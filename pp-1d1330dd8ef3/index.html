@@ -147,7 +147,7 @@ footer b{color:var(--fg);font-weight:600}
   <details><summary><b>How it works</b></summary>
   <p style="color:var(--mut);font-size:12px;margin:6px 0">Phone: press and hold on the picture to pick a colour. One finger draws, two fingers pinch, pan and turn the view (Fit straightens it). Tap with two fingers to undo, three to redo. Apple Pencil pressure changes the brush width.<br>Keys: Draw P, Erase E, Pick I, Fill B, Sculpt S, Smooth M, Smudge U, Mask K, Transform T, Points V, Ref R, Layers L, brush size [ ].</p>
   <div style="display:grid;gap:6px;font-size:12px;color:var(--mut)">
-  <span><b>Colours:</b> press and hold (or the Pick tool) takes the exact colour you see: your paint, or the drawing underneath. Unify colours turns picked colours into the nearest palette colour, shadow or highlight so everything matches.</span>
+  <span><b>Colours:</b> press and hold (or the Pick tool) takes the exact colour you see: your paint, or the drawing underneath. Unify colours turns picked colours into the nearest palette colour, shadow or highlight so everything matches, and fills small holes closed in by paint with the nearest colour.</span>
   <span><b>Layers:</b> a layer can hold any colours. Separate colours moves the ones you choose onto their own layers. Merge colour melts every layer of the current colour into one; Merge down melts the current layer into the one below. The link button groups a layer with the one below; a group sculpts, smooths and transforms as one object.</span>
   <span><b>Draw:</b> scribble with mouse or finger. Everything of one colour on a layer melts into one solid shape, so scribbling inside a circle fills it. Each layer has one colour: pick it from the palette swatches or with the Eyedropper (I, or Alt-click), and the whole layer changes. Right-click drag (or Eraser, E) erases.</span>
   <span><b>Sculpt:</b> drag to push the selected layer (or group) around like liquify. Other layers never move. Shift-drag moves the whole layer.</span>
@@ -210,9 +210,25 @@ function unify(all) {   // snap picked colours to the palette family
   const set = all ? new Set(layers.map(L => L.id)) : objSet(active); let n = 0; snap();
   for (const c of curves) if (set.has(c.layer) && c.col) { const u = unifyCol(c.col); if (u !== c.col) { c.col = u; n++; } }
   for (const f of fills) if (set.has(f.layer) && f.col) f.col = unifyCol(f.col);
-  if (!n) { undo.pop(); say('Those colours already match the palette.'); return; }
-  for (const id of set) remerge(id); if (all) opt.col = unifyCol(opt.col);
-  save(); renderLayers(); swatches(); draw(); say('Unified colours with the palette.');
+  if (n) for (const id of set) remerge(id); if (all) opt.col = unifyCol(opt.col);
+  const h = fillHoles(set);
+  if (!n && !h) { undo.pop(); say('Those colours already match the palette and there are no holes.'); return; }
+  save(); renderLayers(); swatches(); draw(); say((n ? 'Unified colours with the palette' : 'Colours already matched') + (h ? '; filled ' + h + (h === 1 ? ' hole.' : ' holes.') : '.'));
+}
+function fillHoles(set) {   // small empty pockets fully closed in by a layer's paint take the nearest colour around them; nothing else grows
+  renderPixels(); let holes = 0; const cw = IW / PW, ch = IH / PH;
+  for (const id of set) { const li = layerIdx[id]; if (!li) continue; const area = li.reduce((a, v) => a + (v >= 0), 0), lim = Math.max(8, area * .02), seen = new Uint8Array(li.length), put = new Map();
+    for (let st = 0; st < li.length; st++) { if (li[st] >= 0 || seen[st]) continue;
+      const comp = [st]; seen[st] = 1; let edge = false;
+      for (let h = 0; h < comp.length; h++) { const i = comp[h], x = i % PW, y = (i - x) / PW; if (x === 0 || y === 0 || x === PW - 1 || y === PH - 1) edge = true;
+        for (const j of [x > 0 ? i - 1 : -1, x < PW - 1 ? i + 1 : -1, y > 0 ? i - PW : -1, y < PH - 1 ? i + PW : -1]) if (j >= 0 && li[j] < 0 && !seen[j]) { seen[j] = 1; comp.push(j); } }
+      if (edge || comp.length > lim) continue; holes++;
+      const inC = new Set(comp), got = new Map(), q = [];   // grow inward from the paint around the hole
+      for (const i of comp) { const x = i % PW; for (const j of [x > 0 ? i - 1 : -1, x < PW - 1 ? i + 1 : -1, i - PW, i + PW]) if (j >= 0 && j < li.length && li[j] >= 0 && !inC.has(j)) { got.set(i, li[j]); q.push(i); break; } }
+      for (let h = 0; h < q.length; h++) { const i = q[h], x = i % PW; for (const j of [x > 0 ? i - 1 : -1, x < PW - 1 ? i + 1 : -1, i - PW, i + PW]) if (inC.has(j) && !got.has(j)) { got.set(j, got.get(i)); q.push(j); } }
+      for (const [i, k] of got) { const col = allCols[k]; if (!put.has(col)) put.set(col, []); put.get(col).push(i); } }
+    for (const [col, cells] of put) remerge(id, { col, draw: g => { g.fillStyle = '#000'; g.beginPath(); for (const i of cells) { const x = i % PW, y = (i - x) / PW; g.rect(x * cw - .5, y * ch - .5, cw + 1, ch + 1); } g.fill(); } }); }
+  return holes;
 }
 const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => (v + .5) / 16);
 const pixC = document.createElement('canvas'), pg = pixC.getContext('2d');
