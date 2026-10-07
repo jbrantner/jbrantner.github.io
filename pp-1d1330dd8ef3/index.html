@@ -134,7 +134,7 @@ footer b{color:var(--fg);font-weight:600}
   <button id="bFront" hidden></button><button id="bBack" hidden></button>
 </div>
 <div id="stage"><canvas id="cv"></canvas><div id="layers" class="panel"><div class="lh"><b>Layers</b><button id="bAddL" title="New layer: everything you draw on it is one object">+ New</button></div><div id="llist"></div><div class="lh" style="justify-content:flex-start;gap:4px"><button id="bSep" title="Split some colours of this layer onto their own layers">Separate colours</button><button id="bUni" title="Turn picked colours on this layer into the nearest palette colour, shadow or highlight">Unify colours</button><button id="bMergeD2" title="Melt this layer into the one below">Merge down</button></div><div id="sepBox" hidden style="display:grid;gap:6px;padding:6px 0"></div><div class="lh full" style="justify-content:flex-start;gap:4px"><button id="bCopyL" title="Copy this object (Ctrl+C)">Copy</button><button id="bPasteL" title="Paste as a new object (Ctrl+V)">Paste</button><button id="bFlipL" title="Mirror left-right">Flip</button></div><div class="lh full" style="justify-content:flex-start;gap:4px"><button id="bMergeC" title="Melt every layer of this layer's colour into this one">Merge colour</button><label style="font-size:12px" title="Colour: paints its own colour. Shading / Highlight: darkens or lightens whatever colour is underneath, using the palette shades">Type <select id="selMode"><option value="">Colour</option><option value="shade">Shading</option><option value="light">Highlight</option></select></label><label style="font-size:12px" title="Pixel halftone texture for this layer: great for shading">Texture <select id="selTex"><option value="solid">Solid</option><option value="d75">Dots 75%</option><option value="d50">Checker 50%</option><option value="d25">Dots 25%</option><option value="d12">Dots 12%</option><option value="fade">Fade to edge</option></select></label><label style="font-size:12px;flex-basis:100%;display:flex" title="Drag to make the selected layer (or group) thicker or thinner. With a mask painted, only the masked part changes.">Thickness <input id="sThick" type="range" min="-4" max="4" step="0.1" value="0" style="flex:1;min-width:0;width:auto"></label><button class="full" style="display:none" id="bMergeD" title="Melt this layer into the one below (it takes that layer's colour)">Merge down</button></div></div><div id="more" class="panel" hidden>
-  <div class="lh"><b>Settings <small id="ver" style="color:var(--mut);font-weight:400">version 21</small></b><button id="bMoreX">Close</button></div>
+  <div class="lh"><b>Settings <small id="ver" style="color:var(--mut);font-weight:400">version 22</small></b><button id="bMoreX">Close</button></div>
   <label title="How many pixels wide the pixel art is">Pixel width <select id="selW"><option>64</option><option>96</option><option>128</option><option selected>192</option><option>256</option></select></label>
   <label title="How many colours to take from the loaded picture">Palette colours <select id="selPal"><option>6</option><option selected>8</option><option>10</option><option>12</option><option>16</option></select></label>
   <label>Reference <input id="sImg" type="range" min="0" max="1" step="0.05" value=".5"></label>
@@ -179,13 +179,14 @@ let curves = [], fills = [], layers = [{ id: 1, name: 'Layer 1', vis: true, col:
 let tool = 'pen', drawing = -1, hover = null, sel = { ci: -1, pi: -1, fi: -1 };
 let view = { x: 0, y: 0, s: 1, r: 0 }, drag = null, spaceDown = false;
 let undo = [], redo = [], tap = null, lastPen = -1e9, HR = 1;   // HR: bigger transform handles for fingers
+const palms = new Set(), penIds = new Set();   // touches ignored while a pencil is in use; pencils down
 const pointers = new Map(); let pinch = null;
 const opt = { feather: 1, col: '#580840', erase: false, prop: false, bw: 3, tp: .6, soft: 1.4, imgA: .5, pixA: 1, outline: false, curves: false, rad: 70 };
 const KEY = 'pixel-pen-v1';
 
 /* ---------- pixel engine: curves become pixels on a coarse grid ---------- */
 const DEF_PAL = ['#34ac84', '#70ce98', '#faf7f5', '#f784a8', '#d62c70', '#face34', '#f26c2c', '#580840'];
-let pal = DEF_PAL.slice(), ink = '#580840', PW = 192, PH = 256, small = null, allCols = [], shades = [];
+let pal = DEF_PAL.slice(), ink = '#580840', PW = 192, PH = 256, small = null, allCols = [], shades = [], colVer = 0;   // colVer goes up whenever the colour list is rebuilt (colour numbers change)
 function buildShades() {   // shadow and highlight tones made only from the palette's own colours, so everything stays in the family
   const lum = h => { const q = hexRGB(h); return q[0] * .3 + q[1] * .59 + q[2] * .11; };
   const dark = pal.reduce((a, b) => lum(b) < lum(a) ? b : a), light = pal.reduce((a, b) => lum(b) > lum(a) ? b : a);
@@ -198,7 +199,7 @@ function buildShades() {   // shadow and highlight tones made only from the pale
     const hi = h === light ? mix(h, '#ffffff', .6) : mix(h, light, .38);
     return { base: h, shadow: sh, light: hi };
   });
-  allCols = [...pal, ...shades.map(t => t.shadow), ...shades.map(t => t.light)]; tones.clear();
+  allCols = [...pal, ...shades.map(t => t.shadow), ...shades.map(t => t.light)]; tones.clear(); colVer++;
   tint.f = (h, d) => d < 0 ? (h === dark ? mix(h, '#000000', .3) : mix(mix(h, dark, .32), cool, .1)) : (h === light ? mix(h, '#ffffff', .6) : mix(h, light, .38));
 }
 const tones = new Map();
@@ -220,15 +221,16 @@ function growPalette(picks) {   // vivid colours the palette lacks become new pa
   buildShades(); try { localStorage.setItem(KEY + '-pal', JSON.stringify(pal)); } catch (e) {} return added;
 }
 function unify(all) {   // snap picked colours to the palette family
-  const set = all ? new Set(layers.map(L => L.id)) : objSet(active); let n = 0; snap();
+  const set = new Set([...(all ? layers.map(L => L.id) : objSet(active))].filter(id => !layerOf(id)?.mode)); let n = 0;   // Shadow / Highlight layers have no colours of their own
+  if (!set.size) { say('Shadow and Highlight layers take their colours from below, so there is nothing to unify.'); return; } snap();
   const picks = new Map(), fam0 = new Set(allCols.slice(0, famLen())); for (const c of curves) if (set.has(c.layer) && c.col && !fam0.has(c.col)) picks.set(c.col, (picks.get(c.col) || 0) + c.p.length);
   const grew = growPalette(picks);
   for (const c of curves) if (set.has(c.layer) && c.col) { const u = unifyCol(c.col); if (u !== c.col) { c.col = u; n++; } }
   for (const f of fills) if (set.has(f.layer) && f.col) f.col = unifyCol(f.col);
   if (n) for (const id of set) remerge(id); if (all) opt.col = unifyCol(opt.col);
   const h = fillHoles(set);
-  if (!n && !h) { undo.pop(); say('Those colours already match the palette and there are no holes.'); return; }
-  save(); renderLayers(); swatches(); draw(); say((n ? 'Unified colours with the palette' : 'Colours already matched') + (grew ? ' (added ' + grew + ' new palette colour' + (grew > 1 ? 's' : '') + ')' : '') + (h ? '; filled ' + h + (h === 1 ? ' hole.' : ' holes.') : '.'));
+  if (!n && !h && !grew) { undo.pop(); btns(); say('Those colours already match the palette and there are no holes.'); return; }
+  save(); renderLayers(); swatches(); draw(); say((n ? 'Unified colours with the palette' : grew ? 'Your colours are now in the palette' : 'Colours already matched') + (grew ? ' (added ' + grew + ' new palette colour' + (grew > 1 ? 's' : '') + ')' : '') + (h ? '; filled ' + h + (h === 1 ? ' hole.' : ' holes.') : '.'));
 }
 function fillHoles(set) { let n = 0; for (let pass = 0; pass < 4; pass++) { const h = fillHolesOnce(set); if (!h) break; if (!pass) n = h; } return n; }   // repeat: a filled corner can expose another
 function fillHolesOnce(set) {   // small empty pockets closed in by paint (any layers) take the nearest colour around them; nothing else grows
@@ -257,7 +259,7 @@ const rgbHex = c => '#' + c.map(v => Math.round(v).toString(16).padStart(2, '0')
 buildShades();
 function nearestPal(r, g, b) { let bi = 0, bd = 1e9; pal.forEach((h, i) => { const q = hexRGB(h), d = 2 * (r - q[0]) ** 2 + 4 * (g - q[1]) ** 2 + 3 * (b - q[2]) ** 2; if (d < bd) { bd = d; bi = i; } }); return bi; }
 function setupGrid() {
-  PH = Math.round(PW * IH / IW); pixC.width = work.width = PW; pixC.height = work.height = PH;
+  PH = Math.round(PW * IH / IW); pixC.width = work.width = PW; pixC.height = work.height = PH; renderPixels.sig = null;   // resizing wiped the pixels
   const c = document.createElement('canvas'); c.width = PW; c.height = PH; const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
   if (img.naturalWidth) g.drawImage(img, 0, 0, PW, PH); small = g.getImageData(0, 0, PW, PH).data; drawMini.k = 0;
 }
@@ -343,10 +345,10 @@ const edges = b => [[(b[0] + b[2]) / 2, b[1]], [b[2], (b[1] + b[3]) / 2], [(b[0]
 function xfHandle(w) {   // which transform handle is under the cursor
   const b = layerBox(active); if (!b) return null; const t = 11 * HR / view.s, cx = (b[0] + b[2]) / 2;
   if (Math.hypot(w[0] - cx, w[1] - (b[1] - 30 * HR / view.s)) < t) return 'rot';
-  const cs = corners(b), es = edges(b);
-  for (let i = 0; i < 4; i++) if (Math.hypot(w[0] - cs[i][0], w[1] - cs[i][1]) < t) return 'c' + i;
-  for (let i = 0; i < 4; i++) if (Math.hypot(w[0] - es[i][0], w[1] - es[i][1]) < t) return 'e' + i;
-  if (w[0] > b[0] && w[0] < b[2] && w[1] > b[1] && w[1] < b[3]) return 'move';
+  const cs = corners(b), es = edges(b), inside = w[0] > b[0] && w[0] < b[2] && w[1] > b[1] && w[1] < b[3], ti = inside ? Math.min(t, Math.min(b[2] - b[0], b[3] - b[1]) / 4) : t;   // inside a small box, moving wins over the handles
+  for (let i = 0; i < 4; i++) if (Math.hypot(w[0] - cs[i][0], w[1] - cs[i][1]) < ti) return 'c' + i;
+  for (let i = 0; i < 4; i++) if (Math.hypot(w[0] - es[i][0], w[1] - es[i][1]) < ti) return 'e' + i;
+  if (inside) return 'move';
   for (let i = 0; i < 4; i++) if (Math.hypot(w[0] - cs[i][0], w[1] - cs[i][1]) < 34 / view.s) return 'rot';   // just outside a corner: rotate
   return null;
 }
@@ -374,17 +376,17 @@ function applyXf(w, e) {
 }
 let clip = null;
 function copyLayer() {
-  const set = objSet(); clip = JSON.stringify(layers.filter(L => set.has(L.id)).map(L => ({ name: L.name, col: L.col, curves: curves.filter(c => c.layer === L.id), fills: fills.filter(f => f.layer === L.id) })));
+  const set = objSet(); clip = JSON.stringify(layers.filter(L => set.has(L.id)).map(L => ({ name: L.name, col: L.col, mode: L.mode, tex: L.tex, curves: curves.filter(c => c.layer === L.id), fills: fills.filter(f => f.layer === L.id) })));
   say('Copied ' + (set.size > 1 ? 'the group' : layerOf(active).name) + '.');
 }
 function pasteLayer() {
   if (!clip) { say('Copy an object first.'); return; } const arr = JSON.parse(clip), off = 6 * IW / PW; snap();
   const set = objSet(); let at = Math.max(...layers.map((L, i) => set.has(L.id) ? i : -1)) + 1, id = Math.max(0, ...layers.map(L => L.id));
   const gid = arr.length > 1 ? Math.max(0, ...layers.map(L => L.group || 0)) + 1 : null;
-  for (const o of arr) { id++; layers.splice(at++, 0, { id, name: o.name + ' copy', vis: true, col: o.col, group: gid }); active = id;
+  for (const o of arr) { id++; layers.splice(at++, 0, { id, name: o.name + ' copy', vis: true, col: o.col, group: gid, mode: o.mode, tex: o.tex }); active = id;
     for (const c of o.curves) curves.push({ ...c, layer: id, p: c.p.map(q => [q[0] + off, q[1] + off]) });
     for (const f of o.fills) fills.push({ ...f, layer: id, x: f.x + off, y: f.y + off }); }
-  save(); renderLayers(); swatches(); setTool('xf'); say('Pasted as a new object. Drag it into place.');
+  $('sepBox').hidden = true; save(); renderLayers(); swatches(); setTool('xf'); say('Pasted as a new object. Drag it into place.');
 }
 function mergeInto(target, ids) {   // melt layers into one solid layer
   const T = layerOf(target); snap();
@@ -394,8 +396,11 @@ function mergeInto(target, ids) {   // melt layers into one solid layer
   const g = T.group; if (g && layers.filter(q => q.group === g).length < 2) layers.forEach(q => { if (q.group === g) q.group = null; });
   active = target; remerge(target); save(); renderLayers(); swatches(); draw();
 }
-function mergeColour() { const L = layerOf(active), ids = layers.filter(q => q.col === L.col && q.id !== L.id).map(q => q.id); if (!ids.length) { say('No other layer has this colour.'); return; } mergeInto(active, ids); say('Merged ' + (ids.length + 1) + ' layers into one.'); }
-function mergeDown() { const i = layers.findIndex(q => q.id === active); if (i < 1) { say('Nothing below to merge into.'); return; } mergeInto(layers[i - 1].id, [active]); say('Merged down.'); }
+function mergeColour() { const L = layerOf(active), col = colsOf(active)[0], only = id => { const cs = colsOf(id); return cs.length === 1 && cs[0] === col; };   // every other layer that is just this layer's main colour
+  const ids = col ? layers.filter(q => q.id !== L.id && (q.mode || '') === (L.mode || '') && only(q.id)).map(q => q.id) : []; if (!ids.length) { say('No other layer is only this colour.'); return; } mergeInto(active, ids); say('Merged ' + (ids.length + 1) + ' layers into one.'); }
+function mergeDown() { const i = layers.findIndex(q => q.id === active); if (i < 1) { say('Nothing below to merge into.'); return; }
+  const A = layers[i], B = layers[i - 1]; if ((A.mode || '') !== (B.mode || '')) { say(A.mode ? 'A Shadow or Highlight layer can only merge into one of the same kind.' : "The layer below is a Shadow or Highlight layer, so this one can't merge into it."); return; }   // merging would turn shading into solid paint
+  mergeInto(B.id, [active]); say('Merged down.'); }
 function flipLayer() {
   const b = layerBox(active); if (!b) return; snap(); const cx = (b[0] + b[2]) / 2, set = objSet();
   for (const c of curves) if (set.has(c.layer)) c.p = c.p.map(q => [2 * cx - q[0], q[1]]);
@@ -418,12 +423,24 @@ function footprint(g, c, P = c.p) {
   for (const [x, y, r] of strokeSamples(c, P)) { g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); }
   if (c.closed && P.length > 2) { g.beginPath(); tracePath(g, { ...c, closed: true }, P); g.fill('nonzero'); }
 }
-function cellMask(fn) {   // which grid cells a drawing covers at least half of (measured on a 4x finer grid, like the final shape)
+function boxOf(list, rad = 0) {   // the area some curves can touch (picture units): their points, plus room for the spline's bulge and the brush
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, ms = 0;
+  for (const P of list) for (let i = 0; i < P.length; i++) { const q = P[i], p = P[i ? i - 1 : P.length - 1]; if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1];
+    const s = Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]); if (s > ms) ms = s; }
+  const pad = ms / 2 + rad + 2 * IW / PW; return [x0 - pad, y0 - pad, x1 + pad, y1 + pad];
+}
+const strokeRad = c => Math.max(.6, (c.bw ?? opt.bw) / 2) * IW / PW;   // the widest a stroke's brush gets
+function cellMask(fn, box) {   // which grid cells a drawing covers at least half of (measured on a 4x finer grid, like the final shape); only looks inside box
   const c2 = cellMask.c || (cellMask.c = document.createElement('canvas')), F = 4; if (c2.width !== PW * F || c2.height !== PH * F) { c2.width = PW * F; c2.height = PH * F; }
-  const g = c2.getContext('2d', { willReadFrequently: true }); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c2.width, c2.height); g.setTransform(PW * F / IW, 0, 0, PH * F / IH, 0, 0); fn(g);
-  const d = g.getImageData(0, 0, c2.width, c2.height).data, cnt = new Uint8Array(PW * PH), m = new Uint8Array(PW * PH);
-  for (let y = 0; y < PH * F; y++) for (let x = 0; x < PW * F; x++) if (d[(y * PW * F + x) * 4 + 3] >= 128) cnt[(y >> 2) * PW + (x >> 2)]++;
-  for (let i = 0; i < m.length; i++) m[i] = cnt[i] >= 8; return m;
+  let x0 = 0, y0 = 0, x1 = PW, y1 = PH;
+  if (box) { x0 = Math.max(0, Math.floor(box[0] * PW / IW) - 1); y0 = Math.max(0, Math.floor(box[1] * PH / IH) - 1); x1 = Math.min(PW, Math.ceil(box[2] * PW / IW) + 1); y1 = Math.min(PH, Math.ceil(box[3] * PH / IH) + 1); }
+  const m = new Uint8Array(PW * PH); if (!(x1 > x0 && y1 > y0)) return m;
+  const g = c2.getContext('2d', { willReadFrequently: true }), w = (x1 - x0) * F, h = (y1 - y0) * F, cw = x1 - x0;
+  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(x0 * F, y0 * F, w, h); g.save(); g.beginPath(); g.rect(x0 * F, y0 * F, w, h); g.clip(); g.setTransform(PW * F / IW, 0, 0, PH * F / IH, 0, 0); fn(g); g.restore();
+  const d = g.getImageData(x0 * F, y0 * F, w, h).data, cnt = new Uint8Array(cw * (y1 - y0));
+  for (let y = 0; y < h; y++) { const r = (y >> 2) * cw, o = y * w * 4 + 3; for (let x = 0; x < w; x++) if (d[o + x * 4] >= 128) cnt[r + (x >> 2)]++; }
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) m[y * PW + x] = cnt[(y - y0) * cw + x - x0] >= 8;
+  return m;
 }
 function autoCol(c) {   // majority colour of the drawing under the stroke
   wg.setTransform(1, 0, 0, 1, 0, 0); wg.clearRect(0, 0, PW, PH); wg.setTransform(PW / IW, 0, 0, PH / IH, 0, 0); footprint(wg, c);
@@ -454,26 +471,46 @@ function remerge(L, add) {   // melt a layer into solid shapes, one per colour (
   const RW = Math.max(400, PW * 4), RH = Math.round(RW * IH / IW), sc = RW / IW, cell = IW / PW;
   const cv2 = remerge.c || (remerge.c = document.createElement('canvas')); if (cv2.width !== RW || cv2.height !== RH) { cv2.width = RW; cv2.height = RH; }
   const g = cv2.getContext('2d', { willReadFrequently: true }), lab = new Uint16Array(RW * RH);
-  const paint = (fn, v) => { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, RW, RH); g.setTransform(sc, 0, 0, sc, 0, 0); fn(g); const d = g.getImageData(0, 0, RW, RH).data; for (let i = 0; i < lab.length; i++) if (d[i * 4 + 3] >= 128) lab[i] = v; };
+  const paint = (fn, v, box) => {   // only the part of the raster that box (picture units) covers is touched
+    let x0 = 0, y0 = 0, x1 = RW, y1 = RH;
+    if (box) { x0 = Math.max(0, Math.floor(box[0] * sc) - 2); y0 = Math.max(0, Math.floor(box[1] * sc) - 2); x1 = Math.min(RW, Math.ceil(box[2] * sc) + 2); y1 = Math.min(RH, Math.ceil(box[3] * sc) + 2); if (!(x1 > x0 && y1 > y0)) return; }
+    const w = x1 - x0; g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(x0, y0, w, y1 - y0); g.save(); g.beginPath(); g.rect(x0, y0, w, y1 - y0); g.clip(); g.setTransform(sc, 0, 0, sc, 0, 0); fn(g); g.restore();
+    const d = g.getImageData(x0, y0, w, y1 - y0).data; for (let y = y0; y < y1; y++) { const o = (y - y0) * w * 4 + 3 - x0 * 4, r = y * RW; for (let x = x0; x < x1; x++) if (d[o + x * 4] >= 128) lab[r + x] = v; }
+  };
   const mine = curves.filter(c => c.layer === L);
   for (const col of [...new Set(mine.map(c => c.col))]) {
-    const v = ci(col) + 1;
-    paint(g2 => { g2.fillStyle = '#000'; g2.beginPath(); for (const c of mine) if (c.col === col && c.closed && c.p.length > 2) tracePath(g2, c); g2.fill('evenodd'); for (const c of mine) if (c.col === col && !c.closed) footprint(g2, c); }, v);
+    const v = ci(col) + 1, its = mine.filter(c => c.col === col);
+    paint(g2 => { g2.fillStyle = '#000'; g2.beginPath(); for (const c of its) if (c.region && c.closed && c.p.length > 2) tracePath(g2, c); g2.fill('nonzero');   // outlines run one way and holes the other, so overlapping parts add up
+      for (const c of its) if (!c.region && c.closed && c.p.length > 2) { g2.beginPath(); tracePath(g2, c); g2.fill('nonzero'); }
+      for (const c of its) if (!c.closed) footprint(g2, c); }, v, boxOf(its.map(c => c.p), Math.max(0, ...its.map(c => c.closed ? 0 : strokeRad(c)))));
   }
-  if (add) paint(add.draw, add.col ? ci(add.col) + 1 : 0);
+  if (add) paint(add.draw, add.col ? ci(add.col) + 1 : 0, add.box);
   curves = curves.filter(c => c.layer !== L);
-  for (let v = 1; v <= allCols.length; v++) {
-    const m = new Uint8Array(lab.length); let any = 0; for (let i = 0; i < lab.length; i++) if (lab[i] === v) { m[i] = 1; any = 1; } if (!any) continue;
-    for (const loop of contours(m, RW, RH)) {
-      let P = loop.map(([x, y]) => [x / sc, y / sc]);
+  const nC = allCols.length + 1, bx = new Int32Array(nC * 4);   // where each colour is: one pass instead of one per colour
+  for (let v = 0; v < nC; v++) { bx[v * 4] = RW; bx[v * 4 + 1] = RH; bx[v * 4 + 2] = -1; bx[v * 4 + 3] = -1; }
+  for (let y = 0; y < RH; y++) { const r = y * RW; for (let x = 0; x < RW; x++) { const v = lab[r + x]; if (!v) continue; const o = v * 4; if (x < bx[o]) bx[o] = x; if (x > bx[o + 2]) bx[o + 2] = x; if (y < bx[o + 1]) bx[o + 1] = y; bx[o + 3] = y; } }
+  for (let v = 1; v < nC; v++) {
+    const o = v * 4; if (bx[o + 2] < 0) continue;
+    const x0 = bx[o], y0 = bx[o + 1], w = bx[o + 2] - x0 + 1, h = bx[o + 3] - y0 + 1, m = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) { const r = (y + y0) * RW + x0; for (let x = 0; x < w; x++) if (lab[r + x] === v) m[y * w + x] = 1; }
+    const kept = [];
+    for (const loop of contours(m, w, h)) {
+      let P = loop.map(([x, y]) => [(x + x0) / sc, (y + y0) / sc]);
       let area = 0; for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; area += a[0] * b[1] - b[0] * a[1]; } if (Math.abs(area / 2) < 1.2 * cell * cell) continue;
-      for (let it = 0; it < 0; it++) { const n = P.length; P = P.map((q, i) => [(P[(i - 1 + n) % n][0] + 2 * q[0] + P[(i + 1) % n][0]) / 4, (P[(i - 1 + n) % n][1] + 2 * q[1] + P[(i + 1) % n][1]) / 4]); }
       let per = 0; for (let i = 0; i < P.length; i++) per += Math.hypot(P[(i + 1) % P.length][0] - P[i][0], P[(i + 1) % P.length][1] - P[i][1]);
       const step = Math.min(cell * .5, per / 8), out = [P[0]]; let acc = 0;
       for (let i = 1; i < P.length; i++) { acc += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); if (acc >= step) { out.push(P[i]); acc = 0; } }
-      if (out.length >= 3) curves.push({ layer: L, col: allCols[v - 1], closed: true, region: true, p: out, c: out.map(() => 0) });
+      if (out.length >= 3) kept.push([P, out]);
+    }
+    for (const [P, out] of kept) {   // an outline inside an odd number of others is a hole: holes run the other way round
+      const hole = kept.filter(k => k[0] !== P && inPoly(P[0], k[0])).length % 2 === 1; if ((areaOf(out) > 0) === hole) out.reverse();
+      curves.push({ layer: L, col: allCols[v - 1], closed: true, region: true, p: out, c: out.map(() => 0) });
     }
   }
+}
+function orient(list) {   // same rule for older drawings: per layer and colour, outer edges one way, holes the other
+  const g = new Map(); for (const c of list) if (c.region && c.closed && c.p.length > 2) { const k = c.layer + '|' + c.col; if (!g.has(k)) g.set(k, []); g.get(k).push(c); }
+  for (const grp of g.values()) for (const c of grp) { const hole = grp.filter(o => o !== c && inPoly(c.p[0], o.p)).length % 2 === 1; if ((areaOf(c.p) > 0) === hole) { c.p.reverse(); c.c?.reverse(); } }
 }
 function smoothAt(w, push) {   // relax points under the brush toward their neighbours' average
   const R = opt.rad / view.s, L = drag.layer;
@@ -516,52 +553,76 @@ function snapTo(w, skip) {   // land on a nearby point, or onto a nearby curve, 
   return best || w;
 }
 let layerIdx = {};
+const lcache = new Map();   // layer id -> that layer's pixels, worked out again only when the layer changes
+const HF = new Float64Array(1), HI = new Int32Array(HF.buffer);
+function mkHash() {   // a quick fingerprint of numbers and text (two 32-bit hashes)
+  let a = -2128831035, b = 5381; const I = v => { a = Math.imul(a ^ v, 16777619); b = Math.imul(b ^ v, 1540483477) ^ (b >>> 15); };
+  return { I, N: v => { HF[0] = typeof v === 'number' ? v : NaN; I(HI[0]); I(HI[1]); }, S: t => { t = String(t); I(t.length); for (let k = 0; k < t.length; k++) I(t.charCodeAt(k)); }, get: () => (a >>> 0).toString(36) + '.' + (b >>> 0).toString(36) };
+}
+function hashCurve(H, c) {
+  H.I((c.closed ? 1 : 0) | (c.region ? 2 : 0) | (c.free ? 4 : 0) | (c.erase ? 8 : 0)); H.S(c.col || ''); H.N(c.bw); H.N(c.tp);
+  const P = c.p, C = c.c; H.I(P.length); for (let i = 0; i < P.length; i++) { H.N(P[i][0]); H.N(P[i][1]); H.I(C && C[i] ? 1 : 0); }
+  if (c.pr) { H.I(c.pr.length); for (const v of c.pr) H.N(v); }
+}
+function layerPixels(cs, fs) {   // one layer's own pixels: li = colour number, lo = which of its curves (k) or fills (-10-k) made each one
+  const N = PW * PH, li = new Int16Array(N).fill(-1), lo = new Int16Array(N).fill(-1), items = [], colI = c => c.col ? ci(c.col) : ci(ink);
+  cs.forEach((gi, k) => { const c = curves[gi];
+    if (gi === drawing && hover && tool === 'pen' && !drag) items.push({ c: { ...c, c: [...c.c, 0] }, P: [...c.p, hover], preview: !!hover.closeHint, k });
+    else items.push({ c, P: c.p, k }); });
+  const groups = new Map(); for (const it of items) if (it.c.region) { const gk = it.c.col; if (!groups.has(gk)) groups.set(gk, []); groups.get(gk).push(it); }
+  for (const [col, its] of groups) { const m = cellMask(g => { g.beginPath(); for (const it of its) tracePath(g, it.c, it.P); g.fillStyle = '#000'; g.fill('nonzero'); }, boxOf(its.map(it => it.P))), v = colI({ col });
+    for (let i = 0; i < N; i++) if (m[i]) { li[i] = v; lo[i] = its[0].k; } }
+  for (const { c, P, preview, k } of items) if (!c.region && !c.free && (c.closed || preview) && P.length > 2) { const m = fillMask(c, P), v = colI(c); for (let i = 0; i < N; i++) if (m[i]) { li[i] = v; lo[i] = k; } }
+  for (const { c, P, k } of items) if (c.free) {   // the stroke you're drawing right now
+    const m = cellMask(g => footprint(g, c, P), boxOf([P], strokeRad(c))), v = colI(c); for (let i = 0; i < N; i++) if (m[i]) { li[i] = c.erase ? -1 : v; lo[i] = c.erase ? -1 : k; } }
+  const cp = li.slice();   // no lone pixels: a cell that matches none of its 4 neighbours joins a colour 3 of them share (edge cells stay)
+  for (let y = 1; y < PH - 1; y++) for (let x = 1; x < PW - 1; x++) { const i = y * PW + x, v = cp[i], a = cp[i - 1], b = cp[i + 1], c = cp[i - PW], d = cp[i + PW];
+    if (a === v || b === v || c === v || d === v) continue; const best = a === b && (a === c || a === d) ? a : c === d && (c === a || c === b) ? c : null; if (best !== null) { li[i] = best; lo[i] = lo[i - 1]; } }
+  if (opt.outline) { const cp2 = li.slice(), ki = ci(ink);   // a 1-pixel ink edge around each solid
+    for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) { const i = y * PW + x; if (cp2[i] < 0 || cp2[i] === ki) continue; const v = cp2[i], at = (xx, yy) => xx < 0 || yy < 0 || xx >= PW || yy >= PH ? -1 : cp2[yy * PW + xx];
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (at(x + dx, y + dy) < 0 && at(x - dx, y - dy) === v && at(x - 2 * dx, y - 2 * dy) === v && at(x - 3 * dx, y - 3 * dy) === v) { li[i] = ki; break; } } }   // thin strokes keep their colour (no checkerboard)
+  for (const { c, P, k } of items) { if (c.region || c.free || P.length < 2 || (c.closed && !opt.outline)) continue; const v = c.closed ? ci(ink) : colI(c);
+    for (const [x, y] of c.closed ? lineCells(c, P) : brushCells(c, P)) if (x >= 0 && y >= 0 && x < PW && y < PH) { li[y * PW + x] = v; lo[y * PW + x] = k; } }
+  fs.forEach((fi, k) => { const f = fills[fi], x = Math.floor(f.x * PW / IW), y = Math.floor(f.y * PH / IH); if (x < 0 || y < 0 || x >= PW || y >= PH) return;
+    const v = ci(f.col), reg = flood(li, y * PW + x); if (f.n && reg.length > f.n * 3 + 60) return;   // a gap opened: don't spill everywhere
+    for (const i of reg) { li[i] = v; lo[i] = -10 - k; } });
+  return { li, lo };
+}
 function renderPixels() {
-  const idx = new Int16Array(PW * PH).fill(-1), own = new Int16Array(PW * PH).fill(-1);
-  const colI = c => c.col ? ci(c.col) : ci(ink);
-  layerIdx = {};
-  for (const L of layers) {   // each layer is its own object; layers stack bottom to top
-    const li = new Int16Array(PW * PH).fill(-1), lo = new Int16Array(PW * PH).fill(-1), items = [];
-    curves.forEach((c, ci) => { if (c.layer !== L.id) return;
-      if (ci === drawing && hover && tool === 'pen' && !drag) items.push({ c: { ...c, c: [...c.c, 0] }, P: [...c.p, hover], preview: !!hover.closeHint, ci });
-      else items.push({ c, P: c.p, ci }); });
-    const groups = new Map(); for (const it of items) if (it.c.region) { const gk = it.c.col; if (!groups.has(gk)) groups.set(gk, []); groups.get(gk).push(it); }
-    for (const [col, its] of groups) { const m = cellMask(g => { g.beginPath(); for (const it of its) tracePath(g, it.c, it.P); g.fillStyle = '#000'; g.fill('evenodd'); }), k = colI({ col });
-      for (let i = 0; i < PW * PH; i++) if (m[i]) { li[i] = k; lo[i] = its[0].ci; } }
-    for (const { c, P, preview, ci } of items) if (!c.region && !c.free && (c.closed || preview) && P.length > 2) { const m = fillMask(c, P), k = c.col ? colI(c) : pal.indexOf(ink); for (let i = 0; i < m.length; i++) if (m[i]) { li[i] = k; lo[i] = ci; } }
-    for (const { c, P, ci } of items) if (c.free) {   // the stroke you're drawing right now
-      const m = cellMask(g => footprint(g, c, P)), k = colI(c); for (let i = 0; i < PW * PH; i++) if (m[i]) { li[i] = c.erase ? -1 : k; lo[i] = c.erase ? -1 : ci; } }
-    // no lone pixels: a cell that matches none of its 4 neighbours joins the neighbours' colour
-    const cp = li.slice();
-    for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) { const i = y * PW + x, v = cp[i], nb = [x > 0 ? cp[i - 1] : v, x < PW - 1 ? cp[i + 1] : v, y > 0 ? cp[i - PW] : v, y < PH - 1 ? cp[i + PW] : v];
-      if (nb.includes(v)) continue; const cnt = {}; nb.forEach(q => cnt[q] = (cnt[q] || 0) + 1); const [best, n] = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]; if (n >= 3) { li[i] = +best; lo[i] = lo[x > 0 ? i - 1 : i + 1]; } }
-    if (opt.outline) { const cp2 = li.slice(), ki = pal.indexOf(ink);   // a 1-pixel ink edge around each solid
-      for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) { const i = y * PW + x; if (cp2[i] < 0 || cp2[i] === ki) continue; const v = cp2[i], at = (xx, yy) => xx < 0 || yy < 0 || xx >= PW || yy >= PH ? -1 : cp2[yy * PW + xx];
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (at(x + dx, y + dy) < 0 && at(x - dx, y - dy) === v && at(x - 2 * dx, y - 2 * dy) === v && at(x - 3 * dx, y - 3 * dy) === v) { li[i] = ki; break; } } }   // thin strokes keep their colour (no checkerboard)
-    for (const { c, P, ci } of items) { if (c.region || c.free || P.length < 2 || (c.closed && !opt.outline)) continue; const k = c.closed ? pal.indexOf(ink) : colI(c);
-      for (const [x, y] of c.closed ? lineCells(c, P) : brushCells(c, P)) if (x >= 0 && y >= 0 && x < PW && y < PH) { li[y * PW + x] = k; lo[y * PW + x] = ci; } }
-    fills.forEach((f, fi) => { if (f.layer !== L.id) return; const x = Math.floor(f.x * PW / IW), y = Math.floor(f.y * PH / IH); if (x < 0 || y < 0 || x >= PW || y >= PH) return;
-      const k = ci(f.col), reg = flood(li, y * PW + x); if (f.n && reg.length > f.n * 3 + 60) return;   // a gap opened: don't spill everywhere
-      for (const i of reg) { li[i] = k; lo[i] = -10 - fi; } });
-    layerIdx[L.id] = li;
-    const tex = L.tex || 'solid';
-    let dist = null; if (tex === 'fade') {   // distance (in pixels) from the shape's edge: dots thin out toward the edge
-      dist = new Float32Array(li.length).fill(1e9); const q = [];
-      for (let i = 0; i < li.length; i++) if (li[i] < 0) { dist[i] = 0; q.push(i); }
+  const N = PW * PH, base = [PW, PH, IW, IH, opt.outline ? 1 : 0, ink, opt.bw, opt.tp, colVer].join(','), by = new Map(layers.map(L => [L.id, [[], []]]));
+  curves.forEach((c, i) => by.get(c.layer)?.[0].push(i)); fills.forEach((f, i) => by.get(f.layer)?.[1].push(i));
+  let sig = base + '|' + opt.fade + '|' + curves.length + '|' + fills.length; const ents = [];
+  for (const L of layers) {   // each layer is its own object; only a layer that changed is worked out again
+    const [cs, fs] = by.get(L.id), H = mkHash(); H.S(base);
+    for (const i of cs) { hashCurve(H, curves[i]); if (i === drawing && hover && tool === 'pen' && !drag) { H.I(7); H.N(hover[0]); H.N(hover[1]); H.I(hover.closeHint ? 1 : 0); } }
+    for (const i of fs) { const f = fills[i]; H.I(9); H.N(f.x); H.N(f.y); H.S(f.col || ''); H.N(f.n); }
+    const h = H.get(); let e = lcache.get(L.id); if (!e || e.h !== h) { e = { h, ...layerPixels(cs, fs) }; lcache.set(L.id, e); }
+    ents.push([L, e, cs, fs]); sig += '|' + L.id + ':' + h + ':' + (L.vis ? 1 : 0) + ':' + (L.tex || '') + ':' + (L.mode || '') + ':' + cs.join(',') + ':' + fs.join(',');
+  }
+  for (const id of lcache.keys()) if (!by.has(id)) lcache.delete(id);
+  if (sig === renderPixels.sig && lastIdx?.length === N) return;   // nothing changed (pan, zoom, turn): keep the pixels
+  renderPixels.sig = sig; layerIdx = {};
+  const idx = new Int16Array(N).fill(-1), own = new Int16Array(N).fill(-1);
+  for (const [L, e, cs, fs] of ents) {   // layers stack bottom to top
+    const li = e.li, lo = e.lo, tex = L.tex || 'solid'; layerIdx[L.id] = li;
+    if (tex === 'fade' && !e.dist) {   // distance (in pixels) from the shape's edge: dots thin out toward the edge
+      const dist = e.dist = new Float32Array(N).fill(1e9), q = [];
+      for (let i = 0; i < N; i++) if (li[i] < 0) { dist[i] = 0; q.push(i); }
       for (let h = 0; h < q.length; h++) { const i = q[h], x = i % PW, y = (i - x) / PW; for (const j of [x > 0 ? i - 1 : -1, x < PW - 1 ? i + 1 : -1, y > 0 ? i - PW : -1, y < PH - 1 ? i + PW : -1]) if (j >= 0 && dist[j] > dist[i] + 1) { dist[j] = dist[i] + 1; q.push(j); } }
     }
-    const dens = { solid: 1, d75: .75, d50: .5, d25: .25, d12: .125 }[tex];
-    if (L.vis) for (let i = 0; i < li.length; i++) if (li[i] >= 0) {
+    const dist = e.dist, dens = { solid: 1, d75: .75, d50: .5, d25: .25, d12: .125 }[tex];
+    if (L.vis) for (let i = 0; i < N; i++) if (li[i] >= 0) {
       if (tex !== 'solid') { const x = i % PW, y = (i - x) / PW, t = BAYER[(y & 3) * 4 + (x & 3)], d = tex === 'fade' ? Math.min(1, dist[i] / (opt.fade || 6)) : dens; if (t > d) continue; }
+      const o = lo[i], g = o >= 0 ? cs[o] : o <= -10 ? -10 - fs[-10 - o] : -1;   // back to the curve's place in the whole list
       if (L.mode === 'shade' || L.mode === 'light') {   // dynamic: tint whatever colour is underneath, one step darker or lighter
         const b = idx[i]; if (b < 0) continue; const n = pal.length;
-        if (b >= 3 * n) { idx[i] = ci(tint(allCols[b], L.mode === 'shade' ? -1 : 1)); own[i] = lo[i]; continue; }   // a picked colour gets its own shade
+        if (b >= 3 * n) { idx[i] = ci(tint(allCols[b], L.mode === 'shade' ? -1 : 1)); own[i] = g; continue; }   // a picked colour gets its own shade
         const k = b % n, tone = b < n ? 0 : b < 2 * n ? -1 : 1, t2 = Math.max(-1, Math.min(1, tone + (L.mode === 'shade' ? -1 : 1)));
-        idx[i] = t2 === 0 ? k : t2 < 0 ? n + k : 2 * n + k; own[i] = lo[i]; continue; }
-      idx[i] = li[i]; own[i] = lo[i]; }
+        idx[i] = t2 === 0 ? k : t2 < 0 ? n + k : 2 * n + k; own[i] = g; continue; }
+      idx[i] = li[i]; own[i] = g; }
   }
-  const im = pg.createImageData(PW, PH), cols = allCols.map(hexRGB);
-  for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) { const q = cols[idx[i]]; im.data.set([q[0], q[1], q[2], 255], i * 4); }
+  const im = pg.createImageData(PW, PH), cols = allCols.map(hexRGB), D = im.data;
+  for (let i = 0; i < N; i++) { const v = idx[i]; if (v >= 0) { const q = cols[v], o = i * 4; D[o] = q[0]; D[o + 1] = q[1]; D[o + 2] = q[2]; D[o + 3] = 255; } }
   pg.putImageData(im, 0, 0); lastIdx = idx; lastOwn = own; drawMini();
 }
 function drawMini() {
@@ -574,6 +635,7 @@ function sampleCol(c, P) {   // the drawing's own colour inside the shape (major
   if (!any) { const q = P[0], x = Math.min(PW - 1, Math.floor(q[0] * PW / IW)), y = Math.min(PH - 1, Math.floor(q[1] * PH / IH)), i = y * PW + x; return pal[nearestPal(small[i * 4], small[i * 4 + 1], small[i * 4 + 2])]; }
   return pal[cnt.indexOf(Math.max(...cnt))];
 }
+function setInk() { const L = h => { const q = hexRGB(h); return q[0] * 3 + q[1] * 6 + q[2]; }; ink = pal.reduce((a, b) => L(b) < L(a) ? b : a); }   // outlines use the darkest palette colour
 function makePalette(k) {   // k-means on the picture; vivid colours count extra so small bright areas still get a colour
   k = k || opt.palN || 8;
   const c = document.createElement('canvas'); c.width = c.height = 96; const g = c.getContext('2d'); g.drawImage(img, 0, 0, 96, 96);
@@ -585,8 +647,7 @@ function makePalette(k) {   // k-means on the picture; vivid colours count extra
     px.forEach((q, n) => { let bi = 0, bd = 1e18; cen.forEach((c2, i) => { const v = dd(q, c2); if (v < bd) { bd = v; bi = i; } }); const w = wt[n]; sum[bi][0] += q[0] * w; sum[bi][1] += q[1] * w; sum[bi][2] += q[2] * w; sum[bi][3] += w; });
     cen = cen.map((c2, i) => sum[i][3] ? [sum[i][0] / sum[i][3], sum[i][1] / sum[i][3], sum[i][2] / sum[i][3]] : c2); }
   cen.sort((a, b) => { const A = hsl(rgbHex(a)), B = hsl(rgbHex(b)); return (A[1] < .15) - (B[1] < .15) || A[0] - B[0] || A[2] - B[2]; });
-  pal = cen.map(rgbHex); buildShades();
-  ink = pal.reduce((a, b) => { const L = h => { const q = hexRGB(h); return q[0] * 3 + q[1] * 6 + q[2]; }; return L(b) < L(a) ? b : a; });
+  pal = cen.map(rgbHex); buildShades(); setInk();
   swatches();   // your painted colours stay exactly as they are
 }
 function swatches() {   // the layer colour, plus Shadow / Highlight for a layer that tints whatever is under it
@@ -602,7 +663,7 @@ function swatches() {   // the layer colour, plus Shadow / Highlight for a layer
     box.appendChild(col); });
   $('modes').innerHTML = '';
   for (const [m, nm, tip] of [['shade', 'Shadow', 'This layer darkens whatever colour is under it'], ['light', 'Highlight', 'This layer lightens whatever colour is under it']])
-    $('modes').appendChild(mk('mbtn' + (L?.mode === m ? ' on' : ''), null, tip, () => setLayerMode(L?.mode === m ? '' : m))).textContent = nm;
+    $('modes').appendChild(mk('mbtn' + (L?.mode === m ? ' on' : ''), null, tip, () => setLayerMode(layerOf(active)?.mode === m ? '' : m))).textContent = nm;
 }
 function setLayerMode(m) { const L = layerOf(active); if (!L) return; snap(); L.mode = m || undefined;
   if (L.mode) L.name = L.name.replace(/^(Layer|Shading|Highlight)/, L.mode === 'shade' ? 'Shading' : 'Highlight'); if (opt.erase) setTool('pen'); save(); renderLayers(); swatches(); draw(); }
@@ -736,17 +797,20 @@ function startThick() {   // remember each outline point and which way is "away 
 }
 function applyThick(v) {
   if (thick && !thick.warned && mask.length && !thick.items.some(it => it.W.some(w => w > 0))) { thick.warned = true; say("The mask doesn't touch the selected layer. Pick the layer you masked in the Layers panel."); }
-  if (!thick) return; const d = v * IW / PW;
+  if (!thick) return; const d = v * IW / PW; thick.moved = true;
   for (const it of thick.items) it.c.p = it.P0.map((q, i) => [q[0] + it.N[i][0] * it.sgn * d * it.W[i], q[1] + it.N[i][1] * it.sgn * d * it.W[i]]);
   draw();
 }
-function endThick() { if (!thick) return; objSet().forEach(l => remerge(l)); thick = null; $('sThick').value = 0; save(); renderLayers(); draw(); }
-const snapState = () => JSON.stringify({ curves, fills, layers, active }, (k, v) => typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 100) / 100 : v);
-function load(t) { const o = JSON.parse(t); if (Array.isArray(o)) { curves = o; fills = []; } else { curves = o.curves || []; fills = o.fills || []; if (o.layers?.length) { layers = o.layers; active = o.active; } }
+function endThick() { if (!thick) return; if (!thick.moved) { thick = null; undo.pop(); btns(); $('sThick').value = 0; return; } objSet().forEach(l => remerge(l)); thick = null; $('sThick').value = 0; save(); renderLayers(); draw(); }
+const snapState = () => JSON.stringify({ v: 2, curves, fills, layers, active, pal, iw: IW, ih: IH }, (k, v) => typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 100) / 100 : k === 'c' && Array.isArray(v) && !v.some(x => x) ? undefined : v);   // smooth points need no corner list
+function load(t) { let o = JSON.parse(t); if (Array.isArray(o)) { curves = o; fills = []; o = {}; } else { curves = o.curves || []; fills = o.fills || []; if (o.layers?.length) { layers = o.layers; active = o.active; } }
   if (!layers.some(L => L.id === active)) active = layers[layers.length - 1].id;
   for (const q of [...curves, ...fills]) if (!layers.some(L => L.id === q.layer)) q.layer = layers[0].id;
   for (const L of layers) { if (!L.col) L.col = curves.find(c => c.layer === L.id)?.col || '#580840'; if (L.group === undefined) L.group = null; }
-  renderLayers(); swatches(); }
+  for (const c of curves) if (!c.c || c.c.length !== c.p.length) c.c = c.p.map((_, i) => c.c?.[i] || 0);
+  if (!(o.v >= 2)) orient(curves);   // drawings from before version 22
+  if (o.pal?.length && o.pal.join() !== pal.join()) { pal = o.pal; buildShades(); setInk(); }
+  $('sepBox').hidden = true; renderLayers(); swatches(); return o; }
 function renderLayers() {
   const box = $('llist'); box.innerHTML = ''; if ($('selTex')) { $('selTex').value = layerOf(active)?.tex || 'solid'; $('selMode').value = layerOf(active)?.mode || ''; }
   [...layers].reverse().forEach(L => {
@@ -754,30 +818,45 @@ function renderLayers() {
     const n = curves.filter(c => c.layer === L.id).length + fills.filter(f => f.layer === L.id).length;
     const below = layers[layers.indexOf(L) - 1], linked = !!L.group && below?.group === L.group;
     if (L.group) r.style.boxShadow = `inset 3px 0 0 hsl(${L.group * 67 % 360} 70% 55%)`;
-    r.innerHTML = `<button title="Show or hide">${L.vis ? '👁' : '–'}</button><i style="width:12px;height:12px;border-radius:50%;flex:none;background:${L.mode === 'shade' ? 'linear-gradient(135deg,#bbb,#333)' : L.mode === 'light' ? 'linear-gradient(135deg,#fff,#bbb)' : (cs => cs.length > 1 ? 'conic-gradient(' + cs.slice(0, 4).map((c, i, a) => c + ' ' + (i * 100 / a.length) + '% ' + ((i + 1) * 100 / a.length) + '%').join(',') + ')' : cs[0] || opt.col)(colsOf(L.id))};border:1px solid var(--line)"></i><span title="Double-click to rename">${L.name} <small style="color:var(--mut)">${n}</small></span><button title="${linked ? 'Unlink from the layer below' : 'Group with the layer below: they sculpt and transform as one object'}" ${below ? '' : 'disabled'}>${linked ? '⛓' : '🔗'}</button><button title="Move up">▲</button><button title="Move down">▼</button><button title="Delete layer">✕</button>`;
+    r.innerHTML = `<button title="Show or hide">${L.vis ? '👁' : '–'}</button><i style="width:12px;height:12px;border-radius:50%;flex:none;background:${L.mode === 'shade' ? 'linear-gradient(135deg,#bbb,#333)' : L.mode === 'light' ? 'linear-gradient(135deg,#fff,#bbb)' : (cs => cs.length > 1 ? 'conic-gradient(' + cs.slice(0, 4).map((c, i, a) => c + ' ' + (i * 100 / a.length) + '% ' + ((i + 1) * 100 / a.length) + '%').join(',') + ')' : cs[0] || opt.col)(colsOf(L.id))};border:1px solid var(--line)"></i><span title="Double-click, or press and hold, to rename">${esc(L.name)} <small style="color:var(--mut)">${n}</small></span><button title="${linked ? 'Unlink from the layer below' : 'Group with the layer below: they sculpt and transform as one object'}" ${below ? '' : 'disabled'}>${linked ? '⛓' : '🔗'}</button><button title="Move up">▲</button><button title="Move down">▼</button><button title="Delete layer">✕</button>`;
     const [bv, , nm, bl, bu, bd, bx] = r.children;
     bl.onclick = e => { e.stopPropagation(); if (!below) return; snap();
       if (linked) { const g = L.group; L.group = null; if (layers.filter(q => q.group === g).length < 2) layers.forEach(q => { if (q.group === g) q.group = null; }); say('Unlinked.'); }
       else { const gid = below.group || L.group || Math.max(0, ...layers.map(q => q.group || 0)) + 1; if (L.group && L.group !== gid) { const old = L.group; layers.forEach(q => { if (q.group === old) q.group = gid; }); } below.group = L.group = gid; say('Grouped: these layers now sculpt and transform together.'); }
       save(); renderLayers(); draw(); };
 
-    r.onclick = () => { active = L.id; save(); renderLayers(); swatches(); draw(); };
+    r.onclick = () => { if (L.id === active) return; active = L.id; $('sepBox').hidden = true; save(); renderLayers(); swatches(); draw(); };   // tapping the selected row keeps it, so a double-click can rename
     bv.onclick = e => { e.stopPropagation(); snap(); L.vis = !L.vis; save(); renderLayers(); draw(); };
-    nm.ondblclick = e => { e.stopPropagation(); const inp = document.createElement('input'); inp.value = L.name; inp.style.cssText = 'flex:1;min-width:0;font:inherit'; nm.replaceWith(inp); inp.focus(); inp.select();
-      const done = () => { snap(); L.name = inp.value.trim() || L.name; save(); renderLayers(); }; inp.onblur = done; inp.onkeydown = ev => { if (ev.key === 'Enter') inp.blur(); ev.stopPropagation(); }; };
-    const mv = d => e => { e.stopPropagation(); const i = layers.indexOf(L), j = i + d; if (j < 0 || j >= layers.length) return; snap(); layers.splice(i, 1); layers.splice(j, 0, L); save(); renderLayers(); draw(); };
+    const rename = () => { if (!nm.isConnected) return; const inp = document.createElement('input'); inp.value = L.name; inp.style.cssText = 'flex:1;min-width:0;font:inherit;-webkit-user-select:text;user-select:text'; nm.replaceWith(inp); inp.focus(); inp.select();
+      const done = () => { const v = inp.value.trim().slice(0, 40); if (v && v !== L.name) { snap(); L.name = v; save(); } renderLayers(); }; inp.onblur = done; inp.onclick = ev => ev.stopPropagation(); inp.onkeydown = ev => { if (ev.key === 'Enter') inp.blur(); ev.stopPropagation(); }; };
+    nm.ondblclick = e => { e.stopPropagation(); rename(); };
+    nm.onpointerdown = e => { if (e.pointerType === 'mouse') return; const t = setTimeout(() => { nm.onpointerup = null; if (L.id !== active) { active = L.id; save(); renderLayers(); swatches(); draw(); [...$('llist').children].find(q => q.dataset.id == L.id)?.querySelector('span')?.dispatchEvent(new Event('rename')); } else rename(); }, 550);
+      nm.onpointerup = nm.onpointercancel = nm.onpointerleave = () => clearTimeout(t); };   // press and hold the name to rename (phones)
+    nm.addEventListener('rename', rename); r.dataset.id = L.id;
+    const mv = d => e => { e.stopPropagation(); const i = layers.indexOf(L), j = i + d; if (j < 0 || j >= layers.length) return; snap(); layers.splice(i, 1); layers.splice(j, 0, L); fixGroups(); save(); renderLayers(); draw(); };
     bu.onclick = mv(1); bd.onclick = mv(-1);
     bx.onclick = e => { e.stopPropagation(); if (layers.length < 2) { say('Keep at least one layer.'); return; }
       if (bx.dataset.arm !== '1') { bx.dataset.arm = '1'; bx.textContent = 'Sure?'; setTimeout(() => { bx.dataset.arm = ''; bx.textContent = '✕'; }, 2500); return; }
-      snap(); curves = curves.filter(c => c.layer !== L.id); fills = fills.filter(f => f.layer !== L.id); layers.splice(layers.indexOf(L), 1); if (active === L.id) active = layers[layers.length - 1].id; sel = { ci: -1, pi: -1, fi: -1 }; save(); renderLayers(); draw(); };
+      snap(); curves = curves.filter(c => c.layer !== L.id); fills = fills.filter(f => f.layer !== L.id); layers.splice(layers.indexOf(L), 1); fixGroups(); if (active === L.id) { active = layers[layers.length - 1].id; $('sepBox').hidden = true; } sel = { ci: -1, pi: -1, fi: -1 }; save(); renderLayers(); swatches(); draw(); };
     box.appendChild(r);
   });
 }
-function snap() { undo.push(snapState()); if (undo.length > 80) undo.shift(); redo = []; btns(); }
-function save() { try { localStorage.setItem(KEY, snapState()); } catch (e) {} }
+const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+function fixGroups() {   // a group is a run of neighbouring layers: a layer moved out of the run leaves it, a lone layer is no group
+  const seen = new Set(); let next = Math.max(0, ...layers.map(q => q.group || 0)) + 1;
+  for (let i = 0; i < layers.length;) { const g = layers[i].group; let j = i + 1; if (g) while (j < layers.length && layers[j].group === g) j++;
+    if (g) { const run = layers.slice(i, j); if (run.length < 2) run[0].group = null; else if (seen.has(g)) { run.forEach(q => q.group = next); seen.add(next++); } else seen.add(g); }
+    i = j; }
+}
+function snap() { undo.push(snapState()); let tot = 0; for (const u of undo) tot += u.length; while (undo.length > 1 && (undo.length > 80 || tot > 3e7)) tot -= undo.shift().length; redo = []; btns(); }   // big drawings keep fewer undo steps
+function save() { try { localStorage.setItem(KEY, snapState()); save.full = false; } catch (e) { if (!save.full) { save.full = true; say("Storage is full, so the newest changes aren't saved. Export a PNG to keep a copy."); } } }
 function btns() { $('bUndo').disabled = !undo.length; $('bRedo').disabled = !redo.length; }
-function doUndo() { if (!undo.length) return; finishPen(true); redo.push(snapState()); load(undo.pop()); sel = { ci: -1, pi: -1, fi: -1 }; save(); btns(); swatches(); draw(); }
-function doRedo() { if (!redo.length) return; undo.push(snapState()); load(redo.pop()); sel = { ci: -1, pi: -1, fi: -1 }; save(); btns(); swatches(); draw(); }
+function dropEdit() {   // undo or redo while a finger is still mid-edit: drop that half-made edit first
+  if (!drag) return false; const d = drag; drag = null; clearTimeout(holdPick.t);
+  if (d.free || d.grab || d.pt || d.sculpt || d.smooth || d.xf) { load(undo.pop()); if (tap) redo = tap.redo; btns(); draw(); return true; } return false;
+}
+function doUndo() { if (dropEdit()) return; if (!undo.length) return; finishPen(true); redo.push(snapState()); load(undo.pop()); sel = { ci: -1, pi: -1, fi: -1 }; save(); btns(); swatches(); draw(); }
+function doRedo() { if (dropEdit()) return; if (!redo.length) return; undo.push(snapState()); load(redo.pop()); sel = { ci: -1, pi: -1, fi: -1 }; save(); btns(); swatches(); draw(); }
 function say(t) { document.documentElement.style.setProperty('--msgTop', ($('stage').getBoundingClientRect().top + 10) + 'px'); $('msg').textContent = t; clearTimeout(say.t); if (t) say.t = setTimeout(() => $('msg').textContent = '', 3500); }
 
 /* ---------- hit testing ---------- */
@@ -816,28 +895,19 @@ function setTool(t) {
 /* ---------- pointer ---------- */
 cv.addEventListener('contextmenu', e => e.preventDefault());
 cv.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'pen') { lastPen = performance.now(); penIds.add(e.pointerId); }
+  else if (e.pointerType === 'touch' && (penIds.size || performance.now() - lastPen < 1500)) { palms.add(e.pointerId); return; }   // palm rejection while using a pencil
   cv.setPointerCapture(e.pointerId); const s = local(e); pointers.set(e.pointerId, s); HR = e.pointerType === 'touch' ? 2 : 1;
-  if (e.pointerType === 'pen') lastPen = performance.now(); else if (e.pointerType === 'touch' && performance.now() - lastPen < 1500) { pointers.delete(e.pointerId); return; }   // palm rejection while using a pencil
-  if (pointers.size === 1) tap = { t: performance.now(), n: 1, moved: false, s, redo: redo.slice() };
-  else if (tap) tap.n = Math.max(tap.n, pointers.size);
+  if (pointers.size === 1) tap = { t: performance.now(), n: 1, moved: false, starts: new Map([[e.pointerId, s]]), redo: redo.slice() };
+  else if (tap) { tap.n = Math.max(tap.n, pointers.size); tap.starts.set(e.pointerId, s); }
   if (pointers.size === 3 && pinch) return;
-  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: view.s, r: view.r || 0, ang: Math.atan2(b[1] - a[1], b[0] - a[0]), wm: toW((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) };
-    if (drag && (drag.free || drag.grab || drag.pt || drag.sculpt || drag.smooth || drag.xf)) { load(undo.pop()); if (tap) redo = tap.redo; }   // a second finger means zoom/pan: drop the half-made edit
+  if (pointers.size === 2) { startPinch();
+    if (drag && (drag.free || drag.grab || drag.pt || drag.sculpt || drag.smooth || drag.xf)) { load(undo.pop()); if (tap) redo = tap.redo; btns(); }   // a second finger means zoom/pan: drop the half-made edit
     drag = null; draw(); return; }
   if (e.button === 1 || spaceDown || (e.button === 2 && tool !== 'pen' && tool !== 'mask')) { drag = { pan: true, sx: s[0], sy: s[1], vx: view.x, vy: view.y }; return; }
   const w = toW(...s);
-  if (tool === 'pick' || (tool === 'pen' && e.altKey)) {
-    renderPixels(); const x = Math.floor(w[0] * PW / IW), y = Math.floor(w[1] * PH / IH); if (x < 0 || y < 0 || x >= PW || y >= PH) return; const i = y * PW + x;
-    const col = lastIdx[i] >= 0 && opt.pixA > 0 ? allCols[lastIdx[i]] : rgbHex([small[i * 4], small[i * 4 + 1], small[i * 4 + 2]]);   // your paint if there is some, else the drawing's real colour   // always one of the palette colours
-    setLayerCol(col); say('Picked a colour.'); return;
-  }
-  if (tool === 'fill') {   // bucket: the clicked area becomes solid paint on this layer
-    renderPixels(); const x = Math.floor(w[0] * PW / IW), y = Math.floor(w[1] * PH / IH); if (x < 0 || y < 0 || x >= PW || y >= PH) return;
-    const reg = flood(layerIdx[active], y * PW + x), cnt = new Array(pal.length).fill(0); for (const i of reg) cnt[nearestPal(small[i * 4], small[i * 4 + 1], small[i * 4 + 2])]++;
-    const col = opt.col, cw = IW / PW, ch = IH / PH;
-    snap(); remerge(active, { col, draw: g => { g.fillStyle = '#000'; g.beginPath(); for (const i of reg) { const cx = i % PW, cy = (i - cx) / PW; g.rect(cx * cw - .5, cy * ch - .5, cw + 1, ch + 1); } g.fill(); } });
-    save(); renderLayers(); draw(); say(reg.length > PW * PH * .5 ? 'That filled a lot; the area may not be closed. Undo if it was a mistake.' : 'Filled.'); return;
-  }
+  if (tool === 'pick' || (tool === 'pen' && e.altKey)) { drag = { pick: true, w, s }; return; }   // picks and fills happen when the finger lifts, so a pinch never starts with one
+  if (tool === 'fill') { drag = { fill: true, w, s }; return; }
   if (tool === 'xf') {
     let h = xfHandle(w);
     
@@ -871,13 +941,15 @@ cv.addEventListener('pointerdown', e => {
     if (tool === 'pen') drag.penStart = w;   // a click without dragging starts a new line from here
     draw(); return;
   }
-  if (tool === 'pen') { snap(); const er = opt.erase || e.button === 2; curves.push({ p: [w], c: [0], pr: e.pointerType === 'pen' ? [e.pressure || .5] : undefined, closed: false, bw: opt.bw, tp: er ? 0 : opt.tp, layer: active, free: true, erase: er, col: er ? null : opt.col }); drag = { free: true, ci: curves.length - 1, len: 0, s0: s, w0: w }; holdPick(drag); sel = { ci: curves.length - 1, pi: -1, fi: -1 }; draw(); return; }
+  if (tool === 'pen') { snap(); const er = opt.erase || e.button === 2; curves.push({ p: [w], c: [0], pr: e.pointerType === 'pen' ? [e.pressure || .5] : undefined, closed: false, bw: opt.bw, tp: er ? 0 : opt.tp, layer: active, free: true, erase: er, col: er ? null : opt.col }); drag = { free: true, ci: curves.length - 1, len: 0, s0: s, w0: w }; if (!er && !layerOf(active)?.mode) holdPick(drag); sel = { ci: curves.length - 1, pi: -1, fi: -1 }; draw(); return; }
   if (false) { drawing = curves.length - 1; sel = { ci: drawing, pi: -1 }; draw(); return; }
   sel = { ci: -1, pi: -1, fi: -1 }; swatches(); draw();
 });
 cv.addEventListener('pointermove', e => {
+  if (palms.has(e.pointerId)) return; if (penIds.has(e.pointerId)) lastPen = performance.now();
   const s = local(e); if (pointers.has(e.pointerId)) pointers.set(e.pointerId, s);
-  if (tap && pointers.size > 1 && Math.hypot(s[0] - tap.s[0], s[1] - tap.s[1]) > 30) tap.moved = true;
+  if (tap) { const s0 = tap.starts.get(e.pointerId); if (s0 && Math.hypot(s[0] - s0[0], s[1] - s0[1]) > 30) tap.moved = true; }   // each finger against its own start
+  if (drag?.pick || drag?.fill) { if (Math.hypot(s[0] - drag.s[0], s[1] - drag.s[1]) > 12) drag = null; return; }
   if (pinch && pointers.size >= 2) {
     const [a, b] = [...pointers.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]), m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], ns = Math.min(40, Math.max(.05, pinch.s * d / pinch.d));
     let r = pinch.r + Math.atan2(b[1] - a[1], b[0] - a[0]) - pinch.ang; const q = Math.PI / 2, near = Math.round(r / q) * q; if (Math.abs(r - near) < .07) r = near;   // turn the view; clicks straight near upright and quarter turns
@@ -905,16 +977,31 @@ cv.addEventListener('pointermove', e => {
   if (tool === 'pen' && drawing >= 0) { const c = curves[drawing]; hover = w; hover.closeHint = c.p.length > 2 && Math.hypot(c.p[0][0] - w[0], c.p[0][1] - w[1]) < 12 / view.s; draw(); return; }
   const h = hit(w); hover = h?.inside ? null : h; cv.style.cursor = h && !h.inside ? 'grab' : tool === 'pen' ? 'crosshair' : 'default'; draw();
 });
-function holdPick(d) {   // press and hold without moving = eyedropper: take the colour under your finger
-  clearTimeout(holdPick.t); holdPick.t = setTimeout(() => { if (drag !== d || d.far || pointers.size !== 1) return;
-    load(undo.pop()); if (tap) redo = tap.redo; drag = null; renderPixels(); const w = d.w0, x = Math.floor(w[0] * PW / IW), y = Math.floor(w[1] * PH / IH);
-    if (x < 0 || y < 0 || x >= PW || y >= PH) { draw(); return; } const i = y * PW + x;
-    const col = lastIdx[i] >= 0 && opt.pixA > 0 ? allCols[lastIdx[i]] : rgbHex([small[i * 4], small[i * 4 + 1], small[i * 4 + 2]]);   // your paint if there is some, else the drawing's real colour
-    setLayerCol(col); say('Picked a colour.'); if (navigator.vibrate) navigator.vibrate(15); draw(); }, 450);
+function colAt(w) {   // the colour you see at a spot: your paint if there is some, else the drawing's real colour
+  renderPixels(); const x = Math.floor(w[0] * PW / IW), y = Math.floor(w[1] * PH / IH); if (x < 0 || y < 0 || x >= PW || y >= PH) return null; const i = y * PW + x;
+  return lastIdx[i] >= 0 && opt.pixA > 0 ? allCols[lastIdx[i]] : rgbHex([small[i * 4], small[i * 4 + 1], small[i * 4 + 2]]);
 }
-function endPointer(e) { clearTimeout(holdPick.t);
-  pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null;
+function fillAt(w) {   // bucket: the tapped area becomes solid paint on this layer
+  renderPixels(); const x = Math.floor(w[0] * PW / IW), y = Math.floor(w[1] * PH / IH); if (x < 0 || y < 0 || x >= PW || y >= PH) return;
+  const reg = flood(layerIdx[active], y * PW + x), col = opt.col, cw = IW / PW, ch = IH / PH; let x0 = PW, y0 = PH, x1 = 0, y1 = 0;
+  for (const i of reg) { const cx = i % PW, cy = (i - cx) / PW; if (cx < x0) x0 = cx; if (cx > x1) x1 = cx; if (cy < y0) y0 = cy; if (cy > y1) y1 = cy; }
+  snap(); remerge(active, { col, box: [x0 * cw - cw, y0 * ch - ch, (x1 + 2) * cw, (y1 + 2) * ch], draw: g => { g.fillStyle = '#000'; g.beginPath(); for (const i of reg) { const cx = i % PW, cy = (i - cx) / PW; g.rect(cx * cw - .5, cy * ch - .5, cw + 1, ch + 1); } g.fill(); } });
+  save(); renderLayers(); draw(); say(reg.length > PW * PH * .5 ? 'That filled a lot; the area may not be closed. Undo if it was a mistake.' : 'Filled.');
+}
+function holdPick(d) {   // press and hold without moving = eyedropper: take the colour under your finger
+  clearTimeout(holdPick.t); let due = performance.now() + 450;
+  const wait = () => holdPick.t = setTimeout(() => { if (drag !== d || d.far || pointers.size !== 1) return;
+    if (performance.now() - due > 80) { due = performance.now() + 80; wait(); return; }   // the page was busy: let finger moves still waiting in line arrive before deciding it was a hold
+    load(undo.pop()); if (tap) redo = tap.redo; btns(); drag = null; const col = colAt(d.w0); if (!col) { draw(); return; }
+    setLayerCol(col); say('Picked a colour.'); if (navigator.vibrate) navigator.vibrate(15); draw(); }, Math.max(0, due - performance.now()));
+  wait();
+}
+function startPinch() { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, s: view.s, r: view.r || 0, ang: Math.atan2(b[1] - a[1], b[0] - a[0]), wm: toW((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) }; }   // the two fingers' start: zoom, pan and turn follow them
+function endPointer(e) { if (palms.delete(e.pointerId)) return; penIds.delete(e.pointerId); clearTimeout(holdPick.t);
+  pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; else if (pinch) startPinch();   // a finger lifted: carry on with the ones still down, no jump
   if (!pointers.size && tap) { const t = tap; tap = null; if (t.n >= 2 && !t.moved && performance.now() - t.t < 350) { t.n === 2 ? doUndo() : doRedo(); say(t.n === 2 ? 'Undo' : 'Redo'); } }
+  if (drag?.pick && !pointers.size) { const col = colAt(drag.w); drag = null; if (col) { setLayerCol(col); say('Picked a colour.'); } draw(); return; }
+  if (drag?.fill && !pointers.size) { const w = drag.w; drag = null; fillAt(w); return; }
   if (drag?.smooth) { if (!drag.moved && !drag.done.size) undo.pop(); else { drag.set.forEach(l => remerge(l)); save(); } btns(); }
   if (drag?.xf) { if (!drag.moved) undo.pop(); else { drag.layers.forEach(l => remerge(l)); save(); } btns(); }
   if (drag?.free) {
@@ -932,7 +1019,7 @@ cv.addEventListener('pointerup', endPointer); cv.addEventListener('pointercancel
 cv.addEventListener('pointerleave', () => { if (!drag && drawing < 0) { hover = null; draw(); } });
 cv.addEventListener('dblclick', e => {
   if (drawing >= 0 || tool !== 'sel') return;
-  const w = toW(...local(e)), h = hit(w); if (!h) return;
+  const w = toW(...local(e)), h = hit(w); if (!h || h.inside) return;
   const c = curves[h.ci]; snap();
   if (h.pi >= 0) { c.c[h.pi] = c.c[h.pi] ? 0 : 1; say(c.c[h.pi] ? 'Sharp corner.' : 'Smooth again.'); }
   else { const j = Math.floor(h.u), q = evalAt(c, h.u); c.p.splice(j + 1, 0, q); c.c.splice(j + 1, 0, 0); sel = { ci: h.ci, pi: j + 1 }; say('Point added.'); }
@@ -944,8 +1031,8 @@ cv.addEventListener('wheel', e => {
 }, { passive: false });
 
 addEventListener('keydown', e => {
-  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-  const k = e.key.toLowerCase();
+  if (['TEXTAREA', 'INPUT', 'SELECT'].includes(e.target.tagName)) return;
+  const k = e.key.toLowerCase(); if (document.body.classList.contains('simple') && 'iukvb'.includes(k) && k.length === 1 && !e.ctrlKey && !e.metaKey) return;   // those tools are hidden in Simple
   if (k === ' ') { spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); }
   if ((e.ctrlKey || e.metaKey) && k === 'c') { copyLayer(); e.preventDefault(); return; }
   if ((e.ctrlKey || e.metaKey) && k === 'v') { pasteLayer(); e.preventDefault(); return; }
@@ -982,18 +1069,19 @@ $('sFeather').oninput = e => { opt.feather = +e.target.value; draw(); };
 $('bMaskClr').onclick = () => { mask = []; draw(); say('Mask cleared: Thickness now changes the whole layer.'); };
 $('sThick').onpointerdown = () => { if (!thick) startThick(); };
 $('sThick').oninput = e => { if (!thick) startThick(); applyThick(+e.target.value); };
-$('sThick').onchange = endThick;
+$('sThick').onchange = endThick; for (const ev of ['pointerup', 'pointercancel', 'touchend']) $('sThick').addEventListener(ev, () => setTimeout(endThick, 0));
 $('tXf').onclick = () => setTool('xf'); $('tPick').onclick = () => setTool('pick');
 $('cProp').onchange = e => { opt.prop = e.target.checked; };
 $('tErase').onclick = () => setTool(tool === 'pen' && opt.erase ? 'pen' : 'erase'); $('bCopyL').onclick = copyLayer; $('bPasteL').onclick = pasteLayer; $('bFlipL').onclick = flipLayer;
 $('selMode').onchange = e => setLayerMode(e.target.value);
 $('cSimple').onchange = e => setSimple(e.target.checked);
-$('selTex').onchange = e => { const L = layerOf(active); if (!L) return; snap(); L.tex = e.target.value; save(); renderLayers(); draw(); }; $('bMergeC').onclick = mergeColour; $('bMergeD').onclick = mergeDown; $('bMergeD2').onclick = mergeDown; $('bSep').onclick = openSep; $('selPal').onchange = e => { opt.palN = +e.target.value; makePalette(); try { localStorage.setItem(KEY + '-pal', JSON.stringify(pal)); localStorage.setItem(KEY + '-paln', opt.palN); } catch (er) {} renderLayers(); draw(); say('New palette of ' + pal.length + ' colours from the picture.'); }; $('bUni').onclick = () => unify(false); $('bUniAll').onclick = () => unify(true);
-$('bAddL').onclick = () => { snap(); const id = Math.max(0, ...layers.map(L => L.id)) + 1, at = layers.findIndex(L => L.id === active) + 1; layers.splice(at, 0, { id, name: 'Layer ' + id, vis: true, col: layerOf(active)?.mode ? ink : (layerOf(active)?.col || ink), group: null }); active = id; save(); renderLayers(); say('New layer. Everything you draw now belongs to it.'); };
+$('selTex').onchange = e => { const L = layerOf(active); if (!L) return; snap(); L.tex = e.target.value; save(); renderLayers(); draw(); }; $('bMergeC').onclick = mergeColour; $('bMergeD').onclick = mergeDown; $('bMergeD2').onclick = mergeDown; $('bSep').onclick = openSep; $('selPal').onchange = e => { opt.palN = +e.target.value; snap(); makePalette(); save(); try { localStorage.setItem(KEY + '-pal', JSON.stringify(pal)); localStorage.setItem(KEY + '-paln', opt.palN); } catch (er) {} renderLayers(); draw(); say('New palette of ' + pal.length + ' colours from the picture.'); }; $('bUni').onclick = () => unify(false); $('bUniAll').onclick = () => unify(true);
+$('bAddL').onclick = () => { snap(); const id = Math.max(0, ...layers.map(L => L.id)) + 1, at = layers.findIndex(L => L.id === active) + 1; const gin = layers[at - 1]?.group && layers[at]?.group === layers[at - 1].group ? layers[at].group : null;   // made inside a group: it joins the group
+  layers.splice(at, 0, { id, name: 'Layer ' + id, vis: true, col: layerOf(active)?.mode ? ink : (layerOf(active)?.col || ink), group: gin }); active = id; fixGroups(); $('sepBox').hidden = true; save(); renderLayers(); swatches(); say('New layer. Everything you draw now belongs to it.'); };
 $('sRad').oninput = e => { opt.rad = +e.target.value; draw(); }; $('tPen').onclick = () => setTool('pen'); $('tSel').onclick = () => setTool('sel');
 $('bUndo').onclick = doUndo; $('bRedo').onclick = doRedo; $('bFit').onclick = fit;
 $('sSoft').oninput = e => { opt.soft = +e.target.value; draw(); };
-$('selW').onchange = e => { PW = +e.target.value; setupGrid(); draw(); };
+$('selW').onchange = e => { PW = +e.target.value; try { localStorage.setItem(KEY + '-pw', PW); } catch (er) {} setupGrid(); draw(); };
 $('sBw').oninput = e => { opt.bw = +e.target.value; draw(); };
 $('sTp').oninput = e => { opt.tp = +e.target.value; draw(); };
 $('sBw').onpointerdown = $('sTp').onpointerdown = () => { if (curves[sel.ci] && !curves[sel.ci].closed) snap(); };
@@ -1005,27 +1093,30 @@ $('bFront').onclick = () => { if (sel.ci < 0) return; snap(); curves.push(curves
 $('bBack').onclick = () => { if (sel.ci < 0) return; snap(); curves.unshift(curves.splice(sel.ci, 1)[0]); sel = { ci: 0, pi: -1 }; save(); draw(); };
 $('sImg').oninput = e => { opt.imgA = +e.target.value; $('bRef').classList.toggle('on', opt.imgA > 0); draw(); };
 let clearArm = 0;
-$('bClear').onclick = () => { if (!curves.length) return; if (Date.now() - clearArm > 3000) { clearArm = Date.now(); say('Click Clear again to remove every curve (Undo brings them back).'); return; } finishPen(true); snap(); curves = []; fills = []; sel = { ci: -1, pi: -1, fi: -1 }; renderLayers(); save(); draw(); };
+$('bClear').onclick = () => { if (!curves.length) return; if (Date.now() - clearArm > 3000) { clearArm = Date.now(); say('Tap Clear again to erase the whole drawing (Undo brings it back).'); return; } finishPen(true); snap(); curves = []; fills = []; sel = { ci: -1, pi: -1, fi: -1 }; renderLayers(); save(); draw(); };
 $('bLoad').onclick = () => $('fImg').click();
 $('fImg').onchange = e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => {
   const raw = new Image(); raw.onload = () => {   // shrink big photos so the picture can be kept with your work
     const k = Math.min(1, 1600 / Math.max(raw.naturalWidth, raw.naturalHeight)), c = document.createElement('canvas'); c.width = Math.round(raw.naturalWidth * k); c.height = Math.round(raw.naturalHeight * k);
     const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(raw, 0, 0, c.width, c.height); const url = c.toDataURL('image/jpeg', .85);
-    img.onload = () => { IW = img.naturalWidth; IH = img.naturalHeight; setupGrid(); makePalette(); fit(); swatches(); renderLayers(); draw(); try { localStorage.setItem(KEY + '-img', url); localStorage.setItem(KEY + '-pal', JSON.stringify(pal)); } catch (e) { say('Picture is too big to keep after closing; your drawing is still saved.'); } };
+    img.onload = () => { snap(); IW = img.naturalWidth; IH = img.naturalHeight; setupGrid(); makePalette(); fit(); swatches(); renderLayers(); draw(); save(); try { localStorage.setItem(KEY + '-img', url); localStorage.setItem(KEY + '-pal', JSON.stringify(pal)); } catch (e) { say('Picture is too big to keep after closing; your drawing is still saved.'); } };
     img.src = url; }; raw.src = r.result; }; r.readAsDataURL(f); e.target.value = ''; };
 $('bSvg').onclick = () => { renderPixels(); const k = Math.max(1, Math.floor(1024 / PW)), c = document.createElement('canvas'); c.width = PW * k; c.height = PH * k; const g = c.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(pixC, 0, 0, c.width, c.height);
   $('outImg').src = c.toDataURL('image/png'); $('outImg').style.width = Math.min(c.width, 480) + 'px'; $('outImg1').src = pixC.toDataURL('image/png'); $('dlg').hidden = false; };
 $('bClose').onclick = () => $('dlg').hidden = true;
 
-try { const s = localStorage.getItem(KEY); if (s) load(s); } catch (e) {}
-try { const u = localStorage.getItem(KEY + '-img'), pp = JSON.parse(localStorage.getItem(KEY + '-pal') || 'null'); if (u) { img.src = u; if (pp?.length) { pal = pp; buildShades(); } } } catch (e) {}   // the last picture you loaded
-img.onload = () => { IW = img.naturalWidth; IH = img.naturalHeight; setupGrid(); fit(); };
+let st0 = null; try { const s = localStorage.getItem(KEY); if (s) st0 = load(s); } catch (e) {}
+try { const u = localStorage.getItem(KEY + '-img'), pp = JSON.parse(localStorage.getItem(KEY + '-pal') || 'null'); if (u) img.src = u; if (pp?.length && !st0?.pal) { pal = pp; buildShades(); setInk(); } } catch (e) {}   // the last picture you loaded, and its palette
+img.onload = () => { IW = img.naturalWidth; IH = img.naturalHeight;
+  if (st0?.iw && (st0.iw !== IW || st0.ih !== IH) && curves.length) { IW = st0.iw; IH = st0.ih; say("The picture couldn't be kept on this device, but your drawing is safe. Load the picture again to keep tracing."); }   // keep the drawing's own size
+  setupGrid(); fit(); };
 addEventListener('resize', resize); if (window.ResizeObserver) new ResizeObserver(resize).observe(cv);   // the toolbars can change height (fonts loading, phone bars), so keep the canvas matched to its box
 setupGrid(); swatches(); load(snapState());
 const phone = matchMedia('(max-width: 700px)').matches;
 if (matchMedia('(pointer: coarse)').matches) HR = 2;
 try { const c0 = localStorage.getItem(KEY + '-col'); opt.col = c0 || layerOf(active)?.col || opt.col; } catch (e) {}
 try { const pn = +localStorage.getItem(KEY + '-paln'); if (pn) { opt.palN = pn; $('selPal').value = pn; } } catch (e) {}
+try { const pw = +localStorage.getItem(KEY + '-pw'); if ([64, 96, 128, 192, 256].includes(pw) && pw !== PW) { PW = pw; $('selW').value = pw; setupGrid(); } } catch (e) {}
 let simple0 = true; try { simple0 = localStorage.getItem(KEY + '-simple') !== '0'; } catch (e) {} setSimple(simple0);
 $('cMini').checked = !phone; $('mini').hidden = phone; if (phone) togglePanel('layers', 'bLayers', false);
 requestAnimationFrame(() => { resize(); fit(); btns(); setTool('pen'); });
