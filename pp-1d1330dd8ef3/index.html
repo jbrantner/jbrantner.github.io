@@ -21,7 +21,7 @@ html{background:var(--panel)}body{margin:0;box-sizing:border-box;padding:env(saf
 :root[data-theme="dark"]{--bg:#1b171d;--panel:#252028;--fg:#f1eaf2;--mut:#a597a8;--line:#3a323d;--acc:#ff5c9a;--acc-fg:#1b171d;--stage:#120f13;color-scheme:dark}
 [hidden]{display:none!important}
 body.simple .full{display:none!important}
-.swrow{display:flex;gap:3px;align-items:center;flex-wrap:nowrap}
+.swrow{display:flex;gap:3px;align-items:center;flex-wrap:nowrap;overflow-x:auto;max-width:calc(100vw - 24px);scrollbar-width:none}
 .swrow .swb{width:26px;height:26px;border-radius:6px;padding:0;min-height:0}
 #sw{flex-wrap:wrap;gap:4px!important}
 #msg{position:fixed;left:50%;top:var(--msgTop,80px);transform:translateX(-50%);max-width:calc(100% - 32px);background:var(--fg);color:var(--bg);padding:6px 12px;border-radius:8px;pointer-events:none;z-index:5;font-size:13px;text-align:center}
@@ -136,6 +136,7 @@ footer b{color:var(--fg);font-weight:600}
 <div id="stage"><canvas id="cv"></canvas><div id="layers" class="panel"><div class="lh"><b>Layers</b><button id="bAddL" title="New layer: everything you draw on it is one object">+ New</button></div><div id="llist"></div><div class="lh" style="justify-content:flex-start;gap:4px"><button id="bSep" title="Split some colours of this layer onto their own layers">Separate colours</button><button id="bUni" title="Turn picked colours on this layer into the nearest palette colour, shadow or highlight">Unify colours</button><button id="bMergeD2" title="Melt this layer into the one below">Merge down</button></div><div id="sepBox" hidden style="display:grid;gap:6px;padding:6px 0"></div><div class="lh full" style="justify-content:flex-start;gap:4px"><button id="bCopyL" title="Copy this object (Ctrl+C)">Copy</button><button id="bPasteL" title="Paste as a new object (Ctrl+V)">Paste</button><button id="bFlipL" title="Mirror left-right">Flip</button></div><div class="lh full" style="justify-content:flex-start;gap:4px"><button id="bMergeC" title="Melt every layer of this layer's colour into this one">Merge colour</button><label style="font-size:12px" title="Colour: paints its own colour. Shading / Highlight: darkens or lightens whatever colour is underneath, using the palette shades">Type <select id="selMode"><option value="">Colour</option><option value="shade">Shading</option><option value="light">Highlight</option></select></label><label style="font-size:12px" title="Pixel halftone texture for this layer: great for shading">Texture <select id="selTex"><option value="solid">Solid</option><option value="d75">Dots 75%</option><option value="d50">Checker 50%</option><option value="d25">Dots 25%</option><option value="d12">Dots 12%</option><option value="fade">Fade to edge</option></select></label><label style="font-size:12px;flex-basis:100%;display:flex" title="Drag to make the selected layer (or group) thicker or thinner. With a mask painted, only the masked part changes.">Thickness <input id="sThick" type="range" min="-4" max="4" step="0.1" value="0" style="flex:1;min-width:0;width:auto"></label><button class="full" style="display:none" id="bMergeD" title="Melt this layer into the one below (it takes that layer's colour)">Merge down</button></div></div><div id="more" class="panel" hidden>
   <div class="lh"><b>Settings</b><button id="bMoreX">Close</button></div>
   <label title="How many pixels wide the pixel art is">Pixel width <select id="selW"><option>64</option><option>96</option><option>128</option><option selected>192</option><option>256</option></select></label>
+  <label title="How many colours to take from the loaded picture">Palette colours <select id="selPal"><option>6</option><option selected>8</option><option>10</option><option>12</option><option>16</option></select></label>
   <label>Reference <input id="sImg" type="range" min="0" max="1" step="0.05" value=".5"></label>
   <label>Pixels <input id="sPix" type="range" min="0" max="1" step="0.05" value="1"></label>
   <label title="Simple shows only Draw, Erase, Sculpt, Smooth and Transform"><input id="cSimple" type="checkbox"> Simple tools</label>
@@ -206,14 +207,28 @@ function ci(col) { if (!col) return -1; let i = allCols.indexOf(col); if (i < 0)
 const famLen = () => pal.length * 3;   // palette + its shadows + its highlights
 function cdist(a, b) { const p = hexRGB(a), q = hexRGB(b), r = (p[0] + q[0]) / 2; return (2 + r / 256) * (p[0] - q[0]) ** 2 + 4 * (p[1] - q[1]) ** 2 + (2 + (255 - r) / 256) * (p[2] - q[2]) ** 2; }
 function unifyCol(h) { const fam = allCols.slice(0, famLen()); if (fam.includes(h)) return h; return fam.reduce((a, b) => cdist(h, b) < cdist(h, a) ? b : a); }   // nearest base, shadow or highlight
+function hsl(h) { const [r, g, b] = hexRGB(h).map(v => v / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (!d) return [0, 0, l]; const sat = d / (1 - Math.abs(2 * l - 1)); let hu = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return [(hu * 60 + 360) % 360, sat, l]; }
+const hueGap = (a, b) => { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); };
+function fits(h) { const fam = allCols.slice(0, famLen()), b = fam.reduce((a, q) => cdist(h, q) < cdist(h, a) ? q : a), [h1, s1] = hsl(h), [h2, s2] = hsl(b);   // is there a palette colour close enough?
+  return Math.sqrt(cdist(h, b)) < 60 && !(s1 > .3 && (s2 < s1 * .6 || hueGap(h1, h2) > 18)); }
+function growPalette(picks) {   // vivid colours the palette lacks become new palette colours (grouped by hue; the middle shade of each group)
+  const far = [...picks.entries()].filter(([h]) => !fits(h)); if (!far.length) return 0; const groups = [];
+  for (const [h, w] of far.sort((a, b) => b[1] - a[1])) { const [hu, sa, l] = hsl(h), g = groups.find(q => hueGap(q.hu, hu) < 22 && Math.abs(q.sa - sa) < .35 && (sa > .2) === (q.sa > .2));
+    if (g) { g.items.push([h, w, l]); } else groups.push({ hu, sa, items: [[h, w, l]] }); }
+  let added = 0; for (const g of groups) { if (pal.length >= 16) break; g.items.sort((a, b) => a[2] - b[2]); let tot = g.items.reduce((a, q) => a + q[1], 0) / 2, mid = g.items[0][0]; for (const [h, w] of g.items) { mid = h; tot -= w; if (tot <= 0) break; } pal.push(mid); added++; }
+  buildShades(); try { localStorage.setItem(KEY + '-pal', JSON.stringify(pal)); } catch (e) {} return added;
+}
 function unify(all) {   // snap picked colours to the palette family
   const set = all ? new Set(layers.map(L => L.id)) : objSet(active); let n = 0; snap();
+  const picks = new Map(), fam0 = new Set(allCols.slice(0, famLen())); for (const c of curves) if (set.has(c.layer) && c.col && !fam0.has(c.col)) picks.set(c.col, (picks.get(c.col) || 0) + c.p.length);
+  const grew = growPalette(picks);
   for (const c of curves) if (set.has(c.layer) && c.col) { const u = unifyCol(c.col); if (u !== c.col) { c.col = u; n++; } }
   for (const f of fills) if (set.has(f.layer) && f.col) f.col = unifyCol(f.col);
   if (n) for (const id of set) remerge(id); if (all) opt.col = unifyCol(opt.col);
   const h = fillHoles(set);
   if (!n && !h) { undo.pop(); say('Those colours already match the palette and there are no holes.'); return; }
-  save(); renderLayers(); swatches(); draw(); say((n ? 'Unified colours with the palette' : 'Colours already matched') + (h ? '; filled ' + h + (h === 1 ? ' hole.' : ' holes.') : '.'));
+  save(); renderLayers(); swatches(); draw(); say((n ? 'Unified colours with the palette' : 'Colours already matched') + (grew ? ' (added ' + grew + ' new palette colour' + (grew > 1 ? 's' : '') + ')' : '') + (h ? '; filled ' + h + (h === 1 ? ' hole.' : ' holes.') : '.'));
 }
 function fillHoles(set) {   // small empty pockets fully closed in by a layer's paint take the nearest colour around them; nothing else grows
   renderPixels(); let holes = 0; const cw = IW / PW, ch = IH / PH;
@@ -555,18 +570,20 @@ function sampleCol(c, P) {   // the drawing's own colour inside the shape (major
   if (!any) { const q = P[0], x = Math.min(PW - 1, Math.floor(q[0] * PW / IW)), y = Math.min(PH - 1, Math.floor(q[1] * PH / IH)), i = y * PW + x; return pal[nearestPal(small[i * 4], small[i * 4 + 1], small[i * 4 + 2])]; }
   return pal[cnt.indexOf(Math.max(...cnt))];
 }
-function makePalette() {   // k-means: 8 colours from a loaded image
-  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); g.drawImage(img, 0, 0, 64, 64);
-  const d = g.getImageData(0, 0, 64, 64).data, px = []; for (let i = 0; i < d.length; i += 4) px.push([d[i], d[i + 1], d[i + 2]]);
-  px.sort((a, b) => (a[0] * 3 + a[1] * 6 + a[2]) - (b[0] * 3 + b[1] * 6 + b[2]));
-  let cen = Array.from({ length: 8 }, (_, k) => px[Math.floor((k + .5) * px.length / 8)].slice());
+function makePalette(k) {   // k-means on the picture; vivid colours count extra so small bright areas still get a colour
+  k = k || opt.palN || 8;
+  const c = document.createElement('canvas'); c.width = c.height = 96; const g = c.getContext('2d'); g.drawImage(img, 0, 0, 96, 96);
+  const d = g.getImageData(0, 0, 96, 96).data, px = [], wt = []; for (let i = 0; i < d.length; i += 4) { const q = [d[i], d[i + 1], d[i + 2]]; px.push(q); wt.push(1 + 4 * hsl(rgbHex(q))[1] * (1 - Math.abs(2 * hsl(rgbHex(q))[2] - 1))); }
+  const dd = (a, b) => 2 * (a[0] - b[0]) ** 2 + 4 * (a[1] - b[1]) ** 2 + 3 * (a[2] - b[2]) ** 2;
+  let cen = [px.slice().sort((a, b) => (a[0] * 3 + a[1] * 6 + a[2]) - (b[0] * 3 + b[1] * 6 + b[2]))[px.length >> 1].slice()], md = px.map(q => dd(q, cen[0]));
+  while (cen.length < k) { let bi = 0, bv = -1; for (let i = 0; i < px.length; i++) { const v = md[i] * wt[i]; if (v > bv) { bv = v; bi = i; } } cen.push(px[bi].slice()); for (let i = 0; i < px.length; i++) md[i] = Math.min(md[i], dd(px[i], px[bi])); }   // spread-out seeds
   for (let it = 0; it < 12; it++) { const sum = cen.map(() => [0, 0, 0, 0]);
-    for (const q of px) { let bi = 0, bd = 1e9; cen.forEach((c2, i) => { const dd = (q[0] - c2[0]) ** 2 + (q[1] - c2[1]) ** 2 + (q[2] - c2[2]) ** 2; if (dd < bd) { bd = dd; bi = i; } }); sum[bi][0] += q[0]; sum[bi][1] += q[1]; sum[bi][2] += q[2]; sum[bi][3]++; }
+    px.forEach((q, n) => { let bi = 0, bd = 1e18; cen.forEach((c2, i) => { const v = dd(q, c2); if (v < bd) { bd = v; bi = i; } }); const w = wt[n]; sum[bi][0] += q[0] * w; sum[bi][1] += q[1] * w; sum[bi][2] += q[2] * w; sum[bi][3] += w; });
     cen = cen.map((c2, i) => sum[i][3] ? [sum[i][0] / sum[i][3], sum[i][1] / sum[i][3], sum[i][2] / sum[i][3]] : c2); }
+  cen.sort((a, b) => { const A = hsl(rgbHex(a)), B = hsl(rgbHex(b)); return (A[1] < .15) - (B[1] < .15) || A[0] - B[0] || A[2] - B[2]; });
   pal = cen.map(rgbHex); buildShades();
-  const near = h => { const q = hexRGB(h); let best = allCols[0], bd = 1e9; for (const a of allCols) { const r = hexRGB(a), d = (q[0] - r[0]) ** 2 + (q[1] - r[1]) ** 2 + (q[2] - r[2]) ** 2; if (d < bd) { bd = d; best = a; } } return best; };
-  for (const L of layers) if (L.col) L.col = near(L.col); for (const c of curves) if (c.col) c.col = near(c.col); ink = pal.reduce((a, b) => { const L = h => { const q = hexRGB(h); return q[0] * 3 + q[1] * 6 + q[2]; }; return L(b) < L(a) ? b : a; });
-  for (const c2 of curves) c2.col = c2.closed ? sampleCol(c2, c2.p) : ink; swatches();
+  ink = pal.reduce((a, b) => { const L = h => { const q = hexRGB(h); return q[0] * 3 + q[1] * 6 + q[2]; }; return L(b) < L(a) ? b : a; });
+  swatches();   // your painted colours stay exactly as they are
 }
 function swatches() {   // the layer colour, plus Shadow / Highlight for a layer that tints whatever is under it
   const box = $('sw'); box.innerHTML = ''; const L = layerOf(active), cur = L?.mode ? null : opt.col;
@@ -967,7 +984,7 @@ $('cProp').onchange = e => { opt.prop = e.target.checked; };
 $('tErase').onclick = () => setTool(tool === 'pen' && opt.erase ? 'pen' : 'erase'); $('bCopyL').onclick = copyLayer; $('bPasteL').onclick = pasteLayer; $('bFlipL').onclick = flipLayer;
 $('selMode').onchange = e => setLayerMode(e.target.value);
 $('cSimple').onchange = e => setSimple(e.target.checked);
-$('selTex').onchange = e => { const L = layerOf(active); if (!L) return; snap(); L.tex = e.target.value; save(); renderLayers(); draw(); }; $('bMergeC').onclick = mergeColour; $('bMergeD').onclick = mergeDown; $('bMergeD2').onclick = mergeDown; $('bSep').onclick = openSep; $('bUni').onclick = () => unify(false); $('bUniAll').onclick = () => unify(true);
+$('selTex').onchange = e => { const L = layerOf(active); if (!L) return; snap(); L.tex = e.target.value; save(); renderLayers(); draw(); }; $('bMergeC').onclick = mergeColour; $('bMergeD').onclick = mergeDown; $('bMergeD2').onclick = mergeDown; $('bSep').onclick = openSep; $('selPal').onchange = e => { opt.palN = +e.target.value; makePalette(); try { localStorage.setItem(KEY + '-pal', JSON.stringify(pal)); localStorage.setItem(KEY + '-paln', opt.palN); } catch (er) {} renderLayers(); draw(); say('New palette of ' + pal.length + ' colours from the picture.'); }; $('bUni').onclick = () => unify(false); $('bUniAll').onclick = () => unify(true);
 $('bAddL').onclick = () => { snap(); const id = Math.max(0, ...layers.map(L => L.id)) + 1, at = layers.findIndex(L => L.id === active) + 1; layers.splice(at, 0, { id, name: 'Layer ' + id, vis: true, col: layerOf(active)?.mode ? ink : (layerOf(active)?.col || ink), group: null }); active = id; save(); renderLayers(); say('New layer. Everything you draw now belongs to it.'); };
 $('sRad').oninput = e => { opt.rad = +e.target.value; draw(); }; $('tPen').onclick = () => setTool('pen'); $('tSel').onclick = () => setTool('sel');
 $('bUndo').onclick = doUndo; $('bRedo').onclick = doRedo; $('bFit').onclick = fit;
@@ -1004,6 +1021,7 @@ setupGrid(); swatches(); load(snapState());
 const phone = matchMedia('(max-width: 700px)').matches;
 if (matchMedia('(pointer: coarse)').matches) HR = 2;
 try { const c0 = localStorage.getItem(KEY + '-col'); opt.col = c0 || layerOf(active)?.col || opt.col; } catch (e) {}
+try { const pn = +localStorage.getItem(KEY + '-paln'); if (pn) { opt.palN = pn; $('selPal').value = pn; } } catch (e) {}
 let simple0 = true; try { simple0 = localStorage.getItem(KEY + '-simple') !== '0'; } catch (e) {} setSimple(simple0);
 $('cMini').checked = !phone; $('mini').hidden = phone; if (phone) togglePanel('layers', 'bLayers', false);
 requestAnimationFrame(() => { resize(); fit(); btns(); setTool('pen'); });
