@@ -420,6 +420,22 @@ button:disabled { opacity: .5; cursor: default; }
   #packGo { font-variant-numeric: tabular-nums; }
   #packGo:disabled { opacity: .5; }
   @media (prefers-reduced-motion: reduce) { #packSpend .pk-fly { display: none; } }
+  /* The keypad is a sheet. Closed, only its top shows, as a tab above the page dots, and the party walks just
+     above it. Swipe it up (from the tab or anywhere on the road) or tap it to open it; swipe it down or tap the
+     handle to close it. --sh is how much of it shows: its top edge comes down, the keypad comes down with it, and
+     the rest drops out of sight below the tab (sheet-in keeps the keypad its full size inside). */
+  #campCard { touch-action: none; }
+  #packSpend.sheet { height: var(--sh, auto); padding: 0; overflow: hidden; }
+  #packSpend .sheet-in { position: absolute; left: 0; right: 0; top: 0; padding: 12px; }
+  #packSpend .sheet-grab { display: block; width: calc(100% + 24px); height: 22px; margin: -12px -12px 0; padding: 0; border: 0; border-radius: 16px 16px 0 0; background: none; position: relative; }
+  #packSpend .sheet-grab::before { content: ""; position: absolute; left: 50%; top: 8px; width: 40px; height: 5px; margin-left: -20px; border-radius: 99px; background: rgba(255,255,255,.55); }
+  #packSpend .sheet-grab:focus-visible { outline: 3px solid #2dd4bf; outline-offset: -3px; }
+  .sheet-head { min-height: 40px; }
+  .sheet-body { padding-top: 4px; }
+  .sheet-plus { display: none; flex: none; width: 40px; height: 40px; border-radius: 50%; place-items: center; font-size: 28px; font-weight: 500; line-height: 1; background: var(--accent); color: var(--accent-ink); }
+  #packSpend.closed .sheet-plus { display: grid; }
+  #packSpend.closed .pick-mode { display: none; }
+  #packSpend.closed .sheet-head { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -441,9 +457,11 @@ button:disabled { opacity: .5; cursor: default; }
       <div class="scene-top"><div style="min-width:0"><div class="scene-place" id="scenePlace"></div><div class="scene-sub" id="sceneSub"></div></div><div class="scene-clock"><div id="sceneTime"></div><div class="scene-sub" id="sceneDate"></div></div></div>
       <button class="scene-purse" id="scenePurse"></button>
       <button class="scene-update hidden" data-update aria-label="Update the app">✨</button>
-      <div id="packSpend" class="spend-panel">
-        <div class="row spread" style="gap:8px"><div class="grow"><strong id="packTitle" class="pick-title">What did you spend?</strong><div id="packLeft" class="pick-left"></div></div>
-          <div class="pick-mode" role="tablist" aria-label="How to enter the amount"><button role="tab" id="pmKeys" data-pick-mode="keys" aria-controls="pickKeys">Keypad</button><button role="tab" id="pmCount" data-pick-mode="count" aria-controls="pickCount">Count</button></div></div>
+      <div id="packSpend" class="spend-panel sheet closed"><div class="sheet-in" id="sheetIn">
+        <button type="button" class="sheet-grab" id="sheetGrab" aria-expanded="false" aria-controls="sheetBody" aria-label="Open the keypad"></button>
+        <div class="row spread sheet-head" style="gap:8px"><div class="grow"><strong id="packTitle" class="pick-title">What did you spend?</strong><div id="packLeft" class="pick-left"></div></div>
+          <div class="pick-mode" role="tablist" aria-label="How to enter the amount"><button role="tab" id="pmKeys" data-pick-mode="keys" aria-controls="pickKeys">Keypad</button><button role="tab" id="pmCount" data-pick-mode="count" aria-controls="pickCount">Count</button></div><span class="sheet-plus" aria-hidden="true">+</span></div>
+        <div id="sheetBody" class="sheet-body" inert>
         <!-- a combination lock: |0|2|0|.|1|3| is $20.13 -->
         <div id="pickWheel" class="pick-lock no-swipe" role="group" aria-label="Amount, one wheel per digit">
           <span class="sign" aria-hidden="true">$</span>
@@ -466,7 +484,8 @@ button:disabled { opacity: .5; cursor: default; }
         <div class="sr" id="pickSaid" aria-live="polite"></div>
         <div id="packNote" style="font-size:12px; margin-top:2px; text-align:center; opacity:.85"></div>
         <div class="pick-go"><button id="pickZero">Clear</button><button class="primary" id="packGo" disabled>Spend</button></div>
-      </div>
+        </div>
+      </div></div>
     </div>
   </section>
 
@@ -946,7 +965,7 @@ button:disabled { opacity: .5; cursor: default; }
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 76;
+const APP_VERSION = 77;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -2738,6 +2757,32 @@ function packsNow() {
   return out;
 }
 let packEditing = false, sortOpen = null;
+/* The keypad sheet: closed it's a tab above the page dots, open it's the whole keypad. sheetY is how far it has
+   slid down (0 is open); the road is redrawn as it moves, so the party keeps walking just above it. */
+let sheetOpen = false, sheetY = null, sheetAnim = 0, sheetHeld = false, roadRaf = 0;
+const roadSoon = () => { if (!roadRaf) roadRaf = requestAnimationFrame(() => { roadRaf = 0; drawRoad(); }); };
+// How far the sheet slides down to close: all of it but the handle and the title row.
+const sheetClosedY = () => Math.max(0, $('sheetIn').offsetHeight - $('sheetBody').offsetTop - 12);
+function sheetPut(y) {
+  sheetY = y; $('packSpend').style.setProperty('--sh', ($('sheetIn').offsetHeight + 2 - y).toFixed(1) + 'px');   // + its border
+  roadSoon();
+}
+// Back in place after something changed its size (a new screen size, Keypad or Count), unless it's moving.
+// (Not while its page is hidden: nothing has a size then, so it waits for the next render on screen.)
+function sheetFit() { if (!sheetHeld && !sheetAnim && $('sheetIn').offsetHeight) sheetPut(sheetOpen ? 0 : sheetClosedY()); }
+// Open or close it, sliding there (at once with reduced motion).
+function setSheet(open, animate = true) {
+  sheetOpen = open; cancelAnimationFrame(sheetAnim); sheetAnim = 0;
+  const s = $('packSpend');
+  s.classList.toggle('closed', !open); $('sheetBody').inert = !open;
+  $('sheetGrab').setAttribute('aria-expanded', String(open)); $('sheetGrab').setAttribute('aria-label', open ? 'Close the keypad' : 'Open the keypad');
+  if (!$('sheetIn').offsetHeight) return;
+  const to = open ? 0 : sheetClosedY(), from = sheetY == null ? to : sheetY;
+  if (!animate || lessMotion() || Math.abs(to - from) < 1) { sheetPut(to); return; }
+  const t0 = performance.now(), ms = 280;
+  const step = now => { const f = Math.min(1, (now - t0) / ms); sheetPut(from + (to - from) * (1 - Math.pow(1 - f, 3))); sheetAnim = f < 1 ? requestAnimationFrame(step) : 0; };
+  sheetAnim = requestAnimationFrame(step);
+}
 // The home screen is the keypad, over the party on the road. A spend comes off this week's whole purse,
 // and you can sort it into a type later from the Party page. This also draws the type editor there.
 function renderPacks() {
@@ -2787,6 +2832,7 @@ function pickShow() {
   $('pmKeys').setAttribute('aria-selected', m === 'keys'); $('pmCount').setAttribute('aria-selected', m === 'count');
   $('pickWheel').querySelector('.sign').textContent = state.currency;
   document.querySelectorAll('#pickCount .pk-bill').forEach(b => { b.textContent = state.currency + b.dataset.c / 100; });
+  sheetFit();
 }
 // What the amount comes to: the Spend button, the rounding line, and a warning past what's left.
 function pickChanged() {
@@ -2809,6 +2855,7 @@ function pickChanged() {
   $('packLeft').classList.toggle('over', over);
   $('packNote').textContent = c && over ? `That's more than the purse has left, so you'll need to send postage.` : '';
   $('pickSaid').textContent = c ? showCents(c) : '';
+  if (!sheetOpen) sheetFit();
 }
 // Turn the wheels to an amount in cents, the short way round each one.
 // Typing turns them all at once; Clear turns them one after another, left to right.
@@ -2975,7 +3022,7 @@ const mixHex = (c, d, f) => { const h = x => [1, 3, 5].map(i => parseInt(x.slice
 function drawRoad(now = Date.now()) {
   const cv = $('roadCanvas'); if (!cv || !cv.clientWidth) return;
   const W = 160, H = Math.round(W * cv.clientHeight / cv.clientWidth), g = sizeCanvas(cv, W, H);
-  // the ground reaches up to just above the keypad, so the party walks along its top edge
+  // the ground reaches up to just above the keypad (or its tab, when it's closed), so the party walks along its top edge
   const tr = $('packSpend').getBoundingClientRect(), cr = cv.getBoundingClientRect();
   const panelTop = tr.height ? (tr.top - cr.top) * H / cr.height : H * 0.6;
   const GY = Math.max(Math.round(H * 0.22), Math.round(panelTop - 30)), sk = skyAt(now), B = BIOMES[0], n = partySize(), walking = n > 0, run = walking ? now / 70 : 0;
@@ -4111,20 +4158,58 @@ document.addEventListener('keydown', e => {
   if (pickMode() !== 'keys' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
   if ($('pickKeys').offsetParent === null || !$('askBox').classList.contains('hidden') || !$('setup').classList.contains('hidden') || (e.target.closest && e.target.closest('input, select, textarea, .wheel'))) return;
   const k = /^[0-9]$/.test(e.key) ? e.key : e.key === '.' || e.key === ',' ? '.' : e.key === 'Backspace' || e.key === 'Delete' ? 'del' : '';
-  if (!k) return;
-  e.preventDefault(); pickKey(k);
+  if (!k || (!sheetOpen && k === 'del')) return;
+  e.preventDefault(); if (!sheetOpen) setSheet(true); pickKey(k);
   const b = $('pickKeys').querySelector(`[data-k="${k}"]`); b.classList.add('hit'); setTimeout(() => b.classList.remove('hit'), 110);
 });
 $('pickZero').onclick = () => { if (pickMode() === 'count') { pickTray = []; renderTray(); } else { pickVal = 0; pickBuf = ''; wheelsTo(0, true); } pickChanged(); };
-// Spend: it comes off this week's whole purse, marked to sort into a type later. The keypad stays, ready for the next one.
+// Spend: it comes off this week's whole purse, marked to sort into a type later. The sheet slides back down to its tab.
 $('packGo').onclick = () => {
   const c = pickCents(); if (c <= 0) return;
   addTransactions([{ date: today(), amount: -c / 100, description: 'Anything', categoryId: null, pack: '', unsorted: true }], 'manual', state.accounts[1] || state.accounts[0]);
   const t = state.transactions[state.transactions.length - 1], cut = Math.round(scavCut(t) * 100);
   pickVal = 0; pickBuf = ''; pickTray = []; renderTray(); wheelsTo(0, pickMode() === 'keys');
-  render();
+  render(); setSheet(false);
   toastUndo(`Spent ${showCents(c)}` + (cut ? ` · ${cut}¢ to the scavenger` : ''), () => undoSpend(t.id));
 };
+/* Swiping the sheet. A touch that starts on the wheels, the keys or the bills and coins belongs to them, and one
+   that goes sideways flips the page (the same test the page flip uses, so the two never both move). Anything
+   else that goes up or down moves the sheet, from the tab or from anywhere on the road; let go and it settles
+   open or closed, by a flick or by how far it went. A tap on the tab opens it; a tap on the handle closes it. */
+{ const card = $('campCard'); let g = null, eat = 0;
+  card.addEventListener('pointerdown', e => {
+    if (e.button > 0 || g || e.target.closest('#pickWheel, #pickKeys, #pickCount, input, select, textarea')) return;
+    g = { id: e.pointerId, x: e.clientX, y: e.clientY, y0: sheetY == null ? 0 : sheetY, dir: null, t: performance.now(), ly: e.clientY, v: 0, was: sheetOpen };
+  });
+  card.addEventListener('pointermove', e => {
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.dir) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) > Math.abs(dy) * 1.1) { g = null; return; }   // sideways: a page flip
+      g.dir = 'v'; sheetHeld = true; cancelAnimationFrame(sheetAnim); sheetAnim = 0;
+      try { card.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+    const now = performance.now(); g.v = .6 * g.v + .4 * (e.clientY - g.ly) / Math.max(1, now - g.t); g.t = now; g.ly = e.clientY;
+    const C = sheetClosedY(), y = g.y0 + dy;
+    sheetPut(y < 0 ? y / 4 : y > C ? C + Math.min(12, (y - C) / 4) : y);   // a little give past either end
+  });
+  const end = e => {
+    if (!g || e.pointerId !== g.id) return; const d = g; g = null;
+    if (d.dir !== 'v') return;
+    sheetHeld = false; eat = performance.now() + 450;   // the finger lifting off a button isn't a tap on it
+    const C = sheetClosedY(), v = performance.now() - d.t > 100 ? 0 : d.v;
+    setSheet(v < -0.35 ? true : v > 0.35 ? false : d.was ? sheetY < C / 3 : sheetY < C * 2 / 3);
+  };
+  card.addEventListener('pointerup', end); card.addEventListener('pointercancel', end);
+  card.addEventListener('click', e => { if (performance.now() < eat) { e.stopPropagation(); e.preventDefault(); } }, true);
+  $('packSpend').addEventListener('click', e => {
+    if (e.target.closest('#sheetGrab')) setSheet(!sheetOpen);
+    else if (!sheetOpen && !e.target.closest('[data-sort], #sheetBody')) setSheet(true);   // (Spend closes it, and its click comes on up here)
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen && !$('view-budget').classList.contains('hidden') && $('askBox').classList.contains('hidden')) setSheet(false); });
+  addEventListener('resize', sheetFit);
+}
 // "3 to sort": over to the Party page, with the newest one waiting already open
 $('packLeft').addEventListener('click', e => {
   if (!e.target.closest('[data-sort]')) return;
@@ -4468,7 +4553,7 @@ async function checkUpdate() {
   } catch (e) {}
 }
 // No reload under someone's thumb: mid-typing, with a question or the setup open, or partway through a spend.
-const busyForUpdate = () => /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName) || !$('askBox').classList.contains('hidden') || !$('setup').classList.contains('hidden') || pickCents() > 0;
+const busyForUpdate = () => /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName) || !$('askBox').classList.contains('hidden') || !$('setup').classList.contains('hidden') || pickCents() > 0 || sheetOpen;
 function sess(k, v) { try { if (v === undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, v); } catch (e) { return null; } }
 document.querySelectorAll('[data-update]').forEach(el => el.onclick = async () => {
   if (CHANNEL !== 'main') {
