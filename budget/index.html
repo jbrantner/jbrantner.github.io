@@ -1125,7 +1125,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 90;
+const APP_VERSION = 91;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -4449,7 +4449,7 @@ const Town = (() => {
     ];
     LOTS.forEach((L, r) => { L.r = r; L.seed = hash(r + 3) % 1000 / 100;
       const hh = hash([...L.id].reduce((a, c) => a * 31 + c.charCodeAt(0) >>> 0, 7));
-      L.z = L.flat ? 0 : L.kind === 'farm' ? 28 : (L.area === 'home' ? 20 : L.area === 'stock' ? 17 : 14) + [-4, 0, 4, 8][hh % 4] - (L.area === 'proj' && hh % 4 === 3 ? 4 : 0);   // 12 to 28 px up
+      L.z = L.flat ? 0 : L.kind === 'farm' ? 28 : (L.area === 'home' ? 20 : L.area === 'stock' ? 17 : 14) + [-4, 0, 4, 8][hh % 4] - (L.area === 'proj' && hh % 4 === 3 ? 4 : 0);   // 10 to 28 px up
     });
     lotById = Object.fromEntries(LOTS.map(L => [L.id, L]));
     ROADS = new Map();
@@ -4516,17 +4516,11 @@ const Town = (() => {
     cityEl().style.width = W * 2 + 'px'; cityEl().style.height = H * 2 + 'px';
     for (const L of LOTS) {
       const q = lotCentre(L); L.cx = q.x; L.cy = q.y; L.depth = L.i0 + L.j0 + (L.ni + L.nj) / 2 - 1;
-      // a little wooden sign with the place's name, at the front-left of its platform
-      const at = L.kind === 'farm' ? P(L.i0 + 3.4, L.j0 + 2.9, L.z) : L.flat ? { x: L.cx - (L.ni > 2 ? 27 : 21), y: L.cy + (L.ni > 2 ? 13 : 9) } : { x: L.cx - 20, y: L.cy + 9 };
-      L.sign = signAt(placeName(L), at.x, at.y);
+      // the place's name, carved into the front-left wall of its platform (the scavenger's: a stone by his fire)
+      L.face = wallFace(L); L.name = placeName(L); L.sign = wallLabel(L.face, L.name);
     }
-    // small signposts where the bills, stockholds and projects begin (the Bills one opens the list of bills)
-    AREAS = [['home', 'BILLS', 'home'], ['stock', 'STOCKHOLDS'], ['proj', 'PROJECTS']].map(([id, name, lot]) => {
-      const L = LOTS.find(x => x.area === id); if (!L) return null;
-      // the Bills signpost stands by the lane between the farm and the first bill (above the buildings' roofs)
-      const q = id === 'home' ? P(4, 6.5) : P(L.i0 - 1.4, L.j0 - 1.4); return { id, lot, sign: signAt(name, q.x, q.y + 2, true) };
-    }).filter(Boolean);
-    SIGNBOX = [...LOTS.map(L => L.sign.box), ...AREAS.map(A => A.sign.box)];
+    AREAS = [];
+    SIGNBOX = LOTS.map(L => L.sign.box);
     buildLabels();
     PROPS = []; groundTod = '';
     placeProps(); draw();
@@ -4548,15 +4542,7 @@ const Town = (() => {
   };
   const gw = ch => ({ "'": 1, '.': 1, ',': 1, ':': 1, '(': 2, ')': 2, '…': 5, ' ': 2 })[ch] || 3;
   const textW = t => [...t].reduce((a, ch) => a + gw(ch) + 1, 0) - 1;
-  const SIGN_MAX = 13;   // letters on a line before it wraps (two lines at most, then …)
   const clean = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9&\-+\/?!'.,:() ]/g, '').replace(/\s+/g, ' ').trim() || '?';
-  function wrapSign(t) {
-    const words = clean(t).split(' '), lines = [''];
-    for (const w of words) { const cur = lines[lines.length - 1], next = cur ? cur + ' ' + w : w; if (next.length <= SIGN_MAX) lines[lines.length - 1] = next; else lines.push(w); }
-    let out = lines.slice(0, 2).map(l => l.length > SIGN_MAX ? l.slice(0, SIGN_MAX - 1) + '…' : l);
-    if (lines.length > 2) { const l = out[1]; out[1] = (l.length > SIGN_MAX - 1 ? l.slice(0, SIGN_MAX - 1) : l) + '…'; }
-    return out;
-  }
   function placeName(L) {
     if (L.kind === 'farm') return D.incomes.length === 1 ? D.incomes[0].name : 'Farm';
     if (L.kind === 'bill') { const b = billOf(L.id); return b ? b.name : ''; }
@@ -4564,27 +4550,56 @@ const Town = (() => {
     if (L.kind === 'scavenger') return 'Spare change';
     const p = itemOf(L.id); return p ? p.name : '';
   }
-  // a sign standing at (x, y): its lines, and the box it covers (board and post) for taps and the trees
-  function signAt(name, x, y, post) {
-    const lines = wrapSign(name), tw = Math.max(...lines.map(textW)), bw = tw + 6, bh = lines.length * 6 + 3, ph = post ? 9 : 5;
-    let x0 = Math.round(x - bw / 2); x0 = clamp(x0, 1, W - bw - 1);
-    const top = Math.round(y) - ph - bh;
-    return { lines, x: Math.round(x), y: Math.round(y), x0, top, bw, bh, ph, box: [x0, top, x0 + bw, Math.round(y)] };
+  /* ---- names carved into walls ----
+     Self-contained so it carries over to any layout: a face is { x0, y0, w, h, stone? }, a wall running down-right
+     at 1 px of y per 2 px of x, its top edge at (x0, y0), w columns wide and h rows tall. wallLabel(face, name) lays
+     the name out (two lines at most, then …; one line on a low wall) and gives its box; drawWallLabel(g, face, name)
+     cuts it in: a sunken panel that follows the wall's slope, pale letters stepping down with it letter by letter.
+     stone: true draws a small free-standing stone to carry it (for a place with no wall). */
+  const faceY = (F, x) => Math.round(F.y0 + (x - F.x0) / 2);
+  function fitLines(name, maxW, maxLines) {
+    const words = clean(name).split(' '), lines = [''];
+    for (const w of words) { const cur = lines[lines.length - 1], next = cur ? cur + ' ' + w : w; if (textW(next) <= maxW || !cur) lines[lines.length - 1] = next; else lines.push(w); }
+    const cut = (l, more) => { if (!more && textW(l) <= maxW) return l; while (l.length > 1 && textW(l + '…') > maxW) l = l.slice(0, -1).trimEnd(); return l + '…'; };
+    return lines.slice(0, maxLines).map((l, k) => cut(l, k === maxLines - 1 && lines.length > maxLines));
   }
-  function drawSign(g, S, rec) {
-    const F = (a, b, w, h, c) => { g.fillStyle = col(c); g.fillRect(a, b, w, h); };
-    const px0 = clamp(S.x, S.x0 + 2, S.x0 + S.bw - 3);
-    F(px0 - 1, S.top + S.bh - 1, 3, S.ph + 1, '#2b1d3a'); F(px0, S.top + S.bh, 1, S.ph - 1, '#a8652a');
-    F(S.x0, S.top, S.bw, S.bh, '#2b1d3a');
-    F(S.x0 + 1, S.top + 1, S.bw - 2, S.bh - 2, '#e9c98f'); F(S.x0 + 1, S.top + 1, S.bw - 2, 1, '#f7e3b5'); F(S.x0 + 1, S.top + S.bh - 2, S.bw - 2, 1, '#c99a5b');
-    g.fillStyle = col('#3b2414');
+  const WL = new Map();
+  function wallLabel(F, name) {
+    const key = [F.x0, F.y0, F.w, F.h, F.stone ? 1 : 0, name].join('|'); if (WL.has(key)) return WL.get(key);
+    const top = F.stone ? 2 : 3, rows = F.h - top - 1, maxW = F.w - 5, n = rows >= 14 ? 2 : 1;
+    const lines = fitLines(name, maxW, n), tw = Math.max(...lines.map(textW)), pw = tw + 4, ph = lines.length * 6 + 2;
+    const px0 = F.x0 + (F.stone ? Math.floor((F.w - pw) / 2) : Math.min(3, F.w - pw)), py = top + (F.stone ? Math.max(0, Math.floor((rows - ph) / 2)) : 0);   // high on the wall: the lot below stands over its foot
+    const S = { lines, F, px0, py, pw, ph, box: [px0, faceY(F, px0) + py, px0 + pw, faceY(F, px0 + pw - 1) + py + ph] };
+    if (WL.size > 400) WL.clear(); WL.set(key, S); return S;
+  }
+  function drawWallLabel(g, F, name, rec) {
+    const S = wallLabel(F, name), put = (x, y, c) => { g.fillStyle = col(c); g.fillRect(x, faceY(F, x) + y, 1, 1); };
+    if (F.stone) {
+      for (let x = F.x0; x < F.x0 + F.w; x++) {
+        for (let y = -3; y < 0; y++) put(x, y, y === -3 ? '#d9d2c3' : '#c4bcad');
+        for (let y = 0; y < F.h; y++) put(x, y, y === F.h - 1 ? '#3a2716' : hash(x * 31 + y * 7) % 6 === 0 ? '#9f978a' : '#aca496');
+      }
+      for (let k = 0; k < 3; k++) for (let y = -2 + k; y < F.h - 1; y++) { g.fillStyle = col('#7d766b'); g.fillRect(F.x0 + F.w + k, faceY(F, F.x0 + F.w) - k + y, 1, 1); }
+    }
+    for (let x = S.px0; x < S.px0 + S.pw; x++) for (let y = S.py; y < S.py + S.ph; y++) put(x, y, y === S.py ? '#3f3a33' : '#5e584f');
     S.lines.forEach((line, r) => {
-      let cx = S.x0 + 3 + Math.floor((S.bw - 6 - textW(line)) / 2); const cy = S.top + 2 + r * 6;
-      for (const ch of line) { const bits = GLYPH[ch] || GLYPH['?'], w = gw(ch), h = bits.length / w;
-        for (let k = 0; k < bits.length; k++) if (bits[k] === '1') g.fillRect(cx + (k % w), cy + Math.floor(k / w) + (5 - h), 1, 1);
-        cx += w + 1; }
+      let cx = S.px0 + 2 + Math.floor((S.pw - 4 - textW(line)) / 2); const cy = S.py + 1 + r * 6;
+      for (const ch of line) {
+        // each letter stays upright and steps down with the wall at its middle column
+        const bits = GLYPH[ch] || GLYPH['?'], w = gw(ch), h = bits.length / w, dy = faceY(F, cx + (w >> 1));
+        g.fillStyle = col('#f4eddc');
+        for (let k = 0; k < bits.length; k++) if (bits[k] === '1') g.fillRect(cx + (k % w), dy + cy + Math.floor(k / w) + (5 - h), 1, 1);
+        cx += w + 1;
+      }
     });
-    if (rec) rec.push({ box: [S.x0, S.top, S.bw, S.bh + S.ph] });
+    if (rec) rec.push({ box: [S.box[0], S.box[1], S.box[2] - S.box[0], S.box[3] - S.box[1]] });
+    return S;
+  }
+  // a platform's front-left wall (or, on flat ground, a stone at the front of the clearing)
+  function wallFace(L) {
+    if (L.flat) { const p = P(L.i0 - .5, L.j0 + L.nj - .5); return { x0: Math.round(p.x - 20), y0: Math.round(p.y - 25), w: 28, h: 17, stone: true }; }
+    const lp = P(L.i0 - .5, L.j0 + L.nj - .5, L.z), bp = P(L.i0 + L.ni - .5, L.j0 + L.nj - .5, L.z);
+    return { x0: Math.round(lp.x), y0: Math.round(lp.y), w: Math.round(bp.x - lp.x), h: L.z + 1 };
   }
   function renderGround() {
     const c = ground || (ground = document.createElement('canvas')); c.width = W; c.height = H; groundTod = TOD;
@@ -4601,13 +4616,13 @@ const Town = (() => {
 
   /* ---- drawing ---- */
   let selected = null, flash = null, form = null;
-  function drawLotBlock(g, L) {
-    // the platform's earth sides, from its top down to the ground (the top tiles bring their own lip)
+  function walls(g, L) {
+    // the platform's retaining walls, dressed stone from just under the grass down to the ground
     const z = L.z, lp = P(L.i0 - .5, L.j0 + L.nj - .5, z), bp = P(L.i0 + L.ni - .5, L.j0 + L.nj - .5, z), rp = P(L.i0 + L.ni - .5, L.j0 - .5, z);
     for (const [a, b, cs] of [[lp, bp, ['#b8b0a2', '#a39b8d', '#7d766b', '#d2cabb']], [bp, rp, ['#8f887c', '#7c7569', '#5d574e', '#a39b8d']]]) {
       for (let x = Math.min(a.x, b.x); x < Math.max(a.x, b.x); x++) {
-        const t = (x - a.x) / (b.x - a.x), y0 = Math.round(a.y + (b.y - a.y) * t) + 8, slope = Math.round((b.y - a.y) * t);
-        const y1 = y0 - 8 + z + 1;   // down to the ground's surface (the top tile's own side covers the first 8)
+        const t = (x - a.x) / (b.x - a.x), y0 = Math.round(a.y + (b.y - a.y) * t) + 3, slope = Math.round((b.y - a.y) * t);
+        const y1 = y0 - 3 + z + 1;   // from under the grass lip down to the ground's surface
         for (let y = y0; y < y1 + 2; y++) {
           // stone courses 4 px high that follow the wall's slope, joints staggered course by course
           const ry = y - slope, course = Math.floor(ry / 4), joint = (x + course * 3) % 7 === 0, mortar = ((ry % 4) + 4) % 4 === 3 || joint;
@@ -4616,17 +4631,21 @@ const Town = (() => {
         g.fillStyle = col('#3a2716'); g.fillRect(x, Math.max(y0, y1 + 1), 1, 2);   // its foot, a little shadow on the path
       }
     }
-    steps(g, L);
+  }
+  function drawLotBlock(g, L) {
+    // the top tiles first (their own sides get covered by the stone), then the walls, the steps and the name
     for (let s = 0; s <= L.ni + L.nj - 2; s++) for (let di = 0; di < L.ni; di++) {
       const dj = s - di; if (dj < 0 || dj >= L.nj) continue;
-      const i = L.i0 + di, j = L.j0 + dj, p = P(i, j, z);
+      const i = L.i0 + di, j = L.j0 + dj, p = P(i, j, L.z);
       spr(g, 'tiles', L.tile(i, j), p.x, p.y);
     }
+    walls(g, L); steps(g, L);
+    if (L.face) drawWallLabel(g, L.face, L.name);
   }
   // little stone steps from the platform's front down to the path (toward the middle of the street)
   function steps(g, L) {
     const z = L.z; if (z < 6) return;
-    const n = Math.ceil(z / 4), alongI = L.kind === 'farm' ? true : (L.i0 - L.j0) < 0;   // left-hand lots step down to the right
+    const n = Math.ceil(z / 4), alongI = true;   // down the right-hand face (the front-left one carries the name)
     for (let k = 0; k < n; k++) {
       const zk = z - (k + 1) * (z / n), out = .1 + k * .3;
       const A = alongI ? [L.i0 + L.ni - .5 + out, L.j0 + L.nj / 2 - .85] : [L.i0 + L.ni / 2 - .85, L.j0 + L.nj - .5 + out];
@@ -4772,6 +4791,7 @@ const Town = (() => {
       put(y + 2, g => wheel(g, x + (wide ? 30 : 22), y - 1, R));
       put(y + 6, g => spr(g, 'campfire', af('campfire', todAnim('campfire'), now), x - (wide ? 17 : 13), y + 6, false, R));
       if (wide) put(y + 7, g => spr(g, 'camp-stump', af('camp-stump', todAnim('camp-stump'), now), x - 28, y + 8, false, R));
+      if (L.face) put(L.face.y0 + L.face.h + 8, g => drawWallLabel(g, L.face, L.name, R));   // his name stone, by the lane
       const sx = x + (wide ? 8 : 6), sy = y + 8;
       put(sy - 1, g => { for (let k = 0; k < Math.min(3, Math.floor(sc + 1e-9)); k++) spr(g, 'item-coin-stack', Math.min(4, k + 1), sx + 10 + k * 5, sy - 1, false, R); });
       put(sy, g => { for (let k = 0; k < Math.round(cn * 6); k++) spr(g, 'item-cent', af('item-cent', 'glint', now, k * 1.9), sx - 9 + (hash(k + 5) % 22), sy + 1 + hash(k + 9) % 4); spr(g, who, found ? af(who, 'found_coin', now) : af(who, dig ? 'rummage' : 'idle', now), sx, sy, true, R); });
@@ -4807,8 +4827,6 @@ const Town = (() => {
         const p = P(it.pr.X, it.pr.Y); spr(g, it.pr.name, TODI[TOD], p.x, p.y + 2);
       }
     }
-    for (const L of LOTS) drawSign(g, L.sign, L.rec);
-    for (const A of AREAS) drawSign(g, A.sign);
   }
 
   /* ---- tap targets: an invisible button over each sign, its details in the aria-label ---- */
@@ -4823,9 +4841,21 @@ const Town = (() => {
     const wk = `, ${p.crew} worker${p.crew === 1 ? '' : 's'}`;
     return L.kind === 'project' ? `${p.name} project, ${money(p.bal)} of ${money(p.goal)}${wk}` : `${p.name} stockhold, ${(p.exact ? moneyExact : money)(p.bal)}${wk}`;
   }
-  const tapBtn = (id, S) => `<button class="tn-lbl" data-lot="${esc(id)}" style="left:${S.x0 * 2 - 4}px; top:${S.top * 2 - 4}px; width:${S.bw * 2 + 8}px; height:${(S.bh + S.ph) * 2 + 8}px"></button>`;
+  function tapShape(L) {
+    const z = L.z, hb = L.kind === 'farm' ? 46 : L.flat ? 26 : 34, c = corners(L), d = z + 1;
+    // the platform (top and walls) plus what stands on it, rising from the middle of its top, so a lot in front
+    // never covers the wall of the one behind it
+    const mx = (a, b, f) => a + (b - a) * f;
+    let pts = [[c.l.x, c.l.y], [mx(c.l.x, c.t.x, .45), c.t.y - hb], [mx(c.r.x, c.t.x, .45), c.t.y - hb], [c.r.x, c.r.y], [c.r.x, c.r.y + d], [c.b.x, c.b.y + d], [c.l.x, c.l.y + d]];
+    if (L.flat && L.sign) { const B = L.sign.box; pts = [[Math.min(c.l.x, B[0]), c.l.y - hb], [c.t.x, c.t.y - hb], [c.r.x, c.r.y - hb], [c.r.x, c.r.y + 8], [c.b.x, Math.max(c.b.y + 8, B[3] + 2)], [Math.min(c.l.x, B[0]), Math.max(c.l.y + 8, B[3] + 2)]]; }
+    pts = pts.map(([x, y]) => [clamp(Math.round(x), 0, W), clamp(Math.round(y), 0, H)]);
+    const x0 = Math.min(...pts.map(p => p[0])), y0 = Math.min(...pts.map(p => p[1])), x1 = Math.max(...pts.map(p => p[0])), y1 = Math.max(...pts.map(p => p[1]));
+    return { x0, y0, w: x1 - x0, h: y1 - y0, poly: pts.map(([x, y]) => `${(x - x0) * 2}px ${(y - y0) * 2}px`).join(', ') };
+  }
+  const tapBtn = L => { const T = tapShape(L); return `<button class="tn-lbl" data-lot="${esc(L.id)}" style="left:${T.x0 * 2}px; top:${T.y0 * 2}px; width:${T.w * 2}px; height:${T.h * 2}px; clip-path:polygon(${T.poly})"></button>`; };
   function buildLabels() {
-    labelsEl().innerHTML = LOTS.map(L => tapBtn(L.id, L.sign)).join('') + AREAS.filter(A => A.lot).map(A => tapBtn(A.lot, A.sign)).join('');
+    // the nearer platforms last, so where two overlap the one in front takes the tap (as it's drawn in front)
+    labelsEl().innerHTML = [...LOTS].sort((a, b) => (a.flat ? 1e6 : 0) + a.depth - (b.flat ? 1e6 : 0) - b.depth).map(tapBtn).join('');   // the flat clearing (low, in the open) on top
     refreshLabels();
   }
   function refreshLabels() {
@@ -4960,7 +4990,8 @@ const Town = (() => {
     if (id.startsWith('bill:')) {
       const b = billOf(id); if (!b) return { top: '', tail: '' };
       const c = b.cat;
-      return { top: head(b.name, `${money(b.amount)}`) + `<p class="sh-line st">${machineName(c)} · 👷 ${b.crew} villager${b.crew === 1 ? '' : 's'}, ${b.paid ? 'resting: paid this month ✓' : 'at work until it\'s paid'}</p>`,
+      const held = billsHeldLine();
+      return { top: head(b.name, `${money(b.amount)}`) + `<p class="sh-line st">${machineName(c)} · 👷 ${b.crew} villager${b.crew === 1 ? '' : 's'}, ${b.paid ? 'resting: paid this month ✓' : 'at work until it\'s paid'}</p>` + (held ? `<p class="sh-line">${esc(held)}</p>` : ''),
         tail: `<div class="tn-bill">${billRow(c, monthNumbers(month), ledgerAt(today()), false)}</div><div class="tn-acts"><button data-act="home">All bills</button><button data-act="editbills">✎ Edit bills</button></div>` };
     }
     if (id === 'newpot' || id === 'newproj') {
@@ -5095,7 +5126,6 @@ const Town = (() => {
     if (wired) return; wired = true;
     cv().addEventListener('click', e => {
       const r = cv().getBoundingClientRect(), cx = Math.floor((e.clientX - r.left) * W / r.width), cy = Math.floor((e.clientY - r.top) * H / r.height);
-      const A = AREAS.find(A => A.lot && cx >= A.sign.box[0] && cx < A.sign.box[2] && cy >= A.sign.box[1] && cy < A.sign.box[3]); if (A) { tap(A.lot); return; }
       const id = hitTest(Math.floor((e.clientX - r.left) * W / r.width), Math.floor((e.clientY - r.top) * H / r.height));
       if (id) tap(id); else closeSheet();
     });
@@ -5142,7 +5172,7 @@ const Town = (() => {
   requestAnimationFrame(tick);
   // the page came on screen: measure the labels (they can't be measured while it's hidden)
   function shown() { render(); if (LOTS.length && onScreen()) measure(); }
-  return { render, shown, close: closeSheet, open: tap, get selected() { return selected; }, get lots() { return LOTS; }, get signs() { return [...LOTS.map(L => ({ id: L.id, lines: L.sign.lines, box: L.sign.box })), ...AREAS.map(A => ({ id: 'area:' + A.id, lines: A.sign.lines, box: A.sign.box }))]; }, get data() { return D; },
+  return { render, shown, close: closeSheet, open: tap, get selected() { return selected; }, get lots() { return LOTS; }, get signs() { return LOTS.map(L => ({ id: L.id, lines: L.sign.lines, box: L.sign.box, flat: !!L.flat })); }, get data() { return D; },
     villagers() { const c = document.createElement('canvas').getContext('2d'), out = {}; for (const L of LOTS) { COUNT = { n: 0 }; for (const [, fn] of lotContents(L, Date.now())) fn(c); out[L.id] = COUNT.n; } COUNT = null; return out; }, hitTest, P: (X, Y, z) => P(X, Y, z), get W() { return W; }, get H() { return H; } };
 })();
 
