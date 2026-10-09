@@ -22,6 +22,7 @@ self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
   const req = e.request, url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== location.origin || url.pathname.endsWith('/version.json')) return;   // version.json always asks the site
+  if (/\/(icon|tavern)[^/]*$/.test(url.pathname)) return;   // the home-screen icons always come from the site
   e.respondWith((async () => {
     const c = await caches.open(CACHE);
     return (await c.match(req.mode === 'navigate' ? 'index.html' : req, { ignoreSearch: true })) || fetch(req);
