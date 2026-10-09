@@ -781,8 +781,8 @@ button:disabled { opacity: .5; cursor: default; }
     </div>
     <div class="card">
       <h2>Savings</h2>
-      <label class="field">What you have saved right now<input id="suSaved" type="number" inputmode="decimal" placeholder="$0"></label>
-      <p class="muted" style="margin-bottom:0">Everything not spent or used for bills goes into Savings from here on.</p>
+      <label class="field">What's in your bank right now<input id="suSaved" type="number" inputmode="decimal" placeholder="$0"></label>
+      <p class="muted" style="margin-bottom:0">This week's spending money comes out of it. From here on, everything not spent or used for bills goes into Savings.</p>
     </div>
     <div class="muted" id="suErr" style="color:var(--bad); min-height:1.2em"></div>
     <button class="primary" id="suGo" style="width:100%; min-height:52px; font-size:17px">Start</button>
@@ -862,7 +862,7 @@ button:disabled { opacity: .5; cursor: default; }
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 69;
+const APP_VERSION = 70;
 /* ---------- storage ---------- */
 const KEY = 'budget-app-v2';
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -914,6 +914,13 @@ function paidMarker(c, m) {
   return { id: uid(), date: `${m}-${day}`, amount: -Number(c.budget), description: c.name + ' (marked paid)',
     categoryId: c.id, account: c.account, source: 'manual', markedPaid: true };
 }
+// Fixes for data saved by older versions, on every load and every restored backup.
+function migrate(s) {
+  // The first week's purse comes out of what you had when you started. Before version 70 it was
+  // added on top of it, so the $1,430 in the bank counted as $1,535.
+  s.transfers = (s.transfers || []).filter(t => !(t.headStart && t.from === 'start'));
+  return s;
+}
 function load() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.version === 2) {
     s.savings = s.savings || { goal: 0, goalName: '', start: 0, sprite: null };
@@ -928,7 +935,7 @@ function load() {
     for (const t of s.transactions.filter(t => t.savings)) // older "Save it" entries become transfers
       s.transfers.push({ id: t.id, date: t.date, from: t.amount < 0 ? 'spend' : 'savings', to: t.amount < 0 ? 'savings' : 'spend', amount: Math.abs(t.amount) });
     s.transactions = s.transactions.filter(t => !t.savings);
-    return s; } } catch (e) {}
+    return migrate(s); } } catch (e) {}
   return freshState();
 }
 let state = load();
@@ -4003,7 +4010,7 @@ $('backupFile').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   try { const s = JSON.parse(await f.text()); if (s.version !== 2 || !Array.isArray(s.transactions)) throw 0;
     if (!await ask('Replace everything on this device with this backup?')) return;
-    state = s; carts = state.carts || []; save(); render(); toast('Backup restored');
+    state = migrate(s); carts = state.carts || []; save(); render(); toast('Backup restored');
   } catch (err) { toast('That file is not a budget backup'); }
   e.target.value = '';
 };
@@ -4099,16 +4106,14 @@ $('suGo').onclick = () => {
 };
 if (state.needsSetup) openSetup();
 /* A head start: the first week's purse is there in full from the moment you set up, whatever day it
-   is, paid from money you already had (a move from "Money you had", not from your pots). What the
-   party earns over the rest of that week waits at camp toward next week's purse. */
+   is. It comes out of what you had when you started, like every purse after it, so Savings starts
+   that much lower. */
 function headStart() {
   if (state.headStart || !state.startAt) return;
   const wk = ymd(weekStart());
   if (ymd(weekStart(new Date(state.startAt))) !== wk) { state.headStart = true; return; }   // that first week is already over
   if (!state.purse || state.purse.wk !== wk) state.purse = { wk, P: 0, extra: 0 };
   state.purse.extra = Math.max(0, Number(state.purse.extra || 0));                      // undo the old part-week purse
-  const need = Math.round(partySize() * 7 * WORKER_DAY * 100) / 100;
-  if (need >= 0.01) state.transfers.push({ id: uid(), from: 'start', to: 'spend', amount: need, date: today(), headStart: true });
   state.headStart = true; save();
 }
 headStart(); render();
