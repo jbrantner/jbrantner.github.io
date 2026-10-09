@@ -259,8 +259,11 @@ input[type=range] { accent-color: var(--accent); padding: 0; border: 0; backgrou
 .chip { font-size: 14px; padding: 5px 10px; border-radius: 99px; }
 .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .chip.combo { border-style: dashed; }
-.potrow { display: grid; grid-template-columns: 1fr auto 84px auto; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.potrow { display: grid; grid-template-columns: 1fr auto 118px auto; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
 .potrow input { padding: 6px 8px; font-size: 14px; width: 100%; }
+.goalcell { display: flex; gap: 4px; }
+.goalcell input { flex: 1; padding: 6px; }
+.goalcell select { flex: none; width: 54px; padding: 6px 4px; font-size: 14px; }
 .star { border: 0; background: none; padding: 2px; font-size: 18px; color: var(--muted); }
 .star.on { color: var(--warn); }
 button:disabled { opacity: .5; cursor: default; }
@@ -662,9 +665,13 @@ button:disabled { opacity: .5; cursor: default; }
       <div id="storeList"></div>
       <div class="row" style="margin-top:10px; gap:6px">
         <input id="newGoalName" class="grow" placeholder="Mini project, e.g. Laptop" aria-label="Mini project name" style="min-width:0">
-        <input id="newGoalAmt" type="number" inputmode="decimal" placeholder="Goal $" aria-label="Goal amount" style="width:84px">
+      </div>
+      <div class="row" style="margin-top:6px; gap:6px">
+        <input id="newGoalAmt" type="number" inputmode="decimal" placeholder="Goal" aria-label="Goal" style="width:84px">
+        <select id="newGoalUnit" class="grow" aria-label="Goal in dollars or months of bills"><option value="$">dollars</option><option value="months">months of bills</option></select>
         <button id="addGoalBtn">Start</button>
       </div>
+      <div class="muted hidden" id="newGoalHint" style="font-size:12px; margin-top:4px"></div>
     </div>
     <div class="potcards hidden" id="potCards"></div>
 
@@ -862,7 +869,7 @@ button:disabled { opacity: .5; cursor: default; }
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 72;
+const APP_VERSION = 73;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -888,7 +895,7 @@ function freshState() {
     // How purchases round. 'up': $1.99 counts as $2 and 1¢ goes to the scavenger.
     // 'down': $1.99 counts as $1 and 99¢ goes to the scavenger (pots then run ahead of the bank).
     scavengerMode: 'up',
-    goals: {}, featured: 'savings', duel: { a: 'spend', b: 'savings' },
+    goals: {}, goalMonths: {}, featured: 'savings', duel: { a: 'spend', b: 'savings' },
     combos: [],
     inc: 5, carts: [], workerLog: [], presets: [], collected: {}, harvested: {}, rush: {},
     potTraders: {} }; // saved split combos: { id, from: [potIds], to: [potIds] }
@@ -922,6 +929,7 @@ function migrate(s) {
   // The first week's purse comes out of what you had when you started. Before version 70 it was
   // added on top of it, so the $1,430 in the bank counted as $1,535.
   s.transfers = (s.transfers || []).filter(t => !(t.headStart && t.from === 'start'));
+  s.goals = s.goals || {}; s.goalMonths = s.goalMonths || {};   // goals set in months of bills (version 73)
   return s;
 }
 function load() {
@@ -1167,12 +1175,27 @@ function hoardParts(now = Date.now()) {
   return { had, head, bills, even: f.even, bonus: f.bonus, spent, over, scav, total: had + head + bills + f.even + f.bonus - spent - over + scav };
 }
 const hoardAt = (now = Date.now()) => hoardParts(now).total;
+// A month of bills: every bill on the Upkeep page added up.
+function billsMonthly() { return sum(state.categories.filter(c => c.kind === 'bill'), c => Number(c.budget || 0)); }
+// A goal can be set in months of bills ("3 months of bills saved up"). It follows the bills, so
+// changing a bill changes the goal.
+const goalMonthsOf = id => Number((state.goalMonths || {})[id] || 0);
+function goalOf(id) {
+  const n = goalMonthsOf(id);
+  return n > 0 ? Math.ceil(n * billsMonthly() - 1e-9) : Number(state.goals[id] || 0);
+}
+// "1.4 of 3 months of bills saved", for a pot whose goal is in months. Rounded down, never up.
+function monthsLine(p) {
+  const n = goalMonthsOf(p.id), b = billsMonthly(); if (!n || !(b > 0)) return '';
+  const have = Math.max(0, Math.floor(p.bal / b * 10 + 1e-9) / 10);
+  return `<div class="muted" style="font-size:12px">${have.toLocaleString(undefined, { maximumFractionDigits: 1 })} of ${n} month${n === 1 ? '' : 's'} of bills saved · bills are ${money(b)} a month</div>`;
+}
 // A project's money: what was moved in or out, plus what its crew has built.
 const projectBal = (id, now = Date.now()) => moved(id, ymd(new Date(now))) + grown(id, 0, now);
 // When a project's crew finished its goal: the first moment its money reached the goal while the crew
 // was working, or null if it hasn't yet.
 function goalHit(id, now = Date.now()) {
-  const goal = Number(state.goals[id] || 0); if (!(goal > 0)) return null;
+  const goal = goalOf(id); if (!(goal > 0)) return null;
   const ev = [...state.workerLog.filter(w => w.pot === id).map(w => ({ t: w.t, w: w.delta })),
     ...state.transfers.filter(t => t.to === id || t.from === id).map(t => ({ t: dayMs(t.date), d: (t.to === id ? t.amount : 0) - (t.from === id ? t.amount : 0) }))]
     .filter(e => e.t <= now).sort((a, b) => a.t - b.t);
@@ -1201,7 +1224,7 @@ function routeBonuses() {
     done.push(key); changed = true;
     let amt = c.amount;
     if (to !== 'savings') {
-      const goal = Number(state.goals[to] || 0); if (goal > 0) amt = Math.max(0, Math.min(amt, goal - projectBal(to)));
+      const goal = goalOf(to); if (goal > 0) amt = Math.max(0, Math.min(amt, goal - projectBal(to)));
       if (amt >= 0.01) state.transfers.push({ id: uid(), from: 'savings', to, amount: Math.round(amt * 100) / 100, date: c.date, bonus: true });
     }
     state.bonusNews = { date: c.date, amount: c.amount, to: amt >= 0.01 ? to : 'savings', seen: false };
@@ -1866,7 +1889,7 @@ function setBar(el, spent, budget) {
 /* ---------- savings ---------- */
 // How full a pot's hoard looks: progress to its goal, or its size next to the biggest pot.
 function hoardPct(p, pots) {
-  const goal = Number(state.goals[p.id] || 0);
+  const goal = goalOf(p.id);
   if (goal > 0) return Math.max(0, Math.min(1, p.bal / goal));
   const big = Math.max(1, ...pots.map(x => x.bal));
   return Math.max(0, Math.min(1, p.bal / big));
@@ -1891,7 +1914,7 @@ function renderPotsTab() {
   // The hoard is money you've collected and hold: the party's money, storage and spare change. Bill money
   // is spoken for (the machine crews run on it), so it isn't counted here.
   const hoardPots = pots.filter(p => p.id !== 'bills');
-  const total = sum(hoardPots, p => p.bal), goalSum = sum(hoardPots, p => Number(state.goals[p.id] || 0));
+  const total = sum(hoardPots, p => p.bal), goalSum = sum(hoardPots, p => goalOf(p.id));
   $('featBal').textContent = money(total);
   $('featGoal').textContent = goalSum ? money(goalSum) : '';
   $('featGoalRow').classList.toggle('hidden', !goalSum);
@@ -1905,7 +1928,7 @@ function renderPotsTab() {
   renderPosts();
   // pot cards
   $('potCards').innerHTML = pots.map(p => {
-    const goal = Number(state.goals[p.id] || 0), inStation = posts.a.includes(p.id) || posts.b.includes(p.id);
+    const goal = goalOf(p.id), inStation = posts.a.includes(p.id) || posts.b.includes(p.id);
     return `<div class="potcard${inStation ? ' in-station' : ''}" data-pot="${p.id}" role="button" tabindex="0" aria-label="${esc(p.name)}, ${fmt(p)}. Tap or drag to put it in the trading station.">
       <canvas width="112" height="118" data-hoard="${p.id}" aria-hidden="true"></canvas>
       <div class="row spread"><strong style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${esc(p.name)}</strong><span class="num ${p.bal < 0 ? 'bad' : ''}" data-card-bal="${p.id}">${fmt(p)}</span></div>
@@ -1917,11 +1940,11 @@ function renderPotsTab() {
   $('potCards').querySelectorAll('canvas[data-hoard]').forEach(c => drawFarmThumb(c, hoardPct(find(c.dataset.hoard), pots), canFarm(c.dataset.hoard) ? workersAt(c.dataset.hoard) : 0));
   drawVillage(); renderIncome(); renderStore();
   // manage list
-  $('potList').innerHTML = pots.map(p => `<div class="potrow">
-    <div style="min-width:0"><strong>${esc(p.name)}</strong><div class="muted ${p.warn ? 'warn' : ''}" style="font-size:12px">${p.note}</div></div>
+  $('potList').innerHTML = pots.map(p => { const gm = goalMonthsOf(p.id); return `<div class="potrow">
+    <div style="min-width:0"><strong>${esc(p.name)}</strong><div class="muted ${p.warn ? 'warn' : ''}" style="font-size:12px">${p.note}${gm ? ` · goal ${money(goalOf(p.id))}` : ''}</div></div>
     <span class="num ${p.bal < 0 ? 'bad' : ''}">${fmt(p)}</span>
-    <input type="number" inputmode="numeric" min="0" placeholder="Goal" data-goal="${p.id}" value="${state.goals[p.id] || ''}" aria-label="Goal for ${esc(p.name)}">
-    ${p.custom ? `<button class="link danger" data-pot-del="${p.id}" aria-label="Delete ${esc(p.name)}">✕</button>` : '<span></span>'}</div>`).join('');
+    <span class="goalcell"><input type="number" inputmode="numeric" min="0" placeholder="${gm ? 'Months' : 'Goal'}" data-goal="${p.id}" value="${gm || state.goals[p.id] || ''}" aria-label="Goal for ${esc(p.name)}${gm ? ', in months of bills' : ''}">${canFarm(p.id) ? `<select data-goal-unit="${p.id}" aria-label="Goal for ${esc(p.name)} in dollars or months of bills"><option value="$">$</option><option value="months"${gm ? ' selected' : ''}>mo</option></select>` : ''}</span>
+    ${p.custom ? `<button class="link danger" data-pot-del="${p.id}" aria-label="Delete ${esc(p.name)}">✕</button>` : '<span></span>'}</div>`; }).join('');
   $('savStart').value = state.savings.start || '';
   const recent = state.transfers.filter(t => t.date.startsWith(month)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
   $('moveList').innerHTML = recent.length ? '<div class="muted" style="margin-top:10px">Moves this month</div>' + recent.map(t => `
@@ -2678,7 +2701,7 @@ function autoPostage() {
   if (postaging) return;
   const pu = purseNow(), need = postageNeed(pu); if (need < 0.01) return;
   postaging = true;
-  const bals = potBalances(month), minis = bals.filter(p => isMini(p) && p.bal < Number(state.goals[p.id] || 0) && p.bal >= 0.01).map(p => p.id);
+  const bals = potBalances(month), minis = bals.filter(p => isMini(p) && p.bal < goalOf(p.id) && p.bal >= 0.01).map(p => p.id);
   let got = splitFrom(minis, need), sent = sum(Object.values(got), x => x);
   if (need - sent >= 0.01) { const more = splitFrom(coverPots().filter(id => !(id in got)), need - sent); Object.assign(got, more); sent = sum(Object.values(got), x => x); }
   const parts = [];
@@ -2711,7 +2734,7 @@ function renderParty() {
       : lt.amount >= 0.01 ? `🎉 You didn't spend <strong>${money(lt.amount)}</strong> ${lt.weeks > 1 ? `over the last ${lt.weeks} weeks` : 'last week'}. It's saved now in ${esc(potN(lt.to))}.${lt.gold && GOLD_ON ? ` You also earned 🪙 ${goldFmt(lt.gold)} gold.` : ''}`
       : 'The party came home with empty pockets last week.'} <button class="link" id="partyHomeOk">${lt.amount >= 0.01 ? 'Nice' : 'OK'}</button></div>` : '')
     + (bn ? `<div>💰 A bonus paycheck landed ${shortDate(bn.date)}: <strong>${money(bn.amount)}</strong> extra this month, now in ${esc(potN(bn.to))}. <button class="link" id="bonusOk">Nice</button></div>` : '')
-    + built.map(([id]) => `<div>🎉 ${esc(potN(id))} is built! The crew went home and its villagers are free again. <button class="link" data-built-ok="${id}">Nice</button></div>`).join('')
+    + built.map(([id]) => `<div>🎉 ${esc(potN(id))} ${goalMonthsOf(id) ? `is full: ${goalMonthsOf(id)} month${goalMonthsOf(id) === 1 ? '' : 's'} of bills set aside!` : 'is built!'} The crew went home and its villagers are free again. <button class="link" data-built-ok="${id}">Nice</button></div>`).join('')
     + (bk ? `<div>💾 ${bk} Your budget lives only on this phone, so save a copy to Files now and then. <button class="link" id="backupNow">Back up now</button> · <button class="link" id="backupLater">Later</button></div>` : '');
   const need = Math.ceil(postageNeed(pu) - 1e-9), over = pu.purseLeft < 0;
   $('runnerBtn').classList.toggle('hidden', month !== today().slice(0, 7));
@@ -2892,12 +2915,12 @@ function renderIncome() {
 const materialsWaiting = (id, now = Date.now()) => month === today().slice(0, 7) ? Math.max(0, grown(id, workClock(month), now)) : 0;
 // Savings has no worker log (it's everyone left over), so its waiting money comes from how many save.
 const waitingFor = (id, now = Date.now()) => id === 'savings' ? (month === today().slice(0, 7) ? savers() * WORKER_DAY * Math.max(0, now - workClock(month)) / DAY_MS : 0) : materialsWaiting(id, now);
-const isMini = p => p.custom && Number(state.goals[p.id] || 0) > 0;
+const isMini = p => p.custom && goalOf(p.id) > 0;
 const miniSeen = {};
 // A mini project as a building site: the building rises with the money saved, each $1 is a load of
 // materials, and the crew hauls the next load while you gather pay.
 function drawMini(cv, p, now = Date.now()) {
-  const goal = Number(state.goals[p.id] || 0), w = workersAt(p.id), mat = materialsWaiting(p.id, now);
+  const goal = goalOf(p.id), w = workersAt(p.id), mat = materialsWaiting(p.id, now);
   const done = Math.max(0, Math.min(goal, p.bal));
   // the building keeps whatever has been saved; workers only add to it
   const wv = { ms: { amt: goal, hp: goal - done }, f: w > 0 ? (AUTO_COLLECT ? done - Math.floor(done) : mat % 1) : 0, i: Math.floor(done), left: Math.max(0, Math.ceil(goal - done)), boss: false, idle: w < 1 || done >= goal };
@@ -2968,18 +2991,19 @@ function renderStore() {
   const pots = potBalances(month).filter(p => canFarm(p.id));
   $('storeHands').textContent = `${savers()} saving by default`;
   $('storeList').innerHTML = pots.map(p => {
-    const goal = Number(state.goals[p.id] || 0), w = p.id === 'savings' ? savers() : workersAt(p.id), need = goal - p.bal;
+    const goal = goalOf(p.id), gm = goalMonthsOf(p.id), w = p.id === 'savings' ? savers() : workersAt(p.id), need = goal - p.bal;
     const when = goal && need > 0 && w > 0 ? ` · goal around ${new Date(Date.now() + need / (w * WORKER_DAY) * DAY_MS).toLocaleDateString(undefined, need / w > 300 ? { month: 'short', year: 'numeric' } : { month: 'short', day: 'numeric' })}` : goal && need <= 0 ? ' · goal reached 🎉' : '';
     if (isMini(p)) return `<div class="mini">
       <canvas data-mini-cv="${p.id}" role="img" aria-label="${esc(p.name)} being built, ${Math.floor(Math.min(1, p.bal / goal) * 100)}% done"></canvas>
       <div class="row spread"><strong style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${esc(p.name)}</strong><span class="num">${money(p.bal)}<span class="muted"> of ${money(goal)}</span></span></div>
       <div class="bar goal" style="margin:2px 0 0"><span style="width:${Math.max(0, Math.min(100, p.bal / goal * 100))}%"></span></div>
-      ${need <= 0 ? '<div class="ok" style="font-size:13px">Built! 🎉 The money is ready when you are.</div>' : `<div class="muted" style="font-size:12px" data-mini-note="${p.id}"></div>`}
+      ${need <= 0 ? `<div class="ok" style="font-size:13px">${gm ? `Full! 🎉 ${gm} month${gm === 1 ? '' : 's'} of bills set aside.` : 'Built! 🎉 The money is ready when you are.'}</div>` : monthsLine(p) + `<div class="muted" style="font-size:12px" data-mini-note="${p.id}"></div>`}
       <div class="wk"><button data-wk="${p.id}" data-d="-1" aria-label="Take a worker off ${esc(p.name)}">−</button><span class="muted" style="font-size:13px">${w} worker${w === 1 ? '' : 's'} · ${rateText(w)}${when}</span><button data-wk="${p.id}" data-d="1" aria-label="Put a worker on ${esc(p.name)}" style="margin-left:auto">+</button></div>
     </div>`;
     if (p.id === 'savings' || !isMini(p)) return `<div class="mini">
       <canvas data-mini-cv="${p.id}" role="img" aria-label="${esc(p.name)} stockpile, ${money(p.bal)} stored"></canvas>
       <div class="row spread"><strong>${esc(p.name)}</strong><span class="num">${money(p.bal)}${goal ? `<span class="muted"> of ${money(goal)}</span>` : ''}</span></div>
+      ${monthsLine(p)}
       <div data-pile="${p.id}"><div class="crop-bar"><span></span></div><div class="muted" style="font-size:12px; margin-top:2px"></div></div>
       <label class="cover"><input type="checkbox" data-cover="${p.id}"${coverPots().includes(p.id) ? ' checked' : ''}> Covers overspending when no mini project is being built</label>
       ${p.id === 'savings' ? `<div class="muted" style="font-size:13px">${w} villager${w === 1 ? '' : 's'} stockpiling by default · ${rateText(w)}</div>`
@@ -3026,7 +3050,7 @@ function fbRoute() {
 function renderFarm() {
   if (!fb.id) return;
   const pots = potBalances(month), p = pots.find(x => x.id === fb.id); if (!p) { closeFarm(); return; }
-  const goal = Number(state.goals[p.id] || 0), w = workersAt(p.id), here = Math.max(0, w - inFlightWorkers(p.id));
+  const goal = goalOf(p.id), w = workersAt(p.id), here = Math.max(0, w - inFlightWorkers(p.id));
   const coming = sum(carts.filter(c => c.to === p.id), c => c.workers || 0), leaving = inFlightWorkers(p.id);
   $('fbTitle').textContent = p.name;
   $('fbGoal').textContent = goal ? `of ${money(goal)}` : '';
@@ -3118,7 +3142,7 @@ function drawScene(now = Date.now()) {
   for (const side of ['a', 'b']) {
     const id = posts[side][0]; if (!id) continue;
     const p = view.find(x => x.id === id); if (!p) continue;
-    const cx = potX(id, side), w = canFarm(id) ? workersAt(id) : 0, goal = Number(state.goals[id] || 0);
+    const cx = potX(id, side), w = canFarm(id) ? workersAt(id) : 0, goal = goalOf(id);
     islands.push({ x: cx * SC - IW, pct: hoardPct(p, view), w });
     const sending = rt && send.from === side;
     labels.push({ t: p.name, x: cx * SC, y: 22, size: 24, c: sending ? '#5eead4' : '#ffffff' });
@@ -3701,7 +3725,7 @@ $('potList').addEventListener('click', async e => {
   const earlier = cents(grown(id, 0, monthStartMs(today().slice(0, 7))));
   if (earlier > 0) state.transfers.push({ id: uid(), date: today(), from: id, to: 'spend', amount: earlier });
   state.workerLog = state.workerLog.filter(w => w.pot !== id);
-  state.pots = state.pots.filter(x => x.id !== id); delete state.goals[id];
+  state.pots = state.pots.filter(x => x.id !== id); delete state.goals[id]; delete state.goalMonths[id];
   state.combos = state.combos.filter(c => !c.from.includes(id) && !c.to.includes(id));
   save(); render();
 });
@@ -3741,17 +3765,32 @@ $('storeList').addEventListener('click', e => {
   const b = e.target.closest('[data-wk]'); if (!b) return;
   const id = b.dataset.wk, d = Number(b.dataset.d);
   if (id === 'savings') return;
-  const goal = Number(state.goals[id] || 0);
+  const goal = goalOf(id);
   if (d > 0 && goal > 0 && projectBal(id) >= goal - 0.005) { toast('That one is built. Raise its goal to keep building.'); return; }
   if (d > 0 && savers() < 1) { toast(`Nobody is free. Your pay covers ${maxWorkers()} villagers, and they're all with the party or on a project.`); return; }
   if (d < 0 && workersAt(id) < 1) return;
   state.workerLog.push({ t: Date.now(), pot: id, delta: d }); save(); render();
 });
+// A goal in months of bills shows what it comes to while you type.
+function goalHint() {
+  const inMonths = $('newGoalUnit').value === 'months', b = billsMonthly(), n = Math.round(Number($('newGoalAmt').value) || 0);
+  $('newGoalHint').classList.toggle('hidden', !inMonths);
+  $('newGoalName').placeholder = inMonths ? 'Name, e.g. Bills buffer' : 'Mini project, e.g. Laptop';
+  $('newGoalAmt').placeholder = inMonths ? 'Months' : 'Goal';
+  if (inMonths) $('newGoalHint').textContent = !(b > 0) ? 'Add your bills on the Upkeep page first, so the app knows what a month costs.'
+    : `${n > 0 ? `${n} month${n === 1 ? '' : 's'} of bills = ${money(Math.ceil(n * b - 1e-9))}.` : 'How many months of bills?'} Your bills are ${money(b)} a month. If they change, the goal changes with them.`;
+}
+$('newGoalUnit').onchange = () => { if ($('newGoalUnit').value === 'months' && !$('newGoalAmt').value) $('newGoalAmt').value = 3; goalHint(); };
+$('newGoalAmt').oninput = goalHint;
 $('addGoalBtn').onclick = () => {
-  const name = $('newGoalName').value.trim(), amt = Number($('newGoalAmt').value) || 0;
+  const name = $('newGoalName').value.trim(), amt = Number($('newGoalAmt').value) || 0, inMonths = $('newGoalUnit').value === 'months', n = Math.round(amt);
   if (!name) { toast('Name your mini project'); return; }
-  const id = uid(); state.pots.push({ id, name }); if (amt > 0) state.goals[id] = amt;
-  $('newGoalName').value = ''; $('newGoalAmt').value = ''; save(); render(); toast(`Started ${name}. Put some workers on it.`);
+  if (inMonths && !(billsMonthly() > 0)) { toast('Add your bills first, so the app knows what a month costs'); return; }
+  if (inMonths && !(n > 0)) { toast('How many months of bills?'); return; }
+  const id = uid(); state.pots.push({ id, name });
+  if (inMonths) state.goalMonths[id] = n; else if (amt > 0) state.goals[id] = amt;
+  $('newGoalName').value = ''; $('newGoalAmt').value = ''; $('newGoalUnit').value = '$'; goalHint(); save(); render();
+  toast(inMonths ? `Started ${name}: ${n} month${n === 1 ? '' : 's'} of bills, ${money(goalOf(id))}. Put some workers on it.` : `Started ${name}. Put some workers on it.`);
 };
 $('habitList').addEventListener('click', e => {
   const del = e.target.closest('[data-habit-del]');
@@ -3970,8 +4009,18 @@ function placeInSlot(id, slot) {
   });
 })();
 $('potList').addEventListener('change', e => {
+  const gm = state.goalMonths, unit = e.target.dataset.goalUnit;
+  if (unit) {   // switching units keeps the goal about the same size
+    const b = billsMonthly(), g = goalOf(unit);
+    if (e.target.value === 'months') {
+      if (!(b > 0)) { toast('Add your bills first, so the app knows what a month costs'); render(); return; }
+      gm[unit] = Math.max(1, Math.round(g / b) || 3); delete state.goals[unit];
+    } else { delete gm[unit]; if (g > 0) state.goals[unit] = g; }
+    save(); render(); return;
+  }
   const id = e.target.dataset.goal; if (!id) return;
-  const v = Math.floor(Number(e.target.value) || 0); if (v > 0) state.goals[id] = v; else delete state.goals[id];
+  if (gm[id]) { const n = Math.round(Number(e.target.value) || 0); if (n > 0) gm[id] = n; else delete gm[id]; }
+  else { const v = Math.floor(Number(e.target.value) || 0); if (v > 0) state.goals[id] = v; else delete state.goals[id]; }
   save(); render();
 });
 $('savStart').onchange = e => { state.savings.start = Number(e.target.value) || 0; save(); render(); };
