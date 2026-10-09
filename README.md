@@ -1,4 +1,4 @@
-# Pixel Pen and Pixel Studio
+# Pixel Pen, Pixel Studio and Budget
 
 Copyright (c) 2026 Jordan Brantner. All rights reserved.
 
