@@ -2,7 +2,7 @@
 // the version it has: the app shows ✨ when a newer one has been sent, and the new files are only
 // fetched when its owner taps ✨ and says yes. A new copy of this script never swaps the app by itself.
 const CACHE = 'budget-share';
-const FILES = ['art.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'index.html'];   // the page last, so a cut-off update never pairs a new page with old art
+const FILES = ['art.png', 'town-art.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'tavern-180.png', 'tavern-192.png', 'tavern-512.png', 'index.html'];   // the page last, so a cut-off update never pairs a new page with old art
 
 async function fetchInto(name) {
   const c = await caches.open(name);
