@@ -372,6 +372,7 @@ button:disabled { opacity: .5; cursor: default; }
         </div>
         <div class="chips" style="justify-content:center; margin-top:6px"><button class="chip" data-pack-add="5">+$5</button><button class="chip" data-pack-add="10">+$10</button><button class="chip" data-pack-add="20">+$20</button></div>
         <div id="packNote" style="font-size:12px; margin-top:4px; text-align:center; opacity:.85"></div>
+        <button class="link hidden" id="packDone" style="display:block; margin:6px auto 0; font-size:13px"></button>
         <div class="row" style="gap:8px; margin-top:8px"><button class="grow" id="packClear">Leave</button><button class="primary grow" id="packGo" disabled>Accept</button></div>
       </div>
     </div>
@@ -722,6 +723,7 @@ button:disabled { opacity: .5; cursor: default; }
       <button class="danger" id="resetBtn">Reset</button>
       <p class="muted">Start over puts everything back to the original setup, including the bill list.</p>
       <button class="danger" id="wipeBtn">Start over</button>
+      <p class="muted" style="font-size:12px; margin-top:10px">App version 67</p>
     </div>
   </section>
 </main>
@@ -2193,7 +2195,9 @@ function purseNow(now = Date.now()) {
 function packsNow() {
   const pu = purseNow(), packs = state.packs || [], want = sum(packs, p => Number(p.amount || 0)), scale = want > pu.P && want > 0 ? pu.P / want : 1;
   const ws = weekSpends(), used = id => sum(ws.filter(t => (t.pack || '') === id), t => charged(t));
-  const out = packs.map(p => { const amt = Number(p.amount || 0) * scale, u = used(p.id); return { id: p.id, name: p.name, amt, used: u, left: amt - u }; });
+  const wk = ymd(weekStart()), done = id => state.packDone && state.packDone.wk === wk && state.packDone.ids.includes(id);
+  // a type marked done for the week keeps only what was spent; the rest goes to Anything
+  const out = packs.map(p => { const u = used(p.id), amt = done(p.id) ? Math.min(Number(p.amount || 0) * scale, u) : Number(p.amount || 0) * scale; return { id: p.id, name: p.name, amt, used: u, left: amt - u }; });
   const over = sum(out, p => Math.max(0, -p.left)), anyAmt = Math.max(0, pu.P - sum(out, p => p.amt));
   out.forEach(p => { p.left = Math.max(0, p.left); });
   out.push({ id: '', name: 'Anything', amt: anyAmt, used: used(''), left: anyAmt - used('') - over, any: true });
@@ -2212,6 +2216,8 @@ function renderPacks() {
   if (sel) { $('packTitle').textContent = `${sel.name}`; $('packLeft').textContent = `${money(sel.left)} left${sel.any ? '' : ` of ${money(sel.amt)}`}`; }
   drawRoad(); tickRoad();
   $('packAmt').textContent = money(packAmt);
+  $('packDone').classList.toggle('hidden', !sel || sel.any || sel.left < 1);
+  if (sel && !sel.any) $('packDone').textContent = `Done with ${sel.name} this week · move ${money(sel.left)} to Anything`;
   $('packGo').disabled = packAmt <= 0;
   if (sel) $('packGo').textContent = packAmt > 0 ? `Spend ${money(packAmt)} on ${sel.name}` : 'Accept';
   $('packNote').textContent = sel && packAmt > sel.left + 0.001 ? (sel.any ? `That's more than the purse has left; you'll need postage.` : `${money(packAmt - sel.left)} of it borrows from Anything.`) : '';
@@ -3331,6 +3337,12 @@ $('packSpend').addEventListener('click', e => { const b = e.target.closest('[dat
     const d = Number(b.dataset.packAdd); hold = setTimeout(() => { hold = setInterval(() => { packAmt = Math.max(0, packAmt + d); renderPacks(); }, 90); }, 450); });
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => $('packSpend').addEventListener(ev, stop)); }
 $('packClear').onclick = () => { packAmt = 0; packSel = null; renderPacks(); };
+$('packDone').onclick = () => {
+  const wk = ymd(weekStart());
+  if (!state.packDone || state.packDone.wk !== wk) state.packDone = { wk, ids: [] };
+  if (packSel && !state.packDone.ids.includes(packSel)) state.packDone.ids.push(packSel);
+  packSel = null; packAmt = 0; save(); render();
+};
 $('packGo').onclick = () => {
   if (packSel === null || packAmt <= 0) return;
   const name = packSel ? ((state.packs || []).find(p => p.id === packSel) || { name: 'Anything' }).name : 'Anything';
