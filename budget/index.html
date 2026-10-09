@@ -92,7 +92,7 @@ html.full main > header, html.full #goldBtn, html.full #goldLog { display: none;
 html.full .toast { bottom: auto; top: calc(108px + env(safe-area-inset-top)); }
 /* while dragging between pages, the next page peeks in from the side */
 main { position: relative; }
-main > section.peek { position: absolute; left: 0; right: 0; height: 100dvh; overflow: hidden; z-index: 5; background: var(--bg); padding: calc(16px + env(safe-area-inset-top)) 16px 16px; }
+main > section.peek { box-sizing: border-box; position: absolute; left: 0; right: 0; height: 100dvh; overflow: hidden; z-index: 5; background: var(--bg); padding: calc(16px + env(safe-area-inset-top)) 16px 16px; }
 main > section#view-budget.peek { padding: 0; }
 .dragging { will-change: transform; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -994,7 +994,7 @@ button:disabled { opacity: .5; cursor: default; }
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 82;
+const APP_VERSION = 83;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -1236,7 +1236,7 @@ function render() {
   if (document.activeElement !== $('setDay1')) $('setDay1').value = dd[0]; if (document.activeElement !== $('setDay2')) $('setDay2').value = dd[1]; $('setAccounts').value = state.accounts.join(', ');
   $('setCurrency').value = state.currency; $('setTheme').value = state.theme || '';
   $('backupLast').textContent = state.lastBackup ? `Last backup: ${shortDate(ymd(new Date(state.lastBackup)))}` : 'No backup saved yet';
-  $('appVer').textContent = `App version ${APP_VERSION}`;
+  $('appVer').textContent = `App version ${APP_VERSION} · ${screenInfo()}`;
   maybeAskPay();
 }
 
@@ -2949,6 +2949,14 @@ function purseNow(now = Date.now()) {
   const spent = sum(weekSpends(), t => charged(t)), frac = Math.max(0, Math.min(1, (now - weekStart(new Date(now)).getTime()) / (7 * DAY_MS)));
   return { P, spent, left: P - spent, packed: P, purseLeft: P - spent, wagon: 0, camp: 0, carried: st ? Math.max(0, -Number(st.extra || 0)) : 0, pace: P * frac, frac };
 }
+// What's left today: what the purse had this morning, shared evenly over the days left in the week (today
+// too), less what's been spent today. Whole dollars, rounded down (Jordan, v83).
+function todayLeft(pu = purseNow(), now = new Date()) {
+  const td = ymd(now), d = Math.max(0, Math.min(6, Math.floor((now - weekStart(now)) / DAY_MS)));
+  const spentToday = sum(weekSpends().filter(t => t.date === td), t => charged(t));
+  const share = Math.floor(Math.max(0, pu.purseLeft + spentToday) / (7 - d) + 1e-9);
+  return share - spentToday;
+}
 /* Packs: weekly amounts inside the purse (Food $25, Gas $40...). What's left of the purse is the
    Anything pack. If the purse is smaller than the packs (a small party), they shrink to fit. A pack
    that runs over borrows from Anything; the purse as a whole is still the real limit. */
@@ -3052,7 +3060,7 @@ function pickChanged() {
   // under the title: what's left of this week's purse, or what will be after this, and how many spends wait to be sorted
   const left = purseNow().purseLeft, after = left - ch, over = c ? after < -0.005 : left < -0.005;
   const n = (state.packs || []).length ? weekSpends().filter(x => x.unsorted).length : 0;
-  const line = (c ? (over ? `${money(Math.ceil(-after - 1e-9))} over after this` : `${money(after)} left after this`) : over ? `Overdrawn ${money(Math.ceil(-left - 1e-9))}` : `${money(left)} left this week`)
+  const line = (c ? (over ? `${money(Math.ceil(-after - 1e-9))} over after this` : `${money(after)} left after this`) : over ? `Overdrawn ${money(Math.ceil(-left - 1e-9))}` : `${money(left)} left this week · ${(t => t >= 0 ? money(t) + ' today' : money(Math.ceil(-t - 1e-9)) + ' over today')(todayLeft())}`)
     + (n ? ` · <button class="link" data-sort>${n} to sort</button>` : '');
   if (pickChanged.line !== line) { pickChanged.line = line; $('packLeft').innerHTML = line; }
   $('packLeft').classList.toggle('over', over);
@@ -3317,7 +3325,8 @@ function tickRoad() {
   $('sceneTime').textContent = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   $('sceneDate').textContent = now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   const pu = purseNow(), left = pu.purseLeft, over = Math.ceil(-left), short = Math.ceil(pu.carried - 1e-9);
-  const txt = over > 0 ? `Overdrawn ${money(over)} · Send postage` : `👛 ${money(left)} left this week` + (short > 0 ? ` · ${money(short)} short` : '');
+  const tl = todayLeft(pu), day = tl >= 0 ? `${money(tl)} today` : `${money(Math.ceil(-tl - 1e-9))} over today`;
+  const txt = over > 0 ? `Overdrawn ${money(over)} · Send postage` : `👛 ${money(left)} left this week · ${day}` + (short > 0 ? ` · ${money(short)} short` : '');
   if ($('scenePurse').textContent !== txt) $('scenePurse').textContent = txt;
   $('scenePurse').classList.toggle('over', over > 0);
 }
@@ -3840,6 +3849,20 @@ function showView(v, dir = 0) {
   window.scrollTo(0, 0);
 }
 document.documentElement.classList.toggle('full', !$('view-budget').classList.contains('hidden'));
+// Sizes for chasing the iPhone jump: the phone's screen, the page's window, the visible part, and the top inset.
+function screenInfo() {
+  const v = window.visualViewport, probe = document.createElement('div'); probe.style.cssText = 'position:fixed;top:0;height:env(safe-area-inset-top);visibility:hidden';
+  document.body.appendChild(probe); const inset = Math.round(probe.getBoundingClientRect().height); probe.remove();
+  return `screen ${screen.width}×${screen.height} · window ${innerWidth}×${innerHeight} · page ${document.documentElement.clientHeight} · view ${v ? Math.round(v.height) + '@' + Math.round(v.offsetTop) : '-'} · top ${inset} · scroll ${Math.round(scrollY)}`;
+}
+// When the window changes size (the jump), the sheet and the road catch up at once.
+const refit = () => { unshift(); if (!$('view-budget').classList.contains('hidden')) { sheetFit(); drawRoad(); } };
+addEventListener('resize', refit); if (window.visualViewport) visualViewport.addEventListener('resize', refit);
+// The home screen never scrolls. A swipe can still nudge an iPhone's page up a little (the page peeking in
+// makes it taller for a moment), and with scrolling off it would stay stuck there with a dark strip at the
+// bottom (Jordan, v83), so whenever it moves while the home screen is up, it goes straight back.
+const unshift = () => { if (document.documentElement.classList.contains('full') && (scrollY || document.documentElement.scrollTop || document.body.scrollTop)) { scrollTo(0, 0); document.documentElement.scrollTop = document.body.scrollTop = 0; } };
+addEventListener('scroll', unshift, { passive: true });
 // Drag left or right anywhere to flip pages: the page follows your finger and the next one slides in
 // beside it. Let go past a third of the screen (or flick) and it flips; otherwise it springs back.
 { const hdr = document.querySelector('main > header');
@@ -3883,7 +3906,7 @@ document.documentElement.classList.toggle('full', !$('view-budget').classList.co
       for (const m of [$('view-' + was), hdr]) { m.style.transition = m.style.transform = ''; m.classList.remove('dragging'); }
       if (go) { const el = $('view-' + to); dropGhost(el); el.style.top = ''; el.classList.remove('peek', 'dragging'); el.style.transition = el.style.transform = ''; nb = null; showView(to); render(); }
       else clearNb();
-      cur = null;
+      cur = null; unshift();
     }, 270);
   });
   document.addEventListener('touchcancel', () => { if (mode === 'h') { put(0, false); movers().forEach(m => m.classList.remove('dragging')); clearNb(); } mode = null; cur = null; }); }
