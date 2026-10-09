@@ -1125,7 +1125,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 89;
+const APP_VERSION = 90;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -3401,9 +3401,10 @@ function partyReturns() {
   if (!last) { state.lastWeek = wk; state.purse = { wk, P: 0, extra: 0 }; save(); return; }   // the first party leaves next Sunday
   if (last >= wk) return;
   let w = last, extra = state.purse && state.purse.wk === last ? Number(state.purse.extra || 0) : 0, got = 0, short = 0, sunday = '', weeks = 0;
+  const late = state.purse && state.purse.wk === last ? Number(state.purse.late || 0) : 0;
   while (w < wk) {
     const w0 = new Date(dayMs(w)), next = ymd(new Date(w0.getFullYear(), w0.getMonth(), w0.getDate() + 7)), sat = ymd(new Date(w0.getFullYear(), w0.getMonth(), w0.getDate() + 6));
-    const P = workersAt('party', dayMs(next) - 1) * 7 * WORKER_DAY + extra, r = Math.round((P - spentBetween(w, next)) * 100) / 100;
+    const P = workersAt('party', dayMs(next) - 1) * 7 * WORKER_DAY + extra - (w === last ? late : 0), r = Math.round((P - spentBetween(w, next)) * 100) / 100;
     if (r >= 0.01) { state.transfers.push({ id: uid(), from: 'spend', to: treasurePot(), amount: r, date: sat, treasure: true }); got += r; extra = 0; }
     else extra = Math.min(0, r);   // overspent: the gap follows the party into the next week
     sunday = sat; w = next; weeks++;
@@ -3430,7 +3431,7 @@ function purseNow(now = Date.now()) {
   const wk = ymd(weekStart(new Date(now)));
   // a new week's purse is only started by partyReturns, after last week's has been settled
   const st = state.purse && state.purse.wk === wk ? state.purse : null;
-  const P = partySize() * 7 * WORKER_DAY + Number(st ? st.extra || 0 : 0);
+  const P = partySize() * 7 * WORKER_DAY + Number(st ? st.extra || 0 : 0) - Number(st ? st.late || 0 : 0);
   if (st) st.P = P;
   const spent = sum(weekSpends(), t => charged(t)), frac = Math.max(0, Math.min(1, (now - weekStart(new Date(now)).getTime()) / (7 * DAY_MS)));
   return { P, spent, left: P - spent, packed: P, purseLeft: P - spent, wagon: 0, camp: 0, carried: st ? Math.max(0, -Number(st.extra || 0)) : 0, pace: P * frac, frac };
@@ -3631,8 +3632,10 @@ function renderParty() {
   const dstr = d => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   $('partyWeek').textContent = n ? `Back ${dstr(sat)}` : 'In town';
   const pu = purseNow();
-  $('partySize').innerHTML = n ? `On the road: <strong>${n}</strong> villager${n === 1 ? '' : 's'} with ${money(pu.P)} for the week. They can't change until they're back.` + (pu.carried >= 1 ? `<div class="money-note bad">${money(pu.carried)} less than usual: last week ran over, and the gap carries until you send postage</div>` : '')
-    : `No party is out this week. Plan one below; it sets out on Sunday.`;
+  $('partySize').innerHTML = n ? `On the road: <strong>${n}</strong> villager${n === 1 ? '' : 's'} with ${money(pu.P)} for ${state.purse && state.purse.late ? 'the rest of ' : ''}the week. They can't change until they're back.` + (pu.carried >= 1 ? `<div class="money-note bad">${money(pu.carried)} less than usual: last week ran over, and the gap carries until you send postage</div>` : '')
+    : (() => { const k = Math.min(Number(state.partyPlan || 0), partyRoom()), d = sendNowDays();
+        return k ? `No party is out this week.<button class="primary" id="partyNow" style="width:100%; margin-top:8px">Send ${k} out now with ${money(k * d * WORKER_DAY)}</button><div class="money-note">That's ${money(k * WORKER_DAY)} a day for the ${d === 1 ? 'one day' : d + ' days'} left this week, today included. From Sunday it's a full week.</div>`
+          : `No party is out this week. Plan one below, then send them now or let them set out on Sunday.`; })();
   const plan = Math.min(Number(state.partyPlan || 0), partyRoom() + n);
   $('partyPlan').innerHTML = `Next party, leaving ${dstr(nextSun)}: <strong>${plan}</strong> · ${money(plan * 7 * WORKER_DAY)} a week`;
   $('partyMinus').disabled = plan < 1;
@@ -3807,7 +3810,7 @@ function tickRoad() {
   const n = partySize();
   const pw = PartyWorld.at(now.getTime()), what = artOk() && pw.kind !== 'walk' ? pw.label : `${n} on the road`;
   $('scenePlace').textContent = n ? ROAD[Math.max(0, PartyWorld.LANDS.indexOf(pw.land))] : 'Home in the village';
-  $('sceneSub').textContent = n ? `${what} · day ${d + 1} of 7` : 'No party out this week';
+  $('sceneSub').textContent = n ? `${what} · day ${d + 1} of 7` : 'No party out · send one from the Party page';
   $('sceneTime').textContent = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   $('sceneDate').textContent = now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   const pu = purseNow(), left = pu.purseLeft, over = Math.ceil(-left), short = Math.ceil(pu.carried - 1e-9);
@@ -5626,6 +5629,20 @@ $('habitList').addEventListener('click', e => {
   save(); render();
   toast(`⚡ Farms gather ${speedNow()}× faster for 2 hours` + (hg ? ` (and 🪙 ${hg} gold)` : ''));
 });
+// days left in this week, today included (a party sent today spends today too)
+function sendNowDays(now = new Date()) { return 7 - Math.max(0, Math.min(6, Math.floor((now - weekStart(now)) / DAY_MS))); }
+// A party leaves mid-week with the days that are left; it can't change until it's back, like any other.
+function sendPartyNow() {
+  if (partyNow() > 0) return;
+  const k = Math.min(Number(state.partyPlan || 0), partyRoom()); if (!k) return;
+  const wk = ymd(weekStart()), d = sendNowDays();
+  if (!state.purse || state.purse.wk !== wk) state.purse = { wk, P: 0, extra: 0 };
+  state.purse.late = Number(state.purse.late || 0) + k * (7 - d) * WORKER_DAY;
+  state.lastWeek = state.lastWeek || wk;
+  state.workerLog.push({ t: Date.now(), pot: 'party', delta: k });
+  save(); render(); toast(`The party set out with ${money(k * d * WORKER_DAY)}`);
+}
+document.addEventListener('click', e => { if (e.target.closest && e.target.closest('#partyNow')) sendPartyNow(); });
 $('partyMinus').onclick = () => { state.partyPlan = Math.max(0, Math.min(Number(state.partyPlan || 0), partyRoom() + partySize()) - 1); save(); render(); };
 $('partyPlus').onclick = () => { state.partyPlan = Math.min(partyRoom() + partySize(), Number(state.partyPlan || 0) + 1); save(); render(); };
 $('treasureTo').onchange = e => { state.treasureTo = e.target.value; save(); render(); };
