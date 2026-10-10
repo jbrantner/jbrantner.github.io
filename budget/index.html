@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="robots" content="noindex">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Budget</title>
 <meta name="theme-color" content="#0f766e">
 <link rel="manifest" href="manifest.webmanifest">
@@ -467,6 +467,8 @@ button:disabled { opacity: .5; cursor: default; }
 .tn-h1 small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 4px; }
 .tn-sum { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
 .tn-sum strong { color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+.tn-hint { display: none; }
+#view-town .tn-wrap { margin-bottom: -96px; }
 .tn-wrap { margin: 6px -16px 0; display: flex; justify-content: center; overflow: hidden; }
 .tn-city { position: relative; flex: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
 .tn-city canvas { display: block; cursor: pointer; image-rendering: pixelated; }
@@ -1145,7 +1147,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 99;
+const APP_VERSION = 100;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -4469,7 +4471,7 @@ const Town = (() => {
   const wpx = (X, Y, Z) => ({ x: KS * (X - Y), y: KS * ((X + Y) / 2 - Z) });
   const cellAt = (i, j, h, fp = 1) => wpx((i + fp) * C, (j + fp) * C, h * C);
   const bobDy = (n, now) => { if (lessMotion()) return 0; const b = BOB[n]; return b ? Math.round(b[0] * Math.sin(2 * Math.PI * (now / 1000) / b[1] + b[2])) : 0; };
-  const mapKeyOf = () => [Math.floor(cssWidth()), D.incomes.length, D.incomes.length === 1 ? D.incomes[0].name : '',
+  const mapKeyOf = () => [Math.floor(cssWidth()), availH(), D.incomes.length, D.incomes.length === 1 ? D.incomes[0].name : '',
     D.bills.map(b => b.id + '=' + b.name).join(','), D.stock.map(p => p.id + '=' + p.name + '=' + pileLevel(p)).join(','),
     D.projects.map(p => p.id + '=' + p.name + '=' + stageOfP(p) + (p.goal >= 5000 ? 'T' : '')).join(',')].join('|');
 
@@ -4787,9 +4789,25 @@ const Town = (() => {
     // 440 px wide if the islands fit, wider (and drawn smaller) for a very big setup
     let res = null, WC = 440;
     const farmOnly = () => { for (const n of ORDER) if (n !== 'farm') { ISL[n].sheets = []; ISL[n].outlets = []; } };
-    for (let t = 0; t < 6 && !res; t++) { try { res = placeIslands(WC); } catch (e) { farmOnly(); WC += 80; } }
-    if (!res) { WC = 440 + 80 * 6; res = stackIslands(WC); }
-    W = WC; H = res.Hc; S = cssWidth() / W;
+    const CW = cssWidth(), AH = availH(), FH = AH - 64;   // leave the bottom strip for the page dots
+    const snap = ORDER.map(n => [n, ISL[n].sheets.slice(), ISL[n].outlets.slice()]), restore = () => snap.forEach(([n, a, b]) => { ISL[n].sheets = a.slice(); ISL[n].outlets = b.slice(); });
+    let fit = null;
+    for (const z of [2.6, 2.4, 2.2, 2, 1.8, 1.6, 1.4, 1.2, 1]) {
+      const wc = Math.floor(CW / z); if (fit && CW / wc <= fit[0]) break;
+      restore(); let r = null; try { r = placeIslands(wc); } catch (e) { continue; }
+      const sc = Math.min(CW / wc, FH / r.Hc); if (!fit || sc > fit[0]) fit = [sc, wc];
+    }
+    restore();
+    if (fit) { WC = fit[1]; res = placeIslands(WC); S = fit[0]; }
+    else {
+      for (let t = 0; t < 6 && !res; t++) { try { res = placeIslands(WC); } catch (e) { farmOnly(); WC += 80; } }
+      if (!res) { WC = 440 + 80 * 6; res = stackIslands(WC); }
+      S = Math.min(CW / WC, FH / res.Hc);
+    }
+    // the canvas covers the whole area; the islands sit in the middle of it
+    W = Math.max(WC, Math.round(CW / S)); H = Math.max(res.Hc, Math.round(AH / S));
+    const dx = Math.round((W - WC) / 2), dy = Math.max(0, Math.round((FH / S - res.Hc) / 2));
+    for (const n in res.P) { res.P[n][0] += dx; res.P[n][1] += dy; }
     for (const n of ORDER) { [ISL[n].ox, ISL[n].oy] = res.P[n]; ISL[n].parts = islandParts(ISL[n]); }
     // the falls: from the rim under an outlet face down to the next island's cube tops (or off the bottom)
     FALLS = res.falls.map(([src, [i, j], axis, dst]) => {
@@ -4826,6 +4844,10 @@ const Town = (() => {
   }
   const cv = () => el('townCv'), cityEl = () => el('townCity'), labelsEl = () => el('townLabels');
   const cssWidth = () => Math.min(440, (document.querySelector('main') || document.body).clientWidth || innerWidth);
+  const availH = () => {
+    if (onScreen()) { const r = el('townHud').getBoundingClientRect(); if (r.height) availH.top = Math.round(r.bottom + scrollY + 6); }
+    return Math.max(320, Math.round((typeof appH === 'function' ? appH() : innerHeight) - (availH.top || 176)));
+  };
   const onScreen = () => !el('view-town').classList.contains('hidden') && cityEl().getBoundingClientRect().width > 0;
   let needMeasure = false;
   function measure() { needMeasure = false; draw(); }
@@ -5442,6 +5464,9 @@ function appH() {
   if (solo && screen.width && screen.height) return innerWidth <= innerHeight + 80 ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
   return Math.round(Math.max(innerHeight, v ? v.height : 0));
 }
+// no pinch or double-tap zoom (iOS ignores user-scalable=no, so stop its gestures too)
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', e => { if (e.touches.length > 1 || (e.scale && e.scale !== 1)) e.preventDefault(); }, { passive: false });
 const setAppH = () => document.documentElement.style.setProperty('--appH', appH() + 'px');
 setAppH();
 const refit = () => { setAppH(); unshift(); if (!$('view-budget').classList.contains('hidden')) { sheetFit(); drawRoad(); } };
