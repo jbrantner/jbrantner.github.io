@@ -314,6 +314,11 @@ button:disabled { opacity: .5; cursor: default; }
 .rc-pick:focus-within { outline: 2px solid var(--text); outline-offset: 2px; }
 .rc-file { display: flex; gap: 8px; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
 .rc-file .grow { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .rc-file.bad > span:last-child { color: var(--bad); }
+.rc-all { margin-top: 14px; border-top: 1px solid var(--line, rgba(255,255,255,.12)); padding-top: 8px; }
+.rc-all summary { font-weight: 700; cursor: pointer; padding: 6px 0; }
+.rc-place { display: flex; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+.rc-place .ok { color: var(--good, #86efac); }
+.rc-plus { flex: none; min-height: 34px; padding: 4px 10px; font-size: 13px; }
 .rc-note { font-size: 13px; color: var(--muted); margin: 8px 0; } .rc-note.warn { color: var(--warn); }
 .rc-h { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 12px 0 4px; }
 .rc-row { display: block; padding: 8px 0; border-top: 1px solid var(--line); }
@@ -1238,7 +1243,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 113;
+const APP_VERSION = 114;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -6153,7 +6158,7 @@ const Recur = (() => {
   const med = a => { const s = [...a].sort((x, y) => x - y), n = s.length; return n ? (n % 2 ? s[n >> 1] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
   const pad = n => String(n).padStart(2, '0');
   const ymdOf = (y, m, d) => { y = String(y); if (y.length === 2) y = '20' + y; return `${y}-${pad(+m)}-${pad(+d)}`; };
-  let rows = [], files = [], found = [], from = '', added = new Map();
+  let rows = [], files = [], found = [], from = '', added = new Map(), places = [];
 
   /* -- reading the files -- */
   function loadPdfJs() {
@@ -6317,7 +6322,7 @@ const Recur = (() => {
     const months = new Set(list.map(r => r.date.slice(0, 7))).size, n = list.length;
     if (n >= 3 && g >= 6 && g <= 8 && gaps.every(x => (x >= 5 && x <= 9) || (x >= 12 && x <= 16))) return { every: 'week', per: 52 / 12, months };
     if (n >= 3 && g >= 13 && g <= 16 && gaps.every(x => (x >= 11 && x <= 17) || (x >= 26 && x <= 32))) return { every: '2 weeks', per: 26 / 12, months };
-    if (months >= 2 && months === n && gaps.every(x => (x >= 24 && x <= 38) || (x >= 52 && x <= 70))) return { every: 'month', per: 1, months };
+    if (months >= 2 && n <= months + 1 && g >= 22 && g <= 40 && gaps.filter(x => x < 20).length <= 1 && gaps.every(x => x < 20 || (x >= 20 && x <= 41) || (x >= 50 && x <= 72))) return { every: 'month', per: 1, months };
     return null;
   }
   function judge(list) {
@@ -6336,12 +6341,13 @@ const Recur = (() => {
   // changes a little each month); otherwise its payments are split by amount, so a monthly subscription stands out
   // from the other buys at the same shop.
   function analyze(all) {
-    const seen = new Map(), groups = new Map();
+    const seen = new Map(), groups = new Map(), skipped = new Map(); places = [];
     for (const r of all) {
       if (!(r.amount < 0)) continue;   // paychecks, deposits and refunds
       const raw = String(r.description || '').toUpperCase();
-      if (SKIP.test(raw)) continue;    // transfers between your own accounts, card payments, cash
-      const key = merchant(raw); if (!key) continue;
+      const sk = raw.match(SKIP);
+      const key = merchant(raw) || raw.replace(/[^A-Z ]+/g, ' ').trim().split(/\s+/).slice(0, 3).join(' '); if (!key) continue;
+      if (sk) { const g = skipped.get(key) || { key, list: [], why: sk[1] }; g.list.push(r); skipped.set(key, g); continue; }   // transfers between your own accounts, card payments, cash
       const k = r.date + '|' + r.amount.toFixed(2) + '|' + key; if (seen.has(k) && seen.get(k).file !== r.file) { const o = seen.get(k); if (r.file && r.file !== o.file) (o.also = o.also || new Set()).add(r.file); continue; } seen.set(k, r);   // the same row in two files
       if (!groups.has(key)) groups.set(key, []); groups.get(key).push(r);
     }
@@ -6354,10 +6360,15 @@ const Recur = (() => {
         const ok = cl.map(judge).filter(Boolean).sort((a, b) => b.months - a.months || b.n - a.n);
         if (ok.length) c = ok[0];
       }
+      const amts = list.map(r => Math.abs(r.amount)), ms = new Set(list.map(r => r.date.slice(0, 7))).size;
+      places.push({ key, list, n: list.length, months: ms, lo: Math.min(...amts), hi: Math.max(...amts),
+        why: c ? 'bill' : list.length === 1 ? 'Only once' : ms < 2 ? 'All in one month' : 'No steady monthly amount' });
       if (!c) continue;
       c.key = key; c.name = title(key); c.descs = [...new Set(c.list.map(r => r.description))]; c.files = [...new Set(c.list.flatMap(r => [r.file, ...(r.also || new Set())]).filter(Boolean))];
       out.push(c);
     }
+    for (const g of skipped.values()) { const amts = g.list.map(r => Math.abs(r.amount)); places.push({ key: g.key, list: g.list, n: g.list.length, months: new Set(g.list.map(r => r.date.slice(0, 7))).size, lo: Math.min(...amts), hi: Math.max(...amts), why: `Left out (${g.why.toLowerCase()})` }); }
+    places.sort((a, b) => b.n - a.n || b.hi - a.hi);
     const rank = { high: 0, medium: 1, low: 2 };
     out.sort((a, b) => rank[a.conf] - rank[b.conf] || b.monthly - a.monthly);
     matchBills(out);
@@ -6378,7 +6389,7 @@ const Recur = (() => {
       if (x.bill) continue;
       const c = bills.find(c => !used.has(c.id) && t(x, c)); if (c) { x.bill = c; used.add(c.id); }
     }
-    for (const x of list) x.pick = !x.bill && x.conf === 'high';
+    for (const x of list) x.pick = !x.bill && (x.conf === 'high' || (x.conf === 'medium' && !x.varies));
   }
 
   /* -- the box -- */
@@ -6389,7 +6400,7 @@ const Recur = (() => {
     setTimeout(() => $('rcTitle').focus && $('rcTitle').focus(), 30);
   }
   function close() {
-    box().classList.add('hidden'); document.documentElement.classList.remove('rc-open'); rows = []; files = []; found = []; $('rcFile').value = '';   // nothing is kept
+    box().classList.add('hidden'); document.documentElement.classList.remove('rc-open'); rows = []; files = []; found = []; places = []; $('rcFile').value = '';   // nothing is kept
     if (from === 'town' && Town.selected === 'home') Town.open('home');
   }
   async function readFiles(list) {
@@ -6456,6 +6467,15 @@ ${fromText(x)}
     $('rcSum').textContent = p.length ? `Bills go from ${money(now)} to ${money(then)} a month.` : `Your bills are ${money(now)} a month. Tick the ones to add.`;
     $('rcAdd').disabled = !p.length; $('rcAdd').textContent = p.length ? `Add ${p.length} bill${p.length === 1 ? '' : 's'}` : 'Add selected bills';
   }
+  function addPlace(i) {
+    const g = places[i]; if (!g || found.some(x => x.key === g.key)) return;
+    const list = [...g.list].sort((a, b) => a.date.localeCompare(b.date)), amts = list.map(r => Math.abs(r.amount)), mid = med(amts);
+    const per = g.months > 1 ? list.length / g.months : 1, monthly = Math.ceil(amts.reduce((a, b) => a + b, 0) / Math.max(1, g.months) - 1e-9);
+    found.push({ list, every: 'month', months: g.months, n: list.length, typical: mid, lo: g.lo, hi: g.hi, varies: (g.hi - g.lo) / mid > .02, monthly, due: dueOf(list),
+      conf: 'low', first: list[0].date, last: list[list.length - 1].date, key: g.key, name: title(g.key), descs: [...new Set(list.map(r => r.description))],
+      files: [...new Set(list.map(r => r.file).filter(Boolean))], bill: null, pick: true, hand: true });
+    g.why = 'bill'; draw();
+  }
   function draw() {
     const anyFile = files.length > 0;
     $('rcIntro').classList.toggle('hidden', anyFile);
@@ -6471,6 +6491,10 @@ ${fromText(x)}
       html += fresh.length ? `<h3 class="rc-h">Looks like a bill</h3>` + found.map((x, i) => x.bill ? '' : rowHTML(x, i)).join('')
         : `<p class="rc-note">No new repeating payments found${span < 50 ? ' yet' : ''}.</p>`;
       if (have.length) html += `<h3 class="rc-h">Already in your bills</h3>` + found.map((x, i) => x.bill ? rowHTML(x, i) : '').join('');
+      const amt = g => g.hi - g.lo < .01 ? moneyExact(g.lo) : `${moneyExact(g.lo)}–${moneyExact(g.hi)}`;
+      html += `<details class="rc-all"${places.length && found.length < 6 ? ' open' : ''}><summary>Everything it read (${places.length} place${places.length === 1 ? '' : 's'} you paid)</summary>
+        <p class="rc-note">Missing a bill? Find it here and tap <b>+ Bill</b>. If it isn't here at all, it wasn't on these statements (maybe it comes out of another account or card).</p>` +
+        places.map((g, i) => `<div class="rc-place"><div class="grow"><b>${esc(title(g.key))}</b><div class="rc-sub">${g.n}× · ${amt(g)} · ${g.months} month${g.months === 1 ? '' : 's'} · ${g.why === 'bill' ? '<span class="ok">counted as a bill</span>' : esc(g.why)}</div></div>${g.why === 'bill' ? '' : `<button class="rc-plus" data-rc-place="${i}">+ Bill</button>`}</div>`).join('') + `</details>`;
     }
     $('rcOut').innerHTML = html;
     const fresh = found.some(x => !x.bill && !added.has(x.key));
@@ -6507,14 +6531,14 @@ ${fromText(x)}
   $('rcFile').onchange = e => { const l = [...e.target.files]; if (l.length) readFiles(l); };
   $('rcClose').onclick = close;
   $('rcAdd').onclick = addPicked;
-  $('rcAgain').onclick = () => { rows = []; files = []; found = []; added = new Map(); draw(); };
+  $('rcAgain').onclick = () => { rows = []; files = []; found = []; places = []; added = new Map(); draw(); };
   $('rcOut').addEventListener('change', e => {
     const t = e.target;
     if (t.dataset.rcPick) { found[+t.dataset.rcPick].pick = t.checked; summary(); }
     if (t.dataset.rcAmt || t.dataset.rcName) summary();
   });
   $('rcOut').addEventListener('input', e => { if (e.target.dataset.rcAmt) { const i = +e.target.dataset.rcAmt; if (!found[i].pick && Number(e.target.value) > 0) { found[i].pick = true; const cb = $('rcOut').querySelector(`[data-rc-pick="${i}"]`); if (cb) cb.checked = true; } summary(); } });
-  $('rcOut').addEventListener('click', e => { const b = e.target.closest('[data-rc-due]'); if (b) { e.preventDefault(); setDue(+b.dataset.rcDue); } });
+  $('rcOut').addEventListener('click', e => { const b = e.target.closest('[data-rc-due]'); if (b) { e.preventDefault(); setDue(+b.dataset.rcDue); } const q = e.target.closest('[data-rc-place]'); if (q) { e.preventDefault(); addPlace(+q.dataset.rcPlace); } });
   window.addEventListener('keydown', e => { if (e.key === 'Escape' && !box().classList.contains('hidden') && $('askBox').classList.contains('hidden')) { e.stopImmediatePropagation(); close(); } }, true);
   $('recurOpenBtn').onclick = () => open('settings');
   $('suFind').onclick = () => open('setup');
