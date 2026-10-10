@@ -1252,7 +1252,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 119;
+const APP_VERSION = 120;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -1445,7 +1445,7 @@ function payPlan() {
   const whole = Math.floor(D + 1e-9), cut = cents(D - whole), share = shareOf(inc, date), F = Math.max(0, whole - share), V = Math.floor(F / P.days / WORKER_DAY + 1e-9), extra = F - V * P.days;
   const until = P.next ? shortDate(P.next) : 'two weeks from now', was = villagersBefore(date), out = [];
   const nC = normalChecks(inc || {}), part = state.incomes.filter(i => Number(i.amount) > 0).length > 1 ? 'its part' : nC === 1 ? 'all' : nC === 2 ? 'half' : nC === 4 ? 'a quarter' : `1/${nC}`;
-  if (share) out.push(`${money(Math.min(whole, share))} is held for bills (${part} of your ${money(billsMonthWhole())} a month).` + (whole < share ? ` It's ${money(share - whole)} short, so that comes from Savings.` : ''));
+  if (share) out.push(`${money(Math.min(whole, share))} is held for bills (your ${money(billsMonthWhole())} a month, spread over every paycheck of the year).` + (whole < share ? ` It's ${money(share - whole)} short, so that comes from Savings.` : ''));
   else if (inc && isExtraCheck(inc, date)) out.push(`An extra paycheck this month: none of it goes to bills.`);
   if (F) out.push(`${money(F)} is yours: ${money(V)} a day, ${V} villager${V === 1 ? '' : 's'}, until ${until}` + (extra >= 1 ? `, and ${money(extra)} lands in Savings then.` : '.'));
   else out.push('No villagers this pay period.');
@@ -1715,13 +1715,17 @@ function billParts() {
   }
   billParts.k = key; billParts.m = out; return out;
 }
-// The bills' share of one paycheck: the k-th of a month's n normal paychecks holds its even part (whole dollars that
-// round up: $2,059 over two checks is $1,030 each); an extra paycheck holds nothing.
+// The bills' share of one paycheck: a year of bills spread over a year of paychecks, rounded up ($2,059 a month,
+// every 2 weeks: $951 on every check, extra ones too).
 function shareOf(inc, date) {
   if (!inc) return 0;
-  const k = paydaysOf(inc, date.slice(0, 7)).indexOf(date), n = normalChecks(inc), Bi = billParts()[inc.id] || 0;
-  if (k < 0 || k >= n) return 0;
-  return Math.ceil(Bi / n - 1e-9);   // v118: rounded up on every check (Jordan: round up for bills)
+  if (paydaysOf(inc, date.slice(0, 7)).indexOf(date) < 0) return 0;
+  return yearShare(inc);
+}
+// v120: every paycheck, extra ones too, holds its share of a year of bills, rounded up (Jordan: round up for bills)
+const perYearOf = inc => Number(inc.every) === 7 ? 52 : Number(inc.every) === 14 ? 26 : inc.every === 'twice' ? 24 : 12;
+function yearShare(inc) {
+  return Math.ceil((billParts()[inc.id] || 0) * 12 / perYearOf(inc) - 1e-9);
 }
 const isExtraCheck = (inc, date) => !!inc && paydaysOf(inc, date.slice(0, 7)).indexOf(date) >= normalChecks(inc);
 // A pay period: from a payday to the next one (days counted whole, so daylight saving never shifts them).
@@ -2406,7 +2410,7 @@ const machineName = c => (MACHINES.find(([re]) => re.test(c.name)) || [0, buildO
 // period (v117: $1,030 over 14 days is 74), shared out by each bill's size.
 const crewOf = c => crewMap()[c.id] || 0;
 const periodDaysOf = i => i.every === 'twice' ? 365.25 / 24 : Number(i.every) === 7 ? 7 : Number(i.every) === 14 ? 14 : 365.25 / 12;
-const billCrew = () => Math.round(sum(state.incomes.filter(i => Number(i.amount) > 0), i => (billParts()[i.id] || 0) / normalChecks(i) / periodDaysOf(i)) / WORKER_DAY);
+const billCrew = () => Math.round(sum(state.incomes.filter(i => Number(i.amount) > 0), i => yearShare(i) / periodDaysOf(i)) / WORKER_DAY);
 function crewMap() {
   const cs = state.categories.filter(c => Number(c.budget || 0) > 0), tot = sum(cs, c => Number(c.budget)), B = billCrew();
   const key = cs.map(c => c.id + ':' + c.budget).join(',') + '|' + B;
@@ -2815,8 +2819,8 @@ function renderMath() {
     + line('In the bank', moneyExact(pp.bank), 'sum') + `</div>`;
   // the bills' share
   h += `<div class="math-h">Held for bills</div><div class="muted" style="font-size:12.5px; margin:4px 0">Your bills${state.categories.some(c => c.kind !== 'bill') ? ' and set-asides' : ''} are ${money(B)} a month. `
-    + incs.map(i => { const Bi = parts[i.id] || 0, nC = normalChecks(i), a = Math.ceil(Bi / nC - 1e-9), b = Bi - a * (nC - 1); return `Each normal paycheck${incs.length > 1 ? ` from ${esc(i.name)}` : ''} (${nC} a month, ${freqText(i)}) holds ${a === b || nC === 1 ? money(a) : `${money(a)} or ${money(b)}`}.`; }).join(' ')
-    + ` An extra paycheck (a 3rd every-2-weeks one, or a 5th weekly one) holds nothing.</div><div class="math-tbl">`
+    + incs.map(i => `Every paycheck${incs.length > 1 ? ` from ${esc(i.name)}` : ''} (${perYearOf(i)} a year, ${freqText(i)}) holds ${money(yearShare(i))}: a year of bills spread over a year of paychecks, rounded up. Extra paychecks hold their share too, which covers next month's early bills.`).join(' ')
+    + `</div><div class="math-tbl">`
     + line('Held now', money(pp.held), 'sum') + `</div><div class="muted" style="font-size:12.5px">That's what your unpaid bills need until the bill shares of the paychecks still to come can cover them${pp.heldList.length ? ` (${esc(nameList(pp.heldList.map(b => b.c.name)))} first)` : ''}. Bills with no due day are counted on the last day of their month.</div>`;
   // this pay period
   h += `<div class="math-h">This pay period</div>`;
@@ -5726,7 +5730,7 @@ const Town = (() => {
       if (!all) return '';
       const pct = Math.round(crews / all * 100), deg = (crews / all * 360).toFixed(1), extra = pn.list.length && pn.list.every(c => c.bonus);
       return `<div class="tn-pie-row"><div class="tn-pie" role="img" aria-label="${pct}% of your villagers go to bills" style="background:conic-gradient(#f59e0b 0 ${deg}deg, #2dd4bf ${deg}deg 360deg)"><span>${pct}%</span></div>
-        <div class="tn-pie-key"><div><i style="background:#f59e0b"></i><b>${crews}</b> of ${all} villagers keep your bills running${extra ? ' (an extra paycheck: none this time)' : ''}</div><div><i style="background:#2dd4bf"></i><b>${free}</b> are yours for the party, pots and projects${pn.waiting.length ? ' (enter your paycheck to put them to work)' : ''}</div></div></div>`;
+        <div class="tn-pie-key"><div><i style="background:#f59e0b"></i><b>${crews}</b> of ${all} villagers keep your bills running</div><div><i style="background:#2dd4bf"></i><b>${free}</b> are yours for the party, pots and projects${pn.waiting.length ? ' (enter your paycheck to put them to work)' : ''}</div></div></div>`;
     }
     if (id === 'projs') {
       const rows = D.projects.map(p => {
