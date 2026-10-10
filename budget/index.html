@@ -110,6 +110,10 @@ td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line
 .upd-bar { position: fixed; left: 50%; transform: translateX(-50%); top: calc(10px + env(safe-area-inset-top)); z-index: 46; display: flex; align-items: center; gap: 10px;
   width: max-content; max-width: calc(100vw - 24px); padding: 8px 8px 8px 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--accent); box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 14px; }
 .upd-bar button { min-height: 36px; padding: 6px 12px; }
+.paid-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 15px; }
+.paid-row input { width: 22px; height: 22px; flex: none; }
+.paid-row .grow { flex: 1; min-width: 0; }
+#paidAsk .card { max-height: calc(100dvh - 32px); overflow: auto; }
 .ask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 40; }
 .plan { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 4px; font-size: 15px; }
 .bill { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
@@ -1124,6 +1128,12 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
   </div>
 </div>
 <div id="updBar" class="upd-bar hidden" role="status"><span id="updMsg">Update app?</span><button class="primary" id="updGo">Update</button><button class="link" id="updLater">Later</button></div>
+<div id="paidAsk" class="ask hidden" role="dialog" aria-modal="true" aria-labelledby="paidAskH">
+  <div class="card"><h2 id="paidAskH" style="margin-top:0">Already paid this month?</h2>
+  <p class="muted" style="margin-top:0; font-size:14px">The app is holding money for these bills. Tick the ones that already came out of your bank, so it doesn't hold money for them twice.</p>
+  <div id="paidAskList"></div>
+  <div class="row" style="justify-content:flex-end; margin-top:12px"><button class="primary" id="paidAskGo">Done</button></div></div>
+</div>
 <div id="askBox" class="ask hidden" role="dialog" aria-modal="true">
   <div class="card"><p id="askMsg" style="margin-top:0"></p>
   <div class="row" style="justify-content:flex-end"><button id="askNo">Cancel</button><button class="primary" id="askYes">OK</button></div></div>
@@ -1132,7 +1142,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 95;
+const APP_VERSION = 96;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -6290,8 +6300,26 @@ $('suGo').onclick = () => {
   headStart();
   save(); $('setup').classList.add('hidden'); render();
   toast(size < Math.ceil(weekly / 7) ? `Your pay after bills covers ${money(size * 7)} a week, so that's the plan` : 'All set');
+  askPaidAlready();
 };
 if (state.needsSetup) openSetup();
+// After setup: which of the bills being held came out of the bank already this month?
+function askPaidAlready() {
+  const m = today().slice(0, 7), list = hoardParts().heldList.filter(b => b.m === m && b.c.kind === 'bill');
+  if (!list.length) return;
+  $('paidAskList').innerHTML = list.map(b => `<label class="paid-row"><input type="checkbox" data-paid-already="${esc(b.c.id)}"><span class="grow">${esc(b.c.name)}<br><small class="muted">${b.due ? 'due ' + shortDate(b.due) : 'no due day set'}</small></span><span class="num">${money(Number(b.c.budget || 0))}</span></label>`).join('');
+  $('paidAsk').classList.remove('hidden');
+}
+$('paidAskGo').onclick = () => {
+  const m = today().slice(0, 7), ids = [...document.querySelectorAll('[data-paid-already]:checked')].map(x => x.dataset.paidAlready);
+  for (const id of ids) {
+    const c = state.categories.find(c => c.id === id); if (!c) continue;
+    state.transactions.push({ ...paidMarker(c, m), date: startDay() || today(), before: true, at: Date.now(), description: c.name + ' (came out before you started)' });
+    delete billSkips()[c.id + '|' + m];
+  }
+  $('paidAsk').classList.add('hidden'); save(); render();
+  if (ids.length) toast(`${ids.length} bill${ids.length === 1 ? '' : 's'} marked as already paid ✓`);
+};
 /* A head start: the first week's purse is there in full from the moment you set up, whatever day it
    is. It comes out of what you had when you started, like every purse after it, so Savings starts
    that much lower. */
