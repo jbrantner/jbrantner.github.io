@@ -579,6 +579,9 @@ html.rc-open .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)); 
 .tn-sheet .bar { margin-top: 8px; }
 .tn-acts { display: flex; gap: 8px; margin-top: 12px; }
 .tn-acts > * { flex: 1; min-height: 44px; }
+.tn-paysum { margin: 8px 0 4px; font-size: 15px; }
+.tn-sheet .tn-period { margin-top: 14px; }
+.tn-sheet .tn-news { color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 10px; padding: 8px 10px; margin-top: 10px; }
 .tn-inc + .tn-inc { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .tn-crew { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 8px; border: 1px solid var(--line); border-radius: 14px; }
 .tn-crew .t { flex: 1; min-width: 0; font-size: 13.5px; color: var(--muted); line-height: 1.3; }
@@ -1249,7 +1252,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 116;
+const APP_VERSION = 117;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -1335,7 +1338,7 @@ function load() {
 }
 let state = load();
 function save() {
-  booksGen++;
+  booksGen++; if (typeof needMemo !== 'undefined') needMemo.clear();
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('Could not save on this device'); }
 }
 
@@ -1432,18 +1435,21 @@ function openPay(key) {
   setTimeout(() => { if (payKey === key) $('payAmt').focus(); }, 60);
 }
 function closePay() { payKey = null; $('payBox').classList.add('hidden'); }
-// What happens to it, as you type: what goes to bills due before the next payday, what comes in bit by bit, the cents.
+// What happens to it, as you type: the bills' share, what's yours a day until the next payday (its villagers), the cents.
 function payPlan() {
   if (!payKey) return;
   const v = $('payAmt').value.trim(), D = Number(v), ok = v !== '' && isFinite(D) && D >= 0 && D < 1e7;
   $('paySave').disabled = !ok;
   if (!ok) { $('payPlan').textContent = 'Type what landed in your bank, cents and all.'; return; }
-  const [id, date] = splitKey(payKey), inc = state.incomes.find(i => i.id === id), main = mainIncome();
-  const whole = Math.floor(D + 1e-9), cut = cents(D - whole), bills = inc && main && inc.id === main.id ? ledgerAt(today()).inst.filter(b => b.pd === date) : [];
-  const need = sum(bills, b => b.A), cover = Math.min(whole, need), pool = whole - cover, nx = inc && nextPayday(inc, date), until = nx ? shortDate(nx) : 'two weeks from now';
-  const out = [];
-  if (need) out.push(`${money(cover)} goes to bills due before ${nx ? shortDate(nx) : 'your next payday'} (${nameList(bills.map(b => b.c.name))})` + (need > whole ? `. They need ${money(need)}, so ${money(need - whole)} comes from Savings.` : '.'));
-  if (pool) out.push(`${money(pool)} comes in bit by bit until ${until}.`);
+  const [id, date] = splitKey(payKey), inc = state.incomes.find(i => i.id === id), P = periodOf(inc, date);
+  const whole = Math.floor(D + 1e-9), cut = cents(D - whole), share = shareOf(inc, date), F = Math.max(0, whole - share), V = Math.floor(F / P.days / WORKER_DAY + 1e-9), extra = F - V * P.days;
+  const until = P.next ? shortDate(P.next) : 'two weeks from now', was = villagersBefore(date), out = [];
+  const nC = normalChecks(inc || {}), part = state.incomes.filter(i => Number(i.amount) > 0).length > 1 ? 'its part' : nC === 1 ? 'all' : nC === 2 ? 'half' : nC === 4 ? 'a quarter' : `1/${nC}`;
+  if (share) out.push(`${money(Math.min(whole, share))} is held for bills (${part} of your ${money(billsMonthWhole())} a month).` + (whole < share ? ` It's ${money(share - whole)} short, so that comes from Savings.` : ''));
+  else if (inc && isExtraCheck(inc, date)) out.push(`An extra paycheck this month: none of it goes to bills.`);
+  if (F) out.push(`${money(F)} is yours: ${money(V)} a day, ${V} villager${V === 1 ? '' : 's'}, until ${until}` + (extra >= 1 ? `, and ${money(extra)} lands in Savings then.` : '.'));
+  else out.push('No villagers this pay period.');
+  if (V < was) out.push(`That's ${was - V} fewer than your last normal paycheck${partyNow() + crewWorkers() > V ? ': crews come off projects first, then pots' : ''}.`);
   if (cut >= 0.005) out.push(`${Math.round(cut * 100)}¢ goes to the scavenger.`);
   if (!D) out.push('Nothing landed? Saving $0 counts this payday as nothing.');
   $('payPlan').textContent = out.join(' ');
@@ -1452,7 +1458,9 @@ function paySave() {
   const v = $('payAmt').value.trim(), D = Number(v); if (!payKey || v === '' || !(D >= 0)) return;
   const k = payKey, old = (state.checks || {})[k];
   (state.checks = state.checks || {})[k] = { amt: cents(D), at: old ? old.at : Date.now() };
-  closePay(); save(); render(); toast(`Paycheck saved: ${moneyExact(D)}`);
+  booksGen++; needMemo.clear();
+  const n = afterCheck(k), say = payNewsText(n);
+  closePay(); save(); render(); toast(say ? say : `Paycheck saved: ${moneyExact(D)}`);
 }
 $('payAmt').addEventListener('input', payPlan);
 $('payAmt').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('paySave').disabled) paySave(); });
@@ -1478,7 +1486,7 @@ function render() {
   document.documentElement.dataset.theme = state.theme || '';
   const [y, m] = month.split('-').map(Number);
   $('monthLabel').textContent = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  booksGen++; autoSlay(); finishGoals(); partyReturns(); renderGold(); renderOver(); renderMath();
+  booksGen++; needMemo.clear(); autoSlay(); finishGoals(); partyReturns(); renderGold(); renderOver(); renderMath();
   renderBudget(); renderTx(); renderRules(); renderPotsTab(); renderScavenger(); Town.render();
   $('txCat').innerHTML = catOptions($('txCat').value);
   $('ruleCat').innerHTML = catOptions($('ruleCat').value, false);
@@ -1620,10 +1628,10 @@ const catFirstDay = c => c.at && c.at > Number(state.startAt || 0) ? ymd(new Dat
 // only a payday after it started counting) and the day its money is held from. In its first month a bill
 // due before that day was paid already (it's in your starting balance), and so is one you said came out
 // before you started.
-function billInstances(td) {
+function billInstances(td, ahead = 2) {
   const out = [], main = mainIncome(), cats = [...state.categories, ...(state.goneCats || [])];
   const before = new Set(state.transactions.filter(t => t.before).map(t => t.categoryId + '|' + billMonthOf(t)));
-  let last = nextMonth(nextMonth(td.slice(0, 7)));
+  let last = td.slice(0, 7); for (let k = 0; k < ahead; k++) last = nextMonth(last);
   for (const t of state.transactions) if (t.categoryId && billMonthOf(t) > last) last = billMonthOf(t);
   for (const c of cats) {
     const t0 = catStart(c), first = catFirstDay(c), m0 = first.slice(0, 7), bill = c.kind === 'bill';
@@ -1653,25 +1661,20 @@ function paidMap(td) {
   }
   return out;
 }
-// The bills' side of the books up to a day. A bill that's paid costs what was paid; one not paid yet has
-// its money held once its hold day comes. A set-aside holds this month's amount (or what was spent, if
-// that's more); in other months it costs what was spent. Payments with no month of their own here (a bill
-// due before you started, say) count only if real money left after you started.
+// What's been paid toward the bills since you started, up to a day: every payment for a bill or set-aside month the
+// books count (whole dollars, the cents to the scavenger), plus real money that left for one they don't count (a bill
+// due before you started, say). Months run 13 ahead, so the hold below can look a year out.
 const NO_PAY = { P: 0, cut: 0, realP: 0, realCut: 0, preP: 0 };
 function billBooks(td) {
-  const inst = billInstances(td), paid = paidMap(td), cur = td.slice(0, 7), have = new Set(), heldList = [];
-  let out = 0, held = 0, cut = 0;
+  const inst = billInstances(td, 13), paid = paidMap(td), have = new Set();
+  let out = 0, cut = 0;
   for (const b of inst) {
     const e = paid[b.key] || NO_PAY;
     if (!b.set && e.preP > 0 && !(e.P > 0)) continue;   // your bank says it came out before you started
-    have.add(b.key);
-    if (b.set) { cut += e.cut; if (b.m === cur) { out += Math.max(b.A, e.P); held += Math.max(0, b.A - e.P); } else out += e.P; continue; }
-    if (e.P > 0) { out += e.P; cut += e.cut; continue; }
-    if (b.gone || b.holdDay > td) continue;
-    out += b.A; held += b.A; heldList.push(b);
+    have.add(b.key); out += e.P; cut += e.cut;
   }
   for (const [k, e] of Object.entries(paid)) if (!have.has(k)) { out += e.realP; cut += e.realCut; }
-  return { inst, paid, have, out, held, cut, heldList };
+  return { inst, paid, have, out, cut };
 }
 // The books up to a day, kept until something changes (every save and every render starts them afresh).
 let booksGen = 0, payKey = null, bankOpen = false, bankPick = {};
@@ -1685,67 +1688,250 @@ function ledgerAt(td) {
     bills: sum(tr, t => (t.from === 'bills' && !OUTSIDE(t.to) ? t.amount : 0) - (!OUTSIDE(t.from) && OUTSIDE(t.to) ? t.amount : 0)),
     movedBills: moved('bills', td), spent: sum(sp, t => charged(t)), spendCut: sum(sp, scavCut),
     fix: sum(adj, a => Math.floor(a.amount + 1e-9)), adjCut: sum(adj, a => cents(a.amount - Math.floor(a.amount + 1e-9))) };
-  if (booksMemo.size > 50) booksMemo.clear();
+  // the bills the held money covers right now (the earliest unpaid ones)
+  Object.defineProperty(L, 'heldList', { get: () => needAt(td, td === today() ? Date.now() : dayMs(td) + DAY_MS - 1).heldList });
+  if (booksMemo.size > 80) booksMemo.clear();
   booksMemo.set(k, L); return L;
 }
-// Paychecks up to a moment: each one's whole dollars come in (what covers bills due before the next
-// payday at once, the rest evenly from when you entered it until the next payday), its cents go to the
-// scavenger.
-function checkFlows(now, L) {
-  const td = ymd(new Date(now)), main = mainIncome(), cover = {}, out = { into: 0, pending: 0, cut: 0, whole: 0, list: [] };
-  for (const b of L.inst) if (b.pd) cover[b.pd] = (cover[b.pd] || 0) + b.A;
+/* ---------- the paycheck engine (version 117, Jordan 2026-10-10) ----------
+   Each paycheck works until the next payday. A normal paycheck first holds its even part of the month's bills
+   (bills and set-asides ÷ the normal paychecks in a month: every 2 weeks, half; every week, a quarter). An extra
+   paycheck (a 3rd every-2-weeks one, a 5th weekly one) holds nothing. What's left is yours: it comes in a dollar a
+   day per villager (V = what's left ÷ the days to the next payday, rounded down), and the odd dollars land in Savings
+   on the next payday. Cents go to the scavenger. Until you enter a payday's paycheck it puts nobody to work; once you
+   do, it catches up from the payday. The paycheck before you started is already in your starting balance: its
+   villagers work from the day you started. Villagers nobody assigns save into Savings. Nothing here is ever more
+   than the bank has: held + still coming in + yours = the bank. */
+const monthLast = m => `${m}-${String(daysIn(m)).padStart(2, '0')}`;
+// A month of bills and set-asides in whole dollars (each rounded up).
+const billsMonthWhole = () => sum(state.categories, c => Math.max(0, Math.ceil(cents(Number(c.budget || 0)) - 1e-9)));
+// Each income's part of that month: in proportion to its normal month of pay (one income: all of it).
+function billParts() {
+  const key = state.categories.map(c => c.budget).join(',') + '|' + state.incomes.map(i => i.id + ':' + i.amount + ':' + i.every).join(','); if (billParts.k === key) return billParts.m;
+  const B = billsMonthWhole(), incs = state.incomes.filter(i => Number(i.amount) > 0), np = sum(incs, i => Number(i.amount) * normalChecks(i)), out = {};
+  if (incs.length && np > 0) {
+    const e = incs.map(i => B * Number(i.amount) * normalChecks(i) / np); let left = B;
+    incs.forEach((i, k) => { out[i.id] = Math.floor(e[k] + 1e-9); left -= out[i.id]; });
+    incs.map((i, k) => [e[k] - out[i.id], i.id]).sort((a, b) => b[0] - a[0]).slice(0, Math.max(0, left)).forEach(([, id]) => out[id]++);
+  }
+  billParts.k = key; billParts.m = out; return out;
+}
+// The bills' share of one paycheck: the k-th of a month's n normal paychecks holds its even part (whole dollars that
+// add up to the month exactly: $2,059 is $1,030 then $1,029); an extra paycheck holds nothing.
+function shareOf(inc, date) {
+  if (!inc) return 0;
+  const k = paydaysOf(inc, date.slice(0, 7)).indexOf(date), n = normalChecks(inc), Bi = billParts()[inc.id] || 0;
+  if (k < 0 || k >= n) return 0;
+  return Math.ceil(Bi * (k + 1) / n - 1e-9) - Math.ceil(Bi * k / n - 1e-9);
+}
+const isExtraCheck = (inc, date) => !!inc && paydaysOf(inc, date.slice(0, 7)).indexOf(date) >= normalChecks(inc);
+// A pay period: from a payday to the next one (days counted whole, so daylight saving never shifts them).
+function periodOf(inc, date) {
+  const nx = inc ? nextPayday(inc, date) : null, t0 = dayMs(date), t1 = nx ? dayMs(nx) : t0 + 14 * DAY_MS;
+  return { date, next: nx, t0, t1, days: Math.max(1, Math.round((t1 - t0) / DAY_MS)) };
+}
+const clamp01 = x => Math.max(0, Math.min(1, x));
+// Paychecks you've entered, up to a moment: the bill share is held at once, and the rest (F) comes in at V dollars a
+// day from the payday to the next one, plus the odd dollars on that next payday. A paycheck smaller than its bill
+// share holds all of it, and Savings makes up the difference (top) so the bills stay covered.
+function checkFlows(now) {
+  const td = ymd(new Date(now)), out = { list: [], whole: 0, cut: 0, got: 0, pending: 0, top: 0, D: 0 };
   for (const [key, ck] of Object.entries(state.checks || {})) {
     const [id, date] = splitKey(key), at = Number(ck.at); if (date > td || !(at <= now)) continue;
     const inc = state.incomes.find(i => i.id === id), D = Math.max(0, Number(ck.amt) || 0), whole = Math.floor(D + 1e-9), cut = cents(D - whole);
-    const cv = inc && main && inc.id === main.id ? Math.min(whole, cover[date] || 0) : 0, pool = whole - cv;
-    const nx = inc ? nextPayday(inc, date) : null, t1 = nx ? dayMs(nx) : dayMs(date) + 14 * DAY_MS;
-    const f = t1 <= at ? 1 : Math.max(0, Math.min(1, (now - at) / (t1 - at)));
-    out.into += cv + pool * f; out.pending += pool * (1 - f); out.cut += cut; out.whole += whole;
-    out.list.push({ key, inc, date, D, whole, cut, cover: cv, pool, f, t1, at, next: nx });
+    const share = shareOf(inc, date), F = Math.max(0, whole - share), top = Math.max(0, share - whole), P = periodOf(inc, date);
+    const V = Math.floor(F / P.days / WORKER_DAY + 1e-9), extra = F - V * P.days * WORKER_DAY;
+    const got = V * P.days * WORKER_DAY * clamp01((now - P.t0) / (P.t1 - P.t0)) + (now >= P.t1 ? extra : 0);
+    out.whole += whole; out.cut += cut; out.got += got; out.pending += F - got; out.top += top; out.D += D;
+    out.list.push({ key, inc, date, D, whole, cut, share, F, top, V, extra, got, pending: F - got, ...P, at, bonus: isExtraCheck(inc, date) });
+  }
+  out.list.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+}
+// The bills still to pay, each on the day the books expect it: its due day, or for a bill with no due day the last
+// day of its month (when the app marks it paid if you haven't). A set-aside needs its month's money from the 1st.
+function billsAhead(L, td, ignorePaid) {
+  const out = [], cur = td.slice(0, 7);
+  for (const b of L.inst) {
+    if (b.gone || !L.have.has(b.key)) continue;
+    const e = ignorePaid ? NO_PAY : L.paid[b.key] || NO_PAY;
+    if (b.set) { if (b.m < cur) continue; const left = b.A - e.P; if (left > 0) out.push({ b, A: left, day: b.m + '-01' }); continue; }
+    if (e.P > 0) continue;
+    out.push({ b, A: b.A, day: b.due || monthLast(b.m) });
   }
   return out;
 }
-// Everything you have outside the Bills pot at a moment (Savings, the purse, projects and spare change
-// together), and what your bank should show: that, plus bill money held and paychecks still coming in.
+// The bill share of every paycheck after you started that isn't in hand yet (still to come, or waiting to be entered).
+function sharesAhead(td, now, endM) {
+  const d0 = d0Of(), out = []; if (!state.startMonth) return out;
+  for (const inc of state.incomes.filter(i => Number(i.amount) > 0))
+    for (let m = state.startMonth; m <= endM; m = nextMonth(m))
+      for (const date of paydaysOf(inc, m)) {
+        if (date <= d0) continue;
+        const ck = (state.checks || {})[checkKey(inc, date)];
+        if (ck && Number(ck.at) <= now && date <= td) continue;
+        const s = shareOf(inc, date); if (s > 0) out.push({ inc, date, s });
+      }
+  return out;
+}
+// What the bills need held right now: walk forward a year through the unpaid bills and the bill shares still to
+// come (on the same day the paycheck first); the most the bills ever get ahead of the shares has to be in hand.
+function needWalk(bills, shares, td, endM) {
+  const ev = [...shares.map(x => ({ day: x.date > td ? x.date : td, v: -x.s })), ...bills.filter(x => x.b.m <= endM).map(x => ({ day: x.day > td ? x.day : td, v: x.A }))]
+    .sort((a, b) => a.day.localeCompare(b.day) || a.v - b.v);
+  let run = 0, need = 0, at = null;
+  for (const e of ev) { run += e.v; if (run > need + 1e-9) { need = run; at = e.day; } }
+  return { need: Math.max(0, need), at };
+}
+const needMemo = new Map();
+function needAt(td, now = Date.now()) {
+  const inHand = Object.entries(state.checks || {}).filter(([k, c]) => Number(c.at) <= now && splitKey(k)[1] <= td).map(([k]) => k).sort().join(',');
+  const key = booksGen + '|' + td + '|' + inHand; let N = needMemo.get(key); if (N) return N;
+  const L = ledgerAt(td), endM = (() => { let m = td.slice(0, 7); for (let k = 0; k < 12; k++) m = nextMonth(m); return m; })();
+  const bills = billsAhead(L, td), w = needWalk(bills, sharesAhead(td, now, endM), td, endM);
+  // the held money covers the earliest unpaid bills first
+  const heldList = []; let acc = 0;
+  for (const x of bills.filter(x => !x.b.set).sort((a, b) => a.day.localeCompare(b.day) || b.A - a.A)) { if (acc >= w.need - 1e-9) break; heldList.push({ ...x.b, A: x.A }); acc += x.A; }
+  N = { need: w.need, at: w.at, heldList };
+  if (needMemo.size > 80) needMemo.clear();
+  needMemo.set(key, N); return N;
+}
+// The same hold at the moment you started, before anything was paid: what your starting balance has to keep for bills.
+function startNeed() {
+  const key = booksGen; if (startNeed.k === key) return startNeed.v;
+  const d0 = startDay(); let v = 0;
+  if (d0) { const L = ledgerAt(today() > d0 ? today() : d0); let endM = d0.slice(0, 7); for (let k = 0; k < 12; k++) endM = nextMonth(endM);
+    v = needWalk(billsAhead(L, d0, true), sharesAhead(d0, Number(state.startAt || 0), endM), d0, endM).need; }
+  startNeed.k = key; startNeed.v = v; return v;
+}
+// The paycheck before you started (its normal amount) is in your starting balance. Its free part works from the day
+// you started to the next payday, V a day as usual: never more than your balance has after the bills' hold.
+function startFlows(now) {
+  const out = { list: [], got: 0, pending: 0 }, d0 = startDay(); if (!d0 || !state.startAt) return out;
+  const main = mainIncome(); let avail = Math.max(0, Number(state.savings.start || 0) - startNeed());
+  for (const inc of state.incomes.filter(i => Number(i.amount) > 0).sort((a, b) => (b === main) - (a === main))) {
+    const p = prevPayday(inc, d0); if (!p) continue;
+    const P = periodOf(inc, p), ds = dayMs(d0); if (P.t1 <= ds) continue;
+    const share = shareOf(inc, p), F = Math.max(0, Math.floor(Number(inc.amount) + 1e-9) - share), left = Math.max(1, Math.round((P.t1 - ds) / DAY_MS));
+    const full = Math.floor(F / P.days / WORKER_DAY + 1e-9), V = Math.max(0, Math.min(full, Math.floor(avail / left / WORKER_DAY + 1e-9)));
+    avail -= V * left * WORKER_DAY;
+    const total = V * left * WORKER_DAY, got = now < Number(state.startAt) ? 0 : total * clamp01((now - ds) / (P.t1 - ds));
+    out.list.push({ key: checkKey(inc, p), inc, date: p, D: Number(inc.amount), share, F, V, full, left, total, got, pending: total - got, ...P, start: true, capped: V < full, bonus: isExtraCheck(inc, p) });
+    out.got += got; out.pending += total - got;
+  }
+  return out;
+}
+// The pay period you're in, for each income: the paycheck working now (with its villagers), or a payday waiting for
+// you to enter what landed (no villagers until you do).
+function periodNow(now = Date.now()) {
+  const td = ymd(new Date(now)), d0 = d0Of(), ck = checkFlows(now), st = startFlows(now), out = { V: 0, list: [], waiting: [] };
+  for (const inc of state.incomes.filter(i => Number(i.amount) > 0)) {
+    const p = prevPayday(inc, td); if (!p) continue;
+    const c = p <= d0 ? st.list.find(x => x.inc.id === inc.id && x.date === p) : ck.list.find(x => x.inc && x.inc.id === inc.id && x.date === p);
+    if (c) { out.list.push(c); out.V += c.V; } else if (p > d0) out.waiting.push({ inc, date: p, key: checkKey(inc, p) });
+  }
+  return out;
+}
+// Everything at a moment: the bank (what you started with, plus paychecks, less bills and spending), the money held
+// for bills, pay still coming in this pay period, and what's yours (total: Savings, the purse, pots, projects and
+// spare change together). bank = held + Bills pot moves + still coming in + yours.
 function hoardParts(now = Date.now()) {
-  const L = ledgerAt(ymd(new Date(now))), ck = checkFlows(now, L), had = Number(state.savings.start || 0);
+  const td = ymd(new Date(now)), L = ledgerAt(td), ck = checkFlows(now), st = startFlows(now), N = needAt(td, now), had = Number(state.savings.start || 0);
   const scav = cents(L.spendCut + L.cut + ck.cut + L.adjCut);
-  const total = had + L.head + L.bills + L.fix + ck.into - L.out - L.spent + scav;
-  return { had, head: L.head, bills: L.bills, fix: L.fix, pay: ck.into, pending: ck.pending, checks: ck, out: L.out, held: L.held, heldList: L.heldList,
-    spent: L.spent, scav, total, bank: total + L.held + L.movedBills + ck.pending, L };
+  const bank = had + L.head + L.bills + L.movedBills + L.fix + ck.whole - L.out - L.spent + scav;
+  const pending = ck.pending + st.pending, held = N.need, total = bank - held - L.movedBills - pending;
+  return { had, head: L.head, bills: L.bills, fix: L.fix, pay: ck.whole, paid: ck.D, pending, checks: ck, start: st, out: L.out, held, heldUntil: N.at, heldList: N.heldList,
+    spent: L.spent, scav, total, bank, L };
 }
 const hoardAt = (now = Date.now()) => hoardParts(now).total;
 // The pay line on the Party page: a payday waiting for its paycheck, the paycheck coming in, or the next payday.
 function payNow(now = Date.now()) {
   const w = paydaysWaiting(ymd(new Date(now)))[0];
-  if (w) return { frac: 0, text: `💰 Payday ${shortDate(w.date)}: <button class="link" data-pay-open="${esc(w.key)}" style="padding:0; color:var(--accent); font-weight:600">enter your paycheck</button>` };
-  const pp = hoardParts(now), live = pp.checks.list.filter(c => c.f < 1 && c.pool > 0);
+  if (w) return { frac: 0, text: `💰 Payday ${shortDate(w.date)}: <button class="link" data-pay-open="${esc(w.key)}" style="padding:0; color:var(--accent); font-weight:600">enter your paycheck</button> to put villagers to work` };
+  const pn = periodNow(now), live = pn.list.filter(c => c.V > 0 && now < c.t1);
   if (live.length) {
-    const rate = sum(live, c => c.pool / (c.t1 - c.at)), frac = pp.pay - Math.floor(pp.pay), mins = Math.ceil((rate > 0 ? (1 - frac) / rate : 0) / 60000);
-    return { frac, text: `Paycheck coming in · next ${money(1)} in ${mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`} · ${money(pp.pending)} more by ${shortDate(ymd(new Date(Math.max(...live.map(c => c.t1)))))}` };
+    const rate = sum(live, c => c.V * WORKER_DAY / DAY_MS), got = sum(live, c => c.got), frac = got - Math.floor(got), mins = Math.ceil((rate > 0 ? (1 - frac) / rate : 0) / 60000);
+    return { frac, text: `${pn.V} villager${pn.V === 1 ? '' : 's'} at work · next ${money(1)} in ${mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`} · ${money(sum(live, c => c.pending))} more by ${shortDate(ymd(new Date(Math.max(...live.map(c => c.t1)))))}` };
   }
   const inc = mainIncome(), nx = inc && Number(inc.amount) > 0 ? nextPayday(inc, ymd(new Date(now))) : null;
   return { frac: 0, text: nx ? `Next payday ${shortDate(nx)}` : '' };
 }
-// Each income's paychecks right now, for its farm: what came in this month, what's still coming, and
-// whether a payday is waiting for its paycheck.
+// Each income's paychecks right now, for its farm: what landed this month, the pay period's free part and what's
+// still coming of it, its villagers, and whether a payday is waiting for its paycheck.
 function farmPay(now = Date.now()) {
-  const pp = hoardParts(now), td = ymd(new Date(now)), out = {};
-  for (const i of state.incomes) out[i.id] = { inMonth: 0, pending: 0, pool: 0, g: 0, waiting: false };
-  for (const c of pp.checks.list) {
-    const o = out[splitKey(c.key)[0]]; if (!o) continue;
-    const got = c.cover + c.pool * c.f;
-    if (c.date.startsWith(td.slice(0, 7))) o.inMonth += got;
-    if (c.f < 1) { o.pending += c.pool * (1 - c.f); o.pool += c.pool; } o.g += got;
-  }
+  const pp = hoardParts(now), td = ymd(new Date(now)), pn = periodNow(now), out = {};
+  for (const i of state.incomes) out[i.id] = { inMonth: 0, pending: 0, pool: 0, g: 0, V: 0, waiting: false };
+  for (const c of pp.checks.list) { const o = c.inc && out[c.inc.id]; if (!o) continue; if (c.date.startsWith(td.slice(0, 7))) o.inMonth += c.D; o.g += c.D; }
+  for (const c of pn.list) { const o = out[c.inc.id]; if (o) { o.pending += c.pending; o.pool += c.start ? c.total : c.F; o.V += c.V; } }
   for (const w of paydaysWaiting(td)) if (out[w.inc.id]) out[w.inc.id].waiting = true;
   return out;
 }
-// "$2,059 is held for 10 bills not paid yet (Rent, Parking, Phone and 7 more), ...", for the Bills page.
+// "$1,030 is held for bills not paid yet (Rent, Parking, Phone and 7 more), ...", for the Bills page.
 const nameList = names => names.length > 3 ? names.slice(0, 3).join(', ') + ` and ${names.length - 3} more` : names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names.join('');
 function billsHeldLine() {
-  const L = ledgerAt(today()), n = L.heldList.length; if (!n) return '';
-  return `${money(sum(L.heldList, b => b.A))} is held for ${n} bill${n === 1 ? '' : 's'} not paid yet (${nameList(L.heldList.map(b => b.c.name))}), so Savings doesn't count it. `;
+  const pp = hoardParts(), n = pp.heldList.length; if (!(pp.held >= 1)) return '';
+  return `${money(pp.held)} is held for bills${n ? ` (${nameList(pp.heldList.map(b => b.c.name))})` : ''}, so Savings doesn't count it. `;
+}
+/* Villagers this pay period and the crews. When a smaller paycheck brings fewer villagers than are working, crews
+   come off projects first (evenly, by size), then pots; the party is locked until Sunday, so next week's party
+   shrinks only if that still isn't enough. What was cut comes back when a later paycheck has room. */
+function fitCrews(V) {
+  const now = Date.now(), cut = state.cutCrews = state.cutCrews || {}, cuts = [];
+  let over = partyNow() + crewWorkers() - V;
+  for (const mini of [true, false]) {
+    if (over <= 0) break;
+    const cs = state.pots.filter(p => (goalOf(p.id) > 0) === mini).map(p => ({ id: p.id, name: p.name, w: workersAt(p.id) })).filter(c => c.w > 0), tot = sum(cs, c => c.w), take = Math.min(over, tot);
+    if (!take) continue;
+    const keepAll = tot - take, keep = cs.map(c => ({ ...c, k: Math.floor(c.w * keepAll / tot + 1e-9), f: c.w * keepAll / tot % 1 }));
+    let spare = keepAll - sum(keep, c => c.k);
+    for (const c of [...keep].sort((a, b) => b.f - a.f)) { if (spare <= 0) break; c.k++; spare--; }
+    for (const c of keep) if (c.k < c.w) { state.workerLog.push({ t: now, pot: c.id, delta: c.k - c.w }); cut[c.id] = (cut[c.id] || 0) + c.w - c.k; cuts.push({ id: c.id, name: c.name, from: c.w, to: c.k }); }
+    over -= take;
+  }
+  let party = null; const plan = Number(state.partyPlan || 0), room = Math.max(0, V - crewWorkers());
+  if (plan > room) { party = { from: plan, to: room, now: partyNow() }; cut.party = (cut.party || 0) + plan - room; state.partyPlan = room; }
+  return { cuts, party };
+}
+function restoreCrews(V) {
+  const cut = state.cutCrews || {}, now = Date.now(), back = []; let party = null;
+  let room = V - Math.max(partyNow(), Number(state.partyPlan || 0)) - crewWorkers();
+  if (cut.party > 0 && V - crewWorkers() > Number(state.partyPlan || 0)) {   // the party first, from next Sunday
+    const plan = Number(state.partyPlan || 0), to = Math.min(plan + cut.party, V - crewWorkers()), give = to - plan;
+    if (give > 0) { party = { from: plan, to }; state.partyPlan = to; cut.party -= give; room = V - Math.max(partyNow(), to) - crewWorkers(); }
+  }
+  for (const mini of [false, true]) for (const p of state.pots.filter(p => (goalOf(p.id) > 0) === mini && cut[p.id] > 0)) {
+    const done = goalOf(p.id) > 0 && projectBal(p.id) >= goalOf(p.id) - 0.005, give = done ? 0 : Math.min(cut[p.id], Math.max(0, room));
+    if (done) { delete cut[p.id]; continue; }
+    if (give > 0) { const w = workersAt(p.id); state.workerLog.push({ t: now, pot: p.id, delta: give }); cut[p.id] -= give; room -= give; back.push({ id: p.id, name: p.name, from: w, to: w + give }); }
+  }
+  for (const k of Object.keys(cut)) if (!(cut[k] > 0) || (k !== 'party' && !state.pots.some(p => p.id === k))) delete cut[k];
+  return { back, party };
+}
+// The villagers of the last normal paycheck before a payday (an extra paycheck in between doesn't count).
+function villagersBefore(date) {
+  let t = dayMs(date) - 1, prev = periodNow(t);
+  for (let k = 0; k < 4 && prev.list.length && prev.list.every(x => x.bonus && !x.start); k++) { t = Math.min(...prev.list.map(x => x.t0)) - 1; prev = periodNow(t); }
+  return prev.V;
+}
+// After a paycheck is entered: fit the crews to its villagers (or bring back what a smaller one cut) and say so.
+function afterCheck(key) {
+  const [id, date] = splitKey(key), inc = state.incomes.find(i => i.id === id); if (!inc) return null;
+  const pn = periodNow(), c = pn.list.find(x => x.key === key); if (!c) return null;   // an older paycheck: nothing to fit
+  const before = villagersBefore(date), V = pn.V;
+  const fit = partyNow() + crewWorkers() > V || Number(state.partyPlan || 0) > Math.max(0, V - crewWorkers()) ? fitCrews(V) : { cuts: [], party: null };
+  const rest = fit.cuts.length || fit.party ? { back: [], party: null } : restoreCrews(V);
+  state.payNews = { key, date, next: c.next, from: before, to: V, extra: !!c.bonus, cuts: fit.cuts, party: fit.party || rest.party, back: rest.back, at: Date.now(), seen: false };
+  return state.payNews;
+}
+function payNewsText(n) {
+  if (!n) return '';
+  const until = n.next ? ` until ${shortDate(n.next)}` : '', diff = n.to - n.from, parts = [];
+  for (const c of n.cuts) parts.push(`${c.name}'s crew went from ${c.from} to ${c.to}`);
+  for (const c of n.back) parts.push(`${c.name}'s crew is back to ${c.to}`);
+  if (n.party) parts.push(n.party.to < n.party.from ? `from Sunday the party is ${n.party.to} instead of ${n.party.from}` : `from Sunday the party is back to ${n.party.to}`);
+  const head = n.extra ? `Extra paycheck: none of it goes to bills, so ${n.to} villager${n.to === 1 ? '' : 's'}${until}${diff > 0 ? ` (${diff} more than usual)` : ''}` : diff < 0 ? `Smaller paycheck: ${-diff} fewer villager${diff === -1 ? '' : 's'}${until}` : diff > 0 ? `${n.cuts.length ? 'Paycheck' : 'Bigger paycheck'}: ${diff} more villager${diff === 1 ? '' : 's'}${until}` : '';
+  if (!head && !parts.length) return '';
+  return (head || `${n.to} villagers${until}`) + (parts.length ? '; ' + parts.join('; ') : '') + '.';
 }
 // A month of bills: every bill on the Upkeep page added up.
 function billsMonthly() { return sum(state.categories.filter(c => c.kind === 'bill'), c => Number(c.budget || 0)); }
@@ -2217,13 +2403,15 @@ const MACHINES = [
   [/netflix|hulu|disney|stream|tv/i, 'Picture box'], [/gym|fitness/i, 'Training yard'], [/loan|credit|debt|affirm|klarna|afterpay/i, 'Counting house'],
 ];
 const machineName = c => (MACHINES.find(([re]) => re.test(c.name)) || [0, buildOf(c).name])[1];
-// One villager is $1 a day of pay, so a bill keeps as many busy as its daily cost (rounded up).
+// One villager is $1 a day of pay. The bills keep as many busy as a normal paycheck's bill share spread over its pay
+// period (v117: $1,030 over 14 days is 74), shared out by each bill's size.
 const crewOf = c => crewMap()[c.id] || 0;
+const periodDaysOf = i => i.every === 'twice' ? 365.25 / 24 : Number(i.every) === 7 ? 7 : Number(i.every) === 14 ? 14 : 365.25 / 12;
+const billCrew = () => Math.round(sum(state.incomes.filter(i => Number(i.amount) > 0), i => (billParts()[i.id] || 0) / normalChecks(i) / periodDaysOf(i)) / WORKER_DAY);
 function crewMap() {
-  const cs = state.categories.filter(c => Number(c.budget || 0) > 0), tot = sum(cs, c => Number(c.budget)), pay = normalPay();
-  const key = cs.map(c => c.id + ':' + c.budget).join(',') + '|' + pay;
+  const cs = state.categories.filter(c => Number(c.budget || 0) > 0), tot = sum(cs, c => Number(c.budget)), B = billCrew();
+  const key = cs.map(c => c.id + ':' + c.budget).join(',') + '|' + B;
   if (crewMap.k === key) return crewMap.m;
-  const V = Math.floor(pay / 31 / WORKER_DAY + 1e-9), B = planFree() < 0 ? Math.round(tot / 31 / WORKER_DAY) : Math.max(0, V - maxWorkers());
   const m = {}, e = cs.map(c => tot > 0 ? Number(c.budget) / tot * B : 0); let left = B;
   cs.forEach((c, i) => { m[c.id] = Math.floor(e[i] + 1e-9); left -= m[c.id]; });
   cs.map((c, i) => [e[i] - m[c.id], i]).sort((a, b) => b[0] - a[0]).slice(0, Math.max(0, left)).forEach(([, i]) => m[cs[i].id]++);
@@ -2593,15 +2781,16 @@ const sideOf = id => posts.a.includes(id) ? 'a' : posts.b.includes(id) ? 'b' : n
 const potX = (id, side) => side === 'a' ? LW / 4 : LW * 3 / 4;
 const tripMs = c => c.ms || CART_MS;
 const send = { from: 'a', amt: 0, workers: 0 };   // what's set up to go next
-// Fun has one worker per dollar a day of pay after bills; any of them can be sent to a farm.
-// Villagers your pay can keep busy: a normal month's pay after bills at $1 a day each, through a 31-day month.
-const maxWorkers = () => Math.floor(Math.max(0, planFree()) / 31 / WORKER_DAY + 1e-9);
+// Villagers your pay keeps busy: this pay period's paycheck after its bill share, $1 a day each until the next payday
+// (v117). A payday waiting for its paycheck has none until you enter it.
+const maxWorkers = (now = Date.now()) => periodNow(now).V;
+const payWaiting = () => periodNow().waiting.length > 0;
 const partyNow = (t = Date.now()) => Math.max(0, workersAt('party', t));
 const crewWorkers = () => sum(farmPots().filter(id => id !== 'savings'), id => workersAt(id));
 // villagers on Savings: everyone not out with the party or on a project crew
 const savers = () => Math.max(0, maxWorkers() - partyNow() - crewWorkers());
 // Villagers working beyond what your pay supports: Savings pays for them, a dollar a day each.
-const overAssigned = () => Math.max(0, partyNow() + crewWorkers() - maxWorkers());
+const overAssigned = () => payWaiting() ? 0 : Math.max(0, partyNow() + crewWorkers() - maxWorkers());
 function workersFree(id) {
   if (id === 'spend') return savers();
   return canFarm(id) ? Math.max(0, workersAt(id) - inFlightWorkers(id)) : 0;
@@ -2613,76 +2802,78 @@ const shortDate = d => new Date(d + 'T12:00').toLocaleDateString(undefined, { mo
 function renderMath() {
   const box = $('mathBox'); if (!box) return;
   const cur = today().slice(0, 7), td = today(), line = (a, b, cls = '') => `<div class="row spread ${cls}"><span>${a}</span><span class="num">${b}</span></div>`;
-  const incs = state.incomes.filter(i => Number(i.amount) > 0), bills = state.categories.filter(c => c.kind === 'bill'), sets = state.categories.filter(c => c.kind !== 'bill');
-  const pf = planFree(), max = maxWorkers(), party = partyNow(), crews = crewWorkers(), sav = savers(), over = overAssigned();
-  const n = k => `${k} villager${k === 1 ? '' : 's'}`;
-  let h = `<div class="math-h">A normal month</div><div class="math-tbl">`
-    + incs.map(i => line(`${esc(i.name)}: ${normalChecks(i)} × ${money(i.amount)}, ${freqText(i)}`, money(i.amount * normalChecks(i)))).join('')
-    + line(`Bills (${bills.length})`, '−' + money(sum(bills, c => Number(c.budget || 0))))
-    + (sets.length ? line(`Set aside (${sets.length})`, '−' + money(sum(sets, c => Number(c.budget || 0)))) : '')
-    + line('Left after bills', (pf < 0 ? '−' : '') + money(Math.abs(pf)), 'sum' + (pf < 0 ? ' bad' : ''))
-    + `</div><div class="muted" style="font-size:12.5px">Even a 31-day month gives ${money(Math.max(0, pf) / 31)} a day, so your pay keeps ${n(max)} busy at $1 a day.</div>`;
-  h += `<div class="math-h">Where that goes, a day</div><div class="math-tbl">`
+  const pp = hoardParts(), pn = periodNow(), sg = v => (v < 0 ? '−' : '+') + moneyExact(Math.abs(v)), n = k => `${k} villager${k === 1 ? '' : 's'}`;
+  const incs = state.incomes.filter(i => Number(i.amount) > 0), B = billsMonthWhole(), parts = billParts();
+  // the bank
+  const billsOut = cents(pp.out - pp.L.cut), spentOut = cents(pp.spent - pp.L.spendCut), fixes = cents(pp.fix + pp.L.adjCut), moves = cents(pp.head + pp.bills + pp.L.movedBills);
+  let h = `<div class="math-h">Your bank</div><div class="math-tbl">`
+    + line('What you had when you started', moneyExact(pp.had))
+    + line('Paychecks you entered', sg(pp.paid))
+    + line('Bills paid', sg(-billsOut))
+    + line('Spent', sg(-spentOut))
+    + (Math.abs(fixes) >= 0.01 ? line('Bank balance fixes', sg(fixes)) : '')
+    + (Math.abs(moves) >= 0.01 ? line('Other moves', sg(moves)) : '')
+    + line('In the bank', moneyExact(pp.bank), 'sum') + `</div>`;
+  // the bills' share
+  h += `<div class="math-h">Held for bills</div><div class="muted" style="font-size:12.5px; margin:4px 0">Your bills${state.categories.some(c => c.kind !== 'bill') ? ' and set-asides' : ''} are ${money(B)} a month. `
+    + incs.map(i => { const Bi = parts[i.id] || 0, nC = normalChecks(i), a = Math.ceil(Bi / nC - 1e-9), b = Bi - a * (nC - 1); return `Each normal paycheck${incs.length > 1 ? ` from ${esc(i.name)}` : ''} (${nC} a month, ${freqText(i)}) holds ${a === b || nC === 1 ? money(a) : `${money(a)} or ${money(b)}`}.`; }).join(' ')
+    + ` An extra paycheck (a 3rd every-2-weeks one, or a 5th weekly one) holds nothing.</div><div class="math-tbl">`
+    + line('Held now', money(pp.held), 'sum') + `</div><div class="muted" style="font-size:12.5px">That's what your unpaid bills need until the bill shares of the paychecks still to come can cover them${pp.heldList.length ? ` (${esc(nameList(pp.heldList.map(b => b.c.name)))} first)` : ''}. Bills with no due day are counted on the last day of their month.</div>`;
+  // this pay period
+  h += `<div class="math-h">This pay period</div>`;
+  for (const c of pn.list) {
+    const yours = c.start ? c.total : c.F, earned = c.start ? Math.max(0, c.F - c.pending) : c.got;
+    h += `<div class="math-tbl">`
+      + line(`${esc(c.inc.name || 'Paycheck')} ${shortDate(c.date)}${c.start ? ' (in your starting balance)' : ''}`, moneyExact(c.D))
+      + line(c.bonus ? 'Extra paycheck: held for bills' : 'Held for bills', '−' + money(Math.min(Math.floor(c.D), c.share)))
+      + line('Yours', money(c.F))
+      + line(`÷ ${c.days} days to ${c.next ? shortDate(c.next) : 'the next payday'}`, `${money(c.V)} a day · ${n(c.V)}`)
+      + (c.start ? line(`From the day you started (${c.left} days)`, money(c.total)) : (c.extra >= 1 ? line(`Odd dollars, to Savings on ${shortDate(ymd(new Date(c.t1)))}`, money(c.extra)) : ''))
+      + line('Earned so far', money(earned), 'sum') + line('Still coming in', money(c.pending)) + `</div>`
+      + (c.capped ? `<div class="muted" style="font-size:12.5px">Your starting balance, after the bills' hold, covers ${n(c.V)} until ${shortDate(c.next)}.</div>` : '');
+  }
+  for (const w of pn.waiting) h += `<div class="math-tbl">${line(`Payday ${shortDate(w.date)} · <button class="link" data-pay-open="${esc(w.key)}" style="padding:0; color:var(--accent)">enter your paycheck</button> to put villagers to work`, '')}</div>`;
+  if (!pn.list.length && !pn.waiting.length) h += `<div class="muted" style="font-size:12.5px; margin:4px 0">Add your pay and payday and each paycheck shows up here.</div>`;
+  // where the villagers go
+  const max = pn.V, party = partyNow(), crews = crewWorkers(), sav = savers(), over = overAssigned();
+  h += `<div class="math-h">Where your ${n(max)} go, a day</div><div class="math-tbl">`
     + line(`Party: ${n(party)}`, `${money(party)} · ${money(party * 7)} a week`)
-    + line(`Projects: ${n(crews)}`, money(crews))
+    + line(`Projects and pots: ${n(crews)}`, money(crews))
     + line(`Savings: ${n(sav)}`, money(sav))
-    + (over ? line('<span class="bad">More than your pay covers</span>', `<span class="bad">${money(over)}</span>`) : '')
-    + `</div>` + (over ? `<button class="primary" data-fit style="width:100%">Fit my plan to my pay</button>`
-      : `<div class="muted" style="font-size:12.5px">Odd dollars left at the end of a month, and whatever the party doesn't spend, go to Savings too.</div>`);
-  // paydays: what landed, what's waiting for you to enter it, and the next one
-  const pp = hoardParts(), sg = v => (v < 0 ? '−' : '+') + money(Math.abs(v));
-  const recent = pp.checks.list.filter(c => c.date >= `${cur}-01` || c.f < 1).sort((a, b) => a.date.localeCompare(b.date));
-  const waiting = paydaysWaiting(), inc0 = mainIncome(), nx = inc0 && Number(inc0.amount) > 0 ? nextPayday(inc0, td) : null;
-  h += `<div class="math-h">Paydays</div><div class="muted" style="font-size:12.5px; margin:4px 0">A paycheck counts once you enter what landed. The part that bills due before the next payday need goes to them at once; the rest comes in bit by bit until then. Cents go to the scavenger.</div><div class="math-tbl">`
-    + recent.map(c => line(`${shortDate(c.date)} · ${esc(c.inc ? c.inc.name : 'Paycheck')}` + (c.f < 1 && c.pool ? ` · ${money(c.pool * (1 - c.f))} still coming in` : ''), moneyExact(c.D))).join('')
+    + (over ? line('<span class="bad">More than this paycheck covers</span>', `<span class="bad">${money(over)}</span>`) : '')
+    + `</div><div class="muted" style="font-size:12.5px">Anyone you don't assign saves into Savings. Whatever the party doesn't spend comes home to Savings too.</div>`;
+  // paydays
+  const recent = pp.checks.list.filter(c => c.date >= `${cur}-01` || c.pending > 0.005), waiting = paydaysWaiting(), inc0 = mainIncome(), nx = inc0 && Number(inc0.amount) > 0 ? nextPayday(inc0, td) : null;
+  h += `<div class="math-h">Paydays</div><div class="math-tbl">`
+    + recent.map(c => line(`${shortDate(c.date)} · ${esc(c.inc ? c.inc.name : 'Paycheck')}${c.bonus ? ' · extra' : ''} · ${n(c.V)}`, moneyExact(c.D))).join('')
     + waiting.map(w => line(`${shortDate(w.date)} · <button class="link" data-pay-open="${esc(w.key)}" style="padding:0; color:var(--accent)">enter your paycheck</button>`, '')).join('')
     + (nx ? line('Next payday', shortDate(nx)) : '') + `</div>`;
-  // bill money held now
-  const hl = [...pp.heldList].sort((a, b) => (a.due || a.m + '-01').localeCompare(b.due || b.m + '-01'));
-  h += `<div class="math-h">Held for bills now</div>` + (hl.length ? `<div class="math-tbl">`
-    + hl.map(b => line(`${esc(b.c.name)} · ${b.due ? 'due ' + shortDate(b.due) : new Date(b.m + '-15T12:00').toLocaleDateString(undefined, { month: 'short' }) + ', no due day'}`, money(b.A))).join('')
-    + line('Held', money(sum(hl, b => b.A)), 'sum') + `</div><div class="muted" style="font-size:12.5px">Each bill's money is held from the payday before it's due until it's paid, so Savings never counts it.</div>`
-    : `<div class="muted" style="font-size:12.5px; margin:4px 0 10px">Nothing held right now.</div>`);
-  // everything you have
+  // everything added up
   const bals = potBalances(cur), g = id => (bals.find(p => p.id === id) || { bal: 0 }).bal, proj = sum(state.pots, p => g(p.id));
-  h += `<div class="math-h">Everything you have right now</div><div class="math-tbl">`
-    + line('What you had when you started', money(pp.had))
-    + (pp.head ? line("First week's purse, from money you had", sg(pp.head)) : '')
-    + (Math.abs(pp.bills) >= 0.01 ? line('Moved in from Bills (or out to it)', sg(pp.bills)) : '')
-    + line('Paychecks so far', sg(pp.pay))
-    + line('Bills paid, and bill money held', sg(-pp.out))
-    + line('Spent from the purse', sg(-pp.spent))
-    + (Math.abs(pp.fix) >= 1 ? line('Bank balance fixes', sg(pp.fix)) : '')
-    + (pp.scav >= 0.01 ? line('Spare change (cents)', '+' + moneyExact(pp.scav)) : '')
-    + line('Everything you have', money(pp.total), 'sum')
-    + `</div><div class="muted" style="font-size:12.5px">That's Savings ${money(g('savings'))} + party purse ${money(g('spend'))} + projects ${money(proj)} + spare change ${moneyExact(g('scavenger'))}. Add ${money(g('bills'))} for bills and ${money(pp.pending)} of pay still coming in, and your bank should show about ${moneyExact(pp.bank)}.</div>`;
+  h += `<div class="math-h">What's yours</div><div class="math-tbl">`
+    + line('Savings', money(g('savings'))) + line('Party purse', money(g('spend'))) + (state.pots.length ? line('Pots and projects', money(proj)) : '')
+    + line('Spare change', moneyExact(g('scavenger'))) + line('Yours', money(pp.total), 'sum' + (pp.total < 0 ? ' bad' : ''))
+    + `</div><div class="muted" style="font-size:12.5px">In the bank ${moneyExact(pp.bank)} = held for bills ${money(pp.held)}${Math.abs(pp.L.movedBills) >= 0.01 ? ` + moved to Bills ${money(pp.L.movedBills)}` : ''} + still coming in ${money(pp.pending)} + yours ${money(pp.total)}.</div>`
+    + (pp.total < -0.5 ? `<div class="bad" style="font-size:12.5px; margin-top:4px">Your bills need ${money(-pp.total)} more than you have, so Savings is below zero until more pay comes in.</div>` : '');
   if (box.innerHTML !== h) box.innerHTML = h;
 }
-// When more villagers work than a normal month's pay covers, say so where the plan is made, with a fix.
+// When more villagers work than this pay period's paycheck covers, say so where the plan is made, with a fix.
 function renderOver() {
-  const over = overAssigned(), max = maxWorkers(), party = partyNow(), crews = crewWorkers();
+  const over = overAssigned(), pn = periodNow(), max = pn.V, party = partyNow(), crews = crewWorkers(), c = pn.list[0];
+  const locked = over > 0 && crews === 0 && Number(state.partyPlan || 0) <= max;   // only the party, and it's already fitted from Sunday
   document.querySelectorAll('[data-over]').forEach(el => {
     el.classList.toggle('hidden', !over);
-    if (over) el.innerHTML = `<strong class="bad">Your plan is ${money(over)} a day more than your pay</strong>
-      <p>A normal month leaves ${money(Math.max(0, planFree()))} after bills, enough for ${max} villager${max === 1 ? '' : 's'} at $1 a day. ${party + crews} are working (${party} in the party, ${crews} on projects), so Savings pays ${money(over)} a day for the rest.</p>
-      <button class="primary" data-fit>Fit my plan to my pay</button>`;
+    if (over) el.innerHTML = `<strong class="bad">${money(over)} a day more than this paycheck covers</strong>
+      <p>This pay period's paycheck leaves ${money(c ? c.F : 0)} after bills, enough for ${max} villager${max === 1 ? '' : 's'} at $1 a day${c && c.next ? ` until ${shortDate(c.next)}` : ''}. ${party + crews} are working (${party} in the party, ${crews} on projects and pots), so Savings pays ${money(over)} a day for the rest${locked ? ' until the party comes home on Saturday' : ''}.</p>`
+      + (locked ? '' : `<button class="primary" data-fit>Fit my plan to my pay</button>`);
   });
 }
 // Take villagers off projects (evenly, by size) until the plan fits; the party is locked until Sunday, so
 // next week's party shrinks too if it alone is more than the pay covers.
 function fitToPay() {
-  const max = maxWorkers(), party = partyNow(), now = Date.now();
-  const crews = state.pots.map(p => ({ id: p.id, w: workersAt(p.id) })).filter(c => c.w > 0), total = sum(crews, c => c.w);
-  const room = Math.max(0, max - party);
-  if (total > room) {
-    const keep = crews.map(c => ({ ...c, k: Math.floor(c.w * room / total), f: c.w * room / total % 1 }));
-    let spare = room - sum(keep, c => c.k);
-    for (const c of [...keep].sort((a, b) => b.f - a.f)) { if (spare <= 0) break; c.k++; spare--; }
-    for (const c of keep) if (c.k < c.w) state.workerLog.push({ t: now, pot: c.id, delta: c.k - c.w });
-  }
-  if (Number(state.partyPlan || 0) > max) state.partyPlan = max;
+  const max = maxWorkers(), party = partyNow(), r = fitCrews(max);
   save(); render();
-  toast(party > max ? `Projects paused. From Sunday the party is ${max}, which your pay covers.` : 'Your plan fits your pay now');
+  toast(party > max ? `Crews paused. From Sunday the party is ${state.partyPlan}, which this paycheck covers.` : r.cuts.length ? r.cuts.map(c => `${c.name}: ${c.from} → ${c.to}`).join(' · ') : 'Your plan fits your pay now');
 }
 document.addEventListener('click', e => { if (e.target.closest('[data-fit]')) fitToPay(); });
 const funPerDay = () => partyNow() * WORKER_DAY;
@@ -3792,10 +3983,11 @@ function renderParty() {
   const bn = state.bonusNews && !state.bonusNews.seen ? state.bonusNews : null;
   const built = Object.entries(state.built || {}).filter(([id, b]) => !b.seen && state.pots.some(p => p.id === id));
   const bk = backupNudge();
-  $('partyHome').classList.toggle('hidden', !(lt && !lt.seen) && !bn && !built.length && !bk);
+  $('partyHome').classList.toggle('hidden', !(lt && !lt.seen) && !bn && !built.length && !bk && !(state.payNews && !state.payNews.seen && payNewsText(state.payNews)));
   $('partyHome').innerHTML = (lt && !lt.seen ? `<div>${lt.short >= 0.01 ? `The party spent ${money(lt.short)} more than its purse last week. That gap carries into this week until you send postage.`
       : lt.amount >= 0.01 ? `🎉 You didn't spend <strong>${money(lt.amount)}</strong> ${lt.weeks > 1 ? `over the last ${lt.weeks} weeks` : 'last week'}. It's saved now in ${esc(potN(lt.to))}.${lt.gold && GOLD_ON ? ` You also earned 🪙 ${goldFmt(lt.gold)} gold.` : ''}`
       : 'The party came home with empty pockets last week.'} <button class="link" id="partyHomeOk">${lt.amount >= 0.01 ? 'Nice' : 'OK'}</button></div>` : '')
+    + (state.payNews && !state.payNews.seen && payNewsText(state.payNews) ? `<div>💰 ${esc(payNewsText(state.payNews))} <button class="link" id="payNewsOk">OK</button></div>` : '')
     + (bn ? `<div>💰 A bonus paycheck landed ${shortDate(bn.date)}: <strong>${money(bn.amount)}</strong> extra this month, now in ${esc(potN(bn.to))}. <button class="link" id="bonusOk">Nice</button></div>` : '')
     + built.map(([id]) => `<div>🎉 ${esc(potN(id))} ${goalMonthsOf(id) ? `is full: ${goalMonthsOf(id)} month${goalMonthsOf(id) === 1 ? '' : 's'} of bills set aside!` : 'is built!'} The crew went home and its villagers are free again. <button class="link" data-built-ok="${id}">Nice</button></div>`).join('')
     + (bk ? `<div>💾 ${bk} Your budget lives only on this phone, so save a copy to Files now and then. <button class="link" id="backupNow">Back up now</button> · <button class="link" id="backupLater">Later</button></div>` : '');
@@ -4601,7 +4793,8 @@ const Town = (() => {
   function readData(now = Date.now()) {
     const N = monthNumbers(month), pots = potBalances(month), FP = farmPay(now), td = today();
     const incomes = state.incomes.map(i => ({ id: i.id, name: i.name || 'Paycheck', amount: Number(i.amount || 0), ...(FP[i.id] || { inMonth: 0, pending: 0, pool: 0, g: 0, waiting: false }) }));
-    const bills = N.bills.map(c => ({ id: c.id, name: c.name, amount: Number(c.budget || 0), paid: N.isPaid(c), due: dueDate(c, month), cat: c, bldg: bldgOf(c), crew: crewOf(c) }))
+    const preOf = c => { const f = catFirstDay(c), d = dueDate(c, month); return !N.isPaid(c) && (month < f.slice(0, 7) || (month === f.slice(0, 7) && !!d && d < f)); };
+    const bills = N.bills.map(c => ({ id: c.id, name: c.name, amount: Number(c.budget || 0), paid: N.isPaid(c) || preOf(c), pre: preOf(c), due: dueDate(c, month), cat: c, bldg: bldgOf(c), crew: crewOf(c) }))
       .sort((a, b) => (a.due || '9').localeCompare(b.due || '9') || b.amount - a.amount);   // the Bills page's order
     const find = id => pots.find(p => p.id === id);
     const stock = [find('savings'), ...pots.filter(p => p.custom && !isMini(p))].filter(Boolean)
@@ -5502,22 +5695,39 @@ const Town = (() => {
     if (id === 'farm') {
       const incs = `<div class="tn-dock" data-dock="incomeBox"></div><div class="tn-acts"><span class="tn-dock" data-dock="newPlotBtn"></span><span class="tn-dock" data-dock="openSplitBtn"></span></div>`;
       if (!D.incomes.length) return { top: head('Farm', '') + `<p class="sh-line">No pay is set up yet. Add an income source and it shows up here as a field.</p>`, tail: incs };
-      return { top: head(D.incomes.length === 1 ? D.incomes[0].name : 'Farm', `${money(sum(D.incomes, i => i.inMonth))} <small>in this month</small>`) + D.incomes.map(i => {
-        const inc = state.incomes.find(x => x.id === i.id), nx = inc && i.amount > 0 ? nextPayday(inc, today()) : null, w = D.waiting.find(p => p.inc.id === i.id);
-        return `<div class="tn-inc">${D.incomes.length > 1 ? `<div class="row spread"><strong>${esc(i.name)}</strong><span class="num">${money(i.inMonth)} in</span></div>` : ''}
-          <p class="sh-line st">${money(i.inMonth)} of pay has come in ${isStartMonth(month) ? `since you started on ${shortDate(startDay())}` : 'this month'}${i.pending >= 1 ? ` · ${money(i.pending)} more is on its way from a paycheck you entered` : ''}.</p>
-          ${isStartMonth(month) ? `<p class="sh-line">Pay from before then is already in the ${money(Number(state.savings.start || 0))} you said was in your bank, so it isn't counted twice.</p>` : ''}
-          <p class="sh-line">${w ? `Payday ${shortDate(w.date)} is waiting for what landed.` : nx ? `Next payday ${shortDate(nx)}.` : 'No paydays coming up.'}</p>
-          <div class="tn-acts">${w ? `<button class="primary" data-pay-open="${esc(w.key)}">💰 Enter paycheck</button>` : ''}<button data-act="income" data-inc="${esc(i.id)}" aria-pressed="${ib.id === i.id}">Edit ${D.incomes.length > 1 ? esc(i.name) : 'income'}</button></div></div>`;
-      }).join('') + `<p class="sh-line" style="margin-top:10px">Each income is a field on the farm. Pay comes in a bit at a time after it lands, and only what has come in counts.</p>`, tail: incs };
+      // v117: the paycheck summary (Jordan 21:26): the bank, what bills hold, what's left, what this pay period has
+      // earned so far and what's still to come, its villagers, the next payday
+      const pp = hoardParts(), pn = periodNow(), r2 = (a, b, cls = '') => `<div class="row spread${cls}"><span>${a}</span><span class="num">${b}</span></div>`;
+      const left = pp.bank - pp.held - pp.L.movedBills, nw = state.payNews, news = nw && pn.list.some(c => c.key === nw.key) ? payNewsText(nw) : '';
+      let top = head(D.incomes.length === 1 ? D.incomes[0].name : 'Paychecks', `${money(pp.bank)} <small>in the bank</small>`)
+        + `<div class="hoard-math tn-paysum">` + r2('In the bank', money(pp.bank)) + r2("Held for bills", '−' + money(pp.held + pp.L.movedBills)) + r2('Left', money(left), ' sum') + `</div>`
+        + `<p class="sh-line st">${money(Math.max(0, pp.total))} of it is yours now${pp.pending >= 1 ? ` · ${money(pp.pending)} still to come this pay period` : ''}</p>`
+        + (pp.total < -0.5 ? `<p class="sh-line bad">Your bills need ${money(-pp.total)} more than you have, so Savings is below zero until more pay comes in.</p>` : '');
+      for (const c of pn.list) {
+        const yours = c.F, earned = c.start ? Math.max(0, c.F - c.pending) : c.got, nm = D.incomes.length > 1 ? esc(c.inc.name) + ' · ' : '';
+        top += `<div class="tn-inc tn-period"><h3 class="tn-h3" style="margin:0 0 2px">${nm}This pay period · ${shortDate(c.date)} – ${c.next ? shortDate(c.next) : '?'}</h3>
+          <p class="sh-line st">Paycheck ${money(c.D)}${c.start ? ' (before you started: it\'s in your starting balance)' : ''} · ${c.bonus ? 'an extra one, nothing for bills' : c.share ? `${money(Math.min(Math.floor(c.D), c.share))} held for bills` : 'no bills to hold'} · ${money(yours)} yours</p>
+          ${yours > 0 ? bar(earned / yours) + `<p class="sh-line st">Earned so far: <strong>${money(earned)}</strong> of ${money(yours)}${c.pending >= 1 ? ` · ${money(c.pending)} still to come` : ''}</p>` : `<p class="sh-line st">All of it went to bills, so nothing is yours this pay period.</p>`}
+          <p class="sh-line">${c.V ? `${money(c.V)} a day · <strong>${c.V} villager${c.V === 1 ? '' : 's'}</strong> until ${c.next ? shortDate(c.next) : 'the next payday'} · about ${money(c.V * 365 / 12)} a month at this pace` : 'No villagers this pay period.'}${!c.start && c.extra >= 1 ? ` · ${money(c.extra)} more lands in Savings on ${shortDate(c.next)}` : ''}</p>
+          ${c.capped ? `<p class="sh-line">Your starting balance, after the bills' hold, covers ${c.V} villager${c.V === 1 ? '' : 's'} until then.</p>` : ''}</div>`;
+      }
+      if (news) top += `<p class="sh-line tn-news">💰 ${esc(news)}</p>`;
+      for (const w of pn.waiting) top += `<div class="tn-inc"><p class="sh-line st"><strong>Payday ${shortDate(w.date)}.</strong> Enter your paycheck to put villagers to work.</p><div class="tn-acts"><button class="primary" data-pay-open="${esc(w.key)}">💰 Enter paycheck</button></div></div>`;
+      const assigned = partyNow() + crewWorkers();
+      top += `<p class="sh-line" style="margin-top:10px">${pn.V ? `Your ${pn.V} villager${pn.V === 1 ? '' : 's'}: ${partyNow()} in the party, ${crewWorkers()} on pots and projects, ${savers()} saving into Savings.` : ''}${assigned > pn.V && !pn.waiting.length ? ` <span class="bad">${assigned - pn.V} more ${assigned - pn.V === 1 ? 'is' : 'are'} working than this paycheck covers${crewWorkers() === 0 && Number(state.partyPlan || 0) <= pn.V ? ': the party is out until Saturday, so Savings pays for them until then' : ''}.</span>` : ''}</p>`;
+      const nxs = D.incomes.map(i => { const inc = state.incomes.find(x => x.id === i.id); return inc && i.amount > 0 ? nextPayday(inc, today()) : null; }).filter(Boolean).sort();
+      top += `<p class="sh-line">${nxs.length ? `Next payday ${shortDate(nxs[0])}.` : 'No paydays coming up.'} Each paycheck holds its share of the bills; the rest comes in a dollar a day per villager until the payday after it.</p>`
+        + `<div class="tn-acts">${D.incomes.map(i => `<button data-act="income" data-inc="${esc(i.id)}" aria-pressed="${ib.id === i.id}">Edit ${D.incomes.length > 1 ? esc(i.name) : 'income'}</button>`).join('')}</div>`;
+      return { top, tail: incs };
     }
     // the pie: of all your villagers (a normal month's pay / $31), how many keep the bills running
     function billPie() {
-      const cs = state.categories.filter(c => Number(c.budget || 0) > 0), crews = sum(cs, c => crewOf(c)), free = maxWorkers(), all = crews + free;
+      // v117: this pay period's paycheck: its bill share over the days to the next payday on bills, the rest yours
+      const pn = periodNow(), free = pn.V, crews = pn.list.length ? Math.round(sum(pn.list, c => Math.min(Math.floor(c.D), c.share) / c.days) / WORKER_DAY) : billCrew(), all = crews + free;
       if (!all) return '';
-      const pct = Math.round(crews / all * 100), deg = (crews / all * 360).toFixed(1);
+      const pct = Math.round(crews / all * 100), deg = (crews / all * 360).toFixed(1), extra = pn.list.length && pn.list.every(c => c.bonus);
       return `<div class="tn-pie-row"><div class="tn-pie" role="img" aria-label="${pct}% of your villagers go to bills" style="background:conic-gradient(#f59e0b 0 ${deg}deg, #2dd4bf ${deg}deg 360deg)"><span>${pct}%</span></div>
-        <div class="tn-pie-key"><div><i style="background:#f59e0b"></i><b>${crews}</b> of ${all} villagers keep your bills running</div><div><i style="background:#2dd4bf"></i><b>${free}</b> are yours for the party, stockholds and projects</div></div></div>`;
+        <div class="tn-pie-key"><div><i style="background:#f59e0b"></i><b>${crews}</b> of ${all} villagers keep your bills running${extra ? ' (an extra paycheck: none this time)' : ''}</div><div><i style="background:#2dd4bf"></i><b>${free}</b> are yours for the party, pots and projects${pn.waiting.length ? ' (enter your paycheck to put them to work)' : ''}</div></div></div>`;
     }
     if (id === 'projs') {
       const rows = D.projects.map(p => {
@@ -5552,13 +5762,13 @@ const Town = (() => {
       // yet held, and a bar for how near it is to due (from its last due date to its next; by the month if it has no
       // due date); a bill paid this month is a full green bar with ✓. A row opens the bill's own sheet. "All bills"
       // shows the detailed rows (the Bills page's own, with Mark paid and the rest) under the list.
-      const b = billsInfo(), L = ledgerAt(today()), heldAmt = sum(L.heldList, x => x.A), heldIds = new Set(L.heldList.map(x => x.c && x.c.id));
+      const b = billsInfo(), L = ledgerAt(today()), heldAmt = hoardParts().held, heldIds = new Set(L.heldList.filter(x => x.m <= month).map(x => x.c && x.c.id));
       const rows = D.bills.map(x => {
-        const r = billBar(x), st = x.paid ? '<span class="ok">paid ✓</span>' : heldIds.has(x.id) ? '<span class="tn-held">money held</span>' : '<span class="muted">not yet held</span>';
+        const r = billBar(x), st = x.pre ? '<span class="ok">before you started ✓</span>' : x.paid ? '<span class="ok">paid ✓</span>' : heldIds.has(x.id) ? '<span class="tn-held">money held</span>' : '<span class="muted">not yet held</span>';
         return `<div class="tn-bwrap"><button class="tn-brow${x.paid ? ' paid' : ''}" data-bill-row="${esc(x.id)}" aria-label="${esc(x.name)}, ${money(x.amount)}, ${esc(r.when)}, ${x.paid ? 'paid' : heldIds.has(x.id) ? 'money held' : 'not yet held'}">
           <span class="tn-brow-top"><b>${esc(x.name)}</b><span class="num">${money(x.amount)}</span></span>
           <span class="tn-brow-sub"><span>${esc(r.when)} · 👷 ${x.crew ? `${x.crew} villager${x.crew === 1 ? '' : 's'}` : 'under 1 villager'}</span>${st}</span>
-          <span class="tn-bbar${x.paid ? ' done' : r.due ? ' due' : ''}"><span style="width:${(r.f * 100).toFixed(1)}%"></span>${x.paid ? '<i>✓</i>' : ''}</span></button>${x.paid ? `<button class="tn-bpay undo" data-unslay="${esc(x.id)}" aria-label="Undo paid for ${esc(x.name)}">Undo</button>` : `<button class="tn-bpay" data-paid="${esc(x.id)}" aria-label="Mark ${esc(x.name)} paid">Paid</button>`}</div>`;
+          <span class="tn-bbar${x.paid ? ' done' : r.due ? ' due' : ''}"><span style="width:${(r.f * 100).toFixed(1)}%"></span>${x.paid ? '<i>✓</i>' : ''}</span></button>${x.pre ? '' : x.paid ? `<button class="tn-bpay undo" data-unslay="${esc(x.id)}" aria-label="Undo paid for ${esc(x.name)}">Undo</button>` : `<button class="tn-bpay" data-paid="${esc(x.id)}" aria-label="Mark ${esc(x.name)} paid">Paid</button>`}</div>`;
       }).join('');
       return { top: head('Bills', b.n ? b.left ? `${money(b.left)} <small>to go</small>` : '<span class="ok">All paid ✓</span>' : '') +
         `<p class="sh-line st">${!b.n ? 'No bills yet.' : `${b.paid} of ${b.n} paid · ${money(heldAmt)} held for bills not paid yet`}</p>` +
@@ -6757,6 +6967,7 @@ $('trailLog').addEventListener('click', async e => {
 $('partyHome').addEventListener('click', e => {
   if (e.target.id === 'partyHomeOk' && state.lastTrip) state.lastTrip.seen = true;
   else if (e.target.id === 'bonusOk' && state.bonusNews) state.bonusNews.seen = true;
+  else if (e.target.id === 'payNewsOk' && state.payNews) state.payNews.seen = true;
   else if (e.target.dataset.builtOk && state.built && state.built[e.target.dataset.builtOk]) state.built[e.target.dataset.builtOk].seen = true;
   else if (e.target.id === 'backupNow') { exportBackup(); return; }
   else if (e.target.id === 'backupLater') state.backupSnooze = Date.now() - 7 * DAY_MS;   // ask again in a week
@@ -7318,7 +7529,7 @@ $('suGo').onclick = () => {
 if (state.needsSetup) openSetup();
 // After setup: which of the bills being held came out of the bank already this month?
 function askPaidAlready() {
-  const m = today().slice(0, 7), list = hoardParts().heldList.filter(b => b.m === m && b.c.kind === 'bill');
+  const m = today().slice(0, 7), L = ledgerAt(today()), list = L.inst.filter(b => !b.set && !b.gone && b.m === m && L.have.has(b.key) && !((L.paid[b.key] || NO_PAY).P > 0));
   if (!list.length) return;
   $('paidAskList').innerHTML = list.map(b => `<label class="paid-row"><input type="checkbox" data-paid-already="${esc(b.c.id)}"><span class="grow">${esc(b.c.name)}<br><small class="muted">${b.due ? 'due ' + shortDate(b.due) : 'no due day set'}</small></span><span class="num">${money(Number(b.c.budget || 0))}</span></label>`).join('');
   $('paidAsk').classList.remove('hidden');
