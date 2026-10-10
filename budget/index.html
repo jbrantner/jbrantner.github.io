@@ -348,6 +348,9 @@ button:disabled { opacity: .5; cursor: default; }
   .scene-place { font-weight: 800; font-size: 19px; }
   .scene-clock { text-align: right; font-weight: 800; font-size: 19px; font-variant-numeric: tabular-nums; flex: none; }
   .scene-sub { font-weight: 600; font-size: 12.5px; opacity: .92; }
+  .scene-purse.setout { background: #0f766e; border-color: #5eead4; animation: setout-glow 2s ease-in-out infinite; }
+  @keyframes setout-glow { 50% { box-shadow: 0 0 0 4px rgba(94,234,212,.35); } }
+  @media (prefers-reduced-motion: reduce) { .scene-purse.setout { animation: none; } }
   .scene-purse { position: absolute; top: 64px; left: 14px; padding: 5px 12px; border-radius: 99px; background: rgba(15,23,42,.6); border: 1px solid rgba(255,255,255,.25); color: #fff; font-weight: 700; font-size: 14px; }
   .scene-purse.over { background: var(--bad); border-color: var(--bad); }
   .scene-update { position: absolute; top: 64px; right: 14px; width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: 99px; background: rgba(15,23,42,.6); border: 1px solid rgba(255,255,255,.25); font-size: 17px; }
@@ -1142,7 +1145,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 96;
+const APP_VERSION = 98;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -3071,7 +3074,7 @@ function drawWorld(g, W, H, GY, now, n) {
 function drawRoad2(g, W, H, GY, now) {
   const t = lessMotion() ? 0 : now;
   const sk = skyAt(now), td = tod(sk), ti = TODI[td], n = partySize();
-  const home = n < 1, camp = false, walking = false, run = 0;
+  const home = n < 1 || !funded(), camp = false, walking = false, run = 0;
   const sky = g.createLinearGradient(0, 0, 0, GY); sky.addColorStop(0, sk.top); sky.addColorStop(1, sk.bot); g.fillStyle = sky; g.fillRect(0, 0, W, GY);
   if (!sk.day) for (let k = 0; k < 24; k++) { const h = hash(k), p = (Math.floor(t / 180) + h % 60) % 60; art(g, 'sky-star', p < 4 ? p : 0, (h >>> 9) % W, 5 + (h >>> 3) % Math.max(10, GY - 64)); }
   const arc = sk.day ? (sk.hr - 7) / 11.5 : ((sk.hr + 24 - 18.5) % 24) / 12.5, ox = 12 + arc * (W - 24), oy = GY * 0.62 - Math.sin(arc * Math.PI) * GY * 0.2;
@@ -3822,19 +3825,23 @@ function drawPlace(g, kind, W, H, now) {
     [[112, 2], [128, 1], [144, 0]].forEach(([x, k]) => drawHero(g, x, FY + 10, k, 0, false));
   }
 }
+// out on the road only while the purse has at least $1 left
+const funded = () => purseNow().purseLeft >= 1;
 function tickRoad() {
   const now = new Date(), wk = weekStart(now), d = Math.max(0, Math.min(6, Math.floor((now - wk) / DAY_MS)));
   const n = partySize();
   const pw = PartyWorld.at(now.getTime()), what = artOk() && pw.kind !== 'walk' ? pw.label : `${n} on the road`;
-  $('scenePlace').textContent = n ? ROAD[Math.max(0, PartyWorld.LANDS.indexOf(pw.land))] : 'Home in the village';
-  $('sceneSub').textContent = n ? `${what} · day ${d + 1} of 7` : 'No party out · send one from the Party page';
+  const out = n && funded();
+  $('scenePlace').textContent = out ? ROAD[Math.max(0, PartyWorld.LANDS.indexOf(pw.land))] : 'Home in the village';
+  $('sceneSub').textContent = out ? `${what} · day ${d + 1} of 7` : n ? 'Out of gold · resting till the Sunday mail' : 'The party is resting at home';
   $('sceneTime').textContent = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   $('sceneDate').textContent = now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   const pu = purseNow(), left = pu.purseLeft, over = Math.ceil(-left), short = Math.ceil(pu.carried - 1e-9);
   const tl = todayLeft(pu), day = tl >= 0 ? `${money(tl)} today` : `${money(Math.ceil(-tl - 1e-9))} over today`;
-  const txt = over > 0 ? `Overdrawn ${money(over)} · Send postage` : `👛 ${money(left)} left this week · ${day}` + (short > 0 ? ` · ${money(short)} short` : '');
+  const txt = !n && over <= 0 ? '⚔️ Set out on an adventure' : over > 0 ? `Overdrawn ${money(over)} · Send postage` : `👛 ${money(left)} left this week · ${day}` + (short > 0 ? ` · ${money(short)} short` : '');
   if ($('scenePurse').textContent !== txt) $('scenePurse').textContent = txt;
   $('scenePurse').classList.toggle('over', over > 0);
+  $('scenePurse').classList.toggle('setout', !n && over <= 0);
 }
 /* ---------- an income farm, opened ---------- */
 const ib = { id: null };
@@ -5941,7 +5948,11 @@ $('packLeft').addEventListener('click', e => {
   setTimeout(() => { const el = document.querySelector('#trailLog .tx-types') || $('trailLog'); el.scrollIntoView({ block: 'center' }); }, 60);
 });
 $('packEdit').onclick = () => { packEditing = false; renderPacks(); };
-$('scenePurse').onclick = () => { if (postageNeed() >= 0.01) $('runnerBtn').click(); else { showView('party', 1); $('postBox').classList.remove('hidden'); } };
+$('scenePurse').onclick = () => {
+  if (postageNeed() >= 0.01) { $('runnerBtn').click(); return; }
+  if (!partyNow()) { if (Math.min(Number(state.partyPlan || 0), partyRoom()) > 0) sendPartyNow(); else { showView('party', 1); toast('Pick how many villagers go with +, then send them out'); } return; }
+  showView('party', 1); $('postBox').classList.remove('hidden');
+};
 $('packAddBtn').onclick = () => {
   const name = $('packNewName').value.trim(), amount = Math.max(0, Number($('packNewAmt').value) || 0); if (!name) { toast('Give the type a name'); return; }
   (state.packs = state.packs || []).push({ id: uid(), name, amount }); $('packNewName').value = ''; $('packNewAmt').value = ''; save(); render();
