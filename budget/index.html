@@ -636,7 +636,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
       <canvas id="townCv" role="img" aria-label="Your town: the farm for your pay at the top, the house for your bills, then a lot for each stockhold and, further down, each project. Tap one to open it."></canvas>
       <div class="tn-labels" id="townLabels"></div>
     </div></div>
-    <p class="tn-hint">Tap any building or cube to open it. + Add lot starts a new stockhold or project.</p>
+    <p class="tn-hint">Tap any building, cube or name to open it. + Add lot starts a new stockhold or project.</p>
     <div id="townDock" hidden></div>
   </section>
 
@@ -1126,7 +1126,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 93;
+const APP_VERSION = 94;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -4333,7 +4333,7 @@ function renderRules() {
    kit), read from your real numbers. One building per item: the farm's windmill, Savings' keep, a granary or
    depot per stockhold, a building site per project (at its stage), a house per bill (the kit's building for its
    kind, else a cottage) with a green flag once paid, and the scavenger's shack. Villagers are only the workers
-   really at each job. Each name is carved into its own cube; taps go to whatever is drawn front-most.
+   really at each job. Each name hangs on a wooden plate above its building; taps go to whatever is drawn front-most (plates first).
    The sheets are the v86 ones: the Pots, Bills and Scavenger pages' controls live in them. Nothing here changes
    money by itself: every button hands over to the app's own code (the payday box, the income panel, the bill
    handlers, the Move money box, setCrew, addPot, addProject, goalChange, deletePot).
@@ -4355,7 +4355,8 @@ const Town = (() => {
   const meta = name => TOWN_ART[name] || ART[name];
   const ready = () => artOk() && TOWNIMG.complete && TOWNIMG.naturalWidth > 0;
   const TINT = { dusk: ['#4c1d95', 0.3], night: ['#0b1222', 0.55] };
-  const NO_TINT = new Set(['build-spark', 'fx-sparkle', 'fx-coin', 'scene-scavenger-alley', 'trading-stove_glow', 'tavern-candle', 'trading-lantern']);
+  const NO_TINT = new Set(['build-spark', 'fx-sparkle', 'fx-coin', 'scene-scavenger-alley', 'trading-stove_glow', 'tavern-candle', 'trading-lantern',
+    'k_sign_l', 'k_sign_m', 'k_sign_r']);   // name plates stay readable after dark (as if lamplit)
   const ownTod = m => !!(m.a && (m.a.day || m.a.closed_day || m.a.size0_dusk));
   let TOD = 'day';
   const strips = {}, shaded = {};
@@ -4601,81 +4602,71 @@ const Town = (() => {
     }
   }
 
-  /* ---- carved names ---- */
-  // a face of a column: dir +1 is the front-left face (runs down-right), -1 the front-right one (runs up-right)
-  const faceY = (F, x) => Math.round(F.y0 + F.dir * (x - F.x0) / 2);
-    // split a word too long for the face into pieces that fit: as even as can be, between double letters if there are
-  // some, else before a vowel (SAV INGS, ELEC TRIC, INSUR ANCE, VACA TION, GRAM MY, COL LEGE)
-  // a word too wide for the face breaks only where a reader would: before a common ending or after a common
-  // first half (SAV|INGS, INTER|NET, INSUR|ANCE); otherwise it is not carved at all
-  const ENDS = ['INGS', 'ING', 'ANCE', 'ENCE', 'TION', 'SION', 'MENT', 'NESS', 'CARE', 'WORK', 'FLIX', 'PHONE', 'FUND'];
-  const STARTS = ['INTER', 'UNDER', 'OVER', 'SUPER', 'HOUSE', 'HOME', 'CHILD', 'GRAND', 'DAY', 'CAR'];
-  function splitWord(w, maxW) {
-    if (textW(w) <= maxW) return [w];
-    const cuts = new Set();
-    for (const e of ENDS) if (w.length > e.length + 2 && w.endsWith(e)) cuts.add(w.length - e.length);
-    for (const b of STARTS) if (w.length > b.length + 2 && w.startsWith(b)) cuts.add(b.length);
-    for (const k of [...cuts].sort((a, b) => Math.abs(w.length / 2 - a) - Math.abs(w.length / 2 - b))) {
-      const a = w.slice(0, k); if (textW(a) > maxW) continue;
-      const rest = splitWord(w.slice(k), maxW); if (rest.every(x => textW(x) <= maxW)) return [a, ...rest];
+  /* ---- name signs: the concept's wooden plates (the kit's 3-slice sign, its 3x5 font), one per item ----
+     Self-contained so it carries to other town kits: placeSigns() needs only the items (in priority order, each
+     with its name and the point it hangs above), the canvas size, textW() and PLATE_H. A plate sits just above its
+     building, on one line or as two stacked plates; it is nudged left/right/up/down to clear the plates placed
+     before it and stay inside the canvas. One that finds no free spot near its building shows only while selected. */
+  const PLATE_H = 10, PLATE_GAP = 1, PLATE_DX = [0, -4, 4, -8, 8, -12, 12, -16, 16, -20, 20, -24, 24], PLATE_DY = [0, -3, 3, -6, 6, -9, -12, 9, -15, 12];
+  function plateLines(name, maxW) {
+    const ws = name.split(' '), opts = [[name]];
+    if (ws.length > 1) {
+      let best = null;
+      for (let k = 1; k < ws.length; k++) { const a = ws.slice(0, k).join(' '), b = ws.slice(k).join(' '), w = Math.max(textW(a), textW(b)); if (!best || w < best[0]) best = [w, [a, b]]; }
+      opts.push(best[1]);
     }
-    return [w];
+    const fit = opts.filter(ls => ls.every(l => textW(l) + 6 <= maxW));
+    return fit.length ? fit : [opts[opts.length - 1]];
   }
-  function fitCarve(name, maxW, maxLines) {
-    const lines = [];
-    for (const w of clean(name).split(' ')) {
-      const parts = splitWord(w, maxW);
-      parts.forEach((p, k) => { const cur = lines[lines.length - 1]; if (!k && cur && textW(cur + ' ' + p) <= maxW) lines[lines.length - 1] = cur + ' ' + p; else lines.push(p); });
+  // a plate's rows: the kit's left cap (2px) at x0, the middle stretched to x0 + w - 1, the right cap at x0 + w;
+  // y is a row's bottom (the sprites' anchor); the text sits 7px up, a pixel in from the caps
+  function plate(lines, cx, y) {
+    const n = lines.length, rows = lines.map((t, k) => { const w = textW(t) + 4; return { t, x0: Math.round(cx - (w + 2) / 2), w, y: Math.round(y) - (n - 1 - k) * PLATE_H }; });
+    return { lines, rows, box: [Math.min(...rows.map(r => r.x0)), Math.round(y) - n * PLATE_H + 1, Math.max(...rows.map(r => r.x0 + r.w + 2)), Math.round(y) + 1] };
+  }
+  function placeSigns(items, W, H) {
+    const placed = [], out = {};
+    const inside = b => b[0] >= 1 && b[2] <= W - 1 && b[1] >= 1 && b[3] <= H - 1;
+    const clear = b => !placed.some(q => b[0] < q[2] + PLATE_GAP && q[0] < b[2] + PLATE_GAP && b[1] < q[3] + PLATE_GAP && q[1] < b[3] + PLATE_GAP);
+    for (const it of items) {
+      const opts = plateLines(it.name, W - 2); let best = null;
+      opts.forEach((lines, li) => {
+        for (const dx of PLATE_DX) for (const dy of PLATE_DY) {
+          // near its building first; a long name would rather stack on two narrower plates than cover the town
+          const P = plate(lines, it.x + dx, it.y + dy), sc = Math.abs(dx) + Math.abs(dy) * 1.3 + li * 4 + (P.box[2] - P.box[0]) * .25; if (best && sc >= best.sc) continue; if (inside(P.box) && clear(P.box)) best = { sc, ...P };
+        }
+      });
+      if (best) { placed.push(best.box); out[it.id] = { ...best, shown: true }; continue; }
+      // no room: it shows only while its item is selected, over everything, kept inside the canvas
+      let P = plate(opts[0], it.x, it.y);
+      const dx = P.box[0] < 1 ? 1 - P.box[0] : P.box[2] > W - 1 ? W - 1 - P.box[2] : 0, dy = P.box[1] < 1 ? 1 - P.box[1] : P.box[3] > H - 1 ? H - 1 - P.box[3] : 0;
+      if (dx || dy) P = plate(opts[0], it.x + dx, it.y + dy);
+      out[it.id] = { ...P, shown: false };
     }
-    if (lines.length <= maxLines && lines.every(l => textW(l) <= maxW)) return { lines, full: true };
-    const out = lines.slice(0, maxLines); let l = out[maxLines - 1] || ''; while (l.length > 1 && textW(l + '…') > maxW) l = l.slice(0, -1).trimEnd(); out[maxLines - 1] = l + '…';
-    return { lines: out, full: false };
+    return out;
   }
-  function carveLayout(F, name) {
-    const maxW = F.w - 4, rows = F.h - 4, n = clamp(Math.floor((rows + 1) / 6), 0, 3); if (!n) return null;
-    const { lines, full } = fitCarve(name, maxW, n), tw = Math.max(...lines.map(textW)), pw = tw + 4, ph = lines.length * 6 + 1;
-    const px0 = F.x0 + Math.floor((F.w - pw) / 2), py = 2;
-    const ys = [faceY(F, px0), faceY(F, px0 + pw - 1)];
-    return { lines, full, F, px0, py, pw, ph, box: [px0, Math.min(...ys) + py, px0 + pw, Math.max(...ys) + py + ph] };
-  }
-  // cut into the stone: each letter a dark groove with the light catching its lower edge, no panel
-  function carvePixels(S) {
-    const F = S.F, on = new Set(), px = [];
-    S.lines.forEach((line, r) => {
-      let cx = S.px0 + 2 + Math.floor((S.pw - 4 - textW(line)) / 2); const cy = S.py + 1 + r * 6;
-      for (const ch of line) {
-        const bits = GLYPH[ch] || GLYPH['?'], w = gw(ch), h = bits.length / w, dy = faceY(F, cx + (w >> 1));
-        for (let k = 0; k < bits.length; k++) if (bits[k] === '1') { const x = cx + (k % w), y = dy + cy + Math.floor(k / w) + (5 - h); on.add(x + ',' + y); px.push([x, y]); }
-        cx += w + 1;
-      }
-    });
-    return { px, lit: px.filter(([x, y]) => !on.has(x + ',' + (y + 1))).map(([x, y]) => [x, y + 1]) };
-  }
-  function drawCarve(g, S) {
-    const { px, lit } = carvePixels(S);
-    g.fillStyle = col('#fffaf0'); for (const [x, y] of lit) g.fillRect(x, y, 1, 1);
-    g.fillStyle = col('#5b4f5a'); for (const [x, y] of px) g.fillRect(x, y, 1, 1);
-  }
-  // The name goes on the item's own column, at the top of its front-left face (or the front-right one if that is
-  // hidden), when the whole name fits and can be seen; otherwise nowhere, and it shows on a small sign while the
-  // item is selected. Never a cut-off name.
-  function chooseCarves() {
-    const own = (L, x, y) => x >= 0 && y >= 0 && x < W && y < H && IDB[y * W + x] === L.idx;
-    for (const L of LOTS) {
-      L.sign = null; L.name = placeName(L);
-      const at = (i, j) => CELLS.get(ck(i, j));
-      for (const dir of [1, -1]) {
-        const nb = dir > 0 ? at(L.i, L.j + 1) : at(L.i + 1, L.j), vis = L.h - (nb ? nb.h : -1);
-        if (vis < 1) continue;
-        const a = dir > 0 ? cellPx(L.i - 1, L.j, L.h * C) : cellPx(L.i, L.j, L.h * C);   // the face's left end, at the top
-        const F = { x0: Math.round(a.x), y0: Math.round(a.y), w: C, h: Math.min(2 * C, vis * C), dir };
-        const S2 = carveLayout(F, L.name); if (!S2 || !S2.full) continue;
-        // keep it only if (nearly) all of its panel can be seen
-        // every letter (and the stone a pixel round it) must be this item's own visible stone
-        const cp = carvePixels(S2), all = [...cp.px, ...cp.lit];
-        if (all.every(([x, y]) => own(L, x, y) && own(L, x - 1, y) && own(L, x + 1, y) && own(L, x, y - 1))) { L.sign = S2; break; }
-      }
+  function drawPlate(g, P) {
+    for (const r of P.rows) {
+      spr(g, 'k_sign_l', 0, r.x0, r.y); for (let k = 2; k < r.w; k++) spr(g, 'k_sign_m', 0, r.x0 + k, r.y); spr(g, 'k_sign_r', 0, r.x0 + r.w, r.y);
+      drawText(g, r.x0 + 3, r.y - 7, r.t, '#5a321a', true);
     }
+  }
+  // which plates come first when space is short: Savings, the farm, projects, stockholds, bills (biggest first), Spare change
+  const SIGN_RANK = { savings: 0, farm: 1, project: 2, stock: 3, bill: 4, scavenger: 5 };
+  function signAnchor(L) {
+    // the middle of the top of the building (its first opaque row), or of the windmill's sails
+    const a = cellPx(L.i, L.j, L.h * C), nm = 'k_bld_' + L.bld, m = meta(nm), sp = TOWN_MASK[nm] || [];
+    let r0 = 0; while (r0 < sp.length && !(sp[r0] && sp[r0][1] > sp[r0][0])) r0++;
+    let x = m ? a.x - m.ax + m.w / 2 : a.x, y = m ? a.y - m.ay + r0 : a.y - 30;
+    if (L.kind === 'farm') { const hub = (TOWN_ART._kit || {}).windmill_hub_offset || [0, -45.5], sm = meta('k_sails_f0'); if (sm) { x = a.x + hub[0]; y = Math.min(y, a.y + hub[1] - sm.ay); } }
+    return { x: Math.round(x), y: Math.round(y) - 2 };
+  }
+  function chooseSigns() {
+    for (const L of LOTS) L.name = placeName(L);
+    const amt = L => { const b = L.kind === 'bill' ? billOf(L.id) : null; return b ? b.amount : 0; };
+    const order = [...LOTS].sort((a, b) => SIGN_RANK[a.kind] - SIGN_RANK[b.kind] || amt(b) - amt(a) || a.idx - b.idx);
+    const out = placeSigns(order.map(L => ({ id: L.id, name: clean(L.name), ...signAnchor(L) })), W, H);
+    for (const L of LOTS) L.sign = out[L.id];
   }
 
   /* ---- layout: grid -> canvas ---- */
@@ -4712,6 +4703,7 @@ const Town = (() => {
     const grow = b => { x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]); };
     for (const p of paintList()) grow(spriteBox(p.name, p.x, p.y));
     const fp = PX(DECO.fall.X, DECO.fall.Y, DECO.fall.Z - DECO.fall.len); grow([fp.x, fp.y, fp.x + 3, fp.y]);
+    for (const L of LOTS) { const a = signAnchor(L); grow([a.x, a.y - PLATE_H - 2, a.x, a.y]); }   // room for the name plates above the summit
     W = Math.max(220, Math.ceil(x1 - x0) + 12); OX = Math.round((W - (x1 - x0)) / 2 - x0);
     const top = 14; OY = Math.round(top - y0); H = Math.ceil(y1 - y0) + top + 22;
     S = cssWidth() / W;
@@ -4726,11 +4718,9 @@ const Town = (() => {
         const row = yy * W; for (let xx = Math.max(0, bx + a); xx < Math.min(W, bx + b); xx++) IDB[row + xx] = p.idx;
       }
     }
-    chooseCarves();
-    // no lit windows behind a carved name: the cubes it is cut into lose theirs
-    let bare = false;
-    for (const L of LOTS) if (L.sign) { const c = L.cell, n = L.sign.py + L.sign.ph > C ? 2 : 1; for (let k = c.h - n; k < c.h; k++) if (k >= 0 && c.win[k]) { c.win[k] = false; bare = true; } }
-    if (bare) PAINT = paintList();
+    chooseSigns();
+    // a shown plate is drawn over everything, so a tap on it is its item's
+    for (const L of LOTS) if (L.sign && L.sign.shown) for (const r of L.sign.rows) for (let y = r.y - PLATE_H + 1; y <= r.y; y++) if (y >= 0 && y < H) for (let x = r.x0; x < r.x0 + r.w + 2; x++) if (x >= 0 && x < W) IDB[y * W + x] = L.idx;
     // each item's tap point: the visible pixel of it nearest the middle of its building
     const best = LOTS.map(() => [1e9, 0, 0]), centre = LOTS.map(L => { const a = cellPx(L.i, L.j, L.h * C); return [a.x, a.y - 22]; });
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = IDB[y * W + x]; if (k < 0) continue; const d = (x - centre[k][0]) ** 2 + (y - centre[k][1]) ** 2; if (d < best[k][0]) best[k] = [d, x, y]; }
@@ -4744,7 +4734,7 @@ const Town = (() => {
   let needMeasure = false;
   function measure() { needMeasure = false; draw(); }
 
-  /* ---- the 3x5 pixel font (carved names and the selected item's sign) ---- */
+  /* ---- the kit's 3x5 pixel font, for the name plates ---- */
   const GLYPH = {
     A: '010101111101101', B: '110101110101110', C: '011100100100011', D: '110101101101110', E: '111100110100111', F: '111100110100100', G: '011100101101011',
     H: '101101111101101', I: '111010010010111', J: '001001001101010', K: '101101110101101', L: '100100100100111', M: '101111111101101', N: '110101101101101',
@@ -4763,18 +4753,10 @@ const Town = (() => {
     if (L.kind === 'scavenger') return 'Spare change';
     const p = itemOf(L.id); return p ? p.name : '';
   }
-  function drawText(g, x, y, t, c) {
-    g.fillStyle = col(c); let cx = x;
+  function drawText(g, x, y, t, c, lit) {
+    g.fillStyle = lit ? c : col(c); let cx = x;
     for (const ch of t) { const bits = GLYPH[ch] || GLYPH['?'], w = gw(ch), h = bits.length / w; for (let k = 0; k < bits.length; k++) if (bits[k] === '1') g.fillRect(cx + (k % w), y + Math.floor(k / w) + (5 - h), 1, 1); cx += w + 1; }
   }
-  // the selected item's name on the kit's little sign plate, above its building (kept inside the canvas)
-  function drawSign(g, L) {
-    const t = fitCarve(L.name, W - 10, 1).lines[0], w = textW(t) + 4, a = cellPx(L.i, L.j, L.h * C), m = meta('k_bld_' + L.bld);
-    const top = m ? a.y - m.ay - 3 : a.y - 40, x0 = clamp(Math.round(a.x - w / 2) - 1, 1, W - w - 3), y = clamp(Math.round(top), 11, H - 2);
-    spr(g, 'k_sign_l', 0, x0, y); for (let k = 2; k < w; k++) spr(g, 'k_sign_m', 0, x0 + k, y); spr(g, 'k_sign_r', 0, x0 + w, y);
-    drawText(g, x0 + 3, y - 7, t, '#5a321a');
-  }
-
   /* ---- drawing ---- */
   let selected = null, flash = null, form = null, sky = null, skyTod = '';
   function drawSky(now) {
@@ -4821,19 +4803,19 @@ const Town = (() => {
     const list = PAINT.slice();
     for (const L of LOTS) {
       villagers(L, now, list);
-      if (L.sign) list.push({ key: L.i + L.j + L.h - 1 + .1, carve: L.sign });
       if (L.kind === 'bill') { const b = billOf(L.id); if (b && b.paid) { const p = PX(L.i * C + 3, L.j * C + 21, L.h * C); list.push({ key: L.i + L.j + L.h + .55, name: 'k_flag_green', x: Math.round(p.x), y: Math.round(p.y) }); } }
       if (L.kind === 'scavenger') { const p = PX(L.i * C + 19, L.j * C + 19, L.h * C); list.push({ key: L.i + L.j + L.h + .6, name: 'k_scavenger', x: Math.round(p.x), y: Math.round(p.y) }); }
     }
     list.sort((a, b) => a.key - b.key);
-    for (const p of list) { if (p.carve) drawCarve(g, p.carve); else spr(g, p.name, 0, p.x, p.y, p.flip); }
+    for (const p of list) spr(g, p.name, 0, p.x, p.y, p.flip);
     // overlays: the waterfall, the windmill's sails, root lines, the selected item's sign
     const f = DECO.fall, fp = PX(f.X, f.Y, f.Z), fr = lessMotion() ? 0 : Math.floor(now / 90) % 24, fm = meta('k_waterfall');
     if (fm) { const [im, ox, oy] = strip('k_waterfall'); for (let t = -fr; t < f.len; t += 23) { const y0 = Math.max(0, t), hh = Math.min(fm.h - (y0 - t), f.len - y0); if (hh > 0) g.drawImage(im, ox, oy + (y0 - t), fm.w, hh, Math.round(fp.x), Math.round(fp.y) + y0, fm.w, hh); } }
     g.fillStyle = col('#5e3c2c'); for (const r of DECO.roots) { const p = PX(r.X, r.Y, r.Z); for (let t = 0; t < r.len; t++) g.fillRect(Math.round(p.x) + ((t >> 2) & 1), Math.round(p.y) + t, 1, 1); }
     const farm = lotById.farm;
     if (farm) { const a = cellPx(farm.i, farm.j, farm.h * C), hub = (TOWN_ART._kit || {}).windmill_hub_offset || [0, -45.5], fr2 = lessMotion() ? 0 : Math.floor(now / 160) % 4; spr(g, 'k_sails_f' + fr2, 0, a.x + hub[0], a.y + hub[1]); }
-    for (const L of LOTS) if (isLit(L)) drawSign(g, L);
+    for (const L of LOTS) if (L.sign && L.sign.shown) drawPlate(g, L.sign);
+    for (const L of LOTS) if (L.sign && !L.sign.shown && isLit(L)) drawPlate(g, L.sign);   // a name with no room shows while selected
     if (flash && now < flash.until) { const L = lotById[flash.id]; if (L) { const t = 1 - (flash.until - now) / 1400; for (let k = 0; k < 6; k++) { const ang = k / 6 * Math.PI * 2 + .4, r = 6 + t * 14; spr(g, 'fx-sparkle', Math.floor(now / 90 + k) % 4, L.cx + Math.cos(ang) * r, L.cy - 6 - t * 8 + Math.sin(ang) * r * .5); } } }
   }
 
@@ -5208,7 +5190,7 @@ const Town = (() => {
   requestAnimationFrame(tick);
   // the page came on screen: measure the labels (they can't be measured while it's hidden)
   function shown() { render(); if (LOTS.length && onScreen()) measure(); }
-  return { render, shown, close: closeSheet, open: tap, get selected() { return selected; }, get lots() { return LOTS; }, get signs() { return LOTS.filter(L => L.sign).map(L => ({ id: L.id, lines: L.sign.lines, box: L.sign.box, full: L.sign.full, pts: (cp => [...cp.px, ...cp.lit])(carvePixels(L.sign)) })); }, get cells() { return Object.fromEntries(LOTS.map(L => [L.id, [L.i, L.j, L.h, L.bld]])); }, get S() { return S; }, get data() { return D; },
+  return { render, shown, close: closeSheet, open: tap, get selected() { return selected; }, get lots() { return LOTS; }, get signs() { return LOTS.filter(L => L.sign).map(L => ({ id: L.id, lines: L.sign.lines, box: L.sign.box, shown: L.sign.shown, anchor: signAnchor(L) })); }, get cells() { return Object.fromEntries(LOTS.map(L => [L.id, [L.i, L.j, L.h, L.bld]])); }, get S() { return S; }, get data() { return D; },
     villagers() { const out = {}; for (const L of LOTS) { const l = []; villagers(L, Date.now(), l); out[L.id] = l.filter(p => KVIL.has(p.name)).length; } return out; }, hitTest, P: (X, Y, z) => PX(X, Y, z), cellPx: (i, j, z) => cellPx(i, j, z), get W() { return W; }, get H() { return H; } };
 })();
 
