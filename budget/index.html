@@ -107,6 +107,9 @@ td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line
 .toast.show { opacity: 1; }
 .toast.act { pointer-events: auto; display: flex; gap: 12px; align-items: center; }
 .toast.act button { background: none; border: 0; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; padding: 0; min-height: 0; }
+.upd-bar { position: fixed; left: 50%; transform: translateX(-50%); top: calc(10px + env(safe-area-inset-top)); z-index: 46; display: flex; align-items: center; gap: 10px;
+  width: max-content; max-width: calc(100vw - 24px); padding: 8px 8px 8px 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--accent); box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 14px; }
+.upd-bar button { min-height: 36px; padding: 6px 12px; }
 .ask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 40; }
 .plan { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 4px; font-size: 15px; }
 .bill { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
@@ -247,6 +250,8 @@ input[type=range] { accent-color: var(--accent); padding: 0; border: 0; backgrou
 .potcard canvas { width: 100%; height: 96px; object-fit: contain; object-position: bottom; image-rendering: pixelated; }
 .potcard.in-station { border-color: var(--accent); }
 .potcard .bar { margin-top: 2px; height: 6px; }
+.tn-crop { margin: 8px 0 4px; }
+.tn-sheet .crop-bar { height: 10px; }
 .crop-bar { height: 8px; border-radius: 99px; background: rgba(74,222,128,.15); overflow: hidden; }
 .crop-bar > span { display: block; height: 100%; width: 0; border-radius: 99px; transition: width .9s linear;
   background: repeating-linear-gradient(-45deg, #4ade80 0 6px, #86efac 6px 12px); background-size: 17px 17px; animation: crop-slide 1s linear infinite; }
@@ -1118,6 +1123,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
     <div class="row" style="margin-top:12px; gap:8px"><button class="link danger hidden" id="payDel">Take it out</button><span class="grow"></span><button id="payLater">Later</button><button class="primary" id="paySave" disabled>Save</button></div>
   </div>
 </div>
+<div id="updBar" class="upd-bar hidden" role="status"><span id="updMsg">Update app?</span><button class="primary" id="updGo">Update</button><button class="link" id="updLater">Later</button></div>
 <div id="askBox" class="ask hidden" role="dialog" aria-modal="true">
   <div class="card"><p id="askMsg" style="margin-top:0"></p>
   <div class="row" style="justify-content:flex-end"><button id="askNo">Cancel</button><button class="primary" id="askYes">OK</button></div></div>
@@ -1126,7 +1132,7 @@ html.town-sheet .toast { bottom: auto; top: calc(12px + env(safe-area-inset-top)
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 94;
+const APP_VERSION = 95;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -4971,6 +4977,26 @@ const Town = (() => {
       ${to.length ? `<div class="tn-wrow"><span class="tn-wlbl">Send ${wStep === 5 ? 'five' : 'one'} to</span>${to.map(o => chip(o, 'to')).join('')}</div>` : ''}</div>`;
   }
   const bar = f => `<div class="bar goal"><span style="width:${(clamp(f, 0, 1) * 100).toFixed(1)}%"></span></div>`;
+  // the live bar's slot: static markup, so the sheet's redraws never restart its stripes (tnCrop fills it)
+  const crop = id => `<div class="tn-crop" data-tn-crop="${esc(id)}"><div class="crop-bar"><span></span></div><div class="muted tn-crop-eta" style="font-size:12px; margin-top:3px"></div></div>`;
+  // how far the pot is toward its next whole $1, and when that lands. Its workers bring $1 a day each;
+  // Savings (whatever's left of the pay) is measured as it fills.
+  function tnCrop(body) {
+    const c = body.querySelector('[data-tn-crop]'); if (!c) return;
+    const id = c.dataset.tnCrop, pb = potBalances(month).find(x => x.id === id), now = Date.now();
+    if (!pb) { c.classList.add('hidden'); return; }
+    const S = tnCrop.s && tnCrop.s.id === id ? tnCrop.s : (tnCrop.s = { id, t: now, b: pb.bal });
+    let rate = id === 'savings' ? 0 : workersAt(id) * WORKER_DAY / DAY_MS;
+    if (!rate && now - S.t > 3000 && pb.bal > S.b) rate = (pb.bal - S.b) / (now - S.t);
+    const goal = goalOf(id), done = goal && pb.bal >= goal;
+    c.classList.toggle('hidden', !rate || !!done); if (!rate || done) return;
+    const f = pb.bal - Math.floor(pb.bal), mins = Math.max(1, Math.ceil((1 - f) / rate / 60000)), h = Math.floor(mins / 60);
+    c.querySelector('.crop-bar span').style.width = (f * 100).toFixed(2) + '%';
+    const t = `Next ${money(1)} in ${h ? h + 'h ' + (mins % 60) + 'm' : mins + 'm'}`, eta = c.querySelector('.tn-crop-eta');
+    if (eta.textContent !== t) eta.textContent = t;
+    const gb = c.parentNode && c.parentNode.querySelector('.bar.goal span');
+    if (gb && goal) gb.style.width = Math.min(100, pb.bal / goal * 100).toFixed(2) + '%';
+  }
   // what the Pots page's Manage pots had for each pot: its name, its goal (dollars or months of bills),
   // covering overspending, and delete (each through the app's own code)
   function manageHTML(p) {
@@ -5026,14 +5052,14 @@ const Town = (() => {
       const st = stageOf(p), done = p.bal >= p.goal;
       return { top: head(p.name, `${money(p.bal)} <small>of ${money(p.goal)}</small>`) + bar(p.bal / p.goal) +
         `<p class="sh-line st">${done ? 'Built! 🎉 The money is ready when you are.' : `${buildOf({ name: p.name }).name} · stage ${st + 1} of 6: ${STAGES[st].toLowerCase()}`}</p>
-        ${done ? '' : `<p class="sh-line">${p.crew > 0 ? 'The crew is building, a load of materials for every $1.' : 'Paused. The progress stays; put a worker on it to keep building.'}</p>`}${workersHTML(p)}
+        ${done ? '' : crop(p.id) + `<p class="sh-line">${p.crew > 0 ? 'The crew is building, a load of materials for every $1.' : 'Paused. The progress stays; put a worker on it to keep building.'}</p>`}${workersHTML(p)}
         <div class="tn-acts"><button data-act="move">Move money</button></div>`, tail: manageHTML(p) };
     }
     if (p.kind === 'scavenger') return { top: head('Spare change', moneyExact(p.bal)) +
       `<p class="sh-line st">The scavenger's shack in the woods: the leftover cents from rounding purchases up.</p><p class="sh-line">Once he has a whole dollar, collect it into any stockhold or project.</p>`,
       tail: `<div class="tn-acts"><span class="tn-dock" data-dock="scavCollectBtn"></span></div><h3 class="tn-h3">Recent finds</h3><div class="tn-dock tn-finds" data-dock="scavFinds"></div>` };
     return { top: head(p.name, `${money(p.bal)}${p.goal ? ` <small>of ${money(p.goal)}</small>` : ''}`) + (p.goal ? bar(p.bal / p.goal) : '') +
-      workersHTML(p) + `<div class="tn-acts"><button class="primary" data-act="move">Move money</button></div>`, tail: manageHTML(p) };
+      crop(p.id) + workersHTML(p) + `<div class="tn-acts"><button class="primary" data-act="move">Move money</button></div>`, tail: manageHTML(p) };
   }
   function renderSheet(force) {
     if (!selected) return;
@@ -5048,6 +5074,7 @@ const Town = (() => {
     el('townShPic').classList.toggle('hidden', !pic); sheet().classList.toggle('nopic', !pic);
     if (selected === 'home') tickMonsters();
     drawBanner();
+    tnCrop(body);
   }
   async function onSheetClick(e) {
     const b = e.target.closest('button'); if (!b || !selected) return;
@@ -5186,6 +5213,7 @@ const Town = (() => {
     }
     if (needMeasure && LOTS.length && onScreen()) measure();
     draw(now); if (selected) drawBanner(now);
+    if (selected && now - (tick.crop || 0) > 900) { tick.crop = now; tnCrop(shBody()); }   // the live bar, once a second
   }
   requestAnimationFrame(tick);
   // the page came on screen: measure the labels (they can't be measured while it's hidden)
@@ -6297,28 +6325,31 @@ async function checkUpdate() {
   try {
     const v = Number((await (await fetch('version.json', { cache: 'no-store' })).json()).v || 0);
     updateTo = v > APP_VERSION ? v : 0;
-    if (updateTo && CHANNEL === 'main' && !busyForUpdate() && sess('budget-reloaded-for') !== String(v)) { sess('budget-reloaded-for', v); location.reload(); return; }
     document.querySelectorAll('[data-update]').forEach(el => el.classList.toggle('hidden', !updateTo));
+    $('updMsg').textContent = `Update app? Version ${updateTo} is ready.`;
+    $('updBar').classList.toggle('hidden', !updateTo || sess('budget-update-later') === String(updateTo));
   } catch (e) {}
 }
 // No reload under someone's thumb: mid-typing, with a question or the setup open, or partway through a spend.
 const busyForUpdate = () => /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName) || !$('askBox').classList.contains('hidden') || !$('setup').classList.contains('hidden') || pickCents() > 0 || sheetOpen || !$('payBox').classList.contains('hidden');
 function sess(k, v) { try { if (v === undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, v); } catch (e) { return null; } }
-document.querySelectorAll('[data-update]').forEach(el => el.onclick = async () => {
-  if (CHANNEL !== 'main') {
-    if (!await ask(`Version ${updateTo} of the app is ready. Update now?`)) return;
-    // the shared copy's service worker keeps the old files until it's told to fetch the new ones
-    const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
-    if (sw) {
-      const got = await new Promise(res => { const t = setTimeout(() => res('timeout'), 30000);
-        navigator.serviceWorker.addEventListener('message', e => { if (e.data && /^update/.test(e.data.type)) { clearTimeout(t); res(e.data.type); } });
-        sw.postMessage({ type: 'update' }); });
-      if (got !== 'updated') { toast("Couldn't get the update. Try again with a connection."); return; }
-    }
+// Updating: the service worker keeps the old files until it's told to fetch the new ones, then the page reloads.
+async function doUpdate() {
+  $('updBar').classList.add('hidden');
+  const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+  if (sw) {
+    toast('Updating…');
+    const got = await new Promise(res => { const t = setTimeout(() => res('timeout'), 30000);
+      navigator.serviceWorker.addEventListener('message', e => { if (e.data && /^update/.test(e.data.type)) { clearTimeout(t); res(e.data.type); } });
+      sw.postMessage({ type: 'update' }); });
+    if (got !== 'updated') { toast("Couldn't get the update. Try again with a connection."); $('updBar').classList.remove('hidden'); return; }
   }
   location.reload();
-});
-// Say so after a new version loads, since the main link can reload on its own.
+}
+$('updGo').onclick = doUpdate;
+$('updLater').onclick = () => { sess('budget-update-later', updateTo); $('updBar').classList.add('hidden'); };   // asks again next time the app opens
+document.querySelectorAll('[data-update]').forEach(el => el.onclick = async () => { if (await ask(`Version ${updateTo} of the app is ready. Update now?`)) doUpdate(); });
+// Say so after a new version loads.
 try { const seen = Number(localStorage.getItem(KEY + '-version') || 0); if (seen && seen < APP_VERSION) setTimeout(() => toast(`Updated to version ${APP_VERSION}`), 800); localStorage.setItem(KEY + '-version', APP_VERSION); } catch (e) {}
 if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {});   // ask the phone not to clear the data when space runs low
 checkUpdate();
