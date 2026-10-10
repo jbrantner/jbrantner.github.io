@@ -1,7 +1,7 @@
 // The app's offline cache. It keeps the version it has: the app asks "Update app?" when a newer one is out, and the new files are only
 // fetched when Update is tapped. A new copy of this script never swaps the app by itself.
 const CACHE = 'budget-main';
-const FILES = ['art.png', 'town-art.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'tavern-180.png', 'tavern-192.png', 'tavern-512.png', 'index.html'];   // the page last, so a cut-off update never pairs a new page with old art
+const FILES = ['art.png', 'town-art.png', 'town-art-1.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'tavern-180.png', 'tavern-192.png', 'tavern-512.png', 'index.html'];   // the page last, so a cut-off update never pairs a new page with old art
 
 async function fetchInto(name) {
   const c = await caches.open(name);
@@ -16,7 +16,16 @@ self.addEventListener('install', e => e.waitUntil((async () => {
   if (!(await caches.has(CACHE))) await fetchInto(CACHE);   // first visit: keep the version that's there today
   await self.skipWaiting();
 })()));
-self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => /^budget-v\d+$/.test(k)).map(k => caches.delete(k)))).then(() => self.clients.claim())));   // the old version-numbered caches
+self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => /^budget-v\d+$/.test(k)).map(k => caches.delete(k)))).then(() => self.clients.claim()).then(fillMissing)));   // the old version-numbered caches, and any file the cache lacks
+// v104: a file added to FILES since this cache was filled (the forest town's second atlas page, town-art-1.png) is
+// fetched into it now, so it works offline whichever script ran the update. Only what's missing; nothing is replaced.
+async function fillMissing() {
+  try {
+    if (!(await caches.has(CACHE))) return;
+    const c = await caches.open(CACHE);
+    for (const f of FILES) if (!(await c.match(f))) { const r = await fetch(f, { cache: 'no-store' }); if (r.ok) await c.put(f, r); }
+  } catch (err) {}
+}
 
 self.addEventListener('fetch', e => {
   const req = e.request, url = new URL(req.url);
