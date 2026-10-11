@@ -726,6 +726,28 @@ div.vl-row { cursor: default; }
   .vl-fill > span, .vl-fill .vl-pace { transition: none; }
   .vl-fill.live > span { animation: none; }
 }
+/* v124: step bars (a bar that fills toward the next small step of real money, so it's always moving) and quiet bills */
+.vl-stepw { position: relative; display: block; }
+.vl-stepw[hidden] { display: none; }
+.vl-step { height: 8px; }
+.vl-step > span { transition: none; }
+.vl-stepw.tk .vl-step { animation: vl-tk .6s ease-out; }
+@keyframes vl-tk { 30% { box-shadow: 0 0 10px 1px rgba(134, 239, 172, .65); } }
+.vl-tkm { position: absolute; right: 0; top: -15px; font-style: normal; font-size: 11px; font-weight: 700; color: #86efac; pointer-events: none; animation: vl-tkm .9s ease-out forwards; }
+@keyframes vl-tkm { 0% { opacity: 0; transform: translateY(4px); } 25% { opacity: 1; } 100% { opacity: 0; transform: translateY(-8px); } }
+.vl-r3 { display: flex; justify-content: space-between; gap: 8px; margin-top: -2px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vl-r3 > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vl-goal { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vl-fill.thin { height: 3px; }
+.vl-fill.thin > span { background: color-mix(in srgb, var(--accent) 70%, var(--muted)); }
+.vl-hero .vl-stepw { max-width: 280px; margin: 12px auto 4px; }
+.vl-hero .vl-stepw .vl-fill { margin: 0; max-width: none; }
+.vl-steplbl { font-size: 12px; color: var(--muted); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.vl-bill { padding: 9px 2px; gap: 3px; }
+.vl-bill .vl-r1 b { font-weight: 500; font-size: 15px; }
+.vl-bill .vl-r1 .num { font-weight: 600; font-size: 15px; color: color-mix(in srgb, var(--text) 85%, var(--muted)); }
+.vl-bw .vl-pay { min-height: 32px; padding: 0 12px; font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .vl-stepw.tk .vl-step { animation: none; } .vl-tkm { animation: vl-fade .9s ease-out forwards; } }
 /* the Budget page as a list: the party, its pouches and the week's spends; the keypad comes up from the Spend button */
 #homeList { display: none; }
 html.hl-on #homeList { display: block; position: absolute; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
@@ -1355,7 +1377,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 123;
+const APP_VERSION = 124;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -6166,7 +6188,7 @@ const VL = (() => {
   const get = (k, d) => { try { return localStorage.getItem(k) || d; } catch (e) { return d; } };
   const put = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   let town = get(KT, 'list') === 'islands' ? 'islands' : 'list', home = get(KH, 'list') === 'scene' ? 'scene' : 'list', sound = get(KS, '0') === '1';
-  let rows = [], bills = [], lastWhole = null, seen = {}, pings = 0, coins = 0, ac = null, members = 0;
+  let rows = [], lastWhole = null, seen = {}, pings = 0, coins = 0, ac = null, members = 0;
   const townOn = () => town === 'list' && !$('view-town').classList.contains('hidden');
   const homeOn = () => home === 'list' && !$('view-budget').classList.contains('hidden');
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -6223,16 +6245,58 @@ const VL = (() => {
     const v = r.querySelector('.vl-r1 .num'); if (v) { v.classList.remove('vl-hit'); void v.offsetWidth; v.classList.add('vl-hit'); }
   }
 
+  /* ---- v124: step bars. A bar fills toward the smallest of these steps that takes at least 20 seconds at the row's
+     own rate, so it is always visibly moving; its width is the real balance within the step. ---- */
+  const STEPS = [0.01, 0.05, 0.10, 0.25, 1], STEP_MS = 20000;
+  const stepFor = r => { if (!(r > 0)) return 0; for (const st of STEPS) if (st / r >= STEP_MS - 1e-6) return st; return 1; };   // r: dollars a millisecond
+  const stepName = st => st >= 1 ? money(1) : Math.round(st * 100) + '¢';
+  const every = ms => { const sec = Math.round(ms / 1000); return sec < 60 ? `${sec}s` : sec < 600 ? `${Math.floor(sec / 60)}m${sec % 60 ? ` ${sec % 60}s` : ''}` : sec < 5400 ? `${Math.round(sec / 60)}m` : `${Math.round(sec / 3600)}h`; };
+  const stepLine = r => { const st = stepFor(r); return `next ${stepName(st)} · every ${every(st / r)}`; };
+  const stepBar = id => `<span class="vl-stepw" aria-hidden="true"><span class="vl-fill live vl-step"><span data-s="${esc(id)}"></span></span></span>`;
+  let live = {}, ticks = 0;
+  // the engine's balance and rate at a moment (read 4x a second); frames move the bar on from there
+  function snap(id, b, r, now) {
+    const st = stepFor(r), L = live[id];
+    if (L && L.step === st) { L.b = b; L.r = r; L.t = now; }
+    else live[id] = { b, r, t: now, step: st, k: st ? Math.floor(b / st + 1e-9) : 0, el: null };
+  }
+  function tick(el, st) {
+    ticks++;
+    const w = el.closest('.vl-stepw'); if (!w) return;
+    w.classList.remove('tk'); void w.offsetWidth; w.classList.add('tk');
+    const m = document.createElement('i'); m.className = 'vl-tkm'; m.textContent = '+' + stepName(st); w.appendChild(m); setTimeout(() => m.remove(), 950);
+  }
+  // every frame (and with each 4x-a-second read too, in case frames are held back)
+  function frame() { requestAnimationFrame(frame); if (!document.hidden && townOn()) moveBars(Date.now()); }
+  function moveBars(now) {
+    const box = $('townList');
+    for (const [id, L] of Object.entries(live)) {
+      if (!L.el || !L.el.isConnected) L.el = box.querySelector(`[data-s="${CSS.escape(id)}"]`);
+      const el = L.el; if (!el) continue;
+      const w = el.parentNode.parentNode; if (w.hidden !== !L.step) w.hidden = !L.step;
+      if (!L.step) continue;
+      const q = (L.b + L.r * Math.max(0, now - L.t)) / L.step, k = Math.floor(q + 1e-9);
+      el.style.width = (c01(q - k) * 100).toFixed(2) + '%';
+      if (k > L.k && L.step < 1) tick(el, L.step);   // a whole dollar has its own coin (and the total its ping)
+      L.k = k;
+    }
+  }
+  requestAnimationFrame(frame);
+
   /* ---- the Town list ---- */
   function townHTML(now) {
     const D = Town.data; if (!D) return '';
     const e = earning(now), pu = purseNow(now), np = partyNow(), R = [];
-    const row = (o, sub, barCls) => { R.push(o); return `<button class="vl-row" data-vl-open="${esc(o.open)}" data-vl-row="${esc(o.id)}" aria-label="${esc(o.name)}">`
-      + `<span class="vl-r1"><b>${esc(o.name)}</b><span class="num" data-t="v-${esc(o.id)}"></span></span><span class="vl-r2"><span>${sub}</span><span data-t="e-${esc(o.id)}"></span></span>`
-      + (barCls == null ? '' : `<span class="vl-fill ${barCls}" aria-hidden="true"><span data-w="${esc(o.id)}"></span></span>`) + `</button>`; };
+    // kind: 'purse' (left of this week's purse), 'step' (a step bar, its label and any goal on a thin line), or none
+    const row = (o, sub, kind) => { R.push(o); const id = esc(o.id); return `<button class="vl-row" data-vl-open="${esc(o.open)}" data-vl-row="${id}" aria-label="${esc(o.name)}">`
+      + `<span class="vl-r1"><b>${esc(o.name)}</b><span class="num" data-t="v-${id}"></span></span><span class="vl-r2"><span>${sub}</span><span data-t="e-${id}"></span></span>`
+      + (kind === 'purse' ? `<span class="vl-fill" aria-hidden="true"><span data-w="${id}"></span></span>` : '')
+      + (kind === 'step' ? stepBar(o.id) + `<span class="vl-r3"><span data-t="sl-${id}"></span><span data-t="n1-${id}"></span></span>`
+        + (o.goal > 0 ? `<span class="vl-goal"><span class="vl-fill thin" aria-hidden="true"><span data-w="g-${id}"></span></span><span data-t="g-${id}"></span></span>` : '') : '')
+      + `</button>`; };
     // the earned total
     let h = `<div class="vl-hero" id="vlHero"><div class="vl-k">Earned this pay period</div><div class="vl-total num" id="vlTotal" data-t="total"></div>`
-      + `<div class="vl-sub" data-t="rate"></div><span class="vl-fill live" aria-hidden="true"><span data-w="total"></span></span>`;
+      + `<div class="vl-sub" data-t="rate"></div>` + stepBar('total') + `<div class="vl-steplbl" data-t="sl-total"></div>`;
     if (e.pn.list.length) {
       const since = e.pn.list.map(c => c.start ? startDay() : c.date).filter(Boolean).sort()[0], until = Math.max(...e.pn.list.map(c => c.t1));
       h += `<div class="vl-when">${e.pn.list.some(c => c.start) ? 'since you started' : 'since payday'} ${since ? shortDate(since) : ''} · <span data-t="more"></span> by ${shortDate(ymd(new Date(until)))}</div>`;
@@ -6241,13 +6305,13 @@ const VL = (() => {
     h += `<div class="vl-acts"><button class="vl-add" data-vl-open="farm">${D.incomes.length ? 'Paychecks' : '+ Set up pay'}</button></div></div>`;
     // the party
     h += `<h3 class="vl-h">Party <span data-t="purse-h"></span></h3>`
-      + row({ id: 'spend', name: 'Party purse', open: 'party' }, np ? `👥 ${plural(np, 'villager')} in the party · <span data-t="spent"></span>` : 'Nobody is out with the party this week', '');
+      + row({ id: 'spend', name: 'Party purse', open: 'party' }, np ? `👥 ${plural(np, 'villager')} in the party · <span data-t="spent"></span>` : 'Nobody is out with the party this week', 'purse');
     // Savings, the stockholds and the spare change
     h += `<h3 class="vl-h">Savings &amp; pots <span data-t="stock-h"></span></h3>`;
     for (const p of D.stock) {
       const w = p.id === 'savings' ? savers() : workersAt(p.id);
       const sub = p.id === 'savings' ? `👷 ${plural(w, 'villager')}${np ? ` + the party's ${np}` : ''} · <span data-t="r-savings"></span>` : `👷 ${w ? `${plural(w, 'villager')} · +${money(w * WORKER_DAY)} a day` : 'nobody working here'}`;
-      h += row({ id: p.id, name: p.name, open: p.id, goal: p.goal }, sub, p.goal > 0 ? (p.bal >= p.goal - 0.005 ? 'done' : '') : 'live');
+      h += row({ id: p.id, name: p.name, open: p.id, goal: p.goal }, sub, 'step');
     }
     h += row({ id: 'scavenger', name: 'Spare change', open: 'scavenger', exact: true }, 'the cents left over from rounding up', null);
     h += `<div class="vl-acts"><button class="vl-add" data-vl-open="newpot">+ Add pot</button></div>`;
@@ -6255,21 +6319,19 @@ const VL = (() => {
     h += `<h3 class="vl-h">Projects <span data-t="proj-h"></span></h3>`;
     for (const p of D.projects) {
       const done = p.bal >= p.goal - 0.005;
-      h += row({ id: p.id, name: p.name, open: p.id, goal: p.goal, proj: true }, done ? 'Built 🎉' : `👷 ${p.crew ? `${plural(p.crew, 'villager')} building · +${money(p.crew * WORKER_DAY)} a day` : 'paused, nobody building'} · of ${money(p.goal)}`, done ? 'done' : '');
+      h += row({ id: p.id, name: p.name, open: p.id, goal: p.goal, proj: true }, done ? 'Built 🎉' : `👷 ${p.crew ? `${plural(p.crew, 'villager')} building · +${money(p.crew * WORKER_DAY)} a day` : 'paused, nobody building'}`, 'step');
     }
     if (!D.projects.length) h += `<p class="vl-empty">No projects yet. A project is something you save up for, with a goal.</p>`;
     h += `<div class="vl-acts"><button class="vl-add" data-vl-open="newproj">+ Add project</button></div>`;
-    // bills (the Bills list's own rows: due bar, held now / from the next pay / paid, and Paid / Undo)
+    // bills: plain rows (v124: no bars): name, amount, when it's due, held now / from the next pay / paid, and Paid / Undo
     h += `<h3 class="vl-h">Bills <span data-t="bills-h"></span></h3>`;
-    bills = D.bills;
     if (D.bills.length) {
       const L = ledgerAt(today()), held = new Set(L.heldList.filter(x => x.m <= month).map(x => x.c && x.c.id));
       const nps = state.incomes.filter(i => Number(i.amount) > 0).map(i => nextPayday(i, today())).filter(Boolean).sort(), fromPay = nps[0] ? `from ${shortDate(nps[0])} pay` : 'not held yet';
       for (const x of D.bills) {
         const r = Town.billBar(x, now), st = x.pre ? '<span class="ok">before you started ✓</span>' : x.paid ? '<span class="ok">paid ✓</span>' : held.has(x.id) ? '<span class="vl-held">held now</span>' : fromPay;
-        h += `<div class="vl-bw"><button class="vl-row" data-vl-open="bill:${esc(x.id)}" aria-label="${esc(x.name)}, ${money(x.amount)}, ${esc(r.when)}">`
-          + `<span class="vl-r1"><b>${esc(x.name)}</b><span class="num">${money(x.amount)}</span></span><span class="vl-r2"><span>${esc(r.when)} · 👷 ${x.crew || '<1'}</span><span>${st}</span></span>`
-          + `<span class="vl-fill${x.paid ? ' done' : r.due ? ' due' : ''}" aria-hidden="true"><span data-w="b-${esc(x.id)}"></span></span></button>`
+        h += `<div class="vl-bw"><button class="vl-row vl-bill" data-vl-open="bill:${esc(x.id)}" aria-label="${esc(x.name)}, ${money(x.amount)}, ${esc(r.when)}">`
+          + `<span class="vl-r1"><b>${esc(x.name)}</b><span class="num">${money(x.amount)}</span></span><span class="vl-r2"><span>${esc(r.when)}</span><span>${st}</span></span></button>`
           + (x.pre ? '' : x.paid ? `<button class="vl-pay undo" data-unslay="${esc(x.id)}" aria-label="Undo paid for ${esc(x.name)}">Undo</button>` : `<button class="vl-pay" data-paid="${esc(x.id)}" aria-label="Mark ${esc(x.name)} paid">Paid</button>`) + `</div>`;
       }
       h += `<div class="vl-acts"><button class="vl-add" data-vl-open="home">Bills overview</button><button class="vl-add" data-vl-open="editbills">✎ Edit bills</button></div>`;
@@ -6282,7 +6344,8 @@ const VL = (() => {
     const bal = id => (pots.find(p => p.id === id) || { bal: 0 }).bal;
     // the total, its rate and its bar to the next whole dollar
     const whole = Math.floor(e.E + 1e-9), f = e.E - whole;
-    v['t:total'] = cents2(e.E); v['w:total'] = e.V ? f : 0;
+    v['t:total'] = cents2(e.E); snap('total', e.E, e.rate, now);
+    v['t:sl-total'] = e.rate > 0 ? stepLine(e.rate) : '';
     v['t:rate'] = e.V ? `<b>${money(e.V * WORKER_DAY)}</b> a day · ${plural(e.V, 'villager')} · next ${money(1)} in ${eta((1 - f) / e.rate)}` : e.pn.waiting.length ? 'Enter your paycheck to put villagers to work' : 'No villagers at work right now';
     v['t:more'] = `${money(Math.max(0, sum(e.pn.list, c => c.pending)))} more`;
     if (!quiet && lastWhole != null && whole > lastWhole) ping(whole - lastWhole);
@@ -6297,18 +6360,21 @@ const VL = (() => {
       const b = bal(o.id);
       if (o.exact) { v['t:v-' + o.id] = esc(moneyExact(b)); v['t:e-' + o.id] = ''; continue; }
       v['t:v-' + o.id] = cents2(b);
+      // the row's own rate: Savings gets everyone's pay less what crews send elsewhere; a pot or project, its crew
       const rate = (o.id === 'savings' ? Math.max(0, e.V - crews) : Math.max(0, workersAt(o.id))) * WORKER_DAY / DAY_MS, fr = b - Math.floor(b);
-      const next = rate > 0 ? ` · next ${money(1)} in ${eta((1 - fr) / rate)}` : '';
+      snap(o.id, b, rate, now);
+      v['t:sl-' + o.id] = rate > 0 ? stepLine(rate) : 'no villagers here';
+      v['t:n1-' + o.id] = rate > 0 ? `${money(1)} in ${eta((1 - fr) / rate)}` : '';
+      v['t:e-' + o.id] = '';
       if (o.goal > 0) {
         const done = b >= o.goal - 0.005;
-        v['w:' + o.id] = b / o.goal; v['t:e-' + o.id] = done ? `<span class="ok">${o.proj ? 'built ✓' : 'goal reached ✓'}</span>` : `${Math.floor(c01(b / o.goal) * 100)}%${next}`;
-      } else { v['w:' + o.id] = rate > 0 ? fr : 0; v['t:e-' + o.id] = next.slice(3); }
+        v['w:g-' + o.id] = b / o.goal; v['t:g-' + o.id] = done ? `<span class="ok">${o.proj ? 'built ✓' : 'goal reached ✓'}</span>` : `${Math.floor(c01(b / o.goal) * 100)}% of ${money(o.goal)}`;
+      }
       // a coin pops on the row each time it lands another whole dollar (a move of money doesn't count)
       const w = Math.floor(b + 1e-9);
       if (!quiet && rate > 0 && seen[o.id] != null && w > seen[o.id] && w - seen[o.id] <= 2) coin(o.id, w - seen[o.id]);
       seen[o.id] = w;
     }
-    for (const x of bills) v['w:b-' + x.id] = Town.billBar(x, now).f;
     return v;
   }
   function renderTown() {
@@ -6387,7 +6453,7 @@ const VL = (() => {
     const b = e.target.closest('[data-tview], [data-hview], #vlBell'); if (!b) return;
     if (b.id === 'vlBell') { sound = !sound; put(KS, sound ? '1' : '0'); apply(); if (sound) chime(); return; }
     if (b.dataset.tview) {
-      town = b.dataset.tview; put(KT, town); apply(); lastWhole = null; seen = {};
+      town = b.dataset.tview; put(KT, town); apply(); lastWhole = null; seen = {}; live = {};
       if (town === 'list') renderTown(); else Town.shown();
       return;
     }
@@ -6411,16 +6477,16 @@ const VL = (() => {
   setInterval(() => {
     if (document.hidden) { lastWhole = null; seen = {}; return; }
     const now = Date.now();
-    if (townOn() && $('townList').vlHtml) fill($('townList'), townVals(now)); else { lastWhole = null; seen = {}; }
+    if (townOn() && $('townList').vlHtml) { fill($('townList'), townVals(now)); moveBars(now); } else { lastWhole = null; seen = {}; live = {}; }
     if (homeOn() && $('homeList').vlHtml) fill($('homeList'), homeVals(now));
   }, 250);
   function shown(v) {
     if (v !== 'budget') kp(false);
-    if (v !== 'town') { lastWhole = null; seen = {}; }
+    if (v !== 'town') { lastWhole = null; seen = {}; live = {}; }
     if (v === 'town') renderTown(); if (v === 'budget') renderHome();
   }
   function render() { renderTown(); renderHome(); }
-  return { render, shown, kp, get town() { return town; }, get home() { return home; }, get pings() { return pings; }, get coins() { return coins; }, get sound() { return sound; } };
+  return { render, shown, kp, get town() { return town; }, get home() { return home; }, get pings() { return pings; }, get ticks() { return ticks; }, stepFor: perDay => stepFor(perDay / DAY_MS), stepOf: id => live[id] ? live[id].step : null, get coins() { return coins; }, get sound() { return sound; } };
 })();
 
 /* ---------- events ---------- */
