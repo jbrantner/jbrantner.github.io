@@ -883,6 +883,22 @@ html.tl-on:has(#view-town:not(.hidden)), html.tl-on:has(#view-town:not(.hidden))
 #townList .pp-segs i.cur { background: linear-gradient(90deg, color-mix(in srgb, var(--pp-gold) 65%, var(--pp-pip-off)) var(--p, 0%), var(--pp-pip-off) var(--p, 0%)); transition: none; }
 #townList .pp-dime .pp-segs i { height: 5px; }
 #townList .pp-dime .vl-step { display: none; }
+/* v147: the Top off chip and the givers' minus */
+#townList .pp-nxr { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 0; }
+#townList .pp-nxr .pp-nx { flex: 1; min-width: 0; margin-top: 0; }
+#townList .pp-fill { flex: none; padding: 4px 11px; min-height: 30px; border-radius: 999px; border: 1.5px solid var(--pp-gold); background: color-mix(in srgb, var(--pp-gold) 14%, var(--pp-panel)); color: var(--pp-ink); font: 800 12.5px var(--pp-body); }
+#townList .pp-fill:empty { display: none; }
+#townList .pp-pays { margin-top: 10px; border-top: 1px solid var(--pp-line); padding-top: 8px; }
+#townList .pp-pays h4 { margin: 0 0 4px; font: 800 13px var(--pp-body); color: var(--pp-muted); }
+#townList .pp-payr { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 0; font-size: 14px; color: var(--pp-ink); }
+#townList .pp-payr span { min-width: 0; overflow-wrap: anywhere; }
+#townList .pp-payr .link { flex: none; color: var(--pp-low); font-weight: 700; min-height: 32px; }
+#debtBox .card { background: var(--pp-panel); color: var(--pp-ink); }
+#debtBox .debt-after { min-height: 1.3em; margin: 8px 0 0; font-weight: 700; color: var(--pp-moss); font-variant-numeric: tabular-nums; }
+#townList .pp-fill:active { transform: scale(.96); }
+#townList .pp-dime .vl-tkm.pp-out { color: var(--pp-muted); }
+#townList .pp-unit.pop.out .pp-ubar { animation-name: pp-upop-out; }
+@keyframes pp-upop-out { 0% { transform: scaleY(1); } 35% { transform: scaleY(1.7); filter: brightness(.85); } 100% { transform: scaleY(1); } }
 /* v146: the unit bar under the pips */
 #townList .pp-unit { display: flex; align-items: center; gap: 7px; }
 #townList .pp-ubar { flex: 1; position: relative; height: 6px; border-radius: 3px; background: var(--pp-pip-off); overflow: hidden; }
@@ -1619,6 +1635,16 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 </nav>
 <button class="spend-fab" id="spendFab" aria-label="Spend: open the keypad"><i aria-hidden="true">＋</i>Spend</button>
 <div class="toast" id="toast"></div>
+<div id="debtBox" class="ask hidden" role="dialog" aria-modal="true" aria-labelledby="debtTitle">
+  <div class="card debt-card">
+    <h2 id="debtTitle">Make a payment</h2>
+    <p class="muted" id="debtSays" style="font-size:14px"></p>
+    <label class="field">Amount<input id="debtAmt" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00" aria-describedby="debtAfter"></label>
+    <label class="field">Note <span class="muted">(optional)</span><input id="debtNote" maxlength="80" placeholder="What it was for"></label>
+    <p id="debtAfter" class="debt-after" aria-live="polite"></p>
+    <div class="row" style="justify-content:flex-end; margin-top:12px"><button id="debtCancel">Cancel</button><button class="primary" id="debtGo" disabled>Pay</button></div>
+  </div>
+</div>
 <div id="moveBox" class="ask hidden" role="dialog" aria-modal="true" aria-labelledby="mvTitle">
   <div class="card">
     <h2 id="mvTitle">Move money</h2>
@@ -1734,7 +1760,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 146;
+const APP_VERSION = 147;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -2213,6 +2239,7 @@ function ledgerAt(td) {
     head: sum(tr.filter(t => t.from === 'start' && !OUTSIDE(t.to)), t => t.amount),
     bills: sum(tr, t => (t.from === 'bills' && !OUTSIDE(t.to) ? t.amount : 0) - (!OUTSIDE(t.from) && OUTSIDE(t.to) ? t.amount : 0)),
     movedBills: moved('bills', td), spent: sum(sp, t => charged(t)), spendCut: sum(sp, scavCut),
+    debt: sum(tr.filter(t => t.to === 'debt'), t => t.amount),   // v147: payments out of projects
     fix: sum(adj, a => Math.floor(a.amount + 1e-9)), adjCut: sum(adj, a => cents(a.amount - Math.floor(a.amount + 1e-9))) };
   // the bills the held money covers right now (the earliest unpaid ones)
   Object.defineProperty(L, 'heldList', { get: () => needAt(td, td === today() ? Date.now() : dayMs(td) + DAY_MS - 1).heldList });
@@ -2382,10 +2409,10 @@ function extraFlows(now = Date.now()) {
 function hoardParts(now = Date.now()) {
   const ex = extraFlows(now), td = ymd(new Date(now)), L = ledgerAt(td), ck = checkFlows(now), st = startFlows(now), N = needAt(td, now), had = Number(state.savings.start || 0);
   const scav = cents(L.spendCut + L.cut + ck.cut + L.adjCut);
-  const bank = had + L.head + L.bills + L.movedBills + L.fix + ck.whole - L.out - L.spent + scav + ex.bank;
+  const bank = had + L.head + L.bills + L.movedBills + L.fix + ck.whole - L.out - L.spent - L.debt + scav + ex.bank;   // v147: − debt payments
   const pending = ck.pending + st.pending + ex.pending, held = N.need, total = bank - held - L.movedBills - pending;
   return { had, head: L.head, bills: L.bills, fix: L.fix, pay: ck.whole, paid: ck.D, pending, checks: ck, start: st, out: L.out, held, heldUntil: N.at, heldList: N.heldList,
-    spent: L.spent, scav, total, bank, L, extra: ex };
+    spent: L.spent, debt: L.debt, scav, total, bank, L, extra: ex };
 }
 const hoardAt = (now = Date.now()) => hoardParts(now).total;
 // The pay line on the Party page: a payday waiting for its paycheck, the paycheck coming in, or the next payday.
@@ -3493,7 +3520,7 @@ function renderPotsTab() {
     <span class="goalcell"><input type="number" inputmode="numeric" min="0" placeholder="${gm ? 'Months' : 'Goal'}" data-goal="${p.id}" value="${gm || state.goals[p.id] || ''}" aria-label="Goal for ${esc(p.name)}${gm ? ', in months of bills' : ''}">${canFarm(p.id) ? `<select data-goal-unit="${p.id}" aria-label="Goal for ${esc(p.name)} in dollars or months of bills"><option value="$">$</option><option value="months"${gm ? ' selected' : ''}>mo</option></select>` : ''}</span>
     ${p.custom ? `<button class="link danger" data-pot-del="${p.id}" aria-label="Delete ${esc(p.name)}">✕</button>` : '<span></span>'}</div>`; }).join('');
   renderBank();
-  const recent = state.transfers.filter(t => t.date.startsWith(month) && !t.carry).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+  const recent = state.transfers.filter(t => t.date.startsWith(month) && !t.carry && !t.debt).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
   $('moveList').innerHTML = recent.length ? '<div class="muted" style="margin-top:10px">Moves this month</div>' + recent.map(t => `
     <div class="row spread muted" style="padding:2px 0"><span>${t.date.slice(5)} · ${esc(potName(t.from))} → ${esc(potName(t.to))}</span>
     <span class="row"><span class="num">${money(t.amount)}</span><button class="link danger" data-move-del="${t.id}" aria-label="Undo">Undo</button></span></div>`).join('') : '';
@@ -3589,6 +3616,7 @@ function renderMath() {
     + line('Paychecks you entered', sg(pp.paid))
     + line('Bills paid', sg(-billsOut))
     + line('Spent', sg(-spentOut))
+    + (pp.debt >= 0.005 ? line('Debt payments', sg(-cents(pp.debt))) : '')
     + (Math.abs(fixes) >= 0.01 ? line('Bank balance fixes', sg(fixes)) : '')
     + (Math.abs(moves) >= 0.01 ? line('Other moves', sg(moves)) : '')
     + line('In the bank', moneyExact(pp.bank), 'sum') + `</div>`;
@@ -5117,7 +5145,8 @@ function renderIncome() {
 const materialsWaiting = (id, now = Date.now()) => month === today().slice(0, 7) ? Math.max(0, grown(id, workClock(month), now)) : 0;
 // Savings has no worker log (it's everyone left over), so its waiting money comes from how many save.
 const waitingFor = (id, now = Date.now()) => id === 'savings' ? (month === today().slice(0, 7) ? savers() * WORKER_DAY * Math.max(0, now - workClock(month)) / DAY_MS : 0) : materialsWaiting(id, now);
-const isMini = p => p.custom && goalOf(p.id) > 0;
+const isMini = p => p.custom && (goalOf(p.id) > 0 || paidOff(p.id));   // v147: paid off stays a project
+const paidOff = id => !!(state.paidOff || {})[id];
 const miniSeen = {};
 // A mini project as a building site: the building rises with the money saved, each $1 is a load of
 // materials, and the crew hauls the next load while you gather pay.
@@ -5479,6 +5508,85 @@ function collectChange() {
   toastUndo(msg, () => { state.transfers = state.transfers.filter(t => t.collect !== gid); save(); render(); if (typeof VL !== 'undefined') VL.collected([]); toast('Spare change put back'); });
   if (typeof VL !== 'undefined') VL.collected(parts.map(r => [r.id, '+' + ct(r.got)]));
   return { id: gid, cents: c, parts: parts.map(r => ({ id: r.id, cents: r.got })) };
+}
+/* v147: Top off. Cents only, from the other pots and projects, evenly, until the target reaches its next whole dollar
+   or the cents run out. cs: { id: floored cents } for the places that can give or take (Savings and the pots). */
+function topOffPlan(to, cs) {
+  const order = farmPots(), CT = cs[to]; if (CT == null) return null;
+  const need = (100 - (CT % 100 + 100) % 100) % 100; if (!need) return { need: 0, got: 0, parts: [], full: true };
+  const src = order.filter(id => id !== to && !isLocked(id) && cs[id] != null && cs[id] > 0 && cs[id] % 100 > 0).map((id, i) => ({ id, i, avail: cs[id] % 100, take: 0 }));
+  let R = need;
+  while (R > 0) {
+    const act = src.filter(x => x.take < x.avail); if (!act.length) break;
+    const each = Math.floor(R / act.length);
+    if (each === 0) {   // fewer cents to go than places: one each to the ones with the most left, then card order
+      act.sort((a, b) => (b.avail - b.take) - (a.avail - a.take) || a.i - b.i);
+      for (const x of act.slice(0, R)) { x.take++; R--; }
+      break;
+    }
+    for (const x of act) { const t = Math.min(each, x.avail - x.take); x.take += t; R -= t; }
+  }
+  return { need, got: need - R, parts: src.filter(x => x.take > 0).map(x => ({ id: x.id, cents: x.take })), full: R === 0, to: Math.floor(CT / 100) + 1 };
+}
+const placeCents = (pots = potBalances(today().slice(0, 7))) => { const out = {}; for (const id of farmPots()) { const x = pots.find(p => p.id === id); if (x) out[id] = Math.floor(x.bal * 100 + 1e-6); } return out; };
+function topOff(to) {
+  if (clockHold()) return null;
+  const P = topOffPlan(to, placeCents()); if (!P || !P.got) { toast(P && !P.need ? 'Already a whole dollar' : 'No cents to move right now'); return null; }
+  const gid = uid(), date = today(), at = Date.now();
+  for (const x of P.parts) state.transfers.push({ id: uid(), date, at, from: x.id, to, amount: x.cents / 100, topoff: gid });
+  save(); render();
+  const ct = n => n < 100 ? n + '¢' : moneyExact(n / 100);
+  toastUndo(`${P.full ? `Filled ${potName(to)} to ${money(P.to)}` : `Topped off ${potName(to)}`}: ${ct(P.got)} from ${P.parts.length === 1 ? potName(P.parts[0].id) : `${P.parts.length} places`}`,
+    () => { state.transfers = state.transfers.filter(t => t.topoff !== gid); save(); render(); toast('Top off taken back'); });
+  if (typeof VL !== 'undefined') VL.toppedOff(to, P.got, P.parts.map(x => [x.id, x.cents]));
+  return { id: gid, to, cents: P.got, full: P.full, parts: P.parts };
+}
+/* v147: payments out of a project. A move to 'debt' that leaves the bank; the project's goal comes down by the same. */
+const debtPays = id => state.transfers.filter(t => t.debt && t.from === id).sort((a, b) => (b.at || 0) - (a.at || 0) || b.date.localeCompare(a.date));
+function makePayment(id, amount, note = '') {
+  const p = state.pots.find(x => x.id === id); if (!p) return null;
+  const amt = Math.round(Number(amount) * 100) / 100, bal = Math.floor(projectBal(id) * 100 + 1e-6) / 100;
+  if (!(amt >= 0.01) || amt > bal + 1e-9) return null;
+  const was = goalOf(id), months = goalMonthsOf(id) || undefined;
+  if (months) { delete state.goalMonths[id]; }
+  const now = Math.max(0, Math.round((was - amt) * 100) / 100), cut = Math.round((was - now) * 100) / 100, off = was > 0 && now <= 0;
+  if (now > 0) state.goals[id] = now; else delete state.goals[id];
+  if (off) (state.paidOff = state.paidOff || {})[id] = Date.now();
+  const t = { id: uid(), date: today(), at: Date.now(), from: id, to: 'debt', amount: amt, debt: true, goalCut: cut, ...(months ? { months } : {}), ...(off ? { paidOff: true } : {}), ...(note ? { note: String(note).slice(0, 80) } : {}) };
+  state.transfers.push(t); save(); render();
+  return t;
+}
+function undoPayment(tid) {
+  const t = state.transfers.find(x => x.id === tid && x.debt); if (!t) return false;
+  state.transfers = state.transfers.filter(x => x !== t);
+  const id = t.from, g = Math.round((goalOf(id) + Number(t.goalCut || 0)) * 100) / 100;
+  if (t.months && Math.abs(g - Math.ceil(t.months * billsMonthly() - 1e-9)) < 0.005) { (state.goalMonths = state.goalMonths || {})[id] = t.months; delete state.goals[id]; }
+  else if (g > 0) state.goals[id] = g;
+  if (g > 0 && state.paidOff) delete state.paidOff[id];
+  save(); render(); return true;
+}
+let debtFor = null;
+function openDebt(id) {
+  debtFor = id; const bal = Math.floor(projectBal(id) * 100 + 1e-6) / 100;
+  $('debtTitle').textContent = `Make a payment from ${potName(id)}`;
+  $('debtSays').textContent = `Money you pay out of ${potName(id)}, up to ${moneyExact(bal)}. It leaves your bank and the goal comes down by the same amount.`;
+  $('debtAmt').value = ''; $('debtAmt').max = String(bal); $('debtNote').value = ''; debtPreview();
+  $('debtBox').classList.remove('hidden'); setTimeout(() => $('debtAmt').focus(), 60);
+}
+function closeDebt() { debtFor = null; $('debtBox').classList.add('hidden'); }
+function debtPreview() {
+  const id = debtFor; if (!id) return;
+  const bal = Math.floor(projectBal(id) * 100 + 1e-6) / 100, amt = Math.round(Number($('debtAmt').value || 0) * 100) / 100, g = goalOf(id);
+  const ok = amt >= 0.01 && amt <= bal + 1e-9;
+  $('debtGo').disabled = !ok;
+  $('debtAfter').textContent = !$('debtAmt').value ? '' : amt > bal + 1e-9 ? `${potName(id)} has ${moneyExact(bal)}.` : !ok ? '' :
+    `${potName(id)} goes to ${moneyExact(bal - amt)}${g > 0 ? ` of ${moneyExact(Math.max(0, g - amt))}` : ''} · your bank −${moneyExact(amt)}${g > 0 && g - amt <= 0 ? ' · paid off!' : ''}`;
+}
+function saveDebt() {
+  const id = debtFor; if (!id) return;
+  const t = makePayment(id, $('debtAmt').value, $('debtNote').value.trim()); if (!t) { debtPreview(); return; }
+  closeDebt();
+  toastUndo(t.paidOff ? `Paid ${moneyExact(t.amount)} · ${potName(id)} is paid off!` : `Paid ${moneyExact(t.amount)} from ${potName(id)}`, () => { undoPayment(t.id); toast('Payment taken back'); });
 }
 function renderScavenger() {
   const bal = potBalances(month).find(p => p.id === 'scavenger').bal;
@@ -7123,7 +7231,7 @@ const VL = (() => {
     for (const [id, L] of Object.entries(live)) {
       if (!L.el || !L.el.isConnected) L.el = box.querySelector(`[data-s="${CSS.escape(id)}"]`);
       const el = L.el; if (!el) continue;
-      const card = !!pipInfo[id], val = L.step ? barAt(L, now) * L.step : L.b;
+      const card = !!pipInfo[id], val = L.step ? barAt(L, now) * L.step : L.anim ? Math.min(L.b, barAt(L, now)) : L.b;   // v147: no crew: barAt is in dollars
       if (card) { pipsAt(id, pipInfo[id], L, val); rollAt(id, L, val, now); }   // v140, v142
       const w = el.parentNode.parentNode, hide = !L.step && !card; if (w.hidden !== hide) w.hidden = hide;
       if (card) unitBar(w, pipInfo[id], val);   // v146: one bar toward the next cent (or 10c, $1, $10)
@@ -7138,7 +7246,7 @@ const VL = (() => {
   requestAnimationFrame(frame);
   /* v140: livelier pips. The step: the smallest round amount that takes at least a day at the card's own rate. */
   const ROUND_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500], pipInfo = {};   // v144: from $1
-  let bursts = 0;
+  let bursts = 0, tops = 0, drains = 0;
   // how long to the next step: "40m", "3h 10m", past a day "2d 5h"
   const stepIn = ms => { const h = Math.floor(Math.max(1, Math.ceil(ms / 60000)) / 60); return h >= 24 ? `${Math.floor(h / 24)}d${h % 24 ? ' ' + (h % 24) + 'h' : ''}` : eta(ms); };
   const roundStep = perDay => { if (!(perDay > 0)) return ROUND_STEPS[0]; for (const S of ROUND_STEPS) if (S >= perDay / 24 - 1e-9) return S;   /* v144: at least an hour, not a day */ return ROUND_STEPS[ROUND_STEPS.length - 1]; };
@@ -7295,24 +7403,28 @@ const VL = (() => {
     // a pot's or project's card. kind: 'save' (Savings), 'pot' or 'proj'
     const card = (o, kind) => {
       R.push(o); const id = esc(o.id), nm = esc(o.name), sv = kind === 'save', L = !sv && isLocked(o.id), done = kind === 'proj' && o.bal >= o.goal - 0.005;
+      const po = kind === 'proj' && !(o.goal > 0) && paidOff(o.id), pays = kind === 'proj' ? debtPays(o.id) : [];   // v147
       const w = sv ? savers() : Math.max(0, workersAt(o.id)), open = opened.has(o.id), add = !sv && canAdd(o.id);
       const who = `👷 ${plural(w, 'villager')}${sv && np ? ` + the party's ${np}` : ''}${L ? '<span class="pp-lk">🔒 locked</span>' : ''}`;
       const step = sv ? '<span class="pp-rest">the rest live here</span>'
         : `<span class="pp-step"><button class="vl-sb" data-crew="${id}" data-d="-1" aria-label="One villager from ${nm} back to Savings"${L || !w || state.roundOff ? ' disabled' : ''}>−</button><b class="num">${w}</b>`
           + `<button class="vl-sb${pickFor === o.id && add ? ' on' : ''}" data-crew="${id}" data-d="1" aria-haspopup="dialog" aria-expanded="${pickFor === o.id && add}" aria-label="Add a villager to ${nm}: pick where from"${add ? '' : ' disabled'}>+</button></span>`;
-      const note = sv ? 'Savings is home: villagers you take off a place come back here.' : done ? 'Built 🎉 The money is ready when you are.' : kind === 'pot' ? 'A pot keeps what it saves. Nothing here gets spent.' : 'Saving up for it, then spending it.';
+      const note = sv ? 'Savings is home: villagers you take off a place come back here.' : po ? 'Paid off 🎉 Nothing left to pay.' : done ? 'Built 🎉 The money is ready when you are.' : kind === 'pot' ? 'A pot keeps what it saves. Nothing here gets spent.' : 'Saving up for it, then spending it.';
       return `<div class="pp-card ${kind === 'proj' ? 'proj' : 'pot'}${done ? ' done' : ''}${open ? ' open' : ''}${L ? ' locked' : ''}" data-vl-row="${id}">`
         + `<button class="pp-head" data-pp-open="${id}" aria-expanded="${open}" aria-controls="ppm-${id}">${ico(sv ? 'vault' : kind === 'pot' ? 'jar' : 'build')}`
-        + `<span class="pp-nm"><b>${nm}</b><small>${sv ? 'Pot · home' : kind === 'pot' ? 'Pot' : done ? 'Project · built' : 'Project'}</small></span>`
+        + `<span class="pp-nm"><b>${nm}</b><small>${sv ? 'Pot · home' : kind === 'pot' ? 'Pot' : po ? 'Project · paid off' : done ? 'Project · built' : 'Project'}</small></span>`
         + `<span class="pp-amt"><span class="num pp-roll" data-rl="${id}"></span><small data-t="of-${id}"></small></span></button>`
         + `<div class="pp-pips${kind === 'proj' ? '' : ' ember'}" data-t="p-${id}" data-pip="${id}" aria-hidden="true"></div>`
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-unit"><span class="pp-ubar"><i></i></span><b class="pp-ul"></b></span><span class="vl-step"><span data-s="${id}"></span></span></span>`
-        + `<div class="pp-meta"><span data-t="m1-${id}"></span><span data-t="m2-${id}"></span></div><div class="pp-nx" data-t="nx-${id}"></div>`
+        + `<div class="pp-meta"><span data-t="m1-${id}"></span><span data-t="m2-${id}"></span></div><div class="pp-nxr"><div class="pp-nx" data-t="nx-${id}"></div><button class="pp-fill" data-fill="${id}" data-t="fl-${id}"></button></div>`
         + `<div class="pp-crew"><span class="pp-who vl-r2">${who}</span>${step}</div>`
         + `<div class="pp-more" id="ppm-${id}"${open ? '' : ' hidden'}><p data-t="go-${id}"></p><p data-t="eta-${id}"></p><p class="pp-with" data-t="eta1-${id}"></p>`
         + `<p class="pp-small"><span data-t="sl-${id}"></span> <span data-t="n1-${id}"></span></p><p class="pp-small">${note}</p>`
         + `<div class="pp-chips">${sv ? '' : `<button class="pp-chip${L ? ' on' : ''}" data-lock="${id}" aria-pressed="${L}" aria-label="${L ? 'Unlock' : 'Lock'} ${nm}">${L ? '🔒 Locked · tap to unlock' : '🔓 Lock its villagers'}</button>`}`
-        + `<button class="pp-chip" data-vl-open="${id}">${o.custom ? '✎ Rename &amp; goal' : '✎ Goal'}</button></div></div></div>`;
+        + `<button class="pp-chip" data-vl-open="${id}">${o.custom ? '✎ Rename &amp; goal' : '✎ Goal'}</button>`
+        + (kind === 'proj' && o.goal > 0 && o.bal >= 0.01 ? `<button class="pp-chip pp-pay" data-debt="${id}">💸 Make a payment</button>` : '') + `</div>`
+        + (pays.length ? `<div class="pp-pays"><h4>Payments</h4>${pays.map(t => `<div class="pp-payr"><span>Paid ${esc(moneyExact(t.amount))} · ${esc(shortDate(t.date))}${t.note ? ` · ${esc(t.note)}` : ''}</span><button class="link" data-debt-undo="${esc(t.id)}" aria-label="Undo the ${esc(moneyExact(t.amount))} payment of ${esc(shortDate(t.date))}">Undo</button></div>`).join('')}</div>` : '')
+        + `</div></div>`;
     };
     // the villagers: in fives per place, the total, and a verdict
     const grp = [];
@@ -7373,7 +7485,7 @@ const VL = (() => {
   }
   function townVals(now, quiet) {
     const v = {}, e = earning(now), cm = today().slice(0, 7), pots = potBalances(cm), pu = purseNow(now), crews = crewWorkers(), D = Town.data;
-    const bal = id => (pots.find(p => p.id === id) || { bal: 0 }).bal;
+    const bal = id => (pots.find(p => p.id === id) || { bal: 0 }).bal, cs = placeCents(pots);   // v147: cs, for the Top off chips
     // the total, its rate and its bar to the next whole dollar
     const whole = Math.floor(e.E + 1e-9), f = e.E - whole;
     v['t:total'] = cents2(e.E); snap('total', e.E, e.rate, now);
@@ -7401,19 +7513,22 @@ const VL = (() => {
       snap(o.id, b, rate, now);
       v['t:sl-' + o.id] = rate > 0 ? stepLine(rate) : 'no villagers here';
       v['t:n1-' + o.id] = rate > 0 ? `· ${money(1)} in ${eta((1 - fr) / rate)}` : '';
-      const g = o.goal > 0 ? o.goal : 0, done = g > 0 && b >= g - 0.005, mo = w ? `${money(Math.floor(w * WORKER_DAY * 365 / 12))} a month` : 'nobody working here';
-      v['t:of-' + o.id] = g ? `of ${money(g)}` : 'no goal set';
+      const po = !(o.goal > 0) && o.proj && paidOff(o.id);   // v147
+      const g = o.goal > 0 ? o.goal : 0, done = (g > 0 && b >= g - 0.005) || po, mo = w ? `${money(Math.floor(w * WORKER_DAY * 365 / 12))} a month` : 'nobody working here';
+      v['t:of-' + o.id] = g ? `of ${money(g)}` : po ? 'paid off' : 'no goal set';
       // v146: the pips show the whole goal (no goal: the next round $100); the bar under them, the next unit (drawn every
       // frame in moveBars; this is just their slots and the line under them)
       const U = unitFor(rate), Uc = Math.round(U * 100), cb = Math.max(0, b) * 100, nxU = (Math.floor((cb + 1e-6) / Uc) + 1) * Uc;
       pipInfo[o.id] = { g, done, rate, U };
+      { const P = topOffPlan(o.id, cs); v['t:fl-' + o.id] = !P || !P.need || !P.got ? '' : P.full ? `Fill to ${money(P.to)}` : 'Top off'; }   // v147
       v['t:p-' + o.id] = '<i></i>'.repeat(10);
       v['t:nx-' + o.id] = rate > 0 ? `next ${unitWord(U)} in ${shortIn((nxU - cb) / 100 / rate)}` : `next ${unitWord(U)} · paused, no villagers`;
       v['t:m2-' + o.id] = done && o.proj ? `${money(b)} saved` : mo;
       v['t:go-' + o.id] = g && !done ? `${money(Math.ceil(g - b - 1e-9))} to go.` : '';
       v['t:eta-' + o.id] = ''; v['t:eta1-' + o.id] = '';
       const pct = g ? `${Math.floor(c01(B / g) * 100)}% of ${money(g)}` : `${B % 100}% of the way to ${money((Math.floor(B / 100) + 1) * 100)}`;   // v146: the pips show this again
-      if (!g) v['t:m1-' + o.id] = pct;
+      if (po) v['t:m1-' + o.id] = '<span class="pp-ready">Paid off! 🎉</span>';
+      else if (!g) v['t:m1-' + o.id] = pct;
       else if (done) { v['t:m1-' + o.id] = o.proj ? '<span class="pp-ready">Ready to spend ✓</span>' : '<span class="ok">goal reached ✓</span>'; if (o.proj && !built) built = o.name; }
       else {
         // v127: when it would be done with today's crew, and with one more villager (each brings $1 a day)
@@ -7530,6 +7645,9 @@ const VL = (() => {
     if (b.dataset.ppOpen) { toggleCard(b.dataset.ppOpen); return; }
     if (b.dataset.ppClose) { closePick(); return; }
     if (b.dataset.collect) { collectChange(); return; }
+    if (b.dataset.fill) { topOff(b.dataset.fill); return; }   // v147
+    if (b.dataset.debt) { openDebt(b.dataset.debt); return; }
+    if (b.dataset.debtUndo) { const t = state.transfers.find(x => x.id === b.dataset.debtUndo); if (t && await ask(`Take back the ${moneyExact(t.amount)} payment? ${potName(t.from)}, its goal and your bank go back up by it.`)) { undoPayment(t.id); toast('Payment taken back'); } return; }
     if (b.dataset.lock) { setLock(b.dataset.lock, !isLocked(b.dataset.lock)); return; }
     if (b.dataset.pickFrom) { addVillager(b.dataset.pickTo, b.dataset.pickFrom); return; }
     if (b.dataset.crew) {
@@ -7573,7 +7691,17 @@ const VL = (() => {
     seen = {};
     for (const [id, t] of list) { const r = $('townList').querySelector(`[data-vl-row="${CSS.escape(id)}"]`); if (!r) continue;
       const c = document.createElement('span'); c.className = 'vl-coin'; c.textContent = t; r.appendChild(c); setTimeout(() => c.remove(), 1400); }
-  }, get pings() { return pings; }, get ticks() { return ticks; }, get bursts() { return bursts; }, get pops() { return pops; }, get glints() { return glints; }, get fills() { return fills; }, unitFor: perDay => unitFor(perDay / DAY_MS),
+  }, toppedOff(to, plus, minus) {   // v147: as Collect: the target's bar rolls the cents in and pings each one (snap's
+    // catch-up, the same as Collect's); each giver's bar pings once per cent it gave (it already shows what it has left)
+    tops++;
+    for (const [id, n] of minus) {
+      const r = $('townList').querySelector(`[data-vl-row="${CSS.escape(id)}"]`), w = r && r.querySelector('.pp-dime'); if (!w) continue;
+      const k = Math.min(n, 40), gap = Math.max(45, Math.min(160, 1800 / k));
+      for (let i = 0; i < k; i++) setTimeout(() => { drains++; if (lessMotion() || !w.isConnected) return;
+        const u = w.querySelector('.pp-unit'); u.classList.remove('pop', 'out'); void u.offsetWidth; u.classList.add('pop', 'out');
+        if (i % 2 === 0) { const m = document.createElement('i'); m.className = 'vl-tkm pp-out'; m.textContent = '−1¢'; w.appendChild(m); setTimeout(() => m.remove(), 900); } }, i * gap);
+    }
+  }, get tops() { return tops; }, get drains() { return drains; }, get pings() { return pings; }, get ticks() { return ticks; }, get bursts() { return bursts; }, get pops() { return pops; }, get glints() { return glints; }, get fills() { return fills; }, unitFor: perDay => unitFor(perDay / DAY_MS),
     roll: id => { const L = live[id], el = L && L.rlEl, R = el && el.rl; return R ? { txt: R.txt, C: R.C, at: R.ds.map(D => D.at), ds: R.ds.map(D => D.d) } : null; }, roundStep, pips: id => pipInfo[id] || null, stepFor: perDay => stepFor(perDay / DAY_MS), stepOf: id => live[id] ? live[id].step : null, get coins() { return coins; }, get sound() { return sound; } };
 })();
 
@@ -8341,6 +8469,10 @@ function holdRepeat(el, fn) {
 holdRepeat($('mvMinus'), () => nudge(-1));
 holdRepeat($('mvPlus'), () => nudge(1));
 $('mvCancel').onclick = closeMover;
+$('debtCancel').onclick = closeDebt; $('debtGo').onclick = saveDebt; $('debtAmt').oninput = debtPreview;   // v147
+$('debtAmt').onkeydown = $('debtNote').onkeydown = e => { if (e.key === 'Enter' && !$('debtGo').disabled) saveDebt(); };
+$('debtBox').addEventListener('click', e => { if (e.target.id === 'debtBox') closeDebt(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && debtFor) closeDebt(); });
 $('openSplitBtn').onclick = () => openSplit();
 $('spCancel').onclick = () => $('splitBox').classList.add('hidden');
 $('spGo').onclick = doSplit;
