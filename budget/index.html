@@ -750,6 +750,14 @@ div.vl-row { cursor: default; }
 .vl-lk.on { border-color: var(--accent); }
 .tn-even { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 2px; }
 .tn-even button:disabled { opacity: .4; }
+/* v134: where the villager comes from */
+.vl-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 12px; }
+.vl-pkl { font-size: 12.5px; color: var(--muted); width: 100%; }
+.vl-pk { min-height: 36px; font-size: 13.5px; }
+.vl-pk b { color: var(--accent); }
+.vl-pk:disabled { opacity: .4; }
+.vl-sb.on { border-color: var(--accent); color: var(--accent); }
+.tn-workers .vl-pick { margin: 12px 0 4px; }
 /* v129: Round off */
 .vl-ro { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 2px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 12px; font-size: 14px; }
 .vl-roa { margin-top: 4px; }
@@ -1413,7 +1421,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 133;
+const APP_VERSION = 134;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -2108,25 +2116,29 @@ function setLock(id, on) {
   state.locked = state.locked || {}; if (on) state.locked[id] = true; else delete state.locked[id];
   save(); render(); toast(on ? `${potName(id)} is locked: its villagers stay put` : `${potName(id)} is unlocked`);
 }
-// who gives a villager to `to`: the most villagers; ties Savings, pots, projects; then further toward its goal; then list order
-function evenDonor(to) {
-  const kind = id => id === 'savings' ? 0 : goalOf(id) > 0 ? 2 : 1, pct = id => { const g = id === 'savings' ? 0 : goalOf(id); return g > 0 ? projectBal(id) / g : 0; };
-  const c = farmPots().map((id, i) => ({ id, i })).filter(x => x.id !== to && canFarm(x.id) && !isLocked(x.id))
-    .map(x => ({ ...x, n: x.id === 'savings' ? savers() : workersAt(x.id), k: kind(x.id), g: pct(x.id) })).filter(x => x.n > 0);
-  c.sort((a, b) => b.n - a.n || a.k - b.k || b.g - a.g || a.i - b.i);
-  return c[0] || null;
+// v134: you pick where each villager comes from. The places that could give one to `to`, with how many are there.
+function donorList(to) {
+  return farmPots().filter(id => id !== to && canFarm(id)).map(id => ({ id, name: id === 'savings' ? 'Savings' : potName(id), n: id === 'savings' ? savers() : Math.max(0, workersAt(id)), lock: isLocked(id) }));
 }
 const crewBuilt = id => { const g = goalOf(id); return g > 0 && projectBal(id) >= g - 0.005; };
-function canAdd(id) { return !state.roundOff && !isLocked(id) && !crewBuilt(id) && !!evenDonor(id); }
-function addVillager(to) {
-  if (to === 'savings' || !canFarm(to) || !state.pots.some(p => p.id === to)) return false;
+function canAdd(id) { return !state.roundOff && !isLocked(id) && !crewBuilt(id) && donorList(id).some(x => !x.lock && x.n > 0); }
+// one villager from `from` to `to`
+function addVillager(to, from) {
+  if (to === 'savings' || !canFarm(to) || !state.pots.some(p => p.id === to) || !from || from === to) return false;
   if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return false; }
-  if (isLocked(to)) { toast(`${potName(to)} is locked. Unlock it first.`); return false; }
+  if (isLocked(to) || isLocked(from)) { toast(`${potName(isLocked(to) ? to : from)} is locked. Unlock it first.`); return false; }
   if (crewBuilt(to)) { toast('That one is built. Raise its goal to keep building.'); return false; }
-  const d = evenDonor(to); if (!d) { toast('Nobody to bring: everyone else is on a locked place or with the party'); return false; }
-  reassign(Date.now(), d.id === 'savings' ? { [to]: 1 } : { [d.id]: -1, [to]: 1 }); save(); render();
-  toast(`1 villager from ${d.id === 'savings' ? 'Savings' : potName(d.id)} → ${potName(to)}`);
-  return d.id;
+  const d = donorList(to).find(x => x.id === from); if (!d || d.n < 1) { toast(`Nobody left at ${d ? d.name : 'that place'}`); return false; }
+  reassign(Date.now(), from === 'savings' ? { [to]: 1 } : { [from]: -1, [to]: 1 }); save(); render();
+  toast(`1 villager from ${d.name} → ${potName(to)}`);
+  return true;
+}
+// the picker: "Take one from" and a chip per place that has villagers (locked ones can't be tapped)
+function pickHTML(to) {
+  const L = donorList(to).filter(x => x.n > 0);
+  return `<div class="vl-pick" role="group" aria-label="Take a villager from"><span class="vl-pkl">Take one from</span>`
+    + (L.length ? L.map(x => `<button class="chip vl-pk" data-pick-from="${esc(x.id)}" data-pick-to="${esc(to)}"${x.lock ? ' disabled' : ''} aria-label="One villager from ${esc(x.name)} (${x.n} there)">${x.lock ? '🔒 ' : ''}${esc(x.name)} · <b>${x.n}</b></button>`).join('')
+      : '<span class="muted" style="font-size:13px">Nobody to take: everyone is with the party.</span>') + `</div>`;
 }
 function removeVillager(id) {
   if (isLocked(id)) { toast(`${potName(id)} is locked. Unlock it first.`); return false; }
@@ -6103,7 +6115,9 @@ const Town = (() => {
     const prev = dueDate(b.cat, prevMonth(month)), t0 = prev ? dayMs(prev) : dayMs(d) - 30 * DAY_MS, t1 = dayMs(d);
     return { f: clamp((now - t0) / (t1 - t0), 0, 1), when: `due ${shortDate(d)}` };
   }
+  let vPick = false, vPickFor = null;   // v134: the sheet's picker
   function workersHTML(p) {
+    if (vPickFor !== p.id) { vPick = false; vPickFor = p.id; }
     const here = p.id, w = here === 'savings' ? savers() : workersAt(here), goal = goalOf(here), need = goal - p.bal;
     const when = goal && need > 0 && w > 0 ? `goal around ${new Date(Date.now() + need / (w * WORKER_DAY) * DAY_MS).toLocaleDateString(undefined, need / w > 300 ? { month: 'short', year: 'numeric' } : { month: 'short', day: 'numeric' })}` : goal && need <= 0 ? 'goal reached 🎉' : goal ? 'paused until someone works here' : '';
     const others = farmPots().filter(id => id !== here && canFarm(id) && !isLocked(id)).map(id => ({ id, name: id === 'savings' ? 'Savings' : potName(id), n: id === 'savings' ? savers() : workersAt(id), full: goalOf(id) > 0 && projectBal(id) >= goalOf(id) - 0.005 }));
@@ -6114,9 +6128,9 @@ const Town = (() => {
       <p class="sh-line st"><strong>${w} worker${w === 1 ? '' : 's'}</strong> · ${rateText(w)}${when ? ` · ${when}` : ''}</p>
       ${here === 'savings' ? '<p class="sh-line" style="font-size:13px">Anyone not with the party, on a bill, or on a project or stockhold saves here by default.</p>' : ''}
       ${built ? '<p class="sh-line" style="font-size:13px">Built! Raise its goal to keep building, or send its workers elsewhere.</p>' : ''}
-      ${here !== 'savings' ? `<div class="tn-even"><button class="vl-lk${isLocked(here) ? ' on' : ''}" data-act="lock" aria-pressed="${isLocked(here)}">${isLocked(here) ? '🔒 Locked' : '🔓 Lock'}</button><button data-act="vminus"${isLocked(here) || !w || state.roundOff ? ' disabled' : ''}>− 1</button><button class="primary" data-act="vplus"${canAdd(here) ? '' : ' disabled'}>+ Add a villager</button></div>
-        <p class="sh-line" style="font-size:12.5px">${isLocked(here) ? 'Locked: its villagers stay put, and nobody is taken from it.' : '+ brings one from wherever has the most (Savings first on a tie).'}</p>` : ''}
-      ${isLocked(here) ? '' : here !== 'savings' && !built ? `<div class="tn-wrow"><span class="tn-wlbl">Take ${wStep === 5 ? 'five' : 'one'} from</span>${from.length ? from.map(o => chip(o, 'from')).join('') : '<span class="muted" style="font-size:13px">Nobody is free: everyone is on bills or with the party.</span>'}</div>` : ''}
+      ${here !== 'savings' ? `<div class="tn-even"><button class="vl-lk${isLocked(here) ? ' on' : ''}" data-act="lock" aria-pressed="${isLocked(here)}">${isLocked(here) ? '🔒 Locked' : '🔓 Lock'}</button><button data-act="vminus"${isLocked(here) || !w || state.roundOff ? ' disabled' : ''}>− 1</button><button class="primary" data-act="vplus" aria-expanded="${vPick && canAdd(here)}"${canAdd(here) ? '' : ' disabled'}>+ Add a villager</button></div>
+        ${vPick && canAdd(here) ? pickHTML(here) : `<p class="sh-line" style="font-size:12.5px">${isLocked(here) ? 'Locked: its villagers stay put, and nobody is taken from it.' : '+ lets you pick where the villager comes from.'}</p>`}` : ''}
+      ${isLocked(here) || here !== 'savings' ? '' : here !== 'savings' && !built ? `<div class="tn-wrow"><span class="tn-wlbl">Take ${wStep === 5 ? 'five' : 'one'} from</span>${from.length ? from.map(o => chip(o, 'from')).join('') : '<span class="muted" style="font-size:13px">Nobody is free: everyone is on bills or with the party.</span>'}</div>` : ''}
       ${here === 'savings' && from.length ? `<div class="tn-wrow"><span class="tn-wlbl">Bring ${wStep === 5 ? 'five' : 'one'} back from</span>${from.map(o => chip(o, 'from')).join('')}</div>` : ''}
       ${to.length && !isLocked(here) ? `<div class="tn-wrow"><span class="tn-wlbl">Send ${wStep === 5 ? 'five' : 'one'} to</span>${to.map(o => chip(o, 'to')).join('')}</div>` : ''}</div>`;
   }
@@ -6296,7 +6310,8 @@ const Town = (() => {
     if (b.dataset.potDel) { await deletePot(b.dataset.potDel); return; }
     if (act === 'wstep') { wStep = wStep === 5 ? 1 : 5; renderSheet(); return; }
     if (act === 'lock') { setLock(id, !isLocked(id)); renderSheet(true); return; }
-    if (act === 'vplus') { addVillager(id); renderSheet(true); return; }
+    if (act === 'vplus') { vPick = !vPick; renderSheet(true); return; }
+    if (b.dataset.pickFrom) { addVillager(b.dataset.pickTo, b.dataset.pickFrom); renderSheet(true); return; }
     if (act === 'vminus') { removeVillager(id); renderSheet(true); return; }
     if (b.dataset.wfrom) { moveWorker(b.dataset.wfrom, id, wStep); return; }
     if (b.dataset.wto) { moveWorker(id, b.dataset.wto, wStep); return; }
@@ -6633,10 +6648,11 @@ const VL = (() => {
   requestAnimationFrame(frame);
 
   // v131: a pot's or project's crew controls beside its row: the lock, then - n +
-  const crewWrap = (id, name, html) => { const L = isLocked(id), w = Math.max(0, workersAt(id));
+  let pickFor = null;   // v134: the row whose picker is open
+  const crewWrap = (id, name, html) => { const L = isLocked(id), w = Math.max(0, workersAt(id)), open = pickFor === id && canAdd(id);
     return `<div class="vl-bw vl-cw">${html}<span class="vl-cr"><span class="vl-crl">👷 Villagers here</span><button class="vl-lk${L ? ' on' : ''}" data-lock="${esc(id)}" aria-pressed="${L}" aria-label="${L ? 'Unlock' : 'Lock'} ${esc(name)}">${L ? '🔒' : '🔓'}</button>`
       + `<button class="vl-sb" data-crew="${esc(id)}" data-d="-1" aria-label="One villager from ${esc(name)} back to Savings"${L || !w || state.roundOff ? ' disabled' : ''}>−</button><b>${w}</b>`
-      + `<button class="vl-sb" data-crew="${esc(id)}" data-d="1" aria-label="One more villager on ${esc(name)}"${canAdd(id) ? '' : ' disabled'}>+</button></span></div>`; };
+      + `<button class="vl-sb${open ? ' on' : ''}" data-crew="${esc(id)}" data-d="1" aria-expanded="${open}" aria-label="Add a villager to ${esc(name)}: pick where from"${canAdd(id) ? '' : ' disabled'}>+</button></span>${open ? pickHTML(id) : ''}</div>`; };
   /* ---- the Town list ---- */
   function townHTML(now) {
     const D = Town.data; if (!D) return '';
@@ -6831,7 +6847,8 @@ const VL = (() => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.collect) { collectChange(); return; }
     if (b.dataset.lock) { setLock(b.dataset.lock, !isLocked(b.dataset.lock)); return; }
-    if (b.dataset.crew) { if (Number(b.dataset.d) > 0) addVillager(b.dataset.crew); else removeVillager(b.dataset.crew); return; }
+    if (b.dataset.pickFrom) { addVillager(b.dataset.pickTo, b.dataset.pickFrom); return; }
+    if (b.dataset.crew) { if (Number(b.dataset.d) > 0) { pickFor = pickFor === b.dataset.crew ? null : b.dataset.crew; renderTown(); } else removeVillager(b.dataset.crew); return; }
     if (b.dataset.ro) { if (b.dataset.ro === 'stop') roundOffStop(); else roundOffStart(); return; }
     if (b.classList.contains('vl-pay')) { await billClick(e); return; }
     const o = b.dataset.vlOpen; if (!o) return;
