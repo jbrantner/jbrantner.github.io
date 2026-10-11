@@ -729,6 +729,12 @@ div.vl-row { cursor: default; }
 }
 /* v124: step bars (a bar that fills toward the next small step of real money, so it's always moving) and quiet bills */
 .vl-stepw { position: relative; display: block; }
+/* v129: a dollar in 100 segments, one per cent */
+.vl-c100 { position: relative; display: block; height: 10px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.vl-c100 > span { display: block; height: 100%; width: 0; background: #fbbf24; transition: none; }
+.vl-c100::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg, transparent 0, transparent calc(1% - 1px), var(--bg) calc(1% - 1px), var(--bg) 1%); }
+.vl-c100 + .vl-stepw .vl-step { height: 5px; }
 .vl-stepw[hidden] { display: none; }
 .vl-step { height: 8px; }
 .vl-step > span { transition: none; }
@@ -1380,7 +1386,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 128;
+const APP_VERSION = 129;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -6280,10 +6286,11 @@ const VL = (() => {
   /* ---- v124: step bars. A bar fills toward the smallest of these steps that takes at least 20 seconds at the row's
      own rate, so it is always visibly moving; its width is the real balance within the step. ---- */
   const STEPS = [0.01, 0.05, 0.10, 0.25, 1], STEP_MS = 20000;
-  const stepFor = r => { if (!(r > 0)) return 0; for (const st of STEPS) if (st / r >= STEP_MS - 1e-6) return st; return 1; };   // r: dollars a millisecond
+  const stepFor = r => r > 0 ? 0.01 : 0;   // v129: always a cent (r: dollars a millisecond); STEPS kept for reference
   const stepName = st => st >= 1 ? money(1) : Math.round(st * 100) + '¢';
   const every = ms => { const sec = Math.round(ms / 1000); return sec < 60 ? `${sec}s` : sec < 600 ? `${Math.floor(sec / 60)}m${sec % 60 ? ` ${sec % 60}s` : ''}` : sec < 5400 ? `${Math.round(sec / 60)}m` : `${Math.round(sec / 3600)}h`; };
   const stepLine = r => { const st = stepFor(r); return `next ${stepName(st)} · every ${every(st / r)}`; };
+  const segBar = id => `<span class="vl-c100" aria-hidden="true"><span data-c="${esc(id)}"></span></span>`;
   const stepBar = id => `<span class="vl-stepw" aria-hidden="true"><span class="vl-fill live vl-step"><span data-s="${esc(id)}"></span></span></span>`;
   let live = {}, ticks = 0;
   // the engine's balance and rate at a moment (read 4x a second); frames move the bar on from there
@@ -6291,7 +6298,7 @@ const VL = (() => {
     const st = stepFor(r), L = live[id];
     if (L && L.step === st) {
       const was = L.b + L.r * Math.max(0, now - L.t);
-      if (b - was > st * 0.5 && L.el) { const n = (b - was) / st; L.anim = { from: barAt(L, now), start: now, dur: Math.min(4500, Math.max(700, Math.min(n, 40) * 220)) }; }
+      if (st && b - was > st * 0.5 && L.el) { const n = (b - was) / st; L.anim = { from: barAt(L, now), start: now, dur: Math.min(4500, Math.max(700, Math.min(n, 40) * 220)) }; }
       L.b = b; L.r = r; L.t = now;
     }
     else live[id] = { b, r, t: now, step: st, k: st ? Math.floor(b / st + 1e-9) : 0, el: null };
@@ -6315,6 +6322,9 @@ const VL = (() => {
     const box = $('townList');
     for (const [id, L] of Object.entries(live)) {
       if (!L.el || !L.el.isConnected) L.el = box.querySelector(`[data-s="${CSS.escape(id)}"]`);
+      if (!L.cel || !L.cel.isConnected) L.cel = box.querySelector(`[data-c="${CSS.escape(id)}"]`);
+      if (L.cel) { const c = L.step ? barAt(L, now) * L.step * 100 : L.b * 100, u = ((Math.floor(c + 1e-6) % 100) + 100) % 100;
+        if (L.cel.dataset.u !== String(u)) { L.cel.dataset.u = u; L.cel.style.width = u + '%'; } }
       const el = L.el; if (!el) continue;
       const w = el.parentNode.parentNode; if (w.hidden !== !L.step) w.hidden = !L.step;
       if (!L.step) continue;
@@ -6334,7 +6344,8 @@ const VL = (() => {
     const row = (o, sub, kind) => { R.push(o); const id = esc(o.id); return `<button class="vl-row" data-vl-open="${esc(o.open)}" data-vl-row="${id}" aria-label="${esc(o.name)}">`
       + `<span class="vl-r1"><b>${esc(o.name)}</b><span class="num" data-t="v-${id}"></span></span><span class="vl-r2"><span>${sub}</span><span data-t="e-${id}"></span></span>`
       + (kind === 'purse' ? `<span class="vl-fill" aria-hidden="true"><span data-w="${id}"></span></span>` : '')
-      + (kind === 'step' ? stepBar(o.id) + `<span class="vl-r3"><span data-t="sl-${id}"></span><span data-t="n1-${id}"></span></span>`
+      + (kind === 'cents' ? segBar(o.id) : '')
+      + (kind === 'step' ? segBar(o.id) + stepBar(o.id) + `<span class="vl-r3"><span data-t="sl-${id}"></span><span data-t="n1-${id}"></span></span>`
         + (o.goal > 0 ? `<span class="vl-goal"><span class="vl-fill thin" aria-hidden="true"><span data-w="g-${id}"></span></span><span data-t="g-${id}"></span></span><span class="vl-r3 vl-etaL"><span data-t="eta-${id}"></span><span data-t="eta1-${id}"></span></span>` : '') : '')
       + `</button>`; };
     // the earned total
@@ -6354,7 +6365,7 @@ const VL = (() => {
       const sub = p.id === 'savings' ? `👷 ${plural(w, 'villager')}${np ? ` + the party's ${np}` : ''} · <span data-t="r-savings"></span>` : `👷 ${w ? `${plural(w, 'villager')} · +${money(w * WORKER_DAY)} a day` : 'nobody working here'}`;
       h += row({ id: p.id, name: p.name, open: p.id, goal: p.goal }, sub, 'step');
     }
-    h += `<div class="vl-bw">` + row({ id: 'scavenger', name: 'Spare change', open: 'scavenger', exact: true }, 'cents from rounding up · split evenly when collected', null)
+    h += `<div class="vl-bw">` + row({ id: 'scavenger', name: 'Spare change', open: 'scavenger', exact: true }, 'cents from rounding up · split evenly when collected', 'cents')
       + `<button class="vl-pay" data-collect="1" id="vlCollect" aria-label="Collect spare change into Savings, your pots and projects">Collect</button></div>`;
     h += `<div class="vl-acts"><button class="vl-add" data-vl-open="newpot">+ Add pot</button></div>`;
     // projects
@@ -6395,14 +6406,14 @@ const VL = (() => {
     // the rows
     v['t:purse-h'] = `${money(pu.purseLeft)} left this week`; v['t:spent'] = `${money(pu.spent)} spent`;
     v['t:r-savings'] = `+${money(Math.max(0, e.V - crews) * WORKER_DAY)} a day`;
-    if (D) { v['t:stock-h'] = cents2(sum(D.stock, p => bal(p.id))); v['t:proj-h'] = D.projects.length ? `${money(sum(D.projects, p => bal(p.id)))} of ${money(sum(D.projects, p => p.goal))}` : ''; }
+    if (D) { v['t:stock-h'] = money(sum(D.stock, p => bal(p.id))); v['t:proj-h'] = D.projects.length ? `${money(sum(D.projects, p => bal(p.id)))} of ${money(sum(D.projects, p => p.goal))}` : ''; }
     v['t:bills-h'] = `${money(bal('bills'))} held`;
     const cb = $('vlCollect'); if (cb) cb.disabled = !(bal('scavenger') >= 0.005);
     for (const o of rows) {
       if (o.id === 'spend') { v['t:v-spend'] = money(pu.purseLeft); v['w:spend'] = pu.P > 0 ? pu.purseLeft / pu.P : 0; v['t:e-spend'] = pu.P ? `of ${money(pu.P)}` : ''; continue; }
       const b = bal(o.id);
-      if (o.exact) { v['t:v-' + o.id] = esc(moneyExact(b)); v['t:e-' + o.id] = ''; continue; }
-      v['t:v-' + o.id] = cents2(b);
+      if (o.exact) { const c = Math.round(b * 100); v['t:v-' + o.id] = c < 100 ? `${c}¢` : money(b); v['t:e-' + o.id] = ''; snap(o.id, b, 0, now); continue; }
+      v['t:v-' + o.id] = money(b);
       // the row's own rate: Savings gets everyone's pay less what crews send elsewhere; a pot or project, its crew
       const rate = (o.id === 'savings' ? Math.max(0, e.V - crews) : Math.max(0, workersAt(o.id))) * WORKER_DAY / DAY_MS, fr = b - Math.floor(b);
       snap(o.id, b, rate, now);
@@ -6542,7 +6553,7 @@ const VL = (() => {
     seen = {};
     for (const [id, t] of list) { const r = $('townList').querySelector(`[data-vl-row="${CSS.escape(id)}"]`); if (!r) continue;
       const c = document.createElement('span'); c.className = 'vl-coin'; c.textContent = t; r.appendChild(c); setTimeout(() => c.remove(), 1400); }
-  }, get pings() { return pings; }, get ticks() { return ticks; }, stepFor: perDay => stepFor(perDay / DAY_MS), stepOf: id => live[id] ? live[id].step : null, get coins() { return coins; }, get sound() { return sound; } };
+  }, get pings() { return pings; }, get ticks() { return ticks; }, stepFor: perDay => stepFor(perDay / DAY_MS), stepOf: id => live[id] ? live[id].step : null, units: id => { const e = $('townList').querySelector(`[data-c="${CSS.escape(id)}"]`); return e ? Number(e.dataset.u || 0) : null; }, get coins() { return coins; }, get sound() { return sound; } };
 })();
 
 /* ---------- events ---------- */
