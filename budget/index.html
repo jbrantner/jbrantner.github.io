@@ -861,7 +861,25 @@ html.tl-on:has(#view-town:not(.hidden)), html.tl-on:has(#view-town:not(.hidden))
 #townList .pp-segs { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
 #townList .pp-segs i { height: 4px; border-radius: 2px; background: var(--pp-pip-off); transition: background .3s; }
 #townList .pp-segs i.on { background: var(--pp-gold); }
-#townList .pp-segs i.cur { background: linear-gradient(90deg, color-mix(in srgb, var(--pp-gold) 50%, var(--pp-pip-off)) var(--p, 0%), var(--pp-pip-off) var(--p, 0%)); transition: none; }
+/* v142: the penny strip's pop and glint, and the card amount's wheels */
+#townList .pp-segs { position: relative; }
+#townList .pp-segs i.pop { animation: pp-pop .38s ease-out; }
+@keyframes pp-pop { 0% { transform: scaleY(1); } 40% { transform: scaleY(2.2); filter: brightness(1.35); } 100% { transform: scaleY(1); } }
+#townList .pp-segs.glint::after { content: ''; position: absolute; inset: -3px -2px; border-radius: 4px; pointer-events: none;
+  background: linear-gradient(100deg, transparent 0 35%, color-mix(in srgb, var(--pp-gold) 70%, #fff) 50%, transparent 65% 100%); background-size: 260% 100%; animation: pp-glint .7s ease-out forwards; }
+@keyframes pp-glint { 0% { background-position: 100% 0; opacity: 1; } 100% { background-position: -60% 0; opacity: 0; } }
+#townList .pp-roll { display: inline-block; font-variant-numeric: tabular-nums; }
+#townList .pp-roll .rl-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+#townList .pp-roll .rl-v { display: inline-flex; align-items: flex-end; }
+#townList .pp-roll .c { display: inline-flex; align-items: flex-start; }
+#townList .pp-roll .rd { display: inline-block; height: 1.15em; line-height: 1.15em; overflow: hidden; }
+#townList .pp-roll .rs { display: block; transform: translateY(calc(var(--i, 0) * -1.15em)); }
+#townList .pp-roll .rs::before { content: "0\A 1\A 2\A 3\A 4\A 5\A 6\A 7\A 8\A 9\A 0"; white-space: pre; display: block; line-height: 1.15em; }
+#townList .pp-roll .rx { line-height: 1.15em; }
+#townList .pp-roll .rx::before { content: attr(data-ch); }   /* drawn, not text: copying or reading the card gives the hidden amount once */
+@media (prefers-reduced-motion: reduce) { #townList .pp-segs i.pop, #townList .pp-segs.glint::after { animation: none; } }
+#townList .pp-segs i.cur { background: linear-gradient(90deg, color-mix(in srgb, var(--pp-gold) 65%, var(--pp-pip-off)) var(--p, 0%), var(--pp-pip-off) var(--p, 0%)); transition: none; }
+#townList .pp-dime .pp-segs i { height: 5px; }
 #townList .pp-dime .vl-step { display: none; }
 #townList .pp-dime .vl-tkm { top: -17px; color: var(--pp-gold); font-family: var(--pp-body); font-weight: 800; }
 #townList .pp-pips { position: relative; }
@@ -1699,7 +1717,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 142;
+const APP_VERSION = 143;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -7066,12 +7084,14 @@ const VL = (() => {
     for (const [id, L] of Object.entries(live)) {
       if (!L.el || !L.el.isConnected) L.el = box.querySelector(`[data-s="${CSS.escape(id)}"]`);
       const el = L.el; if (!el) continue;
-      if (pipInfo[id]) pipsAt(id, pipInfo[id], L, L.step ? barAt(L, now) * L.step : L.b);   // v140
-      const w = el.parentNode.parentNode; if (w.hidden !== !L.step) w.hidden = !L.step;
+      const card = !!pipInfo[id], val = L.step ? barAt(L, now) * L.step : L.b;
+      if (card) { pipsAt(id, pipInfo[id], L, val); rollAt(id, L, val, now); }   // v140, v142
+      const w = el.parentNode.parentNode, hide = !L.step && !card; if (w.hidden !== hide) w.hidden = hide;
+      if (card) pennies(w, val);   // v142: the penny strip (a card with no crew: standing still)
       if (!L.step) continue;
       const q = barAt(L, now), k = Math.floor(q + 1e-9);
       el.style.width = (c01(q - k) * 100).toFixed(2) + '%';
-      dimes(w, q * L.step);   // v138
+      if (!card) dimes(w, q * L.step);   // v138
       if (k > L.k && L.step < 1) tick(el, L.step);   // a whole dollar has its own coin (and the total its ping)
       L.k = k;
     }
@@ -7081,7 +7101,7 @@ const VL = (() => {
   const ROUND_STEPS = [2, 5, 10, 20, 50, 100, 200, 500], pipInfo = {};
   let bursts = 0;
   // how long to the next step: "40m", "3h 10m", past a day "2d 5h"
-  const stepIn = ms => { const h = Math.floor(Math.max(60000, ms) / 3600000); return h >= 24 ? `${Math.floor(h / 24)}d${h % 24 ? ' ' + (h % 24) + 'h' : ''}` : eta(ms); };
+  const stepIn = ms => { const h = Math.floor(Math.max(1, Math.ceil(ms / 60000)) / 60); return h >= 24 ? `${Math.floor(h / 24)}d${h % 24 ? ' ' + (h % 24) + 'h' : ''}` : eta(ms); };
   const roundStep = perDay => { if (!(perDay > 0)) return ROUND_STEPS[0]; for (const S of ROUND_STEPS) if (S >= perDay - 1e-9) return S; return ROUND_STEPS[ROUND_STEPS.length - 1]; };
   // the 10 pips toward the next step, from a live balance (to the cent, rounded down); a step filling bursts
   function pipsAt(id, info, L, val) {
@@ -7101,6 +7121,60 @@ const VL = (() => {
     bursts++; if (lessMotion()) return;
     const x = document.createElement('span'); x.className = 'pp-burst'; x.setAttribute('aria-hidden', 'true');
     x.innerHTML = Array.from({ length: 12 }, (_, i) => `<i style="--a:${i * 30}deg"></i>`).join(''); el.appendChild(x); setTimeout(() => x.remove(), 1000);
+  }
+  /* v142: the penny strip. 10 segments of 1 cent toward the next 10 cents: the whole cents filled (floored, never ahead
+     of the money), the next one filling with the sub-cent part. A segment filling pops; a 10-cent wrap glints. */
+  let pops = 0, glints = 0;
+  function pennies(w, val) {
+    const S = w.querySelectorAll('.pp-segs i'); if (S.length !== 10) return;
+    const v = Math.max(0, val) * 100, C = Math.floor(v + 1e-6), on = C % 10, part = Math.max(0, Math.min(99, Math.floor((v - C) * 100)));
+    if (w.ppOn !== on) {
+      const was = w.ppOn, wasC = w.ppC; w.ppOn = on;
+      S.forEach((x, i) => { const c = i < on ? 'on' : i === on ? 'cur' : ''; if (x.className.replace(/ ?pop/, '') !== c) x.className = c; });
+      if (was != null && C === wasC + 1) {   // one more cent (a jump of many, as money moves in, just redraws)
+        if (on === 0) { glints++; if (!lessMotion()) { const g = w.querySelector('.pp-segs'); g.classList.remove('glint'); void g.offsetWidth; g.classList.add('glint'); } }
+        else { pops++; if (!lessMotion()) { const x = S[on - 1]; x.classList.add('pop'); setTimeout(() => x.classList.remove('pop'), 400); } }
+      }
+    }
+    w.ppC = C;
+    if (w.ppPart !== part) { w.ppPart = part; w.style.setProperty('--p', part + '%'); }
+  }
+  /* v142: rolling digits on the card amount. Each digit is a wheel (0-9, then 0 again for the roll past 9). It shows
+     the floored cents; a digit that changes rolls there over RL_MS; the last one creeps up by up to RL_SUB of a digit
+     with the sub-cent part. The real amount is in a hidden text for screen readers and copying. */
+  const RL_MS = 320, RL_SUB = 0.2;
+  const rlEase = p => 1 - Math.pow(1 - p, 3);
+  function rollAt(id, L, val, now) {
+    let el = L.rlEl; if (!el || !el.isConnected) { el = L.rlEl = $('townList').querySelector(`[data-rl="${CSS.escape(id)}"]`); if (el) el.rl = null; }
+    if (!el) return;
+    const v = Math.max(0, val) * 100, C = Math.floor(v + 1e-6), sub = lessMotion() ? 0 : Math.max(0, Math.min(1, v - C));
+    const txt = moneyExact(C / 100), m = txt.match(/^(.*?)([.,]\d\d)$/), head = m ? m[1] : txt, tail = m ? m[2] : '';
+    let R = el.rl;
+    if (!R || R.shape !== txt.replace(/\d/g, '0')) {   // first draw, or the number got longer / shorter: build the wheels
+      const wheel = ch => /\d/.test(ch) ? '<span class="rd"><span class="rs"></span></span>' : `<span class="rx" data-ch="${esc(ch)}"></span>`;
+      el.innerHTML = `<span class="rl-sr">${esc(txt)}</span><span class="rl-v" aria-hidden="true">${[...head].map(wheel).join('')}${tail ? `<span class="c">${[...tail].map(wheel).join('')}</span>` : ''}</span>`;
+      R = el.rl = { shape: txt.replace(/\d/g, '0'), txt, C, ds: [...el.querySelectorAll('.rs')].map(x => ({ x, d: null, from: 0, t0: 0, at: null })) };
+    }
+    if (R.txt !== txt) { R.txt = txt; el.firstChild.textContent = txt; }
+    R.C = C;
+    const digits = txt.replace(/\D/g, ''), n = R.ds.length;
+    for (let i = 0; i < n; i++) {
+      const D = R.ds[i], d = +digits[i];
+      if (D.d !== d) {   // a new number: roll to it from where the wheel is now (up past 9 onto the 0 under it)
+        if (D.d == null || lessMotion()) D.from = D.to = d;
+        else { const cur = D.at != null ? D.at : D.d; D.from = cur; D.to = d;
+          if (d < cur && cur - d > 5) D.to = d + 10;           // 9 -> 0: up onto the bottom 0
+          else if (d > cur && d - cur > 5) D.from = cur + 10;  // 0 -> 9 (money taken out): down from that 0
+        }
+        D.t0 = now; D.d = d;
+      }
+      let at = D.to;
+      if (D.from !== D.to) { const p = (now - D.t0) / RL_MS; if (p >= 1) { D.from = D.to = d; at = d; } else at = D.from + (D.to - D.from) * rlEase(p); }
+      if (i === n - 1 && D.from === D.to) at = d + sub * RL_SUB;   // the last digit: the sub-cent creep
+      D.at = at % 10;
+      const y = Math.round(at * 1000) / 1000;
+      if (D.y !== y) { D.y = y; D.x.style.setProperty('--i', y); }
+    }
   }
   /* v138: the gold strip under a card's pips, from the same live balance as the bar above: a segment for each 10 cents
      of the dollar it is on, and the next one filling. */
@@ -7157,7 +7231,7 @@ const VL = (() => {
       return `<div class="pp-card ${kind === 'proj' ? 'proj' : 'pot'}${done ? ' done' : ''}${open ? ' open' : ''}${L ? ' locked' : ''}" data-vl-row="${id}">`
         + `<button class="pp-head" data-pp-open="${id}" aria-expanded="${open}" aria-controls="ppm-${id}">${ico(sv ? 'vault' : kind === 'pot' ? 'jar' : 'build')}`
         + `<span class="pp-nm"><b>${nm}</b><small>${sv ? 'Pot · home' : kind === 'pot' ? 'Pot' : done ? 'Project · built' : 'Project'}</small></span>`
-        + `<span class="pp-amt"><span class="num" data-t="v-${id}"></span><small data-t="of-${id}"></small></span></button>`
+        + `<span class="pp-amt"><span class="num pp-roll" data-rl="${id}"></span><small data-t="of-${id}"></small></span></button>`
         + `<div class="pp-pips${kind === 'proj' ? '' : ' ember'}" data-t="p-${id}" data-pip="${id}" aria-hidden="true"></div>`
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-segs">${'<i></i>'.repeat(10)}</span><span class="vl-step"><span data-s="${id}"></span></span></span>`
         + `<div class="pp-meta"><span data-t="m1-${id}"></span><span data-t="m2-${id}"></span></div><div class="pp-nx" data-t="nx-${id}"></div>`
@@ -7418,7 +7492,8 @@ const VL = (() => {
     seen = {};
     for (const [id, t] of list) { const r = $('townList').querySelector(`[data-vl-row="${CSS.escape(id)}"]`); if (!r) continue;
       const c = document.createElement('span'); c.className = 'vl-coin'; c.textContent = t; r.appendChild(c); setTimeout(() => c.remove(), 1400); }
-  }, get pings() { return pings; }, get ticks() { return ticks; }, get bursts() { return bursts; }, roundStep, pips: id => pipInfo[id] || null, stepFor: perDay => stepFor(perDay / DAY_MS), stepOf: id => live[id] ? live[id].step : null, get coins() { return coins; }, get sound() { return sound; } };
+  }, get pings() { return pings; }, get ticks() { return ticks; }, get bursts() { return bursts; }, get pops() { return pops; }, get glints() { return glints; },
+    roll: id => { const L = live[id], el = L && L.rlEl, R = el && el.rl; return R ? { txt: R.txt, C: R.C, at: R.ds.map(D => D.at), ds: R.ds.map(D => D.d) } : null; }, roundStep, pips: id => pipInfo[id] || null, stepFor: perDay => stepFor(perDay / DAY_MS), stepOf: id => live[id] ? live[id].step : null, get coins() { return coins; }, get sound() { return sound; } };
 })();
 
 /* ---------- events ---------- */
