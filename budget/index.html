@@ -729,6 +729,20 @@ div.vl-row { cursor: default; }
 }
 /* v124: step bars (a bar that fills toward the next small step of real money, so it's always moving) and quiet bills */
 .vl-stepw { position: relative; display: block; }
+/* v129: Round off */
+.vl-ro { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 2px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 12px; font-size: 14px; }
+.vl-roa { margin-top: 4px; }
+/* v129: shares */
+.vl-shw { align-items: flex-start; }
+.vl-shw .vl-shr { margin-top: 10px; }
+.vl-shr { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.vl-shr b { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 700; }
+.vl-sb { min-height: 34px; width: 34px; padding: 0; border-radius: 99px; font-size: 18px; font-weight: 700; line-height: 1; }
+.vl-sb:disabled { opacity: .35; }
+.sh-share { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; }
+.sh-share b { font-size: 24px; min-width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
+.sh-share button { min-width: 64px; font-weight: 700; }
+.sh-share button:disabled { opacity: .4; }
 /* v129: a dollar in 100 segments, one per cent */
 .vl-c100 { position: relative; display: block; height: 10px; border-radius: 3px; background: var(--track); overflow: hidden; }
 .vl-c100 > span { display: block; height: 100%; width: 0; background: #fbbf24; transition: none; }
@@ -1182,6 +1196,8 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
         <label class="field">Currency symbol<input id="setCurrency" maxlength="3"></label>
         <label class="field">Theme<select id="setTheme"><option value="">Match device</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       </div>
+      <label class="row" style="margin-top:14px; font-size:14px; gap:8px; align-items:flex-start"><input type="checkbox" id="setCarry" style="margin-top:3px"> <span>Villagers carry their unfinished cent<br><small class="muted">When villagers move, they take their part of the cent they were working on with them.</small></span></label>
+      <div class="row wrap" style="margin-top:12px; gap:10px; align-items:center"><button id="setRound">Round everything off</button><span class="muted" id="setRoundLine" style="font-size:13px">Everyone helps one place at a time to its next whole dollar, then goes back.</span></div>
     </div>
     <div class="card" id="importCard">
       <h2>Import from your bank</h2>
@@ -1386,7 +1402,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 129;
+const APP_VERSION = 130;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -1620,7 +1636,7 @@ function render() {
   document.documentElement.dataset.theme = state.theme || '';
   const [y, m] = month.split('-').map(Number);
   $('monthLabel').textContent = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  booksGen++; needMemo.clear(); autoSlay(); finishGoals(); partyReturns(); renderGold(); renderOver(); renderMath();
+  booksGen++; needMemo.clear(); autoSlay(); roundOffTick(); finishGoals(); partyReturns(); applyShares(); renderGold(); renderOver(); renderMath();
   renderBudget(); renderTx(); renderRules(); renderPotsTab(); renderScavenger(); Town.render(); VL.render();
   $('txCat').innerHTML = catOptions($('txCat').value);
   $('ruleCat').innerHTML = catOptions($('ruleCat').value, false);
@@ -1632,6 +1648,7 @@ function render() {
   $('setPaydayF').classList.toggle('hidden', tw); $('setDaysF').classList.toggle('hidden', !tw);
   if (document.activeElement !== $('setDay1')) $('setDay1').value = dd[0]; if (document.activeElement !== $('setDay2')) $('setDay2').value = dd[1]; $('setAccounts').value = state.accounts.join(', ');
   $('setCurrency').value = state.currency; $('setTheme').value = state.theme || '';
+  $('setCarry').checked = state.carryCents !== false; $('setRound').textContent = state.roundOff ? 'Stop rounding off' : 'Round everything off'; if (state.roundOff) $('setRoundLine').innerHTML = roundOffLine();
   $('backupLast').textContent = state.lastBackup ? `Last backup: ${shortDate(ymd(new Date(state.lastBackup)))}` : 'No backup saved yet';
   $('appVer').textContent = `App version ${APP_VERSION} · ${screenInfo()}`;
   maybeAskPay();
@@ -1722,7 +1739,7 @@ function monthFree(m) {
   return pay - bills - sets;
 }
 // Money moved into a pot by hand, by postage or as treasure, up to a day.
-const moved = (pot, until = today()) => sum(state.transfers.filter(t => t.date <= until), t => (t.to === pot ? t.amount : 0) - (t.from === pot ? t.amount : 0));
+const moved = (pot, until = today(), at = Infinity) => sum(state.transfers.filter(t => t.date <= until && !(t.at > at)), t => (t.to === pot ? t.amount : 0) - (t.from === pot ? t.amount : 0));
 const OUTSIDE = id => id === 'start' || id === 'bills';
 /* ---------- paydays and bills as they really happen (version 78) ----------
    A paycheck counts once you enter it: on payday the app asks what landed, and its cents go to the
@@ -2013,6 +2030,157 @@ function billsHeldLine() {
 /* Villagers this pay period and the crews. When a smaller paycheck brings fewer villagers than are working, crews
    come off projects first (evenly, by size), then pots; the party is locked until Sunday, so next week's party
    shrinks only if that still isn't enough. What was cut comes back when a later paycheck has room. */
+/* v129: every crew change goes through reassign(t, deltas) (deltas: { potId: +n / -n }; Savings takes the difference).
+   With carryCents on (the default), the villagers who leave a place take their share of its unfinished cent with them. */
+const carryOn = () => state.carryCents !== false;
+const subCent = b => { const c = b * 100, f = c - Math.floor(c + 1e-6); return f > 0 ? f / 100 : 0; };   // dollars below a whole cent
+const placeBal = (id, t) => id === 'savings' ? (potBalances(today().slice(0, 7), t).find(p => p.id === 'savings') || { bal: 0 }).bal : projectBal(id, t);
+const crewsAt = t => sum(state.pots, p => Math.max(0, workersAt(p.id, t)));
+const placeCrew = (id, t) => id === 'savings' ? Math.max(0, maxWorkers(t) - crewsAt(t)) : Math.max(0, workersAt(id, t));   // whoever earns into it
+function reassign(t, deltas) {
+  const d = {}; for (const [k, v] of Object.entries(deltas || {})) if (v && k !== 'savings' && k !== 'party' && k !== 'spend') d[k] = v;
+  const ids = Object.keys(d); if (!ids.length) return [];
+  const out = [];
+  if (carryOn()) {
+    const ds = -sum(ids, k => d[k]), all = ds ? { ...d, savings: ds } : { ...d };
+    const gain = Object.entries(all).filter(([, v]) => v > 0), G = sum(gain, ([, v]) => v);
+    if (G > 0) for (const [k, v] of Object.entries(all)) {
+      if (v >= 0) continue; const n = placeCrew(k, t); if (!(n > 0)) continue;
+      const amt = subCent(placeBal(k, t)) * Math.min(-v, n) / n; if (!(amt > 1e-12)) continue;
+      for (const [g, gv] of gain) { const x = { id: uid(), date: ymd(new Date(t)), at: t, from: k, to: g, amount: amt * gv / G, carry: true }; state.transfers.push(x); out.push(x); }
+    }
+  }
+  for (const k of ids) state.workerLog.push({ t, pot: k, delta: d[k] });
+  return out;
+}
+/* Round everything off. state.roundOff = { saved: { potId: crew }, started, cur, goal, t0 }. */
+let roTimer = null, roNext = Infinity;
+const roFree = t => Math.max(0, maxWorkers(t) - partyNow(t));
+const roWhole = b => Math.abs(b - Math.round(b)) < 1e-7;
+const roName = id => id === 'savings' ? 'Savings' : ((state.pots.find(p => p.id === id) || {}).name || 'a pot');
+const roRate = (id, t) => placeCrew(id, t) * WORKER_DAY / DAY_MS;
+// the next place to round: the pot or project closest to its next whole dollar, then Savings, then none
+function roPick(t) {
+  const ps = state.pots.filter(p => !shareBuilt(p.id)).map(p => ({ id: p.id, b: projectBal(p.id, t) })).filter(x => !roWhole(x.b))
+    .sort((a, b) => (Math.ceil(a.b) - a.b) - (Math.ceil(b.b) - b.b));
+  if (ps.length) return ps[0].id;
+  return roWhole(placeBal('savings', t)) ? null : 'savings';
+}
+function roAssign(id, t) {   // everyone free on one place (on Savings: every crew off)
+  const F = roFree(t), d = {};
+  for (const p of state.pots) { const want = p.id === id ? F : 0, have = workersAt(p.id, t); if (want !== have) d[p.id] = want - have; }
+  return reassign(t, d);
+}
+// the first moment in [t0, now] the place's balance reached the goal, or null (balances only rise while it's filling)
+function roHit(id, goal, t0, now) {
+  const ok = t => placeBal(id, t) >= goal;
+  if (!ok(now)) return null; if (ok(t0)) return t0;
+  let lo = t0, hi = now;
+  for (let k = 0; k < 90; k++) { const m = (lo + hi) / 2; if (!(m > lo && m < hi)) break; if (ok(m)) hi = m; else lo = m; }
+  return hi;
+}
+function roRestore(t) {
+  const R = state.roundOff || { saved: {} }, F = roFree(t), want = {}, d = {};
+  for (const p of state.pots) want[p.id] = shareBuilt(p.id) ? 0 : state.shares ? Math.floor(F * potShare(p.id) / 100 + 1e-9) : Math.max(0, Number(R.saved[p.id] || 0));
+  let over = sum(Object.values(want), x => x) - F;   // only if a smaller paycheck came in meanwhile
+  while (over > 0) { const k = Object.keys(want).sort((a, b) => want[b] - want[a])[0]; if (!want[k]) break; want[k]--; over--; }
+  for (const p of state.pots) { const have = workersAt(p.id, t); if (want[p.id] !== have) d[p.id] = want[p.id] - have; }
+  reassign(t, d);
+}
+// Bring the mode up to now: each place that reached its dollar hands the crew on at that exact moment (even while the
+// app was closed); a paycheck or the party changing how many are free keeps everyone free on the current place.
+function roundOffTick(now = Date.now()) {
+  const R = state.roundOff; if (!R) return false;
+  let changed = false, t = now;
+  for (let k = 0; k < 60 && state.roundOff; k++) {
+    if (R.cur && R.cur !== 'savings' && !state.pots.some(p => p.id === R.cur)) R.cur = null;
+    if (R.cur) {
+      const h = roHit(R.cur, R.goal, R.t0, now);
+      if (h == null) { if (!payWaiting()) { const n = state.workerLog.length; roAssign(R.cur, now); if (state.workerLog.length !== n) changed = true; } break; }   // a payday waiting leaves crews as they are, as always
+      t = h;
+      (R.log = R.log || []).push({ id: R.cur, t: h, goal: R.goal });
+      if (R.cur !== 'savings') { const g = goalOf(R.cur); if (g > 0 && projectBal(R.cur, h) >= g - 1e-7) (state.built = state.built || {})[R.cur] = { t: Math.round(h), seen: false }; }
+      R.cur = null; changed = true;
+    }
+    const id = roPick(t);
+    if (!id) { roRestore(t); state.roundNews = { at: t, log: R.log || [], seen: false }; state.roundOff = null; changed = true; toast('All rounded off ✓ villagers are back at their posts'); break; }
+    roAssign(id, t); changed = true;
+    const b = placeBal(id, t); if (roWhole(b)) continue;   // the cents carried in made it whole already
+    const g = id === 'savings' ? 0 : goalOf(id);
+    R.cur = id; R.t0 = t; R.goal = Math.floor(b + 1e-9) + 1; if (g > 0 && g < R.goal) R.goal = g;
+  }
+  if (changed) save();
+  clearTimeout(roTimer); roNext = Infinity;
+  const Q = state.roundOff;
+  if (Q && Q.cur) { const r = roRate(Q.cur, now); if (r > 0) { roNext = Math.max(now + 200, now + Math.max(0, Q.goal - placeBal(Q.cur, now)) / r);
+    roTimer = setTimeout(() => { if (state.roundOff) render(); }, roNext - now + 5); } }
+  return changed;
+}
+function roundOffStart() {
+  if (state.roundOff) return false;
+  const now = Date.now();
+  if (payWaiting()) { toast('Enter your paycheck first, so villagers are at work'); return false; }
+  if (!(roFree(now) > 0)) { toast('Nobody is free to round off right now'); return false; }
+  if (!roPick(now)) { toast('Everything is on a whole dollar already'); return false; }
+  state.roundOff = { saved: Object.fromEntries(state.pots.map(p => [p.id, Math.max(0, workersAt(p.id, now))])), started: now, cur: null, log: [] };
+  roundOffTick(now); save(); render();
+  if (state.roundOff) toast('Rounding off: everyone helps one place at a time to its next whole dollar');
+  return true;
+}
+function roundOffStop() {
+  if (!state.roundOff) return false;
+  const now = Date.now(); roundOffTick(now);
+  if (state.roundOff) { roRestore(now); state.roundOff = null; toast('Stopped rounding off. Villagers are back at their posts'); }
+  clearTimeout(roTimer); roNext = Infinity; save(); render(); return true;
+}
+function roundOffLine(now = Date.now()) {
+  const R = state.roundOff; if (!R) return '';
+  if (!R.cur) return 'Rounding off';
+  const b = placeBal(R.cur, now), r = roRate(R.cur, now), c = Math.floor(subDollar(b) * 100 + 1e-6);
+  if (!(r > 0)) return `Rounding off · ${esc(roName(R.cur))} ${c}¢ → ${money(R.goal)} · waiting for free villagers`;
+  const mins = Math.max(1, Math.ceil(Math.max(0, R.goal - b) / r / 60000));
+  return `Rounding off · ${esc(roName(R.cur))} ${c}¢ → ${money(R.goal)} in ${mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`}`;
+}
+const subDollar = b => { const f = b - Math.floor(b + 1e-9); return f > 0 ? f : 0; };
+/* v129: shares. state.shares = { potId: percent } (5% steps). Pots and projects each take their share of the villagers
+   not with the party, rounded down; Savings gets the rest. A built project's share goes back to Savings. */
+const potShare = id => Number((state.shares || {})[id] || 0);
+const sharesFree = () => Math.max(0, maxWorkers() - partyNow());
+const shareBuilt = id => { const g = goalOf(id); return g > 0 && projectBal(id) >= g - 0.005; };
+const sharesTotal = () => sum(state.pots.filter(p => !shareBuilt(p.id)), p => potShare(p.id));
+const savingsPct = () => Math.max(0, 100 - sharesTotal());
+const shareCrew = (id, F = sharesFree()) => shareBuilt(id) ? 0 : Math.floor(F * potShare(id) / 100 + 1e-9);
+// The first time: each crew becomes the nearest 5% share of today's free villagers (the biggest trimmed if over 100%).
+function migrateShares() {
+  if (payWaiting()) return; const F = sharesFree(); if (!(F > 0)) return;
+  const sh = {}; for (const p of state.pots) { const w = workersAt(p.id); if (w > 0) { const x = Math.round(w / F * 20) * 5; if (x > 0) sh[p.id] = x; } }
+  let tot = sum(Object.values(sh), x => x);
+  while (tot > 100) { const k = Object.keys(sh).sort((a, b) => sh[b] - sh[a])[0]; sh[k] -= 5; tot -= 5; if (!sh[k]) delete sh[k]; }
+  state.shares = sh;
+}
+// Bring every crew to its share, now. Only future flows change: the log entry is at this moment, so nothing already
+// earned moves. A payday still waiting for its paycheck leaves the crews as they are (as before).
+function applyShares() {
+  if (state.roundOff) return [];   // Round off is placing everyone for now
+  if (!state.shares) migrateShares(); if (!state.shares || payWaiting()) return [];
+  const F = sharesFree(), now = Date.now(), ch = [], d = {};
+  for (const p of state.pots) {
+    const have = workersAt(p.id), want = shareCrew(p.id, F);
+    if (have !== want) { d[p.id] = want - have; ch.push({ id: p.id, name: p.name, from: have, to: want }); }
+  }
+  if (ch.length) { reassign(now, d); save(); }
+  return ch;
+}
+function setShare(id, d) {
+  if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return; }
+  if (!state.shares) applyShares(); if (!state.shares || !state.pots.some(p => p.id === id)) return;
+  const cur = potShare(id), nx = Math.max(0, Math.min(100, cur + d));
+  if (d > 0 && shareBuilt(id)) { toast('That one is built. Raise its goal to keep building.'); return; }
+  if (d > 0 && sharesTotal() + (nx - cur) > 100) { toast('Every villager has a place already. Take 5% from another pot first.'); return; }
+  if (nx === cur) return;
+  if (nx) state.shares[id] = nx; else delete state.shares[id];
+  save(); render();
+}
 function fitCrews(V) {
   const now = Date.now(), cut = state.cutCrews = state.cutCrews || {}, cuts = [];
   let over = partyNow() + crewWorkers() - V;
@@ -2023,7 +2191,7 @@ function fitCrews(V) {
     const keepAll = tot - take, keep = cs.map(c => ({ ...c, k: Math.floor(c.w * keepAll / tot + 1e-9), f: c.w * keepAll / tot % 1 }));
     let spare = keepAll - sum(keep, c => c.k);
     for (const c of [...keep].sort((a, b) => b.f - a.f)) { if (spare <= 0) break; c.k++; spare--; }
-    for (const c of keep) if (c.k < c.w) { state.workerLog.push({ t: now, pot: c.id, delta: c.k - c.w }); cut[c.id] = (cut[c.id] || 0) + c.w - c.k; cuts.push({ id: c.id, name: c.name, from: c.w, to: c.k }); }
+    for (const c of keep) if (c.k < c.w) { reassign(now, { [c.id]: c.k - c.w }); cut[c.id] = (cut[c.id] || 0) + c.w - c.k; cuts.push({ id: c.id, name: c.name, from: c.w, to: c.k }); }
     over -= take;
   }
   let party = null; const plan = Number(state.partyPlan || 0), room = Math.max(0, V - crewWorkers());
@@ -2040,7 +2208,7 @@ function restoreCrews(V) {
   for (const mini of [false, true]) for (const p of state.pots.filter(p => (goalOf(p.id) > 0) === mini && cut[p.id] > 0)) {
     const done = goalOf(p.id) > 0 && projectBal(p.id) >= goalOf(p.id) - 0.005, give = done ? 0 : Math.min(cut[p.id], Math.max(0, room));
     if (done) { delete cut[p.id]; continue; }
-    if (give > 0) { const w = workersAt(p.id); state.workerLog.push({ t: now, pot: p.id, delta: give }); cut[p.id] -= give; room -= give; back.push({ id: p.id, name: p.name, from: w, to: w + give }); }
+    if (give > 0) { const w = workersAt(p.id); reassign(now, { [p.id]: give }); cut[p.id] -= give; room -= give; back.push({ id: p.id, name: p.name, from: w, to: w + give }); }
   }
   for (const k of Object.keys(cut)) if (!(cut[k] > 0) || (k !== 'party' && !state.pots.some(p => p.id === k))) delete cut[k];
   return { back, party };
@@ -2056,6 +2224,13 @@ function afterCheck(key) {
   const [id, date] = splitKey(key), inc = state.incomes.find(i => i.id === id); if (!inc) return null;
   const pn = periodNow(), c = pn.list.find(x => x.key === key); if (!c) return null;   // an older paycheck: nothing to fit
   const before = villagersBefore(date), V = pn.V;
+  if (state.roundOff) { roundOffTick(); state.payNews = { key, date, next: c.next, from: before, to: V, extra: !!c.bonus, cuts: [], back: [], party: null, at: Date.now(), seen: false }; return state.payNews; }
+  if (!state.shares) migrateShares();
+  if (state.shares) {   // v129: crews follow their shares; only the party plan is fitted here
+    const ch = applyShares(), plan = Number(state.partyPlan || 0), party = plan > V ? { from: plan, to: V } : null; if (party) state.partyPlan = V;
+    state.payNews = { key, date, next: c.next, from: before, to: V, extra: !!c.bonus, cuts: ch.filter(x => x.to < x.from), back: ch.filter(x => x.to > x.from), party, at: Date.now(), seen: false };
+    return state.payNews;
+  }
   const fit = partyNow() + crewWorkers() > V || Number(state.partyPlan || 0) > Math.max(0, V - crewWorkers()) ? fitCrews(V) : { cuts: [], party: null };
   const rest = fit.cuts.length || fit.party ? { back: [], party: null } : restoreCrews(V);
   state.payNews = { key, date, next: c.next, from: before, to: V, extra: !!c.bonus, cuts: fit.cuts, party: fit.party || rest.party, back: rest.back, at: Date.now(), seen: false };
@@ -2087,13 +2262,13 @@ function monthsLine(p) {
   return `<div class="muted" style="font-size:12px">${have.toLocaleString(undefined, { maximumFractionDigits: 1 })} of ${n} month${n === 1 ? '' : 's'} of bills saved · bills are ${money(b)} a month</div>`;
 }
 // A project's money: what was moved in or out, plus what its crew has built.
-const projectBal = (id, now = Date.now()) => moved(id, ymd(new Date(now))) + grown(id, 0, now);
+const projectBal = (id, now = Date.now()) => moved(id, ymd(new Date(now)), now) + grown(id, 0, now);
 // When a project's crew finished its goal: the first moment its money reached the goal while the crew
 // was working, or null if it hasn't yet.
 function goalHit(id, now = Date.now()) {
   const goal = goalOf(id); if (!(goal > 0)) return null;
   const ev = [...state.workerLog.filter(w => w.pot === id).map(w => ({ t: w.t, w: w.delta })),
-    ...state.transfers.filter(t => t.to === id || t.from === id).map(t => ({ t: dayMs(t.date), d: (t.to === id ? t.amount : 0) - (t.from === id ? t.amount : 0) }))]
+    ...state.transfers.filter(t => t.to === id || t.from === id).map(t => ({ t: t.at != null ? t.at : dayMs(t.date), d: (t.to === id ? t.amount : 0) - (t.from === id ? t.amount : 0) }))]
     .filter(e => e.t <= now).sort((a, b) => a.t - b.t);
   let bal = 0, n = 0, t = ev.length ? ev[0].t : now;
   for (const e of [...ev, { t: now, end: true }]) {
@@ -2117,7 +2292,7 @@ function finishGoals(now = Date.now()) {
     const w = workersAt(p.id, now); if (w <= 0) continue;
     const t = goalHit(p.id, now); if (t == null) continue;
     const there = workersAt(p.id, t); if (there <= 0) continue;
-    state.workerLog.push({ t: Math.round(t), pot: p.id, delta: -there });
+    reassign(t, { [p.id]: -there });   // v129: at the moment it hit (exact), carrying any part of a cent
     (state.built = state.built || {})[p.id] = { t: Math.round(t), seen: false };
     changed = true;
   }
@@ -2257,9 +2432,9 @@ function monthNumbers(m) {
 }
 // Every pot's balance, now (or at the end of month m, for a month that's over). Bills is the money held for
 // bills not paid yet; Savings is what's left over.
-function potBalances(m) {
-  const cur = today().slice(0, 7), now = m >= cur ? Date.now() : monthEndMs(m) - 1, td = ymd(new Date(now)), pp = hoardParts(now);
-  const purse = m === cur ? purseNow().purseLeft : 0;
+function potBalances(m, at) {
+  const cur = today().slice(0, 7), now = at != null ? at : m >= cur ? Date.now() : monthEndMs(m) - 1, td = ymd(new Date(now)), pp = hoardParts(now);
+  const purse = m === cur ? purseNow(now).purseLeft : 0;
   const scav = cents(pp.scav + moved('scavenger', td));
   const customs = state.pots.map(p => ({ id: p.id, name: p.name, bal: projectBal(p.id, now), note: farmNote(p.id), custom: true }));
   const savings = pp.total - purse - scav - sum(customs, p => p.bal), short = overAssigned(), nh = pp.heldList.length;
@@ -2853,7 +3028,7 @@ function renderPotsTab() {
     <span class="goalcell"><input type="number" inputmode="numeric" min="0" placeholder="${gm ? 'Months' : 'Goal'}" data-goal="${p.id}" value="${gm || state.goals[p.id] || ''}" aria-label="Goal for ${esc(p.name)}${gm ? ', in months of bills' : ''}">${canFarm(p.id) ? `<select data-goal-unit="${p.id}" aria-label="Goal for ${esc(p.name)} in dollars or months of bills"><option value="$">$</option><option value="months"${gm ? ' selected' : ''}>mo</option></select>` : ''}</span>
     ${p.custom ? `<button class="link danger" data-pot-del="${p.id}" aria-label="Delete ${esc(p.name)}">✕</button>` : '<span></span>'}</div>`; }).join('');
   renderBank();
-  const recent = state.transfers.filter(t => t.date.startsWith(month)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+  const recent = state.transfers.filter(t => t.date.startsWith(month) && !t.carry).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
   $('moveList').innerHTML = recent.length ? '<div class="muted" style="margin-top:10px">Moves this month</div>' + recent.map(t => `
     <div class="row spread muted" style="padding:2px 0"><span>${t.date.slice(5)} · ${esc(potName(t.from))} → ${esc(potName(t.to))}</span>
     <span class="row"><span class="num">${money(t.amount)}</span><button class="link danger" data-move-del="${t.id}" aria-label="Undo">Undo</button></span></div>`).join('') : '';
@@ -3049,8 +3224,8 @@ function doSend() {
 }
 // Workers change farms the moment they arrive, which may have been while the app was closed.
 function moveWorkers(from, to, n, t) {
-  if (from !== 'spend') state.workerLog.push({ t, pot: from, delta: -n });
-  if (to !== 'spend') state.workerLog.push({ t, pot: to, delta: n });
+  const d = {}; if (from !== 'spend') d[from] = -n; if (to !== 'spend') d[to] = (d[to] || 0) + n;
+  reassign(t, d);
 }
 function removeFromPost(id) {
   const side = sideOf(id); if (!side) return;
@@ -4661,8 +4836,11 @@ function doSplit() {
 // stockhold and every project not at its goal yet (list order: Savings, stockholds, projects). A project never goes past
 // its goal; what it can't take is shared by the others. Odd cents go one each to the first places. c is in cents.
 function changeSplit(c, pots = potBalances(month)) {
-  const order = [pots.find(p => p.id === 'savings'), ...pots.filter(p => p.custom && !isMini(p)), ...pots.filter(p => isMini(p))].filter(Boolean);
-  const R = order.map(p => { const g = isMini(p) ? goalOf(p.id) : 0; return { id: p.id, name: p.name, room: g > 0 ? Math.max(0, Math.floor((g - p.bal) * 100 + 1e-6)) : Infinity, got: 0 }; }).filter(r => r.room > 0);
+  const all = [pots.find(p => p.id === 'savings'), ...pots.filter(p => p.custom && !isMini(p)), ...pots.filter(p => isMini(p))].filter(Boolean);
+  // v129: only where villagers are working now (Savings: when anyone is unassigned); nobody anywhere: all to Savings
+  const busy = all.filter(p => p.id === 'savings' ? savers() > 0 : workersAt(p.id) > 0);
+  const mk = list => list.map(p => { const g = isMini(p) ? goalOf(p.id) : 0; return { id: p.id, name: p.name, room: g > 0 ? Math.max(0, Math.floor((g - p.bal) * 100 + 1e-6)) : Infinity, got: 0 }; }).filter(r => r.room > 0);
+  let R = mk(busy); if (!R.length) R = mk(all.filter(p => p.id === 'savings'));
   let left = Math.round(c);
   while (left > 0) {
     const open = R.filter(r => r.got < r.room); if (!open.length) break;
@@ -4679,7 +4857,8 @@ function collectChange() {
   if (c < 1) return null;
   const parts = changeSplit(c, pots), gid = uid(), date = month === today().slice(0, 7) ? today() : month + '-01';
   if (!parts.length) return null;
-  for (const r of parts) state.transfers.push({ id: uid(), date, from: 'scavenger', to: r.id, amount: r.got / 100, collect: gid });
+  const at = date === today() ? Date.now() : undefined;
+  for (const r of parts) state.transfers.push({ id: uid(), date, ...(at ? { at } : {}), from: 'scavenger', to: r.id, amount: r.got / 100, collect: gid });
   save(); render();
   const ct = n => n < 100 ? n + '¢' : moneyExact(n / 100), lo = Math.min(...parts.map(r => r.got)), hi = Math.max(...parts.map(r => r.got));
   const msg = parts.length === 1 ? `Collected ${moneyExact(c / 100)} into ${parts[0].name}` : `Collected ${moneyExact(c / 100)} · ${lo === hi ? ct(lo) : (hi < 100 ? `${lo}–${hi}¢` : `${ct(lo)}–${ct(hi)}`)} to each of ${parts.length}`;
@@ -4690,7 +4869,7 @@ function collectChange() {
 function renderScavenger() {
   const bal = potBalances(month).find(p => p.id === 'scavenger').bal;
   $('scavTotal').textContent = moneyExact(bal);
-  $('scavLine').textContent = bal >= 0.005 ? `${moneyExact(bal)} ready to collect, split evenly across Savings, your pots and projects` : 'Nothing to collect yet';
+  $('scavLine').textContent = bal >= 0.005 ? `${moneyExact(bal)} ready to collect, split evenly across the places villagers are working` : 'Nothing to collect yet';
   $('scavCollectBtn').disabled = !(bal >= 0.005);
   const finds = state.transactions.filter(t => scavCut(t) && t.date <= monthEnd(month)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
   $('scavFinds').innerHTML = finds.map(t => `<div class="row spread" style="padding:3px 0"><span class="grow muted">${t.date.slice(5)} · ${esc(t.description || 'Purchase')}</span>
@@ -5809,6 +5988,17 @@ const Town = (() => {
     return { f: clamp((now - t0) / (t1 - t0), 0, 1), when: `due ${shortDate(d)}` };
   }
   function workersHTML(p) {
+    if (state.shares) {   // v129: a share of the villagers, in 5% steps
+      const here = p.id, F = sharesFree(), w = here === 'savings' ? savers() : workersAt(here), built = here !== 'savings' && shareBuilt(here);
+      const mo = n => money(Math.floor(n * WORKER_DAY * 365 / 12));
+      if (here === 'savings') return `<div class="tn-workers"><h3 class="tn-h3" style="margin:0">Share of villagers</h3>
+        <p class="sh-line st"><strong>${savingsPct()}% · the rest</strong> · ${w} villager${w === 1 ? '' : 's'} · ${mo(w)} a month</p>
+        <p class="sh-line" style="font-size:13px">Each pot and project takes a share of the ${F} villagers not with the party, in 5% steps. Savings gets the rest, and any villager a share doesn't make whole.</p></div>`;
+      return `<div class="tn-workers"><h3 class="tn-h3" style="margin:0">Share of villagers</h3>
+        <div class="sh-share"><button data-share="-5" aria-label="5% less for ${esc(p.name)}"${potShare(here) ? '' : ' disabled'}>−5%</button><b>${potShare(here)}%</b><button data-share="5" aria-label="5% more for ${esc(p.name)}"${built || sharesTotal() >= 100 ? ' disabled' : ''}>+5%</button></div>
+        <p class="sh-line st"><strong>${w} villager${w === 1 ? '' : 's'}</strong> of ${F} · ${mo(w)} a month · Savings keeps ${savingsPct()}%</p>
+        ${built ? '<p class="sh-line" style="font-size:13px">Built! Its share goes back to Savings until you raise the goal.</p>' : ''}</div>`;
+    }
     const here = p.id, w = here === 'savings' ? savers() : workersAt(here), goal = goalOf(here), need = goal - p.bal;
     const when = goal && need > 0 && w > 0 ? `goal around ${new Date(Date.now() + need / (w * WORKER_DAY) * DAY_MS).toLocaleDateString(undefined, need / w > 300 ? { month: 'short', year: 'numeric' } : { month: 'short', day: 'numeric' })}` : goal && need <= 0 ? 'goal reached 🎉' : goal ? 'paused until someone works here' : '';
     const others = farmPots().filter(id => id !== here && canFarm(id)).map(id => ({ id, name: id === 'savings' ? 'Savings' : potName(id), n: id === 'savings' ? savers() : workersAt(id), full: goalOf(id) > 0 && projectBal(id) >= goalOf(id) - 0.005 }));
@@ -5998,6 +6188,7 @@ const Town = (() => {
     if (b.closest('.tn-bill') && (b.dataset.paid || b.dataset.unslay || b.dataset.before || b.dataset.editDue || b.dataset.dueDone)) { await billClick(e); renderSheet(true); return; }
     if (b.dataset.potDel) { await deletePot(b.dataset.potDel); return; }
     if (act === 'wstep') { wStep = wStep === 5 ? 1 : 5; renderSheet(); return; }
+    if (b.dataset.share) { setShare(id, Number(b.dataset.share)); renderSheet(true); return; }
     if (b.dataset.wfrom) { moveWorker(b.dataset.wfrom, id, wStep); return; }
     if (b.dataset.wto) { moveWorker(id, b.dataset.wto, wStep); return; }
     if (act === 'kind-pot' || act === 'kind-proj') { const nm = el('townAddName') ? el('townAddName').value : ''; selected = act === 'kind-pot' ? 'newpot' : 'newproj'; renderSheet(); if (el('townAddName')) el('townAddName').value = nm; return; }
@@ -6336,6 +6527,8 @@ const VL = (() => {
   }
   requestAnimationFrame(frame);
 
+  // v129: a pot's or project's share with − / + beside its row (Savings has the rest, so no buttons there)
+  const shareWrap = (id, name, html) => !state.shares || id === 'savings' ? html : `<div class="vl-bw vl-shw">${html}<span class="vl-shr"><button class="vl-sb" data-share-id="${esc(id)}" data-d="-5" aria-label="5% less for ${esc(name)}"${potShare(id) ? '' : ' disabled'}>−</button><b>${potShare(id)}%</b><button class="vl-sb" data-share-id="${esc(id)}" data-d="5" aria-label="5% more for ${esc(name)}"${sharesTotal() >= 100 ? ' disabled' : ''}>+</button></span></div>`;
   /* ---- the Town list ---- */
   function townHTML(now) {
     const D = Town.data; if (!D) return '';
@@ -6355,6 +6548,9 @@ const VL = (() => {
     }
     for (const w of e.pn.waiting) h += `<div><button class="primary vl-payin" data-pay-open="${esc(w.key)}">💰 Enter your ${shortDate(w.date)} paycheck</button></div>`;
     h += `<div class="vl-acts"><button class="vl-add" data-vl-open="farm">${D.incomes.length ? 'Paychecks' : '+ Set up pay'}</button></div></div>`;
+    // v129: Round everything off, or how it's going
+    h += state.roundOff ? `<div class="vl-ro" id="vlRo"><span data-t="ro"></span><button class="vl-pay undo" data-ro="stop">Stop</button></div>`
+      : `<div class="vl-acts vl-roa"><button class="vl-add" data-ro="go" id="vlRoGo">⟳ Round everything off</button></div>`;
     // the party
     h += `<h3 class="vl-h">Party <span data-t="purse-h"></span></h3>`
       + row({ id: 'spend', name: 'Party purse', open: 'party' }, np ? `👥 ${plural(np, 'villager')} in the party · <span data-t="spent"></span>` : 'Nobody is out with the party this week', 'purse');
@@ -6362,8 +6558,9 @@ const VL = (() => {
     h += `<h3 class="vl-h">Savings &amp; pots <span data-t="stock-h"></span></h3>`;
     for (const p of D.stock) {
       const w = p.id === 'savings' ? savers() : workersAt(p.id);
-      const sub = p.id === 'savings' ? `👷 ${plural(w, 'villager')}${np ? ` + the party's ${np}` : ''} · <span data-t="r-savings"></span>` : `👷 ${w ? `${plural(w, 'villager')} · +${money(w * WORKER_DAY)} a day` : 'nobody working here'}`;
-      h += row({ id: p.id, name: p.name, open: p.id, goal: p.goal }, sub, 'step');
+      const sh = state.shares ? (p.id === 'savings' ? `the rest (${savingsPct()}%) · ` : `${potShare(p.id)}% · `) : '';
+      const sub = p.id === 'savings' ? `👷 ${sh}${plural(w, 'villager')}${np ? ` + the party's ${np}` : ''} · <span data-t="r-savings"></span>` : `👷 ${sh}${w ? `${plural(w, 'villager')} · +${money(w * WORKER_DAY)} a day` : 'nobody working here'}`;
+      h += shareWrap(p.id, p.name, row({ id: p.id, name: p.name, open: p.id, goal: p.goal }, sub, 'step'));
     }
     h += `<div class="vl-bw">` + row({ id: 'scavenger', name: 'Spare change', open: 'scavenger', exact: true }, 'cents from rounding up · split evenly when collected', 'cents')
       + `<button class="vl-pay" data-collect="1" id="vlCollect" aria-label="Collect spare change into Savings, your pots and projects">Collect</button></div>`;
@@ -6372,7 +6569,8 @@ const VL = (() => {
     h += `<h3 class="vl-h">Projects <span data-t="proj-h"></span></h3>`;
     for (const p of D.projects) {
       const done = p.bal >= p.goal - 0.005;
-      h += row({ id: p.id, name: p.name, open: p.id, goal: p.goal, proj: true }, done ? 'Built 🎉' : `👷 ${p.crew ? `${plural(p.crew, 'villager')} building · +${money(p.crew * WORKER_DAY)} a day` : 'paused, nobody building'}`, 'step');
+      const sh = state.shares && !done ? `${potShare(p.id)}% · ` : '';
+      h += shareWrap(done ? 'savings' : p.id, p.name, row({ id: p.id, name: p.name, open: p.id, goal: p.goal, proj: true }, done ? 'Built 🎉' : `👷 ${sh}${p.crew ? `${plural(p.crew, 'villager')} building · +${money(p.crew * WORKER_DAY)} a day` : 'paused, nobody building'}`, 'step'));
     }
     if (!D.projects.length) h += `<p class="vl-empty">No projects yet. A project is something you save up for, with a goal.</p>`;
     h += `<div class="vl-acts"><button class="vl-add" data-vl-open="newproj">+ Add project</button></div>`;
@@ -6408,6 +6606,7 @@ const VL = (() => {
     v['t:r-savings'] = `+${money(Math.max(0, e.V - crews) * WORKER_DAY)} a day`;
     if (D) { v['t:stock-h'] = money(sum(D.stock, p => bal(p.id))); v['t:proj-h'] = D.projects.length ? `${money(sum(D.projects, p => bal(p.id)))} of ${money(sum(D.projects, p => p.goal))}` : ''; }
     v['t:bills-h'] = `${money(bal('bills'))} held`;
+    if (state.roundOff) v['t:ro'] = roundOffLine(now);
     const cb = $('vlCollect'); if (cb) cb.disabled = !(bal('scavenger') >= 0.005);
     for (const o of rows) {
       if (o.id === 'spend') { v['t:v-spend'] = money(pu.purseLeft); v['w:spend'] = pu.P > 0 ? pu.purseLeft / pu.P : 0; v['t:e-spend'] = pu.P ? `of ${money(pu.P)}` : ''; continue; }
@@ -6525,6 +6724,8 @@ const VL = (() => {
   $('townList').addEventListener('click', async e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.collect) { collectChange(); return; }
+    if (b.dataset.ro) { if (b.dataset.ro === 'stop') roundOffStop(); else roundOffStart(); return; }
+    if (b.dataset.shareId) { setShare(b.dataset.shareId, Number(b.dataset.d)); return; }
     if (b.classList.contains('vl-pay')) { await billClick(e); return; }
     const o = b.dataset.vlOpen; if (!o) return;
     if (o === 'party') { showView('budget', -1); render(); return; }
@@ -6539,6 +6740,7 @@ const VL = (() => {
   // four times a second while a list is on screen: the numbers move, the bars fill, and the total pings on each $1
   setInterval(() => {
     if (document.hidden) { lastWhole = null; seen = {}; return; }
+    if (state.roundOff && Date.now() >= roNext) { window.render(); return; }   // v129: a place reached its dollar
     const now = Date.now();
     if (townOn() && $('townList').vlHtml) { fill($('townList'), townVals(now)); moveBars(now); } else { lastWhole = null; seen = {}; live = {}; }
     if (homeOn() && $('homeList').vlHtml) fill($('homeList'), homeVals(now));
@@ -7382,11 +7584,13 @@ $('storeList').addEventListener('change', e => { const id = e.target.dataset.cov
 // One worker on (d = 1) or off (d = -1) a pot. The Town page's crew buttons use it too.
 function setCrew(id, d) {
   if (id === 'savings' || !canFarm(id)) return;
+  if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return; }
+  if (state.shares) { setShare(id, d > 0 ? 5 : -5); return; }   // v129: by share
   const goal = goalOf(id);
   if (d > 0 && goal > 0 && projectBal(id) >= goal - 0.005) { toast('That one is built. Raise its goal to keep building.'); return; }
   if (d > 0 && savers() < 1) { toast(`Nobody is free. Your pay covers ${maxWorkers()} villagers, and they're all with the party or on a project.`); return; }
   if (d < 0 && workersAt(id) < 1) return;
-  state.workerLog.push({ t: Date.now(), pot: id, delta: d }); save(); render();
+  reassign(Date.now(), { [id]: d }); save(); render();
 }
 $('storeList').addEventListener('click', e => { const b = e.target.closest('[data-wk]'); if (b) setCrew(b.dataset.wk, Number(b.dataset.d)); });
 // Move n workers from one place to another (Savings, a stockhold or a project), one at a time, stopping at the
@@ -7396,6 +7600,8 @@ $('storeList').addEventListener('click', e => { const b = e.target.closest('[dat
 function moveWorker(from, to, n = 1) {
   const ok = id => id === 'savings' || (canFarm(id) && state.pots.some(p => p.id === id));
   if (from === to || !ok(from) || !ok(to)) return 0;
+  if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return 0; }
+  if (state.shares) { if (from !== 'savings') setShare(from, -5); if (to !== 'savings') setShare(to, 5); return 1; }   // v129: by share
   let moved = 0;
   for (let k = 0; k < n; k++) {
     if (from === 'savings') { const w = workersAt(to); setCrew(to, 1); if (workersAt(to) === w) break; }
@@ -7403,7 +7609,7 @@ function moveWorker(from, to, n = 1) {
     else {
       if (workersAt(from) < 1) break;
       const goal = goalOf(to); if (goal > 0 && projectBal(to) >= goal - 0.005) { toast('That one is built. Raise its goal to keep building.'); break; }
-      const t = Date.now(); state.workerLog.push({ t, pot: from, delta: -1 }, { t, pot: to, delta: 1 }); save(); render();
+      reassign(Date.now(), { [from]: -1, [to]: 1 }); save(); render();
     }
     moved++;
   }
@@ -7923,6 +8129,8 @@ $('setEvery').onchange = e => { const i = state.incomes[0]; if (!i) return; i.ev
 $('setAccounts').onchange = e => { const a = e.target.value.split(',').map(x => x.trim()).filter(Boolean); if (a.length) state.accounts = a; save(); render(); };
 $('setCurrency').onchange = e => { state.currency = e.target.value || '$'; save(); render(); };
 $('setTheme').onchange = e => { state.theme = e.target.value; save(); render(); };
+$('setCarry').onchange = e => { state.carryCents = e.target.checked; save(); render(); };
+$('setRound').onclick = () => state.roundOff ? roundOffStop() : roundOffStart();
 async function exportBackup() {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), name = `budget-backup-${today()}.json`;
   const done = () => { state.lastBackup = Date.now(); save(); render(); };
