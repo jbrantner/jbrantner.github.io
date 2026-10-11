@@ -740,6 +740,8 @@ div.vl-row { cursor: default; }
 .vl-r3 > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vl-goal { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .vl-fill.thin { height: 3px; }
+.vl-etaL { margin-top: 3px; }
+.vl-etaL > span:last-child { color: color-mix(in srgb, var(--accent) 75%, var(--muted)); }
 .vl-fill.thin > span { background: color-mix(in srgb, var(--accent) 70%, var(--muted)); }
 .vl-hero .vl-stepw { max-width: 280px; margin: 12px auto 4px; }
 .vl-hero .vl-stepw .vl-fill { margin: 0; max-width: none; }
@@ -1378,7 +1380,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 126;
+const APP_VERSION = 127;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -6287,17 +6289,28 @@ const VL = (() => {
   // the engine's balance and rate at a moment (read 4x a second); frames move the bar on from there
   function snap(id, b, r, now) {
     const st = stepFor(r), L = live[id];
-    if (L && L.step === st) { L.b = b; L.r = r; L.t = now; }
+    if (L && L.step === st) {
+      const was = L.b + L.r * Math.max(0, now - L.t);
+      if (b - was > st * 0.5 && L.el) { const n = (b - was) / st; L.anim = { from: barAt(L, now), start: now, dur: Math.min(4500, Math.max(700, Math.min(n, 40) * 220)) }; }
+      L.b = b; L.r = r; L.t = now;
+    }
     else live[id] = { b, r, t: now, step: st, k: st ? Math.floor(b / st + 1e-9) : 0, el: null };
   }
   function tick(el, st) {
     ticks++;
     const w = el.closest('.vl-stepw'); if (!w) return;
     w.classList.remove('tk'); void w.offsetWidth; w.classList.add('tk');
+    const t = Date.now(); if (t - (w.vlLast || 0) < 180) return; w.vlLast = t;
     const m = document.createElement('i'); m.className = 'vl-tkm'; m.textContent = '+' + stepName(st); w.appendChild(m); setTimeout(() => m.remove(), 950);
   }
   // every frame (and with each 4x-a-second read too, in case frames are held back)
   function frame() { requestAnimationFrame(frame); if (!document.hidden && townOn()) moveBars(Date.now()); }
+  // where the bar is, in steps: the real balance, or on its way there after a lump arrived
+  function barAt(L, now) {
+    const q = (L.b + L.r * Math.max(0, now - L.t)) / (L.step || 1), A = L.anim; if (!A) return q;
+    const p = (now - A.start) / A.dur; if (p >= 1 || lessMotion()) { L.anim = null; return q; }
+    return A.from + (q - A.from) * (1 - Math.pow(1 - p, 2));
+  }
   function moveBars(now) {
     const box = $('townList');
     for (const [id, L] of Object.entries(live)) {
@@ -6305,7 +6318,7 @@ const VL = (() => {
       const el = L.el; if (!el) continue;
       const w = el.parentNode.parentNode; if (w.hidden !== !L.step) w.hidden = !L.step;
       if (!L.step) continue;
-      const q = (L.b + L.r * Math.max(0, now - L.t)) / L.step, k = Math.floor(q + 1e-9);
+      const q = barAt(L, now), k = Math.floor(q + 1e-9);
       el.style.width = (c01(q - k) * 100).toFixed(2) + '%';
       if (k > L.k && L.step < 1) tick(el, L.step);   // a whole dollar has its own coin (and the total its ping)
       L.k = k;
@@ -6322,15 +6335,13 @@ const VL = (() => {
       + `<span class="vl-r1"><b>${esc(o.name)}</b><span class="num" data-t="v-${id}"></span></span><span class="vl-r2"><span>${sub}</span><span data-t="e-${id}"></span></span>`
       + (kind === 'purse' ? `<span class="vl-fill" aria-hidden="true"><span data-w="${id}"></span></span>` : '')
       + (kind === 'step' ? stepBar(o.id) + `<span class="vl-r3"><span data-t="sl-${id}"></span><span data-t="n1-${id}"></span></span>`
-        + (o.goal > 0 ? `<span class="vl-goal"><span class="vl-fill thin" aria-hidden="true"><span data-w="g-${id}"></span></span><span data-t="g-${id}"></span></span>` : '') : '')
+        + (o.goal > 0 ? `<span class="vl-goal"><span class="vl-fill thin" aria-hidden="true"><span data-w="g-${id}"></span></span><span data-t="g-${id}"></span></span><span class="vl-r3 vl-etaL"><span data-t="eta-${id}"></span><span data-t="eta1-${id}"></span></span>` : '') : '')
       + `</button>`; };
     // the earned total
-    let h = `<div class="vl-hero" id="vlHero"><div class="vl-k">Earned this pay period</div><div class="vl-total num" id="vlTotal" data-t="total"></div>`
-      + `<div class="vl-sub" data-t="rate"></div>` + stepBar('total') + `<div class="vl-steplbl" data-t="sl-total"></div>`;
-    if (e.pn.list.length) {
-      const since = e.pn.list.map(c => c.start ? startDay() : c.date).filter(Boolean).sort()[0], until = Math.max(...e.pn.list.map(c => c.t1));
-      h += `<div class="vl-when">${e.pn.list.some(c => c.start) ? 'since you started' : 'since payday'} ${since ? shortDate(since) : ''} · <span data-t="more"></span> by ${shortDate(ymd(new Date(until)))}</div>`;
-    } else if (!D.incomes.length) h += `<div class="vl-when">No pay set up yet.</div>`;
+    let h = `<div class="vl-hero vl-hero-s" id="vlHero"><div class="vl-sub" data-t="rate"></div>`;
+    if (!e.pn.list.length) {
+      if (!D.incomes.length) h += `<div class="vl-when">No pay set up yet.</div>`;
+    }
     for (const w of e.pn.waiting) h += `<div><button class="primary vl-payin" data-pay-open="${esc(w.key)}">💰 Enter your ${shortDate(w.date)} paycheck</button></div>`;
     h += `<div class="vl-acts"><button class="vl-add" data-vl-open="farm">${D.incomes.length ? 'Paychecks' : '+ Set up pay'}</button></div></div>`;
     // the party
@@ -6401,6 +6412,14 @@ const VL = (() => {
       if (o.goal > 0) {
         const done = b >= o.goal - 0.005;
         v['w:g-' + o.id] = b / o.goal; v['t:g-' + o.id] = done ? `<span class="ok">${o.proj ? 'built ✓' : 'goal reached ✓'}</span>` : `${Math.floor(c01(b / o.goal) * 100)}% of ${money(o.goal)}`;
+        // v127: when it would be done with today's crew, and with one more villager (each brings $1 a day)
+        v['t:eta-' + o.id] = ''; v['t:eta1-' + o.id] = '';
+        if (!done) {
+          const w = o.id === 'savings' ? Math.max(0, e.V - crews) : Math.max(0, workersAt(o.id)), left = o.goal - b;
+          const fin = n => { const d = left / (n * WORKER_DAY); return { when: new Date(now + d * DAY_MS).toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(d > 300 ? { year: 'numeric' } : {}) }), len: d < 14 ? plural(Math.ceil(d), 'day') : d < 120 ? plural(Math.round(d / 7), 'week') : plural(Math.round(d / 30.4), 'month') }; };
+          if (w > 0) { const a = fin(w), c = fin(w + 1); v['t:eta-' + o.id] = `done ~${a.when} · ${a.len} at ${plural(w, 'villager')}`; if (c.when !== a.when) v['t:eta1-' + o.id] = `with ${w + 1}: ${c.when}`; }
+          else { const c = fin(1); v['t:eta-' + o.id] = `with 1 villager: done ~${c.when} · ${c.len}`; }
+        }
       }
       // a coin pops on the row each time it lands another whole dollar (a move of money doesn't count)
       const w = Math.floor(b + 1e-9);
@@ -6520,7 +6539,7 @@ const VL = (() => {
   }
   function render() { renderTown(); renderHome(); }
   return { render, shown, kp, get town() { return town; }, get home() { return home; }, collected(list) {
-    seen = {}; live = {};
+    seen = {};
     for (const [id, t] of list) { const r = $('townList').querySelector(`[data-vl-row="${CSS.escape(id)}"]`); if (!r) continue;
       const c = document.createElement('span'); c.className = 'vl-coin'; c.textContent = t; r.appendChild(c); setTimeout(() => c.remove(), 1400); }
   }, get pings() { return pings; }, get ticks() { return ticks; }, stepFor: perDay => stepFor(perDay / DAY_MS), stepOf: id => live[id] ? live[id].step : null, get coins() { return coins; }, get sound() { return sound; } };
