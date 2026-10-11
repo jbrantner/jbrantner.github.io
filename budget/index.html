@@ -935,6 +935,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 .spend-fab:active { transform: scale(.95); }
 .hl-go { display: block; width: 100%; margin-top: 14px; padding: 11px 12px; border-radius: 12px; font-weight: 700; font-size: 15px; background: #0f766e; border: 1px solid #5eead4; color: #fff; }
 .hl-go.over { background: var(--bad); border-color: var(--bad); }
+.clock-bar { margin: 4px 0 10px; padding: 10px 14px; border: 1px solid var(--warn); border-radius: 14px; background: var(--card); color: var(--text); font-size: 13.5px; line-height: 1.4; }
 /* v136: no-spend dots, the weekly bank check, the payday parade, the Savings milestone burst */
 .hd-dots, .hd-days { display: grid; grid-template-columns: repeat(7, 24px); gap: 10px; justify-content: center; }
 .hd-dots { margin: 14px auto 0; }
@@ -1600,7 +1601,7 @@ html.full.hl-on:not(.kp-on) .spend-fab { display: flex; position: fixed; right: 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 138;
+const APP_VERSION = 139;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -1689,8 +1690,23 @@ function load() {
   return freshState();
 }
 let state = load();
+/* v137: the clock guard. The latest moment the app has seen is kept (state.seenAt, and the newest villager move). If the
+   phone's clock is set back past it, things saved "later" would look missing until the clock catches up, and a move
+   made now would land before them. So while it's behind, a banner says so and villager moves wait. */
+const CLOCK_SLACK = 10000;
+const lastLogT = () => (state.workerLog || []).reduce((m, w) => Math.max(m, Number(w.t) || 0), 0);
+const clockHigh = () => Math.max(Number(state.seenAt) || 0, lastLogT());
+const clockBack = (now = Date.now()) => now + CLOCK_SLACK < clockHigh();
+const stampNow = () => Math.max(Date.now(), lastLogT());   // a move never lands before the last one (same moment at the latest: never in the future, so it shows at once)
+function clockHold() {
+  if (!clockBack()) return false;
+  toast(`Your phone's clock went back. Villager moves wait until it catches up (${clockWait()}).`); return true;
+}
+function clockWait(now = Date.now()) { const m = Math.ceil((clockHigh() - now) / 60000); return m <= 1 ? 'about a minute' : m < 120 ? `about ${m} min` : `about ${Math.round(m / 60)} hours`; }
+const clockBanner = () => clockBack() ? `<div class="clock-bar" role="status">⏰ Your phone's clock went back. Villager moves are paused until it catches up (${clockWait()}). Some numbers may look off until then.</div>` : '';
 function save() {
   booksGen++; if (typeof needMemo !== 'undefined') needMemo.clear();
+  if (!clockBack()) state.seenAt = Math.max(Number(state.seenAt) || 0, Date.now());   // v137
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('Could not save on this device'); }
 }
 
@@ -2306,15 +2322,16 @@ function donorList(to) {
   return farmPots().filter(id => id !== to && canFarm(id)).map(id => ({ id, name: id === 'savings' ? 'Savings' : potName(id), n: id === 'savings' ? savers() : Math.max(0, workersAt(id)), lock: isLocked(id) }));
 }
 const crewBuilt = id => { const g = goalOf(id); return g > 0 && projectBal(id) >= g - 0.005; };
-function canAdd(id) { return !state.roundOff && !isLocked(id) && !crewBuilt(id) && donorList(id).some(x => !x.lock && x.n > 0); }
+function canAdd(id) { return !state.roundOff && !clockBack() && !isLocked(id) && !crewBuilt(id) && donorList(id).some(x => !x.lock && x.n > 0); }
 // one villager from `from` to `to`
 function addVillager(to, from) {
   if (to === 'savings' || !canFarm(to) || !state.pots.some(p => p.id === to) || !from || from === to) return false;
+  if (clockHold()) return false;   // v137
   if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return false; }
   if (isLocked(to) || isLocked(from)) { toast(`${potName(isLocked(to) ? to : from)} is locked. Unlock it first.`); return false; }
   if (crewBuilt(to)) { toast('That one is built. Raise its goal to keep building.'); return false; }
   const d = donorList(to).find(x => x.id === from); if (!d || d.n < 1) { toast(`Nobody left at ${d ? d.name : 'that place'}`); return false; }
-  reassign(Date.now(), from === 'savings' ? { [to]: 1 } : { [from]: -1, [to]: 1 }); save(); render();
+  reassign(stampNow(), from === 'savings' ? { [to]: 1 } : { [from]: -1, [to]: 1 }); save(); render();
   toast(`1 villager from ${d.name} → ${potName(to)}`);
   return true;
 }
@@ -2367,6 +2384,7 @@ function roRestore(t) {
 // app was closed); a paycheck or the party changing how many are free keeps everyone free on the current place.
 function roundOffTick(now = Date.now()) {
   const R = state.roundOff; if (!R) return false;
+  if (clockBack(now)) return false;   // v137: Round off waits for the clock too
   let changed = false, t = now;
   for (let k = 0; k < 60 && state.roundOff; k++) {
     if (R.cur && R.cur !== 'savings' && (!state.pots.some(p => p.id === R.cur) || isLocked(R.cur))) R.cur = null;
@@ -2394,6 +2412,7 @@ function roundOffTick(now = Date.now()) {
 }
 function roundOffStart() {
   if (state.roundOff) return false;
+  if (clockHold()) return false;   // v137
   const now = Date.now();
   if (payWaiting()) { toast('Enter your paycheck first, so villagers are at work'); return false; }
   if (!(roFree(now) > 0)) { toast('Nobody is free to round off right now'); return false; }
@@ -2419,7 +2438,7 @@ function roundOffLine(now = Date.now()) {
 }
 const subDollar = b => { const f = b - Math.floor(b + 1e-9); return f > 0 ? f : 0; };
 function fitCrews(V) {
-  const now = Date.now(), cut = state.cutCrews = state.cutCrews || {}, cuts = [];
+  const now = stampNow(), cut = state.cutCrews = state.cutCrews || {}, cuts = [];
   let over = partyNow() + crewWorkers() - V;
   for (const mini of [true, false]) {
     if (over <= 0) break;
@@ -2436,7 +2455,7 @@ function fitCrews(V) {
   return { cuts, party };
 }
 function restoreCrews(V) {
-  const cut = state.cutCrews || {}, now = Date.now(), back = []; let party = null;
+  const cut = state.cutCrews || {}, now = stampNow(), back = []; let party = null;
   let room = V - Math.max(partyNow(), Number(state.partyPlan || 0)) - crewWorkers();
   if (cut.party > 0 && V - crewWorkers() > Number(state.partyPlan || 0)) {   // the party first, from next Sunday
     const plan = Number(state.partyPlan || 0), to = Math.min(plan + cut.party, V - crewWorkers()), give = to - plan;
@@ -5292,6 +5311,7 @@ function changeSplit(c, pots = potBalances(month)) {
 // Each share is an ordinary money move out of Spare change (tagged with the collect's id, so Undo takes them all back).
 // Moving money between your own places never changes what you have: only where it sits.
 function collectChange() {
+  if (clockHold()) return null;   // v137
   const pots = potBalances(month), sc = pots.find(p => p.id === 'scavenger'), c = Math.round((sc ? sc.bal : 0) * 100);
   if (c < 1) return null;
   const parts = changeSplit(c, pots), gid = uid(), date = month === today().slice(0, 7) ? today() : month + '-01';
@@ -7145,7 +7165,7 @@ const VL = (() => {
   }
   function renderTown() {
     const box = $('townList'); if (!box || town !== 'list') return;
-    const now = Date.now(), html = townHTML(now); if (!html) return;
+    const now = Date.now(), html0 = townHTML(now); if (!html0) return; const html = clockBanner() + html0;   // v137
     paint(box, html); fill(box, townVals(now, true));
   }
   /* ---- the Budget page as a list: the purse, each villager's pouch, the week's spends ---- */
@@ -7153,7 +7173,7 @@ const VL = (() => {
   function homeHTML(now) {
     const pu = purseNow(now), n = partySize(), d = Math.max(0, Math.min(6, Math.floor((now - weekStart(new Date(now))) / DAY_MS))), days = 7 - d, t = todayLeft(pu, new Date(now)), L = pu.purseLeft;
     const over = Math.ceil(-L - 1e-9), go = !n && over <= 0 ? '⚔️ Set out on an adventure' : over > 0 ? `Overdrawn ${money(over)} · Send postage` : '';
-    let h = `<div class="vl-bar"><div class="vl-seg" role="group" aria-label="How to show the party"><button data-hview="scene" aria-pressed="false">🌲 Scene</button><button data-hview="list" aria-pressed="true">☰ List</button></div></div>`;
+    let h = clockBanner() + `<div class="vl-bar"><div class="vl-seg" role="group" aria-label="How to show the party"><button data-hview="scene" aria-pressed="false">🌲 Scene</button><button data-hview="list" aria-pressed="true">☰ List</button></div></div>`;
     h += `<div class="vl-hero"><div class="vl-k">Left this week</div><div class="vl-total num${L < 0 ? ' bad' : ''}">${L >= 0 ? money(L) : '−' + money(over)}</div>`
       + `<div class="vl-sub">${pu.carried > 0.005 ? carriedLine(pu, over > 0 ? '' : ' · <button class="link" data-hl="go">Send postage</button>') : pu.P || pu.spent ? `of ${money(pu.P)} · ${money(pu.spent)} spent · ${n ? `${plural(n, 'villager')} out` : 'the party is home'}` : 'No purse this week yet. Send the party out to get one.'}</div>`
       + (pu.P > 0 ? `<span class="vl-fill" role="img" aria-label="Purse left, with a mark where an even pace would be"><span data-w="purse"></span><i class="vl-pace" id="hlPace"></i></span>` : '')
@@ -8111,6 +8131,7 @@ function setCover(id, on) { const set = new Set(coverPots()); on ? set.add(id) :
 $('storeList').addEventListener('change', e => { const id = e.target.dataset.cover; if (id) setCover(id, e.target.checked); });
 // One worker on (d = 1) or off (d = -1) a pot. The Town page's crew buttons use it too.
 function setCrew(id, d) {
+  if (clockHold()) return;   // v137
   if (id === 'savings' || !canFarm(id)) return;
   if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return; }
   if (isLocked(id)) { toast(`${potName(id)} is locked. Unlock it first.`); return; }
@@ -8118,7 +8139,7 @@ function setCrew(id, d) {
   if (d > 0 && goal > 0 && projectBal(id) >= goal - 0.005) { toast('That one is built. Raise its goal to keep building.'); return; }
   if (d > 0 && savers() < 1) { toast(`Nobody is free. Your pay covers ${maxWorkers()} villagers, and they're all with the party or on a project.`); return; }
   if (d < 0 && workersAt(id) < 1) return;
-  reassign(Date.now(), { [id]: d }); save(); render();
+  reassign(stampNow(), { [id]: d }); save(); render();
 }
 $('storeList').addEventListener('click', e => { const b = e.target.closest('[data-wk]'); if (b) setCrew(b.dataset.wk, Number(b.dataset.d)); });
 // Move n workers from one place to another (Savings, a stockhold or a project), one at a time, stopping at the
@@ -8128,6 +8149,7 @@ $('storeList').addEventListener('click', e => { const b = e.target.closest('[dat
 function moveWorker(from, to, n = 1) {
   const ok = id => id === 'savings' || (canFarm(id) && state.pots.some(p => p.id === id));
   if (from === to || !ok(from) || !ok(to)) return 0;
+  if (clockHold()) return 0;   // v137
   if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return 0; }
   if (isLocked(from) || isLocked(to)) { toast(`${potName(isLocked(from) ? from : to)} is locked. Unlock it first.`); return 0; }
   let moved = 0;
@@ -8137,7 +8159,7 @@ function moveWorker(from, to, n = 1) {
     else {
       if (workersAt(from) < 1) break;
       const goal = goalOf(to); if (goal > 0 && projectBal(to) >= goal - 0.005) { toast('That one is built. Raise its goal to keep building.'); break; }
-      reassign(Date.now(), { [from]: -1, [to]: 1 }); save(); render();
+      reassign(stampNow(), { [from]: -1, [to]: 1 }); save(); render();
     }
     moved++;
   }
@@ -8186,12 +8208,13 @@ function sendNowDays(now = new Date()) { return 7 - Math.max(0, Math.min(6, Math
 // A party leaves mid-week with the days that are left; it can't change until it's back, like any other.
 function sendPartyNow() {
   if (partyNow() > 0) return;
+  if (clockHold()) return;   // v137
   const k = Math.min(Number(state.partyPlan || 0), partyRoom()); if (!k) return;
   const wk = ymd(weekStart()), d = sendNowDays();
   if (!state.purse || state.purse.wk !== wk) state.purse = { wk, P: 0, extra: 0 };
   state.purse.late = Number(state.purse.late || 0) + k * (7 - d) * WORKER_DAY;
   state.lastWeek = state.lastWeek || wk;
-  state.workerLog.push({ t: Date.now(), pot: 'party', delta: k });
+  state.workerLog.push({ t: stampNow(), pot: 'party', delta: k });
   save(); render(); toast(`The party set out with ${money(k * d * WORKER_DAY)}`);
 }
 document.addEventListener('click', e => { if (e.target.closest && e.target.closest('#partyNow')) sendPartyNow(); });
@@ -8851,6 +8874,10 @@ async function checkUpdate() {
 }
 // No reload under someone's thumb: mid-typing, with a question or the setup open, or partway through a spend.
 const busyForUpdate = () => /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName) || !$('askBox').classList.contains('hidden') || !$('setup').classList.contains('hidden') || pickCents() > 0 || (!KEYPAD_ALWAYS && sheetOpen) || !$('payBox').classList.contains('hidden');
+// v137: when the clock catches up (or goes back), show it
+function clockCheck() { const b = clockBack(), shown = !!document.querySelector('.clock-bar'); if (b !== shown) { if (!b) save(); render(); } }
+setInterval(clockCheck, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) clockCheck(); });   // back from changing the time in Settings
 function sess(k, v) { try { if (v === undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, v); } catch (e) { return null; } }
 // Updating: the service worker keeps the old files until it's told to fetch the new ones, then the page reloads.
 async function doUpdate() {
