@@ -2005,7 +2005,7 @@ html.hl-on.kp-on #packSpend .sheet-head { margin-bottom: auto; padding-bottom: 8
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 177;
+const APP_VERSION = 178;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -2282,7 +2282,7 @@ function render() {
   const th = themeOf(); if (th) document.documentElement.dataset.theme = th; else delete document.documentElement.dataset.theme;   // v149: dark unless chosen otherwise
   const [y, m] = month.split('-').map(Number);
   $('monthLabel').textContent = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  booksGen++; needMemo.clear(); autoSlay(); earlyArrive(); roundOffTick(); finishGoals(); weekMigrate(); partyReturns(); renderGold(); renderOver(); renderMath();
+  booksGen++; needMemo.clear(); autoSlay(); earlyArrive(); roundOffTick(); finishGoals(); weekMigrate(); partyReturns(); mondayCatchUp(); renderGold(); renderOver(); renderMath();
   renderBudget(); renderTx(); renderRules(); renderPotsTab(); renderScavenger(); Town.render(); VL.render();
   $('txCat').innerHTML = catOptions($('txCat').value);
   $('ruleCat').innerHTML = catOptions($('ruleCat').value, false);
@@ -4810,7 +4810,12 @@ function partyReturns() {
   const tg = addGold(Math.floor(got) * GOLD.treasurePerDollar, `Party brought home ${money(got)}`, 'trip|' + wk);
   state.purse = { wk, P: 0, extra };
   // the new party sets out (Monday 00:00): as planned, locked until next Monday
-  const go = Math.min(Number(state.partyPlan || 0), partyRoom() + partyNow()), was = workersAt('party', Infinity);
+  const t0 = weekStart().getTime(), plan = Number(state.partyPlan || 0); let room = partyRoom() + partyNow();
+  if (plan > room) {   // v178: the weekly budget comes first: villagers come home from pots and projects to make it, most-staffed first
+    const left = {}; for (const id of farmPots()) if (id !== 'savings' && !isLocked(id)) left[id] = Math.min(workersAt(id), workersAt(id, t0));
+    while (room < plan) { const id = Object.keys(left).sort((a, b) => left[b] - left[a])[0]; if (!id || left[id] < 1) break; left[id]--; room++; state.workerLog.push({ t: t0, pot: id, delta: -1 }); }
+  }
+  const go = Math.min(plan, room), was = workersAt('party', Infinity);
   if (go !== was) state.workerLog.push({ t: weekStart().getTime(), pot: 'party', delta: go - was });
   state.lastWeek = wk; state.lastTrip = { amount: got, short, to: treasurePot(), date: sunday, seen: false, gold: tg, weeks };
   save();
@@ -9024,6 +9029,17 @@ $('habitList').addEventListener('click', e => {
 // days left in this week, today included (a party sent today spends today too)
 function sendNowDays(now = new Date()) { return 7 - Math.max(0, Math.min(6, Math.floor((now - weekStart(now)) / DAY_MS))); }
 // A party leaves mid-week with the days that are left; it can't change until it's back, like any other.
+// v178: on the week's first day, a party that didn't set out (nobody was free at midnight) leaves as soon as there's room
+function mondayCatchUp() {
+  const wk = ymd(weekStart()); if (today() !== wk || state.lastWeek !== wk || partyNow() > 0 || clockBack()) return;
+  if (state.workerLog.some(w => w.pot === 'party' && w.t >= weekStart().getTime())) return;
+  if (state.purse && state.purse.wk === wk && Number(state.purse.late || 0)) return;
+  const k = Math.min(Number(state.partyPlan || 0), partyRoom()), d = sendNowDays(); if (!k) return;
+  if (!state.purse || state.purse.wk !== wk) state.purse = { wk, P: 0, extra: 0 };
+  state.purse.late = Number(state.purse.late || 0) + k * (wkDays(wk) - d) * WORKER_DAY;   // 0 on the first day: a full week
+  state.workerLog.push({ t: stampNow(), pot: 'party', delta: k }); save();
+  setTimeout(() => toast(`This week's spending started: ${money(k * d * WORKER_DAY)}`), 0);
+}
 function sendPartyNow() {
   if (partyNow() > 0) return;
   if (clockHold()) return;   // v137
