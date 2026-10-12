@@ -2108,7 +2108,7 @@ html.pp-dragging #mainScroll { touch-action: none; }
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 184;
+const APP_VERSION = 185;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -4891,12 +4891,12 @@ function weekMigrate() {
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 // v181: the weekly budget comes out of Savings. state.funds[week] = { amt, n, from, want }: what moved from Savings to the
 // purse that week, the plan it was for ($7 steps), and the first day it ran.
-const FROM_SAVINGS = true;
+const FROM_SAVINGS = false;   // v185: off again (Jordan 2026-10-12 05:53); the funds code stays for weeks it already ran
 const fundRec = wk => (state.funds || {})[wk] || null;
 const weekRunning = (now = Date.now()) => { const f = fundRec(ymd(weekStart(new Date(now)))); return f ? f.amt > 0 : partyNow(now) > 0; };
 const partySize = () => { if (!FROM_SAVINGS) return partyNow(); const f = fundRec(ymd(weekStart())); return f && f.amt > 0 ? Math.max(1, Number(f.n) || 0) : partyNow(); };
 const partyRoom = () => FROM_SAVINGS ? maxWorkers() : Math.max(0, maxWorkers() - crewWorkers());   // most the weekly budget can be ($7 steps)
-const planCap = () => FROM_SAVINGS ? maxWorkers() : planCap();
+const planCap = () => FROM_SAVINGS ? maxWorkers() : partyRoom() + partySize();   // v185: was recursing when off
 // Move a week's budget from Savings to the purse: never more than Savings has right now, whole dollars.
 function fundWeek(wk, want, n, from) {
   const funds = state.funds = state.funds || {}; funds[wk] = { amt: 0, n, from, want };   // Savings counted without this week's purse
@@ -4918,6 +4918,16 @@ function partyReturns() {
     (state.funds = state.funds || {})[wk] = { amt: n * wkDays(wk) * WORKER_DAY - late, n, from: first < Infinity ? ymd(new Date(first)) : wk, want: n * 7 * WORKER_DAY, moved: true };
     if (state.purse && state.purse.wk === wk) state.purse.late = 0;
     state.workerLog.push({ t: stampNow(), pot: 'party', delta: -n }); save();
+  }
+  if (!FROM_SAVINGS && last === wk && partyNow() === 0) {   // v185: a week funded from Savings switches back: villagers out, the purse as it was
+    const fw = fundRec(wk);
+    if (fw && fw.amt > 0 && !clockBack()) {
+      const k = Math.min(Number(fw.n) || 0, partyRoom()), t0 = Math.max(weekStart().getTime(), dayMs(fw.from || wk));
+      if (!state.purse || state.purse.wk !== wk) state.purse = { wk, P: 0, extra: 0 };
+      delete state.funds[wk];
+      if (k > 0) { state.purse.late = Math.max(0, Math.round((k * wkDays(wk) * WORKER_DAY - fw.amt) * 100) / 100); state.workerLog.push({ t: t0, pot: 'party', delta: k }); }
+      save();
+    }
   }
   if (last >= wk) return;
   let w = last, extra = state.purse && state.purse.wk === last ? Number(state.purse.extra || 0) : 0, got = 0, short = 0, sunday = '', weeks = 0;
