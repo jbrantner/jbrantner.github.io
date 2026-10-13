@@ -2,7 +2,7 @@
 // the version it has: the app shows ✨ when a newer one has been sent, and the new files are only
 // fetched when its owner taps ✨ and says yes. A new copy of this script never swaps the app by itself.
 const CACHE = 'budget-share';
-const FILES = ['art.png', 'town-art.png', 'town-art-1.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'tavern-180.png', 'tavern-192.png', 'tavern-512.png', 'pip-180.png', 'pip-192.png', 'pip-512.png', 'upkeep.html', 'index.html'];   // the page last, so a cut-off update never pairs a new page with old art
+const FILES = ['art.png', 'town-art.png', 'town-art-1.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'tavern-180.png', 'tavern-192.png', 'tavern-512.png', 'pip-180.png', 'pip-192.png', 'pip-512.png', 'reef-180.png', 'reef-192.png', 'reef-512.png', 'upkeep.html', 'index.html'];   // the page last, so a cut-off update never pairs a new page with old art
 
 async function fetchInto(name) {
   const c = await caches.open(name);
@@ -22,7 +22,7 @@ self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
   const req = e.request, url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== location.origin || url.pathname.endsWith('/version.json')) return;   // version.json always asks the site
-  if (/\/(icon|tavern|pip-)[^/]*$/.test(url.pathname)) return;   // the home-screen icons always come from the site
+  if (/\/(icon|tavern|pip-|reef-)[^/]*$/.test(url.pathname)) return;   // the home-screen icons always come from the site
   e.respondWith((async () => {
     const c = await caches.open(CACHE);
     return (await c.match(req.mode === 'navigate' ? 'index.html' : req, { ignoreSearch: true })) || fetch(req);
