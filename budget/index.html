@@ -2566,6 +2566,17 @@ html.look-b #townList .pp-xv .tn-edit .tn-ck input { accent-color: var(--rf-cora
 html.look-b #townList .pp-xv .tn-edit input:not([type="checkbox"]) { background: #093240 !important; color: #ffd3cd !important; border-color: rgba(255, 154, 146, .4) !important; }   /* as in Settings */
 html.look-b #townList .pp-xv .tn-edit input:not([type="checkbox"]):focus { border-color: #ff8a80 !important; outline: none; }
 html.look-b #townList .pp-xv .tn-edit input::placeholder { color: #b08884; }
+
+/* v272 (Jordan 14:26, from Jordan's screenshot of the All tab): Home is the All tab's top: the weekly card, Savings, the
+   pots and projects, Add a pot or project and the Tetris graph, with Collect and Spend at the bottom. Nothing under the
+   graph: the bills, Manage workers and the rest stay on All. A project nobody is working on still folds small with no
+   amount, as on the v249 Home; a pot keeps its amount. */
+html.home2 #townList > :is(.pp-sec-bills, .pp-bills, .pp-chips, .pp-empty, .pp-mwb), html.home2 #mainTail { display: none !important; }
+html.home2 #townList .pp-card.proj.idle:not(.open) { padding-top: 3px !important; padding-bottom: 3px !important; }
+html.home2 #townList .pp-card.proj.idle:not(.open) .pp-amt { visibility: hidden; }
+/* v272 (Jordan 14:27): Edit's Convert to project / Convert to pot, in place of Has a goal */
+#townList .pp-xv .tn-edit .tn-conv { margin-top: 0; }
+#townList .pp-xv .tn-edit .tn-pj.hidden, #townList .pp-xv .tn-edit .tn-convnote[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -3221,7 +3232,7 @@ html.look-b #townList .pp-xv .tn-edit input::placeholder { color: #b08884; }
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 271;
+const APP_VERSION = 272;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -7996,14 +8007,18 @@ const Town = (() => {
   /* v269: Edit (Jordan): its name, and a goal or none. With a goal it's a project, without one a pot: the same thing
      underneath (isMini). Nothing changes until Save. Payments made from it, a lock or covering overspending show here
      only when there are any, so none of them gets stuck. */
+  /* v272 (Jordan 14:27): Convert to project / Convert to pot in place of Has a goal. A project always has a goal, so its
+     amount box comes with it. A project turned into a pot remembers its goal (state.goalWas) for turning it back. */
   function editHTML(p) {
     const id = p.id, g = goalOf(id), gm = goalMonthsOf(id), po = !(g > 0) && paidOff(id), has = g > 0 || po, pays = debtPays(id), nm = esc(p.name);
-    return `<div class="tn-edit" role="group" aria-label="Edit ${nm}">`
+    const back = !has && Number((state.goalWas || {})[id]) > 0 ? Number(state.goalWas[id]) : '';   // v272: the goal it had as a project
+    return `<div class="tn-edit${has ? ' is-proj' : ''}" role="group" aria-label="Edit ${nm}" data-was="${has ? 'proj' : 'pot'}">`
       + `<label class="field">Name<input data-ed="name" value="${nm}" maxlength="40" autocomplete="off" aria-label="Name"></label>`
-      + `<label class="tn-ck"><input type="checkbox" data-ed="has"${has ? ' checked' : ''}> Has a goal</label>`
-      + `<label class="field tn-goal${has ? '' : ' hidden'}">Goal amount<input data-ed="goal" type="number" inputmode="decimal" min="0" step="any" placeholder="$" value="${g > 0 ? g : ''}" aria-label="Goal amount"></label>`
-      + (gm ? `<p class="sh-line tn-ednote">Now ${gm} month${gm === 1 ? '' : 's'} of bills. A new amount makes it a set dollar goal.</p>` : '')
-      + (po ? '<p class="sh-line tn-ednote">Paid off. A new amount starts it again.</p>' : '')
+      + `<label class="field tn-goal${has ? '' : ' hidden'}">Goal amount<input data-ed="goal" type="number" inputmode="decimal" min="0" step="any" placeholder="$" value="${g > 0 ? g : back}" aria-label="Goal amount"></label>`
+      + (gm ? `<p class="sh-line tn-ednote tn-pj">Now ${gm} month${gm === 1 ? '' : 's'} of bills. A new amount makes it a set dollar goal.</p>` : '')
+      + (po ? '<p class="sh-line tn-ednote tn-pj">Paid off. A new amount starts it again.</p>' : '')
+      + `<div class="tn-acts tn-conv"><button type="button" data-act="ed-conv">${has ? 'Convert to pot' : 'Convert to project'}</button></div>`
+      + `<p class="sh-line tn-ednote tn-convnote" hidden></p>`
       + (isLocked(id) ? '<label class="tn-ck"><input type="checkbox" data-ed="lock" checked> Lock its villagers</label>' : '')
       + (coverPots().includes(id) ? '<label class="tn-ck"><input type="checkbox" data-ed="cover" checked> Covers overspending after your projects</label>' : '')
       + (pays.length ? `<div class="pp-pays"><h4>Payments</h4>${pays.map(t => `<div class="pp-payr"><span>Paid ${esc(moneyExact(t.amount))} · ${esc(shortDate(t.date))}${t.note ? ` · ${esc(t.note)}` : ''}</span><button class="link" data-debt-undo="${esc(t.id)}" aria-label="Undo the ${esc(moneyExact(t.amount))} payment of ${esc(shortDate(t.date))}">Undo</button></div>`).join('')}</div>` : '')
@@ -8012,14 +8027,15 @@ const Town = (() => {
   }
   function saveEdit(id) {
     const box = shBody().querySelector('.tn-edit'), p = state.pots.find(x => x.id === id); if (!box || !p) return;
-    const q = k => box.querySelector(`[data-ed="${k}"]`), gIn = q('goal'), raw = gIn.value.trim(), name = q('name').value.trim().slice(0, 40), has = q('has').checked;
+    const q = k => box.querySelector(`[data-ed="${k}"]`), gIn = q('goal'), raw = gIn.value.trim(), name = q('name').value.trim().slice(0, 40), has = box.classList.contains('is-proj');   // v272: Convert, not a checkbox
     const was = goalOf(id), gm = goalMonthsOf(id), po = !(was > 0) && paidOff(id), amt = Math.round((Number(raw) || 0) * 100) / 100;
     if (!name) { toast('Give it a name'); q('name').focus(); return; }
-    if (has && !(amt > 0) && !po) { toast('Type the goal amount, or uncheck Has a goal'); gIn.focus(); return; }
+    if (has && !(amt > 0) && !po) { toast(box.dataset.was === 'pot' ? 'Type its goal: a project saves up to one' : 'Type the goal amount'); gIn.focus(); return; }
     const said = [], $$ = n => n % 1 ? moneyExact(n) : money(n);
     if (name !== p.name) { p.name = name; said.push(`Renamed to ${name}`); }
-    if (!has) { if (was > 0 || gm || po) { delete state.goals[id]; delete state.goalMonths[id]; if (state.paidOff) delete state.paidOff[id]; said.push(`${name} has no goal now, so it's a pot`); } }
-    else if (amt > 0 && (raw !== gIn.defaultValue || !(was > 0))) { delete state.goalMonths[id]; state.goals[id] = amt; if (state.paidOff) delete state.paidOff[id]; said.push(`${name}'s goal is ${$$(amt)}`); }
+    if (!has) { if (was > 0 || gm || po) { if (was > 0) (state.goalWas = state.goalWas || {})[id] = was; delete state.goals[id]; delete state.goalMonths[id]; if (state.paidOff) delete state.paidOff[id]; said.push(`${name} is a pot now`); } }
+    else if (amt > 0 && (raw !== gIn.defaultValue || !(was > 0))) { const conv = !(was > 0) && !po; delete state.goalMonths[id]; state.goals[id] = amt; if (state.paidOff) delete state.paidOff[id]; if (state.goalWas) delete state.goalWas[id];
+      said.push(conv ? `${name} is a project now, saving up to ${$$(amt)}` : `${name}'s goal is ${$$(amt)}`); }
     editFor = null; save();
     const lk = q('lock'), cv = q('cover');
     if (lk && !lk.checked && isLocked(id)) setLock(id, false);
@@ -8195,6 +8211,15 @@ const Town = (() => {
     if (b.dataset.potDel) { await deletePot(b.dataset.potDel); return; }
     if (act === 'ed-save') { saveEdit(id); return; }   // v269
     if (act === 'ed-cancel') { editFor = null; renderSheet(true); window.render(); return; }
+    if (act === 'ed-conv') {   // v272: switches the form; nothing is saved until Save
+      const box = b.closest('.tn-edit'), pj = box.classList.toggle('is-proj'), gi = box.querySelector('[data-ed="goal"]'), nt = box.querySelector('.tn-convnote');
+      box.querySelector('.tn-goal').classList.toggle('hidden', !pj); box.querySelectorAll('.tn-pj').forEach(n => n.classList.toggle('hidden', !pj));
+      b.textContent = pj ? 'Convert to pot' : 'Convert to project';
+      const moved = (box.dataset.was === 'proj') !== pj; nt.hidden = !moved;
+      nt.textContent = !moved ? '' : pj ? 'It becomes a project when you tap Save.' : 'It becomes a pot when you tap Save. It keeps its money.';
+      if (pj && !gi.value) gi.focus({ preventScroll: true });
+      return;
+    }
     if (act === 'ed-del') { if (await deletePot(id, 'savings')) editFor = null; return; }
     if (act === 'wstep') { wStep = wStep === 5 ? 1 : 5; renderSheet(true); return; }
     if (act === 'lock') { setLock(id, !isLocked(id)); renderSheet(true); return; }
@@ -8228,7 +8253,6 @@ const Town = (() => {
   function onSheetChange(e) {
     const t = e.target; if (!selected) return;
     if (t.closest('.tn-bill') && (t.dataset.dueKind || t.dataset.dueDay || t.dataset.dueNth || t.dataset.dueWd)) { billChange(e); renderSheet(true); return; }
-    if (t.dataset.ed === 'has') { const g = t.closest('.tn-edit').querySelector('.tn-goal'); if (g) g.classList.toggle('hidden', !t.checked); return; }   // v269: nothing saved until Save
     if (t.dataset.ed) return;
     if (t.dataset.goal || t.dataset.goalUnit) { goalChange(t); return; }
     if (t.dataset.rename) { renamePot(t.dataset.rename, t.value); return; }
@@ -9375,7 +9399,7 @@ function openBillEdit() {
 }
 function showView(v, dir = 0) {
   const oldTab = v === 'old'; if (oldTab) v = 'budget';   // v242: 'All' = the full budget screen, kept to sort out later
-  if (v === 'budget') document.documentElement.classList.toggle('lite', !oldTab);
+  if (v === 'budget') document.documentElement.classList.toggle('home2', !oldTab);   // v272: Home is the All tab's top (v242's 'lite' home is off)
   // v86: the Pots, Bills and Scavenger pages live in the town now, and Import in Settings
   if (v === 'pots' || v === 'bills' || v === 'scavenger') { showView('budget', dir); if (v !== 'pots') Town.open(v === 'bills' ? 'home' : 'scavenger'); return; }
   if (v === 'town') v = 'budget';   // v140: the Town list is part of the main screen
@@ -9395,7 +9419,7 @@ function showView(v, dir = 0) {
   VL.shown(v);
 }
 document.documentElement.classList.toggle('full', !$('view-budget').classList.contains('hidden'));
-document.documentElement.classList.add('lite');   // v242: the new home screen
+document.documentElement.classList.add('home2');   // v272 (Jordan 14:26): Home is the All tab's top
 // Sizes for chasing the iPhone jump: the phone's screen, the page's window, the visible part, and the top inset.
 // v140: the Upkeep tab. Its page is fetched and shown with srcdoc (see tabs.py); it keeps its own storage (upkeep.v1).
 const themeOf = () => state.theme === 'device' ? '' : (state.theme || 'dark');   // v149: '' (the default) is Dark
