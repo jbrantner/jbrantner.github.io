@@ -2794,7 +2794,7 @@ html #homeList .vl-hero.hc .hl-today { text-shadow: 0 0 10px color-mix(in srgb, 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 237;
+const APP_VERSION = 238;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -9187,7 +9187,7 @@ const VL = (() => {
       pxSet(id, 'px-out', false); const c2 = pxCard(id) || c;
       if (c2) { c2.classList.remove('xo', 'open'); const c = c2; const m = c.querySelector('.pp-more'); if (m) m.hidden = true; const h = c.querySelector('.pp-head'); if (h) h.setAttribute('aria-expanded', 'false'); } };
     if (!c || now || lessMotion() || !tbCache[id]) { fin(); return; }
-    tbRun(id, false, tbCache[id], fin);   // v236: the tide break, backwards
+    tbTide(id, false, tbCache[id], fin);   // v236: the tide break, backwards
   }
   window.pxClose = pxClose;
   /* v236: Tide break. Jordan's settings (01:32): Total 1050ms, Ripple speed .1, Pixel flight .15, Burst 1.8, Sharpen 0, Glow 0, Card grow .2 */
@@ -9267,11 +9267,46 @@ const VL = (() => {
     const end = () => { cancelAnimationFrame(raf); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height); cv.classList.remove('on'); cp.remove(); cp.style.clipPath = '';
       pxSet(id, 'tb-h', false); pxSet(id, 'tb-clip', false); L.style.removeProperty('--tbh'); L.style.removeProperty('--tbclip'); tbBusy = false; if (done) done(); };
   }
+  function tbMosaic(s, b) {   // the open card in chunky blocks of b px
+    const sm = document.createElement('canvas'); sm.width = Math.ceil(s.W / b); sm.height = Math.ceil(s.H / b); sm.getContext('2d').drawImage(s.c, 0, 0, sm.width, sm.height);
+    const big = document.createElement('canvas'); big.width = s.W; big.height = s.H; const g = big.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(sm, 0, 0, sm.width * b, sm.height * b); return big; }
+  function tbTide(id, open, k, done) {   // v238 (Jordan's Option B): a wave of chunky pixels runs out from the tap, sharpening into the open card behind it
+    const L = $('townList'), c0 = pxCard(id); if (!c0) { if (done) done(); return; }
+    tbBusy = true;
+    const sO = tbSnap(c0), H2 = Math.max(k.H1, c0.offsetHeight), W = k.W, acc = getComputedStyle(c0).getPropertyValue('--cc').trim() || '#b89eff';
+    const R = Math.hypot(Math.max(k.cx, W - k.cx), Math.max(k.cy, H2 - k.cy)) + 40, m = [16, 8, 4, 2].map(b => tbMosaic(sO, b));
+    const bands = [[0, 30, 0], [30, 54, 1], [54, 76, 2], [76, 96, 3]];   // nearest the front = chunkiest
+    const cv = pxCv(), dpr = Math.min(2, devicePixelRatio || 1), x = cv.getContext('2d');
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; cv.classList.add('on');
+    const cp = k.clone; cp.style.cssText = `position:fixed;left:0;top:0;width:${W}px;height:${k.H1}px;margin:0;z-index:23;pointer-events:none;`; L.appendChild(cp);
+    pxSet(id, 'tb-h', true); pxSet(id, 'tb-clip', true);
+    const ms = open ? 1100 : 700, t0 = performance.now(), eo = t => 1 - Math.pow(1 - t, 3), circ = r => `M${(k.cx - r).toFixed(1)} ${k.cy.toFixed(1)} a${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(2 * r).toFixed(1)} 0 a${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(-2 * r).toFixed(1)} 0 Z`;
+    let off = null;
+    const frame = now => {
+      const t = Math.min(1, (now - t0) / ms), r = eo(open ? t : 1 - t) * R, h = Math.round(Math.min(H2, Math.max(k.H1, k.cy + r)));   // the card grows as the wave reaches down
+      L.style.setProperty('--tbh', h + 'px');
+      const card = pxCard(id); if (!card) { end(); return; }
+      const rc = card.getBoundingClientRect(), rIn = r - 96;
+      L.style.setProperty('--tbclip', rIn > 0 ? `circle(${Math.round(rIn)}px at ${Math.round(k.cx)}px ${Math.round(k.cy)}px)` : 'inset(50% 50% 50% 50%)');
+      if (!cp.isConnected) L.appendChild(cp);
+      if (!off) { cp.style.left = rc.left + 'px'; cp.style.top = rc.top + 'px'; const q = cp.getBoundingClientRect(); off = [q.left - rc.left, q.top - rc.top]; }
+      cp.style.left = rc.left - off[0] + 'px'; cp.style.top = rc.top - off[1] + 'px';
+      cp.style.clipPath = r > 0 ? `path(evenodd, "M-20 -20 H${W + 20} V${k.H1 + 20} H-20 Z ${circ(r)}")` : '';   // the old card washes away inside the wave
+      x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, innerWidth, innerHeight); x.translate(rc.left, rc.top); x.imageSmoothingEnabled = false;
+      for (const [a, b, i] of bands) { const r1 = r - a, r0 = Math.max(0, r - b); if (r1 <= 0) continue;
+        x.save(); x.beginPath(); x.rect(0, 0, W, h); x.clip(); x.beginPath(); x.arc(k.cx, k.cy, r1, 0, 6.2832); if (r0 > 0) x.arc(k.cx, k.cy, r0, 0, 6.2832, true); x.clip();
+        x.drawImage(m[i], 0, 0); if (i === 0) { x.globalCompositeOperation = 'source-atop'; x.globalAlpha = .35; x.fillStyle = acc; x.fillRect(0, 0, W, h); } x.restore(); }
+      if (t < 1) raf = requestAnimationFrame(frame); else end();
+    };
+    let raf = requestAnimationFrame(frame);
+    const end = () => { cancelAnimationFrame(raf); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height); cv.classList.remove('on'); cp.remove(); cp.style.clipPath = '';
+      pxSet(id, 'tb-h', false); pxSet(id, 'tb-clip', false); L.style.removeProperty('--tbh'); L.style.removeProperty('--tbclip'); tbBusy = false; if (done) done(); };
+  }
   function tbOpen(id, pt, k) {
     if (!k || lessMotion()) return;
     k.cx = pt ? pt.clientX - k.left : k.W / 2; k.cy = pt ? pt.clientY - k.top : 30; tbCache[id] = k;
     const c = pxCard(id); if (c) { const top = c.getBoundingClientRect().top; if (top + Math.min(c.offsetHeight, innerHeight * .7) > innerHeight - 90 || top < 0) scrollBy({ top: top - 70, behavior: 'smooth' }); }
-    tbRun(id, true, k, null);
+    tbTide(id, true, k, null);
   }
   function toggleCard(id, ev) {
     const c = $('townList').querySelector(`[data-vl-row="${CSS.escape(id)}"]`); if (!c) return;
