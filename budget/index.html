@@ -2140,6 +2140,11 @@ html #homeList .vl-hero, html #mainScroll .vl-hero { --cc: var(--pal-pk, #f594c3
 html #homeList .vl-hero.hc .hl-today { text-shadow: 0 0 10px color-mix(in srgb, var(--pal-pk, #f594c3) 16%, transparent); }
 #townList .pp-bills, #townList .pp-sec-bills { --cc: #7fdc9c !important; --hc: #7fdc9c; }
 #townList .pp-bills .vl-held { color: #7fdc9c !important; }
+
+/* v236: the tide break */
+#townList .pp-card.tb-h { height: var(--tbh) !important; overflow: hidden !important; }
+#townList .pp-card.tb-clip { clip-path: var(--tbclip, none); }
+#townList .tb-copy { transition: none !important; animation: none !important; }
 </style>
 </head>
 <body>
@@ -2789,7 +2794,7 @@ html #homeList .vl-hero.hc .hl-today { text-shadow: 0 0 10px color-mix(in srgb, 
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 235;
+const APP_VERSION = 236;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -9181,19 +9186,93 @@ const VL = (() => {
     const fin = () => { xId = null; Town.closeInline(); opened.delete(id);
       pxSet(id, 'px-out', false); const c2 = pxCard(id) || c;
       if (c2) { c2.classList.remove('xo', 'open'); const c = c2; const m = c.querySelector('.pp-more'); if (m) m.hidden = true; const h = c.querySelector('.pp-head'); if (h) h.setAttribute('aria-expanded', 'false'); } };
-    if (!c || now || lessMotion()) { fin(); return; }
-    const h0 = c.offsetHeight, h1 = c.querySelector('.pp-head').offsetHeight + 30;
-    pxAnim(c, -1, null, null); pxSet(id, 'px-out', true);
-    setTimeout(() => pxHeight(c, h0, h1, 300, fin), 120);
+    if (!c || now || lessMotion() || !tbCache[id]) { fin(); return; }
+    tbRun(id, false, tbCache[id], fin);   // v236: the tide break, backwards
   }
   window.pxClose = pxClose;
+  /* v236: Tide break. Jordan's settings (01:32): Total 1050ms, Ripple speed .1, Pixel flight .15, Burst 1.8, Sharpen 0, Glow 0, Card grow .2 */
+  const TB = { total: 1050, spread: .1, flight: .15, burst: 1.8, glow: 0, grow: .2, hue: 0, hspread: 0, sat: 1.4, bright: 1, tint: .9, white: 0 };
+  const tbRGB = v => { v = String(v || '').trim(); let m = v.match(/^#([0-9a-f]{6})$/i); if (m) return [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16));
+    m = v.match(/^#([0-9a-f]{3})$/i); if (m) return [...m[1]].map(h => parseInt(h + h, 16)); m = v.match(/(\d+)\D+(\d+)\D+(\d+)/); return m ? [+m[1], +m[2], +m[3]] : [110, 208, 255]; };
+  // paint a card into a bitmap: its tinted glass, boxes, borders and words (the pixels that fly)
+  function tbSnap(root) {
+    const R = root.getBoundingClientRect(), W = Math.max(1, Math.round(R.width)), H = Math.max(1, Math.round(R.height)), c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d'), cc = tbRGB(getComputedStyle(root).getPropertyValue('--cc')), mix = (a, b, t) => a.map((v, i) => Math.round(v * t + b[i] * (1 - t)));
+    x.fillStyle = `rgb(${mix(cc, [14, 10, 32], .14)})`; x.fillRect(0, 0, W, H);
+    const box = el => { const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden') return; const r = el.getBoundingClientRect(); if (!r.width || !r.height) return; const L = r.left - R.left, T = r.top - R.top;
+      if (el !== root && cs.backgroundColor && !/rgba\(.*,\s*0\)|transparent/.test(cs.backgroundColor)) { x.fillStyle = cs.backgroundColor; x.fillRect(L, T, r.width, r.height); }
+      for (const [sd, x0, y0, len, hz] of [['Top', L, T, r.width, 1], ['Bottom', L, T + r.height - 2, r.width, 1], ['Left', L, T, r.height, 0], ['Right', L + r.width - 2, T, r.height, 0]]) {
+        const w = parseFloat(cs['border' + sd + 'Width']); if (!w || cs['border' + sd + 'Style'] === 'none') continue;
+        x.fillStyle = cs['border' + sd + 'Color']; const dot = cs['border' + sd + 'Style'] === 'dotted';
+        for (let k = 0; k < len; k += dot ? w * 2 : len) x.fillRect(hz ? x0 + k : x0, hz ? y0 : y0 + k, hz ? (dot ? w : len) : w, hz ? w : (dot ? w : len)); } };
+    box(root); root.querySelectorAll('*').forEach(box);
+    const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let n; const rg = document.createRange();
+    while ((n = tw.nextNode())) { const t = n.textContent; if (!t.trim() || !n.parentElement) continue; const cs = getComputedStyle(n.parentElement); if (cs.visibility === 'hidden') continue;
+      x.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; x.fillStyle = cs.color; x.textBaseline = 'middle'; const up = cs.textTransform === 'uppercase';
+      const re = /\S+/g; let mm; while ((mm = re.exec(t))) { rg.setStart(n, mm.index); rg.setEnd(n, mm.index + mm[0].length); const r = rg.getClientRects()[0]; if (!r || !r.width) continue;   // word by word, so wrapped lines land right
+        x.fillText(up ? mm[0].toUpperCase() : mm[0], r.left - R.left, r.top - R.top + r.height / 2 + 1); } }
+    return { c, W, H };
+  }
+  const tbGrid = (s, P) => { const d = s.c.getContext('2d').getImageData(0, 0, s.W, s.H).data, out = [];
+    for (let y = 0; y < s.H; y += P) for (let x = 0; x < s.W; x += P) { const i = (Math.min(s.H - 1, y + (P >> 1)) * s.W + Math.min(s.W - 1, x + (P >> 1))) * 4; if (d[i + 3] > 20) out.push({ x, y, c: [d[i], d[i + 1], d[i + 2]] }); }
+    return out; };
+  const tbCache = {}; let tbBusy = false;
+  function tbPrep(c) {   // before the card opens: a copy of it as it looks closed, and its pixels
+    const r = c.getBoundingClientRect(), cl = c.cloneNode(true);
+    cl.removeAttribute('data-vl-row'); cl.querySelectorAll('[id]').forEach(e => e.removeAttribute('id')); cl.classList.add('tb-copy'); cl.setAttribute('aria-hidden', 'true');
+    return { clone: cl, sC: tbSnap(c), H1: r.height, W: r.width, left: r.left, top: r.top };
+  }
+  function tbRun(id, open, k, done) {
+    const L = $('townList'), c0 = pxCard(id); if (!c0) { if (done) done(); return; }
+    tbBusy = true;
+    const sO = tbSnap(c0), H2 = Math.max(k.H1, c0.offsetHeight), W = k.W, mx = Math.hypot(W, H2), P = W * H2 > 160000 ? 6 : 4;
+    const A = tbGrid(k.sC, P), B = tbGrid(sO, P), cols = Math.ceil(W / P), idx = new Map(A.map(a => [Math.round(a.y / P) * cols + Math.round(a.x / P), a]));
+    const ps = B.map(b => { const a = idx.get(Math.round(b.y * (k.H1 / H2) / P) * cols + Math.round(b.x / P)) || A[(Math.random() * A.length) | 0] || b;
+      const dx = a.x - k.cx, dy = a.y - k.cy, d = Math.hypot(dx, dy) || 1, db = Math.hypot(b.x - k.cx, b.y - k.cy);
+      return { a, b, nx: dx / d, ny: dy / d, bulge: (10 + 46 * Math.exp(-d / 110) + Math.random() * 14) * TB.burst, sw: (Math.random() - .5) * 24 * TB.burst, st: db / mx * TB.spread + Math.random() * .05 }; });
+    const cv = pxCv(), dpr = Math.min(2, devicePixelRatio || 1), x = cv.getContext('2d');
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; cv.classList.add('on');
+    const cp = k.clone; cp.style.cssText = `position:fixed;left:0;top:0;width:${W}px;height:${k.H1}px;margin:0;z-index:23;pointer-events:none;`; L.appendChild(cp);
+    pxSet(id, 'tb-h', true); pxSet(id, 'tb-clip', true);
+    const T = TB.spread + .05 + TB.flight, ms = TB.total * (open ? 1 : .75), t0 = performance.now();
+    let off = null;
+    const frame = now => {
+      const t = Math.min(1, (now - t0) / ms), tt = (open ? t : 1 - t) * T;
+      L.style.setProperty('--tbh', Math.round(k.H1 + (H2 - k.H1) * (1 - Math.pow(1 - Math.min(1, tt / TB.grow), 3))) + 'px');
+      const card = pxCard(id); if (!card) { end(); return; }
+      const rc = card.getBoundingClientRect(), rDep = tt / TB.spread * mx, rLand = (tt - TB.flight - .05) / TB.spread * mx;
+      L.style.setProperty('--tbclip', rLand > 0 ? `circle(${Math.round(rLand)}px at ${Math.round(k.cx)}px ${Math.round(k.cy)}px)` : 'inset(50% 50% 50% 50%)');
+      if (!cp.isConnected) L.appendChild(cp);
+      if (!off) { cp.style.left = rc.left + 'px'; cp.style.top = rc.top + 'px'; const q = cp.getBoundingClientRect(); off = [q.left - rc.left, q.top - rc.top]; }
+      cp.style.left = rc.left - off[0] + 'px'; cp.style.top = rc.top - off[1] + 'px';
+      const r = Math.max(0, rDep);   // the copy of the old card, with a hole where the pixels have left
+      cp.style.clipPath = r > 0 ? `path(evenodd, "M-20 -20 H${W + 20} V${k.H1 + 20} H-20 Z M${(k.cx - r).toFixed(1)} ${k.cy.toFixed(1)} a${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(2 * r).toFixed(1)} 0 a${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(-2 * r).toFixed(1)} 0 Z")` : '';
+      x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, innerWidth, innerHeight); x.translate(rc.left, rc.top);
+      for (const q of ps) { const u = (tt - q.st) / TB.flight; if (u <= 0 || u >= 1) continue;
+        const e = u < .5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2, arc = Math.sin(u * 3.1416);   // fast out, slam in
+        const px = q.a.x + (q.b.x - q.a.x) * e + (q.nx * q.bulge - q.ny * q.sw) * arc, py = q.a.y + (q.b.y - q.a.y) * e + (q.ny * q.bulge + q.nx * q.sw) * arc;
+        if (rc.top + py < -20 || rc.top + py > innerHeight + 20) continue;
+        x.fillStyle = `rgb(${q.b.c})`; x.fillRect(Math.round(px), Math.round(py), P - 1, P - 1); }
+      if (t < 1) raf = requestAnimationFrame(frame); else end();
+    };
+    let raf = requestAnimationFrame(frame);
+    const end = () => { cancelAnimationFrame(raf); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height); cv.classList.remove('on'); cp.remove(); cp.style.clipPath = '';
+      pxSet(id, 'tb-h', false); pxSet(id, 'tb-clip', false); L.style.removeProperty('--tbh'); L.style.removeProperty('--tbclip'); tbBusy = false; if (done) done(); };
+  }
+  function tbOpen(id, pt, k) {
+    if (!k || lessMotion()) return;
+    k.cx = pt ? pt.clientX - k.left : k.W / 2; k.cy = pt ? pt.clientY - k.top : 30; tbCache[id] = k;
+    const c = pxCard(id); if (c) { const top = c.getBoundingClientRect().top; if (top + Math.min(c.offsetHeight, innerHeight * .7) > innerHeight - 90 || top < 0) scrollBy({ top: top - 70, behavior: 'smooth' }); }
+    tbRun(id, true, k, null);
+  }
   function toggleCard(id, ev) {
     const c = $('townList').querySelector(`[data-vl-row="${CSS.escape(id)}"]`); if (!c) return;
+    if (tbBusy) return;   // v236: let the pixels land first
     if (xId === id) { pxClose(); return; }
     if (xId) pxClose(true);
-    const sl = c.querySelector('.pp-xv');
+    const sl = c.querySelector('.pp-xv'), prep = sl && !lessMotion() ? tbPrep(c) : null;   // v236: the card as it looks closed
     if (sl) { opened.add(id); c.classList.add('open'); const m = c.querySelector('.pp-more'); if (m) m.hidden = false; const h = c.querySelector('.pp-head'); if (h) h.setAttribute('aria-expanded', 'true');
-      if (Town.openInline(id, sl)) { xId = id; c.classList.add('xo'); const pt = ev && ev.clientX ? { clientX: ev.clientX, clientY: ev.clientY } : null; renderTown(); pxOpen(pxCard(id) || c, pt); return; } }
+      if (Town.openInline(id, sl)) { xId = id; c.classList.add('xo'); const pt = ev && ev.clientX ? { clientX: ev.clientX, clientY: ev.clientY } : null; renderTown(); tbOpen(id, pt, prep); return; } }
     const on = !opened.has(id); if (on) opened.add(id); else opened.delete(id);
     c.classList.toggle('open', on); const m = c.querySelector('.pp-more'); if (m) m.hidden = !on;
     const h = c.querySelector('.pp-head'); if (h) h.setAttribute('aria-expanded', String(on));
