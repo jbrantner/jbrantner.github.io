@@ -1,7 +1,7 @@
 // The app's offline cache. It keeps the version it has: the app asks "Update app?" when a newer one is out, and the new files are only
 // fetched when Update is tapped. A new copy of this script never swaps the app by itself.
 const CACHE = 'budget-main';
-const FILES = ['art.png', 'town-art.png', 'town-art-1.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'tavern-180.png', 'tavern-192.png', 'tavern-512.png', 'upkeep.html', 'index.html'];   // v140: upkeep.html, the Upkeep tab   // the page last, so a cut-off update never pairs a new page with old art
+const FILES = ['art.png', 'town-art.png', 'town-art-1.png', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'tavern-180.png', 'tavern-192.png', 'tavern-512.png', 'upkeep.html', 'pet.html', 'pet-engine.js', 'pet-sprites.js', 'index.html'];   // v140: upkeep.html, the Upkeep tab; v286: the Pet tab (its friends/ pictures load from the site)   // the page last, so a cut-off update never pairs a new page with old art
 
 async function fetchInto(name) {
   const c = await caches.open(name);
