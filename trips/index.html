@@ -68,6 +68,15 @@ main { padding-block: 14px 40px }
 .up .msg { font-size: .9rem; color: var(--fg) }
 .up .msg.bad { color: var(--bad) }
 .up .linkbtn { font: inherit; font-size: .85rem; background: none; border: 0; color: var(--brand2); text-decoration: underline; cursor: pointer; padding: 0; justify-self: start }
+.filelbl { font-size: .9rem; color: var(--muted); display: grid; gap: 4px }
+.et { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line) }
+.et input { width: 100%; min-width: 0; font: inherit; font-size: .95rem; padding: 8px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg) }
+.et .del { font: inherit; font-size: 1.2rem; line-height: 1; width: 38px; height: 38px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer }
+.seg { grid-column: 1 / -1; display: flex; gap: 6px }
+.seg button { flex: 1; font: inherit; font-size: .92rem; font-weight: 600; padding: 8px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer }
+.seg button.on.Pending { background: var(--wait-bg); color: var(--wait-fg); border-color: transparent }
+.seg button.on.Assigned { background: var(--ok-bg); color: var(--ok-fg); border-color: transparent }
+.edempty { color: var(--muted); font-size: .9rem; border-top: 1px solid var(--line); padding-top: 10px }
 button:focus-visible { outline: 3px solid var(--brand2); outline-offset: 2px }
 </style>
 </head>
@@ -78,7 +87,7 @@ button:focus-visible { outline: 3px solid var(--brand2); outline-offset: 2px }
 </div></header>
 <main class="wrap">
   <section class="up" id="upload" hidden>
-    <h2>Update trips for everyone</h2>
+    <h2>Edit trips for everyone</h2>
     <div id="keyBox" hidden>
       <p>Connect this device once. The key is saved on this device only.</p>
       <ol>
@@ -91,8 +100,10 @@ button:focus-visible { outline: 3px solid var(--brand2); outline-offset: 2px }
       <button class="btn" id="saveToken">Connect</button>
     </div>
     <div id="fileBox" hidden style="display:grid;gap:10px">
-      <p>Choose the Trip Status file you exported from Helper. The list below shows what everyone will see.</p>
-      <input type="file" id="file" accept=".json,application/json" aria-label="Trip Status file">
+      <p>Change trips below, or load the Trip Status file from Helper to replace the whole list. Nothing changes for anyone until you tap Publish.</p>
+      <label class="filelbl">Load Helper file <input type="file" id="file" accept=".json,application/json"></label>
+      <div id="edTrips"></div>
+      <button class="btn" id="add">+ Add trip</button>
       <button class="btn primary" id="publish" disabled>Publish to everyone</button>
       <button class="linkbtn" id="forget">Disconnect this device</button>
     </div>
@@ -150,11 +161,12 @@ function render() {
 
 function load() {
   if (window.TRIPS_PREVIEW) { data = window.TRIPS_PREVIEW; render(); return; }
-  if (typeof pending !== 'undefined' && pending) return;
+  if (typeof dirty !== 'undefined' && dirty) return;
+  if (window.pubAt && Date.now() - window.pubAt < 180000) return; // the site takes a minute or two to show what was just published
   fetch('trips.json?t=' + Date.now(), { cache: 'no-store' })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (j) {
-      data = j; document.getElementById('warn').hidden = true;
+      data = j; document.getElementById('warn').hidden = true; if (typeof syncEd === 'function') syncEd();
       try { localStorage.setItem('trips-last', JSON.stringify(j)); } catch (e) {}
       render();
     })
@@ -171,18 +183,19 @@ document.getElementById('f-pending').onclick = function () { onlyPending = true;
 document.getElementById('refresh').onclick = load;
 document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
 setInterval(function () { if (!document.hidden) load(); }, 120000);
-// Hidden upload screen (open the page with #upload). The app has no editing: the only way in is a Trip Status
+// Hidden editing screen (open the page with #edit or #upload). The app has no editing: the only way in is a Trip Status
 // file from Helper, and only date, time and status are ever kept from it.
 var REPO_API = 'https://api.github.com/repos/jbrantner/jbrantner.github.io/contents/trips/trips.json';
-var ghToken = '', pending = null;
+var ghToken = '';
 try { ghToken = localStorage.getItem('trips-gh-token') || ''; } catch (e) {}
 function upMsg(t, bad) { var m = document.getElementById('upMsg'); m.textContent = t; m.className = 'msg' + (bad ? ' bad' : ''); }
 function showUpload() {
-  var on = location.hash === '#upload';
+  var on = location.hash === '#edit' || location.hash === '#upload';
   document.getElementById('upload').hidden = !on;
   if (!on) return;
   document.getElementById('keyBox').hidden = !!ghToken;
   document.getElementById('fileBox').hidden = !ghToken;
+  syncEd();
 }
 function cleanTrips(j) {
   if (!j || j.app !== 'trip-status' || !Array.isArray(j.trips)) throw new Error('This is not a Trip Status file from Helper.');
@@ -197,42 +210,90 @@ function cleanTrips(j) {
     return { date: t.date, time: t.time || '', status: t.status };
   });
 }
+// The editing list. It starts as the published list; any change, or a loaded Helper file, shows right away in
+// the list underneath as a preview, and nothing is saved until Publish.
+var ed = [], dirty = false;
+function sortEd() { ed.sort(function (a, b) { return (a.date + (a.time || '99')).localeCompare(b.date + (b.time || '99')); }); }
+function syncEd() {
+  if (dirty || document.getElementById('upload').hidden) return;
+  var today = todayStr();
+  ed = ((data && data.trips) || []).filter(function (t) { return t.date >= today; }).map(function (t) { return { date: t.date, time: t.time || '', status: t.status === 'Assigned' ? 'Assigned' : 'Pending' }; });
+  sortEd(); drawEd();
+}
+function drawEd() {
+  var box = document.getElementById('edTrips');
+  if (!ed.length) { box.innerHTML = '<p class="edempty">No upcoming trips. Tap Add trip or load a Helper file.</p>'; return; }
+  box.innerHTML = ed.map(function (t, i) {
+    return '<div class="et" data-i="' + i + '">' +
+      '<input type="date" id="ed-d' + i + '" aria-label="Date" value="' + esc(t.date) + '">' +
+      '<input type="time" id="ed-t' + i + '" aria-label="Time" value="' + esc(t.time) + '">' +
+      '<button class="del" aria-label="Remove trip">×</button>' +
+      '<div class="seg"><button class="Pending' + (t.status !== 'Assigned' ? ' on' : '') + '">Pending</button>' +
+      '<button class="Assigned' + (t.status === 'Assigned' ? ' on' : '') + '">Assigned</button></div></div>';
+  }).join('');
+}
+function changed(note) {
+  dirty = true; data = { updated: new Date().toISOString(), trips: ed.slice() }; render();
+  document.getElementById('publish').disabled = false;
+  upMsg(note || 'Not published yet. The list below shows what everyone will see.');
+}
+document.getElementById('edTrips').addEventListener('change', function (e) {
+  var row = e.target.closest('.et'); if (!row) return;
+  var t = ed[+row.dataset.i];
+  if (e.target.type === 'date') t.date = e.target.value;
+  if (e.target.type === 'time') t.time = e.target.value;
+  changed();
+});
+document.getElementById('edTrips').addEventListener('click', function (e) {
+  var row = e.target.closest('.et'); if (!row) return;
+  var i = +row.dataset.i;
+  if (e.target.classList.contains('del')) { ed.splice(i, 1); drawEd(); changed(); return; }
+  if (e.target.closest('.seg') && e.target.tagName === 'BUTTON') {
+    ed[i].status = e.target.classList.contains('Assigned') ? 'Assigned' : 'Pending'; drawEd(); changed();
+  }
+});
+document.getElementById('add').onclick = function () {
+  var last = ed[ed.length - 1];
+  ed.push({ date: last ? last.date : todayStr(), time: '', status: 'Pending' });
+  drawEd(); changed();
+  var el = document.getElementById('ed-t' + (ed.length - 1)); if (el) el.focus();
+};
 document.getElementById('file').onchange = function (e) {
-  var f = e.target.files[0]; pending = null; document.getElementById('publish').disabled = true;
-  if (!f) return;
+  var f = e.target.files[0]; if (!f) return;
   if (f.size > 100000) { upMsg('That file is too big to be a Trip Status file.', true); return; }
   f.text().then(function (txt) {
-    var trips = cleanTrips(JSON.parse(txt));
-    pending = { updated: new Date().toISOString(), trips: trips };
-    data = pending; render();
-    var today = todayStr(), up = trips.filter(function (t) { return t.date >= today; }).length;
-    upMsg(up + ' upcoming trip' + (up === 1 ? '' : 's') + ' ready. Check the list below, then tap Publish to everyone.');
-    document.getElementById('publish').disabled = false;
-  }).catch(function (err) { upMsg(err instanceof SyntaxError ? 'That file could not be read. Export it from Helper again.' : err.message, true); load(); });
+    var today = todayStr();
+    ed = cleanTrips(JSON.parse(txt)).filter(function (t) { return t.date >= today; });
+    sortEd(); drawEd();
+    changed('Loaded ' + ed.length + ' upcoming trip' + (ed.length === 1 ? '' : 's') + ' from Helper. Check the list, then tap Publish to everyone.');
+  }).catch(function (err) { upMsg(err instanceof SyntaxError ? 'That file could not be read. Export it from Helper again.' : err.message, true); })
+    .then(function () { e.target.value = ''; });
 };
 document.getElementById('publish').onclick = function () {
-  if (!pending) return;
+  if (ed.some(function (t) { return !/^\d{4}-\d{2}-\d{2}$/.test(t.date || ''); })) { upMsg('Every trip needs a date.', true); return; }
   var btn = this; btn.disabled = true; upMsg('Publishing…');
   var h = { 'Authorization': 'Bearer ' + ghToken, 'Accept': 'application/vnd.github+json' };
   fetch(REPO_API + '?t=' + Date.now(), { headers: h, cache: 'no-store' }).then(function (r) {
     if (r.status === 401 || r.status === 403) throw new Error('key');
     return r.ok ? r.json() : null;
   }).then(function (cur) {
-    var today = todayStr();
-    var body = { updated: pending.updated, trips: pending.trips.filter(function (t) { return t.date >= today; }) };
+    var today = todayStr(); sortEd();
+    var body = { updated: new Date().toISOString(), trips: ed.filter(function (t) { return t.date >= today; }).map(function (t) { return { date: t.date, time: t.time || '', status: t.status }; }) };
     var payload = { message: 'Trips: update status', content: btoa(unescape(encodeURIComponent(JSON.stringify(body, null, 1) + '\n'))) };
     if (cur && cur.sha) payload.sha = cur.sha;
-    return fetch(REPO_API, { method: 'PUT', headers: h, body: JSON.stringify(payload) });
+    return fetch(REPO_API, { method: 'PUT', headers: h, body: JSON.stringify(payload) }).then(function (r) { r.body2 = body; return r; });
   }).then(function (r) {
     if (r.status === 401 || r.status === 403) throw new Error('key');
     if (!r.ok) throw new Error('http');
-    pending = null; document.getElementById('file').value = '';
+    dirty = false; window.pubAt = Date.now(); data = r.body2; render(); drawEd();
+    try { localStorage.setItem('trips-last', JSON.stringify(data)); } catch (e) {}
     upMsg('Published. Everyone sees it within a minute or two, next time they open the app.');
   }).catch(function (err) {
     btn.disabled = false;
     upMsg(err.message === 'key' ? 'GitHub did not accept the key. Disconnect and connect again with Contents set to Read and write.' : 'Could not publish. Check the connection and try again.', true);
   });
 };
+window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 document.getElementById('saveToken').onclick = function () {
   var v = document.getElementById('token').value.trim(); if (!v) { upMsg('Paste the key first.', true); return; }
   ghToken = v; try { localStorage.setItem('trips-gh-token', v); } catch (e) {}
