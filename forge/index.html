@@ -109,6 +109,7 @@ body{padding:0}
 #sheet .pal{gap:4px;grid-template-columns:repeat(auto-fill,minmax(30px,1fr))}#sheet .sw{height:32px}
 .nud{display:grid;grid-template-columns:12px 30px 1fr 30px;gap:4px;align-items:center;font-size:12px}.nud .btn{min-height:30px!important;padding:0!important;font-size:18px!important;touch-action:manipulation}.nud b{font-family:var(--num);font-size:11px;color:var(--gold);text-align:center;font-weight:400;cursor:pointer}
 #c{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}.sw.flash{animation:swf .5s}@keyframes swf{0%{transform:scale(1.35)}100%{transform:scale(1)}}@media (prefers-reduced-motion:reduce){.sw.flash{animation:none}}
+#gizmo{position:absolute;right:max(6px,env(safe-area-inset-right,0px));top:calc(env(safe-area-inset-top,0px) + 100px);width:72px;height:72px;z-index:2;pointer-events:none}
 [hidden]{display:none!important}
 </style>
 <div class="wrap">
@@ -116,7 +117,7 @@ body{padding:0}
   <div class="tabs" id="tabs" role="tablist"></div></div>
   <div class="view" id="view">
     <canvas id="c" aria-label="3D monster. Drag to turn, pinch to zoom, tap to build"></canvas>
-    <div class="ov tr" id="turnbar" hidden><button class="btn sm" id="turnL" type="button" aria-label="Turn left">◀</button><button class="btn sm" id="turnR" type="button" aria-label="Turn right">▶</button></div>
+    <canvas id="gizmo" width="216" height="216" aria-hidden="true"></canvas><div class="ov tr" id="turnbar" hidden><button class="btn sm" id="turnL" type="button" aria-label="Turn left">◀</button><button class="btn sm" id="turnR" type="button" aria-label="Turn right">▶</button></div>
     <div class="ov tl"><button class="btn sm" id="undo" type="button" style="order:9;margin-left:auto">Undo</button><button class="btn sm" id="anim" type="button">Fire</button><button class="btn sm" id="spin" type="button" hidden>Spin</button><button class="btn sm" id="gaps" type="button" hidden>Gaps</button><button class="btn sm" id="flat" type="button" hidden>Flat</button><button class="btn sm" id="pixel" type="button" hidden>Pixel</button><button class="btn sm" id="chunky" type="button" hidden>Chunky</button><button class="btn sm" id="soft" type="button" hidden>Soft</button><button class="btn sm" id="sprite" type="button" hidden>Sprite</button><button class="btn sm" id="art" type="button">Pixel art</button><button class="btn sm" id="showPose" type="button" hidden>Pose</button><button class="btn sm" id="artd" type="button" hidden hidden>Detail</button><button class="btn sm" id="front" type="button">Front</button></div>
     <div class="hint" id="hint">Drag to turn · pinch to zoom · tap to build</div>
   </div>
@@ -226,6 +227,8 @@ const meshG=new THREE.InstancedMesh(geo,matG,MAXV),meshN=new THREE.InstancedMesh
 [meshG,meshN].forEach(m=>{m.setColorAt(0,new THREE.Color());m.count=0;m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);scene.add(m)});
 const floor=new THREE.Mesh(new THREE.PlaneGeometry(200,200),new THREE.MeshBasicMaterial({visible:false}));floor.rotation.x=-Math.PI/2;floor.position.y=-.5;scene.add(floor);
 const grid=new THREE.GridHelper(40,40,0x3f6a7c,0x2f5564);grid.position.y=-.5;grid.material.transparent=true;grid.material.opacity=.45;scene.add(grid);
+// faint X (red) and Z (blue) lines on the floor through the middle; a child of the grid, so they hide with it in Pixel art
+{[[1,0,'#ff7a7a'],[0,1,'#7aa8ff']].forEach(([x,z,c])=>{const g=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-20*x,.01,-20*z),new THREE.Vector3(20*x,.01,20*z)]);grid.add(new THREE.Line(g,new THREE.LineBasicMaterial({color:c,transparent:true,opacity:.55})))})}
 const mirrorLine=new THREE.Mesh(new THREE.PlaneGeometry(.06,60),new THREE.MeshBasicMaterial({color:0xfadda9,transparent:true,opacity:.35,side:THREE.DoubleSide}));scene.add(mirrorLine);
 const ghost=new THREE.Mesh(new THREE.BoxGeometry(.98,.98,.98),new THREE.MeshBasicMaterial({color:0xfadda9,transparent:true,opacity:.25,depthWrite:false}));ghost.visible=false;scene.add(ghost);
 const cam={th:.5,ph:1.2,r:30,t:new THREE.Vector3()};
@@ -329,7 +332,13 @@ function spriteRender(){const Wd=cv.width,Hd=cv.height,h=cam.r*Math.tan(17.5*Mat
   const U=postMat.uniforms;U.tA.value=rtA.texture;U.tB.value=rtB.texture;U.tD.value=rtA.depthTexture;U.uArt.value.set(aw,ah);U.tO.value=art?touchTex(aw,ah):noTouch;U.uPs.value=ps;U.uR.value=art?1:Math.min(12,Math.max(3,Math.round(3*(devicePixelRatio||1))));U.uThr.value=.9/(ortho.far-ortho.near);
   renderer.setRenderTarget(null);renderer.clear();renderer.render(postScene,postCam)}
 const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
-let lastT=0;function loop(t){updateOffset();const dt=Math.min(.1,(t-lastT)/1000);lastT=t;if(playing)tick(dt);if(spinOn&&!drag)cam.th+=.006;placeCam();draw(t);if(sprite||art)spriteRender();else{renderer.setRenderTarget(null);renderer.render(scene,camera)}requestAnimationFrame(loop)}
+const gz=$('gizmo').getContext('2d'),_ga=new THREE.Vector3();
+function drawGizmo(){const c=gz.canvas,W=c.width,m=W/2,L=W*.28;gz.clearRect(0,0,W,W);const q=camera.quaternion.clone().invert();
+  const A=[['X','#ff7a7a',1,0,0],['Y','#7fe08a',0,1,0],['Z','#7aa8ff',0,0,1]].map(([n,col,x,y,z])=>{_ga.set(x,y,z).applyQuaternion(q);return{n,col,x:_ga.x,y:_ga.y,z:_ga.z}}).sort((a,b)=>a.z-b.z);
+  gz.lineWidth=7;gz.font="bold 30px sans-serif";gz.textAlign='center';gz.textBaseline='middle';
+  for(const a of A){const ex=m+a.x*L,ey=m-a.y*L;gz.globalAlpha=a.z<-.2?.45:1;gz.strokeStyle=a.col;gz.beginPath();gz.moveTo(m,m);gz.lineTo(ex,ey);gz.stroke();
+    gz.fillStyle=a.col;gz.beginPath();gz.arc(m+a.x*(L+20),m-a.y*(L+20),21,0,7);gz.fill();gz.fillStyle="#173441";gz.fillText(a.n,m+a.x*(L+20),m-a.y*(L+20)+1)}gz.globalAlpha=1}
+let lastT=0;function loop(t){updateOffset();const dt=Math.min(.1,(t-lastT)/1000);lastT=t;if(playing)tick(dt);if(spinOn&&!drag)cam.th+=.006;placeCam();draw(t);drawGizmo();if(sprite||art)spriteRender();else{renderer.setRenderTarget(null);renderer.render(scene,camera)}requestAnimationFrame(loop)}
 
 /* ---------- touch: one finger turns (or taps to build), two fingers zoom ---------- */
 const pts=new Map();let drag=null,pinch=null;const ray=new THREE.Raycaster(),ndc=new THREE.Vector2();
