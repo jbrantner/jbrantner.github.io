@@ -142,6 +142,7 @@ body{padding:0}
       <button class="btn" id="mirror" type="button">Mirror</button><button class="btn" id="touch" type="button">Touch up</button>
     </div>
     <div class="row"><span class="hintp">Sculpt</span><div class="seg" role="group" aria-label="Sculpt tool"><button class="btn sm" data-tool="layer" type="button">Layer</button><button class="btn sm" data-tool="smooth" type="button">Smooth</button><button class="btn sm" data-tool="pull" type="button">Push/Pull</button></div></div>
+    <div class="row" id="strRow" hidden><span class="hintp">Strength</span><button class="btn sm" id="strM" type="button" aria-label="Gentler">−</button><b id="strV" style="min-width:2.2em;text-align:center">2</b><button class="btn sm" id="strP" type="button" aria-label="Stronger">+</button><span class="hintp" id="strH"></span></div>
     <div class="row"><span class="hintp">Brush</span><button class="btn sm" id="brushM" type="button" aria-label="Smaller brush">−</button><b id="brushV" style="min-width:2.2em;text-align:center">1</b><button class="btn sm" id="brushP" type="button" aria-label="Bigger brush">+</button><span class="hintp" id="brushH">one pip</span></div>
     <div class="pal" id="pal"></div>
     <div class="row"><button class="btn sm" id="xfOpen" type="button" aria-expanded="false">Transform ⋯</button><span class="hintp" id="xfSum"></span></div>
@@ -214,12 +215,12 @@ const emberLine=()=>({name:EMBER2D.name,stages:EMBER2D.stages.map(from2D)});
 
 /* ---------- state ---------- */
 const KEY='pip-monster-forge.v1';
-let poseOn=false,playing=false,clipT=0,selPart='body',copied=null,touchOn=false,touchVer=0,artCam={cr:0,cu:0,ti:0,pi:12},art=false,artD=6,soft=false,sprite=false,chunky=false,pixel=false,flat=false,gaps=false,M,cur=0,tool='add',ink='c',mirror=true,animOn=true,spinOn=false,hist=[],libId=null,brush=1;
-try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&s.M&&s.M.stages&&s.M.stages.length){M=s.M;cur=Math.min(s.cur|0,M.stages.length-1);mirror=s.mirror!==false;gaps=!!s.gaps;flat=!!s.flat;pixel=!!s.pixel;chunky=!!s.chunky;soft=!!s.soft;sprite=!!s.sprite;art=!!s.art;artD=s.artD||6;libId=s.libId||null;brush=Math.max(1,Math.min(16,s.brush|0||1))}}catch(e){}
+let poseOn=false,playing=false,clipT=0,selPart='body',copied=null,touchOn=false,touchVer=0,artCam={cr:0,cu:0,ti:0,pi:12},art=false,artD=6,soft=false,sprite=false,chunky=false,pixel=false,flat=false,gaps=false,M,cur=0,tool='add',ink='c',mirror=true,animOn=true,spinOn=false,hist=[],libId=null,brush=1,smoothS=2;
+try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&s.M&&s.M.stages&&s.M.stages.length){M=s.M;cur=Math.min(s.cur|0,M.stages.length-1);mirror=s.mirror!==false;gaps=!!s.gaps;flat=!!s.flat;pixel=!!s.pixel;chunky=!!s.chunky;soft=!!s.soft;sprite=!!s.sprite;art=!!s.art;artD=s.artD||6;libId=s.libId||null;brush=Math.max(1,Math.min(16,s.brush|0||1));smoothS=Math.max(1,Math.min(5,s.smoothS|0||2))}}catch(e){}
 if(!M)M=emberLine();
 flat=pixel=chunky=soft=sprite=gaps=false;artD=1;
 const S=()=>M.stages[cur];
-function save(){try{localStorage.setItem(KEY,JSON.stringify({M,cur,mirror,gaps,flat,pixel,chunky,soft,sprite,art,artD,libId,brush}))}catch(e){}if(typeof libSave==='function')libSave()}
+function save(){try{localStorage.setItem(KEY,JSON.stringify({M,cur,mirror,gaps,flat,pixel,chunky,soft,sprite,art,artD,libId,brush,smoothS}))}catch(e){}if(typeof libSave==='function')libSave()}
 function snap(){hist.push(JSON.stringify({M,cur}));if(hist.length>60)hist.shift()}
 
 /* ---------- three.js scene ---------- */
@@ -451,11 +452,15 @@ function putV(c,k,pid){if(c[1]<0)return;const st=S();setV(c,k);if(k&&st.rig){con
 function dab(sk,p){const st=S(),V=st.vox,of=st.rig?st.rig.of:{};info=null;
   if(tool==='layer'){for(const c of ball(p.add||p.cell)){const q=c.join(',');if(sk.vox[q]||V[q]||c[1]<0)continue;
       for(const n of N6){const nq=(c[0]+n[0])+','+(c[1]+n[1])+','+(c[2]+n[2]);if(sk.vox[nq]){putV(c,sk.vox[nq],sk.of&&sk.of[nq]);break}}}return}
-  // smooth: decide every cell first, then apply, so the vote isn't skewed by its own changes
+  // smooth: blur and re-threshold. Strength widens the neighbourhood (1 to 4 pips) and pulls the keep/fill line toward half,
+  // so 1 only nibbles notches and corners while 5 melts big steps and lumps. Every cell is decided first, then applied.
+  const SS=[null,[1,.5,.5],[2,.55,.45],[2,.5,.5],[3,.5,.5],[4,.5,.5]][smoothS],K=SS[0],KO=[];
+  for(let a=-K;a<=K;a++)for(let b=-K;b<=K;b++)for(let d=-K;d<=K;d++)if(a*a+b*b+d*d<=K*K+K*1.5)KO.push([a,b,d]);
   const cells=ball(p.cell).concat(brush<3?ball(p.cell).flatMap(c=>N6.map(n=>[c[0]+n[0],c[1]+n[1],c[2]+n[2]])):[]),seen=new Set(),ops=[];
-  for(const c of cells){const q=c.join(',');if(seen.has(q)||c[1]<0)continue;seen.add(q);let n=0;const cnt={},pc={};
-    for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++)for(let d=-1;d<=1;d++){const w=(c[0]+a)+','+(c[1]+b)+','+(c[2]+d),v=V[w];if(!v)continue;n++;if(a||b||d){cnt[v]=(cnt[v]||0)+1;const pp=of[w];if(pp)pc[pp]=(pc[pp]||0)+1}}
-    const had=!!V[q];if(had&&n<10)ops.push([c,null]);else if(!had&&n>=17){let bk=null,bn=0;for(const v in cnt)if(cnt[v]>bn){bn=cnt[v];bk=v}let bp=null,bc=0;for(const x in pc)if(pc[x]>bc){bc=pc[x];bp=x}ops.push([c,bk,bc*2>=n?bp:null])}}
+  for(const c of cells){const q=c.join(',');if(seen.has(q)||c[1]<0)continue;seen.add(q);let n=0,tot=0;const cnt={},pc={};
+    for(const[a,b,d]of KO){const yy=c[1]+b;if(yy<0)continue;tot++;const w=(c[0]+a)+','+yy+','+(c[2]+d),v=V[w];if(!v)continue;n++;if(a||b||d){cnt[v]=(cnt[v]||0)+1;const pp=of[w];if(pp)pc[pp]=(pc[pp]||0)+1}}
+    const f=n/Math.max(1,tot),had=!!V[q];
+    if(had&&f<SS[2])ops.push([c,null]);else if(!had&&f>=SS[1]){let bk=null,bn=0;for(const v in cnt)if(cnt[v]>bn){bn=cnt[v];bk=v}let bp=null,bc=0;for(const x in pc)if(pc[x]>bc){bc=pc[x];bp=x}ops.push([c,bk,bc*2>=n?bp:null])}}
   for(const[c,k,pid]of ops)if(k)putV(c,k,pid);else putV(c,null)}
 // Push/Pull: h > 0 raises the surface h pips along the face normal at the centre, tapering to 0 at the brush edge; h < 0 sinks it
 function pullTo(sk,h){const st=S();st.vox=Object.assign({},sk.vox);if(st.rig&&sk.of)st.rig.of=Object.assign({},sk.of);info=null;if(!h)return;
@@ -467,6 +472,8 @@ function pullTo(sk,h){const st=S();st.vox=Object.assign({},sk.vox);if(st.rig&&sk
     if(!s)continue;const sq=s.join(','),col=V[sq],pid=sk.of&&sk.of[sq];
     if(h>0)for(let k=1;k<=hh;k++)putV(s.map((v,i)=>v+n[i]*k),col,pid);
     else for(let k=0;k<hh;k++){const c=s.map((v,i)=>v-n[i]*k);if(!st.vox[c.join(',')])break;putV(c,null)}}}
+function strUI(){$('strRow').hidden=tool!=='smooth';$('strV').textContent=smoothS;$('strH').textContent=['','nibbles corners','gentle','medium','strong','melts big steps'][smoothS];$('strM').disabled=smoothS<=1;$('strP').disabled=smoothS>=5}
+$('strM').onclick=()=>{smoothS=Math.max(1,smoothS-1);strUI();save()};$('strP').onclick=()=>{smoothS=Math.min(5,smoothS+1);strUI();save()};
 function brushUI(){$('brushV').textContent=brush;$('brushH').textContent=brush===1?'one pip':brush+' pips across';$('brushM').disabled=brush<=1;$('brushP').disabled=brush>=16;ghost.scale.setScalar(brush)}
 $('brushM').onclick=()=>{brush=Math.max(1,brush-1);brushUI();save()};$('brushP').onclick=()=>{brush=Math.min(16,brush+1);brushUI();save()};
 
@@ -475,7 +482,7 @@ function drawTabs(){$('tabs').innerHTML='';M.stages.forEach((s,i)=>{const b=docu
   b.innerHTML='<b></b><span>LV '+(s.lv||'?')+'</span>';b.querySelector('b').textContent=s.name||'Stage '+(i+1);b.onclick=()=>{cur=i;info=null;selPart='body';playing=false;poseOn=false;clipT=0;refresh(true)};$('tabs').appendChild(b)})}
 const pal=$('pal');Object.keys(PAL).forEach(k=>{const b=document.createElement('button');b.type='button';b.className='sw';b.dataset.k=k;b.setAttribute('aria-label',NAMES[k]);
   b.innerHTML='<i style="background:'+PAL[k]+';box-shadow:'+(NOGLOW.includes(k)?'none':'0 0 8px '+PAL[k])+'"></i>';b.onclick=()=>{ink=k;if(tool==='erase')tool='paint';paintUI()};pal.appendChild(b)});
-function paintUI(){pal.querySelectorAll('.sw').forEach(b=>b.classList.toggle('on',b.dataset.k===ink));document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool));
+function paintUI(){if(typeof strUI==='function')strUI();pal.querySelectorAll('.sw').forEach(b=>b.classList.toggle('on',b.dataset.k===ink));document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool));
   $('mirror').classList.toggle('on',mirror);$('anim').classList.toggle('on',fireOn());$('spin').classList.toggle('on',spinOn);$('gaps').classList.toggle('on',gaps);$('flat').classList.toggle('on',flat);$('pixel').classList.toggle('on',pixel);$('soft').classList.toggle('on',soft);$('sprite').classList.toggle('on',sprite);$('art').classList.toggle('on',art);$('view').classList.toggle('px',art);$('touch').classList.toggle('on',touchOn);$('turnbar').hidden=!art;$('cleartouch').hidden=!touchOn;$('artd').textContent='Detail '+artD;$('chunky').classList.toggle('on',chunky);
   $('hint').textContent=poseOn?'Posing '+partName(selPart)+' · tap a part to pick it · drag the handles · two fingers pan':tool==='assign'&&!poseOn?'Tap pips to put them in '+partName(selPart)+(mirror?' (Mirror is on)':''):tool==='pivot'&&!poseOn?'Tap a pip face to put '+partName(selPart)+'\u2019s pivot there':touchOn?'Touch up · '+angleName()+' · tap or drag to '+(tool==='erase'?'erase':'paint')+' pixels':animOn?'Fire is on · turn Fire off to build':(SCULPT.includes(tool)?(tool==='pull'?'Push/Pull · drag up on the model to pull out, down to push in · drag off it to turn':tool==='layer'?'Layer · brush over the model to add one layer · drag off it to turn':'Smooth · brush over the model to round it off · drag off it to turn'):'Drag to turn · pinch to zoom · two fingers pan · tap to '+(tool==='add'?'add a pip':tool));}
 document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>{tool=b.dataset.tool;if(animOn)animOn=false;poseOn=false;playing=false;if(tool==='assign'||tool==='pivot')rig();paintUI();rigUI()});
