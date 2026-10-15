@@ -443,21 +443,24 @@ function ball(c){const D=brush;if(D<2)return[c];const r=D/2,o=D%2?0:.5,lo=-Math.
   for(let a=lo;a<=hi;a++)for(let b=lo;b<=hi;b++)for(let d=lo;d<=hi;d++){const x=a-o,y=b-o,z=d-o;if(x*x+y*y+z*z<=r*r+.01)out.push([c[0]+a,c[1]+b,c[2]+d])}return out}
 /* ---------- Sculpt brushes: treat the pips like clay ----------
    Layer adds one skin of pips over the surface under the brush (one layer per stroke, coloured like the pip below it).
-   Smooth runs a 3×3×3 majority vote inside the brush: notches fill, lone bumps and stair-step corners shave off.
+   Smooth blurs and re-thresholds the pips inside the brush (Strength sets how far it looks); one stroke is one pass.
    Push/Pull grabs the surface where you touch and raises or sinks it along that face, as a rounded dome over the brush;
    it is recalculated from the stroke's start on every move, so it follows your finger both ways. Mirror applies to all three. */
 const SCULPT=['layer','smooth','pull'],N6=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
 function sculptStart(p){const st=S();return{vox:Object.assign({},st.vox),of:st.rig?Object.assign({},st.rig.of):null,cell:p.cell,add:p.add,n:p.add.map((v,i)=>v-p.cell[i])}}
 function putV(c,k,pid){if(c[1]<0)return;const st=S();setV(c,k);if(k&&st.rig){const ks=[c.join(',')];if(mirror)ks.push([mir(c[0]),c[1],c[2]].join(','));ks.forEach(q=>{if(pid)st.rig.of[q]=pid;else delete st.rig.of[q]})}}
-function dab(sk,p){const st=S(),V=st.vox,of=st.rig?st.rig.of:{};info=null;
+function dab(sk,p){const st=S();let V=st.vox,of=st.rig?st.rig.of:{};info=null;
   if(tool==='layer'){for(const c of ball(p.add||p.cell)){const q=c.join(',');if(sk.vox[q]||V[q]||c[1]<0)continue;
       for(const n of N6){const nq=(c[0]+n[0])+','+(c[1]+n[1])+','+(c[2]+n[2]);if(sk.vox[nq]){putV(c,sk.vox[nq],sk.of&&sk.of[nq]);break}}}return}
+  // one stroke = one smoothing pass: every vote reads the shape as it was when the finger went down, and each pip is decided once,
+  // so brushing back and forth doesn't keep eating the shape; lift and brush again for another pass
+  V=sk.vox;of=sk.of||{};const done=sk.done||(sk.done=new Set());
   // smooth: blur and re-threshold. Strength widens the neighbourhood (1 to 4 pips) and pulls the keep/fill line toward half,
   // so 1 only nibbles notches and corners while 5 melts big steps and lumps. Every cell is decided first, then applied.
   const SS=[null,[1,.5,.5],[2,.55,.45],[2,.5,.5],[3,.5,.5],[4,.5,.5]][smoothS],K=SS[0],KO=[];
   for(let a=-K;a<=K;a++)for(let b=-K;b<=K;b++)for(let d=-K;d<=K;d++)if(a*a+b*b+d*d<=K*K+K*1.5)KO.push([a,b,d]);
   const cells=ball(p.cell).concat(brush<3?ball(p.cell).flatMap(c=>N6.map(n=>[c[0]+n[0],c[1]+n[1],c[2]+n[2]])):[]),seen=new Set(),ops=[];
-  for(const c of cells){const q=c.join(',');if(seen.has(q)||c[1]<0)continue;seen.add(q);let n=0,tot=0;const cnt={},pc={};
+  for(const c of cells){const q=c.join(',');if(seen.has(q)||done.has(q)||c[1]<0)continue;seen.add(q);done.add(q);let n=0,tot=0;const cnt={},pc={};
     for(const[a,b,d]of KO){const yy=c[1]+b;if(yy<0)continue;tot++;const w=(c[0]+a)+','+yy+','+(c[2]+d),v=V[w];if(!v)continue;n++;if(a||b||d){cnt[v]=(cnt[v]||0)+1;const pp=of[w];if(pp)pc[pp]=(pc[pp]||0)+1}}
     const f=n/Math.max(1,tot),had=!!V[q];
     if(had&&f<SS[2])ops.push([c,null]);else if(!had&&f>=SS[1]){let bk=null,bn=0;for(const v in cnt)if(cnt[v]>bn){bn=cnt[v];bk=v}let bp=null,bc=0;for(const x in pc)if(pc[x]>bc){bc=pc[x];bp=x}ops.push([c,bk,bc*2>=n?bp:null])}}
