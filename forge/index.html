@@ -114,6 +114,7 @@ body{padding:0}
 #sheet .pal{gap:4px;grid-template-columns:repeat(auto-fill,minmax(30px,1fr))}#sheet .sw{height:32px}
 .nud{display:grid;grid-template-columns:auto 30px 1fr 30px;gap:4px;align-items:center;font-size:12px}.nud .btn{min-height:30px!important;padding:0!important;font-size:18px!important;touch-action:manipulation}.nud b{font-family:var(--num);font-size:11px;color:var(--gold);text-align:center;font-weight:400;cursor:pointer}
 #c{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}.sw.flash{animation:swf .5s}@keyframes swf{0%{transform:scale(1.35)}100%{transform:scale(1)}}@media (prefers-reduced-motion:reduce){.sw.flash{animation:none}}
+#pgz{position:absolute;inset:0;pointer-events:none;z-index:1}
 #gizmo{position:absolute;right:max(6px,env(safe-area-inset-right,0px));top:calc(env(safe-area-inset-top,0px) + 100px);width:72px;height:72px;z-index:2;pointer-events:none}
 [hidden]{display:none!important}
 </style>
@@ -122,7 +123,7 @@ body{padding:0}
   <div class="tabs" id="tabs" role="tablist"></div></div>
   <div class="view" id="view">
     <canvas id="c" aria-label="3D monster. Drag to turn, pinch to zoom, tap to build"></canvas>
-    <canvas id="gizmo" width="216" height="216" aria-hidden="true"></canvas><div class="ov tr" id="turnbar" hidden><button class="btn sm" id="turnL" type="button" aria-label="Turn left">◀</button><button class="btn sm" id="turnR" type="button" aria-label="Turn right">▶</button></div>
+    <canvas id="pgz" aria-hidden="true"></canvas><canvas id="gizmo" width="216" height="216" aria-hidden="true"></canvas><div class="ov tr" id="turnbar" hidden><button class="btn sm" id="turnL" type="button" aria-label="Turn left">◀</button><button class="btn sm" id="turnR" type="button" aria-label="Turn right">▶</button></div>
     <div class="ov tl"><button class="btn sm" id="undo" type="button" style="order:9;margin-left:auto">Undo</button><button class="btn sm" id="anim" type="button">Fire</button><button class="btn sm" id="spin" type="button" hidden>Spin</button><button class="btn sm" id="gaps" type="button" hidden>Gaps</button><button class="btn sm" id="flat" type="button" hidden>Flat</button><button class="btn sm" id="pixel" type="button" hidden>Pixel</button><button class="btn sm" id="chunky" type="button" hidden>Chunky</button><button class="btn sm" id="soft" type="button" hidden>Soft</button><button class="btn sm" id="sprite" type="button" hidden>Sprite</button><button class="btn sm" id="art" type="button">Pixel art</button><button class="btn sm" id="showPose" type="button" hidden>Pose</button><button class="btn sm" id="artd" type="button" hidden hidden>Detail</button><button class="btn sm" id="front" type="button">Front</button></div>
     <div class="hint" id="hint">Drag to turn · pinch to zoom · tap to build</div>
   </div>
@@ -349,23 +350,66 @@ function drawGizmo(){const c=gz.canvas,W=c.width,m=W/2,L=W*.28;gz.clearRect(0,0,
   gz.lineWidth=7;gz.font="bold 30px sans-serif";gz.textAlign='center';gz.textBaseline='middle';
   for(const a of A){const ex=m+a.x*L,ey=m-a.y*L;gz.globalAlpha=a.z<-.2?.45:1;gz.strokeStyle=a.col;gz.beginPath();gz.moveTo(m,m);gz.lineTo(ex,ey);gz.stroke();
     gz.fillStyle=a.col;gz.beginPath();gz.arc(m+a.x*(L+20),m-a.y*(L+20),21,0,7);gz.fill();gz.fillStyle="#173441";gz.fillText(a.n,m+a.x*(L+20),m-a.y*(L+20)+1)}gz.globalAlpha=1}
-let lastT=0;function loop(t){updateOffset();const dt=Math.min(.1,(t-lastT)/1000);lastT=t;if(playing)tick(dt);if(spinOn&&!drag)cam.th+=.006;placeCam();draw(t);drawGizmo();if(sprite||art)spriteRender();else{renderer.setRenderTarget(null);renderer.render(scene,camera)}requestAnimationFrame(loop)}
+let lastT=0;function loop(t){updateOffset();const dt=Math.min(.1,(t-lastT)/1000);lastT=t;if(playing)tick(dt);if(spinOn&&!drag)cam.th+=.006;placeCam();draw(t);drawGizmo();if(sprite||art)spriteRender();else{renderer.setRenderTarget(null);renderer.render(scene,camera)}drawPoseGz();requestAnimationFrame(loop)}
+
+/* ---------- Pose handles, like Maya's manipulators: arrows move, rings rotate, boxes scale ----------
+   Drawn flat over the canvas from the projected 3D frame, so they sit the same in the voxel and Pixel art views.
+   Move and Rotate use the parent's axes (the same axes the − + buttons use); Scale uses the part's own turned axes. */
+const pgz=$('pgz').getContext('2d'),_sv=new THREE.Vector3();
+function toScr(v){_sv.copy(v).project(camera);const r=cv.getBoundingClientRect();
+  if(sprite||art){const sx=cv.width/r.width,sy=cv.height/r.height;return[r.left+(_sv.x+1)/2*SP.aw*SP.ps/sx,r.bottom-(_sv.y+1)/2*SP.ah*SP.ps/sy]}
+  return[r.left+(_sv.x+1)/2*r.width,r.top+(1-_sv.y)/2*r.height]}
+function pxPerUnit(o){camera.updateMatrixWorld();const a=toScr(o),rt=new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld,0).add(o),b=toScr(rt);return Math.hypot(b[0]-a[0],b[1]-a[1])}
+function gzFrame(){if(!poseOn||playing||touchOn)return null;const st=S(),r=st.rig,C=clipOf(r);if(!r||!C)return null;const p=r.parts.find(x=>x.id===selPart);if(!p)return null;
+  const PM=partMats(st);if(!PM)return null;const Pm=p.parent&&PM[p.parent]?PM[p.parent]:new THREE.Matrix4(),k=poseV;
+  const o=new THREE.Vector3(p.pivot[0]-st.mx+k[0],p.pivot[1]+k[1],p.pivot[2]+k[2]).applyMatrix4(Pm);
+  const col=[0,1,2].map(i=>new THREE.Vector3().setFromMatrixColumn(Pm,i)),pax=col.map(c=>c.clone().normalize());
+  const q=new THREE.Quaternion(k[3],k[4],k[5],k[6]).normalize(),lax=[0,1,2].map(i=>new THREE.Vector3(i===0?1:0,i===1?1:0,i===2?1:0).applyQuaternion(q).transformDirection(Pm));
+  const ppu=pxPerUnit(o);if(!(ppu>0))return null;const len=Math.min(90,Math.max(56,innerWidth*.16))/ppu,s0=toScr(o);
+  const ring=pax.map((a,i)=>{const u=pax[(i+1)%3],v=pax[(i+2)%3],pts=[];for(let j=0;j<=48;j++){const t=j/48*Math.PI*2,w=o.clone().addScaledVector(u,Math.cos(t)*len*.85).addScaledVector(v,Math.sin(t)*len*.85);pts.push(toScr(w).concat(w.clone().sub(o).dot(camera.position.clone().sub(o))))}return pts});
+  return{o,col,pax,lax,q,len,ppu,s0,Pm,ring,tip:i=>toScr(o.clone().addScaledVector(poseMode==='scale'?lax[i]:pax[i],len))}}
+const segD=(x,y,a,b)=>{const dx=b[0]-a[0],dy=b[1]-a[1],L=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((x-a[0])*dx+(y-a[1])*dy)/L));return Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy)};
+function gzHit(x,y){const F=gzFrame();if(!F)return null;let best=null,bd=1e9;const take=(d,h)=>{if(d<bd){bd=d;best=h}};
+  if(poseMode==='rot'){F.ring.forEach((pts,i)=>{for(let j=0;j<48;j++)take(segD(x,y,pts[j],pts[j+1]),{i})});return bd<22?best:null}
+  if(poseMode==='scale'){const c=Math.hypot(x-F.s0[0],y-F.s0[1]);if(c<20)return{i:3}}
+  for(let i=0;i<3;i++){const t=F.tip(i);take(poseMode==='scale'?Math.hypot(x-t[0],y-t[1]):segD(x,y,[F.s0[0]+(t[0]-F.s0[0])*.2,F.s0[1]+(t[1]-F.s0[1])*.2],t),{i})}
+  return bd<(poseMode==='scale'?26:22)?best:null}
+function gzDrag(d,x,y){const F=d.F,k=poseV,s=d.start,i=d.gz.i,dx=x-d.x0,dy=y-d.y0;if(!F)return;
+  if(poseMode==='move'){const t=toScr(F.o.clone().add(F.col[i])),sa=[t[0]-F.s0[0],t[1]-F.s0[1]],L=sa[0]*sa[0]+sa[1]*sa[1];if(L<4)return;
+    k[i]=Math.round((s[i]+(dx*sa[0]+dy*sa[1])/L)*2)/2}
+  else if(poseMode==='rot'){const a=Math.atan2(y-F.s0[1],x-F.s0[0]);if(d.a0===null){d.a0=a;d.acc=0;d.la=a}let da=a-d.la;if(da>Math.PI)da-=2*Math.PI;if(da<-Math.PI)da+=2*Math.PI;d.acc+=da;d.la=a;
+    const toward=camera.position.clone().sub(F.o).dot(F.pax[i])>=0?1:-1,ang=Math.round(-d.acc*toward*180/Math.PI)*Math.PI/180;
+    _qa.setFromAxisAngle(new THREE.Vector3(i===0?1:0,i===1?1:0,i===2?1:0),ang);_cq.set(s[3],s[4],s[5],s[6]).premultiply(_qa).normalize();k[3]=_cq.x;k[4]=_cq.y;k[5]=_cq.z;k[6]=_cq.w}
+  else if(i===3){const f=Math.exp((dx-dy)*.006);for(let j=7;j<10;j++)k[j]=Math.max(.1,Math.round(s[j]*f*100)/100)}
+  else{const t=F.tip(i),sa=[t[0]-F.s0[0],t[1]-F.s0[1]],L=sa[0]*sa[0]+sa[1]*sa[1];if(L<4)return;k[7+i]=Math.max(.1,Math.round(s[7+i]*(1+(dx*sa[0]+dy*sa[1])/L)*100)/100)}
+  showVals();keyHere();save();showCode();drawDope(S().rig,clipOf(),clipOf().len)}
+function drawPoseGz(){const c=$('pgz'),dpr=devicePixelRatio||1,W=Math.round(c.clientWidth*dpr),H=Math.round(c.clientHeight*dpr);if(c.width!==W||c.height!==H){c.width=W;c.height=H}
+  pgz.setTransform(1,0,0,1,0,0);pgz.clearRect(0,0,W,H);const F=gzFrame();if(!F)return;const r=c.getBoundingClientRect();pgz.setTransform(dpr,0,0,dpr,-r.left*dpr,-r.top*dpr);
+  const act=drag&&drag.gz?drag.gz.i:-1,[ox,oy]=F.s0;pgz.lineCap='round';
+  if(poseMode==='rot'){F.ring.forEach((pts,i)=>{pgz.strokeStyle=act===i?'#fadda9':AXC[i];pgz.lineWidth=act===i?5:3.5;for(let j=0;j<48;j++){pgz.globalAlpha=(pts[j][2]+pts[j+1][2])<0?.3:1;pgz.beginPath();pgz.moveTo(pts[j][0],pts[j][1]);pgz.lineTo(pts[j+1][0],pts[j+1][1]);pgz.stroke()}});pgz.globalAlpha=1}
+  else for(let i=0;i<3;i++){const[tx,ty]=F.tip(i),col=act===i?'#fadda9':AXC[i];pgz.strokeStyle=pgz.fillStyle=col;pgz.lineWidth=act===i?5:3.5;pgz.beginPath();pgz.moveTo(ox,oy);pgz.lineTo(tx,ty);pgz.stroke();
+    const a=Math.atan2(ty-oy,tx-ox);if(poseMode==='move'){pgz.beginPath();pgz.moveTo(tx+Math.cos(a)*12,ty+Math.sin(a)*12);pgz.lineTo(tx+Math.cos(a+2.4)*10,ty+Math.sin(a+2.4)*10);pgz.lineTo(tx+Math.cos(a-2.4)*10,ty+Math.sin(a-2.4)*10);pgz.fill()}
+    else pgz.fillRect(tx-7,ty-7,14,14)}
+  pgz.fillStyle=poseMode==='scale'?(act===3?'#fadda9':'#f3aea6'):'#fadda9';if(poseMode==='scale')pgz.fillRect(ox-8,oy-8,16,16);else{pgz.beginPath();pgz.arc(ox,oy,5,0,7);pgz.fill()}}
 
 /* ---------- touch: one finger turns (or taps to build), two fingers zoom ---------- */
 const pts=new Map();let drag=null,pinch=null;const ray=new THREE.Raycaster(),ndc=new THREE.Vector2();
 cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);pts.set(e.pointerId,[e.clientX,e.clientY]);
   if(touchOn&&pts.size===1){const d=drag={touch:true,x0:e.clientX,y0:e.clientY,started:false,pe:{clientX:e.clientX,clientY:e.clientY}};
     d.hold=setTimeout(()=>{if(drag!==d||d.started||pts.size!==1)return;const k=touchPick(d.pe);if(!k)return;d.held=true;ink=k;if(tool==='erase')tool='paint';paintUI();flashSw();$('hint').textContent='Picked this color'},450);return}
-  if(pts.size===2){if(drag&&drag.touch)changed();drag=null;const[a,b]=[...pts.values()];pinch={d:Math.hypot(a[0]-b[0],a[1]-b[1]),r:cam.r};return}
+  if(pts.size===2){if(drag&&drag.touch)changed();if(drag&&drag.gz){changed();rigUI()}drag=null;const[a,b]=[...pts.values()];pinch={d:Math.hypot(a[0]-b[0],a[1]-b[1]),r:cam.r,m:[(a[0]+b[0])/2,(a[1]+b[1])/2]};return}
+  if(pts.size===1&&poseOn&&!playing){const h=gzHit(e.clientX,e.clientY);if(h){snap();drag={gz:h,x0:e.clientX,y0:e.clientY,start:poseV.slice(),F:gzFrame(),a0:null};return}}
   drag={x:e.clientX,y:e.clientY,x0:e.clientX,y0:e.clientY,moved:false};
   // press and hold a voxel to pick up its colour
-  const d=drag,ev={clientX:e.clientX,clientY:e.clientY};d.hold=setTimeout(()=>{if(drag!==d||d.moved||pts.size!==1)return;const p=pick(ev);const k=p&&p.cell&&S().vox[p.cell.join(',')];if(!k)return;
+  const d=drag,ev={clientX:e.clientX,clientY:e.clientY};d.hold=setTimeout(()=>{if(drag!==d||d.moved||pts.size!==1||poseOn)return;const p=pick(ev);const k=p&&p.cell&&S().vox[p.cell.join(',')];if(!k)return;
     d.held=true;ink=k;if(tool==='erase')tool='paint';paintUI();flashSw();$('hint').textContent='Picked this color'},450)});
 cv.addEventListener('pointermove',e=>{if(!pts.has(e.pointerId)){hover(e);return}pts.set(e.pointerId,[e.clientX,e.clientY]);
-  if(pinch&&pts.size===2){const[a,b]=[...pts.values()];cam.r=Math.max(6,Math.min(120,pinch.r*pinch.d/Math.max(10,Math.hypot(a[0]-b[0],a[1]-b[1]))));return}
+  if(pinch&&pts.size===2){const[a,b]=[...pts.values()];cam.r=Math.max(6,Math.min(120,pinch.r*pinch.d/Math.max(10,Math.hypot(a[0]-b[0],a[1]-b[1]))));
+    const m=[(a[0]+b[0])/2,(a[1]+b[1])/2],ppu=pxPerUnit(cam.t);if(ppu>0){camera.updateMatrixWorld();const ex=camera.matrixWorld.elements;cam.t.x-=(m[0]-pinch.m[0])/ppu*ex[0]-(m[1]-pinch.m[1])/ppu*ex[4];cam.t.y-=(m[0]-pinch.m[0])/ppu*ex[1]-(m[1]-pinch.m[1])/ppu*ex[5];cam.t.z-=(m[0]-pinch.m[0])/ppu*ex[2]-(m[1]-pinch.m[1])/ppu*ex[6]}pinch.m=m;return}
+  if(drag&&drag.gz){gzDrag(drag,e.clientX,e.clientY);return}
   if(!drag)return;if(drag.touch){if(drag.held)return;if(!drag.started){if(Math.hypot(e.clientX-drag.x0,e.clientY-drag.y0)<6)return;drag.started=true;clearTimeout(drag.hold);snap();touchPaint(drag.pe)}touchPaint(e);return}if(Math.hypot(e.clientX-drag.x0,e.clientY-drag.y0)>7)drag.moved=true;
   if(drag.moved){cam.th-=(e.clientX-drag.x)*.01;cam.ph=Math.max(.15,Math.min(Math.PI-.15,cam.ph-(e.clientY-drag.y)*.01));drag.x=e.clientX;drag.y=e.clientY}});
-const up=e=>{if(drag&&drag.hold)clearTimeout(drag.hold);if(drag&&drag.held){pts.delete(e.pointerId);drag=null;return}if(drag&&drag.touch){if(!drag.started){snap();touchPaint(e)}pts.delete(e.pointerId);drag=null;changed();return}const tap=drag&&!drag.moved&&pts.size===1;pts.delete(e.pointerId);if(!pts.size)pinch=null;if(tap)act(e);drag=null};
+const up=e=>{if(drag&&drag.gz){pts.delete(e.pointerId);if(!pts.size)pinch=null;drag=null;changed();rigUI();return}if(drag&&drag.hold)clearTimeout(drag.hold);if(drag&&drag.held){pts.delete(e.pointerId);drag=null;return}if(drag&&drag.touch){if(!drag.started){snap();touchPaint(e)}pts.delete(e.pointerId);drag=null;changed();return}const tap=drag&&!drag.moved&&pts.size===1;pts.delete(e.pointerId);if(!pts.size)pinch=null;if(tap)act(e);drag=null};
 cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',e=>{pts.delete(e.pointerId);pinch=null;drag=null});
 cv.addEventListener('pointerleave',()=>{ghost.visible=false});
 cv.addEventListener('wheel',e=>{e.preventDefault();cam.r=Math.max(6,Math.min(120,cam.r*(1+e.deltaY*.001)))},{passive:false});
@@ -378,7 +422,7 @@ function hover(e){if(animOn||e.pointerType==='touch'){ghost.visible=false;return
 const mir=x=>Math.round(2*S().mx-x);
 function setV(c,k){if(c[1]<0)return;const st=S(),key=c.join(',');if(k)st.vox[key]=k;else{delete st.vox[key];if(st.rig)delete st.rig.of[key]}
   if(mirror){const m=[mir(c[0]),c[1],c[2]].join(',');if(k)st.vox[m]=k;else delete st.vox[m]}}
-function act(e){if(animOn){$('hint').textContent='Turn Fire off to build';return}if(poseOn){$('hint').textContent='Turn Show pose off to build';return}if(bakeAll()){changed();draw(performance.now());xfUI()}const p=pick(e);if(!p)return;
+function act(e){if(animOn){$('hint').textContent='Turn Fire off to build';return}if(poseOn){const p=pick(e),r=S().rig;if(p&&p.cell&&r){selPart=r.of[p.cell.join(',')]||'body';if(!r.parts.some(x=>x.id===selPart))selPart='body';showSliders();rigUI();paintUI()}return}if(bakeAll()){changed();draw(performance.now());xfUI()}const p=pick(e);if(!p)return;
   if(tool==='assign'){if(!p.cell)return;snap();assignPip(p.cell);changed();return}
   if(tool==='pivot'){if(!p.cell)return;snap();const r=rig(),pt=r.parts.find(x=>x.id===selPart);pt.pivot=p.cell.map((v,i)=>(v+p.add[i])/2);changed();return}
   if(tool==='add'){if(!p.add)return;snap();setV(p.add,ink);const r=S().rig,pp=p.cell&&r&&r.of[p.cell.join(',')];if(pp){r.of[p.add.join(',')]=pp;if(mirror)r.of[[mir(p.add[0]),p.add[1],p.add[2]].join(',')]=pp}}
@@ -393,7 +437,7 @@ const pal=$('pal');Object.keys(PAL).forEach(k=>{const b=document.createElement('
   b.innerHTML='<i style="background:'+PAL[k]+';box-shadow:'+(NOGLOW.includes(k)?'none':'0 0 8px '+PAL[k])+'"></i>';b.onclick=()=>{ink=k;if(tool==='erase')tool='paint';paintUI()};pal.appendChild(b)});
 function paintUI(){pal.querySelectorAll('.sw').forEach(b=>b.classList.toggle('on',b.dataset.k===ink));document.querySelectorAll('[data-tool]').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool));
   $('mirror').classList.toggle('on',mirror);$('anim').classList.toggle('on',fireOn());$('spin').classList.toggle('on',spinOn);$('gaps').classList.toggle('on',gaps);$('flat').classList.toggle('on',flat);$('pixel').classList.toggle('on',pixel);$('soft').classList.toggle('on',soft);$('sprite').classList.toggle('on',sprite);$('art').classList.toggle('on',art);$('view').classList.toggle('px',art);$('touch').classList.toggle('on',touchOn);$('turnbar').hidden=!art;$('cleartouch').hidden=!touchOn;$('artd').textContent='Detail '+artD;$('chunky').classList.toggle('on',chunky);
-  $('hint').textContent=poseOn?'Posing '+partName(selPart)+' · Move, Rotate or Scale on X Y Z below · tap Pose again to build':tool==='assign'&&!poseOn?'Tap pips to put them in '+partName(selPart)+(mirror?' (Mirror is on)':''):tool==='pivot'&&!poseOn?'Tap a pip face to put '+partName(selPart)+'\u2019s pivot there':touchOn?'Touch up · '+angleName()+' · tap or drag to '+(tool==='erase'?'erase':'paint')+' pixels':animOn?'Fire is on · turn Fire off to build':'Drag to turn · pinch to zoom · tap to '+(tool==='add'?'add a pip':tool);}
+  $('hint').textContent=poseOn?'Posing '+partName(selPart)+' · tap a part to pick it · drag the handles · two fingers pan':tool==='assign'&&!poseOn?'Tap pips to put them in '+partName(selPart)+(mirror?' (Mirror is on)':''):tool==='pivot'&&!poseOn?'Tap a pip face to put '+partName(selPart)+'\u2019s pivot there':touchOn?'Touch up · '+angleName()+' · tap or drag to '+(tool==='erase'?'erase':'paint')+' pixels':animOn?'Fire is on · turn Fire off to build':'Drag to turn · pinch to zoom · two fingers pan · tap to '+(tool==='add'?'add a pip':tool);}
 document.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>{tool=b.dataset.tool;if(animOn)animOn=false;poseOn=false;playing=false;if(tool==='assign'||tool==='pivot')rig();paintUI();rigUI()});
 $('mirror').onclick=()=>{mirror=!mirror;save();paintUI()};
 $('anim').onclick=()=>{if(poseOn){const C=clipOf(rig());C.fire=C.fire===false;changed();rigUI()}else animOn=!animOn;paintUI()};$('chunky').onclick=()=>{chunky=!chunky;if(chunky){soft=false;sprite=false;art=false;touchOn=false}save();setLook();paintUI()};$('soft').onclick=()=>{soft=!soft;if(soft){chunky=false;sprite=false;art=false;touchOn=false}save();setLook();paintUI()};$('art').onclick=()=>{art=!art;if(!art)touchOn=false;if(art){flat=pixel=chunky=soft=sprite=false}save();setLook();paintUI()};$('artd').onclick=()=>{artD=artD>=8?1:artD+1;save();paintUI()};$('sprite').onclick=()=>{sprite=!sprite;if(sprite){touchOn=false;art=flat=pixel=chunky=soft=false}save();setLook();paintUI()};$('pixel').onclick=()=>{pixel=!pixel;if(pixel){flat=false;sprite=false;art=false;touchOn=false}save();setLook();paintUI()};$('flat').onclick=()=>{flat=!flat;if(flat){pixel=false;sprite=false;art=false;touchOn=false}save();setLook();paintUI()};$('gaps').onclick=()=>{gaps=!gaps;save();paintUI()};$('spin').onclick=()=>{spinOn=!spinOn;paintUI()};
