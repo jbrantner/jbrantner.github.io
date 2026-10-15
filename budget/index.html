@@ -914,6 +914,7 @@ html.tl-on:has(#view-town:not(.hidden)), html.tl-on:has(#view-town:not(.hidden))
 #dbtBox .dbt-seg button.on { outline: 2px solid currentColor; font-weight: 800; }
 #townList .pp-dl { margin: 6px 0 0; font-size: 12.5px; line-height: 1.35; color: var(--pp-muted); }
 #townList .pp-card.debt.idle:not(.open) .pp-dl { display: none; }
+#townList .pp-dl .dl-owe { font-variant-numeric: tabular-nums; color: var(--pp-ink, inherit); font-weight: 600; }
 #debtBox .debt-after { min-height: 1.3em; margin: 8px 0 0; font-weight: 700; color: var(--pp-moss); font-variant-numeric: tabular-nums; }
 #townList .pp-fill:active { transform: scale(.96); }
 #townList .pp-dime .vl-tkm.pp-out { color: var(--pp-muted); }
@@ -3478,7 +3479,7 @@ palRemap(document);
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 295;
+const APP_VERSION = 296;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -7213,13 +7214,25 @@ function debtPlan(id, plus = 0) {
   }
   return owed > 0.004 ? { never: true, flat: false, i: debtInt(d, goalOf(id)) } : { months, end, interest: c2(interest) };
 }
+/* v296 (Jordan, 2026-10-15: "should we have it ticking up if the interest is adding to the total?"): what you owe, live.
+   The month's interest builds up evenly from the last due day to the next, so on the due day it's all there (debtTick
+   adds exactly that); the extra saved so far counts against it. */
+function debtWin(id) {
+  const d = debtOf(id), c = debtCat(id); if (!d || !c || d.done || !d.last) return null;
+  let nx = null; for (let m = d.last.slice(0, 7), k = 0; k < 3 && !nx; m = nextMonth(m), k++) { const due = dueDate(c, m); if (due && due > d.last) nx = due; }
+  if (!nx) return null;
+  const t0 = Math.max(dayMs(d.last), Math.min(Number(d.at || 0), dayMs(nx) - 1));   // a new debt: from when it was added
+  return { t0, t1: dayMs(nx), i: debtInt(d, goalOf(id)), g: goalOf(id) };
+}
+const debtOweAt = (W, saved, now) => Math.max(0, W.g + W.i * Math.max(0, Math.min(1, (now - W.t0) / Math.max(1, W.t1 - W.t0))) - Math.max(0, saved));
 const monthYear = d => new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
 function debtLine(id) {
   const d = debtOf(id), c = debtCat(id); if (!d || !c) return '';
   if (d.done) return 'Paid off. Nothing left to pay.';
   const P = debtPlan(id), mn = `${d.minKind === 'interest' ? `Interest only (${money(Number(c.budget || 0))})` : `${money(Number(c.budget || 0))} minimum`} in Bills on the ${ordinal(Number(c.dueDay || 1))}`;
   const how = !P ? '' : P.never ? (P.flat ? 'it stays the same until you add money a day' : `growing: about ${money(P.i)} interest a month is more than goes in`) : `paid off ${monthYear(P.end)}, about ${money(P.interest)} more interest`;
-  return `Owe ${money(goalOf(id))} · ${d.apr}% APR · ${mn}${how ? ` · ${how}` : ''}`;
+  const W = debtWin(id);
+  return `Owe ${W ? `<span class="dl-owe" data-owe="${esc(id)}">${moneyExact(Math.round(debtOweAt(W, projectBal(id), Date.now()) * 100) / 100)}</span>` : money(goalOf(id))} · ${d.apr}% APR · ${mn}${how ? ` · ${how}` : ''}`;
 }
 /* v147: payments out of a project. A move to 'debt' that leaves the bank; the project's goal comes down by the same. */
 const debtPays = id => state.transfers.filter(t => t.debt && t.from === id).sort((a, b) => (b.at || 0) - (a.at || 0) || b.date.localeCompare(a.date));
@@ -8986,6 +8999,7 @@ const VL = (() => {
       const card = !!pipInfo[id], val = L.step ? barAt(L, now) * L.step : L.anim ? Math.min(L.b, barAt(L, now)) : L.b;   // v147: no crew: barAt is in dollars
       const vv = card && L.pour ? pourAt(id, L, now) : val;   // v148: Pour
       if (card) pipsAt(id, pipInfo[id], L, vv);   // v140; v196: rollAt after the unit bar
+      if (card && pipInfo[id].debt && pipInfo[id].debt.W) oweAt(id, pipInfo[id].debt.W, L, vv, now);   // v296
       const w = el.parentNode.parentNode, hide = !L.step && !card; if (w.hidden !== hide) w.hidden = hide;
       if (card) { if (L.pour) pourBar(w, L, vv, now); else unitBar(w, pipInfo[id], vv, id, L); rollAt(id, L, vv, now); }   // v196   // v146: one bar toward the next cent (or 10c, $1, $10); v148: or the pour
       if (!L.step) continue;
@@ -9019,6 +9033,12 @@ const VL = (() => {
     }
     if (!info.done && info.rate > 0 && L.pk != null && L.pkS === S && k === L.pk + 1 && !L.pour) stepBurst(el);
     L.pk = k; L.pkS = S;
+  }
+  // v296: the debt's "Owe", to the cent: interest building up, the extra coming off
+  function oweAt(id, W, L, val, now) {
+    let el = L.oweEl; if (!el || !el.isConnected) el = L.oweEl = $('townList').querySelector(`[data-owe="${CSS.escape(id)}"]`);
+    if (!el) return;
+    const t = moneyExact(Math.round(debtOweAt(W, val, now) * 100) / 100); if (el.textContent !== t) el.textContent = t;
   }
   function stepBurst(el) {
     bursts++; if (lessMotion()) return;
@@ -9357,7 +9377,7 @@ const VL = (() => {
       // frame in moveBars; this is just their slots and the line under them)
       const U = unitFor(rate), Uc = Math.round(U * 100), cb = Math.max(0, b) * 100, nxU = (Math.floor((cb + 1e-6) / Uc) + 1) * Uc;
       pipInfo[o.id] = { g, done, rate, U };
-      { const db = debtOf(o.id); if (db) { pipInfo[o.id].debt = { start: Math.max(Number(db.start || 0), g), owed: g }; v['t:of-' + o.id] = po ? 'paid off' : `saved of ${money(g)} owed`; v['t:dl-' + o.id] = debtLine(o.id); } }   // v295
+      { const db = debtOf(o.id); if (db) { pipInfo[o.id].debt = { start: Math.max(Number(db.start || 0), g), owed: g, W: debtWin(o.id) }; v['t:of-' + o.id] = po ? 'paid off' : `saved of ${money(g)} owed`; v['t:dl-' + o.id] = debtLine(o.id); } }   // v295
       { const P = topOffPlan(o.id, cs); v['t:fl-' + o.id] = !P || !P.need || !P.got ? '' : P.full ? `Fill to ${money(P.to)}` : 'Top off'; }   // v147
       v['t:p-' + o.id] = '<i></i>'.repeat(10);
       v['t:nx-' + o.id] = rate > 0 ? `next ${unitWord(U)} in ${shortIn((nxU - cb) / 100 / rate)}` : `next ${unitWord(U)} · paused, nothing goes here each day`;
