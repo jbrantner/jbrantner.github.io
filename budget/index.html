@@ -906,7 +906,14 @@ html.tl-on:has(#view-town:not(.hidden)), html.tl-on:has(#view-town:not(.hidden))
 #townList .pp-payr { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 0; font-size: 14px; color: var(--pp-ink); }
 #townList .pp-payr span { min-width: 0; overflow-wrap: anywhere; }
 #townList .pp-payr .link { flex: none; color: var(--pp-low); font-weight: 700; min-height: 32px; }
-#debtBox .card { background: var(--pp-panel); color: var(--pp-ink); }
+#debtBox .card, #dbtBox .card { background: var(--pp-panel); color: var(--pp-ink); }
+#dbtBox .card { max-height: calc(100% - 24px); overflow-y: auto; }
+#dbtBox .debt-after { min-height: 1.3em; margin: 8px 0 0; font-weight: 700; color: var(--pp-moss); line-height: 1.4; }
+#dbtBox .dbt-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+#dbtBox .dbt-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px; }
+#dbtBox .dbt-seg button.on { outline: 2px solid currentColor; font-weight: 800; }
+#townList .pp-dl { margin: 6px 0 0; font-size: 12.5px; line-height: 1.35; color: var(--pp-muted); }
+#townList .pp-card.debt.idle:not(.open) .pp-dl { display: none; }
 #debtBox .debt-after { min-height: 1.3em; margin: 8px 0 0; font-weight: 700; color: var(--pp-moss); font-variant-numeric: tabular-nums; }
 #townList .pp-fill:active { transform: scale(.96); }
 #townList .pp-dime .vl-tkm.pp-out { color: var(--pp-muted); }
@@ -3342,6 +3349,20 @@ palRemap(document);
     <div class="row" style="justify-content:flex-end; margin-top:12px"><button id="debtCancel">Cancel</button><button class="primary" id="debtGo" disabled>Pay</button></div>
   </div>
 </div>
+<div id="dbtBox" class="ask hidden" role="dialog" aria-modal="true" aria-labelledby="dbtTitle">
+  <div class="card debt-card">
+    <h2 id="dbtTitle">Add a debt</h2>
+    <p class="muted" style="font-size:14px; margin-top:0">Everything here is on a statement. The minimum becomes a bill; money a day on it is extra, like a project.</p>
+    <label class="field">Name<input id="dbtName" maxlength="40" placeholder="Credit card"></label>
+    <div class="dbt-2"><label class="field">Owed now<input id="dbtOwed" type="number" inputmode="decimal" min="0" step="0.01" placeholder="$"></label>
+      <label class="field">APR %<input id="dbtApr" type="number" inputmode="decimal" min="0" step="0.01" placeholder="24.99"></label></div>
+    <label class="field">Due day<input id="dbtDue" type="number" inputmode="numeric" min="1" max="31" placeholder="15"></label>
+    <div class="field">Monthly minimum (a bill)<div class="dbt-seg" role="group" aria-label="Monthly minimum"><button type="button" data-dk="interest">Interest only</button><button type="button" data-dk="amount" class="on">An amount</button></div></div>
+    <label class="field" id="dbtMinF">Minimum payment<input id="dbtMin" type="number" inputmode="decimal" min="0" step="0.01" placeholder="$"></label>
+    <p id="dbtSay" class="debt-after" aria-live="polite"></p>
+    <div class="row" style="justify-content:flex-end; margin-top:12px; gap:8px; flex-wrap:wrap"><button id="dbtDel" hidden>Delete</button><button id="dbtCancel">Cancel</button><button class="primary" id="dbtGo">Save</button></div>
+  </div>
+</div>
 <div id="moveBox" class="ask hidden" role="dialog" aria-modal="true" aria-labelledby="mvTitle">
   <div class="card">
     <h2 id="mvTitle">Move money</h2>
@@ -3457,7 +3478,7 @@ palRemap(document);
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 294;
+const APP_VERSION = 295;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -3736,7 +3757,7 @@ function render() {
   const th = themeOf(); if (th) document.documentElement.dataset.theme = th; else delete document.documentElement.dataset.theme;   // v149: dark unless chosen otherwise
   const [y, m] = month.split('-').map(Number);
   $('monthLabel').textContent = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  booksGen++; needMemo.clear(); autoSlay(); earlyArrive(); roundOffTick(); finishGoals(); weekMigrate(); partyReturns(); mondayCatchUp(); fixSwitchWeek(); renderOver(); renderMath();
+  booksGen++; needMemo.clear(); autoSlay(); debtTick(); earlyArrive(); roundOffTick(); finishGoals(); weekMigrate(); partyReturns(); mondayCatchUp(); fixSwitchWeek(); renderOver(); renderMath();
   renderBudget(); renderTx(); renderRules(); renderPotsTab(); renderScavenger(); Town.render(); VL.render();
   $('txCat').innerHTML = catOptions($('txCat').value);
   $('ruleCat').innerHTML = catOptions($('ruleCat').value, false);
@@ -4482,7 +4503,7 @@ function finishGoals(now = Date.now()) {
     const t = goalHit(p.id, now); if (t == null) continue;
     const there = workersAt(p.id, t); if (there <= 0) continue;
     reassign(t, { [p.id]: -there });   // v129: at the moment it hit (exact), carrying any part of a cent
-    (state.built = state.built || {})[p.id] = { t: Math.round(t), seen: false };
+    if (!debtOf(p.id)) (state.built = state.built || {})[p.id] = { t: Math.round(t), seen: false };   // v295: a debt isn't built
     changed = true;
   }
   if (changed) save();
@@ -7139,6 +7160,67 @@ function topOff(to) {
   if (typeof VL !== 'undefined') VL.toppedOff(to, P.got, P.parts.map(x => [x.id, x.cents]));
   return { id: gid, to, cents: P.got, full: P.full, parts: P.parts };
 }
+/* v295 (Jordan, 2026-10-15: "the minimum ... counts as a bill. but anything extra ... acts sort of like a project"): debts.
+   A debt is a project whose goal is what you owe (state.goals), plus state.debts[id] = { apr, minKind, min, start, cat, last }.
+   Its minimum is a bill (state.categories, debtId), held from pay and marked paid on the due day like any other. Money a
+   day on it is the extra: it fills like a project. Each due day (debtTick): interest (owed x APR / 12) goes on, the
+   minimum comes off, and what the extra saved is paid out (a 'debt' move that leaves the bank), so the goal comes down. */
+const debtOf = id => (state.debts || {})[id] || null;
+const debtCat = id => { const d = debtOf(id); return d ? state.categories.find(c => c.id === d.cat) || (state.goneCats || []).find(c => c.id === d.cat) || null : null; };
+const debtInt = (d, owed) => c2(Math.max(0, owed) * Number(d.apr || 0) / 1200);
+const debtMinFor = (d, owed) => d.minKind === 'interest' ? Math.max(1, Math.ceil(debtInt(d, owed) - 1e-9)) : Math.max(1, Math.ceil(Number(d.min || 0) - 1e-9));
+function debtDone(id) {
+  const d = debtOf(id); if (!d || d.done) return;
+  d.done = Date.now(); delete state.goals[id]; (state.paidOff = state.paidOff || {})[id] = Date.now();
+  const c = state.categories.find(x => x.id === d.cat);   // its minimum stops coming up (what it cost stays counted)
+  if (c) { state.categories = state.categories.filter(x => x !== c); (state.goneCats = state.goneCats || []).push({ ...c, gone: Date.now() }); }
+  const w = workersAt(id); if (w > 0) reassign(stampNow(), { [id]: -w });   // its money a day goes back to Savings
+}
+function debtTick() {
+  const D = state.debts || {}, td = today(); let ch = false;
+  if (clockBack()) return;
+  for (const [id, d] of Object.entries(D)) {
+    if (d.done || !state.pots.some(p => p.id === id)) continue;
+    if (!(goalOf(id) > 0.004)) { debtDone(id); ch = true; continue; }   // paid off with Make a payment
+    const c = debtCat(id); if (!c || !d.last) continue;
+    for (let m = d.last.slice(0, 7); m <= td.slice(0, 7); m = nextMonth(m)) {
+      const due = dueDate(c, m); if (!due || due <= d.last || due > td) continue;
+      let owed = goalOf(id);
+      const i = debtInt(d, owed); owed = c2(owed + i);
+      const mn = Math.min(Number(c.budget || 0), owed); owed = c2(owed - mn);   // the bill paid it
+      const ex = Math.min(Math.floor(projectBal(id) * 100 + 1e-6) / 100, owed);
+      if (ex >= 0.01) { state.transfers.push({ id: uid(), date: td, at: Date.now(), from: id, to: 'debt', amount: ex, debt: true, goalCut: ex, auto: true }); owed = c2(owed - ex); }
+      (d.log = d.log || []).push({ date: due, int: i, min: mn, extra: ex > 0 ? ex : 0, owed });
+      d.last = due; ch = true;
+      if (owed <= 0.004) { debtDone(id); break; }
+      state.goals[id] = owed;
+      if (owed > Number(d.start || 0)) d.start = owed;
+    }
+  }
+  if (ch) save();
+}
+// The months ahead: each due day the interest goes on, the minimum and the month's extra come off.
+function debtPlan(id, plus = 0) {
+  const d = debtOf(id), c = debtCat(id); if (!d || !c || d.done) return null;
+  let owed = goalOf(id), interest = 0, months = 0, end = null, prev = Date.now(), saved = projectBal(id);
+  const per = (Math.max(0, workersAt(id)) + plus) * WORKER_DAY, mn0 = Number(c.budget || 0);
+  for (let m = today().slice(0, 7), k = 0; k < 700 && owed > 0.004; m = nextMonth(m), k++) {
+    const due = dueDate(c, m); if (!due || due <= d.last) continue;
+    const t = dayMs(due) + 12 * 3600e3, ex0 = saved + per * Math.max(0, t - prev) / DAY_MS; saved = 0; prev = t;
+    const i = debtInt(d, owed); if (mn0 + per * 28 <= i + 0.004 && ex0 + mn0 <= i + 0.004) return { never: true, flat: !per && d.minKind === 'interest', i };
+    owed = c2(owed + i); interest += i;
+    owed = c2(owed - Math.min(mn0, owed)); owed = c2(owed - Math.min(ex0, owed)); months++; end = due;
+  }
+  return owed > 0.004 ? { never: true, flat: false, i: debtInt(d, goalOf(id)) } : { months, end, interest: c2(interest) };
+}
+const monthYear = d => new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+function debtLine(id) {
+  const d = debtOf(id), c = debtCat(id); if (!d || !c) return '';
+  if (d.done) return 'Paid off. Nothing left to pay.';
+  const P = debtPlan(id), mn = `${d.minKind === 'interest' ? `Interest only (${money(Number(c.budget || 0))})` : `${money(Number(c.budget || 0))} minimum`} in Bills on the ${ordinal(Number(c.dueDay || 1))}`;
+  const how = !P ? '' : P.never ? (P.flat ? 'it stays the same until you add money a day' : `growing: about ${money(P.i)} interest a month is more than goes in`) : `paid off ${monthYear(P.end)}, about ${money(P.interest)} more interest`;
+  return `Owe ${money(goalOf(id))} · ${d.apr}% APR · ${mn}${how ? ` · ${how}` : ''}`;
+}
 /* v147: payments out of a project. A move to 'debt' that leaves the bank; the project's goal comes down by the same. */
 const debtPays = id => state.transfers.filter(t => t.debt && t.from === id).sort((a, b) => (b.at || 0) - (a.at || 0) || b.date.localeCompare(a.date));
 function makePayment(id, amount, note = '') {
@@ -7167,7 +7249,7 @@ let debtFor = null;
 function openDebt(id) {
   debtFor = id; const bal = Math.floor(projectBal(id) * 100 + 1e-6) / 100;
   $('debtTitle').textContent = `Make a payment from ${potName(id)}`;
-  $('debtSays').textContent = `Money you pay out of ${potName(id)}, up to ${moneyExact(bal)}. It leaves your bank and the goal comes down by the same amount.`;
+  $('debtSays').textContent = debtOf(id) ? `Pay extra now, out of what ${potName(id)} has saved (up to ${moneyExact(bal)}). It leaves your bank and what you owe comes down by the same.` : `Money you pay out of ${potName(id)}, up to ${moneyExact(bal)}. It leaves your bank and the goal comes down by the same amount.`;
   $('debtAmt').value = ''; $('debtAmt').max = String(bal); $('debtNote').value = ''; debtPreview();
   $('debtBox').classList.remove('hidden'); setTimeout(() => $('debtAmt').focus(), 60);
 }
@@ -8927,7 +9009,8 @@ const VL = (() => {
     if (!el) return;
     // v146: toward the whole goal (no goal: the next round $100), from the floored cents
     const c = Math.max(0, Math.floor(val * 100 + 1e-6)), Gc = info.g > 0 ? Math.round(info.g * 100) : 10000;
-    const f = info.done ? 10 : info.g > 0 ? Math.min(10, c / Gc * 10) : (c % Gc) / Gc * 10, on = Math.min(10, Math.floor(f + 1e-9)), part = info.done || on >= 10 ? 0 : Math.floor((f - on) * 100);
+    const dq = info.debt && info.debt.start > 0 ? Math.max(0, Math.min(10, (info.debt.start - info.debt.owed + c / 100) / info.debt.start * 10)) : null;   // v295: paid off so far, the extra saved too
+    const f = info.done ? 10 : dq != null ? dq : info.g > 0 ? Math.min(10, c / Gc * 10) : (c % Gc) / Gc * 10, on = Math.min(10, Math.floor(f + 1e-9)), part = info.done || on >= 10 ? 0 : Math.floor((f - on) * 100);
     const k = info.g > 0 ? on : Math.floor(c / Gc) * 10 + on, S = Gc;
     const key = on + ':' + part;
     if (el.ppKey !== key) {
@@ -9147,16 +9230,18 @@ const VL = (() => {
         : `<span class="pp-step"><button class="vl-sb" data-crew="${id}" data-d="-1" aria-label="$1 a day from ${nm} back to Savings"${L || !w || state.roundOff ? ' disabled' : ''}>−</button><b class="num">${w}</b>`
           + `<button class="vl-sb${pickFor === o.id && add ? ' on' : ''}" data-crew="${id}" data-d="1" aria-haspopup="dialog" aria-expanded="${pickFor === o.id && add}" aria-label="Add $1 a day to ${nm}: pick where from"${add ? '' : ' disabled'}>+</button></span>`;
       const ed = !sv && Town.editing === o.id;   // v269: its Edit is open
+      const db = !sv && debtOf(o.id);   // v295
       const note = sv ? 'Money you take off a pot or project comes back here.' : po ? 'Paid off. Nothing left to pay.' : done ? 'Goal reached. The money is ready when you are.' : kind === 'pot' ? 'A pot keeps what it saves. Nothing here gets spent.' : 'Saving up for it, then spending it.';
-      return `<div class="pp-card ${kind === 'proj' ? 'proj' : 'pot'}${sv ? ' sv' : ''} ${w > 0 ? 'live' : 'idle'}${done ? ' done' : ''}${open ? ' open' : ''}${L ? ' locked' : ''}" style="--cc:${PC[col]}" data-vl-row="${id}">`
+      return `<div class="pp-card ${kind === 'proj' ? 'proj' : 'pot'}${db ? ' debt' : ''}${sv ? ' sv' : ''} ${w > 0 ? 'live' : 'idle'}${done ? ' done' : ''}${open ? ' open' : ''}${L ? ' locked' : ''}" style="--cc:${PC[col]}" data-vl-row="${id}">`
         + `<button class="pp-head" data-pp-open="${id}" aria-expanded="${open}" aria-controls="ppm-${id}">`   // v148: name left, amount right
-        + `<span class="pp-nm"><em class="pp-kind">${kind === 'proj' ? (po ? 'Project · paid off' : done ? 'Project · goal reached' : 'Project') : 'Pot'}</em><span class="pp-nmr"><b>${nm}</b>${w > 0 ? `<span class="pp-vsq" role="img" aria-label="${money((w) * WORKER_DAY)} a day">${'<i></i>'.repeat(Math.min(w, 40))}${w > 40 ? `<em>+${w - 40}</em>` : ''}</span>` : ''}</span></span>`   // v183: a square per villager   // v174
+        + `<span class="pp-nm"><em class="pp-kind">${db ? (po ? 'Debt · paid off' : done ? 'Debt · enough saved to pay it off' : 'Debt') : kind === 'proj' ? (po ? 'Project · paid off' : done ? 'Project · goal reached' : 'Project') : 'Pot'}</em><span class="pp-nmr"><b>${nm}</b>${w > 0 ? `<span class="pp-vsq" role="img" aria-label="${money((w) * WORKER_DAY)} a day">${'<i></i>'.repeat(Math.min(w, 40))}${w > 40 ? `<em>+${w - 40}</em>` : ''}</span>` : ''}</span></span>`   // v183: a square per villager   // v174
         + `<span class="pp-amt"><span class="num pp-roll" data-rl="${id}"></span><small data-t="of-${id}"></small></span></button>`
         + `<div class="pp-pips${kind === 'proj' ? '' : ' ember'}" data-t="p-${id}" data-pip="${id}" aria-hidden="true"></div>`
+        + (db ? `<p class="pp-dl" data-t="dl-${id}"></p>` : '')   // v295: the debt's line
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-unit"><span class="pp-ubar"><i></i></span><b class="pp-ul"></b></span><span class="vl-step"><span data-s="${id}"></span></span></span>`
         + (!sv ? '' : `<div class="pp-meta pp-tidy"><span class="pp-m1"><span data-t="m1-${id}"></span><span class="pp-dot" aria-hidden="true"> · </span><span class="pp-nx" data-t="nx-${id}"></span></span><button class="pp-fill" data-fill="${id}" data-t="fl-${id}"></button></div>`)   // v148: one line; v269: Savings only
         + `<div class="pp-crew"><span class="pp-who vl-r2">${who}<small class="pp-mo" data-t="m2-${id}"></small></span>${step}</div>`   // v148: the month figure with the crew
-        + (!sv ? `<div class="pp-acts" id="ppm-${id}">${kind === 'proj' && o.goal > 0 && o.bal >= 0.01 ? `<button class="pp-chip pp-pay" data-debt="${id}">Make a payment</button>` : ''}`
+        + (!sv ? `<div class="pp-acts" id="ppm-${id}">${kind === 'proj' && o.goal > 0 && o.bal >= 0.01 ? `<button class="pp-chip pp-pay" data-debt="${id}">${db ? 'Pay extra now' : 'Make a payment'}</button>` : ''}`
           + `<button class="pp-fill" data-fill="${id}" data-t="fl-${id}"></button><button class="pp-chip pp-edit${ed ? ' on' : ''}" data-edit="${id}" aria-expanded="${ed}" aria-label="Edit ${nm}">Edit</button></div>`   // v269 (Jordan's concept): its other details are gone
         : `<div class="pp-more" id="ppm-${id}"${open ? '' : ' hidden'}><p data-t="go-${id}"></p><p data-t="eta-${id}"></p><p class="pp-with" data-t="eta1-${id}"></p>`
         + `<p class="pp-small" hidden><span data-t="sl-${id}"></span> <span data-t="n1-${id}"></span></p><p class="pp-small">${note}</p>`
@@ -9207,7 +9292,7 @@ const VL = (() => {
       const act = id => id === 'savings' ? 2 : workersAt(id) > 0 ? 1 : 0;   // v186: Savings first
       its.map((x, n) => ({ x, n })).sort((a, b) => (act(b.x[0].id) - act(a.x[0].id)) || (oi(a.x[0].id) - oi(b.x[0].id)) || a.n - b.n)
         .forEach(({ x }) => { h += card(x[0], x[1]); }); }   // v184: active first, then the order you dragged
-    h += `</div><button class="pp-big alt pp-add" data-vl-open="newpot">＋ Add a pot or project</button>`;
+    h += `</div><button class="pp-big alt pp-add" data-vl-open="newpot">＋ Add a pot or project</button><button class="pp-big alt pp-add pp-adddebt" data-debt-new="1">＋ Add a debt</button>`;   // v295
     // v156: no Party purse section (the top card shows it)
     // bills: plain rows (no bars): name, when it's due, amount (rounded up), held now / from the next pay / paid, and Paid / Undo
     let billsTop = '';
@@ -9272,6 +9357,7 @@ const VL = (() => {
       // frame in moveBars; this is just their slots and the line under them)
       const U = unitFor(rate), Uc = Math.round(U * 100), cb = Math.max(0, b) * 100, nxU = (Math.floor((cb + 1e-6) / Uc) + 1) * Uc;
       pipInfo[o.id] = { g, done, rate, U };
+      { const db = debtOf(o.id); if (db) { pipInfo[o.id].debt = { start: Math.max(Number(db.start || 0), g), owed: g }; v['t:of-' + o.id] = po ? 'paid off' : `saved of ${money(g)} owed`; v['t:dl-' + o.id] = debtLine(o.id); } }   // v295
       { const P = topOffPlan(o.id, cs); v['t:fl-' + o.id] = !P || !P.need || !P.got ? '' : P.full ? `Fill to ${money(P.to)}` : 'Top off'; }   // v147
       v['t:p-' + o.id] = '<i></i>'.repeat(10);
       v['t:nx-' + o.id] = rate > 0 ? `next ${unitWord(U)} in ${shortIn((nxU - cb) / 100 / rate)}` : `next ${unitWord(U)} · paused, nothing goes here each day`;
@@ -9648,6 +9734,8 @@ const VL = (() => {
     if (b.dataset.collect) { collectChange(); return; }
     if (b.dataset.fill) { topOff(b.dataset.fill); return; }   // v147
     if (b.dataset.debt) { openDebt(b.dataset.debt); return; }
+    if (b.dataset.debtNew) { openDebtForm(null); return; }   // v295
+    if (b.dataset.edit && debtOf(b.dataset.edit)) { openDebtForm(b.dataset.edit); return; }
     if (b.dataset.edit) { Town.edit(b.dataset.edit); renderTown(); return; }   // v269
     if (b.dataset.debtUndo) { const t = state.transfers.find(x => x.id === b.dataset.debtUndo); if (t && await ask(`Take back the ${moneyExact(t.amount)} payment? ${potName(t.from)}, its goal and your bank go back up by it.`)) { undoPayment(t.id); toast('Payment taken back'); } return; }
     if (b.dataset.lock) { setLock(b.dataset.lock, !isLocked(b.dataset.lock)); return; }
@@ -10683,6 +10771,65 @@ holdRepeat($('mvMinus'), () => nudge(-1));
 holdRepeat($('mvPlus'), () => nudge(1));
 $('mvCancel').onclick = closeMover;
 $('debtCancel').onclick = closeDebt; $('debtGo').onclick = saveDebt; $('debtAmt').oninput = debtPreview;   // v147
+/* v295: add or edit a debt */
+let dbtFor = null, dbtKind = 'amount';
+function openDebtForm(id) {
+  dbtFor = id; const d = id ? debtOf(id) : null, c = id ? debtCat(id) : null;
+  $('dbtTitle').textContent = d ? `Edit ${potName(id)}` : 'Add a debt';
+  $('dbtName').value = d ? potName(id) : ''; $('dbtOwed').value = d ? String(goalOf(id)) : ''; $('dbtApr').value = d ? String(d.apr) : '';
+  $('dbtDue').value = c ? String(c.dueDay || '') : ''; $('dbtMin').value = d && d.minKind !== 'interest' ? String(d.min) : '';
+  dbtSetKind(d ? d.minKind : 'amount'); $('dbtDel').hidden = !d;
+  $('dbtBox').classList.remove('hidden'); dbtSay(); setTimeout(() => (d ? $('dbtOwed') : $('dbtName')).focus(), 60);
+}
+function dbtSetKind(k) { dbtKind = k === 'interest' ? 'interest' : 'amount'; document.querySelectorAll('#dbtBox [data-dk]').forEach(b => { b.classList.toggle('on', b.dataset.dk === dbtKind); b.setAttribute('aria-pressed', b.dataset.dk === dbtKind); }); $('dbtMinF').hidden = dbtKind === 'interest'; dbtSay(); }
+function dbtRead() {
+  return { name: $('dbtName').value.trim(), owed: c2(Number($('dbtOwed').value) || 0), apr: Math.max(0, Number($('dbtApr').value) || 0),
+    due: Math.min(31, Math.max(1, Math.round(Number($('dbtDue').value) || 0))), dueSet: Number($('dbtDue').value) >= 1, minKind: dbtKind, min: c2(Number($('dbtMin').value) || 0) };
+}
+function dbtSay() {
+  const f = dbtRead(), el = $('dbtSay');
+  if (!(f.owed > 0) || !f.dueSet || (f.minKind === 'amount' && !(f.min > 0))) { el.textContent = ''; return; }
+  const d = { apr: f.apr, minKind: f.minKind, min: f.min }, i = debtInt(d, f.owed), mn = debtMinFor(d, f.owed);
+  if (mn <= i + 0.004) { el.textContent = f.minKind === 'interest' ? `Interest only: about ${money(mn)} a month in Bills, and what you owe stays put until you add money a day.` : `About ${moneyExact(i)} a month in interest is more than the ${money(mn)} minimum, so it grows. Add money a day to pay it down.`; return; }
+  let owed = f.owed, n = 0, tot = 0; while (owed > 0.004 && n < 700) { const x = debtInt(d, owed); tot += x; owed = c2(owed + x - Math.min(mn, owed + x)); n++; }
+  el.textContent = n >= 700 ? '' : `With just the ${money(mn)} minimum: paid off in ${n} month${n === 1 ? '' : 's'}, about ${money(tot)} in interest. Money a day on it makes that sooner.`;
+}
+function dbtSave() {
+  const f = dbtRead();
+  if (!f.name) { toast('Give it a name'); $('dbtName').focus(); return; }
+  if (!(f.owed > 0)) { toast('Type what you owe now'); $('dbtOwed').focus(); return; }
+  if (!f.dueSet) { toast('Type the day it\'s due'); $('dbtDue').focus(); return; }
+  if (f.minKind === 'amount' && !(f.min > 0)) { toast('Type the minimum payment'); $('dbtMin').focus(); return; }
+  const d0 = { apr: f.apr, minKind: f.minKind, min: f.min }, mn = debtMinFor(d0, f.owed);
+  if (dbtFor) {
+    const id = dbtFor, d = debtOf(id), c = debtCat(id), p = state.pots.find(x => x.id === id);
+    if (p) p.name = f.name;
+    Object.assign(d, { apr: f.apr, minKind: f.minKind, min: f.minKind === 'amount' ? f.min : 0 });
+    if (Math.abs(goalOf(id) - f.owed) >= 0.005) { state.goals[id] = f.owed; if (f.owed > Number(d.start || 0)) d.start = f.owed; (d.log = d.log || []).push({ date: today(), set: f.owed }); }   // Update balance
+    if (c) { c.name = `${f.name} ${f.minKind === 'interest' ? 'interest' : 'minimum'}`; c.dueDay = f.due; c.budget = mn; }
+    save(); closeDebtForm(); render(); toast(`${f.name} saved`); return;
+  }
+  const id = uid(), now = Date.now(), td = today();
+  state.pots.push({ id, name: f.name }); state.goals[id] = f.owed;
+  const c = { id: uid(), name: `${f.name} ${f.minKind === 'interest' ? 'interest' : 'minimum'}`, budget: mn, kind: 'bill', dueDay: f.due, account: (state.accounts || [])[0], at: now, debtId: id };
+  state.categories.push(c);
+  // the owed amount is from today: a due day before today was paid already; one due today is still to come (the bill says so too)
+  const last = dueDate(c, td.slice(0, 7)) === td ? ymd(new Date(dayMs(td) - DAY_MS / 2)) : td;
+  (state.debts = state.debts || {})[id] = { apr: f.apr, minKind: f.minKind, min: f.minKind === 'amount' ? f.min : 0, start: f.owed, cat: c.id, last, at: now, log: [] };
+  save(); closeDebtForm(); render(); toast(`Added ${f.name}. Its ${money(mn)} ${f.minKind === 'interest' ? 'interest' : 'minimum'} is in Bills now.`);
+}
+async function dbtDelete() {
+  const id = dbtFor; if (!id) return;
+  if (!await ask(`Delete ${potName(id)}? Its minimum stops coming up in Bills (what it already cost stays counted).`)) return;
+  const d = debtOf(id), c = state.categories.find(x => x.id === d.cat);
+  if (c) { state.categories = state.categories.filter(x => x !== c); (state.goneCats = state.goneCats || []).push({ ...c, gone: Date.now() }); }
+  delete state.debts[id]; closeDebtForm();
+  if (!await deletePot(id, 'savings')) { save(); render(); }
+}
+function closeDebtForm() { dbtFor = null; $('dbtBox').classList.add('hidden'); }
+$('dbtCancel').onclick = closeDebtForm; $('dbtGo').onclick = dbtSave; $('dbtDel').onclick = dbtDelete;
+document.querySelectorAll('#dbtBox [data-dk]').forEach(b => b.onclick = () => dbtSetKind(b.dataset.dk));
+['dbtName', 'dbtOwed', 'dbtApr', 'dbtDue', 'dbtMin'].forEach(k => $(k).addEventListener('input', dbtSay));
 $('debtAmt').onkeydown = $('debtNote').onkeydown = e => { if (e.key === 'Enter' && !$('debtGo').disabled) saveDebt(); };
 $('debtBox').addEventListener('click', e => { if (e.target.id === 'debtBox') closeDebt(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && debtFor) closeDebt(); });
