@@ -189,9 +189,9 @@
   // dayEnds: { 'YYYY-MM-DD': { left: cents, start: cents } } written by the budget app (see HOOKS.md).
   // Pays each finished day once, from the day the pet was made. Today is never paid (it isn't over).
   function syncBudget(s, dayEnds, now = Date.now(), rules = RULES) {
-    const out = [], todayD = dateOf(now), bornD = dateOf(s.born);
+    const out = [], todayD = dateOf(now), bornD = dateOf(s.born), cut = dateOf(now - 60 * DAY);   // v311: older days are forgotten below, so never paid
     for (const date of Object.keys(dayEnds || {}).sort()) {
-      if (date >= todayD || date < bornD || s.credited[date] != null) continue;
+      if (date >= todayD || date < bornD || date < cut || s.credited[date] != null) continue;
       const e = dayEnds[date] || {}, start = Number(e.start) || 0, left = Math.max(0, Math.min(Number(e.left) || 0, start));
       const coins = start > 0 ? Math.round(left / start * rules.coinsPerDay) : 0;
       s.credited[date] = coins;
@@ -206,8 +206,7 @@
         out.push(push(s, { t: now, type: 'dream', date }));
       }
     }
-    // keep the paid list small: anything older than 60 days can't come back from the budget anyway
-    const cut = dateOf(now - 60 * DAY);
+    // keep the paid list small: days older than 60 days are skipped above
     for (const d of Object.keys(s.credited)) if (d < cut) delete s.credited[d];
     return out;
   }
@@ -215,11 +214,11 @@
   // the rest of the budget feed (key budget-pet.v1, see HOOKS.md): weeks, events, projects, savings
   function syncBudgetFeed(s, feed, now = Date.now(), rules = RULES) {
     feed = feed || {};
-    const out = syncBudget(s, feed.days || {}, now, rules), todayD = dateOf(now), born = s.born, bornD = dateOf(born);
+    const out = syncBudget(s, feed.days || {}, now, rules), todayD = dateOf(now), born = s.born, bornD = dateOf(born), cut = now - 60 * DAY;   // v311: weeks and events older than this are forgotten below, so never handled
     // 7. a week that ended within budget sends the pet on an outing with a souvenir
     for (const wk of Object.keys(feed.weeks || {}).sort()) {
       const end = dateOf(new Date(wk + 'T12:00:00').getTime() + 6 * DAY);
-      if (end >= todayD || end < bornD || s.weeks[wk] != null) continue;
+      if (end >= todayD || end < bornD || wk < dateOf(cut) || s.weeks[wk] != null) continue;
       const w = feed.weeks[wk] || {};
       if (!(Number(w.start) > 0) || !(Number(w.left) >= 0)) { s.weeks[wk] = 0; continue; }
       const place = OUTINGS[s.outings % OUTINGS.length]; s.outings++;
@@ -230,7 +229,7 @@
     }
     // 4, 5, 6: one-off moments from the budget app, each handled once
     for (const ev of (feed.events || []).slice().sort((a, b) => a.t - b.t)) {
-      if (!ev || !ev.id || !(ev.t >= born) || ev.t > now + HOUR || s.seen[ev.id]) continue;
+      if (!ev || !ev.id || !(ev.t >= born) || !(ev.t >= cut) || ev.t > now + HOUR || s.seen[ev.id]) continue;
       s.seen[ev.id] = ev.t;
       if (ev.type === 'payday') {
         const gift = pick(PARTY_GIFTS, ev.id); s.inv[gift] = (s.inv[gift] || 0) + 1; s.lastParty = ev.t;
@@ -245,7 +244,6 @@
         out.push(push(s, { t: now, type: 'treasure', item }));
       }
     }
-    const cut = now - 60 * DAY;
     for (const k of Object.keys(s.seen)) if (s.seen[k] < cut) delete s.seen[k];
     for (const k of Object.keys(s.weeks)) if (k < dateOf(cut)) delete s.weeks[k];
     // 3. each savings project grows an egg; reaching its goal hatches a friend (once per project, kept forever)
@@ -279,14 +277,14 @@
   function syncUpkeepState(s, up, now = Date.now()) {
     const out = []; if (!up) return out;
     const tasks = [...(up.tasks || []), ...(up.goals || [])];
-    const spots = tasks.filter(t => t && t.kind === 'spots').flatMap(t => t.spots || []);
+    const spots = tasks.filter(t => t && t.kind === 'spots').flatMap(t => t.spots || []).filter(x => x && typeof x === 'object');   // v311: a spot saved as null can't stop the pet
     const tidy = spots.length ? spots.filter(x => x.ok).length / spots.length : null;
     if (tidy != null && s.room.tidy != null && tidy > s.room.tidy) out.push(push(s, { t: now, type: 'tidy', tidy }));
     s.room.tidy = tidy;
     const snap = {};
     for (const t of tasks) {
       if (!t || t.kind === 'spots' || !t.id) continue;
-      snap[t.id] = (Number(t.chips) || 0) + (t.steps || []).reduce((a, x) => a + (Number(x.chips) || 0), 0);
+      snap[t.id] = (Number(t.chips) || 0) + (t.subs || t.steps || []).reduce((a, x) => a + (Number(x.chips) || 0), 0);   // v311: Upkeep keeps its steps in t.subs (t.steps: the engine's own tests)
     }
     if (Object.keys(snap).some(id => s.chipSnap[id] != null && snap[id] < s.chipSnap[id])) {
       s.lastHug = now; out.push(push(s, { t: now, type: 'hug' }));
@@ -401,7 +399,10 @@
   const readJSON = k => { try { const st = ls(), r = st && st.getItem(k); return r ? JSON.parse(r) : null; } catch (e) { return null; } };
   function load(now = Date.now()) {
     const s = readJSON(KEY);
-    if (!s || s.v !== 1) return create(now);
+    if (!s || s.v !== 1) {   // v311: a new pet. Data that can't be read is kept in pet.v1.bad; the new pet takes in all of Upkeep's XP
+      try { const st = ls(), r = st && st.getItem(KEY); if (r) st.setItem(KEY + '.bad', r); } catch (e) {}
+      return Object.assign(create(now), { upkeepSince: 0 });
+    }
     const base = create(s.born || now);
     return Object.assign(base, s, { room: Object.assign(base.room, s.room), owned: Object.assign(base.owned, s.owned), acc: Object.assign(base.acc, s.acc), train: Object.assign(base.train, s.train) });
   }
