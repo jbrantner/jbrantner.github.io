@@ -13,4 +13,5 @@ Copyright (c) 2026 Jordan Brantner. All rights reserved.
 1. Install Tailscale on the render computer and the iPhone, same account on both.
 2. Tailscale admin page > DNS: turn on MagicDNS and HTTPS certificates.
 3. Start ComfyUI with `--enable-cors-header "*" --preview-method auto`.
-4. Run `tailscale serve --bg 8188` once and paste the https address it prints into the app (⚙ > Connect).
+4. Optional, for "Add a model or LoRA": copy `comfyui/render_deck_models.py` into `ComfyUI/custom_nodes/` and restart ComfyUI. It downloads Civitai / Hugging Face links and receives files from the phone (.safetensors only). For Civitai models that need sign-in, put a Civitai API key in `CIVITAI_API_TOKEN` or in `civitai_token.txt` next to the helper.
+5. Run `tailscale serve --bg 8188` once and paste the https address it prints into the app (⚙ > Connect).
