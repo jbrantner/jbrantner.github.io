@@ -14,6 +14,7 @@ const DEF = { // required inputs and output count, copied from ComfyUI nodes.py
   ImageScale:[['image','upscale_method','width','height','crop'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1],
   UpscaleModelLoader:[['model_name'],1], ImageUpscaleWithModel:[['upscale_model','image'],1],
   CLIPSetLastLayer:[['clip','stop_at_clip_layer'],1],
+  VAEEncodeTiled:[['pixels','vae','tile_size','overlap'],1], VAEDecodeTiled:[['samples','vae','tile_size','overlap'],1],
   ModelMergeSDXL:[['model1','model2','input_blocks.0','middle_block.0','output_blocks.8','out.'],1],
   KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1],
   UltimateSDUpscale:[['image','model','positive','negative','vae','upscale_by','seed','steps','cfg','sampler_name','scheduler','denoise','upscale_model','mode_type','tile_width','tile_height'],1],
