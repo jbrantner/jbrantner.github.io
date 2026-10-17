@@ -322,7 +322,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.16'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-17.17'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -419,7 +419,7 @@ const FAKE = {
   upm:['4x-UltraSharp.pth','RealESRGAN_x4plus.pth'],
   samplers:['euler','euler_ancestral','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','uni_pc','lcm'],
   schedulers:['normal','karras','exponential','sgm_uniform','simple','beta'],
-  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider']),
+  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider','ModelMergeSDXL','KSamplerAdvanced']),
   cnVae:true,
 };
 
@@ -546,10 +546,24 @@ function buildGraph(){
   const [W,H] = sizeOf(P);
   const ck = add('CheckpointLoaderSimple', {ckpt_name:M.ckpt}, 'Model', '--model');
   let model = [ck,0], clip = [ck,1], vae = [ck,2];
-  on('lora').forEach((b,i) => {
-    const id = add('LoraLoader', {lora_name:b.lora, strength_model:b.strength, strength_clip:b.strength, model, clip}, 'LoRA ' + (i+1), '--lora');
+  // LoRAs in "style only" mode go on last, and only reach the parts of the model that draw designs and style:
+  // the early blocks that set layout and pose keep the plain model (a core block merge stands in for block weights)
+  const loras = on('lora'), styled = loras.filter(b => b.styleOnly), plainL = loras.filter(b => !b.styleOnly);
+  let plainModel = model;
+  plainL.concat(styled).forEach((b,i) => {
+    const id = add('LoraLoader', {lora_name:b.lora, strength_model:b.strength, strength_clip:b.strength, model, clip}, 'LoRA ' + (i+1) + (b.styleOnly ? ' (style only)' : ''), '--lora');
     model = [id,0]; clip = [id,1];
+    if(!b.styleOnly) plainModel = model;
   });
+  let early = null; // the model for the first steps, before style-only LoRAs switch on
+  if(styled.length){
+    const base = plainModel;
+    const r = {'time_embed.':1, 'label_emb.':1, 'out.':0};
+    for(let k=0;k<9;k++){ r['input_blocks.' + k] = 1; r['output_blocks.' + k] = k < 3 ? 0.3 : 0; } // ratio = how much of the plain model stays
+    for(let k=0;k<3;k++) r['middle_block.' + k] = 0.3;
+    model = [add('ModelMergeSDXL', Object.assign({model1:base, model2:model}, r), 'Style only: keep layout, take design + style', '--lora'), 0];
+    early = base;
+  }
   const st = STYLES[styleKey(M)], tx = M.quality ? styleText(styleKey(M)) : {pos:'', neg:''};
   if(st.clipSkip) clip = [add('CLIPSetLastLayer', {stop_at_clip_layer:st.clipSkip, clip}, 'CLIP skip ' + -st.clipSkip, '--model'), 0];
   const pos = add('CLIPTextEncode', {text:joinTags([tx.pos, loraWords()].filter(Boolean).join(', '), sentPrompt()), clip}, 'Prompt', '--samp');
@@ -577,7 +591,17 @@ function buildGraph(){
     latent = [add('EmptyLatentImage', {width:W, height:H, batch_size:S.batch}, 'Blank canvas', '--samp'), 0];
   }
   const seed = P.seed;
-  const ks = add('KSampler', {seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler, denoise, model, positive:pp, negative:nn, latent_image:latent}, 'Painting', '--samp');
+  const sw = styled.length ? Math.min(...styled.map(b => b.startStep ?? 4)) : 0;
+  let ks;
+  if(early && sw > 0 && !pic && sw < P.steps){
+    // the plain model sets the pose for the first steps, then the style-only LoRA paints over it (as in Illustrious_Main v5)
+    const a = add('KSamplerAdvanced', {model:early, add_noise:'enable', noise_seed:seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
+      positive:pp, negative:nn, latent_image:latent, start_at_step:0, end_at_step:sw, return_with_leftover_noise:'enable'}, 'Painting: pose (steps 0–' + sw + ')', '--samp');
+    ks = add('KSamplerAdvanced', {model, add_noise:'disable', noise_seed:seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
+      positive:pp, negative:nn, latent_image:[a,0], start_at_step:sw, end_at_step:10000, return_with_leftover_noise:'disable'}, 'Painting: style (step ' + sw + ' on)', '--samp');
+  } else {
+    ks = add('KSampler', {seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler, denoise, model, positive:pp, negative:nn, latent_image:latent}, 'Painting', '--samp');
+  }
   let out = [add('VAEDecode', {samples:[ks,0], vae}, 'Decode', '--samp'), 0];
   const up = on('up')[0];
   if(up){
@@ -819,6 +843,9 @@ function blockBody(b){
     ${meta.length ? `<div class="row" style="padding-left:92px;flex-wrap:wrap">${meta.map(x => `<button class="chipbtn" data-do="lw" data-v="${esc(x)}">＋ ${esc(x)}</button>`).join('')}</div><p class="note" style="margin-left:92px">${lm.civitai ? 'From Civitai' + (lm.title ? ' (' + esc(lm.title) + ')' : '') + ' and the file itself.' : "From the LoRA file's training captions."}</p>` : ''}
     ${lm && lm.base && !/illustrious|noob|sdxl|pony/i.test(lm.base) ? `<p class="warn">Civitai lists this LoRA for ${esc(lm.base)}, so it probably won't work with an SDXL-family checkpoint.</p>` : ''}
     <p class="note">Added to the start of your prompt whenever this LoRA is on, and remembered for this file.</p>
+    <div class="row" style="padding-left:92px"><button class="chipbtn" data-do="styleonly" style="${b.styleOnly?'border-color:var(--lora);color:var(--lora)':''}">${b.styleOnly ? '✓ Style only' : 'Style only: off'}</button></div>
+    ${b.styleOnly ? `${slider('startStep','LoRA from step',0,10,1,b.startStep ?? 4)}
+    <p class="note">Keeps the model's own poses and layout and takes the LoRA's character designs and style. The LoRA switches on at this step: 0–2 for more of its designs, 6–8 for more of the model's variety. For full-strength posing put the pose in the prompt.</p>` : ''}
     <div class="row"><button class="chipbtn" data-do="get" data-v="loras">⬇ Add a LoRA</button></div>`; }
   if(b.type==='cn') return `<div class="row"><select data-k="model">${opts(I.cn, b.model, info ? 'No ControlNets found' : 'Connect to see your ControlNets')}</select></div>
     <div class="thumb">${b.preview ? `<img src="${esc(b.preview)}" alt="">` : '<div class="ph">＋</div>'}<button class="chipbtn" data-do="pick">${b.image?'Change picture':'Pick guide picture'}</button></div>
@@ -939,6 +966,7 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
   else if(act==='quality'){ b.quality = !b.quality; }
   else if(act==='faces'){ b.faces = !b.faces; }
+  else if(act==='styleonly'){ b.styleOnly = !b.styleOnly; if(b.startStep==null) b.startStep = 4; }
   else if(act==='lw'){ S.loraWords[b.lora] = [S.loraWords[b.lora], d.dataset.v].filter(Boolean).join(', '); }
   else if(act==='get'){ openGet(d.dataset.v); return; }
   else if(act==='rec'){ syncRec(true); toast('Painting reset to ' + STYLES[styleKey(b)].name + ' settings'); }
