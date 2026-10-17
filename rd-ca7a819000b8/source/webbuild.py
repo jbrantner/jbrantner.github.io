@@ -2,7 +2,7 @@
 Usage: python3 webbuild.py OUT_DIR   -> writes OUT_DIR/index.html, manifest.webmanifest, sw.js and icons."""
 import sys, os, json
 from PIL import Image, ImageDraw
-src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'comfy-app.html')).read()
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'comfy-app.html'), encoding='utf-8').read()
 out = sys.argv[1]; os.makedirs(out, exist_ok=True)
 head = '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -19,12 +19,12 @@ i = src.index('</style>') + len('</style>')
 html = head + src[:i] + '\n</head><body>\n' + src[i:] + '''
 </body></html>
 '''
-open(os.path.join(out, 'index.html'), 'w').write(html)
+open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(html)
 json.dump({"name": "Render Deck", "short_name": "Render Deck", "start_url": "./", "scope": "./", "display": "standalone",
            "background_color": "#120d2e", "theme_color": "#120d2e",
            "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"}, {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}]},
           open(os.path.join(out, 'manifest.webmanifest'), 'w'), indent=1)
-open(os.path.join(out, 'sw.js'), 'w').write('''// Render Deck offline helper: always try the newest version first, fall back to the saved copy with no signal.
+open(os.path.join(out, 'sw.js'), 'w', encoding='utf-8').write('''// Render Deck offline helper: always try the newest version first, fall back to the saved copy with no signal.
 // On a slow connection it never waits more than 3 seconds when a saved copy is ready; the newer one is saved for next time.
 const CACHE = 'render-deck';
 self.addEventListener('install', e => self.skipWaiting());

@@ -63,6 +63,13 @@ header h1 span{color:var(--accent)}
 .ac button i{font-style:normal;font-size:11.5px;color:var(--dim);font-weight:700}
 .ac button.c1{color:#ff8a8a}.ac button.c3{color:#d68cff}.ac button.c4{color:#6fe39a}.ac button.c5,.ac button.c9{color:var(--pic)}
 .ac button:active{transform:scale(.96)}
+.lblrow{display:flex;align-items:center;justify-content:space-between}
+.lblrow .chipbtn{min-height:32px;padding:4px 11px;font-size:12.5px;text-transform:none;letter-spacing:0;color:var(--soft)}
+.tagres{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.tagres button{display:flex;align-items:baseline;gap:8px;text-align:left;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);font-weight:700}
+.tagres button span{flex:1;min-width:0;overflow-wrap:anywhere}
+.tagres button i{font-style:normal;font-size:12px;color:var(--dim);white-space:nowrap}
+.tagres button.c1 span{color:#ff8a8a}.tagres button.c3 span{color:#d68cff}.tagres button.c4 span{color:#6fe39a}.tagres button.c5 span,.tagres button.c9 span{color:var(--pic)}
 .ideas{margin-top:10px;padding:10px 12px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line)}
 .ihead{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:4px 0 6px;font-size:13px}
 .ihead b{font-weight:800;color:var(--soft)}
@@ -178,7 +185,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="strip" id="strip"></div>
   <div class="err" id="err"></div>
 
-  <div class="lbl">Prompt</div>
+  <div class="lbl lblrow">Prompt <button class="chipbtn" id="tagSearchBtn" hidden>🔍 Find a tag</button></div>
   <textarea id="prompt" placeholder="a cossack lantern hunter in a glowing swamp, vibrant pixel art" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
   <p class="added" id="addedPos"></p>
   <div class="ideas" id="ideas" hidden></div>
@@ -211,6 +218,12 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="nodes" id="nodeList"></div>
   <div class="btnrow"><button class="btn" id="copyJson">Copy</button><button class="btn" id="saveJson">Save .json</button></div>
   <pre id="json"></pre>
+</div></div>
+
+<div class="sheet" id="tagSheet"><div class="in"><div class="grab"></div>
+  <h2>Find a tag</h2>
+  <input id="tagQ" placeholder="any part of a tag, like miku or on back" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <div class="tagres" id="tagRes"><p class="note">Tap a tag to add it to the end of your prompt.</p></div>
 </div></div>
 
 <div class="sheet" id="setSheet"><div class="in"><div class="grab"></div>
@@ -706,6 +719,7 @@ function showAdded(){
   $('#addedPos').textContent = on && tx.pos ? '+ ' + st.name + ' adds: ' + tx.pos : '';
   $('#addedNeg').textContent = on && tx.neg ? '+ ' + st.name + ' adds: ' + tx.neg : '';
   if(typeof updateIdeas==='function') updateIdeas();
+  $('#tagSearchBtn').hidden = !st.tags;
   $('#prompt').placeholder = st.tags ? '1girl, solo, hatsune miku, vocaloid, smile, night city, neon lights' : 'a lantern hunter in a glowing swamp at night, cinematic light';
 }
 function render(){
@@ -811,7 +825,7 @@ function currentWord(el, lastWord){
 }
 // every tag holding what was typed, most used first; a match at the start of the tag or of one of its words
 // (after _, a digit or a bracket, so "girl" finds 1girl) counts more than one in the middle
-function suggest(word, strict){
+function suggest(word, strict, limit){
   const q = word.toLowerCase().replace(/\\/g,'').trim().replace(/\s+/g,'_');
   if(q.length < 2 || !TAGS) return [];
   const hits = [];
@@ -821,16 +835,18 @@ function suggest(word, strict){
     if(w < 0.5 && t.al.some(a => a.startsWith(q))) w = 0.5;
     if(w) hits.push([t.n * w, t]);
   }
-  return hits.sort((a,b) => b[0]-a[0]).slice(0, 12).map(h => h[1]);
+  return hits.sort((a,b) => b[0]-a[0]).slice(0, limit || 12).map(h => h[1]);
 }
 function fmtCount(n){ return n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n/1e3) + 'k' : String(n); }
-let acFor = null, acList = [], acLast = false;
+let acFor = null, acList = [], acStart = 0, acInSentence = false;
 function updateAc(el){
   const ac = $('#ac');
   if(!usesTags()){ ac.hidden = true; return; }
   if(!TAGS){ loadTags().then(() => { if(document.activeElement===el) updateAc(el); }); return; }
-  acLast = false; acList = suggest(currentWord(el).word); acFor = el;
-  if(!acList.length){ acLast = true; acList = suggest(currentWord(el, true).word, true); }
+  const cw = currentWord(el); acFor = el; acStart = cw.start; acInSentence = false; acList = suggest(cw.word);
+  // in a sentence, try the last 5, 4 … 1 words so a tag typed out mid-sentence ("hand on own chest") is still found
+  const sp = []; for(let i = cw.start; i < cw.end; i++) if(el.value[i]===' ' && el.value[i+1] && el.value[i+1]!==' ') sp.push(i+1);
+  for(const st of sp.slice(-5)){ if(acList.length) break; acList = suggest(el.value.slice(st, cw.end), true); acStart = st; acInSentence = true; }
   if(!acList.length){ ac.hidden = true; return; }
   if(ac.previousElementSibling !== el) el.after(ac);
   ac.innerHTML = acList.map((t,i) => `<button data-i="${i}" class="c${t.cat}">${esc(tagText(t))}${t.cat==='9' ? '' : `<i>${fmtCount(t.n)}</i>`}</button>`).join('');
@@ -840,9 +856,9 @@ function updateAc(el){
 $('#ac').addEventListener('mousedown', e => e.preventDefault());
 $('#ac').addEventListener('click', e => {
   const btn = e.target.closest('[data-i]'); if(!btn || !acFor) return;
-  const t = acList[+btn.dataset.i], el = acFor, {start, end} = currentWord(el, acLast);
+  const t = acList[+btn.dataset.i], el = acFor, start = acStart, end = el.selectionStart;
   const rest = el.value.slice(end).replace(/^[^\s,():\n]*/, ''); // drop the rest of a half-typed word after the cursor
-  const ins = tagText(t) + (acLast || /^\s*[,):]/.test(rest) ? '' : ', ');
+  const ins = tagText(t) + (acInSentence || /^\s*[,):]/.test(rest) ? '' : ', ');
   el.value = el.value.slice(0, start) + ins + rest;
   const pos = start + ins.length; el.focus(); el.setSelectionRange(pos, pos);
   el.dispatchEvent(new Event('input')); $('#ac').hidden = true; buzz();
@@ -882,6 +898,8 @@ function indexTags(){
 const findTag = name => TAGMAP.get(name.replace(/ /g,'_')) || ALIAS.get(name.replace(/ /g,'_'));
 // tags for one phrase: the everyday-word list, then the tag or alias itself, then simple plural/singular forms, then near tags
 function lookup(words){
+  const exact = words.length > 1 && findTag(words.join(' '));
+  if(exact) return withNear([exact], 1); // a tag typed word for word, like "on back" or "hand on own chest"
   let w = words.slice(); while(w.length > 1 && LEAD.has(w[0])) w.shift();
   const key = w.join(' '); if(STOP.has(w[w.length-1]) && !PLAIN[key]) return null; // "sitting on" is not a tag, "sitting" is
   const out = [];
@@ -889,12 +907,16 @@ function lookup(words){
   if(PLAIN[key]) PLAIN[key].forEach(n => push(findTag(n)));
   else {
     const t = findTag(key) || findTag(key.replace(/e?s$/,'')) || findTag(key + 's');
-    if(!t || (w.length===1 && t.n < 2000)) return null; // single common words only, so "jacks" doesn't drag in junk
+    if(!t || (w.length===1 && t.n < 500)) return null; // one word alone needs a fairly common tag, so "jacks" doesn't drag in junk
     push(t);
   }
   if(!out.length) return null;
-  out.def = PLAIN[key] ? out.length : 1; // how many are picked by default: all of a hand-made list, else just the first
-  // a few related tags holding the same words, most used first
+  return withNear(out, PLAIN[key] ? out.length : 1);
+}
+// add a few related tags holding the same words, most used first; def is how many are picked by default
+function withNear(out, def){
+  out.def = def;
+  const push = t => { if(!out.includes(t)) out.push(t); };
   const near = new RegExp('(^|_)' + out[0].tag.replace(/[^a-z0-9_]/g,'.') + '(_|$)');
   for(const t of TAGS){ if(out.length >= 4 || t.n < 1000) break; if(t !== out[0] && t.cat===out[0].cat && near.test(t.tag)) push(t); } // TAGS is most used first; same kind only, so "park" doesn't bring South Park
   return out;
@@ -920,7 +942,7 @@ function readPrompt(text){
       let i = 0;
       while(i < words.length){
         const run = describe(words, i); if(run){ piece.phrases.push(run); i += run.len; continue; }
-        let hit = null, len = Math.min(4, words.length - i);
+        let hit = null, len = Math.min(6, words.length - i);
         for(; len >= 1; len--){ const tags = lookup(words.slice(i, i+len)); if(tags){ hit = {words:words.slice(i, i+len).join(' '), tags}; break; } }
         if(hit){ piece.phrases.push(hit); i += len; } else { if(!STOP.has(words[i])) piece.left.push(words[i]); i++; }
       }
@@ -995,6 +1017,22 @@ $('#ideas').addEventListener('click', e => {
 let ideasTimer = 0;
 $('#prompt').addEventListener('input', () => { clearTimeout(ideasTimer); ideasTimer = setTimeout(updateIdeas, 300); });
 
+
+// ---------- find a tag: the whole list, searched by any part of a tag or its other names ----------
+const CATS = {0:'general', 1:'artist', 3:'series', 4:'character', 5:'meta', 9:'quality'};
+$('#tagSearchBtn').onclick = async () => { openSheet('#tagSheet'); await loadTags(); $('#tagQ').focus(); if($('#tagQ').value) $('#tagQ').oninput(); };
+let tagHits = [];
+$('#tagQ').oninput = () => {
+  const q = $('#tagQ').value; if(!TAGS) return;
+  tagHits = suggest(q, false, 60);
+  $('#tagRes').innerHTML = tagHits.length ? tagHits.map((t,i) => `<button data-i="${i}" class="c${t.cat}"><span>${esc(tagText(t))}</span><i>${CATS[t.cat]||''}${t.cat==='9' ? '' : ' · ' + fmtCount(t.n)}</i></button>`).join('')
+    : `<p class="note">${q.trim().length < 2 ? 'Type at least two letters.' : 'No tag has that in it.'}</p>`;
+};
+$('#tagRes').onclick = e => {
+  const b = e.target.closest('[data-i]'); if(!b) return; const t = tagHits[+b.dataset.i];
+  S.prompt = [S.prompt.replace(/[,\s]*$/, ''), tagText(t)].filter(Boolean).join(', '); $('#prompt').value = S.prompt; save(); updateIdeas();
+  b.disabled = true; b.style.opacity = .5; toast('Added ' + tagText(t)); buzz();
+};
 
 // ---------- start ----------
 render(); show(S.gallery.length ? 0 : -1);
