@@ -312,7 +312,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.22'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-17.23'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -413,7 +413,7 @@ const FAKE = {
   upm:['4x-UltraSharp.pth','RealESRGAN_x4plus.pth'],
   samplers:['euler','euler_ancestral','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','uni_pc','lcm'],
   schedulers:['normal','karras','exponential','sgm_uniform','simple','beta'],
-  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider','ModelMergeSDXL','KSamplerAdvanced','VAEEncodeTiled','VAEDecodeTiled']),
+  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider','ModelMergeSDXL','KSamplerAdvanced','VAEEncodeTiled','VAEDecodeTiled','SAMLoader']),
   cnVae:true,
 };
 
@@ -629,14 +629,16 @@ function buildGraph(){
     }
   }
   if(P.faces){
-    const smp = info && info.samplers.includes('dpmpp_2m') ? 'dpmpp_2m' : P.sampler, sch = info && info.schedulers.includes('karras') ? 'karras' : P.scheduler;
-      // faces are found and redrawn on their own at full detail, with the LoRAs on
-      const det = add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}, 'Find faces', '--up');
-      out = [add('FaceDetailer', {image:out, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed, steps:20, cfg:Math.min(P.cfg, 5),
-        sampler_name:smp, scheduler:sch, positive:pp, negative:nn, denoise:0.4, feather:5, noise_mask:true, force_inpaint:true, bbox_threshold:0.5,
-        bbox_dilation:10, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:0, sam_threshold:0.93, sam_bbox_expansion:0,
-        sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[det,0], wildcard:'', cycle:1}, 'Fix faces', '--up'), 0];
-    }
+    // faces are found and redrawn up close with the LoRAs on. To blend in: the mask follows the face's shape (SAM)
+    // instead of a box, its edge is feathered wide, the redraw is gentle, and it uses the render's own sampler and CFG
+    const det = add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}, 'Find faces', '--up');
+    const extra = {noise_mask_feather:P.faceFeather ?? 32};
+    if(info && info.nodes.has('SAMLoader')) extra.sam_model_opt = [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}, 'Face outline', '--up'), 0];
+    out = [add('FaceDetailer', Object.assign({image:out, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed, steps:20, cfg:P.cfg,
+      sampler_name:P.sampler, scheduler:P.scheduler, positive:pp, negative:nn, denoise:P.faceDenoise ?? 0.35, feather:P.faceFeather ?? 32, noise_mask:true, force_inpaint:true,
+      bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
+      sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[det,0], wildcard:'', cycle:1}, extra), 'Fix faces', '--up'), 0];
+  }
   add('SaveImage', {filename_prefix:'RenderDeck/render', images:out}, 'Save', '--model');
   const colors = {}; for(const id in g){ colors[id] = g[id]._c; delete g[id]._c; }
   return {graph:g, titles, colors, notes, seed};
@@ -846,7 +848,8 @@ function blockBody(b){
     <div class="row"><label>Seed</label><div class="grow"><input data-k="seed" inputmode="numeric" value="${b.seed}"></div></div>
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="dice">🎲 New seed</button><button class="chipbtn" data-do="lock" style="${b.lockSeed?'border-color:var(--samp);color:var(--samp)':''}">${b.lockSeed?'🔒 Kept':'🔓 New each time'}</button></div>
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="nonoise" style="${b.noNoise!==false?'border-color:var(--samp);color:var(--samp)':''}">${b.noNoise!==false ? '✓ Finishing pass' : 'Finishing pass: off'}</button>${FACE('samp')}</div>
-    <p class="note" style="margin-left:92px">Finishing pass runs the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps again with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>`; }
+    <p class="note" style="margin-left:92px">Finishing pass runs the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps again with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>
+    ${b.faces ? slider('faceDenoise','Face redraw',0.2,0.6,0.05,b.faceDenoise ?? 0.35) + slider('faceFeather','Face blend',8,64,4,b.faceFeather ?? 32) + '<p class="note" style="margin-left:92px">Lower Face redraw keeps the face closer to the original; higher Face blend softens the edge into the surroundings.</p>' : ''}`; }
   if(b.type==='lora'){ const w = S.loraWords[b.lora] || '', lm = loraMeta(b.lora), meta = ((lm && lm.words) || []).filter(x => !w.toLowerCase().split(/,\s*/).includes(x.toLowerCase()));
     return `<div class="row"><select data-k="lora">${opts(I.lora, b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
     ${slider('strength','Strength',-1,2,0.05,b.strength)}
