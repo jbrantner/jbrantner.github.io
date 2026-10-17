@@ -307,7 +307,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.14'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-17.15'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -404,7 +404,7 @@ const FAKE = {
   upm:['4x-UltraSharp.pth','RealESRGAN_x4plus.pth'],
   samplers:['euler','euler_ancestral','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','uni_pc','lcm'],
   schedulers:['normal','karras','exponential','sgm_uniform','simple','beta'],
-  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer']),
+  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider']),
   cnVae:true,
 };
 
@@ -566,7 +566,30 @@ function buildGraph(){
   let out = [add('VAEDecode', {samples:[ks,0], vae}, 'Decode', '--samp'), 0];
   const up = on('up')[0];
   if(up){
-    if(up.mode==='model' && up.model){
+    if(up.mode==='redraw'){
+      // Redraw: upscale, then repaint it in tiles with real noise at low strength, so the bigger picture gets new detail
+      // instead of being smoothed (a no-added-noise pass only blurs). Tiles keep it within 8 GB; the base model without
+      // LoRAs does the tiles, because a style LoRA leaves brightness blocks between them.
+      const sc = up.scale || 2, dn = up.denoise || 0.35, smp = info && info.samplers.includes('dpmpp_2m') ? 'dpmpp_2m' : P.sampler, sch = info && info.schedulers.includes('karras') ? 'karras' : P.scheduler;
+      const tiles = {model:[ck,0], positive:pp, negative:nn, vae, seed, steps:20, cfg:Math.min(P.cfg, 5), sampler_name:smp, scheduler:sch, denoise:dn,
+        mode_type:'Linear', tile_width:1024, tile_height:1024, mask_blur:8, tile_padding:32, seam_fix_mode:'None', seam_fix_denoise:1, seam_fix_width:64,
+        seam_fix_mask_blur:8, seam_fix_padding:16, force_uniform_tiles:true, tiled_decode:false, batch_size:1};
+      if(up.model){
+        const ul = add('UpscaleModelLoader', {model_name:up.model}, 'Upscale model', '--up');
+        out = [add('UltimateSDUpscale', Object.assign({image:out, upscale_model:[ul,0], upscale_by:sc}, tiles), 'Redraw ' + sc + '× in tiles', '--up'), 0];
+      } else {
+        const big = add('ImageScaleBy', {image:out, upscale_method:'lanczos', scale_by:sc}, 'Resize ' + sc + '×', '--up');
+        out = [add('UltimateSDUpscaleNoUpscale', Object.assign({upscaled_image:[big,0]}, tiles), 'Redraw ' + sc + '× in tiles', '--up'), 0];
+      }
+      if(up.faces){
+        // faces are found and redrawn on their own at full detail, with the LoRAs on
+        const det = add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}, 'Find faces', '--up');
+        out = [add('FaceDetailer', {image:out, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed, steps:20, cfg:Math.min(P.cfg, 5),
+          sampler_name:smp, scheduler:sch, positive:pp, negative:nn, denoise:0.4, feather:5, noise_mask:true, force_inpaint:true, bbox_threshold:0.5,
+          bbox_dilation:10, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:0, sam_threshold:0.93, sam_bbox_expansion:0,
+          sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[det,0], wildcard:'', cycle:1}, 'Fix faces', '--up'), 0];
+      }
+    } else if(up.mode==='model' && up.model){
       const ul = add('UpscaleModelLoader', {model_name:up.model}, 'Upscale model', '--up');
       out = [add('ImageUpscaleWithModel', {upscale_model:[ul,0], image:out}, 'Upscale (model)', '--up'), 0];
     } else {
@@ -730,13 +753,13 @@ function defaults(type){
   if(type==='lora') return {id,type,on:true,lora:'',strength:0.8};
   if(type==='cn') return {id,type,on:true,model:'',image:'',preview:'',prep:'none',strength:0.8,start:0,end:1};
   if(type==='pic') return {id,type,on:true,image:'',preview:'',change:0.6};
-  if(type==='up') return {id,type,on:true,mode:'simple',scale:2,model:''};
+  if(type==='up') return {id,type,on:true,mode:(!info || info.nodes.has('UltimateSDUpscale')) ? 'redraw' : 'simple',scale:2,model:'',denoise:0.35,faces:!!(info && info.nodes.has('FaceDetailer'))};
 }
 function addBlock(type, quiet){
   const b = defaults(type); const list = (info && info[{lora:'lora',cn:'cn',up:'upm'}[type]]) || [];
   if(type==='lora') b.lora = list[0] || '';
   if(type==='cn') b.model = list[0] || '';
-  if(type==='up' && list.length){ b.model = list[0]; }
+  if(type==='up' && list.length){ b.model = list.find(m => /anime/i.test(m)) || list[0]; }
   S.blocks.push(b); justAdded = b.id; save(); if(!quiet){ closeSheets(); render(); buzz(); setTimeout(()=>{ const el = document.querySelector(`[data-id="${b.id}"]`); el && el.scrollIntoView({behavior:'smooth',block:'center'}); }, 60); }
   return b;
 }
@@ -793,13 +816,21 @@ function blockBody(b){
     ${slider('change','How much changes',0.05,1,0.05,b.change)}
     <p class="note">Low keeps your picture, high repaints almost everything.</p>`;
   if(b.type==='up'){ const hasM = I.upm && I.upm.length;
-    return `<div class="row"><label>How</label>${seg('mode',[['simple','Smooth resize'],['model','Upscale model']], b.mode)}</div>
+    const canRedraw = !info || info.nodes.has('UltimateSDUpscale');
+    if(b.mode==='redraw') return `<div class="row"><label>How</label>${seg('mode',[['redraw','Redraw (best)'],['simple','Smooth resize'],['model','Upscale model']], b.mode)}</div>
+    ${canRedraw ? '' : '<p class="warn">Redraw needs the Ultimate SD Upscale nodes in ComfyUI.</p>'}
+    ${slider('scale','Times bigger',1.5,3,0.25,b.scale)}
+    ${slider('denoise','Redraw strength',0.2,0.55,0.05,b.denoise || 0.35)}
+    <div class="row"><select data-k="model">${opts(I.upm, b.model, 'No upscale model: plain resize first')}</select></div>
+    <div class="row" style="padding-left:92px"><button class="chipbtn" data-do="faces" style="${b.faces?'border-color:var(--up);color:var(--up)':''}">${b.faces ? '✓ Fix faces' : 'Fix faces: off'}</button></div>
+    <p class="note">Upscales, then repaints the bigger picture tile by tile with real noise at low strength, so it gains detail instead of going soft. 0.3–0.4 adds detail and keeps the picture; higher reinvents more. Fix faces redraws each face up close afterwards.</p>`;
+    return `<div class="row"><label>How</label>${seg('mode',[['redraw','Redraw (best)'],['simple','Smooth resize'],['model','Upscale model']], b.mode)}</div>
     ${b.mode==='model' ? `<div class="row"><select data-k="model">${opts(I.upm, b.model, 'No upscale models found')}</select></div><p class="note">Upscale models set their own size, usually 4×.</p>` : slider('scale','Times bigger',1.25,4,0.25,b.scale)}
     ${b.mode==='model' && !hasM && info ? '<p class="warn">Put an upscale model in ComfyUI/models/upscale_models to use this.</p>' : ''}`; }
 }
 function renderBlocks(){
   $('#blocks').innerHTML = S.blocks.map(b => { const T = TYPES[b.type];
-    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' : (b.mode==='model' ? 'model' : '×'+b.scale);
+    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' : (b.mode==='redraw' ? 'redraw ×' + b.scale + (b.faces ? ' + faces' : '') : b.mode==='model' ? 'model' : '×'+b.scale);
     return `<div class="block ${b.on?'':'off'} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
       <div class="bhead"><div class="emo">${T.emo}</div><h3>${T.name}<small>${esc(sub)}</small></h3>
       ${T.fixed ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button><button class="x" data-do="del" aria-label="Remove">✕</button>`}</div>
@@ -892,6 +923,7 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='dice'){ b.seed = randSeed(); }
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
   else if(act==='quality'){ b.quality = !b.quality; }
+  else if(act==='faces'){ b.faces = !b.faces; }
   else if(act==='lw'){ S.loraWords[b.lora] = [S.loraWords[b.lora], d.dataset.v].filter(Boolean).join(', '); }
   else if(act==='get'){ openGet(d.dataset.v); return; }
   else if(act==='rec'){ syncRec(true); toast('Painting reset to ' + STYLES[styleKey(b)].name + ' settings'); }

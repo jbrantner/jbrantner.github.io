@@ -14,6 +14,9 @@ const DEF = { // required inputs and output count, copied from ComfyUI nodes.py
   ImageScale:[['image','upscale_method','width','height','crop'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1],
   UpscaleModelLoader:[['model_name'],1], ImageUpscaleWithModel:[['upscale_model','image'],1],
   CLIPSetLastLayer:[['clip','stop_at_clip_layer'],1],
+  UltimateSDUpscale:[['image','model','positive','negative','vae','upscale_by','seed','steps','cfg','sampler_name','scheduler','denoise','upscale_model','mode_type','tile_width','tile_height'],1],
+  UltimateSDUpscaleNoUpscale:[['upscaled_image','model','positive','negative','vae','seed','steps','cfg','denoise'],1],
+  FaceDetailer:[['image','model','clip','vae','positive','negative','bbox_detector','denoise','guide_size'],6], UltralyticsDetectorProvider:[['model_name'],2],
 };
 function check(g){
   const errs = [];
