@@ -54,7 +54,7 @@ header h1 span{color:var(--accent)}
 .neg{margin-top:8px}
 .neg summary{color:var(--soft);font-size:14px;padding:6px 2px;list-style:none;cursor:pointer}
 .neg summary::-webkit-details-marker{display:none}
-.added{font-size:12.5px;color:var(--dim);margin:6px 2px 0;overflow-wrap:anywhere}
+.added{font-size:12.5px;color:var(--dim);margin:6px 2px 0;overflow-wrap:anywhere;white-space:pre-line}
 .added:empty{display:none}
 /* tag suggestions: a row of chips under the box being typed in, above the keyboard */
 .ac{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;scrollbar-width:none}
@@ -322,6 +322,7 @@ let S = load() || {
 };
 S.styles = S.styles || {};       // checkpoint name -> style key, once the user picks one
 S.styleText = S.styleText || {}; // style key -> {pos, neg} the user edited
+S.loraWords = S.loraWords || {}; // LoRA file -> activation words added to the prompt whenever that LoRA is on
 { const M = S.blocks.find(b=>b.type==='model'); if(M.quality==null) M.quality = true; }
 let info = null;          // what the computer has installed: lists of models and node names
 let ws = null, clientId = 'rd-' + Math.random().toString(36).slice(2);
@@ -476,7 +477,7 @@ function buildGraph(){
   });
   const st = STYLES[styleKey(M)], tx = M.quality ? styleText(styleKey(M)) : {pos:'', neg:''};
   if(st.clipSkip) clip = [add('CLIPSetLastLayer', {stop_at_clip_layer:st.clipSkip, clip}, 'CLIP skip ' + -st.clipSkip, '--model'), 0];
-  const pos = add('CLIPTextEncode', {text:joinTags(tx.pos, asTags(S.prompt)), clip}, 'Prompt', '--samp');
+  const pos = add('CLIPTextEncode', {text:joinTags([tx.pos, loraWords()].filter(Boolean).join(', '), asTags(S.prompt)), clip}, 'Prompt', '--samp');
   const neg = add('CLIPTextEncode', {text:joinTags(tx.neg, S.negative), clip}, 'Avoid', '--samp');
   let pp = [pos,0], nn = [neg,0];
   on('cn').forEach((b,i) => {
@@ -686,8 +687,12 @@ function blockBody(b){
     <div class="row"><label>Scheduler</label><div class="grow"><select data-k="scheduler">${opts(I.schedulers, b.scheduler,'')}</select></div></div>
     <div class="row"><label>Seed</label><div class="grow"><input data-k="seed" inputmode="numeric" value="${b.seed}"></div></div>
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="dice">🎲 New seed</button><button class="chipbtn" data-do="lock" style="${b.lockSeed?'border-color:var(--samp);color:var(--samp)':''}">${b.lockSeed?'🔒 Kept':'🔓 New each time'}</button></div>`; }
-  if(b.type==='lora') return `<div class="row"><select data-k="lora">${opts(I.lora, b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
-    ${slider('strength','Strength',-1,2,0.05,b.strength)}`;
+  if(b.type==='lora'){ const w = S.loraWords[b.lora] || '', meta = (loraMeta(b.lora) || []).filter(x => x.toLowerCase() !== w.toLowerCase());
+    return `<div class="row"><select data-k="lora">${opts(I.lora, b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
+    ${slider('strength','Strength',-1,2,0.05,b.strength)}
+    <div class="row"><label>Activation</label><div class="grow"><input data-lw value="${esc(w)}" placeholder="words this LoRA needs, e.g. AFKJ Style" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
+    ${meta.length ? `<div class="row" style="padding-left:92px;flex-wrap:wrap">${meta.map(x => `<button class="chipbtn" data-do="lw" data-v="${esc(x)}">＋ ${esc(x)}</button>`).join('')}</div><p class="note" style="margin-left:92px">From the LoRA file's training captions.</p>` : ''}
+    <p class="note">Added to the start of your prompt whenever this LoRA is on, and remembered for this file.</p>`; }
   if(b.type==='cn') return `<div class="row"><select data-k="model">${opts(I.cn, b.model, info ? 'No ControlNets found' : 'Connect to see your ControlNets')}</select></div>
     <div class="thumb">${b.preview ? `<img src="${esc(b.preview)}" alt="">` : '<div class="ph">＋</div>'}<button class="chipbtn" data-do="pick">${b.image?'Change picture':'Pick guide picture'}</button></div>
     <div class="row"><label>Prep</label>${seg('prep',[['none','Use as is'],['edges','Find edges']], b.prep)}</div>
@@ -712,11 +717,30 @@ function renderBlocks(){
       <div class="body">${blockBody(b)}</div></div>`; }).join('');
   justAdded = 0; showAdded();
 }
+// activation words of every LoRA that is switched on
+function loraWords(){ return S.blocks.filter(b => b.type==='lora' && b.on && b.lora).map(b => S.loraWords[b.lora]).filter(Boolean).join(', '); }
+// trigger words a LoRA file was trained with, read once from its safetensors header through ComfyUI
+const LORAMETA = {};
+function loraMeta(file){
+  if(!file || S.test || !info) return null;
+  if(file in LORAMETA) return LORAMETA[file];
+  LORAMETA[file] = null;
+  fetch(base() + '/view_metadata/loras?filename=' + encodeURIComponent(file)).then(r => r.ok ? r.json() : {}).then(m => {
+    const out = [];
+    if(m['modelspec.trigger_phrase']) out.push(...String(m['modelspec.trigger_phrase']).split(',').map(x => x.trim()));
+    try{ const f = JSON.parse(m.ss_tag_frequency || '{}'), n = {};
+      Object.values(f).forEach(d => Object.entries(d).forEach(([t,c]) => { n[t.trim()] = (n[t.trim()]||0) + c; }));
+      out.push(...Object.entries(n).sort((a,b) => b[1]-a[1]).slice(0, 3).map(x => x[0])); }catch(e){}
+    LORAMETA[file] = [...new Set(out.filter(Boolean))].slice(0, 4); renderBlocks();
+  }).catch(() => { LORAMETA[file] = []; });
+  return null;
+}
 // under the prompt boxes: what the style adds, so nothing is sent that the user can't see
 function showAdded(){
   const M = S.blocks.find(b=>b.type==='model'), k = styleKey(M), tx = styleText(k), st = STYLES[k];
   const on = M.quality && k!=='plain';
-  $('#addedPos').textContent = on && tx.pos ? '+ ' + st.name + ' adds: ' + tx.pos : '';
+  const lw = loraWords();
+  $('#addedPos').textContent = [on && tx.pos ? '+ ' + st.name + ' adds: ' + tx.pos : '', lw ? '+ LoRA adds: ' + lw : ''].filter(Boolean).join('\n');
   $('#addedNeg').textContent = on && tx.neg ? '+ ' + st.name + ' adds: ' + tx.neg : '';
   if(typeof updateIdeas==='function') updateIdeas();
   $('#tagSearchBtn').hidden = !st.tags;
@@ -731,6 +755,7 @@ function render(){
 const blockOf = el => { const d = el.closest('.block'); return d && S.blocks.find(b => b.id === +d.dataset.id); };
 $('#blocks').addEventListener('input', e => {
   const b = blockOf(e.target), st = e.target.dataset.st;
+  if(b && 'lw' in e.target.dataset){ S.loraWords[b.lora] = e.target.value.trim(); save(); showAdded(); return; }
   if(b && st){ const sk = styleKey(b); S.styleText[sk] = Object.assign(styleText(sk), {[st]: e.target.value}); save(); showAdded(); return; }
   const k = e.target.dataset.k; if(!b || !k) return;
   let v = e.target.value; if(e.target.type==='range'){ v = +v; e.target.nextElementSibling.textContent = v; }
@@ -755,6 +780,7 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='dice'){ b.seed = randSeed(); }
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
   else if(act==='quality'){ b.quality = !b.quality; }
+  else if(act==='lw'){ S.loraWords[b.lora] = [S.loraWords[b.lora], d.dataset.v].filter(Boolean).join(', '); }
   else if(act==='rec'){ syncRec(true); toast('Painting reset to ' + STYLES[styleKey(b)].name + ' settings'); }
   else if(act==='resetStyle'){ delete S.styleText[styleKey(b)]; }
   else if(act==='pick'){ pickFor = b; $('#filePick').value = ''; $('#filePick').click(); return; }

@@ -140,6 +140,10 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok(['LoraLoader','Canny','ControlNetApplyAdvanced','VAEEncode','ImageUpscaleWithModel'].every(t => types.includes(t)), 'all blocks appear in graph');
   ok(!types.includes('EmptyLatentImage'), 'start picture replaces blank canvas');
   ok('vae' in Object.values(g).find(x=>x.class_type==='ControlNetApplyAdvanced').inputs, 'ControlNet gets vae when supported');
+  // LoRA activation words go into the prompt while the LoRA is on
+  await page.fill('.block[style*="--lora"] [data-lw]', 'pixel style');
+  await page.click('#graphBtn'); let lg = JSON.parse(await page.textContent('#json')); await page.click('#scrim');
+  ok(textOf(lg,'Prompt').includes(', pixel style, ') && (await page.textContent('#addedPos')).includes('LoRA adds: pixel style'), 'LoRA activation words added: '+textOf(lg,'Prompt'));
 
   // reuse result as start picture
   await page.click('[data-act=pic]');
