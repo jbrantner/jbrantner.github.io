@@ -215,6 +215,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
     <button class="chipbtn" data-act="pic">🖼 Use as start picture</button>
     <button class="chipbtn" data-act="cn">🧭 Use as guide</button>
     <button class="chipbtn" data-act="seed">🎲 Keep this seed</button>
+    <button class="chipbtn" data-act="recipe">⤵ Use its settings</button>
     <button class="chipbtn" data-act="open">↗ Open full size</button>
   </div>
   <div class="strip" id="strip"></div>
@@ -292,7 +293,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 
 <div class="viewer" id="viewer" hidden>
   <img id="viewImg" alt="">
-  <div class="vbar"><button class="chipbtn" id="vClose">✕ Close</button><button class="chipbtn" id="vPic">🖼 Use as start picture</button><button class="chipbtn" id="vOpen">↗ Full size</button><button class="chipbtn danger" id="vDel">🗑 Delete</button></div>
+  <div class="vbar"><button class="chipbtn" id="vClose">✕ Close</button><button class="chipbtn" id="vPic">🖼 Use as start picture</button><button class="chipbtn" id="vRecipe">⤵ Use its settings</button><button class="chipbtn" id="vOpen">↗ Full size</button><button class="chipbtn danger" id="vDel">🗑 Delete</button></div>
 </div>
 
 <div class="sheet" id="setSheet"><div class="in"><div class="grab"></div>
@@ -322,7 +323,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.19'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-17.20'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -682,7 +683,7 @@ async function go(){
       const r = await fetch(base() + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:built.graph, client_id:clientId})});
       const j = await r.json().catch(()=>({}));
       if(!r.ok || j.error){ failAll(explain(j, built.titles)); break; }
-      S.queue.push({id:j.prompt_id, seed:built.seed, prompt:S.prompt, n:i+1, of:runs, titles:built.titles, images:[]}); save();
+      S.queue.push({id:j.prompt_id, seed:built.seed, prompt:S.prompt, n:i+1, of:runs, titles:built.titles, images:[], snap:snapshot(built.seed)}); save();
     }catch(e){ failAll('Could not reach ComfyUI: ' + e.message); break; }
   }
   P.seed = first; save(); renderBlocks();
@@ -712,7 +713,7 @@ async function completeOne(e, quiet){
   S.queue = S.queue.filter(q => q!==e); save();
   if(!e.images.length){ try{ const h = (await (await fetch(base() + '/history/' + e.id)).json())[e.id];
     for(const id in (h && h.outputs) || {}) (h.outputs[id].images||[]).forEach(i => { if(i.type==='output') e.images.push(i); }); }catch(err){} }
-  e.images.forEach(i => S.gallery.unshift({url:viewUrl(i), seed:e.seed, prompt:e.prompt, t:Date.now()}));
+  e.images.forEach(i => S.gallery.unshift({url:viewUrl(i), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}));
   S.gallery = S.gallery.slice(0,40); save(); show(0); drawStrip();
   if(!S.queue.length){ busy(false); status(''); bar(1); setTimeout(()=>bar(0), 500); if(!quiet) toast(e.of > 1 ? 'Done: ' + e.of + ' renders ✨' : 'Done ✨'); }
   else { const n = S.queue[0]; status('Render ' + n.n + ' of ' + n.of); bar(0); }
@@ -750,7 +751,7 @@ function fakeRun(built, runs){
     if(node.class_type==='KSampler' && step < P.steps){ step++; status('Painting ' + step + '/' + P.steps); bar(0.1 + 0.8*step/P.steps); return; }
     status(built.titles[id]); k++;
     if(k >= ids.length){ const j = job; endJob();
-      for(let r=0; r<(runs||1); r++) for(let b=0; b<(on1('pic')?1:S.batch); b++) S.gallery.unshift({url:fakeImage(j.seed + r*7 + b, built), seed:j.seed + r*7 + b, prompt:j.prompt, t:Date.now(), test:true});
+      for(let r=0; r<(runs||1); r++) for(let b=0; b<(on1('pic')?1:S.batch); b++) S.gallery.unshift({url:fakeImage(j.seed + r*7 + b, built), seed:j.seed + r*7 + b, prompt:j.prompt, t:Date.now(), test:true, snap:snapshot(j.seed + r*7 + b)});
       S.gallery = S.gallery.slice(0,40); show(0); drawStrip(); bar(1); setTimeout(()=>bar(0),500); toast('Done (pretend picture) ✨'); save(); }
   }, 70);
 }
@@ -784,6 +785,7 @@ $('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; i
 $('#resultActions').onclick = e => {
   const a = e.target.closest('[data-act]'); if(!a) return; const g = S.gallery[shownIdx]; if(!g) return;
   if(a.dataset.act==='open'){ window.open(g.url, '_blank'); return; }
+  if(a.dataset.act==='recipe'){ useRecipe(g.snap, g.url); return; }
   if(a.dataset.act==='seed'){ const P = S.blocks.find(b=>b.type==='sampler'); P.seed = g.seed; P.lockSeed = true; save(); renderBlocks(); toast('Seed ' + g.seed + ' locked'); return; }
   // feed a finished render back in: ComfyUI's LoadImage reads output files when the name ends in " [output]"
   const ref = refFromUrl(g.url);
@@ -1448,12 +1450,56 @@ async function deletePics(list){
 }
 $('#libDelete').onclick = async () => { if(await deletePics(lib.items.filter(i => lib.picked.has(libKey(i))))){ lib.selecting = false; drawLibBar(); } };
 $('#vClose').onclick = () => { $('#viewer').hidden = true; };
+$('#vRecipe').onclick = async () => { const u = viewUrl(lib.cur), g = S.gallery.find(x => x.url===u); if(await useRecipe(g && g.snap, u)){ $('#viewer').hidden = true; closeSheets(); } };
 $('#vOpen').onclick = () => window.open(viewUrl(lib.cur), '_blank');
 $('#vDel').onclick = async () => { if(await deletePics([lib.cur])) $('#viewer').hidden = true; };
 $('#vPic').onclick = () => {
   const i = lib.cur; let b = on1('pic') || S.blocks.find(x => x.type==='pic'); if(!b) b = addBlock('pic', true);
   b.on = true; b.image = libKey(i) + ' [output]'; b.preview = viewUrl(i); save(); $('#viewer').hidden = true; closeSheets(); render(); toast('Added as start picture');
 };
+
+// ---------- taking the settings back from a picture ----------
+const RECIPE_KEYS = ['blocks','prompt','negative','addedTags','tagOn','tagOff','asTags','peopleOff','batch'];
+function snapshot(seed){ const o = {}; RECIPE_KEYS.forEach(k => o[k] = JSON.parse(JSON.stringify(S[k] ?? null))); o.seed = seed; return o; }
+// a render made by this app carries its whole recipe; any other ComfyUI picture is read from the graph saved inside the PNG
+async function useRecipe(snap, url){
+  if(!snap && url && !S.test){ try{ snap = fromPng(await (await fetch(url)).arrayBuffer()); }catch(e){} }
+  if(!snap){ toast('No settings saved in this picture', true); return false; }
+  RECIPE_KEYS.forEach(k => { if(snap[k] != null) S[k] = JSON.parse(JSON.stringify(snap[k])); });
+  const P = S.blocks.find(b=>b.type==='sampler'); if(snap.seed != null){ P.seed = snap.seed; P.lockSeed = true; }
+  S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
+  S.recFor = styleKey(S.blocks.find(b=>b.type==='model')); // keep the picture's sampler settings, don't reset them to the style's
+  if(snap.fromPng){ // the saved text includes the quality tags and LoRA words the app adds itself; take those back out
+    const tx = styleText(S.recFor), strip = (text, extra) => { const drop = new Set(extra.split(',').map(norm)); return text.split(',').map(t => t.trim()).filter(t => t && !drop.has(norm(t))).join(', '); };
+    S.prompt = strip(S.prompt, tx.pos + ',' + loraWords()); S.negative = strip(S.negative, tx.neg);
+  }
+  if(info) fillDefaults(); save(); render(); updateIdeas(); scrollTo({top:0, behavior:'smooth'});
+  toast(snap.fromPng ? 'Settings read from the picture · seed ' + P.seed + ' kept' : 'Settings and prompt restored · seed ' + P.seed + ' kept'); buzz();
+  return true;
+}
+// ComfyUI writes the graph it ran into the PNG's "prompt" text chunk; turn the parts the app knows back into blocks
+function fromPng(buf){
+  const v = new DataView(buf), td = new TextDecoder('latin1'); let o = 8, graph = null;
+  while(o + 8 < buf.byteLength){
+    const len = v.getUint32(o), type = td.decode(new Uint8Array(buf, o + 4, 4));
+    if(type==='tEXt'){ const t = new TextDecoder().decode(new Uint8Array(buf, o + 8, len)), z = t.indexOf('\0'); if(t.slice(0, z)==='prompt'){ graph = JSON.parse(t.slice(z + 1)); break; } }
+    if(type==='IEND') break; o += 12 + len;
+  }
+  if(!graph) return null;
+  const nodes = Object.values(graph), one = c => nodes.find(n => n.class_type===c), ref = r => Array.isArray(r) ? graph[r[0]] : null;
+  const ks = one('KSampler') || one('KSamplerAdvanced'), ck = one('CheckpointLoaderSimple'); if(!ks) return null;
+  const i = ks.inputs, txt = r => { let n = ref(r); while(n && !('text' in n.inputs)) n = ref(n.inputs.conditioning || n.inputs.positive); return n ? n.inputs.text : ''; };
+  const blocks = JSON.parse(JSON.stringify(S.blocks.filter(b => b.type==='model' || b.type==='sampler')));
+  const M = blocks.find(b=>b.type==='model'), P = blocks.find(b=>b.type==='sampler');
+  if(ck) M.ckpt = ck.inputs.ckpt_name;
+  if(typeof i.steps==='number') P.steps = i.steps; if(typeof i.cfg==='number') P.cfg = i.cfg;
+  if(typeof i.sampler_name==='string') P.sampler = i.sampler_name; if(typeof i.scheduler==='string') P.scheduler = i.scheduler;
+  const lat = one('EmptyLatentImage'); if(lat){ const w = lat.inputs.width, h = lat.inputs.height, px = Math.sqrt(w*h);
+    P.size = px < 640 ? 512 : px < 896 ? 768 : 1024; const r = w/h; P.shape = r > 1.15 ? 'wide' : r < 0.65 ? 'phone' : r < 0.87 ? 'tall' : 'square'; }
+  let id = 100; nodes.filter(n => n.class_type==='LoraLoader').forEach(n => blocks.push({id:id++, type:'lora', on:true, lora:n.inputs.lora_name, strength:n.inputs.strength_model}));
+  const seed = typeof (i.seed ?? i.noise_seed)==='number' ? (i.seed ?? i.noise_seed) : null;
+  return {blocks, prompt:txt(i.positive), negative:txt(i.negative), addedTags:[], asTags:false, seed, fromPng:true};
+}
 
 // ---------- start ----------
 render(); show(S.gallery.length ? 0 : -1);
