@@ -7,6 +7,8 @@ Copyright (c) 2026 Jordan Brantner. All rights reserved.
 - `comfy-app.html` is the whole app (one file, no doctype; `webbuild.py` wraps it into `../index.html` with the manifest, icons and offline helper).
 - Release: edit `comfy-app.html`, run the tests, then `python3 webbuild.py ..` from this folder, commit and push `main`, and check that the "pages build and deployment" Action succeeds.
 - `../tags.txt` is the Danbooru tag list behind the prompt suggestions (Illustrious and Pony styles). Rebuild it with `python3 make_tags.py danbooru.csv` from the a1111 tagcomplete list (link in the script).
+- `../chars.txt` says how often each character is drawn as a girl, boy or other, so the app can add 1girl / 2girls / 1boy / solo for the people named in a prompt. Rebuild it with `python3 make_chars.py` (asks Danbooru once per character; it resumes if stopped).
+- Bump `APP_VERSION` in `comfy-app.html` on every release so a phone that resumes the app offers the update.
 - Tests: `NODE_PATH=$(npm root -g) node tests/t_flow.js` (needs Playwright). It runs the app at phone size against a pretend ComfyUI and checks every graph against ComfyUI's node definitions.
 
 ## Setup on the render computer

@@ -47,6 +47,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message)); page.on('console', m => { if(m.type()==='error') logs.push(m.text()); });
   const sent = []; let sock = null, n = 0;
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
+  await page.route('https://app.test/chars.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'chars.txt'), 'utf8') }));
   await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'tags.txt'), 'utf8') }));
   await page.route(SERVER+'/**', async r => {
     const u = new URL(r.request().url());
@@ -122,7 +123,10 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.click('[data-extra=upper_body]');
   ok((await sentPrompt()).endsWith(', upper body') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'extra tag sent after the words, prompt box untouched');
   await page.fill('#prompt', 'zelda and purah'); await page.waitForSelector('#ideas .hl');
-  ok((await page.$$eval('#ideas .hl', s => s.map(x => x.textContent))).join('|')==='zelda|purah', 'character names in a sentence are found');
+  ok((await page.$$eval('#ideas .irow:not(.wrap) .hl', s => s.map(x => x.textContent))).join('|')==='zelda|purah', 'character names in a sentence are found');
+  ok((await sentPrompt()).includes('2girls, multiple girls, princess zelda, purah'), 'two named girls are counted: '+await sentPrompt());
+  await page.fill('#prompt', 'zelda and purah and link'); await page.waitForTimeout(400);
+  ok((await sentPrompt()).includes('2girls, multiple girls, 1boy, '), 'adding Link adds 1boy: '+await sentPrompt());
   await page.selectOption('[data-k=ckpt]', 'sdxl.safetensors'); await page.type('#prompt', 'smil'); await page.waitForTimeout(150);
   ok(await page.isHidden('#ac'), 'no tag suggestions for SDXL');
   await page.fill('#prompt', 'lantern hunter');
