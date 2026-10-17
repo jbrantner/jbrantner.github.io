@@ -6,7 +6,7 @@
   --bg:#111217; --panel:#1b1d23; --panel2:#24262e; --line:#30333c;
   --text:#e8eaee; --soft:#a3aab6; --dim:#7d8592;
   --accent:#ff5ca8; --accent-ink:#1b0b14; --cyan:#33c2c9;
-  --model:#b892ff; --samp:#ffb35c; --lora:#ff6fae; --cn:#6fc0ff; --pic:#ffd75e; --up:#5cffb0; --fix:#ff9f7a;
+  --model:#b892ff; --samp:#ffb35c; --lora:#ff6fae; --cn:#6fc0ff; --pic:#ffd75e; --up:#5cffb0;
   --bad:#f2777f; --good:#5cffb0;
   --display:"Pixelify Sans","Courier New",ui-monospace,monospace;
   --body:"Nunito",ui-rounded,"SF Pro Rounded",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -312,7 +312,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.21'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-17.22'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -322,7 +322,6 @@ const TYPES = {
   cn:     {name:'ControlNet', emo:'C', c:'--cn', desc:'Guide pose or shape with a picture', needs:['ControlNetLoader','ControlNetApplyAdvanced','LoadImage']},
   pic:    {name:'Start from picture', emo:'S', c:'--pic', desc:'Repaint an image you pick', needs:['LoadImage','VAEEncode','ImageScale'], one:true},
   up:     {name:'Upscale', emo:'U', c:'--up', desc:'Make the result bigger', needs:['ImageScaleBy'], one:true},
-  fix:    {name:'Touch-up', emo:'T', c:'--fix', desc:'Fix faces, and a clean-up pass with no added noise', needs:['KSamplerAdvanced'], one:true},
 };
 const SIZES = {512:[512,512], 768:[768,768], 1024:[1024,1024]};
 const SHAPES = {square:[1,1], tall:[3,4], wide:[4,3], phone:[9,16]};
@@ -384,9 +383,10 @@ let S = load() || {
   gallery:[], nextId:3,
 };
 S.queue = S.queue || []; S.runs = S.runs || 1;
-{ const u = S.blocks.find(b => b.type==='up' && (b.faces || b.cleanup));
-  if(u && !S.blocks.some(b => b.type==='fix')){ S.nextId = S.nextId || 100; S.blocks.push({id:S.nextId++, type:'fix', on:u.on, faces:!!u.faces, cleanup:!!u.cleanup}); }
-  S.blocks.forEach(b => { if(b.type==='up'){ delete b.faces; delete b.cleanup; } }); }
+function migrate(st){ const P = st.blocks.find(b => b.type==='sampler');
+  st.blocks.forEach(b => { if((b.type==='up' || b.type==='fix') && b.faces && b.on) P.faces = true; if(b.type==='up'){ delete b.faces; delete b.cleanup; } });
+  st.blocks = st.blocks.filter(b => b.type!=='fix'); }
+migrate(S);
 S.styles = S.styles || {};       // checkpoint name -> style key, once the user picks one
 S.styleText = S.styleText || {}; // style key -> {pos, neg} the user edited
 S.loraWords = S.loraWords || {}; // LoRA file -> activation words added to the prompt whenever that LoRA is on
@@ -597,6 +597,12 @@ function buildGraph(){
   } else {
     ks = add('KSampler', {seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler, denoise, model, positive:pp, negative:nn, latent_image:latent}, 'Painting', '--samp');
   }
+  if(P.noNoise !== false){
+    // finishing pass of the old Illustrious_Main: the last 20% of the steps again, no noise added, to settle the picture
+    const from = Math.max(1, Math.round(P.steps * 0.8));
+    ks = add('KSamplerAdvanced', {model, add_noise:'disable', noise_seed:seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
+      positive:pp, negative:nn, latent_image:[ks,0], start_at_step:from, end_at_step:10000, return_with_leftover_noise:'disable'}, 'Finishing pass (no added noise)', '--samp');
+  }
   let out = [add('VAEDecode', {samples:[ks,0], vae}, 'Decode', '--samp'), 0];
   const up = on('up')[0];
   if(up){
@@ -622,26 +628,15 @@ function buildGraph(){
       out = [add('ImageScaleBy', {image:out, upscale_method:'lanczos', scale_by:up.scale}, 'Upscale x' + up.scale, '--up'), 0];
     }
   }
-  const fx = on('fix')[0];
-  if(fx){
-    // touch-ups on the finished picture, with or without an upscale before them
+  if(P.faces){
     const smp = info && info.samplers.includes('dpmpp_2m') ? 'dpmpp_2m' : P.sampler, sch = info && info.schedulers.includes('karras') ? 'karras' : P.scheduler;
-    if(fx.faces){
       // faces are found and redrawn on their own at full detail, with the LoRAs on
-      const det = add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}, 'Find faces', '--fix');
+      const det = add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}, 'Find faces', '--up');
       out = [add('FaceDetailer', {image:out, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed, steps:20, cfg:Math.min(P.cfg, 5),
         sampler_name:smp, scheduler:sch, positive:pp, negative:nn, denoise:0.4, feather:5, noise_mask:true, force_inpaint:true, bbox_threshold:0.5,
         bbox_dilation:10, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:0, sam_threshold:0.93, sam_bbox_expansion:0,
-        sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[det,0], wildcard:'', cycle:1}, 'Fix faces', '--fix'), 0];
+        sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[det,0], wildcard:'', cycle:1}, 'Fix faces', '--up'), 0];
     }
-    if(fx.cleanup){
-      // the old Illustrious_Main ending: the last steps (20 to 25) run again over the finished picture with no noise added
-      const enc = add('VAEEncodeTiled', {pixels:out, vae, tile_size:1024, overlap:64, temporal_size:64, temporal_overlap:8}, 'Encode for clean-up', '--fix');
-      const cl = add('KSamplerAdvanced', {model, add_noise:'disable', noise_seed:seed, steps:25, cfg:Math.min(P.cfg, 4.5), sampler_name:P.sampler, scheduler:P.scheduler,
-        positive:pp, negative:nn, latent_image:[enc,0], start_at_step:20, end_at_step:10000, return_with_leftover_noise:'disable'}, 'Clean-up pass (no added noise)', '--fix');
-      out = [add('VAEDecodeTiled', {samples:[cl,0], vae, tile_size:1024, overlap:64, temporal_size:64, temporal_overlap:8}, 'Decode clean-up', '--fix'), 0];
-    }
-  }
   add('SaveImage', {filename_prefix:'RenderDeck/render', images:out}, 'Save', '--model');
   const colors = {}; for(const id in g){ colors[id] = g[id]._c; delete g[id]._c; }
   return {graph:g, titles, colors, notes, seed};
@@ -803,7 +798,6 @@ function defaults(type){
   if(type==='lora') return {id,type,on:true,lora:'',strength:0.8};
   if(type==='cn') return {id,type,on:true,model:'',image:'',preview:'',prep:'none',strength:0.8,start:0,end:1};
   if(type==='pic') return {id,type,on:true,image:'',preview:'',change:0.6};
-  if(type==='fix') return {id,type,on:true,faces:!!(info && info.nodes.has('FaceDetailer')),cleanup:false};
   if(type==='up') return {id,type,on:true,mode:(!info || info.nodes.has('UltimateSDUpscale')) ? 'redraw' : 'simple',scale:2,model:'',denoise:0.35};
 }
 function addBlock(type, quiet){
@@ -824,6 +818,8 @@ function slider(key, label, min, max, step, val){
 function seg(key, pairs, cur){
   return `<div class="seg">${pairs.map(([v,t]) => `<button data-seg="${key}" data-v="${v}" class="${String(v)===String(cur)?'on':''}">${t}</button>`).join('')}</div>`;
 }
+// Fix faces is one setting (kept on the Painting block), shown on Painting and on a Redraw upscale
+function FACE(c){ const P = S.blocks.find(x=>x.type==='sampler'); return `<button class="chipbtn" data-do="faces" style="${P.faces?'border-color:var(--' + c + ');color:var(--' + c + ')':''}">${P.faces ? '✓ Fix faces' : 'Fix faces: off'}</button>`; }
 function blockBody(b){
   const I = info || {ckpt:[],lora:[],cn:[],upm:[],samplers:FAKE.samplers,schedulers:FAKE.schedulers};
   if(b.type==='model'){ ckptInfo(b.ckpt); const k = styleKey(b), st = STYLES[k], tx = styleText(k), picked = S.styles[b.ckpt];
@@ -848,7 +844,9 @@ function blockBody(b){
     <div class="row"><label>Sampler</label><div class="grow"><select data-k="sampler">${opts(I.samplers, b.sampler,'')}</select></div></div>
     <div class="row"><label>Scheduler</label><div class="grow"><select data-k="scheduler">${opts(I.schedulers, b.scheduler,'')}</select></div></div>
     <div class="row"><label>Seed</label><div class="grow"><input data-k="seed" inputmode="numeric" value="${b.seed}"></div></div>
-    <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="dice">🎲 New seed</button><button class="chipbtn" data-do="lock" style="${b.lockSeed?'border-color:var(--samp);color:var(--samp)':''}">${b.lockSeed?'🔒 Kept':'🔓 New each time'}</button></div>`; }
+    <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="dice">🎲 New seed</button><button class="chipbtn" data-do="lock" style="${b.lockSeed?'border-color:var(--samp);color:var(--samp)':''}">${b.lockSeed?'🔒 Kept':'🔓 New each time'}</button></div>
+    <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="nonoise" style="${b.noNoise!==false?'border-color:var(--samp);color:var(--samp)':''}">${b.noNoise!==false ? '✓ Finishing pass' : 'Finishing pass: off'}</button>${FACE('samp')}</div>
+    <p class="note" style="margin-left:92px">Finishing pass runs the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps again with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>`; }
   if(b.type==='lora'){ const w = S.loraWords[b.lora] || '', lm = loraMeta(b.lora), meta = ((lm && lm.words) || []).filter(x => !w.toLowerCase().split(/,\s*/).includes(x.toLowerCase()));
     return `<div class="row"><select data-k="lora">${opts(I.lora, b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
     ${slider('strength','Strength',-1,2,0.05,b.strength)}
@@ -871,11 +869,6 @@ function blockBody(b){
   if(b.type==='pic') return `<div class="thumb">${b.preview ? `<img src="${esc(b.preview)}" alt="">` : '<div class="ph">＋</div>'}<button class="chipbtn" data-do="pick">${b.image?'Change picture':'Pick a picture'}</button></div>
     ${slider('change','How much changes',0.05,1,0.05,b.change)}
     <p class="note">Low keeps your picture, high repaints almost everything.</p>`;
-  if(b.type==='fix'){ const canFace = !info || (info.nodes.has('FaceDetailer') && info.nodes.has('UltralyticsDetectorProvider'));
-    return `<div class="row" style="flex-wrap:wrap"><button class="chipbtn" data-do="faces" style="${b.faces?'border-color:var(--fix);color:var(--fix)':''}">${b.faces ? '✓ Fix faces' : 'Fix faces: off'}</button>
-      <button class="chipbtn" data-do="cleanup" style="${b.cleanup?'border-color:var(--fix);color:var(--fix)':''}">${b.cleanup ? '✓ Clean-up pass' : 'Clean-up pass: off'}</button></div>
-    ${canFace ? '' : '<p class="warn">Fix faces needs the Impact Pack (FaceDetailer) in ComfyUI.</p>'}
-    <p class="note">Runs on the finished picture, after an Upscale block if there is one. Fix faces finds each face and redraws it up close with your LoRAs on. Clean-up pass runs the last 5 of 25 steps again over the whole picture with no noise added, like your old Illustrious_Main ending: it tidies and smooths, and can soften fine detail.</p>`; }
   if(b.type==='up'){ const hasM = I.upm && I.upm.length;
     const canRedraw = !info || info.nodes.has('UltimateSDUpscale');
     if(b.mode==='redraw') return `<div class="row"><label>How</label>${seg('mode',[['redraw','Redraw (best)'],['simple','Smooth resize'],['model','Upscale model']], b.mode)}</div>
@@ -883,15 +876,15 @@ function blockBody(b){
     ${slider('scale','Times bigger',1.5,3,0.25,b.scale)}
     ${slider('denoise','Redraw strength',0.2,0.55,0.05,b.denoise || 0.35)}
     <div class="row"><select data-k="model">${opts(I.upm, b.model, 'No upscale model: plain resize first')}</select></div>
-
-    <p class="note">Upscales, then repaints the bigger picture tile by tile with real noise at low strength, so it gains detail instead of going soft. 0.3–0.4 adds detail and keeps the picture; higher reinvents more. For faces and a clean-up pass, add a Touch-up block.</p>`;
+    <div class="row" style="padding-left:92px">${FACE('up')}</div>
+    <p class="note">Upscales, then repaints the bigger picture tile by tile with real noise at low strength, so it gains detail instead of going soft. 0.3–0.4 adds detail and keeps the picture; higher reinvents more. Fix faces then redraws each face up close.</p>`;
     return `<div class="row"><label>How</label>${seg('mode',[['redraw','Redraw (best)'],['simple','Smooth resize'],['model','Upscale model']], b.mode)}</div>
     ${b.mode==='model' ? `<div class="row"><select data-k="model">${opts(I.upm, b.model, 'No upscale models found')}</select></div><p class="note">Upscale models set their own size, usually 4×.</p>` : slider('scale','Times bigger',1.25,4,0.25,b.scale)}
     ${b.mode==='model' && !hasM && info ? '<p class="warn">Put an upscale model in ComfyUI/models/upscale_models to use this.</p>' : ''}`; }
 }
 function renderBlocks(){
   $('#blocks').innerHTML = S.blocks.map(b => { const T = TYPES[b.type];
-    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' : b.type==='fix' ? [b.faces ? 'faces' : '', b.cleanup ? 'clean-up pass' : ''].filter(Boolean).join(' + ') || 'nothing on' : (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
+    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
     return `<div class="block ${b.on?'':'off'} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
       <div class="bhead"><div class="emo">${T.emo}</div><h3>${T.name}<small>${esc(sub)}</small></h3>
       ${T.fixed ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button><button class="x" data-do="del" aria-label="Remove">✕</button>`}</div>
@@ -984,8 +977,8 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='dice'){ b.seed = randSeed(); }
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
   else if(act==='quality'){ b.quality = !b.quality; }
-  else if(act==='faces'){ b.faces = !b.faces; }
-  else if(act==='cleanup'){ b.cleanup = !b.cleanup; }
+  else if(act==='faces'){ const P = S.blocks.find(x=>x.type==='sampler'); P.faces = !P.faces; }
+  else if(act==='nonoise'){ b.noNoise = b.noNoise===false; }
   else if(act==='styleonly'){ b.styleOnly = !b.styleOnly; if(b.startStep==null) b.startStep = 4; }
   else if(act==='lw'){ S.loraWords[b.lora] = [S.loraWords[b.lora], d.dataset.v].filter(Boolean).join(', '); }
   else if(act==='get'){ openGet(d.dataset.v); return; }
@@ -1467,7 +1460,7 @@ function snapshot(seed){ const o = {}; RECIPE_KEYS.forEach(k => o[k] = JSON.pars
 async function useRecipe(snap, url){
   if(!snap && url && !S.test){ try{ snap = fromPng(await (await fetch(url)).arrayBuffer()); }catch(e){} }
   if(!snap){ toast('No settings saved in this picture', true); return false; }
-  RECIPE_KEYS.forEach(k => { if(snap[k] != null) S[k] = JSON.parse(JSON.stringify(snap[k])); });
+  RECIPE_KEYS.forEach(k => { if(snap[k] != null) S[k] = JSON.parse(JSON.stringify(snap[k])); }); migrate(S);
   const P = S.blocks.find(b=>b.type==='sampler'); if(snap.seed != null){ P.seed = snap.seed; P.lockSeed = true; }
   S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
   S.recFor = styleKey(S.blocks.find(b=>b.type==='model')); // keep the picture's sampler settings, don't reset them to the style's
