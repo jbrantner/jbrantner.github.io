@@ -103,10 +103,19 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.fill('#prompt', ''); await page.type('#prompt', '1girl, long_ha');
   await page.waitForSelector('#ac button'); const chips = await page.$$eval('#ac button', b => b.map(x => x.firstChild.textContent));
   ok(chips[0]==='long hair', 'suggests long hair first: '+chips.slice(0,3).join(' | '));
-  await page.dispatchEvent('#ac button[data-i="0"]', 'pointerdown');
+  await page.click('#ac button[data-i="0"]');
   ok((await page.inputValue('#prompt'))==='1girl, long hair, ', 'tapping a suggestion fills the tag: '+await page.inputValue('#prompt'));
   await page.type('#prompt', 'saber_(fa'); await page.waitForSelector('#ac button');
   ok((await page.$$eval('#ac button', b => b.map(x => x.firstChild.textContent))).includes('saber \\(fate\\)'), 'brackets in tags are escaped');
+  await page.fill('#prompt', ''); await page.type('#prompt', 'girl'); await page.waitForSelector('#ac button');
+  ok((await page.textContent('#ac button[data-i="0"]')).startsWith('1girl'), 'girl finds 1girl first');
+  // a written sentence becomes tag ideas phrase by phrase, plus optional extras
+  await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForSelector('#ideas .hl');
+  ok((await page.$$eval('#ideas .hl', s => s.map(x => x.textContent))).join('|')==='a girl|jumping jacks', 'sentence split into phrases');
+  await page.click('[data-ideas=replace]');
+  ok((await page.inputValue('#prompt'))==='1girl, solo, jumping, exercising, arms up', 'sentence swapped for picked tags: '+await page.inputValue('#prompt'));
+  await page.click('[data-extra=upper_body]');
+  ok((await page.inputValue('#prompt')).endsWith(', upper body'), 'extra tag added');
   await page.selectOption('[data-k=ckpt]', 'sdxl.safetensors'); await page.type('#prompt', 'smil'); await page.waitForTimeout(150);
   ok(await page.isHidden('#ac'), 'no tag suggestions for SDXL');
   await page.fill('#prompt', 'lantern hunter');

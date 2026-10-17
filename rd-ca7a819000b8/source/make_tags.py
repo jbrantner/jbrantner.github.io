@@ -16,7 +16,7 @@ for i, t in enumerate(EXTRA): rows.append((t, '9', str(10**6 - i), '')); seen.ad
 with open(sys.argv[1], encoding='utf-8', newline='') as f:
     for r in csv.reader(f):
         if len(r) < 3 or not r[2].isdigit() or int(r[2]) < MIN or r[0] in seen: continue
-        al = [a for a in (r[3].split(',') if len(r) > 3 else []) if a and not a.startswith('/')][:4]
+        al = [a for a in (r[3].split(',') if len(r) > 3 else []) if a and not a.startswith('/')]  # aliases let plain words like "man" or "exercise" find their tag
         rows.append((r[0], r[1], r[2], ','.join(al).replace('\t', ' ')))
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tags.txt')
 with open(out, 'w', encoding='utf-8', newline='\n') as f:
