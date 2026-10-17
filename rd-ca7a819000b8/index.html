@@ -63,6 +63,15 @@ header h1 span{color:var(--accent)}
 .neg{margin-top:8px}
 .neg summary{color:var(--soft);font-size:14px;padding:6px 2px;list-style:none;cursor:pointer}
 .neg summary::-webkit-details-marker{display:none}
+.added{font-size:12.5px;color:var(--dim);margin:6px 2px 0;overflow-wrap:anywhere}
+.added:empty{display:none}
+/* tag suggestions: a row of chips under the box being typed in, above the keyboard */
+.ac{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;scrollbar-width:none}
+.ac::-webkit-scrollbar{display:none}
+.ac button{flex:none;display:flex;align-items:baseline;gap:6px;min-height:40px;padding:7px 12px;border-radius:99px;background:var(--panel);border:1px solid var(--line);font-size:14px;font-weight:700;white-space:nowrap}
+.ac button i{font-style:normal;font-size:11.5px;color:var(--dim);font-weight:700}
+.ac button.c1{color:#ff8a8a}.ac button.c3{color:#d68cff}.ac button.c4{color:#6fe39a}.ac button.c5,.ac button.c9{color:var(--pic)}
+.ac button:active{transform:scale(.96)}
 
 /* blocks */
 .block{position:relative;border-radius:var(--r);background:var(--panel);border:1px solid var(--line);margin:10px 0;scroll-margin:80px 0 120px}
@@ -166,10 +175,13 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="err" id="err"></div>
 
   <div class="lbl">Prompt</div>
-  <textarea id="prompt" placeholder="a cossack lantern hunter in a glowing swamp, vibrant pixel art"></textarea>
+  <textarea id="prompt" placeholder="a cossack lantern hunter in a glowing swamp, vibrant pixel art" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+  <p class="added" id="addedPos"></p>
   <details class="neg" id="negBox"><summary>➖ Things to avoid</summary>
-    <textarea id="negative" placeholder="blurry, washed out, grey"></textarea>
+    <textarea id="negative" placeholder="blurry, washed out, grey" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+    <p class="added" id="addedNeg"></p>
   </details>
+  <div class="ac" id="ac" hidden></div>
 
   <div class="lbl">Recipe</div>
   <div id="blocks"></div>
@@ -233,6 +245,37 @@ const TYPES = {
 };
 const SIZES = {512:[512,512], 768:[768,768], 1024:[1024,1024]};
 const SHAPES = {square:[1,1], tall:[3,4], wide:[4,3], phone:[9,16]};
+// prompt styles: Illustrious and Pony were trained on Danbooru tags, plain SDXL on captions.
+// pos/neg are added in front of the user's prompt and negative; the user can edit them per style.
+const STYLES = {
+  illustrious:{name:'Illustrious', tags:true, clipSkip:0,
+    pos:'masterpiece, best quality, amazing quality, newest, absurdres, highres, general',
+    neg:'worst quality, low quality, bad quality, lowres, displeasing, very displeasing, old, early, nsfw, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, username, watermark, logo, multiple views, comic, monochrome, greyscale',
+    tip:'Danbooru tags, comma separated: subject count, character, series, artist, then the rest. euler_ancestral, CFG 5–7, 25–30 steps.'},
+  pony:{name:'Pony', tags:true, clipSkip:-2,
+    pos:'score_9, score_8_up, score_7_up, source_anime',
+    neg:'score_6, score_5, score_4, worst quality, low quality, bad anatomy, bad hands, jpeg artifacts, signature, watermark',
+    tip:'Danbooru tags plus score_ and source_ tags. CLIP skip 2 is applied for you. euler_ancestral, CFG 6–8, 25 steps.'},
+  sdxl:{name:'SDXL', tags:false, clipSkip:0,
+    pos:'high quality, highly detailed',
+    neg:'lowres, blurry, low quality, worst quality, jpeg artifacts, watermark, signature, text, deformed, bad anatomy, extra fingers',
+    tip:'Write plain sentences. dpmpp_2m with karras, CFG 5–7, 25–35 steps, 1024 size.'},
+  plain:{name:'Plain', tags:false, clipSkip:0, pos:'', neg:'', tip:'Sends your prompt exactly as typed.'},
+};
+function guessStyle(ckpt){
+  const n = (ckpt||'').toLowerCase();
+  if(/pony|pdxl|autismmix/.test(n)) return 'pony';
+  if(/illustrious|illu|ilxl|noob|wai/.test(n)) return 'illustrious';
+  return 'sdxl'; // the weights look the same for all three, so the name is the only hint; the user corrects it once
+}
+function styleKey(M){ return (S.styles && S.styles[M.ckpt]) || guessStyle(M.ckpt); }
+function styleText(k){ const t = (S.styleText||{})[k] || {}; return {pos: t.pos!=null ? t.pos : STYLES[k].pos, neg: t.neg!=null ? t.neg : STYLES[k].neg}; }
+// put the style's tags in front of the user's text, skipping any the user already typed; the user's text goes through untouched
+function joinTags(prefix, text){
+  const have = new Set((text||'').split(/[,\n]/).map(t => t.trim().toLowerCase()));
+  const add = (prefix||'').split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()));
+  return [add.join(', '), (text||'').trim()].filter(Boolean).join(', ');
+}
 
 // ---------- state ----------
 let S = load() || {
@@ -244,6 +287,9 @@ let S = load() || {
   ],
   gallery:[], nextId:3,
 };
+S.styles = S.styles || {};       // checkpoint name -> style key, once the user picks one
+S.styleText = S.styleText || {}; // style key -> {pos, neg} the user edited
+{ const M = S.blocks.find(b=>b.type==='model'); if(M.quality==null) M.quality = true; }
 let info = null;          // what the computer has installed: lists of models and node names
 let ws = null, clientId = 'rd-' + Math.random().toString(36).slice(2);
 let job = null;           // the running render
@@ -266,7 +312,7 @@ const FAKE = {
   upm:['4x-UltraSharp.pth','RealESRGAN_x4plus.pth'],
   samplers:['euler','euler_ancestral','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','uni_pc','lcm'],
   schedulers:['normal','karras','exponential','sgm_uniform','simple','beta'],
-  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel']),
+  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer']),
   cnVae:true,
 };
 
@@ -395,8 +441,10 @@ function buildGraph(){
     const id = add('LoraLoader', {lora_name:b.lora, strength_model:b.strength, strength_clip:b.strength, model, clip}, 'LoRA ' + (i+1), '--lora');
     model = [id,0]; clip = [id,1];
   });
-  const pos = add('CLIPTextEncode', {text:S.prompt, clip}, 'Prompt', '--samp');
-  const neg = add('CLIPTextEncode', {text:S.negative, clip}, 'Avoid', '--samp');
+  const st = STYLES[styleKey(M)], tx = M.quality ? styleText(styleKey(M)) : {pos:'', neg:''};
+  if(st.clipSkip) clip = [add('CLIPSetLastLayer', {stop_at_clip_layer:st.clipSkip, clip}, 'CLIP skip ' + -st.clipSkip, '--model'), 0];
+  const pos = add('CLIPTextEncode', {text:joinTags(tx.pos, S.prompt), clip}, 'Prompt', '--samp');
+  const neg = add('CLIPTextEncode', {text:joinTags(tx.neg, S.negative), clip}, 'Avoid', '--samp');
   let pp = [pos,0], nn = [neg,0];
   on('cn').forEach((b,i) => {
     const li = add('LoadImage', {image:b.image}, 'Guide picture ' + (i+1), '--cn');
@@ -583,8 +631,16 @@ function seg(key, pairs, cur){
 }
 function blockBody(b){
   const I = info || {ckpt:[],lora:[],cn:[],upm:[],samplers:FAKE.samplers,schedulers:FAKE.schedulers};
-  if(b.type==='model') return `<div class="row"><select data-k="ckpt">${opts(I.ckpt, b.ckpt, info ? 'No models found' : 'Connect to see your models')}</select></div>
-    <p class="note">Checkpoint models (SD 1.5, SDXL, Pony, Illustrious…). Flux and other split models come later.</p>`;
+  if(b.type==='model'){ const k = styleKey(b), st = STYLES[k], tx = styleText(k), picked = S.styles[b.ckpt];
+    return `<div class="row"><select data-k="ckpt">${opts(I.ckpt, b.ckpt, info ? 'No models found' : 'Connect to see your models')}</select></div>
+    <div class="row"><label>Style</label>${seg('style', Object.entries(STYLES).map(([v,s]) => [v, s.name]), k)}</div>
+    <p class="note">${picked ? '' : 'Guessed from the file name. Tap the right one and it is remembered for this model. '}${esc(st.tip)}</p>
+    ${k==='plain' ? '' : `<div class="row" style="padding-left:92px"><button class="chipbtn" data-do="quality" style="${b.quality?'border-color:var(--model);color:var(--model)':''}">${b.quality?'✓ Quality tags added':'Quality tags off'}</button></div>
+    ${b.quality ? `<details class="neg"><summary>Edit what gets added for ${esc(st.name)}</summary>
+      <div class="lbl" style="margin-top:8px">Before your prompt</div><textarea data-st="pos" style="min-height:60px">${esc(tx.pos)}</textarea>
+      <div class="lbl">Before your negative</div><textarea data-st="neg" style="min-height:84px">${esc(tx.neg)}</textarea>
+      <div class="row"><button class="chipbtn" data-do="resetStyle">Reset to default</button></div></details>` : ''}`}
+    <p class="note">Checkpoint models only for now. Flux and other split models come later.</p>`; }
   if(b.type==='sampler'){ const [W,H] = sizeOf(b);
     return `<div class="row"><label>Size</label>${seg('size',[[512,'Small'],[768,'Medium'],[1024,'Large']], b.size)}</div>
     <div class="row"><label>Shape</label>${seg('shape',[['square','Square'],['tall','Tall'],['wide','Wide'],['phone','Phone']], b.shape)}</div>
@@ -614,12 +670,20 @@ function blockBody(b){
 }
 function renderBlocks(){
   $('#blocks').innerHTML = S.blocks.map(b => { const T = TYPES[b.type];
-    const sub = b.type==='model' ? (b.ckpt||'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' : (b.mode==='model' ? 'model' : '×'+b.scale);
+    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' : (b.mode==='model' ? 'model' : '×'+b.scale);
     return `<div class="block ${b.on?'':'off'} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
       <div class="bhead"><div class="emo">${T.emo}</div><h3>${T.name}<small>${esc(sub)}</small></h3>
       ${T.fixed ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button><button class="x" data-do="del" aria-label="Remove">✕</button>`}</div>
       <div class="body">${blockBody(b)}</div></div>`; }).join('');
-  justAdded = 0;
+  justAdded = 0; showAdded();
+}
+// under the prompt boxes: what the style adds, so nothing is sent that the user can't see
+function showAdded(){
+  const M = S.blocks.find(b=>b.type==='model'), k = styleKey(M), tx = styleText(k), st = STYLES[k];
+  const on = M.quality && k!=='plain';
+  $('#addedPos').textContent = on && tx.pos ? '+ ' + st.name + ' adds: ' + tx.pos : '';
+  $('#addedNeg').textContent = on && tx.neg ? '+ ' + st.name + ' adds: ' + tx.neg : '';
+  $('#prompt').placeholder = st.tags ? '1girl, solo, hatsune miku, vocaloid, smile, night city, neon lights' : 'a lantern hunter in a glowing swamp at night, cinematic light';
 }
 function render(){
   renderBlocks(); drawStrip();
@@ -629,7 +693,9 @@ function render(){
 }
 const blockOf = el => { const d = el.closest('.block'); return d && S.blocks.find(b => b.id === +d.dataset.id); };
 $('#blocks').addEventListener('input', e => {
-  const b = blockOf(e.target), k = e.target.dataset.k; if(!b || !k) return;
+  const b = blockOf(e.target), st = e.target.dataset.st;
+  if(b && st){ const sk = styleKey(b); S.styleText[sk] = Object.assign(styleText(sk), {[st]: e.target.value}); save(); showAdded(); return; }
+  const k = e.target.dataset.k; if(!b || !k) return;
   let v = e.target.value; if(e.target.type==='range'){ v = +v; e.target.nextElementSibling.textContent = v; }
   if(k==='seed') v = Math.max(0, Math.floor(+v.replace(/\D/g,'') || 0));
   b[k] = v; save();
@@ -639,13 +705,18 @@ $('#blocks').addEventListener('change', e => { if(e.target.type==='range') rende
 $('#blocks').addEventListener('click', e => {
   const b = blockOf(e.target); if(!b) return;
   const sg = e.target.closest('[data-seg]');
-  if(sg){ const k = sg.dataset.seg; b[k] = (k==='size') ? +sg.dataset.v : sg.dataset.v; save(); renderBlocks(); buzz(); return; }
+  if(sg){ const k = sg.dataset.seg;
+    if(k==='style'){ if(b.ckpt) S.styles[b.ckpt] = sg.dataset.v; else toast('Pick a model first', true); }
+    else b[k] = (k==='size') ? +sg.dataset.v : sg.dataset.v;
+    save(); renderBlocks(); showAdded(); buzz(); return; }
   const d = e.target.closest('[data-do]'); if(!d) return;
   const act = d.dataset.do;
   if(act==='toggle'){ b.on = !b.on; buzz(); }
   else if(act==='del'){ S.blocks = S.blocks.filter(x => x!==b); buzz(); }
   else if(act==='dice'){ b.seed = randSeed(); }
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
+  else if(act==='quality'){ b.quality = !b.quality; }
+  else if(act==='resetStyle'){ delete S.styleText[styleKey(b)]; }
   else if(act==='pick'){ pickFor = b; $('#filePick').value = ''; $('#filePick').click(); return; }
   save(); renderBlocks();
 });
@@ -686,6 +757,70 @@ $('#batchSeg').onclick = e => { const t = e.target.closest('[data-batch]'); if(!
 $('#prompt').oninput = e => { S.prompt = e.target.value; save(); };
 $('#negative').oninput = e => { S.negative = e.target.value; save(); };
 $('#goBtn').onclick = go;
+
+// ---------- tag suggestions (Danbooru styles only) ----------
+// tags.txt sits next to the app: tag TAB category TAB posts TAB aliases, most used first (made by make_tags.py)
+let TAGS = null, tagsLoading = null;
+function loadTags(){
+  if(TAGS || tagsLoading) return tagsLoading;
+  tagsLoading = fetch('tags.txt').then(r => { if(!r.ok) throw new Error(r.status); return r.text(); }).then(t => {
+    TAGS = t.split('\n').filter(Boolean).map(l => { const [tag, cat, n, al] = l.split('\t'); return {tag, cat, n:+n, al: al ? al.split(',') : []}; });
+  }).catch(() => { tagsLoading = null; });
+  return tagsLoading;
+}
+function usesTags(){ return STYLES[styleKey(S.blocks.find(b=>b.type==='model'))].tags; }
+// how a tag is typed into the prompt: spaces not underscores, and brackets escaped so ComfyUI doesn't read them as weights
+function tagText(t){
+  if(t.cat==='9' || t.tag.length<=3 || !/[a-z0-9]/i.test(t.tag)) return t.tag; // trainer tags, ^_^, >_<
+  return t.tag.replace(/_/g,' ').replace(/([()])/g,'\\$1');
+}
+// the tag being typed: from the last comma (or line break, or opening weight bracket) up to the cursor
+function currentWord(el){
+  const end = el.selectionStart, before = el.value.slice(0, end);
+  let start = Math.max(before.lastIndexOf(','), before.lastIndexOf('\n')) + 1;
+  while(start < end && /[\s(]/.test(before[start])) start++;
+  return {start, end, word: before.slice(start)};
+}
+function suggest(word){
+  const q = word.toLowerCase().replace(/\\/g,'').trim().replace(/\s+/g,'_');
+  if(q.length < 2 || !TAGS) return [];
+  const first = [], later = [];
+  for(const t of TAGS){
+    if(t.tag.startsWith(q)) first.push(t);
+    else if(t.tag.includes('_' + q) || t.al.some(a => a.startsWith(q))) later.push(t);
+    if(first.length >= 12) break;
+  }
+  return first.concat(later).slice(0, 12); // the list is sorted by posts, so both halves come out most used first
+}
+function fmtCount(n){ return n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n/1e3) + 'k' : String(n); }
+let acFor = null, acList = [];
+function updateAc(el){
+  const ac = $('#ac');
+  if(!usesTags()){ ac.hidden = true; return; }
+  if(!TAGS){ loadTags().then(() => { if(document.activeElement===el) updateAc(el); }); return; }
+  const {word} = currentWord(el); acList = suggest(word); acFor = el;
+  if(!acList.length){ ac.hidden = true; return; }
+  if(ac.previousElementSibling !== el) el.after(ac);
+  ac.innerHTML = acList.map((t,i) => `<button data-i="${i}" class="c${t.cat}">${esc(tagText(t))}${t.cat==='9' ? '' : `<i>${fmtCount(t.n)}</i>`}</button>`).join('');
+  ac.scrollLeft = 0; ac.hidden = false;
+}
+// pointerdown so the box keeps focus and the keyboard stays up
+$('#ac').addEventListener('pointerdown', e => {
+  const btn = e.target.closest('[data-i]'); if(!btn || !acFor) return; e.preventDefault();
+  const t = acList[+btn.dataset.i], el = acFor, {start, end} = currentWord(el);
+  const rest = el.value.slice(end).replace(/^[^\s,():\n]*/, ''); // drop the rest of a half-typed word after the cursor
+  const ins = tagText(t) + (/^\s*[,):]/.test(rest) ? '' : ', ');
+  el.value = el.value.slice(0, start) + ins + rest;
+  const pos = start + ins.length; el.setSelectionRange(pos, pos);
+  el.dispatchEvent(new Event('input')); $('#ac').hidden = true; buzz();
+});
+['#prompt','#negative'].forEach(id => {
+  const el = $(id);
+  el.addEventListener('focus', () => { if(usesTags()) loadTags(); });
+  el.addEventListener('input', () => updateAc(el));
+  el.addEventListener('click', () => updateAc(el));
+  el.addEventListener('blur', () => setTimeout(() => { if(document.activeElement!==el) $('#ac').hidden = true; }, 150));
+});
 
 // ---------- start ----------
 render(); show(S.gallery.length ? 0 : -1);
