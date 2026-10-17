@@ -267,15 +267,18 @@ const STYLES = {
   illustrious:{name:'Illustrious', tags:true, clipSkip:0,
     pos:'masterpiece, best quality, amazing quality, newest, absurdres, highres, general',
     neg:'worst quality, low quality, bad quality, lowres, displeasing, very displeasing, old, early, nsfw, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, username, watermark, logo, multiple views, comic, monochrome, greyscale',
-    tip:'Danbooru tags, comma separated: subject count, character, series, artist, then the rest. euler_ancestral, CFG 5–7, 25–30 steps.'},
+    rec:{cfg:5.5, steps:28, sampler:'euler_ancestral', scheduler:'normal', size:1024},
+    tip:'Danbooru tags, comma separated: subject count, character, series, artist, then the rest.'},
   pony:{name:'Pony', tags:true, clipSkip:-2,
     pos:'score_9, score_8_up, score_7_up, source_anime',
     neg:'score_6, score_5, score_4, worst quality, low quality, bad anatomy, bad hands, jpeg artifacts, signature, watermark',
-    tip:'Danbooru tags plus score_ and source_ tags. CLIP skip 2 is applied for you. euler_ancestral, CFG 6–8, 25 steps.'},
+    rec:{cfg:7, steps:25, sampler:'euler_ancestral', scheduler:'normal', size:1024},
+    tip:'Danbooru tags plus score_ and source_ tags. CLIP skip 2 is applied for you.'},
   sdxl:{name:'SDXL', tags:false, clipSkip:0,
     pos:'high quality, highly detailed',
     neg:'lowres, blurry, low quality, worst quality, jpeg artifacts, watermark, signature, text, deformed, bad anatomy, extra fingers',
-    tip:'Write plain sentences. dpmpp_2m with karras, CFG 5–7, 25–35 steps, 1024 size.'},
+    rec:{cfg:6, steps:30, sampler:'dpmpp_2m', scheduler:'karras', size:1024},
+    tip:'Write plain sentences.'},
   plain:{name:'Plain', tags:false, clipSkip:0, pos:'', neg:'', tip:'Sends your prompt exactly as typed.'},
 };
 function guessStyle(ckpt){
@@ -285,6 +288,18 @@ function guessStyle(ckpt){
   return 'sdxl'; // the weights look the same for all three, so the name is the only hint; the user corrects it once
 }
 function styleKey(M){ return (S.styles && S.styles[M.ckpt]) || guessStyle(M.ckpt); }
+// when the model's style changes, the Painting block takes that style's usual CFG, steps, sampler and size
+function recText(k){ const r = STYLES[k].rec; return r ? `CFG ${r.cfg}, ${r.steps} steps, ${r.sampler} ${r.scheduler}, ${r.size} size` : ''; }
+function syncRec(force){
+  const M = S.blocks.find(b=>b.type==='model'), P = S.blocks.find(b=>b.type==='sampler'), k = styleKey(M), r = STYLES[k].rec;
+  if(!M.ckpt || (!force && S.recFor===k)) return false;
+  S.recFor = k; if(!r) return false;
+  P.cfg = r.cfg; P.steps = r.steps; P.size = r.size;
+  const I = info || {samplers:[], schedulers:[]};
+  if(!I.samplers.length || I.samplers.includes(r.sampler)) P.sampler = r.sampler;
+  if(!I.schedulers.length || I.schedulers.includes(r.scheduler)) P.scheduler = r.scheduler;
+  return true;
+}
 function styleText(k){ const t = (S.styleText||{})[k] || {}; return {pos: t.pos!=null ? t.pos : STYLES[k].pos, neg: t.neg!=null ? t.neg : STYLES[k].neg}; }
 // put the style's tags in front of the user's text, skipping any the user already typed; the user's text goes through untouched
 function joinTags(prefix, text){
@@ -390,7 +405,7 @@ function fillDefaults(){
     if(b.type==='cn' && info.cn.length && !info.cn.includes(b.model)) b.model = info.cn[0];
     if(b.type==='up' && info.upm.length && !info.upm.includes(b.model)) b.model = info.upm[0];
   });
-  save();
+  syncRec(); save();
 }
 function setConn(kind, text){
   $('#connDot').className = 'dot' + (kind==='on'?' on':kind==='test'?' test':'');
@@ -651,7 +666,8 @@ function blockBody(b){
   if(b.type==='model'){ const k = styleKey(b), st = STYLES[k], tx = styleText(k), picked = S.styles[b.ckpt];
     return `<div class="row"><select data-k="ckpt">${opts(I.ckpt, b.ckpt, info ? 'No models found' : 'Connect to see your models')}</select></div>
     <div class="row"><label>Style</label>${seg('style', Object.entries(STYLES).map(([v,s]) => [v, s.name]), k)}</div>
-    <p class="note">${picked ? '' : 'Guessed from the file name. Tap the right one and it is remembered for this model. '}${esc(st.tip)}</p>
+    <p class="note">${picked ? '' : 'Guessed from the file name. Tap the right one and it is remembered for this model. '}${esc(st.tip)}${st.rec ? ' Painting is set to ' + recText(k) + ' when you pick this style.' : ''}</p>
+    ${st.rec ? `<div class="row" style="padding-left:92px"><button class="chipbtn" data-do="rec">↺ Reset Painting to ${esc(st.name)} settings</button></div>` : ''}
     ${k==='plain' ? '' : `<div class="row" style="padding-left:92px"><button class="chipbtn" data-do="quality" style="${b.quality?'border-color:var(--model);color:var(--model)':''}">${b.quality?'✓ Quality tags added':'Quality tags off'}</button></div>
     ${b.quality ? `<details class="neg"><summary>Edit what gets added for ${esc(st.name)}</summary>
       <div class="lbl" style="margin-top:8px">Before your prompt</div><textarea data-st="pos" style="min-height:60px">${esc(tx.pos)}</textarea>
@@ -716,7 +732,9 @@ $('#blocks').addEventListener('input', e => {
   const k = e.target.dataset.k; if(!b || !k) return;
   let v = e.target.value; if(e.target.type==='range'){ v = +v; e.target.nextElementSibling.textContent = v; }
   if(k==='seed') v = Math.max(0, Math.floor(+v.replace(/\D/g,'') || 0));
-  b[k] = v; save();
+  b[k] = v;
+  if(k==='ckpt' && syncRec()) toast(STYLES[styleKey(b)].name + ' settings: ' + recText(styleKey(b)));
+  save();
   if(e.target.tagName==='SELECT') renderBlocks();
 });
 $('#blocks').addEventListener('change', e => { if(e.target.type==='range') renderBlocks(); });
@@ -724,7 +742,7 @@ $('#blocks').addEventListener('click', e => {
   const b = blockOf(e.target); if(!b) return;
   const sg = e.target.closest('[data-seg]');
   if(sg){ const k = sg.dataset.seg;
-    if(k==='style'){ if(b.ckpt) S.styles[b.ckpt] = sg.dataset.v; else toast('Pick a model first', true); }
+    if(k==='style'){ if(b.ckpt){ S.styles[b.ckpt] = sg.dataset.v; if(syncRec()) toast(STYLES[sg.dataset.v].name + ' settings: ' + recText(sg.dataset.v)); } else toast('Pick a model first', true); }
     else b[k] = (k==='size') ? +sg.dataset.v : sg.dataset.v;
     save(); renderBlocks(); showAdded(); buzz(); return; }
   const d = e.target.closest('[data-do]'); if(!d) return;
@@ -734,6 +752,7 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='dice'){ b.seed = randSeed(); }
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
   else if(act==='quality'){ b.quality = !b.quality; }
+  else if(act==='rec'){ syncRec(true); toast('Painting reset to ' + STYLES[styleKey(b)].name + ' settings'); }
   else if(act==='resetStyle'){ delete S.styleText[styleKey(b)]; }
   else if(act==='pick'){ pickFor = b; $('#filePick').value = ''; $('#filePick').click(); return; }
   save(); renderBlocks();

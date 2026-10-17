@@ -97,6 +97,8 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.click('#graphBtn'); const pg = JSON.parse(await page.textContent('#json')); await page.click('#scrim');
   ok(check(pg).length===0 && Object.values(pg).some(x => x.class_type==='CLIPSetLastLayer' && x.inputs.stop_at_clip_layer===-2), 'Pony style adds CLIP skip 2: '+check(pg).join('; '));
   ok(/^score_9, score_8_up/.test(textOf(pg,'Prompt')) && /^score_6, /.test(textOf(pg,'Avoid')), 'Pony style adds score tags');
+  const ks = Object.values(pg).find(x => x.class_type==='KSampler').inputs;
+  ok(ks.cfg===7 && ks.steps===25 && ks.sampler_name==='euler_ancestral', 'Pony model gets Pony settings: cfg '+ks.cfg+', '+ks.steps+' steps, '+ks.sampler_name);
   await page.click('.block[style*="--model"] [data-seg=style][data-v=illustrious]');
   ok((await page.textContent('#addedPos')).includes('masterpiece'), 'picked style is shown under the prompt');
   // tag suggestions: typing part of a tag offers it with spaces and escaped brackets
