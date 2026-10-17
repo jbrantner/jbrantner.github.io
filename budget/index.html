@@ -1082,8 +1082,11 @@ html.full.hl-on:not(.kp-on) body > .spend-fab { bottom: calc(var(--tabH) + 14px 
   padding: 8px 10px; border: 2px dotted #ffaba4; background: #0f4a5a; color: #ffd3cd; font-family: HoloNum, "Pixelify Sans", "Courier New", ui-monospace, monospace; font-size: 12.5px; line-height: 1.3; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
 .crew-draft[hidden], html.kp-on .crew-draft { display: none; }
 .crew-draft .cd-b { display: flex; gap: 6px; } .crew-draft button { flex: 1; min-height: 40px; padding: 0 10px; font-weight: 800; font-family: inherit; border: 2px solid #ffaba4; background: transparent; color: #ffaba4; }
-.crew-draft .cd-t { display: none; } .crew-draft .cd-p { font-weight: 800; color: #fff; }
+.crew-draft .cd-t { display: none; } .crew-draft.has-opt { max-width: none; right: 16px; } .crew-draft.has-opt .cd-t { display: grid; gap: 4px; } .crew-draft .cd-o { color: #fff; } html.opt-on .spend-fab { display: none !important; }   /* v314 */ .crew-draft .cd-p { font-weight: 800; color: #fff; }
 #townList .pp-plan { margin-left: auto; min-height: 30px; padding: 0 12px; font: inherit; font-size: 12.5px; font-weight: 800; border: 2px dotted #ffaba4; background: transparent; color: #ffaba4; }
+#townList .pp-sec .pp-opt + .pp-plan { margin-left: 6px; }
+#townList .pp-dwarn { margin: 10px 2px 0; padding: 10px 12px; border: 2px solid #ff8a80; border-radius: 10px; color: #ffd3cd; font-size: 13px; line-height: 1.4; display: grid; gap: 6px; }
+#townList .pp-dwarn p { margin: 0; } #townList .pp-dwarn b { color: #fff; } #townList .pp-dwarn .pp-opt { margin-left: 0; justify-self: start; }   /* v314 */
 #townList .pp-plan.on { display: inline-flex; align-items: center; border-style: solid; background: #ff8a80; color: #0f4a5a; }
 html.planning #mainScroll { outline: 3px dashed rgba(255, 171, 164, .55); outline-offset: -3px; } .crew-draft .cd-h { opacity: .8; } .crew-draft .cd-r b { font-size: 15px; color: #fff; } .crew-draft .cd-r small { opacity: .75; } .crew-draft .cd-r em { font-style: normal; display: block; opacity: .85; }
 .crew-draft .cd-go { background: #ff8a80; color: #0f4a5a; border-color: #ff8a80; }
@@ -3528,7 +3531,7 @@ palRemap(document);
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 313;
+const APP_VERSION = 314;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -3648,13 +3651,56 @@ function clockHold() {
 }
 function clockWait(now = Date.now()) { const m = Math.ceil((clockHigh() - now) / 60000); return m <= 1 ? 'about a minute' : m < 120 ? `about ${m} min` : `about ${Math.round(m / 60)} hours`; }
 const clockBanner = () => clockBack() ? `<div class="clock-bar" role="status">Your phone's clock went back. Moving money is paused until it catches up (${clockWait()}). Some numbers may look off until then.</div>` : '';
+/* v314 (Jordan, 2026-10-17: "an optimize button that will suggest where to allocate things that is only applied when you
+   hit apply"): Optimize tries a split of your money a day in Planning mode, so nothing sticks until Apply. In order:
+   1. a debt whose interest is more than goes in gets the least money a day that makes it shrink;
+   2. that comes from what's free first, then from pots and projects, then from weekly spending;
+   3. once the month cushion is full, free money a day goes to the debt with the highest APR.
+   Projects already at their goal give theirs back. Everything else stays as you have it. */
+let optNote = null;   // the lines Optimize shows in the Planning bar, or null
+function debtGrow(id) { const P = debtPlan(id); return !!(P && P.never && !P.flat); }
+function debtNeed(id) { if (!debtGrow(id)) return 0; for (let p = 1; p <= 400; p++) { const P = debtPlan(id, p); if (P && !P.never) return p; } return 0; }
+function optimizePlan() {
+  if (plan) { toast('Apply or Undo the plan you have open first'); return; }
+  if (payWaiting()) { toast('Enter your paycheck first, so Optimize knows what you have'); return; }
+  if (clockHold()) return;
+  if (state.roundOff) { toast('Rounding off right now. Tap Stop first.'); return; }
+  const was = {}, at = id => Math.max(0, workersAt(id)), ids = farmPots().filter(id => id !== 'savings');
+  for (const id of ids) was[id] = at(id); const wk0 = weeklyAmt(), lines = [];
+  plan = JSON.stringify(state);   // Planning mode, quietly
+  try {
+    for (const id of ids) if (!debtOf(id) && !isLocked(id) && roBuilt(id)) while (at(id) > 0) { const n = at(id); setCrew(id, -1); if (at(id) === n) break; }
+    const need = {}; for (const p of liveDebts()) if (!isLocked(p.id)) { const k = debtNeed(p.id); if (k) need[p.id] = k; }
+    let want = Object.values(need).reduce((a, b) => a + b, 0) + overAssigned(), short = want - savers();
+    const from = ids.filter(id => !debtOf(id) && !isLocked(id) && at(id) > 0).sort((a, b) => at(b) - at(a));
+    for (const id of from) while (short > 0 && at(id) > 0) { const n = at(id); setCrew(id, -1); if (at(id) === n) break; short--; }
+    if (short > 0) {   // the rest comes off weekly spending, $7 a week for each $1 a day
+      const k = Math.max(0, Number(state.partyPlan || 0) - short);
+      if (k < Number(state.partyPlan || 0)) { wkDraft = k * 7 * WORKER_DAY; wkConfirm(); }
+    }
+    for (const [id, k] of Object.entries(need)) for (let i = 0; i < k && savers() > 0; i++) setCrew(id, 1);
+    const CT = billsMonthWhole(), sv = (potBalances(today().slice(0, 7)).find(p => p.id === 'savings') || { bal: 0 }).bal;
+    if (!(CT > 0) || sv > CT + 0.005) {   // the cushion is full: free money a day pays down the costliest debt
+      const top = liveDebts().filter(p => !isLocked(p.id)).sort((a, b) => Number(debtOf(b.id).apr || 0) - Number(debtOf(a.id).apr || 0))[0];
+      if (top) for (let i = 0; i < 400 && savers() > 0; i++) { const n = at(top.id); setCrew(top.id, 1); if (at(top.id) === n) break; }
+    }
+  } catch (e) { console.error(e); }
+  const day = k => `${k > 0 ? '+' : '−'}${money(Math.abs(k) * WORKER_DAY)} a day`;
+  const wk1 = weeklyAmt(); if (Math.abs(wk1 - wk0) > 0.005) lines.push(`Weekly spending ${money(wk0)} → ${money(wk1)} a week`);
+  for (const id of ids) { const k = at(id) - was[id]; if (!k) continue;
+    const P = debtOf(id) ? debtPlan(id) : null;
+    lines.push(`${potName(id)} ${day(k)}${P && !P.never ? ` · paid off ${monthYear(P.end)}` : ''}${!debtOf(id) && roBuilt(id) ? ' · at its goal' : ''}`); }
+  if (!lines.length) { const keep = state.transactions, lb = state.lastBackup; state = tidy(JSON.parse(plan)); state.transactions = keep; if (lb) state.lastBackup = lb; plan = null; carts = state.carts || []; render(); toast('Nothing to change. Your money a day already goes where it helps most.'); return; }
+  const fr = savers(); lines.push(fr > 0 ? `${money(fr * WORKER_DAY)} a day stays free for ${billsMonthWhole() > 0 && !(((potBalances(today().slice(0, 7)).find(p => p.id === 'savings') || { bal: 0 }).bal) > billsMonthWhole() + 0.005) ? 'your month cushion' : 'Savings'}` : 'Nothing left free for the cushion');
+  optNote = lines; render(); toast('Here is a suggestion. Nothing changes until you tap Apply.');
+}
 let plan = null;   // v309: the books as they were when Planning mode started (JSON), or null
 const planReal = () => { const b = JSON.parse(plan); b.transactions = state.transactions; b.seenAt = state.seenAt; b.lastBackup = state.lastBackup; return b; };
 // v311: real money isn't something to try out: a paycheck, extra money, a bank fix, a payment or a card charge waits until planning ends
 const planBlock = () => { if (!plan) return false; toast('Planning mode is on. Tap Apply or Undo first.'); return true; };
 function planStart() { if (plan) return; plan = JSON.stringify(state); render(); toast('Planning mode: try anything. Nothing sticks until you tap Apply.'); }
-function planApply() { if (!plan) return; plan = null; save(); render(); toast('Applied ✓'); }
-function planUndo() { if (!plan) return; const keep = state.transactions, lb = state.lastBackup; state = tidy(JSON.parse(plan)); state.transactions = keep; if (lb) state.lastBackup = lb; plan = null; carts = state.carts || []; save(); render(); toast('Put back the way it was'); }
+function planApply() { if (!plan) return; plan = null; optNote = null; save(); render(); toast('Applied ✓'); }
+function planUndo() { if (!plan) return; optNote = null; const keep = state.transactions, lb = state.lastBackup; state = tidy(JSON.parse(plan)); state.transactions = keep; if (lb) state.lastBackup = lb; plan = null; carts = state.carts || []; save(); render(); toast('Put back the way it was'); }
 function save() {
   booksGen++; if (typeof needMemo !== 'undefined') needMemo.clear();
   if (!clockBack()) state.seenAt = Math.max(Number(state.seenAt) || 0, Date.now());   // v137
@@ -4402,7 +4448,7 @@ function reassign(t, deltas, hand) {
   return out;
 }
 function draftBar() {
-  const el = document.getElementById('crewDraft'); if (!el) return; const on = !!plan; el.hidden = !on; document.documentElement.classList.toggle('planning', on); if (!on) return; el.querySelector('.cd-p').textContent = 'Planning mode';
+  const el = document.getElementById('crewDraft'); if (!el) return; const on = !!plan; if (!on) document.documentElement.classList.remove('opt-on'); el.hidden = !on; document.documentElement.classList.toggle('planning', on); if (!on) return; el.querySelector('.cd-p').textContent = optNote ? 'Optimize suggests' : 'Planning mode'; el.classList.toggle('has-opt', !!optNote); document.documentElement.classList.toggle('opt-on', !!optNote); el.querySelector('.cd-t').innerHTML = optNote ? optNote.map(t => `<span class="cd-o">${esc(t)}</span>`).join('') + '<span class="cd-o cd-h">Nothing changes until you tap Apply.</span>' : '';
 }
 const roBuilt = id => { const g = goalOf(id); return g > 0 && projectBal(id) >= g - 0.005; };   // a project at its goal
 /* v131: locks, and + that evens villagers out */
@@ -6536,6 +6582,13 @@ function debtCharge(id, amt, note) {
   return () => { const i = d.log.indexOf(x); if (i >= 0) d.log.splice(i, 1); state.goals[id] = c2(goalOf(id) - x.charge); if (Number(d.start || 0) > st) d.start = Math.max(st, goalOf(id)); save(); render(); };   // v311: and its start
 }
 const monthYear = d => new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+// v314: a debt that grows even when its minimum is paid gets a warning on Home, with the money a day that would turn it around
+function debtWarnHTML() {
+  const L = liveDebts().filter(p => debtGrow(p.id)); if (!L.length) return '';
+  return '<div class="pp-dwarn" role="note">' + L.map(p => { const d = debtOf(p.id), c = debtCat(p.id), k = debtNeed(p.id), P = debtPlan(p.id);
+    return `<p><b>${esc(p.name)} is growing.</b> About ${money(P.i)} interest a month is more than ${d.minKind === 'interest' ? 'goes in' : `the ${money(Number(c && c.budget || 0))} minimum`}${k ? `. ${money(k * WORKER_DAY)} a day more would shrink it` : ''}.</p>`; }).join('')
+    + (plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>') + '</div>';
+}
 function debtLine(id) {
   const d = debtOf(id), c = debtCat(id); if (!d || !c) return '';
   if (d.done) return 'Paid off. Nothing left to pay.';
@@ -7654,7 +7707,7 @@ const VL = (() => {
     // v174: pots and projects in one list (color and the label tell them apart), one add button under it
     // v200: no Spare change card; Collect is the button at the bottom left (#spareFab)
     const mwb = `<button class="pp-big alt pp-add pp-mwb" data-mw="1">Split your pay<small>${money(maxWorkers() * WORKER_DAY)} a day · ${money(perMo(maxWorkers()))} a paycheck</small></button>`;   // v190; v195 a paycheck
-    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${planChip()}</div><div class="pp-list pp-one">` + cushCard();   // v298; v300: the cushion first
+    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>'}${planChip()}</div><div class="pp-list pp-one">` + cushCard();   // v298; v300: the cushion first
     const dbIts = [];
     { const its = [...D.stock.map(p => [{ id: p.id, name: p.name, goal: p.goal, custom: p.custom }, p.id === 'savings' ? 'save' : 'pot']),
         ...D.projects.map(p => [{ id: p.id, name: p.name, goal: p.goal, bal: p.bal, custom: true, proj: true }, 'proj'])];
@@ -7663,7 +7716,7 @@ const VL = (() => {
       its.map((x, n) => ({ x, n })).sort((a, b) => (act(b.x[0].id) - act(a.x[0].id)) || (oi(a.x[0].id) - oi(b.x[0].id)) || a.n - b.n)
         .forEach(({ x }) => { if (debtOf(x[0].id)) dbIts.push(x); else if (x[0].id === 'savings' && !CU.sav) return; else h += card(x[0], x[1]); }); }   // v300: Savings shows once the cushion is full   // v184: active first, then the order you dragged; v298: debts in their own section
     h += `</div><button class="pp-big alt pp-add" data-vl-open="newpot">＋ Add a pot or project</button>`;
-    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Debts</h3></div>` + (dbIts.length ? `<div class="pp-list pp-one pp-debts">${dbIts.map(x => card(x[0], x[1])).join('')}</div>` : '')
+    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Debts</h3></div>` + debtWarnHTML() + (dbIts.length ? `<div class="pp-list pp-one pp-debts">${dbIts.map(x => card(x[0], x[1])).join('')}</div>` : '')
       + `<button class="pp-big alt pp-add pp-adddebt" data-debt-new="1">＋ Add a debt</button>`;   // v295; v298: its own section
     // v156: no Party purse section (the top card shows it)
     // bills: plain rows (no bars): name, when it's due, amount (rounded up), saved ✓ / $X to save / paid (v300), and Paid / Undo
@@ -8130,6 +8183,7 @@ const VL = (() => {
     const b = e.target.closest('button');
     if (!b) { const c = e.target.closest('.pp-card[data-vl-row]:not(.open)'); if (c) toggleCard(c.dataset.vlRow, e); return; }   // v182: a tap anywhere on a closed card opens it
     if (b.dataset.planGo) { planStart(); return; }   // v309
+    if (b.dataset.optGo) { optimizePlan(); return; }   // v314
     if (b.dataset.ppOpen) { toggleCard(b.dataset.ppOpen, e); return; }
     if (b.dataset.ppClose) { closePick(); return; }
     if (b.dataset.mw) { if (b.dataset.mw === 'budget') { setManage(false); wkEd = true; showView('budget'); const hc = document.querySelector('#homeList .vl-hero.hc'); if (!hc) { wkEd = false; showView('settings'); }
