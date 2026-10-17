@@ -157,6 +157,14 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   const li = Object.values(sent[g2before]).find(x=>x._meta.title==='Start picture');
   ok(li.inputs.image==='RenderDeck/render_00002.png [output]', 'reused render points at output file: '+li.inputs.image);
 
+  // renders in a row: 2× queues two prompts with different seeds, and both pictures come back
+  await page.click('#runsBtn'); ok((await page.textContent('#runsBtn'))==='2×', 'runs button steps to 2×');
+  const before = sent.length, strip = await page.$$eval('#strip img', x => x.length);
+  await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#strip img').length===n, strip + 2, {timeout:8000});
+  const seeds = sent.slice(before).map(g => Object.values(g).find(x => x.class_type==='KSampler').inputs.seed);
+  ok(seeds.length===2 && seeds[0]!==seeds[1], 'two renders queued with different seeds');
+  await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); // back to 1×
+
   // switching a block off removes it
   await page.locator('.block[style*="--lora"] [data-do=toggle]').dispatchEvent('click');
   await page.click('#graphBtn'); ok(!(await page.textContent('#json')).includes('LoraLoader'), 'switched-off block left out');

@@ -135,6 +135,7 @@ header h1 span{color:var(--accent)}
 .gobtn{flex:1;height:58px;border-radius:16px;font:700 20px/1 var(--display);letter-spacing:.5px;color:var(--accent-ink);background:var(--accent);box-shadow:inset 0 -3px 0 #0003}
 .gobtn:active{transform:translateY(2px)}
 .gobtn.busy{background:var(--panel2);color:var(--accent);border:1px solid var(--accent)}
+.runsbtn{width:58px;height:58px;border-radius:16px;background:var(--panel);border:1px solid var(--line);font:700 17px/1 var(--display);color:var(--accent)}
 .graphbtn{width:58px;height:58px;border-radius:16px;background:var(--panel);border:1px solid var(--line);font-weight:800;font-size:12.5px;line-height:1.15;color:var(--soft)}
 
 /* sheets */
@@ -212,6 +213,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 
 <div class="go"><div class="in">
   <button class="graphbtn" id="graphBtn">See<br>graph</button>
+  <button class="runsbtn" id="runsBtn" aria-label="Renders in a row">1×</button>
   <button class="gobtn" id="goBtn">Render</button>
 </div></div>
 
@@ -279,7 +281,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.12'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-17.13'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -349,13 +351,14 @@ let S = load() || {
   ],
   gallery:[], nextId:3,
 };
+S.queue = S.queue || []; S.runs = S.runs || 1;
 S.styles = S.styles || {};       // checkpoint name -> style key, once the user picks one
 S.styleText = S.styleText || {}; // style key -> {pos, neg} the user edited
 S.loraWords = S.loraWords || {}; // LoRA file -> activation words added to the prompt whenever that LoRA is on
 { const M = S.blocks.find(b=>b.type==='model'); if(M.quality==null) M.quality = true; }
 let info = null;          // what the computer has installed: lists of models and node names
-let ws = null, clientId = 'rd-' + Math.random().toString(36).slice(2);
-let job = null;           // the running render
+let ws = null, clientId = S.clientId || (S.clientId = 'rd-' + Math.random().toString(36).slice(2)); // kept, so ComfyUI still sends live previews for renders queued before the app was closed
+let job = null;           // a pretend render in Test mode (real ones live in S.queue)
 let shownIdx = -1;
 let justAdded = 0;       // only a freshly added block pops in
 
@@ -411,6 +414,7 @@ async function connect(){
     S.test = false; fillDefaults();
     openSocket();
     setConn('on', 'Connected');
+    if(S.queue.length) checkQueue(true);
     toast('Connected · ' + info.ckpt.length + ' models found');
     closeSheets(); render();
   }catch(e){
@@ -454,21 +458,22 @@ function openSocket(){
 function onSocket(ev){
   if(typeof ev.data !== 'string'){ onPreview(ev.data); return; }
   let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
-  const d = m.data || {};
-  if(!job || (d.prompt_id && d.prompt_id !== job.id)) return;
-  if(m.type==='progress'){ job.prog = d.value / d.max; status(job.titles[d.node] ? job.titles[d.node] + ' ' + d.value + '/' + d.max : 'Painting ' + d.value + '/' + d.max); bar(job.prog); }
-  else if(m.type==='executing'){ if(d.node===null) finish(); else status(job.titles[d.node] || 'Working'); }
-  else if(m.type==='executed'){ const imgs = (d.output && d.output.images) || []; imgs.forEach(i => { if(i.type==='output') job.images.push(i); }); }
-  else if(m.type==='execution_success'){ finish(); }
-  else if(m.type==='execution_error'){ fail(d.exception_message || 'ComfyUI hit an error', d.node_type); }
-  else if(m.type==='execution_interrupted'){ fail('Stopped'); }
+  const d = m.data || {}, e = S.queue.find(q => q.id===d.prompt_id);
+  if(!e) return;
+  const head = e.of > 1 ? 'Render ' + e.n + ' of ' + e.of + ' · ' : '';
+  if(m.type==='progress'){ status(head + (e.titles[d.node] || 'Painting') + ' ' + d.value + '/' + d.max); bar(d.value / d.max); }
+  else if(m.type==='executing'){ if(d.node===null) completeOne(e); else status(head + (e.titles[d.node] || 'Working')); }
+  else if(m.type==='executed'){ ((d.output && d.output.images) || []).forEach(i => { if(i.type==='output') e.images.push(i); }); }
+  else if(m.type==='execution_success'){ completeOne(e); }
+  else if(m.type==='execution_error'){ failOne(e, d.exception_message || 'ComfyUI hit an error', d.node_type); }
+  else if(m.type==='execution_interrupted'){ dropOne(e); }
 }
 // live preview frames: 4 bytes event type, then either 4 bytes image type + image, or (type 4) 4 bytes metadata length + json + image
 function onPreview(buf){
-  if(!job) return;
+  if(!S.queue.length) return;
   const v = new DataView(buf), type = v.getUint32(0);
   let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg';
-  if(type===4){ const n = v.getUint32(4); try{ const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,n))); if(meta.prompt_id && meta.prompt_id!==job.id) return; mime = meta.image_type || 'image/jpeg'; }catch(e){} off = 8 + n; }
+  if(type===4){ const n = v.getUint32(4); try{ const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,n))); if(meta.prompt_id && !S.queue.some(q => q.id===meta.prompt_id)) return; mime = meta.image_type || 'image/jpeg'; }catch(e){} off = 8 + n; }
   else if(type!==1) return;
   const url = URL.createObjectURL(new Blob([new Uint8Array(buf, off)], {type:mime}));
   const img = $('#shown'); if(img.dataset.blob) URL.revokeObjectURL(img.dataset.blob);
@@ -565,53 +570,79 @@ function problems(){
 }
 
 // ---------- rendering a job ----------
+// Every render is queued on ComfyUI, so it keeps going if the app closes. S.queue remembers the ones not back yet
+// ({id, seed, prompt, n, of, titles, images}); the app collects them when it is open again.
 async function go(){
-  if(job){ stop(); return; }
+  if(S.queue.length || job){ stop(); return; }
   const p = problems(); showErr(p.length ? '<b>Before rendering:</b><br>' + p.map(esc).join('<br>') : ''); if(p.length){ buzz(); return; }
-  const P = S.blocks.find(b=>b.type==='sampler');
-  if(!P.lockSeed) P.seed = randSeed();
+  const P = S.blocks.find(b=>b.type==='sampler'), runs = S.runs || 1, first = P.lockSeed ? P.seed : randSeed();
   if(usesTags()) await loadTags(); // Send as tags and added tags need the tag list before the graph is built
-  const built = buildGraph(); save(); renderBlocks();
-  job = {id:null, titles:built.titles, images:[], prog:0, seed:built.seed, prompt:S.prompt};
-  $('#goBtn').textContent = 'Stop'; $('#goBtn').classList.add('busy'); status('Sending…'); bar(0.02); buzz();
-  if(S.test){ fakeRun(built); return; }
-  try{
-    const r = await fetch(base() + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:built.graph, client_id:clientId})});
-    const j = await r.json().catch(()=>({}));
-    if(!r.ok || j.error){ fail(explain(j, built.titles)); return; }
-    job.id = j.prompt_id; status(j.number ? 'In line' : 'Starting');
-    job.poll = setInterval(pollHistory, 4000); // backup in case the socket drops
-  }catch(e){ fail('Could not reach ComfyUI: ' + e.message); }
+  busy(true); status('Sending…'); bar(0.02); buzz();
+  if(S.test){ P.seed = first; const built = buildGraph(); save(); renderBlocks(); job = {titles:built.titles, seed:built.seed, prompt:S.prompt}; fakeRun(built, runs); return; }
+  for(let i = 0; i < runs; i++){
+    P.seed = P.lockSeed ? first + i : (i ? randSeed() : first); // a kept seed steps by one so the renders differ
+    const built = buildGraph();
+    try{
+      const r = await fetch(base() + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:built.graph, client_id:clientId})});
+      const j = await r.json().catch(()=>({}));
+      if(!r.ok || j.error){ failAll(explain(j, built.titles)); break; }
+      S.queue.push({id:j.prompt_id, seed:built.seed, prompt:S.prompt, n:i+1, of:runs, titles:built.titles, images:[]}); save();
+    }catch(e){ failAll('Could not reach ComfyUI: ' + e.message); break; }
+  }
+  P.seed = first; save(); renderBlocks();
+  if(S.queue.length){ status(runs > 1 ? runs + ' renders in line' : 'In line'); watchQueue(); }
 }
+function busy(on){ $('#goBtn').textContent = on ? 'Stop' : 'Render'; $('#goBtn').classList.toggle('busy', on); }
+// backup for a dropped socket, and how renders that finished while the app was closed come back
+let queueTimer = 0;
+function watchQueue(){ clearTimeout(queueTimer); if(S.queue.length && !S.test && info) queueTimer = setTimeout(checkQueue, 4000); }
+async function checkQueue(away){
+  if(!S.queue.length) return;
+  let live = null; try{ const q = await (await fetch(base() + '/queue', {cache:'no-store'})).json(); live = new Set([...q.queue_running, ...q.queue_pending].map(x => x[1])); }catch(e){ watchQueue(); return; }
+  let back = 0;
+  for(const e of S.queue.slice()){
+    try{ const h = (await (await fetch(base() + '/history/' + e.id, {cache:'no-store'})).json())[e.id];
+      if(h && h.status && h.status.completed){ await completeOne(e, true); back++; }
+      else if(h && h.status && h.status.status_str==='error') failOne(e, 'ComfyUI hit an error while rendering');
+      else if(!h && !live.has(e.id)) dropOne(e); // ComfyUI restarted and forgot it
+    }catch(err){}
+  }
+  if(back && away) toast(back + (back > 1 ? ' renders' : ' render') + ' finished while you were away ✨');
+  if(S.queue.length){ busy(true); const e = S.queue[0]; if(!$('#status').textContent) status(e.of > 1 ? 'Render ' + e.n + ' of ' + e.of : 'Rendering'); }
+  watchQueue();
+}
+async function completeOne(e, quiet){
+  if(!S.queue.includes(e)) return;
+  S.queue = S.queue.filter(q => q!==e); save();
+  if(!e.images.length){ try{ const h = (await (await fetch(base() + '/history/' + e.id)).json())[e.id];
+    for(const id in (h && h.outputs) || {}) (h.outputs[id].images||[]).forEach(i => { if(i.type==='output') e.images.push(i); }); }catch(err){} }
+  e.images.forEach(i => S.gallery.unshift({url:viewUrl(i), seed:e.seed, prompt:e.prompt, t:Date.now()}));
+  S.gallery = S.gallery.slice(0,40); save(); show(0); drawStrip();
+  if(!S.queue.length){ busy(false); status(''); bar(1); setTimeout(()=>bar(0), 500); if(!quiet) toast(e.of > 1 ? 'Done: ' + e.of + ' renders ✨' : 'Done ✨'); }
+  else { const n = S.queue[0]; status('Render ' + n.n + ' of ' + n.of); bar(0); }
+}
+function dropOne(e){ S.queue = S.queue.filter(q => q!==e); save(); if(!S.queue.length){ busy(false); status(''); bar(0); } }
+function failOne(e, msg, node){ dropOne(e); showErr('<b>Render failed</b><br>' + esc(msg).replace(/\n/g,'<br>') + (node ? '<br>Node: ' + esc(node) : '')); buzz(); }
+function failAll(msg){ if(!S.queue.length){ busy(false); status(''); bar(0); } showErr('<b>Render failed</b><br>' + esc(msg).replace(/\n/g,'<br>')); buzz(); }
 function explain(j, titles){
   let s = (j.error && (j.error.message || j.error)) || 'ComfyUI refused the graph';
   if(j.node_errors) for(const id in j.node_errors){ const ne = j.node_errors[id]; (ne.errors||[]).forEach(e => { s += '\n' + (titles[id]||ne.class_type) + ': ' + e.message + (e.details ? ' (' + e.details + ')' : ''); }); }
   return s;
 }
-async function pollHistory(){
-  if(!job || !job.id) return;
-  try{ const r = await fetch(base() + '/history/' + job.id); const h = (await r.json())[job.id];
-    if(h && h.status && h.status.completed){ for(const id in h.outputs){ (h.outputs[id].images||[]).forEach(i => { if(i.type==='output' && !job.images.some(x=>x.filename===i.filename)) job.images.push(i); }); } finish(); }
-    else if(h && h.status && h.status.status_str==='error') fail('ComfyUI hit an error while rendering');
-  }catch(e){}
+function endJob(){ if(job && job.timer) clearInterval(job.timer); job = null; busy(false); status(''); }
+function stop(){
+  if(S.test){ endJob(); bar(0); toast('Stopped'); return; }
+  const ids = S.queue.map(q => q.id); S.queue = []; save();
+  fetch(base() + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:ids})}).catch(()=>{});
+  fetch(base() + '/interrupt', {method:'POST'}).catch(()=>{});
+  busy(false); status(''); bar(0); toast(ids.length > 1 ? 'Stopped all ' + ids.length : 'Stopped');
 }
-function finish(){
-  if(!job) return;
-  const j = job; endJob();
-  if(!j.images.length){ if(j.id) pollOnce(j); return; }
-  j.images.forEach(i => S.gallery.unshift({url:viewUrl(i), seed:j.seed, prompt:j.prompt, t:Date.now()}));
-  S.gallery = S.gallery.slice(0,40); save(); show(0); drawStrip(); bar(1); setTimeout(()=>bar(0), 500); toast('Done ✨');
-}
-async function pollOnce(j){ job = j; await pollHistory(); if(job===j) { endJob(); toast('Finished, but no picture came back', true); } }
-function fail(msg, node){ endJob(); bar(0); showErr('<b>Render failed</b><br>' + esc(msg).replace(/\n/g,'<br>') + (node ? '<br>Node: ' + esc(node) : '')); buzz(); }
-function endJob(){ if(job && job.poll) clearInterval(job.poll); if(job && job.timer) clearInterval(job.timer); job = null; $('#goBtn').textContent = 'Render'; $('#goBtn').classList.remove('busy'); status(''); }
-function stop(){ if(!S.test) fetch(base() + '/interrupt', {method:'POST'}).catch(()=>{}); endJob(); bar(0); toast('Stopped'); }
 function status(t){ const s = $('#status'); s.textContent = t; s.style.display = t ? 'block' : 'none'; }
 function bar(f){ $('#bar').style.width = Math.round(f*100) + '%'; }
 function showErr(h){ const e = $('#err'); e.innerHTML = h; e.style.display = h ? 'block' : 'none'; }
 
 // test mode: walks the real graph node by node and paints a stand-in picture
-function fakeRun(built){
+function fakeRun(built, runs){
   const ids = Object.keys(built.graph); let k = 0, step = 0;
   const P = S.blocks.find(b=>b.type==='sampler');
   job.timer = setInterval(() => {
@@ -620,7 +651,7 @@ function fakeRun(built){
     if(node.class_type==='KSampler' && step < P.steps){ step++; status('Painting ' + step + '/' + P.steps); bar(0.1 + 0.8*step/P.steps); return; }
     status(built.titles[id]); k++;
     if(k >= ids.length){ const j = job; endJob();
-      for(let b=0; b<(on1('pic')?1:S.batch); b++) S.gallery.unshift({url:fakeImage(j.seed + b, built), seed:j.seed + b, prompt:j.prompt, t:Date.now(), test:true});
+      for(let r=0; r<(runs||1); r++) for(let b=0; b<(on1('pic')?1:S.batch); b++) S.gallery.unshift({url:fakeImage(j.seed + r*7 + b, built), seed:j.seed + r*7 + b, prompt:j.prompt, t:Date.now(), test:true});
       S.gallery = S.gallery.slice(0,40); show(0); drawStrip(); bar(1); setTimeout(()=>bar(0),500); toast('Done (pretend picture) ✨'); save(); }
   }, 70);
 }
@@ -880,6 +911,10 @@ $('#batchSeg').onclick = e => { const t = e.target.closest('[data-batch]'); if(!
 $('#prompt').oninput = e => { S.prompt = e.target.value; save(); };
 $('#negative').oninput = e => { S.negative = e.target.value; save(); };
 $('#goBtn').onclick = go;
+// how many renders one tap queues: 1, 2, 3, 4, 5, 10, then back to 1
+function drawRuns(){ $('#runsBtn').textContent = (S.runs || 1) + '×'; }
+$('#runsBtn').onclick = () => { const o = [1,2,3,4,5,10]; S.runs = o[(o.indexOf(S.runs || 1) + 1) % o.length]; save(); drawRuns(); toast(S.runs===1 ? 'One render per tap' : S.runs + ' renders in a row per tap'); buzz(); };
+drawRuns();
 
 // ---------- tag suggestions (Danbooru styles only) ----------
 // tags.txt sits next to the app: tag TAB category TAB posts TAB aliases, most used first (made by make_tags.py)
@@ -1230,7 +1265,7 @@ async function checkUpdate(){
     const v = (t.match(/APP_VERSION = '([^']+)'/) || [])[1]; if(v && v !== APP_VERSION) $('#updBtn').hidden = false; }catch(e){}
 }
 $('#updBtn').onclick = () => location.reload();
-document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') checkUpdate(); });
+document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible'){ checkUpdate(); if(S.queue.length && info && !S.test) checkQueue(true); } });
 
 // ---------- start ----------
 render(); show(S.gallery.length ? 0 : -1);
