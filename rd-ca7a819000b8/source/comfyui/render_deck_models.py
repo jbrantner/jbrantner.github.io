@@ -5,6 +5,8 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   POST /renderdeck/download {url, kind}     -> fetch a Civitai or Hugging Face link in the background
   POST /renderdeck/upload?kind=..&name=..   -> receive a file sent from the phone (multipart field "file")
   GET  /renderdeck/model_info?kind=..&name=.. -> Civitai's trigger words and base model for a file, found by its fingerprint
+  GET  /renderdeck/images, /renderdeck/thumb  -> the pictures in the output folder, newest first, and small previews
+  POST /renderdeck/delete {items}             -> move pictures into "Deleted by Render Deck" in the output folder
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
 civitai.com and huggingface.co, and an existing file is never overwritten.
 Civitai models that need sign-in: put your Civitai API key in the CIVITAI_API_TOKEN environment variable,
@@ -19,7 +21,8 @@ import folder_paths
 from server import PromptServer
 
 KINDS = ('checkpoints', 'loras')
-HOSTS = ('civitai.com', 'huggingface.co')
+CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites share one API and the same model ids
+HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
 routes = PromptServer.instance.routes
 
@@ -102,7 +105,7 @@ async def _civitai(session, url):
 async def _download(j, file_url, path):
     tmp = path + '.part'
     try:
-        headers = {'Authorization': 'Bearer ' + _token()} if _token() and 'civitai.com' in file_url else {}
+        headers = {'Authorization': 'Bearer ' + _token()} if _token() and any(c in file_url for c in CIVITAI) else {}
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_read=120)) as s:
             async with s.get(file_url, headers=headers, allow_redirects=True) as r:
                 if r.status in (401, 403):
@@ -138,9 +141,9 @@ async def download(request):
         url = (body.get('url') or '').strip()
         host = (urlparse(url).hostname or '').lower()
         if urlparse(url).scheme != 'https' or not any(host == h or host.endswith('.' + h) for h in HOSTS):
-            raise ValueError('Only civitai.com and huggingface.co links work')
+            raise ValueError('Only Civitai (.com, .red, .green) and huggingface.co links work')
         info = dict(file_url=url, name=None, size=0, kind=None, base='', words=[], title='')
-        if host.endswith('civitai.com'):
+        if any(host == c or host.endswith('.' + c) for c in CIVITAI):
             async with aiohttp.ClientSession() as s:
                 info = await _civitai(s, url)
         else:
@@ -247,6 +250,78 @@ async def model_info(request):
         return web.json_response(_cache[key])
     except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
+
+
+# ---------- the renders on this computer: browse and delete from the phone ----------
+TRASH = 'Deleted by Render Deck'  # deleted pictures are moved here inside the output folder, never erased
+PICS = ('.png', '.jpg', '.jpeg', '.webp')
+
+
+def _out_path(subfolder, filename):
+    root = os.path.realpath(folder_paths.get_output_directory())
+    path = os.path.realpath(os.path.join(root, subfolder or '', os.path.basename(filename or '')))
+    if not path.startswith(root + os.sep) or not path.lower().endswith(PICS):
+        raise ValueError('Not a picture in the output folder')
+    return root, path
+
+
+@routes.get('/renderdeck/images')
+async def images(request):
+    """Every picture in ComfyUI's output folder, newest first, a page at a time."""
+    root = folder_paths.get_output_directory()
+    found = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x != TRASH and not x.startswith('.')]
+        sub = os.path.relpath(d, root).replace('\\', '/')
+        for f in files:
+            if f.lower().endswith(PICS):
+                st = os.stat(os.path.join(d, f))
+                found.append({'subfolder': '' if sub == '.' else sub, 'filename': f, 't': st.st_mtime, 'size': st.st_size})
+    found.sort(key=lambda x: -x['t'])
+    off, lim = int(request.query.get('offset', 0)), min(200, int(request.query.get('limit', 60)))
+    return web.json_response({'total': len(found), 'images': found[off:off + lim], 'trash': TRASH})
+
+
+@routes.get('/renderdeck/thumb')
+async def thumb(request):
+    """A small JPEG of an output picture, so the phone's grid loads fast; kept in ComfyUI's temp folder."""
+    import hashlib
+    from PIL import Image
+    try:
+        _, path = _out_path(request.query.get('subfolder'), request.query.get('filename'))
+        st = os.stat(path)
+        cache = os.path.join(folder_paths.get_temp_directory(), 'render_deck_thumbs')
+        os.makedirs(cache, exist_ok=True)
+        tp = os.path.join(cache, hashlib.sha1(('%s|%d' % (path, st.st_mtime)).encode()).hexdigest() + '.jpg')
+        if not os.path.exists(tp):
+            def make():
+                with Image.open(path) as im:
+                    im.thumbnail((360, 360))
+                    im.convert('RGB').save(tp, 'JPEG', quality=80)
+            await asyncio.get_running_loop().run_in_executor(None, make)
+        return web.FileResponse(tp, headers={'Cache-Control': 'max-age=86400'})
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=404)
+
+
+@routes.post('/renderdeck/delete')
+async def delete(request):
+    """Move pictures into the "Deleted by Render Deck" folder (same subfolders), so a slip can be undone on the computer."""
+    items, moved = (await request.json()).get('items', []), 0
+    for it in items:
+        try:
+            root, path = _out_path(it.get('subfolder'), it.get('filename'))
+            dest_dir = os.path.join(root, TRASH, it.get('subfolder') or '')
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, os.path.basename(path))
+            if os.path.exists(dest):
+                b, e = os.path.splitext(dest)
+                dest = '%s_%d%s' % (b, int(time.time()), e)
+            shutil.move(path, dest)
+            moved += 1
+        except Exception:
+            pass
+    return web.json_response({'moved': moved})
 
 
 NODE_CLASS_MAPPINGS = {}
