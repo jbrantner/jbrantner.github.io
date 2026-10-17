@@ -160,6 +160,21 @@ async def download(request):
         return web.json_response({'error': str(e)}, status=400)
 
 
+@routes.post('/renderdeck/token')
+async def set_token(request):
+    """Save (or clear) the Civitai API key typed in the app. It is written next to this file and never sent back."""
+    t = ((await request.json()).get('token') or '').strip()
+    if t and not re.fullmatch(r'[A-Za-z0-9_\-]{16,128}', t):
+        return web.json_response({'error': "That doesn't look like a Civitai API key"}, status=400)
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'civitai_token.txt')
+    if t:
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write(t)
+    elif os.path.exists(p):
+        os.remove(p)
+    return web.json_response({'token': bool(t)})
+
+
 @routes.post('/renderdeck/cancel')
 async def cancel(request):
     j = JOBS.get((await request.json()).get('id'))
