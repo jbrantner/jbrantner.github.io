@@ -90,6 +90,7 @@ header h1 span{color:var(--accent)}
 .irow button.on{border-color:var(--cyan);background:color-mix(in srgb,var(--cyan) 16%,var(--panel2))}
 .irow button.on::before{content:"✓";color:var(--cyan)}
 .irow.off{opacity:.45}
+.irow.wrap{flex-wrap:wrap}
 .tagmode{min-height:34px;padding:5px 12px;border-radius:99px;border:1px solid var(--line);background:var(--bg);color:var(--soft);font-size:13px;font-weight:800}
 .tagmode.on{border-color:var(--cyan);color:var(--cyan);background:color-mix(in srgb,var(--cyan) 14%,var(--panel2))}
 .irow button.c1{color:#ff8a8a}.irow button.c3{color:#d68cff}.irow button.c4{color:#6fe39a}.irow button.c5,.irow button.c9{color:var(--pic)}
@@ -162,6 +163,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 .steps{padding-left:20px;color:var(--soft);font-size:14.5px}
 .steps li{margin:8px 0}
 .steps code{background:var(--bg);border:1px solid var(--line);padding:1px 6px;border-radius:6px;color:var(--text);font-size:13px;word-break:break-all}
+.upd{position:fixed;left:16px;right:16px;bottom:calc(84px + env(safe-area-inset-bottom));z-index:15;padding:12px 14px;border-radius:12px;background:var(--cyan);color:#06272a;font-weight:800;box-shadow:0 8px 24px #0008}
 .toast{position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top));transform:translate(-50%,-160%);background:var(--panel2);border:1px solid var(--line);padding:10px 16px;border-radius:12px;z-index:20;
   font-weight:700;font-size:14px;max-width:92vw;transition:transform .25s;box-shadow:0 8px 24px #0008}
 .toast.show{transform:translate(-50%,0)}
@@ -231,7 +233,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 <div class="sheet" id="tagSheet"><div class="in"><div class="grab"></div>
   <h2>Find a tag</h2>
   <input id="tagQ" placeholder="any part of a tag, like miku or on back" autocapitalize="off" autocorrect="off" spellcheck="false">
-  <div class="tagres" id="tagRes"><p class="note">Tap a tag to add it to the end of your prompt.</p></div>
+  <div class="tagres" id="tagRes"><p class="note">Tap a tag to add it under your prompt. Your words stay as you wrote them.</p></div>
 </div></div>
 
 <div class="sheet" id="getSheet"><div class="in"><div class="grab"></div>
@@ -270,12 +272,14 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 </div></div>
 
 <div class="toast" id="toast"></div>
+<button class="upd" id="updBtn" hidden>New version of Render Deck ready · tap to update</button>
 <input type="file" id="filePick" accept="image/*" hidden>
 
 <script>
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
+const APP_VERSION = '2026-10-17.10'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -502,7 +506,7 @@ function buildGraph(){
   });
   const st = STYLES[styleKey(M)], tx = M.quality ? styleText(styleKey(M)) : {pos:'', neg:''};
   if(st.clipSkip) clip = [add('CLIPSetLastLayer', {stop_at_clip_layer:st.clipSkip, clip}, 'CLIP skip ' + -st.clipSkip, '--model'), 0];
-  const pos = add('CLIPTextEncode', {text:joinTags([tx.pos, loraWords()].filter(Boolean).join(', '), asTags(S.prompt)), clip}, 'Prompt', '--samp');
+  const pos = add('CLIPTextEncode', {text:joinTags([tx.pos, loraWords()].filter(Boolean).join(', '), sentPrompt()), clip}, 'Prompt', '--samp');
   const neg = add('CLIPTextEncode', {text:joinTags(tx.neg, S.negative), clip}, 'Avoid', '--samp');
   let pp = [pos,0], nn = [neg,0];
   on('cn').forEach((b,i) => {
@@ -566,7 +570,7 @@ async function go(){
   const p = problems(); showErr(p.length ? '<b>Before rendering:</b><br>' + p.map(esc).join('<br>') : ''); if(p.length){ buzz(); return; }
   const P = S.blocks.find(b=>b.type==='sampler');
   if(!P.lockSeed) P.seed = randSeed();
-  if(S.asTags && usesTags()) await loadTags(); // Send as tags needs the tag list before the graph is built
+  if(usesTags()) await loadTags(); // Send as tags and added tags need the tag list before the graph is built
   const built = buildGraph(); save(); renderBlocks();
   job = {id:null, titles:built.titles, images:[], prog:0, seed:built.seed, prompt:S.prompt};
   $('#goBtn').textContent = 'Stop'; $('#goBtn').classList.add('busy'); status('Sending…'); bar(0.02); buzz();
@@ -836,7 +840,7 @@ $('#addBtn').onclick = () => {
 };
 $('#tray').onclick = e => { const t = e.target.closest('[data-add]'); if(t && !t.disabled) addBlock(t.dataset.add); };
 $('#graphBtn').onclick = async () => {
-  if(S.asTags && usesTags()) await loadTags();
+  if(usesTags()) await loadTags();
   const {graph, colors} = buildGraph();
   $('#nodeList').innerHTML = Object.entries(graph).map(([id,nd]) => `<div class="node" style="--c:var(${colors[id]})"><b>${id}</b> ${esc(nd._meta.title)}<code>${nd.class_type}</code></div>`).join('');
   $('#json').textContent = JSON.stringify(graph, null, 2);
@@ -963,7 +967,7 @@ function lookup(words){
   if(PLAIN[key]) PLAIN[key].forEach(n => push(findTag(n)));
   else {
     const t = findTag(key) || findTag(key.replace(/e?s$/,'')) || findTag(key + 's');
-    if(!t || (w.length===1 && t.n < 500)) return null; // one word alone needs a fairly common tag, so "jacks" doesn't drag in junk
+    if(!t || (w.length===1 && t.n < (t.cat==='0' ? 500 : 100))) return null; // one word alone needs a fairly common tag, so "jacks" doesn't drag in junk
     push(t);
   }
   if(!out.length) return null;
@@ -1010,6 +1014,7 @@ function readPrompt(text){
 let IDEAS = null; // {pieces, picked: Set of tag names}
 // chips the user tapped on or off, kept so a pick survives editing the sentence and reloading
 S.tagOn = S.tagOn || []; S.tagOff = S.tagOff || []; if(S.asTags==null) S.asTags = true;
+S.addedTags = S.addedTags || []; // tags added from Find a tag or the extras: sent after the prompt, never written into it
 const norm = s => s.trim().toLowerCase().replace(/\\/g,'').replace(/ /g,'_');
 function pickedFor(pieces){
   const on = new Set(S.tagOn), off = new Set(S.tagOff), picked = new Set();
@@ -1025,13 +1030,20 @@ function asTags(text){
   pieces.forEach(p => { if(p.isTag || !p.phrases.length) put(p.text); else p.phrases.forEach(ph => ph.tags.forEach(t => { if(picked.has(t.tag)) put(tagText(t)); })); });
   return out.join(', ');
 }
+// the prompt Render sends: the words (as tags when Send as tags is on), then the added tags
+function sentPrompt(){
+  const out = asTags(S.prompt), have = new Set(out.split(',').map(norm));
+  const add = usesTags() ? S.addedTags.filter(t => !have.has(t)).map(t => TAGMAP && TAGMAP.get(t) ? tagText(TAGMAP.get(t)) : t.replace(/_/g,' ')) : [];
+  return [out.trim(), ...add].filter(Boolean).join(', ');
+}
+function addTag(name){ if(!S.addedTags.includes(name)) S.addedTags.push(name); save(); updateIdeas(); }
 function updateIdeas(){
   const box = $('#ideas');
-  if(!usesTags() || !TAGS || !S.prompt.trim()){ box.hidden = true; return; }
+  if(!usesTags() || !TAGS || (!S.prompt.trim() && !S.addedTags.length)){ box.hidden = true; return; }
   indexTags();
   const pieces = readPrompt(S.prompt), sentences = pieces.filter(p => !p.isTag && p.phrases.length), picked = pickedFor(pieces);
   IDEAS = {pieces, picked};
-  const have = new Set(pieces.filter(p => p.isTag).map(p => norm(p.text)).concat(S.asTags ? [...picked] : []));
+  const have = new Set(pieces.filter(p => p.isTag).map(p => norm(p.text)).concat(S.asTags ? [...picked] : [], S.addedTags));
   const extra = extras(have);
   let h = '';
   if(sentences.length){
@@ -1040,8 +1052,13 @@ function updateIdeas(){
       h += `<div class="irow ${S.asTags?'':'off'}"><span class="hl">${esc(ph.words)}</span>${ph.tags.map(t => `<button data-pick="${esc(t.tag)}" class="c${t.cat} ${picked.has(t.tag)?'on':''}">${esc(tagText(t))}</button>`).join('')}</div>`; }));
     const left = sentences.flatMap(p => p.left);
     if(left.length) h += `<p class="note">No tag found for: ${esc(left.join(', '))}</p>`;
-    h += `<p class="note">${S.asTags ? 'Render sends: ' + esc(asTags(S.prompt)) : 'Render sends your words as typed. Turn on Send as tags to swap each sentence for the ticked tags.'}</p>`;
+    if(!S.asTags) h += `<p class="note">Your words go as typed. Turn on Send as tags to swap each sentence for the ticked tags.</p>`;
   }
+  if(S.addedTags.length){
+    h += `<div class="ihead"><b>Added tags</b><span>Tap to remove</span></div><div class="irow wrap">${S.addedTags.map(n => { const t = TAGMAP.get(n);
+      return `<button data-unadd="${esc(n)}" class="on c${t ? t.cat : 0}">${esc(t ? tagText(t) : n)} ✕</button>`; }).join('')}</div>`;
+  }
+  if(sentences.length || S.addedTags.length) h += `<p class="note">Render sends: ${esc(sentPrompt())}</p>`;
   if(extra.length){
     h += `<div class="ihead"><b>Optional extras</b><span>Tap to add</span></div><div class="irow">${extra.map(([t,why]) => `<button data-extra="${esc(t.tag)}" class="c${t.cat}">${esc(tagText(t))}<i>${why}</i></button>`).join('')}</div>`;
   }
@@ -1066,7 +1083,8 @@ $('#ideas').addEventListener('click', e => {
     const n = b.dataset.pick, on = !IDEAS.picked.has(n);
     S.tagOn = S.tagOn.filter(x => x!==n); S.tagOff = S.tagOff.filter(x => x!==n); (on ? S.tagOn : S.tagOff).push(n);
   }
-  else if(b.dataset.extra){ const t = TAGMAP.get(b.dataset.extra); S.prompt = [S.prompt.replace(/[,\s]*$/, ''), tagText(t)].filter(Boolean).join(', '); $('#prompt').value = S.prompt; }
+  else if(b.dataset.extra){ addTag(b.dataset.extra); buzz(); return; }
+  else if(b.dataset.unadd){ S.addedTags = S.addedTags.filter(x => x!==b.dataset.unadd); }
   else if(b.dataset.ideas==='mode') S.asTags = !S.asTags;
   save(); updateIdeas(); buzz();
 });
@@ -1086,7 +1104,7 @@ $('#tagQ').oninput = () => {
 };
 $('#tagRes').onclick = e => {
   const b = e.target.closest('[data-i]'); if(!b) return; const t = tagHits[+b.dataset.i];
-  S.prompt = [S.prompt.replace(/[,\s]*$/, ''), tagText(t)].filter(Boolean).join(', '); $('#prompt').value = S.prompt; save(); updateIdeas();
+  addTag(t.tag);
   b.disabled = true; b.style.opacity = .5; toast('Added ' + tagText(t)); buzz();
 };
 
@@ -1146,6 +1164,14 @@ $('#modelPick').onchange = e => {
   x.onerror = () => toast('The upload stopped. Is Tailscale on?', true);
   x.send(fd); toast('Sending ' + f.name); setTimeout(refreshJobs, 800);
 };
+
+// ---------- updates: a home-screen app is often resumed, not reloaded, so look for a newer copy when it comes back ----------
+async function checkUpdate(){
+  try{ const t = await (await fetch('./?check=' + Date.now(), {cache:'no-store'})).text();
+    const v = (t.match(/APP_VERSION = '([^']+)'/) || [])[1]; if(v && v !== APP_VERSION) $('#updBtn').hidden = false; }catch(e){}
+}
+$('#updBtn').onclick = () => location.reload();
+document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') checkUpdate(); });
 
 // ---------- start ----------
 render(); show(S.gallery.length ? 0 : -1);

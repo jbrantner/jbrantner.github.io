@@ -120,7 +120,9 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.click('[data-ideas=mode]'); ok((await sentPrompt()).endsWith(', A girl who is doing jumping jacks'), 'switched off, the words go as typed');
   await page.click('[data-ideas=mode]'); await page.click('[data-pick=solo]');
   await page.click('[data-extra=upper_body]');
-  ok((await page.inputValue('#prompt')).endsWith(', upper body'), 'extra tag added');
+  ok((await sentPrompt()).endsWith(', upper body') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'extra tag sent after the words, prompt box untouched');
+  await page.fill('#prompt', 'zelda and purah'); await page.waitForSelector('#ideas .hl');
+  ok((await page.$$eval('#ideas .hl', s => s.map(x => x.textContent))).join('|')==='zelda|purah', 'character names in a sentence are found');
   await page.selectOption('[data-k=ckpt]', 'sdxl.safetensors'); await page.type('#prompt', 'smil'); await page.waitForTimeout(150);
   ok(await page.isHidden('#ac'), 'no tag suggestions for SDXL');
   await page.fill('#prompt', 'lantern hunter');
