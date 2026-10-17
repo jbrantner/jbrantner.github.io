@@ -4,6 +4,7 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   GET  /renderdeck/jobs                     -> downloads and uploads, with progress
   POST /renderdeck/download {url, kind}     -> fetch a Civitai or Hugging Face link in the background
   POST /renderdeck/upload?kind=..&name=..   -> receive a file sent from the phone (multipart field "file")
+  GET  /renderdeck/model_info?kind=..&name=.. -> Civitai's trigger words and base model for a file, found by its fingerprint
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
 civitai.com and huggingface.co, and an existing file is never overwritten.
 Civitai models that need sign-in: put your Civitai API key in the CIVITAI_API_TOKEN environment variable,
@@ -196,6 +197,55 @@ async def upload(request):
             j['status'], j['error'] = 'failed', str(e)
             if os.path.exists(path + '.part'):
                 os.remove(path + '.part')
+        return web.json_response({'error': str(e)}, status=400)
+
+
+CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_cache.json')
+_cache = None
+
+
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for block in iter(lambda: f.read(1 << 22), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+@routes.get('/renderdeck/model_info')
+async def model_info(request):
+    """What Civitai knows about a file already on this computer, found by its SHA-256: trigger words, base model, title.
+    The fingerprint and the answer are remembered in render_deck_cache.json, so each file is only read once."""
+    global _cache
+    import json
+    try:
+        kind, name = request.query.get('kind'), request.query.get('name') or ''
+        if kind not in KINDS:
+            raise ValueError('kind must be checkpoints or loras')
+        path = folder_paths.get_full_path(kind, name)
+        if not path:
+            raise ValueError('No such file')
+        if _cache is None:
+            _cache = json.load(open(CACHE_FILE, encoding='utf-8')) if os.path.exists(CACHE_FILE) else {}
+        st = os.stat(path)
+        key = '%s|%s|%d|%d' % (kind, name, st.st_size, int(st.st_mtime))
+        if key not in _cache:
+            sha = await asyncio.get_running_loop().run_in_executor(None, _sha256, path)
+            headers = {'Authorization': 'Bearer ' + _token()} if _token() else {}
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
+                async with s.get('https://civitai.com/api/v1/model-versions/by-hash/' + sha, headers=headers) as r:
+                    if r.status == 404:
+                        v = None
+                    elif r.status == 200:
+                        v = await r.json()
+                    else:
+                        raise ValueError('Civitai answered %d' % r.status)
+            _cache[key] = {'found': bool(v), 'words': (v or {}).get('trainedWords') or [], 'base': (v or {}).get('baseModel', ''),
+                           'title': ((v or {}).get('model') or {}).get('name', '')}
+            json.dump(_cache, open(CACHE_FILE, 'w', encoding='utf-8'), indent=1)
+        return web.json_response(_cache[key])
+    except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
 
 
