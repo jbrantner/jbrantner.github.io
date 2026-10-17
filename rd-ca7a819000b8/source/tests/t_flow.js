@@ -112,8 +112,11 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   // a written sentence becomes tag ideas phrase by phrase, plus optional extras
   await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForSelector('#ideas .hl');
   ok((await page.$$eval('#ideas .hl', s => s.map(x => x.textContent))).join('|')==='a girl|jumping jacks', 'sentence split into phrases');
-  await page.click('[data-ideas=replace]');
-  ok((await page.inputValue('#prompt'))==='1girl, solo, jumping, exercising, arms up', 'sentence swapped for picked tags: '+await page.inputValue('#prompt'));
+  const sentPrompt = async () => { await page.click('#graphBtn'); const g = JSON.parse(await page.textContent('#json')); await page.click('#scrim'); return textOf(g,'Prompt'); };
+  ok((await sentPrompt()).endsWith(', 1girl, solo, jumping, exercising, arms up') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'Send as tags sends the picked tags and leaves the words in the box');
+  await page.click('[data-pick=solo]'); ok(!(await sentPrompt()).includes('solo'), 'unticked tag is left out');
+  await page.click('[data-ideas=mode]'); ok((await sentPrompt()).endsWith(', A girl who is doing jumping jacks'), 'switched off, the words go as typed');
+  await page.click('[data-ideas=mode]'); await page.click('[data-pick=solo]');
   await page.click('[data-extra=upper_body]');
   ok((await page.inputValue('#prompt')).endsWith(', upper body'), 'extra tag added');
   await page.selectOption('[data-k=ckpt]', 'sdxl.safetensors'); await page.type('#prompt', 'smil'); await page.waitForTimeout(150);

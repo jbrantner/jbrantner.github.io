@@ -74,6 +74,9 @@ header h1 span{color:var(--accent)}
 .irow button i{font-style:normal;font-size:11px;color:var(--dim)}
 .irow button.on{border-color:var(--cyan);background:color-mix(in srgb,var(--cyan) 16%,var(--panel2))}
 .irow button.on::before{content:"✓";color:var(--cyan)}
+.irow.off{opacity:.45}
+.tagmode{min-height:34px;padding:5px 12px;border-radius:99px;border:1px solid var(--line);background:var(--bg);color:var(--soft);font-size:13px;font-weight:800}
+.tagmode.on{border-color:var(--cyan);color:var(--cyan);background:color-mix(in srgb,var(--cyan) 14%,var(--panel2))}
 .irow button.c1{color:#ff8a8a}.irow button.c3{color:#d68cff}.irow button.c4{color:#6fe39a}.irow button.c5,.irow button.c9{color:var(--pic)}
 
 /* blocks */
@@ -445,7 +448,7 @@ function buildGraph(){
   });
   const st = STYLES[styleKey(M)], tx = M.quality ? styleText(styleKey(M)) : {pos:'', neg:''};
   if(st.clipSkip) clip = [add('CLIPSetLastLayer', {stop_at_clip_layer:st.clipSkip, clip}, 'CLIP skip ' + -st.clipSkip, '--model'), 0];
-  const pos = add('CLIPTextEncode', {text:joinTags(tx.pos, S.prompt), clip}, 'Prompt', '--samp');
+  const pos = add('CLIPTextEncode', {text:joinTags(tx.pos, asTags(S.prompt)), clip}, 'Prompt', '--samp');
   const neg = add('CLIPTextEncode', {text:joinTags(tx.neg, S.negative), clip}, 'Avoid', '--samp');
   let pp = [pos,0], nn = [neg,0];
   on('cn').forEach((b,i) => {
@@ -509,6 +512,7 @@ async function go(){
   const p = problems(); showErr(p.length ? '<b>Before rendering:</b><br>' + p.map(esc).join('<br>') : ''); if(p.length){ buzz(); return; }
   const P = S.blocks.find(b=>b.type==='sampler');
   if(!P.lockSeed) P.seed = randSeed();
+  if(S.asTags && usesTags()) await loadTags(); // Send as tags needs the tag list before the graph is built
   const built = buildGraph(); save(); renderBlocks();
   job = {id:null, titles:built.titles, images:[], prog:0, seed:built.seed, prompt:S.prompt};
   $('#goBtn').textContent = 'Stop'; $('#goBtn').classList.add('busy'); status('Sending…'); bar(0.02); buzz();
@@ -744,7 +748,8 @@ $('#addBtn').onclick = () => {
   openSheet('#addSheet');
 };
 $('#tray').onclick = e => { const t = e.target.closest('[data-add]'); if(t && !t.disabled) addBlock(t.dataset.add); };
-$('#graphBtn').onclick = () => {
+$('#graphBtn').onclick = async () => {
+  if(S.asTags && usesTags()) await loadTags();
   const {graph, colors} = buildGraph();
   $('#nodeList').innerHTML = Object.entries(graph).map(([id,nd]) => `<div class="node" style="--c:var(${colors[id]})"><b>${id}</b> ${esc(nd._meta.title)}<code>${nd.class_type}</code></div>`).join('');
   $('#json').textContent = JSON.stringify(graph, null, 2);
@@ -906,25 +911,39 @@ function readPrompt(text){
   return pieces;
 }
 let IDEAS = null; // {pieces, picked: Set of tag names}
-const userOn = new Set(), userOff = new Set(); // chips the user tapped on or off, so a pick survives typing
+// chips the user tapped on or off, kept so a pick survives editing the sentence and reloading
+S.tagOn = S.tagOn || []; S.tagOff = S.tagOff || []; if(S.asTags==null) S.asTags = true;
 const norm = s => s.trim().toLowerCase().replace(/\\/g,'').replace(/ /g,'_');
+function pickedFor(pieces){
+  const on = new Set(S.tagOn), off = new Set(S.tagOff), picked = new Set();
+  pieces.forEach(p => p.phrases.forEach(ph => ph.tags.forEach((t,k) => { if((k < ph.tags.def || on.has(t.tag)) && !off.has(t.tag)) picked.add(t.tag); })));
+  return picked;
+}
+// what Render sends when "Send as tags" is on: tag pieces as typed, each sentence swapped for its picked tags, no repeats
+function asTags(text){
+  if(!S.asTags || !usesTags() || !TAGS) return text;
+  indexTags();
+  const pieces = readPrompt(text), picked = pickedFor(pieces), out = [], seen = new Set();
+  const put = s => { const k = norm(s); if(k && !seen.has(k)){ seen.add(k); out.push(s.trim()); } };
+  pieces.forEach(p => { if(p.isTag || !p.phrases.length) put(p.text); else p.phrases.forEach(ph => ph.tags.forEach(t => { if(picked.has(t.tag)) put(tagText(t)); })); });
+  return out.join(', ');
+}
 function updateIdeas(){
   const box = $('#ideas');
   if(!usesTags() || !TAGS || !S.prompt.trim()){ box.hidden = true; return; }
   indexTags();
-  const pieces = readPrompt(S.prompt), sentences = pieces.filter(p => !p.isTag && p.phrases.length);
-  const picked = new Set(); sentences.forEach(p => p.phrases.forEach(ph => ph.tags.forEach((t,k) => { if((k < ph.tags.def || userOn.has(t.tag)) && !userOff.has(t.tag)) picked.add(t.tag); })));
+  const pieces = readPrompt(S.prompt), sentences = pieces.filter(p => !p.isTag && p.phrases.length), picked = pickedFor(pieces);
   IDEAS = {pieces, picked};
-  const have = new Set(pieces.filter(p => p.isTag).map(p => norm(p.text)).concat([...picked]));
+  const have = new Set(pieces.filter(p => p.isTag).map(p => norm(p.text)).concat(S.asTags ? [...picked] : []));
   const extra = extras(have);
   let h = '';
   if(sentences.length){
-    h += `<div class="ihead"><b>Tags from your words</b><span>Tap to pick or unpick</span></div>`;
+    h += `<div class="ihead"><b>Tags from your words</b><button class="tagmode ${S.asTags?'on':''}" data-ideas="mode">${S.asTags ? '✓ Send as tags' : 'Send my words'}</button></div>`;
     sentences.forEach(p => p.phrases.forEach(ph => {
-      h += `<div class="irow"><span class="hl">${esc(ph.words)}</span>${ph.tags.map(t => `<button data-pick="${esc(t.tag)}" class="c${t.cat} ${picked.has(t.tag)?'on':''}">${esc(tagText(t))}</button>`).join('')}</div>`; }));
+      h += `<div class="irow ${S.asTags?'':'off'}"><span class="hl">${esc(ph.words)}</span>${ph.tags.map(t => `<button data-pick="${esc(t.tag)}" class="c${t.cat} ${picked.has(t.tag)?'on':''}">${esc(tagText(t))}</button>`).join('')}</div>`; }));
     const left = sentences.flatMap(p => p.left);
     if(left.length) h += `<p class="note">No tag found for: ${esc(left.join(', '))}</p>`;
-    h += `<div class="btnrow"><button class="btn hot" data-ideas="replace">Use these tags</button><button class="btn" data-ideas="add">Add, keep my words</button></div>`;
+    h += `<p class="note">${S.asTags ? 'Render sends: ' + esc(asTags(S.prompt)) : 'Render sends your words as typed. Turn on Send as tags to swap each sentence for the ticked tags.'}</p>`;
   }
   if(extra.length){
     h += `<div class="ihead"><b>Optional extras</b><span>Tap to add</span></div><div class="irow">${extra.map(([t,why]) => `<button data-extra="${esc(t.tag)}" class="c${t.cat}">${esc(tagText(t))}<i>${why}</i></button>`).join('')}</div>`;
@@ -946,19 +965,13 @@ function extras(have){
 }
 $('#ideas').addEventListener('click', e => {
   const b = e.target.closest('button'); if(!b || !IDEAS) return;
-  if(b.dataset.pick){ const n = b.dataset.pick, on = !IDEAS.picked.has(n); on ? IDEAS.picked.add(n) : IDEAS.picked.delete(n); (on ? userOn : userOff).add(n); (on ? userOff : userOn).delete(n); updateIdeas(); buzz(); return; }
-  if(b.dataset.extra){ const t = TAGMAP.get(b.dataset.extra); S.prompt = S.prompt.replace(/[,\s]*$/, '') + ', ' + tagText(t); }
-  else if(b.dataset.ideas){
-    // the picked tags, in the order they were found, go where the first sentence was
-    const tags = [], seen = new Set();
-    IDEAS.pieces.forEach(p => p.phrases.forEach(ph => ph.tags.forEach(t => { if(IDEAS.picked.has(t.tag) && !seen.has(t.tag)){ seen.add(t.tag); tags.push(tagText(t)); } })));
-    const kept = IDEAS.pieces.filter(p => p.isTag || !p.phrases.length || b.dataset.ideas==='add').map(p => p.text);
-    const firstSentence = IDEAS.pieces.findIndex(p => !p.isTag && p.phrases.length);
-    const out = IDEAS.pieces.map(p => p.text).filter(t => kept.includes(t));
-    out.splice(b.dataset.ideas==='add' ? out.length : Math.min(firstSentence, out.length), 0, ...tags);
-    S.prompt = out.filter((t,i) => out.findIndex(x => norm(x)===norm(t))===i).join(', ');
+  if(b.dataset.pick){
+    const n = b.dataset.pick, on = !IDEAS.picked.has(n);
+    S.tagOn = S.tagOn.filter(x => x!==n); S.tagOff = S.tagOff.filter(x => x!==n); (on ? S.tagOn : S.tagOff).push(n);
   }
-  $('#prompt').value = S.prompt; save(); updateIdeas(); buzz();
+  else if(b.dataset.extra){ const t = TAGMAP.get(b.dataset.extra); S.prompt = [S.prompt.replace(/[,\s]*$/, ''), tagText(t)].filter(Boolean).join(', '); $('#prompt').value = S.prompt; }
+  else if(b.dataset.ideas==='mode') S.asTags = !S.asTags;
+  save(); updateIdeas(); buzz();
 });
 let ideasTimer = 0;
 $('#prompt').addEventListener('input', () => { clearTimeout(ideasTimer); ideasTimer = setTimeout(updateIdeas, 300); });
