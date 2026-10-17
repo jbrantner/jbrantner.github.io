@@ -278,7 +278,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="row"><input id="tokIn" type="password" placeholder="Civitai API key" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off"></div>
   <div class="btnrow"><button class="btn" id="tokSave">Save key</button><button class="btn" id="tokClear">Remove key</button></div>
   <div id="getMissing" class="warn" hidden>Your render computer needs the Render Deck helper: copy <code>render_deck_models.py</code> into <code>ComfyUI/custom_nodes</code> and restart ComfyUI.</div>
-  <div class="lbl">Downloads</div>
+  <div class="lbl lblrow">Downloads <button class="chipbtn" id="jobsRefresh">↻ Refresh</button></div>
   <div class="jobs" id="jobList"><p class="note">Nothing yet.</p></div>
 </div></div>
 
@@ -322,7 +322,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.17'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-17.18'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -456,6 +456,7 @@ async function connect(){
     openSocket();
     setConn('on', 'Connected');
     if(S.queue.length) checkQueue(true);
+    refreshJobs();
     toast('Connected · ' + info.ckpt.length + ' models found');
     closeSheets(); render();
   }catch(e){
@@ -824,7 +825,8 @@ function blockBody(b){
       <div class="lbl" style="margin-top:8px">Before your prompt</div><textarea data-st="pos" style="min-height:60px">${esc(tx.pos)}</textarea>
       <div class="lbl">Before your negative</div><textarea data-st="neg" style="min-height:84px">${esc(tx.neg)}</textarea>
       <div class="row"><button class="chipbtn" data-do="resetStyle">Reset to default</button></div></details>` : ''}`}
-    <div class="row"><button class="chipbtn" data-do="get" data-v="checkpoints">⬇ Add a model</button></div>
+    ${dlLine('checkpoints')}
+    <div class="row"><button class="chipbtn" data-do="get" data-v="checkpoints">⬇ Add a model</button><button class="chipbtn" data-do="relist">↻ Refresh list</button></div>
     <p class="note">Checkpoint models only for now. Flux and other split models come later.</p>`; }
   if(b.type==='sampler'){ const [W,H] = sizeOf(b);
     return `<div class="row"><label>Size</label>${seg('size',[[512,'Small'],[768,'Medium'],[1024,'Large']], b.size)}</div>
@@ -846,7 +848,8 @@ function blockBody(b){
     <div class="row" style="padding-left:92px"><button class="chipbtn" data-do="styleonly" style="${b.styleOnly?'border-color:var(--lora);color:var(--lora)':''}">${b.styleOnly ? '✓ Style only' : 'Style only: off'}</button></div>
     ${b.styleOnly ? `${slider('startStep','LoRA from step',0,10,1,b.startStep ?? 4)}
     <p class="note">Keeps the model's own poses and layout and takes the LoRA's character designs and style. The LoRA switches on at this step: 0–2 for more of its designs, 6–8 for more of the model's variety. For full-strength posing put the pose in the prompt.</p>` : ''}
-    <div class="row"><button class="chipbtn" data-do="get" data-v="loras">⬇ Add a LoRA</button></div>`; }
+    ${dlLine('loras')}
+    <div class="row"><button class="chipbtn" data-do="get" data-v="loras">⬇ Add a LoRA</button><button class="chipbtn" data-do="relist">↻ Refresh list</button></div>`; }
   if(b.type==='cn') return `<div class="row"><select data-k="model">${opts(I.cn, b.model, info ? 'No ControlNets found' : 'Connect to see your ControlNets')}</select></div>
     <div class="thumb">${b.preview ? `<img src="${esc(b.preview)}" alt="">` : '<div class="ph">＋</div>'}<button class="chipbtn" data-do="pick">${b.image?'Change picture':'Pick guide picture'}</button></div>
     <div class="row"><label>Prep</label>${seg('prep',[['none','Use as is'],['edges','Find edges']], b.prep)}</div>
@@ -969,6 +972,7 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='styleonly'){ b.styleOnly = !b.styleOnly; if(b.startStep==null) b.startStep = 4; }
   else if(act==='lw'){ S.loraWords[b.lora] = [S.loraWords[b.lora], d.dataset.v].filter(Boolean).join(', '); }
   else if(act==='get'){ openGet(d.dataset.v); return; }
+  else if(act==='relist'){ refreshLists().then(() => toast('Lists updated: ' + info.ckpt.length + ' models, ' + info.lora.length + ' LoRAs')); refreshJobs(); return; }
   else if(act==='rec'){ syncRec(true); toast('Painting reset to ' + STYLES[styleKey(b)].name + ' settings'); }
   else if(act==='resetStyle'){ delete S.styleText[styleKey(b)]; }
   else if(act==='pick'){ pickFor = b; $('#filePick').value = ''; $('#filePick').click(); return; }
@@ -1304,7 +1308,7 @@ $('#tagRes').onclick = e => {
 };
 
 // ---------- adding models and LoRAs to the render computer (needs render_deck_models.py in ComfyUI) ----------
-let getKind = 'checkpoints', jobTimer = 0;
+let getKind = 'checkpoints', jobTimer = 0, liveJobs = [];
 const handledJobs = new Set(); let jobsSeen = false; // jobs already finished when the sheet first opens are applied without a toast
 function openGet(kind){
   if(!info || S.test){ toast('Connect to your render computer first', true); return; }
@@ -1313,11 +1317,14 @@ function openGet(kind){
 function drawGetKind(){ $('#getKind').innerHTML = [['checkpoints','Model'],['loras','LoRA']].map(([v,t]) => `<button data-v="${v}" class="${getKind===v?'on':''}">${t}</button>`).join(''); }
 $('#getKind').onclick = e => { const b = e.target.closest('[data-v]'); if(b){ getKind = b.dataset.v; drawGetKind(); } };
 $('#getBtn').onclick = () => openGet();
+$('#jobsRefresh').onclick = () => { refreshJobs(); refreshLists(); };
 const mb = n => n >= 1024**3 ? (n/1024**3).toFixed(2) + ' GB' : Math.round(n/1024**2) + ' MB';
 async function refreshJobs(){
   clearTimeout(jobTimer);
   let j; try{ const r = await fetch(base() + '/renderdeck/jobs', {cache:'no-store'}); if(r.status===404){ $('#getMissing').hidden = false; return; } j = await r.json(); }catch(e){ return; }
   $('#getMissing').hidden = true;
+  const was = liveJobs.length; liveJobs = j.jobs.filter(x => !['done','failed'].includes(x.status));
+  if((liveJobs.length || was) && !$('#blocks').contains(document.activeElement)) renderBlocks(); // not while typing in a block
   $('#tokNote').textContent = j.token ? 'A Civitai API key is saved on the render computer, so sign-in-only models download too.' : "Some Civitai models only download when you're signed in. Paste your Civitai API key (civitai.com › Account settings › API Keys) once; it's saved on the render computer only.";
   $('#tokClear').hidden = !j.token;
   $('#jobList').innerHTML = j.jobs.length ? j.jobs.map(x => { const pc = x.total ? Math.min(100, x.done/x.total*100) : 0;
@@ -1328,6 +1335,11 @@ async function refreshJobs(){
   fresh.forEach(x => { handledJobs.add(x.id); modelAdded(x, !jobsSeen); }); jobsSeen = true;
   if(fresh.length) refreshLists();
   if(j.jobs.some(x => !['done','failed'].includes(x.status))) jobTimer = setTimeout(refreshJobs, 1500);
+}
+// "Downloading X · 45%" under the Model or LoRA block while the render computer is still fetching one
+function dlLine(kind){
+  const js = liveJobs.filter(x => x.kind===kind); if(!js.length) return '';
+  return js.map(x => `<p class="note">⬇ ${x.status==='uploading' ? 'Sending' : 'Downloading'} ${esc(x.title || x.name)} · ${x.total ? Math.round(x.done/x.total*100) + '%' : mb(x.done)}. It appears in the list when done.</p>`).join('');
 }
 // a finished download: remember its kind and activation words when Civitai told us
 function modelAdded(x, quiet){

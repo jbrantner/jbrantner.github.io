@@ -99,7 +99,7 @@ async def _civitai(session, url):
     mtype = (meta.get('type') or (v.get('model') or {}).get('type') or '').lower()
     kind = 'loras' if mtype in ('lora', 'locon', 'dora', 'lycoris') else 'checkpoints' if mtype == 'checkpoint' else None
     return dict(file_url=f['downloadUrl'], name=f['name'], size=int(f.get('sizeKB', 0) * 1024), kind=kind,
-                base=v.get('baseModel', ''), words=v.get('trainedWords') or [], title=(meta.get('name') or (v.get('model') or {}).get('name') or ''))
+                base=v.get('baseModel', ''), words=v.get('trainedWords') or [], title=((v.get('model') or {}).get('name') if vid else meta.get('name')) or '')
 
 
 async def _download(j, file_url, path):
