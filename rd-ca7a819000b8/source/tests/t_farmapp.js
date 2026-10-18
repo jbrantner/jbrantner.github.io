@@ -7,7 +7,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const RU = 'https://jordo-desktop.tail.ts.net', MU = 'https://jordo-main.tail.ts.net';
 const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetensors']]}}}, LoraLoader:{input:{required:{lora_name:[['pixel.safetensors']]}}},
   KSampler:{input:{required:{sampler_name:[['euler','dpmpp_2m']], scheduler:[['normal','karras']]}}}};
-let rebootAt = 0;
+let rebootAt = 0, agentCalls = [], mainClosed = false;
 const F = {pcs:[], off:[], jobs:[], done:[], adds:[], cancels:[], pcCalls:[]};
 const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url:u, name:u===RU ? 'Render' : 'Main', online:true, off:F.off.includes(u), load:0, copies:[], why:''})),
   jobs:F.jobs.map(j => { const c = Object.assign({}, j); delete c.graph; return c; }), done:F.done.filter(d => d.t_done > since)});
@@ -24,6 +24,9 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
     await page.route(u + '/**', async r => {
       const p = new URL(r.request().url()), body = r.request().method()==='POST' ? JSON.parse(r.request().postData() || '{}') : null;
       if(p.pathname==='/object_info') return r.fulfill({ json:OI });
+      if(u===MU && p.pathname.startsWith('/agent/')){ if(p.pathname==='/agent/status') return r.fulfill({ json:{agent:1, comfy:mainClosed ? 'down' : 'up', wanted:!mainClosed, learned:true} });
+        agentCalls.push(p.pathname); if(p.pathname==='/agent/close') mainClosed = true; if(p.pathname==='/agent/start') mainClosed = false; return r.fulfill({ json:{message:'ok'} }); }
+      if(u===MU && mainClosed) return r.abort();
       if(u===MU && p.pathname==='/api/manager/reboot'){ rebootAt = Date.now(); return r.fulfill({ json:{} }); }
       if(u===MU && rebootAt && Date.now() - rebootAt < 5000) return r.abort();
       if(p.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
@@ -79,16 +82,29 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   ok(await waitFor(() => F.cancels.includes(key)), 'cancel goes to the farm');
   await page.click(`#pcList [data-pc="${MU}"]`);
   ok(await waitFor(() => F.pcCalls.some(c => c.off.includes(MU))), 'switching Main off goes to the farm');
-  // restart ComfyUI on Main: the app asks Manager to reboot, sees it go down and come back
+  // Render has no agent: its Restart goes through ComfyUI-Manager, and the app sees it go down and come back
+  // (here Main plays that part through Manager first, then with its agent)
+  await page.evaluate(() => { const p = pcOf('https://jordo-main.tail.ts.net'); p.agent = null; S.agents = []; drawQueue(); });
   page.once('dialog', d => d.accept());
   await page.click(`#pcList [data-restart="${MU}"]`);
-  ok(await waitFor(() => rebootAt > 0), 'Restart asks Main\'s ComfyUI-Manager to reboot');
+  ok(await waitFor(() => rebootAt > 0), 'Restart without the agent asks ComfyUI-Manager to reboot');
   await until(() => /Restarting/.test(document.querySelector('#pcList').textContent));
   ok(true, 'Main shows as restarting');
-  await until(() => document.querySelectorAll('#pcDots .dot.on').length===1, null, 6000);
-  ok(true, 'its dot goes grey while it is down');
   await until(() => !/Restarting/.test(document.querySelector('#pcList').textContent) && document.querySelectorAll('#pcDots .dot.on').length===2, null, 20000);
   ok(true, 'and green again once it is back');
+  // with the agent on Main: Close, then Start
+  await page.evaluate(() => closeSheets()); await page.click('#queueBtn'); await page.waitForSelector('#queueSheet.open');
+  await page.waitForSelector(`#pcList [data-agent="close"][data-url="${MU}"]`);
+  ok(true, 'with the agent, Main offers Restart and Close');
+  page.once('dialog', d => d.accept());
+  await page.click(`#pcList [data-agent="close"][data-url="${MU}"]`);
+  ok(await waitFor(() => agentCalls.includes('/agent/close')), 'Close asks Main\'s agent to close ComfyUI');
+  await until(() => document.querySelector('#pcDots .dot.test') && /ComfyUI is closed/.test(document.querySelector('#pcList').textContent), null, 8000);
+  ok(true, 'Main shows a yellow dot (computer on, ComfyUI closed) and says so');
+  await page.click(`#pcList [data-agent="start"][data-url="${MU}"]`);
+  ok(await waitFor(() => agentCalls.includes('/agent/start')), 'Start asks the agent to start ComfyUI');
+  await until(() => document.querySelectorAll('#pcDots .dot.on').length===2, null, 20000);
+  ok(true, 'and Main is green again once ComfyUI answers');
   await page.evaluate(() => closeSheets());
   await page.screenshot({ path: path.join(__dirname, 'shot-farm-top.png') });
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));

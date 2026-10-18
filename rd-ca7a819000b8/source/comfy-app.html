@@ -355,7 +355,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.9'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.10'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -586,9 +586,9 @@ function openSocket(p){
   const home = () => p.url===base() && !S.test;
   const w = p.ws = new WebSocket(p.url.replace(/^http/,'ws') + '/ws?clientId=' + clientId); w.binaryType = 'arraybuffer';
   w.onmessage = ev => onSocket(p, ev);
-  w.onclose = () => { if(p.ws!==w) return; p.ws = null; if(home()) setConn('off','Reconnecting…');
+  w.onclose = () => { if(p.ws!==w) return; p.ws = null; if(home()) setConn('off','Reconnecting…'); schedule(500);
     setTimeout(() => { if(!S.test && !p.ws && (home() ? info : p.online)) openSocket(p); }, home() ? 2000 : 6000); };
-  w.onopen = () => { if(home()) setConn('on', pcName(p.url)); };
+  w.onopen = () => { if(home()) setConn('on', pcName(p.url)); if(!p.online) schedule(200); }; // a socket that comes back means the computer did: look now
 }
 function closeSockets(){ Object.values(PCS).forEach(p => { if(p.ws){ p.ws.onclose = null; p.ws.close(); p.ws = null; } }); }
 function onSocket(p, ev){
@@ -912,6 +912,7 @@ async function tick(away){
   if(S.test || !info || ticking) return; ticking = true;
   try{
     await Promise.all(allPcs().map(p => pollPc(p)));
+    await Promise.all(allPcs().filter(p => !p.online || p.restarting).map(p => agentLook(p)));
     await findFarm();
     if(farm) await farmLook(away);
     let back = 0;
@@ -1105,6 +1106,7 @@ function farmView(v, away){
 function pcWhat(p, long){
   const mine = S.queue.find(e => e.srv===p.url && e.state==='running'), off = S.pcOff.includes(p.url);
   if(p.restarting) return 'Restarting ComfyUI…';
+  if(!p.online && p.agent) return p.agent.comfy==='starting' ? 'ComfyUI is starting…' : p.agent.wanted ? 'ComfyUI stopped; starting it again shortly' : 'ComfyUI is closed';
   let w = !p.online ? (long ? 'Not reachable' : 'Offline') : mine ? (mine.prog ? mine.prog.text : 'Starting') + (off && long ? ', then stops taking renders' : '')
     : off ? (long ? 'Not taking renders' : 'Switched off') : p.load ? (long ? 'Busy with something else' : 'Busy') : 'Free';
   if(p.copies.length) w += long ? ' · copying ' + p.copies.map(c => c.name + (c.total ? ' ' + Math.round(c.done/c.total*100) + '%' : '')).join(', ') : ' · copying models';
@@ -1116,8 +1118,10 @@ function drawPcs(){
   const ps = allPcs(), many = ps.length > 1;
   $('#pcDots').hidden = !many; $('#connDot').hidden = many; $('#connText').hidden = many;
   if(!many) return;
-  $('#pcDots').innerHTML = ps.map(p => `<span class="${p.online ? '' : 'off'}" title="${esc(pcName(p.url))}: ${p.online ? 'online' : 'offline'}"><i class="dot ${p.online ? 'on' : ''}"></i>${esc(pcName(p.url).charAt(0))}</span>`).join('');
-  $('#connPill').setAttribute('aria-label', ps.map(p => pcName(p.url) + (p.online ? ' online' : ' offline')).join(', '));
+  const half = p => !p.online && p.agent && p.agent.comfy!=='up'; // the computer is on, ComfyUI isn't (closed, crashed or starting)
+  const word = p => p.online ? 'online' : half(p) ? 'on, ComfyUI not running' : 'offline';
+  $('#pcDots').innerHTML = ps.map(p => `<span class="${p.online ? '' : 'off'}" title="${esc(pcName(p.url))}: ${word(p)}"><i class="dot ${p.online ? 'on' : half(p) ? 'test' : ''}"></i>${esc(pcName(p.url).charAt(0))}</span>`).join('');
+  $('#connPill').setAttribute('aria-label', ps.map(p => pcName(p.url) + ' ' + word(p)).join(', '));
 }
 
 
@@ -1133,6 +1137,34 @@ async function restartPc(p){
   if(!went){ toast(none ? n + " can't restart from here: ComfyUI-Manager isn't installed there" : n + ' did not restart', true); return; }
   p.restarting = Date.now(); p.online = false; toast('Restarting ComfyUI on ' + n + '…'); buzz(); drawQueue(); schedule(3000);
 }
+// ---------- the Render Deck agent on each computer (render_deck_agent.py): starts, restarts and closes ComfyUI ----------
+// It runs outside ComfyUI, so it answers even when ComfyUI is closed or has crashed, at <computer>/agent.
+async function agentLook(p){
+  try{ const r = await fetch(p.url + '/agent/status', Object.assign({cache:'no-store'}, within(4000)));
+    const j = r.ok ? await r.json() : null; p.agent = j && j.agent ? j : null; }
+  catch(e){ p.agent = null; }
+  return p.agent;
+}
+function pcButtons(p){
+  const b = (act, label, on) => `<button class="chipbtn" data-agent="${act}" data-url="${esc(p.url)}" ${on ? '' : 'disabled'}>${label}</button>`;
+  if(p.agent || (S.agents || []).includes(p.url)){
+    if(p.restarting || (p.agent && p.agent.comfy==='starting')) return b('restart', '↻ Restart', false);
+    return p.online ? b('restart', '↻ Restart', true) + b('close', '■ Close', true) : b('start', '▶ Start', !!p.agent);
+  }
+  return `<button class="chipbtn" data-restart="${esc(p.url)}" ${p.online && !p.restarting ? '' : 'disabled'}>↻ Restart</button>`;
+}
+async function agentDo(p, act){
+  const n = pcName(p.url);
+  if(act==='close' && !confirm('Close ComfyUI on ' + n + '? Anything it is painting stops, and it stays closed until you start it.')) return;
+  if(act==='restart' && !confirm('Restart ComfyUI on ' + n + '? Anything it is painting stops; queued renders carry on once it is back.')) return;
+  let j; try{ j = await (await fetch(p.url + '/agent/' + act, {method:'POST', headers:JSONH, body:'{}'})).json(); }
+  catch(e){ toast("Couldn't reach " + n, true); return; }
+  toast(n + ': ' + (j.message || j.error || 'done'), !!j.error); buzz();
+  if(act==='close'){ p.online = false; p.agent = Object.assign(p.agent || {agent:1}, {comfy:'down', wanted:false}); }
+  else { p.restarting = Date.now(); p.wentDown = act==='start'; p.online = false; }
+  drawQueue(); schedule(3000);
+}
+
 // called from pollPc: a restarting computer is back once it answers again after going away (or after a minute)
 function restarted(p, up){
   if(!p.restarting) return;
@@ -1155,7 +1187,7 @@ function drawQueue(){
   $('#pcList').innerHTML = ps.length ? ps.map(p => {
     const off = S.pcOff.includes(p.url), what = pcWhat(p, true);
     return `<div class="pcrow"><i class="dot ${p.online ? 'on' : ''}"></i><div class="grow"><b>${esc(pcName(p.url))}</b><small>${esc(what)}</small>${p.syncNote ? `<small class="warn">${esc(p.syncNote)}</small>` : ''}</div>
-      <button class="chipbtn" data-restart="${esc(p.url)}" ${p.online && !p.restarting ? '' : 'disabled'}>↻ Restart</button>
+      ${pcButtons(p)}
       ${ps.length > 1 ? `<button class="tog ${off ? '' : 'on'}" data-pc="${esc(p.url)}" style="--c:var(--cyan)" aria-label="Let ${esc(pcName(p.url))} take renders"></button>` : ''}</div>`; }).join('') : '';
   $('#qList').innerHTML = S.queue.length ? S.queue.map(e => {
     const p = e.srv && e.srv!=='test' ? pcOf(e.srv) : null, where = e.srv ? pcName(e.srv) : e.farm ? 'Next free computer' : pcName(e.home), run = e.state==='running', big = run && openJobs.has(e.key);
@@ -1170,8 +1202,10 @@ function drawQueue(){
       ${big ? `<img class="jbig" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="">` : ''}</div>`; }).join('')
     : '<p class="note">Nothing queued. Each Render tap adds its renders here.</p>';
 }
-$('#queueBtn').onclick = () => { openSheet('#queueSheet'); drawQueue(); if(S.queue.length) tick(); };
-$('#pcList').onclick = e => { const rs = e.target.closest('[data-restart]'); if(rs){ restartPc(pcOf(rs.dataset.restart)); return; }
+$('#queueBtn').onclick = () => { openSheet('#queueSheet'); drawQueue(); if(S.queue.length) tick();
+  allPcs().forEach(p => agentLook(p).then(a => { if(a && !(S.agents = S.agents || []).includes(p.url)){ S.agents.push(p.url); save(); } drawQueue(); })); };
+$('#pcList').onclick = e => { const ac = e.target.closest('[data-agent]'); if(ac){ agentDo(pcOf(ac.dataset.url), ac.dataset.agent); return; }
+  const rs = e.target.closest('[data-restart]'); if(rs){ restartPc(pcOf(rs.dataset.restart)); return; }
   const t = e.target.closest('[data-pc]'); if(!t) return; const u = t.dataset.pc;
   S.pcOff = S.pcOff.includes(u) ? S.pcOff.filter(x => x!==u) : S.pcOff.concat(u); save(); drawQueue(); buzz();
   if(farm) farmCall('/pcs', farmPcs()); if(S.queue.length) tick(); };
@@ -1481,7 +1515,8 @@ $('#graphBtn').onclick = async () => {
 };
 $('#copyJson').onclick = async () => { try{ await navigator.clipboard.writeText($('#json').textContent); toast('Copied'); }catch(e){ toast('Copy did not work here', true); } };
 $('#saveJson').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('#json').textContent], {type:'application/json'})); a.download = 'render-deck-graph.json'; a.click(); };
-$('#openSettings').onclick = $('#connPill').onclick = () => { render(); openSheet('#setSheet'); };
+$('#openSettings').onclick = () => { render(); openSheet('#setSheet'); };
+$('#connPill').onclick = () => { if(allPcs().length > 1){ tick(); $('#queueBtn').onclick(); } else { render(); openSheet('#setSheet'); } }; // the dots: check now and show each computer
 $('#server').oninput = e => { S.server = e.target.value; save(); };
 $('#srvSeg').onclick = e => { const b = e.target.closest('[data-srv]'); if(!b) return;
   if(b.dataset.srv==='new'){ S.server = ''; $('#server').value = ''; $('#server').focus(); return; }
@@ -1873,7 +1908,7 @@ async function checkUpdate(){
     const v = (t.match(/APP_VERSION = '([^']+)'/) || [])[1]; if(v && v !== APP_VERSION) $('#updBtn').hidden = false; }catch(e){}
 }
 $('#updBtn').onclick = () => location.reload();
-document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible'){ checkUpdate(); if(S.queue.length && info && !S.test) tick(true); else autoSync(); } });
+document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible'){ checkUpdate(); if(info && !S.test) tick(true); else if(!S.test && S.server) connect(); } }); // the dots and the queue catch up straight away
 
 // ---------- your renders: browse the output folder on the render computer and delete what you don't want ----------
 let lib = {items:[], total:0, selecting:false, picked:new Set(), cur:null, shared:false};
