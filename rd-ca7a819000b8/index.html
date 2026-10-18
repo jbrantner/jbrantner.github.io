@@ -420,7 +420,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.19'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.20'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1805,8 +1805,8 @@ const PLAIN = {
   'brainwashed':['mind control','empty eyes'], 'mind controlled':['mind control','empty eyes'], 'trance':['hypnosis','empty eyes'],
   'happy':['smile','happy'], 'laughing':['laughing','smile','open mouth'], 'sad':['sad','tears'],
 };
-const STOP = new Set('a an the one who whom which that this these those is are was were be been being am do does doing did has have having and or but of in on at to into onto with by for as while her his their its she he they it them him some very really quite just so there here'.split(' '));
-const LEAD = new Set('a an the one some at in on under with into onto by'.split(' ')); // dropped from the front of a phrase before looking it up
+const STOP = new Set('another other second a an the one who whom which that this these those is are was were be been being am do does doing did has have having and or but of in on at to into onto with by for as while her his their its she he they it them him some very really quite just so there here'.split(' '));
+const LEAD = new Set('another other second a an the one some at in on under with into onto by'.split(' ')); // dropped from the front of a phrase before looking it up
 let TAGMAP = null, ALIAS = null;
 function indexTags(){
   if(TAGMAP || !TAGS) return; TAGMAP = new Map(); ALIAS = new Map();
@@ -1815,7 +1815,7 @@ function indexTags(){
 const findTag = name => TAGMAP.get(name.replace(/ /g,'_')) || ALIAS.get(name.replace(/ /g,'_'));
 // tags for one phrase: the everyday-word list, then the tag or alias itself, then simple plural/singular forms, then near tags
 function lookup(words){
-  const exact = words.length > 1 && findTag(words.join(' '));
+  const exact = words.length > 1 && !STOP.has(words[words.length-1]) && findTag(words.join(' ')); // "sitting on" is not sitting on person
   if(exact) return withNear([exact], 1); // a tag typed word for word, like "on back" or "hand on own chest"
   let w = words.slice(); while(w.length > 1 && LEAD.has(w[0])) w.shift();
   const key = w.join(' '); if(STOP.has(w[w.length-1]) && !PLAIN[key]) return null; // "sitting on" is not a tag, "sitting" is
@@ -1852,18 +1852,18 @@ function readPrompt(text){
   const pieces = [], re = /[^,\n]+/g; let m;
   while((m = re.exec(text))){
     const raw = m[0], s = raw.trim(); if(!s) continue;
-    const words = s.toLowerCase().match(/[a-z0-9'-]+/g) || [];
+    const words = s.toLowerCase().match(/[a-z0-9'-]+/g) || [], orig = s.match(/[a-zA-Z0-9'-]+/g) || [];
     const k = s.toLowerCase().replace(/\\/g,'').replace(/ /g,'_');
     // a single word that is another name for a tag ("zelda") is read like a phrase so it becomes the real tag
     const isTag = TAGMAP.has(k) || /^\(.*\)$/.test(s) || (words.length < 2 && !(ALIAS.has(k) && ALIAS.get(k).n >= 100));
-    const piece = {text:s, start:m.index + raw.indexOf(s), isTag, phrases:[], left:[]};
+    const piece = {text:s, start:m.index + raw.indexOf(s), isTag, words, phrases:[], left:[], parts:[]}; // parts: phrases and leftover words in order
     if(!isTag){
       let i = 0;
       while(i < words.length){
-        const run = describe(words, i); if(run){ piece.phrases.push(run); i += run.len; continue; }
+        const run = describe(words, i); if(run){ piece.phrases.push(run); piece.parts.push(run); i += run.len; continue; }
         let hit = null, len = Math.min(6, words.length - i);
         for(; len >= 1; len--){ const tags = lookup(words.slice(i, i+len)); if(tags){ hit = {words:words.slice(i, i+len).join(' '), tags}; break; } }
-        if(hit){ piece.phrases.push(hit); i += len; } else { if(!STOP.has(words[i])) piece.left.push(words[i]); i++; }
+        if(hit){ piece.phrases.push(hit); piece.parts.push(hit); i += len; } else { if(!STOP.has(words[i])) piece.left.push(words[i]); piece.parts.push(orig[i] || words[i]); i++; }
       }
     }
     pieces.push(piece);
@@ -1882,25 +1882,57 @@ function pickedFor(pieces){
 }
 // what Render sends when "Send as tags" is on: tag pieces as typed, each sentence swapped for its picked tags, no repeats
 const COUNTS = new Set(['solo','1girl','2girls','3girls','4girls','5girls','6+girls','multiple_girls','1boy','2boys','3boys','4boys','5boys','6+boys','multiple_boys','1other','2others','3others','multiple_others','no_humans']);
-// the characters named in the prompt (typed as tags, found in a sentence, or added), each as girl, boy or other
+// people described in the words, read across the whole prompt so "a girl hitting another girl" is two girls:
+// "a", "another", "her sister" bring in someone new; "the girl", "she" or the same "her sister" again is someone already there
+const GIRLS = 'girl woman lady female sister daughter mother mom mum wife girlfriend schoolgirl'.split(' '), BOYS = 'boy man guy male brother son father dad husband boyfriend schoolboy'.split(' ');
+const PLURAL = {girls:'girl', women:'girl', ladies:'girl', females:'girl', sisters:'girl', daughters:'girl', schoolgirls:'girl', twins:'',
+  boys:'boy', men:'boy', guys:'boy', males:'boy', brothers:'boy', sons:'boy', schoolboys:'boy'};
+const NUMS = {one:1, two:2, both:2, pair:2, twin:2, three:3, four:4, five:5, six:6, seven:7, eight:8};
+const DETS = new Set('a an one another second other the this that her his their my your our both'.split(' '));
+function sentencePeople(pieces){
+  const out = [], seen = new Set(), n = k => out.filter(w => w[1]===k).reduce((a, w) => a + (w[2] || 1), 0);
+  pieces.forEach(p => { if(p.isTag) return; const W = p.words.map(w => w.replace(/'s?$/, ''));
+    W.forEach((w, i) => {
+      const plural = PLURAL[w] != null, sex = plural ? PLURAL[w] : GIRLS.includes(w) ? 'girl' : BOYS.includes(w) ? 'boy' : null;
+      if(!sex) return;
+      let det = '', num = 0, j = i - 1; // look back past a few describing words ("her little sister", "two tall girls")
+      for(; j >= 0 && j >= i - 3; j--){ const v = W[j]; if(NUMS[v] || /^\d+$/.test(v)) num = num || NUMS[v] || +v; if(DETS.has(v)){ det = v; break; } if(STOP.has(v) || GIRLS.includes(v) || BOYS.includes(v)) break; }
+      const label = W.slice(Math.max(j, 0, i - 3), i + 1).filter(Boolean).join(' '), key = (/^(her|his|their|my|your|our)$/.test(det) ? det + ' ' : '') + w;
+      if(plural){
+        const have = n(sex);
+        if(num > 1 && !(['the','both'].includes(det) && have >= num)) out.push([label, sex, num]);
+        else if(!num && have < 2) out.push([label, sex, 2 - have, true]); // "girls": more than one, number unknown
+        return;
+      }
+      const isNew = ['a','an','one','another','second'].includes(det) ? !(det !== 'another' && det !== 'second' && /^(is|was|as|are|like)$/.test(W[j-1] || '') && n(sex)) // "she is a girl who" describes someone already there
+        : det === 'other' ? n(sex) < 2
+        : /^(her|his|their|my|your|our)$/.test(det) ? !seen.has(key)
+        : !seen.has(key) && !(['girl','woman','lady','female','boy','man','guy','male'].includes(w) && n(sex)); // "the girl" is the girl already there
+      seen.add(key); seen.add(w);
+      if(isNew) out.push([label, sex]);
+    });
+  });
+  return out;
+}
+// the characters named in the prompt (typed as tags, found in a sentence, or added) and the people described, each as girl, boy or other
 function peopleOf(pieces){
   if(!CHARS.size) return null;
   if(pieces.some(p => p.isTag && COUNTS.has(norm(p.text)))) return null; // count tags typed by hand win
-  const picked = pickedFor(pieces), names = [], plain = [];
+  const picked = pickedFor(pieces), names = [];
   const take = n => { if(CHARS.has(n) && !names.includes(n)) names.push(n); };
-  pieces.forEach(p => { if(p.isTag) take(norm(p.text)); p.phrases.forEach(ph => {
-    ph.tags.forEach(t => { if(picked.has(t.tag)) take(t.tag); });
-    // someone described rather than named ("a girl", "two boys") counts too
-    const n = ph.tags.map(t => t.tag), k = {'1girl':['girl',1], '2girls':['girl',2], '3girls':['girl',3], '1boy':['boy',1], '2boys':['boy',2], '1other':['other',1]};
-    n.forEach(t => { if(k[t] && picked.has(t)) for(let i = 0; i < k[t][1]; i++) plain.push([ph.words, k[t][0]]); }); }); });
+  pieces.forEach(p => { if(p.isTag) take(norm(p.text)); p.phrases.forEach(ph => ph.tags.forEach(t => { if(picked.has(t.tag)) take(t.tag); })); });
   S.addedTags.forEach(take);
-  if(!names.length) return null; // with nobody named, the sentence's own guesses ("a girl" -> 1girl, solo) are enough
+  const plain = sentencePeople(pieces);
+  if(!names.length && !plain.length) return null;
   const who = names.map(n => { const [g, b, o] = CHARS.get(n); return [n, b > g && b >= o ? 'boy' : o > g && o > b ? 'other' : 'girl']; }).concat(plain);
-  const n = k => who.filter(w => w[1]===k).length, g = n('girl'), b = n('boy'), o = n('other'), tags = [];
-  const count = (k, one, many, multi) => { if(k===1) tags.push(one); else if(k > 1){ tags.push(k >= 6 ? '6+' + many : k + many); if(multi) tags.push(multi); } };
-  count(g, '1girl', 'girls', 'multiple_girls'); count(b, '1boy', 'boys', 'multiple_boys'); count(o, '1other', 'others', 'multiple_others');
-  if(who.length===1) tags.push('solo');
-  return {who, tags: tags.filter(t => TAGMAP.has(t))};
+  const tags = [], total = who.reduce((a, w) => a + (w[2] || 1), 0);
+  const count = (sex, one, many, multi) => {
+    const mine = who.filter(w => w[1]===sex), k = mine.reduce((a, w) => a + (w[2] || 1), 0);
+    if(mine.some(w => w[3])) tags.push(multi); // "girls" with no number: just more than one
+    else if(k===1) tags.push(one); else if(k > 1){ tags.push(k >= 6 ? '6+' + many : k + many); tags.push(multi); } };
+  count('girl', '1girl', 'girls', 'multiple_girls'); count('boy', '1boy', 'boys', 'multiple_boys'); count('other', '1other', 'others', 'multiple_others');
+  if(total===1) tags.push('solo');
+  return {who: who.map(w => [w[2] ? w[0] + (w[3] ? ' (more than one)' : '') : w[0], w[1]]), tags: tags.filter(t => TAGMAP.has(t) && !S.tagOff.includes(t))}; // a count chip ticked off (solo) stays off
 }
 function asTags(text, people){
   if(!S.asTags || !usesTags() || !TAGS) return text;
@@ -1908,7 +1940,11 @@ function asTags(text, people){
   const pieces = readPrompt(text), picked = pickedFor(pieces), out = [], seen = new Set();
   const put = s => { const k = norm(s); if(k && !seen.has(k)){ seen.add(k); out.push(s.trim()); } };
   // with the characters counted, the sentence's own guesses ("a girl" -> 1girl, solo) give way to the real count
-  pieces.forEach(p => { if(p.isTag || !p.phrases.length) put(p.text); else p.phrases.forEach(ph => ph.tags.forEach(t => { if(picked.has(t.tag) && !(people && COUNTS.has(t.tag))) put(tagText(t)); })); });
+  // a group of words that became a tag is replaced by it; words with no tag go as words (glue like "who is" dropped)
+  let run = []; const mixed = people && people.tags.some(t => /girl/.test(t)) && people.tags.some(t => /boy/.test(t)); // a boy with a girl is not male focus
+  const flush = () => { while(run.length && STOP.has(run[0].toLowerCase())) run.shift(); while(run.length && STOP.has(run[run.length-1].toLowerCase())) run.pop(); if(run.length) put(run.join(' ')); run = []; };
+  pieces.forEach(p => { if(p.isTag || !p.phrases.length) return put(p.text);
+    p.parts.forEach(x => { if(typeof x==='string') return run.push(x); flush(); x.tags.forEach(t => { if(picked.has(t.tag) && !(people && (COUNTS.has(t.tag) || (t.tag==='male_focus' && mixed)))) put(tagText(t)); }); }); flush(); });
   return out.join(', ');
 }
 // the prompt Render sends: the words (as tags when Send as tags is on), then the added tags
@@ -1935,8 +1971,8 @@ function updateIdeas(){
     sentences.forEach(p => p.phrases.forEach(ph => {
       h += `<div class="irow ${S.asTags?'':'off'}"><span class="hl">${esc(ph.words)}</span>${ph.tags.map(t => `<button data-pick="${esc(t.tag)}" class="c${t.cat} ${picked.has(t.tag)?'on':''}">${esc(tagText(t))}</button>`).join('')}</div>`; }));
     const left = sentences.flatMap(p => p.left);
-    if(left.length) h += `<p class="note">No tag found for: ${esc(left.join(', '))}</p>`;
-    if(!S.asTags) h += `<p class="note">Your words go as typed. Turn on Send as tags to swap each sentence for the ticked tags.</p>`;
+    if(left.length) h += `<p class="note">No tag found for: ${esc(left.join(', '))}${S.asTags ? ' (sent as words)' : ''}</p>`;
+    if(!S.asTags) h += `<p class="note">Your words go as typed. Turn on Send as tags to swap each group of words for its ticked tags.</p>`;
   }
   if(people){
     h += `<div class="ihead"><b>Who's in it</b><button class="tagmode ${S.peopleOff?'':'on'}" data-ideas="people">${S.peopleOff ? 'Count tags off' : '✓ Add count tags'}</button></div>

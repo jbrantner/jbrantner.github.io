@@ -133,7 +133,14 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok((await page.textContent('#ac button[data-i="0"]')).startsWith('1girl'), 'girl finds 1girl first');
   // a written sentence becomes tag ideas phrase by phrase, plus optional extras
   await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForTimeout(400); await page.waitForSelector('#ideas .hl');
-  ok((await page.$$eval('#ideas .hl', s => s.map(x => x.textContent))).join('|')==='a girl|jumping jacks', 'sentence split into phrases');
+  ok((await page.$$eval('#ideas .irow:not(.wrap) .hl', s => s.map(x => x.textContent))).join('|')==='a girl|jumping jacks', 'sentence split into phrases');
+  await page.fill('#prompt', 'a girl hitting another girl'); await page.waitForTimeout(400);
+  ok((await page.textContent('#ideas')).includes('2girls, multiple girls, hitting'), 'a girl hitting another girl is 2girls, the words replaced by their tags');
+  await page.fill('#prompt', 'a woman holding her daughter\'s hand'); await page.waitForTimeout(400);
+  ok((await page.textContent('#ideas')).includes('2girls, multiple girls, mature female, holding, daughter\'s hand'), 'her daughter is a second girl, words with no tag go as words');
+  await page.fill('#prompt', 'a girl, the girl waves'); await page.waitForTimeout(400);
+  ok((await page.textContent('#ideas')).includes('1girl, solo, waves'), 'the same girl mentioned again counts once');
+  await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForTimeout(400);
   const sentPrompt = async () => { await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const g = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets()); return textOf(g,'Prompt'); };
   ok((await sentPrompt()).endsWith(', 1girl, solo, jumping, exercising, arms up') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'Send as tags sends the picked tags and leaves the words in the box');
   await page.click('[data-pick=solo]'); ok(!(await sentPrompt()).includes('solo'), 'unticked tag is left out');
