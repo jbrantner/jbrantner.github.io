@@ -19,15 +19,27 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
     if(u.pathname==='/object_info') return r.fulfill({ json:OI });
     if(u.pathname==='/renderdeck/images') return r.fulfill({ json:{total:2, shared, pc:'Output_Render', trash:'Deleted by Render Deck', images:[
       {subfolder:'Output_Main/RenderDeck', filename:'render_00001_.png', t:2, size:1}, {subfolder:'Output_Render/RenderDeck', filename:'render_00001_.png', t:1, size:1}]} });
+    if(u.pathname==='/view' && !/^Output_/.test(u.searchParams.get('subfolder'))) return r.fulfill({ status:404, body:'' });
     if(u.pathname==='/renderdeck/thumb' || u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG });
     if(u.pathname==='/renderdeck/delete'){ deleted = JSON.parse(r.request().postData()).items; return r.fulfill({ json:{moved:deleted.length} }); }
     if(u.pathname.startsWith('/history') || u.pathname==='/queue') return r.fulfill({ json:{} });
     r.fulfill({ status:404, body:'' });
   });
+  // two renders in the strip from before the shared folder: one from this computer, one from a computer that's now off
+  // the strip gets two renders from before the shared folder: one from this computer, one from a computer that's now off
+  await page.route('https://main.test/**', r => r.abort());
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
-  await page.click('#openSettings'); await page.fill('#server', SERVER+'/'); await page.click('#connectBtn');
-  await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'));
+  await page.evaluate(() => { S.gallery = [
+    {url:'https://render.test/view?filename=render_00001_.png&subfolder=RenderDeck&type=output', seed:1},
+    {url:'https://main.test/view?filename=render_00083_.png&subfolder=Output_Main%2FRenderDeck&type=output', seed:2}]; drawStrip(); show(0); });
+  await page.click('#openSettings'); await page.fill('#server', SERVER+'/'); await page.evaluate(() => document.querySelector('#connectBtn').click());
+  await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'), null, {timeout:8000}).catch(async () => { console.log('CONN', await page.textContent('#connText'), logs.join(' | ')); });
+  await page.waitForFunction(() => [...document.querySelectorAll('#strip img')].every(i => i.complete && i.naturalWidth>0), null, {timeout:8000}).catch(()=>{});
+  const strip = await page.$$eval('#strip img', a => a.map(i => [i.src, i.naturalWidth]));
+  ok(strip[0][0].includes('subfolder=Output_Render%2FRenderDeck') && strip[0][1]>0, 'old render link moved into Output_Render and loads: '+strip[0][0]);
+  ok(strip[1][0].startsWith(SERVER) && strip[1][1]>0, 'render from the switched-off computer loads from this one: '+strip[1][0]);
+  ok(await page.$eval('#shown', i => i.naturalWidth>0), 'big picture loads');
   await page.evaluate(() => document.querySelector('#libBtn').click());
   await page.waitForFunction(() => document.querySelectorAll('#libGrid img').length===2);
   const tags = await page.$$eval('#libGrid .pc', a => a.map(x => x.textContent));

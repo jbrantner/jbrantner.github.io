@@ -490,7 +490,7 @@ async function connect(){
     const p = pcOf(url); p.oi = oi; p.online = true;
     S.test = false; fillDefaults();
     S.queue = S.queue.filter(e => e.srv!=='test');
-    openSocket(p);
+    openSocket(p); movedOutputs(p);
     if(!S.servers.some(x => x.url===url)){ S.servers.push({name:srvName(url), url}); save(); }
     setConn('on', pcName(url));
     allPcs().forEach(x => { if(x!==p) wakePc(x); });
@@ -551,10 +551,24 @@ async function wakePc(p){
   if(p.waking) return p.waking;
   return p.waking = (async () => {
     try{ const r = await fetch(p.url + '/object_info', Object.assign({cache:'no-store'}, within(10000))); if(!r.ok) throw new Error(r.status);
-      p.oi = await r.json(); p.online = true; if(!p.ws) openSocket(p); autoSync(); }
+      p.oi = await r.json(); p.online = true; if(!p.ws) openSocket(p); autoSync(); movedOutputs(p); }
     catch(e){ p.online = false; }
     p.waking = null; drawQueue();
   })();
+}
+// Renders saved before the computers shared one Dropbox output folder sat at the top of that computer's own folder;
+// in the shared folder they are under its subfolder (Output_Main, Output_Render), so point the strip's saved links there.
+async function movedOutputs(p){
+  if(p.moved) return;
+  try{ const j = await (await fetch(p.url + '/renderdeck/images?limit=1', Object.assign({cache:'no-store'}, within(10000)))).json();
+    p.moved = true; if(!j.shared || !j.pc) return;
+    const pre = j.pc.toLowerCase() + '/'; let n = 0;
+    S.gallery.forEach(g => { try{ const u = new URL(g.url), q = u.searchParams;
+      if(u.origin!==new URL(p.url).origin || q.get('type')!=='output') return;
+      const sub = q.get('subfolder') || ''; if((sub + '/').toLowerCase().startsWith(pre)) return;
+      g.url = viewUrl({filename:q.get('filename'), subfolder:sub ? j.pc + '/' + sub : j.pc, type:'output'}, p.url); n++; }catch(e){} });
+    if(n){ save(); drawStrip(); show(shownIdx); }
+  }catch(e){}
 }
 async function pollPc(p){
   const t = Date.now();
@@ -1088,7 +1102,7 @@ function fakeImage(seed, e){
 
 // ---------- results ----------
 function show(i){
-  shownIdx = i; const g = S.gallery[i]; const img = $('#shown');
+  shownIdx = i; const g = S.gallery[i]; const img = $('#shown'); delete img.dataset.here;
   if(!g){ img.hidden = true; $('#empty').hidden = false; $('#resultActions').hidden = true; return; }
   img.src = g.url; img.hidden = false; $('#empty').hidden = true; $('#resultActions').hidden = false;
   [...$('#strip').children].forEach((t,k) => t.classList.toggle('sel', k===i));
@@ -1096,6 +1110,10 @@ function show(i){
 function drawStrip(){
   $('#strip').innerHTML = S.gallery.map((g,i) => `<img src="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">`).join('');
 }
+// a picture from a computer that's switched off: the shared folder lets the connected one show it
+function viaHere(e){ const img = e.target; if(img.tagName!=='IMG' || img.dataset.here || !base()) return;
+  try{ const u = new URL(img.src); if(!u.pathname.endsWith('/view') || u.origin===new URL(base()).origin) return; img.dataset.here = 1; img.src = base() + u.pathname + u.search; }catch(x){} }
+$('#strip').addEventListener('error', viaHere, true); $('#shown').addEventListener('error', viaHere);
 $('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i!=null) show(+i); };
 $('#resultActions').onclick = async e => {
   const a = e.target.closest('[data-act]'); if(!a) return; const g = S.gallery[shownIdx]; if(!g) return;
