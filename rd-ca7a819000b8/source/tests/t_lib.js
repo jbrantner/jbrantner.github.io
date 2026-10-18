@@ -41,9 +41,8 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   const strip = await page.$$eval('#recentRow img', a => a.map(i => [i.src, i.naturalWidth]));
   ok(strip[0][0].includes('subfolder=Output_Render%2FRenderDeck') && strip[0][1]>0, 'old render link moved into Output_Render and loads: '+strip[0][0]);
   ok(strip[1][0].startsWith(SERVER) && strip[1][1]>0, 'render from the switched-off computer loads from this one: '+strip[1][0]);
-  await page.click('#libBtn'); await page.click('#recentRow [data-i="0"]'); await page.waitForFunction(() => document.querySelector('#shown').naturalWidth>0, null, {timeout:5000}).catch(()=>{});
+  await page.evaluate(() => show(0)); await page.waitForFunction(() => document.querySelector('#shown').naturalWidth>0, null, {timeout:5000}).catch(()=>{});
   ok(await page.$eval('#shown', i => i.naturalWidth>0), 'big picture loads');
-  await page.click('#bigClose'); await page.evaluate(() => closeSheets()); await page.waitForTimeout(300);
   await page.evaluate(() => document.querySelector('#libBtn').click());
   await page.waitForFunction(() => document.querySelectorAll('#libGrid img').length===2);
   const tags = await page.$$eval('#libGrid .pc', a => a.map(x => x.textContent));

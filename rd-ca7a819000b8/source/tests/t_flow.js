@@ -171,16 +171,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok(textOf(lg,'Prompt').includes(', pixel style, ') && (await page.textContent('#addedPos')).includes('LoRA adds: pixel style'), 'LoRA activation words added: '+textOf(lg,'Prompt'));
 
   // reuse result as start picture
-  // the main view is a list: no big picture or bottom strip; tapping a finished render opens it big, Back returns to the list
-  // main view: only what's painting, in a list that folds; finished renders live in the library, which opens them big
-  ok(!(await page.$('#strip')) && (await page.$$eval('#feedQ .frow', x => x.length))===0 && (await page.textContent('#empty')).includes('Library'), 'main list shows only what is painting');
-  await page.click('#feedHead'); ok(!(await page.isVisible('#feedBody')), 'the painting list folds'); await page.click('#feedHead'); ok(await page.isVisible('#feedBody'), 'and opens again');
-  await page.click('#libBtn'); await page.waitForSelector('#libSheet.open');
-  await page.click('#recentRow [data-i="0"]'); ok(await page.isVisible('#big') && await page.isVisible('#resultActions'), 'a render in the library opens big with its actions');
-  await page.click('#bigClose'); ok(!(await page.isVisible('#big')) && !!(await page.$('#libSheet.open')), 'Back goes back to the library');
-  await page.click('#recentRow [data-i="0"]');
+  // the big picture and the thumbnail strip, all in one section that folds; the library's latest row opens a render there
+  ok(await page.isVisible('#shown') && (await page.$$eval('#strip img', x => x.length))===3, 'big picture with thumbnails below');
+  await page.click('#feedHead'); ok(!(await page.isVisible('#shown')) && !(await page.isVisible('#strip')), 'the preview section folds');
+  await page.click('#libBtn'); await page.waitForSelector('#libSheet.open'); await page.click('#recentRow [data-i="1"]');
+  ok(!(await page.$('#libSheet.open')) && await page.isVisible('#shown') && (await page.$eval('#strip img.sel', i => i.dataset.i))==='1', 'a render tapped in the library opens in the preview');
+  await page.click('#strip img[data-i="0"]');
   await page.click('[data-act=pic]');
-  ok(!(await page.isVisible('#big')) && !(await page.$('#libSheet.open')), 'using it as a start picture goes back to the recipe');
   const g2before = sent.length; await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#recentRow img').length===n, 4, {timeout:5000});
   const li = Object.values(sent[g2before]).find(x=>x._meta.title==='Start picture');
   ok(li.inputs.image==='RenderDeck/render_00002.png [output]', 'reused render points at output file: '+li.inputs.image);
