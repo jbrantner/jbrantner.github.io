@@ -123,8 +123,12 @@ def start():
             return "I haven't seen ComfyUI running yet, so I don't know how to start it. Open Comfy Desktop and press Launch once."
         out = open(os.path.join(HERE, 'comfyui_console.log'), 'a', encoding='utf-8', errors='replace')
         flags = (0x00000008 | 0x00000200 | 0x08000000) if WIN else 0  # detached, own process group, no window
-        state['proc'] = subprocess.Popen(state['cmd'], cwd=state['cwd'] or None, stdout=out, stderr=subprocess.STDOUT,
-                                         stdin=subprocess.DEVNULL, creationflags=flags, shell=not WIN)
+        run = lambda f: subprocess.Popen(state['cmd'], cwd=state['cwd'] or None, stdout=out, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, creationflags=f, shell=not WIN)
+        try:  # leave Task Scheduler's job, so ComfyUI keeps running if the agent itself stops or is updated
+            state['proc'] = run(flags | 0x01000000) if WIN else run(flags)
+        except OSError:
+            state['proc'] = run(flags)
         state['starting'], state['misses'] = time.time(), 0
         log('started ComfyUI, pid', state['proc'].pid)
         return 'Starting ComfyUI'
