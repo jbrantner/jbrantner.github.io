@@ -61,12 +61,12 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   // Hidden mode: its own prompt, strip, save folder and renders list
   await page.evaluate(() => { closeSheets(); S.prompt = 'normal prompt'; save(); render(); });
   await page.click('#modeBtn');
-  const hm = await page.evaluate(() => ({title:document.querySelector('h1 span').textContent, prompt:S.prompt, strip:S.gallery.length,
+  const hm = await page.evaluate(() => ({title:document.querySelector('h1 span').textContent, prompt:S.prompt, strip:S.gallery.filter(g => !g.saved).length,
     prefix:Object.values(buildGraph().graph).find(n => n.class_type==='SaveImage').inputs.filename_prefix}));
   ok(hm.title==='Hidden' && hm.prompt==='' && hm.strip===0, 'Hidden starts with an empty prompt and strip: '+JSON.stringify(hm));
   ok(hm.prefix==='Hidden/render', 'Hidden saves into a Hidden folder: '+hm.prefix);
   await page.evaluate(() => { S.queue.push({key:'h2', images:[{filename:'render_00009_.png', subfolder:'Output_Render/RenderDeck', type:'output'}], srv:'https://render.test'}); return completeOne(S.queue[S.queue.length-1], true); });
-  ok(await page.evaluate(() => S.gallery.length===0 && S.stash.gallery.some(g => g.url.includes('render_00009_'))), 'a normal render finishing in Hidden goes to the normal strip');
+  ok(await page.evaluate(() => !S.gallery.some(g => !g.saved) && S.stash.gallery.some(g => g.url.includes('render_00009_'))), 'a normal render finishing in Hidden goes to the normal strip');
   await page.evaluate(() => document.querySelector('#libBtn').click());
   await page.waitForFunction(() => document.querySelectorAll('#libGrid img').length===1);
   ok((await page.textContent('#libTitle'))==='Hidden renders', 'renders list shows only Hidden renders');

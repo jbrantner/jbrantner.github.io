@@ -66,7 +66,7 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   const job = F.jobs.pop(); F.done.push(Object.assign(job, {state:'done', images:[{filename:'d2.png', subfolder:'Output_Render/RenderDeck/drafts', type:'output'}], t_done:Date.now()/1000}));
   const job1 = F.jobs.shift(); F.done.push(Object.assign(job1, {state:'done', images:[{filename:'d1.png', subfolder:'Output_Main/RenderDeck/drafts', type:'output'}], t_done:Date.now()/1000}));
   await page.evaluate(() => { farmAt = 0; tick(); }); await page.waitForTimeout(1500);
-  ok(await page.evaluate(() => S.gallery.length===2 && S.gallery.every(g => g.draft && g.fin)), 'both drafts come back with their full render');
+  ok(await page.evaluate(() => { const mine = S.gallery.filter(g => !g.saved); return mine.length===2 && mine.every(g => g.draft && g.fin); }), 'both drafts come back with their full render');
   ok(await page.$$eval('#draftRows .frow', r => r.length)===2, 'and wait in the Drafts list');
   ok(await page.evaluate(() => document.querySelector('#drafts').compareDocumentPosition(document.querySelector('#feed')) & 4), 'the Drafts list sits above the preview');
   await page.click('#libBtn'); await page.waitForSelector('#libTabs button');

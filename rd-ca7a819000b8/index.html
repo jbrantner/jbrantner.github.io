@@ -107,6 +107,7 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .strip::-webkit-scrollbar{display:none}
 .strip img{flex:none;width:58px;height:58px;object-fit:cover;border-radius:10px;border:2px solid transparent;opacity:.8}
 .strip img.sel{border-color:var(--accent);opacity:1}
+.strip .none{flex:1;min-height:58px;display:grid;place-items:center;border:1px dashed var(--line);border-radius:10px;color:var(--dim);font-size:13px;margin:0}
 
 /* prompt */
 .lbl{font-size:11.5px;font-weight:800;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;margin:20px 2px 8px}
@@ -433,7 +434,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.23'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.24'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -573,7 +574,7 @@ async function connect(){
     tick(true);
     refreshJobs();
     toast('Connected · ' + info.ckpt.length + ' models found');
-    closeSheets(); render();
+    closeSheets(); render(); fillFromPcs();
   }catch(e){
     info = null; setConn('off','Not connected');
     toast(location.protocol==='https:' && url.startsWith('http:')
@@ -1414,9 +1415,21 @@ function show(i){
 }
 // the thumbnails under the picture, and the same renders at the top of the library
 function drawStrip(){
-  $('#strip').innerHTML = S.gallery.map((g,i) => `<img src="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">`).join('');
+  $('#strip').innerHTML = S.gallery.map((g,i) => `<img src="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">`).join('') || '<p class="none">Your renders show up here</p>';
   $('#recentRow').innerHTML = S.gallery.map((g,i) => `<button data-i="${i}"><img src="${esc(g.url)}" alt="" loading="lazy"></button>`).join('') || '<p class="note">Nothing yet.</p>';
   drawDrafts();
+}
+// the strip also shows renders already saved on the computers (this workstation's only: Hidden lists Hidden folders, normal lists the rest)
+let filling = 0;
+async function fillFromPcs(){
+  if(!info || S.test || filling) return; const h = !!S.hidden; filling = 1;
+  try{ const j = await (await fetch(base() + '/renderdeck/images?hidden=' + (h ? 1 : 0) + '&limit=40', {cache:'no-store'})).json();
+    if(!!S.hidden!==h) return; // switched workstation meanwhile
+    const have = new Set(S.gallery.map(g => g.url)); let n = 0;
+    (j.images || []).filter(i => isHidden(i.subfolder)===h && !isDraftFile(i)).forEach(i => { const url = viewUrl(i, i.src);
+      if(!have.has(url) && S.gallery.length < 40){ S.gallery.push({url, seed:null, prompt:'', t:(i.t || 0) * 1000, saved:true}); have.add(url); n++; } });
+    if(n){ save(); drawStrip(); if(!S.gallery[shownIdx]) show(0); }
+  }catch(e){} finally{ filling = 0; }
 }
 // the preview section folds to one line that still shows what's painting
 function drawFeedHead(){
@@ -1531,7 +1544,8 @@ $('#resultActions').onclick = async e => {
   if(a.dataset.act==='open'){ window.open(g.url, '_blank'); return; }
   if(a.dataset.act==='finish'){ await finishDrafts([g]); return; }
   if(a.dataset.act==='recipe'){ useRecipe(g.snap, g.url); return; }
-  if(a.dataset.act==='seed'){ const P = S.blocks.find(b=>b.type==='sampler'); P.seed = g.seed; P.lockSeed = true; save(); renderBlocks(); toast('Seed ' + g.seed + ' locked'); return; }
+  if(a.dataset.act==='seed'){ if(g.seed==null){ try{ const sn = fromPng(await (await fetch(g.url)).arrayBuffer()); g.seed = sn && sn.seed; }catch(err){} if(g.seed==null){ toast('No seed saved in this picture', true); return; } }
+    const P = S.blocks.find(b=>b.type==='sampler'); P.seed = g.seed; P.lockSeed = true; save(); renderBlocks(); toast('Seed ' + g.seed + ' locked'); return; }
   // feed a finished render back in: ComfyUI's LoadImage reads output files when the name ends in " [output]"
   let ref = refFromUrl(g.url);
   if(!g.url.startsWith('data:') && !S.test && new URL(g.url).origin!==new URL(base()).origin){ // painted on the other computer: send this one a copy
@@ -2344,7 +2358,7 @@ function switchMode(){
   S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
   if(!$('#viewer').hidden) closeViewer(); closeSheets(); // nothing open keeps pictures from the other workstation
   if(!S.hidden){ allPcs().forEach(p => { if(S.queue.some(q => q.srv===p.url && masked(q))) dropPreview(p); }); openJobs.clear(); focusPc = null; }
-  if(info) fillDefaults(); save(); drawMode(); render(); drawStrip(); show(S.gallery.length ? 0 : -1); updateIdeas(); drawStatus(); drawQueue();
+  if(info) fillDefaults(); save(); drawMode(); render(); drawStrip(); show(S.gallery.length ? 0 : -1); updateIdeas(); drawStatus(); drawQueue(); fillFromPcs();
   toast(S.hidden ? 'Hidden on' : 'Hidden off'); buzz();
 }
 $('#modeBtn').onclick = switchMode;

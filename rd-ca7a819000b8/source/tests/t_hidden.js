@@ -31,6 +31,10 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   await page.click('#openSettings'); await page.fill('#server', SERVER+'/'); await page.evaluate(() => document.querySelector('#connectBtn').click());
   await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'));
   await page.evaluate(() => closeSheets());
+  // the strip fills from renders already saved on the computers, each workstation from its own folders
+  await page.waitForFunction(() => document.querySelectorAll('#strip img').length>=1, null, {timeout:5000}).catch(()=>{});
+  const ns = await page.evaluate(() => document.querySelector('#strip').innerHTML);
+  ok(ns.includes('render_00001_') && !ns.includes('secret'), 'normal strip fills from the computers\' normal renders only');
 
   // a Hidden render painting on Render and a normal one on Main, queued from Hidden; then back to normal
   await page.click('#modeBtn');
@@ -89,6 +93,9 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   oldHelper = false;
   await page.click('#modeBtn');
   ok(await page.evaluate(() => S.gallery.some(g => g.url.includes('secret_00002_'))), 'in Hidden, the finished Hidden render is in its strip');
+  await page.waitForFunction(() => document.querySelector('#strip').innerHTML.includes('secret_00001_'), null, {timeout:5000}).catch(()=>{});
+  const hs = await page.evaluate(() => document.querySelector('#strip').innerHTML);
+  ok(hs.includes('secret_00001_') && !hs.includes('secretdraft_00001_') && !hs.includes('render_0000'), 'Hidden strip fills from the Hidden renders saved on the computers, without drafts or normal ones');
   ok(!logs.length, 'no page errors: '+logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length+' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
