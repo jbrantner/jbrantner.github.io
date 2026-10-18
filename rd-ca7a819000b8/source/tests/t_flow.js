@@ -73,8 +73,8 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         for(let i=1;i<=3;i++) sock.send(JSON.stringify({type:'progress',data:{value:i,max:3,prompt_id:id,node:ks}}));
         const prev = Buffer.concat([Buffer.from([0,0,0,1,0,0,0,2]), PNG]); sock.send(prev);
         const save = Object.keys(body.prompt).find(k => body.prompt[k].class_type==='SaveImage');
-        sock.send(JSON.stringify({type:'executed',data:{node:save,prompt_id:id,output:{images:[{filename:'render_0000'+n+'.png',subfolder:'RenderDeck',type:'output'}]}}}));
-        done[id] = {status:{completed:true}, outputs:{[save]:{images:[{filename:'render_0000'+n+'.png',subfolder:'RenderDeck',type:'output'}]}}};
+        sock.send(JSON.stringify({type:'executed',data:{node:save,prompt_id:id,output:{images:[{filename:'render_0000'+id.slice(1)+'.png',subfolder:'RenderDeck',type:'output'}]}}}));
+        done[id] = {status:{completed:true}, outputs:{[save]:{images:[{filename:'render_0000'+id.slice(1)+'.png',subfolder:'RenderDeck',type:'output'}]}}};
         sock.send(JSON.stringify({type:'executing',data:{node:null,prompt_id:id}}));
       }, 50);
       return r.fulfill({ json:{prompt_id:id, number:0, node_errors:{}} });
@@ -192,6 +192,30 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   const seeds = sent.slice(before).map(g => (i => i.seed ?? i.noise_seed)(Object.values(g).find(x => x._meta.title==='Painting').inputs));
   ok(seeds.length===2 && seeds[0]!==seeds[1], 'two renders queued with different seeds');
   await page.click('#runsDown'); ok((await page.textContent('#runsN'))==='1×' && await page.isDisabled('#runsDown'), 'minus steps back to 1× and stops there');
+
+  // draft mode: renders stop partway as drafts; ticking one and Finish sends the full render with the same seed
+  const seedOf = g => (i => i.seed ?? i.noise_seed)(Object.values(g).find(x => /^(Painting|Draft)/.test(x._meta.title)).inputs);
+  const saveOf = g => Object.values(g).find(x => x.class_type==='SaveImage').inputs.filename_prefix;
+  await page.click('#draftBtn'); await page.click('#runsUp'); ok((await page.textContent('#goBtn'))==='Draft', 'draft mode on: the button says Draft');
+  const dBefore = sent.length;
+  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#draftRows .frow').length===2, null, {timeout:8000});
+  const drafts = sent.slice(dBefore), stopAt = await page.evaluate(() => draftStep(S.blocks.find(b => b.type==='sampler')));
+  const lastKs = g => Object.values(g).find(x => x._meta.title.startsWith('Draft: stop'));
+  ok(drafts.length===2 && drafts.every(g => !check(g).length && lastKs(g) && lastKs(g)._meta.title.endsWith(' ' + stopAt) && lastKs(g).inputs.end_at_step - lastKs(g).inputs.start_at_step===stopAt && lastKs(g).inputs.return_with_leftover_noise==='disable'
+    && /\/drafts\/draft$/.test(saveOf(g)) && !Object.values(g).some(x => /FaceDetailer|UltimateSDUpscale|ImageScaleBy/.test(x.class_type))),
+    'drafts stop at step ' + stopAt + ' with no upscale or face fix: ' + drafts.map(check).flat().join('; '));
+  ok(await page.isVisible('#drafts') && await page.$$eval('#draftRows .tick', t => t.length)===2, 'drafts wait under the main list with a tick box each');
+  await page.click('#draftRows .tick >> nth=1'); ok((await page.textContent('#draftBar')).includes('Finish 1'), 'ticking a draft offers Finish 1: ' + await page.textContent('#draftBar'));
+  const pickedSeed = await page.evaluate(() => S.gallery.find(g => g.draft && !g.sent && [...picked].includes(g.url)).seed), gBefore = await page.evaluate(() => S.gallery.length);
+  await page.click('#draftGo'); await page.waitForFunction(n => S.gallery.length===n, gBefore + 1, {timeout:8000});
+  const fg = sent[sent.length - 1];
+  ok(sent.length===dBefore + 3 && !check(fg).length && !lastKs(fg) && /\/render$/.test(saveOf(fg)) && seedOf(fg)===pickedSeed && drafts.some(g => seedOf(g)===pickedSeed),
+    'Finish sends the full render with the draft\'s seed ' + pickedSeed + ': ' + check(fg).join('; '));
+  const dk = Object.values(drafts.find(g => seedOf(g)===pickedSeed)).filter(x => x.class_type==='KSamplerAdvanced'), fk = Object.values(fg).filter(x => x.class_type==='KSamplerAdvanced');
+  ok(dk.length && fk.length && ['steps','cfg','sampler_name','scheduler','start_at_step'].every(k => dk[0].inputs[k]===fk[0].inputs[k]), 'the finished render starts exactly like its draft');
+  ok(await page.$$eval('#draftRows .frow', r => r.length)===1, 'the finished draft leaves the drafts list, the other stays');
+  page.once('dialog', d => d.accept()); await page.click('#draftDrop'); ok(await page.isHidden('#drafts'), 'Put away clears the drafts list');
+  await page.click('#draftBtn'); await page.click('#runsDown'); ok((await page.textContent('#goBtn'))==='Render', 'draft mode off again');
 
   // switching a block off removes it
   await page.locator('.block[style*="--lora"] [data-do=toggle]').dispatchEvent('click');
