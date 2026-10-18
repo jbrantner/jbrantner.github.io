@@ -360,7 +360,14 @@ async def model_file(request):
     listed = {n.replace('\\', '/'): n for n in folder_paths.get_filename_list(kind)} if kind in KINDS else {}
     if name not in listed or not name.lower().endswith('.safetensors'):
         return web.json_response({'error': 'No such model'}, status=404)
-    return web.FileResponse(folder_paths.get_full_path(kind, listed[name]))
+    path = folder_paths.get_full_path(kind, listed[name])
+    resp = web.StreamResponse(headers={'Content-Type': 'application/octet-stream', 'Content-Length': str(os.path.getsize(path))})
+    await resp.prepare(request)
+    loop = asyncio.get_running_loop()
+    with open(path, 'rb') as f:  # not FileResponse: on Windows its sendfile sends nothing for files over 2 GB, and checkpoints are bigger
+        while chunk := await loop.run_in_executor(None, f.read, 1 << 22):
+            await resp.write(chunk)
+    return resp
 
 
 def _sync_path(kind, rel):
