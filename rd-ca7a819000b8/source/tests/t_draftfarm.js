@@ -39,7 +39,7 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
       if(u===RU && p.pathname==='/renderdeck/farm/add'){ F.adds.push(body); F.off = body.off; body.jobs.forEach(j => F.jobs.push(Object.assign({state:'waiting', srv:'', id:''}, j))); return r.fulfill({ json:view(Date.now()/1000) }); }
       if(u===RU && p.pathname==='/renderdeck/farm/cancel'){ F.cancels.push(...body.keys); F.jobs = F.jobs.filter(j => !body.keys.includes(j.key)); return r.fulfill({ json:{cancelled:1} }); }
       if(u===RU && p.pathname==='/renderdeck/farm/pcs'){ F.pcCalls.push(body); F.off = body.off; return r.fulfill({ json:view(Date.now()/1000) }); }
-      if(p.pathname==='/renderdeck/images') return r.fulfill({ json:{total:3, shared:1, hidden:'0', images:[{subfolder:'Output_Render/RenderDeck/drafts', filename:'d2.png', t:3},{subfolder:'Output_Main/RenderDeck/drafts', filename:'d1.png', t:2},{subfolder:'Output_Main/RenderDeck', filename:'r0.png', t:1}].concat(DRAFT_PNG ? [{subfolder:'Output_Main/RenderDeck/drafts', filename:'d9.png', t:4}] : [])} });
+      if(p.pathname==='/renderdeck/images') return r.fulfill({ json:{total:3, shared:1, hidden:'0', images:[{subfolder:'Output_Render/RenderDeck/drafts', filename:'d2.png', t:3},{subfolder:'Output_Main/RenderDeck/drafts', filename:'d1.png', t:2},{subfolder:'Output_Main/RenderDeck', filename:'r0.png', t:1}].concat(DRAFT_PNG ? [{subfolder:'Output_Main/RenderDeck/drafts', filename:'d9.png', t:4}] : []).concat(u===MU ? [{subfolder:'Output_Main/RenderDeck/drafts', filename:'d8.png', t:0.5}] : [])} });
       if(p.pathname==='/renderdeck/jobs') return r.fulfill({ json:{jobs:[]} });
       if(p.pathname.startsWith('/renderdeck/') || p.pathname.startsWith('/view_metadata') || p.pathname.startsWith('/history')) return r.fulfill({ json:{} });
       r.fulfill({ status:404, body:'' });
@@ -73,14 +73,15 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   ok(await page.isHidden('#libDraftBox') && await page.isVisible('#libGrid'), 'the library opens on Renders, drafts tucked in their own tab');
   await page.click('#libTabs [data-tab=drafts]'); await page.waitForSelector('#libDrafts button');
   ok(await page.isHidden('#libGrid'), 'the Drafts tab shows only drafts');
-  ok(await page.$$eval('#libDrafts button', b => b.length)===2 && await page.$$eval('#libGrid button', b => b.length)===1, 'the library keeps drafts in their own row');
-  await page.click('#libDrafts button >> nth=0'); ok(await page.isVisible('#vFinish'), 'a draft opened from the library offers Finish');
+  ok(await page.$$eval('#libDrafts button', b => b.length)===3 && await page.$$eval('#libGrid button', b => b.length)===1, 'the Drafts tab has every draft from both computers, each once');
+  ok((await page.getAttribute('#libDrafts button:has(img[src*="d8.png"]) img', 'src')).startsWith(MU), 'a draft Dropbox has not brought over yet comes from the computer that has it');
+  await page.click('#libDrafts button:has(img[src*="d2.png"])'); ok(await page.isVisible('#vFinish'), 'a draft opened from the library offers Finish');
   await page.click('#vFinish'); ok(await waitFor(() => F.adds.length===2), 'Finish hands it to the farm');
   ok(F.adds[1].jobs.length===1 && Object.values(F.adds[1].jobs[0].graph).some(x => x._meta.title.startsWith('Finishing pass')) && !Object.values(F.adds[1].jobs[0].graph).some(x => x._meta.title.startsWith('Draft')), 'as the full render');
   // a draft this phone never saw (another phone, or long gone from its list): Finish reads the full render from the picture
   DRAFT_PNG = pngWithText('prompt', JSON.stringify(F.adds[0].jobs[0].graph));
-  await page.evaluate(() => closeSheets()); await page.click('#libBtn'); await page.waitForFunction(() => document.querySelectorAll('#libDrafts button').length===3);
-  await page.click('#libDrafts button >> nth=2'); ok(await page.isVisible('#vFinish'), 'a draft this phone has no record of still offers Finish');
+  await page.evaluate(() => closeSheets()); await page.click('#libBtn'); await page.waitForFunction(() => document.querySelectorAll('#libDrafts button').length===4);
+  await page.click('#libDrafts button:has(img[src*="d9.png"])'); ok(await page.isVisible('#vFinish'), 'a draft this phone has no record of still offers Finish');
   await page.click('#vFinish'); ok(await waitFor(() => F.adds.length===3), 'and Finish sends it');
   const fj = F.adds[2] && F.adds[2].jobs[0];
   ok(fj && fj.home===MU && Object.values(fj.graph).some(x => x._meta.title.startsWith('Finishing pass')) && fj.seed===F.adds[0].jobs[0].seed, 'as the full render read from the picture, on the computer that made it');

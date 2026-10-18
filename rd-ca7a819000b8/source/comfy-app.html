@@ -409,7 +409,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.20'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.21'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -2121,13 +2121,29 @@ const libPc = i => (i.subfolder || '').split('/')[0].replace(/^output_/i, '');
 // drafts save into a drafts folder; the app keeps each one's full render (by file) until it is finished or put away
 const isDraftFile = i => (i.subfolder || '').split('/').includes('drafts');
 function draftFor(i){ const k = libKey(i); return S.gallery.find(g => { if(!g.draft || !g.fin) return false; try{ const q = new URL(g.url).searchParams; return (q.get('subfolder') ? q.get('subfolder') + '/' : '') + q.get('filename')===k; }catch(e){ return false; } }); }
-const thumbUrl = i => base() + '/renderdeck/thumb?subfolder=' + encodeURIComponent(i.subfolder) + '&filename=' + encodeURIComponent(i.filename);
+const thumbUrl = i => (i.src || base()) + '/renderdeck/thumb?subfolder=' + encodeURIComponent(i.subfolder) + '&filename=' + encodeURIComponent(i.filename);
 const LIB_NOTE = $('#libNote').textContent;
 async function openLib(){
   const on = info && !S.test;
   lib = {items:[], total:0, off:0, selecting:false, picked:new Set(), cur:null}; $('#libTitle').textContent = S.hidden ? 'Hidden renders' : 'Your renders'; drawLibBar(); drawStrip();
   $('#libGrid').innerHTML = on ? '' : '<p class="note" style="grid-column:1/-1">Connect to your render computer to see everything it has saved.</p>'; $('#libNote').hidden = !on; $('#libSelect').hidden = !on; $('#libMore').hidden = true; $('#libCount').textContent = '';
-  openSheet('#libSheet'); if(on) await moreLib();
+  openSheet('#libSheet'); if(on){ libDrafts(); await moreLib(); }
+}
+// every draft on every computer that's on, not just those in the pages loaded so far. Each computer is asked, since
+// Dropbox can take a while to bring one computer's new drafts to the other; the same file from both shows once.
+async function libDrafts(){
+  const mine = lib, found = new Map(), pcs = allPcs().filter(p => p.online).sort((a, b) => (b.url===base()) - (a.url===base()));
+  await Promise.all(pcs.map(async p => {
+    for(let off = 0, pg = 0; pg < 25; pg++){
+      try{ const j = await (await fetch(p.url + '/renderdeck/images?hidden=' + (S.hidden ? 1 : 0) + '&offset=' + off + '&limit=200', {cache:'no-store'})).json();
+        (j.images || []).filter(i => isDraftFile(i) && isHidden(i.subfolder)===!!S.hidden).forEach(i => { const k = libKey(i);
+          if(!found.has(k) || p.url===base()) found.set(k, Object.assign(i, {src:p.url})); });
+        off += (j.images || []).length; if(!(j.images || []).length || off >= j.total) break;
+      }catch(e){ break; }
+    }
+  }));
+  if(lib!==mine) return; // the library was closed and opened again meanwhile
+  lib.drafts = [...found.values()].sort((a, b) => b.t - a.t); drawLib();
 }
 async function moreLib(){
   try{ const r = await fetch(base() + '/renderdeck/images?hidden=' + (S.hidden ? 1 : 0) + '&offset=' + (lib.off || 0) + '&limit=60', {cache:'no-store'});
@@ -2140,14 +2156,14 @@ async function moreLib(){
 }
 function drawLib(){
   $('#libCount').textContent = lib.total ? lib.total + (lib.total===1 ? ' picture' : ' pictures') : '';
-  const cell = (i,k) => `<button data-k="${k}" class="${lib.picked.has(libKey(i))?'sel':''}"><img src="${esc(thumbUrl(i))}" alt="" loading="lazy">${lib.shared && libPc(i) ? `<span class="pc">${esc(libPc(i))}</span>` : ''}</button>`;
-  const dr = lib.items.map((i,k) => [i,k]).filter(([i]) => isDraftFile(i)), dk = new Set(dr.map(x => x[1]));
+  const cell = (i,k,a) => `<button data-${a || 'k'}="${k}" class="${lib.picked.has(libKey(i))?'sel':''}"><img src="${esc(thumbUrl(i))}" alt="" loading="lazy">${lib.shared && libPc(i) ? `<span class="pc">${esc(libPc(i))}</span>` : ''}</button>`;
+  const dk = new Set(lib.items.map((i,k) => isDraftFile(i) ? k : -1)), dr = lib.drafts || [];
   // drafts have their own tab, so they never push the renders down
-  if(!dr.length) S.libTab = '';
+  if(!dr.length && lib.drafts) S.libTab = '';
   const dt = S.libTab==='drafts';
   $('#libTabs').hidden = !dr.length; $('#libTabs').innerHTML = `<button data-tab="" class="${dt ? '' : 'on'}">Renders</button><button data-tab="drafts" class="${dt ? 'on' : ''}">Drafts ${dr.length}</button>`;
   $('#libDraftBox').hidden = !dt; $('#recentBox').hidden = dt; $('#libGrid').hidden = dt;
-  $('#libDrafts').innerHTML = dr.map(([i,k]) => cell(i,k)).join('');
+  $('#libDrafts').innerHTML = lib.drafts ? dr.map((i,k) => cell(i,k,'d')).join('') || '<p class="note">No drafts.</p>' : '<p class="note">Looking on your computers…</p>';
   $('#libGrid').innerHTML = lib.items.some((i,k) => !dk.has(k)) ? lib.items.map((i,k) => dk.has(k) ? '' : `<button data-k="${k}" class="${lib.picked.has(libKey(i))?'sel':''}"><img src="${esc(thumbUrl(i))}" alt="" loading="lazy">${lib.shared && libPc(i) ? `<span class="pc">${esc(libPc(i))}</span>` : ''}</button>`).join('') : '<p class="note">No pictures yet.</p>';
   $('#libMore').hidden = lib.items.length >= lib.total || (lib.off >= lib.total && lib.total >= lib.items.length);
 }
@@ -2157,27 +2173,27 @@ function drawLibBar(){
 }
 $('#libBtn').onclick = openLib;
 $('#libMore').onclick = moreLib;
-$('#libSelect').onclick = () => { if(lib.selecting) lib.items.forEach(i => { if(isDraftFile(i)===(S.libTab==='drafts')) lib.picked.add(libKey(i)); }); lib.selecting = true; drawLibBar(); drawLib(); };
+$('#libSelect').onclick = () => { if(lib.selecting) (S.libTab==='drafts' ? lib.drafts || [] : lib.items.filter(i => !isDraftFile(i))).forEach(i => lib.picked.add(libKey(i))); lib.selecting = true; drawLibBar(); drawLib(); };
 $('#libCancel').onclick = () => { lib.selecting = false; lib.picked.clear(); drawLibBar(); drawLib(); };
 $('#libTabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; S.libTab = b.dataset.tab; save(); drawLib(); buzz(); };
 $('#libDrafts').onclick = e => $('#libGrid').onclick(e);
 $('#libGrid').onclick = e => {
-  const b = e.target.closest('[data-k]'); if(!b) return; const i = lib.items[+b.dataset.k];
+  const b = e.target.closest('[data-k],[data-d]'); if(!b) return; const i = b.dataset.d!=null ? lib.drafts[+b.dataset.d] : lib.items[+b.dataset.k];
   if(lib.selecting){ const k = libKey(i); lib.picked.has(k) ? lib.picked.delete(k) : lib.picked.add(k); b.classList.toggle('sel'); drawLibBar(); buzz(); return; }
-  lib.cur = i; $('#viewImg').src = viewUrl(i); $('#viewer').hidden = false;
+  lib.cur = i; $('#viewImg').src = viewUrl(i, i.src); $('#viewer').hidden = false;
   const d = isDraftFile(i) ? draftFor(i) : null; $('#vFinish').hidden = !isDraftFile(i) || !!(d && d.sent);
 };
 async function deletePics(list){
   if(!list.length || !confirm('Delete ' + (list.length===1 ? 'this picture' : list.length + ' pictures') + (lib.shared ? '? They go from both computers (Dropbox keeps them in Deleted files).' : '? They move to the "Deleted by Render Deck" folder on the render computer.'))) return false;
   try{ const r = await fetch(base() + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:list.map(i => ({subfolder:i.subfolder, filename:i.filename}))})});
     const j = await r.json(); const gone = new Set(list.map(libKey));
-    lib.items = lib.items.filter(i => !gone.has(libKey(i))); lib.total -= j.moved; lib.picked.clear();
+    lib.items = lib.items.filter(i => !gone.has(libKey(i))); if(lib.drafts) lib.drafts = lib.drafts.filter(i => !gone.has(libKey(i))); lib.total -= j.moved; lib.picked.clear();
     // drop them from the strip under the picture too
     S.gallery = S.gallery.filter(g => { try{ const q = new URL(g.url).searchParams; return !gone.has((q.get('subfolder') ? q.get('subfolder') + '/' : '') + q.get('filename')); }catch(e){ return true; } });
     save(); drawStrip(); show(S.gallery.length ? 0 : -1); drawLib(); drawLibBar(); toast(j.moved===1 ? 'Deleted' : 'Deleted ' + j.moved); buzz(); return true;
   }catch(e){ toast('Could not reach the render computer', true); return false; }
 }
-$('#libDelete').onclick = async () => { if(await deletePics(lib.items.filter(i => lib.picked.has(libKey(i))))){ lib.selecting = false; drawLibBar(); } };
+$('#libDelete').onclick = async () => { if(await deletePics((S.libTab==='drafts' ? lib.drafts || [] : lib.items).filter(i => lib.picked.has(libKey(i))))){ lib.selecting = false; drawLibBar(); } };
 $('#vClose').onclick = () => { $('#viewer').hidden = true; };
 $('#vFinish').onclick = async () => { const i = lib.cur, d = draftFor(i) || await finFromFile(i);
   if(!d){ toast('This draft was made before drafts kept their full render. Use its settings to render it again.', true); return; }
@@ -2185,25 +2201,25 @@ $('#vFinish').onclick = async () => { const i = lib.cur, d = draftFor(i) || awai
 // a draft this phone has no record of: its full render is read from the picture's own ComfyUI metadata (the "prompt" text chunk)
 async function finFromFile(i){
   try{
-    const b = new Uint8Array(await (await fetch(viewUrl(i), {cache:'no-store'})).arrayBuffer()), dv = new DataView(b.buffer);
+    const b = new Uint8Array(await (await fetch(viewUrl(i, i.src), {cache:'no-store'})).arrayBuffer()), dv = new DataView(b.buffer);
     for(let o = 8; o + 8 <= b.length;){
       const n = dv.getUint32(o), type = String.fromCharCode(...b.slice(o + 4, o + 8));
       if(type==='tEXt'){ const t = b.slice(o + 8, o + 8 + n), z = t.indexOf(0), key = new TextDecoder('latin1').decode(t.slice(0, z));
         if(key==='prompt'){ const g = JSON.parse(new TextDecoder('latin1').decode(t.slice(z + 1)));
           const f = Object.values(g).map(x => x._meta && x._meta.rd_finish).find(Boolean); if(!f) return null;
           const pc = S.servers.find(x => x.name.toLowerCase()===libPc(i).toLowerCase());
-          return {draft:true, fin:f.graph, finTitles:f.titles || {}, finSteps:f.steps, home:pc ? pc.url : base(), ckpt:f.ckpt, size:f.size, seed:f.seed, prompt:f.prompt || '', snap:null, url:viewUrl(i)}; } }
+          return {draft:true, fin:f.graph, finTitles:f.titles || {}, finSteps:f.steps, home:pc ? pc.url : base(), ckpt:f.ckpt, size:f.size, seed:f.seed, prompt:f.prompt || '', snap:null, url:viewUrl(i, i.src)}; } }
       if(type==='IEND') break; o += 12 + n;
     }
   }catch(e){}
   return null;
 }
-$('#vRecipe').onclick = async () => { const u = viewUrl(lib.cur), g = S.gallery.find(x => x.url===u); if(await useRecipe(g && g.snap, u)){ $('#viewer').hidden = true; closeSheets(); } };
-$('#vOpen').onclick = () => window.open(viewUrl(lib.cur), '_blank');
+$('#vRecipe').onclick = async () => { const u = viewUrl(lib.cur, lib.cur.src), g = S.gallery.find(x => x.url===u); if(await useRecipe(g && g.snap, u)){ $('#viewer').hidden = true; closeSheets(); } };
+$('#vOpen').onclick = () => window.open(viewUrl(lib.cur, lib.cur.src), '_blank');
 $('#vDel').onclick = async () => { if(await deletePics([lib.cur])) $('#viewer').hidden = true; };
 $('#vPic').onclick = () => {
   const i = lib.cur; let b = on1('pic') || S.blocks.find(x => x.type==='pic'); if(!b) b = addBlock('pic', true);
-  b.on = true; b.image = libKey(i) + ' [output]'; b.preview = viewUrl(i); save(); $('#viewer').hidden = true; closeSheets(); render(); toast('Added as start picture');
+  b.on = true; b.image = libKey(i) + ' [output]'; b.preview = viewUrl(i, i.src); save(); $('#viewer').hidden = true; closeSheets(); render(); toast('Added as start picture');
 };
 
 // ---------- Hidden: a second workstation with its own recipe, strip and renders, saved in Hidden subfolders ----------
