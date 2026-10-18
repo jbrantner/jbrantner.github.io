@@ -3,7 +3,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path');
 const zlib = require('zlib');
-let DRAFT_PNG = null; // a draft picture with ComfyUI's prompt text chunk, as ComfyUI saves it
+let DRAFT_PNG = null, HIDDEN_ON = false; // a draft picture with ComfyUI's prompt text chunk, as ComfyUI saves it
 function pngWithText(key, text){ const data = Buffer.concat([Buffer.from(key,'latin1'), Buffer.from([0]), Buffer.from(text,'latin1')]), len = Buffer.alloc(4); len.writeUInt32BE(data.length);
   const tc = Buffer.concat([Buffer.from('tEXt'), data]), crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(tc) >>> 0); return Buffer.concat([PNG.slice(0, 33), len, tc, crc, PNG.slice(33)]); }
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==','base64');
@@ -39,7 +39,7 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
       if(u===RU && p.pathname==='/renderdeck/farm/add'){ F.adds.push(body); F.off = body.off; body.jobs.forEach(j => F.jobs.push(Object.assign({state:'waiting', srv:'', id:''}, j))); return r.fulfill({ json:view(Date.now()/1000) }); }
       if(u===RU && p.pathname==='/renderdeck/farm/cancel'){ F.cancels.push(...body.keys); F.jobs = F.jobs.filter(j => !body.keys.includes(j.key)); return r.fulfill({ json:{cancelled:1} }); }
       if(u===RU && p.pathname==='/renderdeck/farm/pcs'){ F.pcCalls.push(body); F.off = body.off; return r.fulfill({ json:view(Date.now()/1000) }); }
-      if(p.pathname==='/renderdeck/images') return r.fulfill({ json:{total:3, shared:1, hidden:'0', images:[{subfolder:'Output_Render/RenderDeck/drafts', filename:'d2.png', t:3},{subfolder:'Output_Main/RenderDeck/drafts', filename:'d1.png', t:2},{subfolder:'Output_Main/RenderDeck', filename:'r0.png', t:1}].concat(DRAFT_PNG ? [{subfolder:'Output_Main/RenderDeck/drafts', filename:'d9.png', t:4}] : []).concat(u===MU ? [{subfolder:'Output_Main/RenderDeck/drafts', filename:'d8.png', t:0.5}] : [])} });
+      if(p.pathname==='/renderdeck/images') return r.fulfill({ json:{total:3, shared:1, hidden:'0', images:[{subfolder:'Output_Render/RenderDeck/drafts', filename:'d2.png', t:3},{subfolder:'Output_Main/RenderDeck/drafts', filename:'d1.png', t:2},{subfolder:'Output_Main/RenderDeck', filename:'r0.png', t:1}].concat(DRAFT_PNG ? [{subfolder:'Output_Main/RenderDeck/drafts', filename:'d9.png', t:4}] : []).concat(u===MU ? [{subfolder:'Output_Main/RenderDeck/drafts', filename:'d8.png', t:0.5}] : []).concat(HIDDEN_ON ? [{subfolder:'Output_Main/Hidden/drafts', filename:'h1.png', t:5}] : [])} });
       if(p.pathname==='/renderdeck/jobs') return r.fulfill({ json:{jobs:[]} });
       if(p.pathname.startsWith('/renderdeck/') || p.pathname.startsWith('/view_metadata') || p.pathname.startsWith('/history')) return r.fulfill({ json:{} });
       r.fulfill({ status:404, body:'' });
@@ -86,6 +86,30 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   const fj = F.adds[2] && F.adds[2].jobs[0];
   ok(fj && fj.home===MU && Object.values(fj.graph).some(x => x._meta.title.startsWith('Finishing pass')) && fj.seed===F.adds[0].jobs[0].seed, 'as the full render read from the picture, on the computer that made it');
   await page.screenshot({ path: path.join(__dirname, 'shot-draft-viewer.png') });
+
+  // Hidden (🙈) works the same, with its own drafts kept apart
+  await page.evaluate(() => closeSheets());
+  const mainLeft = await page.$$eval('#draftRows .frow', r => r.length);
+  await page.click('#modeBtn'); ok(await page.isHidden('#drafts'), 'Hidden starts without the main drafts');
+  await page.fill('#prompt', 'hidden one'); const nAdds = F.adds.length;
+  if(!(await page.evaluate(() => S.draft))) await page.click('#draftBtn');
+  await page.evaluate(() => { S.runs = 1; drawRuns(); }); await page.click('#goBtn');
+  ok(await waitFor(() => F.adds.length===nAdds + 1), 'Hidden drafts go to the farm');
+  const hj = F.adds[nAdds].jobs[0], hsv = Object.values(hj.graph).find(x => x.class_type==='SaveImage');
+  ok(/^Hidden\/drafts\//.test(hsv.inputs.filename_prefix) && Object.values(hsv._meta.rd_finish.graph).find(x => x.class_type==='SaveImage').inputs.filename_prefix.startsWith('Hidden/render'), 'Hidden drafts and their finished renders save into Hidden folders');
+  F.jobs = F.jobs.filter(j => j.key!==hj.key); F.done.push(Object.assign({}, hj, {state:'done', srv:MU, id:'h1', images:[{filename:'h1.png', subfolder:'Output_Main/Hidden/drafts', type:'output'}], t_done:Date.now()/1000}));
+  await page.evaluate(() => { farmAt = 0; tick(); }); await page.waitForFunction(() => document.querySelectorAll('#draftRows .frow').length===1, null, {timeout:8000});
+  ok(true, 'the Hidden draft waits in Hidden\'s Drafts list, alone');
+  HIDDEN_ON = true; await page.click('#libBtn'); await page.waitForSelector('#libTabs button');
+  if(await page.isHidden('#libDrafts')) await page.click('#libTabs [data-tab=drafts]');
+  await page.waitForFunction(() => document.querySelectorAll('#libDrafts button').length===1);
+  ok(await page.$$eval('#libDrafts img', x => x.every(i => i.src.includes('h1.png'))), 'Hidden\'s library Drafts tab shows only Hidden drafts');
+  await page.click('#libDrafts button'); ok(await page.isVisible('#vFinish'), 'and a Hidden draft offers Finish');
+  await page.click('#vFinish'); ok(await waitFor(() => F.adds.length===nAdds + 2), 'Finish sends it');
+  const hf = F.adds[nAdds + 1].jobs[0];
+  ok(Object.values(hf.graph).find(x => x.class_type==='SaveImage').inputs.filename_prefix.startsWith('Hidden/render'), 'the finished Hidden render saves into Hidden');
+  await page.click('#modeBtn'); await page.waitForTimeout(200);
+  ok(await page.$$eval('#draftRows .frow', r => r.length)===mainLeft, 'back in the main view, its own drafts are as they were');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
