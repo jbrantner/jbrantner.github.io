@@ -33,7 +33,7 @@ KINDS = ('checkpoints', 'loras')
 CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites share one API and the same model ids
 HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
-SYNC_MBPS = 15  # copies between your computers are held to about this many MB a second, so the WiFi stays usable
+SYNC_MBPS = 2  # copies between your computers are held to about this many MB a second: at 15 the house WiFi kept dropping
 routes = PromptServer.instance.routes
 
 
@@ -497,7 +497,7 @@ async def sync(request):
 # The phone adds renders here (on the computer that is always on) and can then close. Every couple of seconds this
 # looks at each computer's ComfyUI; one with nothing to do gets the next render it can run. A computer missing a
 # checkpoint or LoRA is asked to copy it from another (the sync above), and the computers' models are compared
-# when one comes online and every half hour, so a new model ends up on all of them (copied one file at a time, at SYNC_MBPS). The queue is saved to render_deck_farm.json, so it
+# every half hour, so a new model ends up on all of them (copied one file at a time, at SYNC_MBPS). The queue is saved to render_deck_farm.json, so it
 # survives a restart.
 FARM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_farm.json')
 FARM = {'pcs': [], 'off': [], 'jobs': [], 'done': []}  # pcs: [{url, name}]; jobs: waiting/sent/running; done: finished or failed, newest last
@@ -611,9 +611,7 @@ async def _look(s, url):
             for node in ('CheckpointLoaderSimple', 'LoraLoader'):
                 st['oi'][node] = (await _get(s, url + '/object_info/' + node)).get(node) or st['oi'].get(node)
             st['lists_at'] = time.time()
-        if not st['online']:
-            st['synced_at'] = 0  # just came online: compare models now
-        st['online'] = True
+        st['online'] = True  # (no new compare when it comes back: a WiFi drop would start the copies again)
     except Exception:
         st['online'] = False
     if st['online'] and st['copies']:
@@ -743,7 +741,7 @@ async def _farm_round(s):
                 st['pending'] = [j['prompt_id']]
             changed = True
             break
-    # when a computer comes online and every half hour, the computers copy each other's missing models (paced)
+    # every half hour, the computers copy each other's missing models (paced)
     if len([u for u in pcs if _st(u)['online']]) > 1 and any(_st(u)['online'] and time.time() - _st(u)['synced_at'] > 1800 for u in pcs):
         await _sync_all(s)
     if changed:
