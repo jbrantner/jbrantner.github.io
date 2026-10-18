@@ -112,7 +112,10 @@ header h1 span{color:var(--accent)}
 .block{position:relative;border-radius:var(--r);background:var(--panel);border:1px solid var(--line);margin:10px 0;scroll-margin:80px 0 120px}
 .block.new{animation:pop .26s cubic-bezier(.3,1.5,.5,1)}
 .block.off{opacity:.5}
-.block.off .body{display:none}
+.block.off .body,.block:not(.open) .body{display:none}
+.bhead{cursor:pointer;-webkit-tap-highlight-color:transparent}
+.chev{flex:none;width:22px;text-align:center;color:var(--dim);font:700 18px/1 var(--body);transition:transform .15s}
+.block.open .chev{transform:rotate(90deg)}
 @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:none;opacity:1}}
 .bhead{display:flex;align-items:center;gap:12px;padding:12px 12px 10px 14px}
 .bhead .emo{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font:700 16px/1 var(--display);color:var(--c);
@@ -343,7 +346,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.4'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.5'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -425,6 +428,7 @@ migrate(S);
 S.styles = S.styles || {};       // checkpoint name -> style key, once the user picks one
 S.styleText = S.styleText || {}; // style key -> {pos, neg} the user edited
 S.loraWords = S.loraWords || {}; // LoRA file -> activation words added to the prompt whenever that LoRA is on
+S.open = S.open || {};           // block id -> true while its details are shown (blocks start folded to their summary line)
 { const M = S.blocks.find(b=>b.type==='model'); if(M.quality==null) M.quality = true; }
 let info = null;          // what the computer has installed: lists of models and node names
 let clientId = S.clientId || (S.clientId = 'rd-' + Math.random().toString(36).slice(2)); // kept, so ComfyUI still sends live previews for renders queued before the app was closed
@@ -1117,7 +1121,7 @@ function addBlock(type, quiet){
   if(type==='lora') b.lora = list[0] || '';
   if(type==='cn') b.model = list[0] || '';
   if(type==='up' && list.length){ b.model = list.find(m => /anime/i.test(m)) || list[0]; }
-  S.blocks.push(b); justAdded = b.id; save(); if(!quiet){ closeSheets(); render(); buzz(); setTimeout(()=>{ const el = document.querySelector(`[data-id="${b.id}"]`); el && el.scrollIntoView({behavior:'smooth',block:'center'}); }, 60); }
+  S.blocks.push(b); justAdded = b.id; S.open[b.id] = true; save(); if(!quiet){ closeSheets(); render(); buzz(); setTimeout(()=>{ const el = document.querySelector(`[data-id="${b.id}"]`); el && el.scrollIntoView({behavior:'smooth',block:'center'}); }, 60); }
   return b;
 }
 function opts(list, cur, empty){
@@ -1198,9 +1202,9 @@ function blockBody(b){
 function renderBlocks(){
   $('#blocks').innerHTML = S.blocks.map(b => { const T = TYPES[b.type];
     const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
-    return `<div class="block ${b.on?'':'off'} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
+    return `<div class="block ${b.on?'':'off'} ${S.open[b.id]?'open':''} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
       <div class="bhead"><div class="emo">${T.emo}</div><h3>${T.name}<small>${esc(sub)}</small></h3>
-      ${T.fixed ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button><button class="x" data-do="del" aria-label="Remove">✕</button>`}</div>
+      ${T.fixed ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button><button class="x" data-do="del" aria-label="Remove">✕</button>`}<span class="chev" aria-hidden="true">›</span></div>
       <div class="body">${blockBody(b)}</div></div>`; }).join('');
   justAdded = 0; showAdded();
 }
@@ -1284,10 +1288,11 @@ $('#blocks').addEventListener('click', e => {
     if(k==='style'){ if(b.ckpt){ S.styles[b.ckpt] = sg.dataset.v; if(syncRec()) toast(STYLES[sg.dataset.v].name + ' settings: ' + recText(sg.dataset.v)); } else toast('Pick a model first', true); }
     else b[k] = (k==='size') ? +sg.dataset.v : sg.dataset.v;
     save(); renderBlocks(); showAdded(); buzz(); return; }
-  const d = e.target.closest('[data-do]'); if(!d) return;
+  const d = e.target.closest('[data-do]');
+  if(!d){ if(e.target.closest('.bhead')){ if(S.open[b.id]) delete S.open[b.id]; else S.open[b.id] = true; save(); e.target.closest('.block').classList.toggle('open', !!S.open[b.id]); buzz(); } return; }
   const act = d.dataset.do;
   if(act==='toggle'){ b.on = !b.on; buzz(); }
-  else if(act==='del'){ S.blocks = S.blocks.filter(x => x!==b); buzz(); }
+  else if(act==='del'){ S.blocks = S.blocks.filter(x => x!==b); delete S.open[b.id]; buzz(); }
   else if(act==='dice'){ b.seed = randSeed(); }
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
   else if(act==='quality'){ b.quality = !b.quality; }

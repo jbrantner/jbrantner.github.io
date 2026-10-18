@@ -104,6 +104,11 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   // prompt styles: the SDXL model gets the SDXL prefix, a pony-named model gets score tags and CLIP skip 2
   const textOf = (g, t) => Object.values(g).find(x => x._meta.title===t).inputs.text;
   ok(/^high quality, highly detailed, lantern hunter$/.test(textOf(sent[0],'Prompt')), 'SDXL style adds its prefix: '+textOf(sent[0],'Prompt'));
+  // blocks start folded to their summary line; tapping the header shows the details, tapping again folds it
+  ok(!(await page.isVisible('[data-k=ckpt]')) && (await page.textContent('.block[style*="--model"] small')).includes('sdxl.safetensors'), 'blocks start folded with a summary line');
+  await page.click('.block[style*="--model"] h3'); ok(await page.isVisible('[data-k=ckpt]'), 'tapping a block opens it');
+  await page.click('.block[style*="--model"] h3'); ok(!(await page.isVisible('[data-k=ckpt]')), 'tapping again folds it');
+  await page.click('.block[style*="--model"] h3'); await page.click('.block[style*="--samp"] h3');
   await page.selectOption('[data-k=ckpt]', 'pony.safetensors');
   await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const pg = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets());
   ok(check(pg).length===0 && Object.values(pg).some(x => x.class_type==='CLIPSetLastLayer' && x.inputs.stop_at_clip_layer===-2), 'Pony style adds CLIP skip 2: '+check(pg).join('; '));
