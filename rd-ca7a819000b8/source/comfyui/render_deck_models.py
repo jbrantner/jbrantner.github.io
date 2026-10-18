@@ -334,7 +334,7 @@ def _out_path(subfolder, filename):
 @routes.get('/renderdeck/images')
 async def images(request):
     """Every picture in ComfyUI's output folder, newest first, a page at a time.
-    hidden=1 lists only the app's Hidden renders (any folder named Hidden), hidden=0 everything else."""
+    hidden=1 lists only the app's Hidden renders (any folder named Hidden); otherwise they are always left out."""
     root = folder_paths.get_output_directory()
     found, hidden = [], request.query.get('hidden')
     for d, dirs, files in os.walk(root):
@@ -342,7 +342,7 @@ async def images(request):
         sub = os.path.relpath(d, root).replace('\\', '/')
         for f in files:
             if f.lower().endswith(PICS):
-                if hidden in ('0', '1') and (HIDDEN in sub.split('/')) != (hidden == '1'):
+                if (HIDDEN in sub.split('/')) != (hidden == '1'):
                     continue
                 st = os.stat(os.path.join(d, f))
                 found.append({'subfolder': '' if sub == '.' else sub, 'filename': f, 't': st.st_mtime, 'size': st.st_size})
@@ -821,7 +821,7 @@ async def farm(request):
 
 @routes.post('/renderdeck/farm/add')
 async def farm_add(request):
-    """{pcs:[{url,name}], off:[url], jobs:[{key, graph, home, client_id, prompt, seed, ckpt, n, of}]}"""
+    """{pcs:[{url,name}], off:[url], jobs:[{key, graph, home, client_id, prompt, seed, ckpt, n, of, hidden}]}"""
     try:
         body = await request.json()
         _farm_start()
@@ -832,7 +832,7 @@ async def farm_add(request):
             home = _tailnet(j.get('home'))
             FARM['jobs'].append({'key': str(j['key'])[:40], 'graph': j['graph'], 'home': home, 'client_id': str(j.get('client_id') or '')[:60],
                                  'prompt': str(j.get('prompt') or '')[:300], 'seed': j.get('seed'), 'ckpt': str(j.get('ckpt') or '')[:200],
-                                 'n': j.get('n'), 'of': j.get('of'), 'state': 'waiting', 'srv': '', 'id': '', 't_added': time.time()})
+                                 'n': j.get('n'), 'of': j.get('of'), 'hidden': bool(j.get('hidden')), 'state': 'waiting', 'srv': '', 'id': '', 't_added': time.time()})
         _farm_save()
         _farm_wake.set()
         return web.json_response(_farm_view(time.time()))

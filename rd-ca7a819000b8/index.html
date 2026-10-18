@@ -433,7 +433,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.22'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.23'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -696,6 +696,9 @@ function onPreview(p, buf){
   let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg';
   if(type===4){ const n = v.getUint32(4); try{ const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,n))); if(meta.prompt_id && !S.queue.some(q => q.id===meta.prompt_id)) return; mime = meta.image_type || 'image/jpeg'; }catch(e){} off = 8 + n; }
   else if(type!==1) return;
+  // a Hidden render's live picture is never kept or shown outside Hidden
+  const mine = S.queue.filter(q => q.srv===p.url), job = mine.find(q => q.state==='running') || mine[0];
+  if(job ? masked(job) : !S.hidden && S.queue.some(masked)){ dropPreview(p); return; }
   const url = URL.createObjectURL(new Blob([new Uint8Array(buf, off)], {type:mime}));
   if(p.preview) URL.revokeObjectURL(p.preview);
   p.preview = url;
@@ -706,6 +709,10 @@ function onPreview(p, buf){
   const img = $('#shown'); img.src = url; img.hidden = false; $('#empty').hidden = true;
 }
 
+function dropPreview(p){
+  if(p.preview) URL.revokeObjectURL(p.preview); p.preview = '';
+  document.querySelectorAll('img[data-pv]').forEach(i => { if(i.dataset.pv===p.url) i.removeAttribute('src'); });
+}
 async function uploadImage(file){
   if(S.test) return {name:'test-' + file.name, local:URL.createObjectURL(file)};
   const fd = new FormData(); fd.append('image', file, file.name || 'phone.png'); fd.append('overwrite','true'); fd.append('type','input');
@@ -885,7 +892,7 @@ async function go(){
     P.seed = P.lockSeed ? first + i : (i ? randSeed() : first); // a kept seed steps by one so the renders differ
     // a draft also carries the full render it can become, built now so later recipe changes don't touch it
     const built = buildGraph(S.draft ? {draft:draftStep(P), one:true} : null), fin = S.draft ? buildGraph({one:true, exact:true}) : null;
-    const e = {key:tap + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : base(), state:'sending',
+    const e = {key:tap + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : base(), state:'sending', hidden:!!S.hidden,
       graph:built.graph, titles:built.titles, seed:built.seed, prompt:S.prompt, ckpt:M.ckpt, n:i+1, of:runs, images:[], snap:snapshot(built.seed),
       size:sizeOf(P), pics:on1('pic') || S.draft ? 1 : S.batch, steps:S.draft ? draftStep(P) : P.steps};
     if(fin){ Object.assign(e, {draft:true, fin:fin.graph, finTitles:fin.titles, finSteps:P.steps});
@@ -1046,15 +1053,15 @@ function drawDuo(){
   duo.hidden = !two; $('#bothBtn').hidden = !(run.length >= 2 && focusPc);
   if(!two){ duo.dataset.k = ''; return; }
   const k = run.slice(0,2).map(e => e.srv).join(' ');
-  if(duo.dataset.k!==k){ duo.dataset.k = k;
-    duo.innerHTML = run.slice(0,2).map(e => { const p = pcOf(e.srv);
-      return `<button data-duo="${esc(e.srv)}"><img data-pv="${esc(e.srv)}" src="${esc(p.preview || 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==')}" alt=""><span class="dl"></span><i class="db"></i></button>`; }).join(''); }
+  if(duo.dataset.k!==k + S.hidden){ duo.dataset.k = k + S.hidden;
+    duo.innerHTML = run.slice(0,2).map(e => { const p = pcOf(e.srv), pv = masked(e) ? '' : p.preview;
+      return `<button data-duo="${esc(e.srv)}"><img data-pv="${esc(e.srv)}" src="${esc(pv || 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==')}" alt=""><span class="dl"></span><i class="db"></i></button>`; }).join(''); }
   run.slice(0,2).forEach((e,i) => { const b = duo.children[i];
-    b.querySelector('.dl').textContent = pcName(e.srv) + ': ' + (e.prog ? e.prog.text : 'Starting');
+    b.querySelector('.dl').textContent = pcName(e.srv) + ': ' + (masked(e) ? 'Hidden render' : e.prog ? e.prog.text : 'Starting');
     b.querySelector('.db').style.width = Math.round((e.prog ? e.prog.f : 0) * 100) + '%'; });
 }
 $('#duo').onclick = e => { const b = e.target.closest('[data-duo]'); if(!b) return; focusPc = b.dataset.duo;
-  const p = pcOf(focusPc); if(p.preview){ $('#shown').src = p.preview; $('#shown').hidden = false; $('#empty').hidden = true; } drawDuo(); buzz(); };
+  const p = pcOf(focusPc), j = S.queue.find(q => q.srv===focusPc && q.state==='running'); if(p.preview && !masked(j)){ $('#shown').src = p.preview; $('#shown').hidden = false; $('#empty').hidden = true; } drawDuo(); buzz(); };
 $('#bothBtn').onclick = () => { focusPc = null; drawDuo(); buzz(); };
 // on the picture: what each computer is doing, and how many are still waiting
 function drawStatus(){
@@ -1076,7 +1083,7 @@ async function completeOne(e, quiet, h){
   e.images.forEach(i => galleryFor(isHidden(i.subfolder)).unshift(Object.assign({url:viewUrl(i, e.srv), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}, draftInfo(e))));
   S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); save(); show(0); drawStrip();
   doneCount++;
-  if(e.draft && !S.queue.some(q => q.draft)){ const n = S.gallery.filter(g => g.draft && g.fin && !g.sent && !g.away).length;
+  if(e.draft && !masked(e) && !S.queue.some(q => q.draft && !masked(q))){ const n = S.gallery.filter(g => g.draft && g.fin && !g.sent && !g.away).length;
     toast(n + (n > 1 ? ' drafts' : ' draft') + ' ready: tick the ones to finish ✎'); scrollTo({top:0, behavior:'smooth'}); if(!quiet) doneCount = 0; }
   if(!S.queue.length){ status(''); bar(1); setTimeout(()=>bar(0), 500); if(!quiet) toast(doneCount > 1 ? 'Done: ' + doneCount + ' renders ✨' : 'Done ✨'); doneCount = 0; }
   drawGo(); drawStatus(); drawQueue();
@@ -1100,7 +1107,7 @@ async function finishDrafts(gs){
   if(!S.test){ await findFarm(); if(!farm) await Promise.all(allPcs().map(x => pollPc(x))); }
   const had = S.queue.length, tap = Date.now().toString(36), mine = [];
   for(const [i, g] of gs.entries()){
-    const e = {key:tap + 'f' + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : g.home, state:'sending',
+    const e = {key:tap + 'f' + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : g.home, state:'sending', hidden:!!S.hidden,
       graph:JSON.parse(JSON.stringify(g.fin)), titles:g.finTitles || {}, seed:g.seed, prompt:g.prompt, ckpt:g.ckpt, n:i+1, of:gs.length, images:[], snap:g.snap,
       size:g.size, pics:1, steps:g.finSteps, finOf:g.url};
     if(farm){ e.farm = true; e.state = 'waiting'; }
@@ -1212,7 +1219,7 @@ async function farmCall(path, body){
   catch(e){ return {error:'Could not reach ' + pcName(farm) + ', which keeps the queue'}; }
 }
 async function farmAdd(list){
-  const j = await farmCall('/add', Object.assign(farmPcs(), {jobs:list.map(e => ({key:e.key, graph:e.graph, home:e.home, client_id:clientId, prompt:e.prompt, seed:e.seed, ckpt:e.ckpt, n:e.n, of:e.of}))}));
+  const j = await farmCall('/add', Object.assign(farmPcs(), {jobs:list.map(e => ({key:e.key, graph:e.graph, home:e.home, client_id:clientId, prompt:e.prompt, seed:e.seed, ckpt:e.ckpt, n:e.n, of:e.of, hidden:!!e.hidden}))}));
   if(j.error) return j.error;
   list.forEach(e => { delete e.graph; }); save(); // the farm keeps the graph; the app only needs what it shows
   schedule(1500); return '';
@@ -1231,7 +1238,7 @@ function farmView(v, away){
   v.jobs.forEach(j => {
     if(S.farmSeen.includes(j.key)) return; // collected already through the computer's own socket
     let e = S.queue.find(q => q.key===j.key);
-    if(!e){ e = {key:j.key, farm:true, titles:{}, images:[], prompt:j.prompt, seed:j.seed, ckpt:j.ckpt, n:j.n, of:j.of, home:j.home}; S.queue.push(e); }
+    if(!e){ e = {key:j.key, farm:true, titles:{}, images:[], prompt:j.prompt, seed:j.seed, ckpt:j.ckpt, n:j.n, of:j.of, home:j.home, hidden:!!j.hidden}; S.queue.push(e); }
     if(e.srv!==j.srv || e.id!==j.id) e.prog = null;
     else if(e.state==='running' && j.state==='sent') return; // the computer's socket already said it started
     Object.assign(e, {state:j.state, srv:j.srv, id:j.id});
@@ -1239,7 +1246,7 @@ function farmView(v, away){
   let back = 0;
   (v.done || []).forEach(j => {
     if(S.farmSeen.includes(j.key)) return;
-    const e = S.queue.find(q => q.key===j.key) || {key:j.key, farm:true, prompt:j.prompt, seed:j.seed, images:[]};
+    const e = S.queue.find(q => q.key===j.key) || {key:j.key, farm:true, prompt:j.prompt, seed:j.seed, images:[], hidden:!!j.hidden};
     if(j.state==='done'){ e.srv = j.srv; e.id = j.id; e.images = j.images || []; S.queue.includes(e) || S.queue.push(e); completeOne(e, true); back++; }
     else { S.farmSeen.push(j.key); failOne(e, j.error || 'The render failed'); }
   });
@@ -1340,13 +1347,13 @@ function drawQueue(){
     const p = e.srv && e.srv!=='test' ? pcOf(e.srv) : null, where = e.srv ? pcName(e.srv) : e.farm ? 'Next free computer' : pcName(e.home), run = e.state==='running', big = run && openJobs.has(e.key);
     const pos = e.farm ? S.queue.filter(q => q.farm && q.state==='waiting').indexOf(e) + 1 : p ? p.pending.indexOf(e.id) : -1;
     const what = run ? (e.prog ? e.prog.text : 'Starting') : e.farm ? (e.state==='sent' ? 'Starting' : pos > 1 ? '#' + pos + ' in line' : 'Next') : e.state==='waiting' ? 'Waiting for a model to finish copying' : e.state==='sending' ? 'Sending' : pos > 0 ? '#' + (pos + 1) + ' in line' : 'Next';
-    const pv = run ? (p ? p.preview : '') : '';
+    const hid = masked(e), pv = run && !hid ? (p ? p.preview : '') : '';
     return `<div class="job qjob ${e.state} ${big ? 'big' : ''}" data-job="${esc(e.key)}"><div class="jrow">
-      ${run ? `<img class="jthumb" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="" ${pv ? '' : 'hidden'}>` : ''}
-      <div class="grow"><b>${esc(e.prompt.trim() || 'No prompt')}</b><small>${S.servers.length > 1 && !S.test ? esc(where) + ' · ' : ''}${esc(what)} · ${esc(baseName(e.ckpt || '').replace(/\.safetensors$/i, ''))} · seed ${e.seed}</small></div>
+      ${run && !hid ? `<img class="jthumb" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="" ${pv ? '' : 'hidden'}>` : ''}
+      <div class="grow"><b>${hid ? 'Hidden render' : esc((e.prompt || '').trim() || 'No prompt')}</b><small>${S.servers.length > 1 && !S.test ? esc(where) + ' · ' : ''}${esc(what)}${hid ? '' : ' · ' + esc(baseName(e.ckpt || '').replace(/\.safetensors$/i, '')) + ' · seed ' + e.seed}</small></div>
       <button class="x" data-cancel="${esc(e.key)}" aria-label="Cancel this render">✕</button></div>
       ${run ? `<div class="pbar"><i style="width:${Math.round((e.prog ? e.prog.f : 0) * 100)}%"></i></div>` : ''}
-      ${big ? `<img class="jbig" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="">` : ''}</div>`; }).join('')
+      ${big && !hid ? `<img class="jbig" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="">` : ''}</div>`; }).join('')
     : '<p class="note">Nothing queued. Each Render tap adds its renders here.</p>';
 }
 $('#queueBtn').onclick = () => { openSheet('#queueSheet'); drawQueue(); if(S.queue.length) tick();
@@ -1358,7 +1365,7 @@ $('#pcList').onclick = e => { const ac = e.target.closest('[data-agent]'); if(ac
   if(farm) farmCall('/pcs', farmPcs()); if(S.queue.length) tick(); };
 $('#qList').onclick = e => {
   const c = e.target.closest('[data-cancel]'); if(c){ const j = S.queue.find(q => q.key===c.dataset.cancel); if(j){ cancelJob(j); toast('Cancelled'); buzz(); } return; }
-  const r = e.target.closest('.qjob.running'); if(r){ const k = r.dataset.job; openJobs.has(k) ? openJobs.delete(k) : openJobs.add(k); drawQueue(); }
+  const r = e.target.closest('.qjob.running'); if(r && !masked(S.queue.find(q => q.key===r.dataset.job))){ const k = r.dataset.job; openJobs.has(k) ? openJobs.delete(k) : openJobs.add(k); drawQueue(); }
 };
 $('#qCancelAll').onclick = () => { const n = S.queue.length; if(!n || !confirm('Cancel all ' + n + (n > 1 ? ' renders?' : ' render?'))) return; S.queue.slice().forEach(cancelJob); toast(n > 1 ? 'Cancelled all ' + n : 'Cancelled'); };
 
@@ -1374,8 +1381,8 @@ function testRun(){
     if(node.class_type==='KSampler' && step < e.steps){ step++; e.prog = {text:'Painting ' + step + '/' + e.steps, f:0.1 + 0.8*step/e.steps}; drawStatus(); drawQueueSoon(); return; }
     e.prog = {text:e.titles[ids[k]], f:e.prog ? e.prog.f : 0.05}; k++;
     if(k >= ids.length){ endJob(); S.queue = S.queue.filter(q => q!==e);
-      for(let b = 0; b < e.pics; b++) S.gallery.unshift(Object.assign({url:fakeImage(e.seed + b, e), seed:e.seed + b, prompt:e.prompt, t:Date.now(), test:true, snap:e.snap}, draftInfo(e)));
-      S.gallery = trimGallery(S.gallery); show(0); drawStrip(); save();
+      for(let b = 0; b < e.pics; b++) galleryFor(e.hidden).unshift(Object.assign({url:fakeImage(e.seed + b, e), seed:e.seed + b, prompt:e.prompt, t:Date.now(), test:true, snap:e.snap}, draftInfo(e)));
+      S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); show(0); drawStrip(); save();
       if(!S.queue.length){ status(''); bar(1); setTimeout(()=>bar(0),500); toast('Done (pretend picture) ✨'); }
       drawGo(); drawQueue(); testRun(); }
     drawStatus();
@@ -2321,6 +2328,8 @@ $('#vPic').onclick = () => {
 // ---------- Hidden: a second workstation with its own recipe, strip and renders, saved in Hidden subfolders ----------
 const HIDDEN = 'Hidden';
 const isHidden = sub => (sub || '').split('/').includes(HIDDEN);
+// a Hidden render seen from the normal workstation: only "Hidden render", never its picture, prompt, model or seed
+function masked(e){ return !!(e && e.hidden) && !S.hidden; }
 const galleryFor = hidden => !!hidden===!!S.hidden ? S.gallery : ((S.stash = S.stash || {}).gallery = S.stash.gallery || []);
 function drawMode(){
   document.body.classList.toggle('hidden-mode', !!S.hidden); $('#modeBtn').classList.toggle('on', !!S.hidden);
@@ -2333,7 +2342,9 @@ function switchMode(){
   keys.forEach(k => { if(next[k] !== undefined) S[k] = next[k]; });
   S.stash = now; S.hidden = !S.hidden; migrate(S);
   S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
-  if(info) fillDefaults(); save(); drawMode(); render(); drawStrip(); show(S.gallery.length ? 0 : -1); updateIdeas();
+  if(!$('#viewer').hidden) closeViewer(); closeSheets(); // nothing open keeps pictures from the other workstation
+  if(!S.hidden){ allPcs().forEach(p => { if(S.queue.some(q => q.srv===p.url && masked(q))) dropPreview(p); }); openJobs.clear(); focusPc = null; }
+  if(info) fillDefaults(); save(); drawMode(); render(); drawStrip(); show(S.gallery.length ? 0 : -1); updateIdeas(); drawStatus(); drawQueue();
   toast(S.hidden ? 'Hidden on' : 'Hidden off'); buzz();
 }
 $('#modeBtn').onclick = switchMode;
