@@ -7,6 +7,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const RU = 'https://jordo-desktop.tail.ts.net', MU = 'https://jordo-main.tail.ts.net';
 const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetensors']]}}}, LoraLoader:{input:{required:{lora_name:[['pixel.safetensors']]}}},
   KSampler:{input:{required:{sampler_name:[['euler','dpmpp_2m']], scheduler:[['normal','karras']]}}}};
+let rebootAt = 0;
 const F = {pcs:[], off:[], jobs:[], done:[], adds:[], cancels:[], pcCalls:[]};
 const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url:u, name:u===RU ? 'Render' : 'Main', online:true, off:F.off.includes(u), load:0, copies:[], why:''})),
   jobs:F.jobs.map(j => { const c = Object.assign({}, j); delete c.graph; return c; }), done:F.done.filter(d => d.t_done > since)});
@@ -23,6 +24,8 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
     await page.route(u + '/**', async r => {
       const p = new URL(r.request().url()), body = r.request().method()==='POST' ? JSON.parse(r.request().postData() || '{}') : null;
       if(p.pathname==='/object_info') return r.fulfill({ json:OI });
+      if(u===MU && p.pathname==='/api/manager/reboot'){ rebootAt = Date.now(); return r.fulfill({ json:{} }); }
+      if(u===MU && rebootAt && Date.now() - rebootAt < 5000) return r.abort();
       if(p.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
       if(p.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG });
       if(u===RU && p.pathname==='/renderdeck/farm') return r.fulfill({ json:view(+p.searchParams.get('since') || 0) });
@@ -39,9 +42,8 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   const until = (fn, arg, t) => page.waitForFunction(fn, arg, {timeout:t || 10000});
   const waitFor = async (fn, t) => { const end = Date.now() + (t || 10000); while(Date.now() < end){ if(fn()) return true; await page.waitForTimeout(100); } return false; };
   for(const u of [MU, RU]){ await page.click('#openSettings'); await page.fill('#server', u); await page.click('#connectBtn'); await until(() => document.querySelector('#connDot').classList.contains('on')); }
-  await until(() => document.querySelectorAll('#pcStrip button').length===2);
-  const strip = await page.$$eval('#pcStrip button', b => b.map(x => x.textContent));
-  ok(strip.join('|')==='MainFree|RenderFree', 'both computers show at the top with their status: ' + strip.join(' | '));
+  await until(() => document.querySelectorAll('#pcDots .dot.on').length===2);
+  ok((await page.getAttribute('#connPill', 'aria-label'))==='Main online, Render online', 'a dot for each computer at the top, both online');
   ok(await waitFor(() => F.pcCalls.length > 0), 'the farm is told which computers there are');
 
   await page.fill('#prompt', 'lantern hunter');
@@ -62,7 +64,6 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   socks[MU].send(Buffer.concat([Buffer.from([0,0,0,1,0,0,0,2]), PNG]));
   await until(() => document.querySelector('#qList .qjob.running .pbar'));
   ok(true, 'the render Main is painting shows its progress in the list');
-  ok((await page.textContent('#pcStrip')).includes('3/10'), 'and at the top: ' + await page.textContent('#pcStrip'));
 
   // it finishes: the farm reports it done with its picture
   const job = F.jobs.shift(); F.done.push(Object.assign(job, {state:'done', images:[{filename:'r1.png', subfolder:'Output_Main/RenderDeck', type:'output'}], t_done:Date.now()/1000}));
@@ -78,8 +79,17 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   ok(await waitFor(() => F.cancels.includes(key)), 'cancel goes to the farm');
   await page.click(`#pcList [data-pc="${MU}"]`);
   ok(await waitFor(() => F.pcCalls.some(c => c.off.includes(MU))), 'switching Main off goes to the farm');
+  // restart ComfyUI on Main: the app asks Manager to reboot, sees it go down and come back
+  page.once('dialog', d => d.accept());
+  await page.click(`#pcList [data-restart="${MU}"]`);
+  ok(await waitFor(() => rebootAt > 0), 'Restart asks Main\'s ComfyUI-Manager to reboot');
+  await until(() => /Restarting/.test(document.querySelector('#pcList').textContent));
+  ok(true, 'Main shows as restarting');
+  await until(() => document.querySelectorAll('#pcDots .dot.on').length===1, null, 6000);
+  ok(true, 'its dot goes grey while it is down');
+  await until(() => !/Restarting/.test(document.querySelector('#pcList').textContent) && document.querySelectorAll('#pcDots .dot.on').length===2, null, 20000);
+  ok(true, 'and green again once it is back');
   await page.evaluate(() => closeSheets());
-  ok((await page.textContent('#pcStrip')).includes('Switched off'), 'the top shows Main switched off');
   await page.screenshot({ path: path.join(__dirname, 'shot-farm-top.png') });
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

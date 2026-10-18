@@ -34,12 +34,11 @@ header h1 span{color:var(--accent)}
 .icon{width:40px;height:40px;border-radius:12px;background:var(--panel);border:1px solid var(--line);display:grid;place-items:center;font-size:18px;color:var(--soft)}
 
 /* stage */
-.pcs{display:flex;gap:8px;margin:-4px 0 10px}
-.pcs button{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:12px;background:var(--panel);border:1px solid var(--line);text-align:left}
-.pcs b{display:block;font-size:13.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pcs small{display:block;font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pcs .dot{flex:none}
-.pcs .busy small{color:var(--cyan)}
+.pcdots{display:flex;align-items:center;gap:9px}
+.pcdots span{display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:800;color:var(--soft)}
+.pcdots span.off{color:var(--dim)}
+@media (max-width:420px){ .pill:has(.pcdots:not([hidden])){padding:9px 12px} }
+.pcrow .chipbtn{flex:none;min-height:32px;padding:4px 10px;font-size:12.5px}
 .stage{position:relative;aspect-ratio:1;border-radius:var(--r);overflow:hidden;border:1px solid var(--line);background:
   repeating-conic-gradient(#1a1c22 0 25%,#16171c 0 50%) 0 0/24px 24px}
 .stage img{width:100%;height:100%;object-fit:contain;display:block}
@@ -216,11 +215,10 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 <div class="wrap">
   <header>
     <h1>Render <span>Deck</span></h1>
-    <button class="pill" id="connPill"><i class="dot" id="connDot"></i><span id="connText">Not connected</span></button>
+    <button class="pill" id="connPill"><i class="dot" id="connDot"></i><span id="connText">Not connected</span><span class="pcdots" id="pcDots" hidden></span></button>
     <button class="icon" id="libBtn" aria-label="All renders">🗂</button>
     <button class="icon" id="openSettings" aria-label="Settings">⚙</button>
   </header>
-  <div class="pcs" id="pcStrip" hidden></div>
 
   <div class="stage" id="stage">
     <div class="empty" id="empty"><div><b>Build a recipe, hit Render</b>Your picture lands here.<br>Tap ⚙ to connect your render computer, or try Test mode.</div></div>
@@ -353,7 +351,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.7'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.8'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -570,9 +568,10 @@ async function pollPc(p){
   const t = Date.now();
   try{ const q = await (await fetch(p.url + '/queue', Object.assign({cache:'no-store'}, within(6000)))).json();
     p.running = q.queue_running.map(x => x[1]); p.pending = q.queue_pending.map(x => x[1]); p.load = p.running.length + p.pending.length; p.polledAt = t;
+    restarted(p, true); if(p.restarting) return false;
     if(!p.online || !p.oi){ p.online = true; await wakePc(p); }
     return true;
-  }catch(e){ p.online = false; return false; }
+  }catch(e){ p.online = false; restarted(p, false); return false; }
 }
 function setConn(kind, text){
   $('#connDot').className = 'dot' + (kind==='on'?' on':kind==='test'?' test':'');
@@ -931,7 +930,7 @@ async function tick(away){
   }finally{ ticking = false; }
   drawGo(); drawStatus(); drawQueue();
   // busy: look often; idle: just keep the computers' status at the top fresh while the app is on screen
-  if(S.queue.length || allPcs().some(p => p.copies.length)) schedule(3000);
+  if(S.queue.length || allPcs().some(p => p.copies.length || p.restarting)) schedule(3000);
   else if(document.visibilityState==='visible') schedule(10000);
 }
 function drawGo(){
@@ -1101,20 +1100,43 @@ function farmView(v, away){
 // ---------- your computers at the top: on or off, and what each is doing ----------
 function pcWhat(p, long){
   const mine = S.queue.find(e => e.srv===p.url && e.state==='running'), off = S.pcOff.includes(p.url);
+  if(p.restarting) return 'Restarting ComfyUI…';
   let w = !p.online ? (long ? 'Not reachable' : 'Offline') : mine ? (mine.prog ? mine.prog.text : 'Starting') + (off && long ? ', then stops taking renders' : '')
     : off ? (long ? 'Not taking renders' : 'Switched off') : p.load ? (long ? 'Busy with something else' : 'Busy') : 'Free';
   if(p.copies.length) w += long ? ' · copying ' + p.copies.map(c => c.name + (c.total ? ' ' + Math.round(c.done/c.total*100) + '%' : '')).join(', ') : ' · copying models';
   if(long && p.why && p.online && !mine) w += ' · ' + p.why;
   return w;
 }
+// with two or more computers, the pill at the top shows a dot for each: green when it's online
 function drawPcs(){
-  const ps = allPcs(), el = $('#pcStrip');
-  el.hidden = ps.length < 2;
-  if(el.hidden) return;
-  el.innerHTML = ps.map(p => { const run = S.queue.some(e => e.srv===p.url && e.state==='running');
-    return `<button data-strip="${esc(p.url)}" class="${run ? 'busy' : ''}"><i class="dot ${p.online ? 'on' : ''}"></i><span style="min-width:0"><b>${esc(pcName(p.url))}</b><small>${esc(pcWhat(p))}</small></span></button>`; }).join('');
+  const ps = allPcs(), many = ps.length > 1;
+  $('#pcDots').hidden = !many; $('#connDot').hidden = many; $('#connText').hidden = many;
+  if(!many) return;
+  $('#pcDots').innerHTML = ps.map(p => `<span class="${p.online ? '' : 'off'}" title="${esc(pcName(p.url))}: ${p.online ? 'online' : 'offline'}"><i class="dot ${p.online ? 'on' : ''}"></i>${esc(pcName(p.url).charAt(0))}</span>`).join('');
+  $('#connPill').setAttribute('aria-label', ps.map(p => pcName(p.url) + (p.online ? ' online' : ' offline')).join(', '));
 }
-$('#pcStrip').onclick = () => $('#queueBtn').onclick();
+
+
+// ---------- restarting ComfyUI on a computer, through ComfyUI-Manager's reboot ----------
+async function restartPc(p){
+  const n = pcName(p.url);
+  if(!confirm('Restart ComfyUI on ' + n + '? Anything it is painting stops; queued renders carry on once it is back.')) return;
+  let went = false, none = true;
+  for(const path of ['/api/manager/reboot', '/manager/reboot', '/v2/manager/reboot']){
+    try{ const r = await fetch(p.url + path, Object.assign({cache:'no-store'}, within(8000))); if(r.status===404) continue; none = false; went = r.ok; if(went) break; }
+    catch(e){ none = false; went = true; break; } // the connection drops as ComfyUI goes down
+  }
+  if(!went){ toast(none ? n + " can't restart from here: ComfyUI-Manager isn't installed there" : n + ' did not restart', true); return; }
+  p.restarting = Date.now(); p.online = false; toast('Restarting ComfyUI on ' + n + '…'); buzz(); drawQueue(); schedule(3000);
+}
+// called from pollPc: a restarting computer is back once it answers again after going away (or after a minute)
+function restarted(p, up){
+  if(!p.restarting) return;
+  if(!up){ p.wentDown = true; return; }
+  if(!p.wentDown && Date.now() - p.restarting < 60000) return; // not seen going down yet
+  p.restarting = 0; p.wentDown = false; p.oi = null; wakePc(p).then(() => { if(p.url===base() && p.oi){ info = Object.assign(info || {}, parseInfo(p.oi)); renderBlocks(); } });
+  toast('ComfyUI on ' + pcName(p.url) + ' is back'); drawQueue();
+}
 
 // ---------- the queue list ----------
 const openJobs = new Set(); // renders whose live preview is shown big
@@ -1126,10 +1148,11 @@ function drawQueue(){
   const ps = allPcs();
   $('#qHead').textContent = S.queue.length ? S.queue.length + ' to go' : '';
   $('#qCancelAll').hidden = !S.queue.length;
-  $('#pcList').innerHTML = ps.length > 1 ? ps.map(p => {
+  $('#pcList').innerHTML = ps.length ? ps.map(p => {
     const off = S.pcOff.includes(p.url), what = pcWhat(p, true);
     return `<div class="pcrow"><i class="dot ${p.online ? 'on' : ''}"></i><div class="grow"><b>${esc(pcName(p.url))}</b><small>${esc(what)}</small>${p.syncNote ? `<small class="warn">${esc(p.syncNote)}</small>` : ''}</div>
-      <button class="tog ${off ? '' : 'on'}" data-pc="${esc(p.url)}" style="--c:var(--cyan)" aria-label="Let ${esc(pcName(p.url))} take renders"></button></div>`; }).join('') : '';
+      <button class="chipbtn" data-restart="${esc(p.url)}" ${p.online && !p.restarting ? '' : 'disabled'}>↻ Restart</button>
+      ${ps.length > 1 ? `<button class="tog ${off ? '' : 'on'}" data-pc="${esc(p.url)}" style="--c:var(--cyan)" aria-label="Let ${esc(pcName(p.url))} take renders"></button>` : ''}</div>`; }).join('') : '';
   $('#qList').innerHTML = S.queue.length ? S.queue.map(e => {
     const p = e.srv && e.srv!=='test' ? pcOf(e.srv) : null, where = e.srv ? pcName(e.srv) : e.farm ? 'Next free computer' : pcName(e.home), run = e.state==='running', big = run && openJobs.has(e.key);
     const pos = e.farm ? S.queue.filter(q => q.farm && q.state==='waiting').indexOf(e) + 1 : p ? p.pending.indexOf(e.id) : -1;
@@ -1144,7 +1167,8 @@ function drawQueue(){
     : '<p class="note">Nothing queued. Each Render tap adds its renders here.</p>';
 }
 $('#queueBtn').onclick = () => { openSheet('#queueSheet'); drawQueue(); if(S.queue.length) tick(); };
-$('#pcList').onclick = e => { const t = e.target.closest('[data-pc]'); if(!t) return; const u = t.dataset.pc;
+$('#pcList').onclick = e => { const rs = e.target.closest('[data-restart]'); if(rs){ restartPc(pcOf(rs.dataset.restart)); return; }
+  const t = e.target.closest('[data-pc]'); if(!t) return; const u = t.dataset.pc;
   S.pcOff = S.pcOff.includes(u) ? S.pcOff.filter(x => x!==u) : S.pcOff.concat(u); save(); drawQueue(); buzz();
   if(farm) farmCall('/pcs', farmPcs()); if(S.queue.length) tick(); };
 $('#qList').onclick = e => {
