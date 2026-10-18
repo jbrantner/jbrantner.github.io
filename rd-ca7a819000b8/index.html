@@ -475,7 +475,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.34'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.35'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3565,7 +3565,7 @@ function boxTurn(c){
   if(s && s.state==='busy') return h + `<p class="note">🎬 ${esc(s.text)}</p>`;
   if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
   if(t.url || t.test){
-    h += (t.url ? `<video class="tvid" data-tv src="${esc(t.url)}" crossorigin="anonymous" playsinline muted preload="auto"></video>` : '<p class="note">Turnaround ready (pretend, in Test mode).</p>')
+    h += (t.url ? `<video class="tvid" data-tv data-src="${esc(t.url)}" playsinline muted preload="auto"></video>` : '<p class="note">Turnaround ready (pretend, in Test mode).</p>')
       + `<input type="range" class="tvscrub" data-tvt min="0" max="1000" step="1" aria-label="Frame">
       <div class="row" style="margin-top:8px"><label>This frame is</label>${seg('tvang', [['three', '¾ view'], ['right', 'Right side'], ['back', 'Back'], ['left', 'Left side']], TV.ang)}</div>
       <p class="note" style="margin:-2px 0 0 92px">Picking an angle jumps to where it usually is. Slide to the frame that shows it best.</p>
@@ -3576,11 +3576,23 @@ function boxTurn(c){
     <div class="btnrow"><button class="btn${t.url ? '' : ' hot'}" data-ch="maketurn" ${src ? '' : 'disabled'}>🎬 ${t.url || t.test ? 'Make it again' : 'Make a turnaround video'}</button></div>`;
 }
 // after the card is drawn: put the clip on the frame for the picked angle, unless it was slid somewhere else
+// The clip is fetched whole and played from the phone's own copy: iPhones don't load a video's frames until it plays
+// (preload is ignored), and a copy of our own can always be drawn into a picture. A muted play-then-pause wakes it up.
+const TVBLOB = {}; // clip url -> its local copy (a promise of an object URL)
 function showTurn(){
   const vid = $('#charBody video[data-tv]'), sl = $('#charBody [data-tvt]'); if(!sl) return;
   if(!TV.moved) sl.value = Math.round(TV_AT[TV.ang] * 1000);
-  const go = () => { if(vid && vid.duration) vid.currentTime = Math.min(vid.duration - 0.01, vid.duration * sl.value / 1000); };
-  if(vid){ if(vid.readyState >= 1) go(); else vid.addEventListener('loadedmetadata', go, {once:true}); }
+  if(!vid) return;
+  const go = () => { if(vid.duration) vid.currentTime = Math.min(vid.duration - 0.01, vid.duration * sl.value / 1000); };
+  if(vid._ready){ go(); return; }
+  if(vid._loading) return; vid._loading = true;
+  const url = vid.dataset.src;
+  TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b));
+  TVBLOB[url].then(src => {
+    vid.addEventListener('loadeddata', async () => {
+      try{ await vid.play(); }catch(e){} vid.pause(); vid._ready = true; go(); }, {once:true});
+    vid.muted = true; vid.src = src; vid.load();
+  }).catch(err => { delete TVBLOB[url]; vid._loading = false; toast(err.message, true); });
 }
 // a render (from the preview or the viewer) as a picture of a character
 function viewFromGallery(g){
