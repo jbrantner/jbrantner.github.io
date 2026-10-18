@@ -77,6 +77,9 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(nodes.find(n => n.class_type==='SaveGLB').inputs.filename_prefix==='RenderDeck/characters/3d/Levi', 'saved under RenderDeck/characters/3d');
   const src = await page.getAttribute('#charBody model-viewer', 'src');
   ok(/filename=Levi_00001_\.glb/.test(src) && /subfolder=RenderDeck%2Fcharacters%2F3d/.test(src), 'the finished model is shown on the card: ' + src);
+  ok(await page.evaluate(() => { const v = a => ({id:a, angle:a, img:a + '.png'}), w = views3d({views:[v('front'), v('left'), v('right'), v('back'), v('side')]});
+    return w.left.angle==='left' && w.right.angle==='right' && w.back && w.front; }), 'with Left side and Right side pictures, all four of Pixal3D\'s views are filled');
+  ok(/Left side .* guessed|Right side .* guessed|Left side and Right side are guessed/.test(await page.evaluate(() => { const c = S.chars[0]; c.views = c.views.filter(x => x.angle!=='side'); return box3d(c); })), 'it says which views it will have to guess');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

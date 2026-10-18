@@ -82,22 +82,22 @@ const OI = {
   ok(st.n===1 && st.c.name==='Levi' && st.c.views.length===1 && st.c.views[0].angle==='ref', 'new character Levi with the render as its Reference picture');
   // a Reference picture only makes the full-body front, which is then picked for the other angles
   const offer = await page.$$eval('#charBody [data-want]', b => b.map(x => x.dataset.want + (x.classList.contains('on') ? '*' : '')));
-  ok(offer.join()==='front*,three,side,back,face' && (await page.textContent('#charBody [data-ch="turn"]')).includes('Make the full-body front'), 'a Reference picture offers every angle, with just the front ticked: ' + offer.join());
+  ok(offer.join()==='front*,three,left,right,back,face' && (await page.textContent('#charBody [data-ch="turn"]')).includes('Make the full-body front'), 'a Reference picture offers every angle, with just the front ticked: ' + offer.join());
   await page.click('#charBody [data-ch="turn"]');
   ok(await page.evaluate(() => S.queue.length===1 && Object.values(S.graphOf = S.queue[0].graph).some(n => /full-body front view, from head to feet/.test(n.inputs.prompt || ''))), 'one render, asking for a head-to-feet front view');
   await page.waitForFunction(() => !S.queue.length && S.chars[0].views.length===2, null, {timeout:15000});
   st = await page.evaluate(() => ({a:S.chars[0].views.map(v => v.angle).join(), sel:CH.sel===S.chars[0].views[1].id}));
   ok(st.a==='ref,front' && st.sel, 'the new front joins Levi and is picked: ' + JSON.stringify(st));
   const want = await page.$$eval('#charBody [data-want].on', b => b.map(x => x.dataset.want));
-  ok(want.join()==='three,side,back,face', 'the angles it lacks are ticked: ' + want.join());
-  await page.click('#charBody [data-want="three"]');
-  ok((await page.textContent('#charBody [data-ch="turn"]')).includes('Make 3 angles'), 'unticking one leaves 3 to make');
+  ok(want.join()==='three,left,right,back,face', 'the angles it lacks are ticked: ' + want.join());
+  await page.click('#charBody [data-want="three"]'); await page.click('#charBody [data-want="right"]');
+  ok((await page.textContent('#charBody [data-ch="turn"]')).includes('Make 3 angles'), 'unticking two leaves 3 to make');
   await page.click('#charBody [data-ch="turn"]');
   ok(await page.evaluate(() => S.queue.length===3 && S.queue.every(e => S.charJobs[e.key])), 'three renders queued for the character');
   await page.waitForFunction(() => document.querySelectorAll('#charBody .cviews .wait').length > 0, null, {timeout:3000}).catch(() => {});
   await page.waitForFunction(() => !S.queue.length, null, {timeout:15000});
   st = await page.evaluate(() => S.chars[0].views.map(v => v.angle).join());
-  ok(st==='ref,front,side,back,face', 'each finished picture joins Levi with its angle: ' + st);
+  ok(st==='ref,front,left,back,face', 'each finished picture joins Levi with its angle: ' + st);
   ok((await page.$$('#charBody .cviews button[data-cv]')).length===5 && !(await page.$('#charBody .cviews .wait')), 'the sheet shows 5 pictures and nothing still making');
   const tg = await page.evaluate(() => { const k = qwenKit(); return turnGraph(k, 'x.png', 'side', S.chars[0]).graph; });
   ok(check(tg).length===0, 'Qwen graph is valid: ' + check(tg).join('; '));
@@ -110,7 +110,7 @@ const OI = {
   await page.mouse.move(ob.x + ob.width - 20, ob.y + 100); await page.mouse.down();
   for(let i = 1; i <= 5; i++){ await page.mouse.move(ob.x + ob.width - 20 - i * 52, ob.y + 100, {steps:3}); frames.push(await lab() + (await page.$eval('#charBody [data-orbit] img', x => x.classList.contains('flip')) ? '~' : '')); }
   await page.mouse.up();
-  ok(frames.join('|')==='Front|Side|Back|Side, other side~|Front|Side', 'dragging turns him around, the far side mirrored: ' + frames.join('|'));
+  ok(frames.join('|')==='Front|Left side|Back|Left side, mirrored~|Front|Left side', 'dragging turns him around, the far side mirrored: ' + frames.join('|'));
   // picking a picture lets you say which angle it is, and remove it
   await page.click('#charBody .cviews button[data-cv]:nth-child(2)'); await page.click('#charBody [data-seg="cangle"][data-v="three"]');
   ok(await page.evaluate(() => S.chars[0].views[1].angle==='three'), 'a picture\'s angle can be changed');
@@ -138,7 +138,7 @@ const OI = {
   await page.click('#charBtn'); await page.click('#charBody [data-open]');
   ok((await page.textContent('#charBody')).includes('Qwen-Image-Edit on Render'), 'the sheet says the angles are drawn on Render');
   await page.evaluate(() => { CH.want = new Set(); drawChars(); });
-  await page.click('#charBody [data-want="back"]'); await page.click('#charBody [data-want="side"]');
+  await page.click('#charBody [data-want="back"]'); await page.click('#charBody [data-want="left"]');
   await page.click('#charBody [data-ch="turn"]');
   await page.waitForFunction(() => S.chars[0].views.length===3, null, {timeout:8000}).catch(() => {});
   ok(sent[RENDER].length===2 && sent[MAIN].length===0, 'both renders went to Render, none to Main: ' + sent[RENDER].length + ' / ' + sent[MAIN].length);

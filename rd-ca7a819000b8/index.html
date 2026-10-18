@@ -473,7 +473,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.32'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.33'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3109,12 +3109,15 @@ window.addEventListener('resize', () => drawBoards());
 // Each workstation has its own characters (Hidden keeps its own list, like its recipe).
 S.chars = S.chars || [];       // [{id, name, tags, color, views:[{id, angle, img (LoadImage name), url (to show it), home (computer it's on)}]}]
 S.charJobs = S.charJobs || {}; // render key -> {cid, angle, hidden}: a Make other angles render whose picture goes to that character
-const ANGLES = {ref:'Reference', front:'Front', three:'¾ view', side:'Side', back:'Back', face:'Face'}; // a Reference picture is any picture of them (a bust, a scene): it only makes a full-body front
+const TURNS = ['front','three','left','right','back','face']; // the angles Make other angles offers
+const ANGLES = {ref:'Reference', front:'Front', three:'¾ view', left:'Left side', right:'Right side', side:'Side', back:'Back', face:'Face'}; // their own left and right; Side is from before they were split // a Reference picture is any picture of them (a bust, a scene): it only makes a full-body front
 [S.chars, (S.stash || {}).chars || []].forEach(l => l.forEach(c => c.views.forEach(v => { if(!ANGLES[v.angle]) v.angle = 'ref'; }))); // 'other' from before Reference
 const TURN = { // what Qwen-Image-Edit is asked for each angle
   front:'Show this same character from the front, facing the viewer, full body, standing straight',
   three:'Turn the camera 45 degrees so this same character is seen in a three-quarter view, full body, standing',
   side:'Turn the camera 90 degrees so this same character is seen from the side, in profile, full body, standing',
+  left:'Turn the camera 90 degrees so this same character is seen from their left side, in profile, facing the left edge of the picture, full body, standing',
+  right:'Turn the camera 90 degrees so this same character is seen from their right side, in profile, facing the right edge of the picture, full body, standing',
   back:'Turn the camera around so this same character is seen from behind, back view, facing away, full body, standing',
   face:'Close-up portrait of this same character, face and shoulders, front view, looking at the viewer',
   ref:'Draw this same character as a full-body front view, from head to feet, standing straight and facing the viewer, arms relaxed at the sides',
@@ -3330,7 +3333,9 @@ function kit3d(){
   return k;
 }
 // the pictures it builds from: the newest front, side and back, each cut out and framed square on black
-function views3d(c){ const last = a => c.views.filter(v => v.angle===a).slice(-1)[0]; return {front:last('front'), side:last('side'), back:last('back')}; }
+// Pixal3D's four views: the front, their left side, the back and their right side (an old Side picture fills the side it is marked as)
+function views3d(c){ const last = a => c.views.filter(v => v.angle===a).slice(-1)[0], sd = last('side');
+  return {front:last('front'), left:last('left') || (c.sideIs!=='right' ? sd : null), back:last('back'), right:last('right') || (c.sideIs==='right' ? sd : null), side:sd}; }
 function graph3d(k, imgs, c){
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fillIn(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
@@ -3367,7 +3372,7 @@ async function make3d(c){
   const s = M3D[c.id] = {state:'busy', text:'Getting the pictures ready…'}; drawChars(); buzz();
   try{
     const imgs = {};
-    for(const [a, slot] of [['front','front'], ['side', c.sideIs==='right' ? 'right' : 'left'], ['back','back']]){ const v = vw[a]; if(!v) continue;
+    for(const slot of ['front','left','back','right']){ const v = vw[slot]; if(!v) continue;
       let img = v.img; if(!S.test && v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('m3')); img = g.x.inputs.image; }
       imgs[slot] = img; }
     const {g, save:sid} = graph3d(k, imgs, c);
@@ -3437,9 +3442,9 @@ function box3d(c){
       <div class="btnrow"><button class="chipbtn" data-ch="get3d">⬇ Get the 3D model (${P3D.gb} GB)</button></div>`;
   }
   if(k.why) return h + `<p class="warn">${esc(k.why)}</p>`;
-  const have = ['front','side','back'].filter(a => vw[a]);
-  h += `<p class="note">${vw.front ? 'From the ' + have.map(a => ANGLES[a]).join(', ') + (have.length > 1 ? ' pictures' : ' picture') + ' (the newest of each), on ' + esc(pcName(k.url)) + '. More angles give a better back and sides.' : 'It needs a Front picture first: mark one as Front, or make one from a Reference.'}</p>`;
-  if(vw.side) h += `<div class="row"><label>Side shows</label>${seg('side3d', [['left', 'Their left'], ['right', 'Their right']], c.sideIs==='right' ? 'right' : 'left')}</div>
+  const have = ['front','left','back','right'].filter(a => vw[a]), ang = a => vw[a] && vw[a].angle==='side' ? 'Side' : ANGLES[a];
+  h += `<p class="note">${vw.front ? 'From the ' + have.map(ang).join(', ') + (have.length > 1 ? ' pictures' : ' picture') + ' (the newest of each), on ' + esc(pcName(k.url)) + '. ' + (have.length < 4 ? 'It uses four: Front, Left side, Back and Right side; ' + ['front','left','back','right'].filter(a => !vw[a]).map(a => ANGLES[a]).join(' and ') + (4 - have.length > 1 ? ' are' : ' is') + ' guessed. Make other angles can draw them. ' : '') + 'Pictures that disagree (a different coat, a missing belt) smear the model: remove those first.' : 'It needs a Front picture first: mark one as Front, or make one from a Reference.'}</p>`;
+  if(vw.side && (vw.left===vw.side || vw.right===vw.side)) h += `<div class="row"><label>Side shows</label>${seg('side3d', [['left', 'Their left'], ['right', 'Their right']], c.sideIs==='right' ? 'right' : 'left')}</div>
     <p class="note" style="margin:-2px 0 0 92px">Their left side faces the picture's left edge. Pick the other if the model comes out twisted.</p>`;
   return h + `<div class="btnrow"><button class="btn hot" data-ch="make3d" ${vw.front ? '' : 'disabled'}>🧊 ${m.url ? 'Make it again' : 'Make 3D model'}</button></div>`;
 }
@@ -3456,7 +3461,9 @@ function newChar(){ const c = {id:uid('c'), name:'', tags:'', color:CHAR_COLORS[
 // turning the character around: the angles in order around them, the far side as the near side mirrored
 function orbitRing(c){
   const pick = a => c.views.filter(v => v.angle===a).slice(-1)[0];
-  return [['front',0], ['three',0], ['side',0], ['back',0], ['side',1], ['three',1]].map(([a, f]) => pick(a) && {v:pick(a), flip:!!f, label:ANGLES[a] + (f ? ', other side' : '')}).filter(Boolean);
+  const one = (a, f, label) => pick(a) && {v:pick(a), flip:f, label};
+  return [one('front', false, 'Front'), one('three', false, '¾ view'), one('left', false, 'Left side') || one('side', false, 'Side'), one('back', false, 'Back'),
+    one('right', false, 'Right side') || (pick('left') ? one('left', true, 'Left side, mirrored') : one('side', true, 'Side, other side')), one('three', true, '¾ view, other side')].filter(Boolean);
 }
 function showOrbit(c){
   const ring = orbitRing(c), o = $('#charBody [data-orbit]'); if(!o || !ring.length) return;
@@ -3489,7 +3496,7 @@ function drawChars(){
   }
   const sel = c.views.find(v => v.id===CH.sel) || c.views.find(v => v.angle==='front') || c.views[0]; CH.sel = sel ? sel.id : null;
   const have = new Set(c.views.map(v => v.angle)), jobs = making(c);
-  const fromRef = sel && sel.angle==='ref', offer = ['front','three','side','back','face'];
+  const fromRef = sel && sel.angle==='ref', offer = TURNS;
   if(!CH.want) CH.want = fromRef && !have.has('front') ? new Set(['front']) : new Set(offer.filter(a => !have.has(a) && !jobs.some(e => S.charJobs[e.key].angle===a)));
   const k = qwenKit(), n = CH.want.size;
   paint(box, `<div class="libhead"><button class="chipbtn" data-ch="list">‹ Characters</button>${CH.from ? '<button class="chipbtn hot" data-ch="addfrom">＋ Add the picture</button>' : ''}</div>
