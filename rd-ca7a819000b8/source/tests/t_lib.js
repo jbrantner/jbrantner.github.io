@@ -17,6 +17,8 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   await page.route(SERVER+'/**', async r => {
     const u = new URL(r.request().url());
     if(u.pathname==='/object_info') return r.fulfill({ json:OI });
+    if(u.pathname==='/renderdeck/images' && u.searchParams.get('hidden')==='1') return r.fulfill({ json:{total:1, shared, pc:'Output_Render', hidden:'1', images:[
+      {subfolder:'Output_Render/Hidden', filename:'render_00001_.png', t:3, size:1}]} });
     if(u.pathname==='/renderdeck/images') return r.fulfill({ json:{total:2, shared, pc:'Output_Render', trash:'Deleted by Render Deck', images:[
       {subfolder:'Output_Main/RenderDeck', filename:'render_00001_.png', t:2, size:1}, {subfolder:'Output_Render/RenderDeck', filename:'render_00001_.png', t:1, size:1}]} });
     if(u.pathname==='/view' && !/^Output_/.test(u.searchParams.get('subfolder'))) return r.fulfill({ status:404, body:'' });
@@ -55,6 +57,23 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   await page.waitForFunction(() => document.querySelectorAll('#libGrid img').length===2);
   ok(!(await page.$('#libGrid .pc')), 'no computer labels when the folder is not shared');
   ok((await page.textContent('#libNote')).includes('Deleted by Render Deck'), 'note keeps the trash-folder wording');
+  // Hidden mode: its own prompt, strip, save folder and renders list
+  await page.evaluate(() => { closeSheets(); S.prompt = 'normal prompt'; save(); render(); });
+  await page.click('#modeBtn');
+  const hm = await page.evaluate(() => ({title:document.querySelector('h1 span').textContent, prompt:S.prompt, strip:S.gallery.length,
+    prefix:Object.values(buildGraph().graph).find(n => n.class_type==='SaveImage').inputs.filename_prefix}));
+  ok(hm.title==='Hidden' && hm.prompt==='' && hm.strip===0, 'Hidden starts with an empty prompt and strip: '+JSON.stringify(hm));
+  ok(hm.prefix==='Hidden/render', 'Hidden saves into a Hidden folder: '+hm.prefix);
+  await page.evaluate(() => { S.queue.push({key:'h2', images:[{filename:'render_00009_.png', subfolder:'Output_Render/RenderDeck', type:'output'}], srv:'https://render.test'}); return completeOne(S.queue[S.queue.length-1], true); });
+  ok(await page.evaluate(() => S.gallery.length===0 && S.stash.gallery.some(g => g.url.includes('render_00009_'))), 'a normal render finishing in Hidden goes to the normal strip');
+  await page.evaluate(() => document.querySelector('#libBtn').click());
+  await page.waitForFunction(() => document.querySelectorAll('#libGrid img').length===1);
+  ok((await page.textContent('#libTitle'))==='Hidden renders', 'renders list shows only Hidden renders');
+  await page.evaluate(() => closeSheets());
+  await page.click('#modeBtn');
+  const back = await page.evaluate(() => ({title:document.querySelector('h1 span').textContent, prompt:S.prompt, n:S.gallery.filter(g => g.url.includes('render_00009_')).length,
+    prefix:Object.values(buildGraph().graph).find(n => n.class_type==='SaveImage').inputs.filename_prefix}));
+  ok(back.title==='Deck' && back.prompt==='normal prompt' && back.n===1 && back.prefix==='RenderDeck/render', 'switching back restores the normal workstation: '+JSON.stringify(back));
   ok(!logs.length, 'no page errors: '+logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length+' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

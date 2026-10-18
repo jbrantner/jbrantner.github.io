@@ -279,6 +279,7 @@ async def model_info(request):
 # ---------- the renders on this computer: browse and delete from the phone ----------
 TRASH = 'Deleted by Render Deck'  # deleted pictures are moved here inside the output folder, never erased
 PICS = ('.png', '.jpg', '.jpeg', '.webp')
+HIDDEN = 'Hidden'  # the app's Hidden mode saves into folders with this name, kept out of the normal renders list
 
 
 def _pc():
@@ -321,19 +322,22 @@ def _out_path(subfolder, filename):
 
 @routes.get('/renderdeck/images')
 async def images(request):
-    """Every picture in ComfyUI's output folder, newest first, a page at a time."""
+    """Every picture in ComfyUI's output folder, newest first, a page at a time.
+    hidden=1 lists only the app's Hidden renders (any folder named Hidden), hidden=0 everything else."""
     root = folder_paths.get_output_directory()
-    found = []
+    found, hidden = [], request.query.get('hidden')
     for d, dirs, files in os.walk(root):
         dirs[:] = [x for x in dirs if x != TRASH and not x.startswith('.')]
         sub = os.path.relpath(d, root).replace('\\', '/')
         for f in files:
             if f.lower().endswith(PICS):
+                if hidden in ('0', '1') and (HIDDEN in sub.split('/')) != (hidden == '1'):
+                    continue
                 st = os.stat(os.path.join(d, f))
                 found.append({'subfolder': '' if sub == '.' else sub, 'filename': f, 't': st.st_mtime, 'size': st.st_size})
     found.sort(key=lambda x: -x['t'])
     off, lim = int(request.query.get('offset', 0)), min(200, int(request.query.get('limit', 60)))
-    return web.json_response({'total': len(found), 'images': found[off:off + lim], 'trash': TRASH, 'shared': _shared(), 'pc': _pc()})
+    return web.json_response({'total': len(found), 'images': found[off:off + lim], 'trash': TRASH, 'shared': _shared(), 'pc': _pc(), 'hidden': hidden})
 
 
 @routes.get('/renderdeck/thumb')
