@@ -475,7 +475,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.35'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.36'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3456,7 +3456,7 @@ function box3d(c){
 // picture's own all the way round. Turning to their left, about a quarter of the way in shows their right side,
 // half way their back and three quarters their left side. Scrub the clip on the card and add frames as pictures.
 const TV_W = 576, TV_H = 1024, TV_LEN = 124; // portrait, ~5 s at 24 fps (124 is the shortest length it was trained on)
-const TV_AT = {three:0.125, right:0.25, back:0.5, left:0.75}; // where each angle usually is in the turn
+const TV_AT = {front:0.03, three:0.125, right:0.25, back:0.5, left:0.75}; // where each angle usually is in the turn // where each angle usually is in the turn
 const FAKETV = {MiniMaxH3ReferenceToVideo:{input:{required:{}}}, UNETLoader:{input:{required:{unet_name:[['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors']]}}}, CLIPLoader:{input:{required:{clip_name:[['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors']]}}}, SaveVideo:{input:{required:{}}}};
@@ -3484,18 +3484,19 @@ function turnPrompt(c){
     + 'Wide shot: the whole body is in frame from the top of the head to the feet, with space above and below. The camera is locked off at chest height and does not move or zoom. '
     + 'The design, proportions, colours and clothing stay exactly the same the whole time. Only <Subject 1>; no other figures, no props, no shadows except a soft contact shadow. Even, flat studio lighting.';
 }
-function turnVideoGraph(k, img, c){
+function turnVideoGraph(k, img, c, pinned){
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
-  const pin = k.oi.ResizeAndPadImage ? add('ResizeAndPadImage', {image:[li,0], target_width:TV_W, target_height:TV_H, padding_color:'white', interpolation:'lanczos'}) : li; // fit, not crop, so head and feet stay in
+  const pin = !pinned ? li : k.oi.ResizeAndPadImage ? add('ResizeAndPadImage', {image:[li,0], target_width:TV_W, target_height:TV_H, padding_color:'white', interpolation:'lanczos'}) : li; // fit, not crop, so head and feet stay in
   let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
   if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
   const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:turnPrompt(c), width:TV_W, height:TV_H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
-  const g1 = add('MiniMaxH3AddGuide', {positive:[rv,0], latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:0});
-  const g2 = add('MiniMaxH3AddGuide', {positive:[g1,0], latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:-1});
-  const gd = add('BasicGuider', {model, conditioning:[g2,0]});
+  // a Front is pinned as the first and last frame; a Reference only guides the design, so the clip starts on a clean full-body front of its own
+  let cond = [rv,0];
+  if(pinned) for(const f of [0, -1]) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:f}), 0];
+  const gd = add('BasicGuider', {model, conditioning:cond});
   const sc = add('BasicScheduler', {model, scheduler:'simple', steps:k.steps, denoise:1});
   const sa = add('KSamplerSelect', {sampler_name:'res_multistep'}), no = add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)});
   const out = add('SamplerCustomAdvanced', {noise:[no,0], guider:[gd,0], sampler:[sa,0], sigmas:[sc,0], latent_image:[rv,1]});
@@ -3513,7 +3514,7 @@ async function makeTurn(c){
   const s = MTV[c.id] = {state:'busy', text:'Getting the picture ready…'}; drawChars(); buzz();
   try{
     let img = v.img; if(!S.test && v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('tv')); img = g.x.inputs.image; }
-    const {g, save:sid} = turnVideoGraph(k, img, c);
+    const {g, save:sid} = turnVideoGraph(k, img, c, v.angle==='front');
     if(S.test){ await new Promise(r => setTimeout(r, 300)); c.turn = {url:'', test:true, at:Date.now(), pc:'test'}; delete MTV[c.id]; save(); drawChars(); return; }
     const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-turn'})});
     const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -3567,7 +3568,7 @@ function boxTurn(c){
   if(t.url || t.test){
     h += (t.url ? `<video class="tvid" data-tv data-src="${esc(t.url)}" playsinline muted preload="auto"></video>` : '<p class="note">Turnaround ready (pretend, in Test mode).</p>')
       + `<input type="range" class="tvscrub" data-tvt min="0" max="1000" step="1" aria-label="Frame">
-      <div class="row" style="margin-top:8px"><label>This frame is</label>${seg('tvang', [['three', '¾ view'], ['right', 'Right side'], ['back', 'Back'], ['left', 'Left side']], TV.ang)}</div>
+      <div class="row" style="margin-top:8px"><label>This frame is</label>${seg('tvang', [['front', 'Front'], ['three', '¾ view'], ['right', 'Right side'], ['back', 'Back'], ['left', 'Left side']], TV.ang)}</div>
       <p class="note" style="margin:-2px 0 0 92px">Picking an angle jumps to where it usually is. Slide to the frame that shows it best.</p>
       <div class="btnrow"><button class="btn" data-ch="tvadd">＋ Add as ${esc(ANGLES[TV.ang])}</button></div>`;
   }

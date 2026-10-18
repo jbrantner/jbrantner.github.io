@@ -90,6 +90,9 @@ function firstPixel(buf){ // the first pixel of a PNG (row 0's first pixel is ne
   await page.fill('#charBody [data-tvt]', '900'); await page.dispatchEvent('#charBody [data-tvt]', 'input');
   ok(await page.inputValue('#charBody [data-tvt]')==='900', 'sliding keeps the frame where it was put');
   ok(await page.evaluate(() => { const c = S.chars[0], r = c.views; c.views = [r[0]]; CH.sel = 'v0'; const s = turnSource(c); c.views = r; return s.id==='v0'; }), 'with no front yet it turns the Reference picture');
+  ok(await page.evaluate(() => { const c = S.chars[0], g = turnVideoGraph(kitTurn(), 'levi_ref.png', c, false).g, n = Object.values(g);
+    return !n.some(x => x.class_type==='MiniMaxH3AddGuide' || x.class_type==='ResizeAndPadImage') && g[n.find(x => x.class_type==='BasicGuider').inputs.conditioning[0]].class_type==='MiniMaxH3ReferenceToVideo'; }), 'from a Reference nothing is pinned, so the clip opens on a clean front');
+  ok(await page.$('#charBody [data-seg="tvang"][data-v="front"]'), 'Front can be picked from the clip');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
