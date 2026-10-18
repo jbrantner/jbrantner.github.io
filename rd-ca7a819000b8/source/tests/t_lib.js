@@ -34,13 +34,19 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.evaluate(() => { S.gallery = [
     {url:'https://render.test/view?filename=render_00001_.png&subfolder=RenderDeck&type=output', seed:1},
-    {url:'https://main.test/view?filename=render_00083_.png&subfolder=Output_Main%2FRenderDeck&type=output', seed:2}]; drawStrip(); show(0); });
+    {url:'https://main.test/view?filename=render_00083_.png&subfolder=Output_Main%2FRenderDeck&type=output', seed:2},
+    // Main's render served by Render (the strip fills from both computers' folders), and one an earlier version broke by nesting the folders
+    {url:'https://render.test/view?filename=render_00050_.png&subfolder=Output_Main%2FRenderDeck&type=output', seed:3},
+    {url:'https://render.test/view?filename=render_00051_.png&subfolder=Output_Render%2FOutput_Main%2FRenderDeck&type=output', seed:4}]; drawStrip(); show(0); });
   await page.click('#openSettings'); await page.fill('#server', SERVER+'/'); await page.evaluate(() => document.querySelector('#connectBtn').click());
   await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'), null, {timeout:8000}).catch(async () => { console.log('CONN', await page.textContent('#connText'), logs.join(' | ')); });
   await page.waitForFunction(() => [...document.querySelectorAll('#recentRow img')].every(i => i.complete && i.naturalWidth>0), null, {timeout:8000}).catch(()=>{});
   const strip = await page.$$eval('#recentRow img', a => a.map(i => [i.src, i.naturalWidth]));
   ok(strip[0][0].includes('subfolder=Output_Render%2FRenderDeck') && strip[0][1]>0, 'old render link moved into Output_Render and loads: '+strip[0][0]);
   ok(strip[1][0].startsWith(SERVER) && strip[1][1]>0, 'render from the switched-off computer loads from this one: '+strip[1][0]);
+  const urls = await page.evaluate(() => S.gallery.map(g => g.url).join(' '));
+  ok(urls.includes('render_00050_.png&subfolder=Output_Main%2FRenderDeck'), "the other computer's render served from this one keeps its folder");
+  ok(urls.includes('render_00051_.png&subfolder=Output_Main%2FRenderDeck') && !urls.includes('Output_Render%2FOutput_Main'), 'a link with one folder nested in the other is repaired');
   await page.evaluate(() => show(0)); await page.waitForFunction(() => document.querySelector('#shown').naturalWidth>0, null, {timeout:5000}).catch(()=>{});
   ok(await page.$eval('#shown', i => i.naturalWidth>0), 'big picture loads');
   await page.evaluate(() => document.querySelector('#libBtn').click());
