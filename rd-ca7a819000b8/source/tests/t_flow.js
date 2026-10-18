@@ -88,7 +88,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   // test mode first
   await page.click('#openSettings'); await page.click('#testBtn');
   await page.fill('#prompt', 'lantern hunter');
-  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#feedG img').length===1, null, {timeout:8000});
+  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#recentRow img').length===1, null, {timeout:8000});
   ok(true, 'test mode renders a pretend picture');
   await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const tj = JSON.parse(await page.textContent('#json')); ok(check(tj).length===0, 'test-mode graph is valid: '+check(tj).join('; '));
   await page.evaluate(() => closeSheets());
@@ -98,7 +98,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'));
   ok(true, 'connects and reads models');
   ok((await page.$$eval('[data-k=ckpt] option', o => o.map(x=>x.textContent))).join()==='sdxl.safetensors,pony.safetensors', 'model list filled from object_info');
-  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#feedG img').length===2, null, {timeout:5000});
+  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#recentRow img').length===2, null, {timeout:5000});
   ok(sent.length===1 && check(sent[0]).length===0, 'plain text-to-image graph valid');
 
   // prompt styles: the SDXL model gets the SDXL prefix, a pony-named model gets score tags and CLIP skip 2
@@ -159,7 +159,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   for(const sel of ['--cn','--pic']){ const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click(`.block[style*="${sel}"] [data-do=pick]`)]); await fc.setFiles(tmp); await page.waitForTimeout(200); }
   await page.click('.block[style*="--cn"] [data-seg=prep][data-v=edges]');
   await page.click('.block[style*="--up"] [data-seg=mode][data-v=model]');
-  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#feedG img').length===3, null, {timeout:5000});
+  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#recentRow img').length===3, null, {timeout:5000});
   const g = sent[sent.length-1]; const types = Object.values(g).map(x=>x.class_type);
   ok(check(g).length===0, 'full graph valid: '+check(g).join('; '));
   ok(['LoraLoader','Canny','ControlNetApplyAdvanced','VAEEncode','ImageUpscaleWithModel'].every(t => types.includes(t)), 'all blocks appear in graph');
@@ -172,20 +172,23 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
   // reuse result as start picture
   // the main view is a list: no big picture or bottom strip; tapping a finished render opens it big, Back returns to the list
-  ok(!(await page.$('#strip')) && !(await page.isVisible('#big')) && (await page.$$eval('#feedG .frow', x => x.length))===3, 'main view is a list of renders with thumbnails');
-  await page.click('#feedG .frow[data-i="0"]'); ok(await page.isVisible('#big') && await page.isVisible('#resultActions'), 'tapping a render opens it big with its actions');
-  await page.click('#bigClose'); ok(!(await page.isVisible('#big')), 'Back to list closes it');
-  await page.click('#feedG .frow[data-i="0"]');
+  // main view: only what's painting, in a list that folds; finished renders live in the library, which opens them big
+  ok(!(await page.$('#strip')) && (await page.$$eval('#feedQ .frow', x => x.length))===0 && (await page.textContent('#empty')).includes('Library'), 'main list shows only what is painting');
+  await page.click('#feedHead'); ok(!(await page.isVisible('#feedBody')), 'the painting list folds'); await page.click('#feedHead'); ok(await page.isVisible('#feedBody'), 'and opens again');
+  await page.click('#libBtn'); await page.waitForSelector('#libSheet.open');
+  await page.click('#recentRow [data-i="0"]'); ok(await page.isVisible('#big') && await page.isVisible('#resultActions'), 'a render in the library opens big with its actions');
+  await page.click('#bigClose'); ok(!(await page.isVisible('#big')) && !!(await page.$('#libSheet.open')), 'Back goes back to the library');
+  await page.click('#recentRow [data-i="0"]');
   await page.click('[data-act=pic]');
-  ok(!(await page.isVisible('#big')), 'using it as a start picture goes back to the recipe');
-  const g2before = sent.length; await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#feedG img').length===n, 4, {timeout:5000});
+  ok(!(await page.isVisible('#big')) && !(await page.$('#libSheet.open')), 'using it as a start picture goes back to the recipe');
+  const g2before = sent.length; await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#recentRow img').length===n, 4, {timeout:5000});
   const li = Object.values(sent[g2before]).find(x=>x._meta.title==='Start picture');
   ok(li.inputs.image==='RenderDeck/render_00002.png [output]', 'reused render points at output file: '+li.inputs.image);
 
   // renders in a row: 2× queues two prompts with different seeds, and both pictures come back
   await page.click('#runsUp'); ok((await page.textContent('#runsN'))==='2×', 'plus steps the count to 2×');
-  const before = sent.length, strip = await page.$$eval('#feedG img', x => x.length);
-  await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#feedG img').length===n, strip + 2, {timeout:8000});
+  const before = sent.length, strip = await page.$$eval('#recentRow img', x => x.length);
+  await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#recentRow img').length===n, strip + 2, {timeout:8000});
   const seeds = sent.slice(before).map(g => (i => i.seed ?? i.noise_seed)(Object.values(g).find(x => x._meta.title==='Painting').inputs));
   ok(seeds.length===2 && seeds[0]!==seeds[1], 'two renders queued with different seeds');
   await page.click('#runsDown'); ok((await page.textContent('#runsN'))==='1×' && await page.isDisabled('#runsDown'), 'minus steps back to 1× and stops there');

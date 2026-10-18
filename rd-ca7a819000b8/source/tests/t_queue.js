@@ -97,7 +97,7 @@ const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message));
   ok(await waitFor(() => M.prompts.length===1, 12000), 'after the copy lands, free Main takes the render waiting on Render');
   ok(R.deleted.length===1 && M.prompts[0] && JSON.stringify(M.prompts[0].graph).includes('afkj.safetensors'), 'it was taken out of Render\'s line and sent to Main with the LoRA');
   await until(() => !S.queue.length, null, 15000);
-  ok(await page.$$eval('#feedG img', x => x.length)===2, 'both renders came back');
+  ok(await page.$$eval('#recentRow img', x => x.length)===2, 'both renders came back');
 
   // four renders split between the two, more added while they run, one cancelled from the list
   DUR = 1500;
