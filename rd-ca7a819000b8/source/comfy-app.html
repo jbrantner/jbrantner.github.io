@@ -464,7 +464,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.36'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.37'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3329,32 +3329,46 @@ function views3d(c){ const last = a => c.views.filter(v => v.angle===a).slice(-1
   return {front:last('front'), left:last('left') || (c.sideIs!=='right' ? sd : null), back:last('back'), right:last('right') || (c.sideIs==='right' ? sd : null), side:sd}; }
 function graph3d(k, imgs, c){
   const g = {}; let n = 0;
-  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fillIn(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
-  const bgm = add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), cond = {};
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const name = (c.name || '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'character', dir = (S.hidden ? HIDDEN : 'RenderDeck') + '/characters/3d/';
+  const bgm = add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), cond = {}, views = {};
   for(const [slot, img] of Object.entries(imgs)){
     const li = add('LoadImage', {image:img}), m = add('RemoveBackground', {bg_removal_model:[bgm,0], image:[li,0]});
-    cond[slot] = [add('ImageCropToMask', {images:[li,0], masks:[m,0], width:1024, height:1024, pad_factor:1.1, grow_mask:0, background:'#000000'}), 0];
+    const crop = {width:1024, height:1024, pad_factor:1.1, grow_mask:0, background:'#000000'};
+    cond[slot] = [add('ImageCropToMask', Object.assign({images:[li,0], masks:[m,0]}, crop)), 0];
+    // the cut-out views, and their masks cropped the same way, are kept: the app paints the model from them
+    const mi = add('MaskToImage', {mask:[m,0]}), mc = add('ImageCropToMask', Object.assign({images:[mi,0], masks:[m,0]}, crop));
+    views[slot] = [add('SaveImage', {images:cond[slot], filename_prefix:dir + 'views/' + name + '_' + slot}), add('SaveImage', {images:[mc,0], filename_prefix:dir + 'views/' + name + '_' + slot + '_mask'})];
   }
   const cv = add('CLIPVisionLoader', {clip_name:k.dino}), un = add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'});
   const sv = add('VAELoader', {vae_name:k.sv}), tv = add('VAELoader', {vae_name:k.tv});
   const pc = add('Pixal3DMultiViewConditioning', Object.assign({clip_vision_model:[cv,0], fov:20}, cond));
-  const ms = add('ModelSamplingSD3', {model:[un,0], shift:5}), el = add('EmptyTrellis2LatentStructure', {batch_size:1});
+  // as in ComfyUI's own Pixal3D template: guidance eased off at the end of the structure and shape passes
+  const tame = (cfgFrom, rescale) => k.oi.CFGOverride && k.oi.RescaleCFG ? [add('RescaleCFG', {model:[add('CFGOverride', {model:[un,0], cfg:1, start_percent:cfgFrom, end_percent:1}), 0], multiplier:rescale}), 0] : [un,0];
+  const ms = add('ModelSamplingSD3', {model:tame(0.667, 0.7), shift:5}), m2 = tame(0.769, 0.5), el = add('EmptyTrellis2LatentStructure', {batch_size:1});
   const ks = (model, pos, neg, lat, seed, steps, cfg, sch) => add('KSampler', {model, positive:pos, negative:neg, latent_image:lat, seed, steps, cfg, sampler_name:'euler', scheduler:sch || 'normal', denoise:1});
   const s1 = ks([ms,0], [pc,0], [pc,1], [el,0], 56, 12, 7.5);
   const vs = add('VaeDecodeStructureTrellis2', {samples:[s1,0], vae:[sv,0], resolution:'32'});
   const sh = add('Trellis2ShapeStage', {positive:[pc,0], negative:[pc,1], voxel:[vs,0]});
-  const s2 = ks([un,0], [sh,0], [sh,1], [sh,2], 42, 20, 7.5);
-  const up = add('Trellis2UpsampleStage', {positive:[sh,0], negative:[sh,1], shape_latent:[s2,0], vae:[sv,0], target_resolution:1024});
-  const s3 = ks([un,0], [up,0], [up,1], [up,2], 42, 12, 7.5, 'simple');
+  const s2 = ks(m2, [sh,0], [sh,1], [sh,2], 42, 20, 7.5);
+  const up = add('Trellis2UpsampleStage', {positive:[sh,0], negative:[sh,1], shape_latent:[s2,0], vae:[sv,0], target_resolution:1536});
+  const s3 = ks(m2, [up,0], [up,1], [up,2], 42, 12, 7.5, 'simple');
   const tx = add('Trellis2TextureStage', {positive:[up,0], negative:[up,1], shape_latent:[s3,0]});
   const s4 = ks([un,0], [tx,0], [tx,1], [tx,2], 43, 12, 1);
   const ds = add('VaeDecodeShapeTrellis', {samples:[s3,0], vae:[sv,0]}), dt = add('VaeDecodeTextureTrellis', {samples:[s4,0], vae:[tv,0], shape_subdivides:[ds,1]});
   let mesh = [ds,0];
-  if(k.oi.DecimateMesh) mesh = [add('DecimateMesh', {mesh, target_face_count:150000, placement_mode:'midpoint'}), 0]; // small enough to turn smoothly on a phone
+  if(k.oi.RemeshMesh) mesh = [add('RemeshMesh', {mesh, resolution:768, sign_mode:'udf', 'sign_mode.qef':false, 'sign_mode.drop_inverted_components':false, 'sign_mode.drop_enclosed_components':false,
+    band:1, project_back:0, fix_poles:false, smooth_iters:20, drop_small_components:0.01, precluster_max_verts:20000000}), 0];
+  if(k.oi.DecimateMesh) mesh = [add('DecimateMesh', {mesh, target_face_count:200000, placement_mode:'midpoint'}), 0]; // small enough to turn smoothly on a phone
   if(k.oi.MeshSmoothNormals) mesh = [add('MeshSmoothNormals', {mesh, crease_angle:180}), 0];
-  mesh = [add('PaintMesh', {mesh, voxel_colors:[dt,0]}), 0];
-  const save = add('SaveGLB', {mesh, filename_prefix:(S.hidden ? HIDDEN : 'RenderDeck') + '/characters/3d/' + ((c.name || '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'character')});
-  return {g, save};
+  if(k.oi.UnwrapMesh && k.oi.BakeTextureFromVoxel && k.oi.ApplyTextureToMesh){ // a real texture (UV map), which the app then paints from the pictures
+    const uw = add('UnwrapMesh', {mesh, segmenter:'pec', resolution:2048, padding:2, weld_distance:0.0002});
+    const bk = add('BakeTextureFromVoxel', {mesh:[uw,0], voxel_colors:[dt,0], texture_size:2048, reference_mesh:[ds,0]});
+    mesh = [add('ApplyTextureToMesh', {mesh:[uw,0], base_color:[bk,0], metallic:[bk,1], roughness:[bk,2]}), 0];
+    if(k.oi.MeshSmoothNormals) mesh = [add('MeshSmoothNormals', {mesh, crease_angle:180}), 0];
+  } else mesh = [add('PaintMesh', {mesh, voxel_colors:[dt,0]}), 0];
+  const save = add('SaveGLB', {mesh, filename_prefix:dir + name});
+  return {g, save, views};
 }
 const M3D = {}; // character id -> {state, text}: what the 3D section is doing right now
 async function make3d(c){
@@ -3366,11 +3380,11 @@ async function make3d(c){
     for(const slot of ['front','left','back','right']){ const v = vw[slot]; if(!v) continue;
       let img = v.img; if(!S.test && v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('m3')); img = g.x.inputs.image; }
       imgs[slot] = img; }
-    const {g, save:sid} = graph3d(k, imgs, c);
+    const {g, save:sid, views} = graph3d(k, imgs, c);
     if(S.test){ await new Promise(r => setTimeout(r, 300)); c.model3d = {url:'test.glb', test:true, at:Date.now(), views:Object.keys(imgs)}; delete M3D[c.id]; save(); drawChars(); return; }
     const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-3d'})});
     const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    c.model3d = Object.assign({}, c.model3d, {making:{pc:k.url, id:j.prompt_id, save:sid, t:Date.now()}}); save();
+    c.model3d = Object.assign({}, c.model3d, {making:{pc:k.url, id:j.prompt_id, save:sid, views, t:Date.now()}}); save();
     await wait3d(c);
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't make the 3D model: " + err.message}); drawChars(); }
 }
@@ -3388,9 +3402,166 @@ async function wait3d(c){
     if(!(h.status && h.status.completed)) continue;
     const f = (((h.outputs || {})[m.save] || {})['3d'] || [])[0];
     delete c.model3d.making;
-    if(f) Object.assign(c.model3d, {url:viewUrl(f, m.pc), pc:m.pc, file:(f.subfolder ? f.subfolder + '/' : '') + f.filename, at:Date.now()});
-    save(); delete M3D[c.id]; drawChars(); buzz(); toast(f ? '3D model of ' + (c.name || 'the character') + ' ready ✨' : 'Finished, but no 3D file came back', !f); return;
+    const pic = id => (((h.outputs || {})[id] || {}).images || [])[0], views = {};
+    for(const [slot, [im, mk]] of Object.entries(m.views || {})) if(pic(im) && pic(mk)) views[slot] = {img:viewUrl(pic(im), m.pc), mask:viewUrl(pic(mk), m.pc)};
+    if(f) Object.assign(c.model3d, {url:viewUrl(f, m.pc), raw:viewUrl(f, m.pc), views, painted:0, pc:m.pc, file:(f.subfolder ? f.subfolder + '/' : '') + f.filename, at:Date.now()});
+    save(); delete M3D[c.id]; drawChars(); buzz(); toast(f ? '3D model of ' + (c.name || 'the character') + ' ready ✨' : 'Finished, but no 3D file came back', !f);
+    if(f && Object.keys(views).length) paint3d(c);
+    return;
   }
+}
+// ---------- painting the 3D model from the pictures ----------
+// Pixal3D's own colours are soft and noisy, so the app repaints the model's texture from the cut-out views it was built
+// from. Each view is the rig's camera (fov 20, 90° apart, the model filling 1/1.1 of the frame), so every spot on the
+// model looks up its colour in the pictures that face it, skipping ones where something else is in front (a depth map
+// per view). Spots no picture sees keep Pixal3D's colour. Plain WebGL2 in the browser; the painted .glb goes back to
+// the computer it came from.
+const GLB = {
+  read(buf){
+    const dv = new DataView(buf); if(dv.getUint32(0, true)!==0x46546C67) throw new Error('not a .glb file');
+    let p = 12, json = null, bin = null;
+    while(p < buf.byteLength){ const len = dv.getUint32(p, true), type = dv.getUint32(p + 4, true);
+      if(type===0x4E4F534A) json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, p + 8, len)));
+      if(type===0x004E4942) bin = new Uint8Array(buf, p + 8, len);
+      p += 8 + len; }
+    return {json, bin};
+  },
+  acc({json, bin}, i){
+    const a = json.accessors[i], v = json.bufferViews[a.bufferView], n = {SCALAR:1, VEC2:2, VEC3:3, VEC4:4}[a.type];
+    const T = {5126:Float32Array, 5125:Uint32Array, 5123:Uint16Array, 5121:Uint8Array}[a.componentType];
+    const off = (v.byteOffset || 0) + (a.byteOffset || 0), stride = v.byteStride || 0, size = n * T.BYTES_PER_ELEMENT;
+    if(stride && stride!==size){ const out = new T(a.count * n), src = new DataView(bin.buffer, bin.byteOffset + off);
+      for(let k = 0; k < a.count; k++) for(let c = 0; c < n; c++) out[k * n + c] = T===Float32Array ? src.getFloat32(k * stride + c * 4, true) : T===Uint32Array ? src.getUint32(k * stride + c * 4, true) : T===Uint16Array ? src.getUint16(k * stride + c * 2, true) : src.getUint8(k * stride + c);
+      return out; }
+    return new T(bin.buffer.slice(bin.byteOffset + off, bin.byteOffset + off + a.count * size));
+  },
+  // the same file with one picture swapped for a new PNG
+  swapImage({json, bin}, imgIdx, png){
+    json = JSON.parse(JSON.stringify(json)); const pad = x => (x + 3) & ~3, start = pad(bin.length), total = pad(start + png.length);
+    const nb = new Uint8Array(total); nb.set(bin); nb.set(png, start);
+    json.bufferViews.push({buffer:0, byteOffset:start, byteLength:png.length});
+    json.images[imgIdx] = {bufferView:json.bufferViews.length - 1, mimeType:'image/png'}; json.buffers[0].byteLength = total;
+    const js = new TextEncoder().encode(JSON.stringify(json)), jl = pad(js.length), out = new Uint8Array(12 + 8 + jl + 8 + total), dv = new DataView(out.buffer);
+    dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, out.length, true);
+    dv.setUint32(12, jl, true); dv.setUint32(16, 0x4E4F534A, true); out.fill(0x20, 20, 20 + jl); out.set(js, 20);
+    dv.setUint32(20 + jl, total, true); dv.setUint32(24 + jl, 0x004E4942, true); out.set(nb, 28 + jl);
+    return out;
+  },
+};
+const P3D_EYE = {front:[0,0,1], left:[1,0,0], back:[0,0,-1], right:[-1,0,0]}, P3D_FOV = 20, P3D_DIST = 1.1 * 0.5 / Math.tan(P3D_FOV / 2 * Math.PI / 180);
+function viewMat(slot){ // the rig camera for a view: perspective fov 20, looking at the middle, y up (column-major, as GL wants)
+  const e = P3D_EYE[slot].map(x => x * P3D_DIST), f = P3D_EYE[slot].map(x => -x), up = [0,1,0];
+  const cr = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]], dot = (a, b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const r = cr(f, up), u = cr(r, f), t = 1 / Math.tan(P3D_FOV / 2 * Math.PI / 180), nr = 0.1, fr = 10;
+  const V = [r[0],u[0],-f[0],0, r[1],u[1],-f[1],0, r[2],u[2],-f[2],0, -dot(r,e),-dot(u,e),dot(f,e),1];
+  const P = [t,0,0,0, 0,t,0,0, 0,0,(fr+nr)/(nr-fr),-1, 0,0,2*fr*nr/(nr-fr),0];
+  const M = new Array(16).fill(0); for(let i = 0; i < 4; i++) for(let j = 0; j < 4; j++) for(let k = 0; k < 4; k++) M[j*4+i] += P[k*4+i] * V[j*4+k];
+  return M;
+}
+async function bake3d(glbBuf, views, size){
+  const g = GLB.read(glbBuf), prim = g.json.meshes[0].primitives[0], at = prim.attributes;
+  if(at.TEXCOORD_0==null) throw new Error('this model has no texture map (make it again)');
+  const pos = GLB.acc(g, at.POSITION), uv = GLB.acc(g, at.TEXCOORD_0), idx = prim.indices!=null ? GLB.acc(g, prim.indices) : null;
+  let nrm = at.NORMAL!=null ? GLB.acc(g, at.NORMAL) : null;
+  const nv = pos.length / 3, tri = idx ? Uint32Array.from(idx) : Uint32Array.from({length:nv}, (_, i) => i);
+  if(!nrm){ nrm = new Float32Array(nv * 3); for(let t = 0; t < tri.length; t += 3){ const [a,b,c] = [tri[t],tri[t+1],tri[t+2]];
+      const e1 = [0,1,2].map(i => pos[b*3+i]-pos[a*3+i]), e2 = [0,1,2].map(i => pos[c*3+i]-pos[a*3+i]), n = [e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]];
+      for(const v of [a,b,c]) for(let i = 0; i < 3; i++) nrm[v*3+i] += n[i]; } }
+  const mat = g.json.materials && g.json.materials[prim.material || 0], bct = mat && mat.pbrMetallicRoughness && mat.pbrMetallicRoughness.baseColorTexture;
+  const imgIdx = bct ? g.json.textures[bct.index].source : -1;
+  let base = null;
+  if(imgIdx >= 0){ const im = g.json.images[imgIdx], bv = im.bufferView!=null && g.json.bufferViews[im.bufferView];
+    const blob = bv ? new Blob([g.bin.slice(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength)], {type:im.mimeType || 'image/png'}) : await (await fetch(im.uri)).blob();
+    base = await createImageBitmap(blob); }
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const gl = cv.getContext('webgl2', {preserveDrawingBuffer:false, antialias:false}); if(!gl) throw new Error("this phone can't do WebGL2");
+  try{
+    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const prog = (vs, fs) => { const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, '#version 300 es\nprecision highp float;\n' + vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, '#version 300 es\nprecision highp float;\n' + fs));
+      gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aUv'); gl.bindAttribLocation(p, 2, 'aN'); gl.linkProgram(p); if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; };
+    const buf = (data, loc, n) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 0, 0); };
+    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    buf(pos, 0, 3); buf(uv, 1, 2); buf(nrm, 2, 3);
+    const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, tri, gl.STATIC_DRAW);
+    const tex = (src, opts = {}) => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      if(src) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      else gl.texImage2D(gl.TEXTURE_2D, 0, opts.depth ? gl.DEPTH_COMPONENT24 : gl.RGBA8, opts.w, opts.w, 0, opts.depth ? gl.DEPTH_COMPONENT : gl.RGBA, opts.depth ? gl.UNSIGNED_INT : gl.UNSIGNED_BYTE, null);
+      const f = opts.depth ? gl.NEAREST : gl.LINEAR; gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+    // where the model sits in each picture: its outline is fitted to 1/1.1 of the frame, centred, as the cut-out was
+    const slots = Object.keys(views).slice(0, 4), fit = slots.map(s => { const M = viewMat(s); let x0 = 9, x1 = -9, y0 = 9, y1 = -9;
+      for(let i = 0; i < nv; i++){ const x = pos[i*3], y = pos[i*3+1], z = pos[i*3+2], w = M[3]*x+M[7]*y+M[11]*z+M[15], X = (M[0]*x+M[4]*y+M[8]*z+M[12]) / w, Y = (M[1]*x+M[5]*y+M[9]*z+M[13]) / w;
+        if(X < x0) x0 = X; if(X > x1) x1 = X; if(Y < y0) y0 = Y; if(Y > y1) y1 = Y; }
+      const k = 1 / 1.1 / Math.max(x1 - x0, y1 - y0); return {M, a:[k, k], b:[0.5 - k * (x0 + x1) / 2, 0.5 - k * (y0 + y1) / 2]}; });
+    // depth from each camera, to tell which spots each picture actually sees
+    const DS = 1024, depthP = prog('layout(location=0) in vec3 aPos; uniform mat4 M; void main(){ gl_Position = M * vec4(aPos, 1.0); }', 'out vec4 o; void main(){ o = vec4(1.0); }');
+    const depths = slots.map((s, i) => { const d = tex(null, {w:DS, depth:true}), col = tex(null, {w:DS}), fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, col, 0); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, d, 0);
+      gl.viewport(0, 0, DS, DS); gl.enable(gl.DEPTH_TEST); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.useProgram(depthP);
+      gl.uniformMatrix4fv(gl.getUniformLocation(depthP, 'M'), false, fit[i].M); gl.drawElements(gl.TRIANGLES, tri.length, gl.UNSIGNED_INT, 0);
+      gl.deleteFramebuffer(fb); gl.deleteTexture(col); return d; });
+    gl.disable(gl.DEPTH_TEST); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    const pics = slots.map(s => tex(views[s].img)), masks = slots.map(s => tex(views[s].mask)), baseT = tex(base || (() => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = '#888'; x.fillRect(0, 0, 1, 1); return c; })());
+    const N = slots.length, U = (p, n) => gl.getUniformLocation(p, n);
+    const paintP = prog(`layout(location=0) in vec3 aPos; layout(location=1) in vec2 aUv; layout(location=2) in vec3 aN; out vec3 P; out vec3 Nn; out vec2 T;
+      void main(){ P = aPos; Nn = aN; T = aUv; gl_Position = vec4(aUv * 2.0 - 1.0, 0.0, 1.0); }`,
+      `in vec3 P; in vec3 Nn; in vec2 T; out vec4 o; uniform mat4 M[4]; uniform vec2 A[4]; uniform vec2 B[4]; uniform vec3 E[4]; uniform sampler2D pic[4]; uniform sampler2D msk[4]; uniform sampler2D dep[4]; uniform sampler2D base; uniform int n;
+      vec4 look(int i, sampler2D pc, sampler2D mk, sampler2D dp){
+        vec4 c = M[i] * vec4(P, 1.0); vec3 nd = c.xyz / c.w; vec2 im = nd.xy * A[i] + B[i];
+        if(any(lessThan(im, vec2(0.0))) || any(greaterThan(im, vec2(1.0)))) return vec4(0.0);
+        float d = texture(dp, nd.xy * 0.5 + 0.5).r, z = nd.z * 0.5 + 0.5;
+        if(z > d + 0.0015) return vec4(0.0); // something else is in front of this spot in that picture
+        vec2 st = vec2(im.x, 1.0 - im.y); float m = smoothstep(0.75, 1.0, texture(mk, st).r);
+        float f = max(dot(normalize(Nn), normalize(E[i] - P)), 0.0); float w = m * f * f * f;
+        return vec4(texture(pc, st).rgb * w, w); }
+      void main(){ vec4 s = vec4(0.0);
+        if(n > 0) s += look(0, pic[0], msk[0], dep[0]); if(n > 1) s += look(1, pic[1], msk[1], dep[1]);
+        if(n > 2) s += look(2, pic[2], msk[2], dep[2]); if(n > 3) s += look(3, pic[3], msk[3], dep[3]);
+        vec3 b = texture(base, T).rgb; o = vec4(mix(b, s.rgb / max(s.a, 1e-5), smoothstep(0.01, 0.12, s.a)), 1.0); }`);
+    // islands of the texture map get painted; a few passes then spread their edges outwards so seams don't show the old colours
+    const mk = () => { const t = tex(null, {w:size}), fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return {t, fb}; };
+    let A = mk(), Bt = mk();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, A.fb); gl.viewport(0, 0, size, size); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(paintP);
+    for(let i = 0; i < N; i++){ const e = P3D_EYE[slots[i]].map(x => x * P3D_DIST);
+      gl.uniformMatrix4fv(U(paintP, `M[${i}]`), false, fit[i].M); gl.uniform2fv(U(paintP, `A[${i}]`), fit[i].a); gl.uniform2fv(U(paintP, `B[${i}]`), fit[i].b); gl.uniform3fv(U(paintP, `E[${i}]`), e);
+      [[pics, 'pic'], [masks, 'msk'], [depths, 'dep']].forEach(([arr, nm], j) => { const unit = i * 3 + j; gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, arr[i]); gl.uniform1i(U(paintP, `${nm}[${i}]`), unit); }); }
+    for(let i = N; i < 4; i++) ['pic','msk','dep'].forEach((nm, j) => gl.uniform1i(U(paintP, `${nm}[${i}]`), j)); // unused slots point at something valid
+    gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, baseT); gl.uniform1i(U(paintP, 'base'), 12); gl.uniform1i(U(paintP, 'n'), N);
+    gl.drawElements(gl.TRIANGLES, tri.length, gl.UNSIGNED_INT, 0);
+    const quad = 'out vec2 T; void main(){ vec2 p = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 2.0 - 1.0; T = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }';
+    const growP = prog(quad, `in vec2 T; out vec4 o; uniform sampler2D s; uniform float px; void main(){ vec4 c = texture(s, T); if(c.a > 0.5){ o = c; return; }
+      vec4 acc = vec4(0.0); for(int y = -1; y <= 1; y++) for(int x = -1; x <= 1; x++){ vec4 q = texture(s, T + vec2(x, y) * px); if(q.a > 0.5) acc += vec4(q.rgb, 1.0); }
+      o = acc.a > 0.0 ? vec4(acc.rgb / acc.a, 1.0) : vec4(0.0); }`);
+    gl.useProgram(growP); gl.uniform1f(U(growP, 'px'), 1 / size);
+    for(let k = 0; k < 6; k++){ gl.bindFramebuffer(gl.FRAMEBUFFER, Bt.fb); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, A.t); gl.uniform1i(U(growP, 's'), 0); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); [A, Bt] = [Bt, A]; }
+    // what's still empty keeps the old texture
+    const finP = prog(quad, `in vec2 T; out vec4 o; uniform sampler2D s; uniform sampler2D base; void main(){ vec4 c = texture(s, T); o = vec4(c.a > 0.5 ? c.rgb : texture(base, T).rgb, 1.0); }`);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, Bt.fb); gl.useProgram(finP); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, A.t); gl.uniform1i(U(finP, 's'), 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, baseT); gl.uniform1i(U(finP, 'base'), 1); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    const px = new Uint8ClampedArray(size * size * 4); gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    // the texture map's first row is the top of the picture, as glTF expects (UV v=0 is the first row drawn here too)
+    const out = document.createElement('canvas'); out.width = out.height = size; out.getContext('2d').putImageData(new ImageData(px, size, size), 0, 0);
+    const png = new Uint8Array(await (await new Promise((ok, no) => out.toBlob(b => b ? ok(b) : no(new Error("couldn't save the texture")), 'image/png'))).arrayBuffer());
+    out.width = out.height = 0;
+    return imgIdx >= 0 ? GLB.swapImage(g, imgIdx, png) : null;
+  } finally { const l = gl.getExtension('WEBGL_lose_context'); if(l) l.loseContext(); cv.width = cv.height = 0; if(base && base.close) base.close(); }
+}
+const loadPic = url => new Promise((ok, no) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => ok(i); i.onerror = () => no(new Error("couldn't load " + url.split('filename=')[1])); i.src = url; });
+// paint a finished model from its saved views and put the painted copy next to it
+async function paint3d(c){
+  const m = c.model3d; if(!m || !m.raw || !m.views) return;
+  const s = M3D[c.id] = {state:'busy', text:'Painting the model from your pictures…'}; drawChars();
+  try{
+    const views = {};
+    for(const [slot, v] of Object.entries(m.views)) views[slot] = {img:await loadPic(v.img), mask:await loadPic(v.mask)};
+    const glb = await (await fetch(m.raw)).arrayBuffer(), out = await bake3d(glb, views, 2048);
+    if(!out) throw new Error('the model came without a texture to paint');
+    const name = 'rd3d_' + c.id + '_' + Date.now().toString(36) + '.glb', fd = new FormData();
+    fd.append('image', new Blob([out], {type:'model/gltf-binary'}), name); fd.append('overwrite', 'true'); fd.append('type', 'input');
+    const r = await fetch(m.pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving it failed (' + r.status + ')');
+    const j = await r.json(); m.url = viewUrl({filename:j.name, subfolder:j.subfolder || '', type:'input'}, m.pc); m.painted = Date.now();
+    delete M3D[c.id]; save(); drawChars(); toast('Painted from your pictures ✨');
+  }catch(err){ Object.assign(s, {state:'err', text:"Couldn't paint it from the pictures: " + err.message + '. This is the model with its own colours.'}); drawChars(); }
 }
 // Get the 3D model: the one big file, through the helper (2 MB/s, carries on after a drop)
 async function get3d(){
@@ -3420,7 +3591,7 @@ function box3d(c){
   if(m.making && !s) setTimeout(() => wait3d(c), 0);
   let h = '<div class="lbl">3D model</div>';
   if(m.url && !m.test){ loadMV().catch(() => {}); h += `<model-viewer class="m3d" src="${esc(m.url)}" camera-controls touch-action="pan-y" auto-rotate rotation-per-second="20deg" shadow-intensity="0.6" exposure="1.1" alt="3D model of ${esc(c.name || 'the character')}"></model-viewer>
-    <p class="note">Drag to turn ${esc(c.name || 'them')} around, pinch to zoom. Saved in ${esc(m.file || '')}.</p>`; }
+    <p class="note">Drag to turn ${esc(c.name || 'them')} around, pinch to zoom. ${m.painted ? 'Painted from your pictures; spots none of them shows keep the model\'s own colours.' : m.raw ? '' : 'Made before the app could paint models from the pictures: make it again to get that.'} Saved in ${esc(m.file || '')}.</p>`; }
   else if(m.url) h += '<p class="note">3D model ready (pretend, in Test mode).</p>';
   if(s && s.state==='busy') return h + `<p class="note">🧊 ${esc(s.text)}</p>`;
   if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
@@ -3437,7 +3608,7 @@ function box3d(c){
   h += `<p class="note">${vw.front ? 'From the ' + have.map(ang).join(', ') + (have.length > 1 ? ' pictures' : ' picture') + ' (the newest of each), on ' + esc(pcName(k.url)) + '. ' + (have.length < 4 ? 'It uses four: Front, Left side, Back and Right side; ' + ['front','left','back','right'].filter(a => !vw[a]).map(a => ANGLES[a]).join(' and ') + (4 - have.length > 1 ? ' are' : ' is') + ' guessed. Make other angles can draw them. ' : '') + 'Pictures that disagree (a different coat, a missing belt) smear the model: remove those first.' : 'It needs a Front picture first: mark one as Front, or make one from a Reference.'}</p>`;
   if(vw.side && (vw.left===vw.side || vw.right===vw.side)) h += `<div class="row"><label>Side shows</label>${seg('side3d', [['left', 'Their left'], ['right', 'Their right']], c.sideIs==='right' ? 'right' : 'left')}</div>
     <p class="note" style="margin:-2px 0 0 92px">Their left side faces the picture's left edge. Pick the other if the model comes out twisted.</p>`;
-  return h + `<div class="btnrow"><button class="btn hot" data-ch="make3d" ${vw.front ? '' : 'disabled'}>🧊 ${m.url ? 'Make it again' : 'Make 3D model'}</button></div>`;
+  return h + `<div class="btnrow"><button class="btn hot" data-ch="make3d" ${vw.front ? '' : 'disabled'}>🧊 ${m.url ? 'Make it again' : 'Make 3D model'}</button>${m.raw && m.views && Object.keys(m.views).length ? '<button class="btn" data-ch="paint3d">🎨 Paint from the pictures</button>' : ''}</div>`;
 }
 // ---------- turnaround video: MiniMax H3 turns the character around on a turntable, then frames become angles ----------
 // One clip on the computer with the MiniMax H3 nodes (Render): the Front (or Reference) picture is the character
@@ -3688,6 +3859,7 @@ $('#charBody').onclick = async e => {
     s.tags = s.tags.filter(x => !pick.includes(x[0])); if(!s.tags.length) delete SUG[c.id]; }
   else if(act==='sugoff'){ delete SUG[c.id]; }
   else if(act==='get3d'){ get3d(); return; }
+  else if(act==='paint3d'){ paint3d(c); return; }
   else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
   else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
   else if(act==='maketurn'){ if(c.turn && (c.turn.url || c.turn.test) && !confirm('Make the turnaround again? The old clip stays in your renders.')) return; makeTurn(c); return; }

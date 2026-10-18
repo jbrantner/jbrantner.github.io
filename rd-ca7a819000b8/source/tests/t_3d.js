@@ -14,6 +14,8 @@ const DEF = { // required inputs and how many outputs, as in ComfyUI's own defin
   Trellis2ShapeStage:[['positive','negative','voxel'],3], Trellis2UpsampleStage:[['positive','negative','shape_latent','vae','target_resolution'],3], Trellis2TextureStage:[['positive','negative','shape_latent'],3],
   VaeDecodeShapeTrellis:[['samples','vae'],2], VaeDecodeTextureTrellis:[['samples','vae','shape_subdivides'],1], DecimateMesh:[['mesh','target_face_count','placement_mode'],1],
   MeshSmoothNormals:[['mesh','crease_angle'],1], PaintMesh:[['mesh','voxel_colors'],1], SaveGLB:[['mesh','filename_prefix'],0],
+  MaskToImage:[['mask'],1], SaveImage:[['images','filename_prefix'],0], CFGOverride:[['model','cfg','start_percent','end_percent'],1], RescaleCFG:[['model','multiplier'],1],
+  RemeshMesh:[['mesh','resolution','sign_mode'],1], UnwrapMesh:[['mesh','segmenter','resolution','padding','weld_distance'],1], BakeTextureFromVoxel:[['mesh','voxel_colors','texture_size'],3], ApplyTextureToMesh:[['mesh','base_color'],1],
 };
 function check(g){ const errs = [];
   for(const [id,n] of Object.entries(g)){ const d = DEF[n.class_type]; if(!d){ errs.push(id+': unknown '+n.class_type); continue; }
