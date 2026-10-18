@@ -155,6 +155,8 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .pboard{display:block;width:100%;border-radius:10px;border:1px solid var(--line);background:#000;touch-action:none;margin:4px 0 8px}
 .figrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
 /* characters */
+.tvid{display:block;width:100%;max-height:440px;margin-top:6px;border-radius:12px;border:1px solid var(--line);background:#fff;object-fit:contain}
+.tvscrub{width:100%;margin-top:8px}
 .m3d{display:block;width:100%;height:360px;margin-top:6px;border-radius:12px;border:1px solid var(--line);background:var(--bg);--poster-color:transparent}
 .chsec .pbar{height:5px;border-radius:9px;background:var(--panel2);margin:6px 0;overflow:hidden}
 .chsec .pbar i{display:block;height:100%;background:var(--cyan)}
@@ -473,7 +475,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.33'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.34'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3448,6 +3450,138 @@ function box3d(c){
     <p class="note" style="margin:-2px 0 0 92px">Their left side faces the picture's left edge. Pick the other if the model comes out twisted.</p>`;
   return h + `<div class="btnrow"><button class="btn hot" data-ch="make3d" ${vw.front ? '' : 'disabled'}>🧊 ${m.url ? 'Make it again' : 'Make 3D model'}</button></div>`;
 }
+// ---------- turnaround video: MiniMax H3 turns the character around on a turntable, then frames become angles ----------
+// One clip on the computer with the MiniMax H3 nodes (Render): the Front (or Reference) picture is the character
+// reference and is pinned as the first and last frame, so the clip starts and ends on it and the style is the
+// picture's own all the way round. Turning to their left, about a quarter of the way in shows their right side,
+// half way their back and three quarters their left side. Scrub the clip on the card and add frames as pictures.
+const TV_W = 576, TV_H = 1024, TV_LEN = 124; // portrait, ~5 s at 24 fps (124 is the shortest length it was trained on)
+const TV_AT = {three:0.125, right:0.25, back:0.5, left:0.75}; // where each angle usually is in the turn
+const FAKETV = {MiniMaxH3ReferenceToVideo:{input:{required:{}}}, UNETLoader:{input:{required:{unet_name:[['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors']], weight_dtype:[['default']]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors']]}}}, CLIPLoader:{input:{required:{clip_name:[['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']]}}},
+  VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors']]}}}, SaveVideo:{input:{required:{}}}};
+function kitTurn(){
+  const pcs = S.test ? [{url:'test', oi:FAKETV}] : allPcs().filter(p => p.online && p.oi && p.oi.MiniMaxH3ReferenceToVideo && p.oi.SaveVideo);
+  const pick = (oi, cls, k, re) => combo(oi[cls], k).find(n => re.test(baseName(n)));
+  const p = pcs.sort((a, b) => !!pick(b.oi, 'UNETLoader', 'unet_name', /minimaxh3|minimax_h3/i) - !!pick(a.oi, 'UNETLoader', 'unet_name', /minimaxh3|minimax_h3/i) || (b.url===farmHost()) - (a.url===farmHost()))[0];
+  if(!p) return {why: !S.servers.length ? 'Connect to your render computer first' : !allPcs().some(x => x.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
+    : "None of your computers that are on has the MiniMax H3 video nodes: update ComfyUI"};
+  const oi = p.oi, turbo = pick(oi, 'UNETLoader', 'unet_name', /minimax.?h3.*turbo/i), lora = pick(oi, 'LoraLoaderModelOnly', 'lora_name', /minimax_h3_ref2v_turbo/i);
+  const k = {url:p.url, oi, unet:turbo || pick(oi, 'UNETLoader', 'unet_name', /minimax.?h3/i), lora:turbo && lora, clip:pick(oi, 'CLIPLoader', 'clip_name', /minimax_h3/i),
+    vae:pick(oi, 'VAELoader', 'vae_name', /minimax_h3_video_vae_fp16/i) || pick(oi, 'VAELoader', 'vae_name', /minimax_h3_video_vae/i)};
+  k.steps = k.lora ? 4 : 20; k.mins = k.lora ? '4 to 5' : 'about 12';
+  const lacks = [!k.unet && 'a MiniMax H3 model (diffusion_models)', !k.clip && 'the MiniMax H3 text encoder', !k.vae && 'the MiniMax H3 video VAE'].filter(Boolean);
+  if(lacks.length) k.why = pcName(p.url) + ' is missing ' + lacks.join(', ');
+  return k;
+}
+// the picture it turns: the newest Front, or the picked Reference when there's no front yet
+function turnSource(c){ const f = c.views.filter(v => v.angle==='front').slice(-1)[0]; if(f) return f;
+  const s = c.views.find(v => v.id===CH.sel); return s && s.angle==='ref' ? s : c.views.filter(v => v.angle==='ref').slice(-1)[0] || null; }
+function turnPrompt(c){
+  const d = (c.tags || '').trim().replace(/,\s*$/, '');
+  return '<Picture 1> defines <Subject 1>' + (d ? ': ' + d : '') + '. Use only the character design; ignore its background and lighting. Character turnaround on a plain pure-white background. '
+    + '<Subject 1> stands in a neutral pose at the center of the frame and turns in place to their left in one smooth, steady, full 360-degree rotation at constant speed, like a model on a turntable: front, side, back, other side, and back to the front at the end. '
+    + 'Wide shot: the whole body is in frame from the top of the head to the feet, with space above and below. The camera is locked off at chest height and does not move or zoom. '
+    + 'The design, proportions, colours and clothing stay exactly the same the whole time. Only <Subject 1>; no other figures, no props, no shadows except a soft contact shadow. Even, flat studio lighting.';
+}
+function turnVideoGraph(k, img, c){
+  const g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const li = add('LoadImage', {image:img});
+  const pin = k.oi.ResizeAndPadImage ? add('ResizeAndPadImage', {image:[li,0], target_width:TV_W, target_height:TV_H, padding_color:'white', interpolation:'lanczos'}) : li; // fit, not crop, so head and feet stay in
+  let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
+  if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
+  const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
+  const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:turnPrompt(c), width:TV_W, height:TV_H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
+  const g1 = add('MiniMaxH3AddGuide', {positive:[rv,0], latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:0});
+  const g2 = add('MiniMaxH3AddGuide', {positive:[g1,0], latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:-1});
+  const gd = add('BasicGuider', {model, conditioning:[g2,0]});
+  const sc = add('BasicScheduler', {model, scheduler:'simple', steps:k.steps, denoise:1});
+  const sa = add('KSamplerSelect', {sampler_name:'res_multistep'}), no = add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)});
+  const out = add('SamplerCustomAdvanced', {noise:[no,0], guider:[gd,0], sampler:[sa,0], sigmas:[sc,0], latent_image:[rv,1]});
+  const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
+  const vid = add('CreateVideo', {images:[dec,0], fps:24});
+  const save = add('SaveVideo', {video:[vid,0], filename_prefix:(S.hidden ? HIDDEN : 'RenderDeck') + '/characters/turn/' + ((c.name || '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'character'),
+    format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  return {g, save};
+}
+const MTV = {}; // character id -> {state, text}
+const TV = {ang:'right', moved:false}; // the frame picker: which angle the next frame is added as
+async function makeTurn(c){
+  const k = kitTurn(); if(k.why){ toast(k.why, true); return; }
+  const v = turnSource(c); if(!v){ toast('It needs a Front or Reference picture first', true); return; }
+  const s = MTV[c.id] = {state:'busy', text:'Getting the picture ready…'}; drawChars(); buzz();
+  try{
+    let img = v.img; if(!S.test && v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('tv')); img = g.x.inputs.image; }
+    const {g, save:sid} = turnVideoGraph(k, img, c);
+    if(S.test){ await new Promise(r => setTimeout(r, 300)); c.turn = {url:'', test:true, at:Date.now(), pc:'test'}; delete MTV[c.id]; save(); drawChars(); return; }
+    const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-turn'})});
+    const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    c.turn = Object.assign({}, c.turn, {making:{pc:k.url, id:j.prompt_id, save:sid, t:Date.now(), mins:k.mins}}); save();
+    await waitTurn(c);
+  }catch(err){ Object.assign(s, {state:'err', text:"Couldn't make the turnaround: " + err.message}); drawChars(); }
+}
+async function waitTurn(c){
+  const m = c.turn && c.turn.making; if(!m || MTV[c.id] && MTV[c.id].polling) return;
+  const s = MTV[c.id] = {state:'busy', polling:true, text:'Making the turnaround on ' + pcName(m.pc) + '… ' + (m.mins || 'a few') + ' minutes'}; drawChars();
+  for(;;){
+    await new Promise(r => setTimeout(r, 4000));
+    if(MTV[c.id]!==s) return;
+    let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e){ continue; }
+    if(!h){ if(Date.now() - m.t > 3 * 3600e3){ delete c.turn.making; save(); Object.assign(s, {state:'err', text:'It never finished (was ComfyUI restarted?)', polling:false}); drawChars(); return; } continue; }
+    if(h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error');
+      delete c.turn.making; save(); Object.assign(s, {state:'err', polling:false, text:"Couldn't make the turnaround: " + (e ? e[1].exception_message : 'ComfyUI hit an error')}); drawChars(); return; }
+    if(!(h.status && h.status.completed)) continue;
+    const o = (h.outputs || {})[m.save] || {}, f = (o.images || o.videos || o.gifs || [])[0];
+    delete c.turn.making;
+    if(f) Object.assign(c.turn, {url:viewUrl(f, m.pc), pc:m.pc, at:Date.now()});
+    TV.moved = false; save(); delete MTV[c.id]; drawChars(); buzz(); toast(f ? 'Turnaround of ' + (c.name || 'the character') + ' ready: pick the frames ✨' : 'Finished, but no video came back', !f); return;
+  }
+}
+// the frame on screen, as a new picture of the character, on the computer the clip came from
+async function addTurnFrame(c, angle){
+  const vid = $('#charBody video[data-tv]'), cv = document.createElement('canvas');
+  cv.width = vid && vid.videoWidth || TV_W; cv.height = vid && vid.videoHeight || TV_H;
+  const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, cv.width, cv.height);
+  try{ if(vid && vid.videoWidth) x.drawImage(vid, 0, 0, cv.width, cv.height); }catch(e){ toast("Couldn't read the frame: " + e.message, true); return; }
+  let blob; try{ blob = await new Promise((ok, no) => cv.toBlob(b => b ? ok(b) : no(new Error('the picture was blocked')), 'image/png')); }
+  catch(e){ toast("Couldn't read the frame: " + e.message, true); return; }
+  finally{ cv.width = cv.height = 0; } // let iOS have the memory back
+  const file = new File([blob], 'turn_' + angle + '_' + Date.now().toString(36) + '.png', {type:'image/png'}), pc = c.turn.pc;
+  try{
+    let name, url;
+    if(S.test){ const u = await uploadImage(file); name = u.name; url = u.local; }
+    else { const fd = new FormData(); fd.append('image', file, file.name); fd.append('overwrite', 'true'); fd.append('type', 'input');
+      const r = await fetch(pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('upload failed (' + r.status + ')');
+      const j = await r.json(), sub = j.subfolder || ''; name = (sub ? sub + '/' : '') + j.name; url = viewUrl({filename:j.name, subfolder:sub, type:'input'}, pc); }
+    const v = {id:uid('v'), angle, img:name, url, home:S.test ? 'test' : pc, made:true}; c.views.push(v); CH.want = null; save(); drawChars(); buzz();
+    toast(ANGLES[angle] + ' added');
+  }catch(err){ toast("Couldn't add the frame: " + err.message, true); }
+}
+function boxTurn(c){
+  const k = kitTurn(), t = c.turn || {}, s = MTV[c.id], src = turnSource(c);
+  if(t.making && !s) setTimeout(() => waitTurn(c), 0);
+  let h = '<div class="lbl">Turnaround video</div>';
+  if(s && s.state==='busy') return h + `<p class="note">🎬 ${esc(s.text)}</p>`;
+  if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
+  if(t.url || t.test){
+    h += (t.url ? `<video class="tvid" data-tv src="${esc(t.url)}" crossorigin="anonymous" playsinline muted preload="auto"></video>` : '<p class="note">Turnaround ready (pretend, in Test mode).</p>')
+      + `<input type="range" class="tvscrub" data-tvt min="0" max="1000" step="1" aria-label="Frame">
+      <div class="row" style="margin-top:8px"><label>This frame is</label>${seg('tvang', [['three', '¾ view'], ['right', 'Right side'], ['back', 'Back'], ['left', 'Left side']], TV.ang)}</div>
+      <p class="note" style="margin:-2px 0 0 92px">Picking an angle jumps to where it usually is. Slide to the frame that shows it best.</p>
+      <div class="btnrow"><button class="btn" data-ch="tvadd">＋ Add as ${esc(ANGLES[TV.ang])}</button></div>`;
+  }
+  if(k.why) return h + `<p class="note">${esc(k.why)}.</p>`;
+  return h + `<p class="note">${src ? 'MiniMax H3 on ' + esc(pcName(k.url)) + ' turns ' + esc(c.name || 'them') + ' around once, from the ' + (src.angle==='front' ? 'Front' : 'Reference') + ' picture, in its own style. Takes ' + k.mins + ' minutes. The frames are ' + TV_W + '×' + TV_H + ', smaller than Make other angles draws.' : 'It needs a Front or Reference picture first.'}</p>
+    <div class="btnrow"><button class="btn${t.url ? '' : ' hot'}" data-ch="maketurn" ${src ? '' : 'disabled'}>🎬 ${t.url || t.test ? 'Make it again' : 'Make a turnaround video'}</button></div>`;
+}
+// after the card is drawn: put the clip on the frame for the picked angle, unless it was slid somewhere else
+function showTurn(){
+  const vid = $('#charBody video[data-tv]'), sl = $('#charBody [data-tvt]'); if(!sl) return;
+  if(!TV.moved) sl.value = Math.round(TV_AT[TV.ang] * 1000);
+  const go = () => { if(vid && vid.duration) vid.currentTime = Math.min(vid.duration - 0.01, vid.duration * sl.value / 1000); };
+  if(vid){ if(vid.readyState >= 1) go(); else vid.addEventListener('loadedmetadata', go, {once:true}); }
+}
 // a render (from the preview or the viewer) as a picture of a character
 function viewFromGallery(g){
   const o = (() => { try{ return new URL(g.url).origin; }catch(e){ return ''; } })();
@@ -3521,14 +3655,16 @@ function drawChars(){
       ${k.why ? `<p class="warn">${esc(k.why)}</p>` : `<div class="irow wrap">${offer.map(a => `<button data-want="${a}" class="${CH.want.has(a) ? 'on' : ''}">${ANGLES[a]}</button>`).join('')}</div>
       <div class="btnrow"><button class="btn hot" data-ch="turn" ${n ? '' : 'disabled'}>✨ ${fromRef && n===1 && CH.want.has('front') ? 'Make the full-body front' : 'Make ' + (n ? n + ' ' + (n > 1 ? 'angles' : 'angle') : 'angles')}</button></div>`}`
       : '<p class="note" style="margin-top:0">Add a picture of them first (＋ above, or 🧍 Add to a character under any render).</p>'}
+    <div class="chsec">${boxTurn(c)}</div>
     <div class="chsec">${box3d(c)}</div>
     <div class="btnrow" style="margin-top:22px"><button class="btn danger" data-ch="del">Delete ${esc(c.name || 'this character')}</button></div>`);
   jobs.forEach(e => { const x = box.querySelector(`[data-prog="${CSS.escape(e.key)}"]`); if(x) x.textContent = e.state==='running' ? (e.prog ? e.prog.text : 'Starting') : 'in the queue'; });
-  showOrbit(c);
+  showOrbit(c); showTurn();
 }
 $('#charBtn').onclick = () => openChars();
 $('#charSheet').addEventListener('error', viaHere, true);
-$('#charBody').addEventListener('input', e => { const c = S.chars.find(x => x.id===CH.id), f = e.target.dataset.cf; if(!c || !f) return; c[f] = e.target.value; save(); });
+$('#charBody').addEventListener('input', e => { if('tvt' in e.target.dataset){ TV.moved = true; showTurn(); return; }
+  const c = S.chars.find(x => x.id===CH.id), f = e.target.dataset.cf; if(!c || !f) return; c[f] = e.target.value; save(); });
 $('#charBody').onclick = async e => {
   const t = e.target.closest('button,[data-open]'); if(!t) return;
   const c = S.chars.find(x => x.id===CH.id), act = t.dataset.ch;
@@ -3552,6 +3688,9 @@ $('#charBody').onclick = async e => {
   else if(act==='get3d'){ get3d(); return; }
   else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
   else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
+  else if(act==='maketurn'){ if(c.turn && (c.turn.url || c.turn.test) && !confirm('Make the turnaround again? The old clip stays in your renders.')) return; makeTurn(c); return; }
+  else if(t.dataset.seg==='tvang'){ TV.ang = t.dataset.v; TV.moved = false; }
+  else if(act==='tvadd'){ addTurnFrame(c, TV.ang); return; }
   else if(t.dataset.want){ CH.want.has(t.dataset.want) ? CH.want.delete(t.dataset.want) : CH.want.add(t.dataset.want); }
   else if(act==='pic'){ if(!info){ toast('Connect first (or use Test mode) so the picture has somewhere to go', true); return; } $('#charPick').value = ''; $('#charPick').click(); return; }
   else if(act==='see'){ const v = c.views.find(x => x.id===CH.sel); if(v) window.open(v.url, '_blank'); return; }
