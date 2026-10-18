@@ -7,6 +7,7 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   GET  /renderdeck/model_info?kind=..&name=.. -> Civitai's trigger words and base model for a file, found by its fingerprint
   GET  /renderdeck/images, /renderdeck/thumb  -> the pictures in the output folder, newest first, and small previews
   POST /renderdeck/delete {items}             -> move pictures into "Deleted by Render Deck" in the output folder
+                                               (a shared Dropbox output folder deletes for real; Dropbox keeps them in Deleted files)
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
   POST /renderdeck/sync {source}              -> copy the models and LoRAs another computer has and this one lacks
@@ -14,9 +15,12 @@ kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can
 civitai.com, huggingface.co and your own computers' Tailscale (.ts.net) addresses, and an existing file is never overwritten.
 Civitai models that need sign-in: put your Civitai API key in the CIVITAI_API_TOKEN environment variable,
 or in a file named civitai_token.txt next to this one.
+Shared outputs: when ComfyUI's output folder is inside Dropbox (--output-directory), every computer saves into its own
+subfolder named in render_deck_pc.txt next to this file (or the computer's name), so both computers' renders sync
+without their file numbers clashing, and each computer's renders browser shows them all.
 Copyright (c) 2026 Jordan Brantner. All rights reserved.
 """
-import asyncio, os, re, shutil, time, uuid
+import asyncio, os, re, shutil, socket, time, uuid
 from urllib.parse import urlparse, parse_qs, quote, unquote
 import aiohttp
 from aiohttp import web
@@ -275,6 +279,36 @@ TRASH = 'Deleted by Render Deck'  # deleted pictures are moved here inside the o
 PICS = ('.png', '.jpg', '.jpeg', '.webp')
 
 
+def _pc():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_pc.txt')
+    name = open(p, encoding='utf-8').read().strip() if os.path.exists(p) else ''
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name or socket.gethostname()) or 'ComfyUI'
+
+
+def _shared():
+    """True when the output folder is inside Dropbox, so the other computer sees (and deletes) the same files."""
+    return 'dropbox' in os.path.realpath(folder_paths.get_output_directory()).lower().replace('\\', '/').split('/')
+
+
+_save_path = folder_paths.get_save_image_path
+
+
+def _save_path_per_pc(filename_prefix, output_dir, *a, **kw):
+    """Saves into the output folder go into this computer's subfolder when the folder is shared (not previews in temp)."""
+    try:
+        same = os.path.normcase(os.path.realpath(output_dir)) == os.path.normcase(os.path.realpath(folder_paths.get_output_directory()))
+        if same and _shared():
+            pc = _pc()
+            if not filename_prefix.replace('\\', '/').lower().startswith(pc.lower() + '/'):
+                filename_prefix = pc + '/' + filename_prefix
+    except Exception:
+        pass
+    return _save_path(filename_prefix, output_dir, *a, **kw)
+
+
+folder_paths.get_save_image_path = _save_path_per_pc
+
+
 def _out_path(subfolder, filename):
     root = os.path.realpath(folder_paths.get_output_directory())
     path = os.path.realpath(os.path.join(root, subfolder or '', os.path.basename(filename or '')))
@@ -297,7 +331,7 @@ async def images(request):
                 found.append({'subfolder': '' if sub == '.' else sub, 'filename': f, 't': st.st_mtime, 'size': st.st_size})
     found.sort(key=lambda x: -x['t'])
     off, lim = int(request.query.get('offset', 0)), min(200, int(request.query.get('limit', 60)))
-    return web.json_response({'total': len(found), 'images': found[off:off + lim], 'trash': TRASH})
+    return web.json_response({'total': len(found), 'images': found[off:off + lim], 'trash': TRASH, 'shared': _shared(), 'pc': _pc()})
 
 
 @routes.get('/renderdeck/thumb')
@@ -324,11 +358,16 @@ async def thumb(request):
 
 @routes.post('/renderdeck/delete')
 async def delete(request):
-    """Move pictures into the "Deleted by Render Deck" folder (same subfolders), so a slip can be undone on the computer."""
-    items, moved = (await request.json()).get('items', []), 0
+    """Move pictures into the "Deleted by Render Deck" folder (same subfolders), so a slip can be undone on the computer.
+    In a shared Dropbox output folder they are deleted for real, so they go from both computers; Dropbox's Deleted files can bring them back."""
+    items, moved, shared = (await request.json()).get('items', []), 0, _shared()
     for it in items:
         try:
             root, path = _out_path(it.get('subfolder'), it.get('filename'))
+            if shared:
+                os.remove(path)
+                moved += 1
+                continue
             dest_dir = os.path.join(root, TRASH, it.get('subfolder') or '')
             os.makedirs(dest_dir, exist_ok=True)
             dest = os.path.join(dest_dir, os.path.basename(path))

@@ -84,6 +84,7 @@ header h1 span{color:var(--accent)}
 .libgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px}
 .libgrid button{position:relative;aspect-ratio:1;padding:0;border-radius:8px;overflow:hidden;background:var(--bg)}
 .libgrid img{width:100%;height:100%;object-fit:cover;display:block}
+.libgrid .pc{position:absolute;left:4px;bottom:4px;padding:1px 6px;border-radius:6px;background:rgba(0,0,0,.6);border:1px solid var(--line);color:var(--muted);font-size:10px;font-weight:700}
 .libgrid button.sel{outline:3px solid var(--accent);outline-offset:-3px}
 .libgrid button.sel::after{content:"✓";position:absolute;right:6px;top:6px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-weight:800;display:grid;place-items:center;font-size:13px}
 .btn.danger,.chipbtn.danger{border-color:var(--bad);color:var(--bad)}
@@ -318,7 +319,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.1'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.2'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1444,9 +1445,11 @@ $('#updBtn').onclick = () => location.reload();
 document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible'){ checkUpdate(); if(myQ().length && info && !S.test) checkQueue(true); } });
 
 // ---------- your renders: browse the output folder on the render computer and delete what you don't want ----------
-let lib = {items:[], total:0, selecting:false, picked:new Set(), cur:null};
+let lib = {items:[], total:0, selecting:false, picked:new Set(), cur:null, shared:false};
 const libKey = i => (i.subfolder ? i.subfolder + '/' : '') + i.filename;
+const libPc = i => (i.subfolder || '').split('/')[0].replace(/^output_/i, '');
 const thumbUrl = i => base() + '/renderdeck/thumb?subfolder=' + encodeURIComponent(i.subfolder) + '&filename=' + encodeURIComponent(i.filename);
+const LIB_NOTE = $('#libNote').textContent;
 async function openLib(){
   if(!info || S.test){ toast('Connect to your render computer first', true); return; }
   lib = {items:[], total:0, selecting:false, picked:new Set(), cur:null}; drawLibBar(); $('#libGrid').innerHTML = ''; openSheet('#libSheet'); await moreLib();
@@ -1454,12 +1457,13 @@ async function openLib(){
 async function moreLib(){
   try{ const r = await fetch(base() + '/renderdeck/images?offset=' + lib.items.length + '&limit=60', {cache:'no-store'});
     if(r.status===404){ $('#libNote').textContent = 'Your render computer needs the newest Render Deck helper (render_deck_models.py in ComfyUI/custom_nodes).'; return; }
-    const j = await r.json(); lib.total = j.total; lib.items.push(...j.images); drawLib();
+    const j = await r.json(); lib.total = j.total; lib.shared = !!j.shared; lib.items.push(...j.images); drawLib();
+    $('#libNote').textContent = lib.shared ? "Both computers' renders, newest first, synced through Dropbox. Deleting one removes it from both; Dropbox's Deleted files can bring it back." : LIB_NOTE;
   }catch(e){ toast('Could not reach the render computer', true); }
 }
 function drawLib(){
   $('#libCount').textContent = lib.total ? lib.total + (lib.total===1 ? ' picture' : ' pictures') : '';
-  $('#libGrid').innerHTML = lib.items.length ? lib.items.map((i,k) => `<button data-k="${k}" class="${lib.picked.has(libKey(i))?'sel':''}"><img src="${esc(thumbUrl(i))}" alt="" loading="lazy"></button>`).join('') : '<p class="note">No pictures yet.</p>';
+  $('#libGrid').innerHTML = lib.items.length ? lib.items.map((i,k) => `<button data-k="${k}" class="${lib.picked.has(libKey(i))?'sel':''}"><img src="${esc(thumbUrl(i))}" alt="" loading="lazy">${lib.shared && libPc(i) ? `<span class="pc">${esc(libPc(i))}</span>` : ''}</button>`).join('') : '<p class="note">No pictures yet.</p>';
   $('#libMore').hidden = lib.items.length >= lib.total;
 }
 function drawLibBar(){
@@ -1476,7 +1480,7 @@ $('#libGrid').onclick = e => {
   lib.cur = i; $('#viewImg').src = viewUrl(i); $('#viewer').hidden = false;
 };
 async function deletePics(list){
-  if(!list.length || !confirm('Delete ' + (list.length===1 ? 'this picture' : list.length + ' pictures') + '? They move to the "Deleted by Render Deck" folder on the render computer.')) return false;
+  if(!list.length || !confirm('Delete ' + (list.length===1 ? 'this picture' : list.length + ' pictures') + (lib.shared ? '? They go from both computers (Dropbox keeps them in Deleted files).' : '? They move to the "Deleted by Render Deck" folder on the render computer.'))) return false;
   try{ const r = await fetch(base() + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:list.map(i => ({subfolder:i.subfolder, filename:i.filename}))})});
     const j = await r.json(); const gone = new Set(list.map(libKey));
     lib.items = lib.items.filter(i => !gone.has(libKey(i))); lib.total -= j.moved; lib.picked.clear();
