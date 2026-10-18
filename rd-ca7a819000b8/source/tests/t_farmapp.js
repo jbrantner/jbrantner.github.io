@@ -71,10 +71,10 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   // it finishes: the farm reports it done with its picture
   const job = F.jobs.shift(); F.done.push(Object.assign(job, {state:'done', images:[{filename:'r1.png', subfolder:'Output_Main/RenderDeck', type:'output'}], t_done:Date.now()/1000}));
   await page.evaluate(() => tick());
-  await until(() => document.querySelectorAll('#feedG img').length===1);
-  ok((await page.getAttribute('#feedG img', 'src')).startsWith(MU + '/view'), 'the finished picture lands in the strip, from Main');
+  await until(() => document.querySelectorAll('#recentRow img').length===1);
+  ok((await page.getAttribute('#recentRow img', 'src')).startsWith(MU + '/view'), 'the finished picture lands in the strip, from Main');
   await page.evaluate(() => tick()); await page.waitForTimeout(300);
-  ok(await page.$$eval('#feedG img', x => x.length)===1, 'and only once');
+  ok(await page.$$eval('#recentRow img', x => x.length)===1, 'and only once');
 
   // cancel the last one from the list, switch Main off
   const key = await page.evaluate(() => S.queue[S.queue.length-1].key);
