@@ -10,6 +10,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const RU = 'https://jordo-desktop.tail.ts.net', MU = 'https://jordo-main.tail.ts.net';
 const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetensors']]}}}, LoraLoader:{input:{required:{lora_name:[['pixel.safetensors']]}}},
   KSampler:{input:{required:{sampler_name:[['euler','dpmpp_2m']], scheduler:[['normal','karras']]}}}};
+['CLIPTextEncode','EmptyLatentImage','KSamplerAdvanced','VAEDecode','SaveImage','CLIPSetLastLayer','ModelMergeSDXL','LoadImage','VAEEncode','ImageScale','ImageScaleBy'].forEach(k => OI[k] = {input:{required:{}}}); // every computer has ComfyUI's own nodes
 let rebootAt = 0, agentCalls = [], mainClosed = false;
 const F = {pcs:[], off:[], jobs:[], done:[], adds:[], cancels:[], pcCalls:[]};
 const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url:u, name:u===RU ? 'Render' : 'Main', online:true, off:F.off.includes(u), load:0, copies:[], why:''})),

@@ -146,6 +146,9 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .pboard{display:block;width:100%;border-radius:10px;border:1px solid var(--line);background:#000;touch-action:none;margin:4px 0 8px}
 .figrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
 /* characters */
+.m3d{display:block;width:100%;height:360px;margin-top:6px;border-radius:12px;border:1px solid var(--line);background:var(--bg);--poster-color:transparent}
+.chsec .pbar{height:5px;border-radius:9px;background:var(--panel2);margin:6px 0;overflow:hidden}
+.chsec .pbar i{display:block;height:100%;background:var(--cyan)}
 .orbit{position:relative;margin-top:8px;height:340px;border-radius:12px;border:1px solid var(--line);background:var(--bg);overflow:hidden;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:grab}
 .orbit img{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
 .orbit img.flip{transform:scaleX(-1)}
@@ -457,7 +460,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.30'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.31'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -951,17 +954,21 @@ async function go(){
       // the full render also rides inside the draft's own picture (ComfyUI keeps the graph in the PNG), so any phone can finish it later
       const sv = Object.values(built.graph).find(x => x.class_type==='SaveImage');
       sv._meta.rd_finish = {graph:fin.graph, titles:fin.titles, steps:P.steps, size:sizeOf(P), ckpt:M.ckpt, seed:built.seed, prompt:S.prompt}; }
-    if(farm){ e.farm = true; e.state = 'waiting'; }
+    if(farm && farmSafe(e)){ e.farm = true; e.state = 'waiting'; }
     S.queue.push(e); save();
-    if(!S.test && !farm){ const err = await dispatch(e); if(err){ S.queue = S.queue.filter(q => q!==e); save(); failAll(err); break; } }
+    if(!S.test && !e.farm){ const err = await dispatch(e); if(err){ S.queue = S.queue.filter(q => q!==e); save(); failAll(err); break; } }
     added++;
   }
-  if(farm && added){ const mine = S.queue.slice(-added), err = await farmAdd(mine);
+  const mine = S.queue.slice(-added).filter(e => e.farm);
+  if(farm && mine.length){ const err = await farmAdd(mine);
     if(err){ S.queue = S.queue.filter(q => !mine.includes(q)); save(); failAll(err); added = 0; } }
   P.seed = first; save(); renderBlocks(); drawGo(); drawStatus(); drawQueue();
   if(added && had) toast(added > 1 ? added + ' renders added to the queue' : 'Added to the queue');
   if(S.test) testRun(); else schedule(1500);
 }
+// can the farm be given this render? Not when a computer that's on can't run it at all (Main has no ControlNets, so no
+// pose renders): an older farm on Render may still send it there, so the app sends those itself, to a computer that can
+function farmSafe(e){ return S.test || allPcs().filter(usable).every(p => { const f = fit(p, e); return f.ok || (f.missing.length && !f.why); }); }
 // send one render to the best computer for it; '' when it went (or waits for a model to arrive), else why it can't go
 async function dispatch(e, skip){
   const fits = allPcs().filter(p => usable(p) && p!==skip).map(p => [p, fit(p, e)]);
@@ -2477,44 +2484,97 @@ function fromPng(buf){
   return {blocks, prompt:txt(i.positive), negative:txt(i.negative), addedTags:[], asTags:false, seed, fromPng:true};
 }
 
-// ---------- pose board: stick figures in OpenPose's 18 points, one per character, sent as a pose guide ----------
+// ---------- pose board: 3D stick figures in OpenPose's 18 points, one per character, sent as a pose guide ----------
 // Points (OpenPose order): 0 nose, 1 neck, 2–4 right shoulder/elbow/wrist, 5–7 left, 8–10 right hip/knee/ankle,
 // 11–13 left, 14/15 right/left eye, 16/17 right/left ear. "Right" is the figure's own right, so it sits on the
-// picture's left when the figure faces you. Starter poses are drawn in a box one unit tall, centred on x = 0.
+// picture's left when the figure faces you. The figures stand in a small 3D world (y up, the ground at y = 0, a figure
+// about one unit tall, facing +z) and the board is a camera you orbit around them: the picture sent to the ControlNet
+// is what that camera sees, so turning the board turns the scene's camera too. Starter poses are front views one unit
+// tall (y down from the top), centred on x = 0, with the depth (z) of the parts that come forward.
 const POSES = {
   standing:{name:'Standing', p:[[0,.07],[0,.17],[-.09,.18],[-.12,.32],[-.13,.45],[.09,.18],[.12,.32],[.13,.45],[-.06,.5],[-.065,.71],[-.07,.92],[.06,.5],[.065,.71],[.07,.92],[-.025,.055],[.025,.055],[-.05,.07],[.05,.07]]},
-  walking:{name:'Walking', p:[[0,.07],[0,.17],[-.09,.18],[-.08,.32],[-.03,.44],[.09,.18],[.12,.31],[.17,.42],[-.06,.5],[-.04,.7],[-.1,.92],[.06,.5],[.07,.7],[.12,.9],[-.025,.055],[.025,.055],[-.05,.07],[.05,.07]]},
-  fighting:{name:'Fighting stance', p:[[0,.1],[0,.2],[-.09,.21],[-.15,.3],[-.07,.17],[.09,.21],[.16,.3],[.08,.16],[-.06,.52],[-.15,.7],[-.2,.92],[.06,.52],[.14,.72],[.2,.92],[-.025,.085],[.025,.085],[-.05,.1],[.05,.1]]},
-  pointing:{name:'Pointing', p:[[0,.07],[0,.17],[-.09,.18],[-.2,.2],[-.32,.19],[.09,.18],[.12,.32],[.13,.45],[-.06,.5],[-.065,.71],[-.07,.92],[.06,.5],[.065,.71],[.07,.92],[-.025,.055],[.025,.055],[-.05,.07],[.05,.07]]},
+  walking:{name:'Walking', p:[[0,.07],[0,.17],[-.09,.18],[-.08,.32],[-.03,.44],[.09,.18],[.12,.31],[.17,.42],[-.06,.5],[-.04,.7],[-.1,.92],[.06,.5],[.07,.7],[.12,.9],[-.025,.055],[.025,.055],[-.05,.07],[.05,.07]],
+    z:{3:-.06,4:-.1,6:.06,7:.1,9:.1,10:.12,12:-.08,13:-.14}},
+  fighting:{name:'Fighting stance', p:[[0,.1],[0,.2],[-.09,.21],[-.15,.3],[-.07,.17],[.09,.21],[.16,.3],[.08,.16],[-.06,.52],[-.15,.7],[-.2,.92],[.06,.52],[.14,.72],[.2,.92],[-.025,.085],[.025,.085],[-.05,.1],[.05,.1]],
+    z:{3:.1,4:.2,6:.06,7:.14,9:.06,10:.1,12:-.06,13:-.1}},
+  pointing:{name:'Pointing', p:[[0,.07],[0,.17],[-.09,.18],[-.2,.2],[-.32,.19],[.09,.18],[.12,.32],[.13,.45],[-.06,.5],[-.065,.71],[-.07,.92],[.06,.5],[.065,.71],[.07,.92],[-.025,.055],[.025,.055],[-.05,.07],[.05,.07]], z:{3:.06,4:.12}},
   armsup:{name:'Arms up', p:[[0,.1],[0,.2],[-.09,.21],[-.14,.1],[-.16,-.01],[.09,.21],[.14,.1],[.16,-.01],[-.06,.53],[-.065,.73],[-.07,.93],[.06,.53],[.065,.73],[.07,.93],[-.025,.085],[.025,.085],[-.05,.1],[.05,.1]]},
-  sitting:{name:'Sitting', p:[[0,.12],[0,.22],[-.09,.23],[-.13,.37],[-.1,.5],[.09,.23],[.13,.37],[.1,.5],[-.06,.55],[-.09,.62],[-.09,.88],[.06,.55],[.09,.62],[.09,.88],[-.025,.105],[.025,.105],[-.05,.12],[.05,.12]]},
+  sitting:{name:'Sitting', p:[[0,.12],[0,.22],[-.09,.23],[-.13,.37],[-.1,.5],[.09,.23],[.13,.37],[.1,.5],[-.06,.55],[-.09,.6],[-.09,.88],[.06,.55],[.09,.6],[.09,.88],[-.025,.105],[.025,.105],[-.05,.12],[.05,.12]],
+    z:{4:.12,7:.12,9:.24,10:.26,12:.24,13:.26}},
 };
+const FACEZ = {0:.065, 14:.05, 15:.05, 16:-.005, 17:-.005}; // the nose and eyes come forward of the ears
 const LIMBS = [[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],[1,11],[11,12],[12,13],[1,0],[0,14],[14,16],[0,15],[15,17]];
 const PCOL = [[255,0,0],[255,85,0],[255,170,0],[255,255,0],[170,255,0],[85,255,0],[0,255,0],[0,255,85],[0,255,170],[0,255,255],[0,170,255],[0,85,255],[0,0,255],[85,0,255],[170,0,255],[255,0,255],[255,0,170],[255,0,85]];
 const KIDS = {0:[14,15,16,17], 2:[3,4], 3:[4], 5:[6,7], 6:[7], 8:[9,10], 9:[10], 11:[12,13], 12:[13]}; // a joint drags the joints below it along
 const MIRROR = [0,1,5,6,7,2,3,4,11,12,13,8,9,10,15,14,17,16];
 const boardSize = () => sizeOf(S.blocks.find(b => b.type==='sampler'));
-// a new figure, 85% of the picture tall, placed where there's room
+const V3 = {sub:(a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]], add:(a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], mul:(a, k) => [a[0]*k, a[1]*k, a[2]*k],
+  dot:(a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2], cross:(a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]],
+  norm:a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0]/l, a[1]/l, a[2]/l]; }, mid:(a, b) => [(a[0]+b[0])/2, (a[1]+b[1])/2, (a[2]+b[2])/2]};
+const CAM0 = {yaw:0, pitch:0.06, dist:1.85, fov:35, ty:0.47}; // looking at the figures from the front, a little above their middle
+const CAMS = {front:['Front', 0, 0.06], three:['¾', -0.7, 0.12], side:['Side', -Math.PI/2, 0.06], back:['Back', Math.PI, 0.06], above:['Above', 0, 0.75], below:['Below', 0, -0.35]};
+// the board's camera: where it is and which way is right, up and forward on the picture
+function camOf(b, W, H){
+  const c = Object.assign({}, CAM0, b.cam), t = [0, c.ty, 0], cp = Math.cos(c.pitch);
+  const pos = V3.add(t, V3.mul([Math.sin(c.yaw)*cp, Math.sin(c.pitch), Math.cos(c.yaw)*cp], c.dist));
+  const f = V3.norm(V3.sub(t, pos)), r = V3.norm(V3.cross(f, [0,1,0])), u = V3.cross(r, f), k = Math.tan(c.fov * Math.PI / 360);
+  return {pos, f, r, u, kx:k * W / H, ky:k};
+}
+// a 3D point on the picture (0..1 across and down), with its depth from the camera
+function toScreen(cam, p){ const d = V3.sub(p, cam.pos), z = Math.max(0.05, V3.dot(d, cam.f));
+  return [0.5 + V3.dot(d, cam.r) / z / (2 * cam.kx), 0.5 - V3.dot(d, cam.u) / z / (2 * cam.ky), z]; }
+// a point on the picture back into 3D, at the given depth from the camera
+function fromScreen(cam, s, z){ return V3.add(cam.pos, V3.add(V3.mul(cam.f, z), V3.add(V3.mul(cam.r, (s[0] - 0.5) * 2 * cam.kx * z), V3.mul(cam.u, -(s[1] - 0.5) * 2 * cam.ky * z)))); }
+// a starter pose as 3D joints: h units tall, standing at x on the ground
+function poseJoints(kind, x, h){
+  const P = POSES[kind], top = 0.93;
+  return P.p.map(([px, py], i) => [x + px*h, (top - py)*h, ((P.z || {})[i] ?? FACEZ[i] ?? 0)*h]);
+}
+// a board from before the 3D one: its flat points stood up in front of the camera
+function upgradeFigs(b){
+  const [W,H] = boardSize(); let cam = null;
+  b.figs.forEach(f => { if(f.j || !f.pts) return; cam = cam || camOf({cam:CAM0}, W, H);
+    f.j = f.pts.map((p, i) => { const q = fromScreen(cam, p || f.pts[1], CAM0.dist); q[2] = (FACEZ[i] || 0); return q; }); delete f.pts; delete f.base; });
+  if(!b.cam) b.cam = Object.assign({}, CAM0);
+}
+// what the camera sees of a figure: its points on the picture (null where OpenPose would not see it: the face of
+// someone looking away, the far eye and ear in profile), and each point's depth
+function figView(b, f, W, H, cam){
+  cam = cam || camOf(b, W, H);
+  const s = f.j.map(p => toScreen(cam, p)), J = f.j, head = V3.mid(J[16], J[17]);
+  const fwd = V3.norm(V3.sub(J[0], head)), see = V3.norm(V3.sub(cam.pos, head)), facing = V3.dot(fwd, see);
+  const hid = new Set();
+  if(facing < -0.15) [0, 14, 15].forEach(i => hid.add(i));
+  [[14,16],[15,17]].forEach(([e, ear]) => { const side = V3.norm(V3.sub(J[ear], head)), d = V3.dot(side, see);
+    if(d < -0.55) hid.add(ear); if(d < -0.75 && facing < 0.6) hid.add(e); });
+  return {pts:s.map((p, i) => hid.has(i) ? null : [p[0], p[1]]), z:s.map(p => p[2]), all:s, facing, cam};
+}
+// a new figure, standing where there's room
 function addFig(b, kind){
-  const [W,H] = boardSize(), h = 0.85, top = 0.06, n = b.figs.length + 1, xs = b.figs.map(f => f.pts[1][0]);
-  let cx = 0.5;
-  if(b.figs.every(f => !f.moved)){ // nobody placed by hand yet: spread everyone evenly across the picture
-    b.figs.forEach((f, i) => { const d = (i + 1) / (n + 1) - f.pts[1][0]; f.pts.forEach(p => { if(p) p[0] += d; }); }); cx = n / (n + 1); }
-  else { let room = -1; for(let x = 0.2; x <= 0.801; x += 0.05){ const d = Math.min(...xs.map(v => Math.abs(v - x))); if(d > room + 1e-9){ room = d; cx = x; } } } // else the spot furthest from the others
-  const pts = POSES[kind].p.map(([x,y]) => [cx + x*h*H/W, top + y*h]);
-  const used = new Set(b.figs.map(f => f.cid)), c = S.chars.find(x => !used.has(x.id));
-  const f = {id:uid('f'), cid:c ? c.id : '', pts}; b.figs.push(f); b.sel = f.id; return f;
+  upgradeFigs(b);
+  const n = b.figs.length + 1, gap = 0.42, h = 1;
+  let x = 0;
+  if(b.figs.every(f => !f.moved)){ // nobody placed by hand yet: spread everyone evenly in a row
+    b.figs.forEach((f, i) => { const d = (i - (n - 1)/2) * gap - f.j[1][0]; f.j.forEach(p => { p[0] += d; }); }); x = (n - 1 - (n - 1)/2) * gap; }
+  else { const xs = b.figs.map(f => f.j[1][0]); let room = -1; for(let t = -1; t <= 1.001; t += 0.1){ const d = Math.min(...xs.map(v => Math.abs(v - t))); if(d > room + 1e-9){ room = d; x = t; } } }
+  if(n > 2 && !b.figs.some(f => f.moved)) b.cam = Object.assign({}, b.cam || CAM0, {dist:Math.max((b.cam || CAM0).dist, 1.85 + (n - 2) * 0.45)}); // step back to fit everyone
+  const used = new Set(b.figs.map(f => f.cid)), c = S.chars.find(y => !used.has(y.id));
+  const f = {id:uid('f'), cid:c ? c.id : '', j:poseJoints(kind, x, h)}; b.figs.push(f); b.sel = f.id; return f;
 }
 const figChar = f => f.cid ? S.chars.find(c => c.id===f.cid) : null;
 function poseSum(b){ const n = b.figs.length; if(!n) return 'no figures yet';
   const names = b.figs.map(f => (figChar(f) || {}).name).filter(Boolean); return n + (n===1 ? ' figure' : ' figures') + (names.length ? ' · ' + names.join(', ') : ''); }
 function poseBody(b, I){
+  upgradeFigs(b);
   const f = b.figs.find(x => x.id===b.sel);
   return `<canvas class="pboard" data-board></canvas>
+    <div class="figrow">${Object.entries(CAMS).map(([k, c]) => `<button class="chipbtn" data-do="cam" data-v="${k}">${c[0]}</button>`).join('')}</div>
+    <div class="row"><label>Zoom</label><div class="slider"><input type="range" data-fig="zoom" min="0.6" max="2.5" step="0.05" value="${(CAM0.dist / (b.cam || CAM0).dist).toFixed(2)}"><output>${(CAM0.dist / (b.cam || CAM0).dist).toFixed(2)}</output></div></div>
     <div class="figrow">${Object.entries(POSES).map(([k,p]) => `<button class="chipbtn" data-do="fig" data-v="${k}">＋ ${p.name}</button>`).join('')}</div>
-    <p class="note">Drag a joint to move it (the neck moves the whole figure). Tap a figure to pick it. A figure with a character gets that character's tags in its own part of the picture.</p>
+    <p class="note">Drag the empty space to walk the camera around them; the render is what the camera sees. Drag a joint to move it (the neck moves the whole figure, the head turns with the face). Tap a figure to pick it. A figure with a character gets that character's tags in its own part of the picture.</p>
     ${f ? `<div class="row"><label>Who</label><div class="grow"><select data-fig="cid"><option value="">Anyone</option>${S.chars.map(c => `<option value="${esc(c.id)}" ${c.id===f.cid ? 'selected' : ''}>${esc(c.name || 'No name yet')}</option>`).join('')}</select></div></div>
       ${S.chars.length ? '' : '<p class="note" style="margin-left:92px">Make characters under 🧍 Characters to give each figure one.</p>'}
+      <div class="row"><label>Turn</label><div class="slider"><input type="range" data-fig="turn" min="-180" max="180" step="5" value="0"><output>0°</output></div></div>
       <div class="row"><label>Size</label><div class="slider"><input type="range" data-fig="scale" min="0.5" max="1.5" step="0.05" value="1"><output>1</output></div></div>
       <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="figmirror">⇋ Mirror</button><button class="chipbtn danger" data-do="figdel">Remove figure</button></div>` : ''}
     <div class="row"><select data-k="model">${opts(I.cn, b.model, info ? 'No ControlNets found' : 'Connect to see your ControlNets')}</select></div>
@@ -2523,7 +2583,7 @@ function poseBody(b, I){
     ${slider('end','Ends at',0.2,1,0.05,b.end)}
     <p class="note">Ending the pose around 60–70% of the steps holds the pose and leaves hands and clothes free.</p>`;
 }
-// OpenPose's own look: limbs in its colours at 60% brightness, joints as dots, on black
+// OpenPose's own look: limbs in its colours at 60% brightness, joints as dots, on black; points it can't see are left out
 function drawPose(x, W, H, figs){
   x.fillStyle = '#000'; x.fillRect(0, 0, W, H);
   const sw = Math.max(3, Math.round(Math.min(W, H) / 512 * 4));
@@ -2534,17 +2594,41 @@ function drawPose(x, W, H, figs){
     f.pts.forEach((p, i) => { if(!p) return; x.fillStyle = `rgb(${PCOL[i].join(',')})`; x.beginPath(); x.arc(p[0]*W, p[1]*H, sw, 0, 7); x.fill(); });
   });
 }
+// the board on the phone: a floor to show which way is which, then each figure as a mannequin (thick limbs in
+// OpenPose's colours, a round head with a face on the side it looks to), the nearest drawn last
 function drawBoard(cv, b){
+  upgradeFigs(b);
   const [W,H] = boardSize(), w = cv.clientWidth || 300, h = Math.round(w * H / W), d = window.devicePixelRatio || 1;
   if(cv.width!==Math.round(w*d)){ cv.width = Math.round(w*d); cv.height = Math.round(h*d); cv.style.height = h + 'px'; }
   const x = cv.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0);
-  drawPose(x, w, h, b.figs);
-  b.figs.forEach(f => { const c = figChar(f), sel = f.id===b.sel, top = f.pts.reduce((m, p) => p && p[1] < m[1] ? p : m, [0, 2]);
-    if(sel) f.pts.forEach(p => { if(!p) return; x.strokeStyle = '#fff'; x.lineWidth = 1.5; x.beginPath(); x.arc(p[0]*w, p[1]*h, 9, 0, 7); x.stroke(); });
-    const label = c ? (c.name || 'No name') : 'Anyone';
-    x.font = '700 12px Nunito, system-ui'; const tw = x.measureText(label).width + 12, lx = Math.min(w - tw - 2, Math.max(2, top[0]*w - tw/2)), ly = Math.max(2, top[1]*h - 30);
+  const cam = camOf(b, W, H), px = p => [p[0]*w, p[1]*h], foc = h / (2 * cam.ky); // pixels per unit at depth 1
+  x.fillStyle = '#07080b'; x.fillRect(0, 0, w, h);
+  x.lineWidth = 1; // the floor: a grid on the ground, brighter towards the camera
+  for(let i = -6; i <= 6; i++) [[[i*0.25, 0, -1.5], [i*0.25, 0, 1.5]], [[-1.5, 0, i*0.25], [1.5, 0, i*0.25]]].forEach(([a, c]) => {
+    const A = toScreen(cam, a), C = toScreen(cam, c); x.strokeStyle = i===0 ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.08)';
+    x.beginPath(); x.moveTo(A[0]*w, A[1]*h); x.lineTo(C[0]*w, C[1]*h); x.stroke(); });
+  const views = b.figs.map(f => ({f, v:figView(b, f, W, H, cam)})).sort((p, q) => q.v.z[1] - p.v.z[1]);
+  views.forEach(({f, v}) => {
+    const c = figChar(f), sel = f.id===b.sel, S2 = v.all.map(px), z = v.z;
+    const foot = toScreen(cam, [V3.mid(f.j[10], f.j[13])[0], 0, V3.mid(f.j[10], f.j[13])[2]]); // a shadow under them
+    x.fillStyle = 'rgba(255,255,255,.07)'; x.beginPath(); x.ellipse(foot[0]*w, foot[1]*h, 0.12*foc/foot[2], 0.04*foc/foot[2], 0, 0, 7); x.fill();
+    const limbs = LIMBS.map(([a, e], i) => ({a, e, i, z:(z[a] + z[e]) / 2})).filter(l => l.i < 12).sort((p, q) => q.z - p.z);
+    limbs.forEach(({a, e, i, z:lz}) => { x.strokeStyle = `rgb(${PCOL[i].map(t => Math.round(t * (sel ? 0.8 : 0.6))).join(',')})`;
+      x.lineWidth = Math.max(4, 0.035 * foc / lz); x.lineCap = 'round'; x.beginPath(); x.moveTo(...S2[a]); x.lineTo(...S2[e]); x.stroke(); });
+    // the head: a ball, with eyes and a nose where they face the camera
+    const hc = V3.add(V3.mid(f.j[16], f.j[17]), [0, 0.01, 0]), H2 = toScreen(cam, hc), hr = Math.max(6, 0.062 * foc / H2[2]);
+    const neckTop = toScreen(cam, V3.add(hc, [0, -0.06, 0]));
+    x.strokeStyle = 'rgb(153,0,0)'; x.lineWidth = Math.max(4, 0.03 * foc / H2[2]); x.beginPath(); x.moveTo(...S2[1]); x.lineTo(neckTop[0]*w, neckTop[1]*h); x.stroke();
+    x.fillStyle = v.facing < -0.15 ? '#3a2a33' : '#5a4650'; x.strokeStyle = c ? c.color : '#aab'; x.lineWidth = sel ? 3 : 2;
+    x.beginPath(); x.arc(H2[0]*w, H2[1]*h, hr, 0, 7); x.fill(); x.stroke();
+    if(v.facing > -0.15){ [14, 15].forEach(i => { if(!v.pts[i]) return; x.fillStyle = '#fff'; x.beginPath(); x.arc(...S2[i], Math.max(1.6, hr*0.14), 0, 7); x.fill(); });
+      if(v.pts[0]){ x.fillStyle = '#ffb37a'; x.beginPath(); x.arc(...S2[0], Math.max(1.8, hr*0.16), 0, 7); x.fill(); } }
+    if(sel) f.j.forEach((p, i) => { if(i===0 || i > 13) return; x.strokeStyle = '#fff'; x.lineWidth = 1.5; x.beginPath(); x.arc(...S2[i], 9, 0, 7); x.stroke(); });
+    const label = c ? (c.name || 'No name') : 'Anyone', ty = H2[1]*h - hr - 24;
+    x.font = '700 12px Nunito, system-ui'; const tw = x.measureText(label).width + 12, lx = Math.min(w - tw - 2, Math.max(2, H2[0]*w - tw/2)), ly = Math.max(2, ty);
     x.fillStyle = c ? c.color : '#7d8592'; x.globalAlpha = sel ? 1 : 0.7; x.beginPath(); x.roundRect ? x.roundRect(lx, ly, tw, 18, 6) : x.rect(lx, ly, tw, 18); x.fill();
-    x.globalAlpha = 1; x.fillStyle = '#111217'; x.fillText(label, lx + 6, ly + 13); });
+    x.globalAlpha = 1; x.fillStyle = '#111217'; x.fillText(label, lx + 6, ly + 13);
+  });
 }
 function drawBoards(){
   document.querySelectorAll('#blocks canvas[data-board]').forEach(cv => { const b = blockOf(cv); if(!b) return; drawBoard(cv, b); boardTouch(cv, b); });
@@ -2552,26 +2636,37 @@ function drawBoards(){
 function boardTouch(cv, b){
   let drag = null;
   const at = e => { const r = cv.getBoundingClientRect(); return {x:(e.clientX - r.left) / r.width, y:(e.clientY - r.top) / r.height, r}; };
-  cv.onpointerdown = e => { const p = at(e); let best = null;
-    b.figs.forEach(f => f.pts.forEach((q, i) => { if(!q) return; const d = Math.hypot((q[0] - p.x) * p.r.width, (q[1] - p.y) * p.r.height) - (f.id===b.sel ? 6 : 0);
-      if(d < 24 && (!best || d < best.d)) best = {f, i, d}; }));
-    if(!best){ if(b.sel){ b.sel = null; save(); renderBlocks(); } return; }
-    e.preventDefault(); cv.setPointerCapture(e.pointerId); drag = {f:best.f, i:best.i, x:p.x, y:p.y, moved:false};
+  cv.onpointerdown = e => { const p = at(e), [W,H] = boardSize(); let best = null;
+    b.figs.forEach(f => { const v = figView(b, f, W, H), hc = toScreen(v.cam, V3.mid(f.j[16], f.j[17]));
+      v.all.forEach((q, i) => { if(i===0 || i > 13) return; const dd = Math.hypot((q[0] - p.x) * p.r.width, (q[1] - p.y) * p.r.height) - (f.id===b.sel ? 6 : 0);
+        if(dd < 24 && (!best || dd < best.d)) best = {f, i, d:dd, z:q[2]}; });
+      const dh = Math.hypot((hc[0] - p.x) * p.r.width, (hc[1] - p.y) * p.r.height) - 4; // the head ball: drags the face round
+      if(dh < 22 && (!best || dh < best.d)) best = {f, i:0, d:dh, z:hc[2]}; });
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    if(!best){ drag = {orbit:true, x:p.x, y:p.y, moved:false}; return; }
+    drag = {f:best.f, i:best.i, z:best.z, x:p.x, y:p.y, moved:false};
     if(b.sel!==best.f.id){ b.sel = best.f.id; drawBoard(cv, b); drag.picked = true; } };
-  cv.onpointermove = e => { if(!drag) return; e.preventDefault(); const p = at(e), dx = p.x - drag.x, dy = p.y - drag.y; drag.x = p.x; drag.y = p.y; drag.moved = true; drag.f.moved = true;
-    const move = drag.i===1 ? drag.f.pts.map((q, i) => i) : [drag.i].concat(KIDS[drag.i] || []);
-    move.forEach(i => { const q = drag.f.pts[i]; if(q){ q[0] = Math.min(1, Math.max(0, q[0] + dx)); q[1] = Math.min(1, Math.max(0, q[1] + dy)); } });
+  cv.onpointermove = e => { if(!drag) return; e.preventDefault(); const p = at(e), dx = p.x - drag.x, dy = p.y - drag.y;
+    if(Math.abs(dx) + Math.abs(dy) < 0.002) return; drag.x = p.x; drag.y = p.y; drag.moved = true;
+    if(drag.orbit){ b.cam = Object.assign({}, CAM0, b.cam); b.cam.yaw -= dx * Math.PI * 1.2; b.cam.pitch = Math.min(1.3, Math.max(-0.5, b.cam.pitch + dy * 2)); drawBoard(cv, b); return; }
+    const [W,H] = boardSize(), cam = camOf(b, W, H), f = drag.f; f.moved = true;
+    const mv = V3.sub(fromScreen(cam, [p.x, p.y], drag.z), fromScreen(cam, [p.x - dx, p.y - dy], drag.z)); // the drag, in the plane facing the camera
+    const move = drag.i===1 ? f.j.map((q, i) => i) : [drag.i].concat(KIDS[drag.i] || []);
+    move.forEach(i => { const q = f.j[i]; q[0] += mv[0]; q[1] = Math.max(0, q[1] + mv[1]); q[2] += mv[2]; });
     drawBoard(cv, b); };
-  cv.onpointerup = cv.onpointercancel = () => { if(!drag) return; const d = drag; drag = null; save(); if(d.picked || d.moved) renderBlocks(); };
+  cv.onpointerup = cv.onpointercancel = () => { if(!drag) return; const d = drag; drag = null;
+    if(d.orbit && !d.moved){ if(b.sel){ b.sel = null; save(); renderBlocks(); } return; } // a tap on empty space: nobody picked
+    save(); if(d.picked || (d.moved && !d.orbit)) renderBlocks(); };
 }
 // the areas of the picture the pose board's characters stand in (in pixels, on the 8-pixel grid), with their tags, and
 // the count tags for everyone in it (1boy, 2girls…) taken from the characters' own tags
 function regions(W, H){
   const b = on1('pose'), out = []; out.count = '';
   if(!b) return out;
+  upgradeFigs(b);
   const r8 = v => Math.max(0, Math.round(v / 8) * 8), sex = {girl:0, boy:0, other:0};
   b.figs.forEach(f => { const c = figChar(f); if(!c || !c.tags.trim()) return;
-    const ps = f.pts.filter(Boolean), xs = ps.map(p => p[0] * W), ys = ps.map(p => p[1] * H);
+    const ps = figView(b, f, W, H).all, xs = ps.map(p => Math.min(1, Math.max(0, p[0])) * W), ys = ps.map(p => Math.min(1, Math.max(0, p[1])) * H);
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), tall = y1 - y0;
     const half = Math.max(x1 - x0, tall * 0.3) / 2 + tall * 0.05, mid = (x0 + x1) / 2;
     const x = r8(Math.max(0, mid - half)), y = r8(Math.max(0, y0 - tall * 0.12)), w = Math.max(64, r8(Math.min(W, mid + half) - x)), h = Math.max(64, r8(Math.min(H, y1 + tall * 0.05) - y));
@@ -2583,30 +2678,43 @@ function regions(W, H){
   out.count = [k(sex.girl, '1girl', 'girls'), k(sex.boy, '1boy', 'boys'), k(sex.other, '1other', 'others')].filter(Boolean).join(', ');
   return out;
 }
-// the board as a picture the size of the render, sent to the connected computer when it changed; false if that failed
+// the board as the camera sees it, as a picture the size of the render, sent to the connected computer when it
+// changed; false if that failed
 async function poseUpload(){
   const b = on1('pose'); if(!b || !b.figs.length) return true;
-  const [W,H] = boardSize(), key = W + 'x' + H + JSON.stringify(b.figs.map(f => f.pts)) + (S.test ? 't' : base());
+  upgradeFigs(b);
+  const [W,H] = boardSize(), key = W + 'x' + H + JSON.stringify([b.cam, b.figs.map(f => f.j)]) + (S.test ? 't' : base());
   if(b.image && b.imgFor===key) return true;
-  const c = document.createElement('canvas'); c.width = W; c.height = H; drawPose(c.getContext('2d'), W, H, b.figs);
+  const c = document.createElement('canvas'); c.width = W; c.height = H; drawPose(c.getContext('2d'), W, H, b.figs.map(f => figView(b, f, W, H)));
   try{ const blob = await new Promise(r => c.toBlob(r, 'image/png'));
     const u = await uploadImage(new File([blob], 'rd-pose-' + b.id + '-' + Date.now().toString(36) + '.png', {type:'image/png'}));
     b.image = u.name; b.imgFor = key; save(); return true; }
   catch(err){ showErr('<b>Before rendering:</b><br>Could not send the pose board: ' + esc(err.message)); return false; }
 }
+// turn a figure about the upright line through its neck
+const turnFig = (j, a) => { const n = j[1], cs = Math.cos(a), sn = Math.sin(a); return j.map(q => { const dx = q[0] - n[0], dz = q[2] - n[2]; return [n[0] + dx*cs + dz*sn, q[1], n[2] - dx*sn + dz*cs]; }); };
+const facingOf = j => Math.atan2(j[5][2] - j[2][2], j[5][0] - j[2][0]); // 0 when facing +z (left shoulder on +x)
 function poseInput(b, el){
+  const cv = document.querySelector(`.block[data-id="${b.id}"] canvas[data-board]`);
+  if(el.dataset.fig==='zoom'){ const v = +el.value; el.nextElementSibling.textContent = v; b.cam = Object.assign({}, CAM0, b.cam, {dist:CAM0.dist / v}); if(cv) drawBoard(cv, b); clearTimeout(poseInput.t); poseInput.t = setTimeout(save, 400); return; }
   const f = b.figs.find(x => x.id===b.sel); if(!f) return;
   if(el.dataset.fig==='cid'){ f.cid = el.value; save(); renderBlocks(); return; }
-  if(el.dataset.fig==='scale'){ // scale about the neck, from the size it had when the slider was first touched
-    const v = +el.value; el.nextElementSibling.textContent = v; f.moved = true; f.base = f.base || JSON.parse(JSON.stringify(f.pts)); const n = f.base[1];
-    f.pts = f.base.map(q => q && [Math.min(1, Math.max(0, n[0] + (q[0] - n[0]) * v)), Math.min(1, Math.max(0, n[1] + (q[1] - n[1]) * v))]);
-    const cv = document.querySelector(`.block[data-id="${b.id}"] canvas[data-board]`); if(cv) drawBoard(cv, b); }
+  f.moved = true; f.base = f.base || JSON.parse(JSON.stringify(f.j)); // from the figure as it was when a slider was first touched
+  const v = +el.value, k = el.dataset.fig, other = el.closest('.blockbody, .block').querySelector(`[data-fig="${k==='scale' ? 'turn' : 'scale'}"]`);
+  const sc = k==='scale' ? v : other ? +other.value : 1, tu = (k==='turn' ? v : other ? +other.value : 0) * Math.PI / 180;
+  el.nextElementSibling.textContent = k==='turn' ? v + '°' : v;
+  const g = [f.base[1][0], 0, f.base[1][2]]; // scaled about the ground under the neck, so they stay standing on it
+  f.j = turnFig(f.base.map(q => [g[0] + (q[0] - g[0]) * sc, q[1] * sc, g[2] + (q[2] - g[2]) * sc]), tu);
+  if(cv) drawBoard(cv, b); clearTimeout(poseInput.t); poseInput.t = setTimeout(save, 400);
 }
 function poseAct(b, act, v){
+  upgradeFigs(b);
   const f = b.figs.find(x => x.id===b.sel);
+  if(act==='cam'){ const c = CAMS[v]; b.cam = Object.assign({}, CAM0, b.cam, {yaw:c[1], pitch:c[2]}); return true; }
   if(act==='fig'){ addFig(b, v); return true; }
   if(!f) return false;
-  if(act==='figmirror'){ f.moved = true; const cx = f.pts[1][0]; f.pts = MIRROR.map(i => f.pts[i] && [Math.min(1, Math.max(0, 2*cx - f.pts[i][0])), f.pts[i][1]]); delete f.base; return true; }
+  if(act==='figmirror'){ f.moved = true; const a = facingOf(f.j), flat = turnFig(f.j, a), cx = flat[1][0]; // faced forward, flipped left to right, turned back
+    f.j = turnFig(MIRROR.map(i => [2*cx - flat[i][0], flat[i][1], flat[i][2]]), -a); delete f.base; return true; }
   if(act==='figdel'){ b.figs = b.figs.filter(x => x!==f); b.sel = b.figs.length ? b.figs[b.figs.length - 1].id : null; return true; }
   return false;
 }
@@ -2693,7 +2801,7 @@ function turnGraph(k, img, angle, c, fromRef){
 }
 // queue one render per angle on the Qwen computer; each finished picture joins the character with that angle
 async function makeAngles(c, v, angles){
-  const fromRef = v.angle==='ref'; if(fromRef) angles = ['front']; // a reference only makes the front; the other angles come from that front
+  const fromRef = v.angle==='ref'; // from a reference, the front is drawn full body from head to feet; the other angles turn it as usual
   const k = qwenKit(); if(k.why){ toast(k.why, true); return; }
   if(!angles.length){ toast('Tick at least one angle', true); return; }
   buzz();
@@ -2705,10 +2813,10 @@ async function makeAngles(c, v, angles){
   if(!S.test){ await findFarm(); if(!farm) await Promise.all(allPcs().map(x => pollPc(x))); }
   const tap = Date.now().toString(36), mine = [];
   for(const [i, a] of angles.entries()){
-    const b = turnGraph(k, img, a, c, fromRef);
+    const b = turnGraph(k, img, a, c, fromRef && a==='front');
     const e = {key:tap + 'c' + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : k.url, state:'sending', hidden:!!S.hidden,
       graph:b.graph, titles:b.titles, seed:b.seed, prompt:(c.name || 'Character') + ': ' + ANGLES[a], ckpt:k.unet, n:i+1, of:angles.length, images:[], snap:null, size:[1024,1024], pics:1, steps:k.steps, pin:S.test ? null : k.url};
-    S.charJobs[e.key] = {cid:c.id, angle:a, hidden:!!S.hidden, fromRef};
+    S.charJobs[e.key] = {cid:c.id, angle:a, hidden:!!S.hidden, fromRef:fromRef && a==='front' && angles.length===1};
     if(farm){ e.farm = true; e.state = 'waiting'; }
     S.queue.push(e); mine.push(e); save();
     if(!S.test && !farm){ const err = await dispatch(e); if(err){ dropOne(e); mine.pop(); failAll(err); break; } }
@@ -2816,6 +2924,142 @@ function sugBox(c){
   }
   return h;
 }
+// ---------- a 3D model of the character: Pixal3D on ComfyUI's own TRELLIS.2 nodes, on the computer that has them ----------
+// Builds a coloured mesh from the front, side and back pictures (a fixed rig 90° apart: Pixal3D's "left" view shows
+// the character's own left side), saved as a .glb in RenderDeck/characters/3d and shown on the card to turn around.
+// Render already had everything but the main model (5.6 GB), which Get the 3D model fetches through the helper,
+// held to its gentle download speed and carrying on after a WiFi drop.
+const P3D = {file:'pixal3d_multiview_int8_convrot.safetensors', gb:5.6,
+  url:'https://huggingface.co/Comfy-Org/Pixal3D/resolve/main/diffusion_models/pixal3d_multiview_int8_convrot.safetensors'};
+const FAKE3D = {UNETLoader:{input:{required:{unet_name:[[P3D.file]], weight_dtype:[['default']]}}}, CLIPVisionLoader:{input:{required:{clip_name:[['dino_v3_L_naf_fp32.safetensors']]}}},
+  VAELoader:{input:{required:{vae_name:[['trellis_2_shape_vae_bf16.safetensors','trellis_2_texture_vae_bf16.safetensors']]}}}, LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:[['birefnet.safetensors']]}}},
+  Pixal3DMultiViewConditioning:{input:{required:{}}}, SaveGLB:{input:{required:{}}}};
+function kit3d(){
+  const pcs = S.test ? [{url:'test', oi:FAKE3D}] : allPcs().filter(p => p.online && p.oi && p.oi.Pixal3DMultiViewConditioning && p.oi.SaveGLB);
+  const pick = (oi, cls, k, re) => combo(oi[cls], k).find(n => re.test(baseName(n)));
+  const p = pcs.sort((a, b) => !!pick(b.oi, 'UNETLoader', 'unet_name', /pixal3d_multiview/i) - !!pick(a.oi, 'UNETLoader', 'unet_name', /pixal3d_multiview/i) || (b.url===farmHost()) - (a.url===farmHost()))[0];
+  if(!p) return {why: !S.servers.length ? 'Connect to your render computer first' : !allPcs().some(x => x.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
+    : "None of your computers that are on has ComfyUI's 3D nodes (Pixal3D / TRELLIS.2): update ComfyUI"};
+  const oi = p.oi, k = {url:p.url, oi, unet:pick(oi, 'UNETLoader', 'unet_name', /pixal3d_multiview/i), dino:pick(oi, 'CLIPVisionLoader', 'clip_name', /dino_v3/i),
+    sv:pick(oi, 'VAELoader', 'vae_name', /trellis_2_shape_vae/i), tv:pick(oi, 'VAELoader', 'vae_name', /trellis_2_texture_vae/i), bg:pick(oi, 'LoadBackgroundRemovalModel', 'bg_removal_name', /birefnet/i)};
+  const lacks = [!k.dino && 'dino_v3_L_naf_fp32 (clip_vision)', !k.sv && 'trellis_2_shape_vae_bf16 (vae)', !k.tv && 'trellis_2_texture_vae_bf16 (vae)', !k.bg && 'birefnet (background_removal)'].filter(Boolean);
+  if(lacks.length) k.why = pcName(p.url) + ' is missing ' + lacks.join(', ');
+  return k;
+}
+// the pictures it builds from: the newest front, side and back, each cut out and framed square on black
+function views3d(c){ const last = a => c.views.filter(v => v.angle===a).slice(-1)[0]; return {front:last('front'), side:last('side'), back:last('back')}; }
+function graph3d(k, imgs, c){
+  const g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fillIn(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
+  const bgm = add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), cond = {};
+  for(const [slot, img] of Object.entries(imgs)){
+    const li = add('LoadImage', {image:img}), m = add('RemoveBackground', {bg_removal_model:[bgm,0], image:[li,0]});
+    cond[slot] = [add('ImageCropToMask', {images:[li,0], masks:[m,0], width:1024, height:1024, pad_factor:1.1, grow_mask:0, background:'#000000'}), 0];
+  }
+  const cv = add('CLIPVisionLoader', {clip_name:k.dino}), un = add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'});
+  const sv = add('VAELoader', {vae_name:k.sv}), tv = add('VAELoader', {vae_name:k.tv});
+  const pc = add('Pixal3DMultiViewConditioning', Object.assign({clip_vision_model:[cv,0], fov:20}, cond));
+  const ms = add('ModelSamplingSD3', {model:[un,0], shift:5}), el = add('EmptyTrellis2LatentStructure', {batch_size:1});
+  const ks = (model, pos, neg, lat, seed, steps, cfg, sch) => add('KSampler', {model, positive:pos, negative:neg, latent_image:lat, seed, steps, cfg, sampler_name:'euler', scheduler:sch || 'normal', denoise:1});
+  const s1 = ks([ms,0], [pc,0], [pc,1], [el,0], 56, 12, 7.5);
+  const vs = add('VaeDecodeStructureTrellis2', {samples:[s1,0], vae:[sv,0], resolution:'32'});
+  const sh = add('Trellis2ShapeStage', {positive:[pc,0], negative:[pc,1], voxel:[vs,0]});
+  const s2 = ks([un,0], [sh,0], [sh,1], [sh,2], 42, 20, 7.5);
+  const up = add('Trellis2UpsampleStage', {positive:[sh,0], negative:[sh,1], shape_latent:[s2,0], vae:[sv,0], target_resolution:1024});
+  const s3 = ks([un,0], [up,0], [up,1], [up,2], 42, 12, 7.5, 'simple');
+  const tx = add('Trellis2TextureStage', {positive:[up,0], negative:[up,1], shape_latent:[s3,0]});
+  const s4 = ks([un,0], [tx,0], [tx,1], [tx,2], 43, 12, 1);
+  const ds = add('VaeDecodeShapeTrellis', {samples:[s3,0], vae:[sv,0]}), dt = add('VaeDecodeTextureTrellis', {samples:[s4,0], vae:[tv,0], shape_subdivides:[ds,1]});
+  let mesh = [ds,0];
+  if(k.oi.DecimateMesh) mesh = [add('DecimateMesh', {mesh, target_face_count:150000, placement_mode:'midpoint'}), 0]; // small enough to turn smoothly on a phone
+  if(k.oi.MeshSmoothNormals) mesh = [add('MeshSmoothNormals', {mesh, crease_angle:180}), 0];
+  mesh = [add('PaintMesh', {mesh, voxel_colors:[dt,0]}), 0];
+  const save = add('SaveGLB', {mesh, filename_prefix:(S.hidden ? HIDDEN : 'RenderDeck') + '/characters/3d/' + ((c.name || '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'character')});
+  return {g, save};
+}
+const M3D = {}; // character id -> {state, text}: what the 3D section is doing right now
+async function make3d(c){
+  const k = kit3d(); if(k.why || !k.unet){ toast(k.why || 'Get the 3D model first', true); return; }
+  const vw = views3d(c); if(!vw.front){ toast('It needs a Front picture (mark one, or make it from a Reference)', true); return; }
+  const s = M3D[c.id] = {state:'busy', text:'Getting the pictures ready…'}; drawChars(); buzz();
+  try{
+    const imgs = {};
+    for(const [a, slot] of [['front','front'], ['side', c.sideIs==='right' ? 'right' : 'left'], ['back','back']]){ const v = vw[a]; if(!v) continue;
+      let img = v.img; if(!S.test && v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('m3')); img = g.x.inputs.image; }
+      imgs[slot] = img; }
+    const {g, save:sid} = graph3d(k, imgs, c);
+    if(S.test){ await new Promise(r => setTimeout(r, 300)); c.model3d = {url:'test.glb', test:true, at:Date.now(), views:Object.keys(imgs)}; delete M3D[c.id]; save(); drawChars(); return; }
+    const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-3d'})});
+    const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    c.model3d = Object.assign({}, c.model3d, {making:{pc:k.url, id:j.prompt_id, save:sid, t:Date.now()}}); save();
+    await wait3d(c);
+  }catch(err){ Object.assign(s, {state:'err', text:"Couldn't make the 3D model: " + err.message}); drawChars(); }
+}
+// follow a 3D model being made (also after the app was closed and opened again): it takes a few minutes
+async function wait3d(c){
+  const m = c.model3d && c.model3d.making; if(!m || M3D[c.id] && M3D[c.id].polling) return;
+  const s = M3D[c.id] = {state:'busy', polling:true, text:'Making the 3D model on ' + pcName(m.pc) + '… this takes a few minutes'}; drawChars();
+  for(;;){
+    await new Promise(r => setTimeout(r, 4000));
+    if(M3D[c.id]!==s) return;
+    let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e){ continue; } // offline for now: keep waiting
+    if(!h){ if(Date.now() - m.t > 3 * 3600e3){ delete c.model3d.making; save(); Object.assign(s, {state:'err', text:'It never finished (was ComfyUI restarted?)', polling:false}); drawChars(); return; } continue; }
+    if(h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error');
+      delete c.model3d.making; save(); Object.assign(s, {state:'err', polling:false, text:"Couldn't make the 3D model: " + (e ? e[1].exception_message : 'ComfyUI hit an error')}); drawChars(); return; }
+    if(!(h.status && h.status.completed)) continue;
+    const f = (((h.outputs || {})[m.save] || {})['3d'] || [])[0];
+    delete c.model3d.making;
+    if(f) Object.assign(c.model3d, {url:viewUrl(f, m.pc), pc:m.pc, file:(f.subfolder ? f.subfolder + '/' : '') + f.filename, at:Date.now()});
+    save(); delete M3D[c.id]; drawChars(); buzz(); toast(f ? '3D model of ' + (c.name || 'the character') + ' ready ✨' : 'Finished, but no 3D file came back', !f); return;
+  }
+}
+// Get the 3D model: the one big file, through the helper (2 MB/s, carries on after a drop)
+async function get3d(){
+  const k = kit3d(); if(k.why && !k.url) return;
+  if(!confirm(pcName(k.url) + ' will download the Pixal3D model from Hugging Face: ' + P3D.gb + ' GB, about ' + Math.round(P3D.gb * 1024 / 2 / 60) + ' minutes at the gentle 2 MB/s, once. If the WiFi drops it waits and carries on. Start now?')) return;
+  try{ const r = await fetch(k.url + '/renderdeck/download', {method:'POST', headers:JSONH, body:JSON.stringify({url:P3D.url, kind:'diffusion_models'})}), j = await r.json();
+    if(j.error) throw new Error(/checkpoint or LoRA/.test(j.error) ? pcName(k.url) + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : j.error);
+    toast('Downloading on ' + pcName(k.url)); watch3d(k.url); }
+  catch(err){ toast(err.message, true); }
+}
+let dl3d = null; // the download, while the card is open: {pc, done, total, status}
+function watch3d(url){
+  if(watch3d.t) return;
+  watch3d.t = setInterval(async () => {
+    if(!$('#charSheet').classList.contains('open')){ clearInterval(watch3d.t); watch3d.t = 0; return; }
+    try{ const j = (await (await fetch(url + '/renderdeck/jobs')).json()).jobs.find(x => x.name===P3D.file);
+      dl3d = j ? Object.assign({pc:url}, j) : null;
+      if(j && j.status==='done'){ clearInterval(watch3d.t); watch3d.t = 0; dl3d = null; const p = pcOf(url); p.oi = await (await fetch(url + '/object_info')).json(); toast('The 3D model is on ' + pcName(url) + ' ✨'); }
+      if(j && j.status==='failed'){ clearInterval(watch3d.t); watch3d.t = 0; }
+      drawChars(); }catch(e){}
+  }, 4000);
+}
+let mvLoad = null; // Google's <model-viewer>, loaded the first time a 3D model is shown
+const loadMV = () => mvLoad = mvLoad || new Promise((ok, no) => { const s = document.createElement('script'); s.type = 'module'; s.src = 'https://unpkg.com/@google/model-viewer@3.5.0/dist/model-viewer.min.js'; s.onload = ok; s.onerror = no; document.head.appendChild(s); });
+function box3d(c){
+  const k = kit3d(), m = c.model3d || {}, s = M3D[c.id], vw = views3d(c);
+  if(m.making && !s) setTimeout(() => wait3d(c), 0);
+  let h = '<div class="lbl">3D model</div>';
+  if(m.url && !m.test){ loadMV().catch(() => {}); h += `<model-viewer class="m3d" src="${esc(m.url)}" camera-controls touch-action="pan-y" auto-rotate rotation-per-second="20deg" shadow-intensity="0.6" exposure="1.1" alt="3D model of ${esc(c.name || 'the character')}"></model-viewer>
+    <p class="note">Drag to turn ${esc(c.name || 'them')} around, pinch to zoom. Saved in ${esc(m.file || '')}.</p>`; }
+  else if(m.url) h += '<p class="note">3D model ready (pretend, in Test mode).</p>';
+  if(s && s.state==='busy') return h + `<p class="note">🧊 ${esc(s.text)}</p>`;
+  if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
+  if(k.why && !k.url) return h + `<p class="note">${esc(k.why)}.</p>`;
+  if(!k.unet){
+    if(dl3d && dl3d.status!=='failed') return h + `<p class="note">${dl3d.status==='waiting' ? 'The internet dropped: the download carries on in a moment' : 'Downloading Pixal3D on ' + esc(pcName(dl3d.pc))} · ${(dl3d.done / 1e9).toFixed(1)} of ${((dl3d.total || P3D.gb * 1e9) / 1e9).toFixed(1)} GB</p><div class="pbar"><i style="width:${(100 * dl3d.done / (dl3d.total || P3D.gb * 1e9)).toFixed(1)}%"></i></div>`;
+    if(!S.test) watch3d(k.url);
+    return h + `<p class="note">Pixal3D builds a coloured 3D model of them from the Front, Side and Back pictures, on ${esc(pcName(k.url))}. ${esc(pcName(k.url))} has everything but the model itself: ${P3D.gb} GB, downloaded once at the gentle 2 MB/s (about ${Math.round(P3D.gb * 1024 / 2 / 60)} minutes).</p>
+      ${dl3d && dl3d.status==='failed' ? `<p class="warn">The download stopped: ${esc(dl3d.error || '')}. Tap again to carry on from where it got to.</p>` : ''}
+      <div class="btnrow"><button class="chipbtn" data-ch="get3d">⬇ Get the 3D model (${P3D.gb} GB)</button></div>`;
+  }
+  if(k.why) return h + `<p class="warn">${esc(k.why)}</p>`;
+  const have = ['front','side','back'].filter(a => vw[a]);
+  h += `<p class="note">${vw.front ? 'From the ' + have.map(a => ANGLES[a]).join(', ') + (have.length > 1 ? ' pictures' : ' picture') + ' (the newest of each), on ' + esc(pcName(k.url)) + '. More angles give a better back and sides.' : 'It needs a Front picture first: mark one as Front, or make one from a Reference.'}</p>`;
+  if(vw.side) h += `<div class="row"><label>Side shows</label>${seg('side3d', [['left', 'Their left'], ['right', 'Their right']], c.sideIs==='right' ? 'right' : 'left')}</div>
+    <p class="note" style="margin:-2px 0 0 92px">Their left side faces the picture's left edge. Pick the other if the model comes out twisted.</p>`;
+  return h + `<div class="btnrow"><button class="btn hot" data-ch="make3d" ${vw.front ? '' : 'disabled'}>🧊 ${m.url ? 'Make it again' : 'Make 3D model'}</button></div>`;
+}
 // a render (from the preview or the viewer) as a picture of a character
 function viewFromGallery(g){
   const o = (() => { try{ return new URL(g.url).origin; }catch(e){ return ''; } })();
@@ -2862,8 +3106,8 @@ function drawChars(){
   }
   const sel = c.views.find(v => v.id===CH.sel) || c.views.find(v => v.angle==='front') || c.views[0]; CH.sel = sel ? sel.id : null;
   const have = new Set(c.views.map(v => v.angle)), jobs = making(c);
-  const fromRef = sel && sel.angle==='ref', offer = fromRef ? ['front'] : ['front','three','side','back','face'];
-  if(!CH.want) CH.want = fromRef ? new Set(['front']) : new Set(offer.filter(a => !have.has(a) && !jobs.some(e => S.charJobs[e.key].angle===a)));
+  const fromRef = sel && sel.angle==='ref', offer = ['front','three','side','back','face'];
+  if(!CH.want) CH.want = fromRef && !have.has('front') ? new Set(['front']) : new Set(offer.filter(a => !have.has(a) && !jobs.some(e => S.charJobs[e.key].angle===a)));
   const k = qwenKit(), n = CH.want.size;
   paint(box, `<div class="libhead"><button class="chipbtn" data-ch="list">‹ Characters</button>${CH.from ? '<button class="chipbtn hot" data-ch="addfrom">＋ Add the picture</button>' : ''}</div>
     ${orbitRing(c).length > 1 ? `<div class="orbit" data-orbit><img alt=""><span class="ang"></span><small>⟷ drag to turn ${esc(c.name || 'them')} around</small></div>
@@ -2882,11 +3126,12 @@ function drawChars(){
     ${sel ? `<div class="row" style="margin-top:10px"><label>This one is</label>${seg('cangle', Object.entries(ANGLES), sel.angle)}</div>
       <div class="row" style="padding-left:92px"><button class="chipbtn" data-ch="see">↗ See it big</button><button class="chipbtn danger" data-ch="delview">Remove</button></div>` : ''}
     <div class="lbl">Make other angles</div>
-    ${sel ? `<p class="note" style="margin-top:0">${fromRef ? 'This is a Reference picture, so ' + (k.why ? 'it' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url)))) + ' makes a full-body front view of them first, from head to feet. Then it picks that front, and you make the other angles from it. If this picture already is a full-body front, mark it Front instead.'
+    ${sel ? `<p class="note" style="margin-top:0">${fromRef ? 'From this Reference picture, ' + (k.why ? '' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url))) + ' ') + 'draws the angles you tick; its Front is full body, head to feet. Making the front alone first, then the rest from that front, usually keeps the body more alike. If this picture already is a full-body front, mark it Front instead.'
         : 'From the picked picture. ' + (k.why ? '' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url))) + ' draws this character turned around and keeps the design' + (k.fast ? ', ' + k.steps + ' steps each with Lightning' : '') + '. Keep the good ones and remove the rest.')}</p>
       ${k.why ? `<p class="warn">${esc(k.why)}</p>` : `<div class="irow wrap">${offer.map(a => `<button data-want="${a}" class="${CH.want.has(a) ? 'on' : ''}">${ANGLES[a]}</button>`).join('')}</div>
-      <div class="btnrow"><button class="btn hot" data-ch="turn" ${n ? '' : 'disabled'}>✨ ${fromRef ? 'Make the full-body front' : 'Make ' + (n ? n + ' ' + (n > 1 ? 'angles' : 'angle') : 'angles')}</button></div>`}`
+      <div class="btnrow"><button class="btn hot" data-ch="turn" ${n ? '' : 'disabled'}>✨ ${fromRef && n===1 && CH.want.has('front') ? 'Make the full-body front' : 'Make ' + (n ? n + ' ' + (n > 1 ? 'angles' : 'angle') : 'angles')}</button></div>`}`
       : '<p class="note" style="margin-top:0">Add a picture of them first (＋ above, or 🧍 Add to a character under any render).</p>'}
+    <div class="chsec">${box3d(c)}</div>
     <div class="btnrow" style="margin-top:22px"><button class="btn danger" data-ch="del">Delete ${esc(c.name || 'this character')}</button></div>`);
   jobs.forEach(e => { const x = box.querySelector(`[data-prog="${CSS.escape(e.key)}"]`); if(x) x.textContent = e.state==='running' ? (e.prog ? e.prog.text : 'Starting') : 'in the queue'; });
   showOrbit(c);
@@ -2914,6 +3159,9 @@ $('#charBody').onclick = async e => {
     c.tags = [c.tags.trim().replace(/,\s*$/, ''), ...pick.map(x => tagText(TAGMAP.get(x)))].filter(Boolean).join(', ');
     s.tags = s.tags.filter(x => !pick.includes(x[0])); if(!s.tags.length) delete SUG[c.id]; }
   else if(act==='sugoff'){ delete SUG[c.id]; }
+  else if(act==='get3d'){ get3d(); return; }
+  else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
+  else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
   else if(t.dataset.want){ CH.want.has(t.dataset.want) ? CH.want.delete(t.dataset.want) : CH.want.add(t.dataset.want); }
   else if(act==='pic'){ if(!info){ toast('Connect first (or use Test mode) so the picture has somewhere to go', true); return; } $('#charPick').value = ''; $('#charPick').click(); return; }
   else if(act==='see'){ const v = c.views.find(x => x.id===CH.sel); if(v) window.open(v.url, '_blank'); return; }

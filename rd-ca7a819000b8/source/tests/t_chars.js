@@ -82,7 +82,7 @@ const OI = {
   ok(st.n===1 && st.c.name==='Levi' && st.c.views.length===1 && st.c.views[0].angle==='ref', 'new character Levi with the render as its Reference picture');
   // a Reference picture only makes the full-body front, which is then picked for the other angles
   const offer = await page.$$eval('#charBody [data-want]', b => b.map(x => x.dataset.want + (x.classList.contains('on') ? '*' : '')));
-  ok(offer.join()==='front*' && (await page.textContent('#charBody [data-ch="turn"]')).includes('Make the full-body front'), 'a Reference picture offers just the front: ' + offer.join());
+  ok(offer.join()==='front*,three,side,back,face' && (await page.textContent('#charBody [data-ch="turn"]')).includes('Make the full-body front'), 'a Reference picture offers every angle, with just the front ticked: ' + offer.join());
   await page.click('#charBody [data-ch="turn"]');
   ok(await page.evaluate(() => S.queue.length===1 && Object.values(S.graphOf = S.queue[0].graph).some(n => /full-body front view, from head to feet/.test(n.inputs.prompt || ''))), 'one render, asking for a head-to-feet front view');
   await page.waitForFunction(() => !S.queue.length && S.chars[0].views.length===2, null, {timeout:15000});

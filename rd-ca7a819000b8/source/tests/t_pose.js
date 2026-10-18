@@ -60,26 +60,37 @@ for(const k of Object.keys(DEF)) OI[k] = OI[k] || {input:{required:{}}};
   ok(b0.model==='diffusion_pytorch_model_promax.safetensors' && b0.figs===1 && b0.cid==='c1', 'a new Pose board picks ProMax and starts with one figure, given the first character: ' + JSON.stringify(b0));
   ok(await page.isVisible('.block canvas[data-board]'), 'the board is drawn in the block');
   await page.click('.block [data-do="fig"][data-v="fighting"]');
-  const b1 = await page.evaluate(() => { const b = S.blocks.find(x => x.type==='pose'); return b.figs.map(f => f.cid + '@' + f.pts[1][0].toFixed(2)); });
-  ok(b1.length===2 && b1[0].startsWith('c1@0.33') && b1[1].startsWith('c2@0.67'), 'a second figure spreads the two evenly, with the next character: ' + b1.join(' '));
+  const sx = () => page.evaluate(() => { const b = S.blocks.find(x => x.type==='pose'), [W,H] = boardSize(); return b.figs.map(f => f.cid + '@' + figView(b, f, W, H).all[1][0].toFixed(2)); });
+  const b1 = await sx();
+  ok(b1.length===2 && b1[0].startsWith('c1@') && b1[1].startsWith('c2@') && Math.abs(parseFloat(b1[0].split('@')[1]) + parseFloat(b1[1].split('@')[1]) - 1) < 0.02 && parseFloat(b1[0].split('@')[1]) < 0.4, 'a second figure spreads the two evenly, with the next character: ' + b1.join(' '));
+  const cv = await page.$('.block canvas[data-board]'); await cv.scrollIntoViewIfNeeded(); const box = await cv.boundingBox();
+  const scr = (fi, i) => page.evaluate(([fi, i]) => { const b = S.blocks.find(x => x.type==='pose'), [W,H] = boardSize(); return figView(b, b.figs[fi], W, H).all[i]; }, [fi, i]);
+  const J = () => page.evaluate(() => JSON.parse(JSON.stringify(S.blocks.find(x => x.type==='pose').figs[1].j)));
   // drag the second figure's neck: the whole figure moves
-  const cv = await page.$('.block canvas[data-board]'), box = await cv.boundingBox();
-  const before = await page.evaluate(() => S.blocks.find(x => x.type==='pose').figs[1].pts.map(p => p.slice()));
-  const nx = box.x + before[1][0] * box.width, ny = box.y + before[1][1] * box.height;
-  await page.mouse.move(nx, ny); await page.mouse.down(); await page.mouse.move(nx - 20, ny + 10, {steps:4}); await page.mouse.up();
-  const after = await page.evaluate(() => S.blocks.find(x => x.type==='pose').figs[1].pts);
-  const dx = after[1][0] - before[1][0], same = after.every((p, i) => Math.abs((p[0] - before[i][0]) - dx) < 1e-6);
+  const before = await J(), n1 = await scr(1, 1);
+  await page.mouse.move(box.x + n1[0]*box.width, box.y + n1[1]*box.height); await page.mouse.down(); await page.mouse.move(box.x + n1[0]*box.width - 20, box.y + n1[1]*box.height + 10, {steps:4}); await page.mouse.up();
+  const after = await J(), dx = after[1][0] - before[1][0], same = after.every((p, i) => Math.abs((p[0] - before[i][0]) - dx) < 1e-6);
   ok(dx < -0.02 && same, 'dragging the neck moves the whole figure');
   // drag the right wrist alone: elbow stays
-  const wx = box.x + after[4][0] * box.width, wy = box.y + after[4][1] * box.height;
-  await page.mouse.move(wx, wy); await page.mouse.down(); await page.mouse.move(wx - 25, wy - 25, {steps:4}); await page.mouse.up();
-  const a2 = await page.evaluate(() => S.blocks.find(x => x.type==='pose').figs[1].pts);
+  const w4 = await scr(1, 4);
+  await page.mouse.move(box.x + w4[0]*box.width, box.y + w4[1]*box.height); await page.mouse.down(); await page.mouse.move(box.x + w4[0]*box.width - 25, box.y + w4[1]*box.height - 25, {steps:4}); await page.mouse.up();
+  const a2 = await J();
   ok(a2[4][0] < after[4][0] - 0.03 && a2[3][0]===after[3][0], 'dragging a wrist moves just the wrist');
-  // the picked figure's controls: who it is, mirror
   ok((await page.inputValue('.block select[data-fig="cid"]'))==='c2', 'the picked figure shows its character');
-  await page.click('.block [data-do="figmirror"]');
-  const m = await page.evaluate(() => S.blocks.find(x => x.type==='pose').figs[1].pts);
-  ok(Math.abs(m[2][0] - (2*a2[1][0] - a2[5][0])) < 1e-6, 'mirror flips the figure about its neck and swaps left and right');
+  await page.click('.block [data-do="figmirror"]'); const m1 = await J(); await page.click('.block [data-do="figmirror"]'); const m2 = await J();
+  ok(Math.abs(m1[4][0] - a2[4][0]) > 0.02 && m2.every((p, i) => p.every((v, k) => Math.abs(v - a2[i][k]) < 1e-6)), 'mirror flips the figure, and twice puts it back');
+  // the head reads as a head: OpenPose's face points only where the camera can see the face
+  const vis = v => page.evaluate(v => { const b = S.blocks.find(x => x.type==='pose'), [W,H] = boardSize(); if(v) b.cam = Object.assign({}, CAM0, {yaw:CAMS[v][1], pitch:CAMS[v][2]}); return figView(b, b.figs[0], W, H).pts.map(p => p ? 1 : 0).join(''); }, v);
+  const vf = await vis('front'), vs = await vis('side'), vb = await vis('back');
+  ok(vf==='111111111111111111' && vb[0]==='0' && vb.slice(14, 16)==='00' && vs.split('').filter(Number).length < 18 && vs[0]==='1', 'face points: all from the front, none from behind, the far eye or ear hidden in profile: ' + [vf, vs, vb].join(' '));
+  await page.evaluate(() => { S.blocks.find(x => x.type==='pose').cam = Object.assign({}, CAM0); });
+  // orbit: drag the empty space, or a camera button
+  const cv2 = await page.$('.block canvas[data-board]'); await cv2.scrollIntoViewIfNeeded(); const bx = await cv2.boundingBox();
+  await page.mouse.move(bx.x + 6, bx.y + 6); await page.mouse.down(); await page.mouse.move(bx.x + 60, bx.y + 8, {steps:4}); await page.mouse.up();
+  const yaw = await page.evaluate(() => S.blocks.find(x => x.type==='pose').cam.yaw);
+  ok(yaw < -0.3, 'dragging the empty board walks the camera round: yaw ' + yaw.toFixed(2));
+  await page.click('.block [data-do="cam"][data-v="front"]');
+  ok(await page.evaluate(() => S.blocks.find(x => x.type==='pose').cam.yaw===0), 'Front puts the camera back in front');
   await page.click('.block[style*="--cn"] h3');
   ok((await page.textContent('.block[style*="--cn"] small')).includes('2 figures · Levi, Mira'), 'folded summary names who is in it');
 
@@ -105,6 +116,9 @@ for(const k of Object.keys(DEF)) OI[k] = OI[k] || {input:{required:{}}};
   ok(!(await page.$('#tray [data-add="pose"][disabled]')), 'Hidden can add a Pose board of its own');
   ok(await page.evaluate(() => { const e = {graph:{1:{class_type:'ControlNetLoader', inputs:{control_net_name:'diffusion_pytorch_model_promax.safetensors'}}}, home:'x'};
     const f = fit({url:'y', oi:{ControlNetLoader:{input:{required:{control_net_name:[[]]}}}}}, e); return !f.ok && /promax/.test(f.why); }), 'a computer with no ControlNets at all can\'t take a pose render');
+  ok(await page.evaluate(() => { const e = {graph:{1:{class_type:'ControlNetLoader', inputs:{control_net_name:'diffusion_pytorch_model_promax.safetensors'}}}, home:'https://jordo-desktop.test'};
+    const was = S.test; S.test = false; const m = pcOf('https://jordo-main.test'); S.servers.push({url:m.url, name:'Main'}); Object.assign(m, {online:true, oi:{ControlNetLoader:{input:{required:{control_net_name:[[]]}}}}});
+    const out = farmSafe(e); S.servers.pop(); m.online = false; S.test = was; return out===false; }), 'a pose render is not handed to the farm while Main (no ControlNets) is on');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
