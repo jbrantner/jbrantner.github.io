@@ -113,6 +113,13 @@ const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message));
   await until(() => document.querySelectorAll('#qList .qjob').length===5 && document.querySelector('#qList .qjob.running .pbar'));
   ok(true, 'queue list shows every render, the painting ones with a progress bar');
   ok(await page.$$eval('#pcList .pcrow', x => x.length)===2, 'queue list shows both computers');
+  // both painting: the preview shows them side by side; tapping one shows it whole, Both goes back
+  await page.evaluate(() => closeSheets()); await page.waitForTimeout(300);
+  await until(() => !document.querySelector('#duo').hidden && document.querySelectorAll('#duo [data-duo]').length===2);
+  ok((await page.textContent('#duo')).includes('Render') && (await page.textContent('#duo')).includes('Main'), 'both computers painting show side by side');
+  await page.click('#duo [data-duo] >> nth=1'); ok(await page.isHidden('#duo') && await page.isVisible('#bothBtn'), 'tapping one shows it whole');
+  await page.click('#bothBtn'); ok(await page.isVisible('#duo'), 'Both goes back to side by side');
+  await page.click('#queueBtn'); await page.waitForSelector('#queueSheet.open');
 await page.click('#qList .qjob.running'); await page.waitForSelector('#qList .jbig');
   ok(true, 'tapping the painting render shows its preview big');
   const victim = await page.evaluate(() => { const e = S.queue.find(q => q.state==='sent'); return e && {key:e.key, id:e.id, srv:e.srv}; });

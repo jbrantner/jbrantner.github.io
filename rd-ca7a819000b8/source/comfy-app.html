@@ -79,6 +79,15 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .stage img{width:100%;height:100%;object-fit:contain;display:block}
 .stage .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--soft);padding:24px;font-size:15px}
 .stage .empty b{display:block;font:700 19px/1.2 var(--display);color:var(--text);margin-bottom:8px}
+.duo{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;gap:2px;background:var(--line);z-index:1}
+.duo[hidden]{display:none}
+.duo button{position:relative;padding:0;border-radius:0;overflow:hidden;background:repeating-conic-gradient(#1a1c22 0 25%,#16171c 0 50%) 0 0/16px 16px}
+.duo img{width:100%;height:100%;object-fit:contain;display:block}
+.duo .dl{position:absolute;left:6px;right:6px;top:6px;padding:4px 8px;border-radius:99px;background:#111217e6;border:1px solid var(--line);font-size:12px;font-weight:700;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.duo .db{position:absolute;left:0;bottom:0;height:4px;background:var(--accent);transition:width .15s}
+.stage .both{position:absolute;right:10px;top:10px;z-index:2;min-height:32px;padding:4px 11px;font-size:12.5px;background:#111217e6}
+.stage:has(#duo:not([hidden])) .status,.stage:has(#duo:not([hidden])) .bar{display:none!important}
+.stage:has(.both:not([hidden])) .status{max-width:calc(100% - 110px)}
 .bar{position:absolute;left:0;bottom:0;height:5px;width:0;background:var(--accent);transition:width .15s}
 .status{position:absolute;left:10px;top:10px;max-width:calc(100% - 20px);padding:5px 10px;border-radius:99px;background:#111217e6;border:1px solid var(--line);font-size:13px;font-weight:700;display:none}
 .actions{display:flex;gap:8px;overflow-x:auto;padding:10px 0 2px;scrollbar-width:none}
@@ -265,6 +274,8 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
     <img id="shown" alt="" hidden>
     <div class="status" id="status"></div>
     <div class="bar" id="bar"></div>
+    <div class="duo" id="duo" hidden></div>
+    <button class="chipbtn both" id="bothBtn" hidden>⇆ Both</button>
   </div>
   <div class="actions" id="resultActions" hidden>
     <button class="chipbtn hot" data-act="finish" hidden>✨ Finish this draft</button>
@@ -398,7 +409,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.18'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.19'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -666,7 +677,7 @@ function onPreview(p, buf){
   p.preview = url;
   document.querySelectorAll('img[data-pv]').forEach(i => { if(i.dataset.pv===p.url) i.src = url; }); // the queue list's previews
   // the big picture follows the computer working on the oldest render, so two computers don't flicker over each other
-  const first = S.queue.find(q => q.state==='running');
+  const first = focusPc ? {srv:focusPc} : S.queue.find(q => q.state==='running');
   if(first && first.srv!==p.url) return;
   const img = $('#shown'); img.src = url; img.hidden = false; $('#empty').hidden = true;
 }
@@ -1000,14 +1011,36 @@ function drawGo(){
   $('#draftBtn').classList.toggle('on', !!S.draft); $('#draftBtn').setAttribute('aria-pressed', S.draft ? 'true' : 'false');
   $('#qCount').textContent = n || '☰'; $('#qLabel').textContent = n ? 'queued' : 'queue'; $('#queueBtn').classList.toggle('on', !!n);
 }
+// both computers painting: their live previews side by side in the picture; tapping one shows it whole, ⇆ Both goes back
+let focusPc = null;
+function drawDuo(){
+  const run = [], seen = new Set();
+  S.queue.forEach(e => { if(e.state==='running' && e.srv && e.srv!=='test' && !seen.has(e.srv)){ seen.add(e.srv); run.push(e); } });
+  if(run.length < 2) focusPc = null;
+  else if(focusPc && !seen.has(focusPc)) focusPc = null;
+  const duo = $('#duo'), two = run.length >= 2 && !focusPc;
+  duo.hidden = !two; $('#bothBtn').hidden = !(run.length >= 2 && focusPc);
+  if(!two){ duo.dataset.k = ''; return; }
+  const k = run.slice(0,2).map(e => e.srv).join(' ');
+  if(duo.dataset.k!==k){ duo.dataset.k = k;
+    duo.innerHTML = run.slice(0,2).map(e => { const p = pcOf(e.srv);
+      return `<button data-duo="${esc(e.srv)}"><img data-pv="${esc(e.srv)}" src="${esc(p.preview || 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==')}" alt=""><span class="dl"></span><i class="db"></i></button>`; }).join(''); }
+  run.slice(0,2).forEach((e,i) => { const b = duo.children[i];
+    b.querySelector('.dl').textContent = pcName(e.srv) + ': ' + (e.prog ? e.prog.text : 'Starting');
+    b.querySelector('.db').style.width = Math.round((e.prog ? e.prog.f : 0) * 100) + '%'; });
+}
+$('#duo').onclick = e => { const b = e.target.closest('[data-duo]'); if(!b) return; focusPc = b.dataset.duo;
+  const p = pcOf(focusPc); if(p.preview){ $('#shown').src = p.preview; $('#shown').hidden = false; $('#empty').hidden = true; } drawDuo(); buzz(); };
+$('#bothBtn').onclick = () => { focusPc = null; drawDuo(); buzz(); };
 // on the picture: what each computer is doing, and how many are still waiting
 function drawStatus(){
+  drawDuo();
   if(!S.queue.length){ status(''); return; }
   const run = S.queue.filter(e => e.state==='running'), wait = S.queue.length - run.length;
   const many = S.test ? false : allPcs().filter(usable).length > 1;
-  const parts = run.map(e => (many ? pcName(e.srv) + ': ' : '') + (e.prog ? e.prog.text : 'Starting'));
+  const parts = run.filter(e => !focusPc || e.srv===focusPc).map(e => (many ? pcName(e.srv) + ': ' : '') + (e.prog ? e.prog.text : 'Starting'));
   status((parts.join(' · ') || 'In line') + (wait ? ' · ' + wait + ' waiting' : ''));
-  bar(run[0] && run[0].prog ? run[0].prog.f : 0);
+  const bj = (focusPc && run.find(e => e.srv===focusPc)) || run[0]; bar(bj && bj.prog ? bj.prog.f : 0);
 }
 async function completeOne(e, quiet, h){
   if(!S.queue.includes(e)) return;
