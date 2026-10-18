@@ -187,6 +187,8 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .irow{display:flex;gap:6px;align-items:center;overflow-x:auto;padding:4px 0;scrollbar-width:none}
 .irow::-webkit-scrollbar{display:none}
 .irow .hl{flex:none;padding:4px 8px;border-radius:6px;background:color-mix(in srgb,var(--pic) 22%,transparent);color:var(--pic);font-weight:800;font-size:13.5px}
+.irow .hl.words{padding:4px 0;background:none;color:var(--soft);font-weight:700}
+.irow .hl.words::after{content:"→";margin-left:7px;color:var(--dim)}
 .irow button{flex:none;display:flex;align-items:baseline;gap:6px;min-height:36px;padding:6px 11px;border-radius:99px;background:var(--bg);border:1px solid var(--line);font-size:13.5px;font-weight:700;white-space:nowrap}
 .irow button i{font-style:normal;font-size:11px;color:var(--dim)}
 .irow button.on{border-color:var(--cyan);background:color-mix(in srgb,var(--cyan) 16%,var(--panel2))}
@@ -460,7 +462,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.31'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.32'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1892,15 +1894,18 @@ $('#runsUp').onclick = () => stepRuns(1);
 drawRuns(); drawGo();
 
 // ---------- tag suggestions (Danbooru styles only) ----------
-// tags.txt sits next to the app: tag TAB category TAB posts TAB aliases, most used first (made by make_tags.py)
+// tags.txt sits next to the app: tag TAB category TAB posts TAB aliases [TAB flags TAB series], most used first (made by make_tags.py)
 let TAGS = null, tagsLoading = null;
 const CHARS = new Map(); // character tag -> share of its Danbooru posts tagged [1girl, 1boy, 1other] (chars.txt, made by make_chars.py)
+let WORDS = null, EVERY = null, COMMON = null; // English words, the everyday ones among them, and well known names (words.txt, made by make_words.py)
 function loadTags(){
   if(TAGS || tagsLoading) return tagsLoading;
-  tagsLoading = fetch('tags.txt').then(r => { if(!r.ok) throw new Error(r.status); return r.text(); }).then(t => {
-    TAGS = t.split('\n').filter(Boolean).map(l => { const [tag, cat, n, al] = l.split('\t'); return {tag, cat, n:+n, al: al ? al.split(',') : []}; });
-    return fetch('chars.txt').then(r => r.ok ? r.text() : '').then(c => {
-      c.split('\n').forEach(l => { const [tag, g, b, o] = l.split('\t'); if(tag) CHARS.set(tag, [+g, +b, +o]); }); }).catch(() => {});
+  const get = (f, need) => fetch(f).then(r => { if(r.ok) return r.text(); if(need) throw new Error(r.status); return ''; }, e => { if(need) throw e; return ''; });
+  tagsLoading = Promise.all([get('tags.txt', true), get('chars.txt'), get('words.txt')]).then(([t, c, w]) => {
+    c.split('\n').forEach(l => { const [tag, g, b, o] = l.split('\t'); if(tag) CHARS.set(tag, [+g, +b, +o]); });
+    WORDS = new Set(); EVERY = new Set(); COMMON = new Set(); let part = 0;
+    w.split('\n').forEach(l => { if(l === '#') part++; else if(l){ WORDS.add(l); if(part === 0) EVERY.add(l); if(part === 2) COMMON.add(l); } });
+    TAGS = t.split('\n').filter(Boolean).map(l => { const [tag, cat, n, al, fl, ser] = l.split('\t'); return {tag, cat, n:+n, al: al ? al.split(',') : [], fl: fl || '', ser: ser || ''}; });
   }).catch(() => { tagsLoading = null; });
   return tagsLoading;
 }
@@ -1966,7 +1971,8 @@ $('#ac').addEventListener('click', e => {
   el.addEventListener('blur', () => setTimeout(() => { if(document.activeElement!==el) $('#ac').hidden = true; }, 150));
 });
 
-// ---------- tag ideas: turning a written sentence into tags ----------
+// ---------- prompt reader: the tags a written sentence means ----------
+// READER START: tests/t_tags.js runs the code from here to addTag in Node (the reader, then picking and sending tags), given TAGS, CHARS, WORDS, EVERY, COMMON and S
 // everyday words the Danbooru aliases don't cover; the first tag of each is picked by default
 const PLAIN = {
   'girl':['1girl','solo'], 'woman':['1girl','solo','mature female'], 'lady':['1girl','solo','mature female'], 'female':['1girl','solo'],
@@ -1984,77 +1990,433 @@ const PLAIN = {
   'hypnotized':['hypnosis','mind control','empty eyes'], 'hypnotised':['hypnosis','mind control','empty eyes'], 'under hypnosis':['hypnosis','mind control','empty eyes'],
   'brainwashed':['mind control','empty eyes'], 'mind controlled':['mind control','empty eyes'], 'trance':['hypnosis','empty eyes'],
   'happy':['smile','happy'], 'laughing':['laughing','smile','open mouth'], 'sad':['sad','tears'],
+  'at the camera':['looking at viewer'], 'at camera':['looking at viewer'], 'into the camera':['looking at viewer'], 'to the camera':['looking at viewer'],
+  'winking':['one eye closed'], 'winks':['one eye closed'], 'at the viewer':['looking at viewer'], 'at viewer':['looking at viewer'], 'silver hair':['grey hair'], 'silver eyes':['grey eyes'],
+  'rim light':['backlighting'], 'rim lighting':['backlighting'], 'rainy':['rain'], 'raining':['rain'], 'snowy':['snow'], 'foggy':['fog'], 'misty':['fog'], 'stormy':['storm'], 'thunderstorm':['storm','lightning'], 'starry':['starry sky'], 'cloudy':['cloudy sky'],
+  'cross legged':['indian style'], 'cross-legged':['indian style'], 'nine tails':['kyuubi','multiple tails'],
 };
 const STOP = new Set('another other second a an the one who whom which that this these those is are was were be been being am do does doing did has have having and or but of in on at to into onto with by for as while her his their its she he they it them him some very really quite just so there here'.split(' '));
-const LEAD = new Set('another other second a an the one some at in on under with into onto by'.split(' ')); // dropped from the front of a phrase before looking it up
-let TAGMAP = null, ALIAS = null;
-function indexTags(){
-  if(TAGMAP || !TAGS) return; TAGMAP = new Map(); ALIAS = new Map();
-  TAGS.forEach(t => { TAGMAP.set(t.tag, t); t.al.forEach(a => { if(!ALIAS.has(a)) ALIAS.set(a, t); }); });
-}
+const norm = s => s.trim().toLowerCase().replace(/\\/g,'').replace(/ /g,'_');
+// what the little words do: the reader steps over these between the words of a tag, and they only ever match themselves
+const WK = {};
+[['det', 'a an the this that these those some any each every'], ['poss', 'her his their its my your our own'],
+ ['pron', 'she he they it them him i me you we us someone somebody herself himself themselves'],
+ ['aux', 'is are was were be been being am do does did has have had having will would can could should may might must get gets got getting seems seem appears appear seen viewed shown'],
+ ['and', 'and or plus nor'], ['stop', 'but who whom which whose where while when because then if though although'],
+ ['adv', 'very really quite just too also slightly somewhat extremely super kinda totally fully almost even still rather fairly'],
+ ['prep', 'on in at with without under over behind between from above below into onto against near by of for to through across around inside outside beside among along toward towards up down off out like as upon within beneath'],
+ ['fill', 'wearing wears wear wore worn dressed doing making showing shows named called expression']].forEach(([k, s]) => s.split(' ').forEach(w => WK[w] = k));
+const OPTW = new Set('the a an own his her their its of'.split(' ')); // little words a tag can do without
+const NEG = /^(without|no|not|never)$/; // words that say a thing is not there
+// past tenses and plurals the rules below can't work out (left, rose, saw and bit are left out: they're words of their own)
+const IRREG = {ran:'run', sat:'sit', held:'hold', wore:'wear', worn:'wear', men:'man', women:'woman', children:'child', feet:'foot', teeth:'tooth',
+  mice:'mouse', knives:'knife', leaves:'leaf', wolves:'wolf', lay:'lie', lying:'lie', ate:'eat', eaten:'eat', drank:'drink', flew:'fly', flown:'fly',
+  fell:'fall', fallen:'fall', stood:'stand', sang:'sing', sung:'sing', swam:'swim', drew:'draw', drawn:'draw', wrote:'write', written:'write',
+  rode:'ride', ridden:'ride', took:'take', taken:'take', gave:'give', given:'give', threw:'throw', thrown:'throw', broke:'break', broken:'break',
+  hid:'hide', hidden:'hide', caught:'catch', fought:'fight', bought:'buy', brought:'bring', spoke:'speak', woke:'wake', knelt:'kneel',
+  slept:'sleep', wept:'weep', bitten:'bite', tore:'tear', torn:'tear', froze:'freeze', frozen:'freeze', shook:'shake', swung:'swing', hung:'hang',
+  spun:'spin', blew:'blow', grew:'grow', seen:'see', made:'make', went:'go', came:'come', dying:'die', tying:'tie', tied:'tie'};
+let TAGMAP = null, ALIAS = null, KNOWN = null, TIDX = null, RAW = null, ENT = null, FZ = null, IDX = 0;
+const WI = new Map(), OWN = new Map(), MAIN = new Map(), REV = {}; // REV: a word -> its irregular forms (sit -> sat)
+Object.keys(IRREG).forEach(k => (REV[IRREG[k]] = REV[IRREG[k]] || []).push(k));
 const findTag = name => TAGMAP.get(name.replace(/ /g,'_')) || ALIAS.get(name.replace(/ /g,'_'));
-// tags for one phrase: the everyday-word list, then the tag or alias itself, then simple plural/singular forms, then near tags
-function lookup(words){
-  const exact = words.length > 1 && !STOP.has(words[words.length-1]) && findTag(words.join(' ')); // "sitting on" is not sitting on person
-  if(exact) return withNear([exact], 1); // a tag typed word for word, like "on back" or "hand on own chest"
-  let w = words.slice(); while(w.length > 1 && LEAD.has(w[0])) w.shift();
-  const key = w.join(' '); if(STOP.has(w[w.length-1]) && !PLAIN[key]) return null; // "sitting on" is not a tag, "sitting" is
-  const out = [];
-  const push = t => { if(t && !out.includes(t)) out.push(t); };
-  if(PLAIN[key]) PLAIN[key].forEach(n => push(findTag(n)));
-  else {
-    const t = findTag(key) || findTag(key.replace(/e?s$/,'')) || findTag(key + 's');
-    if(!t || (w.length===1 && t.n < (t.cat==='0' ? 500 : 100))) return null; // one word alone needs a fairly common tag, so "jacks" doesn't drag in junk
-    push(t);
+const baseOf = tag => tag.replace(/(_\([^()]*\))+$/, ''); // "fern_(sousou_no_frieren)" -> "fern"
+const fold = w => w.replace(/ou/g, 'o').replace(/uu/g, 'u').replace(/oo/g, 'o'); // romaji spellings: gojou, gojo
+const everyday = w => EVERY && (EVERY.has(w) || winfo(w).forms.some(f => EVERY.has(f)));
+// a word's other forms that are real words: spells -> spell, casting -> cast, tied -> tie, sat -> sit
+function lemmas(w){
+  const out = [], L = w.length, add = x => { if(x !== w && x.length > 1 && KNOWN.has(x) && !out.includes(x)) out.push(x); };
+  if(IRREG[w]) out.push(IRREG[w]);
+  if(L > 3 && w.endsWith('s') && !/(ss|us|is)$/.test(w)){
+    if(w.endsWith('ies') && L > 4) add(w.slice(0, -3) + 'y');
+    if(w.endsWith('ves')){ add(w.slice(0, -3) + 'f'); add(w.slice(0, -3) + 'fe'); }
+    if(/(ches|shes|sses|xes|zes|oes)$/.test(w)) add(w.slice(0, -2));
+    add(w.slice(0, -1));
   }
-  if(!out.length) return null;
-  return withNear(out, PLAIN[key] ? out.length : 1);
-}
-// add a few related tags holding the same words, most used first; def is how many are picked by default
-function withNear(out, def){
-  out.def = def;
-  const push = t => { if(!out.includes(t)) out.push(t); };
-  const near = new RegExp('(^|_)' + out[0].tag.replace(/[^a-z0-9_]/g,'.') + '(_|$)');
-  for(const t of TAGS){ if(out.length >= 4 || t.n < 1000) break; if(t !== out[0] && t.cat===out[0].cat && near.test(t.tag)) push(t); } // TAGS is most used first; same kind only, so "park" doesn't bring South Park
+  if(L > 5 && w.endsWith('ing')){ const b = w.slice(0, -3); add(b); add(b + 'e'); if(/([^aeiou])\1$/.test(b)) add(b.slice(0, -1)); }
+  if(L > 4 && w.endsWith('ed')){ const b = w.slice(0, -2); add(b); add(b + 'e'); add(w.slice(0, -1)); if(/([^aeiou])\1$/.test(b)) add(b.slice(0, -1)); if(b.endsWith('i')) add(b.slice(0, -1) + 'y'); }
   return out;
 }
-// "long red hair" -> long hair, red hair: two or more describing words before a hair, eyes or clothing word
-const NOUNS = new Set('hair eyes dress shirt skirt jacket coat hat shoes boots gloves sweater hoodie kimono bikini swimsuit uniform pants shorts thighhighs background'.split(' '));
-function describe(words, i){
-  let j = i; while(j < words.length && !NOUNS.has(words[j]) && j - i < 4) j++;
-  if(j >= words.length || !NOUNS.has(words[j]) || j - i < 2) return null;
-  const tags = words.slice(i, j).map(a => TAGMAP.get(a + '_' + words[j]));
-  if(tags.some(t => !t)) return null;
-  tags.def = tags.length; return {words:words.slice(i, j+1).join(' '), tags, len:j - i + 1};
+// what the reader keeps about a word: its forms, and whether it is an -ing or -ed form (those never match a bare word: casting is not a cast)
+function winfo(w){
+  let i = WI.get(w); if(i) return i;
+  const forms = [w].concat(lemmas(w));
+  i = {w, forms, ie: /(ing|ed)$/.test(w) && forms.length > 1, kind: WK[w] || '', fold: fold(w)};
+  WI.set(w, i); return i;
 }
-// split the prompt into comma pieces; pieces that are already a tag are left alone, sentences are read phrase by phrase
+const pop = n => 0.5 + 0.5 * Math.min(1, Math.log10(Math.max(n, 1)) / 6.5); // more used tags win close calls
+// everything the reader looks words up in, built once the lists are loaded: each word of a tag (or of one of its
+// other names) -> the tags holding it. The full entry for a tag is only made when a prompt needs it (entryOf).
+const splitTag = s => { const ws = s.split(/[^a-z0-9']+/); for(let i = 0; i < ws.length; i++) if(ws[i].includes("'")) ws[i] = ws[i].replace(/^'+|'+$/g, ''); return ws.filter(Boolean); };
+function indexTags(){
+  if(TIDX || !TAGS) return;
+  TAGMAP = new Map(); ALIAS = new Map(); KNOWN = new Set(WORDS || []); TIDX = new Map(); RAW = []; ENT = []; WI.clear(); OWN.clear(); MAIN.clear();
+  const vocab = new Map(), put = (k, r) => { const a = TIDX.get(k); if(!a) TIDX.set(k, [r]); else if(a[a.length - 1] !== r) a.push(r); };
+  const add = (t, s, alias, name) => {
+    const base = s.endsWith(')') ? baseOf(s) : s, ws = splitTag(base), little = !ws.some(w => !WK[w] && !OPTW.has(w)); // little: "from behind"
+    if(!ws.length || (little && ws.length < 2) || ws.every(w => w.length < 2)) return; // not faces like :o or o_o
+    if(alias && WK[ws[ws.length - 1]] === 'prep' && !s.includes('-') && t.ws && t.ws.length > ws.length && ws.every((w, j) => t.ws[j] === w)) return; // sitting on (a rock) isn't sitting on person
+    const r = RAW.length; RAW.push([t, s, base, ws, alias]);
+    for(const w of ws){
+      KNOWN.add(w); if(OPTW.has(w) || (WK[w] && !little)) continue;
+      put(w, r); if(name){ const f = fold(w); if(f !== w) put(f, r); }
+      if(!t.fl && (name || t.n >= 500) && w.length >= 4 && !/\d/.test(w) && (vocab.get(w) || 0) < t.n) vocab.set(w, t.n);
+    }
+    if(!name){ if(!alias) t.ws = ws; }
+    else { const k = name + ws.join(' '), m = MAIN.get(k); if(!m || m.n < t.n) MAIN.set(k, t); } // the most used character of that name
+  };
+  for(const t of TAGS){
+    TAGMAP.set(t.tag, t); for(const a of t.al) if(!ALIAS.has(a)) ALIAS.set(a, t);
+    if(t.cat === '1' || t.cat === '9') continue; // artists and trainer tags are never read out of a sentence
+    const name = t.cat === '3' || t.cat === '4' ? t.cat : '';
+    add(t, t.tag, false, name); for(const a of t.al) add(t, a, true, name);
+  }
+  Object.keys(PLAIN).forEach(k => { const ws = k.split(' '), r = RAW.length; RAW.push(null);
+    ENT[r] = {plain: PLAIN[k], w: ws.map(winfo), opt: ws.map(() => false), req: ws.length, name: '', q: [], base: k};
+    ws.forEach(w => { if(!WK[w]) put(w, r); }); });
+  FZ = []; vocab.forEach((n, w) => (FZ[w.length] = FZ[w.length] || []).push([w, n]));
+  IDX++;
+}
+function entryOf(r){
+  let e = ENT[r]; if(e) return e;
+  const [t, s, base, ws, alias] = RAW[r], name = t.cat === '3' || t.cat === '4' ? t.cat : '';
+  e = {t, w: ws.map(winfo), alias, name, q: s === base ? [] : splitTag(s.slice(base.length)), base: ws.join(' ')}; // q: the bracketed part, a costume or the series
+  // a little word is optional in a tag; in a name a lone letter is too ("monkey d luffy")
+  const little = !ws.some(w => !WK[w] && !OPTW.has(w));
+  e.opt = ws.map(w => !little && (OPTW.has(w) || (name !== '' && w.length === 1 && ws.length > 2)));
+  e.req = e.opt.filter(o => !o).length;
+  return ENT[r] = e;
+}
+// the words a tag could hold for a word of the sentence: its forms and theirs (hand -> hands, sit -> sitting, sat, lie -> lying)
+function inflect(f, keys){
+  keys.add(f); const L = f[f.length - 1], cvc = /[^aeiou][aeiou][^aeiouwy]$/.test(f);
+  [f + 's', f + 'es', f + 'ing', f + 'ed', f + 'd'].forEach(k => keys.add(k));
+  if(L === 'y') keys.add(f.slice(0, -1) + 'ies'), keys.add(f.slice(0, -1) + 'ied');
+  if(L === 'e') keys.add(f.slice(0, -1) + 'ing');
+  if(cvc) keys.add(f + L + 'ing'), keys.add(f + L + 'ed');
+  (REV[f] || []).forEach(k => keys.add(k));
+}
+// typo distance (letters added, dropped, changed or swapped), giving up past max
+function dist(a, b, max){
+  const m = a.length, n = b.length; if(Math.abs(m - n) > max) return max + 1;
+  let pp = null, p = Array.from({length: n + 1}, (_, j) => j);
+  for(let i = 1; i <= m; i++){
+    const c = [i]; let lo = i;
+    for(let j = 1; j <= n; j++){
+      let v = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if(pp && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, pp[j - 2] + 1);
+      c.push(v); if(v < lo) lo = v;
+    }
+    if(lo > max) return max + 1;
+    pp = p; p = c;
+  }
+  return p[n];
+}
+// the tag word a typo was meant to be: the closest one, and if two are as close, the clearly more used one
+function fuzzy(w){
+  const L = w.length; if(L < 4 || /\d/.test(w)) return [];
+  const d = L >= 8 ? 2 : 1, hits = [];
+  for(let l = L - d; l <= L + d; l++) (FZ[l] || []).forEach(([v, n]) => { const k = dist(w, v, d); if(k <= d) hits.push([v, n, k]); });
+  if(!hits.length) return [];
+  hits.sort((a, b) => a[2] - b[2] || b[1] - a[1]);
+  const [v, n, k] = hits[0], next = hits[1];
+  if(next && next[2] === k && next[1] * 3 > n) return [];
+  return [{w: v, q: (k === 1 ? 0.75 : 0.6) * (v[0] === w[0] ? 1 : 0.9)}];
+}
+// a stretch of a comma piece -> its words, with what the reader needs to know about each
+function tokens(text){
+  const toks = [], re = /\([^()]*\)|<[^<>]*>|\[[^\[\]]*\]|\b(?:embedding|lora):\S+|[A-Za-z0-9]+(?:['’][A-Za-z]+)?|[.!?;:]/g; let m, start = true;
+  while((m = re.exec(text))){
+    const o = m[0];
+    if(/^[(<\[]|:\S/.test(o) && o.length > 1){ toks.push({lit: o, w: '', o, kind: 'stop', forms: [], fz: []}); continue; } // weights and embeddings go as typed
+    if(/^[.!?;:]$/.test(o)){ toks.push({cut: true, w: '', o, kind: 'stop', forms: [], fz: []}); start = true; continue; }
+    const w = o.toLowerCase().replace(/’/g, "'"), poss = /'s$/.test(w) && !WK[w.slice(0, -2)], base = poss ? w.slice(0, -2) : w.replace(/'.*/, '');
+    const info = winfo(base), kind = WK[base] || (/^\d+$/.test(w) ? 'num' : '');
+    const t = {w, o, base, poss, kind, forms: poss ? [w].concat(info.forms) : info.forms, ie: !poss && info.ie, fold: info.fold,
+      cap: !start && /^[A-Z]/.test(o), fz: []};
+    if(!kind && !KNOWN.has(base)){ t.fz = fuzzy(base); if(t.fz.length && winfo(t.fz[0].w).ie) t.ie = true; }
+    toks.push(t); start = false;
+  }
+  // a word ending in s right after someone is what they do: "the girl waves" is waving, not ocean waves
+  toks.forEach((t, i) => { const p = toks[i - 1]; if(p && /[^s]s$/.test(t.w) && !t.kind && (/^(she|he|it|they)$/.test(p.w) || GIRLS.includes(p.w) || BOYS.includes(p.w) || (p.w === 'and' && toks[i - 2] && toks[i - 2].verb))) t.verb = true; });
+  // "a sword in her hand" is holding a sword: an unseen "holding" goes before the thing held, unless the sentence holds it already
+  for(let i = 1; i < toks.length - 1; i++){
+    if(toks[i].w !== 'in' || toks[i - 1].kind || toks[i - 1].lit) continue;
+    let j = i + 1; if(toks[j] && /^(her|his|their|its|one|both|a|my|your)$/.test(toks[j].w)) j++;
+    if(!toks[j] || !/^(hands?|arms)$/.test(toks[j].w)) continue;
+    if(toks.slice(Math.max(0, i - 4), i - 1).some(k => /^(holding|holds|held|carrying|carries|hugging|hugs|cradling)$/.test(k.w))){ toks[i - 1].glue = [i, j]; i = j; continue; }
+    const h = winfo('holding'); toks.splice(i - 1, 0, {w: 'holding', o: '', base: 'holding', forms: h.forms, ie: true, kind: '', fz: [], virt: true, glue: [i + 1, j + 1]});
+    i = j + 1;
+  }
+  return toks;
+}
+// how well a word of the sentence stands for a word of a tag, 0 to 1
+function wq(t, x, e){
+  if(t.lit || t.cut) return 0;
+  if(t.w === x.w || (t.poss && t.base === x.w)) return t.w !== x.w ? 0.9 : t.verb && !e.name ? 0.85 : 1;
+  if(x.w === 'own') return t.kind === 'poss' ? 0.95 : 0;
+  if(x.w === 'no' && t.w === 'without') return 0.95; // without a hat: no headwear
+  if(x.w === "another's") return t.poss ? 0.95 : t.kind === 'poss' ? 0.75 : 0;
+  if(x.kind || t.kind) return 0; // little words only match themselves
+  if(e.name && t.fold === x.fold) return 0.95;
+  let q = 0;
+  if(t.ie === x.ie || (x.ie && x.w.endsWith('ing'))) for(const f of t.forms) if(x.forms.includes(f)){ q = t.verb && x.ie ? 0.95 : 0.9; break; }
+  if(!q) for(const z of t.fz) if(z.w === x.w || (e.name && fold(z.w) === x.fold)) q = Math.max(q, z.q); else if(winfo(z.w).forms.some(f => x.forms.includes(f))) q = Math.max(q, z.q * 0.9);
+  return q;
+}
+const GAP = {det: 0.97, poss: 0.96, adv: 0.95, aux: 0.93, fill: 0.9, prep: 0.9, pron: 0.85, num: 0.9};
+// the best way a tag's words sit in the sentence: in order, a few glue words apart; two-word tags may be turned round ("hair is red")
+function tagMatch(e, toks, ban){
+  const cand = [];
+  for(let j = 0; j < e.w.length; j++){
+    const c = [];
+    for(let i = 0; i < toks.length; i++){ const q = !ban.has(i) && wq(toks[i], e.w[j], e); if(q) c.push([i, q]); }
+    if(!c.length && !e.opt[j]) return null;
+    cand.push(c);
+  }
+  let best = null, tries = 0;
+  const pick = [], rec = j => {
+    if(tries > 200) return;
+    if(j === e.w.length){ tries++; const r = judge(e, toks, pick); if(r && (!best || r.value > best.value)) best = r; return; }
+    if(e.opt[j]){ pick[j] = null; rec(j + 1); }
+    for(const c of cand[j]){ if(pick.slice(0, j).some(p => p && p[0] === c[0])) continue; pick[j] = c; rec(j + 1); }
+  };
+  rec(0);
+  return best;
+}
+function judge(e, toks, pick){
+  const pos = []; let f = 1, wsum = 0, lem = false;
+  pick.forEach((p, j) => { if(!p) return; pos.push([p[0], j]); f *= p[1]; if(p[1] < 1) lem = true;
+    wsum += e.opt[j] ? 0.25 : e.w[j].kind ? (e.plain ? 0.25 : 0.5) : 1; });
+  if(!pos.length) return null;
+  pos.sort((a, b) => a[0] - b[0]);
+  const inOrder = pos.every((p, k) => !k || p[1] > pos[k - 1][1]), lo = pos[0][0], hi = pos[pos.length - 1][0];
+  const fl = e.t && e.t.fl;
+  if(fl && (lem || !inOrder)) return null; // adult tags only when their words are typed out
+  if(hi - lo + 1 > pos.length + 4) return null;
+  const used = new Set(pos.map(p => p[0]));
+  let content = 0, ands = 0, ai = -1, ci = -1, prep = false;
+  for(let i = lo + 1; i < hi; i++){
+    if(used.has(i)) continue;
+    const t = toks[i], k = t.kind;
+    if(k === 'stop' || t.virt) return null;
+    if(k === 'and'){ ands++; ai = i; continue; }
+    if(!k){ if(!t.poss && (t.ie || t.verb || GIRLS.includes(t.base) || BOYS.includes(t.base) || PLURAL[t.base] != null)) return null; content++; ci = i; f *= 0.82; continue; }
+    if(k === 'prep') prep = true;
+    f *= GAP[k] || 0.9;
+  }
+  if(content && (fl || e.plain || e.name)) return null; // everyday phrases, names and adult tags are read word for word
+  if(content > (ands ? 1 : 2)) return null;
+  const glue = [];
+  if(!inOrder){
+    if(pos.length !== 2 || ands || content || e.plain || e.name) return null; // only two-word tags turn round, over little words: "spell casting", "ribbon in her hair"
+    f *= prep ? 1.05 : 0.85; // "X in/on Y" names Y's X: the preposition is the glue, not a gap
+    if(prep) for(let i = lo + 1; i < hi; i++) if(toks[i].kind === 'prep') glue.push(i);
+  }
+  if(ands){
+    if(ands > 1 || content !== 1) return null;
+    if(ci < ai){ // "holding a sword and a shield": holding shield, if only little words follow the and
+      const first = e.w[pos[0][1]]; if(!first.ie && first.kind !== 'prep') return null;
+      for(let i = ai + 1; i < hi; i++) if(!used.has(i) && !/^(det|poss|adv)$/.test(toks[i].kind)) return null;
+    } else if(ai !== lo + 1) return null; // "red and blue eyes": red eyes
+    f *= 0.9;
+  }
+  if(e.plain) f *= 1.25;
+  else {
+    const t = e.t;
+    // lying on her back, not "a katana on her back": a posture tag right after a thing belongs to the thing
+    if(/^on_(back|stomach|side)$/.test(t.tag) && lo > 0){ const b = toks[lo - 1]; if(!b.kind && !b.ie && !b.verb && !GIRLS.includes(b.base) && !BOYS.includes(b.base) && !PLURAL[b.base] && !/^(lying|laying|lies|lay|sleeping)$/.test(b.w)) return null; }
+    if(pos.length === 1 && !e.name && t.n < 500) return null; // one word alone needs a fairly common tag
+    if(fl && e.alias) return null; // adult tags only under their own name
+    if(e.q[0] === 'cosplay' && !toks.some(k => k.base === 'cosplay')) return null;
+    const sense = e.q.length && !e.q.some(q => toks.some(k => k.base === q)) ? 0.8 : 1; // "bow (weapon)" with no weapon word about
+    f *= pop(t.n) * (e.alias ? 0.95 : 1) * (t.cat === '5' ? 0.7 : 1) * sense;
+  }
+  return {e, pos: pos.map(p => p[0]), glue, head: inOrder ? hi : lo, f, value: f * wsum}; // head: the word the tag is about (bow in "bow in her hair")
+}
+// a character's or series' name: all its words side by side (either order for two), or one rare word most people mean it by
+function nameMatch(e, toks, ban){
+  const t = e.t; let best = null;
+  const req = e.w.map((x, j) => [x, j]).filter(([x, j]) => !e.opt[j]); if(!req.length) return null;
+  const ser = t.cat === '4' ? t.ser || t.tag : t.tag;
+  const keep = (pos, q, part) => {
+    const words = pos.map(i => toks[i]);
+    let f = q * pop(t.n) * (e.alias ? 0.95 : 1) * (part ? 0.9 : 1);
+    if(t.cat === '4' && t.ser){ const s = TAGMAP.get(t.ser); if(s && words.some(w => splitTag(baseOf(s.tag)).includes(w.base))) f *= 1.5; } // "naruto": the character, more than the series
+    // a name made of everyday words (link, fern, saber), or one word several characters share (rin, sakura), needs the series
+    // somewhere in the prompt, unless it is plainly a name: "a boy named Link", "saber from fate", or written with a capital
+    // (two or more everyday words are a name when they don't read like a description: princess peach, not girl holding a cat)
+    const plain = words.every(w => everyday(w.base)) && (pos.length === 1 || (TAGMAP.get(words.map(w => w.base).join('_')) || {}).cat === '0'
+      || e.w.some(x => x.ie || GIRLS.includes(x.w) || BOYS.includes(x.w) || PLURAL[x.w] != null || /^(kid|child)s?$/.test(x.w)));
+    const shared = pos.length === 1 && owner(e.w.find((x, j) => !e.opt[j] && wq(words[0], x, e)).w, e.name) !== (MAIN.get(e.name + e.base) || t).tag;
+    const free = !(plain || shared) || (pos[0] > 0 && (t.cat === '3' ? /^(from|of)$/.test(toks[pos[0] - 1].w) : /^(named|called)$/.test(toks[pos[0] - 1].w)))
+      || (!shared && t.cat === '4' && t.n >= 3000 && words.every(w => w.cap));
+    const r = {e, pos, f, value: f * pos.length * (part ? 1 : 1.1), ser, part, ctx: free ? null : ser};
+    if(!pos.some(i => ban.has(i)) && (!best || r.value > best.value)) best = r;
+  };
+  // a costume or second character of the same name (hatsune miku (append)) only when its bracket words are there too
+  const main = MAIN.get(e.name + e.base);
+  if(main && main !== t && !e.q.some(q => toks.some(k => k.w === q))) return null;
+  for(let i = 0; i < toks.length; i++){
+    // whole name, in order, little words optional
+    let q = 1, k = i, pos = [];
+    for(const [x] of req){ while(toks[k] && toks[k].kind === 'det' && pos.length) k++; const v = toks[k] ? wq(toks[k], x, e) : 0; if(!v){ q = 0; break; } q *= v; pos.push(k); k++; }
+    if(q) keep(pos, q, false);
+    if(req.length === 2 && toks[i + 1]){ const v = wq(toks[i], req[1][0], e) * wq(toks[i + 1], req[0][0], e); if(v) keep([i, i + 1], v * 0.95, false); }
+    // one rare word of a longer name (miku, luffy); if other characters share it, only with their series about
+    if(req.length > 1) for(const [x] of req){
+      const tk = toks[i], v = wq(tk, x, e); if(!v || tk.kind || everyday(tk.base) || (COMMON && COMMON.has(tk.base)) || (tk.base.length < 3 && !/\d/.test(tk.base))) continue;
+      if(t.cat === '3' && (t.n < 5000 || everyday(x.w) || (TIDX.get(x.w) || []).some(r => RAW[r] && RAW[r][0].cat === '4' && RAW[r][3].includes(x.w)))) continue;
+      keep([i], v, true);
+    }
+  }
+  return best;
+}
+// the character (or series) people mean by one word of its name, if one clearly stands out
+function owner(w, cat){
+  const k = cat + w; if(OWN.has(k)) return OWN.get(k);
+  const best = new Map();
+  (TIDX.get(w) || []).concat(TIDX.get(fold(w)) || []).forEach(r => { const e = entryOf(r); if(e.name !== cat) return; const t = MAIN.get(cat + e.base) || e.t;
+    const v = t.n * (e.req === 1 ? 2 : 1); if((best.get(t.tag) || 0) < v) best.set(t.tag, v); });
+  const s = [...best].sort((a, b) => b[1] - a[1]), r = s.length && (!s[1] || s[0][1] >= 4 * s[1][1]) ? s[0][0] : null;
+  OWN.set(k, r); return r;
+}
+// every tag the words of one piece could mean
+function candidates(toks){
+  const keys = new Set(), seen = new Set(), out = [];
+  toks.forEach(t => { if(t.lit || t.cut) return; if(t.kind){ keys.add(t.w); if(t.w === 'without') keys.add('no'); return; } t.forms.forEach(f => inflect(f, keys)); if(t.fold) keys.add(t.fold);
+    t.fz.forEach(z => { winfo(z.w).forms.forEach(f => inflect(f, keys)); keys.add(fold(z.w)); }); });
+  keys.forEach(k => (TIDX.get(k) || []).forEach(r => { if(seen.has(r)) return; seen.add(r); const e = entryOf(r);
+    const ban = new Set(); // the same tag can turn up again further on ("a girl hitting another girl")
+    for(let n = 0; n < 3; n++){
+      const m = e.name ? nameMatch(e, toks, ban) : tagMatch(e, toks, ban); if(!m) break;
+      m.cov = m.pos.concat(m.glue || []); m.pos.forEach(i => { ban.add(i); (toks[i].glue || []).forEach(g => m.cov.push(g)); }); m.cov.sort((a, b) => a - b); out.push(m);
+    } }));
+  // "holding a leek": holding + spring onion is holding spring onion, when Danbooru has that tag
+  const one = out.filter(c => c.e.t && !c.e.name && !c.e.plain && c.e.t.cat === '0');
+  one.forEach(a => { if(!/^[a-z]+ing$/.test(a.e.t.tag)) return; const end = a.pos[a.pos.length - 1];
+    one.forEach(b => { const t = TAGMAP.get(a.e.t.tag + '_' + b.e.t.tag); if(!t || t.fl || b.pos[0] <= end || b.pos.length > 3) return;
+      for(let i = end + 1; i < b.pos[0]; i++) if(!/^(det|poss|adv)$/.test(toks[i].kind)) return;
+      const pos = a.pos.concat(b.pos); out.push({e: {t, w: [], alias: true, name: '', q: []}, pos, cov: a.cov.concat(b.cov).sort((x, y) => x - y), f: b.f, value: (a.value + b.value) * 1.05}); }); });
+  // "without glasses", "not wearing a hat", "no sword or shield": those tags are left out and the words go as typed
+  // (unless the tag says no itself: no headwear)
+  const neg = c => { let or = false;
+    for(let k = Math.min(...c.pos) - 1; k >= 0; k--){ const t = toks[k];
+      if(NEG.test(t.w)) return !c.cov.includes(k);
+      if(/^(det|poss|adv|aux|fill)$/.test(t.kind)) continue;
+      if(t.w === 'or' || t.w === 'nor'){ or = true; continue; }
+      if(!(or && !t.kind && !t.lit && !t.cut)) return false; }
+    return false; };
+  return out.filter(c => !neg(c));
+}
+// the best set: highest value first; two tags may share words only at the same end ("long red hair": long hair, red hair)
+function choose(cands, toks, ctx){
+  const sel = [], same = (a, b) => a.every((p, k) => b[k] === p);
+  const v = c => c.value * (c.ser && ctx.has(c.ser) ? 1.5 : 1); // a name from a series already in the prompt wins ("asuka" with senran kagura)
+  cands.filter(c => !c.ctx || ctx.has(c.ctx)).sort((a, b) => v(b) - v(a)).forEach(c => {
+    for(const s of sel){
+      const sh = c.pos.filter(p => s.pos.includes(p)); if(!sh.length) continue;
+      if(sh.length === c.pos.length || sh.length === s.pos.length) return;
+      const pre = same(sh, c.pos) && same(sh, s.pos) && sh.every(i => toks[i].ie || toks[i].verb || toks[i].kind === 'prep' || toks[i].virt);
+      const suf = same(sh, c.pos.slice(-sh.length)) && same(sh, s.pos.slice(-sh.length));
+      const head = sh.length === 1 && !toks[sh[0]].kind && c.head === sh[0] && s.head === sh[0]; // "a red bow in her hair": red bow, hair bow
+      if(!pre && !suf && !head) return;
+    }
+    if(sel.some(s => c.cov.some(i => s.cov.includes(i) && !(s.pos.includes(i) && c.pos.includes(i))))) return; // glue words belong to one tag
+    sel.push(c);
+  });
+  return sel;
+}
+// a few more tags to offer, not picked: the runner-up for the same words, and longer tags holding the same words
+function alternatives(c, p){
+  const t = c.e.t, out = []; if(!t || c.e.name) return out;
+  const runner = p.cands.filter(o => o !== c && o.e.t && o.e.t !== t && !o.e.t.fl && !o.e.name && o.pos.length === c.pos.length && o.pos.every(i => c.pos.includes(i))
+    && o.value >= 0.6 * c.value && (o.e.t.tag.endsWith(')') || o.e.t.n >= 0.15 * t.n))
+    .sort((a, b) => b.value - a.value)[0];
+  if(runner) out.push(runner.e.t);
+  if(t.ws && !t.tag.endsWith(')') && WK[t.ws[0]] !== 'prep'){ // not for a word with several meanings (bow (weapon) is no hair bow), nor a place (on back: weapon on back)
+    const rare = t.ws.filter(w => !WK[w] && !OPTW.has(w)).sort((a, b) => (TIDX.get(a) || []).length - (TIDX.get(b) || []).length)[0];
+    (TIDX.get(rare) || []).map(r => RAW[r]).filter(x => x && !x[4] && x[0].ws && x[0] !== t && !x[0].fl && x[0].cat === t.cat && x[0].n >= Math.max(2000, 0.03 * t.n)
+      && x[0].ws.length === t.ws.length + 1 && t.ws.every(w => x[0].ws.includes(w)) && !x[0].ws.some(w => !t.ws.includes(w) && (OPTW.has(w) || (WK[w] && WK[w] !== 'adv'))))
+      .sort((a, b) => b[0].n - a[0].n).slice(0, 2).forEach(x => { if(!out.includes(x[0])) out.push(x[0]); });
+  }
+  return out.slice(0, 3);
+}
+// the label for a phrase: the words it took, with … where it stepped over some
+function label(toks, cov){
+  let s = '', last = -1;
+  cov.forEach(i => { const t = toks[i]; if(!t.o) return; if(last >= 0 && i > last + 1 && toks.slice(last + 1, i).some(k => !k.kind && !k.virt)) s += ' …'; s += (s ? ' ' : '') + t.o; last = i; });
+  return s;
+}
+// split the prompt into comma pieces; pieces that are already a tag are left alone, the rest are read for tags
+let readMemo = null;
 function readPrompt(text){
+  indexTags();
+  if(readMemo && readMemo.text === text && readMemo.idx === IDX) return readMemo.pieces;
   const pieces = [], re = /[^,\n]+/g; let m;
   while((m = re.exec(text))){
     const raw = m[0], s = raw.trim(); if(!s) continue;
-    const words = s.toLowerCase().match(/[a-z0-9'-]+/g) || [], orig = s.match(/[a-zA-Z0-9'-]+/g) || [];
-    const k = s.toLowerCase().replace(/\\/g,'').replace(/ /g,'_');
-    // a single word that is another name for a tag ("zelda") is read like a phrase so it becomes the real tag
-    const isTag = TAGMAP.has(k) || /^\(.*\)$/.test(s) || (words.length < 2 && !(ALIAS.has(k) && ALIAS.get(k).n >= 100));
-    const piece = {text:s, start:m.index + raw.indexOf(s), isTag, words, phrases:[], left:[], parts:[]}; // parts: phrases and leftover words in order
-    if(!isTag){
-      let i = 0;
-      while(i < words.length){
-        const run = describe(words, i); if(run){ piece.phrases.push(run); piece.parts.push(run); i += run.len; continue; }
-        let hit = null, len = Math.min(6, words.length - i);
-        for(; len >= 1; len--){ const tags = lookup(words.slice(i, i+len)); if(tags){ hit = {words:words.slice(i, i+len).join(' '), tags}; break; } }
-        if(hit){ piece.phrases.push(hit); piece.parts.push(hit); i += len; } else { if(!STOP.has(words[i])) piece.left.push(words[i]); piece.parts.push(orig[i] || words[i]); i++; }
-      }
-    }
+    const words = s.toLowerCase().match(/[a-z0-9'-]+/g) || [], t = TAGMAP.get(norm(s));
+    // a character typed as a tag is still read, so its series comes along
+    const isTag = (t && t.cat !== '4') || /^\(.*\)$/.test(s) || /^<.*>$/.test(s) || /\b(embedding|lora):/i.test(s);
+    const piece = {text:s, start:m.index + raw.indexOf(s), isTag, words, phrases:[], left:[], parts:[]};
+    if(!isTag){ piece.toks = tokens(s); piece.cands = candidates(piece.toks); }
     pieces.push(piece);
   }
+  // names that are everyday words (link, fern) count once their series is in the prompt: typed, or brought by another name
+  const typed = new Set(), ctxOf = (set, t) => { if(t && t.cat === '3') set.add(t.tag); if(t && t.cat === '4') set.add(t.ser || t.tag); };
+  pieces.forEach(p => { if(p.isTag) ctxOf(typed, TAGMAP.get(norm(p.text))); });
+  // and two of them in one list ("stark and fern") bring their series between them, while "a misty forest at dawn" doesn't
+  const list = t => t.kind === 'and' || t.kind === 'det' || t.kind === 'poss' || t.w === 'with';
+  pieces.forEach(p => { const w = (p.cands || []).filter(c => c.ctx && !c.part).sort((a, b) => Math.min(...a.pos) - Math.min(...b.pos));
+    w.forEach((a, i) => w.slice(i + 1).forEach(b => {
+      if(a.ctx !== b.ctx || p.toks[a.pos[0]].base === p.toks[b.pos[0]].base) return;
+      const gap = p.toks.slice(Math.max(...a.pos) + 1, Math.min(...b.pos));
+      if(gap.some(t => t.kind === 'and' || t.w === 'with') && gap.every(list)) typed.add(a.ctx); })); });
+  let ctx = new Set(typed);
+  for(let round = 0; round < 4; round++){
+    pieces.forEach(p => { if(p.toks) p.sel = choose(p.cands, p.toks, ctx); });
+    const next = new Set(typed); pieces.forEach(p => (p.sel || []).forEach(c => ctxOf(next, c.e.t)));
+    if(next.size === ctx.size) break;
+    ctx = next;
+  }
+  const seen = new Set(pieces.filter(p => p.isTag).map(p => norm(p.text)));
+  pieces.forEach(p => { if(p.toks) build(p, seen); });
+  readMemo = {text, idx: IDX, pieces};
   return pieces;
 }
+// a read piece -> its phrases (each with its tags, the first def of them picked) and its parts in order: phrases, leftover words, kept spans
+function build(p, seen){
+  const toks = p.toks, at = new Map();
+  p.sel.slice().sort((a, b) => a.cov[0] - b.cov[0]).forEach(c => {
+    const t = c.e.t, tags = c.e.plain ? c.e.plain.map(findTag).filter(Boolean) : [t];
+    if(t && t.cat === '4' && t.ser && TAGMAP.has(t.ser)) tags.push(TAGMAP.get(t.ser)); // the character's series comes along
+    const aw = c.e.alias && t && t.ws ? c.e.w.map(x => x.w) : []; // "sitting on the floor" is an other name for on floor: sitting, on floor
+    if(aw.length && aw.length === t.ws.length + 1 && /^(sitting|lying|standing|kneeling|squatting)$/.test(aw[0]) && aw.slice(1).join() === t.ws.join()) tags.unshift(TAGMAP.get(aw[0]));
+    const mine = tags.filter((x, k) => !seen.has(x.tag) && tags.indexOf(x) === k); mine.forEach(x => seen.add(x.tag));
+    mine.def = mine.length;
+    alternatives(c, p).forEach(x => { if(!seen.has(x.tag)){ seen.add(x.tag); mine.push(x); } });
+    const ph = {words: label(toks, c.cov), tags: mine, cov: c.cov};
+    if(mine.length) p.phrases.push(ph);
+    c.cov.forEach(i => at.set(i, ph));
+  });
+  // the words people are counted from: not the words of a name ("dark magician girl" is one girl), and "a boy named Link" is Link
+  const name = new Set(); p.sel.forEach(c => { if(!c.e.name) return; c.cov.forEach(i => name.add(i)); const k = c.pos[0]; if(k > 1 && /^(named|called)$/.test(toks[k - 1].w)) name.add(k - 2); });
+  p.words = toks.filter((t, i) => t.w && !t.virt && !name.has(i)).map(t => t.w);
+  toks.forEach((t, i) => {
+    p.phrases.forEach(ph => { if(ph.cov[0] === i) p.parts.push(ph); });
+    if(at.has(i)) return;
+    if(t.virt) return;
+    if(t.lit) p.parts.push({lit: t.lit});
+    else if(t.cut) p.parts.push({cut: true});
+    else { p.parts.push(t.o); if((!t.kind || NEG.test(t.w)) && !STOP.has(t.w)) p.left.push(t.w); }
+  });
+}
+// READER END
 let IDEAS = null; // {pieces, picked: Set of tag names}
 // chips the user tapped on or off, kept so a pick survives editing the sentence and reloading
 S.tagOn = S.tagOn || []; S.tagOff = S.tagOff || []; if(S.asTags==null) S.asTags = true;
 S.addedTags = S.addedTags || []; // tags added from Find a tag or the extras: sent after the prompt, never written into it
-const norm = s => s.trim().toLowerCase().replace(/\\/g,'').replace(/ /g,'_');
 function pickedFor(pieces){
   const on = new Set(S.tagOn), off = new Set(S.tagOff), picked = new Set();
   pieces.forEach(p => p.phrases.forEach(ph => ph.tags.forEach((t,k) => { if((k < ph.tags.def || on.has(t.tag)) && !off.has(t.tag)) picked.add(t.tag); })));
@@ -2104,7 +2466,7 @@ function peopleOf(pieces){
   S.addedTags.forEach(take);
   const plain = sentencePeople(pieces);
   if(!names.length && !plain.length) return null;
-  const who = names.map(n => { const [g, b, o] = CHARS.get(n); return [n, b > g && b >= o ? 'boy' : o > g && o > b ? 'other' : 'girl']; }).concat(plain);
+  const who = names.map(n => { const [g, b, o] = CHARS.get(n); return [n, b >= g && b > 0 && b >= o ? 'boy' : o > g && o > b ? 'other' : 'girl']; }).concat(plain);
   const tags = [], total = who.reduce((a, w) => a + (w[2] || 1), 0);
   const count = (sex, one, many, multi) => {
     const mine = who.filter(w => w[1]===sex), k = mine.reduce((a, w) => a + (w[2] || 1), 0);
@@ -2122,9 +2484,11 @@ function asTags(text, people){
   // with the characters counted, the sentence's own guesses ("a girl" -> 1girl, solo) give way to the real count
   // a group of words that became a tag is replaced by it; words with no tag go as words (glue like "who is" dropped)
   let run = []; const mixed = people && people.tags.some(t => /girl/.test(t)) && people.tags.some(t => /boy/.test(t)); // a boy with a girl is not male focus
-  const flush = () => { while(run.length && STOP.has(run[0].toLowerCase())) run.shift(); while(run.length && STOP.has(run[run.length-1].toLowerCase())) run.pop(); if(run.length) put(run.join(' ')); run = []; };
+  const glue = w => { w = w.toLowerCase(); return !NEG.test(w) && (STOP.has(w) || !!WK[w]); };
+  const flush = () => { while(run.length && glue(run[0])) run.shift(); while(run.length && glue(run[run.length-1])) run.pop(); if(run.length) put(run.join(' ')); run = []; };
   pieces.forEach(p => { if(p.isTag || !p.phrases.length) return put(p.text);
-    p.parts.forEach(x => { if(typeof x==='string') return run.push(x); flush(); x.tags.forEach(t => { if(picked.has(t.tag) && !(people && (COUNTS.has(t.tag) || (t.tag==='male_focus' && mixed)))) put(tagText(t)); }); }); flush(); });
+    p.parts.forEach(x => { if(typeof x==='string') return run.push(x); flush(); if(x.lit) return put(x.lit); if(x.cut) return; // weights and embeddings go as typed
+      x.tags.forEach(t => { if(picked.has(t.tag) && !(people && (COUNTS.has(t.tag) || (t.tag==='male_focus' && mixed)))) put(tagText(t)); }); }); flush(); });
   return out.join(', ');
 }
 // the prompt Render sends: the words (as tags when Send as tags is on), then the added tags
@@ -2149,7 +2513,7 @@ function updateIdeas(){
   if(sentences.length){
     h += `<div class="ihead"><b>Tags from your words</b><button class="tagmode ${S.asTags?'on':''}" data-ideas="mode">${S.asTags ? '✓ Send as tags' : 'Send my words'}</button></div>`;
     sentences.forEach(p => p.phrases.forEach(ph => {
-      h += `<div class="irow ${S.asTags?'':'off'}"><span class="hl">${esc(ph.words)}</span>${ph.tags.map(t => `<button data-pick="${esc(t.tag)}" class="c${t.cat} ${picked.has(t.tag)?'on':''}">${esc(tagText(t))}</button>`).join('')}</div>`; }));
+      h += `<div class="irow ${S.asTags?'':'off'}"><span class="hl words">${esc(ph.words)}</span>${ph.tags.map(t => `<button data-pick="${esc(t.tag)}" class="c${t.cat} ${picked.has(t.tag)?'on':''}">${esc(tagText(t))}</button>`).join('')}</div>`; }));
     const left = sentences.flatMap(p => p.left);
     if(left.length) h += `<p class="note">No tag found for: ${esc(left.join(', '))}${S.asTags ? ' (sent as words)' : ''}</p>`;
     if(!S.asTags) h += `<p class="note">Your words go as typed. Turn on Send as tags to swap each group of words for its ticked tags.</p>`;

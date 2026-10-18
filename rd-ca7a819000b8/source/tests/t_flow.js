@@ -55,6 +55,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/chars.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'chars.txt'), 'utf8') }));
   await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'tags.txt'), 'utf8') }));
+  await page.route('https://app.test/words.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'words.txt'), 'utf8') }));
   await page.route(SERVER+'/**', async r => {
     const u = new URL(r.request().url());
     if(u.pathname==='/object_info') return r.fulfill({ json:OI });
@@ -134,13 +135,17 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok((await page.textContent('#ac button[data-i="0"]')).startsWith('1girl'), 'girl finds 1girl first');
   // a written sentence becomes tag ideas phrase by phrase, plus optional extras
   await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForTimeout(400); await page.waitForSelector('#ideas .hl');
-  ok((await page.$$eval('#ideas .irow:not(.wrap) .hl', s => s.map(x => x.textContent))).join('|')==='a girl|jumping jacks', 'sentence split into phrases');
+  ok((await page.$$eval('#ideas .irow:not(.wrap) .hl', s => s.map(x => x.textContent))).join('|')==='girl|jumping jacks', 'sentence split into phrases');
   await page.fill('#prompt', 'a girl hitting another girl'); await page.waitForTimeout(400);
   ok((await page.textContent('#ideas')).includes('2girls, multiple girls, hitting'), 'a girl hitting another girl is 2girls, the words replaced by their tags');
   await page.fill('#prompt', 'a woman holding her daughter\'s hand'); await page.waitForTimeout(400);
-  ok((await page.textContent('#ideas')).includes('2girls, multiple girls, mature female, holding, daughter\'s hand'), 'her daughter is a second girl, words with no tag go as words');
+  ok((await page.textContent('#ideas')).includes('2girls, multiple girls, mature female, holding hands'), 'her daughter is a second girl, and holding her hand is holding hands');
   await page.fill('#prompt', 'a girl, the girl waves'); await page.waitForTimeout(400);
-  ok((await page.textContent('#ideas')).includes('1girl, solo, waves'), 'the same girl mentioned again counts once');
+  ok((await page.textContent('#ideas')).includes('1girl, solo, waving'), 'the same girl mentioned again counts once');
+  // a misspelt character, a tag spread over the sentence and a plain word: no adult tags offered for "magic"
+  await page.fill('#prompt', 'freiren casting an epic magic spell'); await page.waitForTimeout(400);
+  ok((await page.$$eval('#ideas .irow:not(.wrap) .hl', s => s.map(x => x.textContent))).join('|')==='freiren|casting … spell|magic', 'Jordan\'s example is read phrase by phrase');
+  ok((await page.textContent('#ideas')).includes('1girl, solo, frieren, sousou no frieren, casting spell, epic, magic') && !(await page.textContent('#ideas')).includes('hitachi'), 'frieren, casting spell and magic, nothing odd');
   await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForTimeout(400);
   const sentPrompt = async () => { await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const g = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets()); return textOf(g,'Prompt'); };
   ok((await sentPrompt()).endsWith(', 1girl, solo, jumping, exercising, arms up') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'Send as tags sends the picked tags and leaves the words in the box');
@@ -151,7 +156,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok((await sentPrompt()).endsWith(', upper body') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'extra tag sent after the words, prompt box untouched');
   await page.fill('#prompt', 'zelda and purah'); await page.waitForTimeout(400); await page.waitForSelector('#ideas .hl');
   ok((await page.$$eval('#ideas .irow:not(.wrap) .hl', s => s.map(x => x.textContent))).join('|')==='zelda|purah', 'character names in a sentence are found');
-  ok((await sentPrompt()).includes('2girls, multiple girls, princess zelda, purah'), 'two named girls are counted: '+await sentPrompt());
+  ok((await sentPrompt()).includes('2girls, multiple girls, princess zelda, the legend of zelda, purah'), 'two named girls are counted: '+await sentPrompt());
   await page.fill('#prompt', 'zelda and purah and link'); await page.waitForTimeout(400);
   ok((await sentPrompt()).includes('2girls, multiple girls, 1boy, '), 'adding Link adds 1boy: '+await sentPrompt());
   await page.selectOption('[data-k=ckpt]', 'sdxl.safetensors'); await page.type('#prompt', 'smil'); await page.waitForTimeout(150);
