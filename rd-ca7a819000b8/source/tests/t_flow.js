@@ -91,7 +91,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
   // real (pretend) server
   await page.click('#openSettings'); await page.fill('#server', SERVER+'/'); await page.click('#connectBtn');
-  await page.waitForFunction(() => document.querySelector('#connText').textContent==='Connected');
+  await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'));
   ok(true, 'connects and reads models');
   ok((await page.$$eval('[data-k=ckpt] option', o => o.map(x=>x.textContent))).join()==='sdxl.safetensors,pony.safetensors', 'model list filled from object_info');
   await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#strip img').length===2, null, {timeout:5000});

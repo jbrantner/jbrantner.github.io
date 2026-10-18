@@ -274,6 +274,11 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="lbl">From this phone</div>
   <div class="btnrow"><button class="btn" id="getFile">Send a .safetensors file</button></div>
   <input type="file" id="modelPick" accept=".safetensors" hidden>
+  <div id="syncBox" hidden>
+    <div class="lbl">Between your computers</div>
+    <p class="note" style="margin-top:0">Copies the models and LoRAs one computer has and the other doesn't, both ways. Nothing is replaced or deleted.</p>
+    <div class="btnrow"><button class="btn" id="syncBtn">⇄ Sync models</button></div>
+  </div>
   <div class="lbl">Civitai sign-in</div>
   <p class="note" id="tokNote" style="margin-top:0">Some Civitai models only download when you're signed in. Paste your Civitai API key (civitai.com › Account settings › API Keys) once; it's saved on the render computer only.</p>
   <div class="row"><input id="tokIn" type="password" placeholder="Civitai API key" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off"></div>
@@ -324,7 +329,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-17.24'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.1'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1346,7 +1351,7 @@ let getKind = 'checkpoints', jobTimer = 0, liveJobs = [];
 const handledJobs = new Set(); let jobsSeen = false; // jobs already finished when the sheet first opens are applied without a toast
 function openGet(kind){
   if(!info || S.test){ toast('Connect to your render computer first', true); return; }
-  getKind = kind || getKind; drawGetKind(); closeSheets(); openSheet('#getSheet'); refreshJobs();
+  getKind = kind || getKind; drawGetKind(); $('#syncBox').hidden = S.servers.length < 2; closeSheets(); openSheet('#getSheet'); refreshJobs();
 }
 function drawGetKind(){ $('#getKind').innerHTML = [['checkpoints','Model'],['loras','LoRA']].map(([v,t]) => `<button data-v="${v}" class="${getKind===v?'on':''}">${t}</button>`).join(''); }
 $('#getKind').onclick = e => { const b = e.target.closest('[data-v]'); if(b){ getKind = b.dataset.v; drawGetKind(); } };
@@ -1362,7 +1367,7 @@ async function refreshJobs(){
   $('#tokNote').textContent = j.token ? 'A Civitai API key is saved on the render computer, so sign-in-only models download too.' : "Some Civitai models only download when you're signed in. Paste your Civitai API key (civitai.com › Account settings › API Keys) once; it's saved on the render computer only.";
   $('#tokClear').hidden = !j.token;
   $('#jobList').innerHTML = j.jobs.length ? j.jobs.map(x => { const pc = x.total ? Math.min(100, x.done/x.total*100) : 0;
-    const what = x.status==='done' ? 'Ready to use' : x.status==='failed' ? esc(x.error) : (x.status==='uploading' ? 'Sending' : 'Downloading') + ' · ' + mb(x.done) + (x.total ? ' of ' + mb(x.total) : '');
+    const what = x.status==='done' ? 'Ready to use' : x.status==='failed' ? esc(x.error) : x.status==='queued' ? 'Waiting to copy from ' + esc(srvName('https://' + x.source + '.x')) : (x.status==='uploading' ? 'Sending' : 'Downloading') + ' · ' + mb(x.done) + (x.total ? ' of ' + mb(x.total) : '');
     return `<div class="job ${x.status}"><b>${esc(x.title || x.name)}</b><small>${x.kind==='loras' ? 'LoRA' : 'Model'}${x.base ? ' · ' + esc(x.base) : ''} · ${what}</small>
       ${x.status==='done' || x.status==='failed' ? '' : `<div class="pbar"><i style="width:${pc.toFixed(1)}%"></i></div>`}</div>`; }).join('') : '<p class="note">Nothing yet.</p>';
   const fresh = j.jobs.filter(x => x.status==='done' && !handledJobs.has(x.id));
@@ -1372,7 +1377,7 @@ async function refreshJobs(){
 }
 // "Downloading X · 45%" under the Model or LoRA block while the render computer is still fetching one
 function dlLine(kind){
-  const js = liveJobs.filter(x => x.kind===kind); if(!js.length) return '';
+  const js = liveJobs.filter(x => x.kind===kind && x.status!=='queued'); if(!js.length) return '';
   return js.map(x => `<p class="note">⬇ ${x.status==='uploading' ? 'Sending' : 'Downloading'} ${esc(x.title || x.name)} · ${x.total ? Math.round(x.done/x.total*100) + '%' : mb(x.done)}. It appears in the list when done.</p>`).join('');
 }
 // a finished download: remember its kind and activation words when Civitai told us
@@ -1404,6 +1409,30 @@ async function saveToken(t){
 }
 $('#tokSave').onclick = () => { const t = $('#tokIn').value.trim(); if(t) saveToken(t); else toast('Paste the key first', true); };
 $('#tokClear').onclick = () => saveToken('');
+// sync: each computer copies over what the other has and it lacks (render_deck_models.py does the copying, PC to PC)
+async function syncCall(dst, src){
+  try{ const r = await fetch(dst.url + '/renderdeck/sync', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({source:src.url})});
+    if(r.status===404) return {error: dst.name + ' needs the newest Render Deck helper: copy it there and restart ComfyUI'};
+    return await r.json();
+  }catch(e){ return {error: dst.name + " can't be reached. Is it on, with ComfyUI running?"}; }
+}
+$('#syncBtn').onclick = async () => {
+  const here = S.servers.find(x => x.url===base()) || {name:srvName(base()), url:base()};
+  const others = S.servers.filter(x => x.url!==here.url); if(!others.length){ toast('Add your other computer under Render computer first', true); return; }
+  const b = $('#syncBtn'); b.disabled = true; b.textContent = 'Comparing…';
+  const got = [], errs = [];
+  for(const o of others){
+    for(const [dst, src] of [[here, o], [o, here]]){
+      const j = await syncCall(dst, src);
+      if(j.error){ if(!errs.includes(j.error)) errs.push(j.error); if(j.offline) break; continue; } // the other one is off: no point asking it to copy
+      const n = (j.queued || []).length; if(n) got.push(n + ' to ' + dst.name + (j.room ? '' : ' (not enough disk space for all)'));
+    }
+  }
+  b.disabled = false; b.textContent = '⇄ Sync models';
+  if(errs.length) toast(errs.join(' · ') + (got.length ? ' · Copying ' + got.join(', ') : ''), true);
+  else toast(got.length ? 'Copying ' + got.join(', ') : 'Your computers already have the same models and LoRAs');
+  if(got.length) buzz(); refreshJobs();
+};
 $('#getFile').onclick = () => { $('#modelPick').value = ''; $('#modelPick').click(); };
 $('#modelPick').onchange = e => {
   const f = e.target.files[0]; if(!f) return;

@@ -7,14 +7,17 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   GET  /renderdeck/model_info?kind=..&name=.. -> Civitai's trigger words and base model for a file, found by its fingerprint
   GET  /renderdeck/images, /renderdeck/thumb  -> the pictures in the output folder, newest first, and small previews
   POST /renderdeck/delete {items}             -> move pictures into "Deleted by Render Deck" in the output folder
+  GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
+  GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
+  POST /renderdeck/sync {source}              -> copy the models and LoRAs another computer has and this one lacks
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
-civitai.com and huggingface.co, and an existing file is never overwritten.
+civitai.com, huggingface.co and your own computers' Tailscale (.ts.net) addresses, and an existing file is never overwritten.
 Civitai models that need sign-in: put your Civitai API key in the CIVITAI_API_TOKEN environment variable,
 or in a file named civitai_token.txt next to this one.
 Copyright (c) 2026 Jordan Brantner. All rights reserved.
 """
 import asyncio, os, re, shutil, time, uuid
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, quote, unquote
 import aiohttp
 from aiohttp import web
 import folder_paths
@@ -131,7 +134,7 @@ async def _download(j, file_url, path):
 
 @routes.get('/renderdeck/jobs')
 async def jobs(request):
-    return web.json_response({'version': 1, 'token': bool(_token()), 'jobs': list(JOBS.values())[::-1]})
+    return web.json_response({'version': 2, 'token': bool(_token()), 'jobs': list(JOBS.values())[::-1]})
 
 
 @routes.post('/renderdeck/download')
@@ -337,6 +340,91 @@ async def delete(request):
         except Exception:
             pass
     return web.json_response({'moved': moved})
+
+
+# ---------- sync: copy the models and LoRAs another of your computers has onto this one ----------
+def _models():
+    return {k: [{'name': n.replace('\\', '/'), 'size': os.path.getsize(folder_paths.get_full_path(k, n))}
+                for n in folder_paths.get_filename_list(k) if n.lower().endswith('.safetensors')] for k in KINDS}
+
+
+@routes.get('/renderdeck/models')
+async def models(request):
+    return web.json_response(_models())
+
+
+@routes.get('/renderdeck/file')
+async def model_file(request):
+    """Send one model or LoRA file. Only names ComfyUI itself lists are served, so nothing outside the models folders."""
+    kind, name = request.query.get('kind'), request.query.get('name') or ''
+    listed = {n.replace('\\', '/'): n for n in folder_paths.get_filename_list(kind)} if kind in KINDS else {}
+    if name not in listed or not name.lower().endswith('.safetensors'):
+        return web.json_response({'error': 'No such model'}, status=404)
+    return web.FileResponse(folder_paths.get_full_path(kind, listed[name]))
+
+
+def _sync_path(kind, rel):
+    """Where a copied file goes: the same subfolder it has on the other computer, cleaned part by part."""
+    parts = [re.sub(r'[<>:"|?*\x00-\x1f]', '_', p).strip() for p in rel.split('/')]
+    if any(p in ('', '.', '..') for p in parts):
+        raise ValueError('Bad file name ' + rel)
+    parts[-1] = _clean(parts[-1])
+    return os.path.join(_folder(kind), *parts)
+
+
+async def _sync_run(todo):
+    for j, url, path in todo:  # one file at a time, so the network and the disk aren't split between them
+        if j.get('cancel'):
+            j['status'], j['error'] = 'failed', 'Stopped'
+            continue
+        if os.path.exists(path):  # added some other way while this one waited
+            j['status'] = 'done'
+            continue
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        await _download(j, url, path)
+
+
+@routes.post('/renderdeck/sync')
+async def sync(request):
+    try:
+        src = ((await request.json()).get('source') or '').strip().rstrip('/')
+        u = urlparse(src)
+        if u.scheme != 'https' or not (u.hostname or '').lower().endswith('.ts.net'):
+            raise ValueError('Sync only works with your computers\' Tailscale https addresses')
+        who = u.hostname.split('.')[0]
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
+                async with s.get(src + '/renderdeck/models') as r:
+                    if r.status == 404:
+                        raise ValueError(who + ' needs the newest Render Deck helper: copy it there and restart ComfyUI')
+                    theirs = await r.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return web.json_response({'error': who + " can't be reached. Is it on, with ComfyUI running?", 'offline': True}, status=502)
+        mine = _models()
+        busy = {(j['kind'], j['name'].lower()) for j in JOBS.values() if j['status'] not in ('done', 'failed')}
+        todo, skipped = [], []
+        for kind in KINDS:
+            have = {os.path.basename(m['name']).lower() for m in mine[kind]}  # same file name in any subfolder counts as having it
+            for m in theirs.get(kind, []):
+                name = os.path.basename(m['name'])
+                if name.lower() in have or (kind, name.lower()) in busy or not name.lower().endswith('.safetensors'):
+                    continue
+                try:
+                    path = _sync_path(kind, m['name'])
+                except ValueError:
+                    skipped.append(m['name'])
+                    continue
+                j = _job(name=name, kind=kind, total=int(m.get('size') or 0), source=who, title=name)
+                j['status'] = 'queued'
+                todo.append((j, src + '/renderdeck/file?kind=' + kind + '&name=' + quote(m['name']), path))
+        need = sum(j['total'] for j, _, _ in todo)
+        free = shutil.disk_usage(_folder('checkpoints')).free
+        if todo:
+            asyncio.ensure_future(_sync_run(todo))
+        return web.json_response({'from': who, 'queued': [j['name'] for j, _, _ in todo], 'bytes': need,
+                                  'room': need <= free - 2 * 1024**3, 'skipped': skipped})
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
 
 
 NODE_CLASS_MAPPINGS = {}
