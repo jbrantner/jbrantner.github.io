@@ -6,7 +6,8 @@ ComfyUI has crashed or been closed. Only the Python standard library is used.
     starts ComfyUI again, unless you closed it from the app.
   - It learns how to start ComfyUI by looking at the ComfyUI that's running (the command Comfy Desktop uses), and
     saves that in render_deck_agent.json next to this file. Started by the agent, ComfyUI runs without the Comfy
-    Desktop window; it's the same ComfyUI, folders and settings.
+    Desktop window; it's the same ComfyUI, folders and settings. Closing or restarting from the app also closes the
+    Comfy Desktop window if Desktop had started that ComfyUI, so Desktop isn't left showing an error.
   - The app talks to it through Tailscale: tailscale serve --bg --set-path /agent http://127.0.0.1:8190
       GET  /agent/status   -> {comfy: up|down|starting, wanted, learned}
       POST /agent/start | /agent/restart | /agent/close
@@ -74,6 +75,28 @@ def comfy_procs():
         return []
 
 
+def desktop_of(ppid):
+    """The Comfy Desktop window that launched this ComfyUI, if it was Desktop: (pid, name) or None. Closing ComfyUI
+    without it leaves Desktop showing "ComfyUI exited unexpectedly", and its Restart button would start a second
+    ComfyUI that can't get the port."""
+    if not WIN or not ppid:
+        return None
+    ps = ("Get-CimInstance Win32_Process -Filter \"ProcessId=%d\" | ForEach-Object { [pscustomobject]@{name=$_.Name; exe=$_.ExecutablePath} } "
+          "| ConvertTo-Json -Compress" % int(ppid))
+    try:
+        out = subprocess.run(['powershell', '-NoProfile', '-Command', ps], capture_output=True, text=True, timeout=30,
+                             creationflags=0x08000000).stdout.strip()
+        r = json.loads(out) if out else None
+    except Exception:
+        return None
+    if not r:
+        return None
+    name, exe = (r.get('name') or '').lower(), (r.get('exe') or '').lower()
+    if name.startswith('python') or name in ('cmd.exe', 'powershell.exe', 'explorer.exe') or 'comfy' not in exe:
+        return None
+    return int(ppid), r.get('name')
+
+
 def learn():
     """Remember how the running ComfyUI was started (the outermost python running main.py)."""
     rows = comfy_procs()
@@ -114,6 +137,10 @@ def close():
         pids = {r['pid'] for r in rows}
         for r in rows:
             if r['ppid'] not in pids:  # the whole tree from the top one
+                d = desktop_of(r['ppid'])
+                if d:  # started by Comfy Desktop: close its window too, so it isn't left on an error screen
+                    subprocess.run(['taskkill', '/PID', str(d[0]), '/T', '/F'], capture_output=True, creationflags=0x08000000)
+                    log('closed Comfy Desktop (%s), pid' % d[1], d[0])
                 subprocess.run(['taskkill', '/PID', str(r['pid']), '/T', '/F'], capture_output=True, creationflags=0x08000000)
                 log('closed ComfyUI, pid', r['pid'])
         state['starting'] = 0
