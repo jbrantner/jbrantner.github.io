@@ -51,7 +51,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport:{width:390,height:844}, hasTouch:true, isMobile:true });
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message)); page.on('console', m => { if(m.type()==='error') logs.push(m.text()); });
-  const sent = []; let sock = null, n = 0;
+  const sent = [], done = {}; let sock = null, n = 0;
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/chars.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'chars.txt'), 'utf8') }));
   await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'tags.txt'), 'utf8') }));
@@ -60,7 +60,10 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     if(u.pathname==='/object_info') return r.fulfill({ json:OI });
     if(u.pathname==='/upload/image') return r.fulfill({ json:{name:'phone.png',subfolder:'',type:'input'} });
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG });
-    if(u.pathname.startsWith('/history')) return r.fulfill({ json:{} });
+    if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
+    if(u.pathname.startsWith('/history/') && done[u.pathname.slice(9)]) return r.fulfill({ json:{[u.pathname.slice(9)]:done[u.pathname.slice(9)]} });
+    if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{jobs:[]} });
+    if(u.pathname.startsWith('/history') || u.pathname.startsWith('/renderdeck/') || u.pathname.startsWith('/view_metadata')) return r.fulfill({ json:{} });
     if(u.pathname==='/prompt'){
       const body = JSON.parse(r.request().postData()); sent.push(body.prompt);
       const id = 'p'+(++n), errs = check(body.prompt);
@@ -71,6 +74,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         const prev = Buffer.concat([Buffer.from([0,0,0,1,0,0,0,2]), PNG]); sock.send(prev);
         const save = Object.keys(body.prompt).find(k => body.prompt[k].class_type==='SaveImage');
         sock.send(JSON.stringify({type:'executed',data:{node:save,prompt_id:id,output:{images:[{filename:'render_0000'+n+'.png',subfolder:'RenderDeck',type:'output'}]}}}));
+        done[id] = {status:{completed:true}, outputs:{[save]:{images:[{filename:'render_0000'+n+'.png',subfolder:'RenderDeck',type:'output'}]}}};
         sock.send(JSON.stringify({type:'executing',data:{node:null,prompt_id:id}}));
       }, 50);
       return r.fulfill({ json:{prompt_id:id, number:0, node_errors:{}} });
@@ -86,8 +90,8 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.fill('#prompt', 'lantern hunter');
   await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#strip img').length===1, null, {timeout:8000});
   ok(true, 'test mode renders a pretend picture');
-  await page.click('#graphBtn'); const tj = JSON.parse(await page.textContent('#json')); ok(check(tj).length===0, 'test-mode graph is valid: '+check(tj).join('; '));
-  await page.click('#scrim');
+  await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const tj = JSON.parse(await page.textContent('#json')); ok(check(tj).length===0, 'test-mode graph is valid: '+check(tj).join('; '));
+  await page.evaluate(() => closeSheets());
 
   // real (pretend) server
   await page.click('#openSettings'); await page.fill('#server', SERVER+'/'); await page.click('#connectBtn');
@@ -101,7 +105,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   const textOf = (g, t) => Object.values(g).find(x => x._meta.title===t).inputs.text;
   ok(/^high quality, highly detailed, lantern hunter$/.test(textOf(sent[0],'Prompt')), 'SDXL style adds its prefix: '+textOf(sent[0],'Prompt'));
   await page.selectOption('[data-k=ckpt]', 'pony.safetensors');
-  await page.click('#graphBtn'); const pg = JSON.parse(await page.textContent('#json')); await page.click('#scrim');
+  await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const pg = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets());
   ok(check(pg).length===0 && Object.values(pg).some(x => x.class_type==='CLIPSetLastLayer' && x.inputs.stop_at_clip_layer===-2), 'Pony style adds CLIP skip 2: '+check(pg).join('; '));
   ok(/^score_9, score_8_up/.test(textOf(pg,'Prompt')) && /^score_6, /.test(textOf(pg,'Avoid')), 'Pony style adds score tags');
   const ks = Object.values(pg).find(x => x._meta.title==='Painting').inputs;
@@ -123,16 +127,16 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.fill('#prompt', ''); await page.type('#prompt', 'girl'); await page.waitForSelector('#ac button');
   ok((await page.textContent('#ac button[data-i="0"]')).startsWith('1girl'), 'girl finds 1girl first');
   // a written sentence becomes tag ideas phrase by phrase, plus optional extras
-  await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForSelector('#ideas .hl');
+  await page.fill('#prompt', 'A girl who is doing jumping jacks'); await page.waitForTimeout(400); await page.waitForSelector('#ideas .hl');
   ok((await page.$$eval('#ideas .hl', s => s.map(x => x.textContent))).join('|')==='a girl|jumping jacks', 'sentence split into phrases');
-  const sentPrompt = async () => { await page.click('#graphBtn'); const g = JSON.parse(await page.textContent('#json')); await page.click('#scrim'); return textOf(g,'Prompt'); };
+  const sentPrompt = async () => { await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const g = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets()); return textOf(g,'Prompt'); };
   ok((await sentPrompt()).endsWith(', 1girl, solo, jumping, exercising, arms up') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'Send as tags sends the picked tags and leaves the words in the box');
   await page.click('[data-pick=solo]'); ok(!(await sentPrompt()).includes('solo'), 'unticked tag is left out');
   await page.click('[data-ideas=mode]'); ok((await sentPrompt()).endsWith(', A girl who is doing jumping jacks'), 'switched off, the words go as typed');
   await page.click('[data-ideas=mode]'); await page.click('[data-pick=solo]');
   await page.click('[data-extra=upper_body]');
   ok((await sentPrompt()).endsWith(', upper body') && (await page.inputValue('#prompt'))==='A girl who is doing jumping jacks', 'extra tag sent after the words, prompt box untouched');
-  await page.fill('#prompt', 'zelda and purah'); await page.waitForSelector('#ideas .hl');
+  await page.fill('#prompt', 'zelda and purah'); await page.waitForTimeout(400); await page.waitForSelector('#ideas .hl');
   ok((await page.$$eval('#ideas .irow:not(.wrap) .hl', s => s.map(x => x.textContent))).join('|')==='zelda|purah', 'character names in a sentence are found');
   ok((await sentPrompt()).includes('2girls, multiple girls, princess zelda, purah'), 'two named girls are counted: '+await sentPrompt());
   await page.fill('#prompt', 'zelda and purah and link'); await page.waitForTimeout(400);
@@ -158,7 +162,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok('vae' in Object.values(g).find(x=>x.class_type==='ControlNetApplyAdvanced').inputs, 'ControlNet gets vae when supported');
   // LoRA activation words go into the prompt while the LoRA is on
   await page.fill('.block[style*="--lora"] [data-lw]', 'pixel style');
-  await page.click('#graphBtn'); let lg = JSON.parse(await page.textContent('#json')); await page.click('#scrim');
+  await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); let lg = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets());
   ok(textOf(lg,'Prompt').includes(', pixel style, ') && (await page.textContent('#addedPos')).includes('LoRA adds: pixel style'), 'LoRA activation words added: '+textOf(lg,'Prompt'));
 
   // reuse result as start picture
@@ -168,18 +172,18 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok(li.inputs.image==='RenderDeck/render_00002.png [output]', 'reused render points at output file: '+li.inputs.image);
 
   // renders in a row: 2× queues two prompts with different seeds, and both pictures come back
-  await page.click('#runsBtn'); ok((await page.textContent('#runsBtn'))==='2×', 'runs button steps to 2×');
+  await page.click('#runsUp'); ok((await page.textContent('#runsN'))==='2×', 'plus steps the count to 2×');
   const before = sent.length, strip = await page.$$eval('#strip img', x => x.length);
   await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#strip img').length===n, strip + 2, {timeout:8000});
   const seeds = sent.slice(before).map(g => (i => i.seed ?? i.noise_seed)(Object.values(g).find(x => x._meta.title==='Painting').inputs));
   ok(seeds.length===2 && seeds[0]!==seeds[1], 'two renders queued with different seeds');
-  await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); // back to 1×
+  await page.click('#runsDown'); ok((await page.textContent('#runsN'))==='1×' && await page.isDisabled('#runsDown'), 'minus steps back to 1× and stops there');
 
   // switching a block off removes it
   await page.locator('.block[style*="--lora"] [data-do=toggle]').dispatchEvent('click');
-  await page.click('#graphBtn'); ok(!(await page.textContent('#json')).includes('LoraLoader'), 'switched-off block left out');
-  await page.click('#scrim');
-  await page.evaluate(()=>scrollTo(0,0)); await page.screenshot({ path: path.join(__dirname, 'shot-top.png') }); await page.evaluate(()=>document.querySelector('.block[style*="--cn"]').scrollIntoView()); await page.screenshot({ path: path.join(__dirname, 'shot-blocks.png') }); await page.click('#addBtn'); await page.waitForTimeout(400); await page.screenshot({ path: path.join(__dirname, 'shot-tray.png') }); await page.click('#scrim');
+  await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); ok(!(await page.textContent('#json')).includes('LoraLoader'), 'switched-off block left out');
+  await page.evaluate(() => closeSheets());
+  await page.evaluate(()=>scrollTo(0,0)); await page.screenshot({ path: path.join(__dirname, 'shot-top.png') }); await page.evaluate(()=>document.querySelector('.block[style*="--cn"]').scrollIntoView()); await page.screenshot({ path: path.join(__dirname, 'shot-blocks.png') }); await page.click('#addBtn'); await page.waitForTimeout(400); await page.screenshot({ path: path.join(__dirname, 'shot-tray.png') }); await page.evaluate(() => closeSheets());
   ok(logs.length===0, 'no console errors '+logs.join(' | '));
   fs.unlinkSync(tmp);
   await browser.close();

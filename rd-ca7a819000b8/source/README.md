@@ -9,7 +9,8 @@ Copyright (c) 2026 Jordan Brantner. All rights reserved.
 - `../tags.txt` is the Danbooru tag list behind the prompt suggestions (Illustrious and Pony styles). Rebuild it with `python3 make_tags.py danbooru.csv` from the a1111 tagcomplete list (link in the script).
 - `../chars.txt` says how often each character is drawn as a girl, boy or other, so the app can add 1girl / 2girls / 1boy / solo for the people named in a prompt. Rebuild it with `python3 make_chars.py` (asks Danbooru once per character; it resumes if stopped).
 - Bump `APP_VERSION` in `comfy-app.html` on every release so a phone that resumes the app offers the update.
-- Tests: `NODE_PATH=$(npm root -g) node tests/t_flow.js` and `tests/t_lib.js` (needs Playwright). It runs the app at phone size against a pretend ComfyUI and checks every graph against ComfyUI's node definitions.
+- Tests: `NODE_PATH=$(npm root -g) node tests/t_flow.js`, `tests/t_lib.js` and `tests/t_queue.js` (needs Playwright). It runs the app at phone size against a pretend ComfyUI and checks every graph against ComfyUI's node definitions; `t_queue.js` runs the queue across two pretend computers.
+- Queue: every computer under ⚙ › Render computer takes renders while it's on and switched on in the queue (☰). Each render goes into the least busy computer's ComfyUI queue, so it keeps going when the app closes; while the app is open a free computer takes a render waiting on the other. Models and LoRAs are shared between the computers automatically through the helper's `/renderdeck/sync`.
 
 ## Setup on the render computer
 1. Install Tailscale on the render computer and the iPhone, same account on both.
