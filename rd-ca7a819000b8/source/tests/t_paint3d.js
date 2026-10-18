@@ -103,8 +103,10 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     console.log('   front quarters', face('front', 0.25, 0.25), face('front', 0.75, 0.25), face('front', 0.25, 0.75), face('front', 0.75, 0.75), 'left', face('left', 0.5, 0.5), 'back', face('back', 0.5, 0.5), 'right', face('right', 0.5, 0.5), 'top', face('top', 0.5, 0.5));
     ok(tx.w===2048 && near(face('front', 0.25, 0.25), Q.tl) && near(face('front', 0.75, 0.25), Q.tr) && near(face('front', 0.25, 0.75), Q.bl) && near(face('front', 0.75, 0.75), Q.br), 'the front picture lands on the front the right way round');
     ok(near(face('left', 0.5, 0.5), [0,200,0]) && near(face('back', 0.5, 0.5), [0,0,255]) && near(face('right', 0.5, 0.5), [255,255,0]), 'left, back and right pictures land on their sides');
-    ok(near(face('top', 0.5, 0.5), [128,128,128]), 'the top, which no picture faces, keeps the model\'s own colour');
+    ok(!near(face('top', 0.5, 0.5), [0,0,0]), 'the top, which no picture faces, is filled from around it');
   } else ok(false, 'no painted .glb was uploaded');
+  if(at >= 0){ const b2 = body.slice(at), jl = b2.readUInt32LE(12), js = JSON.parse(b2.slice(20, 20 + jl).toString()), mt = js.materials[0];
+    ok(mt.extensions && mt.extensions.KHR_materials_unlit && mt.pbrMetallicRoughness.metallicFactor===0 && !mt.pbrMetallicRoughness.metallicRoughnessTexture, 'the painted model is flat (unlit, no metal), like the drawings'); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

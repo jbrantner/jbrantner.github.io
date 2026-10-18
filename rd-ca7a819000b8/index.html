@@ -475,7 +475,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.37'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.38'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3452,6 +3452,10 @@ const GLB = {
     const nb = new Uint8Array(total); nb.set(bin); nb.set(png, start);
     json.bufferViews.push({buffer:0, byteOffset:start, byteLength:png.length});
     json.images[imgIdx] = {bufferView:json.bufferViews.length - 1, mimeType:'image/png'}; json.buffers[0].byteLength = total;
+    // shown flat, like the drawings: no shine or metal (Pixal3D's metal map is noise too), and no lighting changing the colours
+    for(const m of json.materials || []){ const pb = m.pbrMetallicRoughness = m.pbrMetallicRoughness || {}; delete pb.metallicRoughnessTexture; pb.metallicFactor = 0; pb.roughnessFactor = 1;
+      m.extensions = Object.assign({}, m.extensions, {KHR_materials_unlit:{}}); }
+    json.extensionsUsed = [...new Set([...(json.extensionsUsed || []), 'KHR_materials_unlit'])];
     const js = new TextEncoder().encode(JSON.stringify(json)), jl = pad(js.length), out = new Uint8Array(12 + 8 + jl + 8 + total), dv = new DataView(out.buffer);
     dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, out.length, true);
     dv.setUint32(12, jl, true); dv.setUint32(16, 0x4E4F534A, true); out.fill(0x20, 20, 20 + jl); out.set(js, 20);
@@ -3497,7 +3501,7 @@ async function bake3d(glbBuf, views, size){
     const tex = (src, opts = {}) => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
       if(src) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
       else gl.texImage2D(gl.TEXTURE_2D, 0, opts.depth ? gl.DEPTH_COMPONENT24 : gl.RGBA8, opts.w, opts.w, 0, opts.depth ? gl.DEPTH_COMPONENT : gl.RGBA, opts.depth ? gl.UNSIGNED_INT : gl.UNSIGNED_BYTE, null);
-      const f = opts.depth ? gl.NEAREST : gl.LINEAR; gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
+      const f = opts.depth ? gl.NEAREST : gl.LINEAR; gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, opts.mip ? gl.LINEAR_MIPMAP_LINEAR : f); if(opts.mip) gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
     // where the model sits in each picture: its outline is fitted to 1/1.1 of the frame, centred, as the cut-out was
     const slots = Object.keys(views).slice(0, 4), fit = slots.map(s => { const M = viewMat(s); let x0 = 9, x1 = -9, y0 = 9, y1 = -9;
@@ -3512,7 +3516,7 @@ async function bake3d(glbBuf, views, size){
       gl.uniformMatrix4fv(gl.getUniformLocation(depthP, 'M'), false, fit[i].M); gl.drawElements(gl.TRIANGLES, tri.length, gl.UNSIGNED_INT, 0);
       gl.deleteFramebuffer(fb); gl.deleteTexture(col); return d; });
     gl.disable(gl.DEPTH_TEST); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    const pics = slots.map(s => tex(views[s].img)), masks = slots.map(s => tex(views[s].mask)), baseT = tex(base || (() => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = '#888'; x.fillRect(0, 0, 1, 1); return c; })());
+    const pics = slots.map(s => tex(views[s].img)), masks = slots.map(s => tex(views[s].mask)), baseT = tex(base || (() => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = '#888'; x.fillRect(0, 0, 1, 1); return c; })(), {mip:true});
     const N = slots.length, U = (p, n) => gl.getUniformLocation(p, n);
     const paintP = prog(`layout(location=0) in vec3 aPos; layout(location=1) in vec2 aUv; layout(location=2) in vec3 aN; out vec3 P; out vec3 Nn; out vec2 T;
       void main(){ P = aPos; Nn = aN; T = aUv; gl_Position = vec4(aUv * 2.0 - 1.0, 0.0, 1.0); }`,
@@ -3522,13 +3526,14 @@ async function bake3d(glbBuf, views, size){
         if(any(lessThan(im, vec2(0.0))) || any(greaterThan(im, vec2(1.0)))) return vec4(0.0);
         float d = texture(dp, nd.xy * 0.5 + 0.5).r, z = nd.z * 0.5 + 0.5;
         if(z > d + 0.0015) return vec4(0.0); // something else is in front of this spot in that picture
-        vec2 st = vec2(im.x, 1.0 - im.y); float m = smoothstep(0.75, 1.0, texture(mk, st).r);
-        float f = max(dot(normalize(Nn), normalize(E[i] - P)), 0.0); float w = m * f * f * f;
+        vec2 st = vec2(im.x, 1.0 - im.y); float m = smoothstep(0.5, 0.9, texture(mk, st).r);
+        float f = max(dot(normalize(Nn), normalize(E[i] - P)), 0.0); float f2 = f * f; float w = m * (f2 * f2 + 0.0005 * step(0.0001, f)); // the picture facing a spot most squarely wins, so views don't double up
         return vec4(texture(pc, st).rgb * w, w); }
       void main(){ vec4 s = vec4(0.0);
         if(n > 0) s += look(0, pic[0], msk[0], dep[0]); if(n > 1) s += look(1, pic[1], msk[1], dep[1]);
         if(n > 2) s += look(2, pic[2], msk[2], dep[2]); if(n > 3) s += look(3, pic[3], msk[3], dep[3]);
-        vec3 b = texture(base, T).rgb; o = vec4(mix(b, s.rgb / max(s.a, 1e-5), smoothstep(0.01, 0.12, s.a)), 1.0); }`);
+        if(s.a < 0.0005){ o = vec4(0.0); return; } // no picture sees it: filled from around it below
+        o = vec4(s.rgb / s.a, 1.0); }`);
     // islands of the texture map get painted; a few passes then spread their edges outwards so seams don't show the old colours
     const mk = () => { const t = tex(null, {w:size}), fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return {t, fb}; };
     let A = mk(), Bt = mk();
@@ -3544,9 +3549,9 @@ async function bake3d(glbBuf, views, size){
       vec4 acc = vec4(0.0); for(int y = -1; y <= 1; y++) for(int x = -1; x <= 1; x++){ vec4 q = texture(s, T + vec2(x, y) * px); if(q.a > 0.5) acc += vec4(q.rgb, 1.0); }
       o = acc.a > 0.0 ? vec4(acc.rgb / acc.a, 1.0) : vec4(0.0); }`);
     gl.useProgram(growP); gl.uniform1f(U(growP, 'px'), 1 / size);
-    for(let k = 0; k < 6; k++){ gl.bindFramebuffer(gl.FRAMEBUFFER, Bt.fb); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, A.t); gl.uniform1i(U(growP, 's'), 0); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); [A, Bt] = [Bt, A]; }
+    for(let k = 0; k < 24; k++){ gl.bindFramebuffer(gl.FRAMEBUFFER, Bt.fb); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, A.t); gl.uniform1i(U(growP, 's'), 0); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); [A, Bt] = [Bt, A]; }
     // what's still empty keeps the old texture
-    const finP = prog(quad, `in vec2 T; out vec4 o; uniform sampler2D s; uniform sampler2D base; void main(){ vec4 c = texture(s, T); o = vec4(c.a > 0.5 ? c.rgb : texture(base, T).rgb, 1.0); }`);
+    const finP = prog(quad, `in vec2 T; out vec4 o; uniform sampler2D s; uniform sampler2D base; void main(){ vec4 c = texture(s, T); o = vec4(c.a > 0.5 ? c.rgb : textureLod(base, T, 5.0).rgb, 1.0); }`); // Pixal3D's own colours, blurred, only where nothing reached
     gl.bindFramebuffer(gl.FRAMEBUFFER, Bt.fb); gl.useProgram(finP); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, A.t); gl.uniform1i(U(finP, 's'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, baseT); gl.uniform1i(U(finP, 'base'), 1); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     const px = new Uint8ClampedArray(size * size * 4); gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, px);
@@ -3602,7 +3607,7 @@ function box3d(c){
   if(m.making && !s) setTimeout(() => wait3d(c), 0);
   let h = '<div class="lbl">3D model</div>';
   if(m.url && !m.test){ loadMV().catch(() => {}); h += `<model-viewer class="m3d" src="${esc(m.url)}" camera-controls touch-action="pan-y" auto-rotate rotation-per-second="20deg" shadow-intensity="0.6" exposure="1.1" alt="3D model of ${esc(c.name || 'the character')}"></model-viewer>
-    <p class="note">Drag to turn ${esc(c.name || 'them')} around, pinch to zoom. ${m.painted ? 'Painted from your pictures; spots none of them shows keep the model\'s own colours.' : m.raw ? '' : 'Made before the app could paint models from the pictures: make it again to get that.'} Saved in ${esc(m.file || '')}.</p>`; }
+    <p class="note">Drag to turn ${esc(c.name || 'them')} around, pinch to zoom. ${m.painted ? 'Painted from your pictures; shown flat, like the drawings.' : m.raw ? '' : 'Made before the app could paint models from the pictures: make it again to get that.'} Saved in ${esc(m.file || '')}.</p>`; }
   else if(m.url) h += '<p class="note">3D model ready (pretend, in Test mode).</p>';
   if(s && s.state==='busy') return h + `<p class="note">🧊 ${esc(s.text)}</p>`;
   if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
