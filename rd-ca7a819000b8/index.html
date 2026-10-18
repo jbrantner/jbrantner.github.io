@@ -475,7 +475,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.38'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.39'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3319,19 +3319,32 @@ function sugBox(c){
 // held to its gentle download speed and carrying on after a WiFi drop.
 const P3D = {file:'pixal3d_multiview_int8_convrot.safetensors', gb:5.6,
   url:'https://huggingface.co/Comfy-Org/Pixal3D/resolve/main/diffusion_models/pixal3d_multiview_int8_convrot.safetensors'};
-const FAKE3D = {UNETLoader:{input:{required:{unet_name:[[P3D.file]], weight_dtype:[['default']]}}}, CLIPVisionLoader:{input:{required:{clip_name:[['dino_v3_L_naf_fp32.safetensors']]}}},
+const HY3D = {file:'hunyuan3d-dit-v2-mv_fp16.safetensors', gb:4.6, kind:'checkpoints', label:'Hunyuan3D-2mv',
+  url:'https://huggingface.co/Comfy-Org/hunyuan3D_2.0_repackaged/resolve/main/split_files/hunyuan3d-dit-v2-mv_fp16.safetensors'};
+const FAKE3D = {UNETLoader:{input:{required:{unet_name:[[P3D.file]], weight_dtype:[['default']]}}}, ImageOnlyCheckpointLoader:{input:{required:{ckpt_name:[[HY3D.file]]}}}, Hunyuan3Dv2ConditioningMultiView:{input:{required:{}}}, CLIPVisionLoader:{input:{required:{clip_name:[['dino_v3_L_naf_fp32.safetensors']]}}},
   VAELoader:{input:{required:{vae_name:[['trellis_2_shape_vae_bf16.safetensors','trellis_2_texture_vae_bf16.safetensors']]}}}, LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:[['birefnet.safetensors']]}}},
   Pixal3DMultiViewConditioning:{input:{required:{}}}, SaveGLB:{input:{required:{}}}};
-function kit3d(){
-  const pcs = S.test ? [{url:'test', oi:FAKE3D}] : allPcs().filter(p => p.online && p.oi && p.oi.Pixal3DMultiViewConditioning && p.oi.SaveGLB);
-  const pick = (oi, cls, k, re) => combo(oi[cls], k).find(n => re.test(baseName(n)));
-  const p = pcs.sort((a, b) => !!pick(b.oi, 'UNETLoader', 'unet_name', /pixal3d_multiview/i) - !!pick(a.oi, 'UNETLoader', 'unet_name', /pixal3d_multiview/i) || (b.url===farmHost()) - (a.url===farmHost()))[0];
-  if(!p) return {why: !S.servers.length ? 'Connect to your render computer first' : !allPcs().some(x => x.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
-    : "None of your computers that are on has ComfyUI's 3D nodes (Pixal3D / TRELLIS.2): update ComfyUI"};
-  const oi = p.oi, k = {url:p.url, oi, unet:pick(oi, 'UNETLoader', 'unet_name', /pixal3d_multiview/i), dino:pick(oi, 'CLIPVisionLoader', 'clip_name', /dino_v3/i),
-    sv:pick(oi, 'VAELoader', 'vae_name', /trellis_2_shape_vae/i), tv:pick(oi, 'VAELoader', 'vae_name', /trellis_2_texture_vae/i), bg:pick(oi, 'LoadBackgroundRemovalModel', 'bg_removal_name', /birefnet/i)};
-  const lacks = [!k.dino && 'dino_v3_L_naf_fp32 (clip_vision)', !k.sv && 'trellis_2_shape_vae_bf16 (vae)', !k.tv && 'trellis_2_texture_vae_bf16 (vae)', !k.bg && 'birefnet (background_removal)'].filter(Boolean);
-  if(lacks.length) k.why = pcName(p.url) + ' is missing ' + lacks.join(', ');
+// Two shape models: Hunyuan3D-2mv (ComfyUI's own Hunyuan 3D nodes; clean smooth shapes, no colours of its own) and
+// Pixal3D. Either way the app paints the model from the pictures afterwards.
+P3D.kind = 'diffusion_models'; P3D.label = 'Pixal3D';
+const HY_YAW = 0; // which way Hunyuan's models face, as a turn about the vertical (0 = +z is the front, like Pixal3D's)
+const hasHy = oi => !!(oi && oi.Hunyuan3Dv2ConditioningMultiView && oi.ImageOnlyCheckpointLoader && oi.SaveGLB);
+// the shape model in use: the one picked, else Hunyuan when the computer has its nodes
+const eng3d = () => S.m3d || (S.test || allPcs().some(p => p.online && hasHy(p.oi)) ? 'hy' : 'px');
+function kit3d(eng = eng3d()){
+  const spec = eng==='hy' ? HY3D : P3D, re = eng==='hy' ? /hunyuan3d-dit-v2-mv/i : /pixal3d_multiview/i;
+  const has = eng==='hy' ? hasHy : oi => !!(oi && oi.Pixal3DMultiViewConditioning && oi.SaveGLB);
+  const pcs = S.test ? [{url:'test', oi:FAKE3D}] : allPcs().filter(p => p.online && has(p.oi));
+  const pick = (oi, cls, k, r) => combo(oi[cls], k).find(n => r.test(baseName(n)));
+  const main = oi => eng==='hy' ? pick(oi, 'ImageOnlyCheckpointLoader', 'ckpt_name', re) : pick(oi, 'UNETLoader', 'unet_name', re);
+  const p = pcs.sort((a, b) => !!main(b.oi) - !!main(a.oi) || (b.url===farmHost()) - (a.url===farmHost()))[0];
+  if(!p) return {eng, spec, why: !S.servers.length ? 'Connect to your render computer first' : !allPcs().some(x => x.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
+    : "None of your computers that are on has ComfyUI's " + spec.label + ' nodes: update ComfyUI'};
+  const oi = p.oi, k = {eng, spec, url:p.url, oi, unet:main(oi), bg:pick(oi, 'LoadBackgroundRemovalModel', 'bg_removal_name', /birefnet/i)};
+  let lacks = [!k.bg && 'birefnet (background_removal)'];
+  if(eng==='px'){ Object.assign(k, {dino:pick(oi, 'CLIPVisionLoader', 'clip_name', /dino_v3/i), sv:pick(oi, 'VAELoader', 'vae_name', /trellis_2_shape_vae/i), tv:pick(oi, 'VAELoader', 'vae_name', /trellis_2_texture_vae/i)});
+    lacks.push(!k.dino && 'dino_v3_L_naf_fp32 (clip_vision)', !k.sv && 'trellis_2_shape_vae_bf16 (vae)', !k.tv && 'trellis_2_texture_vae_bf16 (vae)'); }
+  lacks = lacks.filter(Boolean); if(lacks.length) k.why = pcName(p.url) + ' is missing ' + lacks.join(', ');
   return k;
 }
 // the pictures it builds from: the newest front, side and back, each cut out and framed square on black
@@ -3350,6 +3363,23 @@ function graph3d(k, imgs, c){
     // the cut-out views, and their masks cropped the same way, are kept: the app paints the model from them
     const mi = add('MaskToImage', {mask:[m,0]}), mc = add('ImageCropToMask', Object.assign({images:[mi,0], masks:[m,0]}, crop));
     views[slot] = [add('SaveImage', {images:cond[slot], filename_prefix:dir + 'views/' + name + '_' + slot}), add('SaveImage', {images:[mc,0], filename_prefix:dir + 'views/' + name + '_' + slot + '_mask'})];
+  }
+  if(k.eng==='hy'){ // Hunyuan3D-2mv, as in ComfyUI's own multi-view template; its views are cut out on white
+    const ck = add('ImageOnlyCheckpointLoader', {ckpt_name:k.unet}), enc = {};
+    for(const [slot, img] of Object.entries(imgs)){ const li = (Object.entries(g).find(([, x]) => x.class_type==='LoadImage' && x.inputs.image===img) || [])[0];
+      const rm = (Object.entries(g).find(([, x]) => x.class_type==='RemoveBackground' && x.inputs.image[0]===li) || [])[0];
+      const wc = add('ImageCropToMask', {images:[li,0], masks:[rm,0], width:1024, height:1024, pad_factor:1.1, grow_mask:0, background:'#ffffff'});
+      enc[slot] = [add('CLIPVisionEncode', {clip_vision:[ck,1], image:[wc,0], crop:'none'}), 0]; }
+    const pc = add('Hunyuan3Dv2ConditioningMultiView', enc), ms = add('ModelSamplingAuraFlow', {model:[ck,0], shift:1}), el = add('EmptyLatentHunyuan3Dv2', {resolution:3072, batch_size:1});
+    const ks = add('KSampler', {model:[ms,0], positive:[pc,0], negative:[pc,1], latent_image:[el,0], seed:Math.floor(Math.random() * 1e9), steps:20, cfg:7.5, sampler_name:'euler', scheduler:'normal', denoise:1});
+    const vx = add('VAEDecodeHunyuan3D', {samples:[ks,0], vae:[ck,2], num_chunks:8000, octree_resolution:256});
+    let mesh = [add('VoxelToMesh', {voxel:[vx,0], algorithm:'surface net', threshold:0.6}), 0];
+    if(k.oi.DecimateMesh) mesh = [add('DecimateMesh', {mesh, target_face_count:200000, placement_mode:'midpoint'}), 0];
+    if(k.oi.MeshSmoothNormals) mesh = [add('MeshSmoothNormals', {mesh, crease_angle:180}), 0];
+    if(k.oi.UnwrapMesh && k.oi.ApplyTextureToMesh){ // a blank texture map for the app to paint
+      const uw = add('UnwrapMesh', {mesh, segmenter:'pec', resolution:2048, padding:2, weld_distance:0.0002});
+      mesh = [add('ApplyTextureToMesh', {mesh:[uw,0], base_color:[add('EmptyImage', {width:1024, height:1024, batch_size:1, color:0x808080}), 0]}), 0]; }
+    return {g, save:add('SaveGLB', {mesh, filename_prefix:dir + name}), views};
   }
   const cv = add('CLIPVisionLoader', {clip_name:k.dino}), un = add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'});
   const sv = add('VAELoader', {vae_name:k.sv}), tv = add('VAELoader', {vae_name:k.tv});
@@ -3395,14 +3425,14 @@ async function make3d(c){
     if(S.test){ await new Promise(r => setTimeout(r, 300)); c.model3d = {url:'test.glb', test:true, at:Date.now(), views:Object.keys(imgs)}; delete M3D[c.id]; save(); drawChars(); return; }
     const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-3d'})});
     const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    c.model3d = Object.assign({}, c.model3d, {making:{pc:k.url, id:j.prompt_id, save:sid, views, t:Date.now()}}); save();
+    c.model3d = Object.assign({}, c.model3d, {making:{pc:k.url, id:j.prompt_id, save:sid, views, eng:k.eng, yaw:k.eng==='hy' ? HY_YAW : 0, t:Date.now()}}); save();
     await wait3d(c);
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't make the 3D model: " + err.message}); drawChars(); }
 }
 // follow a 3D model being made (also after the app was closed and opened again): it takes a few minutes
 async function wait3d(c){
   const m = c.model3d && c.model3d.making; if(!m || M3D[c.id] && M3D[c.id].polling) return;
-  const s = M3D[c.id] = {state:'busy', polling:true, text:'Making the 3D model on ' + pcName(m.pc) + '… this takes a few minutes'}; drawChars();
+  const s = M3D[c.id] = {state:'busy', polling:true, text:'Making the 3D model' + (m.eng==='hy' ? ' with Hunyuan3D-2mv' : '') + ' on ' + pcName(m.pc) + '… this takes a few minutes'}; drawChars();
   for(;;){
     await new Promise(r => setTimeout(r, 4000));
     if(M3D[c.id]!==s) return;
@@ -3415,7 +3445,7 @@ async function wait3d(c){
     delete c.model3d.making;
     const pic = id => (((h.outputs || {})[id] || {}).images || [])[0], views = {};
     for(const [slot, [im, mk]] of Object.entries(m.views || {})) if(pic(im) && pic(mk)) views[slot] = {img:viewUrl(pic(im), m.pc), mask:viewUrl(pic(mk), m.pc)};
-    if(f) Object.assign(c.model3d, {url:viewUrl(f, m.pc), raw:viewUrl(f, m.pc), views, painted:0, pc:m.pc, file:(f.subfolder ? f.subfolder + '/' : '') + f.filename, at:Date.now()});
+    if(f) Object.assign(c.model3d, {url:viewUrl(f, m.pc), raw:viewUrl(f, m.pc), views, painted:0, eng:m.eng || 'px', yaw:m.yaw || 0, pc:m.pc, file:(f.subfolder ? f.subfolder + '/' : '') + f.filename, at:Date.now()});
     save(); delete M3D[c.id]; drawChars(); buzz(); toast(f ? '3D model of ' + (c.name || 'the character') + ' ready ✨' : 'Finished, but no 3D file came back', !f);
     if(f && Object.keys(views).length) paint3d(c);
     return;
@@ -3473,7 +3503,7 @@ function viewMat(slot){ // the rig camera for a view: perspective fov 20, lookin
   const M = new Array(16).fill(0); for(let i = 0; i < 4; i++) for(let j = 0; j < 4; j++) for(let k = 0; k < 4; k++) M[j*4+i] += P[k*4+i] * V[j*4+k];
   return M;
 }
-async function bake3d(glbBuf, views, size){
+async function bake3d(glbBuf, views, size, yaw = 0){
   const g = GLB.read(glbBuf), prim = g.json.meshes[0].primitives[0], at = prim.attributes;
   if(at.TEXCOORD_0==null) throw new Error('this model has no texture map (make it again)');
   const pos = GLB.acc(g, at.POSITION), uv = GLB.acc(g, at.TEXCOORD_0), idx = prim.indices!=null ? GLB.acc(g, prim.indices) : null;
@@ -3482,6 +3512,8 @@ async function bake3d(glbBuf, views, size){
   if(!nrm){ nrm = new Float32Array(nv * 3); for(let t = 0; t < tri.length; t += 3){ const [a,b,c] = [tri[t],tri[t+1],tri[t+2]];
       const e1 = [0,1,2].map(i => pos[b*3+i]-pos[a*3+i]), e2 = [0,1,2].map(i => pos[c*3+i]-pos[a*3+i]), n = [e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]];
       for(const v of [a,b,c]) for(let i = 0; i < 3; i++) nrm[v*3+i] += n[i]; } }
+  if(yaw){ const cs = Math.cos(yaw * Math.PI / 180), sn = Math.sin(yaw * Math.PI / 180); // turn the model to face +z before painting (the file keeps its own way round, so the paint is turned with it)
+    for(const a of [pos, nrm]) for(let i = 0; i < a.length; i += 3){ const x = a[i], z = a[i+2]; a[i] = cs * x + sn * z; a[i+2] = -sn * x + cs * z; } }
   const mat = g.json.materials && g.json.materials[prim.material || 0], bct = mat && mat.pbrMetallicRoughness && mat.pbrMetallicRoughness.baseColorTexture;
   const imgIdx = bct ? g.json.textures[bct.index].source : -1;
   let base = null;
@@ -3527,7 +3559,8 @@ async function bake3d(glbBuf, views, size){
         float d = texture(dp, nd.xy * 0.5 + 0.5).r, z = nd.z * 0.5 + 0.5;
         if(z > d + 0.0015) return vec4(0.0); // something else is in front of this spot in that picture
         vec2 st = vec2(im.x, 1.0 - im.y); float m = smoothstep(0.5, 0.9, texture(mk, st).r);
-        float f = max(dot(normalize(Nn), normalize(E[i] - P)), 0.0); float f2 = f * f; float w = m * (f2 * f2 + 0.0005 * step(0.0001, f)); // the picture facing a spot most squarely wins, so views don't double up
+        float f = abs(dot(normalize(Nn), normalize(E[i] - P))); /* either way round: some meshes come inside out, and the depth test hides the far side */
+        float f2 = f * f; float w = m * (f2 * f2 + 0.0005 * step(0.0001, f)); /* the picture facing a spot most squarely wins, so views don't double up */
         return vec4(texture(pc, st).rgb * w, w); }
       void main(){ vec4 s = vec4(0.0);
         if(n > 0) s += look(0, pic[0], msk[0], dep[0]); if(n > 1) s += look(1, pic[1], msk[1], dep[1]);
@@ -3570,7 +3603,7 @@ async function paint3d(c){
   try{
     const views = {};
     for(const [slot, v] of Object.entries(m.views)) views[slot] = {img:await loadPic(v.img), mask:await loadPic(v.mask)};
-    const glb = await (await fetch(m.raw)).arrayBuffer(), out = await bake3d(glb, views, 2048);
+    const glb = await (await fetch(m.raw)).arrayBuffer(), out = await bake3d(glb, views, 2048, m.yaw || 0);
     if(!out) throw new Error('the model came without a texture to paint');
     const name = 'rd3d_' + c.id + '_' + Date.now().toString(36) + '.glb', fd = new FormData();
     fd.append('image', new Blob([out], {type:'model/gltf-binary'}), name); fd.append('overwrite', 'true'); fd.append('type', 'input');
@@ -3581,21 +3614,21 @@ async function paint3d(c){
 }
 // Get the 3D model: the one big file, through the helper (2 MB/s, carries on after a drop)
 async function get3d(){
-  const k = kit3d(); if(k.why && !k.url) return;
-  if(!confirm(pcName(k.url) + ' will download the Pixal3D model from Hugging Face: ' + P3D.gb + ' GB, about ' + Math.round(P3D.gb * 1024 / 2 / 60) + ' minutes at the gentle 2 MB/s, once. If the WiFi drops it waits and carries on. Start now?')) return;
-  try{ const r = await fetch(k.url + '/renderdeck/download', {method:'POST', headers:JSONH, body:JSON.stringify({url:P3D.url, kind:'diffusion_models'})}), j = await r.json();
+  const k = kit3d(), sp = k.spec; if(k.why && !k.url) return;
+  if(!confirm(pcName(k.url) + ' will download ' + sp.label + ' from Hugging Face: ' + sp.gb + ' GB, about ' + Math.round(sp.gb * 1024 / 2 / 60) + ' minutes at the gentle 2 MB/s, once. If the WiFi drops it waits and carries on. Start now?')) return;
+  try{ const r = await fetch(k.url + '/renderdeck/download', {method:'POST', headers:JSONH, body:JSON.stringify({url:sp.url, kind:sp.kind})}), j = await r.json();
     if(j.error) throw new Error(/checkpoint or LoRA/.test(j.error) ? pcName(k.url) + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : j.error);
-    toast('Downloading on ' + pcName(k.url)); watch3d(k.url); }
+    toast('Downloading on ' + pcName(k.url)); watch3d(k.url, sp); }
   catch(err){ toast(err.message, true); }
 }
 let dl3d = null; // the download, while the card is open: {pc, done, total, status}
-function watch3d(url){
+function watch3d(url, sp){
   if(watch3d.t) return;
   watch3d.t = setInterval(async () => {
     if(!$('#charSheet').classList.contains('open')){ clearInterval(watch3d.t); watch3d.t = 0; return; }
-    try{ const j = (await (await fetch(url + '/renderdeck/jobs')).json()).jobs.find(x => x.name===P3D.file);
-      dl3d = j ? Object.assign({pc:url}, j) : null;
-      if(j && j.status==='done'){ clearInterval(watch3d.t); watch3d.t = 0; dl3d = null; const p = pcOf(url); p.oi = await (await fetch(url + '/object_info')).json(); toast('The 3D model is on ' + pcName(url) + ' ✨'); }
+    try{ const j = (await (await fetch(url + '/renderdeck/jobs')).json()).jobs.find(x => x.name===sp.file);
+      dl3d = j ? Object.assign({pc:url, sp}, j) : null;
+      if(j && j.status==='done'){ clearInterval(watch3d.t); watch3d.t = 0; dl3d = null; const p = pcOf(url); p.oi = await (await fetch(url + '/object_info')).json(); toast(sp.label + ' is on ' + pcName(url) + ' ✨'); }
       if(j && j.status==='failed'){ clearInterval(watch3d.t); watch3d.t = 0; }
       drawChars(); }catch(e){}
   }, 4000);
@@ -3611,13 +3644,17 @@ function box3d(c){
   else if(m.url) h += '<p class="note">3D model ready (pretend, in Test mode).</p>';
   if(s && s.state==='busy') return h + `<p class="note">🧊 ${esc(s.text)}</p>`;
   if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
+  const sp = k.spec, both = S.test || allPcs().some(p => p.online && hasHy(p.oi));
+  if(both) h += `<div class="row"><label>Shape from</label>${seg('eng3d', [['hy', 'Hunyuan3D-2mv'], ['px', 'Pixal3D']], k.eng)}</div>
+    <p class="note" style="margin:-2px 0 0 92px">${k.eng==='hy' ? 'Clean, smooth shapes.' : 'Sharper shapes, rougher surface.'} Either way it's painted from your pictures.</p>`;
   if(k.why && !k.url) return h + `<p class="note">${esc(k.why)}.</p>`;
   if(!k.unet){
-    if(dl3d && dl3d.status!=='failed') return h + `<p class="note">${dl3d.status==='waiting' ? 'The internet dropped: the download carries on in a moment' : 'Downloading Pixal3D on ' + esc(pcName(dl3d.pc))} · ${(dl3d.done / 1e9).toFixed(1)} of ${((dl3d.total || P3D.gb * 1e9) / 1e9).toFixed(1)} GB</p><div class="pbar"><i style="width:${(100 * dl3d.done / (dl3d.total || P3D.gb * 1e9)).toFixed(1)}%"></i></div>`;
-    if(!S.test) watch3d(k.url);
-    return h + `<p class="note">Pixal3D builds a coloured 3D model of them from the Front, Side and Back pictures, on ${esc(pcName(k.url))}. ${esc(pcName(k.url))} has everything but the model itself: ${P3D.gb} GB, downloaded once at the gentle 2 MB/s (about ${Math.round(P3D.gb * 1024 / 2 / 60)} minutes).</p>
-      ${dl3d && dl3d.status==='failed' ? `<p class="warn">The download stopped: ${esc(dl3d.error || '')}. Tap again to carry on from where it got to.</p>` : ''}
-      <div class="btnrow"><button class="chipbtn" data-ch="get3d">⬇ Get the 3D model (${P3D.gb} GB)</button></div>`;
+    const d = dl3d && dl3d.sp===sp ? dl3d : null;
+    if(d && d.status!=='failed') return h + `<p class="note">${d.status==='waiting' ? 'The internet dropped: the download carries on in a moment' : 'Downloading ' + sp.label + ' on ' + esc(pcName(d.pc))} · ${(d.done / 1e9).toFixed(1)} of ${((d.total || sp.gb * 1e9) / 1e9).toFixed(1)} GB</p><div class="pbar"><i style="width:${(100 * d.done / (d.total || sp.gb * 1e9)).toFixed(1)}%"></i></div>`;
+    if(!S.test) watch3d(k.url, sp);
+    return h + `<p class="note">${sp.label} builds a 3D model of them from the Front, Left side, Back and Right side pictures, on ${esc(pcName(k.url))}. ${esc(pcName(k.url))} has everything but the model itself: ${sp.gb} GB, downloaded once at the gentle 2 MB/s (about ${Math.round(sp.gb * 1024 / 2 / 60)} minutes).</p>
+      ${d && d.status==='failed' ? `<p class="warn">The download stopped: ${esc(d.error || '')}. Tap again to carry on from where it got to.</p>` : ''}
+      <div class="btnrow"><button class="chipbtn" data-ch="get3d">⬇ Get ${sp.label} (${sp.gb} GB)</button></div>`;
   }
   if(k.why) return h + `<p class="warn">${esc(k.why)}</p>`;
   const have = ['front','left','back','right'].filter(a => vw[a]), ang = a => vw[a] && vw[a].angle==='side' ? 'Side' : ANGLES[a];
@@ -3878,6 +3915,7 @@ $('#charBody').onclick = async e => {
   else if(act==='paint3d'){ paint3d(c); return; }
   else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
   else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
+  else if(t.dataset.seg==='eng3d'){ S.m3d = t.dataset.v; dl3d = null; if(watch3d.t){ clearInterval(watch3d.t); watch3d.t = 0; } }
   else if(act==='maketurn'){ if(c.turn && (c.turn.url || c.turn.test) && !confirm('Make the turnaround again? The old clip stays in your renders.')) return; makeTurn(c); return; }
   else if(t.dataset.seg==='tvang'){ TV.ang = t.dataset.v; TV.moved = false; }
   else if(act==='tvadd'){ addTurnFrame(c, TV.ang); return; }

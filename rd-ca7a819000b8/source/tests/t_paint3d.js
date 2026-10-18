@@ -107,6 +107,18 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   } else ok(false, 'no painted .glb was uploaded');
   if(at >= 0){ const b2 = body.slice(at), jl = b2.readUInt32LE(12), js = JSON.parse(b2.slice(20, 20 + jl).toString()), mt = js.materials[0];
     ok(mt.extensions && mt.extensions.KHR_materials_unlit && mt.pbrMetallicRoughness.metallicFactor===0 && !mt.pbrMetallicRoughness.metallicRoughnessTexture, 'the painted model is flat (unlit, no metal), like the drawings'); }
+  // Hunyuan3D-2mv: once the computer has its nodes and model it is the default shape model, painted the same way
+  await page.evaluate(() => { const oi = allPcs()[0].oi; oi.Hunyuan3Dv2ConditioningMultiView = {input:{required:{}}}; oi.ImageOnlyCheckpointLoader = {input:{required:{ckpt_name:[['hunyuan3d-dit-v2-mv_fp16.safetensors']]}}};
+    ['CLIPVisionEncode','ModelSamplingAuraFlow','EmptyLatentHunyuan3Dv2','VAEDecodeHunyuan3D','VoxelToMesh','EmptyImage'].forEach(c => oi[c] = {input:{required:{}}}); drawChars(); });
+  ok(await page.$eval('#charBody [data-seg="eng3d"].on', b => b.dataset.v)==='hy', 'Hunyuan3D-2mv is offered and picked first');
+  sent.length = 0; ups.length = 0;
+  await page.click('#charBody [data-ch="make3d"]');
+  await page.waitForFunction(() => S.chars[0].model3d.eng==='hy' && S.chars[0].model3d.painted, null, {timeout:30000}).catch(() => {});
+  const hc = by('Hunyuan3Dv2ConditioningMultiView')[0];
+  ok(hc && ['front','left','back','right'].every(k => g()[hc.inputs[k][0]].class_type==='CLIPVisionEncode') && by('ImageOnlyCheckpointLoader')[0].inputs.ckpt_name==='hunyuan3d-dit-v2-mv_fp16.safetensors'
+    && by('ImageCropToMask').filter(n => n.inputs.background==='#ffffff').length===4 && !by('UNETLoader').length, 'the Hunyuan graph: four views cut out on white, multi-view conditioning, its own checkpoint');
+  ok(by('VoxelToMesh').length===1 && by('UnwrapMesh').length===1 && by('ApplyTextureToMesh').length===1 && by('SaveImage').length===8, 'its mesh gets a blank texture map, and the views are kept for painting');
+  ok(ups.length===1 && (await page.evaluate(() => S.chars[0].model3d.url)).includes('rd3d_'), 'and it is painted from the pictures too');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
