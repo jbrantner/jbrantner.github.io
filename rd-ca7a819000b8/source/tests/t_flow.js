@@ -195,11 +195,16 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok(await page.isHidden('#viewer'), 'swiping down closes the viewer');
   await page.click('#libBtn'); await page.waitForSelector('#libSheet.open'); await page.waitForTimeout(300);
   await swipe('#libSheet .grab', [195, 470], [195, 640]); await page.waitForTimeout(300); ok(!(await page.$('#libSheet.open')), 'swiping a menu down closes it');
+  // the prompt folds to one line showing the prompt itself
+  await page.click('#promptHead'); ok(!(await page.isVisible('#prompt')) && (await page.textContent('#promptSum')).includes(await page.evaluate(() => S.prompt.trim().slice(0,10))), 'the prompt folds to a line with the prompt');
+  await page.click('#promptHead'); ok(await page.isVisible('#prompt'), 'and opens again');
   // Hidden gets the same screen: preview with thumbnails, the viewer, draft button, library, folding
   await page.click('#modeBtn'); ok((await page.textContent('h1 span'))==='Hidden', 'Hidden on');
   const hBefore = sent.length; await page.click('#goBtn'); await page.waitForFunction(n => S.gallery.length===1, null, {timeout:8000});
   ok(sent.length===hBefore + 1 && await page.isVisible('#shown') && (await page.$$eval('#strip img', x => x.length))===1 && await page.isVisible('#feedHead') && await page.isVisible('#draftBtn'), 'Hidden has the preview, thumbnails and draft button');
   await page.click('#shown'); ok(await page.isVisible('#viewer') && (await page.$$eval('#vStrip img', x => x.length))===1, 'Hidden opens the photo viewer');
+  await page.click('#vClose'); await page.click('#promptHead'); ok(!(await page.isVisible('#prompt')) && await page.isVisible('#promptSum'), 'Hidden prompt folds too'); await page.click('#promptHead');
+  await page.click('#shown');
   await page.click('#vClose'); await page.click('#libBtn'); await page.waitForSelector('#libSheet.open'); ok((await page.$$eval('#recentRow img', x => x.length))===1, 'Hidden library shows its own latest');
   await page.evaluate(() => closeSheets()); await page.waitForTimeout(300); await page.click('#modeBtn'); ok((await page.$$eval('#strip img', x => x.length))===3, 'back from Hidden with the normal thumbnails');
   await page.click('#feedHead'); ok(!(await page.isVisible('#shown')) && !(await page.isVisible('#strip')), 'the preview section folds');
