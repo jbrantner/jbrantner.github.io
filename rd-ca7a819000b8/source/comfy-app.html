@@ -452,7 +452,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.28'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.29'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -976,6 +976,7 @@ function fit(p, e){
   const out = {ok:false, graph:null, missing:[], why:''};
   if(!e.graph){ out.ok = p.url===e.srv; out.why = out.ok ? '' : 'made before the queue'; return out; }
   out.graph = JSON.parse(JSON.stringify(e.graph));
+  if(e.pin && p.url!==e.pin){ out.why = 'only ' + pcName(e.pin) + ' runs this one'; return out; } // Qwen renders: never moved, never a reason to copy models
   if(p.url===e.home){ out.ok = true; return out; } // built from this computer's own lists
   if(!p.oi){ out.why = pcName(p.url) + ' is not connected'; return out; }
   for(const n of Object.values(out.graph)){
@@ -2643,9 +2644,14 @@ function qwenKit(){
     const loras = combo(oi.LoraLoaderModelOnly, 'lora_name');
     const fast = loras.filter(n => /qwen.?image.?edit.*lightning/i.test(baseName(n))).sort((a, b) => (ver(b)===v) - (ver(a)===v) || /4.?step/i.test(b) - /4.?step/i.test(a))[0];
     const turn = v > 1 ? loras.find(n => /multiple.?angles/i.test(baseName(n))) : null; // the camera-angle LoRA is made for the 2509 model and newer
+    if(!S.test && S.qwenPc!==p.url){ S.qwenPc = p.url; save(); } // remembered, so an offline Render is named as the one with it
     return {url:p.url, oi, unet, enc, clip, vae, fast, turn, steps:fast ? (/8.?step/i.test(fast) ? 8 : 4) : 20, cfg:fast ? 1 : 2.5};
   }
-  return {why: why || (S.servers.length ? 'None of your computers that are on has Qwen-Image-Edit (a qwen_image_edit model in models/diffusion_models)' : 'Connect to your render computer first')};
+  const known = !S.test && S.qwenPc && S.servers.some(x => x.url===S.qwenPc) && !pcOf(S.qwenPc).online;
+  return {why: why || (!S.servers.length ? 'Connect to your render computer first'
+    : known ? pcName(S.qwenPc) + " has Qwen-Image-Edit but can't be reached right now. Is it on, with ComfyUI running?"
+    : !allPcs().some(p => p.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
+    : 'None of your computers that are on has Qwen-Image-Edit (a qwen_image_edit model in models/diffusion_models)')};
 }
 // inputs a node needs that the graph leaves to its defaults, from what that computer's ComfyUI says about the node
 function fillIn(oi, cls, inputs){
@@ -2692,7 +2698,7 @@ async function makeAngles(c, v, angles){
   for(const [i, a] of angles.entries()){
     const b = turnGraph(k, img, a, c);
     const e = {key:tap + 'c' + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : k.url, state:'sending', hidden:!!S.hidden,
-      graph:b.graph, titles:b.titles, seed:b.seed, prompt:(c.name || 'Character') + ': ' + ANGLES[a], ckpt:k.unet, n:i+1, of:angles.length, images:[], snap:null, size:[1024,1024], pics:1, steps:k.steps};
+      graph:b.graph, titles:b.titles, seed:b.seed, prompt:(c.name || 'Character') + ': ' + ANGLES[a], ckpt:k.unet, n:i+1, of:angles.length, images:[], snap:null, size:[1024,1024], pics:1, steps:k.steps, pin:S.test ? null : k.url};
     S.charJobs[e.key] = {cid:c.id, angle:a, hidden:!!S.hidden};
     if(farm){ e.farm = true; e.state = 'waiting'; }
     S.queue.push(e); mine.push(e); save();
@@ -2747,7 +2753,7 @@ function drawChars(){
     <p class="note">Danbooru tags that describe them: hair, eyes, outfit, build. A scene puts these in their part of the picture.</p>
     <div class="lbl lblrow">Pictures <span class="note" style="margin:0;text-transform:none;letter-spacing:0">${c.views.length ? 'tap one to pick it' : ''}</span></div>
     <div class="cviews">${c.views.map(v => `<button data-cv="${esc(v.id)}" class="${v.id===CH.sel ? 'sel' : ''}"><img src="${esc(v.url)}" alt="" loading="lazy"><span class="ang">${esc(ANGLES[v.angle] || 'Other')}</span></button>`).join('')}
-      ${jobs.map(e => `<button class="wait" disabled>Making ${esc(ANGLES[S.charJobs[e.key].angle])}<small>${e.state==='running' ? esc(e.prog ? e.prog.text : 'Starting') : 'in the queue'}</small></button>`).join('')}
+      ${jobs.map(e => `<button class="wait" data-stop="${esc(e.key)}">Making ${esc(ANGLES[S.charJobs[e.key].angle])}<small>${e.state==='running' ? esc(e.prog ? e.prog.text : 'Starting') : 'in the queue'} · ✕ tap to cancel</small></button>`).join('')}
       <button class="add" data-ch="pic" aria-label="Add a picture">＋</button></div>
     ${sel ? `<div class="row" style="margin-top:10px"><label>This one is</label>${seg('cangle', Object.entries(ANGLES), sel.angle)}</div>
       <div class="row" style="padding-left:92px"><button class="chipbtn" data-ch="see">↗ See it big</button><button class="chipbtn danger" data-ch="delview">Remove</button></div>` : ''}
@@ -2773,6 +2779,7 @@ $('#charBody').onclick = async e => {
   if(act==='addfrom' && CH.from){ addView(c, viewFromGallery(CH.from)); CH.from = null; toast('Added'); }
   else if(t.dataset.color){ c.color = t.dataset.color; }
   else if(t.dataset.cv){ CH.sel = t.dataset.cv; }
+  else if(t.dataset.stop){ const j = S.queue.find(q => q.key===t.dataset.stop); if(j && confirm('Cancel making this angle?')){ cancelJob(j); delete S.charJobs[j.key]; toast('Cancelled'); } }
   else if(t.dataset.seg==='cangle'){ const v = c.views.find(x => x.id===CH.sel); if(v) v.angle = t.dataset.v; CH.want = null; }
   else if(t.dataset.want){ CH.want.has(t.dataset.want) ? CH.want.delete(t.dataset.want) : CH.want.add(t.dataset.want); }
   else if(act==='pic'){ if(!info){ toast('Connect first (or use Test mode) so the picture has somewhere to go', true); return; } $('#charPick').value = ''; $('#charPick').click(); return; }

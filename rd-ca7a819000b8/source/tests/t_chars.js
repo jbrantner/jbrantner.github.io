@@ -45,10 +45,11 @@ const OI = {
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message)); page.on('console', m => { if(m.type()==='error' && !/Failed to load resource/.test(m.text())) logs.push(m.text()); });
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
-  const socks = {}, sent = {[RENDER]:[], [MAIN]:[]}, uploads = {[RENDER]:[], [MAIN]:[]}, hist = {}; let n = 0;
+  const syncs = [], socks = {}, sent = {[RENDER]:[], [MAIN]:[]}, uploads = {[RENDER]:[], [MAIN]:[]}, hist = {}; let n = 0;
   await page.routeWebSocket(/\.test\/ws/, ws => { socks[new URL(ws.url()).origin.replace('wss:', 'https:')] = ws; });
   for(const srv of [RENDER, MAIN]) await page.route(srv + '/**', async r => {
     const u = new URL(r.request().url());
+    if(u.pathname.startsWith('/renderdeck/sync') || u.pathname.startsWith('/renderdeck/download') || u.pathname.startsWith('/renderdeck/file')) syncs.push(srv + u.pathname);
     if(u.pathname==='/object_info') return r.fulfill({ json:OI[srv] });
     if(u.pathname==='/upload/image'){ const name = (r.request().postData() || '').match(/filename="([^"]+)"/); uploads[srv].push(name ? name[1] : '?'); return r.fulfill({ json:{name:name ? name[1] : 'phone.png', subfolder:'', type:'input'} }); }
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG });
@@ -134,6 +135,11 @@ const OI = {
   ok(nodes.find(x => x.class_type==='SaveImage').inputs.filename_prefix==='RenderDeck/characters/Levi', 'saved under RenderDeck/characters/Levi');
   st = await page.evaluate(() => S.chars[0].views.slice(1).map(v => v.angle + '@' + v.home + ':' + v.img));
   ok(st.length===2 && st.every(x => x.includes(RENDER) && /\[output\]$/.test(x)), 'finished pictures join Levi, on Render: ' + st.join(' | '));
+  ok(!syncs.length, 'Make angles never asks for a model copy or download: ' + syncs.join());
+  ok(await page.evaluate(r => S.queue.every(e => !e.pin) && Object.keys(S.charJobs).length===0, RENDER), 'nothing left in the queue');
+  // Render offline: the sheet says Render can't be reached, not that nobody has Qwen
+  await page.evaluate(r => { pcOf(r).online = false; drawChars(); }, RENDER);
+  ok((await page.textContent('#charBody')).includes("Render has Qwen-Image-Edit but can't be reached"), 'an offline Render is named as the one with Qwen');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
