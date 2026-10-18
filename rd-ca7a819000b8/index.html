@@ -146,9 +146,19 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .libgrid button.sel{outline:3px solid var(--accent);outline-offset:-3px}
 .libgrid button.sel::after{content:"✓";position:absolute;right:6px;top:6px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-weight:800;display:grid;place-items:center;font-size:13px}
 .btn.danger,.chipbtn.danger{border-color:var(--bad);color:var(--bad)}
-.viewer{position:fixed;inset:0;z-index:30;background:#000e;display:flex;flex-direction:column;padding:calc(10px + env(safe-area-inset-top)) 10px calc(14px + env(safe-area-inset-bottom))}
-.viewer img{flex:1;min-height:0;width:100%;object-fit:contain}
-.vbar{display:flex;gap:8px;overflow-x:auto;padding-top:10px;scrollbar-width:none}
+.viewer{position:fixed;inset:0;z-index:30;background:#000;display:flex;flex-direction:column;padding:calc(10px + env(safe-area-inset-top)) 10px calc(14px + env(safe-area-inset-bottom))}
+.viewer[hidden]{display:none}
+.vtop{display:flex;align-items:center;gap:8px;padding-bottom:8px}
+.vtop small{flex:1;min-width:0;color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.vstage{position:relative;flex:1;min-height:0;overflow:hidden;touch-action:none}
+.vstage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform-origin:0 0;will-change:transform;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.vstrip{display:flex;gap:6px;overflow-x:auto;padding:10px 0 2px;scrollbar-width:none}
+.vstrip::-webkit-scrollbar{display:none}
+.vstrip img{flex:none;width:52px;height:52px;object-fit:cover;border-radius:8px;border:2px solid transparent;opacity:.6}
+.vstrip img.sel{border-color:var(--accent);opacity:1}
+.vbar{display:flex;gap:8px;overflow-x:auto;padding-top:8px;scrollbar-width:none}
+.vbar::-webkit-scrollbar{display:none}
+#shown{cursor:zoom-in}
 .ideas{margin-top:10px;padding:10px 12px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line)}
 .ihead{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:4px 0 6px;font-size:13px}
 .ihead b{font-weight:800;color:var(--soft)}
@@ -388,8 +398,11 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 </div></div>
 
 <div class="viewer" id="viewer" hidden>
-  <img id="viewImg" alt="">
-  <div class="vbar"><button class="chipbtn" id="vClose">✕ Close</button><button class="chipbtn hot" id="vFinish" hidden>✨ Finish this draft</button><button class="chipbtn" id="vPic">🖼 Use as start picture</button><button class="chipbtn" id="vRecipe">⤵ Use its settings</button><button class="chipbtn" id="vOpen">↗ Full size</button><button class="chipbtn danger" id="vDel">🗑 Delete</button></div>
+  <div class="vtop"><button class="chipbtn" id="vClose">✕ Close</button><small id="vInfo"></small></div>
+  <div class="vstage" id="vStage"><img id="viewImg" alt="" draggable="false"></div>
+  <div class="vstrip" id="vStrip"></div>
+  <div class="vbar" id="vGal" hidden><button class="chipbtn hot" data-act="finish" hidden>✨ Finish this draft</button><button class="chipbtn" data-act="pic">🖼 Use as start picture</button><button class="chipbtn" data-act="cn">🧭 Use as guide</button><button class="chipbtn" data-act="seed">🎲 Keep this seed</button><button class="chipbtn" data-act="recipe">⤵ Use its settings</button><button class="chipbtn" data-act="open">↗ Full size</button></div>
+  <div class="vbar" id="vLib"><button class="chipbtn hot" id="vFinish" hidden>✨ Finish this draft</button><button class="chipbtn" id="vPic">🖼 Use as start picture</button><button class="chipbtn" id="vRecipe">⤵ Use its settings</button><button class="chipbtn" id="vOpen">↗ Full size</button><button class="chipbtn danger" id="vDel">🗑 Delete</button></div>
 </div>
 
 <div class="sheet" id="setSheet"><div class="in"><div class="grab"></div>
@@ -420,7 +433,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.21'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.22'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1410,6 +1423,76 @@ function viaHere(e){ const img = e.target; if(img.tagName!=='IMG' || img.dataset
   try{ const u = new URL(img.src); if(!u.pathname.endsWith('/view') || u.origin===new URL(base()).origin) return; img.dataset.here = 1; img.src = base() + u.pathname + u.search; }catch(x){} }
 $('#strip').addEventListener('error', viaHere, true); $('#recentRow').addEventListener('error', viaHere, true); $('#shown').addEventListener('error', viaHere);
 $('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i!=null) show(+i); };
+$('#shown').onclick = () => { if($('#resultActions').hidden) return; if(S.gallery[shownIdx]) openViewer('gal', S.gallery, shownIdx); };
+
+// ---------- the picture viewer: works like a photo app (pinch to zoom, swipe sideways for the next one, swipe down to close) ----------
+const V = {mode:'', list:[], i:0, s:1, x:0, y:0};
+const vSrc = (it, thumb) => V.mode==='gal' ? it.url : thumb ? thumbUrl(it) : viewUrl(it, it.src);
+function openViewer(mode, list, i){ if(!list || !list.length) return; Object.assign(V, {mode, list, i:Math.max(0, i)});
+  $('#vGal').hidden = mode!=='gal'; $('#vLib').hidden = mode!=='lib';
+  $('#vStrip').innerHTML = list.map((it,k) => `<img src="${esc(vSrc(it, true))}" data-v="${k}" alt="" loading="lazy">`).join('');
+  $('#viewer').hidden = false; viewAt(V.i); }
+function closeViewer(){ $('#viewer').hidden = true; $('#viewer').style.background = ''; vMove(1,0,0); }
+function viewAt(i){ V.i = Math.max(0, Math.min(V.list.length - 1, i)); const it = V.list[V.i], img = $('#viewImg');
+  delete img.dataset.here; img.src = vSrc(it); vMove(1,0,0);
+  [...$('#vStrip').children].forEach((t,k) => t.classList.toggle('sel', k===V.i));
+  const t = $('#vStrip').children[V.i]; t && t.scrollIntoView({inline:'center', block:'nearest'});
+  $('#vInfo').textContent = (V.i + 1) + ' / ' + V.list.length;
+  if(V.mode==='gal'){ $('#vGal [data-act="finish"]').hidden = !(it.draft && it.fin && !it.sent); } else libShown(it); }
+function vMove(s, x, y, anim){ Object.assign(V, {s, x, y}); const img = $('#viewImg'); img.style.transition = anim ? 'transform .2s' : 'none'; img.style.transform = `translate(${x}px,${y}px) scale(${s})`; }
+$('#viewImg').addEventListener('error', viaHere);
+$('#vStrip').onclick = e => { const t = e.target.closest('[data-v]'); if(t) viewAt(+t.dataset.v); };
+$('#vGal').onclick = async e => { const a = e.target.closest('[data-act]'); if(!a) return;
+  show(V.i); await $('#resultActions').onclick({target:a}); if(a.dataset.act!=='open'){ closeViewer(); closeSheets(); } };
+{ // touch: one finger swipes (or pans when zoomed), two fingers pinch, double tap zooms
+  const st = $('#vStage'); let g = null, lastTap = 0;
+  const pts = e => [...e.touches].map(t => ({x:t.clientX, y:t.clientY}));
+  const dist = (a,b) => Math.hypot(a.x - b.x, a.y - b.y), mid = (a,b) => ({x:(a.x + b.x)/2, y:(a.y + b.y)/2});
+  const box = () => st.getBoundingClientRect();
+  // keep a zoomed picture covering the frame
+  const clamp = (s,x,y) => { const r = box(); return [s, Math.min(0, Math.max(r.width - r.width*s, x)), Math.min(0, Math.max(r.height - r.height*s, y))]; };
+  st.addEventListener('touchstart', e => { e.preventDefault(); const p = pts(e), r = box();
+    if(p.length===2){ const m = mid(p[0],p[1]); g = {pinch:true, d:dist(p[0],p[1]), s:V.s, mx:m.x - r.left, my:m.y - r.top, x:V.x, y:V.y}; return; }
+    const now = Date.now();
+    if(now - lastTap < 280){ lastTap = 0; const px = p[0].x - r.left, py = p[0].y - r.top; // double tap: zoom in where tapped, or back out
+      if(V.s > 1) vMove(1,0,0,true); else vMove(...clamp(2.5, px - px*2.5, py - py*2.5), true); g = null; return; }
+    lastTap = now; g = {x0:p[0].x, y0:p[0].y, x:V.x, y:V.y, t:now, dir:''};
+  }, {passive:false});
+  st.addEventListener('touchmove', e => { e.preventDefault(); if(!g) return; const p = pts(e);
+    if(g.pinch && p.length===2){ const s = Math.max(1, Math.min(6, g.s * dist(p[0],p[1]) / g.d)), k = s / g.s;
+      vMove(...clamp(s, g.mx - (g.mx - g.x)*k, g.my - (g.my - g.y)*k)); return; }
+    if(g.pinch || p.length!==1) return;
+    const dx = p[0].x - g.x0, dy = p[0].y - g.y0;
+    if(V.s > 1){ vMove(...clamp(V.s, g.x + dx, g.y + dy)); return; }
+    if(!g.dir && Math.hypot(dx,dy) > 8) g.dir = Math.abs(dx) > Math.abs(dy) ? 'x' : dy > 0 ? 'down' : 'up';
+    if(g.dir==='x') vMove(1, dx, 0);
+    else if(g.dir==='down'){ vMove(1 - Math.min(dy/1500, .2), dx*.3, dy); $('#viewer').style.background = `rgba(0,0,0,${Math.max(.3, 1 - dy/400)})`; }
+  }, {passive:false});
+  st.addEventListener('touchend', e => { if(!g) return;
+    if(g.pinch){ if(e.touches.length) return; if(V.s < 1.05) vMove(1,0,0,true); g = null; return; }
+    const dx = V.x - g.x, dy = V.y, fast = Date.now() - g.t < 250;
+    if(g.dir==='x'){ const w = box().width;
+      if((dx < -60 || (fast && dx < -25)) && V.i < V.list.length - 1){ vMove(1, -w, 0, true); setTimeout(() => viewAt(V.i + 1), 160); }
+      else if((dx > 60 || (fast && dx > 25)) && V.i > 0){ vMove(1, w, 0, true); setTimeout(() => viewAt(V.i - 1), 160); }
+      else vMove(1,0,0,true); }
+    else if(g.dir==='down'){ if(dy > 110 || (fast && dy > 40)) closeViewer(); else { vMove(1,0,0,true); $('#viewer').style.background = ''; } }
+    g = null;
+  });
+}
+
+// ---------- swipe down on a sheet's top edge (or anywhere when it's scrolled to the top) closes it ----------
+document.querySelectorAll('.sheet').forEach(sh => { let g = null;
+  sh.addEventListener('touchstart', e => { const t = e.target;
+    if(e.touches.length!==1 || t.closest('input,textarea,select,.seg,.recent,.libgrid button.sel') || (sh.scrollTop > 0 && !t.closest('.grab'))){ g = null; return; }
+    g = {y0:e.touches[0].clientY, x0:e.touches[0].clientX, t:Date.now(), on:false}; }, {passive:true});
+  sh.addEventListener('touchmove', e => { if(!g) return; const dy = e.touches[0].clientY - g.y0, dx = e.touches[0].clientX - g.x0;
+    if(!g.on){ if(Math.abs(dy) < 8 && Math.abs(dx) < 8) return; if(dy <= 0 || Math.abs(dx) > dy){ g = null; return; } g.on = true; sh.style.transition = 'none'; }
+    e.preventDefault(); sh.style.transform = `translateY(${Math.max(0, dy)}px)`; }, {passive:false});
+  sh.addEventListener('touchend', e => { if(!g || !g.on){ g = null; return; } const dy = e.changedTouches[0].clientY - g.y0, fast = Date.now() - g.t < 250;
+    sh.style.transition = ''; g = null;
+    if(dy > 100 || (fast && dy > 40)){ sh.style.transform = 'translateY(105%)'; closeSheets(); setTimeout(() => { sh.style.transform = ''; }, 300); }
+    else sh.style.transform = ''; });
+});
 // a render tapped in the library opens in the preview, with its actions
 $('#recentRow').onclick = e => { const b = e.target.closest('[data-i]'); if(!b) return; show(+b.dataset.i); closeSheets(); S.feedShut = false; save(); drawFeedHead(); scrollTo({top:0, behavior:'smooth'}); };
 // drafts waiting to be picked, under the main list; once sent to finish they leave it (the finished render goes to the library)
@@ -2191,9 +2274,11 @@ $('#libDrafts').onclick = e => $('#libGrid').onclick(e);
 $('#libGrid').onclick = e => {
   const b = e.target.closest('[data-k],[data-d]'); if(!b) return; const i = b.dataset.d!=null ? lib.drafts[+b.dataset.d] : lib.items[+b.dataset.k];
   if(lib.selecting){ const k = libKey(i); lib.picked.has(k) ? lib.picked.delete(k) : lib.picked.add(k); b.classList.toggle('sel'); drawLibBar(); buzz(); return; }
-  lib.cur = i; $('#viewImg').src = viewUrl(i, i.src); $('#viewer').hidden = false;
-  const d = isDraftFile(i) ? draftFor(i) : null; $('#vFinish').hidden = !isDraftFile(i) || !!(d && d.sent);
+  const list = b.dataset.d!=null ? lib.drafts : lib.items.filter(x => !isDraftFile(x));
+  openViewer('lib', list, list.indexOf(i));
 };
+// the library picture shown in the viewer: its buttons follow it as you swipe
+function libShown(i){ lib.cur = i; const d = isDraftFile(i) ? draftFor(i) : null; $('#vFinish').hidden = !isDraftFile(i) || !!(d && d.sent); }
 async function deletePics(list){
   if(!list.length || !confirm('Delete ' + (list.length===1 ? 'this picture' : list.length + ' pictures') + (lib.shared ? '? They go from both computers (Dropbox keeps them in Deleted files).' : '? They move to the "Deleted by Render Deck" folder on the render computer.'))) return false;
   try{ const r = await fetch(base() + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:list.map(i => ({subfolder:i.subfolder, filename:i.filename}))})});
@@ -2205,10 +2290,10 @@ async function deletePics(list){
   }catch(e){ toast('Could not reach the render computer', true); return false; }
 }
 $('#libDelete').onclick = async () => { if(await deletePics((S.libTab==='drafts' ? lib.drafts || [] : lib.items).filter(i => lib.picked.has(libKey(i))))){ lib.selecting = false; drawLibBar(); } };
-$('#vClose').onclick = () => { $('#viewer').hidden = true; };
+$('#vClose').onclick = () => closeViewer();
 $('#vFinish').onclick = async () => { const i = lib.cur, d = draftFor(i) || await finFromFile(i);
   if(!d){ toast('This draft was made before drafts kept their full render. Use its settings to render it again.', true); return; }
-  await finishDrafts([d]); $('#viewer').hidden = true; closeSheets(); };
+  await finishDrafts([d]); closeViewer(); closeSheets(); };
 // a draft this phone has no record of: its full render is read from the picture's own ComfyUI metadata (the "prompt" text chunk)
 async function finFromFile(i){
   try{
@@ -2225,12 +2310,12 @@ async function finFromFile(i){
   }catch(e){}
   return null;
 }
-$('#vRecipe').onclick = async () => { const u = viewUrl(lib.cur, lib.cur.src), g = S.gallery.find(x => x.url===u); if(await useRecipe(g && g.snap, u)){ $('#viewer').hidden = true; closeSheets(); } };
+$('#vRecipe').onclick = async () => { const u = viewUrl(lib.cur, lib.cur.src), g = S.gallery.find(x => x.url===u); if(await useRecipe(g && g.snap, u)){ closeViewer(); closeSheets(); } };
 $('#vOpen').onclick = () => window.open(viewUrl(lib.cur, lib.cur.src), '_blank');
-$('#vDel').onclick = async () => { if(await deletePics([lib.cur])) $('#viewer').hidden = true; };
+$('#vDel').onclick = async () => { if(await deletePics([lib.cur])) closeViewer(); };
 $('#vPic').onclick = () => {
   const i = lib.cur; let b = on1('pic') || S.blocks.find(x => x.type==='pic'); if(!b) b = addBlock('pic', true);
-  b.on = true; b.image = libKey(i) + ' [output]'; b.preview = viewUrl(i, i.src); save(); $('#viewer').hidden = true; closeSheets(); render(); toast('Added as start picture');
+  b.on = true; b.image = libKey(i) + ' [output]'; b.preview = viewUrl(i, i.src); save(); closeViewer(); closeSheets(); render(); toast('Added as start picture');
 };
 
 // ---------- Hidden: a second workstation with its own recipe, strip and renders, saved in Hidden subfolders ----------

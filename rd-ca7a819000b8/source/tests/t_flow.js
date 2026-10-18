@@ -73,8 +73,9 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
         for(let i=1;i<=3;i++) sock.send(JSON.stringify({type:'progress',data:{value:i,max:3,prompt_id:id,node:ks}}));
         const prev = Buffer.concat([Buffer.from([0,0,0,1,0,0,0,2]), PNG]); sock.send(prev);
         const save = Object.keys(body.prompt).find(k => body.prompt[k].class_type==='SaveImage');
-        sock.send(JSON.stringify({type:'executed',data:{node:save,prompt_id:id,output:{images:[{filename:'render_0000'+id.slice(1)+'.png',subfolder:'RenderDeck',type:'output'}]}}}));
-        done[id] = {status:{completed:true}, outputs:{[save]:{images:[{filename:'render_0000'+id.slice(1)+'.png',subfolder:'RenderDeck',type:'output'}]}}};
+        const sub = body.prompt[save].inputs.filename_prefix.split('/').slice(0,-1).join('/'); // saved where the graph says, like ComfyUI
+        sock.send(JSON.stringify({type:'executed',data:{node:save,prompt_id:id,output:{images:[{filename:'render_0000'+id.slice(1)+'.png',subfolder:sub,type:'output'}]}}}));
+        done[id] = {status:{completed:true}, outputs:{[save]:{images:[{filename:'render_0000'+id.slice(1)+'.png',subfolder:sub,type:'output'}]}}};
         sock.send(JSON.stringify({type:'executing',data:{node:null,prompt_id:id}}));
       }, 50);
       return r.fulfill({ json:{prompt_id:id, number:0, node_errors:{}} });
@@ -180,6 +181,27 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   // reuse result as start picture
   // the big picture and the thumbnail strip, all in one section that folds; the library's latest row opens a render there
   ok(await page.isVisible('#shown') && (await page.$$eval('#strip img', x => x.length))===3, 'big picture with thumbnails below');
+  // the picture viewer works like a photo app: tap the picture, swipe sideways for the next one, pinch to zoom, swipe down to close
+  const swipe = (sel, from, to, two) => page.evaluate(([sel, from, to, two]) => { const el = document.querySelector(sel);
+    const T = (x, y, id) => new Touch({identifier:id, target:el, clientX:x, clientY:y});
+    const fire = (type, list) => el.dispatchEvent(new TouchEvent(type, {touches:type==='touchend' ? [] : list, changedTouches:list, bubbles:true, cancelable:true}));
+    const at = f => two ? [T(from[0] - 40 - f*60, from[1], 1), T(from[0] + 40 + f*60, from[1], 2)] : [T(from[0] + (to[0]-from[0])*f, from[1] + (to[1]-from[1])*f, 1)];
+    fire('touchstart', at(0)); for(let k = 1; k <= 6; k++) fire('touchmove', at(k/6)); fire('touchend', at(1)); }, [sel, from, to, two]);
+  await page.click('#shown'); ok(await page.isVisible('#viewer') && (await page.$$eval('#vStrip img', x => x.length))===3 && (await page.textContent('#vInfo'))==='1 / 3', 'tapping the picture opens the viewer with thumbnails');
+  await page.waitForTimeout(350); await swipe('#vStage', [300, 300], [80, 300]); await page.waitForTimeout(400);
+  ok((await page.textContent('#vInfo'))==='2 / 3' && (await page.$eval('#vStrip img.sel', i => i.dataset.v))==='1', 'swiping left shows the next picture');
+  await page.waitForTimeout(350); await swipe('#vStage', [200, 300], [200, 300], true); ok(await page.evaluate(() => V.s > 1.5), 'pinching zooms in');
+  await page.waitForTimeout(350); await page.evaluate(() => vMove(1,0,0)); await swipe('#vStage', [200, 200], [200, 420]); await page.waitForTimeout(300);
+  ok(await page.isHidden('#viewer'), 'swiping down closes the viewer');
+  await page.click('#libBtn'); await page.waitForSelector('#libSheet.open'); await page.waitForTimeout(300);
+  await swipe('#libSheet .grab', [195, 470], [195, 640]); await page.waitForTimeout(300); ok(!(await page.$('#libSheet.open')), 'swiping a menu down closes it');
+  // Hidden gets the same screen: preview with thumbnails, the viewer, draft button, library, folding
+  await page.click('#modeBtn'); ok((await page.textContent('h1 span'))==='Hidden', 'Hidden on');
+  const hBefore = sent.length; await page.click('#goBtn'); await page.waitForFunction(n => S.gallery.length===1, null, {timeout:8000});
+  ok(sent.length===hBefore + 1 && await page.isVisible('#shown') && (await page.$$eval('#strip img', x => x.length))===1 && await page.isVisible('#feedHead') && await page.isVisible('#draftBtn'), 'Hidden has the preview, thumbnails and draft button');
+  await page.click('#shown'); ok(await page.isVisible('#viewer') && (await page.$$eval('#vStrip img', x => x.length))===1, 'Hidden opens the photo viewer');
+  await page.click('#vClose'); await page.click('#libBtn'); await page.waitForSelector('#libSheet.open'); ok((await page.$$eval('#recentRow img', x => x.length))===1, 'Hidden library shows its own latest');
+  await page.evaluate(() => closeSheets()); await page.waitForTimeout(300); await page.click('#modeBtn'); ok((await page.$$eval('#strip img', x => x.length))===3, 'back from Hidden with the normal thumbnails');
   await page.click('#feedHead'); ok(!(await page.isVisible('#shown')) && !(await page.isVisible('#strip')), 'the preview section folds');
   await page.click('#libBtn'); await page.waitForSelector('#libSheet.open'); await page.click('#recentRow [data-i="1"]');
   ok(!(await page.$('#libSheet.open')) && await page.isVisible('#shown') && (await page.$eval('#strip img.sel', i => i.dataset.i))==='1', 'a render tapped in the library opens in the preview');
