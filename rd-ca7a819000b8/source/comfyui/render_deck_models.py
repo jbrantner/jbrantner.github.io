@@ -33,6 +33,7 @@ KINDS = ('checkpoints', 'loras')
 CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites share one API and the same model ids
 HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
+SYNC_MBPS = 15  # copies between your computers are held to about this many MB a second, so the WiFi stays usable
 routes = PromptServer.instance.routes
 
 
@@ -111,8 +112,16 @@ async def _civitai(session, url):
                 base=v.get('baseModel', ''), words=v.get('trainedWords') or [], title=((v.get('model') or {}).get('name') if vid else meta.get('name')) or '')
 
 
+async def _pace(started, sent):
+    """Sleep as long as it takes to keep a copy between computers at SYNC_MBPS."""
+    ahead = sent / (SYNC_MBPS * 1024**2) - (time.time() - started)
+    if ahead > 0:
+        await asyncio.sleep(ahead)
+
+
 async def _download(j, file_url, path):
     tmp = path + '.part'
+    started = time.time()
     try:
         headers = {'Authorization': 'Bearer ' + _token()} if _token() and any(c in file_url for c in CIVITAI) else {}
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_read=120)) as s:
@@ -128,6 +137,8 @@ async def _download(j, file_url, path):
                     async for chunk in r.content.iter_chunked(1 << 20):
                         out.write(chunk)
                         j['done'] += len(chunk)
+                        if j.get('source'):  # a copy from your other computer: gently
+                            await _pace(started, j['done'])
                         if j.get('cancel'):
                             raise ValueError('Stopped')
         os.replace(tmp, path)
@@ -409,9 +420,12 @@ async def model_file(request):
     resp = web.StreamResponse(headers={'Content-Type': 'application/octet-stream', 'Content-Length': str(os.path.getsize(path))})
     await resp.prepare(request)
     loop = asyncio.get_running_loop()
+    started, sent = time.time(), 0
     with open(path, 'rb') as f:  # not FileResponse: on Windows its sendfile sends nothing for files over 2 GB, and checkpoints are bigger
-        while chunk := await loop.run_in_executor(None, f.read, 1 << 22):
+        while chunk := await loop.run_in_executor(None, f.read, 1 << 20):
             await resp.write(chunk)
+            sent += len(chunk)
+            await _pace(started, sent)  # held to SYNC_MBPS, whichever computer's helper is the newer one
     return resp
 
 
@@ -483,7 +497,7 @@ async def sync(request):
 # The phone adds renders here (on the computer that is always on) and can then close. Every couple of seconds this
 # looks at each computer's ComfyUI; one with nothing to do gets the next render it can run. A computer missing a
 # checkpoint or LoRA is asked to copy it from another (the sync above), and the computers' models are compared
-# every few minutes so a new model ends up on all of them. The queue is saved to render_deck_farm.json, so it
+# when one comes online and every half hour, so a new model ends up on all of them (copied one file at a time, at SYNC_MBPS). The queue is saved to render_deck_farm.json, so it
 # survives a restart.
 FARM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_farm.json')
 FARM = {'pcs': [], 'off': [], 'jobs': [], 'done': []}  # pcs: [{url, name}]; jobs: waiting/sent/running; done: finished or failed, newest last
@@ -729,8 +743,8 @@ async def _farm_round(s):
                 st['pending'] = [j['prompt_id']]
             changed = True
             break
-    # every few minutes, and when a computer comes online, the computers copy each other's models
-    if len([u for u in pcs if _st(u)['online']]) > 1 and any(_st(u)['online'] and time.time() - _st(u)['synced_at'] > 600 for u in pcs):
+    # when a computer comes online and every half hour, the computers copy each other's missing models (paced)
+    if len([u for u in pcs if _st(u)['online']]) > 1 and any(_st(u)['online'] and time.time() - _st(u)['synced_at'] > 1800 for u in pcs):
         await _sync_all(s)
     if changed:
         _farm_save()
