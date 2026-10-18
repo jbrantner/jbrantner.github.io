@@ -80,8 +80,7 @@ const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message));
   // connect to Main, then to Render: both are remembered, Render drives the recipe
   for(const pc of [M, R]){ await page.click('#openSettings'); await page.fill('#server', pc.url); await page.click('#connectBtn'); await until(() => document.querySelector('#connDot').classList.contains('on')); }
   ok(await page.evaluate(() => S.servers.map(x => x.name).join())==='Main,Render', 'both computers remembered');
-  ok(await waitFor(() => M.syncs.includes(R.url)), 'Main is asked to copy what Render has, without tapping Sync');
-  ok(M.copies.some(c => c.name==='afkj.safetensors'), "Main starts copying Render's LoRA it lacks");
+  ok(!M.syncs.length && !R.syncs.length, 'no copying just because the app connected');
 
   // a render needing that LoRA goes to Render while Main is still copying it; once it lands, Main takes the waiting one
   DUR = 5000;
@@ -92,6 +91,8 @@ const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message));
   await until(() => S.queue.length===2 && S.queue.every(e => e.state!=='sending'));
   ok(R.prompts.length===2 && M.prompts.length===0, 'Main lacks the LoRA, so both go to Render: Render ' + R.prompts.length + ', Main ' + M.prompts.length);
   ok((await page.textContent('#goBtn'))==='Add to queue', 'Render button says Add to queue while rendering');
+  ok(await waitFor(() => M.syncs.includes(R.url)), 'a render needing the LoRA asks Main to copy what Render has');
+  ok(M.copies.some(c => c.name==='afkj.safetensors'), "Main starts copying Render's LoRA it lacks");
   landCopy = true;
   ok(await waitFor(() => M.prompts.length===1, 12000), 'after the copy lands, free Main takes the render waiting on Render');
   ok(R.deleted.length===1 && M.prompts[0] && JSON.stringify(M.prompts[0].graph).includes('afkj.safetensors'), 'it was taken out of Render\'s line and sent to Main with the LoRA');

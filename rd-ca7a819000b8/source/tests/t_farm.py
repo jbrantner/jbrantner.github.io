@@ -132,7 +132,7 @@ async def main():
         ok(len([d for d in v['done'] if d['key'].startswith('a') and d['state'] == 'done']) == 4, 'four renders come back done')
         ok(len(R.prompts) >= 1 and len(M.prompts) >= 1, 'both computers took renders: Render %d, Main %d' % (len(R.prompts), len(M.prompts)))
         ok(all(d['images'] for d in v['done']), 'each finished render lists its pictures')
-        ok(MU in R.syncs or RU in M.syncs, 'the computers were asked to share models')
+        ok(not R.syncs and not M.syncs, 'no copying while every computer has what the renders need')
 
         m0, r0 = len(M.prompts), len(R.prompts)
         await add(2, 'afkj.safetensors', 'b')

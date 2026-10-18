@@ -496,8 +496,8 @@ async def sync(request):
 # ---------- the render farm: one queue that hands renders to whichever of your computers is free ----------
 # The phone adds renders here (on the computer that is always on) and can then close. Every couple of seconds this
 # looks at each computer's ComfyUI; one with nothing to do gets the next render it can run. A computer missing a
-# checkpoint or LoRA is asked to copy it from another (the sync above), and the computers' models are compared
-# every half hour, so a new model ends up on all of them (copied one file at a time, at SYNC_MBPS). The queue is saved to render_deck_farm.json, so it
+# checkpoint or LoRA is asked to copy it from another (the sync above, one file at a time, at SYNC_MBPS, and only
+# when Tailscale reaches the other computer directly, not through a relay). The queue is saved to render_deck_farm.json, so it
 # survives a restart.
 FARM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_farm.json')
 FARM = {'pcs': [], 'off': [], 'jobs': [], 'done': []}  # pcs: [{url, name}]; jobs: waiting/sent/running; done: finished or failed, newest last
@@ -533,7 +533,7 @@ def _tailnet(url):
 
 def _st(url):
     return PCSTATE.setdefault(url, {'online': False, 'running': [], 'pending': [], 'oi': None, 'oi_at': 0, 'models': None,
-                                    'lists_at': 0, 'synced_at': 0, 'copies': [], 'why': '', 'asked': 0})
+                                    'lists_at': 0, 'synced_at': time.time(), 'copies': [], 'why': '', 'asked': 0})
 
 
 def _combo(spec):
@@ -626,7 +626,30 @@ async def _look(s, url):
             pass
 
 
+_DIRECT = {}  # host -> (checked at, direct?)
+
+
+async def _direct(url):
+    """True unless Tailscale says the way to that computer goes through a relay (then copies would use the internet upload)."""
+    host = urlparse(url).hostname or ''
+    at, ok = _DIRECT.get(host, (0, True))
+    if time.time() - at < 600:
+        return ok
+    exe = shutil.which('tailscale') or r'C:\Program Files\Tailscale\tailscale.exe'
+    try:
+        p = await asyncio.create_subprocess_exec(exe, 'ping', '-c', '3', '--timeout', '3s', host.split('.')[0],
+                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out = (await asyncio.wait_for(p.communicate(), 20))[0].decode(errors='replace')
+        ok = 'via DERP' not in out or 'via ' in out.replace('via DERP', '')  # a direct answer after a relayed one counts
+    except Exception:
+        ok = True  # no tailscale command here: the 2 MB/s cap still holds
+    _DIRECT[host] = (time.time(), ok)
+    return ok
+
+
 async def _sync_pair(s, dst, src):
+    if not (await _direct(src) and await _direct(dst)):
+        return  # relayed: a big copy would go out through the internet connection
     try:
         status, j = await _post(s, dst + '/renderdeck/sync', {'source': src})
         if status == 200 and j.get('queued'):
@@ -634,16 +657,6 @@ async def _sync_pair(s, dst, src):
             _st(dst)['lists_at'] = 0
     except Exception:
         pass
-
-
-async def _sync_all(s):
-    on = [p['url'] for p in FARM['pcs'] if _st(p['url'])['online']]
-    for dst in on:
-        for src in on:
-            if dst != src:
-                await _sync_pair(s, dst, src)
-    for u in on:
-        _st(u)['synced_at'] = time.time()
 
 
 async def _copy_pictures(s, graph, home, url, key):
@@ -719,7 +732,7 @@ async def _farm_round(s):
             if job['state'] != 'waiting':
                 continue
             graph, missing, why = _fit(u, job)
-            if missing and not why and time.time() - st['asked'] > 60:
+            if missing and not why and time.time() - st['asked'] > 1800:  # at most every half hour, so a failed copy doesn't start again at once
                 st['asked'] = time.time()
                 await _sync_pair(s, u, job['home'])
             if graph is None or missing or why:
@@ -741,9 +754,8 @@ async def _farm_round(s):
                 st['pending'] = [j['prompt_id']]
             changed = True
             break
-    # every half hour, the computers copy each other's missing models (paced)
-    if len([u for u in pcs if _st(u)['online']]) > 1 and any(_st(u)['online'] and time.time() - _st(u)['synced_at'] > 1800 for u in pcs):
-        await _sync_all(s)
+    # No timed compare for now: copies only start when a render needs a model a computer lacks (above), or from
+    # the app's Check now. A timed one, started again after each WiFi drop, is the suspect for the house WiFi dropping.
     if changed:
         _farm_save()
 
