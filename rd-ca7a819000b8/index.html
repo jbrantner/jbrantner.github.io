@@ -43,6 +43,12 @@ header h1 span{color:var(--accent)}
 .icon{width:40px;height:40px;border-radius:12px;background:var(--panel);border:1px solid var(--line);display:grid;place-items:center;font-size:18px;color:var(--soft)}
 
 /* stage */
+.pcs{display:flex;gap:8px;margin:-4px 0 10px}
+.pcs button{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:12px;background:var(--panel);border:1px solid var(--line);text-align:left}
+.pcs b{display:block;font-size:13.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcs small{display:block;font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcs .dot{flex:none}
+.pcs .busy small{color:var(--cyan)}
 .stage{position:relative;aspect-ratio:1;border-radius:var(--r);overflow:hidden;border:1px solid var(--line);background:
   repeating-conic-gradient(#1a1c22 0 25%,#16171c 0 50%) 0 0/24px 24px}
 .stage img{width:100%;height:100%;object-fit:contain;display:block}
@@ -225,6 +231,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
     <button class="icon" id="libBtn" aria-label="All renders">🗂</button>
     <button class="icon" id="openSettings" aria-label="Settings">⚙</button>
   </header>
+  <div class="pcs" id="pcStrip" hidden></div>
 
   <div class="stage" id="stage">
     <div class="empty" id="empty"><div><b>Build a recipe, hit Render</b>Your picture lands here.<br>Tap ⚙ to connect your render computer, or try Test mode.</div></div>
@@ -357,7 +364,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.6'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.7'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -796,7 +803,7 @@ async function go(){
   const had = S.queue.length;
   if(usesTags()) await loadTags(); // Send as tags and added tags need the tag list before the graph is built
   buzz();
-  if(!S.test){ if(!had) status('Sending…'); await Promise.all(allPcs().map(x => pollPc(x))); }
+  if(!S.test){ if(!had) status('Sending…'); await findFarm(); if(!farm) await Promise.all(allPcs().map(x => pollPc(x))); }
   const tap = Date.now().toString(36);
   let added = 0;
   for(let i = 0; i < runs; i++){
@@ -805,10 +812,13 @@ async function go(){
     const e = {key:tap + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : base(), state:'sending',
       graph:built.graph, titles:built.titles, seed:built.seed, prompt:S.prompt, ckpt:M.ckpt, n:i+1, of:runs, images:[], snap:snapshot(built.seed),
       size:sizeOf(P), pics:on1('pic') ? 1 : S.batch, steps:P.steps};
+    if(farm){ e.farm = true; e.state = 'waiting'; }
     S.queue.push(e); save();
-    if(!S.test){ const err = await dispatch(e); if(err){ S.queue = S.queue.filter(q => q!==e); save(); failAll(err); break; } }
+    if(!S.test && !farm){ const err = await dispatch(e); if(err){ S.queue = S.queue.filter(q => q!==e); save(); failAll(err); break; } }
     added++;
   }
+  if(farm && added){ const mine = S.queue.slice(-added), err = await farmAdd(mine);
+    if(err){ S.queue = S.queue.filter(q => !mine.includes(q)); save(); failAll(err); added = 0; } }
   P.seed = first; save(); renderBlocks(); drawGo(); drawStatus(); drawQueue();
   if(added && had) toast(added > 1 ? added + ' renders added to the queue' : 'Added to the queue');
   if(S.test) testRun(); else schedule(1500);
@@ -910,9 +920,11 @@ async function tick(away){
   if(S.test || !info || ticking) return; ticking = true;
   try{
     await Promise.all(allPcs().map(p => pollPc(p)));
+    await findFarm();
+    if(farm) await farmLook(away);
     let back = 0;
     for(const e of S.queue.slice()){
-      if(e.moving || !e.srv || !['sent','running'].includes(e.state)) continue;
+      if(e.farm || e.moving || !e.srv || !['sent','running'].includes(e.state)) continue;
       const p = pcOf(e.srv); if(!p.online || p.polledAt < (e.sentAt || 0) + 1500) continue;
       if(p.running.includes(e.id)){ e.state = 'running'; continue; }
       if(p.pending.includes(e.id)){ e.state = 'sent'; continue; }
@@ -924,14 +936,17 @@ async function tick(away){
       }catch(err){}
     }
     if(back && away) toast(back + (back > 1 ? ' renders' : ' render') + ' finished while you were away ✨');
-    await watchCopies();
-    for(const e of S.queue.filter(q => q.state==='waiting')){ const err = await dispatch(e); if(err) failOne(e, err); }
-    await balance();
+    if(!farm) await watchCopies();
+    for(const e of S.queue.filter(q => q.state==='waiting' && !q.farm)){ const err = await dispatch(e); if(err) failOne(e, err); }
+    if(!farm) await balance();
   }finally{ ticking = false; }
   drawGo(); drawStatus(); drawQueue();
+  // busy: look often; idle: just keep the computers' status at the top fresh while the app is on screen
   if(S.queue.length || allPcs().some(p => p.copies.length)) schedule(3000);
+  else if(document.visibilityState==='visible') schedule(10000);
 }
 function drawGo(){
+  drawPcs();
   const n = S.queue.length;
   $('#goBtn').textContent = n ? 'Add to queue' : 'Render';
   $('#qCount').textContent = n || '☰'; $('#qLabel').textContent = n ? 'queued' : 'queue'; $('#queueBtn').classList.toggle('on', !!n);
@@ -947,7 +962,9 @@ function drawStatus(){
 }
 async function completeOne(e, quiet, h){
   if(!S.queue.includes(e)) return;
-  S.queue = S.queue.filter(q => q!==e); save();
+  S.queue = S.queue.filter(q => q!==e);
+  if(e.farm){ S.farmSeen = (S.farmSeen || []).concat(e.key).slice(-300); schedule(800); } // so the farm's own report of it isn't shown twice
+  save();
   if(!e.images.length){ try{ h = h || (await (await fetch(e.srv + '/history/' + e.id)).json())[e.id];
     for(const id in (h && h.outputs) || {}) (h.outputs[id].images||[]).forEach(i => { if(i.type==='output') e.images.push(i); }); }catch(err){} }
   e.images.forEach(i => S.gallery.unshift({url:viewUrl(i, e.srv), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}));
@@ -968,7 +985,8 @@ function explain(j, titles){
 // cancel one render: out of its computer's line, or stopped if it's the one painting now (never someone else's)
 function cancelJob(e){
   S.queue = S.queue.filter(q => q!==e); save();
-  if(e.srv && e.srv!=='test' && e.id){
+  if(e.farm){ farmCall('/cancel', {keys:[e.key]}); }
+  else if(e.srv && e.srv!=='test' && e.id){
     const p = pcOf(e.srv);
     fetch(p.url + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:[e.id]})}).catch(()=>{});
     fetch(p.url + '/queue', {cache:'no-store'}).then(r => r.json()).then(q => {
@@ -1009,7 +1027,7 @@ async function syncAll(){
   return {got, errs};
 }
 function autoSync(now){
-  if(S.test || syncing || allPcs().filter(p => p.online).length < 2 || (!now && Date.now() - syncedAt < 60000)) return;
+  if(S.test || farm || syncing || allPcs().filter(p => p.online).length < 2 || (!now && Date.now() - syncedAt < 60000)) return;
   syncing = syncAll().then(r => { syncing = null; if(r.got.length) toast('Sharing models: copying ' + r.got.join(', ')); drawQueue(); });
 }
 // copies in progress on each computer; when one lands, that computer's lists are read again so renders can use it
@@ -1028,6 +1046,87 @@ async function refreshLoaders(p){
   if(p.url===base() && info && p.oi){ info.ckpt = combo(p.oi.CheckpointLoaderSimple,'ckpt_name'); info.lora = combo(p.oi.LoraLoader,'lora_name'); renderBlocks(); }
 }
 
+// ---------- the farm: the queue kept by the helper on the computer that's always on ----------
+// With the newest helper on it, the render computer named Render keeps the queue itself and hands each render to
+// whichever computer is free, and keeps their models matched, with the app closed. The app adds renders, cancels
+// them, and shows what's happening. Without it, the app does the same itself while it's open (above).
+let farm = null, farmAt = 0, farmPcsAt = 0, farmAsked = '';
+function farmHost(){ const r = S.servers.find(x => x.name==='Render'); return r ? r.url : base(); }
+const tailnet = u => /^https:\/\/[^/]+\.ts\.net$/i.test(u || '');
+async function findFarm(){
+  if(S.test || !tailnet(base())){ farm = null; return; }
+  const h = farmHost();
+  if(h===farmAsked && Date.now() - farmAt < (farm ? 300000 : 60000)) return;
+  farmAsked = h;
+  try{ const r = await fetch(h + '/renderdeck/farm?since=' + (S.farmSince || 0), Object.assign({cache:'no-store'}, within(6000)));
+    farmAt = Date.now();
+    if(!r.ok){ farm = null; return; }
+    const v = await r.json(); if(!v.farm){ farm = null; return; }
+    const was = farm; farm = h; farmView(v, true);
+    if(!was || Date.now() - farmPcsAt > 300000){ farmPcsAt = Date.now(); farmCall('/pcs', farmPcs()); } // tell it which computers there are
+  }catch(e){ if(farm && !pcOf(h).online) farm = null; }
+}
+function farmPcs(){ return {pcs:S.servers.filter(x => tailnet(x.url)).map(x => ({url:x.url, name:x.name})), off:S.pcOff}; }
+async function farmCall(path, body){
+  try{ const r = await fetch(farm + '/renderdeck/farm' + path, {method:'POST', headers:JSONH, body:JSON.stringify(body)}); const j = await r.json(); if(j.pcs) farmView(j); return j; }
+  catch(e){ return {error:'Could not reach ' + pcName(farm) + ', which keeps the queue'}; }
+}
+async function farmAdd(list){
+  const j = await farmCall('/add', Object.assign(farmPcs(), {jobs:list.map(e => ({key:e.key, graph:e.graph, home:e.home, client_id:clientId, prompt:e.prompt, seed:e.seed, ckpt:e.ckpt, n:e.n, of:e.of}))}));
+  if(j.error) return j.error;
+  list.forEach(e => { delete e.graph; }); save(); // the farm keeps the graph; the app only needs what it shows
+  schedule(1500); return '';
+}
+async function farmLook(away){
+  try{ const r = await fetch(farm + '/renderdeck/farm?since=' + (S.farmSince || 0), Object.assign({cache:'no-store'}, within(6000)));
+    farmView(await r.json(), away); }catch(e){}
+}
+// the farm's state into the app: computers, renders in line, and the ones that finished or failed since the last look
+function farmView(v, away){
+  if(!v || !v.pcs) return;
+  v.pcs.forEach(x => { const p = pcOf(x.url); p.copies = x.copies || []; p.why = x.why || ''; });
+  if(!v.jobs) return;
+  S.farmSeen = S.farmSeen || [];
+  const live = new Map(v.jobs.map(j => [j.key, j]));
+  v.jobs.forEach(j => {
+    if(S.farmSeen.includes(j.key)) return; // collected already through the computer's own socket
+    let e = S.queue.find(q => q.key===j.key);
+    if(!e){ e = {key:j.key, farm:true, titles:{}, images:[], prompt:j.prompt, seed:j.seed, ckpt:j.ckpt, n:j.n, of:j.of, home:j.home}; S.queue.push(e); }
+    if(e.srv!==j.srv || e.id!==j.id) e.prog = null;
+    else if(e.state==='running' && j.state==='sent') return; // the computer's socket already said it started
+    Object.assign(e, {state:j.state, srv:j.srv, id:j.id});
+  });
+  let back = 0;
+  (v.done || []).forEach(j => {
+    if(S.farmSeen.includes(j.key)) return;
+    const e = S.queue.find(q => q.key===j.key) || {key:j.key, farm:true, prompt:j.prompt, seed:j.seed, images:[]};
+    if(j.state==='done'){ e.srv = j.srv; e.id = j.id; e.images = j.images || []; S.queue.includes(e) || S.queue.push(e); completeOne(e, true); back++; }
+    else { S.farmSeen.push(j.key); failOne(e, j.error || 'The render failed'); }
+  });
+  S.queue = S.queue.filter(e => !e.farm || live.has(e.key) || e.state==='sending'); // cancelled from another phone
+  S.farmSeen = S.farmSeen.slice(-300); S.farmSince = Math.max(0, (v.now || 0) - 600); save();
+  if(back && away) toast(back + (back > 1 ? ' renders' : ' render') + ' finished while you were away ✨');
+  drawGo(); drawStatus(); drawQueue();
+}
+
+// ---------- your computers at the top: on or off, and what each is doing ----------
+function pcWhat(p, long){
+  const mine = S.queue.find(e => e.srv===p.url && e.state==='running'), off = S.pcOff.includes(p.url);
+  let w = !p.online ? (long ? 'Not reachable' : 'Offline') : mine ? (mine.prog ? mine.prog.text : 'Starting') + (off && long ? ', then stops taking renders' : '')
+    : off ? (long ? 'Not taking renders' : 'Switched off') : p.load ? (long ? 'Busy with something else' : 'Busy') : 'Free';
+  if(p.copies.length) w += long ? ' · copying ' + p.copies.map(c => c.name + (c.total ? ' ' + Math.round(c.done/c.total*100) + '%' : '')).join(', ') : ' · copying models';
+  if(long && p.why && p.online && !mine) w += ' · ' + p.why;
+  return w;
+}
+function drawPcs(){
+  const ps = allPcs(), el = $('#pcStrip');
+  el.hidden = ps.length < 2;
+  if(el.hidden) return;
+  el.innerHTML = ps.map(p => { const run = S.queue.some(e => e.srv===p.url && e.state==='running');
+    return `<button data-strip="${esc(p.url)}" class="${run ? 'busy' : ''}"><i class="dot ${p.online ? 'on' : ''}"></i><span style="min-width:0"><b>${esc(pcName(p.url))}</b><small>${esc(pcWhat(p))}</small></span></button>`; }).join('');
+}
+$('#pcStrip').onclick = () => $('#queueBtn').onclick();
+
 // ---------- the queue list ----------
 const openJobs = new Set(); // renders whose live preview is shown big
 let qTimer = 0;
@@ -1039,15 +1138,13 @@ function drawQueue(){
   $('#qHead').textContent = S.queue.length ? S.queue.length + ' to go' : '';
   $('#qCancelAll').hidden = !S.queue.length;
   $('#pcList').innerHTML = ps.length > 1 ? ps.map(p => {
-    const mine = S.queue.find(e => e.srv===p.url && e.state==='running'), off = S.pcOff.includes(p.url);
-    let what = !p.online ? 'Not reachable' : mine ? (mine.prog ? mine.prog.text : 'Starting') + (off ? ', then stops taking renders' : '') : off ? 'Not taking renders' : p.load ? 'Busy with something else' : 'Free';
-    if(p.copies.length) what += ' · copying ' + p.copies.map(c => c.name + (c.total ? ' ' + Math.round(c.done/c.total*100) + '%' : '')).join(', ');
+    const off = S.pcOff.includes(p.url), what = pcWhat(p, true);
     return `<div class="pcrow"><i class="dot ${p.online ? 'on' : ''}"></i><div class="grow"><b>${esc(pcName(p.url))}</b><small>${esc(what)}</small>${p.syncNote ? `<small class="warn">${esc(p.syncNote)}</small>` : ''}</div>
       <button class="tog ${off ? '' : 'on'}" data-pc="${esc(p.url)}" style="--c:var(--cyan)" aria-label="Let ${esc(pcName(p.url))} take renders"></button></div>`; }).join('') : '';
   $('#qList').innerHTML = S.queue.length ? S.queue.map(e => {
-    const p = e.srv && e.srv!=='test' ? pcOf(e.srv) : null, where = pcName(e.srv || e.home), run = e.state==='running', big = run && openJobs.has(e.key);
-    const pos = p ? p.pending.indexOf(e.id) : -1;
-    const what = run ? (e.prog ? e.prog.text : 'Starting') : e.state==='waiting' ? 'Waiting for a model to finish copying' : e.state==='sending' ? 'Sending' : pos > 0 ? '#' + (pos + 1) + ' in line' : 'Next';
+    const p = e.srv && e.srv!=='test' ? pcOf(e.srv) : null, where = e.srv ? pcName(e.srv) : e.farm ? 'Next free computer' : pcName(e.home), run = e.state==='running', big = run && openJobs.has(e.key);
+    const pos = e.farm ? S.queue.filter(q => q.farm && q.state==='waiting').indexOf(e) + 1 : p ? p.pending.indexOf(e.id) : -1;
+    const what = run ? (e.prog ? e.prog.text : 'Starting') : e.farm ? (e.state==='sent' ? 'Starting' : pos > 1 ? '#' + pos + ' in line' : 'Next') : e.state==='waiting' ? 'Waiting for a model to finish copying' : e.state==='sending' ? 'Sending' : pos > 0 ? '#' + (pos + 1) + ' in line' : 'Next';
     const pv = run ? (p ? p.preview : '') : '';
     return `<div class="job qjob ${e.state} ${big ? 'big' : ''}" data-job="${esc(e.key)}"><div class="jrow">
       ${run ? `<img class="jthumb" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="" ${pv ? '' : 'hidden'}>` : ''}
@@ -1059,7 +1156,8 @@ function drawQueue(){
 }
 $('#queueBtn').onclick = () => { openSheet('#queueSheet'); drawQueue(); if(S.queue.length) tick(); };
 $('#pcList').onclick = e => { const t = e.target.closest('[data-pc]'); if(!t) return; const u = t.dataset.pc;
-  S.pcOff = S.pcOff.includes(u) ? S.pcOff.filter(x => x!==u) : S.pcOff.concat(u); save(); drawQueue(); buzz(); if(S.queue.length) tick(); };
+  S.pcOff = S.pcOff.includes(u) ? S.pcOff.filter(x => x!==u) : S.pcOff.concat(u); save(); drawQueue(); buzz();
+  if(farm) farmCall('/pcs', farmPcs()); if(S.queue.length) tick(); };
 $('#qList').onclick = e => {
   const c = e.target.closest('[data-cancel]'); if(c){ const j = S.queue.find(q => q.key===c.dataset.cancel); if(j){ cancelJob(j); toast('Cancelled'); buzz(); } return; }
   const r = e.target.closest('.qjob.running'); if(r){ const k = r.dataset.job; openJobs.has(k) ? openJobs.delete(k) : openJobs.add(k); drawQueue(); }

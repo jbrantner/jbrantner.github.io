@@ -11,6 +11,8 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
   POST /renderdeck/sync {source}              -> copy the models and LoRAs another computer has and this one lacks
+  GET  /renderdeck/farm, POST /renderdeck/farm/add|cancel|pcs -> the render farm queue: renders go to whichever of your
+                                               computers is free, even with the phone app closed (render_deck_farm.json)
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
 civitai.com, huggingface.co and your own computers' Tailscale (.ts.net) addresses, and an existing file is never overwritten.
 Civitai models that need sign-in: put your Civitai API key in the CIVITAI_API_TOKEN environment variable,
@@ -20,7 +22,7 @@ subfolder named in render_deck_pc.txt next to this file (or the computer's name)
 without their file numbers clashing, and each computer's renders browser shows them all.
 Copyright (c) 2026 Jordan Brantner. All rights reserved.
 """
-import asyncio, os, re, shutil, socket, time, uuid
+import asyncio, json, os, re, shutil, socket, time, uuid
 from urllib.parse import urlparse, parse_qs, quote, unquote
 import aiohttp
 from aiohttp import web
@@ -472,6 +474,380 @@ async def sync(request):
     except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
 
+
+# ---------- the render farm: one queue that hands renders to whichever of your computers is free ----------
+# The phone adds renders here (on the computer that is always on) and can then close. Every couple of seconds this
+# looks at each computer's ComfyUI; one with nothing to do gets the next render it can run. A computer missing a
+# checkpoint or LoRA is asked to copy it from another (the sync above), and the computers' models are compared
+# every few minutes so a new model ends up on all of them. The queue is saved to render_deck_farm.json, so it
+# survives a restart.
+FARM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_farm.json')
+FARM = {'pcs': [], 'off': [], 'jobs': [], 'done': []}  # pcs: [{url, name}]; jobs: waiting/sent/running; done: finished or failed, newest last
+PCSTATE = {}  # url -> {online, running, pending, oi, oi_at, models, synced_at, copies, why}
+_farm_task = None
+_farm_wake = None
+
+
+def _farm_load():
+    try:
+        with open(FARM_FILE, encoding='utf-8') as f:
+            FARM.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+
+
+def _farm_save():
+    try:
+        tmp = FARM_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(FARM, f)
+        os.replace(tmp, FARM_FILE)
+    except OSError:
+        pass
+
+
+def _tailnet(url):
+    u = urlparse(url or '')
+    if u.scheme != 'https' or not (u.hostname or '').lower().endswith('.ts.net'):
+        raise ValueError('Computers are reached by their Tailscale https addresses')
+    return url.strip().rstrip('/')
+
+
+def _st(url):
+    return PCSTATE.setdefault(url, {'online': False, 'running': [], 'pending': [], 'oi': None, 'oi_at': 0, 'models': None,
+                                    'lists_at': 0, 'synced_at': 0, 'copies': [], 'why': '', 'asked': 0})
+
+
+def _combo(spec):
+    if not spec:
+        return []
+    if isinstance(spec[0], list):
+        return spec[0]
+    if spec[0] == 'COMBO' and len(spec) > 1 and isinstance(spec[1], dict):
+        return spec[1].get('options') or []
+    return []
+
+
+def _base(name):
+    return re.split(r'[\\/]', str(name))[-1]
+
+
+LOADERS = {('CheckpointLoaderSimple', 'ckpt_name'): 'checkpoints', ('LoraLoader', 'lora_name'): 'loras'}
+
+
+def _fit(url, job):
+    """Can this computer run the job? (its own copy of the graph with file names matched, models it lacks, why not)"""
+    graph = json.loads(json.dumps(job['graph']))
+    if url == job['home']:
+        return graph, [], ''  # built from this computer's own lists
+    oi = _st(url)['oi']
+    if not oi:
+        return None, [], 'not connected'
+    missing, why = [], ''
+    for n in graph.values():
+        d = oi.get(n.get('class_type'))
+        if not d:
+            why = 'has no ' + str(n.get('class_type')) + ' node'
+            continue
+        inp = d.get('input') or {}
+        for k, v in list((n.get('inputs') or {}).items()):
+            if not isinstance(v, str) or (n['class_type'] == 'LoadImage' and k == 'image'):
+                continue
+            opts = _combo((inp.get('required') or {}).get(k) or (inp.get('optional') or {}).get(k))
+            if not opts or v in opts:
+                continue
+            same = next((o for o in opts if _base(o).lower() == _base(v).lower()), None)
+            if same:
+                n['inputs'][k] = same
+                continue
+            kind = LOADERS.get((n['class_type'], k))
+            if kind and v.lower().endswith('.safetensors'):
+                missing.append({'kind': kind, 'name': _base(v)})
+            else:
+                why = 'has no ' + _base(v)
+    return graph, missing, why
+
+
+async def _get(s, url, timeout=6):
+    async with s.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+        if r.status != 200:
+            raise aiohttp.ClientError(str(r.status))
+        return await r.json(content_type=None)
+
+
+async def _post(s, url, body, timeout=30):
+    async with s.post(url, json=body, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+        return r.status, await r.json(content_type=None)
+
+
+async def _look(s, url):
+    st = _st(url)
+    try:
+        q = await _get(s, url + '/queue')
+        st['running'] = [x[1] for x in q.get('queue_running', [])]
+        st['pending'] = [x[1] for x in q.get('queue_pending', [])]
+        if not st['oi'] or time.time() - st['oi_at'] > 600:
+            st['oi'] = await _get(s, url + '/object_info', 30)
+            st['oi_at'] = time.time()
+        elif time.time() - st['lists_at'] > 30:  # new models show up in the loader lists
+            for node in ('CheckpointLoaderSimple', 'LoraLoader'):
+                st['oi'][node] = (await _get(s, url + '/object_info/' + node)).get(node) or st['oi'].get(node)
+            st['lists_at'] = time.time()
+        if not st['online']:
+            st['synced_at'] = 0  # just came online: compare models now
+        st['online'] = True
+    except Exception:
+        st['online'] = False
+    if st['online'] and st['copies']:
+        try:
+            jobs = (await _get(s, url + '/renderdeck/jobs')).get('jobs', [])
+            before = len(st['copies'])
+            st['copies'] = [{'name': x['name'], 'done': x.get('done', 0), 'total': x.get('total', 0)}
+                            for x in jobs if x.get('source') and x.get('status') not in ('done', 'failed')]
+            if len(st['copies']) < before:
+                st['lists_at'] = 0
+        except Exception:
+            pass
+
+
+async def _sync_pair(s, dst, src):
+    try:
+        status, j = await _post(s, dst + '/renderdeck/sync', {'source': src})
+        if status == 200 and j.get('queued'):
+            _st(dst)['copies'] += [{'name': n, 'done': 0, 'total': 0} for n in j['queued']]
+            _st(dst)['lists_at'] = 0
+    except Exception:
+        pass
+
+
+async def _sync_all(s):
+    on = [p['url'] for p in FARM['pcs'] if _st(p['url'])['online']]
+    for dst in on:
+        for src in on:
+            if dst != src:
+                await _sync_pair(s, dst, src)
+    for u in on:
+        _st(u)['synced_at'] = time.time()
+
+
+async def _copy_pictures(s, graph, home, url, key):
+    for n in graph.values():
+        if n.get('class_type') != 'LoadImage':
+            continue
+        name, kind = n['inputs']['image'], 'input'
+        if name.endswith(' [output]'):
+            name, kind = name[:-9], 'output'
+        sub, _, file = name.rpartition('/')
+        async with s.get(home + '/view', params={'filename': file, 'subfolder': sub, 'type': kind}) as r:
+            if r.status != 200:
+                raise ValueError('could not get the picture ' + file)
+            data = await r.read()
+        form = aiohttp.FormData()
+        form.add_field('image', data, filename='rd-' + key + '-' + file)
+        form.add_field('overwrite', 'true')
+        form.add_field('type', 'input')
+        async with s.post(url + '/upload/image', data=form) as r:
+            u = await r.json(content_type=None)
+        n['inputs']['image'] = (u['subfolder'] + '/' if u.get('subfolder') else '') + u['name']
+
+
+def _finish(job, status, **kw):
+    job.update(kw, state=status, t_done=time.time())
+    FARM['jobs'] = [j for j in FARM['jobs'] if j is not job]
+    job.pop('graph', None)
+    FARM['done'] = (FARM['done'] + [job])[-200:]
+
+
+async def _farm_round(s):
+    pcs = [p['url'] for p in FARM['pcs']]
+    await asyncio.gather(*[_look(s, u) for u in pcs])
+    changed = False
+    # what came back from renders already handed out
+    for job in list(FARM['jobs']):
+        if job['state'] not in ('sent', 'running'):
+            continue
+        st = _st(job['srv'])
+        if not st['online']:
+            continue
+        if job['id'] in st['running']:
+            if job['state'] != 'running':
+                job['state'], changed = 'running', True
+            continue
+        if job['id'] in st['pending']:
+            continue
+        try:
+            h = (await _get(s, job['srv'] + '/history/' + job['id'])).get(job['id'])
+        except Exception:
+            continue
+        if h and (h.get('status') or {}).get('completed'):
+            imgs = [i for o in (h.get('outputs') or {}).values() for i in o.get('images', []) if i.get('type') == 'output']
+            _finish(job, 'done', images=imgs)
+        elif h and (h.get('status') or {}).get('status_str') == 'error':
+            msg = next((m[1].get('exception_message') for m in (h['status'].get('messages') or []) if m[0] == 'execution_error'), '')
+            _finish(job, 'failed', error=msg or 'ComfyUI hit an error while rendering')
+        elif not h and time.time() - job.get('t_sent', 0) > 15:
+            if job.get('resent'):
+                _finish(job, 'failed', error='It disappeared from ' + job['srv'] + "'s queue twice")
+            else:  # ComfyUI restarted and forgot it, or it was cancelled there: send it again once
+                job.update(state='waiting', resent=True)
+        else:
+            continue
+        changed = True
+    # free computers take the next render they can run
+    for u in pcs:
+        st = _st(u)
+        st['why'] = ''
+        if not st['online'] or u in FARM['off'] or st['running'] or st['pending']:
+            continue
+        for job in FARM['jobs']:
+            if job['state'] != 'waiting':
+                continue
+            graph, missing, why = _fit(u, job)
+            if missing and not why and time.time() - st['asked'] > 60:
+                st['asked'] = time.time()
+                await _sync_pair(s, u, job['home'])
+            if graph is None or missing or why:
+                st['why'] = why or ('copying ' + ', '.join(m['name'] for m in missing) if missing else '')
+                continue
+            try:
+                if u != job['home']:
+                    await _copy_pictures(s, graph, job['home'], u, job['key'])
+                status, j = await _post(s, u + '/prompt', {'prompt': graph, 'client_id': job.get('client_id') or 'renderdeck-farm'})
+            except Exception as e:
+                st['why'] = 'could not send: ' + str(e)
+                break
+            if status != 200 or j.get('error'):
+                err = j.get('error') or {}
+                _finish(job, 'failed', error=(err.get('message') if isinstance(err, dict) else str(err)) or 'ComfyUI refused the graph',
+                        node_errors=j.get('node_errors'), srv=u)
+            else:
+                job.update(state='sent', srv=u, id=j['prompt_id'], t_sent=time.time())
+                st['pending'] = [j['prompt_id']]
+            changed = True
+            break
+    # every few minutes, and when a computer comes online, the computers copy each other's models
+    if len([u for u in pcs if _st(u)['online']]) > 1 and any(_st(u)['online'] and time.time() - _st(u)['synced_at'] > 600 for u in pcs):
+        await _sync_all(s)
+    if changed:
+        _farm_save()
+
+
+async def _farm_loop():
+    global _farm_wake
+    _farm_wake = asyncio.Event()
+    async with aiohttp.ClientSession() as s:
+        while True:
+            try:
+                await _farm_round(s)
+            except Exception as e:
+                print('[Render Deck farm]', e)
+            busy = FARM['jobs'] or any(_st(p['url'])['copies'] for p in FARM['pcs'])
+            try:
+                await asyncio.wait_for(_farm_wake.wait(), 1.5 if busy else 30)
+            except asyncio.TimeoutError:
+                pass
+            _farm_wake.clear()
+
+
+def _farm_start():
+    global _farm_task
+    if _farm_task is None or _farm_task.done():
+        _farm_load()
+        _farm_task = asyncio.ensure_future(_farm_loop())
+    elif _farm_wake:
+        _farm_wake.set()
+
+
+def _farm_pcs(body):
+    if 'pcs' in body:
+        pcs = []
+        for p in body['pcs']:
+            url = _tailnet(p.get('url'))
+            if not any(x['url'] == url for x in pcs):
+                pcs.append({'url': url, 'name': str(p.get('name') or url)[:40]})
+        FARM['pcs'] = pcs
+    if 'off' in body:
+        FARM['off'] = [u for u in body['off'] if any(p['url'] == u for p in FARM['pcs'])]
+
+
+def _farm_view(since):
+    pcs = []
+    for p in FARM['pcs']:
+        st = _st(p['url'])
+        pcs.append({'url': p['url'], 'name': p['name'], 'online': st['online'], 'off': p['url'] in FARM['off'],
+                    'load': len(st['running']) + len(st['pending']), 'copies': st['copies'], 'why': st['why']})
+    jobs = [{k: v for k, v in j.items() if k != 'graph'} for j in FARM['jobs']]
+    done = [j for j in FARM['done'] if j.get('t_done', 0) > since]
+    return {'farm': 1, 'pcs': pcs, 'jobs': jobs, 'done': done, 'now': time.time()}
+
+
+@routes.get('/renderdeck/farm')
+async def farm(request):
+    _farm_start()
+    try:
+        since = float(request.query.get('since') or 0)
+    except ValueError:
+        since = 0
+    return web.json_response(_farm_view(since))
+
+
+@routes.post('/renderdeck/farm/add')
+async def farm_add(request):
+    """{pcs:[{url,name}], off:[url], jobs:[{key, graph, home, client_id, prompt, seed, ckpt, n, of}]}"""
+    try:
+        body = await request.json()
+        _farm_start()
+        _farm_pcs(body)
+        for j in body.get('jobs', []):
+            if not isinstance(j.get('graph'), dict) or not j.get('key'):
+                raise ValueError('Each render needs its graph')
+            home = _tailnet(j.get('home'))
+            FARM['jobs'].append({'key': str(j['key'])[:40], 'graph': j['graph'], 'home': home, 'client_id': str(j.get('client_id') or '')[:60],
+                                 'prompt': str(j.get('prompt') or '')[:300], 'seed': j.get('seed'), 'ckpt': str(j.get('ckpt') or '')[:200],
+                                 'n': j.get('n'), 'of': j.get('of'), 'state': 'waiting', 'srv': '', 'id': '', 't_added': time.time()})
+        _farm_save()
+        _farm_wake.set()
+        return web.json_response(_farm_view(time.time()))
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.post('/renderdeck/farm/cancel')
+async def farm_cancel(request):
+    """{keys:[...]}: waiting renders are dropped; one handed out is taken out of that computer's queue, or stopped."""
+    try:
+        keys = set((await request.json()).get('keys') or [])
+        gone = [j for j in FARM['jobs'] if j['key'] in keys]
+        FARM['jobs'] = [j for j in FARM['jobs'] if j['key'] not in keys]
+        _farm_save()
+        async with aiohttp.ClientSession() as s:
+            for j in gone:
+                if j['state'] in ('sent', 'running') and j.get('id'):
+                    try:
+                        await _post(s, j['srv'] + '/queue', {'delete': [j['id']]}, 10)
+                        q = await _get(s, j['srv'] + '/queue')
+                        if any(x[1] == j['id'] for x in q.get('queue_running', [])):
+                            await _post(s, j['srv'] + '/interrupt', {'prompt_id': j['id']}, 10)
+                    except Exception:
+                        pass
+        if _farm_wake:
+            _farm_wake.set()
+        return web.json_response({'cancelled': len(gone)})
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.post('/renderdeck/farm/pcs')
+async def farm_pcs(request):
+    """{pcs:[{url,name}], off:[url]}: which computers take renders"""
+    try:
+        _farm_start()
+        _farm_pcs(await request.json())
+        _farm_save()
+        _farm_wake.set()
+        return web.json_response(_farm_view(time.time()))
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
