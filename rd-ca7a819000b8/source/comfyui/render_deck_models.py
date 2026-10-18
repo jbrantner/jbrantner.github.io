@@ -29,10 +29,11 @@ from aiohttp import web
 import folder_paths
 from server import PromptServer
 
-KINDS = ('checkpoints', 'loras')
+KINDS = ('checkpoints', 'loras', 'diffusion_models', 'vae', 'text_encoders', 'clip_vision', 'controlnet', 'upscale_models')  # the app's own picker offers the first two
 CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites share one API and the same model ids
 HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
+RETRIES = 8  # a download waits 30 s, 1, 2, 4 … up to 10 minutes after each drop before carrying on
 SYNC_MBPS = 2  # copies between your computers are held to about this many MB a second: at 15 the house WiFi kept dropping
 routes = PromptServer.instance.routes
 
@@ -119,34 +120,55 @@ async def _pace(started, sent):
         await asyncio.sleep(ahead)
 
 
-async def _download(j, file_url, path):
+async def _download(j, file_url, path, retries=RETRIES):
+    """Fetch into path + '.part', held to SYNC_MBPS. When the internet drops it waits and carries on from where it got to
+    (an HTTP Range request) instead of starting the file again, up to RETRIES times, longer each time."""
     tmp = path + '.part'
-    started = time.time()
-    try:
-        headers = {'Authorization': 'Bearer ' + _token()} if _token() and any(c in file_url for c in CIVITAI) else {}
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_read=120)) as s:
-            async with s.get(file_url, headers=headers, allow_redirects=True) as r:
-                if r.status in (401, 403):
-                    raise ValueError('Civitai wants you signed in for this one: add your API key on the render computer (see the helper file)')
-                if r.status != 200:
-                    raise ValueError('Download answered %d' % r.status)
-                j['total'] = int(r.headers.get('Content-Length') or j['total'] or 0)
-                _room(path, j['total'])
-                j['status'] = 'downloading'
-                with open(tmp, 'wb') as out:
-                    async for chunk in r.content.iter_chunked(1 << 20):
-                        out.write(chunk)
-                        j['done'] += len(chunk)
-                        if j.get('source'):  # a copy from your other computer: gently
-                            await _pace(started, j['done'])
-                        if j.get('cancel'):
-                            raise ValueError('Stopped')
-        os.replace(tmp, path)
-        j['status'] = 'done'
-    except Exception as e:
-        j['status'], j['error'] = 'failed', str(e) or e.__class__.__name__
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    headers = {'Authorization': 'Bearer ' + _token()} if _token() and any(c in file_url for c in CIVITAI) else {}
+    for attempt in range(retries + 1):
+        started, have = time.time(), os.path.getsize(tmp) if os.path.exists(tmp) else 0
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120)) as s:
+                h = dict(headers, Range='bytes=%d-' % have) if have else headers
+                async with s.get(file_url, headers=h, allow_redirects=True) as r:
+                    if r.status in (401, 403):
+                        raise PermissionError('Civitai wants you signed in for this one: add your API key on the render computer (see the helper file)')
+                    if r.status == 416 and have:  # already all there
+                        break
+                    if r.status not in (200, 206):
+                        raise PermissionError('Download answered %d' % r.status)
+                    if r.status == 200:
+                        have = 0  # the server sent it all again: start the file over
+                    j['total'] = have + int(r.headers.get('Content-Length') or 0) or j['total'] or 0
+                    if not have:
+                        _room(path, j['total'])
+                    j['status'], j['done'], j['error'] = 'downloading', have, ''
+                    with open(tmp, 'ab' if have else 'wb') as out:
+                        async for chunk in r.content.iter_chunked(1 << 20):
+                            out.write(chunk)
+                            j['done'] += len(chunk)
+                            await _pace(started, j['done'] - have)  # downloads and copies alike: gently, for the house WiFi
+                            if j.get('cancel'):
+                                raise PermissionError('Stopped')
+            if j['total'] and os.path.getsize(tmp) < j['total']:
+                raise aiohttp.ClientPayloadError('the download was cut short')
+            break
+        except Exception as e:
+            j['error'] = str(e) or e.__class__.__name__
+            if isinstance(e, (PermissionError, ValueError)) or attempt == retries:
+                j['status'] = 'failed'
+                if j.get('cancel') and os.path.exists(tmp):
+                    os.remove(tmp)
+                return  # a part left by a dropped connection stays, so asking again carries on from it
+            wait = min(600, 30 * 2 ** attempt)
+            j['status'], j['retry_at'] = 'waiting', time.time() + wait  # the internet dropped: wait, then carry on
+            for _ in range(wait):
+                await asyncio.sleep(1)
+                if j.get('cancel'):
+                    j['status'], j['error'] = 'failed', 'Stopped'
+                    return
+    os.replace(tmp, path)
+    j['status'] = 'done'
 
 
 @routes.get('/renderdeck/jobs')
@@ -447,7 +469,7 @@ async def _sync_run(todo):
             j['status'] = 'done'
             continue
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        await _download(j, url, path)
+        await _download(j, url, path, retries=0)  # copies between computers keep their own 30-minute wait after a failure
 
 
 @routes.post('/renderdeck/sync')
@@ -556,6 +578,8 @@ LOADERS = {('CheckpointLoaderSimple', 'ckpt_name'): 'checkpoints', ('LoraLoader'
 def _fit(url, job):
     """Can this computer run the job? (its own copy of the graph with file names matched, models it lacks, why not)"""
     graph = json.loads(json.dumps(job['graph']))
+    if job.get('pin') and url != job['pin']:
+        return None, [], 'only ' + job['pin'] + ' runs this one'  # Qwen renders: never moved, never a reason to copy models
     if url == job['home']:
         return graph, [], ''  # built from this computer's own lists
     oi = _st(url)['oi']
@@ -571,9 +595,10 @@ def _fit(url, job):
         for k, v in list((n.get('inputs') or {}).items()):
             if not isinstance(v, str) or (n['class_type'] == 'LoadImage' and k == 'image'):
                 continue
-            opts = _combo((inp.get('required') or {}).get(k) or (inp.get('optional') or {}).get(k))
-            if not opts or v in opts:
-                continue
+            spec = (inp.get('required') or {}).get(k) or (inp.get('optional') or {}).get(k)
+            opts = _combo(spec)
+            if v in opts or not opts and not (spec and (isinstance(spec[0], list) or spec[0] == 'COMBO')):
+                continue  # not a list of files, or the file is there (an empty list means it has none of them, like no ControlNets)
             same = next((o for o in opts if _base(o).lower() == _base(v).lower()), None)
             if same:
                 n['inputs'][k] = same
@@ -832,7 +857,7 @@ async def farm_add(request):
             home = _tailnet(j.get('home'))
             FARM['jobs'].append({'key': str(j['key'])[:40], 'graph': j['graph'], 'home': home, 'client_id': str(j.get('client_id') or '')[:60],
                                  'prompt': str(j.get('prompt') or '')[:300], 'seed': j.get('seed'), 'ckpt': str(j.get('ckpt') or '')[:200],
-                                 'n': j.get('n'), 'of': j.get('of'), 'hidden': bool(j.get('hidden')), 'state': 'waiting', 'srv': '', 'id': '', 't_added': time.time()})
+                                 'n': j.get('n'), 'of': j.get('of'), 'hidden': bool(j.get('hidden')), 'pin': _tailnet(j.get('pin')) if j.get('pin') else '', 'state': 'waiting', 'srv': '', 'id': '', 't_added': time.time()})
         _farm_save()
         _farm_wake.set()
         return web.json_response(_farm_view(time.time()))

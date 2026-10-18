@@ -103,6 +103,8 @@ for(const k of Object.keys(DEF)) OI[k] = OI[k] || {input:{required:{}}};
   ok(await page.evaluate(() => S.hidden && S.blocks.some(b => b.type==='pose')) && await page.isVisible('.block[style*="--cn"]'), 'Hidden starts from the same recipe, Pose board included');
   await page.evaluate(() => { S.blocks = S.blocks.filter(b => b.type!=='pose'); render(); }); await page.click('#addBtn');
   ok(!(await page.$('#tray [data-add="pose"][disabled]')), 'Hidden can add a Pose board of its own');
+  ok(await page.evaluate(() => { const e = {graph:{1:{class_type:'ControlNetLoader', inputs:{control_net_name:'diffusion_pytorch_model_promax.safetensors'}}}, home:'x'};
+    const f = fit({url:'y', oi:{ControlNetLoader:{input:{required:{control_net_name:[[]]}}}}}, e); return !f.ok && /promax/.test(f.why); }), 'a computer with no ControlNets at all can\'t take a pose render');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

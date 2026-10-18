@@ -160,6 +160,12 @@ async def main():
         ok(len([d for d in v['done'] if d['key'].startswith('d')]) == 1, 'only the one not cancelled was rendered')
         saved = json.load(open(H.FARM_FILE))
         ok(saved['off'] == [MU] and len(saved['pcs']) == 2, 'the farm is saved to its file')
+        # a computer whose list of ControlNets is empty has none of them, so it can't take a pose render; a pinned render stays put
+        g = {'1': {'class_type': 'ControlNetLoader', 'inputs': {'control_net_name': 'promax.safetensors'}}}
+        H._st('M')['oi'] = {'ControlNetLoader': {'input': {'required': {'control_net_name': [[]]}}}}
+        H._st('R2')['oi'] = {'ControlNetLoader': {'input': {'required': {'control_net_name': [['promax.safetensors']]}}}}
+        ok('promax' in H._fit('M', {'graph': g, 'home': 'R'})[2] and not H._fit('R2', {'graph': g, 'home': 'R'})[2], 'no ControlNets at all means it lacks ProMax')
+        ok('only' in H._fit('M', {'graph': {}, 'home': 'M', 'pin': 'R'})[2], 'a pinned render only runs on its computer')
     for rn in runners: await rn.cleanup()
     print(('%d FAILED' % len(fails)) if fails else 'all passed')
     os._exit(1 if fails else 0)

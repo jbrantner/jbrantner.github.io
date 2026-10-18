@@ -155,6 +155,11 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .pboard{display:block;width:100%;border-radius:10px;border:1px solid var(--line);background:#000;touch-action:none;margin:4px 0 8px}
 .figrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
 /* characters */
+.orbit{position:relative;margin-top:8px;height:340px;border-radius:12px;border:1px solid var(--line);background:var(--bg);overflow:hidden;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:grab}
+.orbit img{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
+.orbit img.flip{transform:scaleX(-1)}
+.orbit .ang{position:absolute;left:8px;top:8px;padding:1px 8px;border-radius:6px;background:rgba(0,0,0,.65);border:1px solid var(--line);font-size:12px;font-weight:800}
+.orbit small{position:absolute;right:8px;bottom:6px;color:var(--mut);font-size:12px}
 .cviews{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}
 .cviews button{position:relative;aspect-ratio:3/4;padding:0;border-radius:10px;overflow:hidden;background:var(--bg);border:1px solid var(--line)}
 .cviews img{width:100%;height:100%;object-fit:cover;display:block}
@@ -463,7 +468,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.29'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.30'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -994,7 +999,8 @@ function fit(p, e){
     const d = p.oi[n.class_type]; if(!d){ out.why = pcName(p.url) + ' has no ' + n.class_type + ' node'; continue; }
     for(const [k, v] of Object.entries(n.inputs)){
       if(typeof v!=='string' || (n.class_type==='LoadImage' && k==='image')) continue; // pictures are copied over when it is sent
-      const list = combo(d, k); if(!list.length || list.includes(v)) continue;
+      const list = combo(d, k), spec = ((d.input || {}).required || {})[k] || ((d.input || {}).optional || {})[k];
+      if(list.includes(v) || !list.length && !(spec && (Array.isArray(spec[0]) || spec[0]==='COMBO'))) continue; // an empty list: it has none of them (Main has no ControlNets)
       const same = list.find(o => baseName(o).toLowerCase()===baseName(v).toLowerCase());
       if(same){ n.inputs[k] = same; continue; }
       const kind = (KIND[n.class_type] || {})[k];
@@ -1279,7 +1285,7 @@ async function farmCall(path, body){
   catch(e){ return {error:'Could not reach ' + pcName(farm) + ', which keeps the queue'}; }
 }
 async function farmAdd(list){
-  const j = await farmCall('/add', Object.assign(farmPcs(), {jobs:list.map(e => ({key:e.key, graph:e.graph, home:e.home, client_id:clientId, prompt:e.prompt, seed:e.seed, ckpt:e.ckpt, n:e.n, of:e.of, hidden:!!e.hidden}))}));
+  const j = await farmCall('/add', Object.assign(farmPcs(), {jobs:list.map(e => ({key:e.key, graph:e.graph, home:e.home, client_id:clientId, prompt:e.prompt, seed:e.seed, ckpt:e.ckpt, n:e.n, of:e.of, hidden:!!e.hidden, pin:e.pin || ''}))}));
   if(j.error) return j.error;
   list.forEach(e => { delete e.graph; }); save(); // the farm keeps the graph; the app only needs what it shows
   schedule(1500); return '';
@@ -1308,7 +1314,7 @@ function farmView(v, away){
     if(S.farmSeen.includes(j.key)) return;
     const e = S.queue.find(q => q.key===j.key) || {key:j.key, farm:true, prompt:j.prompt, seed:j.seed, images:[], hidden:!!j.hidden};
     if(j.state==='done'){ e.srv = j.srv; e.id = j.id; e.images = j.images || []; S.queue.includes(e) || S.queue.push(e); completeOne(e, true); back++; }
-    else { S.farmSeen.push(j.key); failOne(e, j.error || 'The render failed'); }
+    else { S.farmSeen.push(j.key); if(j.srv) e.srv = j.srv; failOne(e, j.node_errors ? explain({error:{message:j.error}, node_errors:j.node_errors}, e.titles || {}) : j.error || 'The render failed'); }
   });
   S.queue = S.queue.filter(e => !e.farm || live.has(e.key) || e.state==='sending'); // cancelled from another phone
   S.farmSeen = S.farmSeen.slice(-300); S.farmSince = Math.max(0, (v.now || 0) - 600); save();
@@ -2232,7 +2238,7 @@ async function refreshJobs(){
   $('#tokNote').textContent = j.token ? 'A Civitai API key is saved on the render computer, so sign-in-only models download too.' : "Some Civitai models only download when you're signed in. Paste your Civitai API key (civitai.com › Account settings › API Keys) once; it's saved on the render computer only.";
   $('#tokClear').hidden = !j.token;
   $('#jobList').innerHTML = j.jobs.length ? j.jobs.map(x => { const pc = x.total ? Math.min(100, x.done/x.total*100) : 0;
-    const what = x.status==='done' ? 'Ready to use' : x.status==='failed' ? esc(x.error) : x.status==='queued' ? 'Waiting to copy from ' + esc(srvName('https://' + x.source + '.x')) : (x.status==='uploading' ? 'Sending' : 'Downloading') + ' · ' + mb(x.done) + (x.total ? ' of ' + mb(x.total) : '');
+    const what = x.status==='done' ? 'Ready to use' : x.status==='failed' ? esc(x.error) : x.status==='queued' ? 'Waiting to copy from ' + esc(srvName('https://' + x.source + '.x')) : x.status==='waiting' ? 'The internet dropped: carrying on at ' + mb(x.done) + (x.total ? ' of ' + mb(x.total) : '') + ' in a moment' : (x.status==='uploading' ? 'Sending' : 'Downloading') + ' · ' + mb(x.done) + (x.total ? ' of ' + mb(x.total) : '');
     return `<div class="job ${x.status}"><b>${esc(x.title || x.name)}</b><small>${x.kind==='loras' ? 'LoRA' : 'Model'}${x.base ? ' · ' + esc(x.base) : ''} · ${what}</small>
       ${x.status==='done' || x.status==='failed' ? '' : `<div class="pbar"><i style="width:${pc.toFixed(1)}%"></i></div>`}</div>`; }).join('') : '<p class="note">Nothing yet.</p>';
   const fresh = j.jobs.filter(x => x.status==='done' && !handledJobs.has(x.id));
@@ -2623,13 +2629,15 @@ window.addEventListener('resize', () => drawBoards());
 // Each workstation has its own characters (Hidden keeps its own list, like its recipe).
 S.chars = S.chars || [];       // [{id, name, tags, color, views:[{id, angle, img (LoadImage name), url (to show it), home (computer it's on)}]}]
 S.charJobs = S.charJobs || {}; // render key -> {cid, angle, hidden}: a Make other angles render whose picture goes to that character
-const ANGLES = {front:'Front', three:'¾ view', side:'Side', back:'Back', face:'Face', other:'Other'};
+const ANGLES = {ref:'Reference', front:'Front', three:'¾ view', side:'Side', back:'Back', face:'Face'}; // a Reference picture is any picture of them (a bust, a scene): it only makes a full-body front
+[S.chars, (S.stash || {}).chars || []].forEach(l => l.forEach(c => c.views.forEach(v => { if(!ANGLES[v.angle]) v.angle = 'ref'; }))); // 'other' from before Reference
 const TURN = { // what Qwen-Image-Edit is asked for each angle
   front:'Show this same character from the front, facing the viewer, full body, standing straight',
   three:'Turn the camera 45 degrees so this same character is seen in a three-quarter view, full body, standing',
   side:'Turn the camera 90 degrees so this same character is seen from the side, in profile, full body, standing',
   back:'Turn the camera around so this same character is seen from behind, back view, facing away, full body, standing',
   face:'Close-up portrait of this same character, face and shoulders, front view, looking at the viewer',
+  ref:'Draw this same character as a full-body front view, from head to feet, standing straight and facing the viewer, arms relaxed at the sides',
 };
 const KEEP = '. Keep exactly the same face, hair, eyes, outfit, colours and art style. Plain white background, nobody else.';
 const CHAR_COLORS = ['#ff5ca8','#33c2c9','#ffb35c','#b892ff','#5cffb0','#ffd75e','#6fc0ff','#f2777f'];
@@ -2673,7 +2681,7 @@ function fillIn(oi, cls, inputs){
   return inputs;
 }
 // one picture of the character, turned to one angle: Qwen-Image-Edit, as in ComfyUI's own Qwen image edit template
-function turnGraph(k, img, angle, c){
+function turnGraph(k, img, angle, c, fromRef){
   const g = {}, titles = {}; let n = 0;
   const add = (cls, inputs, title) => { const id = String(++n); g[id] = {class_type:cls, inputs:fillIn(k.oi, cls, inputs), _meta:{title}}; titles[id] = title; return id; };
   let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}, 'Qwen-Image-Edit'), 0];
@@ -2685,7 +2693,7 @@ function turnGraph(k, img, angle, c){
   const li = add('LoadImage', {image:img}, 'Character picture');
   const sc = add('ImageScaleToTotalPixels', {image:[li,0], upscale_method:'lanczos', megapixels:1}, 'Fit to 1 megapixel');
   const im = k.enc==='TextEncodeQwenImageEditPlus' ? {image1:[sc,0]} : {image:[sc,0]};
-  const text = TURN[angle] + KEEP + (c.tags ? ' The character: ' + c.tags.replace(/\s+/g, ' ').trim() + '.' : '');
+  const text = TURN[fromRef ? 'ref' : angle] + KEEP + (c.tags ? ' The character: ' + c.tags.replace(/\s+/g, ' ').trim() + '.' : '');
   const pos = add(k.enc, Object.assign({clip:[cl,0], prompt:text, vae:[va,0]}, im), 'Turn to ' + ANGLES[angle]);
   const neg = add(k.enc, Object.assign({clip:[cl,0], prompt:'', vae:[va,0]}, im), 'Avoid');
   const lat = add('VAEEncode', {pixels:[sc,0], vae:[va,0]}, 'Encode picture'), seed = randSeed();
@@ -2696,6 +2704,7 @@ function turnGraph(k, img, angle, c){
 }
 // queue one render per angle on the Qwen computer; each finished picture joins the character with that angle
 async function makeAngles(c, v, angles){
+  const fromRef = v.angle==='ref'; if(fromRef) angles = ['front']; // a reference only makes the front; the other angles come from that front
   const k = qwenKit(); if(k.why){ toast(k.why, true); return; }
   if(!angles.length){ toast('Tick at least one angle', true); return; }
   buzz();
@@ -2707,10 +2716,10 @@ async function makeAngles(c, v, angles){
   if(!S.test){ await findFarm(); if(!farm) await Promise.all(allPcs().map(x => pollPc(x))); }
   const tap = Date.now().toString(36), mine = [];
   for(const [i, a] of angles.entries()){
-    const b = turnGraph(k, img, a, c);
+    const b = turnGraph(k, img, a, c, fromRef);
     const e = {key:tap + 'c' + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : k.url, state:'sending', hidden:!!S.hidden,
       graph:b.graph, titles:b.titles, seed:b.seed, prompt:(c.name || 'Character') + ': ' + ANGLES[a], ckpt:k.unet, n:i+1, of:angles.length, images:[], snap:null, size:[1024,1024], pics:1, steps:k.steps, pin:S.test ? null : k.url};
-    S.charJobs[e.key] = {cid:c.id, angle:a, hidden:!!S.hidden};
+    S.charJobs[e.key] = {cid:c.id, angle:a, hidden:!!S.hidden, fromRef};
     if(farm){ e.farm = true; e.state = 'waiting'; }
     S.queue.push(e); mine.push(e); save();
     if(!S.test && !farm){ const err = await dispatch(e); if(err){ dropOne(e); mine.pop(); failAll(err); break; } }
@@ -2724,56 +2733,174 @@ async function makeAngles(c, v, angles){
 function charGot(e, pics){
   const j = S.charJobs[e.key]; if(!j) return; delete S.charJobs[e.key];
   const c = charsFor(j.hidden).find(x => x.id===j.cid);
-  if(c) pics.forEach(p => c.views.push(Object.assign({id:uid('v'), angle:j.angle, made:true}, p)));
+  if(c) pics.forEach(p => { const v = Object.assign({id:uid('v'), angle:j.angle, made:true}, p); c.views.push(v);
+    if(j.fromRef && CH.id===c.id){ CH.sel = v.id; CH.want = null; } }); // the new front is picked, ready to make the other angles from
   save(); drawChars();
+}
+// ---------- suggest tags: Florence-2 PromptGen reads the character's pictures and lists Danbooru tags for them ----------
+// One render on the computer with the comfyui-florence2 nodes (Render): each picture goes through Florence2Run's
+// prompt_gen_tags task and its text comes back through a Show Text node. A tag seen in more of the pictures ranks
+// higher. Only real Danbooru tags are offered, minus ones about the picture rather than the character (background,
+// framing, where they look), and minus ones the card already has. Tap one to add it.
+const TAGGER = 'MiaoshouAI/Florence-2-base-PromptGen-v2.0', TAGGER_GB = 1.1;
+const NOT_LOOK = /(^|_)(background|backlighting|border|frame|letterboxed|signature|watermark|artist_name|text|english_text|dated|copyright|web_address)$|^(solo|solo_focus|standing|full_body|upper_body|cowboy_shot|portrait|close-up|feet_out_of_frame|head_out_of_frame|looking_at_viewer|looking_away|looking_to_the_side|looking_back|looking_down|looking_up|from_side|from_behind|from_above|from_below|profile|straight-on|multiple_views|reference_sheet|turnaround|character_sheet|white_theme|simple_background|white_background|grey_background|transparent_background|gradient_background|sitting|walking|arms_at_sides|hands_in_pockets|hand_on_hip|closed_mouth|open_mouth|parted_lips|smile|expressionless|blush|teeth|v-shaped_eyebrows|male_focus|no_humans|monochrome|greyscale|official_art|highres|absurdres|anime_coloring|game_cg|3d|realistic|photorealistic|blurry|depth_of_field|chibi)$/;
+const FAKET = {Florence2Run:{input:{required:{}}}, DownloadAndLoadFlorence2Model:{input:{required:{model:[[TAGGER]], precision:[['fp16','bf16','fp32']]}}},
+  Florence2ModelLoader:{input:{required:{model:[['Florence-2-base-PromptGen-v2.0']]}}}, 'ShowText|pysssss':{input:{required:{}}}, LoadImage:{input:{required:{}}}};
+// the computer that can tag: its Show Text node, and whether the PromptGen model is already in models/LLM
+function tagKit(){
+  const pcs = S.test ? [{url:'test', oi:FAKET}] : allPcs().filter(p => p.online && p.oi && p.oi.Florence2Run && p.oi.DownloadAndLoadFlorence2Model);
+  const has = p => (S.taggerOn || []).includes(p.url) || combo(p.oi.Florence2ModelLoader, 'model').some(n => n.split(/[\\/]/).pop()===TAGGER.split('/')[1]);
+  const show = p => p.oi['ShowText|pysssss'] ? ['ShowText|pysssss', 'text'] : p.oi.PreviewAny ? ['PreviewAny', 'source'] : null;
+  const p = pcs.filter(show).sort((a, b) => has(b) - has(a) || (b.url===farmHost()) - (a.url===farmHost()))[0];
+  if(p) return {url:p.url, oi:p.oi, show:show(p), ready:has(p)};
+  return {why: !S.servers.length ? 'Connect to your render computer first'
+    : pcs.length ? pcName(pcs[0].url) + ' has the Florence-2 nodes but no Show Text node to send the tags back (ComfyUI-Custom-Scripts)'
+    : !allPcs().some(p => p.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
+    : 'None of your computers that are on has the Florence-2 nodes (comfyui-florence2)'};
+}
+function tagGraph(k, imgs){
+  const g = {}; let n = 0;
+  const add = (cls, inputs, title) => { const id = String(++n); g[id] = {class_type:cls, inputs:fillIn(k.oi, cls, inputs), _meta:{title}}; return id; };
+  const m = add('DownloadAndLoadFlorence2Model', {model:TAGGER, precision:'fp16'}, 'Tagger');
+  const outs = imgs.map((img, i) => {
+    const li = add('LoadImage', {image:img}, 'Picture ' + (i + 1));
+    const r = add('Florence2Run', {image:[li,0], florence2_model:[m,0], text_input:'', task:'prompt_gen_tags', fill_mask:false, keep_model_loaded:i < imgs.length - 1,
+      max_new_tokens:256, num_beams:3, do_sample:false, output_mask_select:'', seed:1}, 'Read picture ' + (i + 1));
+    return add(k.show[0], {[k.show[1]]:[r,2]}, 'Tags ' + (i + 1));
+  });
+  return {g, outs};
+}
+// the tagger's text for each picture -> [[tag, pictures it was seen in]], best first
+function sugFrom(texts, c){
+  const have = new Set((c.tags || '').split(',').map(norm).filter(Boolean)), seen = new Map();
+  texts.forEach(t => new Set(String(t || '').split(',').map(s => s.trim()).filter(Boolean).map(s => { const x = findTag(s.replace(/\\/g,'')); return x ? x.tag : null; }).filter(Boolean))
+    .forEach(tag => seen.set(tag, (seen.get(tag) || 0) + 1)));
+  return [...seen].filter(([tag]) => !have.has(tag) && !NOT_LOOK.test(tag) && /^[0-4]$/.test(TAGMAP.get(tag).cat))
+    .sort((a, b) => b[1] - a[1] || TAGMAP.get(b[0]).n - TAGMAP.get(a[0]).n).slice(0, 30);
+}
+const SUG = {}; // character id -> {state:'busy'|'done'|'err', text, tags, of}
+async function suggestTags(c, download){
+  const k = tagKit(); if(k.why){ toast(k.why, true); return; }
+  const views = c.views.slice(0, 6); if(!views.length) return;
+  const s = SUG[c.id] = {state:'busy', text:'Getting the pictures ready…', of:views.length}; drawChars(); buzz();
+  try{
+    await loadTags(); indexTags(); if(!TAGMAP) throw new Error("couldn't load the tag list");
+    let texts;
+    if(S.test){ await new Promise(r => setTimeout(r, 300)); texts = views.map(() => '1boy, solo, black hair, short hair, red eyes, black coat, gloves, white background, simple background, looking at viewer, standing, made_up_tag'); }
+    else{
+      const imgs = [];
+      for(const v of views){ let img = v.img;
+        if(v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('tg')); img = g.x.inputs.image; }
+        imgs.push(img); }
+      const {g, outs} = tagGraph(k, imgs);
+      s.text = download ? 'Downloading the tagger to ' + pcName(k.url) + ' (about ' + TAGGER_GB + ' GB, once)…' : 'Reading ' + (views.length > 1 ? 'the ' + views.length + ' pictures' : 'the picture') + ' on ' + pcName(k.url) + '…'; drawChars();
+      const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-tagger'})});
+      const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(j.error ? (j.error.message || j.error) : 'ComfyUI said no (' + r.status + ')');
+      let h = null;
+      for(let t = 0; t < 600 && !h; t++){ await new Promise(r => setTimeout(r, 1500)); if(SUG[c.id]!==s) return;
+        try{ const x = (await (await fetch(k.url + '/history/' + j.prompt_id)).json())[j.prompt_id]; if(x && x.status && (x.status.completed || x.status.status_str==='error')) h = x; }catch(e){} }
+      if(!h) throw new Error('it took too long');
+      if(h.status.status_str==='error'){ const m = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(m ? m[1].exception_message : 'the tagger failed'); }
+      texts = outs.map(id => { const o = (h.outputs || {})[id] || {}; const t = o.text || o.string || []; return Array.isArray(t) ? t.join(', ') : t; });
+      if(!S.taggerOn || !S.taggerOn.includes(k.url)){ S.taggerOn = (S.taggerOn || []).concat(k.url); save(); }
+    }
+    const tags = sugFrom(texts, c);
+    Object.assign(s, {state:'done', tags, text:tags.length ? '' : 'Nothing new: the card already has what the tagger saw.'});
+  }catch(err){ Object.assign(s, {state:'err', text:"Couldn't suggest tags: " + err.message}); }
+  if(SUG[c.id]===s){ drawChars(); buzz(); }
+}
+function sugBox(c){
+  const s = SUG[c.id], k = c.views.length ? tagKit() : null;
+  if(!c.views.length) return '';
+  let h = '';
+  if(s && s.state==='busy') h += `<p class="note">✨ ${esc(s.text)}</p>`;
+  else if(s && s.state==='done' && s.tags.length){
+    h += `<div class="ihead"><b>Suggested</b><span>Tap to add</span></div><div class="irow wrap">${s.tags.map(([t, n]) => `<button data-addtag="${esc(t)}">${esc(tagText(TAGMAP.get(t)))}${s.of > 1 ? `<small> ${n}/${s.of}</small>` : ''}</button>`).join('')}</div>
+      <div class="btnrow"><button class="chipbtn" data-ch="sugall">＋ Add all</button><button class="chipbtn" data-ch="sugoff">Done</button></div>`;
+  }
+  else if(s) h += `<p class="${s.state==='err' ? 'warn' : 'note'}">${esc(s.text)}</p>`;
+  if(!s || s.state!=='busy' && !(s.state==='done' && s.tags.length)){
+    if(k.why) h += `<p class="note">✨ Suggest tags needs the Florence-2 tagger: ${esc(k.why)}.</p>`;
+    else if(!k.ready) h += `<p class="note">✨ Suggest tags reads the pictures with Florence-2 PromptGen on ${esc(pcName(k.url))}. The first time, ${esc(pcName(k.url))} downloads it from Hugging Face (about ${TAGGER_GB} GB, once), so start it when nobody needs the internet.</p>
+      <div class="btnrow"><button class="chipbtn" data-ch="sugdl">⬇ Download it and suggest tags</button></div>`;
+    else h += `<div class="btnrow"><button class="chipbtn" data-ch="sugg">✨ Suggest tags from ${c.views.length > 1 ? 'the ' + Math.min(6, c.views.length) + ' pictures' : 'the picture'}</button></div>`;
+  }
+  return h;
 }
 // a render (from the preview or the viewer) as a picture of a character
 function viewFromGallery(g){
   const o = (() => { try{ return new URL(g.url).origin; }catch(e){ return ''; } })();
   const pc = g.url.startsWith('data:') ? null : S.servers.find(x => { try{ return new URL(x.url).origin===o; }catch(e){ return false; } });
-  return {id:uid('v'), angle:'other', img:refFromUrl(g.url), url:g.url, home:S.test ? 'test' : pc ? pc.url : base()};
+  return {id:uid('v'), angle:'ref', img:refFromUrl(g.url), url:g.url, home:S.test ? 'test' : pc ? pc.url : base()};
 }
-function addView(c, v){ if(v.angle==='other' && !c.views.length) v.angle = 'front'; // the first picture is usually the front one; tap to change it
+function addView(c, v){ // a new picture is a Reference until it's marked as one of the angles
   c.views.push(v); CH.sel = v.id; CH.want = null; save(); }
 function openChars(fromGallery){ CH.from = fromGallery || null; CH.id = null; openSheet('#charSheet'); drawChars(); }
 function newChar(){ const c = {id:uid('c'), name:'', tags:'', color:CHAR_COLORS[S.chars.length % CHAR_COLORS.length], views:[]}; S.chars.push(c); return c; }
+// turning the character around: the angles in order around them, the far side as the near side mirrored
+function orbitRing(c){
+  const pick = a => c.views.filter(v => v.angle===a).slice(-1)[0];
+  return [['front',0], ['three',0], ['side',0], ['back',0], ['side',1], ['three',1]].map(([a, f]) => pick(a) && {v:pick(a), flip:!!f, label:ANGLES[a] + (f ? ', other side' : '')}).filter(Boolean);
+}
+function showOrbit(c){
+  const ring = orbitRing(c), o = $('#charBody [data-orbit]'); if(!o || !ring.length) return;
+  CH.orb = ((CH.orb || 0) % ring.length + ring.length) % ring.length; const f = ring[CH.orb], im = o.querySelector('img');
+  if(im.getAttribute('src')!==f.v.url) im.src = f.v.url; im.classList.toggle('flip', f.flip); o.querySelector('.ang').textContent = f.label;
+}
+$('#charBody').addEventListener('pointerdown', e => {
+  const o = e.target.closest('[data-orbit]'), c = S.chars.find(x => x.id===CH.id); if(!o || !c) return;
+  let x0 = e.clientX; const step = Math.max(28, o.clientWidth / 8);
+  const move = ev => { const d = ev.clientX - x0; if(Math.abs(d) < step) return; CH.orb += d < 0 ? 1 : -1; x0 = ev.clientX; showOrbit(c); };
+  const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+});
 const making = c => S.queue.filter(e => { const j = S.charJobs[e.key]; return j && j.cid===c.id; });
+// the sheet is only rebuilt when something on it changed, so its pictures don't blink every time the queue moves;
+// progress text is filled in afterwards, outside what is compared
+function paint(box, html){ if(box._html===html) return; box._html = html; box.innerHTML = html; }
 function drawChars(){
   if(!$('#charSheet').classList.contains('open')) return;
   const c = S.chars.find(x => x.id===CH.id), box = $('#charBody');
   if(!c){
     CH.id = null;
-    box.innerHTML = `<div class="libhead"><h2>${S.hidden ? 'Hidden characters' : 'Characters'}</h2><button class="chipbtn" data-ch="new">＋ New</button></div>
+    paint(box, `<div class="libhead"><h2>${S.hidden ? 'Hidden characters' : 'Characters'}</h2><button class="chipbtn" data-ch="new">＋ New</button></div>
       ${CH.from ? '<p class="note" style="margin-top:-4px">Who is this picture of? Tap them, or make a new character from it.</p>' : ''}
       ${S.chars.length ? '<div class="feed" style="margin-top:6px">' + S.chars.map(x => { const v = x.views.find(y => y.angle==='front') || x.views[0], m = making(x).length;
         return `<div class="frow" data-open="${esc(x.id)}" style="--c:${esc(x.color)}">${v ? `<img class="th" src="${esc(v.url)}" alt="" loading="lazy">` : '<div class="th">🧍</div>'}<div class="grow"><b><i class="cdot"></i>${esc(x.name || 'No name yet')}</b>
           <small>${x.views.length} ${x.views.length===1 ? 'picture' : 'pictures'}${m ? ' · making ' + m : ''}${x.tags ? ' · ' + esc(x.tags) : ''}</small></div><span class="chev">›</span></div>`; }).join('') + '</div>'
-        : '<p class="note">No characters yet. Make one, then give it pictures of them from a few angles: front, side, back and a face close-up. Make other angles can draw the rest from one picture.</p>'}`;
+        : '<p class="note">No characters yet. Make one, then give it pictures of them from a few angles: front, side, back and a face close-up. Make other angles can draw the rest from one picture.</p>'}`);
     return;
   }
   const sel = c.views.find(v => v.id===CH.sel) || c.views.find(v => v.angle==='front') || c.views[0]; CH.sel = sel ? sel.id : null;
   const have = new Set(c.views.map(v => v.angle)), jobs = making(c);
-  if(!CH.want) CH.want = new Set(['front','three','side','back','face'].filter(a => !have.has(a) && !jobs.some(e => S.charJobs[e.key].angle===a)));
+  const fromRef = sel && sel.angle==='ref', offer = fromRef ? ['front'] : ['front','three','side','back','face'];
+  if(!CH.want) CH.want = fromRef ? new Set(['front']) : new Set(offer.filter(a => !have.has(a) && !jobs.some(e => S.charJobs[e.key].angle===a)));
   const k = qwenKit(), n = CH.want.size;
-  box.innerHTML = `<div class="libhead"><button class="chipbtn" data-ch="list">‹ Characters</button>${CH.from ? '<button class="chipbtn hot" data-ch="addfrom">＋ Add the picture</button>' : ''}</div>
+  paint(box, `<div class="libhead"><button class="chipbtn" data-ch="list">‹ Characters</button>${CH.from ? '<button class="chipbtn hot" data-ch="addfrom">＋ Add the picture</button>' : ''}</div>
+    ${orbitRing(c).length > 1 ? `<div class="orbit" data-orbit><img alt=""><span class="ang"></span><small>⟷ drag to turn ${esc(c.name || 'them')} around</small></div>
+      <div style="display:none">${orbitRing(c).map(f => `<img src="${esc(f.v.url)}" alt="">`).join('')}</div>` : ''}
     <div class="row" style="margin-top:12px"><input data-cf="name" value="${esc(c.name)}" placeholder="Name, like Levi" autocapitalize="words" autocorrect="off" spellcheck="false"></div>
     <div class="row"><label>Colour</label><div class="cseg">${CHAR_COLORS.map(x => `<button data-color="${x}" class="${x===c.color ? 'on' : ''}" style="--c:${x}" aria-label="Colour"></button>`).join('')}</div></div>
     <p class="note" style="margin:-2px 0 0 92px">Their colour on the pose board, so you can tell who is who.</p>
     <div class="lbl">Tags</div>
     <textarea data-cf="tags" style="min-height:64px" placeholder="1boy, short hair, black hair, red eyes, black coat, gloves" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(c.tags)}</textarea>
     <p class="note">Danbooru tags that describe them: hair, eyes, outfit, build. A scene puts these in their part of the picture.</p>
+    ${sugBox(c)}
     <div class="lbl lblrow">Pictures <span class="note" style="margin:0;text-transform:none;letter-spacing:0">${c.views.length ? 'tap one to pick it' : ''}</span></div>
-    <div class="cviews">${c.views.map(v => `<button data-cv="${esc(v.id)}" class="${v.id===CH.sel ? 'sel' : ''}"><img src="${esc(v.url)}" alt="" loading="lazy"><span class="ang">${esc(ANGLES[v.angle] || 'Other')}</span></button>`).join('')}
-      ${jobs.map(e => `<button class="wait" data-stop="${esc(e.key)}">Making ${esc(ANGLES[S.charJobs[e.key].angle])}<small>${e.state==='running' ? esc(e.prog ? e.prog.text : 'Starting') : 'in the queue'} · ✕ tap to cancel</small></button>`).join('')}
+    <div class="cviews">${c.views.map(v => `<button data-cv="${esc(v.id)}" class="${v.id===CH.sel ? 'sel' : ''}"><img src="${esc(v.url)}" alt="" loading="lazy"><span class="ang">${esc(ANGLES[v.angle] || 'Reference')}</span></button>`).join('')}
+      ${jobs.map(e => `<button class="wait" data-stop="${esc(e.key)}">Making ${esc(ANGLES[S.charJobs[e.key].angle])}<small><span data-prog="${esc(e.key)}"></span> · ✕ tap to cancel</small></button>`).join('')}
       <button class="add" data-ch="pic" aria-label="Add a picture">＋</button></div>
     ${sel ? `<div class="row" style="margin-top:10px"><label>This one is</label>${seg('cangle', Object.entries(ANGLES), sel.angle)}</div>
       <div class="row" style="padding-left:92px"><button class="chipbtn" data-ch="see">↗ See it big</button><button class="chipbtn danger" data-ch="delview">Remove</button></div>` : ''}
     <div class="lbl">Make other angles</div>
-    ${sel ? `<p class="note" style="margin-top:0">From the picked picture. ${k.why ? '' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url))) + ' draws this character turned around and keeps the design' + (k.fast ? ', ' + k.steps + ' steps each with Lightning' : '') + '. Keep the good ones and remove the rest.'}</p>
-      ${k.why ? `<p class="warn">${esc(k.why)}</p>` : `<div class="irow wrap">${['front','three','side','back','face'].map(a => `<button data-want="${a}" class="${CH.want.has(a) ? 'on' : ''}">${ANGLES[a]}</button>`).join('')}</div>
-      <div class="btnrow"><button class="btn hot" data-ch="turn" ${n ? '' : 'disabled'}>✨ Make ${n ? n + ' ' + (n > 1 ? 'angles' : 'angle') : 'angles'}</button></div>`}`
+    ${sel ? `<p class="note" style="margin-top:0">${fromRef ? 'This is a Reference picture, so ' + (k.why ? 'it' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url)))) + ' makes a full-body front view of them first, from head to feet. Then it picks that front, and you make the other angles from it. If this picture already is a full-body front, mark it Front instead.'
+        : 'From the picked picture. ' + (k.why ? '' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url))) + ' draws this character turned around and keeps the design' + (k.fast ? ', ' + k.steps + ' steps each with Lightning' : '') + '. Keep the good ones and remove the rest.')}</p>
+      ${k.why ? `<p class="warn">${esc(k.why)}</p>` : `<div class="irow wrap">${offer.map(a => `<button data-want="${a}" class="${CH.want.has(a) ? 'on' : ''}">${ANGLES[a]}</button>`).join('')}</div>
+      <div class="btnrow"><button class="btn hot" data-ch="turn" ${n ? '' : 'disabled'}>✨ ${fromRef ? 'Make the full-body front' : 'Make ' + (n ? n + ' ' + (n > 1 ? 'angles' : 'angle') : 'angles')}</button></div>`}`
       : '<p class="note" style="margin-top:0">Add a picture of them first (＋ above, or 🧍 Add to a character under any render).</p>'}
-    <div class="btnrow" style="margin-top:22px"><button class="btn danger" data-ch="del">Delete ${esc(c.name || 'this character')}</button></div>`;
+    <div class="btnrow" style="margin-top:22px"><button class="btn danger" data-ch="del">Delete ${esc(c.name || 'this character')}</button></div>`);
+  jobs.forEach(e => { const x = box.querySelector(`[data-prog="${CSS.escape(e.key)}"]`); if(x) x.textContent = e.state==='running' ? (e.prog ? e.prog.text : 'Starting') : 'in the queue'; });
+  showOrbit(c);
 }
 $('#charBtn').onclick = () => openChars();
 $('#charSheet').addEventListener('error', viaHere, true);
@@ -2792,6 +2919,12 @@ $('#charBody').onclick = async e => {
   else if(t.dataset.cv){ CH.sel = t.dataset.cv; }
   else if(t.dataset.stop){ const j = S.queue.find(q => q.key===t.dataset.stop); if(j && confirm('Cancel making this angle?')){ cancelJob(j); delete S.charJobs[j.key]; toast('Cancelled'); } }
   else if(t.dataset.seg==='cangle'){ const v = c.views.find(x => x.id===CH.sel); if(v) v.angle = t.dataset.v; CH.want = null; }
+  else if(act==='sugg' || act==='sugdl'){ if(act==='sugdl' && !confirm(pcName(tagKit().url || '') + ' will download the Florence-2 tagger from Hugging Face, about ' + TAGGER_GB + ' GB, once. Go ahead now?')) return; suggestTags(c, act==='sugdl'); return; }
+  else if(t.dataset.addtag || act==='sugall'){ const s = SUG[c.id]; if(!s || !s.tags) return;
+    const pick = act==='sugall' ? s.tags.map(x => x[0]) : [t.dataset.addtag];
+    c.tags = [c.tags.trim().replace(/,\s*$/, ''), ...pick.map(x => tagText(TAGMAP.get(x)))].filter(Boolean).join(', ');
+    s.tags = s.tags.filter(x => !pick.includes(x[0])); if(!s.tags.length) delete SUG[c.id]; }
+  else if(act==='sugoff'){ delete SUG[c.id]; }
   else if(t.dataset.want){ CH.want.has(t.dataset.want) ? CH.want.delete(t.dataset.want) : CH.want.add(t.dataset.want); }
   else if(act==='pic'){ if(!info){ toast('Connect first (or use Test mode) so the picture has somewhere to go', true); return; } $('#charPick').value = ''; $('#charPick').click(); return; }
   else if(act==='see'){ const v = c.views.find(x => x.id===CH.sel); if(v) window.open(v.url, '_blank'); return; }
@@ -2806,7 +2939,7 @@ $('#charPick').onchange = async e => {
   toast('Uploading…');
   try{ const u = await uploadImage(f), cut = u.name.lastIndexOf('/');
     const url = S.test ? u.local : viewUrl({filename:u.name.slice(cut + 1), subfolder:cut < 0 ? '' : u.name.slice(0, cut), type:'input'});
-    addView(c, {id:uid('v'), angle:'other', img:u.name, url, home:S.test ? 'test' : base()}); drawChars(); toast('Picture added'); }
+    addView(c, {id:uid('v'), angle:'ref', img:u.name, url, home:S.test ? 'test' : base()}); drawChars(); toast('Picture added'); }
   catch(err){ toast(err.message, true); }
 };
 
