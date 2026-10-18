@@ -2890,6 +2890,7 @@ const CAM0 = {yaw:0, pitch:0.06, dist:1.85, fov:35, ty:0.47}; // looking at the 
 const CAMS = {front:['Front', 0, 0.06], three:['¾', -0.7, 0.12], side:['Side', -Math.PI/2, 0.06], back:['Back', Math.PI, 0.06], above:['Above', 0, 0.75], below:['Below', 0, -0.35]};
 // the board's camera: where it is and which way is right, up and forward on the picture
 function camOf(b, W, H){
+  if(b.cam && !Object.values(b.cam).every(Number.isFinite)) b.cam = Object.assign({}, CAM0); // never stuck on a broken camera
   const c = Object.assign({}, CAM0, b.cam), t = [0, c.ty, 0], cp = Math.cos(c.pitch);
   const pos = V3.add(t, V3.mul([Math.sin(c.yaw)*cp, Math.sin(c.pitch), Math.cos(c.yaw)*cp], c.dist));
   const f = V3.norm(V3.sub(t, pos)), r = V3.norm(V3.cross(f, [0,1,0])), u = V3.cross(r, f), k = Math.tan(c.fov * Math.PI / 360);
@@ -2973,8 +2974,8 @@ function drawPose(x, W, H, figs){
 // OpenPose's colours, a round head with a face on the side it looks to), the nearest drawn last
 function drawBoard(cv, b){
   upgradeFigs(b);
-  const [W,H] = boardSize(), w = cv.clientWidth || 300, h = Math.round(w * H / W), d = window.devicePixelRatio || 1;
-  if(cv.width!==Math.round(w*d)){ cv.width = Math.round(w*d); cv.height = Math.round(h*d); cv.style.height = h + 'px'; }
+  const [W,H] = boardSize(), w = cv.clientWidth || 300, h = Math.round(w * H / W), d = Math.min(2, window.devicePixelRatio || 1);
+  if(cv.width!==Math.round(w*d) || cv.height!==Math.round(h*d)){ cv.width = Math.round(w*d); cv.height = Math.round(h*d); cv.style.height = h + 'px'; }
   const x = cv.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0);
   const cam = camOf(b, W, H), px = p => [p[0]*w, p[1]*h], foc = h / (2 * cam.ky); // pixels per unit at depth 1
   x.fillStyle = '#07080b'; x.fillRect(0, 0, w, h);
@@ -3005,8 +3006,15 @@ function drawBoard(cv, b){
     x.globalAlpha = 1; x.fillStyle = '#111217'; x.fillText(label, lx + 6, ly + 13);
   });
 }
+// one canvas per board, kept and put back each time the blocks are redrawn: iPhones only allow so much canvas memory,
+// and a new canvas on every redraw (each drag, each tap) used it up until the board went black
+const BOARDS = new Map();
+const freeCanvas = c => { c.width = c.height = 0; }; // hands its memory back at once (iOS keeps it until collected otherwise)
 function drawBoards(){
-  document.querySelectorAll('#blocks canvas[data-board]').forEach(cv => { const b = blockOf(cv); if(!b) return; drawBoard(cv, b); boardTouch(cv, b); });
+  document.querySelectorAll('#blocks canvas[data-board]').forEach(cv => { const b = blockOf(cv); if(!b) return;
+    const keep = BOARDS.get(b.id); if(keep && keep!==cv){ cv.replaceWith(keep); cv = keep; } else BOARDS.set(b.id, cv);
+    drawBoard(cv, b); boardTouch(cv, b); });
+  for(const [id, c] of BOARDS) if(!c.isConnected && !S.blocks.some(b => b.id===id && b.type==='pose')){ freeCanvas(c); BOARDS.delete(id); }
 }
 function boardTouch(cv, b){
   let drag = null;
@@ -3061,7 +3069,7 @@ async function poseUpload(){
   const [W,H] = boardSize(), key = W + 'x' + H + JSON.stringify([b.cam, b.figs.map(f => f.j)]) + (S.test ? 't' : base());
   if(b.image && b.imgFor===key) return true;
   const c = document.createElement('canvas'); c.width = W; c.height = H; drawPose(c.getContext('2d'), W, H, b.figs.map(f => figView(b, f, W, H)));
-  try{ const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+  try{ const blob = await new Promise(r => c.toBlob(r, 'image/png')); freeCanvas(c);
     const u = await uploadImage(new File([blob], 'rd-pose-' + b.id + '-' + Date.now().toString(36) + '.png', {type:'image/png'}));
     b.image = u.name; b.imgFor = key; save(); return true; }
   catch(err){ showErr('<b>Before rendering:</b><br>Could not send the pose board: ' + esc(err.message)); return false; }

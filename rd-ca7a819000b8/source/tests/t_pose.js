@@ -91,6 +91,8 @@ for(const k of Object.keys(DEF)) OI[k] = OI[k] || {input:{required:{}}};
   ok(yaw < -0.3, 'dragging the empty board walks the camera round: yaw ' + yaw.toFixed(2));
   await page.click('.block [data-do="cam"][data-v="front"]');
   ok(await page.evaluate(() => S.blocks.find(x => x.type==='pose').cam.yaw===0), 'Front puts the camera back in front');
+  ok(await page.evaluate(() => { const c = document.querySelector('.block canvas[data-board]'); renderBlocks(); renderBlocks(); renderBlocks(); const d = document.querySelector('.block canvas[data-board]');
+    return c && c===d && d.width > 0; }), 'the board keeps one canvas however often the blocks are redrawn (iPhones run out of canvas memory and go black otherwise)');
   await page.click('.block[style*="--cn"] h3');
   ok((await page.textContent('.block[style*="--cn"] small')).includes('2 figures · Levi, Mira'), 'folded summary names who is in it');
 
