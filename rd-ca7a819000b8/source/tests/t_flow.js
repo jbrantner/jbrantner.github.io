@@ -66,7 +66,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
       const id = 'p'+(++n), errs = check(body.prompt);
       if(errs.length) return r.fulfill({ status:400, json:{error:{message:'bad graph'},node_errors:{}} });
       setTimeout(() => {
-        const ks = Object.keys(body.prompt).find(k => body.prompt[k].class_type==='KSampler');
+        const ks = Object.keys(body.prompt).find(k => /^KSampler/.test(body.prompt[k].class_type));
         for(let i=1;i<=3;i++) sock.send(JSON.stringify({type:'progress',data:{value:i,max:3,prompt_id:id,node:ks}}));
         const prev = Buffer.concat([Buffer.from([0,0,0,1,0,0,0,2]), PNG]); sock.send(prev);
         const save = Object.keys(body.prompt).find(k => body.prompt[k].class_type==='SaveImage');
@@ -104,7 +104,11 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.click('#graphBtn'); const pg = JSON.parse(await page.textContent('#json')); await page.click('#scrim');
   ok(check(pg).length===0 && Object.values(pg).some(x => x.class_type==='CLIPSetLastLayer' && x.inputs.stop_at_clip_layer===-2), 'Pony style adds CLIP skip 2: '+check(pg).join('; '));
   ok(/^score_9, score_8_up/.test(textOf(pg,'Prompt')) && /^score_6, /.test(textOf(pg,'Avoid')), 'Pony style adds score tags');
-  const ks = Object.values(pg).find(x => x.class_type==='KSampler').inputs;
+  const ks = Object.values(pg).find(x => x._meta.title==='Painting').inputs;
+  // Finishing pass: Painting stops at 80% and passes its leftover noise on; the finishing sampler adds none and picks up from there
+  const fin = Object.values(pg).find(x => x._meta.title==='Finishing pass (no added noise)');
+  ok(fin && ks.return_with_leftover_noise==='enable' && ks.end_at_step===fin.inputs.start_at_step && fin.inputs.add_noise==='disable' && fin.inputs.start_at_step===Math.round(ks.steps*0.8),
+    'finishing pass continues the leftover noise instead of re-running a finished picture');
   ok(ks.cfg===7 && ks.steps===25 && ks.sampler_name==='euler_ancestral', 'Pony model gets Pony settings: cfg '+ks.cfg+', '+ks.steps+' steps, '+ks.sampler_name);
   await page.click('.block[style*="--model"] [data-seg=style][data-v=illustrious]');
   ok((await page.textContent('#addedPos')).includes('masterpiece'), 'picked style is shown under the prompt');
@@ -167,7 +171,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.click('#runsBtn'); ok((await page.textContent('#runsBtn'))==='2×', 'runs button steps to 2×');
   const before = sent.length, strip = await page.$$eval('#strip img', x => x.length);
   await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#strip img').length===n, strip + 2, {timeout:8000});
-  const seeds = sent.slice(before).map(g => Object.values(g).find(x => x.class_type==='KSampler').inputs.seed);
+  const seeds = sent.slice(before).map(g => (i => i.seed ?? i.noise_seed)(Object.values(g).find(x => x._meta.title==='Painting').inputs));
   ok(seeds.length===2 && seeds[0]!==seeds[1], 'two renders queued with different seeds');
   await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); await page.click('#runsBtn'); // back to 1×
 

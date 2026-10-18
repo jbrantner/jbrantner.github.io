@@ -319,7 +319,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.2'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.3'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -599,21 +599,31 @@ function buildGraph(){
   }
   const seed = P.seed;
   const sw = styled.length ? Math.min(...styled.map(b => b.startStep ?? 4)) : 0;
+  // Finishing pass, as in Illustrious_Main: the main sampler stops at 80% and hands its leftover noise to a second sampler
+  // that finishes the last 20% with no noise added. (Re-running those steps over an already finished picture instead makes
+  // the model "denoise" a clean image, which flattens contrast and colour: the washed-out look.)
+  const T = denoise < 1 ? Math.max(P.steps, Math.round(P.steps / denoise)) : P.steps, s0 = T - P.steps; // denoise as a step range
+  const styleRun = early && sw > 0 && !pic && sw < P.steps;
+  let split = P.noNoise !== false ? s0 + Math.max(1, Math.round(P.steps * 0.8)) : T;
+  if(styleRun && split <= sw) split = T; // the style LoRA starts too late to leave room for a finishing pass
+  if(split >= T) split = 10000;
+  const leftover = split < 10000 ? 'enable' : 'disable';
   let ks;
-  if(early && sw > 0 && !pic && sw < P.steps){
+  if(styleRun){
     // the plain model sets the pose for the first steps, then the style-only LoRA paints over it (as in Illustrious_Main v5)
     const a = add('KSamplerAdvanced', {model:early, add_noise:'enable', noise_seed:seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
       positive:pp, negative:nn, latent_image:latent, start_at_step:0, end_at_step:sw, return_with_leftover_noise:'enable'}, 'Painting: pose (steps 0–' + sw + ')', '--samp');
     ks = add('KSamplerAdvanced', {model, add_noise:'disable', noise_seed:seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
-      positive:pp, negative:nn, latent_image:[a,0], start_at_step:sw, end_at_step:10000, return_with_leftover_noise:'disable'}, 'Painting: style (step ' + sw + ' on)', '--samp');
+      positive:pp, negative:nn, latent_image:[a,0], start_at_step:sw, end_at_step:split, return_with_leftover_noise:leftover}, 'Painting: style (step ' + sw + ' on)', '--samp');
+  } else if(split < 10000){
+    ks = add('KSamplerAdvanced', {model, add_noise:'enable', noise_seed:seed, steps:T, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
+      positive:pp, negative:nn, latent_image:latent, start_at_step:s0, end_at_step:split, return_with_leftover_noise:'enable'}, 'Painting', '--samp');
   } else {
     ks = add('KSampler', {seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler, denoise, model, positive:pp, negative:nn, latent_image:latent}, 'Painting', '--samp');
   }
-  if(P.noNoise !== false){
-    // finishing pass of the old Illustrious_Main: the last 20% of the steps again, no noise added, to settle the picture
-    const from = Math.max(1, Math.round(P.steps * 0.8));
-    ks = add('KSamplerAdvanced', {model, add_noise:'disable', noise_seed:seed, steps:P.steps, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
-      positive:pp, negative:nn, latent_image:[ks,0], start_at_step:from, end_at_step:10000, return_with_leftover_noise:'disable'}, 'Finishing pass (no added noise)', '--samp');
+  if(split < 10000){
+    ks = add('KSamplerAdvanced', {model, add_noise:'disable', noise_seed:seed, steps:T, cfg:P.cfg, sampler_name:P.sampler, scheduler:P.scheduler,
+      positive:pp, negative:nn, latent_image:[ks,0], start_at_step:split, end_at_step:10000, return_with_leftover_noise:'disable'}, 'Finishing pass (no added noise)', '--samp');
   }
   let out = [add('VAEDecode', {samples:[ks,0], vae}, 'Decode', '--samp'), 0];
   const up = on('up')[0];
@@ -860,7 +870,7 @@ function blockBody(b){
     <div class="row"><label>Seed</label><div class="grow"><input data-k="seed" inputmode="numeric" value="${b.seed}"></div></div>
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="dice">🎲 New seed</button><button class="chipbtn" data-do="lock" style="${b.lockSeed?'border-color:var(--samp);color:var(--samp)':''}">${b.lockSeed?'🔒 Kept':'🔓 New each time'}</button></div>
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="nonoise" style="${b.noNoise!==false?'border-color:var(--samp);color:var(--samp)':''}">${b.noNoise!==false ? '✓ Finishing pass' : 'Finishing pass: off'}</button>${FACE('samp')}</div>
-    <p class="note" style="margin-left:92px">Finishing pass runs the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps again with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>
+    <p class="note" style="margin-left:92px">Finishing pass hands the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps to a second sampler with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>
     ${b.faces ? slider('faceDenoise','Face redraw',0.2,0.6,0.05,b.faceDenoise ?? 0.35) + slider('faceFeather','Face blend',8,64,4,b.faceFeather ?? 32) + '<p class="note" style="margin-left:92px">Lower Face redraw keeps the face closer to the original; higher Face blend softens the edge into the surroundings.</p>' : ''}`; }
   if(b.type==='lora'){ const w = S.loraWords[b.lora] || '', lm = loraMeta(b.lora), meta = ((lm && lm.words) || []).filter(x => !w.toLowerCase().split(/,\s*/).includes(x.toLowerCase()));
     return `<div class="row"><select data-k="lora">${opts(I.lora, b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
