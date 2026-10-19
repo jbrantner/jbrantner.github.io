@@ -1,6 +1,7 @@
-// 🪄 Build it all: from one Reference picture the card runs the turnaround (no LoRA), finds the front, sides and back in
-// it, makes the 3D model, then the styled turnaround from the 3D model with the AFKJ Style LoRA, with a progress bar.
-// Afterwards a found frame can be swapped and any step redone; the steps after it run again. Test mode throughout.
+// 🪄 Build it all: from one Reference picture the card makes the turnaround (no LoRA), finds six angles in it and
+// redraws each with Illustrious (the quality pass), with a progress bar; a frame can be swapped (and is redrawn), any
+// step redone. 🎞 Training shots: MiniMax acts each line out from the picture, side and back; the sharpest frame is
+// redrawn and joins the card with its tags, which the training set captions use. Test mode throughout.
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path');
 (async () => {
@@ -14,57 +15,58 @@ const fs = require('fs'), path = require('path');
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.waitForTimeout(300);
-  await page.evaluate(() => { closeSheets(); FAKETV.UNETLoader.input.required.unet_name[0].push('DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors'); FAKETV.LoraLoaderModelOnly.input.required.lora_name[0].push('AFK_Claude_minimaxh3_3378890_epoch_10.safetensors', 'AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors');
+  await page.evaluate(() => { closeSheets();
     S.chars = [{id:'c1', name:'Mira', tags:'1girl, red jacket', color:'#ff5ca8', views:[{id:'v0', angle:'ref', img:'mira.png', url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', home:'test'}]}]; save();
     window.GRAPHS = []; const mk = makeTurn; makeTurn = async (c, m, o) => { await mk(c, m, o); GRAPHS.push({model:!!m, g:MTV.last}); }; });
   await page.click('#charBtn'); await page.click('#charBody [data-open="c1"]');
   const txt = await page.textContent('#charBody');
-  ok(/🪄 Build it all/.test(txt) && /One tap does the whole chain from the Reference picture/.test(txt), 'the card offers Build it all from the Reference picture');
-  ok(await page.inputValue('#charBody [data-pipecf="lora"]')==='AFK_Claude_minimaxh3_3378890_epoch_10.safetensors' && await page.inputValue('#charBody [data-pipecf="words"]')==='AFKJ Style', 'step 4 defaults to the AFKJ Style LoRA (not the retired one) with its activation words');
-  // slow the steps a little so the progress bar can be seen
-  await page.evaluate(() => { const m = make3d; make3d = async c => { await new Promise(r => setTimeout(r, 600)); return m(c); }; });
+  ok(/🪄 Build it all/.test(txt) && /six angles picked out of it/.test(txt) && !/3D model's spin/.test(txt), 'the card offers Build it all (turnaround, angles, quality pass; no 3D)');
+  await page.evaluate(() => { const r = redrawPic; redrawPic = async (...a) => { await new Promise(x => setTimeout(x, 120)); return r(...a); }; });
   await page.click('#charBody [data-ch="pipego"]');
   await page.waitForSelector('#charBody [data-pipebar]', {timeout:3000});
-  ok(/Step \d of 4/.test(await page.textContent('#charBody [data-pipetxt]')), 'a progress bar with the step and time left: ' + await page.textContent('#charBody [data-pipetxt]'));
-  await page.waitForFunction(() => S.chars[0].pipe && !S.chars[0].pipe.run && S.chars[0].pipe.done && S.chars[0].pipe.done.turn2, null, {timeout:15000});
-  const st = await page.evaluate(() => ({pipe:S.chars[0].pipe, views:S.chars[0].views.map(v => v.angle + (v.pipe ? '*' : '')), graphs:GRAPHS.map(x => ({model:x.model, loras:Object.values(x.g).filter(n => n.class_type==='LoraLoaderModelOnly').map(n => n.inputs.lora_name), cn:Object.values(x.g).some(n => n.class_type==='MiniMaxH3FunControlNetApply'), unet:Object.values(x.g).find(n => n.class_type==='UNETLoader').inputs.unet_name, steps:Object.values(x.g).find(n => n.class_type==='BasicScheduler').inputs.steps, prompt:(Object.values(x.g).find(n => n.class_type==='MiniMaxH3ReferenceToVideo') || {inputs:{}}).inputs.prompt})), m3d:!!S.chars[0].model3d}));
-  ok(Object.keys(st.pipe.done).sort().join()==='model,sides,turn1,turn2' && !st.pipe.err, 'all four steps done: ' + (st.pipe.err || ''));
-  ok(st.views.join()==='ref,front*,right*,back*,left*', 'front, right side, back and left side were added from the first turnaround: ' + st.views.join());
-  ok(st.graphs.length===2 && !st.graphs[0].model && !st.graphs[0].loras.some(l => /AFK/.test(l)), 'the first turnaround has no style LoRA: ' + JSON.stringify(st.graphs[0] && st.graphs[0].loras));
-  ok(st.graphs[1] && st.graphs[1].model && st.graphs[1].cn && st.graphs[1].loras.includes('AFK_Claude_minimaxh3_3378890_epoch_10.safetensors') && /^AFKJ Style\. /.test(st.graphs[1].prompt), 'the second is from the 3D model (ControlNet) with the AFKJ Style LoRA and "AFKJ Style." first');
-  ok(/Turbo/.test(st.graphs[0].unet) && st.graphs[0].steps===4 && /Turbo/.test(st.graphs[1].unet) && st.graphs[1].steps===4, 'both turnarounds on Turbo (4 steps) by default: ' + st.graphs.map(g => g.unet + ' ' + g.steps).join(' / '));
-  ok(st.m3d, 'the 3D model was made');
-  ok(st.graphs.every(x => x.prompt && !/undefined/.test(x.prompt)), 'both prompts are clean');
-  // both turnarounds used the picture given, not the front it found
-  ok(await page.evaluate(() => Object.values(GRAPHS[1].g).find(n => n.class_type==='LoadImage').inputs.image)==='mira.png', 'the styled turnaround still looks at the original picture');
-  let t2 = await page.textContent('#charBody');
-  ok(/Picked from the first turnaround/.test(t2) && (await page.$$('#charBody [data-piperedo]')).length===4, 'each step can be redone, and the picked frames are shown');
-  // swap the back for another frame
-  await page.click('#charBody [data-pvang="back"]');
-  ok(await page.$('#charBody [data-ch="pvuse"]')!==null, 'tapping a picked frame opens the frame picker');
-  await page.click('#charBody [data-ch="pvuse"]'); await page.waitForTimeout(300);
-  const sw = await page.evaluate(() => ({backs:S.chars[0].views.filter(v => v.angle==='back').length, swapped:S.chars[0].pipe.swapped}));
-  ok(sw.backs===1 && sw.swapped, 'the swapped frame replaces the old back');
-  ok(await page.$('#charBody button[data-piperedo="model"].hot')!==null, 'after a swap it offers to redo the 3D model and styled turnaround');
-  const n3d = await page.evaluate(() => S.chars[0].model3d.at);
-  await page.click('#charBody button[data-piperedo="model"].hot');
-  await page.waitForFunction(at => S.chars[0].pipe && !S.chars[0].pipe.run && S.chars[0].pipe.done.turn2 && S.chars[0].model3d.at > at, n3d, {timeout:15000});
-  const re = await page.evaluate(() => ({graphs:GRAPHS.length, turn1:!!S.chars[0].pipe.done.turn1, views:S.chars[0].views.length}));
-  ok(re.graphs===3 && re.turn1 && re.views===5, 'redo from the 3D model kept the first turnaround and the frames, and made the model and the styled turnaround again');
-  // full quality and no LoRA for step 4, then redo only that step
-  await page.selectOption('#charBody [data-pipecf="model2"]', 'DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors');
-  await page.selectOption('#charBody [data-pipecf="lora"]', '');
-  await page.click('#charBody [data-piperedo="turn2"]');
-  await page.waitForFunction(() => GRAPHS.length===4 && !S.chars[0].pipe.run, null, {timeout:10000});
-  ok(await page.evaluate(() => !Object.values(GRAPHS[3].g).some(n => n.class_type==='LoraLoaderModelOnly' && /AFK/.test(n.inputs.lora_name))), 'picking None for step 4 drops the style LoRA when it is redone');
-  ok(await page.evaluate(() => { const n = Object.values(GRAPHS[3].g); return /HybridV2_int8/.test(n.find(x => x.class_type==='UNETLoader').inputs.unet_name) && n.find(x => x.class_type==='BasicScheduler').inputs.steps===20; }), 'a 20-step model picked for step 4 is used when it is redone');
-  // the sides are found where the silhouette is narrowest
+  ok(/Step \d of 3/.test(await page.textContent('#charBody [data-pipetxt]')), 'a progress bar with the step and time left: ' + await page.textContent('#charBody [data-pipetxt]'));
+  await page.waitForFunction(() => S.chars[0].pipe && !S.chars[0].pipe.run && S.chars[0].pipe.done && S.chars[0].pipe.done.redraw, null, {timeout:15000});
+  const st = await page.evaluate(() => ({pipe:S.chars[0].pipe, views:S.chars[0].views.map(v => (v.slot || v.angle) + (v.redrawn ? '*' : '')), graphs:GRAPHS.map(x => ({model:x.model, loras:Object.values(x.g).filter(n => n.class_type==='LoraLoaderModelOnly').map(n => n.inputs.lora_name)})), m3d:!!S.chars[0].model3d, red:REDRAWN.length, rg:REDRAWN[0]}));
+  ok(Object.keys(st.pipe.done).sort().join()==='redraw,sides,turn1' && !st.pipe.err, 'all three steps done: ' + (st.pipe.err || ''));
+  ok(st.views.join()==='ref,front*,three*,right*,back*,left*,three_b*', 'six angles from the turnaround, each redrawn: ' + st.views.join());
+  ok(st.graphs.length===1 && !st.graphs[0].model && !st.graphs[0].loras.some(l => /AFK/.test(l)) && !st.m3d, 'one turnaround, no style LoRA, no 3D model');
+  const rg = Object.values(st.rg), up = rg.find(n => n.class_type==='UltimateSDUpscaleNoUpscale'), pos = rg.find(n => n.class_type==='CLIPTextEncode');
+  ok(st.red===6 && up && up.inputs.denoise===0.35 && up.inputs.tile_width===1024 && rg.find(n => n.class_type==='ImageScaleBy').inputs.scale_by===1.5 && rg.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='oneObsession_v24.safetensors'
+    && /red jacket/.test(pos.inputs.text) && /a-pose/.test(pos.inputs.text) && !rg.some(n => /Lora/.test(n.class_type)), 'quality pass: 1.5×, Illustrious tiles at 0.35, the card tags, no LoRA');
+  ok(/Picked from the turnaround, redrawn/.test(await page.textContent('#charBody')) && (await page.$$('#charBody [data-piperedo]')).length===3, 'each step can be redone, and the picked frames are shown');
+  // swap the back: the new frame gets the quality pass too
+  await page.click('#charBody [data-pvslot="back"]');
+  await page.click('#charBody [data-ch="pvuse"]'); await page.waitForFunction(() => REDRAWN.length===7, null, {timeout:5000});
+  ok(await page.evaluate(() => S.chars[0].views.filter(v => v.slot==='back').length===1 && S.chars[0].views.find(v => v.slot==='back').redrawn), 'a swapped frame replaces the old one and is redrawn');
+  await page.click('#charBody [data-piperedo="redraw"]'); await page.waitForFunction(() => REDRAWN.length===13 && !S.chars[0].pipe.run, null, {timeout:8000});
+  ok(await page.evaluate(() => GRAPHS.length===1), 'redoing the quality pass keeps the turnaround');
+  // training shots
+  ok(/🎞 Training shots/.test(await page.textContent('#charBody')) && /Make 12 training shots/.test(await page.textContent('#charBody [data-ch="shotgo"]')), 'training shots offer the 12 starter actions');
+  await page.evaluate(() => { S.chars[0].shotList = 'sits in a wooden armchair, reading a book | sitting, armchair, reading, indoors\nwaves at the camera in a park | waving, outdoors, park'; save(); drawChars(); });
+  await page.click('#charBody [data-ch="shotgo"]');
+  await page.waitForFunction(() => (S.chars[0].shots || []).length===2 && S.chars[0].shots.every(s => s.view) && !SHOT_RUN.c1, null, {timeout:10000});
+  const sg = await page.evaluate(() => { const g = Object.values(SHOT_RUN.last), rv = g.find(n => n.class_type==='MiniMaxH3ReferenceToVideo').inputs;
+    return {refs:Object.keys(rv).filter(k => /^ref_images/.test(k)).map(k => g[+rv[k][0] - 1] ? Object.entries(SHOT_RUN.last).find(([id]) => id===rv[k][0])[1].inputs.image : ''), prompt:rv.prompt, loras:g.filter(n => n.class_type==='LoraLoaderModelOnly').map(n => n.inputs.lora_name),
+      shots:S.chars[0].views.filter(v => v.shot).map(v => ({cap:v.cap, red:!!v.redrawn}))}; });
+  ok(sg.refs.length===3 && sg.refs[0]==='mira.png', 'each shot looks at the picture, a side and the back: ' + sg.refs.join(', '));
+  ok(/<Picture 2>: <Subject 1> from the side/.test(sg.prompt) && /<Picture 3>: <Subject 1> from behind/.test(sg.prompt) && /waves at the camera in a park/.test(sg.prompt) && !sg.loras.some(l => /AFK/.test(l)), 'the prompt names the pictures and the action, no style LoRA');
+  ok(sg.shots.length===2 && sg.shots.every(x => x.red) && sg.shots[1].cap==='waving, outdoors, park', 'each shot joins the card redrawn, with its tags');
+  // the training set: captions from the tags, and the angles instead of raw turnaround frames
+  await page.evaluate(() => { S.chars[0].trigger = 'mira'; });
+  const caps = await page.evaluate(async () => { const c = S.chars[0]; picHash = async () => Math.random().toString(36); c.turn = {url:'', test:true}; await exportSet(c); return c.set.files.map(f => f.cap + (f.frame ? ' [frame]' : '')); });
+  ok(caps.some(x => x==='mira, 1girl, solo, sitting, armchair, reading, indoors') && caps.some(x => /from behind, standing, a-pose.*\[frame\]$/.test(x)), 'training set captions come from the shot tags and the angles: ' + caps.slice(-3).join(' / '));
+  // the sharpest frame
+  const sharp = await page.evaluate(async () => { const real = clipFrames;
+    clipFrames = async (url, idx, grab) => idx.map(i => { const cv = document.createElement('canvas'); cv.width = 576; cv.height = 1024; const x = cv.getContext('2d'); x.fillStyle = '#888'; x.fillRect(0, 0, 576, 1024);
+      if(i===48){ x.fillStyle = '#000'; for(let k = 0; k < 40; k++) x.fillRect(10 + k * 14, 0, 6, 1024); } else { x.filter = 'blur(6px)'; x.fillStyle = '#000'; for(let k = 0; k < 40; k++) x.fillRect(10 + k * 14, 0, 6, 1024); } return grab(cv); });
+    try{ return await sharpestFrame('x'); } finally { clipFrames = real; } });
+  ok(sharp===48, 'the sharpest frame is picked: ' + sharp);
+  // the sides
   const sides = await page.evaluate(async () => { const real = clipFrames;
     clipFrames = async (url, idx, grab) => idx.map(i => { const cv = document.createElement('canvas'); cv.width = 576; cv.height = 1024; const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 576, 1024);
       const th = 2 * Math.PI * i / (TV_LEN - 1), w = 60 + 300 * Math.abs(Math.cos(th + 0.25)); x.fillStyle = '#334'; x.fillRect(288 - w / 2, 100, w, 800); return grab(cv); });
     try{ return await findSides('x'); } finally { clipFrames = real; } });
-  // |cos(th + 0.25)| is smallest at th = pi/2 - 0.25 and 3pi/2 - 0.25: frames ~26.6 and ~88.1
-  ok(Math.abs(sides.right - 26.6) <= 2 && Math.abs(sides.left - 88.1) <= 2 && Math.abs(sides.back - 57.4) <= 3 && sides.front <= 9, 'sides found at the narrowest silhouettes: ' + JSON.stringify(sides));
+  ok(Math.abs(sides.right - 26.6) <= 2 && Math.abs(sides.left - 88.1) <= 2 && Math.abs(sides.back - 57.4) <= 3 && sides.front <= 9 && sides.three > sides.front && sides.three < sides.right && sides.three_b > sides.left, 'angles found at the narrowest silhouettes: ' + JSON.stringify(sides));
   ok(logs.length===0, 'no errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' failed' : 'all passed'); process.exit(fail.length ? 1 : 0);
