@@ -14,7 +14,7 @@ const fs = require('fs'), path = require('path');
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.waitForTimeout(300);
-  await page.evaluate(() => { closeSheets(); FAKETV.LoraLoaderModelOnly.input.required.lora_name[0].push('AFK_Claude_minimaxh3_3378890_epoch_10.safetensors', 'AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors');
+  await page.evaluate(() => { closeSheets(); FAKETV.UNETLoader.input.required.unet_name[0].push('DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors'); FAKETV.LoraLoaderModelOnly.input.required.lora_name[0].push('AFK_Claude_minimaxh3_3378890_epoch_10.safetensors', 'AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors');
     S.chars = [{id:'c1', name:'Mira', tags:'1girl, red jacket', color:'#ff5ca8', views:[{id:'v0', angle:'ref', img:'mira.png', url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', home:'test'}]}]; save();
     window.GRAPHS = []; const mk = makeTurn; makeTurn = async (c, m, o) => { await mk(c, m, o); GRAPHS.push({model:!!m, g:MTV.last}); }; });
   await page.click('#charBtn'); await page.click('#charBody [data-open="c1"]');
@@ -27,11 +27,12 @@ const fs = require('fs'), path = require('path');
   await page.waitForSelector('#charBody [data-pipebar]', {timeout:3000});
   ok(/Step \d of 4/.test(await page.textContent('#charBody [data-pipetxt]')), 'a progress bar with the step and time left: ' + await page.textContent('#charBody [data-pipetxt]'));
   await page.waitForFunction(() => S.chars[0].pipe && !S.chars[0].pipe.run && S.chars[0].pipe.done && S.chars[0].pipe.done.turn2, null, {timeout:15000});
-  const st = await page.evaluate(() => ({pipe:S.chars[0].pipe, views:S.chars[0].views.map(v => v.angle + (v.pipe ? '*' : '')), graphs:GRAPHS.map(x => ({model:x.model, loras:Object.values(x.g).filter(n => n.class_type==='LoraLoaderModelOnly').map(n => n.inputs.lora_name), cn:Object.values(x.g).some(n => n.class_type==='MiniMaxH3FunControlNetApply'), prompt:(Object.values(x.g).find(n => n.class_type==='MiniMaxH3ReferenceToVideo') || {inputs:{}}).inputs.prompt})), m3d:!!S.chars[0].model3d}));
+  const st = await page.evaluate(() => ({pipe:S.chars[0].pipe, views:S.chars[0].views.map(v => v.angle + (v.pipe ? '*' : '')), graphs:GRAPHS.map(x => ({model:x.model, loras:Object.values(x.g).filter(n => n.class_type==='LoraLoaderModelOnly').map(n => n.inputs.lora_name), cn:Object.values(x.g).some(n => n.class_type==='MiniMaxH3FunControlNetApply'), unet:Object.values(x.g).find(n => n.class_type==='UNETLoader').inputs.unet_name, steps:Object.values(x.g).find(n => n.class_type==='BasicScheduler').inputs.steps, prompt:(Object.values(x.g).find(n => n.class_type==='MiniMaxH3ReferenceToVideo') || {inputs:{}}).inputs.prompt})), m3d:!!S.chars[0].model3d}));
   ok(Object.keys(st.pipe.done).sort().join()==='model,sides,turn1,turn2' && !st.pipe.err, 'all four steps done: ' + (st.pipe.err || ''));
   ok(st.views.join()==='ref,front*,right*,back*,left*', 'front, right side, back and left side were added from the first turnaround: ' + st.views.join());
   ok(st.graphs.length===2 && !st.graphs[0].model && !st.graphs[0].loras.some(l => /AFK/.test(l)), 'the first turnaround has no style LoRA: ' + JSON.stringify(st.graphs[0] && st.graphs[0].loras));
   ok(st.graphs[1] && st.graphs[1].model && st.graphs[1].cn && st.graphs[1].loras.includes('AFK_Claude_minimaxh3_3378890_epoch_10.safetensors') && /^AFKJ Style\. /.test(st.graphs[1].prompt), 'the second is from the 3D model (ControlNet) with the AFKJ Style LoRA and "AFKJ Style." first');
+  ok(/Turbo/.test(st.graphs[0].unet) && st.graphs[0].steps===4 && /Turbo/.test(st.graphs[1].unet) && st.graphs[1].steps===4, 'both turnarounds on Turbo (4 steps) by default: ' + st.graphs.map(g => g.unet + ' ' + g.steps).join(' / '));
   ok(st.m3d, 'the 3D model was made');
   ok(st.graphs.every(x => x.prompt && !/undefined/.test(x.prompt)), 'both prompts are clean');
   // both turnarounds used the picture given, not the front it found
@@ -50,11 +51,13 @@ const fs = require('fs'), path = require('path');
   await page.waitForFunction(at => S.chars[0].pipe && !S.chars[0].pipe.run && S.chars[0].pipe.done.turn2 && S.chars[0].model3d.at > at, n3d, {timeout:15000});
   const re = await page.evaluate(() => ({graphs:GRAPHS.length, turn1:!!S.chars[0].pipe.done.turn1, views:S.chars[0].views.length}));
   ok(re.graphs===3 && re.turn1 && re.views===5, 'redo from the 3D model kept the first turnaround and the frames, and made the model and the styled turnaround again');
-  // a different LoRA for step 4, then redo only that step
+  // full quality and no LoRA for step 4, then redo only that step
+  await page.selectOption('#charBody [data-pipecf="model2"]', 'DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors');
   await page.selectOption('#charBody [data-pipecf="lora"]', '');
   await page.click('#charBody [data-piperedo="turn2"]');
   await page.waitForFunction(() => GRAPHS.length===4 && !S.chars[0].pipe.run, null, {timeout:10000});
   ok(await page.evaluate(() => !Object.values(GRAPHS[3].g).some(n => n.class_type==='LoraLoaderModelOnly' && /AFK/.test(n.inputs.lora_name))), 'picking None for step 4 drops the style LoRA when it is redone');
+  ok(await page.evaluate(() => { const n = Object.values(GRAPHS[3].g); return /HybridV2_int8/.test(n.find(x => x.class_type==='UNETLoader').inputs.unet_name) && n.find(x => x.class_type==='BasicScheduler').inputs.steps===20; }), 'a 20-step model picked for step 4 is used when it is redone');
   // the sides are found where the silhouette is narrowest
   const sides = await page.evaluate(async () => { const real = clipFrames;
     clipFrames = async (url, idx, grab) => idx.map(i => { const cv = document.createElement('canvas'); cv.width = 576; cv.height = 1024; const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 576, 1024);

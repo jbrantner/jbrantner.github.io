@@ -473,7 +473,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-19.58'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-19.59'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4592,7 +4592,7 @@ function turnVideoGraph(k, img, c, pinned, control, o = {}){
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
   const pin = !pinned ? li : k.oi.ResizeAndPadImage ? add('ResizeAndPadImage', {image:[li,0], target_width:TV_W, target_height:TV_H, padding_color:'white', interpolation:'lanczos'}) : li; // fit, not crop, so head and feet stay in
-  const un = c.tvModel && (k.videos || []).includes(c.tvModel) ? c.tvModel : k.unet, fast = /turbo/i.test(baseName(un)); // the picked video model, else the usual one
+  const pickd = o.model || c.tvModel, un = pickd && (k.videos || []).includes(pickd) ? pickd : k.unet, fast = /turbo/i.test(baseName(un)); // the picked video model, else the usual one
   let model = [add('UNETLoader', {unet_name:un, weight_dtype:'default'}), 0];
   if(k.lora && fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   const want = 'lora' in o ? o.lora : c.tvLora, sl = want && (k.styles || []).includes(want) ? want : ''; // the style LoRA (Build it all picks its own), before the ControlNet as in the AFKJ two-pass
@@ -4727,7 +4727,7 @@ async function makeTurn(c, fromModel, o = {}){
     if(S.test){ await new Promise(r => setTimeout(r, 300)); c.turn = {url:'', test:true, at:Date.now(), pc:'test', model:!!fromModel}; MTV.last = g; delete MTV[c.id]; save(); drawChars(); return; }
     const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-turn'})});
     const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    c.turn = Object.assign({}, c.turn, {making:{pc:k.url, id:j.prompt_id, save:sid, t:Date.now(), prefix:turnPrefix(c), mins:/turbo/i.test(baseName(c.tvModel || k.unet)) ? k.mins : 'about 15', model:!!fromModel, fit}}); save();
+    c.turn = Object.assign({}, c.turn, {making:{pc:k.url, id:j.prompt_id, save:sid, t:Date.now(), prefix:turnPrefix(c), mins:/turbo/i.test(baseName(o.model || c.tvModel || k.unet)) ? k.mins : 'about 15', model:!!fromModel, fit}}); save();
     await waitTurn(c);
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't make the turnaround: " + err.message}); drawChars(); }
 }
@@ -4836,9 +4836,13 @@ function pipeLora(c, k){ const P = c.pipe || {};
   if(P.lora!==undefined) return (k.styles || []).includes(P.lora) ? P.lora : '';
   return (k.styles || []).find(n => AFKJ_LORA.test(baseName(n))) || ''; }
 const pipeWords = (c, lora) => { const P = c.pipe || {}; return P.words!=null ? P.words : lora && AFKJ_LORA.test(baseName(lora)) ? 'AFKJ Style' : ''; };
+// the styled turnaround's video model: the one picked for step 4, else the card's Video model (Turbo by default; Jordan chose Turbo, 2026-10-19)
+function pipeModel(c, k){ const P = c.pipe || {};
+  if(P.model2 && (k.videos || []).includes(P.model2)) return P.model2;
+  return c.tvModel && (k.videos || []).includes(c.tvModel) ? c.tvModel : k.unet; }
 const pipeSrc = c => c.views.find(v => v.id===(c.pipe || {}).src) || null;
-function pipeEst(c, step){ const k = kitTurn(), fast = /turbo/i.test(baseName(c.tvModel || k.unet || ''));
-  return {turn1:fast ? 300 : 720, sides:40, model:300, turn2:fast ? 330 : 900}[step]; }
+function pipeEst(c, step){ const k = kitTurn(), fast = /turbo/i.test(baseName(c.tvModel || k.unet || '')), fast2 = /turbo/i.test(baseName(k.why ? '' : pipeModel(c, k) || ''));
+  return {turn1:fast ? 300 : 720, sides:40, model:300, turn2:fast2 ? 330 : 900}[step]; }
 function pipeProg(c){ const P = c.pipe || {}, tot = PIPE.reduce((t, [s]) => t + pipeEst(c, s), 0), at = PIPE.findIndex(x => x[0]===P.cur); let d = 0;
   PIPE.forEach(([s], i) => { if(at >= 0 ? i < at : P.done && P.done[s]) d += pipeEst(c, s);
     else if(i===at) d += pipeEst(c, s) * Math.min(0.95, (Date.now() - (P.t0 || Date.now())) / 1000 / pipeEst(c, s)); });
@@ -4896,11 +4900,11 @@ const PIPE_FN = {
     if(!k.ok3d) throw new Error(pcName(k.url) + " doesn't have MiniMax H3's Fun ControlNet");
     if(!c.model3d || !(c.model3d.raw || c.model3d.test)) throw new Error('there is no 3D model yet');
     const lora = pipeLora(c, k);
-    if(resume && c.turn && c.turn.making) waitTurn(c); else await makeTurn(c, true, {lora, w:P.w || 1, words:pipeWords(c, lora), src:pipeSrc(c)});
+    if(resume && c.turn && c.turn.making) waitTurn(c); else await makeTurn(c, true, {lora, w:P.w || 1, words:pipeWords(c, lora), src:pipeSrc(c), model:pipeModel(c, k)});
     await until(() => !(c.turn && c.turn.making) && !(MTV[c.id] && MTV[c.id].state==='busy'));
     if(MTV[c.id] && MTV[c.id].state==='err') throw new Error(MTV[c.id].text.replace(/^Couldn't make the turnaround: /, ''));
     if(!c.turn || !(c.turn.url || c.turn.test) || (c.turn.at || 0) < P.t0 - 5000) throw new Error('no clip came back');
-    P.turn2 = {url:c.turn.url, pc:c.turn.pc, test:!!c.turn.test, at:c.turn.at, lora};
+    P.turn2 = {url:c.turn.url, pc:c.turn.pc, test:!!c.turn.test, at:c.turn.at, lora, model:pipeModel(c, k)};
   },
 };
 // runs the steps from `from` (the first when left out) to the end; `resume` picks a step back up after the app was closed
@@ -4940,7 +4944,7 @@ function boxPipe(c){
   if(P.run) h += `<div class="pbar" style="margin-top:4px"><i data-pipebar style="width:0%"></i></div><p class="note" data-pipetxt></p>`;
   h += '<div class="psteps">' + PIPE.map(([s, name], i) => {
     const st = P.cur===s ? '✱' : done[s] ? '✓' : '○', clip = s==='turn1' ? P.turn1 : s==='turn2' ? P.turn2 : null;
-    return `<div class="prow"><span class="pst">${st}</span><span class="grow">${esc(name)}${s==='turn2' && P.turn2 ? `<small> · ${esc(P.turn2.lora ? baseName(P.turn2.lora).replace(/\.safetensors$/, '') : 'no LoRA')}</small>` : ''}</span>
+    return `<div class="prow"><span class="pst">${st}</span><span class="grow">${esc(name)}${s==='turn2' && P.turn2 ? `<small> · ${esc(P.turn2.lora ? baseName(P.turn2.lora).replace(/\.safetensors$/, '') : 'no LoRA')}${P.turn2.model ? ', ' + esc(/turbo/i.test(baseName(P.turn2.model)) ? 'Turbo' : 'full quality') : ''}</small>` : ''}</span>
       ${clip && clip.url && done[s] ? `<button class="chipbtn" data-pipesee="${s}">▶ Watch</button>` : ''}${!P.run && (done[s] || P.err && PIPE.findIndex(x => !done[x[0]])===i) ? `<button class="chipbtn" data-piperedo="${s}">↻ Redo from here</button>` : ''}</div>`; }).join('') + '</div>';
   if(P.err && !P.run) h += `<p class="warn">${esc(P.err)}</p>`;
   if(done.sides && !P.run){ // the frames it picked, each one swappable
@@ -4952,11 +4956,13 @@ function boxPipe(c){
     else h += '<p class="note">Tap one to pick a better frame for it from the first turnaround.</p>';
     if(P.swapped && done.model) h += `<div class="btnrow"><button class="btn hot" data-piperedo="model">↻ Redo the 3D model and styled turnaround with the new frames</button></div>`;
   }
+  if(!k.why && (k.videos || []).length > 1){ const m2 = pipeModel(c, k);
+    h += `<div class="row" style="margin-top:8px"><label>Step 4 model</label><div class="grow"><select data-pipecf="model2">${k.videos.map(n => `<option value="${esc(n)}"${n===m2 ? ' selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/, ''))}${/turbo/i.test(baseName(n)) ? ' (4 steps)' : ' (20 steps)'}</option>`).join('')}</select></div></div>`; }
   if(!k.why && (k.styles || []).length){ const l = pipeLora(c, k);
     h += `<div class="row" style="margin-top:8px"><label>Step 4 LoRA</label><div class="grow"><select data-pipecf="lora"><option value=""${l ? '' : ' selected'}>None</option>${k.styles.map(n => `<option value="${esc(n)}"${n===l ? ' selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/, ''))}</option>`).join('')}</select></div></div>
       <div class="row"><label>Strength</label><input type="number" data-pipecf="w" min="0" max="2" step="0.1" value="${esc(String(P.w || 1))}" style="width:80px"></div>
       <div class="row"><label>Activation</label><div class="grow"><input type="text" data-pipecf="words" placeholder="e.g. AFKJ Style" value="${esc(pipeWords(c, l))}"></div></div>
-      <p class="note" style="margin:-2px 0 0 92px">Only the styled turnaround uses these; the first turnaround has no LoRA. The video model is the one picked under Turnaround video.</p>`; }
+      <p class="note" style="margin:-2px 0 0 92px">Only the styled turnaround uses these; pick a 20-step model for full quality (about 15 minutes). The first turnaround has no LoRA and uses the Video model under Turnaround video (Turbo by default).</p>`; }
   if(P.run) return h + `<div class="btnrow"><button class="btn" data-ch="pipestop" ${P.stop ? 'disabled' : ''}>${P.stop ? 'Stopping after this step…' : '⏸ Stop after this step'}</button></div>`;
   if(k.why) return h + `<p class="note">${esc(k.why)}.</p>`;
   return h + `<div class="btnrow"><button class="btn${any ? '' : ' hot'}" data-ch="pipego" ${src ? '' : 'disabled'}>🪄 ${any ? 'Build it all again' : 'Build it all'}</button></div>`;
@@ -5065,7 +5071,7 @@ $('#charSheet').addEventListener('error', viaHere, true);
 $('#charBody').addEventListener('input', e => { if('tvt' in e.target.dataset){ TV.moved = true; showTurn(); return; }
   if('pvt' in e.target.dataset){ PV.moved = true; showPv(); return; }
   if(e.target.dataset.pipecf){ const c = S.chars.find(x => x.id===CH.id); if(!c) return; const P = c.pipe = c.pipe || {}, f = e.target.dataset.pipecf;
-    P[f] = f==='w' ? parseFloat(e.target.value) || 1 : e.target.value; save(); if(f==='lora'){ delete P.words; drawChars(); } return; }
+    P[f] = f==='w' ? parseFloat(e.target.value) || 1 : e.target.value; save(); if(f==='lora'){ delete P.words; } if(f==='lora' || f==='model2') drawChars(); return; }
   const c = S.chars.find(x => x.id===CH.id), f = e.target.dataset.cf; if(!c || !f) return; c[f] = e.target.value; save(); });
 $('#charBody').onclick = async e => {
   const t = e.target.closest('button,[data-open]'); if(!t) return;
