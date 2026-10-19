@@ -478,7 +478,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.52'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.53'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3727,7 +3727,43 @@ function capsFrom(texts, c, files){
       && (!frame || CAP_WORN.test(t) || CAP_FACE.test(t) && !back) && !(back && /^looking_at_viewer$/.test(t))).map(t => t.replace(/_/g, ' '));
     return start.concat(keep).join(', '); });
 }
+// The WD EVA02 tagger (in the helper, on the CPU): real Danbooru tags with a score each, from a model trained on Danbooru.
+// Fetched once (1.26 GB) after asking; while it downloads the card shows how far it got, then the captioning carries on.
+const WD_THR = 0.35;
+async function wdState(pc){ if(S.test) return S.testWd || null;
+  try{ const r = await fetch(pc + '/renderdeck/tagger', {cache:'no-store'}); return r.ok ? await r.json() : null; }catch(e){ return null; } }
+async function wdTexts(c, t, s, wd){
+  if(!wd.ready){
+    if(!(wd.job && !/done|failed/.test(wd.job.status))){
+      if(!confirm(pcName(t.pc) + ' will download the WD EVA02 tagger from Hugging Face: 1.26 GB, ' + speedTxt(1.26) + ', once. It runs on the processor, so it never gets in the way of a render or a LoRA training. Start now?')) return null;
+      const j = await (await fetch(t.pc + '/renderdeck/tagger/get', {method:'POST', headers:JSONH, body:'{}'})).json(); if(j.error) throw new Error(j.error); }
+    for(;;){ await new Promise(r => setTimeout(r, S.test ? 50 : 3000)); if(MSET[c.id]!==s) return null;
+      wd = await wdState(t.pc); if(!wd) continue; if(wd.ready) break;
+      const j = wd.job || {}; if(j.status==='failed') throw new Error('the tagger download stopped: ' + (j.error || 'no reason given'));
+      s.text = 'Getting the WD tagger on ' + pcName(t.pc) + '… ' + (j.total ? Math.round(100 * j.done / j.total) + '%' : ''); drawChars(); } }
+  s.text = 'The WD tagger is reading the ' + t.files.length + ' pictures on ' + pcName(t.pc) + '…'; drawChars();
+  const r = await fetch(t.pc + '/renderdeck/tag', {method:'POST', headers:JSONH, body:JSON.stringify({threshold:WD_THR, images:t.files.map(f => ({filename:f.img, subfolder:t.dir, type:'output'}))})});
+  const j = await r.json(); if(!r.ok || j.error) throw new Error(j.error || 'the tagger answered ' + r.status);
+  t.tagger = 'wd'; return j.results.map(x => x.general.map(([tag]) => tag).join(', '));
+}
 async function captionSet(c){
+  const t = c.set, wd = await wdState(t.pc);
+  if(wd){ const s = MSET[c.id] = {state:'busy', text:'Asking ' + pcName(t.pc) + ' for the WD tagger…'}; drawChars(); buzz();
+    try{ await loadTags(); indexTags(); if(!TAGMAP) throw new Error("couldn't load the tag list");
+      const texts = await wdTexts(c, t, s, wd); if(!texts){ if(MSET[c.id]===s) delete MSET[c.id]; drawChars(); return; }
+      await writeCaps(c, t, texts); }
+    catch(err){ Object.assign(s, {state:'err', text:"Couldn't caption the set: " + err.message}); drawChars(); }
+    return; }
+  captionFlorence(c); // a helper from before the WD tagger: the Florence-2 one
+}
+async function writeCaps(c, t, texts){
+  const caps = capsFrom(texts, c, t.files);
+  for(let i = 0; i < caps.length; i++){ t.files[i].tagged = caps[i]; if(S.test) continue;
+    const fd = new FormData(); fd.append('image', new Blob([caps[i] + '\n'], {type:'text/plain'}), t.files[i].img.replace(/\.\w+$/, '.txt')); fd.append('subfolder', t.dir); fd.append('type', 'output'); fd.append('overwrite', 'true');
+    const r = await fetch(t.pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving a caption failed (' + r.status + ')'); }
+  t.captioned = Date.now(); delete MSET[c.id]; save(); drawChars(); buzz(); toast('Captions written ✨');
+}
+async function captionFlorence(c){
   const k = tagKit(), t = c.set; if(k.why){ toast(k.why, true); return; }
   if(!S.test && k.url!==t.pc){ toast('The tagger is on ' + pcName(k.url) + ', but the set was saved on ' + pcName(t.pc) + ': save it there again first', true); return; }
   const s = MSET[c.id] = {state:'busy', text:'Reading the ' + t.files.length + ' pictures on ' + pcName(k.url) + '…'}; drawChars(); buzz();
@@ -3744,11 +3780,7 @@ async function captionSet(c){
       if(!h) throw new Error('it took too long');
       if(h.status.status_str==='error'){ const m = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(m ? m[1].exception_message : 'the tagger failed'); }
       texts = outs.map(id => { const o = (h.outputs || {})[id] || {}; const x = o.text || o.string || []; return Array.isArray(x) ? x.join(', ') : x; }); }
-    const caps = capsFrom(texts, c, t.files);
-    for(let i = 0; i < caps.length; i++){ t.files[i].tagged = caps[i]; if(S.test) continue;
-      const fd = new FormData(); fd.append('image', new Blob([caps[i] + '\n'], {type:'text/plain'}), t.files[i].img.replace(/\.\w+$/, '.txt')); fd.append('subfolder', t.dir); fd.append('type', 'output'); fd.append('overwrite', 'true');
-      const r = await fetch(t.pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving a caption failed (' + r.status + ')'); }
-    t.captioned = Date.now(); delete MSET[c.id]; save(); drawChars(); buzz(); toast('Captions written ✨');
+    t.tagger = 'florence'; await writeCaps(c, t, texts);
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't caption the set: " + err.message}); drawChars(); }
 }
 // ---------- training the LoRA, with ComfyUI's own training nodes (nothing to install) ----------
@@ -3852,7 +3884,7 @@ function boxSet(c){
   h += `<div class="row"><label>Trigger word</label><div class="grow"><input type="text" data-cf="trigger" placeholder="${esc(trigOf(Object.assign({}, c, {trigger:''})))}" value="${esc(c.trigger || '')}"></div></div>
     <p class="note">Saves the ${c.views.length} picture${c.views.length===1 ? '' : 's'} on the card${nt ? ' and ' + nt + ' frames from the turnaround (every 30°)' : ''} into ${esc((S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c))} in your renders folder, each with a starter caption: the trigger word, solo, the view angle and the plain background. The look itself (hair, eyes, outfit) is left out on purpose so the trigger word learns it. Add a few pictures in other poses and expressions first, so the LoRA doesn't only know them standing on white.</p>`;
   if(t) h += `<p class="note">Last saved: ${t.n} pictures on ${esc(pcName(t.pc))}, ${new Date(t.at).toLocaleString()}. Saving again overwrites them.${t.captioned ? ' Captioned by the tagger ' + new Date(t.captioned).toLocaleString() + '.' : ''}</p>`
-    + (t.files && t.files.length ? `<p class="note">✍️ Caption with the tagger: Florence-2 PromptGen reads each picture; what most of them share (the design) is dropped, what changes (pose, expression, framing) is kept. Or ask Claude in the project to caption the set.</p>
+    + (t.files && t.files.length ? `<p class="note">✍️ Caption with the tagger: the WD EVA02 tagger (Danbooru tags with a score each; the first time it asks to download it, 1.26 GB) reads each picture; her look (hair, eyes, body) is dropped so the trigger word learns it, while what she wears or doesn't, her expression and the framing are kept. Made-up props and names are left out. For a character you care about, ask Claude in the project to check the captions.</p>
       ${t.captioned ? `<details class="note"><summary>See the captions</summary>${t.files.map(f => `<div><b>${esc(f.img)}</b>: ${esc(f.tagged || f.cap)}</div>`).join('')}</details>` : ''}` : '');
   return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${c.views.length + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button>${t && t.files && t.files.length ? '<button class="btn" data-ch="capset">✍️ Caption with the tagger</button>' : ''}</div>`
     + (t && t.files && t.files.length || c.lora ? boxTrain(c) : '');

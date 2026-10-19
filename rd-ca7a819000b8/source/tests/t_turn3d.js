@@ -64,10 +64,10 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   page.on('dialog', d => d.accept());
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
-  await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:['1girl\t0\t1','solo\t0\t1','blue_hair\t0\t1','short_hair\t0\t1','blue_eyes\t0\t1','standing\t0\t1','white_background\t0\t1','smile\t0\t1','hand_on_hip\t0\t1','closed_mouth\t0\t1','from_side\t0\t1','nude\t0\t1','barefoot\t0\t1','small_breasts\t0\t1','pregnancy_test\t0\t1','hatsune_miku\t4\t1'].join('\n') }));
+  await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:['1girl\t0\t1','solo\t0\t1','blue_hair\t0\t1','short_hair\t0\t1','blue_eyes\t0\t1','standing\t0\t1','white_background\t0\t1','smile\t0\t1','hand_on_hip\t0\t1','closed_mouth\t0\t1','from_side\t0\t1','nude\t0\t1','completely_nude\t0\t1','barefoot\t0\t1','small_breasts\t0\t1','pregnancy_test\t0\t1','hatsune_miku\t4\t1'].join('\n') }));
   await page.route('https://unpkg.com/**', r => r.fulfill({ contentType:'text/javascript', body:'customElements.define("model-viewer", class extends HTMLElement{})' }));
   await page.routeWebSocket(/\.test\/ws/, ws => {});
-  const sent = [], ups = [], loraUps = [], GLBF = boxGlb(), cors = {'Access-Control-Allow-Origin':'*'};
+  const sent = [], ups = [], loraUps = [], WD = {on:false, polls:0, got:0, tagged:null}, GLBF = boxGlb(), cors = {'Access-Control-Allow-Origin':'*'};
   await page.route(RENDER + '/**', async r => {
     const u = new URL(r.request().url()), fn = u.searchParams.get('filename') || '';
     if(u.pathname==='/object_info') return r.fulfill({ json:OI() });
@@ -76,6 +76,11 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     if(u.pathname==='/view' && fn.endsWith('.txt')) return r.fulfill({ contentType:'text/plain', body:'caption of ' + fn, headers:cors });
     if(u.pathname==='/view' && fn.endsWith('.safetensors')){ const n = +/_(\d+)_\.safetensors$/.exec(fn)[1]; // an older LoRA from before, then this run's
       return n <= 2 && /^boxgirl_1000_steps_/.test(fn) && u.searchParams.get('subfolder')==='RenderDeck/loras' ? r.fulfill({ contentType:'application/octet-stream', body:r.request().method()==='HEAD' ? '' : 'LORA' + n, headers:Object.assign({'Last-Modified':new Date(n===2 ? Date.now() : 0).toUTCString()}, cors) }) : r.fulfill({ status:404, body:'', headers:cors }); }
+    if(u.pathname==='/renderdeck/tagger'){ if(!WD.on) return r.fulfill({ status:404, body:'', headers:cors }); // a helper from before the WD tagger answers 404
+      const ready = WD.got && ++WD.polls > 2; return r.fulfill({ json:{ready, model:'SmilingWolf/wd-eva02-large-tagger-v3', job:WD.got ? {kind:'tagger', status:ready ? 'done' : 'downloading', done:WD.polls * 400, total:1260} : null}, headers:cors }); }
+    if(u.pathname==='/renderdeck/tagger/get'){ WD.got++; return r.fulfill({ json:{ready:false, job:{status:'starting'}}, headers:cors }); }
+    if(u.pathname==='/renderdeck/tag'){ const b = JSON.parse(r.request().postData()); WD.tagged = b;
+      return r.fulfill({ json:{results:b.images.map((im, i) => ({general:[['1girl', .99], ['blue_hair', .95], ['completely_nude', .9], ['barefoot', .9], ['standing', .8], ['white_background', .8], [i % 2 ? 'smile' : 'closed_mouth', .6], ['hatsune_miku', .5]].map(([t, v]) => [t, v]), character:[], rating:{general:.9}}))}, headers:cors }); }
     if(u.pathname==='/renderdeck/upload'){ loraUps.push({q:u.search, body:r.request().postDataBuffer().toString('latin1')}); return r.fulfill({ json:{ok:true}, headers:cors }); }
     if(u.pathname==='/view'){ if(fn.endsWith('.glb')) return r.fulfill({ contentType:'model/gltf-binary', body:GLBF, headers:cors }); return r.fulfill({ contentType:'image/png', body:png(4, 4, () => [200,100,[...fn].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) & 0xffff, 7) & 255]), headers:cors }); } // each file its own picture
     if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
@@ -191,6 +196,16 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(L && /^boxgirl_\d{6}_\w+\.safetensors$/.test(L.name) && loraUps.length===1 && loraUps[0].q.includes('kind=loras') && loraUps[0].q.includes('name=' + L.name) && loraUps[0].body.includes('LORA2'),
     'the newest LoRA file is put in the loras folder under its own name: ' + JSON.stringify(L) + ' ' + (loraUps[0] || {}).q);
   ok(/is in the LoRA list on/.test(await page.textContent('#charBody')), 'the card says the LoRA is ready');
+  // the WD tagger in the helper: asks to download it once, waits for it, then tags the saved pictures in the output folder
+  ups.length = 0; WD.on = true; await page.evaluate(() => { delete S.chars[0].set.captioned; drawChars(); });
+  await page.click('#charBody [data-ch="capset"]');
+  await page.waitForFunction(() => S.chars[0].set.captioned, null, {timeout:30000}).catch(() => {});
+  const wc = ups.map(b => b.toString('latin1')).map(t => (st => t.slice(st, t.indexOf('\r\n--', st)))(t.indexOf('\r\n\r\n', t.indexOf('filename=')) + 4).trim());
+  console.log('   ' + wc.join(' | '));
+  ok(WD.got===1 && WD.tagged && WD.tagged.threshold===0.35 && WD.tagged.images.length===5 && WD.tagged.images[0].subfolder==='RenderDeck/datasets/boxgirl' && WD.tagged.images[0].type==='output'
+    && await page.evaluate(() => S.chars[0].set.tagger)==='wd', 'the WD tagger is fetched once (after asking), then reads the 5 saved pictures at 0.35');
+  ok(wc.length===5 && wc[0]==='boxgirl, 1girl, solo, completely nude, barefoot, standing, white background, closed mouth' && wc[3]==='boxgirl, 1girl, solo, from behind, standing, a-pose, full body, simple background, white background, completely nude, barefoot',
+    'WD captions go through the same rules (no hair, no names, no face on a back view)');
   // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
   await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
   ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');

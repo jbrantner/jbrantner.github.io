@@ -11,6 +11,8 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
   POST /renderdeck/sync {source}              -> copy the models and LoRAs another computer has and this one lacks
+  GET  /renderdeck/tagger, POST /renderdeck/tagger/get, POST /renderdeck/tag -> the WD EVA02 tagger (Danbooru tags with
+                                               scores, on the CPU) for training captions; fetched once from Hugging Face
   GET  /renderdeck/farm, POST /renderdeck/farm/add|cancel|pcs -> the render farm queue: renders go to whichever of your
                                                computers is free, even with the phone app closed (render_deck_farm.json)
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
@@ -229,6 +231,114 @@ async def download(request):
         return web.json_response(j)
     except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
+
+
+# ---------- WD EVA02 tagger: Danbooru tags with a confidence each, for LoRA training captions ----------
+# SmilingWolf's wd-eva02-large-tagger-v3 (trained on Danbooru itself), run with onnxruntime on the CPU so it never
+# competes with a render or a training run for the graphics card. 1.26 GB, fetched once into models/wd_tagger.
+WD_REPO = 'SmilingWolf/wd-eva02-large-tagger-v3'
+WD_FILES = ('selected_tags.csv', 'model.onnx')
+WD = {}  # the loaded model: sess, names, cats
+
+
+def _wd_dir():
+    return os.path.join(folder_paths.models_dir, 'wd_tagger', WD_REPO.split('/')[1])
+
+
+def _wd_ready():
+    return all(os.path.exists(os.path.join(_wd_dir(), f)) for f in WD_FILES)
+
+
+def _wd_job():
+    return next((j for j in reversed(list(JOBS.values())) if j.get('kind') == 'tagger'), None)
+
+
+async def _wd_get(j):
+    os.makedirs(_wd_dir(), exist_ok=True)
+    for f in WD_FILES:
+        path = os.path.join(_wd_dir(), f)
+        if os.path.exists(path):
+            continue
+        j['file'] = f
+        await _download(j, 'https://huggingface.co/%s/resolve/main/%s' % (WD_REPO, f), path)
+        if j['status'] != 'done':
+            return
+    j['status'] = 'done'
+
+
+def _wd_load():
+    if 'sess' not in WD:
+        import csv, onnxruntime as ort
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = max(1, (os.cpu_count() or 4) // 2)  # half the cores, so the computer stays usable
+        WD['sess'] = ort.InferenceSession(os.path.join(_wd_dir(), 'model.onnx'), so, providers=['CPUExecutionProvider'])
+        with open(os.path.join(_wd_dir(), 'selected_tags.csv'), encoding='utf-8') as f:
+            rows = list(csv.DictReader(f))
+        WD['names'], WD['cats'] = [r['name'] for r in rows], [int(r['category']) for r in rows]
+    return WD
+
+
+def _wd_run(paths, thr, cthr):
+    import numpy as np
+    from PIL import Image
+    w = _wd_load()
+    sess, inp = w['sess'], w['sess'].get_inputs()[0]
+    size = inp.shape[1] if isinstance(inp.shape[1], int) else 448
+    out = []
+    for p in paths:
+        im = Image.open(p).convert('RGBA')
+        flat = Image.new('RGBA', im.size, (255, 255, 255, 255))
+        flat.alpha_composite(im)
+        im, m = flat.convert('RGB'), max(im.size)
+        sq = Image.new('RGB', (m, m), (255, 255, 255))  # padded square on white, as the model was trained
+        sq.paste(im, ((m - im.width) // 2, (m - im.height) // 2))
+        a = np.asarray(sq.resize((size, size), Image.BICUBIC), dtype=np.float32)[:, :, ::-1]  # BGR, 0-255
+        probs = sess.run([sess.get_outputs()[0].name], {inp.name: np.ascontiguousarray(a[None])})[0][0]
+        pick = lambda cat, t: sorted(((n, round(float(x), 3)) for n, c, x in zip(w['names'], w['cats'], probs) if c == cat and x >= t), key=lambda v: -v[1])
+        out.append({'general': pick(0, thr), 'character': pick(4, cthr), 'rating': {n: round(float(x), 3) for n, c, x in zip(w['names'], w['cats'], probs) if c == 9}})
+    return out
+
+
+@routes.get('/renderdeck/tagger')
+async def tagger_state(request):
+    return web.json_response({'model': WD_REPO, 'ready': _wd_ready(), 'gb': 1.26, 'job': _wd_job()})
+
+
+@routes.post('/renderdeck/tagger/get')
+async def tagger_get(request):
+    j = _wd_job()
+    if _wd_ready() or (j and j['status'] not in ('done', 'failed')):
+        return web.json_response({'ready': _wd_ready(), 'job': j})
+    _room(os.path.join(folder_paths.models_dir, 'x'), int(1.3 * 1024**3))
+    j = _job(name=WD_REPO.split('/')[1], kind='tagger', total=0, source='https://huggingface.co/' + WD_REPO)
+    asyncio.ensure_future(_wd_get(j))
+    return web.json_response({'ready': False, 'job': j})
+
+
+@routes.post('/renderdeck/tag')
+async def tag(request):
+    """{images: [{filename, subfolder, type: output|input}], threshold, character_threshold} -> {results: [{general: [[tag, score]], character, rating}]}"""
+    try:
+        b = await request.json()
+        if not _wd_ready():
+            raise ValueError('The WD tagger is not on this computer yet')
+        paths = []
+        for im in b.get('images') or []:
+            if im.get('type') == 'input':
+                root = os.path.realpath(folder_paths.get_input_directory())
+                path = os.path.realpath(os.path.join(root, im.get('subfolder') or '', os.path.basename(im.get('filename') or '')))
+                if not path.startswith(root + os.sep) or not path.lower().endswith(PICS):
+                    raise ValueError('Not a picture in the input folder')
+            else:
+                path = _out_path(im.get('subfolder'), im.get('filename'))[1]
+            if not os.path.exists(path):
+                raise ValueError(os.path.basename(path) + ' is not there')
+            paths.append(path)
+        thr, cthr = float(b.get('threshold', 0.35)), float(b.get('character_threshold', 0.85))
+        res = await asyncio.get_running_loop().run_in_executor(None, _wd_run, paths, thr, cthr)
+        return web.json_response({'model': WD_REPO, 'results': res})
+    except Exception as e:
+        return web.json_response({'error': str(e) or e.__class__.__name__}, status=400)
 
 
 @routes.post('/renderdeck/token')
