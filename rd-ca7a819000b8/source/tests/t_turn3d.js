@@ -53,6 +53,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['minimax'])}}}, VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
   ModelPatchLoader:{input:{required:{name:C(['minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors'])}}},
   MiniMaxH3ReferenceToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, MiniMaxH3FunControlNetApply:{input:{required:{}}}, LoadVideo:{input:{required:{}}}, GetVideoComponents:{input:{required:{}}},
+  Florence2Run:{input:{required:{}}}, DownloadAndLoadFlorence2Model:{input:{required:{model:C(['MiaoshouAI/Florence-2-base-PromptGen-v2.0']), precision:C(['fp16'])}}}, 'ShowText|pysssss':{input:{required:{}}},
   ResizeAndPadImage:{input:{required:{}}}, SaveVideo:{input:{required:{}}}, CreateVideo:{input:{required:{}}}, LoadImage:{input:{required:{}}}});
 (async () => {
   const html = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + fs.readFileSync(path.join(__dirname, '..', 'comfy-app.html'),'utf8');
@@ -62,6 +63,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   page.on('dialog', d => d.accept());
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
+  await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:['1girl\t0\t1','solo\t0\t1','blue_hair\t0\t1','short_hair\t0\t1','blue_eyes\t0\t1','standing\t0\t1','white_background\t0\t1','smile\t0\t1','hand_on_hip\t0\t1','closed_mouth\t0\t1','from_side\t0\t1'].join('\n') }));
   await page.route('https://unpkg.com/**', r => r.fulfill({ contentType:'text/javascript', body:'customElements.define("model-viewer", class extends HTMLElement{})' }));
   await page.routeWebSocket(/\.test\/ws/, ws => {});
   const sent = [], ups = [], GLBF = boxGlb(), cors = {'Access-Control-Allow-Origin':'*'};
@@ -75,7 +77,11 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{version:2, jobs:[]} });
     if(u.pathname==='/upload/image'){ const b = r.request().postDataBuffer(); ups.push(b); const name = /filename="([^"]+)"/.exec(b.toString('latin1'))[1]; return r.fulfill({ json:{name, subfolder:'', type:'input'}, headers:cors }); }
     if(u.pathname==='/prompt'){ sent.push(JSON.parse(r.request().postData())); return r.fulfill({ json:{prompt_id:'t' + sent.length, number:0, node_errors:{}} }); }
-    if(u.pathname.startsWith('/history/')) return r.fulfill({ json:{} });
+    if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9), g = (sent[+id.slice(1) - 1] || {}).prompt || {};
+      if(!Object.values(g).some(n => n.class_type==='Florence2Run')) return r.fulfill({ json:{} });
+      const outputs = {}; let i = 0; // the tagger: every picture has blue hair and eyes; poses and expressions vary
+      for(const [k, n] of Object.entries(g)) if(n.class_type==='ShowText|pysssss') outputs[k] = {text:['1girl, solo, blue hair, short hair, blue eyes, standing, white background, ' + (i++ % 2 ? 'smile, hand on hip' : 'closed mouth, from side')]};
+      return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs}} }); }
     r.fulfill({ status:404, body:'' });
   });
   await page.goto('https://app.test/');
@@ -147,6 +153,16 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(pics.length===13 && txt.length===13 && parts.every(p => p.sub==='RenderDeck/datasets/boxgirl' && p.type==='output'), '13 pictures (1 from the card, 12 frames) and 13 captions in RenderDeck/datasets/boxgirl');
   ok(txt[0].body.trim()==='boxgirl, 1girl, solo, simple background' && txt.find(p => p.name==='boxgirl_08.txt').body.trim()==='boxgirl, 1girl, solo, from behind, standing, full body, simple background, white background'
     && /from side/.test(txt.find(p => p.name==='boxgirl_05.txt').body), 'captions start with the trigger and carry the angle (180° = from behind, 90° = from side)');
+  // captions from the tagger: the shared look (blue hair, short hair, blue eyes) is dropped, what varies is kept
+  sent.length = 0; ups.length = 0;
+  await page.click('#charBody [data-ch="capset"]');
+  await page.waitForFunction(() => S.chars[0].set.captioned, null, {timeout:30000}).catch(() => {});
+  const tg = sent.length ? Object.values(sent[0].prompt).filter(n => n.class_type==='LoadImage').map(n => n.inputs.image) : [];
+  ok(tg.length===13 && tg[0]==='RenderDeck/datasets/boxgirl/boxgirl_01.png [output]', 'the tagger reads the saved pictures from the output folder: ' + tg[0]);
+  const capd = ups.map(b => b.toString('latin1')).map(t => (st => t.slice(st, t.indexOf('\r\n--', st)))(t.indexOf('\r\n\r\n', t.indexOf('filename=')) + 4).trim());
+  console.log('   ' + capd[0] + ' | ' + capd[1] + ' | ' + capd[7]);
+  ok(capd.length===13 && capd[0]==='boxgirl, 1girl, solo, simple background, standing, white background, closed mouth' && capd[1]==='boxgirl, 1girl, solo, standing, full body, simple background, white background, smile, hand on hip',
+    'captions keep the trigger and the starter, add what varies, and drop the shared look and the tagger\'s angle guesses');
   // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
   await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
   ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');

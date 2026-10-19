@@ -478,7 +478,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.49'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.50'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3681,17 +3681,54 @@ async function exportSet(c){
     if(c.turn && c.turn.url && !c.turn.test){ s.text = 'Taking frames from the turnaround…'; drawChars();
       const degs = Array.from({length:12}, (_, k) => k * 30), frames = await clipFrames(c.turn.url, degs.map(d => Math.round(d / 360 * (TV_LEN - 1))));
       frames.forEach((cv, k) => items.push({canvas:cv, cap:setCaption(c, turnAngTag(degs[k]), ['standing', 'full body', 'simple background', 'white background'])})); }
-    let n = 0;
+    let n = 0; const files = [];
     for(const it of items){ n++; s.text = 'Saving ' + n + ' of ' + items.length + ' on ' + pcName(pc) + '…'; drawChars();
       const blob = it.blob || await new Promise((ok, no) => it.canvas.toBlob(b => b ? ok(b) : no(new Error("couldn't read a frame")), 'image/png'));
       if(it.canvas) it.canvas.width = it.canvas.height = 0;
-      const base = trigOf(c) + '_' + String(n).padStart(2, '0'), ext = /jpe?g/.test(blob.type) ? '.jpg' : /webp/.test(blob.type) ? '.webp' : '.png';
+      const base = trigOf(c) + '_' + String(n).padStart(2, '0'), ext = /jpe?g/.test(blob.type) ? '.jpg' : /webp/.test(blob.type) ? '.webp' : '.png'; files.push({img:base + ext, cap:it.cap});
       for(const [b, name] of [[blob, base + ext], [new Blob([it.cap + '\n'], {type:'text/plain'}), base + '.txt']]){
         if(S.test) continue;
         const fd = new FormData(); fd.append('image', b, name); fd.append('subfolder', dir); fd.append('type', 'output'); fd.append('overwrite', 'true');
         const r = await fetch(pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving ' + name + ' failed (' + r.status + ')'); } }
-    c.set = {n:items.length, dir, pc, at:Date.now()}; delete MSET[c.id]; save(); drawChars(); buzz(); toast(items.length + ' pictures saved for training ✨');
+    c.set = {n:items.length, dir, pc, at:Date.now(), files}; delete MSET[c.id]; save(); drawChars(); buzz(); toast(items.length + ' pictures saved for training ✨');
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't save the training set: " + err.message}); drawChars(); }
+}
+// Captions from the tagger: Florence-2 PromptGen tags each saved picture. A look tag (hair, eyes, clothes) seen in most
+// of the set, or already on the card, is part of the design, so it's dropped for the trigger word to learn. Tags about
+// the picture (pose, expression, framing, background) and look tags only some pictures have (a jacket taken off) stay.
+function capsFrom(texts, c, files){
+  const card = new Set((c.tags || '').split(',').map(norm).filter(Boolean)), seen = new Map();
+  const per = texts.map(t => [...new Set(String(t || '').split(',').map(s => s.trim()).filter(Boolean).map(s => { const x = findTag(s.replace(/\\/g,'')); return x ? x.tag : null; }).filter(Boolean))]);
+  per.forEach(tags => tags.forEach(t => seen.set(t, (seen.get(t) || 0) + 1)));
+  const design = t => card.has(t) || !NOT_LOOK.test(t) && /^[0-4]$/.test((TAGMAP.get(t) || {}).cat) && seen.get(t) >= Math.max(2, 0.6 * per.length);
+  const angles = /^(from_side|from_behind|profile|from_above|from_below)$/; // the app knows the angle of each picture better than the tagger
+  return per.map((tags, i) => { const start = files[i].cap.split(',').map(s => s.trim()), have = new Set(start.map(norm));
+    const keep = tags.filter(t => !design(t) && !angles.test(t) && !/^(1girl|1boy|1other|solo)$/.test(t) && !have.has(t)).map(t => t.replace(/_/g, ' '));
+    return start.concat(keep).join(', '); });
+}
+async function captionSet(c){
+  const k = tagKit(), t = c.set; if(k.why){ toast(k.why, true); return; }
+  if(!S.test && k.url!==t.pc){ toast('The tagger is on ' + pcName(k.url) + ', but the set was saved on ' + pcName(t.pc) + ': save it there again first', true); return; }
+  const s = MSET[c.id] = {state:'busy', text:'Reading the ' + t.files.length + ' pictures on ' + pcName(k.url) + '…'}; drawChars(); buzz();
+  try{
+    await loadTags(); indexTags(); if(!TAGMAP) throw new Error("couldn't load the tag list");
+    let texts;
+    if(S.test){ await new Promise(r => setTimeout(r, 300)); texts = t.files.map((f, i) => '1girl, solo, blue hair, short hair, blue eyes, standing, white background' + (i % 2 ? ', smile, hand on hip' : ', closed mouth')); }
+    else{ const {g, outs} = tagGraph(k, t.files.map(f => t.dir + '/' + f.img + ' [output]'));
+      const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-tagger'})});
+      const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(j.error ? (j.error.message || j.error) : 'ComfyUI said no (' + r.status + ')');
+      let h = null;
+      for(let n = 0; n < 800 && !h; n++){ await new Promise(r => setTimeout(r, 1500)); if(MSET[c.id]!==s) return;
+        try{ const x = (await (await fetch(k.url + '/history/' + j.prompt_id)).json())[j.prompt_id]; if(x && x.status && (x.status.completed || x.status.status_str==='error')) h = x; }catch(e){} }
+      if(!h) throw new Error('it took too long');
+      if(h.status.status_str==='error'){ const m = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(m ? m[1].exception_message : 'the tagger failed'); }
+      texts = outs.map(id => { const o = (h.outputs || {})[id] || {}; const x = o.text || o.string || []; return Array.isArray(x) ? x.join(', ') : x; }); }
+    const caps = capsFrom(texts, c, t.files);
+    for(let i = 0; i < caps.length; i++){ t.files[i].tagged = caps[i]; if(S.test) continue;
+      const fd = new FormData(); fd.append('image', new Blob([caps[i] + '\n'], {type:'text/plain'}), t.files[i].img.replace(/\.\w+$/, '.txt')); fd.append('subfolder', t.dir); fd.append('type', 'output'); fd.append('overwrite', 'true');
+      const r = await fetch(t.pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving a caption failed (' + r.status + ')'); }
+    t.captioned = Date.now(); delete MSET[c.id]; save(); drawChars(); buzz(); toast('Captions written ✨');
+  }catch(err){ Object.assign(s, {state:'err', text:"Couldn't caption the set: " + err.message}); drawChars(); }
 }
 function boxSet(c){
   const s = MSET[c.id], t = c.set, nt = c.turn && c.turn.url ? 12 : 0;
@@ -3700,8 +3737,10 @@ function boxSet(c){
   if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
   h += `<div class="row"><label>Trigger word</label><div class="grow"><input type="text" data-cf="trigger" placeholder="${esc(trigOf(Object.assign({}, c, {trigger:''})))}" value="${esc(c.trigger || '')}"></div></div>
     <p class="note">Saves the ${c.views.length} picture${c.views.length===1 ? '' : 's'} on the card${nt ? ' and ' + nt + ' frames from the turnaround (every 30°)' : ''} into ${esc((S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c))} in your renders folder, each with a starter caption: the trigger word, solo, the view angle and the plain background. The look itself (hair, eyes, outfit) is left out on purpose so the trigger word learns it. Add a few pictures in other poses and expressions first, so the LoRA doesn't only know them standing on white.</p>`;
-  if(t) h += `<p class="note">Last saved: ${t.n} pictures on ${esc(pcName(t.pc))}, ${new Date(t.at).toLocaleString()}. Saving again overwrites them.</p>`;
-  return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${c.views.length + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button></div>`;
+  if(t) h += `<p class="note">Last saved: ${t.n} pictures on ${esc(pcName(t.pc))}, ${new Date(t.at).toLocaleString()}. Saving again overwrites them.${t.captioned ? ' Captioned by the tagger ' + new Date(t.captioned).toLocaleString() + '.' : ''}</p>`
+    + (t.files && t.files.length ? `<p class="note">✍️ Caption with the tagger: Florence-2 PromptGen reads each picture; what most of them share (the design) is dropped, what changes (pose, expression, framing) is kept. Or ask Claude in the project to caption the set.</p>
+      ${t.captioned ? `<details class="note"><summary>See the captions</summary>${t.files.map(f => `<div><b>${esc(f.img)}</b>: ${esc(f.tagged || f.cap)}</div>`).join('')}</details>` : ''}` : '');
+  return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${c.views.length + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button>${t && t.files && t.files.length ? '<button class="btn" data-ch="capset">✍️ Caption with the tagger</button>' : ''}</div>`;
 }
 // Get the 3D model: the one big file, through the helper (at the speed picked in ⚙, carrying on after a drop)
 async function get3d(){
@@ -4136,6 +4175,7 @@ $('#charBody').onclick = async e => {
   else if(act==='paint3d'){ paint3d(c); return; }
   else if(act==='paintturn'){ paint3d(c, true); return; }
   else if(act==='exportset'){ exportSet(c); return; }
+  else if(act==='capset'){ captionSet(c); return; }
   else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
   else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
   else if(t.dataset.seg==='eng3d'){ S.m3d = t.dataset.v; dl3d = null; if(watch3d.t){ clearInterval(watch3d.t); watch3d.t = 0; } }
