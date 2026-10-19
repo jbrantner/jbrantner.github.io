@@ -10,7 +10,7 @@ head = '''<!doctype html>
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black"><meta name="theme-color" content="#120d2e">
 <meta name="apple-mobile-web-app-title" content="Render Deck"><meta name="robots" content="noindex, nofollow">
-<link rel="apple-touch-icon" href="icon-180.png"><link rel="icon" href="icon-192.png"><link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-tape-180.png"><link rel="icon" href="icon-tape-192.png"><link rel="manifest" href="manifest.webmanifest">
 <!-- Render Deck. Copyright (c) 2026 Jordan Brantner. All rights reserved. -->
 <script>if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{}); // keeps a copy for offline use; in the head so a slow font never holds it up</script>
 '''
@@ -22,7 +22,7 @@ html = head + src[:i] + '\n</head><body>\n' + src[i:] + '''
 open(os.path.join(out, 'index.html'), 'w', encoding='utf-8').write(html)
 json.dump({"name": "Render Deck", "short_name": "Render Deck", "start_url": "./", "scope": "./", "display": "standalone",
            "background_color": "#120d2e", "theme_color": "#120d2e",
-           "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"}, {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}]},
+           "icons": [{"src": "icon-tape-192.png", "sizes": "192x192", "type": "image/png"}, {"src": "icon-tape-512.png", "sizes": "512x512", "type": "image/png"}]},
           open(os.path.join(out, 'manifest.webmanifest'), 'w'), indent=1)
 open(os.path.join(out, 'sw.js'), 'w', encoding='utf-8').write('''// Render Deck offline helper: always try the newest version first, fall back to the saved copy with no signal.
 // On a slow connection it never waits more than 3 seconds when a saved copy is ready; the newer one is saved for next time.
@@ -43,5 +43,5 @@ self.addEventListener('fetch', e => {
 ''')
 # icon: a worn cassette tape (source/icon.png, 1024px), inspired by the Arc Raiders tape; resized for each size
 im = Image.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.png')).convert('RGB')
-for s in (180, 192, 512): im.resize((s, s), Image.LANCZOS).save(os.path.join(out, f'icon-{s}.png'))
+for s in (180, 192, 512): im.resize((s, s), Image.LANCZOS).save(os.path.join(out, f'icon-tape-{s}.png'))
 print('built', out)
