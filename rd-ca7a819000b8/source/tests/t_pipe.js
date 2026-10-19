@@ -31,8 +31,8 @@ const fs = require('fs'), path = require('path');
   ok(st.views.join()==='ref,front*,three*,right*,back*,left*,three_b*', 'six angles from the turnaround, each redrawn: ' + st.views.join());
   ok(st.graphs.length===1 && !st.graphs[0].model && !st.graphs[0].loras.some(l => /AFK/.test(l)) && !st.m3d, 'one turnaround, no style LoRA, no 3D model');
   const rg = Object.values(st.rg), up = rg.find(n => n.class_type==='UltimateSDUpscaleNoUpscale'), pos = rg.find(n => n.class_type==='CLIPTextEncode');
-  ok(st.red===6 && up && up.inputs.denoise===0.35 && up.inputs.tile_width===1024 && rg.find(n => n.class_type==='ImageScaleBy').inputs.scale_by===1.5 && rg.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='oneObsession_v24.safetensors'
-    && /red jacket/.test(pos.inputs.text) && /a-pose/.test(pos.inputs.text) && !rg.some(n => /Lora/.test(n.class_type)), 'quality pass: 1.5×, Illustrious tiles at 0.35, the card tags, no LoRA');
+  ok(st.red===6 && up && up.inputs.denoise===0.2 && up.inputs.tile_width===1024 && rg.find(n => n.class_type==='ImageScaleBy').inputs.scale_by===1.5 && rg.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='oneObsession_v24.safetensors'
+    && /red jacket/.test(pos.inputs.text) && /a-pose/.test(pos.inputs.text) && !rg.some(n => /Lora/.test(n.class_type)), 'quality pass: 1.5×, Illustrious tiles at 0.2 (light), the card tags, no LoRA');
   ok(/Picked from the turnaround, redrawn/.test(await page.textContent('#charBody')) && (await page.$$('#charBody [data-piperedo]')).length===3, 'each step can be redone, and the picked frames are shown');
   // swap the back: the new frame gets the quality pass too
   await page.click('#charBody [data-pvslot="back"]');

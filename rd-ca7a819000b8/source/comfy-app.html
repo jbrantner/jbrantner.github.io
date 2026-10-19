@@ -473,7 +473,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-19.61'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-19.62'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4865,22 +4865,27 @@ async function findSides(url){
 }
 // Redraw a picture bigger in the still style: 1.5× (lanczos), then the Illustrious checkpoint repaints it in 1024 tiles
 // at 0.35 with real noise, without LoRAs (they leave brightness blocks between tiles). Returns the new picture.
-function redrawGraph(oi, img, c, tags, prefix){
+function redrawGraph(oi, img, c, tags, prefix, dn = 0.2){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:oi[cls] ? fillIn(oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  if(!dn){ const big = add('ImageScaleBy', {image:[add('LoadImage', {image:img}), 0], upscale_method:'lanczos', scale_by:1.5}); return {g, save:add('SaveImage', {images:[big,0], filename_prefix:prefix})}; } // bigger only
   const ck = add('CheckpointLoaderSimple', {ckpt_name:trainCkpt(oi)});
   const enc = t => [add('CLIPTextEncode', {clip:[ck,1], text:t}), 0];
   const pos = enc(['masterpiece, best quality, amazing quality, very aesthetic, absurdres', (c.tags || '').trim().replace(/,\s*$/, ''), tags].filter(Boolean).join(', '));
   const neg = enc('worst quality, low quality, blurry, jpeg artifacts, bad anatomy, bad hands, extra fingers, watermark, text');
   const big = add('ImageScaleBy', {image:[add('LoadImage', {image:img}), 0], upscale_method:'lanczos', scale_by:1.5});
   const smp = combo(oi.KSampler, 'sampler_name').includes('dpmpp_2m') ? 'dpmpp_2m' : 'euler', sch = combo(oi.KSampler, 'scheduler').includes('karras') ? 'karras' : 'normal';
-  const up = add('UltimateSDUpscaleNoUpscale', {upscaled_image:[big,0], model:[ck,0], positive:pos, negative:neg, vae:[ck,2], seed:Math.floor(Math.random() * 1e9), steps:20, cfg:5, sampler_name:smp, scheduler:sch, denoise:0.35,
+  const up = add('UltimateSDUpscaleNoUpscale', {upscaled_image:[big,0], model:[ck,0], positive:pos, negative:neg, vae:[ck,2], seed:Math.floor(Math.random() * 1e9), steps:20, cfg:5, sampler_name:smp, scheduler:sch, denoise:dn,
     mode_type:'Linear', tile_width:1024, tile_height:1024, mask_blur:8, tile_padding:32, seam_fix_mode:'None', seam_fix_denoise:1, seam_fix_width:64, seam_fix_mask_blur:8, seam_fix_padding:16, force_uniform_tiles:true, tiled_decode:false, batch_size:1});
   return {g, save:add('SaveImage', {images:[up,0], filename_prefix:prefix})};
 }
 let REDRAWN = []; // Test mode: the redraw graphs made
+// how hard the quality pass redraws: on the Librarian (2026-10-19) 0.35 changed her design (hair colour, eyes, lips),
+// 0.22 kept it and sharpened the lines; bigger only (no redraw) stayed closest but soft
+const redrawW = c => c.redrawW==null ? 0.2 : c.redrawW;
+const REDRAW_SEG = [['0', 'Bigger only'], ['0.2', 'Light (0.2)'], ['0.3', 'Stronger (0.3)']];
 async function redrawPic(c, pc, img, tags, prefix){
-  if(S.test){ REDRAWN.push(redrawGraph(FAKE3D_IL, img, c, tags, prefix).g); return {img, url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='}; }
-  const oi = pcOf(pc).oi, t0 = Date.now(), {g, save:sid} = redrawGraph(oi, img, c, tags, prefix);
+  if(S.test){ REDRAWN.push(redrawGraph(FAKE3D_IL, img, c, tags, prefix, redrawW(c)).g); return {img, url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='}; }
+  const oi = pcOf(pc).oi, t0 = Date.now(), {g, save:sid} = redrawGraph(oi, img, c, tags, prefix, redrawW(c));
   const r = await fetch(pc + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-redraw'})}), j = await r.json();
   if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
   const f = await waitOut(pc, j.prompt_id, sid, prefix, t0, false), url = viewUrl(f, pc);
@@ -4954,7 +4959,7 @@ function boxPipe(c){
   if(P.run && !PIPE_RUN[c.id]) setTimeout(() => runPipe(c, P.cur || 'turn1', true), 0); // the app was closed mid-way: carry on
   let h = '<div class="lbl">🪄 Build it all</div>';
   const any = PIPE.some(([s]) => done[s]);
-  if(!P.run && !any) h += `<p class="note" style="margin-top:0">One tap does the chain from ${src ? 'the ' + (src.angle==='front' ? 'Front' : 'Reference') + ' picture' : 'a Reference or Front picture'}: a turnaround video, six angles picked out of it (front, ¾, sides, back), then a quality pass that redraws each one bigger and sharper in the Illustrious style. About ${Math.round(PIPE.reduce((t, [s]) => t + pipeEst(c, s), 0) / 60)} minutes. Afterwards you can swap a picked frame or redo any step. Then 🎞 Training shots below adds action poses.</p>`;
+  if(!P.run && !any) h += `<p class="note" style="margin-top:0">One tap does the chain from ${src ? 'the ' + (src.angle==='front' ? 'Front' : 'Reference') + ' picture' : 'a Reference or Front picture'}: a turnaround video, six angles picked out of it (front, ¾, sides, back), then a quality pass that redraws each one bigger and sharper with Illustrious. About ${Math.round(PIPE.reduce((t, [s]) => t + pipeEst(c, s), 0) / 60)} minutes. Afterwards you can swap a picked frame or redo any step. Then 🎞 Training shots below adds action poses.</p>`;
   if(P.run) h += `<div class="pbar" style="margin-top:4px"><i data-pipebar style="width:0%"></i></div><p class="note" data-pipetxt></p>`;
   h += '<div class="psteps">' + PIPE.map(([s, name], i) => {
     const st = P.cur===s ? '✱' : done[s] ? '✓' : '○';
@@ -4971,6 +4976,8 @@ function boxPipe(c){
       ${done.redraw ? '<p class="note">A new frame gets the quality pass too.</p>' : ''}`; }
     else h += '<p class="note">Tap one to pick a better frame for it from the turnaround.</p>';
   }
+  if(!P.run) h += `<div class="row" style="margin-top:8px"><label>Quality pass</label>${seg('redrawW', REDRAW_SEG, String(redrawW(c)))}</div>
+    <p class="note" style="margin:-2px 0 0 92px">How hard Illustrious redraws each picture (the angles and the training shots). Light sharpens and keeps the design; Stronger can change hair, eyes and face. Bigger only just enlarges it.</p>`;
   if(P.run) return h + `<div class="btnrow"><button class="btn" data-ch="pipestop" ${P.stop ? 'disabled' : ''}>${P.stop ? 'Stopping after this step…' : '⏸ Stop after this step'}</button></div>`;
   if(k.why) return h + `<p class="note">${esc(k.why)}.</p>`;
   return h + `<div class="btnrow"><button class="btn${any ? '' : ' hot'}" data-ch="pipego" ${src ? '' : 'disabled'}>🪄 ${any ? 'Build it all again' : 'Build it all'}</button></div>`;
@@ -5074,7 +5081,7 @@ async function sharpestFrame(url){
 async function shotFrame(c, sh, at){
   const k = kitTurn(), pc = sh.pc, cv = sh.url ? (await clipFrames(sh.url, [at]))[0] : frameCanvas(null);
   const raw = await uploadFrame(cv, 'shot', pc); let v = {id:uid('v'), angle:'ref', img:raw.img, url:raw.url, home:raw.home, shot:sh.id, made:true};
-  if(c.shotRedraw!==false && canRedraw(S.test ? null : pcOf(pc))){ const r = await redrawPic(c, pc, raw.img, sh.tags, shotPrefix(c)); Object.assign(v, {img:r.img, url:r.url, redrawn:true}); }
+  if(canRedraw(S.test ? null : pcOf(pc))){ const r = await redrawPic(c, pc, raw.img, sh.tags, shotPrefix(c)); Object.assign(v, {img:r.img, url:r.url, redrawn:true}); }
   v.cap = sh.tags;
   c.views = c.views.filter(x => x.shot!==sh.id); c.views.push(v); sh.at = at; sh.view = v.id; save();
 }
@@ -5117,7 +5124,7 @@ function drawShotBar(){
 function boxShots(c){
   const k = kitTurn(), R = SHOT_RUN[c.id], shots = (c.shots || []).filter(sh => sh.view && c.views.some(v => v.id===sh.view) || sh.err), lines = shotLines(c);
   let h = '<div class="lbl">🎞 Training shots</div>';
-  h += `<p class="note" style="margin-top:0">For a LoRA that knows ${esc(c.name || 'them')} in any pose: MiniMax acts out each line below from ${esc(c.name || 'their')}${c.name ? "'s" : ''} picture, side and back, the sharpest frame of each clip is picked, and Redraw makes it 1.5× bigger in the Illustrious style. Each one joins the pictures above with its tags, ready for 📦 Save the training set. About ${Math.round(SHOT_EST() / 60)} minutes a shot${k.why ? '' : ' on ' + esc(pcName(k.url))}.</p>`;
+  h += `<p class="note" style="margin-top:0">For a LoRA that knows ${esc(c.name || 'them')} in any pose: MiniMax acts out each line below from ${esc(c.name || 'their')}${c.name ? "'s" : ''} picture, side and back, the sharpest frame of each clip is picked, and the quality pass makes it 1.5× bigger and sharper. Each one joins the pictures above with its tags, ready for 📦 Save the training set. About ${Math.round(SHOT_EST() / 60)} minutes a shot${k.why ? '' : ' on ' + esc(pcName(k.url))}.</p>`;
   if(R) return h + `<div class="pbar"><i data-shotbar style="width:0%"></i></div><p class="note" data-shottxt></p>
     <div class="btnrow"><button class="btn" data-ch="shotstop" ${R.stop ? 'disabled' : ''}>${R.stop ? 'Stopping after this shot…' : '⏸ Stop after this shot'}</button></div>`;
   if(shots.length){
@@ -5132,7 +5139,7 @@ function boxShots(c){
   }
   h += `<details class="neg"><summary>Actions (${lines.length})</summary><textarea data-cf="shotList" style="min-height:160px" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(c.shotList!=null ? c.shotList : SHOT_LIST)}</textarea>
     <p class="note">One shot a line: what they do, then | and its Danbooru tags for the caption. Calm actions give the sharpest frames.</p></details>
-    <div class="row"><label>Redraw</label>${seg('shotRedraw', [['on', 'Bigger, in the still style'], ['off', 'As it comes']], c.shotRedraw===false ? 'off' : 'on')}</div>`;
+    <div class="row"><label>Quality pass</label>${seg('redrawW', REDRAW_SEG, String(redrawW(c)))}</div>`;
   if(k.why) return h + `<p class="note">${esc(k.why)}.</p>`;
   return h + `<div class="btnrow"><button class="btn${shots.length ? '' : ' hot'}" data-ch="shotgo" ${lines.length && shotRefs(c).length ? '' : 'disabled'}>🎞 Make ${lines.length} training ${lines.length===1 ? 'shot' : 'shots'}</button></div>`;
 }
@@ -5260,9 +5267,9 @@ $('#charBody').onclick = async e => {
   else if(t.dataset.shot){ SV.id = SV.id===t.dataset.shot ? null : t.dataset.shot; SV.moved = false; }
   else if(act==='shotredo'){ const sh = (c.shots || []).find(x => x.id===SV.id); if(sh) runShots(c, sh); return; }
   else if(act==='shotdel'){ const sh = (c.shots || []).find(x => x.id===SV.id); if(sh){ c.views = c.views.filter(v => v.shot!==sh.id); c.shots = c.shots.filter(x => x!==sh); SV.id = null; } }
-  else if(act==='shotuse'){ const sh = (c.shots || []).find(x => x.id===SV.id), sl = $('#charBody [data-svt]'); if(!sh) return; toast(c.shotRedraw===false ? 'Using that frame…' : 'Redrawing that frame…');
+  else if(act==='shotuse'){ const sh = (c.shots || []).find(x => x.id===SV.id), sl = $('#charBody [data-svt]'); if(!sh) return; toast('Redrawing that frame…');
     shotFrame(c, sh, Math.round((sl ? sl.value / 1000 : 0.5) * (TV_LEN - 1))).then(() => { drawChars(); toast('Shot updated ✨'); }, err => toast("Couldn't use the frame: " + err.message, true)); return; }
-  else if(t.dataset.seg==='shotRedraw'){ c.shotRedraw = t.dataset.v==='on'; }
+  else if(t.dataset.seg==='redrawW'){ c.redrawW = parseFloat(t.dataset.v) || 0; }
   else if(act==='pipego'){ if((c.pipe || {}).done && Object.keys(c.pipe.done).length && !confirm('Build it all again from the start? What it made before stays in your renders.')) return; runPipe(c); return; }
   else if(t.dataset.piperedo){ const s = t.dataset.piperedo, n = PIPE.findIndex(x => x[0]===s);
     if(!confirm('Redo ' + PIPE[n][1].toLowerCase() + (n < PIPE.length - 1 ? ' and the steps after it' : '') + '?')) return; runPipe(c, s); return; }
