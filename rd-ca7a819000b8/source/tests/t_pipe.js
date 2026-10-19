@@ -58,6 +58,15 @@ const fs = require('fs'), path = require('path');
   ok(pk.n===11 && /11 picked/.test(pk.m) && /A bit few/.test(pk.m), 'every picture can be picked, the meter counts them: ' + pk.m.replace(/\s+/g, ' ').slice(0, 90));
   await page.click('#charBody [data-tpick="v0"]');
   ok(await page.evaluate(() => S.chars[0].views.find(v => v.id==='v0').noTrain && /10 picked/.test(document.querySelector('#charBody .setmeter').textContent)), 'tapping a picture leaves it out');
+  // the big view: tap a thumbnail, swipe through, the check keeps or leaves out
+  await page.click('#charBody [data-tview]:nth-child(2) img');
+  const vw = await page.evaluate(() => ({open:!$('#viewer').hidden, mode:V.mode, i:V.i, keep:$('#vKeep').textContent, info:$('#vInfo').textContent}));
+  ok(vw.open && vw.mode==='tset' && vw.i===1 && /Keep/.test(vw.keep) && /10 kept/.test(vw.info), 'tapping a thumbnail opens it big with a keep check: ' + vw.info);
+  await page.click('#vKeep'); await page.evaluate(() => viewAt(V.i + 1));
+  ok(await page.evaluate(() => S.chars[0].views[1].noTrain && /9 kept/.test($('#vInfo').textContent) && V.i===2), 'the check leaves it out and the count follows as you swipe');
+  await page.click('#vKeep'); await page.evaluate(() => { viewAt(1); }); await page.click('#vKeep'); await page.click('#vClose');
+  ok(await page.evaluate(() => !S.chars[0].views[1].noTrain && S.chars[0].views[2].noTrain && /9 picked/.test(document.querySelector('#charBody .setmeter').textContent)), 'closing the viewer updates the meter on the card');
+  await page.evaluate(() => { delete S.chars[0].views[2].noTrain; save(); });
   // the training set: captions from the tags, and the angles instead of raw turnaround frames
   await page.evaluate(() => { S.chars[0].trigger = 'mira'; });
   const caps = await page.evaluate(async () => { const c = S.chars[0]; delete c.views[0].noTrain; c.views[1].noTrain = true; picHash = async () => Math.random().toString(36); c.turn = {url:'', test:true}; await exportSet(c); return {n:c.set.files.length, all:c.views.length, caps:c.set.files.map(f => f.cap + (f.frame ? ' [frame]' : ''))}; }).then(r => { ok(r.n===r.all - 1, 'left-out pictures are not saved: ' + r.n + ' of ' + r.all); return r.caps; });
