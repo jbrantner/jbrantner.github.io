@@ -22,6 +22,8 @@ const fs = require('fs'), path = require('path');
   const txt = await page.textContent('#charBody');
   ok(/🪄 Build it all/.test(txt) && /six angles picked out of it/.test(txt) && !/3D model's spin/.test(txt), 'the card offers Build it all (turnaround, angles, quality pass; no 3D)');
   await page.evaluate(() => { const r = redrawPic; redrawPic = async (...a) => { await new Promise(x => setTimeout(x, 120)); return r(...a); }; });
+  ok(await page.evaluate(() => redrawW(S.chars[0])===0), 'the quality pass defaults to bigger only (no redraw)');
+  await page.evaluate(() => { S.chars[0].redrawW = 0.2; save(); });
   await page.click('#charBody [data-ch="pipego"]');
   await page.waitForSelector('#charBody [data-pipebar]', {timeout:3000});
   ok(/Step \d of 3/.test(await page.textContent('#charBody [data-pipetxt]')), 'a progress bar with the step and time left: ' + await page.textContent('#charBody [data-pipetxt]'));
@@ -50,16 +52,21 @@ const fs = require('fs'), path = require('path');
       shots:S.chars[0].views.filter(v => v.shot).map(v => ({cap:v.cap, red:!!v.redrawn}))}; });
   ok(sg.refs.length===3 && sg.refs[0]==='mira.png', 'each shot looks at the picture, a side and the back: ' + sg.refs.join(', '));
   ok(/<Picture 2>: <Subject 1> from the side/.test(sg.prompt) && /<Picture 3>: <Subject 1> from behind/.test(sg.prompt) && /waves at the camera in a park/.test(sg.prompt) && !sg.loras.some(l => /AFK/.test(l)), 'the prompt names the pictures and the action, no style LoRA');
-  ok(sg.shots.length===2 && sg.shots.every(x => x.red) && sg.shots[1].cap==='waving, outdoors, park', 'each shot joins the card redrawn, with its tags');
+  ok(sg.shots.length===4 && sg.shots.every(x => x.red) && sg.shots[3].cap==='waving, outdoors, park', 'each shot gives two frames to the card, redrawn, with its tags: ' + sg.shots.length);
+  // the picker: leave some out, the meter counts what is kept
+  const pk = await page.evaluate(() => { drawChars(); const m = document.querySelector('#charBody .setmeter').textContent; return {n:document.querySelectorAll('#charBody [data-tpick]').length, m}; });
+  ok(pk.n===11 && /11 picked/.test(pk.m) && /A bit few/.test(pk.m), 'every picture can be picked, the meter counts them: ' + pk.m.replace(/\s+/g, ' ').slice(0, 90));
+  await page.click('#charBody [data-tpick="v0"]');
+  ok(await page.evaluate(() => S.chars[0].views.find(v => v.id==='v0').noTrain && /10 picked/.test(document.querySelector('#charBody .setmeter').textContent)), 'tapping a picture leaves it out');
   // the training set: captions from the tags, and the angles instead of raw turnaround frames
   await page.evaluate(() => { S.chars[0].trigger = 'mira'; });
-  const caps = await page.evaluate(async () => { const c = S.chars[0]; picHash = async () => Math.random().toString(36); c.turn = {url:'', test:true}; await exportSet(c); return c.set.files.map(f => f.cap + (f.frame ? ' [frame]' : '')); });
+  const caps = await page.evaluate(async () => { const c = S.chars[0]; delete c.views[0].noTrain; c.views[1].noTrain = true; picHash = async () => Math.random().toString(36); c.turn = {url:'', test:true}; await exportSet(c); return {n:c.set.files.length, all:c.views.length, caps:c.set.files.map(f => f.cap + (f.frame ? ' [frame]' : ''))}; }).then(r => { ok(r.n===r.all - 1, 'left-out pictures are not saved: ' + r.n + ' of ' + r.all); return r.caps; });
   ok(caps.some(x => x==='mira, 1girl, solo, sitting, armchair, reading, indoors') && caps.some(x => /from behind, standing, a-pose.*\[frame\]$/.test(x)), 'training set captions come from the shot tags and the angles: ' + caps.slice(-3).join(' / '));
   // the sharpest frame
   const sharp = await page.evaluate(async () => { const real = clipFrames;
     clipFrames = async (url, idx, grab) => idx.map(i => { const cv = document.createElement('canvas'); cv.width = 576; cv.height = 1024; const x = cv.getContext('2d'); x.fillStyle = '#888'; x.fillRect(0, 0, 576, 1024);
       if(i===48){ x.fillStyle = '#000'; for(let k = 0; k < 40; k++) x.fillRect(10 + k * 14, 0, 6, 1024); } else { x.filter = 'blur(6px)'; x.fillStyle = '#000'; for(let k = 0; k < 40; k++) x.fillRect(10 + k * 14, 0, 6, 1024); } return grab(cv); });
-    try{ return await sharpestFrame('x'); } finally { clipFrames = real; } });
+    try{ return (await sharpestFrame('x'))[0]; } finally { clipFrames = real; } });
   ok(sharp===48, 'the sharpest frame is picked: ' + sharp);
   // the sides
   const sides = await page.evaluate(async () => { const real = clipFrames;

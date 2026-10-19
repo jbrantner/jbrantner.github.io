@@ -157,6 +157,12 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .prow:last-child{border-bottom:0}
 .prow .pst{width:18px;text-align:center;color:var(--accent)}
 .prow small{color:var(--dim)}
+.cviews.tpick button.off img{opacity:.3;filter:grayscale(1)}
+.cviews.tpick button.off .ang{color:var(--dim)}
+.setmeter .track{position:relative;height:8px;border-radius:9px;background:var(--panel2);margin-top:10px}
+.setmeter .zone{position:absolute;top:0;bottom:0;border-radius:9px;background:color-mix(in srgb, var(--green, #5fd38d) 45%, transparent)}
+.setmeter .mark{position:absolute;top:-3px;width:4px;height:14px;margin-left:-2px;border-radius:2px;background:var(--accent)}
+.okline b{color:var(--green, #5fd38d)}
 .orbit{position:relative;margin-top:8px;height:340px;border-radius:12px;border:1px solid var(--line);background:var(--bg);overflow:hidden;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:grab}
 .orbit img{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
 .orbit img.flip{transform:scaleX(-1)}
@@ -473,7 +479,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-19.62'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-19.63'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4278,7 +4284,7 @@ async function exportSet(c){
   const dir = (S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c), s = MSET[c.id] = {state:'busy', text:'Gathering the pictures…'}; drawChars();
   try{
     const items = []; // {blob or canvas, caption}
-    for(const v of c.views){ const b = await (await fetch(v.url)).blob(), sh = v.shot && (c.shots || []).find(x => x.id===v.shot); // a training shot carries its action's tags
+    for(const v of c.views.filter(v => !v.noTrain)){ const b = await (await fetch(v.url)).blob(), sh = v.shot && (c.shots || []).find(x => x.id===v.shot); // a training shot carries its action's tags
       const cap = v.cap || (sh && sh.tags) || ''; items.push({blob:b, frame:!!v.pipe, back:!!v.pipe && v.angle==='back', cap:setCaption(c, SET_ANG[v.angle], cap ? cap.split(/\s*,\s*/).filter(Boolean) : null)}); } // the background of a card picture isn't known: the tagger says
     if(c.turn && c.turn.url && !c.turn.test && !c.views.some(v => v.pipe)){ s.text = 'Taking frames from the turnaround…'; // Build it all's angles stand in for these drawChars();
       const degs = Array.from({length:12}, (_, k) => k * 30), frames = await clipFrames(c.turn.url, degs.map(d => Math.round(d / 360 * (TV_LEN - 1))));
@@ -4480,17 +4486,35 @@ function boxTrain(c){
     <p class="note">ComfyUI's own LoRA training on ${esc(pcName(on.url))}, with ${esc(baseName(trainCkpt(on.oi)) || 'the checkpoint')}: rank 16, about 100 steps per picture. Roughly 1 to 2 hours, with the computer working flat out. The LoRA is then added to every computer that's on.</p>
     <div class="btnrow"><button class="btn hot" data-ch="trainset">🎓 Train the LoRA</button></div>`;
 }
+// how many pictures make a good character LoRA set (SDXL / Illustrious): 15 to 30 is the sweet spot; under 10 it barely
+// learns the character, over 40 the weak ones start to teach their mistakes
+const SET_RANGE = {low:10, min:15, max:30, high:40};
+function setMix(c){ const on = c.views.filter(v => !v.noTrain), cap = v => (v.cap || '') + ' ' + (((c.shots || []).find(x => x.id===v.shot) || {}).tags || '');
+  return {on, face:on.filter(v => v.angle==='face' || /close-up|portrait/.test(cap(v))).length, back:on.filter(v => v.angle==='back' || /from behind/.test(cap(v))).length,
+    side:on.filter(v => /left|right|side/.test(v.angle) || /from side/.test(cap(v))).length, action:on.filter(v => v.shot).length}; }
+function setMeter(c, nt){
+  const m = setMix(c), n = m.on.length + nt, R = SET_RANGE, top = R.high + 10, pct = x => (100 * Math.min(x, top) / top).toFixed(1);
+  const [cls, say] = n < R.low ? ['warn', 'Too few: aim for ' + R.min + '–' + R.max + '. Make more training shots.'] : n < R.min ? ['warn', 'A bit few: ' + R.min + '–' + R.max + ' is the sweet spot.']
+    : n <= R.max ? ['ok', '✓ In the good range (' + R.min + '–' + R.max + ').'] : n <= R.high ? ['note', 'Plenty: fine, it just trains a little longer. Drop any blurry or off-model ones.'] : ['warn', 'Too many: drop the weakest (blurry, off-model, repeats) to get back under ' + R.high + '.'];
+  const need = [m.face < 2 && 'a couple of face close-ups', m.back < 1 && 'a back view', m.side < 2 && 'side views', m.action < 5 && 'more action poses'].filter(Boolean);
+  return `<div class="setmeter"><div class="track"><i class="zone" style="left:${pct(R.min)}%;width:${(pct(R.max) - pct(R.min)).toFixed(1)}%"></i><i class="mark" style="left:${pct(n)}%"></i></div>
+    <p class="${cls==='ok' ? 'note okline' : cls}" style="margin-top:4px"><b>${n} picked</b>${nt ? ' (' + nt + ' of them turnaround frames)' : ''} · ${esc(say)}</p>
+    <p class="note" style="margin-top:0">${m.face} close-up${m.face===1 ? '' : 's'} · ${m.side} side · ${m.back} back · ${m.action} action${need.length ? '. Could use ' + esc(need.join(', ')) + '.' : '. A good mix.'}</p></div>`;
+}
 function boxSet(c){
-  const s = MSET[c.id], t = c.set, nt = c.turn && c.turn.url ? 12 : 0;
+  const s = MSET[c.id], t = c.set, nt = c.turn && c.turn.url && !c.views.some(v => v.pipe) ? 12 : 0, kept = c.views.filter(v => !v.noTrain).length;
   let h = '<div class="lbl">Training set (for a LoRA)</div>';
   if(s && s.state==='busy') return h + `<p class="note">📦 ${esc(s.text)}</p>`;
   if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
+  if(c.views.length) h += `<p class="note" style="margin-top:0">Tap pictures to leave them out of the set; tap again to keep them. Drop blurry, off-model or near-repeat ones.</p>
+    <div class="cviews tpick">${c.views.map(v => `<button data-tpick="${esc(v.id)}" class="${v.noTrain ? 'off' : 'on'}"><img src="${esc(v.url)}" alt="" loading="lazy"><span class="ang">${v.noTrain ? '✕ left out' : '✓ ' + esc(v.shot ? 'action' : ANGLES[v.angle] || 'Reference')}</span></button>`).join('')}</div>
+    ${setMeter(c, nt)}${kept < c.views.length ? '<div class="btnrow"><button class="chipbtn" data-ch="tpickall">Keep them all</button></div>' : ''}`;
   h += `<div class="row"><label>Trigger word</label><div class="grow"><input type="text" data-cf="trigger" placeholder="${esc(trigOf(Object.assign({}, c, {trigger:''})))}" value="${esc(c.trigger || '')}"></div></div>
-    <p class="note">Saves the ${c.views.length} picture${c.views.length===1 ? '' : 's'} on the card${nt ? ' and ' + nt + ' frames from the turnaround (every 30°)' : ''} into ${esc((S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c))} in your renders folder, each with a starter caption: the trigger word, solo, the view angle and the plain background. The look itself (hair, eyes, outfit) is left out on purpose so the trigger word learns it. Add a few pictures in other poses and expressions first, so the LoRA doesn't only know them standing on white.</p>`;
+    <p class="note">Saves the ${kept} picked picture${kept===1 ? '' : 's'}${nt ? ' and ' + nt + ' frames from the turnaround (every 30°)' : ''} into ${esc((S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c))} in your renders folder, each with a starter caption: the trigger word, solo, the view angle and the plain background. The look itself (hair, eyes, outfit) is left out on purpose so the trigger word learns it. Add a few pictures in other poses and expressions first, so the LoRA doesn't only know them standing on white.</p>`;
   if(t) h += `<p class="note">Last saved: ${t.n} pictures on ${esc(pcName(t.pc))}, ${new Date(t.at).toLocaleString()}. Saving again overwrites them.${t.captioned ? ' Captioned by the tagger ' + new Date(t.captioned).toLocaleString() + '.' : ''}</p>`
     + (t.files && t.files.length ? `<p class="note">✍️ Caption with the tagger: the WD EVA02 tagger (Danbooru tags with a score each; the first time it asks to download it, 1.26 GB) reads each picture; her look (hair, eyes, body) is dropped so the trigger word learns it, while what she wears or doesn't, her expression and the framing are kept. Made-up props and names are left out. For a character you care about, ask Claude in the project to check the captions.</p>
       ${t.captioned ? `<details class="note"><summary>See the captions</summary>${t.files.map(f => `<div><b>${esc(f.img)}</b>: ${esc(f.tagged || f.cap)}</div>`).join('')}</details>` : ''}` : '');
-  return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${c.views.length + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button>${t && t.files && t.files.length ? '<button class="btn" data-ch="capset">✍️ Caption with the tagger</button>' : ''}</div>`
+  return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${kept + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button>${t && t.files && t.files.length ? '<button class="btn" data-ch="capset">✍️ Caption with the tagger</button>' : ''}</div>`
     + (t && t.files && t.files.length || c.lora ? boxTrain(c) : '');
 }
 // Get the 3D model: the one big file, through the helper (at the speed picked in ⚙, carrying on after a drop)
@@ -4880,8 +4904,9 @@ function redrawGraph(oi, img, c, tags, prefix, dn = 0.2){
 }
 let REDRAWN = []; // Test mode: the redraw graphs made
 // how hard the quality pass redraws: on the Librarian (2026-10-19) 0.35 changed her design (hair colour, eyes, lips),
-// 0.22 kept it and sharpened the lines; bigger only (no redraw) stayed closest but soft
-const redrawW = c => c.redrawW==null ? 0.2 : c.redrawW;
+// 0.22 kept it and sharpened the lines; bigger only (no redraw) stayed closest, and Jordan found those the most consistent,
+// so bigger only is the default
+const redrawW = c => c.redrawW==null ? 0 : c.redrawW;
 const REDRAW_SEG = [['0', 'Bigger only'], ['0.2', 'Light (0.2)'], ['0.3', 'Stronger (0.3)']];
 async function redrawPic(c, pc, img, tags, prefix){
   if(S.test){ REDRAWN.push(redrawGraph(FAKE3D_IL, img, c, tags, prefix, redrawW(c)).g); return {img, url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='}; }
@@ -5024,9 +5049,10 @@ sits on stairs with the chin resting on one hand, thinking | sitting, on stairs,
 stands in the rain holding an umbrella, at night | standing, holding umbrella, rain, night, outdoors`;
 const SHOT_RUN = {}; // character id -> {i, n, t0, text} while making shots in this app
 const SV = {id:null, moved:false}; // the shot being looked at (its clip and frame)
+const shotN = c => c.shotN || 2; // frames kept from each clip: extra ones to choose from when picking the training set
 const shotLines = c => (c.shotList!=null ? c.shotList : SHOT_LIST).split('\n').map(l => l.trim()).filter(Boolean).map(l => { const [say, tags] = l.split('|'); return {say:say.trim(), tags:(tags || '').trim()}; }).filter(x => x.say);
 const shotPrefix = c => (S.hidden ? HIDDEN : 'RenderDeck') + '/characters/shots/' + ((c.name || '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'character');
-const SHOT_EST = () => (/turbo/i.test(baseName(kitTurn().unet || '')) ? 300 : 720) + 60;
+const SHOT_EST = () => (/turbo/i.test(baseName(kitTurn().unet || '')) ? 300 : 720) + 30;
 // the pictures MiniMax looks at: the one the card started from, then a side and the back when there are some
 function shotRefs(c){ const last = a => c.views.filter(v => v.angle===a && !v.shot).slice(-1)[0];
   const src = pipeSrc(c) || turnSource(c); return [src, last('right') || last('left') || last('side'), last('back')].filter((v, i, a) => v && a.indexOf(v)===i); }
@@ -5075,25 +5101,27 @@ async function sharpestFrame(url){
     let s = 0, s2 = 0, m = 0; for(let j = 1; j < H - 1; j++) for(let i = 1; i < W - 1; i++){ const p = j * W + i, v = 4 * L[p] - L[p-1] - L[p+1] - L[p-W] - L[p+W]; s += v; s2 += v * v; m++; }
     return s2 / m - (s / m) ** 2; });
   cv.width = cv.height = 0;
-  let b = 0; sc.forEach((v, j) => { if(v > sc[b]) b = j; }); return idx[b];
+  return idx.map((f, j) => [f, sc[j]]).sort((a, b) => b[1] - a[1]).map(x => x[0]); // sharpest first
 }
+// the n sharpest frames at least a second apart, so they show different moments
+function sharpestApart(order, n){ const out = []; for(const f of order){ if(out.length >= n) break; if(out.every(x => Math.abs(x - f) >= 24)) out.push(f); } return out; }
 // a frame of a shot's clip as a (redrawn) Reference picture on the card
-async function shotFrame(c, sh, at){
+async function shotFrame(c, sh, at, nth = 0){
   const k = kitTurn(), pc = sh.pc, cv = sh.url ? (await clipFrames(sh.url, [at]))[0] : frameCanvas(null);
-  const raw = await uploadFrame(cv, 'shot', pc); let v = {id:uid('v'), angle:'ref', img:raw.img, url:raw.url, home:raw.home, shot:sh.id, made:true};
+  const raw = await uploadFrame(cv, 'shot', pc); let v = {id:uid('v'), angle:'ref', img:raw.img, url:raw.url, home:raw.home, shot:sh.id, shotN:nth, made:true};
   if(canRedraw(S.test ? null : pcOf(pc))){ const r = await redrawPic(c, pc, raw.img, sh.tags, shotPrefix(c)); Object.assign(v, {img:r.img, url:r.url, redrawn:true}); }
   v.cap = sh.tags;
-  c.views = c.views.filter(x => x.shot!==sh.id); c.views.push(v); sh.at = at; sh.view = v.id; save();
+  c.views = c.views.filter(x => !(x.shot===sh.id && (x.shotN || 0)===nth)); c.views.push(v); if(!nth){ sh.at = at; sh.view = v.id; } save();
 }
 async function makeShot(c, sh, k, refImgs){
   const t0 = Date.now(), prefix = shotPrefix(c) + '_clip', {g, save:sid} = shotGraph(k, refImgs, c, shotPrompt(c, shotRefs(c), sh.say), prefix);
-  if(S.test){ await new Promise(r => setTimeout(r, 150)); SHOT_RUN.last = g; Object.assign(sh, {url:'', pc:'test', test:true}); await shotFrame(c, sh, 60); return; }
+  if(S.test){ await new Promise(r => setTimeout(r, 150)); SHOT_RUN.last = g; Object.assign(sh, {url:'', pc:'test', test:true}); for(let n = 0; n < shotN(c); n++) await shotFrame(c, sh, 30 + 40 * n, n); return; }
   const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-shot'})}), j = await r.json();
   if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
   const f = await waitOut(k.url, j.prompt_id, sid, prefix, t0, true);
   Object.assign(sh, {url:viewUrl(f, k.url), pc:k.url}); save();
   const R = SHOT_RUN[c.id]; if(R) R.text = 'Picking the sharpest frame…'; drawShotBar();
-  await shotFrame(c, sh, await sharpestFrame(sh.url));
+  const best = sharpestApart(await sharpestFrame(sh.url), shotN(c)); for(let n = 0; n < best.length; n++) await shotFrame(c, sh, best[n], n);
 }
 // makes the listed shots (or just `only`), one after another on the computer with MiniMax
 async function runShots(c, only){
@@ -5124,7 +5152,7 @@ function drawShotBar(){
 function boxShots(c){
   const k = kitTurn(), R = SHOT_RUN[c.id], shots = (c.shots || []).filter(sh => sh.view && c.views.some(v => v.id===sh.view) || sh.err), lines = shotLines(c);
   let h = '<div class="lbl">🎞 Training shots</div>';
-  h += `<p class="note" style="margin-top:0">For a LoRA that knows ${esc(c.name || 'them')} in any pose: MiniMax acts out each line below from ${esc(c.name || 'their')}${c.name ? "'s" : ''} picture, side and back, the sharpest frame of each clip is picked, and the quality pass makes it 1.5× bigger and sharper. Each one joins the pictures above with its tags, ready for 📦 Save the training set. About ${Math.round(SHOT_EST() / 60)} minutes a shot${k.why ? '' : ' on ' + esc(pcName(k.url))}.</p>`;
+  h += `<p class="note" style="margin-top:0">For a LoRA that knows ${esc(c.name || 'them')} in any pose: MiniMax acts out each line below from ${esc(c.name || 'their')}${c.name ? "'s" : ''} picture, side and back, the two sharpest moments of each clip are kept (extra ones to choose from), made 1.5× bigger by the quality pass. Each one joins the pictures above with its tags, ready for 📦 Save the training set. About ${Math.round(SHOT_EST() / 60)} minutes a shot${k.why ? '' : ' on ' + esc(pcName(k.url))}.</p>`;
   if(R) return h + `<div class="pbar"><i data-shotbar style="width:0%"></i></div><p class="note" data-shottxt></p>
     <div class="btnrow"><button class="btn" data-ch="shotstop" ${R.stop ? 'disabled' : ''}>${R.stop ? 'Stopping after this shot…' : '⏸ Stop after this shot'}</button></div>`;
   if(shots.length){
@@ -5262,6 +5290,8 @@ $('#charBody').onclick = async e => {
     c.tags = [c.tags.trim().replace(/,\s*$/, ''), ...pick.map(x => tagText(TAGMAP.get(x)))].filter(Boolean).join(', ');
     s.tags = s.tags.filter(x => !pick.includes(x[0])); if(!s.tags.length) delete SUG[c.id]; }
   else if(act==='sugoff'){ delete SUG[c.id]; }
+  else if(t.dataset.tpick){ const v = c.views.find(x => x.id===t.dataset.tpick); if(v) v.noTrain = !v.noTrain; }
+  else if(act==='tpickall'){ c.views.forEach(v => delete v.noTrain); }
   else if(act==='shotgo'){ const n = shotLines(c).length; if(!confirm('Make ' + n + ' training ' + (n===1 ? 'shot' : 'shots') + ' on ' + pcName(kitTurn().url || '') + '? About ' + Math.round(n * SHOT_EST() / 60) + ' minutes.')) return; SV.id = null; runShots(c); return; }
   else if(act==='shotstop'){ if(SHOT_RUN[c.id]) SHOT_RUN[c.id].stop = true; toast('It stops once this shot is done'); }
   else if(t.dataset.shot){ SV.id = SV.id===t.dataset.shot ? null : t.dataset.shot; SV.moved = false; }
