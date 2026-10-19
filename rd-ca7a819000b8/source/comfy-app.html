@@ -467,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.51'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.52'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3660,39 +3660,60 @@ function setCaption(c, ang, extra){
   return [trigOf(c), who, 'solo', ang, ...(extra || [])].filter(Boolean).join(', ');
 }
 const MSET = {}; // character id -> {state, text}
+async function picHash(blob){ const b = await blob.arrayBuffer();
+  if(crypto.subtle) return [...new Uint8Array(await crypto.subtle.digest('SHA-1', b))].map(x => x.toString(16).padStart(2, '0')).join('');
+  const u = new Uint8Array(b); let h = 2166136261; for(let i = 0; i < u.length; i++) h = Math.imul(h ^ u[i], 16777619); return u.length + ':' + (h >>> 0); }
 async function exportSet(c){
   const pc = S.test ? 'test' : (c.turn && c.turn.pc && pcOf(c.turn.pc) && pcOf(c.turn.pc).online ? c.turn.pc : (allPcs().find(p => p.online && p.url===farmHost()) || allPcs().find(p => p.online) || {}).url);
   if(!pc){ toast("Your computers can't be reached right now", true); return; }
   const dir = (S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c), s = MSET[c.id] = {state:'busy', text:'Gathering the pictures…'}; drawChars();
   try{
     const items = []; // {blob or canvas, caption}
-    for(const v of c.views){ const b = await (await fetch(v.url)).blob(); items.push({blob:b, cap:setCaption(c, SET_ANG[v.angle], v.angle==='face' ? [] : ['simple background'])}); }
+    for(const v of c.views){ const b = await (await fetch(v.url)).blob(); items.push({blob:b, cap:setCaption(c, SET_ANG[v.angle])}); } // the background of a card picture isn't known: the tagger says
     if(c.turn && c.turn.url && !c.turn.test){ s.text = 'Taking frames from the turnaround…'; drawChars();
       const degs = Array.from({length:12}, (_, k) => k * 30), frames = await clipFrames(c.turn.url, degs.map(d => Math.round(d / 360 * (TV_LEN - 1))));
-      frames.forEach((cv, k) => items.push({canvas:cv, cap:setCaption(c, turnAngTag(degs[k]), ['standing', 'full body', 'simple background', 'white background'])})); }
-    let n = 0; const files = [];
-    for(const it of items){ n++; s.text = 'Saving ' + n + ' of ' + items.length + ' on ' + pcName(pc) + '…'; drawChars();
+      frames.forEach((cv, k) => items.push({canvas:cv, frame:true, back:turnAngTag(degs[k])==='from behind', cap:setCaption(c, turnAngTag(degs[k]), ['standing', 'a-pose', 'full body', 'simple background', 'white background'])})); }
+    let n = 0, dup = 0; const files = [], seenPic = new Set();
+    for(const it of items){ s.text = 'Saving ' + (n + 1) + ' of ' + (items.length - dup) + ' on ' + pcName(pc) + '…'; drawChars();
       const blob = it.blob || await new Promise((ok, no) => it.canvas.toBlob(b => b ? ok(b) : no(new Error("couldn't read a frame")), 'image/png'));
       if(it.canvas) it.canvas.width = it.canvas.height = 0;
-      const base = trigOf(c) + '_' + String(n).padStart(2, '0'), ext = /jpe?g/.test(blob.type) ? '.jpg' : /webp/.test(blob.type) ? '.webp' : '.png'; files.push({img:base + ext, cap:it.cap});
+      // the same picture twice (a card picture taken from the turnaround, or a still start of the clip) only once
+      const hash = await picHash(blob); if(seenPic.has(hash)){ dup++; continue; } seenPic.add(hash); n++;
+      const base = trigOf(c) + '_' + String(n).padStart(2, '0'), ext = /jpe?g/.test(blob.type) ? '.jpg' : /webp/.test(blob.type) ? '.webp' : '.png'; files.push({img:base + ext, cap:it.cap, frame:!!it.frame, back:!!it.back});
       for(const [b, name] of [[blob, base + ext], [new Blob([it.cap + '\n'], {type:'text/plain'}), base + '.txt']]){
         if(S.test) continue;
         const fd = new FormData(); fd.append('image', b, name); fd.append('subfolder', dir); fd.append('type', 'output'); fd.append('overwrite', 'true');
         const r = await fetch(pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving ' + name + ' failed (' + r.status + ')'); } }
-    c.set = {n:items.length, dir, pc, at:Date.now(), files}; delete MSET[c.id]; save(); drawChars(); buzz(); toast(items.length + ' pictures saved for training ✨');
+    c.set = {n:files.length, dir, pc, at:Date.now(), files}; delete MSET[c.id]; save(); drawChars(); buzz(); toast(files.length + ' pictures saved for training' + (dup ? ' (' + dup + ' repeats left out)' : '') + ' ✨');
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't save the training set: " + err.message}); drawChars(); }
 }
 // Captions from the tagger: Florence-2 PromptGen tags each saved picture. A look tag (hair, eyes, clothes) seen in most
 // of the set, or already on the card, is part of the design, so it's dropped for the trigger word to learn. Tags about
 // the picture (pose, expression, framing, background) and look tags only some pictures have (a jacket taken off) stay.
+// Rules learned from the first real set (Laura, 2026-10-19), where PromptGen made things up and dropped what mattered:
+// - what's worn or not (nude, barefoot, nipples...) is never the design, so the LoRA doesn't make the character always nude;
+// - body and hair tags are always the design, however often the tagger saw them (it called her huge breasts small, her
+//   short hair long, and gave her a ponytail and a hairclip);
+// - character, series, artist and meta tags never go in (it named her Hatsune Miku);
+// - a turnaround frame is a plain standing A-pose, so only what can be on her shows up: worn-or-not, face and gaze
+//   (none of it on a back view), not props or poses (a pregnancy test in nine frames, flip-flops, spread legs);
+// - the 1girl / 1boy count is always kept, taken from the tagger when the card doesn't say.
+const CAP_WORN = /^(nude|completely_nude|partially_nude|topless|bottomless|barefoot|nipples|pussy|uncensored|ass|anus|navel|cleavage|areola_slip|no_bra|no_panties|underwear_only|bare_shoulders|bare_arms|bare_legs|bare_back|sweat|wet|shiny_skin|naked_.+)$/;
+const CAP_FACE = /^(blush|smile|light_smile|grin|closed_mouth|open_mouth|parted_lips|expressionless|frown|pout|serious|embarrassed|surprised|sad|angry|closed_eyes|half-closed_eyes|one_eye_closed|looking_at_viewer|looking_to_the_side|looking_away|looking_down|looking_up|looking_back|tears|:d|:o|:\)|;\))$/;
+const CAP_BODY = /(^|_)(hair|eyes|ahoge|bangs|sidelocks|antenna_hair|hairclip|hairband|bun|ponytail|twintails|braid|breasts|areolae|hips|thighs|waist|mole|freckles|piercing|tattoo|skin|ears|eyelashes|pupils|fang|fangs|muscular|abs|plump|curvy|petite|tall|short)(_|$)|^(hair_.+|.+_hair|dark-skinned_.+|pale_skin|tan|tanlines)$/;
 function capsFrom(texts, c, files){
   const card = new Set((c.tags || '').split(',').map(norm).filter(Boolean)), seen = new Map();
   const per = texts.map(t => [...new Set(String(t || '').split(',').map(s => s.trim()).filter(Boolean).map(s => { const x = findTag(s.replace(/\\/g,'')); return x ? x.tag : null; }).filter(Boolean))]);
   per.forEach(tags => tags.forEach(t => seen.set(t, (seen.get(t) || 0) + 1)));
-  const design = t => card.has(t) || !NOT_LOOK.test(t) && /^[0-4]$/.test((TAGMAP.get(t) || {}).cat) && seen.get(t) >= Math.max(2, 0.6 * per.length);
+  const cat = t => String((TAGMAP.get(t) || {}).cat);
+  const design = t => !CAP_WORN.test(t) && !CAP_FACE.test(t) && (card.has(t) || CAP_BODY.test(t) || !NOT_LOOK.test(t) && /^[0-4]$/.test(cat(t)) && seen.get(t) >= Math.max(2, 0.6 * per.length));
+  const counts = per.flat().filter(t => /^(1girl|1boy|1other)$/.test(t)), who = counts.sort((a, b) => counts.filter(x => x===b).length - counts.filter(x => x===a).length)[0];
   const angles = /^(from_side|from_behind|profile|from_above|from_below)$/; // the app knows the angle of each picture better than the tagger
-  return per.map((tags, i) => { const start = files[i].cap.split(',').map(s => s.trim()), have = new Set(start.map(norm));
-    const keep = tags.filter(t => !design(t) && !angles.test(t) && !/^(1girl|1boy|1other|solo)$/.test(t) && !have.has(t)).map(t => t.replace(/_/g, ' '));
+  return per.map((tags, i) => { const f = files[i], start = f.cap.split(',').map(s => s.trim()), have = new Set(start.map(norm));
+    if(who && !start.some(x => /^(1girl|1boy|1other)$/.test(x))) start.splice(1, 0, who);
+    const frame = f.frame || f.frame===undefined && have.has('white_background') && have.has('full_body'), back = f.back || have.has('from_behind');
+    const keep = tags.filter(t => !design(t) && !angles.test(t) && !/^(1girl|1boy|1other|solo|[12]?[0-9]girls|[0-9]boys)$/.test(t) && !have.has(t) && /^[0-2]$/.test(cat(t)) && cat(t)!=='1'
+      && (!frame || CAP_WORN.test(t) || CAP_FACE.test(t) && !back) && !(back && /^looking_at_viewer$/.test(t))).map(t => t.replace(/_/g, ' '));
     return start.concat(keep).join(', '); });
 }
 async function captionSet(c){
@@ -3752,10 +3773,11 @@ async function trainSet(c){
   if(!confirm('Train ' + trig + ' on ' + pcName(p.url) + '? ' + steps + ' steps on ' + baseName(ckpt) + ', roughly 1 to 2 hours. ' + pcName(p.url) + ' works flat out the whole time' + (/main/i.test(pcName(p.url)) ? ', so no gaming meanwhile.' : '.'))) return;
   const s = MLORA[c.id] = {state:'busy', text:'Copying the pictures to ' + pcName(p.url) + '…'}; drawChars(); buzz();
   try{
-    if(!S.test){ let i = 0;
+    if(!S.test){ let i = 0; const seenPic = new Set();
       for(const f of t.files){ i++; s.text = 'Copying picture ' + i + ' of ' + t.files.length + ' to ' + pcName(p.url) + '…'; drawChars();
         const at = name => t.pc + '/view?' + new URLSearchParams({filename:name, subfolder:t.dir, type:'output'});
-        const img = await fitForTraining(await (await fetch(at(f.img))).blob()), cap = await (await fetch(at(f.img.replace(/\.\w+$/, '.txt')))).text();
+        const raw = await (await fetch(at(f.img))).blob(), hash = await picHash(raw); if(seenPic.has(hash)) continue; seenPic.add(hash); // a repeat only once
+        const img = await fitForTraining(raw), cap = await (await fetch(at(f.img.replace(/\.\w+$/, '.txt')))).text();
         for(const [b, name] of [[img, f.img.replace(/\.\w+$/, '.png')], [new Blob([cap], {type:'text/plain'}), f.img.replace(/\.\w+$/, '.txt')]]){
           const fd = new FormData(); fd.append('image', b, name); fd.append('subfolder', folder); fd.append('type', 'input'); fd.append('overwrite', 'true');
           const r = await fetch(p.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('copying ' + name + ' failed (' + r.status + ')'); } } }
