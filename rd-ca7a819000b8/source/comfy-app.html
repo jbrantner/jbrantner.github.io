@@ -151,6 +151,12 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .m3d{display:block;width:100%;height:360px;margin-top:6px;border-radius:12px;border:1px solid var(--line);background:var(--bg);--poster-color:transparent}
 .chsec .pbar{height:5px;border-radius:9px;background:var(--panel2);margin:6px 0;overflow:hidden}
 .chsec .pbar i{display:block;height:100%;background:var(--cyan)}
+.chsec .pbar i[data-pipebar]{background:var(--accent);transition:width .8s linear}
+.psteps{margin:4px 0 2px}
+.prow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
+.prow:last-child{border-bottom:0}
+.prow .pst{width:18px;text-align:center;color:var(--accent)}
+.prow small{color:var(--dim)}
 .orbit{position:relative;margin-top:8px;height:340px;border-radius:12px;border:1px solid var(--line);background:var(--bg);overflow:hidden;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:grab}
 .orbit img{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
 .orbit img.flip{transform:scaleX(-1)}
@@ -448,9 +454,6 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="lbl">Model downloads</div>
   <div class="seg" id="speedSeg" style="--c:var(--accent)"></div>
   <p class="note">How fast your computers download models and copy them to each other. Pick Gentle if the house WiFi starts dropping again.</p>
-  <div class="lbl">Start clean</div>
-  <div class="btnrow"><button class="btn" id="cleanBtn">🧹 Clear characters and renders</button></div>
-  <p class="note">Empties the characters, the picture strip, drafts and the prompt, in both the normal and 🙈 Hidden views. Your computers, models, recipe and settings stay. It doesn't delete picture files: do that from 🗂 Library.</p>
   <div class="lbl">Setup on the render computer</div>
   <ol class="steps">
     <li>Install <b>Tailscale</b> on the render computer and on your iPhone, and sign in to the same account on both.</li>
@@ -470,7 +473,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-19.57'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-19.58'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1500,7 +1503,7 @@ async function fillFromPcs(){
   try{ const j = await (await fetch(base() + '/renderdeck/images?hidden=' + (h ? 1 : 0) + '&limit=40', {cache:'no-store'})).json();
     if(!!S.hidden!==h) return; // switched workstation meanwhile
     const have = new Set(S.gallery.map(g => g.url)); let n = 0;
-    (j.images || []).filter(i => isHidden(i.subfolder)===h && !isDraftFile(i)).forEach(i => { const url = viewUrl(i, i.src);
+    (j.images || []).filter(i => isHidden(i.subfolder)===h && !isDraftFile(i) && !/(^|\/)datasets(\/|$)/.test(i.subfolder || '')).forEach(i => { const url = viewUrl(i, i.src);
       if(!have.has(url) && S.gallery.length < 40){ S.gallery.push({url, seed:null, prompt:'', t:(i.t || 0) * 1000, saved:true}); have.add(url); n++; } });
     if(n){ save(); drawStrip(); if(!S.gallery[shownIdx]) show(0); }
   }catch(e){} finally{ filling = 0; }
@@ -1886,10 +1889,6 @@ $('#srvSeg').onclick = e => { const b = e.target.closest('[data-srv]'); if(!b) r
 $('#connectBtn').onclick = connect;
 $('#testBtn').onclick = testMode;
 // the speed lives in each computer's helper (render_deck_speed.json), so it holds with the app closed too
-$('#cleanBtn').onclick = () => {
-  if(!confirm('Clear all characters, the picture strip, drafts and the prompt in both views? Picture files on your computers stay until you delete them in 🗂 Library.')) return;
-  [S, S.stash || {}].forEach(w => { w.gallery = []; w.chars = []; w.prompt = ''; w.addedTags = []; });
-  S.charJobs = {}; save(); location.reload(); };
 $('#speedSeg').onclick = async e => { const t = e.target.closest('[data-speed]'); if(!t) return; S.speed = t.dataset.speed; save(); render();
   if(S.test) return;
   const res = await Promise.all(allPcs().filter(p => p.online).map(p => fetch(p.url + '/renderdeck/speed', {method:'POST', headers:JSONH, body:JSON.stringify({mbps:S.speed==='gentle' ? 2 : 0})}).then(r => r.ok ? null : pcName(p.url)).catch(() => pcName(p.url))));
@@ -4234,7 +4233,7 @@ async function paint3d(c, fromTurn){
 // The turnaround made from the 3D model lines up with it exactly: frame i shows the model turned 360°·i/(length-1) to
 // their left, seen straight on with the fit kept on the clip. Six frames 60° apart become views with those cameras.
 // frames of a turnaround clip as pictures (canvases): frame i of TV_LEN, at the clip's own frame rate
-async function clipFrames(url, idxs){
+async function clipFrames(url, idxs, grab){
   TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b));
   const vid = document.createElement('video'); vid.muted = true; vid.playsInline = true; vid.setAttribute('playsinline', '');
   await new Promise((ok, no) => { vid.onloadeddata = ok; vid.onerror = () => no(new Error("the clip couldn't be read")); TVBLOB[url].then(src => { vid.src = src; vid.load(); }, no); });
@@ -4242,6 +4241,7 @@ async function clipFrames(url, idxs){
   const fps = vid.duration ? TV_LEN / vid.duration : 24, out = [];
   for(const i of idxs){
     await new Promise(ok => { vid.onseeked = ok; vid.currentTime = Math.min(vid.duration - 0.01, (i + 0.5) / fps); });
+    if(grab){ out.push(grab(vid)); continue; }
     const cv = document.createElement('canvas'); cv.width = vid.videoWidth; cv.height = vid.videoHeight; cv.getContext('2d').drawImage(vid, 0, 0); out.push(cv);
   }
   vid.removeAttribute('src'); vid.load();
@@ -4587,7 +4587,7 @@ function turnPrompt(c){
     + 'Wide shot: the whole body is in frame from the top of the head to the feet, with space above and below. The camera is locked off at chest height and does not move or zoom. '
     + 'The design, proportions, colours and clothing stay exactly the same the whole time. Only <Subject 1>; no other figures, no props. Lit evenly from every side like a flat-colour character sheet: no cast shadows, no shadow on the floor, no dark shading on the body. The background stays pure white all the way to the edges.';
 }
-function turnVideoGraph(k, img, c, pinned, control){
+function turnVideoGraph(k, img, c, pinned, control, o = {}){
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
@@ -4595,13 +4595,14 @@ function turnVideoGraph(k, img, c, pinned, control){
   const un = c.tvModel && (k.videos || []).includes(c.tvModel) ? c.tvModel : k.unet, fast = /turbo/i.test(baseName(un)); // the picked video model, else the usual one
   let model = [add('UNETLoader', {unet_name:un, weight_dtype:'default'}), 0];
   if(k.lora && fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
-  const sl = c.tvLora && (k.styles || []).includes(c.tvLora) ? c.tvLora : ''; // the character's style LoRA, before the ControlNet as in the AFKJ two-pass
-  if(sl) model = [add('LoraLoaderModelOnly', {model, lora_name:sl, strength_model:Math.max(0, Math.min(2, parseFloat(c.tvLoraW) || 1))}), 0];
+  const want = 'lora' in o ? o.lora : c.tvLora, sl = want && (k.styles || []).includes(want) ? want : ''; // the style LoRA (Build it all picks its own), before the ControlNet as in the AFKJ two-pass
+  if(sl) model = [add('LoraLoaderModelOnly', {model, lora_name:sl, strength_model:Math.max(0, Math.min(2, parseFloat('w' in o ? o.w : c.tvLoraW) || 1))}), 0];
+  const words = ('words' in o ? o.words : c.tvLoraWords) || '';
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
   // from the 3D model: its spin (white outlines on black, made on the phone) steers every frame through the Fun ControlNet
   if(control){ const fr = add('GetVideoComponents', {video:[add('LoadVideo', {file:control}), 0]});
     model = [add('MiniMaxH3FunControlNetApply', {model, model_patch:[add('ModelPatchLoader', {name:k.cn}), 0], vae:[vae,0], strength:1, start_percent:0, end_percent:1, control_video:[fr,0]}), 0]; }
-  const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:((c.tvLoraWords || '').trim() ? c.tvLoraWords.trim().replace(/([^.!?])$/, '$1.') + ' ' : '') + turnPrompt(c), width:TV_W, height:TV_H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
+  const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:(words.trim() ? words.trim().replace(/([^.!?])$/, '$1.') + ' ' : '') + turnPrompt(c), width:TV_W, height:TV_H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
   // a Front is pinned as the first and last frame; a Reference only guides the design, so the clip starts on a clean full-body front of its own
   let cond = [rv,0];
   if(pinned) for(const f of [0, -1]) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:f}), 0];
@@ -4706,9 +4707,9 @@ async function findTurnClip(pc, prefix, since){
 }
 const MTV = {}; // character id -> {state, text}
 const TV = {ang:'right', moved:false}; // the frame picker: which angle the next frame is added as
-async function makeTurn(c, fromModel){
+async function makeTurn(c, fromModel, o = {}){
   const k = kitTurn(); if(k.why){ toast(k.why, true); return; }
-  const v = turnSource(c); if(!v){ toast('It needs a Front or Reference picture first', true); return; }
+  const v = o.src || turnSource(c); if(!v){ toast('It needs a Front or Reference picture first', true); return; }
   if(fromModel && !k.ok3d){ toast(pcName(k.url) + " doesn't have MiniMax H3's Fun ControlNet", true); return; }
   const s = MTV[c.id] = {state:'busy', text:'Getting the picture ready…'}; drawChars(); buzz();
   try{
@@ -4722,7 +4723,7 @@ async function makeTurn(c, fromModel){
         const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('sending the spin failed (' + r.status + ')');
         const j = await r.json(); control = (j.subfolder ? j.subfolder + '/' : '') + j.name; }
       else control = 'rdspin_test.avi'; }
-    const {g, save:sid} = turnVideoGraph(k, img, c, v.angle==='front' && !fromModel, control);
+    const {g, save:sid} = turnVideoGraph(k, img, c, v.angle==='front' && !fromModel, control, o);
     if(S.test){ await new Promise(r => setTimeout(r, 300)); c.turn = {url:'', test:true, at:Date.now(), pc:'test', model:!!fromModel}; MTV.last = g; delete MTV[c.id]; save(); drawChars(); return; }
     const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-turn'})});
     const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -4754,22 +4755,26 @@ async function waitTurn(c){
   }
 }
 // the frame on screen, as a new picture of the character, on the computer the clip came from
-async function addTurnFrame(c, angle){
-  const vid = $('#charBody video[data-tv]'), cv = document.createElement('canvas');
+function frameCanvas(vid){ const cv = document.createElement('canvas');
   cv.width = vid && vid.videoWidth || TV_W; cv.height = vid && vid.videoHeight || TV_H;
   const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, cv.width, cv.height);
-  try{ if(vid && vid.videoWidth) x.drawImage(vid, 0, 0, cv.width, cv.height); }catch(e){ toast("Couldn't read the frame: " + e.message, true); return; }
+  if(vid && vid.videoWidth) x.drawImage(vid, 0, 0, cv.width, cv.height); return cv; }
+// a picture (canvas) sent to a computer's input folder, as a new view of the character
+async function uploadFrame(cv, angle, pc){
   let blob; try{ blob = await new Promise((ok, no) => cv.toBlob(b => b ? ok(b) : no(new Error('the picture was blocked')), 'image/png')); }
-  catch(e){ toast("Couldn't read the frame: " + e.message, true); return; }
   finally{ cv.width = cv.height = 0; } // let iOS have the memory back
-  const file = new File([blob], 'turn_' + angle + '_' + Date.now().toString(36) + '.png', {type:'image/png'}), pc = c.turn.pc;
+  const file = new File([blob], 'turn_' + angle + '_' + Date.now().toString(36) + '.png', {type:'image/png'});
+  let name, url;
+  if(S.test){ const u = await uploadImage(file); name = u.name; url = u.local; }
+  else { const fd = new FormData(); fd.append('image', file, file.name); fd.append('overwrite', 'true'); fd.append('type', 'input');
+    const r = await fetch(pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('upload failed (' + r.status + ')');
+    const j = await r.json(), sub = j.subfolder || ''; name = (sub ? sub + '/' : '') + j.name; url = viewUrl({filename:j.name, subfolder:sub, type:'input'}, pc); }
+  return {id:uid('v'), angle, img:name, url, home:S.test ? 'test' : pc, made:true};
+}
+async function addTurnFrame(c, angle){
+  let cv; try{ cv = frameCanvas($('#charBody video[data-tv]')); }catch(e){ toast("Couldn't read the frame: " + e.message, true); return; }
   try{
-    let name, url;
-    if(S.test){ const u = await uploadImage(file); name = u.name; url = u.local; }
-    else { const fd = new FormData(); fd.append('image', file, file.name); fd.append('overwrite', 'true'); fd.append('type', 'input');
-      const r = await fetch(pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('upload failed (' + r.status + ')');
-      const j = await r.json(), sub = j.subfolder || ''; name = (sub ? sub + '/' : '') + j.name; url = viewUrl({filename:j.name, subfolder:sub, type:'input'}, pc); }
-    const v = {id:uid('v'), angle, img:name, url, home:S.test ? 'test' : pc, made:true}; c.views.push(v); CH.want = null; save(); drawChars(); buzz();
+    const v = await uploadFrame(cv, angle, c.turn.pc); c.views.push(v); CH.want = null; save(); drawChars(); buzz();
     toast(ANGLES[angle] + ' added');
   }catch(err){ toast("Couldn't add the frame: " + err.message, true); }
 }
@@ -4816,6 +4821,163 @@ function showTurn(){
       try{ await vid.play(); }catch(e){} vid.pause(); vid._ready = true; go(); }, {once:true});
     vid.muted = true; vid.src = src; vid.load();
   }).catch(err => { delete TVBLOB[url]; vid._loading = false; toast(err.message, true); });
+}
+// ---------- 🪄 Build it all: the turnaround, its sides, the 3D model and the styled turnaround, one after another ----------
+// From one picture: a turnaround video with no style LoRA; the Front, Right side, Back and Left side found in it (the
+// sides are where the silhouette is narrowest, the back the widest frame half way between them); a 3D model from those
+// four; then the model's spin painted by MiniMax with the style LoRA (the AFKJ Style one unless another is picked).
+// Each step keeps what it made in c.pipe, so a frame can be swapped by hand or a step redone, and the later steps follow.
+const PIPE = [['turn1', 'Turnaround video'], ['sides', 'Find the sides'], ['model', '3D model'], ['turn2', 'Styled turnaround from the 3D model']];
+const PIPE_ANG = ['front', 'right', 'back', 'left'];
+const PIPE_RUN = {}; // character id -> true while its steps run in this app
+const PV = {ang:null, moved:false}; // swapping one of the found frames: which angle, on the first turnaround
+const AFKJ_LORA = /AFK_Claude_minimaxh3/i;
+function pipeLora(c, k){ const P = c.pipe || {};
+  if(P.lora!==undefined) return (k.styles || []).includes(P.lora) ? P.lora : '';
+  return (k.styles || []).find(n => AFKJ_LORA.test(baseName(n))) || ''; }
+const pipeWords = (c, lora) => { const P = c.pipe || {}; return P.words!=null ? P.words : lora && AFKJ_LORA.test(baseName(lora)) ? 'AFKJ Style' : ''; };
+const pipeSrc = c => c.views.find(v => v.id===(c.pipe || {}).src) || null;
+function pipeEst(c, step){ const k = kitTurn(), fast = /turbo/i.test(baseName(c.tvModel || k.unet || ''));
+  return {turn1:fast ? 300 : 720, sides:40, model:300, turn2:fast ? 330 : 900}[step]; }
+function pipeProg(c){ const P = c.pipe || {}, tot = PIPE.reduce((t, [s]) => t + pipeEst(c, s), 0), at = PIPE.findIndex(x => x[0]===P.cur); let d = 0;
+  PIPE.forEach(([s], i) => { if(at >= 0 ? i < at : P.done && P.done[s]) d += pipeEst(c, s);
+    else if(i===at) d += pipeEst(c, s) * Math.min(0.95, (Date.now() - (P.t0 || Date.now())) / 1000 / pipeEst(c, s)); });
+  return d / tot; }
+const until = async (ok, ms = 1000) => { while(!ok()) await new Promise(r => setTimeout(r, ms)); };
+// the silhouette's width in each frame: columns with something that isn't the white background (the floor left out)
+async function findSides(url){
+  const n = TV_LEN, idx = Array.from({length:Math.ceil(n / 2)}, (_, i) => Math.min(n - 1, i * 2)), W = 144, H = 256;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const x = cv.getContext('2d', {willReadFrequently:true});
+  const wid = await clipFrames(url, idx, vid => { x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.drawImage(vid, 0, 0, W, H);
+    const d = x.getImageData(0, 0, W, Math.round(H * 0.92)).data, rows = Math.round(H * 0.92); let cols = 0;
+    for(let i = 0; i < W; i++){ let k = 0; for(let j = 0; j < rows; j++){ const p = (j * W + i) * 4; if(Math.min(d[p], d[p+1], d[p+2]) < 225) k++; } if(k >= 3) cols++; }
+    return cols; });
+  cv.width = cv.height = 0;
+  const best = (lo, hi, wide) => { let b = -1, bv = 0; idx.forEach((f, j) => { const p = f / (n - 1); if(p < lo || p > hi) return; const v = wide ? wid[j] : -wid[j]; if(b < 0 || v > bv){ b = f; bv = v; } }); return b; };
+  const def = a => Math.round(TV_AT[a] * (n - 1));
+  const right = best(0.14, 0.36) >= 0 ? best(0.14, 0.36) : def('right'), left = best(0.64, 0.86) >= 0 ? best(0.64, 0.86) : def('left');
+  const mid = (right + left) / 2 / (n - 1), front = best(0, 0.08, true);
+  const near = idx.map((f, j) => [f, wid[j]]).filter(([f]) => Math.abs(f / (n - 1) - mid) <= 0.06), top = Math.max(0, ...near.map(x => x[1]));
+  const wide = near.filter(x => x[1] >= 0.97 * top), back = wide.length ? wide[wide.length >> 1][0] : -1; // the middle of the widest stretch
+  return {front:front >= 0 ? front : def('front'), right, back:back >= 0 ? back : def('back'), left};
+}
+// the found frames become pictures of the character (replacing the ones an earlier run found)
+async function pipeFrames(c, at, only){
+  const P = c.pipe, t = P.turn1, src = pipeSrc(c), angs = (only ? [only] : PIPE_ANG).filter(a => !(a==='front' && src && src.angle==='front')); // a Front given stays the front
+  const cvs = t.url ? await clipFrames(t.url, angs.map(a => at[a])) : angs.map(() => frameCanvas(null));
+  for(let i = 0; i < angs.length; i++){
+    const v = await uploadFrame(cvs[i], angs[i], t.pc); v.pipe = true;
+    c.views = c.views.filter(x => !(x.pipe && x.angle===angs[i])); c.views.push(v); }
+  P.at = Object.assign({}, P.at, at); save();
+}
+const PIPE_FN = {
+  async turn1(c, P, resume){
+    const k = kitTurn(); if(k.why) throw new Error(k.why);
+    if(resume && c.turn && c.turn.making) waitTurn(c); else await makeTurn(c, false, {lora:'', src:pipeSrc(c)});
+    await until(() => !(c.turn && c.turn.making) && !(MTV[c.id] && MTV[c.id].state==='busy'));
+    if(MTV[c.id] && MTV[c.id].state==='err') throw new Error(MTV[c.id].text.replace(/^Couldn't make the turnaround: /, ''));
+    if(!c.turn || !(c.turn.url || c.turn.test) || (c.turn.at || 0) < P.t0 - 5000) throw new Error('no clip came back');
+    P.turn1 = {url:c.turn.url, pc:c.turn.pc, test:!!c.turn.test, at:c.turn.at};
+  },
+  async sides(c, P){
+    if(!P.turn1) throw new Error('make the turnaround first');
+    const at = P.turn1.url ? await findSides(P.turn1.url) : Object.fromEntries(PIPE_ANG.map(a => [a, Math.round(TV_AT[a] * (TV_LEN - 1))]));
+    await pipeFrames(c, at);
+  },
+  async model(c, P, resume){
+    const k = kit3d(); if(k.why || !k.unet) throw new Error(k.why || 'the 3D model isn\'t on ' + pcName(k.url || '') + ' yet: get it under 3D model below');
+    if(resume && c.model3d && c.model3d.making) wait3d(c); else await make3d(c);
+    await until(() => !(c.model3d && c.model3d.making) && !(M3D[c.id] && M3D[c.id].state==='busy'));
+    if(M3D[c.id] && M3D[c.id].state==='err') throw new Error(M3D[c.id].text.replace(/^Couldn't make the 3D model: /, ''));
+    if(!c.model3d || !c.model3d.url || (c.model3d.at || 0) < P.t0 - 5000) throw new Error('no 3D file came back');
+  },
+  async turn2(c, P, resume){
+    const k = kitTurn(); if(k.why) throw new Error(k.why);
+    if(!k.ok3d) throw new Error(pcName(k.url) + " doesn't have MiniMax H3's Fun ControlNet");
+    if(!c.model3d || !(c.model3d.raw || c.model3d.test)) throw new Error('there is no 3D model yet');
+    const lora = pipeLora(c, k);
+    if(resume && c.turn && c.turn.making) waitTurn(c); else await makeTurn(c, true, {lora, w:P.w || 1, words:pipeWords(c, lora), src:pipeSrc(c)});
+    await until(() => !(c.turn && c.turn.making) && !(MTV[c.id] && MTV[c.id].state==='busy'));
+    if(MTV[c.id] && MTV[c.id].state==='err') throw new Error(MTV[c.id].text.replace(/^Couldn't make the turnaround: /, ''));
+    if(!c.turn || !(c.turn.url || c.turn.test) || (c.turn.at || 0) < P.t0 - 5000) throw new Error('no clip came back');
+    P.turn2 = {url:c.turn.url, pc:c.turn.pc, test:!!c.turn.test, at:c.turn.at, lora};
+  },
+};
+// runs the steps from `from` (the first when left out) to the end; `resume` picks a step back up after the app was closed
+async function runPipe(c, from, resume){
+  if(PIPE_RUN[c.id]) return; PIPE_RUN[c.id] = true;
+  const P = c.pipe = c.pipe || {}; P.done = P.done || {};
+  if(!from){ const v = pipeSrc(c) && !pipeSrc(c).pipe ? pipeSrc(c) : turnSource(c);
+    if(!v || v.pipe){ delete PIPE_RUN[c.id]; toast('It needs a Reference or Front picture first', true); return; } P.src = v.id; }
+  let i = Math.max(0, PIPE.findIndex(x => x[0]===(from || 'turn1')));
+  PIPE.slice(i).forEach(([s]) => delete P.done[s]);
+  P.run = true; P.err = ''; P.stop = false; PV.ang = null;
+  const tick = setInterval(drawPipeBar, 1000);
+  try{
+    for(; i < PIPE.length; i++){
+      const s = PIPE[i][0]; if(!(resume && P.cur===s && P.t0)) P.t0 = Date.now(); P.cur = s; save(); drawChars();
+      await PIPE_FN[s](c, P, resume && P.cur===s); resume = false;
+      P.done[s] = Date.now(); save();
+      if(P.stop && i < PIPE.length - 1){ toast('Stopped after ' + PIPE[i][1].toLowerCase()); i = PIPE.length + 1; }
+    }
+    if(i===PIPE.length){ buzz(); toast((c.name || 'The character') + ' is built ✨ Check the styled turnaround'); }
+  }catch(err){ P.err = PIPE[i][1] + ': ' + err.message; toast("Build it all stopped at " + PIPE[i][1].toLowerCase(), true); }
+  finally{ clearInterval(tick); P.run = false; P.cur = null; P.stop = false; delete PIPE_RUN[c.id]; save(); drawChars(); }
+}
+// the bar and the time left, filled in after the card is drawn (outside what paint() compares)
+function drawPipeBar(){
+  const c = S.chars.find(x => x.id===CH.id), bar = $('#charBody [data-pipebar]'), tx = $('#charBody [data-pipetxt]'); if(!c || !c.pipe || !bar) return;
+  const P = c.pipe, f = pipeProg(c), at = PIPE.findIndex(x => x[0]===P.cur), left = PIPE.slice(Math.max(0, at)).reduce((t, [s], j) => t + pipeEst(c, s) * (j ? 1 : Math.max(0.05, 1 - (Date.now() - P.t0) / 1000 / pipeEst(c, s))), 0);
+  bar.style.width = (100 * f).toFixed(1) + '%';
+  if(tx) tx.textContent = at < 0 ? '' : 'Step ' + (at + 1) + ' of ' + PIPE.length + ': ' + PIPE[at][1] + ' · ' + Math.round(100 * f) + '% · about ' + Math.max(1, Math.round(left / 60)) + ' min left';
+}
+function boxPipe(c){
+  const P = c.pipe || {}, k = kitTurn(), src = P.run ? pipeSrc(c) : (pipeSrc(c) && !pipeSrc(c).pipe ? pipeSrc(c) : turnSource(c)), done = P.done || {};
+  if(P.run && !PIPE_RUN[c.id]) setTimeout(() => runPipe(c, P.cur || 'turn1', true), 0); // the app was closed mid-way: carry on
+  let h = '<div class="lbl">🪄 Build it all</div>';
+  const any = PIPE.some(([s]) => done[s]);
+  if(!P.run && !any) h += `<p class="note" style="margin-top:0">One tap does the whole chain from ${src ? 'the ' + (src.angle==='front' ? 'Front' : 'Reference') + ' picture' : 'a Reference or Front picture'}: a turnaround video (no style LoRA), the front, sides and back picked out of it, a 3D model from those, then a turnaround painted over the 3D model's spin with the style LoRA below. About ${Math.round(PIPE.reduce((t, [s]) => t + pipeEst(c, s), 0) / 60)} minutes. Afterwards you can swap a picked frame or redo any step, and the steps after it run again.</p>`;
+  if(P.run) h += `<div class="pbar" style="margin-top:4px"><i data-pipebar style="width:0%"></i></div><p class="note" data-pipetxt></p>`;
+  h += '<div class="psteps">' + PIPE.map(([s, name], i) => {
+    const st = P.cur===s ? '✱' : done[s] ? '✓' : '○', clip = s==='turn1' ? P.turn1 : s==='turn2' ? P.turn2 : null;
+    return `<div class="prow"><span class="pst">${st}</span><span class="grow">${esc(name)}${s==='turn2' && P.turn2 ? `<small> · ${esc(P.turn2.lora ? baseName(P.turn2.lora).replace(/\.safetensors$/, '') : 'no LoRA')}</small>` : ''}</span>
+      ${clip && clip.url && done[s] ? `<button class="chipbtn" data-pipesee="${s}">▶ Watch</button>` : ''}${!P.run && (done[s] || P.err && PIPE.findIndex(x => !done[x[0]])===i) ? `<button class="chipbtn" data-piperedo="${s}">↻ Redo from here</button>` : ''}</div>`; }).join('') + '</div>';
+  if(P.err && !P.run) h += `<p class="warn">${esc(P.err)}</p>`;
+  if(done.sides && !P.run){ // the frames it picked, each one swappable
+    const pics = PIPE_ANG.map(a => [a, c.views.filter(v => v.angle===a).slice(-1)[0]]).filter(([, v]) => v);
+    h += `<div class="lbl" style="margin-top:10px">Picked from the first turnaround</div><div class="cviews">${pics.map(([a, v]) => `<button data-pvang="${a}" class="${PV.ang===a ? 'sel' : ''}"><img src="${esc(v.url)}" alt="" loading="lazy"><span class="ang">${esc(ANGLES[a])}</span></button>`).join('')}</div>`;
+    if(PV.ang && P.turn1 && (P.turn1.url || P.turn1.test)) h += (P.turn1.url ? `<video class="tvid" data-pv data-src="${esc(P.turn1.url)}" playsinline muted preload="auto"></video>` : '<p class="note">The first turnaround (pretend, in Test mode).</p>') + `
+      <input type="range" class="tvscrub" data-pvt min="0" max="1000" step="1" aria-label="Frame">
+      <div class="btnrow"><button class="btn hot" data-ch="pvuse">Use this frame as the ${esc(ANGLES[PV.ang])}</button><button class="btn" data-ch="pvshut">Cancel</button></div>`;
+    else h += '<p class="note">Tap one to pick a better frame for it from the first turnaround.</p>';
+    if(P.swapped && done.model) h += `<div class="btnrow"><button class="btn hot" data-piperedo="model">↻ Redo the 3D model and styled turnaround with the new frames</button></div>`;
+  }
+  if(!k.why && (k.styles || []).length){ const l = pipeLora(c, k);
+    h += `<div class="row" style="margin-top:8px"><label>Step 4 LoRA</label><div class="grow"><select data-pipecf="lora"><option value=""${l ? '' : ' selected'}>None</option>${k.styles.map(n => `<option value="${esc(n)}"${n===l ? ' selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/, ''))}</option>`).join('')}</select></div></div>
+      <div class="row"><label>Strength</label><input type="number" data-pipecf="w" min="0" max="2" step="0.1" value="${esc(String(P.w || 1))}" style="width:80px"></div>
+      <div class="row"><label>Activation</label><div class="grow"><input type="text" data-pipecf="words" placeholder="e.g. AFKJ Style" value="${esc(pipeWords(c, l))}"></div></div>
+      <p class="note" style="margin:-2px 0 0 92px">Only the styled turnaround uses these; the first turnaround has no LoRA. The video model is the one picked under Turnaround video.</p>`; }
+  if(P.run) return h + `<div class="btnrow"><button class="btn" data-ch="pipestop" ${P.stop ? 'disabled' : ''}>${P.stop ? 'Stopping after this step…' : '⏸ Stop after this step'}</button></div>`;
+  if(k.why) return h + `<p class="note">${esc(k.why)}.</p>`;
+  return h + `<div class="btnrow"><button class="btn${any ? '' : ' hot'}" data-ch="pipego" ${src ? '' : 'disabled'}>🪄 ${any ? 'Build it all again' : 'Build it all'}</button></div>`;
+}
+// the swap picker: the first turnaround on the frame it picked for that angle, unless slid somewhere else
+function showPv(){
+  const c = S.chars.find(x => x.id===CH.id), vid = $('#charBody video[data-pv]'), sl = $('#charBody [data-pvt]'); if(!c || !sl || !vid) return;
+  if(!PV.moved) sl.value = Math.round(1000 * (((c.pipe || {}).at || {})[PV.ang] ?? TV_AT[PV.ang] * (TV_LEN - 1)) / (TV_LEN - 1));
+  const go = () => { if(vid.duration) vid.currentTime = Math.min(vid.duration - 0.01, vid.duration * sl.value / 1000); };
+  if(vid._ready){ go(); return; } if(vid._loading) return; vid._loading = true;
+  const url = vid.dataset.src;
+  TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b));
+  TVBLOB[url].then(src => { vid.addEventListener('loadeddata', async () => { try{ await vid.play(); }catch(e){} vid.pause(); vid._ready = true; go(); }, {once:true});
+    vid.muted = true; vid.src = src; vid.load(); }).catch(err => { delete TVBLOB[url]; vid._loading = false; toast(err.message, true); });
+}
+async function pvUse(c){
+  const P = c.pipe, vid = $('#charBody video[data-pv]'), sl = $('#charBody [data-pvt]'), a = PV.ang; if(!P || !a) return;
+  try{ const v = await uploadFrame(frameCanvas(vid), a, P.turn1.pc); v.pipe = true;
+    c.views = c.views.filter(x => !(x.pipe && x.angle===a)); c.views.push(v);
+    P.at = Object.assign({}, P.at, {[a]:Math.round((sl ? sl.value / 1000 : 0) * (TV_LEN - 1))}); P.swapped = true; PV.ang = null; save(); drawChars(); buzz(); toast(ANGLES[a] + ' swapped'); }
+  catch(err){ toast("Couldn't use the frame: " + err.message, true); }
 }
 // a render (from the preview or the viewer) as a picture of a character
 function viewFromGallery(g){
@@ -4884,6 +5046,7 @@ function drawChars(){
       <button class="add" data-ch="pic" aria-label="Add a picture">＋</button></div>
     ${sel ? `<div class="row" style="margin-top:10px"><label>This one is</label>${seg('cangle', Object.entries(ANGLES), sel.angle)}</div>
       <div class="row" style="padding-left:92px"><button class="chipbtn" data-ch="see">↗ See it big</button><button class="chipbtn danger" data-ch="delview">Remove</button></div>` : ''}
+    <div class="chsec" style="margin-top:14px">${boxPipe(c)}</div>
     <div class="lbl">Make other angles</div>
     ${sel ? `<p class="note" style="margin-top:0">${fromRef ? 'From this Reference picture, ' + (k.why ? '' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url))) + ' ') + 'draws the angles you tick; its Front is full body, head to feet. Making the front alone first, then the rest from that front, usually keeps the body more alike. If this picture already is a full-body front, mark it Front instead.'
         : 'From the picked picture. ' + (k.why ? '' : 'Qwen-Image-Edit' + (S.test ? '' : ' on ' + esc(pcName(k.url))) + ' draws this character turned around and keeps the design' + (k.fast ? ', ' + k.steps + ' steps each with Lightning' : '') + '. Keep the good ones and remove the rest.')}</p>
@@ -4895,11 +5058,14 @@ function drawChars(){
     <div class="chsec">${boxSet(c)}</div>
     <div class="btnrow" style="margin-top:22px"><button class="btn danger" data-ch="del">Delete ${esc(c.name || 'this character')}</button></div>`);
   jobs.forEach(e => { const x = box.querySelector(`[data-prog="${CSS.escape(e.key)}"]`); if(x) x.textContent = e.state==='running' ? (e.prog ? e.prog.text : 'Starting') : 'in the queue'; });
-  showOrbit(c); showTurn();
+  showOrbit(c); showTurn(); showPv(); drawPipeBar();
 }
 $('#charBtn').onclick = () => openChars();
 $('#charSheet').addEventListener('error', viaHere, true);
 $('#charBody').addEventListener('input', e => { if('tvt' in e.target.dataset){ TV.moved = true; showTurn(); return; }
+  if('pvt' in e.target.dataset){ PV.moved = true; showPv(); return; }
+  if(e.target.dataset.pipecf){ const c = S.chars.find(x => x.id===CH.id); if(!c) return; const P = c.pipe = c.pipe || {}, f = e.target.dataset.pipecf;
+    P[f] = f==='w' ? parseFloat(e.target.value) || 1 : e.target.value; save(); if(f==='lora'){ delete P.words; drawChars(); } return; }
   const c = S.chars.find(x => x.id===CH.id), f = e.target.dataset.cf; if(!c || !f) return; c[f] = e.target.value; save(); });
 $('#charBody').onclick = async e => {
   const t = e.target.closest('button,[data-open]'); if(!t) return;
@@ -4921,6 +5087,14 @@ $('#charBody').onclick = async e => {
     c.tags = [c.tags.trim().replace(/,\s*$/, ''), ...pick.map(x => tagText(TAGMAP.get(x)))].filter(Boolean).join(', ');
     s.tags = s.tags.filter(x => !pick.includes(x[0])); if(!s.tags.length) delete SUG[c.id]; }
   else if(act==='sugoff'){ delete SUG[c.id]; }
+  else if(act==='pipego'){ if((c.pipe || {}).done && Object.keys(c.pipe.done).length && !confirm('Build it all again from the start? What it made before stays in your renders.')) return; runPipe(c); return; }
+  else if(t.dataset.piperedo){ const s = t.dataset.piperedo, n = PIPE.findIndex(x => x[0]===s);
+    if(!confirm('Redo ' + PIPE[n][1].toLowerCase() + (n < PIPE.length - 1 ? ' and the steps after it' : '') + '?')) return; if(s==='model') c.pipe.swapped = false; runPipe(c, s); return; }
+  else if(t.dataset.pipesee){ const x = c.pipe[t.dataset.pipesee]; if(x && x.url) window.open(x.url, '_blank'); return; }
+  else if(act==='pipestop'){ c.pipe.stop = true; toast('It stops once this step is done'); }
+  else if(t.dataset.pvang){ PV.ang = PV.ang===t.dataset.pvang ? null : t.dataset.pvang; PV.moved = false; }
+  else if(act==='pvshut'){ PV.ang = null; }
+  else if(act==='pvuse'){ pvUse(c); return; }
   else if(act==='get3d'){ get3d(); return; }
   else if(act==='paint3d'){ paint3d(c); return; }
   else if(act==='paintturn'){ paint3d(c, true); return; }
