@@ -95,8 +95,8 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   const sl = cn ? g[cn.inputs.model[0]] : {inputs:{model:[0]}};
   ok(cn && cn.inputs.strength===1 && g[cn.inputs.model_patch[0]].inputs.name==='minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors' && g[cn.inputs.control_video[0]].class_type==='GetVideoComponents'
     && g[g[cn.inputs.control_video[0]].inputs.video[0]].inputs.file===name, 'its frames steer the clip through the Fun ControlNet at 1.0');
-  ok(g[sl.inputs.model[0]].class_type==='UNETLoader' && g[sl.inputs.model[0]].inputs.unet_name==='DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors' && by('LoraLoaderModelOnly').length===1 && by('BasicScheduler')[0].inputs.steps===20,
-    'the full model at 20 steps, no Turbo (as tested with the ControlNet)');
+  ok(g[sl.inputs.model[0]].class_type==='LoraLoaderModelOnly' && g[sl.inputs.model[0]].inputs.lora_name==='minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors' && g[g[sl.inputs.model[0]].inputs.model[0]].inputs.unet_name==='DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors' && by('BasicScheduler')[0].inputs.steps===4,
+    'Turbo by default (a turnaround has no acting to lose): Turbo model + 4-step LoRA');
   ok(sl.class_type==='LoraLoaderModelOnly' && sl.inputs.lora_name==='AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors' && sl.inputs.strength_model===0.8 && /^AFKJ Style\. <Picture 1>/.test(by('MiniMaxH3ReferenceToVideo')[0].inputs.prompt),
     'the picked style LoRA sits before the ControlNet at 0.8, its activation words open the prompt');
   ok(g[by('BasicGuider')[0].inputs.model[0]]===cn && !by('MiniMaxH3AddGuide').length && g[by('MiniMaxH3ReferenceToVideo')[0].inputs['ref_images.ref_image_0'][0]].inputs.image==='box_front.png',
