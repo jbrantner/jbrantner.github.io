@@ -467,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.40'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.41'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3326,7 +3326,7 @@ const FAKE3D = {UNETLoader:{input:{required:{unet_name:[[P3D.file]], weight_dtyp
 // Two shape models: Hunyuan3D-2mv (ComfyUI's own Hunyuan 3D nodes; clean smooth shapes, no colours of its own) and
 // Pixal3D. Either way the app paints the model from the pictures afterwards.
 P3D.kind = 'diffusion_models'; P3D.label = 'Pixal3D';
-const HY_YAW = 0; // which way Hunyuan's models face, as a turn about the vertical (0 = +z is the front, like Pixal3D's)
+const HY_YAW = 0; // which way Hunyuan's models face, as a turn about the vertical: +z is the front, like Pixal3D's (checked on the first real one, 2026-10-19)
 const hasHy = oi => !!(oi && oi.Hunyuan3Dv2ConditioningMultiView && oi.ImageOnlyCheckpointLoader && oi.SaveGLB);
 // the shape model in use: the one picked, else Hunyuan when the computer has its nodes
 const eng3d = () => S.m3d || (S.test || allPcs().some(p => p.online && hasHy(p.oi)) ? 'hy' : 'px');
@@ -3551,7 +3551,7 @@ async function bake3d(glbBuf, views, size, yaw = 0){
     const N = slots.length, U = (p, n) => gl.getUniformLocation(p, n);
     const paintP = prog(`layout(location=0) in vec3 aPos; layout(location=1) in vec2 aUv; layout(location=2) in vec3 aN; out vec3 P; out vec3 Nn; out vec2 T;
       void main(){ P = aPos; Nn = aN; T = aUv; gl_Position = vec4(aUv * 2.0 - 1.0, 0.0, 1.0); }`,
-      `in vec3 P; in vec3 Nn; in vec2 T; out vec4 o; uniform mat4 M[4]; uniform vec2 A[4]; uniform vec2 B[4]; uniform vec3 E[4]; uniform sampler2D pic[4]; uniform sampler2D msk[4]; uniform sampler2D dep[4]; uniform sampler2D base; uniform int n;
+      `in vec3 P; in vec3 Nn; in vec2 T; out vec4 o; uniform mat4 M[4]; uniform vec2 A[4]; uniform vec2 B[4]; uniform vec3 E[4]; uniform sampler2D pic[4]; uniform sampler2D msk[4]; uniform sampler2D dep[4]; uniform sampler2D base; uniform int n; uniform float K[4];
       vec4 look(int i, sampler2D pc, sampler2D mk, sampler2D dp){
         vec4 c = M[i] * vec4(P, 1.0); vec3 nd = c.xyz / c.w; vec2 im = nd.xy * A[i] + B[i];
         if(any(lessThan(im, vec2(0.0))) || any(greaterThan(im, vec2(1.0)))) return vec4(0.0);
@@ -3559,20 +3559,25 @@ async function bake3d(glbBuf, views, size, yaw = 0){
         if(z > d + 0.0015) return vec4(0.0); // something else is in front of this spot in that picture
         vec2 st = vec2(im.x, 1.0 - im.y); float m = smoothstep(0.5, 0.9, texture(mk, st).r);
         float f = abs(dot(normalize(Nn), normalize(E[i] - P))); /* either way round: some meshes come inside out, and the depth test hides the far side */
-        float f2 = f * f; float w = m * (f2 * f2 + 0.0005 * step(0.0001, f)); /* the picture facing a spot most squarely wins, so views don't double up */
-        return vec4(texture(pc, st).rgb * w, w); }
-      void main(){ vec4 s = vec4(0.0);
-        if(n > 0) s += look(0, pic[0], msk[0], dep[0]); if(n > 1) s += look(1, pic[1], msk[1], dep[1]);
-        if(n > 2) s += look(2, pic[2], msk[2], dep[2]); if(n > 3) s += look(3, pic[3], msk[3], dep[3]);
-        if(s.a < 0.0005){ o = vec4(0.0); return; } // no picture sees it: filled from around it below
+        float w = m * max(f, 0.001 * step(0.0001, f));
+        return vec4(texture(pc, st).rgb, w * K[i]); }
+      /* The pictures are drawn, not photographed, so they never agree exactly: blending them gives ghosts (two arms, doubled
+         eyes). Each spot takes the picture that faces it best, with only a narrow soft edge where two are almost even. */
+      vec4 s = vec4(0.0); float top = 0.0;
+      void add(vec4 c){ top = max(top, c.a); float p = pow(c.a, 12.0); s += vec4(c.rgb * p, p); }
+      void main(){
+        if(n > 0) add(look(0, pic[0], msk[0], dep[0])); if(n > 1) add(look(1, pic[1], msk[1], dep[1]));
+        if(n > 2) add(look(2, pic[2], msk[2], dep[2])); if(n > 3) add(look(3, pic[3], msk[3], dep[3]));
+        if(top < 0.0005){ o = vec4(0.0); return; } /* no picture sees it: filled from around it below */
         o = vec4(s.rgb / s.a, 1.0); }`);
     // islands of the texture map get painted; a few passes then spread their edges outwards so seams don't show the old colours
     const mk = () => { const t = tex(null, {w:size}), fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return {t, fb}; };
     let A = mk(), Bt = mk();
     gl.bindFramebuffer(gl.FRAMEBUFFER, A.fb); gl.viewport(0, 0, size, size); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(paintP);
     for(let i = 0; i < N; i++){ const e = P3D_EYE[slots[i]].map(x => x * P3D_DIST);
-      gl.uniformMatrix4fv(U(paintP, `M[${i}]`), false, fit[i].M); gl.uniform2fv(U(paintP, `A[${i}]`), fit[i].a); gl.uniform2fv(U(paintP, `B[${i}]`), fit[i].b); gl.uniform3fv(U(paintP, `E[${i}]`), e);
+      gl.uniformMatrix4fv(U(paintP, `M[${i}]`), false, fit[i].M); gl.uniform2fv(U(paintP, `A[${i}]`), fit[i].a); gl.uniform2fv(U(paintP, `B[${i}]`), fit[i].b); gl.uniform3fv(U(paintP, `E[${i}]`), e); gl.uniform1f(U(paintP, `K[${i}]`), /left|right/.test(slots[i]) ? 0.8 : 1); // front and back pictures are the ones to trust most
       [[pics, 'pic'], [masks, 'msk'], [depths, 'dep']].forEach(([arr, nm], j) => { const unit = i * 3 + j; gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, arr[i]); gl.uniform1i(U(paintP, `${nm}[${i}]`), unit); }); }
+    for(let i = N; i < 4; i++) gl.uniform1f(U(paintP, `K[${i}]`), 0);
     for(let i = N; i < 4; i++) ['pic','msk','dep'].forEach((nm, j) => gl.uniform1i(U(paintP, `${nm}[${i}]`), j)); // unused slots point at something valid
     gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, baseT); gl.uniform1i(U(paintP, 'base'), 12); gl.uniform1i(U(paintP, 'n'), N);
     gl.drawElements(gl.TRIANGLES, tri.length, gl.UNSIGNED_INT, 0);
