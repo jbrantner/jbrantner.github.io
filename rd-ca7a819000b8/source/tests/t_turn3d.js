@@ -54,7 +54,8 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ModelPatchLoader:{input:{required:{name:C(['minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors'])}}},
   MiniMaxH3ReferenceToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, MiniMaxH3FunControlNetApply:{input:{required:{}}}, LoadVideo:{input:{required:{}}}, GetVideoComponents:{input:{required:{}}},
   Florence2Run:{input:{required:{}}}, DownloadAndLoadFlorence2Model:{input:{required:{model:C(['MiaoshouAI/Florence-2-base-PromptGen-v2.0']), precision:C(['fp16'])}}}, 'ShowText|pysssss':{input:{required:{}}},
-  ResizeAndPadImage:{input:{required:{}}}, SaveVideo:{input:{required:{}}}, CreateVideo:{input:{required:{}}}, LoadImage:{input:{required:{}}}});
+  ResizeAndPadImage:{input:{required:{}}}, SaveVideo:{input:{required:{}}}, CreateVideo:{input:{required:{}}}, LoadImage:{input:{required:{}}},
+  TrainLoraNode:{input:{required:{algorithm:C(['LoRA','LoHa'])}}}, LoadImageTextDataSetFromFolder:{input:{required:{}}}, MakeTrainingDataset:{input:{required:{}}}, ResolutionBucket:{input:{required:{}}}, SaveLoRA:{input:{required:{}}}});
 (async () => {
   const html = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + fs.readFileSync(path.join(__dirname, '..', 'comfy-app.html'),'utf8');
   const browser = await chromium.launch({args:['--use-angle=swiftshader', '--enable-unsafe-swiftshader']});
@@ -66,18 +67,23 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:['1girl\t0\t1','solo\t0\t1','blue_hair\t0\t1','short_hair\t0\t1','blue_eyes\t0\t1','standing\t0\t1','white_background\t0\t1','smile\t0\t1','hand_on_hip\t0\t1','closed_mouth\t0\t1','from_side\t0\t1'].join('\n') }));
   await page.route('https://unpkg.com/**', r => r.fulfill({ contentType:'text/javascript', body:'customElements.define("model-viewer", class extends HTMLElement{})' }));
   await page.routeWebSocket(/\.test\/ws/, ws => {});
-  const sent = [], ups = [], GLBF = boxGlb(), cors = {'Access-Control-Allow-Origin':'*'};
+  const sent = [], ups = [], loraUps = [], GLBF = boxGlb(), cors = {'Access-Control-Allow-Origin':'*'};
   await page.route(RENDER + '/**', async r => {
     const u = new URL(r.request().url()), fn = u.searchParams.get('filename') || '';
     if(u.pathname==='/object_info') return r.fulfill({ json:OI() });
     if(u.pathname==='/view' && fn.endsWith('.mp4')){ const n = +/_(\d+)_\.mp4$/.exec(fn)[1]; // two clips on disk; the second was written just now
       return n <= 2 ? r.fulfill({ contentType:'video/webm', body:r.request().method()==='HEAD' ? '' : CLIP, headers:Object.assign({'Last-Modified':new Date(n===2 ? Date.now() : 0).toUTCString()}, cors) }) : r.fulfill({ status:404, body:'', headers:cors }); }
+    if(u.pathname==='/view' && fn.endsWith('.txt')) return r.fulfill({ contentType:'text/plain', body:'caption of ' + fn, headers:cors });
+    if(u.pathname==='/view' && fn.endsWith('.safetensors')){ const n = +/_(\d+)_\.safetensors$/.exec(fn)[1]; // an older LoRA from before, then this run's
+      return n <= 2 && /^boxgirl_1300_steps_/.test(fn) && u.searchParams.get('subfolder')==='RenderDeck/loras' ? r.fulfill({ contentType:'application/octet-stream', body:r.request().method()==='HEAD' ? '' : 'LORA' + n, headers:Object.assign({'Last-Modified':new Date(n===2 ? Date.now() : 0).toUTCString()}, cors) }) : r.fulfill({ status:404, body:'', headers:cors }); }
+    if(u.pathname==='/renderdeck/upload'){ loraUps.push({q:u.search, body:r.request().postDataBuffer().toString('latin1')}); return r.fulfill({ json:{ok:true}, headers:cors }); }
     if(u.pathname==='/view'){ if(fn.endsWith('.glb')) return r.fulfill({ contentType:'model/gltf-binary', body:GLBF, headers:cors }); return r.fulfill({ contentType:'image/png', body:png(4, 4, () => [200,100,50]), headers:cors }); }
     if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
     if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{version:2, jobs:[]} });
     if(u.pathname==='/upload/image'){ const b = r.request().postDataBuffer(); ups.push(b); const name = /filename="([^"]+)"/.exec(b.toString('latin1'))[1]; return r.fulfill({ json:{name, subfolder:'', type:'input'}, headers:cors }); }
     if(u.pathname==='/prompt'){ sent.push(JSON.parse(r.request().postData())); return r.fulfill({ json:{prompt_id:'t' + sent.length, number:0, node_errors:{}} }); }
     if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9), g = (sent[+id.slice(1) - 1] || {}).prompt || {};
+      if(Object.values(g).some(n => n.class_type==='TrainLoraNode')) return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:{}}} });
       if(!Object.values(g).some(n => n.class_type==='Florence2Run')) return r.fulfill({ json:{} });
       const outputs = {}; let i = 0; // the tagger: every picture has blue hair and eyes; poses and expressions vary
       for(const [k, n] of Object.entries(g)) if(n.class_type==='ShowText|pysssss') outputs[k] = {text:['1girl, solo, blue hair, short hair, blue eyes, standing, white background, ' + (i++ % 2 ? 'smile, hand on hip' : 'closed mouth, from side')]};
@@ -163,6 +169,25 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   console.log('   ' + capd[0] + ' | ' + capd[1] + ' | ' + capd[7]);
   ok(capd.length===13 && capd[0]==='boxgirl, 1girl, solo, simple background, standing, white background, closed mouth' && capd[1]==='boxgirl, 1girl, solo, standing, full body, simple background, white background, smile, hand on hip',
     'captions keep the trigger and the starter, add what varies, and drop the shared look and the tagger\'s angle guesses');
+  // training the LoRA on Render with ComfyUI's own nodes: the set is copied into its input folder, then trained and shared
+  sent.length = 0; ups.length = 0; await page.evaluate(() => { TRAIN_POLL = 300; drawChars(); });
+  ok(/Train the LoRA/.test(await page.textContent('#charBody')) && await page.inputValue('#charBody [data-cf="trainSteps"]')==='1300', 'the card offers training, 100 steps a picture (13 pictures: 1300)');
+  await page.click('#charBody [data-ch="trainset"]');
+  await page.waitForFunction(() => S.chars[0].lora && S.chars[0].lora.name, null, {timeout:30000}).catch(() => {});
+  const tp = ups.map(b => { const t = b.toString('latin1'), f = n => (new RegExp('name="' + n + '"\r\n\r\n([^\r]*)').exec(t) || [])[1];
+    return {name:/filename="([^"]+)"/.exec(t)[1], sub:f('subfolder'), type:f('type'), body:(st => t.slice(st, t.indexOf('\r\n--', st)))(t.indexOf('\r\n\r\n', t.indexOf('filename=')) + 4)}; });
+  const folder = tp.length ? tp[0].sub : '';
+  ok(tp.length===26 && /^datasets\/boxgirl_\w+$/.test(folder) && tp.every(p => p.type==='input' && p.sub===folder) && tp.filter(p => p.name.endsWith('.png')).length===13
+    && tp.find(p => p.name==='boxgirl_02.txt').body==='caption of boxgirl_02.txt', '13 pictures (as PNG) and their captions are copied into the input folder ' + folder);
+  const pic = tp.find(p => p.name==='boxgirl_01.png'); ok(pic && unpng(Buffer.from(pic.body, 'latin1')).w===64, 'pictures are fitted to sizes of 64');
+  const tg2 = sent.length ? Object.values(sent[0].prompt) : [], nd = c => tg2.find(n => n.class_type===c) || {inputs:{}};
+  ok(nd('LoadImageTextDataSetFromFolder').inputs.folder===folder && nd('CheckpointLoaderSimple').inputs.ckpt_name==='oneObsession_v24.safetensors' && nd('ResolutionBucket').inputs.latents
+    && nd('TrainLoraNode').inputs.steps===1300 && nd('TrainLoraNode').inputs.rank===16 && nd('TrainLoraNode').inputs.algorithm==='LoRA' && nd('TrainLoraNode').inputs.bucket_mode===true
+    && nd('SaveLoRA').inputs.prefix==='RenderDeck/loras/boxgirl', 'the training graph: folder, checkpoint, buckets, 1300 steps, rank 16, saved in RenderDeck/loras');
+  const L = await page.evaluate(() => S.chars[0].lora);
+  ok(L && /^boxgirl_\d{6}_\w+\.safetensors$/.test(L.name) && loraUps.length===1 && loraUps[0].q.includes('kind=loras') && loraUps[0].q.includes('name=' + L.name) && loraUps[0].body.includes('LORA2'),
+    'the newest LoRA file is put in the loras folder under its own name: ' + JSON.stringify(L) + ' ' + (loraUps[0] || {}).q);
+  ok(/is in the LoRA list on/.test(await page.textContent('#charBody')), 'the card says the LoRA is ready');
   // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
   await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
   ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');

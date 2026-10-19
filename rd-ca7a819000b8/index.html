@@ -478,7 +478,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.50'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.51'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3730,6 +3730,98 @@ async function captionSet(c){
     t.captioned = Date.now(); delete MSET[c.id]; save(); drawChars(); buzz(); toast('Captions written ✨');
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't caption the set: " + err.message}); drawChars(); }
 }
+// ---------- training the LoRA, with ComfyUI's own training nodes (nothing to install) ----------
+// The set is copied into the trainer's input folder (datasets/<trigger>), each picture fitted to about a megapixel in
+// sizes of 64, then: Load Image-Text (from Folder) → Make Training Dataset (the checkpoint's VAE and CLIP) → Resolution
+// Bucket → Train LoRA (rank 16, AdamW 1e-4, bf16, gradient checkpointing) → Save LoRA Weights in RenderDeck/loras.
+// The finished file is then put in the loras folder of every computer that's on, through the helper.
+const trainPcs = () => S.test ? [{url:'test', oi:{TrainLoraNode:{}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors']]}}}}}] : allPcs().filter(p => p.online && p.oi && p.oi.TrainLoraNode && p.oi.LoadImageTextDataSetFromFolder && p.oi.MakeTrainingDataset && p.oi.SaveLoRA);
+const trainSteps = c => Math.max(1000, Math.min(2500, ((c.set && c.set.n) || 10) * 100));
+function trainCkpt(oi){ const list = combo(oi.CheckpointLoaderSimple, 'ckpt_name'), m = S.blocks.find(b => b.type==='model');
+  return (m && list.includes(m.ckpt) && m.ckpt) || list.find(n => /obsession/i.test(n)) || list.find(n => /illustrious|noob/i.test(n)) || list[0]; }
+function trainGraph(oi, folder, ckpt, steps, prefix){
+  const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fillIn(oi, cls, inputs), _meta:{title:cls}}; return id; };
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:ckpt}), ld = add('LoadImageTextDataSetFromFolder', {folder});
+  const mk = add('MakeTrainingDataset', {images:[ld,0], texts:[ld,1], vae:[ck,2], clip:[ck,1]}), rb = add('ResolutionBucket', {latents:[mk,0], conditioning:[mk,1]});
+  const tr = add('TrainLoraNode', {model:[ck,0], latents:[rb,0], positive:[rb,1], batch_size:1, grad_accumulation_steps:1, steps, learning_rate:0.0001, rank:16, optimizer:'AdamW', loss_function:'MSE', seed:1,
+    training_dtype:'bf16', lora_dtype:'bf16', quantized_backward:false, gradient_checkpointing:true, checkpoint_depth:1, offloading:false, existing_lora:'[None]', bucket_mode:true, bypass_mode:false});
+  add('SaveLoRA', {lora:[tr,0], prefix, steps:[tr,2]});
+  return g;
+}
+// a picture fitted to about a megapixel, both sides a multiple of 64 (cropped a little from the middle to fit)
+async function fitForTraining(blob){
+  const im = await createImageBitmap(blob), k = Math.min(1, Math.sqrt(1024 * 1024 / (im.width * im.height)));
+  const w = Math.max(64, Math.floor(im.width * k / 64) * 64), h = Math.max(64, Math.floor(im.height * k / 64) * 64), sc = Math.max(w / im.width, h / im.height);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(im, (w - im.width * sc) / 2, (h - im.height * sc) / 2, im.width * sc, im.height * sc); im.close && im.close();
+  const out = await new Promise((ok, no) => cv.toBlob(b => b ? ok(b) : no(new Error("couldn't fit a picture")), 'image/png')); cv.width = cv.height = 0; return out;
+}
+const MLORA = {}; let TRAIN_POLL = 10000;
+async function trainSet(c){
+  const t = c.set, p = trainPcs().find(x => x.url===(c.trainOn || '')) || trainPcs().find(x => x.url===farmHost()) || trainPcs()[0];
+  if(!p){ toast("None of your computers that are on has ComfyUI's training nodes: update ComfyUI", true); return; }
+  const trig = trigOf(c), folder = 'datasets/' + trig + '_' + Date.now().toString(36), steps = +c.trainSteps || trainSteps(c), ckpt = trainCkpt(p.oi), prefix = (S.hidden ? HIDDEN : 'RenderDeck') + '/loras/' + trig;
+  if(!confirm('Train ' + trig + ' on ' + pcName(p.url) + '? ' + steps + ' steps on ' + baseName(ckpt) + ', roughly 1 to 2 hours. ' + pcName(p.url) + ' works flat out the whole time' + (/main/i.test(pcName(p.url)) ? ', so no gaming meanwhile.' : '.'))) return;
+  const s = MLORA[c.id] = {state:'busy', text:'Copying the pictures to ' + pcName(p.url) + '…'}; drawChars(); buzz();
+  try{
+    if(!S.test){ let i = 0;
+      for(const f of t.files){ i++; s.text = 'Copying picture ' + i + ' of ' + t.files.length + ' to ' + pcName(p.url) + '…'; drawChars();
+        const at = name => t.pc + '/view?' + new URLSearchParams({filename:name, subfolder:t.dir, type:'output'});
+        const img = await fitForTraining(await (await fetch(at(f.img))).blob()), cap = await (await fetch(at(f.img.replace(/\.\w+$/, '.txt')))).text();
+        for(const [b, name] of [[img, f.img.replace(/\.\w+$/, '.png')], [new Blob([cap], {type:'text/plain'}), f.img.replace(/\.\w+$/, '.txt')]]){
+          const fd = new FormData(); fd.append('image', b, name); fd.append('subfolder', folder); fd.append('type', 'input'); fd.append('overwrite', 'true');
+          const r = await fetch(p.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('copying ' + name + ' failed (' + r.status + ')'); } } }
+    const g = trainGraph(p.oi, folder, ckpt, steps, prefix);
+    if(S.test){ MLORA.last = g; c.lora = {name:trig + '.safetensors', at:Date.now(), test:true}; delete MLORA[c.id]; save(); drawChars(); return; }
+    const r = await fetch(p.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-train'})});
+    const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    c.lora = Object.assign({}, c.lora, {making:{pc:p.url, id:j.prompt_id, t:Date.now(), steps, prefix, trig}}); save();
+    await waitTrain(c);
+  }catch(err){ Object.assign(s, {state:'err', text:"Couldn't start the training: " + err.message}); drawChars(); }
+}
+// the saved LoRA: SaveLoRA writes <prefix>_<steps>_steps_<NNNNN>_.safetensors in the output folder; the newest one since the start
+async function findLora(m){
+  const i = m.prefix.lastIndexOf('/'), sub = m.prefix.slice(0, i), base = m.prefix.slice(i + 1) + '_' + m.steps + '_steps_';
+  const at = n => m.pc + '/view?' + new URLSearchParams({filename:base + String(n).padStart(5, '0') + '_.safetensors', subfolder:sub, type:'output'});
+  let last = null;
+  for(let n = 1; n < 1000; n++){ let r; try{ r = await fetch(at(n), {method:'HEAD'}); }catch(e){ return null; } if(!r.ok) break; last = {url:at(n), t:Date.parse(r.headers.get('Last-Modified') || '') || 0}; }
+  return last && last.t >= m.t - 60e3 ? last.url : null;
+}
+async function waitTrain(c){
+  const m = c.lora && c.lora.making; if(!m || MLORA[c.id] && MLORA[c.id].polling) return;
+  const s = MLORA[c.id] = {state:'busy', polling:true, text:'Training on ' + pcName(m.pc) + '…'}; drawChars();
+  for(;;){
+    await new Promise(r => setTimeout(r, TRAIN_POLL)); if(MLORA[c.id]!==s) return;
+    const mins = Math.round((Date.now() - m.t) / 60000); s.text = 'Training ' + m.trig + ' on ' + pcName(m.pc) + ' (' + m.steps + ' steps)… ' + mins + ' min so far'; drawChars();
+    let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e){ continue; }
+    if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error');
+      delete c.lora.making; save(); Object.assign(s, {state:'err', polling:false, text:"The training stopped: " + (e ? e[1].exception_message : 'ComfyUI hit an error')}); drawChars(); return; }
+    if(!h){ let q = null; try{ q = await (await fetch(m.pc + '/queue')).json(); }catch(e){ continue; }
+      if([...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===m.id)) continue; }
+    else if(!(h.status && h.status.completed)) continue;
+    const url = await findLora(m); delete c.lora.making;
+    if(!url){ save(); Object.assign(s, {state:'err', polling:false, text:h ? 'It finished but the LoRA file was not found' : 'It stopped when ComfyUI restarted. Train it again.'}); drawChars(); return; }
+    s.text = 'Putting the LoRA on your computers…'; drawChars();
+    const blob = await (await fetch(url)).blob(), name = m.trig + '_' + new Date().toISOString().slice(2, 10).replace(/-/g, '') + '_' + Date.now().toString(36).slice(-3) + '.safetensors', put = [];
+    for(const q of allPcs().filter(x => x.online)){ try{ const fd = new FormData(); fd.append('file', blob, name);
+        const r = await fetch(q.url + '/renderdeck/upload?kind=loras&name=' + encodeURIComponent(name) + '&size=' + blob.size, {method:'POST', body:fd}); if(r.ok) put.push(pcName(q.url)); }catch(e){} }
+    Object.assign(c.lora, {name, at:Date.now(), pcs:put}); save(); delete MLORA[c.id]; drawChars(); buzz();
+    toast('LoRA ' + name + ' is ready' + (put.length ? ' on ' + put.join(' and ') : '') + ' ✨'); return;
+  }
+}
+function boxTrain(c){
+  const s = MLORA[c.id], L = c.lora || {}, pcs = trainPcs();
+  if(L.making && !s) setTimeout(() => waitTrain(c), 0);
+  let h = '<div class="lbl" style="margin-top:14px">Train the LoRA</div>';
+  if(s && s.state==='busy') return h + `<p class="note">🎓 ${esc(s.text)}</p>`;
+  if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
+  if(L.name) h += `<p class="note">✅ ${esc(L.name)}${L.pcs && L.pcs.length ? ' is in the LoRA list on ' + esc(L.pcs.join(' and ')) : ''}. Add it to a recipe and type ${esc(trigOf(c))} in the prompt.</p>`;
+  if(!pcs.length) return h + `<p class="note">None of your computers that are on has ComfyUI's training nodes.</p>`;
+  const on = pcs.find(x => x.url===c.trainOn) || pcs.find(x => x.url===farmHost()) || pcs[0];
+  return h + (pcs.length > 1 ? `<div class="row"><label>Train on</label>${seg('trainOn', pcs.map(x => [x.url, pcName(x.url)]), on.url)}</div>` : '')
+    + `<div class="row"><label>Steps</label><input type="number" data-cf="trainSteps" min="200" max="6000" step="100" value="${esc(String(c.trainSteps || trainSteps(c)))}" style="width:90px"></div>
+    <p class="note">ComfyUI's own LoRA training on ${esc(pcName(on.url))}, with ${esc(baseName(trainCkpt(on.oi)) || 'the checkpoint')}: rank 16, about 100 steps per picture. Roughly 1 to 2 hours, with the computer working flat out. The LoRA is then added to every computer that's on.</p>
+    <div class="btnrow"><button class="btn hot" data-ch="trainset">🎓 Train the LoRA</button></div>`;
+}
 function boxSet(c){
   const s = MSET[c.id], t = c.set, nt = c.turn && c.turn.url ? 12 : 0;
   let h = '<div class="lbl">Training set (for a LoRA)</div>';
@@ -3740,7 +3832,8 @@ function boxSet(c){
   if(t) h += `<p class="note">Last saved: ${t.n} pictures on ${esc(pcName(t.pc))}, ${new Date(t.at).toLocaleString()}. Saving again overwrites them.${t.captioned ? ' Captioned by the tagger ' + new Date(t.captioned).toLocaleString() + '.' : ''}</p>`
     + (t.files && t.files.length ? `<p class="note">✍️ Caption with the tagger: Florence-2 PromptGen reads each picture; what most of them share (the design) is dropped, what changes (pose, expression, framing) is kept. Or ask Claude in the project to caption the set.</p>
       ${t.captioned ? `<details class="note"><summary>See the captions</summary>${t.files.map(f => `<div><b>${esc(f.img)}</b>: ${esc(f.tagged || f.cap)}</div>`).join('')}</details>` : ''}` : '');
-  return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${c.views.length + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button>${t && t.files && t.files.length ? '<button class="btn" data-ch="capset">✍️ Caption with the tagger</button>' : ''}</div>`;
+  return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${c.views.length + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button>${t && t.files && t.files.length ? '<button class="btn" data-ch="capset">✍️ Caption with the tagger</button>' : ''}</div>`
+    + (t && t.files && t.files.length || c.lora ? boxTrain(c) : '');
 }
 // Get the 3D model: the one big file, through the helper (at the speed picked in ⚙, carrying on after a drop)
 async function get3d(){
@@ -4176,11 +4269,13 @@ $('#charBody').onclick = async e => {
   else if(act==='paintturn'){ paint3d(c, true); return; }
   else if(act==='exportset'){ exportSet(c); return; }
   else if(act==='capset'){ captionSet(c); return; }
+  else if(act==='trainset'){ trainSet(c); return; }
   else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
   else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
   else if(t.dataset.seg==='eng3d'){ S.m3d = t.dataset.v; dl3d = null; if(watch3d.t){ clearInterval(watch3d.t); watch3d.t = 0; } }
   else if(act==='maketurn3d'){ if(c.turn && (c.turn.url || c.turn.test) && !confirm('Make the turnaround again from the 3D model? The old clip stays in your renders.')) return; makeTurn(c, true); return; }
   else if(act==='maketurn'){ if(c.turn && (c.turn.url || c.turn.test) && !confirm('Make the turnaround again? The old clip stays in your renders.')) return; makeTurn(c); return; }
+  else if(t.dataset.seg==='trainOn'){ c.trainOn = t.dataset.v; }
   else if(t.dataset.seg==='tvang'){ TV.ang = t.dataset.v; TV.moved = false; }
   else if(act==='tvadd'){ addTurnFrame(c, TV.ang); return; }
   else if(t.dataset.want){ CH.want.has(t.dataset.want) ? CH.want.delete(t.dataset.want) : CH.want.add(t.dataset.want); }
