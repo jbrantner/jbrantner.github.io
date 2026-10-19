@@ -124,6 +124,8 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(/Box_00002_\.mp4/.test(tu.url || '') && /subfolder=RenderDeck%2Fcharacters%2Fturn/.test(tu.url) && tu.model && !tu.making, 'a clip saved before a ComfyUI restart is still found: ' + JSON.stringify(tu).slice(0, 200));
   // painting the model from that clip: six frames 60° apart, each with the spin's own camera
   ups.length = 0; await page.evaluate(() => { for(const k in M3D) delete M3D[k]; drawChars(); });
+  await page.evaluate(() => { window.UNITS = 0; const o = WebGL2RenderingContext.prototype.shaderSource; // phones allow 16 samplers in a fragment shader
+    WebGL2RenderingContext.prototype.shaderSource = function(sh, src){ let n = 0; for(const m of src.matchAll(/uniform\s+sampler2D\s+(\w+)(?:\[(\d+)\])?/g)) n += m[2] ? +m[2] : 1; window.UNITS = Math.max(window.UNITS, n); return o.call(this, sh, src); }; });
   await page.click('#charBody [data-ch="paintturn"]');
   await page.waitForFunction(() => S.chars[0].model3d.paintedFrom==='turn', null, {timeout:30000}).catch(() => {});
   const gb = ups.find(b => b.indexOf(Buffer.from('glTF')) >= 0);
@@ -132,6 +134,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     ok(near(face('front'), [255,0,0]) && near(face('back'), [0,0,255]), 'the front is painted from the first frame, the back from half way');
     ok(near(face('right'), [0,255,0]) && near(face('left'), [255,255,0]), 'their right side from a quarter of the way, their left from three quarters (the turn goes to their left)');
   } else ok(false, 'nothing was painted from the turnaround: ' + await page.evaluate(() => JSON.stringify(M3D)));
+  ok(await page.evaluate(() => window.UNITS) <= 16, 'the painting shader fits a phone (16 texture units): ' + await page.evaluate(() => window.UNITS));
   // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
   await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
   ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');
