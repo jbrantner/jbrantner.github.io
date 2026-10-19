@@ -467,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.44'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.45'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3732,7 +3732,7 @@ function turnVideoGraph(k, img, c, pinned, control){
   const out = add('SamplerCustomAdvanced', {noise:[no,0], guider:[gd,0], sampler:[sa,0], sigmas:[sc,0], latent_image:[rv,1]});
   const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
   const vid = add('CreateVideo', {images:[dec,0], fps:24});
-  const save = add('SaveVideo', {video:[vid,0], filename_prefix:(S.hidden ? HIDDEN : 'RenderDeck') + '/characters/turn/' + ((c.name || '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'character'),
+  const save = add('SaveVideo', {video:[vid,0], filename_prefix:turnPrefix(c),
     format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   return {g, save};
 }
@@ -3815,6 +3815,16 @@ function aviMjpeg(frames, w, h, fps){
   frames.forEach((f, i) => { cc('00dc'); u32(0x10); u32(offs[i]); u32(f.length); });
   return buf;
 }
+const turnPrefix = c => (S.hidden ? HIDDEN : 'RenderDeck') + '/characters/turn/' + ((c.name || '').replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'character');
+// ComfyUI forgets finished jobs when it restarts, so a clip that finished just before a restart is found by its file:
+// the newest <prefix>_NNNNN_.mp4 that was written after the job was sent
+async function findTurnClip(pc, prefix, since){
+  const i = prefix.lastIndexOf('/'), sub = prefix.slice(0, i), base = prefix.slice(i + 1);
+  const at = n => pc + '/view?' + new URLSearchParams({filename:base + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'});
+  let last = null;
+  for(let n = 1; n < 1000; n++){ let r; try{ r = await fetch(at(n), {method:'HEAD'}); }catch(e){ return null; } if(!r.ok) break; last = {n, t:Date.parse(r.headers.get('Last-Modified') || '') || 0}; }
+  return last && last.t >= since - 60e3 ? {filename:base + '_' + String(last.n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'} : null;
+}
 const MTV = {}; // character id -> {state, text}
 const TV = {ang:'right', moved:false}; // the frame picker: which angle the next frame is added as
 async function makeTurn(c, fromModel){
@@ -3837,7 +3847,7 @@ async function makeTurn(c, fromModel){
     if(S.test){ await new Promise(r => setTimeout(r, 300)); c.turn = {url:'', test:true, at:Date.now(), pc:'test', model:!!fromModel}; MTV.last = g; delete MTV[c.id]; save(); drawChars(); return; }
     const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-turn'})});
     const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    c.turn = Object.assign({}, c.turn, {making:{pc:k.url, id:j.prompt_id, save:sid, t:Date.now(), mins:fromModel ? 'about 15' : k.mins, model:!!fromModel, fit}}); save();
+    c.turn = Object.assign({}, c.turn, {making:{pc:k.url, id:j.prompt_id, save:sid, t:Date.now(), prefix:turnPrefix(c), mins:fromModel ? 'about 15' : k.mins, model:!!fromModel, fit}}); save();
     await waitTurn(c);
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't make the turnaround: " + err.message}); drawChars(); }
 }
@@ -3848,7 +3858,13 @@ async function waitTurn(c){
     await new Promise(r => setTimeout(r, 4000));
     if(MTV[c.id]!==s) return;
     let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e){ continue; }
-    if(!h){ if(Date.now() - m.t > 3 * 3600e3){ delete c.turn.making; save(); Object.assign(s, {state:'err', text:'It never finished (was ComfyUI restarted?)', polling:false}); drawChars(); return; } continue; }
+    if(!h){ let q = null; try{ q = await (await fetch(m.pc + '/queue')).json(); }catch(e){ continue; }
+      const queued = [...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===m.id);
+      if(!queued){ const f = await findTurnClip(m.pc, m.prefix || turnPrefix(c), m.t); // not waiting and not known: ComfyUI restarted
+        delete c.turn.making;
+        if(f){ Object.assign(c.turn, {url:viewUrl(f, m.pc), pc:m.pc, at:Date.now(), model:!!m.model, fit:m.fit || null}); TV.moved = false; save(); delete MTV[c.id]; drawChars(); buzz(); toast('Turnaround of ' + (c.name || 'the character') + ' ready: pick the frames ✨'); return; }
+        save(); Object.assign(s, {state:'err', polling:false, text:'It stopped when ComfyUI restarted, before the clip was saved. Make it again.'}); drawChars(); return; }
+      if(Date.now() - m.t > 3 * 3600e3){ delete c.turn.making; save(); Object.assign(s, {state:'err', text:'It never finished (was ComfyUI restarted?)', polling:false}); drawChars(); return; } continue; }
     if(h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error');
       delete c.turn.making; save(); Object.assign(s, {state:'err', polling:false, text:"Couldn't make the turnaround: " + (e ? e[1].exception_message : 'ComfyUI hit an error')}); drawChars(); return; }
     if(!(h.status && h.status.completed)) continue;

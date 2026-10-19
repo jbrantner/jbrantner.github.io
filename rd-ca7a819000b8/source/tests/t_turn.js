@@ -49,7 +49,7 @@ function firstPixel(buf){ // the first pixel of a PNG (row 0's first pixel is ne
       const a = +m[1], b = m[2] ? +m[2] : VID.length - 1;
       return r.fulfill({ status:206, contentType:'video/webm', body:VID.slice(a, b + 1), headers:Object.assign({'Accept-Ranges':'bytes', 'Content-Range':'bytes ' + a + '-' + b + '/' + VID.length}, cors) }); }
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG, headers:cors });
-    if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
+    if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:sent.length && polls < 2 ? [[0, 't' + sent.length]] : [], queue_pending:[]} }); // running until it's in the history
     if(u.pathname==='/upload/image'){ ups.push(r.request().postDataBuffer()); return r.fulfill({ json:{name:'turn_' + ups.length + '.png', subfolder:'', type:'input'} }); }
     if(u.pathname==='/prompt'){ const b = JSON.parse(r.request().postData()); sent.push(b); return r.fulfill({ json:{prompt_id:'t' + sent.length, number:0, node_errors:{}} }); }
     if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9), g = sent[0].prompt, save = Object.keys(g).find(k => g[k].class_type==='SaveVideo');

@@ -64,6 +64,8 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.route(RENDER + '/**', async r => {
     const u = new URL(r.request().url()), fn = u.searchParams.get('filename') || '';
     if(u.pathname==='/object_info') return r.fulfill({ json:OI() });
+    if(u.pathname==='/view' && fn.endsWith('.mp4')){ const n = +/_(\d+)_\.mp4$/.exec(fn)[1]; // two clips on disk; the second was written just now
+      return n <= 2 ? r.fulfill({ contentType:'video/mp4', body:'', headers:Object.assign({'Last-Modified':new Date(n===2 ? Date.now() : 0).toUTCString()}, cors) }) : r.fulfill({ status:404, body:'', headers:cors }); }
     if(u.pathname==='/view'){ if(fn.endsWith('.glb')) return r.fulfill({ contentType:'model/gltf-binary', body:GLBF, headers:cors }); return r.fulfill({ contentType:'image/png', body:png(4, 4, () => [200,100,50]), headers:cors }); }
     if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
     if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{version:2, jobs:[]} });
@@ -112,6 +114,10 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     ok(a.h > 0.8 && a.h < 0.9 && b.h > 0.8, 'the whole body is in frame, 86% of the height');
     ok(a.w > 2.5 * b.w && Math.abs(a.w - c.w) < 0.05, 'wide from the front, narrow a quarter of the way round, wide again from the back');
   }
+  // ComfyUI restarted after the clip was saved: it no longer knows the job, so the clip is found by its file
+  await page.waitForFunction(() => S.chars[0].turn && S.chars[0].turn.url, null, {timeout:20000}).catch(() => {});
+  const tu = await page.evaluate(() => S.chars[0].turn);
+  ok(/Box_00002_\.mp4/.test(tu.url || '') && /subfolder=RenderDeck%2Fcharacters%2Fturn/.test(tu.url) && tu.model && !tu.making, 'a clip saved before a ComfyUI restart is still found: ' + JSON.stringify(tu).slice(0, 200));
   // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
   await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
   ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');
