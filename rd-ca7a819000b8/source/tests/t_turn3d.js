@@ -44,7 +44,7 @@ function boxGlb(){
   return Buffer.concat([hd, ch(js.length, 0x4E4F534A), js, ch(bin.length, 0x004E4942), bin]);
 }
 const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler']), scheduler:C(['normal','simple'])}}},
-  LoraLoader:{input:{required:{lora_name:C([])}}}, LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors'])}}},
+  LoraLoader:{input:{required:{lora_name:C([])}}}, LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors','AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors','AFKJ Style Illustrious Claude.safetensors'])}}},
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors','DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors','minimax_h3_fl2va_pruned_int8_convrot.safetensors']), weight_dtype:C(['default'])}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['minimax'])}}}, VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
   ModelPatchLoader:{input:{required:{name:C(['minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors'])}}},
@@ -81,16 +81,22 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
       model3d:{url:raw, raw, views:{}, painted:0, eng:'hy', yaw:0, pc:srv, file:'RenderDeck/characters/3d/Box_00001_.glb', at:1}}]; save(); }, RENDER);
   await page.click('#charBtn'); await page.click('#charBody [data-open="c1"]');
   ok(/Turnaround from the 3D model/.test(await page.textContent('#charBody')) && /Plain grey/.test(await page.textContent('#charBody')), 'the card offers a turnaround from the grey 3D model');
+  ok((await page.$$eval('#charBody select[data-cf="tvLora"] option', o => o.map(x => x.value))).join()===',AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors', 'the style LoRA list offers only MiniMax LoRAs (not Turbo, not SDXL ones)');
+  await page.selectOption('#charBody select[data-cf="tvLora"]', 'AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors');
+  await page.fill('#charBody [data-cf="tvLoraW"]', '0.8'); await page.fill('#charBody [data-cf="tvLoraWords"]', 'AFKJ Style');
   await page.click('#charBody [data-ch="maketurn3d"]');
   await page.waitForFunction(() => document.querySelector('#charBody') && /Making the turnaround/.test(document.querySelector('#charBody').textContent), null, {timeout:60000}).catch(() => {});
   const g = sent.length ? sent[0].prompt : {}, by = c => Object.values(g).filter(n => n.class_type===c);
   const up = ups.find(b => /\.avi"/.test(b.toString('latin1'))), name = up && /filename="([^"]+)"/.exec(up.toString('latin1'))[1];
   ok(up && /^rdspin_c1_.*\.avi$/.test(name), 'the spin is sent to Render as an .avi: ' + name);
   const cn = by('MiniMaxH3FunControlNetApply')[0];
+  const sl = cn ? g[cn.inputs.model[0]] : {inputs:{model:[0]}};
   ok(cn && cn.inputs.strength===1 && g[cn.inputs.model_patch[0]].inputs.name==='minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors' && g[cn.inputs.control_video[0]].class_type==='GetVideoComponents'
     && g[g[cn.inputs.control_video[0]].inputs.video[0]].inputs.file===name, 'its frames steer the clip through the Fun ControlNet at 1.0');
-  ok(g[cn.inputs.model[0]].class_type==='UNETLoader' && g[cn.inputs.model[0]].inputs.unet_name==='DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors' && !by('LoraLoaderModelOnly').length && by('BasicScheduler')[0].inputs.steps===20,
+  ok(g[sl.inputs.model[0]].class_type==='UNETLoader' && g[sl.inputs.model[0]].inputs.unet_name==='DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors' && by('LoraLoaderModelOnly').length===1 && by('BasicScheduler')[0].inputs.steps===20,
     'the full model at 20 steps, no Turbo (as tested with the ControlNet)');
+  ok(sl.class_type==='LoraLoaderModelOnly' && sl.inputs.lora_name==='AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors' && sl.inputs.strength_model===0.8 && /^AFKJ Style\. <Picture 1>/.test(by('MiniMaxH3ReferenceToVideo')[0].inputs.prompt),
+    'the picked style LoRA sits before the ControlNet at 0.8, its activation words open the prompt');
   ok(g[by('BasicGuider')[0].inputs.model[0]]===cn && !by('MiniMaxH3AddGuide').length && g[by('MiniMaxH3ReferenceToVideo')[0].inputs['ref_images.ref_image_0'][0]].inputs.image==='box_front.png',
     'the patched model samples it; the Front picture is the look, nothing pinned (it might not line up with the model)');
   if(up){

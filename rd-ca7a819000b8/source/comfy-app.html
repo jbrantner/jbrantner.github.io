@@ -467,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.42'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.43'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3692,6 +3692,7 @@ function kitTurn(){
   k.base = pick(oi, 'UNETLoader', 'unet_name', /dasiwahybridv2/i) || combo(oi.UNETLoader, 'unet_name').find(n => /minimax.?h3/i.test(baseName(n)) && !/turbo|fl2v/i.test(n)) || k.unet;
   k.cn = pick(oi, 'ModelPatchLoader', 'name', /minimax_h3_fun_controlnet/i);
   k.ok3d = !!(k.cn && oi.MiniMaxH3FunControlNetApply && oi.LoadVideo && oi.GetVideoComponents);
+  k.styles = combo(oi.LoraLoaderModelOnly, 'lora_name').filter(n => /minimax|mmh3|(^|[_\W])h3([_\W]|$)/i.test(baseName(n)) && !/turbo|fl2v/i.test(baseName(n))); // style LoRAs made for MiniMax H3
   const lacks = [!k.unet && 'a MiniMax H3 model (diffusion_models)', !k.clip && 'the MiniMax H3 text encoder', !k.vae && 'the MiniMax H3 video VAE'].filter(Boolean);
   if(lacks.length) k.why = pcName(p.url) + ' is missing ' + lacks.join(', ');
   return k;
@@ -3704,7 +3705,7 @@ function turnPrompt(c){
   return '<Picture 1> defines <Subject 1>' + (d ? ': ' + d : '') + '. Use only the character design; ignore its background and lighting. Character turnaround on a plain pure-white background. '
     + '<Subject 1> stands in an A-pose at the center of the frame, arms straight and held slightly away from the body, hands open, feet a little apart, and turns in place to their left in one smooth, steady, full 360-degree rotation at constant speed, like a model on a turntable: front, side, back, other side, and back to the front at the end. '
     + 'Wide shot: the whole body is in frame from the top of the head to the feet, with space above and below. The camera is locked off at chest height and does not move or zoom. '
-    + 'The design, proportions, colours and clothing stay exactly the same the whole time. Only <Subject 1>; no other figures, no props, no shadows except a soft contact shadow. Even, flat studio lighting.';
+    + 'The design, proportions, colours and clothing stay exactly the same the whole time. Only <Subject 1>; no other figures, no props. Lit evenly from every side like a flat-colour character sheet: no cast shadows, no shadow on the floor, no dark shading on the body. The background stays pure white all the way to the edges.';
 }
 function turnVideoGraph(k, img, c, pinned, control){
   const g = {}; let n = 0;
@@ -3713,11 +3714,13 @@ function turnVideoGraph(k, img, c, pinned, control){
   const pin = !pinned ? li : k.oi.ResizeAndPadImage ? add('ResizeAndPadImage', {image:[li,0], target_width:TV_W, target_height:TV_H, padding_color:'white', interpolation:'lanczos'}) : li; // fit, not crop, so head and feet stay in
   let model = [add('UNETLoader', {unet_name:control ? k.base : k.unet, weight_dtype:'default'}), 0];
   if(k.lora && !control) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
+  const sl = c.tvLora && (k.styles || []).includes(c.tvLora) ? c.tvLora : ''; // the character's style LoRA, before the ControlNet as in the AFKJ two-pass
+  if(sl) model = [add('LoraLoaderModelOnly', {model, lora_name:sl, strength_model:Math.max(0, Math.min(2, parseFloat(c.tvLoraW) || 1))}), 0];
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
   // from the 3D model: its spin (white outlines on black, made on the phone) steers every frame through the Fun ControlNet
   if(control){ const fr = add('GetVideoComponents', {video:[add('LoadVideo', {file:control}), 0]});
     model = [add('MiniMaxH3FunControlNetApply', {model, model_patch:[add('ModelPatchLoader', {name:k.cn}), 0], vae:[vae,0], strength:1, start_percent:0, end_percent:1, control_video:[fr,0]}), 0]; }
-  const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:turnPrompt(c), width:TV_W, height:TV_H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
+  const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:((c.tvLoraWords || '').trim() ? c.tvLoraWords.trim().replace(/([^.!?])$/, '$1.') + ' ' : '') + turnPrompt(c), width:TV_W, height:TV_H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
   // a Front is pinned as the first and last frame; a Reference only guides the design, so the clip starts on a clean full-body front of its own
   let cond = [rv,0];
   if(pinned) for(const f of [0, -1]) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:f}), 0];
@@ -3887,6 +3890,10 @@ function boxTurn(c){
       <div class="btnrow"><button class="btn" data-ch="tvadd">＋ Add as ${esc(ANGLES[TV.ang])}</button></div>`;
   }
   if(k.why) return h + `<p class="note">${esc(k.why)}.</p>`;
+  if(k.styles.length) h += `<div class="row" style="margin-top:8px"><label>Style LoRA</label><div class="grow"><select data-cf="tvLora"><option value="">None</option>${k.styles.map(n => `<option value="${esc(n)}"${n===c.tvLora ? ' selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/, ''))}</option>`).join('')}</select></div></div>
+    <div class="row"><label>Strength</label><input type="number" data-cf="tvLoraW" min="0" max="2" step="0.1" value="${esc(String(c.tvLoraW || 1))}" style="width:80px"></div>
+    <div class="row"><label>Activation</label><div class="grow"><input type="text" data-cf="tvLoraWords" placeholder="e.g. AFKJ Style" value="${esc(c.tvLoraWords || '')}"></div></div>
+    <p class="note" style="margin:-2px 0 0 92px">Used by both turnarounds. Activation words (or any words) go at the start of the prompt.</p>`;
   return h + `<p class="note">${src ? 'MiniMax H3 on ' + esc(pcName(k.url)) + ' turns ' + esc(c.name || 'them') + ' around once, from the ' + (src.angle==='front' ? 'Front' : 'Reference') + ' picture, in its own style. Takes ' + k.mins + ' minutes. The frames are ' + TV_W + '×' + TV_H + ', smaller than Make other angles draws.' : 'It needs a Front or Reference picture first.'}</p>
     <div class="btnrow"><button class="btn${t.url ? '' : ' hot'}" data-ch="maketurn" ${src ? '' : 'disabled'}>🎬 ${t.url || t.test ? 'Make it again' : 'Make a turnaround video'}</button></div>`
     + (c.model3d && (c.model3d.raw || c.model3d.test) && src ? (k.ok3d ? `<p class="note">Or from the 3D model: the phone spins the grey model and MiniMax H3 paints the spin, following its outlines (the canny ControlNet) with the ${src.angle==='front' ? 'Front' : 'Reference'} picture as the look. The shape and the turn stay exactly the model's. Full model, 20 steps: about 15 minutes.</p>
