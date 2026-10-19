@@ -1,6 +1,6 @@
 """The helper's download: when the connection drops halfway it waits and carries on from where it got to (a Range
 request) instead of starting again, and the finished file is whole. Run: python3 tests/t_download.py (needs aiohttp)"""
-import asyncio, os, sys, types, tempfile
+import asyncio, os, sys, time, types, tempfile
 from aiohttp import web
 fp = types.ModuleType('folder_paths'); fp.get_folder_paths = lambda k: ['/tmp']; fp.get_filename_list = lambda k: []
 fp.get_save_image_path = lambda *a, **k: None; fp.get_output_directory = lambda: '/tmp'
@@ -9,6 +9,7 @@ srv = types.ModuleType('server'); srv.PromptServer = types.SimpleNamespace(insta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'comfyui'))
 import render_deck_models as H
 H.SYNC_MBPS = 1000
+H.SPEED_FILE = os.path.join(tempfile.mkdtemp(), 'speed.json')  # no file: full speed
 DATA = os.urandom(5 * 1024 * 1024)
 seen = []
 
@@ -42,6 +43,11 @@ async def main():
     ok(j['status'] == 'done' and open(path, 'rb').read() == DATA, 'the file is whole after the drop: ' + j['status'] + ' ' + str(j.get('error')))
     ok(len(seen) == 2 and seen[0] is None and seen[1] == 'bytes=%d-' % (2 * 1024 * 1024), 'the second try asks for the rest only: ' + str(seen))
     ok(not os.path.exists(path + '.part'), 'no part file left')
+    # the speed: full by default, the gentle speed once picked in the app
+    ok(H._speed() == 0, 'full speed when nothing was picked')
+    t0 = time.time(); await H._pace(t0, 50 * 1024**2); ok(time.time() - t0 < 0.05, 'no waiting at full speed')
+    open(H.SPEED_FILE, 'w').write('{"mbps": 100}')
+    t0 = time.time(); await H._pace(t0, 20 * 1024**2); ok(0.15 < time.time() - t0 < 0.4, 'held to the picked speed (20 MB at 100 MB/s is about 0.2 s): %.2f' % (time.time() - t0))
     await run.cleanup()
     print(('%d FAILED' % len(fails)) if fails else 'all passed'); os._exit(1 if fails else 0)
 asyncio.run(main())

@@ -34,7 +34,17 @@ CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites sha
 HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
 RETRIES = 8  # a download waits 30 s, 1, 2, 4 … up to 10 minutes after each drop before carrying on
-SYNC_MBPS = 2  # copies between your computers are held to about this many MB a second: at 15 the house WiFi kept dropping
+SYNC_MBPS = 2  # the gentle speed, MB a second: at 15 the house WiFi kept dropping (2026-10-18); a router fix later let Jordan try full speed
+SPEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_speed.json')
+
+
+def _speed():
+    """MB a second that downloads and copies are held to, 0 for full speed. Set from the app (⚙ › Download speed);
+    full speed unless the gentle speed was picked."""
+    try:
+        return float(json.load(open(SPEED_FILE, encoding='utf-8')).get('mbps', 0))
+    except Exception:
+        return 0.0
 routes = PromptServer.instance.routes
 
 
@@ -114,14 +124,17 @@ async def _civitai(session, url):
 
 
 async def _pace(started, sent):
-    """Sleep as long as it takes to keep a copy between computers at SYNC_MBPS."""
-    ahead = sent / (SYNC_MBPS * 1024**2) - (time.time() - started)
+    """Sleep as long as it takes to keep a download or copy at the chosen speed (no wait at full speed)."""
+    mbps = _speed()
+    if mbps <= 0:
+        return
+    ahead = sent / (mbps * 1024**2) - (time.time() - started)
     if ahead > 0:
         await asyncio.sleep(ahead)
 
 
 async def _download(j, file_url, path, retries=RETRIES):
-    """Fetch into path + '.part', held to SYNC_MBPS. When the internet drops it waits and carries on from where it got to
+    """Fetch into path + '.part', held to the picked speed (_speed). When the internet drops it waits and carries on from where it got to
     (an HTTP Range request) instead of starting the file again, up to RETRIES times, longer each time."""
     tmp = path + '.part'
     headers = {'Authorization': 'Bearer ' + _token()} if _token() and any(c in file_url for c in CIVITAI) else {}
@@ -169,6 +182,20 @@ async def _download(j, file_url, path, retries=RETRIES):
                     return
     os.replace(tmp, path)
     j['status'] = 'done'
+
+
+@routes.get('/renderdeck/speed')
+async def get_speed(request):
+    return web.json_response({'mbps': _speed(), 'gentle': SYNC_MBPS})
+
+
+@routes.post('/renderdeck/speed')
+async def set_speed(request):
+    b = await request.json()
+    mbps = max(0.0, float(b.get('mbps', 0)))
+    with open(SPEED_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'mbps': mbps}, f)
+    return web.json_response({'mbps': mbps})
 
 
 @routes.get('/renderdeck/jobs')
@@ -447,7 +474,7 @@ async def model_file(request):
         while chunk := await loop.run_in_executor(None, f.read, 1 << 20):
             await resp.write(chunk)
             sent += len(chunk)
-            await _pace(started, sent)  # held to SYNC_MBPS, whichever computer's helper is the newer one
+            await _pace(started, sent)  # held to the picked speed, whichever computer's helper is the newer one
     return resp
 
 
@@ -518,7 +545,7 @@ async def sync(request):
 # ---------- the render farm: one queue that hands renders to whichever of your computers is free ----------
 # The phone adds renders here (on the computer that is always on) and can then close. Every couple of seconds this
 # looks at each computer's ComfyUI; one with nothing to do gets the next render it can run. A computer missing a
-# checkpoint or LoRA is asked to copy it from another (the sync above, one file at a time, at SYNC_MBPS, and only
+# checkpoint or LoRA is asked to copy it from another (the sync above, one file at a time, at the picked speed, and only
 # when Tailscale reaches the other computer directly, not through a relay). The queue is saved to render_deck_farm.json, so it
 # survives a restart.
 FARM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_farm.json')
@@ -667,7 +694,7 @@ async def _direct(url):
         out = (await asyncio.wait_for(p.communicate(), 20))[0].decode(errors='replace')
         ok = 'via DERP' not in out or 'via ' in out.replace('via DERP', '')  # a direct answer after a relayed one counts
     except Exception:
-        ok = True  # no tailscale command here: the 2 MB/s cap still holds
+        ok = True  # no tailscale command here: the picked speed still holds
     _DIRECT[host] = (time.time(), ok)
     return ok
 

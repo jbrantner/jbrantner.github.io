@@ -445,6 +445,9 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="btnrow"><button class="btn" id="getBtn">⬇ Add a model or LoRA</button></div>
   <div class="lbl">Pictures per render</div>
   <div class="seg" id="batchSeg" style="--c:var(--accent)"></div>
+  <div class="lbl">Model downloads</div>
+  <div class="seg" id="speedSeg" style="--c:var(--accent)"></div>
+  <p class="note">How fast your computers download models and copy them to each other. Pick Gentle if the house WiFi starts dropping again.</p>
   <div class="lbl">Setup on the render computer</div>
   <ol class="steps">
     <li>Install <b>Tailscale</b> on the render computer and on your iPhone, and sign in to the same account on both.</li>
@@ -464,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.39'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.40'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1792,6 +1795,7 @@ function showAdded(){
 function render(){
   renderBlocks(); drawStrip();
   $('#prompt').value = S.prompt; $('#negative').value = S.negative; drawPromptHead();
+  $('#speedSeg').innerHTML = [['full', 'Full speed'], ['gentle', 'Gentle (2 MB/s)']].map(([v, t]) => `<button data-speed="${v}" class="${(S.speed || 'full')===v ? 'on' : ''}">${t}</button>`).join('');
   $('#batchSeg').innerHTML = [1,2,4].map(n => `<button data-batch="${n}" class="${S.batch===n?'on':''}">${n}</button>`).join('');
   $('#server').value = S.server;
   $('#srvSeg').innerHTML = S.servers.map((x,k) => `<button data-srv="${k}" class="${x.url===base()?'on':''}">${esc(x.name)}</button>`).join('') + (S.servers.length ? '<button data-srv="new">＋ Another</button>' : '');
@@ -1878,6 +1882,12 @@ $('#srvSeg').onclick = e => { const b = e.target.closest('[data-srv]'); if(!b) r
   S.server = S.servers[+b.dataset.srv].url; save(); render(); connect(); };
 $('#connectBtn').onclick = connect;
 $('#testBtn').onclick = testMode;
+// the speed lives in each computer's helper (render_deck_speed.json), so it holds with the app closed too
+$('#speedSeg').onclick = async e => { const t = e.target.closest('[data-speed]'); if(!t) return; S.speed = t.dataset.speed; save(); render();
+  if(S.test) return;
+  const res = await Promise.all(allPcs().filter(p => p.online).map(p => fetch(p.url + '/renderdeck/speed', {method:'POST', headers:JSONH, body:JSON.stringify({mbps:S.speed==='gentle' ? 2 : 0})}).then(r => r.ok ? null : pcName(p.url)).catch(() => pcName(p.url))));
+  const bad = res.filter(Boolean); toast(bad.length ? bad.join(' and ') + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : (S.speed==='gentle' ? 'Downloads held to 2 MB/s' : 'Downloads at full speed'), !!bad.length); };
+const speedTxt = gb => S.speed==='gentle' ? 'about ' + Math.round(gb * 1024 / 2 / 60) + ' minutes at the gentle 2 MB/s' : 'at full speed';
 $('#batchSeg').onclick = e => { const t = e.target.closest('[data-batch]'); if(!t) return; S.batch = +t.dataset.batch; save(); render(); };
 $('#prompt').oninput = e => { S.prompt = e.target.value; save(); drawPromptHead(); };
 // the prompt folds like the other sections; folded, its line shows the prompt itself
@@ -3601,10 +3611,10 @@ async function paint3d(c){
     delete M3D[c.id]; save(); drawChars(); toast('Painted from your pictures ✨');
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't paint it from the pictures: " + err.message + '. This is the model with its own colours.'}); drawChars(); }
 }
-// Get the 3D model: the one big file, through the helper (2 MB/s, carries on after a drop)
+// Get the 3D model: the one big file, through the helper (at the speed picked in ⚙, carrying on after a drop)
 async function get3d(){
   const k = kit3d(), sp = k.spec; if(k.why && !k.url) return;
-  if(!confirm(pcName(k.url) + ' will download ' + sp.label + ' from Hugging Face: ' + sp.gb + ' GB, about ' + Math.round(sp.gb * 1024 / 2 / 60) + ' minutes at the gentle 2 MB/s, once. If the WiFi drops it waits and carries on. Start now?')) return;
+  if(!confirm(pcName(k.url) + ' will download ' + sp.label + ' from Hugging Face: ' + sp.gb + ' GB, ' + speedTxt(sp.gb) + ', once. If the WiFi drops it waits and carries on. Start now?')) return;
   try{ const r = await fetch(k.url + '/renderdeck/download', {method:'POST', headers:JSONH, body:JSON.stringify({url:sp.url, kind:sp.kind})}), j = await r.json();
     if(j.error) throw new Error(/checkpoint or LoRA/.test(j.error) ? pcName(k.url) + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : j.error);
     toast('Downloading on ' + pcName(k.url)); watch3d(k.url, sp); }
@@ -3641,7 +3651,7 @@ function box3d(c){
     const d = dl3d && dl3d.sp===sp ? dl3d : null;
     if(d && d.status!=='failed') return h + `<p class="note">${d.status==='waiting' ? 'The internet dropped: the download carries on in a moment' : 'Downloading ' + sp.label + ' on ' + esc(pcName(d.pc))} · ${(d.done / 1e9).toFixed(1)} of ${((d.total || sp.gb * 1e9) / 1e9).toFixed(1)} GB</p><div class="pbar"><i style="width:${(100 * d.done / (d.total || sp.gb * 1e9)).toFixed(1)}%"></i></div>`;
     if(!S.test) watch3d(k.url, sp);
-    return h + `<p class="note">${sp.label} builds a 3D model of them from the Front, Left side, Back and Right side pictures, on ${esc(pcName(k.url))}. ${esc(pcName(k.url))} has everything but the model itself: ${sp.gb} GB, downloaded once at the gentle 2 MB/s (about ${Math.round(sp.gb * 1024 / 2 / 60)} minutes).</p>
+    return h + `<p class="note">${sp.label} builds a 3D model of them from the Front, Left side, Back and Right side pictures, on ${esc(pcName(k.url))}. ${esc(pcName(k.url))} has everything but the model itself: ${sp.gb} GB, downloaded once, ${speedTxt(sp.gb)}.</p>
       ${d && d.status==='failed' ? `<p class="warn">The download stopped: ${esc(d.error || '')}. Tap again to carry on from where it got to.</p>` : ''}
       <div class="btnrow"><button class="chipbtn" data-ch="get3d">⬇ Get ${sp.label} (${sp.gb} GB)</button></div>`;
   }
