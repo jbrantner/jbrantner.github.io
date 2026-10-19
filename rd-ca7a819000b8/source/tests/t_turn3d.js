@@ -190,8 +190,8 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   const pic = tp.find(p => p.name==='boxgirl_01.png'); ok(pic && unpng(Buffer.from(pic.body, 'latin1')).w===64, 'pictures are fitted to sizes of 64');
   const tg2 = sent.length ? Object.values(sent[0].prompt) : [], nd = c => tg2.find(n => n.class_type===c) || {inputs:{}};
   ok(nd('LoadImageTextDataSetFromFolder').inputs.folder===folder && nd('CheckpointLoaderSimple').inputs.ckpt_name==='oneObsession_v24.safetensors' && nd('ResolutionBucket').inputs.latents
-    && nd('TrainLoraNode').inputs.steps===1000 && nd('TrainLoraNode').inputs.rank===16 && nd('TrainLoraNode').inputs.algorithm==='LoRA' && nd('TrainLoraNode').inputs.bucket_mode===true
-    && nd('SaveLoRA').inputs.prefix==='RenderDeck/loras/boxgirl', 'the training graph: folder, checkpoint, buckets, 1000 steps, rank 16, saved in RenderDeck/loras');
+    && nd('TrainLoraNode').inputs.steps===1000 && nd('TrainLoraNode').inputs.rank===16 && nd('TrainLoraNode').inputs.algorithm==='LoRA' && nd('TrainLoraNode').inputs.bucket_mode===true && nd('TrainLoraNode').inputs.offloading===true
+    && nd('SaveLoRA').inputs.prefix==='RenderDeck/loras/boxgirl', 'the training graph: folder, checkpoint, buckets, 1000 steps, rank 16, offloading on an unknown (or 8 GB) card, saved in RenderDeck/loras');
   const L = await page.evaluate(() => S.chars[0].lora);
   ok(L && /^boxgirl_\d{6}_\w+\.safetensors$/.test(L.name) && loraUps.length===1 && loraUps[0].q.includes('kind=loras') && loraUps[0].q.includes('name=' + L.name) && loraUps[0].body.includes('LORA2'),
     'the newest LoRA file is put in the loras folder under its own name: ' + JSON.stringify(L) + ' ' + (loraUps[0] || {}).q);

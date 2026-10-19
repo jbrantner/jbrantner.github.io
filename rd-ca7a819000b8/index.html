@@ -478,7 +478,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.53'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.54'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3792,18 +3792,18 @@ const trainPcs = () => S.test ? [{url:'test', oi:{TrainLoraNode:{}, CheckpointLo
 const trainSteps = c => Math.max(1000, Math.min(2500, ((c.set && c.set.n) || 10) * 100));
 function trainCkpt(oi){ const list = combo(oi.CheckpointLoaderSimple, 'ckpt_name'), m = S.blocks.find(b => b.type==='model');
   return (m && list.includes(m.ckpt) && m.ckpt) || list.find(n => /obsession/i.test(n)) || list.find(n => /illustrious|noob/i.test(n)) || list[0]; }
-function trainGraph(oi, folder, ckpt, steps, prefix){
+function trainGraph(oi, folder, ckpt, steps, prefix, small){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fillIn(oi, cls, inputs), _meta:{title:cls}}; return id; };
   const ck = add('CheckpointLoaderSimple', {ckpt_name:ckpt}), ld = add('LoadImageTextDataSetFromFolder', {folder});
   const mk = add('MakeTrainingDataset', {images:[ld,0], texts:[ld,1], vae:[ck,2], clip:[ck,1]}), rb = add('ResolutionBucket', {latents:[mk,0], conditioning:[mk,1]});
   const tr = add('TrainLoraNode', {model:[ck,0], latents:[rb,0], positive:[rb,1], batch_size:1, grad_accumulation_steps:1, steps, learning_rate:0.0001, rank:16, optimizer:'AdamW', loss_function:'MSE', seed:1,
-    training_dtype:'bf16', lora_dtype:'bf16', quantized_backward:false, gradient_checkpointing:true, checkpoint_depth:1, offloading:false, existing_lora:'[None]', bucket_mode:true, bypass_mode:false});
+    training_dtype:'bf16', lora_dtype:'bf16', quantized_backward:false, gradient_checkpointing:true, checkpoint_depth:1, offloading:!!small, existing_lora:'[None]', bucket_mode:true, bypass_mode:false});
   add('SaveLoRA', {lora:[tr,0], prefix, steps:[tr,2]});
   return g;
 }
 // a picture fitted to about a megapixel, both sides a multiple of 64 (cropped a little from the middle to fit)
-async function fitForTraining(blob){
-  const im = await createImageBitmap(blob), k = Math.min(1, Math.sqrt(1024 * 1024 / (im.width * im.height)));
+async function fitForTraining(blob, side){
+  const im = await createImageBitmap(blob), k = Math.min(1, Math.sqrt((side || 1024) ** 2 / (im.width * im.height)));
   const w = Math.max(64, Math.floor(im.width * k / 64) * 64), h = Math.max(64, Math.floor(im.height * k / 64) * 64), sc = Math.max(w / im.width, h / im.height);
   const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(im, (w - im.width * sc) / 2, (h - im.height * sc) / 2, im.width * sc, im.height * sc); im.close && im.close();
   const out = await new Promise((ok, no) => cv.toBlob(b => b ? ok(b) : no(new Error("couldn't fit a picture")), 'image/png')); cv.width = cv.height = 0; return out;
@@ -3816,15 +3816,19 @@ async function trainSet(c){
   if(!confirm('Train ' + trig + ' on ' + pcName(p.url) + '? ' + steps + ' steps on ' + baseName(ckpt) + ', roughly 1 to 2 hours. ' + pcName(p.url) + ' works flat out the whole time' + (/main/i.test(pcName(p.url)) ? ', so no gaming meanwhile.' : '.'))) return;
   const s = MLORA[c.id] = {state:'busy', text:'Copying the pictures to ' + pcName(p.url) + '…'}; drawChars(); buzz();
   try{
+    // an 8 GB card (both laptops) can't hold SDXL whole while training: the first try on Render ran out of graphics memory
+    // after two minutes (13.4 GB asked of 8). There the weights wait in the computer's memory between layers
+    // (offloading) and the pictures are fitted to about 768×768.
+    let small = true; try{ const st = await (await fetch(p.url + '/system_stats', within(8000))).json(), v = ((st.devices || [])[0] || {}).vram_total; small = !v || v < 15 * 1024 ** 3; }catch(e){}
     if(!S.test){ let i = 0; const seenPic = new Set();
       for(const f of t.files){ i++; s.text = 'Copying picture ' + i + ' of ' + t.files.length + ' to ' + pcName(p.url) + '…'; drawChars();
         const at = name => t.pc + '/view?' + new URLSearchParams({filename:name, subfolder:t.dir, type:'output'});
         const raw = await (await fetch(at(f.img))).blob(), hash = await picHash(raw); if(seenPic.has(hash)) continue; seenPic.add(hash); // a repeat only once
-        const img = await fitForTraining(raw), cap = await (await fetch(at(f.img.replace(/\.\w+$/, '.txt')))).text();
+        const img = await fitForTraining(raw, small ? 768 : 1024), cap = await (await fetch(at(f.img.replace(/\.\w+$/, '.txt')))).text();
         for(const [b, name] of [[img, f.img.replace(/\.\w+$/, '.png')], [new Blob([cap], {type:'text/plain'}), f.img.replace(/\.\w+$/, '.txt')]]){
           const fd = new FormData(); fd.append('image', b, name); fd.append('subfolder', folder); fd.append('type', 'input'); fd.append('overwrite', 'true');
           const r = await fetch(p.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('copying ' + name + ' failed (' + r.status + ')'); } } }
-    const g = trainGraph(p.oi, folder, ckpt, steps, prefix);
+    const g = trainGraph(p.oi, folder, ckpt, steps, prefix, small);
     if(S.test){ MLORA.last = g; c.lora = {name:trig + '.safetensors', at:Date.now(), test:true}; delete MLORA[c.id]; save(); drawChars(); return; }
     const r = await fetch(p.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-train'})});
     const j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -3848,7 +3852,8 @@ async function waitTrain(c){
     const mins = Math.round((Date.now() - m.t) / 60000); s.text = 'Training ' + m.trig + ' on ' + pcName(m.pc) + ' (' + m.steps + ' steps)… ' + mins + ' min so far'; drawChars();
     let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e){ continue; }
     if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error');
-      delete c.lora.making; save(); Object.assign(s, {state:'err', polling:false, text:"The training stopped: " + (e ? e[1].exception_message : 'ComfyUI hit an error')}); drawChars(); return; }
+      const why = e ? e[1].exception_message : 'ComfyUI hit an error', oom = /out of memory|OutOfMemory|exceed allowed memory/i.test(why);
+      delete c.lora.making; save(); Object.assign(s, {state:'err', polling:false, text:"The training stopped: " + (oom ? pcName(m.pc) + "'s graphics card ran out of memory. Close anything else using it and try again with fewer steps or on the other computer." : why)}); drawChars(); return; }
     if(!h){ let q = null; try{ q = await (await fetch(m.pc + '/queue')).json(); }catch(e){ continue; }
       if([...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===m.id)) continue; }
     else if(!(h.status && h.status.completed)) continue;
