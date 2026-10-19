@@ -91,6 +91,10 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.click('#charBtn'); await page.click('#charBody [data-open="c1"]');
   await page.click('#charBody [data-ch="make3d"]');
   const g = () => sent[0].prompt, by = c => Object.values(g()).filter(n => n.class_type===c);
+  await page.waitForFunction(() => S.chars[0].model3d && S.chars[0].model3d.raw, null, {timeout:30000}).catch(() => {});
+  await page.waitForTimeout(300);
+  ok(!ups.length && !(await page.evaluate(() => S.chars[0].model3d.painted)), 'a new model is not painted on its own any more (plain grey)');
+  await page.click('#charBody [data-ch="paint3d"]');
   await page.waitForFunction(() => S.chars[0].model3d && S.chars[0].model3d.painted, null, {timeout:30000}).catch(() => {});
   ok(by('UnwrapMesh').length===1 && by('BakeTextureFromVoxel').length===1 && by('ApplyTextureToMesh').length===1 && !by('PaintMesh').length, 'the model gets a real texture map (unwrap, bake, apply), not painted points');
   ok(by('CFGOverride').length===2 && by('RescaleCFG').length===2 && by('Trellis2UpsampleStage')[0].inputs.target_resolution===1536 && by('RemeshMesh').length===1, "ComfyUI's template settings: eased guidance, 1536 upsample, remesh");
@@ -113,12 +117,14 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(await page.$eval('#charBody [data-seg="eng3d"].on', b => b.dataset.v)==='hy', 'Hunyuan3D-2mv is offered and picked first');
   sent.length = 0; ups.length = 0;
   await page.click('#charBody [data-ch="make3d"]');
+  await page.waitForFunction(() => S.chars[0].model3d.eng==='hy' && !S.chars[0].model3d.making && document.querySelector('#charBody [data-ch="paint3d"]'), null, {timeout:30000}).catch(() => {});
+  await page.click('#charBody [data-ch="paint3d"]');
   await page.waitForFunction(() => S.chars[0].model3d.eng==='hy' && S.chars[0].model3d.painted, null, {timeout:30000}).catch(() => {});
   const hc = by('Hunyuan3Dv2ConditioningMultiView')[0];
   ok(hc && ['front','left','back','right'].every(k => g()[hc.inputs[k][0]].class_type==='CLIPVisionEncode') && by('ImageOnlyCheckpointLoader')[0].inputs.ckpt_name==='hunyuan3d-dit-v2-mv_fp16.safetensors'
     && by('ImageCropToMask').filter(n => n.inputs.background==='#ffffff').length===4 && !by('UNETLoader').length, 'the Hunyuan graph: four views cut out on white, multi-view conditioning, its own checkpoint');
   ok(by('VoxelToMesh').length===1 && by('UnwrapMesh').length===1 && by('ApplyTextureToMesh').length===1 && by('SaveImage').length===8, 'its mesh gets a blank texture map, and the views are kept for painting');
-  ok(ups.length===1 && (await page.evaluate(() => S.chars[0].model3d.url)).includes('rd3d_'), 'and it is painted from the pictures too');
+  ok(ups.length===1 && (await page.evaluate(() => S.chars[0].model3d.url)).includes('rd3d_'), 'and it can be painted from the pictures too');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
