@@ -135,6 +135,18 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     ok(near(face('right'), [0,255,0]) && near(face('left'), [255,255,0]), 'their right side from a quarter of the way, their left from three quarters (the turn goes to their left)');
   } else ok(false, 'nothing was painted from the turnaround: ' + await page.evaluate(() => JSON.stringify(M3D)));
   ok(await page.evaluate(() => window.UNITS) <= 16, 'the painting shader fits a phone (16 texture units): ' + await page.evaluate(() => window.UNITS));
+  // the training set: the card's picture and twelve turnaround frames, each with a starter caption, in the output folder
+  ups.length = 0; await page.evaluate(() => { for(const k in M3D) delete M3D[k]; drawChars(); });
+  await page.fill('#charBody [data-cf="trigger"]', 'boxgirl');
+  await page.click('#charBody [data-ch="exportset"]');
+  await page.waitForFunction(() => S.chars[0].set, null, {timeout:30000}).catch(() => {});
+  const parts = ups.map(b => { const t = b.toString('latin1'); const f = (n) => (new RegExp('name="' + n + '"\\r\\n\\r\\n([^\\r]*)').exec(t) || [])[1];
+    return {name:/filename="([^"]+)"/.exec(t)[1], sub:f('subfolder'), type:f('type'), body:(st => t.slice(st, t.indexOf('\r\n--', st)))(t.indexOf('\r\n\r\n', t.indexOf('filename=')) + 4)}; });
+  const txt = parts.filter(p => p.name.endsWith('.txt')), pics = parts.filter(p => /\.(png|jpg|webp)$/.test(p.name));
+  console.log('   ' + txt.slice(0, 2).concat(txt.slice(7, 8)).map(p => p.name + ': ' + p.body.trim()).join(' | '));
+  ok(pics.length===13 && txt.length===13 && parts.every(p => p.sub==='RenderDeck/datasets/boxgirl' && p.type==='output'), '13 pictures (1 from the card, 12 frames) and 13 captions in RenderDeck/datasets/boxgirl');
+  ok(txt[0].body.trim()==='boxgirl, 1girl, solo, simple background' && txt.find(p => p.name==='boxgirl_08.txt').body.trim()==='boxgirl, 1girl, solo, from behind, standing, full body, simple background, white background'
+    && /from side/.test(txt.find(p => p.name==='boxgirl_05.txt').body), 'captions start with the trigger and carry the angle (180° = from behind, 90° = from side)');
   // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
   await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
   ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');

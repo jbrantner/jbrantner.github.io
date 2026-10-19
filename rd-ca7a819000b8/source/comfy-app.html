@@ -467,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.48'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.49'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3624,22 +3624,73 @@ async function paint3d(c, fromTurn){
 }
 // The turnaround made from the 3D model lines up with it exactly: frame i shows the model turned 360°·i/(length-1) to
 // their left, seen straight on with the fit kept on the clip. Six frames 60° apart become views with those cameras.
-async function turnViews(t){
-  const url = t.url, f = t.fit, D = 2 * Math.max(f.r, 1 / f.s), ar = TV_H / TV_W;
+// frames of a turnaround clip as pictures (canvases): frame i of TV_LEN, at the clip's own frame rate
+async function clipFrames(url, idxs){
   TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b));
   const vid = document.createElement('video'); vid.muted = true; vid.playsInline = true; vid.setAttribute('playsinline', '');
   await new Promise((ok, no) => { vid.onloadeddata = ok; vid.onerror = () => no(new Error("the clip couldn't be read")); TVBLOB[url].then(src => { vid.src = src; vid.load(); }, no); });
   try{ await vid.play(); }catch(e){} vid.pause(); // wakes an iPhone's video up
-  const fps = vid.duration ? TV_LEN / vid.duration : 24, views = {};
-  for(let k = 0; k < 6; k++){
-    const th = k * Math.PI / 3, i = Math.round(k / 6 * (TV_LEN - 1)), c = Math.cos(th), sn = Math.sin(th), S = f.s;
+  const fps = vid.duration ? TV_LEN / vid.duration : 24, out = [];
+  for(const i of idxs){
     await new Promise(ok => { vid.onseeked = ok; vid.currentTime = Math.min(vid.duration - 0.01, (i + 0.5) / fps); });
-    const cv = document.createElement('canvas'); cv.width = vid.videoWidth; cv.height = vid.videoHeight; cv.getContext('2d').drawImage(vid, 0, 0);
-    views['t' + k] = {img:cv, k:1, onWhite:true, eye:[-sn, 0, c], // column by column: the spin's own camera (turned, centred, scaled to the frame)
-      mat:new Float32Array([S*ar*c, 0, sn/D, 0,  0, S, 0, 0,  S*ar*sn, 0, -c/D, 0,  -S*ar*(c*f.cx + sn*f.cz), -S*f.cy, (-sn*f.cx + c*f.cz)/D, 1])};
+    const cv = document.createElement('canvas'); cv.width = vid.videoWidth; cv.height = vid.videoHeight; cv.getContext('2d').drawImage(vid, 0, 0); out.push(cv);
   }
   vid.removeAttribute('src'); vid.load();
+  return out;
+}
+async function turnViews(t){
+  const f = t.fit, D = 2 * Math.max(f.r, 1 / f.s), ar = TV_H / TV_W, views = {};
+  const frames = await clipFrames(t.url, [0, 1, 2, 3, 4, 5].map(k => Math.round(k / 6 * (TV_LEN - 1))));
+  for(let k = 0; k < 6; k++){
+    const th = k * Math.PI / 3, c = Math.cos(th), sn = Math.sin(th), S = f.s;
+    views['t' + k] = {img:frames[k], k:1, onWhite:true, eye:[-sn, 0, c], // column by column: the spin's own camera (turned, centred, scaled to the frame)
+      mat:new Float32Array([S*ar*c, 0, sn/D, 0,  0, S, 0, 0,  S*ar*sn, 0, -c/D, 0,  -S*ar*(c*f.cx + sn*f.cz), -S*f.cy, (-sn*f.cx + c*f.cz)/D, 1])};
+  }
   return views;
+}
+// ---------- training set for a character LoRA ----------
+// Every picture on the card plus twelve turnaround frames (every 30°) go into RenderDeck/datasets/<name> in the PC's
+// output folder (Dropbox), each with a starter caption: the trigger word, solo, the view angle the app knows for sure and
+// the plain background. The look itself (hair, eyes, outfit) is left out on purpose, so the trigger word learns it.
+const SET_ANG = {front:'', three:'', left:'from side', right:'from side', side:'from side', back:'from behind', face:'portrait, close-up', ref:''};
+const turnAngTag = deg => { deg = ((deg % 360) + 360) % 360; return deg >= 60 && deg <= 120 || deg >= 240 && deg <= 300 ? 'from side' : deg >= 150 && deg <= 210 ? 'from behind' : ''; };
+const trigOf = c => (c.trigger || '').trim() || (c.name || 'character').trim().toLowerCase().replace(/[^\w]+/g, '_').replace(/^_+|_+$/g, '') || 'character';
+function setCaption(c, ang, extra){
+  const who = ((c.tags || '').match(/\b(1girl|1boy|1other)\b/) || [])[0];
+  return [trigOf(c), who, 'solo', ang, ...(extra || [])].filter(Boolean).join(', ');
+}
+const MSET = {}; // character id -> {state, text}
+async function exportSet(c){
+  const pc = S.test ? 'test' : (c.turn && c.turn.pc && pcOf(c.turn.pc) && pcOf(c.turn.pc).online ? c.turn.pc : (allPcs().find(p => p.online && p.url===farmHost()) || allPcs().find(p => p.online) || {}).url);
+  if(!pc){ toast("Your computers can't be reached right now", true); return; }
+  const dir = (S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c), s = MSET[c.id] = {state:'busy', text:'Gathering the pictures…'}; drawChars();
+  try{
+    const items = []; // {blob or canvas, caption}
+    for(const v of c.views){ const b = await (await fetch(v.url)).blob(); items.push({blob:b, cap:setCaption(c, SET_ANG[v.angle], v.angle==='face' ? [] : ['simple background'])}); }
+    if(c.turn && c.turn.url && !c.turn.test){ s.text = 'Taking frames from the turnaround…'; drawChars();
+      const degs = Array.from({length:12}, (_, k) => k * 30), frames = await clipFrames(c.turn.url, degs.map(d => Math.round(d / 360 * (TV_LEN - 1))));
+      frames.forEach((cv, k) => items.push({canvas:cv, cap:setCaption(c, turnAngTag(degs[k]), ['standing', 'full body', 'simple background', 'white background'])})); }
+    let n = 0;
+    for(const it of items){ n++; s.text = 'Saving ' + n + ' of ' + items.length + ' on ' + pcName(pc) + '…'; drawChars();
+      const blob = it.blob || await new Promise((ok, no) => it.canvas.toBlob(b => b ? ok(b) : no(new Error("couldn't read a frame")), 'image/png'));
+      if(it.canvas) it.canvas.width = it.canvas.height = 0;
+      const base = trigOf(c) + '_' + String(n).padStart(2, '0'), ext = /jpe?g/.test(blob.type) ? '.jpg' : /webp/.test(blob.type) ? '.webp' : '.png';
+      for(const [b, name] of [[blob, base + ext], [new Blob([it.cap + '\n'], {type:'text/plain'}), base + '.txt']]){
+        if(S.test) continue;
+        const fd = new FormData(); fd.append('image', b, name); fd.append('subfolder', dir); fd.append('type', 'output'); fd.append('overwrite', 'true');
+        const r = await fetch(pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving ' + name + ' failed (' + r.status + ')'); } }
+    c.set = {n:items.length, dir, pc, at:Date.now()}; delete MSET[c.id]; save(); drawChars(); buzz(); toast(items.length + ' pictures saved for training ✨');
+  }catch(err){ Object.assign(s, {state:'err', text:"Couldn't save the training set: " + err.message}); drawChars(); }
+}
+function boxSet(c){
+  const s = MSET[c.id], t = c.set, nt = c.turn && c.turn.url ? 12 : 0;
+  let h = '<div class="lbl">Training set (for a LoRA)</div>';
+  if(s && s.state==='busy') return h + `<p class="note">📦 ${esc(s.text)}</p>`;
+  if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
+  h += `<div class="row"><label>Trigger word</label><div class="grow"><input type="text" data-cf="trigger" placeholder="${esc(trigOf(Object.assign({}, c, {trigger:''})))}" value="${esc(c.trigger || '')}"></div></div>
+    <p class="note">Saves the ${c.views.length} picture${c.views.length===1 ? '' : 's'} on the card${nt ? ' and ' + nt + ' frames from the turnaround (every 30°)' : ''} into ${esc((S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c))} in your renders folder, each with a starter caption: the trigger word, solo, the view angle and the plain background. The look itself (hair, eyes, outfit) is left out on purpose so the trigger word learns it. Add a few pictures in other poses and expressions first, so the LoRA doesn't only know them standing on white.</p>`;
+  if(t) h += `<p class="note">Last saved: ${t.n} pictures on ${esc(pcName(t.pc))}, ${new Date(t.at).toLocaleString()}. Saving again overwrites them.</p>`;
+  return h + `<div class="btnrow"><button class="btn" data-ch="exportset" ${c.views.length + nt ? '' : 'disabled'}>📦 ${t ? 'Save it again' : 'Save the training set'}</button></div>`;
 }
 // Get the 3D model: the one big file, through the helper (at the speed picked in ⚙, carrying on after a drop)
 async function get3d(){
@@ -4041,6 +4092,7 @@ function drawChars(){
       : '<p class="note" style="margin-top:0">Add a picture of them first (＋ above, or 🧍 Add to a character under any render).</p>'}
     <div class="chsec">${boxTurn(c)}</div>
     <div class="chsec">${box3d(c)}</div>
+    <div class="chsec">${boxSet(c)}</div>
     <div class="btnrow" style="margin-top:22px"><button class="btn danger" data-ch="del">Delete ${esc(c.name || 'this character')}</button></div>`);
   jobs.forEach(e => { const x = box.querySelector(`[data-prog="${CSS.escape(e.key)}"]`); if(x) x.textContent = e.state==='running' ? (e.prog ? e.prog.text : 'Starting') : 'in the queue'; });
   showOrbit(c); showTurn();
@@ -4072,6 +4124,7 @@ $('#charBody').onclick = async e => {
   else if(act==='get3d'){ get3d(); return; }
   else if(act==='paint3d'){ paint3d(c); return; }
   else if(act==='paintturn'){ paint3d(c, true); return; }
+  else if(act==='exportset'){ exportSet(c); return; }
   else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
   else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
   else if(t.dataset.seg==='eng3d'){ S.m3d = t.dataset.v; dl3d = null; if(watch3d.t){ clearInterval(watch3d.t); watch3d.t = 0; } }
