@@ -467,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.43'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.44'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -2596,7 +2596,7 @@ function openGet(kind){
   if(!info || S.test){ toast('Connect to your render computer first', true); return; }
   getKind = kind || getKind; drawGetKind(); $('#syncBox').hidden = S.servers.length < 2; closeSheets(); openSheet('#getSheet'); refreshJobs();
 }
-function drawGetKind(){ $('#getKind').innerHTML = [['checkpoints','Model'],['loras','LoRA']].map(([v,t]) => `<button data-v="${v}" class="${getKind===v?'on':''}">${t}</button>`).join(''); }
+function drawGetKind(){ $('#getKind').innerHTML = [['checkpoints','Model'],['loras','LoRA'],['diffusion_models','Video model']].map(([v,t]) => `<button data-v="${v}" class="${getKind===v?'on':''}">${t}</button>`).join(''); }
 $('#getKind').onclick = e => { const b = e.target.closest('[data-v]'); if(b){ getKind = b.dataset.v; drawGetKind(); } };
 $('#getBtn').onclick = () => openGet();
 $('#jobsRefresh').onclick = () => { refreshJobs(); refreshLists(); };
@@ -3692,6 +3692,7 @@ function kitTurn(){
   k.base = pick(oi, 'UNETLoader', 'unet_name', /dasiwahybridv2/i) || combo(oi.UNETLoader, 'unet_name').find(n => /minimax.?h3/i.test(baseName(n)) && !/turbo|fl2v/i.test(n)) || k.unet;
   k.cn = pick(oi, 'ModelPatchLoader', 'name', /minimax_h3_fun_controlnet/i);
   k.ok3d = !!(k.cn && oi.MiniMaxH3FunControlNetApply && oi.LoadVideo && oi.GetVideoComponents);
+  k.videos = combo(oi.UNETLoader, 'unet_name').filter(n => /minimax|mmh3|dasiwa|(^|[_\W])h3([_\W]|$)/i.test(baseName(n)) && !/fl2v/i.test(baseName(n))); // MiniMax H3 models that take a reference picture
   k.styles = combo(oi.LoraLoaderModelOnly, 'lora_name').filter(n => /minimax|mmh3|(^|[_\W])h3([_\W]|$)/i.test(baseName(n)) && !/turbo|fl2v/i.test(baseName(n))); // style LoRAs made for MiniMax H3
   const lacks = [!k.unet && 'a MiniMax H3 model (diffusion_models)', !k.clip && 'the MiniMax H3 text encoder', !k.vae && 'the MiniMax H3 video VAE'].filter(Boolean);
   if(lacks.length) k.why = pcName(p.url) + ' is missing ' + lacks.join(', ');
@@ -3712,8 +3713,9 @@ function turnVideoGraph(k, img, c, pinned, control){
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
   const pin = !pinned ? li : k.oi.ResizeAndPadImage ? add('ResizeAndPadImage', {image:[li,0], target_width:TV_W, target_height:TV_H, padding_color:'white', interpolation:'lanczos'}) : li; // fit, not crop, so head and feet stay in
-  let model = [add('UNETLoader', {unet_name:control ? k.base : k.unet, weight_dtype:'default'}), 0];
-  if(k.lora && !control) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
+  const un = c.tvModel && (k.videos || []).includes(c.tvModel) ? c.tvModel : control ? k.base : k.unet, fast = /turbo/i.test(baseName(un)); // the picked video model, else the usual one
+  let model = [add('UNETLoader', {unet_name:un, weight_dtype:'default'}), 0];
+  if(k.lora && fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   const sl = c.tvLora && (k.styles || []).includes(c.tvLora) ? c.tvLora : ''; // the character's style LoRA, before the ControlNet as in the AFKJ two-pass
   if(sl) model = [add('LoraLoaderModelOnly', {model, lora_name:sl, strength_model:Math.max(0, Math.min(2, parseFloat(c.tvLoraW) || 1))}), 0];
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
@@ -3725,7 +3727,7 @@ function turnVideoGraph(k, img, c, pinned, control){
   let cond = [rv,0];
   if(pinned) for(const f of [0, -1]) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:[rv,1], vae:[vae,0], image:[pin,0], frame_idx:f}), 0];
   const gd = add('BasicGuider', {model, conditioning:cond});
-  const sc = add('BasicScheduler', {model, scheduler:'simple', steps:control ? 20 : k.steps, denoise:1});
+  const sc = add('BasicScheduler', {model, scheduler:'simple', steps:fast ? 4 : 20, denoise:1});
   const sa = add('KSamplerSelect', {sampler_name:'res_multistep'}), no = add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)});
   const out = add('SamplerCustomAdvanced', {noise:[no,0], guider:[gd,0], sampler:[sa,0], sigmas:[sc,0], latent_image:[rv,1]});
   const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
@@ -3890,6 +3892,8 @@ function boxTurn(c){
       <div class="btnrow"><button class="btn" data-ch="tvadd">＋ Add as ${esc(ANGLES[TV.ang])}</button></div>`;
   }
   if(k.why) return h + `<p class="note">${esc(k.why)}.</p>`;
+  if(k.videos.length > 1) h += `<div class="row" style="margin-top:8px"><label>Video model</label><div class="grow"><select data-cf="tvModel"><option value="">Automatic (${esc(baseName(k.unet).replace(/\.safetensors$/, ''))}; full model from the 3D model)</option>${k.videos.map(n => `<option value="${esc(n)}"${n===c.tvModel ? ' selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/, ''))}</option>`).join('')}</select></div></div>
+    <p class="note" style="margin:-2px 0 0 92px">Turbo models run 4 steps, the others 20 (about three times as long).</p>`;
   if(k.styles.length) h += `<div class="row" style="margin-top:8px"><label>Style LoRA</label><div class="grow"><select data-cf="tvLora"><option value="">None</option>${k.styles.map(n => `<option value="${esc(n)}"${n===c.tvLora ? ' selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/, ''))}</option>`).join('')}</select></div></div>
     <div class="row"><label>Strength</label><input type="number" data-cf="tvLoraW" min="0" max="2" step="0.1" value="${esc(String(c.tvLoraW || 1))}" style="width:80px"></div>
     <div class="row"><label>Activation</label><div class="grow"><input type="text" data-cf="tvLoraWords" placeholder="e.g. AFKJ Style" value="${esc(c.tvLoraWords || '')}"></div></div>

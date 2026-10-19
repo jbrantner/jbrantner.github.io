@@ -45,7 +45,7 @@ function boxGlb(){
 }
 const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler']), scheduler:C(['normal','simple'])}}},
   LoraLoader:{input:{required:{lora_name:C([])}}}, LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors','AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors','AFKJ Style Illustrious Claude.safetensors'])}}},
-  UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors','DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors','minimax_h3_fl2va_pruned_int8_convrot.safetensors']), weight_dtype:C(['default'])}}},
+  UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors','DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors','minimax_h3_fl2va_pruned_int8_convrot.safetensors','DasiwaMinimaxH3_anime_v3.safetensors']), weight_dtype:C(['default'])}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['minimax'])}}}, VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
   ModelPatchLoader:{input:{required:{name:C(['minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors'])}}},
   MiniMaxH3ReferenceToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, MiniMaxH3FunControlNetApply:{input:{required:{}}}, LoadVideo:{input:{required:{}}}, GetVideoComponents:{input:{required:{}}},
@@ -112,6 +112,14 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     ok(a.h > 0.8 && a.h < 0.9 && b.h > 0.8, 'the whole body is in frame, 86% of the height');
     ok(a.w > 2.5 * b.w && Math.abs(a.w - c.w) < 0.05, 'wide from the front, narrow a quarter of the way round, wide again from the back');
   }
+  // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
+  await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
+  ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');
+  const pickG = (name, ctl) => page.evaluate(([n, ctl]) => { const c = S.chars[0]; c.tvModel = n; const g = Object.values(turnVideoGraph(kitTurn(), 'x.png', c, false, ctl).g);
+    return {un:g.find(x => x.class_type==='UNETLoader').inputs.unet_name, steps:g.find(x => x.class_type==='BasicScheduler').inputs.steps, loras:g.filter(x => x.class_type==='LoraLoaderModelOnly').map(x => x.inputs.lora_name)}; }, [name, ctl]);
+  const a1 = await pickG('DasiwaMinimaxH3_anime_v3.safetensors', 'spin.avi'), a2 = await pickG('DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', null), a3 = await pickG('', null);
+  ok(a1.un==='DasiwaMinimaxH3_anime_v3.safetensors' && a1.steps===20 && !a1.loras.some(l => /turbo/.test(l)), 'a picked full model runs 20 steps: ' + JSON.stringify(a1));
+  ok(a2.steps===4 && a2.loras[0]==='minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors' && a3.un===a2.un && a3.steps===4, 'a Turbo model (picked, or the automatic one) runs 4 steps with the Turbo LoRA');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
