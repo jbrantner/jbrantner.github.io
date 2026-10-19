@@ -159,6 +159,20 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok((await sentPrompt()).includes('2girls, multiple girls, princess zelda, the legend of zelda, purah'), 'two named girls are counted: '+await sentPrompt());
   await page.fill('#prompt', 'zelda and purah and link'); await page.waitForTimeout(400);
   ok((await sentPrompt()).includes('2girls, multiple girls, 1boy, '), 'adding Link adds 1boy: '+await sentPrompt());
+  // adult words: the style's rating follows them (general -> nsfw, nsfw out of the style's negative), and can be kept as it was
+  const texts = async () => { await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const g = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets()); return [textOf(g,'Prompt'), textOf(g,'Avoid')]; };
+  const items = s => s.split(',').map(x => x.trim());
+  await page.fill('#prompt', 'a naked woman relaxing in a hot spring'); await page.waitForTimeout(400);
+  ok((await page.textContent('#ideas')).includes('General → nsfw; nsfw taken out of the style\'s negative'), 'adult words: the rating row says what changes');
+  let [tp, tn] = await texts();
+  ok(items(tp).includes('nsfw') && !items(tp).includes('general') && items(tp).includes('nude') && !items(tn).includes('nsfw'), 'adult words: nsfw rating sent, nsfw out of the negative: ' + tp + ' / ' + tn);
+  await page.click('[data-ideas=rate]'); [tp, tn] = await texts();
+  ok(items(tp).includes('general') && items(tn).includes('nsfw'), 'rating kept as the style has it when switched off');
+  await page.click('[data-ideas=rate]');
+  await page.fill('#prompt', 'a woman in lingerie'); await page.waitForTimeout(400); [tp, tn] = await texts();
+  ok(items(tp).includes('sensitive') && items(tn).includes('nsfw'), 'lingerie is sensitive, nsfw stays in the negative');
+  await page.fill('#prompt', 'a girl reading in a library'); await page.waitForTimeout(400); [tp, tn] = await texts();
+  ok(items(tp).includes('general') && items(tn).includes('nsfw') && !(await page.textContent('#ideas')).includes('Rating'), 'an ordinary prompt keeps general and shows no rating row');
   await page.selectOption('[data-k=ckpt]', 'sdxl.safetensors'); await page.type('#prompt', 'smil'); await page.waitForTimeout(150);
   ok(await page.isHidden('#ac'), 'no tag suggestions for SDXL');
   await page.fill('#prompt', 'lantern hunter');

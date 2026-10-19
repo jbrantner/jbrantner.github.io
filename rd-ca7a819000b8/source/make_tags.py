@@ -3,7 +3,8 @@ danbooru.csv is the a1111 tagcomplete list (tag,category,count,"aliases"):
 https://raw.githubusercontent.com/DominikDoom/a1111-sd-webui-tagcomplete/main/tags/danbooru.csv
 Usage: python3 make_tags.py danbooru.csv   -> writes ../tags.txt
 One tag per line: tag TAB category TAB count TAB aliases, then two columns only where they hold something:
-flags (x = sexual or gore: the prompt reader only uses it when its words are typed out) TAB series (a character's
+flags (how adult the tag is: s suggestive, q nudity, e sexual, g gore; the prompt reader only uses these when adult
+words are typed, and picks the rating tag from them) TAB series (a character's
 copyright tag, from series.txt, made by make_series.py).
 Categories: 0 general, 1 artist, 3 series, 4 character, 5 meta, 9 trainer tags that are typed exactly as written."""
 import sys, os, csv, re
@@ -46,7 +47,7 @@ pelvic_curtain_lift pelvic_curtain_aside sarong_lift hakama_lift apron_lift swea
 shorts_aside thighhighs_pull pajamas_pull wind_lift between_thighs another's_thigh another's_thighs licking_armpit licking_foot licking_stomach
 toe_sucking egg_laying mounting held_down bed_invitation smash_invitation saliva_swap virgin_killer_sweater virgin_destroyer_sweater
 backwards_virgin_killer_sweater virgin_killer_outfit open-chest_sweater tanline_peek side-tie_peek assisted_exposure wet_spot on_toilet toilet_use
-milking_machine hand_milking golden_shower change_in_common_sense exposed_brain gimp_mask gimp_suit'''.split()
+milking_machine hand_milking golden_shower change_in_common_sense exposed_brain gimp_mask gimp_suit in_heat grinding gaping flashing 69 sitting_on_face'''.split()
 # tags that are sexual only as the whole tag
 EXACT = set('facial folded tally censored'.split())
 # ordinary tags that hold one of the words above
@@ -54,14 +55,55 @@ SAFE = set('''breasts large_breasts medium_breasts small_breasts flat_chest brea
 cheek_bulge toe_cleavage strap_between_breasts tied_up_(nonsexual) sports_bra bra_strap gag_reflex x-ray cross-section kneepits body_writing
 covered_mouth see-through_sleeves see-through_jacket see-through_cape see-through_shawl see-through_veil see-through_umbrella
 see-through_curtains see-through_gloves severed_hair butt cigarette_butt'''.split())
+# sexual tags whose words also mean everyday things (a bottomless pit, a running gag, a girl presenting a gift, a girl on top of
+# a hill, boxers in a ring, a strap on her bag, the g string of a violin, a folded map) get a w after their level: the reader
+# takes them from a sentence only when the prompt is plainly adult already. MILD: words of WORDS with an innocent sense;
+# MILDSEQ: runs of SEQS made of innocent words; EXACT tags are all w.
+MILD = set('''bottomless bulge bulges gag g-string strap-on strapon oral pasties boxers briefs diaper womb domination knotting
+spanking humiliation'''.split())
+MILDSEQ = set('''presenting straddling girl_on_top boy_on_top missionary slave heavy_breathing steaming_body held_down full_nelson
+leg_lock mounting egg_laying on_toilet between_thighs wet_spot shared_bathing mixed-sex_bathing same-sex_bathing wind_lift
+public_indecency pet_play human_dog prostitution foreign_object in_heat grinding gaping flashing 69 sitting_on_face'''.split())
+GORE_TAGS = set('holding_detached_head'.split())  # "holding her head" is not this
+# other names Danbooru lacks that people type
+MORE_ALIASES = {'honkai:_star_rail': ['star_rail', 'hsr'], 'sword_art_online': ['sao'], 'jujutsu_kaisen': ['jjk'], 'chainsaw_man': ['csm'],  # short names people type for a series
+                'cum_in_pussy': ['creampie'], 'sex': ['intercourse', 'sexual_intercourse'], 'breasts_out': ['bare_breasts', 'exposed_breasts'],  # and everyday names of adult tags
+                'partially_undressed': ['partially_nude', 'partially_naked', 'semi-nude', 'seminude', 'half_naked', 'half-naked', 'half_nude', 'half_undressed']}
+# how adult a flagged tag is, for the rating tag: suggestive (s), nudity (q), sexual (e, everything else flagged) or gore (g)
+GORE = set('ryona guro vore severed corpse corpses amputee suicide torture cannibalism intestines decapitation disembowelment dismemberment hanged necrophilia'.split())
+NUDE = set('nipples nipple areola areolae areolas nude naked nudity bottomless topless pubic'.split())
+NUDE_SEQS = set('''breast_out breasts_out one_breast_out nipple_slip wardrobe_malfunction convenient_censoring mosaic_censoring bar_censor heart_censor
+steam_censor transparent_censoring no_panties no_bra partially_undressed undressing assisted_exposure tanline_peek censored breast_slip
+clothes_pull clothing_aside panty_pull bikini_pull bikini_bottom_pull bikini_top_pull bikini_top_lift bikini_top_aside bikini_bottom_aside
+swimsuit_aside swimsuit_lift one-piece_swimsuit_pull leotard_aside leotard_pull bra_lift shirt_pull dress_pull top_pull'''.split())
+TOUCH = set('stimulation tweak tweaking sucking licking pinch pinching rubbing grab grabbing groping play'.split())  # being touched there is sexual
+SUGG = set('''panties panty underwear lingerie thong g-string bra bras pasties cleavage underboob sideboob downblouse upskirt pantyshot panchira
+breast breasts ass butt buttocks underbutt bulge bulges groin crotch cameltoe briefs boxers jockstrap fundoshi hickey lewd'''.split())
+SUGG_SEQS = set('''see-through micro_bikini slingshot_swimsuit string_bikini revealing_clothes skindentation thigh_gap skirt_lift dress_lift
+shirt_lift clothes_lift lifted_by_self wind_lift covering_crotch steaming_body heavy_breathing bed_invitation virgin_killer_sweater
+virgin_destroyer_sweater backwards_virgin_killer_sweater open-chest_sweater side-tie_peek leotard_peek between_thighs another's_thigh
+another's_thighs shared_bathing mixed-sex_bathing same-sex_bathing butt_crack wet_spot'''.split())
+RANK = {'': 0, 's': 1, 'q': 2, 'e': 3, 'g': 4}
+# tags the words above rank too high: a shirtless man is only suggestive (Danbooru rates male toplessness general or sensitive)
+LEVEL = {'topless_male': 's', 'boxer_briefs': 's'}  # (and boxer briefs are plainly underwear, though boxers and briefs alone may be boxing or papers)
 def nsfw(tag):
+    """'' for an ordinary tag, else how adult it is (s, q, e or g), plus w when its words have an everyday meaning too"""
     t = tag.lower()
-    if t in SAFE: return False
-    if t in EXACT: return True
+    if t in SAFE: return ''
+    if t in LEVEL: return LEVEL[t]
+    if t in GORE_TAGS: return 'g'
+    lv, hard, soft = '', False, False
+    def up(x):
+        nonlocal lv
+        if RANK[x] > RANK[lv]: lv = x
+    if t in EXACT: up('q' if t == 'censored' else 'e')
     for w in re.split(r'[_()]+', t):
         if w.endswith("'s"): w = w[:-2]
-        if w in WORDS: return True
-    return any(re.search(r'(^|_)' + re.escape(s) + r'($|_)', t) for s in SEQS)
+        if w in WORDS: up('g' if w in GORE else 'q' if w in NUDE else 's' if w in SUGG else 'e'); hard, soft = hard or w not in MILD, True
+    for q in SEQS:
+        if re.search(r'(^|_)' + re.escape(q) + r'($|_)', t): up('q' if q in NUDE_SEQS else 's' if q in SUGG_SEQS else 'e'); hard, soft = hard or q not in MILDSEQ, True
+    if lv in ('s', 'q') and any(w in TOUCH for w in re.split(r'[_()]+', t)): lv = 'e'
+    return lv + ('w' if lv and (t in EXACT or (soft and not hard)) else '')
 
 here = os.path.dirname(os.path.abspath(__file__))
 series = {}
@@ -71,12 +113,14 @@ if os.path.exists(os.path.join(here, 'series.txt')):
         if s: series[t] = s
 rows, seen = [], set()
 for i, t in enumerate(EXTRA): rows.append([t, '9', str(10**6 - i), '']); seen.add(t)
-with open(sys.argv[1], encoding='utf-8', newline='') as f:
-    for r in csv.reader(f):
+with open(sys.argv[1], encoding='utf-8', newline='') as f: csvrows = list(csv.reader(f))
+titles = {r[0] for r in csvrows if len(r) > 2 and r[1] == '3'}  # a character named like its series (violet_evergarden, violet_evergarden_(series)) is from that series
+for r in csvrows:
         if len(r) < 3 or not r[2].isdigit() or int(r[2]) < MIN or r[0] in seen: continue
-        al = [a for a in (r[3].split(',') if len(r) > 3 else []) if a and not a.startswith('/')]  # aliases let plain words like "man" or "exercise" find their tag
+        al = [a for a in (r[3].split(',') if len(r) > 3 else []) if a and not a.startswith('/')] + MORE_ALIASES.get(r[0], [])  # aliases let plain words like "man" or "exercise" find their tag
         row = [r[0], r[1], r[2], ','.join(al).replace('\t', ' ')]
-        flag, ser = 'x' if r[1] in ('0', '5') and nsfw(r[0]) else '', series.get(r[0], '') if r[1] == '4' else ''
+        own = re.sub(r'_\(character\)$', '', r[0]) + '_(series)'  # (black_jack_(character) too; lisa_(ponyo) is no lisa_(series))
+        flag, ser = nsfw(r[0]) if r[1] in ('0', '5') else '', (series.get(r[0], '') or (own if own in titles else '')) if r[1] == '4' else ''
         if flag or ser: row.append(flag)
         if ser: row.append(ser)
         rows.append(row)
@@ -84,4 +128,4 @@ out = os.path.join(here, '..', 'tags.txt')
 with open(out, 'w', encoding='utf-8', newline='\n') as f:
     f.write('\n'.join('\t'.join(r) for r in rows) + '\n')
 print(len(rows), 'tags ->', os.path.normpath(out), os.path.getsize(out), 'bytes;',
-      sum(len(r) > 4 and r[4] == 'x' for r in rows), 'flagged,', sum(len(r) > 5 for r in rows), 'with a series')
+      ', '.join(f'{sum(len(r) > 4 and r[4][:1] == k for r in rows)} {k}' for k in 'sqeg'), 'flagged,', sum(len(r) > 4 and r[4].endswith('w') for r in rows), 'only in adult prompts,', sum(len(r) > 5 for r in rows), 'with a series')
