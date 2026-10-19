@@ -331,7 +331,7 @@ check('she hit the ball with a bat', {has:['ball'], not:['milestone_celebration'
 check('a girl with a fox on her shoulder', {has:['fox', 'on_shoulder'], not:['fox_girl']});
 check('bare trees in winter', {has:['bare_tree', 'winter'], not:['in_tree']});
 check('a girl sitting in the shade of a tree', {has:['sitting', 'tree_shade'], not:['in_tree', 'sitting_in_tree']});
-check('a fluffy white cloud in a blue sky', {has:['cloud', 'blue_sky'], not:['white_sky']});
+check('a fluffy white cloud in a blue sky', {has:['white_cloud', 'blue_sky'], not:['white_sky']});
 check('a girl holding a stack of books', {has:['holding_book']});
 check('a ring on her finger', {has:['ring'], not:['middle_finger']});
 check('a dancer in a dynamic pose', {has:['dynamic_pose'], not:['a-pose']});
@@ -424,7 +424,7 @@ check('a nude woman covered in baby oil', {has:['nude'], adult:true}); check('a 
 check('a sperm whale breaching', {has:['whale']}); check('pussy willow branches in a vase', {has:['willow', 'vase']});
 check('a field of rape blossoms', {has:['yellow_flower']}); check('a bowl of bukkake udon', {has:['udon']}); check('she graduated cum laude', {});
 check('blue tits at a bird feeder', {has:['tit_(bird)']}); check('a swallow perched on a wire', {has:['swallow_(bird)']});
-check('a nude sweater and a beige coat', {has:['coat'], notSend:['nude']}); check('nude nail polish', {}); check('a girl in nude heels', {});
+check('a nude sweater and a beige coat', {has:['beige_coat'], notSend:['nude']}); check('nude nail polish', {}); check('a girl in nude heels', {});
 check('a naked tree in winter', {has:['winter']}); check('a naked light bulb hanging from the ceiling', {});
 check('stripping old wallpaper', {}); check('fingering a chord on her guitar', {has:['guitar']}); check('a cat licking its foot', {has:['cat']});
 check('flashing lights of a police car', {not:['epilepsy_warning']}); check('turning the page of a book', {not:['looking_back']});
@@ -450,8 +450,9 @@ check('levi swinging a sword', {send:'1boy, solo, levi, swinging, sword', opt:OW
 check('levi and laura sitting on a bench', {has:['1girl', '1boy', 'levi', 'laura', 'on_bench'], not:['levi_(shingeki_no_kyojin)', 'solo'], opt:OWN});
 check("laura holding levi's hand", {has:['1girl', '1boy', 'levi', 'laura', 'holding_hands'], opt:OWN});
 check('levi ackerman', {has:['levi_(shingeki_no_kyojin)'], not:['mikasa_ackerman'], opt:OWN}); check('levi_oc standing in the rain', {has:['levi_oc', 'standing', 'rain'], opt:OWN});
+check('a woman in black lingerie', {has:['black_lingerie'], adult:true}); check('a girl in a blue kimono with a red obi', {has:['blue_kimono', 'red_obi']}); // a colour with no tag of its own goes with its thing
 check('a girl and her little brother walking to school', {has:['1girl', '1boy', 'brother_and_sister'], not:['brothers']}); check('a boy and his brother', {has:['2boys', 'brothers']});
-check('a cock crowing at dawn', {has:['rooster', 'dawn']});
+check('a cock crowing at dawn', {has:['rooster', 'dawn']}); check('a bird with a red breast', {has:['bird'], not:['breasts']}); check('a nurse in white holding a clipboard', {has:['holding_clipboard', 'white']});
 check('a nude girl, 12', {}); check('1girl, nude, 9', {}); check('2girls, 3 swords', {has:['2girls']}); // a piece that is only an age
 check('nude, a woman sitting on his face', {has:['1girl', '1boy', 'sitting_on_face'], adult:true}); check('a cat sitting on his face', {not:['sitting_on_face']});
 check('levi topless', {has:['levi', 'topless_male'], not:['topless'], adult:true, opt:OWN}); check('ayla giving a blowjob', {has:['1girl', '1boy', 'hetero', 'ayla', 'fellatio'], adult:true, opt:{chars:[{name:'Ayla', tags:'1girl'}]}}); // their sex counts
