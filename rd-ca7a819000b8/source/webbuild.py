@@ -1,7 +1,7 @@
 """Build the home-screen (GitHub Pages) copy of Render Deck from comfy-app.html.
 Usage: python3 webbuild.py OUT_DIR   -> writes OUT_DIR/index.html, manifest.webmanifest, sw.js and icons."""
 import sys, os, json
-from PIL import Image, ImageDraw
+from PIL import Image
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'comfy-app.html'), encoding='utf-8').read()
 out = sys.argv[1]; os.makedirs(out, exist_ok=True)
 head = '''<!doctype html>
@@ -41,10 +41,7 @@ self.addEventListener('fetch', e => {
   }));
 });
 ''')
-# icon: a 32x32 pixel-art render button with a spark, on the app's indigo, scaled up crisp
-im = Image.new('RGB', (32, 32), '#2a1f78'); d = ImageDraw.Draw(im)
-d.rounded_rectangle([3, 9, 28, 24], 4, fill='#ff5f8f', outline='#120c33'); d.rectangle([5, 11, 26, 13], fill='#ffb347')
-d.polygon([(13, 13), (13, 21), (20, 17)], fill='#fff7fd')
-d.polygon([(25, 1), (26, 4), (29, 5), (26, 6), (25, 9), (24, 6), (21, 5), (24, 4)], fill='#1fd8f0')
-for s in (180, 192, 512): im.resize((s, s), Image.NEAREST).save(os.path.join(out, f'icon-{s}.png'))
+# icon: a worn cassette tape (source/icon.png, 1024px), inspired by the Arc Raiders tape; resized for each size
+im = Image.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.png')).convert('RGB')
+for s in (180, 192, 512): im.resize((s, s), Image.LANCZOS).save(os.path.join(out, f'icon-{s}.png'))
 print('built', out)
