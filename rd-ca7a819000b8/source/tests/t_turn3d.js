@@ -43,6 +43,10 @@ function boxGlb(){
   const ch = (len, t) => { const b = Buffer.alloc(8); b.writeUInt32LE(len, 0); b.writeUInt32LE(t, 4); return b; };
   return Buffer.concat([hd, ch(js.length, 0x4E4F534A), js, ch(bin.length, 0x004E4942), bin]);
 }
+function readGlbTexture(buf){ const jl = buf.readUInt32LE(12), json = JSON.parse(buf.slice(20, 20 + jl).toString()), bin = buf.slice(20 + jl + 8);
+  const im = json.images[json.textures[json.materials[0].pbrMetallicRoughness.baseColorTexture.index].source], bv = json.bufferViews[im.bufferView];
+  return unpng(bin.slice(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength)); }
+const CLIP = fs.readFileSync(path.join(__dirname, 'fixtures', 'turn3d.webm')); // red, then green, blue, yellow: which frames each face is painted from
 const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler']), scheduler:C(['normal','simple'])}}},
   LoraLoader:{input:{required:{lora_name:C([])}}}, LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors','AFK_MMH3_minimaxh3_3350370_epoch_10.safetensors','AFKJ Style Illustrious Claude.safetensors'])}}},
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors','DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors','minimax_h3_fl2va_pruned_int8_convrot.safetensors','DasiwaMinimaxH3_anime_v3.safetensors']), weight_dtype:C(['default'])}}},
@@ -65,7 +69,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     const u = new URL(r.request().url()), fn = u.searchParams.get('filename') || '';
     if(u.pathname==='/object_info') return r.fulfill({ json:OI() });
     if(u.pathname==='/view' && fn.endsWith('.mp4')){ const n = +/_(\d+)_\.mp4$/.exec(fn)[1]; // two clips on disk; the second was written just now
-      return n <= 2 ? r.fulfill({ contentType:'video/mp4', body:'', headers:Object.assign({'Last-Modified':new Date(n===2 ? Date.now() : 0).toUTCString()}, cors) }) : r.fulfill({ status:404, body:'', headers:cors }); }
+      return n <= 2 ? r.fulfill({ contentType:'video/webm', body:r.request().method()==='HEAD' ? '' : CLIP, headers:Object.assign({'Last-Modified':new Date(n===2 ? Date.now() : 0).toUTCString()}, cors) }) : r.fulfill({ status:404, body:'', headers:cors }); }
     if(u.pathname==='/view'){ if(fn.endsWith('.glb')) return r.fulfill({ contentType:'model/gltf-binary', body:GLBF, headers:cors }); return r.fulfill({ contentType:'image/png', body:png(4, 4, () => [200,100,50]), headers:cors }); }
     if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
     if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{version:2, jobs:[]} });
@@ -118,6 +122,16 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.waitForFunction(() => S.chars[0].turn && S.chars[0].turn.url, null, {timeout:20000}).catch(() => {});
   const tu = await page.evaluate(() => S.chars[0].turn);
   ok(/Box_00002_\.mp4/.test(tu.url || '') && /subfolder=RenderDeck%2Fcharacters%2Fturn/.test(tu.url) && tu.model && !tu.making, 'a clip saved before a ComfyUI restart is still found: ' + JSON.stringify(tu).slice(0, 200));
+  // painting the model from that clip: six frames 60° apart, each with the spin's own camera
+  ups.length = 0; await page.evaluate(() => { for(const k in M3D) delete M3D[k]; drawChars(); });
+  await page.click('#charBody [data-ch="paintturn"]');
+  await page.waitForFunction(() => S.chars[0].model3d.paintedFrom==='turn', null, {timeout:30000}).catch(() => {});
+  const gb = ups.find(b => b.indexOf(Buffer.from('glTF')) >= 0);
+  if(gb){ const tx = readGlbTexture(gb.slice(gb.indexOf(Buffer.from('glTF')))), face = nm => tx.at(...cellUv(FACES[nm][3], 0.5, 0.5)), near = (c, w) => c.every((v, i) => Math.abs(v - w[i]) < 60);
+    console.log('   front', face('front'), 'right', face('right'), 'back', face('back'), 'left', face('left'));
+    ok(near(face('front'), [255,0,0]) && near(face('back'), [0,0,255]), 'the front is painted from the first frame, the back from half way');
+    ok(near(face('right'), [0,255,0]) && near(face('left'), [255,255,0]), 'their right side from a quarter of the way, their left from three quarters (the turn goes to their left)');
+  } else ok(false, 'nothing was painted from the turnaround: ' + await page.evaluate(() => JSON.stringify(M3D)));
   // a picked video model is used instead (from the 3D model too); a Turbo pick runs 4 steps with the Turbo LoRA
   await page.evaluate(() => { for(const k in MTV) delete MTV[k]; S.chars[0].turn = {}; drawChars(); });
   ok((await page.$$eval('#charBody select[data-cf="tvModel"] option', o => o.map(x => x.value))).join()===',DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors,DasiwaMinimaxH3_dasiwaHybridV2_int8.safetensors,DasiwaMinimaxH3_anime_v3.safetensors', 'the video model list has the MiniMax models that take a picture (not first/last-frame ones)');

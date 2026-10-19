@@ -467,7 +467,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-18.46'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-18.47'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3534,7 +3534,8 @@ async function bake3d(glbBuf, views, size, yaw = 0){
       const f = opts.depth ? gl.NEAREST : gl.LINEAR; gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, opts.mip ? gl.LINEAR_MIPMAP_LINEAR : f); if(opts.mip) gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
     // where the model sits in each picture: its outline is fitted to 1/1.1 of the frame, centred, as the cut-out was
-    const slots = Object.keys(views).slice(0, 4), fit = slots.map(s => { const M = viewMat(s); let x0 = 9, x1 = -9, y0 = 9, y1 = -9;
+    // (a view can also bring its own camera, as the turnaround frames do: mat maps the model straight to the frame, eye is the way to the camera)
+    const slots = Object.keys(views).slice(0, 6), fit = slots.map(s => { if(views[s].mat) return {M:views[s].mat, a:[0.5, 0.5], b:[0.5, 0.5]}; const M = viewMat(s); let x0 = 9, x1 = -9, y0 = 9, y1 = -9;
       for(let i = 0; i < nv; i++){ const x = pos[i*3], y = pos[i*3+1], z = pos[i*3+2], w = M[3]*x+M[7]*y+M[11]*z+M[15], X = (M[0]*x+M[4]*y+M[8]*z+M[12]) / w, Y = (M[1]*x+M[5]*y+M[9]*z+M[13]) / w;
         if(X < x0) x0 = X; if(X > x1) x1 = X; if(Y < y0) y0 = Y; if(Y > y1) y1 = Y; }
       const k = 1 / 1.1 / Math.max(x1 - x0, y1 - y0); return {M, a:[k, k], b:[0.5 - k * (x0 + x1) / 2, 0.5 - k * (y0 + y1) / 2]}; });
@@ -3546,17 +3547,23 @@ async function bake3d(glbBuf, views, size, yaw = 0){
       gl.uniformMatrix4fv(gl.getUniformLocation(depthP, 'M'), false, fit[i].M); gl.drawElements(gl.TRIANGLES, tri.length, gl.UNSIGNED_INT, 0);
       gl.deleteFramebuffer(fb); gl.deleteTexture(col); return d; });
     gl.disable(gl.DEPTH_TEST); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    const pics = slots.map(s => tex(views[s].img)), masks = slots.map(s => tex(views[s].mask)), baseT = tex(base || (() => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = '#888'; x.fillRect(0, 0, 1, 1); return c; })(), {mip:true});
+    const white = (() => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 1, 1); return c; })(); // no cut-out: the depth test alone says what's seen
+    const pics = slots.map(s => tex(views[s].img)), oneMask = slots.every(s => !views[s].mask), masks = oneMask ? [tex(white)] : slots.map(s => tex(views[s].mask || white)), baseT = tex(base || (() => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = '#888'; x.fillRect(0, 0, 1, 1); return c; })(), {mip:true});
     const N = slots.length, U = (p, n) => gl.getUniformLocation(p, n);
     const paintP = prog(`layout(location=0) in vec3 aPos; layout(location=1) in vec2 aUv; layout(location=2) in vec3 aN; out vec3 P; out vec3 Nn; out vec2 T;
       void main(){ P = aPos; Nn = aN; T = aUv; gl_Position = vec4(aUv * 2.0 - 1.0, 0.0, 1.0); }`,
-      `in vec3 P; in vec3 Nn; in vec2 T; out vec4 o; uniform mat4 M[4]; uniform vec2 A[4]; uniform vec2 B[4]; uniform vec3 E[4]; uniform sampler2D pic[4]; uniform sampler2D msk[4]; uniform sampler2D dep[4]; uniform sampler2D base; uniform int n; uniform float K[4];
+      `in vec3 P; in vec3 Nn; in vec2 T; out vec4 o; uniform mat4 M[6]; uniform vec2 A[6]; uniform vec2 B[6]; uniform vec3 E[6]; uniform sampler2D pic[6]; uniform sampler2D msk[6]; uniform sampler2D dep[6]; uniform sampler2D base; uniform int n; uniform float K[6]; uniform float W[6];
       vec4 look(int i, sampler2D pc, sampler2D mk, sampler2D dp){
         vec4 c = M[i] * vec4(P, 1.0); vec3 nd = c.xyz / c.w; vec2 im = nd.xy * A[i] + B[i];
         if(any(lessThan(im, vec2(0.0))) || any(greaterThan(im, vec2(1.0)))) return vec4(0.0);
         float d = texture(dp, nd.xy * 0.5 + 0.5).r, z = nd.z * 0.5 + 0.5;
         if(z > d + 0.0015) return vec4(0.0); // something else is in front of this spot in that picture
         vec2 st = vec2(im.x, 1.0 - im.y); float m = smoothstep(0.5, 0.9, texture(mk, st).r);
+        if(W[i] > 0.0){ /* a frame on white with no cut-out: skip the white, and a couple of pixels in from it, so the edges don't paint the model white */
+          vec2 px = 2.5 / vec2(textureSize(pc, 0)); float wh = 0.0;
+          for(int k = 0; k < 5; k++){ vec2 o = k==0 ? vec2(0.0) : k==1 ? vec2(px.x, 0.0) : k==2 ? vec2(-px.x, 0.0) : k==3 ? vec2(0.0, px.y) : vec2(0.0, -px.y);
+            vec3 q = texture(pc, st + o).rgb; wh = max(wh, smoothstep(0.88, 0.96, min(q.r, min(q.g, q.b)))); }
+          m *= 1.0 - wh; }
         float f = abs(dot(normalize(Nn), normalize(E[i] - P))); /* either way round: some meshes come inside out, and the depth test hides the far side */
         float w = m * max(f, 0.001 * step(0.0001, f));
         return vec4(texture(pc, st).rgb, w * K[i]); }
@@ -3567,18 +3574,20 @@ async function bake3d(glbBuf, views, size, yaw = 0){
       void main(){
         if(n > 0) add(look(0, pic[0], msk[0], dep[0])); if(n > 1) add(look(1, pic[1], msk[1], dep[1]));
         if(n > 2) add(look(2, pic[2], msk[2], dep[2])); if(n > 3) add(look(3, pic[3], msk[3], dep[3]));
+        if(n > 4) add(look(4, pic[4], msk[4], dep[4])); if(n > 5) add(look(5, pic[5], msk[5], dep[5]));
         if(top < 0.0005){ o = vec4(0.0); return; } /* no picture sees it: filled from around it below */
         o = vec4(s.rgb / s.a, 1.0); }`);
     // islands of the texture map get painted; a few passes then spread their edges outwards so seams don't show the old colours
     const mk = () => { const t = tex(null, {w:size}), fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); return {t, fb}; };
     let A = mk(), Bt = mk();
     gl.bindFramebuffer(gl.FRAMEBUFFER, A.fb); gl.viewport(0, 0, size, size); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.useProgram(paintP);
-    for(let i = 0; i < N; i++){ const e = P3D_EYE[slots[i]].map(x => x * P3D_DIST);
-      gl.uniformMatrix4fv(U(paintP, `M[${i}]`), false, fit[i].M); gl.uniform2fv(U(paintP, `A[${i}]`), fit[i].a); gl.uniform2fv(U(paintP, `B[${i}]`), fit[i].b); gl.uniform3fv(U(paintP, `E[${i}]`), e); gl.uniform1f(U(paintP, `K[${i}]`), /left|right/.test(slots[i]) ? 0.8 : 1); // front and back pictures are the ones to trust most
-      [[pics, 'pic'], [masks, 'msk'], [depths, 'dep']].forEach(([arr, nm], j) => { const unit = i * 3 + j; gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, arr[i]); gl.uniform1i(U(paintP, `${nm}[${i}]`), unit); }); }
-    for(let i = N; i < 4; i++) gl.uniform1f(U(paintP, `K[${i}]`), 0);
-    for(let i = N; i < 4; i++) ['pic','msk','dep'].forEach((nm, j) => gl.uniform1i(U(paintP, `${nm}[${i}]`), j)); // unused slots point at something valid
-    gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, baseT); gl.uniform1i(U(paintP, 'base'), 12); gl.uniform1i(U(paintP, 'n'), N);
+    // texture units: the pictures, then the depth maps, then the cut-outs (one shared white one when there are none), then the old texture (at most 14 of a phone's 16)
+    const unitOf = {pic:i => i, dep:i => N + i, msk:i => 2 * N + (oneMask ? 0 : i)}, baseU = 2 * N + masks.length;
+    for(let i = 0; i < N; i++){ const v = views[slots[i]], e = v.eye ? v.eye.map(x => x * 1e4) : P3D_EYE[slots[i]].map(x => x * P3D_DIST);
+      gl.uniformMatrix4fv(U(paintP, `M[${i}]`), false, fit[i].M); gl.uniform2fv(U(paintP, `A[${i}]`), fit[i].a); gl.uniform2fv(U(paintP, `B[${i}]`), fit[i].b); gl.uniform3fv(U(paintP, `E[${i}]`), e); gl.uniform1f(U(paintP, `K[${i}]`), v.k || (/left|right/.test(slots[i]) ? 0.8 : 1)); gl.uniform1f(U(paintP, `W[${i}]`), v.onWhite ? 1 : 0); // front and back pictures are the ones to trust most
+      [[pics[i], 'pic'], [masks[oneMask ? 0 : i], 'msk'], [depths[i], 'dep']].forEach(([t, nm]) => { const unit = unitOf[nm](i); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(U(paintP, `${nm}[${i}]`), unit); }); }
+    for(let i = N; i < 6; i++){ gl.uniform1f(U(paintP, `K[${i}]`), 0); gl.uniform1f(U(paintP, `W[${i}]`), 0); ['pic','msk','dep'].forEach(nm => gl.uniform1i(U(paintP, `${nm}[${i}]`), unitOf[nm](0))); } // unused slots point at something valid
+    gl.activeTexture(gl.TEXTURE0 + baseU); gl.bindTexture(gl.TEXTURE_2D, baseT); gl.uniform1i(U(paintP, 'base'), baseU); gl.uniform1i(U(paintP, 'n'), N);
     gl.drawElements(gl.TRIANGLES, tri.length, gl.UNSIGNED_INT, 0);
     const quad = 'out vec2 T; void main(){ vec2 p = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 2.0 - 1.0; T = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }';
     const growP = prog(quad, `in vec2 T; out vec4 o; uniform sampler2D s; uniform float px; void main(){ vec4 c = texture(s, T); if(c.a > 0.5){ o = c; return; }
@@ -3600,20 +3609,40 @@ async function bake3d(glbBuf, views, size, yaw = 0){
 }
 const loadPic = url => new Promise((ok, no) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => ok(i); i.onerror = () => no(new Error("couldn't load " + url.split('filename=')[1])); i.src = url; });
 // paint a finished model from its saved views and put the painted copy next to it
-async function paint3d(c){
-  const m = c.model3d; if(!m || !m.raw || !m.views) return;
-  const s = M3D[c.id] = {state:'busy', text:'Painting the model from your pictures…'}; drawChars();
+async function paint3d(c, fromTurn){
+  const m = c.model3d; if(!m || !m.raw || !(fromTurn ? c.turn && c.turn.fit && c.turn.url : m.views)) return;
+  const s = M3D[c.id] = {state:'busy', text:fromTurn ? 'Painting the model from the turnaround…' : 'Painting the model from your pictures…'}; drawChars();
   try{
-    const views = {};
-    for(const [slot, v] of Object.entries(m.views)) views[slot] = {img:await loadPic(v.img), mask:await loadPic(v.mask)};
+    let views = {};
+    if(fromTurn) views = await turnViews(c.turn);
+    else for(const [slot, v] of Object.entries(m.views)) views[slot] = {img:await loadPic(v.img), mask:await loadPic(v.mask)};
     const glb = await (await fetch(m.raw)).arrayBuffer(), out = await bake3d(glb, views, 2048, m.yaw || 0);
     if(!out) throw new Error('the model came without a texture to paint');
     const name = 'rd3d_' + c.id + '_' + Date.now().toString(36) + '.glb', fd = new FormData();
     fd.append('image', new Blob([out], {type:'model/gltf-binary'}), name); fd.append('overwrite', 'true'); fd.append('type', 'input');
     const r = await fetch(m.pc + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('saving it failed (' + r.status + ')');
-    const j = await r.json(); m.url = viewUrl({filename:j.name, subfolder:j.subfolder || '', type:'input'}, m.pc); m.painted = Date.now();
-    delete M3D[c.id]; save(); drawChars(); toast('Painted from your pictures ✨');
+    const j = await r.json(); m.url = viewUrl({filename:j.name, subfolder:j.subfolder || '', type:'input'}, m.pc); m.painted = Date.now(); m.paintedFrom = fromTurn ? 'turn' : 'pics';
+    delete M3D[c.id]; save(); drawChars(); toast(fromTurn ? 'Painted from the turnaround ✨' : 'Painted from your pictures ✨');
   }catch(err){ Object.assign(s, {state:'err', text:"Couldn't paint it from the pictures: " + err.message + '. This is the model with its own colours.'}); drawChars(); }
+}
+// The turnaround made from the 3D model lines up with it exactly: frame i shows the model turned 360°·i/(length-1) to
+// their left, seen straight on with the fit kept on the clip. Six frames 60° apart become views with those cameras.
+async function turnViews(t){
+  const url = t.url, f = t.fit, D = 2 * Math.max(f.r, 1 / f.s), ar = TV_H / TV_W;
+  TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b));
+  const vid = document.createElement('video'); vid.muted = true; vid.playsInline = true; vid.setAttribute('playsinline', '');
+  await new Promise((ok, no) => { vid.onloadeddata = ok; vid.onerror = () => no(new Error("the clip couldn't be read")); TVBLOB[url].then(src => { vid.src = src; vid.load(); }, no); });
+  try{ await vid.play(); }catch(e){} vid.pause(); // wakes an iPhone's video up
+  const fps = vid.duration ? TV_LEN / vid.duration : 24, views = {};
+  for(let k = 0; k < 6; k++){
+    const th = k * Math.PI / 3, i = Math.round(k / 6 * (TV_LEN - 1)), c = Math.cos(th), sn = Math.sin(th), S = f.s;
+    await new Promise(ok => { vid.onseeked = ok; vid.currentTime = Math.min(vid.duration - 0.01, (i + 0.5) / fps); });
+    const cv = document.createElement('canvas'); cv.width = vid.videoWidth; cv.height = vid.videoHeight; cv.getContext('2d').drawImage(vid, 0, 0);
+    views['t' + k] = {img:cv, k:1, onWhite:true, eye:[-sn, 0, c], // column by column: the spin's own camera (turned, centred, scaled to the frame)
+      mat:new Float32Array([S*ar*c, 0, sn/D, 0,  0, S, 0, 0,  S*ar*sn, 0, -c/D, 0,  -S*ar*(c*f.cx + sn*f.cz), -S*f.cy, (-sn*f.cx + c*f.cz)/D, 1])};
+  }
+  vid.removeAttribute('src'); vid.load();
+  return views;
 }
 // Get the 3D model: the one big file, through the helper (at the speed picked in ⚙, carrying on after a drop)
 async function get3d(){
@@ -3643,9 +3672,11 @@ function box3d(c){
   if(m.making && !s) setTimeout(() => wait3d(c), 0);
   let h = '<div class="lbl">3D model</div>';
   if(m.url && !m.test){ loadMV().catch(() => {}); h += `<model-viewer class="m3d" src="${esc(m.url)}" camera-controls touch-action="pan-y" auto-rotate rotation-per-second="20deg" shadow-intensity="0.6" exposure="1.1" alt="3D model of ${esc(c.name || 'the character')}"></model-viewer>
-    <p class="note">Drag to turn ${esc(c.name || 'them')} around, pinch to zoom. ${m.painted ? 'Painted from your pictures; shown flat, like the drawings.' : m.raw ? 'Plain grey: the turnaround below can spin it and have MiniMax paint it.' : ''} Saved in ${esc(m.file || '')}.</p>`; }
+    <p class="note">Drag to turn ${esc(c.name || 'them')} around, pinch to zoom. ${m.painted ? (m.paintedFrom==='turn' ? 'Painted from the turnaround' : 'Painted from your pictures') + '; shown flat, like the drawings.' : m.raw ? 'Plain grey: the turnaround below can spin it and have MiniMax paint it.' : ''} Saved in ${esc(m.file || '')}.</p>`; }
   else if(m.url) h += '<p class="note">3D model ready (pretend, in Test mode).</p>';
   if(s && s.state==='busy') return h + `<p class="note">🧊 ${esc(s.text)}</p>`;
+  const fromTurn = m.raw && c.turn && c.turn.model && c.turn.fit && c.turn.url, fromPics = m.raw && m.views && Object.keys(m.views).length;
+  if(fromTurn || fromPics) h += `<div class="btnrow">${fromTurn ? '<button class="btn hot" data-ch="paintturn">🎨 Paint from the turnaround</button>' : ''}${fromPics ? '<button class="btn" data-ch="paint3d">🎨 Paint from the pictures</button>' : ''}</div>`;
   if(s && s.state==='err') h += `<p class="warn">${esc(s.text)}</p>`;
   const sp = k.spec, both = S.test || allPcs().some(p => p.online && hasHy(p.oi));
   if(both) h += `<div class="row"><label>Shape from</label>${seg('eng3d', [['hy', 'Hunyuan3D-2mv'], ['px', 'Pixal3D']], k.eng)}</div>
@@ -3664,7 +3695,7 @@ function box3d(c){
   h += `<p class="note">${vw.front ? 'From the ' + have.map(ang).join(', ') + (have.length > 1 ? ' pictures' : ' picture') + ' (the newest of each), on ' + esc(pcName(k.url)) + '. ' + (have.length < 4 ? 'It uses four: Front, Left side, Back and Right side; ' + ['front','left','back','right'].filter(a => !vw[a]).map(a => ANGLES[a]).join(' and ') + (4 - have.length > 1 ? ' are' : ' is') + ' guessed. Make other angles can draw them. ' : '') + 'Pictures that disagree (a different coat, a missing belt) smear the model: remove those first.' : 'It needs a Front picture first: mark one as Front, or make one from a Reference.'}</p>`;
   if(vw.side && (vw.left===vw.side || vw.right===vw.side)) h += `<div class="row"><label>Side shows</label>${seg('side3d', [['left', 'Their left'], ['right', 'Their right']], c.sideIs==='right' ? 'right' : 'left')}</div>
     <p class="note" style="margin:-2px 0 0 92px">Their left side faces the picture's left edge. Pick the other if the model comes out twisted.</p>`;
-  return h + `<div class="btnrow"><button class="btn hot" data-ch="make3d" ${vw.front ? '' : 'disabled'}>🧊 ${m.url ? 'Make it again' : 'Make 3D model'}</button>${m.raw && m.views && Object.keys(m.views).length ? '<button class="btn" data-ch="paint3d">🎨 Paint from the pictures</button>' : ''}</div>`;
+  return h + `<div class="btnrow"><button class="btn hot" data-ch="make3d" ${vw.front ? '' : 'disabled'}>🧊 ${m.url ? 'Make it again' : 'Make 3D model'}</button></div>`;
 }
 // ---------- turnaround video: MiniMax H3 turns the character around on a turntable, then frames become angles ----------
 // One clip on the computer with the MiniMax H3 nodes (Render): the Front (or Reference) picture is the character
@@ -4043,6 +4074,7 @@ $('#charBody').onclick = async e => {
   else if(act==='sugoff'){ delete SUG[c.id]; }
   else if(act==='get3d'){ get3d(); return; }
   else if(act==='paint3d'){ paint3d(c); return; }
+  else if(act==='paintturn'){ paint3d(c, true); return; }
   else if(act==='make3d'){ if(c.model3d && c.model3d.url && !confirm('Make the 3D model again? The old one stays in your renders.')) return; make3d(c); return; }
   else if(t.dataset.seg==='side3d'){ c.sideIs = t.dataset.v; }
   else if(t.dataset.seg==='eng3d'){ S.m3d = t.dataset.v; dl3d = null; if(watch3d.t){ clearInterval(watch3d.t); watch3d.t = 0; } }
