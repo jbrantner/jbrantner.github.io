@@ -542,7 +542,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.81'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.82'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1563,8 +1563,8 @@ function show(i){
 }
 // the thumbnails under the picture, and the same renders at the top of the library
 function drawStrip(){
-  $('#strip').innerHTML = S.gallery.map((g,i) => `<span class="sth"><img src="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">${g.ob && (g.ob.making || g.ob.fin || g.ob.busy) ? `<i class="sbar"><b data-sb="${i}"></b></i>` : ''}${g.hist && g.hist.length ? `<em class="sver">${g.hist.length + 1}</em>` : ''}</span>`).join('') || '<p class="none">Your renders show up here</p>';
-  $('#recentRow').innerHTML = S.gallery.map((g,i) => `<button data-i="${i}"><img src="${esc(g.url)}" alt="" loading="lazy"></button>`).join('') || '<p class="note">Nothing yet.</p>';
+  $('#strip').innerHTML = S.gallery.map((g,i) => `<span class="sth"><img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">${g.ob && (g.ob.making || g.ob.fin || g.ob.busy) ? `<i class="sbar"><b data-sb="${i}"></b></i>` : ''}${g.hist && g.hist.length ? `<em class="sver">${g.hist.length + 1}</em>` : ''}</span>`).join('') || '<p class="none">Your renders show up here</p>';
+  $('#recentRow').innerHTML = S.gallery.map((g,i) => `<button data-i="${i}"><img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" alt="" loading="lazy"></button>`).join('') || '<p class="note">Nothing yet.</p>';
   drawDrafts();
 }
 // the strip also shows renders already saved on the computers (this workstation's only: Hidden lists Hidden folders, normal lists the rest)
@@ -1587,9 +1587,20 @@ function drawFeedHead(){
 }
 $('#feedHead').onclick = () => { S.feedShut = !S.feedShut; save(); drawFeedHead(); buzz(); };
 // a picture from a computer that's switched off: the shared folder lets the connected one show it
-function viaHere(e){ const img = e.target; if(img.tagName!=='IMG' || img.dataset.here || !base()) return;
+// thumbnails ask for the helper's small cached JPEG (/renderdeck/thumb, 360 px) instead of the full PNG, from a computer
+// that is on (Jordan 2026-10-20: the strip loaded slowly or not at all with Main off); the full picture is the fallback
+function mini(u){
+  if(S.test || !u) return u;
+  try{ const x = new URL(u); if(!x.pathname.endsWith('/view') || (x.searchParams.get('type') || 'output')!=='output') return u;
+    const own = allPcs().find(p => { try{ return new URL(p.url).origin===x.origin; }catch(e){ return false; } });
+    const host = !own || own.online || !base() ? x.origin : new URL(base()).origin;
+    return host + '/renderdeck/thumb?subfolder=' + encodeURIComponent(x.searchParams.get('subfolder') || '') + '&filename=' + encodeURIComponent(x.searchParams.get('filename') || ''); }catch(e){ return u; }
+}
+function viaHere(e){ const img = e.target; if(img.tagName!=='IMG') return;
+  if(img.dataset.full && !img.dataset.tried){ img.dataset.tried = 1; img.src = img.dataset.full; return; } // no small one: the picture itself
+  if(img.dataset.here || !base()) return;
   try{ const u = new URL(img.src); if(!u.pathname.endsWith('/view') || u.origin===new URL(base()).origin) return; img.dataset.here = 1; img.src = base() + u.pathname + u.search; }catch(x){} }
-$('#strip').addEventListener('error', viaHere, true); $('#recentRow').addEventListener('error', viaHere, true); $('#shown').addEventListener('error', viaHere);
+$('#strip').addEventListener('error', viaHere, true); $('#obPanel').addEventListener('error', viaHere, true); $('#recentRow').addEventListener('error', viaHere, true); $('#shown').addEventListener('error', viaHere);
 // each picture is a project: tapping another one loads the settings it was made with
 $('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i==null) return; const was = shownIdx; show(+i);
   const g = S.gallery[+i]; if(+i!==was && g) useRecipe(g.snap, obFirst(g), true); };
@@ -3410,7 +3421,7 @@ const libPc = i => subParts(i.subfolder)[0].replace(/^output_/i, '');
 // drafts save into a drafts folder; the app keeps each one's full render (by file) until it is finished or put away
 const isDraftFile = i => subParts(i.subfolder).includes('drafts');
 function draftFor(i){ const k = libKey(i); return S.gallery.find(g => { if(!g.draft || !g.fin) return false; try{ const q = new URL(g.url).searchParams; return (q.get('subfolder') ? q.get('subfolder') + '/' : '') + q.get('filename')===k; }catch(e){ return false; } }); }
-const thumbUrl = i => (i.src || base()) + '/renderdeck/thumb?subfolder=' + encodeURIComponent(i.subfolder) + '&filename=' + encodeURIComponent(i.filename);
+const thumbUrl = i => (i.src && (!pcOf(i.src).oi || pcOf(i.src).online) ? i.src : base()) + '/renderdeck/thumb?subfolder=' + encodeURIComponent(i.subfolder) + '&filename=' + encodeURIComponent(i.filename);
 const LIB_NOTE = $('#libNote').textContent;
 async function openLib(){
   const on = info && !S.test;
@@ -5917,9 +5928,9 @@ function drawOrbit(){
     else if(!o.busy) x += `<p class="note">MiniMax H3 ${k.fl ? 'FL2V' : ''} on ${esc(pcName(k.url))} pins this picture as the first frame and ${pose ? 'keeps the camera still while the character does it' : 'swings the camera ' + esc(dir) + ' round the frozen scene'}. About ${esc(k.mins)} minutes.${k.because ? ' (' + esc(k.because) + ', so it goes here' + (k.fl ? '' : ', with the hybrid Turbo: no FL2V model on this one') + '.)' : ''}</p>
       <div class="btnrow"><button class="btn${clip ? '' : ' hot'}" data-ob="make">🎬 ${clip ? 'Make another' : pose ? 'Make the move' : 'Make the orbit'}</button></div>`;
     const old = (o.clips || []).filter(c => !o.clip || c.url!==o.clip.url);
-    if(old.length) x += `<div class="lbl">Earlier orbits</div><div class="cviews">${old.map(c => `<button data-obclip="${esc(c.url)}" aria-label="${c.mode==='pose' ? 'Open the move: ' + esc(c.action) : 'Open the ' + esc(c.dir) + ' orbit'}"><img src="${esc(c.src)}" alt="" loading="lazy"></button>`).join('')}</div>`;
+    if(old.length) x += `<div class="lbl">Earlier orbits</div><div class="cviews">${old.map(c => `<button data-obclip="${esc(c.url)}" aria-label="${c.mode==='pose' ? 'Open the move: ' + esc(c.action) : 'Open the ' + esc(c.dir) + ' orbit'}"><img src="${esc(mini(c.src))}" data-full="${esc(c.src)}" alt="" loading="lazy"></button>`).join('')}</div>`;
   }
-  if(hist.length) x += `<div class="lbl">History · tap one to go back to it</div><div class="cviews obhist"><button class="on" aria-label="This version"><img src="${esc(g.url)}" alt="" loading="lazy"></button>${hist.map((hh, i) => `<button data-obhist="${i}" aria-label="An earlier version"><img src="${esc(hh.url)}" alt="" loading="lazy"></button>`).join('')}</div>`;
+  if(hist.length) x += `<div class="lbl">History · tap one to go back to it</div><div class="cviews obhist"><button class="on" aria-label="This version"><img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" alt="" loading="lazy"></button>${hist.map((hh, i) => `<button data-obhist="${i}" aria-label="An earlier version"><img src="${esc(mini(hh.url))}" data-full="${esc(hh.url)}" alt="" loading="lazy"></button>`).join('')}</div>`;
   P.innerHTML = x; wireScrub(); obBar();
 }
 // the clip as a blob (it seeks reliably then), shown in the preview; the slider picks the frame
