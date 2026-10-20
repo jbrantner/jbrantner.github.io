@@ -10,7 +10,7 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
                                                (a shared Dropbox output folder deletes for real; Dropbox keeps them in Deleted files)
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
-  POST /renderdeck/sync {source}              -> copy the models and LoRAs another computer has and this one lacks
+  POST /renderdeck/sync {source}              -> copy the checkpoints and LoRAs another computer has and this one lacks (not Qwen/MiniMax/3D)
   GET  /renderdeck/tagger, POST /renderdeck/tagger/get, POST /renderdeck/tag -> the WD EVA02 tagger (Danbooru tags with
                                                scores, on the CPU) for training captions; fetched once from Hugging Face
   GET  /renderdeck/farm, POST /renderdeck/farm/add|cancel|pcs -> the render farm queue: renders go to whichever of your
@@ -38,6 +38,16 @@ CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites sha
 HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
 RETRIES = 8  # a download waits 30 s, 1, 2, 4 … up to 10 minutes after each drop before carrying on
+# What the sync copies between computers: only checkpoints and LoRAs, the files a queued render can wait for and then
+# run anywhere. Everything else (Qwen Image Edit, MiniMax, 3D, text encoders, ControlNets) stays on the computer it was
+# installed on, and these names are never copied whatever folder they are in (Jordan 2026-10-20: Qwen stays on Render).
+SYNC_KINDS = ('checkpoints', 'loras')
+STAYS_PUT = re.compile(r'qwen|minimax|hunyuan|trellis|pixal|mistral|flux2', re.I)
+def _synced(kind, rel):
+    return kind in SYNC_KINDS and rel.lower().endswith('.safetensors') and not STAYS_PUT.search(rel)
+
+
+_SYNC_LOCK = None  # one copy at a time across every sync, however many were asked for
 SYNC_MBPS = 2  # the gentle speed, MB a second: at 15 the house WiFi kept dropping (2026-10-18); a router fix later let Jordan try full speed
 SPEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_speed.json')
 
@@ -617,7 +627,14 @@ def _sync_path(kind, rel):
 
 
 async def _sync_run(todo):
-    for j, url, path in todo:  # one file at a time, so the network and the disk aren't split between them
+    global _SYNC_LOCK
+    _SYNC_LOCK = _SYNC_LOCK or asyncio.Lock()
+    async with _SYNC_LOCK:  # one file at a time, even when two syncs were asked for, so the network and the disk aren't split
+        await _sync_files(todo)
+
+
+async def _sync_files(todo):
+    for j, url, path in todo:
         if j.get('cancel'):
             j['status'], j['error'] = 'failed', 'Stopped'
             continue
@@ -647,11 +664,11 @@ async def sync(request):
         mine = _models()
         busy = {(j['kind'], j['name'].lower()) for j in JOBS.values() if j['status'] not in ('done', 'failed')}
         todo, skipped = [], []
-        for kind in KINDS:
+        for kind in SYNC_KINDS:
             have = {os.path.basename(m['name']).lower() for m in mine[kind]}  # same file name in any subfolder counts as having it
             for m in theirs.get(kind, []):
                 name = os.path.basename(m['name'])
-                if name.lower() in have or (kind, name.lower()) in busy or not name.lower().endswith('.safetensors'):
+                if name.lower() in have or (kind, name.lower()) in busy or not _synced(kind, m['name']):
                     continue
                 try:
                     path = _sync_path(kind, m['name'])
