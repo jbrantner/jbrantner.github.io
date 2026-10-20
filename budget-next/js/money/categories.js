@@ -7,7 +7,7 @@
    weekly: the dailies today, then the dailies' days ahead, then the other weekly ones, then it goes negative. */
 function catLedger(cats, spends, d, days = 7) {
   const D = cats.filter(c => c.daily), W = cats.filter(c => !c.daily);
-  const pool = {}, wk = {}, start = {}, today = {}, fut = {};
+  const pool = {}, wk = {}, start = {}, today = {}, fut = {}; let took = 0;
   D.forEach(c => { pool[c.id] = c.amt; }); W.forEach(c => { wk[c.id] = c.amt; });
   // take `need` cents from the slots, split equally; a slot that runs dry passes its part to the rest
   const pull = (need, slots) => {
@@ -21,6 +21,7 @@ function catLedger(cats, spends, d, days = 7) {
   for (let i = 0; i <= d; i++) {
     const left = days - i;
     D.forEach(c => { today[c.id] = left > 1 && pool[c.id] > 0 ? Math.floor(pool[c.id] / left / 100) * 100 : pool[c.id]; fut[c.id] = pool[c.id] - today[c.id]; start[c.id] = today[c.id]; });
+    const f0 = sum(D, c => fut[c.id]);
     for (const s of spends.filter(x => x.day === i)) {
       const k = D.some(c => c.id === s.pack) || W.some(c => c.id === s.pack) ? s.pack : '';
       let need = s.c;
@@ -39,13 +40,14 @@ function catLedger(cats, spends, d, days = 7) {
         wk[k] -= need;
       }
     }
+    if (i === d) took = f0 - sum(D, c => fut[c.id]);   // v316: what today's spending took from the days ahead
     D.forEach(c => { pool[c.id] = today[c.id] + fut[c.id]; });
   }
   const ahead = days - d - 1;
   // the days ahead if nothing more is spent: each gets whole dollars of what's left, the last one gets the rest
   const plan = id => { const out = []; let r = fut[id]; for (let k = ahead; k > 0; k--) { const x = k > 1 && r > 0 ? Math.floor(r / k / 100) * 100 : r; out.push(x); r -= x; } return out; };
   return { daily: D.map(c => ({ id: c.id, start: start[c.id], today: today[c.id], fut: fut[c.id], perDay: ahead > 0 ? Math.floor(fut[c.id] / ahead) : 0, ahead: plan(c.id) })),
-    weekly: W.map(c => ({ id: c.id, amt: c.amt, left: wk[c.id] })) };
+    weekly: W.map(c => ({ id: c.id, amt: c.amt, left: wk[c.id] })), took };
 }
 // the week's categories through catLedger, in cents; Anything is daily and gets the rest of the week's money
 function catWeekNow(now = Date.now(), plus, upto) {

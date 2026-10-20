@@ -51,7 +51,7 @@ const STYLE = () => {   // each element on screen: its tag and every computed pr
     if (/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(e.tagName) || !vis(e)) return;
     const s = getComputedStyle(e), b = getComputedStyle(e, '::before'), a = getComputedStyle(e, '::after');
     out.push([path + ' ' + e.tagName + (e.id ? '#' + e.id : '') + (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\s+/).join('.') : ''), props(s), b.content !== 'none' ? props(b) : '', a.content !== 'none' ? props(a) : '']);
-    let k = 0; for (const c of e.children) walk(c, path + '/' + (k++));
+    let k = 0; for (const c of e.children) if (!/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(c.tagName) && vis(c)) walk(c, path + '/' + (k++));   // counted among what's on screen, so a hidden leftover taken out moves nothing
   })(document.documentElement, '');
   return out;
 };

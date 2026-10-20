@@ -743,13 +743,14 @@ const VL = (() => {
     const on = n || pu.P || pu.spent;   // v150: Left today over the day stacks; the week's line under them
     if (on && !heroOpen) {   // v186: the day stacks on their own, as Jordan drew it; a tap opens the card for more
       const cg = (state.packs || []).length && pu.P > 0;   // v275: categories get their own card (daily and weekly)
+      const pd = aheadDay(now, cg, t, L, days);
       h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
-        + (pu.carried > 0.005 || t < 0 ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on)}</div>` : '')
+        + (pu.carried > 0.005 || t < 0 || pd ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, pd)}</div>` : '')
         + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '') + (wkEd ? `<!--hc-ed${cg ? '' : '+'}-->` : '') + `</div>`;
     } else
     h += `<div class="vl-hero pp-panel${on ? ' hx' : ''}"${on ? ' aria-expanded="true"' : ''}><div class="vl-k">${on ? 'Left today' : 'Left this week'}</div><div class="vl-total num${on ? '' : L < 0 ? ' bad' : ''}">${on ? money(Math.max(0, t)) : L >= 0 ? money(L) : '−' + money(over)}</div>`
       + (on ? stacksHTML(now) : '')
-      + (!on || pu.carried > 0.005 || t < 0 ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on)}</div>` : '')   // v151: only a warning, or before spending is set
+      + (!on || pu.carried > 0.005 || t < 0 ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, on ? aheadDay(now, false, t, L, days) : null)}</div>` : '')   // v151: only a warning, or before spending is set
       + (on ? '' : ''
       + `<div class="hl-wk" role="group" aria-label="Weekly spending"><button class="hl-wkb" data-hl="wm" aria-label="$7 a week less"${wkShown() <= 0 ? ' disabled' : ''}>−</button>`
       + `<span>Weekly spending: <b class="num">${money(wkShown())}</b> (${moneyExact(wkShown() / 7)} a day)<small>${wkDraft != null ? `was ${money(weeklyAmt())}` : n ? "this week's spending is running · a change counts from today" : plan ? `${money(plan * 7 * WORKER_DAY)} a week · starts Monday` : 'Set your weekly spending with + to start'}</small></span>`
@@ -794,12 +795,21 @@ const VL = (() => {
      what's left (the last day: its name); "over today" only when today's share is spent past. */
   // v267 (Jordan): when the week isn't running and it could, a link to Start now (it lives in Settings > Money since v173)
   const startLink = over => !partyNow() && over <= 0 && Math.min(Number(state.partyPlan || 0), partyRoom()) > 0 ? '<br><button class="link hl-start" data-hl="start">Start it in Settings ›</button>' : '';
-  function tidyLine(pu, n, t, days, L, over, plan, now, st) {
+  function tidyLine(pu, n, t, days, L, over, plan, now, st, pd) {
     const day = st ? '' : days === 1 ? `${new Date(now).toLocaleDateString(undefined, { weekday: 'long' })}, last day` : `${days} days left, ${money(Math.floor(Math.max(0, L) / days + 1e-9))} a day from here`;
-    if (pu.carried > 0.005) return carriedLine(pu, over > 0 ? '' : ' · <button class="link" data-hl="go">Cover it</button>') + (day && (pu.P || pu.spent) ? `<br>${day}` : '');
+    const per = pd && st ? `<br>Now <b>${money(pd.a)} a day</b> ${days === 2 ? 'for tomorrow' : `for the ${days - 1} days left`}` : '';   // v316
+    if (pu.carried > 0.005) return carriedLine(pu, over > 0 ? '' : ' · <button class="link" data-hl="go">Cover it</button>') + (day && (pu.P || pu.spent) ? `<br>${day}` : '') + per;
     if (!pu.P && !pu.spent) return plan ? "This week's spending isn't running yet" + startLink(over) : 'No weekly spending set yet';
     return `<b>${money(pu.spent)}</b> spent of ${money(pu.P)}${n ? (day ? ' · ' + day : '') : " · this week's spending isn't running" + startLink(over)}`
-      + (t < 0 && days > 1 ? ` · <b class="bad">${money(Math.ceil(-t - 1e-9))} over today</b>${st ? ', taken from the days ahead' : ''}` : '');
+      + (t < 0 && days > 1 ? ` · <b class="bad">${money(Math.ceil(-t - 1e-9))} over today</b>${st ? ', taken from the days ahead' : ''}` : pd && st ? ` · <b class="bad">${money(Math.ceil(pd.took - 1e-9))} taken from the days ahead</b>` : '')
+      + per;
+  }
+  // v316 (Jordan: overspent today, "how much I now have per day"): the even share of what the days ahead have (daily categories only, whole dollars)
+  //   null unless today's spending took from the days ahead; took = dollars taken
+  function aheadDay(now, cg, t, L, days) {
+    if (days < 2) return null;
+    if (cg) { const W = catWeekNow(now); return W.took > 0 ? { a: Math.floor(sum(W.daily, x => x.fut) / 100 / (days - 1) + 1e-9), took: W.took / 100 } : null; }
+    return t < 0 ? { a: Math.floor(Math.max(0, L) / (days - 1) + 1e-9), took: -t } : null;
   }
   let heroOpen = false;   // v184: the weekly card starts condensed
   let wkEd = false;   // v310: the weekly budget open inside the Left today card

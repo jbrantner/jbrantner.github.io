@@ -54,7 +54,10 @@ const CANDS = () => {
     } else if (roll < 0.13) {
       trail.push('Escape'); await both(pair, async p => { await p.page.keyboard.press('Escape'); await p.page.clock.runFor(300); });
     } else {
-      const [ca, cb] = await both(pair, p => p.page.evaluate(CANDS));
+      let [ca, cb] = await both(pair, p => p.page.evaluate(CANDS));
+      if (JSON.stringify(ca) !== JSON.stringify(cb)) {   // caught mid-way (a sheet still sliding on the real clock)? 4 more seconds on both
+        await both(pair, p => p.page.clock.runFor(4000)); [ca, cb] = await both(pair, p => p.page.evaluate(CANDS)); require('./lib').settledMore();
+      }
       if (JSON.stringify(ca) !== JSON.stringify(cb)) { bad++; console.log(`[step ${step}] what can be tapped differs after: ${trail.slice(-5).join(' | ')}\n  ${where(JSON.stringify(ca), JSON.stringify(cb))}`); break; }
       if (!ca.length) { trail.push('nothing to tap'); continue; }
       const c = R.pick(ca), desc = `${c.tag}${c.id ? '#' + c.id : ''}${c.cls ? '.' + c.cls.split(' ')[0] : ''} "${c.text}"`;

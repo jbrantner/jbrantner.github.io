@@ -104,4 +104,4 @@ async function screensDiffer(pair, markup) {
   d = cmp(await both(pair, view)); return d;
 }
 let settled = 0;
-module.exports = { settledCount: () => settled, screensDiffer, launch, openApp, probe, view, where, diffKeys, rng, both, PROBE, BUILDS, BASE, fs };
+module.exports = { settledCount: () => settled, settledMore: () => settled++, screensDiffer, launch, openApp, probe, view, where, diffKeys, rng, both, PROBE, BUILDS, BASE, fs };
