@@ -70,6 +70,8 @@ input{-webkit-user-select:text;user-select:text}
 "use strict";
 const KEY="mailfinder-list-v1";
 const IGN_KEY="mailfinder-ignore-v1";
+const READER_KEY="mailfinder-reader-v1";
+let readerMode="sharp"; try{ readerMode=localStorage.getItem(READER_KEY)||"sharp"; }catch(e){}
 const BASE_IGNORE="HOUSEHOLD FAMILY RESIDENT CURRENT OR THE AND MR MRS MS DR JR SR APT UNIT DRIVE CIRCLE";
 let IGNORE=/^$/;
 function setIgnore(extra){
@@ -204,13 +206,14 @@ function render(readText){
     }
     html+=`<div class="read">It read: ${esc(read.replace(/\s+/g," ").slice(0,300))}</div>`;
   }
-  html+=`</div><p class="small">${people.filter(p=>!isStaff(p)).length} residents${people.some(isStaff)?` and ${people.filter(isStaff).length} staff`:""} loaded on this phone. <button class="link" id="reload">Load a new list</button> · <button class="link" id="ign">Address words to skip</button></p>`;
+  html+=`</div><p class="small">${people.filter(p=>!isStaff(p)).length} residents${people.some(isStaff)?` and ${people.filter(isStaff).length} staff`:""} loaded on this phone. <button class="link" id="reload">Load a new list</button> · <button class="link" id="ign">Address words to skip</button> · <button class="link" id="rdr">Reader: ${readerMode==="sharp"?"Sharper":"Standard"}</button></p>`;
   app.innerHTML=html;
   const q=document.getElementById("q"), out=document.getElementById("out"), hero=document.getElementById("hero");
   hero.innerHTML=hero.innerHTML.trim();
   q.oninput=()=>{ const on=!!q.value.trim();
     // a whole address pasted or scanned in (iPhone "Scan Text"): match it like a photo instead of a typed name
     const r=toks(q.value).length>=3?scoreRead(q.value,true).filter(x=>x.score>=2).slice(0,15):searchTyped(q.value); out.innerHTML=on?(r.length?rows(r):`<div class="none">No one by that name.</div>`):""; hero.classList.toggle("off",on); };
+  document.getElementById("rdr").onclick=()=>{ readerMode=readerMode==="sharp"?"standard":"sharp"; try{localStorage.setItem(READER_KEY,readerMode);}catch(e){} sharpFailed=false; render(readFromHash()); };
   const clr=document.getElementById("clr");
   q.addEventListener("input",()=>{ clr.hidden=!q.value; });
   clr.onclick=()=>{ q.value=""; clr.hidden=true; out.innerHTML=""; hero.classList.remove("off"); q.blur(); };
@@ -239,6 +242,19 @@ async function getWorker(){
   await worker.setParameters({tessedit_pageseg_mode:"11"});
   return worker;
 }
+// "Sharper" = PaddleOCR models (paddle.js); falls back to the standard reader if it can't load
+let sharpFailed=false;
+async function getReader(){
+  if(readerMode==="sharp"&&!sharpFailed){
+    try{
+      if(!window.PaddleReader){ await new Promise((res,rej)=>{ const s=document.createElement("script"); s.src="paddle.js"; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+      if(!PaddleReader.ready()){ const was=document.getElementById("st")?.textContent; setStatus("Loading the sharper reader (first time downloads about 10 MB)…"); await PaddleReader.load("models/"); setStatus(was||""); }
+      return cv=>PaddleReader.read(cv);
+    }catch(e){ sharpFailed=true; setStatus("The sharper reader didn't load, using the standard one."); }
+  }
+  const w=await getWorker();
+  return async cv=>(await w.recognize(cv)).data.text||"";
+}
 function setStatus(t){ const e=document.getElementById("st"); if(e) e.textContent=t; }
 let camOn=false, stream=null, starting=null, holding=false, idleT=null, liveAt=0;
 const video=document.createElement("video"); video.setAttribute("playsinline",""); video.muted=true; video.autoplay=true;
@@ -263,7 +279,7 @@ function startCam(){
   if(camOn) return Promise.resolve(true);
   if(starting) return starting;
   starting=navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:3840},height:{ideal:2160}},audio:false})
-    .then(async st=>{ stream=st; video.srcObject=st; camOn=true; await video.play().catch(()=>{}); liveAt=Date.now(); getWorker().catch(()=>{}); return true; })
+    .then(async st=>{ stream=st; video.srcObject=st; camOn=true; await video.play().catch(()=>{}); liveAt=Date.now(); getReader().catch(()=>{}); return true; })
     .catch(()=>{ alert("The camera didn't start. Allow camera access for this page."); return false; })
     .finally(()=>{ starting=null; });
   return starting;
@@ -301,10 +317,10 @@ async function release(e){
   busy=true; const btn=document.getElementById("cam"); if(btn) btn.textContent="Reading…"; setStatus("Reading…");
   await closeIntoStamp(); idleStop();
   try{
-    const w=await getWorker();
-    let text=(await w.recognize(shots[0].cv)).data.text||"";
+    const rd=await getReader();
+    let text=await rd(shots[0].cv);
     // no clear match: read the next sharpest frame too and use both readings
-    if(shots[1]&&!scoreRead(text).some(r=>r.score>=3.4)){ setStatus("Taking a second look…"); text+="\n"+((await w.recognize(shots[1].cv)).data.text||""); }
+    if(shots[1]&&!scoreRead(text).some(r=>r.score>=3.4)){ setStatus("Taking a second look…"); text+="\n"+(await rd(shots[1].cv)); }
     busy=false;
     history.replaceState(null,"","#t="+encodeURIComponent(text.slice(0,1500)));
     render(text||" "); const st=document.querySelector("#hero .stamp"); if(st) st.classList.add("land");
