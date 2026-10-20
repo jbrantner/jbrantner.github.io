@@ -109,7 +109,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   g = sent[1].prompt;
   ok(check(g).length===0, 'the touch-up graph is valid: ' + check(g).join('; '));
   ok(by('LoadImage')[0].inputs.image==='up_2.png', 'the grabbed frame is uploaded and redrawn');
-  ok(by('KSampler')[0].inputs.denoise===0.2 && by('ImageScaleBy')[0].inputs.scale_by===1.5 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors', 'the picture\'s own checkpoint at 0.2, 1.5x bigger');
+  ok(by('KSampler')[0].inputs.denoise===0.35 && by('ImageScaleBy')[0].inputs.scale_by===1.5 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors', 'the picture\'s own checkpoint at 0.2, 1.5x bigger');
   { const ll = by('LoraLoader'), ks = by('KSampler')[0], pos = by('CLIPTextEncode')[0].inputs.text;
     ok(ll.length===2 && ll[0].inputs.lora_name==='chars\\librarianx_v2.safetensors' && ll[1].inputs.lora_name==='AFKJ Style Illustrious Claude.safetensors' && ll[1].inputs.strength_model===0.8
       && g[ks.inputs.model[0]]===ll[1] && g[by('CLIPTextEncode')[0].inputs.clip[0]]===ll[1], 'its LoRAs (the ones switched on, at their strengths, found in their folder) feed the redraw');
@@ -117,11 +117,14 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(by('SetUnionControlNetType')[0].inputs.type==='canny/lineart/anime_lineart/mlsd' && by('ControlNetApplyAdvanced')[0].inputs.strength===0.8 && g[by('ControlNetApplyAdvanced')[0].inputs.image[0]].class_type==='AnimeLineArtPreprocessor', 'ControlNet ProMax holds the anime line art at 0.8');
   ok(by('SaveImage')[0].inputs.filename_prefix==='RenderDeck/angles/finished', 'saved under RenderDeck/angles/finished');
   { const ap = by('ControlNetApplyAdvanced'), t = ap[1] && g[g[ap[1].inputs.control_net[0]].inputs.control_net ? ap[1].inputs.control_net[0] : ''];
-    ok(ap.length===2 && t && t.inputs.type==='tile' && g[ap[1].inputs.image[0]].class_type==='ImageScaleBy' && ap[1].inputs.strength===0.6, 'a tile ControlNet holds the frame\'s colours and details at 0.6');
+    ok(ap.length===2 && t && t.inputs.type==='tile' && g[ap[1].inputs.image[0]].class_type==='ImageScaleBy' && ap[1].inputs.strength===0.6 && ap[1].inputs.end_percent===0.6, 'a tile ControlNet holds the frame\'s colours and details at 0.6, letting go at 60% so the end paints fresh detail');
     const cm = by('ColorMatch')[0], sv = by('SaveImage')[0];
     ok(cm && cm.inputs.method==='mkl' && g[cm.inputs.image_ref[0]].class_type==='ImageScaleBy' && g[sv.inputs.images[0]].class_type==='ColorMatch' && by('KSampler')[0].inputs.cfg===4, 'the colours are matched back to the frame (Color Match, mkl), cfg 4'); }
   ok(await page.evaluate(() => /finished_00001_/.test(S.gallery[0].url) && /hood_00001_/.test(S.gallery[0].hist[0].url) && S.gallery.length===3 && shownIdx===0 && /finished_00001_/.test(document.querySelector('#strip img[data-i="0"]').src)),
     'the finished angle becomes this picture (its thumbnail), the old one goes into its history, no new strip item');
+  ok(await page.$eval('#obVid', v => v.hidden) && /Showing the finished picture/.test(await page.textContent('#obPanel')), 'after finishing, the finished picture shows, not the clip over it');
+  await page.fill('#obPanel [data-obt]', '400'); await page.dispatchEvent('#obPanel [data-obt]', 'input');
+  ok(!(await page.$eval('#obVid', v => v.hidden)), 'moving the slider brings the clip back');
   ok(await page.$eval('#strip .sver', e => e.textContent)==='2' && await page.$$eval('#obPanel .obhist button', b => b.length)===2, 'the thumbnail shows 2 versions; History lists both');
   await page.click('#obPanel [data-obhist="0"]');
   ok(await page.evaluate(() => /hood_00001_/.test(S.gallery[0].url) && /finished_00001_/.test(S.gallery[0].hist[0].url)), 'tapping an earlier version makes it the picture again');

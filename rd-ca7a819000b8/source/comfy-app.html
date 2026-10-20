@@ -542,7 +542,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.88'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.89'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5836,7 +5836,9 @@ function obFinishGraph(k, img, dn, words, looks){
     // changed her eye colour, so the union ControlNet's tile mode also holds the frame's own colours and small details
     if(k.oi.SetUnionControlNetType && /promax|union/i.test(k.cn)){
       const tile = [add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:k.cn}), 0], type:'tile'}), 0];
-      const at = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:tile, image:[big,0], vae:[ck,2], strength:0.6, start_percent:0, end_percent:1});
+      // it lets go at 60% of the steps: held to the end it also held the video frame's blur (Jordan 2026-10-20), so the last
+      // steps paint fresh detail while Color Match below keeps the colours
+      const at = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:tile, image:[big,0], vae:[ck,2], strength:0.6, start_percent:0, end_percent:0.6});
       pos = [at,0]; neg = [at,1]; } }
   const smp = add('KSampler', {model:mdl, positive:pos, negative:neg, latent_image:[add('VAEEncode', {pixels:[big,0], vae:[ck,2]}), 0],
     seed:Math.floor(Math.random() * 1e9), steps:25, cfg:4, sampler_name:'euler', scheduler:'normal', denoise:dn});
@@ -5953,7 +5955,7 @@ async function finishOrbit(){
   if(!g || !o.clip) return; if(k.why){ toast(k.why, true); return; }
   delete o.err; o.busy = 'Grabbing the frame…'; drawOrbit(); drawStrip(); buzz();
   try{
-    const dn = o.dn==null ? 0.2 : o.dn, pc = S.test ? 'test' : o.clip.pc;
+    const dn = o.dn==null ? 0.35 : o.dn, pc = S.test ? 'test' : o.clip.pc;
     const pk = S.test || pc===k.url || !pcOf(pc).oi ? k : obTouch(pcOf(pc).oi); // the clip's own computer touches it up
     const v = await uploadFrame(frameCanvas(vid && vid._ready ? vid : null), 'orbit', pc);
     o.busy = dn ? 'Touching it up with Illustrious…' : 'Making it bigger…'; drawOrbit();
@@ -5969,6 +5971,7 @@ async function finishOrbit(){
     delete o.fin; delete o.busy;
     // the new angle is this picture now; what it was goes into its history
     g.hist = [{url:g.url, t:g.t || Date.now()}].concat(g.hist || []).slice(0, 30); g.url = url; g.t = Date.now();
+    o.pic = true; // the finished picture shows, not the clip over it (Jordan was still looking at the blurry video frame)
     save(); drawStrip(); if(obG()===g) show(shownIdx); else drawOrbit(); buzz(); toast('New angle saved ✨ It is this picture now; the earlier ones are in its History');
   }catch(err){ delete o.busy; delete o.fin; o.err = "Couldn't finish the frame: " + err.message; save(); drawOrbit(); drawStrip(); }
 }
@@ -5977,7 +5980,7 @@ function drawOrbit(){
   const g = obG(), o = g && g.ob, k = kitOrbit(), hist = (g && g.hist) || [];
   const open = !!(o && (o.open || o.making || o.busy || o.err)), clip = open && o.clip;
   // the orbit plays where the picture is
-  if(clip && clip.url){ if(vid.dataset.src!==clip.url){ vid.dataset.src = clip.url; vid._ready = false; loadOrbitClip(); } vid.hidden = false; }
+  if(clip && clip.url){ if(vid.dataset.src!==clip.url){ vid.dataset.src = clip.url; vid._ready = false; loadOrbitClip(); } vid.hidden = !!o.pic; }
   else { vid.hidden = true; }
   if(!g || (!open && !hist.length)){ P.hidden = true; P.innerHTML = ''; return; }
   P.hidden = false;
@@ -5989,9 +5992,10 @@ function drawOrbit(){
     if(o.err) x += `<p class="warn">${esc(o.err)}</p>`;
     if(clip){
       x += `<input type="range" class="tvscrub" data-obt min="0" max="1000" step="1" value="${o.frame==null ? 1000 : o.frame}" aria-label="Frame">
+      ${o.pic ? '<p class="note" data-obpic>Showing the finished picture. Move the slider to go back to the clip.</p>' : ''}
       <div class="btnrow"><button class="btn" data-ob="back" aria-label="One frame back">◀</button><button class="btn" data-ob="fwd" aria-label="One frame on">▶</button><button class="btn hot" data-ob="finish" ${o.busy || o.making ? 'disabled' : ''}>✨ Finish this frame</button></div>
       ${clip.url ? '' : '<p class="note">The orbit (pretend, in Test mode).</p>'}
-      <div class="row"><label>Touch-up</label>${oseg('dn', [[0, 'Bigger only'], [0.2, 'Light (0.2)'], [0.3, 'Stronger (0.3)']], o.dn==null ? 0.2 : o.dn)}</div>
+      <div class="row"><label>Touch-up</label>${oseg('dn', [[0, 'Bigger only'], [0.2, 'Light'], [0.35, 'Sharpen'], [0.5, 'Repaint']], o.dn==null ? 0.35 : o.dn)}</div>
       <div class="row"><label>Tags</label><div class="grow"><input type="text" data-obf="words" placeholder="optional extra tags for the touch-up, e.g. green eyes" value="${esc(o.words || '')}"></div></div>`;
       { const L = obLooksOf(g); if(L && L.ckpt) x += `<p class="note">The touch-up uses this picture's model${L.loras.length ? ' and LoRAs' : ''}: ${esc([baseName(L.ckpt)].concat(L.loras.map(l => baseName(l.file).replace(/\.safetensors$/i, '') + ' ' + l.strength)).join(' · '))}</p>`; }
       if(o.busy) x += `<p class="note">${esc(o.busy)}</p>` + (o.fin ? '<div class="pbar obbar"><i data-obbar="fin"></i></div><p class="note" data-obtxt="fin"></p>' : '');
@@ -6027,19 +6031,19 @@ function loadOrbitClip(){
 }
 function obSeek(){ const vid = $('#obVid'), o = OB(); if(vid.duration) vid.currentTime = Math.min(vid.duration - 0.01, vid.duration * (o.frame==null ? 1000 : o.frame) / 1000); }
 function wireScrub(){ const sl = $('#obPanel [data-obt]'); if(!sl) return;
-  sl.oninput = () => { OB().frame = +sl.value; obSeek(); }; sl.onchange = () => save(); obSeek(); }
+  sl.oninput = () => { const o = OB(); o.frame = +sl.value; if(o.pic){ delete o.pic; $('#obVid').hidden = false; const n = $('#obPanel [data-obpic]'); if(n) n.remove(); } obSeek(); }; sl.onchange = () => save(); obSeek(); }
 $('#obPanel').addEventListener('click', e => {
   const g = obG(), o = OB(), t = e.target.closest('[data-obdir],[data-obseg],[data-ob],[data-obclip],[data-obhist],[data-obidea]'); if(!t || !g) return;
   if(t.dataset.obhist!=null){ // that version becomes the picture again; the one shown goes into the history
     const i = +t.dataset.obhist, hh = g.hist[i]; g.hist.splice(i, 1); g.hist.unshift({url:g.url, t:g.t}); g.url = hh.url; g.t = hh.t;
     save(); drawStrip(); show(shownIdx); buzz(); return; }
   if(t.dataset.obclip){ if(o.making){ toast('An orbit is still being made', true); return; }
-    const c = (o.clips || []).find(x => x.url===t.dataset.obclip); if(c) Object.assign(o, {dir:c.dir, mode:c.mode || 'angle', action:c.action || o.action, clip:c, frame:1000}); }
+    const c = (o.clips || []).find(x => x.url===t.dataset.obclip); delete o.pic; if(c) Object.assign(o, {dir:c.dir, mode:c.mode || 'angle', action:c.action || o.action, clip:c, frame:1000}); }
   else if(t.dataset.obdir){ o.dir = t.dataset.obdir; }
   else if(t.dataset.obseg){ o[t.dataset.obseg] = t.dataset.obseg==='mode' ? t.dataset.v : parseFloat(t.dataset.v); }
   else if(t.dataset.obidea){ o.action = t.dataset.obidea; }
   else if(t.dataset.ob==='close'){ o.open = false; delete o.err; }
-  else if(t.dataset.ob==='make'){ if(o.clip && !confirm('Make another orbit? The one you have stays under Earlier orbits.')) return; makeOrbit(); return; }
+  else if(t.dataset.ob==='make'){ delete o.pic; if(o.clip && !confirm('Make another orbit? The one you have stays under Earlier orbits.')) return; makeOrbit(); return; }
   else if(t.dataset.ob==='finish'){ finishOrbit(); return; }
   else if(t.dataset.ob==='back' || t.dataset.ob==='fwd'){ const sl = $('#obPanel [data-obt]'); if(!sl) return;
     sl.value = Math.max(0, Math.min(1000, +sl.value + (t.dataset.ob==='fwd' ? 1 : -1) * 1000 / (OB_LEN - 1))); sl.oninput(); save(); return; }
