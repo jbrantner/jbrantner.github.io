@@ -1483,7 +1483,11 @@ async def _step_train(s, j):
     if not ckpt:
         raise RuntimeError('this computer has no ' + j['ckpt'])
     loras = folder_paths.get_folder_paths('loras')[0]
-    name = '%s_auto_%s' % (j['trigger'], time.strftime('%y%m%d_%H%M'))
+    # one file, named after the trigger word (Jordan 2026-10-20): Librarian_rd.safetensors, then _v2, _v3 for later runs
+    name, n = j['trigger'], 1
+    while os.path.exists(os.path.join(loras, name + '.safetensors')):
+        n += 1
+        name = '%s_v%d' % (j['trigger'], n)
     j['lora_name'] = name
     # kohya needs the whole card: let anything already in this ComfyUI's queue (an orbit sent straight here) finish first
     for _ in range(360):
@@ -1510,7 +1514,7 @@ async def _step_train(s, j):
            '--min_bucket_reso', '512', '--max_bucket_reso', '1536', '--bucket_reso_steps', '64', '--caption_extension', '.txt',
            '--optimizer_type', 'Adafactor', '--optimizer_args', 'scale_parameter=False', 'relative_step=False', 'warmup_init=False',
            '--learning_rate', '1e-4', '--lr_scheduler', 'constant_with_warmup', '--lr_warmup_steps', '50', '--max_train_steps', str(steps),
-           '--save_every_n_steps', str(max(100, steps // 3)), '--train_batch_size', '1', '--mixed_precision', 'bf16', '--save_precision', 'fp16',
+           '--train_batch_size', '1', '--mixed_precision', 'bf16', '--save_precision', 'fp16',
            '--fp8_base', '--cache_latents', '--cache_latents_to_disk', '--cache_text_encoder_outputs', '--gradient_checkpointing', '--sdpa',
            '--max_data_loader_n_workers', '0', '--seed', '42']
     env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
@@ -1522,7 +1526,6 @@ async def _step_train(s, j):
     if why:
         raise RuntimeError(why)
     j['lora'] = name + '.safetensors'
-    j['lora_saves'] = sorted(f for f in os.listdir(loras) if f.startswith(name) and f.endswith('.safetensors'))
     _auto_save()
 
 

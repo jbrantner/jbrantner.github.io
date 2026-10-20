@@ -104,7 +104,7 @@ async def main():
     d = os.path.join(K, 'data', 'lib_rd', '10_lib_rd'); caps = sorted(open(os.path.join(d, f)).read() for f in os.listdir(d) if f.endswith('.txt'))
     ok(any(c.startswith('lib_rd, 1girl, solo, standing, a-pose') and 'from behind' in c for c in caps), 'captions: ' + caps[0])
     ok(os.path.exists(os.path.join(OUT, 'RenderDeck', 'datasets', 'lib_rd')) and j['pick_note'], 'the set is also in the output folder, with a note when short: ' + j['pick_note'])
-    ok(j['lora'].startswith('lib_rd_auto_') and os.path.exists(os.path.join(T, 'loras', j['lora'])) and j.get('train_steps') == 300, 'the LoRA is trained into the loras folder: %s %s' % (j.get('lora'), j.get('train_steps')))
+    ok(j['lora'] == 'lib_rd.safetensors' and os.path.exists(os.path.join(T, 'loras', j['lora'])) and j.get('train_steps') == 300, 'the LoRA is trained into the loras folder: %s %s' % (j.get('lora'), j.get('train_steps')))
     v = json.loads((await PS.instance.routes.h[('GET', '/renderdeck/auto')](None)).body)
     ok(v['jobs'][-1]['id'] == jid and 'turn_graph' not in v['jobs'][-1], 'the app reads the run without its graphs')
     await run.cleanup()
