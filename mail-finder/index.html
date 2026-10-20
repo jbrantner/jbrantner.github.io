@@ -155,6 +155,10 @@ const isStaff=p=>/^staff\b/i.test(p.room);
 function rows(list){ return list.map(r=>`<div class="row"><span class="n">${esc(nameOf(r.p))}</span><span class="r${isStaff(r.p)?" staff":""}">${esc(r.p.room)}</span></div>`).join(""); }
 function topCard(t){ return `<div class="stamp"><div class="top"${isStaff(t.p)?' style="background:#6b5a55"':""}><div class="name">${esc(nameOf(t.p))}</div><div class="room${isStaff(t.p)?" staff":""}">${esc(t.p.room)}</div>${t.firstFound&&t.lastFound?"":`<div class="why">${t.lastFound?"Last name match only. Check the first name.":"Room number match only. Check the name."}</div>`}</div></div>`; }
 
+function scoreRead(read){
+  const all=toks(" "+read.toUpperCase().replace(/['’.]/g,"").replace(/[^A-Z0-9]+/g," ")+" ").join(" ").replace(IGNORE," ").split(" ").filter(Boolean);
+  return scoreText(all.filter(w=>/^[A-Z]+$/.test(w)),all.filter(w=>/\d/.test(w)));
+}
 function render(readText){
   if(!people.length){
     app.innerHTML=`<div class="setup"><p><b>Load your list first.</b></p><p>Pick <b>Mail List.json</b> (On My iPhone → Mail). It stays on this phone only.</p>
@@ -162,9 +166,7 @@ function render(readText){
     document.getElementById("f").onchange=onFile; return;
   }
   const read=readText==null?"":readText;
-  const all=toks(" "+read.toUpperCase().replace(/['’.]/g,"").replace(/[^A-Z0-9]+/g," ")+" ").join(" ").replace(IGNORE," ").split(" ").filter(Boolean);
-  const words=all.filter(w=>/^[A-Z]+$/.test(w)), nums=all.filter(w=>/\d/.test(w));
-  const res=read?scoreText(words,nums):[];
+  const res=read?scoreRead(read):[];
   const strong=res.filter(r=>r.score>=3.4);
   let html=`<button class="btn fab" id="cam">${busy?"Reading…":"Read envelope"}</button><div class="status" id="st" style="margin:0 4px 8px">Hold Read envelope to aim, let go to read.</div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"><button class="clear" id="clr" hidden>Clear</button></div><div id="out">`;
   if(read){
@@ -253,6 +255,7 @@ async function press(e){
   const btn=document.getElementById("cam"); if(btn) btn.textContent="Let go to read";
   const wasOn=camOn;
   setIris(0); viewer.classList.add("on"); iris(1,340);
+  startSampling();
   if(wasOn){ video.play().catch(()=>{}); liveAt=Date.now(); return; }
   const ok=await startCam();
   if(!ok){ holding=false; hideViewer(); if(btn) btn.textContent="Read envelope"; return; }
@@ -260,7 +263,7 @@ async function press(e){
     hideViewer(); idleStop(); setStatus("Camera ready. Hold Read envelope to aim, let go to read.");
   }
 }
-function cancelHold(){ if(!holding) return; holding=false; iris(0,160).then(hideViewer); idleStop(); const b=document.getElementById("cam"); if(b) b.textContent="Read envelope"; }
+function cancelHold(){ if(!holding) return; holding=false; stopSampling(); iris(0,160).then(hideViewer); idleStop(); const b=document.getElementById("cam"); if(b) b.textContent="Read envelope"; }
 async function release(e){
   if(!holding) return; holding=false;
   if(!camOn){ return; } // still starting; press() handles it
@@ -268,18 +271,38 @@ async function release(e){
   while(!video.videoWidth&&Date.now()-t0<3000) await wait(50);
   const settle=600-(Date.now()-liveAt); if(settle>0) await wait(settle); // give it a moment to focus
   if(!video.videoWidth){ hideViewer(); idleStop(); return; }
-  const sc=Math.min(1,2400/Math.max(video.videoWidth,video.videoHeight)), cv=document.createElement("canvas");
-  cv.width=Math.round(video.videoWidth*sc); cv.height=Math.round(video.videoHeight*sc);
-  const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.3)"; cx.drawImage(video,0,0,cv.width,cv.height);
+  stopSampling(); frames.push(grab());
+  const shots=frames.filter(Boolean).sort((x,y)=>y.sharp-x.sharp); frames=[];
   await iris(0,200); await wait(90); hideViewer(); idleStop();
   busy=true; const btn=document.getElementById("cam"); if(btn) btn.textContent="Reading…"; setStatus("Reading…");
   try{
     const w=await getWorker();
-    const {data}=await w.recognize(cv);
+    let text=(await w.recognize(shots[0].cv)).data.text||"";
+    // no clear match: read the next sharpest frame too and use both readings
+    if(shots[1]&&!scoreRead(text).some(r=>r.score>=3.4)){ setStatus("Taking a second look…"); text+="\n"+((await w.recognize(shots[1].cv)).data.text||""); }
     busy=false;
-    history.replaceState(null,"","#t="+encodeURIComponent((data.text||"").slice(0,1500)));
-    render(data.text||" ");
+    history.replaceState(null,"","#t="+encodeURIComponent(text.slice(0,1500)));
+    render(text||" ");
   }catch(err){ busy=false; render(readFromHash()); setStatus("That didn't work. The first time needs internet, then try again."); }
+}
+// while the button is held, keep the last few frames; on release the sharpest one is read
+let frames=[], sampler=null;
+function startSampling(){ stopSampling(); frames=[]; sampler=setInterval(()=>{ if(!camOn||Date.now()-liveAt<450) return; const f=grab(); if(f){ frames.push(f); if(frames.length>3) frames.shift(); } },150); }
+function stopSampling(){ clearInterval(sampler); sampler=null; }
+function grab(){
+  if(!video.videoWidth) return null;
+  const sc=Math.min(1,2000/Math.max(video.videoWidth,video.videoHeight)), cv=document.createElement("canvas");
+  cv.width=Math.round(video.videoWidth*sc); cv.height=Math.round(video.videoHeight*sc);
+  const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.3)"; cx.drawImage(video,0,0,cv.width,cv.height);
+  return {cv,sharp:sharpness(cv)};
+}
+const sharpCv=document.createElement("canvas");
+function sharpness(cv){ // edge strength in the middle of the frame: blurry frames score low
+  const W=240,H=Math.round(W*cv.height/cv.width*.6); sharpCv.width=W; sharpCv.height=H;
+  const c=sharpCv.getContext("2d",{willReadFrequently:true}); c.drawImage(cv,cv.width*.2,cv.height*.2,cv.width*.6,cv.height*.6,0,0,W,H);
+  const d=c.getImageData(0,0,W,H).data; let sum=0;
+  for(let y=1;y<H-1;y++) for(let x=1;x<W-1;x++){ const i=(y*W+x)*4, l=4*d[i]-d[i-4]-d[i+4]-d[i-W*4]-d[i+W*4]; sum+=l*l; }
+  return sum/(W*H);
 }
 (function(){ let extra=""; try{ extra=localStorage.getItem(IGN_KEY)||""; }catch(e){}
   const m=location.hash.match(/(?:^|&)ig=([^&]*)/);
