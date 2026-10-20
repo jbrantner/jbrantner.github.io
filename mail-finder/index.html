@@ -28,7 +28,7 @@ button,.btn{font:inherit;font-size:17px;padding:12px 16px;border-radius:12px;bor
 .link{background:none;color:var(--muted);padding:0;font-size:13px;text-decoration:underline}
 #live{margin:0 0 12px}
 video{width:100%;border-radius:16px;background:#000;display:block;aspect-ratio:4/3;object-fit:cover}
-.livebar{display:flex;gap:10px;align-items:center;margin:8px 0}
+.livebar{display:flex;gap:12px;align-items:center;margin:4px 0 12px}
 .status{font-size:13px;color:var(--muted)}
 .ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
 </style>
@@ -52,6 +52,8 @@ let people=[]; // {first,last,room}
 const app=document.getElementById("app");
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const norm=s=>String(s||"").toUpperCase().replace(/['’.]/g,"").replace(/[^A-Z]+/g," ").trim();
+const toks=s=>String(s||"").toUpperCase().replace(/['’.]/g,"").replace(/[^A-Z0-9]+/g," ").trim().split(" ").filter(Boolean);
+const roomNums=room=>(String(room).match(/\d+[A-Z]?/gi)||[]).map(x=>x.toUpperCase()).filter(x=>/\d{2}/.test(x));
 const title=s=>s.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
 
 function loadPeople(json){
@@ -70,7 +72,7 @@ function loadPeople(json){
     const lasts=[...p.lasts].sort((a,b)=>b.length-a.length);
     // the longest key is the full last name; shorter ones are parts of a double name
     const parts=lasts.length>1?lasts.slice(1):[];
-    people.push({first:p.first,room:p.room,last:lasts[0],parts});
+    people.push({first:p.first,room:p.room,last:lasts[0],parts,nums:roomNums(p.room)});
   }
 }
 function lev(a,b,max){
@@ -97,7 +99,9 @@ function wordScore(name,word){
   if(d===2&&name.length>=7) return .6;
   return 0;
 }
-function scoreText(words){
+function scoreText(words,nums){
+  nums=(nums||[]).filter(n=>!/^\d{5}$/.test(n)&&/\d{2}/.test(n)); // skip zip codes
+  const numMatch=p=>p.nums.some(r=>nums.some(n=>n===r||n.replace(/\D/g,"")===r.replace(/\D/g,"")));
   const out=[];
   for(const p of people){
     let bestLast=0,lastAt=-1;
@@ -105,24 +109,26 @@ function scoreText(words){
     words.forEach((w,i)=>{ for(const L of lastNames){ const s=wordScore(L,w)*(L===p.last?1:.85); if(s>bestLast){bestLast=s;lastAt=i;} } });
     // joined double name split by the reader, e.g. "NOT REAL" for NOTREAL
     for(let i=0;i+1<words.length;i++){ const s=wordScore(p.last,words[i]+words[i+1]); if(s>bestLast){bestLast=s;lastAt=i;} }
-    if(bestLast===0) continue;
+    const room=numMatch(p);
+    if(bestLast===0&&!room) continue;
     let bestFirst=0,firstAt=-1;
     words.forEach((w,i)=>{ const s=wordScore(p.first,w)||(w.length===1&&w===p.first[0]?.35:0); if(s>bestFirst){bestFirst=s;firstAt=i;} });
-    let score=bestLast*3+bestFirst*2;
-    if(firstAt>=0&&lastAt>=0&&Math.abs(firstAt-lastAt)<=3) score+=1; // near each other, like on an address label
-    out.push({p,score,firstFound:bestFirst>=.8});
+    let score=bestLast*3+bestFirst*(bestLast?2:1);
+    if(bestLast&&firstAt>=0&&lastAt>=0&&Math.abs(firstAt-lastAt)<=3) score+=1; // near each other, like on an address label
+    if(room) score+=bestLast?1.5:2;
+    out.push({p,score,firstFound:bestFirst>=.8,lastFound:bestLast>0,room});
   }
   return out.sort((a,b)=>b.score-a.score||a.p.last.localeCompare(b.p.last));
 }
 function searchTyped(q){
-  const words=norm(q).split(" ").filter(Boolean); if(!words.length) return [];
+  const words=toks(q); if(!words.length) return [];
   const out=[];
   for(const p of people){
-    const hay=[p.first,p.last,...p.parts,norm(p.room)];
+    const hay=[p.first,p.last,...p.parts,toks(p.room).join(" ")];
     let total=0,ok=true;
     for(const w of words){
       let best=0;
-      for(const h of hay){ for(const part of h.split(" ")){ if(part.startsWith(w)) best=Math.max(best,1.2); else best=Math.max(best,wordScore(part,w)); } }
+      for(const h of hay){ for(const part of h.split(" ")){ if(part.startsWith(w)||(/\d/.test(w)&&part.replace(/\D/g,"")===w.replace(/\D/g,""))) best=Math.max(best,1.2); else if(!/\d/.test(w)) best=Math.max(best,wordScore(part,w)); } }
       if(!best){ok=false;break;} total+=best;
     }
     if(ok) out.push({p,score:total});
@@ -132,7 +138,7 @@ function searchTyped(q){
 const nameOf=p=>title(p.first)+" "+title(p.last);
 const isStaff=p=>/^staff\b/i.test(p.room);
 function rows(list){ return list.map(r=>`<div class="row"><span class="n">${esc(nameOf(r.p))}</span><span class="r${isStaff(r.p)?" staff":""}">${esc(r.p.room)}</span></div>`).join(""); }
-function topCard(t){ return `<div class="top"${isStaff(t.p)?' style="border-color:var(--line)"':""}><div class="name">${esc(nameOf(t.p))}</div><div class="room${isStaff(t.p)?" staff":""}">${esc(t.p.room)}</div>${t.firstFound?"":`<div class="why">Last name match only. Check the first name.</div>`}</div>`; }
+function topCard(t){ return `<div class="top"${isStaff(t.p)?' style="border-color:var(--line)"':""}><div class="name">${esc(nameOf(t.p))}</div><div class="room${isStaff(t.p)?" staff":""}">${esc(t.p.room)}</div>${t.firstFound&&t.lastFound?"":`<div class="why">${t.lastFound?"Last name match only. Check the first name.":"Room number match only. Check the name."}</div>`}</div>`; }
 
 function render(readText){
   if(!people.length){
@@ -141,10 +147,11 @@ function render(readText){
     document.getElementById("f").onchange=onFile; return;
   }
   const read=readText==null?"":readText;
-  const words=norm(read).replace(IGNORE," ").split(" ").filter(w=>w.length>0);
-  const res=read?scoreText(words):[];
+  const all=toks(" "+read.toUpperCase().replace(/['’.]/g,"").replace(/[^A-Z0-9]+/g," ")+" ").join(" ").replace(IGNORE," ").split(" ").filter(Boolean);
+  const words=all.filter(w=>/^[A-Z]+$/.test(w)), nums=all.filter(w=>/\d/.test(w));
+  const res=read?scoreText(words,nums):[];
   const strong=res.filter(r=>r.score>=3.4);
-  let html=`<div id="live">${liveOn?`<video id="v" playsinline muted autoplay></video>`:""}<div class="livebar"><button id="cam" class="${liveOn?"ghost":""}">${liveOn?"Stop camera":"Start camera"}</button><span class="status" id="st">${liveOn?"Reading…":"Point at an envelope, results show below."}</span></div></div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"></div><div id="out">`;
+  let html=`<div class="livebar"><label class="btn">Take photo<input id="cam" type="file" accept="image/*" capture="environment" hidden></label><span class="status" id="st">${busy?"Reading…":"Take a picture of the envelope."}</span></div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"></div><div id="out">`;
   if(read){
     if(strong.length){
       const t=strong[0];
@@ -153,15 +160,14 @@ function render(readText){
       if(more.length) html+=`<div class="label">Also close</div>`+rows(more);
     } else if(res.length){
       html+=`<div class="label">Possible matches</div>`+rows(res.slice(0,6));
-    } else html+=`<div class="none">No resident found. Try searching above.</div>`;
+    } else html+=`<div class="none">No one found. Try searching above.</div>`;
     html+=`<div class="read">It read: ${esc(read.replace(/\s+/g," ").slice(0,300))}</div>`;
   }
   html+=`</div><p class="small">${people.filter(p=>!isStaff(p)).length} residents${people.some(isStaff)?` and ${people.filter(isStaff).length} staff`:""} loaded on this phone. <button class="link" id="reload">Load a new list</button> · <button class="link" id="ign">Address words to skip</button></p>`;
   app.innerHTML=html;
   const q=document.getElementById("q"), out=document.getElementById("out"), base=out.innerHTML;
   q.oninput=()=>{ const r=searchTyped(q.value); out.innerHTML=q.value.trim()?(r.length?rows(r):`<div class="none">No one by that name.</div>`):base; };
-  document.getElementById("cam").onclick=()=>liveOn?stopLive():startLive();
-  if(liveOn) attachVideo();
+  document.getElementById("cam").onchange=onPhoto;
   document.getElementById("ign").onclick=()=>{ let cur=""; try{cur=localStorage.getItem(IGN_KEY)||"";}catch(e){}
     const v=prompt("Words on every envelope that aren't names (street, town), separated by commas:",cur);
     if(v!==null){ try{localStorage.setItem(IGN_KEY,v);}catch(e){} setIgnore(v); render(readFromHash()); } };
@@ -178,7 +184,7 @@ function readFromHash(){
   try{ return decodeURIComponent(m[1].replace(/\+/g," ")); }catch(e){ return m[1]; }
 }
 
-let liveOn=false, stream=null, worker=null, busy=false, timer=null, lastTop="", lastTopAt=0;
+let worker=null, busy=false;
 async function getWorker(){
   if(worker) return worker;
   setStatus("Loading the text reader (first time needs internet)…");
@@ -187,54 +193,21 @@ async function getWorker(){
   return worker;
 }
 function setStatus(t){ const e=document.getElementById("st"); if(e) e.textContent=t; }
-function attachVideo(){ const v=document.getElementById("v"); if(v&&stream){ v.srcObject=stream; v.play().catch(()=>{}); } }
-async function startLive(){
+async function onPhoto(e){
+  const f=e.target.files[0]; if(!f||busy) return;
+  busy=true; setStatus("Reading…");
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1920},height:{ideal:1440}},audio:false});
-  }catch(e){ alert("The camera didn't start. Allow camera access for this page in Safari."); return; }
-  liveOn=true; render(null); attachVideo();
-  try{ await getWorker(); }catch(e){ setStatus("The text reader didn't load. Check the internet and try again."); return; }
-  setStatus("Reading…"); loop();
-}
-function stopLive(){ liveOn=false; clearTimeout(timer); if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } render(null); }
-async function loop(){
-  if(!liveOn) return;
-  const v=document.getElementById("v");
-  if(v&&v.videoWidth&&!busy&&!document.hidden){
-    busy=true;
-    try{
-      const cv=document.createElement("canvas"), w=v.videoWidth, h=v.videoHeight, sc=Math.min(1,1600/w);
-      cv.width=Math.round(w*sc); cv.height=Math.round(h*sc);
-      const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.4)"; cx.drawImage(v,0,0,cv.width,cv.height);
-      const {data}=await worker.recognize(cv);
-      showLive(data.text||"");
-    }catch(e){ setStatus("Reading…"); }
+    const bmp=await createImageBitmap(f);
+    const sc=Math.min(1,2200/Math.max(bmp.width,bmp.height)), cv=document.createElement("canvas");
+    cv.width=Math.round(bmp.width*sc); cv.height=Math.round(bmp.height*sc);
+    const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.3)"; cx.drawImage(bmp,0,0,cv.width,cv.height);
+    const w=await getWorker(); setStatus("Reading…");
+    const {data}=await w.recognize(cv);
     busy=false;
-  }
-  timer=setTimeout(loop,250);
+    history.replaceState(null,"","#t="+encodeURIComponent((data.text||"").slice(0,1500)));
+    render(data.text||" ");
+  }catch(err){ busy=false; setStatus("That didn't work. Check the internet the first time, then try again."); }
 }
-function showLive(text){
-  const out=document.getElementById("out"), q=document.getElementById("q");
-  if(!out||(q&&q.value.trim())) return;
-  const words=norm(text).replace(IGNORE," ").split(" ").filter(Boolean);
-  const res=words.length?scoreText(words):[];
-  const strong=res.filter(r=>r.score>=3.4);
-  const now=Date.now();
-  if(!strong.length){
-    if(now-lastTopAt>2500){ out.innerHTML=""; lastTop=""; }
-    setStatus(words.length?"Looking…":"Point at an envelope");
-    return;
-  }
-  const t=strong[0], id=t.p.first+"|"+t.p.room;
-  lastTopAt=now;
-  if(id===lastTop&&out.innerHTML) { setStatus("Found"); return; }
-  lastTop=id;
-  let html=topCard(t);
-  const more=res.slice(1,4).filter(r=>r.score>=2.4);
-  if(more.length) html+=`<div class="label">Also close</div>`+rows(more);
-  out.innerHTML=html; setStatus("Found");
-}
-document.addEventListener("visibilitychange",()=>{ if(document.hidden&&liveOn) stopLive(); });
 (function(){ let extra=""; try{ extra=localStorage.getItem(IGN_KEY)||""; }catch(e){}
   const m=location.hash.match(/(?:^|&)ig=([^&]*)/);
   if(m){ try{ extra=decodeURIComponent(m[1]); localStorage.setItem(IGN_KEY,extra); }catch(e){} history.replaceState(null,"",location.pathname); }
