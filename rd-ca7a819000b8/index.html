@@ -553,7 +553,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.83'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.84'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4743,7 +4743,7 @@ function box3d(c){
 // half way their back and three quarters their left side. Scrub the clip on the card and add frames as pictures.
 const TV_W = 576, TV_H = 1024, TV_LEN = 124; // portrait, ~5 s at 24 fps (124 is the shortest length it was trained on)
 const TV_AT = {front:0.03, three:0.125, right:0.25, back:0.5, left:0.75}; // where each angle usually is in the turn // where each angle usually is in the turn
-const FAKETV = {MiniMaxH3ReferenceToVideo:{input:{required:{}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors']]}}}, UNETLoader:{input:{required:{unet_name:[['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors']], weight_dtype:[['default']]}}},
+const FAKETV = {MiniMaxH3ReferenceToVideo:{input:{required:{}}}, LoraLoader:{input:{required:{lora_name:[['AFKJ Style Illustrious Claude.safetensors']]}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors']]}}}, UNETLoader:{input:{required:{unet_name:[['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors']]}}}, CLIPLoader:{input:{required:{clip_name:[['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors']]}}}, SaveVideo:{input:{required:{}}},
   ModelPatchLoader:{input:{required:{name:[['minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors']]}}}, MiniMaxH3FunControlNetApply:{input:{required:{}}}, LoadVideo:{input:{required:{}}}, GetVideoComponents:{input:{required:{}}}};
@@ -5220,7 +5220,7 @@ async function autoStart(c){
     shots:lines.map(l => ({say:l.say, tags:l.tags})), shot_graphs:lines.map(l => { const r = shotGraph(k, [img, '@SIDE', '@BACK'], c, shotPrompt(c, refs, l.say), shotPrefix(c) + '_clip_' + uid('a')); return {graph:r.g, save:r.save}; }),
     redraw:dn ? (r => ({graph:r.g, save:r.save}))(redrawGraph(k.oi, '@IMG', c, '@TAGS', anglesPrefix(c), dn)) : null,
     trigger:trigOf(c), who:((c.tags || '').match(/\b(1girl|1boy|1other)\b/) || [])[0] || '', dataset_dir:(S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c),
-    ckpt:autoCkpt(c, k), steps:1200, per_shot:shotN(c), set_min:SET_RANGE.min, set_max:SET_RANGE.max};
+    ckpt:autoCkpt(c, k), steps:1600, style_lora:autoStyle(c, k), style_mult:1, per_shot:shotN(c), set_min:SET_RANGE.min, set_max:SET_RANGE.max};
   if(S.test){ AUTOS.last = body; c.auto = {id:'test', pc:'test', until, state:'running', prog:0, text:'Starting…'}; save(); drawChars(); return; }
   try{ const r = await fetch(k.url + '/renderdeck/auto/start', {method:'POST', headers:JSONH, body:JSON.stringify(body)}), j = await r.json();
     if(!r.ok) throw new Error(j.error || r.status);
@@ -5231,7 +5231,7 @@ async function autoStart(c){
 // the run's results onto the card: the angles as Build it all's, the training shots with their frames, the picks
 function autoImport(c, j){
   const pc = c.auto.pc, A = c.auto, img = f => (f.subfolder ? f.subfolder + '/' : '') + f.filename + ' [output]', key = f => f.subfolder + '/' + f.filename;
-  Object.assign(A, {state:j.state, step:j.step, text:j.text, prog:j.prog, done:j.done || [], lora:j.lora || '', note:j.pick_note || '', gpu:j.gpu_c, ts:j.train_step, tn:j.train_steps});
+  Object.assign(A, {state:j.state, step:j.step, text:j.text, prog:j.prog, done:j.done || [], lora:j.lora || '', note:j.pick_note || '', gpu:j.gpu_c, ts:j.train_step, tn:j.train_steps, t0:j.train_t0});
   const have = new Set(c.views.map(v => v.auto));
   if(j.angles && (j.done || []).includes('angles') && !have.has(key(Object.values(j.angles)[0]))){
     c.views = c.views.filter(v => !v.pipe);
@@ -5260,21 +5260,42 @@ setInterval(() => { if(document.visibilityState==='visible' && $('#charSheet').c
 // the checkpoint the LoRA is trained on: the card's pick when that PC has it, else the usual Illustrious one
 function autoCkpt(c, k){ const list = k.oi && k.oi.CheckpointLoaderSimple ? combo(k.oi.CheckpointLoaderSimple, 'ckpt_name') : [];
   return c.trainCkpt && list.includes(c.trainCkpt) ? c.trainCkpt : k.oi ? trainCkpt(k.oi) : ''; }
+// a style LoRA (AFKJ Style) mixed into the checkpoint while training, so the character LoRA learns only the character and
+// both can be on at full strength later without the style redrawing the character's design (Jordan 2026-10-20)
+function autoStyle(c, k){ const list = k.oi && k.oi.LoraLoader ? combo(k.oi.LoraLoader, 'lora_name') : [];
+  return c.trainStyle && list.includes(c.trainStyle) ? c.trainStyle : ''; }
+// train the LoRA again from the last run's picked pictures: new trigger word, checkpoint or style, no new shots
+async function autoRetrain(c){
+  const k = kitTurn(); if(k.why){ toast(k.why, true); return; }
+  const w = prompt('Trigger word for the new LoRA: one made-up word that means nothing else.', /^(character|girl|boy|woman|man)$/i.test(trigOf(c)) ? 'char_rd' : trigOf(c));
+  if(!w || !w.trim()) return; c.trigger = w.trim().toLowerCase().replace(/[^\w]+/g, '_'); save();
+  const st = autoStyle(c, k), body = {from:c.auto && c.auto.id, char:c.name || 'character', pc:k.url, trigger:trigOf(c), ckpt:autoCkpt(c, k), steps:1600, style_lora:st, style_mult:1};
+  if(!confirm('Train the LoRA again on ' + pcName(k.url) + ' with the same pictures, on ' + baseName(body.ckpt) + (st ? ', with ' + baseName(st) + ' mixed in' : '') + '? About an hour.')) return;
+  if(S.test){ AUTOS.last = body; c.auto = {id:'test', pc:'test', until:'lora', state:'running', prog:0, text:'Starting…'}; save(); drawChars(); return; }
+  try{ const r = await fetch(k.url + '/renderdeck/auto/retrain', {method:'POST', headers:JSONH, body:JSON.stringify(body)}), j = await r.json();
+    if(!r.ok) throw new Error(j.error || r.status);
+    c.auto = {id:j.id, pc:k.url, until:'lora', state:'running', prog:0, text:'Starting…', at:Date.now(), picked:true}; save(); drawChars(); buzz();
+    toast('Training again on ' + pcName(k.url) + '. You can close the app.'); autoPoll(); }
+  catch(e){ toast(/404|Not Found/.test(e.message) ? pcName(k.url) + ' needs the helper update (the PowerShell line in the thread)' : "Couldn't start: " + e.message, true); }
+}
 function boxAuto(c){
   const A = c.auto, run = A && A.state==='running';
   let h = `<div class="autobox"><div class="lblrow"><b>⚡ Auto run</b><small>on ${esc(S.test ? 'Render' : pcName(kitTurn().url || ''))}, with the app closed</small></div>`;
-  if(run){ const mins = A.step==='train' && A.tn ? Math.round((A.tn - A.ts) * 1.9 / 60) : null;
+  if(run){ const per = A.t0 && A.ts > 20 ? (Date.now() / 1000 - A.t0) / A.ts : 2.4, mins = A.step==='train' && A.tn ? Math.round((A.tn - A.ts) * per / 60) : null;
     return h + `<div class="pbar"><i style="width:${(100 * (A.prog || 0)).toFixed(1)}%"></i></div>
       <p class="note">${esc(AUTO_STEP[A.step] || 'Starting')}${A.text && A.step!=='train' ? ': ' + esc(A.text) : ''}${A.step==='train' && A.tn ? ' · step ' + A.ts + ' of ' + A.tn + (mins!=null ? ', about ' + mins + ' min left' : '') + (A.gpu ? ' · GPU ' + A.gpu + '°C' : '') : ''}</p>
       <div class="btnrow"><button class="btn" data-ch="autostop" ${A.stopping ? 'disabled' : ''}>${A.stopping ? 'Stopping…' : '⏹ Stop the auto run'}</button></div></div>`; }
   if(A && A.state==='done') h += `<p class="note okline"><b>✓ Done</b>${A.lora ? ': the LoRA <b>' + esc(A.lora) + '</b> is in ' + esc(pcName(A.pc)) + "'s LoRAs. Its trigger word is " + esc(trigOf(c)) + '.' : '.'}${A.note ? ' ' + esc(A.note) : ''}</p>`;
   else if(A && A.state==='error') h += `<p class="warn">The auto run stopped at ${esc((AUTO_STEP[A.step] || '').toLowerCase())}: ${esc(A.text)}</p>`;
   else if(A && A.state==='stopped') h += '<p class="note">The auto run was stopped. What it made is on the card.</p>';
-  const k = kitTurn(), cks = k.oi && k.oi.CheckpointLoaderSimple ? combo(k.oi.CheckpointLoaderSimple, 'ckpt_name') : [], ck = autoCkpt(c, k);
+  const k = kitTurn(), cks = k.oi && k.oi.CheckpointLoaderSimple ? combo(k.oi.CheckpointLoaderSimple, 'ckpt_name') : [], ck = autoCkpt(c, k),
+    sts = k.oi && k.oi.LoraLoader ? combo(k.oi.LoraLoader, 'lora_name') : [], st = autoStyle(c, k);
   return h + `<div class="row"><label>Run until</label>${seg('autoUntil', AUTO_UNTIL, c.autoUntil || 'lora')}</div>
     ${(c.autoUntil || 'lora')==='lora' && cks.length ? `<div class="row"><label>Train on</label><div class="grow"><select data-cf="trainCkpt">${cks.map(n => `<option value="${esc(n)}" ${n===ck ? 'selected' : ''}>${esc(baseName(n))}</option>`).join('')}</select></div></div>
-      <p class="note" style="margin:-2px 0 0 92px">The checkpoint the LoRA learns on; it looks best on that one later.</p>` : ''}
-    <div class="btnrow"><button class="btn hot" data-ch="autogo">▶ Start auto run</button></div></div>`;
+      <p class="note" style="margin:-2px 0 0 92px">The checkpoint the LoRA learns on; it looks best on that one later.</p>
+      <div class="row"><label>Mix in style</label><div class="grow"><select data-cf="trainStyle"><option value="">None</option>${sts.map(n => `<option value="${esc(n)}" ${n===st ? 'selected' : ''}>${esc(baseName(n))}</option>`).join('')}</select></div></div>
+      <p class="note" style="margin:-2px 0 0 92px">Pick the style LoRA you'll use with this character (AFKJ Style). It's mixed in while training, so later both LoRAs can be on at full strength without the style changing her design.</p>` : ''}
+    <div class="btnrow"><button class="btn hot" data-ch="autogo">▶ Start auto run</button>${A && (A.done || []).includes('pick') || (A && A.lora) ? '<button class="btn" data-ch="autoretrain">🎓 Train the LoRA again</button>' : ''}</div></div>`;
 }
 // ---------- 🎞 Training shots: MiniMax acts the character out, the sharpest frame of each clip joins the card ----------
 // For a LoRA that knows the character in any pose, not just the turnaround's A-pose. Each line is an action ("what they
@@ -5614,6 +5635,7 @@ $('#charBody').onclick = async e => {
   else if(act==='tpickall'){ c.views.forEach(v => delete v.noTrain); }
   else if(act==='shotgo'){ const n = shotLines(c).length; if(!confirm('Make ' + n + ' training ' + (n===1 ? 'shot' : 'shots') + ' on ' + pcName(kitTurn().url || '') + '? About ' + Math.round(n * SHOT_EST() / 60) + ' minutes.')) return; SV.id = null; runShots(c); return; }
   else if(act==='autogo'){ autoStart(c); return; }
+  else if(act==='autoretrain'){ autoRetrain(c); return; }
   else if(act==='autostop'){ if(c.auto && confirm('Stop the auto run? What it made so far stays.')){ c.auto.stopping = true; if(c.auto.pc!=='test') fetch(c.auto.pc + '/renderdeck/auto/stop', {method:'POST', headers:JSONH, body:JSON.stringify({id:c.auto.id})}).catch(() => {}); else c.auto.state = 'stopped'; } }
   else if(t.dataset.seg==='autoUntil'){ c.autoUntil = t.dataset.v; }
   else if(act==='shotfind'){ CH.adopted = Date.now(); findShots(c); return; }

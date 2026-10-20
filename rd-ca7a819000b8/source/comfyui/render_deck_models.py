@@ -1420,6 +1420,39 @@ def _write_set(j):
     j['kohya_data'] = os.path.dirname(dirs[-1]) if sd else ''
 
 
+def _retrain_set(j, sd):
+    """A retrain uses an earlier run's training pictures: copied to kohya's folder for the new trigger word, with the old
+    trigger swapped for the new one at the start of each caption."""
+    src, old = j['retrain_from'], j.get('retrain_trigger', '')
+    if not os.path.isdir(src):
+        raise RuntimeError("the earlier run's training pictures aren't in " + src + ' any more')
+    trig = j['trigger']
+    d = os.path.join(os.path.dirname(sd), 'data', trig, '10_' + trig)
+    if os.path.abspath(d) != os.path.abspath(src):
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+        os.makedirs(d)
+        n = 0
+        for f in sorted(os.listdir(src)):
+            stem, ext = os.path.splitext(f)
+            if ext.lower() not in PICS:
+                continue
+            n += 1
+            new = '%s_%02d' % (trig, n)
+            shutil.copyfile(os.path.join(src, f), os.path.join(d, new + ext))
+            cap = ''
+            if os.path.exists(os.path.join(src, stem + '.txt')):
+                cap = open(os.path.join(src, stem + '.txt'), encoding='utf-8').read().strip()
+            parts = [x.strip() for x in cap.split(',') if x.strip()]
+            if parts and parts[0] == old:
+                parts = parts[1:]
+            with open(os.path.join(d, new + '.txt'), 'w', encoding='utf-8') as fh:
+                fh.write(', '.join([trig] + parts))
+        if not n:
+            raise RuntimeError('no training pictures in ' + src)
+    j['kohya_data'] = os.path.dirname(d)
+
+
 async def _step_pick(s, j):
     if j.get('picks') is None:
         _say(j, 'pick', 'Picking the training set…')
@@ -1451,7 +1484,7 @@ def _train_blocking(j, cmd, env, cwd):
         m = re.findall(r'(\d+)/(\d+) \[', txt)
         if m:
             a, b = map(int, m[-1])
-            if b == int(j.get('steps', 1200)):  # the training bar, not the caching ones
+            if b == int(j.get('steps', 1600)):  # the training bar, not the caching ones
                 j['train_step'], j['train_steps'] = a, b
         tail = txt.splitlines()[-12:]
         if time.time() - last_t > 20:
@@ -1479,6 +1512,8 @@ async def _step_train(s, j):
     sd, py = _kohya()
     if not sd:
         raise RuntimeError("kohya sd-scripts isn't next to ComfyUI (looked for kohya\\sd-scripts with its venv)")
+    if j.get('retrain_from') and not j.get('kohya_data'):
+        await asyncio.to_thread(_retrain_set, j, sd)
     ckpt = folder_paths.get_full_path('checkpoints', j['ckpt'])
     if not ckpt:
         raise RuntimeError('this computer has no ' + j['ckpt'])
@@ -1507,18 +1542,28 @@ async def _step_train(s, j):
     except Exception:
         pass
     AUTO_TRAINING['pc'] = j.get('pc', '')
-    steps = int(j.get('steps', 1200))
+    steps = int(j.get('steps', 1600))
+    # stronger than the first runs (Jordan 2026-10-20: the Librarian's shirt came out right only ~40% of the time): rank 32, and
+    # the text encoders learn the trigger word too, so its text outputs can't be cached
     cmd = [py, os.path.join(sd, 'sdxl_train_network.py'), '--pretrained_model_name_or_path', ckpt, '--train_data_dir', j['kohya_data'],
            '--output_dir', loras, '--output_name', name, '--save_model_as', 'safetensors', '--network_module', 'networks.lora',
-           '--network_dim', '16', '--network_alpha', '8', '--network_train_unet_only', '--resolution', '1024,1024', '--enable_bucket',
+           '--network_dim', '32', '--network_alpha', '16', '--text_encoder_lr', '5e-5', '--resolution', '1024,1024', '--enable_bucket',
            '--min_bucket_reso', '512', '--max_bucket_reso', '1536', '--bucket_reso_steps', '64', '--caption_extension', '.txt',
            '--optimizer_type', 'Adafactor', '--optimizer_args', 'scale_parameter=False', 'relative_step=False', 'warmup_init=False',
            '--learning_rate', '1e-4', '--lr_scheduler', 'constant_with_warmup', '--lr_warmup_steps', '50', '--max_train_steps', str(steps),
            '--train_batch_size', '1', '--mixed_precision', 'bf16', '--save_precision', 'fp16',
-           '--fp8_base', '--cache_latents', '--cache_latents_to_disk', '--cache_text_encoder_outputs', '--gradient_checkpointing', '--sdpa',
+           '--fp8_base', '--cache_latents', '--cache_latents_to_disk', '--gradient_checkpointing', '--sdpa',
            '--max_data_loader_n_workers', '0', '--seed', '42']
+    # a style LoRA mixed into the checkpoint while training: the character LoRA then learns only what's left over, so later
+    # both can be on at full strength without the style redrawing the character's design
+    if j.get('style_lora'):
+        st = folder_paths.get_full_path('loras', j['style_lora'])
+        if not st:
+            raise RuntimeError('this computer has no LoRA ' + j['style_lora'])
+        cmd += ['--base_weights', st, '--base_weights_multiplier', str(float(j.get('style_mult', 1.0)))]
     env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
     _say(j, 'train', 'Training the LoRA with kohya…')
+    j['train_t0'] = time.time()
     try:
         why = await asyncio.to_thread(_train_blocking, j, cmd, env, sd)
     finally:
@@ -1534,7 +1579,7 @@ AUTO_FN = {'turn': _step_turn, 'angles': _step_angles, 'shots': _step_shots, 'pi
 
 def _auto_prog(j):
     w = {'turn': 300, 'angles': 30, 'shots': 330 * max(1, len(j.get('shots', []))), 'pick': 30, 'train': 2400}
-    upto = AUTO_STEPS[:AUTO_STEPS.index(AUTO_UNTIL[j['until']]) + 1]
+    upto = j.get('only') or AUTO_STEPS[:AUTO_STEPS.index(AUTO_UNTIL[j['until']]) + 1]
     total = sum(w[x] for x in upto)
     done = sum(w[x] for x in upto[:upto.index(j['step'])]) if j.get('step') in upto else 0
     part = 0
@@ -1555,7 +1600,7 @@ async def _auto_loop():
             if not j:
                 return
             try:
-                upto = AUTO_STEPS[:AUTO_STEPS.index(AUTO_UNTIL[j['until']]) + 1]
+                upto = j.get('only') or AUTO_STEPS[:AUTO_STEPS.index(AUTO_UNTIL[j['until']]) + 1]
                 for st in upto:
                     if j.get('stop'):
                         raise RuntimeError('stopped')
@@ -1611,11 +1656,39 @@ async def auto_start(request):
         return web.json_response({'error': "kohya sd-scripts isn't next to ComfyUI on this computer, so it can't train the LoRA here."}, status=400)
     j = {'id': uuid.uuid4().hex[:10], 'state': 'running', 'started': time.time(), 'prog': 0, 'step': 'turn', 'text': 'Starting…', 'done': []}
     for k in ('char', 'until', 'turn_graph', 'shot_graphs', 'redraw', 'src', 'keep_front', 'angles_prefix', 'shots_prefix', 'trigger', 'who',
-              'dataset_dir', 'ckpt', 'steps', 'per_shot', 'set_min', 'set_max', 'pc'):
+              'dataset_dir', 'ckpt', 'steps', 'per_shot', 'set_min', 'set_max', 'pc', 'style_lora', 'style_mult'):
         if k in b:
             j[k] = b[k]
     j['shots'] = [{'say': x.get('say', ''), 'tags': x.get('tags', '')} for x in b.get('shots', [])]
     j['trigger'] = re.sub(r'[^\w]+', '_', j.get('trigger') or 'character').strip('_') or 'character'
+    AUTO['jobs'] = AUTO['jobs'][-9:] + [j]
+    _auto_save()
+    _auto_start()
+    return web.json_response({'id': j['id']})
+
+
+@routes.post('/renderdeck/auto/retrain')
+async def auto_retrain(request):
+    """Train the LoRA again from an earlier run's training pictures: a new trigger word, checkpoint or style LoRA,
+    without making the turnaround and shots again."""
+    b = await request.json()
+    if any(x['state'] == 'running' for x in AUTO['jobs']):
+        return web.json_response({'error': 'An auto run is already going on this computer.'}, status=409)
+    if not _kohya()[0]:
+        return web.json_response({'error': "kohya sd-scripts isn't next to ComfyUI on this computer, so it can't train the LoRA here."}, status=400)
+    old = next((x for x in AUTO['jobs'] if x['id'] == b.get('from') and x.get('kohya_data')), None) \
+        or next((x for x in reversed(AUTO['jobs']) if x.get('char') == b.get('char') and x.get('kohya_data')), None)
+    if not old:
+        return web.json_response({'error': "This computer has no earlier run with training pictures for that character."}, status=404)
+    ot = old['trigger']
+    j = {'id': uuid.uuid4().hex[:10], 'state': 'running', 'started': time.time(), 'prog': 0, 'step': 'train', 'text': 'Starting…', 'done': [],
+         'char': old.get('char', ''), 'until': 'lora', 'only': ['train'], 'pc': b.get('pc') or old.get('pc', ''),
+         'retrain_from': os.path.join(old['kohya_data'], '10_' + ot), 'retrain_trigger': ot}
+    for k in ('ckpt', 'steps', 'style_lora', 'style_mult'):
+        if b.get(k) not in (None, ''):
+            j[k] = b[k]
+    j.setdefault('ckpt', old.get('ckpt'))
+    j['trigger'] = re.sub(r'[^\w]+', '_', b.get('trigger') or ot).strip('_') or ot
     AUTO['jobs'] = AUTO['jobs'][-9:] + [j]
     _auto_save()
     _auto_start()

@@ -68,6 +68,7 @@ K = os.path.join(T, 'kohya'); os.makedirs(os.path.join(K, 'sd-scripts')); os.mak
 open(os.path.join(K, 'sd-scripts', 'sdxl_train_network.py'), 'w').write('''import sys, os
 a = sys.argv; out, name, steps = a[a.index('--output_dir') + 1], a[a.index('--output_name') + 1], int(a[a.index('--max_train_steps') + 1])
 data = a[a.index('--train_data_dir') + 1]; assert os.listdir(data), 'no data'
+open(os.path.join(out, name + '.args'), 'w').write(' '.join(a))
 for s in range(1, steps + 1, 100): sys.stderr.write('steps: %d%%| %d/%d [00:01<00:01]\\r' % (s * 100 // steps, s, steps))
 open(os.path.join(out, name + '.safetensors'), 'w').close()
 ''')
@@ -105,8 +106,24 @@ async def main():
     ok(any(c.startswith('lib_rd, 1girl, solo, standing, a-pose') and 'from behind' in c for c in caps), 'captions: ' + caps[0])
     ok(os.path.exists(os.path.join(OUT, 'RenderDeck', 'datasets', 'lib_rd')) and j['pick_note'], 'the set is also in the output folder, with a note when short: ' + j['pick_note'])
     ok(j['lora'] == 'lib_rd.safetensors' and os.path.exists(os.path.join(T, 'loras', j['lora'])) and j.get('train_steps') == 300, 'the LoRA is trained into the loras folder: %s %s' % (j.get('lora'), j.get('train_steps')))
+    args = open(os.path.join(T, 'loras', 'lib_rd.args')).read()
+    ok('--text_encoder_lr' in args and '--network_dim 32' in args and '--cache_text_encoder_outputs' not in args and '--base_weights' not in args, 'trains rank 32 with the text encoders, no style mixed in unless asked')
+    # train again from that run's pictures: new trigger word, the style LoRA mixed into the checkpoint
+    open(os.path.join(T, 'ckpt', 'AFKJ Style.safetensors'), 'w').close()
+    rb = {'from': jid, 'trigger': 'lib x', 'steps': 200, 'style_lora': 'AFKJ Style.safetensors', 'style_mult': 1}
+    r = await PS.instance.routes.h[('POST', '/renderdeck/auto/retrain')](types.SimpleNamespace(json=lambda: asyncio.sleep(0, rb)))
+    rid = json.loads(r.body)['id']
+    for _ in range(100):
+        await asyncio.sleep(0.2)
+        j2 = next(x for x in H.AUTO['jobs'] if x['id'] == rid)
+        if j2['state'] != 'running': break
+    ok(j2['state'] == 'done' and j2['lora'] == 'lib_x.safetensors' and j2['ckpt'] == 'oneObsession_v24.safetensors', 'the retrain makes lib_x on the same checkpoint: %s %s' % (j2['state'], j2.get('text')))
+    d2 = os.path.join(K, 'data', 'lib_x', '10_lib_x'); caps2 = [open(os.path.join(d2, f)).read() for f in os.listdir(d2) if f.endswith('.txt')]
+    ok(len(caps2) == len(caps) and all(c.startswith('lib_x, 1girl') and 'lib_rd' not in c for c in caps2), 'the same pictures, captions start with the new trigger: ' + caps2[0])
+    a2 = open(os.path.join(T, 'loras', 'lib_x.args')).read()
+    ok('--base_weights ' + os.path.join(T, 'ckpt', 'AFKJ Style.safetensors') in a2 and '--base_weights_multiplier 1.0' in a2, 'the style LoRA is mixed in while training')
     v = json.loads((await PS.instance.routes.h[('GET', '/renderdeck/auto')](None)).body)
-    ok(v['jobs'][-1]['id'] == jid and 'turn_graph' not in v['jobs'][-1], 'the app reads the run without its graphs')
+    ok(v['jobs'][-2]['id'] == jid and 'turn_graph' not in v['jobs'][-2], 'the app reads the run without its graphs')
     await run.cleanup()
 asyncio.run(main())
 print(len(fails), 'failed' if fails else 'all passed'); sys.exit(1 if fails else 0)
