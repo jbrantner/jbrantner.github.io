@@ -247,6 +247,31 @@ def _kohya_running():
     return _KOHYA_SEEN[1]
 
 
+def _hold_queue_while_training():
+    """Renders sent straight to this ComfyUI while kohya trains here wait in its queue and start by themselves when the
+    training ends (Jordan 2026-10-20: 'When it's LoRA training turn off ComfyUI renders until it's done'). ComfyUI's worker
+    asks its queue for the next prompt; while training, the answer is 'nothing yet'."""
+    try:
+        import execution
+        PQ = execution.PromptQueue
+    except Exception:
+        return
+    if getattr(PQ.get, '_rd_hold', False):
+        return
+    orig = PQ.get
+
+    def get(self, timeout=None):
+        if _kohya_running():
+            time.sleep(2)
+            return None
+        return orig(self, timeout)
+    get._rd_hold = True
+    PQ.get = get
+
+
+_hold_queue_while_training()
+
+
 @routes.get('/renderdeck/jobs')
 async def jobs(request):
     training = await asyncio.to_thread(_kohya_running)

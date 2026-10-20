@@ -134,6 +134,14 @@ async def main():
     import subprocess
     pr = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)', 'sdxl_train_network.py'])
     await asyncio.sleep(0.5); H._KOHYA_SEEN[0] = 0; seen = H._kohya_running(); pr.kill()
+    # and ComfyUI's own queue holds its renders meanwhile
+    ex = types.ModuleType('execution')
+    class PQ:
+        def get(self, timeout=None): return ('prompt', 1)
+    ex.PromptQueue = PQ; sys.modules['execution'] = ex; H._hold_queue_while_training()
+    H._KOHYA_SEEN[:] = [time.time(), True]; held = PQ().get(1)
+    H._KOHYA_SEEN[:] = [time.time(), False]; after = PQ().get(1)
+    ok(held is None and after == ('prompt', 1), 'ComfyUI holds its queue while kohya trains, then carries on')
     r = await PS.instance.routes.h[('GET', '/renderdeck/jobs')](None)
     ok(seen and 'training' in json.loads(r.body), 'a hand-started kohya shows as training in /renderdeck/jobs')
     await run.cleanup()
