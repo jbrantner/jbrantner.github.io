@@ -1,9 +1,13 @@
-# budget-next
+# The budget app
 
-The budget app (v316) rebuilt on a cleaner footing: the same app, the same math, the same screens, split out of the one
-1 MB `index.html` into files you can find things in. Saved data and backups load as they are. The one difference a
-user sees: the Pet tab is gone (Jordan, 2026-10-20: not the direction the app is going); Upkeep's level on top
-is its own hearth again, as in the shared copy. The live app is still `budget/`; this copy goes live only when Jordan says so.
+Since v317 (2026-10-20) the app is split out of the one 1 MB `index.html` into files you can find things in, with the
+same math and the same screens as v316, tested 1:1 against it (built and tested at `budget-next/` first). Saved data
+and backups load as they are. The one difference a user sees: the Pet tab is gone (Jordan, 2026-10-20: not the direction
+the app is going); Upkeep's level on top is its own hearth again, as in the shared copy. `budget-share/` is the same app
+for Jordan's sister (built from this folder by `/mnt/project-files/budget-app/share-v317/build.sh`).
+
+The old files here that the app no longer loads (`pet.html`, `pet-engine.js`, `pet-sprites.js`, `friends/`, `art.png`,
+`town-art*.png`) stay on the site: an older copy's Update fetches its own file list, and a missing file would stop it.
 
 ## Where things are
 
@@ -20,9 +24,8 @@ is its own hearth again, as in the shared copy. The live app is still `budget/`;
   - `legacy/`: older screens a few paths still open (the old "This week" page and the transaction list), and support
     for older saved data (money still on a cart from the old farms). The old Pots, Bills and Scavenger pages, which
     nothing opened any more, are gone; the pieces the town's sheets borrow from them wait in `#townDock`.
-- `js/sandbox.js` keeps the test copy's saved data apart from the live app's (they share one site): at
-  `/budget-next/` every saved key starts with `budget-next:`, so it starts empty and you restore a backup in it.
-  At any other address it does nothing.
+- `js/sandbox.js` keeps a test copy's saved data apart from the live app's (they share one site): at
+  `/budget-next/` every saved key starts with `budget-next:`. At any other address, this one included, it does nothing.
 - `sw.js` is the offline cache (`budget-next` at the test address, `budget-main` otherwise).
 
 The scripts are plain classic scripts sharing one global scope, as before, so the load order in `index.html` matters:
@@ -30,8 +33,8 @@ each file only uses, while loading, what the files before it define.
 
 ## The 1:1 tests (`dev/`)
 
-These run v315 (A) and this copy (B) side by side in Chromium (Playwright) with the same saved data, the same clock and
-the same random numbers, and compare them. Serve a folder with `A/` (a copy of `budget/`) and `B/` (this folder) on
+These run a reference build (A) and this copy (B) side by side in Chromium (Playwright) with the same saved data, the same clock and
+the same random numbers, and compare them. Serve a folder with `A/` (the reference, e.g. the last release) and `B/` (this folder) on
 port 8801, or set `PARITY_URL`.
 
 - `screens.js <data.json|demo> [outDir] [--looks]`: every screen, sheet and pop-up, and every Home card opened. Every
@@ -43,4 +46,3 @@ port 8801, or set `PARITY_URL`.
 - `battery.sh data...`: all of the above over several seeds, in parallel.
 - `cov.js` / `covreport.js`: which code ever runs, to find leftovers.
 - `lint.js`: `js/money/` stays screen-free.
-- `port.py`: carries a change made to `budget/index.html` into these files (`git diff ... -- budget/index.html | python3 dev/port.py`).
