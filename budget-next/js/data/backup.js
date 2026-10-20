@@ -1,10 +1,10 @@
 'use strict';
-// v311: Upkeep and the pet keep their own storage; a backup carries it as the stored text, under "tabs" (the shared copy has only Upkeep)
-const TAB_KEYS = CHANNEL === 'main' ? { upkeep: 'upkeep.v1', pet: 'pet.v1', petFeed: 'budget-pet.v1' } : { upkeep: 'upkeep.v1-' + CHANNEL };
+// v311: Upkeep keeps its own storage; a backup carries it as the stored text, under "tabs" (the Pet is gone: a backup's pet data is left alone)
+const TAB_KEYS = CHANNEL === 'main' ? { upkeep: 'upkeep.v1' } : { upkeep: 'upkeep.v1-' + CHANNEL };
 function tabsOut() { const o = {}; for (const [k, key] of Object.entries(TAB_KEYS)) { try { const v = localStorage.getItem(key); if (v != null) o[k] = v; } catch (e) {} } return Object.keys(o).length ? o : null; }
-function tabsBack(t) {   // what the backup has goes back (what it hasn't is left alone), and an Upkeep or Pet page already open reads it again
+function tabsBack(t) {   // what the backup has goes back (what it hasn't is left alone), and an Upkeep page already open reads it again
   let n = 0; for (const [k, key] of Object.entries(TAB_KEYS)) if (typeof t[k] === 'string') try { localStorage.setItem(key, t[k]); n++; } catch (e) {}
-  if (n) for (const id of ['upkeepFrame', 'petFrame']) { const f = $(id); if (f && f.dataset.on) { delete f.dataset.on; f.removeAttribute('srcdoc'); f.removeAttribute('src'); } }
+  if (n) for (const id of ['upkeepFrame']) { const f = $(id); if (f && f.dataset.on) { delete f.dataset.on; f.removeAttribute('srcdoc'); f.removeAttribute('src'); } }
 }
 async function exportBackup() {
   const at = Date.now(), data = { ...(plan ? planReal() : state), lastBackup: at }, tabs = tabsOut(); if (tabs) data.tabs = tabs;   // v311: the real books, dated

@@ -160,4 +160,3 @@ const Tour = (() => {
 
 $('tourBtn').onclick = () => { showView('budget'); setTimeout(() => Tour.start(), 250); };
 { const ld = loadDemo; loadDemo = function () { const r = ld.apply(this, arguments); Tour.soon(); return r; }; $('suDemo').onclick = loadDemo; }
-if (CHANNEL === 'share') { const b = document.querySelector('nav button[data-view="pet"]'); if (b) b.remove(); }   // the shared copy has no pet files

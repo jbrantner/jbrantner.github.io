@@ -65,4 +65,3 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) retur
 if ('serviceWorker' in navigator && WEB_APP) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 
-setTimeout(() => { if (typeof petFeed === 'function') petFeed(); }, 1500);   // v286: the pet's budget feed on load

@@ -39,7 +39,6 @@ const STATES = [
   ['ask', ev(() => { ask('Delete this?'); })],
   ['toast', ev(() => toast('Saved ✓'))],
   ['upkeep', ev(() => showView('upkeep'))],
-  ['pet', ev(() => showView('pet'))],
 ];
 // every card on Home, opened one at a time
 const CARDS = p => p.evaluate(() => [...document.querySelectorAll('#townList .pp-card')].map(c => c.dataset.vlRow).filter(Boolean));

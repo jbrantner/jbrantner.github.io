@@ -1,8 +1,9 @@
 # budget-next
 
-The budget app (v315) rebuilt on a cleaner footing: the same app, the same math, the same screens, split out of the one
-1 MB `index.html` into files you can find things in. Nothing a user sees is different, and saved data and backups load
-as they are. The live app is still `budget/`; this copy goes live only when Jordan says so.
+The budget app (v316) rebuilt on a cleaner footing: the same app, the same math, the same screens, split out of the one
+1 MB `index.html` into files you can find things in. Saved data and backups load as they are. The one difference a
+user sees: the Pet tab is gone (Jordan, 2026-10-20: not the direction the app is going); Upkeep's level on top
+is its own hearth again, as in the shared copy. The live app is still `budget/`; this copy goes live only when Jordan says so.
 
 ## Where things are
 

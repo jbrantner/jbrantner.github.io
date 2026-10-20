@@ -15,7 +15,7 @@ function showView(v, dir = 0) {
   if (v === 'town') v = 'budget';   // v140: the Town list is part of the main screen
   if (v === 'import') { showView('settings', dir); const md = $('importCard').closest('details'); if (md) md.open = true; setTimeout(() => $('importCard').scrollIntoView({ block: 'start' }), 0); return; }
   document.documentElement.classList.toggle('full', v === 'budget');
-  document.documentElement.classList.toggle('up', v === 'upkeep' || v === 'pet'); if (v === 'upkeep') openUpkeep(); if (v === 'pet') openPet();   // v140; v286 the Pet tab
+  document.documentElement.classList.toggle('up', v === 'upkeep'); if (v === 'upkeep') openUpkeep();   // v140
   document.documentElement.classList.toggle('st', v === 'settings' || v === 'cats' || v === 'spent' || v === 'week'); if (v === 'cats') renderCats(); if (v === 'spent') { spentInto(document.querySelector(':is(#view-spent, #view-week) .sp-card')); renderSpent(); } if (v === 'week') { spentRange = 'week'; spentOpenId = null; renderWeek(); }   // v274: Categories looks like Settings; v277 Spending too   // v210: Settings in black and white
   if (v !== 'settings' && v !== 'cats' && v !== 'spent' && v !== 'week') showView.last = oldTab ? 'old' : v;   // v311: back to the Bills tab, not Home
   $('settingsBtn').textContent = v === 'settings' ? '✕' : '⚙'; $('settingsBtn').setAttribute('aria-label', v === 'settings' ? 'Close settings' : 'Settings');
@@ -27,7 +27,7 @@ function showView(v, dir = 0) {
   window.scrollTo(0, 0);
   if (v === 'town') Town.shown(); else Town.close();
   VL.shown(v);
-  for (const [k, id] of [['upkeep', 'upkeepFrame'], ['pet', 'petFrame']]) { const f = $(id); try { const w = f && f.contentWindow; if (w && w.tabShown) w.tabShown(v === k); } catch (e) {} }   // v311: Upkeep and Pet rest while their tab is hidden
+  for (const [k, id] of [['upkeep', 'upkeepFrame']]) { const f = $(id); try { const w = f && f.contentWindow; if (w && w.tabShown) w.tabShown(v === k); } catch (e) {} }   // v311: Upkeep rests while its tab is hidden
 }
 document.documentElement.classList.toggle('full', !$('view-budget').classList.contains('hidden'));
 document.documentElement.classList.add('home2');   // v272 (Jordan 14:26): Home is the All tab's top

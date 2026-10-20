@@ -80,7 +80,6 @@ function save() {
   if (!clockBack()) state.seenAt = Math.max(Number(state.seenAt) || 0, Date.now());   // v137
   let ok = true; try { localStorage.setItem(KEY, JSON.stringify(plan ? planReal() : state)); } catch (e) { ok = false; toast('Could not save on this device'); }
   saveBar(!ok);   // v311
-  if (typeof petFeedSoon === 'function') petFeedSoon();   // v286
 }
 // v311: while saving fails (the phone's storage for this app is full), a banner says so at the top of Home, in the clock
 // banner's look; the toast alone was gone in 2 seconds. It goes when a save works.
