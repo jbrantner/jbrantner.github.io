@@ -96,6 +96,19 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   await page.waitForFunction(() => document.querySelector('#strip').innerHTML.includes('secret_00001_'), null, {timeout:5000}).catch(()=>{});
   const hs = await page.evaluate(() => document.querySelector('#strip').innerHTML);
   ok(hs.includes('secret_00001_') && !hs.includes('secretdraft_00001_') && !hs.includes('render_0000'), 'Hidden strip fills from the Hidden renders saved on the computers, without drafts or normal ones');
+  // Windows ComfyUI reports the subfolder with a backslash (Output_Main\Hidden): a Hidden render finishing in Hidden still lands in Hidden's strip, once
+  const bs = await page.evaluate(() => { const e = {key:'win1', srv:'https://render.test', id:'w1', state:'running', hidden:true, prompt:'secret win', seed:1, titles:{}, images:[{filename:'secret_00009_.png', subfolder:'Output_Main\\Hidden', type:'output'}]};
+    S.queue.push(e); return completeOne(e, true).then(() => ({here:S.gallery.filter(g => g.url.includes('secret_00009_')).map(g => g.url), there:S.stash.gallery.filter(g => g.url.includes('secret_00009_')).length})); });
+  ok(bs.here.length===1 && bs.there===0 && bs.here[0].includes('Output_Main%2FHidden'), 'a Windows backslash Hidden render goes to the Hidden strip only: ' + JSON.stringify(bs));
+  const bn = await page.evaluate(() => { const e = {key:'win2', srv:'https://render.test', id:'w2', state:'running', hidden:false, prompt:'lake', seed:1, titles:{}, images:[{filename:'render_00009_.png', subfolder:'Output_Main\\RenderDeck', type:'output'}]};
+    S.queue.push(e); return completeOne(e, true).then(() => ({here:S.gallery.filter(g => g.url.includes('render_00009_')).length, there:S.stash.gallery.filter(g => g.url.includes('render_00009_')).length})); });
+  ok(bn.here===0 && bn.there===1, 'and a normal one finishing while in Hidden goes to the normal strip');
+  // strips already mixed up by it are sorted back when the app opens
+  await page.evaluate(() => { S.gallery.push({url:'https://render.test/view?filename=render_00010_.png&subfolder=Output_Main%5CRenderDeck&type=output'}); S.stash.gallery.push({url:'https://render.test/view?filename=secret_00010_.png&subfolder=Output_Main%5CHidden&type=output'}); save(); });
+  await page.reload(); await page.waitForTimeout(800);
+  const fx = await page.evaluate(() => ({h:S.hidden, mine:S.gallery.map(g => g.url).join(' '), other:S.stash.gallery.map(g => g.url).join(' ')}));
+  ok(fx.h && fx.mine.includes('secret_00010_') && !fx.mine.includes('render_00010_') && fx.other.includes('render_00010_') && !fx.other.includes('secret_'), 'mixed-up strips are sorted back on opening: ' + JSON.stringify(fx));
+  ok(!/%5C/i.test(fx.mine + fx.other), 'with slash addresses');
   ok(!logs.length, 'no page errors: '+logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length+' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

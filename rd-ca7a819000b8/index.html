@@ -522,7 +522,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.72'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.73'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1203,6 +1203,7 @@ async function completeOne(e, quiet, h){
   save();
   if(!e.images.length){ try{ h = h || (await (await fetch(e.srv + '/history/' + e.id)).json())[e.id];
     for(const id in (h && h.outputs) || {}) (h.outputs[id].images||[]).forEach(i => { if(i.type==='output') e.images.push(i); }); }catch(err){} }
+  e.images.forEach(i => { i.subfolder = (i.subfolder || '').replace(/\\/g, '/'); }); // same address as the helper's list gives it, so it isn't listed twice
   charGot(e, e.images.map(i => ({img:(i.subfolder ? i.subfolder + '/' : '') + i.filename + ' [output]', url:viewUrl(i, e.srv), home:e.srv})));
   e.images.forEach(i => galleryFor(isHidden(i.subfolder)).unshift(Object.assign({url:viewUrl(i, e.srv), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}, draftInfo(e))));
   S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); save(); show(0); drawStrip();
@@ -1546,16 +1547,16 @@ function drawStrip(){
   drawDrafts();
 }
 // the strip also shows renders already saved on the computers (this workstation's only: Hidden lists Hidden folders, normal lists the rest)
-let filling = 0;
+let filling = 0, fillAgain = 0;
 async function fillFromPcs(){
-  if(!info || S.test || filling) return; const h = !!S.hidden; filling = 1;
+  if(!info || S.test) return; if(filling){ fillAgain = 1; return; } const h = !!S.hidden; filling = 1; fillAgain = 0;
   try{ const j = await (await fetch(base() + '/renderdeck/images?hidden=' + (h ? 1 : 0) + '&limit=40', {cache:'no-store'})).json();
     if(!!S.hidden!==h) return; // switched workstation meanwhile
     const have = new Set(S.gallery.map(g => g.url)); let n = 0;
     (j.images || []).filter(i => isHidden(i.subfolder)===h && !isDraftFile(i) && !/(^|\/)datasets(\/|$)/.test(i.subfolder || '')).forEach(i => { const url = viewUrl(i, i.src);
       if(!have.has(url) && S.gallery.length < 40){ S.gallery.push({url, seed:null, prompt:'', t:(i.t || 0) * 1000, saved:true}); have.add(url); n++; } });
     if(n){ save(); drawStrip(); if(!S.gallery[shownIdx]) show(0); }
-  }catch(e){} finally{ filling = 0; }
+  }catch(e){} finally{ filling = 0; if(fillAgain) fillFromPcs(); }
 }
 // the preview section folds to one line that still shows what's painting
 function drawFeedHead(){
@@ -3348,9 +3349,9 @@ document.addEventListener('visibilitychange', () => { if(document.visibilityStat
 // ---------- your renders: browse the output folder on the render computer and delete what you don't want ----------
 let lib = {items:[], total:0, selecting:false, picked:new Set(), cur:null, shared:false};
 const libKey = i => (i.subfolder ? i.subfolder + '/' : '') + i.filename;
-const libPc = i => (i.subfolder || '').split('/')[0].replace(/^output_/i, '');
+const libPc = i => subParts(i.subfolder)[0].replace(/^output_/i, '');
 // drafts save into a drafts folder; the app keeps each one's full render (by file) until it is finished or put away
-const isDraftFile = i => (i.subfolder || '').split('/').includes('drafts');
+const isDraftFile = i => subParts(i.subfolder).includes('drafts');
 function draftFor(i){ const k = libKey(i); return S.gallery.find(g => { if(!g.draft || !g.fin) return false; try{ const q = new URL(g.url).searchParams; return (q.get('subfolder') ? q.get('subfolder') + '/' : '') + q.get('filename')===k; }catch(e){ return false; } }); }
 const thumbUrl = i => (i.src || base()) + '/renderdeck/thumb?subfolder=' + encodeURIComponent(i.subfolder) + '&filename=' + encodeURIComponent(i.filename);
 const LIB_NOTE = $('#libNote').textContent;
@@ -3457,10 +3458,18 @@ $('#vPic').onclick = () => {
 
 // ---------- Hidden: a second workstation with its own recipe, strip and renders, saved in Hidden subfolders ----------
 const HIDDEN = 'Hidden';
-const isHidden = sub => (sub || '').split('/').includes(HIDDEN);
+// ComfyUI on Windows reports subfolders with backslashes (Output_Main\Hidden), the helper's lists with slashes: read both
+const subParts = sub => (sub || '').split(/[\\/]/);
+const isHidden = sub => subParts(sub).includes(HIDDEN);
 // a Hidden render seen from the normal workstation: only "Hidden render", never its picture, prompt, model or seed
 function masked(e){ return !!(e && e.hidden) && !S.hidden; }
 const galleryFor = hidden => !!hidden===!!S.hidden ? S.gallery : ((S.stash = S.stash || {}).gallery = S.stash.gallery || []);
+// renders that landed in the other workstation's strip (Windows backslash subfolders, before v.73) go back where they belong
+{ const sub = g => { try{ const u = new URL(g.url); return u.searchParams.get('type')==='output' ? u.searchParams.get('subfolder') : null; }catch(e){ return null; } };
+  const mine = S.gallery || [], other = (S.stash && S.stash.gallery) || [], keep = [[], []], seen = new Set(); let fix = 0;
+  [[mine, !!S.hidden], [other, !S.hidden]].forEach(([l, h]) => l.forEach(g => { const f = sub(g); if(f!=null && f.includes('\\')){ g.url = g.url.replace(/%5C/gi, '%2F'); fix = 1; }
+    if(seen.has(g.url)){ fix = 1; return; } seen.add(g.url); const gh = f==null ? h : isHidden(f); if(gh!==h) fix = 1; keep[gh===!!S.hidden ? 0 : 1].push(g); }));
+  if(fix){ S.gallery = keep[0]; if(keep[1].length || S.stash) (S.stash = S.stash || {}).gallery = keep[1]; save(); } }
 function drawMode(){
   document.body.classList.toggle('hidden-mode', !!S.hidden); $('#modeBtn').classList.toggle('on', !!S.hidden);
   $('h1 span').textContent = S.hidden ? 'Hidden' : 'Deck';
