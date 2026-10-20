@@ -553,7 +553,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.82'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.83'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -675,6 +675,12 @@ function combo(nodeInfo, name){
   return [];
 }
 
+// the model lists of each computer are kept on the phone: with the computer off, the app still opens ready to render,
+// and renders wait on the phone until a computer is on (offline: the lists in use are the saved ones)
+let offline = false;
+const infoKey = url => 'https://rd-info/' + encodeURIComponent(url);
+async function keepInfo(url, oi){ try{ await (await caches.open('render-deck-info')).put(infoKey(url), new Response(JSON.stringify(oi))); }catch(e){} }
+async function savedInfo(url){ try{ const r = await (await caches.open('render-deck-info')).match(infoKey(url)); return r ? await r.json() : null; }catch(e){ return null; } }
 async function connect(){
   const url = base();
   if(!url){ toast('Paste your render computer address first', true); return; }
@@ -683,7 +689,7 @@ async function connect(){
     const r = await fetch(url + '/object_info', {cache:'no-store'});
     if(!r.ok) throw new Error('ComfyUI answered ' + r.status);
     const oi = await r.json();
-    info = parseInfo(oi);
+    info = parseInfo(oi); offline = false; keepInfo(url, oi);
     const p = pcOf(url); p.oi = oi; p.online = true;
     S.test = false; fillDefaults();
     S.queue = S.queue.filter(e => e.srv!=='test');
@@ -696,6 +702,9 @@ async function connect(){
     toast('Connected · ' + info.ckpt.length + ' models found');
     closeSheets(); render(); fillFromPcs();
   }catch(e){
+    const oi = !S.test && await savedInfo(url);
+    if(oi){ info = parseInfo(oi); offline = true; S.test = false; fillDefaults(); setConn('off', pcName(url) + ' is off');
+      toast(pcName(url) + ' is off. Renders wait on the phone until a computer is on.'); render(); drawStrip(); tick(true); return; }
     info = null; setConn('off','Not connected');
     toast(location.protocol==='https:' && url.startsWith('http:')
       ? 'This page is https, so the address must be https too. See the setup steps.'
@@ -1034,7 +1043,7 @@ async function go(){
   if(!(await poseUpload())) return;
   buzz();
   if(!S.test){ if(!had) status('Sending…'); await findFarm(); if(!farm) await Promise.all(allPcs().map(x => pollPc(x))); }
-  const tap = Date.now().toString(36);
+  const tap = Date.now().toString(36), away = !S.test && !farm && !allPcs().some(usable); // every computer off: they wait on the phone
   let added = 0;
   for(let i = 0; i < runs; i++){
     P.seed = P.lockSeed ? first + i : (i ? randSeed() : first); // a kept seed steps by one so the renders differ
@@ -1047,20 +1056,34 @@ async function go(){
       // the full render also rides inside the draft's own picture (ComfyUI keeps the graph in the PNG), so any phone can finish it later
       const sv = Object.values(built.graph).find(x => x.class_type==='SaveImage');
       sv._meta.rd_finish = {graph:fin.graph, titles:fin.titles, steps:P.steps, size:sizeOf(P), ckpt:M.ckpt, seed:built.seed, prompt:S.prompt}; }
-    if(farm && farmSafe(e)){ e.farm = true; e.state = 'waiting'; }
+    if(away){ e.outbox = true; e.state = 'waiting'; }
+    else if(farm && farmSafe(e)){ e.farm = true; e.state = 'waiting'; }
     S.queue.push(e); save();
-    if(!S.test && !e.farm){ const err = await dispatch(e); if(err){ S.queue = S.queue.filter(q => q!==e); save(); failAll(err); break; } }
+    if(!S.test && !e.farm && !e.outbox){ const err = await dispatch(e); if(err){ S.queue = S.queue.filter(q => q!==e); save(); failAll(err); break; } }
     added++;
   }
   const mine = S.queue.slice(-added).filter(e => e.farm);
   if(farm && mine.length){ const err = await farmAdd(mine);
-    if(err){ S.queue = S.queue.filter(q => !mine.includes(q)); save(); failAll(err); added = 0; } }
+    if(err && /^Could not reach/.test(err)) mine.forEach(e => { e.farm = false; e.outbox = true; }); // it went off just now: they wait on the phone
+    else if(err){ S.queue = S.queue.filter(q => !mine.includes(q)); save(); failAll(err); added = 0; } }
+  if(S.queue.slice(-added).some(e => e.outbox)){ save(); toast((added > 1 ? 'Saved' : 'Saved it') + ' on the phone: it goes to a computer as soon as one is on'); drawGo(); drawStatus(); drawQueue(); schedule(3000); P.seed = first; save(); renderBlocks(); return; }
   P.seed = first; save(); renderBlocks(); drawGo(); drawStatus(); drawQueue();
   if(added && had) toast(added > 1 ? added + ' renders added to the queue' : 'Added to the queue');
   if(S.test) testRun(); else schedule(1500);
 }
 // can the farm be given this render? Not when a computer that's on can't run it at all (Main has no ControlNets, so no
 // pose renders): an older farm on Render may still send it there, so the app sends those itself, to a computer that can
+// renders made with every computer off wait on the phone (outbox); the first computer that's on gets them
+async function deliver(){
+  for(const e of S.queue.filter(q => q.outbox)){
+    if(!allPcs().some(usable)) return;
+    delete e.outbox;
+    if(farm && farmSafe(e)){ e.farm = true; const err = await farmAdd([e]);
+      if(err){ if(/^Could not reach/.test(err)){ e.farm = false; e.outbox = true; save(); return; } failOne(e, err); } }
+    else { e.state = 'sending'; const err = await dispatch(e); if(err) failOne(e, err); }
+    save();
+  }
+}
 function farmSafe(e){ return S.test || allPcs().filter(usable).every(p => { const f = fit(p, e); return f.ok || (f.missing.length && !f.why); }); }
 // send one render to the best computer for it; '' when it went (or waits for a model to arrive), else why it can't go
 async function dispatch(e, skip){
@@ -1163,8 +1186,10 @@ async function tick(away){
   try{
     await Promise.all(allPcs().map(p => pollPc(p)));
     await Promise.all(allPcs().filter(p => !p.online || p.restarting).map(p => agentLook(p)));
+    if(offline && pcOf(base()).online){ offline = false; setTimeout(connect, 0); }
     await findFarm();
     if(farm) await farmLook(away);
+    await deliver();
     let back = 0;
     for(const e of S.queue.slice()){
       if(e.farm || e.moving || !e.srv || !['sent','running'].includes(e.state)) continue;
@@ -1180,7 +1205,7 @@ async function tick(away){
     }
     if(back && away) toast(back + (back > 1 ? ' renders' : ' render') + ' finished while you were away ✨');
     if(!farm) await watchCopies();
-    for(const e of S.queue.filter(q => q.state==='waiting' && !q.farm)){ const err = await dispatch(e); if(err) failOne(e, err); }
+    for(const e of S.queue.filter(q => q.state==='waiting' && !q.farm && !q.outbox)){ const err = await dispatch(e); if(err) failOne(e, err); }
     if(!farm) await balance();
   }finally{ if(ticking===me) ticking = 0; }
   if(ticking) return;
@@ -1503,7 +1528,7 @@ function drawQueue(){
   $('#qList').innerHTML = S.queue.length ? S.queue.map(e => {
     const p = e.srv && e.srv!=='test' ? pcOf(e.srv) : null, where = e.srv ? pcName(e.srv) : e.farm ? 'Next free computer' : pcName(e.home), run = e.state==='running', big = run && openJobs.has(e.key);
     const pos = e.farm ? S.queue.filter(q => q.farm && q.state==='waiting').indexOf(e) + 1 : p ? p.pending.indexOf(e.id) : -1;
-    const what = run ? (e.prog ? e.prog.text : 'Starting') : e.farm ? (e.state==='sent' ? 'Starting' : pos > 1 ? '#' + pos + ' in line' : 'Next') : e.state==='waiting' ? 'Waiting for a model to finish copying' : e.state==='sending' ? 'Sending' : pos > 0 ? '#' + (pos + 1) + ' in line' : 'Next';
+    const what = run ? (e.prog ? e.prog.text : 'Starting') : e.farm ? (e.state==='sent' ? 'Starting' : pos > 1 ? '#' + pos + ' in line' : 'Next') : e.outbox ? 'On the phone: goes as soon as a computer is on' : e.state==='waiting' ? 'Waiting for a model to finish copying' : e.state==='sending' ? 'Sending' : pos > 0 ? '#' + (pos + 1) + ' in line' : 'Next';
     const hid = masked(e), pv = run && !hid ? (p ? p.preview : '') : '';
     return `<div class="job qjob ${e.state} ${big ? 'big' : ''}" data-job="${esc(e.key)}"><div class="jrow">
       ${run && !hid ? `<img class="jthumb" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="" ${pv ? '' : 'hidden'}>` : ''}
@@ -3496,6 +3521,9 @@ $('#libGrid').onclick = e => {
 };
 // the library picture shown in the viewer: its buttons follow it as you swipe
 function libShown(i){ lib.cur = i; const d = isDraftFile(i) ? draftFor(i) : null; $('#vFinish').hidden = !isDraftFile(i) || !!(d && d.sent); }
+// the phone keeps finished pictures (sw.js): a deleted one is forgotten, so a new picture that reuses its name shows right
+async function forgetPics(list){ try{ const c = await caches.open('render-deck-pictures');
+  for(const i of list) for(const k of ['full', 'thumb']) await c.delete('https://rd-pic/' + k + '/' + encodeURIComponent(i.subfolder || '') + '/' + encodeURIComponent(i.filename)); }catch(e){} }
 async function deletePics(list){
   if(!list.length || !confirm('Delete ' + (list.length===1 ? 'this picture' : list.length + ' pictures') + (lib.shared ? '? They go from both computers (Dropbox keeps them in Deleted files).' : '? They move to the "Deleted by Render Deck" folder on the render computer.'))) return false;
   try{ const r = await fetch(base() + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:list.map(i => ({subfolder:i.subfolder, filename:i.filename}))})});
@@ -3503,7 +3531,7 @@ async function deletePics(list){
     lib.items = lib.items.filter(i => !gone.has(libKey(i))); if(lib.drafts) lib.drafts = lib.drafts.filter(i => !gone.has(libKey(i))); lib.total -= j.moved; lib.picked.clear();
     // drop them from the strip under the picture too
     S.gallery = S.gallery.filter(g => { try{ const q = new URL(g.url).searchParams; return !gone.has((q.get('subfolder') ? q.get('subfolder') + '/' : '') + q.get('filename')); }catch(e){ return true; } });
-    save(); drawStrip(); show(S.gallery.length ? 0 : -1); drawLib(); drawLibBar(); toast(j.moved===1 ? 'Deleted' : 'Deleted ' + j.moved); buzz(); return true;
+    forgetPics(list); save(); drawStrip(); show(S.gallery.length ? 0 : -1); drawLib(); drawLibBar(); toast(j.moved===1 ? 'Deleted' : 'Deleted ' + j.moved); buzz(); return true;
   }catch(e){ toast('Could not reach the render computer', true); return false; }
 }
 $('#libDelete').onclick = async () => { if(await deletePics((S.libTab==='drafts' ? lib.drafts || [] : lib.items).filter(i => lib.picked.has(libKey(i))))){ lib.selecting = false; drawLibBar(); } };
@@ -5983,6 +6011,7 @@ obAll().forEach(g => { if(g.ob && g.ob.making) waitOrbit(g.ob); }); // an orbit 
 delete S.orbitN; delete S.orbitH; // the per-workstation orbit before pictures became projects
 render(); show(S.gallery.length ? 0 : -1);
 if(usesTags()) loadTags().then(() => updateIdeas());
+if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); // keep the saved pictures when the phone tidies up
 if(S.test) testMode(); else if(S.server) connect();
 </script>
 
