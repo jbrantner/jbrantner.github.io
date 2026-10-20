@@ -485,7 +485,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.67'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.68'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5142,23 +5142,36 @@ async function finishShot(c, sh){
   delete sh.pid; save();
 }
 const shotsWaiting = c => (c.shots || []).filter(sh => sh.pid && !sh.err);
-// shots from before v.65 that the app stopped following when it was closed: their clips are on the computer as
-// <name>_clip_NNNNN_.mp4 in the order they were made; the clips no shot has yet go to those shots in order, and shots
-// left with no clip (never sent before the app closed) are marked so they can be made again
+// shots the app stopped following when it was closed (before v.65): their clips are on the computer as <name>_clip_NNNNN_.mp4
+// in the order they were made. A shot with its own clip but no pictures just needs its frames; a shot with no clip, or
+// one whose clip an earlier shot already has (frames grabbed from the wrong clip), gets the next clip no shot has, in
+// order; shots left with no clip were never sent and are marked so they can be made again. -1: no computer answered
+const lostShots = c => (c.shots || []).filter(sh => !sh.err && !sh.pid && !(sh.view && c.views.some(v => v.id===sh.view)));
 async function adoptClips(c){
-  const lost = (c.shots || []).filter(sh => !sh.view && !sh.err && !sh.pid && !sh.url); if(!lost.length || S.test && !adoptClips.try) return 0;
-  const pre = shotPrefix(c) + '_clip', i = pre.lastIndexOf('/'), sub = pre.slice(0, i), nm = pre.slice(i + 1), fn = u => { try{ return new URL(u).searchParams.get('filename'); }catch(e){ return ''; } };
-  const used = new Set((c.shots || []).map(sh => fn(sh.url || '')).filter(Boolean));
+  if(S.test && !adoptClips.try) return 0;
+  const fn = u => { try{ return new URL(u).searchParams.get('filename') || ''; }catch(e){ return ''; } }, seen = new Set(), frames = [], need = [];
+  for(const sh of c.shots || []){ if(sh.err || sh.pid) continue; const f = fn(sh.url || ''), mine = f && !seen.has(f); if(f) seen.add(f);
+    if(sh.view && c.views.some(v => v.id===sh.view) && mine) continue;
+    (mine ? frames : need).push(sh); }
+  if(!frames.length && !need.length) return 0;
+  const pre = shotPrefix(c) + '_clip', i = pre.lastIndexOf('/'), sub = pre.slice(0, i), nm = pre.slice(i + 1);
   for(const pc of S.servers.map(x => x.url)){
     const at = n => pc + '/view?' + new URLSearchParams({filename:nm + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'});
     const have = []; let reached = false;
-    for(let n = 1; n < 1000; n++){ let r; try{ r = await fetch(at(n), {method:'HEAD'}); }catch(e){ break; } reached = true; if(!r.ok) break; if(!used.has(fn(at(n)))) have.push(at(n)); }
+    for(let n = 1; n < 1000; n++){ let r; try{ r = await fetch(at(n), {method:'HEAD'}); }catch(e){ break; } reached = true; if(!r.ok) break; if(!seen.has(fn(at(n)))) have.push(at(n)); }
     if(!reached) continue;
-    const take = have.slice(0, lost.length);
-    lost.forEach((sh, j) => { if(take[j]) Object.assign(sh, {url:take[j], pc, pid:'found'}); else sh.err = 'This clip was never made (the app was closed before it was sent). Tap ↻ to make it.'; });
-    save(); return take.length;
+    frames.forEach(sh => { sh.pid = 'found'; if(!sh.pc) sh.pc = pc; });
+    need.forEach((sh, j) => { c.views = c.views.filter(v => v.shot!==sh.id); delete sh.view;
+      if(have[j]) Object.assign(sh, {url:have[j], pc, pid:'found'}); else { delete sh.url; sh.err = 'This clip was never made (the app was closed before it was sent). Tap ↻ to make it.'; } });
+    save(); return frames.length + Math.min(need.length, have.length);
   }
-  return 0;
+  return -1;
+}
+async function findShots(c, quiet){
+  const n = await adoptClips(c);
+  if(n > 0){ toast('Found ' + n + ' finished clip' + (n===1 ? '' : 's') + '; picking their frames'); runShots(c, null, true); }
+  else if(!quiet) toast(n < 0 ? "Couldn't reach your computers to look for the clips" : 'No more finished clips found', n < 0);
+  drawChars(); return n;
 }
 // makes the listed shots (or just `only`); `resume` picks up clips queued before the app was closed
 async function runShots(c, only, resume){
@@ -5208,9 +5221,11 @@ function boxShots(c){
   let h = '<div class="lbl">🎞 Training shots</div>';
   h += `<p class="note" style="margin-top:0">For a LoRA that knows ${esc(c.name || 'them')} in any pose: MiniMax acts out each line below from ${esc(c.name || 'their')}${c.name ? "'s" : ''} picture, side and back, the two sharpest moments of each clip are kept (extra ones to choose from), made 1.5× bigger by the quality pass. Each one joins the pictures above with its tags, ready for 📦 Save the training set. About ${Math.round(SHOT_EST() / 60)} minutes a shot${k.why ? '' : ' on ' + esc(pcName(k.url))}.</p>`;
   if(!R && shotsWaiting(c).length) setTimeout(() => runShots(c, null, true), 0); // clips queued before the app was closed: pick their frames
-  else if(!R && Date.now() - (CH.adopted || 0) > 60e3 && (c.shots || []).some(sh => !sh.view && !sh.err && !sh.pid)){ CH.adopted = Date.now(); adoptClips(c).then(n => { if(n){ toast('Found ' + n + ' finished clip' + (n===1 ? '' : 's') + '; picking their frames'); runShots(c, null, true); } }); }
+  else if(!R && Date.now() - (CH.adopted || 0) > 20e3 && lostShots(c).length){ CH.adopted = Date.now(); findShots(c, true); }
   if(R) return h + `<div class="pbar"><i data-shotbar style="width:0%"></i></div><p class="note" data-shottxt></p>
     <div class="btnrow"><button class="btn" data-ch="shotstop" ${R.stop ? 'disabled' : ''}>${R.stop ? 'Stopping after this shot…' : '⏸ Stop after this shot (cancels the rest)'}</button></div>`;
+  const lostN = lostShots(c).length;
+  if(lostN) h += `<p class="note">${lostN} shot${lostN===1 ? ' has' : 's have'} no pictures yet: the app was closed while ${lostN===1 ? 'it was' : 'they were'} being made.</p><div class="btnrow"><button class="btn" data-ch="shotfind">🔎 Find their clips</button></div>`;
   if(shots.length){
     h += `<div class="cviews">${shots.map(sh => { const v = c.views.find(x => x.id===sh.view);
       return v ? `<button data-shot="${esc(sh.id)}" class="${SV.id===sh.id ? 'sel' : ''}"><img src="${esc(v.url)}" alt="" loading="lazy"><span class="ang">${esc(sh.say.split(/[,.]/)[0].slice(0, 28))}</span></button>`
@@ -5350,6 +5365,7 @@ $('#charBody').onclick = async e => {
   else if(t.dataset.tview){ openViewer('tset', c.views, c.views.findIndex(x => x.id===t.dataset.tview)); return; }
   else if(act==='tpickall'){ c.views.forEach(v => delete v.noTrain); }
   else if(act==='shotgo'){ const n = shotLines(c).length; if(!confirm('Make ' + n + ' training ' + (n===1 ? 'shot' : 'shots') + ' on ' + pcName(kitTurn().url || '') + '? About ' + Math.round(n * SHOT_EST() / 60) + ' minutes.')) return; SV.id = null; runShots(c); return; }
+  else if(act==='shotfind'){ CH.adopted = Date.now(); findShots(c); return; }
   else if(act==='shotstop'){ if(SHOT_RUN[c.id]) SHOT_RUN[c.id].stop = true; toast('It stops once this shot is done'); }
   else if(t.dataset.shot){ SV.id = SV.id===t.dataset.shot ? null : t.dataset.shot; SV.moved = false; }
   else if(act==='shotredo'){ const sh = (c.shots || []).find(x => x.id===SV.id); if(sh) runShots(c, sh); return; }

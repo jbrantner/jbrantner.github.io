@@ -59,10 +59,10 @@ const fs = require('fs'), path = require('path');
   ok(true, 'a clip queued before the app closed gets its frames when the card opens');
   await page.evaluate(() => { const c = S.chars[0]; c.views = c.views.filter(v => v.shot!=='shq'); c.shots = c.shots.filter(s => s.id!=='shq'); save(); drawChars(); });
   // shots from before v.65: their finished clips are found on the computer and given to them in order
-  const ad = await page.evaluate(async () => { const c = {id:'cx', name:'Lib', views:[], shots:[{id:'a', view:'v', url:'http://pc/view?filename=Lib_clip_00001_.mp4'}, {id:'b'}, {id:'c'}, {id:'d'}]}, f = window.fetch, t = S.test, sv = S.servers;
+  const ad = await page.evaluate(async () => { const c = {id:'cx', name:'Lib', views:[{id:'v', shot:'a'}, {id:'w', shot:'b'}], shots:[{id:'a', view:'v', url:'http://pc/view?filename=Lib_clip_00001_.mp4'}, {id:'b', view:'w', url:'http://pc/view?filename=Lib_clip_00001_.mp4'}, {id:'c'}, {id:'d'}]}, f = window.fetch, sv = S.servers;
     window.fetch = async u => ({ok:+new URL(u).searchParams.get('filename').match(/_(\d+)_\.mp4/)[1] <= 3}); adoptClips.try = 1; S.servers = [{url:'http://pc'}];
-    try{ const n = await adoptClips(c); return {n, err:!!c.shots[3].err, urls:c.shots.map(x => (x.url || '').match(/_(\d+)_\.mp4/) ? +x.url.match(/_(\d+)_\.mp4/)[1] : 0)}; } finally { window.fetch = f; delete adoptClips.try; S.servers = sv; } });
-  ok(ad.n===2 && ad.urls.join()==='1,2,3,0' && ad.err, 'lost shots get the unused clips in order, the rest can be made again: ' + JSON.stringify(ad));
+    try{ const n = await adoptClips(c); return {n, err:!!c.shots[3].err, views:c.views.length, urls:c.shots.map(x => (x.url || '').match(/_(\d+)_\.mp4/) ? +x.url.match(/_(\d+)_\.mp4/)[1] : 0)}; } finally { window.fetch = f; delete adoptClips.try; S.servers = sv; } });
+  ok(ad.n===2 && ad.urls.join()==='1,2,3,0' && ad.err && ad.views===1, 'lost shots (and one with frames from an earlier clip) get the unused clips in order, the rest can be made again: ' + JSON.stringify(ad));
   // the picker: leave some out, the meter counts what is kept
   const pk = await page.evaluate(() => { drawChars(); const m = document.querySelector('#charBody .setmeter').textContent; return {n:document.querySelectorAll('#charBody [data-tpick]').length, m}; });
   ok(pk.n===11 && /11 picked/.test(pk.m) && /A bit few/.test(pk.m), 'every picture can be picked, the meter counts them: ' + pk.m.replace(/\s+/g, ' ').slice(0, 90));
