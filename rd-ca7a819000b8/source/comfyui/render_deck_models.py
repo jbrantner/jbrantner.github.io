@@ -1485,6 +1485,18 @@ async def _step_train(s, j):
     loras = folder_paths.get_folder_paths('loras')[0]
     name = '%s_auto_%s' % (j['trigger'], time.strftime('%y%m%d_%H%M'))
     j['lora_name'] = name
+    # kohya needs the whole card: let anything already in this ComfyUI's queue (an orbit sent straight here) finish first
+    for _ in range(360):
+        try:
+            q = await _get(s, _me() + '/queue', 10)
+            if not q.get('queue_running') and not q.get('queue_pending'):
+                break
+        except Exception:
+            break
+        _say(j, 'train', 'Waiting for the graphics card: something else is rendering on this computer…')
+        await asyncio.sleep(10)
+        if j.get('stop'):
+            raise RuntimeError('stopped')
     _say(j, 'train', 'Freeing the graphics card for training…')
     try:
         await _post(s, _me() + '/free', {'unload_models': True, 'free_memory': True})
