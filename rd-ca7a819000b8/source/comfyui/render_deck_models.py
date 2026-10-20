@@ -1361,8 +1361,11 @@ def _kohya_find():
     for r in roots:
         sd = os.path.join(r, 'kohya', 'sd-scripts')
         if os.path.exists(os.path.join(sd, 'sdxl_train_network.py')):
+            for py in (os.path.join(sd, 'venv', 'Scripts', 'python.exe'), os.path.join(sd, 'venv', 'bin', 'python'), os.path.join(r, 'kohya', 'venv', 'Scripts', 'python.exe')):
+                if os.path.exists(py):
+                    return sd, py
             for py in glob.glob(os.path.join(r, 'kohya', '**', 'python.exe'), recursive=True) + glob.glob(os.path.join(r, 'kohya', '**', 'bin', 'python'), recursive=True):
-                if 'venv' in py.lower():
+                if 'venv' in py.lower() and os.path.exists(os.path.join(os.path.dirname(os.path.dirname(py)), 'pyvenv.cfg')):  # not the template inside a bundled Python's Lib\\venv
                     return sd, py
     return None, None
 
