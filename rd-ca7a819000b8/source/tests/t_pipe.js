@@ -53,6 +53,11 @@ const fs = require('fs'), path = require('path');
   ok(sg.refs.length===3 && sg.refs[0]==='mira.png', 'each shot looks at the picture, a side and the back: ' + sg.refs.join(', '));
   ok(/<Picture 2>: <Subject 1> from the side/.test(sg.prompt) && /<Picture 3>: <Subject 1> from behind/.test(sg.prompt) && /waves at the camera in a park/.test(sg.prompt) && !sg.loras.some(l => /AFK/.test(l)), 'the prompt names the pictures and the action, no style LoRA');
   ok(sg.shots.length===4 && sg.shots.every(x => x.red) && sg.shots[3].cap==='waving, outdoors, park', 'each shot gives two frames to the card, redrawn, with its tags: ' + sg.shots.length);
+  // clips queued before the app closed: opening the card picks their frames
+  await page.evaluate(() => { const c = S.chars[0]; c.shots.push({id:'shq', say:'sits on a bench', tags:'sitting, bench', pid:'test', pc:'test'}); save(); drawChars(); });
+  await page.waitForFunction(() => S.chars[0].views.filter(v => v.shot==='shq').length===2 && !SHOT_RUN.c1 && !S.chars[0].shots.find(s => s.id==='shq').pid, null, {timeout:8000});
+  ok(true, 'a clip queued before the app closed gets its frames when the card opens');
+  await page.evaluate(() => { const c = S.chars[0]; c.views = c.views.filter(v => v.shot!=='shq'); c.shots = c.shots.filter(s => s.id!=='shq'); save(); drawChars(); });
   // the picker: leave some out, the meter counts what is kept
   const pk = await page.evaluate(() => { drawChars(); const m = document.querySelector('#charBody .setmeter').textContent; return {n:document.querySelectorAll('#charBody [data-tpick]').length, m}; });
   ok(pk.n===11 && /11 picked/.test(pk.m) && /A bit few/.test(pk.m), 'every picture can be picked, the meter counts them: ' + pk.m.replace(/\s+/g, ' ').slice(0, 90));

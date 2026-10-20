@@ -485,7 +485,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-19.64'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.65'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5125,35 +5125,59 @@ async function shotFrame(c, sh, at, nth = 0){
   v.cap = sh.tags;
   c.views = c.views.filter(x => !(x.shot===sh.id && (x.shotN || 0)===nth)); c.views.push(v); if(!nth){ sh.at = at; sh.view = v.id; } save();
 }
-async function makeShot(c, sh, k, refImgs){
-  const t0 = Date.now(), prefix = shotPrefix(c) + '_clip', {g, save:sid} = shotGraph(k, refImgs, c, shotPrompt(c, shotRefs(c), sh.say), prefix);
-  if(S.test){ await new Promise(r => setTimeout(r, 150)); SHOT_RUN.last = g; Object.assign(sh, {url:'', pc:'test', test:true}); for(let n = 0; n < shotN(c); n++) await shotFrame(c, sh, 30 + 40 * n, n); return; }
+// every clip goes into the computer's ComfyUI queue up front, so the whole batch renders even with the app closed;
+// the frames are picked when the app is open (now, or the next time the card is opened)
+async function queueShot(c, sh, k, refImgs){
+  const t0 = Date.now(), prefix = shotPrefix(c) + '_clip_' + sh.id, {g, save:sid} = shotGraph(k, refImgs, c, shotPrompt(c, shotRefs(c), sh.say), prefix);
+  if(S.test){ SHOT_RUN.last = g; Object.assign(sh, {pid:'test', pc:'test'}); return; }
   const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-shot'})}), j = await r.json();
   if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-  const f = await waitOut(k.url, j.prompt_id, sid, prefix, t0, true);
-  Object.assign(sh, {url:viewUrl(f, k.url), pc:k.url}); save();
-  const R = SHOT_RUN[c.id]; if(R) R.text = 'Picking the sharpest frame…'; drawShotBar();
-  const best = sharpestApart(await sharpestFrame(sh.url), shotN(c)); for(let n = 0; n < best.length; n++) await shotFrame(c, sh, best[n], n);
+  Object.assign(sh, {pid:j.prompt_id, sid, prefix, t0, pc:k.url}); save();
 }
-// makes the listed shots (or just `only`), one after another on the computer with MiniMax
-async function runShots(c, only){
-  if(SHOT_RUN[c.id]) return; const k = kitTurn(); if(k.why){ toast(k.why, true); return; }
-  const refs = shotRefs(c); if(!refs.length){ toast('It needs a Reference or Front picture first', true); return; }
-  const list = only ? [only] : shotLines(c).map(l => ({id:uid('sh'), say:l.say, tags:l.tags}));
-  if(!only) c.shots = (c.shots || []).concat(list);
+async function finishShot(c, sh){
+  if(S.test){ await new Promise(r => setTimeout(r, 150)); Object.assign(sh, {url:'', test:true}); for(let n = 0; n < shotN(c); n++) await shotFrame(c, sh, 30 + 40 * n, n); delete sh.pid; return; }
+  if(!sh.url){ const f = await waitOut(sh.pc, sh.pid, sh.sid, sh.prefix, sh.t0, true); sh.url = viewUrl(f, sh.pc); save(); }
+  const R = SHOT_RUN[c.id]; if(R) R.text = 'Picking the sharpest frames…'; drawShotBar();
+  const best = sharpestApart(await sharpestFrame(sh.url), shotN(c)); for(let n = 0; n < best.length; n++) await shotFrame(c, sh, best[n], n);
+  delete sh.pid; save();
+}
+const shotsWaiting = c => (c.shots || []).filter(sh => sh.pid && !sh.err);
+// makes the listed shots (or just `only`); `resume` picks up clips queued before the app was closed
+async function runShots(c, only, resume){
+  if(SHOT_RUN[c.id]) return;
+  let list;
+  if(resume) list = shotsWaiting(c);
+  else {
+    const k = kitTurn(); if(k.why){ toast(k.why, true); return; }
+    const refs = shotRefs(c); if(!refs.length){ toast('It needs a Reference or Front picture first', true); return; }
+    list = only ? [only] : shotLines(c).map(l => ({id:uid('sh'), say:l.say, tags:l.tags}));
+    if(!only) c.shots = (c.shots || []).concat(list);
+    list.forEach(sh => { sh.err = ''; delete sh.url; delete sh.pid; });
+    SHOT_RUN[c.id] = {i:0, n:list.length, t0:Date.now(), text:'Sending the clips to ' + pcName(k.url) + '…'}; drawChars();
+    try{
+      const imgs = [];
+      for(const v of refs){ let img = v.img; if(!S.test && v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('sh')); img = g.x.inputs.image; } imgs.push(img); }
+      for(const sh of list){ try{ await queueShot(c, sh, k, imgs); }catch(err){ sh.err = err.message; } }
+    }catch(err){ list.forEach(sh => { if(!sh.pid) sh.err = err.message; }); }
+    save(); delete SHOT_RUN[c.id];
+    if(!S.test && list.some(sh => sh.pid)) toast('All ' + list.filter(sh => sh.pid).length + ' clips are queued on ' + pcName(k.url) + ". They keep rendering with the app closed; the frames are picked when you're back.");
+    list = list.filter(sh => sh.pid);
+  }
+  if(!list.length){ save(); drawChars(); return; }
   const R = SHOT_RUN[c.id] = {i:0, n:list.length, t0:Date.now(), text:''}, tick = setInterval(drawShotBar, 1000); drawChars();
   let ok = 0, bad = 0;
   try{
-    const imgs = [];
-    for(const v of refs){ let img = v.img; if(!S.test && v.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:v.img}}}; await copyPictures(g, v.home, pcOf(k.url), uid('sh')); img = g.x.inputs.image; } imgs.push(img); }
     for(const sh of list){
-      if(R.stop) break; R.i = list.indexOf(sh); R.ts = Date.now(); R.text = sh.say; sh.err = ''; drawChars();
-      try{ await makeShot(c, sh, k, imgs); ok++; }catch(err){ sh.err = err.message; bad++; }
+      if(R.stop){ // take the clips that haven't started out of the queue
+        const left = list.slice(list.indexOf(sh)).filter(x => x.pid);
+        for(const pc of [...new Set(left.map(x => x.pc))]) if(pc!=='test') try{ await fetch(pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:left.filter(x => x.pc===pc).map(x => x.pid)})}); }catch(e){}
+        left.forEach(x => { delete x.pid; x.err = 'Stopped before it was made'; }); break; }
+      R.i = list.indexOf(sh); R.ts = Date.now(); R.text = sh.say; drawChars();
+      try{ await finishShot(c, sh); ok++; }catch(err){ sh.err = err.message; delete sh.pid; bad++; }
       save(); drawChars();
     }
-    toast(ok + (ok===1 ? ' training shot' : ' training shots') + ' ready' + (bad ? ', ' + bad + " didn't work" : '') + ' ✨', !ok && bad);
-  }catch(err){ toast("Couldn't make the shots: " + err.message, true); }
-  finally{ clearInterval(tick); delete SHOT_RUN[c.id]; save(); drawChars(); }
+    if(ok || bad) toast(ok + (ok===1 ? ' training shot' : ' training shots') + ' ready' + (bad ? ', ' + bad + " didn't work" : '') + ' ✨', !ok && bad);
+  }finally{ clearInterval(tick); delete SHOT_RUN[c.id]; save(); drawChars(); }
 }
 function drawShotBar(){
   const c = S.chars.find(x => x.id===CH.id), R = c && SHOT_RUN[c.id], bar = $('#charBody [data-shotbar]'), tx = $('#charBody [data-shottxt]'); if(!R || !bar) return;
@@ -5165,8 +5189,9 @@ function boxShots(c){
   const k = kitTurn(), R = SHOT_RUN[c.id], shots = (c.shots || []).filter(sh => sh.view && c.views.some(v => v.id===sh.view) || sh.err), lines = shotLines(c);
   let h = '<div class="lbl">🎞 Training shots</div>';
   h += `<p class="note" style="margin-top:0">For a LoRA that knows ${esc(c.name || 'them')} in any pose: MiniMax acts out each line below from ${esc(c.name || 'their')}${c.name ? "'s" : ''} picture, side and back, the two sharpest moments of each clip are kept (extra ones to choose from), made 1.5× bigger by the quality pass. Each one joins the pictures above with its tags, ready for 📦 Save the training set. About ${Math.round(SHOT_EST() / 60)} minutes a shot${k.why ? '' : ' on ' + esc(pcName(k.url))}.</p>`;
+  if(!R && shotsWaiting(c).length) setTimeout(() => runShots(c, null, true), 0); // clips queued before the app was closed: pick their frames
   if(R) return h + `<div class="pbar"><i data-shotbar style="width:0%"></i></div><p class="note" data-shottxt></p>
-    <div class="btnrow"><button class="btn" data-ch="shotstop" ${R.stop ? 'disabled' : ''}>${R.stop ? 'Stopping after this shot…' : '⏸ Stop after this shot'}</button></div>`;
+    <div class="btnrow"><button class="btn" data-ch="shotstop" ${R.stop ? 'disabled' : ''}>${R.stop ? 'Stopping after this shot…' : '⏸ Stop after this shot (cancels the rest)'}</button></div>`;
   if(shots.length){
     h += `<div class="cviews">${shots.map(sh => { const v = c.views.find(x => x.id===sh.view);
       return v ? `<button data-shot="${esc(sh.id)}" class="${SV.id===sh.id ? 'sel' : ''}"><img src="${esc(v.url)}" alt="" loading="lazy"><span class="ang">${esc(sh.say.split(/[,.]/)[0].slice(0, 28))}</span></button>`
