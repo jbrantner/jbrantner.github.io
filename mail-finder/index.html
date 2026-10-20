@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Mail Finder</title>
+<style>
+:root{--bg:#fff;--ink:#1d1d1f;--muted:#6e6e73;--line:#e5e5ea;--card:#f5f5f7;--accent:#962B42;--good:#1a7f37;--warn:#C05133}
+@media (prefers-color-scheme:dark){:root{--bg:#000;--ink:#f5f5f7;--muted:#a1a1a6;--line:#2c2c2e;--card:#1c1c1e;--accent:#e0708a;--good:#3fb950;--warn:#f0883e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.4 -apple-system,system-ui,sans-serif;padding:16px 16px calc(24px + env(safe-area-inset-bottom))}
+h1{font-size:15px;font-weight:600;color:var(--muted);margin:0 0 12px;letter-spacing:.02em}
+.search{position:sticky;top:0;background:var(--bg);padding-bottom:10px;z-index:1}
+input[type=search]{width:100%;font-size:20px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink)}
+.top{border-radius:18px;padding:18px;margin:6px 0 14px;background:var(--card);border:2px solid var(--accent)}
+.top .name{font-size:30px;font-weight:700;line-height:1.15}
+.top .room{font-size:34px;font-weight:800;color:var(--accent);margin-top:6px}
+.top .why{font-size:14px;color:var(--muted);margin-top:8px}
+.row{display:flex;justify-content:space-between;gap:12px;padding:12px 4px;border-bottom:1px solid var(--line)}
+.row .n{font-weight:600}.row .r{color:var(--accent);font-weight:700;text-align:right;white-space:nowrap}
+.label{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:14px 4px 4px}
+.read{font-size:13px;color:var(--muted);margin:14px 4px;word-break:break-word}
+.none{padding:18px;border-radius:14px;background:var(--card);font-size:20px;font-weight:600}
+.setup{padding:18px;border-radius:14px;background:var(--card)}
+button,.btn{font:inherit;font-size:17px;padding:12px 16px;border-radius:12px;border:0;background:var(--accent);color:#fff;display:inline-block}
+.small{font-size:13px;color:var(--muted);margin-top:16px}
+.link{background:none;color:var(--muted);padding:0;font-size:13px;text-decoration:underline}
+#live{margin:0 0 12px}
+video{width:100%;border-radius:16px;background:#000;display:block;aspect-ratio:4/3;object-fit:cover}
+.livebar{display:flex;gap:10px;align-items:center;margin:8px 0}
+.status{font-size:13px;color:var(--muted)}
+.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+</head>
+<body>
+<h1>MAIL FINDER</h1>
+<div id="app"></div>
+<script>
+"use strict";
+const KEY="mailfinder-list-v1";
+const IGN_KEY="mailfinder-ignore-v1";
+const BASE_IGNORE="HOUSEHOLD FAMILY RESIDENT CURRENT OR THE AND MR MRS MS DR JR SR APT UNIT DRIVE CIRCLE";
+let IGNORE=/^$/;
+function setIgnore(extra){
+  const phrases=(BASE_IGNORE.split(" ").concat(String(extra||"").split(","))).map(x=>norm(x)).filter(Boolean)
+    .sort((a,b)=>b.length-a.length).map(x=>x.replace(/ /g," +"));
+  IGNORE=new RegExp("\\b("+phrases.join("|")+")\\b","g");
+}
+let people=[]; // {first,last,room}
+const app=document.getElementById("app");
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const norm=s=>String(s||"").toUpperCase().replace(/['’.]/g,"").replace(/[^A-Z]+/g," ").trim();
+const title=s=>s.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
+
+function loadPeople(json){
+  const seen=new Map();
+  for(const [key,val] of Object.entries(json)){
+    if(key.startsWith("_")) continue;
+    for(const line of String(val).split("\n")){
+      const i=line.indexOf("|"); if(i<0) continue;
+      const first=line.slice(0,i).trim(), room=line.slice(i+1).trim(), id=first+"|"+room;
+      const cur=seen.get(id);
+      if(!cur) seen.set(id,{first,room,lasts:new Set([key])}); else cur.lasts.add(key);
+    }
+  }
+  people=[];
+  for(const p of seen.values()){
+    const lasts=[...p.lasts].sort((a,b)=>b.length-a.length);
+    // the longest key is the full last name; shorter ones are parts of a double name
+    const parts=lasts.length>1?lasts.slice(1):[];
+    people.push({first:p.first,room:p.room,last:lasts[0],parts});
+  }
+}
+function lev(a,b,max){
+  if(Math.abs(a.length-b.length)>max) return max+1;
+  let prev=Array.from({length:b.length+1},(_,i)=>i);
+  for(let i=1;i<=a.length;i++){
+    const cur=[i]; let best=i;
+    for(let j=1;j<=b.length;j++){
+      cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
+      if(cur[j]<best) best=cur[j];
+    }
+    if(best>max) return max+1;
+    prev=cur;
+  }
+  return prev[b.length];
+}
+// how well one name matches one word: 1 exact, 0.8 one letter off, 0.6 two off (long names), 0
+function wordScore(name,word){
+  if(!name||!word) return 0;
+  if(name===word) return 1;
+  if(name.length<4||word.length<3) return 0;
+  const d=lev(name,word,2);
+  if(d===1) return .8;
+  if(d===2&&name.length>=7) return .6;
+  return 0;
+}
+function scoreText(words){
+  const out=[];
+  for(const p of people){
+    let bestLast=0,lastAt=-1;
+    const lastNames=[p.last,...p.parts];
+    words.forEach((w,i)=>{ for(const L of lastNames){ const s=wordScore(L,w)*(L===p.last?1:.85); if(s>bestLast){bestLast=s;lastAt=i;} } });
+    // joined double name split by the reader, e.g. "NOT REAL" for NOTREAL
+    for(let i=0;i+1<words.length;i++){ const s=wordScore(p.last,words[i]+words[i+1]); if(s>bestLast){bestLast=s;lastAt=i;} }
+    if(bestLast===0) continue;
+    let bestFirst=0,firstAt=-1;
+    words.forEach((w,i)=>{ const s=wordScore(p.first,w)||(w.length===1&&w===p.first[0]?.35:0); if(s>bestFirst){bestFirst=s;firstAt=i;} });
+    let score=bestLast*3+bestFirst*2;
+    if(firstAt>=0&&lastAt>=0&&Math.abs(firstAt-lastAt)<=3) score+=1; // near each other, like on an address label
+    out.push({p,score,firstFound:bestFirst>=.8});
+  }
+  return out.sort((a,b)=>b.score-a.score||a.p.last.localeCompare(b.p.last));
+}
+function searchTyped(q){
+  const words=norm(q).split(" ").filter(Boolean); if(!words.length) return [];
+  const out=[];
+  for(const p of people){
+    const hay=[p.first,p.last,...p.parts,norm(p.room)];
+    let total=0,ok=true;
+    for(const w of words){
+      let best=0;
+      for(const h of hay){ for(const part of h.split(" ")){ if(part.startsWith(w)) best=Math.max(best,1.2); else best=Math.max(best,wordScore(part,w)); } }
+      if(!best){ok=false;break;} total+=best;
+    }
+    if(ok) out.push({p,score:total});
+  }
+  return out.sort((a,b)=>b.score-a.score||a.p.last.localeCompare(b.p.last)).slice(0,30);
+}
+const nameOf=p=>title(p.first)+" "+title(p.last);
+function rows(list){ return list.map(r=>`<div class="row"><span class="n">${esc(nameOf(r.p))}</span><span class="r">${esc(r.p.room)}</span></div>`).join(""); }
+
+function render(readText){
+  if(!people.length){
+    app.innerHTML=`<div class="setup"><p><b>Load your list first.</b></p><p>Pick <b>Mail List.json</b> (On My iPhone → Mail). It stays on this phone only.</p>
+      <label class="btn">Choose Mail List.json<input id="f" type="file" accept=".json,application/json" hidden></label></div>`;
+    document.getElementById("f").onchange=onFile; return;
+  }
+  const read=readText==null?"":readText;
+  const words=norm(read).replace(IGNORE," ").split(" ").filter(w=>w.length>0);
+  const res=read?scoreText(words):[];
+  const strong=res.filter(r=>r.score>=3.4);
+  let html=`<div id="live">${liveOn?`<video id="v" playsinline muted autoplay></video>`:""}<div class="livebar"><button id="cam" class="${liveOn?"ghost":""}">${liveOn?"Stop camera":"Start camera"}</button><span class="status" id="st">${liveOn?"Reading…":"Point at an envelope, results show below."}</span></div></div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"></div><div id="out">`;
+  if(read){
+    if(strong.length){
+      const t=strong[0];
+      html+=`<div class="top"><div class="name">${esc(nameOf(t.p))}</div><div class="room">${esc(t.p.room)}</div>${t.firstFound?"":`<div class="why">Last name match only. Check the first name.</div>`}</div>`;
+      const more=res.slice(1,6).filter(r=>r.score>=2.4);
+      if(more.length) html+=`<div class="label">Also close</div>`+rows(more);
+    } else if(res.length){
+      html+=`<div class="label">Possible matches</div>`+rows(res.slice(0,6));
+    } else html+=`<div class="none">No resident found. Try searching above.</div>`;
+    html+=`<div class="read">It read: ${esc(read.replace(/\s+/g," ").slice(0,300))}</div>`;
+  }
+  html+=`</div><p class="small">${people.length} residents loaded on this phone. <button class="link" id="reload">Load a new list</button></p>`;
+  app.innerHTML=html;
+  const q=document.getElementById("q"), out=document.getElementById("out"), base=out.innerHTML;
+  q.oninput=()=>{ const r=searchTyped(q.value); out.innerHTML=q.value.trim()?(r.length?rows(r):`<div class="none">No one by that name.</div>`):base; };
+  document.getElementById("cam").onclick=()=>liveOn?stopLive():startLive();
+  if(liveOn) attachVideo();
+  document.getElementById("reload").onclick=()=>{ people=[]; try{localStorage.removeItem(KEY);}catch(e){} render(); };
+}
+function onFile(e){
+  const f=e.target.files[0]; if(!f) return;
+  f.text().then(t=>{ const j=JSON.parse(t); loadPeople(j); try{localStorage.setItem(KEY,t);}catch(err){} render(readFromHash()); })
+   .catch(()=>alert("That file didn't open. Pick Mail List.json from Helper."));
+}
+function readFromHash(){
+  const h=location.hash.slice(1); if(!h) return null;
+  const m=h.match(/(?:^|&)t=([^&]*)/); if(!m) return null;
+  try{ return decodeURIComponent(m[1].replace(/\+/g," ")); }catch(e){ return m[1]; }
+}
+
+let liveOn=false, stream=null, worker=null, busy=false, timer=null, lastTop="", lastTopAt=0;
+async function getWorker(){
+  if(worker) return worker;
+  setStatus("Loading the text reader (first time needs internet)…");
+  worker=await Tesseract.createWorker("eng",1);
+  await worker.setParameters({tessedit_pageseg_mode:"11"});
+  return worker;
+}
+function setStatus(t){ const e=document.getElementById("st"); if(e) e.textContent=t; }
+function attachVideo(){ const v=document.getElementById("v"); if(v&&stream){ v.srcObject=stream; v.play().catch(()=>{}); } }
+async function startLive(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1920},height:{ideal:1440}},audio:false});
+  }catch(e){ alert("The camera didn't start. Allow camera access for this page in Safari."); return; }
+  liveOn=true; render(null); attachVideo();
+  try{ await getWorker(); }catch(e){ setStatus("The text reader didn't load. Check the internet and try again."); return; }
+  setStatus("Reading…"); loop();
+}
+function stopLive(){ liveOn=false; clearTimeout(timer); if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } render(null); }
+async function loop(){
+  if(!liveOn) return;
+  const v=document.getElementById("v");
+  if(v&&v.videoWidth&&!busy&&!document.hidden){
+    busy=true;
+    try{
+      const cv=document.createElement("canvas"), w=v.videoWidth, h=v.videoHeight, sc=Math.min(1,1600/w);
+      cv.width=Math.round(w*sc); cv.height=Math.round(h*sc);
+      const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.4)"; cx.drawImage(v,0,0,cv.width,cv.height);
+      const {data}=await worker.recognize(cv);
+      showLive(data.text||"");
+    }catch(e){ setStatus("Reading…"); }
+    busy=false;
+  }
+  timer=setTimeout(loop,250);
+}
+function showLive(text){
+  const out=document.getElementById("out"), q=document.getElementById("q");
+  if(!out||(q&&q.value.trim())) return;
+  const words=norm(text).replace(IGNORE," ").split(" ").filter(Boolean);
+  const res=words.length?scoreText(words):[];
+  const strong=res.filter(r=>r.score>=3.4);
+  const now=Date.now();
+  if(!strong.length){
+    if(now-lastTopAt>2500){ out.innerHTML=""; lastTop=""; }
+    setStatus(words.length?"Looking…":"Point at an envelope");
+    return;
+  }
+  const t=strong[0], id=t.p.first+"|"+t.p.room;
+  lastTopAt=now;
+  if(id===lastTop&&out.innerHTML) { setStatus("Found"); return; }
+  lastTop=id;
+  let html=`<div class="top"><div class="name">${esc(nameOf(t.p))}</div><div class="room">${esc(t.p.room)}</div>${t.firstFound?"":`<div class="why">Last name match only. Check the first name.</div>`}</div>`;
+  const more=res.slice(1,4).filter(r=>r.score>=2.4);
+  if(more.length) html+=`<div class="label">Also close</div>`+rows(more);
+  out.innerHTML=html; setStatus("Found");
+}
+document.addEventListener("visibilitychange",()=>{ if(document.hidden&&liveOn) stopLive(); });
+(function(){ let extra=""; try{ extra=localStorage.getItem(IGN_KEY)||""; }catch(e){}
+  const m=location.hash.match(/(?:^|&)ig=([^&]*)/);
+  if(m){ try{ extra=decodeURIComponent(m[1]); localStorage.setItem(IGN_KEY,extra); }catch(e){} history.replaceState(null,"",location.pathname); }
+  setIgnore(extra); })();
+try{ const s=localStorage.getItem(KEY); if(s) loadPeople(JSON.parse(s)); }catch(e){}
+render(readFromHash());
+window.addEventListener("hashchange",()=>render(readFromHash()));
+</script>
+</body>
+</html>
