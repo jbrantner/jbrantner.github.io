@@ -33,6 +33,7 @@ video{width:100%;border-radius:16px;background:#000;display:block;aspect-ratio:4
 .ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
 .fab{position:fixed;right:16px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:5;padding:18px 26px;font-size:20px;font-weight:700;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 body{padding-bottom:calc(110px + env(safe-area-inset-bottom))}
+#camwrap video{width:100%;max-height:42vh;object-fit:cover;border-radius:16px;background:#000;display:block;margin-bottom:8px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 </head>
@@ -153,7 +154,7 @@ function render(readText){
   const words=all.filter(w=>/^[A-Z]+$/.test(w)), nums=all.filter(w=>/\d/.test(w));
   const res=read?scoreText(words,nums):[];
   const strong=res.filter(r=>r.score>=3.4);
-  let html=`<div class="livebar"><label class="btn fab">Take photo<input id="cam" type="file" accept="image/*" capture="environment" hidden></label><span class="status" id="st">${busy?"Reading…":"Take a picture of the envelope."}</span></div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"></div><div id="out">`;
+  let html=`<div id="camwrap"></div><button class="btn fab" id="cam">${busy?"Reading…":"Read envelope"}</button><div class="status" id="st" style="margin:0 4px 8px">${camOn?"Hold the envelope in view, then tap Read envelope.":"Tap Read envelope to start the camera."}</div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"></div><div id="out">`;
   if(read){
     if(strong.length){
       const t=strong[0];
@@ -169,7 +170,8 @@ function render(readText){
   app.innerHTML=html;
   const q=document.getElementById("q"), out=document.getElementById("out"), base=out.innerHTML;
   q.oninput=()=>{ const r=searchTyped(q.value); out.innerHTML=q.value.trim()?(r.length?rows(r):`<div class="none">No one by that name.</div>`):base; };
-  document.getElementById("cam").onchange=onPhoto;
+  document.getElementById("cam").onclick=onRead;
+  placeVideo();
   document.getElementById("ign").onclick=()=>{ let cur=""; try{cur=localStorage.getItem(IGN_KEY)||"";}catch(e){}
     const v=prompt("Words on every envelope that aren't names (street, town), separated by commas:",cur);
     if(v!==null){ try{localStorage.setItem(IGN_KEY,v);}catch(e){} setIgnore(v); render(readFromHash()); } };
@@ -195,20 +197,33 @@ async function getWorker(){
   return worker;
 }
 function setStatus(t){ const e=document.getElementById("st"); if(e) e.textContent=t; }
-async function onPhoto(e){
-  const f=e.target.files[0]; if(!f||busy) return;
-  busy=true; setStatus("Reading…");
+let camOn=false, stream=null;
+const video=document.createElement("video"); video.setAttribute("playsinline",""); video.muted=true; video.autoplay=true;
+function placeVideo(){ const w=document.getElementById("camwrap"); if(w&&camOn&&video.parentNode!==w){ w.appendChild(video); video.play().catch(()=>{}); } }
+async function startCam(){
+  try{ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:3840},height:{ideal:2160}},audio:false}); }
+  catch(e){ alert("The camera didn't start. Allow camera access for this page."); return false; }
+  video.srcObject=stream; camOn=true; placeVideo(); await video.play().catch(()=>{});
+  setStatus("Hold the envelope in view, then tap Read envelope."); getWorker().then(()=>setStatus("Ready. Tap Read envelope.")).catch(()=>{});
+  return true;
+}
+function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } camOn=false; video.remove(); }
+document.addEventListener("visibilitychange",()=>{ if(document.hidden) stopCam(); });
+async function onRead(){
+  if(busy) return;
+  if(!camOn){ await startCam(); return; }
+  if(!video.videoWidth) return;
+  busy=true; const btn=document.getElementById("cam"); if(btn) btn.textContent="Reading…"; setStatus("Reading…");
   try{
-    const bmp=await createImageBitmap(f);
-    const sc=Math.min(1,2200/Math.max(bmp.width,bmp.height)), cv=document.createElement("canvas");
-    cv.width=Math.round(bmp.width*sc); cv.height=Math.round(bmp.height*sc);
-    const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.3)"; cx.drawImage(bmp,0,0,cv.width,cv.height);
-    const w=await getWorker(); setStatus("Reading…");
+    const sc=Math.min(1,2400/Math.max(video.videoWidth,video.videoHeight)), cv=document.createElement("canvas");
+    cv.width=Math.round(video.videoWidth*sc); cv.height=Math.round(video.videoHeight*sc);
+    const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.3)"; cx.drawImage(video,0,0,cv.width,cv.height);
+    const w=await getWorker();
     const {data}=await w.recognize(cv);
     busy=false;
     history.replaceState(null,"","#t="+encodeURIComponent((data.text||"").slice(0,1500)));
     render(data.text||" ");
-  }catch(err){ busy=false; setStatus("That didn't work. Check the internet the first time, then try again."); }
+  }catch(err){ busy=false; render(readFromHash()); setStatus("That didn't work. The first time needs internet, then try again."); }
 }
 (function(){ let extra=""; try{ extra=localStorage.getItem(IGN_KEY)||""; }catch(e){}
   const m=location.hash.match(/(?:^|&)ig=([^&]*)/);
