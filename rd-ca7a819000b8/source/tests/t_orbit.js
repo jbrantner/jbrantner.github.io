@@ -13,7 +13,7 @@ const DEF = {
   BasicGuider:[['model','conditioning'],1], BasicScheduler:[['model','scheduler','steps','denoise'],1], KSamplerSelect:[['sampler_name'],1], RandomNoise:[['noise_seed'],1],
   SamplerCustomAdvanced:[['noise','guider','sampler','sigmas','latent_image'],2], VAEDecodeTiled:[['samples','vae','tile_size','overlap','temporal_size','temporal_overlap'],1],
   CreateVideo:[['images','fps'],1], SaveVideo:[['video','filename_prefix','format'],0],
-  ImageScaleBy:[['image','upscale_method','scale_by'],1], CheckpointLoaderSimple:[['ckpt_name'],3], CLIPTextEncode:[['clip','text'],1], AnimeLineArtPreprocessor:[['image'],1],
+  ImageScaleBy:[['image','upscale_method','scale_by'],1], LoraLoader:[['model','clip','lora_name','strength_model','strength_clip'],2], CheckpointLoaderSimple:[['ckpt_name'],3], CLIPTextEncode:[['clip','text'],1], AnimeLineArtPreprocessor:[['image'],1],
   ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   VAEEncode:[['pixels','vae'],1], ColorMatch:[['image_ref','image_target','method'],1], KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], VAEDecode:[['samples','vae'],1], SaveImage:[['images','filename_prefix'],0],
 };
@@ -23,8 +23,8 @@ function check(g){ const errs = [];
     for(const [k,v] of Object.entries(n.inputs)) if(Array.isArray(v)){ const t = g[v[0]]; if(!t) errs.push(id+'.'+k+' -> missing '+v[0]); else if(v[1] >= DEF[t.class_type][1]) errs.push(id+'.'+k+' -> bad output '+v[1]); } }
   return errs; }
 let FL = true;
-const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler']), scheduler:C(['normal','simple'])}}},
-  LoraLoader:{input:{required:{lora_name:C([])}}},
+const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler']), scheduler:C(['normal','simple'])}}},
+  LoraLoader:{input:{required:{lora_name:C(['chars\\librarianx_v2.safetensors', 'AFKJ Style Illustrious Claude.safetensors'])}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors','minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors'])}}},
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors'].concat(FL ? ['minimax_h3_fl2va_pruned_int8_convrot.safetensors'] : [])), weight_dtype:C(['default'])}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['stable_diffusion','minimax'])}}},
@@ -68,7 +68,10 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.click('#openSettings'); await page.fill('#server', RENDER + '/'); await page.evaluate(() => document.querySelector('#connectBtn').click());
   await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'));
   await page.evaluate(srv => { closeSheets(); const u = f => srv + '/view?filename=' + f + '&subfolder=RenderDeck&type=output';
-    S.gallery = [{url:u('hood_00001_.png'), seed:1, prompt:'', t:Date.now()}, {url:u('fox_00001_.png'), seed:2, prompt:'', t:Date.now(), snap:{prompt:'a red fox in the snow'}}, {url:u('owl_00001_.png'), seed:3, prompt:'', t:Date.now()}];
+    const looks = JSON.parse(JSON.stringify(S.blocks)); looks.find(b => b.type==='model').ckpt = 'iriselTouchIL_v10.safetensors';
+    looks.push({id:90, type:'lora', on:true, lora:'librarianx_v2.safetensors', strength:1}, {id:91, type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}, {id:92, type:'lora', on:false, lora:'off.safetensors', strength:1});
+    S.loraWords['librarianx_v2.safetensors'] = 'librarianx'; S.loraWords['AFKJ Style Illustrious Claude.safetensors'] = 'AFKJ Style';
+    S.gallery = [{url:u('hood_00001_.png'), seed:1, prompt:'', t:Date.now(), snap:{blocks:looks, prompt:'librarianx eating a burger'}}, {url:u('fox_00001_.png'), seed:2, prompt:'', t:Date.now(), snap:{prompt:'a red fox in the snow'}}, {url:u('owl_00001_.png'), seed:3, prompt:'', t:Date.now()}];
     save(); drawStrip(); show(0); }, RENDER);
   await page.click('#resultActions [data-act="orbit"]');
   await page.waitForSelector('#obPanel:not([hidden]) .opad');
@@ -100,12 +103,17 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.fill('#obPanel [data-obt]', '500'); await page.dispatchEvent('#obPanel [data-obt]', 'input');
   await page.click('#obPanel [data-ob="fwd"]');
   ok(Math.abs(+await page.inputValue('#obPanel [data-obt]') - 508) <= 1, '▶ steps one frame on');
+  ok(/uses this picture's model and LoRAs: iriselTouchIL_v10\.safetensors · librarianx_v2 1 · AFKJ Style Illustrious Claude 0\.8/.test(await page.textContent('#obPanel')), 'the panel says the touch-up uses the picture\'s model and LoRAs: ' + await page.textContent('#obPanel'));
   await page.click('#obPanel [data-ob="finish"]');
   await page.waitForFunction(() => (S.gallery[0].hist || []).length===1, null, {timeout:15000});
   g = sent[1].prompt;
   ok(check(g).length===0, 'the touch-up graph is valid: ' + check(g).join('; '));
   ok(by('LoadImage')[0].inputs.image==='up_2.png', 'the grabbed frame is uploaded and redrawn');
-  ok(by('KSampler')[0].inputs.denoise===0.2 && by('ImageScaleBy')[0].inputs.scale_by===1.5 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='oneObsession_v24.safetensors', 'Illustrious at 0.2, 1.5x bigger');
+  ok(by('KSampler')[0].inputs.denoise===0.2 && by('ImageScaleBy')[0].inputs.scale_by===1.5 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors', 'the picture\'s own checkpoint at 0.2, 1.5x bigger');
+  { const ll = by('LoraLoader'), ks = by('KSampler')[0], pos = by('CLIPTextEncode')[0].inputs.text;
+    ok(ll.length===2 && ll[0].inputs.lora_name==='chars\\librarianx_v2.safetensors' && ll[1].inputs.lora_name==='AFKJ Style Illustrious Claude.safetensors' && ll[1].inputs.strength_model===0.8
+      && g[ks.inputs.model[0]]===ll[1] && g[by('CLIPTextEncode')[0].inputs.clip[0]]===ll[1], 'its LoRAs (the ones switched on, at their strengths, found in their folder) feed the redraw');
+    ok(/librarianx, AFKJ Style/.test(pos), 'and their trigger words are in the prompt: ' + pos); }
   ok(by('SetUnionControlNetType')[0].inputs.type==='canny/lineart/anime_lineart/mlsd' && by('ControlNetApplyAdvanced')[0].inputs.strength===0.8 && g[by('ControlNetApplyAdvanced')[0].inputs.image[0]].class_type==='AnimeLineArtPreprocessor', 'ControlNet ProMax holds the anime line art at 0.8');
   ok(by('SaveImage')[0].inputs.filename_prefix==='RenderDeck/angles/finished', 'saved under RenderDeck/angles/finished');
   { const ap = by('ControlNetApplyAdvanced'), t = ap[1] && g[g[ap[1].inputs.control_net[0]].inputs.control_net ? ap[1].inputs.control_net[0] : ''];

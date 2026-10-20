@@ -542,7 +542,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.87'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.88'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3608,13 +3608,18 @@ async function useRecipe(snap, url, quiet){
   return true;
 }
 // ComfyUI writes the graph it ran into the PNG's "prompt" text chunk; turn the parts the app knows back into blocks
-function fromPng(buf){
-  const v = new DataView(buf), td = new TextDecoder('latin1'); let o = 8, graph = null;
+// the ComfyUI graph saved inside a PNG (its 'prompt' text chunk)
+function pngGraph(buf){
+  const v = new DataView(buf), td = new TextDecoder('latin1'); let o = 8;
   while(o + 8 < buf.byteLength){
     const len = v.getUint32(o), type = td.decode(new Uint8Array(buf, o + 4, 4));
-    if(type==='tEXt'){ const t = new TextDecoder().decode(new Uint8Array(buf, o + 8, len)), z = t.indexOf('\0'); if(t.slice(0, z)==='prompt'){ graph = JSON.parse(t.slice(z + 1)); break; } }
+    if(type==='tEXt'){ const t = new TextDecoder().decode(new Uint8Array(buf, o + 8, len)), z = t.indexOf('\0'); if(t.slice(0, z)==='prompt') return JSON.parse(t.slice(z + 1)); }
     if(type==='IEND') break; o += 12 + len;
   }
+  return null;
+}
+function fromPng(buf){
+  const graph = pngGraph(buf);
   if(!graph) return null;
   const nodes = Object.values(graph), one = c => nodes.find(n => n.class_type===c), ref = r => Array.isArray(r) ? graph[r[0]] : null;
   const ks = one('KSampler') || one('KSamplerAdvanced'), ck = one('CheckpointLoaderSimple'); if(!ks) return null;
@@ -5788,15 +5793,39 @@ function orbitGraph(k, img, o, w, h){
   return {g, save};
 }
 // the picked frame redrawn: 1.5x, then Illustrious at the light denoise with ControlNet holding the line art (bigger only at 0)
-function obFinishGraph(k, img, dn, words){
+// the picture's own checkpoint and LoRAs, from its recipe (or the graph inside its first version's PNG), matched to what the
+// touching-up computer has: so Finish this frame keeps the character LoRA's design and the style LoRA's look (Jordan 2026-10-20)
+function obLooksOf(g){
+  const snap = g.snap; if(!snap || !snap.blocks) return null;
+  const M = snap.blocks.find(b => b.type==='model');
+  return {ckpt:M && M.ckpt || '', style:M ? styleKey(M) : '', loras:snap.blocks.filter(b => b.type==='lora' && b.on && b.lora).map(b => ({file:b.lora, strength:b.strength==null ? 1 : +b.strength}))};
+}
+async function obLooks(g, oi){
+  let L = obLooksOf(g);
+  if(!L && !S.test){ const first = g.hist && g.hist.length ? g.hist[g.hist.length - 1].url : g.url;
+    try{ const gr = pngGraph(await (await fetch(first)).arrayBuffer()), ns = gr ? Object.values(gr) : [], ck = ns.find(n => n.class_type==='CheckpointLoaderSimple');
+      if(ck) L = {ckpt:ck.inputs.ckpt_name, style:styleKey({ckpt:ck.inputs.ckpt_name}), loras:ns.filter(n => n.class_type==='LoraLoader' && n.inputs.lora_name).map(n => ({file:n.inputs.lora_name, strength:+n.inputs.strength_model || 1}))}; }catch(e){} }
+  if(!L) return {ckpt:'', loras:[], missing:[], words:''};
+  const has = (cls, key, name) => { if(S.test) return name; const l = combo(oi[cls], key); return l.includes(name) ? name : l.find(n => baseName(n).toLowerCase()===baseName(name).toLowerCase()) || ''; };
+  const out = {ckpt:L.ckpt && has('CheckpointLoaderSimple', 'ckpt_name', L.ckpt), style:L.style, loras:[], missing:[], words:''};
+  if(L.ckpt && !out.ckpt) out.missing.push(baseName(L.ckpt));
+  L.loras.forEach(x => { const f = has('LoraLoader', 'lora_name', x.file); f ? out.loras.push({file:f, strength:x.strength}) : out.missing.push(baseName(x.file)); });
+  out.words = L.loras.map(x => S.loraWords[x.file]).filter(Boolean).join(', ');
+  return out;
+}
+function obFinishGraph(k, img, dn, words, looks){
+  looks = looks || {loras:[]};
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const big = add('ImageScaleBy', {image:[add('LoadImage', {image:img}), 0], upscale_method:'lanczos', scale_by:1.5});
-  if(!dn || !k.ckpt) return {g, save:add('SaveImage', {images:[big,0], filename_prefix:obPrefix('finished')})};
-  const ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt});
-  const enc = t => [add('CLIPTextEncode', {clip:[ck,1], text:t}), 0];
-  let pos = enc(['masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest', (words || '').trim().replace(/,\s*$/, '')].filter(Boolean).join(', '));
-  let neg = enc('worst quality, low quality, bad quality, lowres, displeasing, very displeasing, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, blurry, motion blur, signature, username, watermark, logo');
+  if(!dn || !(looks.ckpt || k.ckpt)) return {g, save:add('SaveImage', {images:[big,0], filename_prefix:obPrefix('finished')})};
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:looks.ckpt || k.ckpt});
+  let mdl = [ck,0], clip = [ck,1];
+  for(const x of looks.loras){ const l = add('LoraLoader', {model:mdl, clip, lora_name:x.file, strength_model:x.strength, strength_clip:x.strength}); mdl = [l,0]; clip = [l,1]; }
+  const enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
+  const st = looks.ckpt && looks.style && STYLES[looks.style] && looks.style!=='plain' ? styleText(looks.style) : null;
+  let pos = enc([st ? st.pos : 'masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest', looks.words, (words || '').trim().replace(/,\s*$/, '')].filter(Boolean).join(', '));
+  let neg = enc(st && st.neg ? st.neg : 'worst quality, low quality, bad quality, lowres, displeasing, very displeasing, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, blurry, motion blur, signature, username, watermark, logo');
   if(k.cn && k.lines){
     const lines = k.lines==='Canny' ? add('Canny', {image:[big,0], low_threshold:0.15, high_threshold:0.3}) : add('AnimeLineArtPreprocessor', {image:[big,0], resolution:1024});
     let cn = [add('ControlNetLoader', {control_net_name:k.cn}), 0];
@@ -5809,7 +5838,7 @@ function obFinishGraph(k, img, dn, words){
       const tile = [add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:k.cn}), 0], type:'tile'}), 0];
       const at = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:tile, image:[big,0], vae:[ck,2], strength:0.6, start_percent:0, end_percent:1});
       pos = [at,0]; neg = [at,1]; } }
-  const smp = add('KSampler', {model:[ck,0], positive:pos, negative:neg, latent_image:[add('VAEEncode', {pixels:[big,0], vae:[ck,2]}), 0],
+  const smp = add('KSampler', {model:mdl, positive:pos, negative:neg, latent_image:[add('VAEEncode', {pixels:[big,0], vae:[ck,2]}), 0],
     seed:Math.floor(Math.random() * 1e9), steps:25, cfg:4, sampler_name:'euler', scheduler:'normal', denoise:dn});
   let out = [add('VAEDecode', {samples:[smp,0], vae:[ck,2]}), 0];
   // and the colours are put back to the frame's afterwards (KJNodes' Color Match, when that computer has it)
@@ -5928,7 +5957,9 @@ async function finishOrbit(){
     const pk = S.test || pc===k.url || !pcOf(pc).oi ? k : obTouch(pcOf(pc).oi); // the clip's own computer touches it up
     const v = await uploadFrame(frameCanvas(vid && vid._ready ? vid : null), 'orbit', pc);
     o.busy = dn ? 'Touching it up with Illustrious…' : 'Making it bigger…'; drawOrbit();
-    const {g:graph, save:sid} = obFinishGraph(pk, v.img, dn, o.words);
+    const looks = dn ? await obLooks(g, S.test ? FAKEOB : pcOf(pc).oi || {}) : null;
+    if(looks && looks.missing.length) toast(pcName(pc) + ' has no ' + looks.missing.join(', ') + ', so the touch-up goes without it');
+    const {g:graph, save:sid} = obFinishGraph(pk, v.img, dn, o.words, looks);
     let url;
     if(S.test){ OB_SENT.push(graph); url = v.url; }
     else { const t0 = Date.now(), r = await fetch(pc + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:graph, client_id:clientId})}), j = await r.json();
@@ -5962,6 +5993,7 @@ function drawOrbit(){
       ${clip.url ? '' : '<p class="note">The orbit (pretend, in Test mode).</p>'}
       <div class="row"><label>Touch-up</label>${oseg('dn', [[0, 'Bigger only'], [0.2, 'Light (0.2)'], [0.3, 'Stronger (0.3)']], o.dn==null ? 0.2 : o.dn)}</div>
       <div class="row"><label>Tags</label><div class="grow"><input type="text" data-obf="words" placeholder="optional extra tags for the touch-up, e.g. green eyes" value="${esc(o.words || '')}"></div></div>`;
+      { const L = obLooksOf(g); if(L && L.ckpt) x += `<p class="note">The touch-up uses this picture's model${L.loras.length ? ' and LoRAs' : ''}: ${esc([baseName(L.ckpt)].concat(L.loras.map(l => baseName(l.file).replace(/\.safetensors$/i, '') + ' ' + l.strength)).join(' · '))}</p>`; }
       if(o.busy) x += `<p class="note">${esc(o.busy)}</p>` + (o.fin ? '<div class="pbar obbar"><i data-obbar="fin"></i></div><p class="note" data-obtxt="fin"></p>' : '');
       x += `<div class="lbl">${pose ? 'Make another move' : 'Make another orbit'}</div>`;
     }
