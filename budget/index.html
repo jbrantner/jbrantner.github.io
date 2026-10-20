@@ -2683,6 +2683,8 @@ html.look-b #townList .pp-xv .tn-edit input::placeholder { color: #b08884; }
 #homeList .dw-day.past { justify-items: stretch; }
 #homeList .dw-dn { font-family: var(--holo-font); font-size: 11px; color: #ff9a92; text-align: center; }
 #homeList .dw-day.t .dw-dn { color: #ffd3cd; }
+#homeList .dw-amt { font-family: var(--holo-font); font-size: 11px; line-height: 1; color: #ff9a92; white-space: nowrap; }
+#homeList .dw-day.t .dw-amt { color: #ffd3cd; }
 #homeList .vl-hero.hc { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 #view-week .wk-card { display: grid; gap: 12px; } #view-week h2, #view-week h3 { margin: 0; } #view-week h3 { font-size: 15px; margin-top: 6px; }
 #view-week .wk-sub { margin: -8px 0 0; font-size: 13px; color: #d9a39d; }
@@ -3532,7 +3534,7 @@ palRemap(document);
 <script>
 'use strict';
 // Bump with every release; the site's version.json carries the same number so open copies can tell.
-const APP_VERSION = 315;
+const APP_VERSION = 316;
 /* ---------- storage ---------- */
 // A shared copy (its page carries <meta name="channel" content="share">) keeps its own data and its
 // own update rules, so opening it on your phone can never touch your budget.
@@ -5725,7 +5727,7 @@ const catSvg = k => `<svg class="hl-sym" viewBox="0 0 7 7" shape-rendering="cris
    weekly: the dailies today, then the dailies' days ahead, then the other weekly ones, then it goes negative. */
 function catLedger(cats, spends, d, days = 7) {
   const D = cats.filter(c => c.daily), W = cats.filter(c => !c.daily);
-  const pool = {}, wk = {}, start = {}, today = {}, fut = {};
+  const pool = {}, wk = {}, start = {}, today = {}, fut = {}; let took = 0;
   D.forEach(c => { pool[c.id] = c.amt; }); W.forEach(c => { wk[c.id] = c.amt; });
   // take `need` cents from the slots, split equally; a slot that runs dry passes its part to the rest
   const pull = (need, slots) => {
@@ -5739,6 +5741,7 @@ function catLedger(cats, spends, d, days = 7) {
   for (let i = 0; i <= d; i++) {
     const left = days - i;
     D.forEach(c => { today[c.id] = left > 1 && pool[c.id] > 0 ? Math.floor(pool[c.id] / left / 100) * 100 : pool[c.id]; fut[c.id] = pool[c.id] - today[c.id]; start[c.id] = today[c.id]; });
+    const f0 = sum(D, c => fut[c.id]);
     for (const s of spends.filter(x => x.day === i)) {
       const k = D.some(c => c.id === s.pack) || W.some(c => c.id === s.pack) ? s.pack : '';
       let need = s.c;
@@ -5757,13 +5760,14 @@ function catLedger(cats, spends, d, days = 7) {
         wk[k] -= need;
       }
     }
+    if (i === d) took = f0 - sum(D, c => fut[c.id]);   // v316: what today's spending took from the days ahead
     D.forEach(c => { pool[c.id] = today[c.id] + fut[c.id]; });
   }
   const ahead = days - d - 1;
   // the days ahead if nothing more is spent: each gets whole dollars of what's left, the last one gets the rest
   const plan = id => { const out = []; let r = fut[id]; for (let k = ahead; k > 0; k--) { const x = k > 1 && r > 0 ? Math.floor(r / k / 100) * 100 : r; out.push(x); r -= x; } return out; };
   return { daily: D.map(c => ({ id: c.id, start: start[c.id], today: today[c.id], fut: fut[c.id], perDay: ahead > 0 ? Math.floor(fut[c.id] / ahead) : 0, ahead: plan(c.id) })),
-    weekly: W.map(c => ({ id: c.id, amt: c.amt, left: wk[c.id] })) };
+    weekly: W.map(c => ({ id: c.id, amt: c.amt, left: wk[c.id] })), took };
 }
 // the week's categories through catLedger, in cents; Anything is daily and gets the rest of the week's money
 function catWeekNow(now = Date.now(), plus, upto) {
@@ -5790,10 +5794,11 @@ function dwHTML(now = Date.now()) {
     + L.daily.map(x => `<span class="dw-num${x.today < 0 ? ' bad' : ''}">${catSvg(catSymOf(p(x.id)))}<b class="num">${x.today < 0 ? '−' + cash(-x.today) : cash(x.today)}</b><small class="dw-nm">${esc(p(x.id).name)}</small></span>`).join('') + `</div>`;
   if (L.weekly.length) h += `<div class="dw-wk hl-cats" role="button" tabindex="0" aria-label="${esc(L.weekly.map(x => `${p(x.id).name}: ${x.left < 0 ? money(-x.left / 100) + ' over this week' : money(x.left / 100) + ' left this week'}`).join('. '))}">`
     + L.weekly.map(x => `<span class="${x.left < 0 ? 'bad' : ''}">${catSvg(catSymOf(p(x.id)))}${esc(p(x.id).name)} ${x.left < 0 ? '−' + money(-x.left / 100) : money(Math.floor(x.left / 100))}</span>`).join('') + `<span class="dw-wkl">left this week</span></div>`;
+  const amt = c => `<span class="dw-amt num">${c < 0 ? '−' + money(Math.ceil(-c / 100 - 1e-9)) : money(Math.floor(c / 100 + 1e-9))}</span>`;   // v316: what each day has, over its bars
   const cells = [0, 1, 2, 3, 4, 5, 6].map(i => {
     if (i < L.d) return `<span class="dw-day past" role="img" aria-label="${N[i]}: done"><i class="dw-past"></i><span class="dw-dn">${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'][i]}</span></span>`;
-    if (i === L.d) return `<span class="dw-day t" role="img" aria-label="Today: ${esc(L.daily.map(x => `${p(x.id).name} ${x.today < 0 ? say(-x.today) + ' over' : say(x.today)}`).join(', '))}"><span class="dw-cols">${L.daily.map(x => col(x.start, x.today > 0 ? Math.ceil(x.today / unit - 1e-9) : 0)).join('')}</span><span class="dw-dn">${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'][i]}</span></span>`;
-    return `<span class="dw-day fut" role="img" aria-label="${N[i]}: ${esc(L.daily.map(x => `${p(x.id).name} ${money((x.ahead[i - L.d - 1] || 0) / 100)}`).join(', '))}"><span class="dw-cols">${L.daily.map(x => (x.ahead[i - L.d - 1] || 0) > 0 ? col(x.ahead[i - L.d - 1], 99) : col(0, 0)).join('')}</span><span class="dw-dn">${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'][i]}</span></span>`;
+    if (i === L.d) return `<span class="dw-day t" role="img" aria-label="Today: ${esc(L.daily.map(x => `${p(x.id).name} ${x.today < 0 ? say(-x.today) + ' over' : say(x.today)}`).join(', '))}">${amt(sum(L.daily, x => x.today))}<span class="dw-cols">${L.daily.map(x => col(x.start, x.today > 0 ? Math.ceil(x.today / unit - 1e-9) : 0)).join('')}</span><span class="dw-dn">${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'][i]}</span></span>`;
+    return `<span class="dw-day fut" role="img" aria-label="${N[i]}: ${esc(L.daily.map(x => `${p(x.id).name} ${money((x.ahead[i - L.d - 1] || 0) / 100)}`).join(', '))}">${amt(sum(L.daily, x => x.ahead[i - L.d - 1] || 0))}<span class="dw-cols">${L.daily.map(x => (x.ahead[i - L.d - 1] || 0) > 0 ? col(x.ahead[i - L.d - 1], 99) : col(0, 0)).join('')}</span><span class="dw-dn">${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'][i]}</span></span>`;
   }).join('');
   const wmax = Math.max(1, ...L.weekly.map(x => x.amt)), wk = L.weekly.length ? `<span class="dw-day wk" role="img" aria-label="This week's weekly categories"><span class="dw-cols">${L.weekly.map(x => { const rows = x.amt > 0 ? Math.max(1, Math.round(x.amt / wmax * 8)) : 1; return col(rows * unit, x.amt > 0 && x.left > 0 ? Math.ceil(x.left / x.amt * rows - 1e-9) : 0); }).join('')}</span><span class="dw-dn">Week</span></span>` : '';
   return h + `<div class="dw-days${wk ? ' has-wk' : ''}" style="--pz:${nD <= 2 ? 5 : nD <= 3 ? 4 : 3}px">${cells}${wk}</div>`;
@@ -7968,13 +7973,14 @@ const VL = (() => {
     const on = n || pu.P || pu.spent;   // v150: Left today over the day stacks; the week's line under them
     if (on && !heroOpen) {   // v186: the day stacks on their own, as Jordan drew it; a tap opens the card for more
       const cg = (state.packs || []).length && pu.P > 0;   // v275: categories get their own card (daily and weekly)
+      const pd = aheadDay(now, cg, t, L, days);
       h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
-        + (pu.carried > 0.005 || t < 0 ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on)}</div>` : '')
+        + (pu.carried > 0.005 || t < 0 || pd ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, pd)}</div>` : '')
         + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '') + (wkEd ? `<!--hc-ed${cg ? '' : '+'}-->` : '') + `</div>`;
     } else
     h += `<div class="vl-hero pp-panel${on ? ' hx' : ''}"${on ? ' aria-expanded="true"' : ''}><div class="vl-k">${on ? 'Left today' : 'Left this week'}</div><div class="vl-total num${on ? '' : L < 0 ? ' bad' : ''}">${on ? money(Math.max(0, t)) : L >= 0 ? money(L) : '−' + money(over)}</div>`
       + (on ? stacksHTML(now) : '')
-      + (!on || pu.carried > 0.005 || t < 0 ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on)}</div>` : '')   // v151: only a warning, or before spending is set
+      + (!on || pu.carried > 0.005 || t < 0 ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, on ? aheadDay(now, false, t, L, days) : null)}</div>` : '')   // v151: only a warning, or before spending is set
       + (on ? '' : ''
       + `<div class="hl-wk" role="group" aria-label="Weekly spending"><button class="hl-wkb" data-hl="wm" aria-label="$7 a week less"${wkShown() <= 0 ? ' disabled' : ''}>−</button>`
       + `<span>Weekly spending: <b class="num">${money(wkShown())}</b> (${moneyExact(wkShown() / 7)} a day)<small>${wkDraft != null ? `was ${money(weeklyAmt())}` : n ? "this week's spending is running · a change counts from today" : plan ? `${money(plan * 7 * WORKER_DAY)} a week · starts Monday` : 'Set your weekly spending with + to start'}</small></span>`
@@ -8019,12 +8025,21 @@ const VL = (() => {
      what's left (the last day: its name); "over today" only when today's share is spent past. */
   // v267 (Jordan): when the week isn't running and it could, a link to Start now (it lives in Settings > Money since v173)
   const startLink = over => !partyNow() && over <= 0 && Math.min(Number(state.partyPlan || 0), partyRoom()) > 0 ? '<br><button class="link hl-start" data-hl="start">Start it in Settings ›</button>' : '';
-  function tidyLine(pu, n, t, days, L, over, plan, now, st) {
+  function tidyLine(pu, n, t, days, L, over, plan, now, st, pd) {
     const day = st ? '' : days === 1 ? `${new Date(now).toLocaleDateString(undefined, { weekday: 'long' })}, last day` : `${days} days left, ${money(Math.floor(Math.max(0, L) / days + 1e-9))} a day from here`;
-    if (pu.carried > 0.005) return carriedLine(pu, over > 0 ? '' : ' · <button class="link" data-hl="go">Cover it</button>') + (day && (pu.P || pu.spent) ? `<br>${day}` : '');
+    const per = pd && st ? `<br>Now <b>${money(pd.a)} a day</b> ${days === 2 ? 'for tomorrow' : `for the ${days - 1} days left`}` : '';   // v316
+    if (pu.carried > 0.005) return carriedLine(pu, over > 0 ? '' : ' · <button class="link" data-hl="go">Cover it</button>') + (day && (pu.P || pu.spent) ? `<br>${day}` : '') + per;
     if (!pu.P && !pu.spent) return plan ? "This week's spending isn't running yet" + startLink(over) : 'No weekly spending set yet';
     return `<b>${money(pu.spent)}</b> spent of ${money(pu.P)}${n ? (day ? ' · ' + day : '') : " · this week's spending isn't running" + startLink(over)}`
-      + (t < 0 && days > 1 ? ` · <b class="bad">${money(Math.ceil(-t - 1e-9))} over today</b>${st ? ', taken from the days ahead' : ''}` : '');
+      + (t < 0 && days > 1 ? ` · <b class="bad">${money(Math.ceil(-t - 1e-9))} over today</b>${st ? ', taken from the days ahead' : ''}` : pd && st ? ` · <b class="bad">${money(Math.ceil(pd.took - 1e-9))} taken from the days ahead</b>` : '')
+      + per;
+  }
+  // v316 (Jordan: overspent today, "how much I now have per day"): the even share of what the days ahead have (daily categories only, whole dollars)
+  //   null unless today's spending took from the days ahead; took = dollars taken
+  function aheadDay(now, cg, t, L, days) {
+    if (days < 2) return null;
+    if (cg) { const W = catWeekNow(now); return W.took > 0 ? { a: Math.floor(sum(W.daily, x => x.fut) / 100 / (days - 1) + 1e-9), took: W.took / 100 } : null; }
+    return t < 0 ? { a: Math.floor(Math.max(0, L) / (days - 1) + 1e-9), took: -t } : null;
   }
   let heroOpen = false;   // v184: the weekly card starts condensed
   let wkEd = false;   // v310: the weekly budget open inside the Left today card
