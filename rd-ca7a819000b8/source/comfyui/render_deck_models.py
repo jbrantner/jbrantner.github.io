@@ -227,9 +227,30 @@ async def set_speed(request):
     return web.json_response({'mbps': mbps, 'auto': auto})
 
 
+_KOHYA_SEEN = [0, False]
+
+
+def _kohya_running():
+    """Whether kohya is training on this computer, however it was started (an auto run, or by hand), so the farm
+    sends no renders here meanwhile (2026-10-20: a hand-started training showed as Free)."""
+    if time.time() - _KOHYA_SEEN[0] > 10:
+        found = False
+        try:
+            import psutil
+            for p in psutil.process_iter(['cmdline']):
+                if any('train_network' in (a or '') for a in (p.info.get('cmdline') or [])):
+                    found = True
+                    break
+        except Exception:
+            pass
+        _KOHYA_SEEN[:] = [time.time(), found]
+    return _KOHYA_SEEN[1]
+
+
 @routes.get('/renderdeck/jobs')
 async def jobs(request):
-    return web.json_response({'version': 2, 'token': bool(_token()), 'jobs': list(JOBS.values())[::-1]})
+    training = await asyncio.to_thread(_kohya_running)
+    return web.json_response({'version': 2, 'token': bool(_token()), 'training': training, 'jobs': list(JOBS.values())[::-1]})
 
 
 @routes.post('/renderdeck/download')
@@ -812,9 +833,15 @@ async def _look(s, url):
         st['online'] = True  # (no new compare when it comes back: a WiFi drop would start the copies again)
     except Exception:
         st['online'] = False
-    if st['online'] and st['copies']:
+    if st['online']:
         try:
-            jobs = (await _get(s, url + '/renderdeck/jobs')).get('jobs', [])
+            jl = await _get(s, url + '/renderdeck/jobs')
+            st['training'] = bool(jl.get('training'))
+        except Exception:
+            jl = None
+    if st['online'] and st['copies'] and jl is not None:
+        try:
+            jobs = jl.get('jobs', [])
             before = len(st['copies'])
             st['copies'] = [{'name': x['name'], 'done': x.get('done', 0), 'total': x.get('total', 0)}
                             for x in jobs if x.get('source') and x.get('status') not in ('done', 'failed')]
@@ -929,7 +956,7 @@ async def _farm_round(s):
         st['why'] = ''
         if not st['online'] or u in FARM['off'] or st['running'] or st['pending']:
             continue
-        if AUTO_TRAINING['pc'] and _tailnet(AUTO_TRAINING['pc']) == u:
+        if st.get('training') or AUTO_TRAINING['pc'] and _tailnet(AUTO_TRAINING['pc']) == u:
             st['why'] = 'training a LoRA'
             continue
         for job in FARM['jobs']:

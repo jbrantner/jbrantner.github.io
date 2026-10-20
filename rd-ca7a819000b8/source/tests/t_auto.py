@@ -130,6 +130,12 @@ async def main():
     ok(os.path.exists(mg) and '--pretrained_model_name_or_path ' + mg in a2 and '--base_weights' not in a2, 'the style LoRA is baked into a copy of the checkpoint, and it trains on that')
     v = json.loads((await PS.instance.routes.h[('GET', '/renderdeck/auto')](None)).body)
     ok(v['jobs'][-2]['id'] == jid and 'turn_graph' not in v['jobs'][-2], 'the app reads the run without its graphs')
+    # kohya started by hand (not by an auto run) still counts as training, so the farm leaves this computer alone
+    import subprocess
+    pr = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)', 'sdxl_train_network.py'])
+    await asyncio.sleep(0.5); H._KOHYA_SEEN[0] = 0; seen = H._kohya_running(); pr.kill()
+    r = await PS.instance.routes.h[('GET', '/renderdeck/jobs')](None)
+    ok(seen and 'training' in json.loads(r.body), 'a hand-started kohya shows as training in /renderdeck/jobs')
     await run.cleanup()
 asyncio.run(main())
 print(len(fails), 'failed' if fails else 'all passed'); sys.exit(1 if fails else 0)
