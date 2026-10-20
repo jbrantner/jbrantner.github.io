@@ -1420,6 +1420,26 @@ def _write_set(j):
     j['kohya_data'] = os.path.dirname(dirs[-1]) if sd else ''
 
 
+async def _style_ckpt(j, sd, py, ckpt, env):
+    st = folder_paths.get_full_path('loras', j['style_lora'])
+    if not st:
+        raise RuntimeError('this computer has no LoRA ' + j['style_lora'])
+    m = float(j.get('style_mult', 1.0))
+    tag = re.sub(r'[^\w]+', '_', os.path.splitext(os.path.basename(j['style_lora']))[0]).strip('_')
+    out = os.path.join(os.path.dirname(sd), 'merged', '%s_%s_%g.safetensors' % (os.path.splitext(os.path.basename(ckpt))[0], tag, m))
+    if not os.path.exists(out):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        part = out[:-len('.safetensors')] + '_part.safetensors'
+        _say(j, 'train', 'Mixing the style LoRA into the checkpoint…')
+        cmd = [py, os.path.join(sd, 'networks', 'sdxl_merge_lora.py'), '--sd_model', ckpt, '--save_to', part,
+               '--models', st, '--ratios', str(m), '--precision', 'float', '--save_precision', 'fp16']
+        why = await asyncio.to_thread(_train_blocking, j, cmd, env, sd)
+        if why or not os.path.exists(part):
+            raise RuntimeError('mixing the style in: ' + (why or 'no file came out'))
+        os.replace(part, out)
+    return out
+
+
 def _retrain_set(j, sd):
     """A retrain uses an earlier run's training pictures: copied to kohya's folder for the new trigger word, with the old
     trigger swapped for the new one at the start of each caption."""
@@ -1545,6 +1565,7 @@ async def _step_train(s, j):
     steps = int(j.get('steps', 1600))
     # stronger than the first runs (Jordan 2026-10-20: the Librarian's shirt came out right only ~40% of the time): rank 32, and
     # the text encoders learn the trigger word too, so its text outputs can't be cached
+    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
     cmd = [py, os.path.join(sd, 'sdxl_train_network.py'), '--pretrained_model_name_or_path', ckpt, '--train_data_dir', j['kohya_data'],
            '--output_dir', loras, '--output_name', name, '--save_model_as', 'safetensors', '--network_module', 'networks.lora',
            '--network_dim', '32', '--network_alpha', '16', '--text_encoder_lr', '5e-5', '--resolution', '1024,1024', '--enable_bucket',
@@ -1556,12 +1577,10 @@ async def _step_train(s, j):
            '--max_data_loader_n_workers', '0', '--seed', '42']
     # a style LoRA mixed into the checkpoint while training: the character LoRA then learns only what's left over, so later
     # both can be on at full strength without the style redrawing the character's design
+    # (kohya's --base_weights crashed on Render with a CPU/GPU mismatch, 2026-10-20, so the style is baked into a copy of the
+    # checkpoint with kohya's merge tool first, kept in kohya\merged for the next run)
     if j.get('style_lora'):
-        st = folder_paths.get_full_path('loras', j['style_lora'])
-        if not st:
-            raise RuntimeError('this computer has no LoRA ' + j['style_lora'])
-        cmd += ['--base_weights', st, '--base_weights_multiplier', str(float(j.get('style_mult', 1.0)))]
-    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+        cmd[cmd.index('--pretrained_model_name_or_path') + 1] = await _style_ckpt(j, sd, py, ckpt, env)
     _say(j, 'train', 'Training the LoRA with kohya…')
     j['train_t0'] = time.time()
     try:

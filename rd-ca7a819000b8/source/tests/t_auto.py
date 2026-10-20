@@ -72,6 +72,10 @@ open(os.path.join(out, name + '.args'), 'w').write(' '.join(a))
 for s in range(1, steps + 1, 100): sys.stderr.write('steps: %d%%| %d/%d [00:01<00:01]\\r' % (s * 100 // steps, s, steps))
 open(os.path.join(out, name + '.safetensors'), 'w').close()
 ''')
+os.makedirs(os.path.join(K, 'sd-scripts', 'networks'))
+open(os.path.join(K, 'sd-scripts', 'networks', 'sdxl_merge_lora.py'), 'w').write('''import sys
+a = sys.argv; open(a[a.index('--save_to') + 1], 'w').write(a[a.index('--models') + 1] + ' ' + a[a.index('--ratios') + 1])
+''')
 os.symlink(sys.executable, os.path.join(K, 'venv', 'bin', 'python'))
 H._kohya_find = lambda: (os.path.join(K, 'sd-scripts'), os.path.join(K, 'venv', 'bin', 'python'))
 H._gpu_c = lambda: 60
@@ -108,6 +112,7 @@ async def main():
     ok(j['lora'] == 'lib_rd.safetensors' and os.path.exists(os.path.join(T, 'loras', j['lora'])) and j.get('train_steps') == 300, 'the LoRA is trained into the loras folder: %s %s' % (j.get('lora'), j.get('train_steps')))
     args = open(os.path.join(T, 'loras', 'lib_rd.args')).read()
     ok('--text_encoder_lr' in args and '--network_dim 32' in args and '--cache_text_encoder_outputs' not in args and '--base_weights' not in args, 'trains rank 32 with the text encoders, no style mixed in unless asked')
+    ok('merged' not in args, 'no merged checkpoint without a style')
     # train again from that run's pictures: new trigger word, the style LoRA mixed into the checkpoint
     open(os.path.join(T, 'ckpt', 'AFKJ Style.safetensors'), 'w').close()
     rb = {'from': jid, 'trigger': 'lib x', 'steps': 200, 'style_lora': 'AFKJ Style.safetensors', 'style_mult': 1}
@@ -121,7 +126,8 @@ async def main():
     d2 = os.path.join(K, 'data', 'lib_x', '10_lib_x'); caps2 = [open(os.path.join(d2, f)).read() for f in os.listdir(d2) if f.endswith('.txt')]
     ok(len(caps2) == len(caps) and all(c.startswith('lib_x, 1girl') and 'lib_rd' not in c for c in caps2), 'the same pictures, captions start with the new trigger: ' + caps2[0])
     a2 = open(os.path.join(T, 'loras', 'lib_x.args')).read()
-    ok('--base_weights ' + os.path.join(T, 'ckpt', 'AFKJ Style.safetensors') in a2 and '--base_weights_multiplier 1.0' in a2, 'the style LoRA is mixed in while training')
+    mg = os.path.join(K, 'merged', 'oneObsession_v24_AFKJ_Style_1.safetensors')
+    ok(os.path.exists(mg) and '--pretrained_model_name_or_path ' + mg in a2 and '--base_weights' not in a2, 'the style LoRA is baked into a copy of the checkpoint, and it trains on that')
     v = json.loads((await PS.instance.routes.h[('GET', '/renderdeck/auto')](None)).body)
     ok(v['jobs'][-2]['id'] == jid and 'turn_graph' not in v['jobs'][-2], 'the app reads the run without its graphs')
     await run.cleanup()
