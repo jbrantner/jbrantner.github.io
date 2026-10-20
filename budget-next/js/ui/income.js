@@ -2,8 +2,8 @@
 /* ---------- an income farm, opened ---------- */
 const ib = { id: null };
 const ibInc = () => state.incomes.find(i => i.id === ib.id);
-function openIncome(id) { ib.id = id; $('incomeBox').classList.remove('hidden'); $('villageHint').classList.add('hidden'); renderIncome(); }
-function closeIncome() { ib.id = null; $('incomeBox').classList.add('hidden'); $('villageHint').classList.remove('hidden'); render(); }
+function openIncome(id) { ib.id = id; $('incomeBox').classList.remove('hidden'); renderIncome(); }
+function closeIncome() { ib.id = null; $('incomeBox').classList.add('hidden'); render(); }
 function renderIncome() {
   const i = ibInc(); if (!i) { if (ib.id) closeIncome(); return; }
   if (document.activeElement !== $('ibName')) $('ibName').value = i.name;

@@ -10,20 +10,9 @@ function billsHeldLine() {
    You can slay one early if the Bills pot can cover it. */
 let editingDue = null;
 function renderMonsters() {
-  const N = monthNumbers(month), { bills, isPaid, spentBy } = N;
-  $('billsPotLine').textContent = billsHeldLine() + `Every bill gets its share of each paycheck, a day at a time, and that money stays with it all month. A green check means this month's bill is paid; its share keeps coming because the bill comes back next month.`;
+  const N = monthNumbers(month), { bills } = N;
   const amt = c => Number(c.budget || 0);
   const order = [...bills].sort((a, b) => (dueDate(a, month) || '9').localeCompare(dueDate(b, month) || '9') || amt(b) - amt(a));
-  // villagers: the bill crews, plus everyone a normal month's pay after bills keeps busy (or more, when
-  // more are working than your pay covers; Savings pays for those)
-  const fun = partyNow(), building = crewWorkers(), saving = savers(), over = overAssigned();
-  const crews = sum(bills, c => crewOf(c)), total = crews + fun + building + saving, store = building + saving;
-  const paidN = bills.filter(isPaid).length;
-  $('billsPaidCount').textContent = bills.length ? `${paidN} of ${bills.length} paid ✓` : '';
-  const pct = n => (total > 0 ? Math.max(0, n / total * 100) : 0).toFixed(2) + '%';
-  $('crewSplit').innerHTML = `<span style="width:${pct(crews)}; background:#f59e0b"></span><span style="width:${pct(store - Math.min(store, over))}; background:#60a5fa"></span><span style="width:${pct(fun)}; background:#2dd4bf"></span><span style="width:${pct(Math.min(store, over))}; background:var(--bad)"></span>`;
-  $('crewTxt').innerHTML = `<strong>${money(crews * WORKER_DAY)}</strong> of ${money(total * WORKER_DAY)} a day goes to bills`;
-  $('crewFree').innerHTML = `${fun} in the party · ${building} building · ${saving} saving` + (over ? ` · <span class="bad">${over} more than your pay covers</span>` : '');
   const L = ledgerAt(today());
   $('billList').innerHTML = order.length ? `<div class="machines">${order.map(c => billRow(c, N, L)).join('')}</div>` : '<p class="muted">No bills yet. Add them with Edit bills.</p>';
 }

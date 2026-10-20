@@ -79,7 +79,7 @@ $('demoBtn').onclick = async () => {
 function loadDemo() {
   plan = null;   // v311: the demo ends Planning mode
   $('setup').classList.add('hidden');
-  state = demoState(); carts = []; posts.a = []; posts.b = []; for (const k in incoming) delete incoming[k];
+  state = demoState(); carts = []; for (const k in incoming) delete incoming[k];
   state.startMonth = month; state.partyPlan = 18;
   // as if you started on the 1st with $1,500 in the bank, and every payday since brought $1,200.37
   state.startAt = monthStartMs(month) + 60e3;

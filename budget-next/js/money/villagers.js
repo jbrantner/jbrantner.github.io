@@ -24,7 +24,6 @@ const workersAt = (pot, t = Date.now()) => {
   let lo = 0, hi = e.ts.length; while (lo < hi) { const m = (lo + hi) >> 1; if (e.ts[m] <= t) lo = m + 1; else hi = m; }
   return lo ? e.cs[lo - 1] : 0;
 };
-const harvest = () => 0;   // storage pots fill as you collect pay; nothing to harvest
 // Dollars of crops a farm grew between two moments (never past now).
 function grown(pot, a, b) {
   b = Math.min(b, Date.now()); if (b <= a) return 0;
@@ -41,7 +40,6 @@ function grown(pot, a, b) {
 // you get the share of the month's pay-after-bills that's left (half the month left, half of it), and it
 // gathers across the days that are left. Money from before you started is what you enter as savings.
 const gatherStart = m => m === state.startMonth && state.startAt > monthStartMs(m) && state.startAt < monthEndMs(m) ? state.startAt : monthStartMs(m);
-const workClock = m => gatherStart(m) + (monthEndMs(m) - gatherStart(m)) * collectedFrac(m);
 const monthLeftFrac = m => (monthEndMs(m) - gatherStart(m)) / (monthEndMs(m) - monthStartMs(m));
 /* Villagers this pay period and the crews. When a smaller paycheck brings fewer villagers than are working, crews
    come off projects first (evenly, by size), then pots; the party is locked until Monday, so next week's party
@@ -79,8 +77,6 @@ function donorList(to) {
 const crewBuilt = id => { const g = goalOf(id); return g > 0 && projectBal(id) >= g - 0.005; };
 function canAdd(id) { return !(debtOf(id) || {}).done && !state.roundOff && !clockBack() && !isLocked(id) && !crewBuilt(id) && donorList(id).some(x => !x.lock && x.n > 0); }
 let carts = [];                    // { from, to, amt, workers, t0 (ms since 1970), ms, side }  side = where it's headed
-function inFlightOut(id) { return sum(carts.filter(c => c.from === id), c => c.amt); }
-const inFlightWorkers = id => sum(carts.filter(c => c.from === id), c => c.workers || 0);
 // Villagers your pay keeps busy: this pay period's paycheck after its bill share, $1 a day each until the next payday
 // (v117). A payday waiting for its paycheck has none until you enter it.
 const maxWorkers = (now = Date.now()) => periodNow(now).V;
@@ -91,9 +87,5 @@ const crewWorkers = () => sum(farmPots().filter(id => id !== 'savings'), id => w
 const savers = () => Math.max(0, maxWorkers() - partyNow() - crewWorkers());
 // Villagers working beyond what your pay supports: Savings pays for them, a dollar a day each.
 const overAssigned = () => payWaiting() ? 0 : Math.max(0, partyNow() + crewWorkers() - maxWorkers());
-function workersFree(id) {
-  if (id === 'spend') return savers();
-  return canFarm(id) ? Math.max(0, workersAt(id) - inFlightWorkers(id)) : 0;
-}
 const funWorkers = () => partyNow();
 const funPerDay = () => partyNow() * WORKER_DAY;

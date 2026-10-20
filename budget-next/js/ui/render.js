@@ -8,7 +8,7 @@ function render() {
   $('monthLabel').textContent = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   try { draftBar(); } catch (e) {}   // v306
   booksGen++; needMemo.clear(); dayMsC.clear(); if (payOfC) payOfC.clear(); autoSlay(); debtTick(); earlyArrive(); roundOffTick(); finishGoals(); weekMigrate(); partyReturns(); mondayCatchUp(); renderOver(); renderMath();
-  renderBudget(); renderTx(); renderRules(); renderPotsTab(); renderScavenger(); Town.render(); VL.render();
+  renderBudget(); renderTx(); renderRules(); renderPotsTab(); Town.render(); VL.render();
   $('txCat').innerHTML = catOptions($('txCat').value);
   $('ruleCat').innerHTML = catOptions($('ruleCat').value, false);
   $('txAcct').innerHTML = acctOptions($('txAcct').value || state.accounts[0]);

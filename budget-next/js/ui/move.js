@@ -38,7 +38,6 @@ function doMove() {
 }
 
 /* ---------- settings & backup ---------- */
-$('openMoveBtn').onclick = () => openMover();
 $('scavCollectBtn').onclick = () => collectChange();
 $('mvFrom').onchange = $('mvTo').onchange = () => updateMover(true);
 $('mvSlider').oninput = () => { $('mvAmt').value = $('mvSlider').value; updateMover(false); };

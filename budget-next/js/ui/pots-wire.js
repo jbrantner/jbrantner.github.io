@@ -1,6 +1,4 @@
 'use strict';
-$('addPotBtn').onclick = () => { if (addPot($('newPotName').value)) $('newPotName').value = ''; };
-$('potList').addEventListener('click', e => { const id = e.target.dataset.potDel; if (id) deletePot(id); });
 $('newPlotBtn').onclick = () => {
   const inc = { id: uid(), name: 'Side gig', amount: 0, every: 0, anchor: today() };
   state.incomes.push(inc);
@@ -16,14 +14,6 @@ $('ibDel').onclick = async () => {
   const i = ibInc(); if (!i || state.incomes.length < 2) return;
   if (!await ask(`Remove ${i.name}? Its pay stops counting.`, 'Remove')) return;
   state.incomes = state.incomes.filter(x => x !== i); closeIncome(); save(); render();
-};
-$('storeList').addEventListener('change', e => { const id = e.target.dataset.cover; if (id) setCover(id, e.target.checked); });
-$('storeList').addEventListener('click', e => { const b = e.target.closest('[data-wk]'); if (b) setCrew(b.dataset.wk, Number(b.dataset.d)); });
-$('newGoalUnit').onchange = () => { if ($('newGoalUnit').value === 'months' && !$('newGoalAmt').value) $('newGoalAmt').value = 3; goalHint(); };
-$('newGoalAmt').oninput = goalHint;
-$('addGoalBtn').onclick = () => {
-  if (!addProject($('newGoalName').value, $('newGoalAmt').value, $('newGoalUnit').value === 'months')) return;
-  $('newGoalName').value = ''; $('newGoalAmt').value = ''; $('newGoalUnit').value = '$'; goalHint();
 };
 $('habitList').addEventListener('click', e => {
   const del = e.target.closest('[data-habit-del]');

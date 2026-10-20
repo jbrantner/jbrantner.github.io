@@ -2,7 +2,6 @@
 const prevMonth = m => { const [y, mo] = m.split('-').map(Number), n = new Date(y, mo - 2, 1); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 let month = today().slice(0, 7);
-const monthEnd = m => m + '-31';
 /* ---------- farm workers ----------
    A worker on a farm (Savings or a pot you made) grows $1 of crops a day, earned instead of for Fun
    as it grows, so a farm's balance climbs all day long. state.workerLog holds every change in

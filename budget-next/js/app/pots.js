@@ -70,15 +70,6 @@ function moveWorker(from, to, n = 1) {
   if (moved) toast(`Moved ${money(moved * WORKER_DAY)} a day from ${potName(from)} to ${potName(to)}`);
   return moved;
 }
-// A goal in months of bills shows what it comes to while you type.
-function goalHint() {
-  const inMonths = $('newGoalUnit').value === 'months', b = billsMonthly(), n = Math.round(Number($('newGoalAmt').value) || 0);
-  $('newGoalHint').classList.toggle('hidden', !inMonths);
-  $('newGoalName').placeholder = inMonths ? 'Name, e.g. Bills buffer' : 'Mini project, e.g. Laptop';
-  $('newGoalAmt').placeholder = inMonths ? 'Months' : 'Goal';
-  if (inMonths) $('newGoalHint').textContent = !(b > 0) ? 'Add your bills on the Upkeep page first, so the app knows what a month costs.'
-    : `${n > 0 ? `${n} month${n === 1 ? '' : 's'} of bills = ${money(Math.ceil(n * b - 1e-9))}.` : 'How many months of bills?'} Your bills are ${money(b)} a month. If they change, the goal changes with them.`;
-}
 // A mini project: a pot with a goal in dollars or months of bills. Returns its id, or null. The Town page uses it too.
 function addProject(name, amt, inMonths) {
   name = String(name || '').trim(); amt = Number(amt) || 0; const n = Math.round(amt);

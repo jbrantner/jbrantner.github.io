@@ -16,8 +16,9 @@ as they are. The live app is still `budget/`; this copy goes live only when Jord
     numbers out from the saved data and don't touch the screen.
   - `app/`: the actions that change the money (pay a bill, move money, collect, plan).
   - `ui/`: the screens, sheets and pop-ups.
-  - `legacy/`: older screens the app no longer shows. They still load because a few of their parts are used elsewhere;
-    they are the next thing to clear out.
+  - `legacy/`: older screens a few paths still open (the old "This week" page and the transaction list), and support
+    for older saved data (money still on a cart from the old farms). The old Pots, Bills and Scavenger pages, which
+    nothing opened any more, are gone; the pieces the town's sheets borrow from them wait in `#townDock`.
 - `js/sandbox.js` keeps the test copy's saved data apart from the live app's (they share one site): at
   `/budget-next/` every saved key starts with `budget-next:`, so it starts empty and you restore a backup in it.
   At any other address it does nothing.
@@ -40,3 +41,5 @@ port 8801, or set `PARITY_URL`.
   every step.
 - `battery.sh data...`: all of the above over several seeds, in parallel.
 - `cov.js` / `covreport.js`: which code ever runs, to find leftovers.
+- `lint.js`: `js/money/` stays screen-free.
+- `port.py`: carries a change made to `budget/index.html` into these files (`git diff ... -- budget/index.html | python3 dev/port.py`).

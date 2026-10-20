@@ -166,13 +166,6 @@ function potBalances(m, at) {
     ...customs,
   ];
 }
-// How far a farm is toward its next whole-dollar crop, and how long until it lands.
-function nextCrop(id, bal) {
-  const w = canFarm(id) ? workersAt(id) : 0; if (w <= 0) return null;
-  const frac = ((harvest(id) % 1) + 1) % 1, perMs = w * WORKER_DAY / DAY_MS, ms = (1 - frac) / perMs;
-  const mins = Math.ceil(ms / 60000), h = Math.floor(mins / 60), m = mins % 60;
-  return { f: frac, eta: h ? `${h}h ${m}m` : `${m}m` };
-}
 function farmNote(id) { const w = id === 'savings' ? savers() : workersAt(id); return w > 0 ? `${money(w * WORKER_DAY)} a day · ${rateText(w)}` : 'kept month to month'; }
 const POT_NAMES = { start: 'Money you had', spend: "This week's money", bills: 'Bills', savings: 'Savings', scavenger: 'Spare change' };
 const potName = id => POT_NAMES[id] || (state.pots.find(p => p.id === id) || { name: 'Deleted pot' }).name;   // v311: no need to count every balance for a name

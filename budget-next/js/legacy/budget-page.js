@@ -76,7 +76,6 @@ function renderBudget() {
   $('incomeGot').textContent = '';
   $('catCard').classList.toggle('hidden', !spends.length);
 
-  $('billsPaidCount').textContent = `${bills.filter(isPaid).length} of ${bills.length} built`;
   renderMonsters();
 
   const rows = spends.map(c => catRow(c.name, Number(c.budget || 0), spentBy[c.id] || 0, c.account));
