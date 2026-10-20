@@ -496,7 +496,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.65'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.66'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5153,6 +5153,20 @@ async function finishShot(c, sh){
   delete sh.pid; save();
 }
 const shotsWaiting = c => (c.shots || []).filter(sh => sh.pid && !sh.err);
+// shots from before v.65 that the app stopped following when it was closed: their clips are on the computer as
+// <name>_clip_NNNNN_.mp4 in the order they were made, so the newest ones go to those shots, in order
+async function adoptClips(c){
+  const lost = (c.shots || []).filter(sh => !sh.view && !sh.err && !sh.pid && !sh.url); if(!lost.length || S.test) return 0;
+  const pre = shotPrefix(c) + '_clip', i = pre.lastIndexOf('/'), sub = pre.slice(0, i), nm = pre.slice(i + 1);
+  for(const pc of S.servers.map(x => x.url)){
+    const at = n => pc + '/view?' + new URLSearchParams({filename:nm + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'});
+    const have = []; for(let n = 1; n < 1000; n++){ let r; try{ r = await fetch(at(n), {method:'HEAD'}); }catch(e){ break; } if(!r.ok) break; have.push(at(n)); }
+    if(!have.length) continue;
+    const take = have.slice(-lost.length), from = lost.slice(-take.length);
+    from.forEach((sh, j) => Object.assign(sh, {url:take[j], pc, pid:'found'})); save(); return from.length;
+  }
+  return 0;
+}
 // makes the listed shots (or just `only`); `resume` picks up clips queued before the app was closed
 async function runShots(c, only, resume){
   if(SHOT_RUN[c.id]) return;
@@ -5201,6 +5215,7 @@ function boxShots(c){
   let h = '<div class="lbl">🎞 Training shots</div>';
   h += `<p class="note" style="margin-top:0">For a LoRA that knows ${esc(c.name || 'them')} in any pose: MiniMax acts out each line below from ${esc(c.name || 'their')}${c.name ? "'s" : ''} picture, side and back, the two sharpest moments of each clip are kept (extra ones to choose from), made 1.5× bigger by the quality pass. Each one joins the pictures above with its tags, ready for 📦 Save the training set. About ${Math.round(SHOT_EST() / 60)} minutes a shot${k.why ? '' : ' on ' + esc(pcName(k.url))}.</p>`;
   if(!R && shotsWaiting(c).length) setTimeout(() => runShots(c, null, true), 0); // clips queued before the app was closed: pick their frames
+  else if(!R && Date.now() - (CH.adopted || 0) > 60e3 && (c.shots || []).some(sh => !sh.view && !sh.err && !sh.pid)){ CH.adopted = Date.now(); adoptClips(c).then(n => { if(n){ toast('Found ' + n + ' finished clip' + (n===1 ? '' : 's') + '; picking their frames'); runShots(c, null, true); } }); }
   if(R) return h + `<div class="pbar"><i data-shotbar style="width:0%"></i></div><p class="note" data-shottxt></p>
     <div class="btnrow"><button class="btn" data-ch="shotstop" ${R.stop ? 'disabled' : ''}>${R.stop ? 'Stopping after this shot…' : '⏸ Stop after this shot (cancels the rest)'}</button></div>`;
   if(shots.length){
