@@ -149,6 +149,12 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(/Swinging the camera round on [\s\S]*Getting ready · \d+% · about \d+ min left/.test(await page.evaluate(() => { drawOrbit(); return document.querySelector('#blocks [data-obhost]').textContent; })), 'while it is made, the block shows a bar and the time left: ' + await page.textContent('#blocks [data-obhost]'));
   await page.reload(); await page.waitForFunction(() => OB().clip && !OB().making, null, {timeout:15000});
   ok(await page.$('#blocks [data-obhost] video[data-ob]'), 'after reopening the app the finished orbit is in the block');
+  // a busy computer is passed over for a free one (even without FL2V); both free: the FL2V one
+  ok(await page.evaluate(srv => { const M = 'https://main.test', oi = JSON.parse(JSON.stringify(pcOf(srv).oi));
+    oi.UNETLoader.input.required.unet_name[0] = oi.UNETLoader.input.required.unet_name[0].filter(n => !/fl2v/.test(n));
+    S.servers.push({name:'Main', url:M}); Object.assign(pcOf(M), {online:true, oi, load:0}); pcOf(srv).load = 2;
+    const a = kitOrbit(); pcOf(srv).load = 0; const b = kitOrbit(); S.servers = S.servers.filter(x => x.url!==M); delete PCS[M];
+    return (a.url===M && !a.fl && /is busy/.test(a.because) && b.url===srv && b.fl) || JSON.stringify([a.url, a.because, b.url]); }, RENDER)===true, 'busy Render: the orbit goes to the free computer, and says why');
   // a live bar with time left, from ComfyUI's step progress over the websocket
   ok(sent.slice(-1)[0] && sent.every(x => x.client_id && x.client_id!=='rd-orbit'), "orbits are queued with the app's own client id, so ComfyUI sends it their progress");
   await page.evaluate(() => { OB_RUN.add('zz'); const o = OB(); o.making = {pc:base(), id:'zz', save:'1', t:Date.now() - 60000, prefix:'x', mins:'4 to 5', smp:'7'}; save(); drawOrbit(); });
@@ -162,6 +168,8 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   say({type:'progress', data:{node:'7', prompt_id:'zz', value:8, max:8}}); say({type:'executing', data:{node:'9', prompt_id:'zz'}});
   await page.waitForFunction(() => LIVE.zz.node==='9'); await page.evaluate(() => obBar());
   ok(/Decoding and saving/.test(await page.textContent('#blocks [data-obtxt="make"]')), 'after the last step it is decoding: ' + await page.textContent('#blocks [data-obtxt="make"]'));
+  ok(await page.evaluate(() => { LIVE.q1 = {ahead:2, pc:base()}; const t = liveEta('q1', '7', Date.now() - 240000, 300, 'Swinging the camera').text; return /^Waiting behind 2 other jobs on .* 4 min so far$/.test(t) || t; })===true, 'queued behind other jobs: it says so');
+  ok(await page.evaluate(() => { LIVE.q2 = {running:true}; const x = liveEta('q2', '7', Date.now() - 600000, 300, 'Swinging the camera'); return x.f < 0.99 && /taking longer than the usual 5 min · 10 min so far/.test(x.text) || x.text; })===true, 'past the estimate with no steps: taking longer than usual, not 99% under a minute');
   await page.evaluate(() => { delete OB().making; save(); drawOrbit(); });
   // from the library viewer too
   ok(await page.$('#vLib #vOrbit') && await page.$('#vGal [data-act="orbit"]'), 'the viewers have 📷 Change angle too');

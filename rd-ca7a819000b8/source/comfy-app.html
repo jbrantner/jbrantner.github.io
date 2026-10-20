@@ -513,7 +513,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.75'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.76'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5592,13 +5592,17 @@ function obCanvas(w, h, short){ const r = w / h; let W = r >= 1 ? short * r : sh
 function obTouch(oi){ return {oi, ckpt:oi.CheckpointLoaderSimple && trainCkpt(oi), cn:combo(oi.ControlNetLoader, 'control_net_name').find(n => /promax|union/i.test(baseName(n))),
   lines:oi.AnimeLineArtPreprocessor ? 'AnimeLineArtPreprocessor' : oi.Canny ? 'Canny' : ''}; }
 function kitOrbit(){
-  const pcs = S.test ? [{url:'test', oi:FAKEOB}] : allPcs().filter(p => p.online && p.oi && p.oi.SaveVideo && (p.oi.MiniMaxH3ImageToVideo || p.oi.MiniMaxH3ReferenceToVideo));
+  const pcs = S.test ? [{url:'test', oi:FAKEOB}] : allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && p.oi.SaveVideo && (p.oi.MiniMaxH3ImageToVideo || p.oi.MiniMaxH3ReferenceToVideo));
   const pick = (oi, cls, k, re) => combo(oi[cls], k).find(n => re.test(baseName(n)));
   const fl = q => !!(q.oi.MiniMaxH3ImageToVideo && pick(q.oi, 'UNETLoader', 'unet_name', /fl2v/i));
-  const p = pcs.sort((a, b) => fl(b) - fl(a) || (b.url===farmHost()) - (a.url===farmHost()))[0];
+  // a free computer first (Jordan 2026-10-20: an orbit sat waiting behind Render's work while Main was free), then the
+  // FL2V model (more faithful), then the shorter queue, then the render computer
+  const busy = q => (q.load || 0) > 0;
+  const p = pcs.sort((a, b) => busy(a) - busy(b) || fl(b) - fl(a) || (a.load || 0) - (b.load || 0) || (b.url===farmHost()) - (a.url===farmHost()))[0];
   if(!p) return {why: !S.servers.length ? 'Connect to your render computer first' : !allPcs().some(x => x.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
     : 'None of your computers that are on has the MiniMax H3 video nodes: update ComfyUI'};
-  const oi = p.oi, k = {url:p.url, oi, fl:fl(p)};
+  const oi = p.oi, k = {url:p.url, oi, fl:fl(p)}, other = pcs.find(q => q!==p && fl(q) && busy(q));
+  if(!busy(p) && other) k.because = pcName(other.url) + ' is busy';
   if(k.fl){ k.unet = pick(oi, 'UNETLoader', 'unet_name', /fl2v/i); k.lora = pick(oi, 'LoraLoaderModelOnly', 'lora_name', /fl2v_turbo_8step/i) || pick(oi, 'LoraLoaderModelOnly', 'lora_name', /fl2v_turbo/i); }
   else { k.unet = pick(oi, 'UNETLoader', 'unet_name', /minimax.?h3.*turbo/i) || pick(oi, 'UNETLoader', 'unet_name', /minimax.?h3/i);
     k.lora = /turbo/i.test(baseName(k.unet || '')) && pick(oi, 'LoraLoaderModelOnly', 'lora_name', /minimax_h3_ref2v_turbo/i); }
@@ -5688,7 +5692,10 @@ function liveEta(id, smp, t0, estS, what){
   if(L.max && L.pn===smp && L.node===smp && L.v){ const r = (L.pt - L.ps) / 1000 / L.v; L.r = r;
     left = Math.max(0, r * (L.max - L.v) - (now - L.pt) / 1000) + 0.25 * r * L.max; phase = what + ': step ' + L.v + ' of ' + L.max; }
   else if(L.max && L.v===L.max && L.node!==smp){ left = Math.max(3, 0.25 * (L.r || 5) * L.max - (now - (L.ds || now)) / 1000); phase = 'Decoding and saving'; }
-  else { left = Math.max(15, estS - el); phase = L.node || L.started ? 'Loading the models' : 'Getting ready'; }
+  else if(L.ahead){ return {f:0.02, text:'Waiting behind ' + L.ahead + ' other job' + (L.ahead > 1 ? 's' : '') + ' on ' + pcName(L.pc) + ' · ' + Math.round(el / 60) + ' min so far'}; }
+  else { left = estS - el; phase = L.node || L.started ? 'Loading the models' : L.running ? what : 'Getting ready'; }
+  // past the estimate with no steps to measure: say so, rather than sit on 99% "under a minute"
+  if(left < 0 || (left < 15 && !L.v)) return {f:0.97, text:phase + ' · taking longer than the usual ' + Math.round(estS / 60) + ' min · ' + Math.round(el / 60) + ' min so far'};
   const f = Math.min(0.99, el / (el + left)), mm = left < 50 ? 'under a minute left' : 'about ' + Math.round(left / 60) + ' min left';
   return {f, text:phase + ' · ' + Math.round(100 * f) + '% · ' + mm};
 }
@@ -5698,7 +5705,15 @@ function obBar(){
   if(o.making) put('make', liveEta(o.making.id, o.making.smp, o.making.t, estSecs(o.making.mins), 'Swinging the camera'));
   if(o.fin) put('fin', liveEta(o.fin.id, o.fin.smp, o.fin.t, 60, 'Touching it up'));
 }
-setInterval(() => { const o = OB(); if((o.making || o.fin) && document.visibilityState==='visible') obBar(); }, 1000);
+// where it sits in that computer's queue (also covers orbits queued before the live steps, which send none)
+async function liveQueue(id, pc){
+  try{ const q = await (await fetch(pc + '/queue')).json(), L = LIVE[id] = LIVE[id] || {}, pend = (q.queue_pending || []).slice().sort((a, b) => a[0] - b[0]), i = pend.findIndex(x => x[1]===id);
+    L.pc = pc; L.running = (q.queue_running || []).some(x => x[1]===id); L.ahead = i < 0 ? 0 : i + (q.queue_running || []).length; }catch(e){}
+}
+let obTicks = 0;
+setInterval(() => { const o = OB(); if(!(o.making || o.fin) || document.visibilityState!=='visible') return;
+  if(o.making && !S.test && ++obTicks % 5===1) liveQueue(o.making.id, o.making.pc).then(obBar);
+  obBar(); }, 1000);
 function openOrbit(url){
   obSetSrc(url); OB_HOST = $('#orbitBody'); closeSheets(); openSheet('#orbitSheet'); drawOrbit();
 }
@@ -5772,7 +5787,7 @@ function drawOrbit(){
   else if(o.making) x += `<p class="note">🎬 Swinging the camera round on ${esc(pcName(o.making.pc))}. You can close the app; it carries on, and the orbit opens here (and in the Change angle block) when it's ready.</p>
     <div class="pbar obbar"><i data-obbar="make"></i></div><p class="note" data-obtxt="make"></p>`;
   else if(o.busy) x += `<p class="note">${esc(o.busy)}</p>` + (o.fin ? '<div class="pbar obbar"><i data-obbar="fin"></i></div><p class="note" data-obtxt="fin"></p>' : '');
-  else x += `<p class="note">MiniMax H3 ${k.fl ? 'FL2V' : ''} on ${esc(pcName(k.url))} pins this picture as the first frame and swings the camera ${esc(dir)} round the frozen scene. About ${esc(k.mins)} minutes.</p>
+  else x += `<p class="note">MiniMax H3 ${k.fl ? 'FL2V' : ''} on ${esc(pcName(k.url))} pins this picture as the first frame and swings the camera ${esc(dir)} round the frozen scene. About ${esc(k.mins)} minutes.${k.because ? ' (' + esc(k.because) + ', so it goes here' + (k.fl ? '' : ', with the hybrid Turbo: no FL2V model on this one') + '.)' : ''}</p>
     <div class="btnrow"><button class="btn${o.clip ? '' : ' hot'}" data-ob="make">🎬 ${o.clip ? 'Make another' : 'Make the orbit'}</button></div>`;
   if(o.clip){
     x += '<div class="lbl">Pick the angle</div>' + (o.clip.url ? `<video class="tvid" data-ob data-src="${esc(o.clip.url)}" playsinline muted preload="auto"></video>` : '<p class="note">The orbit (pretend, in Test mode).</p>')
