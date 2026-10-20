@@ -496,7 +496,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.66'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.67'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5154,16 +5154,20 @@ async function finishShot(c, sh){
 }
 const shotsWaiting = c => (c.shots || []).filter(sh => sh.pid && !sh.err);
 // shots from before v.65 that the app stopped following when it was closed: their clips are on the computer as
-// <name>_clip_NNNNN_.mp4 in the order they were made, so the newest ones go to those shots, in order
+// <name>_clip_NNNNN_.mp4 in the order they were made; the clips no shot has yet go to those shots in order, and shots
+// left with no clip (never sent before the app closed) are marked so they can be made again
 async function adoptClips(c){
-  const lost = (c.shots || []).filter(sh => !sh.view && !sh.err && !sh.pid && !sh.url); if(!lost.length || S.test) return 0;
-  const pre = shotPrefix(c) + '_clip', i = pre.lastIndexOf('/'), sub = pre.slice(0, i), nm = pre.slice(i + 1);
+  const lost = (c.shots || []).filter(sh => !sh.view && !sh.err && !sh.pid && !sh.url); if(!lost.length || S.test && !adoptClips.try) return 0;
+  const pre = shotPrefix(c) + '_clip', i = pre.lastIndexOf('/'), sub = pre.slice(0, i), nm = pre.slice(i + 1), fn = u => { try{ return new URL(u).searchParams.get('filename'); }catch(e){ return ''; } };
+  const used = new Set((c.shots || []).map(sh => fn(sh.url || '')).filter(Boolean));
   for(const pc of S.servers.map(x => x.url)){
     const at = n => pc + '/view?' + new URLSearchParams({filename:nm + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'});
-    const have = []; for(let n = 1; n < 1000; n++){ let r; try{ r = await fetch(at(n), {method:'HEAD'}); }catch(e){ break; } if(!r.ok) break; have.push(at(n)); }
-    if(!have.length) continue;
-    const take = have.slice(-lost.length), from = lost.slice(-take.length);
-    from.forEach((sh, j) => Object.assign(sh, {url:take[j], pc, pid:'found'})); save(); return from.length;
+    const have = []; let reached = false;
+    for(let n = 1; n < 1000; n++){ let r; try{ r = await fetch(at(n), {method:'HEAD'}); }catch(e){ break; } reached = true; if(!r.ok) break; if(!used.has(fn(at(n)))) have.push(at(n)); }
+    if(!reached) continue;
+    const take = have.slice(0, lost.length);
+    lost.forEach((sh, j) => { if(take[j]) Object.assign(sh, {url:take[j], pc, pid:'found'}); else sh.err = 'This clip was never made (the app was closed before it was sent). Tap ↻ to make it.'; });
+    save(); return take.length;
   }
   return 0;
 }
