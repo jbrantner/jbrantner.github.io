@@ -67,16 +67,26 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.click('#openSettings'); await page.fill('#server', RENDER + '/'); await page.evaluate(() => document.querySelector('#connectBtn').click());
   await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'));
-  await page.evaluate(srv => { closeSheets(); S.gallery = [{url:srv + '/view?filename=hood_00001_.png&subfolder=RenderDeck&type=output', seed:1, prompt:'', t:Date.now()}]; save(); drawStrip(); show(0); }, RENDER);
+  await page.evaluate(srv => { closeSheets(); const u = f => srv + '/view?filename=' + f + '&subfolder=RenderDeck&type=output';
+    S.gallery = [{url:u('hood_00001_.png'), seed:1, prompt:'', t:Date.now()}, {url:u('fox_00001_.png'), seed:2, prompt:'', t:Date.now(), snap:{prompt:'a red fox in the snow'}}, {url:u('owl_00001_.png'), seed:3, prompt:'', t:Date.now()}];
+    save(); drawStrip(); show(0); }, RENDER);
   await page.click('#resultActions [data-act="orbit"]');
-  await page.waitForSelector('#orbitSheet.open .opad');
-  ok(await page.$$eval('#orbitBody .opad button', b => b.length)===8 && /hood_00001_/.test(await page.getAttribute('#orbitBody .omid img', 'src')), '8 arrows round the picture');
-  ok(/FL2V on .* pins this picture as the first frame/.test(await page.textContent('#orbitBody')), 'it offers the FL2V orbit on Render');
-  await page.click('#orbitBody [data-obdir="up-left"]');
-  ok(await page.$('#orbitBody [data-obseg="deg"]') && await page.$('#orbitBody [data-obseg="tilt"]'), 'a diagonal asks for both how far round and how far up');
-  await page.click('#orbitBody [data-obseg="deg"][data-v="135"]');
-  await page.click('#orbitBody [data-ob="make"]');
-  await page.waitForSelector('#orbitBody video[data-ob]', {timeout:15000});
+  await page.waitForSelector('#obPanel:not([hidden]) .opad');
+  ok(await page.$$eval('#obPanel .opad button', b => b.length)===8 && !(await page.$('#orbitSheet')), '8 arrows in a panel under the strip (no sheet)');
+  ok(/FL2V on .* pins this picture as the first frame/.test(await page.textContent('#obPanel')), 'it offers the FL2V orbit on Render');
+  await page.click('#obPanel [data-obdir="up-left"]');
+  ok(await page.$('#obPanel [data-obseg="deg"]') && await page.$('#obPanel [data-obseg="tilt"]'), 'a diagonal asks for both how far round and how far up');
+  await page.click('#obPanel [data-obseg="deg"][data-v="135"]');
+  await page.click('#obPanel [data-ob="make"]');
+  await page.waitForSelector('#strip [data-sb="0"]', {timeout:5000}).catch(() => {});
+  ok(await page.$('#strip [data-sb="0"]'), 'the thumbnail making an orbit shows a small bar');
+  // another picture meanwhile: its own (empty) project, and its settings load
+  await page.click('#strip img[data-i="1"]');
+  await page.waitForFunction(() => S.prompt==='a red fox in the snow', null, {timeout:3000}).catch(() => {});
+  ok(await page.evaluate(() => S.prompt==='a red fox in the snow' && shownIdx===1) && await page.$eval('#obPanel', p => p.hidden) && await page.$eval('#obVid', v => v.hidden), 'tapping another thumbnail loads its settings, and its angle work is its own');
+  await page.click('#strip img[data-i="0"]');
+  await page.waitForFunction(() => { const v = document.querySelector('#obVid'); return !v.hidden && v._ready; }, null, {timeout:20000});
+  ok(true, 'back on the first picture, its orbit plays in the preview where the picture was');
   let g = sent[0].prompt, by = c => Object.values(g).filter(n => n.class_type===c);
   ok(sent[0].client_id===await page.evaluate(() => clientId) && check(g).length===0, 'the orbit graph is valid: ' + check(g).join('; '));
   const iv = by('MiniMaxH3ImageToVideo')[0].inputs;
@@ -85,13 +95,13 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(g[iv.first_frame[0]].inputs.image==='up_1.png' && iv.width===576 && iv.height===576 && iv.length===124, 'the picture (sent to Render) is the first frame; a square picture gets a 576 square canvas: ' + [iv.width, iv.height]);
   ok(/135-degree arc shot to the left/.test(iv.prompt) && /cranes up/.test(iv.prompt) && /from behind their right shoulder and from a high angle/.test(iv.prompt), 'the prompt asks for the move and the end view: ' + iv.prompt.slice(0, 160));
   ok(by('SaveVideo')[0].inputs.filename_prefix==='RenderDeck/angles/orbit', 'the clip saves under RenderDeck/angles');
-  await page.waitForFunction(() => document.querySelector('#orbitBody video[data-ob]')._ready, null, {timeout:9000});
-  ok(await page.inputValue('#orbitBody [data-obt]')==='1000', 'the slider starts on the last frame (the new angle)');
-  await page.fill('#orbitBody [data-obt]', '500'); await page.dispatchEvent('#orbitBody [data-obt]', 'input');
-  await page.click('#orbitBody [data-ob="fwd"]');
-  ok(Math.abs(+await page.inputValue('#orbitBody [data-obt]') - 508) <= 1, '▶ steps one frame on');
-  await page.click('#orbitBody [data-ob="finish"]');
-  await page.waitForFunction(() => (OB().done || []).length===1, null, {timeout:15000});
+  ok(!(await page.$('#strip [data-sb="0"]')), 'the thumbnail bar goes when the orbit is ready');
+  ok(await page.inputValue('#obPanel [data-obt]')==='1000', 'the slider starts on the last frame (the new angle)');
+  await page.fill('#obPanel [data-obt]', '500'); await page.dispatchEvent('#obPanel [data-obt]', 'input');
+  await page.click('#obPanel [data-ob="fwd"]');
+  ok(Math.abs(+await page.inputValue('#obPanel [data-obt]') - 508) <= 1, '▶ steps one frame on');
+  await page.click('#obPanel [data-ob="finish"]');
+  await page.waitForFunction(() => (S.gallery[0].hist || []).length===1, null, {timeout:15000});
   g = sent[1].prompt;
   ok(check(g).length===0, 'the touch-up graph is valid: ' + check(g).join('; '));
   ok(by('LoadImage')[0].inputs.image==='up_2.png', 'the grabbed frame is uploaded and redrawn');
@@ -102,59 +112,47 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     ok(ap.length===2 && t && t.inputs.type==='tile' && g[ap[1].inputs.image[0]].class_type==='ImageScaleBy' && ap[1].inputs.strength===0.6, 'a tile ControlNet holds the frame\'s colours and details at 0.6');
     const cm = by('ColorMatch')[0], sv = by('SaveImage')[0];
     ok(cm && cm.inputs.method==='mkl' && g[cm.inputs.image_ref[0]].class_type==='ImageScaleBy' && g[sv.inputs.images[0]].class_type==='ColorMatch' && by('KSampler')[0].inputs.cfg===4, 'the colours are matched back to the frame (Color Match, mkl), cfg 4'); }
-  ok(await page.evaluate(() => /finished_00001_.*RenderDeck\/angles/.test(decodeURIComponent(S.gallery[0].url)) && shownIdx===0), 'the new angle lands in the preview strip: ' + await page.evaluate(() => S.gallery[0].url + ' ' + shownIdx));
-  // Hidden: same screen, its own picture and folders
+  ok(await page.evaluate(() => /finished_00001_/.test(S.gallery[0].url) && /hood_00001_/.test(S.gallery[0].hist[0].url) && S.gallery.length===3 && shownIdx===0 && /finished_00001_/.test(document.querySelector('#strip img[data-i="0"]').src)),
+    'the finished angle becomes this picture (its thumbnail), the old one goes into its history, no new strip item');
+  ok(await page.$eval('#strip .sver', e => e.textContent)==='2' && await page.$$eval('#obPanel .obhist button', b => b.length)===2, 'the thumbnail shows 2 versions; History lists both');
+  await page.click('#obPanel [data-obhist="0"]');
+  ok(await page.evaluate(() => /hood_00001_/.test(S.gallery[0].url) && /finished_00001_/.test(S.gallery[0].hist[0].url)), 'tapping an earlier version makes it the picture again');
+  await page.click('#obPanel [data-obhist="0"]');
+  // Hidden: same screen, its own pictures and folders
   await page.evaluate(srv => { switchMode(); S.gallery = [{url:srv + '/view?filename=h_00001_.png&subfolder=Hidden%2Frender&type=output', seed:1, prompt:'', t:Date.now()}]; save(); drawStrip(); show(0); }, RENDER);
+  ok(await page.$eval('#obPanel', p => p.hidden) && await page.$eval('#obVid', v => v.hidden), 'Hidden has its own pictures, not the normal ones');
   await page.click('#resultActions [data-act="orbit"]');
-  await page.waitForSelector('#orbitSheet.open .opad');
-  ok(!(await page.$('#orbitBody video[data-ob]')) && /h_00001_/.test(await page.getAttribute('#orbitBody .omid img', 'src')), 'Hidden has its own orbit, not the normal one');
-  await page.click('#orbitBody [data-obdir="down"]'); await page.click('#orbitBody [data-ob="make"]');
-  await page.waitForSelector('#orbitBody video[data-ob]', {timeout:15000});
+  await page.click('#obPanel [data-obdir="down"]'); await page.click('#obPanel [data-ob="make"]');
+  await page.waitForFunction(() => { const v = document.querySelector('#obVid'); return !v.hidden && v._ready; }, null, {timeout:20000});
   g = sent[2].prompt;
   ok(by('SaveVideo')[0].inputs.filename_prefix==='Hidden/angles/orbit' && /crane-down/.test(by('MiniMaxH3ImageToVideo')[0].inputs.prompt) && !/arc shot/.test(by('MiniMaxH3ImageToVideo')[0].inputs.prompt), 'Hidden saves into Hidden/angles; down is a crane-down');
   ok(await page.evaluate(() => (OB().clips || []).length===1 && OB().clip.src.includes('h_00001_')), 'the orbit is kept for later');
-  await page.click('#orbitBody [data-obseg="dn"][data-v="0"]'); await page.click('#orbitBody [data-ob="finish"]');
-  await page.waitForFunction(() => (OB().done || []).length===1, null, {timeout:15000});
+  await page.click('#obPanel [data-obseg="dn"][data-v="0"]'); await page.click('#obPanel [data-ob="finish"]');
+  await page.waitForFunction(() => (S.gallery[0].hist || []).length===1, null, {timeout:15000});
   g = sent[3].prompt;
   ok(!by('KSampler').length && by('SaveImage')[0].inputs.filename_prefix==='Hidden/angles/finished', 'Bigger only skips the redraw; Hidden/angles/finished');
+  await page.evaluate(() => switchMode());
+  ok(await page.evaluate(() => /finished_00001_/.test(S.gallery[0].url) && S.gallery[0].ob.clip), 'back in normal: its picture and orbit are as they were');
   // no FL2V model: the hybrid Turbo with the picture as reference, pinned at frame 0
   FL = false; await page.evaluate(async () => { const p = pcOf(base()); p.oi = await (await fetch(base() + '/object_info')).json(); });
   ok(await page.evaluate(() => { const k = kitOrbit(), g = orbitGraph(k, 'x.png', {dir:'right', deg:90}, 576, 1024).g, n = Object.values(g), gd = n.find(x => x.class_type==='BasicGuider'), ad = g[gd.inputs.conditioning[0]];
     return !k.fl && k.steps===4 && ad.class_type==='MiniMaxH3AddGuide' && ad.inputs.frame_idx===0 && /^<Picture 1> is the first frame/.test(n.find(x => x.class_type==='MiniMaxH3ReferenceToVideo').inputs.prompt); }), 'without FL2V: hybrid Turbo, 4 steps, picture as reference pinned at frame 0');
   FL = true; await page.evaluate(async () => { const p = pcOf(base()); p.oi = await (await fetch(base() + '/object_info')).json(); });
-  // 📷 Change angle as a block: in Add a block, same arrows / slider / finish, Hidden's own state, no effect on the render
+  // no Change angle block any more: it is gone from the tray, and an old one is dropped
   await page.evaluate(() => closeSheets()); await page.click('#addBtn');
-  ok(await page.$('#tray [data-add="orbit"]:not([disabled])'), 'Add a block offers Change angle');
-  await page.click('#tray [data-add="orbit"]');
-  await page.waitForSelector('#blocks [data-obhost] .opad');
-  ok(await page.$('#blocks [data-obhost] video[data-ob]') && /h_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')) && !(await page.$('#blocks .block[data-id] .tog')) || false, 'the block shows the same orbit (Hidden picture and clip), with no on/off switch');
-  await page.evaluate(() => { const b = S.blocks.find(x => x.type==='orbit'); S.open[b.id] = true; renderBlocks(); });
-  await page.waitForFunction(() => { const v = document.querySelector('#blocks [data-obhost] video[data-ob]'); return v && v._ready; }, null, {timeout:9000});
-  await page.click('#blocks [data-obhost] [data-ob="finish"]');
-  await page.waitForFunction(() => (OB().done || []).length===2, null, {timeout:15000});
-  ok(sent.length===5 && Object.values(sent[4].prompt).some(n => n.inputs.filename_prefix==='Hidden/angles/finished'), 'Finish works from the block');
-  ok(await page.evaluate(() => !JSON.stringify(buildGraph({})).includes('MiniMax')), "the block isn't part of the render");
-  await page.evaluate(() => switchMode());
-  ok(!(await page.$('#blocks [data-obhost]')), "Hidden's block stays in Hidden");
-  await page.evaluate(() => closeSheets()); await page.click('#addBtn'); await page.click('#tray [data-add="orbit"]');
-  await page.waitForSelector('#blocks [data-obhost] .opad');
-  ok(/hood_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')), 'the normal block has the normal orbit');
-  await page.evaluate(srv => { S.gallery.unshift({url:srv + '/view?filename=new_00001_.png&subfolder=RenderDeck&type=output', seed:2, prompt:'', t:Date.now()}); save(); drawStrip(); show(0); }, RENDER);
-  await page.click('#blocks [data-obhost] [data-ob="shown"]');
-  ok(/new_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')) && !(await page.$('#blocks [data-obhost] video[data-ob]')), 'Use the render on screen swaps the picture in');
-  await page.setInputFiles('#obFile', {name:'phone.png', mimeType:'image/png', buffer:PNG});
-  await page.waitForFunction(() => /up_\d+\.png.*type=input/.test(OB().src), null, {timeout:5000});
-  ok(true, 'a picture from the phone is uploaded and used');
-  // a picture from the phone replaced the orbit; the earlier one is a tap away
-  await page.click('#blocks [data-obhost] [data-obclip]');
-  await page.waitForSelector('#blocks [data-obhost] video[data-ob]');
-  ok(/hood_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')), 'Earlier orbits reopens an orbit with its picture and slider');
+  ok(!(await page.$('#tray [data-add="orbit"]')), 'Add a block has no Change angle block');
+  ok(await page.evaluate(() => { const st = {blocks:[{type:'sampler'}, {type:'orbit', id:99}]}; migrate(st); return st.blocks.length===1; }), 'an old Change angle block is dropped');
+  await page.evaluate(() => { closeSheets(); show(0); });
+  // Earlier orbits
+  await page.evaluate(() => { const o = S.gallery[0].ob; o.open = true; o.clips = [o.clip, {url:o.clip.url.replace('orbit_00001_', 'orbit_00009_'), pc:o.clip.pc, src:o.clip.src, dir:'left'}]; save(); drawOrbit(); });
+  await page.click('#obPanel [data-obclip]');
+  ok(await page.evaluate(() => /orbit_00009_/.test(S.gallery[0].ob.clip.url) && S.gallery[0].ob.dir==='left' && document.querySelector('#obVid').dataset.src.includes('orbit_00009_')), 'Earlier orbits puts that orbit back in the preview');
   // an orbit still being made when the app closes comes in when it opens again
-  await page.evaluate(([srv, sv]) => { const o = OB(); o.making = {pc:srv, id:'o1', save:sv, t:Date.now() - 60000, prefix:'RenderDeck/angles/orbit', mins:'5'}; o.clip = null; o.clips = []; save(); },
+  await page.evaluate(([srv, sv]) => { show(0); const o = OB(); o.making = {pc:srv, id:'o1', save:sv, t:Date.now() - 60000, prefix:'RenderDeck/angles/orbit', mins:'5'}; o.clip = null; o.clips = []; save(); },
     [RENDER, Object.keys(sent[0].prompt).find(k => sent[0].prompt[k].class_type==='SaveVideo')]);
-  ok(/Swinging the camera round on [\s\S]*Getting ready · \d+% · about \d+ min left/.test(await page.evaluate(() => { drawOrbit(); return document.querySelector('#blocks [data-obhost]').textContent; })), 'while it is made, the block shows a bar and the time left: ' + await page.textContent('#blocks [data-obhost]'));
-  await page.reload(); await page.waitForFunction(() => OB().clip && !OB().making, null, {timeout:15000});
-  ok(await page.$('#blocks [data-obhost] video[data-ob]'), 'after reopening the app the finished orbit is in the block');
+  ok(/Swinging the camera round on [\s\S]*Getting ready · \d+% · about \d+ min left/.test(await page.evaluate(() => { drawOrbit(); obBar(); return document.querySelector('#obPanel').textContent; })), 'while it is made, the panel shows a bar and the time left: ' + await page.textContent('#obPanel'));
+  await page.reload(); await page.waitForFunction(() => S.gallery[0].ob && S.gallery[0].ob.clip && !S.gallery[0].ob.making, null, {timeout:15000});
+  ok(true, 'after reopening the app the finished orbit is on its picture');
   // a busy computer is passed over for a free one (even without FL2V); both free: the FL2V one
   ok(await page.evaluate(srv => { const M = 'https://main.test', oi = JSON.parse(JSON.stringify(pcOf(srv).oi));
     oi.UNETLoader.input.required.unet_name[0] = oi.UNETLoader.input.required.unet_name[0].filter(n => !/fl2v/.test(n));
@@ -174,21 +172,38 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   // a live bar with time left, from ComfyUI's step progress over the websocket
   ok(sent.slice(-1)[0] && sent.every(x => x.client_id && x.client_id!=='rd-orbit'), "orbits are queued with the app's own client id, so ComfyUI sends it their progress");
   await page.evaluate(() => { OB_RUN.add('zz'); const o = OB(); o.making = {pc:base(), id:'zz', save:'1', t:Date.now() - 60000, prefix:'x', mins:'4 to 5', smp:'7'}; save(); drawOrbit(); });
-  ok(/Getting ready/.test(await page.textContent('#blocks [data-obtxt="make"]')) && /min left/.test(await page.textContent('#blocks [data-obtxt="make"]')), 'before the first step it shows the estimate: ' + await page.textContent('#blocks [data-obtxt="make"]'));
+  ok(/Getting ready/.test(await page.textContent('#obPanel [data-obtxt="make"]')) && /min left/.test(await page.textContent('#obPanel [data-obtxt="make"]')), 'before the first step it shows the estimate: ' + await page.textContent('#obPanel [data-obtxt="make"]'));
   const say = m => WS.forEach(w => { try{ w.send(JSON.stringify(m)); }catch(e){} });
   say({type:'executing', data:{node:'7', prompt_id:'zz'}}); say({type:'progress', data:{node:'7', prompt_id:'zz', value:2, max:8}});
   await page.waitForFunction(() => LIVE.zz && LIVE.zz.v===2);
   await page.evaluate(() => { const L = LIVE.zz, n = Date.now(); L.ps = n - 46000; L.pt = n; obBar(); });
-  let bt = await page.textContent('#blocks [data-obtxt="make"]');
-  ok(/step 2 of 8/.test(bt) && /about 3 min left/.test(bt) && parseFloat(await page.evaluate(() => document.querySelector('#blocks [data-obbar="make"]').style.width)) > 10, 'during sampling: the step, the percent and the time left from the measured step time: ' + bt);
+  let bt = await page.textContent('#obPanel [data-obtxt="make"]');
+  ok(/step 2 of 8/.test(bt) && /about 3 min left/.test(bt) && parseFloat(await page.evaluate(() => document.querySelector('#obPanel [data-obbar="make"]').style.width)) > 10, 'during sampling: the step, the percent and the time left from the measured step time: ' + bt);
   say({type:'progress', data:{node:'7', prompt_id:'zz', value:8, max:8}}); say({type:'executing', data:{node:'9', prompt_id:'zz'}});
   await page.waitForFunction(() => LIVE.zz.node==='9'); await page.evaluate(() => obBar());
-  ok(/Decoding and saving/.test(await page.textContent('#blocks [data-obtxt="make"]')), 'after the last step it is decoding: ' + await page.textContent('#blocks [data-obtxt="make"]'));
+  ok(/Decoding and saving/.test(await page.textContent('#obPanel [data-obtxt="make"]')), 'after the last step it is decoding: ' + await page.textContent('#obPanel [data-obtxt="make"]'));
   ok(await page.evaluate(() => { LIVE.q1 = {ahead:2, pc:base()}; const t = liveEta('q1', '7', Date.now() - 240000, 300, 'Swinging the camera').text; return /^Waiting behind 2 other jobs on .* 4 min so far$/.test(t) || t; })===true, 'queued behind other jobs: it says so');
   ok(await page.evaluate(() => { LIVE.q2 = {running:true}; const x = liveEta('q2', '7', Date.now() - 600000, 300, 'Swinging the camera'); return x.f < 0.99 && /taking longer than the usual 5 min · 10 min so far/.test(x.text) || x.text; })===true, 'past the estimate with no steps: taking longer than usual, not 99% under a minute');
   await page.evaluate(() => { delete OB().making; save(); drawOrbit(); });
-  // from the library viewer too
-  ok(await page.$('#vLib #vOrbit') && await page.$('#vGal [data-act="orbit"]'), 'the viewers have 📷 Change angle too');
+  // 🤸 Edit pose: same clip and finish, camera locked, the typed action; it chains on the picture's current version
+  await page.evaluate(() => { show(0); delete OB().making; });
+  await page.click('#resultActions [data-act="pose"]');
+  await page.waitForSelector('#obPanel [data-obf="action"]');
+  ok(!(await page.$('#obPanel .opad')), 'Edit pose: no camera arrows, an action box instead');
+  const before = sent.length;
+  await page.click('#obPanel [data-ob="make"]'); await page.waitForTimeout(400);
+  ok(sent.length===before, 'no action typed: nothing is sent');
+  await page.click('#obPanel [data-obidea="picks up the coffee mug and sips it"]');
+  await page.click('#obPanel [data-ob="make"]');
+  await page.waitForFunction(() => S.gallery[0].ob.clip && S.gallery[0].ob.clip.mode==='pose', null, {timeout:20000});
+  { const pg = sent[before].prompt, pv = Object.values(pg).find(n => n.class_type==='MiniMaxH3ImageToVideo').inputs, li = pg[pv.first_frame[0]];
+    ok(/Locked-off static shot/.test(pv.prompt) && /The character picks up the coffee mug and sips it/.test(pv.prompt) && !/arc shot|crane/.test(pv.prompt), 'the pose prompt locks the camera and asks for the action: ' + pv.prompt.slice(0, 140));
+    ok(check(pg).length===0 && Object.values(pg).some(n => n.class_type==='SaveVideo' && n.inputs.filename_prefix==='RenderDeck/angles/orbit'), 'same FL2V graph, saved with the angles'); }
+  ok(/Make another move/.test(await page.textContent('#obPanel')), 'its clip plays with the same slider and finish');
+  // from the library viewer too: that picture becomes a project at the front of the strip
+  ok(await page.$('#vLib #vOrbit') && await page.$('#vLib #vPose') && await page.$('#vGal [data-act="orbit"]') && await page.$('#vGal [data-act="pose"]'), 'the viewers have 📷 Change angle too');
+  await page.evaluate(srv => orbitUrl(srv + '/view?filename=old_00001_.png&subfolder=RenderDeck&type=output'), RENDER);
+  ok(await page.evaluate(() => /old_00001_/.test(S.gallery[0].url) && shownIdx===0 && !document.querySelector('#obPanel').hidden), 'a library picture opens as its own project with the angle panel');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
