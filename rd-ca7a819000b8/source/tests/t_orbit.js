@@ -13,7 +13,7 @@ const DEF = {
   BasicGuider:[['model','conditioning'],1], BasicScheduler:[['model','scheduler','steps','denoise'],1], KSamplerSelect:[['sampler_name'],1], RandomNoise:[['noise_seed'],1],
   SamplerCustomAdvanced:[['noise','guider','sampler','sigmas','latent_image'],2], VAEDecodeTiled:[['samples','vae','tile_size','overlap','temporal_size','temporal_overlap'],1],
   CreateVideo:[['images','fps'],1], SaveVideo:[['video','filename_prefix','format'],0],
-  ImageScaleBy:[['image','upscale_method','scale_by'],1], LoraLoader:[['model','clip','lora_name','strength_model','strength_clip'],2], CheckpointLoaderSimple:[['ckpt_name'],3], CLIPTextEncode:[['clip','text'],1], AnimeLineArtPreprocessor:[['image'],1],
+  ImageScaleBy:[['image','upscale_method','scale_by'],1], LoraLoader:[['model','clip','lora_name','strength_model','strength_clip'],2], LoadVideo:[['file'],1], GetVideoComponents:[['video'],3], ImageFromBatch:[['image','batch_index','length'],1], CheckpointLoaderSimple:[['ckpt_name'],3], CLIPTextEncode:[['clip','text'],1], AnimeLineArtPreprocessor:[['image'],1],
   ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   VAEEncode:[['pixels','vae'],1], ColorMatch:[['image_ref','image_target','method'],1], KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], VAEDecode:[['samples','vae'],1], SaveImage:[['images','filename_prefix'],0],
 };
@@ -24,6 +24,7 @@ function check(g){ const errs = [];
   return errs; }
 let FL = true;
 const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler']), scheduler:C(['normal','simple'])}}},
+  LoadVideo:{input:{required:{}}}, GetVideoComponents:{input:{required:{}}}, ImageFromBatch:{input:{required:{}}},
   LoraLoader:{input:{required:{lora_name:C(['chars\\librarianx_v2.safetensors', 'AFKJ Style Illustrious Claude.safetensors'])}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors','minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors'])}}},
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors'].concat(FL ? ['minimax_h3_fl2va_pruned_int8_convrot.safetensors'] : [])), weight_dtype:C(['default'])}}},
@@ -104,12 +105,18 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.click('#obPanel [data-ob="fwd"]');
   ok(Math.abs(+await page.inputValue('#obPanel [data-obt]') - 508) <= 1, '▶ steps one frame on');
   ok(/uses this picture's model and LoRAs: iriselTouchIL_v10\.safetensors · librarianx_v2 1 · AFKJ Style Illustrious Claude 0\.8/.test(await page.textContent('#obPanel')), 'the panel says the touch-up uses the picture\'s model and LoRAs: ' + await page.textContent('#obPanel'));
+  ok(/Line art/.test(await page.textContent('#obPanel')) && await page.$('#obPanel [data-obseg="cn"][data-v="lines"].on'), 'ControlNet choice: Line art (default), Line art + colour, None');
+  await page.click('#obPanel [data-obseg="cn"][data-v="both"]');
   await page.click('#obPanel [data-ob="finish"]');
   await page.waitForFunction(() => (S.gallery[0].hist || []).length===1, null, {timeout:15000});
   g = sent[1].prompt;
   ok(check(g).length===0, 'the touch-up graph is valid: ' + check(g).join('; '));
-  ok(by('LoadImage')[0].inputs.image==='up_2.png', 'the grabbed frame is uploaded and redrawn');
-  ok(by('KSampler')[0].inputs.denoise===0.35 && by('ImageScaleBy')[0].inputs.scale_by===1.5 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors', 'the picture\'s own checkpoint at 0.2, 1.5x bigger');
+  { const fb = by('ImageFromBatch')[0], lv = by('LoadVideo')[0];
+    ok(!by('LoadImage').length && lv && lv.inputs.file==='RenderDeck/angles/orbit_00001_.webm [output]' && fb.inputs.batch_index===62 && fb.inputs.length===1, 'the computer cuts the slider\'s frame (62 of 124) from the clip itself, not the start frame: ' + JSON.stringify(fb && fb.inputs) + ' ' + (lv && lv.inputs.file));
+    const cns = await page.evaluate(() => ['lines', 'none'].map(cn => Object.values(obFinishGraph(kitOrbit(), {img:'x.png', w:576, h:576}, 0.35, '', {loras:[], cn}).g).filter(n => n.class_type==='ControlNetApplyAdvanced').length));
+    ok(cns[0]===1 && cns[1]===0, 'Line art uses one ControlNet, None uses none: ' + cns);
+    const sc = by('ImageScaleBy')[0].inputs.scale_by; ok(sc >= 1.5 && sc <= 3, 'made about 1344 on its long side: x' + sc); }
+  ok(by('KSampler')[0].inputs.denoise===0.35 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors', 'the picture\'s own checkpoint at 0.2, 1.5x bigger');
   { const ll = by('LoraLoader'), ks = by('KSampler')[0], pos = by('CLIPTextEncode')[0].inputs.text;
     ok(ll.length===2 && ll[0].inputs.lora_name==='chars\\librarianx_v2.safetensors' && ll[1].inputs.lora_name==='AFKJ Style Illustrious Claude.safetensors' && ll[1].inputs.strength_model===0.8
       && g[ks.inputs.model[0]]===ll[1] && g[by('CLIPTextEncode')[0].inputs.clip[0]]===ll[1], 'its LoRAs (the ones switched on, at their strengths, found in their folder) feed the redraw');

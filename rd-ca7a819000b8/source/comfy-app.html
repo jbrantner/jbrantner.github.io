@@ -542,7 +542,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.89'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.90'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5817,7 +5817,10 @@ function obFinishGraph(k, img, dn, words, looks){
   looks = looks || {loras:[]};
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
-  const big = add('ImageScaleBy', {image:[add('LoadImage', {image:img}), 0], upscale_method:'lanczos', scale_by:1.5});
+  // the frame: taken from the clip on the computer itself when it can (exact, full quality), else the one the phone grabbed;
+  // made about 1344 on its long side (a 576 orbit frame was only 864 at 1.5x, too small to feel like a hires pass)
+  const src = img.video ? [add('ImageFromBatch', {image:[add('GetVideoComponents', {video:[add('LoadVideo', {file:img.video}), 0]}), 0], batch_index:img.index, length:1}), 0] : [add('LoadImage', {image:img.img || img}), 0];
+  const big = add('ImageScaleBy', {image:src, upscale_method:'lanczos', scale_by:img.w ? Math.round(Math.min(3, Math.max(1.5, 1344 / Math.max(img.w, img.h))) * 100) / 100 : 1.5});
   if(!dn || !(looks.ckpt || k.ckpt)) return {g, save:add('SaveImage', {images:[big,0], filename_prefix:obPrefix('finished')})};
   const ck = add('CheckpointLoaderSimple', {ckpt_name:looks.ckpt || k.ckpt});
   let mdl = [ck,0], clip = [ck,1];
@@ -5826,7 +5829,8 @@ function obFinishGraph(k, img, dn, words, looks){
   const st = looks.ckpt && looks.style && STYLES[looks.style] && looks.style!=='plain' ? styleText(looks.style) : null;
   let pos = enc([st ? st.pos : 'masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest', looks.words, (words || '').trim().replace(/,\s*$/, '')].filter(Boolean).join(', '));
   let neg = enc(st && st.neg ? st.neg : 'worst quality, low quality, bad quality, lowres, displeasing, very displeasing, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, blurry, motion blur, signature, username, watermark, logo');
-  if(k.cn && k.lines){
+  const cnMode = looks.cn || 'lines';
+  if(k.cn && k.lines && cnMode!=='none'){
     const lines = k.lines==='Canny' ? add('Canny', {image:[big,0], low_threshold:0.15, high_threshold:0.3}) : add('AnimeLineArtPreprocessor', {image:[big,0], resolution:1024});
     let cn = [add('ControlNetLoader', {control_net_name:k.cn}), 0];
     if(k.oi.SetUnionControlNetType && /promax|union/i.test(k.cn)) cn = [add('SetUnionControlNetType', {control_net:cn, type:'canny/lineart/anime_lineart/mlsd'}), 0];
@@ -5834,7 +5838,7 @@ function obFinishGraph(k, img, dn, words, looks){
     pos = [ap,0]; neg = [ap,1];
     // line art only holds the shapes: on Jordan's first try (2026-10-20) a 0.2 redraw still washed the colours out and
     // changed her eye colour, so the union ControlNet's tile mode also holds the frame's own colours and small details
-    if(k.oi.SetUnionControlNetType && /promax|union/i.test(k.cn)){
+    if(cnMode==='both' && k.oi.SetUnionControlNetType && /promax|union/i.test(k.cn)){
       const tile = [add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:k.cn}), 0], type:'tile'}), 0];
       // it lets go at 60% of the steps: held to the end it also held the video frame's blur (Jordan 2026-10-20), so the last
       // steps paint fresh detail while Color Match below keeps the colours
@@ -5957,11 +5961,19 @@ async function finishOrbit(){
   try{
     const dn = o.dn==null ? 0.35 : o.dn, pc = S.test ? 'test' : o.clip.pc;
     const pk = S.test || pc===k.url || !pcOf(pc).oi ? k : obTouch(pcOf(pc).oi); // the clip's own computer touches it up
-    const v = await uploadFrame(frameCanvas(vid && vid._ready ? vid : null), 'orbit', pc);
+    // the frame the slider is on (Jordan 2026-10-20: it was painting over the start frame). Best: the computer cuts it from
+    // the clip itself; otherwise the phone grabs it once the video has really moved there (iPhones draw the old frame until then)
+    const idx = Math.round((o.frame==null ? 1000 : o.frame) / 1000 * (OB_LEN - 1)), q = new URL(o.clip.url || 'https://x/view', location.href).searchParams;
+    const oi = S.test ? FAKEOB : pcOf(pc).oi || {}, w = vid && vid.videoWidth, h = vid && vid.videoHeight;
+    let img;
+    if(o.clip.url && oi.LoadVideo && oi.GetVideoComponents && oi.ImageFromBatch && q.get('filename'))
+      img = {video:(q.get('subfolder') ? q.get('subfolder') + '/' : '') + q.get('filename') + ' [output]', index:idx, w, h};
+    else { if(vid && vid._ready) await obAt(vid); img = {img:(await uploadFrame(frameCanvas(vid && vid._ready ? vid : null), 'orbit', pc)).img, w, h}; }
     o.busy = dn ? 'Touching it up with Illustrious…' : 'Making it bigger…'; drawOrbit();
-    const looks = dn ? await obLooks(g, S.test ? FAKEOB : pcOf(pc).oi || {}) : null;
+    const looks = dn ? await obLooks(g, oi) : null;
     if(looks && looks.missing.length) toast(pcName(pc) + ' has no ' + looks.missing.join(', ') + ', so the touch-up goes without it');
-    const {g:graph, save:sid} = obFinishGraph(pk, v.img, dn, o.words, looks);
+    if(looks) looks.cn = o.cn || 'lines';
+    const {g:graph, save:sid} = obFinishGraph(pk, img, dn, o.words, looks);
     let url;
     if(S.test){ OB_SENT.push(graph); url = v.url; }
     else { const t0 = Date.now(), r = await fetch(pc + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:graph, client_id:clientId})}), j = await r.json();
@@ -5996,6 +6008,7 @@ function drawOrbit(){
       <div class="btnrow"><button class="btn" data-ob="back" aria-label="One frame back">◀</button><button class="btn" data-ob="fwd" aria-label="One frame on">▶</button><button class="btn hot" data-ob="finish" ${o.busy || o.making ? 'disabled' : ''}>✨ Finish this frame</button></div>
       ${clip.url ? '' : '<p class="note">The orbit (pretend, in Test mode).</p>'}
       <div class="row"><label>Touch-up</label>${oseg('dn', [[0, 'Bigger only'], [0.2, 'Light'], [0.35, 'Sharpen'], [0.5, 'Repaint']], o.dn==null ? 0.35 : o.dn)}</div>
+      <div class="row"><label>ControlNet</label>${oseg('cn', [['lines', 'Line art'], ['both', 'Line art + colour'], ['none', 'None']], o.cn || 'lines')}</div>
       <div class="row"><label>Tags</label><div class="grow"><input type="text" data-obf="words" placeholder="optional extra tags for the touch-up, e.g. green eyes" value="${esc(o.words || '')}"></div></div>`;
       { const L = obLooksOf(g); if(L && L.ckpt) x += `<p class="note">The touch-up uses this picture's model${L.loras.length ? ' and LoRAs' : ''}: ${esc([baseName(L.ckpt)].concat(L.loras.map(l => baseName(l.file).replace(/\.safetensors$/i, '') + ' ' + l.strength)).join(' · '))}</p>`; }
       if(o.busy) x += `<p class="note">${esc(o.busy)}</p>` + (o.fin ? '<div class="pbar obbar"><i data-obbar="fin"></i></div><p class="note" data-obtxt="fin"></p>' : '');
@@ -6029,6 +6042,11 @@ function loadOrbitClip(){
     vid.addEventListener('loadeddata', async () => { try{ await vid.play(); }catch(e){} vid.pause(); vid._ready = true; obSeek(); }, {once:true});
     vid.muted = true; vid.src = src; vid.load(); }).catch(err => { delete TVBLOB[url]; toast(err.message, true); });
 }
+// wait until the video shows the slider's frame
+function obAt(vid){ return new Promise(ok => { const o = OB(), t = Math.min(vid.duration - 0.01, vid.duration * (o.frame==null ? 1000 : o.frame) / 1000);
+  if(!vid.duration || (Math.abs(vid.currentTime - t) < 0.001 && !vid.seeking)) return ok();
+  const done = () => vid.requestVideoFrameCallback ? vid.requestVideoFrameCallback(() => ok()) : ok();
+  vid.addEventListener('seeked', done, {once:true}); setTimeout(ok, 1500); vid.currentTime = t; }); }
 function obSeek(){ const vid = $('#obVid'), o = OB(); if(vid.duration) vid.currentTime = Math.min(vid.duration - 0.01, vid.duration * (o.frame==null ? 1000 : o.frame) / 1000); }
 function wireScrub(){ const sl = $('#obPanel [data-obt]'); if(!sl) return;
   sl.oninput = () => { const o = OB(); o.frame = +sl.value; if(o.pic){ delete o.pic; $('#obVid').hidden = false; const n = $('#obPanel [data-obpic]'); if(n) n.remove(); } obSeek(); }; sl.onchange = () => save(); obSeek(); }
@@ -6040,7 +6058,7 @@ $('#obPanel').addEventListener('click', e => {
   if(t.dataset.obclip){ if(o.making){ toast('An orbit is still being made', true); return; }
     const c = (o.clips || []).find(x => x.url===t.dataset.obclip); delete o.pic; if(c) Object.assign(o, {dir:c.dir, mode:c.mode || 'angle', action:c.action || o.action, clip:c, frame:1000}); }
   else if(t.dataset.obdir){ o.dir = t.dataset.obdir; }
-  else if(t.dataset.obseg){ o[t.dataset.obseg] = t.dataset.obseg==='mode' ? t.dataset.v : parseFloat(t.dataset.v); }
+  else if(t.dataset.obseg){ o[t.dataset.obseg] = ['mode', 'cn'].includes(t.dataset.obseg) ? t.dataset.v : parseFloat(t.dataset.v); }
   else if(t.dataset.obidea){ o.action = t.dataset.obidea; }
   else if(t.dataset.ob==='close'){ o.open = false; delete o.err; }
   else if(t.dataset.ob==='make'){ delete o.pic; if(o.clip && !confirm('Make another orbit? The one you have stays under Earlier orbits.')) return; makeOrbit(); return; }
