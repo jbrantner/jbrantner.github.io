@@ -39,7 +39,10 @@ video{width:100%;border-radius:16px;background:#000;display:block;aspect-ratio:4
 .ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
 .fab{background:var(--orange);position:fixed;right:16px;bottom:calc(20px + env(safe-area-inset-bottom));z-index:5;padding:18px 26px;font-size:20px;font-weight:700;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 body{padding-bottom:calc(110px + env(safe-area-inset-bottom))}
-#camwrap video{width:100%;max-height:42vh;object-fit:cover;border-radius:16px;background:#000;display:block;margin-bottom:8px}
+.fab{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
+#viewer{position:fixed;left:16px;right:16px;bottom:calc(96px + env(safe-area-inset-bottom));z-index:6;visibility:hidden}
+#viewer.on{visibility:visible}
+#viewer video{width:100%;aspect-ratio:3/4;max-height:58vh;object-fit:cover;border-radius:16px;background:#000;display:block;box-shadow:0 8px 28px rgba(0,0,0,.35)}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 </head>
@@ -160,7 +163,7 @@ function render(readText){
   const words=all.filter(w=>/^[A-Z]+$/.test(w)), nums=all.filter(w=>/\d/.test(w));
   const res=read?scoreText(words,nums):[];
   const strong=res.filter(r=>r.score>=3.4);
-  let html=`<div id="camwrap"></div><button class="btn fab" id="cam">${busy?"Reading…":"Read envelope"}</button><div class="status" id="st" style="margin:0 4px 8px">${camOn?"Hold the envelope in view, then tap Read envelope.":"Tap Read envelope to start the camera."}</div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"><button class="clear" id="clr" hidden>Clear</button></div><div id="out">`;
+  let html=`<button class="btn fab" id="cam">${busy?"Reading…":"Read envelope"}</button><div class="status" id="st" style="margin:0 4px 8px">Hold Read envelope to aim, let go to read.</div><div class="search"><input id="q" type="search" placeholder="Search a name or room" autocomplete="off" autocorrect="off" spellcheck="false"><button class="clear" id="clr" hidden>Clear</button></div><div id="out">`;
   if(read){
     if(strong.length){
       const t=strong[0];
@@ -179,8 +182,9 @@ function render(readText){
   const clr=document.getElementById("clr");
   q.addEventListener("input",()=>{ clr.hidden=!q.value; });
   clr.onclick=()=>{ q.value=""; clr.hidden=true; out.innerHTML=base; q.blur(); };
-  document.getElementById("cam").onclick=onRead;
-  placeVideo();
+  const cam=document.getElementById("cam");
+  cam.addEventListener("pointerdown",press); cam.addEventListener("pointerup",release);
+  cam.addEventListener("pointercancel",cancelHold); cam.addEventListener("contextmenu",e=>e.preventDefault());
   document.getElementById("ign").onclick=()=>{ let cur=""; try{cur=localStorage.getItem(IGN_KEY)||"";}catch(e){}
     const v=prompt("Words on every envelope that aren't names (street, town), separated by commas:",cur);
     if(v!==null){ try{localStorage.setItem(IGN_KEY,v);}catch(e){} setIgnore(v); render(readFromHash()); } };
@@ -206,27 +210,51 @@ async function getWorker(){
   return worker;
 }
 function setStatus(t){ const e=document.getElementById("st"); if(e) e.textContent=t; }
-let camOn=false, stream=null;
+let camOn=false, stream=null, starting=null, holding=false, idleT=null, liveAt=0;
 const video=document.createElement("video"); video.setAttribute("playsinline",""); video.muted=true; video.autoplay=true;
-function placeVideo(){ const w=document.getElementById("camwrap"); if(w&&camOn&&video.parentNode!==w){ w.appendChild(video); video.play().catch(()=>{}); } }
-async function startCam(){
-  try{ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:3840},height:{ideal:2160}},audio:false}); }
-  catch(e){ alert("The camera didn't start. Allow camera access for this page."); return false; }
-  video.srcObject=stream; camOn=true; placeVideo(); await video.play().catch(()=>{});
-  setStatus("Hold the envelope in view, then tap Read envelope."); getWorker().then(()=>setStatus("Ready. Tap Read envelope.")).catch(()=>{});
-  return true;
+const viewer=document.createElement("div"); viewer.id="viewer"; viewer.appendChild(video); document.body.appendChild(viewer);
+function startCam(){
+  if(camOn) return Promise.resolve(true);
+  if(starting) return starting;
+  starting=navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:3840},height:{ideal:2160}},audio:false})
+    .then(async st=>{ stream=st; video.srcObject=st; camOn=true; await video.play().catch(()=>{}); liveAt=Date.now(); getWorker().catch(()=>{}); return true; })
+    .catch(()=>{ alert("The camera didn't start. Allow camera access for this page."); return false; })
+    .finally(()=>{ starting=null; });
+  return starting;
 }
-function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } camOn=false; video.remove(); }
+function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } camOn=false; video.srcObject=null; hideViewer(); }
+function hideViewer(){ viewer.classList.remove("on"); }
+// camera stays warm (hidden) for a bit so the next press is quick
+function idleStop(){ clearTimeout(idleT); idleT=setTimeout(stopCam,120000); }
 document.addEventListener("visibilitychange",()=>{ if(document.hidden) stopCam(); });
-async function onRead(){
-  if(busy) return;
-  if(!camOn){ await startCam(); return; }
-  if(!video.videoWidth) return;
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function press(e){
+  e.preventDefault(); if(busy||holding) return;
+  holding=true; clearTimeout(idleT);
+  const btn=document.getElementById("cam"); if(btn) btn.textContent="Let go to read";
+  const wasOn=camOn;
+  viewer.classList.add("on");
+  if(wasOn){ video.play().catch(()=>{}); liveAt=Date.now(); return; }
+  const ok=await startCam();
+  if(!ok){ holding=false; hideViewer(); if(btn) btn.textContent="Read envelope"; return; }
+  if(!holding){ // let go while the camera was starting (or asking permission): don't snap blind
+    hideViewer(); idleStop(); setStatus("Camera ready. Hold Read envelope to aim, let go to read.");
+  }
+}
+function cancelHold(){ if(!holding) return; holding=false; hideViewer(); idleStop(); const b=document.getElementById("cam"); if(b) b.textContent="Read envelope"; }
+async function release(e){
+  if(!holding) return; holding=false;
+  if(!camOn){ return; } // still starting; press() handles it
+  const t0=Date.now();
+  while(!video.videoWidth&&Date.now()-t0<3000) await wait(50);
+  const settle=600-(Date.now()-liveAt); if(settle>0) await wait(settle); // give it a moment to focus
+  if(!video.videoWidth){ hideViewer(); idleStop(); return; }
+  const sc=Math.min(1,2400/Math.max(video.videoWidth,video.videoHeight)), cv=document.createElement("canvas");
+  cv.width=Math.round(video.videoWidth*sc); cv.height=Math.round(video.videoHeight*sc);
+  const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.3)"; cx.drawImage(video,0,0,cv.width,cv.height);
+  hideViewer(); idleStop();
   busy=true; const btn=document.getElementById("cam"); if(btn) btn.textContent="Reading…"; setStatus("Reading…");
   try{
-    const sc=Math.min(1,2400/Math.max(video.videoWidth,video.videoHeight)), cv=document.createElement("canvas");
-    cv.width=Math.round(video.videoWidth*sc); cv.height=Math.round(video.videoHeight*sc);
-    const cx=cv.getContext("2d"); cx.filter="grayscale(1) contrast(1.3)"; cx.drawImage(video,0,0,cv.width,cv.height);
     const w=await getWorker();
     const {data}=await w.recognize(cv);
     busy=false;
