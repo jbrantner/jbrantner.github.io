@@ -59,6 +59,12 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 #feedBody{padding:0 10px 2px}
 .feed:not(.open) #feedBody{display:none}
 #promptBox{margin-top:16px}
+/* LoRA trigger words in the prompt are drawn in the LoRA colour: the text is drawn by #promptHi behind a see-through textarea */
+.pwrap{position:relative;border-radius:10px;background:var(--bg)}
+.pwrap textarea{position:relative;background:transparent;color:transparent;caret-color:var(--text);z-index:1}
+.pwrap textarea::placeholder{color:var(--dim)}
+.pwrap .phi{position:absolute;inset:0;padding:11px 13px;font:inherit;font-size:16px;line-height:inherit;color:var(--text);white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;overflow:hidden;pointer-events:none}
+.pwrap .phi .lw{color:var(--lora);background:color-mix(in srgb,var(--lora) 16%,transparent);border-radius:4px}
 .fbody{padding:0 12px 12px}
 .feed:not(.open) .fbody{display:none}
 .ptools{display:flex;justify-content:flex-end}
@@ -417,7 +423,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <button class="fhead" id="promptHead"><b>Prompt</b><small id="promptSum"></small><span class="chev" aria-hidden="true">›</span></button>
   <div class="fbody" id="promptBody">
   <div class="ptools"><button class="chipbtn" id="tagSearchBtn" hidden>🔍 Find a tag</button></div>
-  <textarea id="prompt" placeholder="a cossack lantern hunter in a glowing swamp, vibrant pixel art" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+  <div class="pwrap"><div class="phi" id="promptHi" aria-hidden="true"></div><textarea id="prompt" placeholder="a cossack lantern hunter in a glowing swamp, vibrant pixel art" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea></div>
   <p class="added" id="addedPos"></p>
   <div class="ideas" id="ideas" hidden></div>
   <details class="neg" id="negBox"><summary>➖ Things to avoid</summary>
@@ -547,7 +553,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.80'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.81'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1885,7 +1891,7 @@ function showAdded(){
 }
 function render(){
   renderBlocks(); drawStrip();
-  $('#prompt').value = S.prompt; $('#negative').value = S.negative; drawPromptHead();
+  $('#prompt').value = S.prompt; $('#negative').value = S.negative; drawPromptHead(); lwSeen = null; drawPromptHi();
   $('#speedSeg').innerHTML = [['full', 'Full speed'], ['gentle', 'Gentle (2 MB/s)']].map(([v, t]) => `<button data-speed="${v}" class="${(S.speed || 'full')===v ? 'on' : ''}">${t}</button>`).join('');
   $('#syncSeg').innerHTML = [['auto', 'Keep both in step'], ['need', 'Only when needed']].map(([v, t]) => `<button data-sync="${v}" class="${(S.autoSync || 'auto')===v ? 'on' : ''}">${t}</button>`).join('');
   $('#batchSeg').innerHTML = [1,2,4].map(n => `<button data-batch="${n}" class="${S.batch===n?'on':''}">${n}</button>`).join('');
@@ -1985,11 +1991,40 @@ $('#syncSeg').onclick = async e => { const t = e.target.closest('[data-sync]'); 
   const bad = res.filter(Boolean); toast(bad.length ? bad.join(' and ') + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : (S.autoSync==='need' ? 'Models copy only when a render needs one' : 'Your computers keep their models in step every half hour'), !!bad.length); };
 const speedTxt = gb => S.speed==='gentle' ? 'about ' + Math.round(gb * 1024 / 2 / 60) + ' minutes at the gentle 2 MB/s' : 'at full speed';
 $('#batchSeg').onclick = e => { const t = e.target.closest('[data-batch]'); if(!t) return; S.batch = +t.dataset.batch; save(); render(); };
-$('#prompt').oninput = e => { S.prompt = e.target.value; save(); drawPromptHead(); };
+$('#prompt').oninput = e => { S.prompt = e.target.value; save(); drawPromptHead(); drawPromptHi(true); };
+$('#prompt').addEventListener('scroll', () => { $('#promptHi').scrollTop = $('#prompt').scrollTop; });
+// LoRA trigger words typed (or picked from the suggestions) in the prompt: coloured, and the first time one appears its
+// LoRA switches on, or is added when it isn't in the recipe yet (Jordan 2026-10-20). Switching it off again stays off.
+let lwSeen = null;
+function lwFind(text){
+  const low = (text || '').toLowerCase(), hits = [];
+  Object.entries(S.loraWords || {}).forEach(([file, words]) => String(words || '').split(',').map(w => w.trim()).filter(w => w.length > 1).forEach(w => {
+    const re = new RegExp('(^|[^a-z0-9_])(' + w.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?=$|[^a-z0-9_])', 'g'); let m;
+    while((m = re.exec(low))){ hits.push({at:m.index + m[1].length, len:m[2].length, file}); re.lastIndex = m.index + m[0].length; } }));
+  return hits.sort((a, b) => a.at - b.at || b.len - a.len).filter((h, i, a) => !i || h.at >= a[i - 1].at + a[i - 1].len);
+}
+function drawPromptHi(typed){
+  const t = $('#prompt').value, hits = lwFind(t); let x = '', at = 0;
+  hits.forEach(h => { x += esc(t.slice(at, h.at)) + '<span class="lw">' + esc(t.slice(h.at, h.at + h.len)) + '</span>'; at = h.at + h.len; });
+  $('#promptHi').innerHTML = x + esc(t.slice(at)) + (t.endsWith('\n') ? ' ' : '');
+  const ta = $('#prompt'); if(ta.offsetParent){ ta.style.height = 'auto'; ta.style.height = Math.max(84, ta.scrollHeight + 2) + 'px'; } // grows with the text, so the colours never scroll out of line
+  $('#promptHi').scrollTop = ta.scrollTop;
+  const files = new Set(hits.map(h => h.file)), fresh = typed && lwSeen ? [...files].filter(f => !lwSeen.has(f)) : [];
+  lwSeen = files;
+  let changed = 0;
+  fresh.forEach(file => {
+    let b = S.blocks.find(x => x.type==='lora' && x.lora===file);
+    if(b && b.on) return;
+    if(b){ b.on = true; changed++; toast('LoRA switched on: ' + baseName(file)); return; }
+    if(info && !(info.lora || []).includes(file)) return; // not on this computer
+    b = addBlock('lora', true); b.lora = file; b.on = true; delete S.open[b.id]; changed++; toast('LoRA added: ' + baseName(file));
+  });
+  if(changed){ save(); renderBlocks(); showAdded(); }
+}
 // the prompt folds like the other sections; folded, its line shows the prompt itself
 function drawPromptHead(){ $('#promptBox').classList.toggle('open', !S.promptShut);
   $('#promptSum').textContent = S.promptShut ? (S.prompt || '').replace(/\s+/g, ' ').trim() || 'empty' : ''; }
-$('#promptHead').onclick = () => { S.promptShut = !S.promptShut; save(); drawPromptHead(); buzz(); };
+$('#promptHead').onclick = () => { S.promptShut = !S.promptShut; save(); drawPromptHead(); drawPromptHi(); buzz(); };
 $('#negative').oninput = e => { S.negative = e.target.value; save(); };
 $('#goBtn').onclick = go;
 $('#draftBtn').onclick = () => { S.draft = !S.draft; save(); drawGo(); buzz();
