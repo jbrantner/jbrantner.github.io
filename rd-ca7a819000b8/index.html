@@ -553,7 +553,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.90'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.91'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5809,20 +5809,26 @@ function orbitGraph(k, img, o, w, h){
 function obLooksOf(g){
   const snap = g.snap; if(!snap || !snap.blocks) return null;
   const M = snap.blocks.find(b => b.type==='model');
-  return {ckpt:M && M.ckpt || '', style:M ? styleKey(M) : '', loras:snap.blocks.filter(b => b.type==='lora' && b.on && b.lora).map(b => ({file:b.lora, strength:b.strength==null ? 1 : +b.strength}))};
+  return {prompt:snap.prompt || '', ckpt:M && M.ckpt || '', style:M ? styleKey(M) : '', loras:snap.blocks.filter(b => b.type==='lora' && b.on && b.lora).map(b => ({file:b.lora, strength:b.strength==null ? 1 : +b.strength}))};
 }
 async function obLooks(g, oi){
   let L = obLooksOf(g);
   if(!L && !S.test){ const first = g.hist && g.hist.length ? g.hist[g.hist.length - 1].url : g.url;
-    try{ const gr = pngGraph(await (await fetch(first)).arrayBuffer()), ns = gr ? Object.values(gr) : [], ck = ns.find(n => n.class_type==='CheckpointLoaderSimple');
-      if(ck) L = {ckpt:ck.inputs.ckpt_name, style:styleKey({ckpt:ck.inputs.ckpt_name}), loras:ns.filter(n => n.class_type==='LoraLoader' && n.inputs.lora_name).map(n => ({file:n.inputs.lora_name, strength:+n.inputs.strength_model || 1}))}; }catch(e){} }
-  if(!L) return {ckpt:'', loras:[], missing:[], words:''};
+    try{ const sn = fromPng(await (await fetch(first)).arrayBuffer()); if(sn) L = obLooksOf({snap:sn}); }catch(e){} }
+  if(!L) return {prompt:'', ckpt:'', loras:[], missing:[], words:''};
   const has = (cls, key, name) => { if(S.test) return name; const l = combo(oi[cls], key); return l.includes(name) ? name : l.find(n => baseName(n).toLowerCase()===baseName(name).toLowerCase()) || ''; };
-  const out = {ckpt:L.ckpt && has('CheckpointLoaderSimple', 'ckpt_name', L.ckpt), style:L.style, loras:[], missing:[], words:''};
+  const out = {prompt:L.prompt, ckpt:L.ckpt && has('CheckpointLoaderSimple', 'ckpt_name', L.ckpt), style:L.style, loras:[], missing:[], words:''};
   if(L.ckpt && !out.ckpt) out.missing.push(baseName(L.ckpt));
   L.loras.forEach(x => { const f = has('LoraLoader', 'lora_name', x.file); f ? out.loras.push({file:f, strength:x.strength}) : out.missing.push(baseName(x.file)); });
   out.words = L.loras.map(x => S.loraWords[x.file]).filter(Boolean).join(', ');
   return out;
+}
+// the finish prompt starts as the original picture's own prompt (Jordan 2026-10-20), read from its recipe or its PNG
+function obFinPrompt(g, o){
+  if(o.fprompt!=null) return o.fprompt;
+  const L = obLooksOf(g); if(L){ o.fprompt = [L.prompt, o.words].filter(Boolean).join(', '); return o.fprompt; }
+  if(!o.fpAsk && !S.test){ o.fpAsk = 1; obLooks(g, {}).then(x => { if(o.fprompt==null){ o.fprompt = [x.prompt, o.words].filter(Boolean).join(', '); save(); if(OB()===o) drawOrbit(); } }); }
+  return o.words || '';
 }
 function obFinishGraph(k, img, dn, words, looks){
   looks = looks || {loras:[]};
@@ -5838,7 +5844,9 @@ function obFinishGraph(k, img, dn, words, looks){
   for(const x of looks.loras){ const l = add('LoraLoader', {model:mdl, clip, lora_name:x.file, strength_model:x.strength, strength_clip:x.strength}); mdl = [l,0]; clip = [l,1]; }
   const enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
   const st = looks.ckpt && looks.style && STYLES[looks.style] && looks.style!=='plain' ? styleText(looks.style) : null;
-  let pos = enc([st ? st.pos : 'masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest', looks.words, (words || '').trim().replace(/,\s*$/, '')].filter(Boolean).join(', '));
+  // the quality tags, the LoRAs' trigger words and the picture's own prompt (as filled in on the panel), each tag once
+  const seen = new Set(), tags = [st ? st.pos : 'masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest', looks.words, words].join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()));
+  let pos = enc(tags.join(', '));
   let neg = enc(st && st.neg ? st.neg : 'worst quality, low quality, bad quality, lowres, displeasing, very displeasing, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, blurry, motion blur, signature, username, watermark, logo');
   const cnMode = looks.cn || 'lines';
   if(k.cn && k.lines && cnMode!=='none'){
@@ -5970,7 +5978,7 @@ async function finishOrbit(){
   if(!g || !o.clip) return; if(k.why){ toast(k.why, true); return; }
   delete o.err; o.busy = 'Grabbing the frame…'; drawOrbit(); drawStrip(); buzz();
   try{
-    const dn = o.dn==null ? 0.35 : o.dn, pc = S.test ? 'test' : o.clip.pc;
+    const dn = o.dn==null ? 0.4 : o.dn, pc = S.test ? 'test' : o.clip.pc;
     const pk = S.test || pc===k.url || !pcOf(pc).oi ? k : obTouch(pcOf(pc).oi); // the clip's own computer touches it up
     // the frame the slider is on (Jordan 2026-10-20: it was painting over the start frame). Best: the computer cuts it from
     // the clip itself; otherwise the phone grabs it once the video has really moved there (iPhones draw the old frame until then)
@@ -5984,7 +5992,7 @@ async function finishOrbit(){
     const looks = dn ? await obLooks(g, oi) : null;
     if(looks && looks.missing.length) toast(pcName(pc) + ' has no ' + looks.missing.join(', ') + ', so the touch-up goes without it');
     if(looks) looks.cn = o.cn || 'lines';
-    const {g:graph, save:sid} = obFinishGraph(pk, img, dn, o.words, looks);
+    const {g:graph, save:sid} = obFinishGraph(pk, img, dn, o.fprompt!=null ? o.fprompt : (looks && looks.prompt) || o.words || '', looks);
     let url;
     if(S.test){ OB_SENT.push(graph); url = v.url; }
     else { const t0 = Date.now(), r = await fetch(pc + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:graph, client_id:clientId})}), j = await r.json();
@@ -6018,9 +6026,9 @@ function drawOrbit(){
       ${o.pic ? '<p class="note" data-obpic>Showing the finished picture. Move the slider to go back to the clip.</p>' : ''}
       <div class="btnrow"><button class="btn" data-ob="back" aria-label="One frame back">◀</button><button class="btn" data-ob="fwd" aria-label="One frame on">▶</button><button class="btn hot" data-ob="finish" ${o.busy || o.making ? 'disabled' : ''}>✨ Finish this frame</button></div>
       ${clip.url ? '' : '<p class="note">The orbit (pretend, in Test mode).</p>'}
-      <div class="row"><label>Touch-up</label>${oseg('dn', [[0, 'Bigger only'], [0.2, 'Light'], [0.35, 'Sharpen'], [0.5, 'Repaint']], o.dn==null ? 0.35 : o.dn)}</div>
+      <div class="row"><label>Touch-up</label>${oseg('dn', [[0, 'Bigger only'], [0.25, 'Light'], [0.4, 'Medium'], [0.55, 'Strong']], o.dn==null ? 0.4 : o.dn)}</div>
       <div class="row"><label>ControlNet</label>${oseg('cn', [['lines', 'Line art'], ['both', 'Line art + colour'], ['none', 'None']], o.cn || 'lines')}</div>
-      <div class="row"><label>Tags</label><div class="grow"><input type="text" data-obf="words" placeholder="optional extra tags for the touch-up, e.g. green eyes" value="${esc(o.words || '')}"></div></div>`;
+      <div class="row"><label>Prompt</label><div class="grow"><textarea data-obf="fprompt" rows="2" placeholder="the picture's prompt (filled in from it); add tags like green eyes">${esc(obFinPrompt(g, o))}</textarea></div></div>`;
       { const L = obLooksOf(g); if(L && L.ckpt) x += `<p class="note">The touch-up uses this picture's model${L.loras.length ? ' and LoRAs' : ''}: ${esc([baseName(L.ckpt)].concat(L.loras.map(l => baseName(l.file).replace(/\.safetensors$/i, '') + ' ' + l.strength)).join(' · '))}</p>`; }
       if(o.busy) x += `<p class="note">${esc(o.busy)}</p>` + (o.fin ? '<div class="pbar obbar"><i data-obbar="fin"></i></div><p class="note" data-obtxt="fin"></p>' : '');
       x += `<div class="lbl">${pose ? 'Make another move' : 'Make another orbit'}</div>`;
@@ -6079,7 +6087,7 @@ $('#obPanel').addEventListener('click', e => {
   else return;
   save(); drawOrbit(); buzz();
 });
-$('#obPanel').addEventListener('change', e => { const f = e.target.dataset.obf; if(f){ OB()[f] = e.target.value; save(); } });
+['change', 'input'].forEach(ev => $('#obPanel').addEventListener(ev, e => { const f = e.target.dataset.obf; if(f){ OB()[f] = e.target.value; save(); } }));
 $('#obVid').onclick = () => { const g = obG(); if(g) openViewer('gal', S.gallery, shownIdx); };
 $('#vOrbit').onclick = () => { const u = viewUrl(lib.cur, lib.cur.src); closeViewer(); orbitUrl(u); };
 $('#vPose').onclick = () => { const u = viewUrl(lib.cur, lib.cur.src); closeViewer(); orbitUrl(u, 'pose'); };

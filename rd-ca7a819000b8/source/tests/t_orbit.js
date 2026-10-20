@@ -106,6 +106,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(Math.abs(+await page.inputValue('#obPanel [data-obt]') - 508) <= 1, '▶ steps one frame on');
   ok(/uses this picture's model and LoRAs: iriselTouchIL_v10\.safetensors · librarianx_v2 1 · AFKJ Style Illustrious Claude 0\.8/.test(await page.textContent('#obPanel')), 'the panel says the touch-up uses the picture\'s model and LoRAs: ' + await page.textContent('#obPanel'));
   ok(/Line art/.test(await page.textContent('#obPanel')) && await page.$('#obPanel [data-obseg="cn"][data-v="lines"].on'), 'ControlNet choice: Line art (default), Line art + colour, None');
+  ok(await page.inputValue('#obPanel [data-obf="fprompt"]')==='librarianx eating a burger' && await page.$('#obPanel [data-obseg="dn"][data-v="0.4"].on') && /LightMediumStrong/.test(await page.textContent('#obPanel')), 'the prompt is filled in from the picture; Light, Medium (default), Strong');
   await page.click('#obPanel [data-obseg="cn"][data-v="both"]');
   await page.click('#obPanel [data-ob="finish"]');
   await page.waitForFunction(() => (S.gallery[0].hist || []).length===1, null, {timeout:15000});
@@ -116,11 +117,11 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     const cns = await page.evaluate(() => ['lines', 'none'].map(cn => Object.values(obFinishGraph(kitOrbit(), {img:'x.png', w:576, h:576}, 0.35, '', {loras:[], cn}).g).filter(n => n.class_type==='ControlNetApplyAdvanced').length));
     ok(cns[0]===1 && cns[1]===0, 'Line art uses one ControlNet, None uses none: ' + cns);
     const sc = by('ImageScaleBy')[0].inputs.scale_by; ok(sc >= 1.5 && sc <= 3, 'made about 1344 on its long side: x' + sc); }
-  ok(by('KSampler')[0].inputs.denoise===0.35 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors', 'the picture\'s own checkpoint at 0.2, 1.5x bigger');
+  ok(by('KSampler')[0].inputs.denoise===0.4 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors', 'the picture\'s own checkpoint at 0.2, 1.5x bigger');
   { const ll = by('LoraLoader'), ks = by('KSampler')[0], pos = by('CLIPTextEncode')[0].inputs.text;
     ok(ll.length===2 && ll[0].inputs.lora_name==='chars\\librarianx_v2.safetensors' && ll[1].inputs.lora_name==='AFKJ Style Illustrious Claude.safetensors' && ll[1].inputs.strength_model===0.8
       && g[ks.inputs.model[0]]===ll[1] && g[by('CLIPTextEncode')[0].inputs.clip[0]]===ll[1], 'its LoRAs (the ones switched on, at their strengths, found in their folder) feed the redraw');
-    ok(/librarianx, AFKJ Style/.test(pos), 'and their trigger words are in the prompt: ' + pos); }
+    ok(/librarianx, AFKJ Style/.test(pos) && /eating a burger/.test(pos) && pos.split(/,\s*/).filter(t => t==='librarianx').length===1, 'their trigger words and the picture\'s own prompt are in it, each once: ' + pos); }
   ok(by('SetUnionControlNetType')[0].inputs.type==='canny/lineart/anime_lineart/mlsd' && by('ControlNetApplyAdvanced')[0].inputs.strength===0.8 && g[by('ControlNetApplyAdvanced')[0].inputs.image[0]].class_type==='AnimeLineArtPreprocessor', 'ControlNet ProMax holds the anime line art at 0.8');
   ok(by('SaveImage')[0].inputs.filename_prefix==='RenderDeck/angles/finished', 'saved under RenderDeck/angles/finished');
   { const ap = by('ControlNetApplyAdvanced'), t = ap[1] && g[g[ap[1].inputs.control_net[0]].inputs.control_net ? ap[1].inputs.control_net[0] : ''];
