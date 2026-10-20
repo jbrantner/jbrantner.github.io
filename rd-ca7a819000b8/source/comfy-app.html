@@ -154,6 +154,8 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .omid{border-radius:12px;border:1px solid var(--line);background:var(--bg);overflow:hidden;display:flex;align-items:center;justify-content:center}
 .omid img{display:block;max-width:100%;max-height:280px;object-fit:contain}
 .m3d{display:block;width:100%;height:360px;margin-top:6px;border-radius:12px;border:1px solid var(--line);background:var(--bg);--poster-color:transparent}
+.obbar{height:6px;border-radius:9px;background:var(--panel2);margin:8px 0 2px;overflow:hidden}
+.obbar i{display:block;height:100%;width:0;background:var(--accent);transition:width .8s linear}
 .chsec .pbar, .chbody .pbar{height:5px;border-radius:9px;background:var(--panel2);margin:6px 0;overflow:hidden}
 .chsec .pbar i, .chbody .pbar i{display:block;height:100%;background:var(--cyan)}
 .chsec .pbar i[data-pipebar], .chbody .pbar i[data-pipebar]{background:var(--accent);transition:width .8s linear}
@@ -511,7 +513,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.74'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.75'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -766,7 +768,7 @@ function onSocket(p, ev){
     return;
   }
   const e = S.queue.find(q => q.id && q.id===d.prompt_id);
-  if(!e) return;
+  if(!e){ liveMsg(m, d); return; }
   if(m.type==='execution_start'){ e.state = 'running'; }
   else if(m.type==='progress'){ e.state = 'running'; e.prog = {text:(e.titles[d.node] || 'Painting') + ' ' + d.value + '/' + d.max, f:d.value / d.max}; }
   else if(m.type==='executing'){ if(d.node===null){ completeOne(e); return; } e.state = 'running'; e.prog = {text:e.titles[d.node] || 'Working', f:e.prog ? e.prog.f : 0}; }
@@ -5665,6 +5667,38 @@ function obFinishGraph(k, img, dn, words){
   return {g, save:add('SaveImage', {images:out, filename_prefix:obPrefix('finished')})};
 }
 let OB_SENT = []; // Test mode: the graphs made
+// ---- live progress for prompts outside the render queue (Change angle): ComfyUI sends each sampler step over the
+// websocket to the client that queued the prompt, so these are queued with the app's own client id. Time left = the
+// measured time per step for the steps to go, plus about a quarter of the sampling time for decoding and saving
+// (FL2V on Render, 2026-10-20: 8 steps x ~23 s, ~80 s of loading and decoding). Before the first step: the estimate.
+const LIVE = {};
+const samplerOf = g => Object.keys(g).find(k => /^(SamplerCustomAdvanced|KSampler|KSamplerAdvanced)$/.test(g[k].class_type));
+const liveWatched = id => [S.orbitN, S.orbitH].some(o => o && ((o.making && o.making.id===id) || (o.fin && o.fin.id===id)));
+function liveMsg(m, d){
+  const id = d.prompt_id; if(!id || !liveWatched(id)) return;
+  const L = LIVE[id] = LIVE[id] || {}, now = Date.now();
+  if(m.type==='execution_start') L.started = true;
+  else if(m.type==='executing' && d.node!=null){ if(L.node===L.smp && d.node!==L.node && L.max) L.ds = now; L.node = d.node; L.nt = now; }
+  else if(m.type==='progress'){ if(d.node!==L.pn){ L.pn = d.node; L.ps = L.node===d.node && L.nt ? L.nt : now; } L.v = d.value; L.max = d.max; L.pt = now; }
+  obBar();
+}
+function liveEta(id, smp, t0, estS, what){
+  const L = LIVE[id] || {}, now = Date.now(), el = Math.max(1, (now - t0) / 1000); L.smp = smp;
+  let left, phase;
+  if(L.max && L.pn===smp && L.node===smp && L.v){ const r = (L.pt - L.ps) / 1000 / L.v; L.r = r;
+    left = Math.max(0, r * (L.max - L.v) - (now - L.pt) / 1000) + 0.25 * r * L.max; phase = what + ': step ' + L.v + ' of ' + L.max; }
+  else if(L.max && L.v===L.max && L.node!==smp){ left = Math.max(3, 0.25 * (L.r || 5) * L.max - (now - (L.ds || now)) / 1000); phase = 'Decoding and saving'; }
+  else { left = Math.max(15, estS - el); phase = L.node || L.started ? 'Loading the models' : 'Getting ready'; }
+  const f = Math.min(0.99, el / (el + left)), mm = left < 50 ? 'under a minute left' : 'about ' + Math.round(left / 60) + ' min left';
+  return {f, text:phase + ' · ' + Math.round(100 * f) + '% · ' + mm};
+}
+const estSecs = mins => 60 * (+(String(mins || '').match(/\d+(?!.*\d)/) || [5])[0]);
+function obBar(){
+  const o = OB(), put = (k, p) => { document.querySelectorAll(`[data-obbar="${k}"]`).forEach(el => el.style.width = (100 * p.f).toFixed(1) + '%'); document.querySelectorAll(`[data-obtxt="${k}"]`).forEach(el => el.textContent = p.text); };
+  if(o.making) put('make', liveEta(o.making.id, o.making.smp, o.making.t, estSecs(o.making.mins), 'Swinging the camera'));
+  if(o.fin) put('fin', liveEta(o.fin.id, o.fin.smp, o.fin.t, 60, 'Touching it up'));
+}
+setInterval(() => { const o = OB(); if((o.making || o.fin) && document.visibilityState==='visible') obBar(); }, 1000);
 function openOrbit(url){
   obSetSrc(url); OB_HOST = $('#orbitBody'); closeSheets(); openSheet('#orbitSheet'); drawOrbit();
 }
@@ -5687,9 +5721,9 @@ async function makeOrbit(){
     const img = await obSend(o.src, k.url, 'orbit_src_' + Date.now().toString(36) + '.png');
     const {g, save:sid} = orbitGraph(k, img, o, w, h);
     if(S.test){ OB_SENT.push(g); await new Promise(r => setTimeout(r, 300)); Object.assign(o, {clip:{test:true, w, h}, frame:1000}); delete o.busy; save(); drawOrbit(); return; }
-    const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-orbit'})}), j = await r.json();
+    const r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    o.making = {pc:k.url, id:j.prompt_id, save:sid, t:Date.now(), prefix:obPrefix('orbit'), mins:k.mins}; delete o.busy; save(); drawOrbit(); waitOrbit(o);
+    o.making = {pc:k.url, id:j.prompt_id, save:sid, t:Date.now(), prefix:obPrefix('orbit'), mins:k.mins, smp:samplerOf(g)}; delete o.busy; save(); drawOrbit(); waitOrbit(o);
   }catch(err){ delete o.busy; o.err = "Couldn't make the orbit: " + err.message; save(); drawOrbit(); }
 }
 async function waitOrbit(o){
@@ -5712,13 +5746,14 @@ async function finishOrbit(){
     const {g, save:sid} = obFinishGraph(pk, v.img, dn, o.words);
     let url;
     if(S.test){ OB_SENT.push(g); url = v.url; }
-    else { const t0 = Date.now(), r = await fetch(pc + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:'rd-orbit'})}), j = await r.json();
+    else { const t0 = Date.now(), r = await fetch(pc + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
       if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+      o.fin = {id:j.prompt_id, smp:samplerOf(g), t:t0}; drawOrbit();
       url = viewUrl(await waitOut(pc, j.prompt_id, sid, obPrefix('finished'), t0, false), pc); }
-    (o.done = o.done || []).unshift(url); o.done = o.done.slice(0, 12);
+    delete o.fin; (o.done = o.done || []).unshift(url); o.done = o.done.slice(0, 12);
     galleryFor(S.hidden).unshift({url, seed:null, prompt:'', t:Date.now(), saved:true}); drawStrip(); show(0);
     delete o.busy; save(); drawOrbit(); buzz(); toast('New angle saved ✨');
-  }catch(err){ delete o.busy; o.err = "Couldn't finish the frame: " + err.message; save(); drawOrbit(); }
+  }catch(err){ delete o.busy; delete o.fin; o.err = "Couldn't finish the frame: " + err.message; save(); drawOrbit(); }
 }
 function drawOrbit(){
   const o = OB(), k = kitOrbit(), dir = o.dir || 'right', [h, v] = OB_STEP[dir], hosts = obHosts(); if(!hosts.length) return;
@@ -5734,8 +5769,9 @@ function drawOrbit(){
     <div class="row"><label>In the picture</label><div class="grow"><input type="text" data-obf="scene" placeholder="optional, e.g. a hooded girl on a neon street" value="${esc(o.scene || '')}"></div></div>`;
   if(o.err) x += `<p class="warn">${esc(o.err)}</p>`;
   if(k.why) x += `<p class="note">${esc(k.why)}.</p>`;
-  else if(o.making) x += `<p class="note">🎬 Swinging the camera round on ${esc(pcName(o.making.pc))}: started ${Math.max(0, Math.round((Date.now() - o.making.t) / 60000))} min ago, about ${esc(o.making.mins || 'a few')} minutes in all. You can close the app; it carries on, and the orbit opens here (and in the Change angle block) when it's ready.</p>`;
-  else if(o.busy) x += `<p class="note">${esc(o.busy)}</p>`;
+  else if(o.making) x += `<p class="note">🎬 Swinging the camera round on ${esc(pcName(o.making.pc))}. You can close the app; it carries on, and the orbit opens here (and in the Change angle block) when it's ready.</p>
+    <div class="pbar obbar"><i data-obbar="make"></i></div><p class="note" data-obtxt="make"></p>`;
+  else if(o.busy) x += `<p class="note">${esc(o.busy)}</p>` + (o.fin ? '<div class="pbar obbar"><i data-obbar="fin"></i></div><p class="note" data-obtxt="fin"></p>' : '');
   else x += `<p class="note">MiniMax H3 ${k.fl ? 'FL2V' : ''} on ${esc(pcName(k.url))} pins this picture as the first frame and swings the camera ${esc(dir)} round the frozen scene. About ${esc(k.mins)} minutes.</p>
     <div class="btnrow"><button class="btn${o.clip ? '' : ' hot'}" data-ob="make">🎬 ${o.clip ? 'Make another' : 'Make the orbit'}</button></div>`;
   if(o.clip){
@@ -5750,7 +5786,7 @@ function drawOrbit(){
   const old = (o.clips || []).filter(c => !o.clip || c.url!==o.clip.url);
   if(old.length) x += `<div class="lbl">Earlier orbits</div><div class="cviews">${old.map(c => `<button data-obclip="${esc(c.url)}" aria-label="Open the ${esc(c.dir)} orbit"><img src="${esc(c.src)}" alt="" loading="lazy"></button>`).join('')}</div>`;
   if((o.done || []).length) x += `<div class="lbl">New angles</div><div class="cviews">${o.done.map(u => `<button data-obopen="${esc(u)}"><img src="${esc(u)}" alt="" loading="lazy"></button>`).join('')}</div>`;
-  put(x); hosts.forEach(showOrbitClip);
+  put(x); hosts.forEach(showOrbitClip); obBar();
   const sub = document.querySelector('#blocks .block[data-id] [data-obhost]'); if(sub){ const s = sub.closest('.block').querySelector('.bhead small'); if(s) s.textContent = obSum(); }
 }
 function showOrbitClip(host){

@@ -40,7 +40,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   page.on('dialog', d => d.accept());
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
-  await page.routeWebSocket(/\.test\/ws/, ws => {});
+  const WS = []; await page.routeWebSocket(/\.test\/ws/, ws => { WS.push(ws); });
   const sent = [], ups = [], polls = {};
   await page.route(RENDER + '/**', async r => {
     const u = new URL(r.request().url()), cors = {'Access-Control-Allow-Origin':'*'};
@@ -72,7 +72,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.click('#orbitBody [data-ob="make"]');
   await page.waitForSelector('#orbitBody video[data-ob]', {timeout:15000});
   let g = sent[0].prompt, by = c => Object.values(g).filter(n => n.class_type===c);
-  ok(sent[0].client_id==='rd-orbit' && check(g).length===0, 'the orbit graph is valid: ' + check(g).join('; '));
+  ok(sent[0].client_id===await page.evaluate(() => clientId) && check(g).length===0, 'the orbit graph is valid: ' + check(g).join('; '));
   const iv = by('MiniMaxH3ImageToVideo')[0].inputs;
   ok(by('UNETLoader')[0].inputs.unet_name==='minimax_h3_fl2va_pruned_int8_convrot.safetensors' && by('LoraLoaderModelOnly')[0].inputs.lora_name==='minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors'
     && by('BasicScheduler')[0].inputs.steps===8 && by('KSamplerSelect')[0].inputs.sampler_name==='res_multistep', 'FL2V model, Turbo 8-step LoRA, 8 steps, res_multistep');
@@ -146,9 +146,23 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   // an orbit still being made when the app closes comes in when it opens again
   await page.evaluate(([srv, sv]) => { const o = OB(); o.making = {pc:srv, id:'o1', save:sv, t:Date.now() - 60000, prefix:'RenderDeck/angles/orbit', mins:'5'}; o.clip = null; o.clips = []; save(); },
     [RENDER, Object.keys(sent[0].prompt).find(k => sent[0].prompt[k].class_type==='SaveVideo')]);
-  ok(/Swinging the camera round on .*started 1 min ago/.test(await page.evaluate(() => { drawOrbit(); return document.querySelector('#blocks [data-obhost]').textContent; })), 'while it is made, the block says so and how long ago it started');
+  ok(/Swinging the camera round on [\s\S]*Getting ready · \d+% · about \d+ min left/.test(await page.evaluate(() => { drawOrbit(); return document.querySelector('#blocks [data-obhost]').textContent; })), 'while it is made, the block shows a bar and the time left: ' + await page.textContent('#blocks [data-obhost]'));
   await page.reload(); await page.waitForFunction(() => OB().clip && !OB().making, null, {timeout:15000});
   ok(await page.$('#blocks [data-obhost] video[data-ob]'), 'after reopening the app the finished orbit is in the block');
+  // a live bar with time left, from ComfyUI's step progress over the websocket
+  ok(sent.slice(-1)[0] && sent.every(x => x.client_id && x.client_id!=='rd-orbit'), "orbits are queued with the app's own client id, so ComfyUI sends it their progress");
+  await page.evaluate(() => { OB_RUN.add('zz'); const o = OB(); o.making = {pc:base(), id:'zz', save:'1', t:Date.now() - 60000, prefix:'x', mins:'4 to 5', smp:'7'}; save(); drawOrbit(); });
+  ok(/Getting ready/.test(await page.textContent('#blocks [data-obtxt="make"]')) && /min left/.test(await page.textContent('#blocks [data-obtxt="make"]')), 'before the first step it shows the estimate: ' + await page.textContent('#blocks [data-obtxt="make"]'));
+  const say = m => WS.forEach(w => { try{ w.send(JSON.stringify(m)); }catch(e){} });
+  say({type:'executing', data:{node:'7', prompt_id:'zz'}}); say({type:'progress', data:{node:'7', prompt_id:'zz', value:2, max:8}});
+  await page.waitForFunction(() => LIVE.zz && LIVE.zz.v===2);
+  await page.evaluate(() => { const L = LIVE.zz, n = Date.now(); L.ps = n - 46000; L.pt = n; obBar(); });
+  let bt = await page.textContent('#blocks [data-obtxt="make"]');
+  ok(/step 2 of 8/.test(bt) && /about 3 min left/.test(bt) && parseFloat(await page.evaluate(() => document.querySelector('#blocks [data-obbar="make"]').style.width)) > 10, 'during sampling: the step, the percent and the time left from the measured step time: ' + bt);
+  say({type:'progress', data:{node:'7', prompt_id:'zz', value:8, max:8}}); say({type:'executing', data:{node:'9', prompt_id:'zz'}});
+  await page.waitForFunction(() => LIVE.zz.node==='9'); await page.evaluate(() => obBar());
+  ok(/Decoding and saving/.test(await page.textContent('#blocks [data-obtxt="make"]')), 'after the last step it is decoding: ' + await page.textContent('#blocks [data-obtxt="make"]'));
+  await page.evaluate(() => { delete OB().making; save(); drawOrbit(); });
   // from the library viewer too
   ok(await page.$('#vLib #vOrbit') && await page.$('#vGal [data-act="orbit"]'), 'the viewers have 📷 Change angle too');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
