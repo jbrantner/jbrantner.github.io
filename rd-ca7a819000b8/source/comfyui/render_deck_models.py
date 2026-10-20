@@ -15,6 +15,8 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
                                                scores, on the CPU) for training captions; fetched once from Hugging Face
   GET  /renderdeck/farm, POST /renderdeck/farm/add|cancel|pcs -> the render farm queue: renders go to whichever of your
                                                computers is free, even with the phone app closed (render_deck_farm.json)
+  GET  /renderdeck/auto, POST /renderdeck/auto/start|stop -> a character's auto run: turnaround, angles, training shots,
+                                               the picked set and a kohya LoRA, here, with the phone app closed (render_deck_auto.json)
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
 civitai.com, huggingface.co and your own computers' Tailscale (.ts.net) addresses, and an existing file is never overwritten.
 Civitai models that need sign-in: put your Civitai API key in the CIVITAI_API_TOKEN environment variable,
@@ -892,6 +894,9 @@ async def _farm_round(s):
         st['why'] = ''
         if not st['online'] or u in FARM['off'] or st['running'] or st['pending']:
             continue
+        if AUTO_TRAINING['pc'] and _tailnet(AUTO_TRAINING['pc']) == u:
+            st['why'] = 'training a LoRA'
+            continue
         for job in FARM['jobs']:
             if job['state'] != 'waiting':
                 continue
@@ -1040,6 +1045,560 @@ async def farm_pcs(request):
         return web.json_response(_farm_view(time.time()))
     except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
+
+
+# ---------- auto run: one reference picture to a finished LoRA, on this computer, with the phone app closed ----------
+# The app sends the graphs it would run itself (the turnaround, one per training shot with @SIDE/@BACK for the angle
+# pictures this run finds, and the quality pass with @IMG/@TAGS when it redraws) and how far to go. Here, in order:
+#   turn   the turnaround clip through this ComfyUI's queue
+#   angles six frames found by the silhouette's width (as the app's findSides), saved 1.5x bigger (or redrawn)
+#   shots  every training shot queued at once; the two sharpest moments of each clip (a second apart), saved the same way
+#   pick   15-30 pictures: near-repeats and blurry ones dropped, the angles always kept, the sharpest shot frames after
+#          them; written with captions to kohya's data folder and to RenderDeck/datasets/<trigger> in the output folder
+#   train  kohya sd-scripts (found next to ComfyUI) with the settings that fit the 8 GB laptops, stopped above 87 C
+# State lives in render_deck_auto.json, so a ComfyUI restart picks the run back up at the step it was on.
+AUTO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_auto.json')
+AUTO = {'jobs': []}
+AUTO_STEPS = ('turn', 'angles', 'shots', 'pick', 'train')
+AUTO_UNTIL = {'angles': 'angles', 'shots': 'shots', 'pick': 'pick', 'lora': 'train'}
+AUTO_TRAINING = {'pc': ''}  # the farm leaves this computer alone while kohya has the GPU
+_auto_task = None
+TV_LEN = 124
+SLOTS = (('front', 'front'), ('three', 'three'), ('right', 'right'), ('back', 'back'), ('left', 'left'), ('three_b', 'three'))
+VIEW_TAG = {'front': '', 'three': '', 'right': 'from side', 'left': 'from side', 'back': 'from behind'}
+A_POSE = 'standing, a-pose, full body, simple background, white background'
+HOT_C = 87
+
+
+def _auto_load():
+    try:
+        with open(AUTO_FILE, encoding='utf-8') as f:
+            AUTO.update(json.load(f))
+    except Exception:
+        pass
+
+
+def _auto_save():
+    tmp = AUTO_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(AUTO, f)
+    os.replace(tmp, AUTO_FILE)
+
+
+def _auto_view(j):
+    return {k: v for k, v in j.items() if k not in ('turn_graph', 'shot_graphs', 'redraw')}
+
+
+def _me():
+    try:
+        from comfy.cli_args import args
+        return 'http://127.0.0.1:%d' % args.port
+    except Exception:
+        return 'http://127.0.0.1:8188'
+
+
+def _say(j, step, text, prog=None):
+    j.update(step=step, text=text)
+    if prog is not None:
+        j['prog'] = round(prog, 4)
+    _auto_save()
+
+
+def _outfile(f):
+    return os.path.join(folder_paths.get_output_directory(), f.get('subfolder', ''), f['filename'])
+
+
+async def _comfy_run(s, j, graph, save_id, label):
+    """Queue a graph on this ComfyUI and wait for its first output file; returns {filename, subfolder, type}."""
+    st, r = await _post(s, _me() + '/prompt', {'prompt': graph, 'client_id': 'rd-auto'})
+    if st != 200 or not r.get('prompt_id'):
+        raise RuntimeError(label + ': ComfyUI turned it down (' + json.dumps(r.get('error') or r)[:200] + ')')
+    return await _comfy_wait(s, j, r['prompt_id'], save_id, label)
+
+
+async def _comfy_wait(s, j, pid, save_id, label):
+    while True:
+        await asyncio.sleep(3)
+        if j.get('stop'):
+            raise RuntimeError('stopped')
+        try:
+            h = (await _get(s, _me() + '/history/' + pid, 10)).get(pid)
+        except Exception:
+            continue
+        if not h:
+            q = await _get(s, _me() + '/queue', 10)
+            if any(x[1] == pid for x in q.get('queue_running', []) + q.get('queue_pending', [])):
+                continue
+            raise RuntimeError(label + ': it left the queue without finishing (ComfyUI restarted?)')
+        stt = h.get('status') or {}
+        if stt.get('status_str') == 'error':
+            msg = next((m[1].get('exception_message') for m in stt.get('messages', []) if m[0] == 'execution_error'), 'ComfyUI hit an error')
+            raise RuntimeError(label + ': ' + str(msg).strip()[:300])
+        if not stt.get('completed'):
+            continue
+        o = (h.get('outputs') or {}).get(str(save_id)) or {}
+        f = (o.get('images') or o.get('videos') or o.get('gifs') or [None])[0]
+        if not f:
+            raise RuntimeError(label + ': nothing came back')
+        return {'filename': f['filename'], 'subfolder': f.get('subfolder', ''), 'type': 'output'}
+
+
+def _frames(path, want=None, small=None):
+    """Frames of a clip as PIL pictures: all (as `small` (w, h) when given) or just the indexes in `want`."""
+    import av
+    from PIL import Image
+    out = {}
+    with av.open(path) as c:
+        for i, fr in enumerate(c.decode(video=0)):
+            if want is None or i in want:
+                im = fr.to_image().convert('RGB')
+                out[i] = im.resize(small, Image.BILINEAR) if small else im
+    return out
+
+
+def _find_sides(path):
+    import numpy as np
+    n, W, H = TV_LEN, 144, 256
+    idx = [min(n - 1, i * 2) for i in range((n + 1) // 2)]
+    fr = _frames(path, set(idx), (W, H))
+    n = max(fr) + 1 if fr else n
+    idx = [i for i in idx if i in fr]
+    rows = round(H * 0.92)
+    wid = []
+    for i in idx:
+        a = np.asarray(fr[i])[:rows].min(axis=2) < 225
+        wid.append(int((a.sum(axis=0) >= 3).sum()))
+
+    def best(lo, hi, wide=False):
+        b, bv = -1, 0
+        for f, w in zip(idx, wid):
+            p = f / (n - 1)
+            if lo <= p <= hi:
+                v = w if wide else -w
+                if b < 0 or v > bv:
+                    b, bv = f, v
+        return b
+    at = {'front': 0.03, 'three': 0.125, 'right': 0.25, 'back': 0.5, 'left': 0.75}
+    right = best(0.14, 0.36)
+    right = right if right >= 0 else round(at['right'] * (n - 1))
+    left = best(0.64, 0.86)
+    left = left if left >= 0 else round(at['left'] * (n - 1))
+    mid = (right + left) / 2 / (n - 1)
+    near = [(f, w) for f, w in zip(idx, wid) if abs(f / (n - 1) - mid) <= 0.06]
+    top = max([w for _, w in near] or [0])
+    wide = [f for f, w in near if w >= 0.97 * top]
+    back = wide[len(wide) >> 1] if wide else round(at['back'] * (n - 1))
+    front = best(0, 0.08, True)
+    front = front if front >= 0 else round(at['front'] * (n - 1))
+    return {'front': front, 'three': round((front + right) / 2), 'right': right, 'back': back, 'left': left, 'three_b': round((left + n - 1) / 2)}
+
+
+def _sharp(im):
+    """Edge detail (variance of a Laplacian) of a picture, on a 144x256 grey copy."""
+    import numpy as np
+    from PIL import Image
+    g = np.asarray(im.convert('L').resize((144, 256), Image.BILINEAR), dtype=np.float32)
+    lap = 4 * g[1:-1, 1:-1] - g[:-2, 1:-1] - g[2:, 1:-1] - g[1:-1, :-2] - g[1:-1, 2:]
+    return float(lap.var())
+
+
+def _sharpest(path, n):
+    fr = _frames(path, None, (144, 256))
+    last = max(fr) if fr else TV_LEN - 1
+    sc = sorted(((i, _sharp(fr[i])) for i in range(12, last - 1, 4) if i in fr), key=lambda x: -x[1])
+    out = []
+    for f, _ in sc:
+        if len(out) >= n:
+            break
+        if all(abs(x - f) >= 24 for x in out):
+            out.append(f)
+    return out
+
+
+def _dhash(path):
+    from PIL import Image
+    g = Image.open(path).convert('L').resize((9, 8), Image.BILINEAR)
+    p = list(g.getdata())
+    return sum(1 << i for i in range(64) if p[(i // 8) * 9 + i % 8] > p[(i // 8) * 9 + i % 8 + 1])
+
+
+async def _keep_frame(s, j, im, prefix, tags):
+    """A frame as a training picture: 1.5x bigger (lanczos), or through the app's quality pass graph when it redraws."""
+    from PIL import Image
+    if j.get('redraw'):
+        name = 'rdauto_%s_%s.png' % (j['id'], uuid.uuid4().hex[:8])
+        im.save(os.path.join(folder_paths.get_input_directory(), name))
+        g = json.loads(json.dumps(j['redraw']['graph']).replace('@IMG', name).replace('@TAGS', tags.replace('"', '')))
+        return await _comfy_run(s, j, g, j['redraw']['save'], 'the quality pass')
+    sub, base = prefix.rsplit('/', 1)
+    full, _, _ = _save_path_per_pc_dir(sub)
+    os.makedirs(full, exist_ok=True)
+    name = '%s_%s_%s.png' % (base, time.strftime('%y%m%d%H%M%S'), uuid.uuid4().hex[:4])
+    big = im.resize((round(im.width * 1.5), round(im.height * 1.5)), Image.LANCZOS)
+    await asyncio.to_thread(big.save, os.path.join(full, name))
+    return {'filename': name, 'subfolder': os.path.relpath(full, folder_paths.get_output_directory()).replace('\\', '/'), 'type': 'output'}
+
+
+def _save_path_per_pc_dir(sub):
+    """The folder a SaveImage with this subfolder would write to (this computer's own subfolder in a shared output)."""
+    full, filename, counter, subfolder, _ = folder_paths.get_save_image_path(sub + '/x', folder_paths.get_output_directory())
+    return full, subfolder, filename
+
+
+def _input_copy(j, f, tag):
+    name = 'rdauto_%s_%s.png' % (j['id'], tag)
+    shutil.copyfile(_outfile(f), os.path.join(folder_paths.get_input_directory(), name))
+    return name
+
+
+async def _step_turn(s, j):
+    if j.get('turn'):
+        return
+    _say(j, 'turn', 'Making the turnaround video…', 0.01)
+    j['turn'] = await _comfy_run(s, j, j['turn_graph']['graph'], j['turn_graph']['save'], 'the turnaround')
+    _auto_save()
+
+
+async def _step_angles(s, j):
+    if j.get('angles') and len(j['angles']) >= len(SLOTS) - (1 if j.get('keep_front') else 0):
+        return
+    _say(j, 'angles', 'Finding the six angles in the turnaround…')
+    clip = _outfile(j['turn'])
+    at = await asyncio.to_thread(_find_sides, clip)
+    fr = await asyncio.to_thread(_frames, clip, set(at.values()))
+    j['angles'] = j.get('angles') or {}
+    for slot, ang in SLOTS:
+        if slot in j['angles'] or (slot == 'front' and j.get('keep_front')) or at[slot] not in fr:
+            continue
+        _say(j, 'angles', 'Saving the ' + slot.replace('three_b', '3/4 other side').replace('three', '3/4') + ' view…')
+        f = await _keep_frame(s, j, fr[at[slot]], j['angles_prefix'], A_POSE + (', ' + VIEW_TAG[ang] if VIEW_TAG[ang] else ''))
+        j['angles'][slot] = dict(f, at=at[slot], angle=ang)
+        _auto_save()
+
+
+async def _step_shots(s, j):
+    shots = j['shots']
+    if all(x.get('frames') or x.get('err') for x in shots):
+        return
+    side = j['angles'].get('right') or j['angles'].get('left')
+    back = j['angles'].get('back')
+    ins = {'@SIDE': _input_copy(j, side, 'side') if side else j['src'], '@BACK': _input_copy(j, back, 'back') if back else j['src']}
+    # everything into the queue at once, so a restart of the run finds them already made or waiting
+    for i, x in enumerate(shots):
+        if x.get('frames') or x.get('err') or x.get('pid') or x.get('clip'):
+            continue
+        g = json.dumps(j['shot_graphs'][i]['graph'])
+        for k, v in ins.items():
+            g = g.replace(k, v)
+        st, r = await _post(s, _me() + '/prompt', {'prompt': json.loads(g), 'client_id': 'rd-auto'})
+        if st != 200 or not r.get('prompt_id'):
+            x['err'] = 'ComfyUI turned it down'
+        else:
+            x['pid'] = r['prompt_id']
+        _auto_save()
+    for i, x in enumerate(shots):
+        if x.get('frames') or x.get('err'):
+            continue
+        _say(j, 'shots', 'Training shot %d of %d: %s' % (i + 1, len(shots), x['say'][:60]))
+        try:
+            if not x.get('clip'):
+                x['clip'] = await _comfy_wait(s, j, x['pid'], j['shot_graphs'][i]['save'], 'shot %d' % (i + 1))
+                _auto_save()
+            best = await asyncio.to_thread(_sharpest, _outfile(x['clip']), j.get('per_shot', 2))
+            fr = await asyncio.to_thread(_frames, _outfile(x['clip']), set(best))
+            x['frames'] = []
+            for b in best:
+                f = await _keep_frame(s, j, fr[b], j['shots_prefix'], x.get('tags', ''))
+                x['frames'].append(dict(f, at=b))
+        except RuntimeError as e:
+            if str(e) == 'stopped':
+                raise
+            x['err'] = str(e)
+        _auto_save()
+
+
+def _pick(j):
+    """Drop near-repeats and blurry pictures, keep the angles, fill up to the most with the sharpest shot frames."""
+    lo, hi = j.get('set_min', 15), j.get('set_max', 30)
+    items = [dict(f, kind='angle', cap=A_POSE + (', ' + VIEW_TAG[f['angle']] if VIEW_TAG[f['angle']] else '')) for f in j['angles'].values()]
+    for x in j['shots']:
+        for f in x.get('frames') or []:
+            items.append(dict(f, kind='shot', cap=x.get('tags', '')))
+    for it in items:
+        from PIL import Image
+        p = _outfile(it)
+        it['sharp'] = _sharp(Image.open(p))
+        it['hash'] = _dhash(p)
+    shots = sorted([i for i in items if i['kind'] == 'shot'], key=lambda i: -i['sharp'])
+    med = sorted(i['sharp'] for i in shots)[len(shots) // 2] if shots else 0
+    keep = [i for i in items if i['kind'] == 'angle']
+    for i in shots:
+        if len(keep) >= hi:
+            break
+        if med and i['sharp'] < 0.35 * med:
+            continue
+        if any(bin(i['hash'] ^ k['hash']).count('1') <= 6 for k in keep):
+            continue
+        keep.append(i)
+    j['picks'] = [{'filename': i['filename'], 'subfolder': i['subfolder'], 'cap': i['cap']} for i in keep]
+    j['pick_note'] = '' if len(keep) >= lo else 'Only %d good pictures (aim %d-%d): add more training shots for a better LoRA.' % (len(keep), lo, hi)
+
+
+_KOHYA = []
+
+
+def _kohya():
+    """kohya sd-scripts next to ComfyUI and the Python of its own venv (looked up once)."""
+    if not _KOHYA or not _KOHYA[0][0]:
+        _KOHYA[:] = [_kohya_find()]
+    return _KOHYA[0]
+
+
+def _kohya_find():
+    import glob
+    base = os.path.abspath(getattr(folder_paths, 'base_path', os.getcwd()))
+    roots = [base, os.path.dirname(base), os.path.dirname(os.path.dirname(base)), os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Comfy-Desktop')]
+    for r in roots:
+        sd = os.path.join(r, 'kohya', 'sd-scripts')
+        if os.path.exists(os.path.join(sd, 'sdxl_train_network.py')):
+            for py in glob.glob(os.path.join(r, 'kohya', '**', 'python.exe'), recursive=True) + glob.glob(os.path.join(r, 'kohya', '**', 'bin', 'python'), recursive=True):
+                if 'venv' in py.lower():
+                    return sd, py
+    return None, None
+
+
+def _write_set(j):
+    trig, who = j['trigger'], j.get('who', '')
+    sd, py = _kohya()
+    dirs = [os.path.join(folder_paths.get_output_directory(), j['dataset_dir'])]
+    if sd:
+        dirs.append(os.path.join(os.path.dirname(sd), 'data', trig, '10_' + trig))
+    for d in dirs:
+        if os.path.isdir(d):
+            for f in os.listdir(d):
+                if f.lower().endswith(PICS + ('.txt', '.npz')):
+                    os.remove(os.path.join(d, f))
+        os.makedirs(d, exist_ok=True)
+        for n, p in enumerate(j['picks']):
+            stem = '%s_%02d' % (trig, n + 1)
+            shutil.copyfile(_outfile(p), os.path.join(d, stem + '.png'))
+            cap = ', '.join(x for x in [trig, who, 'solo', p['cap']] if x)
+            with open(os.path.join(d, stem + '.txt'), 'w', encoding='utf-8') as f:
+                f.write(cap)
+    j['kohya_data'] = os.path.dirname(dirs[-1]) if sd else ''
+
+
+async def _step_pick(s, j):
+    if j.get('picks') is None:
+        _say(j, 'pick', 'Picking the training set…')
+        await asyncio.to_thread(_pick, j)
+    await asyncio.to_thread(_write_set, j)
+    _auto_save()
+
+
+def _gpu_c():
+    import subprocess
+    try:
+        out = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=10).stdout
+        return int(out.strip().splitlines()[0])
+    except Exception:
+        return 0
+
+
+def _train_blocking(j, cmd, env, cwd):
+    import subprocess
+    p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    j['_pid'] = p.pid
+    buf, hot, tail, last_t = b'', 0, [], 0
+    while True:
+        ch = p.stdout.read(256)
+        if not ch:
+            break
+        buf = (buf + ch)[-4000:]
+        txt = buf.decode('utf-8', 'replace')
+        m = re.findall(r'(\d+)/(\d+) \[', txt)
+        if m:
+            a, b = map(int, m[-1])
+            if b == int(j.get('steps', 1200)):  # the training bar, not the caching ones
+                j['train_step'], j['train_steps'] = a, b
+        tail = txt.splitlines()[-12:]
+        if time.time() - last_t > 20:
+            last_t = time.time()
+            c = _gpu_c()
+            j['gpu_c'] = c
+            hot = hot + 1 if c > HOT_C else 0
+            if hot >= 2:
+                p.kill()
+                p.wait()
+                return 'The GPU went over %d C, so training stopped to protect the laptop.' % HOT_C
+            if j.get('stop'):
+                p.kill()
+                p.wait()
+                return 'stopped'
+    p.wait()
+    if p.returncode:
+        return 'kohya stopped with an error: ' + ' | '.join(tail)[-400:]
+    return ''
+
+
+async def _step_train(s, j):
+    if j.get('lora'):
+        return
+    sd, py = _kohya()
+    if not sd:
+        raise RuntimeError("kohya sd-scripts isn't next to ComfyUI (looked for kohya\\sd-scripts with its venv)")
+    ckpt = folder_paths.get_full_path('checkpoints', j['ckpt'])
+    if not ckpt:
+        raise RuntimeError('this computer has no ' + j['ckpt'])
+    loras = folder_paths.get_folder_paths('loras')[0]
+    name = '%s_auto_%s' % (j['trigger'], time.strftime('%y%m%d_%H%M'))
+    j['lora_name'] = name
+    _say(j, 'train', 'Freeing the graphics card for training…')
+    try:
+        await _post(s, _me() + '/free', {'unload_models': True, 'free_memory': True})
+    except Exception:
+        pass
+    AUTO_TRAINING['pc'] = j.get('pc', '')
+    steps = int(j.get('steps', 1200))
+    cmd = [py, os.path.join(sd, 'sdxl_train_network.py'), '--pretrained_model_name_or_path', ckpt, '--train_data_dir', j['kohya_data'],
+           '--output_dir', loras, '--output_name', name, '--save_model_as', 'safetensors', '--network_module', 'networks.lora',
+           '--network_dim', '16', '--network_alpha', '8', '--network_train_unet_only', '--resolution', '1024,1024', '--enable_bucket',
+           '--min_bucket_reso', '512', '--max_bucket_reso', '1536', '--bucket_reso_steps', '64', '--caption_extension', '.txt',
+           '--optimizer_type', 'Adafactor', '--optimizer_args', 'scale_parameter=False', 'relative_step=False', 'warmup_init=False',
+           '--learning_rate', '1e-4', '--lr_scheduler', 'constant_with_warmup', '--lr_warmup_steps', '50', '--max_train_steps', str(steps),
+           '--save_every_n_steps', str(max(100, steps // 3)), '--train_batch_size', '1', '--mixed_precision', 'bf16', '--save_precision', 'fp16',
+           '--fp8_base', '--cache_latents', '--cache_latents_to_disk', '--cache_text_encoder_outputs', '--gradient_checkpointing', '--sdpa',
+           '--max_data_loader_n_workers', '0', '--seed', '42']
+    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+    _say(j, 'train', 'Training the LoRA with kohya…')
+    try:
+        why = await asyncio.to_thread(_train_blocking, j, cmd, env, sd)
+    finally:
+        AUTO_TRAINING['pc'] = ''
+    if why:
+        raise RuntimeError(why)
+    j['lora'] = name + '.safetensors'
+    j['lora_saves'] = sorted(f for f in os.listdir(loras) if f.startswith(name) and f.endswith('.safetensors'))
+    _auto_save()
+
+
+AUTO_FN = {'turn': _step_turn, 'angles': _step_angles, 'shots': _step_shots, 'pick': _step_pick, 'train': _step_train}
+
+
+def _auto_prog(j):
+    w = {'turn': 300, 'angles': 30, 'shots': 330 * max(1, len(j.get('shots', []))), 'pick': 30, 'train': 2400}
+    upto = AUTO_STEPS[:AUTO_STEPS.index(AUTO_UNTIL[j['until']]) + 1]
+    total = sum(w[x] for x in upto)
+    done = sum(w[x] for x in upto[:upto.index(j['step'])]) if j.get('step') in upto else 0
+    part = 0
+    if j.get('step') == 'shots':
+        sh = j.get('shots', [])
+        part = w['shots'] * sum(1 for x in sh if x.get('frames') or x.get('err')) / max(1, len(sh))
+    elif j.get('step') == 'train' and j.get('train_steps'):
+        part = w['train'] * j['train_step'] / j['train_steps']
+    elif j.get('step') == 'turn' and j.get('t_step'):
+        part = min(0.95, (time.time() - j['t_step']) / w['turn']) * w['turn']
+    return min(0.99, (done + part) / total)
+
+
+async def _auto_loop():
+    async with aiohttp.ClientSession() as s:
+        while True:
+            j = next((x for x in AUTO['jobs'] if x['state'] == 'running'), None)
+            if not j:
+                return
+            try:
+                upto = AUTO_STEPS[:AUTO_STEPS.index(AUTO_UNTIL[j['until']]) + 1]
+                for st in upto:
+                    if j.get('stop'):
+                        raise RuntimeError('stopped')
+                    j['step'], j['t_step'] = st, time.time()
+                    j['prog'] = _auto_prog(j)
+                    _auto_save()
+                    await AUTO_FN[st](s, j)
+                    j.setdefault('done', [])
+                    if st not in j['done']:
+                        j['done'].append(st)
+                j.update(state='done', text='Finished', prog=1, ended=time.time())
+            except Exception as e:
+                stopped = str(e) == 'stopped'
+                j.update(state='stopped' if stopped else 'error', text='Stopped' if stopped else str(e)[:500], ended=time.time())
+                print('[Render Deck auto]', e)
+            _auto_save()
+
+
+async def _auto_tick():
+    while True:
+        await asyncio.sleep(5)
+        for j in AUTO['jobs']:
+            if j['state'] == 'running':
+                j['prog'] = _auto_prog(j)
+
+
+_auto_ticker = None
+
+
+def _auto_start():
+    global _auto_task, _auto_ticker
+    if _auto_task is None or _auto_task.done():
+        _auto_task = asyncio.ensure_future(_auto_loop())
+    if _auto_ticker is None or _auto_ticker.done():
+        _auto_ticker = asyncio.ensure_future(_auto_tick())
+
+
+@routes.get('/renderdeck/auto')
+async def auto_state(request):
+    if _auto_task is None and any(x['state'] == 'running' for x in AUTO['jobs']):
+        _auto_start()  # a run left going when ComfyUI restarted
+    return web.json_response({'jobs': [_auto_view(j) for j in AUTO['jobs'][-10:]], 'kohya': bool(_kohya()[0]), 'busy': any(x['state'] == 'running' for x in AUTO['jobs'])})
+
+
+@routes.post('/renderdeck/auto/start')
+async def auto_start(request):
+    b = await request.json()
+    if any(x['state'] == 'running' for x in AUTO['jobs']):
+        return web.json_response({'error': 'An auto run is already going on this computer.'}, status=409)
+    if b.get('until') not in AUTO_UNTIL:
+        return web.json_response({'error': 'until must be one of ' + ', '.join(AUTO_UNTIL)}, status=400)
+    if b['until'] == 'lora' and not _kohya()[0]:
+        return web.json_response({'error': "kohya sd-scripts isn't next to ComfyUI on this computer, so it can't train the LoRA here."}, status=400)
+    j = {'id': uuid.uuid4().hex[:10], 'state': 'running', 'started': time.time(), 'prog': 0, 'step': 'turn', 'text': 'Starting…', 'done': []}
+    for k in ('char', 'until', 'turn_graph', 'shot_graphs', 'redraw', 'src', 'keep_front', 'angles_prefix', 'shots_prefix', 'trigger', 'who',
+              'dataset_dir', 'ckpt', 'steps', 'per_shot', 'set_min', 'set_max', 'pc'):
+        if k in b:
+            j[k] = b[k]
+    j['shots'] = [{'say': x.get('say', ''), 'tags': x.get('tags', '')} for x in b.get('shots', [])]
+    j['trigger'] = re.sub(r'[^\w]+', '_', j.get('trigger') or 'character').strip('_') or 'character'
+    AUTO['jobs'] = AUTO['jobs'][-9:] + [j]
+    _auto_save()
+    _auto_start()
+    return web.json_response({'id': j['id']})
+
+
+@routes.post('/renderdeck/auto/stop')
+async def auto_stop(request):
+    b = await request.json()
+    for j in AUTO['jobs']:
+        if j['id'] == b.get('id') and j['state'] == 'running':
+            j['stop'] = True
+            # clips still waiting in the queue go too
+            pids = [x['pid'] for x in j.get('shots', []) if x.get('pid') and not x.get('clip')]
+            if pids:
+                try:
+                    async with aiohttp.ClientSession() as s:
+                        await _post(s, _me() + '/queue', {'delete': pids})
+                except Exception:
+                    pass
+            _auto_save()
+    return web.json_response({'ok': True})
+
+
+_auto_load()
+if any(x['state'] == 'running' for x in AUTO['jobs']):  # a run left going when ComfyUI restarted carries on
+    try:
+        PromptServer.instance.loop.call_soon_threadsafe(_auto_start)
+    except Exception as e:
+        print('[Render Deck auto] resume later:', e)
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}

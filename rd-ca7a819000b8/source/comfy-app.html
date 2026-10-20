@@ -162,6 +162,11 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .prow:last-child{border-bottom:0}
 .prow .pst{width:18px;text-align:center;color:var(--accent)}
 .prow small{color:var(--dim)}
+.autobox{margin-top:16px;padding:12px 14px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line));border-radius:14px;background:color-mix(in srgb,var(--accent) 6%,var(--panel2))}
+.autobox .lblrow{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.autobox .lblrow small{color:var(--dim)}
+.autobox .pbar{height:6px;border-radius:9px;background:var(--panel);margin:10px 0 4px;overflow:hidden}
+.autobox .pbar i{display:block;height:100%;background:var(--accent);transition:width .8s linear}
 .chref{display:block;width:100%;padding:0;margin-top:6px;border-radius:14px;overflow:hidden;background:#fff;border:1px solid var(--line)}
 .chref img{display:block;width:100%;max-height:52vh;object-fit:contain}
 .chref.empty{background:var(--bg);color:var(--soft);padding:40px 12px;font-weight:800;border-style:dashed}
@@ -506,7 +511,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.71'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.72'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5061,6 +5066,79 @@ async function pvUse(c, again){
     PV.slot = null; save(); drawChars(); buzz(); toast(slotName(slot) + (again ? ' redrawn' : ' swapped') + ' ✨'); }
   catch(err){ toast("Couldn't do it: " + err.message, true); }
 }
+// ---------- ⚡ Auto run: the whole chain on Render (the helper's /renderdeck/auto), with the phone app closed ----------
+// The app builds the same graphs it would run itself and hands them over with how far to go; Render makes the turnaround,
+// finds the angles, makes every training shot, picks 15–30 pictures, captions them and trains the LoRA with kohya.
+// While the card is open the app reads the run back and puts its pictures on the card, so every step can be redone by hand.
+const AUTO_UNTIL = [['angles','Angles'],['shots','Training shots'],['pick','Picked set'],['lora','Finished LoRA']];
+const AUTO_STEP = {turn:'Making the turnaround', angles:'Finding the angles', shots:'Training shots', pick:'Picking the training set', train:'Training the LoRA'};
+const AUTOS = {}; // pc url -> last /renderdeck/auto answer
+async function autoStart(c){
+  const k = kitTurn(); if(k.why){ toast(k.why, true); return; }
+  const src = pipeSrc(c) || turnSource(c); if(!src){ toast('It needs a Reference or Front picture first', true); return; }
+  const until = c.autoUntil || 'lora', lines = shotLines(c);
+  if(!S.test){ try{ const r = await fetch(k.url + '/renderdeck/auto'); if(!r.ok) throw 0; const j = await r.json(); if(j.busy){ toast(pcName(k.url) + ' is already on an auto run', true); return; }
+      if(until==='lora' && !j.kohya){ toast(pcName(k.url) + " doesn't have kohya next to ComfyUI, so it can't train the LoRA there", true); return; } }
+    catch(e){ toast(pcName(k.url) + ' needs the helper update for auto runs (the PowerShell line in the thread)', true); return; } }
+  if(!confirm('Run everything up to ' + AUTO_UNTIL.find(x => x[0]===until)[1].toLowerCase() + ' on ' + pcName(k.url) + '? It keeps going with the app closed.')) return;
+  let img = src.img;
+  if(!S.test && src.home!==k.url){ const g = {x:{class_type:'LoadImage', inputs:{image:src.img}}}; await copyPictures(g, src.home, pcOf(k.url), uid('au')); img = g.x.inputs.image; }
+  const turn = turnVideoGraph(k, img, c, src.angle==='front', null, {lora:'', src}), refs = [src, {angle:'right'}, {angle:'back'}], dn = redrawW(c);
+  const body = {char:c.name || 'character', until, pc:k.url, src:img, keep_front:src.angle==='front',
+    turn_graph:{graph:turn.g, save:turn.save}, angles_prefix:anglesPrefix(c), shots_prefix:shotPrefix(c),
+    shots:lines.map(l => ({say:l.say, tags:l.tags})), shot_graphs:lines.map(l => { const r = shotGraph(k, [img, '@SIDE', '@BACK'], c, shotPrompt(c, refs, l.say), shotPrefix(c) + '_clip_' + uid('a')); return {graph:r.g, save:r.save}; }),
+    redraw:dn ? (r => ({graph:r.g, save:r.save}))(redrawGraph(k.oi, '@IMG', c, '@TAGS', anglesPrefix(c), dn)) : null,
+    trigger:trigOf(c), who:((c.tags || '').match(/\b(1girl|1boy|1other)\b/) || [])[0] || '', dataset_dir:(S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c),
+    ckpt:trainCkpt(k.oi), steps:1200, per_shot:shotN(c), set_min:SET_RANGE.min, set_max:SET_RANGE.max};
+  if(S.test){ AUTOS.last = body; c.auto = {id:'test', pc:'test', until, state:'running', prog:0, text:'Starting…'}; save(); drawChars(); return; }
+  try{ const r = await fetch(k.url + '/renderdeck/auto/start', {method:'POST', headers:JSONH, body:JSON.stringify(body)}), j = await r.json();
+    if(!r.ok) throw new Error(j.error || r.status);
+    c.auto = {id:j.id, pc:k.url, until, state:'running', prog:0, text:'Starting…', at:Date.now()}; c.pipe = {}; save(); drawChars(); buzz();
+    toast('Auto run started on ' + pcName(k.url) + '. You can close the app.'); autoPoll(); }
+  catch(e){ toast("Couldn't start the auto run: " + e.message, true); }
+}
+// the run's results onto the card: the angles as Build it all's, the training shots with their frames, the picks
+function autoImport(c, j){
+  const pc = c.auto.pc, A = c.auto, img = f => (f.subfolder ? f.subfolder + '/' : '') + f.filename + ' [output]', key = f => f.subfolder + '/' + f.filename;
+  Object.assign(A, {state:j.state, step:j.step, text:j.text, prog:j.prog, done:j.done || [], lora:j.lora || '', note:j.pick_note || '', gpu:j.gpu_c, ts:j.train_step, tn:j.train_steps});
+  const have = new Set(c.views.map(v => v.auto));
+  if(j.angles && (j.done || []).includes('angles') && !have.has(key(Object.values(j.angles)[0]))){
+    c.views = c.views.filter(v => !v.pipe);
+    for(const [slot, f] of Object.entries(j.angles)) c.views.push({id:uid('v'), angle:f.angle, img:img(f), url:viewUrl(f, pc), home:pc, pipe:true, slot, cap:PIPE_CAP, auto:key(f)});
+    c.pipe = {done:{turn1:1, sides:1, redraw:1}, turn1:j.turn ? {url:viewUrl(j.turn, pc), pc} : null, at:Object.fromEntries(Object.entries(j.angles).map(([s, f]) => [s, f.at]))};
+  }
+  (j.shots || []).forEach((x, i) => { const id = 'a' + j.id + '_' + i; let sh = (c.shots = c.shots || []).find(y => y.id===id);
+    if(!sh){ sh = {id, say:x.say, tags:x.tags}; c.shots.push(sh); }
+    if(x.err && !sh.view) sh.err = x.err;
+    if(x.clip) sh.url = viewUrl(x.clip, pc), sh.pc = pc;
+    (x.frames || []).forEach((f, n) => { if(have.has(key(f))) return; const v = {id:uid('v'), angle:'ref', img:img(f), url:viewUrl(f, pc), home:pc, shot:id, shotN:n, cap:x.tags, made:true, auto:key(f)};
+      c.views = c.views.filter(y => !(y.shot===id && (y.shotN || 0)===n)); c.views.push(v); if(!n){ sh.view = v.id; sh.at = f.at; } delete sh.err; }); });
+  if(j.picks && !A.picked){ const pk = new Set(j.picks.map(key)); c.views.forEach(v => { if(v.auto) v.noTrain = !pk.has(v.auto); }); A.picked = true; }
+  save();
+}
+async function autoPoll(){
+  const cs = S.chars.filter(c => c.auto && c.auto.pc!=='test' && (c.auto.state==='running' || !c.auto.synced)); if(!cs.length) return;
+  for(const pc of [...new Set(cs.map(c => c.auto.pc))]){
+    try{ AUTOS[pc] = await (await fetch(pc + '/renderdeck/auto', {cache:'no-store'})).json(); }catch(e){ continue; }
+    for(const c of cs.filter(c => c.auto.pc===pc)){ const j = (AUTOS[pc].jobs || []).find(x => x.id===c.auto.id); if(!j) continue;
+      autoImport(c, j); if(j.state!=='running') c.auto.synced = true; }
+  }
+  save(); if($('#charSheet').classList.contains('open')) drawChars();
+}
+setInterval(() => { if(document.visibilityState==='visible' && $('#charSheet').classList.contains('open')) autoPoll(); }, 6000);
+function boxAuto(c){
+  const A = c.auto, run = A && A.state==='running';
+  let h = `<div class="autobox"><div class="lblrow"><b>⚡ Auto run</b><small>on ${esc(S.test ? 'Render' : pcName(kitTurn().url || ''))}, with the app closed</small></div>`;
+  if(run){ const mins = A.step==='train' && A.tn ? Math.round((A.tn - A.ts) * 1.9 / 60) : null;
+    return h + `<div class="pbar"><i style="width:${(100 * (A.prog || 0)).toFixed(1)}%"></i></div>
+      <p class="note">${esc(AUTO_STEP[A.step] || 'Starting')}${A.text && A.step!=='train' ? ': ' + esc(A.text) : ''}${A.step==='train' && A.tn ? ' · step ' + A.ts + ' of ' + A.tn + (mins!=null ? ', about ' + mins + ' min left' : '') + (A.gpu ? ' · GPU ' + A.gpu + '°C' : '') : ''}</p>
+      <div class="btnrow"><button class="btn" data-ch="autostop" ${A.stopping ? 'disabled' : ''}>${A.stopping ? 'Stopping…' : '⏹ Stop the auto run'}</button></div></div>`; }
+  if(A && A.state==='done') h += `<p class="note okline"><b>✓ Done</b>${A.lora ? ': the LoRA <b>' + esc(A.lora) + '</b> is in ' + esc(pcName(A.pc)) + "'s LoRAs. Its trigger word is " + esc(trigOf(c)) + '.' : '.'}${A.note ? ' ' + esc(A.note) : ''}</p>`;
+  else if(A && A.state==='error') h += `<p class="warn">The auto run stopped at ${esc((AUTO_STEP[A.step] || '').toLowerCase())}: ${esc(A.text)}</p>`;
+  else if(A && A.state==='stopped') h += '<p class="note">The auto run was stopped. What it made is on the card.</p>';
+  return h + `<div class="row"><label>Run until</label>${seg('autoUntil', AUTO_UNTIL, c.autoUntil || 'lora')}</div>
+    <div class="btnrow"><button class="btn hot" data-ch="autogo">▶ Start auto run</button></div></div>`;
+}
 // ---------- 🎞 Training shots: MiniMax acts the character out, the sharpest frame of each clip joins the card ----------
 // For a LoRA that knows the character in any pose, not just the turnaround's A-pose. Each line is an action ("what they
 // do | its Danbooru tags"): MiniMax H3 makes a short clip from the character's picture, side and back (no style LoRA),
@@ -5334,6 +5412,7 @@ function drawChars(){
     <textarea data-cf="tags" style="min-height:64px" placeholder="1boy, short hair, black hair, red eyes, black coat, gloves" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(c.tags)}</textarea>
     <p class="note">Danbooru tags that describe them: hair, eyes, outfit, build. A scene puts these in their part of the picture.</p>
     ${sugBox(c)}
+    ${boxAuto(c)}
     <div class="chsteps">
     ${step('build', '1 · Turnaround and angles', P.run ? 'Working on it…' : done.redraw ? '✓ Six angles ready' : P.err ? '⚠ Stopped: open to redo' : 'Not done yet', boxPipe(c))}
     ${step('shots', '2 · Training shots', SHOT_RUN[c.id] ? 'Making them…' : made ? '✓ ' + made + ' made' + (lostShots(c).length ? ' · ' + lostShots(c).length + ' missing' : '') : 'None yet', boxShots(c))}
@@ -5345,7 +5424,7 @@ function drawChars(){
   showTurn(); showPv(); drawPipeBar(); showSv(); drawShotBar();
 }
 // the step a character is on: the turnaround and angles first, then the training shots, then picking the set
-function curStep(c){ const P = c.pipe || {};
+function curStep(c){ const P = c.pipe || {}; if(c.auto && c.auto.state==='running') return c.auto.step==='shots' ? 'shots' : c.auto.step==='pick' || c.auto.step==='train' ? 'set' : 'build';
   if(P.run || !(P.done || {}).sides) return 'build';
   if(SHOT_RUN[c.id] || !(c.shots || []).some(sh => sh.view && c.views.some(v => v.id===sh.view))) return 'shots';
   return 'set'; }
@@ -5376,7 +5455,7 @@ $('#charBody').onclick = async e => {
   const c = S.chars.find(x => x.id===CH.id), act = t.dataset.ch;
   if(t.dataset.open){ CH.id = t.dataset.open; CH.sel = null; CH.want = null; CH.step = null;
     const x = S.chars.find(y => y.id===CH.id); if(CH.from && x){ addView(x, viewFromGallery(CH.from)); CH.from = null; toast('Added to ' + (x.name || 'the character')); }
-    drawChars(); buzz(); return; }
+    drawChars(); autoPoll(); buzz(); return; }
   if(act==='new'){ const x = newChar(); CH.id = x.id; CH.sel = null; CH.want = null; CH.step = null; if(CH.from){ addView(x, viewFromGallery(CH.from)); CH.from = null; } save(); drawChars(); buzz(); setTimeout(() => { const i = $('#charBody [data-cf=name]'); i && i.focus(); }, 50); return; }
   if(act==='list'){ CH.id = null; drawChars(); return; }
   if(!c) return;
@@ -5397,6 +5476,9 @@ $('#charBody').onclick = async e => {
   else if(t.dataset.tview){ openViewer('tset', c.views, c.views.findIndex(x => x.id===t.dataset.tview)); return; }
   else if(act==='tpickall'){ c.views.forEach(v => delete v.noTrain); }
   else if(act==='shotgo'){ const n = shotLines(c).length; if(!confirm('Make ' + n + ' training ' + (n===1 ? 'shot' : 'shots') + ' on ' + pcName(kitTurn().url || '') + '? About ' + Math.round(n * SHOT_EST() / 60) + ' minutes.')) return; SV.id = null; runShots(c); return; }
+  else if(act==='autogo'){ autoStart(c); return; }
+  else if(act==='autostop'){ if(c.auto && confirm('Stop the auto run? What it made so far stays.')){ c.auto.stopping = true; if(c.auto.pc!=='test') fetch(c.auto.pc + '/renderdeck/auto/stop', {method:'POST', headers:JSONH, body:JSON.stringify({id:c.auto.id})}).catch(() => {}); else c.auto.state = 'stopped'; } }
+  else if(t.dataset.seg==='autoUntil'){ c.autoUntil = t.dataset.v; }
   else if(act==='shotfind'){ CH.adopted = Date.now(); findShots(c); return; }
   else if(act==='shotstop'){ if(SHOT_RUN[c.id]) SHOT_RUN[c.id].stop = true; toast('It stops once this shot is done'); }
   else if(t.dataset.shot){ SV.id = SV.id===t.dataset.shot ? null : t.dataset.shot; SV.moved = false; }

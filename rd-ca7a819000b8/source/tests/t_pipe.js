@@ -93,6 +93,19 @@ const fs = require('fs'), path = require('path');
       const th = 2 * Math.PI * i / (TV_LEN - 1), w = 60 + 300 * Math.abs(Math.cos(th + 0.25)); x.fillStyle = '#334'; x.fillRect(288 - w / 2, 100, w, 800); return grab(cv); });
     try{ return await findSides('x'); } finally { clipFrames = real; } });
   ok(Math.abs(sides.right - 26.6) <= 2 && Math.abs(sides.left - 88.1) <= 2 && Math.abs(sides.back - 57.4) <= 3 && sides.front <= 9 && sides.three > sides.front && sides.three < sides.right && sides.three_b > sides.left, 'angles found at the narrowest silhouettes: ' + JSON.stringify(sides));
+  // ⚡ auto run: the graphs go to Render with how far to go, and the run's results come back onto the card
+  await page.evaluate(() => { S.chars.push({id:'c9', name:'Ava', tags:'1girl, red hair', color:'#fff', views:[{id:'r9', angle:'ref', img:'ava.png', url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', home:'test'}]}); CH.id = 'c9'; CH.step = null; save(); drawChars(); });
+  ok(await page.$('#charBody [data-ch="autogo"]') && /Finished LoRA/.test(await page.textContent('#charBody .autobox')), 'the card offers an auto run up to a chosen step');
+  await page.click('#charBody [data-seg="autoUntil"][data-v="pick"]'); await page.click('#charBody [data-ch="autogo"]');
+  const ab = await page.evaluate(() => ({until:AUTOS.last.until, n:AUTOS.last.shots.length, g:JSON.stringify(AUTOS.last.shot_graphs[0].graph), tg:JSON.stringify(AUTOS.last.turn_graph.graph), trig:AUTOS.last.trigger, who:AUTOS.last.who, red:AUTOS.last.redraw}));
+  ok(ab.until==='pick' && ab.n===12 && /@SIDE/.test(ab.g) && /@BACK/.test(ab.g) && /ava\.png/.test(ab.g) && /ava\.png/.test(ab.tg) && ab.trig==='ava' && ab.who==='1girl' && ab.red===null, 'the auto run sends the turnaround, 12 shots with the angle pictures to fill in, no redraw (bigger only)');
+  ok(/Making the turnaround|Starting/.test(await page.textContent('#charBody .autobox')), 'the card shows the run going');
+  const im = await page.evaluate(() => { const c = S.chars.find(x => x.id==='c9'); c.auto = {id:'j1', pc:'http://pc', state:'running'}; const f = (n, x) => Object.assign({filename:n + '.png', subfolder:'Output_Render/RenderDeck/characters/angles'}, x);
+    autoImport(c, {id:'j1', state:'done', step:'pick', done:['turn', 'angles', 'shots', 'pick'], turn:{filename:'t.mp4', subfolder:'s'},
+      angles:{front:f('a1', {angle:'front', at:2}), back:f('a2', {angle:'back', at:58})}, shots:[{say:'sits', tags:'sitting', clip:{filename:'c.mp4', subfolder:'s'}, frames:[f('s1', {at:40}), f('s2', {at:88})]}, {say:'waves', tags:'waving', err:'out of memory'}],
+      picks:[f('a1'), f('a2'), f('s1')]});
+    return {pipe:!!(c.pipe.done.sides && c.pipe.done.redraw), angles:c.views.filter(v => v.pipe).length, shots:c.shots.length, err:c.shots[1].err, sv:c.views.filter(v => v.shot).map(v => v.cap + (v.noTrain ? '-' : '+')).join(), img:c.views.find(v => v.pipe).img, step:curStep(c)}; });
+  ok(im.pipe && im.angles===2 && im.shots===2 && im.err==='out of memory' && im.sv==='sitting+,sitting-' && /\[output\]$/.test(im.img) && im.step==='set', 'the run comes back as angles, shots and picks on the card: ' + JSON.stringify(im));
   ok(logs.length===0, 'no errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' failed' : 'all passed'); process.exit(fail.length ? 1 : 0);
