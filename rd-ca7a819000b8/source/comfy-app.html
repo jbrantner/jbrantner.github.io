@@ -494,6 +494,8 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
   <div class="lbl">Model downloads</div>
   <div class="seg" id="speedSeg" style="--c:var(--accent)"></div>
   <p class="note">How fast your computers download models and copy them to each other. Pick Gentle if the house WiFi starts dropping again.</p>
+  <div class="seg" id="syncSeg" style="--c:var(--accent);margin-top:8px"></div>
+  <p class="note">Keep both in step: every half hour each computer copies the models and LoRAs the other has and it lacks. Only when needed: a copy starts only when a render needs a model (or from ⇄ Check now).</p>
   <div class="lbl">Setup on the render computer</div>
   <ol class="steps">
     <li>Install <b>Tailscale</b> on the render computer and on your iPhone, and sign in to the same account on both.</li>
@@ -513,7 +515,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.76'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.77'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1854,6 +1856,7 @@ function render(){
   renderBlocks(); drawStrip();
   $('#prompt').value = S.prompt; $('#negative').value = S.negative; drawPromptHead();
   $('#speedSeg').innerHTML = [['full', 'Full speed'], ['gentle', 'Gentle (2 MB/s)']].map(([v, t]) => `<button data-speed="${v}" class="${(S.speed || 'full')===v ? 'on' : ''}">${t}</button>`).join('');
+  $('#syncSeg').innerHTML = [['auto', 'Keep both in step'], ['need', 'Only when needed']].map(([v, t]) => `<button data-sync="${v}" class="${(S.autoSync || 'auto')===v ? 'on' : ''}">${t}</button>`).join('');
   $('#batchSeg').innerHTML = [1,2,4].map(n => `<button data-batch="${n}" class="${S.batch===n?'on':''}">${n}</button>`).join('');
   $('#server').value = S.server;
   $('#srvSeg').innerHTML = S.servers.map((x,k) => `<button data-srv="${k}" class="${x.url===base()?'on':''}">${esc(x.name)}</button>`).join('') + (S.servers.length ? '<button data-srv="new">＋ Another</button>' : '');
@@ -1945,6 +1948,10 @@ $('#speedSeg').onclick = async e => { const t = e.target.closest('[data-speed]')
   if(S.test) return;
   const res = await Promise.all(allPcs().filter(p => p.online).map(p => fetch(p.url + '/renderdeck/speed', {method:'POST', headers:JSONH, body:JSON.stringify({mbps:S.speed==='gentle' ? 2 : 0})}).then(r => r.ok ? null : pcName(p.url)).catch(() => pcName(p.url))));
   const bad = res.filter(Boolean); toast(bad.length ? bad.join(' and ') + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : (S.speed==='gentle' ? 'Downloads held to 2 MB/s' : 'Downloads at full speed'), !!bad.length); };
+$('#syncSeg').onclick = async e => { const t = e.target.closest('[data-sync]'); if(!t) return; S.autoSync = t.dataset.sync; save(); render();
+  if(S.test) return;
+  const res = await Promise.all(allPcs().filter(p => p.online).map(p => fetch(p.url + '/renderdeck/speed', {method:'POST', headers:JSONH, body:JSON.stringify({auto:S.autoSync!=='need'})}).then(async r => r.ok && 'auto' in await r.json() ? null : pcName(p.url)).catch(() => pcName(p.url))));
+  const bad = res.filter(Boolean); toast(bad.length ? bad.join(' and ') + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : (S.autoSync==='need' ? 'Models copy only when a render needs one' : 'Your computers keep their models in step every half hour'), !!bad.length); };
 const speedTxt = gb => S.speed==='gentle' ? 'about ' + Math.round(gb * 1024 / 2 / 60) + ' minutes at the gentle 2 MB/s' : 'at full speed';
 $('#batchSeg').onclick = e => { const t = e.target.closest('[data-batch]'); if(!t) return; S.batch = +t.dataset.batch; save(); render(); };
 $('#prompt').oninput = e => { S.prompt = e.target.value; save(); drawPromptHead(); };
@@ -5597,7 +5604,7 @@ function kitOrbit(){
   const fl = q => !!(q.oi.MiniMaxH3ImageToVideo && pick(q.oi, 'UNETLoader', 'unet_name', /fl2v/i));
   // a free computer first (Jordan 2026-10-20: an orbit sat waiting behind Render's work while Main was free), then the
   // FL2V model (more faithful), then the shorter queue, then the render computer
-  const busy = q => (q.load || 0) > 0;
+  const busy = q => (q.load || 0) > 0 || /training/i.test(q.why || ''); // the farm says so while kohya has its GPU
   const p = pcs.sort((a, b) => busy(a) - busy(b) || fl(b) - fl(a) || (a.load || 0) - (b.load || 0) || (b.url===farmHost()) - (a.url===farmHost()))[0];
   if(!p) return {why: !S.servers.length ? 'Connect to your render computer first' : !allPcs().some(x => x.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
     : 'None of your computers that are on has the MiniMax H3 video nodes: update ComfyUI'};
@@ -5708,7 +5715,19 @@ function obBar(){
 // where it sits in that computer's queue (also covers orbits queued before the live steps, which send none)
 async function liveQueue(id, pc){
   try{ const q = await (await fetch(pc + '/queue')).json(), L = LIVE[id] = LIVE[id] || {}, pend = (q.queue_pending || []).slice().sort((a, b) => a[0] - b[0]), i = pend.findIndex(x => x[1]===id);
-    L.pc = pc; L.running = (q.queue_running || []).some(x => x[1]===id); L.ahead = i < 0 ? 0 : i + (q.queue_running || []).length; }catch(e){}
+    L.pc = pc; L.running = (q.queue_running || []).some(x => x[1]===id); L.ahead = i < 0 ? 0 : i + (q.queue_running || []).length;
+    const o = OB(); if(L.ahead && o.making && o.making.id===id && !o.moving){ const k = kitOrbit(); if(!k.why && k.url!==pc && !(pcOf(k.url).load > 0)) await moveOrbit(o, k); } }catch(e){}
+}
+// waiting behind other work while another computer is free (Jordan 2026-10-20: "divide and conquer… automatically"):
+// take it out of the busy one's queue and make it on the free one
+async function moveOrbit(o, k){
+  const m = o.making; o.moving = true;
+  try{ await fetch(m.pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:[m.id]})});
+    const q = await (await fetch(m.pc + '/queue')).json();
+    if([...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===m.id)) return; // it started meanwhile: leave it
+    delete o.making; delete LIVE[m.id]; save(); toast(pcName(m.pc) + ' is busy, so the orbit moved to ' + pcName(k.url));
+    await makeOrbit();
+  }finally{ delete o.moving; }
 }
 let obTicks = 0;
 setInterval(() => { const o = OB(); if(!(o.making || o.fin) || document.visibilityState!=='visible') return;
@@ -5744,9 +5763,10 @@ async function makeOrbit(){
 async function waitOrbit(o){
   const m = o.making; if(!m || OB_RUN.has(m.id)) return; OB_RUN.add(m.id);
   try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, true);
+    if(o.making!==m) return; // moved to a free computer meanwhile
     Object.assign(o, {clip:{url:viewUrl(f, m.pc), pc:m.pc, src:o.src, dir:o.dir || 'right'}, frame:1000});
     o.clips = [o.clip].concat((o.clips || []).filter(c => c.url!==o.clip.url)).slice(0, 8); toast('The orbit is ready: slide to the angle you like ✨'); buzz(); }
-  catch(err){ o.err = "Couldn't make the orbit: " + err.message; }
+  catch(err){ if(o.making===m) o.err = "Couldn't make the orbit: " + err.message; }
   finally{ OB_RUN.delete(m.id); if(o.making===m) delete o.making; save(); drawOrbit(); }
 }
 async function finishOrbit(){

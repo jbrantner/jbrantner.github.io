@@ -166,6 +166,23 @@ async def main():
         H._st('R2')['oi'] = {'ControlNetLoader': {'input': {'required': {'control_net_name': [['promax.safetensors']]}}}}
         ok('promax' in H._fit('M', {'graph': g, 'home': 'R'})[2] and not H._fit('R2', {'graph': g, 'home': 'R'})[2], 'no ControlNets at all means it lacks ProMax')
         ok('only' in H._fit('M', {'graph': {}, 'home': 'M', 'pin': 'R'})[2], 'a pinned render only runs on its computer')
+        # every half hour the farm has each computer copy what the other has (⚙ › Model downloads, on by default)
+        g = lambda lora: {'1': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'sdxl.safetensors'}},
+                          '2': {'class_type': 'LoraLoader', 'inputs': {'lora_name': lora, 'strength_model': 1}},
+                          '3': {'class_type': 'KSampler', 'inputs': {'seed': 1}}, '9': {'class_type': 'SaveImage', 'inputs': {}}}
+        async def direct(u): return True
+        H._direct = direct
+        H.SPEED_FILE = '/tmp/render_deck_speed_test.json'
+        if os.path.exists(H.SPEED_FILE): os.remove(H.SPEED_FILE)
+        R.syncs.clear(); M.syncs.clear(); H._last_compare = 0
+        for p in pcs: H._st(p['url'])['copies'] = []
+        await add(1, 'pixel.safetensors', 'c'); await asyncio.sleep(2)
+        ok(MU in R.syncs and RU in M.syncs, 'the timed compare asks each computer to copy from the other: %r %r' % (R.syncs, M.syncs))
+        R.syncs.clear(); M.syncs.clear(); await add(1, 'pixel.safetensors', 'd'); await asyncio.sleep(2)
+        ok(not R.syncs and not M.syncs, 'not again within half an hour')
+        json.dump({'mbps': 0, 'auto': False}, open(H.SPEED_FILE, 'w')); H._last_compare = 0
+        await add(1, 'pixel.safetensors', 'e'); await asyncio.sleep(2)
+        ok(not R.syncs and not M.syncs and not H._auto_sync(), 'switched off: no timed compare')
     for rn in runners: await rn.cleanup()
     print(('%d FAILED' % len(fails)) if fails else 'all passed')
     os._exit(1 if fails else 0)

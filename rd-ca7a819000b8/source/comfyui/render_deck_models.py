@@ -42,13 +42,26 @@ SYNC_MBPS = 2  # the gentle speed, MB a second: at 15 the house WiFi kept droppi
 SPEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_speed.json')
 
 
+def _settings():
+    try:
+        return json.load(open(SPEED_FILE, encoding='utf-8'))
+    except Exception:
+        return {}
+
+
 def _speed():
     """MB a second that downloads and copies are held to, 0 for full speed. Set from the app (⚙ › Download speed);
     full speed unless the gentle speed was picked."""
     try:
-        return float(json.load(open(SPEED_FILE, encoding='utf-8')).get('mbps', 0))
+        return float(_settings().get('mbps', 0))
     except Exception:
         return 0.0
+
+
+def _auto_sync():
+    """Whether the farm compares the computers' models every half hour and copies what one lacks (⚙ › Model downloads).
+    On unless switched off: Jordan asked for it back on 2026-10-20 once the WiFi was fixed."""
+    return _settings().get('auto', True) is not False
 routes = PromptServer.instance.routes
 
 
@@ -190,16 +203,18 @@ async def _download(j, file_url, path, retries=RETRIES):
 
 @routes.get('/renderdeck/speed')
 async def get_speed(request):
-    return web.json_response({'mbps': _speed(), 'gentle': SYNC_MBPS})
+    return web.json_response({'mbps': _speed(), 'gentle': SYNC_MBPS, 'auto': _auto_sync()})
 
 
 @routes.post('/renderdeck/speed')
 async def set_speed(request):
     b = await request.json()
-    mbps = max(0.0, float(b.get('mbps', 0)))
+    cur = _settings()
+    mbps = max(0.0, float(b.get('mbps', cur.get('mbps', 0))))
+    auto = bool(b['auto']) if 'auto' in b else _auto_sync()
     with open(SPEED_FILE, 'w', encoding='utf-8') as f:
-        json.dump({'mbps': mbps}, f)
-    return web.json_response({'mbps': mbps})
+        json.dump({'mbps': mbps, 'auto': auto}, f)
+    return web.json_response({'mbps': mbps, 'auto': auto})
 
 
 @routes.get('/renderdeck/jobs')
@@ -853,6 +868,9 @@ def _finish(job, status, **kw):
     FARM['done'] = (FARM['done'] + [job])[-200:]
 
 
+_last_compare = time.time() - 1800 + 120  # the first compare two minutes after the helper starts
+
+
 async def _farm_round(s):
     pcs = [p['url'] for p in FARM['pcs']]
     await asyncio.gather(*[_look(s, u) for u in pcs])
@@ -923,8 +941,19 @@ async def _farm_round(s):
                 st['pending'] = [j['prompt_id']]
             changed = True
             break
-    # No timed compare for now: copies only start when a render needs a model a computer lacks (above), or from
-    # the app's Check now. A timed one, started again after each WiFi drop, is the suspect for the house WiFi dropping.
+    # Every half hour (and soon after the helper starts) each computer copies the models and LoRAs the other has and it
+    # lacks, one file at a time, at the picked speed, only over a direct Tailscale link. Off in ⚙ › Model downloads:
+    # then copies only start when a render needs a model (above) or from the app's Check now. (A timed compare restarted
+    # after each WiFi drop was the suspect when the house WiFi kept dropping on 2026-10-18, before the router fix.)
+    global _last_compare
+    on = [u for u in pcs if _st(u)['online']]
+    if (_auto_sync() and len(on) > 1 and time.time() - _last_compare > 1800
+            and not any(_st(u)['copies'] for u in pcs)):
+        _last_compare = time.time()
+        for dst in on:
+            for src in on:
+                if src != dst:
+                    await _sync_pair(s, dst, src)
     if changed:
         _farm_save()
 

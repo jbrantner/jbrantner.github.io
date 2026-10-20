@@ -41,13 +41,19 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
   const WS = []; await page.routeWebSocket(/\.test\/ws/, ws => { WS.push(ws); });
-  const sent = [], ups = [], polls = {};
+  const sent = [], ups = [], polls = {}, EXTRA = [], mainSent = [];
+  await page.route('https://main.test/**', r => { const u = new URL(r.request().url());
+    if(u.pathname==='/upload/image') return r.fulfill({ json:{name:'main_up.png', subfolder:'', type:'input'} });
+    if(u.pathname==='/prompt'){ mainSent.push(JSON.parse(r.request().postData())); return r.fulfill({ json:{prompt_id:'m1', number:0, node_errors:{}} }); }
+    if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[['0', 'm1']], queue_pending:[]} });
+    return r.fulfill({ status:404, body:'' }); });
   await page.route(RENDER + '/**', async r => {
     const u = new URL(r.request().url()), cors = {'Access-Control-Allow-Origin':'*'};
     if(u.pathname==='/object_info') return r.fulfill({ json:OI() });
     if(u.pathname==='/view' && /\.webm$/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'video/webm', body:VID, headers:cors });
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG, headers:cors });
-    if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:sent.map((s, i) => [0, 'o' + (i + 1)]).filter(x => (polls[x[1]] || 0) < 2)} });
+    if(u.pathname==='/queue' && r.request().method()==='POST'){ const del = JSON.parse(r.request().postData()).delete || []; EXTRA.splice(0, EXTRA.length, ...EXTRA.filter(x => !del.includes(x))); return r.fulfill({ json:{} }); }
+    if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:sent.map((s, i) => [0, 'o' + (i + 1)]).filter(x => (polls[x[1]] || 0) < 2).concat(EXTRA.map((x, i) => [100 + i, x]))} });
     if(u.pathname==='/upload/image'){ ups.push(1); return r.fulfill({ json:{name:'up_' + ups.length + '.png', subfolder:'', type:'input'} }); }
     if(u.pathname==='/prompt'){ sent.push(JSON.parse(r.request().postData())); return r.fulfill({ json:{prompt_id:'o' + sent.length, number:0, node_errors:{}} }); }
     if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9), g = sent[+id.slice(1) - 1].prompt, ks = Object.keys(g);
@@ -155,6 +161,16 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     S.servers.push({name:'Main', url:M}); Object.assign(pcOf(M), {online:true, oi, load:0}); pcOf(srv).load = 2;
     const a = kitOrbit(); pcOf(srv).load = 0; const b = kitOrbit(); S.servers = S.servers.filter(x => x.url!==M); delete PCS[M];
     return (a.url===M && !a.fl && /is busy/.test(a.because) && b.url===srv && b.fl) || JSON.stringify([a.url, a.because, b.url]); }, RENDER)===true, 'busy Render: the orbit goes to the free computer, and says why');
+  // a waiting orbit moves itself to a free computer
+  ok(await page.evaluate(async ([srv]) => { const M = 'https://main.test', oi = JSON.parse(JSON.stringify(pcOf(srv).oi));
+    S.servers.push({name:'Main', url:M}); Object.assign(pcOf(M), {online:true, oi, load:0}); pcOf(srv).load = 3;
+    const o = OB(); OB_RUN.add('wait1'); o.making = {pc:srv, id:'wait1', save:'1', t:Date.now(), prefix:'x', mins:'5', smp:'7'}; save(); return true; }, [RENDER]), 'set up: an orbit waiting on busy Render, Main free');
+  EXTRA.push('busy1', 'wait1');
+  await page.evaluate(srv => liveQueue('wait1', srv), RENDER);
+  await page.waitForFunction(() => OB().making && OB().making.pc==='https://main.test', null, {timeout:8000}).catch(() => {});
+  ok(!EXTRA.includes('wait1') && mainSent.length===1 && await page.evaluate(() => OB().making && OB().making.pc==='https://main.test' && !OB().err), 'it is taken out of Render\'s queue and made on Main: ' + JSON.stringify([EXTRA, mainSent.length, await page.evaluate(() => [OB().making && OB().making.pc, OB().err])]));
+  await page.evaluate(srv => { OB_RUN.add(OB().making.id); delete OB().making; pcOf(srv).load = 0; S.servers = S.servers.filter(x => x.url!=='https://main.test'); delete PCS['https://main.test']; save(); }, RENDER);
+  EXTRA.length = 0;
   // a live bar with time left, from ComfyUI's step progress over the websocket
   ok(sent.slice(-1)[0] && sent.every(x => x.client_id && x.client_id!=='rd-orbit'), "orbits are queued with the app's own client id, so ComfyUI sends it their progress");
   await page.evaluate(() => { OB_RUN.add('zz'); const o = OB(); o.making = {pc:base(), id:'zz', save:'1', t:Date.now() - 60000, prefix:'x', mins:'4 to 5', smp:'7'}; save(); drawOrbit(); });
