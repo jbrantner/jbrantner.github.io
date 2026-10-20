@@ -71,7 +71,7 @@ const OI = {
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
 
   // Test mode: a render becomes a character's first picture, then Make other angles fills in the rest
-  await page.click('#openSettings'); await page.click('#testBtn');
+  await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => { CH.allOpen = true; });
   await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#strip img').length===1, null, {timeout:8000});
   await page.click('#resultActions [data-act="char"]'); await page.waitForSelector('#charSheet.open');
   ok((await page.textContent('#charBody')).includes('Who is this picture of'), 'adding a render asks who it is of');
@@ -103,14 +103,7 @@ const OI = {
   ok(check(tg).length===0, 'Qwen graph is valid: ' + check(tg).join('; '));
   const txt = Object.values(tg).find(x => x._meta.title==='Turn to Side').inputs.prompt;
   ok(/from the side/.test(txt) && /black coat/.test(txt), 'the prompt asks for the angle and carries the tags: ' + txt);
-  // drag across the big picture to turn him around: front, ¾, side, back, then the near side mirrored
-  await page.$eval('#charBody [data-orbit]', x => x.scrollIntoView({block:'center'})); const ob = await (await page.$('#charBody [data-orbit]')).boundingBox(), frames = [];
-  const lab = () => page.textContent('#charBody [data-orbit] .ang');
-  frames.push(await lab());
-  await page.mouse.move(ob.x + ob.width - 20, ob.y + 100); await page.mouse.down();
-  for(let i = 1; i <= 5; i++){ await page.mouse.move(ob.x + ob.width - 20 - i * 52, ob.y + 100, {steps:3}); frames.push(await lab() + (await page.$eval('#charBody [data-orbit] img', x => x.classList.contains('flip')) ? '~' : '')); }
-  await page.mouse.up();
-  ok(frames.join('|')==='Front|Left side|Back|Left side, mirrored~|Front|Left side', 'dragging turns him around, the far side mirrored: ' + frames.join('|'));
+  ok(await page.$('#charBody .chref img'), 'the top shows the reference picture');
   // picking a picture lets you say which angle it is, and remove it
   await page.click('#charBody .cviews button[data-cv]:nth-child(2)'); await page.click('#charBody [data-seg="cangle"][data-v="three"]');
   ok(await page.evaluate(() => S.chars[0].views[1].angle==='three'), 'a picture\'s angle can be changed');

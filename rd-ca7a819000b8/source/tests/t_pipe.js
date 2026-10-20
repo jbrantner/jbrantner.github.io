@@ -14,7 +14,7 @@ const fs = require('fs'), path = require('path');
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
-  await page.click('#openSettings'); await page.click('#testBtn'); await page.waitForTimeout(300);
+  await page.click('#openSettings'); await page.click('#testBtn'); await page.waitForTimeout(300); await page.evaluate(() => { CH.allOpen = true; });
   await page.evaluate(() => { closeSheets();
     S.chars = [{id:'c1', name:'Mira', tags:'1girl, red jacket', color:'#ff5ca8', views:[{id:'v0', angle:'ref', img:'mira.png', url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', home:'test'}]}]; save();
     window.GRAPHS = []; const mk = makeTurn; makeTurn = async (c, m, o) => { await mk(c, m, o); GRAPHS.push({model:!!m, g:MTV.last}); }; });

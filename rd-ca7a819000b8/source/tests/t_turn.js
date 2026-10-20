@@ -57,7 +57,7 @@ function firstPixel(buf){ // the first pixel of a PNG (row 0's first pixel is ne
       return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:{[save]:{images:[{filename:'Levi_00001_.webm', subfolder:'RenderDeck/characters/turn', type:'output'}], animated:[true]}}}} }); }
     r.fulfill({ status:404, body:'' });
   });
-  await page.goto('https://app.test/');
+  await page.goto('https://app.test/'); await page.evaluate(() => { CH.allOpen = true; });
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.click('#openSettings'); await page.fill('#server', RENDER + '/'); await page.evaluate(() => document.querySelector('#connectBtn').click());
   await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on'));
