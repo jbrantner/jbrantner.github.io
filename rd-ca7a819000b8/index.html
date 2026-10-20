@@ -547,7 +547,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.79'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.80'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4669,7 +4669,7 @@ function box3d(c){
 // half way their back and three quarters their left side. Scrub the clip on the card and add frames as pictures.
 const TV_W = 576, TV_H = 1024, TV_LEN = 124; // portrait, ~5 s at 24 fps (124 is the shortest length it was trained on)
 const TV_AT = {front:0.03, three:0.125, right:0.25, back:0.5, left:0.75}; // where each angle usually is in the turn // where each angle usually is in the turn
-const FAKETV = {MiniMaxH3ReferenceToVideo:{input:{required:{}}}, UNETLoader:{input:{required:{unet_name:[['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors']], weight_dtype:[['default']]}}},
+const FAKETV = {MiniMaxH3ReferenceToVideo:{input:{required:{}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors']]}}}, UNETLoader:{input:{required:{unet_name:[['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors']]}}}, CLIPLoader:{input:{required:{clip_name:[['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors']]}}}, SaveVideo:{input:{required:{}}},
   ModelPatchLoader:{input:{required:{name:[['minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors']]}}}, MiniMaxH3FunControlNetApply:{input:{required:{}}}, LoadVideo:{input:{required:{}}}, GetVideoComponents:{input:{required:{}}}};
@@ -5146,7 +5146,7 @@ async function autoStart(c){
     shots:lines.map(l => ({say:l.say, tags:l.tags})), shot_graphs:lines.map(l => { const r = shotGraph(k, [img, '@SIDE', '@BACK'], c, shotPrompt(c, refs, l.say), shotPrefix(c) + '_clip_' + uid('a')); return {graph:r.g, save:r.save}; }),
     redraw:dn ? (r => ({graph:r.g, save:r.save}))(redrawGraph(k.oi, '@IMG', c, '@TAGS', anglesPrefix(c), dn)) : null,
     trigger:trigOf(c), who:((c.tags || '').match(/\b(1girl|1boy|1other)\b/) || [])[0] || '', dataset_dir:(S.hidden ? HIDDEN : 'RenderDeck') + '/datasets/' + trigOf(c),
-    ckpt:trainCkpt(k.oi), steps:1200, per_shot:shotN(c), set_min:SET_RANGE.min, set_max:SET_RANGE.max};
+    ckpt:autoCkpt(c, k), steps:1200, per_shot:shotN(c), set_min:SET_RANGE.min, set_max:SET_RANGE.max};
   if(S.test){ AUTOS.last = body; c.auto = {id:'test', pc:'test', until, state:'running', prog:0, text:'Starting…'}; save(); drawChars(); return; }
   try{ const r = await fetch(k.url + '/renderdeck/auto/start', {method:'POST', headers:JSONH, body:JSON.stringify(body)}), j = await r.json();
     if(!r.ok) throw new Error(j.error || r.status);
@@ -5183,6 +5183,9 @@ async function autoPoll(){
   save(); if($('#charSheet').classList.contains('open')) drawChars();
 }
 setInterval(() => { if(document.visibilityState==='visible' && $('#charSheet').classList.contains('open')) autoPoll(); }, 6000);
+// the checkpoint the LoRA is trained on: the card's pick when that PC has it, else the usual Illustrious one
+function autoCkpt(c, k){ const list = k.oi && k.oi.CheckpointLoaderSimple ? combo(k.oi.CheckpointLoaderSimple, 'ckpt_name') : [];
+  return c.trainCkpt && list.includes(c.trainCkpt) ? c.trainCkpt : k.oi ? trainCkpt(k.oi) : ''; }
 function boxAuto(c){
   const A = c.auto, run = A && A.state==='running';
   let h = `<div class="autobox"><div class="lblrow"><b>⚡ Auto run</b><small>on ${esc(S.test ? 'Render' : pcName(kitTurn().url || ''))}, with the app closed</small></div>`;
@@ -5193,7 +5196,10 @@ function boxAuto(c){
   if(A && A.state==='done') h += `<p class="note okline"><b>✓ Done</b>${A.lora ? ': the LoRA <b>' + esc(A.lora) + '</b> is in ' + esc(pcName(A.pc)) + "'s LoRAs. Its trigger word is " + esc(trigOf(c)) + '.' : '.'}${A.note ? ' ' + esc(A.note) : ''}</p>`;
   else if(A && A.state==='error') h += `<p class="warn">The auto run stopped at ${esc((AUTO_STEP[A.step] || '').toLowerCase())}: ${esc(A.text)}</p>`;
   else if(A && A.state==='stopped') h += '<p class="note">The auto run was stopped. What it made is on the card.</p>';
+  const k = kitTurn(), cks = k.oi && k.oi.CheckpointLoaderSimple ? combo(k.oi.CheckpointLoaderSimple, 'ckpt_name') : [], ck = autoCkpt(c, k);
   return h + `<div class="row"><label>Run until</label>${seg('autoUntil', AUTO_UNTIL, c.autoUntil || 'lora')}</div>
+    ${(c.autoUntil || 'lora')==='lora' && cks.length ? `<div class="row"><label>Train on</label><div class="grow"><select data-cf="trainCkpt">${cks.map(n => `<option value="${esc(n)}" ${n===ck ? 'selected' : ''}>${esc(baseName(n))}</option>`).join('')}</select></div></div>
+      <p class="note" style="margin:-2px 0 0 92px">The checkpoint the LoRA learns on; it looks best on that one later.</p>` : ''}
     <div class="btnrow"><button class="btn hot" data-ch="autogo">▶ Start auto run</button></div></div>`;
 }
 // ---------- 🎞 Training shots: MiniMax acts the character out, the sharpest frame of each clip joins the card ----------
