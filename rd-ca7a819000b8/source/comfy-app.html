@@ -6,7 +6,7 @@
   --bg:#111217; --panel:#1b1d23; --panel2:#24262e; --line:#30333c;
   --text:#e8eaee; --soft:#a3aab6; --dim:#7d8592;
   --accent:#ff5ca8; --accent-ink:#1b0b14; --cyan:#33c2c9;
-  --model:#b892ff; --samp:#ffb35c; --lora:#ff6fae; --cn:#6fc0ff; --pic:#ffd75e; --up:#5cffb0;
+  --model:#b892ff; --samp:#ffb35c; --lora:#ff6fae; --cn:#6fc0ff; --pic:#ffd75e; --up:#5cffb0; --orb:#7fe0e6;
   --bad:#f2777f; --good:#5cffb0;
   --display:"Pixelify Sans","Courier New",ui-monospace,monospace;
   --body:"Nunito",ui-rounded,"SF Pro Rounded",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -511,7 +511,7 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-20.73'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-20.74'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -522,6 +522,8 @@ const TYPES = {
   pose:   {name:'Pose board', emo:'B', c:'--cn', desc:'Drag stick figures into a pose, one per character', needs:['ControlNetLoader','ControlNetApplyAdvanced','LoadImage'], one:true},
   pic:    {name:'Start from picture', emo:'S', c:'--pic', desc:'Repaint an image you pick', needs:['LoadImage','VAEEncode','ImageScale'], one:true},
   up:     {name:'Upscale', emo:'U', c:'--up', desc:'Make the result bigger', needs:['ImageScaleBy'], one:true},
+  // a tool, not part of the render: MiniMax H3 swings the camera round a picture (same state as the 📷 Change angle sheet)
+  orbit:  {name:'Change angle', emo:'A', c:'--orb', desc:'Swing the camera round a picture, pick a frame, touch it up', one:true, tool:true},
 };
 const SIZES = {512:[512,512], 768:[768,768], 1024:[1024,1024]};
 const SHAPES = {square:[1,1], tall:[3,4], wide:[4,3], phone:[9,16]};
@@ -1694,6 +1696,7 @@ function defaults(type){
   if(type==='cn') return {id,type,on:true,model:'',image:'',preview:'',prep:'none',strength:0.8,start:0,end:1};
   if(type==='pic') return {id,type,on:true,image:'',preview:'',change:0.6};
   if(type==='pose') return {id,type,on:true,model:'',figs:[],sel:null,strength:0.8,end:0.65,image:'',imgFor:''};
+  if(type==='orbit') return {id,type,on:true};
   if(type==='up') return {id,type,on:true,mode:(!info || info.nodes.has('UltimateSDUpscale')) ? 'redraw' : 'simple',scale:2,model:'',denoise:0.35};
 }
 function addBlock(type, quiet){
@@ -1767,6 +1770,7 @@ function blockBody(b){
     ${slider('start','Starts at',0,1,0.05,b.start)}
     ${slider('end','Ends at',0,1,0.05,b.end)}`;
   if(b.type==='pose') return poseBody(b, I);
+  if(b.type==='orbit') return '<div data-obhost></div>';
   if(b.type==='pic') return `<div class="thumb">${b.preview ? `<img src="${esc(b.preview)}" alt="">` : '<div class="ph">＋</div>'}<button class="chipbtn" data-do="pick">${b.image?'Change picture':'Pick a picture'}</button></div>
     ${slider('change','How much changes',0.05,1,0.05,b.change)}
     <p class="note">Low keeps your picture, high repaints almost everything.</p>`;
@@ -1785,12 +1789,12 @@ function blockBody(b){
 }
 function renderBlocks(){
   $('#blocks').innerHTML = S.blocks.map(b => { const T = TYPES[b.type];
-    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pose' ? poseSum(b) : b.type==='pic' ? Math.round(b.change*100)+'% change' :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
+    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pose' ? poseSum(b) : b.type==='pic' ? Math.round(b.change*100)+'% change' : b.type==='orbit' ? obSum() :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
     return `<div class="block ${b.on?'':'off'} ${S.open[b.id]?'open':''} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
       <div class="bhead"><div class="emo">${T.emo}</div><h3>${T.name}<small>${esc(sub)}</small></h3>
-      ${T.fixed ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button><button class="x" data-do="del" aria-label="Remove">✕</button>`}<span class="chev" aria-hidden="true">›</span></div>
+      ${T.fixed ? '' : `${T.tool ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button>`}<button class="x" data-do="del" aria-label="Remove">✕</button>`}<span class="chev" aria-hidden="true">›</span></div>
       <div class="body">${blockBody(b)}</div></div>`; }).join('');
-  justAdded = 0; showAdded(); drawBoards();
+  justAdded = 0; showAdded(); drawBoards(); if(S.blocks.some(b => b.type==='orbit')) drawOrbit();
 }
 // activation words of every LoRA that is switched on
 function loraWords(){ return S.blocks.filter(b => b.type==='lora' && b.on && b.lora).map(b => S.loraWords[b.lora]).filter(Boolean).join(', '); }
@@ -5551,6 +5555,14 @@ const OB_LEN = 124;
 const OB = () => S.hidden ? (S.orbitH = S.orbitH || {}) : (S.orbitN = S.orbitN || {}); // each workstation has its own
 const obPrefix = what => (S.hidden ? HIDDEN : 'RenderDeck') + '/angles/' + what;
 const OB_RUN = new Set(); // making / finishing states polled in this app
+// where the orbit UI is drawn: the sheet, and the Change angle block when the recipe has one. OB_HOST = the one last used.
+const obHosts = () => [$('#orbitBody'), ...document.querySelectorAll('#blocks [data-obhost]')].filter(Boolean);
+let OB_HOST = null;
+const obIn = sel => ((OB_HOST && OB_HOST.isConnected) ? OB_HOST : $('#orbitBody')).querySelector(sel);
+function obSum(){ const o = OB(); return !o.src ? 'no picture yet' : o.making ? 'making the orbit…' : o.clip ? 'pick a frame' : 'camera goes ' + (o.dir || 'right'); }
+function obSetSrc(url){ const o = OB();
+  if(url && url!==o.src && o.making){ toast('An orbit is still being made: it stays open until it is ready', true); return; }
+  if(url && url!==o.src){ Object.assign(o, {src:url, clip:null, frame:null, done:o.done || []}); delete o.err; save(); } }
 function obEnd(h, v, orbit, tilt){
   const p = [];
   if(h){ const near = h > 0 ? 'left' : 'right'; // the camera going right round someone facing it ends up on their left
@@ -5638,15 +5650,23 @@ function obFinishGraph(k, img, dn, words){
     let cn = [add('ControlNetLoader', {control_net_name:k.cn}), 0];
     if(k.oi.SetUnionControlNetType && /promax|union/i.test(k.cn)) cn = [add('SetUnionControlNetType', {control_net:cn, type:'canny/lineart/anime_lineart/mlsd'}), 0];
     const ap = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:cn, image:[lines,0], vae:[ck,2], strength:0.8, start_percent:0, end_percent:1});
-    pos = [ap,0]; neg = [ap,1]; }
+    pos = [ap,0]; neg = [ap,1];
+    // line art only holds the shapes: on Jordan's first try (2026-10-20) a 0.2 redraw still washed the colours out and
+    // changed her eye colour, so the union ControlNet's tile mode also holds the frame's own colours and small details
+    if(k.oi.SetUnionControlNetType && /promax|union/i.test(k.cn)){
+      const tile = [add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:k.cn}), 0], type:'tile'}), 0];
+      const at = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:tile, image:[big,0], vae:[ck,2], strength:0.6, start_percent:0, end_percent:1});
+      pos = [at,0]; neg = [at,1]; } }
   const smp = add('KSampler', {model:[ck,0], positive:pos, negative:neg, latent_image:[add('VAEEncode', {pixels:[big,0], vae:[ck,2]}), 0],
-    seed:Math.floor(Math.random() * 1e9), steps:25, cfg:5, sampler_name:'euler', scheduler:'normal', denoise:dn});
-  return {g, save:add('SaveImage', {images:[add('VAEDecode', {samples:[smp,0], vae:[ck,2]}), 0], filename_prefix:obPrefix('finished')})};
+    seed:Math.floor(Math.random() * 1e9), steps:25, cfg:4, sampler_name:'euler', scheduler:'normal', denoise:dn});
+  let out = [add('VAEDecode', {samples:[smp,0], vae:[ck,2]}), 0];
+  // and the colours are put back to the frame's afterwards (KJNodes' Color Match, when that computer has it)
+  if(k.oi.ColorMatch) out = [add('ColorMatch', {image_ref:[big,0], image_target:out, method:'mkl'}), 0];
+  return {g, save:add('SaveImage', {images:out, filename_prefix:obPrefix('finished')})};
 }
 let OB_SENT = []; // Test mode: the graphs made
 function openOrbit(url){
-  const o = OB(); if(url && url!==o.src){ Object.assign(o, {src:url, clip:null, frame:null, done:[]}); delete o.err; save(); }
-  closeSheets(); openSheet('#orbitSheet'); drawOrbit();
+  obSetSrc(url); OB_HOST = $('#orbitBody'); closeSheets(); openSheet('#orbitSheet'); drawOrbit();
 }
 async function obSize(url){ const im = new Image(); im.crossOrigin = 'anonymous';
   await new Promise((ok, no) => { im.onload = ok; im.onerror = () => no(new Error("the picture couldn't be loaded")); im.src = url; });
@@ -5675,12 +5695,13 @@ async function makeOrbit(){
 async function waitOrbit(o){
   const m = o.making; if(!m || OB_RUN.has(m.id)) return; OB_RUN.add(m.id);
   try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, true);
-    Object.assign(o, {clip:{url:viewUrl(f, m.pc), pc:m.pc}, frame:1000}); toast('The orbit is ready: slide to the angle you like ✨'); buzz(); }
+    Object.assign(o, {clip:{url:viewUrl(f, m.pc), pc:m.pc, src:o.src, dir:o.dir || 'right'}, frame:1000});
+    o.clips = [o.clip].concat((o.clips || []).filter(c => c.url!==o.clip.url)).slice(0, 8); toast('The orbit is ready: slide to the angle you like ✨'); buzz(); }
   catch(err){ o.err = "Couldn't make the orbit: " + err.message; }
   finally{ OB_RUN.delete(m.id); if(o.making===m) delete o.making; save(); drawOrbit(); }
 }
 async function finishOrbit(){
-  const o = OB(), k = kitOrbit(), vid = $('#orbitBody video[data-ob]');
+  const o = OB(), k = kitOrbit(), vid = obIn('video[data-ob]');
   if(k.why){ toast(k.why, true); return; } if(!o.clip){ return; }
   delete o.err; o.busy = 'Grabbing the frame…'; drawOrbit(); buzz();
   try{
@@ -5700,10 +5721,11 @@ async function finishOrbit(){
   }catch(err){ delete o.busy; o.err = "Couldn't finish the frame: " + err.message; save(); drawOrbit(); }
 }
 function drawOrbit(){
-  const o = OB(), k = kitOrbit(), dir = o.dir || 'right', [h, v] = OB_STEP[dir], body = $('#orbitBody'); if(!body) return;
+  const o = OB(), k = kitOrbit(), dir = o.dir || 'right', [h, v] = OB_STEP[dir], hosts = obHosts(); if(!hosts.length) return;
   if(o.making && !OB_RUN.has(o.making.id)) setTimeout(() => waitOrbit(o), 0);
-  let x = '<h2>📷 Change the camera angle</h2>';
-  if(!o.src){ body.innerHTML = x + '<p class="note">Open a render and tap 📷 Change angle under it.</p>'; return; }
+  const put = x => hosts.forEach(el => { el.innerHTML = (el.id==='orbitBody' ? '<h2>📷 Change the camera angle</h2>' : '') + x; });
+  let x = `<div class="btnrow"><button class="chipbtn" data-ob="pick">📱 ${o.src ? 'Another picture' : 'Pick a picture'}</button><button class="chipbtn" data-ob="shown">🖼 Use the render on screen</button></div>`;
+  if(!o.src){ put(x + '<p class="note">Pick a picture, or open a render and tap 📷 Change angle under it.</p>'); return; }
   x += `<div class="opad">${OB_DIRS.map(d => d ? `<button data-obdir="${d[0]}" class="${d[0]===dir ? 'on' : ''}" aria-label="Camera goes ${d[0]}">${d[1]}</button>` : `<div class="omid"><img src="${esc(o.src)}" alt=""></div>`).join('')}</div>`;
   const oseg = (key, pairs, cur) => `<div class="seg">${pairs.map(([val, t]) => `<button data-obseg="${key}" data-v="${val}" class="${String(val)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`;
   if(h) x += `<div class="row"><label>Round by</label>${oseg('deg', [[45, '45°'], [90, '90°'], [135, '135°'], [180, '180°']], o.deg || 90)}</div>`;
@@ -5712,7 +5734,7 @@ function drawOrbit(){
     <div class="row"><label>In the picture</label><div class="grow"><input type="text" data-obf="scene" placeholder="optional, e.g. a hooded girl on a neon street" value="${esc(o.scene || '')}"></div></div>`;
   if(o.err) x += `<p class="warn">${esc(o.err)}</p>`;
   if(k.why) x += `<p class="note">${esc(k.why)}.</p>`;
-  else if(o.making) x += `<p class="note">🎬 Swinging the camera round on ${esc(pcName(o.making.pc))}… ${esc(o.making.mins || 'a few')} minutes. You can close the app; it carries on.</p>`;
+  else if(o.making) x += `<p class="note">🎬 Swinging the camera round on ${esc(pcName(o.making.pc))}: started ${Math.max(0, Math.round((Date.now() - o.making.t) / 60000))} min ago, about ${esc(o.making.mins || 'a few')} minutes in all. You can close the app; it carries on, and the orbit opens here (and in the Change angle block) when it's ready.</p>`;
   else if(o.busy) x += `<p class="note">${esc(o.busy)}</p>`;
   else x += `<p class="note">MiniMax H3 ${k.fl ? 'FL2V' : ''} on ${esc(pcName(k.url))} pins this picture as the first frame and swings the camera ${esc(dir)} round the frozen scene. About ${esc(k.mins)} minutes.</p>
     <div class="btnrow"><button class="btn${o.clip ? '' : ' hot'}" data-ob="make">🎬 ${o.clip ? 'Make another' : 'Make the orbit'}</button></div>`;
@@ -5725,11 +5747,14 @@ function drawOrbit(){
       <p class="note" style="margin:-2px 0 0 92px">${k.cn ? 'ControlNet (anime line art) holds the shapes while Illustrious cleans it up.' : 'No union ControlNet on this computer, so the touch-up is a plain light redraw.'}</p>
       <div class="btnrow"><button class="btn hot" data-ob="finish" ${o.busy ? 'disabled' : ''}>✨ Finish this frame</button></div>`;
   }
+  const old = (o.clips || []).filter(c => !o.clip || c.url!==o.clip.url);
+  if(old.length) x += `<div class="lbl">Earlier orbits</div><div class="cviews">${old.map(c => `<button data-obclip="${esc(c.url)}" aria-label="Open the ${esc(c.dir)} orbit"><img src="${esc(c.src)}" alt="" loading="lazy"></button>`).join('')}</div>`;
   if((o.done || []).length) x += `<div class="lbl">New angles</div><div class="cviews">${o.done.map(u => `<button data-obopen="${esc(u)}"><img src="${esc(u)}" alt="" loading="lazy"></button>`).join('')}</div>`;
-  body.innerHTML = x; showOrbitClip();
+  put(x); hosts.forEach(showOrbitClip);
+  const sub = document.querySelector('#blocks .block[data-id] [data-obhost]'); if(sub){ const s = sub.closest('.block').querySelector('.bhead small'); if(s) s.textContent = obSum(); }
 }
-function showOrbitClip(){
-  const o = OB(), vid = $('#orbitBody video[data-ob]'), sl = $('#orbitBody [data-obt]'); if(!vid || !sl) return;
+function showOrbitClip(host){
+  const o = OB(), vid = host.querySelector('video[data-ob]'), sl = host.querySelector('[data-obt]'); if(!vid || !sl) return;
   const go = () => { if(vid.duration) vid.currentTime = Math.min(vid.duration - 0.01, vid.duration * sl.value / 1000); };
   const url = vid.dataset.src;
   TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b));
@@ -5738,22 +5763,36 @@ function showOrbitClip(){
   sl.oninput = () => { o.frame = +sl.value; go(); };
   sl.onchange = () => save();
 }
-$('#orbitBody').addEventListener('click', e => {
-  const o = OB(), t = e.target.closest('[data-obdir],[data-obseg],[data-ob],[data-obopen]'); if(!t) return;
-  if(t.dataset.obdir){ o.dir = t.dataset.obdir; }
+function obClick(e){
+  const o = OB(), t = e.target.closest('[data-obdir],[data-obseg],[data-ob],[data-obopen],[data-obclip]'); if(!t) return;
+  OB_HOST = t.closest('#orbitBody,[data-obhost]') || OB_HOST;
+  if(t.dataset.ob==='pick'){ obFile.value = ''; obFile.click(); return; }
+  if(t.dataset.ob==='shown'){ const g = S.gallery[shownIdx]; if(!g){ toast('No render on screen yet', true); return; } obSetSrc(g.url); drawOrbit(); buzz(); return; }
+  if(t.dataset.obclip){ if(o.making){ toast('An orbit is still being made', true); return; }
+    const c = (o.clips || []).find(x => x.url===t.dataset.obclip); if(c) Object.assign(o, {src:c.src, dir:c.dir, clip:c, frame:1000}); }
+  else if(t.dataset.obdir){ o.dir = t.dataset.obdir; }
   else if(t.dataset.obseg){ o[t.dataset.obseg] = parseFloat(t.dataset.v); }
   else if(t.dataset.obopen){ window.open(t.dataset.obopen, '_blank'); return; }
   else if(t.dataset.ob==='make'){ if(o.clip && !confirm('Make another orbit? The one you have stays in your renders.')) return; makeOrbit(); return; }
   else if(t.dataset.ob==='finish'){ finishOrbit(); return; }
-  else if(t.dataset.ob==='back' || t.dataset.ob==='fwd'){ const sl = $('#orbitBody [data-obt]'); if(!sl) return;
+  else if(t.dataset.ob==='back' || t.dataset.ob==='fwd'){ const sl = obIn('[data-obt]'); if(!sl) return;
     sl.value = Math.max(0, Math.min(1000, +sl.value + (t.dataset.ob==='fwd' ? 1 : -1) * 1000 / (OB_LEN - 1))); sl.oninput(); save(); return; }
   else return;
   save(); drawOrbit(); buzz();
-});
-$('#orbitBody').addEventListener('change', e => { const f = e.target.dataset.obf; if(f){ OB()[f] = e.target.value; save(); } });
+}
+const obChange = e => { const f = e.target.dataset.obf; if(f){ OB()[f] = e.target.value; save(); } };
+['#orbitBody', '#blocks'].forEach(id => { $(id).addEventListener('click', obClick); $(id).addEventListener('change', obChange); });
+// a picture from this phone goes to the main computer's input folder; the orbit sends it on to the video computer
+const obFile = Object.assign(document.createElement('input'), {type:'file', accept:'image/*', hidden:true, id:'obFile'}); document.body.appendChild(obFile);
+obFile.onchange = async () => { const f = obFile.files[0]; if(!f) return;
+  if(!info){ toast('Connect first (or use Test mode) so the picture has somewhere to go', true); return; }
+  try{ const u = await uploadImage(f), cut = u.name.lastIndexOf('/');
+    obSetSrc(S.test ? u.local : viewUrl({filename:u.name.slice(cut + 1), subfolder:cut < 0 ? '' : u.name.slice(0, cut), type:'input'})); drawOrbit(); toast('Picture ready'); }
+  catch(err){ toast(err.message, true); } };
 $('#vOrbit').onclick = () => { const u = viewUrl(lib.cur, lib.cur.src); closeViewer(); openOrbit(u); };
 
 // ---------- start ----------
+[S.orbitN, S.orbitH].forEach(o => { if(o && o.making) waitOrbit(o); }); // an orbit made while the app was closed comes in
 render(); show(S.gallery.length ? 0 : -1);
 if(usesTags()) loadTags().then(() => updateIdeas());
 if(S.test) testMode(); else if(S.server) connect();

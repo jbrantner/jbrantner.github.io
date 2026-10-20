@@ -15,7 +15,7 @@ const DEF = {
   CreateVideo:[['images','fps'],1], SaveVideo:[['video','filename_prefix','format'],0],
   ImageScaleBy:[['image','upscale_method','scale_by'],1], CheckpointLoaderSimple:[['ckpt_name'],3], CLIPTextEncode:[['clip','text'],1], AnimeLineArtPreprocessor:[['image'],1],
   ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
-  VAEEncode:[['pixels','vae'],1], KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], VAEDecode:[['samples','vae'],1], SaveImage:[['images','filename_prefix'],0],
+  VAEEncode:[['pixels','vae'],1], ColorMatch:[['image_ref','image_target','method'],1], KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], VAEDecode:[['samples','vae'],1], SaveImage:[['images','filename_prefix'],0],
 };
 function check(g){ const errs = [];
   for(const [id,n] of Object.entries(g)){ const d = DEF[n.class_type]; if(!d){ errs.push(id+': unknown '+n.class_type); continue; }
@@ -31,7 +31,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_int8_convrot.safetensors','minimax_h3_video_vae_fp16.safetensors'])}}},
   ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}},
   MiniMaxH3ImageToVideo:{input:{required:{}}}, MiniMaxH3ReferenceToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, SaveVideo:{input:{required:{}}}, SaveImage:{input:{required:{}}},
-  CreateVideo:{input:{required:{}}}, LoadImage:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}}});
+  ColorMatch:{input:{required:{method:C(['mkl','hm'])}}}, CreateVideo:{input:{required:{}}}, LoadImage:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}}});
 (async () => {
   const html = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + fs.readFileSync(path.join(__dirname, '..', 'comfy-app.html'),'utf8');
   const browser = await chromium.launch();
@@ -92,6 +92,10 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   ok(by('KSampler')[0].inputs.denoise===0.2 && by('ImageScaleBy')[0].inputs.scale_by===1.5 && by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='oneObsession_v24.safetensors', 'Illustrious at 0.2, 1.5x bigger');
   ok(by('SetUnionControlNetType')[0].inputs.type==='canny/lineart/anime_lineart/mlsd' && by('ControlNetApplyAdvanced')[0].inputs.strength===0.8 && g[by('ControlNetApplyAdvanced')[0].inputs.image[0]].class_type==='AnimeLineArtPreprocessor', 'ControlNet ProMax holds the anime line art at 0.8');
   ok(by('SaveImage')[0].inputs.filename_prefix==='RenderDeck/angles/finished', 'saved under RenderDeck/angles/finished');
+  { const ap = by('ControlNetApplyAdvanced'), t = ap[1] && g[g[ap[1].inputs.control_net[0]].inputs.control_net ? ap[1].inputs.control_net[0] : ''];
+    ok(ap.length===2 && t && t.inputs.type==='tile' && g[ap[1].inputs.image[0]].class_type==='ImageScaleBy' && ap[1].inputs.strength===0.6, 'a tile ControlNet holds the frame\'s colours and details at 0.6');
+    const cm = by('ColorMatch')[0], sv = by('SaveImage')[0];
+    ok(cm && cm.inputs.method==='mkl' && g[cm.inputs.image_ref[0]].class_type==='ImageScaleBy' && g[sv.inputs.images[0]].class_type==='ColorMatch' && by('KSampler')[0].inputs.cfg===4, 'the colours are matched back to the frame (Color Match, mkl), cfg 4'); }
   ok(await page.evaluate(() => /finished_00001_.*RenderDeck\/angles/.test(decodeURIComponent(S.gallery[0].url)) && shownIdx===0), 'the new angle lands in the preview strip: ' + await page.evaluate(() => S.gallery[0].url + ' ' + shownIdx));
   // Hidden: same screen, its own picture and folders
   await page.evaluate(srv => { switchMode(); S.gallery = [{url:srv + '/view?filename=h_00001_.png&subfolder=Hidden%2Frender&type=output', seed:1, prompt:'', t:Date.now()}]; save(); drawStrip(); show(0); }, RENDER);
@@ -102,6 +106,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.waitForSelector('#orbitBody video[data-ob]', {timeout:15000});
   g = sent[2].prompt;
   ok(by('SaveVideo')[0].inputs.filename_prefix==='Hidden/angles/orbit' && /crane-down/.test(by('MiniMaxH3ImageToVideo')[0].inputs.prompt) && !/arc shot/.test(by('MiniMaxH3ImageToVideo')[0].inputs.prompt), 'Hidden saves into Hidden/angles; down is a crane-down');
+  ok(await page.evaluate(() => (OB().clips || []).length===1 && OB().clip.src.includes('h_00001_')), 'the orbit is kept for later');
   await page.click('#orbitBody [data-obseg="dn"][data-v="0"]'); await page.click('#orbitBody [data-ob="finish"]');
   await page.waitForFunction(() => (OB().done || []).length===1, null, {timeout:15000});
   g = sent[3].prompt;
@@ -110,6 +115,40 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   FL = false; await page.evaluate(async () => { const p = pcOf(base()); p.oi = await (await fetch(base() + '/object_info')).json(); });
   ok(await page.evaluate(() => { const k = kitOrbit(), g = orbitGraph(k, 'x.png', {dir:'right', deg:90}, 576, 1024).g, n = Object.values(g), gd = n.find(x => x.class_type==='BasicGuider'), ad = g[gd.inputs.conditioning[0]];
     return !k.fl && k.steps===4 && ad.class_type==='MiniMaxH3AddGuide' && ad.inputs.frame_idx===0 && /^<Picture 1> is the first frame/.test(n.find(x => x.class_type==='MiniMaxH3ReferenceToVideo').inputs.prompt); }), 'without FL2V: hybrid Turbo, 4 steps, picture as reference pinned at frame 0');
+  FL = true; await page.evaluate(async () => { const p = pcOf(base()); p.oi = await (await fetch(base() + '/object_info')).json(); });
+  // 📷 Change angle as a block: in Add a block, same arrows / slider / finish, Hidden's own state, no effect on the render
+  await page.evaluate(() => closeSheets()); await page.click('#addBtn');
+  ok(await page.$('#tray [data-add="orbit"]:not([disabled])'), 'Add a block offers Change angle');
+  await page.click('#tray [data-add="orbit"]');
+  await page.waitForSelector('#blocks [data-obhost] .opad');
+  ok(await page.$('#blocks [data-obhost] video[data-ob]') && /h_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')) && !(await page.$('#blocks .block[data-id] .tog')) || false, 'the block shows the same orbit (Hidden picture and clip), with no on/off switch');
+  await page.evaluate(() => { const b = S.blocks.find(x => x.type==='orbit'); S.open[b.id] = true; renderBlocks(); });
+  await page.waitForFunction(() => { const v = document.querySelector('#blocks [data-obhost] video[data-ob]'); return v && v._ready; }, null, {timeout:9000});
+  await page.click('#blocks [data-obhost] [data-ob="finish"]');
+  await page.waitForFunction(() => (OB().done || []).length===2, null, {timeout:15000});
+  ok(sent.length===5 && Object.values(sent[4].prompt).some(n => n.inputs.filename_prefix==='Hidden/angles/finished'), 'Finish works from the block');
+  ok(await page.evaluate(() => !JSON.stringify(buildGraph({})).includes('MiniMax')), "the block isn't part of the render");
+  await page.evaluate(() => switchMode());
+  ok(!(await page.$('#blocks [data-obhost]')), "Hidden's block stays in Hidden");
+  await page.evaluate(() => closeSheets()); await page.click('#addBtn'); await page.click('#tray [data-add="orbit"]');
+  await page.waitForSelector('#blocks [data-obhost] .opad');
+  ok(/hood_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')), 'the normal block has the normal orbit');
+  await page.evaluate(srv => { S.gallery.unshift({url:srv + '/view?filename=new_00001_.png&subfolder=RenderDeck&type=output', seed:2, prompt:'', t:Date.now()}); save(); drawStrip(); show(0); }, RENDER);
+  await page.click('#blocks [data-obhost] [data-ob="shown"]');
+  ok(/new_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')) && !(await page.$('#blocks [data-obhost] video[data-ob]')), 'Use the render on screen swaps the picture in');
+  await page.setInputFiles('#obFile', {name:'phone.png', mimeType:'image/png', buffer:PNG});
+  await page.waitForFunction(() => /up_\d+\.png.*type=input/.test(OB().src), null, {timeout:5000});
+  ok(true, 'a picture from the phone is uploaded and used');
+  // a picture from the phone replaced the orbit; the earlier one is a tap away
+  await page.click('#blocks [data-obhost] [data-obclip]');
+  await page.waitForSelector('#blocks [data-obhost] video[data-ob]');
+  ok(/hood_00001_/.test(await page.getAttribute('#blocks [data-obhost] .omid img', 'src')), 'Earlier orbits reopens an orbit with its picture and slider');
+  // an orbit still being made when the app closes comes in when it opens again
+  await page.evaluate(([srv, sv]) => { const o = OB(); o.making = {pc:srv, id:'o1', save:sv, t:Date.now() - 60000, prefix:'RenderDeck/angles/orbit', mins:'5'}; o.clip = null; o.clips = []; save(); },
+    [RENDER, Object.keys(sent[0].prompt).find(k => sent[0].prompt[k].class_type==='SaveVideo')]);
+  ok(/Swinging the camera round on .*started 1 min ago/.test(await page.evaluate(() => { drawOrbit(); return document.querySelector('#blocks [data-obhost]').textContent; })), 'while it is made, the block says so and how long ago it started');
+  await page.reload(); await page.waitForFunction(() => OB().clip && !OB().making, null, {timeout:15000});
+  ok(await page.$('#blocks [data-obhost] video[data-ob]'), 'after reopening the app the finished orbit is in the block');
   // from the library viewer too
   ok(await page.$('#vLib #vOrbit') && await page.$('#vGal [data-act="orbit"]'), 'the viewers have 📷 Change angle too');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
