@@ -403,6 +403,13 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cperr{position:absolute;right:4px;top:4px;width:20px;height:20px;border-radius:50%;background:var(--bad);color:#fff;font-weight:900;display:grid;place-items:center;font-size:13px}
 .cpn{position:absolute;left:3px;top:3px;font:800 10px/1 var(--body);background:#000a;color:#fff;border-radius:5px;padding:2px 4px}
 .cmed{margin-top:12px}
+.cmstills{display:flex;gap:6px;overflow-x:auto;padding:2px 0 6px}
+.cmstills button{flex:none;width:64px;height:64px;border-radius:10px;overflow:hidden;padding:0;background:var(--bg);border:1px solid var(--line);font-size:11px;font-weight:800;color:var(--soft)}
+.cmstills button.on{outline:3px solid var(--cyan);outline-offset:-3px}
+.cmstills img{width:100%;height:100%;object-fit:cover;display:block}
+.cpanel img.cpimg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.cmpj{height:5px;border-radius:9px;background:var(--panel2);margin:8px 0 2px;overflow:hidden}
+.cmpj i{display:block;height:100%;width:2%;background:var(--accent);transition:width .8s linear}
 .cmed .obbar{height:5px;border-radius:9px;background:var(--panel2);margin:8px 0 2px;overflow:hidden}
 .cmed .obbar i{display:block;height:100%;width:2%;background:var(--accent);transition:width .8s linear}
 .cmed textarea{min-height:56px}
@@ -595,7 +602,7 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.92'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.93'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6150,9 +6157,10 @@ const CM_AREA = 576 * 1024; // MiniMax pixels per clip (the turnaround's size), 
 const CMV = {};            // clip url -> its <video> on the page (kept, so redrawing doesn't reload it)
 const CMUP = {};           // computer|picture url -> the name it has in that computer's input folder
 let CM_SENT = [];          // Test mode: the graphs made
-const CM = () => S.comic || (S.comic = {script:'', pages:[], cur:0, sel:0, cast:[], place:'', loc:null, styleLine:'Animation in the style of 2D anime.', vlora:'', vloraW:1, quality:'quick', open:{script:true}});
+const CM = () => S.comic || (S.comic = {script:'', pages:[], cur:0, sel:0, cast:[], place:'', loc:null, styleLine:'Animation in the style of 2D anime.', vlora:'', vloraW:1, quality:'quick', route:'still', open:{script:true}});
 const cmPage = () => { const cm = CM(); return cm.pages[cm.cur] || null; };
-const cmAll = () => [S.comic, S.stash && S.stash.comic].filter(Boolean).flatMap(cm => cm.pages.flatMap(pg => pg.panels));
+const cmAll = () => [S.comic, S.stash && S.stash.comic].filter(Boolean).flatMap(cm => cm.pages.flatMap(pg => pg.panels).concat(cm.pj ? [cm.pj] : []));
+const cmPJ = () => { const cm = CM(); return cm.pj = cm.pj || {id:'plate', takes:[]}; }; // the place being painted
 function cmWatched(id){ return cmAll().some(p => p.making && p.making.id===id); }
 
 // --- reading the script ---
@@ -6371,28 +6379,234 @@ async function cmSend(cm, pg, p, k, rect){
     for(const r of refs) imgs.push(await cmUp(r.url, k.url));
     const [w, h] = cmSize(rect.w / rect.h), prompt = p.prompt!=null ? p.prompt : cmPrompt(cm, p, i, rect), prefix = cmPrefix('panel');
     const {g, save:sid} = cmGraph(k, imgs, prompt, w, h, prefix, cm);
-    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); p.takes.unshift({test:true, w, h, t:Date.now(), n:p.takes.length + 1}); p.take = 0; p.frame = CM_FRAME; delete p.busy; save(); drawComic(); return; }
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); delete p.busy; cmGot(p, 'clip', {test:true, w, h, t:Date.now()}); return; }
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    p.making = {pc:k.url, id:j.prompt_id, save:sid, t:t0, prefix, mins:cmMins(cm, k), smp:samplerOf(g), w, h}; delete p.busy; save(); drawComic(); cmWait(p);
+    p.making = {pc:k.url, id:j.prompt_id, save:sid, t:t0, prefix, mins:cmMins(cm, k), smp:samplerOf(g), w, h, kind:'clip'}; delete p.busy; save(); drawComic(); cmWait(p);
   }catch(err){ delete p.busy; p.err = "Couldn't send panel " + (i + 1) + ': ' + err.message; save(); drawComic(); }
 }
 const CM_RUN = new Set();
 async function cmWait(p){
   const m = p.making; if(!m || CM_RUN.has(m.id)) return; CM_RUN.add(m.id);
-  try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, true);
-    p.takes.unshift({url:viewUrl(f, m.pc), pc:m.pc, w:m.w, h:m.h, t:Date.now()}); p.takes = p.takes.slice(0, 8); p.take = 0; p.frame = CM_FRAME; }
-  catch(err){ p.err = "Couldn't make the clip: " + err.message; }
-  finally{ CM_RUN.delete(m.id); if(p.making===m) p.making = null; save(); if(!$('#comic').hidden) drawComic(); }
+  let got = null;
+  try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, m.video!==false); got = {url:viewUrl(f, m.pc), pc:m.pc, w:m.w, h:m.h, t:Date.now()}; }
+  catch(err){ p.err = "Couldn't make the " + ({still:'still', plate:'place'}[m.kind] || 'clip') + ': ' + err.message; }
+  finally{ CM_RUN.delete(m.id); if(p.making===m) p.making = null; if(got) cmGot(p, m.kind || 'clip', got); else { save(); if(!$('#comic').hidden) drawComic(); } }
 }
-function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, 'Animating') : null; }
+function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', plate:'Painting the place'}[m.kind] || 'Animating') : null; }
 function cmBar(){ if($('#comic').hidden) return; const pg = cmPage(); if(!pg) return;
-  pg.panels.forEach(p => { if(!p.making) return; const e = cmEta(p);
+  pg.panels.concat(CM().pj || []).forEach(p => { if(!p.making) return; const e = cmEta(p);
     document.querySelectorAll(`[data-cmbar="${p.id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
     document.querySelectorAll(`[data-cmtxt="${p.id}"]`).forEach(el => el.textContent = e.text); }); }
 let cmTicks = 0;
-setInterval(() => { if($('#comic').hidden || document.visibilityState!=='visible') return; const pg = cmPage(), busy = pg ? pg.panels.filter(p => p.making) : [];
+setInterval(() => { if($('#comic').hidden || document.visibilityState!=='visible') return; const pg = cmPage(), busy = pg ? pg.panels.concat(CM().pj || []).filter(p => p.making) : [];
   if(!busy.length) return; if(!S.test && ++cmTicks % 5===1) busy.forEach(p => liveQueue(p.making.id, p.making.pc).then(cmBar)); cmBar(); }, 1000);
+
+// --- phase 2 (Jordan 2026-10-21): stills first. The place is painted once with nobody in it (the plate); each panel's still is
+// painted in Illustrious on top of that plate, so the background comes first and stays the same, with the characters' own
+// LoRAs (librarianx_v2 only looks right on its checkpoint) and the style LoRA; people standing apart each get their own area
+// of the picture (regional prompts), people touching (a grab, a hug) are painted together in one area. Only where the people
+// go is repainted (a soft noise mask over the plate), then one light pass over the whole still ties the light together.
+// 🎬 Animate then pins the picked still as the first frame of a MiniMax H3 FL2V clip, so the clip starts on-model.
+const CM_TOUCH = /\b(grabs?|grabbing|holds?|holding|hugs?|hugging|kiss(es|ing)?|punch(es|ing)?|pulls?|pushes?|carries|catches? up|shakes? hands|takes? (her|his|their) hand|slaps?|tackles?)\b/i;
+const CM_STILL_AREA = 1024 * 1024;
+function cmStillSize(r){ const a = Math.max(0.5, Math.min(2, r)), W = Math.sqrt(CM_STILL_AREA * a), H = W / a;
+  return [Math.round(W / 64) * 64, Math.round(H / 64) * 64]; }
+// the Illustrious look on one computer: the picked checkpoint (else iriselTouchIL, the Librarian's), the style LoRA (else AFKJ)
+function cmIllKit(p){
+  const oi = p.oi; if(!oi || !oi.CheckpointLoaderSimple || !oi.KSampler || !oi.SetLatentNoiseMask || !oi.SolidMask || !oi.MaskComposite) return null;
+  const ck = combo(oi.CheckpointLoaderSimple, 'ckpt_name'), lo = combo(oi.LoraLoader, 'lora_name'), cm = CM(), I = cm.ill || {};
+  const has = (list, name) => name && (list.includes(name) ? name : list.find(n => baseName(n).toLowerCase()===baseName(name).toLowerCase())) || '';
+  const ckpt = I.ckpt ? has(ck, I.ckpt) : (ck.find(n => /iriseltouch/i.test(baseName(n))) || trainCkpt(oi));
+  if(!ckpt) return null;
+  const keep = ['ImageBlend', 'ImageToMask', 'ThresholdMask', 'GrowMask', 'ImageCompositeMasked'].every(c => oi[c]);
+  const bg = oi.RemoveBackground && combo(oi.LoadBackgroundRemovalModel, 'bg_removal_name').find(n => /birefnet/i.test(baseName(n)));
+  return {url:p.url, oi, ckpt, loras:lo, has:name => has(lo, name), feather:!!oi.FeatherMask, keep, bg};
+}
+function cmIllKits(){
+  if(S.test) return [cmIllKit({url:'test', oi:CM_FAKEILL})].filter(Boolean);
+  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '')).map(cmIllKit).filter(Boolean);
+}
+const CM_FAKEILL = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors']]}}}, KSampler:{input:{required:{sampler_name:[['euler_ancestral']], scheduler:[['normal']]}}},
+  LoraLoader:{input:{required:{lora_name:[['AFKJ Style Illustrious Claude.safetensors', 'librarianx_v2.safetensors']]}}}, SetLatentNoiseMask:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}},
+  FeatherMask:{input:{required:{}}}, ImageScale:{input:{required:{}}}, ConditioningSetArea:{input:{required:{}}}, ConditioningCombine:{input:{required:{}}},
+  ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}}};
+// the look the stills use, with the defaults filled in from what the computers have
+function cmIll(){ const cm = CM(), I = cm.ill = cm.ill || {}, k = cmIllKits()[0];
+  if(k && I.style==null){ I.style = k.loras.find(n => /afkj/i.test(baseName(n))) || ''; }
+  if(I.styleW==null) I.styleW = 1;
+  if(I.words==null && I.style) I.words = S.loraWords[I.style] || (/afkj/i.test(I.style) ? 'AFKJ Style' : '');
+  return I; }
+// a person's own LoRA: the one picked, else their card's trained one, else one named after their trigger word or name
+function cmSlotLora(s, list){
+  if(s.lora!=null) return s.lora; const c = cmCard(s); if(!c) return '';
+  const want = [c.lora && c.lora.name, c.trigger, trigOf(c), c.name].filter(Boolean).map(x => baseName(x).toLowerCase().replace(/\.safetensors$/, ''));
+  return list.find(n => want.includes(baseName(n).toLowerCase().replace(/\.safetensors$/, ''))) || list.find(n => want.some(w => w.length > 3 && baseName(n).toLowerCase().startsWith(w))) || '';
+}
+const cmLoraWords = (file, c) => (S.loraWords[file] || (c && c.trigger) || baseName(file).replace(/\.safetensors$/i, '').replace(/_v\d+$/i, '')).trim();
+// Danbooru tags from the panel's words (the app's own reader), with the people's names taken out (they are counted instead)
+function cmTags(text, who){
+  let t = ' ' + text + ' '; who.forEach(s => { if(s.pat) t = t.replace(new RegExp(s.pat, 'gi'), ' '); });
+  t = t.replace(/\\/g, '');
+  // comic beats the reader gets wrong on its own ("grabs her arm" read as holding own arm), as Danbooru tags
+  const beats = []; CM_BEATS.forEach(([re, tag]) => { if(re.test(t)){ beats.push(tag); t = t.replace(re, ' '); } });
+  t = t.replace(/\b(she|he|her|him|his|their|them|eventually|suddenly|slowly|keeps?|starts?|begins?|then|and|also|finally)\b/gi, ' ').replace(/[.,;!?]+/g, ',').replace(/\s+/g, ' ').replace(/(\s*,\s*)+/g, ', ').trim().replace(/^,\s*|,\s*$/g, '');
+  if(!t || !TAGS) return beats.concat(t ? [t] : []).join(', ');
+  const was = S.asTags; S.asTags = true;
+  try{ indexTags(); const pieces = readPrompt(t), picked = pickedFor(pieces); const tags = [...picked].map(x => tagText(TAGMAP.get(x)) || x.replace(/_/g, ' '));
+    const left = pieces.flatMap(p => p.left || []); return [...new Set(beats.concat(tags, left).filter(Boolean))].join(', '); }
+  catch(e){ return t; } finally{ S.asTags = was; }
+}
+const CM_BEATS = [[/\b(looks?|looking|glances?|glancing)\s+(behind|back|over\s+\w+\s+shoulder)(\s+(her|him|them))?/i, 'looking back'], [/\bgrabs?\s+(her|his|their|the)?\s*arm\b|\bgrabbing\s+(her|his|their)?\s*arm\b/i, "grabbing another's arm"],
+  [/\bgrabs?\s+(her|his|their)?\s*hand\b/i, 'hand grab'], [/\bcatch(es)?\s+up(\s+to(\s+(her|him|them))?)?|\bchases?\b|\bchasing\b/i, 'chasing'], [/\bwalk(s|ing)?\s+behind\b/i, 'walking, following'],
+  [/\bscreams?\b|\bscreaming\b/i, 'screaming, open mouth'], [/\bwalks?\s+(down|along|through)\b/i, 'walking']];
+const CM_SHOT_TAGS = {wide:'full body, wide shot', medium:'cowboy shot', close:'close-up, portrait, face focus'};
+// what each person looks like: their LoRA's words and their card's tags (or the words typed for them)
+function cmLooks(s, k){ const c = cmCard(s), lora = k ? k.has(cmSlotLora(s, k.loras)) : '';
+  return {lora, words:[lora && cmLoraWords(lora, c), c && (c.tags || '').trim().replace(/,\s*$/, ''), (s.desc || '').trim()].filter(Boolean).join(', ')}; }
+function cmCount(who){ const f = who.filter(s => s.g==='f').length, m = who.filter(s => s.g==='m').length, o = who.length - f - m;
+  return [f && (f===1 ? '1girl' : f + 'girls'), m && (m===1 ? '1boy' : m + 'boys'), o && (o===1 ? '1other' : o + 'others'), who.length===1 && 'solo'].filter(Boolean).join(', ') || 'no humans'; }
+// where the people go in the picture (x, y, w, h as parts of it): apart, one area each from left to right; touching, one together
+function cmAreas(who, shot, touch){
+  if(!who.length) return [];
+  const y = shot==='wide' ? 0.12 : 0, h = 1 - y;
+  if(touch || who.length===1){ const w = shot==='close' ? 0.86 : who.length > 1 ? 0.84 : shot==='wide' ? 0.46 : 0.62; return [{x:(1 - w) / 2, y, w, h, who}]; }
+  const W = 0.92 / who.length; return who.map((s, i) => ({x:0.04 + i * W, y, w:W, h, who:[s]}));
+}
+function cmStillGraph(k, plate, p, i, rect, prefix){
+  const cm = CM(), I = cmIll(), g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const [W, H] = cmStillSize(rect.w / rect.h), who = cmWho(cm, p), shot = cmShot(p, i, rect), touch = who.length > 1 && CM_TOUCH.test(p.text);
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck,0], clip = [ck,1]; const vae = [ck,2];
+  const loras = [], put = (f, w) => { if(f && !loras.some(x => x[0]===f)) loras.push([f, w]); };
+  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => put(cmLooks(s, k).lora, parseFloat(s.loraW) || 1));
+  loras.forEach(([f, w]) => { const l = add('LoraLoader', {model, clip, lora_name:f, strength_model:w, strength_clip:w}); model = [l,0]; clip = [l,1]; });
+  const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
+  const seen = new Set(), tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
+  const areas = cmAreas(who, shot, touch), place = cmTags(cm.place || '', []);
+  const together = areas.length===1 ? areas[0].who.map(s => cmLooks(s, k).words).join(', ') : '';
+  let pos = enc(tags(tx.pos, I.words || '', cmCount(who), together, CM_SHOT_TAGS[shot], cmTags(p.text, who), place, who.length ? '' : 'scenery'));
+  const neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views'));
+  // apart: each person's looks in their own area, on top of the whole prompt (as the pose board does)
+  if(areas.length > 1) areas.forEach(a => { seen.clear(); const t = enc(tags(I.words || '', cmCount(a.who), cmLooks(a.who[0], k).words, CM_SHOT_TAGS[shot]));
+    const ar = add('ConditioningSetArea', {conditioning:t, width:Math.round(a.w * W / 8) * 8, height:Math.round(a.h * H / 8) * 8, x:Math.round(a.x * W / 8) * 8, y:Math.round(a.y * H / 8) * 8, strength:1});
+    pos = [add('ConditioningCombine', {conditioning_1:pos, conditioning_2:[ar,0]}), 0]; });
+  // the plate, cropped to the panel's shape, is the start; only where the people go is painted fresh
+  let lat, dn = 1, im = null, area = null;
+  if(plate){ im = add('ImageScale', {image:[add('LoadImage', {image:plate}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'});
+    lat = [add('VAEEncode', {pixels:[im,0], vae}), 0];
+    if(areas.length){ let mask = [add('SolidMask', {value:0, width:W, height:H}), 0];
+      const pad = 0.06; areas.forEach(a => { const x0 = Math.max(0, a.x - pad), y0 = Math.max(0, a.y - pad), x1 = Math.min(1, a.x + a.w + pad);
+        const sm = add('SolidMask', {value:1, width:Math.round((x1 - x0) * W), height:Math.round((1 - y0) * H)});
+        mask = [add('MaskComposite', {destination:mask, source:[sm,0], x:Math.round(x0 * W), y:Math.round(y0 * H), operation:'add'}), 0]; });
+      area = mask; if(k.feather) mask = [add('FeatherMask', {mask, left:48, top:48, right:48, bottom:0}), 0];
+      lat = [add('SetLatentNoiseMask', {samples:lat, mask}), 0]; }
+    else dn = 0.6; } // nobody in it: the place itself, redrawn for this camera
+  else lat = [add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0];
+  const seed = Math.floor(Math.random() * 1e9), ks = (latent, denoise) => add('KSampler', {model, positive:pos, negative:neg, latent_image:latent, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise});
+  let out = [add('VAEDecode', {samples:[ks(lat, dn), 0], vae}), 0];
+  // one light pass over the whole still, so the painted people and the plate share their light and edges
+  if(plate && areas.length) out = [add('VAEDecode', {samples:[ks([add('VAEEncode', {pixels:out, vae}), 0], 0.3), 0], vae}), 0];
+  // Keep the background exact (Jordan 2026-10-21): the clean place goes back over everything but the people. Where the still
+  // differs from the place is a person (and their shadow); the background-removal model (BiRefNet), when there is one, adds
+  // their full outline; both only inside the people's areas
+  if(plate && areas.length && p.keepBg!==false && k.keep){
+    const ch = c => [add('ImageToMask', {image:[add('ImageBlend', {image1:out, image2:[im,0], blend_factor:1, blend_mode:'difference'}), 0], channel:c}), 0];
+    let m = ch('red'); for(const c of ['green', 'blue']) m = [add('MaskComposite', {destination:m, source:ch(c), x:0, y:0, operation:'add'}), 0];
+    m = [add('ThresholdMask', {mask:m, value:0.08}), 0];
+    if(k.bg) m = [add('MaskComposite', {destination:m, source:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:out}), 0], x:0, y:0, operation:'add'}), 0];
+    m = [add('MaskComposite', {destination:[add('GrowMask', {mask:m, expand:8, tapered_corners:true}), 0], source:area, x:0, y:0, operation:'multiply'}), 0];
+    if(k.feather) m = [add('FeatherMask', {mask:m, left:6, top:6, right:6, bottom:6}), 0];
+    out = [add('ImageCompositeMasked', {destination:[im,0], source:out, x:0, y:0, resize_source:false, mask:m}), 0]; }
+  return {g, save:add('SaveImage', {images:out, filename_prefix:prefix}), W, H};
+}
+// the place with nobody in it, once, in the stills' look (wide, so panels of any shape crop from it)
+function cmPlateGraph(k, prefix){
+  const cm = CM(), I = cmIll(), g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck,0], clip = [ck,1];
+  const st = k.has(I.style); if(st){ const l = add('LoraLoader', {model, clip, lora_name:st, strength_model:parseFloat(I.styleW) || 1, strength_clip:parseFloat(I.styleW) || 1}); model = [l,0]; clip = [l,1]; }
+  const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
+  const pos = enc([tx.pos, I.words, 'no humans, scenery, wide shot, eye level', cmTags(cm.place || '', [])].filter(Boolean).join(', ')), neg = enc(tx.neg + ', 1girl, 1boy, people, person, crowd, text');
+  const smp = add('KSampler', {model, positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:1344, height:768, batch_size:1}), 0], seed:Math.floor(Math.random() * 1e9), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise:1});
+  return {g, save:add('SaveImage', {images:[add('VAEDecode', {samples:[smp,0], vae:[ck,2]}), 0], filename_prefix:prefix})};
+}
+// animating a still: MiniMax H3 FL2V with the still as the first frame (the hybrid Turbo with it pinned when there's no FL2V)
+function cmFlKit(p){ const oi = p.oi; if(!oi || !oi.SaveVideo || !(oi.MiniMaxH3ImageToVideo || oi.MiniMaxH3ReferenceToVideo)) return null;
+  const pick = (cls, key, re) => combo(oi[cls], key).find(n => re.test(baseName(n)));
+  const k = {url:p.url, oi, fl:!!(oi.MiniMaxH3ImageToVideo && pick('UNETLoader', 'unet_name', /fl2v/i))};
+  if(k.fl){ k.unet = pick('UNETLoader', 'unet_name', /fl2v/i); k.lora = pick('LoraLoaderModelOnly', 'lora_name', /fl2v_turbo_8step/i) || pick('LoraLoaderModelOnly', 'lora_name', /fl2v_turbo/i); }
+  else { k.unet = pick('UNETLoader', 'unet_name', /minimax.?h3.*turbo/i) || pick('UNETLoader', 'unet_name', /minimax.?h3/i); k.lora = /turbo/i.test(baseName(k.unet || '')) && pick('LoraLoaderModelOnly', 'lora_name', /minimax_h3_ref2v_turbo/i); }
+  k.steps = !k.lora ? 20 : /4step/i.test(k.lora) ? 4 : 8;
+  k.clip = pick('CLIPLoader', 'clip_name', /minimax_h3/i); k.vae = pick('VAELoader', 'vae_name', /minimax_h3_video_vae_fp16/i) || pick('VAELoader', 'vae_name', /minimax_h3_video_vae/i);
+  return k.unet && k.clip && k.vae && (k.fl || oi.MiniMaxH3AddGuide) ? k : null; }
+function cmFlKits(){ if(S.test) return [cmFlKit({url:'test', oi:FAKEOB})];
+  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '')).map(cmFlKit).filter(Boolean); }
+function cmAnimPrompt(cm, p, i, rect){
+  const who = cmWho(cm, p), shot = cmShot(p, i, rect);
+  let act = ' ' + p.text.trim() + ' ';
+  who.forEach(s => { const c = cmCard(s), nm = c && c.name ? c.name : s.g==='f' ? 'the woman' : s.g==='m' ? 'the man' : 'the person';
+    if(s.pat && new RegExp(s.pat, 'i').test(act)) act = act.replace(new RegExp(s.pat, 'gi'), nm); });
+  act = act.replace(/\\/g, '').trim().replace(/([^.!?])$/, '$1.');
+  return 'The first frame is a ' + ({wide:'wide shot', medium:'medium shot', close:'close-up'}[shot]) + ' of this moment in a comic. [0s-5s] ' + act.charAt(0).toUpperCase() + act.slice(1)
+    + ' One smooth, natural, clearly visible motion, with a steady camera that keeps the framing of the first frame. '
+    + 'Same characters, same faces, same outfits, same place, same art style, colours and lighting as the first frame. No cuts, no new characters.';
+}
+function cmAnimGraph(k, img, prompt, w, h, prefix){
+  const g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const li = add('LoadImage', {image:img});
+  let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
+  if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
+  const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
+  let cond, lat;
+  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:w, height:h, length:TV_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1]; }
+  else { const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + prompt, width:w, height:h, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
+    lat = [rv,1]; cond = [add('MiniMaxH3AddGuide', {positive:[rv,0], latent:lat, vae:[vae,0], image:[li,0], frame_idx:0}), 0]; }
+  const gd = add('BasicGuider', {model, conditioning:cond}), sc = add('BasicScheduler', {model, scheduler:'simple', steps:k.steps, denoise:1});
+  const sa = add('KSamplerSelect', {sampler_name:'res_multistep'}), no = add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)});
+  const out = add('SamplerCustomAdvanced', {noise:[no,0], guider:[gd,0], sampler:[sa,0], sigmas:[sc,0], latent_image:lat});
+  const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
+  const save = add('SaveVideo', {video:[add('CreateVideo', {images:[dec,0], fps:24}), 0], filename_prefix:prefix, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  return {g, save};
+}
+const cmStill = p => (p.stills || [])[p.still || 0] || null;
+const cmShown = p => { const t = p.takes[p.take], s = cmStill(p); return t && (p.show!=='still' || !s) ? {clip:t} : s ? {still:s} : null; };
+const cmSlow = url => url===farmHost() || url==='test' ? 1 : 1.26;
+// one job of any kind on the computer that will be free soonest
+async function cmJobs(kind, list){
+  const cm = CM(), pg = cmPage(), kits = kind==='still' || kind==='plate' ? cmIllKits() : cmFlKits(); if(!list.length) return;
+  if(!kits.length){ toast(kind==='anim' ? cmWhy() : !S.test && !allPcs().some(x => x.online) ? cmWhy() : 'None of your computers that are on has an Illustrious checkpoint and the mask nodes', true); return; }
+  const mins = k => (kind==='anim' ? (k.fl ? 4.5 : 3) : kind==='plate' ? 1 : 1.5) * cmSlow(k.url);
+  const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(p => p.making && p.making.pc===k.url).length);
+  buzz();
+  for(const p of list){ if(p.making || p.busy) continue;
+    const k = kits.slice().sort((a, b) => (load[a.url] + 1) * mins(a) - (load[b.url] + 1) * mins(b))[0]; load[k.url]++;
+    await cmJob(cm, pg, p, k, kind, mins(k)); }
+}
+async function cmJob(cm, pg, p, k, kind, mins){
+  const i = pg ? pg.panels.indexOf(p) : -1, rect = i >= 0 ? cmRectsOf(pg)[i] : null;
+  delete p.err; p.busy = kind==='anim' ? 'Sending the still…' : 'Sending…'; drawComic();
+  try{
+    let G, w, h, prefix, video = kind==='anim';
+    if(kind==='plate'){ prefix = cmPrefix('place'); G = cmPlateGraph(k, prefix); w = 1344; h = 768; }
+    else if(kind==='still'){ prefix = cmPrefix('still'); const plate = cm.loc && cm.loc.url ? await cmUp(cm.loc.url, k.url) : cm.loc && cm.loc.test ? 'test-place.png' : null; G = cmStillGraph(k, plate, p, i, rect, prefix); w = G.W; h = G.H; }
+    else { const s = cmStill(p); if(!s) throw new Error('paint a still first'); prefix = cmPrefix('panel'); [w, h] = obCanvas(s.w || rect.w, s.h || rect.h, 576);
+      G = cmAnimGraph(k, await cmUp(s.url, k.url), cmAnimPrompt(cm, p, i, rect), w, h, prefix); }
+    if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete p.busy; cmGot(p, kind, {test:true, w, h, t:Date.now()}); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
+    if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    p.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins, smp:samplerOf(G.g), w, h, kind, video}; delete p.busy; save(); drawComic(); cmWait(p);
+  }catch(err){ delete p.busy; p.err = "Couldn't " + (kind==='plate' ? 'paint the place' : kind==='still' ? 'paint panel ' + (i + 1) : 'animate panel ' + (i + 1)) + ': ' + err.message; save(); drawComic(); }
+}
+// a finished job lands on its panel (or the place)
+function cmGot(p, kind, it){
+  const cm = CM();
+  if(kind==='plate'){ cm.plates = [it].concat(cm.plates || []).slice(0, 8); if(it.url) cm.loc = {url:it.url}; else cm.loc = {url:'', test:true}; }
+  else if(kind==='still'){ p.stills = [it].concat(p.stills || []).slice(0, 8); p.still = 0; p.show = 'still'; }
+  else { it.n = p.takes.length + 1; it.anim = kind==='anim'; p.takes.unshift(it); p.takes = p.takes.slice(0, 8); p.take = 0; p.frame = CM_FRAME; p.show = 'clip'; }
+  save(); if(!$('#comic').hidden) drawComic();
+}
 
 // --- the page on screen: every panel's clip at its picked frame ---
 function cmVid(url){
@@ -6408,19 +6622,21 @@ function cmSeek(v, frame){ if(v && v.duration) v.currentTime = Math.min(v.durati
 function drawPage(){
   const box = $('#cmPage'), pg = cmPage(); if(!box || !pg) return;
   const cm = CM(), rects = cmRectsOf(pg);
-  box.innerHTML = pg.panels.map((p, i) => { const r = rects[i], t = p.takes[p.take], shot = CM_SHOTS[cmShot(p, i, r)];
+  box.innerHTML = pg.panels.map((p, i) => { const r = rects[i], sh = cmShown(p), t = sh && sh.clip, st = sh && sh.still, shot = CM_SHOTS[cmShot(p, i, r)], op = (p.pos || {x:50}).x + '% ' + (p.pos || {y:50}).y + '%';
     return `<div class="cpanel${i===cm.sel ? ' sel' : ''}" data-cpi="${i}" style="left:${(100 * r.x).toFixed(2)}%;top:${(100 * r.y / CM_H).toFixed(2)}%;width:${(100 * r.w).toFixed(2)}%;height:${(100 * r.h / CM_H).toFixed(2)}%">
       ${t && t.test ? `<div class="cptest" style="--hue:${(i * 67 + (t.n || 1) * 29) % 360}">Take ${t.n || 1}<br><small>pretend clip</small></div>` : ''}
-      ${!t ? `<div class="cpempty"><b>${i + 1}</b> ${esc(shot)}<br><span>${esc(p.text)}</span></div>` : ''}
+      ${st && st.url ? `<img class="cpimg" src="${esc(st.url)}" alt="" style="object-position:${op}" draggable="false">` : ''}
+      ${st && st.test ? `<div class="cptest" style="--hue:${(i * 67 + 200) % 360}">Still<br><small>pretend</small></div>` : ''}
+      ${!sh ? `<div class="cpempty"><b>${i + 1}</b> ${esc(shot)}<br><span>${esc(p.text)}</span></div>` : ''}
       ${p.making || p.busy ? `<div class="cpbusy"><div class="pbar"><i data-cmbar="${p.id}"></i></div><small data-cmtxt="${p.id}">${esc(p.busy || 'Waiting…')}</small></div>` : ''}
       ${p.err ? '<div class="cperr">!</div>' : ''}<span class="cpn">${i + 1}</span></div>`; }).join('');
-  pg.panels.forEach((p, i) => { const t = p.takes[p.take]; if(!t || !t.url) return; const v = cmVid(t.url), el = box.querySelector(`[data-cpi="${i}"]`);
+  pg.panels.forEach((p, i) => { const sh = cmShown(p), t = sh && sh.clip; if(!t || !t.url) return; const v = cmVid(t.url), el = box.querySelector(`[data-cpi="${i}"]`);
     v.style.objectPosition = (p.pos || {x:50}).x + '% ' + (p.pos || {y:50}).y + '%'; el.prepend(v); if(v.readyState >= 2 && !CM_PLAY) cmSeek(v, p.frame); });
   cmBar();
 }
 let CM_PLAY = false;
 function cmPlay(on){ CM_PLAY = on; const pg = cmPage(); if(!pg) return;
-  pg.panels.forEach(p => { const t = p.takes[p.take], v = t && t.url && CMV[t.url]; if(!v) return; if(on){ v.currentTime = 0; v.play().catch(() => {}); } else { v.pause(); cmSeek(v, p.frame); } });
+  pg.panels.forEach(p => { const sh = cmShown(p), t = sh && sh.clip, v = t && t.url && CMV[t.url]; if(!v) return; if(on){ v.currentTime = 0; v.play().catch(() => {}); } else { v.pause(); cmSeek(v, p.frame); } });
   const b = $('#comic [data-cm="play"]'); if(b) b.textContent = on ? '⏸ Stop' : '▶ Play all'; }
 function cmLayThumb(rows, texts, on, i){
   const rs = cmRects(rows, texts);
@@ -6437,48 +6653,70 @@ function drawComic(){
     <p class="note">Write "Panel 1: …", "Panel 2: …" (and "Page 2:" for another page). Name the people as Character 1, a man, she, he, or by your character cards' names.</p></div></div>`;
   if(pg){
     if(cm.pages.length > 1) x += `<div class="cmpages">${seg('data-cmpg', cm.pages.map((q, i) => [i, 'Page ' + (i + 1)]), cm.cur)}</div>`;
-    const empty = pg.panels.filter(p => !p.takes.length && !p.making && !p.busy), busy = pg.panels.filter(p => p.making || p.busy).length;
+    const free = q => !q.making && !q.busy, empty = pg.panels.filter(q => !q.takes.length && free(q)), busy = pg.panels.filter(q => q.making || q.busy).length;
+    const still = cm.route!=='clip', noStill = pg.panels.filter(q => !(q.stills || []).length && free(q)), noAnim = pg.panels.filter(q => (q.stills || []).length && !q.takes.length && free(q)), ik = cmIllKits(), fk = cmFlKits();
     x += `<p class="cmsum">${cm.pages.length > 1 ? 'Page ' + (cm.cur + 1) + ': ' : 'That\'s '}${pg.panels.length} panel${pg.panels.length > 1 ? 's' : ''}${cm.pages.length > 1 ? '' : ' in 1 page'}. Here's the layout; tap another to change it.</p>
       <div class="cmlays">${(pg.lays || []).map((r, i) => cmLayThumb(r, cmTexts(pg), r.join()===pg.rows.join(), i)).join('')}</div>
       <div class="cmpage" id="cmPage"></div>
-      <div class="btnrow"><button class="btn" data-cm="play">${CM_PLAY ? '⏸ Stop' : '▶ Play all'}</button><button class="btn hot" data-cm="all" ${!empty.length ? 'disabled' : ''}>🎬 ${empty.length===pg.panels.length ? 'Render the page' : empty.length ? 'Render ' + empty.length + ' empty panel' + (empty.length > 1 ? 's' : '') : 'Every panel has a clip'}</button></div>
-      <p class="note">${kits.length ? (busy ? busy + ' panel' + (busy > 1 ? 's' : '') + ' rendering. ' : '') + 'Clips go to ' + esc(kits.map(k => pcName(k.url)).join(' and ')) + ' (MiniMax H3 ' + (kits.some(k => cmQuick(cm, k)) ? 'Turbo, about 4 to 5' : 'full model, about 12') + ' min each), into their queues, so they keep going if you close the app.' : esc(cmWhy()) + '.'}</p>`;
+      <div class="btnrow"><button class="btn" data-cm="play">${CM_PLAY ? '⏸ Stop' : '▶ Play all'}</button>${still ? (noStill.length ? `<button class="btn hot" data-cm="stills">🖼 Paint ${noStill.length===pg.panels.length ? 'the stills' : noStill.length + ' still' + (noStill.length > 1 ? 's' : '')}</button>`
+        : `<button class="btn hot" data-cm="anims" ${noAnim.length ? '' : 'disabled'}>🎬 ${noAnim.length ? 'Animate ' + noAnim.length + ' still' + (noAnim.length > 1 ? 's' : '') : 'Every panel has a clip'}</button>`)
+        : `<button class="btn hot" data-cm="all" ${!empty.length ? 'disabled' : ''}>🎬 ${empty.length===pg.panels.length ? 'Render the page' : empty.length ? 'Render ' + empty.length + ' empty panel' + (empty.length > 1 ? 's' : '') : 'Every panel has a clip'}</button>`}</div>
+      <p class="note">${still ? (busy ? busy + ' panel' + (busy > 1 ? 's' : '') + ' working. ' : '') + (ik.length ? 'Stills are painted in Illustrious on ' + esc(ik.map(k => pcName(k.url)).join(' and ')) + ' (about 1 to 2 min each)' + (cm.loc ? ', on top of the place picture' : '; paint the place first (below) so every panel shares it') + '. ' : 'No computer that is on has an Illustrious checkpoint. ')
+        + (fk.length ? 'Then 🎬 Animate makes a MiniMax clip from each still (about 4 to 5 min each).' : '') : kits.length ? (busy ? busy + ' panel' + (busy > 1 ? 's' : '') + ' rendering. ' : '') + 'Clips go to ' + esc(kits.map(k => pcName(k.url)).join(' and ')) + ' (MiniMax H3 ' + (kits.some(k => cmQuick(cm, k)) ? 'Turbo, about 4 to 5' : 'full model, about 12') + ' min each), into their queues, so they keep going if you close the app.' : esc(cmWhy()) + '.'}</p>`;
+    if(cm.route===undefined && !pg.panels.some(q => q.takes.length)) cm.route = 'still';
     const p = pg.panels[cm.sel], rects = cmRectsOf(pg);
-    if(p){ const t = p.takes[p.take], who = cmWho(cm, p);
+    if(p){ const sh = cmShown(p), t = sh && sh.clip ? p.takes[p.take] : null, who = cmWho(cm, p), sts = p.stills || [];
       x += `<div class="obpanel cmed"><div class="obhead"><b>Panel ${cm.sel + 1}</b><span><button class="chipbtn" data-cm="prev" aria-label="Panel before" ${cm.sel ? '' : 'disabled'}>◀</button> <button class="chipbtn" data-cm="next" aria-label="Next panel" ${cm.sel < pg.panels.length - 1 ? '' : 'disabled'}>▶</button></span></div>
         <textarea data-cmp="text" rows="2">${esc(p.text)}</textarea>
         <div class="row"><label>Who</label><div class="seg cmwho">${cm.cast.map(s => `<button data-cmwho="${esc(s.id)}" class="${(p.who || []).includes(s.id) ? 'on' : ''}">${esc(cmCard(s) ? cmCard(s).name : s.label)}</button>`).join('') || '<span class="note">Nobody named</span>'}</div></div>
         <div class="row"><label>Shot</label>${seg('data-cmshot', Object.entries(CM_SHOTS).map(([k2, v]) => [k2, k2==='auto' ? 'Auto (' + CM_SHOTS[cmAutoShot(p.text, cm.sel, rects[cm.sel].w / rects[cm.sel].h)].toLowerCase() + ')' : v]), p.shot || 'auto')}</div>`;
       if(p.err) x += `<p class="warn">${esc(p.err)}</p>`;
+      if(sts.length || p.takes.length > 0 && sts.length) x += `<div class="lbl">Stills · tap one to use it</div><div class="cmstills">${sts.map((st, j) => `<button data-cmstill="${j}" class="${sh && sh.still===st || (j===(p.still || 0) && p.show!=='clip') ? 'on' : ''}" aria-label="Still ${sts.length - j}">${st.url ? `<img src="${esc(mini(st.url))}" alt="">` : `<span>Still ${sts.length - j}</span>`}</button>`).join('')}${p.takes.length ? `<button data-cmshow="clip" class="${sh && sh.clip ? 'on' : ''}"><span>🎬 Clip</span></button>` : ''}</div>`;
       if(t){ x += `<input type="range" class="tvscrub" data-cmt min="0" max="1000" step="1" value="${p.frame==null ? CM_FRAME : p.frame}" aria-label="Frame of panel ${cm.sel + 1}">
         <div class="btnrow"><button class="btn" data-cm="back" aria-label="One frame back">◀</button><button class="btn" data-cm="fwd" aria-label="One frame on">▶</button></div>
         <p class="note">Slide to the frame this panel shows. Drag the picture in the panel to move it inside the frame.</p>`;
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
       if(p.making || p.busy) x += `<div class="pbar obbar"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc(p.busy || '')}</p>`;
+      else if(still) x += `<div class="btnrow"><button class="btn${sts.length ? '' : ' hot'}" data-cm="still1">🖼 ${sts.length ? 'Paint another' : 'Paint the still'}</button><button class="btn${sts.length && !p.takes.length ? ' hot' : ''}" data-cm="anim1" ${sts.length ? '' : 'disabled'}>🎬 ${p.takes.length ? 'Animate again' : 'Animate it'}</button></div>`
+        + (who.length ? `<div class="row"><label>Background</label>${seg('data-cmkeep', [['1', 'Keep it exact'], ['0', 'Let it repaint']], p.keepBg===false ? '0' : '1')}</div>` : '')
+        + (who.length > 1 ? `<p class="note">${CM_TOUCH.test(p.text) ? 'They touch here, so they are painted together in one area.' : 'They are apart, so each gets their own side of the picture: ' + esc(who.map(s => cmCard(s) ? cmCard(s).name : s.label).join(' on the left, ')) + ' on the right.'}</p>` : '');
       else x += `<div class="btnrow"><button class="btn${t ? '' : ' hot'}" data-cm="one">${t ? '↻ Make another take' : '🎬 Render this panel'}</button></div>`;
       const refs = cmRefs(cm, p);
-      x += `<details class="cmprompt"${p.prompt!=null ? ' open' : ''}><summary>What MiniMax is told${refs.length ? ' · ' + refs.length + ' picture' + (refs.length > 1 ? 's' : '') : ''}</summary>
+      if(!still) x += `<details class="cmprompt"${p.prompt!=null ? ' open' : ''}><summary>What MiniMax is told${refs.length ? ' · ' + refs.length + ' picture' + (refs.length > 1 ? 's' : '') : ''}</summary>
         <textarea data-cmp="prompt" rows="6">${esc(p.prompt!=null ? p.prompt : cmPrompt(cm, p, cm.sel, rects[cm.sel]))}</textarea>
         ${p.prompt!=null ? '<div class="btnrow"><button class="btn" data-cm="reprompt">↺ Back to the automatic prompt</button></div>' : '<p class="note">Edit it to take over; it stops following the script and the cast then.</p>'}
-        ${who.some(s => !cmRefView(cmCard(s))) ? '<p class="warn">Someone here has no character card picked, so MiniMax only has words for them. Pick a card under Cast below.</p>' : ''}</details></div>`;
+        ${who.some(s => !cmRefView(cmCard(s))) ? '<p class="warn">Someone here has no character card picked, so MiniMax only has words for them. Pick a card under Cast below.</p>' : ''}</details>`;
+      x += '</div>';
     }
     // the cast and the place
+    const iks = cmIllKits(), loras = [...new Set(iks.flatMap(k => k.loras))];
     x += `<div class="lbl">Cast</div>` + (cm.cast.length ? cm.cast.map(s => { const c = cmCard(s), v = cmRefView(c);
       return `<div class="cmcast">${v ? `<img src="${esc(mini(v.url))}" alt="">` : '<span class="cmnopic">?</span>'}<div class="grow"><b>${esc(s.label)}${s.g ? ' (' + (s.g==='f' ? 'she' : 'he') + ')' : ''}</b>
         <select data-cms="cid" data-id="${esc(s.id)}"><option value="">No card: describe them</option>${(S.chars || []).map(ch => `<option value="${esc(ch.id)}" ${ch.id===s.cid ? 'selected' : ''}>${esc(ch.name || 'No name yet')}</option>`).join('')}</select>
-        <input type="text" data-cms="desc" data-id="${esc(s.id)}" value="${esc(s.desc || '')}" placeholder="${c ? 'extra words, e.g. carrying a red umbrella' : 'e.g. a tall man in a dark hooded coat'}"></div></div>`; }).join('') : '<p class="note">Nobody named in the script yet.</p>')
+        <input type="text" data-cms="desc" data-id="${esc(s.id)}" value="${esc(s.desc || '')}" placeholder="${c ? 'extra words, e.g. carrying a red umbrella' : 'e.g. a tall man in a dark hooded coat'}">
+        ${cm.route!=='clip' && loras.length ? `<select data-cms="lora" data-id="${esc(s.id)}" aria-label="Their LoRA"><option value="">No LoRA</option>${loras.map(n => `<option value="${esc(n)}" ${n===cmSlotLora(s, loras) ? 'selected' : ''}>LoRA: ${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select>` : ''}</div></div>`; }).join('') : '<p class="note">Nobody named in the script yet.</p>')
       + (!(S.chars || []).length ? '<p class="note">Make character cards under 🧍 Characters so MiniMax gets their pictures.</p>' : '');
     x += `<div class="lbl">Place</div><div class="row"><div class="grow"><input type="text" data-cmf="place" value="${esc(cm.place || '')}" placeholder="e.g. a quiet city street at dusk"></div></div>
       <div class="cmloc">${cm.loc && cm.loc.url ? `<img src="${esc(mini(cm.loc.url))}" alt="The place">` : '<span class="cmnopic">🏙</span>'}<div class="grow"><p class="note" style="margin:0 0 6px">${cm.loc ? 'Every panel gets this picture of the place, so it stays the same street.' : 'One picture of the place with nobody in it keeps the background the same in every panel.'}</p>
-        <div class="seg"><button data-cm="locphone">📱 From the phone</button><button data-cm="locshown" ${shownIdx >= 0 && S.gallery[shownIdx] ? '' : 'disabled'}>🖼 The picture in the preview</button>${cm.loc ? '<button data-cm="locoff">✕</button>' : ''}</div></div></div>`;
+        <div class="seg">${iks.length ? `<button data-cm="plate" ${cm.pj && (cm.pj.making || cm.pj.busy) ? 'disabled' : ''}>🏙 Paint the place</button>` : ''}<button data-cm="locphone">📱 From the phone</button><button data-cm="locshown" ${shownIdx >= 0 && S.gallery[shownIdx] ? '' : 'disabled'}>🖼 The picture in the preview</button>${cm.loc ? '<button data-cm="locoff">✕</button>' : ''}</div></div></div>`;
+    if(cm.pj && (cm.pj.making || cm.pj.busy)) x += `<div class="pbar obbar cmpj"><i data-cmbar="plate"></i></div><p class="note" data-cmtxt="plate">${esc(cm.pj.busy || '')}</p>`;
+    if(cm.pj && cm.pj.err) x += `<p class="warn">${esc(cm.pj.err)}</p>`;
+    if((cm.plates || []).length > 1) x += `<div class="cmstills">${cm.plates.map((pl, j) => `<button data-cmplate="${j}" class="${cm.loc && pl.url===cm.loc.url ? 'on' : ''}">${pl.url ? `<img src="${esc(mini(pl.url))}" alt="">` : '<span>Place ' + (cm.plates.length - j) + '</span>'}</button>`).join('')}</div>`;
     // the look
-    const styles = [...new Set(kits.flatMap(k => k.styles))];
-    x += `<div class="lbl">Look</div><div class="row"><label>Style line</label><div class="grow"><input type="text" data-cmf="styleLine" value="${esc(cm.styleLine || '')}" placeholder="Animation in the style of 2D anime."></div></div>
+    const styles = [...new Set(kits.flatMap(k => k.styles))], I = cmIll(), cks = [...new Set(iks.flatMap(k => combo(k.oi.CheckpointLoaderSimple, 'ckpt_name')))];
+    x += `<div class="lbl">Look</div><div class="row"><label>Start from</label>${seg('data-cmroute', [['still', '🖼 Illustrious stills'], ['clip', '🎬 Straight to video']], cm.route==='clip' ? 'clip' : 'still')}</div>`;
+    if(cm.route!=='clip') x += `<p class="note">Stills first: the look and the characters' LoRAs are exact, then each still is animated. Straight to video is the quick draft.</p>
+      <div class="row"><label>Model</label><div class="grow"><select data-cmill="ckpt">${cks.map(n => `<option value="${esc(n)}" ${n===(I.ckpt || (iks[0] || {}).ckpt) ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div></div>
+      <div class="row"><label>Style LoRA</label><div class="grow"><select data-cmill="style"><option value="">None</option>${loras.map(n => `<option value="${esc(n)}" ${n===I.style ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div>
+        ${I.style ? `<input type="number" data-cmill="styleW" value="${esc(I.styleW==null ? 1 : I.styleW)}" step="0.1" min="0" max="2" style="width:76px" aria-label="Strength">` : ''}</div>
+      ${I.style ? `<div class="row"><label>Its words</label><div class="grow"><input type="text" data-cmill="words" value="${esc(I.words || '')}" placeholder="its trigger, e.g. AFKJ Style"></div></div>` : ''}
+      <p class="note">Character LoRAs work best on the model they were trained on (librarianx_v2: iriselTouchIL_v10 with AFKJ Style at 1.0).</p>`;
+    else x += `<div class="row"><label>Style line</label><div class="grow"><input type="text" data-cmf="styleLine" value="${esc(cm.styleLine || '')}" placeholder="Animation in the style of 2D anime."></div></div>
       <div class="row"><label>Video LoRA</label><div class="grow"><select data-cmf="vlora"><option value="">None</option>${styles.concat(cm.vlora && !styles.includes(cm.vlora) ? [cm.vlora] : []).map(n => `<option value="${esc(n)}" ${n===cm.vlora ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div>
         ${cm.vlora ? `<input type="number" data-cmf="vloraW" value="${esc(cm.vloraW==null ? 1 : cm.vloraW)}" step="0.1" min="0" max="2" style="width:76px" aria-label="Strength">` : ''}</div>
       <div class="row"><label>Quality</label>${seg('data-cmq', [['quick', 'Quick (Turbo)'], ['best', 'Best (20 steps)']], cm.quality || 'quick')}</div>
-      <p class="note">Video LoRAs are the ones made for MiniMax H3. Illustrious LoRAs (your characters, AFKJ Style) come in later, when each panel gets its hires pass.</p>
-      <div class="btnrow"><button class="btn" data-cm="export" ${pg.panels.some(q => q.takes.length) ? '' : 'disabled'}>💾 Save the page</button></div>`;
+      <p class="note">Video LoRAs are the ones made for MiniMax H3. Illustrious LoRAs (your characters, AFKJ Style) work in the stills route.</p>`;
+    x += `<div class="btnrow"><button class="btn" data-cm="export" ${pg.panels.some(q => cmShown(q)) ? '' : 'disabled'}>💾 Save the page</button></div>`;
   }
   B.innerHTML = x; drawPage(); wireCm();
 }
@@ -6488,13 +6726,13 @@ function wireCm(){
   sl.onchange = () => save();
 }
 // its own tab (Jordan 2026-10-21): the comic replaces the recipe screen, and the tab is remembered
-function openComic(){ $('#comic').hidden = false; document.body.classList.add('cm-open'); S.tab = 'comic'; drawTabs(); CM(); drawComic(); scrollTo({top:0});
+function openComic(){ if(!TAGS) loadTags(); $('#comic').hidden = false; document.body.classList.add('cm-open'); S.tab = 'comic'; drawTabs(); CM(); drawComic(); scrollTo({top:0});
   cmAll().forEach(p => { if(p.making) cmWait(p); }); }
 function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.classList.remove('cm-open'); S.tab = 'render'; drawTabs(); }
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic') openComic(); else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
   else if(t.dataset.cmfold){ cm.open[t.dataset.cmfold] = !cm.open[t.dataset.cmfold]; }
@@ -6504,6 +6742,16 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmshot){ p.shot = t.dataset.cmshot; }
   else if(t.dataset.cmtake!=null){ p.take = +t.dataset.cmtake; }
   else if(t.dataset.cmq){ cm.quality = t.dataset.cmq; }
+  else if(t.dataset.cmroute){ cm.route = t.dataset.cmroute; }
+  else if(t.dataset.cmkeep){ p.keepBg = t.dataset.cmkeep==='1'; }
+  else if(t.dataset.cmstill!=null){ p.still = +t.dataset.cmstill; p.show = 'still'; cmPlay(false); }
+  else if(t.dataset.cmshow){ p.show = 'clip'; }
+  else if(t.dataset.cmplate!=null){ const pl = cm.plates[+t.dataset.cmplate]; if(pl) cm.loc = {url:pl.url, test:pl.test}; }
+  else if(a==='plate'){ cmJobs('plate', [cmPJ()]); return; }
+  else if(a==='stills'){ cmJobs('still', pg.panels.filter(q => !(q.stills || []).length && !q.making && !q.busy)); return; }
+  else if(a==='anims'){ cmJobs('anim', pg.panels.filter(q => (q.stills || []).length && !q.takes.length && !q.making && !q.busy)); return; }
+  else if(a==='still1'){ cmJobs('still', [p]); return; }
+  else if(a==='anim1'){ cmJobs('anim', [p]); return; }
   else if(a==='read'){ cmRead(); return; }
   else if(a==='prev' || a==='next'){ cm.sel = Math.max(0, Math.min(pg.panels.length - 1, cm.sel + (a==='next' ? 1 : -1))); }
   else if(a==='all'){ cmRender(pg.panels.filter(q => !q.takes.length && !q.making && !q.busy)); return; }
@@ -6522,6 +6770,9 @@ $('#comic').addEventListener('click', e => {
   const el = e.target, cm = CM(), pg = cmPage();
   if(el.dataset.cmf){ cm[el.dataset.cmf] = el.value; save(); if(ev==='change' && el.dataset.cmf!=='script') drawComic(); return; }
   if(el.dataset.cmp && pg){ const p = pg.panels[cm.sel]; p[el.dataset.cmp] = el.value; save(); if(ev==='change') drawComic(); return; }
+  if(el.dataset.cmill){ const I = cmIll(); I[el.dataset.cmill] = el.value;
+    if(el.dataset.cmill==='style' && ev==='change') I.words = el.value ? S.loraWords[el.value] || (/afkj/i.test(el.value) ? 'AFKJ Style' : '') : '';
+    save(); if(ev==='change' && el.dataset.cmill!=='words') drawComic(); return; }
   if(el.dataset.cms){ const s = cm.cast.find(x => x.id===el.dataset.id); if(!s) return; s[el.dataset.cms] = el.value;
     if(el.dataset.cms==='cid' && el.value){ const c = cmCard(s); if(c && !s.g) s.g = cmCardG(c); } save(); if(ev==='change') drawComic(); }
 }));
@@ -6539,8 +6790,9 @@ $('#cmPick').onchange = async e => {
 const cmDrag = {moved:false};
 $('#comic').addEventListener('pointerdown', e => {
   const el = e.target.closest('.cpanel.sel'); if(!el) { cmDrag.moved = false; return; }
-  const p = cmPage().panels[+el.dataset.cpi], v = el.querySelector('video'); cmDrag.moved = false; if(!p || !v || !v.videoWidth) return;
-  const box = el.getBoundingClientRect(), sc = Math.max(box.width / v.videoWidth, box.height / v.videoHeight), ox = v.videoWidth * sc - box.width, oy = v.videoHeight * sc - box.height;
+  const p = cmPage().panels[+el.dataset.cpi], v = el.querySelector('video,img.cpimg'); cmDrag.moved = false; if(!p || !v) return;
+  const vw = v.videoWidth || v.naturalWidth, vh = v.videoHeight || v.naturalHeight; if(!vw) return;
+  const box = el.getBoundingClientRect(), sc = Math.max(box.width / vw, box.height / vh), ox = vw * sc - box.width, oy = vh * sc - box.height;
   const x0 = e.clientX, y0 = e.clientY, p0 = Object.assign({x:50, y:50}, p.pos);
   const mv = ev => { const dx = ev.clientX - x0, dy = ev.clientY - y0; if(Math.abs(dx) + Math.abs(dy) > 6) cmDrag.moved = true; if(!cmDrag.moved) return;
     p.pos = {x:ox > 1 ? Math.max(0, Math.min(100, p0.x - dx / ox * 100)) : 50, y:oy > 1 ? Math.max(0, Math.min(100, p0.y - dy / oy * 100)) : 50};
@@ -6555,9 +6807,12 @@ async function cmPageCanvas(pg){
   const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H);
   const rects = cmRectsOf(pg), u = W; // page units -> pixels
   for(let i = 0; i < pg.panels.length; i++){
-    const p = pg.panels[i], r = rects[i], t = p.takes[p.take], dx = r.x * u, dy = r.y * u, dw = r.w * u, dh = r.h * u;
+    const p = pg.panels[i], r = rects[i], sh = cmShown(p), t = sh && (sh.clip || sh.still), dx = r.x * u, dy = r.y * u, dw = r.w * u, dh = r.h * u;
     x.fillStyle = '#ddd'; x.fillRect(dx, dy, dw, dh);
-    if(t && t.url){ const v = cmVid(t.url); await v._ready; await new Promise(ok => { const at = Math.min(v.duration - 0.01, v.duration * (p.frame==null ? CM_FRAME : p.frame) / 1000);
+    if(sh && sh.still && t.url){ const im = new Image(); im.crossOrigin = 'anonymous'; await new Promise((ok, no) => { im.onload = ok; im.onerror = () => no(new Error("a still couldn't be loaded")); im.src = t.url; });
+      const sc = Math.max(dw / im.naturalWidth, dh / im.naturalHeight), sw = dw / sc, sh2 = dh / sc, pos = Object.assign({x:50, y:50}, p.pos);
+      x.drawImage(im, (im.naturalWidth - sw) * pos.x / 100, (im.naturalHeight - sh2) * pos.y / 100, sw, sh2, dx, dy, dw, dh); }
+    else if(t && t.url){ const v = cmVid(t.url); await v._ready; await new Promise(ok => { const at = Math.min(v.duration - 0.01, v.duration * (p.frame==null ? CM_FRAME : p.frame) / 1000);
         if(Math.abs(v.currentTime - at) < 0.001 && !v.seeking) return ok(); v.addEventListener('seeked', ok, {once:true}); setTimeout(ok, 1500); v.currentTime = at; });
       const sc = Math.max(dw / v.videoWidth, dh / v.videoHeight), sw = dw / sc, sh = dh / sc, pos = Object.assign({x:50, y:50}, p.pos);
       x.drawImage(v, (v.videoWidth - sw) * pos.x / 100, (v.videoHeight - sh) * pos.y / 100, sw, sh, dx, dy, dw, dh); }

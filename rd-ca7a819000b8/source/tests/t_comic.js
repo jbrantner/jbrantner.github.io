@@ -12,16 +12,27 @@ const DEF = {
   BasicGuider:[['model','conditioning'],1], BasicScheduler:[['model','scheduler','steps','denoise'],1], KSamplerSelect:[['sampler_name'],1], RandomNoise:[['noise_seed'],1],
   SamplerCustomAdvanced:[['noise','guider','sampler','sigmas','latent_image'],2], VAEDecodeTiled:[['samples','vae','tile_size','overlap','temporal_size','temporal_overlap'],1],
   CreateVideo:[['images','fps'],1], SaveVideo:[['video','filename_prefix','format'],0],
+  MiniMaxH3ImageToVideo:[['clip','vae','prompt','width','height','length'],2], MiniMaxH3AddGuide:[['positive','latent','frame_idx'],1],
+  CheckpointLoaderSimple:[['ckpt_name'],3], LoraLoader:[['model','clip','lora_name','strength_model','strength_clip'],2], CLIPTextEncode:[['clip','text'],1],
+  ConditioningSetArea:[['conditioning','width','height','x','y','strength'],1], ConditioningCombine:[['conditioning_1','conditioning_2'],1],
+  ImageScale:[['image','upscale_method','width','height','crop'],1], VAEEncode:[['pixels','vae'],1], VAEDecode:[['samples','vae'],1], EmptyLatentImage:[['width','height','batch_size'],1],
+  ImageBlend:[['image1','image2','blend_factor','blend_mode'],1], ImageToMask:[['image','channel'],1], ThresholdMask:[['mask','value'],1], GrowMask:[['mask','expand'],1], ImageCompositeMasked:[['destination','source','x','y','mask'],1],
+  LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
+  SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
+  KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], SaveImage:[['images','filename_prefix'],0],
 };
 function check(g){ const errs = [];
   for(const [id,n] of Object.entries(g)){ const d = DEF[n.class_type]; if(!d){ errs.push(id+': unknown '+n.class_type); continue; }
     d[0].forEach(k => { if(!(k in n.inputs)) errs.push(id+' '+n.class_type+' missing '+k); });
     for(const [k,v] of Object.entries(n.inputs)) if(Array.isArray(v)){ const t = g[v[0]]; if(!t) errs.push(id+'.'+k+' -> missing '+v[0]); else if(v[1] >= DEF[t.class_type][1]) errs.push(id+'.'+k+' -> bad output '+v[1]); } }
   return errs; }
-const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['iriselTouchIL_v10.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler']), scheduler:C(['normal'])}}},
-  LoraLoader:{input:{required:{lora_name:C(['librarianx_v2.safetensors'])}}},
-  LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors', 'AFK_minimax_h3_style.safetensors', 'librarianx_v2.safetensors'])}}},
-  UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors']), weight_dtype:C(['default'])}}},
+const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler', 'euler_ancestral']), scheduler:C(['normal'])}}},
+  LoraLoader:{input:{required:{lora_name:C(['AFKJ Style Illustrious Claude.safetensors', 'librarianx_v2.safetensors'])}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors', 'minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors', 'AFK_minimax_h3_style.safetensors', 'librarianx_v2.safetensors'])}}},
+  UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']), weight_dtype:C(['default'])}}},
+  MiniMaxH3ImageToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, CLIPTextEncode:{input:{required:{}}}, ConditioningSetArea:{input:{required:{}}}, ConditioningCombine:{input:{required:{}}},
+  ImageScale:{input:{required:{}}}, VAEEncode:{input:{required:{}}}, VAEDecode:{input:{required:{}}}, EmptyLatentImage:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}}, FeatherMask:{input:{required:{}}}, SetLatentNoiseMask:{input:{required:{}}}, ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}},
+  LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:C(['BiRefNet-general.safetensors'])}}}, RemoveBackground:{input:{required:{}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['stable_diffusion','minimax'])}}},
   VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
   MiniMaxH3ReferenceToVideo:{input:{required:{}}}, SaveVideo:{input:{required:{}}}, SaveImage:{input:{required:{}}}, CreateVideo:{input:{required:{}}}, LoadImage:{input:{required:{}}}});
@@ -35,7 +46,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
   await page.routeWebSocket(/\.test\/ws/, ws => {});
-  const PCS = {};
+  const PCS = {}, ALL = [];
   for(const [name, host] of [['Render', 'https://jordo-desktop.test'], ['Main', 'https://jordo-main.test']]){
     const pc = PCS[name] = {url:host, sent:[], ups:[], polls:{}, outs:[]};
     await page.route(host + '/**', async r => {
@@ -47,12 +58,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       if(u.pathname==='/upload/image'){ const body = r.request().postData() || ''; const out = /name="type"\r\n\r\noutput/.test(body);
         if(out){ pc.outs.push(body.match(/name="subfolder"\r\n\r\n([^\r]*)/)[1]); return r.fulfill({ json:{name:'page_' + pc.outs.length + '.png', subfolder:pc.outs[pc.outs.length - 1], type:'output'} }); }
         pc.ups.push(1); return r.fulfill({ json:{name:name[0] + 'up_' + pc.ups.length + '.png', subfolder:'', type:'input'} }); }
-      if(u.pathname==='/prompt'){ pc.sent.push(JSON.parse(r.request().postData())); return r.fulfill({ json:{prompt_id:name[0] + pc.sent.length, number:0, node_errors:{}} }); }
+      if(u.pathname==='/prompt'){ const jj = JSON.parse(r.request().postData()); ALL.push(jj); pc.sent.push(jj); return r.fulfill({ json:{prompt_id:name[0] + pc.sent.length, number:0, node_errors:{}} }); }
       if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9), g = pc.sent[+id.slice(1) - 1].prompt, ks = Object.keys(g);
         if((pc.polls[id] = (pc.polls[id] || 0) + 1) < 2) return r.fulfill({ json:{[id]:{status:{completed:false}}} });
-        const vid = ks.find(k => g[k].class_type==='SaveVideo'), pre = g[vid].inputs.filename_prefix, cut = pre.lastIndexOf('/');
-        const f = {filename:pre.slice(cut + 1) + '_' + id + '_.webm', subfolder:pre.slice(0, cut), type:'output'};
-        return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:{[vid]:{images:[f]}}}} }); }
+        const vid = ks.find(k => g[k].class_type==='SaveVideo'), img = ks.find(k => g[k].class_type==='SaveImage'), sv = vid || img, pre = g[sv].inputs.filename_prefix, cut = pre.lastIndexOf('/');
+        const f = {filename:pre.slice(cut + 1) + '_' + id + '_.' + (vid ? 'webm' : 'png'), subfolder:pre.slice(0, cut), type:'output'};
+        return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:{[sv]:{images:[f]}}}} }); }
       if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{jobs:[], token:false} });
       if(u.pathname.startsWith('/renderdeck/')) return r.fulfill({ status:404, body:'' });
       r.fulfill({ status:404, body:'' });
@@ -64,7 +75,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on')); }
   await page.waitForFunction(() => S.servers.length===2 && allPcs().every(p => p.online && p.oi), null, {timeout:10000});
   await page.evaluate(srv => { closeSheets(); const u = f => srv + '/view?filename=' + f + '&subfolder=RenderDeck&type=output';
-    S.chars = [{id:'lib', name:'Librarian', tags:'1girl, long skirt', views:[{id:'v1', angle:'ref', img:'lib.png', url:u('lib_00001_.png'), home:srv}]}];
+    S.loraWords['librarianx_v2.safetensors'] = 'librarianx'; S.chars = [{id:'lib', name:'Librarian', trigger:'librarianx', tags:'1girl, long skirt', views:[{id:'v1', angle:'ref', img:'lib.png', url:u('lib_00001_.png'), home:srv}]}];
     S.gallery = [{url:u('street_00001_.png'), seed:1, prompt:'', t:Date.now()}]; save(); drawStrip(); show(0); }, PCS.Render.url);
 
   // the reader on its own
@@ -95,6 +106,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.fill('#comic input[data-cms="desc"] >> nth=1', 'a tall man in a dark hooded coat'); await page.dispatchEvent('#comic input[data-cms="desc"] >> nth=1', 'change');
   await page.click('#comic [data-cm="locshown"]');
   ok(await page.evaluate(() => /street_00001_/.test(CM().loc.url) && CM().place==='a street'), 'the place picture comes from the preview');
+  ok(await page.evaluate(() => CM().route==='still') && /Paint the stills/.test(await page.textContent('#comic')), 'stills first is the default route (Paint the stills)');
+  await page.click('#comic [data-cmroute="clip"]');
   await page.selectOption('#comic select[data-cmf="vlora"]', 'AFK_minimax_h3_style.safetensors');
   ok(!(await page.$$eval('#comic select[data-cmf="vlora"] option', o => o.map(x => x.value))).includes('librarianx_v2.safetensors'), 'the video LoRA list holds MiniMax LoRAs only, not Illustrious ones');
   await page.click('#comic [data-cm="all"]');
@@ -136,6 +149,48 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#comic [data-cm="export"]');
   await page.waitForFunction(n => S.gallery.length===n + 1, n0, {timeout:15000});
   ok([...PCS.Render.outs, ...PCS.Main.outs].includes('RenderDeck/comics/pages') && await page.evaluate(() => /page_1\.png/.test(S.gallery[0].url) && S.gallery[0].prompt==='Comic page 1'), 'the page is saved into RenderDeck/comics/pages and put at the front of the strip');
+  // ---- phase 2: stills first ----
+  await page.click('#comic [data-cmroute="still"]');
+  ok(await page.$eval('#comic select[data-cmill="ckpt"]', s => s.value)==='iriselTouchIL_v10.safetensors' && await page.$eval('#comic select[data-cmill="style"]', s => s.value)==='AFKJ Style Illustrious Claude.safetensors'
+    && await page.inputValue('#comic input[data-cmill="words"]')==='AFKJ Style', 'stills default to iriselTouchIL with AFKJ Style (its words filled in)');
+  ok(await page.$eval('#comic select[data-cms="lora"]', s => s.value)==='librarianx_v2.safetensors', 'the Librarian\'s own LoRA is found from her trigger word');
+  const sent0 = () => [...PCS.Render.sent, ...PCS.Main.sent].length, lastG = () => ALL[ALL.length - 1].prompt;
+  let n1 = sent0(); await page.click('#comic [data-cm="plate"]');
+  await page.waitForFunction(() => (CM().plates || []).length===1, null, {timeout:15000});
+  { const all2 = [...PCS.Render.sent, ...PCS.Main.sent].map(x => x.prompt), g = all2.find(x => Object.values(x).some(n => n.class_type==='SaveImage' && /comics\/place/.test(n.inputs.filename_prefix)));
+    const n = Object.values(g), pos = n.filter(x => x.class_type==='CLIPTextEncode')[0].inputs.text;
+    ok(g && check(g).length===0 && /no humans, scenery/.test(pos) && /AFKJ Style/.test(pos) && /street/.test(pos) && n.find(x => x.class_type==='EmptyLatentImage').inputs.width===1344, '🏙 Paint the place: an empty wide Illustrious plate in the AFKJ look: ' + check(g || {}).join('; ') + ' ' + pos);
+    ok(await page.evaluate(() => /place_/.test(CM().loc.url)), 'the painted place becomes the place picture'); }
+  await page.click('#comic [data-cm="stills"]');
+  await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:30000});
+  const stillGs = [...PCS.Render.sent, ...PCS.Main.sent].map(x => x.prompt).filter(g => Object.values(g).some(n => n.class_type==='SaveImage' && /comics\/still/.test(n.inputs.filename_prefix)));
+  ok(stillGs.length===5 && stillGs.every(g => check(g).length===0), '5 stills painted, every graph valid: ' + stillGs.map(g => check(g).join('; ')).join(' | '));
+  const txt = g => Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' || ');
+  const s4 = stillGs.find(g => /grab/i.test(txt(g))), s3 = stillGs.find(g => /walking|behind/i.test(txt(g)) && Object.values(g).some(n => n.class_type==='ConditioningSetArea'));
+  { const n = Object.values(s4 || {}), ll = n.filter(x => x.class_type==='LoraLoader').map(x => x.inputs.lora_name);
+    ok(s4 && n.find(x => x.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && ll.join()==='AFKJ Style Illustrious Claude.safetensors,librarianx_v2.safetensors', 'panel 4 still: iriselTouchIL + AFKJ + librarianx_v2: ' + ll);
+    ok(s4 && !n.some(x => x.class_type==='ConditioningSetArea') && /1girl, 1boy/.test(txt(s4)) && /librarianx/.test(txt(s4)) && /tall man in a dark hooded coat/.test(txt(s4)), 'the grab: both painted together in one area (no split), both looks in the prompt: ' + txt(s4).slice(0, 300));
+    const ksa = n.filter(x => x.class_type==='KSampler'), sc = n.find(x => x.class_type==='ImageScale');
+    ok(s4 && n.some(x => x.class_type==='SetLatentNoiseMask') && sc && sc.inputs.crop==='center' && ksa.length===2 && ksa[0].inputs.denoise===1 && ksa[1].inputs.denoise===0.3, 'painted over the place picture (cropped to the panel), only where the people go, then a 0.3 pass over the whole still'); }
+  { const n = Object.values(s4 || {}), cmp = n.find(x => x.class_type==='ImageCompositeMasked'), sv = n.find(x => x.class_type==='SaveImage');
+    ok(cmp && s4[cmp.inputs.destination[0]].class_type==='ImageScale' && s4[sv.inputs.images[0]]===cmp && n.some(x => x.class_type==='RemoveBackground') && n.some(x => x.class_type==='ImageBlend' && x.inputs.blend_mode==='difference'),
+      'Keep the background exact: the clean place goes back over everything but the people (difference + BiRefNet, inside their areas)'); }
+  ok(s3 && Object.values(s3).filter(x => x.class_type==='ConditioningSetArea').length===2, 'panel 3 (he walks behind her, apart): each gets their own area');
+  await page.waitForFunction(() => document.querySelectorAll('#cmPage img.cpimg').length===5, null, {timeout:10000});
+  ok(true, 'the page shows the 5 stills');
+  await page.click('#cmPage [data-cpi="0"]');
+  await page.click('#comic [data-cm="still1"]');
+  await page.waitForFunction(() => (cmPage().panels[0].stills || []).length===2, null, {timeout:15000});
+  ok(await page.$$eval('#comic [data-cmstill]', b => b.length)===2, 'Paint another keeps both stills to pick from');
+  // stills shown even where a clip exists from the quick route; Animate makes a new clip from the still
+  await page.click('#comic [data-cm="anim1"]');
+  await page.waitForFunction(() => cmPage().panels[0].takes.length===2 && cmPage().panels[0].show==='clip', null, {timeout:15000});
+  { const g = lastG(), n = Object.values(g), iv = n.find(x => x.class_type==='MiniMaxH3ImageToVideo');
+    ok(check(g).length===0 && iv && /still_/.test(g[iv.inputs.first_frame[0]].inputs.image) === false && g[iv.inputs.first_frame[0]].class_type==='LoadImage' && n.find(x => x.class_type==='UNETLoader').inputs.unet_name==='minimax_h3_fl2va_pruned_int8_convrot.safetensors',
+      '🎬 Animate: FL2V with the still as the first frame: ' + check(g).join('; '));
+    ok(/^The first frame is a wide shot/.test(iv.inputs.prompt) && /Librarian walks down a street/.test(iv.inputs.prompt), 'its prompt names her and the action: ' + iv.inputs.prompt.slice(0, 120)); }
+  ok(await page.$('#comic [data-cmshow="clip"].on'), 'the clip shows, and the still is a tap away');
+  await page.click('#comic [data-cmstill="0"]'); ok(await page.evaluate(() => cmPage().panels[0].show==='still') && await page.$('#cmPage [data-cpi="0"] img.cpimg'), 'tapping a still shows it in the panel again');
   // the tab is remembered
   await page.reload(); await page.waitForSelector('#cmPage .cpanel');
   ok(await page.isVisible('#comic') && await page.$$eval('#cmPage .cpanel', e => e.length)===5, 'after reopening the app it is still on the Comic tab with the page');
@@ -143,10 +198,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.evaluate(() => switchMode());
   ok(await page.isVisible('#comic') && !(await page.$('#cmPage')) && /🙈 Hidden/.test(await page.textContent('#comic')), 'Hidden starts with its own empty comic');
   await page.fill('#cmScript', 'Panel 1: a girl waves. Panel 2: she smiles.'); await page.dispatchEvent('#cmScript', 'input');
-  await page.click('#comic [data-cm="read"]'); await page.click('#comic [data-cm="all"]');
-  await page.waitForFunction(() => cmPage().panels.every(p => p.takes.length), null, {timeout:20000});
-  const last = [...PCS.Render.sent, ...PCS.Main.sent].slice(-1)[0];
-  ok(Object.values(last.prompt).find(x => x.class_type==='SaveVideo').inputs.filename_prefix==='Hidden/comics/panel', 'Hidden panels save into Hidden/comics');
+  await page.click('#comic [data-cm="read"]'); await page.click('#comic [data-cm="stills"]');
+  await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:20000});
+  ok(Object.values(ALL[ALL.length - 1].prompt).find(x => x.class_type==='SaveImage').inputs.filename_prefix==='Hidden/comics/still' && await page.evaluate(() => !CM().loc && !(CM().plates || []).length), 'Hidden stills save into Hidden/comics, and Hidden has no place of the normal comic');
   await page.evaluate(() => switchMode());
   ok(await page.evaluate(() => CM().pages[0].panels.length===5), 'back in normal: the 5-panel page is as it was');
   await page.click('#tabs [data-tab="render"]');
