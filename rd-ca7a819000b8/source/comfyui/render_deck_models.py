@@ -33,7 +33,7 @@ from aiohttp import web
 import folder_paths
 from server import PromptServer
 
-KINDS = ('checkpoints', 'loras', 'diffusion_models', 'vae', 'text_encoders', 'clip_vision', 'controlnet', 'upscale_models')  # the app's own picker offers the first two
+KINDS = ('checkpoints', 'loras', 'diffusion_models', 'vae', 'text_encoders', 'clip_vision', 'controlnet', 'upscale_models', 'geometry_estimation')  # geometry_estimation: MoGe depth for the comic's 3D look  # the app's own picker offers the first two
 CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites share one API and the same model ids
 HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
@@ -84,7 +84,10 @@ def _token():
 
 
 def _folder(kind):
-    return folder_paths.get_folder_paths(kind)[0]  # Comfy Desktop's shared models folder comes first
+    try:
+        return folder_paths.get_folder_paths(kind)[0]  # Comfy Desktop's shared models folder comes first
+    except KeyError:
+        raise ValueError('This ComfyUI has no ' + kind + ' folder yet: update ComfyUI first')
 
 
 def _clean(name):
@@ -635,7 +638,7 @@ async def delete(request):
 # ---------- sync: copy the models and LoRAs another of your computers has onto this one ----------
 def _models():
     return {k: [{'name': n.replace('\\', '/'), 'size': os.path.getsize(folder_paths.get_full_path(k, n))}
-                for n in folder_paths.get_filename_list(k) if n.lower().endswith('.safetensors')] for k in KINDS}
+                for n in folder_paths.get_filename_list(k) if n.lower().endswith('.safetensors')] for k in KINDS if k in folder_paths.folder_names_and_paths}  # an older ComfyUI has no geometry_estimation
 
 
 @routes.get('/renderdeck/models')
@@ -647,7 +650,7 @@ async def models(request):
 async def model_file(request):
     """Send one model or LoRA file. Only names ComfyUI itself lists are served, so nothing outside the models folders."""
     kind, name = request.query.get('kind'), request.query.get('name') or ''
-    listed = {n.replace('\\', '/'): n for n in folder_paths.get_filename_list(kind)} if kind in KINDS else {}
+    listed = {n.replace('\\', '/'): n for n in folder_paths.get_filename_list(kind)} if kind in KINDS and kind in folder_paths.folder_names_and_paths else {}
     if name not in listed or not name.lower().endswith('.safetensors'):
         return web.json_response({'error': 'No such model'}, status=404)
     path = folder_paths.get_full_path(kind, listed[name])

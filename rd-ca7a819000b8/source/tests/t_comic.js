@@ -20,7 +20,7 @@ const DEF = {
   DepthAnythingV2Preprocessor:[['image','resolution'],1], ImageBatch:[['image1','image2'],1], MaskToImage:[['mask'],1], AnimeLineArtPreprocessor:[['image','resolution'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
   SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
-  KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], ColorMatch:[['image_ref','image_target','method'],1], KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1], SaveImage:[['images','filename_prefix'],0],
+  KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], LoadMoGeModel:[['model_name'],1], MoGeInference:[['moge_model','image'],1], MoGeRender:[['moge_geometry','output'],1], ImageToMask:[['image','channel'],1], GrowMask:[['mask','expand','tapered_corners'],1], ColorMatch:[['image_ref','image_target','method'],1], KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1], SaveImage:[['images','filename_prefix'],0],
 };
 function check(g){ const errs = [];
   for(const [id,n] of Object.entries(g)){ const d = DEF[n.class_type]; if(!d){ errs.push(id+': unknown '+n.class_type); continue; }
@@ -246,6 +246,33 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const g = ALL[nb].prompt, n = Object.values(g), ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
     ok(check(g).length===0 && ks.join()==='0.65,0.25' && n.some(x => x.class_type==='SetLatentNoiseMask') && n.find(x => x.class_type==='SetUnionControlNetType').inputs.type==='tile' && n.filter(x => x.class_type==='LoadImage').length===2 && g[n.find(x => x.class_type==='SaveImage').inputs.images[0]].class_type==='ColorMatch',
       '✨ Use this angle: the swung view, its torn edges repainted at 0.65 then 0.25 over all, held by ProMax tile, colours matched back to the view, lands as a new still: ' + check(g).join('; ') + ' ' + ks); }
+  // ---- 3D look, better: MoGe-2 depth, which way it runs, and a third layer (the far backdrop) ----
+  { const sp = await page.evaluate(async () => { const mk = f => { const c = document.createElement('canvas'); c.width = 64; c.height = 96; const x = c.getContext('2d'), im = x.createImageData(64, 96);
+        for(let j = 0; j < 96; j++) for(let i = 0; i < 64; i++){ const v = f(i, j); im.data.set([v, v, v, 255], (j * 64 + i) * 4); } x.putImageData(im, 0, 0); return c.toDataURL(); };
+      const two = await d3Split(mk((i, j) => j > 60 ? 220 : 30), false), slope = await d3Split(mk((i, j) => Math.round(j * 2.6)), false);
+      return {two:!!two && Math.abs(two.near - 35 / 96) < 0.05, slope:slope===null, dbg:JSON.stringify([two && two.near, slope && slope.near])}; });
+    ok(sp.two && sp.slope, 'the background splits in two only where its depth has a clear near part and far part (not a smooth slope) ' + sp.dbg); }
+  { const fl = await page.evaluate(async () => { const mk = (f, w = 64, h = 64) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'), im = x.createImageData(w, h);
+        for(let j = 0; j < h; j++) for(let i = 0; i < w; i++){ const v = f(i, j); im.data.set([v, v, v, 255], (j * w + i) * 4); } x.putImageData(im, 0, 0); return c.toDataURL(); };
+      const ph = {id:'t3d', url:mk(() => 128), depth:mk((i, j) => i > 20 && i < 44 ? 40 : 200), mask:mk((i, j) => i > 20 && i < 44 ? 255 : 0), moge:true};
+      await d3After(ph); const a = ph.dflip; const ph2 = Object.assign({}, ph, {moge:false}); await d3After(ph2); return {a, b:ph2.dflip, e:ph.err}; });
+    ok(fl.a===true && !fl.b, 'MoGe depth that runs the other way (the character darker than the wall) is turned round; Depth Anything\'s is left ' + JSON.stringify(fl)); }
+  await page.evaluate(() => { const o = allPcs().find(p => /desktop/.test(p.url)).oi; Object.assign(o, {LoadMoGeModel:{input:{required:{model_name:[['moge_2_vitl_normal_fp16.safetensors']]}}}, MoGeInference:{input:{required:{}}},
+    MoGeRender:{input:{required:{output:[['depth_colored', 'depth', 'mask', 'normal_opengl', 'normal_directx']]}}}}); drawComic(); });
+  { const nb = ALL.length; await page.click('#comic [data-cm="d3"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q && q.depth && !q.making; }, null, {timeout:20000});
+    const g = ALL[nb].prompt, n = Object.values(g), r = n.filter(x => x.class_type==='MoGeRender');
+    ok(check(g).length===0 && r.length===2 && r.every(x => x.inputs.output==='depth') && n.find(x => x.class_type==='LoadMoGeModel').inputs.model_name==='moge_2_vitl_normal_fp16.safetensors' && !n.some(x => x.class_type==='DepthAnythingV2Preprocessor')
+      && await page.evaluate(() => cmPage().panels[2].d3.moge), 'with ComfyUI\'s MoGe nodes and MoGe-2 on a computer, the 3D look reads both depths with MoGe-2: ' + check(g).join('; ')); }
+  { const nb = ALL.length; await page.evaluate(async () => { const ph = cmPage().panels[2].d3, c = document.createElement('canvas'); c.width = 8; c.height = 8; await cmFar(ph, {canvas:c, t:0.5, near:0.4}); });
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.far && !q.making; }, null, {timeout:20000});
+    const g = ALL[nb].prompt, n = Object.values(g), sv = n.find(x => x.class_type==='SaveImage');
+    ok(check(g).length===0 && n.some(x => x.class_type==='ImageToMask') && n.some(x => x.class_type==='SetLatentNoiseMask') && /no humans, scenery, distant view/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join())
+      && g[sv.inputs.images[0]].class_type==='ImageBatch' && n.some(x => x.class_type==='MoGeRender'), 'the far backdrop: the near part of the background painted out (Illustrious, scenery), its depth read again: ' + check(g).join('; '));
+    ok(await page.evaluate(() => { const q = cmPage().panels[2].d3; return d3Layers(q).length===3 && q.nearMask && d3Layers(q)[1].mask===q.nearMask; }) && /Three layers/.test(await page.textContent('#comic .d3box')), 'and the 3D look draws three layers: far backdrop, near background, character'); }
+  await page.waitForTimeout(300);
+  { const n = await page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
+    ok(n > 100, 'the three layers draw'); }
   // ---- 🎨 a panel's own full recipe (the Render tab, swapped to the panel) ----
   { const before = await page.evaluate(() => ({prompt:S.prompt, gal:S.gallery[0].url, blocks:S.blocks.length}));
     await page.click('#cmPage [data-cpi="3"]'); await page.click('#comic [data-cm="ws"]');
