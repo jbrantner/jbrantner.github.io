@@ -614,7 +614,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.99'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.100'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5857,14 +5857,14 @@ function obCanvas(w, h, short){ const r = w / h; let W = r >= 1 ? short * r : sh
 // the touch-up: the Illustrious checkpoint, and a union ControlNet (ProMax) with anime line art when there is one
 function obTouch(oi){ return {oi, ckpt:oi.CheckpointLoaderSimple && trainCkpt(oi), cn:combo(oi.ControlNetLoader, 'control_net_name').find(n => /promax|union/i.test(baseName(n))),
   lines:oi.AnimeLineArtPreprocessor ? 'AnimeLineArtPreprocessor' : oi.Canny ? 'Canny' : ''}; }
-function kitOrbit(){
+function kitOrbit(avoid){
   const pcs = S.test ? [{url:'test', oi:FAKEOB}] : allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && p.oi.SaveVideo && (p.oi.MiniMaxH3ImageToVideo || p.oi.MiniMaxH3ReferenceToVideo));
   const pick = (oi, cls, k, re) => combo(oi[cls], k).find(n => re.test(baseName(n)));
   const fl = q => !!(q.oi.MiniMaxH3ImageToVideo && pick(q.oi, 'UNETLoader', 'unet_name', /fl2v/i));
   // a free computer first (Jordan 2026-10-20: an orbit sat waiting behind Render's work while Main was free), then the
   // FL2V model (more faithful), then the shorter queue, then the render computer
   const busy = q => (q.load || 0) > 0 || /training/i.test(q.why || ''); // the farm says so while kohya has its GPU
-  const p = pcs.sort((a, b) => busy(a) - busy(b) || fl(b) - fl(a) || (a.load || 0) - (b.load || 0) || (b.url===farmHost()) - (a.url===farmHost()))[0];
+  const p = pcs.sort((a, b) => (a.url===avoid) - (b.url===avoid) || busy(a) - busy(b) || fl(b) - fl(a) || (a.load || 0) - (b.load || 0) || (b.url===farmHost()) - (a.url===farmHost()))[0];
   if(!p) return {why: !S.servers.length ? 'Connect to your render computer first' : !allPcs().some(x => x.online) ? "Your computers can't be reached right now. Is Tailscale on, and is the internet up?"
     : 'None of your computers that are on has the MiniMax H3 video nodes: update ComfyUI'};
   const oi = p.oi, k = {url:p.url, oi, fl:fl(p)}, other = pcs.find(q => q!==p && fl(q) && busy(q));
@@ -5886,7 +5886,7 @@ const FAKEOB = {MiniMaxH3ImageToVideo:{input:{required:{}}}, SaveVideo:{input:{r
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors']]}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors']]}}},
   ControlNetLoader:{input:{required:{control_net_name:[['diffusion_pytorch_model_promax.safetensors']]}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, SetUnionControlNetType:{input:{required:{}}},
   KSampler:{input:{required:{sampler_name:[['euler']], scheduler:[['normal']]}}}};
-function orbitGraph(k, img, o, w, h){
+function orbitGraph(k, img, o, w, h, prefix){
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
@@ -5904,7 +5904,7 @@ function orbitGraph(k, img, o, w, h){
   const out = add('SamplerCustomAdvanced', {noise:[no,0], guider:[gd,0], sampler:[sa,0], sigmas:[sc,0], latent_image:lat});
   const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
   const vid = add('CreateVideo', {images:[dec,0], fps:24});
-  const save = add('SaveVideo', {video:[vid,0], filename_prefix:obPrefix('orbit'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  const save = add('SaveVideo', {video:[vid,0], filename_prefix:prefix || obPrefix('orbit'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   return {g, save};
 }
 // the picked frame redrawn: 1.5x, then Illustrious at the light denoise with ControlNet holding the line art (bigger only at 0)
@@ -6214,7 +6214,7 @@ const CMUP = {};           // computer|picture url -> the name it has in that co
 let CM_SENT = [];          // Test mode: the graphs made
 const CM = () => S.comic || (S.comic = {script:'', pages:[], cur:0, sel:0, cast:[], place:'', loc:null, styleLine:'Animation in the style of 2D anime.', vlora:'', vloraW:1, quality:'quick', route:'still', open:{script:true}});
 const cmPage = () => { const cm = CM(); return cm.pages[cm.cur] || null; };
-const cmAll = () => [S.comic, S.stash && S.stash.comic].filter(Boolean).flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3] : []))).concat(cm.pj ? [cm.pj] : []));
+const cmAll = () => [S.comic, S.stash && S.stash.comic].filter(Boolean).flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []))).concat(cm.pj ? [cm.pj] : []));
 // a panel's still options are painted as jobs of their own (p.extra), so they spread over both computers
 const cmBusy = p => !!(p.making || p.busy || (p.extra || []).length);
 const cmLead = p => p.making || p.busy ? p : (p.extra || []).find(x => x.making || x.busy) || null;
@@ -6453,18 +6453,18 @@ async function cmWait(p){
   const m = p.making; if(!m || CM_RUN.has(m.id)) return; CM_RUN.add(m.id);
   let got = null;
   try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, m.video!==false, m.all); got = m.all ? {urls:f.map(x => viewUrl(x, m.pc)), url:viewUrl(f[0], m.pc)} : {url:viewUrl(f, m.pc), pc:m.pc, w:m.w, h:m.h, t:Date.now()}; }
-  catch(err){ p.err = "Couldn't make the " + ({still:'still', angle:'new angle', finish:'finished frame', plate:'place', depth:'depth', far:'far background'}[m.kind] || 'clip') + ': ' + err.message; }
-  finally{ CM_RUN.delete(m.id); if(p.making===m) p.making = null; if(got) cmGot(p, m.kind || 'clip', got); else { cmDrop(p); save(); if(!$('#comic').hidden) drawComic(); } }
+  catch(err){ if(!m.cancel) p.err = "Couldn't make the " + ({still:'still', angle:'new angle', finish:'finished frame', plate:'place', depth:'depth', far:'far background', orbit:'MiniMax view'}[m.kind] || 'clip') + ': ' + err.message; }
+  finally{ CM_RUN.delete(m.id); if(p.making===m) p.making = null; if(got && !m.cancel) cmGot(p, m.kind || 'clip', got); else { cmDrop(p); save(); if(!$('#comic').hidden) drawComic(); } }
 }
 // an option job that is over (or failed) leaves its panel, passing its error on
 function cmDrop(c){ if(!c.parent) return; const p = cmAll().find(x => x.id===c.parent && !x.parent); if(!p) return; if(c.err) p.err = c.err; p.extra = (p.extra || []).filter(x => x!==c); }
-function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', angle:'Painting the new angle', finish:'Finishing the frame', plate:'Painting the place', depth:'Reading the depth', far:'Painting the far background'}[m.kind] || 'Animating') : null; }
+function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', angle:'Painting the new angle', finish:'Finishing the frame', plate:'Painting the place', depth:'Reading the depth', far:'Painting the far background', orbit:'MiniMax circling ' + (m.side || '')}[m.kind] || 'Animating') : null; }
 function cmBar(){ if($('#comic').hidden) return; const pg = cmPage(); if(!pg) return;
-  pg.panels.concat(CM().pj || [], pg.panels.map(q => q.d3).filter(Boolean)).forEach(p => { const l = cmLead(p); if(!l || !l.making) return; const e = cmEta(l), n = (p.extra || []).length + (p.making ? 1 : 0);
+  pg.panels.concat(CM().pj || [], pg.panels.flatMap(q => q.d3 ? [q.d3].concat(d3Orbs(q.d3)) : [])).forEach(p => { const l = cmLead(p); if(!l || !l.making) return; const e = cmEta(l), n = (p.extra || []).length + (p.making ? 1 : 0);
     document.querySelectorAll(`[data-cmbar="${p.id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
     document.querySelectorAll(`[data-cmtxt="${p.id}"]`).forEach(el => el.textContent = e.text + (n > 1 ? ' · ' + n + ' options to go' : '')); }); }
 let cmTicks = 0;
-setInterval(() => { if($('#comic').hidden || document.visibilityState!=='visible') return; const pg = cmPage(), busy = pg ? pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 || [])).concat(CM().pj || []).filter(p => p.making) : [];
+setInterval(() => { if($('#comic').hidden || document.visibilityState!=='visible') return; const pg = cmPage(), busy = pg ? pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : [])).concat(CM().pj || []).filter(p => p.making) : [];
   if(!busy.length) return; if(!S.test && ++cmTicks % 5===1) busy.forEach(p => liveQueue(p.making.id, p.making.pc).then(cmBar)); cmBar(); }, 1000);
 
 // --- phase 2 (Jordan 2026-10-21): stills first. The place is painted once with nobody in it (the plate); each panel's still is
@@ -6910,7 +6910,7 @@ function d3Picture(ph, W, H, mode){ const c = document.createElement('canvas'); 
 function d3Html(p, st){
   const ph = p.d3 && p.d3.url===st.url ? p.d3 : null;
   if(!ph) return `<div class="btnrow"><button class="btn" data-cm="d3">🌄 3D look</button></div>`;
-  if(!ph.depth) return ph.making || ph.busy ? `<div class="pbar obbar"><i data-cmbar="${ph.id}"></i></div><p class="note" data-cmtxt="${ph.id}">${esc(ph.busy || '')}</p>`
+  if(!ph.depth) return ph.making || ph.busy ? `<div class="pbar obbar"><i data-cmbar="${ph.id}"></i></div><p class="note" data-cmtxt="${ph.id}">${esc(ph.busy || '')}</p><div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop</button></div>`
     : `${ph.err ? `<p class="warn">${esc(ph.err)}</p>` : ''}<div class="btnrow"><button class="btn" data-cm="d3">🌄 3D look</button></div>`;
   return `<div class="obpanel d3box"><div class="obhead"><b>🌄 3D look</b><button class="chipbtn" data-cm="d3off" aria-label="Close the 3D look">✕</button></div>
     <div class="scwrap"><canvas class="scview" data-d3view></canvas></div>
@@ -6918,6 +6918,7 @@ function d3Html(p, st){
     ${ph.making && ph.making.kind==='far' ? `<div class="pbar obbar"><i data-cmbar="${ph.id}"></i></div><p class="note" data-cmtxt="${ph.id}"></p>` : ''}${d3MogeHtml(ph)}
     <div class="row"><label>Depth</label><div class="slider"><input type="range" data-d3="amt" min="0.2" max="2" step="0.05" value="${d3Amt(ph)}"><output>${d3Amt(ph).toFixed(2)}</output></div></div>
     <div class="btnrow"><button class="btn" data-cm="d3wig">${D3.play ? '⏸ Stop' : '▶ Wiggle'}</button><button class="btn" data-cm="d3rec">💾 Save the wiggle</button><button class="btn" data-cm="d3reset">↺ Straight on</button></div>
+    ${d3OrbHtml(ph)}
     <div class="btnrow"><button class="btn hot" data-cm="d3use" ${cmIllKits().length && !cmBusy(p) ? '' : 'disabled'}>✨ Use this angle</button></div>
     <p class="note">Use this angle paints the swung view as a new still for this panel: the stretched edges are repainted (0.65), then one light pass over it all (0.25), held to the view by ProMax tile.</p></div>`;
 }
@@ -6932,10 +6933,92 @@ async function d3GetMoge(pc){
     if(j.error) throw new Error(/kind|checkpoint or LoRA/i.test(j.error) ? pcName(pc) + "'s helper needs the update first (the paste line in the thread), then a ComfyUI restart" : j.error);
     toast('Downloading MoGe-2 on ' + pcName(pc) + '. Restart ComfyUI there from ☰ when it is done, then make the 3D look again'); }
   catch(err){ toast(err.message, true); } }
+// 🎞 MiniMax views (Jordan 2026-10-21: "use minimax rotating around it to help"): two short MiniMax orbits from the still, one
+// circling left and one right; dragging then scrubs through those painted views, so a bigger swing shows real new sides
+// instead of stretched depth. The depth relief stays for the instant, small swing. Use this angle finishes the exact frame.
+const D3_ORB_N = 16, D3F = {}; // frames per side, taken from the move (the first 4 s of the clip); url -> frames
+const d3Orbs = ph => ['left', 'right'].map(s => ph.orbs && ph.orbs[s]).filter(Boolean);
+const d3OrbReady = ph => ph.orbs && ph.orbs.left && ph.orbs.left.url && ph.orbs.right && ph.orbs.right.url;
+function d3OrbHtml(ph){
+  const os = d3Orbs(ph), busy = os.filter(o => o.making || o.busy), deg = ph.orbDeg || 35;
+  const seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${esc(v)}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`; // the comic's own buttons
+  let x = '<div class="lbl">🎞 Real angles</div>';
+  if(d3OrbReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth'], ['mm', '🎞 MiniMax views']], ph.view==='mm' ? 'mm' : 'depth')}</div>`
+    + (ph.view==='mm' ? `<p class="note">${D3F[ph.orbs.left.url] && D3F[ph.orbs.right.url] && D3F[ph.orbs.left.url].ready && D3F[ph.orbs.right.url].ready ? 'Drag left and right through MiniMax\'s painted views (up to ' + deg + '° each way). Use this angle finishes that exact view in Illustrious.' : 'Loading the views…'}</p>` : '');
+  x += busy.map(o => `<div class="pbar obbar"><i data-cmbar="${o.id}"></i></div><p class="note" data-cmtxt="${o.id}">${esc(o.busy || '')}</p>`).join('');
+  if(busy.length) x += '<div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop the views</button></div>';
+  x += os.filter(o => o.err).map(o => `<p class="warn">${esc(o.err)}</p>`).join('');
+  if(!busy.length){ const k = kitOrbit();
+    x += `<div class="row"><label>How far</label>${seg('data-d3deg', [[20, 'A little'], [35, 'Some'], [60, 'A lot']], deg)}</div>
+      <div class="btnrow"><button class="btn" data-cm="d3orb" ${k.why ? 'disabled' : ''}>🎞 ${d3OrbReady(ph) ? 'Make the views again' : 'Make real angles with MiniMax'}</button></div>
+      <p class="note">${k.why ? esc(k.why) : 'Two MiniMax clips from this still, one circling left and one right (' + k.mins + ' min each, on both computers at once when both are free). Then dragging shows real painted sides instead of stretched depth.'}</p>`; }
+  return x; }
+async function d3Orbit(p){
+  const ph = p.d3, pg = cmPage(), i = pg.panels.indexOf(p); if(!ph) return; ph.orbs = {}; let avoid = null;
+  for(const side of ['left', 'right']){
+    const host = ph.orbs[side] = {id:ph.id + '_' + side, busy:'Sending the still…'}, k = kitOrbit(avoid); drawComic();
+    try{ if(k.why) throw new Error(k.why); avoid = k.url;
+      const img = S.test ? 'test.png' : await cmUp(ph.url, k.url), sz = S.test ? [576, 1024] : await obSize(ph.url), [w, h] = obCanvas(sz[0], sz[1], 576);
+      const prefix = cmPrefixP(pg, i, 'orbit_' + side), G = orbitGraph(k, img, {dir:side, deg:ph.orbDeg || 35, tilt:0, scene:p.text}, w, h, prefix);
+      if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete host.busy; cmGot(host, 'orbit', {test:true}); continue; }
+      const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
+      if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+      host.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:(k.steps===20 ? 15 : k.fl ? 5 : 3) * cmSlow(k.url), smp:samplerOf(G.g), kind:'orbit', side, video:true}; delete host.busy; save(); drawComic(); cmWait(host);
+    }catch(err){ delete host.busy; host.err = "Couldn't make the " + side + ' view: ' + err.message; save(); drawComic(); }
+  }
+}
+// the frames of the move, small enough to keep on a phone (16 a side at about 640 px)
+function d3Frames(url){
+  if(D3F[url]) return D3F[url];
+  const F = D3F[url] = {ready:false, list:[]};
+  F.wait = (async () => {
+    if(url==='test'){ for(let n = 0; n < D3_ORB_N; n++){ const c = document.createElement('canvas'); c.width = 64; c.height = 112; const x = c.getContext('2d'); x.fillStyle = 'hsl(' + n * 20 + ',70%,50%)'; x.fillRect(0, 0, 64, 112); F.list.push(c); } F.ready = true; return F; }
+    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto';
+    v.src = await (TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded'); return r.blob(); }).then(b => URL.createObjectURL(b)));
+    await new Promise((ok, no) => { v.onloadeddata = ok; v.onerror = () => no(new Error('the clip could not be read')); });
+    const end = Math.min(v.duration - 0.05, 4), s = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
+    for(let n = 0; n < D3_ORB_N; n++){ v.currentTime = end * n / (D3_ORB_N - 1); await new Promise(ok => v.onseeked = ok);
+      const c = document.createElement('canvas'); c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); F.list.push(c); }
+    F.ready = true; return F; })().catch(e => { delete D3F[url]; throw e; });
+  return F; }
+// yaw > 0 is the camera moving right, as in the depth view: the right orbit's frame that far along, blended between neighbours
+function d3MmDraw(ph, cv){
+  if(!d3OrbReady(ph)) return false; const yaw = +ph.yaw || 0, F = d3Frames(ph.orbs[yaw >= 0 ? 'right' : 'left'].url);
+  if(!F.ready){ F.wait.then(() => { d3Redraw(); if(!$('#comic').hidden) drawComic(); }).catch(e => toast(e.message, true)); return false; }
+  const f = Math.min(1, Math.abs(yaw) / 0.35) * (F.list.length - 1), a = Math.floor(f), b = Math.min(F.list.length - 1, a + 1), x = cv.getContext('2d');
+  const draw = (c, al) => { const r = Math.max(cv.width / c.width, cv.height / c.height), w = c.width * r, h = c.height * r; x.globalAlpha = al; x.drawImage(c, (cv.width - w) / 2, (cv.height - h) / 2, w, h); };
+  x.globalAlpha = 1; x.fillStyle = '#000'; x.fillRect(0, 0, cv.width, cv.height); draw(F.list[a], 1); if(b!==a) draw(F.list[b], f - a); x.globalAlpha = 1; return true; }
+// Use this angle on a MiniMax view: that moment of the clip at full size, finished in Illustrious as a new still
+async function d3UseMm(p){
+  const ph = p.d3, yaw = +ph.yaw || 0, url = ph.orbs[yaw >= 0 ? 'right' : 'left'].url, frac = Math.min(1, Math.abs(yaw) / 0.35);
+  try{ let c;
+    if(url==='test'){ c = document.createElement('canvas'); c.width = 576; c.height = 1024; c.getContext('2d').fillRect(0, 0, 576, 1024); }
+    else { const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.src = await TVBLOB[url]; await new Promise(ok => v.onloadeddata = ok);
+      v.currentTime = Math.min(v.duration - 0.05, 4) * frac; await new Promise(ok => v.onseeked = ok);
+      c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); }
+    CMFIN[p.id] = c; cmJobs('finish', [p]); }
+  catch(err){ toast("Couldn't take that view: " + err.message, true); } }
+// ✕ Stop (Jordan 2026-10-21: there was no way to cancel the comic's jobs): each job is taken out of its computer's queue, or
+// interrupted if it is the one painting; Stop all also clears any comic job still in a queue that this phone lost track of
+const cmHosts = cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []))).concat(cm.pj ? [cm.pj] : []);
+async function cmStop(hosts, all){
+  const ms = []; hosts.forEach(h => { if(h.making){ h.making.cancel = true; ms.push(h.making); h.making = null; } delete h.busy; delete h.nearNext; if(h.parent) cmDrop(h); });
+  save(); drawComic(); let n = ms.length;
+  if(S.test){ toast(n ? 'Stopped ' + n + (n > 1 ? ' jobs' : ' job') : 'Nothing to stop'); return; }
+  const kill = async (pc, ids) => { if(!ids.length) return; try{ await fetch(pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:ids})});
+    const q = await (await fetch(pc + '/queue')).json(), run = (q.queue_running || []).find(x => ids.includes(x[1]));
+    if(run) await fetch(pc + '/interrupt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt_id:run[1]})}); }catch(e){} };
+  const by = {}; ms.forEach(m => (by[m.pc] = by[m.pc] || []).push(m.id)); await Promise.all(Object.entries(by).map(([pc, ids]) => kill(pc, ids)));
+  if(all){ const root = (S.hidden ? HIDDEN : 'RenderDeck') + '/comics/'; // jobs in the queues saving into this workstation's comic folder
+    await Promise.all(allPcs().filter(p => p.online).map(async p => { try{ const q = await (await fetch(p.url + '/queue')).json();
+      const ids = [...(q.queue_running || []), ...(q.queue_pending || [])].filter(x => Object.values(x[2] || {}).some(nd => String((nd.inputs || {}).filename_prefix || '').startsWith(root))).map(x => x[1]).filter(id => !ms.some(m => m.id===id));
+      n += ids.length; await kill(p.url, ids); }catch(e){} })); }
+  toast(n ? 'Stopped ' + n + (n > 1 ? ' comic jobs' : ' comic job') : 'Nothing was running'); buzz(); }
 function d3Redraw(){
   const cv = $('#comic [data-d3view]'), pg = cmPage(); if(!cv || !pg) return; const ph = pg.panels[CM().sel].d3; if(!ph || !ph.depth) return;
   const ar = (ph.w || 16) / (ph.h || 9), w = cv.clientWidth || 320, h = Math.round(w / ar), d = Math.min(2, window.devicePixelRatio || 1), W = Math.round(w * d), H = Math.round(h * d);
   if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; cv.style.height = h + 'px'; }
+  if(ph.view==='mm' && d3MmDraw(ph, cv)) return;
   const m0 = scMesh(d3Layers(ph)[0]); if(m0.ready && (ph.w!==m0.w || ph.h!==m0.h)){ ph.w = m0.w; ph.h = m0.h; requestAnimationFrame(d3Redraw); }
   try{ cv.getContext('2d').drawImage(scDraw(d3Layers(ph), d3Cam(ph, W, H), W, H, 'colour', D3_NEAR, d3Far(ph)), 0, 0); }catch(e){ toast(e.message, true); }
 }
@@ -6953,7 +7036,7 @@ function d3Wiggle(on){
   const pg = cmPage(), ph = pg && pg.panels[CM().sel].d3; if(!ph) return;
   if(!on){ if(D3.keep){ ph.yaw = D3.keep[0]; ph.pitch = D3.keep[1]; D3.keep = null; d3Redraw(); } return; }
   D3.keep = [+ph.yaw || 0, +ph.pitch || 0]; D3.t0 = performance.now();
-  const step = t => { if(!D3.play) return; const a = (t - D3.t0) / 1000 * Math.PI * 2 / 2.4; ph.yaw = D3.keep[0] + 0.1 * Math.sin(a); ph.pitch = D3.keep[1] + 0.025 * Math.sin(2 * a); d3Redraw(); D3.raf = requestAnimationFrame(step); };
+  const step = t => { if(!D3.play) return; const a = (t - D3.t0) / 1000 * Math.PI * 2 / 2.4, mm = ph.view==='mm'; ph.yaw = mm ? 0.3 * Math.sin(a) : D3.keep[0] + 0.1 * Math.sin(a); ph.pitch = mm ? 0 : D3.keep[1] + 0.025 * Math.sin(2 * a); d3Redraw(); D3.raf = requestAnimationFrame(step); };
   D3.raf = requestAnimationFrame(step);
 }
 // two swings recorded off the canvas, offered to the phone (mp4 where the phone records it, else webm)
@@ -7024,6 +7107,7 @@ function cmGot(p, kind, it){
     if(it.urls && it.urls.length >= 4){ p.bg = it.urls[1]; p.bgDepth = it.urls[2]; p.mask = it.urls[3]; }
     ['far', 'farDepth', 'nearMask'].forEach(x => delete p[x]); p.dflip = false;
     save(); if(!$('#comic').hidden) drawComic(); if(it.url) d3After(p); return; }
+  if(kind==='orbit'){ p.url = it.url || 'test'; delete p.err; save(); if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='far'){ if(it.urls && it.urls.length >= 2){ p.far = it.urls[0]; p.farDepth = it.urls[1]; p.nearMask = p.nearNext; } delete p.nearNext; save(); if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='angle' || kind==='finish') kind = 'still';
   if(p.parent){ const c = p; p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p){ save(); return; } }
@@ -7085,6 +7169,7 @@ function drawComic(){
       <div class="cmlays">${(pg.lays || []).map((r, i) => cmLayThumb(r, cmTexts(pg), r.join()===pg.rows.join(), i)).join('')}</div>
       <div class="row"><label>Borders</label>${seg('data-cmborder', [['white', '⬜ White'], ['black', '⬛ Black']], cm.border==='black' ? 'black' : 'white')}</div>
       <div class="cmpage${cm.border==='black' ? ' dark' : ''}" id="cmPage"></div>
+      ${cmHosts(cm).some(h => h.making || h.busy) ? `<div class="btnrow"><button class="btn" data-cm="stopall">✕ Stop all comic jobs (${cmHosts(cm).filter(h => h.making || h.busy).length})</button></div>` : ''}
       <div class="btnrow"><button class="btn" data-cm="play">${CM_PLAY ? '⏸ Stop' : '▶ Play all'}</button>${still ? (noStill.length ? `<button class="btn hot" data-cm="stills">🖼 Paint ${noStill.length===pg.panels.length ? 'the stills' : noStill.length + ' still' + (noStill.length > 1 ? 's' : '')}</button>`
         : `<button class="btn hot" data-cm="anims" ${noAnim.length ? '' : 'disabled'}>🎬 ${noAnim.length ? 'Animate ' + noAnim.length + ' still' + (noAnim.length > 1 ? 's' : '') : 'Every panel has a clip'}</button>`)
         : `<button class="btn hot" data-cm="all" ${!empty.length ? 'disabled' : ''}>🎬 ${empty.length===pg.panels.length ? 'Render the page' : empty.length ? 'Render ' + empty.length + ' empty panel' + (empty.length > 1 ? 's' : '') : 'Every panel has a clip'}</button>`}</div>
@@ -7109,7 +7194,7 @@ function drawComic(){
         <div class="row"><label>Touch-up</label>${seg('data-cmfin', [[0, 'Bigger only'], [0.25, 'Light'], [0.4, 'Medium'], [0.55, 'Strong']], cm.finDn==null ? 0.4 : cm.finDn)}</div>
         <p class="note">📸 keeps the frame as it is. ✨ paints over it in Illustrious, as the Render tab's Finish this frame does: bigger, with this panel's model, style LoRA, characters' LoRAs and tags, held by ProMax line art and tile, colours matched back. Both land as stills of the panel, so 🌄 3D look and Wiggle work on them.</p>`;
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
-      if(cmBusy(p)) x += `<div class="pbar obbar"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p>`;
+      if(cmBusy(p)) x += `<div class="pbar obbar"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p><div class="btnrow"><button class="btn" data-cm="stop">✕ Stop this panel</button></div>`;
       else if(still) x += `<div class="btnrow"><button class="btn${sts.length ? '' : ' hot'}" data-cm="still1">🖼 ${sts.length ? 'Paint another' : 'Paint the still'}</button><button class="btn${sts.length && !p.takes.length ? ' hot' : ''}" data-cm="anim1" ${sts.length ? '' : 'disabled'}>🎬 ${p.takes.length ? 'Animate again' : 'Animate it'}</button></div>`
         + `<div class="btnrow"><button class="btn" data-cm="ws">🎨 Its full recipe</button></div><p class="note">Opens this panel in the Render tab with its own recipe: every block, 📷 Change angle, 🤸 Edit pose, drafts, Finish. What you render there lands in its stills.${p.ws ? '' : ' It starts from this page\'s model, style and characters\' LoRAs, its tags and its shape.'}</p>`
         + `<div class="row"><label>Options</label>${seg('data-cmopts', [1, 2, 3, 4, 5, 6, 8].map(n => [n, n]), cmOpts(cm))}</div>`
@@ -7169,7 +7254,7 @@ function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.c
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7186,7 +7271,14 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmopts){ cm.opts = +t.dataset.cmopts; }
   else if(t.dataset.cmborder){ cm.border = t.dataset.cmborder; }
   else if(t.dataset.cmfin!=null){ cm.finDn = +t.dataset.cmfin; }
+  else if(t.dataset.d3view && p && p.d3){ p.d3.view = t.dataset.d3view; p.d3.yaw = p.d3.pitch = 0; }
+  else if(t.dataset.d3deg && p && p.d3){ p.d3.orbDeg = +t.dataset.d3deg; }
   else if(a==='retag'){ p.tags = null; }
+  else if(a==='stop'){ cmStop([p].concat(p.extra || [])); return; }
+  else if(a==='stopall'){ cmStop(cmHosts(cm), true); return; }
+  else if(a==='d3stop' && p.d3){ cmStop([p.d3].concat(d3Orbs(p.d3))); return; }
+  else if(a==='d3orb'){ d3Orbit(p); return; }
+  else if(a==='d3use' && p.d3 && p.d3.view==='mm' && d3OrbReady(p.d3)){ d3UseMm(p); return; }
   else if(a==='d3moge'){ d3GetMoge(t.dataset.pc); return; }
   else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = {id:p.id + '_3d', url:st.url, amt:1}; cmDepth(p.d3, st.url); return; }
   else if(a==='d3off'){ p.d3 = null; }

@@ -273,6 +273,28 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.waitForTimeout(300);
   { const n = await page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
     ok(n > 100, 'the three layers draw'); }
+  // ---- 🎞 MiniMax views: a left and a right orbit from the still, scrubbed by dragging ----
+  { const nb = ALL.length; await page.click('#comic [data-d3deg="20"]'); await page.click('#comic [data-cm="d3orb"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3OrbReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
+    const gs = ALL.slice(nb).map(x => x.prompt), sv = g => Object.values(g).find(n => n.class_type==='SaveVideo'), iv = g => Object.values(g).find(n => n.class_type==='MiniMaxH3ImageToVideo');
+    ok(gs.length===2 && /panel_3\/orbit_left$/.test(sv(gs[0]).inputs.filename_prefix) && /panel_3\/orbit_right$/.test(sv(gs[1]).inputs.filename_prefix) && /20-degree arc shot.*to the left/.test(iv(gs[0]).inputs.prompt) && /to the right/.test(iv(gs[1]).inputs.prompt),
+      '🎞 Make real angles: two MiniMax FL2V orbits from the still, left and right, at the picked 20°, saved in the panel\'s folder: ' + gs.map(g => sv(g).inputs.filename_prefix).join(' | '));
+    ok(new Set(ALL.slice(nb).map(x => PCS.Render.sent.includes(x) ? 'R' : 'M')).size===2, 'the two orbits go to both computers at once'); }
+  await page.click('#comic [data-d3view="mm"]');
+  await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return D3F[q.orbs.right.url] && D3F[q.orbs.right.url].ready; }, null, {timeout:20000}).catch(() => {});
+  ok(await page.evaluate(() => { const q = cmPage().panels[2].d3; q.yaw = 0.2; return d3MmDraw(q, document.querySelector('#comic [data-d3view]')); }), 'Swing with MiniMax views: dragging shows the orbit\'s painted frames');
+  { const nb = ALL.length, n0 = await page.evaluate(() => cmPage().panels[2].stills.length); await page.click('#comic [data-cm="d3use"]');
+    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
+    const g = ALL[nb].prompt, sv = Object.values(g).find(n => n.class_type==='SaveImage');
+    ok(/panel_3\/finished/.test(sv.inputs.filename_prefix) && Object.values(g).some(n => n.class_type==='ColorMatch'), 'Use this angle on a MiniMax view finishes that exact frame in Illustrious as a new still'); }
+  // ✕ Stop: the comic's jobs can be cancelled
+  { await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cmopts="3"]'); const n0 = await page.evaluate(() => cmPage().panels[1].stills.length);
+    await page.click('#comic [data-cm="still1"]'); await page.waitForSelector('#comic [data-cm="stopall"]', {timeout:5000});
+    ok(await page.isVisible('#comic [data-cm="stop"]'), 'a busy panel has ✕ Stop this panel, and the page has ✕ Stop all comic jobs');
+    await page.waitForFunction(() => cmPage().panels[1].extra.filter(c => c.making).length===3, null, {timeout:10000});
+    await page.click('#comic [data-cm="stopall"]'); await page.waitForTimeout(2500);
+    ok(await page.evaluate(n => { const p = cmPage().panels[1]; return !cmBusy(p) && p.stills.length===n && !p.err; }, n0) && !(await page.$('#comic [data-cm="stopall"]')), 'Stop all: the panel\'s 3 option jobs are cancelled and nothing lands afterwards');
+    await page.click('#comic [data-cmopts="1"]'); }
   // ---- 🎨 a panel's own full recipe (the Render tab, swapped to the panel) ----
   { const before = await page.evaluate(() => ({prompt:S.prompt, gal:S.gallery[0].url, blocks:S.blocks.length}));
     await page.click('#cmPage [data-cpi="3"]'); await page.click('#comic [data-cm="ws"]');
