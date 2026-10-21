@@ -614,7 +614,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.100'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.101'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6671,8 +6671,8 @@ async function cmJob(cm, pg, p, k, kind, mins, host){
     else if(kind==='finish'){ prefix = cmPrefixP(pg, i, 'finished'); const c = CMFIN[p.id]; if(!c) throw new Error('grab the frame again'); const fw = c.width, fh = c.height;
       const img = (await uploadFrame(c, 'panel_frame', k.url)).img; delete CMFIN[p.id]; G = cmFinGraph(k, img, fw, fh, p, i, rect, prefix); w = fw; h = fh; }
     else if(kind==='angle'){ prefix = cmPrefixP(pg, i, 'angle'); // the still swung a little in 3D, and its torn edges repainted
-      const ph = p.d3, [W, H] = cmStillSize(rect.w / rect.h); await d3Ready(ph);
-      const view = d3Picture(ph, W, H, 'colour'), torn = d3Picture(ph, W, H, 'stretch');
+      const ph = p.d3, [W, H] = cmStillSize(rect.w / rect.h), fz = ph.view==='fuse' && ph.fuse && ph.fuse.glbs; if(!fz) await d3Ready(ph);
+      const shot = fz ? await fuseShot(ph, W, H) : null, view = fz ? shot.view : d3Picture(ph, W, H, 'colour'), torn = fz ? shot.torn : d3Picture(ph, W, H, 'stretch');
       G = cmAngleGraph(k, (await uploadFrame(view, 'angle_view', k.url)).img, (await uploadFrame(torn, 'angle_torn', k.url)).img, p, i, rect, prefix); w = W; h = H; }
     else { const s = cmStill(p); if(!s) throw new Error('paint a still first'); prefix = cmPrefixP(pg, i, 'clip'); [w, h] = obCanvas(s.w || rect.w, s.h || rect.h, 576);
       G = cmAnimGraph(k, await cmUp(s.url, k.url), cmAnimPrompt(cm, p, i, rect), w, h, prefix); }
@@ -6943,7 +6943,7 @@ function d3OrbHtml(ph){
   const os = d3Orbs(ph), busy = os.filter(o => o.making || o.busy), deg = ph.orbDeg || 35;
   const seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${esc(v)}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`; // the comic's own buttons
   let x = '<div class="lbl">🎞 Real angles</div>';
-  if(d3OrbReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth'], ['mm', '🎞 MiniMax views']], ph.view==='mm' ? 'mm' : 'depth')}</div>`
+  if(d3OrbReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth'], ['mm', '🎞 MiniMax views']].concat(ph.fuse && ph.fuse.glbs ? [['fuse', '🧊 3D model']] : []), ph.view || 'depth')}</div>`
     + (ph.view==='mm' ? `<p class="note">${D3F[ph.orbs.left.url] && D3F[ph.orbs.right.url] && D3F[ph.orbs.left.url].ready && D3F[ph.orbs.right.url].ready ? 'Drag left and right through MiniMax\'s painted views (up to ' + deg + '° each way). Use this angle finishes that exact view in Illustrious.' : 'Loading the views…'}</p>` : '');
   x += busy.map(o => `<div class="pbar obbar"><i data-cmbar="${o.id}"></i></div><p class="note" data-cmtxt="${o.id}">${esc(o.busy || '')}</p>`).join('');
   if(busy.length) x += '<div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop the views</button></div>';
@@ -6952,6 +6952,7 @@ function d3OrbHtml(ph){
     x += `<div class="row"><label>How far</label>${seg('data-d3deg', [[20, 'A little'], [35, 'Some'], [60, 'A lot']], deg)}</div>
       <div class="btnrow"><button class="btn" data-cm="d3orb" ${k.why ? 'disabled' : ''}>🎞 ${d3OrbReady(ph) ? 'Make the views again' : 'Make real angles with MiniMax'}</button></div>
       <p class="note">${k.why ? esc(k.why) : 'Two MiniMax clips from this still, one circling left and one right (' + k.mins + ' min each, on both computers at once when both are free). Then dragging shows real painted sides instead of stretched depth.'}</p>`; }
+  if(d3OrbReady(ph)) x += fuseHtml(ph);
   return x; }
 async function d3Orbit(p){
   const ph = p.d3, pg = cmPage(), i = pg.panels.indexOf(p); if(!ph) return; ph.orbs = {}; let avoid = null;
@@ -7014,11 +7015,151 @@ async function cmStop(hosts, all){
       const ids = [...(q.queue_running || []), ...(q.queue_pending || [])].filter(x => Object.values(x[2] || {}).some(nd => String((nd.inputs || {}).filename_prefix || '').startsWith(root))).map(x => x[1]).filter(id => !ms.some(m => m.id===id));
       n += ids.length; await kill(p.url, ids); }catch(e){} })); }
   toast(n ? 'Stopped ' + n + (n > 1 ? ' comic jobs' : ' comic job') : 'Nothing was running'); buzz(); }
+// 🧊 the orbit fused into a 3D model (Jordan picked "A now, then try B"): the still and 8 frames from each orbit, in one sweep,
+// go to Depth Anything 3 in multiview mode (ComfyUI's own nodes, the Base or Small model, which also work out where the camera
+// was for each frame, anchored on the still in the middle); each picked view becomes a textured mesh (DA3GeometryToMesh) saved
+// as a .glb, and the phone draws them together, to turn round further than either orbit alone. Views that don't line up show
+// as doubled edges: then fewer views (1 = the still's own mesh) is the clean fallback.
+const DA3_URL = 'https://huggingface.co/Comfy-Org/Depth-Anything-3/resolve/main/geometry_estimation/depth_anything_3_base.safetensors';
+const FUSE_SIDE = 8, FUSE_PICK = {1:[0], 3:[-8, 0, 8], 5:[-8, -4, 0, 4, 8]}; // views to mesh, counted from the still (the middle)
+function fuseKits(){
+  if(S.test) return [{url:'test', oi:{}, model:'depth_anything_3_base.safetensors'}];
+  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && p.oi.DA3Inference && p.oi.DA3GeometryToMesh && p.oi.SaveGLB)
+    .map(p => { const ms = combo(p.oi.LoadDA3Model, 'model_name'); return {url:p.url, oi:p.oi, model:ms.find(n => /depth_anything_3_base/i.test(n)) || ms.find(n => /depth_anything_3_small/i.test(n)) || ''}; }); }
+function fuseHtml(ph){
+  const F = ph.fuse || {}, ks = fuseKits(), k = ks.find(q => q.model);
+  let x = '<div class="lbl">🧊 3D model from the views</div>';
+  if(F.making) return x + `<div class="pbar obbar"><i data-fusebar="${ph.id}"></i></div><p class="note" data-fusetxt="${ph.id}">Fusing the views on ${esc(pcName(F.making.pc))}…</p><div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop</button></div>`;
+  if(F.err) x += `<p class="warn">${esc(F.err)}</p>`;
+  if(F.glbs) x += `<div class="row"><label>Views</label>${['1', '3', '5'].map(n => `<button class="chipbtn${(F.n || 5)==n ? ' on' : ''}" data-fusen="${n}">${n}</button>`).join(' ')} <button class="chipbtn" data-cm="d3flip">↕ Flip</button></div>
+    <p class="note">Pick 🧊 3D model above and drag to turn it (much further than the orbits). Doubled edges mean the views don't line up: try 3 or 1. ↕ Flip if it shows upside down. Use this angle repaints the holes.</p>`;
+  if(k) x += `<div class="btnrow"><button class="btn" data-cm="d3fuse">🧊 ${F.glbs ? 'Fuse again' : 'Fuse the views into a 3D model'}</button></div><p class="note">Depth Anything 3 (multiview) on ${esc(pcName(k.url))}: the still and 8 frames of each orbit, about 1 to 3 min.</p>`;
+  else if(ks.length) x += `<div class="btnrow"><button class="btn" data-cm="d3getda3" data-pc="${esc(ks[0].url)}">⬇ Get Depth Anything 3 on ${esc(pcName(ks[0].url))} (about 0.5 GB)</button></div><p class="note">Needed to fuse the views into a 3D model. After it downloads, restart ComfyUI there from ☰ and reopen the app.</p>`;
+  else x += '<p class="note">Fusing needs ComfyUI\'s Depth Anything 3 nodes: update ComfyUI on a computer that is on.</p>';
+  return x; }
+async function fuseGet(pc){
+  try{ const r = await fetch(pc + '/renderdeck/download', {method:'POST', headers:JSONH, body:JSON.stringify({url:DA3_URL, kind:'geometry_estimation'})}), j = await r.json();
+    if(j.error) throw new Error(/kind|checkpoint or LoRA/i.test(j.error) ? pcName(pc) + "'s helper needs the update first, then a ComfyUI restart" : j.error);
+    toast('Downloading Depth Anything 3 on ' + pcName(pc) + '. When it is done, restart ComfyUI there from ☰ and reopen the app'); }
+  catch(err){ toast(err.message, true); } }
+// the sweep: far left … the still … far right, all at the orbit frames' size
+async function fuseFrames(ph){
+  const L = await d3Frames(ph.orbs.left.url).wait, R = await d3Frames(ph.orbs.right.url).wait, W = L.list[0].width, H = L.list[0].height;
+  const at = (F, n) => F.list[Math.round(n * (F.list.length - 1) / FUSE_SIDE)], fit = src => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(src, 0, 0, W, H); return c; };
+  const im = S.test ? L.list[0] : await scLoadImg(ph.url), out = [];
+  for(let n = FUSE_SIDE; n >= 1; n--) out.push(fit(at(L, n)));
+  out.push(fit(im)); for(let n = 1; n <= FUSE_SIDE; n++) out.push(fit(at(R, n)));
+  return out; }
+async function fuseMake(p){
+  const ph = p.d3, k = fuseKits().find(q => q.model), pg = cmPage(), i = pg.panels.indexOf(p); if(!ph || !k || !d3OrbReady(ph)) return;
+  const F = ph.fuse = {n:(ph.fuse && ph.fuse.n) || 5, flip:ph.fuse && ph.fuse.flip}; drawComic();
+  try{ const frames = await fuseFrames(ph), names = [];
+    for(const c of frames) names.push(S.test ? 'test.png' : (await uploadFrame(c, 'fuse_view', k.url)).img);
+    const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+    let batch = [add('LoadImage', {image:names[0]}), 0];
+    for(const nm of names.slice(1)) batch = [add('ImageBatch', {image1:batch, image2:[add('LoadImage', {image:nm}), 0]}), 0];
+    const geo = add('DA3Inference', {da3_model:[add('LoadDA3Model', {model_name:k.model, weight_dtype:'default'}), 0], image:batch, resolution:504, resize_method:'upper_bound_resize',
+      mode:'multiview', 'mode.ref_view_strategy':'middle', 'mode.pose_method':'cam_dec'});
+    const prefix = cmPrefixP(pg, i, 'model3d'), saves = {};
+    FUSE_PICK[5].forEach(o => { const bi = FUSE_SIDE + o;
+      saves[o] = add('SaveGLB', {mesh:[add('DA3GeometryToMesh', {da3_geometry:[geo,0], batch_index:bi, decimation:2, discontinuity_threshold:0.04, confidence_threshold:0.1, use_sky_mask:true, texture:true}), 0], filename_prefix:prefix + '_v' + (bi)}); });
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); F.glbs = {}; FUSE_PICK[5].forEach(o => F.glbs[o] = 'test'); ph.view = 'fuse'; ph.yaw = ph.pitch = 0; save(); drawComic(); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
+    if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    F.making = {pc:k.url, id:j.prompt_id, saves, t:t0}; save(); drawComic(); fuseWait(ph);
+  }catch(err){ F.err = "Couldn't fuse the views: " + err.message; save(); drawComic(); } }
+async function fuseWait(ph){
+  const F = ph.fuse, m = F && F.making; if(!m || m.polling) return; m.polling = true;
+  try{ for(;;){ await new Promise(r => setTimeout(r, 3000)); if(F.making!==m) return;
+      const bar = document.querySelector(`[data-fusebar="${ph.id}"]`), txt = document.querySelector(`[data-fusetxt="${ph.id}"]`), sec = (Date.now() - m.t) / 1000;
+      if(bar) bar.style.width = Math.min(95, sec / 1.5) + '%'; if(txt) txt.textContent = 'Fusing the views on ' + pcName(m.pc) + '… ' + Math.round(sec) + ' s';
+      let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e){ continue; }
+      if(!h){ if(Date.now() - m.t > 3600e3) throw new Error('it never finished (was ComfyUI restarted?)'); continue; }
+      if(h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(e ? e[1].exception_message : 'ComfyUI hit an error'); }
+      if(!(h.status && h.status.completed)) continue;
+      const glbs = {}; for(const [o, sid] of Object.entries(m.saves)){ const f = (((h.outputs || {})[sid] || {})['3d'] || [])[0]; if(f) glbs[o] = viewUrl(f, m.pc); }
+      if(!Object.keys(glbs).length) throw new Error('no 3D files came back');
+      F.glbs = glbs; delete F.making; delete F.err; ph.view = 'fuse'; ph.yaw = ph.pitch = 0; save(); if(!$('#comic').hidden) drawComic(); toast('The 3D model is ready: drag to turn it 🧊'); buzz(); return; } }
+  catch(err){ if(F.making===m){ delete F.making; F.err = "Couldn't fuse the views: " + err.message; save(); if(!$('#comic').hidden) drawComic(); } }
+  finally{ m.polling = false; } }
+async function fuseStop(ph){ const F = ph.fuse, m = F && F.making; if(!m) return; delete F.making; save(); drawComic();
+  if(S.test) return; try{ await fetch(m.pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:[m.id]})}); await fetch(m.pc + '/interrupt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt_id:m.id})}); }catch(e){} }
+// the .glb meshes on the phone: positions, UVs and the embedded picture (or vertex colours), drawn with a turning camera
+const FUSE = {gl:null, mesh:new Map()};
+function fuseGL(){
+  if(FUSE.gl) return FUSE; const cv = document.createElement('canvas'), gl = cv.getContext('webgl2', {preserveDrawingBuffer:true, alpha:true, antialias:true, premultipliedAlpha:false}); if(!gl) throw new Error("this phone can't do WebGL2");
+  const sh = (t, src) => { const q = gl.createShader(t); gl.shaderSource(q, src); gl.compileShader(q); if(!gl.getShaderParameter(q, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(q)); return q; };
+  const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, `#version 300 es
+in vec3 p; in vec2 t; in vec3 c; uniform mat4 mvp; out vec2 vt; out vec3 vc; void main(){ vt = t; vc = c; gl_Position = mvp * vec4(p, 1.0); }`));
+  gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, `#version 300 es
+precision highp float; in vec2 vt; in vec3 vc; uniform sampler2D img; uniform int tex; out vec4 o; void main(){ o = tex == 1 ? vec4(texture(img, vt).rgb, 1.0) : vec4(vc, 1.0); }`));
+  gl.bindAttribLocation(pr, 0, 'p'); gl.bindAttribLocation(pr, 1, 't'); gl.bindAttribLocation(pr, 2, 'c'); gl.linkProgram(pr); if(!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+  return Object.assign(FUSE, {gl, cv, pr}); }
+// a node's matrix (glTF: matrix, or translation / rotation / scale), column-major
+function fuseNodeMat(nd){
+  if(nd.matrix) return nd.matrix; const [x, y, z, w] = nd.rotation || [0, 0, 0, 1], [sx, sy, sz] = nd.scale || [1, 1, 1], [tx, ty, tz] = nd.translation || [0, 0, 0];
+  return [(1 - 2*(y*y + z*z)) * sx, 2*(x*y + z*w) * sx, 2*(x*z - y*w) * sx, 0, 2*(x*y - z*w) * sy, (1 - 2*(x*x + z*z)) * sy, 2*(y*z + x*w) * sy, 0, 2*(x*z + y*w) * sz, 2*(y*z - x*w) * sz, (1 - 2*(x*x + y*y)) * sz, 0, tx, ty, tz, 1]; }
+function fuseMesh(url){
+  if(FUSE.mesh.has(url)) return FUSE.mesh.get(url); const M = {ready:false, parts:[]}; FUSE.mesh.set(url, M);
+  M.wait = (async () => { const G = fuseGL(), gl = G.gl;
+    let file;
+    if(url==='test'){ const P = new Float32Array([-0.5, -0.5, 2, 0.5, -0.5, 2, 0, 0.6, 2.2]); M.parts.push({P, T:null, C:new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]), I:new Uint32Array([0, 1, 2]), img:null}); }
+    else { file = GLB.read(await (await fetch(url)).arrayBuffer()); const j = file.json;
+      const mats = []; const walk = (ni, parent) => { const nd = j.nodes[ni], m = fuseMul(parent, fuseNodeMat(nd)); if(nd.mesh!=null) mats.push([nd.mesh, m]); (nd.children || []).forEach(c => walk(c, m)); };
+      ((j.scenes || [])[j.scene || 0] || {nodes:(j.nodes || []).map((_, q) => q)}).nodes.forEach(ni => walk(ni, null));
+      if(!mats.length) (j.meshes || []).forEach((_, q) => mats.push([q, null]));
+      for(const [mi, m] of mats) for(const pr of j.meshes[mi].primitives){ const a = pr.attributes; let P = GLB.acc(file, a.POSITION);
+        if(m){ const Q = new Float32Array(P.length); for(let v = 0; v < P.length; v += 3){ const x = P[v], y = P[v + 1], z = P[v + 2]; Q[v] = m[0]*x + m[4]*y + m[8]*z + m[12]; Q[v + 1] = m[1]*x + m[5]*y + m[9]*z + m[13]; Q[v + 2] = m[2]*x + m[6]*y + m[10]*z + m[14]; } P = Q; }
+        const T = a.TEXCOORD_0!=null ? GLB.acc(file, a.TEXCOORD_0) : null; let C = a.COLOR_0!=null ? GLB.acc(file, a.COLOR_0) : null;
+        if(C && !(C instanceof Float32Array)){ const k = C instanceof Uint8Array ? 255 : 65535, n = j.accessors[a.COLOR_0].type==='VEC4' ? 4 : 3, Q = new Float32Array(C.length / n * 3); for(let v = 0, w = 0; v < C.length; v += n, w += 3){ Q[w] = C[v] / k; Q[w + 1] = C[v + 1] / k; Q[w + 2] = C[v + 2] / k; } C = Q; }
+        else if(C && j.accessors[a.COLOR_0].type==='VEC4'){ const Q = new Float32Array(C.length / 4 * 3); for(let v = 0, w = 0; v < C.length; v += 4, w += 3){ Q[w] = C[v]; Q[w + 1] = C[v + 1]; Q[w + 2] = C[v + 2]; } C = Q; }
+        let I = pr.indices!=null ? GLB.acc(file, pr.indices) : null; if(I && !(I instanceof Uint32Array)) I = Uint32Array.from(I); if(!I){ I = new Uint32Array(P.length / 3); I.forEach((_, q) => I[q] = q); }
+        let img = null; const mt = pr.material!=null && j.materials ? j.materials[pr.material] : null, bt = mt && mt.pbrMetallicRoughness && mt.pbrMetallicRoughness.baseColorTexture;
+        if(bt && T){ const im = j.images[j.textures[bt.index].source], bv = j.bufferViews[im.bufferView]; img = await createImageBitmap(new Blob([file.bin.slice(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength)], {type:im.mimeType || 'image/png'})); }
+        M.parts.push({P, T, C, I, img}); } }
+    for(const pt of M.parts){ pt.vao = gl.createVertexArray(); gl.bindVertexArray(pt.vao);
+      const buf = (loc, data, n) => { gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 0, 0); };
+      buf(0, pt.P, 3); if(pt.T) buf(1, pt.T, 2); else gl.vertexAttrib2f(1, 0, 0); if(pt.C) buf(2, pt.C, 3); else gl.vertexAttrib3f(2, 0.7, 0.7, 0.7);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, pt.I, gl.STATIC_DRAW); gl.bindVertexArray(null);
+      if(pt.img){ pt.tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, pt.tex); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, pt.img); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); }
+      pt.n = pt.I.length; }
+    // where the views look: the still's mesh middle (the camera of the anchor view sits at the origin)
+    let sx = 0, sy = 0, sz = 0, k = 0; M.parts.forEach(pt => { for(let v = 0; v < pt.P.length; v += 30){ sx += pt.P[v]; sy += pt.P[v + 1]; sz += pt.P[v + 2]; k++; } }); M.mid = k ? [sx / k, sy / k, sz / k] : [0, 0, 1];
+    M.ready = true; return M; })().catch(e => { FUSE.mesh.delete(url); throw e; });
+  return M; }
+function fuseMul(a, b){ if(!a) return b; const o = new Array(16); for(let c = 0; c < 4; c++) for(let r = 0; r < 4; r++){ let s = 0; for(let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; } return o; }
+const fuseUrls = ph => { const F = ph.fuse; return FUSE_PICK[F.n || 5].map(o => F.glbs[o]).filter(Boolean); };
+// draws the picked views from a camera turned round the still's middle; null while the files load
+function fuseRender(ph, W, H){
+  const G = fuseGL(), gl = G.gl, ms = fuseUrls(ph).map(fuseMesh); if(!ms.length) return null;
+  if(!ms.every(m => m.ready)){ Promise.all(ms.map(m => m.wait)).then(() => d3Redraw()).catch(e => toast("Couldn't load the 3D model: " + e.message, true)); return null; }
+  const anchor = fuseMesh(ph.fuse.glbs[0] || fuseUrls(ph)[0]).mid || ms[0].mid, T = anchor, eye0 = [0, 0, 0], d = Math.hypot(...V3.sub(T, eye0)) || 1;
+  const up = ph.fuse.flip ? [0, -1, 0] : [0, 1, 0], back = V3.norm(V3.sub(eye0, T)), right = V3.norm(V3.cross(up, back)), u2 = V3.cross(back, right);
+  const yw = +ph.yaw || 0, pt = +ph.pitch || 0;
+  const dir = V3.norm(V3.add(V3.add(V3.mul(back, Math.cos(yw) * Math.cos(pt)), V3.mul(right, Math.sin(yw) * Math.cos(pt))), V3.mul(u2, Math.sin(pt))));
+  const eye = V3.add(T, V3.mul(dir, d)), f = V3.norm(V3.sub(T, eye)), r = V3.norm(V3.cross(f, u2)), uu = V3.cross(r, f);
+  const fov = 50 * Math.PI / 180, ar = W / H, t = 1 / Math.tan(fov / 2), zn = d * 0.05, zf = d * 20;
+  const view = [r[0], uu[0], -f[0], 0, r[1], uu[1], -f[1], 0, r[2], uu[2], -f[2], 0, -V3.dot(r, eye), -V3.dot(uu, eye), V3.dot(f, eye), 1];
+  const proj = [t / ar, 0, 0, 0, 0, t, 0, 0, 0, 0, -(zf + zn) / (zf - zn), -1, 0, 0, -2 * zf * zn / (zf - zn), 0];
+  G.cv.width = W; G.cv.height = H; gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  gl.useProgram(G.pr); gl.uniformMatrix4fv(gl.getUniformLocation(G.pr, 'mvp'), false, fuseMul(proj, view)); gl.uniform1i(gl.getUniformLocation(G.pr, 'img'), 0);
+  ms.forEach(m => m.parts.forEach(p => { gl.uniform1i(gl.getUniformLocation(G.pr, 'tex'), p.tex ? 1 : 0); if(p.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, p.tex); }
+    gl.bindVertexArray(p.vao); gl.drawElements(gl.TRIANGLES, p.n, gl.UNSIGNED_INT, 0); })); gl.bindVertexArray(null);
+  return G.cv; }
+function fuseDraw(ph, cv){ const c = fuseRender(ph, cv.width, cv.height); if(!c) return false; const x = cv.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, cv.width, cv.height); x.drawImage(c, 0, 0); return true; }
+// Use this angle from the 3D model: the view, and where nothing was drawn (the holes) as the part to repaint
+async function fuseShot(ph, W, H){
+  await Promise.all(fuseUrls(ph).map(u => fuseMesh(u).wait)); const c = fuseRender(ph, W, H); if(!c) throw new Error('the 3D model has not loaded');
+  const view = document.createElement('canvas'); view.width = W; view.height = H; const vx = view.getContext('2d'); vx.fillStyle = '#808080'; vx.fillRect(0, 0, W, H); vx.drawImage(c, 0, 0);
+  const a = document.createElement('canvas'); a.width = W; a.height = H; const ax = a.getContext('2d'); ax.drawImage(c, 0, 0); const D = ax.getImageData(0, 0, W, H);
+  for(let q = 0; q < D.data.length; q += 4){ const v = D.data[q + 3] < 128 ? 255 : 0; D.data[q] = D.data[q + 1] = D.data[q + 2] = v; D.data[q + 3] = 255; } ax.putImageData(D, 0, 0);
+  return {view, torn:a}; }
 function d3Redraw(){
   const cv = $('#comic [data-d3view]'), pg = cmPage(); if(!cv || !pg) return; const ph = pg.panels[CM().sel].d3; if(!ph || !ph.depth) return;
   const ar = (ph.w || 16) / (ph.h || 9), w = cv.clientWidth || 320, h = Math.round(w / ar), d = Math.min(2, window.devicePixelRatio || 1), W = Math.round(w * d), H = Math.round(h * d);
   if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; cv.style.height = h + 'px'; }
   if(ph.view==='mm' && d3MmDraw(ph, cv)) return;
+  if(ph.view==='fuse' && fuseDraw(ph, cv)) return;
   const m0 = scMesh(d3Layers(ph)[0]); if(m0.ready && (ph.w!==m0.w || ph.h!==m0.h)){ ph.w = m0.w; ph.h = m0.h; requestAnimationFrame(d3Redraw); }
   try{ cv.getContext('2d').drawImage(scDraw(d3Layers(ph), d3Cam(ph, W, H), W, H, 'colour', D3_NEAR, d3Far(ph)), 0, 0); }catch(e){ toast(e.message, true); }
 }
@@ -7027,7 +7168,8 @@ function d3Touch(){
   const ph = () => cmPage().panels[CM().sel].d3;
   cv.onpointerdown = e => { e.preventDefault(); cv.setPointerCapture(e.pointerId); drag = {x:e.clientX, y:e.clientY}; d3Wiggle(false); };
   cv.onpointermove = e => { if(!drag) return; const r = cv.getBoundingClientRect(), q = ph(), dx = (e.clientX - drag.x) / r.width, dy = (e.clientY - drag.y) / r.height;
-    q.yaw = Math.max(-0.35, Math.min(0.35, (+q.yaw || 0) - dx * 0.8)); q.pitch = Math.max(-0.18, Math.min(0.18, (+q.pitch || 0) + dy * 0.5)); drag = {x:e.clientX, y:e.clientY}; d3Redraw(); };
+    const fz = q.view==='fuse', ym = fz ? 1.2 : 0.35, pm = fz ? 0.6 : 0.18; // the 3D model turns much further
+    q.yaw = Math.max(-ym, Math.min(ym, (+q.yaw || 0) - dx * (fz ? 2 : 0.8))); q.pitch = Math.max(-pm, Math.min(pm, (+q.pitch || 0) + dy * (fz ? 1.2 : 0.5))); drag = {x:e.clientX, y:e.clientY}; d3Redraw(); };
   cv.onpointerup = cv.onpointercancel = () => { if(drag){ drag = null; save(); } };
 }
 // a gentle side to side swing, as wiggle pictures do
@@ -7036,7 +7178,7 @@ function d3Wiggle(on){
   const pg = cmPage(), ph = pg && pg.panels[CM().sel].d3; if(!ph) return;
   if(!on){ if(D3.keep){ ph.yaw = D3.keep[0]; ph.pitch = D3.keep[1]; D3.keep = null; d3Redraw(); } return; }
   D3.keep = [+ph.yaw || 0, +ph.pitch || 0]; D3.t0 = performance.now();
-  const step = t => { if(!D3.play) return; const a = (t - D3.t0) / 1000 * Math.PI * 2 / 2.4, mm = ph.view==='mm'; ph.yaw = mm ? 0.3 * Math.sin(a) : D3.keep[0] + 0.1 * Math.sin(a); ph.pitch = mm ? 0 : D3.keep[1] + 0.025 * Math.sin(2 * a); d3Redraw(); D3.raf = requestAnimationFrame(step); };
+  const step = t => { if(!D3.play) return; const a = (t - D3.t0) / 1000 * Math.PI * 2 / 2.4, mm = ph.view==='mm' || ph.view==='fuse'; ph.yaw = mm ? 0.3 * Math.sin(a) : D3.keep[0] + 0.1 * Math.sin(a); ph.pitch = mm ? 0 : D3.keep[1] + 0.025 * Math.sin(2 * a); d3Redraw(); D3.raf = requestAnimationFrame(step); };
   D3.raf = requestAnimationFrame(step);
 }
 // two swings recorded off the canvas, offered to the phone (mp4 where the phone records it, else webm)
@@ -7254,7 +7396,7 @@ function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.c
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-fusen]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7273,10 +7415,14 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmfin!=null){ cm.finDn = +t.dataset.cmfin; }
   else if(t.dataset.d3view && p && p.d3){ p.d3.view = t.dataset.d3view; p.d3.yaw = p.d3.pitch = 0; }
   else if(t.dataset.d3deg && p && p.d3){ p.d3.orbDeg = +t.dataset.d3deg; }
+  else if(t.dataset.fusen && p && p.d3 && p.d3.fuse){ p.d3.fuse.n = +t.dataset.fusen; }
   else if(a==='retag'){ p.tags = null; }
   else if(a==='stop'){ cmStop([p].concat(p.extra || [])); return; }
   else if(a==='stopall'){ cmStop(cmHosts(cm), true); return; }
-  else if(a==='d3stop' && p.d3){ cmStop([p.d3].concat(d3Orbs(p.d3))); return; }
+  else if(a==='d3stop' && p.d3){ fuseStop(p.d3); cmStop([p.d3].concat(d3Orbs(p.d3))); return; }
+  else if(a==='d3fuse'){ fuseMake(p); return; }
+  else if(a==='d3getda3'){ fuseGet(t.dataset.pc); return; }
+  else if(a==='d3flip' && p.d3 && p.d3.fuse){ p.d3.fuse.flip = !p.d3.fuse.flip; save(); d3Redraw(); return; }
   else if(a==='d3orb'){ d3Orbit(p); return; }
   else if(a==='d3use' && p.d3 && p.d3.view==='mm' && d3OrbReady(p.d3)){ d3UseMm(p); return; }
   else if(a==='d3moge'){ d3GetMoge(t.dataset.pc); return; }
@@ -7431,6 +7577,7 @@ $('#wsBar').onclick = e => { const b = e.target.closest('[data-ws]'); if(!b || b
 obAll().forEach(g => { if(g.ob && g.ob.making) waitOrbit(g.ob); });
 cmAll().forEach(p => { if(!p.parent && p.extra) p.extra = p.extra.filter(c => c.making); }); // an option that never got sent
 cmAll().forEach(p => { if(p.making) cmWait(p); }); // comic panels made while the app was closed come in
+cmAll().forEach(p => { if(p.fuse && p.fuse.making) fuseWait(p); });
 if(S.wsBack){ const id = S.wsBack; delete S.wsBack; if(wsPanel(id)) wsOpen(id); }
 else if(S.tab==='comic') openComic(); // an orbit made while the app was closed comes in
 delete S.orbitN; delete S.orbitH; // the per-workstation orbit before pictures became projects

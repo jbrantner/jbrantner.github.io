@@ -20,7 +20,7 @@ const DEF = {
   DepthAnythingV2Preprocessor:[['image','resolution'],1], ImageBatch:[['image1','image2'],1], MaskToImage:[['mask'],1], AnimeLineArtPreprocessor:[['image','resolution'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
   SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
-  KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], LoadMoGeModel:[['model_name'],1], MoGeInference:[['moge_model','image'],1], MoGeRender:[['moge_geometry','output'],1], ImageToMask:[['image','channel'],1], GrowMask:[['mask','expand','tapered_corners'],1], ColorMatch:[['image_ref','image_target','method'],1], KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1], SaveImage:[['images','filename_prefix'],0],
+  KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], LoadDA3Model:[['model_name','weight_dtype'],1], DA3Inference:[['da3_model','image','resolution','resize_method','mode'],1], DA3GeometryToMesh:[['da3_geometry','batch_index','decimation','discontinuity_threshold','confidence_threshold','use_sky_mask','texture'],1], SaveGLB:[['mesh','filename_prefix'],0], LoadMoGeModel:[['model_name'],1], MoGeInference:[['moge_model','image'],1], MoGeRender:[['moge_geometry','output'],1], ImageToMask:[['image','channel'],1], GrowMask:[['mask','expand','tapered_corners'],1], ColorMatch:[['image_ref','image_target','method'],1], KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1], SaveImage:[['images','filename_prefix'],0],
 };
 function check(g){ const errs = [];
   for(const [id,n] of Object.entries(g)){ const d = DEF[n.class_type]; if(!d){ errs.push(id+': unknown '+n.class_type); continue; }
@@ -38,6 +38,13 @@ const OI = () => ({ColorMatch:{input:{required:{method:C(['mkl'])}}}, Checkpoint
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['stable_diffusion','minimax'])}}},
   VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
   MiniMaxH3ReferenceToVideo:{input:{required:{}}}, SaveVideo:{input:{required:{}}}, SaveImage:{input:{required:{}}}, CreateVideo:{input:{required:{}}}, LoadImage:{input:{required:{}}}});
+// a one-triangle .glb (positions and vertex colours), as DA3GeometryToMesh would save
+const GLBF = (() => { const pos = new Float32Array([-0.5, -0.5, 2, 0.5, -0.5, 2, 0, 0.6, 2.3]), col = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]), bin = Buffer.concat([Buffer.from(pos.buffer), Buffer.from(col.buffer)]);
+  const json = {asset:{version:'2.0'}, scene:0, scenes:[{nodes:[0]}], nodes:[{mesh:0}], meshes:[{primitives:[{attributes:{POSITION:0, COLOR_0:1}}]}], buffers:[{byteLength:bin.length}],
+    bufferViews:[{buffer:0, byteOffset:0, byteLength:36}, {buffer:0, byteOffset:36, byteLength:36}], accessors:[{bufferView:0, componentType:5126, count:3, type:'VEC3', min:[-0.5, -0.5, 2], max:[0.5, 0.6, 2.3]}, {bufferView:1, componentType:5126, count:3, type:'VEC3'}]};
+  let js = Buffer.from(JSON.stringify(json)); while(js.length % 4) js = Buffer.concat([js, Buffer.from(' ')]);
+  const h = Buffer.alloc(12), jh = Buffer.alloc(8), bh = Buffer.alloc(8); h.writeUInt32LE(0x46546C67, 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + 8 + js.length + 8 + bin.length, 8);
+  jh.writeUInt32LE(js.length, 0); jh.writeUInt32LE(0x4E4F534A, 4); bh.writeUInt32LE(bin.length, 0); bh.writeUInt32LE(0x004E4942, 4); return Buffer.concat([h, jh, js, bh, bin]); })();
 const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she looks behind her and keeps walking. Panel 3: a man starts walking behind her. Panel 4: He\\ eventually catches up to her and grabs her arm. Panel 5: she screams';
 (async () => {
   const html = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + fs.readFileSync(path.join(__dirname, '..', 'comfy-app.html'),'utf8');
@@ -55,6 +62,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       const u = new URL(r.request().url()), cors = {'Access-Control-Allow-Origin':'*'};
       if(u.pathname==='/object_info') return r.fulfill({ json:OI() });
       if(u.pathname==='/view' && /\.webm$/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'video/webm', body:VID, headers:cors });
+      if(u.pathname==='/view' && /\.glb$/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'model/gltf-binary', body:GLBF, headers:cors });
       if(u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG, headers:cors });
       if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
       if(u.pathname==='/upload/image'){ const body = r.request().postData() || ''; const out = /name="type"\r\n\r\noutput/.test(body);
@@ -63,6 +71,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       if(u.pathname==='/prompt'){ const jj = JSON.parse(r.request().postData()); ALL.push(jj); pc.sent.push(jj); return r.fulfill({ json:{prompt_id:name[0] + pc.sent.length, number:0, node_errors:{}} }); }
       if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9), g = pc.sent[+id.slice(1) - 1].prompt, ks = Object.keys(g);
         if((pc.polls[id] = (pc.polls[id] || 0) + 1) < 2) return r.fulfill({ json:{[id]:{status:{completed:false}}} });
+        const glbs = ks.filter(k => g[k].class_type==='SaveGLB');
+        if(glbs.length) return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:Object.fromEntries(glbs.map(k => { const pre = g[k].inputs.filename_prefix, c = pre.lastIndexOf('/'); return [k, {'3d':[{filename:pre.slice(c + 1) + '_00001_.glb', subfolder:pre.slice(0, c), type:'output'}]}]; }))}} });
         const vid = ks.find(k => g[k].class_type==='SaveVideo'), img = ks.find(k => g[k].class_type==='SaveImage'), sv = vid || img, pre = g[sv].inputs.filename_prefix, cut = pre.lastIndexOf('/');
         const f = {filename:pre.slice(cut + 1) + '_' + id + '_.' + (vid ? 'webm' : 'png'), subfolder:pre.slice(0, cut), type:'output'};
         const four = !vid && g[sv].inputs.images && g[g[sv].inputs.images[0]].class_type==='ImageBatch'; // the 3D look's layers come back as a batch of 4
@@ -287,6 +297,29 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
     const g = ALL[nb].prompt, sv = Object.values(g).find(n => n.class_type==='SaveImage');
     ok(/panel_3\/finished/.test(sv.inputs.filename_prefix) && Object.values(g).some(n => n.class_type==='ColorMatch'), 'Use this angle on a MiniMax view finishes that exact frame in Illustrious as a new still'); }
+  // ---- 🧊 the orbit views fused into a 3D model (Depth Anything 3, multiview) ----
+  await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; p.d3.view = 'depth'; drawComic(); });
+  ok(/update ComfyUI/.test(await page.textContent('#comic .d3box')), 'without the Depth Anything 3 nodes, the 3D look says to update ComfyUI');
+  await page.evaluate(() => { const o = allPcs().find(p => /desktop/.test(p.url)).oi; Object.assign(o, {DA3Inference:{input:{required:{}}}, DA3GeometryToMesh:{input:{required:{}}}, SaveGLB:{input:{required:{}}},
+    LoadDA3Model:{input:{required:{model_name:[['moge_2_vitl_normal_fp16.safetensors']], weight_dtype:[['default']]}}}}); drawComic(); });
+  ok(await page.isVisible('#comic [data-cm="d3getda3"]'), 'with the nodes but no DA3 model: ⬇ Get Depth Anything 3');
+  await page.evaluate(() => { allPcs().find(p => /desktop/.test(p.url)).oi.LoadDA3Model.input.required.model_name = [['moge_2_vitl_normal_fp16.safetensors', 'depth_anything_3_base.safetensors']]; drawComic(); });
+  { const nb = ALL.length; await page.click('#comic [data-cm="d3fuse"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.fuse && q.fuse.glbs && !q.fuse.making; }, null, {timeout:30000});
+    const g = ALL[nb].prompt, n = Object.values(g), di = n.find(x => x.class_type==='DA3Inference'), ms = n.filter(x => x.class_type==='DA3GeometryToMesh').map(x => x.inputs.batch_index);
+    ok(check(g).length===0 && n.filter(x => x.class_type==='LoadImage').length===17 && di.inputs.mode==='multiview' && di.inputs['mode.ref_view_strategy']==='middle' && n.find(x => x.class_type==='LoadDA3Model').inputs.model_name==='depth_anything_3_base.safetensors'
+      && ms.join()==='0,4,8,12,16' && n.filter(x => x.class_type==='SaveGLB').every(x => /panel_3\/model3d_v\d+$/.test(x.inputs.filename_prefix)),
+      '🧊 Fuse: the still + 8 frames of each orbit go to Depth Anything 3 multiview (anchored on the still), 5 views become meshes saved as .glb: ' + check(g).join('; ') + ' ' + ms); }
+  ok(await page.evaluate(() => cmPage().panels[2].d3.view==='fuse') && await page.$('#comic [data-d3view="fuse"].on'), 'when it is ready the 3D look switches to 🧊 3D model');
+  await page.waitForTimeout(800);
+  { const px = () => page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
+    const a = await px(); await page.evaluate(() => { cmPage().panels[2].d3.yaw = 0.8; d3Redraw(); }); const b = await px();
+    ok(a > 50 && b > 0 && a!==b, 'the fused model draws on the phone and turns (' + a + ' → ' + b + ' lit points)'); }
+  { await page.evaluate(() => { cmPage().panels[2].d3.yaw = 0.3; }); const nb = ALL.length, n0 = await page.evaluate(() => cmPage().panels[2].stills.length); await page.click('#comic [data-cm="d3use"]');
+    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
+    const g = ALL[nb].prompt, ks = Object.values(g).filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
+    ok(check(g).length===0 && ks.join()==='0.65,0.25', 'Use this angle from the 3D model: its holes repainted (0.65), then a light pass (0.25), as a new still'); }
+  await page.evaluate(() => { cmPage().panels[2].d3.view = 'depth'; });
   // ✕ Stop: the comic's jobs can be cancelled
   { await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cmopts="3"]'); const n0 = await page.evaluate(() => cmPage().panels[1].stills.length);
     await page.click('#comic [data-cm="still1"]'); await page.waitForSelector('#comic [data-cm="stopall"]', {timeout:5000});
