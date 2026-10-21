@@ -353,6 +353,26 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {clientX:x, clientY:y, pointerId:1, bubbles:true}));
       q.yaw = q.pitch = 0; ev('pointerdown', r.left + 10, r.top + 10); for(let k = 1; k <= 20; k++) ev('pointermove', r.left + 10 - k * r.width / 8, r.top + 10 + k * r.height / 40); ev('pointerup', 0, 0); return [q.yaw, q.pitch]; });
     ok(turned[0] > 1.3 && turned[1] > 0.6, 'the model from the circle turns past the side (' + turned.map(v => v.toFixed(2)) + ') and tilts further'); }
+  // 🧍 her own 3D model from the circle: front, sides and back to Hunyuan3D-2mv, drawn where she stands, turned and tilted
+  { await page.evaluate(() => { const q = cmPage().panels[2].d3; q.view = 'depth'; drawComic(); }); await page.evaluate(() => { const o = allPcs().find(p => /desktop/.test(p.url)).oi; Object.assign(o, {Hunyuan3Dv2ConditioningMultiView:{input:{required:{}}}, ImageOnlyCheckpointLoader:{input:{required:{ckpt_name:[['hunyuan3d-dit-v2-mv_fp16.safetensors']]}}},
+      LoadBackgroundRemovalModel:o.LoadBackgroundRemovalModel || {input:{required:{bg_removal_name:[['birefnet.safetensors']]}}}}); drawComic(); });
+    const nb = ALL.length; await page.click('#comic [data-cm="cmod"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.cmod && q.cmod.url && q.view==='model'; }, null, {timeout:30000});
+    const g = ALL[nb].prompt, mv = Object.values(g).find(x => x.class_type==='Hunyuan3Dv2ConditioningMultiView');
+    ok(mv && ['front', 'left', 'back', 'right'].every(k => mv.inputs[k]), '🧍 Make her 3D model: the circle\'s front, both sides and back go to Hunyuan3D-2mv');
+    await page.waitForTimeout(500);
+    const r = await page.evaluate(async () => { const q = cmPage().panels[2].d3, cv = document.querySelector('#comic [data-d3view]'); await fuseMesh(q.cmod.url).wait;
+      const h = () => { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let k = 0; for(let i = 0; i < d.length; i += 16) k = (k * 31 + d[i] + 3 * d[i + 1]) % 1000003; return k; };
+      q.yaw = q.pitch = 0; const a = cmodDraw(q, cv), h0 = h(); q.yaw = 2.5; q.pitch = 0.8; cmodDraw(q, cv); const h1 = h(); q.yaw = q.pitch = 0; return [a, h0!==h1]; });
+    ok(r[0] && r[1], 'her model draws over the swung background and turns and tilts');
+    const nb2 = ALL.length, n0 = await page.evaluate(() => { cmPage().panels[2].d3.yaw = 1; return cmPage().panels[2].stills.length; }); await page.click('#comic [data-cm="d3use"]');
+    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
+    const ks = Object.values(ALL[nb2].prompt).filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
+    ok(ks.join()==='0.65,0.55', 'Use this angle from her model repaints harder (0.65 then 0.55), so the shading and dress come from Illustrious: ' + ks); }
+  { await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; p.d3.view = 'depth'; p.d3.orbMode = 'circle'; drawComic(); });
+    await page.click('#comic [data-d3plain="1"]'); const nb = ALL.length; await page.click('#comic [data-cm="d3orb"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3CircReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
+    const iv = Object.values(ALL[nb].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo'); ok(/plain white/.test(iv.inputs.prompt), 'Circle her on: Plain white circles her alone on white'); }
   await page.evaluate(() => { cmPage().panels[2].d3.view = 'depth'; });
   // ✕ Stop: the comic's jobs can be cancelled
   { await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cmopts="3"]'); const n0 = await page.evaluate(() => cmPage().panels[1].stills.length);

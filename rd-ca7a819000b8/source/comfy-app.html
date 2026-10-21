@@ -605,7 +605,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.109'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.110'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5823,8 +5823,16 @@ function obPrompt(dir, orbit, tilt, scene, zoom){
 // ⭕ a full circle round the frozen subject (Jordan 2026-10-21: one clip that goes all the way round, scrubbed forward or back):
 // the still is the first AND the last frame, so it has to come home on-model; timed checkpoints keep it moving (an
 // "everything stays the same" prompt made MiniMax barely move in the orbit tests)
-function circlePrompt(scene){
+// the still with only her in it, on white (the cut-out mask)
+async function d3Plain(ph){ const im = await scLoadImg(ph.url), mk = await scLoadImg(ph.mask), W = im.naturalWidth, H = im.naturalHeight;
+  const m = document.createElement('canvas'); m.width = W; m.height = H; const mx = m.getContext('2d'); mx.drawImage(mk, 0, 0, W, H); const D = mx.getImageData(0, 0, W, H);
+  for(let q = 0; q < D.data.length; q += 4){ D.data[q + 3] = D.data[q]; } mx.putImageData(D, 0, 0); mx.globalCompositeOperation = 'source-in'; mx.drawImage(im, 0, 0, W, H);
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.drawImage(m, 0, 0); return c; }
+function circlePrompt(scene, plain){
   const first = (scene || '').trim() ? 'The first frame shows ' + scene.trim().replace(/\.+$/, '') + '. ' : '';
+  if(plain) return 'The first frame shows ' + scene + '. One continuous camera move: a full 360-degree orbit shot round her, like a character turnaround. The camera circles to the right all the way around her at the same height and distance, never stopping, always keeping her centred and the same size. '
+    + '[0s-1.3s] By 1.3 seconds we see her in full profile. [1.3s-2.6s] By 2.6 seconds we see her from directly behind. [2.6s-3.9s] By 3.9 seconds we see her other side in full profile. [3.9s-5s] The camera comes back round to the front. '
+    + 'The background stays plain white the whole time, with no floor, shadows or scenery. She is frozen in the moment of the first frame: same pose, same expression, nothing moves except the camera. Same art style, colours and lighting as the first frame. No cuts, no zoom, no new characters. Silence.';
   return first + 'One continuous camera move: a full 360-degree orbit shot. The camera circles to the right all the way around the subject at the same height and distance, never stopping, always keeping the subject centred. '
     + '[0s-1.3s] The camera swings round to the side: by 1.3 seconds we see the subject in full profile. [1.3s-2.6s] It keeps going behind them: by 2.6 seconds we see the subject from directly behind. '
     + '[2.6s-3.9s] It keeps circling: by 3.9 seconds we see their other side in full profile. [3.9s-5s] It comes back round to the front and ends exactly on the first frame\'s view. '
@@ -5895,7 +5903,7 @@ function orbitGraph(k, img, o, w, h, prefix){
   let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
   if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
-  const prompt = o.mode==='pose' ? posePrompt(o.action, o.scene) : o.mode==='circle' ? circlePrompt(o.scene) : obPrompt(o.dir || 'right', o.deg || 90, o.tilt || 40, o.scene, o.zoom);
+  const prompt = o.mode==='pose' ? posePrompt(o.action, o.scene) : o.mode==='circle' ? circlePrompt(o.scene, o.plain) : obPrompt(o.dir || 'right', o.deg || 90, o.tilt || 40, o.scene, o.zoom);
   let cond, lat;
   if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', Object.assign({clip:[clip,0], vae:[vae,0], prompt, width:w, height:h, length:OB_LEN, first_frame:[li,0]}, o.mode==='circle' && o.home!==false ? {last_frame:[li,0]} : {})); cond = [iv,0]; lat = [iv,1]; }
   else { const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + prompt, width:w, height:h, length:OB_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
@@ -6673,9 +6681,9 @@ async function cmJob(cm, pg, p, k, kind, mins, host){
     else if(kind==='finish'){ prefix = cmPrefixP(pg, i, 'finished'); const c = CMFIN[p.id]; if(!c) throw new Error('grab the frame again'); const fw = c.width, fh = c.height;
       const img = (await uploadFrame(c, 'panel_frame', k.url)).img; delete CMFIN[p.id]; G = cmFinGraph(k, img, fw, fh, p, i, rect, prefix); w = fw; h = fh; }
     else if(kind==='angle'){ prefix = cmPrefixP(pg, i, 'angle'); // the still swung a little in 3D, and its torn edges repainted
-      const ph = p.d3, [W, H] = cmStillSize(rect.w / rect.h), fz = ph.view==='fuse' && ph.fuse && ph.fuse.glbs; if(!fz) await d3Ready(ph);
-      const shot = fz ? await fuseShot(ph, W, H) : null, view = fz ? shot.view : d3Picture(ph, W, H, 'colour'), torn = fz ? shot.torn : d3Picture(ph, W, H, 'stretch');
-      G = cmAngleGraph(k, (await uploadFrame(view, 'angle_view', k.url)).img, (await uploadFrame(torn, 'angle_torn', k.url)).img, p, i, rect, prefix); w = W; h = H; }
+      const ph = p.d3, [W, H] = cmStillSize(rect.w / rect.h), md = ph.view==='model' && ph.cmod && ph.cmod.url, fz = md || ph.view==='fuse' && ph.fuse && ph.fuse.glbs; if(!fz) await d3Ready(ph);
+      const shot = md ? await cmodShot(ph, W, H) : fz ? await fuseShot(ph, W, H) : null, view = fz ? shot.view : d3Picture(ph, W, H, 'colour'), torn = fz ? shot.torn : d3Picture(ph, W, H, 'stretch');
+      G = cmAngleGraph(k, (await uploadFrame(view, 'angle_view', k.url)).img, (await uploadFrame(torn, 'angle_torn', k.url)).img, p, i, rect, prefix, !!md); w = W; h = H; }
     else { const s = cmStill(p); if(!s) throw new Error('paint a still first'); prefix = cmPrefixP(pg, i, 'clip'); [w, h] = obCanvas(s.w || rect.w, s.h || rect.h, 576);
       G = cmAnimGraph(k, await cmUp(s.url, k.url), cmAnimPrompt(cm, p, i, rect), w, h, prefix); }
     if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete h0.busy; cmGot(h0, kind, {test:true, w, h, t:Date.now()}); return; }
@@ -6953,7 +6961,7 @@ function d3OrbHtml(ph){
   const os = d3Orbs(ph), busy = os.filter(o => o.making || o.busy), deg = ph.orbDeg || 35, circ = ph.orbMode==='circle';
   const seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${esc(v)}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`; // the comic's own buttons
   let x = '<div class="lbl">🎞 Real angles</div>';
-  if(d3OrbReady(ph) || d3CircReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth']].concat(d3OrbReady(ph) ? [['mm', '🎞 MiniMax views']] : [], d3CircReady(ph) ? [['circle', '⭕ Full circle']] : [], ph.fuse && ph.fuse.glbs ? [['fuse', '🧊 3D model']] : []), ph.view || 'depth')}</div>`
+  if(d3OrbReady(ph) || d3CircReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth']].concat(d3OrbReady(ph) ? [['mm', '🎞 MiniMax views']] : [], d3CircReady(ph) ? [['circle', '⭕ Full circle']] : [], ph.fuse && ph.fuse.glbs ? [['fuse', '🧊 3D model']] : [], ph.cmod && ph.cmod.url ? [['model', '🧍 Her model']] : []), ph.view || 'depth')}</div>`
     + (ph.view==='circle' ? `<p class="note">${(D3F[ph.orbs.circle.url] || {}).ready ? 'Drag to turn all the way round; the scene follows your finger. ↔ if it turns the wrong way. Use this angle finishes that exact view in Illustrious.' : D3ERR[ph.id] ? esc(D3ERR[ph.id]) : '<span data-d3loadtxt>Loading the circle…</span>'}</p>`
       + (D3ERR[ph.id] || (D3F[ph.orbs.circle.url] || {}).ready ? `<div class="btnrow"><button class="btn" data-cm="d3rev">↔ Turn the other way</button></div>` : '<div class="pbar obbar"><i data-d3load style="width:2%"></i></div>') : '')
     + (ph.view==='mm' ? `<p class="note">${D3F[ph.orbs.left.url] && D3F[ph.orbs.right.url] && D3F[ph.orbs.left.url].ready && D3F[ph.orbs.right.url].ready ? 'Drag left and right through MiniMax\'s painted views (up to ' + deg + '° each way; pick ⭕ Full circle above to go all the way round). Use this angle finishes that exact view in Illustrious.' : D3ERR[ph.id] ? esc(D3ERR[ph.id]) : '<span data-d3loadtxt>Loading the views…</span>'}</p>`
@@ -6963,9 +6971,11 @@ function d3OrbHtml(ph){
   x += os.filter(o => o.err).map(o => `<p class="warn">${esc(o.err)}</p>`).join('');
   if(!busy.length){ const k = kitOrbit();
     x += `<div class="row"><label>Make</label>${seg('data-d3mode', [['sides', '🎞 Left and right'], ['circle', '⭕ Full circle']], circ ? 'circle' : 'sides')}</div>`
+      + (circ && ph.mask ? `<div class="row"><label>Circle her on</label>${seg('data-d3plain', [['', 'The scene'], ['1', 'Plain white']], ph.circPlain ? '1' : '')}</div>` : '')
       + (circ ? `<div class="row"><label>Last frame</label>${seg('data-d3home', [['still', 'This still'], ['free', 'Leave it free']], ph.circHome || 'still')}</div>` : `<div class="row"><label>How far</label>${seg('data-d3deg', [[20, 'A little'], [35, 'Some'], [60, 'A lot']], deg)}</div>`)
       + `<div class="btnrow"><button class="btn" data-cm="d3orb" ${k.why ? 'disabled' : ''}>${circ ? '⭕ ' + (d3CircReady(ph) ? 'Make the circle again' : 'Circle all the way round') : '🎞 ' + (d3OrbReady(ph) ? 'Make the views again' : 'Make real angles with MiniMax')}</button></div>
       <p class="note">${k.why ? esc(k.why) : circ ? 'One MiniMax clip that circles all the way round the still and lands back on it (' + (ph.circHome==='free' ? 'this still is only its first frame, so nothing tempts it to stand still, but it may not come all the way home' : 'this still is its first and last frame, so it lands back on-model; if MiniMax barely moves, try Leave it free') + ', ' + k.mins + ' min). Dragging then turns right round the scene.' : 'Two MiniMax clips from this still, one circling left and one right (' + k.mins + ' min each, on both computers at once when both are free). Then dragging shows real painted sides instead of stretched depth.'}</p>`; }
+  if(d3CircReady(ph)) x += cmodHtml(ph);
   if(d3OrbReady(ph) || d3CircReady(ph)) x += fuseHtml(ph);
   return x; }
 async function d3Orbit(p){
@@ -6975,8 +6985,9 @@ async function d3Orbit(p){
   for(const side of sides){
     const host = ph.orbs[side] = {id:ph.id + '_' + side, busy:'Sending the still…'}, k = kitOrbit(avoid); drawComic();
     try{ if(k.why) throw new Error(k.why); avoid = k.url;
-      const img = S.test ? 'test.png' : await cmUp(ph.url, k.url), sz = S.test ? [576, 1024] : await obSize(ph.url), [w, h] = obCanvas(sz[0], sz[1], 576);
-      const prefix = cmPrefixP(pg, i, 'orbit_' + side), G = orbitGraph(k, img, side==='circle' ? {mode:'circle', scene:p.text, home:ph.circHome!=='free'} : {dir:side, deg:ph.orbDeg || 35, tilt:0, scene:p.text}, w, h, prefix);
+      const plain = side==='circle' && ph.circPlain && ph.mask; // Plain white (Jordan 2026-10-21): just her, cut out, so MiniMax only has her to turn
+      const img = S.test ? 'test.png' : plain ? (await uploadFrame(await d3Plain(ph), 'circle_plain', k.url)).img : await cmUp(ph.url, k.url), sz = S.test ? [576, 1024] : await obSize(ph.url), [w, h] = obCanvas(sz[0], sz[1], 576);
+      const prefix = cmPrefixP(pg, i, 'orbit_' + side), G = orbitGraph(k, img, side==='circle' ? {mode:'circle', scene:plain ? 'her alone on a plain white background' : p.text, home:ph.circHome!=='free', plain:!!plain} : {dir:side, deg:ph.orbDeg || 35, tilt:0, scene:p.text}, w, h, prefix);
       if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete host.busy; cmGot(host, 'orbit', {test:true}); continue; }
       const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
       if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -7222,12 +7233,103 @@ async function fuseShot(ph, W, H){
   const c = fuseRender(ph, W, H); if(!c) throw new Error('the 3D model has not loaded'); vx.drawImage(c, 0, 0); ax.drawImage(c, 0, 0); const D = ax.getImageData(0, 0, W, H);
   for(let q = 0; q < D.data.length; q += 4){ const v = D.data[q + 3] < 128 ? 255 : 0; D.data[q] = D.data[q + 1] = D.data[q + 2] = v; D.data[q + 3] = 255; } ax.putImageData(D, 0, 0);
   return {view, torn:a}; }
+// 🧍 her own 3D model from the ⭕ full circle (Jordan 2026-10-21: orbit round her and tilt above or below; fusing the circle
+// with Depth Anything 3 gave several copies of her, as it can't tell where the camera was round a painted character). The
+// circle already has her front, both sides and back, which is what Hunyuan3D-2mv (or Pixal3D) builds a shape from, as on the
+// character cards; then the app paints the shape from those same four pictures (bake3d), and draws it where she stands in
+// the still, over the swung background. No camera guessing anywhere.
+const CMOD = {}; // panel 3D look id -> {text} while the model is being made or painted
+// the four sides from the circle: the camera circles to the right, so a quarter of the way round shows her left side
+// (↔ on the circle swaps them, for a clip that went the other way)
+const cmodSides = ph => ph.circRev ? {front:0, right:0.25, back:0.5, left:0.75} : {front:0, left:0.25, back:0.5, right:0.75};
+function cmodHtml(ph){
+  const M = ph.cmod || {}, busy = CMOD[ph.id], k = kit3d();
+  let x = '<div class="lbl">🧍 Her 3D model from the circle</div>';
+  if(busy) return x + `<div class="pbar obbar${M.making ? '' : ' pulse'}"><i data-cmodbar="${ph.id}"></i></div><p class="note" data-cmodtxt="${ph.id}">${esc(busy.text)}</p>`;
+  if(M.err) x += `<p class="warn">${esc(M.err)}</p>`;
+  if(M.url) x += `<p class="note">Pick 🧍 Her model above: drag sideways to walk round her, up and down to look from above or below. She stands where she is in the still, over the swung background. Use this angle paints the view in Illustrious.</p>`;
+  x += `<div class="btnrow"><button class="btn" data-cm="cmod" ${k.why || !k.unet ? 'disabled' : ''}>🧍 ${M.url ? 'Make her model again' : 'Make her 3D model'}</button></div>`
+    + `<p class="note">${k.why ? esc(k.why) : !k.unet ? 'Needs ' + esc(k.spec.label) + ' (get it on a character card: 🛠 More tools)' : k.spec.label + ' on ' + esc(pcName(k.url)) + ' from the circle\'s front, sides and back, then painted from them on this phone (a few minutes).'}</p>`;
+  return x; }
+async function cmodMake(p){
+  const ph = p.d3, pg = cmPage(), i = pg.panels.indexOf(p), k = kit3d(); if(!ph || !d3CircReady(ph) || k.why || !k.unet) return;
+  const S0 = CMOD[ph.id] = {text:'Taking her front, sides and back from the circle…'}; delete (ph.cmod || {}).err; if(ph.view==='model'){ ph.view = 'depth'; ph.yaw = ph.pitch = 0; } drawComic();
+  try{ const imgs = {}, sides = cmodSides(ph);
+    if(S.test) Object.keys(sides).forEach(sl => imgs[sl] = 'test.png');
+    else { const v = await d3Video(ph.orbs.circle.url);
+      for(const [sl, t] of Object.entries(sides)){ await d3SeekTo(v, Math.max(0, (v.duration - 0.05) * t)); const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0);
+        S0.text = 'Sending her ' + sl + ' to ' + pcName(k.url) + '…'; cmodTell(ph); imgs[sl] = (await uploadFrame(c, 'circle_' + sl, k.url)).img; } }
+    const {g, save:sid, views} = graph3d(k, imgs, {name:'comic_p' + (CM().pages.indexOf(pg) + 1) + '_panel' + (i + 1)});
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); ph.cmod = {url:'test', raw:'test', yaw:0}; delete CMOD[ph.id]; ph.view = 'model'; ph.yaw = ph.pitch = 0; save(); drawComic(); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
+    if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    ph.cmod = {making:{pc:k.url, id:j.prompt_id, save:sid, views, smp:samplerOf(g), eng:k.eng, yaw:k.eng==='hy' ? HY_YAW : 0, t:t0}}; save(); cmodWait(ph);
+  }catch(err){ delete CMOD[ph.id]; ph.cmod = Object.assign(ph.cmod || {}, {err:"Couldn't make her model: " + err.message}); save(); drawComic(); } }
+function cmodTell(ph){ const S0 = CMOD[ph.id]; if(!S0) return; const t = document.querySelector(`[data-cmodtxt="${ph.id}"]`); if(t) t.textContent = S0.text; }
+async function cmodWait(ph){
+  const m = ph.cmod && ph.cmod.making; if(!m || m.polling) return; m.polling = true; const S0 = CMOD[ph.id] = CMOD[ph.id] || {}; drawComic();
+  try{ for(;;){ await new Promise(r => setTimeout(r, 3000)); if(ph.cmod.making!==m) return;
+      await liveQueue(m.id, m.pc); const e = liveEta(m.id, m.smp, m.t, 240, 'Building her shape on ' + pcName(m.pc));
+      S0.text = e.text; const bar = document.querySelector(`[data-cmodbar="${ph.id}"]`); if(bar){ bar.parentNode.classList.remove('pulse'); bar.style.width = (100 * e.f).toFixed(1) + '%'; } cmodTell(ph);
+      let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e2){ continue; }
+      if(!h){ if(Date.now() - m.t > 3 * 3600e3) throw new Error('it never finished (was ComfyUI restarted?)'); continue; }
+      if(h.status && h.status.status_str==='error'){ const er = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(er ? er[1].exception_message : 'ComfyUI hit an error'); }
+      if(!(h.status && h.status.completed)) continue;
+      const f = (((h.outputs || {})[m.save] || {})['3d'] || [])[0]; if(!f) throw new Error('no 3D file came back');
+      const pic = id => (((h.outputs || {})[id] || {}).images || [])[0], views = {};
+      for(const [slot, [im, mk]] of Object.entries(m.views || {})) if(pic(im) && pic(mk)) views[slot] = {img:viewUrl(pic(im), m.pc), mask:viewUrl(pic(mk), m.pc)};
+      const raw = viewUrl(f, m.pc); ph.cmod = {raw, url:raw, pc:m.pc, yaw:m.yaw, views}; save();
+      // painted from the four pictures, as a character card's model is
+      S0.text = 'Painting her from the four pictures…'; const bar2 = document.querySelector(`[data-cmodbar="${ph.id}"]`); if(bar2) bar2.parentNode.classList.add('pulse'); cmodTell(ph);
+      try{ const vs = {}; for(const [slot, v] of Object.entries(views)) vs[slot] = {img:await loadPic(v.img), mask:await loadPic(v.mask)};
+        const out = await bake3d(await (await fetch(raw)).arrayBuffer(), vs, 2048, m.yaw || 0);
+        if(out){ const name = 'rdcm_' + ph.id + '_' + Date.now().toString(36) + '.glb', fd = new FormData(); fd.append('image', new Blob([out], {type:'model/gltf-binary'}), name); fd.append('overwrite', 'true'); fd.append('type', 'input');
+          const r = await fetch(m.pc + '/upload/image', {method:'POST', body:fd}); if(r.ok){ const j = await r.json(); ph.cmod.url = viewUrl({filename:j.name, subfolder:j.subfolder || '', type:'input'}, m.pc); } } }
+      catch(e3){ ph.cmod.err = 'Her shape is ready, but painting it failed (' + e3.message + '), so it shows plain.'; }
+      delete CMOD[ph.id]; ph.view = 'model'; ph.yaw = ph.pitch = 0; save(); if(!$('#comic').hidden) drawComic(); toast('Her 3D model is ready: drag to walk round her 🧍'); buzz(); return; } }
+  catch(err){ if(ph.cmod && ph.cmod.making===m){ delete CMOD[ph.id]; ph.cmod = {err:"Couldn't make her model: " + err.message}; save(); if(!$('#comic').hidden) drawComic(); } }
+  finally{ m.polling = false; } }
+// where she stands in the still: the box round the cut-out mask (parts of the picture)
+const CMBOX = {};
+function cmodBox(ph){
+  if(CMBOX[ph.mask]) return CMBOX[ph.mask].box; const B = CMBOX[ph.mask] = {box:null};
+  if(!ph.mask || S.test){ B.box = {x:0.3, y:0.1, w:0.4, h:0.9}; return B.box; }
+  scLoadImg(ph.mask).then(im => { const W = 160, H = Math.max(2, Math.round(W * im.naturalHeight / im.naturalWidth)), c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H); const D = x.getImageData(0, 0, W, H).data; let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for(let y = 0; y < H; y++) for(let q = 0; q < W; q++) if(D[(y * W + q) * 4] > 127){ if(q < x0) x0 = q; if(q > x1) x1 = q; if(y < y0) y0 = y; if(y > y1) y1 = y; }
+    B.box = x1 < 0 ? {x:0.3, y:0.1, w:0.4, h:0.9} : {x:x0 / W, y:y0 / H, w:(x1 - x0 + 1) / W, h:(y1 - y0 + 1) / H}; d3Redraw(); }).catch(() => { B.box = {x:0.3, y:0.1, w:0.4, h:0.9}; d3Redraw(); });
+  return null; }
+// her model on its own, turned (yaw about the vertical, pitch over and under), filling a square as tall as she is at the start
+function cmodRender(ph, S2){
+  const G = fuseGL(), gl = G.gl, M = fuseMesh(ph.cmod.url); if(!M.ready){ M.wait.then(() => d3Redraw()).catch(e => toast("Couldn't load her model: " + e.message, true)); return null; }
+  if(!M.box){ const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; M.parts.forEach(pt => { for(let v = 0; v < pt.P.length; v += 3) for(let a = 0; a < 3; a++){ lo[a] = Math.min(lo[a], pt.P[v + a]); hi[a] = Math.max(hi[a], pt.P[v + a]); } }); M.box = {lo, hi}; }
+  const {lo, hi} = M.box, T = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2], half = (hi[1] - lo[1]) / 2 || 1, R = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
+  const yw = (+ph.yaw || 0) + (+ph.cmod.yaw || 0), pt = +ph.pitch || 0, dir = [Math.sin(yw) * Math.cos(pt), Math.sin(pt), Math.cos(yw) * Math.cos(pt)], eye = V3.add(T, V3.mul(dir, R * 2));
+  const f = V3.norm(V3.sub(T, eye)), r = V3.norm(V3.cross(f, [0, 1, 0])), u = V3.cross(r, f), zn = R * 0.5, zf = R * 4;
+  const view = [r[0], u[0], -f[0], 0, r[1], u[1], -f[1], 0, r[2], u[2], -f[2], 0, -V3.dot(r, eye), -V3.dot(u, eye), V3.dot(f, eye), 1];
+  const proj = [1 / half, 0, 0, 0, 0, 1 / half, 0, 0, 0, 0, -2 / (zf - zn), 0, 0, 0, -(zf + zn) / (zf - zn), 1];
+  G.cv.width = G.cv.height = S2; gl.viewport(0, 0, S2, S2); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  gl.useProgram(G.pr); gl.uniformMatrix4fv(gl.getUniformLocation(G.pr, 'mvp'), false, fuseMul(proj, view)); gl.uniform1i(gl.getUniformLocation(G.pr, 'img'), 0);
+  M.parts.forEach(q => { gl.uniform1i(gl.getUniformLocation(G.pr, 'tex'), q.tex ? 1 : 0); if(q.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, q.tex); } gl.bindVertexArray(q.vao); gl.drawElements(gl.TRIANGLES, q.n, gl.UNSIGNED_INT, 0); });
+  gl.bindVertexArray(null); return G.cv; }
+// the background swung (as behind the fused model), and her model where she stands
+function cmodPaint(ph, x, W, H){ const box = cmodBox(ph); if(!box) return false; const b = fuseBack(ph, W, H); if(b) x.drawImage(b, 0, 0);
+  const side = Math.round(box.h * H * 1.04), m = cmodRender(ph, Math.max(64, Math.min(2048, side))); if(!m) return false;
+  x.drawImage(m, Math.round((box.x + box.w / 2) * W - side / 2), Math.round((box.y + box.h / 2) * H - side / 2), side, side); return true; }
+function cmodDraw(ph, cv){ const x = cv.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, cv.width, cv.height); return cmodPaint(ph, x, cv.width, cv.height); }
+async function cmodShot(ph, W, H){
+  await Promise.all([fuseMesh(ph.cmod.url).wait, ...d3Layers(ph).map(l => scMesh(l).wait)]); for(let n = 0; n < 50 && !cmodBox(ph); n++) await new Promise(r => setTimeout(r, 100));
+  const view = document.createElement('canvas'), a = document.createElement('canvas'); view.width = a.width = W; view.height = a.height = H; const vx = view.getContext('2d'), ax = a.getContext('2d'); vx.fillStyle = '#808080'; vx.fillRect(0, 0, W, H);
+  if(!cmodPaint(ph, vx, W, H) || !cmodPaint(ph, ax, W, H)) throw new Error('her model has not loaded'); const D = ax.getImageData(0, 0, W, H);
+  for(let q = 0; q < D.data.length; q += 4){ const v = D.data[q + 3] < 128 ? 255 : 0; D.data[q] = D.data[q + 1] = D.data[q + 2] = v; D.data[q + 3] = 255; } ax.putImageData(D, 0, 0);
+  return {view, torn:a}; }
 function d3Redraw(){
   const cv = $('#comic [data-d3view]'), pg = cmPage(); if(!cv || !pg) return; const ph = pg.panels[CM().sel].d3; if(!ph || !ph.depth) return;
   const ar = (ph.w || 16) / (ph.h || 9), w = cv.clientWidth || 320, h = Math.round(w / ar), d = Math.min(2, window.devicePixelRatio || 1), W = Math.round(w * d), H = Math.round(h * d);
   if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; cv.style.height = h + 'px'; }
   if(ph.view==='mm' && d3MmDraw(ph, cv)) return;
   if(ph.view==='circle' && d3CircDraw(ph, cv)) return;
+  if(ph.view==='model' && ph.cmod && ph.cmod.url && cmodDraw(ph, cv)) return;
   if(ph.view==='fuse' && fuseDraw(ph, cv)) return;
   const m0 = scMesh(d3Layers(ph)[0]); if(m0.ready && (ph.w!==m0.w || ph.h!==m0.h)){ ph.w = m0.w; ph.h = m0.h; requestAnimationFrame(d3Redraw); }
   try{ cv.getContext('2d').drawImage(d3Scene(ph, W, H, 'colour'), 0, 0); }catch(e){ toast(e.message, true); }
@@ -7238,6 +7340,7 @@ function d3Touch(){
   cv.onpointerdown = e => { e.preventDefault(); cv.setPointerCapture(e.pointerId); drag = {x:e.clientX, y:e.clientY}; d3Wiggle(false); };
   cv.onpointermove = e => { if(!drag) return; const r = cv.getBoundingClientRect(), q = ph(), dx = (e.clientX - drag.x) / r.width, dy = (e.clientY - drag.y) / r.height;
     if(q.view==='circle'){ q.yaw = (+q.yaw || 0) - dx * Math.PI; /* the clip follows the finger (Jordan 2026-10-21: it was backwards) */ q.pitch = 0; drag = {x:e.clientX, y:e.clientY}; d3Redraw(); return; }
+    if(q.view==='model'){ q.yaw = (+q.yaw || 0) - dx * Math.PI; q.pitch = Math.max(-1.2, Math.min(1.2, (+q.pitch || 0) + dy * 1.5)); drag = {x:e.clientX, y:e.clientY}; d3Redraw(); return; } // walk round her model, over and under
     const fz = q.view==='fuse', ym = fz ? (fuseCirc(q) ? 1e9 : 1.2) : 0.35, pm = fz ? (fuseCirc(q) ? 1.2 : 0.6) : 0.18; // the 3D model turns much further (all the way round from the circle)
     q.yaw = Math.max(-ym, Math.min(ym, (+q.yaw || 0) - dx * (fz ? 2 : 0.8))); q.pitch = Math.max(-pm, Math.min(pm, (+q.pitch || 0) + dy * (fz ? 1.2 : 0.5))); drag = {x:e.clientX, y:e.clientY}; d3Redraw(); };
   cv.onpointerup = cv.onpointercancel = () => { if(drag){ drag = null; save(); } };
@@ -7264,7 +7367,9 @@ async function d3Record(){
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); toast('Saved ' + file.name);
 }
 // ✨ Use this angle: the swung view as the start, its torn edges (and anything outside the picture) repainted, then a light pass
-function cmAngleGraph(k, view, torn, p, i, rect, prefix){
+// full: from her 3D model (Jordan 2026-10-21 worried about its baked shading and the dress): her outline and pose held by the
+// line art (or a looser tile), and the whole picture repainted harder, so the shading and the dress come from Illustrious
+function cmAngleGraph(k, view, torn, p, i, rect, prefix, full){
   const cm = CM(), I = cmIll(), g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const who = cmWho(cm, p), ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck,0], clip = [ck,1]; const vae = [ck,2];
@@ -7275,15 +7380,17 @@ function cmAngleGraph(k, view, torn, p, i, rect, prefix){
   const tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
   let pos = enc(tags(tx.pos, I.words || '', cmCount(who), who.map(s => cmLooks(s, k).words).join(', '), cmStillTags(cm, p, i, rect))), neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views'));
   const vi = add('LoadImage', {image:view});
-  if(k.cn){ const cn = [add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:k.cn}), 0], type:'tile'}), 0];
-    const ap = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:cn, image:[vi,0], vae, strength:0.5, start_percent:0, end_percent:0.7}); pos = [ap,0]; neg = [ap,1]; }
+  if(k.cn){ const ln = full && (k.oi.AnimeLineArtPreprocessor ? 'AnimeLineArtPreprocessor' : k.oi.Canny ? 'Canny' : '');
+    const cn = [add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:k.cn}), 0], type:ln ? (ln==='Canny' ? 'canny/lineart/anime_lineart/mlsd' : 'canny/lineart/anime_lineart/mlsd') : 'tile'}), 0];
+    const hint = ln==='Canny' ? [add('Canny', {image:[vi,0], low_threshold:0.3, high_threshold:0.6}), 0] : ln ? [add(ln, {image:[vi,0], resolution:1024}), 0] : [vi,0];
+    const ap = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:cn, image:hint, vae, strength:full ? (ln ? 0.75 : 0.35) : 0.5, start_percent:0, end_percent:full ? 0.8 : 0.7}); pos = [ap,0]; neg = [ap,1]; }
   let mask = [add('GrowMask', {mask:[add('ImageToMask', {image:[add('LoadImage', {image:torn}), 0], channel:'red'}), 0], expand:12, tapered_corners:true}), 0];
   if(k.feather) mask = [add('FeatherMask', {mask, left:16, top:16, right:16, bottom:16}), 0];
   const seed = Math.floor(Math.random() * 1e9), ks = (latent, denoise) => add('KSampler', {model, positive:pos, negative:neg, latent_image:latent, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise});
   const one = add('VAEDecode', {samples:[ks([add('SetLatentNoiseMask', {samples:[add('VAEEncode', {pixels:[vi,0], vae}), 0], mask}), 0], 0.65), 0], vae});
-  let two = [add('VAEDecode', {samples:[ks([add('VAEEncode', {pixels:[one,0], vae}), 0], 0.25), 0], vae}), 0];
+  let two = [add('VAEDecode', {samples:[ks([add('VAEEncode', {pixels:[one,0], vae}), 0], full ? 0.55 : 0.25), 0], vae}), 0];
   // the two repaints drift the colours (Jordan 2026-10-21: it "turned yellow"), so they are put back to the swung view's own
-  if(k.oi.ColorMatch) two = [add('ColorMatch', {image_ref:[vi,0], image_target:two, method:'mkl'}), 0];
+  if(k.oi.ColorMatch && !full) two = [add('ColorMatch', {image_ref:[vi,0], image_target:two, method:'mkl'}), 0];
   return {g, save:add('SaveImage', {images:two, filename_prefix:prefix})};
 }
 // the clip's current frame on a canvas (null, with a note, before it has loaded); pretend clips give a pretend frame
@@ -7468,7 +7575,7 @@ function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.c
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-fusesrc],[data-fusen]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7490,6 +7597,7 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.d3mode && p && p.d3){ p.d3.orbMode = t.dataset.d3mode; const v = t.dataset.d3mode==='circle' ? (d3CircReady(p.d3) && 'circle') : (d3OrbReady(p.d3) && 'mm'); if(v && ['mm', 'circle'].includes(p.d3.view)){ p.d3.view = v; p.d3.yaw = p.d3.pitch = 0; } }
   else if(t.dataset.d3home && p && p.d3){ p.d3.circHome = t.dataset.d3home; }
   else if(t.dataset.d3flat!=null && p && p.d3){ p.d3.flat = !!t.dataset.d3flat; }
+  else if(t.dataset.d3plain!=null && p && p.d3){ p.d3.circPlain = !!t.dataset.d3plain; }
   else if(t.dataset.fusesrc && p && p.d3){ p.d3.fuse = Object.assign(p.d3.fuse || {}, {src:t.dataset.fusesrc}); }
   else if(a==='d3rev' && p.d3){ p.d3.circRev = !p.d3.circRev; }
   else if(t.dataset.fusen && p && p.d3 && p.d3.fuse){ p.d3.fuse.n = +t.dataset.fusen; }
@@ -7501,6 +7609,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='d3getda3'){ fuseGet(t.dataset.pc); return; }
   else if(a==='d3flip' && p.d3 && p.d3.fuse){ p.d3.fuse.flip = !p.d3.fuse.flip; save(); d3Redraw(); return; }
   else if(a==='d3orb'){ d3Orbit(p); return; }
+  else if(a==='cmod'){ cmodMake(p); return; }
   else if(a==='d3use' && p.d3 && (p.d3.view==='mm' && d3OrbReady(p.d3) || p.d3.view==='circle' && d3CircReady(p.d3))){ d3UseMm(p); return; }
   else if(a==='d3moge'){ d3GetMoge(t.dataset.pc); return; }
   else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = {id:p.id + '_3d', url:st.url, amt:1}; cmDepth(p.d3, st.url); return; }
@@ -7654,7 +7763,7 @@ $('#wsBar').onclick = e => { const b = e.target.closest('[data-ws]'); if(!b || b
 obAll().forEach(g => { if(g.ob && g.ob.making) waitOrbit(g.ob); });
 cmAll().forEach(p => { if(!p.parent && p.extra) p.extra = p.extra.filter(c => c.making); }); // an option that never got sent
 cmAll().forEach(p => { if(p.making) cmWait(p); }); // comic panels made while the app was closed come in
-cmAll().forEach(p => { if(p.fuse && p.fuse.making) fuseWait(p); });
+cmAll().forEach(p => { if(p.fuse && p.fuse.making) fuseWait(p); if(p.cmod && p.cmod.making) cmodWait(p); });
 if(S.wsBack){ const id = S.wsBack; delete S.wsBack; if(wsPanel(id)) wsOpen(id); }
 else if(S.tab==='comic') openComic(); // an orbit made while the app was closed comes in
 delete S.orbitN; delete S.orbitH; // the per-workstation orbit before pictures became projects
