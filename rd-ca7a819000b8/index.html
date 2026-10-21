@@ -614,7 +614,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.101'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.102'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6936,7 +6936,7 @@ async function d3GetMoge(pc){
 // 🎞 MiniMax views (Jordan 2026-10-21: "use minimax rotating around it to help"): two short MiniMax orbits from the still, one
 // circling left and one right; dragging then scrubs through those painted views, so a bigger swing shows real new sides
 // instead of stretched depth. The depth relief stays for the instant, small swing. Use this angle finishes the exact frame.
-const D3_ORB_N = 16, D3F = {}; // frames per side, taken from the move (the first 4 s of the clip); url -> frames
+const D3_ORB_N = 16, D3F = {}, D3ERR = {}; // frames per side, taken from the move (the first 4 s of the clip); url -> frames
 const d3Orbs = ph => ['left', 'right'].map(s => ph.orbs && ph.orbs[s]).filter(Boolean);
 const d3OrbReady = ph => ph.orbs && ph.orbs.left && ph.orbs.left.url && ph.orbs.right && ph.orbs.right.url;
 function d3OrbHtml(ph){
@@ -6944,7 +6944,7 @@ function d3OrbHtml(ph){
   const seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${esc(v)}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`; // the comic's own buttons
   let x = '<div class="lbl">🎞 Real angles</div>';
   if(d3OrbReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth'], ['mm', '🎞 MiniMax views']].concat(ph.fuse && ph.fuse.glbs ? [['fuse', '🧊 3D model']] : []), ph.view || 'depth')}</div>`
-    + (ph.view==='mm' ? `<p class="note">${D3F[ph.orbs.left.url] && D3F[ph.orbs.right.url] && D3F[ph.orbs.left.url].ready && D3F[ph.orbs.right.url].ready ? 'Drag left and right through MiniMax\'s painted views (up to ' + deg + '° each way). Use this angle finishes that exact view in Illustrious.' : 'Loading the views…'}</p>` : '');
+    + (ph.view==='mm' ? `<p class="note">${D3F[ph.orbs.left.url] && D3F[ph.orbs.right.url] && D3F[ph.orbs.left.url].ready && D3F[ph.orbs.right.url].ready ? 'Drag left and right through MiniMax\'s painted views (up to ' + deg + '° each way). Use this angle finishes that exact view in Illustrious.' : D3ERR[ph.id] ? esc(D3ERR[ph.id]) : 'Loading the views…'}</p>` : '');
   x += busy.map(o => `<div class="pbar obbar"><i data-cmbar="${o.id}"></i></div><p class="note" data-cmtxt="${o.id}">${esc(o.busy || '')}</p>`).join('');
   if(busy.length) x += '<div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop the views</button></div>';
   x += os.filter(o => o.err).map(o => `<p class="warn">${esc(o.err)}</p>`).join('');
@@ -6974,18 +6974,25 @@ function d3Frames(url){
   const F = D3F[url] = {ready:false, list:[]};
   F.wait = (async () => {
     if(url==='test'){ for(let n = 0; n < D3_ORB_N; n++){ const c = document.createElement('canvas'); c.width = 64; c.height = 112; const x = c.getContext('2d'); x.fillStyle = 'hsl(' + n * 20 + ',70%,50%)'; x.fillRect(0, 0, 64, 112); F.list.push(c); } F.ready = true; return F; }
-    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto';
-    v.src = await (TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded'); return r.blob(); }).then(b => URL.createObjectURL(b)));
-    await new Promise((ok, no) => { v.onloadeddata = ok; v.onerror = () => no(new Error('the clip could not be read')); });
-    const end = Math.min(v.duration - 0.05, 4), s = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
-    for(let n = 0; n < D3_ORB_N; n++){ v.currentTime = end * n / (D3_ORB_N - 1); await new Promise(ok => v.onseeked = ok);
+    const v = await d3Video(url), end = Math.min(v.duration - 0.05, 4), s = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
+    for(let n = 0; n < D3_ORB_N; n++){ await d3SeekTo(v, end * n / (D3_ORB_N - 1));
       const c = document.createElement('canvas'); c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); F.list.push(c); }
-    F.ready = true; return F; })().catch(e => { delete D3F[url]; throw e; });
+    v.removeAttribute('src'); v.load(); F.ready = true; return F; })().catch(e => { delete D3F[url]; throw e; });
   return F; }
+// a clip ready to seek, also on iPhone: Safari loads nothing for a video that isn't playing until load() and a muted play()
+// (2026-10-21 the views sat on "Loading the views…" for ever), and every wait gives up instead of hanging
+async function d3Video(url){
+  const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.setAttribute('muted', ''); v.preload = 'auto';
+  v.src = await (TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b)));
+  const ready = new Promise((ok, no) => { const go = () => { if(v.videoWidth && v.duration) ok(); }; ['loadedmetadata', 'loadeddata', 'canplay'].forEach(ev => v.addEventListener(ev, go));
+    v.addEventListener('error', () => no(new Error('the clip could not be read'))); setTimeout(() => no(new Error('the clip took too long to open')), 20000); });
+  v.load(); try{ await v.play(); v.pause(); }catch(e){}
+  await ready; return v; }
+function d3SeekTo(v, t){ return new Promise(ok => { let done = false; const fin = () => { if(!done){ done = true; ok(); } }; v.addEventListener('seeked', fin, {once:true}); setTimeout(fin, 3000); v.currentTime = t; }); }
 // yaw > 0 is the camera moving right, as in the depth view: the right orbit's frame that far along, blended between neighbours
 function d3MmDraw(ph, cv){
   if(!d3OrbReady(ph)) return false; const yaw = +ph.yaw || 0, F = d3Frames(ph.orbs[yaw >= 0 ? 'right' : 'left'].url);
-  if(!F.ready){ F.wait.then(() => { d3Redraw(); if(!$('#comic').hidden) drawComic(); }).catch(e => toast(e.message, true)); return false; }
+  if(!F.ready){ if(!F.hooked){ F.hooked = true; F.wait.then(() => { delete D3ERR[ph.id]; d3Redraw(); if(!$('#comic').hidden) drawComic(); }).catch(e => { D3ERR[ph.id] = "Couldn't load the views: " + e.message; if(!$('#comic').hidden) drawComic(); }); } return false; }
   const f = Math.min(1, Math.abs(yaw) / 0.35) * (F.list.length - 1), a = Math.floor(f), b = Math.min(F.list.length - 1, a + 1), x = cv.getContext('2d');
   const draw = (c, al) => { const r = Math.max(cv.width / c.width, cv.height / c.height), w = c.width * r, h = c.height * r; x.globalAlpha = al; x.drawImage(c, (cv.width - w) / 2, (cv.height - h) / 2, w, h); };
   x.globalAlpha = 1; x.fillStyle = '#000'; x.fillRect(0, 0, cv.width, cv.height); draw(F.list[a], 1); if(b!==a) draw(F.list[b], f - a); x.globalAlpha = 1; return true; }
@@ -6994,8 +7001,7 @@ async function d3UseMm(p){
   const ph = p.d3, yaw = +ph.yaw || 0, url = ph.orbs[yaw >= 0 ? 'right' : 'left'].url, frac = Math.min(1, Math.abs(yaw) / 0.35);
   try{ let c;
     if(url==='test'){ c = document.createElement('canvas'); c.width = 576; c.height = 1024; c.getContext('2d').fillRect(0, 0, 576, 1024); }
-    else { const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.src = await TVBLOB[url]; await new Promise(ok => v.onloadeddata = ok);
-      v.currentTime = Math.min(v.duration - 0.05, 4) * frac; await new Promise(ok => v.onseeked = ok);
+    else { const v = await d3Video(url); await d3SeekTo(v, Math.min(v.duration - 0.05, 4) * frac);
       c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); }
     CMFIN[p.id] = c; cmJobs('finish', [p]); }
   catch(err){ toast("Couldn't take that view: " + err.message, true); } }
@@ -7029,6 +7035,7 @@ function fuseKits(){
 function fuseHtml(ph){
   const F = ph.fuse || {}, ks = fuseKits(), k = ks.find(q => q.model);
   let x = '<div class="lbl">🧊 3D model from the views</div>';
+  if(F.busy) return x + `<p class="note" data-fusetxt="${ph.id}">${esc(F.busy)}</p>`;
   if(F.making) return x + `<div class="pbar obbar"><i data-fusebar="${ph.id}"></i></div><p class="note" data-fusetxt="${ph.id}">Fusing the views on ${esc(pcName(F.making.pc))}…</p><div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop</button></div>`;
   if(F.err) x += `<p class="warn">${esc(F.err)}</p>`;
   if(F.glbs) x += `<div class="row"><label>Views</label>${['1', '3', '5'].map(n => `<button class="chipbtn${(F.n || 5)==n ? ' on' : ''}" data-fusen="${n}">${n}</button>`).join(' ')} <button class="chipbtn" data-cm="d3flip">↕ Flip</button></div>
@@ -7052,9 +7059,11 @@ async function fuseFrames(ph){
   return out; }
 async function fuseMake(p){
   const ph = p.d3, k = fuseKits().find(q => q.model), pg = cmPage(), i = pg.panels.indexOf(p); if(!ph || !k || !d3OrbReady(ph)) return;
-  const F = ph.fuse = {n:(ph.fuse && ph.fuse.n) || 5, flip:ph.fuse && ph.fuse.flip}; drawComic();
-  try{ const frames = await fuseFrames(ph), names = [];
-    for(const c of frames) names.push(S.test ? 'test.png' : (await uploadFrame(c, 'fuse_view', k.url)).img);
+  const F = ph.fuse = {n:(ph.fuse && ph.fuse.n) || 5, flip:ph.fuse && ph.fuse.flip, busy:'Taking the frames from the two views…'}; drawComic();
+  try{ const frames = await fuseFrames(ph), names = []; let up = 0;
+    for(const c of frames){ F.busy = 'Sending the frames to ' + pcName(k.url) + '… ' + (++up) + '/' + frames.length; const el = document.querySelector(`[data-fusetxt="${ph.id}"]`); if(el) el.textContent = F.busy;
+      names.push(S.test ? 'test.png' : (await uploadFrame(c, 'fuse_view', k.url)).img); }
+    delete F.busy;
     const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
     let batch = [add('LoadImage', {image:names[0]}), 0];
     for(const nm of names.slice(1)) batch = [add('ImageBatch', {image1:batch, image2:[add('LoadImage', {image:nm}), 0]}), 0];
@@ -7067,7 +7076,7 @@ async function fuseMake(p){
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     F.making = {pc:k.url, id:j.prompt_id, saves, t:t0}; save(); drawComic(); fuseWait(ph);
-  }catch(err){ F.err = "Couldn't fuse the views: " + err.message; save(); drawComic(); } }
+  }catch(err){ delete F.busy; F.err = "Couldn't fuse the views: " + err.message; save(); drawComic(); } }
 async function fuseWait(ph){
   const F = ph.fuse, m = F && F.making; if(!m || m.polling) return; m.polling = true;
   try{ for(;;){ await new Promise(r => setTimeout(r, 3000)); if(F.making!==m) return;
