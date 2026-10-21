@@ -17,7 +17,7 @@ const DEF = {
   ConditioningSetArea:[['conditioning','width','height','x','y','strength'],1], ConditioningCombine:[['conditioning_1','conditioning_2'],1],
   ImageScale:[['image','upscale_method','width','height','crop'],1], VAEEncode:[['pixels','vae'],1], VAEDecode:[['samples','vae'],1], EmptyLatentImage:[['width','height','batch_size'],1],
   ImageBlend:[['image1','image2','blend_factor','blend_mode'],1], ImageToMask:[['image','channel'],1], ThresholdMask:[['mask','value'],1], GrowMask:[['mask','expand'],1], ImageCompositeMasked:[['destination','source','x','y','mask'],1],
-  DepthAnythingV2Preprocessor:[['image','resolution'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
+  DepthAnythingV2Preprocessor:[['image','resolution'],1], ImageBatch:[['image1','image2'],1], MaskToImage:[['mask'],1], AnimeLineArtPreprocessor:[['image','resolution'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
   SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
   KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], SaveImage:[['images','filename_prefix'],0],
@@ -33,7 +33,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']), weight_dtype:C(['default'])}}},
   MiniMaxH3ImageToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, CLIPTextEncode:{input:{required:{}}}, ConditioningSetArea:{input:{required:{}}}, ConditioningCombine:{input:{required:{}}},
   ImageScale:{input:{required:{}}}, VAEEncode:{input:{required:{}}}, VAEDecode:{input:{required:{}}}, EmptyLatentImage:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}}, FeatherMask:{input:{required:{}}}, SetLatentNoiseMask:{input:{required:{}}}, ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}},
-  DepthAnythingV2Preprocessor:{input:{required:{ckpt_name:C(['depth_anything_v2_vitl.pth'])}}}, ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
+  ImageBatch:{input:{required:{}}}, MaskToImage:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, ImageScaleBy:{input:{required:{}}}, DepthAnythingV2Preprocessor:{input:{required:{ckpt_name:C(['depth_anything_v2_vitl.pth'])}}}, ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
   LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:C(['BiRefNet-general.safetensors'])}}}, RemoveBackground:{input:{required:{}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['stable_diffusion','minimax'])}}},
   VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
@@ -65,7 +65,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         if((pc.polls[id] = (pc.polls[id] || 0) + 1) < 2) return r.fulfill({ json:{[id]:{status:{completed:false}}} });
         const vid = ks.find(k => g[k].class_type==='SaveVideo'), img = ks.find(k => g[k].class_type==='SaveImage'), sv = vid || img, pre = g[sv].inputs.filename_prefix, cut = pre.lastIndexOf('/');
         const f = {filename:pre.slice(cut + 1) + '_' + id + '_.' + (vid ? 'webm' : 'png'), subfolder:pre.slice(0, cut), type:'output'};
-        return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:{[sv]:{images:[f]}}}} }); }
+        const four = !vid && g[sv].inputs.images && g[g[sv].inputs.images[0]].class_type==='ImageBatch'; // the 3D look's layers come back as a batch of 4
+        const fs = four ? [1, 2, 3, 4].map(n => Object.assign({}, f, {filename:f.filename.replace('.png', n + '.png')})) : [f];
+        return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:{[sv]:{images:fs}}}} }); }
       if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{jobs:[], token:false} });
       if(u.pathname.startsWith('/renderdeck/')) return r.fulfill({ status:404, body:'' });
       r.fulfill({ status:404, body:'' });
@@ -124,7 +126,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   ok(p4 && Object.keys(p4.rv).filter(k => /^ref_images/.test(k)).length===2 && p4.g[p4.rv['ref_images.ref_image_1'][0]].inputs.image===(p4.pc + 'up_2.png').replace(/^(.)/, '$1') || true, 'two pictures for panel 4 (her card, the place)');
   ok(p1 && /Wide shot/.test(p1.rv.prompt) && /<Subject 1> walks down a street\./.test(p1.rv.prompt) && p5 && /Close-up/.test(p5.rv.prompt), 'panel 1 wide, panel 5 a close-up');
   ok(p1 && p1.n.find(x => x.class_type==='BasicScheduler').inputs.steps===4 && p1.n.filter(x => x.class_type==='LoraLoaderModelOnly').map(x => x.inputs.lora_name).join()==='minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors,AFK_minimax_h3_style.safetensors', 'Quick: Turbo, its 4-step LoRA, then the video style LoRA');
-  ok(P.every(x => x.rv.width % 32===0 && x.rv.height % 32===0 && x.rv.length===124) && P.every(x => x.n.find(y => y.class_type==='SaveVideo').inputs.filename_prefix==='RenderDeck/comics/panel'), 'clips sized on the 32 grid, 124 frames, saved in RenderDeck/comics');
+  ok(P.every(x => x.rv.width % 32===0 && x.rv.height % 32===0 && x.rv.length===124) && P.every(x => /^RenderDeck\/comics\/page_1\/panel_\d\/clip$/.test(x.n.find(y => y.class_type==='SaveVideo').inputs.filename_prefix)), 'clips sized on the 32 grid, 124 frames, saved in RenderDeck/comics');
   { const r0 = rects[0], s0 = p1.rv.width / p1.rv.height; ok(Math.abs(Math.log(s0) - Math.log(Math.max(9/16, Math.min(16/9, r0.w / r0.h)))) < 0.12, 'panel 1\'s clip has its panel\'s shape: ' + p1.rv.width + 'x' + p1.rv.height); }
   await page.waitForFunction(() => document.querySelectorAll('#cmPage .cpanel video').length===5, null, {timeout:15000});
   ok(true, 'every panel shows its clip on the page');
@@ -144,6 +146,20 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.fill('#comic [data-cmp="prompt"]', 'my own words'); await page.dispatchEvent('#comic [data-cmp="prompt"]', 'change');
   ok(await page.evaluate(() => cmPage().panels[3].prompt==='my own words') && await page.$('#comic [data-cm="reprompt"]'), 'a hand-edited prompt is kept');
   await page.click('#comic [data-cm="reprompt"]'); ok(await page.evaluate(() => cmPage().panels[3].prompt===null), '↺ goes back to the automatic prompt');
+  { const p0 = await page.evaluate(() => CM().sel); await page.waitForFunction(i => { const p = cmPage().panels[i], t = p.takes[p.take], v = t && CMV[t.url]; return v && v.videoWidth; }, p0, {timeout:10000});
+    await page.click('#comic [data-cm="frame"]'); await page.waitForFunction(i => (cmPage().panels[i].stills || []).some(s => s.frame && s.url), p0, {timeout:10000});
+    ok(await page.evaluate(i => cmPage().panels[i].show==='still', p0), '📸 Use this frame keeps the current clip frame as a flat still of the panel');
+    await page.evaluate(i => { const p = cmPage().panels[i]; p.stills = []; p.show = 'clip'; save(); drawComic(); }, p0);
+    await page.click('#comic [data-cmfin="0.25"]'); const nb = ALL.length; await page.click('#comic [data-cm="finish"]');
+    await page.waitForFunction(i => (cmPage().panels[i].stills || []).length===1 && !cmBusy(cmPage().panels[i]), p0, {timeout:15000});
+    const g = ALL[nb].prompt, n = Object.values(g), ks = n.find(x => x.class_type==='KSampler'), types = n.filter(x => x.class_type==='SetUnionControlNetType').map(x => x.inputs.type);
+    ok(check(g).length===0 && ks.inputs.denoise===0.25 && types.join()==='canny/lineart/anime_lineart/mlsd,tile' && n.some(x => x.class_type==='AnimeLineArtPreprocessor') && n.some(x => x.class_type==='ImageScaleBy')
+      && /comics\/page_1\/panel_\d\/finished/.test(n.find(x => x.class_type==='SaveImage').inputs.filename_prefix) && n.filter(x => x.class_type==='LoraLoader').length >= 1,
+      '✨ Finish this frame: the Render tab\'s finishing graph (bigger, ProMax line art + tile, Light 0.25) with the panel\'s LoRAs, landing as a still: ' + check(g).join('; '));
+    await page.evaluate(i => { const p = cmPage().panels[i]; p.stills = []; p.show = 'clip'; save(); drawComic(); }, p0); }
+  await page.click('#comic [data-cmborder="black"]');
+  ok(await page.$eval('#cmPage', e => e.classList.contains('dark') && getComputedStyle(e).backgroundColor==='rgb(0, 0, 0)'), '⬛ Black borders turn the page black');
+  await page.click('#comic [data-cmborder="white"]');
   ok(await page.$eval('#comic .cmscrub', e => getComputedStyle(e).position==='fixed' && e.getBoundingClientRect().bottom >= innerHeight - 1), 'the frame scrubber sits at the bottom of the screen, so the panel stays in sight');
   await page.click('#comic [data-cm="play"]'); ok(await page.evaluate(() => CM_PLAY) && /Stop/.test(await page.textContent('#comic [data-cm="play"]')), '▶ Play all plays the panels together');
   await page.click('#comic [data-cm="play"]');
@@ -171,7 +187,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     ok(/1girl/.test(tg) && /looking back/.test(tg) && !/she|behind her/i.test(tg), 'panel 2\'s words are read into tags, as a normal render does: ' + tg); }
   await page.click('#comic [data-cm="stills"]');
   await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:30000});
-  const stillGs = [...PCS.Render.sent, ...PCS.Main.sent].map(x => x.prompt).filter(g => Object.values(g).some(n => n.class_type==='SaveImage' && /comics\/still/.test(n.inputs.filename_prefix)));
+  const stillGs = [...PCS.Render.sent, ...PCS.Main.sent].map(x => x.prompt).filter(g => Object.values(g).some(n => n.class_type==='SaveImage' && /comics\/page_1\/panel_\d\/still/.test(n.inputs.filename_prefix)));
   ok(stillGs.length===5 && stillGs.every(g => check(g).length===0), '5 stills painted, every graph valid: ' + stillGs.map(g => check(g).join('; ')).join(' | '));
   const txt = g => Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' || ');
   const s4 = stillGs.find(g => /grab/i.test(txt(g))), s3 = stillGs.find(g => /walking|behind/i.test(txt(g)) && Object.values(g).some(n => n.class_type==='ConditioningSetArea'));
@@ -214,7 +230,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#comic [data-cm="d3"]');
   await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q && q.depth && !q.making; }, null, {timeout:20000});
   { const g = ALL[ALL.length - 1].prompt, n = Object.values(g), d = n.find(x => x.class_type==='DepthAnythingV2Preprocessor');
-    ok(check(g).length===0 && d && d.inputs.ckpt_name==='depth_anything_v2_vitl.pth' && /comics\/depth/.test(n.find(x => x.class_type==='SaveImage').inputs.filename_prefix), '🌄 3D look: Depth Anything V2 reads the still\'s depth on a computer: ' + check(g).join('; ')); }
+    ok(check(g).length===0 && d && d.inputs.ckpt_name==='depth_anything_v2_vitl.pth' && /comics\/depth/.test(n.find(x => x.class_type==='SaveImage').inputs.filename_prefix), '🌄 3D look: Depth Anything V2 reads the still\'s depth on a computer: ' + check(g).join('; '));
+    ok(n.some(x => x.class_type==='RemoveBackground') && n.filter(x => x.class_type==='DepthAnythingV2Preprocessor').length===2 && n.filter(x => x.class_type==='ImageBatch').length===3 && /no humans, scenery/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join())
+      && await page.evaluate(() => { const q = cmPage().panels[2].d3; return q.bg && q.bgDepth && q.mask && d3Layers(q).length===2; }), 'in layers: the character cut out (BiRefNet), the background painted in behind them (Illustrious, no humans), the depth of both'); }
   await page.waitForSelector('#comic [data-d3view]'); await page.waitForTimeout(400);
   { const n = await page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
     ok(n > 100, '🌄 3D look draws the still as a relief'); }
@@ -237,7 +255,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.fill('#cmScript', 'Panel 1: a girl waves. Panel 2: she smiles.'); await page.dispatchEvent('#cmScript', 'input');
   await page.click('#comic [data-cm="read"]'); await page.click('#comic [data-cm="stills"]');
   await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:20000});
-  ok(Object.values(ALL[ALL.length - 1].prompt).find(x => x.class_type==='SaveImage').inputs.filename_prefix==='Hidden/comics/still' && await page.evaluate(() => !CM().loc && !(CM().plates || []).length), 'Hidden stills save into Hidden/comics, and Hidden has no place of the normal comic');
+  ok(Object.values(ALL[ALL.length - 1].prompt).find(x => x.class_type==='SaveImage').inputs.filename_prefix==='Hidden/comics/page_1/panel_2/still' && await page.evaluate(() => !CM().loc && !(CM().plates || []).length), 'Hidden stills save into Hidden/comics, and Hidden has no place of the normal comic');
   await page.evaluate(() => switchMode());
   ok(await page.evaluate(() => CM().pages[0].panels.length===5), 'back in normal: the 5-panel page is as it was');
   await page.click('#tabs [data-tab="render"]');

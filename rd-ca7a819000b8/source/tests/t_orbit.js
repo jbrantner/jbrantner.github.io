@@ -141,6 +141,9 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.evaluate(srv => { switchMode(); S.gallery = [{url:srv + '/view?filename=h_00001_.png&subfolder=Hidden%2Frender&type=output', seed:1, prompt:'', t:Date.now()}]; save(); drawStrip(); show(0); }, RENDER);
   ok(await page.$eval('#obPanel', p => p.hidden) && await page.$eval('#obVid', v => v.hidden), 'Hidden has its own pictures, not the normal ones');
   await page.click('#resultActions [data-act="orbit"]');
+  await page.click('#obPanel [data-obdir="in"]'); await page.click('#obPanel [data-obseg="zoom"][data-v="lot"]');
+  ok(await page.evaluate(() => OB().dir==='in' && OB().zoom==='lot' && /dolly-in/.test(obPrompt('in', 90, 40, '', 'lot')) && /close-up/.test(obPrompt('in', 90, 40, '', 'lot')) && /dolly-out/.test(obPrompt('out', 90, 40, '', 'little')) && !/arc shot/.test(obPrompt('out', 90, 40, '', 'little'))),
+    '🔍 Zoom in / 🔭 Zoom out: straight dolly moves, A little or A lot');
   await page.click('#obPanel [data-obdir="down"]'); await page.click('#obPanel [data-ob="make"]');
   await page.waitForFunction(() => { const v = document.querySelector('#obVid'); return !v.hidden && v._ready; }, null, {timeout:20000});
   g = sent[2].prompt;

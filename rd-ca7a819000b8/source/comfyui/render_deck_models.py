@@ -1227,6 +1227,18 @@ async def _comfy_wait(s, j, pid, save_id, label):
             q = await _get(s, _me() + '/queue', 10)
             if any(x[1] == pid for x in q.get('queue_running', []) + q.get('queue_pending', [])):
                 continue
+            # a quick job can finish between the two reads: look in history again before giving up
+            back = None
+            for _ in range(3):
+                await asyncio.sleep(1.5)
+                try:
+                    back = (await _get(s, _me() + '/history/' + pid, 10)).get(pid)
+                except Exception:
+                    back = None
+                if back:
+                    break
+            if back:
+                continue
             raise RuntimeError(label + ': it left the queue without finishing (ComfyUI restarted?)')
         stt = h.get('status') or {}
         if stt.get('status_str') == 'error':
