@@ -260,9 +260,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   { const bx = await (await page.$('#comic [data-d3view]')).boundingBox(), y0 = await page.evaluate(() => cmPage().panels[2].d3.yaw);
     await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.5); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.6, bx.y + bx.height * 0.5, {steps:4}); await page.mouse.up();
     ok(await page.evaluate(y => Math.abs(cmPage().panels[2].d3.yaw - y) > 0.05 && !cmPage().panels[2].d3.ring, y0), 'a finger sideways turns her');
-    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.7); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.4, {steps:6}); await page.mouse.up();
-    ok(await page.evaluate(() => cmPage().panels[2].d3.ring===1), 'a finger up snaps to the high circle');
-    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.3); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.9, {steps:8}); await page.mouse.up();
+    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.4); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.7, {steps:6}); await page.mouse.up();
+    ok(await page.evaluate(() => cmPage().panels[2].d3.ring===1), 'a finger down snaps to the high circle');
+    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.9); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.3, {steps:8}); await page.mouse.up();
     ok(await page.evaluate(() => cmPage().panels[2].d3.ring===-1), 'and down past eye level to the low one');
     await page.click('#comic [data-t3dring="1"]'); ok(await page.evaluate(() => cmPage().panels[2].d3.ring===1), 'the Height buttons pick a circle too'); }
   await page.click('#comic [data-cm="d3wig"]'); await page.waitForTimeout(300); ok(await page.evaluate(() => D3.play), '▶ Wiggle swings it side to side'); await page.click('#comic [data-cm="d3wig"]');
