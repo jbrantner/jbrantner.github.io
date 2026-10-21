@@ -380,6 +380,9 @@ pre{white-space:pre-wrap;word-break:break-all;font:12px/1.45 ui-monospace,Menlo,
 .tabs button{flex:1;min-height:40px;border-radius:12px;background:var(--panel);border:1px solid var(--line);font:700 15px/1 var(--display);color:var(--soft)}
 .tabs button.on{background:var(--panel2);border-color:var(--accent);color:var(--text)}
 body.cm-open #mainView, body.cm-open .go{display:none}
+.wsbar{border:1px solid var(--cyan);border-radius:var(--r);background:var(--panel);padding:10px 12px;margin:0 0 10px}
+.wsbar b{font-family:var(--head,inherit)}
+.wsbar .note{margin:4px 0 8px}
 .cmtop{display:flex;align-items:center;gap:10px;margin:0 0 10px}
 .cmtop b{font:700 19px/1.2 var(--display);flex:1}
 .cmtop small{color:var(--soft)}
@@ -443,6 +446,7 @@ body.cm-open #comic{padding-bottom:84px}
   <div class="tabs" id="tabs" role="tablist"><button data-tab="render" class="on" role="tab">🎨 Render</button><button data-tab="comic" role="tab">📖 Comic</button></div>
 
   <div id="mainView">
+  <div class="wsbar" id="wsBar" hidden></div>
   <div class="feed drafts" id="drafts" hidden><div class="draftbar" id="draftBar"></div><div id="draftRows"></div></div>
   <div class="feed open" id="feed">
     <button class="fhead" id="feedHead"><b>Preview</b><small id="feedCount"></small><span class="chev" aria-hidden="true">›</span></button>
@@ -610,7 +614,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.97'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.98'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -920,7 +924,7 @@ function viewUrl(i, srv){ return (srv || base()) + '/view?filename=' + encodeURI
 
 // ---------- building the graph ----------
 function sizeOf(s){
-  const L = SIZES[s.size][0], [a,b] = SHAPES[s.shape];
+  const L = SIZES[s.size][0], [a,b] = s.shape==='panel' && s.ratio ? [Math.max(0.5, Math.min(2, s.ratio)), 1] : SHAPES[s.shape] || SHAPES.square; // panel: a comic panel's own shape
   const k = Math.sqrt(L*L/(a*b)); // keep about the same number of pixels whatever the shape
   const r64 = x => Math.max(64, Math.round(x/64)*64);
   return [r64(a*k), r64(b*k)];
@@ -1064,7 +1068,7 @@ function buildGraph(opt){
       bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
       sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[det,0], wildcard:'', cycle:1}, extra), 'Fix faces', '--up'), 0];
   }
-  add('SaveImage', {filename_prefix:(S.hidden ? HIDDEN : 'RenderDeck') + (opt.draft ? '/drafts/draft' : '/render'), images:out}, 'Save', '--model');
+  add('SaveImage', {filename_prefix:(S.ws && wsPrefix(opt.draft)) || (S.hidden ? HIDDEN : 'RenderDeck') + (opt.draft ? '/drafts/draft' : '/render'), images:out}, 'Save', '--model');
   const colors = {}; for(const id in g){ colors[id] = g[id]._c; delete g[id]._c; }
   return {graph:g, titles, colors, notes, seed};
 }
@@ -1111,6 +1115,7 @@ async function go(){
     const e = {key:tap + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : base(), state:'sending', hidden:!!S.hidden,
       graph:built.graph, titles:built.titles, seed:built.seed, prompt:S.prompt, ckpt:M.ckpt, n:i+1, of:runs, images:[], snap:snapshot(built.seed),
       size:sizeOf(P), pics:on1('pic') || S.draft ? 1 : S.batch, steps:S.draft ? draftStep(P) : P.steps};
+    if(S.ws) e.ws = S.ws.pid; // a comic panel's render goes back to that panel, even if it finishes after you leave it
     if(fin){ Object.assign(e, {draft:true, fin:fin.graph, finTitles:fin.titles, finSteps:P.steps});
       // the full render also rides inside the draft's own picture (ComfyUI keeps the graph in the PNG), so any phone can finish it later
       const sv = Object.values(built.graph).find(x => x.class_type==='SaveImage');
@@ -1320,7 +1325,7 @@ async function completeOne(e, quiet, h){
     for(const id in (h && h.outputs) || {}) (h.outputs[id].images||[]).forEach(i => { if(i.type==='output') e.images.push(i); }); }catch(err){} }
   e.images.forEach(i => { i.subfolder = (i.subfolder || '').replace(/\\/g, '/'); }); // same address as the helper's list gives it, so it isn't listed twice
   charGot(e, e.images.map(i => ({img:(i.subfolder ? i.subfolder + '/' : '') + i.filename + ' [output]', url:viewUrl(i, e.srv), home:e.srv})));
-  e.images.forEach(i => galleryFor(isHidden(i.subfolder)).unshift(Object.assign({url:viewUrl(i, e.srv), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}, draftInfo(e))));
+  e.images.forEach(i => galleryFor(isHidden(i.subfolder), e, i.subfolder).unshift(Object.assign({url:viewUrl(i, e.srv), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}, draftInfo(e))));
   S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); save(); show(0); drawStrip();
   doneCount++;
   if(e.draft && !masked(e) && !S.queue.some(q => q.draft && !masked(q))){ const n = S.gallery.filter(g => g.draft && g.fin && !g.sent && !g.away).length;
@@ -1624,7 +1629,7 @@ function testRun(){
     if(k >= ids.length){ endJob(); S.queue = S.queue.filter(q => q!==e);
       const fakes = []; for(let b = 0; b < e.pics; b++) fakes.push(fakeImage(e.seed + b, e));
       charGot(e, fakes.map(url => ({img:'test-render.png', url, home:'test'})));
-      fakes.forEach((url, b) => galleryFor(e.hidden).unshift(Object.assign({url, seed:e.seed + b, prompt:e.prompt, t:Date.now(), test:true, snap:e.snap}, draftInfo(e))));
+      fakes.forEach((url, b) => galleryFor(e.hidden, e).unshift(Object.assign({url, seed:e.seed + b, prompt:e.prompt, t:Date.now(), test:true, snap:e.snap}, draftInfo(e))));
       S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); show(0); drawStrip(); save();
       if(!S.queue.length){ status(''); bar(1); setTimeout(()=>bar(0),500); toast('Done (pretend picture) ✨'); }
       drawGo(); drawQueue(); testRun(); }
@@ -1665,7 +1670,7 @@ function drawStrip(){
 // the strip also shows renders already saved on the computers (this workstation's only: Hidden lists Hidden folders, normal lists the rest)
 let filling = 0, fillAgain = 0;
 async function fillFromPcs(){
-  if(!info || S.test) return; if(filling){ fillAgain = 1; return; } const h = !!S.hidden; filling = 1; fillAgain = 0;
+  if(!info || S.test || S.ws) return; if(filling){ fillAgain = 1; return; } const h = !!S.hidden; filling = 1; fillAgain = 0;
   try{ const j = await (await fetch(base() + '/renderdeck/images?hidden=' + (h ? 1 : 0) + '&limit=40', {cache:'no-store'})).json();
     if(!!S.hidden!==h) return; // switched workstation meanwhile
     const have = new Set(S.gallery.flatMap(g => [g.url, ...(g.hist || []).map(h => h.url)])); let n = 0;
@@ -1874,7 +1879,7 @@ function blockBody(b){
     <p class="note">Checkpoint models only for now. Flux and other split models come later.</p>`; }
   if(b.type==='sampler'){ const [W,H] = sizeOf(b);
     return `<div class="row"><label>Size</label>${seg('size',[[512,'Small'],[768,'Medium'],[1024,'Large']], b.size)}</div>
-    <div class="row"><label>Shape</label>${seg('shape',[['square','Square'],['tall','Tall'],['wide','Wide'],['phone','Phone']], b.shape)}</div>
+    <div class="row"><label>Shape</label>${seg('shape',[['square','Square'],['tall','Tall'],['wide','Wide'],['phone','Phone']].concat(b.ratio ? [['panel','Panel']] : []), b.shape)}</div>
     <p class="note" style="margin:-2px 0 6px 92px">${W} × ${H}. SD 1.5 models like Small, SDXL likes Large.</p>
     ${slider('steps','Steps',4,60,1,b.steps)}
     ${slider('cfg','Prompt pull',1,15,0.5,b.cfg)}
@@ -3629,7 +3634,30 @@ const subParts = sub => (sub || '').split(/[\\/]/);
 const isHidden = sub => subParts(sub).includes(HIDDEN);
 // a Hidden render seen from the normal workstation: only "Hidden render", never its picture, prompt, model or seed
 function masked(e){ return !!(e && e.hidden) && !S.hidden; }
-const galleryFor = hidden => !!hidden===!!S.hidden ? S.gallery : ((S.stash = S.stash || {}).gallery = S.stash.gallery || []);
+const galleryFor = (hidden, e, sub) => { if(!!hidden!==!!S.hidden) return (S.stash = S.stash || {}).gallery = S.stash.gallery || [];
+  return wsList(e, sub) || (S.ws ? S.ws.keep.gallery : S.gallery); };
+// 🎨 a comic panel's own recipe (Jordan 2026-10-21: "every panel in a comic page to have the same freedoms as the render tab"):
+// the Render tab swaps to that panel's recipe and its stills, as Hidden swaps workstations; ← Back puts the normal one back
+function wsPanel(pid){ const pages = (S.comic && S.comic.pages) || [];
+  for(let pi = 0; pi < pages.length; pi++){ const i = pages[pi].panels.findIndex(p => p.id===pid); if(i >= 0) return {pg:pages[pi], pi, i, p:pages[pi].panels[i]}; } return null; }
+// the panel keeps its recipe and every picture made in it; the normal recipe and strip come back
+function wsPut(){ const w = S.ws; if(!w) return null; const f = wsPanel(w.pid);
+  if(f){ const p = f.p, was = (p.stills || [])[p.still || 0]; p.ws = {recFor:S.recFor};
+    Object.keys(w.keep).filter(k => k!=='gallery' && k!=='recFor').forEach(k => p.ws[k] = S[k]);
+    p.stills = S.gallery.concat((p.stills || []).filter(x => !x.url)); const j = p.stills.indexOf(was); p.still = j < 0 ? 0 : j; }
+  Object.keys(w.keep).forEach(k => S[k] = w.keep[k]); delete S.ws; return f; }
+// where a finished render goes: its panel's stills (tagged when sent, else read from its folder comics/page_N/panel_M/render)
+function wsList(e, sub){
+  let pid = e && e.ws;
+  if(!pid && sub){ const m = /(^|\/)comics\/page_(\d+)\/panel_(\d+)\/(render|drafts)/.exec(sub), pg = m && S.comic && S.comic.pages[m[2] - 1], p = pg && pg.panels[m[3] - 1]; pid = p && p.id; }
+  if(!pid) return null;
+  if(S.ws && S.ws.pid===pid) return S.gallery;
+  const f = wsPanel(pid); if(!f) return null; const p = f.p; p.stills = p.stills || [];
+  p.still = p.stillPicked ? (p.still || 0) + 1 : 0; if(!p.stillPicked) p.show = 'still';
+  setTimeout(() => { if(typeof drawComic==='function' && !$('#comic').hidden) drawComic(); }); return p.stills; }
+function wsPrefix(draft){ const f = wsPanel(S.ws.pid); return f ? cmPrefixP(f.pg, f.i, draft ? 'drafts/draft' : 'render') : ''; }
+// the app was closed inside a panel: start on the normal recipe and go back into the panel once everything is loaded
+if(S.ws){ const pid = S.ws.pid; wsPut(); S.wsBack = pid; }
 // renders that landed in the other workstation's strip (Windows backslash subfolders, before v.73) go back where they belong
 { const sub = g => { try{ const u = new URL(g.url); return u.searchParams.get('type')==='output' ? u.searchParams.get('subfolder') : null; }catch(e){ return null; } };
   const mine = S.gallery || [], other = (S.stash && S.stash.gallery) || [], keep = [[], []], seen = new Set(); let fix = 0;
@@ -3641,6 +3669,7 @@ function drawMode(){
   $('h1 span').textContent = S.hidden ? 'Hidden' : 'Deck';
 }
 function switchMode(){
+  if(S.ws) wsBack(false); // a panel's recipe belongs to this workstation's comic
   const keys = RECIPE_KEYS.concat('gallery', 'chars', 'comic'), now = {};
   keys.forEach(k => now[k] = S[k]);
   const next = S.stash && S.stash.blocks ? S.stash : Object.assign(JSON.parse(JSON.stringify(now)), {prompt:'', addedTags:[], gallery:(S.stash && S.stash.gallery) || [], chars:(S.stash && S.stash.chars) || [], comic:(S.stash && S.stash.comic) || null});
@@ -5774,7 +5803,7 @@ const OB_LEN = 124;
 // The Change angle block and sheet of v.73 are gone: they made you look somewhere else for the same thing.
 const obG = () => S.gallery[shownIdx];
 const OB = () => { const g = obG(); return g ? (g.ob = g.ob || {}) : {}; };
-const obAll = () => [...(S.gallery || []), ...((S.stash && S.stash.gallery) || [])];
+const obAll = () => [...(S.gallery || []), ...((S.stash && S.stash.gallery) || []), ...((S.ws && S.ws.keep.gallery) || []), ...cmAll().flatMap(p => p.stills || []).filter(x => x.url && !(S.gallery || []).includes(x))];
 const obPrefix = what => (S.hidden ? HIDDEN : 'RenderDeck') + '/angles/' + what;
 const OB_RUN = new Set(); // making / finishing states polled in this app
 const obIn = sel => $('#obPanel').querySelector(sel) || $('#stage').querySelector(sel);
@@ -6468,7 +6497,7 @@ const CM_FAKEILL = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObs
   LoraLoader:{input:{required:{lora_name:[['AFKJ Style Illustrious Claude.safetensors', 'librarianx_v2.safetensors']]}}}, SetLatentNoiseMask:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}},
   ControlNetLoader:{input:{required:{control_net_name:[['diffusion_pytorch_model_promax.safetensors']]}}}, ControlNetApplyAdvanced:{input:{required:{}}}, SetUnionControlNetType:{input:{required:{}}},
   FeatherMask:{input:{required:{}}}, ImageScale:{input:{required:{}}}, ConditioningSetArea:{input:{required:{}}}, ConditioningCombine:{input:{required:{}}},
-  ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}}};
+  ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}}, ColorMatch:{input:{required:{}}}};
 // the look the stills use, with the defaults filled in from what the computers have
 function cmIll(){ const cm = CM(), I = cm.ill = cm.ill || {}, k = cmIllKits()[0];
   if(k && I.style==null){ I.style = k.loras.find(n => /afkj/i.test(baseName(n))) || ''; }
@@ -6885,8 +6914,10 @@ function cmAngleGraph(k, view, torn, p, i, rect, prefix){
   if(k.feather) mask = [add('FeatherMask', {mask, left:16, top:16, right:16, bottom:16}), 0];
   const seed = Math.floor(Math.random() * 1e9), ks = (latent, denoise) => add('KSampler', {model, positive:pos, negative:neg, latent_image:latent, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise});
   const one = add('VAEDecode', {samples:[ks([add('SetLatentNoiseMask', {samples:[add('VAEEncode', {pixels:[vi,0], vae}), 0], mask}), 0], 0.65), 0], vae});
-  const two = add('VAEDecode', {samples:[ks([add('VAEEncode', {pixels:[one,0], vae}), 0], 0.25), 0], vae});
-  return {g, save:add('SaveImage', {images:[two,0], filename_prefix:prefix})};
+  let two = [add('VAEDecode', {samples:[ks([add('VAEEncode', {pixels:[one,0], vae}), 0], 0.25), 0], vae}), 0];
+  // the two repaints drift the colours (Jordan 2026-10-21: it "turned yellow"), so they are put back to the swung view's own
+  if(k.oi.ColorMatch) two = [add('ColorMatch', {image_ref:[vi,0], image_target:two, method:'mkl'}), 0];
+  return {g, save:add('SaveImage', {images:two, filename_prefix:prefix})};
 }
 // the clip's current frame on a canvas (null, with a note, before it has loaded); pretend clips give a pretend frame
 const CMFIN = {}; // panel id -> the frame grabbed for ✨ Finish this frame
@@ -6922,6 +6953,7 @@ function cmGot(p, kind, it){
   if(kind==='angle' || kind==='finish') kind = 'still';
   if(p.parent){ const c = p; p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p){ save(); return; } }
   if(kind==='plate'){ cm.plates = [it].concat(cm.plates || []).slice(0, 8); if(it.url) cm.loc = {url:it.url}; else cm.loc = {url:'', test:true}; }
+  else if(kind==='still' && S.ws && S.ws.pid===p.id){ S.gallery.unshift(it); drawStrip(); }
   else if(kind==='still'){ p.stills = [it].concat(p.stills || []).slice(0, 16); p.still = p.stillPicked ? Math.min(p.stills.length - 1, (p.still || 0) + 1) : 0; p.show = 'still'; }
   else { it.n = p.takes.length + 1; it.anim = kind==='anim'; p.takes.unshift(it); p.takes = p.takes.slice(0, 8); p.take = 0; p.frame = CM_FRAME; p.show = 'clip'; }
   save(); if(!$('#comic').hidden) drawComic();
@@ -7004,6 +7036,7 @@ function drawComic(){
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
       if(cmBusy(p)) x += `<div class="pbar obbar"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p>`;
       else if(still) x += `<div class="btnrow"><button class="btn${sts.length ? '' : ' hot'}" data-cm="still1">🖼 ${sts.length ? 'Paint another' : 'Paint the still'}</button><button class="btn${sts.length && !p.takes.length ? ' hot' : ''}" data-cm="anim1" ${sts.length ? '' : 'disabled'}>🎬 ${p.takes.length ? 'Animate again' : 'Animate it'}</button></div>`
+        + `<div class="btnrow"><button class="btn" data-cm="ws">🎨 Its full recipe</button></div><p class="note">Opens this panel in the Render tab with its own recipe: every block, 📷 Change angle, 🤸 Edit pose, drafts, Finish. What you render there lands in its stills.${p.ws ? '' : ' It starts from this page\'s model, style and characters\' LoRAs, its tags and its shape.'}</p>`
         + `<div class="row"><label>Options</label>${seg('data-cmopts', [1, 2, 3, 4, 5, 6, 8].map(n => [n, n]), cmOpts(cm))}</div>`
         + `<details class="cmprompt"${p.tags!=null ? ' open' : ''}><summary>Tags Illustrious gets</summary><textarea data-cmp="tags" rows="3">${esc(cmStillTags(cm, p, cm.sel, rects[cm.sel]))}</textarea>
           ${p.tags!=null ? '<div class="btnrow"><button class="btn" data-cm="retag">↺ Back to the automatic tags</button></div>' : '<p class="note">Read from the panel\'s words, as a normal render reads a sentence. Edit them to take over. The quality tags, the style LoRA\'s words and each person\'s LoRA words are added on top.</p>'}</details>`
@@ -7059,7 +7092,7 @@ function openComic(){ if(!TAGS) loadTags(); $('#comic').hidden = false; document
   cmAll().forEach(p => { if(p.making) cmWait(p); }); }
 function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.classList.remove('cm-open'); S.tab = 'render'; drawTabs(); }
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
-$('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic') openComic(); else closeComic(); save(); buzz(); };
+$('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
   const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
@@ -7093,6 +7126,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='stills'){ cmJobs('still', pg.panels.filter(q => !(q.stills || []).length && !cmBusy(q))); return; }
   else if(a==='anims'){ cmJobs('anim', pg.panels.filter(q => (q.stills || []).length && !q.takes.length && !cmBusy(q))); return; }
   else if(a==='still1'){ cmJobs('still', [p]); return; }
+  else if(a==='ws'){ wsOpen(p.id); return; }
   else if(a==='anim1'){ cmJobs('anim', [p]); return; }
   else if(a==='read'){ cmRead(); return; }
   else if(a==='prev' || a==='next'){ cm.sel = Math.max(0, Math.min(pg.panels.length - 1, cm.sel + (a==='next' ? 1 : -1))); }
@@ -7181,11 +7215,56 @@ async function cmExport(){
   }catch(err){ toast("Couldn't save the page: " + err.message, true); }
 }
 
+// 🎨 the panel's recipe the first time: the normal recipe's painting settings with this page's look (model, style LoRA,
+// the characters' LoRAs), the panel's tags as the prompt and the panel's own shape
+function wsRecipe(cm, pg, p, i){
+  const k = cmIllKits()[0], I = cmIll(), rect = cmRectsOf(pg)[i], who = cmWho(cm, p);
+  const r = JSON.parse(JSON.stringify({blocks:S.blocks, negative:S.negative, peopleOff:S.peopleOff}));
+  r.blocks = r.blocks.filter(b => b.type==='model' || b.type==='sampler');
+  const M = r.blocks.find(b => b.type==='model'), P = r.blocks.find(b => b.type==='sampler'), rec = STYLES.illustrious.rec;
+  if(k) M.ckpt = k.ckpt; else if(I.ckpt) M.ckpt = I.ckpt;
+  if(M.ckpt && !S.styles[M.ckpt]) S.styles[M.ckpt] = 'illustrious'; // the comic paints with it as Illustrious
+  Object.assign(P, {steps:rec.steps, cfg:rec.cfg, sampler:rec.sampler, scheduler:rec.scheduler, size:1024, shape:'panel', ratio:rect.w / rect.h, lockSeed:false});
+  const lo = [], put = (f, w) => { if(f && !lo.some(x => x[0]===f)) lo.push([f, w]); };
+  if(k){ put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => put(cmLooks(s, k).lora, parseFloat(s.loraW) || 1)); }
+  lo.forEach(([f, w]) => r.blocks.push(Object.assign(defaults('lora'), {lora:f, strength:w})));
+  // the LoRA blocks add their own activation words, so only what they don't already add goes in the prompt
+  const auto = new Set(lo.flatMap(([f]) => (S.loraWords[f] || '').split(',')).map(t => t.trim().toLowerCase()).filter(Boolean)), seen = new Set();
+  r.prompt = [cmCount(who), I.words || ''].concat(who.map(s => k ? cmLooks(s, k).words : (s.desc || '')), cmStillTags(cm, p, i, rect)).join(',').split(',').map(t => t.trim())
+    .filter(t => t && !auto.has(t.toLowerCase()) && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
+  return Object.assign(r, {addedTags:[], tagOn:[], tagOff:[], asTags:false, batch:1, recFor:'illustrious'});
+}
+function wsOpen(pid){
+  if(S.ws) wsBack(false);
+  const f = wsPanel(pid); if(!f) return; const {pg, i, p} = f, keep = {};
+  RECIPE_KEYS.concat('gallery', 'recFor').forEach(k => keep[k] = S[k]);
+  const r = p.ws || wsRecipe(CM(), pg, p, i);
+  RECIPE_KEYS.forEach(k => { if(r[k] !== undefined) S[k] = r[k]; }); S.recFor = r.recFor;
+  S.gallery = (p.stills || []).filter(x => x.url); S.ws = {pid, keep}; migrate(S);
+  S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
+  closeComic(); closeSheets(); if(info) fillDefaults(); save(); render(); drawStrip();
+  const j = S.gallery.indexOf(cmStill(p)); show(S.gallery.length ? Math.max(0, j) : -1); drawWs(); updateIdeas(); scrollTo({top:0}); buzz();
+}
+// ← Back: the normal recipe and strip again; ✓ also puts the picture in the preview on the panel
+function wsBack(toPage, use){
+  const g = use ? S.gallery[shownIdx] : null, f = wsPut();
+  if(f && g){ const j = f.p.stills.indexOf(g); if(j >= 0){ f.p.still = j; f.p.stillPicked = true; f.p.show = 'still'; } }
+  if(info) fillDefaults(); save(); render(); drawStrip(); show(S.gallery.length ? 0 : -1); drawWs(); updateIdeas();
+  if(toPage && f){ const cm = CM(); cm.cur = f.pi; cm.sel = f.i; openComic(); }
+}
+function drawWs(){
+  const bar = $('#wsBar'), f = S.ws && wsPanel(S.ws.pid); bar.hidden = !f; document.body.classList.toggle('ws-on', !!f); if(!f) return;
+  bar.innerHTML = `<b>📖 Page ${f.pi + 1} · Panel ${f.i + 1}</b><p class="note">${esc(f.p.text.slice(0, 120))}${f.p.text.length > 120 ? '…' : ''}<br>This is the panel's own recipe. What you render here lands in its stills, in its folder.</p>
+    <div class="btnrow"><button class="btn hot" data-ws="use">✓ Put this picture on the panel</button><button class="btn" data-ws="back">← Back to the page</button></div>`;
+}
+$('#wsBar').onclick = e => { const b = e.target.closest('[data-ws]'); if(!b || b.disabled) return; wsBack(true, b.dataset.ws==='use'); buzz(); };
+
 // ---------- start ----------
 obAll().forEach(g => { if(g.ob && g.ob.making) waitOrbit(g.ob); });
 cmAll().forEach(p => { if(!p.parent && p.extra) p.extra = p.extra.filter(c => c.making); }); // an option that never got sent
 cmAll().forEach(p => { if(p.making) cmWait(p); }); // comic panels made while the app was closed come in
-if(S.tab==='comic') openComic(); // an orbit made while the app was closed comes in
+if(S.wsBack){ const id = S.wsBack; delete S.wsBack; if(wsPanel(id)) wsOpen(id); }
+else if(S.tab==='comic') openComic(); // an orbit made while the app was closed comes in
 delete S.orbitN; delete S.orbitH; // the per-workstation orbit before pictures became projects
 render(); show(S.gallery.length ? 0 : -1);
 if(usesTags()) loadTags().then(() => updateIdeas());

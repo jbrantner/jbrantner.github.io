@@ -20,14 +20,14 @@ const DEF = {
   DepthAnythingV2Preprocessor:[['image','resolution'],1], ImageBatch:[['image1','image2'],1], MaskToImage:[['mask'],1], AnimeLineArtPreprocessor:[['image','resolution'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
   SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
-  KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], SaveImage:[['images','filename_prefix'],0],
+  KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], ColorMatch:[['image_ref','image_target','method'],1], KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1], SaveImage:[['images','filename_prefix'],0],
 };
 function check(g){ const errs = [];
   for(const [id,n] of Object.entries(g)){ const d = DEF[n.class_type]; if(!d){ errs.push(id+': unknown '+n.class_type); continue; }
     d[0].forEach(k => { if(!(k in n.inputs)) errs.push(id+' '+n.class_type+' missing '+k); });
-    for(const [k,v] of Object.entries(n.inputs)) if(Array.isArray(v)){ const t = g[v[0]]; if(!t) errs.push(id+'.'+k+' -> missing '+v[0]); else if(v[1] >= DEF[t.class_type][1]) errs.push(id+'.'+k+' -> bad output '+v[1]); } }
+    for(const [k,v] of Object.entries(n.inputs)) if(Array.isArray(v)){ const t = g[v[0]]; if(!t) errs.push(id+'.'+k+' -> missing '+v[0]); else if(!DEF[t.class_type]) errs.push(t.class_type + ' not known'); else if(v[1] >= DEF[t.class_type][1]) errs.push(id+'.'+k+' -> bad output '+v[1]); } }
   return errs; }
-const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler', 'euler_ancestral']), scheduler:C(['normal'])}}},
+const OI = () => ({ColorMatch:{input:{required:{method:C(['mkl'])}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler', 'euler_ancestral']), scheduler:C(['normal'])}}},
   LoraLoader:{input:{required:{lora_name:C(['AFKJ Style Illustrious Claude.safetensors', 'librarianx_v2.safetensors'])}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors', 'minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors', 'AFK_minimax_h3_style.safetensors', 'librarianx_v2.safetensors'])}}},
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']), weight_dtype:C(['default'])}}},
@@ -244,8 +244,33 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   { const n0 = await page.evaluate(() => cmPage().panels[2].stills.length), nb = ALL.length; await page.click('#comic [data-cm="d3use"]');
     await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
     const g = ALL[nb].prompt, n = Object.values(g), ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
-    ok(check(g).length===0 && ks.join()==='0.65,0.25' && n.some(x => x.class_type==='SetLatentNoiseMask') && n.find(x => x.class_type==='SetUnionControlNetType').inputs.type==='tile' && n.filter(x => x.class_type==='LoadImage').length===2,
-      '✨ Use this angle: the swung view, its torn edges repainted at 0.65 then 0.25 over all, held by ProMax tile, lands as a new still: ' + check(g).join('; ') + ' ' + ks); }
+    ok(check(g).length===0 && ks.join()==='0.65,0.25' && n.some(x => x.class_type==='SetLatentNoiseMask') && n.find(x => x.class_type==='SetUnionControlNetType').inputs.type==='tile' && n.filter(x => x.class_type==='LoadImage').length===2 && g[n.find(x => x.class_type==='SaveImage').inputs.images[0]].class_type==='ColorMatch',
+      '✨ Use this angle: the swung view, its torn edges repainted at 0.65 then 0.25 over all, held by ProMax tile, colours matched back to the view, lands as a new still: ' + check(g).join('; ') + ' ' + ks); }
+  // ---- 🎨 a panel's own full recipe (the Render tab, swapped to the panel) ----
+  { const before = await page.evaluate(() => ({prompt:S.prompt, gal:S.gallery[0].url, blocks:S.blocks.length}));
+    await page.click('#cmPage [data-cpi="3"]'); await page.click('#comic [data-cm="ws"]');
+    ok(await page.isVisible('#mainView') && await page.isVisible('.go') && await page.isVisible('#wsBar') && /Page 1 · Panel 4/.test(await page.textContent('#wsBar')), '🎨 Its full recipe opens the panel in the Render tab, with a Page 1 · Panel 4 bar');
+    const ws = await page.evaluate(() => ({ck:S.blocks.find(b => b.type==='model').ckpt, loras:S.blocks.filter(b => b.type==='lora').map(b => b.lora + '@' + b.strength), P:S.blocks.find(b => b.type==='sampler'), prompt:S.prompt, gal:S.gallery.length, stills:cmPage().panels[3].stills.length, style:styleKey(S.blocks.find(b => b.type==='model'))}));
+    ok(ws.ck==='iriselTouchIL_v10.safetensors' && ws.style==='illustrious' && ws.loras.join()==='AFKJ Style Illustrious Claude.safetensors@1,librarianx_v2.safetensors@1' && ws.P.shape==='panel' && ws.P.steps===28,
+      'it starts from the page\'s look: iriselTouchIL as Illustrious, AFKJ + librarianx_v2 blocks at 1.0, Illustrious painting settings, the panel\'s shape: ' + JSON.stringify(ws.loras));
+    ok(/grabbing another's arm/.test(ws.prompt) && /1girl, 1boy/.test(ws.prompt) && !/(^|, )librarianx(,|$)/.test(ws.prompt) && ws.gal===ws.stills, 'its prompt is the panel\'s tags (LoRA words left to the blocks) and the strip is its stills: ' + ws.prompt);
+    const nb = ALL.length; await page.click('#goBtn');
+    await page.waitForFunction(n => S.gallery.length===n + 1, ws.gal, {timeout:20000});
+    const g = ALL[nb].prompt, n = Object.values(g), lat = n.find(x => x.class_type==='EmptyLatentImage'), r = await page.evaluate(() => { const q = cmRectsOf(cmPage())[3]; return q.w / q.h; });
+    ok(check(g).length===0 && n.find(x => x.class_type==='SaveImage').inputs.filename_prefix==='RenderDeck/comics/page_1/panel_4/render' && Math.abs(lat.inputs.width / lat.inputs.height - Math.max(0.5, Math.min(2, r))) < 0.15,
+      'Render makes a normal render in the panel\'s shape, saved in its folder: ' + check(g).join('; ') + ' ' + lat.inputs.width + 'x' + lat.inputs.height);
+    ok(await page.isVisible('#resultActions [data-act="orbit"]') && await page.isVisible('#resultActions [data-act="pose"]'), '📷 Change angle and 🤸 Edit pose are there for the panel\'s pictures');
+    await page.click('#wsBar [data-ws="use"]');
+    const back = await page.evaluate(() => { const p = cmPage().panels[3]; return {comic:!document.querySelector('#comic').hidden, sel:CM().sel, n:p.stills.length, still:p.still, picked:p.stillPicked, ws:!!S.ws, prompt:S.prompt, gal:S.gallery[0].url, blocks:S.blocks.length, has:!!p.ws}; });
+    ok(back.comic && back.sel===3 && back.n===ws.stills + 1 && back.still===0 && back.picked && back.has, '✓ Put this picture on the panel: back on the page, the render is the panel\'s picked still: ' + JSON.stringify(back));
+    ok(!back.ws && back.prompt===before.prompt && back.gal===before.gal && back.blocks===before.blocks, 'and the normal recipe and strip are back as they were');
+    await page.click('#comic [data-cm="ws"]'); await page.evaluate(() => { S.prompt = 'edited by hand'; save(); });
+    await page.click('#tabs [data-tab="comic"]'); await page.click('#comic [data-cm="ws"]');
+    ok(await page.evaluate(() => S.prompt==='edited by hand'), 'the panel keeps its own recipe between visits');
+    await page.reload(); await page.waitForSelector('#wsBar:not([hidden])');
+    ok(await page.evaluate(() => S.ws && S.prompt==='edited by hand' && S.gallery.length===cmPage().panels[3].stills.filter(x => x.url).length), 'reopening the app goes back into the panel');
+    await page.evaluate(() => switchMode()); ok(await page.evaluate(() => !S.ws && S.hidden), 'Hidden leaves the panel first'); await page.evaluate(() => switchMode());
+    await page.click('#tabs [data-tab="comic"]'); }
   // the tab is remembered
   await page.reload(); await page.waitForSelector('#cmPage .cpanel');
   ok(await page.isVisible('#comic') && await page.$$eval('#cmPage .cpanel', e => e.length)===5, 'after reopening the app it is still on the Comic tab with the page');
