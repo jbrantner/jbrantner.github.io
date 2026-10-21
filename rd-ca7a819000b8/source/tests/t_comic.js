@@ -283,6 +283,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.waitForTimeout(300);
   { const n = await page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
     ok(n > 100, 'the three layers draw'); }
+  { await page.click('#comic [data-d3flat="1"]'); const r = await page.evaluate(async () => { const q = cmPage().panels[2].d3; await d3Ready(q); const real = scDraw, seen = [];
+      window.scDraw = function(ls, cam, W, H, mode, n, f, last){ seen.push([ls.length, cam.pos.join(), last ? last.pos.join() : null]); return real.apply(this, arguments); };
+      q.yaw = 0.3; q.flat = true; d3Picture(q, 160, 120, 'stretch'); q.flat = false; d3Picture(q, 160, 120, 'colour'); window.scDraw = real;
+      const straight = d3Cam(Object.assign({}, q, {yaw:0, pitch:0}), 160, 120).pos.join(); q.yaw = 0; return [q.flat, seen, straight]; });
+    ok(r[1][0][0]===3 && r[1][0][2]===r[2] && r[1][0][1]!==r[2] && r[1][1][2]===null, 'Character: Flat cut-out draws the character from the straight-on camera over the swung background (also for Use this angle): ' + JSON.stringify(r[1]));
+    await page.click('#comic [data-d3flat=""]'); }
   // ---- 🎞 MiniMax views: a left and a right orbit from the still, scrubbed by dragging ----
   { const nb = ALL.length; await page.click('#comic [data-d3deg="20"]'); await page.click('#comic [data-cm="d3orb"]');
     await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3OrbReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});

@@ -605,7 +605,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.106'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.107'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6781,7 +6781,8 @@ function scMesh(spec){
   return m;
 }
 // draws the layers (back to front) as the camera sees them into the GL canvas (W x H); mode 'colour', 'depth' or 'stretch'
-function scDraw(layers, cam, W, H, mode, near, far){
+// lastCam: the last layer (the character) is drawn from that camera instead, over the rest (the flat cut-out)
+function scDraw(layers, cam, W, H, mode, near, far, lastCam){
   const G = scGL(), {cv, gl, pr} = G; if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; }
   const ms = layers.map(scMesh); ms.forEach(m => { if(!m.ready) m.wait.then(() => d3Redraw(), () => {}); });
   const zn = near * 0.25, zf = far * 3;
@@ -6790,7 +6791,8 @@ function scDraw(layers, cam, W, H, mode, near, far){
   const U = nm => gl.getUniformLocation(pr, nm);
   gl.uniform3fv(U('cp'), cam.pos); gl.uniform3fv(U('cr'), cam.r); gl.uniform3fv(U('cu'), cam.u); gl.uniform3fv(U('cf'), cam.f); gl.uniform2f(U('k'), cam.kx, cam.ky);
   gl.uniform1f(U('zn'), zn); gl.uniform1f(U('zf'), zf); gl.uniform1i(U('mode'), mode==='depth' ? 1 : mode==='stretch' ? 2 : 0);
-  ms.forEach(m => { if(!m.ready) return; gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, m.tex); gl.uniform1i(U('img'), 0);
+  ms.forEach((m, i) => { if(lastCam && i===ms.length - 1){ gl.clear(gl.DEPTH_BUFFER_BIT); gl.uniform3fv(U('cp'), lastCam.pos); gl.uniform3fv(U('cr'), lastCam.r); gl.uniform3fv(U('cu'), lastCam.u); gl.uniform3fv(U('cf'), lastCam.f); gl.uniform2f(U('k'), lastCam.kx, lastCam.ky); }
+    if(!m.ready) return; gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, m.tex); gl.uniform1i(U('img'), 0);
     gl.uniform1i(U('useMask'), m.msk ? 1 : 0); if(m.msk){ gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, m.msk); gl.uniform1i(U('msk'), 1); }
     gl.bindVertexArray(m.vao); gl.drawElements(gl.TRIANGLES, m.n, gl.UNSIGNED_INT, 0); });
   gl.bindVertexArray(null);
@@ -6908,7 +6910,11 @@ function d3Cam(ph, W, H){
   const pos = V3.add(T, V3.mul([Math.sin(yw) * Math.cos(pt), Math.sin(pt), Math.cos(yw) * Math.cos(pt)], zt)), f = V3.norm(V3.sub(T, pos)), r = V3.norm(V3.cross(f, [0, 1, 0]));
   return {pos, f, r, u:V3.cross(r, f), kx:base.kx * 0.86, ky:base.ky * 0.86}; // a little zoomed in, so a swing doesn't show past the picture's edges
 }
-function d3Picture(ph, W, H, mode){ const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(scDraw(d3Layers(ph), d3Cam(ph, W, H), W, H, mode, D3_NEAR, d3Far(ph)), 0, 0); return c; }
+// the swung view; with Character: Flat cut-out (Jordan 2026-10-21: the 3D background works well, the character can be a flat
+// cut-out facing the camera) the character is drawn straight on, over the swung background
+function d3Scene(ph, W, H, mode){ const ls = d3Layers(ph), flat = ph.flat && ls.length > 1;
+  return scDraw(ls, d3Cam(ph, W, H), W, H, mode, D3_NEAR, d3Far(ph), flat ? d3Cam(Object.assign({}, ph, {yaw:0, pitch:0}), W, H) : null); }
+function d3Picture(ph, W, H, mode){ const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(d3Scene(ph, W, H, mode), 0, 0); return c; }
 function d3Html(p, st){
   const ph = p.d3 && p.d3.url===st.url ? p.d3 : null;
   if(!ph) return `<div class="btnrow"><button class="btn" data-cm="d3">🌄 3D look</button></div>`;
@@ -6918,6 +6924,7 @@ function d3Html(p, st){
     <div class="scwrap"><canvas class="scview" data-d3view></canvas></div>
     <p class="note">Drag to swing the angle.${ph.mask ? (ph.far ? ' Three layers: the far backdrop (painted in), the near part of the background, and the character cut out in front.' : ' The character is cut out in front of the background, which was painted in behind them.' + (ph.making && ph.making.kind==='far' ? ' The far backdrop is being painted for a third layer.' : '')) : ' This one is a single sheet (no BiRefNet or Illustrious model on that computer), so edges stretch on bigger swings.'} Depth from ${ph.moge ? 'MoGe-2' : 'Depth Anything V2'}.</p>
     ${ph.making && ph.making.kind==='far' ? `<div class="pbar obbar"><i data-cmbar="${ph.id}"></i></div><p class="note" data-cmtxt="${ph.id}"></p>` : ''}${d3MogeHtml(ph)}
+    ${ph.mask && ph.bg ? `<div class="row"><label>Character</label><div class="seg">${[['', '3D'], ['1', 'Flat cut-out']].map(([v, t]) => `<button data-d3flat="${v}" class="${!!ph.flat===!!v ? 'on' : ''}">${t}</button>`).join('')}</div></div>` : ''}
     <div class="row"><label>Depth</label><div class="slider"><input type="range" data-d3="amt" min="0.2" max="2" step="0.05" value="${d3Amt(ph)}"><output>${d3Amt(ph).toFixed(2)}</output></div></div>
     <div class="btnrow"><button class="btn" data-cm="d3wig">${D3.play ? '⏸ Stop' : '▶ Wiggle'}</button><button class="btn" data-cm="d3rec">💾 Save the wiggle</button><button class="btn" data-cm="d3reset">↺ Straight on</button></div>
     ${d3OrbHtml(ph)}
@@ -7209,7 +7216,7 @@ function d3Redraw(){
   if(ph.view==='circle' && d3CircDraw(ph, cv)) return;
   if(ph.view==='fuse' && fuseDraw(ph, cv)) return;
   const m0 = scMesh(d3Layers(ph)[0]); if(m0.ready && (ph.w!==m0.w || ph.h!==m0.h)){ ph.w = m0.w; ph.h = m0.h; requestAnimationFrame(d3Redraw); }
-  try{ cv.getContext('2d').drawImage(scDraw(d3Layers(ph), d3Cam(ph, W, H), W, H, 'colour', D3_NEAR, d3Far(ph)), 0, 0); }catch(e){ toast(e.message, true); }
+  try{ cv.getContext('2d').drawImage(d3Scene(ph, W, H, 'colour'), 0, 0); }catch(e){ toast(e.message, true); }
 }
 function d3Touch(){
   const cv = $('#comic [data-d3view]'); if(!cv) return; let drag = null;
@@ -7445,7 +7452,7 @@ function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.c
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-fusen]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-fusen]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7466,6 +7473,7 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.d3deg && p && p.d3){ p.d3.orbDeg = +t.dataset.d3deg; }
   else if(t.dataset.d3mode && p && p.d3){ p.d3.orbMode = t.dataset.d3mode; }
   else if(t.dataset.d3home && p && p.d3){ p.d3.circHome = t.dataset.d3home; }
+  else if(t.dataset.d3flat!=null && p && p.d3){ p.d3.flat = !!t.dataset.d3flat; }
   else if(a==='d3rev' && p.d3){ p.d3.circRev = !p.d3.circRev; }
   else if(t.dataset.fusen && p && p.d3 && p.d3.fuse){ p.d3.fuse.n = +t.dataset.fusen; }
   else if(a==='retag'){ p.tags = null; }
