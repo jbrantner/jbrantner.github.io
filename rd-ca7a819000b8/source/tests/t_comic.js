@@ -326,6 +326,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     LoadDA3Model:{input:{required:{model_name:[['moge_2_vitl_normal_fp16.safetensors']], weight_dtype:[['default']]}}}}); drawComic(); });
   ok(await page.isVisible('#comic [data-cm="d3getda3"]'), 'with the nodes but no DA3 model: ⬇ Get Depth Anything 3');
   await page.evaluate(() => { allPcs().find(p => /desktop/.test(p.url)).oi.LoadDA3Model.input.required.model_name = [['moge_2_vitl_normal_fp16.safetensors', 'depth_anything_3_base.safetensors']]; drawComic(); });
+  await page.click('#comic [data-fusesrc="sides"]');
   { const nb = ALL.length; await page.click('#comic [data-cm="d3fuse"]');
     await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.fuse && q.fuse.glbs && !q.fuse.making; }, null, {timeout:30000});
     const g = ALL[nb].prompt, n = Object.values(g), di = n.find(x => x.class_type==='DA3Inference'), ms = n.filter(x => x.class_type==='DA3GeometryToMesh').map(x => x.inputs.batch_index);
@@ -341,6 +342,17 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
     const g = ALL[nb].prompt, ks = Object.values(g).filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
     ok(check(g).length===0 && ks.join()==='0.65,0.25', 'Use this angle from the 3D model: its holes repainted (0.65), then a light pass (0.25), as a new still'); }
+  // 🧊 from the ⭕ full circle: 16 frames all the way round, 8 meshes, turns all the way and tilts
+  { await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; drawComic(); });
+    await page.click('#comic [data-fusesrc="circle"]'); const nb = ALL.length; await page.click('#comic [data-cm="d3fuse"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.fuse && q.fuse.glbs && q.fuse.made==='circle' && !q.fuse.making; }, null, {timeout:150000}); // 72 real frames to take first
+    const g = ALL[nb].prompt, n = Object.values(g), ms = n.filter(x => x.class_type==='DA3GeometryToMesh').map(x => x.inputs.batch_index);
+    ok(check(g).length===0 && n.filter(x => x.class_type==='LoadImage').length===16 && ms.join()==='0,2,4,6,8,10,12,14' && await page.evaluate(() => fuseUrls(cmPage().panels[2].d3).length===8),
+      '🧊 Fuse from the full circle: 16 frames all the way round (the still in the middle), 8 meshes: ' + ms);
+    const turned = await page.evaluate(() => { const q = cmPage().panels[2].d3, cv = document.querySelector('#comic [data-d3view]'), r = cv.getBoundingClientRect();
+      const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {clientX:x, clientY:y, pointerId:1, bubbles:true}));
+      q.yaw = q.pitch = 0; ev('pointerdown', r.left + 10, r.top + 10); for(let k = 1; k <= 20; k++) ev('pointermove', r.left + 10 - k * r.width / 8, r.top + 10 + k * r.height / 40); ev('pointerup', 0, 0); return [q.yaw, q.pitch]; });
+    ok(turned[0] > 1.3 && turned[1] > 0.6, 'the model from the circle turns past the side (' + turned.map(v => v.toFixed(2)) + ') and tilts further'); }
   await page.evaluate(() => { cmPage().panels[2].d3.view = 'depth'; });
   // ✕ Stop: the comic's jobs can be cancelled
   { await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cmopts="3"]'); const n0 = await page.evaluate(() => cmPage().panels[1].stills.length);

@@ -605,7 +605,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.108'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.109'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6966,11 +6966,12 @@ function d3OrbHtml(ph){
       + (circ ? `<div class="row"><label>Last frame</label>${seg('data-d3home', [['still', 'This still'], ['free', 'Leave it free']], ph.circHome || 'still')}</div>` : `<div class="row"><label>How far</label>${seg('data-d3deg', [[20, 'A little'], [35, 'Some'], [60, 'A lot']], deg)}</div>`)
       + `<div class="btnrow"><button class="btn" data-cm="d3orb" ${k.why ? 'disabled' : ''}>${circ ? '⭕ ' + (d3CircReady(ph) ? 'Make the circle again' : 'Circle all the way round') : '🎞 ' + (d3OrbReady(ph) ? 'Make the views again' : 'Make real angles with MiniMax')}</button></div>
       <p class="note">${k.why ? esc(k.why) : circ ? 'One MiniMax clip that circles all the way round the still and lands back on it (' + (ph.circHome==='free' ? 'this still is only its first frame, so nothing tempts it to stand still, but it may not come all the way home' : 'this still is its first and last frame, so it lands back on-model; if MiniMax barely moves, try Leave it free') + ', ' + k.mins + ' min). Dragging then turns right round the scene.' : 'Two MiniMax clips from this still, one circling left and one right (' + k.mins + ' min each, on both computers at once when both are free). Then dragging shows real painted sides instead of stretched depth.'}</p>`; }
-  if(d3OrbReady(ph)) x += fuseHtml(ph);
+  if(d3OrbReady(ph) || d3CircReady(ph)) x += fuseHtml(ph);
   return x; }
 async function d3Orbit(p){
   const ph = p.d3, pg = cmPage(), i = pg.panels.indexOf(p); if(!ph) return; let avoid = null; const circ = ph.orbMode==='circle', sides = circ ? ['circle'] : ['left', 'right'];
-  ph.orbs = ph.orbs || {}; sides.forEach(sd => { delete ph.orbs[sd]; if(D3ERR[ph.id]) delete D3ERR[ph.id]; }); if(['mm', 'circle'].includes(ph.view)) ph.view = 'depth'; if(!circ) delete ph.fuse;
+  ph.orbs = ph.orbs || {}; sides.forEach(sd => { delete ph.orbs[sd]; if(D3ERR[ph.id]) delete D3ERR[ph.id]; }); if(['mm', 'circle'].includes(ph.view)) ph.view = 'depth';
+  if(ph.fuse && ph.fuse.glbs && (ph.fuse.made || 'sides')===(circ ? 'circle' : 'sides')){ delete ph.fuse; if(ph.view==='fuse') ph.view = 'depth'; }
   for(const side of sides){
     const host = ph.orbs[side] = {id:ph.id + '_' + side, busy:'Sending the still…'}, k = kitOrbit(avoid); drawComic();
     try{ if(k.why) throw new Error(k.why); avoid = k.url;
@@ -7062,6 +7063,9 @@ async function cmStop(hosts, all){
 // as doubled edges: then fewer views (1 = the still's own mesh) is the clean fallback.
 const DA3_URL = 'https://huggingface.co/Comfy-Org/Depth-Anything-3/resolve/main/geometry_estimation/depth_anything_3_base.safetensors';
 const FUSE_SIDE = 8, FUSE_PICK = {1:[0], 3:[-8, 0, 8], 5:[-8, -4, 0, 4, 8]}; // views to mesh, counted from the still (the middle)
+// from the ⭕ full circle (Jordan 2026-10-21: orbit round her and tilt above or below): 16 frames all the way round, the still in
+// the middle of the batch, and every other one (8, 45° apart) made into a mesh
+const FUSE_CIRC = [-8, -6, -4, -2, 0, 2, 4, 6], fuseCirc = ph => !!(ph.fuse && ph.fuse.glbs && ph.fuse.made==='circle'); // the model on show came from the circle
 function fuseKits(){
   if(S.test) return [{url:'test', oi:{}, model:'depth_anything_3_base.safetensors'}];
   return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && p.oi.DA3Inference && p.oi.DA3GeometryToMesh && p.oi.SaveGLB)
@@ -7072,9 +7076,12 @@ function fuseHtml(ph){
   if(F.busy) return x + `<div class="pbar obbar${F.up ? '' : ' pulse'}"><i data-fusebar="${ph.id}" style="width:${(100 * (F.up || 0)).toFixed(1)}%"></i></div><p class="note" data-fusetxt="${ph.id}">${esc(F.busy)}</p>`;
   if(F.making) return x + `<div class="pbar obbar"><i data-fusebar="${ph.id}"></i></div><p class="note" data-fusetxt="${ph.id}">Fusing the views on ${esc(pcName(F.making.pc))}…</p><div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop</button></div>`;
   if(F.err) x += `<p class="warn">${esc(F.err)}</p>`;
-  if(F.glbs) x += `<div class="row"><label>Views</label>${['1', '3', '5'].map(n => `<button class="chipbtn${(F.n || 5)==n ? ' on' : ''}" data-fusen="${n}">${n}</button>`).join(' ')} <button class="chipbtn" data-cm="d3flip">↕ Flip</button></div>
+  const circ = d3CircReady(ph), both = circ && d3OrbReady(ph), src = (F.src || (circ ? 'circle' : 'sides'));
+  if(both && !F.making) x += `<div class="row"><label>From</label><div class="seg">${[['circle', '⭕ Full circle'], ['sides', '🎞 Left and right']].map(([v, t]) => `<button data-fusesrc="${v}" class="${src===v ? 'on' : ''}">${t}</button>`).join('')}</div></div>`;
+  if(F.glbs && fuseCirc(ph)) x += `<div class="row"><label></label><button class="chipbtn" data-cm="d3flip">↕ Flip</button></div><p class="note">Pick 🧊 3D model above and drag to turn it all the way round, up and down to look from above or below. Use this angle repaints the holes.</p>`;
+  else if(F.glbs) x += `<div class="row"><label>Views</label>${['1', '3', '5'].map(n => `<button class="chipbtn${(F.n || 5)==n ? ' on' : ''}" data-fusen="${n}">${n}</button>`).join(' ')} <button class="chipbtn" data-cm="d3flip">↕ Flip</button></div>
     <p class="note">Pick 🧊 3D model above and drag to turn it (much further than the orbits). Doubled edges mean the views don't line up: try 3 or 1. ↕ Flip if it shows upside down. Use this angle repaints the holes.</p>`;
-  if(k) x += `<div class="btnrow"><button class="btn" data-cm="d3fuse">🧊 ${F.glbs ? 'Fuse again' : 'Fuse the views into a 3D model'}</button></div><p class="note">Depth Anything 3 (multiview) on ${esc(pcName(k.url))}: the still and 8 frames of each orbit, about 1 to 3 min.</p>`;
+  if(k) x += `<div class="btnrow"><button class="btn" data-cm="d3fuse">🧊 ${F.glbs ? 'Fuse again' : 'Fuse the views into a 3D model'}</button></div><p class="note">Depth Anything 3 (multiview) on ${esc(pcName(k.url))}: ${src==='circle' ? '16 frames all the way round the full circle' : 'the still and 8 frames of each orbit'}, about 1 to 3 min.</p>`;
   else if(ks.length) x += `<div class="btnrow"><button class="btn" data-cm="d3getda3" data-pc="${esc(ks[0].url)}">⬇ Get Depth Anything 3 on ${esc(pcName(ks[0].url))} (about 0.5 GB)</button></div><p class="note">Needed to fuse the views into a 3D model. After it downloads, restart ComfyUI there from ☰ and reopen the app.</p>`;
   else if(!allPcs().some(p => p.online && !S.pcOff.includes(p.url))) x += '<p class="note">Fusing waits for a computer: none can be reached right now (on the phone, toggle Tailscale and reopen the app).</p>';
   else x += '<p class="note">Fusing needs ComfyUI\'s Depth Anything 3 nodes, which the computers that are on don\'t have: update ComfyUI there (Comfy Desktop updates itself on restart).</p>';
@@ -7085,7 +7092,11 @@ async function fuseGet(pc){
     toast('Downloading Depth Anything 3 on ' + pcName(pc) + '. When it is done, restart ComfyUI there from ☰ and reopen the app'); }
   catch(err){ toast(err.message, true); } }
 // the sweep: far left … the still … far right, all at the orbit frames' size
-async function fuseFrames(ph){
+async function fuseFrames(ph, src){
+  if(src==='circle'){ const C = await d3Frames(ph.orbs.circle.url, true).wait; const W = C.list[0].width, H = C.list[0].height, out = [];
+    // batch k (0..15) is k-8 sixteenths of the way round, so the still (the clip's first frame) sits in the middle
+    for(let k2 = 0; k2 < 16; k2++){ const t = (((k2 - 8) / 16) % 1 + 1) % 1, c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(C.list[Math.round(t * (C.list.length - 1))], 0, 0, W, H); out.push(c); }
+    return out; }
   const L = await d3Frames(ph.orbs.left.url).wait, R = await d3Frames(ph.orbs.right.url).wait, W = L.list[0].width, H = L.list[0].height;
   const at = (F, n) => F.list[Math.round(n * (F.list.length - 1) / FUSE_SIDE)], fit = src => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(src, 0, 0, W, H); return c; };
   const im = S.test ? L.list[0] : await scLoadImg(ph.url), out = [];
@@ -7093,9 +7104,12 @@ async function fuseFrames(ph){
   out.push(fit(im)); for(let n = 1; n <= FUSE_SIDE; n++) out.push(fit(at(R, n)));
   return out; }
 async function fuseMake(p){
-  const ph = p.d3, k = fuseKits().find(q => q.model), pg = cmPage(), i = pg.panels.indexOf(p); if(!ph || !k || !d3OrbReady(ph)) return;
-  const F = ph.fuse = {n:(ph.fuse && ph.fuse.n) || 5, flip:ph.fuse && ph.fuse.flip, busy:'Taking the frames from the two views…'}; drawComic();
-  try{ const frames = await fuseFrames(ph), names = []; let up = 0;
+  const ph = p.d3, k = fuseKits().find(q => q.model), pg = cmPage(), i = pg.panels.indexOf(p); if(!ph || !k || !(d3OrbReady(ph) || d3CircReady(ph))) return;
+  const src = (ph.fuse && ph.fuse.src) || (d3CircReady(ph) ? 'circle' : 'sides');
+  if(src==='circle' ? !d3CircReady(ph) : !d3OrbReady(ph)) return;
+  if(ph.view==='fuse'){ ph.view = 'depth'; ph.yaw = ph.pitch = 0; } // Fuse again while looking at the model (it threw: no model while the new one is made)
+  const F = ph.fuse = {n:(ph.fuse && ph.fuse.n) || 5, flip:ph.fuse && ph.fuse.flip, src, busy:src==='circle' ? 'Taking 16 frames from the full circle…' : 'Taking the frames from the two views…'}; drawComic();
+  try{ const frames = await fuseFrames(ph, src), names = []; let up = 0;
     for(const c of frames){ F.busy = 'Sending the frames to ' + pcName(k.url) + '… ' + (++up) + '/' + frames.length; F.up = up / frames.length; const el = document.querySelector(`[data-fusetxt="${ph.id}"]`), bar = document.querySelector(`[data-fusebar="${ph.id}"]`);
       if(el) el.textContent = F.busy; if(bar){ if(bar.parentNode.classList.contains('pulse')){ bar.parentNode.classList.remove('pulse'); } bar.style.width = (100 * F.up).toFixed(1) + '%'; }
       names.push(S.test ? 'test.png' : (await uploadFrame(c, 'fuse_view', k.url)).img); }
@@ -7106,12 +7120,12 @@ async function fuseMake(p){
     const geo = add('DA3Inference', {da3_model:[add('LoadDA3Model', {model_name:k.model, weight_dtype:'default'}), 0], image:batch, resolution:504, resize_method:'upper_bound_resize',
       mode:'multiview', 'mode.ref_view_strategy':'middle', 'mode.pose_method':'cam_dec'});
     const prefix = cmPrefixP(pg, i, 'model3d'), saves = {};
-    FUSE_PICK[5].forEach(o => { const bi = FUSE_SIDE + o;
+    (src==='circle' ? FUSE_CIRC : FUSE_PICK[5]).forEach(o => { const bi = FUSE_SIDE + o;
       saves[o] = add('SaveGLB', {mesh:[add('DA3GeometryToMesh', {da3_geometry:[geo,0], batch_index:bi, decimation:2, discontinuity_threshold:0.08, confidence_threshold:0.1, use_sky_mask:false, texture:true}), 0], filename_prefix:prefix + '_v' + (bi)}); });
-    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); F.glbs = {}; FUSE_PICK[5].forEach(o => F.glbs[o] = 'test'); ph.view = 'fuse'; ph.yaw = ph.pitch = 0; save(); drawComic(); return; }
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); F.glbs = {}; F.made = src; (src==='circle' ? FUSE_CIRC : FUSE_PICK[5]).forEach(o => F.glbs[o] = 'test'); ph.view = 'fuse'; ph.yaw = ph.pitch = 0; save(); drawComic(); return; }
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    F.making = {pc:k.url, id:j.prompt_id, saves, t:t0}; save(); drawComic(); fuseWait(ph);
+    F.making = {pc:k.url, id:j.prompt_id, saves, t:t0, src}; save(); drawComic(); fuseWait(ph);
  }catch(err){ delete F.busy; delete F.up; F.err = "Couldn't fuse the views: " + err.message; save(); drawComic(); } }
 async function fuseWait(ph){
   const F = ph.fuse, m = F && F.making; if(!m || m.polling) return; m.polling = true;
@@ -7125,7 +7139,7 @@ async function fuseWait(ph){
       if(!(h.status && h.status.completed)) continue;
       const glbs = {}; for(const [o, sid] of Object.entries(m.saves)){ const f = (((h.outputs || {})[sid] || {})['3d'] || [])[0]; if(f) glbs[o] = viewUrl(f, m.pc); }
       if(!Object.keys(glbs).length) throw new Error('no 3D files came back');
-      F.glbs = glbs; delete F.making; delete F.err; ph.view = 'fuse'; ph.yaw = ph.pitch = 0; save(); if(!$('#comic').hidden) drawComic(); toast('The 3D model is ready: drag to turn it 🧊'); buzz(); return; } }
+      F.glbs = glbs; F.made = m.src || 'sides'; delete F.making; delete F.err; ph.view = 'fuse'; ph.yaw = ph.pitch = 0; save(); if(!$('#comic').hidden) drawComic(); toast('The 3D model is ready: drag to turn it 🧊'); buzz(); return; } }
   catch(err){ if(F.making===m){ delete F.making; F.err = "Couldn't fuse the views: " + err.message; save(); if(!$('#comic').hidden) drawComic(); } }
   finally{ m.polling = false; } }
 async function fuseStop(ph){ const F = ph.fuse, m = F && F.making; if(!m) return; delete F.making; save(); drawComic();
@@ -7174,7 +7188,7 @@ function fuseMesh(url){
     M.ready = true; return M; })().catch(e => { FUSE.mesh.delete(url); throw e; });
   return M; }
 function fuseMul(a, b){ if(!a) return b; const o = new Array(16); for(let c = 0; c < 4; c++) for(let r = 0; r < 4; r++){ let s = 0; for(let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; } return o; }
-const fuseUrls = ph => { const F = ph.fuse; return FUSE_PICK[F.n || 5].map(o => F.glbs[o]).filter(Boolean); };
+const fuseUrls = ph => { const F = ph.fuse; if(!F || !F.glbs) return []; return (fuseCirc(ph) ? FUSE_CIRC : FUSE_PICK[F.n || 5]).map(o => F.glbs[o]).filter(Boolean); };
 // draws the picked views from a camera turned round the still's middle; null while the files load
 function fuseRender(ph, W, H){
   const G = fuseGL(), gl = G.gl, ms = fuseUrls(ph).map(fuseMesh); if(!ms.length) return null;
@@ -7224,7 +7238,7 @@ function d3Touch(){
   cv.onpointerdown = e => { e.preventDefault(); cv.setPointerCapture(e.pointerId); drag = {x:e.clientX, y:e.clientY}; d3Wiggle(false); };
   cv.onpointermove = e => { if(!drag) return; const r = cv.getBoundingClientRect(), q = ph(), dx = (e.clientX - drag.x) / r.width, dy = (e.clientY - drag.y) / r.height;
     if(q.view==='circle'){ q.yaw = (+q.yaw || 0) - dx * Math.PI; /* the clip follows the finger (Jordan 2026-10-21: it was backwards) */ q.pitch = 0; drag = {x:e.clientX, y:e.clientY}; d3Redraw(); return; }
-    const fz = q.view==='fuse', ym = fz ? 1.2 : 0.35, pm = fz ? 0.6 : 0.18; // the 3D model turns much further
+    const fz = q.view==='fuse', ym = fz ? (fuseCirc(q) ? 1e9 : 1.2) : 0.35, pm = fz ? (fuseCirc(q) ? 1.2 : 0.6) : 0.18; // the 3D model turns much further (all the way round from the circle)
     q.yaw = Math.max(-ym, Math.min(ym, (+q.yaw || 0) - dx * (fz ? 2 : 0.8))); q.pitch = Math.max(-pm, Math.min(pm, (+q.pitch || 0) + dy * (fz ? 1.2 : 0.5))); drag = {x:e.clientX, y:e.clientY}; d3Redraw(); };
   cv.onpointerup = cv.onpointercancel = () => { if(drag){ drag = null; save(); } };
 }
@@ -7454,7 +7468,7 @@ function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.c
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-fusen]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-fusesrc],[data-fusen]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7476,6 +7490,7 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.d3mode && p && p.d3){ p.d3.orbMode = t.dataset.d3mode; const v = t.dataset.d3mode==='circle' ? (d3CircReady(p.d3) && 'circle') : (d3OrbReady(p.d3) && 'mm'); if(v && ['mm', 'circle'].includes(p.d3.view)){ p.d3.view = v; p.d3.yaw = p.d3.pitch = 0; } }
   else if(t.dataset.d3home && p && p.d3){ p.d3.circHome = t.dataset.d3home; }
   else if(t.dataset.d3flat!=null && p && p.d3){ p.d3.flat = !!t.dataset.d3flat; }
+  else if(t.dataset.fusesrc && p && p.d3){ p.d3.fuse = Object.assign(p.d3.fuse || {}, {src:t.dataset.fusesrc}); }
   else if(a==='d3rev' && p.d3){ p.d3.circRev = !p.d3.circRev; }
   else if(t.dataset.fusen && p && p.d3 && p.d3.fuse){ p.d3.fuse.n = +t.dataset.fusen; }
   else if(a==='retag'){ p.tags = null; }

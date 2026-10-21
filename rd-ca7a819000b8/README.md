@@ -10,3 +10,5 @@
 **v.107 (2026-10-21):** 3D look **Character: 3D / Flat cut-out** (Jordan's idea). The flat cut-out is drawn straight on, always facing the camera, over the swung 3D background, in the view and in Use this angle (so only the background gets repainted). Shows when the still has the layered character cut-out.
 
 **v.108 (2026-10-21):** ⭕ Full circle fixes from Jordan's first test. The drag now follows your finger (it was backwards). It shows the nearest frame and no longer blends two, which showed her twice; there are 72 frames now. The 3D look switches to the circle as soon as it's made. Picking Make: Full circle also switches the view.
+
+**v.109 (2026-10-21):** 🧊 Fuse from the ⭕ full circle (Jordan asked to orbit all round her and tilt above or below). It takes 16 frames all the way round, with the still in the middle, through Depth Anything 3 multiview, and turns 8 of them into meshes 45° apart. The model turns without a stop and tilts up to about 70°. A From switch picks Full circle or Left and right when both exist. Fixed: Fuse again while looking at the 3D model used to hang on "Taking the frames".
