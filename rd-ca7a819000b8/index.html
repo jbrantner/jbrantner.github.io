@@ -616,7 +616,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.105'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.106'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5831,6 +5831,17 @@ function obPrompt(dir, orbit, tilt, scene, zoom){
     + '[4s-5s] The camera holds still on that new angle. The subject and the scene are frozen in the moment of the first frame: same pose, same expression, nothing moves except the camera. '
     + 'Same art style, colours and lighting as the first frame. No cuts, no zoom, no new characters. Silence.';
 }
+// ⭕ a full circle round the frozen subject (Jordan 2026-10-21: one clip that goes all the way round, scrubbed forward or back):
+// the still is the first AND the last frame, so it has to come home on-model; timed checkpoints keep it moving (an
+// "everything stays the same" prompt made MiniMax barely move in the orbit tests)
+function circlePrompt(scene){
+  const first = (scene || '').trim() ? 'The first frame shows ' + scene.trim().replace(/\.+$/, '') + '. ' : '';
+  return first + 'One continuous camera move: a full 360-degree orbit shot. The camera circles to the right all the way around the subject at the same height and distance, never stopping, always keeping the subject centred. '
+    + '[0s-1.3s] The camera swings round to the side: by 1.3 seconds we see the subject in full profile. [1.3s-2.6s] It keeps going behind them: by 2.6 seconds we see the subject from directly behind. '
+    + '[2.6s-3.9s] It keeps circling: by 3.9 seconds we see their other side in full profile. [3.9s-5s] It comes back round to the front and ends exactly on the first frame\'s view. '
+    + 'The background swings all the way round with strong parallax, showing every side of the room. The subject and the scene are frozen in the moment of the first frame: same pose, same expression, nothing moves except the camera. '
+    + 'Same art style, colours and lighting as the first frame. No cuts, no zoom, no new characters. Silence.';
+}
 // a dolly in or out: the camera travels straight toward or away from the frozen subject (a real move, not a crop)
 function obZoomPrompt(dir, zoom, scene){
   const lot = zoom==='lot', first = (scene || '').trim() ? 'The first frame shows ' + scene.trim().replace(/\.+$/, '') + '. ' : '';
@@ -5895,9 +5906,9 @@ function orbitGraph(k, img, o, w, h, prefix){
   let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
   if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
-  const prompt = o.mode==='pose' ? posePrompt(o.action, o.scene) : obPrompt(o.dir || 'right', o.deg || 90, o.tilt || 40, o.scene, o.zoom);
+  const prompt = o.mode==='pose' ? posePrompt(o.action, o.scene) : o.mode==='circle' ? circlePrompt(o.scene) : obPrompt(o.dir || 'right', o.deg || 90, o.tilt || 40, o.scene, o.zoom);
   let cond, lat;
-  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:w, height:h, length:OB_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1]; }
+  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', Object.assign({clip:[clip,0], vae:[vae,0], prompt, width:w, height:h, length:OB_LEN, first_frame:[li,0]}, o.mode==='circle' && o.home!==false ? {last_frame:[li,0]} : {})); cond = [iv,0]; lat = [iv,1]; }
   else { const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + prompt, width:w, height:h, length:OB_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
     lat = [rv,1]; cond = [add('MiniMaxH3AddGuide', {positive:[rv,0], latent:lat, vae:[vae,0], image:[li,0], frame_idx:0}), 0]; }
   const gd = add('BasicGuider', {model, conditioning:cond});
@@ -6460,7 +6471,7 @@ async function cmWait(p){
 }
 // an option job that is over (or failed) leaves its panel, passing its error on
 function cmDrop(c){ if(!c.parent) return; const p = cmAll().find(x => x.id===c.parent && !x.parent); if(!p) return; if(c.err) p.err = c.err; p.extra = (p.extra || []).filter(x => x!==c); }
-function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', angle:'Painting the new angle', finish:'Finishing the frame', plate:'Painting the place', depth:'Reading the depth', far:'Painting the far background', orbit:'MiniMax circling ' + (m.side || '')}[m.kind] || 'Animating') : null; }
+function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', angle:'Painting the new angle', finish:'Finishing the frame', plate:'Painting the place', depth:'Reading the depth', far:'Painting the far background', orbit:m.side==='circle' ? 'MiniMax circling all the way round' : 'MiniMax circling ' + (m.side || '')}[m.kind] || 'Animating') : null; }
 function cmBar(){ if($('#comic').hidden) return; const pg = cmPage(); if(!pg) return;
   pg.panels.concat(CM().pj || [], pg.panels.flatMap(q => q.d3 ? [q.d3].concat(d3Orbs(q.d3)) : [])).forEach(p => { const l = cmLead(p); if(!l || !l.making) return; const e = cmEta(l), n = (p.extra || []).length + (p.making ? 1 : 0);
     document.querySelectorAll(`[data-cmbar="${p.id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
@@ -6938,47 +6949,52 @@ async function d3GetMoge(pc){
 // 🎞 MiniMax views (Jordan 2026-10-21: "use minimax rotating around it to help"): two short MiniMax orbits from the still, one
 // circling left and one right; dragging then scrubs through those painted views, so a bigger swing shows real new sides
 // instead of stretched depth. The depth relief stays for the instant, small swing. Use this angle finishes the exact frame.
-const D3_ORB_N = 16, D3F = {}, D3ERR = {}; // frames per side, taken from the move (the first 4 s of the clip); url -> frames
-const d3Orbs = ph => ['left', 'right'].map(s => ph.orbs && ph.orbs[s]).filter(Boolean);
+const D3_CIRC_N = 48, D3_ORB_N = 16, D3F = {}, D3ERR = {}; // frames per side, taken from the move (the first 4 s of the clip); url -> frames
+const d3Orbs = ph => ['left', 'right', 'circle'].map(s => ph.orbs && ph.orbs[s]).filter(Boolean);
+const d3CircReady = ph => !!(ph.orbs && ph.orbs.circle && ph.orbs.circle.url);
 const d3OrbReady = ph => ph.orbs && ph.orbs.left && ph.orbs.left.url && ph.orbs.right && ph.orbs.right.url;
 function d3OrbHtml(ph){
-  const os = d3Orbs(ph), busy = os.filter(o => o.making || o.busy), deg = ph.orbDeg || 35;
+  const os = d3Orbs(ph), busy = os.filter(o => o.making || o.busy), deg = ph.orbDeg || 35, circ = ph.orbMode==='circle';
   const seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${esc(v)}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`; // the comic's own buttons
   let x = '<div class="lbl">🎞 Real angles</div>';
-  if(d3OrbReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth'], ['mm', '🎞 MiniMax views']].concat(ph.fuse && ph.fuse.glbs ? [['fuse', '🧊 3D model']] : []), ph.view || 'depth')}</div>`
+  if(d3OrbReady(ph) || d3CircReady(ph)) x += `<div class="row"><label>Swing with</label>${seg('data-d3view', [['depth', 'Depth']].concat(d3OrbReady(ph) ? [['mm', '🎞 MiniMax views']] : [], d3CircReady(ph) ? [['circle', '⭕ Full circle']] : [], ph.fuse && ph.fuse.glbs ? [['fuse', '🧊 3D model']] : []), ph.view || 'depth')}</div>`
+    + (ph.view==='circle' ? `<p class="note">${(D3F[ph.orbs.circle.url] || {}).ready ? 'Drag to turn all the way round: right plays the circle forward, left plays it backward. ↔ if it turns the wrong way. Use this angle finishes that exact view in Illustrious.' : D3ERR[ph.id] ? esc(D3ERR[ph.id]) : '<span data-d3loadtxt>Loading the circle…</span>'}</p>`
+      + (D3ERR[ph.id] || (D3F[ph.orbs.circle.url] || {}).ready ? `<div class="btnrow"><button class="btn" data-cm="d3rev">↔ Turn the other way</button></div>` : '<div class="pbar obbar"><i data-d3load style="width:2%"></i></div>') : '')
     + (ph.view==='mm' ? `<p class="note">${D3F[ph.orbs.left.url] && D3F[ph.orbs.right.url] && D3F[ph.orbs.left.url].ready && D3F[ph.orbs.right.url].ready ? 'Drag left and right through MiniMax\'s painted views (up to ' + deg + '° each way). Use this angle finishes that exact view in Illustrious.' : D3ERR[ph.id] ? esc(D3ERR[ph.id]) : '<span data-d3loadtxt>Loading the views…</span>'}</p>`
       + (D3ERR[ph.id] || (D3F[ph.orbs.left.url] || {}).ready && (D3F[ph.orbs.right.url] || {}).ready ? '' : '<div class="pbar obbar"><i data-d3load style="width:2%"></i></div>') : '');
   x += busy.map(o => `<div class="pbar obbar${o.making ? '' : ' pulse'}"><i data-cmbar="${o.id}"></i></div><p class="note" data-cmtxt="${o.id}">${esc(o.busy || '')}</p>`).join('');
   if(busy.length) x += '<div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop the views</button></div>';
   x += os.filter(o => o.err).map(o => `<p class="warn">${esc(o.err)}</p>`).join('');
   if(!busy.length){ const k = kitOrbit();
-    x += `<div class="row"><label>How far</label>${seg('data-d3deg', [[20, 'A little'], [35, 'Some'], [60, 'A lot']], deg)}</div>
-      <div class="btnrow"><button class="btn" data-cm="d3orb" ${k.why ? 'disabled' : ''}>🎞 ${d3OrbReady(ph) ? 'Make the views again' : 'Make real angles with MiniMax'}</button></div>
-      <p class="note">${k.why ? esc(k.why) : 'Two MiniMax clips from this still, one circling left and one right (' + k.mins + ' min each, on both computers at once when both are free). Then dragging shows real painted sides instead of stretched depth.'}</p>`; }
+    x += `<div class="row"><label>Make</label>${seg('data-d3mode', [['sides', '🎞 Left and right'], ['circle', '⭕ Full circle']], circ ? 'circle' : 'sides')}</div>`
+      + (circ ? `<div class="row"><label>Last frame</label>${seg('data-d3home', [['still', 'This still'], ['free', 'Leave it free']], ph.circHome || 'still')}</div>` : `<div class="row"><label>How far</label>${seg('data-d3deg', [[20, 'A little'], [35, 'Some'], [60, 'A lot']], deg)}</div>`)
+      + `<div class="btnrow"><button class="btn" data-cm="d3orb" ${k.why ? 'disabled' : ''}>${circ ? '⭕ ' + (d3CircReady(ph) ? 'Make the circle again' : 'Circle all the way round') : '🎞 ' + (d3OrbReady(ph) ? 'Make the views again' : 'Make real angles with MiniMax')}</button></div>
+      <p class="note">${k.why ? esc(k.why) : circ ? 'One MiniMax clip that circles all the way round the still and lands back on it (' + (ph.circHome==='free' ? 'this still is only its first frame, so nothing tempts it to stand still, but it may not come all the way home' : 'this still is its first and last frame, so it lands back on-model; if MiniMax barely moves, try Leave it free') + ', ' + k.mins + ' min). Dragging then turns right round the scene.' : 'Two MiniMax clips from this still, one circling left and one right (' + k.mins + ' min each, on both computers at once when both are free). Then dragging shows real painted sides instead of stretched depth.'}</p>`; }
   if(d3OrbReady(ph)) x += fuseHtml(ph);
   return x; }
 async function d3Orbit(p){
-  const ph = p.d3, pg = cmPage(), i = pg.panels.indexOf(p); if(!ph) return; ph.orbs = {}; let avoid = null;
-  for(const side of ['left', 'right']){
+  const ph = p.d3, pg = cmPage(), i = pg.panels.indexOf(p); if(!ph) return; let avoid = null; const circ = ph.orbMode==='circle', sides = circ ? ['circle'] : ['left', 'right'];
+  ph.orbs = ph.orbs || {}; sides.forEach(sd => { delete ph.orbs[sd]; if(D3ERR[ph.id]) delete D3ERR[ph.id]; }); if(['mm', 'circle'].includes(ph.view)) ph.view = 'depth'; if(!circ) delete ph.fuse;
+  for(const side of sides){
     const host = ph.orbs[side] = {id:ph.id + '_' + side, busy:'Sending the still…'}, k = kitOrbit(avoid); drawComic();
     try{ if(k.why) throw new Error(k.why); avoid = k.url;
       const img = S.test ? 'test.png' : await cmUp(ph.url, k.url), sz = S.test ? [576, 1024] : await obSize(ph.url), [w, h] = obCanvas(sz[0], sz[1], 576);
-      const prefix = cmPrefixP(pg, i, 'orbit_' + side), G = orbitGraph(k, img, {dir:side, deg:ph.orbDeg || 35, tilt:0, scene:p.text}, w, h, prefix);
+      const prefix = cmPrefixP(pg, i, 'orbit_' + side), G = orbitGraph(k, img, side==='circle' ? {mode:'circle', scene:p.text, home:ph.circHome!=='free'} : {dir:side, deg:ph.orbDeg || 35, tilt:0, scene:p.text}, w, h, prefix);
       if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete host.busy; cmGot(host, 'orbit', {test:true}); continue; }
       const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
       if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
       host.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:(k.steps===20 ? 15 : k.fl ? 5 : 3) * cmSlow(k.url), smp:samplerOf(G.g), kind:'orbit', side, video:true}; delete host.busy; save(); drawComic(); cmWait(host);
-    }catch(err){ delete host.busy; host.err = "Couldn't make the " + side + ' view: ' + err.message; save(); drawComic(); }
+    }catch(err){ delete host.busy; host.err = "Couldn't make the " + (side==='circle' ? 'full circle' : side + ' view') + ': ' + err.message; save(); drawComic(); }
   }
 }
 // the frames of the move, small enough to keep on a phone (16 a side at about 640 px)
-function d3Frames(url){
-  if(D3F[url]) return D3F[url];
+function d3Frames(url, all){
+  if(D3F[url]) return D3F[url]; const N = all ? D3_CIRC_N : D3_ORB_N;
   const F = D3F[url] = {ready:false, list:[], f:0}, tell = f => { F.f = f; d3LoadBar(); };
   F.wait = (async () => {
-    if(url==='test'){ for(let n = 0; n < D3_ORB_N; n++){ const c = document.createElement('canvas'); c.width = 64; c.height = 112; const x = c.getContext('2d'); x.fillStyle = 'hsl(' + n * 20 + ',70%,50%)'; x.fillRect(0, 0, 64, 112); F.list.push(c); } F.ready = true; return F; }
-    const v = await d3Video(url, f => tell(0.6 * f)), end = Math.min(v.duration - 0.05, 4), s = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
-    for(let n = 0; n < D3_ORB_N; n++){ await d3SeekTo(v, end * n / (D3_ORB_N - 1)); tell(0.6 + 0.4 * (n + 1) / D3_ORB_N);
+    if(url==='test'){ for(let n = 0; n < N; n++){ const c = document.createElement('canvas'); c.width = 64; c.height = 112; const x = c.getContext('2d'); x.fillStyle = 'hsl(' + n * 20 + ',70%,50%)'; x.fillRect(0, 0, 64, 112); F.list.push(c); } F.ready = true; return F; }
+    const v = await d3Video(url, f => tell(0.6 * f)), end = all ? v.duration - 0.05 : Math.min(v.duration - 0.05, 4), s = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
+    for(let n = 0; n < N; n++){ await d3SeekTo(v, end * n / (N - 1)); tell(0.6 + 0.4 * (n + 1) / N);
       const c = document.createElement('canvas'); c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); F.list.push(c); }
     v.removeAttribute('src'); v.load(); F.ready = true; return F; })().catch(e => { delete D3F[url]; throw e; });
   return F; }
@@ -6999,10 +7015,11 @@ async function d3Video(url, prog){
   await ready; return v; }
 function d3SeekTo(v, t){ return new Promise(ok => { let done = false; const fin = () => { if(!done){ done = true; ok(); } }; v.addEventListener('seeked', fin, {once:true}); setTimeout(fin, 3000); v.currentTime = t; }); }
 // the views' loading bar: both clips, downloaded then cut into frames
-function d3LoadBar(){ const pg = cmPage(); if(!pg || $('#comic').hidden) return; const ph = (pg.panels[CM().sel] || {}).d3; if(!ph || !d3OrbReady(ph)) return;
-  const fs = ['left', 'right'].map(sd => D3F[ph.orbs[sd].url]), f = fs.reduce((a, F) => a + (F ? (F.ready ? 1 : F.f || 0) : 0), 0) / 2;
+function d3LoadBar(){ const pg = cmPage(); if(!pg || $('#comic').hidden) return; const ph = (pg.panels[CM().sel] || {}).d3; if(!ph || !ph.orbs) return;
+  if(!(ph.view==='circle' ? d3CircReady(ph) : d3OrbReady(ph))) return;
+  const fs = (ph.view==='circle' ? ['circle', 'circle'] : ['left', 'right']).map(sd => D3F[ph.orbs[sd].url]), f = fs.reduce((a, F) => a + (F ? (F.ready ? 1 : F.f || 0) : 0), 0) / 2;
   document.querySelectorAll('[data-d3load]').forEach(el => el.style.width = (100 * f).toFixed(1) + '%');
-  document.querySelectorAll('[data-d3loadtxt]').forEach(el => el.textContent = 'Loading the views… ' + Math.round(100 * f) + '%' + (f < 0.6 ? ' (downloading the clips)' : ' (taking the frames)')); }
+  document.querySelectorAll('[data-d3loadtxt]').forEach(el => el.textContent = (ph.view==='circle' ? 'Loading the circle… ' : 'Loading the views… ') + Math.round(100 * f) + '%' + (f < 0.6 ? ' (downloading the clips)' : ' (taking the frames)')); }
 // yaw > 0 is the camera moving right, as in the depth view: the right orbit's frame that far along, blended between neighbours
 function d3MmDraw(ph, cv){
   if(!d3OrbReady(ph)) return false; const yaw = +ph.yaw || 0, F = d3Frames(ph.orbs[yaw >= 0 ? 'right' : 'left'].url);
@@ -7010,12 +7027,19 @@ function d3MmDraw(ph, cv){
   const f = Math.min(1, Math.abs(yaw) / 0.35) * (F.list.length - 1), a = Math.floor(f), b = Math.min(F.list.length - 1, a + 1), x = cv.getContext('2d');
   const draw = (c, al) => { const r = Math.max(cv.width / c.width, cv.height / c.height), w = c.width * r, h = c.height * r; x.globalAlpha = al; x.drawImage(c, (cv.width - w) / 2, (cv.height - h) / 2, w, h); };
   x.globalAlpha = 1; x.fillStyle = '#000'; x.fillRect(0, 0, cv.width, cv.height); draw(F.list[a], 1); if(b!==a) draw(F.list[b], f - a); x.globalAlpha = 1; return true; }
+const d3CircAt = ph => { const t = ((+ph.yaw || 0) * (ph.circRev ? -1 : 1)) / (2 * Math.PI); return t - Math.floor(t); }; // 0..1 along the clip
+function d3CircDraw(ph, cv){
+  if(!d3CircReady(ph)) return false; const F = d3Frames(ph.orbs.circle.url, true);
+  if(!F.ready){ if(!F.hooked){ F.hooked = true; F.wait.then(() => { delete D3ERR[ph.id]; d3Redraw(); if(!$('#comic').hidden) drawComic(); }).catch(e => { D3ERR[ph.id] = "Couldn't load the circle: " + e.message; if(!$('#comic').hidden) drawComic(); }); } return false; }
+  const f = d3CircAt(ph) * (F.list.length - 1), a = Math.floor(f), b = Math.min(F.list.length - 1, a + 1), x = cv.getContext('2d');
+  const draw = (c, al) => { const r = Math.max(cv.width / c.width, cv.height / c.height), w = c.width * r, h = c.height * r; x.globalAlpha = al; x.drawImage(c, (cv.width - w) / 2, (cv.height - h) / 2, w, h); };
+  x.globalAlpha = 1; x.fillStyle = '#000'; x.fillRect(0, 0, cv.width, cv.height); draw(F.list[a], 1); if(b!==a) draw(F.list[b], f - a); x.globalAlpha = 1; return true; }
 // Use this angle on a MiniMax view: that moment of the clip at full size, finished in Illustrious as a new still
 async function d3UseMm(p){
-  const ph = p.d3, yaw = +ph.yaw || 0, url = ph.orbs[yaw >= 0 ? 'right' : 'left'].url, frac = Math.min(1, Math.abs(yaw) / 0.35);
+  const ph = p.d3, yaw = +ph.yaw || 0, circ = ph.view==='circle', url = circ ? ph.orbs.circle.url : ph.orbs[yaw >= 0 ? 'right' : 'left'].url, frac = circ ? d3CircAt(ph) : Math.min(1, Math.abs(yaw) / 0.35);
   try{ let c; toast('Taking that view…');
     if(url==='test'){ c = document.createElement('canvas'); c.width = 576; c.height = 1024; c.getContext('2d').fillRect(0, 0, 576, 1024); }
-    else { const v = await d3Video(url); await d3SeekTo(v, Math.min(v.duration - 0.05, 4) * frac);
+    else { const v = await d3Video(url); await d3SeekTo(v, (circ ? v.duration - 0.05 : Math.min(v.duration - 0.05, 4)) * frac);
       c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); }
     CMFIN[p.id] = c; cmJobs('finish', [p]); }
   catch(err){ toast("Couldn't take that view: " + err.message, true); } }
@@ -7193,6 +7217,7 @@ function d3Redraw(){
   const ar = (ph.w || 16) / (ph.h || 9), w = cv.clientWidth || 320, h = Math.round(w / ar), d = Math.min(2, window.devicePixelRatio || 1), W = Math.round(w * d), H = Math.round(h * d);
   if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; cv.style.height = h + 'px'; }
   if(ph.view==='mm' && d3MmDraw(ph, cv)) return;
+  if(ph.view==='circle' && d3CircDraw(ph, cv)) return;
   if(ph.view==='fuse' && fuseDraw(ph, cv)) return;
   const m0 = scMesh(d3Layers(ph)[0]); if(m0.ready && (ph.w!==m0.w || ph.h!==m0.h)){ ph.w = m0.w; ph.h = m0.h; requestAnimationFrame(d3Redraw); }
   try{ cv.getContext('2d').drawImage(scDraw(d3Layers(ph), d3Cam(ph, W, H), W, H, 'colour', D3_NEAR, d3Far(ph)), 0, 0); }catch(e){ toast(e.message, true); }
@@ -7202,6 +7227,7 @@ function d3Touch(){
   const ph = () => cmPage().panels[CM().sel].d3;
   cv.onpointerdown = e => { e.preventDefault(); cv.setPointerCapture(e.pointerId); drag = {x:e.clientX, y:e.clientY}; d3Wiggle(false); };
   cv.onpointermove = e => { if(!drag) return; const r = cv.getBoundingClientRect(), q = ph(), dx = (e.clientX - drag.x) / r.width, dy = (e.clientY - drag.y) / r.height;
+    if(q.view==='circle'){ q.yaw = (+q.yaw || 0) + dx * Math.PI; q.pitch = 0; drag = {x:e.clientX, y:e.clientY}; d3Redraw(); return; }
     const fz = q.view==='fuse', ym = fz ? 1.2 : 0.35, pm = fz ? 0.6 : 0.18; // the 3D model turns much further
     q.yaw = Math.max(-ym, Math.min(ym, (+q.yaw || 0) - dx * (fz ? 2 : 0.8))); q.pitch = Math.max(-pm, Math.min(pm, (+q.pitch || 0) + dy * (fz ? 1.2 : 0.5))); drag = {x:e.clientX, y:e.clientY}; d3Redraw(); };
   cv.onpointerup = cv.onpointercancel = () => { if(drag){ drag = null; save(); } };
@@ -7212,7 +7238,7 @@ function d3Wiggle(on){
   const pg = cmPage(), ph = pg && pg.panels[CM().sel].d3; if(!ph) return;
   if(!on){ if(D3.keep){ ph.yaw = D3.keep[0]; ph.pitch = D3.keep[1]; D3.keep = null; d3Redraw(); } return; }
   D3.keep = [+ph.yaw || 0, +ph.pitch || 0]; D3.t0 = performance.now();
-  const step = t => { if(!D3.play) return; const a = (t - D3.t0) / 1000 * Math.PI * 2 / 2.4, mm = ph.view==='mm' || ph.view==='fuse'; ph.yaw = mm ? 0.3 * Math.sin(a) : D3.keep[0] + 0.1 * Math.sin(a); ph.pitch = mm ? 0 : D3.keep[1] + 0.025 * Math.sin(2 * a); d3Redraw(); D3.raf = requestAnimationFrame(step); };
+  const step = t => { if(!D3.play) return; const a = (t - D3.t0) / 1000 * Math.PI * 2 / 2.4, mm = ph.view==='mm' || ph.view==='fuse'; if(ph.view==='circle'){ ph.yaw = D3.keep[0] + a / 4; ph.pitch = 0; d3Redraw(); D3.raf = requestAnimationFrame(step); return; } ph.yaw = mm ? 0.3 * Math.sin(a) : D3.keep[0] + 0.1 * Math.sin(a); ph.pitch = mm ? 0 : D3.keep[1] + 0.025 * Math.sin(2 * a); d3Redraw(); D3.raf = requestAnimationFrame(step); };
   D3.raf = requestAnimationFrame(step);
 }
 // two swings recorded off the canvas, offered to the phone (mp4 where the phone records it, else webm)
@@ -7430,7 +7456,7 @@ function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.c
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-fusen]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-fusen]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7449,6 +7475,9 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmfin!=null){ cm.finDn = +t.dataset.cmfin; }
   else if(t.dataset.d3view && p && p.d3){ p.d3.view = t.dataset.d3view; p.d3.yaw = p.d3.pitch = 0; }
   else if(t.dataset.d3deg && p && p.d3){ p.d3.orbDeg = +t.dataset.d3deg; }
+  else if(t.dataset.d3mode && p && p.d3){ p.d3.orbMode = t.dataset.d3mode; }
+  else if(t.dataset.d3home && p && p.d3){ p.d3.circHome = t.dataset.d3home; }
+  else if(a==='d3rev' && p.d3){ p.d3.circRev = !p.d3.circRev; }
   else if(t.dataset.fusen && p && p.d3 && p.d3.fuse){ p.d3.fuse.n = +t.dataset.fusen; }
   else if(a==='retag'){ p.tags = null; }
   else if(a==='stop'){ cmStop([p].concat(p.extra || [])); return; }
@@ -7458,7 +7487,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='d3getda3'){ fuseGet(t.dataset.pc); return; }
   else if(a==='d3flip' && p.d3 && p.d3.fuse){ p.d3.fuse.flip = !p.d3.fuse.flip; save(); d3Redraw(); return; }
   else if(a==='d3orb'){ d3Orbit(p); return; }
-  else if(a==='d3use' && p.d3 && p.d3.view==='mm' && d3OrbReady(p.d3)){ d3UseMm(p); return; }
+  else if(a==='d3use' && p.d3 && (p.d3.view==='mm' && d3OrbReady(p.d3) || p.d3.view==='circle' && d3CircReady(p.d3))){ d3UseMm(p); return; }
   else if(a==='d3moge'){ d3GetMoge(t.dataset.pc); return; }
   else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = {id:p.id + '_3d', url:st.url, amt:1}; cmDepth(p.d3, st.url); return; }
   else if(a==='d3off'){ p.d3 = null; }

@@ -297,6 +297,22 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
     const g = ALL[nb].prompt, sv = Object.values(g).find(n => n.class_type==='SaveImage');
     ok(/panel_3\/finished/.test(sv.inputs.filename_prefix) && Object.values(g).some(n => n.class_type==='ColorMatch'), 'Use this angle on a MiniMax view finishes that exact frame in Illustrious as a new still'); }
+  // ---- ⭕ Full circle: one MiniMax clip all the way round, the still as first and last frame, scrubbed forward or back ----
+  await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; p.d3.view = 'depth'; drawComic(); });
+  await page.click('#comic [data-d3mode="circle"]');
+  { const nb = ALL.length; await page.click('#comic [data-cm="d3orb"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3CircReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
+    const gs = ALL.slice(nb).map(x => x.prompt), iv = Object.values(gs[0]).find(n => n.class_type==='MiniMaxH3ImageToVideo'), sv = Object.values(gs[0]).find(n => n.class_type==='SaveVideo');
+    ok(gs.length===1 && iv.inputs.last_frame && iv.inputs.first_frame && JSON.stringify(iv.inputs.last_frame)===JSON.stringify(iv.inputs.first_frame) && /360-degree orbit/.test(iv.inputs.prompt) && /panel_3\/orbit_circle$/.test(sv.inputs.filename_prefix)
+      && await page.evaluate(() => d3OrbReady(cmPage().panels[2].d3)), '⭕ Full circle: one FL2V clip with the still as first and last frame, a timed 360 prompt; the left/right views are kept'); }
+  await page.click('#comic [data-d3view="circle"]');
+  await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return D3F[q.orbs.circle.url] && D3F[q.orbs.circle.url].ready; }, null, {timeout:20000}).catch(() => {});
+  ok(await page.evaluate(() => { const q = cmPage().panels[2].d3; q.yaw = Math.PI; const a = d3CircAt(q); q.yaw = -Math.PI / 2; const b = d3CircAt(q); return Math.abs(a - 0.5) < 1e-6 && Math.abs(b - 0.75) < 1e-6 && d3CircDraw(q, document.querySelector('#comic [data-d3view]')); }),
+    'dragging right plays the circle forward, left plays it backward from the end');
+  { await page.click('#comic [data-d3mode="circle"]').catch(() => {}); await page.click('#comic [data-d3home="free"]'); const nb = ALL.length; await page.click('#comic [data-cm="d3orb"]');
+    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3CircReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
+    const iv = Object.values(ALL[nb].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo'); ok(!iv.inputs.last_frame, 'Last frame: Leave it free sends only the first frame'); }
+  await page.evaluate(() => { cmPage().panels[2].d3.orbMode = 'sides'; cmPage().panels[2].d3.view = 'depth'; drawComic(); });
   // ---- 🧊 the orbit views fused into a 3D model (Depth Anything 3, multiview) ----
   await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; p.d3.view = 'depth'; drawComic(); });
   ok(/update ComfyUI/.test(await page.textContent('#comic .d3box')), 'without the Depth Anything 3 nodes, the 3D look says to update ComfyUI');

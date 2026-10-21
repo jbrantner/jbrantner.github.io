@@ -4,3 +4,5 @@
 **v.104 (2026-10-21):** More progress bars, so a stuck job is easy to spot (Jordan asked). The MiniMax views show a loading bar with a % (downloading the clips, then taking the frames). Fuse shows a bar while it sends the 17 frames, then the real queue state ("Waiting behind N jobs", time so far). Every short step without a number (sending pictures, grabbing a frame) shows a moving bar.
 
 **v.105 (2026-10-21):** 🧊 Fuse no longer says "update ComfyUI" when the computers just can't be reached; it says to check Tailscale instead.
+
+**v.106 (2026-10-21):** 3D look ⭕ Full circle (Jordan's idea): one MiniMax FL2V clip that circles all the way round the still, using the still as first and last frame (Last frame: This still / Leave it free). The prompt has timed checkpoints: profile 1.3 s, back 2.6 s, other profile 3.9 s, home 5 s. Swing with ⭕ Full circle: dragging right plays it forward, left plays it backward from the end, with no stop; ↔ flips the direction; Wiggle spins it slowly; Use this angle finishes that frame. The left/right views are kept alongside.
