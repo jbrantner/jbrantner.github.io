@@ -22,3 +22,5 @@
 - Turn into 3D object makes a MiniMax full circle of the still on plain white. It then takes 16 views (every 22.5°) and reads each one's depth (MoGe-2 or Depth Anything) in one job; her outline comes from the white.
 - A **Turn** slider (-8 to 8, front in the middle) picks the view, and a finger swings that view's own depth. Wiggle, ↺, ↔ Swap left and right, and Use this angle (on white) all work on it.
 - The old 3D look experiments (layers, MiniMax views, Full circle, Fuse, her model, Flat cut-out) are no longer reachable from the panel.
+
+**v.113 (2026-10-21):** 🧊 3D object: the 16 views now use Depth Anything (MoGe-2 stopped on a mostly white view with "max() iterable argument is empty"). MoGe is only used when there's no Depth Anything, and a MoGe failure retries once with Depth Anything.
