@@ -24,3 +24,5 @@
 - The old 3D look experiments (layers, MiniMax views, Full circle, Fuse, her model, Flat cut-out) are no longer reachable from the panel.
 
 **v.113 (2026-10-21):** 🧊 3D object: the 16 views now use Depth Anything (MoGe-2 stopped on a mostly white view with "max() iterable argument is empty"). MoGe is only used when there's no Depth Anything, and a MoGe failure retries once with Depth Anything.
+
+**v.114 (2026-10-21)**: 🧊 Turn into 3D object is all video now, with no depth step (Jordan: Depth Anything wasn't good enough). MiniMax circles her on white three times: at eye level, from a high angle and from a low angle. The high and low circles start and end on the last frame of a crane up or down from the still, so all three show the same her. Each ring is lined up with the eye-level circle by her outline and colours (dynamic time warping), because MiniMax doesn't turn at an even speed. Drag sideways (or use the Turn slider) to walk round her. Drag up or down (or tap the Height buttons) to snap to the high or low circle at the same angle. ✨ Use this angle finishes the exact frame showing.
