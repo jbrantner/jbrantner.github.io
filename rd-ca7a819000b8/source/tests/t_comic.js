@@ -17,7 +17,7 @@ const DEF = {
   ConditioningSetArea:[['conditioning','width','height','x','y','strength'],1], ConditioningCombine:[['conditioning_1','conditioning_2'],1],
   ImageScale:[['image','upscale_method','width','height','crop'],1], VAEEncode:[['pixels','vae'],1], VAEDecode:[['samples','vae'],1], EmptyLatentImage:[['width','height','batch_size'],1],
   ImageBlend:[['image1','image2','blend_factor','blend_mode'],1], ImageToMask:[['image','channel'],1], ThresholdMask:[['mask','value'],1], GrowMask:[['mask','expand'],1], ImageCompositeMasked:[['destination','source','x','y','mask'],1],
-  ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
+  DepthAnythingV2Preprocessor:[['image','resolution'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
   SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
   KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], SaveImage:[['images','filename_prefix'],0],
@@ -33,7 +33,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']), weight_dtype:C(['default'])}}},
   MiniMaxH3ImageToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, CLIPTextEncode:{input:{required:{}}}, ConditioningSetArea:{input:{required:{}}}, ConditioningCombine:{input:{required:{}}},
   ImageScale:{input:{required:{}}}, VAEEncode:{input:{required:{}}}, VAEDecode:{input:{required:{}}}, EmptyLatentImage:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}}, FeatherMask:{input:{required:{}}}, SetLatentNoiseMask:{input:{required:{}}}, ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}},
-  ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
+  DepthAnythingV2Preprocessor:{input:{required:{ckpt_name:C(['depth_anything_v2_vitl.pth'])}}}, ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
   LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:C(['BiRefNet-general.safetensors'])}}}, RemoveBackground:{input:{required:{}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['stable_diffusion','minimax'])}}},
   VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
@@ -237,6 +237,31 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     ok(check(g).length===0 && types.join()==='depth,openpose' && new Set(imgs.split(',')).size===3, 'a scene still: the colours as the start, ProMax depth for the empty place, then OpenPose for the people: ' + check(g).join('; ') + ' ' + types);
     const ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise), cmp = n.find(x => x.class_type==='ImageCompositeMasked');
     ok(ks.join()==='0.72,1,0.3' && cmp && g[cmp.inputs.destination[0]].class_type==='VAEDecode', 'pass A at 0.72, the people at 1 in their mask, a 0.3 light pass, and the clean pass A pasted back over all but the people: ' + ks); }
+  // the place picture in 3D, as the scene's set
+  await page.click('#comic [data-scmode="box"]'); await page.click('#comic [data-sc="photo"]');
+  await page.waitForFunction(() => CM().scene.photo && CM().scene.photo.depth && !CM().scene.photo.making, null, {timeout:20000});
+  { const g = ALL[ALL.length - 1].prompt, n = Object.values(g), d = n.find(x => x.class_type==='DepthAnythingV2Preprocessor');
+    ok(check(g).length===0 && d && d.inputs.ckpt_name==='depth_anything_v2_vitl.pth' && /comics\/depth/.test(n.find(x => x.class_type==='SaveImage').inputs.filename_prefix) && await page.evaluate(() => !CM().scene.boxes.length),
+      '🌄 The place picture in 3D: Depth Anything V2 reads its depth on a computer, and it replaces the template boxes: ' + check(g).join('; ')); }
+  await page.waitForTimeout(400); ok(await lit() > 100 && await page.$('#comic [data-scph="near"]'), 'the scene shows the picture as a relief, with its depth sliders');
+  { const nb = ALL.length; await page.click('#comic [data-cm="still1"]'); await page.waitForTimeout(150); await page.waitForFunction(() => !cmBusy(cmPage().panels[2]), null, {timeout:20000});
+    ok(ALL.length===nb + 1 && check(ALL[nb].prompt).length===0, 'a still painted from the picture set: ' + (ALL[nb] ? check(ALL[nb].prompt).join('; ') : 'not sent')); }
+  // 🌄 3D look on a still, and ✨ Use this angle
+  await page.click('#comic [data-cm="d3"]');
+  await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q && q.depth && !q.making; }, null, {timeout:20000});
+  await page.waitForSelector('#comic [data-d3view]'); await page.waitForTimeout(400);
+  { const n = await page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
+    ok(n > 100, '🌄 3D look draws the still as a relief'); }
+  await (await page.$('#comic [data-d3view]')).scrollIntoViewIfNeeded();
+  { const bx = await (await page.$('#comic [data-d3view]')).boundingBox();
+    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.5); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.6, bx.y + bx.height * 0.5, {steps:4}); await page.mouse.up();
+    ok(await page.evaluate(() => Math.abs(cmPage().panels[2].d3.yaw) > 0.05), 'dragging swings its angle a little'); }
+  await page.click('#comic [data-cm="d3wig"]'); await page.waitForTimeout(300); ok(await page.evaluate(() => D3.play), '▶ Wiggle swings it side to side'); await page.click('#comic [data-cm="d3wig"]');
+  { const n0 = await page.evaluate(() => cmPage().panels[2].stills.length), nb = ALL.length; await page.click('#comic [data-cm="d3use"]');
+    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
+    const g = ALL[nb].prompt, n = Object.values(g), ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
+    ok(check(g).length===0 && ks.join()==='0.65,0.25' && n.some(x => x.class_type==='SetLatentNoiseMask') && n.find(x => x.class_type==='SetUnionControlNetType').inputs.type==='tile' && n.filter(x => x.class_type==='LoadImage').length===2,
+      '✨ Use this angle: the swung view, its torn edges repainted at 0.65 then 0.25 over all, held by ProMax tile, lands as a new still: ' + check(g).join('; ') + ' ' + ks); }
   await page.click('#comic [data-scmode="box"]'); await page.click('#comic [data-sctpl="room"]');
   ok(await page.evaluate(() => CM().scene.boxes.some(b => b.name==='Back wall')), 'the Room template replaces the boxes');
   await page.click('#comic [data-cm="sceneoff"]'); ok(await page.evaluate(() => !cmUseScene(CM())), 'the place picture can be used again instead');

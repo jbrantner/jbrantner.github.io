@@ -609,7 +609,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.94'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.95'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6166,7 +6166,7 @@ const CMUP = {};           // computer|picture url -> the name it has in that co
 let CM_SENT = [];          // Test mode: the graphs made
 const CM = () => S.comic || (S.comic = {script:'', pages:[], cur:0, sel:0, cast:[], place:'', loc:null, styleLine:'Animation in the style of 2D anime.', vlora:'', vloraW:1, quality:'quick', route:'still', open:{script:true}});
 const cmPage = () => { const cm = CM(); return cm.pages[cm.cur] || null; };
-const cmAll = () => [S.comic, S.stash && S.stash.comic].filter(Boolean).flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || []))).concat(cm.pj ? [cm.pj] : []));
+const cmAll = () => [S.comic, S.stash && S.stash.comic].filter(Boolean).flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3] : []))).concat(cm.pj ? [cm.pj] : [], cm.scene && cm.scene.photo ? [cm.scene.photo] : []));
 // a panel's still options are painted as jobs of their own (p.extra), so they spread over both computers
 const cmBusy = p => !!(p.making || p.busy || (p.extra || []).length);
 const cmLead = p => p.making || p.busy ? p : (p.extra || []).find(x => x.making || x.busy) || null;
@@ -6403,18 +6403,18 @@ async function cmWait(p){
   const m = p.making; if(!m || CM_RUN.has(m.id)) return; CM_RUN.add(m.id);
   let got = null;
   try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, m.video!==false); got = {url:viewUrl(f, m.pc), pc:m.pc, w:m.w, h:m.h, t:Date.now()}; }
-  catch(err){ p.err = "Couldn't make the " + ({still:'still', plate:'place'}[m.kind] || 'clip') + ': ' + err.message; }
+  catch(err){ p.err = "Couldn't make the " + ({still:'still', angle:'new angle', plate:'place', depth:'depth'}[m.kind] || 'clip') + ': ' + err.message; }
   finally{ CM_RUN.delete(m.id); if(p.making===m) p.making = null; if(got) cmGot(p, m.kind || 'clip', got); else { cmDrop(p); save(); if(!$('#comic').hidden) drawComic(); } }
 }
 // an option job that is over (or failed) leaves its panel, passing its error on
 function cmDrop(c){ if(!c.parent) return; const p = cmAll().find(x => x.id===c.parent && !x.parent); if(!p) return; if(c.err) p.err = c.err; p.extra = (p.extra || []).filter(x => x!==c); }
-function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', plate:'Painting the place'}[m.kind] || 'Animating') : null; }
+function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', angle:'Painting the new angle', plate:'Painting the place', depth:'Reading the depth'}[m.kind] || 'Animating') : null; }
 function cmBar(){ if($('#comic').hidden) return; const pg = cmPage(); if(!pg) return;
-  pg.panels.concat(CM().pj || []).forEach(p => { const l = cmLead(p); if(!l || !l.making) return; const e = cmEta(l), n = (p.extra || []).length + (p.making ? 1 : 0);
+  pg.panels.concat(CM().pj || [], pg.panels.map(q => q.d3).filter(Boolean), CM().scene && CM().scene.photo || []).forEach(p => { const l = cmLead(p); if(!l || !l.making) return; const e = cmEta(l), n = (p.extra || []).length + (p.making ? 1 : 0);
     document.querySelectorAll(`[data-cmbar="${p.id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
     document.querySelectorAll(`[data-cmtxt="${p.id}"]`).forEach(el => el.textContent = e.text + (n > 1 ? ' · ' + n + ' options to go' : '')); }); }
 let cmTicks = 0;
-setInterval(() => { if($('#comic').hidden || document.visibilityState!=='visible') return; const pg = cmPage(), busy = pg ? pg.panels.flatMap(p => [p].concat(p.extra || [])).concat(CM().pj || []).filter(p => p.making) : [];
+setInterval(() => { if($('#comic').hidden || document.visibilityState!=='visible') return; const pg = cmPage(), busy = pg ? pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 || [])).concat(CM().pj || [], CM().scene && CM().scene.photo || []).filter(p => p.making) : [];
   if(!busy.length) return; if(!S.test && ++cmTicks % 5===1) busy.forEach(p => liveQueue(p.making.id, p.making.pc).then(cmBar)); cmBar(); }, 1000);
 
 // --- phase 2 (Jordan 2026-10-21): stills first. The place is painted once with nobody in it (the plate); each panel's still is
@@ -6607,15 +6607,15 @@ const cmShown = p => { const t = p.takes[p.take], s = cmStill(p); return t && (p
 const cmSlow = url => url===farmHost() || url==='test' ? 1 : 1.26;
 // one job of any kind on the computer that will be free soonest
 async function cmJobs(kind, list){
-  const cm = CM(), pg = cmPage(), kits = kind==='still' || kind==='plate' ? cmIllKits() : cmFlKits(); if(!list.length) return;
+  const cm = CM(), pg = cmPage(), kits = kind==='still' || kind==='plate' || kind==='angle' ? cmIllKits() : cmFlKits(); if(!list.length) return;
   if(!kits.length){ toast(kind==='anim' ? cmWhy() : !S.test && !allPcs().some(x => x.online) ? cmWhy() : 'None of your computers that are on has an Illustrious checkpoint and the mask nodes', true); return; }
-  const mins = k => (kind==='anim' ? (k.fl ? 4.5 : 3) : kind==='plate' ? 1 : 1.5) * cmSlow(k.url);
+  const mins = k => (kind==='anim' ? (k.fl ? 4.5 : 3) : kind==='plate' || kind==='angle' ? 1 : 1.5) * cmSlow(k.url);
   const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(p => p.making && p.making.pc===k.url).length);
   buzz();
   const next = () => { const k = kits.slice().sort((a, b) => (load[a.url] + 1) * mins(a) - (load[b.url] + 1) * mins(b))[0]; load[k.url]++; return k; }, ups = {};
   for(const p of list){ if(cmBusy(p)) continue;
-    if(kind==='still'){ p.stillPicked = false; // a set of options, each its own job on whichever computer is free soonest
-      const n = cmOpts(cm), cs = Array.from({length:n}, (_, o) => ({id:uid('x'), parent:p.id, opt:o + 1})); p.extra = cs;
+    if(kind==='still' || kind==='angle'){ p.stillPicked = false; // a set of options, each its own job on whichever computer is free soonest
+      const n = kind==='angle' ? 1 : cmOpts(cm), cs = Array.from({length:n}, (_, o) => ({id:uid('x'), parent:p.id, opt:o + 1})); p.extra = cs;
       for(const c of cs){ const k = next(); await cmJob(cm, pg, p, k, kind, mins(k), c, ups); } continue; }
     const k = next(); await cmJob(cm, pg, p, k, kind, mins(k)); }
 }
@@ -6628,18 +6628,22 @@ async function cmJob(cm, pg, p, k, kind, mins, host, ups){
     else if(kind==='still'){ prefix = cmPrefix('still');
       if(cmUseScene(cm)){ // the panel's camera on the scene: colours, depth and the figures' OpenPose, sent once per computer
         const key = p.id + '|' + k.url; ups = ups || {};
-        ups[key] = ups[key] || (async () => { scEnsure(cm, pg, p, i); const [W, H] = cmStillSize(rect.w / rect.h), pics = scPictures(p, W, H), o = {};
+        ups[key] = ups[key] || (async () => { scEnsure(cm, pg, p, i); await scPhotoReady(cm.scene); const [W, H] = cmStillSize(rect.w / rect.h), pics = scPictures(p, W, H), o = {};
           for(const nm of ['colour', 'depth', 'pose']) o[nm] = (await uploadFrame(pics[nm], 'scene_' + nm, k.url)).img; return o; })();
         G = cmStillGraph(k, null, p, i, rect, prefix, await ups[key]); }
       else { const plate = cm.loc && cm.loc.url ? await cmUp(cm.loc.url, k.url) : cm.loc && cm.loc.test ? 'test-place.png' : null; G = cmStillGraph(k, plate, p, i, rect, prefix); }
       w = G.W; h = G.H; }
+    else if(kind==='angle'){ prefix = cmPrefix('still'); // the still swung a little in 3D, and its torn edges repainted
+      const ph = p.d3, [W, H] = cmStillSize(rect.w / rect.h); await scPhotoMesh(ph).wait;
+      const view = d3Picture(ph, W, H, 'colour'), torn = d3Picture(ph, W, H, 'stretch');
+      G = cmAngleGraph(k, (await uploadFrame(view, 'angle_view', k.url)).img, (await uploadFrame(torn, 'angle_torn', k.url)).img, p, i, rect, prefix); w = W; h = H; }
     else { const s = cmStill(p); if(!s) throw new Error('paint a still first'); prefix = cmPrefix('panel'); [w, h] = obCanvas(s.w || rect.w, s.h || rect.h, 576);
       G = cmAnimGraph(k, await cmUp(s.url, k.url), cmAnimPrompt(cm, p, i, rect), w, h, prefix); }
     if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete h0.busy; cmGot(h0, kind, {test:true, w, h, t:Date.now()}); return; }
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     h0.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins, smp:samplerOf(G.g), w, h, kind, video}; delete h0.busy; save(); drawComic(); cmWait(h0);
-  }catch(err){ delete h0.busy; if(h0!==p) cmDrop(h0); p.err = "Couldn't " + (kind==='plate' ? 'paint the place' : kind==='still' ? 'paint panel ' + (i + 1) : 'animate panel ' + (i + 1)) + ': ' + err.message; save(); drawComic(); }
+  }catch(err){ delete h0.busy; if(h0!==p) cmDrop(h0); p.err = "Couldn't " + (kind==='plate' ? 'paint the place' : kind==='angle' ? 'paint the new angle of panel ' + (i + 1) : kind==='still' ? 'paint panel ' + (i + 1) : 'animate panel ' + (i + 1)) + ': ' + err.message; save(); drawComic(); }
 }
 // --- phase 3: 🧱 the scene studio (Jordan 2026-10-21: "one panel may need to be the 3d studio where you can build the scene") ---
 // The place is built once from boxes (templates to start from: street, alley, room, library, café), each box with its own
@@ -6696,39 +6700,82 @@ const SC_FACES = [[0,1,2,3],[4,7,6,5],[0,4,5,1],[1,5,6,2],[2,6,7,3],[3,7,4,0]]; 
 const hexRgb = h => { const m = /^#?([0-9a-f]{6})$/i.exec(h || '') || [0, '888888']; const n = parseInt(m[1], 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; };
 // one WebGL2 canvas for every scene picture: colours (lit simply) or depth (near white, far black, as depth ControlNets expect)
 const SCGL = {};
+const SC_VS = `#version 300 es
+in vec3 p; in vec3 n; in vec3 c; in vec2 t; uniform vec3 cp, cr, cu, cf; uniform vec2 k; uniform float zn, zf; out vec3 vc; out vec3 vn; out vec2 vt; out float vz;
+void main(){ vec3 d = p - cp; float z = dot(d, cf); vz = z; vc = c; vn = n; vt = t; gl_Position = vec4(dot(d, cr) / k.x, dot(d, cu) / k.y, (zf + zn) / (zf - zn) * z - 2.0 * zf * zn / (zf - zn), z); }`;
 function scGL(){
   if(SCGL.gl) return SCGL;
   const cv = document.createElement('canvas'), gl = cv.getContext('webgl2', {preserveDrawingBuffer:true, antialias:true, alpha:false});
   if(!gl) throw new Error("this phone can't do WebGL2");
   const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-  const pr = gl.createProgram();
-  gl.attachShader(pr, sh(gl.VERTEX_SHADER, `#version 300 es
-in vec3 p; in vec3 n; in vec3 c; uniform vec3 cp, cr, cu, cf; uniform vec2 k; uniform float zn, zf; out vec3 vc; out vec3 vn; out float vz;
-void main(){ vec3 d = p - cp; float z = dot(d, cf); vz = z; vc = c; vn = n; gl_Position = vec4(dot(d, cr) / k.x, dot(d, cu) / k.y, (zf + zn) / (zf - zn) * z - 2.0 * zf * zn / (zf - zn), z); }`));
-  gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, `#version 300 es
-precision highp float; in vec3 vc; in vec3 vn; in float vz; uniform int mode; uniform float zn, zf; out vec4 o;
-void main(){ if(mode == 1){ float v = clamp((1.0 / vz - 1.0 / zf) / (1.0 / zn - 1.0 / zf), 0.0, 1.0); o = vec4(vec3(v), 1.0); return; }
-  vec3 L = normalize(vec3(0.45, 0.85, 0.35)); float s = 0.62 + 0.38 * max(dot(normalize(vn), L), 0.0); o = vec4(vc * s, 1.0); }`));
-  gl.linkProgram(pr); if(!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
-  Object.assign(SCGL, {cv, gl, pr, buf:gl.createBuffer()}); return SCGL;
+  const prog = fs => { const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, SC_VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, `#version 300 es
+precision highp float; in vec3 vc; in vec3 vn; in vec2 vt; in float vz; uniform int mode; uniform float zn, zf; uniform sampler2D img; out vec4 o;
+void main(){ if(mode == 1){ float v = clamp((1.0 / vz - 1.0 / zf) / (1.0 / zn - 1.0 / zf), 0.0, 1.0); o = vec4(vec3(v), 1.0); return; } ${fs} }`));
+    gl.bindAttribLocation(pr, 0, 'p'); gl.bindAttribLocation(pr, 1, 'n'); gl.bindAttribLocation(pr, 2, 'c'); gl.bindAttribLocation(pr, 3, 't');
+    gl.linkProgram(pr); if(!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr)); return pr; };
+  const pr = prog('if(mode == 2){ o = vec4(0.0, 0.0, 0.0, 1.0); return; } vec3 L = normalize(vec3(0.45, 0.85, 0.35)); float s = 0.62 + 0.38 * max(dot(normalize(vn), L), 0.0); o = vec4(vc * s, 1.0);');
+  const pp = prog('if(mode == 2){ o = vec4(vec3(step(0.3, vn.x)), 1.0); return; } o = vec4(texture(img, vt).rgb, 1.0);'); // mode 2: where the surface is torn open // a picture in 3D shows its own colours, unlit
+  const vao = gl.createVertexArray(), buf = gl.createBuffer(); gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  [0, 1, 2].forEach(i => { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 3, gl.FLOAT, false, 36, i * 12); }); gl.bindVertexArray(null);
+  Object.assign(SCGL, {cv, gl, pr, pp, buf, vao, mesh:{}}); return SCGL;
 }
-// draws the boxes as the camera sees them into the GL canvas (W x H); mode 'colour' or 'depth'
+// --- a picture in 3D (Jordan 2026-10-21: "let's see what that would look like"): a depth model (Depth Anything V2, from
+// comfyui_controlnet_aux) reads how far away each pixel is, and every pixel is pushed out along its ray from the camera that took
+// it, so the picture becomes a surface other cameras can look at a little from the side. It is a relief, not a full model: what
+// was hidden behind things has nothing there, so it stretches when the camera swings far.
+const SC_PH = {fov:40, near:1.6, far:40, y:0};
+function scPhotoCam(ph, W, H){ return scCam(Object.assign({}, SC_CAM0, {fov:ph.fov || SC_PH.fov}), W, H); }
+const scPhotoKey = ph => [ph.url, ph.depth, ph.fov, ph.near, ph.far, ph.y].join('|');
+const scLoadImg = url => new Promise((ok, no) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => ok(im); im.onerror = () => no(new Error('the picture could not be loaded')); im.src = url; });
+// the surface: a grid over the picture, each point at its depth (Depth Anything gives near as white, as inverse depth)
+function scPhotoMesh(ph){
+  const G = scGL(), key = scPhotoKey(ph); if(G.mesh[key]) return G.mesh[key];
+  if(ph._key && ph._key!==key) delete G.mesh[ph._key]; Object.defineProperty(ph, '_key', {value:key, writable:true, enumerable:false});
+  const m = G.mesh[key] = {ready:false};
+  m.wait = Promise.all([scLoadImg(ph.url), scLoadImg(ph.depth)]).then(([im, dm]) => {
+    const W = im.naturalWidth, H = im.naturalHeight, GW = 192, GH = Math.max(2, Math.round(GW * H / W));
+    ph.w = W; ph.h = H;
+    const c = document.createElement('canvas'); c.width = GW + 1; c.height = GH + 1; const x = c.getContext('2d'); x.drawImage(dm, 0, 0, GW + 1, GH + 1);
+    const D = x.getImageData(0, 0, GW + 1, GH + 1).data, cam = scPhotoCam(ph, W, H), near = +ph.near || SC_PH.near, far = Math.max(near + 0.5, +ph.far || SC_PH.far), y = +ph.y || 0;
+    const pos = new Float32Array((GW + 1) * (GH + 1) * 12), idx = [], Z = new Float32Array((GW + 1) * (GH + 1));
+    for(let q = 0; q < Z.length; q++) Z[q] = 1 / (1 / far + D[q * 4] / 255 * (1 / near - 1 / far));
+    // how torn the surface is at each point: a big jump in depth to a neighbour (the edge of a person in front of the wall)
+    const tear = (i, j) => { const z = Z[j * (GW + 1) + i]; let r = 1; for(const [a, b] of [[1,0],[-1,0],[0,1],[0,-1]]){ const ii = i + a, jj = j + b; if(ii < 0 || jj < 0 || ii > GW || jj > GH) continue; const w = Z[jj * (GW + 1) + ii]; r = Math.max(r, w / z, z / w); } return Math.min(1, (r - 1) / 0.35); };
+    for(let j = 0; j <= GH; j++) for(let i = 0; i <= GW; i++){ const q = j * (GW + 1) + i, u = i / GW, v = j / GH;
+      const z = Z[q], dir = V3.add(cam.f, V3.add(V3.mul(cam.r, (2 * u - 1) * cam.kx), V3.mul(cam.u, (1 - 2 * v) * cam.ky)));
+      const P = V3.add(cam.pos, V3.mul(dir, z)); pos.set([P[0], P[1] + y, P[2], tear(i, j), 0, 1, 1, 1, 1, u, v, 0], q * 12); }
+    for(let j = 0; j < GH; j++) for(let i = 0; i < GW; i++){ const a = j * (GW + 1) + i, b = a + 1, cc = a + GW + 1, d = cc + 1; idx.push(a, cc, b, b, cc, d); }
+    const gl = G.gl; m.vao = gl.createVertexArray(); gl.bindVertexArray(m.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    [0, 1, 2].forEach(i => { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 3, gl.FLOAT, false, 48, i * 12); }); gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, 48, 36);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW); gl.bindVertexArray(null);
+    m.tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, m.tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    m.n = idx.length; m.pts = []; for(let q = 0; q < pos.length; q += 12 * 97) m.pts.push([pos[q], pos[q + 1], pos[q + 2]]); m.ready = true; return m;
+  }).catch(err => { delete G.mesh[key]; ph.err = err.message; throw err; });
+  return m;
+}
+const scPhotoReady = async scene => { if(scene && scene.photo && scene.photo.depth) await scPhotoMesh(scene.photo).wait; };
+// draws the scene as the camera sees it into the GL canvas (W x H); mode 'colour' or 'depth'
 function scDraw(scene, cam, W, H, mode){
-  const {cv, gl, pr, buf} = scGL(); if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; }
-  const v = []; let zmin = 1e9, zmax = 0;
-  scene.boxes.forEach(b => { const P = scCorners(b), col = hexRgb(b.color);
-    P.forEach(q => { const z = V3.dot(V3.sub(q, cam.pos), cam.f); if(z > 0.05){ zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); } });
+  const G = scGL(), {cv, gl, pr, pp, buf, vao} = G; if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; }
+  const v = []; let zmin = 1e9, zmax = 0; const seeZ = q => { const z = V3.dot(V3.sub(q, cam.pos), cam.f); if(z > 0.05){ zmin = Math.min(zmin, z); zmax = Math.max(zmax, z); } };
+  scene.boxes.forEach(b => { const P = scCorners(b), col = hexRgb(b.color); P.forEach(seeZ);
     SC_FACES.forEach(fc => { const [a, bb, c, d] = fc.map(i => P[i]), nn = V3.norm(V3.cross(V3.sub(bb, a), V3.sub(d, a)));
       [a, bb, c, a, c, d].forEach(q => v.push(...q, ...nn, ...col)); }); });
-  const zn = Math.max(0.05, Math.min(zmin, 0.3)), zf = Math.max(zn + 1, Math.min(zmax, 60));
-  gl.viewport(0, 0, W, H); const sky = mode==='depth' ? [0, 0, 0] : hexRgb(scene.sky || '#b9d3e8'); gl.clearColor(sky[0], sky[1], sky[2], 1);
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.useProgram(pr);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW);
-  ['p', 'n', 'c'].forEach((nm, i) => { const l = gl.getAttribLocation(pr, nm); if(l < 0) return; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 36, i * 12); });
-  const U = nm => gl.getUniformLocation(pr, nm);
-  gl.uniform3fv(U('cp'), cam.pos); gl.uniform3fv(U('cr'), cam.r); gl.uniform3fv(U('cu'), cam.u); gl.uniform3fv(U('cf'), cam.f); gl.uniform2f(U('k'), cam.kx, cam.ky);
-  gl.uniform1f(U('zn'), zn); gl.uniform1f(U('zf'), zf); gl.uniform1i(U('mode'), mode==='depth' ? 1 : 0);
-  gl.drawArrays(gl.TRIANGLES, 0, v.length / 9);
+  const ph = scene.photo && scene.photo.depth ? scPhotoMesh(scene.photo) : null;
+  if(ph && !ph.ready) ph.wait.then(() => { scRedraw(); d3Redraw(); }, () => {});
+  if(ph && ph.ready) ph.pts.forEach(seeZ);
+  const zn = Math.max(0.05, Math.min(zmin, 0.3)), zf = Math.max(zn + 1, Math.min(zmax, 80));
+  gl.viewport(0, 0, W, H); const sky = mode==='depth' ? [0, 0, 0] : mode==='stretch' ? [1, 1, 1] : hexRgb(scene.sky || '#b9d3e8'); gl.clearColor(sky[0], sky[1], sky[2], 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  const uni = p => { const U = nm => gl.getUniformLocation(p, nm); gl.useProgram(p);
+    gl.uniform3fv(U('cp'), cam.pos); gl.uniform3fv(U('cr'), cam.r); gl.uniform3fv(U('cu'), cam.u); gl.uniform3fv(U('cf'), cam.f); gl.uniform2f(U('k'), cam.kx, cam.ky);
+    gl.uniform1f(U('zn'), zn); gl.uniform1f(U('zf'), zf); gl.uniform1i(U('mode'), mode==='depth' ? 1 : mode==='stretch' ? 2 : 0); return U; };
+  if(v.length){ uni(pr); gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW); gl.drawArrays(gl.TRIANGLES, 0, v.length / 9); }
+  if(ph && ph.ready){ const U = uni(pp); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, ph.tex); gl.uniform1i(U('img'), 0);
+    gl.bindVertexArray(ph.vao); gl.drawElements(gl.TRIANGLES, ph.n, gl.UNSIGNED_INT, 0); }
+  gl.bindVertexArray(null);
   return cv;
 }
 // a panel's three pictures at the still's size: the boxes' colours, their depth and the people's OpenPose
@@ -6775,6 +6822,7 @@ function scEditorHtml(cm, p, i, rect){
     <div class="btnrow"><button class="btn" data-sc="scdepth">${SCED.depth ? '🎨 Show colours' : '🌫 Show depth'}</button>${i > 0 ? '<button class="btn" data-sc="camprev">Same camera as panel ' + i + '</button>' : ''}</div>`;
   if(SCED.mode==='box'){ x += `<div class="row"><label>Template</label><div class="seg">${Object.entries(SC_TPL).map(([k, v]) => `<button data-sctpl="${k}">${v}</button>`).join('')}</div></div>
     <p class="note">Tap a box to pick it, drag it along the ground. Every panel shares these boxes.</p>
+    ${scPhotoHtml(cm)}
     <div class="btnrow"><button class="btn" data-sc="addbox">＋ Box</button>${b ? '<button class="btn" data-sc="dupbox">⧉ Copy</button><button class="btn danger" data-sc="delbox">Remove</button>' : ''}</div>`;
     if(b) x += `<div class="row"><label>Name</label><div class="grow"><input type="text" data-scb="name" value="${esc(b.name || '')}"></div><input type="color" data-scb="color" value="${esc(b.color)}" aria-label="Colour" class="sccol"></div>
       ${[['w', 'Width', 0.05, 40], ['d', 'Depth', 0.02, 50], ['h', 'Height', 0.01, 12], ['y', 'Lift', 0, 6], ['yaw', 'Turn', -180, 180]].map(([k, l, a, z]) => `<div class="row"><label>${l}</label><div class="slider"><input type="range" data-scb="${k}" min="${a}" max="${z}" step="${k==='yaw' ? 5 : 0.01}" value="${b[k] || 0}"><output>${(+(b[k] || 0)).toFixed(k==='yaw' ? 0 : 2)}</output></div></div>`).join('')}`; }
@@ -6788,6 +6836,15 @@ function scEditorHtml(cm, p, i, rect){
       <div class="btnrow"><button class="btn" data-sc="figmirror">⇋ Mirror</button><button class="btn danger" data-sc="figdel">Remove</button></div>`;
     else if(!who.length) x += '<p class="note">Nobody is in this panel (tick them under Who above).</p>'; }
   return x + '</div>';
+}
+// the place picture as part of the scene: a relief from its depth, seen from where it was taken (the panels' starting camera)
+function scPhotoHtml(cm){
+  const ph = cm.scene.photo;
+  if(!ph) return cm.loc && cm.loc.url ? '<div class="btnrow"><button class="btn" data-sc="photo">🌄 The place picture in 3D</button></div><p class="note">Reads the place picture\'s depth on a computer and stands it in the scene as a relief, so each panel\'s camera sees it from its own angle (small swings look best).</p>' : '';
+  if(!ph.depth) return (ph.making || ph.busy ? `<div class="pbar obbar"><i data-cmbar="photo"></i></div><p class="note" data-cmtxt="photo">${esc(ph.busy || '')}</p>` : `${ph.err ? `<p class="warn">${esc(ph.err)}</p>` : ''}<div class="btnrow"><button class="btn" data-sc="photo">🌄 Try again</button></div>`);
+  const sl = (k, l, a, z, st, v) => `<div class="row"><label>${l}</label><div class="slider"><input type="range" data-scph="${k}" min="${a}" max="${z}" step="${st}" value="${v}"><output>${(+v).toFixed(st < 1 ? 2 : 0)}</output></div></div>`;
+  return `<div class="lbl">🌄 The place picture in 3D</div>${sl('near', 'Nearest', 0.5, 6, 0.1, ph.near || SC_PH.near)}${sl('far', 'Farthest', 8, 80, 1, ph.far || SC_PH.far)}${sl('fov', 'Its lens', 25, 75, 1, ph.fov || SC_PH.fov)}${sl('y', 'Lift', -2, 2, 0.05, ph.y || 0)}
+    <p class="note">Nearest and Farthest set how deep the picture is; Lift moves it up or down until the figures stand on its ground.</p><div class="btnrow"><button class="btn danger" data-sc="photooff">Remove the picture</button></div>`;
 }
 let scRaf = 0;
 function scRedraw(){ cancelAnimationFrame(scRaf); scRaf = requestAnimationFrame(() => {
@@ -6862,10 +6919,16 @@ function scClick(t, cm, pg, p){
   if(a==='figmirror' && f){ const an = facingOf(f.j), flat = turnFig(f.j, an), cx = flat[1][0]; f.j = turnFig(MIRROR.map(k => [2 * cx - flat[k][0], flat[k][1], flat[k][2]]), -an); delete f.base; return true; }
   if(a==='figdel' && f){ p.figs = p.figs.filter(x => x!==f); SCED.figSel = null; return true; }
   if(a==='scdepth'){ SCED.depth = !SCED.depth; return true; }
+  if(a==='photo'){ if(!cm.loc || !cm.loc.url) return false;
+    if(cm.scene.boxes.length && confirm('Take the template boxes away, so the picture is the set? (Cancel keeps them.)')) cm.scene.boxes = [];
+    cm.scene.photo = Object.assign({id:'photo', url:cm.loc.url}, SC_PH); cmDepth(cm.scene.photo, cm.loc.url); return true; }
+  if(a==='photooff'){ cm.scene.photo = null; return true; }
   return false;
 }
 function scInput(el, cm, p, ev){
   const live = o => { if(o) o.textContent = el.dataset.scf==='turn' || el.dataset.scb==='yaw' ? Math.round(+el.value) + (el.dataset.scf==='turn' ? '°' : '') : (+el.value).toFixed(2); };
+  if(el.dataset.scph){ const ph = cm.scene.photo; if(!ph) return true; if(el.nextElementSibling) el.nextElementSibling.textContent = (+el.value).toFixed(+el.step < 1 ? 2 : 0);
+    if(ev==='change'){ ph[el.dataset.scph] = +el.value; save(); scRedraw(); } return true; }
   if(el.dataset.sccam){ p.cam = Object.assign({}, SC_CAM0, p.cam, {[el.dataset.sccam]:+el.value}); live(el.nextElementSibling); scRedraw(); if(ev==='change') save(); return true; }
   if(el.dataset.scb){ const b = cm.scene.boxes.find(x => x.id===SCED.sel); if(!b) return true; b[el.dataset.scb] = ['name', 'color'].includes(el.dataset.scb) ? el.value : +el.value; live(el.nextElementSibling); scRedraw(); if(ev==='change') save(); return true; }
   if(el.dataset.scf){ const f = (p.figs || []).find(x => x.id===SCED.figSel); if(!f) return true;
@@ -6875,9 +6938,115 @@ function scInput(el, cm, p, ev){
     live(el.nextElementSibling); scRedraw(); if(ev==='change') save(); return true; }
   return false;
 }
+// depth for a picture, on a computer with a depth node (Depth Anything V2 first); the host (a panel's 3D look or the scene's
+// picture) gets .making while it runs, then .depth
+const CM_DEPTH = ['DepthAnythingV2Preprocessor', 'DepthAnythingPreprocessor', 'Zoe-DepthMapPreprocessor', 'MiDaS-DepthMapPreprocessor'];
+function cmDepthKits(){
+  if(S.test) return [{url:'test', oi:{}, node:'DepthAnythingV2Preprocessor'}];
+  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '')).map(p => ({url:p.url, oi:p.oi, node:CM_DEPTH.find(c => p.oi[c])})).filter(k => k.node);
+}
+function scFakeDepth(){ const c = document.createElement('canvas'); c.width = 64; c.height = 36; const x = c.getContext('2d'), g = x.createLinearGradient(0, 0, 0, 36);
+  g.addColorStop(0, '#000'); g.addColorStop(1, '#fff'); x.fillStyle = g; x.fillRect(0, 0, 64, 36); x.fillStyle = '#ddd'; x.fillRect(26, 8, 12, 26); return c.toDataURL(); }
+async function cmDepth(host, url){
+  const ks = cmDepthKits(); if(!ks.length){ toast("None of your computers that are on has a depth node (Depth Anything V2, from comfyui_controlnet_aux)", true); return; }
+  const k = ks.sort((a, b) => ((pcOf(a.url).load || 0) + 1) * cmSlow(a.url) - ((pcOf(b.url).load || 0) + 1) * cmSlow(b.url))[0];
+  delete host.err; delete host.depth; host.busy = 'Sending the picture…'; drawComic();
+  try{
+    const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+    const prefix = cmPrefix('depth'), img = S.test ? 'test.png' : await cmUp(url, k.url);
+    const sid = add('SaveImage', {images:[add(k.node, {image:[add('LoadImage', {image:img}), 0], resolution:1024}), 0], filename_prefix:prefix});
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); delete host.busy; cmGot(host, 'depth', {test:true}); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
+    if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    host.making = {pc:k.url, id:j.prompt_id, save:sid, t:t0, prefix, mins:0.4 * cmSlow(k.url), smp:null, kind:'depth', video:false}; delete host.busy; save(); drawComic(); cmWait(host);
+  }catch(err){ delete host.busy; host.err = "Couldn't read the depth: " + err.message; save(); drawComic(); }
+}
+// --- 🌄 3D look on a panel's still: swing it a little, wiggle it, save the wiggle, or paint the swung view as a new still ---
+const D3 = {play:false, raf:0, t0:0};
+const d3Amt = ph => Math.max(0.2, Math.min(2, +ph.amt || 1));
+// the camera swung round a point in the middle of the picture's depth
+function d3Cam(ph, W, H){
+  const base = scPhotoCam(ph, W, H), zt = (+ph.near || 1.5) * 2.2, T = V3.add(base.pos, V3.mul(base.f, zt)), back = V3.mul(base.f, -1);
+  const y0 = Math.atan2(back[0], back[2]), p0 = Math.asin(Math.max(-1, Math.min(1, back[1]))), yw = y0 + (+ph.yaw || 0), pt = p0 + (+ph.pitch || 0);
+  const pos = V3.add(T, V3.mul([Math.sin(yw) * Math.cos(pt), Math.sin(pt), Math.cos(yw) * Math.cos(pt)], zt)), f = V3.norm(V3.sub(T, pos)), r = V3.norm(V3.cross(f, [0, 1, 0]));
+  return {pos, f, r, u:V3.cross(r, f), kx:base.kx, ky:base.ky};
+}
+const d3Scene = ph => ({sky:'#000000', boxes:[], photo:ph});
+function d3Picture(ph, W, H, mode){ const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(scDraw(d3Scene(ph), d3Cam(ph, W, H), W, H, mode), 0, 0); return c; }
+function d3Html(p, st){
+  const ph = p.d3 && p.d3.url===st.url ? p.d3 : null;
+  if(!ph) return `<div class="btnrow"><button class="btn" data-cm="d3">🌄 3D look</button></div>`;
+  if(!ph.depth) return ph.making || ph.busy ? `<div class="pbar obbar"><i data-cmbar="${ph.id}"></i></div><p class="note" data-cmtxt="${ph.id}">${esc(ph.busy || '')}</p>`
+    : `${ph.err ? `<p class="warn">${esc(ph.err)}</p>` : ''}<div class="btnrow"><button class="btn" data-cm="d3">🌄 3D look</button></div>`;
+  return `<div class="obpanel d3box"><div class="obhead"><b>🌄 3D look</b><button class="chipbtn" data-cm="d3off" aria-label="Close the 3D look">✕</button></div>
+    <div class="scwrap"><canvas class="scview" data-d3view></canvas></div>
+    <p class="note">Drag to swing the angle. Small swings look best: further round, the edges behind people stretch, because the picture has nothing behind them.</p>
+    <div class="row"><label>Depth</label><div class="slider"><input type="range" data-d3="amt" min="0.2" max="2" step="0.05" value="${d3Amt(ph)}"><output>${d3Amt(ph).toFixed(2)}</output></div></div>
+    <div class="btnrow"><button class="btn" data-cm="d3wig">${D3.play ? '⏸ Stop' : '▶ Wiggle'}</button><button class="btn" data-cm="d3rec">💾 Save the wiggle</button><button class="btn" data-cm="d3reset">↺ Straight on</button></div>
+    <div class="btnrow"><button class="btn hot" data-cm="d3use" ${cmIllKits().length && !cmBusy(p) ? '' : 'disabled'}>✨ Use this angle</button></div>
+    <p class="note">Use this angle paints the swung view as a new still for this panel: the stretched edges are repainted (0.65), then one light pass over it all (0.25), held to the view by ProMax tile.</p></div>`;
+}
+function d3Redraw(){
+  const cv = $('#comic [data-d3view]'), pg = cmPage(); if(!cv || !pg) return; const ph = pg.panels[CM().sel].d3; if(!ph || !ph.depth) return;
+  const ar = (ph.w || 16) / (ph.h || 9), w = cv.clientWidth || 320, h = Math.round(w / ar), d = Math.min(2, window.devicePixelRatio || 1), W = Math.round(w * d), H = Math.round(h * d);
+  if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; cv.style.height = h + 'px'; }
+  try{ cv.getContext('2d').drawImage(scDraw(d3Scene(ph), d3Cam(ph, W, H), W, H, 'colour'), 0, 0); }catch(e){ toast(e.message, true); }
+}
+function d3Touch(){
+  const cv = $('#comic [data-d3view]'); if(!cv) return; let drag = null;
+  const ph = () => cmPage().panels[CM().sel].d3;
+  cv.onpointerdown = e => { e.preventDefault(); cv.setPointerCapture(e.pointerId); drag = {x:e.clientX, y:e.clientY}; d3Wiggle(false); };
+  cv.onpointermove = e => { if(!drag) return; const r = cv.getBoundingClientRect(), q = ph(), dx = (e.clientX - drag.x) / r.width, dy = (e.clientY - drag.y) / r.height;
+    q.yaw = Math.max(-0.6, Math.min(0.6, (+q.yaw || 0) - dx * 1.2)); q.pitch = Math.max(-0.35, Math.min(0.35, (+q.pitch || 0) + dy * 0.8)); drag = {x:e.clientX, y:e.clientY}; d3Redraw(); };
+  cv.onpointerup = cv.onpointercancel = () => { if(drag){ drag = null; save(); } };
+}
+// a gentle side to side swing, as wiggle pictures do
+function d3Wiggle(on){
+  D3.play = on; cancelAnimationFrame(D3.raf); const b = $('#comic [data-cm="d3wig"]'); if(b) b.textContent = on ? '⏸ Stop' : '▶ Wiggle';
+  const pg = cmPage(), ph = pg && pg.panels[CM().sel].d3; if(!ph) return;
+  if(!on){ if(D3.keep){ ph.yaw = D3.keep[0]; ph.pitch = D3.keep[1]; D3.keep = null; d3Redraw(); } return; }
+  D3.keep = [+ph.yaw || 0, +ph.pitch || 0]; D3.t0 = performance.now();
+  const step = t => { if(!D3.play) return; const a = (t - D3.t0) / 1000 * Math.PI * 2 / 2.4; ph.yaw = D3.keep[0] + 0.14 * Math.sin(a); ph.pitch = D3.keep[1] + 0.035 * Math.sin(2 * a); d3Redraw(); D3.raf = requestAnimationFrame(step); };
+  D3.raf = requestAnimationFrame(step);
+}
+// two swings recorded off the canvas, offered to the phone (mp4 where the phone records it, else webm)
+async function d3Record(){
+  const cv = $('#comic [data-d3view]'); if(!cv || !cv.captureStream || !window.MediaRecorder){ toast("This phone can't record the canvas", true); return; }
+  const type = ['video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)); if(!type){ toast("This phone can't record video here", true); return; }
+  const rec = new MediaRecorder(cv.captureStream(30), {mimeType:type, videoBitsPerSecond:8e6}), parts = [];
+  rec.ondataavailable = e => { if(e.data.size) parts.push(e.data); };
+  const done = new Promise(ok => rec.onstop = ok); toast('Recording the wiggle…'); d3Wiggle(true); rec.start();
+  await new Promise(r => setTimeout(r, 4800)); rec.stop(); await done; d3Wiggle(false);
+  const ext = /mp4/.test(type) ? 'mp4' : 'webm', file = new File(parts, 'panel_' + (CM().sel + 1) + '_3d.' + ext, {type:type.split(';')[0]});
+  if(navigator.canShare && navigator.canShare({files:[file]})){ try{ await navigator.share({files:[file], title:'3D look'}); return; }catch(e){} }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); toast('Saved ' + file.name);
+}
+// ✨ Use this angle: the swung view as the start, its torn edges (and anything outside the picture) repainted, then a light pass
+function cmAngleGraph(k, view, torn, p, i, rect, prefix){
+  const cm = CM(), I = cmIll(), g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const who = cmWho(cm, p), ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck,0], clip = [ck,1]; const vae = [ck,2];
+  const loras = [], put = (f, w) => { if(f && !loras.some(x => x[0]===f)) loras.push([f, w]); };
+  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => put(cmLooks(s, k).lora, parseFloat(s.loraW) || 1));
+  loras.forEach(([f, w]) => { const l = add('LoraLoader', {model, clip, lora_name:f, strength_model:w, strength_clip:w}); model = [l,0]; clip = [l,1]; });
+  const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0], seen = new Set();
+  const tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
+  let pos = enc(tags(tx.pos, I.words || '', cmCount(who), who.map(s => cmLooks(s, k).words).join(', '), cmStillTags(cm, p, i, rect))), neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views'));
+  const vi = add('LoadImage', {image:view});
+  if(k.cn){ const cn = [add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:k.cn}), 0], type:'tile'}), 0];
+    const ap = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:cn, image:[vi,0], vae, strength:0.5, start_percent:0, end_percent:0.7}); pos = [ap,0]; neg = [ap,1]; }
+  let mask = [add('GrowMask', {mask:[add('ImageToMask', {image:[add('LoadImage', {image:torn}), 0], channel:'red'}), 0], expand:12, tapered_corners:true}), 0];
+  if(k.feather) mask = [add('FeatherMask', {mask, left:16, top:16, right:16, bottom:16}), 0];
+  const seed = Math.floor(Math.random() * 1e9), ks = (latent, denoise) => add('KSampler', {model, positive:pos, negative:neg, latent_image:latent, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise});
+  const one = add('VAEDecode', {samples:[ks([add('SetLatentNoiseMask', {samples:[add('VAEEncode', {pixels:[vi,0], vae}), 0], mask}), 0], 0.65), 0], vae});
+  const two = add('VAEDecode', {samples:[ks([add('VAEEncode', {pixels:[one,0], vae}), 0], 0.25), 0], vae});
+  return {g, save:add('SaveImage', {images:[two,0], filename_prefix:prefix})};
+}
 // a finished job lands on its panel (or the place)
 function cmGot(p, kind, it){
   const cm = CM();
+  if(kind==='depth'){ p.depth = it.url || scFakeDepth(); p.yaw = p.pitch = 0; save(); if(!$('#comic').hidden) drawComic(); return; }
+  if(kind==='angle') kind = 'still';
   if(p.parent){ const c = p; p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p){ save(); return; } }
   if(kind==='plate'){ cm.plates = [it].concat(cm.plates || []).slice(0, 8); if(it.url) cm.loc = {url:it.url}; else cm.loc = {url:'', test:true}; }
   else if(kind==='still'){ p.stills = [it].concat(p.stills || []).slice(0, 16); p.still = p.stillPicked ? Math.min(p.stills.length - 1, (p.still || 0) + 1) : 0; p.show = 'still'; }
@@ -6949,6 +7118,7 @@ function drawComic(){
         <div class="row"><label>Shot</label>${seg('data-cmshot', Object.entries(CM_SHOTS).map(([k2, v]) => [k2, k2==='auto' ? 'Auto (' + CM_SHOTS[cmAutoShot(p.text, cm.sel, rects[cm.sel].w / rects[cm.sel].h)].toLowerCase() + ')' : v]), p.shot || 'auto')}</div>`;
       if(p.err) x += `<p class="warn">${esc(p.err)}</p>`;
       if(sts.length || p.takes.length > 0 && sts.length) x += `<div class="lbl">Stills · tap one to use it</div><div class="cmstills">${sts.map((st, j) => `<button data-cmstill="${j}" class="${sh && sh.still===st || (j===(p.still || 0) && p.show!=='clip') ? 'on' : ''}" aria-label="Still ${sts.length - j}">${st.url ? `<img src="${esc(mini(st.url))}" alt="">` : `<span>Still ${sts.length - j}</span>`}</button>`).join('')}${p.takes.length ? `<button data-cmshow="clip" class="${sh && sh.clip ? 'on' : ''}"><span>🎬 Clip</span></button>` : ''}</div>`;
+      if(still && sh && sh.still && sh.still.url) x += d3Html(p, sh.still);
       // the scrubber sits at the bottom of the screen (Jordan 2026-10-21), so the panel stays in sight while it moves
       if(t){ x += `<div class="cmscrub"><b>${cm.sel + 1}</b><button class="chipbtn" data-cm="back" aria-label="One frame back">◀</button>
           <input type="range" class="tvscrub" data-cmt min="0" max="1000" step="1" value="${p.frame==null ? CM_FRAME : p.frame}" aria-label="Frame of panel ${cm.sel + 1}">
@@ -7003,7 +7173,7 @@ function drawComic(){
       <p class="note">Video LoRAs are the ones made for MiniMax H3. Illustrious LoRAs (your characters, AFKJ Style) work in the stills route.</p>`;
     x += `<div class="btnrow"><button class="btn" data-cm="export" ${pg.panels.some(q => cmShown(q)) ? '' : 'disabled'}>💾 Save the page</button></div>`;
   }
-  B.innerHTML = x; drawPage(); wireCm(); scTouch(); scRedraw();
+  B.innerHTML = x; drawPage(); wireCm(); scTouch(); scRedraw(); d3Touch(); d3Redraw();
 }
 function wireCm(){
   const sl = $('#comic [data-cmt]'); if(!sl) return;
@@ -7019,6 +7189,7 @@ $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) ret
 $('#comic').addEventListener('click', e => {
   const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-scmode],[data-scdrag],[data-sclens],[data-sctpl],[data-scfig],[data-sc]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
+  if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
   else if(t.dataset.cmfold){ cm.open[t.dataset.cmfold] = !cm.open[t.dataset.cmfold]; }
   else if(t.dataset.cmpg!=null){ cmPlay(false); cm.cur = +t.dataset.cmpg; cm.sel = 0; }
@@ -7036,6 +7207,12 @@ $('#comic').addEventListener('click', e => {
     cm.useScene = true; cm.route = 'still'; SCED.mode = 'box'; }
   else if(a==='sceneoff'){ cm.useScene = false; }
   else if(a==='retag'){ p.tags = null; }
+  else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = Object.assign({id:p.id + '_3d', url:st.url}, SC_PH, {near:1.5, far:6, amt:1}); cmDepth(p.d3, st.url); return; }
+  else if(a==='d3off'){ p.d3 = null; }
+  else if(a==='d3wig'){ d3Wiggle(!D3.play); return; }
+  else if(a==='d3rec'){ d3Record(); return; }
+  else if(a==='d3reset'){ if(p.d3){ p.d3.yaw = p.d3.pitch = 0; } }
+  else if(a==='d3use'){ cmJobs('angle', [p]); return; }
   else if(t.dataset.cmshow){ p.show = 'clip'; }
   else if(t.dataset.cmplate!=null){ const pl = cm.plates[+t.dataset.cmplate]; if(pl) cm.loc = {url:pl.url, test:pl.test}; }
   else if(a==='plate'){ cmJobs('plate', [cmPJ()]); return; }
@@ -7061,6 +7238,8 @@ $('#comic').addEventListener('click', e => {
   const el = e.target, cm = CM(), pg = cmPage();
   if(el.dataset.cmf){ cm[el.dataset.cmf] = el.value; save(); if(ev==='change' && el.dataset.cmf!=='script') drawComic(); return; }
   if(pg && el.closest('.scbox') && scInput(el, cm, pg.panels[cm.sel], ev)) return;
+  if(pg && el.dataset.d3){ const ph = pg.panels[cm.sel].d3; if(!ph) return; if(el.nextElementSibling) el.nextElementSibling.textContent = (+el.value).toFixed(2);
+    if(ev==='change'){ ph.amt = +el.value; ph.far = (+ph.near || 1.5) * (1 + 3 * ph.amt); save(); d3Redraw(); } return; }
   if(el.dataset.cmp && pg){ const p = pg.panels[cm.sel]; p[el.dataset.cmp] = el.value; save(); if(ev==='change') drawComic(); return; }
   if(el.dataset.cmill){ const I = cmIll(); I[el.dataset.cmill] = el.value;
     if(el.dataset.cmill==='style' && ev==='change') I.words = el.value ? S.loraWords[el.value] || (/afkj/i.test(el.value) ? 'AFKJ Style' : '') : '';
