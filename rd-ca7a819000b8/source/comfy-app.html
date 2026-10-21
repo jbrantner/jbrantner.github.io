@@ -605,7 +605,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.111'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.112'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6557,8 +6557,12 @@ function cmAreas(who, shot, touch){
   const W = 0.92 / who.length; return who.map((s, i) => ({x:0.04 + i * W, y, w:W, h, who:[s]}));
 }
 // the panel's own tags, read from its words as a normal render reads a sentence (Jordan 2026-10-21); edited by hand, they stay
-function cmAutoTags(cm, p, i, rect){ const who = cmWho(cm, p);
-  return [cmCount(who), CM_SHOT_TAGS[cmShot(p, i, rect)], cmTags(p.text, who), cmTags(cm.place || '', []), who.length ? '' : 'scenery'].filter(Boolean).join(', '); }
+// ⬜ characters on white (Jordan 2026-10-21: the character pass on a plain white background, so she turns into a clean 3D
+// object; the place is added back afterwards): no place in the tags, a plain white background asked for
+const cmWhite = cm => cm.white!==false;
+const CM_WHITE = 'simple background, white background', CM_WHITE_NEG = 'scenery, detailed background, room, outdoors, indoors, floor, shadow';
+function cmAutoTags(cm, p, i, rect){ const who = cmWho(cm, p), w = cmWhite(cm) && who.length;
+  return [cmCount(who), CM_SHOT_TAGS[cmShot(p, i, rect)], cmTags(p.text, who), w ? CM_WHITE : cmTags(cm.place || '', []), who.length ? '' : 'scenery'].filter(Boolean).join(', '); }
 const cmStillTags = (cm, p, i, rect) => p.tags!=null ? p.tags : cmAutoTags(cm, p, i, rect);
 function cmStillGraph(k, plate, p, i, rect, prefix){
   const cm = CM(), I = cmIll(), g = {}; let n = 0;
@@ -6573,7 +6577,7 @@ function cmStillGraph(k, plate, p, i, rect, prefix){
   const areas = cmAreas(who, shot, touch), place = cmTags(cm.place || '', []);
   const together = areas.length===1 ? areas[0].who.map(s => cmLooks(s, k).words).join(', ') : '';
   let pos = enc(tags(tx.pos, I.words || '', cmCount(who), together, cmStillTags(cm, p, i, rect)));
-  const neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views'));
+  const neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views', cmWhite(cm) && who.length ? CM_WHITE_NEG : ''));
   // apart: each person's looks in their own area, on top of the whole prompt (as the pose board does)
   if(areas.length > 1) areas.forEach(a => { seen.clear(); const t = enc(tags(I.words || '', a.who.length ? cmCount(a.who) : 'solo', a.who.map(s => cmLooks(s, k).words).join(', '), CM_SHOT_TAGS[shot]));
     const ar = add('ConditioningSetArea', {conditioning:t, width:Math.round(a.w * W / 8) * 8, height:Math.round(a.h * H / 8) * 8, x:Math.round(a.x * W / 8) * 8, y:Math.round(a.y * H / 8) * 8, strength:1});
@@ -6682,13 +6686,13 @@ async function cmJob(cm, pg, p, k, kind, mins, host){
     let G, w, h, prefix, video = kind==='anim';
     if(kind==='plate'){ prefix = cmPrefix('place'); G = cmPlateGraph(k, prefix); w = 1344; h = 768; }
     else if(kind==='still'){ prefix = cmPrefixP(pg, i, 'still');
-      const plate = cm.loc && cm.loc.url ? await cmUp(cm.loc.url, k.url) : cm.loc && cm.loc.test ? 'test-place.png' : null; G = cmStillGraph(k, plate, p, i, rect, prefix);
+      const plate = cmWhite(cm) ? null : cm.loc && cm.loc.url ? await cmUp(cm.loc.url, k.url) : cm.loc && cm.loc.test ? 'test-place.png' : null; G = cmStillGraph(k, plate, p, i, rect, prefix);
       w = G.W; h = G.H; }
     else if(kind==='finish'){ prefix = cmPrefixP(pg, i, 'finished'); const c = CMFIN[p.id]; if(!c) throw new Error('grab the frame again'); const fw = c.width, fh = c.height;
       const img = (await uploadFrame(c, 'panel_frame', k.url)).img; delete CMFIN[p.id]; G = cmFinGraph(k, img, fw, fh, p, i, rect, prefix); w = fw; h = fh; }
     else if(kind==='angle'){ prefix = cmPrefixP(pg, i, 'angle'); // the still swung a little in 3D, and its torn edges repainted
-      const ph = p.d3, [W, H] = cmStillSize(rect.w / rect.h), md = ph.view==='model' && ph.cmod && ph.cmod.url, fz = md || ph.view==='fuse' && ph.fuse && ph.fuse.glbs; if(!fz) await d3Ready(ph);
-      const shot = md ? await cmodShot(ph, W, H) : fz ? await fuseShot(ph, W, H) : null, view = fz ? shot.view : d3Picture(ph, W, H, 'colour'), torn = fz ? shot.torn : d3Picture(ph, W, H, 'stretch');
+      const ph = p.d3, [W, H] = cmStillSize(rect.w / rect.h), ob = t3dReady(ph), md = !ob && ph.view==='model' && ph.cmod && ph.cmod.url, fz = md || ph.view==='fuse' && ph.fuse && ph.fuse.glbs; if(ob) await scMesh(t3dLayer(ph)).wait; else if(!fz) await d3Ready(ph);
+      const shot = ob ? {view:t3dPicture(ph, W, H, 'colour'), torn:t3dPicture(ph, W, H, 'stretch')} : md ? await cmodShot(ph, W, H) : fz ? await fuseShot(ph, W, H) : null, view = fz ? shot.view : d3Picture(ph, W, H, 'colour'), torn = fz ? shot.torn : d3Picture(ph, W, H, 'stretch');
       G = cmAngleGraph(k, (await uploadFrame(view, 'angle_view', k.url)).img, (await uploadFrame(torn, 'angle_torn', k.url)).img, p, i, rect, prefix, !!md); w = W; h = H; }
     else { const s = cmStill(p); if(!s) throw new Error('paint a still first'); prefix = cmPrefixP(pg, i, 'clip'); [w, h] = obCanvas(s.w || rect.w, s.h || rect.h, 576);
       G = cmAnimGraph(k, await cmUp(s.url, k.url), cmAnimPrompt(cm, p, i, rect), w, h, prefix); }
@@ -6796,11 +6800,11 @@ function scMesh(spec){
 }
 // draws the layers (back to front) as the camera sees them into the GL canvas (W x H); mode 'colour', 'depth' or 'stretch'
 // lastCam: the last layer (the character) is drawn from that camera instead, over the rest (the flat cut-out)
-function scDraw(layers, cam, W, H, mode, near, far, lastCam){
+function scDraw(layers, cam, W, H, mode, near, far, lastCam, clear){
   const G = scGL(), {cv, gl, pr} = G; if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; }
   const ms = layers.map(scMesh); ms.forEach(m => { if(!m.ready) m.wait.then(() => d3Redraw(), () => {}); });
   const zn = near * 0.25, zf = far * 3;
-  gl.viewport(0, 0, W, H); const sky = mode==='stretch' ? 1 : 0; gl.clearColor(sky, sky, sky, 1);
+  gl.viewport(0, 0, W, H); const sky = clear!=null ? clear : mode==='stretch' ? 1 : 0; gl.clearColor(sky, sky, sky, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.useProgram(pr);
   const U = nm => gl.getUniformLocation(pr, nm);
   gl.uniform3fv(U('cp'), cam.pos); gl.uniform3fv(U('cr'), cam.r); gl.uniform3fv(U('cu'), cam.u); gl.uniform3fv(U('cf'), cam.f); gl.uniform2f(U('k'), cam.kx, cam.ky);
@@ -6931,7 +6935,8 @@ function d3Scene(ph, W, H, mode){ const ls = d3Layers(ph), flat = ph.flat && ls.
 function d3Picture(ph, W, H, mode){ const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(d3Scene(ph, W, H, mode), 0, 0); return c; }
 function d3Html(p, st){
   const ph = p.d3 && p.d3.url===st.url ? p.d3 : null;
-  if(!ph) return `<div class="btnrow"><button class="btn" data-cm="d3">🌄 3D look</button></div>`;
+  if(!ph || !ph.t3d) return `<div class="btnrow"><button class="btn" data-cm="d3">🧊 Turn into 3D object</button></div><p class="note">MiniMax circles her (on white) all the way round, 16 views are taken from that and each gets its depth: then a slider turns her round and your finger wiggles each view. About ${Math.round(kitOrbit().mins || 5) + 2} min.</p>`;
+  if(ph.t3d) return t3dHtml(p, ph);
   if(!ph.depth) return ph.making || ph.busy ? `<div class="pbar obbar${ph.making ? '' : ' pulse'}"><i data-cmbar="${ph.id}"></i></div><p class="note" data-cmtxt="${ph.id}">${esc(ph.busy || '')}</p><div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop</button></div>`
     : `${ph.err ? `<p class="warn">${esc(ph.err)}</p>` : ''}<div class="btnrow"><button class="btn" data-cm="d3">🌄 3D look</button></div>`;
   return `<div class="obpanel d3box"><div class="obhead"><b>🌄 3D look</b><button class="chipbtn" data-cm="d3off" aria-label="Close the 3D look">✕</button></div>
@@ -6991,8 +6996,8 @@ async function d3Orbit(p){
   for(const side of sides){
     const host = ph.orbs[side] = {id:ph.id + '_' + side, busy:'Sending the still…'}, k = kitOrbit(avoid); drawComic();
     try{ if(k.why) throw new Error(k.why); avoid = k.url;
-      const plain = side==='circle' && ph.circPlain && ph.mask; // Plain white (Jordan 2026-10-21): just her, cut out, so MiniMax only has her to turn
-      const img = S.test ? 'test.png' : plain ? (await uploadFrame(await d3Plain(ph), 'circle_plain', k.url)).img : await cmUp(ph.url, k.url), sz = S.test ? [576, 1024] : await obSize(ph.url), [w, h] = obCanvas(sz[0], sz[1], 576);
+      const plain = side==='circle' && ph.circPlain; // Plain white (Jordan 2026-10-21): just her, cut out (or the still itself, painted on white), so MiniMax only has her to turn
+      const img = S.test ? 'test.png' : plain && ph.mask ? (await uploadFrame(await d3Plain(ph), 'circle_plain', k.url)).img : await cmUp(ph.url, k.url), sz = S.test ? [576, 1024] : await obSize(ph.url), [w, h] = obCanvas(sz[0], sz[1], 576);
       const prefix = cmPrefixP(pg, i, 'orbit_' + side), G = orbitGraph(k, img, side==='circle' ? {mode:'circle', scene:plain ? 'her alone on a plain white background' : p.text, home:ph.circHome!=='free', plain:!!plain} : {dir:side, deg:ph.orbDeg || 35, tilt:0, scene:p.text}, w, h, prefix);
       if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete host.busy; cmGot(host, 'orbit', {test:true}); continue; }
       const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
@@ -7333,10 +7338,92 @@ async function cmodShot(ph, W, H){
   if(!cmodPaint(ph, vx, W, H) || !cmodPaint(ph, ax, W, H)) throw new Error('her model has not loaded'); const D = ax.getImageData(0, 0, W, H);
   for(let q = 0; q < D.data.length; q += 4){ const v = D.data[q + 3] < 128 ? 255 : 0; D.data[q] = D.data[q + 1] = D.data[q + 2] = v; D.data[q + 3] = 255; } ax.putImageData(D, 0, 0);
   return {view, torn:a}; }
+// 🧊 Turn into 3D object (Jordan 2026-10-21, after the fused models and her Hunyuan model came out wrong): the still, on white,
+// circled all the way round by MiniMax; 16 views taken from that turn (every 22.5°), each with its own depth (MoGe-2 or Depth
+// Anything) and her outline, one job on one computer. A slider picks the view (the big turn, left or right from the front)
+// and a finger swings that view's own depth a little (the small turn). Nothing has to guess cameras or join views together.
+const T3D_N = 16;
+const t3dReady = ph => !!(ph && ph.t3d && ph.t3d.frames && ph.t3d.frames.length===T3D_N);
+// the view on the slider: -8 … 0 (the still, the front) … +8 (the back); the turn went to the right, so +n is n sixteenths round
+const t3dIdx = ph => { const i = Math.round(+ph.t3d.i || 0) * (ph.circRev ? -1 : 1); return ((i % T3D_N) + T3D_N) % T3D_N; };
+function t3dHtml(p, ph){
+  const T = ph.t3d, o = ph.orbs && ph.orbs.circle, run = o && (o.making || o.busy) || T.busy || T.making;
+  let x = `<div class="obpanel d3box"><div class="obhead"><b>🧊 3D object</b><button class="chipbtn" data-cm="d3off" aria-label="Close the 3D object">✕</button></div>`;
+  if(run){ const step = o && (o.making || o.busy) ? 1 : 2;
+    x += `<p class="note">Step ${step} of 2: ${step===1 ? 'MiniMax circles her all the way round' : 'the 16 views and their depth'}.</p>`
+      + (step===1 ? `<div class="pbar obbar${o.making ? '' : ' pulse'}"><i data-cmbar="${o.id}"></i></div><p class="note" data-cmtxt="${o.id}">${esc(o.busy || '')}</p>`
+        : `<div class="pbar obbar${T.making ? '' : ' pulse'}"><i data-t3dbar="${ph.id}" style="width:${(100 * (T.f || 0)).toFixed(1)}%"></i></div><p class="note" data-t3dtxt="${ph.id}">${esc(T.busy || '')}</p>`)
+      + `<div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop</button></div></div>`;
+    return x; }
+  if(T.err || o && o.err) x += `<p class="warn">${esc(T.err || o.err)}</p>`;
+  if(!t3dReady(ph)) return x + `<div class="btnrow"><button class="btn" data-cm="t3dgo">🧊 ${o && o.url ? 'Take the views again' : 'Turn into 3D object'}</button></div></div>`;
+  const i = Math.round(+T.i || 0), deg = Math.abs(i) * 22.5;
+  return x + `<div class="scwrap"><canvas class="scview" data-d3view></canvas></div>
+    <div class="row"><label>Turn</label><div class="slider"><input type="range" data-t3d="i" min="-8" max="8" step="1" value="${i}"><output>${i===0 ? 'front' : Math.abs(i)===8 ? 'back' : (i < 0 ? '◀ ' : '') + deg + '°' + (i > 0 ? ' ▶' : '')}</output></div></div>
+    <p class="note">The slider turns her round (16 views); drag on the picture to swing the view you are on.</p>
+    <div class="row"><label>Depth</label><div class="slider"><input type="range" data-d3="amt" min="0.2" max="2" step="0.05" value="${d3Amt(ph)}"><output>${d3Amt(ph).toFixed(2)}</output></div></div>
+    <div class="btnrow"><button class="btn" data-cm="d3wig">${D3.play ? '⏸ Stop' : '▶ Wiggle'}</button><button class="btn" data-cm="d3reset">↺ Straight on</button><button class="btn" data-cm="d3rev">↔ Swap left and right</button></div>
+    <div class="btnrow"><button class="btn hot" data-cm="d3use" ${cmIllKits().length && !cmBusy(p) ? '' : 'disabled'}>✨ Use this angle</button></div>
+    <p class="note">Use this angle paints this view as a new still for the panel, on white: the stretched edges repainted (0.65), then a light pass (0.25).</p>
+    <div class="btnrow"><button class="btn" data-cm="t3dgo">🧊 Turn her again</button></div></div>`; }
+// the circle on white, then the views (from the start, or the views again from the same circle)
+function t3dGo(p){ const ph = p.d3; if(!ph) return; ph.t3d = {i:0}; ph.yaw = ph.pitch = 0;
+  if(ph.orbs && ph.orbs.circle && ph.orbs.circle.url && ph.orbs.circle.plain){ t3dDepth(ph); return; }
+  ph.orbMode = 'circle'; ph.circPlain = true; ph.circHome = 'free'; d3Orbit(p).then(() => { if(ph.orbs && ph.orbs.circle) ph.orbs.circle.plain = true; save(); }); }
+function t3dTell(ph){ const T = ph.t3d; const b = document.querySelector(`[data-t3dbar="${ph.id}"]`), t = document.querySelector(`[data-t3dtxt="${ph.id}"]`);
+  if(b){ b.style.width = (100 * (T.f || 0)).toFixed(1) + '%'; if(T.making || T.f) b.parentNode.classList.remove('pulse'); } if(t) t.textContent = T.busy || ''; }
+// her outline from a view on white: wherever it isn't (nearly) white, grown a pixel so her edge stays on
+function t3dMask(c){ const W = c.width, H = c.height, m = document.createElement('canvas'); m.width = W; m.height = H; const D = c.getContext('2d').getImageData(0, 0, W, H), x = m.getContext('2d'), O = x.createImageData(W, H);
+  for(let q = 0; q < D.data.length; q += 4){ const v = Math.min(D.data[q], D.data[q + 1], D.data[q + 2]) < 236 ? 255 : 0; O.data[q] = O.data[q + 1] = O.data[q + 2] = v; O.data[q + 3] = 255; }
+  x.putImageData(O, 0, 0); return m.toDataURL('image/png'); }
+async function t3dDepth(ph){
+  const T = ph.t3d = Object.assign(ph.t3d || {}, {busy:'Taking 16 views from the turn…', f:0}); delete T.err; delete T.frames; drawComic();
+  const ks = cmDepthKits(), mg = ks.filter(k => k.moge), k = (mg.length ? mg : ks)[0];
+  try{ if(!k) throw new Error('none of your computers that are on has a depth node (MoGe-2 or Depth Anything)');
+    const o = ph.orbs.circle, ups = [], masks = []; let W = 576, H = 1024;
+    if(S.test){ for(let n = 0; n < T3D_N; n++){ ups.push({img:'test.png', url:'test'}); masks.push(''); } }
+    else { const v = await d3Video(o.url, f => { T.f = 0.1 * f; t3dTell(ph); }); W = v.videoWidth; H = v.videoHeight;
+      for(let n = 0; n < T3D_N; n++){ await d3SeekTo(v, (v.duration - 0.05) * n / T3D_N); const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(v, 0, 0);
+        masks.push(t3dMask(c)); T.busy = 'Sending the views to ' + pcName(k.url) + '… ' + (n + 1) + '/' + T3D_N; T.f = 0.1 + 0.3 * (n + 1) / T3D_N; t3dTell(ph); ups.push(await uploadFrame(c, 'view' + n, k.url)); } }
+    const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+    const mm = k.moge ? add('LoadMoGeModel', {model_name:k.moge}) : null, prefix = cmPrefix('object3d'), saves = [];
+    ups.forEach((u, q) => { const li = add('LoadImage', {image:u.img});
+      const dep = mm ? add('MoGeRender', {moge_geometry:[add('MoGeInference', {moge_model:[mm,0], image:[li,0]}), 0], [k.mogeKey]:'depth'}) : add(k.node, {image:[li,0], resolution:1024});
+      saves.push(add('SaveImage', {images:[dep,0], filename_prefix:prefix + '_v' + q})); });
+    T.busy = 'Reading the depth of the 16 views…'; T.f = 0.4; t3dTell(ph);
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); T.frames = ups.map(() => ({url:'test', depth:scFakeDepth(), mask:'', flip:false})); T.w = 576; T.h = 1024; ph.w = T.w; ph.h = T.h; delete T.busy; save(); drawComic(); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
+    if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    T.making = {pc:k.url, id:j.prompt_id, saves, t:t0, ups:ups.map(u => u.url), masks, w:W, h:H, moge:!!mm}; save(); drawComic(); t3dWait(ph);
+  }catch(err){ delete T.busy; delete T.making; T.err = "Couldn't take the views: " + err.message; save(); drawComic(); } }
+async function t3dStop(ph){ const T = ph.t3d, m = T && T.making; if(!T) return; delete T.busy; if(!m) return; delete T.making; save(); drawComic();
+  if(S.test) return; try{ await fetch(m.pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:[m.id]})}); await fetch(m.pc + '/interrupt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt_id:m.id})}); }catch(e){} }
+async function t3dWait(ph){
+  const T = ph.t3d, m = T && T.making; if(!m || m.polling) return; m.polling = true;
+  try{ for(;;){ await new Promise(r => setTimeout(r, 3000)); if(T.making!==m) return;
+      await liveQueue(m.id, m.pc); const e = liveEta(m.id, null, m.t, 90, 'Reading the depth of the 16 views on ' + pcName(m.pc)); T.busy = e.text; T.f = 0.4 + 0.6 * e.f; t3dTell(ph);
+      let h = null; try{ h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id]; }catch(e2){ continue; }
+      if(!h){ if(Date.now() - m.t > 3600e3) throw new Error('it never finished (was ComfyUI restarted?)'); continue; }
+      if(h.status && h.status.status_str==='error'){ const er = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(er ? er[1].exception_message : 'ComfyUI hit an error'); }
+      if(!(h.status && h.status.completed)) continue;
+      const frames = m.saves.map((sid, q) => { const f = (((h.outputs || {})[sid] || {}).images || [])[0]; return f ? {url:m.ups[q], depth:viewUrl(f, m.pc), mask:m.masks[q], flip:false} : null; });
+      if(frames.some(f => !f)) throw new Error('some depth pictures did not come back');
+      // MoGe's depth can run the other way: her (the mask) should be nearer than the white around her
+      if(m.moge) for(const f of frames){ try{ const d = await d3Grey(f.depth, 96), mk = await d3Grey(f.mask, 96); let a = 0, na = 0, b = 0, nb = 0;
+        for(let q = 0; q < d.v.length; q++) if(mk.v[q] > 0.5){ a += d.v[q]; na++; } else { b += d.v[q]; nb++; } if(na && nb) f.flip = a / na < b / nb; }catch(e3){} }
+      T.frames = frames; T.w = m.w; T.h = m.h; ph.w = m.w; ph.h = m.h; delete T.making; delete T.busy; T.i = 0; ph.yaw = ph.pitch = 0; save();
+      if(!$('#comic').hidden) drawComic(); toast('She is a 3D object now: slide to turn her 🧊'); buzz(); return; } }
+  catch(err){ if(T.making===m){ delete T.making; delete T.busy; T.err = "Couldn't take the views: " + err.message; save(); if(!$('#comic').hidden) drawComic(); } }
+  finally{ m.polling = false; } }
+// the view on the slider, as one sheet with her outline, swung by the finger, on white
+function t3dLayer(ph){ const f = ph.t3d.frames[t3dIdx(ph)]; return {img:f.url, depth:f.depth, mask:f.mask || undefined, near:D3_NEAR, far:d3Far(ph), smooth:1, flip:!!f.flip}; }
+function t3dScene(ph, W, H, mode){ return scDraw([t3dLayer(ph)], d3Cam(ph, W, H), W, H, mode, D3_NEAR, d3Far(ph), null, mode==='stretch' ? 0 : 1); }
+function t3dPicture(ph, W, H, mode){ const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(t3dScene(ph, W, H, mode), 0, 0); return c; }
 function d3Redraw(){
-  const cv = $('#comic [data-d3view]'), pg = cmPage(); if(!cv || !pg) return; const ph = pg.panels[CM().sel].d3; if(!ph || !ph.depth) return;
+  const cv = $('#comic [data-d3view]'), pg = cmPage(); if(!cv || !pg) return; const ph = pg.panels[CM().sel].d3; if(!ph || !(ph.depth || t3dReady(ph))) return;
   const ar = (ph.w || 16) / (ph.h || 9), w = cv.clientWidth || 320, h = Math.round(w / ar), d = Math.min(2, window.devicePixelRatio || 1), W = Math.round(w * d), H = Math.round(h * d);
   if(cv.width!==W || cv.height!==H){ cv.width = W; cv.height = H; cv.style.height = h + 'px'; }
+  if(t3dReady(ph)){ try{ cv.getContext('2d').drawImage(t3dScene(ph, W, H, 'colour'), 0, 0); }catch(e){ toast(e.message, true); } return; }
   if(ph.view==='mm' && d3MmDraw(ph, cv)) return;
   if(ph.view==='circle' && d3CircDraw(ph, cv)) return;
   if(ph.view==='model' && ph.cmod && ph.cmod.url && cmodDraw(ph, cv)) return;
@@ -7437,7 +7524,7 @@ function cmGot(p, kind, it){
     ['far', 'farDepth', 'nearMask'].forEach(x => delete p[x]); p.dflip = false;
     save(); if(!$('#comic').hidden) drawComic(); if(it.url) d3After(p); return; }
   if(kind==='orbit'){ p.url = it.url || 'test'; delete p.err;
-    if(/_circle$/.test(p.id)){ const ph = cmAll().map(q => q.d3).find(d => d && d.orbs && d.orbs.circle===p); if(ph){ ph.view = 'circle'; ph.yaw = ph.pitch = 0; } } // straight onto the circle (Jordan 2026-10-21 was still on the 35° views)
+    if(/_circle$/.test(p.id)){ const ph = cmAll().map(q => q.d3).find(d => d && d.orbs && d.orbs.circle===p); if(ph && ph.t3d){ t3dDepth(ph); return; } if(ph){ ph.view = 'circle'; ph.yaw = ph.pitch = 0; } } // straight onto the circle (Jordan 2026-10-21 was still on the 35° views)
     save(); if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='far'){ if(it.urls && it.urls.length >= 2){ p.far = it.urls[0]; p.farDepth = it.urls[1]; p.nearMask = p.nearNext; } delete p.nearNext; save(); if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='angle' || kind==='finish') kind = 'still';
@@ -7549,6 +7636,7 @@ function drawComic(){
         <input type="text" data-cms="desc" data-id="${esc(s.id)}" value="${esc(s.desc || '')}" placeholder="${c ? 'extra words, e.g. carrying a red umbrella' : 'e.g. a tall man in a dark hooded coat'}">
         ${cm.route!=='clip' && loras.length ? `<select data-cms="lora" data-id="${esc(s.id)}" aria-label="Their LoRA"><option value="">No LoRA</option>${loras.map(n => `<option value="${esc(n)}" ${n===cmSlotLora(s, loras) ? 'selected' : ''}>LoRA: ${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select>` : ''}</div></div>`; }).join('') : '<p class="note">Nobody named in the script yet.</p>')
       + (!(S.chars || []).length ? '<p class="note">Make character cards under 🧍 Characters so MiniMax gets their pictures.</p>' : '');
+    x += `<div class="row"><label>Characters on</label>${seg('data-cmwhite', [['1', '⬜ White (for 3D)'], ['0', '🏙 The place']], cmWhite(cm) ? '1' : '0')}</div>`;
     x += `<div class="lbl">Place</div><div class="row"><div class="grow"><input type="text" data-cmf="place" value="${esc(cm.place || '')}" placeholder="e.g. a quiet city street at dusk"></div></div>
       <div class="cmloc">${cm.loc && cm.loc.url ? `<img src="${esc(mini(cm.loc.url))}" alt="The place">` : '<span class="cmnopic">🏙</span>'}<div class="grow"><p class="note" style="margin:0 0 6px">${cm.loc ? 'Every panel gets this picture of the place, so it stays the same street.' : 'One picture of the place with nobody in it keeps the background the same in every panel.'}</p>
         <div class="seg">${iks.length ? `<button data-cm="plate" ${cm.pj && (cm.pj.making || cm.pj.busy) ? 'disabled' : ''}>🏙 Paint the place</button>` : ''}<button data-cm="locphone">📱 From the phone</button><button data-cm="locshown" ${shownIdx >= 0 && S.gallery[shownIdx] ? '' : 'disabled'}>🖼 The picture in the preview</button>${cm.loc ? '<button data-cm="locoff">✕</button>' : ''}</div></div></div>`;
@@ -7585,7 +7673,7 @@ function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.c
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dsrc]'); if(!t) return;
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7608,21 +7696,23 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.d3home && p && p.d3){ p.d3.circHome = t.dataset.d3home; }
   else if(t.dataset.d3flat!=null && p && p.d3){ p.d3.flat = !!t.dataset.d3flat; }
   else if(t.dataset.d3plain!=null && p && p.d3){ p.d3.circPlain = !!t.dataset.d3plain; }
+  else if(t.dataset.cmwhite!=null){ cm.white = t.dataset.cmwhite==='1'; }
   else if(t.dataset.fusesrc && p && p.d3){ p.d3.fuse = Object.assign(p.d3.fuse || {}, {src:t.dataset.fusesrc}); }
   else if(a==='d3rev' && p.d3){ p.d3.circRev = !p.d3.circRev; }
   else if(t.dataset.fusen && p && p.d3 && p.d3.fuse){ p.d3.fuse.n = +t.dataset.fusen; }
   else if(a==='retag'){ p.tags = null; }
   else if(a==='stop'){ cmStop([p].concat(p.extra || [])); return; }
   else if(a==='stopall'){ cmStop(cmHosts(cm), true); return; }
-  else if(a==='d3stop' && p.d3){ fuseStop(p.d3); cmStop([p.d3].concat(d3Orbs(p.d3))); return; }
+  else if(a==='d3stop' && p.d3){ fuseStop(p.d3); t3dStop(p.d3); cmStop([p.d3].concat(d3Orbs(p.d3))); return; }
   else if(a==='d3fuse'){ fuseMake(p); return; }
   else if(a==='d3getda3'){ fuseGet(t.dataset.pc); return; }
   else if(a==='d3flip' && p.d3 && p.d3.fuse){ p.d3.fuse.flip = !p.d3.fuse.flip; save(); d3Redraw(); return; }
   else if(a==='d3orb'){ d3Orbit(p); return; }
+  else if(a==='t3dgo'){ t3dGo(p); }
   else if(a==='cmod'){ cmodMake(p); return; }
   else if(a==='d3use' && p.d3 && (p.d3.view==='mm' && d3OrbReady(p.d3) || p.d3.view==='circle' && d3CircReady(p.d3))){ d3UseMm(p); return; }
   else if(a==='d3moge'){ d3GetMoge(t.dataset.pc); return; }
-  else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = {id:p.id + '_3d', url:st.url, amt:1}; cmDepth(p.d3, st.url); return; }
+  else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = {id:p.id + '_3d', url:st.url, amt:1, t3d:{i:0}}; t3dGo(p); }
   else if(a==='d3off'){ p.d3 = null; }
   else if(a==='d3wig'){ d3Wiggle(!D3.play); return; }
   else if(a==='d3rec'){ d3Record(); return; }
@@ -7655,6 +7745,8 @@ $('#comic').addEventListener('click', e => {
 ['input', 'change'].forEach(ev => $('#comic').addEventListener(ev, e => {
   const el = e.target, cm = CM(), pg = cmPage();
   if(el.dataset.cmf){ cm[el.dataset.cmf] = el.value; save(); if(ev==='change' && el.dataset.cmf!=='script') drawComic(); return; }
+  if(pg && el.dataset.t3d){ const ph = pg.panels[cm.sel].d3; if(!ph || !ph.t3d) return; const i = Math.round(+el.value); ph.t3d.i = i; ph.yaw = ph.pitch = 0;
+    if(el.nextElementSibling) el.nextElementSibling.textContent = i===0 ? 'front' : Math.abs(i)===8 ? 'back' : (i < 0 ? '◀ ' : '') + Math.abs(i) * 22.5 + '°' + (i > 0 ? ' ▶' : ''); d3Redraw(); if(ev==='change') save(); return; }
   if(pg && el.dataset.d3){ const ph = pg.panels[cm.sel].d3; if(!ph) return; if(el.nextElementSibling) el.nextElementSibling.textContent = (+el.value).toFixed(2);
     if(ev==='change'){ ph.amt = +el.value; save(); d3Redraw(); } return; }
   if(el.dataset.cmp && pg){ const p = pg.panels[cm.sel]; p[el.dataset.cmp] = el.value; save(); if(ev==='change') drawComic(); return; }
@@ -7773,7 +7865,7 @@ $('#wsBar').onclick = e => { const b = e.target.closest('[data-ws]'); if(!b || b
 obAll().forEach(g => { if(g.ob && g.ob.making) waitOrbit(g.ob); });
 cmAll().forEach(p => { if(!p.parent && p.extra) p.extra = p.extra.filter(c => c.making); }); // an option that never got sent
 cmAll().forEach(p => { if(p.making) cmWait(p); }); // comic panels made while the app was closed come in
-cmAll().forEach(p => { if(p.fuse && p.fuse.making) fuseWait(p); if(p.cmod && p.cmod.making) cmodWait(p); });
+cmAll().forEach(p => { if(p.t3d && p.t3d.making) t3dWait(p); if(p.fuse && p.fuse.making) fuseWait(p); if(p.cmod && p.cmod.making) cmodWait(p); });
 if(S.wsBack){ const id = S.wsBack; delete S.wsBack; if(wsPanel(id)) wsOpen(id); }
 else if(S.tab==='comic') openComic(); // an orbit made while the app was closed comes in
 delete S.orbitN; delete S.orbitH; // the per-workstation orbit before pictures became projects

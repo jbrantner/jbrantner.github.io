@@ -16,3 +16,9 @@
 **v.110 (2026-10-21):** 🧍 Her 3D model from the ⭕ full circle. It replaces the fused model, which showed copies because Depth Anything 3 couldn't place the cameras round a painted character. The circle's front, both sides and back go to Hunyuan3D-2mv (or Pixal3D), the shape is painted from those four pictures on the phone (bake3d), and she is drawn where she stands in the still over the swung background. Swing with 🧍 Her model: drag sideways to walk round her, up or down to look from above or below. From her model, Use this angle repaints harder, with line art ControlNet and a 0.65 then 0.55 pass with no colour match, so Illustrious redoes her shading and dress. New "Circle her on: The scene / Plain white" setting circles her cut out on white.
 
 **v.111 (2026-10-21):** The comic redraws by itself when a computer comes on or goes off, so you no longer need to tap another panel and back. Her model now always looks for Hunyuan3D-2mv (on Render) instead of saying Pixal3D is missing.
+
+**v.112 (2026-10-21):** Jordan's plan: **🧊 Turn into 3D object**.
+- **Characters on: ⬜ White (for 3D) / 🏙 The place** is a new setting, white by default. Stills are painted on a plain white background (simple background, white background, with scenery negatives) and the place picture isn't used.
+- Turn into 3D object makes a MiniMax full circle of the still on plain white. It then takes 16 views (every 22.5°) and reads each one's depth (MoGe-2 or Depth Anything) in one job; her outline comes from the white.
+- A **Turn** slider (-8 to 8, front in the middle) picks the view, and a finger swings that view's own depth. Wiggle, ↺, ↔ Swap left and right, and Use this angle (on white) all work on it.
+- The old 3D look experiments (layers, MiniMax views, Full circle, Fuse, her model, Flat cut-out) are no longer reachable from the panel.

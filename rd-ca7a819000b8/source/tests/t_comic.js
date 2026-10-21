@@ -73,6 +73,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         if((pc.polls[id] = (pc.polls[id] || 0) + 1) < 2) return r.fulfill({ json:{[id]:{status:{completed:false}}} });
         const glbs = ks.filter(k => g[k].class_type==='SaveGLB');
         if(glbs.length) return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:Object.fromEntries(glbs.map(k => { const pre = g[k].inputs.filename_prefix, c = pre.lastIndexOf('/'); return [k, {'3d':[{filename:pre.slice(c + 1) + '_00001_.glb', subfolder:pre.slice(0, c), type:'output'}]}]; }))}} });
+        const imgs = ks.filter(k => g[k].class_type==='SaveImage');
+        if(!ks.some(k => g[k].class_type==='SaveVideo') && imgs.length > 2) return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:Object.fromEntries(imgs.map(k => { const pre = g[k].inputs.filename_prefix, c = pre.lastIndexOf('/');
+          return [k, {images:[{filename:pre.slice(c + 1) + '_' + id + '_.png', subfolder:pre.slice(0, c), type:'output'}]}]; }))}} }); // many pictures in one job (the 16 views' depth)
         const vid = ks.find(k => g[k].class_type==='SaveVideo'), img = ks.find(k => g[k].class_type==='SaveImage'), sv = vid || img, pre = g[sv].inputs.filename_prefix, cut = pre.lastIndexOf('/');
         const f = {filename:pre.slice(cut + 1) + '_' + id + '_.' + (vid ? 'webm' : 'png'), subfolder:pre.slice(0, cut), type:'output'};
         const four = !vid && g[sv].inputs.images && g[g[sv].inputs.images[0]].class_type==='ImageBatch'; // the 3D look's layers come back as a batch of 4
@@ -183,6 +186,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   ok(await page.$eval('#comic select[data-cmill="ckpt"]', s => s.value)==='iriselTouchIL_v10.safetensors' && await page.$eval('#comic select[data-cmill="style"]', s => s.value)==='AFKJ Style Illustrious Claude.safetensors'
     && await page.inputValue('#comic input[data-cmill="words"]')==='AFKJ Style', 'stills default to iriselTouchIL with AFKJ Style (its words filled in)');
   ok(await page.$eval('#comic select[data-cms="lora"]', s => s.value)==='librarianx_v2.safetensors', 'the Librarian\'s own LoRA is found from her trigger word');
+  ok(await page.$('#comic [data-cmwhite="1"].on'), 'characters are painted on white by default (for 3D)');
+  await page.click('#comic [data-cmwhite="0"]'); // the place-painting tests below
   const sent0 = () => [...PCS.Render.sent, ...PCS.Main.sent].length, lastG = () => ALL[ALL.length - 1].prompt;
   let n1 = sent0(); await page.click('#comic [data-cm="plate"]');
   await page.waitForFunction(() => (CM().plates || []).length===1, null, {timeout:15000});
@@ -236,144 +241,29 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   // ---- 🌄 pictures in 3D ----
   await page.click('#cmPage [data-cpi="2"]');
   ok(!(await page.$('#comic [data-cm="scene"]')), 'the 3D scene builder is gone (Jordan found it clumsy)');
-  // 🌄 3D look on a still, and ✨ Use this angle
-  await page.click('#comic [data-cm="d3"]');
-  await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q && q.depth && !q.making; }, null, {timeout:20000});
-  { const g = ALL[ALL.length - 1].prompt, n = Object.values(g), d = n.find(x => x.class_type==='DepthAnythingV2Preprocessor');
-    ok(check(g).length===0 && d && d.inputs.ckpt_name==='depth_anything_v2_vitl.pth' && /comics\/depth/.test(n.find(x => x.class_type==='SaveImage').inputs.filename_prefix), '🌄 3D look: Depth Anything V2 reads the still\'s depth on a computer: ' + check(g).join('; '));
-    ok(n.some(x => x.class_type==='RemoveBackground') && n.filter(x => x.class_type==='DepthAnythingV2Preprocessor').length===2 && n.filter(x => x.class_type==='ImageBatch').length===3 && /no humans, scenery/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join())
-      && await page.evaluate(() => { const q = cmPage().panels[2].d3; return q.bg && q.bgDepth && q.mask && d3Layers(q).length===2; }), 'in layers: the character cut out (BiRefNet), the background painted in behind them (Illustrious, no humans), the depth of both'); }
-  await page.waitForSelector('#comic [data-d3view]'); await page.waitForTimeout(400);
-  { const n = await page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
-    ok(n > 100, '🌄 3D look draws the still as a relief'); }
+  await page.evaluate(() => { CM().white = true; drawComic(); });
+  // 🧊 Turn into 3D object (Jordan 2026-10-21): a MiniMax circle on white, 16 views with their depth, a slider and a finger
+  { const nb = ALL.length; await page.click('#comic [data-cm="d3"]');
+    await page.waitForFunction(() => t3dReady(cmPage().panels[2].d3), null, {timeout:120000}).catch(async e => { console.log('DBG', await page.evaluate(() => { const q = cmPage().panels[2].d3; return JSON.stringify({t3d:q.t3d, orb:q.orbs && q.orbs.circle}).slice(0, 900); })); throw e; });
+    const gs = ALL.slice(nb).map(x => x.prompt), iv = Object.values(gs[0]).find(n => n.class_type==='MiniMaxH3ImageToVideo'), dg = gs[1], dn = Object.values(dg || {});
+    ok(iv && /360-degree orbit/.test(iv.inputs.prompt) && /plain white/.test(iv.inputs.prompt), '🧊 Turn into 3D object: MiniMax circles her all the way round on plain white');
+    ok(dg && check(dg).length===0 && dn.filter(x => x.class_type==='LoadImage').length===16 && dn.filter(x => x.class_type==='DepthAnythingV2Preprocessor').length===16 && dn.filter(x => x.class_type==='SaveImage').length===16,
+      'then 16 views from the turn get their depth in one job: ' + check(dg || {}).join('; ')); }
+  await page.waitForSelector('#comic [data-d3view]'); await page.waitForTimeout(500);
+  { const px = () => page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0, h = 0; for(let q = 0; q < d.length; q += 16){ if(d[q] + d[q+1] + d[q+2] < 720) k++; h = (h * 31 + d[q] + 3 * d[q+1]) % 1000003; } return [k, h]; });
+    const a = await px(), la = await page.evaluate(() => t3dLayer(cmPage().panels[2].d3).img); await page.$eval('#comic [data-t3d="i"]', el => { el.value = 4; el.dispatchEvent(new Event('input', {bubbles:true})); }); await page.waitForTimeout(400); const b = await px();
+    ok(a[0] > 20 && la!==await page.evaluate(() => t3dLayer(cmPage().panels[2].d3).img) && await page.evaluate(() => t3dIdx(cmPage().panels[2].d3)===4) && /90°/.test(await page.textContent('#comic .d3box')), 'the slider turns her through the 16 views (90° is the 5th): ' + a + ' → ' + b);
+    await page.$eval('#comic [data-t3d="i"]', el => { el.value = -2; el.dispatchEvent(new Event('input', {bubbles:true})); }); ok(await page.evaluate(() => t3dIdx(cmPage().panels[2].d3)===14), 'left of the front counts back from the end of the turn'); }
   await (await page.$('#comic [data-d3view]')).scrollIntoViewIfNeeded();
   { const bx = await (await page.$('#comic [data-d3view]')).boundingBox();
     await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.5); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.6, bx.y + bx.height * 0.5, {steps:4}); await page.mouse.up();
-    ok(await page.evaluate(() => Math.abs(cmPage().panels[2].d3.yaw) > 0.05), 'dragging swings its angle a little'); }
+    ok(await page.evaluate(() => Math.abs(cmPage().panels[2].d3.yaw) > 0.05), 'a finger swings the view it is on a little'); }
   await page.click('#comic [data-cm="d3wig"]'); await page.waitForTimeout(300); ok(await page.evaluate(() => D3.play), '▶ Wiggle swings it side to side'); await page.click('#comic [data-cm="d3wig"]');
   { const n0 = await page.evaluate(() => cmPage().panels[2].stills.length), nb = ALL.length; await page.click('#comic [data-cm="d3use"]');
     await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
     const g = ALL[nb].prompt, n = Object.values(g), ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
-    ok(check(g).length===0 && ks.join()==='0.65,0.25' && n.some(x => x.class_type==='SetLatentNoiseMask') && n.find(x => x.class_type==='SetUnionControlNetType').inputs.type==='tile' && n.filter(x => x.class_type==='LoadImage').length===2 && g[n.find(x => x.class_type==='SaveImage').inputs.images[0]].class_type==='ColorMatch',
-      '✨ Use this angle: the swung view, its torn edges repainted at 0.65 then 0.25 over all, held by ProMax tile, colours matched back to the view, lands as a new still: ' + check(g).join('; ') + ' ' + ks); }
-  // ---- 3D look, better: MoGe-2 depth, which way it runs, and a third layer (the far backdrop) ----
-  { const sp = await page.evaluate(async () => { const mk = f => { const c = document.createElement('canvas'); c.width = 64; c.height = 96; const x = c.getContext('2d'), im = x.createImageData(64, 96);
-        for(let j = 0; j < 96; j++) for(let i = 0; i < 64; i++){ const v = f(i, j); im.data.set([v, v, v, 255], (j * 64 + i) * 4); } x.putImageData(im, 0, 0); return c.toDataURL(); };
-      const two = await d3Split(mk((i, j) => j > 60 ? 220 : 30), false), slope = await d3Split(mk((i, j) => Math.round(j * 2.6)), false);
-      return {two:!!two && Math.abs(two.near - 35 / 96) < 0.05, slope:slope===null, dbg:JSON.stringify([two && two.near, slope && slope.near])}; });
-    ok(sp.two && sp.slope, 'the background splits in two only where its depth has a clear near part and far part (not a smooth slope) ' + sp.dbg); }
-  { const fl = await page.evaluate(async () => { const mk = (f, w = 64, h = 64) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'), im = x.createImageData(w, h);
-        for(let j = 0; j < h; j++) for(let i = 0; i < w; i++){ const v = f(i, j); im.data.set([v, v, v, 255], (j * w + i) * 4); } x.putImageData(im, 0, 0); return c.toDataURL(); };
-      const ph = {id:'t3d', url:mk(() => 128), depth:mk((i, j) => i > 20 && i < 44 ? 40 : 200), mask:mk((i, j) => i > 20 && i < 44 ? 255 : 0), moge:true};
-      await d3After(ph); const a = ph.dflip; const ph2 = Object.assign({}, ph, {moge:false}); await d3After(ph2); return {a, b:ph2.dflip, e:ph.err}; });
-    ok(fl.a===true && !fl.b, 'MoGe depth that runs the other way (the character darker than the wall) is turned round; Depth Anything\'s is left ' + JSON.stringify(fl)); }
-  await page.evaluate(() => { const o = allPcs().find(p => /desktop/.test(p.url)).oi; Object.assign(o, {LoadMoGeModel:{input:{required:{model_name:[['moge_2_vitl_normal_fp16.safetensors']]}}}, MoGeInference:{input:{required:{}}},
-    MoGeRender:{input:{required:{output:[['depth_colored', 'depth', 'mask', 'normal_opengl', 'normal_directx']]}}}}); drawComic(); });
-  { const nb = ALL.length; await page.click('#comic [data-cm="d3"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q && q.depth && !q.making; }, null, {timeout:20000});
-    const g = ALL[nb].prompt, n = Object.values(g), r = n.filter(x => x.class_type==='MoGeRender');
-    ok(check(g).length===0 && r.length===2 && r.every(x => x.inputs.output==='depth') && n.find(x => x.class_type==='LoadMoGeModel').inputs.model_name==='moge_2_vitl_normal_fp16.safetensors' && !n.some(x => x.class_type==='DepthAnythingV2Preprocessor')
-      && await page.evaluate(() => cmPage().panels[2].d3.moge), 'with ComfyUI\'s MoGe nodes and MoGe-2 on a computer, the 3D look reads both depths with MoGe-2: ' + check(g).join('; ')); }
-  { const nb = ALL.length; await page.evaluate(async () => { const ph = cmPage().panels[2].d3, c = document.createElement('canvas'); c.width = 8; c.height = 8; await cmFar(ph, {canvas:c, t:0.5, near:0.4}); });
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.far && !q.making; }, null, {timeout:20000});
-    const g = ALL[nb].prompt, n = Object.values(g), sv = n.find(x => x.class_type==='SaveImage');
-    ok(check(g).length===0 && n.some(x => x.class_type==='ImageToMask') && n.some(x => x.class_type==='SetLatentNoiseMask') && /no humans, scenery, distant view/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join())
-      && g[sv.inputs.images[0]].class_type==='ImageBatch' && n.some(x => x.class_type==='MoGeRender'), 'the far backdrop: the near part of the background painted out (Illustrious, scenery), its depth read again: ' + check(g).join('; '));
-    ok(await page.evaluate(() => { const q = cmPage().panels[2].d3; return d3Layers(q).length===3 && q.nearMask && d3Layers(q)[1].mask===q.nearMask; }) && /Three layers/.test(await page.textContent('#comic .d3box')), 'and the 3D look draws three layers: far backdrop, near background, character'); }
-  await page.waitForTimeout(300);
-  { const n = await page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
-    ok(n > 100, 'the three layers draw'); }
-  { await page.click('#comic [data-d3flat="1"]'); const r = await page.evaluate(async () => { const q = cmPage().panels[2].d3; await d3Ready(q); const real = scDraw, seen = [];
-      window.scDraw = function(ls, cam, W, H, mode, n, f, last){ seen.push([ls.length, cam.pos.join(), last ? last.pos.join() : null]); return real.apply(this, arguments); };
-      q.yaw = 0.3; q.flat = true; d3Picture(q, 160, 120, 'stretch'); q.flat = false; d3Picture(q, 160, 120, 'colour'); window.scDraw = real;
-      const straight = d3Cam(Object.assign({}, q, {yaw:0, pitch:0}), 160, 120).pos.join(); q.yaw = 0; return [q.flat, seen, straight]; });
-    ok(r[1][0][0]===3 && r[1][0][2]===r[2] && r[1][0][1]!==r[2] && r[1][1][2]===null, 'Character: Flat cut-out draws the character from the straight-on camera over the swung background (also for Use this angle): ' + JSON.stringify(r[1]));
-    await page.click('#comic [data-d3flat=""]'); }
-  // ---- 🎞 MiniMax views: a left and a right orbit from the still, scrubbed by dragging ----
-  { const nb = ALL.length; await page.click('#comic [data-d3deg="20"]'); await page.click('#comic [data-cm="d3orb"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3OrbReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
-    const gs = ALL.slice(nb).map(x => x.prompt), sv = g => Object.values(g).find(n => n.class_type==='SaveVideo'), iv = g => Object.values(g).find(n => n.class_type==='MiniMaxH3ImageToVideo');
-    ok(gs.length===2 && /panel_3\/orbit_left$/.test(sv(gs[0]).inputs.filename_prefix) && /panel_3\/orbit_right$/.test(sv(gs[1]).inputs.filename_prefix) && /20-degree arc shot.*to the left/.test(iv(gs[0]).inputs.prompt) && /to the right/.test(iv(gs[1]).inputs.prompt),
-      '🎞 Make real angles: two MiniMax FL2V orbits from the still, left and right, at the picked 20°, saved in the panel\'s folder: ' + gs.map(g => sv(g).inputs.filename_prefix).join(' | '));
-    ok(new Set(ALL.slice(nb).map(x => PCS.Render.sent.includes(x) ? 'R' : 'M')).size===2, 'the two orbits go to both computers at once'); }
-  await page.click('#comic [data-d3view="mm"]');
-  await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return D3F[q.orbs.right.url] && D3F[q.orbs.right.url].ready; }, null, {timeout:20000}).catch(() => {});
-  ok(await page.evaluate(() => { const q = cmPage().panels[2].d3; q.yaw = 0.2; return d3MmDraw(q, document.querySelector('#comic [data-d3view]')); }), 'Swing with MiniMax views: dragging shows the orbit\'s painted frames');
-  { const nb = ALL.length, n0 = await page.evaluate(() => cmPage().panels[2].stills.length); await page.click('#comic [data-cm="d3use"]');
-    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
-    const g = ALL[nb].prompt, sv = Object.values(g).find(n => n.class_type==='SaveImage');
-    ok(/panel_3\/finished/.test(sv.inputs.filename_prefix) && Object.values(g).some(n => n.class_type==='ColorMatch'), 'Use this angle on a MiniMax view finishes that exact frame in Illustrious as a new still'); }
-  // ---- ⭕ Full circle: one MiniMax clip all the way round, the still as first and last frame, scrubbed forward or back ----
-  await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; p.d3.view = 'depth'; drawComic(); });
-  await page.click('#comic [data-d3mode="circle"]');
-  { const nb = ALL.length; await page.click('#comic [data-cm="d3orb"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3CircReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
-    const gs = ALL.slice(nb).map(x => x.prompt), iv = Object.values(gs[0]).find(n => n.class_type==='MiniMaxH3ImageToVideo'), sv = Object.values(gs[0]).find(n => n.class_type==='SaveVideo');
-    ok(gs.length===1 && iv.inputs.last_frame && iv.inputs.first_frame && JSON.stringify(iv.inputs.last_frame)===JSON.stringify(iv.inputs.first_frame) && /360-degree orbit/.test(iv.inputs.prompt) && /panel_3\/orbit_circle$/.test(sv.inputs.filename_prefix)
-      && await page.evaluate(() => d3OrbReady(cmPage().panels[2].d3)), '⭕ Full circle: one FL2V clip with the still as first and last frame, a timed 360 prompt; the left/right views are kept'); }
-  ok(await page.evaluate(() => cmPage().panels[2].d3.view==='circle') && await page.$('#comic [data-d3view="circle"].on'), 'when the circle is ready the 3D look switches straight to ⭕ Full circle');
-  await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return D3F[q.orbs.circle.url] && D3F[q.orbs.circle.url].ready; }, null, {timeout:20000}).catch(() => {});
-  ok(await page.evaluate(() => { const q = cmPage().panels[2].d3; q.yaw = Math.PI; const a = d3CircAt(q); q.yaw = -Math.PI / 2; const b = d3CircAt(q); return Math.abs(a - 0.5) < 1e-6 && Math.abs(b - 0.75) < 1e-6 && d3CircDraw(q, document.querySelector('#comic [data-d3view]')); }),
-    'dragging right plays the circle forward, left plays it backward from the end');
-  { await page.click('#comic [data-d3mode="circle"]').catch(() => {}); await page.click('#comic [data-d3home="free"]'); const nb = ALL.length; await page.click('#comic [data-cm="d3orb"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3CircReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
-    const iv = Object.values(ALL[nb].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo'); ok(!iv.inputs.last_frame, 'Last frame: Leave it free sends only the first frame'); }
-  await page.evaluate(() => { cmPage().panels[2].d3.orbMode = 'sides'; cmPage().panels[2].d3.view = 'depth'; drawComic(); });
-  // ---- 🧊 the orbit views fused into a 3D model (Depth Anything 3, multiview) ----
-  await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; p.d3.view = 'depth'; drawComic(); });
-  ok(/update ComfyUI/.test(await page.textContent('#comic .d3box')), 'without the Depth Anything 3 nodes, the 3D look says to update ComfyUI');
-  await page.evaluate(() => { const o = allPcs().find(p => /desktop/.test(p.url)).oi; Object.assign(o, {DA3Inference:{input:{required:{}}}, DA3GeometryToMesh:{input:{required:{}}}, SaveGLB:{input:{required:{}}},
-    LoadDA3Model:{input:{required:{model_name:[['moge_2_vitl_normal_fp16.safetensors']], weight_dtype:[['default']]}}}}); drawComic(); });
-  ok(await page.isVisible('#comic [data-cm="d3getda3"]'), 'with the nodes but no DA3 model: ⬇ Get Depth Anything 3');
-  await page.evaluate(() => { allPcs().find(p => /desktop/.test(p.url)).oi.LoadDA3Model.input.required.model_name = [['moge_2_vitl_normal_fp16.safetensors', 'depth_anything_3_base.safetensors']]; drawComic(); });
-  await page.click('#comic [data-fusesrc="sides"]');
-  { const nb = ALL.length; await page.click('#comic [data-cm="d3fuse"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.fuse && q.fuse.glbs && !q.fuse.making; }, null, {timeout:30000});
-    const g = ALL[nb].prompt, n = Object.values(g), di = n.find(x => x.class_type==='DA3Inference'), ms = n.filter(x => x.class_type==='DA3GeometryToMesh').map(x => x.inputs.batch_index);
-    ok(check(g).length===0 && n.filter(x => x.class_type==='LoadImage').length===17 && di.inputs.mode==='multiview' && di.inputs['mode.ref_view_strategy']==='middle' && n.find(x => x.class_type==='LoadDA3Model').inputs.model_name==='depth_anything_3_base.safetensors'
-      && ms.join()==='0,4,8,12,16' && n.filter(x => x.class_type==='SaveGLB').every(x => /panel_3\/model3d_v\d+$/.test(x.inputs.filename_prefix)),
-      '🧊 Fuse: the still + 8 frames of each orbit go to Depth Anything 3 multiview (anchored on the still), 5 views become meshes saved as .glb: ' + check(g).join('; ') + ' ' + ms); }
-  ok(await page.evaluate(() => cmPage().panels[2].d3.view==='fuse') && await page.$('#comic [data-d3view="fuse"].on'), 'when it is ready the 3D look switches to 🧊 3D model');
-  await page.waitForTimeout(800);
-  { const px = () => page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0, h = 0; for(let q = 0; q < d.length; q += 16){ if(d[q] + d[q+1] + d[q+2] > 30) k++; h = (h * 31 + d[q] + d[q+1]) % 1000003; } return [k, h]; });
-    const a = await px(); await page.evaluate(() => { cmPage().panels[2].d3.yaw = 0.8; d3Redraw(); }); const b = await px();
-    ok(a[0] > 50 && b[0] > 0 && a[1]!==b[1], 'the fused model draws on the phone (over the painted-in background) and turns (' + a + ' → ' + b + ')'); }
-  { await page.evaluate(() => { cmPage().panels[2].d3.yaw = 0.3; }); const nb = ALL.length, n0 = await page.evaluate(() => cmPage().panels[2].stills.length); await page.click('#comic [data-cm="d3use"]');
-    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
-    const g = ALL[nb].prompt, ks = Object.values(g).filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
-    ok(check(g).length===0 && ks.join()==='0.65,0.25', 'Use this angle from the 3D model: its holes repainted (0.65), then a light pass (0.25), as a new still'); }
-  // 🧊 from the ⭕ full circle: 16 frames all the way round, 8 meshes, turns all the way and tilts
-  { await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; drawComic(); });
-    await page.click('#comic [data-fusesrc="circle"]'); const nb = ALL.length; await page.click('#comic [data-cm="d3fuse"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.fuse && q.fuse.glbs && q.fuse.made==='circle' && !q.fuse.making; }, null, {timeout:150000}); // 72 real frames to take first
-    const g = ALL[nb].prompt, n = Object.values(g), ms = n.filter(x => x.class_type==='DA3GeometryToMesh').map(x => x.inputs.batch_index);
-    ok(check(g).length===0 && n.filter(x => x.class_type==='LoadImage').length===16 && ms.join()==='0,2,4,6,8,10,12,14' && await page.evaluate(() => fuseUrls(cmPage().panels[2].d3).length===8),
-      '🧊 Fuse from the full circle: 16 frames all the way round (the still in the middle), 8 meshes: ' + ms);
-    const turned = await page.evaluate(() => { const q = cmPage().panels[2].d3, cv = document.querySelector('#comic [data-d3view]'), r = cv.getBoundingClientRect();
-      const ev = (t, x, y) => cv.dispatchEvent(new PointerEvent(t, {clientX:x, clientY:y, pointerId:1, bubbles:true}));
-      q.yaw = q.pitch = 0; ev('pointerdown', r.left + 10, r.top + 10); for(let k = 1; k <= 20; k++) ev('pointermove', r.left + 10 - k * r.width / 8, r.top + 10 + k * r.height / 40); ev('pointerup', 0, 0); return [q.yaw, q.pitch]; });
-    ok(turned[0] > 1.3 && turned[1] > 0.6, 'the model from the circle turns past the side (' + turned.map(v => v.toFixed(2)) + ') and tilts further'); }
-  // 🧍 her own 3D model from the circle: front, sides and back to Hunyuan3D-2mv, drawn where she stands, turned and tilted
-  { await page.evaluate(() => { const q = cmPage().panels[2].d3; q.view = 'depth'; drawComic(); }); await page.evaluate(() => { const o = allPcs().find(p => /desktop/.test(p.url)).oi; Object.assign(o, {Hunyuan3Dv2ConditioningMultiView:{input:{required:{}}}, ImageOnlyCheckpointLoader:{input:{required:{ckpt_name:[['hunyuan3d-dit-v2-mv_fp16.safetensors']]}}},
-      LoadBackgroundRemovalModel:o.LoadBackgroundRemovalModel || {input:{required:{bg_removal_name:[['birefnet.safetensors']]}}}}); drawComic(); });
-    const nb = ALL.length; await page.click('#comic [data-cm="cmod"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return q.cmod && q.cmod.url && q.view==='model'; }, null, {timeout:30000});
-    const g = ALL[nb].prompt, mv = Object.values(g).find(x => x.class_type==='Hunyuan3Dv2ConditioningMultiView');
-    ok(mv && ['front', 'left', 'back', 'right'].every(k => mv.inputs[k]), '🧍 Make her 3D model: the circle\'s front, both sides and back go to Hunyuan3D-2mv');
-    await page.waitForTimeout(500);
-    const r = await page.evaluate(async () => { const q = cmPage().panels[2].d3, cv = document.querySelector('#comic [data-d3view]'); await fuseMesh(q.cmod.url).wait;
-      const h = () => { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let k = 0; for(let i = 0; i < d.length; i += 16) k = (k * 31 + d[i] + 3 * d[i + 1]) % 1000003; return k; };
-      q.yaw = q.pitch = 0; const a = cmodDraw(q, cv), h0 = h(); q.yaw = 2.5; q.pitch = 0.8; cmodDraw(q, cv); const h1 = h(); q.yaw = q.pitch = 0; return [a, h0!==h1]; });
-    ok(r[0] && r[1], 'her model draws over the swung background and turns and tilts');
-    const nb2 = ALL.length, n0 = await page.evaluate(() => { cmPage().panels[2].d3.yaw = 1; return cmPage().panels[2].stills.length; }); await page.click('#comic [data-cm="d3use"]');
-    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
-    const ks = Object.values(ALL[nb2].prompt).filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
-    ok(ks.join()==='0.65,0.55', 'Use this angle from her model repaints harder (0.65 then 0.55), so the shading and dress come from Illustrious: ' + ks); }
-  { await page.evaluate(() => { const p = cmPage().panels[2]; p.still = p.stills.findIndex(x => x.url===p.d3.url); p.show = 'still'; p.d3.view = 'depth'; p.d3.orbMode = 'circle'; drawComic(); });
-    await page.click('#comic [data-d3plain="1"]'); const nb = ALL.length; await page.click('#comic [data-cm="d3orb"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return d3CircReady(q) && !d3Orbs(q).some(o => o.making || o.busy); }, null, {timeout:30000});
-    const iv = Object.values(ALL[nb].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo'); ok(/plain white/.test(iv.inputs.prompt), 'Circle her on: Plain white circles her alone on white'); }
-  await page.evaluate(() => { cmPage().panels[2].d3.view = 'depth'; });
+    ok(check(g).length===0 && ks.join()==='0.65,0.25' && /white background/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join()), '✨ Use this angle paints that view as a new still, on white: ' + check(g).join('; ') + ' ' + ks); }
+  ok(!(await page.$('#comic [data-d3view="mm"], #comic [data-cm="d3fuse"], #comic [data-cm="cmod"], #comic [data-d3flat]')), 'the old 3D experiments are gone from the panel');
   // ✕ Stop: the comic's jobs can be cancelled
   { await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cmopts="3"]'); const n0 = await page.evaluate(() => cmPage().panels[1].stills.length);
     await page.click('#comic [data-cm="still1"]'); await page.waitForSelector('#comic [data-cm="stopall"]', {timeout:5000});
