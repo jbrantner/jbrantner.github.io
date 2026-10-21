@@ -242,34 +242,34 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#cmPage [data-cpi="2"]');
   ok(!(await page.$('#comic [data-cm="scene"]')), 'the 3D scene builder is gone (Jordan found it clumsy)');
   await page.evaluate(() => { CM().white = true; drawComic(); });
-  // 🧊 Turn into 3D object (Jordan 2026-10-21): three MiniMax circles on white (eye level, high, low), no depth; sideways turns, up/down snaps rings
+  // 🧊 Turn into 3D object (Jordan 2026-10-21): a MiniMax circle on white, no depth; camera moves (up/down/zoom) from any angle
   { const nb = ALL.length; await page.click('#comic [data-cm="d3"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return t3dReady(q) && t3dHas(q, 1) && t3dHas(q, -1); }, null, {timeout:120000}).catch(async e => { console.log('DBG', await page.evaluate(() => { const q = cmPage().panels[2].d3; return JSON.stringify({t3d:q.t3d, orb:q.orbs && q.orbs.circle}).slice(0, 900); })); throw e; });
-    const ps = ALL.slice(nb).map(x => Object.values(x.prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo')).filter(Boolean), pr = ps.map(n => n.inputs.prompt);
-    ok(ps.length===5 && /360-degree orbit/.test(pr[0]) && /plain white/.test(pr[0]) && !ALL.slice(nb).some(x => Object.values(x.prompt).some(n => /Depth/.test(n.class_type))), '🧊 Turn into 3D object: MiniMax circles her on plain white, no depth step (' + ps.length + ' clips)');
-    ok(pr.some(t => /crane-up/.test(t)) && pr.some(t => /crane-down/.test(t)), 'it cranes up and down from the still');
-    const hi = ps.find(n => /high angle above her/.test(n.inputs.prompt)), lo = ps.find(n => /low angle near the ground/.test(n.inputs.prompt));
-    ok(hi && lo && hi.inputs.last_frame && lo.inputs.last_frame && /360-degree/.test(hi.inputs.prompt), 'then a high and a low circle, each starting and ending on its crane\'s last frame'); }
+    await page.waitForFunction(() => t3dReady(cmPage().panels[2].d3), null, {timeout:120000});
+    const ps = ALL.slice(nb).map(x => Object.values(x.prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo')).filter(Boolean);
+    ok(ps.length===1 && /360-degree orbit/.test(ps[0].inputs.prompt) && /plain white/.test(ps[0].inputs.prompt) && !ALL.slice(nb).some(x => Object.values(x.prompt).some(n => /Depth/.test(n.class_type))), '🧊 Turn into 3D object: one MiniMax circle on plain white, no depth step'); }
   await page.waitForSelector('#comic [data-d3view]'); await page.waitForTimeout(500);
   { await page.$eval('#comic [data-t3d="deg"]', el => { el.value = 90; el.dispatchEvent(new Event('input', {bubbles:true})); });
     ok(await page.evaluate(() => Math.abs(d3CircAt(cmPage().panels[2].d3) - 0.25) < 0.01) && /90°/.test(await page.textContent('#comic .d3box')), 'the Turn slider walks round her (90° is a quarter of the circle)');
-    await page.$eval('#comic [data-t3d="deg"]', el => { el.value = -90; el.dispatchEvent(new Event('input', {bubbles:true})); }); ok(await page.evaluate(() => Math.abs(d3CircAt(cmPage().panels[2].d3) - 0.75) < 0.01), 'left of the front is the end of the circle');
-    ok(await page.evaluate(() => { const ph = cmPage().panels[2].d3, A = [0, 1, 2, 3, 4].map(n => { const c = document.createElement('canvas'); c.width = 20; c.height = 30; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 20, 30); x.fillStyle = 'hsl(' + n * 60 + ',80%,40%)'; x.fillRect(5, 5, 4 + n * 2, 20); return c; });
-      const B = [A[0], A[0], A[1], A[2], A[3], A[3], A[4]]; const m = t3dMap(A, B, 'x'); return m.every((j, i) => B[j]===A[i] && (!i || j >= m[i - 1])); }), 'a ring that turns at a different pace is lined up by her outline'); }
+    await page.$eval('#comic [data-t3d="deg"]', el => { el.value = -90; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }); ok(await page.evaluate(() => Math.abs(d3CircAt(cmPage().panels[2].d3) - 0.75) < 0.01), 'left of the front is the end of the circle'); }
+  { const nb = ALL.length; await page.click('#comic [data-cm="t3dmove"][data-d="up"]');
+    await page.waitForFunction(() => { const m = t3dMoves(cmPage().panels[2].d3)[0]; return m && m.host.url; }, null, {timeout:20000});
+    const iv = Object.values(ALL[nb].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo');
+    ok(iv && /crane-up/.test(iv.inputs.prompt) && iv.inputs.height > 0, '⬆ Up: MiniMax cranes up from the angle on screen');
+    await page.click('#comic [data-t3dmv="0"]'); ok(await page.evaluate(() => cmPage().panels[2].d3.mv===0 && Math.abs(d3CircAt(cmPage().panels[2].d3) - 0.75) < 0.01), 'tapping a made move looks through it, at its angle');
+    const nz = ALL.length; await page.click('#comic [data-t3dmv="0"]'); await page.click('#comic [data-cm="t3dmove"][data-d="in"]'); await page.waitForTimeout(600);
+    ok(/dolly-in/.test(Object.values(ALL[nz].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo').inputs.prompt), '🔍 Zoom in makes a dolly-in'); await page.click('#comic [data-t3dmv="0"]'); }
   await (await page.$('#comic [data-d3view]')).scrollIntoViewIfNeeded();
-  { const bx = await (await page.$('#comic [data-d3view]')).boundingBox(), y0 = await page.evaluate(() => cmPage().panels[2].d3.yaw);
+  { const bx = await (await page.$('#comic [data-d3view]')).boundingBox();
+    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.3); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.6, {steps:6}); await page.mouse.up();
+    ok(await page.evaluate(() => cmPage().panels[2].d3.mvT > 0.2), 'dragging up or down scrubs the move');
     await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.5); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.6, bx.y + bx.height * 0.5, {steps:4}); await page.mouse.up();
-    ok(await page.evaluate(y => Math.abs(cmPage().panels[2].d3.yaw - y) > 0.05 && !cmPage().panels[2].d3.ring, y0), 'a finger sideways turns her');
-    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.4); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.7, {steps:6}); await page.mouse.up();
-    ok(await page.evaluate(() => cmPage().panels[2].d3.ring===1), 'a finger down snaps to the high circle');
-    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.9); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.3, {steps:8}); await page.mouse.up();
-    ok(await page.evaluate(() => cmPage().panels[2].d3.ring===-1), 'and down past eye level to the low one');
-    await page.click('#comic [data-t3dring="1"]'); ok(await page.evaluate(() => cmPage().panels[2].d3.ring===1), 'the Height buttons pick a circle too'); }
+    ok(await page.evaluate(() => cmPage().panels[2].d3.mv===-1), 'dragging sideways goes back to the circle and turns her');
+    await page.click('#comic [data-t3dmv="0"]'); }
   await page.click('#comic [data-cm="d3wig"]'); await page.waitForTimeout(300); ok(await page.evaluate(() => D3.play), '▶ Wiggle swings it side to side'); await page.click('#comic [data-cm="d3wig"]');
   { const n0 = await page.evaluate(() => cmPage().panels[2].stills.length), nb = ALL.length; await page.click('#comic [data-cm="d3use"]');
     await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
     const g = ALL[nb].prompt, n = Object.values(g), ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
-    ok(check(g).length===0 && ks.length >= 1 && /white background/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join()), '✨ Use this angle finishes the frame showing (high circle) as a new still, on white: ' + check(g).join('; ') + ' ' + ks); }
+    ok(check(g).length===0 && ks.length >= 1 && /white background/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join()), '✨ Use this angle finishes the frame showing (in the crane) as a new still, on white: ' + check(g).join('; ') + ' ' + ks); }
   ok(!(await page.$('#comic [data-d3view="mm"], #comic [data-cm="d3fuse"], #comic [data-cm="cmod"], #comic [data-d3flat], #comic [data-t3d="i"]')), 'the old 3D experiments (and the depth views) are gone from the panel');
   // ✕ Stop: the comic's jobs can be cancelled
   { await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cmopts="3"]'); const n0 = await page.evaluate(() => cmPage().panels[1].stills.length);
