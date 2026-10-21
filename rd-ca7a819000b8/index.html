@@ -614,7 +614,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-21.102'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-21.103'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -7071,7 +7071,7 @@ async function fuseMake(p){
       mode:'multiview', 'mode.ref_view_strategy':'middle', 'mode.pose_method':'cam_dec'});
     const prefix = cmPrefixP(pg, i, 'model3d'), saves = {};
     FUSE_PICK[5].forEach(o => { const bi = FUSE_SIDE + o;
-      saves[o] = add('SaveGLB', {mesh:[add('DA3GeometryToMesh', {da3_geometry:[geo,0], batch_index:bi, decimation:2, discontinuity_threshold:0.04, confidence_threshold:0.1, use_sky_mask:true, texture:true}), 0], filename_prefix:prefix + '_v' + (bi)}); });
+      saves[o] = add('SaveGLB', {mesh:[add('DA3GeometryToMesh', {da3_geometry:[geo,0], batch_index:bi, decimation:2, discontinuity_threshold:0.08, confidence_threshold:0.1, use_sky_mask:false, texture:true}), 0], filename_prefix:prefix + '_v' + (bi)}); });
     if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 200)); F.glbs = {}; FUSE_PICK[5].forEach(o => F.glbs[o] = 'test'); ph.view = 'fuse'; ph.yaw = ph.pitch = 0; save(); drawComic(); return; }
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -7155,12 +7155,20 @@ function fuseRender(ph, W, H){
   ms.forEach(m => m.parts.forEach(p => { gl.uniform1i(gl.getUniformLocation(G.pr, 'tex'), p.tex ? 1 : 0); if(p.tex){ gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, p.tex); }
     gl.bindVertexArray(p.vao); gl.drawElements(gl.TRIANGLES, p.n, gl.UNSIGNED_INT, 0); })); gl.bindVertexArray(null);
   return G.cv; }
-function fuseDraw(ph, cv){ const c = fuseRender(ph, cv.width, cv.height); if(!c) return false; const x = cv.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, cv.width, cv.height); x.drawImage(c, 0, 0); return true; }
+// behind the model: the painted-in background (the depth layers without the character), swung less, so holes and torn edges
+// show the room instead of black (v.103, Jordan: the first fused model was torn pieces floating on black)
+function fuseBack(ph, W, H){
+  const ls = d3Layers(ph); if(ls.length < 2) return null; const bl = ls.slice(0, -1); if(!bl.every(l => scMesh(l).ready)){ bl.forEach(l => scMesh(l).wait.then(() => d3Redraw()).catch(() => {})); return null; }
+  const q = Object.assign({}, ph, {yaw:Math.max(-0.35, Math.min(0.35, (+ph.yaw || 0) * 0.4)), pitch:Math.max(-0.18, Math.min(0.18, (+ph.pitch || 0) * 0.4))});
+  try{ return scDraw(bl, d3Cam(q, W, H), W, H, 'colour', D3_NEAR, d3Far(ph)); }catch(e){ return null; } }
+function fuseDraw(ph, cv){ const W = cv.width, H = cv.height, x = cv.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, W, H);
+  const b = fuseBack(ph, W, H); if(b) x.drawImage(b, 0, 0); const c = fuseRender(ph, W, H); if(!c) return false; x.drawImage(c, 0, 0); return true; }
 // Use this angle from the 3D model: the view, and where nothing was drawn (the holes) as the part to repaint
 async function fuseShot(ph, W, H){
-  await Promise.all(fuseUrls(ph).map(u => fuseMesh(u).wait)); const c = fuseRender(ph, W, H); if(!c) throw new Error('the 3D model has not loaded');
-  const view = document.createElement('canvas'); view.width = W; view.height = H; const vx = view.getContext('2d'); vx.fillStyle = '#808080'; vx.fillRect(0, 0, W, H); vx.drawImage(c, 0, 0);
-  const a = document.createElement('canvas'); a.width = W; a.height = H; const ax = a.getContext('2d'); ax.drawImage(c, 0, 0); const D = ax.getImageData(0, 0, W, H);
+  await Promise.all([...fuseUrls(ph).map(u => fuseMesh(u).wait), ...d3Layers(ph).map(l => scMesh(l).wait)]);
+  const view = document.createElement('canvas'), a = document.createElement('canvas'); view.width = a.width = W; view.height = a.height = H; const vx = view.getContext('2d'), ax = a.getContext('2d'); vx.fillStyle = '#808080'; vx.fillRect(0, 0, W, H);
+  const b = fuseBack(ph, W, H); if(b){ vx.drawImage(b, 0, 0); ax.drawImage(b, 0, 0); }
+  const c = fuseRender(ph, W, H); if(!c) throw new Error('the 3D model has not loaded'); vx.drawImage(c, 0, 0); ax.drawImage(c, 0, 0); const D = ax.getImageData(0, 0, W, H);
   for(let q = 0; q < D.data.length; q += 4){ const v = D.data[q + 3] < 128 ? 255 : 0; D.data[q] = D.data[q + 1] = D.data[q + 2] = v; D.data[q + 3] = 255; } ax.putImageData(D, 0, 0);
   return {view, torn:a}; }
 function d3Redraw(){

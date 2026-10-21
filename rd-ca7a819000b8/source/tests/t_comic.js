@@ -312,9 +312,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       '🧊 Fuse: the still + 8 frames of each orbit go to Depth Anything 3 multiview (anchored on the still), 5 views become meshes saved as .glb: ' + check(g).join('; ') + ' ' + ms); }
   ok(await page.evaluate(() => cmPage().panels[2].d3.view==='fuse') && await page.$('#comic [data-d3view="fuse"].on'), 'when it is ready the 3D look switches to 🧊 3D model');
   await page.waitForTimeout(800);
-  { const px = () => page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) k++; return k; });
+  { const px = () => page.$eval('#comic [data-d3view]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let k = 0, h = 0; for(let q = 0; q < d.length; q += 16){ if(d[q] + d[q+1] + d[q+2] > 30) k++; h = (h * 31 + d[q] + d[q+1]) % 1000003; } return [k, h]; });
     const a = await px(); await page.evaluate(() => { cmPage().panels[2].d3.yaw = 0.8; d3Redraw(); }); const b = await px();
-    ok(a > 50 && b > 0 && a!==b, 'the fused model draws on the phone and turns (' + a + ' → ' + b + ' lit points)'); }
+    ok(a[0] > 50 && b[0] > 0 && a[1]!==b[1], 'the fused model draws on the phone (over the painted-in background) and turns (' + a + ' → ' + b + ')'); }
   { await page.evaluate(() => { cmPage().panels[2].d3.yaw = 0.3; }); const nb = ALL.length, n0 = await page.evaluate(() => cmPage().panels[2].stills.length); await page.click('#comic [data-cm="d3use"]');
     await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
     const g = ALL[nb].prompt, ks = Object.values(g).filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
