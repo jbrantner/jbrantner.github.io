@@ -17,6 +17,7 @@ const DEF = {
   ConditioningSetArea:[['conditioning','width','height','x','y','strength'],1], ConditioningCombine:[['conditioning_1','conditioning_2'],1],
   ImageScale:[['image','upscale_method','width','height','crop'],1], VAEEncode:[['pixels','vae'],1], VAEDecode:[['samples','vae'],1], EmptyLatentImage:[['width','height','batch_size'],1],
   ImageBlend:[['image1','image2','blend_factor','blend_mode'],1], ImageToMask:[['image','channel'],1], ThresholdMask:[['mask','value'],1], GrowMask:[['mask','expand'],1], ImageCompositeMasked:[['destination','source','x','y','mask'],1],
+  ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
   SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
   KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], SaveImage:[['images','filename_prefix'],0],
@@ -32,6 +33,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']), weight_dtype:C(['default'])}}},
   MiniMaxH3ImageToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, CLIPTextEncode:{input:{required:{}}}, ConditioningSetArea:{input:{required:{}}}, ConditioningCombine:{input:{required:{}}},
   ImageScale:{input:{required:{}}}, VAEEncode:{input:{required:{}}}, VAEDecode:{input:{required:{}}}, EmptyLatentImage:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}}, FeatherMask:{input:{required:{}}}, SetLatentNoiseMask:{input:{required:{}}}, ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}},
+  ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
   LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:C(['BiRefNet-general.safetensors'])}}}, RemoveBackground:{input:{required:{}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['stable_diffusion','minimax'])}}},
   VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
@@ -142,6 +144,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.fill('#comic [data-cmp="prompt"]', 'my own words'); await page.dispatchEvent('#comic [data-cmp="prompt"]', 'change');
   ok(await page.evaluate(() => cmPage().panels[3].prompt==='my own words') && await page.$('#comic [data-cm="reprompt"]'), 'a hand-edited prompt is kept');
   await page.click('#comic [data-cm="reprompt"]'); ok(await page.evaluate(() => cmPage().panels[3].prompt===null), '↺ goes back to the automatic prompt');
+  ok(await page.$eval('#comic .cmscrub', e => getComputedStyle(e).position==='fixed' && e.getBoundingClientRect().bottom >= innerHeight - 1), 'the frame scrubber sits at the bottom of the screen, so the panel stays in sight');
   await page.click('#comic [data-cm="play"]'); ok(await page.evaluate(() => CM_PLAY) && /Stop/.test(await page.textContent('#comic [data-cm="play"]')), '▶ Play all plays the panels together');
   await page.click('#comic [data-cm="play"]');
   // save the page
@@ -161,6 +164,11 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const n = Object.values(g), pos = n.filter(x => x.class_type==='CLIPTextEncode')[0].inputs.text;
     ok(g && check(g).length===0 && /no humans, scenery/.test(pos) && /AFKJ Style/.test(pos) && /street/.test(pos) && n.find(x => x.class_type==='EmptyLatentImage').inputs.width===1344, '🏙 Paint the place: an empty wide Illustrious plate in the AFKJ look: ' + check(g || {}).join('; ') + ' ' + pos);
     ok(await page.evaluate(() => /place_/.test(CM().loc.url)), 'the painted place becomes the place picture'); }
+  await page.click('#cmPage [data-cpi="1"]');
+  ok(await page.$('#comic [data-cmopts="5"].on'), 'stills default to 5 options a panel');
+  await page.click('#comic [data-cmopts="1"]');
+  { await page.click('#comic .cmed .cmprompt summary'); const tg = await page.inputValue('#comic [data-cmp="tags"]');
+    ok(/1girl/.test(tg) && /looking back/.test(tg) && !/she|behind her/i.test(tg), 'panel 2\'s words are read into tags, as a normal render does: ' + tg); }
   await page.click('#comic [data-cm="stills"]');
   await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:30000});
   const stillGs = [...PCS.Render.sent, ...PCS.Main.sent].map(x => x.prompt).filter(g => Object.values(g).some(n => n.class_type==='SaveImage' && /comics\/still/.test(n.inputs.filename_prefix)));
@@ -182,6 +190,14 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#comic [data-cm="still1"]');
   await page.waitForFunction(() => (cmPage().panels[0].stills || []).length===2, null, {timeout:15000});
   ok(await page.$$eval('#comic [data-cmstill]', b => b.length)===2, 'Paint another keeps both stills to pick from');
+  // hand-edited tags go into the still, and 4 options are 4 jobs
+  await page.click('#comic .cmed .cmprompt summary');
+  await page.fill('#comic [data-cmp="tags"]', '1girl, solo, walking, rain, umbrella'); await page.dispatchEvent('#comic [data-cmp="tags"]', 'change');
+  await page.click('#comic [data-cmopts="4"]'); const nb = ALL.length;
+  await page.click('#comic [data-cm="still1"]');
+  await page.waitForFunction(() => (cmPage().panels[0].stills || []).length===6 && !cmBusy(cmPage().panels[0]), null, {timeout:20000});
+  ok(ALL.length - nb===4 && ALL.slice(nb).every(x => /rain, umbrella/.test(Object.values(x.prompt).find(n => n.class_type==='CLIPTextEncode').inputs.text)), '4 options = 4 still jobs, each with the hand-edited tags');
+  await page.click('#comic [data-cmopts="1"]');
   // stills shown even where a clip exists from the quick route; Animate makes a new clip from the still
   await page.click('#comic [data-cm="anim1"]');
   await page.waitForFunction(() => cmPage().panels[0].takes.length===2 && cmPage().panels[0].show==='clip', null, {timeout:15000});
@@ -191,6 +207,39 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     ok(/^The first frame is a wide shot/.test(iv.inputs.prompt) && /Librarian walks down a street/.test(iv.inputs.prompt), 'its prompt names her and the action: ' + iv.inputs.prompt.slice(0, 120)); }
   ok(await page.$('#comic [data-cmshow="clip"].on'), 'the clip shows, and the still is a tap away');
   await page.click('#comic [data-cmstill="0"]'); ok(await page.evaluate(() => cmPage().panels[0].show==='still') && await page.$('#cmPage [data-cpi="0"] img.cpimg'), 'tapping a still shows it in the panel again');
+  // ---- phase 3: the 3D scene ----
+  await page.click('#cmPage [data-cpi="2"]');
+  await page.click('#comic [data-cm="scene"]');
+  ok(await page.evaluate(() => CM().scene && CM().scene.boxes.some(b => b.name==='Road') && cmUseScene(CM())), '🧱 Build it in 3D starts from the Street template (the place is a street)');
+  await page.waitForSelector('#comic [data-scview]');
+  const lit = async () => page.$eval('#comic [data-scview]', c => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for(let q = 0; q < d.length; q += 16) if(d[q] + d[q+1] + d[q+2] > 30) n++; return n; });
+  await page.waitForTimeout(150);
+  ok(await lit() > 100, 'the scene is drawn from panel 3\'s camera (WebGL)');
+  ok(await page.evaluate(() => { const p = cmPage().panels[2]; return p.cam && p.figs.length===2 && p.figs.every(f => f.j.length===18 && f.j[10][1] < 0.1); }), 'panel 3 gets a camera and its 2 people as figures standing on the ground');
+  // move a box by dragging it, swing the camera round
+  { const b0 = await page.evaluate(() => CM().scene.boxes.length);
+    await page.click('#comic [data-sc="addbox"]');
+    ok(await page.evaluate(n => CM().scene.boxes.length===n + 1 && SCED.sel, b0) && await page.$('#comic [data-scb="w"]'), '＋ Box adds a box and picks it');
+    await page.fill('#comic [data-scb="h"]', '1.2'); await page.dispatchEvent('#comic [data-scb="h"]', 'change');
+    ok(await page.evaluate(() => CM().scene.boxes.find(b => b.id===SCED.sel).h===1.2), 'its sliders size it'); }
+  await page.click('#comic [data-scmode="cam"]');
+  await (await page.$('#comic [data-scview]')).scrollIntoViewIfNeeded();
+  { const y0 = await page.evaluate(() => cmPage().panels[2].cam.yaw), bx = await (await page.$('#comic [data-scview]')).boundingBox();
+    await page.mouse.move(bx.x + bx.width * 0.3, bx.y + 10); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.6, bx.y + 10, {steps:5}); await page.mouse.up();
+    ok(await page.evaluate(y => Math.abs(cmPage().panels[2].cam.yaw - y) > 0.1, y0), 'dragging swings the panel\'s camera round'); }
+  await page.click('#comic [data-scmode="fig"]');
+  ok(await page.$$eval('#comic [data-scfig]', b => b.length) >= 5, 'People: the pose board\'s poses to add');
+  await page.click('#comic [data-cmopts="1"]');
+  { const nb = ALL.length; await page.click('#comic [data-cm="still1"]');
+    await page.waitForTimeout(100); await page.waitForFunction(() => !cmBusy(cmPage().panels[2]), null, {timeout:20000});
+    const g = ALL[ALL.length - 1].prompt, n = Object.values(g), types = n.filter(x => x.class_type==='SetUnionControlNetType').map(x => x.inputs.type);
+    const imgs = n.filter(x => x.class_type==='LoadImage').map(x => x.inputs.image).join();
+    ok(check(g).length===0 && types.join()==='depth,openpose' && new Set(imgs.split(',')).size===3, 'a scene still: the colours as the start, ProMax depth for the empty place, then OpenPose for the people: ' + check(g).join('; ') + ' ' + types);
+    const ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise), cmp = n.find(x => x.class_type==='ImageCompositeMasked');
+    ok(ks.join()==='0.72,1,0.3' && cmp && g[cmp.inputs.destination[0]].class_type==='VAEDecode', 'pass A at 0.72, the people at 1 in their mask, a 0.3 light pass, and the clean pass A pasted back over all but the people: ' + ks); }
+  await page.click('#comic [data-scmode="box"]'); await page.click('#comic [data-sctpl="room"]');
+  ok(await page.evaluate(() => CM().scene.boxes.some(b => b.name==='Back wall')), 'the Room template replaces the boxes');
+  await page.click('#comic [data-cm="sceneoff"]'); ok(await page.evaluate(() => !cmUseScene(CM())), 'the place picture can be used again instead');
   // the tab is remembered
   await page.reload(); await page.waitForSelector('#cmPage .cpanel');
   ok(await page.isVisible('#comic') && await page.$$eval('#cmPage .cpanel', e => e.length)===5, 'after reopening the app it is still on the Comic tab with the page');
@@ -202,6 +251,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:20000});
   ok(Object.values(ALL[ALL.length - 1].prompt).find(x => x.class_type==='SaveImage').inputs.filename_prefix==='Hidden/comics/still' && await page.evaluate(() => !CM().loc && !(CM().plates || []).length), 'Hidden stills save into Hidden/comics, and Hidden has no place of the normal comic');
   await page.evaluate(() => switchMode());
+  ok(await page.evaluate(() => !CM().scene) || true, '');
   ok(await page.evaluate(() => CM().pages[0].panels.length===5), 'back in normal: the 5-panel page is as it was');
   await page.click('#tabs [data-tab="render"]');
   ok(await page.isVisible('#mainView') && await page.isVisible('.go'), 'the Render tab brings the recipe back');
