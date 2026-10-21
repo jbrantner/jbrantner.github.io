@@ -311,7 +311,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const gs = ALL.slice(nb).map(x => x.prompt), iv = Object.values(gs[0]).find(n => n.class_type==='MiniMaxH3ImageToVideo'), sv = Object.values(gs[0]).find(n => n.class_type==='SaveVideo');
     ok(gs.length===1 && iv.inputs.last_frame && iv.inputs.first_frame && JSON.stringify(iv.inputs.last_frame)===JSON.stringify(iv.inputs.first_frame) && /360-degree orbit/.test(iv.inputs.prompt) && /panel_3\/orbit_circle$/.test(sv.inputs.filename_prefix)
       && await page.evaluate(() => d3OrbReady(cmPage().panels[2].d3)), '⭕ Full circle: one FL2V clip with the still as first and last frame, a timed 360 prompt; the left/right views are kept'); }
-  await page.click('#comic [data-d3view="circle"]');
+  ok(await page.evaluate(() => cmPage().panels[2].d3.view==='circle') && await page.$('#comic [data-d3view="circle"].on'), 'when the circle is ready the 3D look switches straight to ⭕ Full circle');
   await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return D3F[q.orbs.circle.url] && D3F[q.orbs.circle.url].ready; }, null, {timeout:20000}).catch(() => {});
   ok(await page.evaluate(() => { const q = cmPage().panels[2].d3; q.yaw = Math.PI; const a = d3CircAt(q); q.yaw = -Math.PI / 2; const b = d3CircAt(q); return Math.abs(a - 0.5) < 1e-6 && Math.abs(b - 0.75) < 1e-6 && d3CircDraw(q, document.querySelector('#comic [data-d3view]')); }),
     'dragging right plays the circle forward, left plays it backward from the end');

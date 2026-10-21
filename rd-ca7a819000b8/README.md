@@ -8,3 +8,5 @@
 **v.106 (2026-10-21):** 3D look ⭕ Full circle (Jordan's idea): one MiniMax FL2V clip that circles all the way round the still, using the still as first and last frame (Last frame: This still / Leave it free). The prompt has timed checkpoints: profile 1.3 s, back 2.6 s, other profile 3.9 s, home 5 s. Swing with ⭕ Full circle: dragging right plays it forward, left plays it backward from the end, with no stop; ↔ flips the direction; Wiggle spins it slowly; Use this angle finishes that frame. The left/right views are kept alongside.
 
 **v.107 (2026-10-21):** 3D look **Character: 3D / Flat cut-out** (Jordan's idea). The flat cut-out is drawn straight on, always facing the camera, over the swung 3D background, in the view and in Use this angle (so only the background gets repainted). Shows when the still has the layered character cut-out.
+
+**v.108 (2026-10-21):** ⭕ Full circle fixes from Jordan's first test. The drag now follows your finger (it was backwards). It shows the nearest frame and no longer blends two, which showed her twice; there are 72 frames now. The 3D look switches to the circle as soon as it's made. Picking Make: Full circle also switches the view.
