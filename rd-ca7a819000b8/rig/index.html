@@ -100,7 +100,7 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
 <div id="app">
   <header>
     <h1>Pose Rig</h1>
-    <div class="ctl" id="ctl"><button data-ctl="pose">🦴 Pose</button><button data-ctl="cam">🎥 Camera</button></div>
+    <div class="ctl" id="ctl"><button data-ctl="pose">🦴 Pose</button><button data-ctl="cam">🎥 Camera</button><button data-ctl="set">🛋 Set</button></div>
     <span id="selName">Tap a handle</span>
     <button class="icon" id="undoBtn" title="Undo" aria-label="Undo">↶</button>
     <button class="icon" id="redoBtn" title="Redo" aria-label="Redo">↷</button>
@@ -110,12 +110,13 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
     <img id="photo" alt="" hidden>
     <div id="frame"></div>
     <div class="views" id="views"></div>
+    <div class="views" id="setViews" hidden></div>
     <div class="modes" id="modes"></div>
     <div class="modes" id="camSub"><button data-cs="orbit">Orbit</button><button data-cs="pan">Pan / zoom</button></div>
     <div id="toast"></div>
   </div>
   <nav class="tabs" id="tabs">
-    <button data-tab="pose" class="on">Pose</button><button data-tab="body">Body</button><button data-tab="pic">Picture</button><button data-tab="guide">Guide</button>
+    <button data-tab="pose" class="on">Pose</button><button data-tab="body">Body</button><button data-tab="pic">Picture</button><button data-tab="guide">Guide</button><button data-tab="set">Set</button>
   </nav>
   <div id="panel">
     <section class="pane" data-pane="pose">
@@ -186,6 +187,12 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
       <div class="status" id="orbStatus"></div>
       <div class="orbgrid" id="orbGrid"></div>
       <p class="note">Each little picture is one view: pink dots are what the reader saw, green lines are the combined pose seen from that view. A gold edge means the reader mixed up her left and right there (fixed); a faded one was left out.</p>
+    </section>
+    <section class="pane" data-pane="set" hidden>
+      <div id="setPicked"></div>
+      <h3>Add</h3>
+      <div class="chips" id="setAdd"></div>
+      <p class="note">🛋 Set (top) shows the set flat, from the Top or one side. Tap a piece to pick it; a drag slides it along one line only (the way your finger first goes), in 5 cm steps. Tap her to slide her across the floor. Drag empty space to look around, pinch to zoom. The cyan box is the panel's camera; 🎥 Camera moves it. Every panel of the comic shares this set.</p>
     </section>
     <section class="pane" data-pane="guide" hidden>
       <h3>Guides</h3>
@@ -306,8 +313,9 @@ const renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true, preserveDra
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0b0c10);
 const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 50);
-scene.add(new THREE.HemisphereLight(0xdfe6ff, 0x30333c, 1.6));
+const hemi = new THREE.HemisphereLight(0xdfe6ff, 0x30333c, 1.6); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(1.5, 3, 2.5); scene.add(sun);
+hemi.layers.enable(4); sun.layers.enable(4); // they light the set when it is drawn alone for the comic
 const grid = new THREE.GridHelper(4, 16, 0x3a3e48, 0x23262d); scene.add(grid);
 const rig = new THREE.Group(); scene.add(rig);
 const bones = {}; for(const n of ['pelvis', ...Object.keys(PARENT)]) bones[n] = new THREE.Bone();
@@ -1009,9 +1017,10 @@ function retarget(){ const C = charCenter(); if(C.distanceTo(controls.target) < 
 function ctlControls(){ controls.enabled = S.ctl==='cam' && S.camSub==='orbit'; }
 function showCtl(){
   $$('#ctl button').forEach(b => b.classList.toggle('on', b.dataset.ctl===S.ctl)); $$('#camSub button').forEach(b => b.classList.toggle('on', b.dataset.cs===S.camSub));
-  $('#camSub').hidden = S.ctl!=='cam'; ctlControls();
+  $('#camSub').hidden = S.ctl!=='cam'; ctlControls(); setMode(S.ctl==='set');
+  if(S.ctl==='set'){ if(sel) selectH(null); $('#selName').textContent = 'Tap a piece, or add one below'; if(S.tab!=='set') $('#tabs [data-tab="set"]').click(); setUi(); }
   if(S.ctl==='cam'){ if(sel) selectH(null); retarget(); $('#selName').textContent = S.camSub==='pan' ? 'Drag to move her, pinch to zoom' : 'Drag to orbit round her, pinch to zoom'; }
-  else $('#selName').textContent = sel ? $('#selName').textContent : 'Tap a handle';
+  else if(S.ctl==='pose') $('#selName').textContent = sel ? $('#selName').textContent : 'Tap a handle';
   placeHandles(); dirty = true; }
 $('#ctl').onclick = e => { const b = e.target.closest('[data-ctl]'); if(!b) return; S.ctl = b.dataset.ctl; showCtl(); save(); };
 $('#camSub').onclick = e => { const b = e.target.closest('[data-cs]'); if(!b) return; S.camSub = b.dataset.cs; showCtl(); save(); };
@@ -1782,10 +1791,168 @@ $('#mStr').oninput = () => { S.skirt.str = +$('#mStr').value; $('#mStr').nextEle
 $('#mDir').oninput = () => { S.skirt.dir = +$('#mDir').value; $('#mDir').nextElementSibling.textContent = dirName(S.skirt.dir); skirtChanged(); };
 skirtUi();
 
+// ---------- 🛋 the set ----------
+// Blocks of furniture and walls behind and around her, shared by every panel of a comic (Jordan 2026-10-22: "keep the scene
+// consistent"). They are moved in flat views (top and the four sides), where a drag slides the picked piece along one axis
+// only, so a sofa never drifts sideways while it is pushed back. The panel's camera sees the set too, and the comic gets
+// the set's colours and depth from that camera to paint the background, with her painted in on top as her own layer.
+const SETKEY = 'rd-pose-rig-set-' + (QS.get('set') || (EMBED ? 'p-' + EMBED : 'v1'));
+const SET = (() => { try{ return JSON.parse(localStorage.getItem(SETKEY)) || {items:[], v:0}; }catch(e){ return {items:[], v:0}; } })();
+function saveSet(){ SET.v = (SET.v || 0) + 1; try{ localStorage.setItem(SETKEY, JSON.stringify(SET)); }catch(e){} }
+// each piece: a list of blocks (x, y from the floor, z, width, height, depth, shade, shape) from its size [w, h, d]; its front faces +z
+const BX = (x, y, z, w, h, d, t = 0, k = 'b') => ({x, y, z, w, h, d, t, k});
+const legs4 = (s, l, h) => [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([a, b]) => BX(a * (s[0] / 2 - l / 2), 0, b * (s[2] / 2 - l / 2), l, h, l, -0.15));
+const SET_TYPES = {
+  floor:['Floor', [6, 0.02, 6], '#c9b79a', s => [BX(0, -s[1], 0, ...s)]],
+  wall:['Wall', [6, 2.8, 0.12], '#e6dfd2', s => [BX(0, 0, 0, ...s)]],
+  door:['Door', [0.9, 2.1, 0.08], '#8b5e3c', s => [BX(0, 0, 0, s[0], s[1], s[2], -0.1), BX(s[0] * 0.36, s[1] * 0.47, s[2] / 2 + 0.02, 0.05, 0.05, 0.04, 0.4)]],
+  window:['Window', [1.2, 1.2, 0.08], '#a9d3ec', s => [BX(0, 0, 0, s[0], s[1], s[2] / 2, 0.15), BX(0, 0, 0, s[0], 0.06, s[2], -0.4), BX(0, s[1] - 0.06, 0, s[0], 0.06, s[2], -0.4),
+    BX(-s[0] / 2 + 0.03, 0, 0, 0.06, s[1], s[2], -0.4), BX(s[0] / 2 - 0.03, 0, 0, 0.06, s[1], s[2], -0.4), BX(0, 0, 0, 0.04, s[1], s[2], -0.4)]],
+  rug:['Rug', [2, 0.01, 1.4], '#9c4f4f', s => [BX(0, 0, 0, ...s)]],
+  table:['Table', [1.4, 0.75, 0.8], '#8a5a3a', s => [BX(0, s[1] - 0.05, 0, s[0], 0.05, s[2]), ...legs4(s, 0.06, s[1] - 0.05)]],
+  chair:['Chair', [0.45, 0.9, 0.45], '#7a5236', s => [BX(0, 0.42, 0, s[0], 0.05, s[2]), ...legs4(s, 0.04, 0.42), BX(0, 0.47, -s[2] / 2 + 0.025, s[0], s[1] - 0.47, 0.05, 0.08)]],
+  shelf:['Bookshelf', [1, 2, 0.35], '#6e4b33', s => { const t = 0.04, out = [BX(-s[0] / 2 + t / 2, 0, 0, t, s[1], s[2]), BX(s[0] / 2 - t / 2, 0, 0, t, s[1], s[2]), BX(0, 0, -s[2] / 2 + 0.01, s[0], s[1], 0.02, -0.2)];
+    for(let i = 0; i < 6; i++){ const y = i * (s[1] - t) / 5; out.push(BX(0, y, 0, s[0] - 2 * t, t, s[2]));
+      if(i < 5) out.push(BX(0, y + t, 0.02, s[0] - 2 * t - 0.04, (s[1] - t) / 5 * 0.72, s[2] * 0.75, [0.25, -0.3, 0.1, -0.15, 0.3][i])); } return out; }],
+  sofa:['Sofa', [2, 0.85, 0.9], '#5a6f8f', s => [BX(0, 0, 0.05, s[0] - 0.4, 0.42, s[2] - 0.1), BX(0, 0, -s[2] / 2 + 0.1, s[0], s[1], 0.2, -0.1),
+    BX(-s[0] / 2 + 0.1, 0, 0, 0.2, 0.62, s[2], -0.05), BX(s[0] / 2 - 0.1, 0, 0, 0.2, 0.62, s[2], -0.05)]],
+  bed:['Bed', [1.6, 1, 2.1], '#e9e4dc', s => [BX(0, 0, 0, s[0], 0.3, s[2], -0.35), BX(0, 0.3, 0.05, s[0] - 0.06, 0.2, s[2] - 0.12), BX(0, 0, -s[2] / 2 + 0.04, s[0], s[1], 0.08, -0.35),
+    BX(0, 0.5, -s[2] / 2 + 0.3, s[0] * 0.7, 0.12, 0.35, 0.1)]],
+  counter:['Counter', [2, 0.9, 0.6], '#a6a29a', s => [BX(0, 0, 0.02, s[0], s[1] - 0.04, s[2] - 0.04, -0.1), BX(0, s[1] - 0.04, 0, s[0], 0.04, s[2], 0.2)]],
+  box:['Box', [0.6, 0.6, 0.6], '#b08a5a', s => [BX(0, 0, 0, ...s)]],
+  pillar:['Pillar', [0.4, 2.8, 0.4], '#d8d2c6', s => [BX(0, 0, 0, ...s, 0, 'c')]],
+  lamp:['Floor lamp', [0.4, 1.6, 0.4], '#e8d9a8', s => [BX(0, 0, 0, s[0] * 0.6, 0.03, s[2] * 0.6, -0.5, 'c'), BX(0, 0, 0, 0.03, s[1] - 0.3, 0.03, -0.5, 'c'), BX(0, s[1] - 0.32, 0, s[0], 0.32, s[2], 0.1, 'n')]],
+  plant:['Plant', [0.5, 1.1, 0.5], '#6b8f4e', s => [BX(0, 0, 0, s[0] * 0.6, s[1] * 0.3, s[2] * 0.6, 0, 'pot'), BX(0, s[1] * 0.3, 0, s[0], s[1] * 0.7, s[2], 0, 's')]],
+};
+const SET_COLS = ['#e6dfd2', '#c9b79a', '#8b5e3c', '#6e4b33', '#3c3a40', '#f2f0ea', '#a6a29a', '#5a6f8f', '#9c4f4f', '#6b8f4e', '#a9d3ec', '#d9a441'];
+const setG = new THREE.Group(); scene.add(setG);
+const setGeo = {b:new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), c:new THREE.CylinderGeometry(0.5, 0.5, 1, 20).translate(0, 0.5, 0), n:new THREE.CylinderGeometry(0.25, 0.5, 1, 20, 1, true).translate(0, 0.5, 0),
+  pot:new THREE.CylinderGeometry(0.5, 0.38, 1, 16).translate(0, 0.5, 0), s:new THREE.SphereGeometry(0.5, 16, 12).translate(0, 0.5, 0)};
+const setMats = new Map();
+function setMat(hex, t){ const c = new THREE.Color(hex); if(t) c.offsetHSL(0, 0, t * 0.35); const key = c.getHexString();
+  if(!setMats.has(key)) setMats.set(key, new THREE.MeshStandardMaterial({color:c, roughness:0.85, side:THREE.DoubleSide})); return setMats.get(key); }
+let setSel = null; // a piece's id, 'her', or null
+const selBox = new THREE.BoxHelper(undefined, 0xff5ca8); selBox.visible = false; scene.add(selBox);
+function buildSet(){
+  setG.clear();
+  for(const it of SET.items){ const T = SET_TYPES[it.k]; if(!T) continue; const g = new THREE.Group(); g.userData.id = it.id;
+    for(const b of T[3](it.s)){ const m = new THREE.Mesh(setGeo[b.k] || setGeo.b, b.k==='pot' ? setMat('#8a5a44', 0) : setMat(it.c || T[2], b.t)); m.position.set(b.x, b.y, b.z); m.scale.set(b.w, b.h, b.d);
+      m.layers.enable(4); m.userData.id = it.id; g.add(m); }
+    g.position.fromArray(it.p); g.rotation.y = (it.r || 0) * Math.PI / 2; setG.add(g); }
+  grid.visible = !SET.items.some(it => it.k==='floor'); showSetSel(); dirty = true; guideDirty = true; }
+function showSetSel(){ const g = setSel && setSel!=='her' ? setG.children.find(x => x.userData.id===setSel) : null;
+  if(setSel==='her' && bodyMesh) selBox.setFromObject(rig); else if(g) selBox.setFromObject(g);
+  selBox.visible = S.ctl==='set' && !!(g || setSel==='her'); dirty = true; }
+const setItem = id => SET.items.find(it => it.id===id);
+function addSet(k){ const T = SET_TYPES[k], c = SV.cam ? SV.c.clone() : V(), id = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const it = {id, k, p:[Math.round(c.x * 20) / 20, k==='window' ? 0.9 : 0, Math.round(c.z * 20) / 20], s:T[1].slice(), r:0, c:T[2]};
+  if((S.setView || 'top')!=='top'){ const ax = setAxes(); it.p = [0, it.p[1], 0]; const o = SV.c.clone(); if(Math.abs(ax.r.x) > 0.5) it.p[0] = Math.round(o.x * 20) / 20; else it.p[2] = Math.round(o.z * 20) / 20; }
+  if(k==='floor') it.p = [0, 0, 0];
+  SET.items.push(it); setSel = id; buildSet(); saveSet(); setUi(); return it; }
+function starterRoom(){ SET.items = SET.items.filter(it => !['floor', 'wall'].includes(it.k));
+  const mk = (k, p, s, r) => SET.items.push({id:'i' + Math.random().toString(36).slice(2, 9), k, p, s, r, c:SET_TYPES[k][2]});
+  mk('floor', [0, 0, 0], [6, 0.02, 6], 0); mk('wall', [0, 0, -3.06], [6.24, 2.8, 0.12], 0); mk('wall', [-3.06, 0, 0], [6.24, 2.8, 0.12], 1); mk('wall', [3.06, 0, 0], [6.24, 2.8, 0.12], 1);
+  buildSet(); saveSet(); setUi(); fitSet(); }
+// the flat views: an orthographic camera from above or from one side
+const setOrtho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.05, 200); setOrtho.layers.enableAll();
+const SET_VIEWS = {top:['Top', V(0, 1, 0), V(0, 0, -1)], front:['Front', V(0, 0, 1), V(0, 1, 0)], back:['Back', V(0, 0, -1), V(0, 1, 0)], left:['Left', V(-1, 0, 0), V(0, 1, 0)], right:['Right', V(1, 0, 0), V(0, 1, 0)]};
+const SV = {cam:false, c:V(), half:4};
+const camMark = new THREE.Group(); scene.add(camMark); camMark.visible = false;
+function setAxes(){ setOrtho.updateMatrixWorld(); const e = setOrtho.matrixWorld.elements; return {r:V(e[0], e[1], e[2]).normalize(), u:V(e[4], e[5], e[6]).normalize()}; }
+function placeOrtho(){ const [, dir, up] = SET_VIEWS[S.setView] || SET_VIEWS.top, a = (view.clientWidth || 1) / (view.clientHeight || 1), h = SV.half;
+  setOrtho.left = -h * a; setOrtho.right = h * a; setOrtho.top = h; setOrtho.bottom = -h; setOrtho.up.copy(up);
+  setOrtho.position.copy(SV.c).addScaledVector(dir, 60); setOrtho.lookAt(SV.c); setOrtho.updateProjectionMatrix(); setOrtho.updateMatrixWorld(); dirty = true; }
+// everything in view: the set, her and the panel's camera
+function fitSet(){ const box = new THREE.Box3().setFromObject(setG); Object.values(bones).forEach(b => box.expandByPoint(wpos(b))); box.expandByPoint(camera.position);
+  if(box.isEmpty()) box.set(V(-2, 0, -2), V(2, 2, 2)); const c = box.getCenter(V()), sz = box.getSize(V()), [, dir] = SET_VIEWS[S.setView] || SET_VIEWS.top, a = (view.clientWidth || 1) / (view.clientHeight || 1);
+  const w = Math.abs(dir.x) > 0.5 ? sz.z : sz.x, hgt = Math.abs(dir.y) > 0.5 ? sz.z : sz.y; SV.c.copy(c); SV.half = Math.max(1, hgt / 2, w / 2 / a) * 1.15; placeOrtho(); }
+// a little camera where the panel's camera stands, looking the way it looks
+function markCam(){ camMark.clear(); const pc = exportCam(); pc.near = 0.05; pc.far = 1.2; pc.updateProjectionMatrix(); pc.updateMatrixWorld();
+  const hp = new THREE.CameraHelper(pc); hp.setColors(new THREE.Color(0x33c2c9), new THREE.Color(0x33c2c9), new THREE.Color(0x33c2c9), new THREE.Color(0x33c2c9), new THREE.Color(0xffd75e));
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.3), new THREE.MeshBasicMaterial({color:0x33c2c9})); body.position.copy(pc.position); body.quaternion.copy(pc.quaternion);
+  camMark.add(hp, body); }
+function setMode(on){ SV.cam = on; camMark.visible = on; if(on){ markCam(); if(!SV.fit){ SV.fit = true; fitSet(); } else placeOrtho(); }
+  $('#setViews').hidden = !on; $('#views').hidden = on; $('#frame').hidden = on; showSetSel(); }
+function showSetViews(){ $$('#setViews button').forEach(b => b.classList.toggle('on', b.dataset.sv===(S.setView || 'top'))); }
+// touch in the flat views: tap picks a piece (or her), a drag slides it along the one axis it starts along; a drag on nothing
+// slides the view, two fingers pinch it
+const sp = new Map(); let sdrag = null;
+function setPick(e){ const r = cv.getBoundingClientRect(), n = new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(n, setOrtho); const hb = new THREE.Box3(); Object.values(bones).forEach(b => hb.expandByPoint(wpos(b))); hb.expandByScalar(0.08);
+  const hh = ray.ray.intersectBox(hb, V()), hits = ray.intersectObjects(setG.children, true).filter(h => h.object.userData.id);
+  const dh = hh ? hh.distanceTo(ray.ray.origin) : 1e9; if(hh && (!hits.length || dh <= hits[0].distance + 0.3)) return 'her';
+  if(!hits.length) return null;
+  // seen from above, the floor is under everything: pick what sits on it first
+  const nf = hits.find(h => { const it = setItem(h.object.userData.id); return it && it.k!=='floor' && it.k!=='rug'; }); return (nf || hits[0]).object.userData.id; }
+const setOn = () => S.ctl==='set';
+cv.addEventListener('pointerdown', e => { if(!setOn()) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); sp.set(e.pointerId, [e.clientX, e.clientY]);
+  if(sp.size > 1){ sdrag = null; return; }
+  const id = setPick(e); sdrag = {x0:e.clientX, y0:e.clientY, id, axis:null, moved:false, ax:setAxes(), k:2 * SV.half / (view.clientHeight || 1)};
+  if(id && id!=='her'){ const it = setItem(id); sdrag.p0 = it.p.slice(); } else if(id==='her') sdrag.root = va(wpos(bones.pelvis)); else sdrag.c0 = SV.c.clone(); });
+cv.addEventListener('pointermove', e => { if(!setOn() || !sp.has(e.pointerId)) return; const was = [...sp.values()].map(a => a.slice()); sp.set(e.pointerId, [e.clientX, e.clientY]);
+  if(sp.size >= 2){ const now = [...sp.values()], dist = q => Math.hypot(q[0][0] - q[1][0], q[0][1] - q[1][1]) || 1; SV.half = clamp(SV.half * dist(was) / dist(now), 0.5, 40); placeOrtho(); return; }
+  if(!sdrag) return; const dx = e.clientX - sdrag.x0, dy = e.clientY - sdrag.y0; if(!sdrag.moved && Math.hypot(dx, dy) < 6) return; sdrag.moved = true;
+  if(!sdrag.id){ SV.c.copy(sdrag.c0).addScaledVector(sdrag.ax.r, -dx * sdrag.k).addScaledVector(sdrag.ax.u, dy * sdrag.k); placeOrtho(); return; }
+  if(!sdrag.axis) sdrag.axis = Math.abs(dx) >= Math.abs(dy) ? 'r' : 'u';
+  const d = sdrag.axis==='r' ? sdrag.ax.r.clone().multiplyScalar(dx * sdrag.k) : sdrag.ax.u.clone().multiplyScalar(-dy * sdrag.k);
+  if(sdrag.id==='her'){ d.y = 0; const want = av(sdrag.root).add(d), now = wpos(bones.pelvis), step = want.sub(now); step.y = 0; step.x = Math.round((now.x + step.x) * 20) / 20 - now.x; step.z = Math.round((now.z + step.z) * 20) / 20 - now.z; shiftAll(step); placeHandles(); }
+  else { const it = setItem(sdrag.id); it.p = sdrag.p0.map((v, i) => Math.round((v + d.getComponent(i)) * 20) / 20); it.p[1] = Math.max(it.k==='floor' ? -2 : 0, it.p[1]);
+    const g = setG.children.find(x => x.userData.id===it.id); if(g) g.position.fromArray(it.p); }
+  showSetSel(); guideDirty = true; dirty = true; });
+const sEnd = e => { if(!sp.delete(e.pointerId)) return; if(sdrag && !sp.size){ const d = sdrag; sdrag = null;
+    if(!d.moved){ setSel = d.id; showSetSel(); setUi(); $('#selName').textContent = setSel==='her' ? 'Her: drag to slide her' : setSel ? SET_TYPES[setItem(setSel).k][0] + ': drag to slide it' : 'Tap a piece, or add one below'; }
+    else if(d.id==='her') save(); else if(d.id){ saveSet(); setUi(); } } };
+cv.addEventListener('pointerup', sEnd); cv.addEventListener('pointercancel', sEnd);
+cv.addEventListener('wheel', e => { if(!setOn()) return; e.preventDefault(); SV.half = clamp(SV.half * (e.deltaY > 0 ? 1.1 : 1 / 1.1), 0.5, 40); placeOrtho(); }, {passive:false});
+// the Set tab: add pieces; the picked one turns, copies, goes, changes size and colour
+function setUi(){ const it = setSel && setSel!=='her' ? setItem(setSel) : null, T = it && SET_TYPES[it.k];
+  $('#setAdd').innerHTML = '<button class="chipbtn hot" data-sadd="room">🏠 Starter room</button>' + Object.entries(SET_TYPES).map(([k, t]) => `<button class="chipbtn" data-sadd="${k}">${t[0]}</button>`).join('');
+  $('#setPicked').innerHTML = it ? `<h3>${esc(T[0])}</h3><div class="chips"><button class="chipbtn" data-sdo="turn">↻ Turn 90°</button><button class="chipbtn" data-sdo="copy">⧉ Copy</button><button class="chipbtn" data-sdo="del">🗑 Remove</button></div>`
+    + [['Width', 0], ['Height', 1], ['Depth', 2]].map(([n, i]) => `<div class="row"><label>${n}</label><div class="slider"><input type="range" data-ssz="${i}" min="${i===1 ? 0.01 : 0.05}" max="${i===1 ? 4 : 10}" step="0.05" value="${it.s[i]}"><output>${it.s[i].toFixed(2)} m</output></div></div>`).join('')
+    + `<div class="chips">${SET_COLS.map(c => `<button class="chipbtn" data-scol="${c}" style="background:${c};width:34px;padding:0${(it.c || '').toLowerCase()===c ? ';outline:2px solid var(--accent)' : ''}" aria-label="Colour ${c}"></button>`).join('')}<input type="color" data-scol="pick" value="${esc(it.c || T[2])}" style="width:44px;height:36px;padding:2px"></div>`
+    : setSel==='her' ? '<p class="note">She slides along the floor; her pose stays.</p>' : '<p class="note">Tap a piece in the view to pick it.</p>';
+  showSetViews(); }
+$('#setAdd').onclick = e => { const b = e.target.closest('[data-sadd]'); if(!b) return; if(b.dataset.sadd==='room') starterRoom(); else { addSet(b.dataset.sadd); if(!setOn()){ S.ctl = 'set'; showCtl(); } } };
+$('#setPicked').addEventListener('click', e => { const b = e.target.closest('[data-sdo],[data-scol]'); if(!b) return; const it = setItem(setSel); if(!it) return;
+  if(b.dataset.sdo==='turn') it.r = ((it.r || 0) + 1) % 4;
+  else if(b.dataset.sdo==='copy'){ const c = JSON.parse(JSON.stringify(it)); c.id = 'i' + Math.random().toString(36).slice(2, 9); c.p[0] += 0.5; SET.items.push(c); setSel = c.id; }
+  else if(b.dataset.sdo==='del'){ SET.items = SET.items.filter(x => x!==it); setSel = null; }
+  else if(b.dataset.scol && b.dataset.scol!=='pick') it.c = b.dataset.scol; else return;
+  buildSet(); saveSet(); setUi(); });
+$('#setPicked').addEventListener('input', e => { const it = setItem(setSel); if(!it) return; const z = e.target.closest('[data-ssz]'), c = e.target.closest('[data-scol="pick"]');
+  if(z){ it.s[+z.dataset.ssz] = +z.value; z.nextElementSibling.textContent = (+z.value).toFixed(2) + ' m'; } else if(c) it.c = c.value; else return; buildSet(); clearTimeout(saveSet.t); saveSet.t = setTimeout(saveSet, 250); });
+$('#setViews').innerHTML = Object.entries(SET_VIEWS).map(([k, v]) => `<button data-sv="${k}">${v[0]}</button>`).join('') + '<button data-sv="fit">⤢ All</button>';
+$('#setViews').onclick = e => { const b = e.target.closest('[data-sv]'); if(!b) return; if(b.dataset.sv!=='fit') S.setView = b.dataset.sv; fitSet(); showSetViews(); save(); };
+// for the comic: the set from the panel's camera without her (its colours, and its depth near = white), and where a piece of
+// the set stands in front of her (white), so she can be painted behind it
+function setPass(cam, W, H2, mat, clear){
+  const rt = new THREE.WebGLRenderTarget(W, H2, {samples:mat ? 0 : 4, colorSpace:mat ? THREE.NoColorSpace : THREE.SRGBColorSpace}), buf = new Uint8Array(W * H2 * 4), bg = scene.background, cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha(), lm = cam.layers.mask;
+  scene.background = null; scene.overrideMaterial = mat; renderer.setClearColor(clear, 1); cam.layers.set(4);
+  renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H2, buf);
+  renderer.setRenderTarget(null); scene.overrideMaterial = null; scene.background = bg; renderer.setClearColor(cc, ca); cam.layers.mask = lm; rt.dispose(); dirty = true; return buf; }
+function setMaps(W, H2){
+  const cam = exportCam(); cam.near = 0.05; cam.far = 80; cam.updateProjectionMatrix();
+  const col = setPass(cam, W, H2, null, 0xf4f4f4), raw = setPass(cam, W, H2, DEPTH_MAT, 0xffffff), n = cam.near, f = cam.far, K = [255 / 256 / 16777216, 255 / 256 / 65536, 255 / 256 / 256, 255 / 256];
+  const lin = new Float32Array(W * H2); let lo = 1e9, hi = -1e9;
+  for(let y = 0; y < H2; y++) for(let x = 0; x < W; x++){ const i = (H2 - 1 - y) * W + x, z = (raw[i * 4] * K[0] + raw[i * 4 + 1] * K[1] + raw[i * 4 + 2] * K[2] + raw[i * 4 + 3] * K[3]) / 255;
+    if(z > 0.9999){ lin[y * W + x] = -1; continue; } const l = 2 * n * f / (f + n - (2 * z - 1) * (f - n)); lin[y * W + x] = l; if(l < lo) lo = l; if(l > hi) hi = l; }
+  const mk = () => { const c = document.createElement('canvas'); c.width = W; c.height = H2; return c; };
+  const cc = mk(), cx = cc.getContext('2d'), ci = cx.createImageData(W, H2);
+  for(let y = 0; y < H2; y++) for(let x = 0; x < W; x++){ const i = ((H2 - 1 - y) * W + x) * 4, j = (y * W + x) * 4; ci.data[j] = col[i]; ci.data[j + 1] = col[i + 1]; ci.data[j + 2] = col[i + 2]; ci.data[j + 3] = 255; }
+  cx.putImageData(ci, 0, 0);
+  const dc = mk(), dx = dc.getContext('2d'), di = dx.createImageData(W, H2), span = Math.max(1e-3, hi - lo);
+  for(let i = 0; i < W * H2; i++){ const v = lin[i] < 0 ? 0 : Math.round(255 * (1 - 0.85 * (lin[i] - lo) / span)); di.data[i * 4] = di.data[i * 4 + 1] = di.data[i * 4 + 2] = v; di.data[i * 4 + 3] = 255; }
+  dx.putImageData(di, 0, 0);
+  // in front of her: her body's depth from the same camera against the set's
+  let oc = null; if(bodyMesh){ const bm = bodyMaps(W, H2); let any = false; const oo = mk(), ox = oo.getContext('2d'), oi = ox.createImageData(W, H2);
+    for(let i = 0; i < W * H2; i++){ const on = bm.lin[i] >= 0 && lin[i] >= 0 && lin[i] < bm.lin[i] - 0.03; if(on) any = true; oi.data[i * 4] = oi.data[i * 4 + 1] = oi.data[i * 4 + 2] = on ? 255 : 0; oi.data[i * 4 + 3] = 255; }
+    if(any){ ox.putImageData(oi, 0, 0); oc = oo; } }
+  return {colour:cc, depth:dc, front:oc}; }
+
 // ---------- start ----------
 let dirty = true;
 function resize(){ const w = view.clientWidth, h = view.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); layoutFrame(); placeHandles(); dirty = true; guideDirty = true; }
-setBody(S.body);
+setBody(S.body); buildSet();
 if(S.pose && S.pose.limbs && S.pose.root){ P = S.pose; } else { restPose(); applyPreset('stand'); }
 Object.defineProperty(S, 'pose', {get:() => P, enumerable:true});
 solve();
@@ -1796,16 +1963,17 @@ if(EMBED){ setWho(QS.get('name') || ''); const [w, h] = guideSize(); $('#gSize')
 showCtl();
 if(S.tab) $(`#tabs [data-tab="${S.tab}"]`).click();
 undoBtns();
-(function loop(){ requestAnimationFrame(loop); if(dirty){ dirty = false; renderer.render(scene, camera); } drawGuidePrev(); })();
+(function loop(){ requestAnimationFrame(loop); if(dirty){ dirty = false; renderer.render(scene, SV.cam ? setOrtho : camera); } drawGuidePrev(); })();
 // who this panel's rig is (the comic picks a character from its library)
 function setWho(name){ $('header h1').textContent = name || (EMBED ? 'Panel' : 'Pose Rig'); }
 // a small picture of what's in the frame: the body on white, no handles or floor, for the comic page
 function frameShot(maxW = 320){
   const [gw, gh] = guideSize(), W = maxW, H2 = Math.max(1, Math.round(maxW * gh / gw)), m = S.mode, bg = scene.background, hv = H.visible, rv = rings.visible, gv = grid.visible;
+  const cmv = camMark.visible, sbv = selBox.visible; camMark.visible = false; selBox.visible = false;
   S.mode = bodyMesh ? 'body' : 'skel'; showMode(); H.visible = false; rings.visible = false; grid.visible = false; scene.background = new THREE.Color(0xffffff);
   const cam = exportCam(); renderer.render(scene, cam);
   const c = document.createElement('canvas'); c.width = W; c.height = H2; c.getContext('2d').drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, W, H2);
-  S.mode = m; showMode(); H.visible = hv; rings.visible = rv; grid.visible = gv; scene.background = bg; dirty = true;
+  S.mode = m; showMode(); H.visible = hv; rings.visible = rv; grid.visible = gv; scene.background = bg; camMark.visible = cmv; selBox.visible = sbv; dirty = true;
   return c.toDataURL('image/jpeg', 0.82);
 }
 // the panel's guides for its stills (OpenPose, and depth from the body), at most 1024 on the long side, and where she is in the
@@ -1814,11 +1982,12 @@ function panelGuides(){
   const [gw, gh] = guideSize(), k = Math.min(1, 1024 / Math.max(gw, gh)), W = Math.round(gw * k), H2 = Math.round(gh * k), out = {w:W, h:H2};
   let cs = {}; try{ cs = guideCanvases(W, H2, ['pose', 'depth', 'line']); }catch(e){ console.error(e); cs = {pose:openposeCanvas(W, H2)}; }
   out.pose = cs.pose.toDataURL('image/png'); if(cs.depth) out.depth = cs.depth.toDataURL('image/jpeg', 0.9); if(cs.line) out.line = cs.line.toDataURL('image/jpeg', 0.92);
+  if(SET.items.length){ try{ const m = setMaps(W, H2); out.bg = m.colour.toDataURL('image/jpeg', 0.9); out.bgDepth = m.depth.toDataURL('image/jpeg', 0.9); if(m.front) out.front = m.front.toDataURL('image/png'); out.setV = SET.v || 0; }catch(e){ console.error(e); } }
   const pts = opView(exportCam()).filter(Boolean); if(pts.length){ const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), hh = (Math.max(...ys) - Math.min(...ys)) || 0.3;
     out.box = [Math.min(...xs) - 0.06, Math.min(...ys) - hh * 0.14, Math.max(...xs) + 0.06, Math.max(...ys) + hh * 0.06].map(v => Math.round(v * 1000) / 1000); }
   return out;
 }
-window.RIG = {S, frameShot, panelGuides, setWho, showCtl, retarget, charCenter, get shift(){ return shift; }, setView, camState, applyCam, save:() => { clearTimeout(save.t); try{ S.cam = camState(); localStorage.setItem(KEY, JSON.stringify(Object.assign({}, S, {photo:undefined}))); }catch(e){} }, scene, renderer, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, solveOrbit, orbProj, packPose, unpackPose, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
+window.RIG = {S, SET, SV, setOrtho, buildSet, addSet, starterRoom, setMaps, setPick, fitSet, setAxes, get setSel(){ return setSel; }, get sdrag(){ return sdrag; }, frameShot, panelGuides, setWho, showCtl, retarget, charCenter, get shift(){ return shift; }, setView, camState, applyCam, save:() => { clearTimeout(save.t); try{ S.cam = camState(); localStorage.setItem(KEY, JSON.stringify(Object.assign({}, S, {photo:undefined}))); }catch(e){} }, scene, renderer, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, solveOrbit, orbProj, packPose, unpackPose, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
 </script>
 </body>
 </html>

@@ -39,3 +39,5 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 - In a comic panel: `rig/?panel=<id>&w=&h=&name=&g=` (Render Deck opens it full screen). Its own saved rig per panel
   (`rd-pose-rig-panel-<id>`, a new one starts with the rig page's body), the frame fixed to the panel's shape, Camera
   first, the view chips turn the camera without changing where she sits or how big; `RIG.frameShot()` gives the page its picture.
+
+**2026-10-22 (Render Deck v.134)**: 🛋 Set mode: walls and furniture blocks moved in orthographic views one axis at a time; panelGuides() adds bg (set colours), bgDepth and front (set in front of her) when a set exists.
