@@ -11,6 +11,7 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
   POST /renderdeck/sync {source}              -> copy the checkpoints and LoRAs another computer has and this one lacks (not Qwen/MiniMax/3D)
+       {source, only:'qwen'}                   -> copy the Qwen-Image-Edit files once (edit model, encoder, VAE, Lightning LoRAs)
   GET  /renderdeck/tagger, POST /renderdeck/tagger/get, POST /renderdeck/tag -> the WD EVA02 tagger (Danbooru tags with
                                                scores, on the CPU) for training captions; fetched once from Hugging Face
   GET  /renderdeck/farm, POST /renderdeck/farm/add|cancel|pcs -> the render farm queue: renders go to whichever of your
@@ -45,6 +46,11 @@ SYNC_KINDS = ('checkpoints', 'loras')
 STAYS_PUT = re.compile(r'qwen|minimax|hunyuan|trellis|pixal|mistral|flux2', re.I)
 def _synced(kind, rel):
     return kind in SYNC_KINDS and rel.lower().endswith('.safetensors') and not STAYS_PUT.search(rel)
+# 📦 Copy Qwen once (Jordan 2026-10-22, the WiFi drops were a bad cord): the Qwen-Image-Edit set (edit model, text encoder,
+# VAE, Lightning LoRAs) from any models folder, asked for once from the app; MiniMax's own Qwen-named encoder is not part of it
+QWEN_SET = re.compile(r'qwen', re.I)
+def _qwen(kind, rel):
+    return rel.lower().endswith('.safetensors') and QWEN_SET.search(rel) and not re.search(r'minimax', rel, re.I)
 
 
 _SYNC_LOCK = None  # one copy at a time across every sync, however many were asked for
@@ -697,7 +703,8 @@ async def _sync_files(todo):
 @routes.post('/renderdeck/sync')
 async def sync(request):
     try:
-        src = ((await request.json()).get('source') or '').strip().rstrip('/')
+        body = await request.json()
+        src, only = (body.get('source') or '').strip().rstrip('/'), body.get('only') or ''
         u = urlparse(src)
         if u.scheme != 'https' or not (u.hostname or '').lower().endswith('.ts.net'):
             raise ValueError('Sync only works with your computers\' Tailscale https addresses')
@@ -713,11 +720,14 @@ async def sync(request):
         mine = _models()
         busy = {(j['kind'], j['name'].lower()) for j in JOBS.values() if j['status'] not in ('done', 'failed')}
         todo, skipped = [], []
-        for kind in SYNC_KINDS:
+        want = (lambda k, n: _qwen(k, n)) if only == 'qwen' else _synced
+        for kind in (KINDS if only == 'qwen' else SYNC_KINDS):
+            if kind not in mine:
+                continue
             have = {os.path.basename(m['name']).lower() for m in mine[kind]}  # same file name in any subfolder counts as having it
             for m in theirs.get(kind, []):
                 name = os.path.basename(m['name'])
-                if name.lower() in have or (kind, name.lower()) in busy or not _synced(kind, m['name']):
+                if name.lower() in have or (kind, name.lower()) in busy or not want(kind, m['name']):
                     continue
                 try:
                     path = _sync_path(kind, m['name'])
@@ -729,6 +739,10 @@ async def sync(request):
                 todo.append((j, src + '/renderdeck/file?kind=' + kind + '&name=' + quote(m['name']), path))
         need = sum(j['total'] for j, _, _ in todo)
         free = shutil.disk_usage(_folder('checkpoints')).free
+        if only and need > free - 2 * 1024**3:
+            for j, _, _ in todo:
+                j['status'], j['error'] = 'failed', 'Not enough disk space'
+            return web.json_response({'error': 'Not enough disk space: the Qwen files need %.1f GB and %s has %.1f GB free' % (need / 1024**3, 'this computer', free / 1024**3)}, status=400)
         if todo:
             asyncio.ensure_future(_sync_run(todo))
         return web.json_response({'from': who, 'queued': [j['name'] for j, _, _ in todo], 'bytes': need,
