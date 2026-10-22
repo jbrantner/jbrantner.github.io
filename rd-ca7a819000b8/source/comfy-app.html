@@ -379,6 +379,7 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cmtop small{color:var(--soft)}
 .cmsum{margin:14px 2px 8px;font-weight:700}
 .cmpages{margin:12px 0 0}
+.cmbar{gap:8px;align-items:center}.cmbar .seg button{min-width:40px}.cmbar select{width:100%}
 .cmlays{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 8px}
 .cmlay{position:relative;flex:none;width:58px;aspect-ratio:2/3;border-radius:6px;background:#f4f1ea;border:2px solid var(--line)}
 .cmlay.on{border-color:var(--accent)}
@@ -605,7 +606,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.119'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.120'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3661,12 +3662,13 @@ function drawMode(){
 }
 function switchMode(){
   if(S.ws) wsBack(false); // a panel's recipe belongs to this workstation's comic
-  const keys = RECIPE_KEYS.concat('gallery', 'chars', 'comic'), now = {};
+  const keys = RECIPE_KEYS.concat('gallery', 'chars', 'comic', 'comics'), now = {};
   keys.forEach(k => now[k] = S[k]);
-  const next = S.stash && S.stash.blocks ? S.stash : Object.assign(JSON.parse(JSON.stringify(now)), {prompt:'', addedTags:[], gallery:(S.stash && S.stash.gallery) || [], chars:(S.stash && S.stash.chars) || [], comic:(S.stash && S.stash.comic) || null});
+  const next = S.stash && S.stash.blocks ? S.stash : Object.assign(JSON.parse(JSON.stringify(now)), {prompt:'', addedTags:[], gallery:(S.stash && S.stash.gallery) || [], chars:(S.stash && S.stash.chars) || [], comic:(S.stash && S.stash.comic) || null, comics:(S.stash && S.stash.comics) || []});
   keys.forEach(k => { if(next[k] !== undefined) S[k] = next[k]; });
   if(next.chars === undefined) S.chars = []; // a Hidden workstation made before characters starts with none of its own
   if(next.comic === undefined) S.comic = null; // and its own comic pages
+  if(next.comics === undefined) S.comics = []; // and its own other comics
   if(typeof cmPlay==='function') cmPlay(false);
   S.stash = now; S.hidden = !S.hidden; migrate(S);
   S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
@@ -6232,7 +6234,8 @@ const CMUP = {};           // computer|picture url -> the name it has in that co
 let CM_SENT = [];          // Test mode: the graphs made
 const CM = () => S.comic || (S.comic = {script:'', pages:[], cur:0, sel:0, cast:[], place:'', loc:null, styleLine:'Animation in the style of 2D anime.', vlora:'', vloraW:1, quality:'quick', route:'still', open:{script:true}});
 const cmPage = () => { const cm = CM(); return cm.pages[cm.cur] || null; };
-const cmAll = () => [S.comic, S.stash && S.stash.comic].filter(Boolean).flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []))).concat(cm.pj ? [cm.pj] : []));
+const cmComics = () => [S.comic, S.stash && S.stash.comic].concat(S.comics || [], S.stash && S.stash.comics || []).filter(Boolean);
+const cmAll = () => cmComics().flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []))).concat(cm.pj ? [cm.pj] : []));
 // a panel's still options are painted as jobs of their own (p.extra), so they spread over both computers
 const cmBusy = p => !!(p.making || p.busy || (p.extra || []).length);
 const cmLead = p => p.making || p.busy ? p : (p.extra || []).find(x => x.making || x.busy) || null;
@@ -6339,23 +6342,43 @@ const cmRectsOf = pg => cmRects(pg.rows, cmTexts(pg));
 function cmSize(r){ const a = Math.max(9 / 16, Math.min(16 / 9, r)), W = Math.sqrt(CM_AREA * a), H = W / a;
   return [Math.max(256, Math.round(W / 32) * 32), Math.max(256, Math.round(H / 32) * 32)]; }
 
+// 📄 pages and comics (Jordan 2026-10-22: one page start to finish): each page keeps its own script; ➕ New page,
+// 🗑 Remove page, ➕ New comic (the old one stays in the list to switch back to)
+const cmPgScript = pg => pg.script!=null ? pg.script : pg.panels.map((p, i) => 'Panel ' + (i + 1) + ': ' + p.text).join('\n');
+function cmFixPages(cm){ if(cm.pages.length && cm.pages.some(pg => pg.script==null)){ if(cm.pages.length===1) cm.pages[0].script = cm.script; else cm.pages.forEach(pg => pg.script = cmPgScript(pg)); cm.script = cmPgScript(cm.pages[cm.cur] || cm.pages[0]); }
+  if(!cm.n){ cm.n = Math.max(0, ...(S.comics || []).map(c => c.n || 0)) + 1; } }
+function cmGoPage(i){ const cm = CM(), pg = cmPage(); if(pg) pg.script = cm.script; cm.cur = Math.max(0, Math.min(cm.pages.length - 1, i)); cm.sel = 0; const n = cmPage(); cm.script = n ? cmPgScript(n) : ''; if(n && !n.panels.length) cm.open.script = true; }
+function cmNewPage(){ const cm = CM(), pg = cmPage(); if(pg) pg.script = cm.script; cmPlay(false);
+  cm.pages.splice(cm.pages.length ? cm.cur + 1 : 0, 0, {id:uid('pg'), panels:[], rows:[], lays:[], script:''}); cmGoPage(cm.pages.length===1 ? 0 : cm.cur + 1); cm.open.script = true; save(); drawComic();
+  toast('Page ' + (cm.cur + 1) + ': write its panels in the script box'); }
+function cmDelPage(){ const cm = CM(), pg = cmPage(); if(!pg) return; const hs = pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : [])), run = hs.filter(h => h.making || h.busy);
+  if(!confirm('Remove page ' + (cm.cur + 1) + (pg.panels.length ? ' and its ' + pg.panels.length + ' panel' + (pg.panels.length > 1 ? 's' : '') : '') + '?' + (run.length ? ' Its ' + run.length + ' running job' + (run.length > 1 ? 's' : '') + ' will be stopped.' : '') + ' Pictures it made stay in your Library.')) return;
+  cmPlay(false); if(run.length) cmStop(run); cm.pages.splice(cm.cur, 1); cm.cur = Math.min(cm.cur, cm.pages.length - 1); if(cm.cur < 0) cm.cur = 0; cm.sel = 0;
+  const n = cmPage(); cm.script = n ? cmPgScript(n) : ''; if(!n) cm.open.script = true; save(); drawComic(); toast('Page removed'); }
+function cmNewComic(){ const cm = CM(), pg = cmPage(); if(pg) pg.script = cm.script; cmPlay(false); cmFixPages(cm);
+  if(cm.pages.length || (cm.script || '').trim()) S.comics = (S.comics || []).concat([cm]);
+  const n = Math.max(0, ...cmComics().map(c => c.n || 0)) + 1; S.comic = null; const c = CM(); c.n = n; c.open.script = true; save(); drawComic(); toast('Comic ' + n + ': write page 1'); }
+function cmPickComic(n){ const cm = CM(), pg = cmPage(); if(pg) pg.script = cm.script; const c = (S.comics || []).find(x => x.n===n); if(!c || c===cm) return; cmPlay(false);
+  S.comics = S.comics.filter(x => x!==c).concat(cm.pages.length || (cm.script || '').trim() ? [cm] : []); S.comic = c; cmFixPages(c); c.script = cmPage() ? cmPgScript(cmPage()) : c.script || ''; save(); drawComic(); }
+const cmName = c => 'Comic ' + (c.n || 1) + (c.pages.length ? ' (' + c.pages.length + ' page' + (c.pages.length > 1 ? 's' : '') + ')' : '');
 function cmRead(){
   const cm = CM(), pages = cmSplit(cm.script);
   if(!pages.length){ toast('Write the page first, like "Panel 1: … Panel 2: …"', true); return; }
   const flat = pages.flat(), {cast, who} = cmCast(flat, cm.cast);
-  const had = cm.pages.some(pg => pg.panels.some(p => p.takes.length));
-  if(had && !confirm('Read the script again? Panels keep their clips by number.')) return;
+  const cur = cmPage(), had = cur && cur.panels.some(p => p.takes.length || (p.stills || []).length);
+  if(had && !confirm('Read this page\'s script again? Panels keep their pictures and clips by number.')) return;
   let n = 0;
-  cm.pages = pages.map((texts, pi) => { const old = cm.pages[pi], panels = texts.map((text, i) => { const o = old && old.panels[i] || {}, w = who[n++];
+  const made = pages.map((texts, pi) => { const old = pi ? null : cur, panels = texts.map((text, i) => { const o = old && old.panels[i] || {}, w = who[n++];
       return {id:o.id || uid('p'), text, who:o.whoSet ? o.who : w, whoSet:!!o.whoSet, shot:o.shot || 'auto', prompt:o.text===text ? o.prompt : null,
         tags:o.text===text ? o.tags : null, stills:o.stills, still:o.still, keepBg:o.keepBg,
         takes:o.takes || [], take:o.take || 0, frame:o.frame==null ? CM_FRAME : o.frame, pos:o.pos || {x:50, y:50}, making:o.making || null}; });
     const lays = cmLayouts(texts), same = old && old.panels.length===texts.length;
-    return {id:old && old.id || uid('pg'), panels, rows:same ? old.rows : lays[0], lays}; });
+    return {id:old && old.id || uid('pg'), panels, rows:same ? old.rows : lays[0], lays, script:pages.length > 1 ? texts.map((t, i) => 'Panel ' + (i + 1) + ': ' + t).join('\n') : cm.script}; });
+  cm.pages.splice(cm.pages.length ? cm.cur : 0, cur ? 1 : 0, ...made); cm.script = made[0].script;
   cm.cast = cast; if(!cm.place) cm.place = cmPlace(flat);
-  cm.cur = Math.min(cm.cur || 0, cm.pages.length - 1); cm.sel = 0; cm.open.script = false;
+  cm.cur = Math.max(0, Math.min(cm.cur || 0, cm.pages.length - 1)); cm.sel = 0; cm.open.script = false;
   save(); drawComic(); buzz();
-  const pg = cmPage(); toast('That\'s ' + pg.panels.length + ' panel' + (pg.panels.length > 1 ? 's' : '') + (cm.pages.length > 1 ? ' on page 1 (' + cm.pages.length + ' pages)' : ' in 1 page') + '. Here\'s the layout');
+  const pg = cmPage(); toast('That\'s ' + pg.panels.length + ' panel' + (pg.panels.length > 1 ? 's' : '') + (cm.pages.length > 1 ? ' on page ' + (cm.cur + 1) + (made.length > 1 ? ' (' + made.length + ' pages added)' : '') : ' in 1 page') + '. Here\'s the layout');
 }
 
 // --- the prompt MiniMax gets for a panel ---
@@ -7392,7 +7415,7 @@ function t3dHtml(p, ph){
   if(t3kOn(ph)) x = x.replace(/<div class="btnrow"><button class="btn hot" data-cm="t3dcirc"[\s\S]*?<\/p>/, '');
   return x; }
 // the panel (and its page) a 3D object belongs to
-function t3dOwner(ph){ for(const cm of [S.comic, S.stash && S.stash.comic].filter(Boolean)) for(const pg of cm.pages){ const i = pg.panels.findIndex(q => q.d3===ph); if(i >= 0) return {pg, p:pg.panels[i], i}; } return null; }
+function t3dOwner(ph){ for(const cm of cmComics()) for(const pg of cm.pages){ const i = pg.panels.findIndex(q => q.d3===ph); if(i >= 0) return {pg, p:pg.panels[i], i}; } return null; }
 // one MiniMax job for the rings: src is the still's URL or a canvas
 async function t3dSend(ph, host, src, o, tag, avoid, last){
   const own = t3dOwner(ph), k = kitOrbit(avoid); host.busy = 'Sending…'; if(!$('#comic').hidden) drawComic();
@@ -7672,15 +7695,18 @@ function cmLayThumb(rows, texts, on, i){
 function drawComic(){ try{ drawComic0(); }catch(e){ console.error(e); const B = $('#cmBody'); if(B && !B.innerHTML.trim()) B.innerHTML = `<p class="warn">The comic page couldn't draw (${esc(e.message)}). Send Claude a screenshot of this.</p>`; else toast("Couldn't redraw the comic: " + e.message, true); } }
 function drawComic0(){
   const B = $('#cmBody'); if(!B || $('#comic').hidden) return;
-  const cm = CM(), pg = cmPage(), kits = cmKits();
+  const cm = CM(); cmFixPages(cm); const pg0 = cmPage(), pg = pg0 && pg0.panels.length ? pg0 : null, kits = cmKits();
   const seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${esc(v)}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`;
   let x = `<div class="cmtop"><b>📖 Comic page</b>${S.hidden ? '<small>🙈 Hidden</small>' : ''}</div>`;
-  x += `<div class="feed${cm.open.script || !pg ? ' open' : ''}"><button class="fhead" data-cmfold="script"><b>Script</b><small>${esc(pg ? cm.script.replace(/\s+/g, ' ').slice(0, 60) : '')}</small><span class="chev" aria-hidden="true">›</span></button>
+  const others = S.comics || [];
+  x += `<div class="row cmbar"><label>Comic</label><div class="grow">${others.length ? `<select data-cmcomic aria-label="Comic">${[cm].concat(others).sort((a, b) => (a.n || 0) - (b.n || 0)).map(c => `<option value="${c.n}" ${c===cm ? 'selected' : ''}>${esc(cmName(c))}</option>`).join('')}</select>` : `<b>${esc(cmName(cm))}</b>`}</div><button class="chipbtn" data-cm="newcomic">➕ New comic</button></div>
+    <div class="row cmbar"><label>Page</label><div class="grow">${cm.pages.length ? seg('data-cmpg', cm.pages.map((q, i) => [i, String(i + 1)]), cm.cur) : '<span class="note">none yet</span>'}</div>
+    <button class="chipbtn" data-cm="newpage">➕ New page</button>${cm.pages.length ? '<button class="chipbtn" data-cm="delpage" aria-label="Remove this page">🗑 Remove</button>' : ''}</div>`;
+  x += `<div class="feed${cm.open.script || !pg ? ' open' : ''}"><button class="fhead" data-cmfold="script"><b>Script${cm.pages.length > 1 ? ' · page ' + (cm.cur + 1) : ''}</b><small>${esc(pg ? cm.script.replace(/\s+/g, ' ').slice(0, 60) : '')}</small><span class="chev" aria-hidden="true">›</span></button>
     <div class="fbody"><textarea id="cmScript" data-cmf="script" rows="6" placeholder="Page 1: Panel 1: Character 1 walks down a street. Panel 2: She looks behind her and keeps walking. Panel 3: A man starts walking behind her. Panel 4: He catches up to her and grabs her arm. Panel 5: She screams." autocapitalize="sentences" spellcheck="true">${esc(cm.script)}</textarea>
     <div class="btnrow"><button class="btn hot" data-cm="read">📖 Read the script</button></div>
     <p class="note">Write "Panel 1: …", "Panel 2: …" (and "Page 2:" for another page). Name the people as Character 1, a man, she, he, or by your character cards' names.</p></div></div>`;
   if(pg){
-    if(cm.pages.length > 1) x += `<div class="cmpages">${seg('data-cmpg', cm.pages.map((q, i) => [i, 'Page ' + (i + 1)]), cm.cur)}</div>`;
     const free = q => !cmBusy(q), empty = pg.panels.filter(q => !q.takes.length && free(q)), busy = pg.panels.filter(cmBusy).length;
     const still = cm.route!=='clip', noStill = pg.panels.filter(q => !(q.stills || []).length && free(q)), noAnim = pg.panels.filter(q => (q.stills || []).length && !q.takes.length && free(q)), ik = cmIllKits(), fk = cmFlKits();
     x += `<p class="cmsum">${cm.pages.length > 1 ? 'Page ' + (cm.cur + 1) + ': ' : 'That\'s '}${pg.panels.length} panel${pg.panels.length > 1 ? 's' : ''}${cm.pages.length > 1 ? '' : ' in 1 page'}. Here's the layout; tap another to change it.</p>
@@ -7778,7 +7804,7 @@ $('#comic').addEventListener('click', e => {
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
   else if(t.dataset.cmfold){ cm.open[t.dataset.cmfold] = !cm.open[t.dataset.cmfold]; }
-  else if(t.dataset.cmpg!=null){ cmPlay(false); cm.cur = +t.dataset.cmpg; cm.sel = 0; }
+  else if(t.dataset.cmpg!=null){ cmPlay(false); cmGoPage(+t.dataset.cmpg); }
   else if(t.dataset.cmlay!=null){ pg.rows = pg.lays[+t.dataset.cmlay]; }
   else if(t.dataset.cmwho){ const id = t.dataset.cmwho; p.who = (p.who || []).includes(id) ? p.who.filter(x => x!==id) : cm.cast.filter(s => s.id===id || p.who.includes(s.id)).map(s => s.id); p.whoSet = true; }
   else if(t.dataset.cmshot){ p.shot = t.dataset.cmshot; }
@@ -7834,6 +7860,9 @@ $('#comic').addEventListener('click', e => {
   else if(a==='ws'){ wsOpen(p.id); return; }
   else if(a==='anim1'){ cmJobs('anim', [p]); return; }
   else if(a==='read'){ cmRead(); return; }
+  else if(a==='newpage'){ cmNewPage(); return; }
+  else if(a==='delpage'){ cmDelPage(); return; }
+  else if(a==='newcomic'){ cmNewComic(); return; }
   else if(a==='prev' || a==='next'){ cm.sel = Math.max(0, Math.min(pg.panels.length - 1, cm.sel + (a==='next' ? 1 : -1))); }
   else if(a==='all'){ cmRender(pg.panels.filter(q => !q.takes.length && !cmBusy(q))); return; }
   else if(a==='one'){ cmRender([p]); return; }
@@ -7849,6 +7878,7 @@ $('#comic').addEventListener('click', e => {
 });
 ['input', 'change'].forEach(ev => $('#comic').addEventListener(ev, e => {
   const el = e.target, cm = CM(), pg = cmPage();
+  if(el.dataset.cmcomic!=null){ if(ev==='change') cmPickComic(+el.value); return; }
   if(el.dataset.cmf){ cm[el.dataset.cmf] = el.value; save(); if(ev==='change' && el.dataset.cmf!=='script') drawComic(); return; }
   if(pg && el.dataset.t3d==='mv'){ const ph = pg.panels[cm.sel].d3; if(!ph || !ph.t3d) return; ph.mvT = +el.value / 100; if(el.nextElementSibling) el.nextElementSibling.textContent = el.value + '%'; d3Redraw(); if(ev==='change') save(); return; }
   if(pg && el.dataset.t3d){ const ph = pg.panels[cm.sel].d3; if(!ph || !ph.t3d) return; const d = Math.round(+el.value); if(ph.mv >= 0){ ph.mv = -1; if(ev==='change') drawComic(); } ph.yaw = d / 360 * 2 * Math.PI * (ph.circRev ? -1 : 1); ph.pitch = 0;

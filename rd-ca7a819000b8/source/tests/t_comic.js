@@ -334,6 +334,19 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   ok(Object.values(ALL[ALL.length - 1].prompt).find(x => x.class_type==='SaveImage').inputs.filename_prefix==='Hidden/comics/page_1/panel_2/still' && await page.evaluate(() => !CM().loc && !(CM().plates || []).length), 'Hidden stills save into Hidden/comics, and Hidden has no place of the normal comic');
   await page.evaluate(() => switchMode());
   ok(await page.evaluate(() => CM().pages[0].panels.length===5), 'back in normal: the 5-panel page is as it was');
+  // 📄 pages and comics (Jordan 2026-10-22: New page, Remove page, New comic)
+  { const n0 = await page.evaluate(() => CM().pages.length); await page.click('#comic [data-cm="newpage"]');
+    ok(await page.evaluate(n => CM().pages.length===n + 1 && !cmPage().panels.length && CM().script==='', n0) && !(await page.$('#cmPage')) && await page.isVisible('#cmScript'), '➕ New page: an empty page after this one, with its own empty script');
+    await page.fill('#cmScript', 'Panel 1: she opens a door. Panel 2: she gasps.'); await page.dispatchEvent('#cmScript', 'input'); await page.click('#comic [data-cm="read"]');
+    ok(await page.evaluate(n => CM().pages.length===n + 1 && cmPage().panels.length===2 && CM().pages[0].panels.length===5, n0), 'reading it makes only that page (page 1 keeps its 5 panels)');
+    await page.click('#comic [data-cmpg="0"]'); ok(await page.evaluate(() => CM().cur===0 && /Panel 1/.test(CM().script) && !/opens a door/.test(CM().script)), 'each page shows its own script');
+    await page.click('#comic [data-cmpg="1"]'); ok(await page.evaluate(() => /opens a door/.test(CM().script)), 'and back');
+    await page.click('#comic [data-cm="delpage"]'); await page.waitForTimeout(300);
+    ok(await page.evaluate(n => CM().pages.length===n && CM().cur===0 && CM().pages[0].panels.length===5, n0), '🗑 Remove page takes it out (after asking)');
+    await page.click('#comic [data-cm="newcomic"]');
+    ok(await page.evaluate(() => !CM().pages.length && S.comics.length===1 && CM().n===2) && await page.isVisible('#cmScript') && await page.$('#comic [data-cmcomic]'), '➕ New comic: a fresh comic, the old one kept in the Comic list');
+    await page.selectOption('#comic [data-cmcomic]', '1'); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => CM().n===1 && CM().pages[0].panels.length===5 && S.comics.length===0), 'switching back: the empty new comic is dropped and comic 1 is as it was'); }
   await page.click('#tabs [data-tab="render"]');
   ok(await page.isVisible('#mainView') && await page.isVisible('.go'), 'the Render tab brings the recipe back');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
