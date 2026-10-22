@@ -23,7 +23,7 @@ const DEPS = process.env.RIG_DEPS || '';
     // the normals point out: the top of the head's normal points up
     const p = g.attributes.position.array, n = g.attributes.normal.array; let top = 0; for(let v = 1; v < p.length / 3; v++) if(p[v * 3 + 1] > p[top * 3 + 1]) top = v;
     return {...info, open, badW, topUp:n[top * 3 + 1]}; });
-  ok(info.verts > 5000 && info.open < info.tris * 0.002 && !info.badW && info.topUp > 0.5, 'the body is one closed skin, weights add up, normals face out: ' + JSON.stringify(info));
+  ok(info.verts > 5000 && info.open <= 12 && !info.badW && info.topUp > 0.5, 'the body is one closed skin, weights add up, normals face out: ' + JSON.stringify(info));
   // posed: a raised hand's skin goes up with the hand bone
   const follow = await page.evaluate(() => { const R = RIG; R.applyPreset('cheer'); const {mesh} = R.body(), g = mesh.geometry, p = g.attributes.position, v = new (R.bones.pelvis.position.constructor)();
     let maxY = -1; for(let i = 0; i < p.count; i += 7){ mesh.getVertexPosition(i, v); maxY = Math.max(maxY, v.y); } return {maxY, hand:R.wpos(R.bones.handEndL).y}; });
