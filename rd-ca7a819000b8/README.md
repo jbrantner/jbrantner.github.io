@@ -58,3 +58,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 **v.127 (2026-10-22)**: 🎬 a posed panel's stills can be drawn by MiniMax H3 (Pose by: 🎬 MiniMax + pictures, the default; or 🖼 Illustrious + ProMax): the characters' pictures (card, else the library preview) as references, the rig's Outline guide as a 9-frame still control video through the Fun ControlNet (as canny, strength 1, full model 20 steps), the middle frame saved as the still. Only on a computer with the Fun ControlNet (Render).
 
 **v.128 (2026-10-22)**: the panel editor has 🦴 Its pose rig (opens the rig even when the panel shows a still) and 🗑 Clear its stills (asks first; they stay in the Library).
+
+**v.129 (2026-10-22)**: MiniMax-posed stills use Turbo at 4 steps by default (Steps: ⚡ Turbo (4) / Full (20), per comic); the 3D object note no longer says "About NaN min".
