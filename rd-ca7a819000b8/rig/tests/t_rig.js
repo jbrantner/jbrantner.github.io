@@ -105,9 +105,17 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.mouse.move(ring.x + rad, ring.y - 0); await page.mouse.down(); await page.mouse.move(ring.x + rad - 5, ring.y + 30, {steps:6}); await page.mouse.up();
   const ring2 = await page.evaluate(() => ({q:RIG.bones.head.quaternion.toArray(), sel:document.querySelector('#selName').textContent}));
   ok(/Head/.test(ring2.sel) && ring2.q.some((v, i) => Math.abs(v - ring.e0[i]) > 0.01), 'dragging a ring on screen turns the head: ' + JSON.stringify(ring2));
+  // depth and outline from the body: depth bright in front, dark behind, black around her; outline has white lines
+  const gd = await page.evaluate(() => { const R = RIG; document.querySelector('[data-preset="point"]').click(); document.querySelector('#views [data-v="front"]').click();
+    const cs = R.guideCanvases(208, 304, ['depth', 'line']), d = cs.depth.getContext('2d').getImageData(0, 0, 208, 304).data, l = cs.line.getContext('2d').getImageData(0, 0, 208, 304).data;
+    let body = 0, bg = 0, maxV = 0, minV = 255, lines = 0; for(let i = 0; i < d.length; i += 4){ if(d[i] > 0){ body++; maxV = Math.max(maxV, d[i]); minV = Math.min(minV, d[i]); } else bg++; if(l[i] > 128) lines++; }
+    // the pointing hand (her right, picture's left, reaching towards the camera) is nearer than her hips
+    const v = (p) => { const q = p.clone().project(R.exportCam()); const x = Math.round((q.x + 1) / 2 * 208), y = Math.round((1 - q.y) / 2 * 304); return d[(y * 208 + x) * 4]; };
+    return {body, bg, maxV, minV, lines, hand:v(R.wpos(R.bones.handR)), hips:v(R.wpos(R.bones.pelvis))}; });
+  ok(gd.body > 3000 && gd.bg > gd.body && gd.maxV > 230 && gd.minV < 120 && gd.hand > gd.hips && gd.lines > 300 && gd.lines < gd.body, 'depth and outline guides from the body: ' + JSON.stringify(gd));
   // the guide tab draws a preview, the saved picture has the chosen size
   await page.click('#tabs [data-tab="guide"]'); await page.waitForTimeout(100);
-  const g = await page.evaluate(() => { const c = document.querySelector('#gPrev'); document.querySelector('#gSize').value = '832x1216'; document.querySelector('#gSize').onchange();
+  const g = await page.evaluate(() => { const c = document.querySelector('#gPrevs canvas'); document.querySelector('#gSize').value = '832x1216'; document.querySelector('#gSize').onchange();
     return {w:c.width, h:c.height, lit:[...c.getContext('2d').getImageData(0, 0, c.width, c.height).data].some((v, i) => i % 4===0 && v > 100)}; });
   ok(g.w > 100 && g.lit, 'the Guide tab shows the OpenPose preview: ' + JSON.stringify(g));
   fs.mkdirSync(path.join(__dirname, 'out'), {recursive:true});
@@ -132,7 +140,8 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(picks.join('|')===SRV + '|iriselTouchIL_v10.safetensors|AFKJ Style Illustrious Claude.safetensors|librarianx_v2.safetensors|diffusion_pytorch_model_promax.safetensors', 'Try a render starts on Render with the Librarian setup: ' + picks.join(' · '));
   await page.evaluate(() => document.querySelector('#tGo').click()); await page.waitForFunction(() => /Done|bad/.test(document.querySelector('#tStatus').textContent + document.querySelector('#tStatus').className), null, {timeout:15000});
   const G = sent[0] || {}, types = Object.values(G).map(n => n.class_type);
-  ok(ups.length===1 && /^rd-rig-openpose-/.test(ups[0]) && G[8] && G[8].inputs.type==='openpose' && G[9].inputs.end_percent===0.7 && G[2].inputs.lora_name.startsWith('AFKJ') && G[3].inputs.lora_name.startsWith('librarianx')
+  ok(ups.length===2 && /^rd-rig-openpose-/.test(ups[0]) && /^rd-rig-depth-/.test(ups[1]) && G['8pose'].inputs.type==='openpose' && G['8depth'].inputs.type==='depth' && G['9pose'].inputs.end_percent===0.7
+    && G[9].inputs.positive[0]==='9pose' && G[9].inputs.image[0]==='6depth' && G[11].inputs.positive[0]==='9' && G[2].inputs.lora_name.startsWith('AFKJ') && G[3].inputs.lora_name.startsWith('librarianx')
     && G[11].inputs.model[0]==='3' && /^librarianx, 1girl, solo/.test(G[4].inputs.text) && G[10].inputs.width===832, 'the render graph: ' + types.join(', '));
   ok(await page.evaluate(() => !document.querySelector('#testOut').hidden), 'the finished render shows on the page');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
