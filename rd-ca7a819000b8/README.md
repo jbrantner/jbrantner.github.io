@@ -60,3 +60,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 **v.128 (2026-10-22)**: the panel editor has 🦴 Its pose rig (opens the rig even when the panel shows a still) and 🗑 Clear its stills (asks first; they stay in the Library).
 
 **v.129 (2026-10-22)**: MiniMax-posed stills use Turbo at 4 steps by default (Steps: ⚡ Turbo (4) / Full (20), per comic); the 3D object note no longer says "About NaN min".
+
+**v.130 (2026-10-22)**: 🎬 Director mode on a comic panel with a still: pick an Action (walking, running, holds the pose, turns around, looks back, sits down, waves, or type your own) and a Camera (static, side, other side, behind, high, low, push in, pull back). MiniMax H3 reference-to-video, the still pinned as frame 0 and each character's card or library preview as a "model sheet" reference, hybrid Turbo 4 steps; the clip lands as a take (scrub, 📸, ✨ Finish). The prompt pieces were tested on Render in three rounds (RenderDeck/director_tests): side 9/9/9/10, low 9/9/8/10, high 8/9/8/9 (camera/outfit/face/walking). Fixed a page error when a host without takes had a clip loading.

@@ -428,6 +428,17 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         && gs.every(g => Object.values(g).some(n => n.class_type==='BasicScheduler' && n.inputs.steps===4) && Object.values(g).some(n => n.class_type==='UNETLoader' && /turbo/i.test(n.inputs.unet_name)))
         && gs.every(g => Object.values(g).some(n => n.class_type==='ImageFromBatch' && n.inputs.batch_index===4) && Object.values(g).some(n => n.class_type==='MiniMaxH3FunControlNetApply') && Object.values(g).find(n => n.class_type==="LoadVideo").inputs.file) && !errs.length,
         '🎬 MiniMax draws her from her preview inside the rig\'s outline (9 frames, the middle kept), wired right: ' + JSON.stringify({n:rv.length, gs:gs.length, len:rv.map(n => n.inputs.length), ib:gs.map(g => (Object.values(g).find(n => n.class_type==='ImageFromBatch') || {inputs:{}}).inputs.batch_index), lv:gs.map(g => (Object.values(g).find(n => n.class_type==='LoadVideo') || {inputs:{}}).inputs.file)}) + ' ' + errs.slice(0, 3).join('; ')); }
+    // 🎬 Director mode: the still is the first frame, her preview the reference; Action + Camera from the tested pieces
+    { await page.evaluate(() => { CM().sel = 0; const q = cmPage().panels[0]; if(!(q.stills || []).length) q.stills = [{url:'https://jordo-desktop.test/view?filename=s.png', w:832, h:1280}]; q.show = 'still'; CM().open.dir = true; drawComic(); });
+      await page.click('#comic [data-cmdact="walk"]'); await page.click('#comic [data-cmdcam="high"]');
+      ok(/Walking · High angle/.test(await page.textContent('#comic [data-cmfold="dir"]')), '🎬 Director mode shows the picked action and camera');
+      const nb = ALL.length, t0 = await page.evaluate(() => cmPage().panels[0].takes.length); await page.click('#comic [data-cm="direct"]');
+      await page.waitForFunction(n => cmPage().panels[0].takes.length > n, t0, {timeout:20000});
+      const g = ALL[nb].prompt, ns = Object.values(g), rv = ns.find(n => n.class_type==='MiniMaxH3ReferenceToVideo'), ag = ns.find(n => n.class_type==='MiniMaxH3AddGuide'), errs = check(g);
+      ok(rv && rv.inputs['ref_images.ref_image_0'] && rv.inputs['ref_images.ref_image_1'] && ag && ag.inputs.frame_idx===0 && /^<Picture 1> is the first frame/.test(rv.inputs.prompt) && /<Picture 2> is a character model sheet for <Subject 1> \(she\): copy only her design from it, never its standing pose/.test(rv.inputs.prompt)
+        && /High-angle tracking shot/.test(rv.inputs.prompt) && /looking down at her the whole time/.test(rv.inputs.prompt) && /walks forward with a steady stride .* from the first frame to the very last frame/.test(rv.inputs.prompt) && /Her whole body, head included, stays in frame\.$/.test(rv.inputs.prompt) && ns.some(n => n.class_type==='BasicScheduler' && n.inputs.steps===4) && !errs.length,
+        '🎬 Direct it: the still pinned as frame 0, her preview as Picture 2, walking + crane up, Turbo 4 steps: ' + (rv ? rv.inputs.prompt : '') + ' ' + errs.join('; '));
+      ok(await page.evaluate(() => cmPage().panels[0].show==='clip' && !!document.querySelector('#comic [data-cmt]')), 'the directed clip lands as a take with the frame scrubber'); }
     await page.selectOption('#comic [data-cmcomic]', '1'); await page.waitForTimeout(300);
     ok(await page.evaluate(() => CM().n===1 && CM().pages[0].panels.length===5 && S.comics.length===1 && S.cmLib.length===1), 'switching back: comic 1 is as it was, comic 2 kept, the library shared'); }
   await page.click('#tabs [data-tab="render"]');

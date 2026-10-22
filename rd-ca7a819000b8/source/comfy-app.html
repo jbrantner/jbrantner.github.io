@@ -620,7 +620,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.129'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.130'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6529,6 +6529,65 @@ function cmMmStillGraph(k, imgs, prompt, control, w, h, prefix){
   const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
   const one = add('ImageFromBatch', {image:[dec,0], batch_index:Math.floor(CM_MM_LEN / 2), length:1});
   return {g, save:add('SaveImage', {images:[one,0], filename_prefix:prefix}), W:w, H:h}; }
+// 🎬 Director mode (Jordan 2026-10-22): the panel's Illustrious still is the first frame and each character's picture (card,
+// else library preview) their reference, so the outfit holds; an Action and a Camera are picked from tested prompt pieces.
+// MiniMax H3 reference-to-video with the still pinned as frame 0 (hybrid Turbo, 4 steps); the clip lands as a take, so the
+// frame scrubber, 📸 Use this frame and ✨ Finish work on it. {S} is the first person, {her} their pronoun.
+// The pieces were tested on Render (2026-10-22, three rounds, RenderDeck/director_tests): a "model sheet" lock stops the
+// reference's standing pose leaking in; cameras that move WITH her and describe what the frame looks like reach the angle and
+// hold it; actions run "from the first frame to the very last frame". Every prompt is LOCK + CAMERA + ACTION + FRAME.
+// Round 3 scores (camera/outfit/face/walking of 10): side 9/9/9/10, low 9/9/8/10, high 8/9/8/9; static stalls into the
+// reference's pose at 4-5 s. Untested so far: actions other than walking, and the push, pull, behind and other-side cameras.
+const CM_ACTS = {walk:['🚶 Walking', '{S} walks forward with a steady stride and swinging arms from the first frame to the very last frame; {she} never slows, stops, stands still or poses.'],
+  run:['🏃 Running', '{S} runs forward fast with pumping arms from the first frame to the very last frame; {she} never slows, stops or poses.'],
+  still:['🧍 Holds the pose', '{S} holds the pose from the first frame, breathing and blinking, {her} weight shifting slightly; {she} never changes into a standing pose.'],
+  turn:['🔄 Turns around', '{S} turns around on the spot, slowly and steadily from the first frame to the very last frame, until {her} back is to the camera.'],
+  look:['👀 Looks back', '{S} keeps walking and looks back over {her} shoulder towards the camera, from the first frame to the very last frame.'],
+  sit:['🪑 Sits down', '{S} sits down on the ground, slowly and naturally, finishing in the last second.'],
+  wave:['👋 Waves', '{S} waves at the camera with one hand, again and again, from the first frame to the very last frame.']};
+const CM_CAMS = {static:['📷 Static', 'Locked-off shot. The camera stays at {her} eye level a few metres in front of {her} and never moves, pans or zooms.'],
+  side:['➡️ Side angle', 'Arc-then-tracking shot. [0s-3s] The camera travels in a smooth arc around {S} to {her} right side, and stops when we see {her} in full profile, facing the right edge of the frame. [3s-5s] The camera tracks sideways alongside {her} at {her} pace, holding {her} profile in the middle of the frame until the end; it never drifts back to the front.'],
+  side2:['⬅️ Other side', 'Arc-then-tracking shot. [0s-3s] The camera travels in a smooth arc around {S} to {her} left side, and stops when we see {her} in full profile, facing the left edge of the frame. [3s-5s] The camera tracks sideways alongside {her} at {her} pace, holding {her} profile in the middle of the frame until the end; it never drifts back to the front.'],
+  back:['↩️ Behind', 'Arc-then-tracking shot. [0s-3s] The camera travels in a smooth half circle around {S} until it is directly behind {her}, and stops when we see {her} back. [3s-5s] The camera follows behind {her} at {her} pace, holding {her} back in the middle of the frame until the end; it never drifts back to the front.'],
+  high:['⬆️ High angle', 'High-angle tracking shot. [0s-1s] The camera rises to about a metre above {her} head and tilts down at about 45 degrees. [1s-5s] The camera glides backward ahead of {her} at {her} pace, staying high and looking down at {her} the whole time, far enough back to see all of {her}: we see the top of {her} head, {her} face and {her} whole body below us, {her} feet small near the bottom of the frame. It never goes directly overhead and never drops back to eye level.'],
+  low:['⬇️ Low angle', "Low-angle tracking shot, worm's-eye view. [0s-1s] The camera sinks from {her} eye level down to the floor a few metres in front of {her} and tilts up. [1s-5s] The camera stays on the floor and glides backward at {her} pace, looking up at {her} the whole time: {her} feet large near the bottom edge of the frame, {her} legs towering, {her} face seen from below near the top edge. It never rises back to eye level and stays far enough back to see all of {her}."],
+  push:['🔍 Push in', 'Push-in shot. [0s-4s] The camera glides slowly straight towards {S} at {her} eye level until {her} face and shoulders fill the frame. [4s-5s] The camera holds on that close-up; it never pulls back.'],
+  pull:['🔭 Pull back', 'Pull-back shot. [0s-4s] The camera glides slowly straight back from {S} at {her} eye level until {her} whole body and the space around {her} are in frame. [4s-5s] The camera holds; it never moves back in.']};
+function cmDirPrompt(cm, p, refs){
+  const who = cmWho(cm, p), d = p.dir || {}, s0 = who[0], g = s0 && s0.g, parts = ['<Picture 1> is the first frame of this shot.'];
+  const P = {S:who.length ? '<Subject 1>' : 'the subject', her:g==='m' ? 'his' : g==='f' ? 'her' : 'their', she:g==='m' ? 'he' : g==='f' ? 'she' : 'they'};
+  who.forEach((s, k) => { const pi = refs.findIndex(r => r.slot===s.id), pr = s.g==='m' ? ['he', 'his'] : s.g==='f' ? ['she', 'her'] : ['they', 'their'], c = cmCard(s);
+    const desc = [c && (c.tags || '').trim().replace(/,\s*$/, ''), (s.desc || '').trim()].filter(Boolean).join(', ');
+    parts.push(pi >= 0 ? '<Picture ' + (pi + 2) + '> is a character model sheet for <Subject ' + (k + 1) + '> (' + pr[0] + '): copy only ' + pr[1] + ' design from it, never its standing pose.' + (desc ? ' ' + pr[1].charAt(0).toUpperCase() + pr[1].slice(1) + ' look: ' + desc + '.' : '') + ' ' + pr[1].charAt(0).toUpperCase() + pr[1].slice(1) + ' clothes never change, from every angle.'
+      : '<Subject ' + (k + 1) + '> (' + pr[0] + ') is the person in the first frame' + (desc ? ': ' + desc : '') + ', with the same clothes the whole time.'); });
+  parts.push(cmWhite(cm, p) ? 'Plain white background.' : 'The place stays the same as in the first frame.');
+  const fill = t => t.replace(/\{(S|her|she)\}/g, (m, k) => P[k]);
+  const act = (p.dirText || '').trim() ? p.dirText.trim().replace(/([^.!?])$/, '$1.') + ' ' + P.S.charAt(0).toUpperCase() + P.S.slice(1) + ' keeps doing it from the first frame to the very last frame and never stops to pose.' : fill((CM_ACTS[d.act] || CM_ACTS.walk)[1]);
+  parts.push(fill((CM_CAMS[d.cam] || CM_CAMS.static)[1]), act, fill(P.her.charAt(0).toUpperCase() + P.her.slice(1) + ' whole body, head included, stays in frame.'));
+  return parts.join(' '); }
+function cmDirGraph(k, imgs, prompt, w, h, prefix){
+  const g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const un = k.turbo || k.base, fast = /turbo/i.test(baseName(un));
+  let model = [add('UNETLoader', {unet_name:un, weight_dtype:'default'}), 0];
+  if(k.lora && fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
+  const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
+  const ims = imgs.map(im => add('LoadImage', {image:im})), refs = {}; ims.forEach((id, i) => { refs['ref_images.ref_image_' + i] = [id, 0]; });
+  const rv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip:[clip,0], vae:[vae,0], prompt, width:w, height:h, length:TV_LEN, ref_image_size:'match'}, refs));
+  const cond = add('MiniMaxH3AddGuide', {positive:[rv,0], latent:[rv,1], vae:[vae,0], image:[ims[0],0], frame_idx:0});
+  const gd = add('BasicGuider', {model, conditioning:[cond,0]}), sc = add('BasicScheduler', {model, scheduler:'simple', steps:fast ? 4 : 20, denoise:1});
+  const sa = add('KSamplerSelect', {sampler_name:'res_multistep'}), no = add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)});
+  const out = add('SamplerCustomAdvanced', {noise:[no,0], guider:[gd,0], sampler:[sa,0], sigmas:[sc,0], latent_image:[rv,1]});
+  const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
+  const save = add('SaveVideo', {video:[add('CreateVideo', {images:[dec,0], fps:24}), 0], filename_prefix:prefix, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  return {g, save}; }
+function cmDirHtml(cm, p){ const d = p.dir || {}, chips = (attr, list, cur) => `<div class="btnrow">${Object.entries(list).map(([k, v]) => `<button class="chipbtn${k===cur ? ' on' : ''}" ${attr}="${k}">${v[0]}</button>`).join('')}</div>`, who = cmWho(cm, p), refs = cmMmRefs(cm, p).filter(r => r.kind==='char');
+  return `<div class="feed${cm.open.dir ? ' open' : ''}"><button class="fhead" data-cmfold="dir"><b>🎬 Director mode</b><small>${esc(((p.dirText || '').trim() ? 'custom action' : (CM_ACTS[d.act] || CM_ACTS.walk)[0].replace(/^\S+\s/, '')) + ' · ' + (CM_CAMS[d.cam] || CM_CAMS.static)[0].replace(/^\S+\s/, ''))}</small><span class="chev" aria-hidden="true">›</span></button><div class="fbody">
+    <div class="lbl">Action</div>${chips('data-cmdact', CM_ACTS, (p.dirText || '').trim() ? '' : d.act || 'walk')}
+    <input type="text" data-cmp="dirText" value="${esc(p.dirText || '')}" placeholder="or type your own action, e.g. she pulls a book from the shelf">
+    <div class="lbl">Camera</div>${chips('data-cmdcam', CM_CAMS, d.cam || 'static')}
+    <p class="note">The still you're showing is the first frame; ${refs.length ? esc(who.filter(s => refs.some(r => r.slot===s.id)).map(s => s.label).join(' and ')) + "'s picture keeps the outfit" : 'give the character a preview (👥 Characters) or a card so the outfit holds'}. MiniMax Turbo on ${esc(cmKits().map(k => pcName(k.url)).join(' and ') || 'a computer with MiniMax')}, about 3 to 5 min. It lands as a take: slide to the frame you want, then 📸 or ✨ Finish.</p>
+    <div class="btnrow"><button class="btn hot" data-cm="direct" ${cmStill(p) ? '' : 'disabled'}>🎬 Direct it</button></div></div></div>`; }
 const cmName = c => 'Comic ' + (c.n || 1) + (c.pages.length ? ' (' + c.pages.length + ' page' + (c.pages.length > 1 ? 's' : '') + ')' : '');
 function cmRead(){
   const cm = CM(), pages = cmSplit(cm.script);
@@ -6904,13 +6963,13 @@ const cmShown = p => { const t = p.takes[p.take], s = cmStill(p); return t && (p
 const cmSlow = url => url===farmHost() || url==='test' ? 1 : 1.26;
 // one job of any kind on the computer that will be free soonest
 async function cmJobs(kind, list){
-  const cm = CM(), pg = cmPage(); let kits = ['still', 'plate', 'angle', 'finish'].includes(kind) ? cmIllKits() : cmFlKits(); if(!list.length) return;
+  const cm = CM(), pg = cmPage(); let kits = ['still', 'plate', 'angle', 'finish'].includes(kind) ? cmIllKits() : kind==='direct' ? cmKits().filter(k => k.oi.MiniMaxH3AddGuide) : cmFlKits(); if(!list.length) return;
   // 🎬 panels posed with MiniMax go to the computers with MiniMax H3's Fun ControlNet; the rest are painted as usual
   if(kind==='still' && list.some(cmMmUse)){ const mk = cmMmKits().map(k => Object.assign({}, k, {mm:true})), rest = list.filter(q => !cmMmUse(q));
     if(!mk.length) toast("None of your computers that are on has MiniMax H3's Fun ControlNet (it's on Render), so those panels are painted in Illustrious with the rig", true);
     else { if(rest.length) await cmJobs(kind, rest); kits = mk; list = list.filter(cmMmUse); } }
   if(!kits.length){ toast(kind==='anim' ? cmWhy() : !S.test && !allPcs().some(x => x.online) ? cmWhy() : 'None of your computers that are on has an Illustrious checkpoint and the mask nodes', true); return; }
-  const mins = k => (kind==='anim' ? (k.fl ? 4.5 : 3) : k.mm ? (cm.mmQ==='full' ? 2 : 0.7) : kind==='plate' || kind==='angle' ? 1 : 1.5) * cmSlow(k.url);
+  const mins = k => (kind==='direct' ? 4 : kind==='anim' ? (k.fl ? 4.5 : 3) : k.mm ? (cm.mmQ==='full' ? 2 : 0.7) : kind==='plate' || kind==='angle' ? 1 : 1.5) * cmSlow(k.url);
   const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(p => p.making && p.making.pc===k.url).length);
   buzz();
   const next = () => { const k = kits.slice().sort((a, b) => (load[a.url] + 1) * mins(a) - (load[b.url] + 1) * mins(b))[0]; load[k.url]++; return k; };
@@ -6924,8 +6983,11 @@ async function cmJob(cm, pg, p, k, kind, mins, host){
   const i = pg ? pg.panels.indexOf(p) : -1, rect = i >= 0 ? cmRectsOf(pg)[i] : null, h0 = host || p;
   delete p.err; delete h0.err; h0.busy = kind==='anim' ? 'Sending the still…' : 'Sending…'; drawComic();
   try{
-    let G, w, h, prefix, video = kind==='anim';
+    let G, w, h, prefix, video = kind==='anim' || kind==='direct';
     if(kind==='plate'){ prefix = cmPrefix('place'); G = cmPlateGraph(k, prefix); w = 1344; h = 768; }
+    else if(kind==='direct'){ const s = cmStill(p); if(!s) throw new Error('paint a still first'); prefix = cmPrefixP(pg, i, 'direct'); [w, h] = obCanvas(s.w || rect.w, s.h || rect.h, 576);
+      const refs = cmMmRefs(cm, p).filter(r => r.kind==='char'), imgs = [await cmUp(s.url, k.url)]; for(const r of refs) imgs.push(await cmUp(r.url, k.url));
+      G = cmDirGraph(k, imgs, cmDirPrompt(cm, p, refs), w, h, prefix); }
     else if(kind==='still' && k.mm){ prefix = cmPrefixP(pg, i, 'still'); const [W, H] = cmSize(rect.w / rect.h), refs = cmMmRefs(cm, p);
       let Gd = null; try{ Gd = JSON.parse(localStorage.getItem('rd-pose-rig-guides-' + cmRigKey(p))); }catch(e){} if(!Gd || !Gd.line) throw new Error('open its rig and tap ✓ Done once more, so it keeps the outline');
       let control = 'rdpanel_test.avi'; if(!S.test){ h0.busy = 'Sending the pose…'; drawComic(); const avi = await cmMmControl(Gd.line, W, H, CM_MM_LEN), fd = new FormData();
@@ -7882,7 +7944,7 @@ function cmVid(url){
   TVBLOB[url] = TVBLOB[url] || fetch(url).then(r => { if(!r.ok) throw new Error('the clip could not be loaded (' + r.status + ')'); return r.blob(); }).then(b => URL.createObjectURL(b));
   v._ready = new Promise(ok => { v.addEventListener('loadeddata', async () => { try{ await v.play(); }catch(e){} v.pause(); ok(); }, {once:true}); });
   TVBLOB[url].then(src => { v.src = src; v.load(); }).catch(err => { delete TVBLOB[url]; toast(err.message, true); });
-  v._ready.then(() => { const p = cmAll().find(x => { const t = x.takes[x.take]; return t && t.url===url; }); if(p) cmSeek(v, p.frame); });
+  v._ready.then(() => { const p = cmAll().find(x => { const t = x.takes && x.takes[x.take]; return t && t.url===url; }); if(p) cmSeek(v, p.frame); });
   return CMV[url] = v;
 }
 function cmSeek(v, frame){ if(v && v.duration) v.currentTime = Math.min(v.duration - 0.01, v.duration * (frame==null ? CM_FRAME : frame) / 1000); }
@@ -7951,6 +8013,7 @@ function drawComic0(){
         <div class="row"><label>Shot</label>${seg('data-cmshot', Object.entries(CM_SHOTS).map(([k2, v]) => [k2, k2==='auto' ? 'Auto (' + CM_SHOTS[cmAutoShot(p.text, cm.sel, rects[cm.sel].w / rects[cm.sel].h)].toLowerCase() + ')' : v]), p.shot || 'auto')}</div>`;
       if(p.err) x += `<p class="warn">${esc(p.err)}</p>`;
       if(sts.length || p.takes.length > 0 && sts.length) x += `<div class="lbl">Stills · tap one to use it</div><div class="cmstills">${sts.map((st, j) => `<button data-cmstill="${j}" class="${sh && sh.still===st || (j===(p.still || 0) && p.show!=='clip') ? 'on' : ''}" aria-label="Still ${sts.length - j}">${st.url ? `<img src="${esc(mini(st.url))}" alt="">` : `<span>Still ${sts.length - j}</span>`}</button>`).join('')}${p.takes.length ? `<button data-cmshow="clip" class="${sh && sh.clip ? 'on' : ''}"><span>🎬 Clip</span></button>` : ''}</div>`;
+      if(still && sts.length) x += cmDirHtml(cm, p);
       if(still && sh && sh.still && sh.still.url) x += d3Html(p, sh.still);
       // the scrubber sits at the bottom of the screen (Jordan 2026-10-21), so the panel stays in sight while it moves
       if(t){ x += `<div class="cmscrub"><b>${cm.sel + 1}</b><button class="chipbtn" data-cm="back" aria-label="One frame back">◀</button>
@@ -8020,7 +8083,7 @@ $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) ret
 // where the cursor is in each panel box, so 👤 Add a character puts the @tag there
 ['keyup', 'click', 'focusout'].forEach(ev => $('#comic').addEventListener(ev, e => { const el = e.target; if(el && el.dataset && el.dataset.cmpt!=null) CM_CARET[+el.dataset.cmpt] = el.selectionStart; }));
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmrig],[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cmprev],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmrigby],[data-cmmmq],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmrig],[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cmprev],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmrigby],[data-cmdact],[data-cmdcam],[data-cmmmq],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
   if(t.dataset.cmrig!=null){ cmRigOpen(+t.dataset.cmrig); return; }
   if(t.dataset.cmins){ cmInsert(+t.dataset.i, t.dataset.cmins); return; }
   if(t.dataset.cmprev){ const L = (S.cmLib || []).find(x => x.id===t.dataset.cmprev); if(L) cmPreview(L); return; }
@@ -8040,6 +8103,8 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmroute){ cm.route = t.dataset.cmroute; }
   else if(t.dataset.cmkeep){ p.keepBg = t.dataset.cmkeep==='1'; }
   else if(t.dataset.cmrigby){ p.rigBy = t.dataset.cmrigby; }
+  else if(t.dataset.cmdact){ p.dir = Object.assign({}, p.dir, {act:t.dataset.cmdact}); p.dirText = ''; }
+  else if(t.dataset.cmdcam){ p.dir = Object.assign({}, p.dir, {cam:t.dataset.cmdcam}); }
   else if(t.dataset.cmmmq){ cm.mmQ = t.dataset.cmmmq; }
   else if(t.dataset.cmstill!=null){ p.still = +t.dataset.cmstill; p.stillPicked = true; p.show = 'still'; cmPlay(false); }
   else if(t.dataset.cmopts){ cm.opts = +t.dataset.cmopts; }
@@ -8089,6 +8154,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='ws'){ wsOpen(p.id); return; }
   else if(a==='clearstills'){ if(!confirm('Clear the ' + (p.stills || []).length + ' still' + ((p.stills || []).length > 1 ? 's' : '') + ' of panel ' + (cm.sel + 1) + '? They stay in your Library.')) return; p.stills = []; p.still = 0; p.stillPicked = false; if(p.show==='still') delete p.show; }
   else if(a==='anim1'){ cmJobs('anim', [p]); return; }
+  else if(a==='direct'){ cmJobs('direct', [p]); return; }
   else if(a==='read'){ cmRead(); return; }
   else if(a==='newpage'){ cmNewPage(); return; }
   else if(a==='padd'){ cmAddPanel(); return; }
