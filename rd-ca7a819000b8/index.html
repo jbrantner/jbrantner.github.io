@@ -632,7 +632,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.131'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.132'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6510,7 +6510,7 @@ function cmMmPrompt(cm, p, refs){
     parts.push(pi >= 0 ? '<Picture ' + (pi + 1) + '> defines <Subject ' + (k + 1) + '>' + pron + (desc ? ': ' + desc : '') + '.' : '<Subject ' + (k + 1) + '>' + pron + ' is ' + (desc || (s.g==='m' ? 'a man' : s.g==='f' ? 'a woman' : 'a person')) + '.'); });
   if(refs.some(r => r.kind==='char')) parts.push('Use only the character design from the pictures: the same face, hair, outfit and colours, not their background, pose or lighting.');
   const li = refs.findIndex(r => r.kind==='loc');
-  if(cmWhite(cm, p)) parts.push('A plain pure-white background with nothing else in it.');
+  if(cmWhite(cm, p)) parts.push(cmFloor(cm)==='plain' ? 'A plain pure-white background with nothing else in it.' : CM_FLOORS[cmFloor(cm)][2].replace(/\{her\} /g, 'their ').replace('falls', 'fall').replace(' shadow ', ' shadows '));
   else if(li >= 0) parts.push('<Picture ' + (li + 1) + '> is the place' + (cm.place ? ', ' + cm.place : '') + ': this happens there, seen from this camera.');
   else if((cm.place || '').trim()) parts.push('The place: ' + cm.place.trim().replace(/\.+$/, '') + '.');
   let act = ' ' + p.text.trim() + ' '; who.forEach((s, k) => { if(s.pat && new RegExp(s.pat, 'i').test(act)) act = act.replace(new RegExp(s.pat, 'gi'), '<Subject ' + (k + 1) + '>'); });
@@ -6572,8 +6572,8 @@ function cmDirPrompt(cm, p, refs){
     const desc = [c && (c.tags || '').trim().replace(/,\s*$/, ''), (s.desc || '').trim()].filter(Boolean).join(', ');
     parts.push(pi >= 0 ? '<Picture ' + (pi + 2) + '> is a character model sheet for <Subject ' + (k + 1) + '> (' + pr[0] + '): copy only ' + pr[1] + ' design from it, never its standing pose.' + (desc ? ' ' + pr[1].charAt(0).toUpperCase() + pr[1].slice(1) + ' look: ' + desc + '.' : '') + ' ' + pr[1].charAt(0).toUpperCase() + pr[1].slice(1) + ' clothes never change, from every angle.'
       : '<Subject ' + (k + 1) + '> (' + pr[0] + ') is the person in the first frame' + (desc ? ': ' + desc : '') + ', with the same clothes the whole time.'); });
-  parts.push(cmWhite(cm, p) ? 'Plain white background.' : 'The place stays the same as in the first frame.');
   const fill = t => t.replace(/\{(S|her|she)\}/g, (m, k) => P[k]);
+  parts.push(cmWhite(cm, p) ? fill(CM_FLOORS[cmFloor(cm)][2]) : 'The place stays the same as in the first frame.');
   const act = (p.dirText || '').trim() ? p.dirText.trim().replace(/([^.!?])$/, '$1.') + ' ' + P.S.charAt(0).toUpperCase() + P.S.slice(1) + ' keeps doing it from the first frame to the very last frame and never stops to pose.' : fill((CM_ACTS[d.act] || CM_ACTS.walk)[1]);
   parts.push(fill((CM_CAMS[d.cam] || CM_CAMS.static)[1]), act, fill(P.her.charAt(0).toUpperCase() + P.her.slice(1) + ' whole body, head included, stays in frame.'));
   return parts.filter(Boolean).join(' '); }
@@ -6836,8 +6836,15 @@ function cmAreas(who, shot, touch){
 // object; the place is added back afterwards): no place in the tags, a plain white background asked for
 const cmWhite = (cm, p) => !!(p && p.white); // ⬜ Character only, per panel (Jordan 2026-10-22)
 const CM_WHITE = 'simple background, white background', CM_WHITE_NEG = 'scenery, detailed background, room, outdoors, indoors, floor, shadow';
+// floor under Character only panels, tested on Render 2026-10-22: the grid keeps feet planted when the camera moves, shadow alone is weaker
+const CM_FLOORS = {grid:['🔲 Faint grid', 'white floor, grid, perspective grid, tile floor, shadow', 'A plain white floor marked with a faint light-grey grid; the grid stays fixed to the floor as the camera moves, and {her} shadow falls on it under {her} feet.'],
+  shadow:['🌑 Shadow', 'white floor, shadow', 'A plain white floor; {her} shadow falls on it under {her} feet.'],
+  plain:['⬜ Plain', '', 'Plain white background.']};
+const cmFloor = cm => CM_FLOORS[cm.floor] ? cm.floor : 'grid';
+const cmWhiteTags = cm => [CM_WHITE, CM_FLOORS[cmFloor(cm)][1]].filter(Boolean).join(', ');
+const cmWhiteNeg = cm => cmFloor(cm)==='plain' ? CM_WHITE_NEG : 'scenery, detailed background, room, outdoors, indoors';
 function cmAutoTags(cm, p, i, rect){ const who = cmWho(cm, p), w = cmWhite(cm, p) && who.length;
-  return [cmCount(who), CM_SHOT_TAGS[cmShot(p, i, rect)], cmTags(p.text, who), w ? CM_WHITE : cmTags(cm.place || '', []), who.length ? '' : 'scenery'].filter(Boolean).join(', '); }
+  return [cmCount(who), CM_SHOT_TAGS[cmShot(p, i, rect)], cmTags(p.text, who), w ? cmWhiteTags(cm) : cmTags(cm.place || '', []), who.length ? '' : 'scenery'].filter(Boolean).join(', '); }
 const cmStillTags = (cm, p, i, rect) => p.tags!=null ? p.tags : cmAutoTags(cm, p, i, rect);
 // 👁 a library character's preview (Jordan 2026-10-22: to see what the tags do): full body, standing, on white, with their
 // LoRAs and the comic's model and style
@@ -6879,7 +6886,7 @@ function cmStillGraph(k, plate, p, i, rect, prefix, rg){
   const rb = rg && rg.box, areas = rb && who.length ? [{x:Math.max(0, rb[0]), y:Math.max(0, rb[1]), w:Math.min(1, rb[2]) - Math.max(0, rb[0]), h:Math.min(1, rb[3]) - Math.max(0, rb[1]), who}] : cmAreas(who, shot, touch), place = cmTags(cm.place || '', []);
   const together = areas.length===1 ? areas[0].who.map(s => cmLooks(s, k).words).join(', ') : '';
   let pos = enc(tags(tx.pos, I.words || '', cmCount(who), together, cmStillTags(cm, p, i, rect)));
-  let neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views', cmWhite(cm, p) && who.length ? CM_WHITE_NEG : ''));
+  let neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views', cmWhite(cm, p) && who.length ? cmWhiteNeg(cm) : ''));
   // apart: each person's looks in their own area, on top of the whole prompt (as the pose board does)
   if(areas.length > 1) areas.forEach(a => { seen.clear(); const t = enc(tags(I.words || '', a.who.length ? cmCount(a.who) : 'solo', a.who.map(s => cmLooks(s, k).words).join(', '), CM_SHOT_TAGS[shot]));
     const ar = add('ConditioningSetArea', {conditioning:t, width:Math.round(a.w * W / 8) * 8, height:Math.round(a.h * H / 8) * 8, x:Math.round(a.x * W / 8) * 8, y:Math.round(a.y * H / 8) * 8, strength:1});
@@ -8039,6 +8046,7 @@ function drawComic0(){
       if(cmBusy(p)) x += `<div class="pbar obbar${(cmLead(p) || {}).making ? '' : ' pulse'}"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p><div class="btnrow"><button class="btn" data-cm="stop">✕ Stop this panel</button></div>`;
       else if(still) x += `<div class="btnrow"><button class="btn${sts.length ? '' : ' hot'}" data-cm="still1">🖼 ${sts.length ? 'Paint another' : 'Paint the still'}</button><button class="btn${sts.length && !p.takes.length ? ' hot' : ''}" data-cm="anim1" ${sts.length ? '' : 'disabled'}>🎬 ${p.takes.length ? 'Animate again' : 'Animate it'}</button></div>`
         + `<div class="btnrow"><button class="btn" data-cmrig="${cm.sel}">🦴 Its pose rig</button>${sts.length ? '<button class="btn" data-cm="clearstills">🗑 Clear its stills</button>' : ''}</div><div class="btnrow"><button class="btn" data-cm="ws">🎨 Its full recipe</button></div><p class="note">Opens this panel in the Render tab with its own recipe: every block, 📷 Change angle, 🤸 Edit pose, drafts, Finish. What you render there lands in its stills.${p.ws ? '' : ' It starts from this page\'s model, style and characters\' LoRAs, its tags and its shape.'}</p>`
+        + (cmWhite(cm, p) ? `<div class="row"><label>Floor</label>${seg('data-cmfloor', Object.entries(CM_FLOORS).map(([k, v]) => [k, v[0]]), cmFloor(cm))}</div>` : '')
         + (p.rig && p.rig.box ? `<div class="row"><label>Pose by</label>${seg('data-cmrigby', [['mm', '🎬 MiniMax + pictures'], ['ill', '🖼 Illustrious + ProMax']], cmRigBy(p))}</div>${cmRigBy(p)==='mm' ? `<div class="row"><label>Steps</label>${seg('data-cmmmq', [['turbo', '⚡ Turbo (4)'], ['full', 'Full (20)']], cm.mmQ==='full' ? 'full' : 'turbo')}</div>` : ''}<p class="note">${cmRigBy(p)==='mm' ? '🦴 MiniMax draws her from her pictures (card, else her preview) inside the rig\'s outline: 9 frames, the middle one kept, ' + (cm.mmQ==='full' ? 'full model, 20 steps, about 2 min' : 'Turbo, 4 steps, well under a minute') + ' each on ' + esc(cmMmKits().map(k => pcName(k.url)).join(' and ') || 'Render') + '. Smaller (MiniMax size); ✨ Finish can paint it bigger.' : '🦴 Illustrious paints her where the rig stands, held by its OpenPose and depth. The look comes from her tags and LoRAs.'}</p>` : '')
         + `<div class="row"><label>Options</label>${seg('data-cmopts', [1, 2, 3, 4, 5, 6, 8].map(n => [n, n]), cmOpts(cm))}</div>`
         + `<details class="cmprompt"${p.tags!=null ? ' open' : ''}><summary>Tags Illustrious gets</summary><textarea data-cmp="tags" rows="3">${esc(cmStillTags(cm, p, cm.sel, rects[cm.sel]))}</textarea>
@@ -8095,7 +8103,7 @@ $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) ret
 // where the cursor is in each panel box, so 👤 Add a character puts the @tag there
 ['keyup', 'click', 'focusout'].forEach(ev => $('#comic').addEventListener(ev, e => { const el = e.target; if(el && el.dataset && el.dataset.cmpt!=null) CM_CARET[+el.dataset.cmpt] = el.selectionStart; }));
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmrig],[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cmprev],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmrigby],[data-cmdact],[data-cmdcam],[data-cmmmq],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmrig],[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cmprev],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmrigby],[data-cmfloor],[data-cmdact],[data-cmdcam],[data-cmmmq],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
   if(t.dataset.cmrig!=null){ cmRigOpen(+t.dataset.cmrig); return; }
   if(t.dataset.cmins){ cmInsert(+t.dataset.i, t.dataset.cmins); return; }
   if(t.dataset.cmprev){ const L = (S.cmLib || []).find(x => x.id===t.dataset.cmprev); if(L) cmPreview(L); return; }
@@ -8115,6 +8123,7 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmroute){ cm.route = t.dataset.cmroute; }
   else if(t.dataset.cmkeep){ p.keepBg = t.dataset.cmkeep==='1'; }
   else if(t.dataset.cmrigby){ p.rigBy = t.dataset.cmrigby; }
+  else if(t.dataset.cmfloor){ cm.floor = t.dataset.cmfloor; }
   else if(t.dataset.cmdact){ p.dir = Object.assign({}, p.dir, {act:t.dataset.cmdact}); p.dirText = ''; }
   else if(t.dataset.cmdcam){ p.dir = Object.assign({}, p.dir, {cam:t.dataset.cmdcam}); }
   else if(t.dataset.cmmmq){ cm.mmQ = t.dataset.cmmmq; }

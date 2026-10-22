@@ -432,6 +432,11 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     { await page.evaluate(() => { CM().sel = 0; const q = cmPage().panels[0]; if(!(q.stills || []).length) q.stills = [{url:'https://jordo-desktop.test/view?filename=s.png', w:832, h:1280}]; q.show = 'still'; CM().open.dir = true; drawComic(); });
       const sw = await page.evaluate(() => [...document.querySelectorAll('#comic .cmdchips')].map(r => { const o = getComputedStyle(r).overflowX, w = r.scrollWidth > r.clientWidth; r.scrollLeft = 60; return {o, w, sl:r.scrollLeft}; }));
       ok(sw.length===2 && sw.every(r => r.o==='auto' && (!r.w || r.sl > 0)), '🎬 the Action and Camera chip rows swipe sideways: ' + JSON.stringify(sw));
+      const fl = await page.evaluate(() => { const cm = CM(), q = cmPage().panels[0], w0 = q.white, f0 = cm.floor; q.white = true; delete cm.floor; drawComic();
+        const seg = !!document.querySelector('#comic [data-cmfloor="grid"].on'), r = {seg, grid:cmDirPrompt(cm, q, []), tags:cmAutoTags(cm, q, 0, null), neg:cmWhiteNeg(cm)};
+        cm.floor = 'plain'; r.plain = cmDirPrompt(cm, q, []); r.pneg = cmWhiteNeg(cm); q.white = w0; if(f0) cm.floor = f0; else delete cm.floor; drawComic(); return r; });
+      ok(fl.seg && /faint light-grey grid; the grid stays fixed/.test(fl.grid) && /perspective grid, tile floor, shadow/.test(fl.tags) && !/shadow|floor/.test(fl.neg) && /Plain white background\./.test(fl.plain) && /floor, shadow/.test(fl.pneg),
+        '🔲 Character only panels get the faint grid floor by default (tags, Director line, negative), ⬜ Plain keeps the old wording: ' + JSON.stringify({seg:fl.seg, tags:fl.tags, neg:fl.neg}));
       await page.click('#comic [data-cmdcam="static"]');
       const nc = await page.evaluate(() => cmDirPrompt(CM(), cmPage().panels[0], []));
       ok(!/camera/i.test(nc) && /first frame/.test(nc) && /No camera change/.test(await page.textContent('#comic [data-cmfold="dir"]')), '🎬 No camera change leaves the camera out of the prompt: ' + nc.slice(0, 160));
