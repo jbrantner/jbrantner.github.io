@@ -1184,13 +1184,29 @@ async function getLandmarker(st){
     try{ mpLandmarker = await mp.PoseLandmarker.createFromOptions(fs, opts('GPU')); }catch(e){ mpLandmarker = await mp.PoseLandmarker.createFromOptions(fs, opts('CPU')); } }
   return mpLandmarker;
 }
+// The reader often finds nobody in a picture cut off at the thighs or waist. Giving it empty room below (and then all
+// round) to "finish" her fixes that; any point it then puts outside the real picture is a guess and is dropped, so the
+// rig keeps standing legs there.
+function mpDetect(lm, src, W, Hh){
+  const r0 = lm.detect(src); if(r0.landmarks && r0.landmarks.length) return {res:r0, ox:0, oy:0, padded:false};
+  for(const [l, t, r, b] of [[0, 0, 0, 0.7], [0.4, 0.15, 0.4, 0.8], [1, 0.5, 1, 1.2]]){
+    const c = document.createElement('canvas'), ox = Math.round(W * l), oy = Math.round(Hh * t); c.width = W + ox + Math.round(W * r); c.height = Hh + oy + Math.round(Hh * b);
+    const x = c.getContext('2d'); x.fillStyle = '#ebebeb'; x.fillRect(0, 0, c.width, c.height); x.drawImage(src, ox, oy, W, Hh);
+    const res = lm.detect(c); if(res.landmarks && res.landmarks.length){
+      // back to the real picture's pixels, as fractions of it
+      for(const L of res.landmarks[0]){ L.x = (L.x * c.width - ox) / W; L.y = (L.y * c.height - oy) / Hh; }
+      return {res, ox, oy, padded:true}; } }
+  return null;
+}
+const outside = L => L.x < -0.02 || L.x > 1.02 || L.y < -0.02 || L.y > 1.02;
 async function readOnPhone(img){
   const st = $('#picStatus'); await getLandmarker(st);
   st.textContent = 'Reading the pose…';
-  const res = mpLandmarker.detect(img); if(!res.worldLandmarks || !res.worldLandmarks.length) throw new Error('No person found in the picture. A clear full-body pose works best.');
-  const w = res.worldLandmarks[0], l = res.landmarks[0], pts = {}, img2 = {}, W = img.naturalWidth, Hh = img.naturalHeight;
-  for(const [k, i] of Object.entries(MPI)){ const p = w[i]; if((p.visibility ?? 1) < 0.15 && !/sh|hip/.test(k)) continue; pts[k] = V(p.x, -p.y, -p.z); img2[k] = [l[i].x * W, l[i].y * Hh]; }
-  return {pts, img2, W, H:Hh, hands:true};
+  const W = img.naturalWidth, Hh = img.naturalHeight, d = mpDetect(mpLandmarker, img, W, Hh);
+  if(!d || !d.res.worldLandmarks || !d.res.worldLandmarks.length) throw new Error('No person found in the picture. Try DWPose on a PC, which reads anime drawings better.');
+  const w = d.res.worldLandmarks[0], l = d.res.landmarks[0], pts = {}, img2 = {};
+  for(const [k, i] of Object.entries(MPI)){ const p = w[i]; if(!/sh|hip/.test(k) && ((p.visibility ?? 1) < 0.15 || outside(l[i]))) continue; pts[k] = V(p.x, -p.y, -p.z); img2[k] = [l[i].x * W, l[i].y * Hh]; }
+  return {pts, img2, W, H:Hh, hands:true, partial:['lank', 'rank', 'lkn', 'rkn'].some(k => !pts[k])};
 }
 async function readOnPc(img, file){
   const {flat, cw, ch} = await dwposeFlat(img.naturalWidth, img.naturalHeight, file, $('#picStatus'));
@@ -1303,7 +1319,7 @@ $('#picFile').onchange = async e => { const f = e.target.files[0]; if(!f) return
 $('#picHow').onchange = () => { $('#picPcRow').hidden = $('#picHow').value!=='dwpose'; S.picHow = $('#picHow').value; save(); };
 $('#picGo').onclick = async () => { const st = $('#picStatus'), b = $('#picGo'); b.disabled = true; st.className = 'status';
   try{ const R = $('#picHow').value==='dwpose' ? await readOnPc(picImg, picFile) : await readOnPhone(picImg);
-    act(() => fitPoints(R)); st.className = 'status good'; st.textContent = 'Copied. Check it from the side (Side view) and drag anything that went the wrong way.'; }
+    act(() => fitPoints(R)); st.className = 'status good'; st.textContent = 'Copied. ' + (R.partial ? 'Her legs are out of the picture, so they were left standing; pose them by hand. ' : '') + 'Check it from the side (Side view) and drag anything that went the wrong way.'; }
   catch(err){ st.className = 'status bad'; st.textContent = err.message; console.error(err); }
   b.disabled = false; };
 $('#picOpacity').oninput = e => { $('#photo').style.opacity = e.target.value; e.target.nextElementSibling.textContent = Math.round(e.target.value * 100) + '%'; };
@@ -1418,9 +1434,9 @@ async function readView(c, how, st, label){
     for(let i = 0; i < 18; i++){ const x = flat[i * 3], y = flat[i * 3 + 1], cf = flat[i * 3 + 2]; if(!(cf > 0.2) || (x <= 0 && y <= 0)) continue;
       pts[OP18[i]] = [norm ? x * c.width / cw : x * c.width, norm ? y * c.height / ch : y * c.height, Math.min(1, cf)]; }
     return pts; }
-  const lm = await getLandmarker(st); st.textContent = label; const res = lm.detect(c); if(!res.landmarks || !res.landmarks.length) return null;
-  const l = res.landmarks[0], pts = {};
-  for(const [k, i] of Object.entries(MPI)){ const v = l[i].visibility ?? 1; if(v < 0.3 && !/sh|hip/.test(k)) continue; pts[k] = [l[i].x * c.width, l[i].y * c.height, clamp(v, 0.2, 1)]; }
+  const lm = await getLandmarker(st); st.textContent = label; const d = mpDetect(lm, c, c.width, c.height); if(!d) return null;
+  const l = d.res.landmarks[0], pts = {};
+  for(const [k, i] of Object.entries(MPI)){ const v = l[i].visibility ?? 1; if((v < 0.3 || outside(l[i])) && !/sh|hip/.test(k)) continue; pts[k] = [l[i].x * c.width, l[i].y * c.height, clamp(v, 0.2, 1)]; }
   return pts;
 }
 function drawOrbit(views, R){
