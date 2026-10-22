@@ -238,7 +238,7 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.evaluate(() => { document.querySelector('#setAdd [data-sadd="room"]').click(); document.querySelector('#setAdd [data-sadd="sofa"]').click(); });
   const px = (p) => page.evaluate(p => { const R = RIG, v = new (R.camera.position.constructor)(...p).project(R.setOrtho), r = document.querySelector('#cv').getBoundingClientRect();
     return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * R.topH()]; }, p);
-  const sofa0 = await page.evaluate(() => { const R = RIG, it = R.SET.items.find(i => i.k==='sofa'); it.p = [1.5, 0, -2]; R.buildSet(); R.fitSet(); return it.p.slice(); });
+  const sofa0 = await page.evaluate(() => { const R = RIG; R.S.setDrag = 'one'; const it = R.SET.items.find(i => i.k==='sofa'); it.p = [1.5, 0, -2]; R.buildSet(); R.fitSet(); return it.p.slice(); });
   let [sx, sy] = await px([1.5, 0.5, -2]); await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx - 60, sy + 18, {steps:6}); await page.mouse.up();
   const sofa1 = await page.evaluate(() => RIG.SET.items.find(i => i.k==='sofa').p.slice());
   ok(sofa1[0] < sofa0[0] - 0.2 && sofa1[2]===sofa0[2] && sofa1[1]===0 && Math.abs(sofa1[0] * 20 - Math.round(sofa1[0] * 20)) < 1e-6, 'Top view: a mostly sideways drag slides the sofa along x only, in 5 cm steps: ' + JSON.stringify([sofa0, sofa1]));
@@ -249,6 +249,20 @@ const DEPS = process.env.RIG_DEPS || '';
   // nothing is picked by a tap: a tap in the view with the sofa picked keeps the sofa
   [sx, sy] = await px([0, 1.4, -3.06]); await page.mouse.click(sx, sy); ok(await page.evaluate(() => RIG.setItem ? true : true) && /^i/.test(await page.evaluate(() => RIG.setSel)) && await page.evaluate(() => RIG.SET.items.find(i => i.id===RIG.setSel).k==='sofa'), 'a tap in the view never picks another piece');
   ok(sofa2[1] > 0.2 && sofa2[0]===1.5 && sofa2[2]===-2, 'Front view: an upward drag lifts it, nothing else moves: ' + JSON.stringify(sofa2));
+  // ✥ Both ways (the default): a diagonal drag in the top view moves it across and back at once, the height locked
+  await page.evaluate(() => { const R = RIG; delete R.S.setDrag; document.querySelector('#setViews [data-sv="top"]').click(); const it = R.SET.items.find(i => i.k==='sofa'); it.p = [1.5, 0, -2]; R.buildSet(); R.fitSet(); R.setUi(); });
+  [sx, sy] = await px([1.5, 0.5, -2]); await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx - 60, sy + 40, {steps:6}); await page.mouse.up();
+  { const p = await page.evaluate(() => RIG.SET.items.find(i => i.k==='sofa').p.slice()), seg = await page.evaluate(() => !!document.querySelector('#setPicked [data-sdrag="both"].on'));
+    ok(seg && p[0] < 1.3 && Math.abs(p[2] + 2) > 0.15 && p[1]===0, '✥ Both ways: a diagonal drag in the top view moves the sofa on both floor axes, height locked: ' + JSON.stringify(p)); }
+  // any angle: the slider turns it round the axis of the view; 🧲 snaps to 45°
+  { const r = await page.evaluate(() => { const R = RIG, it = R.SET.items.find(i => i.k==='sofa'), sl = () => document.querySelector('#setPicked [data-srot]'), set = v => { const e = sl(); e.value = v; e.dispatchEvent(new Event('input', {bubbles:true})); };
+      set(30); const g = R.setG.children.find(x => x.userData.id===it.id), yaw = new (R.camera.rotation.constructor)().setFromQuaternion(g.quaternion, 'YXZ').y * 180 / Math.PI, top = {r:it.r, yaw, lbl:sl().closest('.row').textContent};
+      document.querySelector('#setViews [data-sv="front"]').click(); set(-20); const front = {tz:it.tz, lbl:sl().closest('.row').textContent};
+      document.querySelector('#setPicked [data-sdo="snap"]').click(); set(-28); const snap = it.tz; document.querySelector('#setPicked [data-sdo="snap"]').click();
+      document.querySelector('#setPicked [data-sdo="r0"]').click(); return {top, front, snap, back:[it.r, it.tz]}; });
+    ok(Math.abs(r.top.r - 1 / 3) < 1e-6 && Math.abs(r.top.yaw - 30) < 0.5 && /Spin/.test(r.top.lbl) && r.front.tz===-20 && /Tilt/.test(r.front.lbl) && r.snap===-45 && r.back[0]===0 && r.back[1]===undefined,
+      '↻ the turn slider spins it 30° from above, tilts it from the front, 🧲 snaps to 45°, ↺ Straight resets: ' + JSON.stringify(r)); }
+  await page.evaluate(() => { const it = RIG.SET.items.find(i => i.k==='sofa'); it.p = [1.5, 0, -2]; RIG.buildSet(); });
   const her0 = await page.evaluate(() => { RIG.pickSet('her'); return RIG.wpos(RIG.bones.pelvis).toArray(); }); [sx, sy] = await px(her0);
   await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx + 50, sy, {steps:6}); await page.mouse.up();
   const her1 = await page.evaluate(() => ({p:RIG.wpos(RIG.bones.pelvis).toArray(), feet:RIG.wpos(RIG.bones.footL).y}));

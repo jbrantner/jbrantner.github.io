@@ -126,15 +126,13 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#comic [data-cmlay="0"]');
   ok(/Auto \(wide\)/.test(await page.textContent('#comic .cmed')), 'panel 1 is framed wide (walks down a street)');
   // cast: the Librarian plays Character 1; the man gets words; the place is the picture in the preview
-  await page.selectOption('#comic select[data-cms="cid"]', 'lib');
-  await page.fill('#comic input[data-cms="desc"] >> nth=1', 'a tall man in a dark hooded coat'); await page.dispatchEvent('#comic input[data-cms="desc"] >> nth=1', 'change');
-  await page.click('#comic [data-cm="locshown"]');
+  // the Cast and Place sections left the tab (Jordan 2026-10-22); the data still drives the old routes
+  await page.evaluate(() => { const cm = CM(); cm.open.more = true; cm.cast[0].cid = 'lib'; cm.cast[0].g = cm.cast[0].g || 'f'; cm.cast[1].desc = 'a tall man in a dark hooded coat'; cm.loc = {url:S.gallery[shownIdx].url}; save(); drawComic(); });
+  ok(!(await page.$('#comic [data-cms], #comic [data-cmroute], #comic [data-cm="plate"], #comic [data-cm="locphone"], #comic [data-cm="locshown"], #comic [data-cm="anims"], #comic [data-cm="all"], #comic [data-cmf="vlora"]')), 'the trimmed tab: no Cast, Place picture, Straight to video or Animate controls');
   ok(await page.evaluate(() => /street_00001_/.test(CM().loc.url) && CM().place==='a street'), 'the place picture comes from the preview');
   ok(await page.evaluate(() => CM().route==='still') && /Paint the stills/.test(await page.textContent('#comic')), 'stills first is the default route (Paint the stills)');
-  await page.click('#comic [data-cmroute="clip"]');
-  await page.selectOption('#comic select[data-cmf="vlora"]', 'AFK_minimax_h3_style.safetensors');
-  ok(!(await page.$$eval('#comic select[data-cmf="vlora"] option', o => o.map(x => x.value))).includes('librarianx_v2.safetensors'), 'the video LoRA list holds MiniMax LoRAs only, not Illustrious ones');
-  await page.click('#comic [data-cm="all"]');
+  // the old Straight to video route, driven directly (its controls are gone), so the panels have clips to scrub
+  await page.evaluate(() => { CM().vlora = 'AFK_minimax_h3_style.safetensors'; cmRender(cmPage().panels.filter(q => !q.takes.length && !cmBusy(q))); });
   await page.waitForFunction(() => cmPage().panels.every(p => p.takes.length), null, {timeout:30000});
   const all = [...PCS.Render.sent.map(s => ['R', s]), ...PCS.Main.sent.map(s => ['M', s])];
   ok(all.length===5 && PCS.Render.sent.length >= 2 && PCS.Main.sent.length >= 2, 'the 5 clips are spread over both computers: Render ' + PCS.Render.sent.length + ', Main ' + PCS.Main.sent.length);
@@ -157,15 +155,10 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#cmPage [data-cpi="3"]');
   ok(await page.evaluate(() => CM().sel===3) && /Panel 4/.test(await page.textContent('#comic .cmed')), 'tapping a panel picks it');
   const before = PCS.Render.sent.length + PCS.Main.sent.length;
-  await page.click('#comic [data-cm="one"]');
+  await page.evaluate(() => cmRender([cmPage().panels[CM().sel]]));
   await page.waitForFunction(() => cmPage().panels[3].takes.length===2, null, {timeout:20000});
   ok(PCS.Render.sent.length + PCS.Main.sent.length===before + 1 && await page.$$eval('#comic [data-cmtake]', b => b.length)===2, 'another take of panel 4 only; Takes lists both');
   await page.click('#comic [data-cmtake="1"]'); ok(await page.evaluate(() => cmPage().panels[3].take===1), 'tapping a take shows it');
-  // edit the prompt by hand, then back to the automatic one
-  await page.click('#comic .cmprompt summary');
-  await page.fill('#comic [data-cmp="prompt"]', 'my own words'); await page.dispatchEvent('#comic [data-cmp="prompt"]', 'change');
-  ok(await page.evaluate(() => cmPage().panels[3].prompt==='my own words') && await page.$('#comic [data-cm="reprompt"]'), 'a hand-edited prompt is kept');
-  await page.click('#comic [data-cm="reprompt"]'); ok(await page.evaluate(() => cmPage().panels[3].prompt===null), '↺ goes back to the automatic prompt');
   { const p0 = await page.evaluate(() => CM().sel); await page.waitForFunction(i => { const p = cmPage().panels[i], t = p.takes[p.take], v = t && CMV[t.url]; return v && v.videoWidth; }, p0, {timeout:10000});
     await page.click('#comic [data-cm="frame"]'); await page.waitForFunction(i => (cmPage().panels[i].stills || []).some(s => s.frame && s.url), p0, {timeout:10000});
     ok(await page.evaluate(i => cmPage().panels[i].show==='still', p0), '📸 Use this frame keeps the current clip frame as a flat still of the panel');
@@ -189,13 +182,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.waitForFunction(n => S.gallery.length===n + 1, n0, {timeout:15000});
   ok([...PCS.Render.outs, ...PCS.Main.outs].includes('RenderDeck/comics/pages') && await page.evaluate(() => /page_1\.png/.test(S.gallery[0].url) && S.gallery[0].prompt==='Comic page 1'), 'the page is saved into RenderDeck/comics/pages and put at the front of the strip');
   // ---- phase 2: stills first ----
-  await page.click('#comic [data-cmroute="still"]');
   ok(await page.$eval('#comic select[data-cmill="ckpt"]', s => s.value)==='iriselTouchIL_v10.safetensors' && await page.$eval('#comic select[data-cmill="style"]', s => s.value)==='AFKJ Style Illustrious Claude.safetensors'
     && await page.inputValue('#comic input[data-cmill="words"]')==='AFKJ Style', 'stills default to iriselTouchIL with AFKJ Style (its words filled in)');
-  ok(await page.$eval('#comic select[data-cms="lora"]', s => s.value)==='librarianx_v2.safetensors', 'the Librarian\'s own LoRA is found from her trigger word');
+  ok(await page.evaluate(() => cmSlotLora(CM().cast[0], [...new Set(cmIllKits().flatMap(k => k.loras))]))==='librarianx_v2.safetensors', 'the Librarian\'s own LoRA is found from her trigger word');
   ok(await page.evaluate(() => !cmWhite(CM(), cmPage().panels[0])) && await page.$('#comic [data-cm="pwhite"][data-i="0"]:not(.on)'), 'panels are painted on the place unless ⬜ Character only is on');
   const sent0 = () => [...PCS.Render.sent, ...PCS.Main.sent].length, lastG = () => ALL[ALL.length - 1].prompt;
-  let n1 = sent0(); await page.click('#comic [data-cm="plate"]');
+  let n1 = sent0(); await page.evaluate(() => cmJobs('plate', [cmPJ()]));
   await page.waitForFunction(() => (CM().plates || []).length===1, null, {timeout:15000});
   { const all2 = [...PCS.Render.sent, ...PCS.Main.sent].map(x => x.prompt), g = all2.find(x => Object.values(x).some(n => n.class_type==='SaveImage' && /comics\/place/.test(n.inputs.filename_prefix)));
     const n = Object.values(g), pos = n.filter(x => x.class_type==='CLIPTextEncode')[0].inputs.text;
@@ -235,14 +227,6 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.waitForFunction(() => (cmPage().panels[0].stills || []).length===6 && !cmBusy(cmPage().panels[0]), null, {timeout:20000});
   ok(ALL.length - nb===4 && ALL.slice(nb).every(x => /rain, umbrella/.test(Object.values(x.prompt).find(n => n.class_type==='CLIPTextEncode').inputs.text)), '4 options = 4 still jobs, each with the hand-edited tags');
   await page.click('#comic [data-cmopts="1"]');
-  // stills shown even where a clip exists from the quick route; Animate makes a new clip from the still
-  await page.click('#comic [data-cm="anim1"]');
-  await page.waitForFunction(() => cmPage().panels[0].takes.length===2 && cmPage().panels[0].show==='clip', null, {timeout:15000});
-  { const g = lastG(), n = Object.values(g), iv = n.find(x => x.class_type==='MiniMaxH3ImageToVideo');
-    ok(check(g).length===0 && iv && /still_/.test(g[iv.inputs.first_frame[0]].inputs.image) === false && g[iv.inputs.first_frame[0]].class_type==='LoadImage' && n.find(x => x.class_type==='UNETLoader').inputs.unet_name==='minimax_h3_fl2va_pruned_int8_convrot.safetensors',
-      '🎬 Animate: FL2V with the still as the first frame: ' + check(g).join('; '));
-    ok(/^The first frame is a wide shot/.test(iv.inputs.prompt) && /Librarian walks down a street/.test(iv.inputs.prompt), 'its prompt names her and the action: ' + iv.inputs.prompt.slice(0, 120)); }
-  ok(await page.$('#comic [data-cmshow="clip"].on'), 'the clip shows, and the still is a tap away');
   await page.click('#comic [data-cmstill="0"]'); ok(await page.evaluate(() => cmPage().panels[0].show==='still') && await page.$('#cmPage [data-cpi="0"] img.cpimg'), 'tapping a still shows it in the panel again');
   // ---- 🌄 pictures in 3D ----
   await page.click('#cmPage [data-cpi="2"]');
@@ -253,48 +237,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.evaluate(o => { const p = cmPage().panels[2], st = cmStill(p); p.d3 = {id:p.id + '_3d', url:st.url, amt:1, t3d:o, orbs:{circle:{id:'z', url:'https://x/z.mp4'}}}; drawComic(); }, old);
     ok(await page.$('#cmPage [data-cpi="2"]') && !(await page.textContent('#cmBody')).includes("couldn't draw"), 'an old 3D state still draws the page: ' + JSON.stringify(old).slice(0, 60)); }
   await page.evaluate(() => { delete cmPage().panels[2].d3; drawComic(); });
-  // 🧊 Turn into 3D object (Jordan 2026-10-22, set and forget): eye-level circle + crane up + crane down from the still, then a
-  // high and a low circle from each crane's furthest frame; camera moves from any angle; up/down snaps between the circles
-  await page.evaluate(() => { const o = d3Frames; window.d3Frames = (u, all) => o(/^https?:/.test(u) ? 'test' : u, all); }); // the fake clips can't be decoded
-  { const nb = ALL.length; await page.click('#comic [data-cm="d3"]');
-    await page.waitForFunction(() => { const q = cmPage().panels[2].d3; return t3dReady(q) && t3kHas(q, 0) && t3kHas(q, 1) && t3kHas(q, -1); }, null, {timeout:120000}).catch(async e => { console.log('DBG', await page.evaluate(() => JSON.stringify(cmPage().panels[2].d3.t3d).slice(0, 1500))); throw e; });
-    const ps = ALL.slice(nb).map(x => Object.values(x.prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo')).filter(Boolean), pr = ps.map(n => n.inputs.prompt);
-    ok(ps.length===21 && /360-degree orbit/.test(pr[0]) && /plain white/.test(pr[0]) && !ALL.slice(nb).some(x => Object.values(x.prompt).some(n => /Depth/.test(n.class_type))), '🧊 Turn into 3D object: MiniMax circles her on plain white, no depth step (' + ps.length + ' clips)');
-    ok(pr.filter(t => /crane-up/.test(t)).length===4 && pr.filter(t => /crane-down/.test(t)).length===4, '🔑 it cranes up and down from each of the 4 eye-level keyframes');
-    const qs = ps.filter(n => /90-degree arc shot/.test(n.inputs.prompt));
-    ok(qs.length===12 && qs.every(n => n.inputs.last_frame && n.inputs.first_frame && n.inputs.height > 0) && qs.filter(n => /high above her/.test(n.inputs.prompt)).length===4 && qs.filter(n => /low near the ground/.test(n.inputs.prompt)).length===4,
-      'then 12 quarter turns, keyframe to keyframe (first + last frame), 4 at each height'); }
-  await page.waitForSelector('#comic [data-d3view]'); await page.waitForTimeout(500);
-  { await page.$eval('#comic [data-t3d="deg"]', el => { el.value = 90; el.dispatchEvent(new Event('input', {bubbles:true})); });
-    ok(await page.evaluate(() => Math.abs(d3CircAt(cmPage().panels[2].d3) - 0.25) < 0.01) && /90°/.test(await page.textContent('#comic .d3box')), 'the Turn slider walks round her (90° is a quarter of the circle)');
-    await page.$eval('#comic [data-t3d="deg"]', el => { el.value = -90; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }); ok(await page.evaluate(() => Math.abs(d3CircAt(cmPage().panels[2].d3) - 0.75) < 0.01), 'left of the front is the end of the circle');
-    ok(await page.evaluate(() => { const A = [0, 1, 2, 3, 4].map(n => { const c = document.createElement('canvas'); c.width = 20; c.height = 30; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 20, 30); x.fillStyle = 'hsl(' + n * 60 + ',80%,40%)'; x.fillRect(5, 5, 4 + n * 2, 20); return c; });
-      const B = [A[0], A[0], A[1], A[2], A[3], A[3], A[4]], m = t3dMap(A, B, 'x'); return m.every((j, i) => B[j]===A[i] && (!i || j >= m[i - 1])); }), 'a circle that turns at a different pace is lined up by her outline'); }
-  await (await page.$('#comic [data-d3view]')).scrollIntoViewIfNeeded();
-  { const bx = await (await page.$('#comic [data-d3view]')).boundingBox();
-    await page.click('#comic [data-t3dring="1"]'); ok(await page.evaluate(() => { const q = cmPage().panels[2].d3, f = t3kFrame(q); return q.ring===1 && f && /high3|_kqhigh3|quarter_high_3/.test(JSON.stringify(t3kQs(q, 'high')[3])) && f.url===t3kQs(q, 'high')[3].url; }), 'Height: High shows the high turn at the same angle (-90° is in its last quarter)');
-    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.9); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.2, {steps:8}); await page.mouse.up();
-    ok(await page.evaluate(() => cmPage().panels[2].d3.ring===-1), 'a long drag up goes from high through eye level to low (down looks from higher up)'); }
-  { const nb = ALL.length; await page.click('#comic [data-t3dring="0"]'); await page.click('#comic [data-cm="t3dmove"][data-d="up"]');
-    await page.waitForFunction(() => { const m = t3dMoves(cmPage().panels[2].d3)[0]; return m && m.host.url; }, null, {timeout:20000});
-    const iv = Object.values(ALL[nb].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo');
-    ok(iv && /crane-up/.test(iv.inputs.prompt) && iv.inputs.height > 0, '⬆ Up: MiniMax cranes up from the angle on screen');
-    await page.click('#comic [data-t3dmv="0"]'); ok(await page.evaluate(() => cmPage().panels[2].d3.mv===0 && Math.abs(d3CircAt(cmPage().panels[2].d3) - 0.75) < 0.01), 'tapping a made move looks through it, at its angle');
-    const nz = ALL.length; await page.click('#comic [data-t3dmv="0"]'); await page.click('#comic [data-cm="t3dmove"][data-d="in"]'); await page.waitForTimeout(600);
-    ok(/dolly-in/.test(Object.values(ALL[nz].prompt).find(n => n.class_type==='MiniMaxH3ImageToVideo').inputs.prompt), '🔍 Zoom in makes a dolly-in'); await page.click('#comic [data-t3dmv="0"]'); }
-  { await (await page.$('#comic [data-d3view]')).scrollIntoViewIfNeeded(); const bx = await (await page.$('#comic [data-d3view]')).boundingBox();
-    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.3); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.6, {steps:6}); await page.mouse.up();
-    ok(await page.evaluate(() => cmPage().panels[2].d3.mvT > 0.2), 'dragging up or down scrubs the move ' + await page.evaluate(() => JSON.stringify([cmPage().panels[2].d3.mv, cmPage().panels[2].d3.mvT, t3dMoves(cmPage().panels[2].d3).map(m => !!m.host.url)])));
-    ok(!(await page.$('#comic [data-cm="t3dcirc"]')), 'no ⭕ Circle from here with the keyframed turn');
-    await page.mouse.move(bx.x + bx.width * 0.5, bx.y + bx.height * 0.5); await page.mouse.down(); await page.mouse.move(bx.x + bx.width * 0.6, bx.y + bx.height * 0.5, {steps:4}); await page.mouse.up();
-    ok(await page.evaluate(() => cmPage().panels[2].d3.mv===-1), 'dragging sideways goes back to the circle and turns her');
-    await page.click('#comic [data-t3dmv="0"]'); }
-  await page.click('#comic [data-cm="d3wig"]'); await page.waitForTimeout(300); ok(await page.evaluate(() => D3.play), '▶ Wiggle swings it side to side'); await page.click('#comic [data-cm="d3wig"]');
-  { const n0 = await page.evaluate(() => cmPage().panels[2].stills.length), nb = ALL.length; await page.click('#comic [data-cm="d3use"]');
-    await page.waitForFunction(n => cmPage().panels[2].stills.length===n + 1 && !cmBusy(cmPage().panels[2]), n0, {timeout:20000});
-    const g = ALL[nb].prompt, n = Object.values(g), ks = n.filter(x => x.class_type==='KSampler').map(x => x.inputs.denoise);
-    ok(check(g).length===0 && ks.length >= 1 && /white background/.test(n.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join()), '✨ Use this angle finishes the frame showing (in the crane) as a new still, on white: ' + check(g).join('; ') + ' ' + ks); }
-  ok(!(await page.$('#comic [data-d3view="mm"], #comic [data-cm="d3fuse"], #comic [data-cm="cmod"], #comic [data-d3flat], #comic [data-t3d="i"]')), 'the old 3D experiments (and the depth views) are gone from the panel');
+  ok(!(await page.$('#comic [data-cm="d3"], #comic [data-cm="t3dgo"], #comic [data-cm="anim1"]')), 'no 🧊 Turn into 3D object or 🎬 Animate on a panel any more (Jordan 2026-10-22)');
   // ✕ Stop: the comic's jobs can be cancelled
   { await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cmopts="3"]'); const n0 = await page.evaluate(() => cmPage().panels[1].stills.length);
     await page.click('#comic [data-cm="still1"]'); await page.waitForSelector('#comic [data-cm="stopall"]', {timeout:5000});
@@ -461,15 +404,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       const inSet = await fp.evaluate(() => { RIG.S.ctl = 'set'; RIG.showCtl(); return !!document.querySelector('#setAdd [data-sadd^="sprite:"]'); });
       ok(lib.n===1 && lib.urls===24 && lib.geo && lib.poses && inSet, 'the pose is kept under 🧍 Poses and offered as a piece in the rig\'s Set tab: ' + JSON.stringify(lib));
       await page.click('#cmRigDone'); }
-    // 🎬 or MiniMax: her picture (the library preview) inside the rig's outline through MiniMax H3's Fun ControlNet, 9 frames, the middle kept
-    if(process.env.RIG_DEPS){ const nb = ALL.length; await page.evaluate(() => { const q = cmPage().panels[0]; q.rigBy = 'mm'; q.stills = []; drawComic(); });
-      ok(/MiniMax \+ pictures/.test(await page.textContent('#comic [data-cmrigby="mm"].on').catch(() => '')) || await page.evaluate(() => { CM().sel = 0; drawComic(); return !!document.querySelector('#comic [data-cmrigby="mm"].on'); }), 'a posed panel offers Pose by: 🎬 MiniMax + pictures (picked) or 🖼 Illustrious + ProMax');
-      await page.evaluate(() => cmJobs('still', [cmPage().panels[0]])); await page.waitForFunction(() => (cmPage().panels[0].stills || []).length >= 5, null, {timeout:20000});
-      const gs = ALL.slice(nb).map(x => x.prompt), rv = gs.map(g => Object.values(g).find(n => n.class_type==='MiniMaxH3ReferenceToVideo')).filter(Boolean), errs = gs.flatMap(check);
-      ok(rv.length===5 && rv.every(n => n.inputs.length===9 && n.inputs['ref_images.ref_image_0'] && /frozen moment/.test(n.inputs.prompt) && /<Picture 1> defines <Subject 1>/.test(n.inputs.prompt))
-        && gs.every(g => Object.values(g).some(n => n.class_type==='BasicScheduler' && n.inputs.steps===4) && Object.values(g).some(n => n.class_type==='UNETLoader' && /turbo/i.test(n.inputs.unet_name)))
-        && gs.every(g => Object.values(g).some(n => n.class_type==='ImageFromBatch' && n.inputs.batch_index===4) && Object.values(g).some(n => n.class_type==='MiniMaxH3FunControlNetApply') && Object.values(g).find(n => n.class_type==="LoadVideo").inputs.file) && !errs.length,
-        '🎬 MiniMax draws her from her preview inside the rig\'s outline (9 frames, the middle kept), wired right: ' + JSON.stringify({n:rv.length, gs:gs.length, len:rv.map(n => n.inputs.length), ib:gs.map(g => (Object.values(g).find(n => n.class_type==='ImageFromBatch') || {inputs:{}}).inputs.batch_index), lv:gs.map(g => (Object.values(g).find(n => n.class_type==='LoadVideo') || {inputs:{}}).inputs.file)}) + ' ' + errs.slice(0, 3).join('; ')); }
+    { const r = await page.evaluate(() => { const q = cmPage().panels[0], o = q.rigBy; q.rigBy = 'mm'; CM().sel = 0; drawComic(); const x = {by:cmRigBy(q), seg:!!document.querySelector('#comic [data-cmrigby], #comic [data-cmmmq]')}; if(o) q.rigBy = o; else delete q.rigBy; drawComic(); return x; });
+      ok(r.by==='ill' && !r.seg, 'posing is always Illustrious + ProMax now; the MiniMax choice is gone, even for an old panel set to it: ' + JSON.stringify(r)); }
     // 🎬 Director mode: the still is the first frame, her preview the reference; Action + Camera from the tested pieces
     { await page.evaluate(() => { CM().sel = 0; const q = cmPage().panels[0]; if(!(q.stills || []).length) q.stills = [{url:'https://jordo-desktop.test/view?filename=s.png', w:832, h:1280}]; q.show = 'still'; CM().open.dir = true; drawComic(); });
       const sw = await page.evaluate(() => [...document.querySelectorAll('#comic .cmdchips')].map(r => { const o = getComputedStyle(r).overflowX, w = r.scrollWidth > r.clientWidth; r.scrollLeft = 60; return {o, w, sl:r.scrollLeft}; }));

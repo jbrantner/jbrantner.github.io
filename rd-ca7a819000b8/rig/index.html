@@ -1843,13 +1843,21 @@ function setMat(hex, t){ const c = new THREE.Color(hex); if(t) c.offsetHSL(0, 0,
   if(!setMats.has(key)) setMats.set(key, new THREE.MeshStandardMaterial({color:c, roughness:0.85, side:THREE.DoubleSide})); return setMats.get(key); }
 let setSel = null; // a piece's id, 'her', or null
 const selBox = new THREE.BoxHelper(undefined, 0xff5ca8); selBox.visible = false; scene.add(selBox);
+// a piece's turn (Jordan 2026-10-22: any angle, round the axis of the view): it.r = spin in quarter turns, it.tx / it.tz = tilt in degrees round the world X / Z
+const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
+function setRot(g, it){ g.quaternion.setFromAxisAngle(V(0, 1, 0), (it.r || 0) * Math.PI / 2);
+  if(it.k==='sprite') return; if(it.tz) g.quaternion.premultiply(_qa.setFromAxisAngle(V(0, 0, 1), it.tz * D2R)); if(it.tx) g.quaternion.premultiply(_qb.setFromAxisAngle(V(1, 0, 0), it.tx * D2R)); }
+// which turn the slider holds in this view: from above it spins, from the front/back it tilts round Z, from the sides round X
+const rotKey = it => it.k==='sprite' || (S.setView || 'top')==='top' ? 'r' : /front|back/.test(S.setView) ? 'tz' : 'tx';
+const rotDeg = it => { const k = rotKey(it), v = k==='r' ? (it.r || 0) * 90 : it[k] || 0; return ((v + 180) % 360 + 360) % 360 - 180; };
+function setRotDeg(it, d){ if(S.setSnap) d = Math.round(d / 45) * 45; const k = rotKey(it); if(k==='r') it.r = d / 90; else it[k] = d; return d; }
 function buildSet(){
   setG.clear();
-  for(const it of SET.items){ if(it.k==='sprite'){ const g = new THREE.Group(); g.userData.id = it.id; buildSprite(it, g); g.position.fromArray(it.p); g.rotation.y = (it.r || 0) * Math.PI / 2; setG.add(g); continue; }
+  for(const it of SET.items){ if(it.k==='sprite'){ const g = new THREE.Group(); g.userData.id = it.id; buildSprite(it, g); g.position.fromArray(it.p); setRot(g, it); setG.add(g); continue; }
     const T = SET_TYPES[it.k]; if(!T) continue; const g = new THREE.Group(); g.userData.id = it.id;
     for(const b of T[3](it.s)){ const m = new THREE.Mesh(setGeo[b.k] || setGeo.b, b.k==='pot' ? setMat('#8a5a44', 0) : setMat(it.c || T[2], b.t)); m.position.set(b.x, b.y, b.z); m.scale.set(b.w, b.h, b.d);
       m.layers.enable(4); m.userData.id = it.id; g.add(m); }
-    g.position.fromArray(it.p); g.rotation.y = (it.r || 0) * Math.PI / 2; setG.add(g); }
+    g.position.fromArray(it.p); setRot(g, it); setG.add(g); }
   grid.visible = !SET.items.some(it => it.k==='floor'); showSetSel(); dirty = true; guideDirty = true; }
 function showSetSel(){ const g = setSel && setSel!=='her' ? setG.children.find(x => x.userData.id===setSel) : null;
   if(setSel==='her' && bodyMesh) selBox.setFromObject(rig); else if(g) selBox.setFromObject(g);
@@ -1909,8 +1917,9 @@ cv.addEventListener('pointermove', e => { if(!setOn() || !sp.has(e.pointerId)) r
   if(sp.size >= 2){ const now = [...sp.values()], dist = q => Math.hypot(q[0][0] - q[1][0], q[0][1] - q[1][1]) || 1; SV.half = clamp(SV.half * dist(was) / dist(now), 0.5, 40); placeOrtho(); return; }
   if(!sdrag) return; const dx = e.clientX - sdrag.x0, dy = e.clientY - sdrag.y0; if(!sdrag.moved && Math.hypot(dx, dy) < 6) return; sdrag.moved = true;
   if(!sdrag.id){ SV.c.copy(sdrag.c0).addScaledVector(sdrag.ax.r, -dx * sdrag.k).addScaledVector(sdrag.ax.u, dy * sdrag.k); placeOrtho(); return; }
-  if(!sdrag.axis) sdrag.axis = Math.abs(dx) >= Math.abs(dy) ? 'r' : 'u';
-  const d = sdrag.axis==='r' ? sdrag.ax.r.clone().multiplyScalar(dx * sdrag.k) : sdrag.ax.u.clone().multiplyScalar(-dy * sdrag.k);
+  // both screen directions at once, the depth of the view locked (Jordan 2026-10-22); ↔ One way keeps the old first-direction lock
+  if(!sdrag.axis) sdrag.axis = S.setDrag==='one' ? (Math.abs(dx) >= Math.abs(dy) ? 'r' : 'u') : 'both';
+  const d = sdrag.axis==='r' ? sdrag.ax.r.clone().multiplyScalar(dx * sdrag.k) : sdrag.axis==='u' ? sdrag.ax.u.clone().multiplyScalar(-dy * sdrag.k) : sdrag.ax.r.clone().multiplyScalar(dx * sdrag.k).addScaledVector(sdrag.ax.u, -dy * sdrag.k);
   if(sdrag.id==='her'){ d.y = 0; const want = av(sdrag.root).add(d), now = wpos(bones.pelvis), step = want.sub(now); step.y = 0; step.x = Math.round((now.x + step.x) * 20) / 20 - now.x; step.z = Math.round((now.z + step.z) * 20) / 20 - now.z; shiftAll(step); placeHandles(); }
   else { const it = setItem(sdrag.id); it.p = sdrag.p0.map((v, i) => Math.round((v + d.getComponent(i)) * 20) / 20); it.p[1] = Math.max(it.k==='floor' ? -2 : 0, it.p[1]);
     const g = setG.children.find(x => x.userData.id===it.id); if(g) g.position.fromArray(it.p); }
@@ -1926,25 +1935,31 @@ function setUi(){ const cnt = {}, nm = SET.items.map(x => { const b = setName(x)
   const it = setSel && setSel!=='her' ? setItem(setSel) : null, T = it && (SET_TYPES[it.k] || ['', [1, 1, 1], '']), lib = spriteLib().filter(x => x.views && x.views.some(Boolean));
   $('#setAdd').innerHTML = '<button class="chipbtn hot" data-sadd="room">🏠 Starter room</button>' + Object.entries(SET_TYPES).map(([k, t]) => `<button class="chipbtn" data-sadd="${k}">${t[0]}</button>`).join('')
     + lib.map(x => `<button class="chipbtn" data-sadd="sprite:${esc(x.id)}">🧍 ${esc(x.name || 'Posed character')}</button>`).join('');
-  if(it && it.k==='sprite'){ $('#setPicked').innerHTML = `<h3>${esc(setName(it))}</h3><div class="chips"><button class="chipbtn" data-sdo="turn">↻ Turn 45°</button><button class="chipbtn" data-sdo="copy">⧉ Copy</button><button class="chipbtn" data-sdo="del">🗑 Remove</button></div>
-    <div class="row"><label>Size</label><div class="slider"><input type="range" data-ssz="1" min="0.6" max="1.4" step="0.01" value="${it.s[1] || 1}"><output>${Math.round((it.s[1] || 1) * 100)}%</output></div></div><p class="note">A posed character from Render Deck's 🧍 Poses: the picture changes as the camera goes round her and up or down (24 angles).</p>`; showSetViews(); return; }
-  $('#setPicked').innerHTML = it ? `<h3>${esc(T[0])}</h3><div class="chips"><button class="chipbtn" data-sdo="turn">↻ Turn 90°</button><button class="chipbtn" data-sdo="copy">⧉ Copy</button><button class="chipbtn" data-sdo="del">🗑 Remove</button></div>`
+  const turn = it ? `<div class="row"><label>${rotKey(it)==='r' ? 'Spin' : 'Tilt'}</label><div class="slider"><input type="range" data-srot min="-180" max="180" step="0.5" value="${rotDeg(it)}"><output>${rotDeg(it)}°</output></div></div>
+    <div class="chips"><button class="chipbtn${S.setSnap ? ' on' : ''}" data-sdo="snap">🧲 Snap to 45°</button><button class="chipbtn" data-sdo="r0">↺ Straight</button></div>
+    <p class="note">${rotKey(it)==='r' ? 'Turns it round the up axis, as seen from above.' : 'Tilts it round the axis pointing at you in this view. Pick ⬇ Top to spin it instead.'}</p>` : '';
+  const drag = `<div class="row"><label>Drag</label><div class="seg"><button data-sdrag="both" class="${S.setDrag==='one' ? '' : 'on'}">✥ Both ways</button><button data-sdrag="one" class="${S.setDrag==='one' ? 'on' : ''}">↔ One way</button></div></div>`;
+  if(it && it.k==='sprite'){ $('#setPicked').innerHTML = `<h3>${esc(setName(it))}</h3><div class="chips"><button class="chipbtn" data-sdo="copy">⧉ Copy</button><button class="chipbtn" data-sdo="del">🗑 Remove</button></div>
+    <div class="row"><label>Size</label><div class="slider"><input type="range" data-ssz="1" min="0.6" max="1.4" step="0.01" value="${it.s[1] || 1}"><output>${Math.round((it.s[1] || 1) * 100)}%</output></div></div><p class="note">A posed character from Render Deck's 🧍 Poses: the picture changes as the camera goes round her and up or down (24 angles).</p>` + turn + drag; showSetViews(); return; }
+  $('#setPicked').innerHTML = it ? `<h3>${esc(T[0])}</h3><div class="chips"><button class="chipbtn" data-sdo="copy">⧉ Copy</button><button class="chipbtn" data-sdo="del">🗑 Remove</button></div>`
     + [['Width', 0], ['Height', 1], ['Depth', 2]].map(([n, i]) => `<div class="row"><label>${n}</label><div class="slider"><input type="range" data-ssz="${i}" min="${i===1 ? 0.01 : 0.05}" max="${i===1 ? 4 : 10}" step="0.05" value="${it.s[i]}"><output>${it.s[i].toFixed(2)} m</output></div></div>`).join('')
-    + `<div class="chips">${SET_COLS.map(c => `<button class="chipbtn" data-scol="${c}" style="background:${c};width:34px;padding:0${(it.c || '').toLowerCase()===c ? ';outline:2px solid var(--accent)' : ''}" aria-label="Colour ${c}"></button>`).join('')}<input type="color" data-scol="pick" value="${esc(it.c || T[2])}" style="width:44px;height:36px;padding:2px"></div>`
-    : setSel==='her' ? '<p class="note">She slides along the floor; her pose stays.</p>' : '<p class="note">Tap a piece in the view to pick it.</p>';
+    + `<div class="chips">${SET_COLS.map(c => `<button class="chipbtn" data-scol="${c}" style="background:${c};width:34px;padding:0${(it.c || '').toLowerCase()===c ? ';outline:2px solid var(--accent)' : ''}" aria-label="Colour ${c}"></button>`).join('')}<input type="color" data-scol="pick" value="${esc(it.c || T[2])}" style="width:44px;height:36px;padding:2px"></div>` + turn + drag
+    : setSel==='her' ? '<p class="note">She slides along the floor; her pose stays.</p>' + drag : '<p class="note">Tap a piece in the view to pick it.</p>';
   showSetViews(); }
 $('#setLayers').onclick = e => { const b = e.target.closest('[data-slay]'); if(b){ pickSet(b.dataset.slay); if(!setOn()){ S.ctl = 'set'; showCtl(); } } };
 $('#setAdd').onclick = e => { const b = e.target.closest('[data-sadd]'); if(!b) return; if(b.dataset.sadd==='room') starterRoom(); else { addSet(b.dataset.sadd); if(!setOn()){ S.ctl = 'set'; showCtl(); } } };
-$('#setPicked').addEventListener('click', e => { const b = e.target.closest('[data-sdo],[data-scol]'); if(!b) return; const it = setItem(setSel); if(!it) return;
-  if(b.dataset.sdo==='turn') it.r = ((it.r || 0) + (it.k==='sprite' ? 0.5 : 1)) % 4;
+$('#setPicked').addEventListener('click', e => { const sd = e.target.closest('[data-sdrag]'); if(sd){ S.setDrag = sd.dataset.sdrag; save(); setUi(); return; }
+  const b = e.target.closest('[data-sdo],[data-scol]'); if(!b) return; const it = setItem(setSel); if(!it) return;
+  if(b.dataset.sdo==='snap'){ S.setSnap = !S.setSnap; save(); if(S.setSnap) setRotDeg(it, rotDeg(it)); }
+  else if(b.dataset.sdo==='r0'){ it.r = 0; delete it.tx; delete it.tz; }
   else if(b.dataset.sdo==='copy'){ const c = JSON.parse(JSON.stringify(it)); c.id = 'i' + Math.random().toString(36).slice(2, 9); c.p[0] += 0.5; SET.items.push(c); setSel = c.id; }
   else if(b.dataset.sdo==='del'){ SET.items = SET.items.filter(x => x!==it); setSel = null; }
   else if(b.dataset.scol && b.dataset.scol!=='pick') it.c = b.dataset.scol; else return;
   buildSet(); saveSet(); setUi(); });
-$('#setPicked').addEventListener('input', e => { const it = setItem(setSel); if(!it) return; const z = e.target.closest('[data-ssz]'), c = e.target.closest('[data-scol="pick"]');
-  if(z){ it.s[+z.dataset.ssz] = +z.value; z.nextElementSibling.textContent = it.k==='sprite' ? Math.round(z.value * 100) + '%' : (+z.value).toFixed(2) + ' m'; } else if(c) it.c = c.value; else return; buildSet(); clearTimeout(saveSet.t); saveSet.t = setTimeout(saveSet, 250); });
+$('#setPicked').addEventListener('input', e => { const it = setItem(setSel); if(!it) return; const z = e.target.closest('[data-ssz]'), c = e.target.closest('[data-scol="pick"]'), ro = e.target.closest('[data-srot]');
+  if(ro){ const d = setRotDeg(it, +ro.value); ro.value = d; ro.nextElementSibling.textContent = d + '°'; } else if(z){ it.s[+z.dataset.ssz] = +z.value; z.nextElementSibling.textContent = it.k==='sprite' ? Math.round(z.value * 100) + '%' : (+z.value).toFixed(2) + ' m'; } else if(c) it.c = c.value; else return; buildSet(); clearTimeout(saveSet.t); saveSet.t = setTimeout(saveSet, 250); });
 $('#setViews').innerHTML = Object.entries(SET_VIEWS).map(([k, v]) => `<button data-sv="${k}">${v[0]}</button>`).join('') + '<button data-sv="fit">⤢ All</button>';
-$('#setViews').onclick = e => { const b = e.target.closest('[data-sv]'); if(!b) return; if(b.dataset.sv!=='fit') S.setView = b.dataset.sv; fitSet(); showSetViews(); save(); };
+$('#setViews').onclick = e => { const b = e.target.closest('[data-sv]'); if(!b) return; if(b.dataset.sv!=='fit') S.setView = b.dataset.sv; fitSet(); showSetViews(); save(); if(setSel && setSel!=='her') setUi(); };
 // for the comic: the set from the panel's camera without her (its colours, and its depth near = white), and where a piece of
 // the set stands in front of her (white), so she can be painted behind it
 function setPass(cam, W, H2, mat, clear){
@@ -2052,7 +2067,7 @@ function panelGuides(){
     out.box = [Math.min(...xs) - 0.06, Math.min(...ys) - hh * 0.14, Math.max(...xs) + 0.06, Math.max(...ys) + hh * 0.06].map(v => Math.round(v * 1000) / 1000); }
   return out;
 }
-window.RIG = {S, SET, SV, setOrtho, pickSet, topH, spriteShots, updSprites, spriteMeshes, spriteView, SPKEY, buildSet, addSet, starterRoom, setMaps, setPick, fitSet, setAxes, get setSel(){ return setSel; }, get sdrag(){ return sdrag; }, frameShot, panelGuides, setWho, showCtl, retarget, charCenter, get shift(){ return shift; }, setView, camState, applyCam, save:() => { clearTimeout(save.t); try{ S.cam = camState(); localStorage.setItem(KEY, JSON.stringify(Object.assign({}, S, {photo:undefined}))); }catch(e){} }, scene, renderer, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, solveOrbit, orbProj, packPose, unpackPose, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
+window.RIG = {setRotDeg, rotDeg, rotKey, setUi, setG, S, SET, SV, setOrtho, pickSet, topH, spriteShots, updSprites, spriteMeshes, spriteView, SPKEY, buildSet, addSet, starterRoom, setMaps, setPick, fitSet, setAxes, get setSel(){ return setSel; }, get sdrag(){ return sdrag; }, frameShot, panelGuides, setWho, showCtl, retarget, charCenter, get shift(){ return shift; }, setView, camState, applyCam, save:() => { clearTimeout(save.t); try{ S.cam = camState(); localStorage.setItem(KEY, JSON.stringify(Object.assign({}, S, {photo:undefined}))); }catch(e){} }, scene, renderer, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, solveOrbit, orbProj, packPose, unpackPose, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
 </script>
 </body>
 </html>

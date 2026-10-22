@@ -43,3 +43,5 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 **2026-10-22 (Render Deck v.134)**: 🛋 Set mode: walls and furniture blocks moved in orthographic views one axis at a time; panelGuides() adds bg (set colours), bgDepth and front (set in front of her) when a set exists.
 
 **2026-10-22 (Render Deck v.135)**: spriteShots() gives 24 guides (3 rings at -25/5/35 degrees × 8 yaws from her facing); set pieces of kind sprite read rd-pose-sprites[-h] and face the camera, picking the view by azimuth (minus the piece turn) and elevation (<-10 low, >20 high). Set mode: Layers list, split view (SPLIT 0.56).
+
+**2026-10-22 (Render Deck v.136)**: set drags move along both screen axes of the flat view (S.setDrag 'one' = old first-direction lock); pieces carry it.r (spin in quarter turns, any value) plus it.tx / it.tz (world tilts in degrees), set by the Spin/Tilt slider for the current view (rotKey), with S.setSnap rounding to 45°.
