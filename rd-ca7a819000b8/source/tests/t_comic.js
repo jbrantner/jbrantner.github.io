@@ -186,8 +186,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   ok(await page.$eval('#comic select[data-cmill="ckpt"]', s => s.value)==='iriselTouchIL_v10.safetensors' && await page.$eval('#comic select[data-cmill="style"]', s => s.value)==='AFKJ Style Illustrious Claude.safetensors'
     && await page.inputValue('#comic input[data-cmill="words"]')==='AFKJ Style', 'stills default to iriselTouchIL with AFKJ Style (its words filled in)');
   ok(await page.$eval('#comic select[data-cms="lora"]', s => s.value)==='librarianx_v2.safetensors', 'the Librarian\'s own LoRA is found from her trigger word');
-  ok(await page.$('#comic [data-cmwhite="1"].on'), 'characters are painted on white by default (for 3D)');
-  await page.click('#comic [data-cmwhite="0"]'); // the place-painting tests below
+  ok(await page.evaluate(() => !cmWhite(CM(), cmPage().panels[0])) && await page.$('#comic [data-cm="pwhite"][data-i="0"]:not(.on)'), 'panels are painted on the place unless ⬜ Character only is on');
   const sent0 = () => [...PCS.Render.sent, ...PCS.Main.sent].length, lastG = () => ALL[ALL.length - 1].prompt;
   let n1 = sent0(); await page.click('#comic [data-cm="plate"]');
   await page.waitForFunction(() => (CM().plates || []).length===1, null, {timeout:15000});
@@ -241,7 +240,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   // ---- 🌄 pictures in 3D ----
   await page.click('#cmPage [data-cpi="2"]');
   ok(!(await page.$('#comic [data-cm="scene"]')), 'the 3D scene builder is gone (Jordan found it clumsy)');
-  await page.evaluate(() => { CM().white = true; drawComic(); });
+  await page.evaluate(() => { cmPage().panels[2].white = true; drawComic(); });
   // older saved 3D states (v.114 rings, v.112 slider) must not blank the tab (Jordan 2026-10-22)
   for(const old of [{rings:{high:{crane:{id:'a', url:'https://x/a.mp4'}, ring:{id:'b'}}, low:{crane:{id:'c'}}}}, {i:0}, {tilts:[{at:0.2, up:{id:'u'}}]}, {moves:[null]}]){
     await page.evaluate(o => { const p = cmPage().panels[2], st = cmStill(p); p.d3 = {id:p.id + '_3d', url:st.url, amt:1, t3d:o, orbs:{circle:{id:'z', url:'https://x/z.mp4'}}}; drawComic(); }, old);
@@ -345,8 +344,28 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     ok(await page.evaluate(n => CM().pages.length===n && CM().cur===0 && CM().pages[0].panels.length===5, n0), '🗑 Remove page takes it out (after asking)');
     await page.click('#comic [data-cm="newcomic"]');
     ok(await page.evaluate(() => !CM().pages.length && S.comics.length===1 && CM().n===2) && await page.isVisible('#cmScript') && await page.$('#comic [data-cmcomic]'), '➕ New comic: a fresh comic, the old one kept in the Comic list');
+    // 👥 the character library and ✏️ one box per panel (Jordan 2026-10-22)
+    await page.click('#comic [data-cmfold="lib"]'); await page.click('#comic [data-cm="libadd"]');
+    await page.fill('#comic [data-cml="name"]', 'The Librarian'); await page.dispatchEvent('#comic [data-cml="name"]', 'change');
+    await page.fill('#comic [data-cml="desc"]', 'long black hair, green eyes, black gothic dress'); await page.dispatchEvent('#comic [data-cml="desc"]', 'change');
+    ok(await page.evaluate(() => S.cmLib.length===1 && cmTagOf(S.cmLib[0])==='Librarian') && /@?Librarian/.test(await page.inputValue('#comic [data-cml="tag"]')), '👥 Add a character: named, with a tag made from the name');
+    await page.click('#comic [data-cm="padd"]');
+    ok(await page.evaluate(() => CM().pages.length===1 && cmPage().panels.length===1) && await page.$('#comic [data-cmpt="0"]'), '➕ Add panel makes the page and a box for panel 1');
+    await page.fill('#comic [data-cmpt="0"]', 'walks into the library'); await page.dispatchEvent('#comic [data-cmpt="0"]', 'change');
+    await page.evaluate(() => { const t = document.querySelector('#comic [data-cmpt="0"]'); t.focus(); t.setSelectionRange(0, 0); t.dispatchEvent(new Event('keyup', {bubbles:true})); });
+    await page.click('#comic [data-cm="pins"][data-i="0"]'); await page.click('#comic [data-cmins]');
+    ok(await page.evaluate(() => { const p = cmPage().panels[0], w = cmWho(CM(), p); return p.src==='@Librarian walks into the library' && p.text==='The Librarian walks into the library' && w.length===1 && /green eyes/.test(w[0].desc); }), '👤 Add a character puts @Librarian where the cursor was; her look comes from the library');
+    await page.click('#comic [data-cm="padd"]'); await page.fill('#comic [data-cmpt="1"]', 'she smiles at the camera'); await page.dispatchEvent('#comic [data-cmpt="1"]', 'change');
+    await page.click('#comic [data-cm="padd"]'); await page.fill('#comic [data-cmpt="2"]', 'a cat sleeps'); await page.dispatchEvent('#comic [data-cmpt="2"]', 'change');
+    ok(await page.evaluate(() => cmPage().panels.length===3 && cmWho(CM(), cmPage().panels[1]).some(s => s.label==='The Librarian')), '"she" in the next box is her too');
+    ok(await page.$('#cmPage [data-cpi="2"]') && (await page.$$('#comic .cmlays > *')).length > 0, 'the page preview shows a panel for every box straight away');
+    await page.click('#comic [data-cm="pdel"][data-i="2"]'); ok(await page.evaluate(() => cmPage().panels.length===2 && cmPage().rows.reduce((a, b) => a + b, 0)===2), '✕ removes a panel and the layout follows');
+    await page.click('#comic [data-cm="pwhite"][data-i="1"]'); ok(await page.evaluate(() => cmPage().panels[1].white && !cmPage().panels[0].white), '⬜ Character only is per panel');
+    { const nb = ALL.length; await page.click('#comic [data-cm="stills"]'); await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:20000});
+      const pr = ALL.slice(nb).map(x => Object.values(x.prompt).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | '));
+      ok(pr.length===10 && pr.every(t => /green eyes/.test(t) && !/@/.test(t)) && pr.filter(t => /white background/.test(t)).length===5, 'stills get her look from the library (no @ in the prompt); only the Character only panel is on white'); }
     await page.selectOption('#comic [data-cmcomic]', '1'); await page.waitForTimeout(300);
-    ok(await page.evaluate(() => CM().n===1 && CM().pages[0].panels.length===5 && S.comics.length===0), 'switching back: the empty new comic is dropped and comic 1 is as it was'); }
+    ok(await page.evaluate(() => CM().n===1 && CM().pages[0].panels.length===5 && S.comics.length===1 && S.cmLib.length===1), 'switching back: comic 1 is as it was, comic 2 kept, the library shared'); }
   await page.click('#tabs [data-tab="render"]');
   ok(await page.isVisible('#mainView') && await page.isVisible('.go'), 'the Render tab brings the recipe back');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));

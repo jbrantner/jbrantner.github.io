@@ -388,7 +388,8 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cmtop small{color:var(--soft)}
 .cmsum{margin:14px 2px 8px;font-weight:700}
 .cmpages{margin:12px 0 0}
-.cmbar{gap:8px;align-items:center}.cmbar .seg button{min-width:40px}.cmbar select{width:100%}
+.cmbar{gap:8px;align-items:center}
+.cmbox,.cmlib{border:1px solid var(--line);border-radius:12px;padding:10px;margin:0 0 10px;background:var(--panel2)}.cmbox textarea,.cmlib textarea{width:100%}.chipbtn.on{border-color:var(--pink,#ff5ca8);color:var(--text)}.cmbar .seg button{min-width:40px}.cmbar select{width:100%}
 .cmlays{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 8px}
 .cmlay{position:relative;flex:none;width:58px;aspect-ratio:2/3;border-radius:6px;background:#f4f1ea;border:2px solid var(--line)}
 .cmlay.on{border-color:var(--accent)}
@@ -617,7 +618,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.120'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.121'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -3673,13 +3674,14 @@ function drawMode(){
 }
 function switchMode(){
   if(S.ws) wsBack(false); // a panel's recipe belongs to this workstation's comic
-  const keys = RECIPE_KEYS.concat('gallery', 'chars', 'comic', 'comics'), now = {};
+  const keys = RECIPE_KEYS.concat('gallery', 'chars', 'comic', 'comics', 'cmLib'), now = {};
   keys.forEach(k => now[k] = S[k]);
-  const next = S.stash && S.stash.blocks ? S.stash : Object.assign(JSON.parse(JSON.stringify(now)), {prompt:'', addedTags:[], gallery:(S.stash && S.stash.gallery) || [], chars:(S.stash && S.stash.chars) || [], comic:(S.stash && S.stash.comic) || null, comics:(S.stash && S.stash.comics) || []});
+  const next = S.stash && S.stash.blocks ? S.stash : Object.assign(JSON.parse(JSON.stringify(now)), {prompt:'', addedTags:[], gallery:(S.stash && S.stash.gallery) || [], chars:(S.stash && S.stash.chars) || [], comic:(S.stash && S.stash.comic) || null, comics:(S.stash && S.stash.comics) || [], cmLib:(S.stash && S.stash.cmLib) || []});
   keys.forEach(k => { if(next[k] !== undefined) S[k] = next[k]; });
   if(next.chars === undefined) S.chars = []; // a Hidden workstation made before characters starts with none of its own
   if(next.comic === undefined) S.comic = null; // and its own comic pages
   if(next.comics === undefined) S.comics = []; // and its own other comics
+  if(next.cmLib === undefined) S.cmLib = []; // and its own comic characters
   if(typeof cmPlay==='function') cmPlay(false);
   S.stash = now; S.hidden = !S.hidden; migrate(S);
   S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
@@ -6282,10 +6284,14 @@ function cmCast(texts, old){
   const slot = (key, label, g, pat, cid) => { let s = cast.find(x => x.key===key);
     if(!s){ const o = (old || []).find(x => x.key===key) || {}; s = {id:o.id || uid('w'), key, label, g:g || o.g || '', pat, cid:cid || o.cid || '', desc:o.desc || ''}; cast.push(s); }
     else if(g && !s.g) s.g = g; return s; };
+  const lib = (S.cmLib || []).filter(L => (L.name || '').trim());
   const who = texts.map(tx => {
     const hits = [], t = ' ' + tx + ' ';
-    (S.chars || []).filter(c => (c.name || '').trim()).forEach(c => { const pat = '\\b' + cmEsc(c.name.trim()) + '\\b', m = new RegExp(pat, 'i').exec(t);
-      if(m) hits.push([m.index, slot('c:' + c.id, c.name.trim(), cmCardG(c), pat, c.id)]); });
+    const spans = []; // a card's name inside a library character's name ("Librarian" in "The Librarian") is that character
+    lib.forEach(L => { const pat = '\\b' + cmEsc(L.name.trim()) + '\\b', m = new RegExp(pat, 'i').exec(t);
+      if(m){ const s = slot('L:' + L.id, L.name.trim(), L.g, pat, L.cid); s.lib = L.id; hits.push([m.index, s]); spans.push([m.index, m.index + m[0].length]); } });
+    (S.chars || []).filter(c => (c.name || '').trim() && !lib.some(L => L.cid===c.id || L.name.trim().toLowerCase()===c.name.trim().toLowerCase())).forEach(c => { const pat = '\\b' + cmEsc(c.name.trim()) + '\\b', m = new RegExp(pat, 'i').exec(t);
+      if(m && !spans.some(([a, b]) => m.index >= a && m.index < b)) hits.push([m.index, slot('c:' + c.id, c.name.trim(), cmCardG(c), pat, c.id)]); });
     for(const m of t.matchAll(/\bcharacter\s*(\d+)\b/gi)) hits.push([m.index, slot('n:' + m[1], 'Character ' + m[1], '', '\\bcharacter\\s*' + m[1] + '\\b')]);
     for(const m of t.matchAll(new RegExp('\\b(a|an|the|another|that|this)\\s+' + CM_ADJ + '(' + Object.keys(CM_NOUNS).join('|') + ')\\b', 'gi'))){
       const noun = m[2].toLowerCase(), key = 'w:' + noun + (/another/i.test(m[1]) ? '2' : '');
@@ -6371,6 +6377,39 @@ function cmNewComic(){ const cm = CM(), pg = cmPage(); if(pg) pg.script = cm.scr
   const n = Math.max(0, ...cmComics().map(c => c.n || 0)) + 1; S.comic = null; const c = CM(); c.n = n; c.open.script = true; save(); drawComic(); toast('Comic ' + n + ': write page 1'); }
 function cmPickComic(n){ const cm = CM(), pg = cmPage(); if(pg) pg.script = cm.script; const c = (S.comics || []).find(x => x.n===n); if(!c || c===cm) return; cmPlay(false);
   S.comics = S.comics.filter(x => x!==c).concat(cm.pages.length || (cm.script || '').trim() ? [cm] : []); S.comic = c; cmFixPages(c); c.script = cmPage() ? cmPgScript(cmPage()) : c.script || ''; save(); drawComic(); }
+// ✏️ the script as one box per panel (Jordan 2026-10-22), and 👥 a character library shared by every comic and page: a
+// character goes into a panel as its @tag, and their look (or card, with its LoRA and pictures) is added to the prompt
+// from the library, so the panel text stays short
+const cmTagOf = L => (L.tag || (L.name || '').replace(/^\s*the\s+/i, '')).replace(/[^\w-]+/g, '') || 'Character';
+const cmPlainTx = src => (src || '').replace(/@([\w-]+)/g, (m, t) => { const L = (S.cmLib || []).find(x => cmTagOf(x).toLowerCase()===t.toLowerCase()); return L && (L.name || '').trim() ? L.name.trim() : t; });
+const cmSrc = p => p.src!=null ? p.src : p.text;
+function cmRecast(){ const cm = CM(), ps = cm.pages.flatMap(pg => pg.panels), {cast, who} = cmCast(ps.map(p => p.text), cm.cast);
+  ps.forEach((p, i) => { if(!p.whoSet) p.who = who[i]; }); cm.cast = cast; }
+function cmRelayout(pg){ const t = cmTexts(pg); pg.lays = t.length ? cmLayouts(t) : []; pg.rows = pg.lays[0] || []; }
+const cmNewPanel = () => ({id:uid('p'), text:'', src:'', who:[], whoSet:false, shot:'auto', prompt:null, tags:null, takes:[], take:0, frame:CM_FRAME, pos:{x:50, y:50}, making:null});
+let CM_INS = null; const CM_CARET = {}; // the panel box showing its character chips; where the cursor was in each box
+function cmAddPanel(){ const cm = CM(); if(!cm.pages.length){ cm.pages.push({id:uid('pg'), panels:[], rows:[], lays:[], script:''}); cm.cur = 0; }
+  const pg = cmPage(); pg.panels.push(cmNewPanel()); cmRelayout(pg); cm.sel = pg.panels.length - 1; cm.open.script = true; save(); drawComic();
+  const ta = document.querySelector('#comic [data-cmpt="' + cm.sel + '"]'); if(ta) ta.focus(); }
+function cmDelPanel(i){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i]; if(!p) return; const hs = [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []), run = hs.filter(h => h.making || h.busy);
+  if(((p.stills || []).length || p.takes.length || run.length) && !confirm('Remove panel ' + (i + 1) + '?' + (run.length ? ' Its running jobs will be stopped.' : '') + ' Pictures it made stay in your Library.')) return;
+  if(run.length) cmStop(run); pg.panels.splice(i, 1); cmRelayout(pg); cm.sel = Math.max(0, Math.min(cm.sel, pg.panels.length - 1)); if(CM_INS===i) CM_INS = null; cmRecast(); save(); drawComic(); }
+function cmInsert(i, libId){ const pg = cmPage(), p = pg && pg.panels[i], L = (S.cmLib || []).find(x => x.id===libId); if(!p || !L) return;
+  const src = cmSrc(p) || '', at = CM_CARET[i]!=null ? Math.min(CM_CARET[i], src.length) : src.length, tag = '@' + cmTagOf(L), pre = src.slice(0, at), post = src.slice(at);
+  p.src = pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + (post && /^\s/.test(post) ? '' : ' ') + post; p.text = cmPlainTx(p.src); CM_CARET[i] = (pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + ' ').length;
+  CM_INS = null; cmRecast(); save(); drawComic(); }
+function cmLibHtml(){ const lib = S.cmLib || [];
+  return lib.map(L => `<div class="cmlib"><div class="row"><div class="grow"><input type="text" data-cml="name" data-id="${esc(L.id)}" value="${esc(L.name || '')}" placeholder="Name, e.g. The Librarian" aria-label="Name"></div><button class="chipbtn" data-cm="libdel" data-id="${esc(L.id)}" aria-label="Remove ${esc(L.name || 'this character')}">🗑</button></div>
+    <div class="row"><label>Tag</label><div class="grow"><input type="text" data-cml="tag" data-id="${esc(L.id)}" value="${esc(cmTagOf(L))}" aria-label="Tag"></div>${['f', 'm', ''].map(g => `<button class="chipbtn${(L.g || '')===g ? ' on' : ''}" data-cmlg="${g}" data-id="${esc(L.id)}">${g==='f' ? 'she' : g==='m' ? 'he' : 'they'}</button>`).join('')}</div>
+    <textarea data-cml="desc" data-id="${esc(L.id)}" rows="2" placeholder="What they look like, as tags: long black hair, green eyes, black gothic dress">${esc(L.desc || '')}</textarea>
+    <div class="row"><label>Card</label><div class="grow"><select data-cml="cid" data-id="${esc(L.id)}"><option value="">None</option>${(S.chars || []).map(c => `<option value="${esc(c.id)}" ${c.id===L.cid ? 'selected' : ''}>${esc(c.name || 'Unnamed')}</option>`).join('')}</select></div></div></div>`).join('')
+    + `<div class="btnrow"><button class="btn" data-cm="libadd">➕ Add a character</button></div><p class="note">Every comic and page can use these. A card (from 🧍 Characters) adds its LoRA and pictures; the look is added to the prompt for you.</p>`; }
+function cmBoxesHtml(cm, pg0){ const ps = pg0 ? pg0.panels : [], lib = (S.cmLib || []).filter(L => (L.name || '').trim());
+  return ps.map((p, i) => `<div class="cmbox"><div class="obhead"><b>Panel ${i + 1}</b><span><button class="chipbtn${p.white ? ' on' : ''}" data-cm="pwhite" data-i="${i}">⬜ Character only</button> <button class="chipbtn" data-cm="pdel" data-i="${i}" aria-label="Remove panel ${i + 1}">✕</button></span></div>
+    <textarea data-cmpt="${i}" rows="2" placeholder="What happens in this panel" autocapitalize="sentences">${esc(cmSrc(p) || '')}</textarea>
+    <div class="btnrow"><button class="chipbtn${CM_INS===i ? ' on' : ''}" data-cm="pins" data-i="${i}">👤 Add a character</button></div>
+    ${CM_INS===i ? `<div class="btnrow">${lib.length ? lib.map(L => `<button class="chipbtn" data-cmins="${esc(L.id)}" data-i="${i}">@${esc(cmTagOf(L))}</button>`).join('') : '<span class="note">Add characters under 👥 Characters first.</span>'}</div>` : ''}</div>`).join('')
+    + `<div class="btnrow"><button class="btn" data-cm="padd">➕ Add panel</button></div>`; }
 const cmName = c => 'Comic ' + (c.n || 1) + (c.pages.length ? ' (' + c.pages.length + ' page' + (c.pages.length > 1 ? 's' : '') + ')' : '');
 function cmRead(){
   const cm = CM(), pages = cmSplit(cm.script);
@@ -6396,7 +6435,9 @@ function cmRead(){
 const cmCard = s => s && s.cid ? (S.chars || []).find(c => c.id===s.cid) || null : null;
 function cmRefView(c){ if(!c || !c.views || !c.views.length) return null;
   return pipeSrc(c) || turnSource(c) || c.views.find(v => v.angle==='front') || c.views[0]; }
-function cmWho(cm, p){ return (p.who || []).map(id => cm.cast.find(s => s.id===id)).filter(Boolean); }
+// a library character's name, look and card come from the 👥 library itself, so editing them there changes every comic
+function cmWho(cm, p){ return (p.who || []).map(id => cm.cast.find(s => s.id===id)).filter(Boolean).map(s => { const L = s.lib && (S.cmLib || []).find(x => x.id===s.lib);
+  return L ? Object.assign({}, s, {label:L.name || s.label, desc:L.desc || '', cid:L.cid || '', g:L.g || s.g}) : s; }); }
 // pictures in order: the cast first (so the first person is <Picture 1>), the place last
 function cmRefs(cm, p){ const r = [];
   cmWho(cm, p).forEach(s => { const v = cmRefView(cmCard(s)); if(v && v.url) r.push({kind:'char', slot:s.id, url:v.url}); });
@@ -6601,9 +6642,9 @@ function cmAreas(who, shot, touch){
 // the panel's own tags, read from its words as a normal render reads a sentence (Jordan 2026-10-21); edited by hand, they stay
 // ⬜ characters on white (Jordan 2026-10-21: the character pass on a plain white background, so she turns into a clean 3D
 // object; the place is added back afterwards): no place in the tags, a plain white background asked for
-const cmWhite = cm => cm.white!==false;
+const cmWhite = (cm, p) => !!(p && p.white); // ⬜ Character only, per panel (Jordan 2026-10-22)
 const CM_WHITE = 'simple background, white background', CM_WHITE_NEG = 'scenery, detailed background, room, outdoors, indoors, floor, shadow';
-function cmAutoTags(cm, p, i, rect){ const who = cmWho(cm, p), w = cmWhite(cm) && who.length;
+function cmAutoTags(cm, p, i, rect){ const who = cmWho(cm, p), w = cmWhite(cm, p) && who.length;
   return [cmCount(who), CM_SHOT_TAGS[cmShot(p, i, rect)], cmTags(p.text, who), w ? CM_WHITE : cmTags(cm.place || '', []), who.length ? '' : 'scenery'].filter(Boolean).join(', '); }
 const cmStillTags = (cm, p, i, rect) => p.tags!=null ? p.tags : cmAutoTags(cm, p, i, rect);
 function cmStillGraph(k, plate, p, i, rect, prefix){
@@ -6619,7 +6660,7 @@ function cmStillGraph(k, plate, p, i, rect, prefix){
   const areas = cmAreas(who, shot, touch), place = cmTags(cm.place || '', []);
   const together = areas.length===1 ? areas[0].who.map(s => cmLooks(s, k).words).join(', ') : '';
   let pos = enc(tags(tx.pos, I.words || '', cmCount(who), together, cmStillTags(cm, p, i, rect)));
-  const neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views', cmWhite(cm) && who.length ? CM_WHITE_NEG : ''));
+  const neg = enc(tags(tx.neg, who.length > 1 ? '' : 'multiple views', cmWhite(cm, p) && who.length ? CM_WHITE_NEG : ''));
   // apart: each person's looks in their own area, on top of the whole prompt (as the pose board does)
   if(areas.length > 1) areas.forEach(a => { seen.clear(); const t = enc(tags(I.words || '', a.who.length ? cmCount(a.who) : 'solo', a.who.map(s => cmLooks(s, k).words).join(', '), CM_SHOT_TAGS[shot]));
     const ar = add('ConditioningSetArea', {conditioning:t, width:Math.round(a.w * W / 8) * 8, height:Math.round(a.h * H / 8) * 8, x:Math.round(a.x * W / 8) * 8, y:Math.round(a.y * H / 8) * 8, strength:1});
@@ -6728,7 +6769,7 @@ async function cmJob(cm, pg, p, k, kind, mins, host){
     let G, w, h, prefix, video = kind==='anim';
     if(kind==='plate'){ prefix = cmPrefix('place'); G = cmPlateGraph(k, prefix); w = 1344; h = 768; }
     else if(kind==='still'){ prefix = cmPrefixP(pg, i, 'still');
-      const plate = cmWhite(cm) ? null : cm.loc && cm.loc.url ? await cmUp(cm.loc.url, k.url) : cm.loc && cm.loc.test ? 'test-place.png' : null; G = cmStillGraph(k, plate, p, i, rect, prefix);
+      const plate = cmWhite(cm, p) ? null : cm.loc && cm.loc.url ? await cmUp(cm.loc.url, k.url) : cm.loc && cm.loc.test ? 'test-place.png' : null; G = cmStillGraph(k, plate, p, i, rect, prefix);
       w = G.W; h = G.H; }
     else if(kind==='finish'){ prefix = cmPrefixP(pg, i, 'finished'); const c = CMFIN[p.id]; if(!c) throw new Error('grab the frame again'); const fw = c.width, fh = c.height;
       const img = (await uploadFrame(c, 'panel_frame', k.url)).img; delete CMFIN[p.id]; G = cmFinGraph(k, img, fw, fh, p, i, rect, prefix); w = fw; h = fh; }
@@ -7713,10 +7754,12 @@ function drawComic0(){
   x += `<div class="row cmbar"><label>Comic</label><div class="grow">${others.length ? `<select data-cmcomic aria-label="Comic">${[cm].concat(others).sort((a, b) => (a.n || 0) - (b.n || 0)).map(c => `<option value="${c.n}" ${c===cm ? 'selected' : ''}>${esc(cmName(c))}</option>`).join('')}</select>` : `<b>${esc(cmName(cm))}</b>`}</div><button class="chipbtn" data-cm="newcomic">➕ New comic</button></div>
     <div class="row cmbar"><label>Page</label><div class="grow">${cm.pages.length ? seg('data-cmpg', cm.pages.map((q, i) => [i, String(i + 1)]), cm.cur) : '<span class="note">none yet</span>'}</div>
     <button class="chipbtn" data-cm="newpage">➕ New page</button>${cm.pages.length ? '<button class="chipbtn" data-cm="delpage" aria-label="Remove this page">🗑 Remove</button>' : ''}</div>`;
-  x += `<div class="feed${cm.open.script || !pg ? ' open' : ''}"><button class="fhead" data-cmfold="script"><b>Script${cm.pages.length > 1 ? ' · page ' + (cm.cur + 1) : ''}</b><small>${esc(pg ? cm.script.replace(/\s+/g, ' ').slice(0, 60) : '')}</small><span class="chev" aria-hidden="true">›</span></button>
-    <div class="fbody"><textarea id="cmScript" data-cmf="script" rows="6" placeholder="Page 1: Panel 1: Character 1 walks down a street. Panel 2: She looks behind her and keeps walking. Panel 3: A man starts walking behind her. Panel 4: He catches up to her and grabs her arm. Panel 5: She screams." autocapitalize="sentences" spellcheck="true">${esc(cm.script)}</textarea>
+  x += `<div class="feed${cm.open.lib ? ' open' : ''}"><button class="fhead" data-cmfold="lib"><b>👥 Characters</b><small>${esc((S.cmLib || []).map(L => L.name).filter(Boolean).join(', ') || 'none yet')}</small><span class="chev" aria-hidden="true">›</span></button><div class="fbody">${cmLibHtml()}</div></div>`;
+  x += `<div class="feed${cm.open.script || !pg ? ' open' : ''}"><button class="fhead" data-cmfold="script"><b>Script${cm.pages.length > 1 ? ' · page ' + (cm.cur + 1) : ''}</b><small>${esc(pg ? pg.panels.length + ' panel' + (pg.panels.length > 1 ? 's' : '') : '')}</small><span class="chev" aria-hidden="true">›</span></button>
+    <div class="fbody">${cmBoxesHtml(cm, pg0)}
+    <div class="feed${cm.open.paste || !(pg0 && pg0.panels.length) ? ' open' : ''}"><button class="fhead" data-cmfold="paste"><b>📋 Paste a whole script</b><small>splits it into panels</small><span class="chev" aria-hidden="true">›</span></button><div class="fbody"><textarea id="cmScript" data-cmf="script" rows="6" placeholder="Page 1: Panel 1: Character 1 walks down a street. Panel 2: She looks behind her and keeps walking. Panel 3: A man starts walking behind her. Panel 4: He catches up to her and grabs her arm. Panel 5: She screams." autocapitalize="sentences" spellcheck="true">${esc(cm.script)}</textarea>
     <div class="btnrow"><button class="btn hot" data-cm="read">📖 Read the script</button></div>
-    <p class="note">Write "Panel 1: …", "Panel 2: …" (and "Page 2:" for another page). Name the people as Character 1, a man, she, he, or by your character cards' names.</p></div></div>`;
+    <p class="note">Write "Panel 1: …", "Panel 2: …" (and "Page 2:" for another page). Name the people as Character 1, a man, she, he, or by your characters' names.</p></div></div></div></div>`;
   if(pg){
     const free = q => !cmBusy(q), empty = pg.panels.filter(q => !q.takes.length && free(q)), busy = pg.panels.filter(cmBusy).length;
     const still = cm.route!=='clip', noStill = pg.panels.filter(q => !(q.stills || []).length && free(q)), noAnim = pg.panels.filter(q => (q.stills || []).length && !q.takes.length && free(q)), ik = cmIllKits(), fk = cmFlKits();
@@ -7734,7 +7777,7 @@ function drawComic0(){
     const p = pg.panels[cm.sel], rects = cmRectsOf(pg);
     if(p){ const sh = cmShown(p), t = sh && sh.clip ? p.takes[p.take] : null, who = cmWho(cm, p), sts = p.stills || [];
       x += `<div class="obpanel cmed"><div class="obhead"><b>Panel ${cm.sel + 1}</b><span><button class="chipbtn" data-cm="prev" aria-label="Panel before" ${cm.sel ? '' : 'disabled'}>◀</button> <button class="chipbtn" data-cm="next" aria-label="Next panel" ${cm.sel < pg.panels.length - 1 ? '' : 'disabled'}>▶</button></span></div>
-        <textarea data-cmp="text" rows="2">${esc(p.text)}</textarea>
+        <textarea data-cmp="text" rows="2">${esc(cmSrc(p))}</textarea>
         <div class="row"><label>Who</label><div class="seg cmwho">${cm.cast.map(s => `<button data-cmwho="${esc(s.id)}" class="${(p.who || []).includes(s.id) ? 'on' : ''}">${esc(cmCard(s) ? cmCard(s).name : s.label)}</button>`).join('') || '<span class="note">Nobody named</span>'}</div></div>
         <div class="row"><label>Shot</label>${seg('data-cmshot', Object.entries(CM_SHOTS).map(([k2, v]) => [k2, k2==='auto' ? 'Auto (' + CM_SHOTS[cmAutoShot(p.text, cm.sel, rects[cm.sel].w / rects[cm.sel].h)].toLowerCase() + ')' : v]), p.shot || 'auto')}</div>`;
       if(p.err) x += `<p class="warn">${esc(p.err)}</p>`;
@@ -7773,7 +7816,6 @@ function drawComic0(){
         <input type="text" data-cms="desc" data-id="${esc(s.id)}" value="${esc(s.desc || '')}" placeholder="${c ? 'extra words, e.g. carrying a red umbrella' : 'e.g. a tall man in a dark hooded coat'}">
         ${cm.route!=='clip' && loras.length ? `<select data-cms="lora" data-id="${esc(s.id)}" aria-label="Their LoRA"><option value="">No LoRA</option>${loras.map(n => `<option value="${esc(n)}" ${n===cmSlotLora(s, loras) ? 'selected' : ''}>LoRA: ${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select>` : ''}</div></div>`; }).join('') : '<p class="note">Nobody named in the script yet.</p>')
       + (!(S.chars || []).length ? '<p class="note">Make character cards under 🧍 Characters so MiniMax gets their pictures.</p>' : '');
-    x += `<div class="row"><label>Characters on</label>${seg('data-cmwhite', [['1', '⬜ White (for 3D)'], ['0', '🏙 The place']], cmWhite(cm) ? '1' : '0')}</div>`;
     x += `<div class="lbl">Place</div><div class="row"><div class="grow"><input type="text" data-cmf="place" value="${esc(cm.place || '')}" placeholder="e.g. a quiet city street at dusk"></div></div>
       <div class="cmloc">${cm.loc && cm.loc.url ? `<img src="${esc(mini(cm.loc.url))}" alt="The place">` : '<span class="cmnopic">🏙</span>'}<div class="grow"><p class="note" style="margin:0 0 6px">${cm.loc ? 'Every panel gets this picture of the place, so it stays the same street.' : 'One picture of the place with nobody in it keeps the background the same in every panel.'}</p>
         <div class="seg">${iks.length ? `<button data-cm="plate" ${cm.pj && (cm.pj.making || cm.pj.busy) ? 'disabled' : ''}>🏙 Paint the place</button>` : ''}<button data-cm="locphone">📱 From the phone</button><button data-cm="locshown" ${shownIdx >= 0 && S.gallery[shownIdx] ? '' : 'disabled'}>🖼 The picture in the preview</button>${cm.loc ? '<button data-cm="locoff">✕</button>' : ''}</div></div></div>`;
@@ -7809,8 +7851,12 @@ function openComic(){ if(!TAGS) loadTags(); $('#comic').hidden = false; document
 function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.classList.remove('cm-open'); S.tab = 'render'; drawTabs(); }
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
+// where the cursor is in each panel box, so 👤 Add a character puts the @tag there
+['keyup', 'click', 'focusout'].forEach(ev => $('#comic').addEventListener(ev, e => { const el = e.target; if(el && el.dataset && el.dataset.cmpt!=null) CM_CARET[+el.dataset.cmpt] = el.selectionStart; }));
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmins],[data-cmlg],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  if(t.dataset.cmins){ cmInsert(+t.dataset.i, t.dataset.cmins); return; }
+  if(t.dataset.cmlg!=null){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(L){ L.g = t.dataset.cmlg; cmRecast(); save(); drawComic(); } return; }
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
   if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
@@ -7872,6 +7918,12 @@ $('#comic').addEventListener('click', e => {
   else if(a==='anim1'){ cmJobs('anim', [p]); return; }
   else if(a==='read'){ cmRead(); return; }
   else if(a==='newpage'){ cmNewPage(); return; }
+  else if(a==='padd'){ cmAddPanel(); return; }
+  else if(a==='pdel'){ cmDelPanel(+t.dataset.i); return; }
+  else if(a==='pwhite' && pg){ const q = pg.panels[+t.dataset.i]; if(q) q.white = !q.white; }
+  else if(a==='pins'){ const i = +t.dataset.i; CM_INS = CM_INS===i ? null : i; }
+  else if(a==='libadd'){ S.cmLib = (S.cmLib || []).concat([{id:uid('L'), name:'', desc:'', g:'f', cid:''}]); cm.open.lib = true; }
+  else if(a==='libdel'){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(L && confirm('Remove ' + (L.name || 'this character') + ' from the library? Panels keep their text.')){ S.cmLib = S.cmLib.filter(x => x!==L); cmComics().forEach(c => c.pages.forEach(q => q.panels.forEach(x => x.text = cmPlainTx(cmSrc(x))))); cmRecast(); } }
   else if(a==='delpage'){ cmDelPage(); return; }
   else if(a==='newcomic'){ cmNewComic(); return; }
   else if(a==='prev' || a==='next'){ cm.sel = Math.max(0, Math.min(pg.panels.length - 1, cm.sel + (a==='next' ? 1 : -1))); }
@@ -7889,6 +7941,10 @@ $('#comic').addEventListener('click', e => {
 });
 ['input', 'change'].forEach(ev => $('#comic').addEventListener(ev, e => {
   const el = e.target, cm = CM(), pg = cmPage();
+  if(el.dataset.cmpt!=null && pg){ const i = +el.dataset.cmpt, q = pg.panels[i]; if(!q) return; CM_CARET[i] = el.selectionStart; q.src = el.value; q.text = cmPlainTx(el.value); save();
+    if(ev==='change'){ cmRecast(); save(); drawComic(); } return; }
+  if(el.dataset.cml && el.dataset.id){ const L = (S.cmLib || []).find(x => x.id===el.dataset.id); if(!L) return; L[el.dataset.cml] = el.dataset.cml==='tag' ? el.value.replace(/^@/, '').replace(/[^\w-]+/g, '') : el.value; save();
+    if(ev==='change'){ if(el.dataset.cml==='name' || el.dataset.cml==='tag') cmComics().forEach(c => c.pages.forEach(q => q.panels.forEach(x => { if(x.src!=null) x.text = cmPlainTx(x.src); }))); cmRecast(); save(); drawComic(); } return; }
   if(el.dataset.cmcomic!=null){ if(ev==='change') cmPickComic(+el.value); return; }
   if(el.dataset.cmf){ cm[el.dataset.cmf] = el.value; save(); if(ev==='change' && el.dataset.cmf!=='script') drawComic(); return; }
   if(pg && el.dataset.t3d==='mv'){ const ph = pg.panels[cm.sel].d3; if(!ph || !ph.t3d) return; ph.mvT = +el.value / 100; if(el.nextElementSibling) el.nextElementSibling.textContent = el.value + '%'; d3Redraw(); if(ev==='change') save(); return; }
@@ -7896,6 +7952,7 @@ $('#comic').addEventListener('click', e => {
     if(el.nextElementSibling) el.nextElementSibling.textContent = d===0 ? 'front' : Math.abs(d)===180 ? 'back' : (d < 0 ? '◀ ' : '') + Math.abs(d) + '°' + (d > 0 ? ' ▶' : ''); d3Redraw(); if(ev==='change'){ save(); drawComic(); } return; }
   if(pg && el.dataset.d3){ const ph = pg.panels[cm.sel].d3; if(!ph) return; if(el.nextElementSibling) el.nextElementSibling.textContent = (+el.value).toFixed(2);
     if(ev==='change'){ ph.amt = +el.value; save(); d3Redraw(); } return; }
+  if(el.dataset.cmp==='text' && pg){ const p = pg.panels[cm.sel]; p.src = el.value; p.text = cmPlainTx(el.value); save(); if(ev==='change'){ cmRecast(); save(); drawComic(); } return; }
   if(el.dataset.cmp && pg){ const p = pg.panels[cm.sel]; p[el.dataset.cmp] = el.value; save(); if(ev==='change') drawComic(); return; }
   if(el.dataset.cmill){ const I = cmIll(); I[el.dataset.cmill] = el.value;
     if(el.dataset.cmill==='style' && ev==='change') I.words = el.value ? S.loraWords[el.value] || (/afkj/i.test(el.value) ? 'AFKJ Style' : '') : '';
