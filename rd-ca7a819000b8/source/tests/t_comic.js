@@ -415,6 +415,10 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         ok(p1.length===5 && p1.every(g => cn(g)==='openpose,depth' && g.filter(n => n.class_type==='ControlNetApplyAdvanced').length===2) && p2.every(g => !cn(g)),
           '🦴 the posed panel\'s stills follow its rig through ProMax (OpenPose + depth); the other panel has none: ' + JSON.stringify({p1:p1.length, cn:p1[0] && cn(p1[0]), area})); }
       ok(pr.length===10 && pr.every(t => /green eyes/.test(t) && !/@/.test(t)) && pr.filter(t => /white background/.test(t)).length===5, 'stills get her look from the library (no @ in the prompt); only the Character only panel is on white'); }
+    await page.evaluate(() => { CM().sel = 0; drawComic(); });
+    ok(await page.$('#comic .cmed [data-cmrig="0"]') && await page.$('#comic [data-cm="clearstills"]'), 'a panel with stills has 🦴 Its pose rig and 🗑 Clear its stills');
+    await page.click('#comic [data-cm="clearstills"]'); await page.waitForTimeout(200);
+    ok(await page.evaluate(() => !(cmPage().panels[0].stills || []).length && !!document.querySelector('#cmPage [data-cpi="0"] .cpempty')), '🗑 Clear its stills empties the panel on the page again (after asking)');
     // 🎬 or MiniMax: her picture (the library preview) inside the rig's outline through MiniMax H3's Fun ControlNet, 9 frames, the middle kept
     if(process.env.RIG_DEPS){ const nb = ALL.length; await page.evaluate(() => { const q = cmPage().panels[0]; q.rigBy = 'mm'; q.stills = []; drawComic(); });
       ok(/MiniMax \+ pictures/.test(await page.textContent('#comic [data-cmrigby="mm"].on').catch(() => '')) || await page.evaluate(() => { CM().sel = 0; drawComic(); return !!document.querySelector('#comic [data-cmrigby="mm"].on'); }), 'a posed panel offers Pose by: 🎬 MiniMax + pictures (picked) or 🖼 Illustrious + ProMax');

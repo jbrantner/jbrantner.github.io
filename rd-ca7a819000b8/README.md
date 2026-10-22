@@ -56,3 +56,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 **v.126 (2026-10-22)**: 🦴 a panel's posed rig now steers its stills: ✓ Done keeps the rig's OpenPose and depth guides (on the phone, beside the comic) and where she stands in the frame; 🖼 Paint the still sends them through ProMax (OpenPose 0.85 to 70%, depth 0.45 to 50%) and paints the character only where the rig stands.
 
 **v.127 (2026-10-22)**: 🎬 a posed panel's stills can be drawn by MiniMax H3 (Pose by: 🎬 MiniMax + pictures, the default; or 🖼 Illustrious + ProMax): the characters' pictures (card, else the library preview) as references, the rig's Outline guide as a 9-frame still control video through the Fun ControlNet (as canny, strength 1, full model 20 steps), the middle frame saved as the still. Only on a computer with the Fun ControlNet (Render).
+
+**v.128 (2026-10-22)**: the panel editor has 🦴 Its pose rig (opens the rig even when the panel shows a still) and 🗑 Clear its stills (asks first; they stay in the Library).
