@@ -430,6 +430,11 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         '🎬 MiniMax draws her from her preview inside the rig\'s outline (9 frames, the middle kept), wired right: ' + JSON.stringify({n:rv.length, gs:gs.length, len:rv.map(n => n.inputs.length), ib:gs.map(g => (Object.values(g).find(n => n.class_type==='ImageFromBatch') || {inputs:{}}).inputs.batch_index), lv:gs.map(g => (Object.values(g).find(n => n.class_type==='LoadVideo') || {inputs:{}}).inputs.file)}) + ' ' + errs.slice(0, 3).join('; ')); }
     // 🎬 Director mode: the still is the first frame, her preview the reference; Action + Camera from the tested pieces
     { await page.evaluate(() => { CM().sel = 0; const q = cmPage().panels[0]; if(!(q.stills || []).length) q.stills = [{url:'https://jordo-desktop.test/view?filename=s.png', w:832, h:1280}]; q.show = 'still'; CM().open.dir = true; drawComic(); });
+      const sw = await page.evaluate(() => [...document.querySelectorAll('#comic .cmdchips')].map(r => { const o = getComputedStyle(r).overflowX, w = r.scrollWidth > r.clientWidth; r.scrollLeft = 60; return {o, w, sl:r.scrollLeft}; }));
+      ok(sw.length===2 && sw.every(r => r.o==='auto' && (!r.w || r.sl > 0)), '🎬 the Action and Camera chip rows swipe sideways: ' + JSON.stringify(sw));
+      await page.click('#comic [data-cmdcam="static"]');
+      const nc = await page.evaluate(() => cmDirPrompt(CM(), cmPage().panels[0], []));
+      ok(!/camera/i.test(nc) && /first frame/.test(nc) && /No camera change/.test(await page.textContent('#comic [data-cmfold="dir"]')), '🎬 No camera change leaves the camera out of the prompt: ' + nc.slice(0, 160));
       await page.click('#comic [data-cmdact="walk"]'); await page.click('#comic [data-cmdcam="high"]');
       ok(/Walking · High angle/.test(await page.textContent('#comic [data-cmfold="dir"]')), '🎬 Director mode shows the picked action and camera');
       const nb = ALL.length, t0 = await page.evaluate(() => cmPage().panels[0].takes.length); await page.click('#comic [data-cm="direct"]');
