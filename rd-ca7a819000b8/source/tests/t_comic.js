@@ -242,6 +242,11 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#cmPage [data-cpi="2"]');
   ok(!(await page.$('#comic [data-cm="scene"]')), 'the 3D scene builder is gone (Jordan found it clumsy)');
   await page.evaluate(() => { CM().white = true; drawComic(); });
+  // older saved 3D states (v.114 rings, v.112 slider) must not blank the tab (Jordan 2026-10-22)
+  for(const old of [{rings:{high:{crane:{id:'a', url:'https://x/a.mp4'}, ring:{id:'b'}}, low:{crane:{id:'c'}}}}, {i:0}, {tilts:[{at:0.2, up:{id:'u'}}]}, {moves:[null]}]){
+    await page.evaluate(o => { const p = cmPage().panels[2], st = cmStill(p); p.d3 = {id:p.id + '_3d', url:st.url, amt:1, t3d:o, orbs:{circle:{id:'z', url:'https://x/z.mp4'}}}; drawComic(); }, old);
+    ok(await page.$('#cmPage [data-cpi="2"]') && !(await page.textContent('#cmBody')).includes("couldn't draw"), 'an old 3D state still draws the page: ' + JSON.stringify(old).slice(0, 60)); }
+  await page.evaluate(() => { delete cmPage().panels[2].d3; drawComic(); });
   // 🧊 Turn into 3D object (Jordan 2026-10-22, set and forget): eye-level circle + crane up + crane down from the still, then a
   // high and a low circle from each crane's furthest frame; camera moves from any angle; up/down snaps between the circles
   await page.evaluate(() => { const o = d3Frames; window.d3Frames = (u, all) => o(/^https?:/.test(u) ? 'test' : u, all); }); // the fake clips can't be decoded

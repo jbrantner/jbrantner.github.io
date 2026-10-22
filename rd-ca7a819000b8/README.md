@@ -38,3 +38,5 @@
 - **High and low:** a crane up and a crane down from each eye-level keyframe, using the furthest frame of each crane.
 
 Each height then becomes four quarter turns made with MiniMax FL2V, each one starting and ending on neighbouring keyframes. That way all three heights reach front, side and back at the same moment. There are 21 jobs in all, alternating between both PCs. One step function moves the run forward whenever a job lands and whenever the app opens, so it carries on after the app is closed. Drag sideways to turn, and up or down (or the Height buttons) to snap heights; drag down looks from higher up. Camera moves and ✨ Use this angle work as before.
+
+**v.119 (2026-10-22)**: Fixed the blank Comic tab. An older saved 3D state (the v.114 rings) crashed the 3D panel, and that blanked the whole tab. Old states are now handled. If any part of the comic page fails to draw, it shows a message instead of a blank tab, and if the 3D panel itself fails, it offers to start the 3D object again.
