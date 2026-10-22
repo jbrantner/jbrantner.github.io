@@ -144,6 +144,40 @@ const DEPS = process.env.RIG_DEPS || '';
     && G[9].inputs.positive[0]==='9pose' && G[9].inputs.image[0]==='6depth' && G[11].inputs.positive[0]==='9' && G[2].inputs.lora_name.startsWith('AFKJ') && G[3].inputs.lora_name.startsWith('librarianx')
     && G[11].inputs.model[0]==='3' && /^librarianx, 1girl, solo/.test(G[4].inputs.text) && G[10].inputs.width===832, 'the render graph: ' + types.join(', '));
   ok(await page.evaluate(() => !document.querySelector('#testOut').hidden), 'the finished render shows on the page');
+  // pose from an orbit: a pose seen from 16 views by a pretend reader (uneven turns, a tilted camera, wobbling size and
+  // position, noise, a missing point per view, left and right mixed up whenever she faces away) is rebuilt in 3D
+  for(const [pre, turn] of [['point', 1], ['fight', 0.9], ['run', 1.1], ['sit', 1]]){
+    const orb = await page.evaluate(([pre, turn]) => { const R = window.RIG, T = R.THREE || null; document.querySelector(`[data-preset="${pre}"]`).click();
+      const w = n => R.wpos(R.bones[n]), hp = (x, y, z) => R.bones.head.localToWorld(new (R.wpos(R.bones.head).constructor)(x * R.REST().h, y * R.REST().h, z * R.REST().h));
+      const J = {lsh:w('armL'), rsh:w('armR'), lel:w('foreL'), rel:w('foreR'), lwr:w('handL'), rwr:w('handR'), lhip:w('thighL'), rhip:w('thighR'), lkn:w('shinL'), rkn:w('shinR'), lank:w('footL'), rank:w('footR'),
+        ltoe:w('toeL'), rtoe:w('toeR'), nose:hp(0, 0.33, 0.5), lear:hp(0.4, 0.4, 0), rear:hp(-0.4, 0.4, 0)};
+      const truth = {}; for(const [k, L] of [['armL', ['lsh', 'lel', 'lwr']], ['armR', ['rsh', 'rel', 'rwr']], ['legL', ['lhip', 'lkn', 'lank']], ['legR', ['rhip', 'rkn', 'rank']]]) truth[k] = L.map(n => J[n].clone());
+      let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5, yaw = 0.7, e = 0.2, views = [];
+      for(let k = 0; k < 16; k++){ const a = k / 16 * Math.PI * 2, th = a * turn + yaw + rnd() * 0.25, s = 300 * (1 + rnd() * 0.15), tx = 400 + rnd() * 60, ty = 500 + rnd() * 60, pts = {};
+        for(const [n, X] of Object.entries(J)){ const q = R.orbProj(X, {th, e, s, tx, ty}); pts[n] = [q[0] + rnd() * 6, q[1] + rnd() * 6, 1]; }
+        delete pts[Object.keys(pts)[k % 17]];
+        if(Math.cos(th) < -0.2 && pts.lsh && pts.rsh && pts.lhip && pts.rhip){ const sw = {}; for(const [n, v] of Object.entries(pts)) sw[n[0]==='l' ? 'r' + n.slice(1) : n[0]==='r' ? 'l' + n.slice(1) : n] = v; Object.keys(pts).forEach(n => delete pts[n]); Object.assign(pts, sw); }
+        views.push({pts, a}); }
+      R.applyPreset('apose');
+      const t0 = performance.now(), res = R.solveOrbit(views), ms = Math.round(performance.now() - t0); R.fitPoints(res);
+      // compare each limb's bend and direction in her own hips' frame
+      const qp = R.bones.pelvis.getWorldQuaternion(R.bones.pelvis.quaternion.clone()).invert(), angs = [];
+      const L2 = {armL:['armL', 'foreL', 'handL'], armR:['armR', 'foreR', 'handR'], legL:['thighL', 'shinL', 'footL'], legR:['thighR', 'shinR', 'footR']};
+      // the truth's hips frame: from its own hips and shoulders
+      const tq = (() => { const x = J.lhip.clone().sub(J.rhip).normalize(), y = J.lsh.clone().add(J.rsh).sub(J.lhip).sub(J.rhip).normalize(), xx = x.clone().sub(y.clone().multiplyScalar(x.dot(y))).normalize(), z = xx.clone().cross(y);
+        const m = new (R.bones.pelvis.matrixWorld.constructor)().makeBasis(xx, y, z); return R.bones.pelvis.quaternion.clone().setFromRotationMatrix(m).invert(); })();
+      const gq = (() => { const x = w('thighL').sub(w('thighR')).normalize(), y = w('armL').add(w('armR')).sub(w('thighL')).sub(w('thighR')).normalize(), xx = x.clone().sub(y.clone().multiplyScalar(x.dot(y))).normalize(), z = xx.clone().cross(y);
+        const m = new (R.bones.pelvis.matrixWorld.constructor)().makeBasis(xx, y, z); return R.bones.pelvis.quaternion.clone().setFromRotationMatrix(m).invert(); })();
+      for(const [k, bs] of Object.entries(L2)){ const g = bs.map(w), t = truth[k];
+        for(let i = 0; i < 2; i++){ const a = g[i + 1].clone().sub(g[i]).normalize().applyQuaternion(gq), b = t[i + 1].clone().sub(t[i]).normalize().applyQuaternion(tq); angs.push(Math.acos(Math.max(-1, Math.min(1, a.dot(b)))) * 180 / Math.PI); } }
+      void qp; void T;
+      return {ms, worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((x, y) => x + y) / angs.length), flips:res.flips, used:res.used.length, err:+res.err.toFixed(3)}; }, [pre, turn]);
+    ok(orb.worst < 20 && orb.mean < 9, `pose from an orbit rebuilds "${pre}" from 16 messy views (turning ${Math.round(turn * 360)}°): ` + JSON.stringify(orb));
+  }
+  // my poses keep their shape through a save and load
+  const my = await page.evaluate(() => { const R = window.RIG; document.querySelector('[data-preset="kneel"]').click(); const a = R.packPose(), before = ['handL', 'footR', 'shinL'].map(n => R.wpos(R.bones[n]));
+    document.querySelector('[data-preset="tpose"]').click(); R.unpackPose(JSON.parse(JSON.stringify(a))); return Math.max(...['handL', 'footR', 'shinL'].map((n, i) => R.wpos(R.bones[n]).distanceTo(before[i]))); });
+  ok(my < 0.03, 'a saved pose comes back the same: ' + my.toFixed(3) + ' m');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

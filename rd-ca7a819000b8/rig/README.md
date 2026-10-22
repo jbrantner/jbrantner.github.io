@@ -19,6 +19,11 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 - Pose from a picture: MediaPipe Pose Landmarker on the phone (3D), or DWPose on a PC (comfyui_controlnet_aux's
   DWPreprocessor + SavePoseKpsAsJsonFile, lifted to 3D with the rig's bone lengths). The camera is fitted so the rig
   lines up with the picture.
+- Pose from an orbit: a turnaround video of one held pose (or pictures from all round, in order) is cut into 12/16/24
+  views, each read (MediaPipe or DWPose), then combined into one 3D pose: per view turn (searched near its even step,
+  with the whole turn allowed to run 25% short or long), size and shift, one shared camera tilt, left/right mix-ups
+  tried both ways, outlier points dropped; which side is her left is settled from the nose. `tests/t_orbit.js [preset]`
+  films the rig turning (pictures and a webm) and reads it back. My poses (Pose tab) saves poses as directions.
 - Guides of what's inside the dashed frame: OpenPose (18 points, OpenPose colours), Depth (from the body, near =
   white) and Outline (white lines on black). Save, send to a PC's input folder, or try a render (Illustrious + LoRAs +
   ProMax with each guide switched on as its union type, saved under RenderDeck/rig).

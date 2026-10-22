@@ -76,6 +76,9 @@ header h1{font:700 20px/1 var(--display);margin:0;letter-spacing:.3px;white-spac
 .gblock .row>label{width:74px}
 .guidebox canvas,.guidebox img{width:132px;border-radius:10px;border:1px solid var(--line);background:#000}
 #testOut{width:100%;max-width:420px;border-radius:10px;border:1px solid var(--line);margin-top:8px}
+.orbgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
+.orbgrid canvas{width:100%;border-radius:8px;border:1px solid var(--line);background:#000;display:block}
+.orbgrid canvas.flip{border-color:var(--gold)} .orbgrid canvas.miss{opacity:.35}
 .status{font-size:13px;font-weight:700;color:var(--soft);margin:6px 0}
 .status.bad{color:var(--bad)} .status.good{color:var(--good)}
 .key{display:inline-block;width:9px;height:9px;border-radius:3px;margin:0 3px 0 1px;vertical-align:0}
@@ -108,6 +111,8 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
       <div id="selTools"></div>
       <h3>Starting poses</h3>
       <div class="chips" id="presets"></div>
+      <h3>My poses</h3>
+      <div class="chips" id="myPoses"></div>
       <div id="motionBox"><h3>Skirt motion</h3>
         <div class="chips" id="motionChips"></div>
         <div class="row"><label>Strength</label><div class="slider"><input type="range" id="mStr" min="0" max="1.6" step="0.05"><output></output></div></div>
@@ -155,6 +160,15 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
       <div class="status" id="picStatus"></div>
       <div class="row"><label>Show it</label><div class="slider"><input type="range" id="picOpacity" min="0" max="1" step="0.05" value="0.45"><output>45%</output></div></div>
       <p class="note">On this phone needs no PC and guesses depth too; DWPose is better at anime drawings but only sees flat, so check arms and legs from the side afterwards.</p>
+      <h3>Pose from an orbit</h3>
+      <p class="note">A turnaround video of one held pose (a MiniMax orbit), or pictures of it from all round in order. Every view is read, then they are combined into one 3D pose, so depth is measured instead of guessed. Uses the reader picked above.</p>
+      <div class="chips"><label class="chipbtn" style="display:inline-flex;align-items:center">🎞 Choose a video or pictures<input type="file" id="orbFile" accept="video/*,image/*" multiple hidden></label></div>
+      <div class="row"><label>Views</label><div class="grow"><select id="orbN"><option value="12">12</option><option value="16" selected>16</option><option value="24">24</option></select></div></div>
+      <div class="row"><label>It turns</label><div class="grow"><select id="orbSpan"><option value="360">A full circle</option><option value="180">Half a circle</option></select></div></div>
+      <div class="chips"><button class="chipbtn hot" id="orbGo" disabled>🧭 Combine into one pose</button><button class="chipbtn" id="orbSave" hidden>＋ Save to My poses</button></div>
+      <div class="status" id="orbStatus"></div>
+      <div class="orbgrid" id="orbGrid"></div>
+      <p class="note">Each little picture is one view: pink dots are what the reader saw, green lines are the combined pose seen from that view. A gold edge means the reader mixed up her left and right there (fixed); a faded one was left out.</p>
     </section>
     <section class="pane" data-pane="guide" hidden>
       <h3>Guides</h3>
@@ -1162,13 +1176,16 @@ async function runGraph(srv, prompt, onTick){
 // on the picture, which place the camera so the rig lines up with the picture.
 const MPI = {nose:0, lear:7, rear:8, lsh:11, rsh:12, lel:13, rel:14, lwr:15, rwr:16, lpinky:17, rpinky:18, lidx:19, ridx:20, lhip:23, rhip:24, lkn:25, rkn:26, lank:27, rank:28, lheel:29, rheel:30, ltoe:31, rtoe:32};
 let mpLandmarker = null;
-async function readOnPhone(img){
-  const st = $('#picStatus');
+async function getLandmarker(st){
   if(!mpLandmarker){ st.textContent = 'Loading the pose reader (about 9 MB, once)…';
     const mp = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
     const fs = await mp.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
     const opts = d => ({baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task', delegate:d}, runningMode:'IMAGE', numPoses:1});
     try{ mpLandmarker = await mp.PoseLandmarker.createFromOptions(fs, opts('GPU')); }catch(e){ mpLandmarker = await mp.PoseLandmarker.createFromOptions(fs, opts('CPU')); } }
+  return mpLandmarker;
+}
+async function readOnPhone(img){
+  const st = $('#picStatus'); await getLandmarker(st);
   st.textContent = 'Reading the pose…';
   const res = mpLandmarker.detect(img); if(!res.worldLandmarks || !res.worldLandmarks.length) throw new Error('No person found in the picture. A clear full-body pose works best.');
   const w = res.worldLandmarks[0], l = res.landmarks[0], pts = {}, img2 = {}, W = img.naturalWidth, Hh = img.naturalHeight;
@@ -1176,16 +1193,21 @@ async function readOnPhone(img){
   return {pts, img2, W, H:Hh, hands:true};
 }
 async function readOnPc(img, file){
-  const st = $('#picStatus'), srv = pcUrl($('#picPc').value); if(!srv) throw new Error('Pick a PC');
+  const {flat, cw, ch} = await dwposeFlat(img.naturalWidth, img.naturalHeight, file, $('#picStatus'));
+  return lift2D(flat, cw, ch, img.naturalWidth, img.naturalHeight);
+}
+// DWPose on a PC: the 18 body points of one picture, flat
+async function dwposeFlat(W, Hh, file, st){
+  const srv = pcUrl($('#picPc').value); if(!srv) throw new Error('Pick a PC');
   st.textContent = 'Asking ' + pcLabel(srv) + ' for DWPose…';
   const dw = await nodeInfo(srv, 'DWPreprocessor').catch(() => null), sv = await nodeInfo(srv, 'SavePoseKpsAsJsonFile').catch(() => null);
   if(!dw || !sv) throw new Error(pcLabel(srv) + " doesn't have DWPose (comfyui_controlnet_aux). Use On this phone, or add the controlnet_aux nodes to that ComfyUI.");
   const inputs = {image:['1', 0]}, req = dw.input.required || {};
   for(const [k, spec] of Object.entries(req)){ if(k==='image') continue; const [t, o] = spec;
-    inputs[k] = k==='detect_body' ? 'enable' : /detect_(hand|face)/.test(k) ? 'disable' : k==='resolution' ? clamp(Math.round(Math.max(img.naturalWidth, img.naturalHeight) / 64) * 64, 512, 1024)
+    inputs[k] = k==='detect_body' ? 'enable' : /detect_(hand|face)/.test(k) ? 'disable' : k==='resolution' ? clamp(Math.round(Math.max(W, Hh) / 64) * 64, 512, 1024)
       : Array.isArray(t) ? ((o && o.default) ?? t[0]) : (o && o.default); }
   for(const [k, spec] of Object.entries(dw.input.optional || {})){ const [t, o] = spec;
-    inputs[k] = k==='resolution' ? clamp(Math.round(Math.max(img.naturalWidth, img.naturalHeight) / 64) * 64, 512, 1024) : /detect_(hand|face)/.test(k) ? 'disable' : k==='detect_body' ? 'enable' : Array.isArray(t) ? ((o && o.default) ?? t[0]) : (o && o.default);
+    inputs[k] = k==='resolution' ? clamp(Math.round(Math.max(W, Hh) / 64) * 64, 512, 1024) : /detect_(hand|face)/.test(k) ? 'disable' : k==='detect_body' ? 'enable' : Array.isArray(t) ? ((o && o.default) ?? t[0]) : (o && o.default);
     if(inputs[k]===undefined) delete inputs[k]; }
   const name = await upload(srv, file, 'rd-rig-src-' + Date.now().toString(36) + '.png');
   st.textContent = 'DWPose is reading it on ' + pcLabel(srv) + '…';
@@ -1195,7 +1217,7 @@ async function readOnPc(img, file){
   if(!raw) throw new Error("DWPose ran but sent nothing back. That PC's controlnet_aux may be old.");
   const kp = (typeof raw==='string' ? JSON.parse(raw) : raw), frame = Array.isArray(kp) ? kp[0] : kp, person = frame && frame.people && frame.people[0];
   if(!person) throw new Error('DWPose found no person in the picture.');
-  return lift2D(person.pose_keypoints_2d, frame.canvas_width || img.naturalWidth, frame.canvas_height || img.naturalHeight, img.naturalWidth, img.naturalHeight);
+  return {flat:person.pose_keypoints_2d, cw:frame.canvas_width || W, ch:frame.canvas_height || Hh};
 }
 // DWPose sees only flat points: stand them up into 3D using the rig's own bone lengths (each bone's depth is what's
 // left of its length after its length on the picture), guessing arms and thighs come forward and torso turns from
@@ -1251,7 +1273,7 @@ function fitPoints(R){
   // stand her in the middle of the floor, then put the camera where the picture's was
   const pc = wpos(bones.pelvis); P.root.p = va(av(P.root.p).sub(V(pc.x, 0, pc.z))); for(const k of ['legL', 'legR']){ const w = limbWorld(k); setLimbWorld(k, {t:w.t.sub(V(pc.x, 0, pc.z)), p:w.p.sub(V(pc.x, 0, pc.z))}); }
   solve(); groundIt();
-  fitCamera(R);
+  if(R.img2) fitCamera(R);
 }
 // the camera that lines the rig up with the picture: a straight-on camera, its distance and aim solved so the rig's
 // joints land on the picture's (a least-squares fit of scale and shift)
@@ -1285,6 +1307,172 @@ $('#picGo').onclick = async () => { const st = $('#picStatus'), b = $('#picGo');
   catch(err){ st.className = 'status bad'; st.textContent = err.message; console.error(err); }
   b.disabled = false; };
 $('#picOpacity').oninput = e => { $('#photo').style.opacity = e.target.value; e.target.nextElementSibling.textContent = Math.round(e.target.value * 100) + '%'; };
+
+// ---------- pose from an orbit ----------
+// A turnaround of one held pose: read the flat points in every view, then find the one 3D pose (and each view's exact
+// turn, size and shift, plus the camera's height angle) that lines up with all of them at once. The orbit is never a
+// perfect turntable, so each view's turn is searched near its even step; readers often mix up left and right when
+// she faces away, so each view is also tried swapped; points that disagree with the rest are dropped.
+const OJ = ['nose', 'lear', 'rear', 'lsh', 'rsh', 'lel', 'rel', 'lwr', 'rwr', 'lhip', 'rhip', 'lkn', 'rkn', 'lank', 'rank', 'lidx', 'ridx', 'lpinky', 'rpinky', 'lheel', 'rheel', 'ltoe', 'rtoe'];
+const swapName = n => n[0]==='l' ? 'r' + n.slice(1) : n[0]==='r' ? 'l' + n.slice(1) : n;
+function orbProj(X, c){ const ct = Math.cos(c.th), st = Math.sin(c.th), ce = Math.cos(c.e), se = Math.sin(c.e);
+  return [c.s * (ct * X.x - st * X.z) + c.tx, c.s * (se * st * X.x - ce * X.y + se * ct * X.z) + c.ty]; }
+function orbTriangulate(F, cams){
+  const X = {};
+  for(const n of OJ){ const A = new Float64Array(9), b = new Float64Array(3); let views = 0;
+    F.forEach((f, i) => { const c = cams[i], o = f.o[c.swap ? swapName(n) : n], w = o ? o[2] * (c.w[n] ?? 1) : 0; if(!(w > 0)) return; views++;
+      const ct = Math.cos(c.th), st = Math.sin(c.th), ce = Math.cos(c.e), se = Math.sin(c.e);
+      for(const [a, r] of [[[c.s * ct, 0, -c.s * st], o[0] - c.tx], [[c.s * se * st, -c.s * ce, c.s * se * ct], o[1] - c.ty]])
+        for(let p = 0; p < 3; p++){ b[p] += w * a[p] * r; for(let q = 0; q < 3; q++) A[p * 3 + q] += w * a[p] * a[q]; } });
+    if(views < 2) continue; for(let p = 0; p < 3; p++) A[p * 4] += 1e-4;
+    const M = new THREE.Matrix3().set(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8]); if(Math.abs(M.determinant()) < 1e-9) continue;
+    X[n] = V(b[0], b[1], b[2]).applyMatrix3(M.invert()); }
+  return X;
+}
+// one view: the best size and shift for a given turn, and how far off it is
+function orbFit(X, f, c, th, swap){
+  const pr = [], ob = []; let W = 0, mu = 0, mv = 0, pu = 0, pv = 0;
+  for(const n of OJ){ const x = X[n], o = f.o[swap ? swapName(n) : n]; if(!x || !o) continue; const w = o[2] * (c.w[n] ?? 1); if(!(w > 0)) continue;
+    const q = orbProj(x, {th, e:c.e, s:1, tx:0, ty:0}); pr.push([q[0], q[1], w, n]); ob.push(o); W += w; mu += w * o[0]; mv += w * o[1]; pu += w * q[0]; pv += w * q[1]; }
+  if(W <= 0 || pr.length < 4) return null; mu /= W; mv /= W; pu /= W; pv /= W;
+  let num = 0, den = 0; pr.forEach((q, i) => { num += q[2] * ((q[0] - pu) * (ob[i][0] - mu) + (q[1] - pv) * (ob[i][1] - mv)); den += q[2] * ((q[0] - pu) ** 2 + (q[1] - pv) ** 2); });
+  const s = num / (den || 1); if(!(s > 0)) return null; const tx = mu - s * pu, ty = mv - s * pv;
+  let e = 0; pr.forEach((q, i) => { e += q[2] * ((s * q[0] + tx - ob[i][0]) ** 2 + (s * q[1] + ty - ob[i][1]) ** 2); });
+  return {th, swap, s, tx, ty, err:e / W};
+}
+function orbTotal(X, F, cams){ let e = 0, n = 0; F.forEach((f, i) => { const r = orbFit(X, f, cams[i], cams[i].th, cams[i].swap); if(r){ e += r.err; n++; } }); return n ? e / n : 1e9; }
+function orbRun(F, dir, facing){
+  // first guess: even steps, and swapped wherever the shoulders sit the wrong way round for which side of her we see
+  const cams = F.map(f => { const th = dir * f.a, front = Math.cos(th) * facing, sx = f.o.lsh[0] - f.o.rsh[0];
+    return {th, th0:th, e:0, s:1, tx:0, ty:0, swap:Math.abs(Math.cos(th)) > 0.4 && sx * front < 0, w:{}}; });
+  let X = {};
+  for(let it = 0; it < 14; it++){
+    X = orbTriangulate(F, cams);
+    const win = it < 4 ? 24 : it < 9 ? 8 : 3, step = it < 4 ? 2 : it < 9 ? 1 : 0.25;
+    F.forEach((f, i) => { const c = cams[i]; let best = null;
+      for(const swap of [false, true]) for(let d = -win; d <= win; d += step){ const th = c.th + d * D2R; if(Math.abs(th - c.th0) > 30 * D2R) continue;
+        const r = orbFit(X, f, c, th, swap); if(r && (!best || r.err < best.err)) best = r; }
+      if(best) Object.assign(c, {th:best.th, swap:best.swap, s:best.s, tx:best.tx, ty:best.ty}); });
+    // the orbit may turn a bit more or less than it says: fit the found turns to a straight line through the even steps
+    // and move each view's search window along with it
+    if(it >= 2){ let n = 0, sa = 0, st = 0, saa = 0, sat = 0; F.forEach((f, i) => { const a = dir * f.a, t = cams[i].th; n++; sa += a; st += t; saa += a * a; sat += a * t; });
+      const sl = clamp((sat - sa * st / n) / ((saa - sa * sa / n) || 1), 0.75, 1.25), c0 = (st - sl * sa) / n; F.forEach((f, i) => { cams[i].th0 = c0 + sl * dir * f.a; }); }
+    // the camera's height angle, shared by every view
+    { const c0 = cams.map(c => c.e); let be = c0[0], bt = orbTotal(X, F, cams);
+      for(let e = -40; e <= 40; e += it < 4 ? 4 : 1){ cams.forEach(c => { c.e = e * D2R; }); const t = orbTotal(X, F, cams); if(t < bt){ bt = t; be = e * D2R; } }
+      cams.forEach(c => { c.e = be; }); }
+    // drop points that disagree with everything else (a hidden hand guessed by the reader)
+    if(it >= 3){ const res = []; F.forEach((f, i) => { const c = cams[i]; for(const n of OJ){ const o = f.o[c.swap ? swapName(n) : n]; if(!o || !X[n]) continue; const q = orbProj(X[n], c); res.push([i, n, Math.hypot(q[0] - o[0], q[1] - o[1])]); } });
+      const med = res.map(r => r[2]).sort((a, b) => a - b)[res.length >> 1] || 0.05; cams.forEach(c => { c.w = {}; });
+      for(const [i, n, r] of res) if(r > Math.max(3 * med, 0.12)) cams[i].w[n] = 0; }
+  }
+  X = orbTriangulate(F, cams);
+  return {X, cams, err:orbTotal(X, F, cams)};
+}
+function solveOrbit(frames){
+  // each view on the same footing: the hips' middle at 0, and shoulders-to-hips height 1 (it barely changes as she turns)
+  const F = frames.map((f, k) => { const p = f && f.pts; if(!p || !p.lsh || !p.rsh || !p.lhip || !p.rhip) return null;
+    const hx = (p.lhip[0] + p.rhip[0]) / 2, hy = (p.lhip[1] + p.rhip[1]) / 2, sc = Math.abs(hy - (p.lsh[1] + p.rsh[1]) / 2) || 1, o = {};
+    for(const n of OJ) if(p[n]) o[n] = [(p[n][0] - hx) / sc, (p[n][1] - hy) / sc, p[n][2] ?? 1];
+    return {k, a:f.a, o, hx, hy, sc}; }).filter(Boolean);
+  if(F.length < 4) throw new Error('Only ' + F.length + ' views showed her shoulders and hips clearly; at least 4 are needed.');
+  let best = null;
+  for(const dir of [1, -1]) for(const facing of [1, -1]){ const r = orbRun(F, dir, facing); if(!best || r.err < best.err) best = r; }
+  const {X, cams} = best;
+  if(!X.lsh || !X.rsh || !X.lhip || !X.rhip) throw new Error("The views didn't agree on where her shoulders and hips are.");
+  // which side is her left: left = up × forward (forward from the nose, else from the feet). A whole-pose mix-up of
+  // left and right fits the views equally well, so this settles it.
+  const mid = (a, b) => X[a].clone().add(X[b]).multiplyScalar(0.5), up = mid('lsh', 'rsh').sub(mid('lhip', 'rhip')).normalize();
+  let fwd = null; if(X.nose) fwd = X.nose.clone().sub(X.lear && X.rear ? mid('lear', 'rear') : mid('lsh', 'rsh'));
+  if((!fwd || fwd.lengthSq() < 1e-6) && X.ltoe && X.lheel) fwd = X.ltoe.clone().sub(X.lheel);
+  if(fwd && X.lsh.clone().sub(X.rsh).dot(up.clone().cross(fwd)) < 0){ const Y = {}; for(const n of Object.keys(X)) Y[swapName(n)] = X[n]; for(const n of Object.keys(X)) delete X[n]; Object.assign(X, Y); cams.forEach(c => { c.swap = !c.swap; }); }
+  const used = F.map((f, i) => ({k:f.k, cam:cams[i], f}));
+  return {pts:X, used, err:Math.sqrt(best.err), flips:cams.filter(c => c.swap).length};
+}
+// the views: frames of a video at even steps through it, or the pictures in name order
+async function orbFrames(files, n, span){
+  const out = [], full = span >= 359;
+  if(files.length===1 && files[0].type.startsWith('video')){
+    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(files[0]);
+    await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = () => bad(new Error("This phone can't open that video. Try an .mp4.")); v.load(); });
+    const D = v.duration; if(!(D > 0)) throw new Error("Couldn't read the video's length.");
+    for(let k = 0; k < n; k++){ const t = Math.min(D - 0.04, full ? k * D / n : k * D / (n - 1)) + 0.001;
+      await new Promise(ok => { v.onseeked = ok; v.currentTime = t; });
+      const c = document.createElement('canvas'), sc = Math.min(1, 1024 / Math.max(v.videoWidth, v.videoHeight)); c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); out.push({c, a:(full ? k / n : k / (n - 1)) * span * D2R}); }
+    URL.revokeObjectURL(v.src);
+  } else {
+    const fs = [...files].filter(f => f.type.startsWith('image')).sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric:true})), m = fs.length;
+    if(m < 4) throw new Error('Pick a video, or at least 4 pictures.');
+    for(let k = 0; k < m; k++){ const im = new Image(); im.src = URL.createObjectURL(fs[k]); await im.decode();
+      const c = document.createElement('canvas'), sc = Math.min(1, 1024 / Math.max(im.naturalWidth, im.naturalHeight)); c.width = Math.round(im.naturalWidth * sc); c.height = Math.round(im.naturalHeight * sc);
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(im.src); out.push({c, a:(full ? k / m : k / (m - 1)) * span * D2R}); }
+  }
+  return out;
+}
+const OP18 = ['nose', 'neck', 'rsh', 'rel', 'rwr', 'lsh', 'lel', 'lwr', 'rhip', 'rkn', 'rank', 'lhip', 'lkn', 'lank', 'reye', 'leye', 'rear', 'lear'];
+async function readView(c, how, st, label){
+  if(how==='dwpose'){ const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    const {flat, cw, ch} = await dwposeFlat(c.width, c.height, blob, {set textContent(t){ st.textContent = label + ': ' + t; }});
+    const norm = flat.some((v, i) => i % 3 < 2 && v > 1.5) ? 1 : 0, pts = {};
+    for(let i = 0; i < 18; i++){ const x = flat[i * 3], y = flat[i * 3 + 1], cf = flat[i * 3 + 2]; if(!(cf > 0.2) || (x <= 0 && y <= 0)) continue;
+      pts[OP18[i]] = [norm ? x * c.width / cw : x * c.width, norm ? y * c.height / ch : y * c.height, Math.min(1, cf)]; }
+    return pts; }
+  const lm = await getLandmarker(st); st.textContent = label; const res = lm.detect(c); if(!res.landmarks || !res.landmarks.length) return null;
+  const l = res.landmarks[0], pts = {};
+  for(const [k, i] of Object.entries(MPI)){ const v = l[i].visibility ?? 1; if(v < 0.3 && !/sh|hip/.test(k)) continue; pts[k] = [l[i].x * c.width, l[i].y * c.height, clamp(v, 0.2, 1)]; }
+  return pts;
+}
+function drawOrbit(views, R){
+  const g = $('#orbGrid'); g.innerHTML = '';
+  views.forEach((vw, k) => { const c = document.createElement('canvas'), w = 160, h = Math.round(w * vw.c.height / vw.c.width), x = c.getContext('2d'), sc = w / vw.c.width; c.width = w; c.height = h;
+    x.drawImage(vw.c, 0, 0, w, h); x.fillStyle = 'rgba(0,0,0,0.25)'; x.fillRect(0, 0, w, h);
+    const u = R && R.used.find(u => u.k===k);
+    if(vw.pts) for(const p of Object.values(vw.pts)){ x.fillStyle = '#ff5ca8'; x.beginPath(); x.arc(p[0] * sc, p[1] * sc, 2.2, 0, 7); x.fill(); }
+    if(u){ const q = n => { const p = orbProj(R.pts[n], u.cam); return [(p[0] * u.f.sc + u.f.hx) * sc, (p[1] * u.f.sc + u.f.hy) * sc]; };
+      x.strokeStyle = '#5cffb0'; x.lineWidth = 1.6;
+      for(const [a, b] of [['lsh', 'rsh'], ['lhip', 'rhip'], ['lsh', 'lhip'], ['rsh', 'rhip'], ['lsh', 'lel'], ['lel', 'lwr'], ['rsh', 'rel'], ['rel', 'rwr'], ['lhip', 'lkn'], ['lkn', 'lank'], ['rhip', 'rkn'], ['rkn', 'rank']])
+        if(R.pts[a] && R.pts[b]){ const A = q(a), B = q(b); x.beginPath(); x.moveTo(A[0], A[1]); x.lineTo(B[0], B[1]); x.stroke(); }
+      if(u.cam.swap) c.classList.add('flip'); }
+    else if(R) c.classList.add('miss');
+    g.appendChild(c); });
+}
+let orbFiles = null, orbLast = null;
+$('#orbFile').onchange = e => { orbFiles = e.target.files; $('#orbGo').disabled = !orbFiles || !orbFiles.length; $('#orbStatus').className = 'status';
+  $('#orbStatus').textContent = orbFiles.length===1 ? '1 video picked' : orbFiles.length + ' pictures picked'; $('#orbSave').hidden = true; };
+$('#orbGo').onclick = async () => { const st = $('#orbStatus'), b = $('#orbGo'); b.disabled = true; st.className = 'status'; $('#orbSave').hidden = true;
+  try{ st.textContent = 'Taking the views out…'; const views = await orbFrames(orbFiles, +$('#orbN').value, +$('#orbSpan').value); drawOrbit(views, null);
+    const how = $('#picHow').value;
+    for(let k = 0; k < views.length; k++){ views[k].pts = await readView(views[k].c, how, st, 'Reading view ' + (k + 1) + ' of ' + views.length); drawOrbit(views, null); }
+    st.textContent = 'Combining the views…'; await new Promise(r => setTimeout(r, 30));
+    const R = solveOrbit(views.map(v => ({pts:v.pts, a:v.a}))); orbLast = R; drawOrbit(views, R);
+    act(() => fitPoints(R)); setView('three');
+    st.className = 'status good'; st.textContent = `Combined ${R.used.length} of ${views.length} views` + (R.flips ? `; the reader mixed up left and right in ${R.flips} (fixed)` : '') +
+      `. They agree to within ${Math.round(R.err * 50)}% of her height. Check it from the side, then save it.`; $('#orbSave').hidden = false; }
+  catch(err){ st.className = 'status bad'; st.textContent = err.message; console.error(err); }
+  b.disabled = false; };
+$('#orbSave').onclick = () => saveMyPose('Orbit pose');
+
+// ---------- my poses ----------
+// saved as directions (like the starting poses), so they still fit after the body changes
+S.myPoses = S.myPoses || [];
+let myDel = false;
+function myPosesUi(){ const el = $('#myPoses');
+  el.innerHTML = S.myPoses.map((m, i) => `<button class="chipbtn ${myDel ? 'hot' : ''}" data-my="${i}">${myDel ? '✕ ' : ''}${esc(m.name)}</button>`).join('') +
+    (myDel ? '<button class="chipbtn" data-mydo="done">Done</button>' : '<button class="chipbtn" data-mydo="save">＋ Save this pose</button>' + (S.myPoses.length ? '<button class="chipbtn" data-mydo="del">🗑</button>' : '')); }
+function packPose(){ const k = poseDirs(), D = k.D, out = {rootQ:qa(D.rootQ), fk:{}, limbs:{}, onFloor:k.onFloor, pelY:k.pel.y, skirt:P.skirt ? JSON.parse(JSON.stringify(P.skirt)) : null};
+  for(const n of FK) out.fk[n] = qa(D.fk[n]); for(const [l, d] of Object.entries(D.limbs)) out.limbs[l] = {u:d.u, l:d.l, end:qa(d.end), pole:d.pole}; return out; }
+function unpackPose(m){ const D = {rootQ:aq(m.rootQ), fk:{}, limbs:{}}; for(const n of FK) if(m.fk[n]) D.fk[n] = aq(m.fk[n]);
+  for(const [l, d] of Object.entries(m.limbs)) D.limbs[l] = {u:d.u, l:d.l, end:aq(d.end), pole:d.pole};
+  applyDirs(D, true); const p = wpos(bones.pelvis); shiftAll(V(-p.x, 0, -p.z)); if(m.onFloor) groundIt(); else shiftAll(V(0, m.pelY - wpos(bones.pelvis).y, 0));
+  if(m.skirt) P.skirt = JSON.parse(JSON.stringify(m.skirt)); solve(); }
+function saveMyPose(def){ const name = (prompt('Name this pose', def + ' ' + (S.myPoses.length + 1)) || '').trim(); if(!name) return;
+  S.myPoses.push({name:name.slice(0, 40), pose:packPose()}); save(); myPosesUi(); toast('Saved to My poses (Pose tab)'); }
+$('#myPoses').onclick = e => { const b = e.target.closest('[data-my],[data-mydo]'); if(!b) return;
+  if(b.dataset.mydo==='save') return saveMyPose('Pose'); if(b.dataset.mydo==='del'){ myDel = true; return myPosesUi(); } if(b.dataset.mydo==='done'){ myDel = false; return myPosesUi(); }
+  const i = +b.dataset.my, m = S.myPoses[i]; if(myDel){ if(confirm('Delete "' + m.name + '"?')){ S.myPoses.splice(i, 1); if(!S.myPoses.length) myDel = false; save(); myPosesUi(); } return; }
+  act(() => unpackPose(m.pose)); toast(m.name); };
+myPosesUi();
 
 // ---------- try a render ----------
 const ILL_POS = 'masterpiece, best quality, amazing quality, newest, absurdres, highres, general';
@@ -1441,7 +1629,7 @@ markView(S.viewKey==='photo' ? '' : (S.viewKey || ''));
 if(S.tab) $(`#tabs [data-tab="${S.tab}"]`).click();
 undoBtns();
 (function loop(){ requestAnimationFrame(loop); if(dirty){ dirty = false; renderer.render(scene, camera); } drawGuidePrev(); })();
-window.RIG = {S, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
+window.RIG = {S, scene, renderer, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, solveOrbit, orbProj, packPose, unpackPose, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
 </script>
 </body>
 </html>
