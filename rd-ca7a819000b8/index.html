@@ -618,7 +618,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.121'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.122'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -2186,10 +2186,10 @@ function suggest(word, strict, limit){
 }
 function fmtCount(n){ return n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n/1e3) + 'k' : String(n); }
 let acFor = null, acList = [], acStart = 0, acInSentence = false;
-function updateAc(el){
+function updateAc(el, always){ // always: a box that is tags whatever the recipe's model (the comic's character looks)
   const ac = $('#ac');
-  if(!usesTags()){ ac.hidden = true; return; }
-  if(!TAGS){ loadTags().then(() => { if(document.activeElement===el) updateAc(el); }); return; }
+  if(!always && !usesTags()){ ac.hidden = true; return; }
+  if(!TAGS){ loadTags().then(() => { if(document.activeElement===el) updateAc(el, always); }); return; }
   const cw = currentWord(el); acFor = el; acStart = cw.start; acInSentence = false; acList = suggest(cw.word);
   // in a sentence, try the last 5, 4 … 1 words so a tag typed out mid-sentence ("hand on own chest") is still found
   const sp = []; for(let i = cw.start; i < cw.end; i++) if(el.value[i]===' ' && el.value[i+1] && el.value[i+1]!==' ') sp.push(i+1);
@@ -6380,6 +6380,11 @@ function cmPickComic(n){ const cm = CM(), pg = cmPage(); if(pg) pg.script = cm.s
 // ✏️ the script as one box per panel (Jordan 2026-10-22), and 👥 a character library shared by every comic and page: a
 // character goes into a panel as its @tag, and their look (or card, with its LoRA and pictures) is added to the prompt
 // from the library, so the panel text stays short
+// a character's look as tags (Jordan 2026-10-22): plain words become their Danbooru tags, so the look stays short; the
+// count tags (1girl, solo) are left to the panel, which counts everyone in it
+function cmDescTags(text){ if(!TAGS || !(text || '').trim()) return text; const a = S.asTags, u = usesTags; let out = text;
+  try{ S.asTags = true; usesTags = () => true; out = asTags(text); }catch(e){ console.error(e); } finally{ S.asTags = a; usesTags = u; }
+  return out.split(',').map(t => t.trim()).filter(t => t && !/^(\d\+?\s?(girl|boy|other)s?|solo|multiple (girls|boys|others)|no humans)$/i.test(t)).join(', '); }
 const cmTagOf = L => (L.tag || (L.name || '').replace(/^\s*the\s+/i, '')).replace(/[^\w-]+/g, '') || 'Character';
 const cmPlainTx = src => (src || '').replace(/@([\w-]+)/g, (m, t) => { const L = (S.cmLib || []).find(x => cmTagOf(x).toLowerCase()===t.toLowerCase()); return L && (L.name || '').trim() ? L.name.trim() : t; });
 const cmSrc = p => p.src!=null ? p.src : p.text;
@@ -6398,11 +6403,14 @@ function cmInsert(i, libId){ const pg = cmPage(), p = pg && pg.panels[i], L = (S
   const src = cmSrc(p) || '', at = CM_CARET[i]!=null ? Math.min(CM_CARET[i], src.length) : src.length, tag = '@' + cmTagOf(L), pre = src.slice(0, at), post = src.slice(at);
   p.src = pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + (post && /^\s/.test(post) ? '' : ' ') + post; p.text = cmPlainTx(p.src); CM_CARET[i] = (pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + ' ').length;
   CM_INS = null; cmRecast(); save(); drawComic(); }
-function cmLibHtml(){ const lib = S.cmLib || [];
+function cmLibHtml(){ const lib = S.cmLib || [], files = [...new Set(cmIllKits().flatMap(k => k.loras))].sort((a, b) => baseName(a).localeCompare(baseName(b)));
   return lib.map(L => `<div class="cmlib"><div class="row"><div class="grow"><input type="text" data-cml="name" data-id="${esc(L.id)}" value="${esc(L.name || '')}" placeholder="Name, e.g. The Librarian" aria-label="Name"></div><button class="chipbtn" data-cm="libdel" data-id="${esc(L.id)}" aria-label="Remove ${esc(L.name || 'this character')}">🗑</button></div>
     <div class="row"><label>Tag</label><div class="grow"><input type="text" data-cml="tag" data-id="${esc(L.id)}" value="${esc(cmTagOf(L))}" aria-label="Tag"></div>${['f', 'm', ''].map(g => `<button class="chipbtn${(L.g || '')===g ? ' on' : ''}" data-cmlg="${g}" data-id="${esc(L.id)}">${g==='f' ? 'she' : g==='m' ? 'he' : 'they'}</button>`).join('')}</div>
-    <textarea data-cml="desc" data-id="${esc(L.id)}" rows="2" placeholder="What they look like, as tags: long black hair, green eyes, black gothic dress">${esc(L.desc || '')}</textarea>
-    <div class="row"><label>Card</label><div class="grow"><select data-cml="cid" data-id="${esc(L.id)}"><option value="">None</option>${(S.chars || []).map(c => `<option value="${esc(c.id)}" ${c.id===L.cid ? 'selected' : ''}>${esc(c.name || 'Unnamed')}</option>`).join('')}</select></div></div></div>`).join('')
+    <textarea data-cml="desc" data-id="${esc(L.id)}" rows="2" placeholder="What they look like: long black hair and green eyes, a black gothic dress (turned into tags)">${esc(L.desc || '')}</textarea>
+    <div class="row"><label>Card</label><div class="grow"><select data-cml="cid" data-id="${esc(L.id)}"><option value="">None</option>${(S.chars || []).map(c => `<option value="${esc(c.id)}" ${c.id===L.cid ? 'selected' : ''}>${esc(c.name || 'Unnamed')}</option>`).join('')}</select></div></div>
+    ${(L.loras || []).map((x, j) => `<div class="row"><label>${j ? '' : 'LoRAs'}</label><div class="grow"><select data-cmll="file" data-id="${esc(L.id)}" data-j="${j}" aria-label="LoRA"><option value="">Pick a LoRA</option>${files.concat(x.file && !files.includes(x.file) ? [x.file] : []).map(n => `<option value="${esc(n)}" ${n===x.file ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div>
+      <input type="number" data-cmll="w" data-id="${esc(L.id)}" data-j="${j}" value="${esc(x.w==null ? 1 : x.w)}" step="0.05" min="0" max="2" style="width:70px" aria-label="Strength"><button class="chipbtn" data-cmlldel="${j}" data-id="${esc(L.id)}" aria-label="Remove this LoRA">✕</button></div>`).join('')}
+    <div class="btnrow"><button class="chipbtn" data-cmlladd data-id="${esc(L.id)}">➕ Add a LoRA</button></div></div>`).join('')
     + `<div class="btnrow"><button class="btn" data-cm="libadd">➕ Add a character</button></div><p class="note">Every comic and page can use these. A card (from 🧍 Characters) adds its LoRA and pictures; the look is added to the prompt for you.</p>`; }
 function cmBoxesHtml(cm, pg0){ const ps = pg0 ? pg0.panels : [], lib = (S.cmLib || []).filter(L => (L.name || '').trim());
   return ps.map((p, i) => `<div class="cmbox"><div class="obhead"><b>Panel ${i + 1}</b><span><button class="chipbtn${p.white ? ' on' : ''}" data-cm="pwhite" data-i="${i}">⬜ Character only</button> <button class="chipbtn" data-cm="pdel" data-i="${i}" aria-label="Remove panel ${i + 1}">✕</button></span></div>
@@ -6437,7 +6445,7 @@ function cmRefView(c){ if(!c || !c.views || !c.views.length) return null;
   return pipeSrc(c) || turnSource(c) || c.views.find(v => v.angle==='front') || c.views[0]; }
 // a library character's name, look and card come from the 👥 library itself, so editing them there changes every comic
 function cmWho(cm, p){ return (p.who || []).map(id => cm.cast.find(s => s.id===id)).filter(Boolean).map(s => { const L = s.lib && (S.cmLib || []).find(x => x.id===s.lib);
-  return L ? Object.assign({}, s, {label:L.name || s.label, desc:L.desc || '', cid:L.cid || '', g:L.g || s.g}) : s; }); }
+  return L ? Object.assign({}, s, {label:L.name || s.label, desc:L.desc || '', cid:L.cid || '', g:L.g || s.g, libLoras:(L.loras || []).filter(x => x.file)}) : s; }); }
 // pictures in order: the cast first (so the first person is <Picture 1>), the place last
 function cmRefs(cm, p){ const r = [];
   cmWho(cm, p).forEach(s => { const v = cmRefView(cmCard(s)); if(v && v.url) r.push({kind:'char', slot:s.id, url:v.url}); });
@@ -6628,8 +6636,10 @@ const CM_BEATS = [[/\b(looks?|looking|glances?|glancing)\s+(behind|back|over\s+\
   [/\bscreams?\b|\bscreaming\b/i, 'screaming, open mouth'], [/\bwalks?\s+(down|along|through)\b/i, 'walking']];
 const CM_SHOT_TAGS = {wide:'full body, wide shot', medium:'cowboy shot', close:'close-up, portrait, face focus'};
 // what each person looks like: their LoRA's words and their card's tags (or the words typed for them)
+// plus the library character's own LoRAs (Jordan 2026-10-22: a few LoRAs on a character without making a card), with their words
 function cmLooks(s, k){ const c = cmCard(s), lora = k ? k.has(cmSlotLora(s, k.loras)) : '';
-  return {lora, words:[lora && cmLoraWords(lora, c), c && (c.tags || '').trim().replace(/,\s*$/, ''), (s.desc || '').trim()].filter(Boolean).join(', ')}; }
+  const extra = k ? (s.libLoras || []).map(x => [k.has(x.file), parseFloat(x.w) || 1]).filter(([f]) => f && f!==lora) : [];
+  return {lora, extra, words:[lora && cmLoraWords(lora, c)].concat(extra.map(([f]) => cmLoraWords(f, c)), c && (c.tags || '').trim().replace(/,\s*$/, ''), (s.desc || '').trim()).filter(Boolean).join(', ')}; }
 function cmCount(who){ const f = who.filter(s => s.g==='f').length, m = who.filter(s => s.g==='m').length, o = who.length - f - m;
   return [f && (f===1 ? '1girl' : f + 'girls'), m && (m===1 ? '1boy' : m + 'boys'), o && (o===1 ? '1other' : o + 'others'), who.length===1 && 'solo'].filter(Boolean).join(', ') || 'no humans'; }
 // where the people go in the picture (x, y, w, h as parts of it): apart, one area each from left to right; touching, one together
@@ -6653,7 +6663,7 @@ function cmStillGraph(k, plate, p, i, rect, prefix){
   const [W, H] = cmStillSize(rect.w / rect.h), who = cmWho(cm, p), shot = cmShot(p, i, rect), touch = who.length > 1 && CM_TOUCH.test(p.text);
   const ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck,0], clip = [ck,1]; const vae = [ck,2];
   const loras = [], put = (f, w) => { if(f && !loras.some(x => x[0]===f)) loras.push([f, w]); };
-  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => put(cmLooks(s, k).lora, parseFloat(s.loraW) || 1));
+  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => { const lk = cmLooks(s, k); put(lk.lora, parseFloat(s.loraW) || 1); lk.extra.forEach(([f, w]) => put(f, w)); });
   loras.forEach(([f, w]) => { const l = add('LoraLoader', {model, clip, lora_name:f, strength_model:w, strength_clip:w}); model = [l,0]; clip = [l,1]; });
   const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
   const seen = new Set(), tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
@@ -7644,7 +7654,7 @@ function cmAngleGraph(k, view, torn, p, i, rect, prefix, full){
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const who = cmWho(cm, p), ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck,0], clip = [ck,1]; const vae = [ck,2];
   const loras = [], put = (f, w) => { if(f && !loras.some(x => x[0]===f)) loras.push([f, w]); };
-  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => put(cmLooks(s, k).lora, parseFloat(s.loraW) || 1));
+  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => { const lk = cmLooks(s, k); put(lk.lora, parseFloat(s.loraW) || 1); lk.extra.forEach(([f, w]) => put(f, w)); });
   loras.forEach(([f, w]) => { const l = add('LoraLoader', {model, clip, lora_name:f, strength_model:w, strength_clip:w}); model = [l,0]; clip = [l,1]; });
   const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0], seen = new Set();
   const tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
@@ -7673,7 +7683,7 @@ function cmGrab(p){ const t = p.takes[p.take]; if(!t) return null;
 // ✨ Finish this frame (Jordan 2026-10-21: "like the render tab does"): the Render tab's own finishing graph, with the panel's look
 function cmFinGraph(k, img, w, h, p, i, rect, prefix){
   const cm = CM(), I = cmIll(), who = cmWho(cm, p), loras = [], put = (f, s2) => { if(f && !loras.some(x => x.file===f)) loras.push({file:f, strength:s2}); };
-  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => put(cmLooks(s, k).lora, parseFloat(s.loraW) || 1));
+  put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => { const lk = cmLooks(s, k); put(lk.lora, parseFloat(s.loraW) || 1); lk.extra.forEach(([f, w]) => put(f, w)); });
   const looks = {ckpt:k.ckpt, style:'illustrious', loras, words:[I.words || '', cmCount(who)].concat(who.map(s => cmLooks(s, k).words)).filter(Boolean).join(', '), cn:'both'};
   const kk = Object.assign({}, k, {lines:k.oi.AnimeLineArtPreprocessor ? 'AnimeLineArtPreprocessor' : k.oi.Canny ? 'Canny' : ''});
   return obFinishGraph(kk, {img, w, h}, cm.finDn==null ? 0.4 : cm.finDn, cmStillTags(cm, p, i, rect), looks, prefix);
@@ -7747,6 +7757,7 @@ function cmLayThumb(rows, texts, on, i){
 function drawComic(){ try{ drawComic0(); }catch(e){ console.error(e); const B = $('#cmBody'); if(B && !B.innerHTML.trim()) B.innerHTML = `<p class="warn">The comic page couldn't draw (${esc(e.message)}). Send Claude a screenshot of this.</p>`; else toast("Couldn't redraw the comic: " + e.message, true); } }
 function drawComic0(){
   const B = $('#cmBody'); if(!B || $('#comic').hidden) return;
+  { const ac = $('#ac'); if(ac && B.contains(ac)){ ac.hidden = true; document.body.appendChild(ac); } } // the tag suggestions row outlives a redraw
   const cm = CM(); cmFixPages(cm); const pg0 = cmPage(), pg = pg0 && pg0.panels.length ? pg0 : null, kits = cmKits();
   const seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${esc(v)}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`;
   let x = `<div class="cmtop"><b>📖 Comic page</b>${S.hidden ? '<small>🙈 Hidden</small>' : ''}</div>`;
@@ -7854,8 +7865,10 @@ $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) ret
 // where the cursor is in each panel box, so 👤 Add a character puts the @tag there
 ['keyup', 'click', 'focusout'].forEach(ev => $('#comic').addEventListener(ev, e => { const el = e.target; if(el && el.dataset && el.dataset.cmpt!=null) CM_CARET[+el.dataset.cmpt] = el.selectionStart; }));
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmins],[data-cmlg],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
   if(t.dataset.cmins){ cmInsert(+t.dataset.i, t.dataset.cmins); return; }
+  if(t.dataset.cmlladd!=null || t.dataset.cmlldel!=null){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(!L) return;
+    if(t.dataset.cmlladd!=null) L.loras = (L.loras || []).concat([{file:'', w:1}]); else L.loras = (L.loras || []).filter((x, j) => j!==+t.dataset.cmlldel); save(); drawComic(); return; }
   if(t.dataset.cmlg!=null){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(L){ L.g = t.dataset.cmlg; cmRecast(); save(); drawComic(); } return; }
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
@@ -7943,7 +7956,11 @@ $('#comic').addEventListener('click', e => {
   const el = e.target, cm = CM(), pg = cmPage();
   if(el.dataset.cmpt!=null && pg){ const i = +el.dataset.cmpt, q = pg.panels[i]; if(!q) return; CM_CARET[i] = el.selectionStart; q.src = el.value; q.text = cmPlainTx(el.value); save();
     if(ev==='change'){ cmRecast(); save(); drawComic(); } return; }
-  if(el.dataset.cml && el.dataset.id){ const L = (S.cmLib || []).find(x => x.id===el.dataset.id); if(!L) return; L[el.dataset.cml] = el.dataset.cml==='tag' ? el.value.replace(/^@/, '').replace(/[^\w-]+/g, '') : el.value; save();
+  if(el.dataset.cmll && el.dataset.id){ const L = (S.cmLib || []).find(x => x.id===el.dataset.id), x = L && (L.loras || [])[+el.dataset.j]; if(!x) return;
+    x[el.dataset.cmll] = el.value; save(); if(ev==='change') drawComic(); return; }
+  if(el.dataset.cml && el.dataset.id){ const L = (S.cmLib || []).find(x => x.id===el.dataset.id); if(!L) return;
+    if(el.dataset.cml==='desc'){ if(ev==='input'){ updateAc(el, true); L.desc = el.value; save(); return; } $('#ac').hidden = true; L.desc = cmDescTags(el.value); el.value = L.desc; }
+    else L[el.dataset.cml] = el.dataset.cml==='tag' ? el.value.replace(/^@/, '').replace(/[^\w-]+/g, '') : el.value; save();
     if(ev==='change'){ if(el.dataset.cml==='name' || el.dataset.cml==='tag') cmComics().forEach(c => c.pages.forEach(q => q.panels.forEach(x => { if(x.src!=null) x.text = cmPlainTx(x.src); }))); cmRecast(); save(); drawComic(); } return; }
   if(el.dataset.cmcomic!=null){ if(ev==='change') cmPickComic(+el.value); return; }
   if(el.dataset.cmf){ cm[el.dataset.cmf] = el.value; save(); if(ev==='change' && el.dataset.cmf!=='script') drawComic(); return; }
@@ -8032,7 +8049,7 @@ function wsRecipe(cm, pg, p, i){
   if(M.ckpt && !S.styles[M.ckpt]) S.styles[M.ckpt] = 'illustrious'; // the comic paints with it as Illustrious
   Object.assign(P, {steps:rec.steps, cfg:rec.cfg, sampler:rec.sampler, scheduler:rec.scheduler, size:1024, shape:'panel', ratio:rect.w / rect.h, lockSeed:false});
   const lo = [], put = (f, w) => { if(f && !lo.some(x => x[0]===f)) lo.push([f, w]); };
-  if(k){ put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => put(cmLooks(s, k).lora, parseFloat(s.loraW) || 1)); }
+  if(k){ put(k.has(I.style), parseFloat(I.styleW) || 1); who.forEach(s => { const lk = cmLooks(s, k); put(lk.lora, parseFloat(s.loraW) || 1); lk.extra.forEach(([f, w]) => put(f, w)); }); }
   lo.forEach(([f, w]) => r.blocks.push(Object.assign(defaults('lora'), {lora:f, strength:w})));
   // the LoRA blocks add their own activation words, so only what they don't already add goes in the prompt
   const auto = new Set(lo.flatMap(([f]) => (S.loraWords[f] || '').split(',')).map(t => t.trim().toLowerCase()).filter(Boolean)), seen = new Set();

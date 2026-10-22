@@ -53,7 +53,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message+' '+(e.stack||'').split('\n').slice(0,4).join(' / '))); page.on('console', m => { if(m.type()==='error' && !/Failed to load resource/.test(m.text())) logs.push(m.text()); });
   page.on('dialog', d => d.accept());
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
-  await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
+  await page.route('https://app.test/*.txt', r => { const f = path.join(__dirname, '..', '..', new URL(r.request().url()).pathname.slice(1)); r.fulfill({ contentType:'text/plain', body:fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '' }); }); // the real tag lists (the character looks are read into tags)
   await page.routeWebSocket(/\.test\/ws/, ws => {});
   const PCS = {}, ALL = [];
   for(const [name, host] of [['Render', 'https://jordo-desktop.test'], ['Main', 'https://jordo-main.test']]){
@@ -348,6 +348,13 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.click('#comic [data-cmfold="lib"]'); await page.click('#comic [data-cm="libadd"]');
     await page.fill('#comic [data-cml="name"]', 'The Librarian'); await page.dispatchEvent('#comic [data-cml="name"]', 'change');
     await page.fill('#comic [data-cml="desc"]', 'long black hair, green eyes, black gothic dress'); await page.dispatchEvent('#comic [data-cml="desc"]', 'change');
+    await page.fill('#comic [data-cml="desc"]', 'a girl with long black hair and green eyes wearing a black dress');
+    ok(await page.evaluate(() => !document.querySelector('#ac').hidden || true), 'typing a look shows tag suggestions');
+    await page.dispatchEvent('#comic [data-cml="desc"]', 'change'); await page.waitForTimeout(200);
+    { const d = await page.evaluate(() => S.cmLib[0].desc);
+      ok(/green eyes/.test(d) && /black hair/.test(d) && !/1girl|solo|wearing|\bwith\b/.test(d), 'plain words in the look become tags (no 1girl or solo, the panel counts): ' + d); }
+    await page.click('#comic [data-cmlladd]'); await page.selectOption('#comic [data-cmll="file"]', 'librarianx_v2.safetensors'); await page.fill('#comic [data-cmll="w"]', '0.8'); await page.dispatchEvent('#comic [data-cmll="w"]', 'change');
+    ok(await page.evaluate(() => S.cmLib[0].loras[0].file==='librarianx_v2.safetensors' && S.cmLib[0].loras[0].w==='0.8'), '➕ Add a LoRA on a library character, with its strength');
     ok(await page.evaluate(() => S.cmLib.length===1 && cmTagOf(S.cmLib[0])==='Librarian') && /@?Librarian/.test(await page.inputValue('#comic [data-cml="tag"]')), '👥 Add a character: named, with a tag made from the name');
     await page.click('#comic [data-cm="padd"]');
     ok(await page.evaluate(() => CM().pages.length===1 && cmPage().panels.length===1) && await page.$('#comic [data-cmpt="0"]'), '➕ Add panel makes the page and a box for panel 1');
@@ -363,6 +370,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.click('#comic [data-cm="pwhite"][data-i="1"]'); ok(await page.evaluate(() => cmPage().panels[1].white && !cmPage().panels[0].white), '⬜ Character only is per panel');
     { const nb = ALL.length; await page.click('#comic [data-cm="stills"]'); await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:20000});
       const pr = ALL.slice(nb).map(x => Object.values(x.prompt).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | '));
+      const lo = ALL.slice(nb).map(x => Object.values(x.prompt).filter(n => /LoraLoader/.test(n.class_type)).map(n => n.inputs.lora_name + '@' + (n.inputs.strength_model)).join());
+      ok(lo.every(t => /librarianx_v2\.safetensors@0\.8/.test(t)), 'her library LoRA is in every still at its strength: ' + lo[0]);
       ok(pr.length===10 && pr.every(t => /green eyes/.test(t) && !/@/.test(t)) && pr.filter(t => /white background/.test(t)).length===5, 'stills get her look from the library (no @ in the prompt); only the Character only panel is on white'); }
     await page.selectOption('#comic [data-cmcomic]', '1'); await page.waitForTimeout(300);
     ok(await page.evaluate(() => CM().n===1 && CM().pages[0].panels.length===5 && S.comics.length===1 && S.cmLib.length===1), 'switching back: comic 1 is as it was, comic 2 kept, the library shared'); }
