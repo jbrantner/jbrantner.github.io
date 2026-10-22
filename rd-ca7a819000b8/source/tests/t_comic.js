@@ -408,6 +408,11 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       const pr = ALL.slice(nb).map(x => Object.values(x.prompt).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | '));
       const lo = ALL.slice(nb).map(x => Object.values(x.prompt).filter(n => /LoraLoader/.test(n.class_type)).map(n => n.inputs.lora_name + '@' + (n.inputs.strength_model)).join());
       ok(lo.every(t => /librarianx_v2\.safetensors@0\.8/.test(t)), 'her library LoRA is in every still at its strength: ' + lo[0]);
+      if(process.env.RIG_DEPS){ const gs = ALL.slice(nb).map(x => Object.values(x.prompt)), pan = g => (g.find(n => n.class_type==='SaveImage') || {inputs:{}}).inputs.filename_prefix || '';
+        const cn = g => g.filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type).join(), p1 = gs.filter(g => /panel_1\//.test(pan(g))), p2 = gs.filter(g => /panel_2\//.test(pan(g)));
+        const area = p1.map(g => g.find(n => n.class_type==='SolidMask' && n.inputs.value===1)).filter(Boolean).map(n => n.inputs.width)[0];
+        ok(p1.length===5 && p1.every(g => cn(g)==='openpose,depth' && g.filter(n => n.class_type==='ControlNetApplyAdvanced').length===2) && p2.every(g => !cn(g)),
+          '🦴 the posed panel\'s stills follow its rig through ProMax (OpenPose + depth); the other panel has none: ' + JSON.stringify({p1:p1.length, cn:p1[0] && cn(p1[0]), area})); }
       ok(pr.length===10 && pr.every(t => /green eyes/.test(t) && !/@/.test(t)) && pr.filter(t => /white background/.test(t)).length===5, 'stills get her look from the library (no @ in the prompt); only the Character only panel is on white'); }
     await page.selectOption('#comic [data-cmcomic]', '1'); await page.waitForTimeout(300);
     ok(await page.evaluate(() => CM().n===1 && CM().pages[0].panels.length===5 && S.comics.length===1 && S.cmLib.length===1), 'switching back: comic 1 is as it was, comic 2 kept, the library shared'); }
