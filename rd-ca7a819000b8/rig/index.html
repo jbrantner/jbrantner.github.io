@@ -108,6 +108,11 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
       <div id="selTools"></div>
       <h3>Starting poses</h3>
       <div class="chips" id="presets"></div>
+      <div id="motionBox"><h3>Skirt motion</h3>
+        <div class="chips" id="motionChips"></div>
+        <div class="row"><label>Strength</label><div class="slider"><input type="range" id="mStr" min="0" max="1.6" step="0.05"><output></output></div></div>
+        <div class="row" id="mDirRow"><label>Flows</label><div class="slider"><input type="range" id="mDir" min="-180" max="180" step="5"><output style="width:76px"></output></div></div>
+      </div>
       <h3>Mirror</h3>
       <div class="chips">
         <button class="chipbtn" data-do="mirrorLR">Left → right</button>
@@ -127,6 +132,9 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
       <div class="chips" id="bodyPresets"></div>
       <h3>Hair</h3>
       <div class="chips" id="hairChips"><button class="chipbtn" data-hair="long">Long, straight bangs</button><button class="chipbtn" data-hair="bob">Bob</button><button class="chipbtn" data-hair="none">None</button></div>
+      <h3>Skirt</h3>
+      <div class="chips" id="skirtChips"></div>
+      <div id="skirtSliders"></div>
       <h3>Proportions</h3>
       <div id="bodySliders"></div>
       <p class="note">The pose keeps its shape when you change the body. OpenPose reads the head size, so a big anime head here gives a big head in the render.</p>
@@ -245,6 +253,7 @@ const LIMB_OF = {}; for(const [k, L] of Object.entries(LIMB)){ LIMB_OF[L.a] = [k
 let S = load() || {};
 S.body = Object.assign({}, BODY0, S.body);
 S.guide = Object.assign({size:'832x1216'}, S.guide);
+S.skirt = Object.assign({style:'none', len:1, flare:0.3, motion:'still', str:0, dir:0}, S.skirt);
 S.test = Object.assign({pc:'', url:'', ckpt:'', lora1:'', lora2:'', cn:'', prompt:''}, S.test);
 if(S.showHandles===undefined) S.showHandles = true;
 function load(){ try{ return JSON.parse(localStorage.getItem(KEY)); }catch(e){ return null; } }
@@ -470,7 +479,7 @@ function buildBody(){
   const style = S.hair || 'long';
   if(style!=='none'){ const hp = hairPrims(REST, style), h = REST.h, hb = new THREE.Box3(V(-0.6 * h, REST.spine.y - 0.06, REST.chest.z - 0.16), V(0.6 * h, REST.headTop.y + 0.12, REST.head.z + 0.62 * h));
     const hg = skinFor(hp, hb, 0.008); hairMesh = skinned(hg, HAIR_MAT, true); inks.push(skinned(inkFor(hg, 0.0028), INK)); }
-  buildFace(); bodyRest = {verts:g.attributes.position.count, tris:g.index.count / 3, ms:Math.round(performance.now() - t0)};
+  buildSkirt(prims); settleSkirt(); buildFace(); bodyRest = {verts:g.attributes.position.count, tris:g.index.count / 3, ms:Math.round(performance.now() - t0)};
   showMode(); dirty = true; guideDirty = true;
 }
 // painted features on the face: green eyes with a dark upper lash line, thin brows, a small mouth. They sit on the
@@ -492,12 +501,139 @@ function buildFace(){
     put(s * 0.175, 0.5, 0.105, 0.018, FACE_MAT.lash, s * 0.16, 0.0022); put(s * 0.165, 0.585, 0.08, 0.011, FACE_MAT.lash, s * 0.1, 0.002); }
   put(0, 0.15, 0.05, 0.009, FACE_MAT.mouth, 0, 0.0015);
 }
+// ---------- the skirt ----------
+// A ring of hanging chains from the waist, one per column of cloth. It is not simulated over time: every time the pose
+// changes it settles from scratch into one frozen frame. Gravity pulls it down, the motion (walk, run, twirl, wind)
+// pushes it, a little stiffness keeps its flare, and it is pushed out of the hips and legs (the body's own shapes, posed)
+// wherever it would cut into them. A hem point you drag stays pinned where you put it, relative to the hips.
+const SKIRT_STYLES = {none:['None', 0, 0], short:['Short', 0.3, 0.55], knee:['Knee', 0.52, 0.45], long:['Long dress', 1, 0.3]};
+const MOTIONS = {still:['Still', 0, 0], walk:['Walk', 0.35, 0], run:['Run', 0.9, 0], twirl:['Twirl', 1.1, 0], wind:['Wind', 0.8, 90]};
+const SK_N = 40, SK_R = 12, SK_FOLDS = 8, SK_PINS = 8;
+const CLOTH_MAT = new THREE.MeshToonMaterial({color:0x2b2834, gradientMap:TOON, transparent:true, side:THREE.DoubleSide});
+const CLOTH_INK = new THREE.MeshBasicMaterial({color:0x17121c, side:THREE.BackSide, polygonOffset:true, polygonOffsetFactor:2, polygonOffsetUnits:2});
+let skirtMesh = null, skirtInk = null, SK = null;
+const COLLIDE = ['pelvis', 'spine', 'thighL', 'shinL', 'footL', 'thighR', 'shinR', 'footR'];
+function skirtOn(){ return S.skirt && S.skirt.style!=='none'; }
+// the ring at the waist and each column's resting direction, in the hips' own frame; the shapes it cannot pass through
+function buildSkirt(prims){
+  [skirtMesh, skirtInk].forEach(m => { if(m){ scene.remove(m); m.geometry.dispose(); } }); skirtMesh = skirtInk = SK = null;
+  if(!skirtOn()) return;
+  const k = S.skirt, solid = prims.filter(p => !p.sub && COLLIDE.includes(p.bone)), torso = solid.filter(p => ['pelvis', 'spine'].includes(p.bone));
+  const y = REST.spine.y, cz = REST.spine.z - 0.008, ring = [], dir = [], tilt = (6 + 40 * k.flare) * D2R;
+  for(let i = 0; i < SK_N; i++){ const a = i / SK_N * Math.PI * 2, o = V(Math.sin(a), 0, Math.cos(a)); let r = 0.3;
+    for(let t = 0; t < 80; t++){ const d = bodyDist(torso, o.x * r, y, cz + o.z * r); if(d < 2e-4) break; r -= Math.max(d, 2e-4); }
+    ring.push(V(o.x * (r + 0.006), y, cz + o.z * (r + 0.006)).sub(REST.pelvis)); dir.push(V(0, -Math.cos(tilt), 0).addScaledVector(o, Math.sin(tilt))); }
+  const len = Math.max(0.12, (y - 0.035) * k.len), seg = len / SK_R, maxH = [];
+  for(let r = 0; r <= SK_R; r++){ let c = 0; for(let i = 0; i < SK_N; i++){ const j = (i + 1) % SK_N; c += ring[i].clone().addScaledVector(dir[i], r * seg).distanceTo(ring[j].clone().addScaledVector(dir[j], r * seg)); } maxH.push(c / SK_N * 1.04); }
+  const coll = COLLIDE.map(b => { const ps = solid.filter(p => p.bone===b); if(!ps.length) return null;
+    const box = new THREE.Box3(); for(const p of ps){ for(const q of [p.a, p.b, p.c]) if(q) box.expandByPoint(q); if(p.t===4){ box.expandByPoint(V(-0.2, p.y0, -0.2)); box.expandByPoint(V(0.2, p.y1, 0.2)); } }
+    const sph = box.getBoundingSphere(new THREE.Sphere()); sph.radius += 0.1; return {bone:b, prims:ps, sph, inv:new THREE.Matrix4()}; }).filter(Boolean);
+  const pts = Array.from({length:(SK_R + 1) * SK_N}, () => V());
+  SK = {ring, dir, seg, maxH, coll, pts};
+  const g = new THREE.BufferGeometry(), idx = [];
+  for(let r = 0; r < SK_R; r++) for(let i = 0; i < SK_N; i++){ const j = (i + 1) % SK_N, a = r * SK_N + i, b = r * SK_N + j, c = (r + 1) * SK_N + j, d = (r + 1) * SK_N + i; idx.push(a, d, c, a, c, b); }
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3)); g.setIndex(idx);
+  skirtMesh = new THREE.Mesh(g, CLOTH_MAT); skirtMesh.frustumCulled = false; skirtMesh.layers.enable(1); scene.add(skirtMesh);
+  const ig = new THREE.BufferGeometry(); ig.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3)); ig.setIndex(idx);
+  skirtInk = new THREE.Mesh(ig, CLOTH_INK); skirtInk.frustumCulled = false; scene.add(skirtInk);
+}
+// distance from a point to the posed hips and legs (negative inside). The shapes are melted together generously, so
+// cloth bridges the gap between the thighs instead of slipping down between them, the way a real skirt does.
+const _c = V(), WEB = 0.06;
+function collDist(p){ let d = 1e9;
+  for(const c of SK.coll){ _c.copy(p).applyMatrix4(c.inv).add(REST[c.bone]); if(_c.distanceTo(c.sph.center) - c.sph.radius > d + WEB) continue;
+    for(const q of c.prims){ const e = primDist(q, _c.x, _c.y, _c.z); if(e - d < WEB){ const h = clamp(0.5 + 0.5 * (e - d) / WEB, 0, 1); d = e * (1 - h) + d * h - WEB * h * (1 - h); } } }
+  return d; }
+const _n = V();
+function pushOut(p, m){
+  for(let t = 0; t < 3; t++){ const d = collDist(p); if(d >= m) return; const e = 2e-3;
+    _n.set(collDist(_c.set(p.x + e, p.y, p.z).clone()) - collDist(_c.set(p.x - e, p.y, p.z).clone()), collDist(_c.set(p.x, p.y + e, p.z).clone()) - collDist(_c.set(p.x, p.y - e, p.z).clone()),
+      collDist(_c.set(p.x, p.y, p.z + e).clone()) - collDist(_c.set(p.x, p.y, p.z - e).clone()));
+    if(_n.lengthSq() < 1e-12) return; p.addScaledVector(_n.normalize(), m - d); }
+}
+// move a point that was outside to a new spot without passing through her: stop where it touches, then let the rest of
+// the move slide along her surface, a little (cloth has grip)
+const _pr = V(), _t = V(), _g = V();
+function slideTo(p, prev, m){
+  if(collDist(p) >= m) return;
+  if(collDist(prev) < m * 0.5){ pushOut(p, m); return; }
+  let lo = 0, hi = 1; for(let k = 0; k < 7; k++){ const mid = (lo + hi) / 2; _t.lerpVectors(prev, p, mid); if(collDist(_t) >= m) lo = mid; else hi = mid; }
+  const hit = V().lerpVectors(prev, p, lo), e = 2e-3, d0 = (x, y, z) => collDist(_g.set(x, y, z));
+  const n = V(d0(hit.x + e, hit.y, hit.z) - d0(hit.x - e, hit.y, hit.z), d0(hit.x, hit.y + e, hit.z) - d0(hit.x, hit.y - e, hit.z), d0(hit.x, hit.y, hit.z + e) - d0(hit.x, hit.y, hit.z - e)).normalize();
+  _t.subVectors(p, hit); _t.addScaledVector(n, -Math.min(0, _t.dot(n))); p.copy(hit).addScaledVector(_t, 0.15); pushOut(p, m); // cloth grips: it barely slides
+}
+function hemPins(){ return (P && P.skirt && P.skirt.pins) || {}; }
+function settleSkirt(iters = 40){
+  if(!SK) return;
+  const k = S.skirt, N = SK_N, M = bones.pelvis.matrixWorld, Q = wquat(bones.pelvis), {pts, seg} = SK;
+  SK.coll.forEach(c => c.inv.copy(bones[c.bone].matrixWorld).invert());
+  const dirW = SK.dir.map(d => d.clone().applyQuaternion(Q)), pins = hemPins();
+  // like a game skirt, the front and sides follow the thighs: the cloth facing the way a thigh points lies along it down
+  // to the knee (a lap when she sits, a lifted front when she kicks), then hangs from there
+  const legs = ['L', 'R'].map(sd => { const hip = wpos(bones['thigh' + sd]), knee = wpos(bones['shin' + sd]), d = knee.clone().sub(hip).normalize(), hz = V(d.x, 0, d.z);
+    return {d, hz:hz.lengthSq() > 1e-8 ? hz.normalize() : hz, out:Math.hypot(d.x, d.z), reach:(REST.spine.y - knee.y + (knee.y - hip.y)) }; });
+  const tl = REST.thighL.y - REST.shinL.y + (REST.spine.y - REST.thighL.y), legDir = [], legW = [];
+  for(let i = 0; i < N; i++){ const o = V(SK.dir[i].x, 0, SK.dir[i].z).normalize(), side = clamp(0.5 + o.x * 1.6, 0, 1), oW = o.clone().applyQuaternion(Q);
+    let w = 0, d = dirW[i];
+    legs.forEach((L, j) => { const sw = j===0 ? side : 1 - side, f = Math.max(0, oW.dot(L.hz)) * clamp(L.out * 1.6, 0, 1) * sw; if(f > w){ w = f; d = L.d; } });
+    legW.push(clamp(w * 1.4, 0, 1)); legDir.push(d); }
+  const dirAt = (i, r, out) => r * seg > tl ? out.copy(dirW[i]) : out.copy(dirW[i]).lerp(legDir[i], legW[i]).normalize(), dt = V();
+  void legs;
+  const pinW = {}; for(const [i, v] of Object.entries(pins)) pinW[i] = av(v).applyMatrix4(M);
+  // the waist ring rides half on the hips and half on the waist, like the skin there, so bending forward never buries it
+  const Mw = bones.spine.matrixWorld, rp = V(), rs = V();
+  for(let i = 0; i < N; i++){ rp.copy(SK.ring[i]).applyMatrix4(M); rs.copy(SK.ring[i]).add(REST.pelvis).sub(REST.spine).applyMatrix4(Mw); pts[i].copy(rp).lerp(rs, 0.5); }
+  // first guess: hang each column from the waist down, row by row, laying it over whatever it meets (a raised thigh, a
+  // knee) rather than letting it start inside and come out underneath
+  for(let r = 1; r <= SK_R; r++) for(let i = 0; i < N; i++){ const p = pts[r * N + i], q = pts[(r - 1) * N + i];
+    p.copy(q).addScaledVector(dirAt(i, r, dt), seg * 0.5); pushOut(p, 0.02); p.sub(q).normalize().multiplyScalar(seg * 0.5).add(q);
+    const h = p.clone(); p.copy(h).addScaledVector(p.clone().sub(q).normalize(), seg * 0.5); pushOut(p, 0.02); p.sub(q).normalize().multiplyScalar(seg).add(q); void h; }
+  // the push of the motion: a direction she moves away from (behind her for walk and run), or out from her middle (twirl)
+  const fwd = V(0, 0, 1).applyQuaternion(Q); fwd.y = 0; if(fwd.lengthSq() < 1e-6) fwd.set(0, 0, 1); fwd.normalize();
+  const side = V(0, 1, 0).cross(fwd), a = (k.dir || 0) * D2R, wind = side.multiplyScalar(Math.sin(a)).addScaledVector(fwd, -Math.cos(a));
+  const str = (k.str || 0) * 0.02, twirl = k.motion==='twirl', mid = wpos(bones.pelvis), G = 0.02, f = V(), o = V(), tg = V();
+  const fix = (p, q, L) => { p.sub(q).normalize().multiplyScalar(L).add(q); };
+  for(let it = 0; it <= iters; it++){ const last = it===iters;
+    for(let r = 1; r <= SK_R; r++){ const rf = r / SK_R;
+      for(let i = 0; i < N; i++){ const p = pts[r * N + i], q = pts[(r - 1) * N + i]; _pr.copy(p);
+        if(!last){ f.set(0, -G, 0);
+          if(str){ if(twirl){ o.copy(p).sub(mid); o.y = 0; o.normalize(); f.addScaledVector(o, str * (0.3 + 0.7 * rf)).addScaledVector(V(0, 1, 0).cross(o), -str * 0.3 * rf); }
+            else f.addScaledVector(wind, str * (0.35 + 0.65 * rf) * (1 + 0.3 * Math.sin(i * 2.1 + r * 0.7))).add(V(0, str * 0.2 * rf, 0)); }
+          p.add(f); tg.copy(q).addScaledVector(dirAt(i, r, dt), seg); p.lerp(tg, 0.25); }
+        fix(p, q, seg);
+        slideTo(p, _pr, 0.02); if(p.y < 0.004) p.y = 0.004; }
+      if(last) continue;
+      // the cloth may bunch up (folds) but not stretch around the ring
+      for(let i = 0; i < N; i++){ const p = pts[r * N + i], n2 = pts[r * N + (i + 1) % N], d = p.distanceTo(n2), mx = SK.maxH[r];
+        if(d > mx){ o.subVectors(n2, p).multiplyScalar((d - mx) / d / 2); _pr.copy(p); p.add(o); slideTo(p, _pr, 0.02); _pr.copy(n2); n2.sub(o); slideTo(n2, _pr, 0.02); } }
+    }
+    // a pinned hem point pulls its column (and, less, its neighbours) up to it: the chain is pulled from the hem end,
+    // then hung from the waist again so it keeps its length
+    if(!last) for(const [j, w] of Object.entries(pinW)){ const c = +j * N / SK_PINS, span = 1.8 * N / SK_PINS;
+      for(let i = 0; i < N; i++){ const dd = Math.min(Math.abs(i - c), N - Math.abs(i - c)); if(dd >= span) continue; const wgt = 0.5 + 0.5 * Math.cos(dd / span * Math.PI);
+        pts[SK_R * N + i].lerp(w, wgt * 0.6);
+        for(let r = SK_R - 1; r >= 1; r--) fix(pts[r * N + i], pts[(r + 1) * N + i], seg);
+        for(let r = 1; r <= SK_R; r++) fix(pts[r * N + i], pts[(r - 1) * N + i], seg); } }
+  }
+  // soft vertical folds, deeper towards the hem; they only stand out, never sink into her
+  const pos = skirtMesh.geometry.attributes.position, nrm = V(), a1 = V(), a2 = V();
+  for(let r = 0; r <= SK_R; r++){ const rf = r / SK_R;
+    for(let i = 0; i < N; i++){ const p = pts[r * N + i]; a1.subVectors(pts[r * N + (i + 1) % N], pts[r * N + (i + N - 1) % N]);
+      a2.subVectors(pts[Math.min(r + 1, SK_R) * N + i], pts[Math.max(r - 1, 0) * N + i]); nrm.crossVectors(a2, a1).normalize();
+      const off = (0.5 + 0.5 * Math.sin(i / N * Math.PI * 2 * SK_FOLDS)) * 0.013 * rf * (0.6 + k.flare); tg.copy(p).addScaledVector(nrm, off);
+      if(r > 0) pushOut(tg, 0.03); // a little more room for the mesh than for the chains, so a knee never shows through between them
+      pos.setXYZ(r * N + i, tg.x, tg.y, tg.z); } }
+  pos.needsUpdate = true; skirtMesh.geometry.computeVertexNormals();
+  const ip = skirtInk.geometry.attributes.position, gn = skirtMesh.geometry.attributes.normal;
+  for(let v = 0; v < pos.count; v++) ip.setXYZ(v, pos.getX(v) + gn.getX(v) * 0.003, pos.getY(v) + gn.getY(v) * 0.003, pos.getZ(v) + gn.getZ(v) * 0.003);
+  ip.needsUpdate = true;
+}
 // what the view shows: just the skeleton, the body with the skeleton showing through, or just the body
 const MODES = {skel:'Skeleton', xray:'X-ray', body:'Body'};
 function showMode(){
   const m = S.mode || 'xray';
-  for(const x of [bodyMesh, hairMesh]) if(x) x.visible = m!=='skel'; inks.forEach(x => { x.visible = m==='body'; });
-  for(const mat of [BODY_MAT, HAIR_MAT]){ mat.opacity = m==='xray' ? 0.42 : 1; mat.depthWrite = m!=='xray'; mat.needsUpdate = true; }
+  for(const x of [bodyMesh, hairMesh, skirtMesh]) if(x) x.visible = m!=='skel'; [...inks, skirtInk].forEach(x => { if(x) x.visible = m==='body'; });
+  for(const mat of [BODY_MAT, HAIR_MAT, CLOTH_MAT]){ mat.opacity = m==='xray' ? 0.42 : 1; mat.depthWrite = m!=='xray'; mat.needsUpdate = true; }
   for(const b of Object.values(bones)) b.children.forEach(c => { if(c.userData.look) c.visible = m!=='body'; if(c.userData.face) c.visible = m!=='skel'; });
   $$('#modes button').forEach(b => b.classList.toggle('on', b.dataset.m===m)); dirty = true;
 }
@@ -565,6 +701,7 @@ function solve(){
   rig.updateMatrixWorld(true);
   for(const k of Object.keys(LIMB)) reach[k] = solveLimb(k).reach;
   rig.updateMatrixWorld(true);
+  settleSkirt(drag ? 16 : 40);
   placeHandles(); dirty = true; guideDirty = true; save();
 }
 // the rest pose: A-pose standing in the middle, hands and feet where the arms and legs end
@@ -657,6 +794,7 @@ for(const k of Object.keys(LIMB)){ mkHandle(k, 'ik', cube, PINK, {limb:k}); mkHa
 mkHandle('hips', 'root', new THREE.TorusGeometry(1, 0.08, 6, 32), GOLD);
 mkHandle('ground', 'ground', new THREE.TorusGeometry(1, 0.03, 4, 48), GOLD);
 for(const n of FK) mkHandle(n, 'fk', smallBall, 0xffffff, {bone:n});
+for(let j = 0; j < SK_PINS; j++) mkHandle('hem' + j, 'hem', smallBall, 0xb38cff, {pin:j});
 const poleLines = {}; for(const k of Object.keys(LIMB)){ const g = new THREE.BufferGeometry().setFromPoints([V(), V()]);
   const l = new THREE.Line(g, new THREE.LineDashedMaterial({color:CYAN, dashSize:0.02, gapSize:0.015, depthTest:false, transparent:true, opacity:0.6})); l.renderOrder = 9; H.add(l); poleLines[k] = l; }
 function handlePos(h){
@@ -666,6 +804,7 @@ function handlePos(h){
   if(h.kind==='ground'){ const p = wpos(bones.pelvis); return V(p.x, 0.001, p.z); }
   if(h.bone==='head') return bones.head.localToWorld(V(0, 0.46 * REST.h, 0.03 * REST.h));
   if(h.kind==='fk') return wpos(bones[h.bone]);
+  if(h.kind==='hem') return SK ? SK.pts[SK_R * SK_N + h.pin * SK_N / SK_PINS].clone() : V(0, -9, 0);
 }
 const pxSize = (p, px) => { const d = camera.position.distanceTo(p), k = 2 * Math.tan(camera.fov * D2R / 2) * d / view.clientHeight; return px * k; };
 function placeHandles(){
@@ -675,6 +814,7 @@ function placeHandles(){
     else if(h.kind==='pole') h.mesh.scale.setScalar(pxSize(p, sel ? 8 : 6));
     else if(h.kind==='root'){ h.mesh.quaternion.copy(wquat(bones.pelvis)).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), Math.PI / 2)); h.mesh.scale.setScalar(0.16 * Math.max(1, S.body.hips)); }
     else if(h.kind==='ground'){ h.mesh.rotation.set(-Math.PI / 2, 0, 0); h.mesh.scale.setScalar(0.32); }
+    else if(h.kind==='hem'){ h.mesh.visible = !!SK; h.mesh.scale.setScalar(pxSize(p, sel ? 7 : 5)); h.mesh.material.color.set(hemPins()[h.pin] ? 0xd9c2ff : 0x8a66d9); }
     else h.mesh.scale.setScalar(pxSize(p, sel ? 7 : (h.bone==='head' ? 6 : 5)));
     h.mesh.material.opacity = sel ? 1 : 0.85; }
   for(const k of Object.keys(LIMB)){ const w = limbWorld(k), B = wpos(bones[LIMB[k].b]); const l = poleLines[k]; l.geometry.setFromPoints([B, w.p]); l.computeLineDistances(); }
@@ -714,7 +854,7 @@ function placeRings(){
 }
 function selectH(s){
   sel = s; const name = !s ? 'Tap a handle' : s.kind==='ik' ? NAMES[LIMB[s.limb].c] + ' (IK)' : s.kind==='pole' ? NAMES[LIMB[s.limb].b] + ' points here' : s.kind==='root' ? 'Hips' :
-    s.kind==='ground' ? 'Whole body' : s.kind==='upper' ? NAMES[LIMB[s.limb].a] : s.kind==='lower' ? NAMES[LIMB[s.limb].b] : NAMES[s.bone];
+    s.kind==='ground' ? 'Whole body' : s.kind==='hem' ? 'Skirt hem' : s.kind==='upper' ? NAMES[LIMB[s.limb].a] : s.kind==='lower' ? NAMES[LIMB[s.limb].b] : NAMES[s.bone];
   $('#selName').textContent = name; placeHandles(); dirty = true; selTools();
 }
 // turn the picked part by ang around a world axis
@@ -746,7 +886,7 @@ function pick(e){
   if(rings.visible){ ray.setFromCamera(ndc(e), camera); const hits = ray.intersectObjects(ringMeshes.filter(g => g.visible).map(g => g.userData.hit), false);
     if(hits.length){ const g = hits[0].object.parent; return {ring:g.userData.i}; } }
   let best = null, bd = 30;
-  for(const h of handles){ if(h.kind==='ground') continue; const [hx, hy, hz] = toPx(h.mesh.position); if(hz > 1) continue;
+  for(const h of handles){ if(h.kind==='ground' || !h.mesh.visible) continue; const [hx, hy, hz] = toPx(h.mesh.position); if(hz > 1) continue;
     const d = Math.hypot(hx - x, hy - y) - (h.kind==='ik' ? 4 : h.kind==='root' ? -6 : 0); if(d < bd){ bd = d; best = h; } }
   if(best) return {h:best};
   // a bone: pick the joint that turns it
@@ -771,12 +911,12 @@ cv.addEventListener('pointerdown', e => {
   const hit = pick(e);
   if(!hit){ tap = {x:e.clientX, y:e.clientY, id:e.pointerId}; return; }
   controls.enabled = false; e.preventDefault(); cv.setPointerCapture(e.pointerId); tap = null;
-  if(hit.h) selectH({kind:hit.h.kind, id:hit.h.id, limb:hit.h.limb, bone:hit.h.bone});
+  if(hit.h) selectH({kind:hit.h.kind, id:hit.h.id, limb:hit.h.limb, bone:hit.h.bone, pin:hit.h.pin});
   else if(hit.sel) selectH(hit.sel);
   const before = snap();
   if(hit.ring!==undefined){ const f = ringFrame(), c = toPx(f.c), r = cv.getBoundingClientRect();
     drag = {id:e.pointerId, before, ring:hit.ring, c, ang:Math.atan2(e.clientY - r.top - c[1], e.clientX - r.left - c[0]), f}; return; }
-  if(sel && ['ik', 'pole', 'root', 'ground'].includes(sel.kind)){
+  if(sel && ['ik', 'pole', 'root', 'ground', 'hem'].includes(sel.kind)){
     const h = handles.find(x => isSel(x)), p = handlePos(h);
     if(sel.kind==='ground') plane.set(V(0, 1, 0), 0); else plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(V()), p);
     ray.setFromCamera(ndc(e), camera); const hp = ray.ray.intersectPlane(plane, V()) || p.clone();
@@ -795,6 +935,7 @@ cv.addEventListener('pointermove', e => {
   if(sel.kind==='ik') setLimbWorld(sel.limb, {t:np});
   else if(sel.kind==='pole') setLimbWorld(sel.limb, {p:np});
   else if(sel.kind==='root') P.root.p = va(np);
+  else if(sel.kind==='hem'){ P.skirt = P.skirt || {pins:{}}; P.skirt.pins[sel.pin] = va(np.clone().applyMatrix4(bones.pelvis.matrixWorld.clone().invert())); }
   else if(sel.kind==='ground'){ const d = np.clone().sub(drag.last); d.y = 0; drag.last = np; P.root.p = va(av(P.root.p).add(d));
     for(const k of ['legL', 'legR']){ const w = limbWorld(k); setLimbWorld(k, {t:w.t.add(d), p:w.p.add(d)}); } }
   solve();
@@ -918,16 +1059,16 @@ function openposeCanvas(W, H2){ const c = document.createElement('canvas'); c.wi
 // depth and outline: the body alone, seen by the export camera, read back from the graphics card. Depth is near =
 // white, far = dark grey, nothing = black (the way depth preprocessors draw it); the outline is white lines on black
 // where the body's edge, a fold, or a jump in depth is (like a line-art preprocessor).
-const DEPTH_MAT = new THREE.MeshDepthMaterial({depthPacking:THREE.RGBADepthPacking}), NORMAL_MAT = new THREE.MeshNormalMaterial();
+const DEPTH_MAT = new THREE.MeshDepthMaterial({depthPacking:THREE.RGBADepthPacking, side:THREE.DoubleSide}), NORMAL_MAT = new THREE.MeshNormalMaterial({side:THREE.DoubleSide});
 function bodyPass(cam, W, H2, mat, clear, keepLayers){
   const rt = new THREE.WebGLRenderTarget(W, H2), buf = new Uint8Array(W * H2 * 4), bg = scene.background, cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
-  const figs = [bodyMesh, hairMesh].filter(Boolean), vis = figs.map(m => m.visible); figs.forEach(m => { m.visible = true; }); scene.background = null; scene.overrideMaterial = mat; renderer.setClearColor(clear, 1);
+  const figs = [bodyMesh, hairMesh, skirtMesh].filter(Boolean), vis = figs.map(m => m.visible); figs.forEach(m => { m.visible = true; }); scene.background = null; scene.overrideMaterial = mat; renderer.setClearColor(clear, 1);
   if(!keepLayers) cam.layers.set(1); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H2, buf);
   renderer.setRenderTarget(null); scene.overrideMaterial = null; scene.background = bg; renderer.setClearColor(cc, ca); figs.forEach((m, i) => { m.visible = vis[i]; }); rt.dispose(); dirty = true;
   return buf; // bottom row first
 }
 function bodyMaps(W, H2){
-  const cam = exportCam(), box = new THREE.Box3().setFromObject(bodyMesh, true).union(hairMesh ? new THREE.Box3().setFromObject(hairMesh, true) : new THREE.Box3()), sph = box.getBoundingSphere(new THREE.Sphere()), d = cam.position.distanceTo(sph.center);
+  const cam = exportCam(), box = new THREE.Box3().setFromObject(bodyMesh, true).union(hairMesh ? new THREE.Box3().setFromObject(hairMesh, true) : new THREE.Box3()).union(skirtMesh ? new THREE.Box3().setFromObject(skirtMesh, true) : new THREE.Box3()), sph = box.getBoundingSphere(new THREE.Sphere()), d = cam.position.distanceTo(sph.center);
   cam.near = Math.max(0.03, d - sph.radius - 0.05); cam.far = d + sph.radius + 0.05; cam.updateProjectionMatrix();
   const n = cam.near, f = cam.far, raw = bodyPass(cam, W, H2, DEPTH_MAT, 0xffffff), nrm = bodyPass(cam, W, H2, NORMAL_MAT, 0x000000);
   const lin = new Float32Array(W * H2), K = [255 / 256 / 16777216, 255 / 256 / 65536, 255 / 256 / 256, 255 / 256];
@@ -939,7 +1080,7 @@ function bodyMaps(W, H2){
   const nm = new Float32Array(W * H2 * 3);
   for(let y = 0; y < H2; y++) for(let x = 0; x < W; x++){ const i = ((H2 - 1 - y) * W + x) * 4, j = (y * W + x) * 3; for(let c = 0; c < 3; c++) nm[j + c] = nrm[i + c] / 127.5 - 1; }
   // the painted face lines (lashes, brows, mouth, irises) seen in front of the body, for the outline
-  const sw = new Map(); for(const m of [bodyMesh, hairMesh]) if(m){ sw.set(m, m.material); m.material = FLAT_BLACK; }
+  const sw = new Map(); for(const m of [bodyMesh, hairMesh, skirtMesh]) if(m){ sw.set(m, m.material); m.material = FLAT_BLACK; }
   const prevLayers = cam.layers.mask; cam.layers.set(1); cam.layers.enable(2);
   const faceMats = new Map(); bones.head.children.filter(c => c.layers.isEnabled(2)).forEach(c => { faceMats.set(c, c.material); c.material = FLAT_WHITE; });
   const fbuf = bodyPass(cam, W, H2, null, 0x000000, true); cam.layers.mask = prevLayers;
@@ -1216,6 +1357,8 @@ $('#panel').addEventListener('click', e => { const b = e.target.closest('[data-d
   if(d==='photoView') setView('photo');
   if(d==='handles'){ S.showHandles = !S.showHandles; b.textContent = 'Show handles: ' + (S.showHandles ? 'on' : 'off'); placeHandles(); dirty = true; save(); }
   if(d==='resetSel') act(resetSel);
+  if(d==='hemFree') act(() => { if(P.skirt) delete P.skirt.pins[sel.pin]; solve(); selTools(); });
+  if(d==='hemFreeAll') act(() => { delete P.skirt; solve(); selTools(); });
   if(d==='straight') act(() => { const L = LIMB[sel.limb], w = limbWorld(sel.limb), A = wpos(bones[L.a]), u = w.t.clone().sub(A).normalize(), len = bones[L.b].position.length() + bones[L.c].position.length();
     setLimbWorld(sel.limb, {t:A.clone().addScaledVector(u, len * 0.999)}); solve(); });
 });
@@ -1226,6 +1369,7 @@ function selTools(){
   const b = [];
   if(['fk', 'ik', 'root', 'upper', 'lower'].includes(sel.kind)) b.push('<button class="chipbtn" data-do="resetSel">↺ Reset this</button>');
   if(sel.limb) b.push('<button class="chipbtn" data-do="straight">Straighten</button>');
+  if(sel.kind==='hem'){ b.push('<button class="chipbtn" data-do="hemFree">↺ Let it hang</button>'); if(Object.keys(hemPins()).length > 1) b.push('<button class="chipbtn" data-do="hemFreeAll">Let the whole hem hang</button>'); }
   el.innerHTML = `<h3>${esc($('#selName').textContent)}</h3><div class="chips">${b.join('')}</div>`;
 }
 function resetSel(){
@@ -1266,6 +1410,24 @@ fillPcs(); $('#tPrompt').value = S.test.prompt; guideRows();
 $('#modes').innerHTML = Object.entries(MODES).map(([k, n]) => `<button data-m="${k}">${n}</button>`).join('');
 $('#modes').onclick = e => { const b = e.target.closest('[data-m]'); if(b){ S.mode = b.dataset.m; showMode(); save(); } };
 
+// ---------- skirt controls ----------
+const dirName = a => { a = ((a % 360) + 540) % 360 - 180; const n = Math.abs(a) < 23 ? 'behind' : Math.abs(a) > 157 ? 'forward' : Math.abs(a) < 68 ? (a > 0 ? 'back left' : 'back right') : Math.abs(a) < 113 ? (a > 0 ? 'to her left' : 'to her right') : (a > 0 ? 'front left' : 'front right'); return n; };
+function skirtUi(){ const k = S.skirt, on = skirtOn();
+  $('#skirtChips').innerHTML = Object.entries(SKIRT_STYLES).map(([id, v]) => `<button class="chipbtn ${k.style===id ? 'on' : ''}" data-sk="${id}">${v[0]}</button>`).join('');
+  $('#skirtSliders').innerHTML = on ? [['len', 'Length', 0.2, 1.05], ['flare', 'Flare', 0, 1]].map(([f, n, a, b]) => `<div class="row"><label>${n}</label><div class="slider"><input type="range" data-skf="${f}" min="${a}" max="${b}" step="0.01" value="${k[f]}"><output>${Math.round(k[f] * 100)}%</output></div></div>`).join('') : '';
+  $('#motionBox').hidden = !on; $('#motionChips').innerHTML = Object.entries(MOTIONS).map(([id, v]) => `<button class="chipbtn ${k.motion===id ? 'on' : ''}" data-mo="${id}">${v[0]}</button>`).join('');
+  $('#mStr').value = k.str; $('#mStr').nextElementSibling.textContent = Math.round(k.str * 100) + '%'; $('#mDir').value = k.dir; $('#mDir').nextElementSibling.textContent = dirName(k.dir);
+  $('#mDirRow').hidden = k.motion==='twirl' || k.motion==='still'; }
+function skirtChanged(rebuild){ if(rebuild) buildBody(); else settleSkirt(); dirty = true; guideDirty = true; save(); }
+$('#skirtChips').onclick = e => { const b = e.target.closest('[data-sk]'); if(!b) return; const st = SKIRT_STYLES[b.dataset.sk]; Object.assign(S.skirt, {style:b.dataset.sk}, st[1] ? {len:st[1], flare:st[2]} : {}); skirtUi(); skirtChanged(true); };
+let skT = 0;
+$('#skirtSliders').addEventListener('input', e => { const i = e.target.closest('[data-skf]'); if(!i) return; S.skirt[i.dataset.skf] = +i.value; i.nextElementSibling.textContent = Math.round(i.value * 100) + '%';
+  clearTimeout(skT); skT = setTimeout(() => { if(SK) buildSkirt(bodyPrims(REST, S.body)); settleSkirt(); showMode(); guideDirty = true; save(); }, 60); });
+$('#motionChips').onclick = e => { const b = e.target.closest('[data-mo]'); if(!b) return; const m = MOTIONS[b.dataset.mo]; Object.assign(S.skirt, {motion:b.dataset.mo, str:m[1], dir:m[2]}); skirtUi(); skirtChanged(); };
+$('#mStr').oninput = () => { S.skirt.str = +$('#mStr').value; $('#mStr').nextElementSibling.textContent = Math.round(S.skirt.str * 100) + '%'; if(S.skirt.motion==='still' && S.skirt.str > 0){ S.skirt.motion = 'wind'; skirtUi(); } skirtChanged(); };
+$('#mDir').oninput = () => { S.skirt.dir = +$('#mDir').value; $('#mDir').nextElementSibling.textContent = dirName(S.skirt.dir); skirtChanged(); };
+skirtUi();
+
 // ---------- start ----------
 let dirty = true;
 function resize(){ const w = view.clientWidth, h = view.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); layoutFrame(); placeHandles(); dirty = true; guideDirty = true; }
@@ -1279,7 +1441,7 @@ markView(S.viewKey==='photo' ? '' : (S.viewKey || ''));
 if(S.tab) $(`#tabs [data-tab="${S.tab}"]`).click();
 undoBtns();
 (function loop(){ requestAnimationFrame(loop); if(dirty){ dirty = false; renderer.render(scene, camera); } drawGuidePrev(); })();
-window.RIG = {S, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, camera, controls, groundIt, poseDirs};
+window.RIG = {S, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
 </script>
 </body>
 </html>

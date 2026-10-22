@@ -12,6 +12,10 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
   blunt bangs / bob / none, toon shading with an ink outline) grown from the skeleton (rounded cones and ellipsoids melted together, meshed with
   surface nets, skinned to the bones by which shapes each point lies on); rebuilt when the proportions change.
   Skeleton / X-ray / Body view switch.
+- Skirt (Short / Knee / Long dress, length and flare): a ring of hanging chains from the waist that settles from scratch
+  for each pose (gravity, a motion push: Still / Walk / Run / Twirl / Wind with a direction, stiffness for the flare,
+  the front following the thighs so it makes a lap), kept out of the posed hips and legs. Purple hem handles pin the
+  hem where you drag it (saved with the pose, undoable). The skirt is in the depth and outline guides.
 - Pose from a picture: MediaPipe Pose Landmarker on the phone (3D), or DWPose on a PC (comfyui_controlnet_aux's
   DWPreprocessor + SavePoseKpsAsJsonFile, lifted to 3D with the rig's bone lengths). The camera is fitted so the rig
   lines up with the picture.

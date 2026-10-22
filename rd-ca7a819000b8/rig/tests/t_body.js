@@ -38,6 +38,22 @@ const DEPS = process.env.RIG_DEPS || '';
   const urls = await page.evaluate(() => { document.querySelector('[data-preset="contra"]').click(); document.querySelector('#views [data-v="three"]').click(); document.querySelector('#gSize').value = '832x1216'; document.querySelector('#gSize').onchange();
     const cs = RIG.guideCanvases(832, 1216, ['pose', 'depth', 'line']); return Object.fromEntries(Object.entries(cs).map(([k, c]) => [k, c.toDataURL('image/png')])); });
   for(const [k, u] of Object.entries(urls)) fs.writeFileSync(path.join(__dirname, 'out', 'guide-' + k + '.png'), Buffer.from(u.split(',')[1], 'base64'));
+  // the skirt: settles in every starting pose without cutting into her, shows in the depth guide, and a dragged hem
+  // point pulls the cloth up to it
+  const sk = await page.evaluate(() => { document.querySelector('[data-sk="long"]').click(); const res = {inside:{}, ms:0};
+    for(const pre of ['stand', 'walk', 'run', 'sit', 'floor', 'kneel', 'crouch', 'jump', 'fight', 'lie']){ document.querySelector(`[data-preset="${pre}"]`).click();
+      const t0 = performance.now(); RIG.settleSkirt(); res.ms = Math.max(res.ms, Math.round(performance.now() - t0));
+      const K = RIG.skirt(); let n = 0; K.pts.forEach((p, j) => { if(j >= 40 && p.y > 0.03 && RIG.collDist(p) < 0.006) n++; }); if(n) res.inside[pre] = n; }
+    document.querySelector('[data-preset="stand"]').click(); document.querySelector('#views [data-v="front"]').click();
+    const cover = () => { const m = RIG.bodyMaps(256, 384); let n = 0; for(const v of m.lin) if(v > 0) n++; return n; };
+    const withSkirt = cover(); document.querySelector('[data-sk="none"]').click(); const without = cover(); document.querySelector('[data-sk="long"]').click(); res.hemDepth = +(withSkirt / without).toFixed(2);
+    const K = RIG.skirt(), hem = K.pts[12 * 40 + 10].clone(), t = hem.clone(); t.y += 0.3; t.x += 0.12;
+    RIG.P.skirt = {pins:{2:t.clone().applyMatrix4(RIG.bones.pelvis.matrixWorld.clone().invert()).toArray()}}; RIG.solve(); res.pinMiss = +K.pts[12 * 40 + 10].distanceTo(t).toFixed(3);
+    document.querySelector('[data-sk="none"]').click(); res.off = !RIG.skirt(); return res; });
+  ok(!Object.keys(sk.inside).length && sk.ms < 400, 'the long skirt never cuts into her in any starting pose: ' + JSON.stringify(sk.inside) + ', slowest settle ' + sk.ms + ' ms');
+  ok(sk.hemDepth > 1.3, 'the skirt is in the depth guide (covers more of the picture than the bare body): ' + sk.hemDepth + 'x');
+  ok(sk.pinMiss < 0.08, 'dragging the hem pulls the cloth up to it: ' + sk.pinMiss + ' m off');
+  ok(sk.off, 'Skirt: None takes it away');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
