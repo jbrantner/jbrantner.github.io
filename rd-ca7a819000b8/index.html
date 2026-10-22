@@ -616,7 +616,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.117'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.118'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5839,6 +5839,12 @@ async function d3Plain(ph){ const im = await scLoadImg(ph.url), mk = await scLoa
   const m = document.createElement('canvas'); m.width = W; m.height = H; const mx = m.getContext('2d'); mx.drawImage(mk, 0, 0, W, H); const D = mx.getImageData(0, 0, W, H);
   for(let q = 0; q < D.data.length; q += 4){ D.data[q + 3] = D.data[q]; } mx.putImageData(D, 0, 0); mx.globalCompositeOperation = 'source-in'; mx.drawImage(im, 0, 0, W, H);
   const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.drawImage(m, 0, 0); return c; }
+// a quarter of the keyframed circle (Jordan 2026-10-22): first and last frame are two keyframes 90° apart at one height
+function quarterPrompt(height, scene){
+  const h = height==='high' ? 'high above her, looking down on her' : height==='low' ? 'low near the ground, looking up at her' : 'at her eye level';
+  return 'The first frame shows ' + (scene || 'her') + '. One continuous camera move: a 90-degree arc shot. The camera circles to the right around her ' + h + ', at the same height and distance the whole time, '
+    + 'at one steady, constant speed from the first frame to the last, always keeping her centred and the same size. [0s-5s] The camera travels the whole quarter circle evenly and arrives exactly on the last frame\'s view at 5 seconds. '
+    + 'The background stays plain white, with no floor, shadows or scenery. She is frozen: same pose, same expression, nothing moves except the camera. Same art style, colours and lighting. No cuts, no zoom, no new characters. Silence.'; }
 function circlePrompt(scene, plain, height){
   if(height) return circlePrompt(scene, plain).replace('She is frozen', 'The camera never comes back to eye level: it stays ' + (height==='high' ? 'high above her, looking down, so we see the top of her head and shoulders' : 'low near the ground, looking up, so she towers over the camera') + ' for the whole orbit. She is frozen').replace('at the same height and distance', height==='high' ? 'from a high angle above her, looking down on her, staying at that same height and distance'
     : 'from a low angle near the ground, looking up at her, staying at that same height and distance').replace('The camera circles', 'The camera keeps its ' + height + ' angle the whole time and circles');
@@ -5916,9 +5922,9 @@ function orbitGraph(k, img, o, w, h, prefix){
   let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
   if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
-  const prompt = o.mode==='pose' ? posePrompt(o.action, o.scene) : o.mode==='circle' ? circlePrompt(o.scene, o.plain, o.height) : obPrompt(o.dir || 'right', o.deg || 90, o.tilt || 40, o.scene, o.zoom);
+  const prompt = o.mode==='quarter' ? quarterPrompt(o.height, o.scene) : o.mode==='pose' ? posePrompt(o.action, o.scene) : o.mode==='circle' ? circlePrompt(o.scene, o.plain, o.height) : obPrompt(o.dir || 'right', o.deg || 90, o.tilt || 40, o.scene, o.zoom);
   let cond, lat;
-  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', Object.assign({clip:[clip,0], vae:[vae,0], prompt, width:w, height:h, length:OB_LEN, first_frame:[li,0]}, o.mode==='circle' && o.home!==false ? {last_frame:[li,0]} : {})); cond = [iv,0]; lat = [iv,1]; }
+  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', Object.assign({clip:[clip,0], vae:[vae,0], prompt, width:w, height:h, length:OB_LEN, first_frame:[li,0]}, o.last ? {last_frame:[add('LoadImage', {image:o.last}),0]} : o.mode==='circle' && o.home!==false ? {last_frame:[li,0]} : {})); cond = [iv,0]; lat = [iv,1]; }
   else { const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + prompt, width:w, height:h, length:OB_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
     lat = [rv,1]; cond = [add('MiniMaxH3AddGuide', {positive:[rv,0], latent:lat, vae:[vae,0], image:[li,0], frame_idx:0}), 0]; }
   const gd = add('BasicGuider', {model, conditioning:cond});
@@ -6978,7 +6984,8 @@ async function d3GetMoge(pc){
 // circling left and one right; dragging then scrubs through those painted views, so a bigger swing shows real new sides
 // instead of stretched depth. The depth relief stays for the instant, small swing. Use this angle finishes the exact frame.
 const D3_CIRC_N = 72, D3_ORB_N = 16, D3F = {}, D3ERR = {}; // frames per side, taken from the move (the first 4 s of the clip); url -> frames
-const d3Orbs = ph => ['left', 'right', 'circle'].map(s => ph.orbs && ph.orbs[s]).filter(Boolean).concat(ph.t3d && ph.t3d.moves ? ph.t3d.moves.map(m => m.host) : [], ph.t3d && ph.t3d.rings ? ['high', 'low'].map(k => ph.t3d.rings[k] && ph.t3d.rings[k].host).filter(Boolean) : []);
+const d3Orbs = ph => ['left', 'right', 'circle'].map(s => ph.orbs && ph.orbs[s]).filter(Boolean).concat(ph.t3d && ph.t3d.moves ? ph.t3d.moves.map(m => m.host) : [], ph.t3d && ph.t3d.rings ? ['high', 'low'].map(k => ph.t3d.rings[k] && ph.t3d.rings[k].host).filter(Boolean) : [],
+  ph.t3d && ph.t3d.kf ? Object.values(ph.t3d.kf.cr).concat(...Object.values(ph.t3d.kf.q)).filter(Boolean) : []);
 const d3CircReady = ph => !!(ph.orbs && ph.orbs.circle && ph.orbs.circle.url);
 const d3OrbReady = ph => ph.orbs && ph.orbs.left && ph.orbs.left.url && ph.orbs.right && ph.orbs.right.url;
 function d3OrbHtml(ph){
@@ -7021,11 +7028,11 @@ async function d3Orbit(p){
 }
 // the frames of the move, small enough to keep on a phone (16 a side at about 640 px)
 function d3Frames(url, all){
-  if(D3F[url]) return D3F[url]; const N = all ? D3_CIRC_N : D3_ORB_N;
+  if(D3F[url]) return D3F[url]; const N = all==='q' ? 24 : all ? D3_CIRC_N : D3_ORB_N, px = all==='q' ? 480 : 640;
   const F = D3F[url] = {ready:false, list:[], f:0}, tell = f => { F.f = f; d3LoadBar(); };
   F.wait = (async () => {
     if(url==='test'){ for(let n = 0; n < N; n++){ const c = document.createElement('canvas'); c.width = 64; c.height = 112; const x = c.getContext('2d'); x.fillStyle = 'hsl(' + n * 20 + ',70%,50%)'; x.fillRect(0, 0, 64, 112); F.list.push(c); } F.ready = true; return F; }
-    const v = await d3Video(url, f => tell(0.6 * f)), end = all ? v.duration - 0.05 : Math.min(v.duration - 0.05, 4), s = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
+    const v = await d3Video(url, f => tell(0.6 * f)), end = all ? v.duration - 0.05 : Math.min(v.duration - 0.05, 4), s = Math.min(1, px / Math.max(v.videoWidth, v.videoHeight));
     for(let n = 0; n < N; n++){ await d3SeekTo(v, end * n / (N - 1)); tell(0.6 + 0.4 * (n + 1) / N);
       const c = document.createElement('canvas'); c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); F.list.push(c); }
     v.removeAttribute('src'); v.load(); F.ready = true; return F; })().catch(e => { delete D3F[url]; throw e; });
@@ -7360,24 +7367,28 @@ const t3dReady = ph => !!(ph && ph.t3d && ph.orbs && ph.orbs.circle && ph.orbs.c
 const t3dMoves = ph => ph.t3d && ph.t3d.moves || [];
 const t3dMv = ph => { const m = t3dMoves(ph)[ph.mv]; return m && m.host.url ? m : null; }; // the move being looked through
 const t3dRing = (ph, r) => r && ph.t3d && ph.t3d.rings && ph.t3d.rings[r > 0 ? 'high' : 'low'];
-const t3dHas = (ph, r) => !r ? t3dReady(ph) : !!(t3dRing(ph, r) && t3dRing(ph, r).host.url);
+const t3dHas = (ph, r) => !r ? t3dReady(ph) : t3kOn(ph) ? t3kHas(ph, r) : !!(t3dRing(ph, r) && t3dRing(ph, r).host.url);
 const t3dDeg = ph => { const t = d3CircAt(ph); return Math.round((t > 0.5 ? t - 1 : t) * 360); };
 const t3dDegTxt = d => d===0 ? 'front' : Math.abs(d)===180 ? 'back' : (d < 0 ? '◀ ' : '') + Math.abs(d) + '°' + (d > 0 ? ' ▶' : '');
 const t3dAtTxt = at => t3dDegTxt(Math.round((at > 0.5 ? at - 1 : at) * 360));
 function t3dJobs(ph){ const o = ph.orbs && ph.orbs.circle, R = ph.t3d && ph.t3d.rings || {}; return (o ? [[o, 'The circle']] : []).concat(t3dMoves(ph).map(m => [m.host, T3D_MOVES.find(x => x[0]===m.dir)[1] + ' from ' + t3dAtTxt(m.at)]),
-  ['high', 'low'].filter(k => R[k]).map(k => [R[k].host, '⭕ The ' + k + ' circle'])); }
+  ['high', 'low'].filter(k => R[k]).map(k => [R[k].host, '⭕ The ' + k + ' circle']),
+  t3kOn(ph) ? Object.entries(ph.t3d.kf.cr).map(([id, h]) => [h, (id[0]==='u' ? '⬆ Crane up' : '⬇ Crane down') + ' at ' + t3dAtTxt(T3K_AT[+id.slice(-1)])])
+    .concat(T3K_H.flatMap(([h]) => ph.t3d.kf.q[h].map((x, i) => x && [x, (h==='eye' ? 'Eye level' : h==='high' ? 'High' : 'Low') + ' turn, ' + ['front → side', 'side → back', 'back → side', 'side → front'][i]]).filter(Boolean))) : []); }
 function t3dHtml(p, ph){
-  const jobs = t3dJobs(ph), run = jobs.filter(([h]) => h.making || h.busy);
-  let x = `<div class="obpanel d3box"><div class="obhead"><b>🧊 3D object</b><button class="chipbtn" data-cm="d3off" aria-label="Close the 3D object">✕</button></div>`;
+  const jobs = t3dJobs(ph), run = jobs.filter(([h]) => h.making || h.busy), all = t3kOn(ph) ? 21 : 0, got = jobs.filter(([h]) => h.url).length;
+  let x = `<div class="obpanel d3box"><div class="obhead"><b>🧊 3D object</b><button class="chipbtn" data-cm="d3off" aria-label="Close the 3D object">✕</button></div>`
+    + (all ? `<p class="note">🔑 ${got} of ${all} clips made${got < all ? ': keyframes at front, side, back and side, at eye level, high and low, then quarter turns between them' : ''}.</p>` : '');
   const bars = run.map(([h, L]) => `<p class="note"><b>${L}</b></p><div class="pbar obbar${h.making ? '' : ' pulse'}"><i data-cmbar="${h.id}"></i></div><p class="note" data-cmtxt="${h.id}">${esc(h.busy || '')}</p>`).join('')
     + jobs.filter(([h]) => h.err).map(([h]) => `<p class="warn">${esc(h.err)}</p>`).join('');
-  if(!t3dReady(ph)) return x + (run.length ? `<p class="note">MiniMax is circling her all the way round on white at eye level, and craning up and down from your still. Then it picks the highest and lowest frames and circles her there too (about 15 to 20 minutes). You can close the app; when you open it again it carries on.</p>` + bars
+  if(!t3dReady(ph)) return x + (run.length ? `<p class="note">MiniMax is circling her on white at eye level for the keyframes, and craning up and down from your still. About 45 to 50 minutes in all across both computers. You can close the app; when you open it again it carries on.</p>` + bars
     + `<div class="btnrow"><button class="btn" data-cm="d3stop">✕ Stop</button></div></div>` : bars + `<div class="btnrow"><button class="btn" data-cm="t3dgo">🧊 Turn into 3D object</button></div></div>`);
   const deg = t3dDeg(ph), mv = t3dMv(ph), done = t3dMoves(ph).map((m, i) => [m, i]).filter(([m]) => m.host.url);
   x += `<div class="scwrap"><canvas class="scview" data-d3view></canvas></div>
     <div class="row"><label>Turn</label><div class="slider"><input type="range" data-t3d="deg" min="-180" max="180" step="1" value="${deg}"><output>${t3dDegTxt(deg)}</output></div></div>`
     + (mv ? `<div class="row"><label>${T3D_MOVES.find(q => q[0]===mv.dir)[1]}</label><div class="slider"><input type="range" data-t3d="mv" min="0" max="100" step="1" value="${Math.round((+ph.mvT || 0) * 100)}"><output>${Math.round((+ph.mvT || 0) * 100)}%</output></div></div>` : '')
-    + (!mv && (ph.t3d.rings && (ph.t3d.rings.high || ph.t3d.rings.low)) ? `<div class="row"><label>Height</label><div class="seg">${[[1, '⬆ High'], [0, 'Eye level'], [-1, '⬇ Low']].map(([v, L]) => `<button class="${(+ph.ring || 0)===v ? 'on' : ''}" data-t3dring="${v}" ${t3dHas(ph, v) ? '' : 'disabled'}>${L}</button>`).join('')}</div></div>` : '')
+    + (!mv && t3kOn(ph) ? `<div class="row"><label>Height</label><div class="seg">${[[1, '⬆ High'], [0, 'Eye level'], [-1, '⬇ Low']].map(([v, L]) => `<button class="${(+ph.ring || 0)===v ? 'on' : ''}" data-t3dring="${v}" ${t3kHas(ph, v) ? '' : 'disabled'}>${L}${t3kHas(ph, v) ? '' : ' …'}</button>`).join('')}</div></div>` : '')
+    + (!mv && !t3kOn(ph) && (ph.t3d.rings && (ph.t3d.rings.high || ph.t3d.rings.low)) ? `<div class="row"><label>Height</label><div class="seg">${[[1, '⬆ High'], [0, 'Eye level'], [-1, '⬇ Low']].map(([v, L]) => `<button class="${(+ph.ring || 0)===v ? 'on' : ''}" data-t3dring="${v}" ${t3dHas(ph, v) ? '' : 'disabled'}>${L}</button>`).join('')}</div></div>` : '')
     + (mv && (mv.dir==='up' || mv.dir==='down') ? `<div class="btnrow"><button class="btn hot" data-cm="t3dcirc" ${run.length ? 'disabled' : ''}>⭕ Circle from here (the ${mv.dir==='up' ? 'high' : 'low'} circle)</button></div><p class="note">Scrub to the height you like first. MiniMax then circles her at that height, and up and down drags snap between the circles.</p>` : '')
     + `<p class="note">${mv ? 'Drag up or down (or the slider) to move along the ' + T3D_MOVES.find(q => q[0]===mv.dir)[2] + '. Drag sideways to go back to the circle.' : (ph.t3d.rings && (ph.t3d.rings.high || ph.t3d.rings.low) ? 'Drag sideways to walk round her, up or down to snap between the circles. ' : 'Drag sideways to walk round her. ') + 'Stop on an angle you like and make a camera move from it:'}</p>
     <div class="btnrow">${T3D_MOVES.map(([d, L]) => `<button class="btn" data-cm="t3dmove" data-d="${d}" ${mv ? 'disabled' : ''}>${L}</button>`).join('')}</div>
@@ -7388,16 +7399,18 @@ function t3dHtml(p, ph){
     <div class="btnrow"><button class="btn hot" data-cm="d3use" ${cmIllKits().length && !cmBusy(p) ? '' : 'disabled'}>✨ Use this angle</button></div>
     <p class="note">Use this angle finishes the frame you are on in Illustrious, as a new still for the panel.</p>
     <div class="btnrow"><button class="btn" data-cm="t3dgo" ${run.length ? 'disabled' : ''}>🧊 Circle her again</button></div></div>`;
+  if(t3kOn(ph)) x = x.replace(/<div class="btnrow"><button class="btn hot" data-cm="t3dcirc"[\s\S]*?<\/p>/, '');
   return x; }
 // the panel (and its page) a 3D object belongs to
 function t3dOwner(ph){ for(const cm of [S.comic, S.stash && S.stash.comic].filter(Boolean)) for(const pg of cm.pages){ const i = pg.panels.findIndex(q => q.d3===ph); if(i >= 0) return {pg, p:pg.panels[i], i}; } return null; }
 // one MiniMax job for the rings: src is the still's URL or a canvas
-async function t3dSend(ph, host, src, o, tag, avoid){
+async function t3dSend(ph, host, src, o, tag, avoid, last){
   const own = t3dOwner(ph), k = kitOrbit(avoid); host.busy = 'Sending…'; if(!$('#comic').hidden) drawComic();
   try{ if(k.why) throw new Error(k.why); if(!own) throw new Error('the panel is gone');
     let img = 'test.png', w = 576, h = 1024;
     if(!S.test){ if(typeof src==='string'){ img = await cmUp(src, k.url); const sz = await obSize(src); [w, h] = obCanvas(sz[0], sz[1], 576); }
       else { if(!src.width || !src.height) throw new Error('the frame came out empty'); img = (await uploadFrame(src, tag, k.url)).img; const sz = await obSize(ph.url); [w, h] = obCanvas(sz[0], sz[1], 576); } }
+    if(last!=null){ o = Object.assign({}, o, {last:S.test ? 'test_last.png' : typeof last==='string' ? await cmUp(last, k.url) : (await uploadFrame(last, tag + '_last', k.url)).img}); }
     if(!(w > 0 && h > 0)) throw new Error('the clip size came out blank');
     const prefix = cmPrefixP(own.pg, own.i, 'orbit_' + tag), G = orbitGraph(k, img, o, w, h, prefix);
     if(S.test){ CM_SENT.push(G.g); setTimeout(() => { delete host.busy; cmGot(host, 'orbit', {test:true}); }, 200); return k.url; }
@@ -7405,22 +7418,46 @@ async function t3dSend(ph, host, src, o, tag, avoid){
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     host.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:(k.steps===20 ? 15 : k.fl ? 5 : 3) * cmSlow(k.url), smp:samplerOf(G.g), kind:'orbit', side:tag, video:true}; delete host.busy; save(); if(!$('#comic').hidden) drawComic(); cmWait(host); return k.url;
   }catch(err){ delete host.busy; host.err = "Couldn't make the " + tag.replace(/_/g, ' ') + ': ' + err.message; save(); if(!$('#comic').hidden) drawComic(); return null; } }
-// set and forget (Jordan 2026-10-22): the eye-level circle, and a crane up and a crane down from the still beside it; each
-// crane's furthest frame (where her outline has changed most) then starts that height's circle
-async function t3dGo(p){ const ph = p.d3; if(!ph) return; ph.yaw = ph.pitch = 0; ph.mv = -1; ph.mvT = 0; ph.ring = 0; ph.view = 'circle';
-  ph.t3d = {moves:[['up', 0], ['down', 1]].map(([dir, n]) => ({at:0, dir, auto:true, host:{id:ph.id + '_mv' + n, busy:'Waiting…'}}))};
-  ph.orbMode = 'circle'; ph.circPlain = true; ph.circHome = 'free'; await d3Orbit(p);
-  let avoid = ph.orbs.circle && ph.orbs.circle.making && ph.orbs.circle.making.pc;
-  for(const m of ph.t3d.moves) avoid = await t3dSend(ph, m.host, ph.url, {dir:m.dir, deg:0, tilt:45, scene:'her alone on a plain white background'}, 'move_' + m.dir, avoid) || avoid; }
-// a crane from the set-and-forget run is done: pick its furthest frame and circle from there
-async function t3dAfterMove(host){
-  const ph = cmAll().map(q => q.d3).find(d => d && d.t3d && (d.t3d.moves || []).some(m => m.host===host)); if(!ph) return;
-  const mv = ph.t3d.moves.find(m => m.host===host), k = mv.dir==='up' ? 'high' : 'low'; if(!mv.auto || ph.t3d.rings && ph.t3d.rings[k] || !host.url) return;
-  try{ const F = d3Frames(host.url); await F.wait; const s0 = t3dSig(F.list[0]); let best = 0, bi = F.list.length - 1;
-    F.list.forEach((c, i) => { const g = t3dSig(c), d = g.reduce((a, v, q) => a + (v - s0[q]) ** 2, 0); if(d > best){ best = d; bi = i; } });
-    if(best < 0.02 && !S.test){ host.err = 'The ' + (mv.dir==='up' ? 'crane up' : 'crane down') + ' barely moved, so there is no ' + k + ' circle. Try ' + (mv.dir==='up' ? '⬆ Up' : '⬇ Down') + ' again from an angle you like.'; save(); if(!$('#comic').hidden) drawComic(); return; }
-    await t3dCirc(ph, mv, bi / (F.list.length - 1)); }
-  catch(err){ host.err = "Couldn't pick the " + k + ' frame: ' + err.message; save(); if(!$('#comic').hidden) drawComic(); } }
+// 🔑 keyframed 3D object (Jordan 2026-10-22): front, side, back, other side at eye level (the still + the eye-level circle at its
+// 1.3 / 2.6 / 3.9 s marks), a crane up and a crane down from each (the furthest frame is that angle's high / low keyframe),
+// then each height is four quarter clips from keyframe to keyframe (first + last frame), so all three heights hit every
+// angle at the same moment. One idempotent step function moves it along whenever a job lands, and when the app opens.
+const T3K_H = [['eye', 0], ['high', 1], ['low', -1]], T3K_AT = [0, 0.26, 0.52, 0.78];
+const t3kOn = ph => !!(ph && ph.t3d && ph.t3d.kf);
+const t3kQs = (ph, h) => ph.t3d.kf.q[h];
+const t3kHas = (ph, r) => { const h = T3K_H.find(x => x[1]===r)[0]; return t3kQs(ph, h).every(x => x && x.url); };
+const t3kKeyImg = async key => key.still ? key.still : S.test ? null : await t3dGrab(key.u, d => (d - 0.05) * key.t);
+async function t3kGo(p){ const ph = p.d3; if(!ph) return; ph.yaw = ph.pitch = 0; ph.mv = -1; ph.mvT = 0; ph.ring = 0; ph.view = 'circle';
+  ph.t3d = {moves:[], kf:{keys:{eye:[{still:ph.url}, null, null, null], high:[null, null, null, null], low:[null, null, null, null]}, cr:{}, q:{eye:[null, null, null, null], high:[null, null, null, null], low:[null, null, null, null]}}};
+  ph.orbMode = 'circle'; ph.circPlain = true; ph.circHome = 'free'; await d3Orbit(p); t3kStep(ph); }
+let T3K_LAST = null; // the computer the last job went to, so the 21 jobs alternate between both
+async function t3kStep(ph){
+  if(!t3kOn(ph) || !t3dOwner(ph)) return; const K = ph.t3d.kf, sc = 'her alone on a plain white background';
+  // the eye-level keyframes from the circle
+  if(ph.orbs && ph.orbs.circle && ph.orbs.circle.url) [1, 2, 3].forEach(i => { if(!K.keys.eye[i]) K.keys.eye[i] = {u:ph.orbs.circle.url, t:T3K_AT[i]}; });
+  // cranes from every eye-level keyframe
+  for(let i = 0; i < 4; i++) for(const dir of ['up', 'down']){ const id = dir + i; if(!K.keys.eye[i] || K.cr[id]) continue;
+    const host = K.cr[id] = {id:ph.id + '_kc' + id, busy:'Waiting…'}; save(); t3kKeyImg(K.keys.eye[i]).then(src => t3dSend(ph, host, src, {dir, deg:0, tilt:45, scene:sc}, 'key_' + (dir==='up' ? 'high' : 'low') + '_' + i, T3K_LAST)).then(u => { if(u) T3K_LAST = u; })
+      .catch(err => { delete host.busy; host.err = "Couldn't take the keyframe: " + err.message; save(); }); }
+  // each crane's furthest frame becomes that angle's high / low keyframe
+  for(const id in K.cr){ const host = K.cr[id], h = id[0]==='u' ? 'high' : 'low', i = +id.slice(-1); if(!host.url || K.keys[h][i] || host.picking || host.err) continue;
+    host.picking = true;
+    try{ const F = d3Frames(host.url); await F.wait; const s0 = t3dSig(F.list[0]); let best = 0, bi = F.list.length - 1;
+      F.list.forEach((c, n) => { const g = t3dSig(c), d = g.reduce((a, v, q) => a + (v - s0[q]) ** 2, 0); if(d > best){ best = d; bi = n; } });
+      if(best < 0.02 && !S.test) host.err = 'The crane ' + (h==='high' ? 'up' : 'down') + ' at ' + t3dAtTxt(T3K_AT[i]) + ' barely moved.';
+      else K.keys[h][i] = {u:host.url, t:bi / (F.list.length - 1) * Math.min(1, 4 / 5)}; }
+    catch(err){ host.err = "Couldn't pick the " + h + ' keyframe: ' + err.message; }
+    delete host.picking; save(); }
+  // quarter clips between neighbouring keyframes
+  for(const [h] of T3K_H) for(let i = 0; i < 4; i++){ const a = K.keys[h][i], b = K.keys[h][(i + 1) % 4]; if(!a || !b || K.q[h][i]) continue;
+    const host = K.q[h][i] = {id:ph.id + '_kq' + h + i, busy:'Waiting…'}; save();
+    Promise.all([t3kKeyImg(a), t3kKeyImg(b)]).then(([sa, sb]) => t3dSend(ph, host, sa, {mode:'quarter', height:h, scene:sc}, 'quarter_' + h + '_' + i, T3K_LAST, sb)).then(u => { if(u) T3K_LAST = u; })
+      .catch(err => { delete host.busy; host.err = "Couldn't take the keyframes: " + err.message; save(); }); }
+  if(!$('#comic').hidden) drawComic(); }
+// the frame on screen when keyframed: the quarter clip of this height that the turn is in
+function t3kFrame(ph){ const r = +ph.ring || 0; if(!t3kHas(ph, r)) return null; const h = T3K_H.find(x => x[1]===r)[0], at = d3CircAt(ph), i = Math.min(3, Math.floor(at * 4)), f = at * 4 - i, u = t3kQs(ph, h)[i].url, F = d3Frames(u, 'q');
+  if(!F.ready){ if(!F.hooked){ F.hooked = true; F.wait.then(() => d3Redraw()).catch(e => toast("Couldn't load that part of the turn: " + e.message, true)); } return null; }
+  const j = Math.round(f * (F.list.length - 1)); return {url:u, i:j, n:F.list.length, c:F.list[j]}; }
 // the frame of the circle on screen, at full size
 async function t3dGrab(url, t){ const v = await d3Video(url); await d3SeekTo(v, t(v.duration)); const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); return c; }
 // ⬆ ⬇ 🔍 🔭 a MiniMax camera move from the frame the turn is on
@@ -7468,7 +7505,7 @@ function t3dRingFrame(ph, r){
 function t3dDraw(ph, cv){
   const sl = document.querySelector('#comic [data-t3d="deg"]'); if(sl && document.activeElement!==sl){ const d = t3dDeg(ph); sl.value = d; if(sl.nextElementSibling) sl.nextElementSibling.textContent = t3dDegTxt(d); }
   const ms = document.querySelector('#comic [data-t3d="mv"]'); if(ms && document.activeElement!==ms){ ms.value = Math.round((+ph.mvT || 0) * 100); if(ms.nextElementSibling) ms.nextElementSibling.textContent = ms.value + '%'; }
-  const mv = t3dMv(ph), rf = !mv && +ph.ring && t3dRingFrame(ph, +ph.ring);
+  const mv = t3dMv(ph), rf = !mv && (t3kOn(ph) ? t3kFrame(ph) : +ph.ring && t3dRingFrame(ph, +ph.ring));
   if(rf){ const c = rf.c, x = cv.getContext('2d'), r = Math.max(cv.width / c.width, cv.height / c.height), w = c.width * r, h = c.height * r; x.fillStyle = '#fff'; x.fillRect(0, 0, cv.width, cv.height); x.drawImage(c, (cv.width - w) / 2, (cv.height - h) / 2, w, h); return true; }
   if(!mv) return d3CircDraw(ph, cv);
   const F = d3Frames(mv.host.url);
@@ -7477,7 +7514,7 @@ function t3dDraw(ph, cv){
   x.fillStyle = '#fff'; x.fillRect(0, 0, cv.width, cv.height); x.drawImage(c, (cv.width - w) / 2, (cv.height - h) / 2, w, h); return true; }
 // Use this angle: the very frame showing, at full size, finished in Illustrious
 async function t3dUse(p){
-  const ph = p.d3, mv = t3dMv(ph); if(!mv && +ph.ring) await d3Frames(ph.orbs.circle.url, true).wait; const rf = !mv && +ph.ring && t3dRingFrame(ph, +ph.ring), url = mv ? mv.host.url : rf ? rf.url : ph.orbs.circle.url;
+  const ph = p.d3, mv = t3dMv(ph); if(!mv && +ph.ring && !t3kOn(ph)) await d3Frames(ph.orbs.circle.url, true).wait; const rf = !mv && (t3kOn(ph) ? t3kFrame(ph) : +ph.ring && t3dRingFrame(ph, +ph.ring)), url = mv ? mv.host.url : rf ? rf.url : ph.orbs.circle.url;
   try{ let c; toast('Taking that view…');
     if(url==='test'){ c = document.createElement('canvas'); c.width = 576; c.height = 1024; c.getContext('2d').fillRect(0, 0, 576, 1024); }
     else c = await t3dGrab(url, d => mv ? Math.min(d - 0.05, 4) * Math.min(1, Math.max(0, +ph.mvT || 0)) : rf ? (d - 0.05) * rf.i / (rf.n - 1) : (d - 0.05) * d3CircAt(ph));
@@ -7594,7 +7631,7 @@ function cmGot(p, kind, it){
     if(it.urls && it.urls.length >= 4){ p.bg = it.urls[1]; p.bgDepth = it.urls[2]; p.mask = it.urls[3]; }
     ['far', 'farDepth', 'nearMask'].forEach(x => delete p[x]); p.dflip = false;
     save(); if(!$('#comic').hidden) drawComic(); if(it.url) d3After(p); return; }
-  if(kind==='orbit'){ p.url = it.url || 'test'; delete p.err; if(/_mv\d+$/.test(p.id)) setTimeout(() => t3dAfterMove(p), 0);
+  if(kind==='orbit'){ p.url = it.url || 'test'; delete p.err;     setTimeout(() => cmAll().forEach(q => { if(q.d3 && t3kOn(q.d3)) t3kStep(q.d3); }), 0);
     if(/_circle$/.test(p.id)){ const ph = cmAll().map(q => q.d3).find(d => d && d.orbs && d.orbs.circle===p); if(ph){ ph.view = 'circle'; ph.yaw = ph.pitch = 0; } } // straight onto the circle (Jordan 2026-10-21 was still on the 35° views)
     save(); if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='far'){ if(it.urls && it.urls.length >= 2){ p.far = it.urls[0]; p.farDepth = it.urls[1]; p.nearMask = p.nearNext; } delete p.nearNext; save(); if(!$('#comic').hidden) drawComic(); return; }
@@ -7781,14 +7818,14 @@ $('#comic').addEventListener('click', e => {
   else if(a==='d3getda3'){ fuseGet(t.dataset.pc); return; }
   else if(a==='d3flip' && p.d3 && p.d3.fuse){ p.d3.fuse.flip = !p.d3.fuse.flip; save(); d3Redraw(); return; }
   else if(a==='d3orb'){ d3Orbit(p); return; }
-  else if(a==='t3dgo'){ t3dGo(p); }
+  else if(a==='t3dgo'){ t3kGo(p); }
   else if(a==='cmod'){ cmodMake(p); return; }
   else if(a==='d3use' && p.d3 && t3dReady(p.d3)){ t3dUse(p); return; }
   else if(a==='t3dmove' && p.d3){ t3dMove(p, t.dataset.d); return; }
   else if(a==='t3dcirc' && p.d3){ t3dCirc(p.d3, t3dMv(p.d3), +p.d3.mvT || 0); return; }
   else if(a==='d3use' && p.d3 && (p.d3.view==='mm' && d3OrbReady(p.d3) || p.d3.view==='circle' && d3CircReady(p.d3))){ d3UseMm(p); return; }
   else if(a==='d3moge'){ d3GetMoge(t.dataset.pc); return; }
-  else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = {id:p.id + '_3d', url:st.url, amt:1, t3d:{i:0}}; t3dGo(p); }
+  else if(a==='d3'){ const st = cmStill(p); if(!st || !st.url) return; p.d3 = {id:p.id + '_3d', url:st.url, amt:1, t3d:{i:0}}; t3kGo(p); }
   else if(a==='d3off'){ p.d3 = null; }
   else if(a==='d3wig'){ d3Wiggle(!D3.play); return; }
   else if(a==='d3rec'){ d3Record(); return; }
@@ -7942,6 +7979,7 @@ $('#wsBar').onclick = e => { const b = e.target.closest('[data-ws]'); if(!b || b
 obAll().forEach(g => { if(g.ob && g.ob.making) waitOrbit(g.ob); });
 cmAll().forEach(p => { if(!p.parent && p.extra) p.extra = p.extra.filter(c => c.making); }); // an option that never got sent
 cmAll().forEach(p => { if(p.making) cmWait(p); }); // comic panels made while the app was closed come in
+setTimeout(() => cmAll().forEach(q => { if(q.d3 && t3kOn(q.d3)) t3kStep(q.d3); }), 3000);
 cmAll().forEach(p => { if(p.fuse && p.fuse.making) fuseWait(p); if(p.cmod && p.cmod.making) cmodWait(p); });
 if(S.wsBack){ const id = S.wsBack; delete S.wsBack; if(wsPanel(id)) wsOpen(id); }
 else if(S.tab==='comic') openComic(); // an orbit made while the app was closed comes in
