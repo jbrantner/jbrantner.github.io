@@ -431,7 +431,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     // 🎬 Director mode: the still is the first frame, her preview the reference; Action + Camera from the tested pieces
     { await page.evaluate(() => { CM().sel = 0; const q = cmPage().panels[0]; if(!(q.stills || []).length) q.stills = [{url:'https://jordo-desktop.test/view?filename=s.png', w:832, h:1280}]; q.show = 'still'; CM().open.dir = true; drawComic(); });
       const sw = await page.evaluate(() => [...document.querySelectorAll('#comic .cmdchips')].map(r => { const o = getComputedStyle(r).overflowX, w = r.scrollWidth > r.clientWidth; r.scrollLeft = 60; return {o, w, sl:r.scrollLeft}; }));
-      ok(sw.length===2 && sw.every(r => r.o==='auto' && (!r.w || r.sl > 0)), '🎬 the Action and Camera chip rows swipe sideways: ' + JSON.stringify(sw));
+      ok(sw.length===3 && sw.every(r => r.o==='auto' && (!r.w || r.sl > 0)), '🎬 the Action and Camera chip rows swipe sideways: ' + JSON.stringify(sw));
       const fl = await page.evaluate(() => { const cm = CM(), q = cmPage().panels[0], w0 = q.white, f0 = cm.floor; q.white = true; delete cm.floor; drawComic();
         const seg = !!document.querySelector('#comic [data-cmfloor="grid"].on'), r = {seg, grid:cmDirPrompt(cm, q, []), tags:cmAutoTags(cm, q, 0, null), neg:cmWhiteNeg(cm)};
         cm.floor = 'plain'; r.plain = cmDirPrompt(cm, q, []); r.pneg = cmWhiteNeg(cm); q.white = w0; if(f0) cm.floor = f0; else delete cm.floor; drawComic(); return r; });
@@ -448,7 +448,14 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       ok(rv && rv.inputs['ref_images.ref_image_0'] && rv.inputs['ref_images.ref_image_1'] && ag && ag.inputs.frame_idx===0 && /^<Picture 1> is the first frame/.test(rv.inputs.prompt) && /<Picture 2> is a character model sheet for <Subject 1> \(she\): copy only her design from it, never its standing pose/.test(rv.inputs.prompt)
         && /High-angle tracking shot/.test(rv.inputs.prompt) && /looking down at her the whole time/.test(rv.inputs.prompt) && /walks forward with a steady stride .* from the first frame to the very last frame/.test(rv.inputs.prompt) && /Her whole body, head included, stays in frame\.$/.test(rv.inputs.prompt) && ns.some(n => n.class_type==='BasicScheduler' && n.inputs.steps===4) && !errs.length,
         '🎬 Direct it: the still pinned as frame 0, her preview as Picture 2, walking + crane up, Turbo 4 steps: ' + (rv ? rv.inputs.prompt : '') + ' ' + errs.join('; '));
-      ok(await page.evaluate(() => cmPage().panels[0].show==='clip' && !!document.querySelector('#comic [data-cmt]')), 'the directed clip lands as a take with the frame scrubber'); }
+      ok(await page.evaluate(() => cmPage().panels[0].show==='clip' && !!document.querySelector('#comic [data-cmt]')), 'the directed clip lands as a take with the frame scrubber');
+      await page.evaluate(() => { cmPage().panels[0].show = 'still'; CM().open.dir = true; drawComic(); }); await page.click('#comic [data-cmdirq="full"]');
+      const nf = ALL.length, t1 = await page.evaluate(() => cmPage().panels[0].takes.length); await page.click('#comic [data-cm="direct"]');
+      await page.waitForFunction(n => cmPage().panels[0].takes.length > n, t1, {timeout:20000});
+      const fg = Object.values(ALL[nf].prompt);
+      ok(fg.some(n => n.class_type==='BasicScheduler' && n.inputs.steps===20) && !fg.some(n => n.class_type==='LoraLoaderModelOnly') && !/turbo/i.test(fg.find(n => n.class_type==='UNETLoader').inputs.unet_name),
+        '🎬 Direct it, Full: the base model at 20 steps, no Turbo LoRA: ' + fg.find(n => n.class_type==='UNETLoader').inputs.unet_name);
+      await page.evaluate(() => { CM().dirQ = 'turbo'; }); }
     await page.selectOption('#comic [data-cmcomic]', '1'); await page.waitForTimeout(300);
     ok(await page.evaluate(() => CM().n===1 && CM().pages[0].panels.length===5 && S.comics.length===1 && S.cmLib.length===1), 'switching back: comic 1 is as it was, comic 2 kept, the library shared'); }
   await page.click('#tabs [data-tab="render"]');

@@ -66,3 +66,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 **v.131 (2026-10-22)**: 🎬 Director mode chip rows (Action, Camera) swipe sideways on a phone (they were clipped). Camera "Static" is now 🚫 No camera change: the prompt says nothing about the camera, so the character animates in the still's framing.
 
 **v.132 (2026-10-22)**: Floor for ⬜ Character only panels (per comic, panel editor): 🔲 Faint grid (default), 🌑 Shadow, ⬜ Plain. Grid adds "white floor, grid, perspective grid, tile floor, shadow" to the still, drops "floor, shadow" from its negative, and tells Director mode "A plain white floor marked with a faint light-grey grid; the grid stays fixed to the floor as the camera moves, and her shadow falls on it under her feet." Tested on Render: feet stay planted on the grid through a side arc (8.5/10 vs 6 on plain white).
+
+**v.133 (2026-10-22)**: 🎬 Director mode has a Steps choice per comic: ⚡ Turbo (4 steps, the hybrid Turbo with its ref2v LoRA, default) or Full (20 steps on the base MiniMax H3 model, no Turbo LoRA, about 12 to 20 min).
