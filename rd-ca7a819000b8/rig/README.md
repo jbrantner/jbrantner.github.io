@@ -24,6 +24,10 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
   with the whole turn allowed to run 25% short or long), size and shift, one shared camera tilt, left/right mix-ups
   tried both ways, outlier points dropped; which side is her left is settled from the nose. `tests/t_orbit.js [preset]`
   films the rig turning (pictures and a webm) and reads it back. My poses (Pose tab) saves poses as directions.
+- Not the whole body in the picture: the phone reader gets empty room below to find a cut-off person (legs it can't
+  see stay standing). 🎬 Make it full body runs two MiniMax H3 FL2V clips on the PC (Render Deck's Change angle setup):
+  a dolly-out to head-to-toe (optional leg description), then a full circle from its last frame back to it, which is
+  read as an orbit. Tested in `tests/t_orbit.js` against a stand-in ComfyUI.
 - Guides of what's inside the dashed frame: OpenPose (18 points, OpenPose colours), Depth (from the body, near =
   white) and Outline (white lines on black). Save, send to a PC's input folder, or try a render (Illustrious + LoRAs +
   ProMax with each guide switched on as its union type, saved under RenderDeck/rig).

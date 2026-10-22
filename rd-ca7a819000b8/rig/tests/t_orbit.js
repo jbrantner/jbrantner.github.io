@@ -59,7 +59,32 @@ const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * 
     const angs = G ? Object.keys(T).flatMap(k => [0, 1].map(i => angle(T[k][i], G[k][i]))) : [];
     results[kind] = {per:angs.map(Math.round), status:st, worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((a, b) => a + b, 0) / (angs.length || 1)), errors:logs};
     await ctx.close(); }
+  // 3. Make it full body: a stand-in ComfyUI on Render with MiniMax H3 FL2V; both clips it "makes" are the filmed turn.
+  // Checks the two graphs (pull-back from the picture, then a circle from the pull-back's last frame that ends where it
+  // starts) and that the circle is then read into a pose.
+  { const {page, logs, ctx} = await open(browser, {}), SRV = 'https://jordo-desktop.tailadee9a.ts.net', sent = [], ups = []; let n = 0;
+    const L = {UNETLoader:{unet_name:[['minimax_h3_t2v.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}, LoraLoaderModelOnly:{lora_name:[['minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors']]},
+      CLIPLoader:{clip_name:[['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']]}, VAELoader:{vae_name:[['minimax_h3_video_vae_fp16.safetensors']]}, MiniMaxH3ImageToVideo:{}, SaveVideo:{}, CreateVideo:{}, VAEDecodeTiled:{}};
+    await page.route(SRV + '/**', r => { const u = new URL(r.request().url()), cls = u.pathname.split('/')[2];
+      if(u.pathname.startsWith('/object_info/')) return r.fulfill({json:L[cls] ? {[cls]:{input:{required:L[cls]}}} : {}});
+      if(u.pathname==='/upload/image'){ const m = (r.request().postData() || '').match(/filename="([^"]+)"/); ups.push(m[1]); return r.fulfill({json:{name:m[1], subfolder:'', type:'input'}}); }
+      if(u.pathname==='/prompt'){ sent.push(JSON.parse(r.request().postData()).prompt); n++; return r.fulfill({json:{prompt_id:'p' + n, number:0, node_errors:{}}}); }
+      if(u.pathname.startsWith('/history/')){ const id = u.pathname.split('/')[2], g = sent[+id.slice(1) - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveVideo');
+        return r.fulfill({json:{[id]:{status:{status_str:'success', completed:true}, outputs:{[save]:{images:[{filename:'fb_00001_.mp4', subfolder:'RenderDeck/rig', type:'output'}], animated:[true]}}}}}); }
+      if(u.pathname==='/view') return r.fulfill({contentType:'video/webm', body:fs.readFileSync(vid)});
+      r.fulfill({status:404, body:''}); });
+    await page.click('#tabs [data-tab="pic"]'); await page.setInputFiles('#picFile', path.join(OUT, 'orbit', 'view-00.png'));
+    await page.waitForFunction(() => !document.querySelector('#fbGo').disabled); await page.fill('#fbLegs', 'weight on her left leg');
+    await page.evaluate(() => { document.querySelector('#picPc').value = 'https://jordo-desktop.tailadee9a.ts.net'; document.querySelector('#fbGo').click(); });
+    await page.waitForFunction(() => /good|bad/.test(document.querySelector('#fbStatus').className), null, {timeout:300000});
+    const st = await page.evaluate(() => document.querySelector('#fbStatus').textContent), G = await page.evaluate(LIMB_DIRS);
+    const angs = Object.keys(T).flatMap(k => [0, 1].map(i => angle(T[k][i], G[k][i])));
+    const mm = sent.map(g => Object.values(g).find(x => x.class_type==='MiniMaxH3ImageToVideo').inputs);
+    const graphs = sent.length===2 && mm[0].first_frame && !mm[0].last_frame && /dolly-out/.test(mm[0].prompt) && /weight on her left leg/.test(mm[0].prompt) && mm[1].last_frame && /360-degree/.test(mm[1].prompt)
+      && mm[0].width % 32===0 && mm[0].height > mm[0].width && ups.length===2 && sent.every(g => Object.values(g).some(x => x.class_type==='LoraLoaderModelOnly' && /fl2v_turbo_8step/.test(x.inputs.lora_name)) && Object.values(g).some(x => x.class_type==='UNETLoader' && /fl2v/.test(x.inputs.unet_name)));
+    results.fullbody = {status:st, graphs, size:[mm[0] && mm[0].width, mm[0] && mm[0].height], worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((a, b) => a + b, 0) / angs.length), errors:logs};
+    await page.screenshot({path:path.join(OUT, 'orbit-fullbody.png')}); await ctx.close(); }
   console.log(JSON.stringify(results, null, 1));
   await browser.close();
-  const pass = Object.values(results).every(r => r.worst < 30 && r.mean < 15 && !r.errors.length); console.log(pass ? 'all passed' : 'FAILED'); process.exit(pass ? 0 : 1);
+  const pass = Object.values(results).every(r => r.worst < 30 && r.mean < 15 && !r.errors.length && r.graphs!==false); console.log(pass ? 'all passed' : 'FAILED'); process.exit(pass ? 0 : 1);
 })();

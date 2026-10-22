@@ -76,6 +76,7 @@ header h1{font:700 20px/1 var(--display);margin:0;letter-spacing:.3px;white-spac
 .gblock .row>label{width:74px}
 .guidebox canvas,.guidebox img{width:132px;border-radius:10px;border:1px solid var(--line);background:#000}
 #testOut{width:100%;max-width:420px;border-radius:10px;border:1px solid var(--line);margin-top:8px}
+.guidebox video{width:132px;border-radius:10px;border:1px solid var(--line);background:#000}
 .orbgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
 .orbgrid canvas{width:100%;border-radius:8px;border:1px solid var(--line);background:#000;display:block}
 .orbgrid canvas.flip{border-color:var(--gold)} .orbgrid canvas.miss{opacity:.35}
@@ -155,11 +156,17 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
         <option value="phone">On this phone (MediaPipe, 3D)</option>
         <option value="dwpose">On a PC (DWPose)</option>
       </select></div></div>
-      <div class="row" id="picPcRow" hidden><label>PC</label><div class="grow"><select id="picPc"></select></div></div>
+      <div class="row" id="picPcRow"><label>PC</label><div class="grow"><select id="picPc"></select></div></div>
       <div class="chips"><button class="chipbtn hot" id="picGo" disabled>🤸 Copy the pose</button><button class="chipbtn" data-do="photoView">📷 Picture's camera</button></div>
       <div class="status" id="picStatus"></div>
       <div class="row"><label>Show it</label><div class="slider"><input type="range" id="picOpacity" min="0" max="1" step="0.05" value="0.45"><output>45%</output></div></div>
-      <p class="note">On this phone needs no PC and guesses depth too; DWPose is better at anime drawings but only sees flat, so check arms and legs from the side afterwards.</p>
+      <p class="note">On this phone needs no PC and guesses depth too; DWPose is better at anime drawings but only sees flat, so check arms and legs from the side afterwards. The PC is used for DWPose and for the full-body maker below.</p>
+      <h3>Not the whole body in it?</h3>
+      <p class="note">MiniMax (on the PC above) pulls the camera back from the picture until she's head to toe, holding the pose, then circles round her; the circle is read as an orbit below. Two clips, about 10 minutes on Render.</p>
+      <div class="row" style="align-items:flex-start"><label>Her legs</label><div class="grow"><input id="fbLegs" placeholder="optional: weight on one leg, left foot forward"></div></div>
+      <div class="chips"><button class="chipbtn hot" id="fbGo" disabled>🎬 Make it full body, then read it</button><button class="chipbtn" id="fbStop" hidden>✕ Stop</button></div>
+      <div class="status" id="fbStatus"></div>
+      <div class="guidebox" id="fbClips"></div>
       <h3>Pose from an orbit</h3>
       <p class="note">A turnaround video of one held pose (a MiniMax orbit), or pictures of it from all round in order. Every view is read, then they are combined into one 3D pose, so depth is measured instead of guessed. Uses the reader picked above.</p>
       <div class="chips"><label class="chipbtn" style="display:inline-flex;align-items:center">🎞 Choose a video or pictures<input type="file" id="orbFile" accept="video/*,image/*" multiple hidden></label></div>
@@ -1315,8 +1322,8 @@ function fitCamera(R){
 let picImg = null, picFile = null;
 $('#picFile').onchange = async e => { const f = e.target.files[0]; if(!f) return; picFile = f; const url = URL.createObjectURL(f);
   picImg = new Image(); picImg.src = url; await picImg.decode(); $('#picThumb').src = url; $('#picThumb').hidden = false; $('#photo').src = url; S.photoUrl = url;
-  $('#picGo').disabled = false; $('#picStatus').textContent = ''; };
-$('#picHow').onchange = () => { $('#picPcRow').hidden = $('#picHow').value!=='dwpose'; S.picHow = $('#picHow').value; save(); };
+  $('#picGo').disabled = false; $('#fbGo').disabled = false; $('#picStatus').textContent = ''; };
+$('#picHow').onchange = () => { S.picHow = $('#picHow').value; save(); };
 $('#picGo').onclick = async () => { const st = $('#picStatus'), b = $('#picGo'); b.disabled = true; st.className = 'status';
   try{ const R = $('#picHow').value==='dwpose' ? await readOnPc(picImg, picFile) : await readOnPhone(picImg);
     act(() => fitPoints(R)); st.className = 'status good'; st.textContent = 'Copied. ' + (R.partial ? 'Her legs are out of the picture, so they were left standing; pose them by hand. ' : '') + 'Check it from the side (Side view) and drag anything that went the wrong way.'; }
@@ -1456,18 +1463,91 @@ function drawOrbit(views, R){
 let orbFiles = null, orbLast = null;
 $('#orbFile').onchange = e => { orbFiles = e.target.files; $('#orbGo').disabled = !orbFiles || !orbFiles.length; $('#orbStatus').className = 'status';
   $('#orbStatus').textContent = orbFiles.length===1 ? '1 video picked' : orbFiles.length + ' pictures picked'; $('#orbSave').hidden = true; };
-$('#orbGo').onclick = async () => { const st = $('#orbStatus'), b = $('#orbGo'); b.disabled = true; st.className = 'status'; $('#orbSave').hidden = true;
-  try{ st.textContent = 'Taking the views out…'; const views = await orbFrames(orbFiles, +$('#orbN').value, +$('#orbSpan').value); drawOrbit(views, null);
+$('#orbGo').onclick = () => runOrbit(orbFiles);
+async function runOrbit(files){ const st = $('#orbStatus'), b = $('#orbGo'); b.disabled = true; st.className = 'status'; $('#orbSave').hidden = true;
+  try{ st.textContent = 'Taking the views out…'; const views = await orbFrames(files, +$('#orbN').value, +$('#orbSpan').value); drawOrbit(views, null);
     const how = $('#picHow').value;
     for(let k = 0; k < views.length; k++){ views[k].pts = await readView(views[k].c, how, st, 'Reading view ' + (k + 1) + ' of ' + views.length); drawOrbit(views, null); }
     st.textContent = 'Combining the views…'; await new Promise(r => setTimeout(r, 30));
     const R = solveOrbit(views.map(v => ({pts:v.pts, a:v.a}))); orbLast = R; drawOrbit(views, R);
     act(() => fitPoints(R)); setView('three');
     st.className = 'status good'; st.textContent = `Combined ${R.used.length} of ${views.length} views` + (R.flips ? `; the reader mixed up left and right in ${R.flips} (fixed)` : '') +
-      `. They agree to within ${Math.round(R.err * 50)}% of her height. Check it from the side, then save it.`; $('#orbSave').hidden = false; }
+      `. They agree to within ${Math.round(R.err * 50)}% of her height. Check it from the side, then save it.`; $('#orbSave').hidden = false; b.disabled = false; return true; }
   catch(err){ st.className = 'status bad'; st.textContent = err.message; console.error(err); }
-  b.disabled = false; };
+  b.disabled = false; return false; }
 $('#orbSave').onclick = () => saveMyPose('Orbit pose');
+
+// ---------- make it full body (MiniMax H3 FL2V on a PC) ----------
+// The same first-frame-to-video clips Render Deck's Change angle makes: a dolly-out from the picture until she is head
+// to toe (her legs made up to fit the pose, or as described), then a full circle that starts and ends on that frame,
+// which is read as an orbit. Prompts follow the timed-checkpoint wording that made MiniMax actually move the camera.
+const MM_LEN = 124;
+function fbPullPrompt(legs){ return 'The first frame shows her. One continuous camera move: a slow dolly-out. [0s-4s] The camera pulls straight back along a straight line, keeping her centred, '
+  + 'until her whole body is in frame from the top of her head down to her feet, with a little space around her. Her legs and feet come into view and continue the first frame naturally'
+  + ((legs || '').trim() ? ': ' + legs.trim().replace(/\.+$/, '') : '') + '. By 4 seconds we see all of her, standing on the ground. [4s-5s] The camera holds still on that full-body shot. '
+  + 'She is frozen in the moment of the first frame: same pose, same expression, nothing moves except the camera. Same art style, colours and lighting as the first frame. No cuts, no new characters. Silence.'; }
+const FB_CIRCLE = 'The first frame shows her, full body. One continuous camera move: a full 360-degree orbit shot round her, like a character turnaround. The camera circles to the right all the way around her at the same height and distance, never stopping, always keeping her whole body centred and the same size. '
+  + '[0s-1.3s] By 1.3 seconds we see her in full profile. [1.3s-2.6s] By 2.6 seconds we see her from directly behind. [2.6s-3.9s] By 3.9 seconds we see her other side in full profile. [3.9s-5s] The camera comes back round to the front and ends exactly on the first frame\'s view. '
+  + 'She is frozen in the moment of the first frame: same pose, same expression, nothing moves except the camera. Same art style, colours and lighting as the first frame. No cuts, no zoom, no new characters. Silence.';
+async function mmKit(srv){
+  const oi = {}; await Promise.all(['UNETLoader', 'LoraLoaderModelOnly', 'CLIPLoader', 'VAELoader', 'MiniMaxH3ImageToVideo', 'SaveVideo', 'CreateVideo', 'VAEDecodeTiled'].map(async c => { oi[c] = await nodeInfo(srv, c).catch(() => null); }));
+  const list = (c, k) => { const i = oi[c] && oi[c].input, sp = i && ((i.required || {})[k] || (i.optional || {})[k]); return sp && Array.isArray(sp[0]) ? sp[0] : []; };
+  const pick = (c, k, re) => list(c, k).find(n => re.test(n.split(/[\\/]/).pop()));
+  if(!oi.MiniMaxH3ImageToVideo || !oi.SaveVideo) throw new Error(pcLabel(srv) + " doesn't have the MiniMax H3 video nodes. Use Render.");
+  const k = {oi, unet:pick('UNETLoader', 'unet_name', /fl2v/i), lora:pick('LoraLoaderModelOnly', 'lora_name', /fl2v_turbo_8step/i) || pick('LoraLoaderModelOnly', 'lora_name', /fl2v_turbo/i),
+    clip:pick('CLIPLoader', 'clip_name', /minimax_h3/i), vae:pick('VAELoader', 'vae_name', /minimax_h3_video_vae_fp16/i) || pick('VAELoader', 'vae_name', /minimax_h3_video_vae/i)};
+  const lacks = [!k.unet && 'the MiniMax H3 FL2V model', !k.clip && 'the MiniMax H3 text encoder', !k.vae && 'the MiniMax H3 video VAE'].filter(Boolean);
+  if(lacks.length) throw new Error(pcLabel(srv) + ' is missing ' + lacks.join(', ') + '. Use Render.');
+  k.steps = !k.lora ? 20 : /4step/i.test(k.lora) ? 4 : 8; return k;
+}
+function mmGraph(k, first, last, prompt, w, h, prefix){
+  const g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n), req = ((k.oi[cls] || {}).input || {}).required || {};
+    for(const [key, sp] of Object.entries(req)) if(!(key in inputs)){ if(Array.isArray(sp[0]) && sp[0].length) inputs[key] = sp[0][0]; else if(sp[1] && sp[1].default!==undefined) inputs[key] = sp[1].default; }
+    g[id] = {class_type:cls, inputs}; return id; };
+  const li = add('LoadImage', {image:first}); let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
+  if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
+  const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
+  const iv = add('MiniMaxH3ImageToVideo', Object.assign({clip:[clip, 0], vae:[vae, 0], prompt, width:w, height:h, length:MM_LEN, first_frame:[li, 0]}, last ? {last_frame:[li, 0]} : {}));
+  const gd = add('BasicGuider', {model, conditioning:[iv, 0]}), sc = add('BasicScheduler', {model, scheduler:'simple', steps:k.steps, denoise:1});
+  const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)}), 0], guider:[gd, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sc, 0], latent_image:[iv, 1]});
+  const dec = add('VAEDecodeTiled', {samples:[out, 0], vae:[vae, 0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
+  const save = add('SaveVideo', {video:[add('CreateVideo', {images:[dec, 0], fps:24}), 0], filename_prefix:prefix, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  return {g, save};
+}
+// MiniMax's grid: multiples of 32, the picture's own shape (FL2V stretches the first frame to it), short side 576
+function mmSize(w, h){ const r = w / h, sh = 576; let W = r >= 1 ? sh * r : sh, H = r >= 1 ? sh : sh / r; if(W * H > 768 * 1344){ const q = Math.sqrt(768 * 1344 / (W * H)); W *= q; H *= q; }
+  return [Math.max(32, Math.round(W / 32) * 32), Math.max(32, Math.round(H / 32) * 32)]; }
+async function lastFrame(blob){
+  const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(blob);
+  await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = () => bad(new Error("Couldn't open the clip on this phone.")); v.load(); });
+  await new Promise(ok => { v.onseeked = ok; v.currentTime = Math.max(0, v.duration - 0.06); });
+  const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); URL.revokeObjectURL(v.src); return c;
+}
+let fbStop = false;
+async function fbClip(srv, k, img, last, prompt, w, h, what, st){
+  const name = await upload(srv, await new Promise(r => img.toBlob(r, 'image/png')), 'rd-rig-fb-' + Date.now().toString(36) + '.png');
+  const {g, save} = mmGraph(k, name, last, prompt, w, h, 'RenderDeck/rig/fullbody'), mins = k.steps===20 ? 15 : 5;
+  const out = await runGraph(srv, g, t => { if(fbStop) throw new Error('Stopped'); st.textContent = what + ' on ' + pcLabel(srv) + '… ' + Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0') + ' (usually about ' + mins + ' min)'; });
+  const o = out[save] || {}, f = (o.images || o.videos || o.gifs || [])[0]; if(!f) throw new Error('MiniMax finished but sent no clip back.');
+  const r = await fetch(srv + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'})); if(!r.ok) throw new Error("Couldn't fetch the clip (" + r.status + ')');
+  const blob = await r.blob(), vid = document.createElement('video'); vid.src = URL.createObjectURL(blob); vid.muted = true; vid.loop = true; vid.playsInline = true; vid.autoplay = true; vid.controls = true; $('#fbClips').appendChild(vid);
+  return blob;
+}
+$('#fbGo').onclick = async () => { const st = $('#fbStatus'), b = $('#fbGo'), srv = pcUrl($('#picPc').value); b.disabled = true; $('#fbStop').hidden = false; fbStop = false; st.className = 'status'; $('#fbClips').innerHTML = '';
+  try{ if(!srv) throw new Error('Pick a PC'); if(!picImg) throw new Error('Choose a picture first');
+    st.textContent = 'Asking ' + pcLabel(srv) + ' for MiniMax…'; const k = await mmKit(srv);
+    const c0 = document.createElement('canvas'); c0.width = picImg.naturalWidth; c0.height = picImg.naturalHeight; c0.getContext('2d').drawImage(picImg, 0, 0);
+    const [w, h] = mmSize(c0.width, c0.height);
+    const pull = await fbClip(srv, k, c0, false, fbPullPrompt($('#fbLegs').value), w, h, '1 of 2: pulling back to her whole body', st);
+    const full = await lastFrame(pull);
+    const circle = await fbClip(srv, k, full, true, FB_CIRCLE, w, h, '2 of 2: circling round her', st);
+    st.textContent = 'Reading the circle (Pose from an orbit, below)…'; $('#orbSpan').value = '360';
+    const ok = await runOrbit([new File([circle], 'circle.mp4', {type:'video/mp4'})]);
+    st.className = ok ? 'status good' : 'status bad'; st.textContent = ok ? 'Done: posed from the circle. Check it, then ＋ Save to My poses below.' : "The circle couldn't be read; see below. You can play the clips here."; }
+  catch(err){ st.className = 'status bad'; st.textContent = err.message; console.error(err); if(fbStop) fetch(srv + '/interrupt', {method:'POST'}).catch(() => {}); }
+  b.disabled = false; $('#fbStop').hidden = true; };
+$('#fbStop').onclick = () => { fbStop = true; $('#fbStatus').textContent = 'Stopping…'; };
 
 // ---------- my poses ----------
 // saved as directions (like the starting poses), so they still fit after the body changes
@@ -1608,7 +1688,7 @@ $('#bodySliders').addEventListener('input', e => { const i = e.target.closest('[
   const v = +i.value, k = i.dataset.bk; bodyT = setTimeout(() => { bodyT = 0; changeBody(Object.assign({}, S.body, {[k]:v})); }, 180); });
 $('#bodySliders').addEventListener('change', () => { if(bodyBefore){ if(bodyT){ clearTimeout(bodyT); bodyT = 0; const vals = {}; $$('[data-bk]').forEach(x => { vals[x.dataset.bk] = +x.value; }); changeBody(Object.assign({}, S.body, vals)); } commit(bodyBefore); bodyBefore = null; } });
 $('#gSize').value = S.guide.size; $('#gSize').onchange = () => { S.guide.size = $('#gSize').value; layoutFrame(); guideDirty = true; save(); };
-$('#picHow').value = S.picHow || 'phone'; $('#picPcRow').hidden = $('#picHow').value!=='dwpose';
+$('#picHow').value = S.picHow || 'phone';
 fillPcs(); $('#tPrompt').value = S.test.prompt; guideRows();
 
 $('#modes').innerHTML = Object.entries(MODES).map(([k, n]) => `<button data-m="${k}">${n}</button>`).join('');
