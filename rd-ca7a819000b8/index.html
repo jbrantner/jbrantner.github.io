@@ -389,6 +389,7 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cmsum{margin:14px 2px 8px;font-weight:700}
 .cmpages{margin:12px 0 0}
 .cmbar{gap:8px;align-items:center}
+.cmprev{display:block;max-width:60%;margin:8px auto;border-radius:10px;border:1px solid var(--line);background:#fff}
 .cmbox,.cmlib{border:1px solid var(--line);border-radius:12px;padding:10px;margin:0 0 10px;background:var(--panel2)}.cmbox textarea,.cmlib textarea{width:100%}.chipbtn.on{border-color:var(--pink,#ff5ca8);color:var(--text)}.cmbar .seg button{min-width:40px}.cmbar select{width:100%}
 .cmlays{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 8px}
 .cmlay{position:relative;flex:none;width:58px;aspect-ratio:2/3;border-radius:6px;background:#f4f1ea;border:2px solid var(--line)}
@@ -618,7 +619,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.122'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.123'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6248,7 +6249,8 @@ let CM_SENT = [];          // Test mode: the graphs made
 const CM = () => S.comic || (S.comic = {script:'', pages:[], cur:0, sel:0, cast:[], place:'', loc:null, styleLine:'Animation in the style of 2D anime.', vlora:'', vloraW:1, quality:'quick', route:'still', open:{script:true}});
 const cmPage = () => { const cm = CM(); return cm.pages[cm.cur] || null; };
 const cmComics = () => [S.comic, S.stash && S.stash.comic].concat(S.comics || [], S.stash && S.stash.comics || []).filter(Boolean);
-const cmAll = () => cmComics().flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []))).concat(cm.pj ? [cm.pj] : []));
+const cmLibHosts = () => (S.cmLib || []).map(L => L.pv).filter(Boolean);
+const cmAll = () => cmLibHosts().concat(cmComics().flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []))).concat(cm.pj ? [cm.pj] : [])));
 // a panel's still options are painted as jobs of their own (p.extra), so they spread over both computers
 const cmBusy = p => !!(p.making || p.busy || (p.extra || []).length);
 const cmLead = p => p.making || p.busy ? p : (p.extra || []).find(x => x.making || x.busy) || null;
@@ -6403,14 +6405,27 @@ function cmInsert(i, libId){ const pg = cmPage(), p = pg && pg.panels[i], L = (S
   const src = cmSrc(p) || '', at = CM_CARET[i]!=null ? Math.min(CM_CARET[i], src.length) : src.length, tag = '@' + cmTagOf(L), pre = src.slice(0, at), post = src.slice(at);
   p.src = pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + (post && /^\s/.test(post) ? '' : ' ') + post; p.text = cmPlainTx(p.src); CM_CARET[i] = (pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + ' ').length;
   CM_INS = null; cmRecast(); save(); drawComic(); }
-function cmLibHtml(){ const lib = S.cmLib || [], files = [...new Set(cmIllKits().flatMap(k => k.loras))].sort((a, b) => baseName(a).localeCompare(baseName(b)));
+// 🎨 the comic's look (Jordan 2026-10-22): one model and one style LoRA for every page, panel and library preview, so the
+// style LoRA is never added again (or twice) on a character
+function cmLookHtml(cm){ const iks = cmIllKits(), I = cmIll(), loras = [...new Set(iks.flatMap(k => k.loras))].sort((a, b) => baseName(a).localeCompare(baseName(b))), cks = [...new Set(iks.flatMap(k => combo(k.oi.CheckpointLoaderSimple, 'ckpt_name')))];
+  const nm = n => esc(baseName(n).replace(/\.safetensors$/i, '')), keep = (list, v) => v && !list.includes(v) ? list.concat([v]) : list;
+  return `<div class="row"><label>Model</label><div class="grow"><select data-cmill="ckpt">${keep(cks, I.ckpt).map(n => `<option value="${esc(n)}" ${n===(I.ckpt || (iks[0] || {}).ckpt) ? 'selected' : ''}>${nm(n)}</option>`).join('') || '<option>Turn a computer on</option>'}</select></div></div>
+    <div class="row"><label>Style LoRA</label><div class="grow"><select data-cmill="style"><option value="">None</option>${keep(loras, I.style).map(n => `<option value="${esc(n)}" ${n===I.style ? 'selected' : ''}>${nm(n)}</option>`).join('')}</select></div>
+      ${I.style ? `<input type="number" data-cmill="styleW" value="${esc(I.styleW==null ? 1 : I.styleW)}" step="0.1" min="0" max="2" style="width:76px" aria-label="Strength">` : ''}</div>
+    ${I.style ? `<div class="row"><label>Its words</label><div class="grow"><input type="text" data-cmill="words" value="${esc(I.words || '')}" placeholder="its trigger, e.g. AFKJ Style"></div></div>` : ''}
+    <p class="note">Used for every page, panel and character preview in this comic, so don't add it to characters. Character LoRAs work best on the model they were trained on (librarianx_v2: iriselTouchIL_v10 with AFKJ Style at 1.0).</p>`; }
+function cmLibHtml(){ const lib = S.cmLib || [], st = cmIll().style, files = [...new Set(cmIllKits().flatMap(k => k.loras))].filter(n => n!==st).sort((a, b) => baseName(a).localeCompare(baseName(b)));
   return lib.map(L => `<div class="cmlib"><div class="row"><div class="grow"><input type="text" data-cml="name" data-id="${esc(L.id)}" value="${esc(L.name || '')}" placeholder="Name, e.g. The Librarian" aria-label="Name"></div><button class="chipbtn" data-cm="libdel" data-id="${esc(L.id)}" aria-label="Remove ${esc(L.name || 'this character')}">🗑</button></div>
     <div class="row"><label>Tag</label><div class="grow"><input type="text" data-cml="tag" data-id="${esc(L.id)}" value="${esc(cmTagOf(L))}" aria-label="Tag"></div>${['f', 'm', ''].map(g => `<button class="chipbtn${(L.g || '')===g ? ' on' : ''}" data-cmlg="${g}" data-id="${esc(L.id)}">${g==='f' ? 'she' : g==='m' ? 'he' : 'they'}</button>`).join('')}</div>
     <textarea data-cml="desc" data-id="${esc(L.id)}" rows="2" placeholder="What they look like: long black hair and green eyes, a black gothic dress (turned into tags)">${esc(L.desc || '')}</textarea>
     <div class="row"><label>Card</label><div class="grow"><select data-cml="cid" data-id="${esc(L.id)}"><option value="">None</option>${(S.chars || []).map(c => `<option value="${esc(c.id)}" ${c.id===L.cid ? 'selected' : ''}>${esc(c.name || 'Unnamed')}</option>`).join('')}</select></div></div>
     ${(L.loras || []).map((x, j) => `<div class="row"><label>${j ? '' : 'LoRAs'}</label><div class="grow"><select data-cmll="file" data-id="${esc(L.id)}" data-j="${j}" aria-label="LoRA"><option value="">Pick a LoRA</option>${files.concat(x.file && !files.includes(x.file) ? [x.file] : []).map(n => `<option value="${esc(n)}" ${n===x.file ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div>
       <input type="number" data-cmll="w" data-id="${esc(L.id)}" data-j="${j}" value="${esc(x.w==null ? 1 : x.w)}" step="0.05" min="0" max="2" style="width:70px" aria-label="Strength"><button class="chipbtn" data-cmlldel="${j}" data-id="${esc(L.id)}" aria-label="Remove this LoRA">✕</button></div>`).join('')}
-    <div class="btnrow"><button class="chipbtn" data-cmlladd data-id="${esc(L.id)}">➕ Add a LoRA</button></div></div>`).join('')
+    <div class="btnrow"><button class="chipbtn" data-cmlladd data-id="${esc(L.id)}">➕ Add a LoRA</button></div>
+    ${L.pv && (L.pv.making || L.pv.busy) ? `<div class="pbar obbar${L.pv.making ? '' : ' pulse'}"><i data-cmbar="${esc(L.pv.id)}"></i></div><p class="note" data-cmtxt="${esc(L.pv.id)}">${esc(L.pv.busy || '')}</p>` : ''}
+    ${L.pv && L.pv.err ? `<p class="warn">${esc(L.pv.err)}</p>` : ''}
+    ${L.preview ? `<img class="cmprev" src="${esc(mini(L.preview))}" alt="${esc(L.name || '')} preview" data-cmprevimg="${esc(L.id)}">` : ''}
+    <div class="btnrow"><button class="btn" data-cmprev="${esc(L.id)}" ${L.pv && (L.pv.making || L.pv.busy) ? 'disabled' : ''}>👁 ${L.preview ? 'New preview' : 'Generate preview'}</button></div></div>`).join('')
     + `<div class="btnrow"><button class="btn" data-cm="libadd">➕ Add a character</button></div><p class="note">Every comic and page can use these. A card (from 🧍 Characters) adds its LoRA and pictures; the look is added to the prompt for you.</p>`; }
 function cmBoxesHtml(cm, pg0){ const ps = pg0 ? pg0.panels : [], lib = (S.cmLib || []).filter(L => (L.name || '').trim());
   return ps.map((p, i) => `<div class="cmbox"><div class="obhead"><b>Panel ${i + 1}</b><span><button class="chipbtn${p.white ? ' on' : ''}" data-cm="pwhite" data-i="${i}">⬜ Character only</button> <button class="chipbtn" data-cm="pdel" data-i="${i}" aria-label="Remove panel ${i + 1}">✕</button></span></div>
@@ -6560,8 +6575,8 @@ async function cmWait(p){
 // an option job that is over (or failed) leaves its panel, passing its error on
 function cmDrop(c){ if(!c.parent) return; const p = cmAll().find(x => x.id===c.parent && !x.parent); if(!p) return; if(c.err) p.err = c.err; p.extra = (p.extra || []).filter(x => x!==c); }
 function cmEta(p){ const m = p.making; return m ? liveEta(m.id, m.smp, m.t, 60 * m.mins, {still:'Painting', angle:'Painting the new angle', finish:'Finishing the frame', plate:'Painting the place', depth:'Reading the depth', far:'Painting the far background', orbit:m.side==='circle' ? 'MiniMax circling all the way round' : 'MiniMax circling ' + (m.side || '')}[m.kind] || 'Animating') : null; }
-function cmBar(){ if($('#comic').hidden) return; const pg = cmPage(); if(!pg) return;
-  pg.panels.concat(CM().pj || [], pg.panels.flatMap(q => q.d3 ? [q.d3].concat(d3Orbs(q.d3)) : [])).forEach(p => { const l = cmLead(p); if(!l || !l.making) return; const e = cmEta(l), n = (p.extra || []).length + (p.making ? 1 : 0);
+function cmBar(){ if($('#comic').hidden) return; const pg = cmPage() || {panels:[]};
+  pg.panels.concat(CM().pj || [], pg.panels.flatMap(q => q.d3 ? [q.d3].concat(d3Orbs(q.d3)) : []), cmLibHosts()).forEach(p => { const l = cmLead(p); if(!l || !l.making) return; const e = cmEta(l), n = (p.extra || []).length + (p.making ? 1 : 0);
     document.querySelectorAll(`[data-cmbar="${p.id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
     document.querySelectorAll(`[data-cmtxt="${p.id}"]`).forEach(el => el.textContent = e.text + (n > 1 ? ' · ' + n + ' options to go' : '')); }); }
 // a computer coming on (or going off) redraws the comic, so its buttons and notes are right without leaving the panel and coming
@@ -6638,7 +6653,7 @@ const CM_SHOT_TAGS = {wide:'full body, wide shot', medium:'cowboy shot', close:'
 // what each person looks like: their LoRA's words and their card's tags (or the words typed for them)
 // plus the library character's own LoRAs (Jordan 2026-10-22: a few LoRAs on a character without making a card), with their words
 function cmLooks(s, k){ const c = cmCard(s), lora = k ? k.has(cmSlotLora(s, k.loras)) : '';
-  const extra = k ? (s.libLoras || []).map(x => [k.has(x.file), parseFloat(x.w) || 1]).filter(([f]) => f && f!==lora) : [];
+  const st = k && k.has(cmIll().style), extra = k ? (s.libLoras || []).map(x => [k.has(x.file), parseFloat(x.w) || 1]).filter(([f]) => f && f!==lora && f!==st) : []; // the comic's style LoRA only once
   return {lora, extra, words:[lora && cmLoraWords(lora, c)].concat(extra.map(([f]) => cmLoraWords(f, c)), c && (c.tags || '').trim().replace(/,\s*$/, ''), (s.desc || '').trim()).filter(Boolean).join(', ')}; }
 function cmCount(who){ const f = who.filter(s => s.g==='f').length, m = who.filter(s => s.g==='m').length, o = who.length - f - m;
   return [f && (f===1 ? '1girl' : f + 'girls'), m && (m===1 ? '1boy' : m + 'boys'), o && (o===1 ? '1other' : o + 'others'), who.length===1 && 'solo'].filter(Boolean).join(', ') || 'no humans'; }
@@ -6657,6 +6672,32 @@ const CM_WHITE = 'simple background, white background', CM_WHITE_NEG = 'scenery,
 function cmAutoTags(cm, p, i, rect){ const who = cmWho(cm, p), w = cmWhite(cm, p) && who.length;
   return [cmCount(who), CM_SHOT_TAGS[cmShot(p, i, rect)], cmTags(p.text, who), w ? CM_WHITE : cmTags(cm.place || '', []), who.length ? '' : 'scenery'].filter(Boolean).join(', '); }
 const cmStillTags = (cm, p, i, rect) => p.tags!=null ? p.tags : cmAutoTags(cm, p, i, rect);
+// 👁 a library character's preview (Jordan 2026-10-22: to see what the tags do): full body, standing, on white, with their
+// LoRAs and the comic's model and style
+function cmPreviewGraph(k, L, prefix){
+  const I = cmIll(), g = {}; let n = 0;
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const s = {id:'pv', label:L.name || '', g:L.g || '', cid:L.cid || '', desc:L.desc || '', libLoras:(L.loras || []).filter(x => x.file)}, who = [s], lk = cmLooks(s, k);
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck,0], clip = [ck,1]; const vae = [ck,2];
+  const loras = [], put = (f, w) => { if(f && !loras.some(x => x[0]===f)) loras.push([f, w]); };
+  put(k.has(I.style), parseFloat(I.styleW) || 1); put(lk.lora, 1); lk.extra.forEach(([f, w]) => put(f, w));
+  loras.forEach(([f, w]) => { const l = add('LoraLoader', {model, clip, lora_name:f, strength_model:w, strength_clip:w}); model = [l,0]; clip = [l,1]; });
+  const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
+  const seen = new Set(), tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
+  const pos = enc(tags(tx.pos, I.words || '', cmCount(who), lk.words, 'full body, standing, looking at viewer, ' + CM_WHITE)), neg = enc(tags(tx.neg, 'multiple views', CM_WHITE_NEG));
+  const ksa = add('KSampler', {model, positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:832, height:1216, batch_size:1}), 0], seed:Math.floor(Math.random() * 1e9), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise:1});
+  const save = add('SaveImage', {images:[add('VAEDecode', {samples:[ksa,0], vae}), 0], filename_prefix:prefix});
+  return {g, save}; }
+async function cmPreview(L){
+  const k = cmIllKits().sort((a, b) => (allPcs().find(p => p.url===a.url) || {}).load - (allPcs().find(p => p.url===b.url) || {}).load)[0];
+  if(!k){ toast('Turn on a computer with an Illustrious model first', true); return; }
+  const h = L.pv = {id:'pv_' + L.id, lib:L.id, busy:'Sending…'}; drawComic();
+  try{ const prefix = cmPrefix('characters/' + cmTagOf(L)), G = cmPreviewGraph(k, L, prefix);
+    if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 200)); delete h.busy; cmGot(h, 'libprev', {url:'test-preview.png'}); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
+    if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    h.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:1.5 * cmSlow(k.url), smp:samplerOf(G.g), w:832, h:1216, kind:'libprev', video:false}; delete h.busy; save(); drawComic(); cmWait(h); }
+  catch(err){ delete h.busy; h.err = "Couldn't make the preview: " + err.message; save(); drawComic(); } }
 function cmStillGraph(k, plate, p, i, rect, prefix){
   const cm = CM(), I = cmIll(), g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
@@ -7706,6 +7747,7 @@ function cmGot(p, kind, it){
     if(it.urls && it.urls.length >= 4){ p.bg = it.urls[1]; p.bgDepth = it.urls[2]; p.mask = it.urls[3]; }
     ['far', 'farDepth', 'nearMask'].forEach(x => delete p[x]); p.dflip = false;
     save(); if(!$('#comic').hidden) drawComic(); if(it.url) d3After(p); return; }
+  if(kind==='libprev'){ const L = (S.cmLib || []).find(x => x.id===p.lib); if(L){ L.preview = it.url; delete L.pv; } save(); if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='orbit'){ p.url = it.url || 'test'; delete p.err;     setTimeout(() => cmAll().forEach(q => { if(q.d3 && t3kOn(q.d3)) t3kStep(q.d3); }), 0);
     if(/_circle$/.test(p.id)){ const ph = cmAll().map(q => q.d3).find(d => d && d.orbs && d.orbs.circle===p); if(ph){ ph.view = 'circle'; ph.yaw = ph.pitch = 0; } } // straight onto the circle (Jordan 2026-10-21 was still on the 35° views)
     save(); if(!$('#comic').hidden) drawComic(); return; }
@@ -7765,6 +7807,7 @@ function drawComic0(){
   x += `<div class="row cmbar"><label>Comic</label><div class="grow">${others.length ? `<select data-cmcomic aria-label="Comic">${[cm].concat(others).sort((a, b) => (a.n || 0) - (b.n || 0)).map(c => `<option value="${c.n}" ${c===cm ? 'selected' : ''}>${esc(cmName(c))}</option>`).join('')}</select>` : `<b>${esc(cmName(cm))}</b>`}</div><button class="chipbtn" data-cm="newcomic">➕ New comic</button></div>
     <div class="row cmbar"><label>Page</label><div class="grow">${cm.pages.length ? seg('data-cmpg', cm.pages.map((q, i) => [i, String(i + 1)]), cm.cur) : '<span class="note">none yet</span>'}</div>
     <button class="chipbtn" data-cm="newpage">➕ New page</button>${cm.pages.length ? '<button class="chipbtn" data-cm="delpage" aria-label="Remove this page">🗑 Remove</button>' : ''}</div>`;
+  { const I = cmIll(); x += `<div class="feed${cm.open.look ? ' open' : ''}"><button class="fhead" data-cmfold="look"><b>🎨 Comic look</b><small>${esc([I.ckpt || (cmIllKits()[0] || {}).ckpt, I.style].filter(Boolean).map(n => baseName(n).replace(/\.safetensors$/i, '')).join(' + ') || 'model and style LoRA')}</small><span class="chev" aria-hidden="true">›</span></button><div class="fbody">${cmLookHtml(cm)}</div></div>`; }
   x += `<div class="feed${cm.open.lib ? ' open' : ''}"><button class="fhead" data-cmfold="lib"><b>👥 Characters</b><small>${esc((S.cmLib || []).map(L => L.name).filter(Boolean).join(', ') || 'none yet')}</small><span class="chev" aria-hidden="true">›</span></button><div class="fbody">${cmLibHtml()}</div></div>`;
   x += `<div class="feed${cm.open.script || !pg ? ' open' : ''}"><button class="fhead" data-cmfold="script"><b>Script${cm.pages.length > 1 ? ' · page ' + (cm.cur + 1) : ''}</b><small>${esc(pg ? pg.panels.length + ' panel' + (pg.panels.length > 1 ? 's' : '') : '')}</small><span class="chev" aria-hidden="true">›</span></button>
     <div class="fbody">${cmBoxesHtml(cm, pg0)}
@@ -7837,11 +7880,7 @@ function drawComic0(){
     const styles = [...new Set(kits.flatMap(k => k.styles))], I = cmIll(), cks = [...new Set(iks.flatMap(k => combo(k.oi.CheckpointLoaderSimple, 'ckpt_name')))];
     x += `<div class="lbl">Look</div><div class="row"><label>Start from</label>${seg('data-cmroute', [['still', '🖼 Illustrious stills'], ['clip', '🎬 Straight to video']], cm.route==='clip' ? 'clip' : 'still')}</div>`;
     if(cm.route!=='clip') x += `<p class="note">Stills first: the look and the characters' LoRAs are exact, then each still is animated. Straight to video is the quick draft.</p>
-      <div class="row"><label>Model</label><div class="grow"><select data-cmill="ckpt">${cks.map(n => `<option value="${esc(n)}" ${n===(I.ckpt || (iks[0] || {}).ckpt) ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div></div>
-      <div class="row"><label>Style LoRA</label><div class="grow"><select data-cmill="style"><option value="">None</option>${loras.map(n => `<option value="${esc(n)}" ${n===I.style ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div>
-        ${I.style ? `<input type="number" data-cmill="styleW" value="${esc(I.styleW==null ? 1 : I.styleW)}" step="0.1" min="0" max="2" style="width:76px" aria-label="Strength">` : ''}</div>
-      ${I.style ? `<div class="row"><label>Its words</label><div class="grow"><input type="text" data-cmill="words" value="${esc(I.words || '')}" placeholder="its trigger, e.g. AFKJ Style"></div></div>` : ''}
-      <p class="note">Character LoRAs work best on the model they were trained on (librarianx_v2: iriselTouchIL_v10 with AFKJ Style at 1.0).</p>`;
+<p class="note">The model and style LoRA are at the top, under 🎨 Comic look.</p>`;
     else x += `<div class="row"><label>Style line</label><div class="grow"><input type="text" data-cmf="styleLine" value="${esc(cm.styleLine || '')}" placeholder="Animation in the style of 2D anime."></div></div>
       <div class="row"><label>Video LoRA</label><div class="grow"><select data-cmf="vlora"><option value="">None</option>${styles.concat(cm.vlora && !styles.includes(cm.vlora) ? [cm.vlora] : []).map(n => `<option value="${esc(n)}" ${n===cm.vlora ? 'selected' : ''}>${esc(baseName(n).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div>
         ${cm.vlora ? `<input type="number" data-cmf="vloraW" value="${esc(cm.vloraW==null ? 1 : cm.vloraW)}" step="0.1" min="0" max="2" style="width:76px" aria-label="Strength">` : ''}</div>
@@ -7865,8 +7904,9 @@ $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) ret
 // where the cursor is in each panel box, so 👤 Add a character puts the @tag there
 ['keyup', 'click', 'focusout'].forEach(ev => $('#comic').addEventListener(ev, e => { const el = e.target; if(el && el.dataset && el.dataset.cmpt!=null) CM_CARET[+el.dataset.cmpt] = el.selectionStart; }));
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cmprev],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
   if(t.dataset.cmins){ cmInsert(+t.dataset.i, t.dataset.cmins); return; }
+  if(t.dataset.cmprev){ const L = (S.cmLib || []).find(x => x.id===t.dataset.cmprev); if(L) cmPreview(L); return; }
   if(t.dataset.cmlladd!=null || t.dataset.cmlldel!=null){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(!L) return;
     if(t.dataset.cmlladd!=null) L.loras = (L.loras || []).concat([{file:'', w:1}]); else L.loras = (L.loras || []).filter((x, j) => j!==+t.dataset.cmlldel); save(); drawComic(); return; }
   if(t.dataset.cmlg!=null){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(L){ L.g = t.dataset.cmlg; cmRecast(); save(); drawComic(); } return; }

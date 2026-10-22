@@ -355,6 +355,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       ok(/green eyes/.test(d) && /black hair/.test(d) && !/1girl|solo|wearing|\bwith\b/.test(d), 'plain words in the look become tags (no 1girl or solo, the panel counts): ' + d); }
     await page.click('#comic [data-cmlladd]'); await page.selectOption('#comic [data-cmll="file"]', 'librarianx_v2.safetensors'); await page.fill('#comic [data-cmll="w"]', '0.8'); await page.dispatchEvent('#comic [data-cmll="w"]', 'change');
     ok(await page.evaluate(() => S.cmLib[0].loras[0].file==='librarianx_v2.safetensors' && S.cmLib[0].loras[0].w==='0.8'), '➕ Add a LoRA on a library character, with its strength');
+    ok(!(await page.$$eval('#comic [data-cmll="file"] option', os => os.map(o => o.value))).some(v => /AFKJ/.test(v)), "the comic's style LoRA isn't offered on a character (it's on every picture already)");
+    ok(await page.$('#comic [data-cmfold="look"]') && /AFKJ/.test(await page.textContent('#comic [data-cmfold="look"]')), '🎨 Comic look sits at the top with the model and style LoRA');
+    { const nb = ALL.length; await page.click('#comic [data-cmprev]'); await page.waitForFunction(() => S.cmLib[0].preview, null, {timeout:20000});
+      const g = Object.values(ALL[nb].prompt), pos = g.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text)[0], lo = g.filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name);
+      ok(/full body/.test(pos) && /white background/.test(pos) && /green eyes/.test(pos) && /1girl/.test(pos) && lo.join()==='AFKJ Style Illustrious Claude.safetensors,librarianx_v2.safetensors' && await page.$('#comic img.cmprev'),
+        '👁 Generate preview: full body on white, with the comic\'s style LoRA once and her own LoRA: ' + lo.join()); }
     ok(await page.evaluate(() => S.cmLib.length===1 && cmTagOf(S.cmLib[0])==='Librarian') && /@?Librarian/.test(await page.inputValue('#comic [data-cml="tag"]')), '👥 Add a character: named, with a tag made from the name');
     await page.click('#comic [data-cm="padd"]');
     ok(await page.evaluate(() => CM().pages.length===1 && cmPage().panels.length===1) && await page.$('#comic [data-cmpt="0"]'), '➕ Add panel makes the page and a box for panel 1');
