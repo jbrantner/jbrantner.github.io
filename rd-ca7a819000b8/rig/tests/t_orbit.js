@@ -82,7 +82,7 @@ const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * 
     const mm = sent.map(g => Object.values(g).find(x => x.class_type==='MiniMaxH3ImageToVideo').inputs);
     const graphs = sent.length===2 && mm[0].first_frame && !mm[0].last_frame && /dolly-out/.test(mm[0].prompt) && /weight on her left leg/.test(mm[0].prompt) && mm[1].last_frame && /360-degree/.test(mm[1].prompt)
       && mm[0].width % 32===0 && mm[0].height > mm[0].width && ups.length===2 && sent.every(g => Object.values(g).some(x => x.class_type==='LoraLoaderModelOnly' && /fl2v_turbo_8step/.test(x.inputs.lora_name)) && Object.values(g).some(x => x.class_type==='UNETLoader' && /fl2v/.test(x.inputs.unet_name)));
-    results.fullbody = {status:st, graphs, size:[mm[0] && mm[0].width, mm[0] && mm[0].height], worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((a, b) => a + b, 0) / angs.length), errors:logs};
+    results.fullbody = {status:st, graphs:graphs && await page.evaluate(() => !document.querySelector('#fbSave').hidden), size:[mm[0] && mm[0].width, mm[0] && mm[0].height], worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((a, b) => a + b, 0) / angs.length), errors:logs};
     await page.screenshot({path:path.join(OUT, 'orbit-fullbody.png')}); await ctx.close(); }
   console.log(JSON.stringify(results, null, 1));
   await browser.close();
