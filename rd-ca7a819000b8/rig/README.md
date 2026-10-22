@@ -8,7 +8,8 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 - Posing: pink IK handles for hands and feet (arms follow the chest, feet stay planted), cyan poles for elbows and knees,
   gold hips and floor ring, rotate rings with joint limits on the spine, neck, head and collarbones, mirror and flip,
   undo, starting poses, body proportion sliders (the pose is kept when the body changes).
-- Body: a smooth anime figure grown from the skeleton (rounded cones and ellipsoids melted together, meshed with
+- Body: an AFK Journey-style anime figure (narrow face with a pointed chin, painted green eyes, hair: long with
+  blunt bangs / bob / none, toon shading with an ink outline) grown from the skeleton (rounded cones and ellipsoids melted together, meshed with
   surface nets, skinned to the bones by which shapes each point lies on); rebuilt when the proportions change.
   Skeleton / X-ray / Body view switch.
 - Pose from a picture: MediaPipe Pose Landmarker on the phone (3D), or DWPose on a PC (comfyui_controlnet_aux's
