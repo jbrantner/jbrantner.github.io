@@ -89,6 +89,40 @@ const DEPS = process.env.RIG_DEPS || '';
   const und = await page.evaluate(async () => { const R = RIG; document.querySelector('[data-preset="stand"]').click(); const a = JSON.stringify(R.P); document.querySelector('[data-preset="cheer"]').click();
     const b = JSON.stringify(R.P); document.querySelector('#undoBtn').click(); const c = JSON.stringify(R.P); document.querySelector('#redoBtn').click(); return {back:c===a, fwd:JSON.stringify(R.P)===b}; });
   ok(und.back && und.fwd, 'undo goes back to Standing and redo forward to Arms up: ' + JSON.stringify(und));
+  // 🎥 Camera mode: a drag on her hand's handle orbits the camera and leaves her alone; 🦴 Pose mode: empty space does nothing
+  await page.evaluate(() => { document.querySelector('[data-preset="stand"]').click(); document.querySelector('#views [data-v="front"]').click(); document.querySelector('#ctl [data-ctl="cam"]').click(); document.querySelector('#camSub [data-cs="orbit"]').click(); });
+  const cam0 = await page.evaluate(() => { const R = RIG, t = R.limbWorld('armL').t, v = t.clone().project(R.camera), r = document.querySelector('#cv').getBoundingClientRect();
+    return {x:r.left + (v.x + 1) / 2 * r.width, y:r.top + (1 - v.y) / 2 * r.height, hand:R.wpos(R.bones.handL).toArray(), cam:R.camera.position.toArray(), pose:JSON.stringify(R.P)}; });
+  await page.mouse.move(cam0.x, cam0.y); await page.mouse.down(); await page.mouse.move(cam0.x + 60, cam0.y, {steps:6}); await page.mouse.up();
+  const cam1 = await page.evaluate(() => ({cam:RIG.camera.position.toArray(), pose:JSON.stringify(RIG.P), handles:RIG.scene.children.some(c => c.isGroup && c.visible===false)}));
+  ok(cam1.pose===cam0.pose && Math.hypot(...cam1.cam.map((v, i) => v - cam0.cam[i])) > 0.1, 'Camera mode: dragging over her hand orbits the camera and the pose stays the same');
+  await page.evaluate(() => document.querySelector('#ctl [data-ctl="pose"]').click());
+  const cam2 = await page.evaluate(() => RIG.camera.position.toArray());
+  await page.mouse.move(30, 300); await page.mouse.down(); await page.mouse.move(120, 330, {steps:6}); await page.mouse.up();
+  const cam3 = await page.evaluate(() => RIG.camera.position.toArray());
+  ok(Math.hypot(...cam3.map((v, i) => v - cam2[i])) < 1e-6, 'Pose mode: dragging empty space leaves the camera where it is');
+  // Pan / zoom: a drag slides her across the picture with the same view of her; the guide follows; the wheel zooms
+  await page.evaluate(() => { document.querySelector('#ctl [data-ctl="cam"]').click(); document.querySelector('#camSub [data-cs="pan"]').click(); });
+  const pz0 = await page.evaluate(() => { const R = RIG, c = R.charCenter(), v = c.clone().project(R.camera), r = document.querySelector('#cv').getBoundingClientRect(), dir = R.camera.position.clone().sub(c).normalize();
+    return {x:r.left + (v.x + 1) / 2 * r.width, y:r.top + (1 - v.y) / 2 * r.height, dir:dir.toArray(), d:R.camera.position.distanceTo(c), pose:JSON.stringify(R.P)}; });
+  await page.mouse.move(pz0.x, pz0.y); await page.mouse.down(); await page.mouse.move(pz0.x - 50, pz0.y + 40, {steps:6}); await page.mouse.up();
+  const pz1 = await page.evaluate(() => { const R = RIG, c = R.charCenter(), v = c.clone().project(R.camera), r = document.querySelector('#cv').getBoundingClientRect(), dir = R.camera.position.clone().sub(c).normalize();
+    const cam = R.exportCam(); cam.updateMatrixWorld(); const g = c.clone().project(cam), f = document.querySelector('#frame').getBoundingClientRect();
+    return {x:r.left + (v.x + 1) / 2 * r.width, y:r.top + (1 - v.y) / 2 * r.height, dir:dir.toArray(), d:R.camera.position.distanceTo(c), pose:JSON.stringify(R.P),
+      gx:f.left + (g.x + 1) / 2 * f.width, gy:f.top + (1 - g.y) / 2 * f.height}; });
+  const same = pz1.dir.every((v, i) => Math.abs(v - pz0.dir[i]) < 1e-4);
+  ok(Math.abs(pz1.x - pz0.x + 50) < 2 && Math.abs(pz1.y - pz0.y - 40) < 2 && same && pz1.pose===pz0.pose, 'Pan: a drag slides her 50 px left and 40 px down, same angle on her: ' + JSON.stringify({dx:pz1.x - pz0.x, dy:pz1.y - pz0.y, same}));
+  ok(Math.abs(pz1.gx - pz1.x) < 1.5 && Math.abs(pz1.gy - pz1.y) < 1.5, 'the guide camera sees her where the screen shows her: ' + JSON.stringify({gx:pz1.gx - pz1.x, gy:pz1.gy - pz1.y}));
+  await page.mouse.move(pz1.x, pz1.y); await page.mouse.wheel(0, -300); await page.waitForTimeout(50);
+  const pz2 = await page.evaluate(() => { const R = RIG, c = R.charCenter(), v = c.clone().project(R.camera), r = document.querySelector('#cv').getBoundingClientRect(); return {x:r.left + (v.x + 1) / 2 * r.width, y:r.top + (1 - v.y) / 2 * r.height, d:R.camera.position.distanceTo(c)}; });
+  ok(pz2.d < pz1.d - 0.05 && Math.abs(pz2.x - pz1.x) < 1.5 && Math.abs(pz2.y - pz1.y) < 1.5, 'zooming brings the camera closer and she stays where she was put: ' + JSON.stringify({d0:pz1.d, d1:pz2.d}));
+  // back to orbit: she stays where she was put while the camera turns round her middle
+  await page.evaluate(() => document.querySelector('#camSub [data-cs="orbit"]').click());
+  const ob0 = await page.evaluate(() => { const R = RIG, c = R.charCenter(), v = c.clone().project(R.camera); return {v:[v.x, v.y], t:R.controls.target.distanceTo(c)}; });
+  await page.mouse.move(200, 400); await page.mouse.down(); await page.mouse.move(280, 400, {steps:6}); await page.mouse.up();
+  const ob1 = await page.evaluate(() => { const R = RIG, c = R.charCenter(), v = c.clone().project(R.camera); return {v:[v.x, v.y]}; });
+  ok(ob0.t < 1e-4 && Math.abs(ob1.v[0] - ob0.v[0]) < 0.01 && Math.abs(ob1.v[1] - ob0.v[1]) < 0.01, 'Orbit turns round her middle and she keeps her place in the frame: ' + JSON.stringify({ob0, ob1}));
+  await page.evaluate(() => document.querySelector('#ctl [data-ctl="pose"]').click());
   // a real drag of the left hand's handle on the screen
   await page.evaluate(() => { document.querySelector('[data-preset="stand"]').click(); document.querySelector('#views [data-v="front"]').click(); });
   await page.waitForTimeout(100);
@@ -178,6 +212,25 @@ const DEPS = process.env.RIG_DEPS || '';
   const my = await page.evaluate(() => { const R = window.RIG; document.querySelector('[data-preset="kneel"]').click(); const a = R.packPose(), before = ['handL', 'footR', 'shinL'].map(n => R.wpos(R.bones[n]));
     document.querySelector('[data-preset="tpose"]').click(); R.unpackPose(JSON.parse(JSON.stringify(a))); return Math.max(...['handL', 'footR', 'shinL'].map((n, i) => R.wpos(R.bones[n]).distanceTo(before[i]))); });
   ok(my < 0.03, 'a saved pose comes back the same: ' + my.toFixed(3) + ' m');
+  // inside a comic panel: its own saved rig, the frame in the panel's shape, a small picture of the frame for the page
+  await page.route('https://app.test/rig/?*', r => r.fulfill({ contentType:'text/html', body:html }));
+  await page.goto('https://app.test/rig/?panel=ptest&w=1216&h=832&name=Girl%201');
+  await page.waitForFunction(() => window.RIG, null, {timeout:15000}); await page.waitForTimeout(400);
+  const emb = await page.evaluate(() => { const R = RIG, f = document.querySelector('#frame').getBoundingClientRect(), shot = R.frameShot(240); R.save();
+    return {name:document.querySelector('header h1').textContent, ar:f.width / f.height, size:document.querySelector('#gSize').value, dis:document.querySelector('#gSize').disabled,
+      ctl:R.S.ctl, keys:Object.keys(localStorage), shot:shot.slice(0, 23), body:R.S.body.legs}; });
+  const im = await page.evaluate(async () => { const img = new Image(); img.src = RIG.frameShot(240); await img.decode(); const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const x = c.getContext('2d'); x.drawImage(img, 0, 0); const d = x.getImageData(0, 0, c.width, c.height).data; let white = 0, dark = 0; for(let i = 0; i < d.length; i += 4){ if(d[i] > 240 && d[i + 1] > 240) white++; else if(d[i] < 120) dark++; }
+    return {w:img.width, h:img.height, white:white / (d.length / 4), dark}; });
+  ok(emb.name==='Girl 1' && Math.abs(emb.ar - 1216 / 832) < 0.02 && /1216 × 832/.test(emb.size) && emb.dis && emb.ctl==='cam' && emb.keys.includes('rd-pose-rig-panel-ptest'),
+    'in a panel: the name on top, the frame in the panel\'s shape, size fixed, Camera mode first, saved under its own key: ' + JSON.stringify(emb));
+  ok(im.w===240 && im.h===164 && im.white > 0.5 && im.dark > 50, 'the panel\'s little picture is her on white in the panel\'s shape: ' + JSON.stringify(im));
+  // the chips only turn the camera in a panel: where she sits and how big stay
+  await page.evaluate(() => { document.querySelector('#camSub [data-cs="pan"]').click(); });
+  await page.mouse.move(200, 300); await page.mouse.down(); await page.mouse.move(150, 300, {steps:4}); await page.mouse.up();
+  const ch = await page.evaluate(async () => { const R = RIG, s0 = R.shift.slice(), d0 = R.camera.position.distanceTo(R.controls.target); R.save(); document.querySelector('#views [data-v="side"]').click();
+    return {s0, s1:R.shift.slice(), d0, d1:R.camera.position.distanceTo(R.controls.target)}; });
+  ok(Math.abs(ch.s0[0] - ch.s1[0]) < 0.02 && Math.abs(ch.d0 - ch.d1) < 0.02, 'in a panel, Side turns the camera but keeps her place and size: ' + JSON.stringify(ch));
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

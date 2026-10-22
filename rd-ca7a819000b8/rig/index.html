@@ -45,6 +45,14 @@ header h1{font:700 20px/1 var(--display);margin:0;letter-spacing:.3px;white-spac
 .modes button{font-size:12px;font-weight:800;padding:5px 9px;border-radius:9px;color:var(--dim)}
 .modes button.on{background:var(--panel2);color:var(--text)}
 .views button.on{color:var(--text);border-color:var(--soft)}
+/* 🦴 Pose / 🎥 Camera: only one of them answers the finger, so posing never moves the camera and the camera never moves her */
+.ctl{flex:none;display:flex;gap:3px;padding:3px;border-radius:12px;background:var(--panel);border:1px solid var(--line)}
+.ctl button{font-size:13px;font-weight:800;padding:7px 10px;border-radius:9px;color:var(--dim)}
+.ctl button.on{background:var(--accent);color:var(--accent-ink)}
+#camSub{left:auto;right:8px}
+#camSub button.on{background:var(--cyan);color:#06181a}
+body.embed header h1{display:none}
+body.embed #frame{border:1.5px solid rgba(255,255,255,.75);box-shadow:0 0 0 9999px rgba(0,0,0,.55)}
 #toast{position:absolute;left:50%;top:46px;transform:translateX(-50%);max-width:calc(100% - 20px);background:rgba(27,29,35,.92);border:1px solid var(--line);border-radius:12px;padding:7px 12px;font-size:13px;font-weight:700;color:var(--soft);pointer-events:none;transition:opacity .25s;opacity:0;text-align:center}
 #toast.on{opacity:1}
 .tabs{display:flex;gap:6px;padding:8px 10px 0}
@@ -92,6 +100,7 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
 <div id="app">
   <header>
     <h1>Pose Rig</h1>
+    <div class="ctl" id="ctl"><button data-ctl="pose">🦴 Pose</button><button data-ctl="cam">🎥 Camera</button></div>
     <span id="selName">Tap a handle</span>
     <button class="icon" id="undoBtn" title="Undo" aria-label="Undo">↶</button>
     <button class="icon" id="redoBtn" title="Redo" aria-label="Redo">↷</button>
@@ -102,6 +111,7 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
     <div id="frame"></div>
     <div class="views" id="views"></div>
     <div class="modes" id="modes"></div>
+    <div class="modes" id="camSub"><button data-cs="orbit">Orbit</button><button data-cs="pan">Pan / zoom</button></div>
     <div id="toast"></div>
   </div>
   <nav class="tabs" id="tabs">
@@ -131,7 +141,7 @@ summary{font:700 14px/1.2 var(--display);cursor:pointer;color:var(--soft)}
         <button class="chipbtn" data-do="center">Back to the middle</button>
         <button class="chipbtn" data-do="handles">Show handles: on</button>
       </div>
-      <p class="note"><span class="key" style="background:var(--accent)"></span>pink: hands and feet (drag to move, the arm or leg follows) · <span class="key" style="background:var(--cyan)"></span>cyan: where the elbow or knee points · <span class="key" style="background:var(--gold)"></span>gold: hips (feet stay put) and the floor ring (moves everything). Tap a joint or a bone to turn it with rings. One finger on empty space orbits, two fingers zoom and pan. Skeleton, X-ray and Body (bottom left of the view) change what you see, not the guides.</p>
+      <p class="note"><span class="key" style="background:var(--accent)"></span>pink: hands and feet (drag to move, the arm or leg follows) · <span class="key" style="background:var(--cyan)"></span>cyan: where the elbow or knee points · <span class="key" style="background:var(--gold)"></span>gold: hips (feet stay put) and the floor ring (moves everything). Tap a joint or a bone to turn it with rings. 🦴 Pose (top) moves only her; 🎥 Camera moves only the camera: Orbit turns round her, Pan / zoom slides her across the frame and pinches closer. Skeleton, X-ray and Body (bottom left of the view) change what you see, not the guides.</p>
     </section>
     <section class="pane" data-pane="body" hidden>
       <h3>Body type</h3>
@@ -221,7 +231,10 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const D2R = Math.PI / 180, clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const KEY = 'rd-pose-rig-v1';
+// ?panel=<id>&w=&h=&name=&g= opens the rig inside a Render Deck comic panel: its own saved rig per panel, the dashed
+// frame in the panel's shape (Jordan 2026-10-22)
+const QS = new URLSearchParams(location.search), EMBED = QS.get('panel') || '';
+const KEY = EMBED ? 'rd-pose-rig-panel-' + EMBED : 'rd-pose-rig-v1';
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'}[c]));
 function toast(msg, ms = 2200){ const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), ms); }
 
@@ -271,7 +284,14 @@ const LIMB = {armL:{a:'armL', b:'foreL', c:'handL', space:'chest', v0:V(0, 0, -1
 const LIMB_OF = {}; for(const [k, L] of Object.entries(LIMB)){ LIMB_OF[L.a] = [k, 'upper']; LIMB_OF[L.b] = [k, 'lower']; LIMB_OF[L.c] = [k, 'end']; }
 
 // ---------- state ----------
-let S = load() || {};
+let S = load() || (EMBED ? seedPanel() : {});
+// a new panel's rig starts with the body made in the rig page (its proportions, hair and skirt), standing
+function seedPanel(){ let m = null; try{ m = JSON.parse(localStorage.getItem('rd-pose-rig-v1')); }catch(e){}
+  const out = m ? {body:m.body, hair:m.hair, skirt:m.skirt && {style:m.skirt.style, len:m.skirt.len, flare:m.skirt.flare}, mode:m.mode, showHandles:m.showHandles} : {};
+  if(QS.get('g')==='m' && !m){ out.body = Object.assign({}, BODY0, BODY_PRESETS.broad[1]); out.hair = 'none'; }
+  return out; }
+if(EMBED){ const w = +QS.get('w'), h = +QS.get('h'); if(w > 0 && h > 0) S.guide = Object.assign({}, S.guide, {size:w + 'x' + h}); document.body.classList.add('embed'); }
+if(!S.ctl) S.ctl = 'cam'; if(!S.camSub) S.camSub = 'orbit';
 S.body = Object.assign({}, BODY0, S.body);
 S.guide = Object.assign({size:'832x1216'}, S.guide);
 S.skirt = Object.assign({style:'none', len:1, flare:0.3, motion:'still', str:0, dir:0}, S.skirt);
@@ -829,7 +849,7 @@ function handlePos(h){
 }
 const pxSize = (p, px) => { const d = camera.position.distanceTo(p), k = 2 * Math.tan(camera.fov * D2R / 2) * d / view.clientHeight; return px * k; };
 function placeHandles(){
-  H.visible = S.showHandles;
+  H.visible = S.showHandles && S.ctl==='pose';
   for(const h of handles){ const p = handlePos(h); h.mesh.position.copy(p); const sel = isSel(h);
     if(h.kind==='ik'){ h.mesh.quaternion.copy(limbWorld(h.limb).q); h.mesh.scale.setScalar(pxSize(p, sel ? 9 : 7)); h.mesh.material.color.set(reach[h.limb]===false ? 0xffa0c8 : PINK); }
     else if(h.kind==='pole') h.mesh.scale.setScalar(pxSize(p, sel ? 8 : 6));
@@ -903,7 +923,7 @@ function ndc(e){ const r = cv.getBoundingClientRect(); return new THREE.Vector2(
 function toPx(p){ const v = p.clone().project(camera); return [(v.x + 1) / 2 * view.clientWidth, (1 - v.y) / 2 * view.clientHeight, v.z]; }
 function pick(e){
   const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  if(!S.showHandles) return null;
+  if(!S.showHandles || S.ctl!=='pose') return null;
   if(rings.visible){ ray.setFromCamera(ndc(e), camera); const hits = ray.intersectObjects(ringMeshes.filter(g => g.visible).map(g => g.userData.hit), false);
     if(hits.length){ const g = hits[0].object.parent; return {ring:g.userData.i}; } }
   let best = null, bd = 30;
@@ -964,13 +984,52 @@ cv.addEventListener('pointermove', e => {
 const endDrag = e => {
   if(tap && e.pointerId===tap.id){ if(Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 6 && sel) selectH(null); tap = null; }
   if(!drag || e.pointerId!==drag.id) return;
-  commit(drag.before); drag = null; controls.enabled = true;
+  commit(drag.before); drag = null; ctlControls();
 };
 cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
 const controls = new OrbitControls(camera, cv); // made after the rig's own touch handler, so a handle wins over orbiting
 controls.enableDamping = false; controls.rotateSpeed = 0.8; controls.minDistance = 0.4; controls.maxDistance = 12;
 controls.addEventListener('change', () => { dirty = true; placeHandles(); });
+controls.addEventListener('start', retarget);
 controls.addEventListener('end', () => { save(); markView(''); });
+controls.enablePan = false;
+
+// ---------- 🦴 Pose / 🎥 Camera ----------
+// The camera orbits her middle; where she sits in the picture is a lens shift (the picture slides, the angle on her
+// stays), so Orbit and Pan / zoom never undo each other.
+let shift = [0, 0];
+const _upm = camera.updateProjectionMatrix.bind(camera);
+camera.updateProjectionMatrix = () => { _upm(); const e = camera.projectionMatrix.elements; e[8] -= shift[0]; e[9] -= shift[1]; camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert(); };
+function charCenter(){ const box = new THREE.Box3(); Object.values(bones).forEach(b => box.expandByPoint(wpos(b))); return box.getCenter(V()); }
+// aim at her middle again (after posing moved her) without her jumping on screen
+function retarget(){ const C = charCenter(); if(C.distanceTo(controls.target) < 1e-4) return;
+  camera.updateMatrixWorld(); const n = C.clone().project(camera);
+  camera.position.add(C.clone().sub(controls.target)); controls.target.copy(C); shift = [clamp(n.x, -1.5, 1.5), clamp(n.y, -1.5, 1.5)];
+  camera.updateProjectionMatrix(); camera.lookAt(C); controls.update(); dirty = true; guideDirty = true; }
+function ctlControls(){ controls.enabled = S.ctl==='cam' && S.camSub==='orbit'; }
+function showCtl(){
+  $$('#ctl button').forEach(b => b.classList.toggle('on', b.dataset.ctl===S.ctl)); $$('#camSub button').forEach(b => b.classList.toggle('on', b.dataset.cs===S.camSub));
+  $('#camSub').hidden = S.ctl!=='cam'; ctlControls();
+  if(S.ctl==='cam'){ if(sel) selectH(null); retarget(); $('#selName').textContent = S.camSub==='pan' ? 'Drag to move her, pinch to zoom' : 'Drag to orbit round her, pinch to zoom'; }
+  else $('#selName').textContent = sel ? $('#selName').textContent : 'Tap a handle';
+  placeHandles(); dirty = true; }
+$('#ctl').onclick = e => { const b = e.target.closest('[data-ctl]'); if(!b) return; S.ctl = b.dataset.ctl; showCtl(); save(); };
+$('#camSub').onclick = e => { const b = e.target.closest('[data-cs]'); if(!b) return; S.camSub = b.dataset.cs; showCtl(); save(); };
+// Pan / zoom: one finger slides her across the picture, two fingers pinch (closer or further) and slide
+const pts = new Map(); let pzMoved = false;
+const panOn = () => S.ctl==='cam' && S.camSub==='pan';
+function dolly(k){ const off = camera.position.clone().sub(controls.target); off.setLength(clamp(off.length() * k, controls.minDistance, controls.maxDistance)); camera.position.copy(controls.target).add(off); }
+function slide(dx, dy){ shift = [clamp(shift[0] + 2 * dx / view.clientWidth, -1.5, 1.5), clamp(shift[1] - 2 * dy / view.clientHeight, -1.5, 1.5)]; }
+cv.addEventListener('pointerdown', e => { if(!panOn()) return; e.preventDefault(); cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); if(pts.size===1){ retarget(); pzMoved = false; } });
+cv.addEventListener('pointermove', e => { if(!panOn() || !pts.has(e.pointerId)) return;
+  const was = [...pts.values()].map(a => a.slice()); pts.set(e.pointerId, [e.clientX, e.clientY]); const now = [...pts.values()];
+  if(now.length===1) slide(now[0][0] - was[0][0], now[0][1] - was[0][1]);
+  else if(now.length >= 2){ const mid = q => [(q[0][0] + q[1][0]) / 2, (q[0][1] + q[1][1]) / 2], dist = q => Math.hypot(q[0][0] - q[1][0], q[0][1] - q[1][1]) || 1;
+    const m0 = mid(was), m1 = mid(now); slide(m1[0] - m0[0], m1[1] - m0[1]); dolly(dist(was) / dist(now)); }
+  pzMoved = true; camera.updateProjectionMatrix(); camera.lookAt(controls.target); dirty = true; guideDirty = true; placeHandles(); });
+const pzEnd = e => { if(!pts.delete(e.pointerId)) return; if(!pts.size && pzMoved){ save(); markView(''); } };
+cv.addEventListener('pointerup', pzEnd); cv.addEventListener('pointercancel', pzEnd);
+cv.addEventListener('wheel', e => { if(!panOn()) return; e.preventDefault(); dolly(e.deltaY > 0 ? 1.08 : 1 / 1.08); camera.lookAt(controls.target); dirty = true; guideDirty = true; placeHandles(); save(); }, {passive:false});
 
 // ---------- undo ----------
 const undo = [], redo = [];
@@ -1008,22 +1067,26 @@ function fitView(){
   const box = new THREE.Box3(); Object.values(bones).forEach(b => box.expandByPoint(wpos(b))); box.max.y += 0.03; box.min.y = Math.min(box.min.y, 0);
   const t = box.getCenter(V()), sz = box.getSize(V()), vh = view.clientHeight || 1;
   const tv = Math.tan(camera.fov * D2R / 2) * frameRect.h / vh, th = tv * frameRect.w / frameRect.h;
-  // the frame sits a little below the view's middle (under the camera chips): aim so her middle is the frame's middle
-  const d = Math.max(sz.y / 2 / tv, Math.max(sz.x, sz.z) / 2 / th) * 1.12 + Math.max(sz.x, sz.z) / 2, off = (frameRect.y + frameRect.h / 2 - vh / 2) / vh * 2 * Math.tan(camera.fov * D2R / 2) * d;
-  t.y += off; return {t, d};
+  const d = Math.max(sz.y / 2 / tv, Math.max(sz.x, sz.z) / 2 / th) * 1.12 + Math.max(sz.x, sz.z) / 2;
+  return {t, d};
 }
+// the middle of the dashed frame, where the lens shift puts her middle (the frame sits a little below the view's middle)
+const frameMid = () => [(frameRect.x + frameRect.w / 2) / (view.clientWidth || 1) * 2 - 1, 1 - (frameRect.y + frameRect.h / 2) / (view.clientHeight || 1) * 2];
 const VIEWS = {front:['Front', 0, 4], three:['¾', 40, 8], side:['Side', 90, 4], back:['Back', 180, 4], above:['Above', 20, 50], below:['Below', 15, -25], photo:['Picture']};
 function setView(k){
   if(k==='photo'){ if(!S.photoCam){ toast('Copy a pose from a picture first'); return; } applyCam(S.photoCam); markView('photo'); return; }
-  const [, yaw, pitch] = VIEWS[k], {t, d} = fitView();
+  const [, yaw, pitch] = VIEWS[k], fit = fitView();
+  // in a comic panel the chips only turn the camera: how big she is and where she sits stay (Jordan 2026-10-22)
+  const keep = EMBED && S.cam && S.cam.s, d = keep ? camera.position.distanceTo(controls.target) : fit.d;
+  const t = keep ? charCenter() : fit.t; if(!keep) shift = frameMid(); camera.updateProjectionMatrix();
   const y = yaw * D2R, p = pitch * D2R; camera.position.set(t.x + Math.sin(y) * Math.cos(p) * d, t.y + Math.sin(p) * d, t.z + Math.cos(y) * Math.cos(p) * d);
   controls.target.copy(t); camera.lookAt(t); controls.update(); markView(k); dirty = true; guideDirty = true; placeHandles(); save();
 }
 function markView(k){ $$('#views button').forEach(b => b.classList.toggle('on', b.dataset.v===k)); S.viewKey = k; $('#photo').hidden = !(S.photoUrl && k==='photo'); layoutFrame(); }
 $('#views').innerHTML = Object.entries(VIEWS).map(([k, v]) => `<button data-v="${k}">${v[0]}</button>`).join('');
 $('#views').onclick = e => { const b = e.target.closest('button'); if(b) setView(b.dataset.v); };
-function camState(){ return {p:va(camera.position), t:va(controls.target), fov:camera.fov}; }
-function applyCam(c){ camera.position.fromArray(c.p); controls.target.fromArray(c.t); camera.fov = c.fov || 35; camera.updateProjectionMatrix(); camera.lookAt(controls.target); controls.update(); dirty = true; guideDirty = true; placeHandles(); }
+function camState(){ return {p:va(camera.position), t:va(controls.target), fov:camera.fov, s:shift.slice()}; }
+function applyCam(c){ camera.position.fromArray(c.p); controls.target.fromArray(c.t); camera.fov = c.fov || 35; shift = c.s ? c.s.slice() : [0, 0]; camera.updateProjectionMatrix(); camera.lookAt(controls.target); controls.update(); dirty = true; guideDirty = true; placeHandles(); }
 
 // ---------- the guide frame and the export camera ----------
 function guideSize(){ if(S.guide.size==='photo' && S.photoSize){ return bucket(S.photoSize[0] / S.photoSize[1]); }
@@ -1043,6 +1106,9 @@ function exportCam(){
   const [gw, gh] = guideSize(), vh = view.clientHeight, vw = view.clientWidth, c = camera.clone();
   c.aspect = vw / vh; c.updateProjectionMatrix();
   // a view offset crops the full view down to the frame, so the export matches the dashed box exactly
+  // the lens shift carries over, scaled to the frame, and stays when a guide changes near and far
+  const sx = shift[0] * vw / frameRect.w, sy = shift[1] * vh / frameRect.h;
+  c.updateProjectionMatrix = function(){ THREE.PerspectiveCamera.prototype.updateProjectionMatrix.call(this); const e = this.projectionMatrix.elements; e[8] -= sx; e[9] -= sy; this.projectionMatrixInverse.copy(this.projectionMatrix).invert(); };
   c.setViewOffset(vw, vh, frameRect.x, frameRect.y, frameRect.w, frameRect.h); c.updateMatrixWorld(); void gw; void gh;
   return c;
 }
@@ -1726,10 +1792,23 @@ solve();
 new ResizeObserver(resize).observe(view); resize();
 if(S.cam) applyCam(S.cam); else setView('three');
 markView(S.viewKey==='photo' ? '' : (S.viewKey || ''));
+if(EMBED){ setWho(QS.get('name') || ''); const [w, h] = guideSize(); $('#gSize').innerHTML = `<option>This panel, ${w} × ${h}</option>`; $('#gSize').disabled = true; }
+showCtl();
 if(S.tab) $(`#tabs [data-tab="${S.tab}"]`).click();
 undoBtns();
 (function loop(){ requestAnimationFrame(loop); if(dirty){ dirty = false; renderer.render(scene, camera); } drawGuidePrev(); })();
-window.RIG = {S, scene, renderer, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, solveOrbit, orbProj, packPose, unpackPose, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
+// who this panel's rig is (the comic picks a character from its library)
+function setWho(name){ $('header h1').textContent = name || (EMBED ? 'Panel' : 'Pose Rig'); }
+// a small picture of what's in the frame: the body on white, no handles or floor, for the comic page
+function frameShot(maxW = 320){
+  const [gw, gh] = guideSize(), W = maxW, H2 = Math.max(1, Math.round(maxW * gh / gw)), m = S.mode, bg = scene.background, hv = H.visible, rv = rings.visible, gv = grid.visible;
+  S.mode = bodyMesh ? 'body' : 'skel'; showMode(); H.visible = false; rings.visible = false; grid.visible = false; scene.background = new THREE.Color(0xffffff);
+  const cam = exportCam(); renderer.render(scene, cam);
+  const c = document.createElement('canvas'); c.width = W; c.height = H2; c.getContext('2d').drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, W, H2);
+  S.mode = m; showMode(); H.visible = hv; rings.visible = rv; grid.visible = gv; scene.background = bg; dirty = true;
+  return c.toDataURL('image/jpeg', 0.82);
+}
+window.RIG = {S, frameShot, setWho, showCtl, retarget, charCenter, get shift(){ return shift; }, setView, camState, applyCam, save:() => { clearTimeout(save.t); try{ S.cam = camState(); localStorage.setItem(KEY, JSON.stringify(Object.assign({}, S, {photo:undefined}))); }catch(e){} }, scene, renderer, guideCanvases, bodyMaps, body:() => ({mesh:bodyMesh, info:bodyRest}), buildBody, get P(){ return P; }, bones, solve, applyPreset, mirror, flipPose, opView, exportCam, fitPoints, lift2D, limbWorld, setLimbWorld, changeBody, rotateSel, selectH, wpos, LIMB, REST:() => REST, skirt:() => SK, settleSkirt, solveOrbit, orbProj, packPose, unpackPose, collDist, buildSkirt, skirtUi, camera, controls, groundIt, poseDirs};
 </script>
 </body>
 </html>

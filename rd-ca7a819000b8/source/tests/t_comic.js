@@ -55,6 +55,11 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => { const f = path.join(__dirname, '..', '..', new URL(r.request().url()).pathname.slice(1)); r.fulfill({ contentType:'text/plain', body:fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '' }); }); // the real tag lists (the character looks are read into tags)
   await page.routeWebSocket(/\.test\/ws/, ws => {});
+  // the pose rig page for 🦴 panels, three.js from RIG_DEPS (unpacked npm packs) when set
+  const RIG_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'rig', 'index.html'), 'utf8'), DEPS = process.env.RIG_DEPS || '';
+  await page.route('https://app.test/rig/**', r => r.fulfill({ contentType:'text/html', body:RIG_HTML }));
+  if(DEPS) await page.route('https://cdn.jsdelivr.net/npm/three@0.160.0/**', r => { const f = path.join(DEPS, 'three-0.160.0', 'package', new URL(r.request().url()).pathname.replace(/^\/npm\/three@0\.160\.0\//, ''));
+    r.fulfill(fs.existsSync(f) ? { contentType:'text/javascript', body:fs.readFileSync(f) } : { status:404, body:'' }); });
   const PCS = {}, ALL = [];
   for(const [name, host] of [['Render', 'https://jordo-desktop.test'], ['Main', 'https://jordo-main.test']]){
     const pc = PCS[name] = {url:host, sent:[], ups:[], polls:{}, outs:[]};
@@ -374,6 +379,31 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     ok(await page.$('#cmPage [data-cpi="2"]') && (await page.$$('#comic .cmlays > *')).length > 0, 'the page preview shows a panel for every box straight away');
     await page.click('#comic [data-cm="pdel"][data-i="2"]'); ok(await page.evaluate(() => cmPage().panels.length===2 && cmPage().rows.reduce((a, b) => a + b, 0)===2), '✕ removes a panel and the layout follows');
     await page.click('#comic [data-cm="pwhite"][data-i="1"]'); ok(await page.evaluate(() => cmPage().panels[1].white && !cmPage().panels[0].white), '⬜ Character only is per panel');
+    // 🦴 a blank frame in the panel's shape; tapped, the pose rig opens full screen in that shape (Jordan 2026-10-22)
+    { const fr = await page.evaluate(() => { const b = document.querySelector('#comic [data-cmrig="0"]').getBoundingClientRect(), r = cmRectsOf(cmPage())[0]; return {ar:b.width / b.height, want:r.w / r.h, txt:document.querySelector('#comic [data-cmrig="0"]').textContent}; });
+      ok(Math.abs(fr.ar - fr.want) < 0.03 && /Tap to pose/.test(fr.txt), 'each panel box shows a blank frame in the panel\'s shape: ' + JSON.stringify(fr));
+      await page.click('#comic [data-cmrig="0"]');
+      const src = await page.getAttribute('#cmRigBox iframe', 'src'), q = new URLSearchParams(src.split('?')[1]), pid = await page.evaluate(() => cmPage().panels[0].id);
+      ok(await page.isVisible('#cmRigBox') && q.get('panel')===pid && q.get('name')==='The Librarian' && +q.get('w') > 0 && /The Librarian/.test(await page.textContent('#cmRigWho option:checked')),
+        'tapping it opens the rig full screen for that panel, as the character tagged in it: ' + src);
+      if(DEPS){ const fh = await page.waitForSelector('#cmRigBox iframe'), f = await fh.contentFrame(); await f.waitForFunction(() => window.RIG, null, {timeout:20000}); await page.waitForTimeout(500);
+        const inside = await f.evaluate(() => { const b = document.querySelector('#frame').getBoundingClientRect(); return {ar:b.width / b.height, name:document.querySelector('header h1').textContent, ctl:RIG.S.ctl}; });
+        ok(Math.abs(inside.ar - q.get('w') / q.get('h')) < 0.02 && inside.name==='The Librarian' && inside.ctl==='cam', 'inside: the frame is the panel\'s shape, her name on top, 🎥 Camera first: ' + JSON.stringify(inside));
+        await f.click('#ctl [data-ctl="pose"]'); await f.click('[data-preset="cheer"]'); await f.click('#ctl [data-ctl="cam"]'); await f.click('#camSub [data-cs="pan"]');
+        const vb = await (await f.$('#cv')).boundingBox(); await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2); await page.mouse.down(); await page.mouse.move(vb.x + vb.width / 2 - 40, vb.y + vb.height / 2, {steps:4}); await page.mouse.up();
+        await page.screenshot({path:path.join(process.env.SHOTS || __dirname, 'comic-rig.png')});
+        await page.click('#cmRigDone');
+        const after = await page.evaluate(id => { const p = cmPage().panels[0], st = JSON.parse(localStorage.getItem('rd-pose-rig-panel-' + id) || 'null');
+          return {gone:!document.querySelector('#cmRigBox'), thumb:/^data:image\/jpeg/.test((p.rig || {}).thumb || ''), who:(p.rig || {}).who===S.cmLib[0].id, saved:!!(st && st.pose && st.cam && st.cam.s && st.cam.s[0] < 0),
+            page:!!document.querySelector('#cmPage [data-cpi="0"] img.cprig'), box:!!document.querySelector('#comic [data-cmrig="0"] img')}; }, pid);
+        ok(Object.values(after).every(Boolean), 'Done keeps the pose and camera for that panel, and its picture shows in the box and on the page: ' + JSON.stringify(after));
+        await page.evaluate(() => { CM().sel = 0; drawComic(); }); await page.click('#cmPage [data-cpi="0"]');
+        ok(await page.isVisible('#cmRigBox'), 'tapping the picked empty panel on the page opens its rig too');
+        const f2 = await (await page.waitForSelector('#cmRigBox iframe')).contentFrame(); await f2.waitForFunction(() => window.RIG, null, {timeout:20000});
+        const re = await f2.evaluate(() => ({ctl:RIG.S.ctl, sx:RIG.shift[0], hand:RIG.wpos(RIG.bones.handL).y, head:RIG.wpos(RIG.bones.head).y}));
+        ok(re.ctl==='cam' && re.sx < 0 && re.hand > re.head, 'opening it again brings back the same pose (arms up) and camera: ' + JSON.stringify(re));
+        await page.click('#cmRigDone'); }
+      else { await page.click('#cmRigDone'); console.log('(RIG_DEPS not set: the rig inside the panel was not loaded)'); } }
     { const nb = ALL.length; await page.click('#comic [data-cm="stills"]'); await page.waitForFunction(() => cmPage().panels.every(p => (p.stills || []).length), null, {timeout:20000});
       const pr = ALL.slice(nb).map(x => Object.values(x.prompt).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | '));
       const lo = ALL.slice(nb).map(x => Object.values(x.prompt).filter(n => /LoraLoader/.test(n.class_type)).map(n => n.inputs.lora_name + '@' + (n.inputs.strength_model)).join());

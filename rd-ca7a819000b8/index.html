@@ -402,6 +402,16 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cpanel.sel{outline:3px solid var(--cyan);outline-offset:2px;touch-action:none}
 .cpanel video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
 .cpempty{position:absolute;inset:0;padding:6px;color:#555;font-size:11.5px;line-height:1.25;overflow:hidden}
+/* 🦴 the panel's pose rig: a blank frame in the panel's shape in each script box, full screen when tapped (Jordan 2026-10-22) */
+.cmpf{position:relative;display:block;max-width:100%;margin:8px 0 2px;border:1.5px solid #cfd3da;border-radius:4px;background:#fff;overflow:hidden;padding:0}
+.cmpf img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cmpf span{position:absolute;left:6px;bottom:5px;right:6px;font-size:12px;font-weight:800;color:#555;text-align:left;text-shadow:0 0 4px #fff}
+.cprig{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55}
+.cmrigbox{position:fixed;inset:0;z-index:300;background:var(--bg);display:flex;flex-direction:column}
+.cmrigtop{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 10px 6px}
+.cmrigtop b{font:700 16px/1 var(--display);white-space:nowrap}
+.cmrigtop select{flex:1;min-width:0}
+.cmrigbox iframe{flex:1;width:100%;border:0;display:block}
 .cpempty b{font:700 15px/1 var(--display);color:#222}
 .cpempty span{color:#777;font-style:italic}
 .cptest{position:absolute;inset:0;display:grid;place-items:center;text-align:center;background:hsl(var(--hue) 45% 55%);color:#fff;font-weight:800;font-size:13px}
@@ -621,7 +631,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-22.124'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-22.125'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6417,7 +6427,7 @@ function cmAddPanel(){ const cm = CM(); if(!cm.pages.length){ cm.pages.push({id:
   const ta = document.querySelector('#comic [data-cmpt="' + cm.sel + '"]'); if(ta) ta.focus(); }
 function cmDelPanel(i){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i]; if(!p) return; const hs = [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []), run = hs.filter(h => h.making || h.busy);
   if(((p.stills || []).length || p.takes.length || run.length) && !confirm('Remove panel ' + (i + 1) + '?' + (run.length ? ' Its running jobs will be stopped.' : '') + ' Pictures it made stay in your Library.')) return;
-  if(run.length) cmStop(run); pg.panels.splice(i, 1); cmRelayout(pg); cm.sel = Math.max(0, Math.min(cm.sel, pg.panels.length - 1)); if(CM_INS===i) CM_INS = null; cmRecast(); save(); drawComic(); }
+  if(run.length) cmStop(run); try{ localStorage.removeItem('rd-pose-rig-panel-' + cmRigKey(p)); }catch(e){} pg.panels.splice(i, 1); cmRelayout(pg); cm.sel = Math.max(0, Math.min(cm.sel, pg.panels.length - 1)); if(CM_INS===i) CM_INS = null; cmRecast(); save(); drawComic(); }
 function cmInsert(i, libId){ const pg = cmPage(), p = pg && pg.panels[i], L = (S.cmLib || []).find(x => x.id===libId); if(!p || !L) return;
   const src = cmSrc(p) || '', at = CM_CARET[i]!=null ? Math.min(CM_CARET[i], src.length) : src.length, tag = '@' + cmTagOf(L), pre = src.slice(0, at), post = src.slice(at);
   p.src = pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + (post && /^\s/.test(post) ? '' : ' ') + post; p.text = cmPlainTx(p.src); CM_CARET[i] = (pre + (pre && !/\s$/.test(pre) ? ' ' : '') + tag + ' ').length;
@@ -6444,12 +6454,37 @@ function cmLibHtml(){ const lib = S.cmLib || [], st = cmIll().style, files = [..
     ${L.preview ? `<img class="cmprev" src="${esc(mini(L.preview))}" alt="${esc(L.name || '')} preview" data-cmprevimg="${esc(L.id)}">` : ''}
     <div class="btnrow"><button class="btn" data-cmprev="${esc(L.id)}" ${L.pv && (L.pv.making || L.pv.busy) ? 'disabled' : ''}>👁 ${L.preview ? 'New preview' : 'Generate preview'}</button></div></div>`).join('')
     + `<div class="btnrow"><button class="btn" data-cm="libadd">➕ Add a character</button></div><p class="note">Every comic and page can use these. A card (from 🧍 Characters) adds its LoRA and pictures; the look is added to the prompt for you.</p>`; }
-function cmBoxesHtml(cm, pg0){ const ps = pg0 ? pg0.panels : [], lib = (S.cmLib || []).filter(L => (L.name || '').trim());
+function cmBoxesHtml(cm, pg0){ const ps = pg0 ? pg0.panels : [], lib = (S.cmLib || []).filter(L => (L.name || '').trim()), rects = ps.length ? cmRectsOf(pg0) : [];
   return ps.map((p, i) => `<div class="cmbox"><div class="obhead"><b>Panel ${i + 1}</b><span><button class="chipbtn${p.white ? ' on' : ''}" data-cm="pwhite" data-i="${i}">⬜ Character only</button> <button class="chipbtn" data-cm="pdel" data-i="${i}" aria-label="Remove panel ${i + 1}">✕</button></span></div>
     <textarea data-cmpt="${i}" rows="2" placeholder="What happens in this panel" autocapitalize="sentences">${esc(cmSrc(p) || '')}</textarea>
+    ${cmFrameHtml(p, i, rects[i])}
     <div class="btnrow"><button class="chipbtn${CM_INS===i ? ' on' : ''}" data-cm="pins" data-i="${i}">👤 Add a character</button></div>
     ${CM_INS===i ? `<div class="btnrow">${lib.length ? lib.map(L => `<button class="chipbtn" data-cmins="${esc(L.id)}" data-i="${i}">@${esc(cmTagOf(L))}</button>`).join('') : '<span class="note">Add characters under 👥 Characters first.</span>'}</div>` : ''}</div>`).join('')
     + `<div class="btnrow"><button class="btn" data-cm="padd">➕ Add panel</button></div>`; }
+// 🦴 each panel's pose rig (Jordan 2026-10-22): the rig page opens full screen inside the panel's shape, with its own
+// saved pose, body and camera per panel (rd-pose-rig-panel-<id> on this phone); 🦴 Pose moves only her, 🎥 Camera only the
+// camera (Orbit round her, or Pan / zoom to place her in the panel). Done keeps a little picture of the frame for the page.
+const cmRigKey = p => (S.hidden ? 'h' : '') + p.id;
+// the panel's own shape at about a megapixel on the 64 grid (not clamped like a still, so a thin panel stays thin)
+function cmRigSize(a){ const H = Math.sqrt(1048576 / a); return [Math.max(256, Math.round(H * a / 64) * 64), Math.max(256, Math.round(H / 64) * 64)]; }
+function cmFrameHtml(p, i, r){ if(!r) return ''; const a = r.w / r.h, [W, H] = cmRigSize(a), th = p.rig && p.rig.thumb;
+  return `<button class="cmpf" data-cmrig="${i}" style="width:min(100%, ${Math.round(150 * a)}px);aspect-ratio:${a.toFixed(4)}" aria-label="Open panel ${i + 1} full screen to pose">${th ? `<img src="${esc(th)}" alt="">` : ''}<span>${th ? '🦴 ' + esc(cmRigWho(p) ? cmRigWho(p).name : 'Posed') : '🦴 Tap to pose'} · ${W} × ${H}</span></button>`; }
+// who the rig is: picked in its top bar, else the first library character tagged in the panel, else the first in the library
+function cmRigWho(p){ const lib = (S.cmLib || []).filter(L => (L.name || '').trim()); if(p.rig && p.rig.who){ const L = lib.find(x => x.id===p.rig.who); if(L) return L; }
+  const tags = ((cmSrc(p) || '').match(/@([\w-]+)/g) || []).map(t => t.slice(1).toLowerCase()); return lib.find(L => tags.includes(cmTagOf(L).toLowerCase())) || lib[0] || null; }
+function cmRigOpen(i){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i]; if(!p) return; const r = cmRectsOf(pg)[i], [W, H] = cmRigSize(r.w / r.h), L = cmRigWho(p), lib = (S.cmLib || []).filter(x => (x.name || '').trim());
+  cmRigClose(true); const box = document.createElement('div'); box.className = 'cmrigbox'; box.id = 'cmRigBox'; box.dataset.i = i; box.dataset.pid = p.id;
+  box.innerHTML = `<div class="cmrigtop"><b>Panel ${i + 1}</b>${lib.length ? `<select id="cmRigWho" aria-label="Who the rig is">${lib.map(x => `<option value="${esc(x.id)}" ${L && x.id===L.id ? 'selected' : ''}>🦴 ${esc(x.name)}</option>`).join('')}</select>` : '<span class="note" style="flex:1">Add characters under 👥 Characters to name the rig</span>'}<button class="btn hot" id="cmRigDone">✓ Done</button></div>
+    <iframe title="Pose rig for panel ${i + 1}" src="rig/?${new URLSearchParams({panel:cmRigKey(p), w:W, h:H, name:L ? L.name : 'Panel ' + (i + 1), g:L && L.g || ''})}"></iframe>`;
+  document.body.appendChild(box); document.body.style.overflow = 'hidden';
+  $('#cmRigDone').onclick = () => cmRigClose();
+  const sel = $('#cmRigWho'); if(sel) sel.onchange = () => { const N = lib.find(x => x.id===sel.value); p.rig = Object.assign({}, p.rig, {who:sel.value}); save();
+    try{ box.querySelector('iframe').contentWindow.RIG.setWho(N ? N.name : ''); }catch(e){} }; }
+// Done: the rig saves itself; the panel keeps who it is and a little picture of the frame
+function cmRigClose(quiet){ const box = $('#cmRigBox'); if(!box) return; const pg = cmPage(), p = pg && pg.panels.find(q => q.id===box.dataset.pid);
+  if(p){ const L = cmRigWho(p); p.rig = Object.assign({}, p.rig, {who:L ? L.id : '', at:Date.now()});
+    try{ const R = box.querySelector('iframe').contentWindow.RIG; if(R){ R.save(); p.rig.thumb = R.frameShot(320); } }catch(e){ console.error(e); } }
+  box.remove(); document.body.style.overflow = ''; if(!quiet){ save(); drawComic(); } }
 const cmName = c => 'Comic ' + (c.n || 1) + (c.pages.length ? ' (' + c.pages.length + ' page' + (c.pages.length > 1 ? 's' : '') + ')' : '');
 function cmRead(){
   const cm = CM(), pages = cmSplit(cm.script);
@@ -7797,7 +7832,8 @@ function drawPage(){
       ${t && t.test ? `<div class="cptest" style="--hue:${(i * 67 + (t.n || 1) * 29) % 360}">Take ${t.n || 1}<br><small>pretend clip</small></div>` : ''}
       ${st && st.url ? `<img class="cpimg" src="${esc(st.url)}" alt="" style="object-position:${op}" draggable="false">` : ''}
       ${st && st.test ? `<div class="cptest" style="--hue:${(i * 67 + 200) % 360}">Still<br><small>pretend</small></div>` : ''}
-      ${!sh ? `<div class="cpempty"><b>${i + 1}</b> ${esc(shot)}<br><span>${esc(p.text)}</span></div>` : ''}
+      ${!sh && p.rig && p.rig.thumb ? `<img class="cprig" src="${esc(p.rig.thumb)}" alt="" draggable="false">` : ''}
+      ${!sh ? `<div class="cpempty"><b>${i + 1}</b> ${esc(shot)}<br><span>${esc(p.text)}</span>${i===cm.sel ? '<br><span>🦴 tap again to pose</span>' : ''}</div>` : ''}
       ${cmBusy(p) ? `<div class="cpbusy"><div class="pbar"><i data-cmbar="${p.id}"></i></div><small data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || 'Waiting…')}</small></div>` : ''}
       ${p.err ? '<div class="cperr">!</div>' : ''}<span class="cpn">${i + 1}</span></div>`; }).join('');
   pg.panels.forEach((p, i) => { const sh = cmShown(p), t = sh && sh.clip; if(!t || !t.url) return; const v = cmVid(t.url), el = box.querySelector(`[data-cpi="${i}"]`);
@@ -7921,7 +7957,8 @@ $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) ret
 // where the cursor is in each panel box, so 👤 Add a character puts the @tag there
 ['keyup', 'click', 'focusout'].forEach(ev => $('#comic').addEventListener(ev, e => { const el = e.target; if(el && el.dataset && el.dataset.cmpt!=null) CM_CARET[+el.dataset.cmpt] = el.selectionStart; }));
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cmprev],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmrig],[data-cmins],[data-cmlg],[data-cmlladd],[data-cmlldel],[data-cmprev],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmwho],[data-cmshot],[data-cmtake],[data-cmq],[data-cmroute],[data-cmkeep],[data-cmstill],[data-cmshow],[data-cmplate],[data-cmopts],[data-cmborder],[data-cmfin],[data-d3view],[data-d3deg],[data-d3mode],[data-d3home],[data-d3flat],[data-d3plain],[data-fusesrc],[data-fusen],[data-cmwhite],[data-t3dmv],[data-t3dring]'); if(!t) return;
+  if(t.dataset.cmrig!=null){ cmRigOpen(+t.dataset.cmrig); return; }
   if(t.dataset.cmins){ cmInsert(+t.dataset.i, t.dataset.cmins); return; }
   if(t.dataset.cmprev){ const L = (S.cmLib || []).find(x => x.id===t.dataset.cmprev); if(L) cmPreview(L); return; }
   if(t.dataset.cmlladd!=null || t.dataset.cmlldel!=null){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(!L) return;
@@ -7929,7 +7966,7 @@ $('#comic').addEventListener('click', e => {
   if(t.dataset.cmlg!=null){ const L = (S.cmLib || []).find(x => x.id===t.dataset.id); if(L){ L.g = t.dataset.cmlg; cmRecast(); save(); drawComic(); } return; }
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   if(D3.play && a!=='d3wig' && a!=='d3rec') d3Wiggle(false);
-  if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel) return; cm.sel = i; }
+  if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel){ const q = pg.panels[i]; if(q && !cmShown(q)) cmRigOpen(i); return; } cm.sel = i; }
   else if(t.dataset.cmfold){ cm.open[t.dataset.cmfold] = !cm.open[t.dataset.cmfold]; }
   else if(t.dataset.cmpg!=null){ cmPlay(false); cmGoPage(+t.dataset.cmpg); }
   else if(t.dataset.cmlay!=null){ pg.rows = pg.lays[+t.dataset.cmlay]; }

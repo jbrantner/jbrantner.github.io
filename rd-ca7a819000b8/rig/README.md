@@ -33,3 +33,9 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
   ProMax with each guide switched on as its union type, saved under RenderDeck/rig).
 - Tests: `RIG_DEPS=<folder with three-0.160.0/ and mediapipe-tasks-vision-0.10.14/ unpacked from npm pack> NODE_PATH=$(npm root -g) node tests/t_rig.js`;
   `tests/t_body.js` checks the body and saves screenshots and guides to tests/out; `tests/t_photo.js <photo>` also needs `pose_landmarker_full.task` in RIG_DEPS.
+- 🦴 Pose / 🎥 Camera (top): only one answers the finger, so posing never moves the camera and the camera never moves her.
+  Camera has Orbit (turns round her middle) and Pan / zoom (one finger slides her across the frame as a lens shift, so the
+  angle on her stays; pinch or the wheel goes closer). The shift is carried into every guide.
+- In a comic panel: `rig/?panel=<id>&w=&h=&name=&g=` (Render Deck opens it full screen). Its own saved rig per panel
+  (`rd-pose-rig-panel-<id>`, a new one starts with the rig page's body), the frame fixed to the panel's shape, Camera
+  first, the view chips turn the camera without changing where she sits or how big; `RIG.frameShot()` gives the page its picture.
