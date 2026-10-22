@@ -237,7 +237,7 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(sm.views && sm.tab && sm.cam, '🛋 Set shows the flat views and the Set tab: ' + JSON.stringify(sm));
   await page.evaluate(() => { document.querySelector('#setAdd [data-sadd="room"]').click(); document.querySelector('#setAdd [data-sadd="sofa"]').click(); });
   const px = (p) => page.evaluate(p => { const R = RIG, v = new (R.camera.position.constructor)(...p).project(R.setOrtho), r = document.querySelector('#cv').getBoundingClientRect();
-    return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, p);
+    return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * R.topH()]; }, p);
   const sofa0 = await page.evaluate(() => { const R = RIG, it = R.SET.items.find(i => i.k==='sofa'); it.p = [1.5, 0, -2]; R.buildSet(); R.fitSet(); return it.p.slice(); });
   let [sx, sy] = await px([1.5, 0.5, -2]); await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx - 60, sy + 18, {steps:6}); await page.mouse.up();
   const sofa1 = await page.evaluate(() => RIG.SET.items.find(i => i.k==='sofa').p.slice());
@@ -246,10 +246,14 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.evaluate(() => { const R = RIG, it = R.SET.items.find(i => i.k==='sofa'); it.p = [1.5, 0, -2]; R.buildSet(); });
   [sx, sy] = await px([1.5, 0.3, -2]); await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx + 10, sy - 50, {steps:6}); await page.mouse.up();
   const sofa2 = await page.evaluate(() => RIG.SET.items.find(i => i.k==='sofa').p.slice());
+  // nothing is picked by a tap: a tap in the view with the sofa picked keeps the sofa
+  [sx, sy] = await px([0, 1.4, -3.06]); await page.mouse.click(sx, sy); ok(await page.evaluate(() => RIG.setItem ? true : true) && /^i/.test(await page.evaluate(() => RIG.setSel)) && await page.evaluate(() => RIG.SET.items.find(i => i.id===RIG.setSel).k==='sofa'), 'a tap in the view never picks another piece');
   ok(sofa2[1] > 0.2 && sofa2[0]===1.5 && sofa2[2]===-2, 'Front view: an upward drag lifts it, nothing else moves: ' + JSON.stringify(sofa2));
-  const her0 = await page.evaluate(() => RIG.wpos(RIG.bones.pelvis).toArray()); [sx, sy] = await px(her0);
+  const her0 = await page.evaluate(() => { RIG.pickSet('her'); return RIG.wpos(RIG.bones.pelvis).toArray(); }); [sx, sy] = await px(her0);
   await page.mouse.move(sx, sy); await page.mouse.down(); await page.mouse.move(sx + 50, sy, {steps:6}); await page.mouse.up();
   const her1 = await page.evaluate(() => ({p:RIG.wpos(RIG.bones.pelvis).toArray(), feet:RIG.wpos(RIG.bones.footL).y}));
+  const lay = await page.evaluate(() => { const b = [...document.querySelectorAll('#setLayers [data-slay]')]; return {n:b.length, on:b.filter(x => x.classList.contains('on')).map(x => x.dataset.slay), split:!document.querySelector('#setSplit').hidden}; });
+  ok(lay.n===6 && lay.on.join()==='her' && lay.split, 'Layers lists her and every piece, the picked one lit; the panel camera shows under the flat view: ' + JSON.stringify(lay));
   ok(her1.p[0] > her0[0] + 0.15 && Math.abs(her1.p[2] - her0[2]) < 0.01 && Math.abs(her1.p[1] - her0[1]) < 0.01, 'her too: she slides across the floor, same height: ' + JSON.stringify([her0, her1]));
   // what the comic gets: the set's colours and depth from the panel's camera, and where a piece stands in front of her
   const sg = await page.evaluate(() => { const R = RIG; document.querySelector('#ctl [data-ctl="cam"]').click();
@@ -259,6 +263,18 @@ const DEPS = process.env.RIG_DEPS || '';
   const tone = await page.evaluate(async () => { const g = RIG.panelGuides(), im = new Image(); im.src = g.bg; await im.decode(); const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.drawImage(im, 0, 0);
     const d = x.getImageData(0, 0, c.width, c.height).data; let grey = 0; for(let i = 0; i < d.length; i += 4) if(Math.abs(d[i] - 244) < 4 && Math.abs(d[i + 2] - 244) < 4) grey++; return grey / (d.length / 4); });
   ok(tone < 0.5, 'the set colour picture shows the room, not empty sky: ' + tone.toFixed(2));
+  // 🧍 pose sprites: 24 guides from her pose (3 heights × 8 directions), then a camera-facing picture that swaps with the angle
+  const ss = await page.evaluate(() => { const t0 = performance.now(), r = RIG.spriteShots(256); return {ms:Math.round(performance.now() - t0), n:r.views.length, rings:[...new Set(r.views.map(v => v.ring))].join(), png:r.views.every(v => /^data:image\/png/.test(v.pose) && /^data:image\/jpeg/.test(v.depth)), wM:r.wM, hM:r.hM, aimY:r.aim[1], differ:r.views[0].pose!==r.views[4].pose}; });
+  ok(ss.n===24 && ss.rings==='0,1,2' && ss.png && ss.hM > 1.6 && ss.aimY > 0.6 && ss.differ, 'a pose sprite\'s 24 guides (OpenPose + depth), the same size from every angle: ' + JSON.stringify(ss));
+  const sv = await page.evaluate(() => { const R = RIG, c = document.createElement('canvas'); c.width = 8; c.height = 12; const views = [];
+    for(let n = 0; n < 24; n++){ const x = c.getContext('2d'); x.fillStyle = 'hsl(' + n * 15 + ',80%,50%)'; x.fillRect(0, 0, 8, 12); views.push(c.toDataURL()); }
+    localStorage.setItem(R.SPKEY, JSON.stringify([{id:'sp1', name:'Walking', geo:{wM:1.2, hM:1.9, aim:[0, 0.9, 0]}, views}]));
+    const it = R.addSet('sprite:sp1'); it.p = [0, 0, 0]; it.r = 0; R.buildSet(); const m = R.spriteMeshes()[0], P = (x, y, z) => new (R.camera.position.constructor)(x, y, z);
+    const at = (x, y, z) => { const v = R.spriteView(m, P(x, y, z)); return v.ring * 8 + v.i; };
+    const out = {front:at(0, 1, 5), left45:at(3.5, 1, 3.5), back:at(0, 1, -5), above:at(0, 6, 2), below:at(0, -2, 5), btn:!!document.querySelector('#setAdd [data-sadd="sprite:sp1"]')};
+    it.r = 1; R.buildSet(); out.turned = at(0, 1, 5); const m2 = R.spriteMeshes()[0]; R.updSprites(R.camera); out.tex = !!m2.material.map; out.faces = m2.getWorldDirection(P()).dot(R.camera.position.clone().sub(m2.getWorldPosition(P())).normalize()); return out; });
+  ok(sv.front===8 && sv.left45===9 && sv.back===12 && sv.above===16 && sv.below===0 && sv.turned===14 && sv.btn && sv.tex && sv.faces > 0.99,
+    'the sprite shows the picture for the camera\'s angle and height, turns with the piece, and faces the camera: ' + JSON.stringify(sv));
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

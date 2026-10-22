@@ -448,7 +448,19 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       await page.selectOption('#comic [data-cmcopy]', '1');
       const cp = await page.evaluate(() => { const b = cmPage().panels[1], c = cmPage().panels[2]; return {dir:c.dir && c.dir.cam==='front', rig:!!c.rig && c.rig.box, still:(c.stills || []).length===1}; });
       ok(Object.values(cp).every(Boolean), 'Copy from panel… gives this panel another one\'s pose, camera, set, still and direction: ' + JSON.stringify(cp));
-      await page.evaluate(() => { cmDelPanel(1); const p = cmPage().panels[0]; delete p.setBg; p.rig.set = false; p.stills = []; CM().sel = 0; drawComic(); }); }
+      await page.evaluate(() => { cmDelPanel(1); const p = cmPage().panels[0]; delete p.setBg; p.rig.set = false; p.stills = []; CM().sel = 0; drawComic(); });
+      // 🧍 a pose from 24 angles: the rig's guides, painted with her LoRA, cut out, and offered in every rig's Set tab
+      nb = ALL.length; await page.click('#comic .cmed [data-cmrig="0"]'); const fp = await (await page.waitForSelector('#cmRigBox iframe')).contentFrame(); await fp.waitForFunction(() => window.RIG, null, {timeout:20000});
+      await page.click('#cmRigPose'); await page.waitForFunction(() => (S.cmPoses || []).length && S.cmPoses[0].views.every(v => v.url), null, {timeout:60000});
+      const pg24 = ALL.slice(nb).map(x => x.prompt), e3 = pg24.flatMap(check), seeds = new Set(pg24.map(g => Object.values(g).find(n => n.class_type==='KSampler').inputs.seed));
+      const txt = g => Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | '), pre = g => Object.values(g).find(n => n.class_type==='SaveImage').inputs.filename_prefix;
+      const back = pg24.find(g => /eye_4$/.test(pre(g))), hi = pg24.find(g => /high_0$/.test(pre(g)));
+      ok(pg24.length===24 && seeds.size===1 && pg24.every(g => Object.values(g).filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type).join()==='openpose,depth' && Object.values(g).some(n => n.class_type==='JoinImageWithAlpha') && /librarianx_v2/.test(JSON.stringify(g)))
+        && back && /from behind, back/.test(txt(back)) && hi && /from above/.test(txt(hi)) && !e3.length, '🧍 Make a pose paints her from 24 angles (same seed, rig guides, her LoRA, cut out): ' + JSON.stringify({n:pg24.length, seeds:seeds.size}) + ' ' + e3.slice(0, 3).join('; '));
+      const lib = await page.evaluate(() => { const l = JSON.parse(localStorage.getItem('rd-pose-sprites') || '[]'); return {n:l.length, urls:l[0] && l[0].views.filter(Boolean).length, geo:!!(l[0] && l[0].geo && l[0].geo.hM > 1), poses:!!document.querySelector('#comic [data-cmfold="poses"]')}; });
+      const inSet = await fp.evaluate(() => { RIG.S.ctl = 'set'; RIG.showCtl(); return !!document.querySelector('#setAdd [data-sadd^="sprite:"]'); });
+      ok(lib.n===1 && lib.urls===24 && lib.geo && lib.poses && inSet, 'the pose is kept under 🧍 Poses and offered as a piece in the rig\'s Set tab: ' + JSON.stringify(lib));
+      await page.click('#cmRigDone'); }
     // 🎬 or MiniMax: her picture (the library preview) inside the rig's outline through MiniMax H3's Fun ControlNet, 9 frames, the middle kept
     if(process.env.RIG_DEPS){ const nb = ALL.length; await page.evaluate(() => { const q = cmPage().panels[0]; q.rigBy = 'mm'; q.stills = []; drawComic(); });
       ok(/MiniMax \+ pictures/.test(await page.textContent('#comic [data-cmrigby="mm"].on').catch(() => '')) || await page.evaluate(() => { CM().sel = 0; drawComic(); return !!document.querySelector('#comic [data-cmrigby="mm"].on'); }), 'a posed panel offers Pose by: 🎬 MiniMax + pictures (picked) or 🖼 Illustrious + ProMax');

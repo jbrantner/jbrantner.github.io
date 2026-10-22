@@ -41,3 +41,5 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
   first, the view chips turn the camera without changing where she sits or how big; `RIG.frameShot()` gives the page its picture.
 
 **2026-10-22 (Render Deck v.134)**: 🛋 Set mode: walls and furniture blocks moved in orthographic views one axis at a time; panelGuides() adds bg (set colours), bgDepth and front (set in front of her) when a set exists.
+
+**2026-10-22 (Render Deck v.135)**: spriteShots() gives 24 guides (3 rings at -25/5/35 degrees × 8 yaws from her facing); set pieces of kind sprite read rd-pose-sprites[-h] and face the camera, picking the view by azimuth (minus the piece turn) and elevation (<-10 low, >20 high). Set mode: Layers list, split view (SPLIT 0.56).
