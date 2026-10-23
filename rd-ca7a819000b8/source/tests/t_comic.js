@@ -86,7 +86,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         const vid = ks.find(k => g[k].class_type==='SaveVideo'), img = ks.find(k => g[k].class_type==='SaveImage'), sv = vid || img, pre = g[sv].inputs.filename_prefix, cut = pre.lastIndexOf('/');
         const f = {filename:pre.slice(cut + 1) + '_' + id + '_.' + (vid ? 'webm' : 'png'), subfolder:pre.slice(0, cut), type:'output'};
         const four = !vid && g[sv].inputs.images && g[g[sv].inputs.images[0]].class_type==='ImageBatch'; // the 3D look's layers come back as a batch of 4
-        const fs = four ? [1, 2, 3, 4].map(n => Object.assign({}, f, {filename:f.filename.replace('.png', n + '.png')})) : [f];
+        let nb = 1; for(let q = four ? g[sv].inputs.images[0] : null; q && g[q].class_type==='ImageBatch'; q = g[q].inputs.image1[0]) nb++; // a chain of ImageBatch: that many pictures (4 for the 3D look, 8 for a pose's turn)
+        const fs = four ? Array.from({length:Math.max(nb, 4)}, (_, n) => n + 1).map(n => Object.assign({}, f, {filename:f.filename.replace('.png', n + '.png')})) : [f];
         return r.fulfill({ json:{[id]:{status:{completed:true, status_str:'success'}, outputs:{[sv]:{images:fs}}}} }); }
       if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{jobs:[], token:false} });
       if(u.pathname.startsWith('/renderdeck/')) return r.fulfill({ status:404, body:'' });
@@ -393,7 +394,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       ok(Object.values(cp).every(Boolean), 'Copy from panel… gives this panel another one\'s pose, camera, set, still and direction: ' + JSON.stringify(cp));
       await page.evaluate(() => { cmDelPanel(1); const p = cmPage().panels[0]; delete p.setBg; p.rig.set = false; p.stills = []; CM().sel = 0; drawComic(); });
       // 🧍 a pose from 24 angles: the rig's guides, painted with her LoRA, cut out, and offered in every rig's Set tab
-      nb = ALL.length; await page.click('#comic .cmed [data-cmrig="0"]'); const fp = await (await page.waitForSelector('#cmRigBox iframe')).contentFrame(); await fp.waitForFunction(() => window.RIG, null, {timeout:20000});
+      await page.evaluate(() => { S.cmPoseBy = 'ill'; }); nb = ALL.length; await page.click('#comic .cmed [data-cmrig="0"]'); const fp = await (await page.waitForSelector('#cmRigBox iframe')).contentFrame(); await fp.waitForFunction(() => window.RIG, null, {timeout:20000});
       await page.click('#cmRigPose'); await page.waitForFunction(() => (S.cmPoses || []).length && S.cmPoses[0].views.every(v => v.url), null, {timeout:60000});
       const pg24 = ALL.slice(nb).map(x => x.prompt), e3 = pg24.flatMap(check), seeds = new Set(pg24.map(g => Object.values(g).find(n => n.class_type==='KSampler').inputs.seed));
       const txt = g => Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | '), pre = g => Object.values(g).find(n => n.class_type==='SaveImage').inputs.filename_prefix;
@@ -403,6 +404,24 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       const lib = await page.evaluate(() => { const l = JSON.parse(localStorage.getItem('rd-pose-sprites') || '[]'); return {n:l.length, urls:l[0] && l[0].views.filter(Boolean).length, geo:!!(l[0] && l[0].geo && l[0].geo.hM > 1), poses:!!document.querySelector('#comic [data-cmfold="poses"]')}; });
       const inSet = await fp.evaluate(() => { RIG.S.ctl = 'set'; RIG.showCtl(); return !!document.querySelector('#setAdd [data-sadd^="sprite:"]'); });
       ok(lib.n===1 && lib.urls===24 && lib.geo && lib.poses && inSet, 'the pose is kept under 🧍 Poses and offered as a piece in the rig\'s Set tab: ' + JSON.stringify(lib));
+      // 👀 the optional looking-at-camera set: 24 more of the same pose, eyes on the camera, kept beside the first set
+      { await page.click('#cmRigDone'); const nl = ALL.length; await page.evaluate(() => { CM().open.poses = true; drawComic(); }); await page.click('#comic [data-cmpose="look"]');
+        await page.waitForFunction(() => S.cmPoses[0].views.length===48 && S.cmPoses[0].views.every(v => v.url), null, {timeout:60000});
+        const lg = ALL.slice(nl).map(x => x.prompt), l2 = await page.evaluate(() => JSON.parse(localStorage.getItem('rd-pose-sprites'))[0]);
+        const backL = lg.find(g => /eye_4_look$/.test(pre(g))), negs = g => Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text)[1];
+        ok(lg.length===24 && lg.every(g => /looking at viewer/.test(txt(g)) && !/looking at viewer/.test(negs(g))) && backL && /looking back/.test(txt(backL)) && l2.look.length===24 && l2.look.every(Boolean) && l2.views.length===24 && /2 of|48 pictures/.test(await page.textContent('#comic')),
+          '👀 Add a looking-at-camera set paints 24 more with her eyes on the camera, kept as the pose\'s look set: ' + JSON.stringify({n:lg.length, look:l2.look.length}));
+      }
+      // 🎬 MiniMax turn + Illustrious: one MiniMax clip a height following the rig's outline turning round her, then each angle painted over it
+      { await page.evaluate(() => { S.cmPoseBy = 'mm'; S.cmPoseLook = false; }); await page.click('#comic .cmed [data-cmrig="0"]'); const fq = await (await page.waitForSelector('#cmRigBox iframe')).contentFrame(); await fq.waitForFunction(() => window.RIG, null, {timeout:20000});
+        const nm = ALL.length; await page.click('#cmRigPose'); await page.waitForFunction(() => S.cmPoses[0].by==='mm' && S.cmPoses[0].views.every(v => v.url), null, {timeout:120000}).catch(async e => { console.log('DBG', await page.evaluate(() => JSON.stringify({by:S.cmPoses[0].by, orb:S.cmPoses[0].orb, mm:cmMmKits().length, v:S.cmPoses[0].views.slice(0, 2)}))); console.log('POLLS', JSON.stringify(PCS.Render.polls).slice(-400), JSON.stringify(PCS.Main.polls).slice(-200)); throw e; });
+        const gs = ALL.slice(nm).map(x => x.prompt), orb = gs.filter(g => Object.values(g).some(n => n.class_type==='MiniMaxH3FunControlNetApply')), ill = gs.filter(g => Object.values(g).some(n => n.class_type==='CheckpointLoaderSimple'));
+        const rv = orb.map(g => Object.values(g).find(n => n.class_type==='MiniMaxH3ReferenceToVideo').inputs), picks = orb.map(g => Object.values(g).filter(n => n.class_type==='ImageFromBatch').map(n => n.inputs.batch_index).join());
+        const ks = ill.map(g => Object.values(g).find(n => n.class_type==='KSampler').inputs.denoise), enc = ill.filter(g => Object.values(g).some(n => n.class_type==='VAEEncode')).length, P0 = await page.evaluate(() => ({orb:S.cmPoses[0].orb.map(o => o.urls.length), frames:Object.keys(CM_SPO).length && CM_SPO[S.cmPoses[0].id].map(f => f.length)}));
+        ok(orb.length===3 && rv.every(r => r.length===49 && /turntable/.test(r.prompt) && r['ref_images.ref_image_0']) && picks.every(p => p==='0,6,12,18,24,30,36,42') && ill.length===24 && ks.every(d => d===0.5) && enc===24 && gs.flatMap(check).length===0 && P0.orb.join()==='8,8,8' && P0.frames.join()==='49,49,49',
+          '🎬 MiniMax turn + Illustrious: 3 turning clips (49 frames from the rig\'s outline, every 6th kept), then 24 Illustrious passes at 0.5 over those frames: ' + JSON.stringify({orb:orb.length, ill:ill.length, picks:picks[0], ks:[...new Set(ks)], P0, e:gs.flatMap(check).slice(0, 3)}));
+        await page.evaluate(() => { S.cmPoseBy = 'ill'; }); await page.click('#cmRigDone'); }
+      await page.click('#comic .cmed [data-cmrig="0"]'); await (await page.waitForSelector('#cmRigBox iframe')).contentFrame();
       await page.click('#cmRigDone'); }
     { const r = await page.evaluate(() => { const q = cmPage().panels[0], o = q.rigBy; q.rigBy = 'mm'; CM().sel = 0; drawComic(); const x = {by:cmRigBy(q), seg:!!document.querySelector('#comic [data-cmrigby], #comic [data-cmmmq]')}; if(o) q.rigBy = o; else delete q.rigBy; drawComic(); return x; });
       ok(r.by==='ill' && !r.seg, 'posing is always Illustrious + ProMax now; the MiniMax choice is gone, even for an old panel set to it: ' + JSON.stringify(r)); }
