@@ -47,3 +47,5 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 **2026-10-22 (Render Deck v.136)**: set drags move along both screen axes of the flat view (S.setDrag 'one' = old first-direction lock); pieces carry it.r (spin in quarter turns, any value) plus it.tx / it.tz (world tilts in degrees), set by the Spin/Tilt slider for the current view (rotKey), with S.setSnap rounding to 45°.
 
 **2026-10-23 (Render Deck v.137)**: spriteShots(gw, {n, w, h}) also returns orbit: 3 rings × n outline frames (frame f at f·360/(n−1)°) for MiniMax's control video; sprite pieces with it.look use the pose's look[] pictures; Bust 0–5 (bigger busts sit lower, further apart, sunk into the chest).
+
+**2026-10-23 (Render Deck v.138)**: each spriteShots view also has face (head forward · direction to the camera), spread (1 − silhouette area / convex hull area) and mask (64-wide 0/1 silhouette string), used by Render Deck to pick the best start picture.

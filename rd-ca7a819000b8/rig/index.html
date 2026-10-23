@@ -2001,6 +2001,18 @@ const SPKEY = 'rd-pose-sprites' + (QS.get('sp') ? '-' + QS.get('sp') : '');
 const spriteLib = () => { try{ return JSON.parse(localStorage.getItem(SPKEY)) || []; }catch(e){ return []; } };
 let camOverride = null;
 // the 24 views of her pose: the same distance and lens for each, so every picture is the same size in the set
+// how a view reads, for picking the best start picture without AI (Jordan 2026-10-23): her silhouette at 64 wide, and how
+// open it is (1 − area / convex hull area: arms and legs clear of the body leave more empty room inside the hull)
+const MASK_W = 64;
+function maskStats(cv){ const w = MASK_W, h = Math.round(w * cv.height / cv.width), c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); x.drawImage(cv, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data, pts = []; let m = '';
+  for(let y = 0; y < h; y++) for(let q = 0; q < w; q++){ const on = d[(y * w + q) * 4] > 8; m += on ? '1' : '0'; if(on) pts.push([q, y]); }
+  if(pts.length < 3) return {mask:m, spread:0, w, h};
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]); const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo = [], up = [];
+  for(const p of pts){ while(lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for(let k = pts.length - 1; k >= 0; k--){ const p = pts[k]; while(up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  const hull = lo.slice(0, -1).concat(up.slice(0, -1)); let a = 0; for(let k = 0; k < hull.length; k++){ const p = hull[k], q = hull[(k + 1) % hull.length]; a += p[0] * q[1] - q[0] * p[1]; }
+  return {mask:m, spread:Math.max(0, 1 - pts.length / Math.max(1, Math.abs(a) / 2 + hull.length / 2 + 1)), w, h}; }
 // orbit: N outline frames a ring all the way round (frame f at f × 360/(N-1)°, so with 49 frames every 6th is one of the 8
 // views), the control video MiniMax follows when it paints the pose turning (Jordan 2026-10-22)
 function spriteShots(gw = 512, orbit = null){
@@ -2011,7 +2023,8 @@ function spriteShots(gw = 512, orbit = null){
   const hM = 2 * d * Math.tan(fov * D2R / 2), wM = hM * SPRITE_W / SPRITE_H;
   try{ for(let ring = 0; ring < 3; ring++) for(let i = 0; i < 8; i++){ const y = facing + i * 45 * D2R, p = SPRITE_RINGS[ring][1] * D2R, c = new THREE.PerspectiveCamera(fov, SPRITE_W / SPRITE_H, 0.05, 50);
       c.position.set(C.x + Math.sin(y) * Math.cos(p) * d, C.y + Math.sin(p) * d, C.z + Math.cos(y) * Math.cos(p) * d); c.lookAt(C); c.updateMatrixWorld(); c.updateProjectionMatrix(); camOverride = c;
-      const cs = guideCanvases(gw, gh, ['pose', 'depth']); views.push({ring, i, pose:cs.pose.toDataURL('image/png'), depth:cs.depth.toDataURL('image/jpeg', 0.88)}); }
+      const cs = guideCanvases(gw, gh, ['pose', 'depth']), hp = wpos(bones.head), hf = V(0, 0, 1).applyQuaternion(wquat(bones.head)).normalize(), ms = maskStats(cs.depth);
+      views.push({ring, i, pose:cs.pose.toDataURL('image/png'), depth:cs.depth.toDataURL('image/jpeg', 0.88), face:Math.max(0, hf.dot(c.position.clone().sub(hp).normalize())), spread:ms.spread, mask:ms.mask}); }
     if(orbit) for(let ring = 0; ring < 3; ring++){ const fr = []; for(let f = 0; f < orbit.n; f++){ const y = facing + f * 2 * Math.PI / (orbit.n - 1), p = SPRITE_RINGS[ring][1] * D2R, c = new THREE.PerspectiveCamera(fov, orbit.w / orbit.h, 0.05, 50);
         c.position.set(C.x + Math.sin(y) * Math.cos(p) * d, C.y + Math.sin(p) * d, C.z + Math.cos(y) * Math.cos(p) * d); c.lookAt(C); c.updateMatrixWorld(); c.updateProjectionMatrix(); camOverride = c;
         fr.push(guideCanvases(orbit.w, orbit.h, ['line']).line.toDataURL('image/jpeg', 0.9)); } orbit[ring] = fr; } }
