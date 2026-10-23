@@ -91,6 +91,12 @@ const DEPS = process.env.RIG_DEPS || '';
     const flat = []; v.forEach(p => flat.push(p ? p[0] * W : 0, p ? p[1] * H : 0, p ? 0.9 : 0)); const r = R.lift2D(flat, W, H, W, H).pts;
     return {kneeL:+(r.lkn.z - r.lhip.z).toFixed(3), ankL:+(r.lank.z - r.lhip.z).toFixed(3), kneeR:+(r.rkn.z - r.rhip.z).toFixed(3)}; });
   ok(Math.abs(st.kneeL) < 0.01 && Math.abs(st.ankL) < 0.01 && Math.abs(st.kneeR) < 0.01, 'straight legs that look short stay straight (no knee bend from the shortness): ' + JSON.stringify(st));
+  // a picture on white is cut out from its edges in; white inside her stays
+  const wc = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 40; c.height = 60; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 40, 60);
+    x.fillStyle = '#226'; x.fillRect(10, 10, 20, 40); x.fillStyle = '#fff'; x.fillRect(16, 20, 8, 8); const o = RIG.whiteCut(c), d = o.getContext('2d');
+    const al = (px, py) => d.getImageData(px, py, 1, 1).data[3]; const cc = document.createElement('canvas'); cc.width = cc.height = 4; cc.getContext('2d').clearRect(0, 0, 4, 4);
+    return {corner:al(1, 1), body:al(12, 40), inside:al(20, 24), already:RIG.whiteCut(cc)===null}; });
+  ok(wc.corner===0 && wc.body===255 && wc.inside===255 && wc.already, 'whiteCut: the white round her goes see-through, white inside her stays, a cut-out picture is left alone: ' + JSON.stringify(wc));
   // undo and redo through the buttons
   const und = await page.evaluate(async () => { const R = RIG; document.querySelector('[data-preset="stand"]').click(); const a = JSON.stringify(R.P); document.querySelector('[data-preset="cheer"]').click();
     const b = JSON.stringify(R.P); document.querySelector('#undoBtn').click(); const c = JSON.stringify(R.P); document.querySelector('#redoBtn').click(); return {back:c===a, fwd:JSON.stringify(R.P)===b}; });

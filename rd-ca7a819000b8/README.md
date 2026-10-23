@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.157
+- 🧊 3D angles go to every computer that can paint them, not only ones with BiRefNet (Main sat free while Render did it all). A computer without BiRefNet paints on white, and the 3D viewer (and the rig's set) cuts the white away from the edges in, so white inside her (a blouse, socks) stays.
+
 ## 2026-10-23.156
 - 🧊 A 3D left on "Copying her pose onto the rig…" (the app was closed or reloaded during that step, which runs in the app) now starts the step again by itself while the app is open. So does a rig-led one whose skeleton videos were lost with a reload, and a rig one whose angle guides were.
 

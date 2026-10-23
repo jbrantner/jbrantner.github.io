@@ -38,7 +38,19 @@ const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshBasicM
 const sh = document.createElement('canvas'); sh.width = sh.height = 64; { const x = sh.getContext('2d'), gr = x.createRadialGradient(32, 32, 2, 32, 32, 32); gr.addColorStop(0, 'rgba(0,0,0,.45)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64); }
 const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.5), new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(sh), transparent:true, depthWrite:false})); shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.002; scene.add(shadow);
 const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous'); const tex = new Map();
-const texOf = url => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; tex.set(url, t); } return tex.get(url); };
+// a picture on plain white (an angle painted by a computer without BiRefNet, or MiniMax's own frame) is cut out here: the white
+// reaching in from the edges goes see-through, so white inside her (a blouse, socks) stays (Jordan 2026-10-23: Main sat free
+// because only Render could cut them out)
+function whiteCut(im){ const w = im.naturalWidth || im.width, h = im.naturalHeight || im.height; if(!w || !h) return null;
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); x.drawImage(im, 0, 0); let d;
+  try{ d = x.getImageData(0, 0, w, h); }catch(e){ return null; } const a = d.data, wh = i => a[i + 3] > 250 && a[i] > 228 && a[i + 1] > 228 && a[i + 2] > 228 && Math.max(a[i], a[i + 1], a[i + 2]) - Math.min(a[i], a[i + 1], a[i + 2]) < 18;
+  const corners = [0, (w - 1) * 4, (h - 1) * w * 4, ((h - 1) * w + w - 1) * 4]; if(corners.filter(wh).length < 3) return null; // already cut out, or not on white
+  const seen = new Uint8Array(w * h), st = []; for(let q = 0; q < w; q++){ st.push(q, (h - 1) * w + q); } for(let y = 0; y < h; y++){ st.push(y * w, y * w + w - 1); }
+  while(st.length){ const p = st.pop(); if(seen[p] || !wh(p * 4)) continue; seen[p] = 1; a[p * 4 + 3] = 0; const px = p % w;
+    if(px > 0) st.push(p - 1); if(px < w - 1) st.push(p + 1); if(p >= w) st.push(p - w); if(p < w * (h - 1)) st.push(p + w); }
+  for(let p = 0; p < w * h; p++){ if(seen[p]) continue; const px = p % w; if((px > 0 && seen[p - 1]) || (px < w - 1 && seen[p + 1]) || (p >= w && seen[p - w]) || (p < w * (h - 1) && seen[p + w])){ const i = p * 4, l = Math.min(a[i], a[i + 1], a[i + 2]); if(l > 200) a[i + 3] = Math.round(255 * (255 - l) / 55); } } // soft edge
+  x.putImageData(d, 0, 0); return c; }
+const texOf = url => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { const c = whiteCut(t.image); if(c){ t.image = c; t.needsUpdate = true; } dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; tex.set(url, t); } return tex.get(url); };
 let sp = null, her = null, back = null, dirty = true;
 function load(){ sp = lib().find(x => x.id===QS.get('pose')) || null; if(her){ scene.remove(her); her = null; }
   if(!sp || !sp.geo){ document.getElementById('msg').textContent = 'This pose is not ready yet'; return; } document.getElementById('msg').textContent = '';
