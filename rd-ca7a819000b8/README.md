@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.160
+- 🦴🎬 MiniMax led by the rig: a computer that runs MiniMax but lacks the pose ControlNet gets a 📦 Get it on … button (2.3 GB from Comfy-Org/MiniMax-H3 on Hugging Face, the same file Render has); once it's there, that computer takes rig-led moves too, including ones already waiting. Needs the helper with the model_patches folder.
+
 ## 2026-10-23.159
 - 3D viewer: from above (or below) she keeps the size she is drawn at; each picture is sized only against the front at the same height, so her head no longer grows as the camera rises.
 - 🧊 MiniMax 3D: the front angle is the frame where she really faces the camera, not the picture she started from: of the frames within 60° of the start, the one whose outline is most mirror-even. The other seven follow from it; the picture itself only starts the turn.

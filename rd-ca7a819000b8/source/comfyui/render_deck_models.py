@@ -34,7 +34,7 @@ from aiohttp import web
 import folder_paths
 from server import PromptServer
 
-KINDS = ('checkpoints', 'loras', 'diffusion_models', 'vae', 'text_encoders', 'clip_vision', 'controlnet', 'upscale_models', 'geometry_estimation')  # geometry_estimation: MoGe depth for the comic's 3D look  # the app's own picker offers the first two
+KINDS = ('checkpoints', 'loras', 'diffusion_models', 'vae', 'text_encoders', 'clip_vision', 'controlnet', 'upscale_models', 'geometry_estimation', 'model_patches')  # model_patches: MiniMax's pose ControlNet (Jordan 2026-10-23: Main too)  # geometry_estimation: MoGe depth for the comic's 3D look  # the app's own picker offers the first two
 CIVITAI = ('civitai.com', 'civitai.red', 'civitai.green')  # Civitai's sites share one API and the same model ids
 HOSTS = CIVITAI + ('huggingface.co',)
 JOBS = {}  # id -> job dict, newest last
