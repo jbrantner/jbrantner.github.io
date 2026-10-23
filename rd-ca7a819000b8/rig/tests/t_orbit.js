@@ -35,7 +35,7 @@ const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * 
   await film.page.evaluate(() => { window.RIG.scene.background.set(0xffffff); window.dispatchEvent(new Event('resize')); });
   const truth = await film.page.evaluate(pre => { document.querySelector(`[data-preset="${pre}"]`).click(); document.querySelector('#modes [data-m="body"]').click();
     if(window.RIG.S.showHandles) document.querySelector('[data-do="handles"]').click(); return null; }, PRE);
-  void truth; const T = await film.page.evaluate(LIMB_DIRS);
+  void truth; const T = await film.page.evaluate(LIMB_DIRS), FACE = await film.page.evaluate(() => { const R = window.RIG, w = n => R.wpos(R.bones[n]), l = w('thighL').sub(w('thighR')), f = l.clone().cross(w('armL').add(w('armR')).sub(w('thighL')).sub(w('thighR')).normalize()); return (Math.atan2(f.x, f.z) * 180 / Math.PI + 360) % 360; });
   const place = a => film.page.evaluate(a => { const R = window.RIG, c = R.wpos(R.bones.pelvis); c.y = 0.85; const d = 3.0, e = 0.17; R.scene.children.forEach(o => { if(o.type==='GridHelper') o.visible = false; });
     R.controls.target.copy(c); R.camera.position.set(c.x + Math.sin(a) * Math.cos(e) * d, c.y + Math.sin(e) * d, c.z + Math.cos(a) * Math.cos(e) * d); R.camera.lookAt(c); R.controls.update(); R.renderer.render(R.scene, R.camera); }, a);
   for(let k = 0; k < 16; k++){ await place(0.5 + k / 16 * Math.PI * 2); await film.page.waitForTimeout(120); await film.page.locator('#view').screenshot({path:path.join(OUT, 'orbit', `view-${String(k).padStart(2, '0')}.png`)}); }
@@ -63,6 +63,12 @@ const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * 
   { const {page, logs, ctx} = await open(browser, {}), files = fs.readdirSync(path.join(OUT, 'orbit')).filter(f => f.endsWith('.png')).sort();
     await page.route('https://pics.test/**', r => r.fulfill({contentType:'image/png', body:fs.readFileSync(path.join(OUT, 'orbit', path.basename(new URL(r.request().url()).pathname)))}));
     const r = await page.evaluate(async fs => { try{ return await window.RIG.poseFromOrbit(fs.map(f => 'https://pics.test/' + f), fs.map((_, k) => k / fs.length * Math.PI * 2), null); }catch(e){ return {error:e.message}; } }, files);
+    // filmed from 0.5 rad round her, so in the views' own turn her front is 0.5 rad (28.65°) less than in the rig; each view's solved turn near its own
+    // (the solve can turn the whole scene, so both are taken against one steady turn fitted through the views)
+    if(!r.error){ const t = r.ths.map(([k, th]) => [k, th]); for(let i = 1; i < t.length; i++){ while(t[i][1] - t[i - 1][1] > Math.PI) t[i][1] -= 2 * Math.PI; while(t[i][1] - t[i - 1][1] < -Math.PI) t[i][1] += 2 * Math.PI; }
+      const n = t.length, mk = t.reduce((s, x) => s + x[0], 0) / n, ma = t.reduce((s, x) => s + x[1], 0) / n, a0 = ma - mk * Math.PI * 2 / files.length;
+      const fe = Math.abs(((r.face - a0 * 180 / Math.PI - (FACE - 28.65) + 540) % 360) - 180), te = Math.max(...t.map(([k, th]) => Math.abs(((th - a0 - k / files.length * Math.PI * 2) * 180 / Math.PI + 540) % 360 - 180)));
+      r.faceErr = Math.round(fe); r.turnErr = Math.round(te); if(fe > 25) logs.push('her front came out ' + Math.round(fe) + '° off'); }
     const G = r.error ? null : await page.evaluate(LIMB_DIRS), angs = G ? Object.keys(T).flatMap(k => [0, 1].map(i => angle(T[k][i], G[k][i]))) : [];
     results.urls = {per:angs.map(Math.round), status:JSON.stringify(r), worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((a, b) => a + b, 0) / (angs.length || 1)), errors:logs};
     await ctx.close(); }

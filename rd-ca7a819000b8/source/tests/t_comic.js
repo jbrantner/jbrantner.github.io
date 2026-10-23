@@ -509,6 +509,10 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           ok(cmm.length===5 && !led(cmm[0]) && cmm.slice(1).every(led) && cinfo.ctl && cinfo.by==='mm' && cinfo.asked.length===1 && cinfo.asked[0].orbit >= 4 && cinfo.asked[0].a1 > 0
             && cinfo.frames.join()==='0,124,124,124,124' && cinfo.jpg && cinfo.pick==='0,4,8,12,15,19,23,27' && cinfo.eye,
             '🦴🎬 MiniMax led by the rig: the plain eye-level turn first, the rig fitted to its views, then 4 moves following the skeleton turning (124 frames sent as a video, pose ControlNet), their angles at exact eighths of the turn: ' + JSON.stringify(cinfo) + ' ' + JSON.stringify(cmm.map(g => V(g).filter(n => /LoadVideo|ControlNet/.test(n.class_type)).map(n => n.class_type + ':' + (n.inputs.file || '')))) + cmm.length);
+          // 🎯 the eye-level angles by maths from the rig fit: her front at 90°, a turn of 30 frames going the other way round
+          { const em = await page.evaluate(() => [cmEyeMath([[0, 0], [10, 2 * Math.PI / 3], [20, 4 * Math.PI / 3], [28, 2 * Math.PI * 28 / 30]], 90, 31, 30).join(), cmEyeMath([[0, 0], [10, -2 * Math.PI / 3], [20, -4 * Math.PI / 3]], 0, 31, 30).join()]);
+            const near = (got, want) => got.split(',').every((g, i) => Math.abs(((+g - want[i]) % 30 + 45) % 30 - 15) <= 0.51);
+            ok(near(em[0], [7.5, 11.25, 15, 18.75, 22.5, 26.25, 0, 3.75]) && near(em[1], [0, 26.25, 22.5, 18.75, 15, 11.25, 7.5, 3.75]), '🎯 eye-level angles worked out from the rig: each is the frame looking at her front + n × 45°: ' + em.join(' | ')); }
           // a circle whose frames came back with no angles picked (the app closed or reloaded meanwhile) gets lined up by itself
           { const pz = await page.evaluate(async () => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p), o = P.orb.find(x => x.step==='circle' && x.ring===2); delete o.pick; save();
               for(let t = 0; t < 100 && !o.pick; t++) await new Promise(r => setTimeout(r, 100)); return (o.pick || []).join(); });

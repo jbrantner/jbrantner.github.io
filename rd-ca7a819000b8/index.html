@@ -637,7 +637,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.162'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.163'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6681,6 +6681,15 @@ function m3Start(g){ if((S.m3By || 'rig')==='rig') return m3StartRig(g); const c
 // (no orbRig) copied the pose from the picture alone and led all 5 moves.
 const cmOrbCtl = (P, o) => !!P.ctl && !(P.orbRig && o.step==='circle' && o.ring===1);
 const cmEyeOrb = P => (P.orb || []).find(o => o.step==='circle' && o.ring===1);
+// the eye-level turn's 8 angles by maths (Jordan 2026-10-23: "take the front, ¾, side, back views from math"): the rig fit says
+// which way each view looked at her (ths: frame, turn in radians) and where her front is (face, degrees), so each angle is the
+// frame whose turn is nearest her front + n × 45°, on one steady turn fitted through the solved views
+function cmEyeMath(ths, face, len, turn){ const t = ths.slice().sort((a, b) => a[0] - b[0]); for(let i = 1; i < t.length; i++){ while(t[i][1] - t[i - 1][1] > Math.PI) t[i][1] -= 2 * Math.PI; while(t[i][1] - t[i - 1][1] < -Math.PI) t[i][1] += 2 * Math.PI; }
+  // one steady turn through all the solved views (each view alone can be ~20° out; together they agree)
+  const n = t.length, mf = t.reduce((s, x) => s + x[0], 0) / n, ma = t.reduce((s, x) => s + x[1], 0) / n; let num = 0, den = 0; t.forEach(([f, a]) => { num += (f - mf) * (a - ma); den += (f - mf) ** 2; });
+  const b = den ? num / den : 0; if(!b) return null; const thAt = f => ma + b * (f - mf);
+  const wrap = a => Math.abs(((a % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI), lim = Math.min(len, Math.max(8, Math.ceil(2 * Math.PI / Math.abs(b))));
+  return [0, 1, 2, 3, 4, 5, 6, 7].map(n => { const want = (face + n * 45) * Math.PI / 180; let best = 0, bd = 9; for(let f = 0; f < lim; f++){ const d = wrap(thAt(f) - want); if(d < bd){ bd = d; best = f; } } return best; }); }
 const CM_SP_EL = [-25, 5, 35]; // the rig's low / eye / high rings
 async function m3RigSpin(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); const fr = document.createElement('iframe');
   fr.style.cssText = 'position:fixed;left:-2000px;top:0;width:400px;height:700px;border:0'; fr.title = 'Pose rig';
@@ -6691,13 +6700,13 @@ async function m3RigSpin(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); cons
     if(P.orbRig){ const turn = eye && eye.turn || 30, us = eye && eye.urls || [], ix = []; for(let f = 0; f < Math.min(turn, us.length); f += 2) ix.push(Math.round(f));
       if(ix.length < 4) throw new Error('the eye-level turn has too few frames');
       r = await R.poseFromOrbit(ix.map(f => us[f]), ix.map(f => 2 * Math.PI * f / turn), dw && dw.url, (k, n) => { P.rigMsg = 'Fitting the rig to her turn: view ' + (k + 1) + ' of ' + n + '…'; if($('#m3Box')) m3Draw(); });
-      P.rigFit = {used:r.used, n:r.n, flips:r.flips}; }
+      P.rigFit = {used:r.used, n:r.n, flips:r.flips}; if(eye && r.ths && r.ths.length >= 2){ const pk = cmEyeMath(r.ths.map(([k, th]) => [ix[k], th]), r.face, us.length, turn); if(pk){ eye.pick = pk; eye.math = true; } } }
     else r = await R.poseFromPicture(P.src, dw && dw.url);
     await new Promise(res => setTimeout(res, 300)); P.partial = r.partial;
     const led = P.orb.filter(o => cmOrbCtl(P, o)), mv = led.map(o => o.step==='crane' ? {kind:'crane', from:CM_SP_EL[1], to:CM_SP_EL[o.ring]} : {kind:'circle', el:CM_SP_EL[o.ring]});
     const sp = R.spinGuides(P.mw || CM_SP_MW, P.mh || CM_SP_MH, TV_LEN, mv); led.forEach((o, n) => { CM_SPC[o.id] = sp.moves[n]; }); P.fit = sp.fit; P.face = sp.facing || 0;
     (P.orb || []).forEach(o => { if(/rig again|copy her pose/.test(o.err || '')) delete o.err; }); delete P.rigging; delete P.rigMsg; save(); cmPoseSync(); cmPoseRun(P); }
-  catch(err){ delete P.rigging; delete P.rigMsg; (P.orb || []).filter(o => cmOrbCtl(P, o) && !(o.urls || []).length).forEach(o => o.err = "the rig couldn't copy her pose: " + err.message); save(); toast("The rig couldn't copy her pose: " + err.message, true); }
+  catch(err){ delete P.rigging; delete P.rigMsg; if(P.orbRig) P.rigFail = err.message; (P.orb || []).filter(o => cmOrbCtl(P, o) && !(o.urls || []).length).forEach(o => o.err = "the rig couldn't copy her pose: " + err.message); save(); toast("The rig couldn't copy her pose: " + err.message, true); }
   finally{ M3_RIG.delete(P.id); fr.remove(); if($('#m3Box')) m3Draw(); } }
 // the rig step runs in the app, so a 3D left mid-way (the app closed or reloaded while copying her pose; Jordan 2026-10-23:
 // "I set this to go a long time ago but I don't think it ran") picks it up again; so does a rig-led one whose skeleton videos
@@ -6910,7 +6919,7 @@ async function cmAutoPick(P, o){ const us = o.urls || []; if(us.length <= 8 || o
   // the turn starts from the picture but the picture needn't be the front (Jordan 2026-10-23: "the turn around doesn't actually
   // need to use the original image at all"): her front is the frame near the start or end (within 60°) whose outline is most
   // mirror-even, which a ¾ view isn't; the high and low circles start from their crane's end, so they get the same
-  let f0 = 0; { const lim = per * 60 / 360; let best = -1; for(let f = 0; f < us.length; f++){ const d = Math.min(f, per - f); if(d > lim || !ms[f]) continue; const sc = cmMirror(ms[f]) - 0.004 * d; if(sc > best){ best = sc; f0 = f; } } }
+  let f0 = 0; if(cmOrbCtl(P, o) && P.face!=null) f0 = P.face / 360 * per; else { const lim = per * 60 / 360; let best = -1; for(let f = 0; f < us.length; f++){ const d = Math.min(f, per - f); if(d > lim || !ms[f]) continue; const sc = cmMirror(ms[f]) - 0.004 * d; if(sc > best){ best = sc; f0 = f; } } }
   o.pick = [0, 1, 2, 3, 4, 5, 6, 7].map(n => Math.min(us.length - 1, Math.round((f0 + n * per / 8) % per))); o.turn = per; save(); cmPoseSync(); cmPoseRun(P, true); if($('#m3Box')) m3Draw(); }
 function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_MH, ctl = null){
   const g = {}; let n = 0;
@@ -6992,7 +7001,7 @@ function cmPoseRun(P, quiet){ if(P.stopped || P.rigging) return; const L = P.fro
   let fl = cmFlKits(); if(fl.some(k => k.fl)) fl = fl.filter(k => k.fl); const ck = P.ctl ? cmCtlKits() : [], fk = fl.concat(ck), kitFor = (o, url) => (cmOrbCtl(P, o) ? ck : fl).find(k => k.url===url);
   const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url) && !(P.orbRig && cmOrbCtl(P, o) && !CM_SPC[o.id] && !S.test)).map(o => [o, o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]]).filter(x => x[1]) : [];
   if(P.by==='mm' && src) (P.orb || []).forEach(o => { if(!(o.urls || []).length && !o.making && !(cmOrbCtl(P, o) ? ck : fl).length) o.err = cmOrbCtl(P, o) ? 'no computer that is on has the MiniMax pose ControlNet (📦 Get it on a PC in the 🧊 settings)' : 'no computer that is on has MiniMax H3'; });
-  const ready = v => P.by!=='mm' || !!cmPoseFrame(P, v);
+  const ready = v => P.by!=='mm' || !!cmPoseFrame(P, v) && !(P.orbRig && v.ring===1 && !P.rigFit && !P.rigFail);
   if(P.by==='mm' && !src && !P.pic && !(P.cands || []).length) cmPoseCands(P);
   const todo = P.views.filter(v => !v.url && !v.making && !v.busy && !v.err && ready(v)).concat(P.by==='mm' && !src ? (P.cands || []).filter(c => !c.url && !c.making && !c.busy && !c.err) : []), lost = todo.filter(v => !CM_SPG[v.id] && !(P.by==='mm' && v.cand==null));
   if(lost.length){ toast(lost.length + ' of its angles need the rig again: open a panel\'s rig with that pose and tap 🧍 Make a pose', true); lost.forEach(v => v.err = 'needs the rig again'); }
