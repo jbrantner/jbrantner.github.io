@@ -85,6 +85,12 @@ const DEPS = process.env.RIG_DEPS || '';
     const back = R.opView(R.exportCam()); let err = 0, n = 0; back.forEach((p, i) => { if(p && v[i]){ err += Math.hypot((p[0] - v[i][0]) * W, (p[1] - v[i][1]) * H); n++; } });
     return {finite:ok2, legsApart:lf.z - rf.z, handsApart:rh.z - lh.z, px:err / n, photo:document.querySelector('#gSize').value}; });
   ok(lift.finite && lift.px < 25, 'a flat pose read back lines up with the picture (mean ' + (lift.px || 0).toFixed(1) + ' px off): ' + JSON.stringify(lift));
+  // straight legs that look short (anime proportions) stay straight, they don't fold at the knee (Jordan 2026-10-23)
+  const st = await page.evaluate(async () => { const R = RIG; R.applyPreset('stand'); document.querySelector('#views [data-v="front"]').click(); await new Promise(r => setTimeout(r, 50));
+    const v = R.opView(R.exportCam()), W = 832, H = 1216; [9, 10, 12, 13].forEach(i => { const h = v[i < 12 ? 8 : 11]; v[i] = [v[i][0], h[1] + (v[i][1] - h[1]) * 0.75]; }); // legs 25% shorter on the picture
+    const flat = []; v.forEach(p => flat.push(p ? p[0] * W : 0, p ? p[1] * H : 0, p ? 0.9 : 0)); const r = R.lift2D(flat, W, H, W, H).pts;
+    return {kneeL:+(r.lkn.z - r.lhip.z).toFixed(3), ankL:+(r.lank.z - r.lhip.z).toFixed(3), kneeR:+(r.rkn.z - r.rhip.z).toFixed(3)}; });
+  ok(Math.abs(st.kneeL) < 0.01 && Math.abs(st.ankL) < 0.01 && Math.abs(st.kneeR) < 0.01, 'straight legs that look short stay straight (no knee bend from the shortness): ' + JSON.stringify(st));
   // undo and redo through the buttons
   const und = await page.evaluate(async () => { const R = RIG; document.querySelector('[data-preset="stand"]').click(); const a = JSON.stringify(R.P); document.querySelector('[data-preset="cheer"]').click();
     const b = JSON.stringify(R.P); document.querySelector('#undoBtn').click(); const c = JSON.stringify(R.P); document.querySelector('#redoBtn').click(); return {back:c===a, fwd:JSON.stringify(R.P)===b}; });

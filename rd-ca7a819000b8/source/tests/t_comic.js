@@ -454,6 +454,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           await page.click('#m3Box [data-m3pk="1:2:1"]'); const pk1 = await page.evaluate(() => S.cmPoses.find(x => x.id===S.gallery[0].d3p).orb.find(x => x.step==='circle' && x.ring===1).pick[2]);
           ok(pk0.n===31 && pk0.pick.split(',').length===8 && pk0.pick.startsWith('0,') && pk0.eye===0 && /Pick the angles/.test(pk0.head) && pk0.th >= 8 && pk1===+pk0.pick.split(',')[2] + 1,
             '🎯 Pick the angles: 31 frames from each circle, 8 lined up on their own, nothing painted until she says, ‹ › nudges one: ' + JSON.stringify(pk0) + ' ' + pk1);
+          { const b = await page.evaluate(() => S.cmPoses.find(x => x.id===S.gallery[0].d3p).orb.find(x => x.step==='circle' && x.ring===1).pick.slice()); await page.click('#m3Box [data-m3pk="1:rot:1"]');
+            const a2 = await page.evaluate(() => S.cmPoses.find(x => x.id===S.gallery[0].d3p).orb.find(x => x.step==='circle' && x.ring===1).pick.slice());
+            ok(a2.join()===b.slice(1).concat(b[0]).join(), 'Turn all ↷ moves every label one angle round (when "front" isn\'t her front): ' + JSON.stringify({b, a2})); await page.click('#m3Box [data-m3pk="1:rot:-1"]'); }
           for(const r of [1, 2, 0]){ await page.waitForSelector(`#m3Box [data-m3pk="${r}:ok"]`, {timeout:60000}); await page.click(`#m3Box [data-m3pk="${r}:ok"]`); }
           await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});
           const gs = ALL.slice(n0).map(x => x.prompt), V = g => Object.values(g), ill = gs.filter(g => V(g).some(n => n.class_type==='CheckpointLoaderSimple'));
