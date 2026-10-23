@@ -46,3 +46,7 @@ port 8801, or set `PARITY_URL`.
 - `battery.sh data...`: all of the above over several seeds, in parallel.
 - `cov.js` / `covreport.js`: which code ever runs, to find leftovers.
 - `lint.js`: `js/money/` stays screen-free.
+- `globals.js`: every name the scripts use is defined somewhere. The scripts share one global scope, so a helper
+  defined inside one file's function can't be called from another file; this catches that before a phone does.
+
+`CHANGELOG.md` has what each cleanup or release changed, from 2026-10-23 on (earlier ones: the git log).

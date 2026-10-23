@@ -22,8 +22,6 @@ function showView(v, dir = 0) {
   document.querySelectorAll('nav button').forEach(x => { const on = x.dataset.view === (oldTab ? 'old' : v === 'party' || v === 'tx' ? 'budget' : v); x.classList.toggle('active', on); if (on) x.setAttribute('aria-current', 'page'); else x.removeAttribute('aria-current'); });
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 'view-' + v));
   const sec = $('view-' + v); if (sec && dir) { sec.classList.remove('slide-l', 'slide-r'); void sec.offsetWidth; sec.classList.add(dir > 0 ? 'slide-l' : 'slide-r'); }
-  const b = document.querySelector(`nav button[data-view="${v}"]`), tag = $('pagerName');
-  if (false && b && tag && v !== 'budget') { tag.textContent = b.textContent; tag.classList.add('on'); clearTimeout(showView.t); showView.t = setTimeout(() => tag.classList.remove('on'), 1100); }
   window.scrollTo(0, 0);
   if (v === 'town') Town.shown(); else Town.close();
   VL.shown(v);

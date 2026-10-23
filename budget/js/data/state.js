@@ -48,7 +48,7 @@ function tidy(s) {
     s.coll = s.coll || {}; s.habitLog = s.habitLog || [];
     if (!s.startMonth) { const d = new Date(); s.startMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); s.partyPlan = 0; s.workerLog = s.workerLog.filter(w => w.pot !== 'savings'); }
     s.habits = s.habits || [{ id: 'water', name: 'Drink water' }, { id: 'pushups', name: 'Push-ups' }, { id: 'walk', name: 'Go for a walk' }, { id: 'read', name: 'Read 10 minutes' }]; s.rush = s.rush || {}; s.harvested = s.harvested || {}; s.collected = s.collected || {};
-    s.potTraders = s.potTraders || {}; s.pay = s.pay || { amount: Math.round(Number(s.income || 0) / 2), anchor: '2026-10-09' }; s.duel = s.duel || { a: 'spend', b: 'savings' };
+    s.potTraders = s.potTraders || {}; s.duel = s.duel || { a: 'spend', b: 'savings' };
     for (const t of s.transactions.filter(t => t.savings)) // older "Save it" entries become transfers
       s.transfers.push({ id: t.id, date: t.date, from: t.amount < 0 ? 'spend' : 'savings', to: t.amount < 0 ? 'savings' : 'spend', amount: Math.abs(t.amount) });
     s.transactions = s.transactions.filter(t => !t.savings);

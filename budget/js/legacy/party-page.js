@@ -48,7 +48,7 @@ function renderParty() {
 
 /* ---------- the camp screen: where the party is now, and the stops where money gets spent ---------- */
 function tickRoad() {
-  const now = new Date(), n = partySize();
+  const n = partySize();
   const pu = purseNow(), left = pu.purseLeft, over = Math.ceil(-left), short = Math.ceil(pu.carried - 1e-9);
   const tl = todayLeft(pu), day = tl >= 0 ? `${money(tl)} today` : `${money(Math.ceil(-tl - 1e-9))} over today`;
   const k0 = Math.min(Number(state.partyPlan || 0), partyRoom());

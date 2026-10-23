@@ -8,13 +8,12 @@
    walking scene are one tap away (remembered on this device). A list is drawn as a structure (titles, rows) and
    values put into it by key, so a moving bar never rebuilds its row and its CSS transition carries it smoothly. */
 const VL = (() => {
-  const H = document.documentElement, KT = KEY + '-town-view', KH = KEY + '-home-view', KS = KEY + '-ping-sound';
+  const H = document.documentElement, KS = KEY + '-ping-sound';
   const get = (k, d) => { try { return localStorage.getItem(k) || d; } catch (e) { return d; } };
   const put = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   let town = 'list', home = 'list', sound = get(KS, '0') === '1';   // v140: no islands, no scene
   let rows = [], lastWhole = null, seen = {}, pings = 0, coins = 0, ac = null;
   const townOn = () => town === 'list' && !$('view-budget').classList.contains('hidden');   // v140: on the main screen
-  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const c01 = x => Math.max(0, Math.min(1, x));
   // $16.75 with the cents a little smaller
   const cents2 = n => { const t = moneyExact(Math.floor(n * 100 + 1e-6) / 100), m = t.match(/^(.*?)([.,]\d\d)$/); return m ? `${esc(m[1])}<span class="c">${esc(m[2])}</span>` : esc(t); };
@@ -235,14 +234,13 @@ const VL = (() => {
     if (w.ubP !== pct) { w.ubP = pct; bar.style.width = pct + '%'; pipOn(w, bar.parentNode, pct); }
   }
   /* v166: whole pips only; a pip that comes on flashes, then settles */
-  let pipFlashes = 0;
   function pipOn(w, ub, pct) {
     const k = Math.floor(pct + 1e-6), was = w.ubPip; if (was === k) return; w.ubPip = k; ub.style.setProperty('--p', k);
     if (was == null || k <= was || k - was > 3 || lessMotion()) return;
     const t = Date.now(); if (t - (w.ubFl || 0) < 70) return; w.ubFl = t;
     const i = k - 1, f = document.createElement('b'), cw = ub.clientWidth / 50; f.className = 'pp-flash';
     f.style.left = (ub.offsetLeft + (i % 50) * cw) + 'px'; f.style.width = Math.max(2, cw - 2) + 'px'; f.style.top = (ub.offsetTop + (i < 50 ? 0 : 8)) + 'px';
-    ub.parentNode.appendChild(f); pipFlashes++; setTimeout(() => f.remove(), 1000);   // v191: above the pixel mask, so the glow shows
+    ub.parentNode.appendChild(f); setTimeout(() => f.remove(), 1000);   // v191: above the pixel mask, so the glow shows
   }
   /* v148: Pour (the "pour" concept). A card's new money pours into its unit bar, which counts in $1 while it pours (in
      $10 or $100 when the lump would fill it more than 4 times). The fill eases out over POUR_MS with a glowing front;
@@ -389,7 +387,7 @@ const VL = (() => {
   const planChip = () => plan ? '<span class="pp-plan on">Planning</span>' : '<button class="pp-plan" data-plan-go="1">Plan</button>';
   function townHTML(now) {
     const D = Town.data; if (!D) return '';
-    const e = earning(now), np = partyNow(), R = [];
+    const e = earning(now), R = [];
     // a pot's or project's card. kind: 'save' (Savings), 'pot' or 'proj'
     const PC = palColors(), PCN = Object.keys(PC).filter(k => k !== 'pink');   // v232: pink is the weekly budget's   // v153; v214 from the palette
     const PDEF = { pot: ['amber', 'coral', 'purple', 'mint', 'blue', 'pink'], proj: ['blue', 'purple', 'mint', 'amber', 'coral', 'pink'] }, CK = {};
@@ -451,31 +449,11 @@ const VL = (() => {
         + (pays.length && sv ? `<div class="pp-pays"><h4>Payments</h4>${pays.map(t => `<div class="pp-payr"><span>Paid ${esc(moneyExact(t.amount))} · ${esc(shortDate(t.date))}${t.note ? ` · ${esc(t.note)}` : ''}</span><button class="link" data-debt-undo="${esc(t.id)}" aria-label="Undo the ${esc(moneyExact(t.amount))} payment of ${esc(shortDate(t.date))}">Undo</button></div>`).join('')}</div>` : '')
         + `</div>`) + `<div class="pp-xv" data-x="${id}"></div></div>`;   // v225: the details open here
     };
-    // the villagers: in fives per place, the total, and a verdict
-    const grp = [];
-    grp.push(['Savings', savers(), 'pot', 'savings']);
-    for (const p of D.stock) if (p.id !== 'savings' && workersAt(p.id) > 0) grp.push([p.name, workersAt(p.id), 'pot', p.id]);
-    for (const p of D.projects) if (p.crew > 0) grp.push([p.name, p.crew, 'proj', p.id]);
-    // which places aren't in fives (not the party: it's planned by the week). − and + only help when there's somewhere to move them.
-    const odd = grp.filter(g => g[2] !== 'party' && g[1] % 5), places = D.stock.length + D.projects.length > 1;
-    const even = !e.V || state.roundOff ? '' : !odd.length ? 'Groups of 5 everywhere. Nice and even.' : !places ? ''
-      : `Not in fives: ${odd.slice(0, 2).map(g => `${esc(g[0])} ${g[1]}`).join(', ')}${odd.length > 2 ? ` and ${odd.length - 2} more` : ''}. Use − and + on the cards to even it out.`;
-    // v148 (Tidy): one stacked bar (a tick every 5) and a legend, instead of the rows of fives
-    const shown = grp.filter(g => g[1] > 0), tot = sum(shown, g => g[1]), cols = { pot: 0, proj: 0 };
-    const col = g => g[2] === 'party' ? 'party' : g[0] === 'Savings' && g[2] === 'pot' && !cols.sv ? (cols.sv = 1, 'save') : `${g[2]} k${Math.min(3, cols[g[2]]++)}`;
-    const tone = shown.map(col), vc = g => g[3] && CK[g[3]] ? ` style="--vc:${PC[CK[g[3]]]}"` : '';
     let h = ``;   // v186: no villagers card (Jordan's image); the lines below stand on their own when there are any
-    if (false) h += `<section class="pp-panel" id="vlHero" aria-label="Money a day"><div class="pp-top"><h3 class="pp-h2">Your money a day</h3><span class="pp-tot">${e.V ? `<b class="num">${Math.max(0, e.V - np)}</b> · ` : ''}<span data-t="rate"></span></span></div>`
-      + (tot ? `<div class="pp-stack" role="img" aria-label="${esc(shown.map(g => `${g[0]} ${g[1]}`).join(', '))}" style="--five:${(500 / tot).toFixed(4)}%">${shown.map((g, i) => `<i class="${tone[i]}" style="flex:${g[1]};${g[3] && CK[g[3]] ? `--vc:${PC[CK[g[3]]]}` : ''}"></i>`).join('')}</div>`
-        + `<div class="pp-legend">${shown.map((g, i) => `<span class="${tone[i]}"${vc(g)}><i aria-hidden="true"></i>${esc(g[0])} <b class="num">${g[1]}</b></span>`).join('')}</div>` : '')
-      + (state.roundOff ? `<div class="pp-verdict vl-ro" id="vlRo"><span data-t="ro"></span></div>` : `<div class="pp-verdict"><span data-t="vd"></span>${even ? `<small>${even}</small>` : ''}</div>`);
     h += `<div class="pp-paylines">`;   // v186
     if (!e.pn.list.length && !D.incomes.length) h += `<div class="vl-early">No pay set up yet.</div>`;
     for (const w of e.pn.waiting) h += `<button class="pp-big vl-payin" data-pay-open="${esc(w.key)}">Enter your ${shortDate(w.date)} paycheck</button>`;
     for (const c of checkFlows(now).list.filter(c => c.date > ymd(new Date(now)))) h += `<div class="vl-early">${money(c.F)} pay waiting · starts ${shortDate(c.date)}</div>`;   // v131: entered early
-    if (false) { const n = nextPayNow(now); if (n && dayMs(n.date) - now < 7 * DAY_MS) h += n.entered   // v192; v193: moved into the opened weekly card
-        ? `<button class="pp-tip pp-next" data-pay-open="${esc(n.key)}"><span><b>Next paycheck · ${shortDate(n.date)}</b><small>${moneyExact(n.D)} · ${money((n.V) * WORKER_DAY)} a day from then · tap to fix</small></span></button>`
-        : `<button class="pp-big alt pp-add pp-next" data-pay-open="${esc(n.key)}">Enter your ${shortDate(n.date)} paycheck<small>Got your pay summary? It starts on payday.</small></button>`; }
     // v148: Collect spare change as a gold row in this card (its words open where it came from), Round off under it
     R.push({ id: 'scavenger', name: 'Spare change', exact: true });
     h += `</div>`;
@@ -504,7 +482,7 @@ const VL = (() => {
         ...D.projects.map(x => [x.id, x.name, Math.max(0, workersAt(x.id)), PC[CK[x.id]]]),   // v255: projects, then pots, in the key's order
         ...D.stock.filter(x => x.id !== 'savings').map(x => [x.id, x.name, Math.max(0, workersAt(x.id)), PC[CK[x.id]]]), ['savings', 'Savings', savers(), reef ? 'var(--rf-coral, #ff8a80)' : PC[CK.savings]]].filter(x => x[2] > 0);
       billsTop = billGrid(D.bills, held, 'pieces', places);   // v228: one box per pay period   // v221: in place of the v157 ring
-      const nps = state.incomes.filter(i => Number(i.amount) > 0).map(i => nextPayday(i, today())).filter(Boolean).sort(), TS = billToSave();
+      const TS = billToSave();
       h += `<div class="pp-sec pp-sec-home pp-sec-ov"><h3 class="pp-h2">Overview</h3></div>` + billsTop + `<div class="pp-sec pp-sec-bills"><h3 class="pp-h2">Bills</h3>${planChip()}<span data-t="bills-h"></span></div><div class="pp-panel pp-bills">`;
       for (const x of D.bills.map((b, i) => [b, i]).sort((a, b) => (!!(a[0].pre || a[0].paid) - !!(b[0].pre || b[0].paid)) || a[1] - b[1]).map(z => z[0])) {   // v188: paid ones last
         const r = Town.billBar(x, now), amt = money(Math.ceil(Number(x.amount) - 1e-9)), st = x.pre ? '<span class="ok">before you started ✓</span>' : x.paid ? '<span class="ok">paid ✓</span>' : !(TS[x.id] >= 0.5) ? '<span class="vl-held">saved ✓</span>' : `${money(TS[x.id])} to save`;
@@ -637,7 +615,7 @@ const VL = (() => {
   /* v221: the bills grid, in place of the ring. Bills in the order they hit; glowing = held from this paycheck,
      outlined = later this month, dim = paid; then your free villagers. */
   function billGrid(bills, held, mode, places = []) {
-    const free = periodNow().V, nps = state.incomes.filter(i => Number(i.amount) > 0).map(i => nextPayday(i, today())).filter(Boolean).sort();
+    const free = periodNow().V;
     const list = bills.slice().sort((a, b) => (a.due || '9999') < (b.due || '9999') ? -1 : (a.due || '9999') > (b.due || '9999') ? 1 : 0);
     const kind = x => x.pre || x.paid ? 'paid' : held.has(x.id) ? 'now' : 'later';
     const onBills = list.reduce((t, x) => t + (x.crew || 0), 0), left = list.filter(x => !(x.pre || x.paid)).length;
@@ -646,7 +624,7 @@ const VL = (() => {
       const inc = mainIncome(), m0 = month + '-01', st = inc ? prevPayday(inc, m0) : null;
       const starts = [st || m0, ...(inc ? paydaysOf(inc, month) : []).filter(d => d > (st || m0))], secs = starts.map(d => ({ d, b: [] }));
       for (const x of list) { let k = secs.length - 1; if (x.due) { k = 0; for (let i = secs.length - 1; i >= 0; i--) if (secs[i].d <= x.due) { k = i; break; } } secs[k].b.push(x); }
-      const H = 5, cells = [], td = today(); let cur = 0; secs.forEach((z, i) => { if (z.d <= td) cur = i; });
+      const H = 5, cells = [];
       const used = secs.map((z, i) => Object.assign(z, { i })).filter(z => z.b.length);
       // v235: the pay periods already gone are hollow; this one and the ones to come are solid and glowing
       const live = used.findIndex(z => z.b.some(x => !(x.pre || x.paid))), from = live < 0 ? used.length : live;
@@ -674,12 +652,11 @@ const VL = (() => {
       const inc = mainIncome(), m0 = month + '-01', st = inc ? prevPayday(inc, m0) : null;
       const starts = [st || m0, ...(inc ? paydaysOf(inc, month) : []).filter(d => d > (st || m0))], secs = starts.map(d => ({ d, b: [] }));
       for (const x of list) { let k = secs.length - 1; if (x.due) { k = 0; for (let i = secs.length - 1; i >= 0; i--) if (secs[i].d <= x.due) { k = i; break; } } secs[k].b.push(x); }
-      const end = i => { const nx = secs[i + 1] ? secs[i + 1].d : null; if (!nx) return null; const t = new Date(dayMs(nx) - DAY_MS); return ymd(t); };
       const box = (z, i) => {
         const n = z.b.reduce((t, x) => t + Math.max(1, x.crew || 0), 0), ks = z.b.map(kind);
         const k = ks.every(q => q === 'paid') ? 'paid' : ks.includes('now') ? 'now' : 'later', cols = Math.min(8, Math.max(1, Math.ceil(Math.sqrt(n * 1.6))));
         const pips = z.b.map(x => x.crew ? `<i class="${kind(x)}"></i>`.repeat(x.crew) : `<i class="${kind(x)} part"></i>`).join('');
-        const e = end(i), lbl = `${shortDate(z.d)} pay`, rng = e ? `${shortDate(z.d)} to ${shortDate(e)}` : `from ${shortDate(z.d)}`;
+        const lbl = `${shortDate(z.d)} pay`;
         return `<span class="bx-bill bpd ${k}"><span class="bx-nm">${esc(lbl)}</span><span class="bx-box" style="--cols:${cols}">${pips}${k === 'paid' ? '<b class="bx-ck">PAID</b>' : ''}</span>`
           + `<span class="bx-dt">${z.b.length} bill${z.b.length === 1 ? '' : 's'}</span></span>`; };
       const hd = `<div class="bg-head"><span><b class="num">${onBills}</b> on bills</span><span>${left ? `${left} bill${left === 1 ? '' : 's'} left` : 'all bills paid'}</span></div>`;
@@ -839,13 +816,6 @@ const VL = (() => {
     const b = e.target.closest('[data-tview], [data-hview], #vlBell'); if (!b) return;
     if (b.id === 'vlBell') { sound = !sound; put(KS, sound ? '1' : '0'); apply(); if (sound) chime(); return; }
     return;   // v140: the island and scene toggles are gone
-    if (b.dataset.tview) {
-      town = b.dataset.tview; put(KT, town); apply(); lastWhole = null; seen = {}; live = {};
-      if (town === 'list') renderTown(); else Town.shown();
-      return;
-    }
-    home = b.dataset.hview; put(KH, home); apply();
-    if (home === 'list') renderHome(); else { setSheet(true, false); requestAnimationFrame(() => sheetFit()); }
   });
   // v138: tap a card to open it (in place, so the page doesn't jump)
   var xId = null;   // v225: the card open in place

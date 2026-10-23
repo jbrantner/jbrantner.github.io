@@ -43,7 +43,7 @@ function dwHTML(now = Date.now()) {
   return h + `<div class="dw-days${wk ? ' has-wk' : ''}" style="--pz:${nD <= 2 ? 5 : nD <= 3 ? 4 : 3}px">${cells}${wk}</div>`;
 }
 function stacksHTML(now = Date.now()) {
-  const W = weekDots(now), pu = purseNow(now), ws = weekSpends(), N = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const W = weekDots(now), pu = purseNow(now), N = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   const di = Math.max(0, Math.min(6, Math.floor((now - weekStart(new Date(now))) / DAY_MS))), t = todayLeft(pu, new Date(now));
   let before = 0; const share = [];
   for (const d of W.days) { share[d.i] = Math.floor(Math.max(0, pu.P - before) / (7 - d.i) + 1e-9); before += d.spent; }

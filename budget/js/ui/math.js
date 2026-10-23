@@ -3,7 +3,7 @@ function renderMath() {
   const box = $('mathBox'); if (!box) return;
   const cur = today().slice(0, 7), td = today(), line = (a, b, cls = '') => `<div class="row spread ${cls}"><span>${a}</span><span class="num">${b}</span></div>`;
   const pp = hoardParts(), pn = periodNow(), sg = v => (v < 0 ? '−' : '+') + moneyExact(Math.abs(v)), n = k => `${money((k) * WORKER_DAY)} a day`;
-  const incs = state.incomes.filter(i => Number(i.amount) > 0), B = billsMonthWhole(), parts = billParts();
+  const incs = state.incomes.filter(i => Number(i.amount) > 0), B = billsMonthWhole();
   // the bank
   const billsOut = cents(pp.out - pp.L.cut), spentOut = cents(pp.spent - pp.L.spendCut), fixes = cents(pp.fix + pp.L.adjCut), moves = cents(pp.head + pp.bills + pp.L.movedBills);
   const outOf = sum(state.transfers.filter(t => t.spend && t.to === 'debt' && t.date <= td), t => t.amount);

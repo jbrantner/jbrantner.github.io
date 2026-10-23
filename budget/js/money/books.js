@@ -28,7 +28,7 @@ function ledgerAt(td) {
 // day from the payday to the next one, plus the odd dollars on that next payday. A paycheck smaller than its bill
 // share holds all of it, and Savings makes up the difference (top) so the bills stay covered.
 function checkFlows(now) {
-  const td = ymd(new Date(now)), out = { list: [], whole: 0, cut: 0, got: 0, pending: 0, top: 0, D: 0 };
+  const out = { list: [], whole: 0, cut: 0, got: 0, pending: 0, top: 0, D: 0 };
   for (const [key, ck] of Object.entries(state.checks || {})) {
     const [id, date] = splitKey(key), at = Number(ck.at); if (!(at <= now)) continue;   // v131: entered early, it counts from when it landed
     const inc = state.incomes.find(i => i.id === id), D = Math.max(0, Number(ck.amt) || 0), whole = Math.floor(D + 1e-9), cut = cents(D - whole);
