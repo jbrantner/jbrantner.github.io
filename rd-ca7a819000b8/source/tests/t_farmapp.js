@@ -10,13 +10,13 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
 ['CLIPTextEncode','EmptyLatentImage','KSamplerAdvanced','VAEDecode','SaveImage','CLIPSetLastLayer','ModelMergeSDXL','LoadImage','VAEEncode','ImageScale','ImageScaleBy'].forEach(k => OI[k] = {input:{required:{}}}); // every computer has ComfyUI's own nodes
 let rebootAt = 0, agentCalls = [], mainClosed = false;
 const F = {pcs:[], off:[], jobs:[], done:[], adds:[], cancels:[], pcCalls:[]};
-const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url:u, name:u===RU ? 'Render' : 'Main', online:true, off:F.off.includes(u), load:0, copies:[], why:''})),
+const view = since => ({farm:1, chain:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url:u, name:u===RU ? 'Render' : 'Main', online:true, off:F.off.includes(u), load:0, copies:[], why:''})),
   jobs:F.jobs.map(j => { const c = Object.assign({}, j); delete c.graph; return c; }), done:F.done.filter(d => d.t_done > since)});
 (async () => {
   const html = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + fs.readFileSync(path.join(__dirname, '..', 'comfy-app.html'),'utf8');
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport:{width:390,height:844}, hasTouch:true, isMobile:true });
-  const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message));
+  const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message)); page.on('console', m => { if(m.type()==='warning') console.log('WARN', m.text(), JSON.stringify(m.location())); });
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   await page.route('https://app.test/*.txt', r => r.fulfill({ contentType:'text/plain', body:'' }));
   const socks = {};
@@ -112,6 +112,33 @@ const view = since => ({farm:1, now:Date.now()/1000, pcs:[RU, MU].map(u => ({url
   ok(true, 'a stuck look does not freeze the dots: they come back on their own');
   await page.evaluate(() => closeSheets());
   await page.screenshot({ path: path.join(__dirname, 'shot-farm-top.png') });
+  // 🧊 Make 3D on the farm: the whole 3D goes at once, high/low circles waiting for their crane and each angle for its circle
+  const n0 = F.adds.length;
+  await page.evaluate(RU => { const K = {url:RU, oi:{}, fl:true, unet:'fl2v.safetensors', lora:'fl2v_turbo_8step.safetensors', steps:8, clip:'c', vae:'v', bg:'birefnet', cn:'promax', ckpt:'sdxl.safetensors', loras:[], has:x => x};
+    window.cmFlKits = () => [K]; window.cmIllKits = () => [K]; window.cmUp = async u => 'up_' + u.split('=').pop(); window.obLooks = async () => ({ckpt:'sdxl.safetensors', loras:[], words:'', prompt:'a girl'});
+    const P = {id:'spT', name:'🧊 test', who:'', from:true, snap:null, geo:{wM:1, hM:1.5, aim:[0, 0.75, 0]}, seed:1, at:Date.now(), by:'mm', pic:true, src:RU + '/view?filename=jump.png', off:0, dn:0, mw:544, mh:800, iw:832, ih:1216,
+      views:[0, 1, 2].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:'v' + ring + i, ring, i, url:''})))};
+    P.orb = cmPoseOrbs().map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P]; cmPoseRun(P); }, RU);
+  ok(await waitFor(() => F.adds.length > n0), 'the 3D is handed to the farm');
+  if(F.adds.length===n0) console.log('DIAG', await page.evaluate(() => JSON.stringify({farm, farmChain, toast:(document.querySelector('#toast') || {}).textContent, err:S.cmPoses[0].orb.map(o => o.err || o.farm || '-')})));
+  const J = F.adds[F.adds.length - 1].jobs, byKey = Object.fromEntries(J.map(j => [j.key, j]));
+  const orbs = await page.evaluate(() => S.cmPoses[0].orb.map(o => ({key:cmFarmKey(o), step:o.step, ring:o.ring})));
+  const crane = r => orbs.find(o => o.step==='crane' && o.ring===r).key, circ = r => orbs.find(o => o.step==='circle' && o.ring===r).key;
+  const hi = byKey[circ(2)], v31 = byKey['p3-v13'];
+  ok(J.length===29 && !byKey[circ(1)].after.length && !byKey[crane(2)].after.length && hi.after[0]===crane(2) && Object.values(hi.use)[0][0]===crane(2)
+    && v31.after[0]===circ(1) && Object.values(v31.use)[0][1]===3 && J.every(j => j.home===RU),
+    '29 jobs: 3 moves start at once, high/low circles wait for their crane, each angle for its circle and takes its frame: ' + JSON.stringify({n:J.length, hi:hi.after, v:v31.use}));
+  // the farm finishes the eye-level circle: its frames land on the 3D; an angle running shows on its own
+  const tt = Date.now() / 1000; F.jobs = F.jobs.filter(j => !/^p3-/.test(j.key) || [circ(1), 'p3-v10'].includes(j.key) ? false : true).map(j => j);
+  F.jobs.push({key:'p3-v11', state:'running', srv:MU, id:'M9'});
+  F.done.push({key:circ(1), state:"done", srv:MU, t_done:tt, images:[0, 1, 2, 3, 4, 5, 6, 7].map(n => ({filename:'c' + n + '.png', subfolder:'RenderDeck/comics/poses', type:'output'}))},
+    {key:'p3-v10', state:"done", srv:RU, t_done:tt, images:[{filename:'a.png', subfolder:'x', type:'output'}]});
+  await page.evaluate(() => farmLook());
+  const st = await page.evaluate(() => { const P = S.cmPoses[0]; return {circ:P.orb.find(o => o.step==='circle' && o.ring===1).urls.length, v10:P.views.find(v => v.id==='v10').url, run:!!(P.views.find(v => v.id==='v11').making || {}).farm, q:S.queue.some(e => /^p3-/.test(e.key))}; });
+  ok(st.circ===8 && /jordo-desktop.*a\.png/.test(st.v10) && st.run && !st.q, 'finished 3D jobs land on the 3D (not in the render queue), a running one gets a step bar: ' + JSON.stringify(st));
+  await page.evaluate(() => { const b = document.createElement('div'); b.id = 'm3Box'; document.body.appendChild(b); M3.P = 'spT'; M3.g = {}; });
+  const nc = F.cancels.length; await page.evaluate(() => { const P = S.cmPoses[0]; P.stopped = true; const fks = P.orb.concat(P.views).map(h => h.farm).filter(Boolean); farmCall('/cancel', {keys:fks}); });
+  ok(await waitFor(() => F.cancels.length > nc), 'Stop cancels its farm jobs');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

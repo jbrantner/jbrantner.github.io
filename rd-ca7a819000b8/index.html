@@ -637,7 +637,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.146'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.147'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1465,7 +1465,7 @@ async function refreshLoaders(p){
 // With the newest helper on it, the render computer named Render keeps the queue itself and hands each render to
 // whichever computer is free, and keeps their models matched, with the app closed. The app adds renders, cancels
 // them, and shows what's happening. Without it, the app does the same itself while it's open (above).
-let farm = null, farmAt = 0, farmPcsAt = 0, farmAsked = '';
+let farm = null, farmAt = 0, farmPcsAt = 0, farmAsked = '', farmChain = false; // farmChain: the helper can run 🧊 jobs that wait for each other
 function farmHost(){ const r = S.servers.find(x => x.name==='Render'); return r ? r.url : base(); }
 const tailnet = u => /^https:\/\/[^/]+\.ts\.net$/i.test(u || '');
 async function findFarm(){
@@ -1501,6 +1501,9 @@ function farmView(v, away){
   if(!v || !v.pcs) return;
   v.pcs.forEach(x => { const p = pcOf(x.url); p.copies = x.copies || []; p.why = x.why || ''; });
   if(!v.jobs) return;
+  farmChain = !!v.chain;
+  // 🧊 jobs (keys p3-…) belong to their 3D, not to the render queue
+  const p3 = j => /^p3-/.test(j.key); cmFarmSeen(v.jobs.filter(p3), (v.done || []).filter(p3)); v = Object.assign({}, v, {jobs:v.jobs.filter(j => !p3(j)), done:(v.done || []).filter(j => !p3(j))});
   S.farmSeen = S.farmSeen || [];
   const live = new Map(v.jobs.map(j => [j.key, j]));
   v.jobs.forEach(j => {
@@ -6691,7 +6694,8 @@ document.addEventListener('click', e => { const b = e.target.closest('#m3Box [da
   else if(a==='nobg'){ g.d3bgSel = ''; const V = m3V(); if(V) V.setBackdrop(''); save(); m3Draw(); }
   else if(a==='stop' || a==='over'){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P) return; // Jordan 2026-10-23: no way to cancel a 3D render
     if(a==='over' && !confirm('Stop this 3D and start it again from the picture?')) return;
-    P.stopped = true; cmStop(m3Jobs(P).concat(P.views.concat(P.orb || [], P.cands || []).filter(v => v.busy))).then(() => { M3.n = -1; m3Draw(); });
+    P.stopped = true; const fks = (P.orb || []).concat(P.views).map(h => h.farm).filter(Boolean); if(fks.length && farm) farmCall('/cancel', {keys:fks}); (P.orb || []).concat(P.views).forEach(h => { delete h.farm; if(h.making && h.making.farm) h.making = null; });
+    cmStop(m3Jobs(P).concat(P.views.concat(P.orb || [], P.cands || []).filter(v => v.busy))).then(() => { M3.n = -1; m3Draw(); });
     if(a==='over'){ S.cmPoses = S.cmPoses.filter(x => x!==P); delete g.d3p; S.gallery.forEach(x => { if(x.d3p===P.id) delete x.d3p; }); save(); m3Close(); m3Open(g); } else { save(); m3Draw(); } }
   else if(a==='retry'){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(P){ delete P.stopped; P.views.concat(P.orb || []).forEach(v => delete v.err); cmPoseRun(P); m3Draw(); } } });
 function cmPoseFromPic(url){ const L = (S.cmLib || []).find(x => x.id===S.cmPoseWho) || (S.cmLib || [])[0]; if(!L){ toast('Add the character under 👥 Characters first, so the pose knows who she is', true); return; }
@@ -6788,6 +6792,7 @@ setInterval(() => { if(document.visibilityState!=='visible') return; (S.cmPoses 
 function cmPoseRun(P, quiet){ if(P.stopped) return; const L = P.from ? {name:'', g:'', from:true} : (S.cmLib || []).find(x => x.id===P.who); if(!L){ if(!quiet) toast('That pose\'s character is gone from 👥 Characters', true); return; }
   let kits = cmIllKits().filter(k => k.cn); const kb = kits.filter(k => k.bg); if(kb.length) kits = kb; // only computers that can cut her out (Jordan saw every other one uncut)
   if(!kits.length){ if(!quiet) toast('None of your computers that are on has an Illustrious model and ControlNet ProMax', true); return; }
+  if(farm && farmChain && P.by==='mm' && P.src && !S.test){ cmPoseFarm(P, L, kits); return; } // the farm on Render runs it, app open or not
   // one job per computer at a time (Jordan 2026-10-23: "we just don't queue the job to a computer until one is idle"): the rest wait
   // here, and whenever a computer is idle it takes the next one that it can make, MiniMax moves first (they unlock the angles)
   const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, src = P.src;
@@ -6804,6 +6809,45 @@ function cmPoseRun(P, quiet){ if(P.stopped) return; const L = P.from ? {name:'',
     if(f && moves.length){ const [o, from] = moves.shift(); CM_SENTAT[url] = Date.now(); sent++; cmPoseOrbJob(P, o, from, f); return; }
     if(k && angles.length){ CM_SENTAT[url] = Date.now(); sent++; cmPoseJob(P, L, angles.shift(), k); } });
   if(sent || !quiet) drawComic(); }
+// 🧊 on the farm (Jordan 2026-10-23: "switch computers automatically… without needing the app open"): the whole 3D goes to
+// the helper on Render at once. MiniMax moves first; each high/low circle waits for its crane and each angle for its circle,
+// and takes that job's picture (the farm fetches it from whichever computer made it). One job per idle computer.
+const CM_CHAIN_PIC = 'rd-chain-placeholder.png';
+const cmFarmKey = h => 'p3-' + h.id;
+const cmPoseAllHosts = () => (S.cmPoses || []).concat(S.stash && S.stash.cmPoses || []).map(P => [P, (P.orb || []).concat(P.views)]);
+function cmFarmHost(key){ for(const [P, hs] of cmPoseAllHosts()){ const h = hs.find(x => cmFarmKey(x)===key); if(h) return [P, h]; } return [null, null]; }
+let cmFarmBusy = false;
+async function cmPoseFarm(P, L, kits){
+  if(cmFarmBusy || P.stopped) return; const live = new Set((S.cmFarmLive || [])), hs = (P.orb || []).concat(P.views);
+  const need = hs.filter(h => !(h.urls || []).length && !h.url && !h.err && !(h.farm && live.has(h.farm)) && !h.making && !h.busy);
+  if(!need.length) return; cmFarmBusy = true;
+  try{ let fk = cmFlKits(); if(fk.some(k => k.fl)) fk = fk.filter(k => k.fl);
+    const near = ks => ks.find(k => k.url===farm) || ks[0], fh = near(fk), ih = near(kits); if(!fh){ hs.forEach(h => { if(!h.url && !(h.urls || []).length) h.err = 'no computer that is on has MiniMax H3'; }); return; }
+    const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, jobs = [], place = (g, key, n) => { const id = Object.keys(g).find(i => g[i].class_type==='LoadImage' && g[i].inputs.image===CM_CHAIN_PIC); return id ? {[id]:[key, n]} : {}; };
+    const mk = (h, g, home, after, use) => { h.farm = cmFarmKey(h); h.fsmp = samplerOf(g); jobs.push({key:h.farm, graph:g, home, client_id:clientId, prompt:'🧊 ' + (P.name || ''), hidden:!!S.hidden, after, use}); };
+    for(const o of (P.orb || [])){ if(!need.includes(o)) continue; const cr = orb('crane', o.ring), first = o.step==='crane' || o.ring===1;
+      const img = first ? await cmUp(P.src, fh.url) : (cr.urls || []).length ? await cmUp(cr.urls[0], fh.url) : CM_CHAIN_PIC;
+      const G = cmPoseOrbGraph(fh, img, cmPoseOrbPrompt(o), cmPosePicks(o), cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), P.mw || CM_SP_MW, P.mh || CM_SP_MH);
+      o.fmins = 5 * cmSlow(fh.url); mk(o, G.g, fh.url, img===CM_CHAIN_PIC ? [cmFarmKey(cr)] : [], img===CM_CHAIN_PIC ? place(G.g, cmFarmKey(cr), 0) : {}); }
+    let Lk = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, ih.oi)}); if(P.iw) Lk.size = [P.iw, P.ih]; if(P.dn!=null) Lk.dn = P.dn;
+    for(const v of P.views){ if(!need.includes(v)) continue; const c = orb('circle', v.ring), n = (v.i - (P.off || 0) + 8) % 8;
+      const mm = (c.urls || []).length===8 ? await cmUp(c.urls[n], ih.url) : CM_CHAIN_PIC;
+      const G = cmPoseGraph(ih, Lk, {mm}, v, v.seed || P.seed, cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : '')));
+      v.fmins = 1.5 * cmSlow(ih.url); mk(v, G.g, ih.url, mm===CM_CHAIN_PIC ? [cmFarmKey(c)] : [], mm===CM_CHAIN_PIC ? place(G.g, cmFarmKey(c), n) : {}); }
+    const j = await farmCall('/add', Object.assign(farmPcs(), {jobs}));
+    if(j.error){ jobs.forEach(x => { const [, h] = cmFarmHost(x.key); if(h) delete h.farm; }); toast("Couldn't hand the 3D to the farm: " + j.error, true); }
+    else S.cmFarmLive = [...live, ...jobs.map(x => x.key)];
+  }catch(err){ need.forEach(h => delete h.farm); toast("Couldn't hand the 3D to the farm: " + err.message, true); console.warn(err); }
+  finally{ cmFarmBusy = false; save(); cmPoseSync(); if(!$('#comic').hidden) drawComic(); } }
+// what the farm says about them: in line, running (then the step bar follows ComfyUI's own steps), done or failed
+function cmFarmSeen(jobs, done){ let ch = false; S.cmFarmLive = jobs.map(j => j.key);
+  jobs.forEach(j => { const [, h] = cmFarmHost(j.key); if(!h || h.url || (h.urls || []).length) return; h.farm = j.key;
+    if(['sent', 'running'].includes(j.state) && j.id){ if(!h.making || h.making.id!==j.id){ h.making = {pc:j.srv, id:j.id, t:Date.now(), smp:h.fsmp || null, mins:h.fmins || 2, kind:h.step ? 'sporb' : 'sprite', farm:true}; ch = true; } }
+    else if(h.making){ h.making = null; ch = true; } });
+  done.forEach(j => { const [P, h] = cmFarmHost(j.key); if(!h || h.url || (h.urls || []).length || h.farm!==j.key) return; h.making = null; delete h.farm; ch = true;
+    if(j.state!=='done'){ h.err = j.error || 'the farm could not make it'; return; }
+    const ims = j.images || []; if(h.step) h.urls = ims.map(i => viewUrl(i, j.srv)); else if(ims[0]) h.url = viewUrl(ims[0], j.srv); else h.err = 'came back without a picture'; });
+  if(ch){ save(); cmPoseSync(); if(!$('#comic').hidden) drawComic(); } }
 async function cmPoseJob(P, L, v, k){ v.busy = 'Sending…'; v.busyPc = k.url; delete v.err;
   try{ if(L.from) L = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, k.oi)}); if(P.iw) L = Object.assign({}, L, {size:[P.iw, P.ih]}); if(P.dn!=null) L = Object.assign({}, L, {dn:P.dn});
     const gd = CM_SPG[v.id], prefix = cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : '') + (v.cand!=null ? '_start' + v.cand : '')), o = P.by==='mm' && v.cand==null && (P.orb || []).find(x => x.step==='circle' && x.ring===v.ring), mmf = o && o.urls && o.urls[(v.i - (P.off || 0) + 8) % 8], G = cmPoseGraph(k, L, mmf ? {mm:await cmUp(mmf, k.url)} : {pose:await cmUp(gd.pose, k.url), depth:await cmUp(gd.depth, k.url)}, v, v.seed || P.seed, prefix);
@@ -8432,7 +8476,7 @@ function wireCm(){
 }
 // its own tab (Jordan 2026-10-21): the comic replaces the recipe screen, and the tab is remembered
 function openComic(){ if(!TAGS) loadTags(); $('#comic').hidden = false; document.body.classList.add('cm-open'); S.tab = 'comic'; drawTabs(); CM(); drawComic(); scrollTo({top:0});
-  cmAll().forEach(p => { if(p.making) cmWait(p); }); }
+  cmAll().forEach(p => { if(p.making && !p.making.farm) cmWait(p); }); }
 function closeComic(){ cmPlay(false); $('#comic').hidden = true; document.body.classList.remove('cm-open'); S.tab = 'render'; drawTabs(); }
 function drawTabs(){ document.querySelectorAll('#tabs [data-tab]').forEach(b => { const on = b.dataset.tab===(S.tab || 'render'); b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(!b) return; if(b.dataset.tab==='comic'){ if(S.ws) wsBack(true); else openComic(); } else closeComic(); save(); buzz(); };
@@ -8691,7 +8735,7 @@ $('#wsBar').onclick = e => { const b = e.target.closest('[data-ws]'); if(!b || b
 // ---------- start ----------
 obAll().forEach(g => { if(g.ob && g.ob.making) waitOrbit(g.ob); });
 cmAll().forEach(p => { if(!p.parent && p.extra) p.extra = p.extra.filter(c => c.making); }); // an option that never got sent
-cmAll().forEach(p => { if(p.making) cmWait(p); }); // comic panels made while the app was closed come in
+cmAll().forEach(p => { if(p.making && !p.making.farm) cmWait(p); }); // comic panels made while the app was closed come in
 setTimeout(() => cmAll().forEach(q => { if(q.d3 && t3kOn(q.d3)) t3kStep(q.d3); }), 3000);
 cmAll().forEach(p => { if(p.fuse && p.fuse.making) fuseWait(p); if(p.cmod && p.cmod.making) cmodWait(p); });
 if(S.wsBack){ const id = S.wsBack; delete S.wsBack; if(wsPanel(id)) wsOpen(id); }

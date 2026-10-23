@@ -926,15 +926,18 @@ async def _sync_pair(s, dst, src):
         pass
 
 
-async def _copy_pictures(s, graph, home, url, key):
-    for n in graph.values():
+async def _copy_pictures(s, graph, home, url, key, srcs=None):
+    for nid, n in graph.items():
         if n.get('class_type') != 'LoadImage':
+            continue
+        src = (srcs or {}).get(nid) or home  # a step's picture comes from whichever computer made the step before it
+        if src == url:
             continue
         name, kind = n['inputs']['image'], 'input'
         if name.endswith(' [output]'):
             name, kind = name[:-9], 'output'
         sub, _, file = name.rpartition('/')
-        async with s.get(home + '/view', params={'filename': file, 'subfolder': sub, 'type': kind}) as r:
+        async with s.get(src + '/view', params={'filename': file, 'subfolder': sub, 'type': kind}) as r:
             if r.status != 200:
                 raise ValueError('could not get the picture ' + file)
             data = await r.read()
@@ -992,6 +995,32 @@ async def _farm_round(s):
         else:
             continue
         changed = True
+    # chained jobs (🧊 Make 3D: MiniMax moves, then the angles made from their frames): a job waits until the jobs it comes
+    # after are done, then its pictures become their output pictures, fetched from whichever computer made them
+    done = {j['key']: j for j in FARM['done']}
+    for job in list(FARM['jobs']):
+        if job['state'] != 'waiting' or not job.get('after'):
+            continue
+        deps = [done.get(k) for k in job['after']]
+        if any(k in done and done[k]['state'] != 'done' for k in job['after']) or any(
+                d is None and not any(j['key'] == k for j in FARM['jobs']) for d, k in zip(deps, job['after'])):
+            _finish(job, 'failed', error='a step before it failed or was cancelled')
+            changed = True
+            continue
+        if any(d is None for d in deps):
+            continue
+        srcs = {}
+        for nid, (k, i) in (job.get('use') or {}).items():
+            imgs = done[k].get('images') or []
+            if not (0 <= i < len(imgs)) or nid not in job['graph']:
+                _finish(job, 'failed', error='a step before it came back without the picture it needs')
+                break
+            im = imgs[i]
+            job['graph'][nid]['inputs']['image'] = (im['subfolder'] + '/' if im.get('subfolder') else '') + im['filename'] + ' [output]'
+            srcs[nid] = done[k]['srv']
+        else:
+            job['srcs'], job['after'] = srcs, []
+        changed = True
     # free computers take the next render they can run
     for u in pcs:
         st = _st(u)
@@ -1002,7 +1031,7 @@ async def _farm_round(s):
             st['why'] = 'training a LoRA'
             continue
         for job in FARM['jobs']:
-            if job['state'] != 'waiting':
+            if job['state'] != 'waiting' or job.get('after'):
                 continue
             graph, missing, why = _fit(u, job)
             if missing and not why and time.time() - st['asked'] > 1800:  # at most every half hour, so a failed copy doesn't start again at once
@@ -1012,8 +1041,8 @@ async def _farm_round(s):
                 st['why'] = why or ('copying ' + ', '.join(m['name'] for m in missing) if missing else '')
                 continue
             try:
-                if u != job['home']:
-                    await _copy_pictures(s, graph, job['home'], u, job['key'])
+                if u != job['home'] or job.get('srcs'):
+                    await _copy_pictures(s, graph, job['home'], u, job['key'], job.get('srcs'))
                 status, j = await _post(s, u + '/prompt', {'prompt': graph, 'client_id': job.get('client_id') or 'renderdeck-farm'})
             except Exception as e:
                 st['why'] = 'could not send: ' + str(e)
@@ -1090,7 +1119,7 @@ def _farm_view(since):
                     'load': len(st['running']) + len(st['pending']), 'copies': st['copies'], 'why': st['why']})
     jobs = [{k: v for k, v in j.items() if k != 'graph'} for j in FARM['jobs']]
     done = [j for j in FARM['done'] if j.get('t_done', 0) > since]
-    return {'farm': 1, 'pcs': pcs, 'jobs': jobs, 'done': done, 'now': time.time()}
+    return {'farm': 1, 'chain': 1, 'pcs': pcs, 'jobs': jobs, 'done': done, 'now': time.time()}
 
 
 @routes.get('/renderdeck/farm')
@@ -1105,7 +1134,8 @@ async def farm(request):
 
 @routes.post('/renderdeck/farm/add')
 async def farm_add(request):
-    """{pcs:[{url,name}], off:[url], jobs:[{key, graph, home, client_id, prompt, seed, ckpt, n, of, hidden}]}"""
+    """{pcs:[{url,name}], off:[url], jobs:[{key, graph, home, client_id, prompt, seed, ckpt, n, of, hidden, after, use}]}
+    after: keys of jobs this one waits for; use: {LoadImage node id: [key, n]} = that job's nth output picture"""
     try:
         body = await request.json()
         _farm_start()
@@ -1116,7 +1146,9 @@ async def farm_add(request):
             home = _tailnet(j.get('home'))
             FARM['jobs'].append({'key': str(j['key'])[:40], 'graph': j['graph'], 'home': home, 'client_id': str(j.get('client_id') or '')[:60],
                                  'prompt': str(j.get('prompt') or '')[:300], 'seed': j.get('seed'), 'ckpt': str(j.get('ckpt') or '')[:200],
-                                 'n': j.get('n'), 'of': j.get('of'), 'hidden': bool(j.get('hidden')), 'pin': _tailnet(j.get('pin')) if j.get('pin') else '', 'state': 'waiting', 'srv': '', 'id': '', 't_added': time.time()})
+                                 'n': j.get('n'), 'of': j.get('of'), 'hidden': bool(j.get('hidden')), 'pin': _tailnet(j.get('pin')) if j.get('pin') else '', 'state': 'waiting', 'srv': '', 'id': '', 't_added': time.time(),
+                                 'after': [str(k)[:40] for k in (j.get('after') or [])][:8],
+                                 'use': {str(n): [str(u[0])[:40], int(u[1])] for n, u in (j.get('use') or {}).items()}})
         _farm_save()
         _farm_wake.set()
         return web.json_response(_farm_view(time.time()))

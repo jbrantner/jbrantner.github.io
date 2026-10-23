@@ -34,7 +34,7 @@ class Pc:
     def oi(self):
         return {'CheckpointLoaderSimple': {'input': {'required': {'ckpt_name': [['sdxl.safetensors']]}}},
                 'LoraLoader': {'input': {'required': {'lora_name': [list(self.loras)]}}},
-                'KSampler': {'input': {'required': {}}}, 'SaveImage': {'input': {'required': {}}}}
+                'KSampler': {'input': {'required': {}}}, 'SaveImage': {'input': {'required': {}}}, 'LoadImage': {'input': {'required': {'image': [[]]}}}}
 
     async def worker(self):
         while True:
@@ -71,6 +71,13 @@ class Pc:
             for p in (await req.json()).get('delete', []):
                 if p in self.queue: self.queue.remove(p); self.deleted.append(p)
             return web.json_response({})
+
+        @r.get('/view')
+        async def view(req): self.views = getattr(self, 'views', []) + [req.query.get('filename')]; return web.Response(body=b'png', content_type='image/png')
+
+        @r.post('/upload/image')
+        async def up(req):
+            f = (await req.post())['image']; return web.json_response({'name': f.filename, 'subfolder': ''})
 
         @r.post('/interrupt')
         async def intr(req): self.running = None; return web.json_response({})
@@ -183,6 +190,28 @@ async def main():
         json.dump({'mbps': 0, 'auto': False}, open(H.SPEED_FILE, 'w')); H._last_compare = 0
         await add(1, 'pixel.safetensors', 'e'); await asyncio.sleep(2)
         ok(not R.syncs and not M.syncs and not H._auto_sync(), 'switched off: no timed compare')
+        # 🧊 chained jobs: a step waits for the one before it and uses its picture, fetched from whichever computer made it
+        off.clear()
+        async with s.post(RU + '/renderdeck/farm/pcs', json={'off': off}) as r: await r.json()
+        gi = lambda: {'5': {'class_type': 'LoadImage', 'inputs': {'image': 'placeholder.png'}}, '3': {'class_type': 'KSampler', 'inputs': {'seed': 1}}, '9': {'class_type': 'SaveImage', 'inputs': {}}}
+        base = {'1': {'class_type': 'KSampler', 'inputs': {'seed': 2}}, '9': {'class_type': 'SaveImage', 'inputs': {}}}
+        jobs = [{'key': 'p3-a', 'graph': base, 'home': RU}] + [{'key': 'p3-b' + str(i), 'graph': gi(), 'home': RU, 'after': ['p3-a'], 'use': {'5': ['p3-a', 0]}} for i in range(3)]
+        async with s.post(RU + '/renderdeck/farm/add', json={'pcs': pcs, 'off': off, 'jobs': jobs}) as r: await r.json()
+        await asyncio.sleep(0.3); v = await view()
+        st = {j['key']: j['state'] for j in v['jobs']}
+        ok(st.get('p3-a') in ('sent', 'running') and all(st.get('p3-b' + str(i)) == 'waiting' for i in range(3)), 'the chained steps wait for the first: %r' % st)
+        v = await until(lambda v: len([d for d in v['done'] if d['key'].startswith('p3-b')]) == 3)
+        a = next(d for d in v['done'] if d['key'] == 'p3-a'); bs = [d for d in v['done'] if d['key'].startswith('p3-b')]
+        ims = [p['5']['inputs']['image'] for p in R.prompts + M.prompts if '5' in p]
+        ok(all(d['state'] == 'done' for d in bs) and len(ims) == 3, 'then they all run: %r' % [d['state'] for d in bs])
+        made = a['images'][0]['filename']
+        ok(all(i == made + ' [output]' or i == 'rd-p3-b%d-%s' % (n, made) or i.startswith('rd-p3-b') and i.endswith(made) for n, i in enumerate(ims)), 'each uses the first step\'s picture (its own output, or a copy from the computer that made it): %r' % ims)
+        ok(len({d['srv'] for d in bs}) == 2, 'and they spread over both computers')
+        jobs = [{'key': 'p3-c', 'graph': base, 'home': RU}, {'key': 'p3-d', 'graph': gi(), 'home': RU, 'after': ['p3-c'], 'use': {'5': ['p3-c', 0]}}]
+        async with s.post(RU + '/renderdeck/farm/add', json={'pcs': pcs, 'off': off, 'jobs': jobs}) as r: await r.json()
+        async with s.post(RU + '/renderdeck/farm/cancel', json={'keys': ['p3-c']}) as r: await r.json()
+        v = await until(lambda v: any(d['key'] == 'p3-d' for d in v['done']))
+        ok(next((d['state'] for d in v['done'] if d['key'] == 'p3-d'), '') == 'failed', 'a step whose earlier step was cancelled fails instead of waiting for ever')
     for rn in runners: await rn.cleanup()
     print(('%d FAILED' % len(fails)) if fails else 'all passed')
     os._exit(1 if fails else 0)

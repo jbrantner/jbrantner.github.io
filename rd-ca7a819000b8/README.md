@@ -103,3 +103,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-23.146
 - 🧍/🧊 pose jobs go out one per computer at a time (Jordan): the rest wait in the app, and whichever PC is idle (nothing in its ComfyUI line) takes the next one it can make, MiniMax moves first. 🧊 shows how many are waiting. Needs the app open; it picks up again when the app opens.
 - Removed the live picture for these jobs (MiniMax sent nothing useful); the step bars stay.
+
+## 2026-10-23.147 (helper: farm chains)
+- 🧊 Make 3D (and 📱 poses from a picture) run on the farm when Render's helper has chains: the whole 3D is handed over at once and runs with the app closed. MiniMax moves first, each high/low circle waits for its crane and each angle for its circle, taking that job's frame (fetched from whichever PC made it); one job per idle PC. ✕ Stop cancels its farm jobs. Without the new helper the app hands them out itself while open (v.146).
+- Helper: farm jobs take `after` (keys) and `use` ({LoadImage node: [key, n]}); `/renderdeck/farm` says `chain: 1`.
