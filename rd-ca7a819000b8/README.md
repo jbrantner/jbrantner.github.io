@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.165
+- 3D viewer: the fade between angles is taken out again (Jordan: a flat render of the view needs one clean picture). 16 angles and pinning to the rig stay.
+
 ## 2026-10-23.164
 - 3D viewer, less popping: (1) 16 angles round each ring for MiniMax 3Ds kept as MiniMax drew them: the frame halfway between each two picked angles is already in the turn (cmViews16); (2) near each switch the next angle fades in over the nearest, to half at the switch; (3) rig-led 3Ds store her head-top-to-feet line from the rig (P.rigV) and each picture is sized and tilted (up to 15°, about her feet) so its own head-to-feet line matches the skeleton's from that angle, so her head sits where the rig's does.
 

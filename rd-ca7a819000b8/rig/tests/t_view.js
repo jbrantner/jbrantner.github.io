@@ -44,11 +44,9 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(wait.i===2 && shown.has && shown.ready, 'turning to an angle still loading keeps the last picture up (no blank): ' + JSON.stringify({wait, shown}));
   held.forEach(r => r()); await page.waitForTimeout(400); const after = await at(Math.PI / 2 + 0.001);
   ok(after.i===2 && after.feet && after.feet.every(v => Math.abs(v) < 0.01), 'and once it has loaded it swaps in, feet on the spot: ' + JSON.stringify(after));
-  // crossfade: near the switch the next angle fades in over the nearest one, and not at all facing an angle square on
-  { const fade = async az => page.evaluate(az => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update();
-      setTimeout(() => { const L = VIEW.stand().layers; res({i:VIEW.view().i, top:L[1].mesh.visible, op:+L[1].mesh.material.opacity.toFixed(2)}); }, 150); }), az);
-    const sq = await fade(0.01), near = await fade(0.38);
-    ok(!sq.top && near.top && near.op > 0.3 && near.op <= 0.5, 'turning, the next angle fades in over the nearest near the switch (none facing one square on): ' + JSON.stringify({sq, near})); }
+  // no fading: only the nearest angle shows, even near the switch (a flat render needs one clean picture)
+  { const top = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(0.38) * d, 0.96, Math.cos(0.38) * d); VIEW.controls.update(); setTimeout(() => res(VIEW.stand().layers[1].mesh.visible), 150); }));
+    ok(!top, 'no second picture fades in near a switch: ' + top); }
   // 16 angles round: the in-between frames show between the 8
   { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); L[0].views16 = Array.from({length:48}, (_, n) => n % 2 ? 'https://app.test/pic/x100_y280_h20' + (n % 10) + '.svg?b' + n : L[0].views[Math.floor(n / 16) * 8 + (n % 16) / 2]); localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
     await page.waitForTimeout(500); const v = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5, az = Math.PI / 8; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update(); setTimeout(() => res(VIEW.view()), 150); }));
