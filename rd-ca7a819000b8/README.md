@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.168
+- 🧊 one outfit all the way round (Jordan): in a 🦴🎬 3D the eye-level turn is the design; its back and two side frames go to the high and low turns as reference pictures (MiniMax's reference model on the same computer, with the first frame pinned and the pose ControlNet still leading), so they copy her back instead of making it up. Without the reference model a computer makes them as before.
+
 ## 2026-10-23.167
 - 🧊 Make 3D locked to what works (Jordan): 🦴🎬 MiniMax led by the rig, no Illustrious pass, angles go ahead on their own; tapping 🧊 on a picture that isn't 3D starts it straight away, with no choices shown (window.M3_FREE unlocks them for the tests).
 

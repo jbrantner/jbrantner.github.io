@@ -626,7 +626,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.167'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.168'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6926,7 +6926,7 @@ async function cmAutoPick(P, o){ const us = o.urls || []; if(us.length <= 8 || o
   // mirror-even, which a ¾ view isn't; the high and low circles start from their crane's end, so they get the same
   let f0 = 0; if(cmOrbCtl(P, o) && P.face!=null) f0 = P.face / 360 * per; else { const lim = per * 60 / 360; let best = -1; for(let f = 0; f < us.length; f++){ const d = Math.min(f, per - f); if(d > lim || !ms[f]) continue; const sc = cmMirror(ms[f]) - 0.004 * d; if(sc > best){ best = sc; f0 = f; } } }
   o.pick = [0, 1, 2, 3, 4, 5, 6, 7].map(n => Math.min(us.length - 1, Math.round((f0 + n * per / 8) % per))); o.turn = per; save(); cmPoseSync(); cmPoseRun(P, true); if($('#m3Box')) m3Draw(); }
-function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_MH, ctl = null){
+function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_MH, ctl = null, refs = null){
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
@@ -6935,7 +6935,11 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
   if(ctl) model = [add('MiniMaxH3FunControlNetApply', {model, model_patch:[add('ModelPatchLoader', {name:k.cn}), 0], vae:[vae,0], strength:1, start_percent:0, end_percent:1, control_video:[add('GetVideoComponents', {video:[add('LoadVideo', {file:ctl}), 0]}), 0]}), 0]; // 🦴 the skeleton turning
   let cond, lat;
-  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:W, height:H, length:TV_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1]; }
+  if(k.fl && !refs){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:W, height:H, length:TV_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1]; }
+  else if(refs){ // 👗 her back and sides from the eye-level turn as Pictures 2-4, so this turn draws the same hair and outfit
+    const r = {'ref_images.ref_image_0':[li,0]}; refs.forEach((im, i) => { r['ref_images.ref_image_' + (i + 1)] = [add('LoadImage', {image:im}), 0]; });
+    const rv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + refs.map((_, i) => '<Picture ' + (i + 2) + '>').join(', ').replace(/, ([^,]*)$/, ' and $1') + ' show the same woman from behind and from the sides: her hair, clothes and shoes stay exactly as in them all the way round. ' + prompt, width:W, height:H, length:TV_LEN, ref_image_size:'match'}, r));
+    lat = [rv,1]; cond = [add('MiniMaxH3AddGuide', {positive:[rv,0], latent:lat, vae:[vae,0], image:[li,0], frame_idx:0}), 0]; }
   else { const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + prompt, width:W, height:H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
     lat = [rv,1]; cond = [add('MiniMaxH3AddGuide', {positive:[rv,0], latent:lat, vae:[vae,0], image:[li,0], frame_idx:0}), 0]; }
   const gd = add('BasicGuider', {model, conditioning:cond}), sc = add('BasicScheduler', {model, scheduler:'simple', steps:k.steps, denoise:1});
@@ -6946,7 +6950,8 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
   return {g, save:add('SaveImage', {images:[b,0], filename_prefix:prefix})}; }
 async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.busyPc = k.url; o.from = src; delete o.err; drawComic();
   try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), picks = cmPosePicks(o), ctl = cmOrbCtl(P, o) ? await cmCtlUp(P, o, k) : null;
-    const G = cmPoseOrbGraph(k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH, ctl);
+    const ro = cmOutfitRefs(P, o), rk = ro && cmRefKit(k), refs = rk ? await Promise.all(ro.map(u => cmUp(u, k.url))) : null;
+    const G = cmPoseOrbGraph(rk || k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH, ctl, refs); if(refs) o.refs = refs.length;
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     o.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:5 * cmSlow(k.url), smp:samplerOf(G.g), w:P.mw || CM_SP_MW, h:P.mh || CM_SP_MH, kind:'sporb', video:false, all:true}; delete o.busy; save(); drawComic(); cmWait(o); }
@@ -6954,6 +6959,15 @@ async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.bus
 // 🦴🎬 the rig's skeleton turning as each move's control video (made once by m3RigSpin, kept in memory), sent to the PC
 // that makes the move. Only PCs with the MiniMax Fun ControlNet (Render) can make these moves.
 const CM_SPC = {};
+// 👗 one outfit all the way round (Jordan 2026-10-23: "back view angles change her outfit and hair"): the eye-level turn is the
+// design; its back and two side frames go to the high and low turns as reference pictures, so MiniMax copies them instead of
+// making the back up again. That takes MiniMax's reference model (not the first-frame one) on the same computer.
+function cmOutfitRefs(P, o){ if(!P.orbRig || o.step!=='circle' || o.ring===1) return null;
+  const us = [4, 2, 6].map(i => { const v = P.views.find(x => !x.look && x.ring===1 && x.i===i); return v && cmPoseFrame(P, v); }).filter(Boolean); return us.length===3 ? us : null; }
+function cmRefKit(k){ const oi = k.oi; if(!oi.MiniMaxH3ReferenceToVideo || !oi.MiniMaxH3AddGuide) return null; const pick = (cls, key, re) => combo(oi[cls], key).find(n => re.test(baseName(n)));
+  const unet = pick('UNETLoader', 'unet_name', /minimax.?h3.*turbo/i) || combo(oi.UNETLoader, 'unet_name').find(n => /minimax.?h3/i.test(baseName(n)) && !/fl2v/i.test(baseName(n))); if(!unet) return null;
+  const lora = /turbo/i.test(baseName(unet)) && pick('LoraLoaderModelOnly', 'lora_name', /minimax_h3_ref2v_turbo/i);
+  return Object.assign({}, k, {fl:false, unet, lora, steps:!lora ? 20 : /4step/i.test(lora) ? 4 : 8}); }
 function cmCtlKits(){ return cmFlKits().filter(k => { const n = combo(k.oi.ModelPatchLoader, 'name').find(x => /minimax_h3_fun_controlnet/i.test(baseName(x))); if(n) k.cn = n;
   return k.fl && n && k.oi.MiniMaxH3FunControlNetApply && k.oi.LoadVideo && k.oi.GetVideoComponents; }); }
 async function cmCtlUp(P, o, k){ if(S.test) return 'rdspin_test.avi'; o.ctlf = o.ctlf || {}; if(o.ctlf[k.url]) return o.ctlf[k.url];
