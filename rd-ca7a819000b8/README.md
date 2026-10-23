@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.167
+- 🧊 Make 3D locked to what works (Jordan): 🦴🎬 MiniMax led by the rig, no Illustrious pass, angles go ahead on their own; tapping 🧊 on a picture that isn't 3D starts it straight away, with no choices shown (window.M3_FREE unlocks them for the tests).
+
 ## 2026-10-23.166
 - 3D viewer: a flat (orthographic) camera, so zooming in no longer bends her (Jordan); pinch zooms instead of moving the camera closer, and the card faces back along the line of sight. Saved cameras from before turn their distance into the zoom.
 

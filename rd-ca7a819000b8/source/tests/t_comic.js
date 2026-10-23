@@ -441,7 +441,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
             '📱 a pose from the picture in the preview: 5 MiniMax moves from it, all 24 angles painted over their frames, no rig: ' + JSON.stringify({mmn, ill:ill.length, P})); }
         // 🧊 Make 3D on a render: MiniMax turns round it, every angle painted with the render's own look, shown in the grey room;
         // backdrops and ✨ Paint it flat, which lands in the strip and opens the 3D again
-        if(process.env.RIG_DEPS){ const n0 = ALL.length; await page.evaluate(() => { S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump.png', prompt:'a girl jumping, dynamic pose', t:Date.now(),
+        if(process.env.RIG_DEPS){ const n0 = ALL.length; await page.evaluate(() => { window.M3_FREE = true; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump.png', prompt:'a girl jumping, dynamic pose', t:Date.now(),
             snap:{prompt:'a girl jumping, dynamic pose', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); S.m3Paint = 0.45; S.m3By = 'mm'; S.m3Pick = true; m3Open(S.gallery[0]); });
           // opening it doesn't start it: the choices and ▶ Make it 3D come first
           { await page.waitForSelector('#m3Box [data-m3="start"]'); const nb = ALL.length; await new Promise(r => setTimeout(r, 600));
@@ -517,6 +517,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           { const pz = await page.evaluate(async () => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p), o = P.orb.find(x => x.step==='circle' && x.ring===2); delete o.pick; save();
               for(let t = 0; t < 100 && !o.pick; t++) await new Promise(r => setTimeout(r, 100)); return (o.pick || []).join(); });
             ok(pz==='0,4,8,12,15,19,23,27', '🎯 a circle back with no angles picked is lined up on its own, so its 8 angles don\'t wait for ever: ' + pz); }
+          // 🧊 locked for now (Jordan 2026-10-23): Make 3D starts straight away as 🦴🎬, no Illustrious pass, going ahead on its own, no choices shown
+          { const lk = await page.evaluate(async () => { window.M3_FREE = false; S.m3By = 'mm'; S.m3Paint = 0.45; S.m3Pick = true; $('#m3Done') && $('#m3Done').click();
+              S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump5.png', prompt:'a girl', t:Date.now(), snap:{prompt:'a girl', blocks:[]}}); m3Open(S.gallery[0]); await new Promise(r => setTimeout(r, 400));
+              const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); const r = {started:!!P, ctl:P && P.ctl, orbRig:P && P.orbRig, dn:P && P.dn, pick:S.m3Pick, choices:!!document.querySelector('#m3Box [data-m3by]'), ask:!!document.querySelector('#m3Box [data-m3pkask]')};
+              if(P) P.stopped = true; window.M3_FREE = true; return r; });
+            ok(lk.started && lk.ctl && lk.orbRig && lk.dn===0 && lk.pick===false && !lk.choices && !lk.ask, '🧊 Make 3D starts straight away with the locked settings (🦴🎬, Illustrious pass off, go ahead), no choices shown: ' + JSON.stringify(lk)); }
           await page.click('#m3Done'); }
         await page.evaluate(() => { S.cmPoseBy = 'ill'; delete window.WAIT_MS; }); }
       await page.click('#comic .cmed [data-cmrig="0"]'); await (await page.waitForSelector('#cmRigBox iframe')).contentFrame();
