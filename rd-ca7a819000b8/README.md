@@ -118,5 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.152
+- 🧊 Make 3D with 🎬 MiniMax: each circle now keeps 31 frames (every 4th) and the 8 angles are lined up on their own: the frame where her outline is back to the first one marks a full turn, and the angles are spread evenly over it (MiniMax doesn't always turn in exactly 5 s). Then 🎯 Pick the angles shows the 8 per height with ‹ › to nudge any one a frame, and ✓ Use these angles sends them to the Illustrious / cut-out pass. "Each time: Ask me / Go ahead on its own" skips the check. The angles are handed over once picked, so that step needs the app open (the MiniMax moves still run with it closed).
+- 🧊 Turn her with: 🦴🎬 MiniMax led by the rig. The rig copies her pose from the picture, then makes the skeleton's 5 moves (eye-level circle, crane up / down, high / low circles) as DWPose-style control videos, its first frame fitted onto her in the picture. MiniMax follows them through the Fun ControlNet Union (pose), so it turns at a steady speed and the 8 angles are exact eighths of the turn (still shown in 🎯 Pick the angles for nudging). Only PCs with the ControlNet (Render) make these moves, and they don't go to the farm.
+
 ## 2026-10-23.151
 - 🧊 says when a PC is busy with another 3D's jobs on the farm, instead of calling them other jobs.

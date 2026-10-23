@@ -294,6 +294,14 @@ const DEPS = process.env.RIG_DEPS || '';
     const it = R.SET.items.find(x => x.k==='sprite'); it.r = 0; R.buildSet(); if(R.setSel!==it.id) R.pickSet(it.id); else R.setUi(); const btn = document.querySelector('#setPicked [data-sdo="look"]'), m = () => R.spriteMeshes()[0], P = new (R.camera.position.constructor)(0, 1, 5);
     const away = R.spriteView(m(), P).url; btn.click(); const at = R.spriteView(m(), P).url; return {btn:!!btn, away:away.slice(0, 15), at, on:!!it.look}; });
   ok(lk.btn && lk.on && lk.at==='data:look8' && lk.away!==lk.at, '👀 Looks at camera swaps the piece to the pose\'s looking-at-camera pictures: ' + JSON.stringify(lk));
+  // 🦴🎬 the skeleton turning for MiniMax: n frames a move, the first frame's skeleton fitted onto the picture's points
+  { const r = await page.evaluate(() => { RIG.lastRead = null; const a = RIG.spinGuides(100, 150, 5, [{kind:'circle', el:5}, {kind:'crane', from:5, to:35}]);
+      const OPN = ['nose', 'neck', 'rsh', 'rel', 'rwr', 'lsh', 'lel', 'lwr', 'rhip', 'rkn', 'rank', 'lhip', 'lkn', 'lank', 'reye', 'leye', 'rear', 'lear'], img2 = {};
+      a.pts0.forEach((p, i) => { if(p) img2[OPN[i]] = [(p[0] * 100 * 1.5 + 10) * 2, (p[1] * 150 * 1.5 - 20) * 2]; }); RIG.lastRead = {W:200, H:300, img2};
+      const b = RIG.spinGuides(100, 150, 5, [{kind:'circle', el:5}]); RIG.lastRead = null;
+      return {n:a.moves.map(m => m.length), jpg:/^data:image\/jpeg/.test(a.moves[0][0]), k0:a.fit.k, fit:b.fit, same:a.moves[0][0]!==a.moves[0][2]}; });
+    ok(r.n.join()==='5,5' && r.jpg && r.k0===1 && Math.abs(r.fit.k - 1.5) < 0.01 && Math.abs(r.fit.tx - 10) < 0.5 && Math.abs(r.fit.ty + 20) < 0.5 && r.same,
+      '🦴🎬 spinGuides: frames for each move, the first frame fitted onto the picture\'s points (scale and shift): ' + JSON.stringify(r)); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
