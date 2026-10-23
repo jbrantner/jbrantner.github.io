@@ -32,6 +32,11 @@ const DEPS = process.env.RIG_DEPS || '';
   const front = await at(0.01), back = await at(Math.PI);
   ok(front.i===0 && back.i===4 && front.feet.every(v => Math.abs(v) < 0.01) && back.feet.every(v => Math.abs(v) < 0.01) && Math.abs(front.ht - back.ht) < 0.02,
     'her feet stand on the same spot from the front and the back, and she is as tall, wherever each picture drew her: ' + JSON.stringify({front, back}));
+  // from above she is drawn shorter: she is not grown to make up for it (her head blew up)
+  { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); for(let n = 16; n < 24; n++) L[0].views[n] = 'https://app.test/pic/x100_y280_h150.svg'; L[0].views[20] = 'https://app.test/pic/x100_y280_h140.svg'; localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
+    await page.waitForTimeout(500); const hi = await page.evaluate(() => new Promise(res => { const c = VIEW.camera; c.position.set(0, 0.96 + 4.5 * Math.sin(0.7), 4.5 * Math.cos(0.7)); VIEW.controls.update();
+      setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({ring:VIEW.view().ring, k:+s.her.scale.y.toFixed(3), ht:f && f.ht}); }, 150); }));
+    ok(hi.ring===2 && hi.k===1, 'from above she keeps the size she is drawn at (sized only against the front at that height): ' + JSON.stringify(hi)); }
   // a picture that hasn't loaded yet: the last one stays up instead of going blank
   slow = 'slow'; await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); L[0].views[10] = 'https://app.test/pic/x111_y280_h200.svg?slow'; localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); });
   await page.evaluate(() => VIEW.reload()); await page.waitForTimeout(400); await at(0.01);
