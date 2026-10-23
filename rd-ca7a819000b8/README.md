@@ -113,3 +113,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 ## 2026-10-23.149
 - 🧊: a finished 3D has ↻ Make it again (with the Turn her with setting), not only one still running.
+
+## 2026-10-23.150
+- 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
+- 3D viewer: the picture standing in before the angles arrive keeps its own shape.

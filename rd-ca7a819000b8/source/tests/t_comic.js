@@ -466,13 +466,13 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           ok(st.stopped && !st.run && st.orbs < 5 && ov.gone && ov.fresh && ov.now!==p0, '🧊 ✕ Stop halts the 3D and ↻ Start over begins again from the picture: ' + JSON.stringify({st, ov}));
           await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); P.stopped = true; }); await page.click('#m3Done');
           // 🦴 the rig way: the rig copies her pose from the picture, then 24 Illustrious angles from its pose and depth, no MiniMax
-          const n1 = ALL.length; await page.evaluate(() => { window.TEST_POSE = []; S.m3By = 'rig'; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump3.png', prompt:'a girl jumping', t:Date.now(),
+          const n1 = ALL.length; await page.evaluate(() => { window.TEST_POSE = []; S.m3By = 'rig'; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump3.png', prompt:'a girl jumping', t:Date.now(), d3desc:'orange sweater, black sneakers',
             snap:{prompt:'a girl jumping', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); m3Open(S.gallery[0]); });
           await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});
           const rg = ALL.slice(n1).map(x => x.prompt), rill = rg.filter(g => V(g).some(n => n.class_type==='CheckpointLoaderSimple'));
           const rinfo = await page.evaluate(() => ({asked:window.TEST_POSE, by:S.cmPoses.find(x => x.id===S.gallery[0].d3p).by}));
           ok(rill.length===24 && rill.every(g => V(g).some(n => n.class_type==='SetUnionControlNetType' && n.inputs.type==='openpose') && V(g).some(n => n.class_type==='LoraLoader' && /AFKJ/.test(n.inputs.lora_name)))
-            && !rg.some(g => V(g).some(n => /^MiniMaxH3/.test(n.class_type))) && rinfo.asked[0]==='https://jordo-desktop.test/view?filename=jump3.png' && rinfo.by==='ill',
+            && rill.every(g => /^[^]*orange sweater, black sneakers/.test(V(g).find(n => n.class_type==='CLIPTextEncode').inputs.text)) && !rg.some(g => V(g).some(n => /^MiniMaxH3/.test(n.class_type))) && rinfo.asked[0]==='https://jordo-desktop.test/view?filename=jump3.png' && rinfo.by==='ill',
             '🦴 Make 3D the rig way: the rig copies the pose from the picture, then 24 Illustrious angles from its pose and depth with the render\'s own look, no MiniMax: ' + JSON.stringify({n:rill.length, rinfo}));
           await page.click('#m3Done'); }
         await page.evaluate(() => { S.cmPoseBy = 'ill'; delete window.WAIT_MS; }); }
