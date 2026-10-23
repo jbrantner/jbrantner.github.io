@@ -496,6 +496,10 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
             && rill.every(g => /^[^]*orange sweater, black sneakers/.test(V(g).find(n => n.class_type==='CLIPTextEncode').inputs.text)) && !rg.some(g => V(g).some(n => /^MiniMaxH3/.test(n.class_type))) && rinfo.asked[0]==='https://jordo-desktop.test/view?filename=jump3.png' && rinfo.by==='ill',
             '🦴 Make 3D the rig way: the rig copies the pose from the picture, then 24 Illustrious angles from its pose and depth with the render\'s own look, no MiniMax: ' + JSON.stringify({n:rill.length, rinfo}));
           await page.click('#m3Done');
+          // a 3D left on "Copying her pose onto the rig…" (the app closed meanwhile) starts that step again by itself
+          { const rz = await page.evaluate(async () => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p), n = window.TEST_POSE.length; P.rigging = true; save();
+              for(let t = 0; t < 100 && (P.rigging || window.TEST_POSE.length===n); t++) await new Promise(r => setTimeout(r, 100)); return {asked:window.TEST_POSE.length - n, rigging:!!P.rigging}; });
+            ok(rz.asked===1 && !rz.rigging, '🦴 a 3D stuck copying her pose onto the rig picks that step up again on its own: ' + JSON.stringify(rz)); }
           // 🦴🎬 MiniMax led by the rig: the rig copies her pose, its skeleton turning is each move's pose control video
           const n2 = ALL.length; await page.evaluate(() => { window.TEST_POSE = []; S.m3By = 'mmrig'; S.m3Pick = false; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump4.png', prompt:'a girl jumping', t:Date.now(), snap:{prompt:'a girl jumping', blocks:[]}}); m3Open(S.gallery[0], true); });
           await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});

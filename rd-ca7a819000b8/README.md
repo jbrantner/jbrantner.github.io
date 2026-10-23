@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.156
+- 🧊 A 3D left on "Copying her pose onto the rig…" (the app was closed or reloaded during that step, which runs in the app) now starts the step again by itself while the app is open. So does a rig-led one whose skeleton videos were lost with a reload, and a rig one whose angle guides were.
+
 ## 2026-10-23.155
 - Rig: a limb that is straight in the picture stays straight. Reading a picture used to turn "this bone looks shorter than the rig's" into depth, so anime-length legs folded at the knee (and showed bent from the side, in 🦴 and 🦴🎬 3D). Now a nearly straight leg or arm lies flat, or leans as one piece when it is much shorter.
 - 🧊 3D: the front angle is her real front, not just the picture's view. With 🦴🎬 MiniMax led by the rig her facing is known, so the 8 angles start from it; 🎯 Pick the angles also has ↶ Turn all / Turn all ↷ to move every label one angle round when "front" isn't her front (plain 🎬 MiniMax).
