@@ -508,6 +508,10 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           ok(cmm.length===5 && cmm.every(g => V(g).some(n => n.class_type==='MiniMaxH3FunControlNetApply') && V(g).some(n => n.class_type==='LoadVideo' && /up_/.test(n.inputs.file))) && cinfo.ctl && cinfo.by==='mm' && cinfo.asked===1
             && cinfo.frames.every(n => n===124) && cinfo.jpg && cinfo.pick==='0,4,8,12,15,19,23,27',
             '🦴🎬 MiniMax led by the rig: 5 moves, each following the skeleton turning (124 frames sent as a video, pose ControlNet), the 8 angles taken at exact eighths of the turn: ' + JSON.stringify(cinfo) + ' ' + JSON.stringify(cmm.map(g => V(g).filter(n => /LoadVideo|ControlNet/.test(n.class_type)).map(n => n.class_type + ':' + (n.inputs.file || '')))) + cmm.length);
+          // a circle whose frames came back with no angles picked (the app closed or reloaded meanwhile) gets lined up by itself
+          { const pz = await page.evaluate(async () => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p), o = P.orb.find(x => x.step==='circle' && x.ring===1); delete o.pick; save();
+              for(let t = 0; t < 100 && !o.pick; t++) await new Promise(r => setTimeout(r, 100)); return (o.pick || []).join(); });
+            ok(pz==='0,4,8,12,15,19,23,27', '🎯 a circle back with no angles picked is lined up on its own, so its 8 angles don\'t wait for ever: ' + pz); }
           await page.click('#m3Done'); }
         await page.evaluate(() => { S.cmPoseBy = 'ill'; delete window.WAIT_MS; }); }
       await page.click('#comic .cmed [data-cmrig="0"]'); await (await page.waitForSelector('#cmRigBox iframe')).contentFrame();

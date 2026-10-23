@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.161
+- 🧊 MiniMax 3D: a circle whose frames came back while the app was closed or reloading had no angles picked, so that ring's 8 angles waited for ever and the bar stopped. It is now lined up by itself.
+
 ## 2026-10-23.160
 - 🦴🎬 MiniMax led by the rig: a computer that runs MiniMax but lacks the pose ControlNet gets a 📦 Get it on … button (2.3 GB from Comfy-Org/MiniMax-H3 on Hugging Face, the same file Render has); once it's there, that computer takes rig-led moves too, including ones already waiting. Needs the helper with the model_patches folder.
 
