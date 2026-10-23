@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.174
+
+- 🧊 Viewer: the high pictures take over from 27° up (was 20°), and a picture made from above or below is never stretched more than 8% past its size from where it was made, so her head no longer grows big while her height still has no jump at the switch.
+
 ## 2026-10-23.173
 
 - 🧊 Viewer: her height on screen follows the camera smoothly. Each picture is sized and tilted to the rig's head-to-feet line as seen from where the camera is now, not from the height the picture was made at, so her head no longer jumps up where the high pictures switch to the eye-level ones.
