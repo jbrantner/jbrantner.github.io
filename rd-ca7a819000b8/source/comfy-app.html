@@ -322,7 +322,7 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .stepper button{width:38px;height:100%;font:700 22px/1 var(--display);color:var(--soft)}
 .stepper button:disabled{opacity:.3}
 .stepper span{min-width:32px;text-align:center;font:700 17px/1 var(--display);color:var(--accent)}
-.pcrow{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);margin-bottom:8px}
+.qlines{margin:-2px 0 10px 10px;padding-left:10px;border-left:1px solid var(--line)}.qline{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}.qline:last-child{border-bottom:0}.qline.run b{color:var(--accent)}.qline b{font-size:13px;display:block}.qline small{display:block;color:var(--soft);font-size:11px}.qline .qtxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62vw}.pcrow{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);margin-bottom:8px}
 .pcrow .grow,.jrow .grow{flex:1;min-width:0}
 .pcrow b{display:block;font-weight:800}
 .pcrow small{display:block;color:var(--dim);font-size:12.5px}
@@ -626,7 +626,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.152'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.153'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -861,6 +861,7 @@ async function pollPc(p){
   const t = Date.now();
   try{ const q = await (await fetch(p.url + '/queue', Object.assign({cache:'no-store'}, within(6000)))).json();
     p.running = q.queue_running.map(x => x[1]); p.pending = q.queue_pending.map(x => x[1]); p.load = p.running.length + p.pending.length; p.polledAt = t;
+    p.line = q.queue_running.map(x => qSum(x, true)).concat(q.queue_pending.slice().sort((a, b) => a[0] - b[0]).map(x => qSum(x, false))); // everything in its line, ours or not
     restarted(p, true); if(p.restarting) return false;
     if(!p.online || !p.oi){ p.online = true; await wakePc(p); }
     return true;
@@ -1517,12 +1518,33 @@ function farmView(v, away){
 }
 
 // ---------- your computers at the top: on or off, and what each is doing ----------
+// 👀 what a computer is busy with (Jordan 2026-10-23: "busy with something else but I can't see what it is"): every job in its
+// ComfyUI line, not just this queue's renders: 3D and comic jobs, the farm's, other apps' or ComfyUI's own. Read from the job
+// itself (what it saves, which models, its prompt), named better when this app knows the job; ✕ takes it out of the line.
+const QSUM = new Map(), CM_KIND = {}; // CM_KIND: prompt id → what the comic / 3D code sent it for
+const QKIND = {sporb:'🎬 MiniMax turn for a 3D', sprite:'🧊 3D angle', clip:'🎬 Comic clip', libprev:'👥 Character preview', depth:'📖 Panel depth', far:'📖 Panel background', orbit:'🎬 Camera orbit', char:'👥 Character', still:'📖 Comic still'};
+function qSum(x, run){ const id = x[1], ex = x[3] || {}; let s = QSUM.get(id);
+  if(!s){ const g = x[2] || {}, ns = Object.values(g), sv = ns.find(n => /^Save(Image|Video|AnimatedWEBP|Animated)/.test(n.class_type) && n.inputs && typeof n.inputs.filename_prefix==='string'), pre = sv ? sv.inputs.filename_prefix : '';
+    const txt = ns.map(n => n.inputs && (typeof n.inputs.text==='string' ? n.inputs.text : typeof n.inputs.prompt==='string' ? n.inputs.prompt : '')).find(t => t && t.trim().length > 3) || '';
+    const ck = ns.map(n => n.inputs && (n.inputs.ckpt_name || n.inputs.unet_name)).find(v => typeof v==='string') || '', mm = ns.some(n => /^MiniMaxH3/.test(n.class_type)), vid = ns.some(n => /SaveVideo|CreateVideo/.test(n.class_type));
+    const kind = CM_KIND[id] || (/comics\/poses/.test(pre) ? (mm ? '🎬 MiniMax turn for a 3D' : '🧊 3D angle') : /\/3d\//.test(pre) ? '🧊 3D backdrop or flat paint' : /comics/.test(pre) ? (mm || vid ? '🎬 Comic clip' : '📖 Comic still')
+      : /characters/.test(pre) ? '👥 Character' : /drafts/.test(pre) ? '✎ Draft' : /lora_test|train/.test(pre) ? '🎓 LoRA test' : mm ? '🎬 MiniMax video' : vid ? '🎬 Video' : sv ? '🖼 Render' : '⚙ ComfyUI job');
+    s = {id, kind, pre, text:txt.replace(/\s+/g, ' ').trim().slice(0, 90), model:baseName(ck).replace(/\.(safetensors|gguf|ckpt)$/i, ''), hid:/^Hidden\//.test(pre) || /(^|\/)Hidden\//.test(pre),
+      who:ex.client_id===clientId ? 'from this phone' : ex.client_id ? 'from another phone or app' : 'from ComfyUI or the farm'};
+    QSUM.set(id, s); if(QSUM.size > 400) QSUM.delete(QSUM.keys().next().value); }
+  return Object.assign({}, s, {run}); }
+function pcLine(p){ const ours = new Set(S.queue.map(e => e.id).filter(Boolean)), line = (p.line || []).filter(j => !ours.has(j.id)); if(!p.online || !line.length) return '';
+  const row = j => { const hid = j.hid && !S.hidden, L = LIVE[j.id], st = j.run ? (L && L.max ? 'Step ' + L.v + '/' + L.max : 'Working on it now') : 'Waiting';
+    return `<div class="qline ${j.run ? 'run' : ''}"><div class="grow"><b>${esc(hid ? '🙈 Hidden job' : j.kind)}</b><small>${esc(st)} · ${esc(j.who)}${hid ? '' : (j.model ? ' · ' + esc(j.model) : '')}</small>${!hid && j.text ? `<small class="qtxt">${esc(j.text)}</small>` : ''}</div>
+      <button class="x" data-qx="${esc(p.url + '|' + j.id + '|' + (j.run ? 1 : 0))}" aria-label="Take this job out of the line">✕</button></div>`; };
+  const n = line.length, w = line.filter(j => !j.run).length;
+  return `<div class="qlines"><div class="lbl lblrow">On ${esc(pcName(p.url))}: ${n} job${n > 1 ? 's' : ''}${w > 1 ? `<button class="chipbtn danger" data-qclear="${esc(p.url)}">Clear the ${w} waiting</button>` : ''}</div>${line.slice(0, 15).map(row).join('')}${n > 15 ? `<p class="note">…and ${n - 15} more waiting.</p>` : ''}</div>`; }
 function pcWhat(p, long){
   const mine = S.queue.find(e => e.srv===p.url && e.state==='running'), off = S.pcOff.includes(p.url);
   if(p.restarting) return 'Restarting ComfyUI…';
   if(!p.online && p.agent) return p.agent.comfy==='starting' ? 'ComfyUI is starting…' : p.agent.wanted ? 'ComfyUI stopped; starting it again shortly' : 'ComfyUI is closed';
   let w = !p.online ? (long ? 'Not reachable' : 'Offline') : mine ? (mine.prog ? mine.prog.text : 'Starting') + (off && long ? ', then stops taking renders' : '')
-    : off ? (long ? 'Not taking renders' : 'Switched off') : p.load ? (long ? 'Busy with something else' : 'Busy') : 'Free';
+    : off ? (long ? 'Not taking renders' : 'Switched off') : p.load ? (long ? 'Busy with ' + p.load + ' job' + (p.load > 1 ? 's' : '') + ' (listed below)' : 'Busy') : 'Free';
   if(p.copies.length) w += long ? ' · copying ' + p.copies.map(c => c.name + (c.total ? ' ' + Math.round(c.done/c.total*100) + '%' : '')).join(', ') : ' · copying models';
   if(long && p.why && p.online && !mine) w += ' · ' + p.why;
   return w;
@@ -1603,7 +1625,7 @@ function drawQueue(){
     const off = S.pcOff.includes(p.url), what = pcWhat(p, true);
     return `<div class="pcrow"><i class="dot ${p.online ? 'on' : ''}"></i><div class="grow"><b>${esc(pcName(p.url))}</b><small>${esc(what)}</small>${p.syncNote ? `<small class="warn">${esc(p.syncNote)}</small>` : ''}</div>
       ${pcButtons(p)}
-      ${ps.length > 1 ? `<button class="tog ${off ? '' : 'on'}" data-pc="${esc(p.url)}" style="--c:var(--cyan)" aria-label="Let ${esc(pcName(p.url))} take renders"></button>` : ''}</div>`; }).join('') : '';
+      ${ps.length > 1 ? `<button class="tog ${off ? '' : 'on'}" data-pc="${esc(p.url)}" style="--c:var(--cyan)" aria-label="Let ${esc(pcName(p.url))} take renders"></button>` : ''}</div>${pcLine(p)}`; }).join('') : '';
   $('#qList').innerHTML = S.queue.length ? S.queue.map(e => {
     const p = e.srv && e.srv!=='test' ? pcOf(e.srv) : null, where = e.srv ? pcName(e.srv) : e.farm ? 'Next free computer' : pcName(e.home), run = e.state==='running', big = run && openJobs.has(e.key);
     const pos = e.farm ? S.queue.filter(q => q.farm && q.state==='waiting').indexOf(e) + 1 : p ? p.pending.indexOf(e.id) : -1;
@@ -1617,9 +1639,19 @@ function drawQueue(){
       ${big && !hid ? `<img class="jbig" data-pv="${esc(e.srv)}" src="${esc(pv)}" alt="">` : ''}</div>`; }).join('')
     : '<p class="note">Nothing queued. Each Render tap adds its renders here.</p>';
 }
-$('#queueBtn').onclick = () => { openSheet('#queueSheet'); drawQueue(); if(S.queue.length) tick();
+let qLook = 0; // while the queue is open, look at every computer's line every 3 s
+function qLookNow(){ if(!$('#queueSheet').classList.contains('open') || S.test){ clearInterval(qLook); qLook = 0; return; } Promise.all(allPcs().map(pollPc)).then(drawQueue); }
+$('#queueBtn').onclick = () => { openSheet('#queueSheet'); drawQueue(); if(S.queue.length) tick(); clearInterval(qLook); qLook = setInterval(qLookNow, 3000); qLookNow();
   allPcs().forEach(p => agentLook(p).then(a => { if(a && !(S.agents = S.agents || []).includes(p.url)){ S.agents.push(p.url); save(); } drawQueue(); })); };
-$('#pcList').onclick = e => { const ac = e.target.closest('[data-agent]'); if(ac){ agentDo(pcOf(ac.dataset.url), ac.dataset.agent); return; }
+$('#pcList').onclick = e => {
+  const qx = e.target.closest('[data-qx]'); if(qx){ const [url, id, run] = qx.dataset.qx.split('|'), j = (pcOf(url).line || []).find(x => x.id===id);
+    if(j && !j.who.startsWith('from this') && !confirm('Take this ' + (j.hid && !S.hidden ? 'job' : j.kind.replace(/^\S+\s/, '')) + ' out of ' + pcName(url) + "'s line? It wasn't sent from this phone.")) return;
+    (run==='1' ? fetch(url + '/interrupt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt_id:id})}) : fetch(url + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:[id]})}))
+      .then(() => { const p = pcOf(url); p.line = (p.line || []).filter(x => x.id!==id); drawQueue(); toast(run==='1' ? 'Stopped' : 'Taken out of the line'); pollPc(p).then(drawQueue); }).catch(err => toast("Couldn't: " + err.message, true)); return; }
+  const qc = e.target.closest('[data-qclear]'); if(qc){ const url = qc.dataset.qclear, p = pcOf(url), w = (p.line || []).filter(x => !x.run).length;
+    if(!confirm('Clear the ' + w + ' waiting job' + (w > 1 ? 's' : '') + ' in ' + pcName(url) + "'s line? Whatever it is making right now keeps going.")) return;
+    fetch(url + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({clear:true})}).then(() => { p.line = (p.line || []).filter(x => x.run); drawQueue(); toast(pcName(url) + "'s line is clear"); pollPc(p).then(drawQueue); }).catch(err => toast("Couldn't: " + err.message, true)); return; }
+  const ac = e.target.closest('[data-agent]'); if(ac){ agentDo(pcOf(ac.dataset.url), ac.dataset.agent); return; }
   const rs = e.target.closest('[data-restart]'); if(rs){ restartPc(pcOf(rs.dataset.restart)); return; }
   const t = e.target.closest('[data-pc]'); if(!t) return; const u = t.dataset.pc;
   S.pcOff = S.pcOff.includes(u) ? S.pcOff.filter(x => x!==u) : S.pcOff.concat(u); save(); drawQueue(); buzz();
@@ -7199,7 +7231,7 @@ async function cmSend(cm, pg, p, k, rect){
 }
 const CM_RUN = new Set();
 async function cmWait(p){
-  const m = p.making; if(!m || CM_RUN.has(m.id)) return; CM_RUN.add(m.id);
+  const m = p.making; if(!m || CM_RUN.has(m.id)) return; CM_RUN.add(m.id); if(QKIND[m.kind]) CM_KIND[m.id] = QKIND[m.kind];
   let got = null;
   try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, m.video!==false, m.all); got = m.all ? {urls:f.map(x => viewUrl(x, m.pc)), url:viewUrl(f[0], m.pc)} : {url:viewUrl(f, m.pc), pc:m.pc, w:m.w, h:m.h, t:Date.now()};
     if(m.cut) try{ const h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id], c = (((h || {}).outputs || {})[m.cut] || {}).images; if(c && c[0]) got.cut = viewUrl(c[0], m.pc); }catch(e){} }

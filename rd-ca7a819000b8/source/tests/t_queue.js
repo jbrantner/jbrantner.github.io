@@ -53,8 +53,8 @@ const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message));
       if(u.pathname==='/object_info') return r.fulfill({ json:pc.oi() });
       if(u.pathname.startsWith('/object_info/')){ const n = u.pathname.slice(13); return r.fulfill({ json:{[n]:pc.oi()[n]} }); }
       if(u.pathname==='/prompt'){ const id = pc.host[0] + (++pc.n); pc.prompts.push({id, graph:body.prompt}); pc.queue.push({id}); pc.status(); setTimeout(pc.next, 10); return r.fulfill({ json:{prompt_id:id, number:pc.n, node_errors:{}} }); }
-      if(u.pathname==='/queue' && post){ (body.delete || []).forEach(id => { if(pc.queue.some(q => q.id===id)){ pc.deleted.push(id); pc.queue = pc.queue.filter(q => q.id!==id); } }); pc.status(); return r.fulfill({ json:{} }); }
-      if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:pc.running ? [[0, pc.running.id]] : [], queue_pending:pc.queue.map((q,i) => [i+1, q.id])} });
+      if(u.pathname==='/queue' && post){ pc.foreign = (pc.foreign || []).filter(f => !(body.delete || []).includes(f[1]) || !pc.deleted.push(f[1])); (body.delete || []).forEach(id => { if(pc.queue.some(q => q.id===id)){ pc.deleted.push(id); pc.queue = pc.queue.filter(q => q.id!==id); } }); pc.status(); return r.fulfill({ json:{} }); }
+      if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:pc.running ? [[0, pc.running.id]] : [], queue_pending:pc.queue.map((q,i) => [i+1, q.id]).concat(pc.foreign || [])} });
       if(u.pathname==='/interrupt'){ pc.interrupted.push(body.prompt_id); if(pc.running && pc.running.id===body.prompt_id){ pc.send({type:'execution_interrupted', data:{prompt_id:pc.running.id}}); pc.running = null; pc.status(); pc.next(); } return r.fulfill({ json:{} }); }
       if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9); return r.fulfill({ json:pc.history[id] ? {[id]:pc.history[id]} : {} }); }
       if(u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG });
@@ -140,6 +140,19 @@ await page.click('#qList .qjob.running'); await page.waitForSelector('#qList .jb
   await until(() => S.queue[0] && S.queue[0].state==='running'); await page.evaluate(() => cancelJob(S.queue[0]));
   ok(await waitFor(() => R.interrupted.length===1), 'cancelling the one painting now stops it');
 
+  // 👀 every job in a computer's line shows, even ones this queue didn't send: what it is, who sent it, ✕ takes it out
+  await until(() => !S.queue.length, null, 20000);
+  M.foreign = [[90, 'f1', {'1':{class_type:'MiniMaxH3ImageToVideo', inputs:{prompt:'One continuous camera move: a full 360-degree orbit'}}, '2':{class_type:'UNETLoader', inputs:{unet_name:'minimax_h3_fl2v.safetensors'}}, '3':{class_type:'SaveImage', inputs:{filename_prefix:'RenderDeck/comics/poses/sp1/circle_eye'}}}, {client_id:'someone-else'}],
+    [91, 'f2', {'1':{class_type:'CLIPTextEncode', inputs:{text:'a secret prompt'}}, '2':{class_type:'SaveImage', inputs:{filename_prefix:'Hidden/render'}}}, {client_id:'someone-else'}]];
+  await page.evaluate(() => closeSheets()); await page.click('#queueBtn'); await page.waitForSelector('#queueSheet.open');
+  await until(() => document.querySelectorAll('#pcList .qline').length===2, null, 8000);
+  const ql = await page.$$eval('#pcList .qline', x => x.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  ok(/MiniMax turn for a 3D/.test(ql[0]) && /from another phone or app/.test(ql[0]) && /360-degree orbit/.test(ql[0]) && /Hidden job/.test(ql[1]) && !/secret/.test(ql.join()) && /2 jobs/.test(await page.textContent('#pcList')),
+    '👀 the queue lists what each computer is busy with, even jobs from elsewhere (a Hidden one stays unnamed outside Hidden): ' + JSON.stringify(ql));
+  page.once('dialog', d => d.accept()); await page.click('#pcList [data-qx$="|f1|0"]');
+  ok(await waitFor(() => M.deleted.includes('f1')), '✕ takes a job out of that computer\'s line');
+  await until(() => document.querySelectorAll('#pcList .qline').length===1, null, 8000); M.foreign = [];
+  await page.screenshot({ path: path.join(__dirname, 'shot-queue-lines.png') }); await page.evaluate(() => closeSheets());
   await page.screenshot({ path: path.join(__dirname, 'shot-queue-bar.png') });
   await page.click('#queueBtn'); await page.waitForSelector('#queueSheet.open'); await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(__dirname, 'shot-queue.png') });
