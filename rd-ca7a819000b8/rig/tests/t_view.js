@@ -57,10 +57,18 @@ const DEPS = process.env.RIG_DEPS || '';
   // the line stands straight, so that picture doesn't tilt, and it is sized from the rig's line, not from how big it was drawn
   { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); delete L[0].views16; L[0].rig = [0.2, 1.6, 0]; for(let n = 0; n < 24; n++) L[0].views[n] = 'https://app.test/pic/x100_y280_h200.svg'; L[0].views[10] = 'https://app.test/pic/x100_y280_h170.svg'; localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
     await page.waitForTimeout(600); const pin = async az => page.evaluate(az => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update();
-      setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({i:VIEW.view().i, rot:+s.layers[0].pivot.rotation.z.toFixed(3), ht:+(f.ht * s.g.hM * s.her.scale.y).toFixed(3)}); }, 150); }), az);
+      setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({i:VIEW.view().i, el:VIEW.view().el, rot:+s.layers[0].pivot.rotation.z.toFixed(3), ht:+(f.ht * s.g.hM * s.her.scale.y).toFixed(3)}); }, 150); }), az);
     const fr = await pin(0.01), sd = await pin(Math.PI / 2);
-    ok(Math.abs(fr.rot + Math.atan2(0.2, 1.6)) < 0.02 && Math.abs(sd.rot) < 0.02 && Math.abs(sd.ht / fr.ht - 1.6 / Math.hypot(0.2, 1.6)) < 0.02,
+    const E = fr.el * Math.PI / 180, side = 1.6 * Math.cos(E) - 0.2 * Math.sin(E), front = Math.hypot(0.2, 1.6 * Math.cos(E)); // the line as the camera sees it now
+    ok(Math.abs(fr.rot + Math.atan2(0.2, 1.6 * Math.cos(E))) < 0.02 && Math.abs(sd.rot) < 0.02 && Math.abs(sd.ht / fr.ht - side / front) < 0.02,
       'pinned to the rig: each picture leans and is sized as the skeleton is from that angle, whatever size it was drawn: ' + JSON.stringify({fr, sd})); }
+  // no jump at the switch from the eye-level pictures to the high ones (Jordan 2026-10-23: "her head jumps up on screen"): the high
+  // pictures are drawn shorter (seen from above), but either side of the switch she is the height the rig is from the camera
+  { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); L[0].rig = [0, 1.6, 0]; for(let n = 0; n < 24; n++) L[0].views[n] = 'https://app.test/pic/x100_y280_h' + (n >= 16 ? 150 : 200) + '.svg'; localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
+    await page.waitForTimeout(600); const hAt = async deg => page.evaluate(deg => new Promise(res => { const c = VIEW.camera, d = 4.5, e = deg * Math.PI / 180; c.position.set(0.001, 1 + Math.sin(e) * d, Math.cos(e) * d); VIEW.controls.update();
+      setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({ring:VIEW.view().ring, ht:+(f.ht * s.g.hM * s.her.scale.y).toFixed(3)}); }, 150); }), deg);
+    const lo = await hAt(19), hi = await hAt(21.5);
+    ok(lo.ring===1 && hi.ring===2 && Math.abs(hi.ht / lo.ht - 1) < 0.03, 'no jump in her height where the eye-level pictures switch to the high ones: ' + JSON.stringify({lo, hi})); }
   // a flat camera: zoomed right in and from above, the picture keeps its drawn shape (it deformed with the perspective camera)
   { const z = await page.evaluate(() => new Promise(res => { const c = VIEW.camera; c.position.set(0, 0.96 + 4.5 * Math.sin(0.5), 4.5 * Math.cos(0.5)); c.zoom = 4; c.updateProjectionMatrix(); VIEW.controls.update();
       setTimeout(() => { const s = VIEW.stand(), V = s.V, g = s.g, P = (x, y) => s.her.localToWorld(new V(x, y, 0)).project(c), a = P(-g.wM / 2, -g.hM / 2), b = P(g.wM / 2, -g.hM / 2), d = P(-g.wM / 2, g.hM / 2);
