@@ -13,8 +13,7 @@ function renderPresets() {
 // Live parts of the Fun number: what the workers have earned and not spent yet, and today's share.
 function tickHero(now = Date.now()) {
   if (!hero) return;
-  const { base, free, Fc } = hero, F = gatherF(month, now), sp = speedNow(now), perMs = free / (monthEndMs(month) - gatherStart(month)) * sp;
-  const ready = base, loot = Math.max(0, sum(state.incomes, i => farmReady(i, now)));
+  const ready = hero.base, sp = speedNow(now);
   const whole = sum(state.incomes, i => farmWhole(i, now));
   $('lootBtn').innerHTML = `<span class="chest"></span><span><strong>${money(whole)}</strong> waiting on your farms</span><span class="go">Collect</span>`;
   $('lootBtn').disabled = whole < 1; $('lootBtn').classList.toggle('full', whole >= 1); $('lootBtn').classList.toggle('hidden', AUTO_COLLECT);
@@ -40,7 +39,7 @@ function tickHero(now = Date.now()) {
   if ($('collectEta').innerHTML !== pn.text) $('collectEta').innerHTML = pn.text;
 }
 function renderBudget() {
-  const { spentBy, income, bills, spends, billTotal, spendTotal, isPaid, billsDue, free, potSpent, left } = monthNumbers(month);
+  const { spentBy, spends, billTotal, spendTotal, billsDue, free, potSpent, left } = monthNumbers(month);
   renderHabits(); renderParty(); renderPacks();
   $('monthLeft').textContent = money(left);
   $('monthLeft').className = 'num ' + (left < 0 ? 'bad' : '');
