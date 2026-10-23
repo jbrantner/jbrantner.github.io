@@ -454,7 +454,16 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           const fg = V(ALL[ALL.length - 1].prompt), bg = V(ALL[nf - 1].prompt), it = await page.evaluate(() => ({cam:!!S.gallery[0].d3cam, bg:!!S.gallery[0].d3bg, p:S.gallery[0].d3p===S.gallery[1].d3p}));
           ok(/no humans/.test(bg.find(n => n.class_type==='CLIPTextEncode').inputs.text) && /sunny park/.test(bg.find(n => n.class_type==='CLIPTextEncode').inputs.text) && fg.some(n => n.class_type==='VAEEncode') && fg.find(n => n.class_type==='KSampler').inputs.denoise===0.4 && fg.some(n => n.class_type==='AnimeLineArtPreprocessor') && it.cam && it.bg && it.p,
             '🏙 backdrops (no humans, the typed place) and ✨ Paint it flat (a 0.4 pass over the camera\'s view) landing in the strip with its 3D, camera and backdrop kept: ' + JSON.stringify(it));
-          await page.click('#m3Done'); }
+          await page.click('#m3Done');
+          // ✕ Stop and ↻ Start over while it is still turning
+          await page.evaluate(() => { S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump2.png', prompt:'a girl kicking', t:Date.now(), snap:{prompt:'a girl kicking', blocks:[]}}); m3Open(S.gallery[0]); });
+          await page.waitForSelector('#m3Box [data-m3="stop"]', {timeout:20000}); const p0 = await page.evaluate(() => S.gallery[0].d3p); await page.click('#m3Box [data-m3="stop"]');
+          await page.waitForSelector('#m3Box [data-m3="retry"]', {timeout:20000}); await new Promise(r => setTimeout(r, 1500));
+          const st = await page.evaluate(id => { const P = S.cmPoses.find(x => x.id===id); return {stopped:P.stopped, run:P.views.concat(P.orb).filter(v => v.making || v.busy).length, orbs:P.orb.filter(o => o.urls.length).length}; }, p0);
+          await page.click('#m3Box [data-m3="over"]'); await page.waitForSelector('#m3Box');
+          const ov = await page.evaluate(id => ({gone:!S.cmPoses.some(x => x.id===id), now:S.gallery[0].d3p, fresh:!!S.cmPoses.find(x => x.id===S.gallery[0].d3p)}), p0);
+          ok(st.stopped && !st.run && st.orbs < 5 && ov.gone && ov.fresh && ov.now!==p0, '🧊 ✕ Stop halts the 3D and ↻ Start over begins again from the picture: ' + JSON.stringify({st, ov}));
+          await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); P.stopped = true; }); await page.click('#m3Done'); }
         await page.evaluate(() => { S.cmPoseBy = 'ill'; }); }
       await page.click('#comic .cmed [data-cmrig="0"]'); await (await page.waitForSelector('#cmRigBox iframe')).contentFrame();
       await page.click('#cmRigDone'); }

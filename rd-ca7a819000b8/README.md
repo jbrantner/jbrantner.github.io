@@ -84,3 +84,8 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-23.140
 - 🧊 Make 3D shows what is running: each MiniMax move or angle being painted gets ComfyUI's live preview picture (when the PC sends one) and its own step bar with time left ("step 3 of 8"), or its place in that PC's line.
 - The MiniMax moves now spread over every PC that has FL2V instead of all going to the first one.
+
+## 2026-10-23.141
+- 🧊 Make 3D: ✕ Stop (takes its jobs out of the PCs' lines and stops the running one), ▶ Carry on, and ↻ Start over from the picture.
+- A pose job waiting in a busy PC's line moves to a PC that can make it and is idle.
+- The 3D viewer shows the picture itself until the angles are painted, instead of a white card.
