@@ -95,3 +95,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 3D viewer: the camera can go under the floor to look up at her (low ring); a smaller 4 m grid; two fingers pinch to zoom and drag to pan, and the camera still turns round her after a pan (double-tap recentres).
 - 🧊 Illustrious pass on each angle: Off (MiniMax frames, just cut out; the new default) / Light 0.3 / Full 0.45. Paint over's Light/Medium/Strong buttons work again.
 - Spreading pose and MiniMax jobs uses each PC's own ComfyUI queue length, so jobs cleared in ComfyUI no longer count against a PC; a waiting MiniMax move sent by an older version can move to an idle PC too.
+
+## 2026-10-23.144–145
+- FIX: since v.140 every live preview picture from a 📖/🧍/🧊 job started a new character-preview render (two functions shared a name), which filled both PCs' lines with hundreds of jobs. Renamed; live pictures only update the 🧊 thumbnails now.
+- 🧊 shows when a PC that could help has a line of other jobs, with ✕ Clear its line.

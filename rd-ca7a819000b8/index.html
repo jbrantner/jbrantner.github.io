@@ -637,7 +637,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.143'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.145'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -918,7 +918,7 @@ function onPreview(p, buf){
   if(type===4){ const n = v.getUint32(4); try{ const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,n))); pid = meta.prompt_id || null; mime = meta.image_type || 'image/jpeg'; }catch(e){} off = 8 + n; }
   else if(type!==1) return;
   // not a render-queue job: a 📖/🧍/🧊 job's live picture (Jordan 2026-10-23: show the steps like image renders)
-  if(pid ? !S.queue.some(q => q.id===pid) : !S.queue.some(q => q.srv===p.url)){ cmPreview(p, pid, new Blob([new Uint8Array(buf, off)], {type:mime})); return; }
+  if(pid ? !S.queue.some(q => q.id===pid) : !S.queue.some(q => q.srv===p.url)){ cmLivePic(p, pid, new Blob([new Uint8Array(buf, off)], {type:mime})); return; }
   // a Hidden render's live picture is never kept or shown outside Hidden
   const mine = S.queue.filter(q => q.srv===p.url), job = mine.find(q => q.state==='running') || mine[0];
   if(job ? masked(job) : !S.hidden && S.queue.some(masked)){ dropPreview(p); return; }
@@ -933,7 +933,7 @@ function onPreview(p, buf){
 }
 
 const CMPV = {}; // job id -> its latest live picture
-function cmPreview(p, pid, blob){ const h = cmAll().find(x => x.making && x.making.pc===p.url && (pid ? x.making.id===pid : LIVE[x.making.id] && LIVE[x.making.id].started)); if(!h) return;
+function cmLivePic(p, pid, blob){ const h = cmAll().find(x => x.making && x.making.pc===p.url && (pid ? x.making.id===pid : LIVE[x.making.id] && LIVE[x.making.id].started)); if(!h) return;
   const id = h.making.id, url = URL.createObjectURL(blob); if(CMPV[id]) URL.revokeObjectURL(CMPV[id]); CMPV[id] = url;
   document.querySelectorAll('img[data-cmpv]').forEach(i => { if(i.dataset.cmpv===id){ i.src = url; i.hidden = false; } }); }
 function dropPreview(p){
@@ -6622,15 +6622,18 @@ function m3Open(g){ const src = g.d3from ? S.gallery.find(x => x.url===g.d3from)
   m3Draw(); clearInterval(M3.t); M3.t = setInterval(m3Tick, 1000); }
 const m3V = () => { try{ return $('#m3Box iframe').contentWindow.VIEW; }catch(e){ return null; } };
 function m3Close(){ clearInterval(M3.t); const b = $('#m3Box'); if(b) b.remove(); document.body.style.overflow = ''; M3.g = null; drawStrip(); }
-function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return; const n = P.views.filter(v => v.url).length + (P.orb || []).filter(o => o.urls.length).length * 100 + '|' + m3Jobs(P).map(v => v.making.id).join(',');
+function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return; const n = P.views.filter(v => v.url).length + (P.orb || []).filter(o => o.urls.length).length * 100 + '|' + m3Jobs(P).map(v => v.making.id).join(',') + '|' + cmFlKits().map(k => pcOf(k.url).load > 0 ? 1 : 0).join('');
   if(!S.test && ++M3.q % 5===1) m3Jobs(P).forEach(v => liveQueue(v.making.id, v.making.pc).then(m3Bars)); m3Bars();
   if(n!==M3.n){ M3.n = n; const V = m3V(); if(V) V.reload(); m3Draw(); } else { const h = $('#m3Head'); if(h) h.textContent = m3Status(P); } }
 function m3Status(P){ const done = P.views.filter(v => v.url).length, mv = (P.orb || []).filter(o => o.urls.length).length, run = P.views.concat(P.orb || []).filter(v => v.making || v.busy).length, err = P.views.concat(P.orb || []).find(v => v.err);
   return done===P.views.length ? 'Drag to walk round her' : err && !run ? "Something didn't paint: " + err.err : mv < (P.orb || []).length ? 'MiniMax turning round her: ' + mv + ' of ' + P.orb.length + ' moves' : 'Painting the angles: ' + done + ' of ' + P.views.length; }
 // what is painting right now: its live picture (ComfyUI's preview, step by step) and its own step bar with time left
 const m3Jobs = P => (P.orb || []).concat(P.views, P.cands || []).filter(v => v.making);
+// a computer that could help but has a line of other jobs (Jordan 2026-10-23: Main sat on 58 old jobs, so Render did it all)
+function m3Idle(P){ const js = m3Jobs(P); if(!js.length) return ''; const mine = new Set(js.map(v => v.making.pc));
+  return cmFlKits().filter(k => !mine.has(k.url) && pcOf(k.url).load > 0).map(k => `<p class="note">${esc(pcName(k.url))} isn't helping: it has ${pcOf(k.url).load} other job${pcOf(k.url).load > 1 ? 's' : ''} waiting in its line.</p><div class="btnrow"><button class="btn" data-m3clear="${esc(k.url)}">✕ Clear ${esc(pcName(k.url))}'s line</button></div>`).join(''); }
 function m3Live(P){ const js = m3Jobs(P); if(!js.length) return '';
-  return '<div class="m3live">' + js.map(v => { const id = v.making.id, e = cmEta(v) || {f:0, text:''};
+  return m3Idle(P) + '<div class="m3live">' + js.map(v => { const id = v.making.id, e = cmEta(v) || {f:0, text:''};
     return `<div class="m3job"><img data-cmpv="${esc(id)}" ${CMPV[id] ? 'src="' + esc(CMPV[id]) + '"' : 'hidden'} alt=""><div class="grow"><b>${v.step ? (v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===2 ? ' high' : v.ring===0 ? ' low' : '')) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
       <div class="pbar obbar"><i data-m3bar="${esc(id)}" style="width:${(100 * e.f).toFixed(1)}%"></i></div><p class="note" data-m3txt="${esc(id)}">${esc(e.text)}</p></div></div>`; }).join('') + '</div>'; }
 function m3Bars(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return;
@@ -6682,7 +6685,10 @@ async function m3Flat(){ const g = M3.g, V = m3V(), k = m3Kit(), P = (S.cmPoses 
     S.gallery.unshift({url, seed:null, prompt:g.prompt || '', t:Date.now(), snap:g.snap, d3p:P && P.id, d3from:g.url, d3cam:cam, d3bg:g.d3bgSel || ''}); save(); drawStrip(); show(0); toast('Painted flat: it is in your strip'); }
   catch(err){ toast("Couldn't paint it: " + err.message, true); }
   M3.busy = ''; m3Draw(); }
-document.addEventListener('click', e => { const b = e.target.closest('#m3Box [data-m3],#m3Box [data-m3bg],#m3Box [data-m3dn],#m3Box [data-m3paint]'); if(!b) return; const g = M3.g;
+document.addEventListener('click', e => { const b = e.target.closest('#m3Box [data-m3],#m3Box [data-m3bg],#m3Box [data-m3dn],#m3Box [data-m3paint],#m3Box [data-m3clear]'); if(!b) return; const g = M3.g;
+  if(b.dataset.m3clear){ const pc = b.dataset.m3clear, n = pcOf(pc).load; if(!confirm('Clear the ' + n + ' waiting job' + (n > 1 ? 's' : '') + ' in ' + pcName(pc) + "'s line? Whatever it is making right now keeps going.")) return;
+    fetch(pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({clear:true})}).then(() => { pcOf(pc).load = 0; toast(pcName(pc) + "'s line is clear"); const P = (S.cmPoses || []).find(x => x.id===M3.P);
+      if(P) m3Jobs(P).forEach(v => liveQueue(v.making.id, v.making.pc)); m3Draw(); }).catch(err => toast("Couldn't clear it: " + err.message, true)); return; }
   if(b.dataset.m3paint!=null){ S.m3Paint = +b.dataset.m3paint; save(); m3Draw(); return; }
   if(b.dataset.m3dn){ S.m3Dn = +b.dataset.m3dn; save(); m3Draw(); return; }
   if(b.dataset.m3bg){ g.d3bgSel = b.dataset.m3bg; const V = m3V(); if(V) V.setBackdrop(g.d3bgSel); save(); m3Draw(); return; }
