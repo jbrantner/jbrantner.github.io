@@ -51,3 +51,5 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 **2026-10-23 (Render Deck v.138)**: each spriteShots view also has face (head forward · direction to the camera), spread (1 − silhouette area / convex hull area) and mask (64-wide 0/1 silhouette string), used by Render Deck to pick the best start picture.
 
 **2026-10-23 (Render Deck v.139)**: view.html is 🧊 Make 3D's viewer: one pose from rd-pose-sprites[-h] (?pose=id&sp=-h) as a camera-facing picture in a grey room with a grid floor and a soft shadow, OrbitControls, an optional flat backdrop that always faces the camera; window.VIEW = {shot(w, h), cam(), setCam(), setBackdrop(url), reload()}.
+
+- 2026-10-23: `RIG.poseFromPicture(url, pc)` copies a picture's pose (DWPose on that PC first, else MediaPipe on the phone), for Render Deck's 🧊 Make 3D.

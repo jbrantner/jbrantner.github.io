@@ -139,6 +139,13 @@ const view = since => ({farm:1, chain:1, now:Date.now()/1000, pcs:[RU, MU].map(u
   await page.evaluate(() => { const b = document.createElement('div'); b.id = 'm3Box'; document.body.appendChild(b); M3.P = 'spT'; M3.g = {}; });
   const nc = F.cancels.length; await page.evaluate(() => { const P = S.cmPoses[0]; P.stopped = true; const fks = P.orb.concat(P.views).map(h => h.farm).filter(Boolean); farmCall('/cancel', {keys:fks}); });
   ok(await waitFor(() => F.cancels.length > nc), 'Stop cancels its farm jobs');
+  // 🦴 a rig 3D on the farm: 24 independent Illustrious angles from the rig's guides
+  const n2 = F.adds.length;
+  await page.evaluate(() => { const P = {id:'spR', name:'🧊 rig', who:'', from:true, snap:null, geo:{wM:1, hM:1.5, aim:[0, 0.75, 0]}, seed:1, at:Date.now(), by:'ill', src:'x', views:[0, 1, 2].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:'r' + ring + i, ring, i, url:''})))};
+    P.views.forEach(v => CM_SPG[v.id] = {pose:'pose_' + v.id, depth:'depth_' + v.id}); S.cmPoses = [P]; cmPoseRun(P); });
+  ok(await waitFor(() => F.adds.length > n2), 'a rig 3D is handed to the farm too');
+  const RJ = F.adds[F.adds.length - 1].jobs;
+  ok(RJ.length===24 && RJ.every(j => !j.after.length && Object.values(j.graph).some(n => n.class_type==='LoadImage' && /^up_pose_/.test(n.inputs.image))), 'its 24 angles go at once, each with its own rig guides: ' + RJ.length);
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

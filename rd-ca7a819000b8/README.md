@@ -107,3 +107,6 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-23.147 (helper: farm chains)
 - 🧊 Make 3D (and 📱 poses from a picture) run on the farm when Render's helper has chains: the whole 3D is handed over at once and runs with the app closed. MiniMax moves first, each high/low circle waits for its crane and each angle for its circle, taking that job's frame (fetched from whichever PC made it); one job per idle PC. ✕ Stop cancels its farm jobs. Without the new helper the app hands them out itself while open (v.146).
 - Helper: farm jobs take `after` (keys) and `use` ({LoadImage node: [key, n]}); `/renderdeck/farm` says `chain: 1`.
+
+## 2026-10-23.148
+- 🧊 Make 3D "Turn her with": 🦴 Rig + Illustrious (new default, after MiniMax's turn wasn't great) or 🎬 MiniMax. The rig copies her pose from the picture (DWPose on a PC that has it, else the phone's reader), then each of the 24 angles is an Illustrious render from the rig's pose and depth with the picture's own model, LoRAs and prompt; all 24 go to the farm at once.

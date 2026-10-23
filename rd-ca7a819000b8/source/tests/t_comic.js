@@ -60,7 +60,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   // the pose rig page for 🦴 panels, three.js from RIG_DEPS (unpacked npm packs) when set
   const RIG_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'rig', 'index.html'), 'utf8'), DEPS = process.env.RIG_DEPS || '';
   const VIEW_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'rig', 'view.html'), 'utf8');
-  await page.route('https://app.test/rig/**', r => r.fulfill({ contentType:'text/html', body:/\/rig\/view\.html/.test(r.request().url()) ? VIEW_HTML : RIG_HTML }));
+  await page.route('https://app.test/rig/**', r => r.fulfill({ contentType:'text/html', body:/\/rig\/view\.html/.test(r.request().url()) ? VIEW_HTML : RIG_HTML.replace('async function poseFromPicture(url, pc){', 'async function poseFromPicture(url, pc){ if(parent.TEST_POSE){ parent.TEST_POSE.push(url); return {partial:false}; }') }));
   if(DEPS) await page.route('https://cdn.jsdelivr.net/npm/three@0.160.0/**', r => { const f = path.join(DEPS, 'three-0.160.0', 'package', new URL(r.request().url()).pathname.replace(/^\/npm\/three@0\.160\.0\//, ''));
     r.fulfill(fs.existsSync(f) ? { contentType:'text/javascript', body:fs.readFileSync(f) } : { status:404, body:'' }); });
   const PCS = {}, ALL = [];
@@ -442,7 +442,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         // 🧊 Make 3D on a render: MiniMax turns round it, every angle painted with the render's own look, shown in the grey room;
         // backdrops and ✨ Paint it flat, which lands in the strip and opens the 3D again
         if(process.env.RIG_DEPS){ const n0 = ALL.length; await page.evaluate(() => { S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump.png', prompt:'a girl jumping, dynamic pose', t:Date.now(),
-            snap:{prompt:'a girl jumping, dynamic pose', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); S.m3Paint = 0.45; m3Open(S.gallery[0]); });
+            snap:{prompt:'a girl jumping, dynamic pose', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); S.m3Paint = 0.45; S.m3By = 'mm'; m3Open(S.gallery[0]); });
           await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});
           const gs = ALL.slice(n0).map(x => x.prompt), V = g => Object.values(g), ill = gs.filter(g => V(g).some(n => n.class_type==='CheckpointLoaderSimple'));
           const lk = ill.map(g => V(g).find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name + '|' + V(g).filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name + '@' + n.inputs.strength_model).join() + '|' + /a girl jumping/.test(V(g).filter(n => n.class_type==='CLIPTextEncode')[0].inputs.text));
@@ -464,7 +464,17 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           await page.click('#m3Box [data-m3="over"]'); await page.waitForSelector('#m3Box');
           const ov = await page.evaluate(id => ({gone:!S.cmPoses.some(x => x.id===id), now:S.gallery[0].d3p, fresh:!!S.cmPoses.find(x => x.id===S.gallery[0].d3p)}), p0);
           ok(st.stopped && !st.run && st.orbs < 5 && ov.gone && ov.fresh && ov.now!==p0, '🧊 ✕ Stop halts the 3D and ↻ Start over begins again from the picture: ' + JSON.stringify({st, ov}));
-          await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); P.stopped = true; }); await page.click('#m3Done'); }
+          await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); P.stopped = true; }); await page.click('#m3Done');
+          // 🦴 the rig way: the rig copies her pose from the picture, then 24 Illustrious angles from its pose and depth, no MiniMax
+          const n1 = ALL.length; await page.evaluate(() => { window.TEST_POSE = []; S.m3By = 'rig'; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump3.png', prompt:'a girl jumping', t:Date.now(),
+            snap:{prompt:'a girl jumping', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); m3Open(S.gallery[0]); });
+          await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});
+          const rg = ALL.slice(n1).map(x => x.prompt), rill = rg.filter(g => V(g).some(n => n.class_type==='CheckpointLoaderSimple'));
+          const rinfo = await page.evaluate(() => ({asked:window.TEST_POSE, by:S.cmPoses.find(x => x.id===S.gallery[0].d3p).by}));
+          ok(rill.length===24 && rill.every(g => V(g).some(n => n.class_type==='SetUnionControlNetType' && n.inputs.type==='openpose') && V(g).some(n => n.class_type==='LoraLoader' && /AFKJ/.test(n.inputs.lora_name)))
+            && !rg.some(g => V(g).some(n => /^MiniMaxH3/.test(n.class_type))) && rinfo.asked[0]==='https://jordo-desktop.test/view?filename=jump3.png' && rinfo.by==='ill',
+            '🦴 Make 3D the rig way: the rig copies the pose from the picture, then 24 Illustrious angles from its pose and depth with the render\'s own look, no MiniMax: ' + JSON.stringify({n:rill.length, rinfo}));
+          await page.click('#m3Done'); }
         await page.evaluate(() => { S.cmPoseBy = 'ill'; delete window.WAIT_MS; }); }
       await page.click('#comic .cmed [data-cmrig="0"]'); await (await page.waitForSelector('#cmRigBox iframe')).contentFrame();
       await page.click('#cmRigDone'); }
