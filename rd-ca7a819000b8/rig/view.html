@@ -32,7 +32,7 @@ addEventListener('pointermove', e => { if(!pts.has(e.pointerId)) return; pts.set
 const up = e => { pts.delete(e.pointerId); pc = pts.size===2 ? mid() : null; }; addEventListener('pointerup', up); addEventListener('pointercancel', up);
 renderer.domElement.addEventListener('dblclick', () => { PX = PY = 0; offset(innerWidth, innerHeight); dirty = true; });
 function offset(w, h){ if(PX || PY) camera.setViewOffset(w, h, -PX * h, -PY * h, w, h); else camera.clearViewOffset(); }
-const grid = new THREE.GridHelper(4, 16, 0x6b707b, 0x50545c); // a small square under her, not the whole room (Jordan 2026-10-23) scene.add(grid);
+const grid = new THREE.GridHelper(4, 16, 0x6b707b, 0x50545c); scene.add(grid); // a small square under her, not the whole room (Jordan 2026-10-23)
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshBasicMaterial({color:0x44474e, transparent:true, opacity:0.6})); floor.rotation.x = -Math.PI / 2; floor.position.y = -0.002; scene.add(floor);
 // a soft round shadow under her feet
 const sh = document.createElement('canvas'); sh.width = sh.height = 64; { const x = sh.getContext('2d'), gr = x.createRadialGradient(32, 32, 2, 32, 32, 32); gr.addColorStop(0, 'rgba(0,0,0,.45)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64); }
@@ -50,18 +50,40 @@ function whiteCut(im){ const w = im.naturalWidth || im.width, h = im.naturalHeig
     if(px > 0) st.push(p - 1); if(px < w - 1) st.push(p + 1); if(p >= w) st.push(p - w); if(p < w * (h - 1)) st.push(p + w); }
   for(let p = 0; p < w * h; p++){ if(seen[p]) continue; const px = p % w; if((px > 0 && seen[p - 1]) || (px < w - 1 && seen[p + 1]) || (p >= w && seen[p - w]) || (p < w * (h - 1) && seen[p + w])){ const i = p * 4, l = Math.min(a[i], a[i + 1], a[i + 2]); if(l > 200) a[i + 3] = Math.round(255 * (255 - l) / 55); } } // soft edge
   x.putImageData(d, 0, 0); return c; }
-const texOf = url => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { const c = whiteCut(t.image); if(c){ t.image = c; t.needsUpdate = true; } dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; tex.set(url, t); } return tex.get(url); };
+// where her feet are in a cut-out picture (0..1 across and down) and how tall she is in it, so every angle stands on the same spot
+function feetOf(im){ const w = 96, h = Math.max(1, Math.round(w * (im.height || im.naturalHeight) / (im.width || im.naturalWidth))), c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d'); x.drawImage(im, 0, 0, w, h); let a; try{ a = x.getImageData(0, 0, w, h).data; }catch(e){ return null; }
+  let top = -1, bot = -1, clear = 0; for(let y = 0; y < h; y++){ let any = 0; for(let q = 0; q < w; q++){ const al = a[(y * w + q) * 4 + 3]; if(al > 128) any = 1; else if(al < 10) clear++; } if(any){ if(top < 0) top = y; bot = y; } }
+  if(top < 0 || clear < w * h * 0.2) return null; // not cut out: leave it as it is
+  const band = Math.max(1, Math.round(h * 0.04)); let sx = 0, n = 0; for(let y = Math.max(top, bot - band); y <= bot; y++) for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ sx += q; n++; }
+  return {fx:n ? (sx / n + 0.5) / w : 0.5, fy:(bot + 1) / h, ht:(bot + 1 - top) / h}; }
+// every angle loads as soon as the 3D opens, and a picture is only shown once it has loaded (Jordan 2026-10-23: turning round
+// her went blank for a moment while the next one loaded), so the last one stays up until then
+const texOf = url => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { const c = whiteCut(t.image); if(c){ t.image = c; t.needsUpdate = true; } t.userData.feet = feetOf(t.image); t.userData.ready = true; dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; tex.set(url, t); } return tex.get(url); };
 let sp = null, her = null, back = null, dirty = true;
-function load(){ sp = lib().find(x => x.id===QS.get('pose')) || null; if(her){ scene.remove(her); her = null; }
+function load(){ sp = lib().find(x => x.id===QS.get('pose')) || null; if(stand){ scene.remove(stand); stand = null; her = null; }
   if(!sp || !sp.geo){ document.getElementById('msg').textContent = 'This pose is not ready yet'; return; } document.getElementById('msg').textContent = '';
   const g = sp.geo; her = new THREE.Mesh(new THREE.PlaneGeometry(g.wM, g.hM), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide}));
-  her.position.set(0, g.aim[1], 0); scene.add(her); controls.target.set(0, g.aim[1], 0); dirty = true; }
+  stand = new THREE.Group(); stand.add(her); scene.add(stand); her.position.set(0, g.aim[1], 0); controls.target.set(0, g.aim[1], 0); dirty = true;
+  [sp.src, ...(sp.views || []), ...(sp.look || [])].filter(Boolean).forEach(texOf); } // load them all now
+let stand = null; const HERC = () => new THREE.Vector3(0, sp.geo.aim[1], 0);
 // which picture: the camera's direction round her and its height, as the rig's set does
-function view(){ const rel = camera.position.clone().sub(her.position), az = Math.atan2(rel.x, rel.z), i = ((Math.round(az / (Math.PI / 4)) % 8) + 8) % 8, el = Math.atan2(rel.y, Math.hypot(rel.x, rel.z)) / D2R;
+function view(){ const rel = camera.position.clone().sub(HERC()), az = Math.atan2(rel.x, rel.z), i = ((Math.round(az / (Math.PI / 4)) % 8) + 8) % 8, el = Math.atan2(rel.y, Math.hypot(rel.x, rel.z)) / D2R;
   const ring = el < -10 ? 0 : el > 20 ? 2 : 1, look = QS.get('look')==='1' && sp.look, pick = n => look && sp.look[n * 8 + i] || sp.views[n * 8 + i] || '';
   return {i, ring, url:pick(ring) || pick(1) || sp.views.find(Boolean) || sp.src || ''}; } // the picture itself stands in until the angles are painted
 function setBackdrop(url){ if(back){ scene.remove(back); back = null; } if(url){ const t = texOf(url); back = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({map:t, depthWrite:false})); back.renderOrder = -1; scene.add(back); } dirty = true; }
-function place(){ if(her){ const v = view(), t = texOf(v.url); if(her.material.map!==t){ her.material.map = t; her.material.needsUpdate = true; } her.visible = shadow.visible = !!t; { const im = t && t.image, g = sp.geo; her.scale.x = v.url===sp.src && im && im.width ? (im.width / im.height) / (g.wM / g.hM) : 1; } her.lookAt(camera.position); } // (the picture itself, standing in, keeps its own shape)
+// planted feet (Jordan 2026-10-23: "have the feet look planted in place"): the card turns to the camera about the point on the
+// floor where she stands, and each picture is moved and sized so her feet sit on that point and she is as tall as in the front
+// one, whatever spot and size MiniMax or Illustrious drew her at
+function place(){ if(her){ const v = view(), want = texOf(v.url), cur = her.material.map, t = want && want.userData.ready ? want : cur && cur.userData.ready ? cur : want;
+  if(her.material.map!==t){ her.material.map = t; her.material.needsUpdate = true; } her.visible = shadow.visible = !!t;
+  const im = t && t.image, g = sp.geo, sx = t && sp.src && t===tex.get(sp.src) && im && im.width ? (im.width / im.height) / (g.wM / g.hM) : 1; // (the picture itself, standing in, keeps its own shape)
+  const ft = t && t.userData.feet, ref = [sp.views[8], sp.views.find(Boolean), sp.src].map(u => u && tex.get(u)).find(r => r && r.userData.feet), rf = ref && ref.userData.feet;
+  const k = ft && rf ? Math.max(0.85, Math.min(1.18, rf.ht / ft.ht)) : 1;
+  her.scale.set(sx * k, k, 1);
+  if(ft){ her.position.set(-(ft.fx - 0.5) * g.wM * sx * k, (ft.fy - 0.5) * g.hM * k, 0); stand.position.set(0, 0, 0); } // her feet on the stand's spot, the floor at her centre
+  else { her.position.set(0, g.aim[1], 0); stand.position.set(0, 0, 0); }
+  if(ft){ her.rotation.set(0, 0, 0); stand.lookAt(camera.position); } else { stand.rotation.set(0, 0, 0); her.lookAt(camera.position); } }
   if(back){ const d = camera.position.distanceTo(controls.target), far = d + 6, dir = controls.target.clone().sub(camera.position).normalize(), h = 2 * far * Math.tan(camera.fov * D2R / 2) * 1.05, im = back.material.map && back.material.map.image;
     back.position.copy(camera.position).addScaledVector(dir, far); back.quaternion.copy(camera.quaternion); const ar = im && im.width ? im.width / im.height : 1.5; back.scale.set(Math.max(h * camera.aspect, h * ar), Math.max(h, h * camera.aspect / ar), 1); }
   grid.visible = floor.visible = !back || QS.get('floor')!=='0'; shadow.visible = grid.visible && !!(her && her.visible); }
@@ -76,5 +98,5 @@ function shot(w, h){ const ow = renderer.domElement.width, oh = renderer.domElem
   renderer.setPixelRatio(pr); size(); return url; }
 const cam = () => ({p:camera.position.toArray(), t:controls.target.toArray(), pan:[PX, PY]});
 function setCam(c){ if(!c) return; camera.position.fromArray(c.p); controls.target.fromArray(c.t); [PX, PY] = c.pan || [0, 0]; offset(innerWidth, innerHeight); camera.updateProjectionMatrix(); controls.update(); dirty = true; }
-window.VIEW = {shot, cam, setCam, setBackdrop, reload:load, view:() => her && view(), camera, controls};
+window.VIEW = {shot, cam, setCam, setBackdrop, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3}), camera, controls};
 </script></body></html>

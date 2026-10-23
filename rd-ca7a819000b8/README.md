@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.158
+- 3D viewer: every angle loads as soon as it opens, and a picture only swaps in once it has loaded, so turning round her never goes blank.
+- 3D viewer: planted feet. Each picture is moved and sized so her feet stand on the same spot on the floor and she is as tall as in the front view, wherever MiniMax or Illustrious drew her in the frame; the card turns to the camera about that spot, so looking from above or below doesn't slide her feet either. (Also: the floor grid was never drawn, now it is.) Test: rig/tests/t_view.js.
+
 ## 2026-10-23.157
 - 🧊 3D angles go to every computer that can paint them, not only ones with BiRefNet (Main sat free while Render did it all). A computer without BiRefNet paints on white, and the 3D viewer (and the rig's set) cuts the white away from the edges in, so white inside her (a blouse, socks) stays.
 
