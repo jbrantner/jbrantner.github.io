@@ -59,7 +59,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.routeWebSocket(/\.test\/ws/, ws => {});
   // the pose rig page for 🦴 panels, three.js from RIG_DEPS (unpacked npm packs) when set
   const RIG_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'rig', 'index.html'), 'utf8'), DEPS = process.env.RIG_DEPS || '';
-  await page.route('https://app.test/rig/**', r => r.fulfill({ contentType:'text/html', body:RIG_HTML }));
+  const VIEW_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'rig', 'view.html'), 'utf8');
+  await page.route('https://app.test/rig/**', r => r.fulfill({ contentType:'text/html', body:/\/rig\/view\.html/.test(r.request().url()) ? VIEW_HTML : RIG_HTML }));
   if(DEPS) await page.route('https://cdn.jsdelivr.net/npm/three@0.160.0/**', r => { const f = path.join(DEPS, 'three-0.160.0', 'package', new URL(r.request().url()).pathname.replace(/^\/npm\/three@0\.160\.0\//, ''));
     r.fulfill(fs.existsSync(f) ? { contentType:'text/javascript', body:fs.readFileSync(f) } : { status:404, body:'' }); });
   const PCS = {}, ALL = [];
@@ -437,6 +438,23 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           const P = await page.evaluate(() => ({pic:S.cmPoses[0].pic, off:S.cmPoses[0].off, src:!!S.cmPoses[0].src, cands:(S.cmPoses[0].cands || []).length}));
           ok(mmn===5 && ill.length===24 && ill.every(g => V(g).some(n => n.class_type==='VAEEncode') && !V(g).some(n => n.inputs.type==='openpose')) && P.pic && P.off===2 && P.src && !P.cands && !gs.flatMap(check).length,
             '📱 a pose from the picture in the preview: 5 MiniMax moves from it, all 24 angles painted over their frames, no rig: ' + JSON.stringify({mmn, ill:ill.length, P})); }
+        // 🧊 Make 3D on a render: MiniMax turns round it, every angle painted with the render's own look, shown in the grey room;
+        // backdrops and ✨ Paint it flat, which lands in the strip and opens the 3D again
+        if(process.env.RIG_DEPS){ const n0 = ALL.length; await page.evaluate(() => { S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump.png', prompt:'a girl jumping, dynamic pose', t:Date.now(),
+            snap:{prompt:'a girl jumping, dynamic pose', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); m3Open(S.gallery[0]); });
+          await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});
+          const gs = ALL.slice(n0).map(x => x.prompt), V = g => Object.values(g), ill = gs.filter(g => V(g).some(n => n.class_type==='CheckpointLoaderSimple'));
+          const lk = ill.map(g => V(g).find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name + '|' + V(g).filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name + '@' + n.inputs.strength_model).join() + '|' + /a girl jumping/.test(V(g).filter(n => n.class_type==='CLIPTextEncode')[0].inputs.text));
+          const fv = await page.frameLocator('#m3Box iframe').locator('canvas').count(), vw = await (await page.$('#m3Box iframe')).contentFrame();
+          await vw.waitForFunction(() => window.VIEW && VIEW.view() && VIEW.view().url, null, {timeout:20000});
+          ok(ill.length===24 && new Set(lk).size===1 && lk[0].endsWith('|AFKJ Style Illustrious Claude.safetensors@0.8|true') && gs.filter(g => V(g).some(n => /^MiniMaxH3/.test(n.class_type))).length===5 && fv===1 && !gs.flatMap(check).length,
+            '🧊 Make 3D: MiniMax turns round the render, 24 angles painted with its own model, LoRAs and prompt, and she stands in the 3D viewer: ' + JSON.stringify({ill:ill.length, lk:[...new Set(lk)]}));
+          await page.fill('#m3BgText', 'a sunny park'); await page.click('#m3Box [data-m3="bgs"]'); await page.waitForFunction(() => (S.gallery[0].d3bgs || []).length===3 && S.gallery[0].d3bgSel, null, {timeout:20000});
+          const nf = ALL.length; await page.click('#m3Box [data-m3="flat"]'); await page.waitForFunction(() => S.gallery[0].d3from, null, {timeout:20000});
+          const fg = V(ALL[ALL.length - 1].prompt), bg = V(ALL[nf - 1].prompt), it = await page.evaluate(() => ({cam:!!S.gallery[0].d3cam, bg:!!S.gallery[0].d3bg, p:S.gallery[0].d3p===S.gallery[1].d3p}));
+          ok(/no humans/.test(bg.find(n => n.class_type==='CLIPTextEncode').inputs.text) && /sunny park/.test(bg.find(n => n.class_type==='CLIPTextEncode').inputs.text) && fg.some(n => n.class_type==='VAEEncode') && fg.find(n => n.class_type==='KSampler').inputs.denoise===0.4 && fg.some(n => n.class_type==='AnimeLineArtPreprocessor') && it.cam && it.bg && it.p,
+            '🏙 backdrops (no humans, the typed place) and ✨ Paint it flat (a 0.4 pass over the camera\'s view) landing in the strip with its 3D, camera and backdrop kept: ' + JSON.stringify(it));
+          await page.click('#m3Done'); }
         await page.evaluate(() => { S.cmPoseBy = 'ill'; }); }
       await page.click('#comic .cmed [data-cmrig="0"]'); await (await page.waitForSelector('#cmRigBox iframe')).contentFrame();
       await page.click('#cmRigDone'); }

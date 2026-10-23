@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pose viewer</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#3b3e45;touch-action:none}
+canvas{display:block;width:100%;height:100%}
+#msg{position:absolute;left:0;right:0;top:45%;text-align:center;font:600 14px system-ui,sans-serif;color:#d8dbe2}
+</style></head>
+<body><div id="msg"></div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+// 🧊 Make 3D's viewer (Jordan 2026-10-23): one posed character from Render Deck's 🧍 Poses, standing in a grey room with a grid
+// floor, the picture swapping with the camera's angle and height (24 views, Doom style), orbited with a finger; an optional
+// flat backdrop stands behind her, facing the camera. VIEW.shot() hands back what the camera sees, for ✨ Paint it flat.
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const QS = new URLSearchParams(location.search), SPKEY = 'rd-pose-sprites' + (QS.get('sp') || ''), D2R = Math.PI / 180;
+const lib = () => { try{ return JSON.parse(localStorage.getItem(SPKEY)) || []; }catch(e){ return []; } };
+const renderer = new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true}); renderer.setPixelRatio(Math.min(2, devicePixelRatio)); renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x3b3e45);
+const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 100); camera.position.set(0, 1.45, 4.5);
+const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 0.9, 0); controls.enableDamping = true; controls.minDistance = 1.5; controls.maxDistance = 12; controls.maxPolarAngle = 100 * D2R; controls.enablePan = false;
+const grid = new THREE.GridHelper(12, 48, 0x6b707b, 0x50545c); scene.add(grid);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshBasicMaterial({color:0x44474e})); floor.rotation.x = -Math.PI / 2; floor.position.y = -0.002; scene.add(floor);
+// a soft round shadow under her feet
+const sh = document.createElement('canvas'); sh.width = sh.height = 64; { const x = sh.getContext('2d'), gr = x.createRadialGradient(32, 32, 2, 32, 32, 32); gr.addColorStop(0, 'rgba(0,0,0,.45)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64); }
+const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.5), new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(sh), transparent:true, depthWrite:false})); shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.002; scene.add(shadow);
+const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous'); const tex = new Map();
+const texOf = url => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; tex.set(url, t); } return tex.get(url); };
+let sp = null, her = null, back = null, dirty = true;
+function load(){ sp = lib().find(x => x.id===QS.get('pose')) || null; if(her){ scene.remove(her); her = null; }
+  if(!sp || !sp.geo){ document.getElementById('msg').textContent = 'This pose is not ready yet'; return; } document.getElementById('msg').textContent = '';
+  const g = sp.geo; her = new THREE.Mesh(new THREE.PlaneGeometry(g.wM, g.hM), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide}));
+  her.position.set(0, g.aim[1], 0); scene.add(her); controls.target.set(0, g.aim[1], 0); dirty = true; }
+// which picture: the camera's direction round her and its height, as the rig's set does
+function view(){ const rel = camera.position.clone().sub(her.position), az = Math.atan2(rel.x, rel.z), i = ((Math.round(az / (Math.PI / 4)) % 8) + 8) % 8, el = Math.atan2(rel.y, Math.hypot(rel.x, rel.z)) / D2R;
+  const ring = el < -10 ? 0 : el > 20 ? 2 : 1, look = QS.get('look')==='1' && sp.look, pick = n => look && sp.look[n * 8 + i] || sp.views[n * 8 + i] || '';
+  return {i, ring, url:pick(ring) || pick(1) || sp.views.find(Boolean) || ''}; }
+function setBackdrop(url){ if(back){ scene.remove(back); back = null; } if(url){ const t = texOf(url); back = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({map:t, depthWrite:false})); back.renderOrder = -1; scene.add(back); } dirty = true; }
+function place(){ if(her){ const v = view(), t = texOf(v.url); if(her.material.map!==t){ her.material.map = t; her.material.needsUpdate = true; } her.lookAt(camera.position); }
+  if(back){ const d = camera.position.distanceTo(controls.target), far = d + 6, dir = controls.target.clone().sub(camera.position).normalize(), h = 2 * far * Math.tan(camera.fov * D2R / 2) * 1.05, im = back.material.map && back.material.map.image;
+    back.position.copy(camera.position).addScaledVector(dir, far); back.quaternion.copy(camera.quaternion); const ar = im && im.width ? im.width / im.height : 1.5; back.scale.set(Math.max(h * camera.aspect, h * ar), Math.max(h, h * camera.aspect / ar), 1); }
+  grid.visible = floor.visible = shadow.visible = !back || QS.get('floor')!=='0'; }
+function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); dirty = true; }
+addEventListener('resize', size); size(); controls.addEventListener('change', () => { dirty = true; });
+addEventListener('storage', e => { if(e.key===SPKEY){ load(); } });
+(function loop(){ requestAnimationFrame(loop); controls.update(); if(!dirty) return; dirty = false; place(); renderer.render(scene, camera); })();
+load();
+// what the camera sees, at w × h (the frame ✨ Paint it flat paints over), and where the camera is, to open it again
+function shot(w, h){ const ow = renderer.domElement.width, oh = renderer.domElement.height, oa = camera.aspect, pr = renderer.getPixelRatio();
+  renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); place(); renderer.render(scene, camera); const url = renderer.domElement.toDataURL('image/png');
+  renderer.setPixelRatio(pr); size(); return url; }
+const cam = () => ({p:camera.position.toArray(), t:controls.target.toArray()});
+function setCam(c){ if(!c) return; camera.position.fromArray(c.p); controls.target.fromArray(c.t); controls.update(); dirty = true; }
+window.VIEW = {shot, cam, setCam, setBackdrop, reload:load, view:() => her && view(), camera, controls};
+</script></body></html>
