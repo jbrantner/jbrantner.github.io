@@ -44,6 +44,23 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(wait.i===2 && shown.has && shown.ready, 'turning to an angle still loading keeps the last picture up (no blank): ' + JSON.stringify({wait, shown}));
   held.forEach(r => r()); await page.waitForTimeout(400); const after = await at(Math.PI / 2 + 0.001);
   ok(after.i===2 && after.feet && after.feet.every(v => Math.abs(v) < 0.01), 'and once it has loaded it swaps in, feet on the spot: ' + JSON.stringify(after));
+  // crossfade: near the switch the next angle fades in over the nearest one, and not at all facing an angle square on
+  { const fade = async az => page.evaluate(az => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update();
+      setTimeout(() => { const L = VIEW.stand().layers; res({i:VIEW.view().i, top:L[1].mesh.visible, op:+L[1].mesh.material.opacity.toFixed(2)}); }, 150); }), az);
+    const sq = await fade(0.01), near = await fade(0.38);
+    ok(!sq.top && near.top && near.op > 0.3 && near.op <= 0.5, 'turning, the next angle fades in over the nearest near the switch (none facing one square on): ' + JSON.stringify({sq, near})); }
+  // 16 angles round: the in-between frames show between the 8
+  { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); L[0].views16 = Array.from({length:48}, (_, n) => n % 2 ? 'https://app.test/pic/x100_y280_h20' + (n % 10) + '.svg?b' + n : L[0].views[Math.floor(n / 16) * 8 + (n % 16) / 2]); localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
+    await page.waitForTimeout(500); const v = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5, az = Math.PI / 8; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update(); setTimeout(() => res(VIEW.view()), 150); }));
+    ok(v.N===16 && v.k===1 && /\?b17$/.test(v.url), '16 angles round: at 22.5° the in-between frame shows: ' + JSON.stringify(v)); }
+  // pinned to the rig: her head-to-feet line leans right from the front, so the upright picture tilts to match; from the side
+  // the line stands straight, so that picture doesn't tilt, and it is sized from the rig's line, not from how big it was drawn
+  { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); delete L[0].views16; L[0].rig = [0.2, 1.6, 0]; for(let n = 0; n < 24; n++) L[0].views[n] = 'https://app.test/pic/x100_y280_h200.svg'; L[0].views[10] = 'https://app.test/pic/x100_y280_h170.svg'; localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
+    await page.waitForTimeout(600); const pin = async az => page.evaluate(az => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update();
+      setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({i:VIEW.view().i, rot:+s.layers[0].pivot.rotation.z.toFixed(3), ht:+(f.ht * s.g.hM * s.her.scale.y).toFixed(3)}); }, 150); }), az);
+    const fr = await pin(0.01), sd = await pin(Math.PI / 2);
+    ok(Math.abs(fr.rot + Math.atan2(0.2, 1.6)) < 0.02 && Math.abs(sd.rot) < 0.02 && Math.abs(sd.ht / fr.ht - 1.6 / Math.hypot(0.2, 1.6)) < 0.02,
+      'pinned to the rig: each picture leans and is sized as the skeleton is from that angle, whatever size it was drawn: ' + JSON.stringify({fr, sd})); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

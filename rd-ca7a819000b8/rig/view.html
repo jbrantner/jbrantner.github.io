@@ -56,34 +56,59 @@ function feetOf(im){ const w = 96, h = Math.max(1, Math.round(w * (im.height || 
   let top = -1, bot = -1, clear = 0; for(let y = 0; y < h; y++){ let any = 0; for(let q = 0; q < w; q++){ const al = a[(y * w + q) * 4 + 3]; if(al > 128) any = 1; else if(al < 10) clear++; } if(any){ if(top < 0) top = y; bot = y; } }
   if(top < 0 || clear < w * h * 0.2) return null; // not cut out: leave it as it is
   const band = Math.max(1, Math.round(h * 0.04)); let sx = 0, n = 0; for(let y = Math.max(top, bot - band); y <= bot; y++) for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ sx += q; n++; }
-  return {fx:n ? (sx / n + 0.5) / w : 0.5, fy:(bot + 1) / h, ht:(bot + 1 - top) / h}; }
+  let hx = 0, hn = 0; for(let y = top; y <= Math.min(bot, top + band * 2); y++) for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ hx += q; hn++; } // the top of her head
+  return {fx:n ? (sx / n + 0.5) / w : 0.5, fy:(bot + 1) / h, ht:(bot + 1 - top) / h, hx:hn ? (hx / hn + 0.5) / w : 0.5}; }
 // every angle loads as soon as the 3D opens, and a picture is only shown once it has loaded (Jordan 2026-10-23: turning round
 // her went blank for a moment while the next one loaded), so the last one stays up until then
 const texOf = url => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { const c = whiteCut(t.image); if(c){ t.image = c; t.needsUpdate = true; } t.userData.feet = feetOf(t.image); t.userData.ready = true; dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; tex.set(url, t); } return tex.get(url); };
-let sp = null, her = null, back = null, dirty = true;
-function load(){ sp = lib().find(x => x.id===QS.get('pose')) || null; if(stand){ scene.remove(stand); stand = null; her = null; }
+let sp = null, her = null, back = null, dirty = true, stand = null;
+// two cards: the angle nearest the camera, and the next one round faded in over it near the switch (Jordan 2026-10-23: the
+// head popped as the pictures swapped). Each card: stand (turns to the camera about her feet) › pivot (tilts) › the picture.
+const layers = [], mkLayer = top => { const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide, depthWrite:!top}));
+  const pivot = new THREE.Group(), st = new THREE.Group(); pivot.add(mesh); st.add(pivot); if(top){ mesh.position.z = 0; pivot.position.z = 0.004; mesh.renderOrder = 2; } return {mesh, pivot, st, top}; };
+function load(){ sp = lib().find(x => x.id===QS.get('pose')) || null; layers.splice(0).forEach(L => scene.remove(L.st)); stand = null; her = null;
   if(!sp || !sp.geo){ document.getElementById('msg').textContent = 'This pose is not ready yet'; return; } document.getElementById('msg').textContent = '';
-  const g = sp.geo; her = new THREE.Mesh(new THREE.PlaneGeometry(g.wM, g.hM), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide}));
-  stand = new THREE.Group(); stand.add(her); scene.add(stand); her.position.set(0, g.aim[1], 0); controls.target.set(0, g.aim[1], 0); dirty = true;
-  [sp.src, ...(sp.views || []), ...(sp.look || [])].filter(Boolean).forEach(texOf); } // load them all now
-let stand = null; const HERC = () => new THREE.Vector3(0, sp.geo.aim[1], 0);
-// which picture: the camera's direction round her and its height, as the rig's set does
-function view(){ const rel = camera.position.clone().sub(HERC()), az = Math.atan2(rel.x, rel.z), i = ((Math.round(az / (Math.PI / 4)) % 8) + 8) % 8, el = Math.atan2(rel.y, Math.hypot(rel.x, rel.z)) / D2R;
-  const ring = el < -10 ? 0 : el > 20 ? 2 : 1, look = QS.get('look')==='1' && sp.look, pick = n => look && sp.look[n * 8 + i] || sp.views[n * 8 + i] || '';
-  return {i, ring, url:pick(ring) || pick(1) || sp.views.find(Boolean) || sp.src || ''}; } // the picture itself stands in until the angles are painted
+  const g = sp.geo; for(const top of [false, true]){ const L = mkLayer(top); L.mesh.geometry.dispose(); L.mesh.geometry = new THREE.PlaneGeometry(g.wM, g.hM); scene.add(L.st); layers.push(L); }
+  her = layers[0].mesh; stand = layers[0].st; controls.target.set(0, g.aim[1], 0); dirty = true;
+  [sp.src, ...(sp.views || []), ...(sp.views16 || []), ...(sp.look || [])].filter(Boolean).forEach(texOf); } // load them all now
+const HERC = () => new THREE.Vector3(0, sp.geo.aim[1], 0);
+const RING_EL = [-25, 5, 35]; // the heights the angles were made from (the rig's low / eye / high rings)
+// which picture: the camera's direction round her and its height, as the rig's set does; 16 round when the turn gave them
+function view(){ const rel = camera.position.clone().sub(HERC()), az = Math.atan2(rel.x, rel.z), el = Math.atan2(rel.y, Math.hypot(rel.x, rel.z)) / D2R;
+  const ring = el < -10 ? 0 : el > 20 ? 2 : 1, look = QS.get('look')==='1' && sp.look, v16 = !look && sp.views16 && sp.views16.some(Boolean), N = v16 ? 16 : 8;
+  const f = az / (2 * Math.PI / N), i = ((Math.round(f) % N) + N) % N, fr = f - Math.round(f), j = ((i + (fr >= 0 ? 1 : -1)) % N + N) % N;
+  const at = (n, k) => { if(v16){ const u = sp.views16[n * 16 + k]; if(u) return u; if(k % 2===0) return sp.views[n * 8 + k / 2] || ''; return ''; } return look && sp.look[n * 8 + k] || sp.views[n * 8 + k] || ''; };
+  const url = at(ring, i) || at(1, i) || (v16 && (sp.views[ring * 8 + Math.round(i / 2) % 8] || sp.views[8 + Math.round(i / 2) % 8])) || sp.views.find(Boolean) || sp.src || ''; // the picture itself stands in until the angles are painted
+  return {i:v16 ? i / 2 : i, k:i, N, ring, url, next:at(ring, j), nk:j, w:Math.abs(fr)}; }
 function setBackdrop(url){ if(back){ scene.remove(back); back = null; } if(url){ const t = texOf(url); back = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({map:t, depthWrite:false})); back.renderOrder = -1; scene.add(back); } dirty = true; }
+// pinned to the rig (Jordan 2026-10-23): sp.rig is her head-top-to-feet line from the rig, turned so her front is at 0°. Seen
+// from each angle it is a line on the screen of a known length and lean; each picture is sized and tilted (about her feet)
+// so its own head-to-feet line matches, scaled against the eye-level front. So her head sits where the skeleton's does.
+function rigLine(k, N, ring){ const az = k * 2 * Math.PI / N, el = RING_EL[ring] * D2R, [x, y, z] = sp.rig;
+  return [x * Math.cos(az) - z * Math.sin(az), -x * Math.sin(el) * Math.sin(az) + y * Math.cos(el) - z * Math.sin(el) * Math.cos(az)]; }
+const picLine = (ft, sx) => [(ft.hx - ft.fx) * sp.geo.wM * sx, ft.ht * sp.geo.hM];
 // planted feet (Jordan 2026-10-23: "have the feet look planted in place"): the card turns to the camera about the point on the
 // floor where she stands, and each picture is moved and sized so her feet sit on that point and she is as tall as in the front
 // one, whatever spot and size MiniMax or Illustrious drew her at
-function place(){ if(her){ const v = view(), want = texOf(v.url), cur = her.material.map, t = want && want.userData.ready ? want : cur && cur.userData.ready ? cur : want;
-  if(her.material.map!==t){ her.material.map = t; her.material.needsUpdate = true; } her.visible = shadow.visible = !!t;
-  const im = t && t.image, g = sp.geo, sx = t && sp.src && t===tex.get(sp.src) && im && im.width ? (im.width / im.height) / (g.wM / g.hM) : 1; // (the picture itself, standing in, keeps its own shape)
-  const ft = t && t.userData.feet, ref = [sp.views[v.ring * 8], ...sp.views.slice(v.ring * 8, v.ring * 8 + 8)].map(u => u && tex.get(u)).find(r => r && r.userData.feet), rf = ref && ref.userData.feet; // sized against the front at this height only: from above she looks shorter, and growing her to make up for it blew up her head (Jordan 2026-10-23)
-  const k = ft && rf ? Math.max(0.85, Math.min(1.18, rf.ht / ft.ht)) : 1;
-  her.scale.set(sx * k, k, 1);
-  if(ft){ her.position.set(-(ft.fx - 0.5) * g.wM * sx * k, (ft.fy - 0.5) * g.hM * k, 0); stand.position.set(0, 0, 0); } // her feet on the stand's spot, the floor at her centre
-  else { her.position.set(0, g.aim[1], 0); stand.position.set(0, 0, 0); }
-  if(ft){ her.rotation.set(0, 0, 0); stand.lookAt(camera.position); } else { stand.rotation.set(0, 0, 0); her.lookAt(camera.position); } }
+function placeOne(L, url, v, k8){ const want = texOf(url), cur = L.mesh.material.map, t = want && want.userData.ready ? want : !L.top && cur && cur.userData.ready ? cur : L.top ? null : want;
+  if(L.mesh.material.map!==t){ L.mesh.material.map = t; L.mesh.material.needsUpdate = true; } L.mesh.visible = !!t; if(!t) return false;
+  const im = t.image, g = sp.geo, sx = sp.src && t===tex.get(sp.src) && im && im.width ? (im.width / im.height) / (g.wM / g.hM) : 1; // (the picture itself, standing in, keeps its own shape)
+  const ft = t.userData.feet; let k = 1, rot = 0;
+  const refUrl = sp.views[8] || (sp.views16 || [])[16], rt = refUrl && tex.get(refUrl), rf = rt && rt.userData.feet;
+  if(ft && sp.rig && rf && rf.hx!=null && ft.hx!=null){ // against the rig's own line from this angle
+    const pf = picLine(rf, 1), lf = rigLine(0, 8, 1), s = Math.hypot(...pf) / (Math.hypot(...lf) || 1), pw = picLine(ft, sx), lw = rigLine(k8, v.N, v.ring).map(q => q * s);
+    k = Math.max(0.7, Math.min(1.4, Math.hypot(...lw) / (Math.hypot(...pw) || 1))); rot = Math.max(-0.26, Math.min(0.26, Math.atan2(lw[0], lw[1]) - Math.atan2(pw[0], pw[1]))); }
+  else { const ref = [sp.views[v.ring * 8], ...sp.views.slice(v.ring * 8, v.ring * 8 + 8)].map(u => u && tex.get(u)).find(r => r && r.userData.feet), rr = ref && ref.userData.feet; // sized against the front at this height only: from above she looks shorter, and growing her to make up for it blew up her head (Jordan 2026-10-23)
+    k = ft && rr ? Math.max(0.85, Math.min(1.18, rr.ht / ft.ht)) : 1; }
+  L.mesh.scale.set(sx * k, k, 1); L.pivot.rotation.set(0, 0, -rot);
+  if(ft){ L.mesh.position.set(-(ft.fx - 0.5) * g.wM * sx * k, (ft.fy - 0.5) * g.hM * k, 0); L.st.position.set(0, 0, 0); L.st.lookAt(camera.position); } // her feet on the stand's spot, the floor at her centre
+  else { L.pivot.rotation.set(0, 0, 0); L.mesh.position.set(0, 0, 0); L.st.position.set(0, g.aim[1], 0); L.st.lookAt(camera.position); }
+  return true; }
+function place(){ if(her){ const v = view(), A = layers[0], B = layers[1];
+  her.visible = shadow.visible = placeOne(A, v.url, v, v.k);
+  // the next angle fades in over the last third before the switch, to half at the switch itself, where the two change places
+  const op = v.next && v.next!==v.url ? 0.5 * Math.max(0, Math.min(1, (v.w - 0.2) / 0.3)) : 0;
+  if(op > 0.01 && placeOne(B, v.next, Object.assign({}, v), v.nk)){ B.mesh.material.opacity = op; B.mesh.material.alphaTest = 0.4 * op; } else B.mesh.visible = false; }
   if(back){ const d = camera.position.distanceTo(controls.target), far = d + 6, dir = controls.target.clone().sub(camera.position).normalize(), h = 2 * far * Math.tan(camera.fov * D2R / 2) * 1.05, im = back.material.map && back.material.map.image;
     back.position.copy(camera.position).addScaledVector(dir, far); back.quaternion.copy(camera.quaternion); const ar = im && im.width ? im.width / im.height : 1.5; back.scale.set(Math.max(h * camera.aspect, h * ar), Math.max(h, h * camera.aspect / ar), 1); }
   grid.visible = floor.visible = !back || QS.get('floor')!=='0'; shadow.visible = grid.visible && !!(her && her.visible); }
@@ -98,5 +123,5 @@ function shot(w, h){ const ow = renderer.domElement.width, oh = renderer.domElem
   renderer.setPixelRatio(pr); size(); return url; }
 const cam = () => ({p:camera.position.toArray(), t:controls.target.toArray(), pan:[PX, PY]});
 function setCam(c){ if(!c) return; camera.position.fromArray(c.p); controls.target.fromArray(c.t); [PX, PY] = c.pan || [0, 0]; offset(innerWidth, innerHeight); camera.updateProjectionMatrix(); controls.update(); dirty = true; }
-window.VIEW = {shot, cam, setCam, setBackdrop, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3}), camera, controls};
+window.VIEW = {shot, cam, setCam, setBackdrop, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3, layers}), camera, controls};
 </script></body></html>
