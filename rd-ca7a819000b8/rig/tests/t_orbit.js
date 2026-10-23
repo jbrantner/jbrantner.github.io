@@ -59,6 +59,13 @@ const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * 
     const angs = G ? Object.keys(T).flatMap(k => [0, 1].map(i => angle(T[k][i], G[k][i]))) : [];
     results[kind] = {per:angs.map(Math.round), status:st, worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((a, b) => a + b, 0) / (angs.length || 1)), errors:logs};
     await ctx.close(); }
+  // 2b. Render Deck's 🦴🎬: the views given as picture URLs with their turns (poseFromOrbit), read on the phone
+  { const {page, logs, ctx} = await open(browser, {}), files = fs.readdirSync(path.join(OUT, 'orbit')).filter(f => f.endsWith('.png')).sort();
+    await page.route('https://pics.test/**', r => r.fulfill({contentType:'image/png', body:fs.readFileSync(path.join(OUT, 'orbit', path.basename(new URL(r.request().url()).pathname)))}));
+    const r = await page.evaluate(async fs => { try{ return await window.RIG.poseFromOrbit(fs.map(f => 'https://pics.test/' + f), fs.map((_, k) => k / fs.length * Math.PI * 2), null); }catch(e){ return {error:e.message}; } }, files);
+    const G = r.error ? null : await page.evaluate(LIMB_DIRS), angs = G ? Object.keys(T).flatMap(k => [0, 1].map(i => angle(T[k][i], G[k][i]))) : [];
+    results.urls = {per:angs.map(Math.round), status:JSON.stringify(r), worst:Math.round(Math.max(...angs)), mean:Math.round(angs.reduce((a, b) => a + b, 0) / (angs.length || 1)), errors:logs};
+    await ctx.close(); }
   // 3. Make it full body: a stand-in ComfyUI on Render with MiniMax H3 FL2V; both clips it "makes" are the filmed turn.
   // Checks the two graphs (pull-back from the picture, then a circle from the pull-back's last frame that ends where it
   // starts) and that the circle is then read into a pose.

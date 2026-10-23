@@ -626,7 +626,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.161'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.162'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6129,7 +6129,7 @@ async function liveQueue(id, pc){
 // moves to a computer that can make it and has nothing to do
 const CM_MOVING = new Set();
 async function cmMoveWaiting(h, pc){ const P = (S.cmPoses || []).find(x => (x.orb || []).concat(x.views, x.cands || []).includes(h)), m = h.making; if(!P || !m || CM_MOVING.has(m.id)) return;
-  const orb = m.kind==='sporb'; let ks = orb ? (P.ctl ? cmCtlKits() : cmFlKits()) : cmIllKits().filter(k => k.cn);
+  const orb = m.kind==='sporb'; let ks = orb ? (cmOrbCtl(P, h) ? cmCtlKits() : cmFlKits()) : cmIllKits().filter(k => k.cn);
   if(orb){ if(ks.some(k => k.fl)) ks = ks.filter(k => k.fl); if(!h.from) h.from = h.step==='crane' || h.ring===1 ? P.src : (((P.orb || []).find(o => o.step==='crane' && o.ring===h.ring) || {}).urls || [])[0]; if(!h.from) return; }
   if(P.stopped) return; const free = ks.find(k => k.url!==pc && !(pcOf(k.url).load > 0)); if(!free) return;
   CM_MOVING.add(m.id);
@@ -6661,21 +6661,32 @@ function m3Start(g){ if((S.m3By || 'rig')==='rig') return m3StartRig(g); const c
   if(ctl && !cmCtlKits().length){ toast('None of your computers that are on has the MiniMax ControlNet (📦 Get it on a PC from the 🧊 settings)', true); return null; }
   const P = {id:uid('sp'), name:'🧊 ' + (g.prompt || 'Render').slice(0, 30), who:'', from:true, snap:g.snap || null, geo:{wM:1.28, hM:1.87, aim:[0, 0.935, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
     by:'mm', pic:true, src:g.url, off:0, desc:g.d3desc || '', dn:S.m3Paint!=null ? S.m3Paint : 0, views:[0, 1, 2].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})))};
-  if(ctl){ P.ctl = true; P.rigging = true; }
-  P.orb = cmPoseOrbs().map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseShape(P, g.url).then(() => { save(); cmPoseSync(); if(ctl) m3RigSpin(P); else cmPoseRun(P); }); return P; }
-// 🦴🎬 the rig copies her pose, then makes the skeleton's 5 moves (eye-level circle, crane up / down, high / low circles) as the
-// control videos MiniMax follows, so it turns at a steady speed and the 8 angles land on the right frames
+  if(ctl){ P.ctl = true; P.orbRig = true; } // 🦴🎬 the plain eye-level turn first, then the rig from all its angles
+  P.orb = cmPoseOrbs().map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseShape(P, g.url).then(() => { save(); cmPoseSync(); cmPoseRun(P); }); return P; }
+// 🦴🎬 (Jordan 2026-10-23: "you do a turn around video and then you make the rig from all of the angles"): MiniMax's plain
+// eye-level turn comes first; the rig is fitted to its views all at once (so a leg hidden or foreshortened in the picture is
+// put right by the side views), then the skeleton's other 4 moves (crane up / down, high / low circles) are the control
+// videos MiniMax follows, so it turns at a steady speed and the 8 angles land on the right frames. Older rig-led 3Ds
+// (no orbRig) copied the pose from the picture alone and led all 5 moves.
+const cmOrbCtl = (P, o) => !!P.ctl && !(P.orbRig && o.step==='circle' && o.ring===1);
+const cmEyeOrb = P => (P.orb || []).find(o => o.step==='circle' && o.ring===1);
 const CM_SP_EL = [-25, 5, 35]; // the rig's low / eye / high rings
 async function m3RigSpin(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); const fr = document.createElement('iframe');
   fr.style.cssText = 'position:fixed;left:-2000px;top:0;width:400px;height:700px;border:0'; fr.title = 'Pose rig';
   fr.src = 'rig/?' + new URLSearchParams({panel:'m3' + (S.hidden ? 'h' : ''), w:640, h:960}); document.body.appendChild(fr);
   try{ const t0 = Date.now(); while(!(fr.contentWindow && fr.contentWindow.RIG)){ if(Date.now() - t0 > 30000) throw new Error("the rig didn't open"); await new Promise(r => setTimeout(r, 150)); }
     const R = fr.contentWindow.RIG, dw = cmIllKits().find(k => k.oi.DWPreprocessor && k.oi.SavePoseKpsAsJsonFile);
-    const r = await R.poseFromPicture(P.src, dw && dw.url); await new Promise(res => setTimeout(res, 300)); P.partial = r.partial;
-    const mv = P.orb.map(o => o.step==='crane' ? {kind:'crane', from:CM_SP_EL[1], to:CM_SP_EL[o.ring]} : {kind:'circle', el:CM_SP_EL[o.ring]});
-    const sp = R.spinGuides(P.mw || CM_SP_MW, P.mh || CM_SP_MH, TV_LEN, mv); P.orb.forEach((o, n) => { CM_SPC[o.id] = sp.moves[n]; }); P.fit = sp.fit; P.face = sp.facing || 0;
-    (P.orb || []).forEach(o => { if(/rig again/.test(o.err || '')) delete o.err; }); delete P.rigging; save(); cmPoseSync(); cmPoseRun(P); }
-  catch(err){ delete P.rigging; (P.orb || []).forEach(o => o.err = "the rig couldn't copy her pose: " + err.message); save(); toast("The rig couldn't copy her pose: " + err.message, true); }
+    let r; const eye = cmEyeOrb(P);
+    if(P.orbRig){ const turn = eye && eye.turn || 30, us = eye && eye.urls || [], ix = []; for(let f = 0; f < Math.min(turn, us.length); f += 2) ix.push(Math.round(f));
+      if(ix.length < 4) throw new Error('the eye-level turn has too few frames');
+      r = await R.poseFromOrbit(ix.map(f => us[f]), ix.map(f => 2 * Math.PI * f / turn), dw && dw.url, (k, n) => { P.rigMsg = 'Fitting the rig to her turn: view ' + (k + 1) + ' of ' + n + '…'; if($('#m3Box')) m3Draw(); });
+      P.rigFit = {used:r.used, n:r.n, flips:r.flips}; }
+    else r = await R.poseFromPicture(P.src, dw && dw.url);
+    await new Promise(res => setTimeout(res, 300)); P.partial = r.partial;
+    const led = P.orb.filter(o => cmOrbCtl(P, o)), mv = led.map(o => o.step==='crane' ? {kind:'crane', from:CM_SP_EL[1], to:CM_SP_EL[o.ring]} : {kind:'circle', el:CM_SP_EL[o.ring]});
+    const sp = R.spinGuides(P.mw || CM_SP_MW, P.mh || CM_SP_MH, TV_LEN, mv); led.forEach((o, n) => { CM_SPC[o.id] = sp.moves[n]; }); P.fit = sp.fit; P.face = sp.facing || 0;
+    (P.orb || []).forEach(o => { if(/rig again|copy her pose/.test(o.err || '')) delete o.err; }); delete P.rigging; delete P.rigMsg; save(); cmPoseSync(); cmPoseRun(P); }
+  catch(err){ delete P.rigging; delete P.rigMsg; (P.orb || []).filter(o => cmOrbCtl(P, o) && !(o.urls || []).length).forEach(o => o.err = "the rig couldn't copy her pose: " + err.message); save(); toast("The rig couldn't copy her pose: " + err.message, true); }
   finally{ M3_RIG.delete(P.id); fr.remove(); if($('#m3Box')) m3Draw(); } }
 // the rig step runs in the app, so a 3D left mid-way (the app closed or reloaded while copying her pose; Jordan 2026-10-23:
 // "I set this to go a long time ago but I don't think it ran") picks it up again; so does a rig-led one whose skeleton videos
@@ -6687,7 +6698,7 @@ function m3Resume(P){ if(!P || P.stopped || M3_RIG.has(P.id) || !P.src) return;
   // a circle that came back while the app was closed or reloading has its frames but no angles picked, so its 8 angles waited
   // for ever (Jordan 2026-10-23: the eye-level angles never came and the bar stopped): line it up now
   (P.orb || []).forEach(o => { if(o.step==='circle' && (o.urls || []).length > 8 && !o.pick && !M3_PK.has(o.id)){ M3_PK.add(o.id); cmAutoPick(P, o).finally(() => M3_PK.delete(o.id)); } });
-  if(P.ctl && (P.orb || []).some(o => !(o.urls || []).length && !o.making && !o.busy && !CM_SPC[o.id] && (!o.err || /rig again/.test(o.err)))){ P.rigging = true; save(); m3RigSpin(P); return; }
+  if(P.ctl && (!P.orbRig || (cmEyeOrb(P) || {}).pick) && (P.orb || []).some(o => cmOrbCtl(P, o) && !(o.urls || []).length && !o.making && !o.busy && !CM_SPC[o.id] && (!o.err || /rig again/.test(o.err)))){ P.rigging = true; save(); m3RigSpin(P); return; }
   if(P.from && P.by==='ill' && P.views.some(v => !v.url && !v.making && !v.busy && !(v.farm && (S.cmFarmLive || []).includes(v.farm)) && !CM_SPG[v.id] && (!v.err || /rig again/.test(v.err)))){ P.rigging = true; save(); m3Rig(P); } }
 // 🧊 opens on what is there: a picture that isn't 3D yet shows the choices and ▶ Make it 3D first (Jordan 2026-10-23: opening
 // it to look at the options, or to see whether it was 3D, started making it); go = start right away (↻ Make it again)
@@ -6708,7 +6719,7 @@ function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || 
   if(!S.test && ++M3.q % 5===1) m3Jobs(P).forEach(v => liveQueue(v.making.id, v.making.pc).then(m3Bars)); m3Bars();
   const f = document.activeElement, typing = f && f.tagName==='INPUT' && $('#m3Box').contains(f); // don't redraw under her fingers
   if(n!==M3.n && !typing){ M3.n = n; const V = m3V(); if(V) V.reload(); m3Draw(); } else { const h = $('#m3Head'); if(h) h.textContent = m3Status(P); } }
-function m3Status(P){ if(P.rigging) return 'Copying her pose onto the rig…'; if(P.by==='mm' && !P.stopped && (P.orb || []).some(o => o.step==='circle' && (o.urls || []).length > 8 && o.pick && !cmRingOk(P, o.ring))) return 'Pick the angles below'; const done = P.views.filter(v => v.url).length, mv = (P.orb || []).filter(o => o.urls.length).length, run = P.views.concat(P.orb || []).filter(v => v.making || v.busy).length, err = P.views.concat(P.orb || []).find(v => v.err);
+function m3Status(P){ if(P.rigging) return P.rigMsg || (P.orbRig ? 'Fitting the rig to her turn…' : 'Copying her pose onto the rig…'); if(P.by==='mm' && !P.stopped && (P.orb || []).some(o => o.step==='circle' && (o.urls || []).length > 8 && o.pick && !cmRingOk(P, o.ring))) return 'Pick the angles below'; const done = P.views.filter(v => v.url).length, mv = (P.orb || []).filter(o => o.urls.length).length, run = P.views.concat(P.orb || []).filter(v => v.making || v.busy).length, err = P.views.concat(P.orb || []).find(v => v.err);
   return done===P.views.length ? 'Drag to walk round her' : err && !run ? "Something didn't paint: " + err.err : mv < (P.orb || []).length ? 'MiniMax turning round her: ' + mv + ' of ' + P.orb.length + ' moves' : 'Painting the angles: ' + done + ' of ' + P.views.length; }
 // what is painting right now, each with its own step bar and time left
 const m3Jobs = P => (P.orb || []).concat(P.views, P.cands || []).filter(v => v.making);
@@ -6754,7 +6765,7 @@ async function m3CtlFetch(url){ M3CTL[url] = {status:'starting', done:0, total:0
 // the choices for how it is made, shown before it starts and under a 3D already made (used by ↻ Make it again)
 function m3Opts(g, P){ const by = S.m3By || 'rig';
   return `<div class="lbl">Turn her with</div><div class="row">${m3Seg('data-m3by', [['rig', '🦴 Rig + Illustrious'], ['mm', '🎬 MiniMax'], ['mmrig', '🦴🎬 MiniMax led by the rig']], by)}</div>
-    <p class="note">${by==='rig' ? 'The rig copies her pose from the picture, then each of the 24 angles is an Illustrious render of that pose, with this picture\'s model, LoRAs and prompt.' : by==='mmrig' ? 'The rig copies her pose, then MiniMax circles the picture following the rig\'s skeleton turning at a steady speed (the pose ControlNet), so the angles land where they should. Only computers with the pose ControlNet make these moves.' : 'MiniMax circles the picture and its frames become the angles.'} ${P ? 'This one was made with ' : ''}${!P ? '' : P.ctl ? '🦴🎬 MiniMax led by the rig' : P.by==='mm' ? '🎬 MiniMax' : '🦴 the rig'}${P ? (P.partial ? ' (her legs were out of the picture, so the rig left them standing)' : '') + '; the setting is used by the next 🧊, ↻ Start over or ↻ Make it again.' : ''}</p>`
+    <p class="note">${by==='rig' ? 'The rig copies her pose from the picture, then each of the 24 angles is an Illustrious render of that pose, with this picture\'s model, LoRAs and prompt.' : by==='mmrig' ? 'MiniMax first turns round her at eye level; the rig is then fitted to all the angles of that turn at once, so it gets her pose right in 3D. The other 4 moves (crane up and down, high and low circles) follow the rig\'s skeleton turning at a steady speed (the pose ControlNet), so their angles land where they should. Only computers with the pose ControlNet make those 4.' : 'MiniMax circles the picture and its frames become the angles.'} ${P ? 'This one was made with ' : ''}${!P ? '' : P.ctl ? '🦴🎬 MiniMax led by the rig' : P.by==='mm' ? '🎬 MiniMax' : '🦴 the rig'}${P ? (P.partial ? ' (her legs were out of the picture, so the rig left them standing)' : '') + '; the setting is used by the next 🧊, ↻ Start over or ↻ Make it again.' : ''}</p>`
     + (by==='mmrig' ? m3CtlGet() : '')
     + (by==='mm' || by==='mmrig' ? `<div class="lbl">Illustrious pass on each angle</div><div class="row">${m3Seg('data-m3paint', [[0, 'Off'], [0.3, 'Light'], [0.45, 'Full']], S.m3Paint!=null ? S.m3Paint : 0)}</div>
     <p class="note">Off keeps MiniMax's frames as they are (just cut out), so colours and shoes stay put.</p>` : '') + `
@@ -6877,9 +6888,9 @@ async function cmOutline(url){ const im = new Image(); im.crossOrigin = 'anonymo
 // how mirror-even an outline is (1 = the same flipped about her middle): high for front and back views
 function cmMirror(m){ const W = 32, H = m.length / W; let sx = 0, n = 0; for(let q = 0; q < m.length; q++) if(m[q]){ sx += q % W; n++; } if(n < 20) return 0;
   const cx = sx / n; let a = 0, u = 0; for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){ const v = m[y * W + x], mx = Math.round(2 * cx - x), w = mx >= 0 && mx < W ? m[y * W + mx] : 0; if(v && w) a++; if(v || w) u++; } return u ? a / u : 0; }
-async function cmAutoPick(P, o){ const us = o.urls || []; if(us.length <= 8 || o.pick) return; let per = P.ctl ? (TV_LEN - 1) / 4 : us.length - 1, ms = [];
+async function cmAutoPick(P, o){ const us = o.urls || []; if(us.length <= 8 || o.pick) return; let per = cmOrbCtl(P, o) ? (TV_LEN - 1) / 4 : us.length - 1, ms = [];
   try{ ms = await Promise.all(us.map(u => cmOutline(u).catch(() => null))); }catch(e){}
-  if(!P.ctl) try{ // 🦴🎬 with the skeleton turning, a full turn is exactly the clip, so the angles are where they should be
+  if(!cmOrbCtl(P, o)) try{ // 🦴🎬 with the skeleton turning, a full turn is exactly the clip, so the angles are where they should be
     const m0 = ms[0]; let best = 0;
     if(m0) for(let f = Math.floor(us.length / 2); f < us.length; f++){ const m = ms[f]; if(!m) continue; let a = 0, u = 0; for(let q = 0; q < m.length; q++){ if(m[q] && m0[q]) a++; if(m[q] || m0[q]) u++; } const iou = u ? a / u : 0; if(iou > best){ best = iou; per = f; } }
     if(best < 0.5) per = us.length - 1; }catch(e){}
@@ -6909,7 +6920,7 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
   let b = null; for(const f of picks){ const one = add('ImageFromBatch', {image:[dec,0], batch_index:f, length:1}); b = b ? add('ImageBatch', {image1:[b,0], image2:[one,0]}) : one; }
   return {g, save:add('SaveImage', {images:[b,0], filename_prefix:prefix})}; }
 async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.busyPc = k.url; o.from = src; delete o.err; drawComic();
-  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), picks = cmPosePicks(o), ctl = P.ctl ? await cmCtlUp(P, o, k) : null;
+  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), picks = cmPosePicks(o), ctl = cmOrbCtl(P, o) ? await cmCtlUp(P, o, k) : null;
     const G = cmPoseOrbGraph(k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH, ctl);
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -6967,9 +6978,9 @@ function cmPoseRun(P, quiet){ if(P.stopped || P.rigging) return; const L = P.fro
   // one job per computer at a time (Jordan 2026-10-23: "we just don't queue the job to a computer until one is idle"): the rest wait
   // here, and whenever a computer is idle it takes the next one that it can make, MiniMax moves first (they unlock the angles)
   const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, src = P.src;
-  let fk = P.ctl ? cmCtlKits() : cmFlKits(); if(fk.some(k => k.fl)) fk = fk.filter(k => k.fl);
-  const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url)).map(o => [o, o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]]).filter(x => x[1]) : [];
-  if(P.by==='mm' && src && !fk.length) (P.orb || []).forEach(o => { if(!(o.urls || []).length && !o.making) o.err = P.ctl ? 'no computer that is on has the MiniMax ControlNet (Render)' : 'no computer that is on has MiniMax H3'; });
+  let fl = cmFlKits(); if(fl.some(k => k.fl)) fl = fl.filter(k => k.fl); const ck = P.ctl ? cmCtlKits() : [], fk = fl.concat(ck), kitFor = (o, url) => (cmOrbCtl(P, o) ? ck : fl).find(k => k.url===url);
+  const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url) && !(P.orbRig && cmOrbCtl(P, o) && !CM_SPC[o.id] && !S.test)).map(o => [o, o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]]).filter(x => x[1]) : [];
+  if(P.by==='mm' && src) (P.orb || []).forEach(o => { if(!(o.urls || []).length && !o.making && !(cmOrbCtl(P, o) ? ck : fl).length) o.err = cmOrbCtl(P, o) ? 'no computer that is on has the MiniMax pose ControlNet (📦 Get it on a PC in the 🧊 settings)' : 'no computer that is on has MiniMax H3'; });
   const ready = v => P.by!=='mm' || !!cmPoseFrame(P, v);
   if(P.by==='mm' && !src && !P.pic && !(P.cands || []).length) cmPoseCands(P);
   const todo = P.views.filter(v => !v.url && !v.making && !v.busy && !v.err && ready(v)).concat(P.by==='mm' && !src ? (P.cands || []).filter(c => !c.url && !c.making && !c.busy && !c.err) : []), lost = todo.filter(v => !CM_SPG[v.id] && !(P.by==='mm' && v.cand==null));
@@ -6977,7 +6988,7 @@ function cmPoseRun(P, quiet){ if(P.stopped || P.rigging) return; const L = P.fro
   const angles = todo.filter(v => !lost.includes(v));
   const pcs = [...new Set(fk.concat(kits).map(k => k.url))].sort((a, b) => cmSlow(a) - cmSlow(b));
   let sent = 0; pcs.forEach(url => { if(cmPcBusy(url)) return; const f = fk.find(k => k.url===url), k = kits.find(k => k.url===url);
-    if(f && moves.length){ const [o, from] = moves.shift(); CM_SENTAT[url] = Date.now(); sent++; cmPoseOrbJob(P, o, from, f); return; }
+    const mi = moves.findIndex(([o]) => kitFor(o, url)); if(mi >= 0){ const [o, from] = moves.splice(mi, 1)[0]; CM_SENTAT[url] = Date.now(); sent++; cmPoseOrbJob(P, o, from, kitFor(o, url)); return; }
     if(k && angles.length){ CM_SENTAT[url] = Date.now(); sent++; cmPoseJob(P, L, angles.shift(), k); } });
   if(sent || !quiet) drawComic(); }
 // 🧊 on the farm (Jordan 2026-10-23: "switch computers automatically… without needing the app open"): the whole 3D goes to

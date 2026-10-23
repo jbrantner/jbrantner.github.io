@@ -118,6 +118,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.162
+- 🦴🎬 MiniMax led by the rig, the way it was meant: MiniMax's plain eye-level turn comes first, then the rig is fitted to about 15 of its views at once (DWPose on a PC, else the phone's reader; Pose Rig's solveOrbit, new RIG.poseFromOrbit), so hidden or foreshortened legs come out right. Only the other 4 moves follow the skeleton; each goes to whichever computer with the pose ControlNet is free. Older rig-led 3Ds keep the picture-only rig.
+
 ## 2026-10-23.161
 - 🧊 MiniMax 3D: a circle whose frames came back while the app was closed or reloading had no angles picked, so that ring's 8 angles waited for ever and the bar stopped. It is now lined up by itself.
 
