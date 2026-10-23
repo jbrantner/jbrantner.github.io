@@ -626,7 +626,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.141'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.143'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6088,8 +6088,8 @@ async function liveQueue(id, pc){
 const CM_MOVING = new Set();
 async function cmMoveWaiting(h, pc){ const P = (S.cmPoses || []).find(x => (x.orb || []).concat(x.views, x.cands || []).includes(h)), m = h.making; if(!P || !m || CM_MOVING.has(m.id)) return;
   const orb = m.kind==='sporb'; let ks = orb ? cmFlKits() : cmIllKits().filter(k => k.cn);
-  if(orb){ if(ks.some(k => k.fl)) ks = ks.filter(k => k.fl); if(!h.from) return; } else { const kb = ks.filter(k => k.bg); if(kb.length) ks = kb; }
-  if(P.stopped) return; const free = ks.find(k => k.url!==pc && !(pcOf(k.url).load > 0) && !cmAll().some(x => x.making && x.making.pc===k.url)); if(!free) return;
+  if(orb){ if(ks.some(k => k.fl)) ks = ks.filter(k => k.fl); if(!h.from) h.from = h.step==='crane' || h.ring===1 ? P.src : (((P.orb || []).find(o => o.step==='crane' && o.ring===h.ring) || {}).urls || [])[0]; if(!h.from) return; } else { const kb = ks.filter(k => k.bg); if(kb.length) ks = kb; }
+  if(P.stopped) return; const free = ks.find(k => k.url!==pc && !(pcOf(k.url).load > 0)); if(!free) return;
   CM_MOVING.add(m.id);
   try{ await fetch(pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:[m.id]})});
     const q = await (await fetch(pc + '/queue')).json();
@@ -6566,6 +6566,11 @@ function cmPoseTake(p, R, L, name){ const mm = S.cmPoseBy!=='ill' && cmFlKits().
 // as its only first frame (no reference) and circles her on white: once at eye level; for high and low it cranes up / down
 // from the same picture, and circles from where the crane ends. 8 evenly spaced frames of each circle are the 8 directions;
 // each is painted over in Illustrious (her LoRA, line art from the frame itself) and cut out.
+// a pose from a picture keeps the picture's shape all the way (Jordan 2026-10-23: a square picture came out squished, as
+// FL2V stretches its first frame to the clip's size): MiniMax at about 544 × 800 worth of pixels, Illustrious at about 832 × 1216
+const cmFit = (ar, area, step) => { const w = Math.round(Math.sqrt(area * ar) / step) * step; return [w, Math.round(w / ar / step) * step]; };
+async function cmPoseShape(P, url){ let ar = 832 / 1216; try{ const [w, h] = await obSize(url); ar = Math.min(16 / 9, Math.max(9 / 16, w / h)); }catch(e){}
+  [P.mw, P.mh] = cmFit(ar, 544 * 800, 32); [P.iw, P.ih] = cmFit(ar, 832 * 1216, 64); P.geo = Object.assign({}, P.geo, {wM:P.geo.hM * P.iw / P.ih}); }
 const CM_SP_MW = 544, CM_SP_MH = 800, CM_SP_DN = 0.45, CM_SP_SCENE = 'a full-body anime character standing frozen in a pose on a plain white background';
 const cmPoseStart = P => P.views.find(v => v.ring===1 && v.i===0 && !v.look);
 // 📱 a pose from any picture (Jordan 2026-10-23: "it might even be better to start with a picture I upload"): no rig at all,
@@ -6594,8 +6599,8 @@ const M3 = {g:null, t:0, n:-1, q:0};
 const m3Pose = g => g && g.d3p && (S.cmPoses || []).find(P => P.id===g.d3p);
 function m3Start(g){ if(!cmFlKits().length){ toast('None of your computers that are on has MiniMax H3', true); return null; }
   const P = {id:uid('sp'), name:'🧊 ' + (g.prompt || 'Render').slice(0, 30), who:'', from:true, snap:g.snap || null, geo:{wM:1.28, hM:1.87, aim:[0, 0.935, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
-    by:'mm', pic:true, src:g.url, off:0, views:[0, 1, 2].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})))};
-  P.orb = cmPoseOrbs().map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseSync(); cmPoseRun(P); return P; }
+    by:'mm', pic:true, src:g.url, off:0, dn:S.m3Paint!=null ? S.m3Paint : 0, views:[0, 1, 2].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})))};
+  P.orb = cmPoseOrbs().map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseShape(P, g.url).then(() => { save(); cmPoseSync(); cmPoseRun(P); }); return P; }
 function m3Open(g){ const src = g.d3from ? S.gallery.find(x => x.url===g.d3from) || g : g; let P = m3Pose(src) || m3Pose(g);
   if(!P){ P = m3Start(src); if(!P) return; } M3.g = src; M3.P = P.id; M3.n = -1;
   const box = document.createElement('div'); box.className = 'cmrigbox'; box.id = 'm3Box';
@@ -6621,16 +6626,19 @@ function m3Bars(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || 
   m3Jobs(P).forEach(v => { const e = cmEta(v); if(!e) return; const id = v.making.id;
     document.querySelectorAll(`[data-m3bar="${id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
     document.querySelectorAll(`[data-m3txt="${id}"]`).forEach(el => el.textContent = e.text); }); }
+const m3Seg = (attr, pairs, cur) => `<div class="seg">${pairs.map(([v, t]) => `<button ${attr}="${v}" class="${String(v)===String(cur) ? 'on' : ''}">${t}</button>`).join('')}</div>`;
 function m3Draw(){ const B = $('#m3Body'), P = (S.cmPoses || []).find(x => x.id===M3.P), g = M3.g; if(!B || !P || !g) return; $('#m3Head').textContent = m3Status(P);
   const done = P.views.filter(v => v.url).length, tot = P.views.length + (P.orb || []).length * 4, got = done + (P.orb || []).filter(o => o.urls.length).length * 4, bgs = g.d3bgs || [], busy = M3.busy;
   let x = m3Live(P) + (done < P.views.length ? `<div class="pbar obbar"><i style="width:${(100 * got / tot).toFixed(1)}%"></i></div><p class="note">About ${Math.max(1, Math.round((tot - got) * 0.6))} min to go. You can close this; it keeps going, and 🧊 Make 3D on the picture opens it again.</p>`
     + '<div class="btnrow">' + (P.stopped ? '<button class="btn hot" data-m3="retry">▶ Carry on</button>' : m3Jobs(P).length ? '<button class="btn" data-m3="stop">✕ Stop</button>'
       : P.views.concat(P.orb || []).some(v => v.err) ? '<button class="btn" data-m3="retry">↻ Try the missing ones again</button>' : '') + '<button class="btn" data-m3="over">↻ Start over</button></div>' : '');
-  x += `<div class="lbl">Backdrop</div><div class="row"><div class="grow"><input type="text" id="m3BgText" value="${esc(g.d3bgText || '')}" placeholder="e.g. a sunny park with trees"></div></div>
+  x += `<div class="lbl">Illustrious pass on each angle</div><div class="row">${m3Seg('data-m3paint', [[0, 'Off'], [0.3, 'Light'], [0.45, 'Full']], S.m3Paint!=null ? S.m3Paint : 0)}</div>
+    <p class="note">Off keeps MiniMax's frames as they are (just cut out), so colours and shoes stay put. This one is ${P.dn===0 ? 'Off' : P.dn===0.3 ? 'Light' : 'Full'}; the setting is used by the next 🧊 or ↻ Start over.</p>
+    <div class="lbl">Backdrop</div><div class="row"><div class="grow"><input type="text" id="m3BgText" value="${esc(g.d3bgText || '')}" placeholder="e.g. a sunny park with trees"></div></div>
     <div class="btnrow"><button class="btn" data-m3="bgs" ${busy ? 'disabled' : ''}>🏙 Paint 3 backdrops</button>${g.d3bgSel ? '<button class="btn" data-m3="nobg">✕ No backdrop</button>' : ''}</div>
     ${bgs.length ? `<div class="m3bgs">${bgs.map(u => `<button data-m3bg="${esc(u)}" class="${g.d3bgSel===u ? 'on' : ''}"><img src="${esc(mini(u))}" alt="" loading="lazy"></button>`).join('')}</div>` : ''}
     <p class="note">A flat picture behind her, facing the camera wherever it goes. Paint a few and tap one.</p>
-    <div class="lbl">Make it a picture</div><div class="row"><label>Paint over</label>${seg('data-m3dn', [[0.3, 'Light'], [0.4, 'Medium'], [0.55, 'Strong']], S.m3Dn || 0.4)}</div>
+    <div class="lbl">Make it a picture</div><div class="row"><label>Paint over</label>${m3Seg('data-m3dn', [[0.3, 'Light'], [0.4, 'Medium'], [0.55, 'Strong']], S.m3Dn || 0.4)}</div>
     <div class="btnrow"><button class="btn hot" data-m3="flat" ${busy || done < P.views.length ? 'disabled' : ''}>✨ Paint it flat</button></div>
     ${busy ? `<div class="pbar obbar pulse"><i></i></div><p class="note">${esc(busy)}</p>` : ''}
     <p class="note">✨ paints her and the backdrop together as one picture from this camera, with this render's model, LoRAs and prompt. It lands in your strip, and 🧊 on it opens this 3D scene again.</p>`;
@@ -6663,7 +6671,8 @@ async function m3Flat(){ const g = M3.g, V = m3V(), k = m3Kit(), P = (S.cmPoses 
     S.gallery.unshift({url, seed:null, prompt:g.prompt || '', t:Date.now(), snap:g.snap, d3p:P && P.id, d3from:g.url, d3cam:cam, d3bg:g.d3bgSel || ''}); save(); drawStrip(); show(0); toast('Painted flat: it is in your strip'); }
   catch(err){ toast("Couldn't paint it: " + err.message, true); }
   M3.busy = ''; m3Draw(); }
-document.addEventListener('click', e => { const b = e.target.closest('#m3Box [data-m3],#m3Box [data-m3bg],#m3Box [data-m3dn]'); if(!b) return; const g = M3.g;
+document.addEventListener('click', e => { const b = e.target.closest('#m3Box [data-m3],#m3Box [data-m3bg],#m3Box [data-m3dn],#m3Box [data-m3paint]'); if(!b) return; const g = M3.g;
+  if(b.dataset.m3paint!=null){ S.m3Paint = +b.dataset.m3paint; save(); m3Draw(); return; }
   if(b.dataset.m3dn){ S.m3Dn = +b.dataset.m3dn; save(); m3Draw(); return; }
   if(b.dataset.m3bg){ g.d3bgSel = b.dataset.m3bg; const V = m3V(); if(V) V.setBackdrop(g.d3bgSel); save(); m3Draw(); return; }
   const a = b.dataset.m3; if(a==='bgs') m3Backdrops(); else if(a==='flat') m3Flat();
@@ -6678,7 +6687,7 @@ function cmPoseFromPic(url){ const L = (S.cmLib || []).find(x => x.id===S.cmPose
   const n = (S.cmPoses || []).filter(P => P.who===L.id).length, P = {id:uid('sp'), name:(L.name || 'Pose') + ' ' + (n + 1), who:L.id, geo:{wM:1.28, hM:1.87, aim:[0, 0.85, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
     by:'mm', pic:true, src:url, off:+(S.cmPoseOff || 0), views:[0, 1, 2].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})))};
   P.orb = cmPoseOrbs().map(o => Object.assign(o, {pose:P.id})); if(S.cmPoseLook) cmPoseAddLook(P);
-  S.cmPoses = [P].concat(S.cmPoses || []); CM().open.poses = true; save(); cmPoseSync(); cmPoseRun(P); }
+  S.cmPoses = [P].concat(S.cmPoses || []); CM().open.poses = true; save(); cmPoseShape(P, url).then(() => { save(); cmPoseSync(); cmPoseRun(P); }); }
 $('#cmPosePick').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if(!f) return;
   try{ let url; if(S.test) url = (await uploadImage(f)).local;
     else { const pc = (cmFlKits()[0] || {}).url || farmHost(), fd = new FormData(); fd.append('image', f, 'pose_from_' + Date.now().toString(36) + '.png'); fd.append('overwrite', 'true'); fd.append('type', 'input');
@@ -6707,7 +6716,7 @@ function cmPoseOrbs(){ return [{step:'circle', ring:1}, {step:'crane', ring:2}, 
 function cmPoseOrbPrompt(o){ return o.step==='crane' ? obPrompt(o.ring===2 ? 'up' : 'down', 0, 35, CM_SP_SCENE) : circlePrompt(CM_SP_SCENE, true, o.ring===2 ? 'high' : o.ring===0 ? 'low' : ''); }
 // the circle comes back to the front at about 5 s (frame 120): every 15th frame is the next 45°; a crane keeps its last frame
 const cmPosePicks = o => o.step==='crane' ? [TV_LEN - 1] : [0, 1, 2, 3, 4, 5, 6, 7].map(i => i * 15);
-function cmPoseOrbGraph(k, img, prompt, picks, prefix){
+function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_MH){
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
@@ -6715,8 +6724,8 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix){
   if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
   let cond, lat;
-  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:CM_SP_MW, height:CM_SP_MH, length:TV_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1]; }
-  else { const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + prompt, width:CM_SP_MW, height:CM_SP_MH, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
+  if(k.fl){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:W, height:H, length:TV_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1]; }
+  else { const rv = add('MiniMaxH3ReferenceToVideo', {clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + prompt, width:W, height:H, length:TV_LEN, ref_image_size:'match', 'ref_images.ref_image_0':[li,0]});
     lat = [rv,1]; cond = [add('MiniMaxH3AddGuide', {positive:[rv,0], latent:lat, vae:[vae,0], image:[li,0], frame_idx:0}), 0]; }
   const gd = add('BasicGuider', {model, conditioning:cond}), sc = add('BasicScheduler', {model, scheduler:'simple', steps:k.steps, denoise:1});
   const sa = add('KSamplerSelect', {sampler_name:'res_multistep'}), no = add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)});
@@ -6725,10 +6734,10 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix){
   let b = null; for(const f of picks){ const one = add('ImageFromBatch', {image:[dec,0], batch_index:f, length:1}); b = b ? add('ImageBatch', {image1:[b,0], image2:[one,0]}) : one; }
   return {g, save:add('SaveImage', {images:[b,0], filename_prefix:prefix})}; }
 async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.from = src; delete o.err; drawComic();
-  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), picks = cmPosePicks(o), G = cmPoseOrbGraph(k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix);
+  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), picks = cmPosePicks(o), G = cmPoseOrbGraph(k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH);
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    o.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:5 * cmSlow(k.url), smp:samplerOf(G.g), w:CM_SP_MW, h:CM_SP_MH, kind:'sporb', video:false, all:true}; delete o.busy; save(); drawComic(); cmWait(o); }
+    o.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:5 * cmSlow(k.url), smp:samplerOf(G.g), w:P.mw || CM_SP_MW, h:P.mh || CM_SP_MH, kind:'sporb', video:false, all:true}; delete o.busy; save(); drawComic(); cmWait(o); }
   catch(err){ delete o.busy; o.err = err.message; save(); drawComic(); } }
 function cmPoseAddLook(P){ P.views.filter(v => !v.look).forEach(v => { const id = uid('sv'); if(CM_SPG[v.id]) CM_SPG[id] = CM_SPG[v.id]; P.views.push({id, ring:v.ring, i:v.i, look:true, url:''}); }); }
 function cmPoseGraph(k, L, gd, v, seed, prefix){
@@ -6743,12 +6752,17 @@ function cmPoseGraph(k, L, gd, v, seed, prefix){
   const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
   const seen = new Set(), tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
   let pos = enc(tags(tx.pos, LK ? [LK.words, LK.prompt].filter(Boolean).join(', ') : [I.words || '', cmCount(who), lk.words].join(', '), 'full body', (v.look ? CM_SP_LOOK : CM_SP_DIR)[v.i], CM_SP_UP[v.ring], CM_WHITE)), neg = enc(tags(tx.neg, 'multiple views', v.i && !v.look ? 'looking at viewer, eye contact, looking back' : '', CM_WHITE_NEG));
-  const W = 832, H = 1216, cl = [add('ControlNetLoader', {control_net_name:k.cn}), 0], mmIm = gd.mm ? add('ImageScale', {image:[add('LoadImage', {image:gd.mm}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'}) : null;
+  const [W, H] = L.size || [832, 1216];
+  // 🎬 MiniMax only (Jordan 2026-10-23: the Illustrious pass shifted her shoes and sweater): the MiniMax frame, just cut out
+  if(gd.mm && L.dn===0){ let out = [add('ImageScale', {image:[add('LoadImage', {image:gd.mm}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'}), 0];
+    if(k.bg && k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:out}), 0]}), 0]}), 0];
+    return {g, save:add('SaveImage', {images:out, filename_prefix:prefix})}; }
+  const cl = [add('ControlNetLoader', {control_net_name:k.cn}), 0], mmIm = gd.mm ? add('ImageScale', {image:[add('LoadImage', {image:gd.mm}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'}) : null;
   (mmIm ? (k.oi.AnimeLineArtPreprocessor ? [[{n:add('AnimeLineArtPreprocessor', {image:[mmIm,0], resolution:1024})}, 'canny/lineart/anime_lineart/mlsd', 0.7, 0.7]] : []) : [[gd.pose, 'openpose', 0.85, 0.7], [gd.depth, 'depth', 0.45, 0.5]]).forEach(([img, type, strength, end]) => {
     const gi = img.n ? img.n : add('ImageScale', {image:[add('LoadImage', {image:img}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'});
     const ap = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:cl, type}), 0], image:[gi,0], strength, start_percent:0, end_percent:end, vae}); pos = [ap,0]; neg = [ap,1]; });
   const ksa = add('KSampler', {model, positive:pos, negative:neg, latent_image:mmIm ? [add('VAEEncode', {pixels:[mmIm,0], vae}), 0] : [add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0],
-    seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise:gd.mm ? CM_SP_DN : 1});
+    seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise:gd.mm ? (L.dn || CM_SP_DN) : 1});
   let out = [add('VAEDecode', {samples:[ksa,0], vae}), 0];
   // cut out: transparent round her (BiRefNet), so she stands in the set
   if(k.bg && k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:out}), 0]}), 0]}), 0];
@@ -6756,11 +6770,12 @@ function cmPoseGraph(k, L, gd, v, seed, prefix){
 function cmPoseRun(P){ if(P.stopped) return; const L = P.from ? {name:'', g:'', from:true} : (S.cmLib || []).find(x => x.id===P.who); if(!L){ toast('That pose\'s character is gone from 👥 Characters', true); return; }
   let kits = cmIllKits().filter(k => k.cn); const kb = kits.filter(k => k.bg); if(kb.length) kits = kb; // only computers that can cut her out (Jordan saw every other one uncut)
   if(!kits.length){ toast('None of your computers that are on has an Illustrious model and ControlNet ProMax', true); return; }
-  const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(h => h.making && h.making.pc===k.url).length);
+  // how busy: the computer's own queue (Jordan 2026-10-23: jobs he cleared in ComfyUI still counted against Render, so all went to Main)
+  const load = {}; kits.forEach(k => load[k.url] = pcOf(k.url).load || 0);
   const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, st = cmPoseStart(P);
   const src = P.src;
   if(P.by==='mm' && src){ let fk = cmFlKits(); if(fk.some(k => k.fl)) fk = fk.filter(k => k.fl); // FL2V wherever it is, spread by load (Jordan 2026-10-23: 0 of 5 for ages)
-    const fl = {}; fk.forEach(k => fl[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(h => h.making && h.making.pc===k.url).length);
+    const fl = {}; fk.forEach(k => fl[k.url] = pcOf(k.url).load || 0);
     (P.orb || []).forEach(o => { if((o.urls || []).length || o.making || o.busy || !P.views.some(v => v.ring===o.ring && !v.url)) return;
       const from = o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]; if(!from) return;
       if(!fk.length){ o.err = 'no computer that is on has MiniMax H3'; return; }
@@ -6772,12 +6787,12 @@ function cmPoseRun(P){ if(P.stopped) return; const L = P.from ? {name:'', g:'', 
   todo.filter(v => !lost.includes(v)).forEach(v => { const k = kits.slice().sort((a, b) => (load[a.url] + 1) * cmSlow(a.url) - (load[b.url] + 1) * cmSlow(b.url))[0]; load[k.url]++; cmPoseJob(P, L, v, k); });
   drawComic(); }
 async function cmPoseJob(P, L, v, k){ v.busy = 'Sending…'; delete v.err;
-  try{ if(L.from) L = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, k.oi)});
+  try{ if(L.from) L = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, k.oi)}); if(P.iw) L = Object.assign({}, L, {size:[P.iw, P.ih]}); if(P.dn!=null) L = Object.assign({}, L, {dn:P.dn});
     const gd = CM_SPG[v.id], prefix = cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : '') + (v.cand!=null ? '_start' + v.cand : '')), o = P.by==='mm' && v.cand==null && (P.orb || []).find(x => x.step==='circle' && x.ring===v.ring), mmf = o && o.urls && o.urls[(v.i - (P.off || 0) + 8) % 8], G = cmPoseGraph(k, L, mmf ? {mm:await cmUp(mmf, k.url)} : {pose:await cmUp(gd.pose, k.url), depth:await cmUp(gd.depth, k.url)}, v, v.seed || P.seed, prefix);
     if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 120)); delete v.busy; cmGot(v, 'sprite', {url:'https://jordo-desktop.test/view?filename=' + P.id + '_' + v.ring + '_' + v.i + (v.look ? '_look' : '') + (v.cand!=null ? '_s' + v.cand : '') + '.png'}); return; }
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    v.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:1.5 * cmSlow(k.url), smp:samplerOf(G.g), w:832, h:1216, kind:'sprite', video:false}; delete v.busy; save(); drawComic(); cmWait(v); }
+    v.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:1.5 * cmSlow(k.url), smp:samplerOf(G.g), w:P.iw || 832, h:P.ih || 1216, kind:'sprite', video:false}; delete v.busy; save(); drawComic(); cmWait(v); }
   catch(err){ delete v.busy; v.err = err.message; save(); drawComic(); } }
 function cmPosesHtml(){ const ps = S.cmPoses || [];
   return (ps.length ? ps.map(P => { const done = P.views.filter(v => v.url).length, hs = P.views.concat(P.orb || [], P.cands || []), run = hs.filter(v => v.making || v.busy), lead = (P.orb || []).find(v => v.making) || P.views.find(v => v.making), errs = hs.filter(v => v.err), L = (S.cmLib || []).find(x => x.id===P.who);

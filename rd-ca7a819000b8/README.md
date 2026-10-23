@@ -89,3 +89,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Make 3D: ✕ Stop (takes its jobs out of the PCs' lines and stops the running one), ▶ Carry on, and ↻ Start over from the picture.
 - A pose job waiting in a busy PC's line moves to a PC that can make it and is idle.
 - The 3D viewer shows the picture itself until the angles are painted, instead of a white card.
+
+## 2026-10-23.142–143
+- 🧊 / 📱 poses from a picture keep the picture's shape: MiniMax and the Illustrious pass use its aspect (FL2V stretched a square picture into a tall clip), and the 3D card matches it.
+- 3D viewer: the camera can go under the floor to look up at her (low ring); a smaller 4 m grid; two fingers pinch to zoom and drag to pan, and the camera still turns round her after a pan (double-tap recentres).
+- 🧊 Illustrious pass on each angle: Off (MiniMax frames, just cut out; the new default) / Light 0.3 / Full 0.45. Paint over's Light/Medium/Strong buttons work again.
+- Spreading pose and MiniMax jobs uses each PC's own ComfyUI queue length, so jobs cleared in ComfyUI no longer count against a PC; a waiting MiniMax move sent by an older version can move to an idle PC too.
