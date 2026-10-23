@@ -59,6 +59,11 @@ const DEPS = process.env.RIG_DEPS || '';
     const fr = await pin(0.01), sd = await pin(Math.PI / 2);
     ok(Math.abs(fr.rot + Math.atan2(0.2, 1.6)) < 0.02 && Math.abs(sd.rot) < 0.02 && Math.abs(sd.ht / fr.ht - 1.6 / Math.hypot(0.2, 1.6)) < 0.02,
       'pinned to the rig: each picture leans and is sized as the skeleton is from that angle, whatever size it was drawn: ' + JSON.stringify({fr, sd})); }
+  // a flat camera: zoomed right in and from above, the picture keeps its drawn shape (it deformed with the perspective camera)
+  { const z = await page.evaluate(() => new Promise(res => { const c = VIEW.camera; c.position.set(0, 0.96 + 4.5 * Math.sin(0.5), 4.5 * Math.cos(0.5)); c.zoom = 4; c.updateProjectionMatrix(); VIEW.controls.update();
+      setTimeout(() => { const s = VIEW.stand(), V = s.V, g = s.g, P = (x, y) => s.her.localToWorld(new V(x, y, 0)).project(c), a = P(-g.wM / 2, -g.hM / 2), b = P(g.wM / 2, -g.hM / 2), d = P(-g.wM / 2, g.hM / 2);
+        res({flat:!!c.isOrthographicCamera, ratio:+(Math.hypot((b.x - a.x) * c.aspect, b.y - a.y) / Math.hypot((d.x - a.x) * c.aspect, d.y - a.y) / (g.wM / g.hM)).toFixed(3)}); }, 150); }));
+    ok(z.flat && Math.abs(z.ratio - 1) < 0.02, 'a flat camera: zoomed in and from above, she keeps the shape she was drawn with: ' + JSON.stringify(z)); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

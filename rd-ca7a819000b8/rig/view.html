@@ -19,8 +19,12 @@ const lib = () => { try{ return JSON.parse(localStorage.getItem(SPKEY)) || []; }
 const renderer = new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true}); renderer.setPixelRatio(Math.min(2, devicePixelRatio)); renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x3b3e45);
-const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 100); camera.position.set(0, 1.45, 4.5);
-const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 0.9, 0); controls.enableDamping = true; controls.minDistance = 0.8; controls.maxDistance = 12; controls.maxPolarAngle = 165 * D2R; controls.enablePan = false;
+// a flat (orthographic) camera (Jordan 2026-10-23: "when I zoom in it deforms"): each angle is a flat drawing on a card that
+// faces the camera, so with no perspective it shows exactly as drawn at any zoom; pinching zooms instead of moving closer.
+// At zoom 1 it frames what the old 30° camera saw from 4.5 m.
+const HALF = 4.5 * Math.tan(15 * Math.PI / 180), camera = new THREE.OrthographicCamera(-HALF, HALF, HALF, -HALF, -20, 100); camera.position.set(0, 1.45, 4.5);
+camera.fov = 30; // (kept for anything that still reads it)
+const controls = new OrbitControls(camera, renderer.domElement); controls.target.set(0, 0.9, 0); controls.enableDamping = true; controls.minZoom = 0.375; controls.maxZoom = 6; controls.maxPolarAngle = 165 * D2R; controls.enablePan = false;
 // one finger orbits, two fingers pinch to zoom and drag to pan (Jordan 2026-10-23); panning slides the picture on the screen and
 // never moves the pivot, so the camera always turns round her; the camera can go under the floor to look up at her
 controls.touches = {ONE:THREE.TOUCH.ROTATE, TWO:THREE.TOUCH.DOLLY_PAN};
@@ -31,7 +35,7 @@ addEventListener('pointermove', e => { if(!pts.has(e.pointerId)) return; pts.set
   const m = mid(), h = innerHeight; PX += (m.x - pc.x) / h; PY += (m.y - pc.y) / h; pc = m; offset(innerWidth, h); dirty = true; });
 const up = e => { pts.delete(e.pointerId); pc = pts.size===2 ? mid() : null; }; addEventListener('pointerup', up); addEventListener('pointercancel', up);
 renderer.domElement.addEventListener('dblclick', () => { PX = PY = 0; offset(innerWidth, innerHeight); dirty = true; });
-function offset(w, h){ if(PX || PY) camera.setViewOffset(w, h, -PX * h, -PY * h, w, h); else camera.clearViewOffset(); }
+function offset(w, h){ camera.left = -HALF * w / h; camera.right = HALF * w / h; camera.top = HALF; camera.bottom = -HALF; if(PX || PY) camera.setViewOffset(w, h, -PX * h, -PY * h, w, h); else camera.clearViewOffset(); camera.updateProjectionMatrix(); }
 const grid = new THREE.GridHelper(4, 16, 0x6b707b, 0x50545c); scene.add(grid); // a small square under her, not the whole room (Jordan 2026-10-23)
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshBasicMaterial({color:0x44474e, transparent:true, opacity:0.6})); floor.rotation.x = -Math.PI / 2; floor.position.y = -0.002; scene.add(floor);
 // a soft round shadow under her feet
@@ -89,6 +93,8 @@ const picLine = (ft, sx) => [(ft.hx - ft.fx) * sp.geo.wM * sx, ft.ht * sp.geo.hM
 // planted feet (Jordan 2026-10-23: "have the feet look planted in place"): the card turns to the camera about the point on the
 // floor where she stands, and each picture is moved and sized so her feet sit on that point and she is as tall as in the front
 // one, whatever spot and size MiniMax or Illustrious drew her at
+// (the card faces back along the camera's line of sight: with a flat camera every ray is parallel, so facing its position
+// from her feet would tip the card a little and squash her)
 function placeOne(L, url, v, k8){ const want = texOf(url), cur = L.mesh.material.map, t = want && want.userData.ready ? want : !L.top && cur && cur.userData.ready ? cur : L.top ? null : want;
   if(L.mesh.material.map!==t){ L.mesh.material.map = t; L.mesh.material.needsUpdate = true; } L.mesh.visible = !!t; if(!t) return false;
   const im = t.image, g = sp.geo, sx = sp.src && t===tex.get(sp.src) && im && im.width ? (im.width / im.height) / (g.wM / g.hM) : 1; // (the picture itself, standing in, keeps its own shape)
@@ -100,17 +106,17 @@ function placeOne(L, url, v, k8){ const want = texOf(url), cur = L.mesh.material
   else { const ref = [sp.views[v.ring * 8], ...sp.views.slice(v.ring * 8, v.ring * 8 + 8)].map(u => u && tex.get(u)).find(r => r && r.userData.feet), rr = ref && ref.userData.feet; // sized against the front at this height only: from above she looks shorter, and growing her to make up for it blew up her head (Jordan 2026-10-23)
     k = ft && rr ? Math.max(0.85, Math.min(1.18, rr.ht / ft.ht)) : 1; }
   L.mesh.scale.set(sx * k, k, 1); L.pivot.rotation.set(0, 0, -rot);
-  if(ft){ L.mesh.position.set(-(ft.fx - 0.5) * g.wM * sx * k, (ft.fy - 0.5) * g.hM * k, 0); L.st.position.set(0, 0, 0); L.st.lookAt(camera.position); } // her feet on the stand's spot, the floor at her centre
-  else { L.pivot.rotation.set(0, 0, 0); L.mesh.position.set(0, 0, 0); L.st.position.set(0, g.aim[1], 0); L.st.lookAt(camera.position); }
+  if(ft){ L.mesh.position.set(-(ft.fx - 0.5) * g.wM * sx * k, (ft.fy - 0.5) * g.hM * k, 0); L.st.position.set(0, 0, 0); L.st.lookAt(L.st.position.clone().add(camera.position).sub(controls.target)); } // her feet on the stand's spot, the floor at her centre
+  else { L.pivot.rotation.set(0, 0, 0); L.mesh.position.set(0, 0, 0); L.st.position.set(0, g.aim[1], 0); L.st.lookAt(L.st.position.clone().add(camera.position).sub(controls.target)); }
   return true; }
 function place(){ if(her){ const v = view(), A = layers[0], B = layers[1];
   her.visible = shadow.visible = placeOne(A, v.url, v, v.k);
   // (no fading in of the next angle: Jordan 2026-10-23, a flat render of the view needs one clean picture, not two blended)
   B.mesh.visible = false; }
-  if(back){ const d = camera.position.distanceTo(controls.target), far = d + 6, dir = controls.target.clone().sub(camera.position).normalize(), h = 2 * far * Math.tan(camera.fov * D2R / 2) * 1.05, im = back.material.map && back.material.map.image;
+  if(back){ const d = camera.position.distanceTo(controls.target), far = d + 6, dir = controls.target.clone().sub(camera.position).normalize(), h = 2 * HALF / camera.zoom * 1.05, im = back.material.map && back.material.map.image;
     back.position.copy(camera.position).addScaledVector(dir, far); back.quaternion.copy(camera.quaternion); const ar = im && im.width ? im.width / im.height : 1.5; back.scale.set(Math.max(h * camera.aspect, h * ar), Math.max(h, h * camera.aspect / ar), 1); }
   grid.visible = floor.visible = !back || QS.get('floor')!=='0'; shadow.visible = grid.visible && !!(her && her.visible); }
-function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; offset(w, h); camera.updateProjectionMatrix(); dirty = true; }
+function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; offset(w, h); dirty = true; }
 addEventListener('resize', size); size(); controls.addEventListener('change', () => { dirty = true; });
 addEventListener('storage', e => { if(e.key===SPKEY){ load(); } });
 (function loop(){ requestAnimationFrame(loop); controls.update(); if(!dirty) return; dirty = false; place(); renderer.render(scene, camera); })();
@@ -119,7 +125,8 @@ load();
 function shot(w, h){ const ow = renderer.domElement.width, oh = renderer.domElement.height, oa = camera.aspect, pr = renderer.getPixelRatio();
   renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; offset(w, h); camera.updateProjectionMatrix(); place(); renderer.render(scene, camera); const url = renderer.domElement.toDataURL('image/png');
   renderer.setPixelRatio(pr); size(); return url; }
-const cam = () => ({p:camera.position.toArray(), t:controls.target.toArray(), pan:[PX, PY]});
-function setCam(c){ if(!c) return; camera.position.fromArray(c.p); controls.target.fromArray(c.t); [PX, PY] = c.pan || [0, 0]; offset(innerWidth, innerHeight); camera.updateProjectionMatrix(); controls.update(); dirty = true; }
+const cam = () => ({p:camera.position.toArray(), t:controls.target.toArray(), pan:[PX, PY], zoom:camera.zoom, flat:1});
+function setCam(c){ if(!c) return; camera.position.fromArray(c.p); controls.target.fromArray(c.t);
+  if(c.flat) camera.zoom = c.zoom || 1; else { const d = camera.position.distanceTo(controls.target) || 4.5; camera.zoom = Math.max(0.375, Math.min(6, 4.5 / d)); camera.position.sub(controls.target).setLength(4.5).add(controls.target); } /* an older saved camera: its distance becomes the zoom */ [PX, PY] = c.pan || [0, 0]; offset(innerWidth, innerHeight); camera.updateProjectionMatrix(); controls.update(); dirty = true; }
 window.VIEW = {shot, cam, setCam, setBackdrop, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3, layers}), camera, controls};
 </script></body></html>
