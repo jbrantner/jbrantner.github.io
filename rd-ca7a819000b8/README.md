@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.172
+
+- 🧊 Viewer: the next angle fades in near each switch again, but only while you drag. When you let go, and in any flat shot, it shows the one nearest picture.
+
 ## 2026-10-23.171
 
 - 🧊 Outfit references for the high and low circles are OFF again: they painted the skeleton onto her dress and made the head pop. Back to the v.167 way (first-frame model following the skeleton video).
