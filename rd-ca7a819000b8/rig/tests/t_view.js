@@ -64,6 +64,16 @@ const DEPS = process.env.RIG_DEPS || '';
       setTimeout(() => { const s = VIEW.stand(), V = s.V, g = s.g, P = (x, y) => s.her.localToWorld(new V(x, y, 0)).project(c), a = P(-g.wM / 2, -g.hM / 2), b = P(g.wM / 2, -g.hM / 2), d = P(-g.wM / 2, g.hM / 2);
         res({flat:!!c.isOrthographicCamera, ratio:+(Math.hypot((b.x - a.x) * c.aspect, b.y - a.y) / Math.hypot((d.x - a.x) * c.aspect, d.y - a.y) / (g.wM / g.hM)).toFixed(3)}); }, 150); }));
     ok(z.flat && Math.abs(z.ratio - 1) < 0.02, 'a flat camera: zoomed in and from above, she keeps the shape she was drawn with: ' + JSON.stringify(z)); }
+  // 🌄 360° background: a ring drawn behind her by a camera that only turns; the base picture's point faces the front camera,
+  // and from the side (camera at +x looking at -x) the part of the panorama a quarter turn to the left shows
+  { const px = await page.evaluate(async () => { const c = document.createElement('canvas'); c.width = 800; c.height = 100; const x = c.getContext('2d'); ['#f00', '#0f0', '#00f', '#ff0'].forEach((col, i) => { x.fillStyle = col; x.fillRect(i * 200, 0, 200, 100); });
+      const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); L[0].views = L[0].views.map(() => ''); L[0].src = ''; localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload();
+      VIEW.setPano(c.toDataURL(), 0.125); await new Promise(r => setTimeout(r, 400));
+      const at = az => new Promise(res => { const cam = VIEW.camera, d = 4.5; cam.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); cam.zoom = 1; cam.updateProjectionMatrix(); VIEW.controls.update();
+        setTimeout(() => { const g = document.querySelector('canvas'), gl = g.getContext('webgl2') || g.getContext('webgl'), b = new Uint8Array(4); gl.readPixels(Math.round(g.width / 2), Math.round(g.height * 0.6), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, b); res([...b].slice(0, 3)); }, 200); });
+      return {front:await at(0.001), side:await at(Math.PI / 2), has:!!VIEW.pano()}; });
+    const col = p => p[0] > 150 && p[1] > 150 ? 'yellow' : p[0] > 150 ? 'red' : p[1] > 150 ? 'green' : p[2] > 150 ? 'blue' : '?';
+    ok(px.has && col(px.front)==='red' && col(px.side)==='yellow', '🌄 the 360° background wraps round: the base picture faces the front, a quarter turn of it to each side: ' + JSON.stringify({front:col(px.front), side:col(px.side), px})); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

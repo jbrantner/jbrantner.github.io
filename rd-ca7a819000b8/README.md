@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.169
+
+- 🌄 360° background in 🧊 Turn into 3D: pick a backdrop, tap 🌀 Turn the backdrop 360° (MiniMax turns the camera on the spot, starting from the backdrop), nudge the 3 picks at 90°, 180° and 270°, then tap 🔁 Make it loop. MiniMax runs again with the backdrop as first and last frame and the picks as key frames, the frames are stitched into one long panorama, and the viewer wraps it around the scene like a ring. On/off and ↻ Make a new one in the same section.
+
 ## 2026-10-23.168
 - 🧊 one outfit all the way round (Jordan): in a 🦴🎬 3D the eye-level turn is the design; its back and two side frames go to the high and low turns as reference pictures (MiniMax's reference model on the same computer, with the first frame pinned and the pose ControlNet still leading), so they copy her back instead of making it up. Without the reference model a computer makes them as before.
 

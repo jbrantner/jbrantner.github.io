@@ -517,6 +517,19 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           { const pz = await page.evaluate(async () => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p), o = P.orb.find(x => x.step==='circle' && x.ring===2); delete o.pick; save();
               for(let t = 0; t < 100 && !o.pick; t++) await new Promise(r => setTimeout(r, 100)); return (o.pick || []).join(); });
             ok(pz==='0,4,8,12,15,19,23,27', '🎯 a circle back with no angles picked is lined up on its own, so its 8 angles don\'t wait for ever: ' + pz); }
+          // 🌄 360° background: a turn on the spot from the backdrop, 3 picks, a looping turn with them as key frames, stitched into a panorama
+          { const pz = await page.evaluate(async () => { const P = document.createElement('canvas'); P.width = 2400; P.height = 576; const x = P.getContext('2d'); let sd = 7; const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+              for(let i = 0; i < 400; i++){ x.fillStyle = `hsl(${rnd() * 360},70%,${30 + rnd() * 40}%)`; x.fillRect(rnd() * 2400, rnd() * 576, 40 + rnd() * 160, 20 + rnd() * 120); }
+              const crop = off => { const c = document.createElement('canvas'); c.width = 832; c.height = 576; const y = c.getContext('2d'); for(const o of [0, 2400]) y.drawImage(P, -(off % 2400) + o, 0); return c.toDataURL('image/jpeg', 0.9); };
+              const g = S.gallery[0]; g.d3bgSel = crop(0); M3.g = g; window.TEST_PANG = []; window.TEST_PANFRAMES = (pre, n) => Array.from({length:n}, (_, i) => crop(Math.round(i * 2400 / (n===62 ? 62 : 30.75) * (n===62 ? 1 : 1)) ));
+              await m3Pan1(); const s1 = (g.d3pano.s1 || []).length; await m3Pan2(); const G = window.TEST_PANG.map(q => Object.values(q)); delete window.TEST_PANFRAMES;
+              const im = await new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = g.d3pano.url; });
+              const r = {s1, picks:g.d3pano.picks.join(), first:G[0] && {last:G[0].some(n => n.class_type==='MiniMaxH3ImageToVideo' && n.inputs.last_frame), keys:G[0].filter(n => n.class_type==='MiniMaxH3AddGuide').length, frames:G[0].filter(n => n.class_type==='ImageFromBatch').length},
+                second:G[1] && {last:G[1].some(n => n.class_type==='MiniMaxH3ImageToVideo' && n.inputs.last_frame), keys:G[1].filter(n => n.class_type==='MiniMaxH3AddGuide').map(n => n.inputs.frame_idx).join(), frames:G[1].filter(n => n.class_type==='ImageFromBatch').length},
+                url:!!g.d3pano.url, at:+(g.d3pano.at || 0).toFixed(3), w:g.d3pano.w, on:m3PanoOn(g)};
+              g.d3pano.on = false; return r; });
+            ok(pz.s1===31 && pz.picks==='8,15,23' && pz.first && !pz.first.last && pz.first.keys===0 && pz.first.frames===31 && pz.second && pz.second.last && pz.second.keys==='31,62,92' && pz.second.frames===62 && pz.url && pz.on && Math.abs(pz.w - 2400) < 60 && Math.abs(pz.at - 416 / 2400) < 0.02,
+              '🌄 360° background: MiniMax turns on the spot from the backdrop (31 frames), then loops it with the backdrop as first and last frame and the 3 picks as key frames, stitched into one panorama as wide as the whole turn: ' + JSON.stringify(pz)); }
           // 🧊 locked for now (Jordan 2026-10-23): Make 3D starts straight away as 🦴🎬, no Illustrious pass, going ahead on its own, no choices shown
           { const lk = await page.evaluate(async () => { window.M3_FREE = false; S.m3By = 'mm'; S.m3Paint = 0.45; S.m3Pick = true; $('#m3Done') && $('#m3Done').click();
               S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump5.png', prompt:'a girl', t:Date.now(), snap:{prompt:'a girl', blocks:[]}}); m3Open(S.gallery[0]); await new Promise(r => setTimeout(r, 400));

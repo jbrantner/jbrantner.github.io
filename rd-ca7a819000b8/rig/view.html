@@ -83,6 +83,17 @@ function view(){ const rel = camera.position.clone().sub(HERC()), az = Math.atan
   const at = (n, k) => { if(v16){ const u = sp.views16[n * 16 + k]; if(u) return u; if(k % 2===0) return sp.views[n * 8 + k / 2] || ''; return ''; } return look && sp.look[n * 8 + k] || sp.views[n * 8 + k] || ''; };
   const url = at(ring, i) || at(1, i) || (v16 && (sp.views[ring * 8 + Math.round(i / 2) % 8] || sp.views[8 + Math.round(i / 2) % 8])) || sp.views.find(Boolean) || sp.src || ''; // the picture itself stands in until the angles are painted
   return {i:v16 ? i / 2 : i, k:i, N, ring, url, next:at(ring, j), nk:j, w:Math.abs(fr)}; }
+// 🌄 a 360° background (Jordan 2026-10-23): one long looping panorama on the inside of a ring round the scene, drawn first by
+// its own camera that stands at the middle and only turns with the view camera (so the far scenery never slides about),
+// then her and the floor on top. The base picture's middle is straight ahead of the camera's first, front view.
+const bgScene = new THREE.Scene(), bgCam = new THREE.PerspectiveCamera(50, 1, 0.1, 100); let pano = null;
+function setPano(url, at){ if(pano){ bgScene.remove(pano); pano = null; } scene.background = url ? null : new THREE.Color(0x3b3e45);
+  if(url){ const t = loader.load(url, () => { const im = t.image, R = 10, H = 2 * Math.PI * R * im.height / im.width; pano.geometry.dispose(); pano.geometry = new THREE.CylinderGeometry(R, R, H, 96, 1, true); dirty = true; });
+    t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping; t.repeat.x = -1; t.offset.x = (at || 0) + 0.5; // inside the ring the picture would read backwards; its point at "at" (0..1 across) faces the front camera
+    pano = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 4, 96, 1, true), new THREE.MeshBasicMaterial({map:t, side:THREE.BackSide, depthWrite:false})); bgScene.add(pano); }
+  dirty = true; }
+function draw(){ if(pano){ renderer.autoClear = false; renderer.setClearColor(0x3b3e45); renderer.clear(); bgCam.quaternion.copy(camera.quaternion); bgCam.aspect = camera.aspect; bgCam.updateProjectionMatrix(); renderer.render(bgScene, bgCam); renderer.clearDepth(); renderer.render(scene, camera); renderer.autoClear = true; }
+  else renderer.render(scene, camera); }
 function setBackdrop(url){ if(back){ scene.remove(back); back = null; } if(url){ const t = texOf(url); back = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({map:t, depthWrite:false})); back.renderOrder = -1; scene.add(back); } dirty = true; }
 // pinned to the rig (Jordan 2026-10-23): sp.rig is her head-top-to-feet line from the rig, turned so her front is at 0°. Seen
 // from each angle it is a line on the screen of a known length and lean; each picture is sized and tilted (about her feet)
@@ -115,18 +126,18 @@ function place(){ if(her){ const v = view(), A = layers[0], B = layers[1];
   B.mesh.visible = false; }
   if(back){ const d = camera.position.distanceTo(controls.target), far = d + 6, dir = controls.target.clone().sub(camera.position).normalize(), h = 2 * HALF / camera.zoom * 1.05, im = back.material.map && back.material.map.image;
     back.position.copy(camera.position).addScaledVector(dir, far); back.quaternion.copy(camera.quaternion); const ar = im && im.width ? im.width / im.height : 1.5; back.scale.set(Math.max(h * camera.aspect, h * ar), Math.max(h, h * camera.aspect / ar), 1); }
-  grid.visible = floor.visible = !back || QS.get('floor')!=='0'; shadow.visible = grid.visible && !!(her && her.visible); }
+  grid.visible = floor.visible = !(back || pano) || QS.get('floor')!=='0'; shadow.visible = grid.visible && !!(her && her.visible); }
 function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; offset(w, h); dirty = true; }
 addEventListener('resize', size); size(); controls.addEventListener('change', () => { dirty = true; });
 addEventListener('storage', e => { if(e.key===SPKEY){ load(); } });
-(function loop(){ requestAnimationFrame(loop); controls.update(); if(!dirty) return; dirty = false; place(); renderer.render(scene, camera); })();
+(function loop(){ requestAnimationFrame(loop); controls.update(); if(!dirty) return; dirty = false; place(); draw(); })();
 load();
 // what the camera sees, at w × h (the frame ✨ Paint it flat paints over), and where the camera is, to open it again
 function shot(w, h){ const ow = renderer.domElement.width, oh = renderer.domElement.height, oa = camera.aspect, pr = renderer.getPixelRatio();
-  renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; offset(w, h); camera.updateProjectionMatrix(); place(); renderer.render(scene, camera); const url = renderer.domElement.toDataURL('image/png');
+  renderer.setPixelRatio(1); renderer.setSize(w, h, false); camera.aspect = w / h; offset(w, h); camera.updateProjectionMatrix(); place(); draw(); const url = renderer.domElement.toDataURL('image/png');
   renderer.setPixelRatio(pr); size(); return url; }
 const cam = () => ({p:camera.position.toArray(), t:controls.target.toArray(), pan:[PX, PY], zoom:camera.zoom, flat:1});
 function setCam(c){ if(!c) return; camera.position.fromArray(c.p); controls.target.fromArray(c.t);
   if(c.flat) camera.zoom = c.zoom || 1; else { const d = camera.position.distanceTo(controls.target) || 4.5; camera.zoom = Math.max(0.375, Math.min(6, 4.5 / d)); camera.position.sub(controls.target).setLength(4.5).add(controls.target); } /* an older saved camera: its distance becomes the zoom */ [PX, PY] = c.pan || [0, 0]; offset(innerWidth, innerHeight); camera.updateProjectionMatrix(); controls.update(); dirty = true; }
-window.VIEW = {shot, cam, setCam, setBackdrop, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3, layers}), camera, controls};
+window.VIEW = {shot, cam, setCam, setBackdrop, setPano, pano:() => pano, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3, layers}), camera, controls};
 </script></body></html>
