@@ -99,3 +99,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-23.144–145
 - FIX: since v.140 every live preview picture from a 📖/🧍/🧊 job started a new character-preview render (two functions shared a name), which filled both PCs' lines with hundreds of jobs. Renamed; live pictures only update the 🧊 thumbnails now.
 - 🧊 shows when a PC that could help has a line of other jobs, with ✕ Clear its line.
+
+## 2026-10-23.146
+- 🧍/🧊 pose jobs go out one per computer at a time (Jordan): the rest wait in the app, and whichever PC is idle (nothing in its ComfyUI line) takes the next one it can make, MiniMax moves first. 🧊 shows how many are waiting. Needs the app open; it picks up again when the app opens.
+- Removed the live picture for these jobs (MiniMax sent nothing useful); the step bars stay.

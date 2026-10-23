@@ -637,7 +637,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.145'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.146'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -917,8 +917,7 @@ function onPreview(p, buf){
   let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg', pid = null;
   if(type===4){ const n = v.getUint32(4); try{ const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,n))); pid = meta.prompt_id || null; mime = meta.image_type || 'image/jpeg'; }catch(e){} off = 8 + n; }
   else if(type!==1) return;
-  // not a render-queue job: a 📖/🧍/🧊 job's live picture (Jordan 2026-10-23: show the steps like image renders)
-  if(pid ? !S.queue.some(q => q.id===pid) : !S.queue.some(q => q.srv===p.url)){ cmLivePic(p, pid, new Blob([new Uint8Array(buf, off)], {type:mime})); return; }
+  if(pid ? !S.queue.some(q => q.id===pid) : !S.queue.length) return; // only render-queue jobs (MiniMax sent no useful picture anyway, Jordan 2026-10-23)
   // a Hidden render's live picture is never kept or shown outside Hidden
   const mine = S.queue.filter(q => q.srv===p.url), job = mine.find(q => q.state==='running') || mine[0];
   if(job ? masked(job) : !S.hidden && S.queue.some(masked)){ dropPreview(p); return; }
@@ -932,10 +931,6 @@ function onPreview(p, buf){
   const img = $('#shown'); img.src = url; img.hidden = false; $('#empty').hidden = true;
 }
 
-const CMPV = {}; // job id -> its latest live picture
-function cmLivePic(p, pid, blob){ const h = cmAll().find(x => x.making && x.making.pc===p.url && (pid ? x.making.id===pid : LIVE[x.making.id] && LIVE[x.making.id].started)); if(!h) return;
-  const id = h.making.id, url = URL.createObjectURL(blob); if(CMPV[id]) URL.revokeObjectURL(CMPV[id]); CMPV[id] = url;
-  document.querySelectorAll('img[data-cmpv]').forEach(i => { if(i.dataset.cmpv===id){ i.src = url; i.hidden = false; } }); }
 function dropPreview(p){
   if(p.preview) URL.revokeObjectURL(p.preview); p.preview = '';
   document.querySelectorAll('img[data-pv]').forEach(i => { if(i.dataset.pv===p.url) i.removeAttribute('src'); });
@@ -5491,7 +5486,7 @@ function shotGraph(k, imgs, c, prompt, prefix){
 // a job on a computer, followed to its first output file (also through a ComfyUI restart, by its file for videos)
 async function waitOut(pc, id, sid, prefix, t0, video, all){
   for(;;){
-    await new Promise(r => setTimeout(r, 4000));
+    await new Promise(r => setTimeout(r, window.WAIT_MS || 4000));
     let h = null; try{ h = (await (await fetch(pc + '/history/' + id)).json())[id]; }catch(e){ continue; }
     if(!h){ let q = null; try{ q = await (await fetch(pc + '/queue')).json(); }catch(e){ continue; }
       if([...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===id)) continue;
@@ -6622,20 +6617,20 @@ function m3Open(g){ const src = g.d3from ? S.gallery.find(x => x.url===g.d3from)
   m3Draw(); clearInterval(M3.t); M3.t = setInterval(m3Tick, 1000); }
 const m3V = () => { try{ return $('#m3Box iframe').contentWindow.VIEW; }catch(e){ return null; } };
 function m3Close(){ clearInterval(M3.t); const b = $('#m3Box'); if(b) b.remove(); document.body.style.overflow = ''; M3.g = null; drawStrip(); }
-function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return; const n = P.views.filter(v => v.url).length + (P.orb || []).filter(o => o.urls.length).length * 100 + '|' + m3Jobs(P).map(v => v.making.id).join(',') + '|' + cmFlKits().map(k => pcOf(k.url).load > 0 ? 1 : 0).join('');
+function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return; const n = P.views.filter(v => v.url).length + (P.orb || []).filter(o => o.urls.length).length * 100 + '|' + m3Jobs(P).map(v => v.making.id).join(',') + '|' + cmFlKits().map(k => pcOf(k.url).load > 0 ? 1 : 0).join('') + '|' + cmPoseWaiting(P);
   if(!S.test && ++M3.q % 5===1) m3Jobs(P).forEach(v => liveQueue(v.making.id, v.making.pc).then(m3Bars)); m3Bars();
   if(n!==M3.n){ M3.n = n; const V = m3V(); if(V) V.reload(); m3Draw(); } else { const h = $('#m3Head'); if(h) h.textContent = m3Status(P); } }
 function m3Status(P){ const done = P.views.filter(v => v.url).length, mv = (P.orb || []).filter(o => o.urls.length).length, run = P.views.concat(P.orb || []).filter(v => v.making || v.busy).length, err = P.views.concat(P.orb || []).find(v => v.err);
   return done===P.views.length ? 'Drag to walk round her' : err && !run ? "Something didn't paint: " + err.err : mv < (P.orb || []).length ? 'MiniMax turning round her: ' + mv + ' of ' + P.orb.length + ' moves' : 'Painting the angles: ' + done + ' of ' + P.views.length; }
-// what is painting right now: its live picture (ComfyUI's preview, step by step) and its own step bar with time left
+// what is painting right now, each with its own step bar and time left
 const m3Jobs = P => (P.orb || []).concat(P.views, P.cands || []).filter(v => v.making);
 // a computer that could help but has a line of other jobs (Jordan 2026-10-23: Main sat on 58 old jobs, so Render did it all)
 function m3Idle(P){ const js = m3Jobs(P); if(!js.length) return ''; const mine = new Set(js.map(v => v.making.pc));
   return cmFlKits().filter(k => !mine.has(k.url) && pcOf(k.url).load > 0).map(k => `<p class="note">${esc(pcName(k.url))} isn't helping: it has ${pcOf(k.url).load} other job${pcOf(k.url).load > 1 ? 's' : ''} waiting in its line.</p><div class="btnrow"><button class="btn" data-m3clear="${esc(k.url)}">✕ Clear ${esc(pcName(k.url))}'s line</button></div>`).join(''); }
-function m3Live(P){ const js = m3Jobs(P); if(!js.length) return '';
+function m3Live(P){ const js = m3Jobs(P), w = cmPoseWaiting(P), wn = w ? `<p class="note">${w} more waiting; each goes to the next computer that is free.</p>` : ''; if(!js.length) return wn;
   return m3Idle(P) + '<div class="m3live">' + js.map(v => { const id = v.making.id, e = cmEta(v) || {f:0, text:''};
-    return `<div class="m3job"><img data-cmpv="${esc(id)}" ${CMPV[id] ? 'src="' + esc(CMPV[id]) + '"' : 'hidden'} alt=""><div class="grow"><b>${v.step ? (v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===2 ? ' high' : v.ring===0 ? ' low' : '')) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
-      <div class="pbar obbar"><i data-m3bar="${esc(id)}" style="width:${(100 * e.f).toFixed(1)}%"></i></div><p class="note" data-m3txt="${esc(id)}">${esc(e.text)}</p></div></div>`; }).join('') + '</div>'; }
+    return `<div class="m3job"><div class="grow"><b>${v.step ? (v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===2 ? ' high' : v.ring===0 ? ' low' : '')) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
+      <div class="pbar obbar"><i data-m3bar="${esc(id)}" style="width:${(100 * e.f).toFixed(1)}%"></i></div><p class="note" data-m3txt="${esc(id)}">${esc(e.text)}</p></div></div>`; }).join('') + '</div>' + wn; }
 function m3Bars(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return;
   m3Jobs(P).forEach(v => { const e = cmEta(v); if(!e) return; const id = v.making.id;
     document.querySelectorAll(`[data-m3bar="${id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
@@ -6750,7 +6745,7 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
   const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
   let b = null; for(const f of picks){ const one = add('ImageFromBatch', {image:[dec,0], batch_index:f, length:1}); b = b ? add('ImageBatch', {image1:[b,0], image2:[one,0]}) : one; }
   return {g, save:add('SaveImage', {images:[b,0], filename_prefix:prefix})}; }
-async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.from = src; delete o.err; drawComic();
+async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.busyPc = k.url; o.from = src; delete o.err; drawComic();
   try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), picks = cmPosePicks(o), G = cmPoseOrbGraph(k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH);
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -6784,26 +6779,32 @@ function cmPoseGraph(k, L, gd, v, seed, prefix){
   // cut out: transparent round her (BiRefNet), so she stands in the set
   if(k.bg && k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:out}), 0]}), 0]}), 0];
   return {g, save:add('SaveImage', {images:out, filename_prefix:prefix})}; }
-function cmPoseRun(P){ if(P.stopped) return; const L = P.from ? {name:'', g:'', from:true} : (S.cmLib || []).find(x => x.id===P.who); if(!L){ toast('That pose\'s character is gone from 👥 Characters', true); return; }
+// a computer is busy while ComfyUI has anything in its line or one of our pose jobs is being sent to it or made on it
+const CM_SENTAT = {};
+const cmPcBusy = url => pcOf(url).load > 0 || (S.cmPoses || []).some(P => (P.orb || []).concat(P.views, P.cands || []).some(v => (v.making && v.making.pc===url) || (v.busy && v.busyPc===url)));
+// what is still waiting for a free computer
+const cmPoseWaiting = P => P.stopped ? 0 : (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err).length + P.views.filter(v => !v.url && !v.making && !v.busy && !v.err).length;
+setInterval(() => { if(document.visibilityState!=='visible') return; (S.cmPoses || []).forEach(P => { if(!P.stopped && cmPoseWaiting(P)) cmPoseRun(P, true); }); }, 3000);
+function cmPoseRun(P, quiet){ if(P.stopped) return; const L = P.from ? {name:'', g:'', from:true} : (S.cmLib || []).find(x => x.id===P.who); if(!L){ if(!quiet) toast('That pose\'s character is gone from 👥 Characters', true); return; }
   let kits = cmIllKits().filter(k => k.cn); const kb = kits.filter(k => k.bg); if(kb.length) kits = kb; // only computers that can cut her out (Jordan saw every other one uncut)
-  if(!kits.length){ toast('None of your computers that are on has an Illustrious model and ControlNet ProMax', true); return; }
-  // how busy: the computer's own queue (Jordan 2026-10-23: jobs he cleared in ComfyUI still counted against Render, so all went to Main)
-  const load = {}; kits.forEach(k => load[k.url] = pcOf(k.url).load || 0);
-  const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, st = cmPoseStart(P);
-  const src = P.src;
-  if(P.by==='mm' && src){ let fk = cmFlKits(); if(fk.some(k => k.fl)) fk = fk.filter(k => k.fl); // FL2V wherever it is, spread by load (Jordan 2026-10-23: 0 of 5 for ages)
-    const fl = {}; fk.forEach(k => fl[k.url] = pcOf(k.url).load || 0);
-    (P.orb || []).forEach(o => { if((o.urls || []).length || o.making || o.busy || !P.views.some(v => v.ring===o.ring && !v.url)) return;
-      const from = o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]; if(!from) return;
-      if(!fk.length){ o.err = 'no computer that is on has MiniMax H3'; return; }
-      const k = fk.slice().sort((a, b) => (fl[a.url] + 1) * cmSlow(a.url) - (fl[b.url] + 1) * cmSlow(b.url))[0]; fl[k.url]++; cmPoseOrbJob(P, o, from, k); }); }
+  if(!kits.length){ if(!quiet) toast('None of your computers that are on has an Illustrious model and ControlNet ProMax', true); return; }
+  // one job per computer at a time (Jordan 2026-10-23: "we just don't queue the job to a computer until one is idle"): the rest wait
+  // here, and whenever a computer is idle it takes the next one that it can make, MiniMax moves first (they unlock the angles)
+  const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, src = P.src;
+  let fk = cmFlKits(); if(fk.some(k => k.fl)) fk = fk.filter(k => k.fl);
+  const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url)).map(o => [o, o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]]).filter(x => x[1]) : [];
+  if(P.by==='mm' && src && !fk.length) (P.orb || []).forEach(o => { if(!(o.urls || []).length && !o.making) o.err = 'no computer that is on has MiniMax H3'; });
   const ready = v => P.by!=='mm' || (orb('circle', v.ring).urls || []).length===8;
   if(P.by==='mm' && !src && !P.pic && !(P.cands || []).length) cmPoseCands(P);
-  const todo = P.views.filter(v => !v.url && !v.making && !v.busy && ready(v)).concat(P.by==='mm' && !src ? (P.cands || []).filter(c => !c.url && !c.making && !c.busy && !c.err) : []), lost = todo.filter(v => !CM_SPG[v.id] && !(P.by==='mm' && v.cand==null));
-  if(lost.length){ toast(lost.length + ' of its angles need the rig again: open a panel\'s rig with that pose and tap 🧍 Make a pose', true); }
-  todo.filter(v => !lost.includes(v)).forEach(v => { const k = kits.slice().sort((a, b) => (load[a.url] + 1) * cmSlow(a.url) - (load[b.url] + 1) * cmSlow(b.url))[0]; load[k.url]++; cmPoseJob(P, L, v, k); });
-  drawComic(); }
-async function cmPoseJob(P, L, v, k){ v.busy = 'Sending…'; delete v.err;
+  const todo = P.views.filter(v => !v.url && !v.making && !v.busy && !v.err && ready(v)).concat(P.by==='mm' && !src ? (P.cands || []).filter(c => !c.url && !c.making && !c.busy && !c.err) : []), lost = todo.filter(v => !CM_SPG[v.id] && !(P.by==='mm' && v.cand==null));
+  if(lost.length){ toast(lost.length + ' of its angles need the rig again: open a panel\'s rig with that pose and tap 🧍 Make a pose', true); lost.forEach(v => v.err = 'needs the rig again'); }
+  const angles = todo.filter(v => !lost.includes(v));
+  const pcs = [...new Set(fk.concat(kits).map(k => k.url))].sort((a, b) => cmSlow(a) - cmSlow(b));
+  let sent = 0; pcs.forEach(url => { if(cmPcBusy(url)) return; const f = fk.find(k => k.url===url), k = kits.find(k => k.url===url);
+    if(f && moves.length){ const [o, from] = moves.shift(); CM_SENTAT[url] = Date.now(); sent++; cmPoseOrbJob(P, o, from, f); return; }
+    if(k && angles.length){ CM_SENTAT[url] = Date.now(); sent++; cmPoseJob(P, L, angles.shift(), k); } });
+  if(sent || !quiet) drawComic(); }
+async function cmPoseJob(P, L, v, k){ v.busy = 'Sending…'; v.busyPc = k.url; delete v.err;
   try{ if(L.from) L = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, k.oi)}); if(P.iw) L = Object.assign({}, L, {size:[P.iw, P.ih]}); if(P.dn!=null) L = Object.assign({}, L, {dn:P.dn});
     const gd = CM_SPG[v.id], prefix = cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : '') + (v.cand!=null ? '_start' + v.cand : '')), o = P.by==='mm' && v.cand==null && (P.orb || []).find(x => x.step==='circle' && x.ring===v.ring), mmf = o && o.urls && o.urls[(v.i - (P.off || 0) + 8) % 8], G = cmPoseGraph(k, L, mmf ? {mm:await cmUp(mmf, k.url)} : {pose:await cmUp(gd.pose, k.url), depth:await cmUp(gd.depth, k.url)}, v, v.seed || P.seed, prefix);
     if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 120)); delete v.busy; cmGot(v, 'sprite', {url:'https://jordo-desktop.test/view?filename=' + P.id + '_' + v.ring + '_' + v.i + (v.look ? '_look' : '') + (v.cand!=null ? '_s' + v.cand : '') + '.png'}); return; }
@@ -8299,7 +8300,7 @@ function cmGot(p, kind, it){
     if(it.urls && it.urls.length >= 4){ p.bg = it.urls[1]; p.bgDepth = it.urls[2]; p.mask = it.urls[3]; }
     ['far', 'farDepth', 'nearMask'].forEach(x => delete p[x]); p.dflip = false;
     save(); if(!$('#comic').hidden) drawComic(); if(it.url) d3After(p); return; }
-  if(kind==='sprite'){ p.url = it.url; delete p.err; save(); cmPoseSync(); const P = (S.cmPoses || []).find(x => x.by==='mm' && (x.views.includes(p) || (x.cands || []).includes(p)));
+  if(kind==='sprite'){ p.url = it.url; delete p.err; save(); cmPoseSync(); const P = (S.cmPoses || []).find(x => x.views.includes(p) || (x.cands || []).includes(p)); // and the next one waiting goes out
     if(P && p.cand!=null){ const rd = P.cands.filter(c => c.round===p.round); if(!P.src && S.cmPoseAuto!==false && rd.every(c => c.url || c.err) && rd.some(c => c.url)) cmPoseScore(P, p.round).then(b => { if(b && !P.src) cmPosePick(P, b, true); else drawComic(); }); else if(!$('#comic').hidden) drawComic(); return; }
     if(P) cmPoseRun(P); else if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='sporb'){ p.urls = it.urls || []; delete p.err; save(); const P = (S.cmPoses || []).find(x => x.id===p.pose); if(P) cmPoseRun(P); else if(!$('#comic').hidden) drawComic(); return; }

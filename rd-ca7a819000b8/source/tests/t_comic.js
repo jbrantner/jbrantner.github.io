@@ -396,7 +396,8 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       await page.evaluate(() => { cmDelPanel(1); const p = cmPage().panels[0]; delete p.setBg; p.rig.set = false; p.stills = []; CM().sel = 0; drawComic(); });
       // 🧍 a pose from 24 angles: the rig's guides, painted with her LoRA, cut out, and offered in every rig's Set tab
       await page.evaluate(() => { S.cmPoseBy = 'ill'; }); nb = ALL.length; await page.click('#comic .cmed [data-cmrig="0"]'); const fp = await (await page.waitForSelector('#cmRigBox iframe')).contentFrame(); await fp.waitForFunction(() => window.RIG, null, {timeout:20000});
-      await page.click('#cmRigPose'); await page.waitForFunction(() => (S.cmPoses || []).length && S.cmPoses[0].views.every(v => v.url), null, {timeout:60000});
+      await page.click('#cmRigPose'); await page.evaluate(() => { window.WAIT_MS = 300; }); // pose jobs go out one per computer at a time, so poll quickly
+      await page.waitForFunction(() => (S.cmPoses || []).length && S.cmPoses[0].views.every(v => v.url), null, {timeout:60000});
       const pg24 = ALL.slice(nb).map(x => x.prompt), e3 = pg24.flatMap(check), seeds = new Set(pg24.map(g => Object.values(g).find(n => n.class_type==='KSampler').inputs.seed));
       const txt = g => Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | '), pre = g => Object.values(g).find(n => n.class_type==='SaveImage').inputs.filename_prefix;
       const back = pg24.find(g => /eye_4$/.test(pre(g))), hi = pg24.find(g => /high_0$/.test(pre(g)));
@@ -464,7 +465,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           const ov = await page.evaluate(id => ({gone:!S.cmPoses.some(x => x.id===id), now:S.gallery[0].d3p, fresh:!!S.cmPoses.find(x => x.id===S.gallery[0].d3p)}), p0);
           ok(st.stopped && !st.run && st.orbs < 5 && ov.gone && ov.fresh && ov.now!==p0, '🧊 ✕ Stop halts the 3D and ↻ Start over begins again from the picture: ' + JSON.stringify({st, ov}));
           await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); P.stopped = true; }); await page.click('#m3Done'); }
-        await page.evaluate(() => { S.cmPoseBy = 'ill'; }); }
+        await page.evaluate(() => { S.cmPoseBy = 'ill'; delete window.WAIT_MS; }); }
       await page.click('#comic .cmed [data-cmrig="0"]'); await (await page.waitForSelector('#cmRigBox iframe')).contentFrame();
       await page.click('#cmRigDone'); }
     { const r = await page.evaluate(() => { const q = cmPage().panels[0], o = q.rigBy; q.rigBy = 'mm'; CM().sel = 0; drawComic(); const x = {by:cmRigBy(q), seg:!!document.querySelector('#comic [data-cmrigby], #comic [data-cmmmq]')}; if(o) q.rigBy = o; else delete q.rigBy; drawComic(); return x; });
