@@ -110,3 +110,6 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 ## 2026-10-23.148
 - 🧊 Make 3D "Turn her with": 🦴 Rig + Illustrious (new default, after MiniMax's turn wasn't great) or 🎬 MiniMax. The rig copies her pose from the picture (DWPose on a PC that has it, else the phone's reader), then each of the 24 angles is an Illustrious render from the rig's pose and depth with the picture's own model, LoRAs and prompt; all 24 go to the farm at once.
+
+## 2026-10-23.149
+- 🧊: a finished 3D has ↻ Make it again (with the Turn her with setting), not only one still running.
