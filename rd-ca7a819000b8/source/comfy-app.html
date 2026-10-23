@@ -403,7 +403,7 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cprig{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.55}
 .cmrigbox{position:fixed;inset:0;z-index:300;background:var(--bg);display:flex;flex-direction:column}
 .m3view{flex:0 0 56%;border:0;width:100%;background:#3b3e45}.m3body{flex:1;overflow:auto;padding:10px 12px calc(16px + env(safe-area-inset-bottom))}
-.m3bgs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:6px 0}.m3bgs button{padding:0;aspect-ratio:3/2;border-radius:6px;overflow:hidden;border:1px solid var(--line);background:var(--panel2)}.m3bgs button.on{outline:2px solid var(--accent)}.m3bgs img{width:100%;height:100%;object-fit:cover;display:block}
+.m3job{display:flex;gap:8px;align-items:center;margin:0 0 8px}.m3job img{width:64px;height:94px;object-fit:cover;border-radius:6px;border:1px solid var(--line);background:var(--panel2);flex:0 0 auto}.m3job b{font-size:13px}.m3bgs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:6px 0}.m3bgs button{padding:0;aspect-ratio:3/2;border-radius:6px;overflow:hidden;border:1px solid var(--line);background:var(--panel2)}.m3bgs button.on{outline:2px solid var(--accent)}.m3bgs img{width:100%;height:100%;object-fit:cover;display:block}
 .cmrigtop{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 10px 6px}
 .cmrigtop b{font:700 16px/1 var(--display);white-space:nowrap}
 .cmrigtop select{flex:1;min-width:0}
@@ -626,7 +626,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-23.139'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-23.140'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -902,11 +902,12 @@ function onSocket(p, ev){
 }
 // live preview frames: 4 bytes event type, then either 4 bytes image type + image, or (type 4) 4 bytes metadata length + json + image
 function onPreview(p, buf){
-  if(!S.queue.length) return;
   const v = new DataView(buf), type = v.getUint32(0);
-  let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg';
-  if(type===4){ const n = v.getUint32(4); try{ const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,n))); if(meta.prompt_id && !S.queue.some(q => q.id===meta.prompt_id)) return; mime = meta.image_type || 'image/jpeg'; }catch(e){} off = 8 + n; }
+  let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg', pid = null;
+  if(type===4){ const n = v.getUint32(4); try{ const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,n))); pid = meta.prompt_id || null; mime = meta.image_type || 'image/jpeg'; }catch(e){} off = 8 + n; }
   else if(type!==1) return;
+  // not a render-queue job: a 📖/🧍/🧊 job's live picture (Jordan 2026-10-23: show the steps like image renders)
+  if(pid ? !S.queue.some(q => q.id===pid) : !S.queue.some(q => q.srv===p.url)){ cmPreview(p, pid, new Blob([new Uint8Array(buf, off)], {type:mime})); return; }
   // a Hidden render's live picture is never kept or shown outside Hidden
   const mine = S.queue.filter(q => q.srv===p.url), job = mine.find(q => q.state==='running') || mine[0];
   if(job ? masked(job) : !S.hidden && S.queue.some(masked)){ dropPreview(p); return; }
@@ -920,6 +921,10 @@ function onPreview(p, buf){
   const img = $('#shown'); img.src = url; img.hidden = false; $('#empty').hidden = true;
 }
 
+const CMPV = {}; // job id -> its latest live picture
+function cmPreview(p, pid, blob){ const h = cmAll().find(x => x.making && x.making.pc===p.url && (pid ? x.making.id===pid : LIVE[x.making.id] && LIVE[x.making.id].started)); if(!h) return;
+  const id = h.making.id, url = URL.createObjectURL(blob); if(CMPV[id]) URL.revokeObjectURL(CMPV[id]); CMPV[id] = url;
+  document.querySelectorAll('img[data-cmpv]').forEach(i => { if(i.dataset.cmpv===id){ i.src = url; i.hidden = false; } }); }
 function dropPreview(p){
   if(p.preview) URL.revokeObjectURL(p.preview); p.preview = '';
   document.querySelectorAll('img[data-pv]').forEach(i => { if(i.dataset.pv===p.url) i.removeAttribute('src'); });
@@ -6046,7 +6051,7 @@ function liveMsg(m, d){
   if(m.type==='execution_start') L.started = true;
   else if(m.type==='executing' && d.node!=null){ if(L.node===L.smp && d.node!==L.node && L.max) L.ds = now; L.node = d.node; L.nt = now; }
   else if(m.type==='progress'){ if(d.node!==L.pn){ L.pn = d.node; L.ps = L.node===d.node && L.nt ? L.nt : now; } L.v = d.value; L.max = d.max; L.pt = now; }
-  obBar(); cmBar();
+  obBar(); cmBar(); m3Bars();
 }
 function liveEta(id, smp, t0, estS, what){
   const L = LIVE[id] || {}, now = Date.now(), el = Math.max(1, (now - t0) / 1000); L.smp = smp;
@@ -6566,7 +6571,7 @@ async function cmPoseFromSaved(name){ const m = cmRigMyPoses().find(x => x.name=
 // she stands in a grey room with a grid floor (rig/view.html) and is orbited with a finger. Flat backdrops can be painted to
 // stand behind her, and ✨ Paint it flat paints over what the camera sees as one picture. The picture keeps its 3D (g.d3p):
 // 🧊 on it opens the scene again, and a flat picture opens at the camera and backdrop it was painted from.
-const M3 = {g:null, t:0, n:-1};
+const M3 = {g:null, t:0, n:-1, q:0};
 const m3Pose = g => g && g.d3p && (S.cmPoses || []).find(P => P.id===g.d3p);
 function m3Start(g){ if(!cmFlKits().length){ toast('None of your computers that are on has MiniMax H3', true); return null; }
   const P = {id:uid('sp'), name:'🧊 ' + (g.prompt || 'Render').slice(0, 30), who:'', from:true, snap:g.snap || null, geo:{wM:1.28, hM:1.87, aim:[0, 0.935, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
@@ -6582,14 +6587,25 @@ function m3Open(g){ const src = g.d3from ? S.gallery.find(x => x.url===g.d3from)
   m3Draw(); clearInterval(M3.t); M3.t = setInterval(m3Tick, 1000); }
 const m3V = () => { try{ return $('#m3Box iframe').contentWindow.VIEW; }catch(e){ return null; } };
 function m3Close(){ clearInterval(M3.t); const b = $('#m3Box'); if(b) b.remove(); document.body.style.overflow = ''; M3.g = null; drawStrip(); }
-function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return; const n = P.views.filter(v => v.url).length + (P.orb || []).filter(o => o.urls.length).length * 100;
+function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return; const n = P.views.filter(v => v.url).length + (P.orb || []).filter(o => o.urls.length).length * 100 + '|' + m3Jobs(P).map(v => v.making.id).join(',');
+  if(!S.test && ++M3.q % 5===1) m3Jobs(P).forEach(v => liveQueue(v.making.id, v.making.pc).then(m3Bars)); m3Bars();
   if(n!==M3.n){ M3.n = n; const V = m3V(); if(V) V.reload(); m3Draw(); } else { const h = $('#m3Head'); if(h) h.textContent = m3Status(P); } }
 function m3Status(P){ const done = P.views.filter(v => v.url).length, mv = (P.orb || []).filter(o => o.urls.length).length, run = P.views.concat(P.orb || []).filter(v => v.making || v.busy).length, err = P.views.concat(P.orb || []).find(v => v.err);
   return done===P.views.length ? 'Drag to walk round her' : err && !run ? "Something didn't paint: " + err.err : mv < (P.orb || []).length ? 'MiniMax turning round her: ' + mv + ' of ' + P.orb.length + ' moves' : 'Painting the angles: ' + done + ' of ' + P.views.length; }
+// what is painting right now: its live picture (ComfyUI's preview, step by step) and its own step bar with time left
+const m3Jobs = P => (P.orb || []).concat(P.views, P.cands || []).filter(v => v.making);
+function m3Live(P){ const js = m3Jobs(P); if(!js.length) return '';
+  return '<div class="m3live">' + js.map(v => { const id = v.making.id, e = cmEta(v) || {f:0, text:''};
+    return `<div class="m3job"><img data-cmpv="${esc(id)}" ${CMPV[id] ? 'src="' + esc(CMPV[id]) + '"' : 'hidden'} alt=""><div class="grow"><b>${v.step ? (v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===2 ? ' high' : v.ring===0 ? ' low' : '')) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
+      <div class="pbar obbar"><i data-m3bar="${esc(id)}" style="width:${(100 * e.f).toFixed(1)}%"></i></div><p class="note" data-m3txt="${esc(id)}">${esc(e.text)}</p></div></div>`; }).join('') + '</div>'; }
+function m3Bars(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return;
+  m3Jobs(P).forEach(v => { const e = cmEta(v); if(!e) return; const id = v.making.id;
+    document.querySelectorAll(`[data-m3bar="${id}"]`).forEach(el => el.style.width = (100 * e.f).toFixed(1) + '%');
+    document.querySelectorAll(`[data-m3txt="${id}"]`).forEach(el => el.textContent = e.text); }); }
 function m3Draw(){ const B = $('#m3Body'), P = (S.cmPoses || []).find(x => x.id===M3.P), g = M3.g; if(!B || !P || !g) return; $('#m3Head').textContent = m3Status(P);
   const done = P.views.filter(v => v.url).length, tot = P.views.length + (P.orb || []).length * 4, got = done + (P.orb || []).filter(o => o.urls.length).length * 4, bgs = g.d3bgs || [], busy = M3.busy;
-  let x = done < P.views.length ? `<div class="pbar obbar"><i style="width:${(100 * got / tot).toFixed(1)}%"></i></div><p class="note">About ${Math.max(1, Math.round((tot - got) * 0.6))} min to go. You can close this; it keeps going, and 🧊 Make 3D on the picture opens it again.</p>`
-    + (P.views.concat(P.orb || []).some(v => v.err) && !P.views.concat(P.orb || []).some(v => v.making || v.busy) ? '<div class="btnrow"><button class="btn" data-m3="retry">↻ Try the missing ones again</button></div>' : '') : '';
+  let x = m3Live(P) + (done < P.views.length ? `<div class="pbar obbar"><i style="width:${(100 * got / tot).toFixed(1)}%"></i></div><p class="note">About ${Math.max(1, Math.round((tot - got) * 0.6))} min to go. You can close this; it keeps going, and 🧊 Make 3D on the picture opens it again.</p>`
+    + (P.views.concat(P.orb || []).some(v => v.err) && !P.views.concat(P.orb || []).some(v => v.making || v.busy) ? '<div class="btnrow"><button class="btn" data-m3="retry">↻ Try the missing ones again</button></div>' : '') : '');
   x += `<div class="lbl">Backdrop</div><div class="row"><div class="grow"><input type="text" id="m3BgText" value="${esc(g.d3bgText || '')}" placeholder="e.g. a sunny park with trees"></div></div>
     <div class="btnrow"><button class="btn" data-m3="bgs" ${busy ? 'disabled' : ''}>🏙 Paint 3 backdrops</button>${g.d3bgSel ? '<button class="btn" data-m3="nobg">✕ No backdrop</button>' : ''}</div>
     ${bgs.length ? `<div class="m3bgs">${bgs.map(u => `<button data-m3bg="${esc(u)}" class="${g.d3bgSel===u ? 'on' : ''}"><img src="${esc(mini(u))}" alt="" loading="lazy"></button>`).join('')}</div>` : ''}
@@ -6719,10 +6735,12 @@ function cmPoseRun(P){ const L = P.from ? {name:'', g:'', from:true} : (S.cmLib 
   const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(h => h.making && h.making.pc===k.url).length);
   const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, st = cmPoseStart(P);
   const src = P.src;
-  if(P.by==='mm' && src){ const fk = cmFlKits().sort((a, b) => (b.fl ? 1 : 0) - (a.fl ? 1 : 0));
+  if(P.by==='mm' && src){ let fk = cmFlKits(); if(fk.some(k => k.fl)) fk = fk.filter(k => k.fl); // FL2V wherever it is, spread by load (Jordan 2026-10-23: 0 of 5 for ages)
+    const fl = {}; fk.forEach(k => fl[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(h => h.making && h.making.pc===k.url).length);
     (P.orb || []).forEach(o => { if((o.urls || []).length || o.making || o.busy || !P.views.some(v => v.ring===o.ring && !v.url)) return;
       const from = o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]; if(!from) return;
-      if(!fk.length){ o.err = 'no computer that is on has MiniMax H3'; return; } cmPoseOrbJob(P, o, from, fk[0]); }); }
+      if(!fk.length){ o.err = 'no computer that is on has MiniMax H3'; return; }
+      const k = fk.slice().sort((a, b) => (fl[a.url] + 1) * cmSlow(a.url) - (fl[b.url] + 1) * cmSlow(b.url))[0]; fl[k.url]++; cmPoseOrbJob(P, o, from, k); }); }
   const ready = v => P.by!=='mm' || (orb('circle', v.ring).urls || []).length===8;
   if(P.by==='mm' && !src && !P.pic && !(P.cands || []).length) cmPoseCands(P);
   const todo = P.views.filter(v => !v.url && !v.making && !v.busy && ready(v)).concat(P.by==='mm' && !src ? (P.cands || []).filter(c => !c.url && !c.making && !c.busy && !c.err) : []), lost = todo.filter(v => !CM_SPG[v.id] && !(P.by==='mm' && v.cand==null));
