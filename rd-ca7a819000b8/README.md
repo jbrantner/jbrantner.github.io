@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.171
+
+- 🧊 Outfit references for the high and low circles are OFF again: they painted the skeleton onto her dress and made the head pop. Back to the v.167 way (first-frame model following the skeleton video).
+
 ## 2026-10-23.170
 
 - 🧊 The high and low circles (skeleton video plus the eye-level outfit references) now use the full MiniMax model at 20 steps instead of Turbo at 4: on Turbo the skeleton's lines were painted onto her dress. Those two moves take longer.
