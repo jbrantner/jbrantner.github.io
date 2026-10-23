@@ -443,6 +443,11 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
         // backdrops and ✨ Paint it flat, which lands in the strip and opens the 3D again
         if(process.env.RIG_DEPS){ const n0 = ALL.length; await page.evaluate(() => { S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump.png', prompt:'a girl jumping, dynamic pose', t:Date.now(),
             snap:{prompt:'a girl jumping, dynamic pose', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); S.m3Paint = 0.45; S.m3By = 'mm'; S.m3Pick = true; m3Open(S.gallery[0]); });
+          // opening it doesn't start it: the choices and ▶ Make it 3D come first
+          { await page.waitForSelector('#m3Box [data-m3="start"]'); const nb = ALL.length; await new Promise(r => setTimeout(r, 600));
+            const st0 = await page.evaluate(() => ({head:$('#m3Head').textContent, by:!!document.querySelector('#m3Box [data-m3by="mmrig"]'), pic:!!document.querySelector('#m3Box img.m3pic'), d3p:!!S.gallery[0].d3p}));
+            ok(st0.head==='Not 3D yet' && st0.by && st0.pic && !st0.d3p && ALL.length===nb, '🧊 opening a picture that isn\'t 3D shows the choices and ▶ Make it 3D, and starts nothing: ' + JSON.stringify(st0));
+            await page.click('#m3Box [data-m3="start"]'); }
           // 🎯 the angles wait for her: each circle's 8 lined up on their own, ‹ › nudges one, ✓ Use these angles sends them
           await page.waitForSelector('#m3Box [data-m3pk="1:ok"]', {timeout:60000});
           const pk0 = await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p), o = P.orb.find(x => x.step==='circle' && x.ring===1); return {pick:o.pick.join(), n:o.urls.length, eye:P.views.filter(v => v.ring===1 && (v.url || v.making || v.busy)).length, head:$('#m3Head').textContent, th:document.querySelectorAll('#m3Box .m3pick img').length}; });
@@ -463,8 +468,14 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           ok(/no humans/.test(bg.find(n => n.class_type==='CLIPTextEncode').inputs.text) && /sunny park/.test(bg.find(n => n.class_type==='CLIPTextEncode').inputs.text) && fg.some(n => n.class_type==='VAEEncode') && fg.find(n => n.class_type==='KSampler').inputs.denoise===0.4 && fg.some(n => n.class_type==='AnimeLineArtPreprocessor') && it.cam && it.bg && it.p,
             '🏙 backdrops (no humans, the typed place) and ✨ Paint it flat (a 0.4 pass over the camera\'s view) landing in the strip with its 3D, camera and backdrop kept: ' + JSON.stringify(it) + ' ' + JSON.stringify({bg:(bg.find(n => n.class_type==='CLIPTextEncode') || {inputs:{}}).inputs.text, fg:fg.map(n => n.class_type).join()}).slice(0, 600));
           await page.click('#m3Done');
+          // 🧊 on its thumbnail, and the preview shows it in 3D (🖼 Flat flips back)
+          { const sv = await page.evaluate(() => { const i = S.gallery.findIndex(x => x.d3p && !x.d3from && pic3d(x)===2); show(i); drawStrip(); const f = $('#st3d');
+              return {i, badge:!!document.querySelector(`#strip .sth:nth-child(${i + 1}) .s3d`), flatBadge:!!document.querySelector('#strip .sth:nth-child(1) .s3d'), frame:!!f && /view\.html\?pose=/.test(f.src), hid:$('#shown').style.visibility, btn:$('#st3dBtn').textContent}; });
+            const sv2 = await page.evaluate(() => { $('#st3dBtn').click(); const r = {frame:!!$('#st3d'), btn:$('#st3dBtn').textContent}; $('#st3dBtn').click(); return r; }); // (the comic tab covers the preview here)
+            ok(sv.i >= 0 && sv.badge && !sv.flatBadge && sv.frame && sv.hid==='hidden' && sv.btn==='🖼 Flat' && !sv2.frame && sv2.btn==='🧊 3D',
+              '🧊 a 3D render has a 🧊 on its thumbnail (its flat paint doesn\'t), and the preview shows it in 3D with 🖼 Flat / 🧊 3D: ' + JSON.stringify({sv, sv2})); }
           // ✕ Stop and ↻ Start over while it is still turning
-          await page.evaluate(() => { S.m3Pick = false; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump2.png', prompt:'a girl kicking', t:Date.now(), snap:{prompt:'a girl kicking', blocks:[]}}); m3Open(S.gallery[0]); });
+          await page.evaluate(() => { S.m3Pick = false; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump2.png', prompt:'a girl kicking', t:Date.now(), snap:{prompt:'a girl kicking', blocks:[]}}); m3Open(S.gallery[0], true); });
           await page.waitForSelector('#m3Box [data-m3="stop"]', {timeout:20000}); const p0 = await page.evaluate(() => S.gallery[0].d3p); await page.click('#m3Box [data-m3="stop"]');
           await page.waitForSelector('#m3Box [data-m3="retry"]', {timeout:20000}); await new Promise(r => setTimeout(r, 1500));
           const st = await page.evaluate(id => { const P = S.cmPoses.find(x => x.id===id); return {stopped:P.stopped, run:P.views.concat(P.orb).filter(v => v.making || v.busy).length, orbs:P.orb.filter(o => o.urls.length).length}; }, p0);
@@ -474,7 +485,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); P.stopped = true; }); await page.click('#m3Done');
           // 🦴 the rig way: the rig copies her pose from the picture, then 24 Illustrious angles from its pose and depth, no MiniMax
           const n1 = ALL.length; await page.evaluate(() => { window.TEST_POSE = []; S.m3By = 'rig'; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump3.png', prompt:'a girl jumping', t:Date.now(), d3desc:'orange sweater, black sneakers',
-            snap:{prompt:'a girl jumping', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); m3Open(S.gallery[0]); });
+            snap:{prompt:'a girl jumping', blocks:[{type:'model', ckpt:'oneObsession_v17.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:0.8}]}}); m3Open(S.gallery[0], true); });
           await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});
           const rg = ALL.slice(n1).map(x => x.prompt), rill = rg.filter(g => V(g).some(n => n.class_type==='CheckpointLoaderSimple'));
           const rinfo = await page.evaluate(() => ({asked:window.TEST_POSE, by:S.cmPoses.find(x => x.id===S.gallery[0].d3p).by}));
@@ -483,7 +494,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
             '🦴 Make 3D the rig way: the rig copies the pose from the picture, then 24 Illustrious angles from its pose and depth with the render\'s own look, no MiniMax: ' + JSON.stringify({n:rill.length, rinfo}));
           await page.click('#m3Done');
           // 🦴🎬 MiniMax led by the rig: the rig copies her pose, its skeleton turning is each move's pose control video
-          const n2 = ALL.length; await page.evaluate(() => { window.TEST_POSE = []; S.m3By = 'mmrig'; S.m3Pick = false; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump4.png', prompt:'a girl jumping', t:Date.now(), snap:{prompt:'a girl jumping', blocks:[]}}); m3Open(S.gallery[0]); });
+          const n2 = ALL.length; await page.evaluate(() => { window.TEST_POSE = []; S.m3By = 'mmrig'; S.m3Pick = false; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump4.png', prompt:'a girl jumping', t:Date.now(), snap:{prompt:'a girl jumping', blocks:[]}}); m3Open(S.gallery[0], true); });
           await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url); }, null, {timeout:90000});
           const cg = ALL.slice(n2).map(x => x.prompt), cmm = cg.filter(g => V(g).some(n => /^MiniMaxH3/.test(n.class_type)));
           const cinfo = await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return {ctl:P.ctl, by:P.by, asked:window.TEST_POSE.length, frames:P.orb.map(o => (CM_SPC[o.id] || []).length), jpg:/^data:image\/jpeg/.test((CM_SPC[P.orb[0].id] || [])[0] || ''), pick:P.orb.find(o => o.step==='circle' && o.ring===1).pick.join()}; });

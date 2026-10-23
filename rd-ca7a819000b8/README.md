@@ -118,6 +118,11 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-23.154
+- 🧊 on a thumbnail marks a render that has been made 3D (faded while it is still being made; its ✨ flat paints don't get one).
+- The preview shows a 3D render in 3D straight away (drag to walk round her), with 🖼 Flat / 🧊 3D in the corner to flip. A live render preview takes the picture back while something paints.
+- 🧊 Make 3D on a picture that isn't 3D yet no longer starts at once: it shows the picture, the choices (Turn her with, Illustrious pass, Describe her) and ▶ Make it 3D. ↻ Make it again still starts straight away.
+
 ## 2026-10-23.153
 - ☰ Queue shows everything in each computer's line under its row, not just this queue's renders: 3D angles and MiniMax turns, comic stills and clips, character previews, the farm's jobs, other phones' or ComfyUI's own. Each says what it is (from what it saves, its model and prompt), whether it is running (with steps when this phone sent it) or waiting, and who sent it; ✕ stops or takes out one, "Clear the N waiting" empties the line. Hidden jobs stay unnamed outside Hidden. The list refreshes every 3 s while the queue is open.
 
