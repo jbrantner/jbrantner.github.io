@@ -26,6 +26,7 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.goto('https://app.test/rig/view.html?pose=sp1');
   await page.evaluate(v => { localStorage.setItem('rd-pose-sprites', JSON.stringify([{id:'sp1', name:'t', geo:{wM:1.28, hM:1.92, aim:[0, 0.96, 0]}, src:'', views:v}])); VIEW.reload(); }, views);
   await page.waitForFunction(() => window.VIEW && VIEW.feet(), null, {timeout:20000});
+  await page.evaluate(() => VIEW.lock(false)); // the card that turns to the camera first; 📌 locked is checked at the end
   // where her feet land in the world, and how tall she is: front vs back
   const at = async az => page.evaluate(az => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update();
     setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({i:VIEW.view().i, feet:f && s.her.localToWorld(new s.V((f.fx - 0.5) * s.g.wM, (0.5 - f.fy) * s.g.hM, 0)).toArray().map(v => +v.toFixed(3)), ht:f && +(f.ht * s.g.hM * s.her.scale.y).toFixed(3)}); }, 120); }), az);
@@ -75,6 +76,14 @@ const DEPS = process.env.RIG_DEPS || '';
       setTimeout(() => { const s = VIEW.stand(), V = s.V, g = s.g, P = (x, y) => s.her.localToWorld(new V(x, y, 0)).project(c), a = P(-g.wM / 2, -g.hM / 2), b = P(g.wM / 2, -g.hM / 2), d = P(-g.wM / 2, g.hM / 2);
         res({flat:!!c.isOrthographicCamera, ratio:+(Math.hypot((b.x - a.x) * c.aspect, b.y - a.y) / Math.hypot((d.x - a.x) * c.aspect, d.y - a.y) / (g.wM / g.hM)).toFixed(3)}); }, 150); }));
     ok(z.flat && Math.abs(z.ratio - 1) < 0.02, 'a flat camera: zoomed in and from above, she keeps the shape she was drawn with: ' + JSON.stringify(z)); }
+  // 📌 locked (Jordan 2026-10-24): the card faces the way its picture was made and doesn't turn as the camera moves within one
+  // angle; at the next angle it faces that one's way
+  { const lk = await page.evaluate(() => new Promise(res => { VIEW.lock(true); const c = VIEW.camera, d = 4.5, n = [];
+      const go = (az, k) => { c.zoom = 1; c.updateProjectionMatrix(); c.position.set(Math.sin(az) * d, 0.96 + 0.39, Math.cos(az) * d); VIEW.controls.update(); setTimeout(() => { const s = VIEW.stand(), q = new s.V(0, 0, 1).applyQuaternion(s.layers[0].st.getWorldQuaternion(new THREE_Q())); n.push(Math.atan2(q.x, q.z)); k(); }, 150); };
+      const THREE_Q = VIEW.camera.quaternion.constructor;
+      go(-0.15, () => go(0.15, () => go(Math.PI / 4 + 0.05, () => { VIEW.lock(false); res(n.map(a => +a.toFixed(3))); }))); }));
+    const step = 2 * Math.PI / 8;
+    ok(Math.abs(lk[0]) < 0.01 && Math.abs(lk[1]) < 0.01 && Math.abs(lk[2] - step) < 0.01, '📌 locked: the picture keeps facing the way it was made while the camera moves round, and turns only at the next angle: ' + JSON.stringify(lk)); }
   // 🌄 360° background: a ring drawn behind her by a camera that only turns; the base picture's point faces the front camera,
   // and from the side (camera at +x looking at -x) the part of the panorama a quarter turn to the left shows
   { const px = await page.evaluate(async () => { const c = document.createElement('canvas'); c.width = 800; c.height = 100; const x = c.getContext('2d'); ['#f00', '#0f0', '#00f', '#ff0'].forEach((col, i) => { x.fillStyle = col; x.fillRect(i * 200, 0, 200, 100); });

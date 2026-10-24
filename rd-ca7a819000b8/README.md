@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.177
+
+- 🧊 Viewer, 📌 locked pictures (to try): each picture stands facing the way it was made and no longer turns to follow the camera; it changes only at the next angle. rig/view.html?follow=1 brings back the turning card.
+
 ## 2026-10-24.176
 
 - 🧊 Viewer: no fade between angles at all, dragging or not (Jordan said no).
