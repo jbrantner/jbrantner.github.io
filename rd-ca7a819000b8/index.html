@@ -118,6 +118,10 @@ body.hidden-mode .wrap{box-shadow:inset 0 3px 0 var(--soft)}
 .strip::-webkit-scrollbar{display:none}
 .strip img{flex:none;width:58px;height:58px;object-fit:cover;border-radius:10px;border:2px solid transparent;opacity:.8}
 .strip img.sel{border-color:var(--accent);opacity:1}
+.projs .sth.on img{border-color:var(--accent);opacity:1}.projs .pcount{position:absolute;left:4px;top:4px;font:800 10px/1 var(--body,system-ui);background:#000c;color:#fff;border-radius:6px;padding:2px 4px;font-style:normal}
+.projs .newproj{flex:none;width:58px;height:58px;border-radius:10px;border:1.5px dashed var(--line);background:none;color:var(--muted);font:700 11px/1.15 var(--body,system-ui);display:grid;place-items:center;text-align:center;padding:0 4px}
+.projhead{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin:2px 0 -4px}.projhead b{color:var(--ink);font-weight:700}.projhead button{background:none;border:0;color:var(--muted);font-size:12px;padding:2px 4px}
+.strip.inproj img{width:46px;height:46px}
 .strip .none{flex:1;min-height:58px;display:grid;place-items:center;border:1px dashed var(--line);border-radius:10px;color:var(--dim);font-size:13px;margin:0}
 
 /* prompt */
@@ -493,6 +497,8 @@ body.cm-open #comic{padding-bottom:84px}
     <button class="chipbtn" data-act="recipe" hidden>⤵ Use its settings</button>
     <button class="chipbtn" data-act="open" hidden>↗ Open full size</button>
   </div>
+  <div class="strip projs" id="projs" hidden></div>
+  <div class="projhead" id="projHead" hidden></div>
   <div class="strip" id="strip"></div>
   <div class="obpanel" id="obPanel" hidden></div>
     </div>
@@ -638,7 +644,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-24.181'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-24.182'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1141,6 +1147,7 @@ async function go(){
     const e = {key:tap + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : base(), state:'sending', hidden:!!S.hidden,
       graph:built.graph, titles:built.titles, seed:built.seed, prompt:S.prompt, ckpt:M.ckpt, n:i+1, of:runs, images:[], snap:snapshot(built.seed),
       size:sizeOf(P), pics:on1('pic') || S.draft ? 1 : S.batch, steps:S.draft ? draftStep(P) : P.steps};
+    if(!S.ws && S.proj) e.proj = S.proj; // 🗂 it lands in the project open now, even if you open another meanwhile
     if(S.ws) e.ws = S.ws.pid; // a comic panel's render goes back to that panel, even if it finishes after you leave it
     if(fin){ Object.assign(e, {draft:true, fin:fin.graph, finTitles:fin.titles, finSteps:P.steps});
       // the full render also rides inside the draft's own picture (ComfyUI keeps the graph in the PNG), so any phone can finish it later
@@ -1351,8 +1358,8 @@ async function completeOne(e, quiet, h){
     for(const id in (h && h.outputs) || {}) (h.outputs[id].images||[]).forEach(i => { if(i.type==='output') e.images.push(i); }); }catch(err){} }
   e.images.forEach(i => { i.subfolder = (i.subfolder || '').replace(/\\/g, '/'); }); // same address as the helper's list gives it, so it isn't listed twice
   charGot(e, e.images.map(i => ({img:(i.subfolder ? i.subfolder + '/' : '') + i.filename + ' [output]', url:viewUrl(i, e.srv), home:e.srv})));
-  e.images.forEach(i => galleryFor(isHidden(i.subfolder), e, i.subfolder).unshift(Object.assign({url:viewUrl(i, e.srv), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}, draftInfo(e))));
-  S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); save(); show(0); drawStrip();
+  e.images.forEach(i => galleryFor(isHidden(i.subfolder), e, i.subfolder).unshift(Object.assign({url:viewUrl(i, e.srv), seed:e.seed, prompt:e.prompt, t:Date.now(), snap:e.snap}, e.proj ? {proj:e.proj} : {}, draftInfo(e))));
+  S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); save(); showLanded(); drawStrip();
   doneCount++;
   if(e.draft && !masked(e) && !S.queue.some(q => q.draft && !masked(q))){ const n = S.gallery.filter(g => g.draft && g.fin && !g.sent && !g.away).length;
     toast(n + (n > 1 ? ' drafts' : ' draft') + ' ready: tick the ones to finish ✎'); scrollTo({top:0, behavior:'smooth'}); if(!quiet) doneCount = 0; }
@@ -1370,7 +1377,12 @@ function draftInfo(e){
   return e.finOf ? {from:e.finOf} : {};
 }
 // the latest 40 renders, plus every draft still waiting to be picked
-const trimGallery = a => { let k = 0; return a.filter(g => (g.draft && g.fin && !g.sent && !g.away) || (g.ob && (g.ob.making || g.ob.fin)) || k++ < 40); };
+// the latest 60 renders of each 🗂 project (300 in all), plus every draft still waiting to be picked
+const trimGallery = a => { let k = 0; const per = {}; return a.filter(g => (g.draft && g.fin && !g.sent && !g.away) || (g.ob && (g.ob.making || g.ob.fin)) || ((per[g.proj] = (per[g.proj] || 0) + 1) <= 60 && k++ < 300)); };
+// a render that lands opens in the preview when it belongs to the project that is open (one made for another project waits there)
+// the open 🗂 project's picture (or the newest render without projects)
+function showOpen(){ if(!S.ws && projInit()){ const g = projPick(S.proj); return show(g ? S.gallery.indexOf(g) : -1); } show(S.gallery.length ? 0 : -1); }
+function showLanded(){ const g = S.gallery[0]; if(!g || !g.proj || !Array.isArray(S.projects) || S.ws || g.proj===S.proj) return show(0); drawStrip(); }
 const picked = new Set(); // drafts ticked in the list, by picture address
 async function finishDrafts(gs){
   gs = gs.filter(g => g.draft && g.fin && !g.sent); if(!gs.length) return;
@@ -1380,7 +1392,7 @@ async function finishDrafts(gs){
   for(const [i, g] of gs.entries()){
     const e = {key:tap + 'f' + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : g.home, state:'sending', hidden:!!S.hidden,
       graph:JSON.parse(JSON.stringify(g.fin)), titles:g.finTitles || {}, seed:g.seed, prompt:g.prompt, ckpt:g.ckpt, n:i+1, of:gs.length, images:[], snap:g.snap,
-      size:g.size, pics:1, steps:g.finSteps, finOf:g.url};
+      size:g.size, pics:1, steps:g.finSteps, finOf:g.url, proj:g.proj};
     if(farm){ e.farm = true; e.state = 'waiting'; }
     S.queue.push(e); mine.push(e); save();
     if(!S.test && !farm){ const err = await dispatch(e); if(err){ S.queue = S.queue.filter(q => q!==e); mine.pop(); save(); failAll(err); break; } }
@@ -1689,8 +1701,8 @@ function testRun(){
     if(k >= ids.length){ endJob(); S.queue = S.queue.filter(q => q!==e);
       const fakes = []; for(let b = 0; b < e.pics; b++) fakes.push(fakeImage(e.seed + b, e));
       charGot(e, fakes.map(url => ({img:'test-render.png', url, home:'test'})));
-      fakes.forEach((url, b) => galleryFor(e.hidden, e).unshift(Object.assign({url, seed:e.seed + b, prompt:e.prompt, t:Date.now(), test:true, snap:e.snap}, draftInfo(e))));
-      S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); show(0); drawStrip(); save();
+      fakes.forEach((url, b) => galleryFor(e.hidden, e).unshift(Object.assign({url, seed:e.seed + b, prompt:e.prompt, t:Date.now(), test:true, snap:e.snap}, e.proj ? {proj:e.proj} : {}, draftInfo(e))));
+      S.gallery = trimGallery(S.gallery); if(S.stash) S.stash.gallery = trimGallery(S.stash.gallery || []); showLanded(); drawStrip(); save();
       if(!S.queue.length){ status(''); bar(1); setTimeout(()=>bar(0),500); toast('Done (pretend picture) ✨'); }
       drawGo(); drawQueue(); testRun(); }
     drawStatus();
@@ -1725,18 +1737,43 @@ function stage3d(g){ const st = $('#stage'); let f = $('#st3d'), b = $('#st3dBtn
     f.onload = () => { try{ const V = f.contentWindow.VIEW; if(!V) return; if(g.d3cam) V.setCam(g.d3cam); m3ApplyBg(V, g); }catch(e){} }; }
   $('#shown').style.visibility = 'hidden'; }
 function drop3d(){ const f = $('#st3d'); if(f){ f.remove(); $('#shown').style.visibility = ''; } }
+let EMPTY0 = '';
 function show(i){
   shownIdx = i; const g = S.gallery[i]; const img = $('#shown'); delete img.dataset.here;
-  if(!g){ img.hidden = true; $('#empty').hidden = false; $('#resultActions').hidden = true; stage3d(null); return; }
+  if(!g){ img.hidden = true; $('#empty').hidden = false; const fresh = !!(S.gallery.length && Array.isArray(S.projects) && !S.ws); EMPTY0 = EMPTY0 || $('#empty').innerHTML;
+    $('#empty').innerHTML = fresh ? '<div><b>' + esc(((S.projects.find(p => p.id===S.proj) || {}).name) || 'New project') + '</b>Hit Render: its pictures land here and in the row below.</div>' : EMPTY0; $('#resultActions').hidden = true; stage3d(null); return; }
   img.src = g.url; img.hidden = false; $('#empty').hidden = true; $('#resultActions').hidden = false; stage3d(g);
+  if(g.proj && Array.isArray(S.projects) && !S.ws){ const P = S.projects.find(p => p.id===g.proj); if(P && (S.proj!==P.id || P.pick!==g.url)){ S.proj = P.id; P.pick = g.url; save(); drawStrip(); } } // 🗂 it opens its project and becomes its thumbnail
   $('#resultActions [data-act="finish"]').hidden = !(g.draft && g.fin && !g.sent); $('#resultActions').hidden = $('#resultActions [data-act="finish"]').hidden; // (Jordan 2026-10-24: the rest of the row is gone for now)
   d3Draw();
   $('#strip').querySelectorAll('img[data-i]').forEach(t => t.classList.toggle('sel', +t.dataset.i===i));
   drawOrbit();
 }
 // the thumbnails under the picture, and the same renders at the top of the library
+// 🗂 projects (Jordan 2026-10-24: "the thumbnails are like project folders"): the main row of thumbnails is projects, each showing
+// the picture picked in it (the one last looked at); renders made while a project is open go into it, listed in the row below.
+// ＋ New starts an empty one. Renders from before projects, and ones found on the computers, are in "Earlier renders".
+// Each workstation (Hidden too) keeps its own. A comic panel's recipe (S.ws) keeps the plain strip.
+function projInit(){ if(S.ws) return false; let ch = false;
+  if(!Array.isArray(S.projects)){ S.projects = []; ch = true; }
+  const earlier = () => { let e = S.projects.find(p => p.id==='earlier'); if(!e){ e = {id:'earlier', name:'Earlier renders', t:0}; S.projects.push(e); ch = true; } return e; };
+  if(!S.proj || !S.projects.some(p => p.id===S.proj)){ S.proj = (S.projects[0] || earlier()).id; ch = true; }
+  S.gallery.forEach(g => { if(!g.proj || !S.projects.some(p => p.id===g.proj)){ g.proj = g.saved || g.t < (S.projects.find(p => p.id===S.proj) || {}).t ? earlier().id : S.proj; ch = true; } });
+  if(ch) save(); return true; }
+const projPics = id => S.gallery.filter(g => g.proj===id);
+const projLast = id => Math.max((S.projects.find(p => p.id===id) || {}).t || 0, ...projPics(id).map(g => g.t || 0));
+function projPick(id){ const P = S.projects.find(p => p.id===id), ps = projPics(id); return (P && ps.find(g => g.url===P.pick)) || ps[0] || null; }
+function newProject(){ projInit(); const n = S.projects.filter(p => p.id!=='earlier').length + 1, P = {id:uid('pj'), name:'Project ' + n, t:Date.now(), pick:null};
+  S.projects.unshift(P); S.proj = P.id; save(); show(-1); drawStrip(); buzz(); toast('New project: your next renders go in it'); }
+function drawProjects(){ const on = projInit(); $('#projs').hidden = $('#projHead').hidden = !on; $('#strip').classList.toggle('inproj', on); if(!on) return;
+  const list = S.projects.filter(p => p.id===S.proj || projPics(p.id).length).sort((a, b) => projLast(b.id) - projLast(a.id));
+  $('#projs').innerHTML = '<button class="newproj" data-newproj="1">＋ New project</button>' + list.map(p => { const g = projPick(p.id), i = g ? S.gallery.indexOf(g) : -1, n = projPics(p.id).length;
+    return `<span class="sth ${p.id===S.proj ? 'on' : ''}" data-proj="${esc(p.id)}" title="${esc(p.name)}">${g ? `<img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" data-i="${i}" data-proj="${esc(p.id)}" alt="${esc(p.name)}" loading="lazy">` : `<button class="newproj" data-proj="${esc(p.id)}">${esc(p.name)}<br>empty</button>`}${n > 1 ? `<em class="pcount">${n}</em>` : ''}${g && pic3d(g) ? `<em class="s3d ${pic3d(g)===1 ? 'wip' : ''}" title="3D">🧊</em>` : ''}</span>`; }).join('');
+  const P = S.projects.find(p => p.id===S.proj), n = projPics(S.proj).length;
+  $('#projHead').innerHTML = `<span>🗂 <b>${esc(P.name)}</b> · ${n} ${n===1 ? 'picture' : 'pictures'}</span><button data-projname="1" aria-label="Rename this project">✎ Rename</button>`; }
 function drawStrip(){
-  $('#strip').innerHTML = S.gallery.map((g,i) => `<span class="sth"><img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">${g.ob && (g.ob.making || g.ob.fin || g.ob.busy) ? `<i class="sbar"><b data-sb="${i}"></b></i>` : ''}${g.hist && g.hist.length ? `<em class="sver">${g.hist.length + 1}</em>` : ''}${pic3d(g) ? `<em class="s3d ${pic3d(g)===1 ? 'wip' : ''}" title="3D">🧊</em>` : ''}</span>`).join('') || '<p class="none">Your renders show up here</p>';
+  drawProjects(); const inP = !!(Array.isArray(S.projects) && !S.ws);
+  $('#strip').innerHTML = S.gallery.map((g,i) => inP && g.proj!==S.proj ? '' : `<span class="sth"><img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">${g.ob && (g.ob.making || g.ob.fin || g.ob.busy) ? `<i class="sbar"><b data-sb="${i}"></b></i>` : ''}${g.hist && g.hist.length ? `<em class="sver">${g.hist.length + 1}</em>` : ''}${pic3d(g) ? `<em class="s3d ${pic3d(g)===1 ? 'wip' : ''}" title="3D">🧊</em>` : ''}</span>`).join('') || `<p class="none">${inP && S.gallery.length ? 'Renders in this project show up here' : 'Your renders show up here'}</p>`;
   $('#recentRow').innerHTML = S.gallery.map((g,i) => `<button data-i="${i}"><img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" alt="" loading="lazy"></button>`).join('') || '<p class="note">Nothing yet.</p>';
   drawDrafts();
 }
@@ -1748,8 +1785,8 @@ async function fillFromPcs(){
     if(!!S.hidden!==h) return; // switched workstation meanwhile
     const have = new Set(S.gallery.flatMap(g => [g.url, ...(g.hist || []).map(h => h.url)])); let n = 0;
     (j.images || []).filter(i => isHidden(i.subfolder)===h && !isDraftFile(i) && !/(^|\/)datasets(\/|$)/.test(i.subfolder || '')).forEach(i => { const url = viewUrl(i, i.src);
-      if(!have.has(url) && S.gallery.length < 40){ S.gallery.push({url, seed:null, prompt:'', t:(i.t || 0) * 1000, saved:true}); have.add(url); n++; } });
-    if(n){ save(); drawStrip(); if(!S.gallery[shownIdx]) show(0); }
+      if(!have.has(url) && S.gallery.filter(g => g.saved || g.proj==='earlier').length < 40){ S.gallery.push({url, seed:null, prompt:'', t:(i.t || 0) * 1000, saved:true}); have.add(url); n++; } });
+    if(n){ save(); drawStrip(); if(!S.gallery[shownIdx]) showOpen(); }
   }catch(e){} finally{ filling = 0; if(fillAgain) fillFromPcs(); }
 }
 // the preview section folds to one line that still shows what's painting
@@ -1775,6 +1812,11 @@ function viaHere(e){ const img = e.target; if(img.tagName!=='IMG') return;
   try{ const u = new URL(img.src); if(!u.pathname.endsWith('/view') || u.origin===new URL(base()).origin) return; img.dataset.here = 1; img.src = base() + u.pathname + u.search; }catch(x){} }
 $('#strip').addEventListener('error', viaHere, true); $('#obPanel').addEventListener('error', viaHere, true); $('#recentRow').addEventListener('error', viaHere, true); $('#shown').addEventListener('error', viaHere);
 // each picture is a project: tapping another one loads the settings it was made with
+$('#projs').onclick = e => { const t = e.target.closest('[data-newproj],[data-proj]'); if(!t) return; if(t.dataset.newproj) return newProject();
+  const id = t.dataset.proj, g = projPick(id); if(!g){ S.proj = id; save(); show(-1); drawStrip(); return; }
+  const i = S.gallery.indexOf(g), was = shownIdx; show(i); if(i!==was) useRecipe(g.snap, obFirst(g), true); };
+$('#projHead').onclick = e => { if(!e.target.closest('[data-projname]')) return; const P = (S.projects || []).find(p => p.id===S.proj); if(!P) return;
+  const n = prompt('Name this project', P.name); if(n && n.trim()){ P.name = n.trim().slice(0, 40); save(); drawStrip(); } };
 $('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i==null) return; const was = shownIdx; show(+i);
   const g = S.gallery[+i]; if(+i!==was && g) useRecipe(g.snap, obFirst(g), true); };
 $('#shown').onclick = () => { if($('#shown').hidden) return; if(S.gallery[shownIdx]) openViewer('gal', S.gallery, shownIdx); };
@@ -3686,7 +3728,7 @@ async function deletePics(list){
     lib.items = lib.items.filter(i => !gone.has(libKey(i))); if(lib.drafts) lib.drafts = lib.drafts.filter(i => !gone.has(libKey(i))); lib.total -= j.moved; lib.picked.clear();
     // drop them from the strip under the picture too
     S.gallery = S.gallery.filter(g => { try{ const q = new URL(g.url).searchParams; return !gone.has((q.get('subfolder') ? q.get('subfolder') + '/' : '') + q.get('filename')); }catch(e){ return true; } });
-    forgetPics(list); save(); drawStrip(); show(S.gallery.length ? 0 : -1); drawLib(); drawLibBar(); toast(j.moved===1 ? 'Deleted' : 'Deleted ' + j.moved); buzz(); return true;
+    forgetPics(list); save(); drawStrip(); showOpen(); drawLib(); drawLibBar(); toast(j.moved===1 ? 'Deleted' : 'Deleted ' + j.moved); buzz(); return true;
   }catch(e){ toast('Could not reach the render computer', true); return false; }
 }
 $('#libDelete').onclick = async () => { if(await deletePics((S.libTab==='drafts' ? lib.drafts || [] : lib.items).filter(i => lib.picked.has(libKey(i))))){ lib.selecting = false; drawLibBar(); } };
@@ -3761,21 +3803,22 @@ function drawMode(){
 }
 function switchMode(){
   if(S.ws) wsBack(false); // a panel's recipe belongs to this workstation's comic
-  const keys = RECIPE_KEYS.concat('gallery', 'chars', 'comic', 'comics', 'cmLib', 'cmPoses'), now = {};
+  const keys = RECIPE_KEYS.concat('gallery', 'chars', 'comic', 'comics', 'cmLib', 'cmPoses', 'projects', 'proj'), now = {};
   keys.forEach(k => now[k] = S[k]);
-  const next = S.stash && S.stash.blocks ? S.stash : Object.assign(JSON.parse(JSON.stringify(now)), {prompt:'', addedTags:[], gallery:(S.stash && S.stash.gallery) || [], chars:(S.stash && S.stash.chars) || [], comic:(S.stash && S.stash.comic) || null, comics:(S.stash && S.stash.comics) || [], cmLib:(S.stash && S.stash.cmLib) || [], cmPoses:(S.stash && S.stash.cmPoses) || []});
+  const next = S.stash && S.stash.blocks ? S.stash : Object.assign(JSON.parse(JSON.stringify(now)), {prompt:'', addedTags:[], gallery:(S.stash && S.stash.gallery) || [], chars:(S.stash && S.stash.chars) || [], comic:(S.stash && S.stash.comic) || null, comics:(S.stash && S.stash.comics) || [], cmLib:(S.stash && S.stash.cmLib) || [], cmPoses:(S.stash && S.stash.cmPoses) || [], projects:(S.stash && S.stash.projects) || null, proj:(S.stash && S.stash.proj) || null});
   keys.forEach(k => { if(next[k] !== undefined) S[k] = next[k]; });
   if(next.chars === undefined) S.chars = []; // a Hidden workstation made before characters starts with none of its own
   if(next.comic === undefined) S.comic = null; // and its own comic pages
   if(next.comics === undefined) S.comics = []; // and its own other comics
   if(next.cmLib === undefined) S.cmLib = []; // and its own comic characters
   if(next.cmPoses === undefined) S.cmPoses = []; // and its own 🧍 poses
+  if(next.projects === undefined){ S.projects = null; S.proj = null; } // and its own 🗂 projects
   if(typeof cmPlay==='function') cmPlay(false);
   S.stash = now; S.hidden = !S.hidden; migrate(S);
   S.nextId = Math.max(S.nextId, ...S.blocks.map(b => b.id + 1));
   if(!$('#viewer').hidden) closeViewer(); closeSheets(); // nothing open keeps pictures from the other workstation
   if(!S.hidden){ allPcs().forEach(p => { if(S.queue.some(q => q.srv===p.url && masked(q))) dropPreview(p); }); openJobs.clear(); focusPc = null; }
-  if(info) fillDefaults(); save(); drawMode(); render(); drawStrip(); show(S.gallery.length ? 0 : -1); updateIdeas(); drawStatus(); drawQueue(); fillFromPcs(); if(!$('#comic').hidden) drawComic();
+  if(info) fillDefaults(); save(); drawMode(); render(); drawStrip(); showOpen(); updateIdeas(); drawStatus(); drawQueue(); fillFromPcs(); if(!$('#comic').hidden) drawComic();
   toast(S.hidden ? 'Hidden on' : 'Hidden off'); buzz();
 }
 $('#modeBtn').onclick = switchMode;
@@ -7005,7 +7048,7 @@ async function d3Char(g, P){ let V = null; try{ V = $('#st3d').contentWindow.VIE
   try{ const white = await new Promise((ok, bad) => { const im = new Image(); im.onload = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.drawImage(im, 0, 0, W, H); ok(c.toDataURL('image/png')); }; im.onerror = () => bad(new Error("the view didn't draw")); im.src = shot; });
     const lo = await obLooks(g, k.oi), prefix = (S.hidden ? HIDDEN : 'RenderDeck') + '/render', img = await cmUp(white, k.url), cut = await cmUp(shot, k.url);
     const url = await m3Run(k, d3CharGraph(k, lo, [lo.words, lo.prompt, 'full body, simple background, white background'].filter(Boolean).join(', '), 'multiple views, text, scenery', W, H, img, cut, dn, prefix), prefix);
-    S.gallery.unshift({url, seed:null, prompt:g.prompt || '', t:Date.now(), snap:g.snap, d3p:P.id, d3from:g.url, d3cam:cam}); save(); drawStrip(); show(0); toast('Painted: it is in your strip'); }
+    S.gallery.unshift({url, seed:null, prompt:g.prompt || '', t:Date.now(), snap:g.snap, d3p:P.id, d3from:g.url, d3cam:cam, proj:g.proj}); save(); drawStrip(); show(0); toast('Painted: it is in your strip'); }
   catch(err){ toast("Couldn't paint her: " + err.message, true); }
   D3B.busy = ''; d3Draw(true); }
 function d3CharGraph(k, look, prompt, neg, W, H, img, cut, dn, prefix){ const G = m3Graph(k, look, prompt, neg, W, H, img, dn, prefix, true), g = G.g, ids = Object.keys(g); let n = Math.max(...ids.map(Number));
@@ -9189,7 +9232,7 @@ function wsOpen(pid){
 function wsBack(toPage, use){
   const g = use ? S.gallery[shownIdx] : null, f = wsPut();
   if(f && g){ const j = f.p.stills.indexOf(g); if(j >= 0){ f.p.still = j; f.p.stillPicked = true; f.p.show = 'still'; } }
-  if(info) fillDefaults(); save(); render(); drawStrip(); show(S.gallery.length ? 0 : -1); drawWs(); updateIdeas();
+  if(info) fillDefaults(); save(); render(); drawStrip(); showOpen(); drawWs(); updateIdeas();
   if(toPage && f){ const cm = CM(); cm.cur = f.pi; cm.sel = f.i; openComic(); }
 }
 function drawWs(){
@@ -9208,7 +9251,7 @@ cmAll().forEach(p => { if(p.fuse && p.fuse.making) fuseWait(p); if(p.cmod && p.c
 if(S.wsBack){ const id = S.wsBack; delete S.wsBack; if(wsPanel(id)) wsOpen(id); }
 else if(S.tab==='comic') openComic(); // an orbit made while the app was closed comes in
 delete S.orbitN; delete S.orbitH; // the per-workstation orbit before pictures became projects
-render(); show(S.gallery.length ? 0 : -1);
+render(); showOpen();
 if(usesTags()) loadTags().then(() => updateIdeas());
 if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); // keep the saved pictures when the phone tidies up
 if(S.test) testMode(); else if(S.server) connect();

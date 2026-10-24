@@ -118,6 +118,12 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.182
+
+- 🗂 Projects (Jordan's idea): each thumbnail under the picture is now a project, not a single render. The thumbnail shows the picture you last looked at in that project. Renders made while a project is open go into it, and its pictures are in the smaller row below (tap one to show it; it becomes the project's thumbnail).
+- ＋ New project starts an empty one, and your next renders go in it. A render started in one project lands there even if you open another meanwhile. ✎ Rename names the open project.
+- Your renders from before, and ones found on the computers, are in "Earlier renders". Hidden keeps its own projects. Each project keeps its latest 60 pictures in the app (300 in all); the files on the computers are untouched.
+
 ## 2026-10-24.181
 
 - 🧊 The 3D block stays in the recipe when you tap another thumbnail. Tapping loads that picture's recipe, which dropped the block (Jordan found it).
