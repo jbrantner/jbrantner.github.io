@@ -73,7 +73,7 @@ const OI = {
   // Test mode: a render becomes a character's first picture, then Make other angles fills in the rest
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => { CH.allOpen = true; });
   await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#strip img').length===1, null, {timeout:8000});
-  await page.click('#resultActions [data-act="char"]'); await page.waitForSelector('#charSheet.open');
+  await page.$eval('#resultActions [data-act="char"]', b => b.click()); await page.waitForSelector('#charSheet.open'); // the button is hidden for now (Jordan 2026-10-24), still wired
   ok((await page.textContent('#charBody')).includes('Who is this picture of'), 'adding a render asks who it is of');
   await page.click('#charBody [data-ch="new"]');
   await page.fill('#charBody [data-cf="name"]', 'Levi'); await page.fill('#charBody [data-cf="tags"]', '1boy, black hair, red eyes, black coat');

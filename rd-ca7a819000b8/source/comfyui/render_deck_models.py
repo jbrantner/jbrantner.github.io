@@ -16,6 +16,8 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
                                                scores, on the CPU) for training captions; fetched once from Hugging Face
   GET  /renderdeck/farm, POST /renderdeck/farm/add|cancel|pcs -> the render farm queue: renders go to whichever of your
                                                computers is free, even with the phone app closed (render_deck_farm.json)
+  GET  /renderdeck/p3d, POST /renderdeck/p3d/add|ask|take|put -> 🧊 3Ds made here with the app closed: the app is opened
+                                               hidden (Edge headless, ?worker=1) to fit the rig and send the jobs (render_deck_p3d.json)
   GET  /renderdeck/auto, POST /renderdeck/auto/start|stop -> a character's auto run: turnaround, angles, training shots,
                                                the picked set and a kohya LoRA, here, with the phone app closed (render_deck_auto.json)
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
@@ -1119,7 +1121,7 @@ def _farm_view(since):
                     'load': len(st['running']) + len(st['pending']), 'copies': st['copies'], 'why': st['why']})
     jobs = [{k: v for k, v in j.items() if k != 'graph'} for j in FARM['jobs']]
     done = [j for j in FARM['done'] if j.get('t_done', 0) > since]
-    return {'farm': 1, 'chain': 1, 'pcs': pcs, 'jobs': jobs, 'done': done, 'now': time.time()}
+    return {'farm': 1, 'chain': 1, 'p3d': 1, 'pcs': pcs, 'jobs': jobs, 'done': done, 'now': time.time()}
 
 
 @routes.get('/renderdeck/farm')
@@ -1190,6 +1192,192 @@ async def farm_pcs(request):
         _farm_save()
         _farm_wake.set()
         return web.json_response(_farm_view(time.time()))
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+# ---------- 🧊 3Ds made here with the app closed (2026-10-24) ----------
+# Fitting the rig to MiniMax's turn happens in a browser, so the phone hands the whole 3D (its state, P) to this helper and
+# this helper opens the Render Deck app itself, hidden (Edge or Chrome, headless, its own profile), with ?worker=1. That copy
+# takes the 3Ds and the phone's taps (/take), makes them exactly as the app does, and sends each change back (/put); the
+# phone reads them (GET). The hidden browser is closed again once nothing has been left to do for a few minutes.
+P3D_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_p3d.json')
+P3D = {'jobs': {}}
+P3D_APPS = ('https://jbrantner.github.io/',)  # the only page the hidden browser opens
+_p3d = {'proc': None, 'seen': 0, 'idle': 0, 'task': None, 'loaded': False}
+
+
+def _p3d_load():
+    if _p3d['loaded']:
+        return
+    _p3d['loaded'] = True
+    try:
+        with open(P3D_FILE, encoding='utf-8') as f:
+            P3D['jobs'] = json.load(f).get('jobs', {})
+    except Exception:
+        pass
+
+
+def _p3d_save():
+    try:
+        tmp = P3D_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(P3D, f)
+        os.replace(tmp, P3D_FILE)
+    except Exception as e:
+        print('[Render Deck 3D]', e)
+
+
+def _p3d_browser():
+    names = []
+    for env in ('ProgramFiles(x86)', 'ProgramFiles', 'LOCALAPPDATA'):
+        root = os.environ.get(env)
+        if root:
+            names += [os.path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'), os.path.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe')]
+    for n in names:
+        if os.path.isfile(n):
+            return n
+    for n in ('msedge', 'google-chrome', 'chromium', 'chromium-browser'):
+        p = shutil.which(n)
+        if p:
+            return p
+    return None
+
+
+def _p3d_open(job):
+    import subprocess
+    exe = _p3d_browser()
+    if not exe:
+        job['why'] = 'No Edge or Chrome on this computer'
+        return
+    url = job['app'] + ('&' if '?' in job['app'] else '?') + 'worker=1&farm=' + quote(job['farm'], safe='')
+    prof = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_worker_profile')
+    args = [exe, '--headless=new', '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--enable-unsafe-swiftshader', '--user-data-dir=' + prof, url]
+    _p3d['proc'] = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    _p3d['seen'] = time.time()
+    print('[Render Deck 3D] opened the app hidden to make', len([j for j in P3D['jobs'].values() if not j.get('done')]), '3D(s)')
+
+
+def _p3d_close():
+    p = _p3d['proc']
+    _p3d['proc'] = None
+    if p and p.poll() is None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+
+async def _p3d_loop():
+    while True:
+        try:
+            todo = [j for j in P3D['jobs'].values() if not j.get('done') or j.get('asks')]
+            alive = _p3d['proc'] is not None and _p3d['proc'].poll() is None
+            if todo:
+                _p3d['idle'] = 0
+                # opened (again) when nothing is running it, or the hidden app stopped checking in for 2 minutes
+                if not alive or time.time() - _p3d['seen'] > 120:
+                    _p3d_close()
+                    _p3d_open(todo[0])
+            elif alive:
+                _p3d['idle'] = _p3d['idle'] or time.time()
+                if time.time() - _p3d['idle'] > 300:
+                    _p3d_close()
+        except Exception as e:
+            print('[Render Deck 3D]', e)
+        await asyncio.sleep(20)
+
+
+def _p3d_start():
+    _p3d_load()
+    if _p3d['task'] is None or _p3d['task'].done():
+        _p3d['task'] = asyncio.ensure_future(_p3d_loop())
+
+
+@routes.get('/renderdeck/p3d')
+async def p3d_get(request):
+    _p3d_start()
+    ids = [x for x in (request.query.get('ids') or '').split(',') if x]
+    jobs = {k: {'P': j['P'], 'rev': j.get('rev', 0), 'done': bool(j.get('done')) and not j.get('asks'), 'why': j.get('why', '')}
+            for k, j in P3D['jobs'].items() if not ids or k in ids}
+    return web.json_response({'p3d': 1, 'jobs': jobs, 'worker': bool(_p3d['proc'] and _p3d['proc'].poll() is None)})
+
+
+@routes.post('/renderdeck/p3d/add')
+async def p3d_add(request):
+    """{id, P, hidden, servers:[{url,name}], off, app, farm}: a 🧊 to make here"""
+    try:
+        b = await request.json()
+        _p3d_start()
+        app, farm = str(b.get('app') or ''), _tailnet(b.get('farm'))
+        if not app.startswith(P3D_APPS) and not os.environ.get('RENDERDECK_P3D_ANY_APP'):
+            raise ValueError('Only the Render Deck app can make 3Ds here')
+        if not isinstance(b.get('P'), dict) or not b.get('id') or not farm:
+            raise ValueError('A 3D needs its id, its state and this computer\'s address')
+        def tn(u):
+            try:
+                return _tailnet(u)
+            except ValueError:
+                return ''
+        servers = [{'url': tn(x.get('url')), 'name': str(x.get('name') or '')[:40]} for x in (b.get('servers') or []) if tn(x.get('url'))]
+        P3D['jobs'][str(b['id'])[:40]] = {'P': b['P'], 'rev': 1, 'done': False, 'asks': [], 'hidden': bool(b.get('hidden')), 'servers': servers,
+                                          'off': [u for u in (b.get('off') or []) if any(x['url'] == u for x in servers)], 'app': app, 'farm': farm, 't': time.time()}
+        _p3d_save()
+        return web.json_response({'ok': 1})
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.post('/renderdeck/p3d/ask')
+async def p3d_ask(request):
+    """{id, ask:{look|show|redo|stop|go|drop}}: a tap on the phone, passed on to the hidden app"""
+    try:
+        b = await request.json()
+        j = P3D['jobs'].get(str(b.get('id')))
+        if not j:
+            return web.json_response({'error': 'That 3D is not here'}, status=404)
+        a = b.get('ask') or {}
+        j['asks'].append({k: a[k] for k in ('look', 'show', 'redo', 'stop', 'go', 'drop') if k in a})
+        j['done'] = False
+        _p3d_save()
+        return web.json_response({'ok': 1})
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.post('/renderdeck/p3d/take')
+async def p3d_take(request):
+    """the hidden app checking in: every 3D still to make, with the taps since it last asked (a dropped one is taken out)"""
+    _p3d_start()
+    _p3d['seen'] = time.time()
+    out, gone = [], []
+    for k, j in P3D['jobs'].items():
+        drop = any(a.get('drop') for a in j['asks'])
+        if drop:
+            gone.append(k)
+            out.append({'id': k, 'drop': True})
+        elif not j.get('done') or j['asks']:
+            out.append({'id': k, 'P': j['P'], 'hidden': j['hidden'], 'servers': j['servers'], 'off': j['off'], 'asks': j['asks']})
+            j['asks'] = []
+    for k in gone:
+        P3D['jobs'].pop(k, None)
+    _p3d_save()
+    return web.json_response({'jobs': out})
+
+
+@routes.post('/renderdeck/p3d/put')
+async def p3d_put(request):
+    """{id, P, done}: the hidden app's latest state of a 3D"""
+    try:
+        b = await request.json()
+        _p3d['seen'] = time.time()
+        j = P3D['jobs'].get(str(b.get('id')))
+        if not j or not isinstance(b.get('P'), dict):
+            return web.json_response({'error': 'That 3D is not here'}, status=404)
+        j['P'], j['rev'], j['done'] = b['P'], j.get('rev', 0) + 1, bool(b.get('done')) and not j['asks']
+        _p3d_save()
+        return web.json_response({'ok': 1})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
 

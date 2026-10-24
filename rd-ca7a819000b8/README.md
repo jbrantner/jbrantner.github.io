@@ -118,6 +118,17 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.180
+
+- 🧊 3D is now a block (＋ Add a block › 3D), not its own screen (Jordan's redesign). ▶ Make it 3D turns the picture in the preview into 3D: MiniMax goes round her at 5 heights, led by the rig, and the preview shows her in 3D when it is done. No angle pictures, backdrop or "make it a picture".
+- Faces: every picture of a 3D gets FaceDetailer in Illustrious (face_yolov8m), the MiniMax pictures and every look. There is no switch for it.
+- Look: MiniMax / Light 0.3 / Medium 0.4 / Heavy 0.55. Illustrious paints over the same MiniMax frames, all 80 pictures (40 angles plus the in-between frames). Each look is painted once and kept, so switching between them works like a quality setting.
+- 🖌 Repaint this angle repaints the angle you're looking at, in the look shown, with a new seed.
+- 🎨 Render character paints the current view as one Illustrious picture with the render's own prompt, at the look's strength (Light when the look is MiniMax), face fixed. It is cut out along her outline in the view (LoadImage mask → JoinImageWithAlpha) and lands in the strip.
+- Made with the app closed: with the new helper on Render, the 3D is handed to Render, which opens the app hidden (Edge headless, ?worker=1) to make it, and taps on the phone (look, repaint, stop) are passed on. Without the helper it is made from the app, as before.
+- The row under the picture is gone for now (✨ Finish stays for drafts). Use as start picture and the rest are still in the photo viewer.
+- Fixes found by the new test (tests/t_d3block.js): the block couldn't be added, the angles waited for picks on the hidden app, and the preview didn't turn 3D when it finished. Tapping the picture opens the viewer again.
+
 ## 2026-10-24.179
 
 - 🧊 5 heights (Jordan picked it): new MiniMax 3Ds also turn round her at 20° up and 10° down. Each of those turns starts from the middle frame of the crane up / crane down (cranes now keep their middle and last frames). 40 angles, 80 with the in-between frames. The viewer shows the nearest height's pictures (older 3Ds with 3 heights keep the 32° / -20° switch).

@@ -261,7 +261,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const g = ALL[nb].prompt, n = Object.values(g), lat = n.find(x => x.class_type==='EmptyLatentImage'), r = await page.evaluate(() => { const q = cmRectsOf(cmPage())[3]; return q.w / q.h; });
     ok(check(g).length===0 && n.find(x => x.class_type==='SaveImage').inputs.filename_prefix==='RenderDeck/comics/page_1/panel_4/render' && Math.abs(lat.inputs.width / lat.inputs.height - Math.max(0.5, Math.min(2, r))) < 0.15,
       'Render makes a normal render in the panel\'s shape, saved in its folder: ' + check(g).join('; ') + ' ' + lat.inputs.width + 'x' + lat.inputs.height);
-    ok(await page.isVisible('#resultActions [data-act="orbit"]') && await page.isVisible('#resultActions [data-act="pose"]'), '📷 Change angle and 🤸 Edit pose are there for the panel\'s pictures');
+    ok(!(await page.isVisible('#resultActions [data-act="orbit"]')) && !(await page.isVisible('#resultActions [data-act="m3d"]')), 'the row under the picture is gone for now (Jordan 2026-10-24)');
     await page.click('#wsBar [data-ws="use"]');
     const back = await page.evaluate(() => { const p = cmPage().panels[3]; return {comic:!document.querySelector('#comic').hidden, sel:CM().sel, n:p.stills.length, still:p.still, picked:p.stillPicked, ws:!!S.ws, prompt:S.prompt, gal:S.gallery[0].url, blocks:S.blocks.length, has:!!p.ws}; });
     ok(back.comic && back.sel===3 && back.n===ws.stills + 1 && back.still===0 && back.picked && back.has, '✓ Put this picture on the panel: back on the page, the render is the panel\'s picked still: ' + JSON.stringify(back));

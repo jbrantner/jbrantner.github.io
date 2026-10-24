@@ -471,15 +471,16 @@ body.cm-open #comic{padding-bottom:84px}
   </div>
   <div class="actions" id="resultActions" hidden>
     <button class="chipbtn hot" data-act="finish" hidden>✨ Finish this draft</button>
-    <button class="chipbtn" data-act="pic">🖼 Use as start picture</button>
-    <button class="chipbtn" data-act="cn">🧭 Use as guide</button>
-    <button class="chipbtn" data-act="seed">🎲 Keep this seed</button>
-    <button class="chipbtn" data-act="char">🧍 Add to a character</button>
-    <button class="chipbtn" data-act="orbit">📷 Change angle</button>
-    <button class="chipbtn" data-act="pose">🤸 Edit pose</button>
-    <button class="chipbtn" data-act="m3d">🧊 Make 3D</button>
-    <button class="chipbtn" data-act="recipe">⤵ Use its settings</button>
-    <button class="chipbtn" data-act="open">↗ Open full size</button>
+    <!-- the rest of this row is gone for now (Jordan 2026-10-24); 🧊 Make 3D is the 3D block -->
+    <button class="chipbtn" data-act="pic" hidden>🖼 Use as start picture</button>
+    <button class="chipbtn" data-act="cn" hidden>🧭 Use as guide</button>
+    <button class="chipbtn" data-act="seed" hidden>🎲 Keep this seed</button>
+    <button class="chipbtn" data-act="char" hidden>🧍 Add to a character</button>
+    <button class="chipbtn" data-act="orbit" hidden>📷 Change angle</button>
+    <button class="chipbtn" data-act="pose" hidden>🤸 Edit pose</button>
+    <button class="chipbtn" data-act="m3d" hidden>🧊 Make 3D</button>
+    <button class="chipbtn" data-act="recipe" hidden>⤵ Use its settings</button>
+    <button class="chipbtn" data-act="open" hidden>↗ Open full size</button>
   </div>
   <div class="strip" id="strip"></div>
   <div class="obpanel" id="obPanel" hidden></div>
@@ -626,7 +627,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-24.179'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-24.180'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -637,6 +638,7 @@ const TYPES = {
   pose:   {name:'Pose board', emo:'B', c:'--cn', desc:'Drag stick figures into a pose, one per character', needs:['ControlNetLoader','ControlNetApplyAdvanced','LoadImage'], one:true},
   pic:    {name:'Start from picture', emo:'S', c:'--pic', desc:'Repaint an image you pick', needs:['LoadImage','VAEEncode','ImageScale'], one:true},
   up:     {name:'Upscale', emo:'U', c:'--up', desc:'Make the result bigger', needs:['ImageScaleBy'], one:true},
+  d3:     {name:'3D', emo:'3', c:'--pic', desc:'Make the picture in the preview 3D, then paint it in Illustrious', one:true, tool:true}, // not part of the render (Jordan 2026-10-24)
 };
 const SIZES = {512:[512,512], 768:[768,768], 1024:[1024,1024]};
 const SHAPES = {square:[1,1], tall:[3,4], wide:[4,3], phone:[9,16]};
@@ -1091,8 +1093,8 @@ function problems(){
   const M = S.blocks.find(b=>b.type==='model');
   if(!M.ckpt) p.push('Pick a model in the Model block.');
   for(const b of S.blocks){
-    if(!b.on) continue;
     const T = TYPES[b.type];
+    if(!b.on || T.tool) continue;
     (T.needs||[]).forEach(nm => { if(!info.nodes.has(nm)) p.push(T.name + ' needs the ' + nm + ' node, which this ComfyUI does not have.'); });
     if(b.type==='lora' && !b.lora) p.push('Pick a LoRA, or switch that block off.');
     if(b.type==='cn' && !b.model) p.push('Pick a ControlNet model, or switch that block off.');
@@ -1455,7 +1457,7 @@ async function refreshLoaders(p){
 // With the newest helper on it, the render computer named Render keeps the queue itself and hands each render to
 // whichever computer is free, and keeps their models matched, with the app closed. The app adds renders, cancels
 // them, and shows what's happening. Without it, the app does the same itself while it's open (above).
-let farm = null, farmAt = 0, farmPcsAt = 0, farmAsked = '', farmChain = false; // farmChain: the helper can run 🧊 jobs that wait for each other
+let farm = null, farmAt = 0, farmPcsAt = 0, farmAsked = '', farmChain = false, farmP3dOk = false; // farmChain: the helper can run 🧊 jobs that wait for each other
 function farmHost(){ const r = S.servers.find(x => x.name==='Render'); return r ? r.url : base(); }
 const tailnet = u => /^https:\/\/[^/]+\.ts\.net$/i.test(u || '');
 async function findFarm(){
@@ -1491,7 +1493,7 @@ function farmView(v, away){
   if(!v || !v.pcs) return;
   v.pcs.forEach(x => { const p = pcOf(x.url); p.copies = x.copies || []; p.why = x.why || ''; });
   if(!v.jobs) return;
-  farmChain = !!v.chain;
+  farmChain = !!v.chain; farmP3dOk = !!v.p3d;
   // 🧊 jobs (keys p3-…) belong to their 3D, not to the render queue
   const p3 = j => /^p3-/.test(j.key); cmFarmSeen(v.jobs.filter(p3), (v.done || []).filter(p3)); v = Object.assign({}, v, {jobs:v.jobs.filter(j => !p3(j)), done:(v.done || []).filter(j => !p3(j))});
   S.farmSeen = S.farmSeen || [];
@@ -1716,7 +1718,8 @@ function show(i){
   shownIdx = i; const g = S.gallery[i]; const img = $('#shown'); delete img.dataset.here;
   if(!g){ img.hidden = true; $('#empty').hidden = false; $('#resultActions').hidden = true; stage3d(null); return; }
   img.src = g.url; img.hidden = false; $('#empty').hidden = true; $('#resultActions').hidden = false; stage3d(g);
-  $('#resultActions [data-act="finish"]').hidden = !(g.draft && g.fin && !g.sent);
+  $('#resultActions [data-act="finish"]').hidden = !(g.draft && g.fin && !g.sent); $('#resultActions').hidden = $('#resultActions [data-act="finish"]').hidden; // (Jordan 2026-10-24: the rest of the row is gone for now)
+  d3Draw();
   $('#strip').querySelectorAll('img[data-i]').forEach(t => t.classList.toggle('sel', +t.dataset.i===i));
   drawOrbit();
 }
@@ -1763,7 +1766,7 @@ $('#strip').addEventListener('error', viaHere, true); $('#obPanel').addEventList
 // each picture is a project: tapping another one loads the settings it was made with
 $('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i==null) return; const was = shownIdx; show(+i);
   const g = S.gallery[+i]; if(+i!==was && g) useRecipe(g.snap, obFirst(g), true); };
-$('#shown').onclick = () => { if($('#resultActions').hidden) return; if(S.gallery[shownIdx]) openViewer('gal', S.gallery, shownIdx); };
+$('#shown').onclick = () => { if($('#shown').hidden) return; if(S.gallery[shownIdx]) openViewer('gal', S.gallery, shownIdx); };
 
 // ---------- the picture viewer: works like a photo app (pinch to zoom, swipe sideways for the next one, swipe down to close) ----------
 const V = {mode:'', list:[], i:0, s:1, x:0, y:0};
@@ -1899,6 +1902,7 @@ function defaults(type){
   if(type==='cn') return {id,type,on:true,model:'',image:'',preview:'',prep:'none',strength:0.8,start:0,end:1};
   if(type==='pic') return {id,type,on:true,image:'',preview:'',change:0.6};
   if(type==='pose') return {id,type,on:true,model:'',figs:[],sel:null,strength:0.8,end:0.65,image:'',imgFor:''};
+  if(type==='d3') return {id,type,on:true}; // a tool, not part of the render
   if(type==='up') return {id,type,on:true,mode:(!info || info.nodes.has('UltimateSDUpscale')) ? 'redraw' : 'simple',scale:2,model:'',denoise:0.35};
 }
 function addBlock(type, quiet){
@@ -1972,6 +1976,7 @@ function blockBody(b){
     ${slider('start','Starts at',0,1,0.05,b.start)}
     ${slider('end','Ends at',0,1,0.05,b.end)}`;
   if(b.type==='pose') return poseBody(b, I);
+  if(b.type==='d3') return `<div id="d3Body">${d3BlockHtml()}</div>`;
   if(b.type==='pic') return `<div class="thumb">${b.preview ? `<img src="${esc(b.preview)}" alt="">` : '<div class="ph">＋</div>'}<button class="chipbtn" data-do="pick">${b.image?'Change picture':'Pick a picture'}</button></div>
     ${slider('change','How much changes',0.05,1,0.05,b.change)}
     <p class="note">Low keeps your picture, high repaints almost everything.</p>`;
@@ -1990,7 +1995,7 @@ function blockBody(b){
 }
 function renderBlocks(){
   $('#blocks').innerHTML = S.blocks.map(b => { const T = TYPES[b.type];
-    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pose' ? poseSum(b) : b.type==='pic' ? Math.round(b.change*100)+'% change' :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
+    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pose' ? poseSum(b) : b.type==='pic' ? Math.round(b.change*100)+'% change' : b.type==='d3' ? d3Sum() :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
     return `<div class="block ${b.on?'':'off'} ${S.open[b.id]?'open':''} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
       <div class="bhead"><div class="emo">${T.emo}</div><h3>${T.name}<small>${esc(sub)}</small></h3>
       ${T.fixed ? '' : `${T.tool ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button>`}<button class="x" data-do="del" aria-label="Remove">✕</button>`}<span class="chev" aria-hidden="true">›</span></div>
@@ -6131,7 +6136,7 @@ async function liveQueue(id, pc){
 // the same for 🧍/🧊 pose jobs (Jordan 2026-10-23: "they're all rendering on main"): one waiting in a busy computer's line
 // moves to a computer that can make it and has nothing to do
 const CM_MOVING = new Set();
-async function cmMoveWaiting(h, pc){ const P = (S.cmPoses || []).find(x => (x.orb || []).concat(x.views, x.cands || []).includes(h)), m = h.making; if(!P || !m || CM_MOVING.has(m.id)) return;
+async function cmMoveWaiting(h, pc){ const P = (S.cmPoses || []).find(x => (x.orb || []).concat(cmPics(x), x.cands || []).includes(h)), m = h.making; if(!P || !m || CM_MOVING.has(m.id)) return;
   const orb = m.kind==='sporb'; let ks = orb ? (cmOrbCtl(P, h) ? cmCtlKits() : cmFlKits()) : cmIllKits().filter(k => k.cn);
   if(orb){ if(ks.some(k => k.fl)) ks = ks.filter(k => k.fl); if(!h.from) h.from = h.step==='crane' || h.ring===1 ? P.src : cmCraneUrl(P, h.ring); if(!h.from) return; }
   if(P.stopped) return; const free = ks.find(k => k.url!==pc && !(pcOf(k.url).load > 0)); if(!free) return;
@@ -6145,7 +6150,7 @@ async function cmMoveWaiting(h, pc){ const P = (S.cmPoses || []).find(x => (x.or
   }catch(e){} finally{ CM_MOVING.delete(m.id); } }
 let cmPoseTicks = 0;
 setInterval(() => { if(S.test || document.visibilityState!=='visible' || $('#m3Box') || ++cmPoseTicks % 6) return; // 🧊's own tick does it while it is open
-  (S.cmPoses || []).flatMap(P => (P.orb || []).concat(P.views, P.cands || [])).filter(v => v.making).forEach(v => liveQueue(v.making.id, v.making.pc)); }, 1000);
+  (S.cmPoses || []).flatMap(P => (P.orb || []).concat(cmPics(P), P.cands || [])).filter(v => v.making).forEach(v => liveQueue(v.making.id, v.making.pc)); }, 1000);
 // waiting behind other work while another computer is free (Jordan 2026-10-20: "divide and conquer… automatically"):
 // take it out of the busy one's queue and make it on the free one
 async function moveOrbit(g, k){
@@ -6342,7 +6347,7 @@ let CM_SENT = [];          // Test mode: the graphs made
 const CM = () => S.comic || (S.comic = {script:'', pages:[], cur:0, sel:0, cast:[], place:'', loc:null, styleLine:'Animation in the style of 2D anime.', vlora:'', vloraW:1, quality:'quick', route:'still', open:{script:true}});
 const cmPage = () => { const cm = CM(); return cm.pages[cm.cur] || null; };
 const cmComics = () => [S.comic, S.stash && S.stash.comic].concat(S.comics || [], S.stash && S.stash.comics || []).filter(Boolean);
-const cmLibHosts = () => (S.cmLib || []).map(L => L.pv).filter(Boolean).concat((S.cmPoses || []).flatMap(P => P.views.concat(P.orb || [], P.cands || [])));
+const cmLibHosts = () => (S.cmLib || []).map(L => L.pv).filter(Boolean).concat((S.cmPoses || []).flatMap(P => cmPics(P).concat(P.orb || [], P.cands || [])));
 const cmAll = () => cmLibHosts().concat(cmComics().flatMap(cm => cm.pages.flatMap(pg => pg.panels.flatMap(p => [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []))).concat(cm.pj ? [cm.pj] : [])));
 // a panel's still options are painted as jobs of their own (p.extra), so they spread over both computers
 const cmBusy = p => !!(p.making || p.busy || (p.extra || []).length);
@@ -6597,11 +6602,12 @@ const CM_SPG = {}, CM_SP_RING = ['low', 'eye', 'high', 'midhigh', 'midlow'];
 const CM_SP_DIR = ['looking at viewer', 'looking ahead', 'from side, profile, looking ahead', 'from behind', 'from behind, back', 'from behind', 'from side, profile, looking ahead', 'looking ahead'], CM_SP_UP = ['from below', '', 'from above', 'from above', 'from below'];
 // 👀 the optional second set (Jordan 2026-10-22): the same pose with her eyes on the camera from every angle, so a character's pose library covers both
 const CM_SP_LOOK = ['looking at viewer', 'looking at viewer', 'from side, looking at viewer', 'from behind, looking back, looking at viewer', 'from behind, looking back, looking at viewer', 'from behind, looking back, looking at viewer', 'from side, looking at viewer', 'looking at viewer'];
-function cmPoseSync(){ try{ localStorage.setItem('rd-pose-sprites' + (S.hidden ? '-h' : ''), JSON.stringify((S.cmPoses || []).map(P => ({id:P.id, name:P.name, geo:P.geo, src:P.src || '', views:P.views.filter(v => !v.look).map(v => v.url || ''), look:P.views.some(v => v.look) ? P.views.filter(v => v.look).map(v => v.url || '') : undefined,
+function cmPoseSync(){ try{ localStorage.setItem('rd-pose-sprites' + (S.hidden ? '-h' : ''), JSON.stringify((S.cmPoses || []).map(P => ({id:P.id, name:P.name, geo:P.geo, src:P.src || '', views:P.mids ? m3Pics(P, P.show)[0] : P.views.filter(v => !v.look).map(v => v.url || ''), look:P.views.some(v => v.look) ? P.views.filter(v => v.look).map(v => v.url || '') : undefined,
   views16:cmViews16(P), rig:P.rigV || undefined})))); }catch(e){} }
 // 16 angles round each ring (Jordan 2026-10-23: smaller jumps as she turns): for a MiniMax 3D kept as MiniMax drew it (no
 // Illustrious pass), the frame halfway between each two picked angles is in the turn already, so it costs nothing to make
-function cmViews16(P){ if(P.by!=='mm' || P.dn > 0 || !(P.orb || []).length) return undefined; const nr = Math.max(3, ...P.views.map(v => v.ring + 1)), out = Array(16 * nr).fill(''); let any = false;
+function cmViews16(P){ if(P.mids){ const [vs, ms] = m3Pics(P, P.show), out = []; vs.forEach((u, n) => { out.push(u, ms[n] || ''); }); return out.some(Boolean) ? out : undefined; }
+  if(P.by!=='mm' || P.dn > 0 || !(P.orb || []).length) return undefined; const nr = Math.max(3, ...P.views.map(v => v.ring + 1)), out = Array(16 * nr).fill(''); let any = false;
   for(let ring = 0; ring < nr; ring++){ const o = (P.orb || []).find(x => x.step==='circle' && x.ring===ring), pk = cmPickOf(o); if(!pk || !cmRingOk(P, ring) || (o.urls || []).length <= 8) continue;
     const T = o.turn || o.urls.length - 1;
     for(let i = 0; i < 8; i++){ const v = P.views.find(x => !x.look && x.ring===ring && x.i===i); out[ring * 16 + 2 * i] = v && v.url || '';
@@ -6669,13 +6675,17 @@ async function m3Rig(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); const fr
     P.views.forEach(v => { if(/rig again/.test(v.err || '')) delete v.err; }); delete P.rigging; save(); cmPoseSync(); cmPoseRun(P); }
   catch(err){ delete P.rigging; P.views.forEach(v => v.err = "the rig couldn't copy her pose: " + err.message); save(); toast("The rig couldn't copy her pose: " + err.message, true); }
   finally{ M3_RIG.delete(P.id); fr.remove(); if($('#m3Box')) m3Draw(); } }
-function m3Start(g){ if((S.m3By || 'rig')==='rig') return m3StartRig(g); const ctl = S.m3By==='mmrig';
+function m3Start(g, remote){ if((S.m3By || 'rig')==='rig') return m3StartRig(g); const ctl = S.m3By==='mmrig';
   if(!cmFlKits().length){ toast('None of your computers that are on has MiniMax H3', true); return null; }
   if(ctl && !cmCtlKits().length){ toast('None of your computers that are on has the MiniMax ControlNet (📦 Get it on a PC from the 🧊 settings)', true); return null; }
   const P = {id:uid('sp'), name:'🧊 ' + (g.prompt || 'Render').slice(0, 30), who:'', from:true, snap:g.snap || null, geo:{wM:1.28, hM:1.87, aim:[0, 0.935, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
     by:'mm', pic:true, src:g.url, off:0, desc:g.d3desc || '', dn:S.m3Paint!=null ? S.m3Paint : 0, views:[0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})))};
   if(ctl){ P.ctl = true; P.orbRig = true; } // 🦴🎬 the plain eye-level turn first, then the rig from all its angles
-  P.orb = cmPoseOrbs(true).map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseShape(P, g.url).then(() => { save(); cmPoseSync(); cmPoseRun(P); }); return P; }
+  P.hid = !!S.hidden;
+  if(ctl){ P.mids = [0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sm'), ring, i, mid:true, url:''}))); P.faces = true; P.show = 'mm'; } // 🧊 block (Jordan 2026-10-24)
+  if(S.m3Pick===false) P.goOn = true; // its angles line up on their own, wherever it is made (the hidden app on Render has its own settings)
+  P.orb = cmPoseOrbs(true).map(o => Object.assign(o, {pose:P.id})); if(remote) P.remote = true; // 🖥 made on Render (sent once its shape is known)
+  S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseShape(P, g.url).then(() => { save(); cmPoseSync(); if(P.remote) p3dSend(P); else cmPoseRun(P); }); return P; }
 // 🦴🎬 (Jordan 2026-10-23: "you do a turn around video and then you make the rig from all of the angles"): MiniMax's plain
 // eye-level turn comes first; the rig is fitted to its views all at once (so a leg hidden or foreshortened in the picture is
 // put right by the side views), then the skeleton's other 4 moves (crane up / down, high / low circles) are the control
@@ -6722,7 +6732,7 @@ async function m3RigSpin(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); cons
 // were only in memory and still have moves to send
 const M3_RIG = new Set();
 const M3_PK = new Set();
-function m3Resume(P){ if(!P || P.stopped || M3_RIG.has(P.id) || !P.src) return;
+function m3Resume(P){ if(!P || P.stopped || P.remote || M3_RIG.has(P.id) || !P.src) return;
   if(P.rigging){ if(P.ctl) m3RigSpin(P); else m3Rig(P); return; }
   // a circle that came back while the app was closed or reloading has its frames but no angles picked, so its 8 angles waited
   // for ever (Jordan 2026-10-23: the eye-level angles never came and the bar stopped): line it up now
@@ -6754,7 +6764,7 @@ function m3Tick(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || 
 function m3Status(P){ if(P.rigging) return P.rigMsg || (P.orbRig ? 'Fitting the rig to her turn…' : 'Copying her pose onto the rig…'); if(P.by==='mm' && !P.stopped && (P.orb || []).some(o => o.step==='circle' && (o.urls || []).length > 8 && o.pick && !cmRingOk(P, o.ring))) return 'Pick the angles below'; const done = P.views.filter(v => v.url).length, mv = (P.orb || []).filter(o => o.urls.length).length, run = P.views.concat(P.orb || []).filter(v => v.making || v.busy).length, err = P.views.concat(P.orb || []).find(v => v.err);
   return done===P.views.length ? 'Drag to walk round her' : err && !run ? "Something didn't paint: " + err.err : mv < (P.orb || []).length ? 'MiniMax turning round her: ' + mv + ' of ' + P.orb.length + ' moves' : 'Painting the angles: ' + done + ' of ' + P.views.length; }
 // what is painting right now, each with its own step bar and time left
-const m3Jobs = P => (P.orb || []).concat(P.views, P.cands || []).filter(v => v.making);
+const m3Jobs = P => (P.orb || []).concat(cmPics(P), P.cands || []).filter(v => v.making);
 // a computer that could help but has a line of other jobs (Jordan 2026-10-23: Main sat on 58 old jobs, so Render did it all)
 function m3Idle(P){ const js = m3Jobs(P); if(!js.length) return ''; const mine = new Set(js.map(v => v.making.pc));
   const other = url => (S.cmPoses || []).find(Q => Q!==P && !Q.stopped && (Q.orb || []).concat(Q.views).some(h => h.making && h.making.pc===url));
@@ -6891,6 +6901,117 @@ function m3PanoUi(g){ const P3 = g.d3pano, busy = M3.pbusy, mini2 = u => esc(min
   else h += `<div class="btnrow"><button class="btn" data-m3="pan1" ${g.d3bgSel ? '' : 'disabled'}>🌀 Turn the backdrop 360°</button></div><p class="note">${g.d3bgSel ? 'MiniMax turns on the spot from the backdrop you picked; then you pick 3 frames and it makes the turn loop.' : 'Pick a backdrop above first.'}</p>`;
   return h; }
 // a computer that can paint in Illustrious, the least busy first
+// ---------- 🖥 a 🧊 made on Render with the app closed (Jordan 2026-10-24: "do everything while the app is closed") ----------
+// The rig is fitted in a browser, so Render's helper keeps the 3D (render_deck_p3d.json) and opens this app hidden on Render
+// (Edge, headless, ?worker=1) to make it. The phone sends it there, shows how far it is and passes on taps (a look, a repaint,
+// stop); the hidden app takes the 3Ds and the taps, makes them as the app always does, and sends each change back.
+const farmP3d = () => window.TEST_P3D ? true : !S.test && !!(farm && farmP3dOk); // TEST_P3D: the tests' pretend Render helper
+const p3dUrl = () => window.TEST_P3D || farm;
+async function p3dPost(path, body){ const r = await fetch(p3dUrl() + '/renderdeck/p3d' + path, Object.assign({method:'POST', headers:JSONH, body:JSON.stringify(body)}, within(15000))); if(!r.ok) throw new Error('Render said ' + r.status); return r.json(); }
+async function p3dSend(P){ try{ await p3dPost('/add', {id:P.id, P, hidden:!!S.hidden, servers:S.servers.map(x => ({url:x.url, name:x.name})), off:S.pcOff || [], app:location.origin + location.pathname, farm:p3dUrl()});
+    P.remote = true; save(); toast('Making it on Render: you can close the app'); }
+  catch(e){ P.remote = false; save(); toast("Render couldn't take it, so it is made from the app: keep it open", true); cmPoseRun(P); } }
+async function p3dAsk(P, ask){ try{ await p3dPost('/ask', {id:P.id, ask}); P.rbusy = Date.now(); save(); }catch(e){ toast("Couldn't reach Render: " + e.message, true); } }
+// the phone: each 3D Render is making comes back every few seconds while the app is open
+let p3dPolling = false;
+async function p3dPoll(){ const mine = (S.cmPoses || []).filter(P => P.remote && (!P.rdone || Date.now() - (P.rbusy || 0) < 600000)); if(p3dPolling || !mine.length || !farmP3d() || WORKER) return; p3dPolling = true;
+  try{ const r = await fetch(p3dUrl() + '/renderdeck/p3d?ids=' + mine.map(P => P.id).join(','), Object.assign({cache:'no-store'}, within(8000))), j = await r.json();
+    let ch = false; mine.forEach(P => { const x = (j.jobs || {})[P.id]; if(!x){ return; } if(x.rev!==P.rrev){ const show = P.show; Object.assign(P, x.P, {remote:true, show, rrev:x.rev}); ch = true; } if(!!x.done!==!!P.rdone){ P.rdone = !!x.done; ch = true; } });
+    if(ch){ save(); cmPoseSync(); stage3d(S.gallery[shownIdx]); d3Draw(); drawStrip(); } }
+  catch(e){} finally{ p3dPolling = false; } }
+setInterval(() => { if(document.visibilityState==='visible') p3dPoll(); }, 3000);
+// the hidden app on Render
+const WORKER = new URLSearchParams(location.search).get('worker')==='1' ? {farm:new URLSearchParams(location.search).get('farm') || '', id:uid('w'), sent:{}} : null;
+function p3dSettled(P){ return P.stopped || (P.views.concat(P.mids || [], P.lk || []).every(v => (v.url && !v.redo) || v.err) && (P.orb || []).every(o => (o.urls || []).length || o.err) && !m3Jobs(P).length && !P.rigging); }
+function p3dApply(P, a){
+  if(a.look && !(P.lk || []).some(h => h.str===a.look)){ const dn = (M3_LOOKS.find(x => x[0]===a.look) || [])[1]; if(dn) P.lk = (P.lk || []).concat(P.views.filter(v => !v.look).concat(P.mids || []).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:!!v.mid, str:a.look, dn, url:''}))); }
+  if(a.redo){ const h = cmPics(P).find(x => x.id===a.redo); if(h){ h.redo = true; h.seed = Math.floor(Math.random() * 1e9); delete h.err; } }
+  if(a.stop){ P.stopped = true; cmStop(m3Jobs(P)); }
+  if(a.go){ delete P.stopped; cmPics(P).concat(P.orb || []).forEach(v => delete v.err); } }
+async function p3dWork(){ if(!WORKER) return;
+  try{ const r = await fetch(WORKER.farm + '/renderdeck/p3d/take', {method:'POST', headers:JSONH, body:JSON.stringify({worker:WORKER.id})}), j = await r.json();
+    for(const x of j.jobs || []){ if(x.drop){ const P = (S.cmPoses || []).find(q => q.id===x.id); if(P){ P.stopped = true; cmStop(m3Jobs(P)); S.cmPoses = S.cmPoses.filter(q => q!==P); } continue; }
+      let P = (S.cmPoses || []).find(q => q.id===x.id);
+      if(!P){ P = Object.assign(x.P, {remote:false}); S.cmPoses = [P].concat(S.cmPoses || []); if(x.servers && !S.servers.length){ S.servers = x.servers; S.server = (x.servers.find(q => q.name==='Render') || x.servers[0]).url; S.pcOff = x.off || []; save(); await connect(); } }
+      (x.asks || []).forEach(a => p3dApply(P, a)); }
+    (S.cmPoses || []).forEach(P => { m3Resume(P); if(!P.stopped) cmPoseRun(P, true); });
+    for(const P of S.cmPoses || []){ const t = JSON.stringify(P), done = p3dSettled(P); if(WORKER.sent[P.id]===t + done) continue; WORKER.sent[P.id] = t + done;
+      await fetch(WORKER.farm + '/renderdeck/p3d/put', {method:'POST', headers:JSONH, body:JSON.stringify({id:P.id, P:JSON.parse(t), done, worker:WORKER.id})}).catch(() => {}); } }
+  catch(e){ console.log('[worker]', e.message); } }
+if(WORKER){ try{ Object.defineProperty(document, 'visibilityState', {get:() => 'visible'}); }catch(e){} setInterval(p3dWork, 3000); }
+
+// ---------- 🧊 the 3D block (Jordan 2026-10-24) ----------
+// Its own block instead of its own screen: ▶ Make it 3D turns the picture in the preview into 3D (MiniMax round her at 5 heights,
+// led by the rig, her face fixed in Illustrious on every picture) and the preview shows it. No angle pictures, no backdrop.
+// Look: the MiniMax pictures or Illustrious painted over the same MiniMax frames at Light / Medium / Heavy; each look is kept
+// once painted, to switch between like a quality setting. 🖌 Repaint this angle paints the angle in view again (a new seed),
+// in the look shown. 🎨 Render character paints the view as one Illustrious picture with the render's own prompt, cut out
+// along her outline. Made on Render's helper when it can (the app closed or not), else from the app.
+const D3B = {busy:'', sig:''};
+function d3G(){ const g = S.gallery[shownIdx]; return g && g.d3from ? S.gallery.find(x => x.url===g.d3from) || g : g; }
+const d3P = g => g && (S.cmPoses || []).find(P => P.id===g.d3p) || null;
+function d3Prog(P){ const base = P.views.concat(P.mids || []), mv = (P.orb || []).filter(o => (o.urls || []).length).length, tot = base.length + (P.orb || []).length * 4;
+  return {f:(base.filter(v => v.url).length + mv * 4) / (tot || 1), done:P.views.every(v => v.url)}; }
+function d3Sum(){ const P = d3P(d3G()); if(!P) return 'the picture in the preview'; const p = d3Prog(P); return p.done ? 'ready · ' + (P.show && P.show!=='mm' ? M3_LOOKS.find(x => x[0]===P.show)[2] : 'MiniMax') : 'making it, ' + Math.round(100 * p.f) + '%'; }
+function d3BlockHtml(){ const g = d3G(); if(!g) return '<p class="note">Pick a render in the preview first.</p>'; const P = d3P(g);
+  if(!P){ const why = !cmFlKits().length ? 'None of your computers that are on has MiniMax H3.' : !cmCtlKits().length ? 'None of your computers that are on has the MiniMax pose ControlNet.' : '';
+    return `<p class="note">Turns the picture in the preview into 3D you can walk round: MiniMax goes round her at 5 heights, led by the rig, and her face is fixed in Illustrious on every picture. ${farmP3d() ? 'It is made on Render, so you can close the app.' : 'Keep the app open while it is made.'}</p>
+      ${why ? `<p class="note">${why}</p>` : ''}<div class="btnrow"><button class="btn hot" data-d3="start" ${why ? 'disabled' : ''}>▶ Make it 3D</button></div>`; }
+  const p = d3Prog(P), st = m3Status(P);
+  if(!p.done) return `<p class="note">${esc(st)}</p><div class="pbar obbar"><i style="width:${(100 * p.f).toFixed(1)}%"></i></div>
+    <p class="note">${P.remote ? 'Made on Render: you can close the app.' : 'Keep the app open while it is made.'}</p><div class="btnrow">${P.stopped ? '<button class="btn" data-d3="go">▶ Carry on</button>' : '<button class="btn" data-d3="stop">✕ Stop</button>'}<button class="btn" data-d3="over">↻ Start again</button></div>`;
+  const base = P.views.length + (P.mids || []).length, look = P.show || 'mm', lk = P.lk || [];
+  const seg = [['mm', 'MiniMax']].concat(M3_LOOKS.map(x => [x[0], x[2]])).map(([k, t]) => { const n = k==='mm' ? base : lk.filter(h => h.str===k && h.url).length, has = k==='mm' || lk.some(h => h.str===k);
+    return `<button class="${look===k ? 'on' : ''}" data-d3look="${k}">${t}${has && n < base ? ' ' + Math.round(100 * n / base) + '%' : ''}</button>`; }).join('');
+  const painting = look!=='mm' && lk.filter(h => h.str===look && !h.url).length, redo = cmPics(P).filter(h => h.redo).length;
+  return `<div class="row"><label>Look</label><div class="seg">${seg}</div></div>
+    <p class="note">${look==='mm' ? 'The MiniMax pictures, face fixed. Light, Medium and Heavy paint over the same MiniMax frames in Illustrious (once each), and are kept to switch between.' : painting ? 'Painting ' + esc(M3_LOOKS.find(x => x[0]===look)[2]) + ': ' + (base - painting) + ' of ' + base + ' (the MiniMax pictures show until each is done).' : esc(M3_LOOKS.find(x => x[0]===look)[2]) + ' Illustrious over the MiniMax frames, face fixed.'}${redo ? ' Repainting ' + redo + (redo > 1 ? ' angles' : ' angle') + '…' : ''}</p>
+    <div class="btnrow"><button class="btn" data-d3="repaint">🖌 Repaint this angle</button><button class="btn hot" data-d3="char" ${D3B.busy ? 'disabled' : ''}>🎨 Render character</button></div>
+    ${D3B.busy ? `<p class="note">${esc(D3B.busy)}</p>` : ''}<p class="note">🎨 paints the view in the preview as one Illustrious picture with this render's prompt, ${look==='mm' ? 'lightly' : 'at ' + esc(M3_LOOKS.find(x => x[0]===look)[2])}, and keeps her cut out. It lands in your strip.</p>
+    <div class="btnrow"><button class="btn" data-d3="over">↻ Make it again</button></div>`; }
+function d3Draw(force){ const el = $('#d3Body'); if(!el) return; const h = d3BlockHtml(); if(!force && h===D3B.sig) return; D3B.sig = h; el.innerHTML = h; stage3d(S.gallery[shownIdx]); // the preview turns 3D as soon as it is done
+  const b = el.closest('.block'), sm = b && b.querySelector('h3 small'); if(sm) sm.textContent = d3Sum(); }
+setInterval(() => { if(document.visibilityState==='visible') d3Draw(); }, 1500);
+async function d3Start(g){ M3_LOCK(); const P = m3Start(g, farmP3d()); if(!P) return; S.pv3d = true; save(); d3Draw(true); drawStrip(); }
+function d3Look(P, look){ P.show = look;
+  if(look!=='mm' && !(P.lk || []).some(h => h.str===look)){ const dn = M3_LOOKS.find(x => x[0]===look)[1];
+    if(P.remote){ p3dAsk(P, {look}); } else P.lk = (P.lk || []).concat(P.views.filter(v => !v.look).concat(P.mids || []).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:!!v.mid, str:look, dn, url:''}))); }
+  else if(P.remote) p3dAsk(P, {show:look});
+  save(); cmPoseSync(); if(!P.remote) cmPoseRun(P); d3Draw(true); }
+function d3Repaint(P){ let v = null; try{ v = $('#st3d').contentWindow.VIEW.view(); }catch(e){} if(!v) return toast('Show it in 3D in the preview first', true);
+  const mid = v.N===16 && v.k % 2===1, i = v.N===16 ? (v.k - (mid ? 1 : 0)) / 2 : v.k, look = P.show || 'mm';
+  const h = look==='mm' ? (mid ? P.mids || [] : P.views).find(x => !x.look && x.ring===v.ring && x.i===i) : (P.lk || []).find(x => x.str===look && x.ring===v.ring && x.i===i && !!x.mid===mid);
+  if(!h || !h.url) return toast('That angle is still being painted', true);
+  if(P.remote) p3dAsk(P, {redo:h.id}); else { h.redo = true; h.seed = Math.floor(Math.random() * 1e9); delete h.err; save(); cmPoseRun(P); }
+  toast('Repainting this angle'); d3Draw(true); }
+// 🎨 Render character: the view as it is now, only her on a see-through background; painted in Illustrious (a white backdrop
+// behind her, her outlines held by line art) and cut out again along the very same outline
+async function d3Char(g, P){ let V = null; try{ V = $('#st3d').contentWindow.VIEW; }catch(e){} const k = m3Kit(); if(!V) return toast('Show it in 3D in the preview first', true); if(!k) return toast('No computer that is on has an Illustrious model', true);
+  const W = 832, H = 1216, shot = V.shot(W, H, true), cam = V.cam(), look = P.show && P.show!=='mm' ? P.show : 'light', dn = M3_LOOKS.find(x => x[0]===look)[1];
+  D3B.busy = 'Painting her…'; d3Draw(true);
+  try{ const white = await new Promise((ok, bad) => { const im = new Image(); im.onload = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.drawImage(im, 0, 0, W, H); ok(c.toDataURL('image/png')); }; im.onerror = () => bad(new Error("the view didn't draw")); im.src = shot; });
+    const lo = await obLooks(g, k.oi), prefix = (S.hidden ? HIDDEN : 'RenderDeck') + '/render', img = await cmUp(white, k.url), cut = await cmUp(shot, k.url);
+    const url = await m3Run(k, d3CharGraph(k, lo, [lo.words, lo.prompt, 'full body, simple background, white background'].filter(Boolean).join(', '), 'multiple views, text, scenery', W, H, img, cut, dn, prefix), prefix);
+    S.gallery.unshift({url, seed:null, prompt:g.prompt || '', t:Date.now(), snap:g.snap, d3p:P.id, d3from:g.url, d3cam:cam}); save(); drawStrip(); show(0); toast('Painted: it is in your strip'); }
+  catch(err){ toast("Couldn't paint her: " + err.message, true); }
+  D3B.busy = ''; d3Draw(true); }
+function d3CharGraph(k, look, prompt, neg, W, H, img, cut, dn, prefix){ const G = m3Graph(k, look, prompt, neg, W, H, img, dn, prefix, true), g = G.g, ids = Object.keys(g); let n = Math.max(...ids.map(Number));
+  const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const sv = g[G.save], ks = ids.find(i => g[i].class_type==='KSampler'), K = g[ks].inputs, ck = ids.find(i => g[i].class_type==='CheckpointLoaderSimple'), enc = ids.filter(i => g[i].class_type==='CLIPTextEncode');
+  let out = cmFace(add, k, sv.inputs.images, K.model, g[enc[0]].inputs.clip, [ck, 2], [enc[0], 0], [enc[1], 0], K.seed);
+  if(k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('LoadImage', {image:cut}), 1]}), 0]; // LoadImage's mask is where the shot is see-through
+  sv.inputs.images = out; return G; }
+document.addEventListener('click', e => { const b = e.target.closest('#d3Body [data-d3],#d3Body [data-d3look]'); if(!b || b.disabled) return; const g = d3G(), P = d3P(g); if(!g) return;
+  if(b.dataset.d3look){ if(P) d3Look(P, b.dataset.d3look); return; }
+  const a = b.dataset.d3;
+  if(a==='start') d3Start(g);
+  else if(a==='repaint' && P) d3Repaint(P);
+  else if(a==='char' && P) d3Char(g, P);
+  else if(a==='stop' && P){ if(P.remote) p3dAsk(P, {stop:true}); else { P.stopped = true; cmStop(m3Jobs(P).concat(cmPics(P).concat(P.orb || []).filter(v => v.busy))); } save(); d3Draw(true); }
+  else if(a==='go' && P){ if(P.remote) p3dAsk(P, {go:true}); else { delete P.stopped; cmPics(P).concat(P.orb || []).forEach(v => delete v.err); cmPoseRun(P); } save(); d3Draw(true); }
+  else if(a==='over' && P){ if(!confirm('Make this 3D again from the picture? This one is replaced.')) return;
+    if(P.remote) p3dAsk(P, {drop:true}); else { P.stopped = true; cmStop(m3Jobs(P).concat(cmPics(P).concat(P.orb || []).filter(v => v.busy))); }
+    S.cmPoses = S.cmPoses.filter(x => x!==P); S.gallery.forEach(x => { if(x.d3p===P.id) delete x.d3p; }); save(); drop3d(); d3Start(g); } });
 const m3Kit = () => cmIllKits().slice().sort((a, b) => (pcOf(a.url).load || 0) - (pcOf(b.url).load || 0))[0];
 async function m3Run(k, G, prefix){ if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 150)); return 'https://jordo-desktop.test/view?filename=' + prefix.split('/').pop() + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) + '.png'; }
   const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
@@ -6984,8 +7105,19 @@ const cmPosePicks = o => o.step==='crane' ? [Math.round((TV_LEN - 1) / 2), TV_LE
 // 5 s per turn, so the frame where she is back to the front is found (her outline closest to the first frame's, in the
 // second half), and the 8 angles are spread evenly over that turn. Then she can shift any of them before the paint.
 const cmPickOf = o => o && (o.pick || ((o.urls || []).length===8 ? [0, 1, 2, 3, 4, 5, 6, 7] : null));
-const cmRingOk = (P, ring) => { const o = (P.orb || []).find(x => x.step==='circle' && x.ring===ring); return !!(cmPickOf(o) && ((o.urls || []).length===8 || S.m3Pick===false || (P.pickOk || {})[ring])); };
-function cmPoseFrame(P, v){ const o = (P.orb || []).find(x => x.step==='circle' && x.ring===v.ring), pk = cmPickOf(o); return pk && cmRingOk(P, v.ring) ? o.urls[pk[(v.i - (P.off || 0) + 8) % 8]] : null; }
+const cmRingOk = (P, ring) => { const o = (P.orb || []).find(x => x.step==='circle' && x.ring===ring); return !!(cmPickOf(o) && ((o.urls || []).length===8 || S.m3Pick===false || P.goOn || (P.pickOk || {})[ring])); };
+function cmPoseFrame(P, v){ const o = (P.orb || []).find(x => x.step==='circle' && x.ring===v.ring), pk = cmPickOf(o); if(!pk || !cmRingOk(P, v.ring)) return null;
+  if(!v.mid) return o.urls[pk[(v.i - (P.off || 0) + 8) % 8]];
+  const T = o.turn || o.urls.length - 1, a = pk[(v.i - (P.off || 0) + 8) % 8], b = pk[(v.i + 1 - (P.off || 0) + 8) % 8]; let d = ((b - a) % T + T) % T; if(d > T / 2) d -= T;
+  return o.urls.length > 8 ? o.urls[Math.round(((a + d / 2) % T + T) % T)] || null : null; }
+// 🧊 every picture of a 3D (Jordan 2026-10-24): the 8 angles a height, the frame half way between each two (P.mids), and the
+// Illustrious looks painted from the same MiniMax frames (P.lk, each with its strength), kept side by side to switch between
+const cmPics = P => P.views.concat(P.mids || [], P.lk || []);
+const M3_LOOKS = [['light', 0.3, 'Light'], ['medium', 0.4, 'Medium'], ['heavy', 0.55, 'Heavy']];
+// the pictures the viewer shows for a look (the MiniMax ones where that look isn't painted yet): [8 a height, 8 in-between a height]
+function m3Pics(P, look){ const lk = look && look!=='mm' ? (P.lk || []).filter(h => h.str===look) : [];
+  const pick = h => { const x = lk.find(y => y.ring===h.ring && y.i===h.i && !!y.mid===!!h.mid); return x && x.url || h.url || ''; };
+  return [P.views.filter(v => !v.look).map(pick), (P.mids || []).map(h => pick(h) || cmPoseFrame(P, h) || '')]; }
 async function cmOutline(url){ const im = new Image(); im.crossOrigin = 'anonymous'; im.src = url; await im.decode(); const c = document.createElement('canvas'); c.width = 32; c.height = 48;
   const x = c.getContext('2d'); x.drawImage(im, 0, 0, 32, 48); const d = x.getImageData(0, 0, 32, 48).data, m = new Uint8Array(32 * 48); for(let q = 0; q < m.length; q++) m[q] = Math.min(d[q * 4], d[q * 4 + 1], d[q * 4 + 2]) < 232 ? 1 : 0; return m; }
 // how mirror-even an outline is (1 = the same flipped about her middle): high for front and back views
@@ -7027,7 +7159,7 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
   let b = null; for(const f of picks){ const one = add('ImageFromBatch', {image:[dec,0], batch_index:f, length:1}); b = b ? add('ImageBatch', {image1:[b,0], image2:[one,0]}) : one; }
   return {g, save:add('SaveImage', {images:[b,0], filename_prefix:prefix})}; }
 async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.busyPc = k.url; o.from = src; delete o.err; drawComic();
-  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), picks = cmPosePicks(o), ctl = cmOrbCtl(P, o) ? await cmCtlUp(P, o, k) : null;
+  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring], P.hid), picks = cmPosePicks(o), ctl = cmOrbCtl(P, o) ? await cmCtlUp(P, o, k) : null;
     const ro = cmOutfitRefs(P, o), rk = ro && cmRefKit(k, !!ctl), refs = rk ? await Promise.all(ro.map(u => cmUp(u, k.url))) : null;
     const G = cmPoseOrbGraph(rk || k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH, ctl, refs); if(refs) o.refs = refs.length;
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
@@ -7073,9 +7205,12 @@ function cmPoseGraph(k, L, gd, v, seed, prefix){
   const tx = styleText('illustrious'), enc = t => [add('CLIPTextEncode', {clip, text:t}), 0];
   const seen = new Set(), tags = (...a) => a.join(',').split(',').map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase())).join(', ');
   let pos = enc(tags(tx.pos, LK ? [L.desc, LK.words, LK.prompt].filter(Boolean).join(', ') : [I.words || '', cmCount(who), lk.words].join(', '), 'full body', (v.look ? CM_SP_LOOK : CM_SP_DIR)[v.i], CM_SP_UP[v.ring], CM_WHITE)), neg = enc(tags(tx.neg, 'multiple views', v.i && !v.look ? 'looking at viewer, eye contact, looking back' : '', CM_WHITE_NEG));
-  const [W, H] = L.size || [832, 1216];
+  const [W, H] = L.size || [832, 1216], pos0 = pos, neg0 = neg;
+  // 🙂 face fixing (Jordan 2026-10-24: always on for the new 3Ds, MiniMax pictures and every Illustrious look): her face found
+  // and redrawn up close in Illustrious, before she is cut out
+  const face = img => L.faces ? cmFace(add, k, img, model, clip, vae, pos0, neg0, seed) : img;
   // 🎬 MiniMax only (Jordan 2026-10-23: the Illustrious pass shifted her shoes and sweater): the MiniMax frame, just cut out
-  if(gd.mm && L.dn===0){ let out = [add('ImageScale', {image:[add('LoadImage', {image:gd.mm}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'}), 0];
+  if(gd.mm && L.dn===0){ let out = face([add('ImageScale', {image:[add('LoadImage', {image:gd.mm}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'}), 0]);
     if(k.bg && k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:out}), 0]}), 0]}), 0];
     return {g, save:add('SaveImage', {images:out, filename_prefix:prefix})}; }
   const cl = [add('ControlNetLoader', {control_net_name:k.cn}), 0], mmIm = gd.mm ? add('ImageScale', {image:[add('LoadImage', {image:gd.mm}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'}) : null;
@@ -7084,17 +7219,25 @@ function cmPoseGraph(k, L, gd, v, seed, prefix){
     const ap = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:cl, type}), 0], image:[gi,0], strength, start_percent:0, end_percent:end, vae}); pos = [ap,0]; neg = [ap,1]; });
   const ksa = add('KSampler', {model, positive:pos, negative:neg, latent_image:mmIm ? [add('VAEEncode', {pixels:[mmIm,0], vae}), 0] : [add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0],
     seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', denoise:gd.mm ? (L.dn || CM_SP_DN) : 1});
-  let out = [add('VAEDecode', {samples:[ksa,0], vae}), 0];
+  let out = face([add('VAEDecode', {samples:[ksa,0], vae}), 0]);
   // cut out: transparent round her (BiRefNet), so she stands in the set
   if(k.bg && k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:out}), 0]}), 0]}), 0];
   return {g, save:add('SaveImage', {images:out, filename_prefix:prefix})}; }
+// Fix faces as the Painting block does it (face_yolov8m, SAM outline, wide feather, gentle redraw), for 🧊's pictures; left out on
+// a computer without the Impact Pack nodes
+function cmFace(add, k, img, model, clip, vae, pos, neg, seed, dn){ if(!k.oi.FaceDetailer || !k.oi.UltralyticsDetectorProvider) return img;
+  const extra = {noise_mask_feather:32}; if(k.oi.SAMLoader) extra.sam_model_opt = [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0];
+  return [add('FaceDetailer', Object.assign({image:img, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed:seed || 1, steps:20, cfg:5.5,
+    sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, denoise:dn || 0.35, feather:32, noise_mask:true, force_inpaint:true,
+    bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
+    sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}), 0], wildcard:'', cycle:1}, extra)), 0]; }
 // a computer is busy while ComfyUI has anything in its line or one of our pose jobs is being sent to it or made on it
 const CM_SENTAT = {};
-const cmPcBusy = url => pcOf(url).load > 0 || (S.cmPoses || []).some(P => (P.orb || []).concat(P.views, P.cands || []).some(v => (v.making && v.making.pc===url) || (v.busy && v.busyPc===url)));
+const cmPcBusy = url => pcOf(url).load > 0 || (S.cmPoses || []).some(P => (P.orb || []).concat(cmPics(P), P.cands || []).some(v => (v.making && v.making.pc===url) || (v.busy && v.busyPc===url)));
 // what is still waiting for a free computer
-const cmPoseWaiting = P => P.stopped ? 0 : (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err).length + P.views.filter(v => !v.url && !v.making && !v.busy && !v.err).length;
+const cmPoseWaiting = P => P.stopped || P.remote ? 0 : (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err).length + cmPics(P).filter(v => (!v.url || v.redo) && !v.making && !v.busy && !v.err).length;
 setInterval(() => { if(document.visibilityState!=='visible') return; (S.cmPoses || []).forEach(P => { m3Resume(P); if(!P.stopped && cmPoseWaiting(P)) cmPoseRun(P, true); }); }, 3000);
-function cmPoseRun(P, quiet){ if(P.stopped || P.rigging) return; const L = P.from ? {name:'', g:'', from:true} : (S.cmLib || []).find(x => x.id===P.who); if(!L){ if(!quiet) toast('That pose\'s character is gone from 👥 Characters', true); return; }
+function cmPoseRun(P, quiet){ if(P.stopped || P.rigging || P.remote) return; const L = P.from ? {name:'', g:'', from:true} : (S.cmLib || []).find(x => x.id===P.who); if(!L){ if(!quiet) toast('That pose\'s character is gone from 👥 Characters', true); return; }
   let kits = cmIllKits().filter(k => k.cn); // a computer without BiRefNet paints them on white and the 3D viewer cuts the white away (Jordan 2026-10-23: Main sat free)
   if(!kits.length){ if(!quiet) toast('None of your computers that are on has an Illustrious model and ControlNet ProMax', true); return; }
   if(farm && farmChain && (P.by==='mm' && P.src && !P.ctl || P.from && !P.rigging && P.by!=='mm') && !S.test){ cmPoseFarm(P, L, kits); return; } // the farm on Render runs it, app open or not
@@ -7105,8 +7248,9 @@ function cmPoseRun(P, quiet){ if(P.stopped || P.rigging) return; const L = P.fro
   const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url) && !(P.orbRig && cmOrbCtl(P, o) && !CM_SPC[o.id] && !S.test)).map(o => [o, o.step==='crane' || o.ring===1 ? src : cmCraneUrl(P, o.ring)]).filter(x => x[1]) : [];
   if(P.by==='mm' && src) (P.orb || []).forEach(o => { if(!(o.urls || []).length && !o.making && !(cmOrbCtl(P, o) ? ck : fl).length) o.err = cmOrbCtl(P, o) ? 'no computer that is on has the MiniMax pose ControlNet (📦 Get it on a PC in the 🧊 settings)' : 'no computer that is on has MiniMax H3'; });
   const ready = v => P.by!=='mm' || !!cmPoseFrame(P, v) && !(P.orbRig && v.ring===1 && !P.rigFit && !P.rigFail);
+  if(P.remote) return; // 🖥 made on Render's helper (the app closed or not): this phone only shows it
   if(P.by==='mm' && !src && !P.pic && !(P.cands || []).length) cmPoseCands(P);
-  const todo = P.views.filter(v => !v.url && !v.making && !v.busy && !v.err && ready(v)).concat(P.by==='mm' && !src ? (P.cands || []).filter(c => !c.url && !c.making && !c.busy && !c.err) : []), lost = todo.filter(v => !CM_SPG[v.id] && !(P.by==='mm' && v.cand==null));
+  const todo = P.views.concat(P.mids || [], P.lk || []).filter(v => (!v.url || v.redo) && !v.making && !v.busy && !v.err && ready(v)).concat(P.by==='mm' && !src ? (P.cands || []).filter(c => !c.url && !c.making && !c.busy && !c.err) : []), lost = todo.filter(v => !CM_SPG[v.id] && !(P.by==='mm' && v.cand==null));
   if(lost.length){ toast(lost.length + ' of its angles need the rig again: open a panel\'s rig with that pose and tap 🧍 Make a pose', true); lost.forEach(v => v.err = 'needs the rig again'); }
   const angles = todo.filter(v => !lost.includes(v));
   const pcs = [...new Set(fk.concat(kits).map(k => k.url))].sort((a, b) => cmSlow(a) - cmSlow(b));
@@ -7132,15 +7276,15 @@ async function cmPoseFarm(P, L, kits){
     const mk = (h, g, home, after, use) => { h.farm = cmFarmKey(h); h.fsmp = samplerOf(g); jobs.push({key:h.farm, graph:g, home, client_id:clientId, prompt:'🧊 ' + (P.name || ''), hidden:!!S.hidden, after, use}); };
     for(const o of (P.orb || [])){ if(!need.includes(o)) continue; const cr = orb('crane', cmCraneRing(o.ring)), first = o.step==='crane' || o.ring===1, cu = !first && cmCraneUrl(P, o.ring);
       const img = first ? await cmUp(P.src, fh.url) : cu ? await cmUp(cu, fh.url) : CM_CHAIN_PIC;
-      const G = cmPoseOrbGraph(fh, img, cmPoseOrbPrompt(o), cmPosePicks(o), cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), P.mw || CM_SP_MW, P.mh || CM_SP_MH);
+      const G = cmPoseOrbGraph(fh, img, cmPoseOrbPrompt(o), cmPosePicks(o), cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring], P.hid), P.mw || CM_SP_MW, P.mh || CM_SP_MH);
       o.fmins = 5 * cmSlow(fh.url); mk(o, G.g, fh.url, img===CM_CHAIN_PIC ? [cmFarmKey(cr)] : [], img===CM_CHAIN_PIC ? place(G.g, cmFarmKey(cr), o.ring >= 3 ? 0 : cmPosePicks(cr).length - 1) : {}); }
     let Lk = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, ih.oi)}); if(P.iw) Lk.size = [P.iw, P.ih]; if(P.dn!=null) Lk.dn = P.dn; if(P.desc) Lk.desc = P.desc;
     for(const v of P.views){ if(!need.includes(v)) continue; const c = orb('circle', v.ring), n = (v.i - (P.off || 0) + 8) % 8;
       if(P.by!=='mm'){ const gd = CM_SPG[v.id]; if(!gd){ v.err = 'needs the rig again (↻ Start over)'; continue; } // 🦴 the rig's guides for this angle, no waiting
-        const G = cmPoseGraph(ih, Lk, {pose:await cmUp(gd.pose, ih.url), depth:await cmUp(gd.depth, ih.url)}, v, v.seed || P.seed, cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : '')));
+        const G = cmPoseGraph(ih, Lk, {pose:await cmUp(gd.pose, ih.url), depth:await cmUp(gd.depth, ih.url)}, v, v.seed || P.seed, cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : ''), P.hid));
         v.fmins = 1.5 * cmSlow(ih.url); mk(v, G.g, ih.url, [], {}); continue; }
       const fr = cmPoseFrame(P, v); if(!fr) continue; const mm = await cmUp(fr, ih.url); // its angle is picked (or lined up) first
-      const G = cmPoseGraph(ih, Lk, {mm}, v, v.seed || P.seed, cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : '')));
+      const G = cmPoseGraph(ih, Lk, {mm}, v, v.seed || P.seed, cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : ''), P.hid));
       v.fmins = 1.5 * cmSlow(ih.url); mk(v, G.g, ih.url, [], {}); }
     const j = await farmCall('/add', Object.assign(farmPcs(), {jobs}));
     if(j.error){ jobs.forEach(x => { const [, h] = cmFarmHost(x.key); if(h) delete h.farm; }); toast("Couldn't hand the 3D to the farm: " + j.error, true); }
@@ -7158,7 +7302,8 @@ function cmFarmSeen(jobs, done){ let ch = false; S.cmFarmLive = jobs.map(j => j.
   if(ch){ save(); cmPoseSync(); if(!$('#comic').hidden) drawComic(); } }
 async function cmPoseJob(P, L, v, k){ v.busy = 'Sending…'; v.busyPc = k.url; delete v.err;
   try{ if(L.from) L = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, k.oi)}); if(P.iw) L = Object.assign({}, L, {size:[P.iw, P.ih]}); if(P.dn!=null) L = Object.assign({}, L, {dn:P.dn}); if(P.desc) L = Object.assign({}, L, {desc:P.desc});
-    const gd = CM_SPG[v.id], prefix = cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.look ? '_look' : '') + (v.cand!=null ? '_start' + v.cand : '')), mmf = P.by==='mm' && v.cand==null ? cmPoseFrame(P, v) : null, G = cmPoseGraph(k, L, mmf ? {mm:await cmUp(mmf, k.url)} : {pose:await cmUp(gd.pose, k.url), depth:await cmUp(gd.depth, k.url)}, v, v.seed || P.seed, prefix);
+    if(v.str) L = Object.assign({}, L, {dn:v.dn}); if(P.faces) L = Object.assign({}, L, {faces:true});
+    const gd = CM_SPG[v.id], prefix = cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.mid ? 'm' : '') + (v.str ? '_' + v.str : '') + (v.look ? '_look' : '') + (v.cand!=null ? '_start' + v.cand : ''), P.hid), mmf = P.by==='mm' && v.cand==null ? cmPoseFrame(P, v) : null, G = cmPoseGraph(k, L, mmf ? {mm:await cmUp(mmf, k.url)} : {pose:await cmUp(gd.pose, k.url), depth:await cmUp(gd.depth, k.url)}, v, v.seed || P.seed, prefix);
     if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 120)); delete v.busy; cmGot(v, 'sprite', {url:'https://jordo-desktop.test/view?filename=' + P.id + '_' + v.ring + '_' + v.i + (v.look ? '_look' : '') + (v.cand!=null ? '_s' + v.cand : '') + '.png'}); return; }
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -7398,7 +7543,7 @@ function cmGraph(k, imgs, prompt, w, h, prefix, cm){
   const save = add('SaveVideo', {video:[add('CreateVideo', {images:[dec,0], fps:24}), 0], filename_prefix:prefix, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   return {g, save};
 }
-const cmPrefix = what => (S.hidden ? HIDDEN : 'RenderDeck') + '/comics/' + what;
+const cmPrefix = (what, hid) => ((hid!=null ? hid : S.hidden) ? HIDDEN : 'RenderDeck') + '/comics/' + what; // hid: a 🧊 made on Render keeps the workstation it was started from
 // every panel has its own folder (Jordan 2026-10-21: each page a folder of panels that are folders too), e.g. comics/page_1/panel_3/still
 const cmPrefixP = (pg, i, what) => pg && i >= 0 ? cmPrefix('page_' + (CM().pages.indexOf(pg) + 1) + '/panel_' + (i + 1) + '/' + what) : cmPrefix(what);
 async function cmUp(url, pc){ const key = pc + '|' + url;
@@ -8652,7 +8797,7 @@ function cmGot(p, kind, it){
     if(it.urls && it.urls.length >= 4){ p.bg = it.urls[1]; p.bgDepth = it.urls[2]; p.mask = it.urls[3]; }
     ['far', 'farDepth', 'nearMask'].forEach(x => delete p[x]); p.dflip = false;
     save(); if(!$('#comic').hidden) drawComic(); if(it.url) d3After(p); return; }
-  if(kind==='sprite'){ p.url = it.url; delete p.err; save(); cmPoseSync(); const P = (S.cmPoses || []).find(x => x.views.includes(p) || (x.cands || []).includes(p)); // and the next one waiting goes out
+  if(kind==='sprite'){ p.url = it.url; delete p.err; delete p.redo; save(); cmPoseSync(); const P = (S.cmPoses || []).find(x => cmPics(x).includes(p) || (x.cands || []).includes(p)); // and the next one waiting goes out
     if(P && p.cand!=null){ const rd = P.cands.filter(c => c.round===p.round); if(!P.src && S.cmPoseAuto!==false && rd.every(c => c.url || c.err) && rd.some(c => c.url)) cmPoseScore(P, p.round).then(b => { if(b && !P.src) cmPosePick(P, b, true); else drawComic(); }); else if(!$('#comic').hidden) drawComic(); return; }
     if(P) cmPoseRun(P); else if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='sporb'){ p.urls = it.urls || []; delete p.err; save(); const P = (S.cmPoses || []).find(x => x.id===p.pose); if(P && p.step==='circle') cmAutoPick(P, p); if(P) cmPoseRun(P); else if(!$('#comic').hidden) drawComic(); return; }

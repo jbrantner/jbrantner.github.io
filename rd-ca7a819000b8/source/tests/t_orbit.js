@@ -74,7 +74,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
     S.loraWords['librarianx_v2.safetensors'] = 'librarianx'; S.loraWords['AFKJ Style Illustrious Claude.safetensors'] = 'AFKJ Style';
     S.gallery = [{url:u('hood_00001_.png'), seed:1, prompt:'', t:Date.now(), snap:{blocks:looks, prompt:'librarianx eating a burger'}}, {url:u('fox_00001_.png'), seed:2, prompt:'', t:Date.now(), snap:{prompt:'a red fox in the snow'}}, {url:u('owl_00001_.png'), seed:3, prompt:'', t:Date.now()}];
     save(); drawStrip(); show(0); }, RENDER);
-  await page.click('#resultActions [data-act="orbit"]');
+  await page.$eval('#resultActions [data-act="orbit"]', b => b.click()); // hidden for now (Jordan 2026-10-24), still wired
   await page.waitForSelector('#obPanel:not([hidden]) .opad');
   ok(await page.$$eval('#obPanel .opad button', b => b.length)===8 && !(await page.$('#orbitSheet')), '8 arrows in a panel under the strip (no sheet)');
   ok(/FL2V on .* pins this picture as the first frame/.test(await page.textContent('#obPanel')), 'it offers the FL2V orbit on Render');
@@ -140,7 +140,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   // Hidden: same screen, its own pictures and folders
   await page.evaluate(srv => { switchMode(); S.gallery = [{url:srv + '/view?filename=h_00001_.png&subfolder=Hidden%2Frender&type=output', seed:1, prompt:'', t:Date.now()}]; save(); drawStrip(); show(0); }, RENDER);
   ok(await page.$eval('#obPanel', p => p.hidden) && await page.$eval('#obVid', v => v.hidden), 'Hidden has its own pictures, not the normal ones');
-  await page.click('#resultActions [data-act="orbit"]');
+  await page.$eval('#resultActions [data-act="orbit"]', b => b.click()); // hidden for now (Jordan 2026-10-24), still wired
   await page.click('#obPanel [data-obdir="in"]'); await page.click('#obPanel [data-obseg="zoom"][data-v="lot"]');
   ok(await page.evaluate(() => OB().dir==='in' && OB().zoom==='lot' && /dolly-in/.test(obPrompt('in', 90, 40, '', 'lot')) && /close-up/.test(obPrompt('in', 90, 40, '', 'lot')) && /dolly-out/.test(obPrompt('out', 90, 40, '', 'little')) && !/arc shot/.test(obPrompt('out', 90, 40, '', 'little'))),
     '🔍 Zoom in / 🔭 Zoom out: straight dolly moves, A little or A lot');
@@ -209,7 +209,7 @@ const OI = () => ({CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObs
   await page.evaluate(() => { delete OB().making; save(); drawOrbit(); });
   // 🤸 Edit pose: same clip and finish, camera locked, the typed action; it chains on the picture's current version
   await page.evaluate(() => { show(0); delete OB().making; });
-  await page.click('#resultActions [data-act="pose"]');
+  await page.$eval('#resultActions [data-act="pose"]', b => b.click()); // hidden for now (Jordan 2026-10-24), still wired
   await page.waitForSelector('#obPanel [data-obf="action"]');
   ok(!(await page.$('#obPanel .opad')), 'Edit pose: no camera arrows, an action box instead');
   const before = sent.length;

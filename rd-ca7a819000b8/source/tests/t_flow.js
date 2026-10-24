@@ -230,7 +230,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.click('#libBtn'); await page.waitForSelector('#libSheet.open'); await page.click('#recentRow [data-i="1"]');
   ok(!(await page.$('#libSheet.open')) && await page.isVisible('#shown') && (await page.$eval('#strip img.sel', i => i.dataset.i))==='1', 'a render tapped in the library opens in the preview');
   await page.click('#strip img[data-i="0"]');
-  await page.click('[data-act=pic]');
+  await page.click('#shown'); await page.click('#vGal [data-act=pic]'); // the row under the picture is gone (Jordan 2026-10-24): the viewer has it
   const g2before = sent.length; await page.click('#goBtn'); await page.waitForFunction(n => document.querySelectorAll('#recentRow img').length===n, 4, {timeout:5000});
   const li = Object.values(sent[g2before]).find(x=>x._meta.title==='Start picture');
   ok(li.inputs.image==='RenderDeck/render_00002.png [output]', 'reused render points at output file: '+li.inputs.image);
