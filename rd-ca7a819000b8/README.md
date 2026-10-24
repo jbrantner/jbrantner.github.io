@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.179
+
+- 🧊 5 heights (Jordan picked it): new MiniMax 3Ds also turn round her at 20° up and 10° down. Each of those turns starts from the middle frame of the crane up / crane down (cranes now keep their middle and last frames). 40 angles, 80 with the in-between frames. The viewer shows the nearest height's pictures (older 3Ds with 3 heights keep the 32° / -20° switch).
+
 ## 2026-10-24.178
 
 - 🧊 Viewer: pictures follow the camera again, feet planted (the locked pictures looked bad). Locked is only on with rig/view.html?lock=1.

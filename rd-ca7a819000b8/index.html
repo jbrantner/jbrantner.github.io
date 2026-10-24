@@ -637,7 +637,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-24.178'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-24.179'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5933,6 +5933,9 @@ function quarterPrompt(height, scene){
     + 'at one steady, constant speed from the first frame to the last, always keeping her centred and the same size. [0s-5s] The camera travels the whole quarter circle evenly and arrives exactly on the last frame\'s view at 5 seconds. '
     + 'The background stays plain white, with no floor, shadows or scenery. She is frozen: same pose, same expression, nothing moves except the camera. Same art style, colours and lighting. No cuts, no zoom, no new characters. Silence.'; }
 function circlePrompt(scene, plain, height){
+  if(height==='midhigh' || height==='midlow'){ const up = height==='midhigh'; // the in-between heights: a little above or below her eyes
+    return circlePrompt(scene, plain).replace('She is frozen', 'The camera stays a little ' + (up ? 'above her eye level, looking slightly down at her' : 'below her eye level, near her waist, looking slightly up at her') + ' for the whole orbit. She is frozen')
+      .replace('at the same height and distance', 'from slightly ' + (up ? 'above' : 'below') + ', staying at that same height and distance'); }
   if(height) return circlePrompt(scene, plain).replace('She is frozen', 'The camera never comes back to eye level: it stays ' + (height==='high' ? 'high above her, looking down, so we see the top of her head and shoulders' : 'low near the ground, looking up, so she towers over the camera') + ' for the whole orbit. She is frozen').replace('at the same height and distance', height==='high' ? 'from a high angle above her, looking down on her, staying at that same height and distance'
     : 'from a low angle near the ground, looking up at her, staying at that same height and distance').replace('The camera circles', 'The camera keeps its ' + height + ' angle the whole time and circles');
   const first = (scene || '').trim() ? 'The first frame shows ' + scene.trim().replace(/\.+$/, '') + '. ' : '';
@@ -6141,7 +6144,7 @@ async function liveQueue(id, pc){
 const CM_MOVING = new Set();
 async function cmMoveWaiting(h, pc){ const P = (S.cmPoses || []).find(x => (x.orb || []).concat(x.views, x.cands || []).includes(h)), m = h.making; if(!P || !m || CM_MOVING.has(m.id)) return;
   const orb = m.kind==='sporb'; let ks = orb ? (cmOrbCtl(P, h) ? cmCtlKits() : cmFlKits()) : cmIllKits().filter(k => k.cn);
-  if(orb){ if(ks.some(k => k.fl)) ks = ks.filter(k => k.fl); if(!h.from) h.from = h.step==='crane' || h.ring===1 ? P.src : (((P.orb || []).find(o => o.step==='crane' && o.ring===h.ring) || {}).urls || [])[0]; if(!h.from) return; }
+  if(orb){ if(ks.some(k => k.fl)) ks = ks.filter(k => k.fl); if(!h.from) h.from = h.step==='crane' || h.ring===1 ? P.src : cmCraneUrl(P, h.ring); if(!h.from) return; }
   if(P.stopped) return; const free = ks.find(k => k.url!==pc && !(pcOf(k.url).load > 0)); if(!free) return;
   CM_MOVING.add(m.id);
   try{ await fetch(pc + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({delete:[m.id]})});
@@ -6600,17 +6603,17 @@ function cmSetGraph(k, img, dimg, p, i, rect, prefix, people){
 // side, ¾), each painted in Illustrious with the character's LoRA through ProMax (OpenPose + depth from the rig, so every
 // picture is exactly its angle) on white, cut out with BiRefNet. The rig's 🛋 Set places them as a camera-facing picture
 // that swaps as the camera goes round (rd-pose-sprites on this phone)
-const CM_SPG = {}, CM_SP_RING = ['low', 'eye', 'high'];
+const CM_SPG = {}, CM_SP_RING = ['low', 'eye', 'high', 'midhigh', 'midlow'];
 // Illustrious turns her head to the camera on its own, so only the front view looks at us (Jordan 2026-10-22)
-const CM_SP_DIR = ['looking at viewer', 'looking ahead', 'from side, profile, looking ahead', 'from behind', 'from behind, back', 'from behind', 'from side, profile, looking ahead', 'looking ahead'], CM_SP_UP = ['from below', '', 'from above'];
+const CM_SP_DIR = ['looking at viewer', 'looking ahead', 'from side, profile, looking ahead', 'from behind', 'from behind, back', 'from behind', 'from side, profile, looking ahead', 'looking ahead'], CM_SP_UP = ['from below', '', 'from above', 'from above', 'from below'];
 // 👀 the optional second set (Jordan 2026-10-22): the same pose with her eyes on the camera from every angle, so a character's pose library covers both
 const CM_SP_LOOK = ['looking at viewer', 'looking at viewer', 'from side, looking at viewer', 'from behind, looking back, looking at viewer', 'from behind, looking back, looking at viewer', 'from behind, looking back, looking at viewer', 'from side, looking at viewer', 'looking at viewer'];
 function cmPoseSync(){ try{ localStorage.setItem('rd-pose-sprites' + (S.hidden ? '-h' : ''), JSON.stringify((S.cmPoses || []).map(P => ({id:P.id, name:P.name, geo:P.geo, src:P.src || '', views:P.views.filter(v => !v.look).map(v => v.url || ''), look:P.views.some(v => v.look) ? P.views.filter(v => v.look).map(v => v.url || '') : undefined,
   views16:cmViews16(P), rig:P.rigV || undefined})))); }catch(e){} }
 // 16 angles round each ring (Jordan 2026-10-23: smaller jumps as she turns): for a MiniMax 3D kept as MiniMax drew it (no
 // Illustrious pass), the frame halfway between each two picked angles is in the turn already, so it costs nothing to make
-function cmViews16(P){ if(P.by!=='mm' || P.dn > 0 || !(P.orb || []).length) return undefined; const out = Array(48).fill(''); let any = false;
-  for(const ring of [0, 1, 2]){ const o = (P.orb || []).find(x => x.step==='circle' && x.ring===ring), pk = cmPickOf(o); if(!pk || !cmRingOk(P, ring) || (o.urls || []).length <= 8) continue;
+function cmViews16(P){ if(P.by!=='mm' || P.dn > 0 || !(P.orb || []).length) return undefined; const nr = Math.max(3, ...P.views.map(v => v.ring + 1)), out = Array(16 * nr).fill(''); let any = false;
+  for(let ring = 0; ring < nr; ring++){ const o = (P.orb || []).find(x => x.step==='circle' && x.ring===ring), pk = cmPickOf(o); if(!pk || !cmRingOk(P, ring) || (o.urls || []).length <= 8) continue;
     const T = o.turn || o.urls.length - 1;
     for(let i = 0; i < 8; i++){ const v = P.views.find(x => !x.look && x.ring===ring && x.i===i); out[ring * 16 + 2 * i] = v && v.url || '';
       const a = pk[(i - (P.off || 0) + 8) % 8], b = pk[(i + 1 - (P.off || 0) + 8) % 8]; let d = ((b - a) % T + T) % T; if(d > T / 2) d -= T;
@@ -6681,9 +6684,9 @@ function m3Start(g){ if((S.m3By || 'rig')==='rig') return m3StartRig(g); const c
   if(!cmFlKits().length){ toast('None of your computers that are on has MiniMax H3', true); return null; }
   if(ctl && !cmCtlKits().length){ toast('None of your computers that are on has the MiniMax ControlNet (📦 Get it on a PC from the 🧊 settings)', true); return null; }
   const P = {id:uid('sp'), name:'🧊 ' + (g.prompt || 'Render').slice(0, 30), who:'', from:true, snap:g.snap || null, geo:{wM:1.28, hM:1.87, aim:[0, 0.935, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
-    by:'mm', pic:true, src:g.url, off:0, desc:g.d3desc || '', dn:S.m3Paint!=null ? S.m3Paint : 0, views:[0, 1, 2].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})))};
+    by:'mm', pic:true, src:g.url, off:0, desc:g.d3desc || '', dn:S.m3Paint!=null ? S.m3Paint : 0, views:[0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})))};
   if(ctl){ P.ctl = true; P.orbRig = true; } // 🦴🎬 the plain eye-level turn first, then the rig from all its angles
-  P.orb = cmPoseOrbs().map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseShape(P, g.url).then(() => { save(); cmPoseSync(); cmPoseRun(P); }); return P; }
+  P.orb = cmPoseOrbs(true).map(o => Object.assign(o, {pose:P.id})); S.cmPoses = [P].concat(S.cmPoses || []); g.d3p = P.id; save(); cmPoseShape(P, g.url).then(() => { save(); cmPoseSync(); cmPoseRun(P); }); return P; }
 // 🦴🎬 (Jordan 2026-10-23: "you do a turn around video and then you make the rig from all of the angles"): MiniMax's plain
 // eye-level turn comes first; the rig is fitted to its views all at once (so a leg hidden or foreshortened in the picture is
 // put right by the side views), then the skeleton's other 4 moves (crane up / down, high / low circles) are the control
@@ -6700,7 +6703,11 @@ function cmEyeMath(ths, face, len, turn){ const t = ths.slice().sort((a, b) => a
   const b = den ? num / den : 0; if(!b) return null; const thAt = f => ma + b * (f - mf);
   const wrap = a => Math.abs(((a % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI), lim = Math.min(len, Math.max(8, Math.ceil(2 * Math.PI / Math.abs(b))));
   return [0, 1, 2, 3, 4, 5, 6, 7].map(n => { const want = (face + n * 45) * Math.PI / 180; let best = 0, bd = 9; for(let f = 0; f < lim; f++){ const d = wrap(thAt(f) - want); if(d < bd){ bd = d; best = f; } } return best; }); }
-const CM_SP_EL = [-25, 5, 35]; // the rig's low / eye / high rings
+const CM_SP_EL = [-25, 5, 35, 20, -10]; // the rig's low / eye / high rings, and (Jordan 2026-10-24, 5 heights) a little high / a little low
+// the two in-between heights (rings 3 and 4) are half way up the crane up and half way down the crane down, so each of those
+// turns starts from the crane's middle frame; the high and low turns from its last
+const cmCraneRing = r => r===3 ? 2 : r===4 ? 0 : r, cmRingName = r => ['low', 'eye level', 'high', 'a little high', 'a little low'][r] || '';
+function cmCraneUrl(P, ring){ const c = (P.orb || []).find(o => o.step==='crane' && o.ring===cmCraneRing(ring)), us = c && c.urls || []; return ring >= 3 ? (us.length > 1 ? us[0] : '') : us[us.length - 1]; }
 async function m3RigSpin(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); const fr = document.createElement('iframe');
   fr.style.cssText = 'position:fixed;left:-2000px;top:0;width:400px;height:700px;border:0'; fr.title = 'Pose rig';
   fr.src = 'rig/?' + new URLSearchParams({panel:'m3' + (S.hidden ? 'h' : ''), w:640, h:960}); document.body.appendChild(fr);
@@ -6765,7 +6772,7 @@ function m3Idle(P){ const js = m3Jobs(P); if(!js.length) return ''; const mine =
   return cmFlKits().filter(k => !mine.has(k.url) && pcOf(k.url).load > 0).map(k => other(k.url) ? `<p class="note">${esc(pcName(k.url))} is busy with another 3D (${esc(other(k.url).name || '🧊')}); it joins in when that's done, or stop that one.</p>` : `<p class="note">${esc(pcName(k.url))} isn't helping: it has ${pcOf(k.url).load} other job${pcOf(k.url).load > 1 ? 's' : ''} waiting in its line.</p><div class="btnrow"><button class="btn" data-m3clear="${esc(k.url)}">✕ Clear ${esc(pcName(k.url))}'s line</button></div>`).join(''); }
 function m3Live(P){ const js = m3Jobs(P), w = cmPoseWaiting(P), wn = w ? `<p class="note">${w} more waiting; each goes to the next computer that is free.</p>` : ''; if(!js.length) return wn;
   return m3Idle(P) + '<div class="m3live">' + js.map(v => { const id = v.making.id, e = cmEta(v) || {f:0, text:''};
-    return `<div class="m3job"><div class="grow"><b>${v.step ? (v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===2 ? ' high' : v.ring===0 ? ' low' : '')) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
+    return `<div class="m3job"><div class="grow"><b>${v.step ? (v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===1 ? '' : ' ' + cmRingName(v.ring))) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
       <div class="pbar obbar"><i data-m3bar="${esc(id)}" style="width:${(100 * e.f).toFixed(1)}%"></i></div><p class="note" data-m3txt="${esc(id)}">${esc(e.text)}</p></div></div>`; }).join('') + '</div>' + wn; }
 function m3Bars(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return;
   m3Jobs(P).forEach(v => { const e = cmEta(v); if(!e) return; const id = v.making.id;
@@ -6774,7 +6781,7 @@ function m3Bars(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || 
 // 🎯 Pick the angles: each MiniMax circle's 8 angles, already lined up by her outline; ‹ › steps a frame either way
 const M3_ANG = ['front', 'front ¾', 'side', 'back ¾', 'back', 'back ¾', 'side', 'front ¾'];
 function m3Picker(P){ if(P.by!=='mm') return ''; let x = '';
-  (P.orb || []).filter(o => o.step==='circle' && (o.urls || []).length > 8 && o.pick).forEach(o => { const ok = cmRingOk(P, o.ring), nm = o.ring===2 ? 'high' : o.ring===0 ? 'low' : 'eye level';
+  (P.orb || []).filter(o => o.step==='circle' && (o.urls || []).length > 8 && o.pick).forEach(o => { const ok = cmRingOk(P, o.ring), nm = cmRingName(o.ring);
     x += `<div class="lbl">🎯 Angles, ${nm}${ok ? ' ✓' : ''}</div><div class="m3pick">${o.pick.map((f, n) => `<div><img src="${esc(mini(o.urls[f]))}" alt="" loading="lazy"><div class="m3pk"><button data-m3pk="${o.ring}:${n}:-1" ${ok ? 'disabled' : ''}>‹</button><span>${M3_ANG[n]}</span><button data-m3pk="${o.ring}:${n}:1" ${ok ? 'disabled' : ''}>›</button></div></div>`).join('')}</div>`
       + (ok ? '' : `<div class="btnrow"><button class="btn" data-m3pk="${o.ring}:rot:-1">↶ Turn all</button><button class="btn" data-m3pk="${o.ring}:rot:1">Turn all ↷</button></div><p class="note">If "front" isn't her front, Turn all moves every label one angle round.</p><p class="note">Lined up on its own (one turn took ${Math.round((o.turn || o.urls.length - 1) * 4 / 24 * 10) / 10} s). Nudge any that face the wrong way, then:</p><div class="btnrow"><button class="btn hot" data-m3pk="${o.ring}:ok">✓ Use these angles</button></div>`); });
   return x && !m3Locked() ? x + `<div class="row"><label>Each time</label>${m3Seg('data-m3pkask', [[1, 'Ask me'], [0, 'Go ahead on its own']], S.m3Pick===false ? 0 : 1)}</div>` : x; } // (locked to go ahead, Jordan 2026-10-23)
@@ -6979,10 +6986,11 @@ async function cmPoseScore(P, round){ const cs = P.cands.filter(c => c.round===r
   return cs.slice().sort((a, b) => b.score.all - a.score.all)[0]; }
 function cmPosePick(P, c, auto){ const v = P.views.find(x => x.ring===1 && x.i===c.i && !x.look); if(v){ v.url = c.url; v.seed = c.seed; } P.src = c.url; P.off = c.i; P.picked = c.id; P.auto = !!auto;
   save(); cmPoseSync(); cmPoseRun(P); }
-function cmPoseOrbs(){ return [{step:'circle', ring:1}, {step:'crane', ring:2}, {step:'crane', ring:0}, {step:'circle', ring:2}, {step:'circle', ring:0}].map(o => Object.assign({id:uid('so'), urls:[]}, o)); }
-function cmPoseOrbPrompt(o){ return o.step==='crane' ? obPrompt(o.ring===2 ? 'up' : 'down', 0, 35, CM_SP_SCENE) : circlePrompt(CM_SP_SCENE, true, o.ring===2 ? 'high' : o.ring===0 ? 'low' : ''); }
-// the circle comes back to the front at about 5 s (frame 120): every 15th frame is the next 45°; a crane keeps its last frame
-const cmPosePicks = o => o.step==='crane' ? [TV_LEN - 1] : Array.from({length:31}, (_, n) => n * 4); // every 4th frame, so the angles can be picked
+function cmPoseOrbs(five){ return [{step:'circle', ring:1}, {step:'crane', ring:2}, {step:'crane', ring:0}, {step:'circle', ring:2}, {step:'circle', ring:0}].concat(five ? [{step:'circle', ring:3}, {step:'circle', ring:4}] : []).map(o => Object.assign({id:uid('so'), urls:[]}, o)); }
+function cmPoseOrbPrompt(o){ return o.step==='crane' ? obPrompt(o.ring===2 ? 'up' : 'down', 0, 35, CM_SP_SCENE) : circlePrompt(CM_SP_SCENE, true, ['low', '', 'high', 'midhigh', 'midlow'][o.ring] || ''); }
+// the circle comes back to the front at about 5 s (frame 120): every 15th frame is the next 45°; a crane keeps its middle frame
+// (where the in-between turn starts) and its last
+const cmPosePicks = o => o.step==='crane' ? [Math.round((TV_LEN - 1) / 2), TV_LEN - 1] : Array.from({length:31}, (_, n) => n * 4); // every 4th frame, so the angles can be picked
 // 🎯 lining up the angles (Jordan 2026-10-23: "the angles haven't lined up very well"): MiniMax doesn't always take exactly
 // 5 s per turn, so the frame where she is back to the front is found (her outline closest to the first frame's, in the
 // second half), and the 8 angles are spread evenly over that turn. Then she can shift any of them before the paint.
@@ -7105,7 +7113,7 @@ function cmPoseRun(P, quiet){ if(P.stopped || P.rigging) return; const L = P.fro
   // here, and whenever a computer is idle it takes the next one that it can make, MiniMax moves first (they unlock the angles)
   const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, src = P.src;
   let fl = cmFlKits(); if(fl.some(k => k.fl)) fl = fl.filter(k => k.fl); const ck = P.ctl ? cmCtlKits() : [], fk = fl.concat(ck), kitFor = (o, url) => (cmOrbCtl(P, o) ? ck : fl).find(k => k.url===url);
-  const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url) && !(P.orbRig && cmOrbCtl(P, o) && !CM_SPC[o.id] && !S.test)).map(o => [o, o.step==='crane' || o.ring===1 ? src : (orb('crane', o.ring).urls || [])[0]]).filter(x => x[1]) : [];
+  const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url) && !(P.orbRig && cmOrbCtl(P, o) && !CM_SPC[o.id] && !S.test)).map(o => [o, o.step==='crane' || o.ring===1 ? src : cmCraneUrl(P, o.ring)]).filter(x => x[1]) : [];
   if(P.by==='mm' && src) (P.orb || []).forEach(o => { if(!(o.urls || []).length && !o.making && !(cmOrbCtl(P, o) ? ck : fl).length) o.err = cmOrbCtl(P, o) ? 'no computer that is on has the MiniMax pose ControlNet (📦 Get it on a PC in the 🧊 settings)' : 'no computer that is on has MiniMax H3'; });
   const ready = v => P.by!=='mm' || !!cmPoseFrame(P, v) && !(P.orbRig && v.ring===1 && !P.rigFit && !P.rigFail);
   if(P.by==='mm' && !src && !P.pic && !(P.cands || []).length) cmPoseCands(P);
@@ -7133,10 +7141,10 @@ async function cmPoseFarm(P, L, kits){
     const near = ks => ks.find(k => k.url===farm) || ks[0], fh = near(fk), ih = near(kits); if(!fh && need.some(h => h.step)){ hs.forEach(h => { if(!h.url && !(h.urls || []).length) h.err = 'no computer that is on has MiniMax H3'; }); return; }
     const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, jobs = [], place = (g, key, n) => { const id = Object.keys(g).find(i => g[i].class_type==='LoadImage' && g[i].inputs.image===CM_CHAIN_PIC); return id ? {[id]:[key, n]} : {}; };
     const mk = (h, g, home, after, use) => { h.farm = cmFarmKey(h); h.fsmp = samplerOf(g); jobs.push({key:h.farm, graph:g, home, client_id:clientId, prompt:'🧊 ' + (P.name || ''), hidden:!!S.hidden, after, use}); };
-    for(const o of (P.orb || [])){ if(!need.includes(o)) continue; const cr = orb('crane', o.ring), first = o.step==='crane' || o.ring===1;
-      const img = first ? await cmUp(P.src, fh.url) : (cr.urls || []).length ? await cmUp(cr.urls[0], fh.url) : CM_CHAIN_PIC;
+    for(const o of (P.orb || [])){ if(!need.includes(o)) continue; const cr = orb('crane', cmCraneRing(o.ring)), first = o.step==='crane' || o.ring===1, cu = !first && cmCraneUrl(P, o.ring);
+      const img = first ? await cmUp(P.src, fh.url) : cu ? await cmUp(cu, fh.url) : CM_CHAIN_PIC;
       const G = cmPoseOrbGraph(fh, img, cmPoseOrbPrompt(o), cmPosePicks(o), cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring]), P.mw || CM_SP_MW, P.mh || CM_SP_MH);
-      o.fmins = 5 * cmSlow(fh.url); mk(o, G.g, fh.url, img===CM_CHAIN_PIC ? [cmFarmKey(cr)] : [], img===CM_CHAIN_PIC ? place(G.g, cmFarmKey(cr), 0) : {}); }
+      o.fmins = 5 * cmSlow(fh.url); mk(o, G.g, fh.url, img===CM_CHAIN_PIC ? [cmFarmKey(cr)] : [], img===CM_CHAIN_PIC ? place(G.g, cmFarmKey(cr), o.ring >= 3 ? 0 : cmPosePicks(cr).length - 1) : {}); }
     let Lk = Object.assign({}, L, {look:await obLooks({snap:P.snap, url:P.src, hist:[]}, ih.oi)}); if(P.iw) Lk.size = [P.iw, P.ih]; if(P.dn!=null) Lk.dn = P.dn; if(P.desc) Lk.desc = P.desc;
     for(const v of P.views){ if(!need.includes(v)) continue; const c = orb('circle', v.ring), n = (v.i - (P.off || 0) + 8) % 8;
       if(P.by!=='mm'){ const gd = CM_SPG[v.id]; if(!gd){ v.err = 'needs the rig again (↻ Start over)'; continue; } // 🦴 the rig's guides for this angle, no waiting
@@ -7175,7 +7183,7 @@ function cmPosesHtml(){ const ps = S.cmPoses || [];
       ${errs.length ? `<p class="warn">${esc(errs.length + ' angle' + (errs.length > 1 ? 's' : '') + " didn't paint: " + errs[0].err)}</p>` : ''}
       ${P.pic ? `<p class="note">MiniMax turns from <a href="${esc(P.src)}" target="_blank" rel="noopener">your picture</a> (${esc(CM_SP_FROM[P.off || 0].toLowerCase())}).</p>` : ''}${P.by==='mm' && (P.cands || []).length && !P.pic ? `<div class="lbl">${P.src ? (P.auto ? '🤖 Picked for you (tap another to start again from it)' : 'MiniMax turns from the one you tapped') : 'Tap the picture MiniMax turns from' + (S.cmPoseAuto!==false ? ', or wait and the best is picked' : '')}</div><div class="cmposegrid cmcands">${P.cands.map(c => c.url ? `<button data-cmpose="pick" data-id="${esc(P.id)}" data-c="${esc(c.id)}" class="${P.picked===c.id ? 'on' : ''}" aria-label="Use this one"><img src="${esc(mini(c.url))}" alt="" loading="lazy">${c.score ? `<small>face ${Math.round(100 * c.score.face)} · open ${Math.round(100 * c.score.open)}${c.score.match!=null ? ' · match ' + Math.round(100 * c.score.match) : ''}</small>` : ''}</button>` : '<span></span>').join('')}</div>
         ${P.src ? '' : `<div class="btnrow"><button class="btn" data-cmpose="more" data-id="${esc(P.id)}" ${P.cands.some(c => c.making || c.busy) ? 'disabled' : ''}>🖼 Paint 3 more</button></div>`}` : ''}
-      ${[false, true].filter(lk => P.views.some(v => !!v.look===lk)).map(lk => (lk ? '<div class="lbl">👀 Looking at the camera</div>' : '') + `<div class="cmposegrid">${[2, 1, 0].map(ring => P.views.filter(v => v.ring===ring && !!v.look===lk).map(v => v.url ? `<img src="${esc(mini(v.url))}" alt="${CM_SP_RING[ring]} ${v.i * 45}°" loading="lazy">` : '<span></span>').join('')).join('')}</div>`).join('')}
+      ${[false, true].filter(lk => P.views.some(v => !!v.look===lk)).map(lk => (lk ? '<div class="lbl">👀 Looking at the camera</div>' : '') + `<div class="cmposegrid">${[2, 3, 1, 4, 0].map(ring => P.views.filter(v => v.ring===ring && !!v.look===lk).map(v => v.url ? `<img src="${esc(mini(v.url))}" alt="${CM_SP_RING[ring]} ${v.i * 45}°" loading="lazy">` : '<span></span>').join('')).join('')}</div>`).join('')}
       ${!run.length && !P.views.some(v => v.look) && P.views.some(v => CM_SPG[v.id]) ? `<div class="btnrow"><button class="btn" data-cmpose="look" data-id="${esc(P.id)}">👀 Add a looking-at-camera set (24 more)</button></div>` : ''}
       ${done < P.views.length && !run.length ? `<div class="btnrow"><button class="btn" data-cmpose="redo" data-id="${esc(P.id)}">↻ Paint the missing angles</button></div>` : ''}</div>`; }).join('')
     : '') + (cmFlKits().length ? `<div class="row"><label>Paint by</label>${seg('data-cmposeby', [['mm', '🎬 MiniMax turn + Illustrious'], ['ill', '🖼 Illustrious only']], S.cmPoseBy==='ill' ? 'ill' : 'mm')}</div>` : '') + ((S.cmLib || []).length ? `<div class="row"><label>Who</label><select data-cmposewho style="flex:1">${S.cmLib.map(L => `<option value="${esc(L.id)}" ${L.id===S.cmPoseWho ? 'selected' : ''}>${esc(L.name || 'No name')}</option>`).join('')}</select></div>` : '')
