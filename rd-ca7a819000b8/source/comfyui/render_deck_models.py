@@ -1256,7 +1256,8 @@ def _p3d_open(job):
         job['why'] = 'No Edge or Chrome on this computer'
         return
     url = job['farm'].rstrip('/') + '/renderdeck/app/?worker=1&farm=' + quote(job['farm'], safe='')
-    prof = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_worker_profile')
+    # its own browser profile, in ComfyUI's user folder (inside custom_nodes ComfyUI tried to load it as a node pack)
+    prof = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'user', 'render_deck_worker_profile')
     args = [exe, '--headless=new', '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-background-timer-throttling',
             '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--enable-unsafe-swiftshader', '--user-data-dir=' + prof, url]
     _p3d['proc'] = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
