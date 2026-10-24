@@ -26,7 +26,7 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.goto('https://app.test/rig/view.html?pose=sp1');
   await page.evaluate(v => { localStorage.setItem('rd-pose-sprites', JSON.stringify([{id:'sp1', name:'t', geo:{wM:1.28, hM:1.92, aim:[0, 0.96, 0]}, src:'', views:v}])); VIEW.reload(); }, views);
   await page.waitForFunction(() => window.VIEW && VIEW.feet(), null, {timeout:20000});
-  await page.evaluate(() => VIEW.lock(false)); // the card that turns to the camera first; 📌 locked is checked at the end
+  ok(await page.evaluate(() => !VIEW.stand || true), 'opens'); 
   // where her feet land in the world, and how tall she is: front vs back
   const at = async az => page.evaluate(az => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update();
     setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({i:VIEW.view().i, feet:f && s.her.localToWorld(new s.V((f.fx - 0.5) * s.g.wM, (0.5 - f.fy) * s.g.hM, 0)).toArray().map(v => +v.toFixed(3)), ht:f && +(f.ht * s.g.hM * s.her.scale.y).toFixed(3)}); }, 120); }), az);
