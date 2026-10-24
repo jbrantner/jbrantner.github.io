@@ -87,7 +87,7 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
       if(u.pathname==='/view' && /\.webm$/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'video/webm', body:VID, headers:cors });
       if(u.pathname==='/view') return r.fulfill({ contentType:'image/png', body:PNG, headers:cors });
       if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
-      if(u.pathname==='/upload/image'){ pc.ups.push(1); return r.fulfill({ json:{name:name[0] + 'up_' + pc.ups.length + '.png', subfolder:'', type:'input'} }); }
+      if(u.pathname==='/upload/image'){ pc.ups.push(1); const bd = r.request().postDataBuffer(); if(bd && /name="type"\r\n\r\noutput/.test(bd.toString('latin1'))) pc.outs.push({sub:bd.toString('latin1').match(/name="subfolder"\r\n\r\n([^\r]*)/)[1], png:bd.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47])) >= 0, alpha:bd.indexOf(Buffer.from('IHDR')) >= 0 && bd[bd.indexOf(Buffer.from('IHDR')) + 13]===6}); return r.fulfill({ json:{name:name[0] + 'up_' + pc.ups.length + '.png', subfolder:'', type:'input'} }); }
       if(u.pathname==='/prompt'){ const jj = JSON.parse(r.request().postData()); ALL.push(jj); pc.sent.push(jj); return r.fulfill({ json:{prompt_id:name[0] + pc.sent.length, number:0, node_errors:{}} }); }
       if(u.pathname.startsWith('/history/')){ const id = u.pathname.slice(9), g = pc.sent[+id.slice(1) - 1].prompt, ks = Object.keys(g);
         if((pc.polls[id] = (pc.polls[id] || 0) + 1) < 2) return r.fulfill({ json:{[id]:{status:{completed:false}}} });
@@ -107,7 +107,7 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
     await page.goto(url); return page;
   }
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
-  const page = await open('https://app.test/');
+  const page = await open('https://app.test/'); page.on('framenavigated', f => { if(f===page.mainFrame()) console.log('NAV', f.url()); });
   for(const pc of [PCS.Main, PCS.Render]){ await page.click('#openSettings'); await page.fill('#server', pc.url); await page.evaluate(() => document.querySelector('#connectBtn').click());
     await page.waitForFunction(() => document.querySelector('#connDot').classList.contains('on')); }
   await page.waitForFunction(() => S.servers.length===2 && allPcs().every(p => p.online && p.oi), null, {timeout:10000});
@@ -139,7 +139,9 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
   ok(await vw.evaluate(() => VIEW.view().N)===16, 'the preview shows her in 3D with 16 angles round each height');
 
   // a look: Illustrious over the same MiniMax frames, kept
-  const n1 = ALL.length; await page.click('#d3Body [data-d3look="medium"]');
+  { const nl = ALL.length; await page.click('#d3Body [data-d3look="medium"]'); await page.waitForTimeout(800);
+    ok(ALL.length===nl && await page.$('#d3Body [data-d3="paintall"]') && /Render character paints at this strength/.test(await page.textContent('#d3Body')), 'picking Medium only picks it: nothing is painted until asked (Jordan)'); }
+  const n1 = ALL.length; await page.click('#d3Body [data-d3="paintall"]');
   await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return (P.lk || []).length===80 && P.lk.every(h => h.url); }, null, {timeout:150000});
   { const gs = ALL.slice(n1).map(x => x.prompt), dn = [...new Set(gs.map(g => (V(g).find(n => n.class_type==='KSampler') || {inputs:{}}).inputs.denoise))];
     ok(gs.length===80 && dn.join()==='0.4' && gs.every(g => has(g, 'FaceDetailer') && has(g, 'VAEEncode')) && !gs.flatMap(check).length, 'Medium paints all 80 angles over the MiniMax frames at 0.4, face fixed: ' + JSON.stringify({n:gs.length, dn}));
@@ -147,6 +149,10 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
     ok(sw, 'the 3D shows the Medium pictures'); }
   await page.click('#d3Body [data-d3look="mm"]'); const n2 = ALL.length; await page.click('#d3Body [data-d3look="medium"]'); await page.waitForTimeout(800);
   ok(ALL.length===n2 && await page.evaluate(() => S.cmPoses.find(x => x.id===S.gallery[0].d3p).show==='medium'), 'switching back to Medium paints nothing again: the look is kept');
+  { const nh = ALL.length; await page.click('#d3Body [data-d3look="heavy"]'); await page.click('#d3Body [data-d3="paintall"]'); await page.waitForSelector('#d3Body [data-d3="unlook"]'); await page.click('#d3Body [data-d3="unlook"]'); await page.waitForTimeout(1200);
+    const hv = await page.evaluate(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return {left:(P.lk || []).filter(h => h.str==='heavy').length, busy:cmPics(P).filter(h => h.making || h.busy).length}; });
+    ok(hv.left <= 4 && ALL.length - nh <= 4 && !!(await page.$('#d3Body [data-d3="paintall"]')), '✕ Stop painting the angles stops the Heavy pass (only what was already sent): ' + JSON.stringify(hv));
+    await page.click('#d3Body [data-d3look="medium"]'); await page.waitForTimeout(500); }
 
   // 🖌 Repaint this angle
   await vw.evaluate(() => VIEW.view()); const n3 = ALL.length; await page.click('#d3Body [data-d3="repaint"]');
@@ -162,6 +168,16 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
     ok(j && ld && ld.class_type==='LoadImage' && j.inputs.alpha[1]===1 && has(g, 'FaceDetailer') && /a girl jumping/.test(V(g).filter(n => n.class_type==='CLIPTextEncode')[0].inputs.text) && V(g).find(n => n.class_type==='KSampler').inputs.denoise===0.4 && !check(g).length && it.p && it.from && it.cam,
       '🎨 Render character: Illustrious with the render\'s prompt at the look\'s strength, face fixed, cut out with the view\'s own outline (LoadImage mask), landing in the strip: ' + check(g).join('; ') + JSON.stringify(it)); }
 
+  // ⬇ Flatten: the 3D view as it is now, one see-through PNG, into the same project
+  await page.evaluate(() => { const i = S.gallery.findIndex(x => x.d3p && !x.d3from && pic3d(x)===2); show(i); });
+  await (await page.waitForSelector('#st3d')).contentFrame().then(f => f.waitForFunction(() => window.VIEW && VIEW.view() && VIEW.view().url, null, {timeout:20000}));
+  const alpha = await page.evaluate(async () => { const r = await flatShot(); const im = await new Promise(ok => { const i = new Image(); i.onload = () => ok(i); i.src = r.url; }); const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.drawImage(im, 0, 0); return {corner:x.getImageData(2, 2, 1, 1).data[3], png:/^data:image\/png/.test(r.url), what:r.what}; });
+  ok(alpha.png && alpha.corner===0 && alpha.what==='3D view', 'the flat copy is a PNG with see-through around her (no grid, no floor): ' + JSON.stringify(alpha));
+  ok(/Flat/.test(await page.textContent('#st3dBtn')), 'the 🖼 Flat button is on the 3D preview');
+  const gf = await page.evaluate(() => S.gallery.length), of = PCS.Render.outs.length; await page.click('#st3dBtn');
+  await page.waitForFunction(n => S.gallery.length===n + 1, gf, {timeout:10000});
+  { const it = await page.evaluate(() => ({flat:S.gallery[0].flat, proj:S.gallery[0].proj===S.gallery[1].proj || !!S.gallery[0].proj, from:!!S.gallery[0].from, shown:shownIdx===0, d3:!!document.querySelector('#d3Body')})), up = PCS.Render.outs[of];
+    ok(it.flat==='3D view' && it.from && it.shown && up && up.sub==='RenderDeck/render', '🖼 Flat saves the 3D view as one PNG with see-through kept (RGBA) into RenderDeck/render and shows it: ' + JSON.stringify({it, up})); }
   // 🖥 made on Render with the app closed
   await page.evaluate(g => { window.TEST_P3D = 'https://jordo-desktop.test'; S.gallery.unshift(g); save(); drawStrip(); show(0); }, pic('jump2'));
   await page.waitForFunction(() => document.querySelector('#d3Body [data-d3="start"]'), null, {timeout:5000});
@@ -178,7 +194,7 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
   await page.waitForFunction(() => { const P = S.cmPoses.find(x => x.id===S.gallery[0].d3p); return P && P.views.every(v => v.url) && P.rdone; }, null, {timeout:30000});
   ok(true, 'the phone shows it done, mirrored from Render');
   await page.waitForSelector('#d3Body [data-d3look="light"]', {timeout:5000});
-  const n5 = ALL.length; await page.click('#d3Body [data-d3look="light"]');
+  const n5 = ALL.length; await page.click('#d3Body [data-d3look="light"]'); await page.click('#d3Body [data-d3="paintall"]');
   await worker.waitForFunction(id => { const P = S.cmPoses.find(x => x.id===id); return (P.lk || []).length===80 && P.lk.every(h => h.url); }, pid, {timeout:150000});
   ok(P3DLOG.includes('ask') && ALL.slice(n5).every(x => V(x.prompt).find(n => n.class_type==='KSampler').inputs.denoise===0.3), 'tapping Light on the phone is passed to Render, which paints it at 0.3');
   await page.waitForFunction(id => { const P = S.cmPoses.find(x => x.id===id); return (P.lk || []).filter(h => h.url).length===80 && P.show==='light'; }, pid, {timeout:30000});

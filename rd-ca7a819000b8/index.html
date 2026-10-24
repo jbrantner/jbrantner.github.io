@@ -644,7 +644,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-24.183'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-24.184'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -921,6 +921,8 @@ function onSocket(p, ev){
   drawStatus(); drawQueueSoon();
 }
 // live preview frames: 4 bytes event type, then either 4 bytes image type + image, or (type 4) 4 bytes metadata length + json + image
+// a picture tapped while renders run stays on screen (Jordan 2026-10-24: it snapped back to the live picture); the next Render tap lets go
+let viewPinned = false;
 function onPreview(p, buf){
   const v = new DataView(buf), type = v.getUint32(0);
   let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg', pid = null;
@@ -937,6 +939,7 @@ function onPreview(p, buf){
   // the big picture follows the computer working on the oldest render, so two computers don't flicker over each other
   const first = focusPc ? {srv:focusPc} : S.queue.find(q => q.state==='running');
   if(first && first.srv!==p.url) return;
+  if(viewPinned) return;
   drop3d(); const img = $('#shown'); img.src = url; img.hidden = false; $('#empty').hidden = true;
 }
 
@@ -1130,7 +1133,7 @@ function problems(){
 // a render still waiting on the other one. A render keeps its own graph, so changing the recipe never changes it.
 // Entry: {key, id (ComfyUI prompt id), srv (computer it is on), home (computer whose files it names), state
 // (sending | waiting | sent | running), graph, titles, seed, prompt, ckpt, n, of, images, snap, size, pics, steps}
-async function go(){
+async function go(){ viewPinned = false;
   const p = problems(); showErr(p.length ? '<b>Before rendering:</b><br>' + p.map(esc).join('<br>') : ''); if(p.length){ buzz(); return; }
   const P = S.blocks.find(b=>b.type==='sampler'), M = S.blocks.find(b=>b.type==='model'), runs = S.runs || 1, first = P.lockSeed ? P.seed : randSeed();
   const had = S.queue.length;
@@ -1325,7 +1328,7 @@ function drawDuo(){
   S.queue.forEach(e => { if(e.state==='running' && e.srv && e.srv!=='test' && !seen.has(e.srv)){ seen.add(e.srv); run.push(e); } });
   if(run.length < 2) focusPc = null;
   else if(focusPc && !seen.has(focusPc)) focusPc = null;
-  const duo = $('#duo'), two = run.length >= 2 && !focusPc;
+  const duo = $('#duo'), two = run.length >= 2 && !focusPc && !viewPinned;
   duo.hidden = !two; $('#bothBtn').hidden = !(run.length >= 2 && focusPc);
   if(!two){ duo.dataset.k = ''; return; }
   const k = run.slice(0,2).map(e => e.srv).join(' ');
@@ -1382,7 +1385,7 @@ const trimGallery = a => { let k = 0; const per = {}; return a.filter(g => (g.dr
 // a render that lands opens in the preview when it belongs to the project that is open (one made for another project waits there)
 // the open 🗂 project's picture (or the newest render without projects)
 function showOpen(){ if(!S.ws && projInit()){ const g = projPick(S.proj); return show(g ? S.gallery.indexOf(g) : -1); } show(S.gallery.length ? 0 : -1); }
-function showLanded(){ const g = S.gallery[0]; if(!g || !g.proj || !Array.isArray(S.projects) || S.ws || g.proj===S.proj) return show(0); drawStrip(); }
+function showLanded(){ const g = S.gallery[0]; if(viewPinned){ drawStrip(); return; } if(!g || !g.proj || !Array.isArray(S.projects) || S.ws || g.proj===S.proj) return show(0); drawStrip(); }
 const picked = new Set(); // drafts ticked in the list, by picture address
 async function finishDrafts(gs){
   gs = gs.filter(g => g.draft && g.fin && !g.sent); if(!gs.length) return;
@@ -1729,7 +1732,7 @@ function picPc(u){ try{ const o = new URL(u).origin; const x = S.servers.find(v 
 // and the preview shows it as 3D straight away (drag to walk round her), with a chip to flip back to the flat picture
 const pic3d = g => { const P = g && !g.d3from && m3Pose(g); if(!P) return 0; const vs = P.views.filter(v => !v.look); return vs.every(v => v.url) ? 2 : 1; }; // 2 done, 1 still making
 function stage3d(g){ const st = $('#stage'); let f = $('#st3d'), b = $('#st3dBtn'); const P = pic3d(g)===2 && m3Pose(g), on = P && S.pv3d!==false;
-  if(!b){ b = document.createElement('button'); b.id = 'st3dBtn'; b.className = 'chipbtn st3dbtn'; st.appendChild(b); b.onclick = () => { S.pv3d = S.pv3d===false; save(); stage3d(S.gallery[shownIdx]); }; }
+  if(!b){ b = document.createElement('button'); b.id = 'st3dBtn'; b.className = 'chipbtn st3dbtn'; st.appendChild(b); b.onclick = () => { if($('#st3d')) return flatten(); S.pv3d = true; save(); stage3d(S.gallery[shownIdx]); }; } // in 3D: 🖼 Flat saves the view as a picture
   b.hidden = !P; b.textContent = on ? '🖼 Flat' : '🧊 3D';
   if(!on){ if(f) f.remove(); $('#shown').style.visibility = ''; return; }
   const src = 'rig/view.html?' + new URLSearchParams({pose:P.id, sp:S.hidden ? '-h' : ''});
@@ -1813,11 +1816,11 @@ function viaHere(e){ const img = e.target; if(img.tagName!=='IMG') return;
 $('#strip').addEventListener('error', viaHere, true); $('#obPanel').addEventListener('error', viaHere, true); $('#recentRow').addEventListener('error', viaHere, true); $('#shown').addEventListener('error', viaHere);
 // each picture is a project: tapping another one loads the settings it was made with
 $('#projs').onclick = e => { const t = e.target.closest('[data-newproj],[data-proj]'); if(!t) return; if(t.dataset.newproj) return newProject();
-  const id = t.dataset.proj, g = projPick(id); if(!g){ S.proj = id; save(); show(-1); drawStrip(); return; }
+  const id = t.dataset.proj, g = projPick(id); if(S.queue.length) viewPinned = true; if(!g){ S.proj = id; save(); show(-1); drawStrip(); return; }
   const i = S.gallery.indexOf(g), was = shownIdx; show(i); if(i!==was) useRecipe(g.snap, obFirst(g), true); };
 $('#projHead').onclick = e => { if(!e.target.closest('[data-projname]')) return; const P = (S.projects || []).find(p => p.id===S.proj); if(!P) return;
   const n = prompt('Name this project', P.name); if(n && n.trim()){ P.name = n.trim().slice(0, 40); save(); drawStrip(); } };
-$('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i==null) return; const was = shownIdx; show(+i);
+$('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i==null) return; if(S.queue.length) viewPinned = true; const was = shownIdx; show(+i);
   const g = S.gallery[+i]; if(+i!==was && g) useRecipe(g.snap, obFirst(g), true); };
 $('#shown').onclick = () => { if($('#shown').hidden) return; if(S.gallery[shownIdx]) openViewer('gal', S.gallery, shownIdx); };
 
@@ -6980,6 +6983,7 @@ setInterval(() => { if(document.visibilityState==='visible') p3dPoll(); }, 3000)
 const WORKER = new URLSearchParams(location.search).get('worker')==='1' ? {farm:new URLSearchParams(location.search).get('farm') || '', id:uid('w'), sent:{}} : null;
 function p3dSettled(P){ return P.stopped || (P.views.concat(P.mids || [], P.lk || []).every(v => (v.url && !v.redo) || v.err) && (P.orb || []).every(o => (o.urls || []).length || o.err) && !m3Jobs(P).length && !P.rigging); }
 function p3dApply(P, a){
+  if(a.look && a.look[0]==='-'){ const lk = a.look.slice(1), gone = (P.lk || []).filter(h => h.str===lk && (!h.url || h.redo)); cmStop(gone.filter(h => h.making)); P.lk = (P.lk || []).filter(h => !gone.includes(h)); gone.forEach(h => { delete h.making; delete h.busy; }); return; }
   if(a.look && !(P.lk || []).some(h => h.str===a.look)){ const dn = (M3_LOOKS.find(x => x[0]===a.look) || [])[1]; if(dn) P.lk = (P.lk || []).concat(P.views.filter(v => !v.look).concat(P.mids || []).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:!!v.mid, str:a.look, dn, url:''}))); }
   if(a.redo){ const h = cmPics(P).find(x => x.id===a.redo); if(h){ h.redo = true; h.seed = Math.floor(Math.random() * 1e9); delete h.err; } }
   if(a.stop){ P.stopped = true; cmStop(m3Jobs(P)); }
@@ -7019,9 +7023,10 @@ function d3BlockHtml(){ const g = d3G(); if(!g) return '<p class="note">Pick a r
   const base = P.views.length + (P.mids || []).length, look = P.show || 'mm', lk = P.lk || [];
   const seg = [['mm', 'MiniMax']].concat(M3_LOOKS.map(x => [x[0], x[2]])).map(([k, t]) => { const n = k==='mm' ? base : lk.filter(h => h.str===k && h.url).length, has = k==='mm' || lk.some(h => h.str===k);
     return `<button class="${look===k ? 'on' : ''}" data-d3look="${k}">${t}${has && n < base ? ' ' + Math.round(100 * n / base) + '%' : ''}</button>`; }).join('');
-  const painting = look!=='mm' && lk.filter(h => h.str===look && !h.url).length, redo = cmPics(P).filter(h => h.redo).length;
+  const painting = look!=='mm' && lk.filter(h => h.str===look && !h.url).length, redo = cmPics(P).filter(h => h.redo).length, started = look!=='mm' && lk.some(h => h.str===look);
   return `<div class="row"><label>Look</label><div class="seg">${seg}</div></div>
-    <p class="note">${look==='mm' ? 'The MiniMax pictures, face fixed. Light, Medium and Heavy paint over the same MiniMax frames in Illustrious (once each), and are kept to switch between.' : painting ? 'Painting ' + esc(M3_LOOKS.find(x => x[0]===look)[2]) + ': ' + (base - painting) + ' of ' + base + ' (the MiniMax pictures show until each is done).' : esc(M3_LOOKS.find(x => x[0]===look)[2]) + ' Illustrious over the MiniMax frames, face fixed.'}${redo ? ' Repainting ' + redo + (redo > 1 ? ' angles' : ' angle') + '…' : ''}</p>
+    <p class="note">${look==='mm' ? 'The MiniMax pictures, face fixed. Light, Medium and Heavy are how strongly 🎨 Render character paints over the view in Illustrious.' : !started ? esc(M3_LOOKS.find(x => x[0]===look)[2]) + ': 🎨 Render character paints at this strength. The 3D itself keeps the MiniMax pictures unless you paint every angle (80 pictures, about 30 min on both PCs).' : painting ? 'Painting ' + esc(M3_LOOKS.find(x => x[0]===look)[2]) + ': ' + (base - painting) + ' of ' + base + ' (the MiniMax pictures show until each is done).' : esc(M3_LOOKS.find(x => x[0]===look)[2]) + ' Illustrious over the MiniMax frames, face fixed.'}${redo ? ' Repainting ' + redo + (redo > 1 ? ' angles' : ' angle') + '…' : ''}</p>
+    ${look!=='mm' ? `<div class="btnrow">${!started ? `<button class="btn" data-d3="paintall">🖌 Paint every angle at ${esc(M3_LOOKS.find(x => x[0]===look)[2])}</button>` : painting ? '<button class="btn" data-d3="unlook">✕ Stop painting the angles</button>' : ''}</div>` : ''}
     <div class="btnrow"><button class="btn" data-d3="repaint">🖌 Repaint this angle</button><button class="btn hot" data-d3="char" ${D3B.busy ? 'disabled' : ''}>🎨 Render character</button></div>
     ${D3B.busy ? `<p class="note">${esc(D3B.busy)}</p>` : ''}<p class="note">🎨 paints the view in the preview as one Illustrious picture with this render's prompt, ${look==='mm' ? 'lightly' : 'at ' + esc(M3_LOOKS.find(x => x[0]===look)[2])}, and keeps her cut out. It lands in your strip.</p>
     <div class="btnrow"><button class="btn" data-d3="over">↻ Make it again</button></div>`; }
@@ -7029,13 +7034,15 @@ function d3Draw(force){ const el = $('#d3Body'); if(!el) return; const h = d3Blo
   const b = el.closest('.block'), sm = b && b.querySelector('h3 small'); if(sm) sm.textContent = d3Sum(); }
 setInterval(() => { if(document.visibilityState==='visible') d3Draw(); }, 1500);
 async function d3Start(g){ M3_LOCK(); const P = m3Start(g, farmP3d()); if(!P) return; S.pv3d = true; save(); d3Draw(true); drawStrip(); }
-function d3Look(P, look){ P.show = look;
-  if(look!=='mm' && !(P.lk || []).some(h => h.str===look)){ const dn = M3_LOOKS.find(x => x[0]===look)[1];
-    if(P.remote){ p3dAsk(P, {look}); } else P.lk = (P.lk || []).concat(P.views.filter(v => !v.look).concat(P.mids || []).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:!!v.mid, str:look, dn, url:''}))); }
-  else if(P.remote) p3dAsk(P, {show:look});
-  save(); cmPoseSync(); if(!P.remote) cmPoseRun(P); d3Draw(true); }
+// picking a look only picks it (Jordan 2026-10-24: "I don't want it to start auto making them"): 🎨 Render character paints at it,
+// and the 3D shows it where it is painted; 🎨 Paint every angle paints all 80 at it, ✕ stops that
+function d3Look(P, look){ P.show = look; save(); cmPoseSync(); d3Draw(true); }
+function d3PaintAll(P, look){ if(look==='mm' || (P.lk || []).some(h => h.str===look)) return; const dn = M3_LOOKS.find(x => x[0]===look)[1];
+  if(P.remote) p3dAsk(P, {look}); else { P.lk = (P.lk || []).concat(P.views.filter(v => !v.look).concat(P.mids || []).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:!!v.mid, str:look, dn, url:''}))); save(); cmPoseSync(); cmPoseRun(P); }
+  d3Draw(true); }
+function d3Unlook(P, look){ if(P.remote) p3dAsk(P, {look:'-' + look}); else p3dApply(P, {look:'-' + look}); save(); cmPoseSync(); d3Draw(true); }
 function d3Repaint(P){ let v = null; try{ v = $('#st3d').contentWindow.VIEW.view(); }catch(e){} if(!v) return toast('Show it in 3D in the preview first', true);
-  const mid = v.N===16 && v.k % 2===1, i = v.N===16 ? (v.k - (mid ? 1 : 0)) / 2 : v.k, look = P.show || 'mm';
+  const mid = v.N===16 && v.k % 2===1, i = v.N===16 ? (v.k - (mid ? 1 : 0)) / 2 : v.k, look = P.show && (P.lk || []).some(h => h.str===P.show) ? P.show : 'mm'; // a look not painted across the 3D: its MiniMax picture
   const h = look==='mm' ? (mid ? P.mids || [] : P.views).find(x => !x.look && x.ring===v.ring && x.i===i) : (P.lk || []).find(x => x.str===look && x.ring===v.ring && x.i===i && !!x.mid===mid);
   if(!h || !h.url) return toast('That angle is still being painted', true);
   if(P.remote) p3dAsk(P, {redo:h.id}); else { h.redo = true; h.seed = Math.floor(Math.random() * 1e9); delete h.err; save(); cmPoseRun(P); }
@@ -7062,6 +7069,8 @@ document.addEventListener('click', e => { const b = e.target.closest('#d3Body [d
   const a = b.dataset.d3;
   if(a==='start') d3Start(g);
   else if(a==='move' && P && !P.remote){ cmPics(P).concat(P.orb || []).forEach(v => { delete v.making; delete v.busy; }); P.remote = true; save(); p3dSend(P); d3Draw(true); } // what was being made is made again on Render
+  else if(a==='paintall' && P) d3PaintAll(P, P.show || 'mm');
+  else if(a==='unlook' && P) d3Unlook(P, P.show || 'mm');
   else if(a==='repaint' && P) d3Repaint(P);
   else if(a==='char' && P) d3Char(g, P);
   else if(a==='stop' && P){ if(P.remote) p3dAsk(P, {stop:true}); else { P.stopped = true; cmStop(m3Jobs(P).concat(cmPics(P).concat(P.orb || []).filter(v => v.busy))); } save(); d3Draw(true); }
@@ -7069,6 +7078,24 @@ document.addEventListener('click', e => { const b = e.target.closest('#d3Body [d
   else if(a==='over' && P){ if(!confirm('Make this 3D again from the picture? This one is replaced.')) return;
     if(P.remote) p3dAsk(P, {drop:true}); else { P.stopped = true; cmStop(m3Jobs(P).concat(cmPics(P).concat(P.orb || []).filter(v => v.busy))); }
     S.cmPoses = S.cmPoses.filter(x => x!==P); S.gallery.forEach(x => { if(x.d3p===P.id) delete x.d3p; }); save(); drop3d(); d3Start(g); } });
+// ---------- 🖼 Flat (Jordan 2026-10-24: "basically a copy canvas"): the 3D view as it is now, saved as one PNG of only her
+// (see-through around her, no grid or floor) into the library and this project ----------
+async function flatShot(){ const g = S.gallery[shownIdx]; if(!g) throw new Error('Nothing in the preview');
+  const im = $('#shown'), long = 1216, big = im.naturalWidth >= 64 && im.naturalHeight >= 64, nw = big ? im.naturalWidth : 832, nh = big ? im.naturalHeight : 1216, k = Math.min(1, long / Math.max(nw, nh)), W = Math.round(nw * k / 8) * 8, H = Math.round(nh * k / 8) * 8;
+  const f = $('#st3d'); let V = null; try{ V = f && f.contentWindow.VIEW; }catch(e){}
+  if(V && V.shot) return {g, url:V.shot(W, H, true), what:'3D view'};
+  const vid = $('#obVid'); if(vid && !vid.hidden && vid.videoWidth){ const c = document.createElement('canvas'); c.width = vid.videoWidth; c.height = vid.videoHeight; c.getContext('2d').drawImage(vid, 0, 0); return {g, url:c.toDataURL('image/png'), what:'clip frame'}; }
+  return {g, url:null, what:'picture'}; }
+async function flatten(){ let r; try{ r = await flatShot(); }catch(e){ return toast(e.message, true); }
+  if(!r.url) return toast('This picture is already flat');
+  const b = $('#st3dBtn'); if(b) b.disabled = true;
+  try{ const blob = await (await fetch(r.url)).blob(), name = 'flat_' + new Date().toISOString().slice(0, 19).replace(/\D/g, '') + '.png', dir = (S.hidden ? HIDDEN : 'RenderDeck') + '/render';
+    let url = r.url;
+    if(!S.test){ const pc = farmHost(), fd = new FormData(); fd.append('image', blob, name); fd.append('subfolder', dir); fd.append('type', 'output'); fd.append('overwrite', 'true');
+      const q = await fetch(pc + '/upload/image', {method:'POST', body:fd}); if(!q.ok) throw new Error('the computer said ' + q.status); const j = await q.json(); url = viewUrl({filename:j.name, subfolder:j.subfolder || dir, type:'output'}, pc); }
+    const g = r.g; S.gallery.unshift({url, seed:g.seed, prompt:g.prompt || '', t:Date.now(), snap:g.snap, proj:g.proj, flat:r.what, from:g.url}); save(); drawStrip(); show(0); toast('Flattened the ' + r.what + ': it is in this project'); buzz(); }
+  catch(e){ toast("Couldn't flatten it: " + e.message, true); }
+  if(b) b.disabled = false; }
 const m3Kit = () => cmIllKits().slice().sort((a, b) => (pcOf(a.url).load || 0) - (pcOf(b.url).load || 0))[0];
 async function m3Run(k, G, prefix){ if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 150)); return 'https://jordo-desktop.test/view?filename=' + prefix.split('/').pop() + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) + '.png'; }
   const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();

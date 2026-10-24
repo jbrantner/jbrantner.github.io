@@ -39,19 +39,24 @@ const fs = require('fs'), path = require('path');
   await page.click(`#projs .sth[data-proj="${B}"] img`); await page.click('#goBtn'); await page.click('#projs .sth[data-proj="earlier"] img');
   await page.waitForFunction(b => S.gallery.filter(g => g.proj===b).length===3, B, {timeout:8000}); await page.waitForTimeout(300); s = await st();
   ok(s.proj==='earlier' && /old1/.test(s.shown) && s.strip===3 && s.projs.find(p => p[0]===B)[1]==='3', 'a render started in the new project lands there while you look at Earlier renders, which stays on screen: ' + JSON.stringify(s));
+  // a picture tapped while a render runs stays on screen when the render lands
+  await page.click(`#projs .sth[data-proj="${B}"] img`); await page.click('#goBtn'); await page.waitForTimeout(50);
+  const pinned = await page.evaluate(() => { const i = S.gallery.findIndex((g, n) => g.proj===S.proj && n > 0); document.querySelector(`#strip img[data-i="${i}"]`).click(); return S.gallery[i].url; });
+  await page.waitForFunction(b => S.gallery.filter(g => g.proj===b).length===4, B, {timeout:8000}); await page.waitForTimeout(300);
+  ok(await page.evaluate(u => $('#shown').src===u && !S.queue.length, pinned), 'a picture you tap while a render runs stays on screen when the render lands (Jordan)');
   // rename
   await page.click(`#projs .sth[data-proj="${B}"] img`); await page.click('#projHead [data-projname]');
-  ok(/Café scene · 3 pictures/.test(await page.textContent('#projHead')), '✎ Rename names the project');
+  ok(/Café scene · 4 pictures/.test(await page.textContent('#projHead')), '✎ Rename names the project');
   // Hidden keeps its own
   await page.click('#modeBtn'); await page.waitForTimeout(300); s = await st();
   ok(!s.projs.some(p => p[0]===B) && s.strip===0, 'Hidden has its own projects, none of the normal ones: ' + JSON.stringify(s));
   await page.click('#projs [data-newproj]'); await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#strip img').length===1, null, {timeout:8000});
   const hp = await page.evaluate(() => S.proj);
   await page.click('#modeBtn'); await page.waitForTimeout(300); s = await st();
-  ok(s.proj===B && s.projs.length===2 && !s.projs.some(p => p[0]===hp) && s.strip===3, 'back in the normal workstation: its projects as they were, the Hidden one not among them: ' + JSON.stringify(s));
+  ok(s.proj===B && s.projs.length===2 && !s.projs.some(p => p[0]===hp) && s.strip===4, 'back in the normal workstation: its projects as they were, the Hidden one not among them: ' + JSON.stringify(s));
   // kept on reload
   await page.reload(); await page.waitForTimeout(500); s = await st();
-  ok(s.proj===B && s.projs.length===2 && /Café scene/.test(s.head) && s.strip===3 && s.shown, 'projects are kept when the app is reopened: ' + JSON.stringify(s));
+  ok(s.proj===B && s.projs.length===2 && /Café scene/.test(s.head) && s.strip===4 && s.shown, 'projects are kept when the app is reopened: ' + JSON.stringify(s));
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

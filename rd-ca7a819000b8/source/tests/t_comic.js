@@ -474,9 +474,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
           // 🧊 on its thumbnail, and the preview shows it in 3D (🖼 Flat flips back)
           { const sv = await page.evaluate(() => { const i = S.gallery.findIndex(x => x.d3p && !x.d3from && pic3d(x)===2); show(i); drawStrip(); const f = $('#st3d');
               return {i, badge:!!document.querySelector(`#strip .sth:nth-child(${i + 1}) .s3d`), flatBadge:!!document.querySelector('#strip .sth:nth-child(1) .s3d'), frame:!!f && /view\.html\?pose=/.test(f.src), hid:$('#shown').style.visibility, btn:$('#st3dBtn').textContent}; });
-            const sv2 = await page.evaluate(() => { $('#st3dBtn').click(); const r = {frame:!!$('#st3d'), btn:$('#st3dBtn').textContent}; $('#st3dBtn').click(); return r; }); // (the comic tab covers the preview here)
-            ok(sv.i >= 0 && sv.badge && !sv.flatBadge && sv.frame && sv.hid==='hidden' && sv.btn==='🖼 Flat' && !sv2.frame && sv2.btn==='🧊 3D',
-              '🧊 a 3D render has a 🧊 on its thumbnail (its flat paint doesn\'t), and the preview shows it in 3D with 🖼 Flat / 🧊 3D: ' + JSON.stringify({sv, sv2})); }
+            const sv2 = 1; // 🖼 Flat saves a flat copy now (Jordan 2026-10-24), tested in t_d3block
+            ok(sv.i >= 0 && sv.badge && !sv.flatBadge && sv.frame && sv.hid==='hidden' && sv.btn==='🖼 Flat',
+              '🧊 a 3D render has a 🧊 on its thumbnail (its flat paint doesn\'t), and the preview shows it in 3D with 🖼 Flat: ' + JSON.stringify({sv, sv2})); }
           // ✕ Stop and ↻ Start over while it is still turning
           await page.evaluate(() => { S.m3Pick = false; S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=jump2.png', prompt:'a girl kicking', t:Date.now(), snap:{prompt:'a girl kicking', blocks:[]}}); m3Open(S.gallery[0], true); });
           await page.waitForSelector('#m3Box [data-m3="stop"]', {timeout:20000}); const p0 = await page.evaluate(() => S.gallery[0].d3p); await page.click('#m3Box [data-m3="stop"]');

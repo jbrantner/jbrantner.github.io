@@ -118,6 +118,12 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.184
+
+- 🖼 Flat on the 3D preview is now "copy canvas" (Jordan): it saves the view as it is as a PNG of only her, see-through around her, no grid, floor or shadow, into the library and the open project, and shows it.
+- 🧊 Look only picks a strength now (Jordan: picking one started 80 paints). 🎨 Render character paints at it. "🖌 Paint every angle at …" paints the whole 3D at that look if you want it, and "✕ Stop painting the angles" stops it. 🖌 Repaint this angle uses the MiniMax picture when the look isn't painted across the 3D.
+- A picture you tap while renders run stays on screen. The live picture and newly landed renders no longer pull you back, and the next Render tap lets go (Jordan).
+
 ## 2026-10-24.183
 
 - 🖥 3Ds made with the app closed now actually start. Edge on Render blocked the hidden app (loaded from github.io) from reaching the PCs' Tailscale addresses ("Permission was denied for this request to access the local address space"), so it never took a job and the helper reopened it every 2 minutes. The helper now serves the app from Render's own address (/renderdeck/app/) and opens the hidden copy from there. It waits 10 minutes, not 2, before deciding the hidden app has stalled. Needs helper paste on Render.
