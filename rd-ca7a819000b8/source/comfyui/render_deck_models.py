@@ -18,6 +18,7 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
                                                computers is free, even with the phone app closed (render_deck_farm.json)
   GET  /renderdeck/p3d, POST /renderdeck/p3d/add|ask|take|put -> 🧊 3Ds made here with the app closed: the app is opened
                                                hidden (Edge headless, ?worker=1) to fit the rig and send the jobs (render_deck_p3d.json)
+  GET  /renderdeck/app/...                  -> the app from GitHub Pages, served from here for that hidden browser
   GET  /renderdeck/auto, POST /renderdeck/auto/start|stop -> a character's auto run: turnaround, angles, training shots,
                                                the picked set and a kohya LoRA, here, with the phone app closed (render_deck_auto.json)
 kind is "checkpoints" or "loras". Only .safetensors files are accepted (they can't run code), only from
@@ -1203,7 +1204,11 @@ async def farm_pcs(request):
 # phone reads them (GET). The hidden browser is closed again once nothing has been left to do for a few minutes.
 P3D_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_p3d.json')
 P3D = {'jobs': {}}
-P3D_APPS = ('https://jbrantner.github.io/',)  # the only page the hidden browser opens
+P3D_APPS = ('https://jbrantner.github.io/',)  # the only app that can hand 3Ds here
+P3D_APP = 'https://jbrantner.github.io/rd-ca7a819000b8/'  # served again from this computer at /renderdeck/app/ for the hidden browser:
+# Edge won't let a page from github.io reach the Tailscale addresses without a permission prompt a hidden browser can't show,
+# so the hidden copy comes from this computer's own address (the same place as the farm) and needs no permission
+_p3d_app_cache = {}
 _p3d = {'proc': None, 'seen': 0, 'idle': 0, 'task': None, 'loaded': False}
 
 
@@ -1250,7 +1255,7 @@ def _p3d_open(job):
     if not exe:
         job['why'] = 'No Edge or Chrome on this computer'
         return
-    url = job['app'] + ('&' if '?' in job['app'] else '?') + 'worker=1&farm=' + quote(job['farm'], safe='')
+    url = job['farm'].rstrip('/') + '/renderdeck/app/?worker=1&farm=' + quote(job['farm'], safe='')
     prof = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_worker_profile')
     args = [exe, '--headless=new', '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-background-timer-throttling',
             '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--enable-unsafe-swiftshader', '--user-data-dir=' + prof, url]
@@ -1276,8 +1281,9 @@ async def _p3d_loop():
             alive = _p3d['proc'] is not None and _p3d['proc'].poll() is None
             if todo:
                 _p3d['idle'] = 0
-                # opened (again) when nothing is running it, or the hidden app stopped checking in for 2 minutes
-                if not alive or time.time() - _p3d['seen'] > 120:
+                # opened (again) when nothing is running it, or the hidden app stopped checking in for 10 minutes (fitting the
+                # rig on the software GPU can hold it up a while)
+                if not alive or time.time() - _p3d['seen'] > 600:
                     _p3d_close()
                     _p3d_open(todo[0])
             elif alive:
@@ -1293,6 +1299,29 @@ def _p3d_start():
     _p3d_load()
     if _p3d['task'] is None or _p3d['task'].done():
         _p3d['task'] = asyncio.ensure_future(_p3d_loop())
+
+
+@routes.get('/renderdeck/app/{tail:.*}')
+async def p3d_app(request):
+    """the Render Deck app (and its rig pages) fetched from GitHub Pages and served from here, for the hidden browser"""
+    tail = request.match_info.get('tail') or ''
+    if not re.fullmatch(r'[A-Za-z0-9_\-./]*', tail) or '..' in tail or tail.endswith('sw.js'):
+        return web.Response(status=404)
+    if tail == '' or tail.endswith('/'):
+        tail += 'index.html'
+    hit = _p3d_app_cache.get(tail)
+    if not hit or time.time() - hit[0] > 120:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
+                async with s.get(P3D_APP + tail) as r:
+                    if r.status != 200:
+                        return web.Response(status=r.status)
+                    hit = (time.time(), await r.read(), r.headers.get('Content-Type', 'application/octet-stream'))
+                    _p3d_app_cache[tail] = hit
+        except Exception as e:
+            if not hit:
+                return web.Response(status=502, text=str(e))
+    return web.Response(body=hit[1], headers={'Content-Type': hit[2], 'Cache-Control': 'no-store'})
 
 
 @routes.get('/renderdeck/p3d')

@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.183
+
+- 🖥 3Ds made with the app closed now actually start. Edge on Render blocked the hidden app (loaded from github.io) from reaching the PCs' Tailscale addresses ("Permission was denied for this request to access the local address space"), so it never took a job and the helper reopened it every 2 minutes. The helper now serves the app from Render's own address (/renderdeck/app/) and opens the hidden copy from there. It waits 10 minutes, not 2, before deciding the hidden app has stalled. Needs helper paste on Render.
+
 ## 2026-10-24.182
 
 - 🗂 Projects (Jordan's idea): each thumbnail under the picture is now a project, not a single render. The thumbnail shows the picture you last looked at in that project. Renders made while a project is open go into it, and its pictures are in the smaller row below (tap one to show it; it becomes the project's thumbnail).
