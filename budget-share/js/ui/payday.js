@@ -24,7 +24,6 @@ function payPlan() {
   const [id, date] = splitKey(payKey), inc = state.incomes.find(i => i.id === id), P = periodOf(inc, date);
   const whole = Math.floor(D + 1e-9), cut = cents(D - whole), share = shareOf(inc, date), F = Math.max(0, whole - share), V = Math.floor(F / P.days / WORKER_DAY + 1e-9), extra = F - V * P.days;
   const until = P.next ? shortDate(P.next) : 'two weeks from now', was = villagersBefore(date), out = [];
-  const nC = normalChecks(inc || {}), part = state.incomes.filter(i => Number(i.amount) > 0).length > 1 ? 'its part' : nC === 1 ? 'all' : nC === 2 ? 'half' : nC === 4 ? 'a quarter' : `1/${nC}`;
   if (share) out.push(`${money(Math.min(whole, share))} is held for bills (your ${money(billsMonthWhole())} a month, spread over every paycheck of the year).` + (whole < share ? ` It's ${money(share - whole)} short, so that comes from Savings.` : ''));
   else if (inc && isExtraCheck(inc, date)) out.push(`An extra paycheck this month: none of it goes to bills.`);
   const early = date > today();

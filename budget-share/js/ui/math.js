@@ -3,16 +3,18 @@ function renderMath() {
   const box = $('mathBox'); if (!box) return;
   const cur = today().slice(0, 7), td = today(), line = (a, b, cls = '') => `<div class="row spread ${cls}"><span>${a}</span><span class="num">${b}</span></div>`;
   const pp = hoardParts(), pn = periodNow(), sg = v => (v < 0 ? '−' : '+') + moneyExact(Math.abs(v)), n = k => `${money((k) * WORKER_DAY)} a day`;
-  const incs = state.incomes.filter(i => Number(i.amount) > 0), B = billsMonthWhole(), parts = billParts();
+  const incs = state.incomes.filter(i => Number(i.amount) > 0), B = billsMonthWhole();
   // the bank
   const billsOut = cents(pp.out - pp.L.cut), spentOut = cents(pp.spent - pp.L.spendCut), fixes = cents(pp.fix + pp.L.adjCut), moves = cents(pp.head + pp.bills + pp.L.movedBills);
+  const outOf = sum(state.transfers.filter(t => t.spend && t.to === 'debt' && t.date <= td), t => t.amount);
   let h = `<div class="math-h">Your bank</div><div class="math-tbl">`
     + line('What you had when you started', moneyExact(pp.had))
     + line('Paychecks you entered', sg(pp.paid))
     + (Math.abs(pp.extra.bank) >= 0.005 ? line('Extra money', sg(pp.extra.bank)) : '')   // v311: it's in the bank too
     + line('Bills paid', sg(-billsOut))
     + line('Spent', sg(-spentOut))
-    + (pp.debt >= 0.005 ? line('Debt payments', sg(-cents(pp.debt))) : '')
+    + (pp.debt - outOf >= 0.005 ? line('Debt payments', sg(-cents(pp.debt - outOf))) : '')
+    + (outOf >= 0.005 ? line('Spent from Savings and pots', sg(-cents(outOf))) : '')
     + (Math.abs(fixes) >= 0.01 ? line('Bank balance fixes', sg(fixes)) : '')
     + (Math.abs(moves) >= 0.01 ? line('Other moves', sg(moves)) : '')
     + line('In the bank', moneyExact(pp.bank), 'sum') + `</div>`;

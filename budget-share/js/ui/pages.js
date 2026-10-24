@@ -42,7 +42,7 @@ function renderSpent() {
 }
 /* v279 (Jordan 20:26): the week in detail, from a tap anywhere on the weekly card */
 function renderWeek() {
-  const pu = purseNow(), w0 = weekStart(), td = today(), di = Math.max(0, Math.min(6, Math.floor((Date.now() - w0) / DAY_MS)));
+  const pu = purseNow(), w0 = weekStart(), di = Math.max(0, Math.min(6, Math.floor((Date.now() - w0) / DAY_MS)));
   const dates = [0, 1, 2, 3, 4, 5, 6].map(i => ymd(new Date(w0.getFullYear(), w0.getMonth(), w0.getDate() + i))), DN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const fmtD = ds => new Date(ds + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const ws = weekSpends(), types = state.packs || [], packOf = t => types.some(p => p.id === t.pack) ? t.pack : '';

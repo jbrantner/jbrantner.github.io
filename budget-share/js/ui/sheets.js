@@ -215,6 +215,12 @@ const Town = (() => {
         + `<div class="vl-pick" role="group" aria-label="Pots and projects to empty">${L.map(p => `<button class="chip vl-pk${cDrain.has(p.id) ? ' on' : ''}" data-cdr="${esc(p.id)}" aria-pressed="${cDrain.has(p.id)}">${cDrain.has(p.id) ? '✓ ' : ''}${esc(p.name)} · <b>${moneyExact(p.amt)}</b></button>`).join('')}</div>`
         + `<div class="tn-acts"><button class="primary" data-act="cdr-go"${tot > 0 ? '' : ' disabled'}>${tot > 0 ? `Move ${moneyExact(tot)} into the cushion` : 'Pick what to empty'}</button></div></div>`;
   }
+  // Spend from it: Savings, the cushion, pots and projects (not debts), and what was spent from each lately
+  const spendBtn = id => `<button data-act="spend"${spendRoom(id) >= 0.01 ? '' : ' disabled'}>Spend from it</button>`;
+  function spentHTML(id) {
+    const L = spendsOf(id).slice(0, 3); if (!L.length) return '';
+    return `<div class="pp-pays tn-spent"><h4>Spent from ${id === 'cushion' ? 'Savings' : esc(potName(id))}</h4>${L.map(t => `<div class="pp-payr"><span>${esc(moneyExact(t.amount))} · ${esc(shortDate(t.date))}${t.note ? ` · ${esc(t.note)}` : ''}</span><button class="link" data-spend-undo="${esc(t.id)}" aria-label="Undo spending ${esc(moneyExact(t.amount))} on ${esc(shortDate(t.date))}">Undo</button></div>`).join('')}</div>`;
+  }
   function sheetHTML(id) {
     const head = (t, n) => `<div class="tn-head"><h2 id="townShTitle">${esc(t)}</h2><span class="num">${n}</span></div>`;
     if (id === 'cushion') {   // v301: it is Savings' first month of bills, so its money a day is Savings' (what isn't on spending, pots or projects)
@@ -235,7 +241,7 @@ const Town = (() => {
         + `<div class="tn-workers tn-slim"><div class="tn-even"><button data-act="cminus" aria-expanded="${cPick === 'give'}"${w < 1 || state.roundOff ? ' disabled' : ''} aria-label="${money(n * WORKER_DAY)} a day less, to a pot or project">− ${money(n * WORKER_DAY)}</button>`
         + `<button class="primary" data-act="cplus" aria-expanded="${cPick === 'take'}"${take.length && !state.roundOff ? '' : ' disabled'}>+ ${money(n * WORKER_DAY)} a day</button>`
         + `<button class="chip tn-step5" data-act="wstep" aria-pressed="${n === 5}" aria-label="Five at a time">×5</button></div>${pick}</div>`
-        + `<div class="tn-acts"><button data-act="cmove">Move money</button></div>` + drainHTML(), tail: '' };
+        + `<div class="tn-acts"><button data-act="cmove">Move money</button>${spendBtn('cushion')}</div>` + spentHTML('cushion') + drainHTML(), tail: '' };
     }
     if (id === 'farm') {
       const incs = `<div class="tn-dock" data-dock="incomeBox"></div><div class="tn-acts"><span class="tn-dock" data-dock="newPlotBtn"></span><span class="tn-dock" data-dock="openSplitBtn"></span></div>`;
@@ -356,7 +362,7 @@ const Town = (() => {
     }
     const p = itemOf(id); if (!p) return { top: '', tail: '' };
     if (inline && p.custom && (p.kind === 'project' || p.kind === 'stock'))   // v269 (Jordan's concept): its villagers and Move money; Edit below
-      return { top: head(p.name, `${money(p.bal)}${p.goal ? ` <small>of ${money(p.goal)}</small>` : ''}`) + slimWorkersHTML(p) + `<div class="tn-acts"><button data-act="move">Move money</button></div>`,
+      return { top: head(p.name, `${money(p.bal)}${p.goal ? ` <small>of ${money(p.goal)}</small>` : ''}`) + slimWorkersHTML(p) + `<div class="tn-acts"><button data-act="move">Move money</button>${debtOf(p.id) ? '' : spendBtn(p.id)}</div>` + spentHTML(p.id),
         tail: editFor === p.id ? editHTML(p) : '' };
     if (p.kind === 'project') {
       const done = p.bal >= p.goal;
@@ -369,7 +375,7 @@ const Town = (() => {
       `<p class="sh-line st">The leftover cents from rounding purchases up.</p><p class="sh-line">Collect it any time, cents and all: it's split evenly across Savings, your pots and your projects.</p>`,
       tail: `<div class="tn-acts"><span class="tn-dock" data-dock="scavCollectBtn"></span></div><h3 class="tn-h3">Where it came from</h3><div class="tn-dock tn-finds" data-dock="scavFinds"></div>` };
     return { top: head(p.name, `${money(p.bal)}${p.goal ? ` <small>of ${money(p.goal)}</small>` : ''}`) + (p.goal ? bar(p.bal / p.goal) : '') +
-      crop(p.id) + workersHTML(p) + `<div class="tn-acts"><button class="primary" data-act="move">Move money</button></div>`, tail: manageHTML(p) };
+      crop(p.id) + workersHTML(p) + `<div class="tn-acts"><button class="primary" data-act="move">Move money</button>${p.id === 'savings' ? spendBtn('savings') : ''}</div>` + (p.id === 'savings' ? spentHTML('savings') : ''), tail: manageHTML(p) };
   }
   function renderSheet(force) {
     if (!selected) return;
@@ -404,6 +410,8 @@ const Town = (() => {
       return;
     }
     if (act === 'ed-del') { if (await deletePot(id, 'savings')) editFor = null; return; }
+    if (act === 'spend') { openSpend(id); return; }
+    if (b.dataset.spendUndo) { const t = state.transfers.find(x => x.id === b.dataset.spendUndo); if (t && await ask(`Take back spending ${moneyExact(t.amount)}${t.note ? ` on ${t.note}` : ''}? ${t.from === 'savings' ? 'Savings' : potName(t.from)} and your bank go back up by it.`)) { undoSpendFrom(t.id); toast('Spending taken back'); renderSheet(true); } return; }
     if (act === 'wstep') { wStep = wStep === 5 ? 1 : 5; renderSheet(true); return; }
     if (id === 'cushion') {   // v301: money a day in and out of the cushion is Savings'
       if (b.dataset.cdr) { const k = b.dataset.cdr; if (cDrain.has(k)) cDrain.delete(k); else cDrain.add(k); renderSheet(true); return; }
