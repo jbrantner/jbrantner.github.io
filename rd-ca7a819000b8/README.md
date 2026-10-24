@@ -118,6 +118,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.176
+
+- 🧊 Viewer: no fade between angles at all, dragging or not (Jordan said no).
+
 ## 2026-10-24.175
 
 - 🧊 Viewer: the eye-level pictures hold until 32° up and 20° down (near where the high and low ones were made), and the high and low pictures are never stretched past their own size, so her head stays its size.

@@ -46,9 +46,8 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(after.i===2 && after.feet && after.feet.every(v => Math.abs(v) < 0.01), 'and once it has loaded it swaps in, feet on the spot: ' + JSON.stringify(after));
   // no fading: only the nearest angle shows, even near the switch (a flat render needs one clean picture)
   { const top = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5; c.position.set(Math.sin(0.38) * d, 0.96, Math.cos(0.38) * d); VIEW.controls.update(); setTimeout(() => res(VIEW.stand().layers[1].mesh.visible), 150); }));
-    ok(!top, 'no second picture fades in near a switch while still: ' + top);
-    const mv = await page.evaluate(() => new Promise(res => { VIEW.drag(true); setTimeout(() => { const B = VIEW.stand().layers[1].mesh, on = B.visible && B.material.opacity; VIEW.shot(200, 300); const inShot = B.visible; VIEW.drag(false); setTimeout(() => res({on, inShot, after:B.visible}), 150); }, 150); }));
-    ok(mv.on > 0.05 && mv.on <= 0.5 && !mv.inShot && !mv.after, 'while dragging the next angle fades in near the switch; a shot and letting go show one picture: ' + JSON.stringify(mv)); }
+    ok(!top, 'no second picture fades in near a switch: ' + top);
+  }
   // 16 angles round: the in-between frames show between the 8
   { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); L[0].views16 = Array.from({length:48}, (_, n) => n % 2 ? 'https://app.test/pic/x100_y280_h20' + (n % 10) + '.svg?b' + n : L[0].views[Math.floor(n / 16) * 8 + (n % 16) / 2]); localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
     await page.waitForTimeout(500); const v = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5, az = Math.PI / 8; c.position.set(Math.sin(az) * d, 0.96, Math.cos(az) * d); VIEW.controls.update(); setTimeout(() => res(VIEW.view()), 150); }));
