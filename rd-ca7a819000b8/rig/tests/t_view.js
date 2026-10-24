@@ -67,10 +67,10 @@ const DEPS = process.env.RIG_DEPS || '';
   { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); L[0].rig = [0, 1.6, 0]; for(let n = 0; n < 24; n++) L[0].views[n] = 'https://app.test/pic/x100_y280_h' + (n >= 16 ? 150 : 200) + '.svg'; localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
     await page.waitForTimeout(600); const hAt = async deg => page.evaluate(deg => new Promise(res => { const c = VIEW.camera, d = 4.5, e = deg * Math.PI / 180; c.position.set(0.001, 1 + Math.sin(e) * d, Math.cos(e) * d); VIEW.controls.update();
       setTimeout(() => { const s = VIEW.stand(), f = VIEW.feet(); res({ring:VIEW.view().ring, ht:+(f.ht * s.g.hM * s.her.scale.y).toFixed(3)}); }, 150); }), deg);
-    const lo = await hAt(26), hi = await hAt(28.5), top = await hAt(60);
+    const lo = await hAt(31), hi = await hAt(33.5), top = await hAt(60);
     // and never stretched much past its size from where it was made (its head is drawn big): at 60° it is the high picture's size
-    const nat = 1.6 * Math.cos(35 * Math.PI / 180) / (1.6 * Math.cos(5 * Math.PI / 180)) * lo.ht / (Math.cos(26 * Math.PI / 180) / Math.cos(5 * Math.PI / 180));
-    ok(lo.ring===1 && hi.ring===2 && Math.abs(hi.ht / lo.ht - 1) < 0.04 && top.ht <= nat * 1.09, 'no jump in her height where the eye-level pictures switch to the high ones: ' + JSON.stringify({lo, hi, top, nat})); }
+    const nat = 1.6 * Math.cos(35 * Math.PI / 180) / (1.6 * Math.cos(5 * Math.PI / 180)) * lo.ht / (Math.cos(31 * Math.PI / 180) / Math.cos(5 * Math.PI / 180));
+    ok(lo.ring===1 && hi.ring===2 && Math.abs(hi.ht / lo.ht - 1) < 0.05 && hi.ht <= nat * 1.01 && top.ht <= nat * 1.01, 'no jump in her height where the eye-level pictures switch to the high ones: ' + JSON.stringify({lo, hi, top, nat})); }
   // a flat camera: zoomed right in and from above, the picture keeps its drawn shape (it deformed with the perspective camera)
   { const z = await page.evaluate(() => new Promise(res => { const c = VIEW.camera; c.position.set(0, 0.96 + 4.5 * Math.sin(0.5), 4.5 * Math.cos(0.5)); c.zoom = 4; c.updateProjectionMatrix(); VIEW.controls.update();
       setTimeout(() => { const s = VIEW.stand(), V = s.V, g = s.g, P = (x, y) => s.her.localToWorld(new V(x, y, 0)).project(c), a = P(-g.wM / 2, -g.hM / 2), b = P(g.wM / 2, -g.hM / 2), d = P(-g.wM / 2, g.hM / 2);
