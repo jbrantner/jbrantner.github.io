@@ -49,7 +49,7 @@ const Tour = (() => {
     { t: 'Tour complete!', burst: true, b: 'Log what you spend and keep an eye on Left today. The app does the rest.', next: 'Start using it', pre: () => go('budget') },
   ];
   // What's new on the sister's copy. v: the version a step arrived in. Each step is skipped when its part isn't on screen.
-  const NEW_V = 317, NEW = [
+  const NEW_V = 319, NEW = [
     { v: 315, el: () => vis(q('#homeList .vl-hero')), t: 'Change your week here', pre: () => go('budget'),
       b: 'Tap the Left today card to change your weekly amount right there, without going to Settings. Tap "This week" on it to see the whole week.' },
     { v: 315, el: () => vis(q('#townList .pp-card.cush')), t: 'Month cushion',
@@ -66,6 +66,8 @@ const Tour = (() => {
       b: "Each day's bar now shows how much that day has. If you spend more than today has, the card also says how much a day you now have for the days left." },
     { v: 317, t: 'Rebuilt underneath', pre: () => go('budget'),
       b: "The app was rebuilt underneath so it's easier to keep improving. Your money, your numbers and how everything works stay exactly the same." },
+    { v: 318, el: () => vis(q('#townList .pp-card.sv:not(.cush)')) || vis(q('#townList .pp-card.cush')), t: 'Spend from Savings or a pot', pre: () => go('budget'),
+      b: "Paid for something out of Savings, the Month cushion or a pot, like a car repair? Open it and tap Spend from it. Its balance comes down, and your weekly money isn't touched." },
   ];
   const newHead = { t: "What's new", b: "Here's a quick look at what changed in this update. It only points things out, and nothing you tap here changes your money.", next: 'Show me', pre: () => go('budget') },
     newTail = { t: "That's what's new", burst: true, b: "You can see this again in Settings under How it works.", next: 'Done', pre: () => go('budget') };

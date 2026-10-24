@@ -1,12 +1,11 @@
 'use strict';
 /* ---------- pots & moving money ---------- */
-let mover = null;
 function openMover(from, to) {
   const pots = potBalances(month);
   const opts = (sel, L = pots) => L.map(p => `<option value="${p.id}"${p.id === sel ? ' selected' : ''}>${esc(p.name)} (${p.exact ? moneyExact(p.bal) : money(p.bal)})</option>`).join('');
   $('mvFrom').innerHTML = opts(from && from !== 'bills' && from !== 'spend' ? from : 'savings', pots.filter(p => p.id !== 'bills' && p.id !== 'spend')); $('mvTo').innerHTML = opts(to || 'savings');   // v302 (Jordan): bill money is held, it isn't moved
   if ($('mvFrom').value === $('mvTo').value) $('mvTo').value = pots.find(p => p.id !== $('mvFrom').value).id;
-  $('mvAmt').value = ''; mover = true; $('moveBox').classList.remove('hidden');
+  $('mvAmt').value = ''; $('moveBox').classList.remove('hidden');
   updateMover(true);
 }
 // Keeps the slider's range and the before/after numbers in step with the chosen pots.
@@ -23,7 +22,7 @@ function updateMover(resetSlider) {
     ${f.id === 'bills' && f.bal - amt < monthNumbers(month).billsDue - 0.005 ? '<div class="warn">That leaves less than you still owe on bills this month.</div>' : ''}`;
   $('mvGo').disabled = same || !amt || amt > max;
 }
-function closeMover() { mover = null; $('moveBox').classList.add('hidden'); }
+function closeMover() { $('moveBox').classList.add('hidden'); }
 function doMove() {
   const amt = Math.floor(Math.max(0, Number($('mvAmt').value) || 0)), from = $('mvFrom').value, to = $('mvTo').value;
   if (!amt || from === to || from === 'bills' || from === 'spend') return;

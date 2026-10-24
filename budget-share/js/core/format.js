@@ -5,6 +5,7 @@ const curSym = () => { const c = state.currency; if (curSym.v == null || c !== c
 const moneyExact = n => (n < 0 ? '−' : '') + curSym() + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 // Whole dollars, cents dropped ($1.99 shows as $1). The math underneath keeps the cents.
 const money = n => { const d = Math.floor(Math.abs(n) + 1e-9); return (n < 0 && d ? '−' : '') + curSym() + d.toLocaleString(); };
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;   // "1 month", "2 months"
 const ordinal = n => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
 // "$1,030 is held for bills not paid yet (Rent, Parking, Phone and 7 more), ...", for the Bills page.
 const nameList = names => names.length > 3 ? names.slice(0, 3).join(', ') + ` and ${names.length - 3} more` : names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names.join('');
