@@ -118,6 +118,11 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧊 Describe her: tags put first in every angle (on top of the picture's own prompt), so the back and sides keep the same hair, clothes and shoes.
 - 3D viewer: the picture standing in before the angles arrive keeps its own shape.
 
+## 2026-10-24.181
+
+- 🧊 The 3D block stays in the recipe when you tap another thumbnail. Tapping loads that picture's recipe, which dropped the block (Jordan found it).
+- 🖥 Hand it to Render: a 3D being made from the app can be moved to Render once Render has the new helper. While Render doesn't have it, the block says so.
+
 ## 2026-10-24.180
 
 - 🧊 3D is now a block (＋ Add a block › 3D), not its own screen (Jordan's redesign). ▶ Make it 3D turns the picture in the preview into 3D: MiniMax goes round her at 5 heights, led by the rig, and the preview shows her in 3D when it is done. No angle pictures, backdrop or "make it a picture".

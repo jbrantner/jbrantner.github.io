@@ -121,6 +121,9 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
   ok(!(await page.$('.block:has(#d3Body) [data-do="toggle"]')) && /Keep the app open/.test(await page.textContent('#d3Body')), 'the block has no on/off switch (it isn\'t part of the render) and, with no Render helper, says to keep the app open');
   const before = await page.evaluate(() => JSON.stringify(buildGraph()));
   ok(!/FaceDetailer|MiniMax/.test(before), 'a normal render is unchanged with the block in the recipe');
+  await page.evaluate(g => { g.snap = {prompt:'another girl', blocks:JSON.parse(JSON.stringify(S.blocks.filter(b => b.type!=='d3')))}; S.gallery.push(g); save(); drawStrip(); }, pic('other')); await page.click('#strip img[data-i="1"]'); await page.waitForTimeout(300);
+  ok(await page.$('#d3Body') && await page.evaluate(() => S.blocks.filter(b => b.type==='d3').length===1), 'tapping another thumbnail loads its recipe but keeps the 🧊 block (Jordan: it vanished)');
+  await page.evaluate(() => show(0)); await page.waitForSelector('#d3Body [data-d3="start"]');
 
   // ▶ Make it 3D, from the app
   const n0 = ALL.length; await page.click('#d3Body [data-d3="start"]');
@@ -180,6 +183,13 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
   ok(P3DLOG.includes('ask') && ALL.slice(n5).every(x => V(x.prompt).find(n => n.class_type==='KSampler').inputs.denoise===0.3), 'tapping Light on the phone is passed to Render, which paints it at 0.3');
   await page.waitForFunction(id => { const P = S.cmPoses.find(x => x.id===id); return (P.lk || []).filter(h => h.url).length===80 && P.show==='light'; }, pid, {timeout:30000});
   ok(true, 'the phone gets the Light pictures and keeps showing Light');
+  // one started from the app before Render had the helper can be handed over
+  await page.evaluate(g => { delete window.TEST_P3D; S.gallery.unshift(g); save(); drawStrip(); show(0); }, pic('jump3'));
+  await page.waitForSelector('#d3Body [data-d3="start"]'); await page.click('#d3Body [data-d3="start"]'); await page.waitForSelector('#d3Body .pbar');
+  ok(/needs the new helper/.test(await page.textContent('#d3Body')) && !(await page.$('#d3Body [data-d3="move"]')), 'made from the app: it says Render needs the new helper to close the app');
+  await page.evaluate(() => { window.TEST_P3D = 'https://jordo-desktop.test'; d3Draw(true); }); await page.click('#d3Body [data-d3="move"]');
+  const mid = await page.evaluate(() => S.gallery[0].d3p); await page.waitForFunction(id => S.cmPoses.find(x => x.id===id).remote, mid, {timeout:5000});
+  ok(!!P3D[mid] && /close the app/.test(await page.textContent('#d3Body')), '🖥 Hand it to Render moves one being made from the app over to Render');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
