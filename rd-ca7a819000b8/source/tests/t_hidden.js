@@ -49,7 +49,7 @@ const OI = {CheckpointLoaderSimple:{input:{required:{ckpt_name:[['sdxl.safetenso
   ok(!pv.hid, 'Hidden render\'s live picture is dropped in the normal view');
   ok(!!pv.nor, 'the normal render\'s live picture still comes through');
   const duo = await page.evaluate(() => ({text:document.querySelector('#duo').textContent, srcs:[...document.querySelectorAll('#duo img')].map(i => i.src.startsWith('blob:'))}));
-  ok(duo.text.includes('Hidden render') && !duo.text.includes('3/20') && duo.srcs.filter(Boolean).length===1, 'side-by-side preview shows only "Hidden render" for it: '+duo.text);
+  ok(!duo.text.includes('3/20') && !(await page.evaluate(() => document.body.innerText.includes('3/20'))), 'the Hidden render is nowhere on the normal screen (since jobs, only this job\'s renders show in its picture): '+duo.text);
   await page.evaluate(([a]) => { focusPc = a; document.querySelector('#duo [data-duo="'+a+'"]') && document.querySelector('#duo [data-duo="'+a+'"]').click(); }, [SERVER]);
   ok(!(await page.evaluate(() => document.querySelector('#shown').src)).includes('secret'), 'tapping it doesn\'t show anything of it');
   await page.evaluate(() => { openSheet('#queueSheet'); drawQueue(); });
