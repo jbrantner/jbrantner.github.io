@@ -253,3 +253,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 ## 2026-10-23.151
 - 🧊 says when a PC is busy with another 3D's jobs on the farm, instead of calling them other jobs.
+
+## 2026-10-25.185
+
+- 🗂 🗑 Delete next to ✎ Rename deletes the open project and its pictures, every version, from both computers (Dropbox keeps them in Deleted files). Then it opens your next project. Works in Hidden too (Jordan asked).

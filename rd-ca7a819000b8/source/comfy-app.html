@@ -633,7 +633,7 @@ body.cm-open #comic{padding-bottom:84px}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-24.184'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-25.185'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -1762,7 +1762,7 @@ function drawProjects(){ const on = projInit(); $('#projs').hidden = $('#projHea
   $('#projs').innerHTML = '<button class="newproj" data-newproj="1">＋ New project</button>' + list.map(p => { const g = projPick(p.id), i = g ? S.gallery.indexOf(g) : -1, n = projPics(p.id).length;
     return `<span class="sth ${p.id===S.proj ? 'on' : ''}" data-proj="${esc(p.id)}" title="${esc(p.name)}">${g ? `<img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" data-i="${i}" data-proj="${esc(p.id)}" alt="${esc(p.name)}" loading="lazy">` : `<button class="newproj" data-proj="${esc(p.id)}">${esc(p.name)}<br>empty</button>`}${n > 1 ? `<em class="pcount">${n}</em>` : ''}${g && pic3d(g) ? `<em class="s3d ${pic3d(g)===1 ? 'wip' : ''}" title="3D">🧊</em>` : ''}</span>`; }).join('');
   const P = S.projects.find(p => p.id===S.proj), n = projPics(S.proj).length;
-  $('#projHead').innerHTML = `<span>🗂 <b>${esc(P.name)}</b> · ${n} ${n===1 ? 'picture' : 'pictures'}</span><button data-projname="1" aria-label="Rename this project">✎ Rename</button>`; }
+  $('#projHead').innerHTML = `<span>🗂 <b>${esc(P.name)}</b> · ${n} ${n===1 ? 'picture' : 'pictures'}</span><button data-projname="1" aria-label="Rename this project">✎ Rename</button><button data-projdel="1" aria-label="Delete this project">🗑 Delete</button>`; }
 function drawStrip(){
   drawProjects(); const inP = !!(Array.isArray(S.projects) && !S.ws);
   $('#strip').innerHTML = S.gallery.map((g,i) => inP && g.proj!==S.proj ? '' : `<span class="sth"><img src="${esc(mini(g.url))}" data-full="${esc(g.url)}" data-i="${i}" alt="" loading="lazy" class="${i===shownIdx?'sel':''}">${g.ob && (g.ob.making || g.ob.fin || g.ob.busy) ? `<i class="sbar"><b data-sb="${i}"></b></i>` : ''}${g.hist && g.hist.length ? `<em class="sver">${g.hist.length + 1}</em>` : ''}${pic3d(g) ? `<em class="s3d ${pic3d(g)===1 ? 'wip' : ''}" title="3D">🧊</em>` : ''}</span>`).join('') || `<p class="none">${inP && S.gallery.length ? 'Renders in this project show up here' : 'Your renders show up here'}</p>`;
@@ -1807,8 +1807,22 @@ $('#strip').addEventListener('error', viaHere, true); $('#obPanel').addEventList
 $('#projs').onclick = e => { const t = e.target.closest('[data-newproj],[data-proj]'); if(!t) return; if(t.dataset.newproj) return newProject();
   const id = t.dataset.proj, g = projPick(id); if(S.queue.length) viewPinned = true; if(!g){ S.proj = id; save(); show(-1); drawStrip(); return; }
   const i = S.gallery.indexOf(g), was = shownIdx; show(i); if(i!==was) useRecipe(g.snap, obFirst(g), true); };
-$('#projHead').onclick = e => { if(!e.target.closest('[data-projname]')) return; const P = (S.projects || []).find(p => p.id===S.proj); if(!P) return;
+$('#projHead').onclick = e => { const P = (S.projects || []).find(p => p.id===S.proj); if(!P) return;
+  if(e.target.closest('[data-projdel]')) return deleteProject(P);
+  if(!e.target.closest('[data-projname]')) return;
   const n = prompt('Name this project', P.name); if(n && n.trim()){ P.name = n.trim().slice(0, 40); save(); drawStrip(); } };
+// 🗑 Delete (Jordan 2026-10-25): the project goes, and so do its pictures (every version), like the library's Delete
+async function deleteProject(P){
+  const pics = projPics(P.id), files = [];
+  pics.forEach(g => [g.url, ...(g.hist || []).map(h => h.url)].forEach(u => { try{ const q = new URL(u).searchParams; if(q.get('filename') && (q.get('type') || 'output')==='output') files.push({subfolder:q.get('subfolder') || '', filename:q.get('filename')}); }catch(e){} }));
+  if(!confirm('Delete the project "' + P.name + '"' + (pics.length ? ' and its ' + (pics.length===1 ? 'picture' : pics.length + ' pictures') + '? They go from both computers (Dropbox keeps them in Deleted files).' : '?'))) return;
+  if(files.length && !S.test){
+    try{ const r = await fetch(base() + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:files})}); if(!r.ok) throw 0; }
+    catch(e){ toast('Could not reach the render computer, so nothing was deleted', true); return; } }
+  forgetPics(files); S.gallery = S.gallery.filter(g => g.proj!==P.id); S.projects = S.projects.filter(p => p.id!==P.id);
+  if(lib.items) lib.items = lib.items.filter(i => !files.some(f => f.subfolder===(i.subfolder || '') && f.filename===i.filename));
+  const next = S.projects.filter(p => projPics(p.id).length).sort((a, b) => projLast(b.id) - projLast(a.id))[0];
+  S.proj = next ? next.id : null; save(); drawStrip(); showOpen(); buzz(); toast('Deleted "' + P.name + '"'); }
 $('#strip').onclick = e => { const i = e.target.dataset && e.target.dataset.i; if(i==null) return; if(S.queue.length) viewPinned = true; const was = shownIdx; show(+i);
   const g = S.gallery[+i]; if(+i!==was && g) useRecipe(g.snap, obFirst(g), true); };
 $('#shown').onclick = () => { if($('#shown').hidden) return; if(S.gallery[shownIdx]) openViewer('gal', S.gallery, shownIdx); };
