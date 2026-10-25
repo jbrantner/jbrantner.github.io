@@ -57,6 +57,13 @@ const fs = require('fs'), path = require('path');
   // kept on reload
   await page.reload(); await page.waitForTimeout(500); s = await st();
   ok(s.proj===B && s.projs.length===2 && /Café scene/.test(s.head) && s.strip===4 && s.shown, 'projects are kept when the app is reopened: ' + JSON.stringify(s));
+  // 🗑 Delete removes the project and its pictures, and opens the next one
+  await page.click('#projHead [data-projdel]'); await page.waitForTimeout(300); s = await st();
+  ok(!s.projs.some(p => p[0]===B) && s.proj==='earlier' && s.strip===3 && await page.evaluate(b => !S.gallery.some(g => g.proj===b) && !S.projects.some(p => p.id===b), B), '🗑 Delete removes the project and its 4 pictures and opens Earlier renders: ' + JSON.stringify(s));
+  await page.click('#projs [data-newproj]'); await page.click('#projHead [data-projdel]'); await page.waitForTimeout(300); s = await st();
+  ok(s.proj==='earlier' && s.projs.length===1, 'an empty project can be deleted too: ' + JSON.stringify(s));
+  await page.reload(); await page.waitForTimeout(500); s = await st();
+  ok(s.proj==='earlier' && s.projs.length===1 && s.strip===3, 'the deleted project stays gone after reopening: ' + JSON.stringify(s));
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
