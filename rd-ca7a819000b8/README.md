@@ -266,3 +266,9 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-26.187
 
 - 🧍 Character is now a third tab next to 🎨 Render and 📖 Comic (Jordan asked). The tab remembers itself like Comic does; `chars/` and `?cc` still open it.
+
+## 2026-10-26.188
+
+- 🧍 Character: typing in the name and tags boxes works again (a redraw every 1.5 s took the box away once she had a name).
+- Tapping one of your renders as her picture fills step 1 from that render: its prompt (plus added tags) as her tags, its model, AFKJ as the style LoRA and any other LoRA (her character LoRA) under "Her LoRAs", used in the Illustrious steps with its activation words. ✕ leaves one out. Only a picture with no recipe goes to the tagger.
+- When a PC doesn't have the WD tagger yet, "Read them from the picture" offers to get it (1.26 GB, once) and reads the tags when it's in, instead of stopping with an error.

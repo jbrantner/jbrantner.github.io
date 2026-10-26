@@ -461,7 +461,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 .ccwrap{max-width:560px;margin:0 auto;padding:0 0 150px;display:grid;gap:14px}
 .cctop{position:sticky;top:0;z-index:3;background:var(--bg);display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line)}
 .cctop h1{font:700 20px/1 var(--display);margin:0;flex:1;white-space:nowrap}
-.cchosts{display:flex;gap:8px}.cchosts .host{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:3px 9px 3px 7px;font-weight:800;font-size:13px;color:var(--soft)}
+.ccloras{display:flex;flex-wrap:wrap;gap:6px}.cchosts{display:flex;gap:8px}.cchosts .host{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:3px 9px 3px 7px;font-weight:800;font-size:13px;color:var(--soft)}
 .ccchips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}
 .ccchip{flex:none;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:7px 14px;font-weight:700;font-size:15px;min-height:38px}
 .ccchip[aria-pressed="true"]{background:var(--panel2);border-color:var(--text)}.ccchip.new{color:var(--soft);border-style:dashed}
@@ -691,7 +691,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-26.187'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-26.188'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -9370,7 +9370,7 @@ function ccFresh(P){ P.views = [0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5
 const ccLooks = P => P.views.concat(P.mids).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:!!v.mid, str:'cc', dn:0.3, url:''}));
 function ccMakeP(c){ const P = {id:uid('sp'), name:'🧍 ' + (c.name || 'Character'), who:'', from:true, snap:null, geo:{wM:1.28, hM:1.87, aim:[0, 0.935, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
     by:'mm', pic:true, off:0, desc:'', dn:0, ctl:true, orbRig:true, faces:true, show:'mm', goOn:true, hid:false, mw:480, mh:864, iw:768, ih:1344,
-    cc:{ref:c.ref, tags:c.tags, desc:c.desc, ckpt:c.ckpt, lora:c.lora, loraW:c.loraW || 1, full:ccHost(), redraw:ccHost()}};
+    cc:{ref:c.ref, tags:c.tags, desc:c.desc, ckpt:c.ckpt, lora:c.lora, loraW:c.loraW || 1, loras:(c.loras || []).slice(), full:ccHost(), redraw:ccHost()}};
   P.geo.wM = P.geo.hM * P.iw / P.ih; ccFresh(P); return P; }
 // where a picture of the 80 comes from: the finish if it is done, else the turnaround's cut-out
 const ccBase = (P, v) => { const h = (v.mid ? P.mids : P.views).find(x => !x.look && x.ring===v.ring && x.i===v.i); return h && h.url && !h.redo ? h.url : ''; };
@@ -9404,10 +9404,21 @@ function ccFullGraph(k, img, c, prefix, seed){
   const dec = add('VAEDecodeTiled', {samples:[out,0], vae:[vae,0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
   return {g, save:add('SaveImage', {images:[add('ImageFromBatch', {image:[dec,0], batch_index:TV_LEN - 1, length:1}), 0], filename_prefix:prefix})}; }
 // the Illustrious side: checkpoint, clip skip 2, the style LoRA, her tags
+// her own LoRAs (a character LoRA from the render she came from), found by name on this PC; a PC without one leaves it out
+function ccOwnLoras(c, k){ const lo = combo(k.oi.LoraLoader, 'lora_name'); return (c.loras || []).map(o => ({name:lo.find(n => baseName(n).toLowerCase()===baseName(o.name).toLowerCase()), w:+o.w || 1})).filter(o => o.name); }
+// a render from this app as her picture: its prompt, model and LoRAs fill step 1 (Jordan 2026-10-26), so the tagger isn't needed
+async function ccFromRender(c, g){ let snap = g.snap; if(!snap && !S.test){ try{ snap = fromPng(await (await fetch(g.url)).arrayBuffer()); }catch(e){} } if(!snap) return false;
+  const bl = snap.blocks || [], M = bl.find(b => b.type==='model'), los = bl.filter(b => b.type==='lora' && b.on!==false && b.lora), style = los.find(b => /afkj/i.test(baseName(b.lora)));
+  let text = ccJoin(snap.prompt || '', (snap.addedTags || []).join(', '));
+  if(snap.fromPng){ const drop = new Set((styleText(M ? styleKey(M) : 'illustrious').pos + ',sensitive,nsfw,explicit,rating_questionable,rating_explicit').split(',').map(norm)); text = text.split(',').map(t => t.trim()).filter(t => t && !drop.has(norm(t))).join(', '); }
+  if(!text.trim() && !los.length && !(M && M.ckpt)) return false;
+  c.tags = text; if(M && M.ckpt) c.ckpt = M.ckpt; if(style){ c.lora = style.lora; c.loraW = style.strength ?? 1; }
+  c.loras = los.filter(b => b!==style).map(b => ({name:b.lora, w:b.strength ?? 1})); return true; }
 function ccIll(add, k, c, extra){ const ck = add('CheckpointLoaderSimple', {ckpt_name:ccCkpt(c, k)}); let model = [ck,0], clip = [ck,1]; const vae = [ck,2];
   if(k.oi.CLIPSetLastLayer) clip = [add('CLIPSetLastLayer', {clip, stop_at_clip_layer:-2}), 0];
   const lo = ccLora(c, k); if(lo){ const w = +c.loraW || 1, l = add('LoraLoader', {model, clip, lora_name:lo, strength_model:w, strength_clip:w}); model = [l,0]; clip = [l,1]; }
-  const tx = styleText('illustrious'), pos = [add('CLIPTextEncode', {clip, text:ccJoin(ccTrigger(c, k), tx.pos, c.tags || '1girl, solo', 'full body, standing, arms at sides, closed mouth', extra, CM_WHITE)}), 0];
+  const own = ccOwnLoras(c, k); own.forEach(o => { const l = add('LoraLoader', {model, clip, lora_name:o.name, strength_model:o.w, strength_clip:o.w}); model = [l,0]; clip = [l,1]; });
+  const tx = styleText('illustrious'), pos = [add('CLIPTextEncode', {clip, text:ccJoin(ccTrigger(c, k), ...own.map(o => (S.loraWords || {})[o.name] || ''), tx.pos, c.tags || '1girl, solo', 'full body, standing, arms at sides, closed mouth', extra, CM_WHITE)}), 0];
   const neg = [add('CLIPTextEncode', {clip, text:ccJoin(tx.neg, CC_NEG)}), 0]; return {model, clip, vae, pos, neg}; }
 function ccFace(add, k, img, I, seed, guide){ if(!k.oi.FaceDetailer || !k.oi.UltralyticsDetectorProvider) return img; const extra = {noise_mask_feather:32}; if(k.oi.SAMLoader) extra.sam_model_opt = [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0];
   return [add('FaceDetailer', Object.assign({image:img, model:I.model, clip:I.clip, vae:I.vae, positive:I.pos, negative:I.neg, guide_size:guide, guide_size_for:true, max_size:guide * 1.5, seed, steps:20, cfg:5, sampler_name:'euler', scheduler:'normal',
@@ -9512,6 +9523,7 @@ function ccStep1(c, P){ const ks = cmIllKits(), cks = [...new Set(ks.flatMap(k =
     <textarea data-ccf="desc" placeholder="a young woman with a pink wavy bob, blue eyes, a cream blouse and a brown pinafore dress" ${lock ? 'disabled' : ''}>${esc(c.desc || '')}</textarea>
     <div class="row"><label>Model</label><select data-ccf="ckpt" ${lock ? 'disabled' : ''}>${cks.map(n => `<option value="${esc(n)}" ${n===ck ? 'selected' : ''}>${esc(baseName(n))}</option>`).join('') || `<option>${esc(c.ckpt || 'iriselTouchIL_v10')}</option>`}</select></div>
     <div class="row"><label>Style LoRA</label><select data-ccf="lora" ${lock ? 'disabled' : ''}><option value="-" ${c.lora===null ? 'selected' : ''}>None</option>${los.map(n => `<option value="${esc(n)}" ${n===lo ? 'selected' : ''}>${esc(baseName(n))}</option>`).join('')}</select></div>
+    ${(c.loras || []).length ? `<div class="row"><label>Her LoRAs</label><div class="grow ccloras">${c.loras.map((o, i) => `<button class="chipbtn" data-cc="droplora" data-i="${i}" ${lock ? 'disabled' : ''} aria-label="Leave this LoRA out">${esc(baseName(o.name).replace(/\.safetensors$/i, ''))} ${+o.w || 1} ✕</button>`).join('')}</div></div>` : ''}
     ${lock ? `<p class="note">Locked while she is made from it. ↻ Start again to change these.</p><div class="btnrow"><button class="btn" data-cc="restart">↻ Start again</button></div>` : ''}`; }
 function ccDraw(force){ const box = $('#cc'); if(!box || box.hidden) return; const s = ccState(), c = ccChar(), P = ccP(c), st = ccStatus(P);
   const f = document.activeElement, typing = f && box.contains(f) && /INPUT|TEXTAREA|SELECT/.test(f.tagName);
@@ -9519,7 +9531,7 @@ function ccDraw(force){ const box = $('#cc'); if(!box || box.hidden) return; con
   const pics = P ? ccPics(P) : null, any = !!(pics && pics.some(r => r.some(Boolean)));
   // the frame (top bar, chips, the viewer's stage) is drawn again only for another character or when her first angle comes in,
   // so a drag in progress isn't cut off by the angles arriving; the steps and the button follow along
-  const frame = JSON.stringify([s.sel, s.chars.map(x => x.id + (x.id===s.sel && typing ? '' : x.name)), any, !!P, dots]);
+  const frame = JSON.stringify([s.sel, s.chars.map(x => x.id + (x.id===s.sel ? '' : x.name)), any, !!P, dots]);
   if(force || frame!==CCV.frame){ CCV.frame = frame; CCV.sig = '';
     box.innerHTML = `<div class="ccwrap"><header class="cctop"><button class="chipbtn" data-cc="back" aria-label="Back to Render Deck">‹</button><h1>Character Creator</h1><span class="cchosts">${dots}</span></header>
     <div class="ccchips">${s.chars.map(x => `<button class="ccchip" data-cc="sel" data-id="${esc(x.id)}" aria-pressed="${x.id===s.sel}">${esc(x.name || 'No name')}</button>`).join('')}<button class="ccchip new" data-cc="new">＋ New character</button></div>
@@ -9582,8 +9594,17 @@ async function ccPhone(c, file){ const host = farmHost() || base(); if(!host && 
     c.ref = url; save(); ccDraw(true); ccTags(c); }
   catch(e){ toast("Couldn't send the picture: " + e.message, true); } }
 // her tags from the picture (the WD tagger in Render Deck's helper)
+// the WD tagger lives on each PC's helper; the first time a PC needs it, it fetches it (1.26 GB, once) and the tags follow
+async function ccTagger(pc){ let wd = await wdState(pc); if(!wd) throw new Error(pcName(pc) + " didn't answer"); if(wd.ready) return true;
+  if(!(wd.job && !/done|failed/.test(wd.job.status))){
+    if(!confirm(pcName(pc) + ' needs the WD tagger to read her tags: a 1.26 GB download from Hugging Face, once. Get it now?')) return false;
+    const j = await (await fetch(pc + '/renderdeck/tagger/get', {method:'POST', headers:JSONH, body:'{}'})).json(); if(j.error) throw new Error(j.error); }
+  for(let n = 0; ; n++){ await new Promise(r => setTimeout(r, 3000)); wd = await wdState(pc); if(!wd) continue; if(wd.ready) return true;
+    const j = wd.job || {}; if(j.status==='failed') throw new Error('the tagger download stopped: ' + (j.error || 'no reason given'));
+    if(n % 5===0) toast('Getting the WD tagger on ' + pcName(pc) + '… ' + (j.total ? Math.round(100 * j.done / j.total) + '%' : '')); } }
 async function ccTags(c){ if(!c.ref || S.test) return; let u; try{ u = new URL(c.ref); }catch(e){ return; } CCV.tagging = true; ccDraw(true);
-  try{ const q = u.searchParams, r = await fetch(u.origin + '/renderdeck/tag', {method:'POST', headers:JSONH, body:JSON.stringify({images:[{filename:q.get('filename'), subfolder:q.get('subfolder') || '', type:q.get('type') || 'output'}], threshold:0.35})}), j = await r.json();
+  try{ if(!await ccTagger(u.origin)) return;
+    const q = u.searchParams, r = await fetch(u.origin + '/renderdeck/tag', {method:'POST', headers:JSONH, body:JSON.stringify({images:[{filename:q.get('filename'), subfolder:q.get('subfolder') || '', type:q.get('type') || 'output'}], threshold:0.35})}), j = await r.json();
     if(j.error) throw new Error(j.error); const res = (j.results || [])[0] || {}, skip = /^(simple background|white background|grey background|gradient background|full body|cowboy shot|upper body|portrait|looking at viewer|standing|solo focus|blurry.*|.*background)$/;
     const tags = (res.general || []).map(([t]) => t.replace(/_/g, ' ')).filter(t => !skip.test(t)).slice(0, 40);
     if(tags.length && !(c.tags || '').trim()) c.tags = tags.join(', '); else if(tags.length) toast('Tags read: they are in the box if it was empty, so yours are kept'); save(); }
@@ -9606,7 +9627,8 @@ function ccWire(){ const box = $('#cc'); if(!box || box._wired) return; box._wir
     else if(a==='sel'){ ccState().sel = b.dataset.id; CCV.key = ''; save(); ccDraw(true); }
     else if(a==='new'){ ccNewChar(); CCV.key = ''; CCV.open = {ref:true}; ccDraw(true); }
     else if(a==='phone') { $('#ccPick').value = ''; $('#ccPick').click(); }
-    else if(a==='usepic'){ const g = (S.gallery || []).filter(g => g.url && !g.draft)[+b.dataset.i]; if(g && c){ c.ref = g.url; save(); ccDraw(true); ccTags(c); } }
+    else if(a==='droplora'){ if(c && !ccP(c) && c.loras){ c.loras.splice(+b.dataset.i, 1); save(); ccDraw(true); } }
+    else if(a==='usepic'){ const g = (S.gallery || []).filter(g => g.url && !g.draft)[+b.dataset.i]; if(g && c){ c.ref = g.url; save(); ccDraw(true); ccFromRender(c, g).then(got => { if(got){ save(); ccDraw(true); toast('Her prompt, model and LoRAs are filled in from that render'); } else ccTags(c); }); } }
     else if(a==='tags' && c) ccTags(c);
     else if(a==='go' && c) ccGo(c);
     else if(a==='redo' && c && P) ccRedoTap(c, P, +b.dataset.n);
