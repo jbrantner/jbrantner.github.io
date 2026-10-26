@@ -276,3 +276,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-26.189
 
 - 🧍 Character viewer: only finished (step 5) angles are shown. An angle still waiting for its finish holds the nearest finished one at that height (or eye level) instead of its raw MiniMax frame, which was on grey, not cut out, and came out too big. No fade.
+
+## 2026-10-26.190
+
+- 🧍 Character: step 4's cut-outs and step 5's finishes only go to a PC with BiRefNet (Main has none yet, so 22 of Ellie's angles came back without a cut-out). Step 5 now finds her outline with BiRefNet, kept inside the picture's own cut-out, so a picture without one no longer has its white background repainted as part of her.
