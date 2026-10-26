@@ -691,7 +691,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-26.193'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-26.194'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -9496,19 +9496,31 @@ function ccRun(P){ if(!P || !P.cc || P.stopped || P.remote) return; const c = P.
 function ccGot(h, it){ h.url = it.url; delete h.err; save(); const P = (S.cmPoses || []).find(Q => Q.cc && (Q.cc.full===h || Q.cc.redraw===h)); if(P) ccRun(P); ccDraw(); }
 // ↻ Redo from here (a new seed for that step; what comes after it is made again)
 // 🧍 a high or low circle's own turn (Jordan 2026-10-26: her higher views were a ¾ view where the eye level was front). With the
-// pose guide easing off at 60%, MiniMax doesn't keep the skeleton's speed (one turn took 31 to 35 frames, not 30.75), but her
-// outline half a turn on is her outline mirrored: the length whose half-turn pairs match best is the turn. Each circle starts at
-// her front (it starts from the crane's front frame).
-async function ccOutline(u){ const im = new Image(); im.crossOrigin = 'anonymous'; im.src = u; await im.decode(); const W = 32, H = 48, c = document.createElement('canvas'); c.width = W; c.height = H;
+// pose guide easing off at 60%, MiniMax doesn't keep the skeleton's speed (one turn took 31 to 35 frames, not 30.75). Her
+// shoulders and arms are widest seen from the front or back and narrowest from the sides, so the two narrowest frames are a
+// half turn apart; and when the clip comes back round to her front, the frame most like frame 0 is the whole turn. (Matching
+// her outline mirrored half a turn on was tried first: from the front and back she is near enough symmetric that it locked on
+// to the wrong turn, 24 frames for one that took 31.) Each circle starts at her front (from the crane's front frame).
+async function ccOutline(u){ const im = new Image(); im.crossOrigin = 'anonymous'; im.src = u; await im.decode(); const W = 64, H = 96, c = document.createElement('canvas'); c.width = W; c.height = H;
   const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data, edge = [];
   for(let q = 0; q < W * H; q++){ const px = q % W, py = (q / W) | 0; if(px===0 || py===0 || px===W - 1 || py===H - 1) edge.push(q); }
   const med = k => { const v = edge.map(q => d[q * 4 + k]).sort((a, b) => a - b); return v[v.length >> 1]; }, bg = [med(0), med(1), med(2)];
-  const m = new Uint8Array(W * H); let sx = 0, n = 0; for(let q = 0; q < W * H; q++){ const o = q * 4; if(Math.abs(d[o] - bg[0]) + Math.abs(d[o + 1] - bg[1]) + Math.abs(d[o + 2] - bg[2]) > 60 && d[o + 3] > 40){ m[q] = 1; sx += q % W; n++; } }
-  const cx = n ? sx / n : W / 2, out = new Uint8Array(W * H); for(let q = 0; q < W * H; q++) if(m[q]){ const nx = Math.round(q % W - cx + W / 2); if(nx >= 0 && nx < W) out[((q / W) | 0) * W + nx] = 1; } return out; } // centred on her
-function ccHalfTurn(ms, per){ const W = 32; let s = 0, n = 0; for(let f = 0; f < ms.length; f++){ const g = Math.round(f + per / 2), a = ms[f], b = ms[g]; if(!a || !b) continue;
-    let i = 0, u = 0; for(let q = 0; q < a.length; q++){ const y = (q / W) | 0, x = q % W, am = a[y * W + (W - 1 - x)]; if(am && b[q]) i++; if(am || b[q]) u++; } if(u){ s += i / u; n++; } } return n >= 3 ? s / n : 0; }
-async function ccTurnLen(us){ let ms = []; try{ ms = await Promise.all(us.map(u => ccOutline(u).catch(() => null))); }catch(e){} const def = (TV_LEN - 1) / 4;
-  let best = def, bs = 0; for(let per = 24; per <= 44; per += 0.25){ const sc = ccHalfTurn(ms, per); if(sc > bs + 1e-9){ bs = sc; best = per; } } return bs > 0.3 ? best : def; }
+  const m = new Uint8Array(W * H); for(let q = 0; q < W * H; q++){ const o = q * 4; if(Math.abs(d[o] - bg[0]) + Math.abs(d[o + 1] - bg[1]) + Math.abs(d[o + 2] - bg[2]) > 60 && d[o + 3] > 40) m[q] = 1; } return m; }
+// how wide her upper body is (20-60% of her height, shoulders and arms), in pixels
+function ccWidth(m){ const W = 64, H = m.length / W; let top = -1, bot = -1; for(let y = 0; y < H; y++){ let any = 0; for(let x = 0; x < W; x++) if(m[y * W + x]){ any = 1; break; } if(any){ if(top < 0) top = y; bot = y; } }
+  if(top < 0) return null; let s = 0, n = 0; for(let y = Math.round(top + (bot - top) * 0.2); y <= Math.round(top + (bot - top) * 0.6); y++){ let l = -1, r = -1; for(let x = 0; x < W; x++) if(m[y * W + x]){ if(l < 0) l = x; r = x; } if(l >= 0){ s += r - l + 1; n++; } } return n ? s / n : null; }
+const ccIou = (a, b) => { let i = 0, u = 0; for(let q = 0; q < a.length; q++){ if(a[q] && b[q]) i++; if(a[q] || b[q]) u++; } return u ? i / u : 0; };
+// the frame (to a fraction) where a run of values is lowest or highest, from the best frame and its two neighbours
+const ccPeak = (v, f) => { const a = v[f - 1], b = v[f], c = v[f + 1]; if(a==null || c==null) return f; const den = a - 2 * b + c; return den ? f + Math.max(-0.5, Math.min(0.5, (a - c) / (2 * den))) : f; };
+function ccTurnFit(ms){ const def = (TV_LEN - 1) / 4, L = ms.length, w0 = ms.map(m => m ? ccWidth(m) : null);
+  const w = w0.map((v, f) => { const a = w0[f - 1] ?? v, b = w0[f + 1] ?? v; return v==null ? null : (a + 2 * v + b) / 4; }); // smoothed a little
+  const low = (lo, hi) => { let best = -1; for(let f = Math.max(1, lo); f <= Math.min(L - 2, hi); f++) if(w[f]!=null && (best < 0 || w[f] < w[best])) best = f; return best < 0 ? null : ccPeak(w, best); };
+  let side = null; const f1 = low(4, 13), f2 = f1==null ? null : low(Math.round(f1 + 12), Math.round(f1 + 20)); if(f1!=null && f2!=null){ const p = 2 * (f2 - f1); if(p >= 26 && p <= 42 && Math.abs(f1 - p / 4) <= 3) side = p; }
+  // back round to her front inside the clip: the frame most like frame 0 (not at the clip's end, where it may still be rising)
+  let back = null; if(ms[0]){ const iou = ms.map(m => m ? ccIou(ms[0], m) : 0); let bf = -1; for(let f = 22; f < L - 1; f++) if(bf < 0 || iou[f] > iou[bf]) bf = f; if(bf > 0 && iou[bf] >= 0.9 && iou[bf] > iou[bf + 1] && iou[bf] >= iou[bf - 1]) back = ccPeak(iou, bf); }
+  const per = back!=null && side!=null ? (Math.abs(back - side) <= 2.5 ? (back + side) / 2 : back) : back ?? side ?? def;
+  return {per, side, back}; }
+async function ccTurnLen(us){ let ms = []; try{ ms = await Promise.all(us.map(u => ccOutline(u).catch(() => null))); }catch(e){} return ccTurnFit(ms).per; }
 // ↻ 4.5: line her heights up again from the circles already made (new picks for the high and low ones), then their angles and
 // every finish again; the MiniMax moves aren't made again
 function ccRelineup(P){ cmStop(m3Jobs(P)); (P.orb || []).forEach(o => { if(o.step==='circle' && o.ring!==1){ delete o.pick; delete o.turn; delete o.fit; } });
