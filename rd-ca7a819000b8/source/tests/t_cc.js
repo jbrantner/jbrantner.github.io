@@ -13,7 +13,7 @@ const DEF = {
   SamplerCustomAdvanced:[['noise','guider','sampler','sigmas','latent_image'],2], VAEDecodeTiled:[['samples','vae','tile_size','overlap','temporal_size','temporal_overlap'],1], SaveImage:[['images','filename_prefix'],0],
   CheckpointLoaderSimple:[['ckpt_name'],3], CLIPSetLastLayer:[['clip','stop_at_clip_layer'],1], LoraLoader:[['model','clip','lora_name','strength_model','strength_clip'],2], CLIPTextEncode:[['clip','text'],1],
   ImageScale:[['image','upscale_method','width','height','crop'],1], VAEEncode:[['pixels','vae'],1], VAEDecode:[['samples','vae'],1], EmptyImage:[['width','height','batch_size','color'],1],
-  ImageCompositeMasked:[['destination','source','x','y','resize_source'],1], GrowMask:[['mask','expand'],1], InvertMask:[['mask'],1], SetLatentNoiseMask:[['samples','mask'],1],
+  ImageCompositeMasked:[['destination','source','x','y','resize_source'],1], GrowMask:[['mask','expand'],1], InvertMask:[['mask'],1], MaskComposite:[['destination','source','x','y','operation'],1], SetLatentNoiseMask:[['samples','mask'],1],
   AnimeLineArtPreprocessor:[['image','resolution'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1],
   ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1],
@@ -105,6 +105,12 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
     return {eye:at(2), high:at(0)}; });
   const he = feet.eye[1] - feet.eye[0], hh = feet.high[1] - feet.high[0];
   ok(Math.abs(feet.eye[1] - feet.high[1]) <= 5 && Math.abs(hh / he - Math.cos(35 * Math.PI / 180) / Math.cos(5 * Math.PI / 180)) < 0.03, 'her feet stay on one floor point and the high view is her eye-level height × cos 35° (no size jump): ' + JSON.stringify(feet));
+  // step 5 finds her with BiRefNet, kept inside the picture's own cut-out: a picture with no cut-out isn't all "her" (Jordan 2026-10-26)
+  ok(await page.evaluate(() => { const P = ccP(ccChar()), G = ccFinishGraph(ccIllKits()[0], P.cc, P.lk[0], 'a.png', 'f.png', 'p', 1).g, N = Object.values(G), mc = N.find(n => n.class_type==='MaskComposite');
+    return mc && mc.inputs.operation==='multiply' && G[mc.inputs.destination[0]].class_type==='RemoveBackground' && G[mc.inputs.source[0]].class_type==='InvertMask' && N.filter(n => n.class_type==='ImageCompositeMasked').every(n => n.inputs.mask[0]===mc._id || G[n.inputs.mask[0]]===mc); }), 'step 5: her outline is BiRefNet × her own cut-out, so a picture without one keeps its white');
+  const noBg = async bg => page.evaluate(async bg => { const real = cmIllKits; cmIllKits = () => real().map(k => Object.assign({}, k, bg ? {} : {bg:''})); const P = ccP(ccChar()), h = P.lk[0], keep = h.url; h.url = ''; delete h.making; delete h.err; CM_SENT.length = 0;
+    cmPoseRun(P, true); await new Promise(r => setTimeout(r, 600)); const sent = CM_SENT.length > 0 || !!h.making || !!h.busy || (h.url && h.url!==''); delete h.making; delete h.busy; h.url = keep; cmIllKits = real; return sent; }, bg);
+  ok(await noBg(true) && !await noBg(false), 'step 4/5 jobs go to a PC with BiRefNet, never to one without');
   // an angle whose finish isn't in yet: never the raw MiniMax frame (grey, not cut out), the nearest finished angle holds instead (Jordan 2026-10-26)
   ok(await page.evaluate(() => { const P = ccP(ccChar()), h = P.lk.find(x => x.str==='cc' && x.ring===1 && x.i===1 && !x.mid), keep = h.url; h.url = '';
     const pics = ccPics(P), raw = pics[2][2]; CCV.key = ''; ccViewer(pics); CCV.h = 2; const n = ccNear(2); h.url = keep; CCV.key = ''; ccViewer(ccPics(P));
