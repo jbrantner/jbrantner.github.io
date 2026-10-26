@@ -285,3 +285,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 - 🧍 Character viewer: her turning axis is the middle of her body (35–65% of her height) and her floor point is the middle of where her feet touch. From above she no longer orbits the centre: the old anchor was the bottom band, which from up there is only the foot nearer the camera.
 - Step 5 saves every angle as a see-through PNG (her outline as the alpha); the viewer still draws her on white.
+
+## 2026-10-26.192
+
+- 🧍 Character: 🧊 Open in 3D stands her in the 3D viewer (grey room, grid floor, orbit / pan / zoom), with her 80 finished see-through angles (16 round each of the 5 heights). In the viewer a character stands on the middle of her body and where her feet touch, upright, so she turns on her own axis from every height.
