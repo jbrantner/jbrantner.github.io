@@ -607,11 +607,12 @@ async def thumb(request):
         st = os.stat(path)
         cache = os.path.join(folder_paths.get_temp_directory(), 'render_deck_thumbs')
         os.makedirs(cache, exist_ok=True)
-        tp = os.path.join(cache, hashlib.sha1(('%s|%d' % (path, st.st_mtime)).encode()).hexdigest() + '.jpg')
+        size = max(64, min(1600, int(request.query.get('size') or 360)))  # 🧍 the Character Creator's viewer asks for 900
+        tp = os.path.join(cache, hashlib.sha1(('%s|%d' % (path, st.st_mtime) + ('' if size == 360 else '|%d' % size)).encode()).hexdigest() + '.jpg')
         if not os.path.exists(tp):
             def make():
                 with Image.open(path) as im:
-                    im.thumbnail((360, 360))
+                    im.thumbnail((size, size))
                     im.convert('RGB').save(tp, 'JPEG', quality=80)
             await asyncio.get_running_loop().run_in_executor(None, make)
         return web.FileResponse(tp, headers={'Cache-Control': 'max-age=86400'})
@@ -2087,5 +2088,64 @@ if any(x['state'] == 'running' for x in AUTO['jobs']):  # a run left going when 
     except Exception as e:
         print('[Render Deck auto] resume later:', e)
 
-NODE_CLASS_MAPPINGS = {}
-NODE_DISPLAY_NAME_MAPPINGS = {}
+
+
+# ---------- 🧍 Character Creator: the dress colour held to the front (Jordan 2026-10-25, "version B") ----------
+# A mean/std colour match in Lab, measured and applied only on her (the white round her left out, where a whole-frame match
+# darkened the side views to maroon), at a strength, with a soft 1 px edge. Both pictures are her on white.
+class RenderDeckCutoutColorMatch:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'image': ('IMAGE',), 'image_ref': ('IMAGE',), 'strength': ('FLOAT', {'default': 0.6, 'min': 0.0, 'max': 1.0, 'step': 0.05})}}
+    RETURN_TYPES = ('IMAGE',)
+    FUNCTION = 'match'
+    CATEGORY = 'Render Deck'
+
+    @staticmethod
+    def _lab(a):
+        import torch
+        lin = torch.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
+        M = torch.tensor([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]], dtype=a.dtype, device=a.device)
+        W = torch.tensor([0.95047, 1.0, 1.08883], dtype=a.dtype, device=a.device)
+        xyz = lin @ M.T / W
+        f = torch.where(xyz > 0.008856, xyz.clamp(min=0) ** (1 / 3), 7.787 * xyz + 16 / 116)
+        return torch.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
+
+    @staticmethod
+    def _rgb(l):
+        import torch
+        fy = (l[..., 0] + 16) / 116
+        f = torch.stack([fy + l[..., 1] / 500, fy, fy - l[..., 2] / 200], -1)
+        W = torch.tensor([0.95047, 1.0, 1.08883], dtype=l.dtype, device=l.device)
+        xyz = torch.where(f > 0.206893, f ** 3, (f - 16 / 116) / 7.787) * W
+        M = torch.tensor([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]], dtype=l.dtype, device=l.device)
+        lin = xyz @ torch.linalg.inv(M).T
+        return torch.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin.clamp(min=0) ** (1 / 2.4) - 0.055).clamp(0, 1)
+
+    def match(self, image, image_ref, strength):
+        import torch
+        import torch.nn.functional as F
+        ref = image_ref[0].double()
+        rh = ref.min(-1).values < 0.94
+        if rh.sum() < 50 or strength <= 0:
+            return (image,)
+        rl = self._lab(ref)[rh]
+        rm, rs = rl.mean(0), rl.std(0).clamp(min=1e-4)
+        out = []
+        for a in image.double():
+            hard = a.min(-1).values < 0.94
+            if hard.sum() < 50:
+                out.append(a)
+                continue
+            soft = -F.max_pool2d(-hard.double()[None, None], 3, 1, 1)  # shrunk by a pixel
+            k = torch.tensor([0.0545, 0.2442, 0.4026, 0.2442, 0.0545], dtype=a.dtype, device=a.device)  # a 1 px gaussian
+            soft = F.conv2d(F.conv2d(soft, k.view(1, 1, 1, 5), padding=(0, 2)), k.view(1, 1, 5, 1), padding=(2, 0))[0, 0]
+            lab = self._lab(a)
+            m, s = lab[hard].mean(0), lab[hard].std(0).clamp(min=1e-4)
+            matched = self._rgb((lab - m) / s * rs + rm)
+            out.append((a + (matched - a) * strength * soft[..., None]).clamp(0, 1))
+        return (torch.stack(out).to(image.dtype),)
+
+
+NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch}
+NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)'}
