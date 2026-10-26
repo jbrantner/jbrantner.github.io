@@ -262,3 +262,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 - New 🧍 Character Creator, a page of its own at `chars/` (or `?cc`). It runs the 3D Character Workflow in 5 steps on Render's helper, so the app can be closed: 1 your reference picture and tags, 2 full body with MiniMax (reference route, Hybrid Turbo + ref2v 4-step, mouth closed), 3 AFKJ redraw (inpaint 0.45 + line art 0.6, ESRGAN 2x, soft face fix), 4 turnaround (rig-led MiniMax orbit, pose ControlNet 0.6 ending at 60%, 40 angles over 5 heights), 5 finish on every angle (AFKJ masked repaint 0.3, line art 0.8 + tile 0.6, colour match on her cut-out 0.6, soft face fix, white paste-back). The viewer turns her by dragging left/right and changes height by dragging up/down, with no crossfade; feet sit on one floor and her size follows eye height. ↻ Redo from here on any step.
 - Helper: `RenderDeckCutoutColorMatch` node and `/renderdeck/thumb?size=` (up to 1600 px). Without the new helper, step 5 skips the colour match and the viewer uses small thumbnails.
+
+## 2026-10-26.187
+
+- 🧍 Character is now a third tab next to 🎨 Render and 📖 Comic (Jordan asked). The tab remembers itself like Comic does; `chars/` and `?cc` still open it.
