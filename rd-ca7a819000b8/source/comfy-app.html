@@ -680,7 +680,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-26.192'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-26.193'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -7259,7 +7259,8 @@ async function cmOutline(url){ const im = new Image(); im.crossOrigin = 'anonymo
 // how mirror-even an outline is (1 = the same flipped about her middle): high for front and back views
 function cmMirror(m){ const W = 32, H = m.length / W; let sx = 0, n = 0; for(let q = 0; q < m.length; q++) if(m[q]){ sx += q % W; n++; } if(n < 20) return 0;
   const cx = sx / n; let a = 0, u = 0; for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){ const v = m[y * W + x], mx = Math.round(2 * cx - x), w = mx >= 0 && mx < W ? m[y * W + mx] : 0; if(v && w) a++; if(v || w) u++; } return u ? a / u : 0; }
-async function cmAutoPick(P, o){ const us = o.urls || []; if(us.length <= 8 || o.pick) return; let per = cmOrbCtl(P, o) ? (TV_LEN - 1) / 4 : us.length - 1, ms = [];
+async function cmAutoPick(P, o){ const us = o.urls || []; if(us.length <= 8 || o.pick) return;
+  if(P.cc && cmOrbCtl(P, o)){ const per = await ccTurnLen(us); if(o.pick) return; o.pick = [0, 1, 2, 3, 4, 5, 6, 7].map(n => Math.min(us.length - 1, Math.round(n * per / 8))); o.turn = per; o.fit = true; save(); cmPoseSync(); cmPoseRun(P, true); return; } let per = cmOrbCtl(P, o) ? (TV_LEN - 1) / 4 : us.length - 1, ms = [];
   try{ ms = await Promise.all(us.map(u => cmOutline(u).catch(() => null))); }catch(e){}
   if(!cmOrbCtl(P, o)) try{ // 🦴🎬 with the skeleton turning, a full turn is exactly the clip, so the angles are where they should be
     const m0 = ms[0]; let best = 0;
@@ -7439,7 +7440,7 @@ function cmFarmSeen(jobs, done){ let ch = false; S.cmFarmLive = jobs.map(j => j.
   if(ch){ save(); cmPoseSync(); if(!$('#comic').hidden) drawComic(); } }
 async function cmPoseJob(P, L, v, k){ v.busy = 'Sending…'; v.busyPc = k.url; delete v.err;
   try{ if(v.str==='cc'){ // 🧍 step 5, the finish
-      const prefix = cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.mid ? 'm' : '') + '_cc', P.hid), G = ccFinishGraph(k, P.cc, v, await cmUp(ccBase(P, v), k.url), await cmUp(P.src, k.url), prefix, v.seed || P.seed);
+      const prefix = cmPrefix('poses/' + P.id + '/' + CM_SP_RING[v.ring] + '_' + v.i + (v.mid ? 'm' : '') + '_cc', P.hid), G = ccFinishGraph(k, P.cc, v, await cmUp(ccBase(P, v), k.url), await cmUp(P.cc.full.url || P.src, k.url), prefix, v.seed || P.seed);
       if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 120)); delete v.busy; cmGot(v, 'sprite', {url:'https://jordo-desktop.test/view?filename=' + P.id + '_' + v.ring + '_' + v.i + (v.mid ? 'm' : '') + '_cc.png'}); return; }
       const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
       if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
@@ -9434,9 +9435,12 @@ function ccRedrawGraph(k, img, c, prefix, seed){
   const pre = [add('ImageCompositeMasked', {destination:ccWhite(add, 864, 1536), source:[add('VAEDecode', {samples:[ks,0], vae:I.vae}), 0], x:0, y:0, resize_source:false, mask:her}), 0];
   const up = [add('ImageScale', {image:[add('ImageUpscaleWithModel', {upscale_model:[add('UpscaleModelLoader', {model_name:k.esr}), 0], image:pre}), 0], upscale_method:'lanczos', width:1728, height:3072, crop:'disabled'}), 0];
   const face = ccFace(add, k, up, I, seed, 1024);
-  const out = add('ImageCompositeMasked', {destination:ccWhite(add, 1728, 3072), source:face, x:0, y:0, resize_source:false, mask:ccCut(add, k, face)});
-  return {g, save:add('SaveImage', {images:[out,0], filename_prefix:prefix})}; }
-// 5: one angle finished (same seed for every angle); img is the turnaround's cut-out (its alpha is her), ref the step 3 front
+  let out = [add('ImageCompositeMasked', {destination:ccWhite(add, 1728, 3072), source:face, x:0, y:0, resize_source:false, mask:ccCut(add, k, face)}), 0];
+  // her colours held to the full body MiniMax made (Jordan 2026-10-26: "washed out": the AFKJ redraw lifted her blacks 2.3x and
+  // lost 39% of her colour), matched on her alone; the line work stays the redraw's
+  if(k.oi.RenderDeckCutoutColorMatch) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:[add('LoadImage', {image:img}), 0], strength:1}), 0];
+  return {g, save:add('SaveImage', {images:out, filename_prefix:prefix})}; }
+// 5: one angle finished (same seed for every angle); img is the turnaround's cut-out (its alpha is her), ref the step 2 full body (her true colours)
 function ccFinishGraph(k, c, v, img, ref, prefix, seed){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const W = 768, H = 1344, I = ccIll(add, k, c, ccJoin(v.mid ? '' : CM_SP_DIR[v.i], CM_SP_UP[v.ring])), cn = [add('ControlNetLoader', {control_net_name:k.cn}), 0];
@@ -9450,8 +9454,8 @@ function ccFinishGraph(k, c, v, img, ref, prefix, seed){
   const ks = add('KSampler', {model:I.model, positive:I.pos, negative:I.neg, latent_image:[add('SetLatentNoiseMask', {samples:[add('VAEEncode', {pixels:on, vae:I.vae}), 0], mask:grow}), 0], seed, steps:28, cfg:5, sampler_name:'euler', scheduler:'normal', denoise:0.3});
   const face = ccFace(add, k, [add('VAEDecode', {samples:[ks,0], vae:I.vae}), 0], I, seed, 512);
   let out = [add('ImageCompositeMasked', {destination:ccWhite(add, W, H), source:face, x:0, y:0, resize_source:false, mask:her}), 0];
-  // her dress colour held to the front: measured and matched on her alone (the white round her left out), at 0.6
-  if(k.oi.RenderDeckCutoutColorMatch) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:[add('LoadImage', {image:ref}), 0], strength:0.6}), 0];
+  // her colours held to the full body MiniMax made: measured and matched on her alone (the white round her left out), at 0.8
+  if(k.oi.RenderDeckCutoutColorMatch) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:[add('LoadImage', {image:ref}), 0], strength:0.8}), 0];
   // saved see-through round her (Jordan 2026-10-26: a clear PNG, to stand in a 3D scene); the viewer draws her on white
   if(k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:her}), 0]}), 0];
   return {g, save:add('SaveImage', {images:out, filename_prefix:prefix})}; }
@@ -9480,7 +9484,26 @@ function ccRun(P){ if(!P || !P.cc || P.stopped || P.remote) return; const c = P.
   if(!P.src){ P.src = c.redraw.url; save(); cmPoseSync(); m3Resume(P); cmPoseRun(P, true); } }
 function ccGot(h, it){ h.url = it.url; delete h.err; save(); const P = (S.cmPoses || []).find(Q => Q.cc && (Q.cc.full===h || Q.cc.redraw===h)); if(P) ccRun(P); ccDraw(); }
 // ↻ Redo from here (a new seed for that step; what comes after it is made again)
-function ccRedo(P, n){ const c = P.cc; cmStop(m3Jobs(P));
+// 🧍 a high or low circle's own turn (Jordan 2026-10-26: her higher views were a ¾ view where the eye level was front). With the
+// pose guide easing off at 60%, MiniMax doesn't keep the skeleton's speed (one turn took 31 to 35 frames, not 30.75), but her
+// outline half a turn on is her outline mirrored: the length whose half-turn pairs match best is the turn. Each circle starts at
+// her front (it starts from the crane's front frame).
+async function ccOutline(u){ const im = new Image(); im.crossOrigin = 'anonymous'; im.src = u; await im.decode(); const W = 32, H = 48, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data, edge = [];
+  for(let q = 0; q < W * H; q++){ const px = q % W, py = (q / W) | 0; if(px===0 || py===0 || px===W - 1 || py===H - 1) edge.push(q); }
+  const med = k => { const v = edge.map(q => d[q * 4 + k]).sort((a, b) => a - b); return v[v.length >> 1]; }, bg = [med(0), med(1), med(2)];
+  const m = new Uint8Array(W * H); let sx = 0, n = 0; for(let q = 0; q < W * H; q++){ const o = q * 4; if(Math.abs(d[o] - bg[0]) + Math.abs(d[o + 1] - bg[1]) + Math.abs(d[o + 2] - bg[2]) > 60 && d[o + 3] > 40){ m[q] = 1; sx += q % W; n++; } }
+  const cx = n ? sx / n : W / 2, out = new Uint8Array(W * H); for(let q = 0; q < W * H; q++) if(m[q]){ const nx = Math.round(q % W - cx + W / 2); if(nx >= 0 && nx < W) out[((q / W) | 0) * W + nx] = 1; } return out; } // centred on her
+function ccHalfTurn(ms, per){ const W = 32; let s = 0, n = 0; for(let f = 0; f < ms.length; f++){ const g = Math.round(f + per / 2), a = ms[f], b = ms[g]; if(!a || !b) continue;
+    let i = 0, u = 0; for(let q = 0; q < a.length; q++){ const y = (q / W) | 0, x = q % W, am = a[y * W + (W - 1 - x)]; if(am && b[q]) i++; if(am || b[q]) u++; } if(u){ s += i / u; n++; } } return n >= 3 ? s / n : 0; }
+async function ccTurnLen(us){ let ms = []; try{ ms = await Promise.all(us.map(u => ccOutline(u).catch(() => null))); }catch(e){} const def = (TV_LEN - 1) / 4;
+  let best = def, bs = 0; for(let per = 24; per <= 44; per += 0.25){ const sc = ccHalfTurn(ms, per); if(sc > bs + 1e-9){ bs = sc; best = per; } } return bs > 0.3 ? best : def; }
+// ↻ 4.5: line her heights up again from the circles already made (new picks for the high and low ones), then their angles and
+// every finish again; the MiniMax moves aren't made again
+function ccRelineup(P){ cmStop(m3Jobs(P)); (P.orb || []).forEach(o => { if(o.step==='circle' && o.ring!==1){ delete o.pick; delete o.turn; delete o.fit; } });
+  P.views.concat(P.mids || []).forEach(v => { if(v.ring!==1 && !v.look){ v.url = ''; delete v.making; delete v.busy; delete v.err; delete v.redo; } });
+  P.lk = (P.lk || []).filter(h => h.str!=='cc').concat(ccLooks(P)); P.seed = Math.floor(Math.random() * 1e9); delete P.stopped; }
+function ccRedo(P, n){ if(n===4.5) return ccRelineup(P); const c = P.cc; cmStop(m3Jobs(P));
   if(n <= 2) c.full = ccHost(); if(n <= 3) c.redraw = ccHost(); delete P.stopped;
   if(n <= 4){ Object.keys(CM_SPC).forEach(k => { if((P.orb || []).some(o => o.id===k)) delete CM_SPC[k]; }); ccFresh(P); }
   else P.lk = (P.lk || []).filter(h => h.str!=='cc').concat(ccLooks(P));
