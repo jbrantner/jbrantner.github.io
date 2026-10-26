@@ -115,6 +115,25 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   // a second character, and deleting one
   await page.click('[data-cc="new"]');
   ok(await page.evaluate(() => ccState().chars.length===2 && !ccChar().ref && $('[data-cc="go"]').disabled), '＋ New character starts an empty one');
+  // typing in her boxes: nothing is drawn again under the finger (Jordan 2026-10-26: the box glitched and wouldn't take typing)
+  await page.evaluate(() => { const d = $('.ccstep[data-cstep="ref"]'); if(d) d.open = true; });
+  await page.click('[data-ccf="name"]'); await page.keyboard.type('Ell', {delay:30}); await page.waitForTimeout(2000); await page.keyboard.type('ie', {delay:30});
+  ok(await page.evaluate(() => ccChar().name==='Ellie' && document.activeElement===$('[data-ccf="name"]') && $('.ccchip[aria-pressed="true"]').textContent==='Ellie'), 'the name box keeps her typing, with her chip following along');
+  await page.evaluate(() => document.activeElement.blur()); await page.waitForTimeout(1700); // drawn once with her name in, as after picking her picture
+  await page.click('[data-ccf="tags"]'); await page.evaluate(() => { window._ta = $('[data-ccf="tags"]'); }); await page.keyboard.type('blue hair', {delay:30}); await page.waitForTimeout(3300);
+  await page.keyboard.type(', red eyes', {delay:30});
+  ok(await page.evaluate(() => window._ta===$('[data-ccf="tags"]') && document.activeElement===window._ta && ccChar().tags==='blue hair, red eyes'), 'with a name in, the tags box keeps her typing across the 1.5 s redraws (it glitched for Jordan)');
+  // a render from this app as her picture: its prompt, model and LoRAs fill step 1 (Jordan 2026-10-26)
+  await page.evaluate(() => { S.gallery.unshift({url:'https://jordo-desktop.test/view?filename=lib.png&subfolder=RenderDeck&type=output', t:Date.now(), prompt:'librarianx, 1girl, solo, gothic dress',
+    snap:{prompt:'librarianx, 1girl, solo, gothic dress, standing', addedTags:['purple eyes'], blocks:[{type:'model', ckpt:'iriselTouchIL_v10.safetensors'}, {type:'lora', on:true, lora:'AFKJ Style Illustrious Claude.safetensors', strength:1}, {type:'lora', on:true, lora:'librarianx_v2.safetensors', strength:1}]}}); ccDraw(true); });
+  await page.evaluate(() => { const d = $('.ccstep[data-cstep="ref"]'); if(d) d.open = true; }); await page.click('[data-cc="usepic"][data-i="0"]'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => { const c = ccChar(); return /librarianx, 1girl, solo, gothic dress/.test(c.tags) && /purple eyes/.test(c.tags) && /iriselTouch/.test(c.ckpt) && /AFKJ/.test(c.lora) && c.loras.length===1 && c.loras[0].name==='librarianx_v2.safetensors' && /librarianx_v2 1 ✕/.test($('#cc').textContent); }), 'tapping a render fills her tags from its prompt, its model, AFKJ as the style and librarianx_v2 as her own LoRA');
+  ok(await page.evaluate(() => { const c = ccChar(), k = JSON.parse(JSON.stringify(ccIllKits()[0])), L = k.oi.LoraLoader.input.required.lora_name; (Array.isArray(L[0]) ? L[0] : L[1].options).push('librarianx_v2.safetensors');
+    const g = {}; let n = 0; const add = (t, inputs) => { g[++n] = {class_type:t, inputs}; return String(n); }; ccIll(add, k, ccMakeP(c).cc, '');
+    const ls = Object.values(g).filter(x => x.class_type==='LoraLoader').map(x => x.inputs.lora_name); return ls.length===2 && /AFKJ/.test(ls[0]) && ls[1]==='librarianx_v2.safetensors'; }), 'her own LoRA is chained after AFKJ in the Illustrious steps');
+  await page.click('[data-cc="droplora"]');
+  ok(await page.evaluate(() => !ccChar().loras.length), '✕ leaves her LoRA out');
+  await page.evaluate(() => S.gallery.shift());
   await page.click('[data-cc="del"]');
   ok(await page.evaluate(() => ccState().chars.length===1 && ccChar().name==='Pinky'), '🗑 deletes the open one and opens the other');
   // the app reopened: still there
