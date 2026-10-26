@@ -42,8 +42,12 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  await page.evaluate(() => ccOpen());
-  ok(await page.evaluate(() => !$('#cc').hidden && /Character Creator/.test($('#cc').textContent) && document.querySelectorAll('.ccstep').length===5), '?cc opens the Character Creator over the app: its own top bar and the five steps');
+  await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => !$('#cc').hidden && $('#mainView').offsetParent===null && $('#tabs [data-tab="cc"]').classList.contains('on') && document.querySelectorAll('.ccstep').length===5), 'the 🧍 Character tab (beside Render and Comic) opens the Character Creator with its five steps, Render\'s screen hidden');
+  await page.click('#tabs [data-tab="comic"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => $('#cc').hidden && !$('#comic').hidden && S.tab==='comic'), '📖 Comic swaps it out');
+  await page.click('#tabs [data-tab="render"]'); await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => !$('#cc').hidden && $('#comic').hidden && S.tab==='cc'), 'and 🧍 Character comes back');
   ok(await page.evaluate(() => $('[data-cc="go"]').disabled && /Pick her picture/.test($('#cc').textContent)), '▶ Make her waits for a picture');
   // step 1: a picture from the phone, a name, tags, the style
   await page.click('.ccstep[data-cstep="ref"] summary');
@@ -88,7 +92,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.waitForFunction(() => $('#ccCv') && CCV.box.size >= 2, null, {timeout:8000}); await page.waitForTimeout(400);
   const st = await page.evaluate(() => ({deg:$('#ccDeg').textContent, hl:$('#ccHl').textContent, txt:$('#ccTxt').textContent, go:$('[data-cc="go"]').textContent, states:[...document.querySelectorAll('.ccs')].map(s => s.textContent.trim().split(' ')[0])}));
   ok(st.deg==='0°' && /Eye level · 1\/16/.test(st.hl) && /All 5 steps done · 80 angles/.test(st.txt) && /Make her again/.test(st.go) && st.states.every(s => s==='Done'), 'all 80 in: the viewer opens at eye level, front, and every step says Done: ' + JSON.stringify(st));
-  await page.evaluate(() => { $('#cc').scrollTop = 0; }); await page.waitForTimeout(100);
+  await page.evaluate(() => $('.ccstage').scrollIntoView({block:'center'})); await page.waitForTimeout(100);
   const box = await page.$('#ccStage').then(e => e.boundingBox());
   const drag = async (dx, dy) => { await page.mouse.move(box.x + 150, box.y + 300); await page.mouse.down(); await page.mouse.move(box.x + 150 + dx, box.y + 300 + dy, {steps:12}); await page.waitForTimeout(150); await page.mouse.up(); await page.waitForTimeout(150); };
   await drag(box.width / 4, 0);
@@ -116,6 +120,10 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   // the app reopened: still there
   await page.goto('https://app.test/?cc'); await page.waitForTimeout(500);
   ok(await page.evaluate(() => !$('#cc').hidden && ccChar().name==='Pinky' && !!ccP(ccChar())), 'reopening the page with ?cc opens the Character Creator on her again');
+  await page.click('#tabs [data-tab="render"]'); await page.goto('https://app.test/'); await page.waitForTimeout(500);
+  ok(await page.evaluate(() => $('#cc').hidden && !$('#mainView').hidden), 'left on Render, the app reopens on Render');
+  await page.click('#tabs [data-tab="cc"]'); await page.goto('https://app.test/'); await page.waitForTimeout(500);
+  ok(await page.evaluate(() => !$('#cc').hidden && S.tab==='cc'), 'left on 🧍 Character, the app reopens on it');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
