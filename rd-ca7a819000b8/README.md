@@ -294,3 +294,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 - 🧍 Character, heights lined up: the high and low circles get their own turn length from their frames (her outline half a turn on is her outline mirrored), starting at her front. With the pose guide letting go at 60%, MiniMax took 31–35 frames a turn, not 30.75, so the higher views drifted to ¾ where eye level was front. `ccredo:4.5` lines a character up again from the circles already made (new angles for those heights and every finish; no new MiniMax moves).
 - 🧍 Character, colours: step 3 ends colour-matched (on her alone, 1.0) to the full body MiniMax made, and step 5 matches every angle to the full body at 0.8. The AFKJ redraw had lifted her blacks 2.3× and lost 39% of her colour, and step 5 was pinned to that.
+
+## 2026-10-26.194
+
+- 🧍 Character: a circle's own turn is now found from how wide her shoulders and arms are (narrowest from the sides, which are half a turn apart) and, when the clip comes back round to her front, the frame most like the first. The mirrored-outline fit in v.193 locked on to wrong turns (24 frames for one of 31) because from front and back she is near enough symmetric.
