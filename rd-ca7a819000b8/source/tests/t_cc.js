@@ -120,6 +120,13 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   ok(await page.evaluate(() => { const P = ccP(ccChar()), h = P.lk.find(x => x.str==='cc' && x.ring===1 && x.i===1 && !x.mid), keep = h.url; h.url = '';
     const pics = ccPics(P), raw = pics[2][2]; CCV.key = ''; ccViewer(pics); CCV.h = 2; const n = ccNear(2); h.url = keep; CCV.key = ''; ccViewer(ccPics(P));
     return raw==='' && n && /_1_0m?\.png|_1_1m\.png/.test(n.im.src) && n.ring===1; }), 'an unfinished angle shows the nearest finished one at that height, not its grey MiniMax frame');
+  // 🧊 Open in 3D (Jordan 2026-10-26): her finished angles go to the 3D viewer, anchored on her body
+  ok(await page.evaluate(() => { const P = ccP(ccChar()); cmPoseSync(); const sp = JSON.parse(localStorage.getItem('rd-pose-sprites')).find(x => x.id===P.id);
+    return sp && sp.cc===true && sp.views.length===40 && sp.views16.length===80 && sp.views.every(u => /filename=f_/.test(u)) && sp.views16.every(u => /filename=f_/.test(u)) && sp.views[8]===sp.src; }), 'Open in 3D hands the viewer her 80 finished angles (8 and 16 round each height), marked as a character');
+  await page.evaluate(() => $('[data-cc="open3d"]').scrollIntoView()); await page.click('[data-cc="open3d"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => { const f = $('#cc3d iframe'); return !$('#cc3d').hidden && f && /rig\/view\.html\?pose=/.test(f.getAttribute('src')); }), '🧊 Open in 3D shows her in the 3D viewer over the page');
+  await page.click('[data-cc3d="close"]');
+  ok(await page.evaluate(() => $('#cc3d').hidden), '✕ Close goes back to the Character tab');
   // ↻ Redo from here: step 5 again keeps the turnaround; step 3 again starts the 🧊 over from a new redraw
   await page.evaluate(() => { const P = ccP(ccChar()); ccRedo(P, 5); });
   ok(await page.evaluate(() => { const P = ccP(ccChar()); return P.lk.filter(h => h.str==='cc' && !h.url).length===80 && P.views.every(v => v.url) && P.src; }), '↻ Redo from step 5 makes the 80 finishes again and keeps the turnaround');
