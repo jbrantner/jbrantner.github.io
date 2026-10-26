@@ -280,3 +280,8 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-26.190
 
 - 🧍 Character: step 4's cut-outs and step 5's finishes only go to a PC with BiRefNet (Main has none yet, so 22 of Ellie's angles came back without a cut-out). Step 5 now finds her outline with BiRefNet, kept inside the picture's own cut-out, so a picture without one no longer has its white background repainted as part of her.
+
+## 2026-10-26.191
+
+- 🧍 Character viewer: her turning axis is the middle of her body (35–65% of her height) and her floor point is the middle of where her feet touch. From above she no longer orbits the centre: the old anchor was the bottom band, which from up there is only the foot nearer the camera.
+- Step 5 saves every angle as a see-through PNG (her outline as the alpha); the viewer still draws her on white.

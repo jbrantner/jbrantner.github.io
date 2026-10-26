@@ -13,7 +13,7 @@ const DEF = {
   SamplerCustomAdvanced:[['noise','guider','sampler','sigmas','latent_image'],2], VAEDecodeTiled:[['samples','vae','tile_size','overlap','temporal_size','temporal_overlap'],1], SaveImage:[['images','filename_prefix'],0],
   CheckpointLoaderSimple:[['ckpt_name'],3], CLIPSetLastLayer:[['clip','stop_at_clip_layer'],1], LoraLoader:[['model','clip','lora_name','strength_model','strength_clip'],2], CLIPTextEncode:[['clip','text'],1],
   ImageScale:[['image','upscale_method','width','height','crop'],1], VAEEncode:[['pixels','vae'],1], VAEDecode:[['samples','vae'],1], EmptyImage:[['width','height','batch_size','color'],1],
-  ImageCompositeMasked:[['destination','source','x','y','resize_source'],1], GrowMask:[['mask','expand'],1], InvertMask:[['mask'],1], MaskComposite:[['destination','source','x','y','operation'],1], SetLatentNoiseMask:[['samples','mask'],1],
+  ImageCompositeMasked:[['destination','source','x','y','resize_source'],1], GrowMask:[['mask','expand'],1], InvertMask:[['mask'],1], JoinImageWithAlpha:[['image','alpha'],1], MaskComposite:[['destination','source','x','y','operation'],1], SetLatentNoiseMask:[['samples','mask'],1],
   AnimeLineArtPreprocessor:[['image','resolution'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1],
   ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1],
@@ -85,7 +85,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
     ok(ks.denoise===0.3 && ks.sampler_name==='euler' && cns[0].strength===0.8 && cns[0].end_percent===0.8 && cns[1].strength===0.6 && cns[1].end_percent===1 && types.includes('tile'), 'step 5: repaint 0.3 (euler) with line art 0.8 to 80% and tile 0.6');
     ok(fd.denoise===0.25 && fd.feather===24 && fd.noise_mask_feather===32 && fd.sam_model_opt, 'step 5: the soft SAM face fix');
     ok(cm && cm.inputs.strength===0.6 && of(fin, 'LoadImage').some(n => n.inputs.image==='front.png') && !of(fin, 'ColorMatch').length, 'step 5: colour matched on her cut-out to the step 3 front at 0.6 (no whole-frame ColorMatch)');
-    ok(of(fin, 'InvertMask').length===1 && of(fin, 'ImageCompositeMasked').length===2, 'step 5: her outline comes from the cut-out, white round her before and after'); }
+    ok(of(fin, 'InvertMask').length===2 && of(fin, 'ImageCompositeMasked').length===2 && of(fin, 'JoinImageWithAlpha').length===1, 'step 5: her outline comes from the cut-out, white round her before and after, saved see-through'); }
   ok(await page.evaluate(() => { const oi = Object.assign({}, ccIllKits()[0].oi); delete oi.RenderDeckCutoutColorMatch; const P = ccP(ccChar()), v = P.lk[0]; return !Object.values(ccFinishGraph(Object.assign({}, ccIllKits()[0], {oi}), P.cc, v, 'a.png', 'b.png', 'p', 1).g).some(n => /ColorMatch/.test(n.class_type)); }), 'a computer without the new helper finishes without the colour match');
   // the viewer: every angle in, she turns by dragging, the height changes up and down, her feet and size stay put
   await page.evaluate(() => { const P = ccP(ccChar()); P.views.concat(P.mids).forEach(v => v.url = 'https://jordo-desktop.test/view?filename=a_' + v.ring + '_' + v.i + (v.mid ? 'm' : '') + '.png'); P.lk.forEach(h => h.url = 'https://jordo-desktop.test/view?filename=f_' + h.ring + '_' + h.i + (h.mid ? 'm' : '') + '.png'); P.orb.forEach(o => { o.urls = ['https://jordo-desktop.test/view?filename=o.png']; delete o.err; delete o.making; }); save(); CCV.key = ''; ccDraw(true); });
@@ -111,6 +111,11 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   const noBg = async bg => page.evaluate(async bg => { const real = cmIllKits; cmIllKits = () => real().map(k => Object.assign({}, k, bg ? {} : {bg:''})); const P = ccP(ccChar()), h = P.lk[0], keep = h.url; h.url = ''; delete h.making; delete h.err; CM_SENT.length = 0;
     cmPoseRun(P, true); await new Promise(r => setTimeout(r, 600)); const sent = CM_SENT.length > 0 || !!h.making || !!h.busy || (h.url && h.url!==''); delete h.making; delete h.busy; h.url = keep; cmIllKits = real; return sent; }, bg);
   ok(await noBg(true) && !await noBg(false), 'step 4/5 jobs go to a PC with BiRefNet, never to one without');
+  ok(await page.evaluate(() => { const P = ccP(ccChar()), G = ccFinishGraph(ccIllKits()[0], P.cc, P.lk[0], 'a.png', 'f.png', 'p', 1).g, N = Object.values(G), sv = N.find(n => n.class_type==='SaveImage'), j = G[sv.inputs.images[0]];
+    return j.class_type==='JoinImageWithAlpha' && G[j.inputs.alpha[0]].class_type==='InvertMask' && G[G[j.inputs.alpha[0]].inputs.mask[0]].class_type==='MaskComposite'; }), 'step 5 saves her as a see-through PNG (her outline as the alpha)');
+  // her axis: from above, the lowest band is only the near foot; the top of her head stays on her turning axis
+  ok(await page.evaluate(async () => { const c = document.createElement('canvas'); c.width = 400; c.height = 700; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 400, 700); x.fillStyle = '#222';
+    x.fillRect(180, 40, 40, 50); x.fillRect(150, 90, 100, 450); x.fillRect(230, 540, 60, 80); const im = new Image(); im.src = c.toDataURL(); await im.decode(); ccMeasure(im); const b = CCV.box.get(im.src); return Math.abs(b.cx - 0.5) < 0.02; }), 'her axis is the middle of her body, not the foot nearer the camera');
   // an angle whose finish isn't in yet: never the raw MiniMax frame (grey, not cut out), the nearest finished angle holds instead (Jordan 2026-10-26)
   ok(await page.evaluate(() => { const P = ccP(ccChar()), h = P.lk.find(x => x.str==='cc' && x.ring===1 && x.i===1 && !x.mid), keep = h.url; h.url = '';
     const pics = ccPics(P), raw = pics[2][2]; CCV.key = ''; ccViewer(pics); CCV.h = 2; const n = ccNear(2); h.url = keep; CCV.key = ''; ccViewer(ccPics(P));

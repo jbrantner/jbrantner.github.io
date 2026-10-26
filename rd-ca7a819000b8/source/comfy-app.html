@@ -680,7 +680,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-26.190'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-26.191'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -9447,10 +9447,12 @@ function ccFinishGraph(k, c, v, img, ref, prefix, seed){
   let out = [add('ImageCompositeMasked', {destination:ccWhite(add, W, H), source:face, x:0, y:0, resize_source:false, mask:her}), 0];
   // her dress colour held to the front: measured and matched on her alone (the white round her left out), at 0.6
   if(k.oi.RenderDeckCutoutColorMatch) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:[add('LoadImage', {image:ref}), 0], strength:0.6}), 0];
+  // saved see-through round her (Jordan 2026-10-26: a clear PNG, to stand in a 3D scene); the viewer draws her on white
+  if(k.oi.JoinImageWithAlpha) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:her}), 0]}), 0];
   return {g, save:add('SaveImage', {images:out, filename_prefix:prefix})}; }
 // a computer for each step
 function ccFullKit(){ const k = kitTurn(); return k.why || !k.lora ? (k.why ? k : Object.assign(k, {why:'Step 2 needs MiniMax H3 Turbo with its ref2v 4-step LoRA'})) : k; }
-const CC_FAKE = {FaceDetailer:{input:{required:{}}}, UltralyticsDetectorProvider:{input:{required:{}}}, SAMLoader:{input:{required:{}}}, RenderDeckCutoutColorMatch:{input:{required:{}}}, CLIPSetLastLayer:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, EmptyImage:{input:{required:{}}}, UpscaleModelLoader:{input:{required:{model_name:[['RealESRGAN_x4plus_anime_6B.pth']]}}}};
+const CC_FAKE = {JoinImageWithAlpha:{input:{required:{}}}, FaceDetailer:{input:{required:{}}}, UltralyticsDetectorProvider:{input:{required:{}}}, SAMLoader:{input:{required:{}}}, RenderDeckCutoutColorMatch:{input:{required:{}}}, CLIPSetLastLayer:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, EmptyImage:{input:{required:{}}}, UpscaleModelLoader:{input:{required:{model_name:[['RealESRGAN_x4plus_anime_6B.pth']]}}}};
 function ccIllKits(){ if(S.test) return cmIllKits().map(k => Object.assign({}, k, {oi:Object.assign({}, k.oi, CC_FAKE), bg:k.bg || 'BiRefNet-general.safetensors', esr:'RealESRGAN_x4plus_anime_6B.pth'})); return cmIllKits().filter(k => k.cn && k.bg && k.oi.AnimeLineArtPreprocessor && k.oi.EmptyImage).map(k => Object.assign({}, k, {esr:combo(k.oi.UpscaleModelLoader, 'model_name').find(n => /realesrgan_x4plus_anime/i.test(baseName(n)))})); }
 async function ccSend(h, k, G, kind, mins){ if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 120)); delete h.busy; cmGot(h, 'ccstep', {url:'https://jordo-desktop.test/view?filename=' + kind + '_' + Date.now().toString(36) + '.png'}); return; }
   const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
@@ -9561,8 +9563,14 @@ function ccBig(u){ const m = mini(u); return m===u ? u : m + '&size=900'; }
 function ccMeasure(im){ if(CCV.box.has(im.src)) return; try{ const W = 192, H = Math.round(W * im.naturalHeight / im.naturalWidth), c = document.createElement('canvas'); c.width = W; c.height = H;
   const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data; let top = H, bot = -1, l = W, r = -1;
   for(let y = 0; y < H; y++) for(let q = 0; q < W; q++){ const o = (y * W + q) * 4; if(Math.min(d[o], d[o + 1], d[o + 2]) < 232 && d[o + 3] > 40){ if(y < top) top = y; if(y > bot) bot = y; if(q < l) l = q; if(q > r) r = q; } }
-  if(bot < 0) return; let fl = W, fr = -1; for(let y = Math.max(top, bot - Math.round((bot - top) * 0.06)); y <= bot; y++) for(let q = 0; q < W; q++){ const o = (y * W + q) * 4; if(Math.min(d[o], d[o + 1], d[o + 2]) < 232 && d[o + 3] > 40){ if(q < fl) fl = q; if(q > fr) fr = q; } }
-  CCV.box.set(im.src, {top:top / H, bot:(bot + 1) / H, cx:(fl + fr + 1) / 2 / W}); }catch(e){ CCV.box.set(im.src, null); } }
+  // her turning axis: the middle of her body (35-65% of her height), steady from every height (Jordan 2026-10-26: from above she
+  // orbited the centre, because the lowest band there is only the foot nearer the camera)
+  if(bot < 0) return; const on = (q, y) => { const o = (y * W + q) * 4; return Math.min(d[o], d[o + 1], d[o + 2]) < 232 && d[o + 3] > 40; };
+  let tx = 0, tn = 0; for(let y = Math.round(top + (bot - top) * 0.35); y <= Math.round(top + (bot - top) * 0.65); y++) for(let q = 0; q < W; q++) if(on(q, y)){ tx += q; tn++; }
+  // and the floor: the middle of where her feet touch (the lowest point of each bit of her near the bottom), not the nearer toe
+  const low = []; for(let q = 0; q < W; q++){ for(let y = bot; y >= bot - Math.round((bot - top) * 0.08); y--) if(on(q, y)){ low.push(y); break; } } low.sort((p, q) => p - q);
+  const fy = low.length ? low[low.length >> 1] + 1 : bot + 1;
+  CCV.box.set(im.src, {top:top / H, bot:fy / H, cx:tn ? (tx / tn + 0.5) / W : (l + r + 1) / 2 / W}); }catch(e){ CCV.box.set(im.src, null); } }
 // an angle not finished yet holds the nearest finished one (same height first, then eye level), never a fade
 function ccNear(k){ const ok = x => x && x.complete && x.naturalWidth; for(const r of [CCV.h, 2]){ const row = CCV.imgs[r] || []; for(let d = 0; d <= 8; d++) for(const j of [k + d, k - d]){ const im = row[((j % 16) + 16) % 16]; if(ok(im)) return {im, ring:CC_HEIGHTS[r][0]}; } } return null; }
 function ccPaint(){ const cv = $('#ccCv'); if(!cv) return; const k = ((Math.round(CCV.a) % 16) + 16) % 16, ctx = cv.getContext('2d'), near = ccNear(k), im = near && near.im;
