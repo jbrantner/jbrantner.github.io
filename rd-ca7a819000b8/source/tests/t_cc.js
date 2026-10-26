@@ -105,6 +105,10 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
     return {eye:at(2), high:at(0)}; });
   const he = feet.eye[1] - feet.eye[0], hh = feet.high[1] - feet.high[0];
   ok(Math.abs(feet.eye[1] - feet.high[1]) <= 5 && Math.abs(hh / he - Math.cos(35 * Math.PI / 180) / Math.cos(5 * Math.PI / 180)) < 0.03, 'her feet stay on one floor point and the high view is her eye-level height × cos 35° (no size jump): ' + JSON.stringify(feet));
+  // an angle whose finish isn't in yet: never the raw MiniMax frame (grey, not cut out), the nearest finished angle holds instead (Jordan 2026-10-26)
+  ok(await page.evaluate(() => { const P = ccP(ccChar()), h = P.lk.find(x => x.str==='cc' && x.ring===1 && x.i===1 && !x.mid), keep = h.url; h.url = '';
+    const pics = ccPics(P), raw = pics[2][2]; CCV.key = ''; ccViewer(pics); CCV.h = 2; const n = ccNear(2); h.url = keep; CCV.key = ''; ccViewer(ccPics(P));
+    return raw==='' && n && /_1_0m?\.png|_1_1m\.png/.test(n.im.src) && n.ring===1; }), 'an unfinished angle shows the nearest finished one at that height, not its grey MiniMax frame');
   // ↻ Redo from here: step 5 again keeps the turnaround; step 3 again starts the 🧊 over from a new redraw
   await page.evaluate(() => { const P = ccP(ccChar()); ccRedo(P, 5); });
   ok(await page.evaluate(() => { const P = ccP(ccChar()); return P.lk.filter(h => h.str==='cc' && !h.url).length===80 && P.views.every(v => v.url) && P.src; }), '↻ Redo from step 5 makes the 80 finishes again and keeps the turnaround');
