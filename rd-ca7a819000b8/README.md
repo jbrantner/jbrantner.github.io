@@ -272,3 +272,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🧍 Character: typing in the name and tags boxes works again (a redraw every 1.5 s took the box away once she had a name).
 - Tapping one of your renders as her picture fills step 1 from that render: its prompt (plus added tags) as her tags, its model, AFKJ as the style LoRA and any other LoRA (her character LoRA) under "Her LoRAs", used in the Illustrious steps with its activation words. ✕ leaves one out. Only a picture with no recipe goes to the tagger.
 - When a PC doesn't have the WD tagger yet, "Read them from the picture" offers to get it (1.26 GB, once) and reads the tags when it's in, instead of stopping with an error.
+
+## 2026-10-26.189
+
+- 🧍 Character viewer: only finished (step 5) angles are shown. An angle still waiting for its finish holds the nearest finished one at that height (or eye level) instead of its raw MiniMax frame, which was on grey, not cut out, and came out too big. No fade.
