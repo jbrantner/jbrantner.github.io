@@ -289,3 +289,8 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-26.192
 
 - 🧍 Character: 🧊 Open in 3D stands her in the 3D viewer (grey room, grid floor, orbit / pan / zoom), with her 80 finished see-through angles (16 round each of the 5 heights). In the viewer a character stands on the middle of her body and where her feet touch, upright, so she turns on her own axis from every height.
+
+## 2026-10-26.193
+
+- 🧍 Character, heights lined up: the high and low circles get their own turn length from their frames (her outline half a turn on is her outline mirrored), starting at her front. With the pose guide letting go at 60%, MiniMax took 31–35 frames a turn, not 30.75, so the higher views drifted to ¾ where eye level was front. `ccredo:4.5` lines a character up again from the circles already made (new angles for those heights and every finish; no new MiniMax moves).
+- 🧍 Character, colours: step 3 ends colour-matched (on her alone, 1.0) to the full body MiniMax made, and step 5 matches every angle to the full body at 0.8. The AFKJ redraw had lifted her blacks 2.3× and lost 39% of her colour, and step 5 was pinned to that.
