@@ -204,10 +204,13 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   ok(check(rg).length===0 && us.inputs.seam_fix_mode==='Band Pass' && us.inputs.tile_padding===64 && us.inputs.mask_blur===16 && us.inputs.seam_fix_denoise<=0.3, 'redraw smooths seams: ' + check(rg).join('; '));
   const usId = Object.keys(rg).find(k => rg[k]===us), src = us.inputs.image || rg[us.inputs.upscaled_image[0]].inputs.image;
   ok(cf && cf[1].inputs.image[0]===usId && JSON.stringify(cf[1].inputs.image_ref)===JSON.stringify(src) && rg[src[0]].class_type==='VAEDecode', 'keep colours matches the redraw to the picture before it');
+  const ckId = Object.keys(rg).find(k => rg[k].class_type==='CheckpointLoaderSimple');
+  ok(rg[us.inputs.model[0]].class_type==='LoraLoader', 'with keep colours the tiles are redrawn with the LoRAs');
   const fd = Object.values(rg).find(x => x.class_type==='FaceDetailer');
   ok(fd ? fd.inputs.image[0]===cf[0] : rg[Object.keys(rg).find(k => rg[k].class_type==='SaveImage')].inputs.images[0]===cf[0], 'the colour-fixed picture goes on to faces or the save');
   await page.click('.block[style*="--up"] [data-do=seams]'); await page.click('.block[style*="--up"] [data-do=keepColour]');
   rg = await upGraph(); us = Object.values(rg).find(x => /^UltimateSDUpscale/.test(x.class_type));
+  ok(us.inputs.model[0]===ckId, 'without keep colours the tiles use the bare checkpoint');
   ok(us.inputs.seam_fix_mode==='None' && !Object.values(rg).some(x => x.class_type==='RenderDeckUpscaleColorFix') && /Smooth seams: off/.test(await page.textContent('.block[style*="--up"]')), 'both switch off');
   await page.click('.block[style*="--up"] [data-do=seams]'); await page.click('.block[style*="--up"] [data-do=keepColour]');
   await page.click('.block[style*="--up"] [data-seg=mode][data-v=model]');
