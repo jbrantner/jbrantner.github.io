@@ -680,7 +680,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-26.194'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-27.195'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6814,6 +6814,24 @@ function cmEyeMath(ths, face, len, turn){ const t = ths.slice().sort((a, b) => a
 const CM_SP_EL = [-25, 5, 35, 20, -10]; // the rig's low / eye / high rings, and (Jordan 2026-10-24, 5 heights) a little high / a little low
 // the two in-between heights (rings 3 and 4) are half way up the crane up and half way down the crane down, so each of those
 // turns starts from the crane's middle frame; the high and low turns from its last
+// 🧍 a character's heights (Jordan 2026-10-27): the high and low angles come from each eye-level side (one clip per side that
+// rises to high, then sinks past eye level to low), so every height shows the back the eye-level turn drew; low stays above
+// the floor (the rig's camera is 2.3× her height from her hips: at −25° it was below the floor, at −10° at her shins)
+const CC_SW_EL = [-12, 5, 35, 20, -4];
+const ccRingEl = P => P && P.ringEl || CM_SP_EL;
+// the clip's path: [t (0..1 of the clip), degrees], one steady speed all the way, and the frames each height is taken from
+// ([start, a little high, high, eye level again, a little low, low]; the eye level again is the drift check)
+function ccSweepKeys(){ const [lo, eye, hi] = CC_SW_EL, up = hi - eye, dn = hi - lo, tt = up / (up + dn); return [[0, eye], [tt, hi], [1, lo]]; }
+function ccSweepPicks(){ const k = ccSweepKeys(), L = TV_LEN - 1, [, eye, hi, mh, ml] = CC_SW_EL, lo = CC_SW_EL[0], tt = k[1][0];
+  const up = el => (el - eye) / (hi - eye) * tt, dn = el => tt + (hi - el) / (hi - lo) * (1 - tt);
+  return [0, up(mh), tt, dn(eye), dn(ml), 1].map(t => Math.round(t * L)); }
+const CC_SW_AT = {3:1, 2:2, 4:4, 0:5}; // ring → which of the picks
+const ccSweepOf = (P, i) => (P.orb || []).find(o => o.step==='sweep' && o.side===i);
+function ccSweepPrompt(){ const T = TV_LEN / 24, s = x => (x * T).toFixed(1), k = ccSweepKeys(), eyeT = ccSweepPicks()[3] / (TV_LEN - 1);
+  return 'The first frame shows ' + CM_SP_SCENE + '. One continuous camera move straight up and then straight down, at one steady speed, always keeping her whole body centred and the same size. The camera never circles around her: she keeps facing exactly the same way as in the first frame the whole time. '
+    + '[0s-' + s(k[1][0]) + 's] The camera cranes up in an arc over her and tilts down: by ' + s(k[1][0]) + ' seconds it looks down on her from high above, so we see the top of her head and shoulders. '
+    + '[' + s(k[1][0]) + 's-' + s(1) + 's] The camera sinks back down in the same arc, passes her eye level at ' + s(eyeT) + ' seconds, and keeps going down to the height of her knees, tilting up to look slightly up at her by ' + s(1) + ' seconds. '
+    + 'The background stays plain white the whole time, with no floor, shadows or scenery. She is frozen in the moment of the first frame: same pose, same expression, nothing moves except the camera. Same art style, colours and lighting as the first frame. No cuts, no zoom, no new characters. Silence.'; }
 const cmCraneRing = r => r===3 ? 2 : r===4 ? 0 : r, cmRingName = r => ['low', 'eye level', 'high', 'a little high', 'a little low'][r] || '';
 function cmCraneUrl(P, ring){ const c = (P.orb || []).find(o => o.step==='crane' && o.ring===cmCraneRing(ring)), us = c && c.urls || []; return ring >= 3 ? (us.length > 1 ? us[0] : '') : us[us.length - 1]; }
 async function m3RigSpin(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); const fr = document.createElement('iframe');
@@ -6825,10 +6843,10 @@ async function m3RigSpin(P){ if(M3_RIG.has(P.id)) return; M3_RIG.add(P.id); cons
     if(P.orbRig){ const turn = eye && eye.turn || 30, us = eye && eye.urls || [], ix = []; for(let f = 0; f < Math.min(turn, us.length); f += 2) ix.push(Math.round(f));
       if(ix.length < 4) throw new Error('the eye-level turn has too few frames');
       r = await R.poseFromOrbit(ix.map(f => us[f]), ix.map(f => 2 * Math.PI * f / turn), dw && dw.url, (k, n) => { P.rigMsg = 'Fitting the rig to her turn: view ' + (k + 1) + ' of ' + n + '…'; if($('#m3Box')) m3Draw(); });
-      P.rigFit = {used:r.used, n:r.n, flips:r.flips}; if(eye && r.ths && r.ths.length >= 2){ const pk = cmEyeMath(r.ths.map(([k, th]) => [ix[k], th]), r.face, us.length, turn); if(pk){ eye.pick = pk; eye.math = true; } } }
+      P.rigFit = {used:r.used, n:r.n, flips:r.flips}; if(eye && r.ths && r.ths.length >= 2){ const pk = cmEyeMath(r.ths.map(([k, th]) => [ix[k], th]), r.face, us.length, turn); if(pk && !(P.sweep && eye.math)){ eye.pick = pk; eye.math = true; } } } // 🧍 a re-made height keeps the eye-level angles it starts from
     else r = await R.poseFromPicture(P.src, dw && dw.url);
     await new Promise(res => setTimeout(res, 300)); P.partial = r.partial;
-    const led = P.orb.filter(o => cmOrbCtl(P, o)), mv = led.map(o => o.step==='crane' ? {kind:'crane', from:CM_SP_EL[1], to:CM_SP_EL[o.ring]} : {kind:'circle', el:CM_SP_EL[o.ring]});
+    const led = P.orb.filter(o => cmOrbCtl(P, o)), mv = led.map(o => o.step==='sweep' ? {kind:'path', side:((o.side - (P.off || 0) + 8) % 8) * 45, keys:ccSweepKeys()} : o.step==='crane' ? {kind:'crane', from:CM_SP_EL[1], to:CM_SP_EL[o.ring]} : {kind:'circle', el:CM_SP_EL[o.ring]});
     const sp = R.spinGuides(P.mw || CM_SP_MW, P.mh || CM_SP_MH, TV_LEN, mv); led.forEach((o, n) => { CM_SPC[o.id] = sp.moves[n]; }); P.fit = sp.fit; P.face = sp.facing || 0;
     // her head-top-to-feet line, turned so her front is at 0°: the viewer pins each angle's picture to it
     try{ const w = n => R.wpos(R.bones[n]), H = w('headTop'), fl = w('footL'), fr = w('footR'), F = fl.clone().add(fr).multiplyScalar(0.5); F.y = Math.min(fl.y, fr.y, 0);
@@ -6880,7 +6898,7 @@ function m3Idle(P){ const js = m3Jobs(P); if(!js.length) return ''; const mine =
   return cmFlKits().filter(k => !mine.has(k.url) && pcOf(k.url).load > 0).map(k => other(k.url) ? `<p class="note">${esc(pcName(k.url))} is busy with another 3D (${esc(other(k.url).name || '🧊')}); it joins in when that's done, or stop that one.</p>` : `<p class="note">${esc(pcName(k.url))} isn't helping: it has ${pcOf(k.url).load} other job${pcOf(k.url).load > 1 ? 's' : ''} waiting in its line.</p><div class="btnrow"><button class="btn" data-m3clear="${esc(k.url)}">✕ Clear ${esc(pcName(k.url))}'s line</button></div>`).join(''); }
 function m3Live(P){ const js = m3Jobs(P), w = cmPoseWaiting(P), wn = w ? `<p class="note">${w} more waiting; each goes to the next computer that is free.</p>` : ''; if(!js.length) return wn;
   return m3Idle(P) + '<div class="m3live">' + js.map(v => { const id = v.making.id, e = cmEta(v) || {f:0, text:''};
-    return `<div class="m3job"><div class="grow"><b>${v.step ? (v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===1 ? '' : ' ' + cmRingName(v.ring))) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
+    return `<div class="m3job"><div class="grow"><b>${v.step ? (v.step==='sweep' ? '🎬 Up and down from ' + (['the front', 'her ¾', 'her side', 'her back ¾', 'her back', 'her back ¾', 'her other side', 'her ¾'][v.side] || 'a side') : v.step==='crane' ? (v.ring===2 ? '🎬 Rising' : '🎬 Lowering') : '🎬 Circling' + (v.ring===1 ? '' : ' ' + cmRingName(v.ring))) : '🎨 Painting an angle'} · ${esc(pcName(v.making.pc))}</b>
       <div class="pbar obbar"><i data-m3bar="${esc(id)}" style="width:${(100 * e.f).toFixed(1)}%"></i></div><p class="note" data-m3txt="${esc(id)}">${esc(e.text)}</p></div></div>`; }).join('') + '</div>' + wn; }
 function m3Bars(){ const P = (S.cmPoses || []).find(x => x.id===M3.P); if(!P || !$('#m3Box')) return;
   m3Jobs(P).forEach(v => { const e = cmEta(v); if(!e) return; const id = v.making.id;
@@ -7233,16 +7251,17 @@ async function cmPoseScore(P, round){ const cs = P.cands.filter(c => c.round===r
 function cmPosePick(P, c, auto){ const v = P.views.find(x => x.ring===1 && x.i===c.i && !x.look); if(v){ v.url = c.url; v.seed = c.seed; } P.src = c.url; P.off = c.i; P.picked = c.id; P.auto = !!auto;
   save(); cmPoseSync(); cmPoseRun(P); }
 function cmPoseOrbs(five){ return [{step:'circle', ring:1}, {step:'crane', ring:2}, {step:'crane', ring:0}, {step:'circle', ring:2}, {step:'circle', ring:0}].concat(five ? [{step:'circle', ring:3}, {step:'circle', ring:4}] : []).map(o => Object.assign({id:uid('so'), urls:[]}, o)); }
-function cmPoseOrbPrompt(o){ return o.step==='crane' ? obPrompt(o.ring===2 ? 'up' : 'down', 0, 35, CM_SP_SCENE) : circlePrompt(CM_SP_SCENE, true, ['low', '', 'high', 'midhigh', 'midlow'][o.ring] || ''); }
+function cmPoseOrbPrompt(o){ if(o.step==='sweep') return ccSweepPrompt(); return o.step==='crane' ? obPrompt(o.ring===2 ? 'up' : 'down', 0, 35, CM_SP_SCENE) : circlePrompt(CM_SP_SCENE, true, ['low', '', 'high', 'midhigh', 'midlow'][o.ring] || ''); }
 // the circle comes back to the front at about 5 s (frame 120): every 15th frame is the next 45°; a crane keeps its middle frame
 // (where the in-between turn starts) and its last
-const cmPosePicks = o => o.step==='crane' ? [Math.round((TV_LEN - 1) / 2), TV_LEN - 1] : Array.from({length:31}, (_, n) => n * 4); // every 4th frame, so the angles can be picked
+const cmPosePicks = o => o.step==='sweep' ? ccSweepPicks() : o.step==='crane' ? [Math.round((TV_LEN - 1) / 2), TV_LEN - 1] : Array.from({length:31}, (_, n) => n * 4); // every 4th frame, so the angles can be picked
 // 🎯 lining up the angles (Jordan 2026-10-23: "the angles haven't lined up very well"): MiniMax doesn't always take exactly
 // 5 s per turn, so the frame where she is back to the front is found (her outline closest to the first frame's, in the
 // second half), and the 8 angles are spread evenly over that turn. Then she can shift any of them before the paint.
 const cmPickOf = o => o && (o.pick || ((o.urls || []).length===8 ? [0, 1, 2, 3, 4, 5, 6, 7] : null));
 const cmRingOk = (P, ring) => { const o = (P.orb || []).find(x => x.step==='circle' && x.ring===ring); return !!(cmPickOf(o) && ((o.urls || []).length===8 || S.m3Pick===false || P.goOn || (P.pickOk || {})[ring])); };
-function cmPoseFrame(P, v){ const o = (P.orb || []).find(x => x.step==='circle' && x.ring===v.ring), pk = cmPickOf(o); if(!pk || !cmRingOk(P, v.ring)) return null;
+function cmPoseFrame(P, v){ if(P.sweep && v.ring!==1){ const w = ccSweepOf(P, v.i); return !v.mid && w && w.ok && (w.urls || [])[CC_SW_AT[v.ring]] || null; }
+  const o = (P.orb || []).find(x => x.step==='circle' && x.ring===v.ring), pk = cmPickOf(o); if(!pk || !cmRingOk(P, v.ring)) return null;
   if(!v.mid) return o.urls[pk[(v.i - (P.off || 0) + 8) % 8]];
   const T = o.turn || o.urls.length - 1, a = pk[(v.i - (P.off || 0) + 8) % 8], b = pk[(v.i + 1 - (P.off || 0) + 8) % 8]; let d = ((b - a) % T + T) % T; if(d > T / 2) d -= T;
   return o.urls.length > 8 ? o.urls[Math.round(((a + d / 2) % T + T) % T)] || null : null; }
@@ -7297,7 +7316,7 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
   let b = null; for(const f of picks){ const one = add('ImageFromBatch', {image:[dec,0], batch_index:f, length:1}); b = b ? add('ImageBatch', {image1:[b,0], image2:[one,0]}) : one; }
   return {g, save:add('SaveImage', {images:[b,0], filename_prefix:prefix})}; }
 async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.busyPc = k.url; o.from = src; delete o.err; drawComic();
-  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + CM_SP_RING[o.ring], P.hid), picks = cmPosePicks(o), ctl = cmOrbCtl(P, o) ? await cmCtlUp(P, o, k) : null;
+  try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + (o.step==='sweep' ? 'side' + o.side : CM_SP_RING[o.ring]), P.hid), picks = cmPosePicks(o), ctl = cmOrbCtl(P, o) ? await cmCtlUp(P, o, k) : null;
     const ro = cmOutfitRefs(P, o), rk = ro && cmRefKit(k, !!ctl), refs = rk ? await Promise.all(ro.map(u => cmUp(u, k.url))) : null;
     const G = cmPoseOrbGraph(rk || k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH, ctl, refs, P.cc ? 0.6 : 1); if(refs) o.refs = refs.length;
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
@@ -7383,7 +7402,8 @@ function cmPoseRun(P, quiet){ if(P.stopped || P.rigging || P.remote) return; con
   // here, and whenever a computer is idle it takes the next one that it can make, MiniMax moves first (they unlock the angles)
   const orb = (step, ring) => (P.orb || []).find(o => o.step===step && o.ring===ring) || {}, src = P.src;
   let fl = cmFlKits(); if(fl.some(k => k.fl)) fl = fl.filter(k => k.fl); const ck = P.ctl ? cmCtlKits() : [], fk = fl.concat(ck), kitFor = (o, url) => (cmOrbCtl(P, o) ? ck : fl).find(k => k.url===url);
-  const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && P.views.some(v => v.ring===o.ring && !v.url) && !(P.orbRig && cmOrbCtl(P, o) && !CM_SPC[o.id] && !S.test)).map(o => [o, o.step==='crane' || o.ring===1 ? src : cmCraneUrl(P, o.ring)]).filter(x => x[1]) : [];
+  const swFrom = o => cmPoseFrame(P, P.views.find(v => v.ring===1 && v.i===o.side && !v.look) || {ring:1, i:o.side}); // 🧍 a side's clip starts from that side's eye-level frame
+  const moves = P.by==='mm' && src ? (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err && (o.step==='sweep' ? P.views.some(v => v.ring!==1 && v.i===o.side && !v.url) : P.views.some(v => v.ring===o.ring && !v.url)) && !(P.orbRig && cmOrbCtl(P, o) && !CM_SPC[o.id] && !S.test)).map(o => [o, o.step==='sweep' ? swFrom(o) : o.step==='crane' || o.ring===1 ? src : cmCraneUrl(P, o.ring)]).filter(x => x[1]) : [];
   if(P.by==='mm' && src) (P.orb || []).forEach(o => { if(!(o.urls || []).length && !o.making && !(cmOrbCtl(P, o) ? ck : fl).length) o.err = cmOrbCtl(P, o) ? 'no computer that is on has the MiniMax pose ControlNet (📦 Get it on a PC in the 🧊 settings)' : 'no computer that is on has MiniMax H3'; });
   const ready = v => v.str==='cc' ? !!ccBase(P, v) : P.by!=='mm' || !!cmPoseFrame(P, v) && !(P.orbRig && v.ring===1 && !P.rigFit && !P.rigFail);
   if(P.remote) return; // 🖥 made on Render's helper (the app closed or not): this phone only shows it
@@ -8945,7 +8965,7 @@ function cmGot(p, kind, it){
   if(kind==='sprite'){ p.url = it.url; delete p.err; delete p.redo; save(); cmPoseSync(); const P = (S.cmPoses || []).find(x => cmPics(x).includes(p) || (x.cands || []).includes(p)); // and the next one waiting goes out
     if(P && p.cand!=null){ const rd = P.cands.filter(c => c.round===p.round); if(!P.src && S.cmPoseAuto!==false && rd.every(c => c.url || c.err) && rd.some(c => c.url)) cmPoseScore(P, p.round).then(b => { if(b && !P.src) cmPosePick(P, b, true); else drawComic(); }); else if(!$('#comic').hidden) drawComic(); return; }
     if(P) cmPoseRun(P); else if(!$('#comic').hidden) drawComic(); return; }
-  if(kind==='sporb'){ p.urls = it.urls || []; delete p.err; save(); const P = (S.cmPoses || []).find(x => x.id===p.pose); if(P && p.step==='circle') cmAutoPick(P, p); if(P) cmPoseRun(P); else if(!$('#comic').hidden) drawComic(); return; }
+  if(kind==='sporb'){ p.urls = it.urls || []; delete p.err; save(); const P = (S.cmPoses || []).find(x => x.id===p.pose); if(P && p.step==='circle') cmAutoPick(P, p); if(P && p.step==='sweep'){ ccDrift(P, p); return; } if(P) cmPoseRun(P); else if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='libprev'){ const L = (S.cmLib || []).find(x => x.id===p.lib); if(L){ L.preview = it.url; delete L.pv; } save(); if(!$('#comic').hidden) drawComic(); return; }
   if(kind==='orbit'){ p.url = it.url || 'test'; delete p.err;     setTimeout(() => cmAll().forEach(q => { if(q.d3 && t3kOn(q.d3)) t3kStep(q.d3); }), 0);
     if(/_circle$/.test(p.id)){ const ph = cmAll().map(q => q.d3).find(d => d && d.orbs && d.orbs.circle===p); if(ph){ ph.view = 'circle'; ph.yaw = ph.pitch = 0; } } // straight onto the circle (Jordan 2026-10-21 was still on the 35° views)
@@ -9346,7 +9366,7 @@ const CC_STEPS = [['ref', 'Reference', 'The picture you start from, its tags and
   ['turn', 'Turnaround', '5 heights × 16 angles, MiniMax led by the rig (pose guide 0.6, letting go at 60%), each face fixed and cut out.'],
   ['finish', 'Finish', 'Every angle repainted lightly (0.3, line art 0.8, tile 0.6), face fixed softly, dress colour matched to the front.']];
 const CC_HEIGHTS = [[2, 'High'], [3, 'A little high'], [1, 'Eye level'], [4, 'A little low'], [0, 'Low']]; // [ring, name], top to bottom
-const CC_EL = r => CM_SP_EL[r] * Math.PI / 180;
+const CC_EL = r => ccRingEl(ccP(ccChar()))[r] * Math.PI / 180;
 const ccHost = () => ({id:uid('cc'), url:''});
 function ccState(){ return S.cc || (S.cc = {chars:[], sel:''}); }
 const ccChar = () => { const s = ccState(); return s.chars.find(c => c.id===s.sel) || null; };
@@ -9354,9 +9374,24 @@ const ccP = c => c && c.pid ? (S.cmPoses || []).find(P => P.id===c.pid) || null 
 function ccNewChar(){ const s = ccState(), c = {id:uid('ch'), name:'', ref:'', tags:'', desc:'', ckpt:'', lora:'', loraW:1}; s.chars.unshift(c); s.sel = c.id; save(); return c; }
 // the 80 angles: 8 a height (P.views) and the 8 half way between (P.mids)
 function ccFresh(P){ P.views = [0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sv'), ring, i, url:''})));
-  P.mids = [0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sm'), ring, i, mid:true, url:''})));
-  P.orb = cmPoseOrbs(true).map(o => Object.assign(o, {pose:P.id})); P.lk = ccLooks(P);
+  P.mids = [1].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sm'), ring, i, mid:true, url:''}))); // in-between angles at eye level only (Jordan 2026-10-27: 8 sides for the others)
+  P.sweep = true; P.ringEl = CC_SW_EL.slice(); P.orb = ccSweepOrbs(P); P.lk = ccLooks(P);
   ['src', 'rigFit', 'rigFail', 'face', 'fit', 'rigV', 'rigging', 'rigMsg', 'partial', 'pickOk'].forEach(k => delete P[k]); }
+const ccSweepOrbs = P => [{id:uid('so'), urls:[], step:'circle', ring:1, pose:P.id}].concat([0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('so'), urls:[], step:'sweep', ring:2, side:i, pose:P.id})));
+// 🎬 a side's clip should pass her eye level again looking as it started; one that drifted (turned, or changed her) is made once more
+async function ccDrift(P, o){ const us = o.urls || [], at = CC_SW_AT; let iou = null;
+  if(us.length >= 6) try{ const [a, b] = await Promise.all([ccOutline(us[0]), ccOutline(us[3])]); iou = ccIou(a, b); }catch(e){}
+  o.drift = iou==null ? null : +iou.toFixed(3);
+  if(iou!=null && iou < CC_DRIFT && !o.again){ o.again = 1; o.urls = []; delete o.ctlf; save(); cmPoseRun(P, true); ccDraw(); return; }
+  o.ok = true; save(); cmPoseSync(); cmPoseRun(P, true); ccDraw(); }
+const CC_DRIFT = 0.72;
+// ↻ (Jordan 2026-10-27) her high and low angles made again from the eye-level sides she already has
+function ccSweepify(P){ cmStop(m3Jobs(P)); (P.orb || []).forEach(o => { delete CM_SPC[o.id]; });
+  const eye = cmEyeOrb(P); P.orb = ccSweepOrbs(P); if(eye) P.orb[0] = eye; P.sweep = true; P.ringEl = CC_SW_EL.slice();
+  P.views.forEach(v => { if(v.ring!==1 && !v.look){ v.url = ''; delete v.making; delete v.busy; delete v.err; delete v.redo; } });
+  P.mids = (P.mids || []).filter(v => v.ring===1);
+  P.lk = (P.lk || []).filter(h => h.str!=='cc' || (h.ring===1 && !h.redo)).concat(P.views.filter(v => v.ring!==1 && !v.look).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:false, str:'cc', dn:0.3, url:''})));
+  P.seed = Math.floor(Math.random() * 1e9); delete P.stopped; }
 const ccLooks = P => P.views.concat(P.mids).map(v => ({id:uid('sl'), ring:v.ring, i:v.i, mid:!!v.mid, str:'cc', dn:0.3, url:''}));
 function ccMakeP(c){ const P = {id:uid('sp'), name:'🧍 ' + (c.name || 'Character'), who:'', from:true, snap:null, geo:{wM:1.28, hM:1.87, aim:[0, 0.935, 0]}, seed:Math.floor(Math.random() * 1e9), at:Date.now(),
     by:'mm', pic:true, off:0, desc:'', dn:0, ctl:true, orbRig:true, faces:true, show:'mm', goOn:true, hid:false, mw:480, mh:864, iw:768, ih:1344,
@@ -9368,7 +9403,7 @@ const ccBase = (P, v) => { const h = (v.mid ? P.mids : P.views).find(x => !x.loo
 // 8 and 16 round each height, and cc:true so the viewer stands her on the middle of her body, as the Character tab does
 function ccSprite(P){ const fin = (P.lk || []).filter(h => h.str==='cc' && h.url && !h.redo), at = (ring, i, mid) => (fin.find(h => h.ring===ring && h.i===i && !!h.mid===mid) || {}).url || '';
   const views = [], v16 = []; for(let ring = 0; ring < 5; ring++) for(let i = 0; i < 8; i++){ views.push(at(ring, i, false)); v16.push(at(ring, i, false), at(ring, i, true)); }
-  return {id:P.id, name:P.name, geo:P.geo, src:views[8] || views.find(Boolean) || '', views, views16:v16.some(Boolean) ? v16 : undefined, rig:P.rigV || undefined, cc:true}; }
+  return {id:P.id, name:P.name, geo:P.geo, src:views[8] || views.find(Boolean) || '', views, views16:v16.some(Boolean) ? v16 : undefined, rig:P.rigV || undefined, ringEl:P.ringEl || undefined, cc:true}; }
 function ccPics(P){ const fin = (P.lk || []).filter(h => h.str==='cc'), pick = h => { const f = fin.find(x => x.ring===h.ring && x.i===h.i && !!x.mid===!!h.mid); return f && f.url && !f.redo ? f.url : ''; }; // only finished angles: a MiniMax frame before step 5 is on grey, not cut out, and the size fix can't find her in it (Jordan 2026-10-26)
   return CC_HEIGHTS.map(([ring]) => Array.from({length:16}, (_, k) => { const mid = k % 2===1, i = (k - (mid ? 1 : 0)) / 2, h = (mid ? P.mids : P.views).find(x => !x.look && x.ring===ring && x.i===i); return h ? pick(h) : ''; })); }
 // how far it is: [step 1-5 running or 6 done, the share of the whole made]
@@ -9515,7 +9550,7 @@ async function ccTurnLen(us){ let ms = []; try{ ms = await Promise.all(us.map(u 
 function ccRelineup(P){ cmStop(m3Jobs(P)); (P.orb || []).forEach(o => { if(o.step==='circle' && o.ring!==1){ delete o.pick; delete o.turn; delete o.fit; } });
   P.views.concat(P.mids || []).forEach(v => { if(v.ring!==1 && !v.look){ v.url = ''; delete v.making; delete v.busy; delete v.err; delete v.redo; } });
   P.lk = (P.lk || []).filter(h => h.str!=='cc').concat(ccLooks(P)); P.seed = Math.floor(Math.random() * 1e9); delete P.stopped; }
-function ccRedo(P, n){ if(n===4.5) return ccRelineup(P); const c = P.cc; cmStop(m3Jobs(P));
+function ccRedo(P, n){ if(n===4.5) return ccRelineup(P); if(n===4.6) return ccSweepify(P); const c = P.cc; cmStop(m3Jobs(P));
   if(n <= 2) c.full = ccHost(); if(n <= 3) c.redraw = ccHost(); delete P.stopped;
   if(n <= 4){ Object.keys(CM_SPC).forEach(k => { if((P.orb || []).some(o => o.id===k)) delete CM_SPC[k]; }); ccFresh(P); }
   else P.lk = (P.lk || []).filter(h => h.str!=='cc').concat(ccLooks(P));

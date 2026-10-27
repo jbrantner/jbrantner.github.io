@@ -298,3 +298,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-26.194
 
 - 🧍 Character: a circle's own turn is now found from how wide her shoulders and arms are (narrowest from the sides, which are half a turn apart) and, when the clip comes back round to her front, the frame most like the first. The mirrored-outline fit in v.193 locked on to wrong turns (24 frames for one of 31) because from front and back she is near enough symmetric.
+
+## 2026-10-27.195
+
+- 🧍 Character: her high and low angles now come from the eye-level turn. For each of the 8 eye-level sides, one MiniMax clip starts on that side's own frame, rises to high, then sinks past eye level to low, led by the rig's skeleton at 0.6 (letting go at 60%). Every height then shows the back the eye-level turn drew. Before, the low circles started from a camera below her, couldn't see her hair, and made up a different back.
+- Low heights stay above the floor: low is −12° and a little low −4° (they were −25°, below the floor, and −10°, at her shins). The viewer reads each character's own heights.
+- Drift check: when the clip passes eye level again it should look like its first frame. One that doesn't (it turned, or changed her) is made once more.
+- 16 angles round at eye level and 8 at the other heights, so 48 in all. ↻ `ccredo:4.6` remakes an older character's high and low angles this way and keeps her eye level.

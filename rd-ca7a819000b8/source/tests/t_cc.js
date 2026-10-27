@@ -71,8 +71,8 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
     ok(fd.denoise===0.25 && fd.feather===24 && fd.noise_mask_feather===32 && fd.sam_model_opt && of(red, 'RemoveBackground').length===2, 'step 3: the soft SAM face fix (0.25, feather 24, 32 px noise blend), white pasted back round her'); }
   // step 4 is the 🧊: its moves are led by the rig at 0.6, letting go at 60%
   const P = await page.evaluate(() => { const P = ccP(ccChar()); return {views:P.views.length, mids:P.mids.length, lk:P.lk.filter(h => h.str==='cc').length, orb:P.orb.length, ctl:P.ctl, orbRig:P.orbRig, faces:P.faces, dn:P.dn, src:P.src, iw:P.iw, ih:P.ih, mw:P.mw, mh:P.mh}; });
-  ok(P.views===40 && P.mids===40 && P.lk===80 && P.orb===7 && P.ctl && P.orbRig && P.faces && P.dn===0 && /redraw/.test(P.src) && P.iw===768 && P.ih===1344 && P.mw===480 && P.mh===864, 'step 4 is a 🧊 of 5 heights × 16 angles from the step 3 picture (MiniMax 480×864, angles 768×1344, faces fixed, cut out): ' + JSON.stringify(P));
-  const orb = await page.evaluate(() => { const P = ccP(ccChar()), o = P.orb.find(o => o.step==='circle' && o.ring===2); return cmPoseOrbGraph(cmFlKits()[0], 'x.png', cmPoseOrbPrompt(o), cmPosePicks(o), 'p', P.mw, P.mh, 'skel.avi', null, P.cc ? 0.6 : 1).g; });
+  ok(P.views===40 && P.mids===8 && P.lk===48 && P.orb===9 && P.ctl && P.orbRig && P.faces && P.dn===0 && /redraw/.test(P.src) && P.iw===768 && P.ih===1344 && P.mw===480 && P.mh===864, 'step 4 is a 🧊 of 5 heights (16 round at eye level, 8 at the others), one turn + 8 up-and-down clips, from the step 3 picture (MiniMax 480×864, angles 768×1344, faces fixed, cut out): ' + JSON.stringify(P));
+  const orb = await page.evaluate(() => { const P = ccP(ccChar()), o = P.orb.find(o => o.step==='sweep'); return cmPoseOrbGraph(cmFlKits()[0], 'x.png', cmPoseOrbPrompt(o), cmPosePicks(o), 'p', P.mw, P.mh, 'skel.avi', null, P.cc ? 0.6 : 1).g; });
   const fun = of(orb, 'MiniMaxH3FunControlNetApply')[0];
   ok(fun && fun.inputs.strength===0.6 && fun.inputs.end_percent===0.6, 'step 4: the pose guide at 0.6, letting go at 60% (no skeleton lines or red eye points)');
   ok(!(await page.evaluate(() => cmPosesHtml())).includes('Pinky'), "her 🧊 isn't listed among the comic's poses");
@@ -91,7 +91,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.evaluate(() => { const P = ccP(ccChar()); P.views.concat(P.mids).forEach(v => v.url = 'https://jordo-desktop.test/view?filename=a_' + v.ring + '_' + v.i + (v.mid ? 'm' : '') + '.png'); P.lk.forEach(h => h.url = 'https://jordo-desktop.test/view?filename=f_' + h.ring + '_' + h.i + (h.mid ? 'm' : '') + '.png'); P.orb.forEach(o => { o.urls = ['https://jordo-desktop.test/view?filename=o.png']; delete o.err; delete o.making; }); save(); CCV.key = ''; ccDraw(true); });
   await page.waitForFunction(() => $('#ccCv') && CCV.box.size >= 2, null, {timeout:8000}); await page.waitForTimeout(400);
   const st = await page.evaluate(() => ({deg:$('#ccDeg').textContent, hl:$('#ccHl').textContent, txt:$('#ccTxt').textContent, go:$('[data-cc="go"]').textContent, states:[...document.querySelectorAll('.ccs')].map(s => s.textContent.trim().split(' ')[0])}));
-  ok(st.deg==='0°' && /Eye level · 1\/16/.test(st.hl) && /All 5 steps done · 80 angles/.test(st.txt) && /Make her again/.test(st.go) && st.states.every(s => s==='Done'), 'all 80 in: the viewer opens at eye level, front, and every step says Done: ' + JSON.stringify(st));
+  ok(st.deg==='0°' && /Eye level · 1\/16/.test(st.hl) && /All 5 steps done · 48 angles/.test(st.txt) && /Make her again/.test(st.go) && st.states.every(s => s==='Done'), 'all 48 in: the viewer opens at eye level, front, and every step says Done: ' + JSON.stringify(st));
   await page.evaluate(() => $('.ccstage').scrollIntoView({block:'center'})); await page.waitForTimeout(100);
   const box = await page.$('#ccStage').then(e => e.boundingBox());
   const drag = async (dx, dy) => { await page.mouse.move(box.x + 150, box.y + 300); await page.mouse.down(); await page.mouse.move(box.x + 150 + dx, box.y + 300 + dy, {steps:12}); await page.waitForTimeout(150); await page.mouse.up(); await page.waitForTimeout(150); };
@@ -115,9 +115,30 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
       x.fillRect(48 + 3 * Math.sin(th) - 6, 4, 12, 12); us.push(c.toDataURL()); } return ccTurnLen(us); }, per);
   const t34 = await turn(34), t31 = await turn(31), t28 = await turn(28);
   ok(Math.abs(t34 - 34) <= 1 && Math.abs(t31 - 31) <= 1 && Math.abs(t28 - 28) <= 1, 'a circle\'s own turn is found for a near-symmetric figure on grey: 34, 31 and 28 frames (got ' + [t34, t31, t28].map(x => x.toFixed(2)).join(', ') + ')');
-  ok(await page.evaluate(() => { const P = ccP(ccChar()), keep = JSON.stringify(P); P.orb.filter(o => o.step==='circle').forEach(o => { o.pick = [30, 3, 7, 11, 15, 19, 23, 27]; o.turn = 30.75; }); p3dApply(P, {redo:'ccredo:4.5'});
-    const ok = P.orb.filter(o => o.step==='circle' && o.ring!==1).every(o => !o.pick) && !!P.orb.find(o => o.step==='circle' && o.ring===1).pick && P.views.filter(v => v.ring===1).every(v => v.url) && P.views.filter(v => v.ring!==1).every(v => !v.url) && P.lk.filter(h => h.str==='cc').every(h => !h.url) && P.lk.filter(h => h.str==='cc').length===80;
-    Object.assign(P, JSON.parse(keep)); return ok; }), '↻ 4.5 lines her heights up again: new picks for the high and low circles, their angles and every finish again, eye level and the MiniMax moves kept');
+  // 🧍 the high and low angles come from each eye-level side (Jordan 2026-10-27: the low circles made up a different back)
+  const sw = await page.evaluate(() => ({keys:ccSweepKeys(), picks:ccSweepPicks(), prompt:ccSweepPrompt(), el:ccRingEl(ccP(ccChar()))}));
+  ok(sw.keys[0][1]===5 && sw.keys[1][1]===35 && sw.keys[2][1]===-12 && sw.picks[0]===0 && sw.picks[5]===123 && sw.picks.every((f, n) => !n || f > sw.picks[n - 1]) && Math.abs(sw.picks[2] - 48) <= 1 && Math.abs(sw.picks[3] - 96) <= 2,
+    'one clip a side: eye level up to 35°, then down past eye level to −12°, at one speed; a little high, high, eye level again, a little low and low in order: ' + JSON.stringify(sw.picks));
+  ok(/never circles around her/.test(sw.prompt) && /passes her eye level at 4\.\d seconds/.test(sw.prompt) && sw.el[0]===-12 && sw.el[4]===-4, 'its prompt says up then down without turning, and her low heights stay above the floor (−12° and −4°)');
+  ok(await page.evaluate(() => { const P = ccP(ccChar()), keep = JSON.stringify(P), w = ccSweepOf(P, 4); w.urls = ['s0', 's1', 's2', 's3', 's4', 's5']; w.ok = true;
+    const at = r => cmPoseFrame(P, P.views.find(v => v.ring===r && v.i===4)), r = [at(3), at(2), at(4), at(0)].join(), mid = cmPoseFrame(P, {ring:2, i:4, mid:true}); w.ok = false; const wait = at(2);
+    Object.assign(P, JSON.parse(keep)); return r==='s1,s2,s4,s5' && mid===null && wait===null; }), "her back's high and low angles are that side's clip frames (a little high, high, a little low, low), once its drift check passed");
+  ok(await page.evaluate(async () => { const P = ccP(ccChar()), keep = JSON.stringify(P), eye = cmEyeOrb(P); eye.urls = Array.from({length:31}, (_, f) => 'https://jordo-desktop.test/view?filename=eye_' + f + '.png'); eye.pick = [0, 4, 8, 12, 16, 20, 24, 28]; P.goOn = true; const realCk = cmCtlKits; cmCtlKits = () => cmFlKits().map(k => Object.assign({}, k, {cn:'minimax_h3_fun_controlnet.safetensors'}));
+    P.views.filter(v => v.ring!==1).forEach(v => v.url = ''); P.orb.filter(o => o.step==='sweep').forEach(o => { o.urls = []; delete o.making; delete o.busy; delete o.from; delete o.err; }); CM_SENT.length = 0;
+    for(let n = 0; n < 20 && P.orb.filter(o => o.step==='sweep' && o.from).length < 2; n++){ cmPoseRun(P, true); await new Promise(r => setTimeout(r, 200)); }
+    const fr = P.orb.filter(o => o.step==='sweep' && o.from), good = fr.length >= 2 && fr.every(o => o.from===eye.urls[eye.pick[o.side]]);
+    cmCtlKits = realCk; m3Jobs(P).forEach(h => { delete h.making; delete h.busy; }); Object.assign(P, JSON.parse(keep)); return good; }), 'each side\'s clip starts from that side\'s own eye-level frame');
+  ok(await page.evaluate(async () => { const P = ccP(ccChar()), keep = JSON.stringify(P), real = ccOutline, w = ccSweepOf(P, 2), m = v => { const a = new Uint8Array(64 * 96); a.fill(1, 0, v); return a; };
+    let iou = 0.5; ccOutline = async u => u==='s3' ? m(Math.round(6144 * iou)) : m(6144); const run = async () => { w.urls = ['s0', 's1', 's2', 's3', 's4', 's5']; await ccDrift(P, w); };
+    await run(); const first = !w.ok && !w.urls.length && w.again===1; await run(); const second = w.ok && w.urls.length===6; delete w.again; delete w.ok; iou = 0.95; await run(); const clean = w.ok && !w.again && w.drift > 0.9;
+    ccOutline = real; m3Jobs(P).forEach(h => { delete h.making; delete h.busy; }); Object.assign(P, JSON.parse(keep)); return first && second && clean; }), 'a clip that comes back to eye level looking different (it turned or changed her) is made once more; a clean one is used straight away');
+  ok(await page.evaluate(() => { const P = ccP(ccChar()), keep = JSON.stringify(P); // an older character (circles at every height, 80 angles) made again from her eye-level sides
+    P.sweep = false; delete P.ringEl; const eye = cmEyeOrb(P); eye.pick = [30, 3, 7, 11, 15, 19, 23, 27]; eye.math = true; P.orb = [eye].concat(cmPoseOrbs(true).slice(1).map(o => Object.assign(o, {pose:P.id, urls:['x']})));
+    P.mids = [0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('sm'), ring, i, mid:true, url:'m'}))); P.lk = ccLooks(P).map(h => Object.assign(h, {url:'f'}));
+    p3dApply(P, {redo:'ccredo:4.6'});
+    const ok = P.sweep && P.orb.length===9 && P.orb[0]===eye && eye.pick[0]===30 && P.orb.slice(1).every((o, n) => o.step==='sweep' && o.side===n && !o.urls.length) && P.views.filter(v => v.ring===1).every(v => v.url) && P.views.filter(v => v.ring!==1).every(v => !v.url)
+      && P.mids.length===8 && P.lk.filter(h => h.ring===1).length===16 && P.lk.filter(h => h.ring===1).every(h => h.url==='f') && P.lk.filter(h => h.ring!==1).length===32 && P.lk.filter(h => h.ring!==1).every(h => !h.url) && P.ringEl[0]===-12;
+    Object.assign(P, JSON.parse(keep)); return ok; }), '↻ 4.6 makes her high and low angles again from her eye-level sides, keeping the eye-level turn, its picks and its 16 finished angles');
   // step 5 finds her with BiRefNet, kept inside the picture's own cut-out: a picture with no cut-out isn't all "her" (Jordan 2026-10-26)
   ok(await page.evaluate(() => { const P = ccP(ccChar()), G = ccFinishGraph(ccIllKits()[0], P.cc, P.lk[0], 'a.png', 'f.png', 'p', 1).g, N = Object.values(G), mc = N.find(n => n.class_type==='MaskComposite');
     return mc && mc.inputs.operation==='multiply' && G[mc.inputs.destination[0]].class_type==='RemoveBackground' && G[mc.inputs.source[0]].class_type==='InvertMask' && N.filter(n => n.class_type==='ImageCompositeMasked').every(n => n.inputs.mask[0]===mc._id || G[n.inputs.mask[0]]===mc); }), 'step 5: her outline is BiRefNet × her own cut-out, so a picture without one keeps its white');
@@ -135,14 +156,14 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
     return raw==='' && n && /_1_0m?\.png|_1_1m\.png/.test(n.im.src) && n.ring===1; }), 'an unfinished angle shows the nearest finished one at that height, not its grey MiniMax frame');
   // 🧊 Open in 3D (Jordan 2026-10-26): her finished angles go to the 3D viewer, anchored on her body
   ok(await page.evaluate(() => { const P = ccP(ccChar()); cmPoseSync(); const sp = JSON.parse(localStorage.getItem('rd-pose-sprites')).find(x => x.id===P.id);
-    return sp && sp.cc===true && sp.views.length===40 && sp.views16.length===80 && sp.views.every(u => /filename=f_/.test(u)) && sp.views16.every(u => /filename=f_/.test(u)) && sp.views[8]===sp.src; }), 'Open in 3D hands the viewer her 80 finished angles (8 and 16 round each height), marked as a character');
+    return sp && sp.cc===true && sp.views.length===40 && sp.views16.length===80 && sp.views.every(u => /filename=f_/.test(u)) && sp.views16.filter(Boolean).length===48 && sp.views16.filter(Boolean).every(u => /filename=f_/.test(u)) && sp.views[8]===sp.src; }), 'Open in 3D hands the viewer her 48 finished angles (16 round at eye level, 8 at the other heights), marked as a character');
   await page.evaluate(() => $('[data-cc="open3d"]').scrollIntoView()); await page.click('[data-cc="open3d"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => { const f = $('#cc3d iframe'); return !$('#cc3d').hidden && f && /rig\/view\.html\?pose=/.test(f.getAttribute('src')); }), '🧊 Open in 3D shows her in the 3D viewer over the page');
   await page.click('[data-cc3d="close"]');
   ok(await page.evaluate(() => $('#cc3d').hidden), '✕ Close goes back to the Character tab');
   // ↻ Redo from here: step 5 again keeps the turnaround; step 3 again starts the 🧊 over from a new redraw
   await page.evaluate(() => { const P = ccP(ccChar()); ccRedo(P, 5); });
-  ok(await page.evaluate(() => { const P = ccP(ccChar()); return P.lk.filter(h => h.str==='cc' && !h.url).length===80 && P.views.every(v => v.url) && P.src; }), '↻ Redo from step 5 makes the 80 finishes again and keeps the turnaround');
+  ok(await page.evaluate(() => { const P = ccP(ccChar()); return P.lk.filter(h => h.str==='cc' && !h.url).length===48 && P.views.every(v => v.url) && P.src; }), '↻ Redo from step 5 makes the 48 finishes again and keeps the turnaround');
   await page.evaluate(() => { const P = ccP(ccChar()); p3dApply(P, {redo:'ccredo:3'}); });
   ok(await page.evaluate(() => { const P = ccP(ccChar()); return !P.cc.redraw.url && P.cc.full.url && !P.src && P.views.every(v => !v.url); }), "↻ Redo from step 3 (also as a tap passed on to Render's hidden app) keeps the full body and makes the redraw and everything after again");
   await page.evaluate(() => { CM_SENT.length = 0; ccRun(ccP(ccChar())); }); await page.waitForFunction(() => ccP(ccChar()).src, null, {timeout:8000});
