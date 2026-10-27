@@ -350,3 +350,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.205
 
 - 🧍 Character: 📐 Straighten is taken out, since Jordan didn't like it. ⟋ Slant now also works in the Character tab, skewing her and the Momentum floor by the same amount as in the 3D view. The toggle in the 3D view controls both.
+
+## 2026-10-27.206
+
+- 🧍 Character tab: one drag now turns her and changes the height together, so a diagonal drag orbits diagonally. Before, a drag locked to whichever direction the finger first moved (Jordan 2026-10-27). A flick still keeps her spinning with Momentum.
