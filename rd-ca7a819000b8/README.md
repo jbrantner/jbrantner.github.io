@@ -305,3 +305,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - Low heights stay above the floor: low is −12° and a little low −4° (they were −25°, below the floor, and −10°, at her shins). The viewer reads each character's own heights.
 - Drift check: when the clip passes eye level again it should look like its first frame. One that doesn't (it turned, or changed her) is made once more.
 - 16 angles round at eye level and 8 at the other heights, so 48 in all. ↻ `ccredo:4.6` remakes an older character's high and low angles this way and keeps her eye level.
+
+## 2026-10-27.196
+
+- 🧍 Character: the up-and-down clip's prompt now says "about 35 degrees above her eye level, still seeing her face, whole body and feet, never over her". "High above her, the top of her head" sent MiniMax straight overhead, so the high angle was only the top of her head.
