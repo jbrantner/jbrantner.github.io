@@ -103,6 +103,8 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   ok(await page.evaluate(() => $('#ccDeg').textContent)==='270°', 'a quarter of the viewer dragged right turns her a quarter round (to 270°, the way the sketch turned)');
   await drag(0, 120);
   ok(await page.evaluate(() => /^High/.test($('#ccHl').textContent)), 'dragging down looks from higher up');
+  await page.evaluate(() => { CCV.h = 2; CCV.a = 0; ccPaint(); }); await drag(box.width / 8, -60);
+  ok(await page.evaluate(() => CCV.h===3 && ((Math.round(CCV.a) % 16) + 16) % 16===14), 'a diagonal drag turns her and changes the height in one go (no locking to one way): ' + await page.evaluate(() => CCV.h + ' ' + CCV.a));
   // the size fix: the eye-level picture (short figure) and the high one (tall figure) stand on one floor point, sized by the camera
   // 🧍 Momentum draws a floor grid through each picture's own camera: grey lines below her feet, a different floor from above
   const grid = await page.evaluate(() => { CCV.mom = true; const at = h => { CCV.h = h; CCV.a = 0; ccPaint(); const cv = $('#ccCv'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0, sig = 0;
