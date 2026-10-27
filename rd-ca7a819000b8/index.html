@@ -691,7 +691,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-27.196'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-27.197'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6836,11 +6836,11 @@ const ccRingEl = P => P && P.ringEl || CM_SP_EL;
 function ccSweepKeys(){ const [lo, eye, hi] = CC_SW_EL, up = hi - eye, dn = hi - lo, tt = up / (up + dn); return [[0, eye], [tt, hi], [1, lo]]; }
 function ccSweepPicks(){ const k = ccSweepKeys(), L = TV_LEN - 1, [, eye, hi, mh, ml] = CC_SW_EL, lo = CC_SW_EL[0], tt = k[1][0];
   const up = el => (el - eye) / (hi - eye) * tt, dn = el => tt + (hi - el) / (hi - lo) * (1 - tt);
-  return [0, up(mh), tt, dn(eye), dn(ml), 1].map(t => Math.round(t * L)); }
+  return [0, up(mh), tt, dn(eye), dn(ml), 1].map((t, n) => n===3 ? Math.round(t * L / 4) * 4 : Math.round(t * L)); } // the eye-level-again frame is pinned, on a latent frame (every 4th)
 const CC_SW_AT = {3:1, 2:2, 4:4, 0:5}; // ring → which of the picks
 const ccSweepOf = (P, i) => (P.orb || []).find(o => o.step==='sweep' && o.side===i);
 function ccSweepPrompt(){ const T = TV_LEN / 24, s = x => (x * T).toFixed(1), k = ccSweepKeys(), eyeT = ccSweepPicks()[3] / (TV_LEN - 1);
-  return 'The first frame shows ' + CM_SP_SCENE + '. One continuous camera move straight up and then straight down, at one steady speed, always keeping her whole body centred and the same size. The camera never circles around her: she keeps facing exactly the same way as in the first frame the whole time. '
+  return 'The first frame shows ' + CM_SP_SCENE + '. One continuous camera move straight up and then straight down, at one steady speed, always keeping her whole body centred and the same size. The camera never circles around her: she keeps facing exactly the same way as in the first frame the whole time, and she never turns towards the camera. Whichever side of her the first frame shows, her front, her side or her back, is the side we see all the way through. '
     + '[0s-' + s(k[1][0]) + 's] The camera cranes up a little in an arc and tilts down: by ' + s(k[1][0]) + ' seconds it is only about 35 degrees above her eye level, a gentle high angle looking down at her, where we still see her face, her whole body and her feet. It never goes over her or looks straight down on her head. '
     + '[' + s(k[1][0]) + 's-' + s(1) + 's] The camera sinks back down in the same arc, passes her eye level at ' + s(eyeT) + ' seconds, and keeps going down to the height of her knees, tilting up to look slightly up at her by ' + s(1) + ' seconds. '
     + 'The background stays plain white the whole time, with no floor, shadows or scenery. She is frozen in the moment of the first frame: same pose, same expression, nothing moves except the camera. Same art style, colours and lighting as the first frame. No cuts, no zoom, no new characters. Silence.'; }
@@ -7053,9 +7053,10 @@ async function p3dSend(P){ try{ await p3dPost('/add', {id:P.id, P, hidden:!!S.hi
 async function p3dAsk(P, ask){ try{ await p3dPost('/ask', {id:P.id, ask}); P.rbusy = Date.now(); save(); }catch(e){ toast("Couldn't reach Render: " + e.message, true); } }
 // the phone: each 3D Render is making comes back every few seconds while the app is open
 let p3dPolling = false;
-async function p3dPoll(){ const mine = (S.cmPoses || []).filter(P => P.remote && (!P.rdone || Date.now() - (P.rbusy || 0) < 600000)); if(p3dPolling || !mine.length || !farmP3d() || WORKER) return; p3dPolling = true;
+const P3D_SLOW = {};
+async function p3dPoll(){ const mine = (S.cmPoses || []).filter(P => P.remote && (!P.rdone || Date.now() - (P.rbusy || 0) < 600000 || Date.now() - (P3D_SLOW[P.id] || 0) > 60000)); // a finished one too, once a minute (Jordan 2026-10-27: one started again on Render showed no progress) if(p3dPolling || !mine.length || !farmP3d() || WORKER) return; p3dPolling = true;
   try{ const r = await fetch(p3dUrl() + '/renderdeck/p3d?ids=' + mine.map(P => P.id).join(','), Object.assign({cache:'no-store'}, within(8000))), j = await r.json();
-    let ch = false; mine.forEach(P => { const x = (j.jobs || {})[P.id]; if(!x){ return; } if(x.rev!==P.rrev){ const show = P.show; Object.assign(P, x.P, {remote:true, show, rrev:x.rev}); ch = true; } if(!!x.done!==!!P.rdone){ P.rdone = !!x.done; ch = true; } });
+    let ch = false; mine.forEach(P => { P3D_SLOW[P.id] = Date.now(); const x = (j.jobs || {})[P.id]; if(!x){ return; } if(x.rev!==P.rrev){ const show = P.show; Object.assign(P, x.P, {remote:true, show, rrev:x.rev}); ch = true; } if(!!x.done!==!!P.rdone){ P.rdone = !!x.done; ch = true; } });
     if(ch){ save(); cmPoseSync(); stage3d(S.gallery[shownIdx]); d3Draw(); drawStrip(); } }
   catch(e){} finally{ p3dPolling = false; } }
 setInterval(() => { if(document.visibilityState==='visible') p3dPoll(); }, 3000);
@@ -7304,7 +7305,7 @@ async function cmAutoPick(P, o){ const us = o.urls || []; if(us.length <= 8 || o
   // mirror-even, which a ¾ view isn't; the high and low circles start from their crane's end, so they get the same
   let f0 = 0; if(cmOrbCtl(P, o) && P.face!=null) f0 = P.face / 360 * per; else { const lim = per * 60 / 360; let best = -1; for(let f = 0; f < us.length; f++){ const d = Math.min(f, per - f); if(d > lim || !ms[f]) continue; const sc = cmMirror(ms[f]) - 0.004 * d; if(sc > best){ best = sc; f0 = f; } } }
   o.pick = [0, 1, 2, 3, 4, 5, 6, 7].map(n => Math.min(us.length - 1, Math.round((f0 + n * per / 8) % per))); o.turn = per; save(); cmPoseSync(); cmPoseRun(P, true); if($('#m3Box')) m3Draw(); }
-function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_MH, ctl = null, refs = null, cs = 1){
+function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_MH, ctl = null, refs = null, cs = 1, pin = null){
   const g = {}; let n = 0;
   const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
   const li = add('LoadImage', {image:img});
@@ -7314,7 +7315,9 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
   // 🧍 the Character Creator's (Jordan 2026-10-25): 0.6, letting go at 60% of the steps, so the skeleton's lines and red eye points aren't painted in
   if(ctl) model = [add('MiniMaxH3FunControlNetApply', {model, model_patch:[add('ModelPatchLoader', {name:k.cn}), 0], vae:[vae,0], strength:cs, start_percent:0, end_percent:cs, control_video:[add('GetVideoComponents', {video:[add('LoadVideo', {file:ctl}), 0]}), 0]}), 0]; // 🦴 the skeleton turning
   let cond, lat;
-  if(k.fl && !refs){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:W, height:H, length:TV_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1]; }
+  if(k.fl && !refs){ const iv = add('MiniMaxH3ImageToVideo', {clip:[clip,0], vae:[vae,0], prompt, width:W, height:H, length:TV_LEN, first_frame:[li,0]}); cond = [iv,0]; lat = [iv,1];
+    // 🧍 the first frame pinned again where the camera passes her eye level (Jordan 2026-10-27: from behind, MiniMax turned her round to face the camera)
+    if(pin!=null) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae:[vae,0], image:[li,0], frame_idx:pin}), 0]; }
   else if(refs){ // 👗 her back and sides from the eye-level turn as Pictures 2-4, so this turn draws the same hair and outfit
     const r = {'ref_images.ref_image_0':[li,0]}; refs.forEach((im, i) => { r['ref_images.ref_image_' + (i + 1)] = [add('LoadImage', {image:im}), 0]; });
     const rv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip:[clip,0], vae:[vae,0], prompt:'<Picture 1> is the first frame of this shot. ' + refs.map((_, i) => '<Picture ' + (i + 2) + '>').join(', ').replace(/, ([^,]*)$/, ' and $1') + ' show the same woman from behind and from the sides: her hair, clothes and shoes stay exactly as in them all the way round. ' + prompt, width:W, height:H, length:TV_LEN, ref_image_size:'match'}, r));
@@ -7330,7 +7333,7 @@ function cmPoseOrbGraph(k, img, prompt, picks, prefix, W = CM_SP_MW, H = CM_SP_M
 async function cmPoseOrbJob(P, o, src, k){ o.busy = 'Sending the turn…'; o.busyPc = k.url; o.from = src; delete o.err; drawComic();
   try{ const prefix = cmPrefix('poses/' + P.id + '/' + o.step + '_' + (o.step==='sweep' ? 'side' + o.side : CM_SP_RING[o.ring]), P.hid), picks = cmPosePicks(o), ctl = cmOrbCtl(P, o) ? await cmCtlUp(P, o, k) : null;
     const ro = cmOutfitRefs(P, o), rk = ro && cmRefKit(k, !!ctl), refs = rk ? await Promise.all(ro.map(u => cmUp(u, k.url))) : null;
-    const G = cmPoseOrbGraph(rk || k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH, ctl, refs, P.cc ? 0.6 : 1); if(refs) o.refs = refs.length;
+    const G = cmPoseOrbGraph(rk || k, await cmUp(src, k.url), cmPoseOrbPrompt(o), picks, prefix, P.mw || CM_SP_MW, P.mh || CM_SP_MH, ctl, refs, P.cc ? 0.6 : 1, o.step==='sweep' ? picks[3] : null); if(refs) o.refs = refs.length;
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json();
     if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     o.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:(rk && rk.full ? 15 : 5) * cmSlow(k.url), smp:samplerOf(G.g), w:P.mw || CM_SP_MW, h:P.mh || CM_SP_MH, kind:'sporb', video:false, all:true}; delete o.busy; save(); drawComic(); cmWait(o); }
@@ -9391,12 +9394,19 @@ function ccFresh(P){ P.views = [0, 1, 2, 3, 4].flatMap(ring => [0, 1, 2, 3, 4, 5
   ['src', 'rigFit', 'rigFail', 'face', 'fit', 'rigV', 'rigging', 'rigMsg', 'partial', 'pickOk'].forEach(k => delete P[k]); }
 const ccSweepOrbs = P => [{id:uid('so'), urls:[], step:'circle', ring:1, pose:P.id}].concat([0, 1, 2, 3, 4, 5, 6, 7].map(i => ({id:uid('so'), urls:[], step:'sweep', ring:2, side:i, pose:P.id})));
 // 🎬 a side's clip should pass her eye level again looking as it started; one that drifted (turned, or changed her) is made once more
-async function ccDrift(P, o){ const us = o.urls || [], at = CC_SW_AT; let iou = null;
+// (her outline alone missed it when she turned round to face the camera, Jordan 2026-10-27: from front and back it is the same, so her
+// colours are compared too: a face, a blouse or a different dress where her back was)
+async function ccColours(u){ const im = new Image(); im.crossOrigin = 'anonymous'; im.src = u; await im.decode(); const c = document.createElement('canvas'); c.width = 16; c.height = 24;
+  const x = c.getContext('2d'); x.drawImage(im, 0, 0, 16, 24); return x.getImageData(0, 0, 16, 24).data; }
+const ccColDiff = (a, b) => { let d = 0, n = 0; for(let q = 0; q < a.length; q += 4){ for(let ch = 0; ch < 3; ch++) d += Math.abs(a[q + ch] - b[q + ch]); n += 3; } return n ? d / n / 255 : 0; };
+async function ccDrift(P, o){ const us = o.urls || []; let iou = null, col = null;
   if(us.length >= 6) try{ const [a, b] = await Promise.all([ccOutline(us[0]), ccOutline(us[3])]); iou = ccIou(a, b); }catch(e){}
-  o.drift = iou==null ? null : +iou.toFixed(3);
-  if(iou!=null && iou < CC_DRIFT && !o.again){ o.again = 1; o.urls = []; delete o.ctlf; save(); cmPoseRun(P, true); ccDraw(); return; }
+  let colLo = null; if(us.length >= 6) try{ const [a, b, c] = await Promise.all([ccColours(us[0]), ccColours(us[3]), ccColours(us[5])]); col = ccColDiff(a, b); colLo = ccColDiff(a, c); }catch(e){}
+  o.drift = iou==null ? null : +iou.toFixed(3); o.col = col==null ? null : +col.toFixed(3); o.colLo = colLo==null ? null : +colLo.toFixed(3);
+  if(((iou!=null && iou < CC_DRIFT) || (col!=null && col > CC_COLD) || (colLo!=null && colLo > CC_COLLO)) && !o.again){ o.again = 1; o.urls = []; delete o.ctlf; save(); cmPoseRun(P, true); ccDraw(); return; }
   o.ok = true; save(); cmPoseSync(); cmPoseRun(P, true); ccDraw(); }
-const CC_DRIFT = 0.72;
+// measured on Ellie's clips (16×24, mean |RGB| ÷ 255): eye level again 0.016-0.045 kept vs 0.066-0.091 turned; low 0.004-0.013 kept vs 0.049-0.081 turned
+const CC_DRIFT = 0.72, CC_COLD = 0.055, CC_COLLO = 0.03;
 // ↻ (Jordan 2026-10-27) her high and low angles made again from the eye-level sides she already has
 function ccSweepify(P){ cmStop(m3Jobs(P)); (P.orb || []).forEach(o => { delete CM_SPC[o.id]; });
   const eye = cmEyeOrb(P); P.orb = ccSweepOrbs(P); if(eye) P.orb[0] = eye; P.sweep = true; P.ringEl = CC_SW_EL.slice();

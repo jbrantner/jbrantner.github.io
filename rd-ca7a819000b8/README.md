@@ -309,3 +309,11 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.196
 
 - 🧍 Character: the up-and-down clip's prompt now says "about 35 degrees above her eye level, still seeing her face, whole body and feet, never over her". "High above her, the top of her head" sent MiniMax straight overhead, so the high angle was only the top of her head.
+
+## 2026-10-27.197
+
+- 🧍 Character: from behind, MiniMax turned her round to face the camera during the up-and-down clip, and on her back it changed her outfit. Now:
+  - each clip pins its first frame again where the camera passes eye level (MiniMaxH3AddGuide);
+  - the prompt says she never turns towards the camera;
+  - the drift check also compares her colours, at eye level again (over 0.055) and at the low end (over 0.03). Her outline alone looks the same from the front and the back.
+- A character made on Render with the app closed now shows its progress. The app checks a finished one again once a minute, so a run started again on Render shows up.
