@@ -330,3 +330,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 - 🧍 Character, 🧊 Open in 3D: two fixes for her looking bloated from above (Jordan 2026-10-27). 🧲 Snap to her angles: when you let go, the camera glides to the nearest angle and height a picture was made from, so the floor is seen from the same angle she was. 📐 Straighten: each picture is unbent as if it had been filmed from far away, with the parts that were nearer the camera narrowed. From above, her head gets smaller and her legs longer, and her feet and head top stay put. Both are on by default and toggle at the bottom of the 3D view.
 - Helper: the small previews of see-through pictures are made on white. They showed black boxes behind her in the Character tab.
+
+## 2026-10-27.201
+
+- 🧍 Character tab, Momentum: a floor grid under her feet with a soft shadow. It is drawn through the camera each picture was made with (its height, its side, the guide's lens and distance), so it snaps with her. Jordan's test of whether she reads as standing in a 3D space.
