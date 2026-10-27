@@ -188,6 +188,17 @@ async def main():
     ok(r.status == 400, 'a missing angle is turned down')
     await R[('POST', '/renderdeck/library/delete')](J({'name': 'Ellie'}))
     ok(not os.path.exists(ld), 'taken out of the library')
+    # 🪑 an object goes to the Object Library, listed on its own
+    r = await R[('POST', '/renderdeck/library/save')](J({'name': 'Chair', 'kind': 'obj', 'meta': {'kind': 'obj', 'height': 0.9}, 'pics': pics}))
+    od = os.path.join(OUT, 'Object Library', 'Chair')
+    ok(r.status == 200 and os.path.exists(os.path.join(od, 'object.json')) and os.path.exists(os.path.join(od, 'eye_000.png')), 'an object goes to the Object Library: %s' % r.body.decode()[:100])
+    lo = json.loads((await R[('GET', '/renderdeck/library')](types.SimpleNamespace(query={'kind': 'obj'}))).body)
+    lc = json.loads((await R[('GET', '/renderdeck/library')](types.SimpleNamespace(query={}))).body)
+    ok([x['subfolder'] for x in lo['objects']] == ['Object Library/Chair'] and lo['objects'][0]['height'] == 0.9 and not lc['characters'], 'objects are listed apart from characters: %s' % lo)
+    imgs = json.loads((await R[('GET', '/renderdeck/images')](types.SimpleNamespace(query={'limit': '200'}))).body)['images']
+    ok(not any('Object Library' in x['subfolder'] for x in imgs), 'the renders browser leaves the Object Library out')
+    await R[('POST', '/renderdeck/library/delete')](J({'name': 'Chair', 'kind': 'obj'}))
+    ok(not os.path.exists(od), 'and it can be taken out')
     await run.cleanup()
 asyncio.run(main())
 print(len(fails), 'failed' if fails else 'all passed'); sys.exit(1 if fails else 0)

@@ -584,7 +584,7 @@ async def images(request):
     root = folder_paths.get_output_directory()
     found, hidden = [], request.query.get('hidden')
     for d, dirs, files in os.walk(root):
-        dirs[:] = [x for x in dirs if x != TRASH and x != LIBRARY and not x.startswith('.')]
+        dirs[:] = [x for x in dirs if x != TRASH and x not in (LIBRARY, OBJLIB) and not x.startswith('.')]
         sub = os.path.relpath(d, root).replace('\\', '/')
         for f in files:
             if f.lower().endswith(PICS):
@@ -653,12 +653,19 @@ async def delete(request):
 # her see-through angles named by height and turn (eye_000.png, a_little_high_022.5.png …) and character.json with her
 # LoRA, its trigger word, the model and style it goes with, the prompt start, and what the 3D viewer needs (heights,
 # body size, lens). The renders browser leaves these folders out.
+# 🪑 Objects from the Object Creator (Jordan 2026-10-27) are kept the same way, in Object Library/<name> with object.json.
 LIBRARY = 'Character Library'
+OBJLIB = 'Object Library'
 LIB_RINGS = {0: 'low', 1: 'eye', 2: 'high', 3: 'a_little_high', 4: 'a_little_low'}
 
 
-def _lib_root(hidden):
-    return os.path.join(folder_paths.get_output_directory(), *((HIDDEN, LIBRARY) if hidden else (LIBRARY,)))
+def _lib_root(hidden, kind=None):
+    top = OBJLIB if kind == 'obj' else LIBRARY
+    return os.path.join(folder_paths.get_output_directory(), *((HIDDEN, top) if hidden else (top,)))
+
+
+def _lib_meta(kind):
+    return 'object.json' if kind == 'obj' else 'character.json'
 
 
 def _lib_name(n):
@@ -667,11 +674,11 @@ def _lib_name(n):
 
 @routes.get('/renderdeck/library')
 async def library(request):
-    hidden = request.query.get('hidden') == '1'
-    root, out = _lib_root(hidden), []
+    hidden, kind = request.query.get('hidden') == '1', request.query.get('kind')
+    root, out = _lib_root(hidden, kind), []
     if os.path.isdir(root):
         for d in sorted(os.listdir(root), key=str.lower):
-            f = os.path.join(root, d, 'character.json')
+            f = os.path.join(root, d, _lib_meta(kind))
             try:
                 with open(f, encoding='utf-8') as fh:
                     c = json.load(fh)
@@ -679,15 +686,16 @@ async def library(request):
                 continue
             c['subfolder'] = os.path.relpath(os.path.join(root, d), folder_paths.get_output_directory()).replace('\\', '/')
             out.append(c)
-    return web.json_response({'library': 1, 'characters': out})
+    return web.json_response({'library': 1, 'kinds': ['char', 'obj'], ('objects' if kind == 'obj' else 'characters'): out})
 
 
 @routes.post('/renderdeck/library/save')
 async def library_save(request):
-    """{name, hidden, meta:{…}, pics:[{ring, i, mid, filename, subfolder}]}: her angles copied as they are (see-through)"""
+    """{name, hidden, kind, meta:{…}, pics:[{ring, i, mid, filename, subfolder}]}: her angles copied as they are (see-through)"""
     b = await request.json()
-    name = _lib_name(b.get('name'))
-    d = os.path.join(_lib_root(bool(b.get('hidden'))), name)
+    name, kind = _lib_name(b.get('name')), b.get('kind')
+    meta_f = _lib_meta(kind)
+    d = os.path.join(_lib_root(bool(b.get('hidden')), kind), name)
     views, gone = [], []
     for p in b.get('pics') or []:
         try:
@@ -707,7 +715,7 @@ async def library_save(request):
 
     def write():
         os.makedirs(d, exist_ok=True)
-        keep = {v['file'] for v in views} | {'character.json'}
+        keep = {v['file'] for v in views} | {meta_f}
         for f in os.listdir(d):
             if f not in keep and f.lower().endswith(PICS):
                 os.remove(os.path.join(d, f))
@@ -716,10 +724,10 @@ async def library_save(request):
                 shutil.copyfile(v['src'], os.path.join(d, v['file']))
         meta = dict(b.get('meta') or {}, name=str(b.get('name') or name), saved=time.time(),
                     views=[{k: v[k] for k in ('ring', 'i', 'mid', 'file')} for v in views])
-        tmp = os.path.join(d, 'character.json.tmp')
+        tmp = os.path.join(d, meta_f + '.tmp')
         with open(tmp, 'w', encoding='utf-8') as fh:
             json.dump(meta, fh, indent=1)
-        os.replace(tmp, os.path.join(d, 'character.json'))
+        os.replace(tmp, os.path.join(d, meta_f))
     await asyncio.to_thread(write)
     return web.json_response({'ok': True, 'n': len(views), 'subfolder': os.path.relpath(d, folder_paths.get_output_directory()).replace('\\', '/')})
 
@@ -728,8 +736,8 @@ async def library_save(request):
 async def library_delete(request):
     """Takes a character out of the library (her folder goes; in Dropbox, Deleted files can bring it back). Her LoRA stays."""
     b = await request.json()
-    d = os.path.join(_lib_root(bool(b.get('hidden'))), _lib_name(b.get('name')))
-    if not os.path.exists(os.path.join(d, 'character.json')):
+    d = os.path.join(_lib_root(bool(b.get('hidden')), b.get('kind')), _lib_name(b.get('name')))
+    if not os.path.exists(os.path.join(d, _lib_meta(b.get('kind')))):
         return web.json_response({'error': 'not in the library'}, status=404)
     await asyncio.to_thread(shutil.rmtree, d)
     return web.json_response({'ok': True})

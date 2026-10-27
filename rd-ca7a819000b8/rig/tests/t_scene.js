@@ -19,9 +19,11 @@ const DEPS = process.env.RIG_DEPS || '';
   const H = {'access-control-allow-origin':'*'}, files = ['000', '045', '090', '135', '180', '225', '270', '315'];
   const lib = {name:'Ellie', subfolder:'Character Library/Ellie', saved:1000, trigger:'elliex', lora:'elliex.safetensors', geo:{wM:1.07, hM:1.87, aim:[0, 0.935, 0]}, ringEl:[-12, 5, 35, 20, -4],
     cover:'eye_000.png', views:files.map((f, i) => ({ring:1, i, mid:false, file:'eye_' + f + '.png'}))};
+  // 🪑 and a chair in the Object Library, 0.9 m tall
+  const chair = {name:'Chair', subfolder:'Object Library/Chair', saved:1000, kind:'obj', height:0.9, geo:{wM:1.07, hM:1.87}, ringEl:[-12, 5, 35, 20, -4], cover:'eye_000.png', views:files.map((f, i) => ({ring:1, i, mid:false, file:'eye_' + f + '.png'}))};
   const store = new Map(); let saves = 0;
   await page.route('https://render.test/**', async r => { const u = new URL(r.request().url());
-    if(u.pathname==='/renderdeck/library') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({library:1, characters:[lib]}) });
+    if(u.pathname==='/renderdeck/library') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(u.searchParams.get('kind')==='obj' ? {library:1, kinds:['char', 'obj'], objects:[chair]} : {library:1, kinds:['char', 'obj'], characters:[lib]}) });
     if(u.pathname==='/renderdeck/scenes') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({scenes:[...store.values()]}) });
     if(u.pathname==='/renderdeck/scenes/save'){ const b = JSON.parse(r.request().postData()); store.set(b.scene.id, b.scene); saves++; return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
     if(u.pathname==='/renderdeck/scenes/delete'){ store.delete(JSON.parse(r.request().postData()).id); return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
@@ -73,6 +75,13 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(await page.evaluate(() => SCENE.sc.name==='Library set' && !SCENE.sc.objs.length) && store.size===2, '＋ New starts an empty scene, kept as its own file');
   await page.click('#del'); await page.waitForTimeout(500);
   ok(await page.evaluate(() => SCENE.sc.name==='Scene 1') && store.size===1, '🗑 deletes it and goes back to the other');
+  // 🪑 ＋ Object: from the Object Library, stood at its real height
+  await page.click('#addo'); await page.waitForSelector('#chars [data-ref]');
+  ok(await page.evaluate(() => /Object Library/.test(document.querySelector('#pickh').textContent) && document.querySelectorAll('#chars [data-ref]').length===1 && /Chair/.test(document.querySelector('#chars').textContent)), '＋ Object lists only the Object Library');
+  await page.click('#chars [data-ref]'); await page.waitForTimeout(800);
+  const ch = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind==='obj'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('front');
+    const ft = o.card.material.map && o.card.material.map.userData.feet; return {ref:ob.ref, sel:SCENE.ui.sel===ob.id, list:/🪑 Chair/.test(document.querySelector('#objs').textContent), tall:ft ? o.geo.hM * o.card.scale.y * ft.ht : null, smax:document.querySelector('[data-n="s"]').max}; });
+  ok(ch.ref==='Object Library/Chair' && ch.sel && ch.list && Math.abs(ch.tall - 0.9) < 0.01 && ch.smax==='3', 'the chair goes in by reference, listed with 🪑, standing 0.9 m tall, its size up to 300%: ' + JSON.stringify(ch));
   if(process.env.SHOT){ await page.click('.views [data-v="persp"]'); await page.click('[data-sel]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scene3d.png', fullPage:true}); await page.click('.views [data-v="quad"]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scenequad.png'}); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
