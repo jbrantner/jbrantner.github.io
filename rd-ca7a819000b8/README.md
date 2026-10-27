@@ -321,3 +321,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.198
 
 - 🧍 Character: the drift check no longer sends every side round twice. Eye level is pinned now, so that frame always matches, and only the low end's colours are compared. That limit was raised to 0.065: Ellie's good pinned clips came out at 0.025–0.047.
+
+## 2026-10-27.199
+
+- 🧍 Character: her camera is flat now (Jordan: "camera has to be flat perspective"). The rig guide films her with an 8° long lens from far away instead of 30°, and her turn and every up-and-down clip ask for a flat, telephoto, model-sheet view with no perspective distortion. The 3D viewer was already orthographic. A character made before this needs a redo from step 4 to get flat pictures.

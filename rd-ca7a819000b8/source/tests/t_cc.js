@@ -120,6 +120,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   const t34 = await turn(34), t31 = await turn(31), t28 = await turn(28);
   ok(Math.abs(t34 - 34) <= 1 && Math.abs(t31 - 31) <= 1 && Math.abs(t28 - 28) <= 1, 'a circle\'s own turn is found for a near-symmetric figure on grey: 34, 31 and 28 frames (got ' + [t34, t31, t28].map(x => x.toFixed(2)).join(', ') + ')');
   // 🧍 the high and low angles come from each eye-level side (Jordan 2026-10-27: the low circles made up a different back)
+  ok(await page.evaluate(() => { const P = ccP(ccChar()), ps = P.orb.map(o => cmPoseOrbPrompt(o)); return ps.length===9 && ps.every(t => /very long telephoto lens, so the view is flat and orthographic/.test(t) && /One continuous camera move/.test(t)) && CC_FOV===8; }), 'her turn and every up-and-down clip are asked for a flat, telephoto view, and the rig guide uses an 8° lens (Jordan: "camera has to be flat perspective")');
   const sw = await page.evaluate(() => ({keys:ccSweepKeys(), picks:ccSweepPicks(), prompt:ccSweepPrompt(), el:ccRingEl(ccP(ccChar()))}));
   ok(sw.keys[0][1]===5 && sw.keys[1][1]===35 && sw.keys[2][1]===-12 && sw.picks[0]===0 && sw.picks[5]===123 && sw.picks.every((f, n) => !n || f > sw.picks[n - 1]) && Math.abs(sw.picks[2] - 48) <= 1 && Math.abs(sw.picks[3] - 96) <= 2,
     'one clip a side: eye level up to 35°, then down past eye level to −12°, at one speed; a little high, high, eye level again, a little low and low in order: ' + JSON.stringify(sw.picks));
