@@ -165,6 +165,9 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
     return sp && sp.cc===true && sp.views.length===40 && sp.views16.length===80 && sp.views.every(u => /filename=f_/.test(u)) && sp.views16.filter(Boolean).length===48 && sp.views16.filter(Boolean).every(u => /filename=f_/.test(u)) && sp.views[8]===sp.src; }), 'Open in 3D hands the viewer her 48 finished angles (16 round at eye level, 8 at the other heights), marked as a character');
   await page.evaluate(() => $('[data-cc="open3d"]').scrollIntoView()); await page.click('[data-cc="open3d"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => { const f = $('#cc3d iframe'); return !$('#cc3d').hidden && f && /rig\/view\.html\?pose=/.test(f.getAttribute('src')); }), '🧊 Open in 3D shows her in the 3D viewer over the page');
+  await page.click('[data-cc3d="snap"]');
+  ok(await page.evaluate(() => S.cc3d.snap===false && S.cc3d.straight===true && $('[data-cc3d="snap"]').getAttribute('aria-pressed')==='false' && /snap=1/.test($('#cc3d iframe').getAttribute('src'))), '🧲 Snap and 📐 Straighten start on and toggle (remembered)');
+  await page.click('[data-cc3d="snap"]');
   await page.click('[data-cc3d="close"]');
   ok(await page.evaluate(() => $('#cc3d').hidden), '✕ Close goes back to the Character tab');
   // ↻ Redo from here: step 5 again keeps the turnaround; step 3 again starts the 🧊 over from a new redraw
