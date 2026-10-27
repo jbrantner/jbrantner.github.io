@@ -739,9 +739,13 @@ const VL = (() => {
     { const it = newsNow(now)[0]; if (it) h += `<div class="hl-news" role="status"><span>${it.html}</span> <span class="hl-news-act">${it.acts}</span></div>`; }   // v267: one at a time
     // v151: the weekly spending −/+ and the bank check, in their own plain panel at the foot
     const dv = wkDraft == null ? weeklyAmt() : wkDraft, dirty = wkDraft != null, dk = Math.ceil(dv / 7 / WORKER_DAY - 1e-9), wkTake = dirty ? wkTakes(dk) : [];   // v177: a draft until Confirm; v294: dollars
+    // v320 (Jordan: set $140 a week, Home showed ~$15 a day): name what the categories take, then what's left for Anything a day
+    const wkSplit = dv => { const ps = (state.packs || []).filter(p => Number(p.amount || 0) > 0), want = sum(ps, p => Number(p.amount || 0)), sc = want > dv && want > 0 ? dv / want : 1, cash = x => Math.abs(x - Math.round(x)) < 0.005 ? money(Math.round(x)) : moneyExact(x);
+      if (!ps.length) return `${moneyExact(dv / 7)} a day`;
+      return ps.map(p => `${esc(p.name)} ${p.daily ? `${moneyExact(Number(p.amount) * sc / 7)} a day` : cash(Number(p.amount) * sc)}`).concat(`Anything ${moneyExact(Math.max(0, dv - want * sc) / 7)} a day`).join(' · '); };
     const wkSet = ''
       + `<div class="hl-wk" role="group" aria-label="Weekly spending"><button class="hl-wkb" data-hl="wm" aria-label="$7 a week less"${dv <= 0 ? ' disabled' : ''}>−</button>`
-      + `<span><label class="hl-wkin"><span>$</span><input class="wk-amt" type="number" inputmode="decimal" min="0" step="1" value="${dv}" aria-label="Weekly spending in dollars"></label> a week<small>${dv ? `${moneyExact(dv / 7)} a day · ` : ''}${dirty ? `was ${money(weeklyAmt())}` : n ? 'a change counts from today' : plan ? 'starts Monday' : 'Set it with + to start'}</small></span>`   // v175: dollars, no villagers
+      + `<span><label class="hl-wkin"><span>$</span><input class="wk-amt" type="number" inputmode="decimal" min="0" step="1" value="${dv}" aria-label="Weekly spending in dollars"></label> a week<small>${dv ? `${wkSplit(dv)} · ` : ''}${dirty ? `was ${money(weeklyAmt())}` : n ? 'a change counts from today' : plan ? 'starts Monday' : 'Set it with + to start'}</small></span>`   // v175: dollars, no villagers
       + `<button class="hl-wkb" data-hl="wp" aria-label="$7 a week more"${dv >= wkTop() ? ' disabled' : ''}>+</button></div>`   // v154: in Settings > Money
       + (dirty ? `<p class="hl-wkn">${wkTake.length ? `Confirm takes ${wkTake.map(([id, c]) => `${money((c) * WORKER_DAY)} a day off ${esc(potName(id))}`).join(', ')}.` : dk < plan || dv < weeklyAmt() ? 'The rest stays in Savings.' : 'Money nobody\'s using covers it.'}${n ? ' This week changes from today, for the days left.' : dk > plan && autoStartOk() ? ' It starts today, for the days left.' : ''}</p>`
         + `<div class="hl-wkc"><button class="pp-chip" data-hl="wkno">Cancel</button><button class="primary" data-hl="wkok">Confirm ${money(dv)} a week</button></div>` : '')
