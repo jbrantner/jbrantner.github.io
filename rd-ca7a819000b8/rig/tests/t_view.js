@@ -99,15 +99,9 @@ const DEPS = process.env.RIG_DEPS || '';
       return {front:await at(0.001), side:await at(Math.PI / 2), has:!!VIEW.pano()}; });
     const col = p => p[0] > 150 && p[1] > 150 ? 'yellow' : p[0] > 150 ? 'red' : p[1] > 150 ? 'green' : p[2] > 150 ? 'blue' : '?';
     ok(px.has && col(px.front)==='red' && col(px.side)==='yellow', '🌄 the 360° background wraps round: the base picture faces the front, a quarter turn of it to each side: ' + JSON.stringify({front:col(px.front), side:col(px.side), px})); }
-  // 🧍 straightened: a character's high picture (35° up, filmed with a 30° lens) is unbent: the top of her narrower, the bottom wider,
-  // feet and head top where they were; eye level and ?straight off leave the card flat
-  { await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); delete L[0].rig; delete L[0].views16; L[0].cc = true; L[0].fov = 30; L[0].ringEl = [-12, 5, 35, 20, -4]; L[0].views = Array.from({length:40}, (_, n) => 'https://app.test/pic/x100_y280_h200.svg?r' + Math.floor(n / 8)); localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
-    await page.waitForTimeout(700);
-    const shape = el => page.evaluate(el => new Promise(res => { const c = VIEW.camera, d = 4.5, e = el * Math.PI / 180; c.position.set(0, 0.96 + d * Math.sin(e), d * Math.cos(e)); VIEW.controls.update();
-      setTimeout(() => { const L = VIEW.stand().layers[0], p = L.mesh.geometry.attributes.position, b = L.mesh.geometry.userData.base, n = p.count, w = i => p.getX(i * 2 + 1) - p.getX(i * 2), r = n / 2 - 1;
-        res({ring:VIEW.view().ring, top:+(w(0) / (b[3] - b[0])).toFixed(3), bot:+(w(r) / (b[3] - b[0])).toFixed(3), moved:+Math.max(...Array.from(p.array, (v, i) => Math.abs(v - b[i]))).toFixed(3)}); }, 200); }), el);
-    const hi = await shape(36), eye = await shape(3); await page.evaluate(() => VIEW.straight(false)); const off = await shape(36); await page.evaluate(() => VIEW.straight(true));
-    ok(hi.ring===2 && hi.top < 0.95 && hi.bot > 1.05 && eye.ring===1 && eye.moved < 0.04 && off.moved===0, '🧍 her high picture is straightened (top narrower, bottom wider); eye level barely moves; off leaves it flat: ' + JSON.stringify({hi, eye, off})); }
+  // 🧍 a character with 5 heights, for the tests below
+  await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); delete L[0].rig; delete L[0].views16; L[0].cc = true; L[0].fov = 30; L[0].ringEl = [-12, 5, 35, 20, -4]; L[0].views = Array.from({length:40}, (_, n) => 'https://app.test/pic/x100_y280_h200.svg?r' + Math.floor(n / 8)); localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload(); });
+  await page.waitForTimeout(700);
   // 🧍 slimmed: from 35° up she is narrowed by cos 35° / cos 5° (Jordan's hand edit), eye level not at all; ?slim off leaves her
   { const w = el => page.evaluate(el => new Promise(res => { const c = VIEW.camera, d = 4.5, e = el * Math.PI / 180; c.position.set(0, 0.96 + d * Math.sin(e), d * Math.cos(e)); VIEW.controls.update();
       setTimeout(() => { const m = VIEW.stand().her; res(+(m.scale.x / m.scale.y).toFixed(3)); }, 200); }), el);

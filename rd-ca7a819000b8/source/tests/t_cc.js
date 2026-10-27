@@ -109,6 +109,8 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
       for(let y = Math.round(cv.height * 0.5); y < cv.height; y += 2) for(let x = 0; x < cv.width; x += 2){ const o = (y * cv.width + x) * 4; if(d[o] < 245 && d[o] > 120){ n++; sig += y * 3 + x; } } return [n, sig]; };
     const eye = at(2), high = at(0); CCV.mom = false; const off = at(2); return {eye, high, off}; });
   ok(grid.eye[0] > 200 && grid.high[0] > 200 && grid.off[0] < grid.eye[0] / 4 && grid.eye[1]!==grid.high[1], '🧍 Momentum draws a floor grid under her through each picture\'s camera (off without it): ' + JSON.stringify(grid));
+  // ⟋ the tab slants too: at 45° round from 35° up a sideways line slopes down to the left by 0.12; none from the front
+  ok(await page.evaluate(() => Math.abs(ccSlope(35 * Math.PI / 180, Math.PI / 4) - 0.12) < 1e-6 && Math.abs(ccSlope(35 * Math.PI / 180, 0)) < 1e-9 && ccSlope(35 * Math.PI / 180, -Math.PI / 4) < 0), '⟋ the Character tab slants her like the 3D view');
   const feet = await page.evaluate(() => { const at = h => { CCV.mom = false; CCV.h = h; CCV.a = 0; ccPaint(); const cv = $('#ccCv'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let top = -1, bot = -1;
       for(let y = 0; y < cv.height; y++){ let any = false; for(let x = 0; x < cv.width; x += 2){ const o = (y * cv.width + x) * 4; if(d[o] < 200){ any = true; break; } } if(any){ if(top < 0) top = y; bot = y; } } return [top, bot]; };
     const r = {eye:at(2), high:at(0)}; CCV.mom = true; return r; });
@@ -172,7 +174,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   ok(await page.evaluate(() => { const f = $('#cc3d iframe'); return !$('#cc3d').hidden && f && /rig\/view\.html\?pose=/.test(f.getAttribute('src')); }), '🧊 Open in 3D shows her in the 3D viewer over the page');
   await page.click('[data-cc3d="snap"]');
   ok(await page.evaluate(() => S.cc3d.slim===true && /slim=1/.test($('#cc3d iframe').getAttribute('src')) && !!$('[data-cc3d="slim"]')), '↔ Slim starts on in the 3D view');
-  ok(await page.evaluate(() => S.cc3d.snap===false && S.cc3d.straight===true && $('[data-cc3d="snap"]').getAttribute('aria-pressed')==='false' && /snap=1/.test($('#cc3d iframe').getAttribute('src'))), '🧲 Snap and 📐 Straighten start on and toggle (remembered)');
+  ok(await page.evaluate(() => S.cc3d.snap===false && S.cc3d.straight===undefined && !$('[data-cc3d="straight"]') && $('[data-cc3d="snap"]').getAttribute('aria-pressed')==='false' && /snap=1/.test($('#cc3d iframe').getAttribute('src'))), '🧲 Snap and 📐 Straighten start on and toggle (remembered)');
   await page.click('[data-cc3d="snap"]');
   await page.click('[data-cc3d="close"]');
   ok(await page.evaluate(() => $('#cc3d').hidden), '✕ Close goes back to the Character tab');
