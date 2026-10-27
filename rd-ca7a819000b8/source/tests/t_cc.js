@@ -171,6 +171,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.evaluate(() => $('[data-cc="open3d"]').scrollIntoView()); await page.click('[data-cc="open3d"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => { const f = $('#cc3d iframe'); return !$('#cc3d').hidden && f && /rig\/view\.html\?pose=/.test(f.getAttribute('src')); }), '🧊 Open in 3D shows her in the 3D viewer over the page');
   await page.click('[data-cc3d="snap"]');
+  ok(await page.evaluate(() => S.cc3d.slim===true && /slim=1/.test($('#cc3d iframe').getAttribute('src')) && !!$('[data-cc3d="slim"]')), '↔ Slim starts on in the 3D view');
   ok(await page.evaluate(() => S.cc3d.snap===false && S.cc3d.straight===true && $('[data-cc3d="snap"]').getAttribute('aria-pressed')==='false' && /snap=1/.test($('#cc3d iframe').getAttribute('src'))), '🧲 Snap and 📐 Straighten start on and toggle (remembered)');
   await page.click('[data-cc3d="snap"]');
   await page.click('[data-cc3d="close"]');

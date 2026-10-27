@@ -334,3 +334,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.201
 
 - 🧍 Character tab, Momentum: a floor grid under her feet with a soft shadow. It is drawn through the camera each picture was made with (its height, its side, the guide's lens and distance), so it snaps with her. Jordan's test of whether she reads as standing in a 3D space.
+
+## 2026-10-27.202
+
+- 🧍 Character: ↔ Slim. Pictures made from above or below are drawn narrower by cos(height) / cos(eye level), which gives about 0.94 a little high and 0.82 high, the same as Jordan's hand edit ("I just had to Freeform transform it to squish it thinner"). It applies in the Character tab and in 🧊 Open in 3D, with a toggle in the 3D view. The files are unchanged.
