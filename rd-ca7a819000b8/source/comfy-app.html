@@ -682,7 +682,7 @@ body.cc-open #mainView, body.cc-open .go, body.cc-open #comic{display:none}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-27.208'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-27.209'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -792,7 +792,7 @@ const FAKE = {
   upm:['4x-UltraSharp.pth','RealESRGAN_x4plus.pth'],
   samplers:['euler','euler_ancestral','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','uni_pc','lcm'],
   schedulers:['normal','karras','exponential','sgm_uniform','simple','beta'],
-  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','SetUnionControlNetType','ConditioningSetArea','ConditioningCombine','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider','ModelMergeSDXL','KSamplerAdvanced','VAEEncodeTiled','VAEDecodeTiled','SAMLoader']),
+  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','SetUnionControlNetType','ConditioningSetArea','ConditioningCombine','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider','ModelMergeSDXL','KSamplerAdvanced','VAEEncodeTiled','VAEDecodeTiled','SAMLoader','RenderDeckUpscaleColorFix']),
   cnVae:true,
 };
 
@@ -1112,10 +1112,13 @@ function buildGraph(opt){
       // Redraw: upscale, then repaint it in tiles with real noise at low strength, so the bigger picture gets new detail
       // instead of being smoothed (a no-added-noise pass only blurs). Tiles keep it within 8 GB; the base model without
       // LoRAs does the tiles, because a style LoRA leaves brightness blocks between them.
+      // Seams (Jordan 2026-10-27): tiles overlap more with softer edges, and Band Pass redraws a strip over each seam gently.
+      // (A last whole-picture pass at low denoise was the other idea: ~4 MP is past what SDXL draws well, and it barely moves a seam.)
       const sc = up.scale || 2, dn = up.denoise || 0.35, smp = info && info.samplers.includes('dpmpp_2m') ? 'dpmpp_2m' : P.sampler, sch = info && info.schedulers.includes('karras') ? 'karras' : P.scheduler;
+      const seams = up.seams !== false, pre = out;
       const tiles = {model:[ck,0], positive:pp, negative:nn, vae, seed, steps:20, cfg:Math.min(P.cfg, 5), sampler_name:smp, scheduler:sch, denoise:dn,
-        mode_type:'Linear', tile_width:1024, tile_height:1024, mask_blur:8, tile_padding:32, seam_fix_mode:'None', seam_fix_denoise:1, seam_fix_width:64,
-        seam_fix_mask_blur:8, seam_fix_padding:16, force_uniform_tiles:true, tiled_decode:false, batch_size:1};
+        mode_type:'Linear', tile_width:1024, tile_height:1024, mask_blur:seams ? 16 : 8, tile_padding:seams ? 64 : 32, seam_fix_mode:seams ? 'Band Pass' : 'None',
+        seam_fix_denoise:seams ? Math.min(dn, 0.3) : 1, seam_fix_width:64, seam_fix_mask_blur:16, seam_fix_padding:32, force_uniform_tiles:true, tiled_decode:false, batch_size:1};
       if(up.model){
         const ul = add('UpscaleModelLoader', {model_name:up.model}, 'Upscale model', '--up');
         out = [add('UltimateSDUpscale', Object.assign({image:out, upscale_model:[ul,0], upscale_by:sc}, tiles), 'Redraw ' + sc + '× in tiles', '--up'), 0];
@@ -1123,6 +1126,9 @@ function buildGraph(opt){
         const big = add('ImageScaleBy', {image:out, upscale_method:'lanczos', scale_by:sc}, 'Resize ' + sc + '×', '--up');
         out = [add('UltimateSDUpscaleNoUpscale', Object.assign({upscaled_image:[big,0]}, tiles), 'Redraw ' + sc + '× in tiles', '--up'), 0];
       }
+      // Keep colours: the redraw keeps its new fine detail, the broad colour and shading come back from the picture before it
+      if(up.keepColour !== false && info && info.nodes.has('RenderDeckUpscaleColorFix'))
+        out = [add('RenderDeckUpscaleColorFix', {image:out, image_ref:pre, strength:1, levels:5}, 'Keep colours', '--up'), 0];
     } else if(up.mode==='model' && up.model){
       const ul = add('UpscaleModelLoader', {model_name:up.model}, 'Upscale model', '--up');
       out = [add('ImageUpscaleWithModel', {upscale_model:[ul,0], image:out}, 'Upscale (model)', '--up'), 0];
@@ -2095,8 +2101,9 @@ function blockBody(b){
     ${slider('scale','Times bigger',1.5,3,0.25,b.scale)}
     ${slider('denoise','Redraw strength',0.2,0.55,0.05,b.denoise || 0.35)}
     <div class="row"><select data-k="model">${opts(I.upm, b.model, 'No upscale model: plain resize first')}</select></div>
-    <div class="row" style="padding-left:92px">${FACE('up')}</div>
-    <p class="note">Upscales, then repaints the bigger picture tile by tile with real noise at low strength, so it gains detail instead of going soft. 0.3–0.4 adds detail and keeps the picture; higher reinvents more. Fix faces then redraws each face up close.</p>`;
+    <div class="row" style="padding-left:92px;flex-wrap:wrap">${FACE('up')}<button class="chipbtn" data-do="seams" style="${b.seams!==false?'border-color:var(--up);color:var(--up)':''}">${b.seams!==false ? '✓ Smooth seams' : 'Smooth seams: off'}</button><button class="chipbtn" data-do="keepColour" style="${b.keepColour!==false?'border-color:var(--up);color:var(--up)':''}">${b.keepColour!==false ? '✓ Keep colours' : 'Keep colours: off'}</button></div>
+    ${b.keepColour!==false && info && !info.nodes.has('RenderDeckUpscaleColorFix') ? '<p class="warn">Keep colours needs the latest Render Deck helper on this computer.</p>' : ''}
+    <p class="note">Upscales, then repaints the bigger picture tile by tile with real noise at low strength, so it gains detail instead of going soft. 0.3–0.4 adds detail and keeps the picture; higher reinvents more. Smooth seams redraws a soft strip over each tile edge. Keep colours takes the colour and shading back from the picture before the upscale, keeping the new detail. Fix faces then redraws each face up close.</p>`;
     return `<div class="row"><label>How</label>${seg('mode',[['redraw','Redraw (best)'],['simple','Smooth resize'],['model','Upscale model']], b.mode)}</div>
     ${b.mode==='model' ? `<div class="row"><select data-k="model">${opts(I.upm, b.model, 'No upscale models found')}</select></div><p class="note">Upscale models set their own size, usually 4×.</p>` : slider('scale','Times bigger',1.25,4,0.25,b.scale)}
     ${b.mode==='model' && !hasM && info ? '<p class="warn">Put an upscale model in ComfyUI/models/upscale_models to use this.</p>' : ''}`; }
@@ -2204,6 +2211,7 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='lock'){ b.lockSeed = !b.lockSeed; }
   else if(act==='quality'){ b.quality = !b.quality; }
   else if(act==='faces'){ const P = S.blocks.find(x=>x.type==='sampler'); P.faces = !P.faces; }
+  else if(act==='seams' || act==='keepColour'){ b[act] = b[act]===false; }
   else if(act==='nonoise'){ b.noNoise = b.noNoise===false; }
   else if(act==='styleonly'){ b.styleOnly = !b.styleOnly; if(b.startStep==null) b.startStep = 4; }
   else if(act==='lw'){ S.loraWords[b.lora] = [S.loraWords[b.lora], d.dataset.v].filter(Boolean).join(', '); }
