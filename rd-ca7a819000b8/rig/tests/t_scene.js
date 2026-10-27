@@ -1,0 +1,79 @@
+// 🎬 Scene (Jordan 2026-10-27): a saved 3D space with Character Library characters placed in it as references (re-saving
+// her in the library changes her in the scene), a layers-style object list where only the selected one moves, and flat
+// Front / Side / Top views beside the 3D one. Run with RIG_DEPS (three.js) like t_view.js.
+const { chromium } = require('playwright');
+const fs = require('fs'), path = require('path');
+const DEPS = process.env.RIG_DEPS || '';
+(async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'scene.html'), 'utf8');
+  const browser = await chromium.launch({args:['--use-gl=swiftshader', '--enable-unsafe-swiftshader']});
+  const page = await browser.newPage({ viewport:{width:390, height:900} });
+  const logs = []; page.on('pageerror', e => logs.push('PAGEERROR ' + e.message)); page.on('dialog', d => d.accept());
+  await page.route('https://app.test/rig/scene.html*', r => r.fulfill({ contentType:'text/html', body:html }));
+  await page.route('https://fonts.googleapis.com/**', r => r.fulfill({ contentType:'text/css', body:'' }));
+  await page.route('https://cdn.jsdelivr.net/npm/**', r => {
+    const u = new URL(r.request().url()).pathname.replace('/npm/', ''), m = u.match(/^(@?[^@]+)@([^/]+)\/(.*)$/);
+    const f = path.join(DEPS, {'three':'three-0.160.0'}[m[1]] || 'x', 'package', m[3]); if(!fs.existsSync(f)) return r.fulfill({ status:404, body:'' });
+    r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(f) }); });
+  // a pretend Render: the library (Ellie, 8 eye-level angles, see-through) and the scenes store
+  const H = {'access-control-allow-origin':'*'}, files = ['000', '045', '090', '135', '180', '225', '270', '315'];
+  const lib = {name:'Ellie', subfolder:'Character Library/Ellie', saved:1000, trigger:'elliex', lora:'elliex.safetensors', geo:{wM:1.07, hM:1.87, aim:[0, 0.935, 0]}, ringEl:[-12, 5, 35, 20, -4],
+    cover:'eye_000.png', views:files.map((f, i) => ({ring:1, i, mid:false, file:'eye_' + f + '.png'}))};
+  const store = new Map(); let saves = 0;
+  await page.route('https://render.test/**', async r => { const u = new URL(r.request().url());
+    if(u.pathname==='/renderdeck/library') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({library:1, characters:[lib]}) });
+    if(u.pathname==='/renderdeck/scenes') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({scenes:[...store.values()]}) });
+    if(u.pathname==='/renderdeck/scenes/save'){ const b = JSON.parse(r.request().postData()); store.set(b.scene.id, b.scene); saves++; return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
+    if(u.pathname==='/renderdeck/scenes/delete'){ store.delete(JSON.parse(r.request().postData()).id); return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
+    if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
+    r.fulfill({ status:404, headers:H, body:'' }); });
+  const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
+  await page.goto('https://app.test/rig/scene.html');
+  await page.evaluate(() => localStorage.setItem('render-deck-v1', JSON.stringify({servers:[{url:'https://render.test', name:'Render'}]})));
+  await page.goto('https://app.test/rig/scene.html'); await page.waitForFunction(() => window.SCENE && SCENE.sc, null, {timeout:20000}); await page.waitForTimeout(1200);
+  ok(await page.evaluate(() => SCENE.sc.name==='Scene 1' && !!document.querySelector('#saved')), 'a first scene opens on its own') ;
+  ok(saves >= 1 && store.size===1, 'and is kept on the PC (Scenes/ in the shared output): ' + saves);
+  // ＋ Add a character from the library
+  await page.click('#add'); await page.waitForSelector('#chars [data-ref]'); await page.click('#chars [data-ref]'); await page.waitForTimeout(600);
+  const ob = await page.evaluate(() => JSON.parse(JSON.stringify(SCENE.sc.objs)));
+  ok(ob.length===1 && ob[0].ref==='Character Library/Ellie' && ob[0].label==='Ellie' && await page.evaluate(() => SCENE.ui.sel===SCENE.sc.objs[0].id), 'she goes in as a reference to her library folder, selected');
+  ok(await page.evaluate(() => /🧍 Ellie/.test(document.querySelector('#objs').textContent) && /elliex/.test(document.querySelector('#objs').textContent) && /LoRA/.test(document.querySelector('#selbox').textContent)), 'the object list shows her (with her LoRA trigger word)');
+  // which picture each view shows
+  const pick = v => page.evaluate(v => { SCENE.placeCams(SCENE.rects()); const o = [...SCENE.objs.values()][0]; SCENE.placeCams({[v]:{x:0, y:0, w:300, h:300}}); const a = SCENE.pickAngle(o, SCENE.camOf(v)); return a && decodeURIComponent(a.url); }, v);
+  ok(/eye_000\.png/.test(await pick('front')) && /eye_090\.png/.test(await pick('side')), 'Front shows her front, Side her side: ' + await pick('front') + ' / ' + await pick('side'));
+  await page.evaluate(() => { const r = document.querySelector('[data-n="rot"]'); r.value = 90; r.dispatchEvent(new Event('input')); });
+  ok(/eye_270\.png/.test(await pick('front')), 'turned 90°, the Front view sees her other side: ' + await pick('front'));
+  // drag her in the Front view: only once selected
+  await page.click('.views [data-v="front"]'); await page.waitForTimeout(300);
+  const box = await page.$('#stage').then(e => e.boundingBox());
+  const drag = async (x0, y0, dx, dy) => { await page.mouse.move(box.x + x0, box.y + y0); await page.mouse.down(); await page.mouse.move(box.x + x0 + dx, box.y + y0 + dy, {steps:8}); await page.mouse.up(); await page.waitForTimeout(200); };
+  // where she is on screen in the Front view: x=0 at the middle, her middle ~0.9 m up
+  const at = await page.evaluate(() => { const r = SCENE.rects().front, C = SCENE.camOf('front'); SCENE.placeCams(SCENE.rects()); const p = new (C.position.constructor)(0, 0.9, 0).project(C); return [(p.x + 1) / 2 * r.w, (1 - p.y) / 2 * r.h, r.h, C.top - C.bottom]; });
+  await drag(at[0], at[1], 60, 0);
+  const x1 = await page.evaluate(() => SCENE.sc.objs[0].x), want = 60 * at[3] / at[2];
+  ok(Math.abs(x1 - want) < 0.05, 'dragging her in Front moves her across by the same amount: ' + x1.toFixed(3) + ' m (want ' + want.toFixed(3) + ')');
+  await page.evaluate(() => { document.querySelector('[data-sel]').click(); }); // deselect
+  const before = await page.evaluate(() => JSON.stringify(SCENE.sc.objs[0]));
+  const at2 = await page.evaluate(x => { const r = SCENE.rects().front, C = SCENE.camOf('front'); SCENE.placeCams(SCENE.rects()); const p = new (C.position.constructor)(x, 0.9, 0).project(C); return [(p.x + 1) / 2 * r.w, (1 - p.y) / 2 * r.h]; }, x1);
+  await drag(at2[0], at2[1], 50, 0);
+  ok(await page.evaluate(b => JSON.stringify(SCENE.sc.objs[0])===b, before), 'not selected, she stays put (the drag pans the view)');
+  // Top view: no card, her ring and name on the floor
+  await page.click('.views [data-v="top"]'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => { const o = [...SCENE.objs.values()][0]; SCENE.poseFor('top'); return !o.card.visible && o.disc.visible !== false && o.label.visible; }), 'Top shows where she stands and which way she faces, with her name');
+  await page.click('.views [data-v="quad"]'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => Object.keys(SCENE.rects()).sort().join()==='front,persp,side,top' && document.querySelectorAll('.vlab').length===4), '⊞ All 4 shows 3D, Top, Front and Side together');
+  // the reference: re-saved in the library, she is re-drawn from the new pictures
+  lib.saved = 2000; await page.evaluate(() => SCENE.reload()); await page.waitForTimeout(300);
+  ok(/v=2000/.test(await pick('front')), 're-saving her in the library changes her in the scene (a reference, not a copy)');
+  // kept: reopening finds the scene and where she stands
+  await page.waitForTimeout(900); await page.goto('https://app.test/rig/scene.html'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000});
+  ok(await page.evaluate(x => Math.abs(SCENE.sc.objs[0].x - x) < 0.001 && SCENE.sc.objs[0].rot===90, x1), 'reopened, the scene has her where she was left');
+  // a second scene, rename, delete
+  await page.evaluate(() => { window.prompt = () => 'Library set'; }); await page.click('#new'); await page.waitForTimeout(800);
+  ok(await page.evaluate(() => SCENE.sc.name==='Library set' && !SCENE.sc.objs.length) && store.size===2, '＋ New starts an empty scene, kept as its own file');
+  await page.click('#del'); await page.waitForTimeout(500);
+  ok(await page.evaluate(() => SCENE.sc.name==='Scene 1') && store.size===1, '🗑 deletes it and goes back to the other');
+  if(process.env.SHOT){ await page.click('.views [data-v="persp"]'); await page.click('[data-sel]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scene3d.png', fullPage:true}); await page.click('.views [data-v="quad"]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scenequad.png'}); }
+  ok(!logs.length, 'no page errors: ' + logs.join(' | '));
+  await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
+})();

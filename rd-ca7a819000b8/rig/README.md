@@ -53,3 +53,10 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 **2026-10-23 (Render Deck v.139)**: view.html is 🧊 Make 3D's viewer: one pose from rd-pose-sprites[-h] (?pose=id&sp=-h) as a camera-facing picture in a grey room with a grid floor and a soft shadow, OrbitControls, an optional flat backdrop that always faces the camera; window.VIEW = {shot(w, h), cam(), setCam(), setBackdrop(url), reload()}.
 
 - 2026-10-23: `RIG.poseFromPicture(url, pc)` copies a picture's pose (DWPose on that PC first, else MediaPipe on the phone), for Render Deck's 🧊 Make 3D.
+
+## Scene (`scene.html`)
+
+Render Deck's 🎬 Scene tab: a saved 3D space with Character Library characters placed as references (resolved from
+the library on each load, so a re-save updates them). Layers-style object list, 3D / Front / Side / Top / All 4 views,
+drag only the selected object. Scenes live on the helper (`/renderdeck/scenes*`) and in localStorage. Test:
+`RIG_DEPS=<three.js deps> node tests/t_scene.js`.

@@ -735,6 +735,61 @@ async def library_delete(request):
     return web.json_response({'ok': True})
 
 
+# ---------- 🎬 Scenes: the Scene tab's saved 3D layouts (Jordan 2026-10-27), one JSON file each in Scenes/ of the shared output
+# (Hidden/Scenes). A scene keeps references to Character Library characters (their folder), never copies, so re-saving a
+# character changes her in every scene, as Maya's references do.
+def _scene_dir(hidden):
+    return os.path.join(folder_paths.get_output_directory(), *((HIDDEN, 'Scenes') if hidden else ('Scenes',)))
+
+
+def _scene_file(hidden, sid):
+    sid = re.sub(r'[^\w\-]+', '', str(sid or ''))[:40]
+    if not sid:
+        raise ValueError('no scene id')
+    return os.path.join(_scene_dir(hidden), sid + '.json')
+
+
+@routes.get('/renderdeck/scenes')
+async def scenes(request):
+    d, out = _scene_dir(request.query.get('hidden') == '1'), []
+    if os.path.isdir(d):
+        for f in os.listdir(d):
+            if f.endswith('.json'):
+                try:
+                    with open(os.path.join(d, f), encoding='utf-8') as fh:
+                        out.append(json.load(fh))
+                except Exception:
+                    pass
+    return web.json_response({'scenes': sorted(out, key=lambda x: -float(x.get('saved') or 0))})
+
+
+@routes.post('/renderdeck/scenes/save')
+async def scenes_save(request):
+    b = await request.json()
+    sc = b.get('scene') or {}
+    try:
+        f = _scene_file(bool(b.get('hidden')), sc.get('id'))
+    except ValueError as e:
+        return web.json_response({'error': str(e)}, status=400)
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    with open(f + '.tmp', 'w', encoding='utf-8') as fh:
+        json.dump(sc, fh, indent=1)
+    os.replace(f + '.tmp', f)
+    return web.json_response({'ok': True})
+
+
+@routes.post('/renderdeck/scenes/delete')
+async def scenes_delete(request):
+    b = await request.json()
+    try:
+        f = _scene_file(bool(b.get('hidden')), b.get('id'))
+    except ValueError as e:
+        return web.json_response({'error': str(e)}, status=400)
+    if os.path.exists(f):
+        os.remove(f)
+    return web.json_response({'ok': True})
+
+
 # ---------- sync: copy the models and LoRAs another of your computers has onto this one ----------
 def _models():
     return {k: [{'name': n.replace('\\', '/'), 'size': os.path.getsize(folder_paths.get_full_path(k, n))}
