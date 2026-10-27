@@ -342,3 +342,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.203
 
 - 🧍 Character, 🧊 Open in 3D: ↺ Lean. The whole frame rolls a little, as in Jordan's hand edit of the high 45° view. The amount is 4° × sin(height)/sin(35°) × sin(angle round her)/sin(45°): none from the front or back, counter-clockwise on one side of her and clockwise on the other. It is on by default, with a toggle beside Snap, Straighten and Slim.
+
+## 2026-10-27.204
+
+- 🧍 Character, 🧊 Open in 3D: ↺ Lean is replaced by ⟋ Slant. Jordan's edit was a skew, not a turn ("I literally took the side of the image and pulled it downward"). Upright lines stay upright, and sideways lines (shoulders, hem, floor) slope down on one side. The slope is 0.12 at 35° up and 45° round her, scaled by sin(height) and sin(angle round her), so there is none from the front or back and it slopes the other way on her other side.
