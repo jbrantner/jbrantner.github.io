@@ -100,7 +100,8 @@ function pickChanged() {
   const n = (state.packs || []).length ? weekSpends().filter(x => x.unsorted).length : 0;
   const line = [c ? (over ? `${money(Math.ceil(-after - 1e-9))} over after this` : `${money(after)} left after this`) : over ? `Overdrawn ${money(Math.ceil(-left - 1e-9))}` : (KEYPAD_ALWAYS ? '' : `${money(left)} left this week · ${(t => t >= 0 ? money(t) + ' today' : money(Math.ceil(-t - 1e-9)) + ' over today')(todayLeft())}`),
     n ? `<button class="link" data-sort>${n} to sort</button>` : ''].filter(Boolean).join(' · ');
-  const line2 = String(spendCat).startsWith('debt:') ? `Goes on ${esc(potName(spendCat.slice(5)))}, not this week's money` : line;   // v297
+  const fromId = String(spendCat).startsWith('from:') ? spendCat.slice(5) : null;   // v321: out of Savings, the cushion or a pot
+  const line2 = String(spendCat).startsWith('debt:') ? `Goes on ${esc(potName(spendCat.slice(5)))}, not this week's money` : fromId ? `Comes out of ${esc(spendName(fromId))}, not this week's money` : line;   // v297
   if (pickChanged.line !== line2) { pickChanged.line = line2; $('packLeft').innerHTML = line2; }
   { const pk = (state.packs || []).length && purseNow().P > 0, L2 = pk ? catWeekNow(Date.now(), c ? { pack: spendCat, c: Math.round(ch * 100) } : null) : null, wk = L2 && L2.weekly.find(x => x.id === spendCat) || null;
     const wn = wk ? ((state.packs || []).find(x => x.id === spendCat) || {}).name || '' : '';
@@ -108,11 +109,13 @@ function pickChanged() {
     const h = `<div class="kp-tl">${wk ? `${esc(wn)} left this week${c ? ' after this' : ''}` : c ? 'Left today after this' : 'Left today'}</div><div class="kp-tn num${a < 0 ? ' bad' : ''}">${m ? `${esc(m[1])}<span class="c">${esc(m[2])}</span>` : esc(a < 0 ? '−' + money(Math.round(-a)) : money(Math.round(a)))}</div>`;
     let h2 = h; if (String(spendCat).startsWith('debt:')) { const id = spendCat.slice(5), r = debtRoom(id), aft = r == null ? goalOf(id) + (c ? c / 100 : 0) : r - (c ? c / 100 : 0);   // v297: on a card
       h2 = `<div class="kp-tl">${esc(potName(id))} ${r == null ? 'owed' : 'left to spend'}${c ? ' after this' : ''}</div><div class="kp-tn num${r != null && aft < 0 ? ' bad' : ''}">${esc(aft < 0 ? '−' + moneyExact(-aft) : moneyExact(aft))}</div>`; }
+    if (fromId) { const aft = c2(spendRoom(fromId) - (c ? c / 100 : 0));
+      h2 = `<div class="kp-tl">${esc(spendName(fromId))} left${c ? ' after this' : ''}</div><div class="kp-tn num${aft < 0 ? ' bad' : ''}">${esc(aft < 0 ? '−' + moneyExact(-aft) : moneyExact(aft))}</div>`; }
     if (pickChanged.today !== h2) { pickChanged.today = h2; $('kpToday').innerHTML = h2; } }
   homeStats(); renderFav();
-  const onCard = String(spendCat).startsWith('debt:');   // v297
+  const onCard = String(spendCat).startsWith('debt:') || !!fromId;   // v297; v321: or out of Savings or a pot
   $('packLeft').classList.toggle('over', over && !onCard);
-  $('packNote').textContent = c && over && !onCard ? `That's more than the purse has left, so you'll need to send postage.` : '';
+  $('packNote').textContent = fromId && c && c / 100 > spendRoom(fromId) + 1e-9 ? `${spendName(fromId)} has ${moneyExact(spendRoom(fromId))}.` : c && over && !onCard ? `That's more than the purse has left, so you'll need to send postage.` : '';
   $('pickSaid').textContent = c ? showCents(c) : '';
   if (!sheetOpen) sheetFit();
 }
@@ -274,6 +277,13 @@ $('packGo').onclick = () => { const c = pickCents(); if (!(c > 0)) return;
     const id = spendCat.slice(5), n = potName(id), u = debtCharge(id, c / 100); spendCat = ''; renderFav();
     if (u) { pickVal = 0; pickBuf = ''; pickTray = []; renderTray(); wheelsTo(0, false); clearTimeout(spendClose); setSheet(false); VL.kp(false); const r = debtRoom(id); toastUndo(`${moneyExact(c / 100)} on ${n} · owe ${moneyExact(goalOf(id))}${r != null ? ` · ${money(Math.max(0, Math.floor(r + 1e-9)))} left` : ''}`, u); }
     return; }
+  if (String(spendCat).startsWith('from:')) {   // v321: out of Savings, the cushion or a pot: it leaves the bank, this week's money doesn't change
+    if (planBlock()) return;
+    const id = spendCat.slice(5), n = spendName(id), t = spendFrom(id, c / 100);
+    if (!t) { toast(`${n} has ${moneyExact(spendRoom(id))}`); return; }
+    spendCat = ''; renderFav(); pickVal = 0; pickBuf = ''; pickTray = []; renderTray(); wheelsTo(0, false); clearTimeout(spendClose); setSheet(false); VL.kp(false);
+    toastUndo(`Spent ${moneyExact(t.amount)} from ${n}`, () => { undoSpendFrom(t.id); toast('Spending taken back'); });
+    return; }
   const p = (state.packs || []).find(x => x.id === spendCat);   // v285: the category picked above the keys (Anything when none)
   logSpend(c, (state.packs || []).length ? { description: p ? p.name : 'Anything', pack: p ? p.id : '' } : undefined); spendCat = ''; renderFav(); };
 // v270 (Jordan 13:57): Favorites, in Spend again's place. Spends you name yourself, as keys above the keypad (up to three,
@@ -290,14 +300,18 @@ function renderFav() {
   const ps = state.packs || [];
   if (ps.length) {
     const dbs = liveDebts();   // v297: a debt to spend on (it goes on the card)
-    if (spendCat && !ps.some(p => p.id === spendCat) && !dbs.some(p => 'debt:' + p.id === spendCat)) spendCat = '';
+    // v321 (Jordan): Savings (the Month cushion while it fills) and pots or projects with money in them, to spend out of
+    const CT = billsMonthWhole(), sv = CT > 0 && placeBal('savings') < CT - 0.005 ? 'cushion' : 'savings';
+    const outs = [sv, ...(state.pots || []).filter(p => !debtOf(p.id) && spendRoom(p.id) >= 1).map(p => p.id)].filter(id => spendRoom(id) >= 0.01);
+    if (spendCat && !ps.some(p => p.id === spendCat) && !dbs.some(p => 'debt:' + p.id === spendCat) && !outs.some(id => 'from:' + id === spendCat)) spendCat = '';
     let L = null; try { L = catWeekNow(); } catch (e) {}
     const leftOf = id => { if (!L) return ''; const d = L.daily.find(x => x.id === id), w = L.weekly.find(x => x.id === id);
       return d ? `${d.today < 0 ? '−' : ''}${money(Math.floor(Math.abs(d.today) / 100))} today` : w ? `${w.left < 0 ? '−' : ''}${money(Math.floor(Math.abs(w.left) / 100))} this week` : ''; };
-    const all = ps.map(p => ({ id: p.id, p })).concat(dbs.map(p => ({ id: 'debt:' + p.id, p: { name: p.name, debt: p.id } })), [{ id: '', p: { any: true, name: 'Anything' } }]);
+    const all = ps.map(p => ({ id: p.id, p })).concat(dbs.map(p => ({ id: 'debt:' + p.id, p: { name: p.name, debt: p.id } })), [{ id: '', p: { any: true, name: 'Anything' } }],
+      outs.map(id => ({ id: 'from:' + id, p: { name: id === 'cushion' ? 'Cushion' : spendName(id), from: id } })));
     const dLeft = x => { const r = debtRoom(x.p.debt); return r == null ? `owe ${money(goalOf(x.p.debt))}` : r >= 0 ? `${money(Math.floor(r + 1e-9))} left` : `${money(Math.ceil(-r - 1e-9))} over`; };
     const h = `<div class="kp-fav-cap"><span>Spend on</span></div><div class="kp-cat-row" style="--n:${Math.min(all.length, 4)}">`
-      + all.map(x => `<button type="button" class="kp-fav-b kp-cat${x.id === spendCat ? ' on' : ''}" data-sp-cat="${esc(x.id)}" aria-pressed="${x.id === spendCat}"><b>${catSvg(x.p.debt ? 'card' : catSymOf(x.p))}<span>${esc(x.p.name)}</span></b><small>${x.p.debt ? dLeft(x) : leftOf(x.id)}</small></button>`).join('') + '</div>';
+      + all.map(x => `<button type="button" class="kp-fav-b kp-cat${x.id === spendCat ? ' on' : ''}" data-sp-cat="${esc(x.id)}" aria-pressed="${x.id === spendCat}"><b>${catSvg(x.p.debt ? 'card' : x.p.from ? 'save' : catSymOf(x.p))}<span>${esc(x.p.name)}</span></b><small>${x.p.debt ? dLeft(x) : x.p.from ? `${money(Math.floor(spendRoom(x.p.from) + 1e-9))} saved` : leftOf(x.id)}</small></button>`).join('') + '</div>';
     if (renderFav.h !== h) { renderFav.h = h; $('kpFav').innerHTML = h; $('kpFav').setAttribute('aria-label', 'Spend on'); }
     return;
   }

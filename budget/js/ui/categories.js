@@ -15,6 +15,7 @@ const CAT_SYM = {   // 7x7, '#' is a pixel
   home: ['...#...', '..###..', '.#####.', '#######', '.##.##.', '.##.##.', '.##.##.'],
   any: ['...#...', '...#...', '..###..', '#######', '..###..', '...#...', '...#...'],
   other: ['...#...', '..###..', '.#####.', '#######', '.#####.', '..###..', '...#...'],
+  save: ['.#####.', '#.....#', '.#####.', '#.....#', '.#####.', '#.....#', '.#####.'],   // v321: a stack of coins, for spending out of Savings or a pot
   card: ['.......', '#######', '#######', '#......', '#.##..#', '#######', '.......'] };   // v297: a debt
 const CAT_WORDS = [['food', /food|grocer|eat|meal|lunch|dinner|restaur|snack|takeout|take out/i], ['gas', /gas|fuel/i], ['coffee', /coffee|cafe|café|tea|drink/i],
   ['fun', /fun|game|movie|entertain|hobby|treat/i], ['shop', /shop|cloth|store|amazon|target/i], ['pet', /pet|dog|cat\b|vet/i], ['health', /health|med|pharm|doctor|drug/i],
