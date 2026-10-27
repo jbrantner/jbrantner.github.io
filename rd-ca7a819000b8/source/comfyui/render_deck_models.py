@@ -1425,6 +1425,8 @@ async def p3d_put(request):
 #   pick   15-30 pictures: near-repeats and blurry ones dropped, the angles always kept, the sharpest shot frames after
 #          them; written with captions to kohya's data folder and to RenderDeck/datasets/<trigger> in the output folder
 #   train  kohya sd-scripts (found next to ComfyUI) with the settings that fit the 8 GB laptops, stopped above 87 C
+# The Character Creator starts at shots (`only`): its finished angles come as `given` pictures (always kept, with their
+# own captions) and `front`/`side`/`back` stand in for the turnaround's angles as MiniMax's pictures.
 # State lives in render_deck_auto.json, so a ComfyUI restart picks the run back up at the step it was on.
 AUTO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_auto.json')
 AUTO = {'jobs': []}
@@ -1628,8 +1630,22 @@ def _save_path_per_pc_dir(sub):
 
 def _input_copy(j, f, tag):
     name = 'rdauto_%s_%s.png' % (j['id'], tag)
-    shutil.copyfile(_outfile(f), os.path.join(folder_paths.get_input_directory(), name))
+    _flat_copy(_outfile(f), os.path.join(folder_paths.get_input_directory(), name))
     return name
+
+
+def _flat_copy(src, dst):
+    """A copy of a picture; a cut-out one (the Character Creator's) is put on white first, as MiniMax and kohya would
+    otherwise see whatever colour hides under the see-through parts."""
+    from PIL import Image
+    im = Image.open(src)
+    if im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info):
+        im = im.convert('RGBA')
+        bg = Image.new('RGB', im.size, (255, 255, 255))
+        bg.paste(im, mask=im.split()[3])
+        bg.save(dst)
+    else:
+        shutil.copyfile(src, dst)
 
 
 async def _step_turn(s, j):
@@ -1661,9 +1677,12 @@ async def _step_shots(s, j):
     shots = j['shots']
     if all(x.get('frames') or x.get('err') for x in shots):
         return
-    side = j['angles'].get('right') or j['angles'].get('left')
-    back = j['angles'].get('back')
-    ins = {'@SIDE': _input_copy(j, side, 'side') if side else j['src'], '@BACK': _input_copy(j, back, 'back') if back else j['src']}
+    an = j.get('angles') or {}
+    front = an.get('front') or j.get('front')
+    side = an.get('right') or an.get('left') or j.get('side')
+    back = an.get('back') or j.get('back')
+    src = _input_copy(j, front, 'front') if front else j.get('src', '')
+    ins = {'@FRONT': src, '@SIDE': _input_copy(j, side, 'side') if side else src, '@BACK': _input_copy(j, back, 'back') if back else src}
     # everything into the queue at once, so a restart of the run finds them already made or waiting
     for i, x in enumerate(shots):
         if x.get('frames') or x.get('err') or x.get('pid') or x.get('clip'):
@@ -1701,7 +1720,8 @@ async def _step_shots(s, j):
 def _pick(j):
     """Drop near-repeats and blurry pictures, keep the angles, fill up to the most with the sharpest shot frames."""
     lo, hi = j.get('set_min', 15), j.get('set_max', 30)
-    items = [dict(f, kind='angle', cap=A_POSE + (', ' + VIEW_TAG[f['angle']] if VIEW_TAG[f['angle']] else '')) for f in j['angles'].values()]
+    items = [dict(f, kind='angle', cap=A_POSE + (', ' + VIEW_TAG[f['angle']] if VIEW_TAG[f['angle']] else '')) for f in (j.get('angles') or {}).values()]
+    items += [dict(f, kind='angle') for f in j.get('given') or [] if os.path.exists(_outfile(f))]
     for x in j['shots']:
         for f in x.get('frames') or []:
             items.append(dict(f, kind='shot', cap=x.get('tags', '')))
@@ -1765,7 +1785,7 @@ def _write_set(j):
         os.makedirs(d, exist_ok=True)
         for n, p in enumerate(j['picks']):
             stem = '%s_%02d' % (trig, n + 1)
-            shutil.copyfile(_outfile(p), os.path.join(d, stem + '.png'))
+            _flat_copy(_outfile(p), os.path.join(d, stem + '.png'))
             cap = ', '.join(x for x in [trig, who, 'solo', p['cap']] if x)
             with open(os.path.join(d, stem + '.txt'), 'w', encoding='utf-8') as f:
                 f.write(cap)
@@ -2025,11 +2045,20 @@ async def auto_start(request):
         return web.json_response({'error': 'until must be one of ' + ', '.join(AUTO_UNTIL)}, status=400)
     if b['until'] == 'lora' and not _kohya()[0]:
         return web.json_response({'error': "kohya sd-scripts isn't next to ComfyUI on this computer, so it can't train the LoRA here."}, status=400)
-    j = {'id': uuid.uuid4().hex[:10], 'state': 'running', 'started': time.time(), 'prog': 0, 'step': 'turn', 'text': 'Starting…', 'done': []}
+    only = [x for x in AUTO_STEPS if x in (b.get('only') or [])]
+    if b.get('only') and (not only or 'turn' in only or ('angles' in only and 'shots' in only)):
+        return web.json_response({'error': 'only takes later steps: shots, pick, train'}, status=400)
+    pics = [f for f in [b.get('front'), b.get('side'), b.get('back')] + list(b.get('given') or []) if f]
+    gone = [f.get('filename', '?') for f in pics if not (isinstance(f, dict) and f.get('filename') and os.path.exists(_outfile(f)))]
+    if gone:
+        return web.json_response({'error': "%d of her pictures aren't in this computer's output folder yet (Dropbox still syncing?): %s" % (len(gone), ', '.join(gone[:3]))}, status=400)
+    j = {'id': uuid.uuid4().hex[:10], 'state': 'running', 'started': time.time(), 'prog': 0, 'step': (only or AUTO_STEPS)[0], 'text': 'Starting…', 'done': []}
     for k in ('char', 'until', 'turn_graph', 'shot_graphs', 'redraw', 'src', 'keep_front', 'angles_prefix', 'shots_prefix', 'trigger', 'who',
-              'dataset_dir', 'ckpt', 'steps', 'per_shot', 'set_min', 'set_max', 'pc', 'style_lora', 'style_mult'):
+              'dataset_dir', 'ckpt', 'steps', 'per_shot', 'set_min', 'set_max', 'pc', 'style_lora', 'style_mult', 'front', 'side', 'back', 'given'):
         if k in b:
             j[k] = b[k]
+    if only:
+        j['only'] = only
     j['shots'] = [{'say': x.get('say', ''), 'tags': x.get('tags', '')} for x in b.get('shots', [])]
     j['trigger'] = re.sub(r'[^\w]+', '_', j.get('trigger') or 'character').strip('_') or 'character'
     AUTO['jobs'] = AUTO['jobs'][-9:] + [j]

@@ -144,6 +144,33 @@ async def main():
     ok(held is None and after == ('prompt', 1), 'ComfyUI holds its queue while kohya trains, then carries on')
     r = await PS.instance.routes.h[('GET', '/renderdeck/jobs')](None)
     ok(seen and 'training' in json.loads(r.body), 'a hand-started kohya shows as training in /renderdeck/jobs')
+    # the Character Creator's run (2026-10-27): starts at the shots, with her finished cut-out angles given (always kept, on white)
+    cc = os.path.join(OUT, 'Output_Render', 'RenderDeck', 'cc'); os.makedirs(cc)
+    given = []
+    for n in range(10):
+        im = Image.new('RGBA', (768, 1344), (0, 0, 0, 0)); ImageDraw.Draw(im).rectangle([300 - n * 8, 200, 470 + n * 8, 1200], fill=(200, 40, 90, 255)); im.save(os.path.join(cc, 'f_%d.png' % n))
+        given.append({'filename': 'f_%d.png' % n, 'subfolder': 'Output_Render/RenderDeck/cc', 'cap': 'standing, full body, white background' + (', from side' if n == 2 else '')})
+    vf = lambda p: {'graph': {'1': {'class_type': 'LoadImage', 'inputs': {'image': '@FRONT'}}, '2': {'class_type': 'LoadImage', 'inputs': {'image': '@SIDE'}}, '3': {'class_type': 'LoadImage', 'inputs': {'image': '@BACK'}}, '4': {'class_type': 'SaveVideo', 'inputs': {'filename_prefix': p}}}, 'save': '4'}
+    cb = {'char': 'Ellie', 'until': 'lora', 'only': ['shots', 'pick', 'train'], 'front': given[0], 'side': given[2], 'back': given[4], 'given': given,
+          'shots_prefix': 'RenderDeck/characters/shots/Ellie', 'shots': [{'say': 'sits', 'tags': 'sitting, chair'}], 'shot_graphs': [vf('RenderDeck/characters/shots/Ellie_clip_a')],
+          'trigger': 'elliex', 'who': '1girl', 'dataset_dir': 'RenderDeck/datasets/elliex', 'ckpt': 'oneObsession_v24.safetensors', 'steps': 200, 'pc': 'https://render.ts.net'}
+    bad = dict(cb, given=given + [{'filename': 'gone.png', 'subfolder': 'x'}])
+    r = await PS.instance.routes.h[('POST', '/renderdeck/auto/start')](types.SimpleNamespace(json=lambda: asyncio.sleep(0, bad)))
+    ok(r.status == 400 and 'gone.png' in r.body.decode(), 'a picture missing from the output folder is turned down at the start: ' + r.body.decode()[:120])
+    SEEN.clear()
+    r = await PS.instance.routes.h[('POST', '/renderdeck/auto/start')](types.SimpleNamespace(json=lambda: asyncio.sleep(0, cb)))
+    cid = json.loads(r.body)['id']
+    for _ in range(200):
+        await asyncio.sleep(0.2)
+        j3 = next(x for x in H.AUTO['jobs'] if x['id'] == cid)
+        if j3['state'] != 'running': break
+    ok(j3['state'] == 'done' and j3['done'] == ['shots', 'pick', 'train'] and not j3.get('turn') and j3['lora'] == 'elliex.safetensors', 'her LoRA run skips the turnaround and angles: %s %s %s' % (j3['state'], j3.get('done'), j3.get('text')))
+    g = SEEN[0]; ims = [g[k]['inputs']['image'] for k in '123']
+    ok(len(SEEN) == 1 and ims == ['rdauto_%s_front.png' % cid, 'rdauto_%s_side.png' % cid, 'rdauto_%s_back.png' % cid], 'MiniMax gets her front, side and back: %s' % ims)
+    fi = Image.open(os.path.join(INP, ims[0])); ok(fi.mode == 'RGB' and fi.getpixel((5, 5)) == (255, 255, 255), 'her cut-out goes to MiniMax on white')
+    d3 = os.path.join(K, 'data', 'elliex', '10_elliex'); pics = sorted(f for f in os.listdir(d3) if f.endswith('.png')); caps3 = [open(os.path.join(d3, f)).read() for f in sorted(os.listdir(d3)) if f.endswith('.txt')]
+    ok(len(pics) >= 10 and sum(c.endswith('white background') or 'white background, from side' in c for c in caps3) == 10 and caps3[0].startswith('elliex, 1girl, solo, standing'), 'all 10 given angles are in the set with their captions, plus shot frames: %d pictures, %s' % (len(pics), caps3[2]))
+    ti = Image.open(os.path.join(d3, pics[0])); ok(ti.mode == 'RGB' and ti.getpixel((5, 5)) == (255, 255, 255), 'and kohya gets them on white')
     await run.cleanup()
 asyncio.run(main())
 print(len(fails), 'failed' if fails else 'all passed'); sys.exit(1 if fails else 0)

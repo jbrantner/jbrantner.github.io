@@ -354,3 +354,8 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.206
 
 - 🧍 Character tab: one drag now turns her and changes the height together, so a diagonal drag orbits diagonally. Before, a drag locked to whichever direction the finger first moved (Jordan 2026-10-27). A flick still keeps her spinning with Momentum.
+
+## 2026-10-27.207
+
+- 🧍 Character: a sixth card, 🎓 Her LoRA. Once all five steps are done, ▶ Make her LoRA runs on Render's helper with the app closed. The trigger word is her name + x (Ellie → elliex). Her 8 eye-level angles and the two a-little-high ¾ views are always in the set, put on white. MiniMax acts out the 12 training shots from her finished front, side and back. The helper keeps the sharpest, least alike frames, up to 30 pictures, and kohya trains on her model with her style LoRA mixed in (about 2.5 h). The card shows progress, the pictures it picked, and how to use the LoRA.
+- Helper: `/renderdeck/auto/start` takes `only` (start at shots), `given` pictures, and `front`/`side`/`back`. Cut-out pictures are put on white for MiniMax and kohya. A picture missing from the output folder is turned down at the start.
