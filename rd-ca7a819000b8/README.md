@@ -368,3 +368,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 
 - 🧍 Character: 📚 **Character Library**. Once all 5 steps are done, "📚 Save her to the library" keeps the character in the shared Dropbox output, in `Character Library/<name>/`. That holds her 48 angles as see-through PNGs (`eye_000.png`, `a_little_high_022.5.png` …) and `character.json`: her LoRA, trigger word, model, style, prompt start, plus the heights, body size and lens the 3D viewer needs. The library strip under the steps shows everyone saved. Tap one for her LoRA and prompt start (📋 Copy), 🧊 Open in 3D from the library pictures, or 🗑 Take out of the library (her LoRA stays). Saving again replaces her. The renders browser leaves library folders out.
 - Helper: `/renderdeck/library` (list), `/renderdeck/library/save`, `/renderdeck/library/delete`.
+
+## 2026-10-27.212
+
+- 📚 Library is its own tab now, the fourth beside 🎨 Render, 📖 Comic and 🧍 Character Creator. "Character" is renamed "Character Creator" (Jordan 2026-10-27). The Creator keeps 📚 Save her to the library, plus a button that opens the Library tab. The Library tab shows everyone saved as a grid: tap one for her LoRA recipe, 🧊 Open in 3D, 📋 Copy the prompt start, or 🗑 Take out. The tab bar lets "Character Creator" wrap to two lines on a phone.
