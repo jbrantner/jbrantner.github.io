@@ -19,6 +19,7 @@ const DEF = { // required inputs and output count, copied from ComfyUI nodes.py
   KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1],
   UltimateSDUpscale:[['image','model','positive','negative','vae','upscale_by','seed','steps','cfg','sampler_name','scheduler','denoise','upscale_model','mode_type','tile_width','tile_height'],1],
   UltimateSDUpscaleNoUpscale:[['upscaled_image','model','positive','negative','vae','seed','steps','cfg','denoise'],1],
+  RenderDeckUpscaleColorFix:[['image','image_ref','strength','levels'],1],
   FaceDetailer:[['image','model','clip','vae','positive','negative','bbox_detector','denoise','guide_size'],6], UltralyticsDetectorProvider:[['model_name'],2],
 };
 function check(g){
@@ -196,6 +197,20 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.fill('.block[style*="--lora"] [data-lw]', 'pixel style');
   await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); let lg = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets());
   ok(textOf(lg,'Prompt').includes(', pixel style, ') && (await page.textContent('#addedPos')).includes('LoRA adds: pixel style'), 'LoRA activation words added: '+textOf(lg,'Prompt'));
+  // Redraw upscale: soft tile edges + Band Pass seam fix, then colours taken back from the picture before the upscale
+  await page.click('.block[style*="--up"] [data-seg=mode][data-v=redraw]');
+  const upGraph = async () => { await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const x = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets()); return x; };
+  let rg = await upGraph(), us = Object.values(rg).find(x => /^UltimateSDUpscale/.test(x.class_type)), cf = Object.entries(rg).find(([k, x]) => x.class_type==='RenderDeckUpscaleColorFix');
+  ok(check(rg).length===0 && us.inputs.seam_fix_mode==='Band Pass' && us.inputs.tile_padding===64 && us.inputs.mask_blur===16 && us.inputs.seam_fix_denoise<=0.3, 'redraw smooths seams: ' + check(rg).join('; '));
+  const usId = Object.keys(rg).find(k => rg[k]===us), src = us.inputs.image || rg[us.inputs.upscaled_image[0]].inputs.image;
+  ok(cf && cf[1].inputs.image[0]===usId && JSON.stringify(cf[1].inputs.image_ref)===JSON.stringify(src) && rg[src[0]].class_type==='VAEDecode', 'keep colours matches the redraw to the picture before it');
+  const fd = Object.values(rg).find(x => x.class_type==='FaceDetailer');
+  ok(fd ? fd.inputs.image[0]===cf[0] : rg[Object.keys(rg).find(k => rg[k].class_type==='SaveImage')].inputs.images[0]===cf[0], 'the colour-fixed picture goes on to faces or the save');
+  await page.click('.block[style*="--up"] [data-do=seams]'); await page.click('.block[style*="--up"] [data-do=keepColour]');
+  rg = await upGraph(); us = Object.values(rg).find(x => /^UltimateSDUpscale/.test(x.class_type));
+  ok(us.inputs.seam_fix_mode==='None' && !Object.values(rg).some(x => x.class_type==='RenderDeckUpscaleColorFix') && /Smooth seams: off/.test(await page.textContent('.block[style*="--up"]')), 'both switch off');
+  await page.click('.block[style*="--up"] [data-do=seams]'); await page.click('.block[style*="--up"] [data-do=keepColour]');
+  await page.click('.block[style*="--up"] [data-seg=mode][data-v=model]');
 
   // reuse result as start picture
   // the big picture and the thumbnail strip, all in one section that folds; the library's latest row opens a render there

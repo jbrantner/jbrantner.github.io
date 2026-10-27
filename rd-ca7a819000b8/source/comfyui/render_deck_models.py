@@ -2179,5 +2179,48 @@ class RenderDeckCutoutColorMatch:
         return (torch.stack(out).to(image.dtype),)
 
 
-NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch}
-NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)'}
+# ---------- ⬆ Redraw upscale: colours held to the picture before it (Jordan 2026-10-27, "upscales wash out the colour") ----------
+# The tiles are redrawn by the base model with no LoRAs at a low CFG, so they drift to its flatter palette, each tile a little
+# differently. The wavelet colour fix (as in StableSR): split both pictures into fine detail and broad colour and shading,
+# keep the redraw's fine detail and take the broad part from the picture before upscaling (resized to fit). That also evens
+# out tile-to-tile brightness.
+class RenderDeckUpscaleColorFix:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'image': ('IMAGE',), 'image_ref': ('IMAGE',), 'strength': ('FLOAT', {'default': 1.0, 'min': 0.0, 'max': 1.0, 'step': 0.05}),
+                             'levels': ('INT', {'default': 5, 'min': 1, 'max': 8})}}
+    RETURN_TYPES = ('IMAGE',)
+    FUNCTION = 'fix'
+    CATEGORY = 'Render Deck'
+
+    @staticmethod
+    def _split(x, levels):
+        import torch
+        import torch.nn.functional as F
+        k = torch.tensor([[1 / 16, 1 / 8, 1 / 16], [1 / 8, 1 / 4, 1 / 8], [1 / 16, 1 / 8, 1 / 16]], dtype=x.dtype, device=x.device)
+        k = k[None, None].repeat(x.shape[1], 1, 1, 1)
+        high, low = torch.zeros_like(x), x
+        for i in range(levels):
+            r = 2 ** i
+            blur = F.conv2d(F.pad(low, (r, r, r, r), mode='replicate'), k, groups=x.shape[1], dilation=r)
+            high, low = high + low - blur, blur
+        return high, low
+
+    def fix(self, image, image_ref, strength, levels=5):
+        import torch.nn.functional as F
+        if strength <= 0:
+            return (image,)
+        out = []
+        for i, a in enumerate(image):
+            r = image_ref[min(i, len(image_ref) - 1)][..., :3].permute(2, 0, 1)[None].float()
+            x = a[..., :3].permute(2, 0, 1)[None].float()
+            if r.shape[-2:] != x.shape[-2:]:
+                r = F.interpolate(r, size=x.shape[-2:], mode='bicubic', align_corners=False).clamp(0, 1)
+            fixed = self._split(x, levels)[0] + self._split(r, levels)[1]
+            out.append((x + (fixed - x) * strength).clamp(0, 1)[0].permute(1, 2, 0))
+        import torch
+        return (torch.stack(out).to(image.dtype),)
+
+
+NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix}
+NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)'}
