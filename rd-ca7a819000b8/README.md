@@ -372,3 +372,8 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.212
 
 - 📚 Library is its own tab now, the fourth beside 🎨 Render, 📖 Comic and 🧍 Character Creator. "Character" is renamed "Character Creator" (Jordan 2026-10-27). The Creator keeps 📚 Save her to the library, plus a button that opens the Library tab. The Library tab shows everyone saved as a grid: tap one for her LoRA recipe, 🧊 Open in 3D, 📋 Copy the prompt start, or 🗑 Take out. The tab bar lets "Character Creator" wrap to two lines on a phone.
+
+## 2026-10-27.213
+
+- 🎬 **Scene** tab (Jordan 2026-10-27): a saved 3D space (`rig/scene.html`, shown inside the app). Scenes are named projects (＋ New, ✎ Rename, 🗑) kept on Render in the shared output as `Scenes/<id>.json` (`Hidden/Scenes` in Hidden) and on the phone. ＋ Add a character puts a 📚 Library character in as a reference: the scene keeps only her library folder and where she stands, so re-saving her in the library changes her in every scene. Objects list works like layers (👁 hide, 🔒 lock); only the selected one moves. Views: 3D, Front, Side, Top or ⊞ All 4. In each view she is drawn from the library angle that faces that camera; Top shows a ring with her facing arrow and name. Drag in Front/Side to move her sideways and up, in Top/3D across the floor; exact x/y/z, Turn (↺/↻ 45°), Size, 🧲 Snap to 25 cm, ⧉ Another one, ✕ Take out.
+- Helper: `/renderdeck/scenes` (list), `/renderdeck/scenes/save`, `/renderdeck/scenes/delete`.
