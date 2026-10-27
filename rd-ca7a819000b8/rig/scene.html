@@ -24,7 +24,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 @media (min-width:760px){.cols{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .box h2{margin:0 0 8px;font:600 15px var(--display);display:flex;align-items:center;gap:8px}
-.box h2 button{margin-left:auto;min-height:32px;padding:4px 10px;font:700 13px Nunito,sans-serif}
+.box h2 button:first-of-type{margin-left:auto}.box h2 button{min-height:32px;padding:4px 10px;font:700 13px Nunito,sans-serif}
 .list{display:grid;gap:4px}
 .row{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:4px 6px;background:var(--bg)}
 .row[aria-selected="true"]{border-color:var(--sel)}
@@ -52,14 +52,15 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 <div class="views" role="tablist"><button data-v="persp">3D</button><button data-v="front">Front</button><button data-v="side">Side</button><button data-v="top">Top</button><button data-v="quad">⊞ All 4</button></div>
 <div id="stage"><div id="msg"></div></div>
 <div class="cols">
-  <div class="box"><h2>Objects<button id="add">＋ Add a character</button></h2><div class="list" id="objs"></div>
+  <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="list" id="objs"></div>
     <p class="note">Tap a name to select it; only the selected one moves. Drag it in any view: Front and Side move it sideways and up, Top and 3D slide it over the floor.</p></div>
   <div class="box" id="selbox"></div>
 </div>
-<div id="pick" hidden><div class="sheet"><div class="bar" style="padding:0"><b style="font-family:var(--display)">📚 Character Library</b><button id="pickx" style="margin-left:auto">✕</button></div><div class="chars" id="chars"></div></div></div>
+<div id="pick" hidden><div class="sheet"><div class="bar" style="padding:0"><b style="font-family:var(--display)" id="pickh">📚 Character Library</b><button id="pickx" style="margin-left:auto">✕</button></div><div class="chars" id="chars"></div></div></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
 <script type="module">
 // 🎬 Scene (Jordan 2026-10-27): a 3D space saved as a scene, with Character Library characters placed in it as references.
+// 🪑 Objects from the Object Library go in the same way (kind 'obj'), stood at their real height.
 // A scene keeps only where each one stands (and its turn and size) and which library folder it is; her pictures, LoRA and
 // size come from the library each time, so re-saving her there changes her in every scene (as Maya's references do).
 // Layers-style object list: only the selected one moves. Views: 3D (orbit), and flat Front, Side and Top for exact placing,
@@ -73,7 +74,8 @@ const uid = p => p + Math.random().toString(36).slice(2, 9);
 function deckServers(){ try{ const d = JSON.parse(localStorage.getItem('render-deck-v1')) || {}; return (d.servers || []).filter(x => x.url && x.url!=='test').sort((a, b) => (b.name==='Render') - (a.name==='Render')); }catch(e){ return []; } }
 const PC = {url:'', lib:[], ok:false};
 async function findPc(){ for(const s of (window.SCENE_SERVERS || deckServers())){ try{ const r = await fetch(s.url + '/renderdeck/library' + (HID ? '?hidden=1' : ''), {cache:'no-store'}); if(!r.ok) continue; const j = await r.json(); if(!j.library) continue;
-      PC.url = s.url; PC.lib = j.characters || []; PC.ok = true; return true; }catch(e){} } return false; }
+      let objs = []; if(j.kinds) try{ objs = ((await (await fetch(s.url + '/renderdeck/library?kind=obj' + (HID ? '&hidden=1' : ''), {cache:'no-store'})).json()).objects || []).map(e => Object.assign(e, {kind:'obj'})); }catch(e){}
+      PC.url = s.url; PC.lib = (j.characters || []).concat(objs); PC.ok = true; return true; }catch(e){} } return false; }
 const viewUrl = (e, file) => PC.url + '/view?filename=' + encodeURIComponent(file) + '&subfolder=' + encodeURIComponent(e.subfolder) + '&type=output&v=' + Math.round(e.saved || 0);
 const libOf = ref => PC.lib.find(e => e.subfolder===ref);
 // ---- scenes: on the phone always, on the PC when its helper has /renderdeck/scenes; the newer copy wins
@@ -136,15 +138,15 @@ const discTex = (() => { const c = document.createElement('canvas'); c.width = c
   x.fillStyle = '#fff'; x.beginPath(); x.moveTo(64, 124); x.lineTo(46, 96); x.lineTo(82, 96); x.fill(); return new THREE.CanvasTexture(c); })(); // the arrow points to her front (+z)
 function labelTex(txt){ const c = document.createElement('canvas'); c.width = 256; c.height = 64; const x = c.getContext('2d'); x.fillStyle = 'rgba(0,0,0,.55)'; x.fillRect(0, 8, 256, 48); x.fillStyle = '#fff'; x.font = '700 30px Nunito,sans-serif'; x.textAlign = 'center'; x.fillText(txt.slice(0, 16), 128, 43); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; }
 function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(); if(!SC) return;
-  for(const ob of SC.objs){ const e = libOf(ob.ref), g = new THREE.Group(), geo = e && e.geo || {wM:1.07, hM:1.87};
+  for(const ob of SC.objs){ const e = libOf(ob.ref), g = new THREE.Group(), geo = e && e.geo || {wM:1.07, hM:1.87}, isObj = ob.kind==='obj', ht = isObj ? (e && +e.height) || 1 : 1.7;
     const card = new THREE.Mesh(new THREE.PlaneGeometry(geo.wM, geo.hM), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide}));
-    const missing = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.7, 0.3), new THREE.MeshBasicMaterial({color:0x8a5560, wireframe:true})); missing.position.y = 0.85;
+    const missing = new THREE.Mesh(new THREE.BoxGeometry(isObj ? ht * 0.6 : 0.5, ht, isObj ? ht * 0.6 : 0.3), new THREE.MeshBasicMaterial({color:0x8a5560, wireframe:true})); missing.position.y = ht / 2;
     const disc = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), new THREE.MeshBasicMaterial({map:discTex, transparent:true, depthWrite:false, color:0x9aa0ad})); disc.rotation.x = -Math.PI / 2; disc.position.y = 0.006;
     const label = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.3), new THREE.MeshBasicMaterial({map:labelTex(ob.label || (e && e.name) || '?'), transparent:true, depthWrite:false, depthTest:false})); label.renderOrder = 5;
-    g.add(card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {g, card, disc, missing, label, e, at, geo, ob}); }
+    g.add(card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
   dirty = true; }
 // the picture for a camera: the camera's direction in her own turn (her front is +z), its height to the nearest of her heights
-function pickAngle(o, cam){ const ob = o.ob, p = new THREE.Vector3(ob.x, ob.y + o.geo.hM * (ob.s || 1) * 0.5, ob.z);
+function pickAngle(o, cam){ const ob = o.ob, p = new THREE.Vector3(ob.x, ob.y + (o.isObj ? o.ht : o.geo.hM) * (ob.s || 1) * 0.5, ob.z);
   const dir = cam.isOrthographicCamera ? new THREE.Vector3().subVectors(cam.position, cam.position.clone().add(cam.getWorldDirection(new THREE.Vector3()))).normalize() : cam.position.clone().sub(p).normalize();
   const el = Math.asin(Math.max(-1, Math.min(1, dir.y))) / D2R, az = Math.atan2(dir.x, dir.z) - (ob.rot || 0) * D2R, rings = (o.e.ringEl || RING_EL0);
   const has = r => Object.keys(o.at).some(k => k.startsWith(r + ':')), rs = [0, 1, 2, 3, 4].filter(has); if(!rs.length) return null;
@@ -160,9 +162,11 @@ function poseFor(view){ const cam = camOf(view), top = view==='top';
     if(o.card.material.map!==use){ o.card.material.map = use; o.card.material.needsUpdate = true; } if(!use) continue; o.card.visible = true;
     const ft = use.userData.feet, rt = a.front && tex.get(a.front), rf = rt && rt.userData.feet, k = ft && rf ? Math.max(0.85, Math.min(1.18, rf.ht / ft.ht)) : 1;
     const sl = a.ring===1 ? 1 : Math.cos((o.e.ringEl || RING_EL0)[a.ring] * D2R) / Math.cos((o.e.ringEl || RING_EL0)[1] * D2R); // ↔ Slim, as her 3D view
-    o.card.scale.set(s * k * sl, s * k, 1);
+    // 🪑 an object stands at its real height: its front picture's outline is that tall
+    const m = o.isObj && rf && rf.ht ? o.ht / (o.geo.hM * rf.ht) : 1;
+    o.card.scale.set(s * k * sl * m, s * k * m, 1);
     // her feet on her spot: the card turns to the camera about that point
-    const fx = ft ? ft.ax : 0.5, fy = ft ? ft.ay : 1, off = new THREE.Vector3(-(fx - 0.5) * o.geo.wM * s * k * sl, (fy - 0.5) * o.geo.hM * s * k, 0);
+    const fx = ft ? ft.ax : 0.5, fy = ft ? ft.ay : 1, off = new THREE.Vector3(-(fx - 0.5) * o.geo.wM * s * k * sl * m, (fy - 0.5) * o.geo.hM * s * k * m, 0);
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(a.dir, new THREE.Vector3(), Math.abs(a.dir.y) > 0.99 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0)));
     o.card.quaternion.copy(q); o.card.position.copy(off.applyQuaternion(q)); } }
 // ---- drawing: one view, or all four (3D top left, Top top right, Front bottom left, Side bottom right)
@@ -217,8 +221,8 @@ stage.addEventListener('wheel', e => { e.preventDefault(); const [px, py] = loca
   if(at.k==='persp') orbit.d = Math.max(1, Math.min(60, orbit.d * f)); else ortho[at.k].half = Math.max(0.3, Math.min(40, ortho[at.k].half * f)); saveCams(); dirty = true; }, {passive:false});
 let camT = 0; function saveCams(){ clearTimeout(camT); camT = setTimeout(() => { ui.orbit = {az:orbit.az, el:orbit.el, d:orbit.d}; ui.orbitT = orbit.t.toArray(); ui.ortho = Object.fromEntries(Object.entries(ortho).map(([k, o]) => [k, {c:o.c, half:o.half}])); saveUi(); }, 300); }
 // ---- the object list (layers) and the selected one's numbers
-function drawList(){ const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = '<p class="note">Nothing in this scene yet. ＋ Add a character from the 📚 Library.</p>'; return; }
-  box.innerHTML = SC.objs.map(ob => { const e = libOf(ob.ref); return `<div class="row" aria-selected="${ui.sel===ob.id}"><button class="nm" data-sel="${esc(ob.id)}">🧍 ${esc(ob.label || (e && e.name) || '?')} ${e ? (e.trigger ? `<small>${esc(e.trigger)}</small>` : '') : '<small class="warn">not in the library</small>'}</button>
+function drawList(){ const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
+  box.innerHTML = SC.objs.map(ob => { const e = libOf(ob.ref); return `<div class="row" aria-selected="${ui.sel===ob.id}"><button class="nm" data-sel="${esc(ob.id)}">${ob.kind==='obj' ? '🪑' : '🧍'} ${esc(ob.label || (e && e.name) || '?')} ${e ? (e.trigger ? `<small>${esc(e.trigger)}</small>` : '') : '<small class="warn">not in the library</small>'}</button>
     <button class="ic" data-eye="${esc(ob.id)}" aria-pressed="${!ob.hide}" aria-label="Show or hide">👁</button><button class="ic" data-lock="${esc(ob.id)}" aria-pressed="${!!ob.lock}" aria-label="Lock">🔒</button></div>`; }).join(''); }
 $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) return; const id = b.dataset.sel || b.dataset.eye || b.dataset.lock, ob = SC.objs.find(o => o.id===id); if(!ob) return;
   if(b.dataset.sel){ ui.sel = ui.sel===id ? '' : id; saveUi(); }
@@ -227,30 +231,33 @@ $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) 
 function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find(o => o.id===ui.sel);
   if(numbersOnly && ob && box.dataset.id===ob.id){ ['x', 'y', 'z'].forEach(k => { const i = box.querySelector(`[data-n="${k}"]`); if(i && document.activeElement!==i) i.value = ob[k]; }); return; }
   box.dataset.id = ob ? ob.id : '';
-  if(!ob){ box.innerHTML = `<h2>Selected</h2><p class="note">Nothing selected. Tap a name in Objects (or tap her in a view) to move her.</p><div class="line"><button id="snap" aria-pressed="${!!ui.snap}">🧲 Snap to 25 cm</button></div>`; $('#snap').onclick = snapTog; return; }
-  const e = libOf(ob.ref);
+  if(!ob){ box.innerHTML = `<h2>Selected</h2><p class="note">Nothing selected. Tap a name in Objects (or tap one in a view) to move it.</p><div class="line"><button id="snap" aria-pressed="${!!ui.snap}">🧲 Snap to 25 cm</button></div>`; $('#snap').onclick = snapTog; return; }
+  const e = libOf(ob.ref), it = ob.kind==='obj';
   box.innerHTML = `<h2>${esc(ob.label || (e && e.name) || '?')}${ob.lock ? ' 🔒' : ''}</h2>
-    ${e ? `<p class="note">From the 📚 Library: ${esc(e.name)}${e.lora ? ` · LoRA <b>${esc(String(e.lora).replace(/\.safetensors$/i, ''))}</b>` : ''}. Re-saving her in the library changes her here too.</p>` : '<p class="warn">She is not in the library any more (or the PC is off), so a box stands in for her.</p>'}
+    ${e ? (it ? `<p class="note">From the 📚 Library: ${esc(e.name)}, ${esc(String(e.height || 1))} m tall (× its size here). Re-saving it in the library changes it here too.</p>` : `<p class="note">From the 📚 Library: ${esc(e.name)}${e.lora ? ` · LoRA <b>${esc(String(e.lora).replace(/\.safetensors$/i, ''))}</b>` : ''}. Re-saving her in the library changes her here too.</p>`) : `<p class="warn">${it ? 'It is' : 'She is'} not in the library any more (or the PC is off), so a box stands in.</p>`}
     <div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
-    <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="0.5" max="1.5" step="0.01" data-n="s" value="${ob.s || 1}"></div>
+    <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>
     <div class="line"><button id="snap" aria-pressed="${!!ui.snap}">🧲 Snap to 25 cm</button><button data-act="dup">⧉ Another one</button><button data-act="rm">✕ Take out of the scene</button></div>`;
   $('#snap').onclick = snapTog;
   box.querySelectorAll('[data-n]').forEach(i => i.oninput = () => { if(ob.lock) return; const k = i.dataset.n, v = parseFloat(i.value); if(!isFinite(v)) return; ob[k] = k==='y' ? Math.max(0, v) : v;
     if(k==='rot') $('#rotv').textContent = Math.round(v) + '°'; if(k==='s') $('#sv').textContent = Math.round(v * 100) + '%'; changed(); });
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
-  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || 'her') + ' out of this scene? She stays in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
+  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
   if(ob.lock) box.querySelectorAll('input').forEach(i => i.disabled = true); }
 function snapTog(){ ui.snap = !ui.snap; saveUi(); drawSel(); }
 const nextLabel = base => { const used = new Set((SC.objs || []).map(o => o.label)); if(!used.has(base)) return base; for(let n = 2; ; n++) if(!used.has(base + ' ' + n)) return base + ' ' + n; };
-// ---- ＋ Add a character: the library's people
-$('#add').onclick = async () => { if(!SC) return; $('#pick').hidden = false; const box = $('#chars'); box.innerHTML = '<p class="note">Looking in the library…</p>'; await findPc();
-  if(!PC.lib.length){ box.innerHTML = PC.ok ? '<p class="note">The 📚 Library is empty. Save a finished character from 🧍 Character Creator first.</p>' : '<p class="note">None of your PCs answered with a library (is Render on, with the helper update?).</p>'; return; }
-  box.innerHTML = PC.lib.map(e => `<button data-ref="${esc(e.subfolder)}"><img src="${esc(viewUrl(e, e.cover || (e.views[0] || {}).file))}" alt="" loading="lazy"><span>${esc(e.name)}</span></button>`).join(''); };
+// ---- ＋ Character / ＋ Object: the library's people or things
+let pickKind = 'char';
+async function openPick(kind){ if(!SC) return; pickKind = kind; $('#pickh').textContent = kind==='obj' ? '📚 Object Library' : '📚 Character Library'; $('#pick').hidden = false; const box = $('#chars'); box.innerHTML = '<p class="note">Looking in the library…</p>'; await findPc();
+  const es = PC.lib.filter(e => (e.kind==='obj')===(kind==='obj'));
+  if(!es.length){ box.innerHTML = PC.ok ? (kind==='obj' ? '<p class="note">No objects saved yet. Save a finished one from 🪑 Object Creator first.</p>' : '<p class="note">The 📚 Library is empty. Save a finished character from 🧍 Character Creator first.</p>') : '<p class="note">None of your PCs answered with a library (is Render on, with the helper update?).</p>'; return; }
+  box.innerHTML = es.map(e => `<button data-ref="${esc(e.subfolder)}"><img src="${esc(viewUrl(e, e.cover || (e.views[0] || {}).file))}" alt="" loading="lazy"><span>${esc(e.name)}</span></button>`).join(''); }
+$('#add').onclick = () => openPick('char'); $('#addo').onclick = () => openPick('obj');
 $('#chars').onclick = e => { const b = e.target.closest('[data-ref]'); if(!b) return; const lib = libOf(b.dataset.ref); if(!lib) return;
-  const n = SC.objs.length, ob = {id:uid('o'), kind:'char', ref:lib.subfolder, label:nextLabel(lib.name), x:snapV((n % 4) * 0.9 - 1.35 * (n > 0 ? 1 : 0)), y:0, z:snapV(-Math.floor(n / 4) * 0.9), rot:0, s:1};
+  const n = SC.objs.length, ob = {id:uid('o'), kind:lib.kind==='obj' ? 'obj' : 'char', ref:lib.subfolder, label:nextLabel(lib.name), x:snapV((n % 4) * 0.9 - 1.35 * (n > 0 ? 1 : 0)), y:0, z:snapV(-Math.floor(n / 4) * 0.9), rot:0, s:1};
   SC.objs.push(ob); ui.sel = ob.id; saveUi(); $('#pick').hidden = true; buildObjs(); drawList(); drawSel(); changed(); };
 $('#pickx').onclick = () => { $('#pick').hidden = true; };
 // ---- start: the library (for the references), the scenes, the last one open
