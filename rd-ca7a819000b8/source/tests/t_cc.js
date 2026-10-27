@@ -21,6 +21,7 @@ const DEF = {
   FaceDetailer:[['image','model','clip','vae','positive','negative','bbox_detector','denoise','guide_size','seed'],6], UltralyticsDetectorProvider:[['model_name'],2], SAMLoader:[['model_name','device_mode'],1],
   RenderDeckCutoutColorMatch:[['image','image_ref','strength'],1],
   MiniMaxH3ImageToVideo:[['clip','vae','prompt','width','height','length','first_frame'],2], MiniMaxH3FunControlNetApply:[['model','model_patch','vae','strength','start_percent','end_percent','control_video'],1],
+  CreateVideo:[['images','fps'],1], SaveVideo:[['video','filename_prefix'],0],
   ModelPatchLoader:[['name'],1], LoadVideo:[['file'],1], GetVideoComponents:[['video'],3], ImageBatch:[['image1','image2'],1],
 };
 function check(g){ const errs = [];
@@ -43,7 +44,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
   await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200);
-  ok(await page.evaluate(() => !$('#cc').hidden && $('#mainView').offsetParent===null && $('#tabs [data-tab="cc"]').classList.contains('on') && document.querySelectorAll('.ccstep').length===5), 'the 🧍 Character tab (beside Render and Comic) opens the Character Creator with its five steps, Render\'s screen hidden');
+  ok(await page.evaluate(() => !$('#cc').hidden && $('#mainView').offsetParent===null && $('#tabs [data-tab="cc"]').classList.contains('on') && document.querySelectorAll('.ccstep').length===6 && /🎓 Her LoRA/.test($('.ccstep[data-cstep="lora"]').textContent) && $('[data-cc="lora"]').disabled), 'the 🧍 Character tab (beside Render and Comic) opens the Character Creator with its five steps and 🎓 Her LoRA (waiting), Render\'s screen hidden');
   await page.click('#tabs [data-tab="comic"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => $('#cc').hidden && !$('#comic').hidden && S.tab==='comic'), '📖 Comic swaps it out');
   await page.click('#tabs [data-tab="render"]'); await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200);
@@ -94,8 +95,24 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   // the viewer: every angle in, she turns by dragging, the height changes up and down, her feet and size stay put
   await page.evaluate(() => { const P = ccP(ccChar()); P.views.concat(P.mids).forEach(v => v.url = 'https://jordo-desktop.test/view?filename=a_' + v.ring + '_' + v.i + (v.mid ? 'm' : '') + '.png'); P.lk.forEach(h => h.url = 'https://jordo-desktop.test/view?filename=f_' + h.ring + '_' + h.i + (h.mid ? 'm' : '') + '.png'); P.orb.forEach(o => { o.urls = ['https://jordo-desktop.test/view?filename=o.png']; delete o.err; delete o.making; }); save(); CCV.key = ''; ccDraw(true); });
   await page.waitForFunction(() => $('#ccCv') && CCV.box.size >= 2, null, {timeout:8000}); await page.waitForTimeout(400);
-  const st = await page.evaluate(() => ({deg:$('#ccDeg').textContent, hl:$('#ccHl').textContent, txt:$('#ccTxt').textContent, go:$('[data-cc="go"]').textContent, states:[...document.querySelectorAll('.ccs')].map(s => s.textContent.trim().split(' ')[0])}));
+  const st = await page.evaluate(() => ({deg:$('#ccDeg').textContent, hl:$('#ccHl').textContent, txt:$('#ccTxt').textContent, go:$('[data-cc="go"]').textContent, states:[...document.querySelectorAll('.ccstep:not([data-cstep="lora"]) .ccs')].map(s => s.textContent.trim().split(' ')[0])}));
   ok(st.deg==='0°' && /Eye level · 1\/16/.test(st.hl) && /All 5 steps done · 48 angles/.test(st.txt) && /Make her again/.test(st.go) && st.states.every(s => s==='Done'), 'all 48 in: the viewer opens at eye level, front, and every step says Done: ' + JSON.stringify(st));
+  // 🎓 Her LoRA (Jordan 2026-10-27): trigger = name + x; her finished angles go in as given pictures, MiniMax shots from her front/side/back
+  await page.evaluate(() => { const d = $('.ccstep[data-cstep="lora"]'); d.open = true; });
+  ok(await page.evaluate(() => /pinkyx/.test($('.ccstep[data-cstep="lora"]').textContent) && !$('[data-cc="lora"]').disabled && /Ready/.test($('.ccstep[data-cstep="lora"] .ccs').textContent)), 'with all 5 steps done, 🎓 Her LoRA is ready, trigger pinkyx');
+  await page.click('[data-cc="lora"]'); await page.waitForTimeout(200);
+  const LB = await page.evaluate(() => JSON.parse(JSON.stringify(AUTOS.last)));
+  ok(LB.trigger==='pinkyx' && LB.until==='lora' && JSON.stringify(LB.only)==='["shots","pick","train"]' && LB.front.filename==='f_1_0.png' && LB.side.filename==='f_1_2.png' && LB.back.filename==='f_1_4.png'
+    && LB.given.length===10 && LB.given.filter(g => /from above/.test(g.cap)).length===2 && LB.given.every(g => /white background/.test(g.cap)) && /from side/.test(LB.given[2].cap) && /iriselTouch/.test(LB.ckpt) && /AFKJ/.test(LB.style_lora)
+    && LB.shot_graphs.length===12 && LB.shots.length===12 && LB.set_max===30 && /datasets\/pinkyx$/.test(LB.dataset_dir), 'the LoRA run: 10 given angles (8 eye level, 2 a little high), 12 shots, iriselTouch + AFKJ, only shots→pick→train: ' + JSON.stringify(Object.assign({}, LB, {shot_graphs:LB.shot_graphs.length})).slice(0, 400));
+  const sg = LB.shot_graphs[0].graph, li = V(sg).filter(n => n.class_type==='LoadImage').map(n => n.inputs.image), rp = of(sg, 'MiniMaxH3ReferenceToVideo')[0].inputs.prompt;
+  ok(!check(sg).length && li.join()==='@FRONT,@SIDE,@BACK' && /from the side/.test(rp) && /from behind/.test(rp) && /pink hair/.test(rp), 'each training shot is a whole MiniMax graph from @FRONT, @SIDE, @BACK: ' + check(sg).join('; '));
+  ok(await page.evaluate(() => ccChar().lr.state==='running' && /Running/.test($('.ccstep[data-cstep="lora"] .ccs').textContent) && !!$('[data-cc="lorastop"]')), 'it shows running with ⏹ Stop');
+  await page.click('[data-cc="lorastop"]'); await page.waitForTimeout(100);
+  ok(await page.evaluate(() => ccChar().lr.state==='stopped' && !$('[data-cc="lora"]').disabled), '⏹ Stop stops it and ▶ Make her LoRA can go again');
+  await page.evaluate(() => { const c = ccChar(); c.lr = {id:'x', pc:'test', state:'done', lora:'pinkyx.safetensors', trig:'pinkyx', ckpt:'iriselTouchIL_v10.safetensors', style:'AFKJ Style Illustrious Claude.safetensors', picks:['https://jordo-desktop.test/view?filename=a.png']}; ccDraw(true); });
+  ok(await page.evaluate(() => /pinkyx\.safetensors/.test($('.cclora').textContent) && /prompt starting "pinkyx, 1girl, solo"/.test($('.cclora').textContent) && document.querySelectorAll('.ccpicks img').length===1), 'done: the LoRA, how to use it, and the pictures it picked: ' + await page.evaluate(() => $('.cclora').textContent));
+  await page.evaluate(() => { delete ccChar().lr; ccDraw(true); });
   await page.evaluate(() => $('.ccstage').scrollIntoView({block:'center'})); await page.waitForTimeout(100);
   const box = await page.$('#ccStage').then(e => e.boundingBox());
   const drag = async (dx, dy) => { await page.mouse.move(box.x + 150, box.y + 300); await page.mouse.down(); await page.mouse.move(box.x + 150 + dx, box.y + 300 + dy, {steps:12}); await page.waitForTimeout(150); await page.mouse.up(); await page.waitForTimeout(150); };
