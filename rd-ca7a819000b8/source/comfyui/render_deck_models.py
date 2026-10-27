@@ -608,10 +608,13 @@ async def thumb(request):
         cache = os.path.join(folder_paths.get_temp_directory(), 'render_deck_thumbs')
         os.makedirs(cache, exist_ok=True)
         size = max(64, min(1600, int(request.query.get('size') or 360)))  # 🧍 the Character Creator's viewer asks for 900
-        tp = os.path.join(cache, hashlib.sha1(('%s|%d' % (path, st.st_mtime) + ('' if size == 360 else '|%d' % size)).encode()).hexdigest() + '.jpg')
+        tp = os.path.join(cache, hashlib.sha1(('%s|%d' % (path, st.st_mtime) + ('' if size == 360 else '|%d' % size) + '|w').encode()).hexdigest() + '.jpg')
         if not os.path.exists(tp):
             def make():
                 with Image.open(path) as im:
+                    # a see-through picture goes on white first: shrinking RGBA blackens the clear parts, and a JPEG then shows them as a black box
+                    if im.mode in ('RGBA', 'LA', 'P'):
+                        im = im.convert('RGBA'); bg = Image.new('RGB', im.size, (255, 255, 255)); bg.paste(im, mask=im.split()[3]); im = bg
                     im.thumbnail((size, size))
                     im.convert('RGB').save(tp, 'JPEG', quality=80)
             await asyncio.get_running_loop().run_in_executor(None, make)

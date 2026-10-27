@@ -325,3 +325,8 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.199
 
 - 🧍 Character: her camera is flat now (Jordan: "camera has to be flat perspective"). The rig guide films her with an 8° long lens from far away instead of 30°, and her turn and every up-and-down clip ask for a flat, telephoto, model-sheet view with no perspective distortion. The 3D viewer was already orthographic. A character made before this needs a redo from step 4 to get flat pictures.
+
+## 2026-10-27.200
+
+- 🧍 Character, 🧊 Open in 3D: two fixes for her looking bloated from above (Jordan 2026-10-27). 🧲 Snap to her angles: when you let go, the camera glides to the nearest angle and height a picture was made from, so the floor is seen from the same angle she was. 📐 Straighten: each picture is unbent as if it had been filmed from far away, with the parts that were nearer the camera narrowed. From above, her head gets smaller and her legs longer, and her feet and head top stay put. Both are on by default and toggle at the bottom of the 3D view.
+- Helper: the small previews of see-through pictures are made on white. They showed black boxes behind her in the Character tab.
