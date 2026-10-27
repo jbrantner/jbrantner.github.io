@@ -171,6 +171,23 @@ async def main():
     d3 = os.path.join(K, 'data', 'elliex', '10_elliex'); pics = sorted(f for f in os.listdir(d3) if f.endswith('.png')); caps3 = [open(os.path.join(d3, f)).read() for f in sorted(os.listdir(d3)) if f.endswith('.txt')]
     ok(len(pics) >= 10 and sum(c.endswith('white background') or 'white background, from side' in c for c in caps3) == 10 and caps3[0].startswith('elliex, 1girl, solo, standing'), 'all 10 given angles are in the set with their captions, plus shot frames: %d pictures, %s' % (len(pics), caps3[2]))
     ti = Image.open(os.path.join(d3, pics[0])); ok(ti.mode == 'RGB' and ti.getpixel((5, 5)) == (255, 255, 255), 'and kohya gets them on white')
+    # 📚 Character Library: her angles copied as they are (see-through), character.json, listed, left out of the renders browser
+    R = PS.instance.routes.h
+    J = lambda b: types.SimpleNamespace(json=lambda: asyncio.sleep(0, b))
+    pics = [dict(ring=1, i=n % 8, mid=n >= 8, filename='f_%d.png' % n, subfolder='Output_Render/RenderDeck/cc') for n in range(10)]
+    r = await R[('POST', '/renderdeck/library/save')](J({'name': 'Ellie', 'meta': {'trigger': 'elliex', 'lora': 'elliex.safetensors'}, 'pics': pics}))
+    ok(r.status == 200 and json.loads(r.body)['n'] == 10, 'her angles go into the library: ' + r.body.decode()[:100])
+    ld = os.path.join(OUT, 'Character Library', 'Ellie')
+    li = Image.open(os.path.join(ld, 'eye_000.png')); cj = json.load(open(os.path.join(ld, 'character.json')))
+    ok(li.mode == 'RGBA' and li.getpixel((5, 5))[3] == 0 and os.path.exists(os.path.join(ld, 'eye_022.5.png')) and cj['trigger'] == 'elliex' and len(cj['views']) == 10, 'kept see-through, named by height and turn, with her LoRA in character.json: %s' % sorted(os.listdir(ld))[:4])
+    lst = json.loads((await R[('GET', '/renderdeck/library')](types.SimpleNamespace(query={}))).body)
+    ok(len(lst['characters']) == 1 and lst['characters'][0]['subfolder'] == 'Character Library/Ellie', 'the library lists her: %s' % lst)
+    imgs = json.loads((await R[('GET', '/renderdeck/images')](types.SimpleNamespace(query={'limit': '200'}))).body)['images']
+    ok(not any('Character Library' in x['subfolder'] for x in imgs), 'the renders browser leaves the library out')
+    r = await R[('POST', '/renderdeck/library/save')](J({'name': 'Ellie', 'pics': pics + [dict(ring=1, i=0, filename='nope.png', subfolder='x')]}))
+    ok(r.status == 400, 'a missing angle is turned down')
+    await R[('POST', '/renderdeck/library/delete')](J({'name': 'Ellie'}))
+    ok(not os.path.exists(ld), 'taken out of the library')
     await run.cleanup()
 asyncio.run(main())
 print(len(fails), 'failed' if fails else 'all passed'); sys.exit(1 if fails else 0)

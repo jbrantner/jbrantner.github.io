@@ -112,6 +112,20 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   ok(await page.evaluate(() => ccChar().lr.state==='stopped' && !$('[data-cc="lora"]').disabled), '⏹ Stop stops it and ▶ Make her LoRA can go again');
   await page.evaluate(() => { const c = ccChar(); c.lr = {id:'x', pc:'test', state:'done', lora:'pinkyx.safetensors', trig:'pinkyx', ckpt:'iriselTouchIL_v10.safetensors', style:'AFKJ Style Illustrious Claude.safetensors', picks:['https://jordo-desktop.test/view?filename=a.png']}; ccDraw(true); });
   ok(await page.evaluate(() => /pinkyx\.safetensors/.test($('.cclora').textContent) && /prompt starting "pinkyx, 1girl, solo"/.test($('.cclora').textContent) && document.querySelectorAll('.ccpicks img').length===1), 'done: the LoRA, how to use it, and the pictures it picked: ' + await page.evaluate(() => $('.cclora').textContent));
+  // 📚 Character Library (Jordan 2026-10-27): her 48 see-through angles + her LoRA and its recipe, then 🧊 from the library
+  await page.evaluate(() => { CCV.lib = {pc:'https://jordo-desktop.test', list:[], at:Date.now()}; ccDraw(true); });
+  ok(await page.evaluate(() => !$('[data-cc="libsave"]').disabled && /Nobody saved yet/.test($('#ccLib').textContent)), 'with her done, 📚 Save her to the library is ready');
+  await page.click('[data-cc="libsave"]'); await page.waitForTimeout(150);
+  const LE = await page.evaluate(() => JSON.parse(JSON.stringify(CCV.libLast)));
+  ok(LE.name==='Pinky' && LE.pics.length===48 && LE.pics.filter(p => p.mid).length===8 && LE.pics.every(p => /^f_\d_\d+m?\.png$/.test(p.filename)) && LE.meta.lora==='pinkyx.safetensors' && LE.meta.trigger==='pinkyx'
+    && LE.meta.prompt==='AFKJ Style, pinkyx, 1girl, solo' && /iriselTouch/.test(LE.meta.ckpt) && /AFKJ/.test(LE.meta.style) && LE.meta.ringEl.length===5 && LE.meta.geo && LE.meta.fov, 'saved: 48 angles, her LoRA pinkyx with iriselTouch + AFKJ and the prompt start, and what the 3D viewer needs: ' + JSON.stringify(LE.meta).slice(0, 300));
+  await page.click('[data-cc="libopen"]'); await page.waitForTimeout(100);
+  ok(await page.evaluate(() => /pinkyx 1.0 on iriselTouchIL_v10/.test($('.cclibone').textContent) && /AFKJ Style, pinkyx, 1girl, solo/.test($('.cclibone').textContent)), 'tapping her shows her LoRA and how to use it');
+  await page.click('[data-cc="lib3d"]'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => { const f = $('#cc3d iframe'), sp = JSON.parse(localStorage.getItem('rd-pose-sprites')).find(x => x.lib); return f && /pose=lib%3A/.test(f.src) && sp && sp.views.length===40 && sp.views16.length===80 && /Character%20Library%2FPinky/.test(sp.views[8]) && /f_1_0\.png/.test(sp.views[8]) && sp.cc; }), '🧊 Open in 3D shows her from the library pictures: ' + await page.evaluate(() => { const f = $('#cc3d iframe'), sp = (JSON.parse(localStorage.getItem('rd-pose-sprites')) || []).find(x => x.lib); return (f ? f.src : 'no frame') + ' ' + JSON.stringify(sp).slice(0, 300); }));
+  await page.evaluate(() => { $('#cc3d').hidden = true; $('#cc3d').innerHTML = ''; });
+  await page.click('[data-cc="libdel"]'); await page.waitForTimeout(100);
+  ok(await page.evaluate(() => !CCV.lib.list.length), '🗑 takes her out of the library');
   await page.evaluate(() => { delete ccChar().lr; ccDraw(true); });
   await page.evaluate(() => $('.ccstage').scrollIntoView({block:'center'})); await page.waitForTimeout(100);
   const box = await page.$('#ccStage').then(e => e.boundingBox());
