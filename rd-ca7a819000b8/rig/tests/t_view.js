@@ -108,6 +108,11 @@ const DEPS = process.env.RIG_DEPS || '';
         res({ring:VIEW.view().ring, top:+(w(0) / (b[3] - b[0])).toFixed(3), bot:+(w(r) / (b[3] - b[0])).toFixed(3), moved:+Math.max(...Array.from(p.array, (v, i) => Math.abs(v - b[i]))).toFixed(3)}); }, 200); }), el);
     const hi = await shape(36), eye = await shape(3); await page.evaluate(() => VIEW.straight(false)); const off = await shape(36); await page.evaluate(() => VIEW.straight(true));
     ok(hi.ring===2 && hi.top < 0.95 && hi.bot > 1.05 && eye.ring===1 && eye.moved < 0.04 && off.moved===0, '🧍 her high picture is straightened (top narrower, bottom wider); eye level barely moves; off leaves it flat: ' + JSON.stringify({hi, eye, off})); }
+  // 🧍 slimmed: from 35° up she is narrowed by cos 35° / cos 5° (Jordan's hand edit), eye level not at all; ?slim off leaves her
+  { const w = el => page.evaluate(el => new Promise(res => { const c = VIEW.camera, d = 4.5, e = el * Math.PI / 180; c.position.set(0, 0.96 + d * Math.sin(e), d * Math.cos(e)); VIEW.controls.update();
+      setTimeout(() => { const m = VIEW.stand().her; res(+(m.scale.x / m.scale.y).toFixed(3)); }, 200); }), el);
+    const hi = await w(36), eye = await w(3); await page.evaluate(() => VIEW.slim(false)); const off = await w(36); await page.evaluate(() => VIEW.slim(true));
+    ok(Math.abs(hi - Math.cos(35 * Math.PI / 180) / Math.cos(5 * Math.PI / 180)) < 0.01 && eye===1 && off===1, '🧍 slimmed: her high picture is narrowed to ' + hi + ' (cos 35° / cos 5°), eye level ' + eye + ', off ' + off); }
   // 🧍 snapping: let go between angles and the camera glides to the nearest made angle and height
   { const r = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5, az = 0.5, e = 28 * Math.PI / 180; c.position.set(Math.sin(az) * Math.cos(e) * d, 0.96 + d * Math.sin(e), Math.cos(az) * Math.cos(e) * d); VIEW.controls.update();
       VIEW.controls.dispatchEvent({type:'end'}); setTimeout(() => { const v = VIEW.view(); res({az:+(v.az * 180 / Math.PI).toFixed(1), el:+v.el.toFixed(1), ring:v.ring}); }, 900); }));
