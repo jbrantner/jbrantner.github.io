@@ -75,7 +75,7 @@ const layers = [], mkLayer = top => { const mesh = new THREE.Mesh(new THREE.Plan
   const pivot = new THREE.Group(), st = new THREE.Group(); pivot.add(mesh); st.add(pivot); if(top){ mesh.position.z = 0; pivot.position.z = 0.004; mesh.renderOrder = 2; } return {mesh, pivot, st, top}; };
 function load(){ sp = lib().find(x => x.id===QS.get('pose')) || null; layers.splice(0).forEach(L => scene.remove(L.st)); stand = null; her = null;
   if(!sp || !sp.geo){ document.getElementById('msg').textContent = 'This pose is not ready yet'; return; } document.getElementById('msg').textContent = '';
-  const g = sp.geo; for(const top of [false, true]){ const L = mkLayer(top); L.mesh.geometry.dispose(); L.mesh.geometry = new THREE.PlaneGeometry(g.wM, g.hM, 1, 32); L.mesh.geometry.userData.base = L.mesh.geometry.attributes.position.array.slice(); scene.add(L.st); layers.push(L); }
+  const g = sp.geo; for(const top of [false, true]){ const L = mkLayer(top); L.mesh.geometry.dispose(); L.mesh.geometry = new THREE.PlaneGeometry(g.wM, g.hM); scene.add(L.st); layers.push(L); }
   her = layers[0].mesh; stand = layers[0].st; controls.target.set(0, g.aim[1], 0); dirty = true;
   [sp.src, ...(sp.views || []), ...(sp.views16 || []), ...(sp.look || [])].filter(Boolean).forEach(texOf); } // load them all now
 const HERC = () => new THREE.Vector3(0, sp.geo.aim[1], 0);
@@ -122,29 +122,16 @@ const picLine = (ft, sx) => [(ft.hx - ft.fx) * sp.geo.wM * sx, ft.ht * sp.geo.hM
 let LOCKED = QS.get('lock')==='1'; // tried as the default in v.177; Jordan 2026-10-24: "that looks real bad", so the card follows the camera again
 function faceDir(v){ if(!LOCKED) return camera.position.clone().sub(controls.target);
   const az = v.k * 2 * Math.PI / v.N, el = ringEl()[v.ring] * D2R; return new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)); }
-// 🧍 straightened (Jordan 2026-10-27, "the weird bloating angle"): each angle was filmed through a lens from nearby, so from 35°
-// up her head was nearer the camera and came out bigger and her legs shorter. Here the picture is unbent as if filmed from far
-// away: the card is cut into strips, each moved and narrowed by how much nearer or further that part of her was. Her feet and the
-// top of her head stay put. sp.fov is the lens her guides used (30° before v.199). Off with ?straight=0 or VIEW.straight(false).
-let STRAIGHT = QS.get('straight')!=='0';
 // 🧍 slimmed (Jordan 2026-10-27, after squishing the high ones thinner by hand: "maybe that's all it needs"): a picture made from
 // above or below is narrowed by cos(its height) / cos(eye level), the same as Jordan's hand edit (35° up ≈ 0.82). Off with ?slim=0.
 let SLIM = QS.get('slim')!=='0';
 const slimOf = url => sp && sp.cc && SLIM && url && url!==sp.src ? Math.cos(ringEl()[ringOf(url)] * D2R) / Math.cos(ringEl()[1] * D2R) : 1;
 const ringOf = url => { let i = sp.views.indexOf(url); if(i >= 0) return i >> 3; i = (sp.views16 || []).indexOf(url); return i >= 0 ? i >> 4 : 1; };
-function unbend(L, url, ft){ const geo = L.mesh.geometry, pos = geo.attributes.position, base = geo.userData.base; if(!base) return;
-  const g = sp.geo, el = sp.cc && STRAIGHT && ft && url && url!==sp.src ? ringEl()[ringOf(url)] * D2R : 0, key = url + '|' + el;
-  if(L.bent===key) return; L.bent = key;
-  if(!el){ pos.array.set(base); pos.needsUpdate = true; return; }
-  const H = ft.ht * g.hM, yF = (0.5 - ft.ay) * g.hM, yC = yF + H / 2, xA = (ft.ax - 0.5) * g.wM, s = Math.sin(el), c = Math.cos(el);
-  const D = 0.56 * H / c / Math.sin((sp.fov || 30) * D2R / 2), real = v => v * D / Math.max(D * c * 0.2, D * c + v * s), flat = v => real(v) * c, f0 = flat(-H / 2), f1 = flat(H / 2);
-  for(let n = 0; n < pos.count; n++){ const X = base[n * 3], v = base[n * 3 + 1] - yC, y = real(v);
-    pos.array[n * 3] = xA + (X - xA) * (1 - y * s / D); pos.array[n * 3 + 1] = yF + (flat(v) - f0) * H / (f1 - f0); }
-  pos.needsUpdate = true; }
+// (📐 Straighten, an unbending of each picture for a far-away lens, was taken out in v.205: Jordan didn't like it)
 function placeOne(L, url, v, k8){ const want = texOf(url), cur = L.mesh.material.map, t = want && want.userData.ready ? want : !L.top && cur && cur.userData.ready ? cur : L.top ? null : want;
   if(L.mesh.material.map!==t){ L.mesh.material.map = t; L.mesh.material.needsUpdate = true; } L.mesh.visible = !!t; if(!t) return false;
   const im = t.image, g = sp.geo, sx = sp.src && t===tex.get(sp.src) && im && im.width ? (im.width / im.height) / (g.wM / g.hM) : 1; // (the picture itself, standing in, keeps its own shape)
-  const ft = t.userData.feet; let k = 1, rot = 0; unbend(L, t.userData.url, ft);
+  const ft = t.userData.feet; let k = 1, rot = 0;
   const refUrl = sp.views[8] || (sp.views16 || [])[16], rt = refUrl && tex.get(refUrl), rf = rt && rt.userData.feet;
   if(ft && sp.rig && rf && rf.hx!=null && ft.hx!=null){ // against the rig's own line from this angle
     const pf = picLine(rf, 1), lf = rigLine(0, 8, 1), s = Math.hypot(...pf) / (Math.hypot(...lf) || 1), pw = picLine(ft, sx), lw = (LOCKED ? rigLine(k8, v.N, v.ring) : rigLine(k8, v.N, v.ring, v.az, v.el)).map(q => q * s); // seen from where the camera is now, not where the picture was made (Jordan 2026-10-23: her head jumped up as the camera came down from the high pictures to the eye-level ones; now her height on screen follows the camera smoothly)
@@ -208,5 +195,5 @@ function shot(w, h, clean){ const ow = renderer.domElement.width, oh = renderer.
 const cam = () => ({p:camera.position.toArray(), t:controls.target.toArray(), pan:[PX, PY], zoom:camera.zoom, flat:1});
 function setCam(c){ if(!c) return; camera.position.fromArray(c.p); controls.target.fromArray(c.t);
   if(c.flat) camera.zoom = c.zoom || 1; else { const d = camera.position.distanceTo(controls.target) || 4.5; camera.zoom = Math.max(0.375, Math.min(6, 4.5 / d)); camera.position.sub(controls.target).setLength(4.5).add(controls.target); } /* an older saved camera: its distance becomes the zoom */ [PX, PY] = c.pan || [0, 0]; offset(innerWidth, innerHeight); camera.updateProjectionMatrix(); controls.update(); dirty = true; }
-window.VIEW = {shot, lock:b => { LOCKED = !!b; dirty = true; }, straight:b => { STRAIGHT = !!b; dirty = true; }, slim:b => { SLIM = !!b; dirty = true; }, snap:b => { SNAP = !!b; }, slant:b => { SLANT = !!b; dirty = true; }, slope,  cam, setCam, setBackdrop, setPano, pano:() => pano, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3, layers}), camera, controls};
+window.VIEW = {shot, lock:b => { LOCKED = !!b; dirty = true; }, slim:b => { SLIM = !!b; dirty = true; }, snap:b => { SNAP = !!b; }, slant:b => { SLANT = !!b; dirty = true; }, slope,  cam, setCam, setBackdrop, setPano, pano:() => pano, reload:load, view:() => her && view(), feet:() => her && her.material.map && her.material.map.userData.feet, stand:() => ({her, stand, g:sp && sp.geo, V:THREE.Vector3, layers}), camera, controls};
 </script></body></html>
