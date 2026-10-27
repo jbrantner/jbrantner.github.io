@@ -338,3 +338,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 ## 2026-10-27.202
 
 - 🧍 Character: ↔ Slim. Pictures made from above or below are drawn narrower by cos(height) / cos(eye level), which gives about 0.94 a little high and 0.82 high, the same as Jordan's hand edit ("I just had to Freeform transform it to squish it thinner"). It applies in the Character tab and in 🧊 Open in 3D, with a toggle in the 3D view. The files are unchanged.
+
+## 2026-10-27.203
+
+- 🧍 Character, 🧊 Open in 3D: ↺ Lean. The whole frame rolls a little, as in Jordan's hand edit of the high 45° view. The amount is 4° × sin(height)/sin(35°) × sin(angle round her)/sin(45°): none from the front or back, counter-clockwise on one side of her and clockwise on the other. It is on by default, with a toggle beside Snap, Straighten and Slim.

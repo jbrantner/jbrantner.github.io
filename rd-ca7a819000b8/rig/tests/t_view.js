@@ -113,6 +113,11 @@ const DEPS = process.env.RIG_DEPS || '';
       setTimeout(() => { const m = VIEW.stand().her; res(+(m.scale.x / m.scale.y).toFixed(3)); }, 200); }), el);
     const hi = await w(36), eye = await w(3); await page.evaluate(() => VIEW.slim(false)); const off = await w(36); await page.evaluate(() => VIEW.slim(true));
     ok(Math.abs(hi - Math.cos(35 * Math.PI / 180) / Math.cos(5 * Math.PI / 180)) < 0.01 && eye===1 && off===1, '🧍 slimmed: her high picture is narrowed to ' + hi + ' (cos 35° / cos 5°), eye level ' + eye + ', off ' + off); }
+  // 🧍 leaned: the frame rolls about 4° counter-clockwise (the world's up leans left on screen: tilt -4) from 35° up at 45° round, the other way at 315°, none from the front
+  { const r = (el, az) => page.evaluate(([el, az]) => new Promise(res => { const c = VIEW.camera, d = 4.5, e = el * Math.PI / 180, a = az * Math.PI / 180; c.position.set(Math.sin(a) * Math.cos(e) * d, 0.96 + d * Math.sin(e), Math.cos(a) * Math.cos(e) * d); VIEW.controls.update();
+      setTimeout(() => { const V = VIEW.stand().V, q = c.quaternion, cu = new V(0, 1, 0).applyQuaternion(q), cr = new V(1, 0, 0).applyQuaternion(q), w = new V(0, 1, 0); res({tilt:+(Math.atan2(w.dot(cr), w.dot(cu)) * 180 / Math.PI).toFixed(2), roll:+VIEW.roll().toFixed(2)}); }, 200); }), [el, az]);
+    const a = await r(35, 45), b = await r(35, 315), f = await r(35, 0.01), e = await r(5, 45);
+    ok(Math.abs(a.tilt + 4) < 0.3 && Math.abs(b.tilt - 4) < 0.3 && Math.abs(f.tilt) < 0.1 && Math.abs(e.tilt) < 1, '🧍 leaned: ' + JSON.stringify({a, b, f, e})); }
   // 🧍 snapping: let go between angles and the camera glides to the nearest made angle and height
   { const r = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5, az = 0.5, e = 28 * Math.PI / 180; c.position.set(Math.sin(az) * Math.cos(e) * d, 0.96 + d * Math.sin(e), Math.cos(az) * Math.cos(e) * d); VIEW.controls.update();
       VIEW.controls.dispatchEvent({type:'end'}); setTimeout(() => { const v = VIEW.view(); res({az:+(v.az * 180 / Math.PI).toFixed(1), el:+v.el.toFixed(1), ring:v.ring}); }, 900); }));
