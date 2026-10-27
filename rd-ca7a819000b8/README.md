@@ -317,3 +317,7 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
   - the prompt says she never turns towards the camera;
   - the drift check also compares her colours, at eye level again (over 0.055) and at the low end (over 0.03). Her outline alone looks the same from the front and the back.
 - A character made on Render with the app closed now shows its progress. The app checks a finished character again once a minute, so a run started again on Render shows up.
+
+## 2026-10-27.198
+
+- 🧍 Character: the drift check no longer sends every side round twice. Eye level is pinned now, so that frame always matches, and only the low end's colours are compared. That limit was raised to 0.065: Ellie's good pinned clips came out at 0.025–0.047.
