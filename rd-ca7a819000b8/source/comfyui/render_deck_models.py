@@ -584,7 +584,7 @@ async def images(request):
     root = folder_paths.get_output_directory()
     found, hidden = [], request.query.get('hidden')
     for d, dirs, files in os.walk(root):
-        dirs[:] = [x for x in dirs if x != TRASH and not x.startswith('.')]
+        dirs[:] = [x for x in dirs if x != TRASH and x != LIBRARY and not x.startswith('.')]
         sub = os.path.relpath(d, root).replace('\\', '/')
         for f in files:
             if f.lower().endswith(PICS):
@@ -646,6 +646,93 @@ async def delete(request):
         except Exception:
             pass
     return web.json_response({'moved': moved})
+
+
+# ---------- 📚 Character Library: a finished Character Creator character kept for later (Jordan 2026-10-27) ----------
+# One folder per character in the shared output folder (Character Library/<name>, or Hidden/Character Library/<name>):
+# her see-through angles named by height and turn (eye_000.png, a_little_high_022.5.png …) and character.json with her
+# LoRA, its trigger word, the model and style it goes with, the prompt start, and what the 3D viewer needs (heights,
+# body size, lens). The renders browser leaves these folders out.
+LIBRARY = 'Character Library'
+LIB_RINGS = {0: 'low', 1: 'eye', 2: 'high', 3: 'a_little_high', 4: 'a_little_low'}
+
+
+def _lib_root(hidden):
+    return os.path.join(folder_paths.get_output_directory(), *((HIDDEN, LIBRARY) if hidden else (LIBRARY,)))
+
+
+def _lib_name(n):
+    return re.sub(r'[^\w\- ]+', '', str(n or '')).strip()[:60] or 'Character'
+
+
+@routes.get('/renderdeck/library')
+async def library(request):
+    hidden = request.query.get('hidden') == '1'
+    root, out = _lib_root(hidden), []
+    if os.path.isdir(root):
+        for d in sorted(os.listdir(root), key=str.lower):
+            f = os.path.join(root, d, 'character.json')
+            try:
+                with open(f, encoding='utf-8') as fh:
+                    c = json.load(fh)
+            except Exception:
+                continue
+            c['subfolder'] = os.path.relpath(os.path.join(root, d), folder_paths.get_output_directory()).replace('\\', '/')
+            out.append(c)
+    return web.json_response({'library': 1, 'characters': out})
+
+
+@routes.post('/renderdeck/library/save')
+async def library_save(request):
+    """{name, hidden, meta:{…}, pics:[{ring, i, mid, filename, subfolder}]}: her angles copied as they are (see-through)"""
+    b = await request.json()
+    name = _lib_name(b.get('name'))
+    d = os.path.join(_lib_root(bool(b.get('hidden'))), name)
+    views, gone = [], []
+    for p in b.get('pics') or []:
+        try:
+            _, src = _out_path(p.get('subfolder'), p.get('filename'))
+            if not os.path.exists(src):
+                raise ValueError
+        except Exception:
+            gone.append(p.get('filename', '?'))
+            continue
+        deg = (int(p.get('i', 0)) * 2 + (1 if p.get('mid') else 0)) * 22.5
+        views.append(dict(ring=int(p.get('ring', 1)), i=int(p.get('i', 0)), mid=bool(p.get('mid')), src=src,
+                          file='%s_%s.png' % (LIB_RINGS.get(int(p.get('ring', 1)), 'r%s' % p.get('ring')), ('%03d' % deg) if deg == int(deg) else '%05.1f' % deg)))
+    if gone:
+        return web.json_response({'error': "%d of her angles aren't in this computer's output folder yet (Dropbox still syncing?): %s" % (len(gone), ', '.join(gone[:3]))}, status=400)
+    if not views:
+        return web.json_response({'error': 'no angles to save'}, status=400)
+
+    def write():
+        os.makedirs(d, exist_ok=True)
+        keep = {v['file'] for v in views} | {'character.json'}
+        for f in os.listdir(d):
+            if f not in keep and f.lower().endswith(PICS):
+                os.remove(os.path.join(d, f))
+        for v in views:
+            if os.path.normcase(os.path.abspath(v['src'])) != os.path.normcase(os.path.abspath(os.path.join(d, v['file']))):
+                shutil.copyfile(v['src'], os.path.join(d, v['file']))
+        meta = dict(b.get('meta') or {}, name=str(b.get('name') or name), saved=time.time(),
+                    views=[{k: v[k] for k in ('ring', 'i', 'mid', 'file')} for v in views])
+        tmp = os.path.join(d, 'character.json.tmp')
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(meta, fh, indent=1)
+        os.replace(tmp, os.path.join(d, 'character.json'))
+    await asyncio.to_thread(write)
+    return web.json_response({'ok': True, 'n': len(views), 'subfolder': os.path.relpath(d, folder_paths.get_output_directory()).replace('\\', '/')})
+
+
+@routes.post('/renderdeck/library/delete')
+async def library_delete(request):
+    """Takes a character out of the library (her folder goes; in Dropbox, Deleted files can bring it back). Her LoRA stays."""
+    b = await request.json()
+    d = os.path.join(_lib_root(bool(b.get('hidden'))), _lib_name(b.get('name')))
+    if not os.path.exists(os.path.join(d, 'character.json')):
+        return web.json_response({'error': 'not in the library'}, status=404)
+    await asyncio.to_thread(shutil.rmtree, d)
+    return web.json_response({'ok': True})
 
 
 # ---------- sync: copy the models and LoRAs another of your computers has onto this one ----------
