@@ -2,6 +2,13 @@
 
 The release-by-release history before this file is in the git log. This file starts with the 2026-10-23 cleanup pass.
 
+## 2026-10-27: weekly spending line names the categories (v320)
+
+Settings > Money said "$20.00 a day" under a $140 week, but Home showed about $15 a day, because the weekly Gas
+category ($30) comes out first. The line under the weekly amount now says what each category takes and what's really
+left a day for Anything: "Gas $30 · Anything $15.71 a day · a change counts from today". With no categories it reads
+as before.
+
 ## 2026-10-23: cleanup pass (v319)
 
 Same app, same math and screens. Checked side by side against v318 with the `dev/` kit.
