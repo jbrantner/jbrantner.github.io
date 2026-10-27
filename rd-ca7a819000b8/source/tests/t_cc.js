@@ -104,9 +104,14 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await drag(0, 120);
   ok(await page.evaluate(() => /^High/.test($('#ccHl').textContent)), 'dragging down looks from higher up');
   // the size fix: the eye-level picture (short figure) and the high one (tall figure) stand on one floor point, sized by the camera
-  const feet = await page.evaluate(() => { const at = h => { CCV.h = h; CCV.a = 0; ccPaint(); const cv = $('#ccCv'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let top = -1, bot = -1;
+  // 🧍 Momentum draws a floor grid through each picture's own camera: grey lines below her feet, a different floor from above
+  const grid = await page.evaluate(() => { CCV.mom = true; const at = h => { CCV.h = h; CCV.a = 0; ccPaint(); const cv = $('#ccCv'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0, sig = 0;
+      for(let y = Math.round(cv.height * 0.5); y < cv.height; y += 2) for(let x = 0; x < cv.width; x += 2){ const o = (y * cv.width + x) * 4; if(d[o] < 245 && d[o] > 120){ n++; sig += y * 3 + x; } } return [n, sig]; };
+    const eye = at(2), high = at(0); CCV.mom = false; const off = at(2); return {eye, high, off}; });
+  ok(grid.eye[0] > 200 && grid.high[0] > 200 && grid.off[0] < grid.eye[0] / 4 && grid.eye[1]!==grid.high[1], '🧍 Momentum draws a floor grid under her through each picture\'s camera (off without it): ' + JSON.stringify(grid));
+  const feet = await page.evaluate(() => { const at = h => { CCV.mom = false; CCV.h = h; CCV.a = 0; ccPaint(); const cv = $('#ccCv'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let top = -1, bot = -1;
       for(let y = 0; y < cv.height; y++){ let any = false; for(let x = 0; x < cv.width; x += 2){ const o = (y * cv.width + x) * 4; if(d[o] < 200){ any = true; break; } } if(any){ if(top < 0) top = y; bot = y; } } return [top, bot]; };
-    return {eye:at(2), high:at(0)}; });
+    const r = {eye:at(2), high:at(0)}; CCV.mom = true; return r; });
   const he = feet.eye[1] - feet.eye[0], hh = feet.high[1] - feet.high[0];
   ok(Math.abs(feet.eye[1] - feet.high[1]) <= 5 && Math.abs(hh / he - Math.cos(35 * Math.PI / 180) / Math.cos(5 * Math.PI / 180)) < 0.03, 'her feet stay on one floor point and the high view is her eye-level height × cos 35° (no size jump): ' + JSON.stringify(feet));
   // her colours (Jordan 2026-10-26: washed out): step 3 matched to the step 2 full body at 1.0, step 5 to the full body too
