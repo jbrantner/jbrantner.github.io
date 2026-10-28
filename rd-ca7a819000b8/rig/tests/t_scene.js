@@ -34,6 +34,7 @@ const DEPS = process.env.RIG_DEPS || '';
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({prompt_id:'p' + GRAPHS.length}) }); }
     const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[GRAPHS.length - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage');
       return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({[hi[1]]:{status:{status_str:'success'}, outputs:{[save]:{images:[0, 1, 2, 3].map(i => ({filename:'ellie_' + i + '.png', subfolder:'RenderDeck/scene', type:'output'}))}}}}) }); }
+    if(u.pathname==='/view' && u.searchParams.get('filename')==='Anime_Female_A.fbx') return process.env.BODY_FBX ? r.fulfill({ contentType:'application/octet-stream', headers:H, body:fs.readFileSync(process.env.BODY_FBX) }) : r.fulfill({ status:404, headers:H, body:'' }); // 🧍 the base body (a bought model, only on Render)
     if(u.pathname==='/view' && /^ellie_/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect width="200" height="350" fill="#fff"/><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' }); // a PC without BiRefNet: on white
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:u.searchParams.get('filename')==='eye_090.png' && u.searchParams.get('subfolder')==='Character Library/Ellie' // MiniMax drew this angle smaller
       ? '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="85" y="100" width="30" height="240" fill="#c33"/></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
@@ -141,6 +142,20 @@ const DEPS = process.env.RIG_DEPS || '';
     const res = [0.9, 2.2].map(a => { SCENE.SET_ORBIT_AZ(a); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp'); const y = new (o.g.position.constructor)(0, 0, 1).applyQuaternion(o.card.quaternion); return {url:o.card.material.map && o.card.material.map.userData.url, dot:+y.dot(y0).toFixed(4)}; });
     return {u0:(u0 || '').match(/eye_\d+/) + '', res:res.map(r => ({url:(r.url || '').match(/eye_\d+/) + '', dot:r.dot})), same:res.every(r => r.url===u0 && r.dot > 0.9999)}; });
   ok(fr.same, '🕹 turning round in Free keeps the Camera\'s picture standing flat, facing the Camera: ' + JSON.stringify(fr));
+  // 🧍 the base body (when the test is given it): the mannequin is her, posed, feet on the floor, and the guides' skeleton comes from her bones
+  if(process.env.BODY_FBX){ await page.waitForFunction(() => SCENE.BODY, null, {timeout:30000}); await page.waitForTimeout(300);
+    const bd = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); ob.mode = 'mq'; ob.hide = false; const res = {};
+      for(const k of ['stand', 'wave', 'sit']){ ob.pose = k; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam'); o.g.updateMatrixWorld(true);
+        const J = SCENE.bodyJoints(o.mq), V = J[0].constructor, box = new (o.g.position.constructor)(); let lo = 9, hi = -9; const p = new V(); o.mq.traverse(m => { if(m.isSkinnedMesh) for(let i = 0; i < m.geometry.attributes.position.count; i += 13){ m.getVertexPosition(i, p); p.applyMatrix4(m.matrixWorld); lo = Math.min(lo, p.y); hi = Math.max(hi, p.y); } });
+        res[k] = {body:!!o.mq.userData.body, lo:+lo.toFixed(3), hi:+hi.toFixed(3), wristR:+J[4].y.toFixed(2), nose:+J[0].y.toFixed(2), hip:+J[8].y.toFixed(2), noseZ:+(J[0].z - J[1].z).toFixed(3), eyesSide:+(J[14].x - J[15].x).toFixed(3)}; }
+      ob.pose = 'stand'; return res; });
+    ok(bd.stand.body && Math.abs(bd.stand.lo) < 0.03 && bd.stand.hi > 1.5 && bd.stand.noseZ > 0.05 && bd.stand.eyesSide < 0, '🧍 the mannequin is the base body, standing on the floor, face points the right way: ' + JSON.stringify(bd.stand));
+    ok(bd.wave.wristR > bd.wave.nose && Math.abs(bd.wave.lo) < 0.03, '👋 Waving puts her right hand above her head, feet still on the floor: ' + JSON.stringify(bd.wave));
+    ok(bd.sit.hip < bd.stand.hip - 0.2 && Math.abs(bd.sit.lo) < 0.03, '🪑 Sitting drops her hips with her feet still on the floor: ' + JSON.stringify(bd.sit));
+    if(process.env.SHOT){ await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); SCENE.sc.objs.forEach(o => { o.hide = o!==ob; }); ob.pose = 'hip'; SCENE.ui.sel = ob.id; SCENE.drawSel(); SCENE.setView('cam'); });
+      await page.waitForTimeout(500); await page.screenshot({path:path.join(process.env.SHOT, 'body-scene.png'), fullPage:true});
+    }
+    await page.evaluate(() => { SCENE.sc.objs.forEach(o => { o.hide = false; if(o.mode) o.mode = 'pics'; }); }); }
   // 📏 even size: an angle MiniMax drew smaller is scaled up to the others at that height, so she is the same height all round
   const ev = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind!=='obj'); ob.rot = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects());
     const tall = v => { SCENE.poseFor(v); const ft = o.card.material.map && o.card.material.map.userData.feet; return {url:(o.card.material.map.userData.url || o.card.material.map.image && o.card.material.map.image.src || '').match(/eye_\d+/) + '', h:ft ? +(o.geo.hM * o.card.scale.y * ft.ht).toFixed(3) : null}; };
