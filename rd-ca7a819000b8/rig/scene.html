@@ -55,6 +55,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 <div id="stage"><div id="msg"></div><div id="camctl" hidden><button id="camlock"></button><button id="camcopy">⤓ Free view’s angle</button></div></div>
 <div class="cols">
   <div class="box" id="envbox"></div>
+  <div class="box" id="lightbox"></div>
   <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="rall">▶ Render all</button></div><div id="final"></div><p class="note" id="allmsg">▶ Render all redraws every pick in high res, paints the 🌄 background from the 📷 Camera, and lays everyone over it into one finished picture.</p><div class="list" id="objs"></div>
     <p class="note">Tap a name to select it; only the selected one moves. Drag it in any view: Front and Side move it sideways and up, Top, Camera and Free slide it over the floor.</p></div>
   <div class="box" id="selbox"></div>
@@ -113,7 +114,7 @@ async function pushScene(){ if(!SC) return; if(!PC.url){ $('#saved').textContent
   try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:SC})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
   catch(e){ $('#saved').textContent = 'On this phone'; } }
 function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : 'sc'), name:name || (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : {}); scenesAll.unshift(s); openScene(s); changed(); }
-function openScene(s){ SC = s; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawFinal(); dirty = true; }
+function openScene(s){ SC = s; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawLightBox(); drawFinal(); dirty = true; }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
@@ -200,8 +201,8 @@ const gOpt = sel => GROUNDS.map((g, i) => `<option value="${i}" ${i===sel ? 'sel
 function drawEnvBox(){ const box = $('#envbox'); if(!SC){ box.innerHTML = ''; return; }
   if(!ENV){ const e = envOf(SC.env);
     box.innerHTML = `<h2>🌄 Environment</h2><select id="envsel" style="width:100%"><option value="">None (a plain floor)</option>${ENVS.map(x => `<option value="${esc(x.id)}" ${x.id===SC.env ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-      <p class="note">${e ? 'Its ground and objects stand behind your characters (locked here: change them in the 🌄 Environment tab).' + (e.words ? ' The place: <b>' + esc(e.words) + '</b>' : ' It has no place words yet.') : SC.env ? '<span class="warn">That environment was deleted (or is on a PC that is off).</span>' : 'Make one in the 🌄 Environment tab: paint a ground, add objects, describe the place.'}</p>`;
-    $('#envsel').onchange = ev => { SC.env = ev.target.value || undefined; buildObjs(); applyGround(); drawEnvBox(); changed(); }; return; }
+      <p class="note">${e ? 'Its ground and objects stand behind your characters (locked here: change them in the 🌄 Environment tab).' + (e.words ? ' The place: <b>' + esc(e.words) + '</b>' : ' It has no place words yet.') + '</p><div class="line"><button id="bgtest">🧪 Background strength test</button></div><p class="note" id="bgtmsg">' + (SC.bgSet && SC.bgSet.pick ? 'Render all uses your picked test (denoise ' + SC.bgSet.dn + ', depth ' + SC.bgSet.cn + ').' : 'Paints the background 9 ways (denoise ' + BG_DN.join('/') + ' × depth ' + BG_CN.join('/') + ') with one seed, to pick from.') + '</p><div id="bgt"></div><p class="note">' : SC.env ? '<span class="warn">That environment was deleted (or is on a PC that is off).</span>' : 'Make one in the 🌄 Environment tab: paint a ground, add objects, describe the place.'}</p>`;
+    $('#envsel').onchange = ev => { SC.env = ev.target.value || undefined; buildObjs(); applyGround(); drawEnvBox(); changed(); }; if($('#bgtest')){ $('#bgtest').onclick = bgTest; drawBgTest(); } return; }
   const gd = SC.ground = SC.ground || {base:0, cells:{}, tileM:2, on:true};
   box.innerHTML = `<h2>🏙 The place</h2><textarea id="ewords" rows="2" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit" placeholder="What is this place? e.g. old library, tall bookshelves, warm lamp light, evening">${esc(SC.words || '')}</textarea>
     <p class="note">These words paint the background when a scene in it renders (no people, just the place).</p>
@@ -257,6 +258,48 @@ function placeCams(rects){ const P = persp; aimCam(P, orbit); aimCam(shotCam, sh
     C.left = -o.half * asp; C.right = o.half * asp; C.top = o.half; C.bottom = -o.half; C.updateProjectionMatrix(); }
   if(rects.persp){ P.aspect = rects.persp.w / rects.persp.h; P.updateProjectionMatrix(); } }
 const camOf = k => k==='persp' ? persp : k==='cam' ? shotCam : ortho[k].cam;
+
+// 💡 the light (Jordan 2026-10-28): a sun you turn round the scene, with its colour, and a fill colour. The flat pictures can't be lit
+// themselves, but each stands in front of its real 3D stand-in (her posed mannequin, painted over from the 📷 Camera, and the 3D chair),
+// so the stand-ins are lit in 3D with real shadows (hers on the floor and the chair, the chair's on her) and that light, pixel for
+// pixel, multiplies the Camera view: the pictures look lit by it. It shows in the 📷 Camera view and goes into the finished picture
+const LT = {sun:new THREE.DirectionalLight(0xffffff, 1), amb:new THREE.AmbientLight(0xffffff, 1)}; LT.sun.castShadow = true; LT.sun.shadow.mapSize.set(2048, 2048); LT.sun.shadow.bias = -0.0006; LT.sun.shadow.normalBias = 0.02;
+Object.assign(LT.sun.shadow.camera, {left:-6, right:6, top:6, bottom:-6, near:0.1, far:60}); LT.sun.visible = LT.amb.visible = false; scene.add(LT.sun, LT.sun.target, LT.amb);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const LIGHT_MAT = new THREE.MeshLambertMaterial({color:0xffffff}), LIGHT0 = {on:false, turn:-40, up:50, color:'#ffe6c4', power:1, fill:'#9fb4d8', fillK:0.45};
+const catcher = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), LIGHT_MAT); catcher.rotation.x = -Math.PI / 2; catcher.visible = false; catcher.receiveShadow = true; scene.add(catcher); // a floor for shadows when there's no ground
+const sunMark = new THREE.Group(); { const b = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), new THREE.MeshBasicMaterial({color:0xffd166})); const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]), new THREE.LineDashedMaterial({color:0xffd166, dashSize:0.15, gapSize:0.1}));
+  sunMark.add(b, ln); sunMark.userData.line = ln; sunMark.visible = false; scene.add(sunMark); }
+const lightOf = () => SC && !ENV ? Object.assign({}, LIGHT0, SC.light || {}) : null, lightOn = () => { const L = lightOf(); return !!(L && L.on); };
+function placeLight(){ const L = lightOf(); if(!L) return; const t = shotO.t, D = 14, a = L.turn * D2R, e = L.up * D2R, dir = new THREE.Vector3(Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e));
+  LT.sun.position.copy(t).addScaledVector(dir, D); LT.sun.target.position.set(t.x, 0, t.z); LT.sun.target.updateMatrixWorld(); LT.sun.color.set(L.color); LT.sun.intensity = Math.PI * L.power; LT.amb.color.set(L.fill); LT.amb.intensity = Math.PI * L.fillK;
+  sunMark.position.copy(t).addScaledVector(dir, 4); const ln = sunMark.userData.line; ln.geometry.setFromPoints([new THREE.Vector3(), dir.clone().multiplyScalar(-4)]); ln.computeLineDistances(); sunMark.children[0].material.color.set(L.color); }
+// the light pass: only the 3D stand-ins, all white, lit by the sun and fill (the models' own studio light off)
+function lightPass(rt, cam, keepBg){ const hid = [], show = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } }, put = m => { if(m && !m.visible){ m.visible = true; show.push(m); } };
+  for(const o of OBJ.values()){ if(o.ob.hide){ continue; } put(o.g); [o.card, o.ghost, o.shot, o.disc, o.label, o.missing, o.shd].forEach(hide); if(o.mq) put(o.mq); if(o.mesh) put(o.mesh); for(const m of [o.mq, o.mesh]) if(m) m.traverse(x => { if(x.isMesh){ x.castShadow = x.receiveShadow = true; if(x.material && x.material.side===THREE.BackSide) hide(x); } }); }
+  [camRig, pgrid, grid, axX, axZ, sunMark].forEach(hide); BASE_LIGHTS.forEach(hide); if(!ground.visible) put(catcher); ground.receiveShadow = true; LT.sun.visible = LT.amb.visible = true;
+  const bg = scene.background; scene.background = keepBg ? null : new THREE.Color(1, 1, 1); scene.overrideMaterial = LIGHT_MAT;
+  renderer.setRenderTarget(rt); renderer.setClearColor(0xffffff, 1); renderer.clear(); renderer.render(scene, cam); renderer.setRenderTarget(null);
+  scene.overrideMaterial = null; scene.background = bg; LT.sun.visible = LT.amb.visible = false; hid.forEach(m => m.visible = true); show.forEach(m => m.visible = false); }
+// colour × light, drawn on a full-screen quad (the sky, where nothing stands, keeps its own colour: the light pass is white there)
+const MIX = new THREE.ShaderMaterial({uniforms:{tC:{value:null}, tL:{value:null}, dbg:{value:0}}, depthTest:false, depthWrite:false,
+  vertexShader:'varying vec2 vU; void main(){ vU = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader:'uniform sampler2D tC, tL; uniform float dbg; varying vec2 vU; void main(){ vec4 c = texture2D(tC, vU); vec3 l = texture2D(tL, vU).rgb; gl_FragColor = vec4(dbg > 0.5 ? l : c.rgb * l, 1.0);\n#include <colorspace_fragment>\n}'});
+const mixScene = new THREE.Scene(), mixCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1); mixScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), MIX));
+const RTS = {}; const rtOf = (k, W, H) => { const r = RTS[k]; if(r && r.width===W && r.height===H) return r; if(r) r.dispose(); return RTS[k] = new THREE.WebGLRenderTarget(W, H, {samples:4, type:THREE.HalfFloatType}); }; // (half float: a strong light can brighten past white)
+// a lit picture of the scene through cam at W×H, into target (null: the screen's current viewport)
+function litRender(cam, W, H, target){ placeLight(); const C = rtOf('c' + (target ? 't' : ''), W, H), L = rtOf('l' + (target ? 't' : ''), W, H);
+  const vp = new THREE.Vector4(), sc = new THREE.Vector4(), st = renderer.getScissorTest(); renderer.getViewport(vp); renderer.getScissor(sc); renderer.setScissorTest(false);
+  renderer.setRenderTarget(C); renderer.setClearColor(0x2b2e35, 1); renderer.clear(); renderer.render(scene, cam); lightPass(L, cam);
+  MIX.uniforms.dbg.value = window.LIGHT_ONLY ? 1 : 0; MIX.uniforms.tC.value = C.texture; MIX.uniforms.tL.value = L.texture; renderer.setRenderTarget(target || null); if(!target){ renderer.setViewport(vp); renderer.setScissor(sc); renderer.setScissorTest(st); } renderer.render(mixScene, mixCam); renderer.setRenderTarget(null); }
+function drawLightBox(){ const box = $('#lightbox'); if(ENV || !SC){ box.hidden = true; return; } box.hidden = false; const L = lightOf();
+  const sl = (k, t, min, max, st, unit) => `<div class="lbl">${t}: <b data-v="${k}">${L[k]}${unit}</b></div><div class="line"><input type="range" data-l="${k}" min="${min}" max="${max}" step="${st}" value="${L[k]}"></div>`;
+  box.innerHTML = `<h2>💡 Light<button id="lon" aria-pressed="${L.on}">${L.on ? 'On' : 'Off'}</button></h2>
+    ${L.on ? sl('turn', 'Comes from (turn)', -180, 180, 5, '°') + sl('up', 'Height', 5, 85, 1, '°') + `<div class="line"><label class="note" style="margin:0">Colour <input type="color" data-c="color" value="${L.color}"></label>${sl('power', 'Strength', 0, 2, 0.05, '')}</div>`
+      + `<div class="line"><label class="note" style="margin:0">Fill colour <input type="color" data-c="fill" value="${L.fill}"></label></div>` + sl('fillK', 'Fill', 0, 1, 0.05, '') + '<p class="note">Shows in the 📷 Camera view (the yellow ball in the other views is the sun). It lights the 3D stand-ins behind the pictures, so shadows fall where they really would.</p>' : '<p class="note">Turn it on to light the scene with a sun you can move, with real shadows and coloured light.</p>'}`;
+  box.querySelector('#lon').onclick = () => { SC.light = Object.assign({}, L, {on:!L.on}); if(SC.light.on && view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); } drawLightBox(); changed(); dirty = true; };
+  box.querySelectorAll('[data-l]').forEach(i => i.oninput = () => { SC.light = Object.assign({}, lightOf(), {[i.dataset.l]:+i.value}); box.querySelector(`[data-v="${i.dataset.l}"]`).textContent = i.value + ({turn:'°', up:'°'}[i.dataset.l] || ''); dirty = true; changed(); });
+  box.querySelectorAll('[data-c]').forEach(i => i.oninput = () => { SC.light = Object.assign({}, lightOf(), {[i.dataset.c]:i.value}); dirty = true; changed(); }); }
 // ---- characters: one card that faces the camera of the view being drawn, showing the angle nearest that camera
 const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous'); const tex = new Map();
 function feetOf(im){ const w = 96, h = Math.max(1, Math.round(w * im.height / im.width)), c = document.createElement('canvas'); c.width = w; c.height = h;
@@ -295,7 +338,8 @@ const WOOD = (() => { const c = document.createElement('canvas'); c.width = 128;
     for(let y = 0; y <= 256; y += 16) x.lineTo(x0 + Math.sin(y / 40 + i) * 4, y); x.stroke(); }
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; })();
 let litOnce = false;
-function lights(){ if(!litOnce){ litOnce = true; scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a6a, 1.4)); const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(2, 4, 3); scene.add(sun); } }
+const BASE_LIGHTS = []; // the 3D models' own soft studio light (left out of the 💡 light pass)
+function lights(){ if(!litOnce){ litOnce = true; const h = new THREE.HemisphereLight(0xffffff, 0x8a7a6a, 1.4), sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(2, 4, 3); scene.add(h, sun); BASE_LIGHTS.push(h, sun); } }
 function chairMesh(ht){ lights();
   const g = new THREE.Group(), k = ht / 0.9, wood = new THREE.MeshToonMaterial({map:WOOD, gradientMap:TOON}), ink = new THREE.MeshBasicMaterial({color:0x24160c, side:THREE.BackSide});
   const part = (w, h, d, x, y, z, rx) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wood); m.position.set(x, y, z); if(rx) m.rotation.x = rx;
@@ -342,10 +386,10 @@ function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(
     for(const m of [shd, disc]){ m.renderOrder = -1; m.material.depthTest = false; } // under the pictures, always
     const mesh = e && e.mesh==='chair' ? chairMesh(ht) : e && e.mesh==='mannequin' ? mqMesh(ht) : null; if(mesh) g.add(mesh);
     // 🧍 every library character also has a mannequin (posed and rendered from), and 📸 the picture last rendered from it
-    const mq = !isObj && !mesh ? mqMesh(1.7, e && e.body, e && e.hair, e && e.look) : null, shot = mq ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
-    if(mq){ mq.visible = false; shot.visible = false; g.add(mq, shot); }
+    const mq = !isObj && !mesh ? mqMesh(1.7, e && e.body, e && e.hair, e && e.look) : null, shot = mq || (isObj && mesh) ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
+    if(mq){ mq.visible = false; shot.visible = false; g.add(mq, shot); } else if(shot){ shot.visible = false; g.add(shot); } // 🪑 a 3D object's 📸 painted picture
     if(ob.fromEnv) disc.visible = false; // 🌄 part of the environment: no ring, it can't be picked here
-    g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {mesh, mq, shot, ghost, g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
+    g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {mesh, mq, shot, ghost, g, card, disc, missing, label, shd, e, at, geo, ob, isObj, ht}); }
   dirty = true; }
 // the picture for a camera: the camera's direction in her own turn (her front is +z), its height to the nearest of her heights
 function pickAngle(o, cam){ const ob = o.ob, p = new THREE.Vector3(ob.x, ob.y + (o.isObj ? o.ht : o.geo.hM) * (ob.s || 1) * 0.5, ob.z);
@@ -378,6 +422,7 @@ function poseFor(view){ const cam = view==='persp' ? shotCam : camOf(view), top 
     const sel = ui.sel===ob.id; o.disc.material.color.set(sel ? 0xffd166 : 0x9aa0ad); o.disc.scale.setScalar(s); o.disc.rotation.z = (ob.rot || 0) * D2R;
     o.label.visible = top; if(top){ o.label.position.set(0, 0.03, 0.62 * s); o.label.rotation.set(-Math.PI / 2, 0, 0); }
     o.missing.visible = !o.e; o.card.visible = false; o.ghost.visible = false;
+    if(o.mesh && o.shot){ const md = modeOf(ob); o.mesh.visible = md!=='shot'; o.shot.visible = false; if(md==='shot'){ if(!top) placeShot(o, cam); continue; } }
     if(o.mesh){ o.mesh.scale.setScalar(s); o.mesh.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mesh, ob.pose || 'stand'); continue; } // 🪑 a 3D model just turns with its spot: right from every angle
     if(o.mq){ const md = modeOf(ob); o.mq.visible = md==='mq'; o.shot.visible = false;
       if(md==='mq'){ o.mq.scale.setScalar(s * mqHeight(o) / 1.7); o.mq.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mq, ob.pose || 'stand'); continue; }
@@ -410,7 +455,8 @@ function rects(){ const W = stage.clientWidth, H = stage.clientHeight; if(view!=
   const w = W / 2, h = H / 2; return {persp:{x:0, y:0, w, h}, top:{x:w, y:0, w, h}, front:{x:0, y:h, w, h}, side:{x:w, y:h, w, h}}; }
 function draw(){ const W = stage.clientWidth, H = stage.clientHeight; if(renderer.domElement.width!==Math.round(W * renderer.getPixelRatio())) renderer.setSize(W, H, false);
   const R = rects(); placeCams(R); renderer.setScissorTest(true); renderer.setClearColor(0x2b2e35); renderer.clear();
-  for(const [k, r] of Object.entries(R)){ const y = H - r.y - r.h; renderer.setViewport(r.x, y, r.w, r.h); renderer.setScissor(r.x, y, r.w, r.h); poseFor(k); camRig.visible = k!=='cam'; renderer.render(scene, camOf(k)); }
+  const lit = lightOn(); if(lit) placeLight(); for(const [k, r] of Object.entries(R)){ const y = H - r.y - r.h; renderer.setViewport(r.x, y, r.w, r.h); renderer.setScissor(r.x, y, r.w, r.h); poseFor(k); camRig.visible = k!=='cam'; sunMark.visible = lit && k!=='cam';
+    if(lit && k==='cam'){ const pr = renderer.getPixelRatio(); litRender(camOf(k), Math.max(1, Math.round(r.w * pr)), Math.max(1, Math.round(r.h * pr)), null); } else renderer.render(scene, camOf(k)); } sunMark.visible = false;
   renderer.setScissorTest(false);
   stage.querySelectorAll('.vlab').forEach(n => n.remove()); for(const [k, r] of Object.entries(R)){ const d = document.createElement('div'); d.className = 'vlab'; d.textContent = LABEL[k]; d.style.left = (r.x + 6) + 'px'; d.style.top = (r.y + 6) + 'px'; stage.appendChild(d); }
   $('#camctl').hidden = view!=='cam'; $('#camlock').textContent = camLocked() ? '🔒 Locked' : '🔓 Aiming'; $('#camlock').setAttribute('aria-pressed', !camLocked()); }
@@ -471,7 +517,7 @@ const shotUrl = sh => (sh = sh.hi || sh, sh.pc + '/view?filename=' + encodeURICo
 // the rendered picture stands where the mannequin stood: upright, turned to the camera from its spot, as tall on screen as when it was made
 function placeShot(o, cam){ const ob = o.ob, sh = ob.shot, s = ob.s || 1, t = texOf(shotUrl(sh), true); if(!t || !t.userData.ready) return;
   if(o.shot.material.map!==t){ o.shot.material.map = t; o.shot.material.needsUpdate = true; } o.shot.visible = true;
-  const p = new THREE.Vector3(ob.x, ob.y + mqHeight(o) * s / 2, ob.z), d = cam.isOrthographicCamera ? cam.getWorldDirection(new THREE.Vector3()).negate() : cam.position.clone().sub(p).normalize();
+  const p = new THREE.Vector3(ob.x, ob.y + (o.mq ? mqHeight(o) : o.ht) * s / 2, ob.z), d = cam.isOrthographicCamera ? cam.getWorldDirection(new THREE.Vector3()).negate() : cam.position.clone().sub(p).normalize();
   const up = 1 / Math.max(0.3, Math.sqrt(Math.max(0, 1 - d.y * d.y))), q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(d.x, d.z));
   o.shot.scale.set(sh.w * s, sh.h * s * up, 1); o.shot.quaternion.copy(q); o.shot.position.copy(new THREE.Vector3(-(sh.fx - 0.5) * sh.w * s, (sh.fy - 0.5) * sh.h * s * up, 0).applyQuaternion(q));
   const ft = t.userData.feet; if(ft && ft.by > sh.fy) aboveFloor(o.shot.position, d, (ft.by - sh.fy) * sh.h * s * up); }
@@ -480,8 +526,8 @@ function placeShot(o, cam){ const ob = o.ob, sh = ob.shot, s = ob.s || 1, t = te
 const MQ_J = [[0, 1.585, 0.1], [0, 1.44, 0], [-0.24, 1.37, 0], [-0.255, 1.08, 0], [-0.275, 0.8, 0], [0.24, 1.37, 0], [0.255, 1.08, 0], [0.275, 0.8, 0], [-0.095, 0.93, 0], [-0.095, 0.5, 0], [-0.095, 0.08, 0],
   [0.095, 0.93, 0], [0.095, 0.5, 0], [0.095, 0.08, 0], [-0.035, 1.61, 0.085], [0.035, 1.61, 0.085], [-0.095, 1.585, 0], [0.095, 1.585, 0]];
 function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rects()); poseFor(view);
-  const mode0 = ob.mode; ob.mode = 'mq'; poseFor(view); o.g.updateMatrixWorld(true);
-  const box = new THREE.Box3(); o.mq.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) box.expandByObject(m, true); });
+  const mode0 = ob.mode; ob.mode = 'mq'; poseFor(view); o.g.updateMatrixWorld(true); const part = o.mq || o.mesh; // 🧍 her mannequin, or 🪑 the 3D object
+  const box = new THREE.Box3(); part.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) box.expandByObject(m, true); });
   const cam = cam0.clone(), corners = []; for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z).project(cam));
   const asp = cam.isOrthographicCamera ? (cam.right - cam.left) / (cam.top - cam.bottom) : cam.aspect, FH = 2000, FW = Math.round(FH * asp);
   let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for(const c of corners){ const px = (c.x + 1) / 2 * FW, py = (1 - c.y) / 2 * FH; x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); }
@@ -490,8 +536,10 @@ function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rect
   if(cw / ch < W / H) cw = ch * W / H; else ch = cw * H / W; const cx = (x0 + x1) / 2 - cw / 2, cy = (y0 + y1) / 2 - ch / 2;
   cam.setViewOffset(FW, FH, cx, cy, cw, ch); cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
   // depth: only the mannequin (its ink outline hidden), near bright, far dark, nothing black
-  const hid = []; scene.traverse(m => { if(m!==scene && m.visible && !(m===o.g || o.mq===m || isIn(m, o.mq) || isAnc(m, o.g))){ m.visible = false; hid.push(m); } });
-  o.mq.traverse(m => { if(m.isMesh && m.material.side===THREE.BackSide && m.visible){ m.visible = false; hid.push(m); } }); [o.disc, o.label, o.card, o.ghost, o.shot].forEach(m => { if(m && m.visible){ m.visible = false; hid.push(m); } });
+  const hid = []; scene.traverse(m => { if(m!==scene && m.visible && !m.isLight && !(m===o.g || part===m || isIn(m, part) || isAnc(m, o.g))){ m.visible = false; hid.push(m); } });
+  [o.disc, o.label, o.card, o.ghost, o.shot, o.shd, o.missing].forEach(m => { if(m && m.visible){ m.visible = false; hid.push(m); } });
+  let colour = null; if(!o.mq){ colour = shotOf(cam, W, H, 0xffffff); } // 🪑 its own colours on white (ink lines and all), the start of the painting
+  part.traverse(m => { if(m.isMesh && m.material.side===THREE.BackSide && m.visible){ m.visible = false; hid.push(m); } });
   const dz = []; for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z]){ const v = new THREE.Vector3(x, y, z).applyMatrix4(cam.matrixWorldInverse); dz.push(-v.z); }
   DEPTH_MAT.uniforms.uNear.value = Math.min(...dz); DEPTH_MAT.uniforms.uFar.value = Math.max(...dz) + 0.05;
   const rt = new THREE.WebGLRenderTarget(W, H), bg = scene.background, buf = new Uint8Array(W * H * 4); scene.background = new THREE.Color(0x000000); scene.overrideMaterial = DEPTH_MAT;
@@ -500,22 +548,35 @@ function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rect
   const depth = document.createElement('canvas'); depth.width = W; depth.height = H; const dx = depth.getContext('2d'), id = dx.createImageData(W, H);
   for(let y = 0; y < H; y++) id.data.set(buf.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4); dx.putImageData(id, 0, 0);
   // skeleton: OpenPose colours on black; the face points only when it looks this way, an ear only on the side that shows
-  const k = mqHeight(o) * (ob.s || 1) / 1.7, toW = j => new THREE.Vector3(j[0] * k, j[1] * k, j[2] * k).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R).add(new THREE.Vector3(ob.x, ob.y, ob.z));
+  const k = (o.mq ? mqHeight(o) : 1.7) * (ob.s || 1) / 1.7, toW = j => new THREE.Vector3(j[0] * k, j[1] * k, j[2] * k).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R).add(new THREE.Vector3(ob.x, ob.y, ob.z));
   const camAt = cam.isOrthographicCamera ? null : cam.position, fwd = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R), side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R);
   const toCam = camAt ? camAt.clone().sub(new THREE.Vector3(ob.x, ob.y + 1.5 * k, ob.z)).normalize() : cam.getWorldDirection(new THREE.Vector3()).negate(), face = fwd.dot(toCam), ear = side.dot(toCam);
   const show = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, face > -0.15, face > -0.15, ear < 0.35, ear > -0.35]; show[0] = face > -0.15;
-  const pts = (o.mq.userData.body ? bodyJoints(o.mq, BODY.face) : MQ_J.map(toW)).map(w0 => { const p = w0.clone().project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; });
-  const pose = drawPose(W, H, pts, show);
+  const pts = !o.mq ? [] : (o.mq.userData.body ? bodyJoints(o.mq, BODY.face) : MQ_J.map(toW)).map(w0 => { const p = w0.clone().project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; });
+  const pose = o.mq ? drawPose(W, H, pts, show) : null;
   // where her spot (the feet) falls in the picture, and how many metres a pixel is there, so the picture stands back in the same place and size
   const f = new THREE.Vector3(ob.x, ob.y, ob.z).project(cam), fx = (f.x + 1) / 2, fy = (1 - f.y) / 2;
   const m0 = new THREE.Vector3(ob.x, ob.y + 1, ob.z).project(cam), mPerPx = 1 / Math.max(1e-6, Math.hypot((m0.x - f.x) / 2 * W, (m0.y - f.y) / 2 * H)), d = toCam;
   const el = Math.asin(Math.max(-1, Math.min(1, d.y))), hM = H * mPerPx * Math.cos(el);
   ob.mode = mode0; dirty = true;
-  return {W, H, depth, pose, geo:{w:W * mPerPx * Math.cos(el), h:hM, fx, fy}}; }
+  return {W, H, depth, pose, colour, geo:{w:W * mPerPx * Math.cos(el), h:hM, fx, fy}}; }
+// what the camera sees right now (whatever is showing), on a plain background
+function shotOf(cam, W, H, bgc){ const rt = new THREE.WebGLRenderTarget(W, H, {colorSpace:THREE.SRGBColorSpace}), bg = scene.background, buf = new Uint8Array(W * H * 4); scene.background = new THREE.Color(bgc);
+  renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null); scene.background = bg; rt.dispose();
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), id = x.createImageData(W, H);
+  for(let y = 0; y < H; y++) id.data.set(buf.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4); x.putImageData(id, 0, 0); return c; }
 const isIn = (m, root) => { for(let p = m.parent; p; p = p.parent) if(p===root) return true; return false; };
 const isAnc = (m, child) => { for(let p = child.parent; p; p = p.parent) if(p===m) return true; return false; };
 // talking to the PC: its lists, an upload, a graph and waiting for it
 const PROMPT_TAIL = 'full body, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
+// 🪑 a 3D object (Jordan 2026-10-28: "a 3d chair would become a flat image that is painted over by illustrious and uses the same style lora"):
+// its words (the library's, or its name), and the scene's characters' model and style LoRA so it matches them
+const OBJ_DN = 0.62; // how far Illustrious repaints the 3D object's own colours (its depth holds the shape)
+const OBJ_TAIL = 'no humans, still life, object focus, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
+function kitE(ob, e){ if(ob.kind!=='obj') return e; const who = SC.objs.map(x => libOf(x.ref)).find(c => c && c.kind!=='obj' && c.ckpt) || {};
+  return {ckpt:e.ckpt || who.ckpt, style:e.style || who.style, name:e.name, words:(e.tags || e.prompt || e.name || 'object').replace(/\(3D\)/i, '').replace(/^(AFKJ Style,\s*)/i, '').trim().toLowerCase(), obj:true}; }
+const wordsOf = (ob, E, los) => E.obj ? [lorasOf(E, los || []).some(([l]) => /afkj/i.test(l)) ? 'AFKJ Style' : '', E.words, OBJ_TAIL].filter(Boolean).join(', ') : herWords(E, ob.pose) + ', ' + PROMPT_TAIL;
+const lorasOf = (E, los) => (E.obj ? [[E.style || los.find(n => /afkj/i.test(n)), 1]] : [[E.style, 1], [E.lora, +E.strength || 1]]).filter(([l]) => l && los.includes(l));
 // her words (Jordan 2026-10-28: a sitting Ellen came out blonde, bootless and "standing"): LoRA trigger + her saved tags + the pose as words; pose and framing words from her card are dropped so they never fight the guide
 const POSE_WORDS = {stand:'standing', hip:'standing, hand on own hip', walk:'walking', sit:'sitting', wave:'standing, waving'};
 const NOT_HERS = /^(standing|sitting|walking|waving|a-pose|t-pose|arms at sides|full body|upper body|simple background|white background|transparent background|solo|1girl|1boy|1other|looking at viewer)$/i;
@@ -544,18 +605,18 @@ async function runGraph(url, g, save, tick){ const r = await fetch(url + '/promp
 const cutOut = (add, out, bgm) => bgm ? [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:bgm}), 0], image:out}), 0]}), 0]}), 0] : out;
 async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || !PC.url){ st('Render (or the PC with her library) is not answering.'); return; } if(BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
-  try{ st('Asking the PCs for their models…'); const K = await kitFor(e, 'cn'); const {url, ckpt, cn, bgm, fd, ud, sam, los} = K;
+  try{ st('Asking the PCs for their models…'); const E = kitE(ob, e), K = await kitFor(E, 'cn'); const {url, ckpt, cn, bgm, fd, ud, sam, los} = K;
     if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); } const G = guidesFor(o, 'cam'), stamp = Date.now().toString(36);
-    st('Sending the mannequin…'); const dn = await upload(url, G.depth, 'rd-scene-depth-' + stamp + '.png'), pn = await upload(url, G.pose, 'rd-scene-pose-' + stamp + '.png');
+    st(E.obj ? 'Sending the 3D object…' : 'Sending the mannequin…'); const dn = await upload(url, G.depth, 'rd-scene-depth-' + stamp + '.png'), pn = G.pose && await upload(url, G.pose, 'rd-scene-pose-' + stamp + '.png'), cl = G.colour && await upload(url, G.colour, 'rd-scene-obj-' + stamp + '.png');
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:ckpt}); let model = [ck, 0], clip = [ck, 1];
-    for(const [l, w] of [[e.style, 1], [e.lora, +e.strength || 1]]) if(l && los.includes(l)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
-    const words = herWords(e, ob.pose), pos0 = add('CLIPTextEncode', {clip, text:words + ', ' + PROMPT_TAIL}), neg0 = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:cn});
+    for(const [l, w] of lorasOf(E, los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
+    const pos0 = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, los)}), neg0 = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '')}), L = add('ControlNetLoader', {control_net_name:cn});
     let pos = [pos0, 0], neg = [neg0, 0];
-    for(const [img, type, str, end] of [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
-    const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:1});
+    for(const [img, type, str, end] of E.obj ? [[dn, 'depth', 0.7, 0.7]] : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
+    const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:E.obj ? [add('RepeatLatentBatch', {samples:[add('VAEEncode', {pixels:[add('LoadImage', {image:cl}), 0], vae:[ck, 2]}), 0], amount:4}), 0] : [add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:E.obj ? OBJ_DN : 1}); // 🪑 an object starts from its own colours
     let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0];
-    if(fd && ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, sam);
+    if(fd && ud && !E.obj) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, sam);
     out = cutOut(add, out, bgm);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_')});
     const imgs = await runGraph(url, g, save, t => st('Painting 4 on ' + pcName(url) + '… ' + t + ' s'));
@@ -573,13 +634,13 @@ function hiTiles(add, img, model, pos, neg, ck, cfx){ const big = add('ImageScal
   return cfx ? [add('RenderDeckUpscaleColorFix', {image:out, image_ref:[big, 0], strength:1, levels:5}), 0] : out; }
 async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || !sh || sh.hi || BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
-  try{ st('Asking the PCs for their models…'); const K = await kitFor(e, 'usu'), url = K.url;
-    st('Sending her picture to ' + pcName(url) + '…'); const b = await (await fetch(shotUrl(sh))).blob(), fdt = new FormData(); fdt.append('image', b, 'rd-scene-hi-' + Date.now().toString(36) + '.png'); fdt.append('overwrite', 'true');
+  try{ st('Asking the PCs for their models…'); const E = kitE(ob, e), K = await kitFor(E, 'usu'), url = K.url;
+    st('Sending the picture to ' + pcName(url) + '…'); const b = await (await fetch(shotUrl(sh))).blob(), fdt = new FormData(); fdt.append('image', b, 'rd-scene-hi-' + Date.now().toString(36) + '.png'); fdt.append('overwrite', 'true');
     const up = await (await fetch(url + '/upload/image', {method:'POST', body:fdt})).json();
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
-    if(K.cfx) for(const [l, w] of [[e.style, 1], [e.lora, +e.strength || 1]]) if(l && K.los.includes(l)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
-    const pos = add('CLIPTextEncode', {clip, text:herWords(e, ob.pose) + ', ' + PROMPT_TAIL}), neg = add('CLIPTextEncode', {clip, text:NEG});
+    if(K.cfx) for(const [l, w] of lorasOf(E, K.los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
+    const pos = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, K.cfx ? K.los : [])}), neg = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '')});
     let out = cutOut(add, hiTiles(add, [add('LoadImage', {image:up.name}), 0], model, pos, neg, ck, K.cfx), K.bgm);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_hi'});
     const imgs = await runGraph(url, g, save, t => st('⤴ Redrawing her 2× on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
@@ -590,62 +651,94 @@ async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, 
   BUSY.delete(ob.id); drawSel(); }
 // ▶ Render all (Jordan 2026-10-28): every character's pick gets ⤴ High res (one with no pick gets 4 tries to pick from, and it stops there);
 // then 🌄 the background is painted from the 📷 Camera, and 🖼 everyone is laid over it into one picture
-async function renderAll(){ if(!SC) return; const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }; const chars = SC.objs.filter(ob => ob.kind!=='obj' && !ob.hide && OBJ.get(ob.id) && OBJ.get(ob.id).mq);
+async function renderAll(){ if(!SC) return; const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }; const chars = SC.objs.filter(ob => !ob.hide && OBJ.get(ob.id) && OBJ.get(ob.id).shot); // characters, and 🪑 3D objects (painted the same way)
   $('#rall').disabled = true; let tries = 0;
   try{ for(const ob of chars){ const nm = ob.label || 'her';
       if(modeOf(ob)==='shot'){ if(ob.shot.hi) continue; msg('⤴ ' + nm + ': redrawing her pick 2×…'); await hiRes(ob); }
       else { msg('🎬 ' + nm + ' has no pick yet: painting 4 to pick from…'); await renderAngle(ob); tries++; } }
-    if(tries){ msg('Pick one for ' + tries + (tries > 1 ? ' characters' : ' character') + ' that had none, then ▶ Render all again.'); return; }
+    if(tries){ msg('Pick one for the ' + tries + ' that had none (tap ' + (tries > 1 ? 'each' : 'it') + ' in the list), then ▶ Render all again.'); return; }
     if(chars.some(ob => !(ob.shot && ob.shot.hi))){ msg('A high-res redraw did not finish (see under that character). ▶ Render all tries again.'); return; }
     if(!envOf(SC.env)){ msg(chars.length ? 'Every pick is high res. Pick a 🌄 Environment above to paint a background and make the finished picture.' : 'No characters and no environment yet.'); return; }
     if(!bgFits()){ msg('🌄 Painting the background from the 📷 Camera…'); await renderBg(msg); }
     if(!bgFits()) return; msg('🖼 Putting everyone on the background…'); await compose(msg); }
   catch(err){ msg(err.message || String(err)); }
   finally{ $('#rall').disabled = false; drawFinal(); } }
-// 🌄 the background: the scene's environment through the 📷 Camera with no one in it. Its own colours start the picture (img2img 0.72)
-// and its depth holds the shapes (ProMax depth 0.6 to 60%); Illustrious paints it from the place words, with the characters' style LoRA,
-// then 2× in tiles like ⤴ High res. Kept with the scene and the camera it was painted from
 const bgKey = () => JSON.stringify([SC.cam || camState(), SC.env, (envOf(SC.env) || {}).saved || 0]);
 const bgFits = () => !!(SC && SC.bg && SC.bg.key===bgKey());
 function envShot(W, H, depth){ placeCams(rects()); poseFor('cam'); const cam = shotCam.clone(); cam.aspect = W / H; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
   const hid = []; const hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
   for(const o of OBJ.values()){ if(!(o.ob.fromEnv || o.isObj)) hide(o.g); else [o.disc, o.label, o.missing].forEach(hide); } [camRig, pgrid, grid, axX, axZ].forEach(hide);
-  const bg = scene.background, D = cam.position.distanceTo(shotO.t), rt = new THREE.WebGLRenderTarget(W, H), buf = new Uint8Array(W * H * 4);
+  const bg = scene.background, D = cam.position.distanceTo(shotO.t), rt = new THREE.WebGLRenderTarget(W, H, depth ? {} : {colorSpace:THREE.SRGBColorSpace}), buf = new Uint8Array(W * H * 4); // colour in sRGB as the screen shows it (v.239 sent it linear: dark)
   if(depth){ scene.background = new THREE.Color(0x000000); scene.overrideMaterial = DEPTH_MAT; DEPTH_MAT.uniforms.uNear.value = Math.max(0.1, D * 0.25); DEPTH_MAT.uniforms.uFar.value = D * 3; }
   renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null);
   scene.overrideMaterial = null; scene.background = bg; hid.forEach(m => m.visible = true); rt.dispose(); dirty = true;
   const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), id = x.createImageData(W, H);
   for(let y = 0; y < H; y++) id.data.set(buf.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4); x.putImageData(id, 0, 0); return c; }
 const BG_TAIL = 'scenery, no humans, masterpiece, best quality, amazing quality, newest, absurdres, highres', BG_NEG = ', 1girl, 1boy, people, person, character, crowd';
-async function renderBg(msg){ const env = envOf(SC.env), who = SC.objs.map(ob => libOf(ob.ref)).find(e => e && e.kind!=='obj' && e.ckpt) || {}, e = {ckpt:who.ckpt, style:who.style};
+// what the painted ground is, in words (Jordan's v.239 try had no place words, so planks came back as a wheat field)
+const GROUND_WORDS = ['grass', 'wooden floor, wooden planks', 'wooden floor, painted wood', 'dirt'];
+function groundWords(env){ const g = env.ground || {}; if(g.on===false) return ''; const used = [g.base || 0, ...Object.values(g.cells || {})].filter((v, i, a) => a.indexOf(v)===i);
+  return used.filter(k => !(g.tex || {})[k]).map(k => GROUND_WORDS[k]).filter(Boolean).join(', '); }
+// 🧪 how hard the background is painted over (Jordan 2026-10-28: v.239's 0.72 + depth 0.6 to 60% lost the planks): denoise × depth strength,
+// tried side by side with one seed; the picked one is kept (its settings, and its picture becomes the background before the 2×)
+const BG_DN = [0.4, 0.55, 0.7], BG_CN = [0.5, 0.8, 1.0], BG_DEF = {dn:0.55, cn:0.8};
+async function bgStart(msg){ const env = envOf(SC.env), who = SC.objs.map(ob => libOf(ob.ref)).find(e => e && e.kind!=='obj' && e.ckpt) || {}, e = {ckpt:who.ckpt, style:who.style};
   const K = await kitFor(e, 'cn'), url = K.url, a = shotCam.aspect || 1, H = Math.max(512, Math.round(Math.sqrt(1048576 / a) / 64) * 64), W = Math.max(512, Math.round(H * a / 64) * 64), stamp = Date.now().toString(36);
   if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); }
   msg('🌄 Sending the place to ' + pcName(url) + '…'); const ln = await upload(url, envShot(W, H, false), 'rd-scene-bg-' + stamp + '.png'), dn = await upload(url, envShot(W, H, true), 'rd-scene-bgdepth-' + stamp + '.png');
   const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
   const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
   if(e.style && K.los.includes(e.style)){ const id = add('LoraLoader', {model, clip, lora_name:e.style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
-  const words = [/afkj/i.test(e.style || '') ? 'AFKJ Style' : '', (env.words || '').trim().replace(/,\s*$/, ''), BG_TAIL].filter(Boolean).join(', ');
-  const pos = add('CLIPTextEncode', {clip, text:words}), neg = add('CLIPTextEncode', {clip, text:NEG + BG_NEG}), L = add('ControlNetLoader', {control_net_name:K.cn});
-  const ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.6, start_percent:0, end_percent:0.6, vae:[ck, 2]});
+  const words = [/afkj/i.test(e.style || '') ? 'AFKJ Style' : '', (env.words || '').trim().replace(/,\s*$/, ''), groundWords(env), BG_TAIL].filter(Boolean).join(', ');
+  const pos = add('CLIPTextEncode', {clip, text:words}), neg = add('CLIPTextEncode', {clip, text:NEG + BG_NEG}), L = add('ControlNetLoader', {control_net_name:K.cn}), U = add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), dimg = add('LoadImage', {image:dn});
   const lat = add('VAEEncode', {pixels:[add('LoadImage', {image:ln}), 0], vae:[ck, 2]});
-  const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:0.72});
-  let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.usu) out = hiTiles(add, out, model, pos, neg, ck, K.cfx);
-  const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_bg'});
-  const imgs = await runGraph(url, g, save, t => msg('🌄 Painting the background on ' + pcName(url) + (K.usu ? ' (then 2×)' : '') + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent no background back.');
-  SC.bg = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', key:bgKey(), W:W * (K.usu ? 2 : 1), H:H * (K.usu ? 2 : 1)}; changed(); }
+  const paint = (d, c, seed) => { const ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[U, 0], image:[dimg, 0], strength:c, start_percent:0, end_percent:0.8, vae:[ck, 2]});
+    const ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:d});
+    return [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; };
+  return {K, url, add, g, model, pos, neg, ck, paint, W, H, words}; }
+async function bgTest(){ const msg = m => { const el = $('#bgtmsg'); if(el) el.textContent = m; }, b = $('#bgtest'); if(b) b.disabled = true;
+  try{ const S = await bgStart(msg), seed = Math.floor(Math.random() * 2 ** 40), list = []; let out = null;
+    for(const d of BG_DN) for(const c of BG_CN){ const im = S.paint(d, c, seed); list.push({dn:d, cn:c}); out = out ? [S.add('ImageBatch', {image1:out, image2:im}), 0] : im; }
+    const save = S.add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_bgtest'});
+    const imgs = await runGraph(S.url, S.g, save, t => msg('🧪 Painting ' + list.length + ' strengths on ' + pcName(S.url) + '… ' + t + ' s')); if(imgs.length < list.length) throw new Error('The PC sent back ' + imgs.length + ' of ' + list.length + '.');
+    SC.bgTest = {key:bgKey(), seed, W:S.W, H:S.H, words:S.words, items:list.map((x, i) => Object.assign(x, {pc:S.url, file:imgs[i].filename, sub:imgs[i].subfolder || ''}))}; changed(); msg('Tap the one you like: Render all uses it (and its settings from then on).'); }
+  catch(err){ msg(err.message || String(err)); }
+  if($('#bgtest')) $('#bgtest').disabled = false; drawBgTest(); }
+function drawBgTest(){ const box = $('#bgt'); if(!box || !SC) return; const T = SC.bgTest, set = SC.bgSet || BG_DEF;
+  box.innerHTML = T && T.items ? `<div style="display:grid;grid-template-columns:repeat(${BG_CN.length},1fr);gap:4px;margin-top:6px">${T.items.map((x, i) => `<button data-bt="${i}" style="padding:0;border:2px solid ${set.pick && set.pick.file===x.file ? 'var(--pink,#ff5ca8)' : 'transparent'};border-radius:6px;overflow:hidden;background:none"><img src="${esc(shotUrl(x))}" style="width:100%;display:block"><div style="font-size:11px;padding:2px">denoise ${x.dn} · depth ${x.cn}</div></button>`).join('')}</div>${T.key!==bgKey() ? '<p class="note warn">The camera or environment changed since this test.</p>' : ''}` : '';
+  box.querySelectorAll('[data-bt]').forEach(b => b.onclick = () => { const x = T.items[+b.dataset.bt]; SC.bgSet = {dn:x.dn, cn:x.cn, seed:T.seed, W:T.W, H:T.H, pick:{pc:x.pc, file:x.file, sub:x.sub}, key:T.key}; SC.bg = undefined; changed(); drawBgTest(); drawFinal(); }); }
+// 🌄 the background: the scene's environment through the 📷 Camera with no one in it. Its own colours start the picture and its depth holds
+// the shapes (settings from the 🧪 test, or denoise 0.55 + depth 0.8); a picked test picture is used as it is. Then 2× in tiles like ⤴ High res
+async function renderBg(msg){ const set = SC.bgSet || BG_DEF;
+  if(set.pick && set.key===bgKey()){ const who = SC.objs.map(ob => libOf(ob.ref)).find(e => e && e.kind!=='obj' && e.ckpt) || {}, e = {ckpt:who.ckpt, style:who.style}, K = await kitFor(e, 'usu'), url = K.url;
+    msg('🌄 Sending your picked background to ' + pcName(url) + '…'); const b = await (await fetch(shotUrl(set.pick))).blob(), fd = new FormData(), c = {width:set.W || 1024, height:set.H || 1024}; fd.append('image', b, 'rd-scene-bgpick-' + Date.now().toString(36) + '.png'); fd.append('overwrite', 'true');
+    const nm = (await (await fetch(url + '/upload/image', {method:'POST', body:fd})).json()).name, g = {}; let n = 0; const add = (k, i) => { const id = String(++n); g[id] = {class_type:k, inputs:i}; return id; };
+    const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
+    if(e.style && K.los.includes(e.style)){ const id = add('LoraLoader', {model, clip, lora_name:e.style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
+    const pos = add('CLIPTextEncode', {clip, text:(SC.bgTest && SC.bgTest.words) || BG_TAIL}), neg = add('CLIPTextEncode', {clip, text:NEG + BG_NEG}); let out = [add('LoadImage', {image:nm}), 0];
+    if(K.usu) out = hiTiles(add, out, model, pos, neg, ck, K.cfx);
+    const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_bg'});
+    const imgs = await runGraph(url, g, save, t => msg('🌄 Redrawing your background 2× on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent no background back.');
+    SC.bg = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', key:bgKey(), W:c.width * (K.usu ? 2 : 1), H:c.height * (K.usu ? 2 : 1)}; changed(); return; }
+  const S = await bgStart(msg); let out = S.paint(set.dn, set.cn, Math.floor(Math.random() * 2 ** 40)); if(S.K.usu) out = hiTiles(S.add, out, S.model, S.pos, S.neg, S.ck, S.K.cfx);
+  const save = S.add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_bg'});
+  const imgs = await runGraph(S.url, S.g, save, t => msg('🌄 Painting the background on ' + pcName(S.url) + (S.K.usu ? ' (then 2×)' : '') + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent no background back.');
+  SC.bg = {pc:S.url, file:imgs[0].filename, sub:imgs[0].subfolder || '', key:bgKey(), W:S.W * (S.K.usu ? 2 : 1), H:S.H * (S.K.usu ? 2 : 1)}; changed(); }
 // 🖼 the finished picture: the painted background with the characters' high-res cut-outs drawn over it through the same 📷 Camera, each
 // where she stands, with her soft contact shadow; the environment's own ground and objects are left out (they are in the painting)
 const loadImg = url => new Promise((res, rej) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => res(im); im.onerror = () => rej(new Error('Could not load ' + url)); im.src = url; });
 async function waitTex(urls){ for(let i = 0; i < 100 && urls.some(u => { const t = texOf(u, true); return t && !t.userData.ready && !t.userData.bad; }); i++) await new Promise(r => setTimeout(r, 100)); }
 async function compose(msg){ const bg = SC.bg, im = await loadImg(shotUrl(bg)), W = im.naturalWidth, H = im.naturalHeight;
-  const chars = SC.objs.filter(ob => ob.kind!=='obj' && !ob.hide && modeOf(ob)==='shot'); await waitTex(chars.map(ob => shotUrl(ob.shot)));
+  const chars = SC.objs.filter(ob => !ob.hide && modeOf(ob)==='shot'); await waitTex(chars.map(ob => shotUrl(ob.shot)));
   placeCams(rects()); poseFor('cam'); const cam = shotCam.clone(); cam.aspect = W / H; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
   const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
-  for(const o of OBJ.values()){ if(o.ob.fromEnv || o.isObj || o.ob.hide) hide(o.g); else { if(o.shot && o.ob.shot) placeShot(o, cam); [o.disc, o.label, o.missing, o.card, o.ghost, o.mq].forEach(hide); } }
+  for(const o of OBJ.values()){ if(o.ob.fromEnv || o.ob.hide || !(o.shot && modeOf(o.ob)==='shot')) hide(o.g); else { placeShot(o, cam); [o.disc, o.label, o.missing, o.card, o.ghost, o.mq, o.mesh].forEach(hide); } } // only the 📸 painted pictures (anything else is in the background painting)
   [camRig, pgrid, grid, axX, axZ, ground].forEach(hide);
   const bgT = new THREE.Texture(im); bgT.colorSpace = THREE.SRGBColorSpace; bgT.needsUpdate = true; const sky = scene.background; scene.background = bgT;
-  const rt = new THREE.WebGLRenderTarget(W, H, {samples:4}), buf = new Uint8Array(W * H * 4);
-  renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null);
+  const rt = new THREE.WebGLRenderTarget(W, H, {colorSpace:THREE.SRGBColorSpace}), buf = new Uint8Array(W * H * 4); renderer.setScissorTest(false); // (sRGB, as the screen shows it)
+  if(lightOn()) litRender(cam, W, H, rt); // 💡 lit like the Camera view: her shadows fall on the painted ground too (a flat shadow floor stands in for it)
+  else { renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); }
+  renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null);
   scene.background = sky; hid.forEach(m => m.visible = true); rt.dispose(); bgT.dispose(); dirty = true;
   const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), id = x.createImageData(W, H);
   for(let y = 0; y < H; y++) id.data.set(buf.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4); x.putImageData(id, 0, 0);
@@ -668,16 +761,16 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
   if(numbersOnly && ob && box.dataset.id===ob.id){ ['x', 'y', 'z'].forEach(k => { const i = box.querySelector(`[data-n="${k}"]`); if(i && document.activeElement!==i) i.value = ob[k]; }); return; }
   box.dataset.id = ob ? ob.id : '';
   if(!ob){ box.innerHTML = `<h2>Selected</h2><p class="note">Nothing selected. Tap a name in Objects (or tap one in a view) to move it.</p><div class="line"><button id="snap" aria-pressed="${!!ui.snap}">🧲 Snap to 25 cm</button></div>`; $('#snap').onclick = snapTog; return; }
-  const e = libOf(ob.ref), it = ob.kind==='obj';
+  const e = libOf(ob.ref), it = ob.kind==='obj', oo = OBJ.get(ob.id), paints = !!(oo && oo.shot); // characters and 🪑 3D objects get painted
   box.innerHTML = `<h2>${esc(ob.label || (e && e.name) || '?')}${ob.lock ? ' 🔒' : ''}</h2>
     ${e ? (it ? `<p class="note">From the 📚 Library: ${esc(e.name)}, ${esc(String(e.height || 1))} m tall (× its size here). Re-saving it in the library changes it here too.</p>` : `<p class="note">From the 📚 Library: ${esc(e.name)}${e.lora ? ` · LoRA <b>${esc(String(e.lora).replace(/\.safetensors$/i, ''))}</b>` : ''}. Re-saving her in the library changes her here too.</p>`) : `<p class="warn">${it ? 'It is' : 'She is'} not in the library any more (or the PC is off), so a box stands in.</p>`}
     <div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
     <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>
-    ${!it && e && !e.mesh ? `<div class="lbl">Show her as</div><div class="line">${[['mq', '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
-      ${modeOf(ob)==='mq' ? poseRow(ob) : ''}
-      ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. A PC paints her 4 times over the mannequin with her LoRA, faces fixed, cut out.</p>` : ''}
-      ${modeOf(ob)==='shot' ? `<div class="line"><button data-act="hi" ${BUSY.has(ob.id) || ob.shot.hi ? 'disabled' : ''}>${ob.shot.hi ? '✓ High res' : '⤴ High res'}</button></div><p class="note">${ob.shot.hi ? 'This pick has been redrawn 2× and cut out again.' : 'Redraws this pick 2× bigger in tiles with her LoRA (the same picture, more detail), then cuts her out again.'}</p>` : ''}
+    ${paints ? `<div class="lbl">Show ${it ? 'it' : 'her'} as</div><div class="line">${[['mq', it ? '🪑 3D' : '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
+      ${modeOf(ob)==='mq' && !it ? poseRow(ob) : ''}
+      ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. ${it ? 'A PC paints it 4 times over the 3D model (its own colours and shape) with the style LoRA, cut out.' : 'A PC paints her 4 times over the mannequin with her LoRA, faces fixed, cut out.'}</p>` : ''}
+      ${modeOf(ob)==='shot' ? `<div class="line"><button data-act="hi" ${BUSY.has(ob.id) || ob.shot.hi ? 'disabled' : ''}>${ob.shot.hi ? '✓ High res' : '⤴ High res'}</button></div><p class="note">${ob.shot.hi ? 'This pick has been redrawn 2× and cut out again.' : (it ? 'Redraws this pick 2× bigger in tiles (the same picture, more detail), then cuts it out again.' : 'Redraws this pick 2× bigger in tiles with her LoRA (the same picture, more detail), then cuts her out again.')}</p>` : ''}
       <p class="note" id="rmsg">${esc(RMSG.get(ob.id) || '')}</p>
       ${(ob.tries || []).length ? `<div class="tries">${ob.tries.map((t, i) => `<button data-try="${i}" aria-pressed="${!!ob.shot && ob.shot.file===t.file}"><img src="${esc(((tex.get(shotUrl(t)) || {}).userData || {}).thumb || shotUrl(t))}" data-u="${esc(shotUrl(t))}" crossorigin="anonymous" alt="Try ${i + 1}"></button>`).join('')}</div>` : ''}` : ''}
     ${e && e.mesh==='mannequin' ? poseRow(ob) : ''}
@@ -725,5 +818,5 @@ if(ENV){ $('#add').hidden = true; $('#rall').parentNode.hidden = true; $('#allms
   SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene(ENV ? 'Environment 1' : 'Scene 1');
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-window.SCENE = {get sc(){ return SC; }, ground, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>

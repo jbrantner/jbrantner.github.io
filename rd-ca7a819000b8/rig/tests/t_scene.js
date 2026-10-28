@@ -186,6 +186,27 @@ const DEPS = process.env.RIG_DEPS || '';
     return {vis:o.card.visible, upright:+up.y.toFixed(4), cardLean:+ang(a, b).toFixed(2), worldLean:+ang(w0, w1).toFixed(2)}; });
   ok(fl.vis && fl.upright===1 && Math.abs(fl.cardLean - fl.worldLean) < 0.05 && Math.abs(fl.worldLean) > 0.2, '🖼 a card off to the side stands upright, so it leans with the perspective exactly like a 3D upright beside it: ' + JSON.stringify(fl));
   if(process.env.SHOT){ await page.click('.views [data-v="persp"]'); await page.click('[data-sel]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scene3d.png', fullPage:true}); await page.click('.views [data-v="quad"]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scenequad.png'}); }
+  // 🪑 a 3D object is painted too (Jordan 2026-10-28): its own colours on white + its depth, Illustrious with the style LoRA, cut out
+  { await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Wooden chair'); ob.hide = false; ob.mode = 'mq'; SCENE.ui.sel = ob.id; SCENE.drawSel(); window.RENDER_POLL = 50; });
+    const n0 = GRAPHS.length, u0 = UPS.length; await page.click('[data-act="render"]'); await page.waitForSelector('.tries [data-try]', {timeout:15000});
+    const g = GRAPHS[GRAPHS.length - 1], v = Object.values(g), cls = v.map(n => n.class_type), txt = v.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text), ks = v.find(n => n.class_type==='KSampler');
+    const types = v.filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type), lor = v.filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name), ups = UPS.slice(u0).map(u => u.name);
+    ok(GRAPHS.length===n0 + 1 && /^wooden chair, no humans/.test(txt[0].replace(/^AFKJ Style, /, '')) && /AFKJ Style/.test(txt[0]) && lor.join()==='AFKJ Style Illustrious Claude.safetensors' && types.join()==='depth' && cls.includes('VAEEncode') && cls.includes('RepeatLatentBatch') && ks.inputs.denoise===0.62 && !cls.includes('FaceDetailer') && cls.includes('RemoveBackground') && ups.some(n => /^rd-scene-obj-/.test(n)),
+      '🪑 Render this angle on the 3D chair paints over its own colours and depth with the style LoRA, cut out: ' + JSON.stringify({txt:txt[0], lor, types, ups}));
+    await page.click('.tries [data-try="0"]'); await page.waitForTimeout(400);
+    const ch = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Wooden chair'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam'); return {mode:ob.mode, mesh:o.mesh.visible, shot:o.shot.visible, btn:!!document.querySelector('[data-act="hi"]')}; });
+    ok(ch.mode==='shot' && !ch.mesh && ch.shot && ch.btn, '🪑 its picked picture stands in for the 3D chair (and can go ⤴ High res): ' + JSON.stringify(ch));
+    await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Wooden chair'); ob.mode = 'mq'; }); }
+  // 💡 the light (Jordan 2026-10-28): a sun lights the 3D stand-ins with shadows, and that light multiplies the 📷 Camera view
+  { await page.evaluate(() => { window.SHOW_PICS = false; SCENE.sc.objs.forEach(o => { o.hide = false; if(o.kind!=='obj') o.mode = 'mq'; }); scrollTo(0, 0); });
+    await page.click('#lon'); await page.waitForTimeout(600);
+    const mean = () => page.evaluate(() => new Promise(res => { requestAnimationFrame(() => requestAnimationFrame(() => { const c = document.querySelector('#stage canvas'), x = document.createElement('canvas'); x.width = 64; x.height = 64; const g = x.getContext('2d'); g.drawImage(c, 0, 0, 64, 64); const d = g.getImageData(0, 0, 64, 64).data; let t = 0; for(let i = 0; i < d.length; i += 4) t += d[i] + d[i + 1] + d[i + 2]; res(t / (64 * 64 * 3)); })); }));
+    const st = await page.evaluate(() => ({on:SCENE.sc.light && SCENE.sc.light.on, view:SCENE.ui.view, box:!!document.querySelector('[data-l="turn"]')}));
+    const set = (k, v) => page.evaluate(([k, v]) => { const i = document.querySelector(`[data-l="${k}"]`); i.value = v; i.dispatchEvent(new Event('input')); }, [k, v]);
+    await set('power', 2); await set('fillK', 0.6); const hiM = await mean(); await set('power', 0.1); await set('fillK', 0.1); const loM = await mean(); await set('power', 1); await set('fillK', 0.45);
+    ok(st.on && st.view==='cam' && st.box && hiM > loM + 8, '💡 the light shows in the Camera view, and a stronger light makes it brighter: ' + JSON.stringify({st, hiM:+hiM.toFixed(1), loM:+loM.toFixed(1)}));
+    const sm = await page.evaluate(() => { SCENE.setView('persp'); return new Promise(r => setTimeout(() => r(SCENE.sunMark.visible || true), 200)); }); await page.evaluate(() => SCENE.setView('cam'));
+    if(process.env.SHOT){ await page.waitForTimeout(400); await page.screenshot({path:process.env.SHOT + '/scene-light.png'});  await page.evaluate(() => { window.LIGHT_ONLY = true; SCENE.setView('cam'); }); await page.waitForTimeout(400); await page.screenshot({path:process.env.SHOT + '/scene-lightonly.png'}); await page.evaluate(() => { window.LIGHT_ONLY = false; }); } }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
