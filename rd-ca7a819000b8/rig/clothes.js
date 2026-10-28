@@ -7,15 +7,17 @@ import {lookOf, PIECES, COL, colourIn} from './look.js';
 
 const LIFT = {legs:0.004, bottom:0.008, dress:0.011, top:0.013, shoes:0.016, gloves:0.006};
 // a skirt's shape: how much it flares per metre it falls, and its pleats
-const SKIRTS = [[/pleated/, {flare:0.42, pleats:22}], [/pencil/, {flare:0.0}], [/long skirt/, {flare:0.22, pleats:0}], [/miniskirt/, {flare:0.5}],
-  [/gown|wedding/, {flare:0.45}], [/maid/, {flare:0.55, pleats:14}], [/sundress|dress/, {flare:0.4}], [/kimono|yukata|robe/, {flare:0.08}], [/witch/, {flare:0.3}], [/skirt/, {flare:0.38}]];
+// a skirt's shape: flare = how far it moves out per metre it falls, cling = how far it may fall back in towards her legs
+// (Jordan 2026-10-28: "conform more to her legs"), pleats = folds round it
+const SKIRTS = [[/pleated/, {flare:0.1, cling:0.3, pleats:22}], [/pencil/, {flare:0, cling:0.8}], [/long skirt/, {flare:0.05, cling:0.35}], [/miniskirt/, {flare:0.12, cling:0.25}],
+  [/gown|wedding/, {flare:0.18, cling:0.2}], [/maid/, {flare:0.2, cling:0.2, pleats:14}], [/sundress|dress/, {flare:0.08, cling:0.35}], [/kimono|yukata|robe/, {flare:0, cling:0.6}], [/witch/, {flare:0.08, cling:0.3}], [/skirt/, {flare:0.08, cling:0.35}]];
 const WAIST = 1.24; // her natural waist (level), where skirts hang from
 const LOOSE = /skirt|dress|gown|kimono|yukata|robe|maid|witch/;
 
 // what she wears, inner to outer: [{t, kind, how, a, sl, col, skirt}]
 export function wornOf(look){ const k = lookOf(look), out = [];
   for(const f of ['legs', 'bottom', 'dress', 'top', 'shoes', 'acc']) for(const t of k[f]){ const P = PIECES.find(p => p[0].test(t)); if(!P) continue;
-    const sk = P[2]==='span' && LOOSE.test(t) && !/shorts|pants|jeans/.test(t) ? (SKIRTS.find(s => s[0].test(t)) || [0, {flare:0.35}])[1] : null;
+    const sk = P[2]==='span' && LOOSE.test(t) && !/shorts|pants|jeans/.test(t) ? (SKIRTS.find(s => s[0].test(t)) || [0, {flare:0.08, cling:0.35}])[1] : null;
     out.push({t, kind:P[1], how:P[2], a:P[3], sl:P[5] || '', col:colourIn(t) || P[4] || COL.white, skirt:sk}); }
   const ORDER = ['legs', 'bottom', 'dress', 'top', 'shoes', 'gloves']; return out.sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind)); }
 
@@ -62,7 +64,7 @@ function skirt(p, F, W, L, R, m, grp, material, lift){ const S = p.skirt, y0 = F
   for(let r = 0; r <= NR; r++){ const t = r / NR, y = y0 + (y1 - y0) * t, band = 0.025, br = new Float32Array(NA);
     for(let i = 0; i < W.length; i += 2){ const v = W[i]; if(R[i] >= 0 || Math.abs(v.y - y) > band) continue; const a = Math.atan2(v.z - cz, v.x - cx), b = ((Math.round(a / (Math.PI * 2) * NA) % NA) + NA) % NA, d = Math.hypot(v.x - cx, v.z - cz); if(d > br[b]) br[b] = d; }
     const sm = new Float32Array(NA); for(let b = 0; b < NA; b++){ let mx = 0; for(let k = -3; k <= 3; k++) mx = Math.max(mx, br[(b + k + NA) % NA]); sm[b] = mx; }
-    const ring = []; for(let b = 0; b < NA; b++){ let rad = sm[b] + lift + 0.006; if(prev) rad = Math.max(rad, prev[b] + S.flare * (y0 - y1) / NR); ring.push(rad); }
+    const ring = []; for(let b = 0; b < NA; b++){ let rad = sm[b] + lift + 0.006; if(prev) rad = Math.max(rad, prev[b] + (S.flare - (S.cling || 0)) * (y0 - y1) / NR); ring.push(rad); }
     // a skirt hangs round her, not between her legs: no ring narrower than its widest neighbours allow
     for(let pass = 0; pass < 3; pass++) for(let b = 0; b < NA; b++) ring[b] = Math.max(ring[b], 0.5 * (ring[(b + NA - 4) % NA] + ring[(b + 4) % NA]) - 0.002);
     rings.push({y, t, rad:ring}); prev = ring; }
