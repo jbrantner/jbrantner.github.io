@@ -126,22 +126,28 @@ const DEPS = process.env.RIG_DEPS || '';
     if(process.env.SHOT) UPS.forEach(u => { const b = u.body, i = b.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47])); if(i >= 0) fs.writeFileSync(path.join(process.env.SHOT, u.name), b.subarray(i)); });
     await page.click('.tries [data-try="1"]'); await page.waitForTimeout(500);
     if(process.env.SHOT){ await page.waitForTimeout(400); await (await page.$('#selbox')).screenshot({path:path.join(process.env.SHOT, 'render-panel.png')}); await (await page.$('#stage')).screenshot({path:path.join(process.env.SHOT, 'render-stage.png')}); }
-    const sh = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp'); o.g.updateMatrixWorld(true);
-      const cam = SCENE.camOf('persp'), V = o.g.position.constructor, P2 = v => { const p = v.clone().project(cam); return [p.x, p.y]; }, a = P2(o.shot.localToWorld(new V(0, -0.5, 0))), b = P2(o.shot.localToWorld(new V(0, 0.5, 0)));
+    const sh = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam'); o.g.updateMatrixWorld(true);
+      const cam = SCENE.camOf('cam'), V = o.g.position.constructor, P2 = v => { const p = v.clone().project(cam); return [p.x, p.y]; }, a = P2(o.shot.localToWorld(new V(0, -0.5, 0))), b = P2(o.shot.localToWorld(new V(0, 0.5, 0)));
       const ft = (o.shot.material.map && o.shot.material.map.userData.feet) || null, foot = ft ? P2(o.shot.localToWorld(new V(ft.ax - 0.5, 0.5 - ft.ay, 0))) : null, spot = P2(new V(ob.x, ob.y, ob.z)), top = P2(new V(ob.x, ob.y + 1.7, ob.z));
       return {mode:ob.mode, vis:o.shot.visible, mq:o.mq.visible, file:ob.shot && ob.shot.file, footErr:foot ? +Math.hypot(foot[0] - spot[0], foot[1] - spot[1]).toFixed(3) : null, cardH:+Math.abs(b[1] - a[1]).toFixed(3), mqH:+Math.abs(top[1] - spot[1]).toFixed(3)}; });
     ok(sh.mode==='shot' && sh.vis && !sh.mq && sh.file==='ellie_1.png', '📸 the picked one stands in the scene in place of the mannequin: ' + JSON.stringify(sh));
     const cut = await page.evaluate(() => { const o = SCENE.objs.get(SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie').id), im = o.shot.material.map.image; if(!im.getContext) return {canvas:false}; const x = im.getContext('2d'); return {canvas:true, corner:x.getImageData(2, 2, 1, 1).data[3], body:x.getImageData(100, 200, 1, 1).data[3], thumb:/^data:/.test((document.querySelector('.tries img[data-u]') || {}).src || '')}; });
     ok(cut.canvas && cut.corner===0 && cut.body===255 && cut.thumb, '✂ a render that came back on white is cut out here (scene and thumbnails): ' + JSON.stringify(cut));
     await page.evaluate(() => { SCENE.sc.objs.forEach(o => { o.hide = false; if(o.mode) o.mode = 'pics'; }); }); }
+  // 🕹 Free shows each picture as the 📷 Camera sees it: the same picture, flat, facing the Camera, not turning to Free
+  const fr = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); ob.x = 0; ob.z = 0; ob.rot = 0; const o = SCENE.objs.get(ob.id);
+    SCENE.shotO.az = 0; SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam'); const u0 = o.card.material.map && o.card.material.map.userData.url, y0 = new (o.g.position.constructor)(0, 0, 1).applyQuaternion(o.card.quaternion);
+    const res = [0.9, 2.2].map(a => { SCENE.SET_ORBIT_AZ(a); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp'); const y = new (o.g.position.constructor)(0, 0, 1).applyQuaternion(o.card.quaternion); return {url:o.card.material.map && o.card.material.map.userData.url, dot:+y.dot(y0).toFixed(4)}; });
+    return {u0:(u0 || '').match(/eye_\d+/) + '', res:res.map(r => ({url:(r.url || '').match(/eye_\d+/) + '', dot:r.dot})), same:res.every(r => r.url===u0 && r.dot > 0.9999)}; });
+  ok(fr.same, '🕹 turning round in Free keeps the Camera\'s picture standing flat, facing the Camera: ' + JSON.stringify(fr));
   // 📏 even size: an angle MiniMax drew smaller is scaled up to the others at that height, so she is the same height all round
   const ev = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind!=='obj'); ob.rot = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects());
     const tall = v => { SCENE.poseFor(v); const ft = o.card.material.map && o.card.material.map.userData.feet; return {url:(o.card.material.map.userData.url || o.card.material.map.image && o.card.material.map.image.src || '').match(/eye_\d+/) + '', h:ft ? +(o.geo.hM * o.card.scale.y * ft.ht).toFixed(3) : null}; };
     return {front:tall('front'), side:tall('side')}; });
   ok(ev.front.h && ev.side.h && /090/.test(ev.side.url) && Math.abs(ev.front.h - ev.side.h) < 0.01, '📏 an angle drawn smaller is shown the same height as the rest: ' + JSON.stringify(ev));
   // 🖼 a card off to the side stands upright and leans with the perspective like the 3D chair beside it (Jordan 2026-10-28)
-  const fl = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Object Library/Chair'); ob.x = 2.5; ob.z = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp');
-    const cam = SCENE.camOf('persp'), V = o.card.position.constructor, up = new V(0, 1, 0).applyQuaternion(o.card.quaternion), P = (x, y) => o.card.localToWorld(new V(x, y, 0)).project(cam);
+  const fl = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Object Library/Chair'); ob.x = 2.5; ob.z = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam');
+    const cam = SCENE.camOf('cam'), V = o.card.position.constructor, up = new V(0, 1, 0).applyQuaternion(o.card.quaternion), P = (x, y) => o.card.localToWorld(new V(x, y, 0)).project(cam);
     o.card.updateMatrixWorld(true); const a = P(0, -0.5), b = P(0, 0.5), w0 = new V(o.g.position.x, 0, o.g.position.z).project(cam), w1 = new V(o.g.position.x, 1, o.g.position.z).project(cam);
     const ang = (p, q2) => Math.atan2((q2.x - p.x) * cam.aspect, q2.y - p.y) * 180 / Math.PI;
     return {vis:o.card.visible, upright:+up.y.toFixed(4), cardLean:+ang(a, b).toFixed(2), worldLean:+ang(w0, w1).toFixed(2)}; });
