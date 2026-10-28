@@ -21,12 +21,19 @@ const DEPS = process.env.RIG_DEPS || '';
     cover:'eye_000.png', views:files.map((f, i) => ({ring:1, i, mid:false, file:'eye_' + f + '.png'}))};
   // 🪑 and a chair in the Object Library, 0.9 m tall
   const chair = {name:'Chair', subfolder:'Object Library/Chair', saved:1000, kind:'obj', height:0.9, geo:{wM:1.07, hM:1.87}, ringEl:[-12, 5, 35, 20, -4], cover:'eye_000.png', views:files.map((f, i) => ({ring:1, i, mid:false, file:'eye_' + f + '.png'}))};
-  const store = new Map(); let saves = 0;
+  const store = new Map(); let saves = 0; const UPS = [], GRAPHS = [];
   await page.route('https://render.test/**', async r => { const u = new URL(r.request().url());
     if(u.pathname==='/renderdeck/library') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(u.searchParams.get('kind')==='obj' ? {library:1, kinds:['char', 'obj'], objects:[chair]} : {library:1, kinds:['char', 'obj'], characters:[lib]}) });
     if(u.pathname==='/renderdeck/scenes') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({scenes:[...store.values()]}) });
     if(u.pathname==='/renderdeck/scenes/save'){ const b = JSON.parse(r.request().postData()); store.set(b.scene.id, b.scene); saves++; return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
     if(u.pathname==='/renderdeck/scenes/delete'){ store.delete(JSON.parse(r.request().postData()).id); return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
+    // 🎬 a pretend ComfyUI for Render this angle
+    const OI = {CheckpointLoaderSimple:['ckpt_name', ['iriselTouchIL_v10.safetensors']], LoraLoader:['lora_name', ['elliex.safetensors', 'AFKJ Style Illustrious Claude.safetensors']], ControlNetLoader:['control_net_name', ['illustriousXL_controlnetPromax.safetensors']], LoadBackgroundRemovalModel:['bg_removal_name', ['BiRefNet-general.safetensors']]};
+    const oi = u.pathname.match(/^\/object_info\/(\w+)$/); if(oi){ const d = OI[oi[1]]; return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(d ? {[oi[1]]:{input:{required:{[d[0]]:[d[1]]}}}} : {}) }); }
+    if(u.pathname==='/upload/image'){ const body = r.request().postDataBuffer(), m = body.toString('latin1').match(/filename="([^"]+)"/); UPS.push({name:m && m[1], body}); return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({name:m && m[1]}) }); }
+    if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({prompt_id:'p' + GRAPHS.length}) }); }
+    const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[GRAPHS.length - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage');
+      return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({[hi[1]]:{status:{status_str:'success'}, outputs:{[save]:{images:[0, 1, 2, 3].map(i => ({filename:'ellie_' + i + '.png', subfolder:'RenderDeck/scene', type:'output'}))}}}}) }); }
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:u.searchParams.get('filename')==='eye_090.png' && u.searchParams.get('subfolder')==='Character Library/Ellie' // MiniMax drew this angle smaller
       ? '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="85" y="100" width="30" height="240" fill="#c33"/></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
     r.fulfill({ status:404, headers:H, body:'' }); });
@@ -94,6 +101,26 @@ const DEPS = process.env.RIG_DEPS || '';
   const mq = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id); SCENE.poseFor('persp'); o.g.updateMatrixWorld(true); let lo = 9, hi = -9;
     o.mesh.traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); lo = Math.min(lo, bb.min.y); hi = Math.max(hi, bb.max.y); } }); return {low:+(lo - ob.y).toFixed(3), tall:+(hi - lo).toFixed(2)}; });
   ok(Math.abs(mq.low) < 0.005 && Math.abs(mq.tall - 1.7) < 0.03, '🧍 the built-in 3D mannequin is under ＋ Character and stands on the floor, 1.7 m tall: ' + JSON.stringify(mq));
+  // 🎬 render this angle: Ellie as a mannequin, painted from the camera by a PC, picked, and standing back where she was
+  { await page.evaluate(() => { window.RENDER_POLL = 50; const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); ob.x = 0; ob.z = 0; ob.rot = 0; ob.hide = false; SCENE.sc.objs.forEach(o => { if(o!==ob) o.hide = true; }); SCENE.ui.sel = ob.id; SCENE.setView('persp'); });
+    await page.evaluate(() => SCENE.drawSel());
+    await page.click('[data-mode="mq"]'); await page.waitForTimeout(300);
+    const mqv = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp'); return {mq:o.mq.visible, card:o.card.visible, mode:ob.mode}; });
+    ok(mqv.mq && !mqv.card && mqv.mode==='mq', '🧍 her mannequin shows in place of her angles: ' + JSON.stringify(mqv));
+    await page.click('[data-act="render"]'); await page.waitForSelector('.tries [data-try]', {timeout:15000});
+    const g = GRAPHS[GRAPHS.length - 1], cls = Object.values(g).map(n => n.class_type), lor = Object.values(g).filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name), types = Object.values(g).filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type);
+    const lat = Object.values(g).find(n => n.class_type==='EmptyLatentImage').inputs, txt = Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | ');
+    ok(UPS.length===2 && lor.includes('elliex.safetensors') && types.join()==='openpose,depth' && lat.batch_size===4 && lat.width % 64===0 && lat.height % 64===0 && cls.includes('RemoveBackground') && /elliex/.test(txt),
+      '🎬 Render this angle sends the mannequin\'s skeleton and depth, paints 4 with her LoRA on ProMax and cuts them out: ' + JSON.stringify({ups:UPS.length, lor, types, lat, txt:txt.slice(0, 80)}));
+    if(process.env.SHOT) UPS.forEach(u => { const b = u.body, i = b.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47])); if(i >= 0) fs.writeFileSync(path.join(process.env.SHOT, u.name), b.subarray(i)); });
+    await page.click('.tries [data-try="1"]'); await page.waitForTimeout(500);
+    if(process.env.SHOT){ await page.waitForTimeout(400); await (await page.$('#selbox')).screenshot({path:path.join(process.env.SHOT, 'render-panel.png')}); await (await page.$('#stage')).screenshot({path:path.join(process.env.SHOT, 'render-stage.png')}); }
+    const sh = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp'); o.g.updateMatrixWorld(true);
+      const cam = SCENE.camOf('persp'), V = o.g.position.constructor, P2 = v => { const p = v.clone().project(cam); return [p.x, p.y]; }, a = P2(o.shot.localToWorld(new V(0, -0.5, 0))), b = P2(o.shot.localToWorld(new V(0, 0.5, 0)));
+      const ft = (o.shot.material.map && o.shot.material.map.userData.feet) || null, foot = ft ? P2(o.shot.localToWorld(new V(ft.ax - 0.5, 0.5 - ft.ay, 0))) : null, spot = P2(new V(ob.x, ob.y, ob.z)), top = P2(new V(ob.x, ob.y + 1.7, ob.z));
+      return {mode:ob.mode, vis:o.shot.visible, mq:o.mq.visible, file:ob.shot && ob.shot.file, footErr:foot ? +Math.hypot(foot[0] - spot[0], foot[1] - spot[1]).toFixed(3) : null, cardH:+Math.abs(b[1] - a[1]).toFixed(3), mqH:+Math.abs(top[1] - spot[1]).toFixed(3)}; });
+    ok(sh.mode==='shot' && sh.vis && !sh.mq && sh.file==='ellie_1.png', '📸 the picked one stands in the scene in place of the mannequin: ' + JSON.stringify(sh));
+    await page.evaluate(() => { SCENE.sc.objs.forEach(o => { o.hide = false; if(o.mode) o.mode = 'pics'; }); }); }
   // 📏 even size: an angle MiniMax drew smaller is scaled up to the others at that height, so she is the same height all round
   const ev = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind!=='obj'); ob.rot = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects());
     const tall = v => { SCENE.poseFor(v); const ft = o.card.material.map && o.card.material.map.userData.feet; return {url:(o.card.material.map.userData.url || o.card.material.map.image && o.card.material.map.image.src || '').match(/eye_\d+/) + '', h:ft ? +(o.geo.hM * o.card.scale.y * ft.ht).toFixed(3) : null}; };
