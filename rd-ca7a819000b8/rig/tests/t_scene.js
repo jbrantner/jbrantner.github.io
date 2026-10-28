@@ -88,10 +88,13 @@ const DEPS = process.env.RIG_DEPS || '';
     const b = new (o.g.position.constructor)(), box = {min:[9, 9, 9], max:[-9, -9, -9]}; o.mesh.traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); ['x', 'y', 'z'].forEach((k, i) => { box.min[i] = Math.min(box.min[i], bb.min[k]); box.max[i] = Math.max(box.max[i], bb.max[k]); }); } });
     return {card:o.card.visible, low:+(box.min[1] - ob.y).toFixed(3), tall:+(box.max[1] - box.min[1]).toFixed(2), turned:Math.abs(o.mesh.rotation.y - Math.PI / 2) < 1e-6}; });
   ok(!m3.card && Math.abs(m3.low) < 0.005 && Math.abs(m3.tall - 0.9) < 0.03 && m3.turned, '🪑 the built-in 3D chair stands on the floor, 0.9 m tall, no picture card, turns with its spot: ' + JSON.stringify(m3));
-  // 🖼 a card off to the side faces the camera from its own spot (Jordan 2026-10-28: matches the 3D chair beside it)
+  // 🖼 a card off to the side stands upright and leans with the perspective like the 3D chair beside it (Jordan 2026-10-28)
   const fl = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Object Library/Chair'); ob.x = 2.5; ob.z = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp');
-    const cam = SCENE.camOf ? SCENE.camOf('persp') : null, q = o.card.quaternion; return {vis:o.card.visible, same:!!cam && Math.abs(Math.abs(q.dot(cam.quaternion)) - 1) < 1e-6}; });
-  ok(fl.vis && !fl.same, '🖼 a card off to the side faces the camera from its own spot, leaning with the perspective like a 3D object: ' + JSON.stringify(fl));
+    const cam = SCENE.camOf('persp'), V = o.card.position.constructor, up = new V(0, 1, 0).applyQuaternion(o.card.quaternion), P = (x, y) => o.card.localToWorld(new V(x, y, 0)).project(cam);
+    o.card.updateMatrixWorld(true); const a = P(0, -0.5), b = P(0, 0.5), w0 = new V(o.g.position.x, 0, o.g.position.z).project(cam), w1 = new V(o.g.position.x, 1, o.g.position.z).project(cam);
+    const ang = (p, q2) => Math.atan2((q2.x - p.x) * cam.aspect, q2.y - p.y) * 180 / Math.PI;
+    return {vis:o.card.visible, upright:+up.y.toFixed(4), cardLean:+ang(a, b).toFixed(2), worldLean:+ang(w0, w1).toFixed(2)}; });
+  ok(fl.vis && fl.upright===1 && Math.abs(fl.cardLean - fl.worldLean) < 0.05 && Math.abs(fl.worldLean) > 0.2, '🖼 a card off to the side stands upright, so it leans with the perspective exactly like a 3D upright beside it: ' + JSON.stringify(fl));
   if(process.env.SHOT){ await page.click('.views [data-v="persp"]'); await page.click('[data-sel]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scene3d.png', fullPage:true}); await page.click('.views [data-v="quad"]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scenequad.png'}); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
