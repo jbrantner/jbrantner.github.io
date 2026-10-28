@@ -79,7 +79,9 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   // 👗 her look: searchable tag fields; more than one tag, custom tags, two hair colours → multicolored hair, tips = base + tip colour
   const fld = k => `.fld[data-f="${k}"]`;
   await fr.click(fld('hcol') + ' input'); ok(await fr.evaluate(k => document.querySelectorAll(k + ' .dd button').length >= 10, fld('hcol')), '👗 Hair › Colour opens its list of colours');
-  await fr.click(fld('hcol') + ' .dd [data-t="black hair"]'); await fr.click(fld('hcol') + ' .dd [data-t="red hair"]');
+  await fr.click(fld('hcol') + ' .dd [data-t="black hair"]');
+  ok(await fr.evaluate(k => document.querySelector(k + ' .dd').hidden, fld('hcol')), '…and closes once one is picked');
+  await fr.click(fld('hcol') + ' input'); await fr.click(fld('hcol') + ' .dd [data-t="red hair"]');
   ok(/black hair, red hair, multicolored hair/.test(await box()), '…two colours add multicolored hair: ' + await box());
   await fr.click(fld('hmix') + ' input'); await fr.click(fld('hmix') + ' .dd [data-t="colored tips"]');
   ok(/black hair, red hair, multicolored hair, colored tips, red tips/.test(await box()) && /Base: black hair/.test(await fr.textContent(fld('hmix'))), '…Tips: black is her base and red her tips: ' + await box());
@@ -91,10 +93,14 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   await fr.fill(fld('top') + ' input', 'pirate'); await page.waitForTimeout(300);
   ok(await fr.evaluate(k => [...document.querySelectorAll(k + ' .dd button')].some(b => /pirate/.test(b.dataset.t)), fld('top')), '…and the whole Danbooru list (pirate)');
   await fr.fill(fld('top') + ' input', 'starry cardigan'); await page.waitForTimeout(150); await fr.click(fld('top') + ' .dd .add');
-  await fr.fill(fld('ecol') + ' input', ''); await fr.click(fld('ecol') + ' .dd [data-t="blue eyes"]'); await fr.click(fld('ecol') + ' .dd [data-t="yellow eyes"]');
+  await fr.fill(fld('ecol') + ' input', ''); await fr.click(fld('ecol') + ' .dd [data-t="blue eyes"]'); await fr.click(fld('ecol') + ' input'); await fr.click(fld('ecol') + ' .dd [data-t="yellow eyes"]');
   ok(/blue eyes, yellow eyes, heterochromia/.test(await box()) && /starry cardigan/.test(await box()), '…a custom tag goes in as typed; two eye colours add heterochromia: ' + await box());
   await fr.click(fld('top') + ' .picked [data-x="0"]'); ok(!/starry cardigan/.test(await box()) && /heterochromia, silver hair, white blouse/.test(await box()), '✕ takes a tag off and out of the box, and keeps her own words: ' + await box());
   await page.mouse.click(5, 5);
+  // 🎨 the mannequin wears her picks (the 3D view only)
+  await page.waitForTimeout(300); const tint = () => fr.evaluate(() => { const o = {}; MQ.her.traverse(m => { if(m.isMesh && m.geometry.attributes.color && m.material.vertexColors){ const c = m.geometry.attributes.color; o[m.name==='hair' ? 'hair' : m.name] = 1; } }); return Object.keys(o).sort().join(); });
+  ok(/Anime_Female_A/.test(await tint()) && /hair/.test(await tint()), '🎨 the mannequin is coloured from her picks: ' + await tint());
+  await fr.click('#cols'); await page.waitForTimeout(200); ok(await tint()==='', '🎨 Colours off shows her plain grey: ' + await tint() + ' ' + await fr.evaluate(() => MQ.ST.cols)); await fr.click('#cols'); await page.waitForTimeout(200);
   await fr.evaluate(() => { window.RENDER_POLL = 50; }); await fr.click('#paint'); await fr.waitForFunction(() => document.querySelectorAll('#tries [data-u]').length===4, null, {timeout:20000});
   const g = GRAPHS[0], nodes = Object.values(g), by = c => nodes.filter(n => n.class_type===c);
   const lat = by('EmptyLatentImage')[0].inputs, cns = by('SetUnionControlNetType').map(n => n.inputs.type), ap2 = by('ControlNetApplyAdvanced').map(n => [n.inputs.strength, n.inputs.end_percent]), txt = by('CLIPTextEncode')[0].inputs.text;
