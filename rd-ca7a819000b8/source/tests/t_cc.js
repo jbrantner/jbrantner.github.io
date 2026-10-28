@@ -37,6 +37,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   const page = await browser.newPage({ viewport:{width:390,height:844}, hasTouch:true, isMobile:true });
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR ' + e.message + ' ' + (e.stack || '').split('\n').slice(0, 3).join(' / ')));
   page.on('dialog', d => d.accept());
+  await page.addInitScript(() => { window.CC_ALL_HEIGHTS = true; }); // this test walks the older 5-height turnaround; t_ccmq.js covers eye level only (v.230)
   await page.route('https://app.test/**', r => { const u = new URL(r.request().url()); if(u.pathname.endsWith('.txt')) return r.fulfill({ contentType:'text/plain', body:'' }); return r.fulfill({ contentType:'text/html', body:html }); });
   // the pictures the pretend computers made: a tall figure for the high heights, a short one elsewhere (the size fix evens them)
   await page.route('https://jordo-desktop.test/**', r => r.fulfill({ contentType:'image/png', headers:{'access-control-allow-origin':'*'}, body:/_(2|3)_\d+m?/.test(r.request().url()) ? TALL : SHORT }));
