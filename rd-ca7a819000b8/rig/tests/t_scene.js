@@ -10,7 +10,7 @@ const DEPS = process.env.RIG_DEPS || '';
   const page = await browser.newPage({ viewport:{width:390, height:900} });
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR ' + e.message)); page.on('dialog', d => d.accept());
   await page.route('https://app.test/rig/scene.html*', r => r.fulfill({ contentType:'text/html', body:html }));
-  await page.route(/https:\/\/app\.test\/rig\/(body|hair)\.js/, r => r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(path.join(__dirname, '..', new URL(r.request().url()).pathname.split('/').pop())) })); // 🧍 the base body, shared with the Mannequin page
+  await page.route(/https:\/\/app\.test\/rig\/(body|hair|look)\.js/, r => r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(path.join(__dirname, '..', new URL(r.request().url()).pathname.split('/').pop())) })); // 🧍 the base body, shared with the Mannequin page
   await page.route('https://fonts.googleapis.com/**', r => r.fulfill({ contentType:'text/css', body:'' }));
   await page.route('https://cdn.jsdelivr.net/npm/**', r => {
     const u = new URL(r.request().url()).pathname.replace('/npm/', ''), m = u.match(/^(@?[^@]+)@([^/]+)\/(.*)$/);
@@ -18,7 +18,7 @@ const DEPS = process.env.RIG_DEPS || '';
     r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(f) }); });
   // a pretend Render: the library (Ellie, 8 eye-level angles, see-through) and the scenes store
   const H = {'access-control-allow-origin':'*'}, files = ['000', '045', '090', '135', '180', '225', '270', '315'];
-  const lib = {name:'Ellie', subfolder:'Character Library/Ellie', saved:1000, trigger:'elliex', lora:'elliex.safetensors', geo:{wM:1.07, hM:1.87, aim:[0, 0.935, 0]}, ringEl:[-12, 5, 35, 20, -4],
+  const lib = {name:'Ellie', subfolder:'Character Library/Ellie', saved:1000, trigger:'elliex', lora:'elliex.safetensors', prompt:'elliex, 1girl, solo', tags:'1girl, solo, blue hair, standing, brown_boots, full body', geo:{wM:1.07, hM:1.87, aim:[0, 0.935, 0]}, ringEl:[-12, 5, 35, 20, -4],
     cover:'eye_000.png', views:files.map((f, i) => ({ring:1, i, mid:false, file:'eye_' + f + '.png'}))};
   // 🪑 and a chair in the Object Library, 0.9 m tall
   const chair = {name:'Chair', subfolder:'Object Library/Chair', saved:1000, kind:'obj', height:0.9, geo:{wM:1.07, hM:1.87}, ringEl:[-12, 5, 35, 20, -4], cover:'eye_000.png', views:files.map((f, i) => ({ring:1, i, mid:false, file:'eye_' + f + '.png'}))};
@@ -52,6 +52,10 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(ob.length===1 && ob[0].ref==='Character Library/Ellie' && ob[0].label==='Ellie' && await page.evaluate(() => SCENE.ui.sel===SCENE.sc.objs[0].id), 'she goes in as a reference to her library folder, selected');
   ok(await page.evaluate(() => /🧍 Ellie/.test(document.querySelector('#objs').textContent) && /elliex/.test(document.querySelector('#objs').textContent) && /LoRA/.test(document.querySelector('#selbox').textContent)), 'the object list shows her (with her LoRA trigger word)');
   // which picture each view shows
+  // 🧍 Jordan 2026-10-28: in a scene she is only Mannequin (the default) or Rendered, no 🖼 Her angles
+  const md = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp'); return {mq:o.mq && o.mq.visible, card:o.card.visible, btns:[...document.querySelectorAll('#selbox [data-mode]')].map(b => b.dataset.mode)}; });
+  ok(md.mq && !md.card && md.btns.join()==='mq,shot', 'she shows as her mannequin by default, buttons only Mannequin and Rendered: ' + JSON.stringify(md));
+  await page.evaluate(() => { window.SHOW_PICS = true; SCENE.sc.objs[0].mode = 'pics'; }); // the picture-card checks below (objects still use them)
   const pick = v => page.evaluate(v => { SCENE.placeCams(SCENE.rects()); const o = [...SCENE.objs.values()][0]; SCENE.placeCams({[v]:{x:0, y:0, w:300, h:300}}); const a = SCENE.pickAngle(o, SCENE.camOf(v)); return a && decodeURIComponent(a.url); }, v);
   ok(/eye_000\.png/.test(await pick('front')) && /eye_090\.png/.test(await pick('side')), 'Front shows her front, Side her side: ' + await pick('front') + ' / ' + await pick('side'));
   await page.evaluate(() => { const r = document.querySelector('[data-n="rot"]'); r.value = 90; r.dispatchEvent(new Event('input')); });
@@ -79,7 +83,7 @@ const DEPS = process.env.RIG_DEPS || '';
   lib.saved = 2000; await page.evaluate(() => SCENE.reload()); await page.waitForTimeout(300);
   ok(/v=2000/.test(await pick('front')), 're-saving her in the library changes her in the scene (a reference, not a copy)');
   // kept: reopening finds the scene and where she stands
-  await page.waitForTimeout(900); await page.goto('https://app.test/rig/scene.html'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000});
+  await page.waitForTimeout(900); await page.goto('https://app.test/rig/scene.html'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000}); await page.evaluate(() => { window.SHOW_PICS = true; });
   ok(await page.evaluate(x => Math.abs(SCENE.sc.objs[0].x - x) < 0.001 && SCENE.sc.objs[0].rot===90, x1), 'reopened, the scene has her where she was left');
   // a second scene, rename, delete
   await page.evaluate(() => { window.prompt = () => 'Library set'; }); await page.click('#new'); await page.waitForTimeout(800);
@@ -118,6 +122,7 @@ const DEPS = process.env.RIG_DEPS || '';
     await page.evaluate(() => { SCENE.shotO.az = 0.3; SCENE.setView('persp'); SCENE.redraw(); });
     const rig = await page.evaluate(() => { SCENE.placeCams(SCENE.rects()); const a = SCENE.camRig.geometry.attributes.position; return {vis:SCENE.camRig.visible, n:a.count, tail:+Math.hypot(a.getX(3) - a.getX(2), a.getY(3) - a.getY(2), a.getZ(3) - a.getZ(2)).toFixed(3), toLens:+SCENE.camOf('cam').position.distanceTo(new (SCENE.shotO.t.constructor)(a.getX(3), a.getY(3), a.getZ(3))).toFixed(2) < +SCENE.camOf('cam').position.distanceTo(new (SCENE.shotO.t.constructor)(a.getX(2), a.getY(2), a.getZ(2))).toFixed(2), free:+SCENE.camOf('persp').position.distanceTo(SCENE.camOf('cam').position).toFixed(2)}; });
     ok(rig.tail===1.2 && rig.toLens && rig.free > 0.5, '🕹 Free view sees the Camera as a pink frame pointing back to its lens: ' + JSON.stringify(rig));
+    await page.evaluate(() => { SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie').pose = 'sit'; });
     await page.click('[data-act="render"]'); await page.waitForSelector('.tries [data-try]', {timeout:15000});
     const rv = await page.evaluate(() => ({view:SCENE.ui.view, az:SCENE.shotO.az}));
     ok(rv.view==='cam' && rv.az===0.3, '🎬 Render this angle switches to and paints from the 📷 Camera view: ' + JSON.stringify(rv));
@@ -125,6 +130,8 @@ const DEPS = process.env.RIG_DEPS || '';
     const lat = Object.values(g).find(n => n.class_type==='EmptyLatentImage').inputs, txt = Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | ');
     ok(UPS.length===2 && lor.includes('elliex.safetensors') && types.join()==='openpose,depth' && lat.batch_size===4 && lat.width % 64===0 && lat.height % 64===0 && cls.includes('RemoveBackground') && cls.includes('FaceDetailer') && cls.includes('SAMLoader') && /elliex/.test(txt),
       '🎬 Render this angle sends the mannequin\'s skeleton and depth, paints 4 with her LoRA on ProMax, fixes the faces and cuts them out: ' + JSON.stringify({ups:UPS.length, lor, types, lat, txt:txt.slice(0, 80)}));
+    { const pos = Object.values(g).filter(n => n.class_type==='CLIPTextEncode')[0].inputs.text; await page.evaluate(() => { SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie').pose = 'stand'; });
+      ok(/^elliex, 1girl, solo, blue hair, brown_boots, sitting, full body/.test(pos) && !/standing/.test(pos) && (pos.match(/1girl/g) || []).length===1, '🏷 her prompt has her saved tags and the pose in words (sitting, never "standing"): ' + pos.slice(0, 120)); }
     if(process.env.SHOT) UPS.forEach(u => { const b = u.body, i = b.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47])); if(i >= 0) fs.writeFileSync(path.join(process.env.SHOT, u.name), b.subarray(i)); });
     await page.click('.tries [data-try="1"]'); await page.waitForTimeout(500);
     if(process.env.SHOT){ await page.waitForTimeout(400); await (await page.$('#selbox')).screenshot({path:path.join(process.env.SHOT, 'render-panel.png')}); await (await page.$('#stage')).screenshot({path:path.join(process.env.SHOT, 'render-stage.png')}); }
