@@ -109,7 +109,7 @@ export function drawPose(W, H, pts, show){ const pose = document.createElement('
   pts.forEach(([x2, y2], i) => { if(!show[i]) return; px.fillStyle = `rgb(${OP_COL[i].join(',')})`; px.beginPath(); px.arc(x2, y2, sw, 0, Math.PI * 2); px.fill(); });
   return pose; }
 // talking to a PC: its lists, an upload, the face fix
-export async function comboOf(url, cls, field){ try{ const j = await (await fetch(url + '/object_info/' + cls, {cache:'no-store'})).json(); const r = j[cls] && j[cls].input && j[cls].input.required[field]; return r && Array.isArray(r[0]) ? r[0] : []; }catch(e){ return []; } }
+export async function comboOf(url, cls, field){ try{ const j = await (await fetch(url + '/object_info/' + cls, {cache:'no-store'})).json(); const inp = j[cls] && j[cls].input || {}, r = (inp.required || {})[field] || (inp.optional || {})[field]; return !r ? [] : Array.isArray(r[0]) ? r[0] : r[0]==='COMBO' && r[1] && Array.isArray(r[1].options) ? r[1].options : []; }catch(e){ return []; } } // newer core nodes (BiRefNet's loader) list as ['COMBO', {options}]
 export const hasNode = async (url, cls) => { try{ const j = await (await fetch(url + '/object_info/' + cls, {cache:'no-store'})).json(); return !!j[cls]; }catch(e){ return false; } };
 export async function upload(url, canvas, name){ const b = await new Promise(r => canvas.toBlob(r, 'image/png')), fd = new FormData(); fd.append('image', b, name); fd.append('overwrite', 'true');
   const r = await fetch(url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Upload failed (' + r.status + ')'); return (await r.json()).name; }
