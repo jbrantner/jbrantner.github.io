@@ -302,6 +302,8 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(sv.front===8 && sv.left45===9 && sv.back===12 && sv.above===16 && sv.below===0 && sv.turned===14 && sv.btn && sv.tex && sv.faces > 0.99,
     'the sprite shows the picture for the camera\'s angle and height, turns with the piece, and faces the camera: ' + JSON.stringify(sv));
   // 👀 a pose with the looking-at-camera set: the piece's switch picks it
+  { const r = await page.evaluate(() => { RIG.lastRead = null; const s = RIG.spinGuides(100, 150, 5, []); return {moves:s.moves.length, facing:typeof s.facing, fit:!!s.fit}; });
+    ok(r.moves===0 && r.facing==='number' && r.fit, '👁 spinGuides with no moves (an eye-level-only turn) still gives her fit and facing: ' + JSON.stringify(r)); }
   const lk = await page.evaluate(() => { const R = RIG, L = JSON.parse(localStorage.getItem(R.SPKEY)); L[0].look = L[0].views.map((u, n) => 'data:look' + n); localStorage.setItem(R.SPKEY, JSON.stringify(L));
     const it = R.SET.items.find(x => x.k==='sprite'); it.r = 0; R.buildSet(); if(R.setSel!==it.id) R.pickSet(it.id); else R.setUi(); const btn = document.querySelector('#setPicked [data-sdo="look"]'), m = () => R.spriteMeshes()[0], P = new (R.camera.position.constructor)(0, 1, 5);
     const away = R.spriteView(m(), P).url; btn.click(); const at = R.spriteView(m(), P).url; return {btn:!!btn, away:away.slice(0, 15), at, on:!!it.look}; });
