@@ -19,7 +19,7 @@ const links = g => { const errs = []; for(const [id, n] of Object.entries(g)) fo
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  ok(await page.evaluate(() => { const t = $('#tabs'); return t.scrollWidth <= t.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth && document.querySelectorAll('#tabs button').length===6; }), 'six tabs fit a 375 px phone with no sideways scroll');
+  ok(await page.evaluate(() => { const t = $('#tabs'); return t.scrollWidth <= t.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth && document.querySelectorAll('#tabs button').length===7; }), 'seven tabs fit a 375 px phone with no sideways scroll');
   // a character first, so the two lists can be told apart
   await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200); await page.evaluate(() => { ccChar().name = 'Pinky'; save(); ccDraw(true); });
   await page.click('#tabs [data-tab="obj"]'); await page.waitForTimeout(200);
