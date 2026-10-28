@@ -793,7 +793,8 @@ async function compose(msg){ const bg = SC.bg, im = await loadImg(shotUrl(bg)), 
 // the 3D scene through the 📷 Camera) with its own words and its own LoRA (ComfyUI hook LoRAs work only inside their region), the
 // background in the rest with the place words, the style LoRA over everything; the whole scene's depth and the characters' skeletons
 // (ControlNet ProMax) hold the layout; then 2× in tiles, gently
-const RS_DN = 0.5, RS_HI = 0.25;
+const RS_DN = 0.5, RS_HI = 0.25, RS_AREA = 1536 * 1536; // (Jordan 2026-10-28: Illustrious holds up at about 1536² with the VAE tiled)
+const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8};
 function sceneHide(){ const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
   for(const o of OBJ.values()) [o.card, o.ghost, o.disc, o.label, o.missing, o.shd].forEach(hide); [camRig, pgrid, grid, axX, axZ, sunMark, catcher].forEach(hide); return hid; }
 function readRT(cam, W, H){ const rt = new THREE.WebGLRenderTarget(W, H), buf = new Uint8Array(W * H * 4); renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam);
@@ -828,7 +829,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     const kits = (await Promise.all(urls.map(async u => { try{ const k = await kitOn(u, {ckpt:lead.ckpt}); k.hooks = await hasNode(u, 'CreateHookLora') && await hasNode(u, 'SetClipHooks'); return k; }catch(e){ return null; } }))).filter(k => k && k.ckpt && k.cn);
     if(!kits.length) throw new Error('No PC has an Illustrious model and ControlNet ProMax.'); const has = k => chars.filter(o => o.e.lora && k.los.includes(o.e.lora)).length;
     kits.sort((a, b) => (has(b) - has(a)) || ((b.url===SC.final.pc) - (a.url===SC.final.pc))); const K = kits[0], url = K.url;
-    const fin = await loadImg(shotUrl(SC.final)), a = fin.naturalWidth / fin.naturalHeight, H = Math.max(512, Math.round(Math.sqrt(1048576 / a) / 64) * 64), W = Math.max(512, Math.round(H * a / 64) * 64);
+    const fin = await loadImg(shotUrl(SC.final)), a = fin.naturalWidth / fin.naturalHeight, H = Math.max(512, Math.round(Math.sqrt(RS_AREA / a) / 64) * 64), W = Math.max(512, Math.round(H * a / 64) * 64);
     placeCams(rects()); poseFor('cam'); const cam = shotCam.clone(); cam.aspect = W / H; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
     for(const o of items) if(modeOf(o.ob)==='shot' && o.shot) placeShot(o, cam);
     msg('🎬 Sending the scene to ' + pcName(url) + '…'); const stamp = Date.now().toString(36), masks = regionMasks(items, cam, W, H), up = (c, n) => upload(url, c, 'rd-scene-' + n + '-' + stamp + '.png');
@@ -848,12 +849,12 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     const neg = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:K.cn});
     let ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.5, start_percent:0, end_percent:0.7, vae:[ck, 2]});
     if(pn) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:0.6, start_percent:0, end_percent:0.7, vae:[ck, 2]});
-    const lat = add('VAEEncode', {pixels:[add('ImageScale', {image:[add('LoadImage', {image:flat}), 0], upscale_method:'lanczos', width:W, height:H, crop:'disabled'}), 0], vae:[ck, 2]});
+    const lat = add('VAEEncodeTiled', {pixels:[add('ImageScale', {image:[add('LoadImage', {image:flat}), 0], upscale_method:'lanczos', width:W, height:H, crop:'disabled'}), 0], vae:[ck, 2], ...TILE});
     const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:RS_DN});
-    let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0];
-    if(K.usu){ const all = add('CLIPTextEncode', {clip, text:[...words, bw].join(', ')}); out = hiTiles(add, out, model, all, neg, ck, K.cfx, RS_HI); }
+    let out = [add('VAEDecodeTiled', {samples:[ks, 0], vae:[ck, 2], ...TILE}), 0];
+    if(K.usu && window.RS_UPSCALE){ const all = add('CLIPTextEncode', {clip, text:[...words, bw].join(', ')}); out = hiTiles(add, out, model, all, neg, ck, K.cfx, RS_HI); } // (Jordan 2026-10-28: one render, no 2×, until it's worth it)
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    const imgs = await runGraph(url, g, save, t => msg('🎬 Painting the scene as one picture on ' + pcName(url) + (K.usu ? ' (then 2×)' : '') + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
+    const imgs = await runGraph(url, g, save, t => msg('🎬 Painting the scene as one picture on ' + pcName(url) + (K.usu && window.RS_UPSCALE ? ' (then 2×)' : '') + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
     SC.scene = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now()}; changed();
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
     msg('Done: the rendered scene is below.' + (!K.hooks && chars.some(o => o.e.lora) ? ' (' + pcName(url) + '\'s ComfyUI is too old for LoRAs in regions, so their LoRAs were left out: update ComfyUI.)' : miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : '')); }
