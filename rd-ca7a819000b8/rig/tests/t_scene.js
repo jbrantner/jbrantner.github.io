@@ -10,6 +10,7 @@ const DEPS = process.env.RIG_DEPS || '';
   const page = await browser.newPage({ viewport:{width:390, height:900} });
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR ' + e.message)); page.on('dialog', d => d.accept());
   await page.route('https://app.test/rig/scene.html*', r => r.fulfill({ contentType:'text/html', body:html }));
+  await page.route('https://app.test/rig/body.js*', r => r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(path.join(__dirname, '..', 'body.js')) })); // 🧍 the base body, shared with the Mannequin page
   await page.route('https://fonts.googleapis.com/**', r => r.fulfill({ contentType:'text/css', body:'' }));
   await page.route('https://cdn.jsdelivr.net/npm/**', r => {
     const u = new URL(r.request().url()).pathname.replace('/npm/', ''), m = u.match(/^(@?[^@]+)@([^/]+)\/(.*)$/);
