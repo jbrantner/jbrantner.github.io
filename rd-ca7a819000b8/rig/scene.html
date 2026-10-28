@@ -110,11 +110,18 @@ const grid = new THREE.GridHelper(20, 40, 0x6b707b, 0x474b54); scene.add(grid);
 const axX = new THREE.Mesh(new THREE.BoxGeometry(20, 0.004, 0.012), new THREE.MeshBasicMaterial({color:0xb85c5c})); axX.position.y = 0.002; scene.add(axX);
 const axZ = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.004, 20), new THREE.MeshBasicMaterial({color:0x5c7fb8})); axZ.position.y = 0.002; scene.add(axZ);
 // the cameras: 3D orbits round a point; Front looks along -z (her front faces +z), Side from her right (+x), Top straight down
-const persp = new THREE.PerspectiveCamera(35, 1, 0.05, 200), orbit = Object.assign({az:0.6, el:0.35, d:7, t:new THREE.Vector3(0, 0.9, 0)}, ui.orbit || {}); orbit.t = new THREE.Vector3().fromArray(ui.orbitT || [0, 0.9, 0]);
+const persp = new THREE.PerspectiveCamera(35, 1, 0.05, 200), orbit = Object.assign({az:0.6, el:0.35, d:7, t:new THREE.Vector3(0, 0.9, 0)}, ui.orbit || {}); orbit.t = new THREE.Vector3().fromArray(ui.orbitT || [0, 0.9, 0]); orbit.el = Math.min(orbit.el, 38 * Math.PI / 180); // (the 38° cap, below)
 const ortho = {front:{dir:[0, 0, 1], up:[0, 1, 0], c:[0, 1.2], half:2.2}, side:{dir:[1, 0, 0], up:[0, 1, 0], c:[0, 1.2], half:2.2}, top:{dir:[0, 1, 0], up:[0, 0, -1], c:[0, 0], half:4}};
 for(const k in ortho){ Object.assign(ortho[k], (ui.ortho || {})[k] || {}); ortho[k].cam = new THREE.OrthographicCamera(-1, 1, 1, -1, -100, 200); }
 const LABEL = {persp:'3D', front:'Front', side:'Side', top:'Top'};
-function placeCams(rects){ const P = persp; P.position.set(orbit.t.x + orbit.d * Math.sin(orbit.az) * Math.cos(orbit.el), orbit.t.y + orbit.d * Math.sin(orbit.el), orbit.t.z + orbit.d * Math.cos(orbit.az) * Math.cos(orbit.el)); P.lookAt(orbit.t);
+// 📷 how the camera and pictures behave, as Jordan tuned them in the sandbox Scene (2026-10-27/28): a flat 10° lens like the
+// pictures', the camera kept at or below 38° (the highest pictures are from 35°), everyone switching height together (turning
+// stays each one's own), every picture at one true size, and Jordan's measured switch points: up to the 35° pictures at 31°,
+// 20° at 18°, 5° at -2°, -4° at -20°, the next 22.5° turn half way; the next picture blends in over the last 6° before a switch
+Object.assign(window, {FLAT_LENS:10, EL_MAX:38 * Math.PI / 180, SYNC_ANG:true, TRUE_SIZE:true, SW_TH:{2:31, 3:18, 1:-2, 4:-20}, SW_TURN:0.5, BLEND:true, BLEND_W:6, LOCK_CARDS:false});
+function placeCams(rects){ const P = persp, FL = window.FLAT_LENS, D = orbit.d * (FL ? Math.tan(17.5 * Math.PI / 180) / Math.tan(FL / 2 * Math.PI / 180) : 1); if(P.fov!==(FL || 35)){ P.fov = FL || 35; P.far = 2000; }
+  if(orbit.t.y + D * Math.sin(orbit.el) < 0.05) orbit.el = Math.asin(Math.max(-1, (0.05 - orbit.t.y) / D)); // the camera stays above the ground
+  P.position.set(orbit.t.x + D * Math.sin(orbit.az) * Math.cos(orbit.el), orbit.t.y + D * Math.sin(orbit.el), orbit.t.z + D * Math.cos(orbit.az) * Math.cos(orbit.el)); P.lookAt(orbit.t);
   for(const k in ortho){ const o = ortho[k], C = o.cam, r = rects[k]; const asp = r ? r.w / r.h : 1;
     // the view's centre: Front (x, y), Side (-z, y), Top (x, -z) in screen terms
     const cx = o.c[0], cy = o.c[1], ctr = k==='front' ? new THREE.Vector3(cx, cy, 0) : k==='side' ? new THREE.Vector3(0, cy, -cx) : new THREE.Vector3(cx, 0, -cy);
@@ -129,10 +136,13 @@ function feetOf(im){ const w = 96, h = Math.max(1, Math.round(w * im.height / im
   let top = -1, bot = -1; for(let y = 0; y < h; y++){ for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ if(top < 0) top = y; bot = y; break; } } if(top < 0) return null;
   let tx = 0, tn = 0; for(let y = Math.round(top + (bot - top) * 0.35); y <= Math.round(top + (bot - top) * 0.65); y++) for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ tx += q; tn++; }
   const low = []; for(let q = 0; q < w; q++) for(let y = bot; y >= bot - Math.round((bot - top) * 0.08); y--) if(a[(y * w + q) * 4 + 3] > 128){ low.push(y); break; } low.sort((p, q) => p - q);
-  return {ax:tn ? (tx / tn + 0.5) / w : 0.5, ay:low.length ? (low[low.length >> 1] + 1) / h : (bot + 1) / h, ht:(bot + 1 - top) / h}; }
+  let l0 = w, r0 = -1; for(let y = top; y <= bot; y++) for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ if(q < l0) l0 = q; if(q > r0) r0 = q; }
+  return {wd:Math.max(0, r0 - l0 + 1) / w, ax:tn ? (tx / tn + 0.5) / w : 0.5, ay:low.length ? (low[low.length >> 1] + 1) / h : (bot + 1) / h, ht:(bot + 1 - top) / h}; }
 const texOf = url => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { t.userData.feet = feetOf(t.image); t.userData.ready = true; dirty = true; }, undefined, () => { t.userData.bad = true; dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; tex.set(url, t); } return tex.get(url); };
 const RING_EL0 = [-12, 5, 35, 20, -4];
 function angles(e){ const at = {}; (e.views || []).forEach(v => { at[v.ring + ':' + (v.i * 2 + (v.mid ? 1 : 0))] = viewUrl(e, v.file); }); return at; }
+const shadowTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d'), gr = x.createRadialGradient(64, 64, 4, 64, 64, 62); gr.addColorStop(0, 'rgba(0,0,0,.55)'); gr.addColorStop(0.6, 'rgba(0,0,0,.25)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 128, 128); return new THREE.CanvasTexture(c); })(); // a soft contact shadow so things sit on the ground
+const k_isP = c => !c.isOrthographicCamera;
 const OBJ = new Map(); // object id -> {g, card, disc, label, e}
 const discTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d'); x.strokeStyle = '#fff'; x.lineWidth = 7; x.beginPath(); x.arc(64, 64, 52, 0, 7); x.stroke();
   x.fillStyle = '#fff'; x.beginPath(); x.moveTo(64, 124); x.lineTo(46, 96); x.lineTo(82, 96); x.fill(); return new THREE.CanvasTexture(c); })(); // the arrow points to her front (+z)
@@ -143,32 +153,50 @@ function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(
     const missing = new THREE.Mesh(new THREE.BoxGeometry(isObj ? ht * 0.6 : 0.5, ht, isObj ? ht * 0.6 : 0.3), new THREE.MeshBasicMaterial({color:0x8a5560, wireframe:true})); missing.position.y = ht / 2;
     const disc = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), new THREE.MeshBasicMaterial({map:discTex, transparent:true, depthWrite:false, color:0x9aa0ad})); disc.rotation.x = -Math.PI / 2; disc.position.y = 0.006;
     const label = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.3), new THREE.MeshBasicMaterial({map:labelTex(ob.label || (e && e.name) || '?'), transparent:true, depthWrite:false, depthTest:false})); label.renderOrder = 5;
-    g.add(card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
+    const shd = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({map:shadowTex, transparent:true, depthWrite:false})); shd.rotation.x = -Math.PI / 2; shd.position.y = 0.003; const sw = isObj ? ht * 1.15 : 0.75; shd.scale.set(sw, sw, 1); shd.userData.base = sw;
+    const ghost = new THREE.Mesh(card.geometry, new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.02, side:THREE.DoubleSide, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2})); ghost.visible = false; ghost.renderOrder = 1; g.add(ghost);
+    for(const m of [shd, disc]){ m.renderOrder = -1; m.material.depthTest = false; } // under the pictures, always
+    g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {ghost, g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
   dirty = true; }
 // the picture for a camera: the camera's direction in her own turn (her front is +z), its height to the nearest of her heights
 function pickAngle(o, cam){ const ob = o.ob, p = new THREE.Vector3(ob.x, ob.y + (o.isObj ? o.ht : o.geo.hM) * (ob.s || 1) * 0.5, ob.z);
-  const dir = cam.isOrthographicCamera ? new THREE.Vector3().subVectors(cam.position, cam.position.clone().add(cam.getWorldDirection(new THREE.Vector3()))).normalize() : cam.position.clone().sub(p).normalize();
+  const dirC = new THREE.Vector3().subVectors(cam.position, cam.position.clone().add(cam.getWorldDirection(new THREE.Vector3()))).normalize();
+  let dir = cam.isOrthographicCamera ? dirC : cam.position.clone().sub(p).normalize();
+  if(window.SYNC_ANG && !cam.isOrthographicCamera){ const hz = Math.hypot(dir.x, dir.z) || 1, ce = Math.sqrt(Math.max(0, 1 - dirC.y * dirC.y)); dir = new THREE.Vector3(dir.x / hz * ce, dirC.y, dir.z / hz * ce); } // ↕ everyone's height from the camera, turning from each one's own spot
   const el = Math.asin(Math.max(-1, Math.min(1, dir.y))) / D2R, az = Math.atan2(dir.x, dir.z) - (ob.rot || 0) * D2R, rings = (o.e.ringEl || RING_EL0);
-  const has = r => Object.keys(o.at).some(k => k.startsWith(r + ':')), rs = [0, 1, 2, 3, 4].filter(has); if(!rs.length) return null;
-  const ring = rs.reduce((b, n) => Math.abs(rings[n] - el) < Math.abs(rings[b] - el) ? n : b, rs.includes(1) ? 1 : rs[0]);
-  const k16 = ((Math.round(az / (Math.PI / 8)) % 16) + 16) % 16, url = o.at[ring + ':' + k16] || o.at[ring + ':' + (k16 - k16 % 2)] || o.at['1:' + (k16 - k16 % 2)] || o.at['1:0'];
-  return {url, ring, dir, el, front:o.at[ring + ':0'] || o.at['1:0']}; }
+  const has = r => Object.keys(o.at).some(k => k.startsWith(r + ':')), rs = [0, 1, 2, 3, 4].filter(has).filter(r => !(o.isObj && (o.e.ringEl || RING_EL0)[r] < 0 && cam.position.y > ob.y + 0.01)); // 🪑 an object on the ground is never seen from underneath while the camera is above its base if(!rs.length) return null;
+  const TH = window.SW_TH; let ring;
+  if(TH){ const up = rs.slice().sort((p, q) => rings[p] - rings[q]); ring = up[0]; for(const r of up.slice(1)) if(el >= (TH[r]!=null ? TH[r] : -99)) ring = r; } // 🎚 Jordan's switch points: the highest height whose switch-up point the camera has passed
+  else ring = rs.reduce((b, n) => Math.abs(rings[n] - el) < Math.abs(rings[b] - el) ? n : b, rs.includes(1) ? 1 : rs[0]);
+  const k16 = ((Math.floor(az / (Math.PI / 8) + 1 - (window.SW_TURN!=null ? window.SW_TURN : 0.5)) % 16) + 16) % 16, url = o.at[ring + ':' + k16] || o.at[ring + ':' + (k16 - k16 % 2)] || o.at['1:' + (k16 - k16 % 2)] || o.at['1:0'];
+  let url2 = null, w2 = 0; const BW = window.BLEND ? (window.BLEND_W || 0) : 0;
+  if(BW > 0){ const pick = (r, k) => o.at[r + ':' + (((k % 16) + 16) % 16)], up2 = rs.slice().sort((p, q) => rings[p] - rings[q]), i = up2.indexOf(ring), nx = up2[i + 1], pv = up2[i - 1], C = [];
+    const thOf = (r, a2, b2) => TH && TH[r]!=null ? TH[r] : (rings[a2] + rings[b2]) / 2;
+    if(nx!=null) C.push({r:nx, k:k16, d:thOf(nx, ring, nx) - el}); if(pv!=null) C.push({r:pv, k:k16, d:el - thOf(ring, ring, pv)});
+    const T = window.SW_TURN!=null ? window.SW_TURN : 0.5, x = az / (Math.PI / 8) + 1 - T, f = x - Math.floor(x); C.push({r:ring, k:k16 + 1, d:(1 - f) * 22.5}, {r:ring, k:k16 - 1, d:f * 22.5});
+    const c = C.filter(c => c.d >= 0 && c.d < BW && pick(c.r, c.k)).sort((p, q) => p.d - q.d)[0]; if(c){ url2 = pick(c.r, c.k); w2 = 0.5 * (1 - c.d / BW); } } // ⟷ blend: the next picture fades in as the camera nears its switch point, half and half right at it
+  return {url2, w2, url, ring, dir, el, k16, front:o.at[ring + ':0'] || o.at['1:0']}; }
 function poseFor(view){ const cam = camOf(view), top = view==='top';
   for(const o of OBJ.values()){ const ob = o.ob, s = ob.s || 1; o.g.position.set(ob.x, ob.y, ob.z); o.g.visible = !ob.hide;
     const sel = ui.sel===ob.id; o.disc.material.color.set(sel ? 0xffd166 : 0x9aa0ad); o.disc.scale.setScalar(s); o.disc.rotation.z = (ob.rot || 0) * D2R;
     o.label.visible = top; if(top){ o.label.position.set(0, 0.03, 0.62 * s); o.label.rotation.set(-Math.PI / 2, 0, 0); }
-    o.missing.visible = !o.e; o.card.visible = false; if(!o.e || top) continue;
-    const a = pickAngle(o, cam); if(!a) continue; const t = texOf(a.url), cur = o.card.material.map, use = t && t.userData.ready ? t : cur && cur.userData.ready ? cur : null;
+    o.missing.visible = !o.e; o.card.visible = false; o.ghost.visible = false; if(!o.e || top) continue;
+    const a = pickAngle(o, cam); if(!a) continue; if(view==='persp' || k_isP(cam)) window.PICKINFO = window.PICKINFO || {}, window.PICKINFO[ob.id] = {el:a.el, az:Math.atan2(a.dir.x, a.dir.z) - (ob.rot || 0) * D2R, ring:a.ring, ringEl:(o.e.ringEl || RING_EL0)[a.ring], k16:(a.k16 * 22.5) + '°', name:ob.label || o.e.name}; const t = texOf(a.url), cur = o.card.material.map, use = t && t.userData.ready ? t : cur && cur.userData.ready ? cur : null;
     if(o.card.material.map!==use){ o.card.material.map = use; o.card.material.needsUpdate = true; } if(!use) continue; o.card.visible = true;
-    const ft = use.userData.feet, rt = a.front && tex.get(a.front), rf = rt && rt.userData.feet, k = ft && rf ? Math.max(0.85, Math.min(1.18, rf.ht / ft.ht)) : 1;
-    const sl = a.ring===1 ? 1 : Math.cos((o.e.ringEl || RING_EL0)[a.ring] * D2R) / Math.cos((o.e.ringEl || RING_EL0)[1] * D2R); // ↔ Slim, as her 3D view
+    const TS = window.TRUE_SIZE, ft = use.userData.feet, rt = (TS && o.at['1:0'] && tex.get(o.at['1:0'])) || (a.front && tex.get(a.front)), rf = rt && rt.userData.feet, k = TS ? 1 : ft && rf ? Math.max(0.85, Math.min(1.18, rf.ht / ft.ht)) : 1; // 📏 true size: every picture at the same scale, sized once from the eye-level front
+    const sl = (a.ring===1 || TS) ? 1 : Math.cos((o.e.ringEl || RING_EL0)[a.ring] * D2R) / Math.cos((o.e.ringEl || RING_EL0)[1] * D2R); // ↔ Slim, as her 3D view
     // 🪑 an object stands at its real height: its front picture's outline is that tall
     const m = o.isObj && rf && rf.ht ? o.ht / (o.geo.hM * rf.ht) : 1;
     o.card.scale.set(s * k * sl * m, s * k * m, 1);
     // her feet on her spot: the card turns to the camera about that point
-    const fx = ft ? ft.ax : 0.5, fy = ft ? ft.ay : 1, off = new THREE.Vector3(-(fx - 0.5) * o.geo.wM * s * k * sl * m, (fy - 0.5) * o.geo.hM * s * k * m, 0);
-    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(a.dir, new THREE.Vector3(), Math.abs(a.dir.y) > 0.99 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0)));
-    o.card.quaternion.copy(q); o.card.position.copy(off.applyQuaternion(q)); } }
+    const fx = ft ? ft.ax : 0.5, fy = ft ? (o.isObj && ft.wd ? ft.ay - 0.5 * ft.wd * (o.geo.wM / o.geo.hM) * Math.sin(Math.max(0, (o.e.ringEl || RING_EL0)[a.ring]) * D2R) : ft.ay) : 1, // 🪑 an object stands on the middle of its footprint, not its nearest corner
+     off = new THREE.Vector3(-(fx - 0.5) * o.geo.wM * s * k * sl * m, (fy - 0.5) * o.geo.hM * s * k * m, 0);
+    const azP = a.k16 * Math.PI / 8 + (ob.rot || 0) * D2R, elP = (o.e.ringEl || RING_EL0)[a.ring] * D2R, cdir = window.LOCK_CARDS ? new THREE.Vector3(Math.sin(azP) * Math.cos(elP), Math.sin(elP), Math.cos(azP) * Math.cos(elP)) : a.dir; // 📌 pinned: the card faces the way its picture was made, not the camera
+    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cdir, new THREE.Vector3(), Math.abs(cdir.y) > 0.99 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0)));
+    o.card.quaternion.copy(q); o.card.position.copy(off.applyQuaternion(q));
+    // ⟷ blend: the neighbouring picture drawn over this one, as strong as the camera is close to its switch point
+    const gm = o.ghost.material, t2 = a.url2 && a.w2 > 0.003 ? texOf(a.url2) : null;
+    if(t2 && t2.userData.ready){ if(gm.map!==t2){ gm.map = t2; gm.needsUpdate = true; } o.ghost.visible = true; o.ghost.position.copy(o.card.position); o.ghost.quaternion.copy(o.card.quaternion); o.ghost.scale.copy(o.card.scale); gm.opacity = a.w2; dirty = dirty; } } }
 // ---- drawing: one view, or all four (3D top left, Top top right, Front bottom left, Side bottom right)
 let dirty = true, view = ui.view || 'persp';
 function rects(){ const W = stage.clientWidth, H = stage.clientHeight; if(view!=='quad') return {[view]:{x:0, y:0, w:W, h:H}};
@@ -210,7 +238,7 @@ stage.addEventListener('pointermove', e => { if(!ptr.has(e.pointerId) || !G) ret
     else { const C = ortho[G.k].cam, s = 2 * ortho[G.k].half / G.r.h, R = new THREE.Vector3().setFromMatrixColumn(C.matrixWorld, 0), U = new THREE.Vector3().setFromMatrixColumn(C.matrixWorld, 1), d = R.multiplyScalar(dx * s).add(U.multiplyScalar(-dy * s));
       sel.x = snapV(G.move.x + d.x); sel.y = Math.max(0, snapV(G.move.y + d.y)); sel.z = snapV(G.move.z + d.z); }
     G.did = true; drawSel(true); dirty = true; return; }
-  if(G.orb){ orbit.az = G.orb.az - dx / G.r.w * Math.PI * 1.6; orbit.el = Math.max(-0.2, Math.min(1.45, G.orb.el + dy / G.r.h * 2)); dirty = true; return; }
+  if(G.orb){ orbit.az = G.orb.az - dx / G.r.w * Math.PI * 1.6; orbit.el = Math.max(-0.2, Math.min(window.EL_MAX || 1.45, G.orb.el + dy / G.r.h * 2)); dirty = true; return; }
   if(G.pan){ const o = ortho[G.k], s = 2 * o.half / G.r.h; o.c = [G.pan[0] - dx * s, G.pan[1] + dy * s]; dirty = true; } });
 const end = e => { if(!ptr.has(e.pointerId)) return; ptr.delete(e.pointerId); if(!G) return;
   if(G.pinch){ if(!ptr.size) G = null; saveCams(); return; }

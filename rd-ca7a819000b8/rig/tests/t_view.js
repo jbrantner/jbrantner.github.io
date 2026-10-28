@@ -76,11 +76,12 @@ const DEPS = process.env.RIG_DEPS || '';
       setTimeout(() => { const s = VIEW.stand(), V = s.V, g = s.g, P = (x, y) => s.her.localToWorld(new V(x, y, 0)).project(c), a = P(-g.wM / 2, -g.hM / 2), b = P(g.wM / 2, -g.hM / 2), d = P(-g.wM / 2, g.hM / 2);
         res({flat:!!c.isOrthographicCamera, ratio:+(Math.hypot((b.x - a.x) * c.aspect, b.y - a.y) / Math.hypot((d.x - a.x) * c.aspect, d.y - a.y) / (g.wM / g.hM)).toFixed(3)}); }, 150); }));
     ok(z.flat && Math.abs(z.ratio - 1) < 0.02, 'a flat camera: zoomed in and from above, she keeps the shape she was drawn with: ' + JSON.stringify(z)); }
-  // 5 heights (Jordan 2026-10-24): with the in-between rings (20° and -10°) the nearest height's pictures show
+  // 5 heights (Jordan 2026-10-24): with the in-between rings; switched at Jordan's measured points (2026-10-28): 35° from 31°, 20° from 18°, 5° from -2°, -4° from -20°
   { const rr = await page.evaluate(() => new Promise(res => { const L = JSON.parse(localStorage.getItem('rd-pose-sprites')); delete L[0].views16; L[0].views = Array.from({length:40}, () => 'https://app.test/pic/x100_y280_h200.svg'); localStorage.setItem('rd-pose-sprites', JSON.stringify(L)); VIEW.reload();
       const c = VIEW.camera, d = 4.5, out = []; const go = (els, k) => { if(!els.length) return k(); const e = els[0] * Math.PI / 180; c.position.set(0.001, 0.96 + Math.sin(e) * d, Math.cos(e) * d); VIEW.controls.update(); setTimeout(() => { out.push(VIEW.view().ring); go(els.slice(1), k); }, 120); };
-      setTimeout(() => go([0, 15, 30, 50, -5, -30], () => res(out.join())), 500); }));
-    ok(rr==='1,3,2,2,4,0', '5 heights: the nearest of eye level, a little high, high, a little low and low shows: ' + rr); }
+      setTimeout(() => go([0, 15, 30, 50, -5, -30], () => { const L2 = JSON.parse(localStorage.getItem('rd-pose-sprites')); L2[0].obj = true; L2[0].h = 0.9; localStorage.setItem('rd-pose-sprites', JSON.stringify(L2)); VIEW.reload();
+        setTimeout(() => go([-5], () => { out.push(+VIEW.controls.target.y.toFixed(2)); L2[0].obj = false; delete L2[0].h; localStorage.setItem('rd-pose-sprites', JSON.stringify(L2)); VIEW.reload(); setTimeout(() => res(out.join()), 300); }), 500); }), 500); }));
+    ok(rr==='1,1,3,2,4,0,1,0.45', '5 heights switch at the measured points (eye, eye, a little high, high, a little low, low), and a 🪑 object seen from above the floor never shows its underside (eye level at -5°), aimed at its middle: ' + rr); }
   // 📌 locked (Jordan 2026-10-24): the card faces the way its picture was made and doesn't turn as the camera moves within one
   // angle; at the next angle it faces that one's way
   { const lk = await page.evaluate(() => new Promise(res => { VIEW.lock(true); const c = VIEW.camera, d = 4.5, n = [];
@@ -118,7 +119,7 @@ const DEPS = process.env.RIG_DEPS || '';
   // 🧍 snapping: let go between angles and the camera glides to the nearest made angle and height
   { const r = await page.evaluate(() => new Promise(res => { const c = VIEW.camera, d = 4.5, az = 0.5, e = 28 * Math.PI / 180; c.position.set(Math.sin(az) * Math.cos(e) * d, 0.96 + d * Math.sin(e), Math.cos(az) * Math.cos(e) * d); VIEW.controls.update();
       VIEW.controls.dispatchEvent({type:'end'}); setTimeout(() => { const v = VIEW.view(); res({az:+(v.az * 180 / Math.PI).toFixed(1), el:+v.el.toFixed(1), ring:v.ring}); }, 900); }));
-    ok(r.ring===2 && Math.abs(r.az - 45) < 0.5 && Math.abs(r.el - 35) < 0.5, '🧍 letting go between angles glides the camera to the nearest made one (45° round, 35° up): ' + JSON.stringify(r)); }
+    ok(r.ring===3 && Math.abs(r.az - 45) < 0.5 && Math.abs(r.el - 20) < 0.5, '🧍 letting go between angles glides the camera to the angle it shows (45° round, 28° is still the 20° pictures): ' + JSON.stringify(r)); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
