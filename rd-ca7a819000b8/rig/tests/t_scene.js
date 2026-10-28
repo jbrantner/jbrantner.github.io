@@ -34,6 +34,7 @@ const DEPS = process.env.RIG_DEPS || '';
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({prompt_id:'p' + GRAPHS.length}) }); }
     const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[GRAPHS.length - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage');
       return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({[hi[1]]:{status:{status_str:'success'}, outputs:{[save]:{images:[0, 1, 2, 3].map(i => ({filename:'ellie_' + i + '.png', subfolder:'RenderDeck/scene', type:'output'}))}}}}) }); }
+    if(u.pathname==='/view' && /^ellie_/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect width="200" height="350" fill="#fff"/><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' }); // a PC without BiRefNet: on white
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:u.searchParams.get('filename')==='eye_090.png' && u.searchParams.get('subfolder')==='Character Library/Ellie' // MiniMax drew this angle smaller
       ? '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="85" y="100" width="30" height="240" fill="#c33"/></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
     r.fulfill({ status:404, headers:H, body:'' }); });
@@ -107,7 +108,17 @@ const DEPS = process.env.RIG_DEPS || '';
     await page.click('[data-mode="mq"]'); await page.waitForTimeout(300);
     const mqv = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp'); return {mq:o.mq.visible, card:o.card.visible, mode:ob.mode}; });
     ok(mqv.mq && !mqv.card && mqv.mode==='mq', '🧍 her mannequin shows in place of her angles: ' + JSON.stringify(mqv));
+    // 📷 the Camera view keeps its angle while locked, and the render paints from it, not from Free
+    const lk = await page.evaluate(async () => { SCENE.setView('cam'); await new Promise(r => setTimeout(r, 200)); return SCENE.shotO.az; });
+    { const bx = await (await page.$('#stage')).boundingBox(); await page.mouse.move(bx.x + 30, bx.y + bx.height - 30); await page.mouse.down(); await page.mouse.move(bx.x + 200, bx.y + bx.height - 60, {steps:6}); await page.mouse.up(); }
+    const lk2 = await page.evaluate(() => ({az:SCENE.shotO.az, lock:!!document.querySelector('#camlock') && /Locked/.test(document.querySelector('#camlock').textContent), ctl:!document.querySelector('#camctl').hidden}));
+    ok(Math.abs(lk2.az - lk)<1e-9 && lk2.lock && lk2.ctl, '📷 dragging in the locked Camera view leaves its angle alone: ' + JSON.stringify({lk, ...lk2}));
+    await page.evaluate(() => { SCENE.shotO.az = 0.3; SCENE.setView('persp'); SCENE.redraw(); });
+    const rig = await page.evaluate(() => { SCENE.placeCams(SCENE.rects()); const a = SCENE.camRig.geometry.attributes.position; return {vis:SCENE.camRig.visible, n:a.count, tail:+Math.hypot(a.getX(3) - a.getX(2), a.getY(3) - a.getY(2), a.getZ(3) - a.getZ(2)).toFixed(3), toLens:+SCENE.camOf('cam').position.distanceTo(new (SCENE.shotO.t.constructor)(a.getX(3), a.getY(3), a.getZ(3))).toFixed(2) < +SCENE.camOf('cam').position.distanceTo(new (SCENE.shotO.t.constructor)(a.getX(2), a.getY(2), a.getZ(2))).toFixed(2), free:+SCENE.camOf('persp').position.distanceTo(SCENE.camOf('cam').position).toFixed(2)}; });
+    ok(rig.tail===1.2 && rig.toLens && rig.free > 0.5, '🕹 Free view sees the Camera as a pink frame pointing back to its lens: ' + JSON.stringify(rig));
     await page.click('[data-act="render"]'); await page.waitForSelector('.tries [data-try]', {timeout:15000});
+    const rv = await page.evaluate(() => ({view:SCENE.ui.view, az:SCENE.shotO.az}));
+    ok(rv.view==='cam' && rv.az===0.3, '🎬 Render this angle switches to and paints from the 📷 Camera view: ' + JSON.stringify(rv));
     const g = GRAPHS[GRAPHS.length - 1], cls = Object.values(g).map(n => n.class_type), lor = Object.values(g).filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name), types = Object.values(g).filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type);
     const lat = Object.values(g).find(n => n.class_type==='EmptyLatentImage').inputs, txt = Object.values(g).filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text).join(' | ');
     ok(UPS.length===2 && lor.includes('elliex.safetensors') && types.join()==='openpose,depth' && lat.batch_size===4 && lat.width % 64===0 && lat.height % 64===0 && cls.includes('RemoveBackground') && /elliex/.test(txt),
@@ -120,6 +131,8 @@ const DEPS = process.env.RIG_DEPS || '';
       const ft = (o.shot.material.map && o.shot.material.map.userData.feet) || null, foot = ft ? P2(o.shot.localToWorld(new V(ft.ax - 0.5, 0.5 - ft.ay, 0))) : null, spot = P2(new V(ob.x, ob.y, ob.z)), top = P2(new V(ob.x, ob.y + 1.7, ob.z));
       return {mode:ob.mode, vis:o.shot.visible, mq:o.mq.visible, file:ob.shot && ob.shot.file, footErr:foot ? +Math.hypot(foot[0] - spot[0], foot[1] - spot[1]).toFixed(3) : null, cardH:+Math.abs(b[1] - a[1]).toFixed(3), mqH:+Math.abs(top[1] - spot[1]).toFixed(3)}; });
     ok(sh.mode==='shot' && sh.vis && !sh.mq && sh.file==='ellie_1.png', '📸 the picked one stands in the scene in place of the mannequin: ' + JSON.stringify(sh));
+    const cut = await page.evaluate(() => { const o = SCENE.objs.get(SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie').id), im = o.shot.material.map.image; if(!im.getContext) return {canvas:false}; const x = im.getContext('2d'); return {canvas:true, corner:x.getImageData(2, 2, 1, 1).data[3], body:x.getImageData(100, 200, 1, 1).data[3], thumb:/^data:/.test((document.querySelector('.tries img[data-u]') || {}).src || '')}; });
+    ok(cut.canvas && cut.corner===0 && cut.body===255 && cut.thumb, '✂ a render that came back on white is cut out here (scene and thumbnails): ' + JSON.stringify(cut));
     await page.evaluate(() => { SCENE.sc.objs.forEach(o => { o.hide = false; if(o.mode) o.mode = 'pics'; }); }); }
   // 📏 even size: an angle MiniMax drew smaller is scaled up to the others at that height, so she is the same height all round
   const ev = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind!=='obj'); ob.rot = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects());
