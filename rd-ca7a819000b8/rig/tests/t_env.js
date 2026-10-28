@@ -17,12 +17,17 @@ const DEPS = process.env.RIG_DEPS || '';
     const u = new URL(r.request().url()).pathname.replace('/npm/', ''), m = u.match(/^(@?[^@]+)@([^/]+)\/(.*)$/);
     const f = path.join(DEPS, {'three':'three-0.160.0'}[m[1]] || 'x', 'package', m[3]); if(!fs.existsSync(f)) return r.fulfill({ status:404, body:'' });
     r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(f) }); });
-  const H = {'access-control-allow-origin':'*'}, store = new Map(), UPS = [];
+  const H = {'access-control-allow-origin':'*'}, store = new Map(), UPS = [], GRAPHS = [];
   await page.route('https://render.test/**', async r => { const u = new URL(r.request().url());
     if(u.pathname==='/renderdeck/library') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(u.searchParams.get('kind')==='obj' ? {library:1, kinds:['char', 'obj'], objects:[]} : {library:1, kinds:['char', 'obj'], characters:[]}) });
     if(u.pathname==='/renderdeck/scenes') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({scenes:[...store.values()]}) });
     if(u.pathname==='/renderdeck/scenes/save'){ const b = JSON.parse(r.request().postData()); store.set(b.scene.id, b.scene); return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
     if(u.pathname==='/upload/image'){ const m = r.request().postDataBuffer().toString('latin1').match(/filename="([^"]+)"/); UPS.push(m && m[1]); return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({name:m && m[1]}) }); }
+    const OI = {CheckpointLoaderSimple:['ckpt_name', ['iriselTouchIL_v10.safetensors']], LoraLoader:['lora_name', ['AFKJ Style Illustrious Claude.safetensors']], ControlNetLoader:['control_net_name', ['illustriousXL_controlnetPromax.safetensors']], LoadBackgroundRemovalModel:['bg_removal_name', ['birefnet.safetensors']], UltimateSDUpscaleNoUpscale:['mode_type', ['Linear']], RenderDeckUpscaleColorFix:['levels', ['x']]};
+    const oi = u.pathname.match(/^\/object_info\/(\w+)$/); if(oi){ const d = OI[oi[1]]; return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(d ? {[oi[1]]:{input:{required:{[d[0]]:[d[1]]}}}} : {}) }); }
+    if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({prompt_id:'p' + GRAPHS.length}) }); }
+    const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[+hi[1].slice(1) - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage'), pre = g[save].inputs.filename_prefix.split('/').pop();
+      return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({[hi[1]]:{status:{status_str:'success'}, outputs:{[save]:{images:[{filename:pre + '_00001_.png', subfolder:'RenderDeck/scene', type:'output'}]}}}}) }); }
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#3a6"/></svg>' });
     r.fulfill({ status:404, headers:H, body:'' }); });
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
@@ -56,6 +61,15 @@ const DEPS = process.env.RIG_DEPS || '';
   const envId = st.id; await page.selectOption('#envsel', envId); await page.waitForTimeout(400);
   const s1 = await page.evaluate(() => { const o = [...SCENE.objs.values()].find(x => x.ob.fromEnv); return {env:SCENE.sc.env, fromEnv:!!o, lock:o && o.ob.lock, inList:document.querySelector('#objs').textContent.includes('Wooden chair'), ground:SCENE.ground.visible, note:document.querySelector('#envbox').textContent}; });
   ok(s1.env===envId && s1.fromEnv && s1.lock && !s1.inList && s1.ground && /bookshelves/.test(s1.note), '🌄 a scene in that environment shows its ground and its chair (locked, not in the list): ' + JSON.stringify(s1));
+  // ▶ Render all with an environment: the background from the Camera (place words, its own colours + depth, no people, 2×), then everyone on it
+  await page.click('.views [data-v="cam"]'); await page.evaluate(() => { window.RENDER_POLL = 50; scrollTo(0, 0); }); await page.click('#rall');
+  await page.waitForFunction(() => /Done/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
+  const bg = GRAPHS[GRAPHS.length - 2], fin = GRAPHS[GRAPHS.length - 1], bv = Object.values(bg), txt = bv.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text);
+  const ks = bv.find(n => n.class_type==='KSampler'), types = bv.filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type);
+  ok(/old library, tall bookshelves/.test(txt[0]) && /no humans/.test(txt[0]) && /1girl/.test(txt[1]) && ks && ks.inputs.denoise===0.72 && types.join()==='depth' && bv.some(n => n.class_type==='VAEEncode') && bv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale') && UPS.filter(n => /^rd-scene-bg/.test(n)).length===2,
+    '🌄 Render all paints the background from the Camera: place words, no people, its own colours (img2img 0.72) + depth, then 2×: ' + JSON.stringify({txt:txt[0], denoise:ks && ks.inputs.denoise, types}));
+  const fv = Object.values(fin).map(n => n.class_type), sf = await page.evaluate(() => ({bg:SCENE.sc.bg && SCENE.sc.bg.file, fin:SCENE.sc.final && SCENE.sc.final.file, img:!!document.querySelector('#final img')}));
+  ok(fv.join()==='LoadImage,SaveImage' && UPS.some(n => /^rd-scene-final/.test(n)) && /_bg_/.test(sf.bg) && /_final_/.test(sf.fin) && sf.img, '🖼 then everyone is laid over it and the finished picture is saved on the PC and shown: ' + JSON.stringify(sf));
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

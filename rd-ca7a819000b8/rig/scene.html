@@ -55,7 +55,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 <div id="stage"><div id="msg"></div><div id="camctl" hidden><button id="camlock"></button><button id="camcopy">⤓ Free view’s angle</button></div></div>
 <div class="cols">
   <div class="box" id="envbox"></div>
-  <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="rall">▶ Render all</button></div><p class="note" id="allmsg">▶ Render all redraws every character's pick in high res (and paints tries for any without one).</p><div class="list" id="objs"></div>
+  <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="rall">▶ Render all</button></div><div id="final"></div><p class="note" id="allmsg">▶ Render all redraws every pick in high res, paints the 🌄 background from the 📷 Camera, and lays everyone over it into one finished picture.</p><div class="list" id="objs"></div>
     <p class="note">Tap a name to select it; only the selected one moves. Drag it in any view: Front and Side move it sideways and up, Top, Camera and Free slide it over the floor.</p></div>
   <div class="box" id="selbox"></div>
 </div>
@@ -113,7 +113,7 @@ async function pushScene(){ if(!SC) return; if(!PC.url){ $('#saved').textContent
   try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:SC})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
   catch(e){ $('#saved').textContent = 'On this phone'; } }
 function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : 'sc'), name:name || (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : {}); scenesAll.unshift(s); openScene(s); changed(); }
-function openScene(s){ SC = s; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); dirty = true; }
+function openScene(s){ SC = s; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawFinal(); dirty = true; }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
@@ -567,6 +567,10 @@ async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg
 // (the Render tab's Redraw that Jordan called perfect), her LoRA in the tiles when Keep colours can even out their brightness, then cut out
 // again with BiRefNet at the new size. Saved on the pick, so re-picking that try keeps it.
 const HI_DN = 0.35;
+function hiTiles(add, img, model, pos, neg, ck, cfx){ const big = add('ImageScaleBy', {image:img, upscale_method:'lanczos', scale_by:2});
+  const out = [add('UltimateSDUpscaleNoUpscale', {upscaled_image:[big, 0], model, positive:[pos, 0], negative:[neg, 0], vae:[ck, 2], seed:Math.floor(Math.random() * 2 ** 40), steps:20, cfg:5, sampler_name:'dpmpp_2m', scheduler:'karras', denoise:HI_DN,
+    mode_type:'Linear', tile_width:1024, tile_height:1024, mask_blur:16, tile_padding:64, seam_fix_mode:'Band Pass', seam_fix_denoise:0.3, seam_fix_width:64, seam_fix_mask_blur:16, seam_fix_padding:32, force_uniform_tiles:true, tiled_decode:false, batch_size:1}), 0];
+  return cfx ? [add('RenderDeckUpscaleColorFix', {image:out, image_ref:[big, 0], strength:1, levels:5}), 0] : out; }
 async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || !sh || sh.hi || BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
   try{ st('Asking the PCs for their models…'); const K = await kitFor(e, 'usu'), url = K.url;
@@ -576,11 +580,7 @@ async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, 
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
     if(K.cfx) for(const [l, w] of [[e.style, 1], [e.lora, +e.strength || 1]]) if(l && K.los.includes(l)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
     const pos = add('CLIPTextEncode', {clip, text:herWords(e, ob.pose) + ', ' + PROMPT_TAIL}), neg = add('CLIPTextEncode', {clip, text:NEG});
-    const big = add('ImageScaleBy', {image:[add('LoadImage', {image:up.name}), 0], upscale_method:'lanczos', scale_by:2});
-    let out = [add('UltimateSDUpscaleNoUpscale', {upscaled_image:[big, 0], model, positive:[pos, 0], negative:[neg, 0], vae:[ck, 2], seed:Math.floor(Math.random() * 2 ** 40), steps:20, cfg:5, sampler_name:'dpmpp_2m', scheduler:'karras', denoise:HI_DN,
-      mode_type:'Linear', tile_width:1024, tile_height:1024, mask_blur:16, tile_padding:64, seam_fix_mode:'Band Pass', seam_fix_denoise:0.3, seam_fix_width:64, seam_fix_mask_blur:16, seam_fix_padding:32, force_uniform_tiles:true, tiled_decode:false, batch_size:1}), 0];
-    if(K.cfx) out = [add('RenderDeckUpscaleColorFix', {image:out, image_ref:[big, 0], strength:1, levels:5}), 0];
-    out = cutOut(add, out, K.bgm);
+    let out = cutOut(add, hiTiles(add, [add('LoadImage', {image:up.name}), 0], model, pos, neg, ck, K.cfx), K.bgm);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_hi'});
     const imgs = await runGraph(url, g, save, t => st('⤴ Redrawing her 2× on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
     const hi = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || ''}; texOf(shotUrl(hi), true);
@@ -588,13 +588,75 @@ async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, 
     st('⤴ High res done' + (K.bgm ? '' : ' (cut away from the white here: no PC has BiRefNet)') + '.'); changed(); dirty = true; }
   catch(err){ st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
-// ▶ Render all: every character in the scene that has a pick gets ⤴ High res; one with no pick yet gets her 4 tries to pick from
+// ▶ Render all (Jordan 2026-10-28): every character's pick gets ⤴ High res (one with no pick gets 4 tries to pick from, and it stops there);
+// then 🌄 the background is painted from the 📷 Camera, and 🖼 everyone is laid over it into one picture
 async function renderAll(){ if(!SC) return; const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }; const chars = SC.objs.filter(ob => ob.kind!=='obj' && !ob.hide && OBJ.get(ob.id) && OBJ.get(ob.id).mq);
-  if(!chars.length){ msg('No characters in this scene yet.'); return; } $('#rall').disabled = true; let tries = 0, ups = 0;
-  for(const ob of chars){ const nm = ob.label || 'her';
-    if(modeOf(ob)==='shot'){ if(ob.shot.hi) continue; msg('⤴ ' + nm + ': redrawing her pick 2×…'); await hiRes(ob); ups++; }
-    else { msg('🎬 ' + nm + ' has no pick yet: painting 4 to pick from…'); await renderAngle(ob); tries++; } }
-  $('#rall').disabled = false; msg(tries ? 'Done. Pick one for ' + tries + (tries > 1 ? ' characters' : ' character') + ' that had none, then ▶ Render all again for high res.' : ups ? 'Done: every pick is high res.' : 'Every pick was already high res.'); }
+  $('#rall').disabled = true; let tries = 0;
+  try{ for(const ob of chars){ const nm = ob.label || 'her';
+      if(modeOf(ob)==='shot'){ if(ob.shot.hi) continue; msg('⤴ ' + nm + ': redrawing her pick 2×…'); await hiRes(ob); }
+      else { msg('🎬 ' + nm + ' has no pick yet: painting 4 to pick from…'); await renderAngle(ob); tries++; } }
+    if(tries){ msg('Pick one for ' + tries + (tries > 1 ? ' characters' : ' character') + ' that had none, then ▶ Render all again.'); return; }
+    if(chars.some(ob => !(ob.shot && ob.shot.hi))){ msg('A high-res redraw did not finish (see under that character). ▶ Render all tries again.'); return; }
+    if(!envOf(SC.env)){ msg(chars.length ? 'Every pick is high res. Pick a 🌄 Environment above to paint a background and make the finished picture.' : 'No characters and no environment yet.'); return; }
+    if(!bgFits()){ msg('🌄 Painting the background from the 📷 Camera…'); await renderBg(msg); }
+    if(!bgFits()) return; msg('🖼 Putting everyone on the background…'); await compose(msg); }
+  catch(err){ msg(err.message || String(err)); }
+  finally{ $('#rall').disabled = false; drawFinal(); } }
+// 🌄 the background: the scene's environment through the 📷 Camera with no one in it. Its own colours start the picture (img2img 0.72)
+// and its depth holds the shapes (ProMax depth 0.6 to 60%); Illustrious paints it from the place words, with the characters' style LoRA,
+// then 2× in tiles like ⤴ High res. Kept with the scene and the camera it was painted from
+const bgKey = () => JSON.stringify([SC.cam || camState(), SC.env, (envOf(SC.env) || {}).saved || 0]);
+const bgFits = () => !!(SC && SC.bg && SC.bg.key===bgKey());
+function envShot(W, H, depth){ placeCams(rects()); poseFor('cam'); const cam = shotCam.clone(); cam.aspect = W / H; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
+  const hid = []; const hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
+  for(const o of OBJ.values()){ if(!(o.ob.fromEnv || o.isObj)) hide(o.g); else [o.disc, o.label, o.missing].forEach(hide); } [camRig, pgrid, grid, axX, axZ].forEach(hide);
+  const bg = scene.background, D = cam.position.distanceTo(shotO.t), rt = new THREE.WebGLRenderTarget(W, H), buf = new Uint8Array(W * H * 4);
+  if(depth){ scene.background = new THREE.Color(0x000000); scene.overrideMaterial = DEPTH_MAT; DEPTH_MAT.uniforms.uNear.value = Math.max(0.1, D * 0.25); DEPTH_MAT.uniforms.uFar.value = D * 3; }
+  renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null);
+  scene.overrideMaterial = null; scene.background = bg; hid.forEach(m => m.visible = true); rt.dispose(); dirty = true;
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), id = x.createImageData(W, H);
+  for(let y = 0; y < H; y++) id.data.set(buf.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4); x.putImageData(id, 0, 0); return c; }
+const BG_TAIL = 'scenery, no humans, masterpiece, best quality, amazing quality, newest, absurdres, highres', BG_NEG = ', 1girl, 1boy, people, person, character, crowd';
+async function renderBg(msg){ const env = envOf(SC.env), who = SC.objs.map(ob => libOf(ob.ref)).find(e => e && e.kind!=='obj' && e.ckpt) || {}, e = {ckpt:who.ckpt, style:who.style};
+  const K = await kitFor(e, 'cn'), url = K.url, a = shotCam.aspect || 1, H = Math.max(512, Math.round(Math.sqrt(1048576 / a) / 64) * 64), W = Math.max(512, Math.round(H * a / 64) * 64), stamp = Date.now().toString(36);
+  if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); }
+  msg('🌄 Sending the place to ' + pcName(url) + '…'); const ln = await upload(url, envShot(W, H, false), 'rd-scene-bg-' + stamp + '.png'), dn = await upload(url, envShot(W, H, true), 'rd-scene-bgdepth-' + stamp + '.png');
+  const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
+  if(e.style && K.los.includes(e.style)){ const id = add('LoraLoader', {model, clip, lora_name:e.style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
+  const words = [/afkj/i.test(e.style || '') ? 'AFKJ Style' : '', (env.words || '').trim().replace(/,\s*$/, ''), BG_TAIL].filter(Boolean).join(', ');
+  const pos = add('CLIPTextEncode', {clip, text:words}), neg = add('CLIPTextEncode', {clip, text:NEG + BG_NEG}), L = add('ControlNetLoader', {control_net_name:K.cn});
+  const ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.6, start_percent:0, end_percent:0.6, vae:[ck, 2]});
+  const lat = add('VAEEncode', {pixels:[add('LoadImage', {image:ln}), 0], vae:[ck, 2]});
+  const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:0.72});
+  let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.usu) out = hiTiles(add, out, model, pos, neg, ck, K.cfx);
+  const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_bg'});
+  const imgs = await runGraph(url, g, save, t => msg('🌄 Painting the background on ' + pcName(url) + (K.usu ? ' (then 2×)' : '') + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent no background back.');
+  SC.bg = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', key:bgKey(), W:W * (K.usu ? 2 : 1), H:H * (K.usu ? 2 : 1)}; changed(); }
+// 🖼 the finished picture: the painted background with the characters' high-res cut-outs drawn over it through the same 📷 Camera, each
+// where she stands, with her soft contact shadow; the environment's own ground and objects are left out (they are in the painting)
+const loadImg = url => new Promise((res, rej) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => res(im); im.onerror = () => rej(new Error('Could not load ' + url)); im.src = url; });
+async function waitTex(urls){ for(let i = 0; i < 100 && urls.some(u => { const t = texOf(u, true); return t && !t.userData.ready && !t.userData.bad; }); i++) await new Promise(r => setTimeout(r, 100)); }
+async function compose(msg){ const bg = SC.bg, im = await loadImg(shotUrl(bg)), W = im.naturalWidth, H = im.naturalHeight;
+  const chars = SC.objs.filter(ob => ob.kind!=='obj' && !ob.hide && modeOf(ob)==='shot'); await waitTex(chars.map(ob => shotUrl(ob.shot)));
+  placeCams(rects()); poseFor('cam'); const cam = shotCam.clone(); cam.aspect = W / H; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
+  const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
+  for(const o of OBJ.values()){ if(o.ob.fromEnv || o.isObj || o.ob.hide) hide(o.g); else { if(o.shot && o.ob.shot) placeShot(o, cam); [o.disc, o.label, o.missing, o.card, o.ghost, o.mq].forEach(hide); } }
+  [camRig, pgrid, grid, axX, axZ, ground].forEach(hide);
+  const bgT = new THREE.Texture(im); bgT.colorSpace = THREE.SRGBColorSpace; bgT.needsUpdate = true; const sky = scene.background; scene.background = bgT;
+  const rt = new THREE.WebGLRenderTarget(W, H, {samples:4}), buf = new Uint8Array(W * H * 4);
+  renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null);
+  scene.background = sky; hid.forEach(m => m.visible = true); rt.dispose(); bgT.dispose(); dirty = true;
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'), id = x.createImageData(W, H);
+  for(let y = 0; y < H; y++) id.data.set(buf.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4); x.putImageData(id, 0, 0);
+  // kept in the PC's output folder like any render: uploaded, then a Load → Save
+  const url = bg.pc; msg('🖼 Saving the finished picture on ' + pcName(url) + '…'); const nm = await upload(url, c, 'rd-scene-final-' + Date.now().toString(36) + '.png');
+  const g = {1:{class_type:'LoadImage', inputs:{image:nm}}, 2:{class_type:'SaveImage', inputs:{images:['1', 0], filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_final'}}};
+  const imgs = await runGraph(url, g, '2', t => msg('🖼 Saving… ' + t + ' s')); if(!imgs.length) throw new Error('The PC did not save the picture.');
+  SC.final = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now()}; changed(); msg('Done: the finished picture is below (and in the PC\'s renders).'); }
+function drawFinal(){ const box = $('#final'); if(!box) return; const f = SC && SC.final, b = SC && SC.bg;
+  box.innerHTML = (f ? `<a href="${esc(shotUrl(f))}" target="_blank" rel="noopener"><img src="${esc(shotUrl(f))}" alt="The finished picture" style="display:block;width:100%;border-radius:8px;margin-top:8px"></a><p class="note">🖼 The finished picture (tap for full size).${bgFits() ? '' : ' The camera or environment changed since: ▶ Render all paints a new background.'}</p>` : '')
+    + (b && !f ? `<img src="${esc(shotUrl(b))}" alt="The background" style="display:block;width:100%;border-radius:8px;margin-top:8px"><p class="note">🌄 The painted background.</p>` : ''); }
 function drawList(){ const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = ENV ? '<p class="note">No objects yet. ＋ Object adds one from the 📚 Object Library (the 3D chair is there too).</p>' : '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
   box.innerHTML = SC.objs.map(ob => { const e = libOf(ob.ref); return `<div class="row" aria-selected="${ui.sel===ob.id}"><button class="nm" data-sel="${esc(ob.id)}">${ob.kind==='obj' ? '🪑' : '🧍'} ${esc(ob.label || (e && e.name) || '?')} ${e ? (e.trigger ? `<small>${esc(e.trigger)}</small>` : '') : '<small class="warn">not in the library</small>'}</button>
     <button class="ic" data-eye="${esc(ob.id)}" aria-pressed="${!ob.hide}" aria-label="Show or hide">👁</button><button class="ic" data-lock="${esc(ob.id)}" aria-pressed="${!!ob.lock}" aria-label="Lock">🔒</button></div>`; }).join(''); }

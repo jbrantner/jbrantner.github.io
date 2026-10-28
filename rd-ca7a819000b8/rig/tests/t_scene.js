@@ -150,8 +150,8 @@ const DEPS = process.env.RIG_DEPS || '';
       ok(GRAPHS.length===n0 + 1 && UPS.length===u0 + 1 && /^rd-scene-hi-/.test(UPS[UPS.length - 1].name) && sc && sc.inputs.scale_by===2 && up && up.inputs.denoise===0.35 && cls.includes('LoraLoader') && cls.includes('RenderDeckUpscaleColorFix') && cls.includes('RemoveBackground') && !cls.includes('KSampler') && !cls.includes('EmptyLatentImage'),
         '⤴ High res sends her pick, 2× in tiles at 0.35 with her LoRA (Keep colours), cut out again: ' + JSON.stringify({cls}));
       ok(hs.hi==='ellie_0.png' && hs.tryHi && /✓ High res/.test(hs.btn) && hs.dis, '⤴ the high-res picture replaces the pick (and stays on that try): ' + JSON.stringify(hs));
-      const n1 = GRAPHS.length; await page.click('#rall'); await page.waitForFunction(() => /Done|already/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:15000});
-      ok(GRAPHS.length===n1 && /already high res/.test(await page.textContent('#allmsg')), '▶ Render all skips picks that are already high res: ' + await page.textContent('#allmsg')); }
+      const n1 = GRAPHS.length; await page.click('#rall'); await page.waitForFunction(() => /Every pick is high res/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:15000});
+      ok(GRAPHS.length===n1 && /Pick a 🌄 Environment/.test(await page.textContent('#allmsg')), '▶ Render all skips picks that are already high res (and asks for an environment): ' + await page.textContent('#allmsg')); }
     await page.evaluate(() => { SCENE.sc.objs.forEach(o => { o.hide = false; if(o.mode) o.mode = 'pics'; }); }); }
   // 🕹 Free shows each picture as the 📷 Camera sees it: the same picture, flat, facing the Camera, not turning to Free
   const fr = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); ob.x = 0; ob.z = 0; ob.rot = 0; const o = SCENE.objs.get(ob.id);
