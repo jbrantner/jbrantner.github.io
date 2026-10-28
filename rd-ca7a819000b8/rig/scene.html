@@ -269,7 +269,14 @@ renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadow
 const LIGHT_MAT = new THREE.MeshLambertMaterial({color:0xffffff}), LIGHT0 = {on:false, turn:-40, up:50, color:'#ffe6c4', power:1, fill:'#9fb4d8', fillK:0.45};
 const catcher = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), LIGHT_MAT); catcher.rotation.x = -Math.PI / 2; catcher.visible = false; catcher.receiveShadow = true; scene.add(catcher); // a floor for shadows when there's no ground
 const sunMark = new THREE.Group(); { const b = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), new THREE.MeshBasicMaterial({color:0xffd166})); const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]), new THREE.LineDashedMaterial({color:0xffd166, dashSize:0.15, gapSize:0.1}));
-  sunMark.add(b, ln); sunMark.userData.line = ln; sunMark.visible = false; scene.add(sunMark); }
+  const grab = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 6), new THREE.MeshBasicMaterial({visible:false})); // (a bigger finger target)
+  sunMark.add(b, ln, grab); sunMark.userData.line = ln; sunMark.userData.grab = grab; sunMark.visible = false; scene.add(sunMark); }
+// ☀ drag the sun like an object (Jordan 2026-10-28) in Free, Front, Side or Top: it slides over a ball round the scene's centre, so
+// where you drop it is where the light comes from (its height stays between 5° and 85°)
+function sunFromRay(rc){ const t = shotO.t, R = 4, sp = new THREE.Sphere(t, R), p = new THREE.Vector3(); let d;
+  if(rc.ray.intersectSphere(sp, p)) d = p.sub(t); else { rc.ray.closestPointToPoint(t, p); d = p.sub(t); }
+  d.normalize(); const up = Math.max(5, Math.min(85, Math.asin(Math.max(-1, Math.min(1, d.y))) / D2R)), turn = Math.atan2(d.x, d.z) / D2R;
+  SC.light = Object.assign({}, lightOf(), {turn:Math.round(turn), up:Math.round(up)}); dirty = true; }
 const lightOf = () => SC && !ENV ? Object.assign({}, LIGHT0, SC.light || {}) : null, lightOn = () => { const L = lightOf(); return !!(L && L.on); };
 function placeLight(){ const L = lightOf(); if(!L) return; const t = shotO.t, D = 14, a = L.turn * D2R, e = L.up * D2R, dir = new THREE.Vector3(Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e));
   LT.sun.position.copy(t).addScaledVector(dir, D); LT.sun.target.position.set(t.x, 0, t.z); LT.sun.target.updateMatrixWorld(); LT.sun.color.set(L.color); LT.sun.intensity = Math.PI * L.power; LT.amb.color.set(L.fill); LT.amb.intensity = Math.PI * L.fillK;
@@ -321,7 +328,7 @@ function drawLightBox(){ const box = $('#lightbox'); if(ENV || !SC){ box.hidden 
   const sl = (k, t, min, max, st, unit) => `<div class="lbl">${t}: <b data-v="${k}">${L[k]}${unit}</b></div><div class="line"><input type="range" data-l="${k}" min="${min}" max="${max}" step="${st}" value="${L[k]}"></div>`;
   box.innerHTML = `<h2>💡 Light<button id="lon" aria-pressed="${L.on}">${L.on ? 'On' : 'Off'}</button></h2>
     ${L.on ? sl('turn', 'Comes from (turn)', -180, 180, 5, '°') + sl('up', 'Height', 5, 85, 1, '°') + `<div class="line"><label class="note" style="margin:0">Colour <input type="color" data-c="color" value="${L.color}"></label>${sl('power', 'Strength', 0, 2, 0.05, '')}</div>`
-      + `<div class="line"><label class="note" style="margin:0">Fill colour <input type="color" data-c="fill" value="${L.fill}"></label></div>` + sl('fillK', 'Fill', 0, 1, 0.05, '') + '<p class="note">Shows in the 📷 Camera view (the yellow ball in the other views is the sun). It lights the 3D stand-ins behind the pictures, so shadows fall where they really would.</p>' : '<p class="note">Turn it on to light the scene with a sun you can move, with real shadows and coloured light.</p>'}`;
+      + `<div class="line"><label class="note" style="margin:0">Fill colour <input type="color" data-c="fill" value="${L.fill}"></label></div>` + sl('fillK', 'Fill', 0, 1, 0.05, '') + '<p class="note">Shows in the 📷 Camera view (the yellow ball in the other views is the sun). Drag the yellow ball in Free, Front, Side or Top to move the sun. It lights the 3D stand-ins behind the pictures, so shadows fall where they really would.</p>' : '<p class="note">Turn it on to light the scene with a sun you can move, with real shadows and coloured light.</p>'}`;
   box.querySelector('#lon').onclick = () => { SC.light = Object.assign({}, L, {on:!L.on}); if(SC.light.on && view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); } drawLightBox(); changed(); dirty = true; };
   box.querySelectorAll('[data-l]').forEach(i => i.oninput = () => { SC.light = Object.assign({}, lightOf(), {[i.dataset.l]:+i.value}); box.querySelector(`[data-v="${i.dataset.l}"]`).textContent = i.value + ({turn:'°', up:'°'}[i.dataset.l] || ''); dirty = true; changed(); });
   box.querySelectorAll('[data-c]').forEach(i => i.oninput = () => { SC.light = Object.assign({}, lightOf(), {[i.dataset.c]:i.value}); dirty = true; changed(); }); }
@@ -510,6 +517,7 @@ const snapV = v => SNAP() ? Math.round(v / SNAP()) * SNAP() : Math.round(v * 100
 stage.addEventListener('pointerdown', e => { stage.setPointerCapture(e.pointerId); const [px, py] = local2(e); ptr.set(e.pointerId, {x:px, y:py});
   if(ptr.size===2){ const a = [...ptr.values()], at = viewAt((a[0].x + a[1].x) / 2, (a[0].y + a[1].y) / 2); G = at && {pinch:true, k:at.k, r:at.r, d0:Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y), m0:[(a[0].x + a[1].x) / 2, (a[0].y + a[1].y) / 2], z0:at && isP(at.k) ? orbOf(at.k).d : at && ortho[at.k].half, c0:at && isP(at.k) ? orbOf(at.k).t.clone() : at && ortho[at.k].c.slice()}; if(G && G.k==='cam' && camLocked()) G = null; return; }
   const at = viewAt(px, py); if(!at) return; const hit = hitObj(at.k, at.r, px, py), sel = SC && SC.objs.find(o => o.id===ui.sel);
+  if(lightOn() && at.k!=='cam'){ placeLight(); sunMark.updateMatrixWorld(true); const rc = rayFor(at.k, at.r, px, py); if(rc.intersectObject(sunMark.userData.grab, false).length){ G = {k:at.k, r:at.r, x0:px, y0:py, moved:false, sun:true}; return; } }
   G = {k:at.k, r:at.r, x0:px, y0:py, moved:false, hit};
   if(hit && sel && hit.ob===sel && !sel.lock){ G.move = {x:sel.x, y:sel.y, z:sel.z}; if(isP(at.k)){ const rc = rayFor(at.k, at.r, px, py), pl = new THREE.Plane(new THREE.Vector3(0, 1, 0), -sel.y), p = new THREE.Vector3(); G.p0 = rc.ray.intersectPlane(pl, p) ? p.clone() : null; } }
   else if(isP(at.k)){ if(!(at.k==='cam' && camLocked())) G.orb = {az:orbOf(at.k).az, el:orbOf(at.k).el}; } else G.pan = ortho[at.k].c.slice(); });
@@ -519,6 +527,7 @@ stage.addEventListener('pointermove', e => { if(!ptr.has(e.pointerId) || !G) ret
     else { const o = ortho[G.k]; o.half = Math.max(0.3, Math.min(40, G.z0 * f)); const s = 2 * o.half / G.r.h; o.c = [G.c0[0] - (m[0] - G.m0[0]) * s, G.c0[1] + (m[1] - G.m0[1]) * s]; }
     dirty = true; return; }
   const dx = px - G.x0, dy = py - G.y0; if(Math.hypot(dx, dy) > 5) G.moved = true; if(!G.moved) return;
+  if(G.sun){ sunFromRay(rayFor(G.k, G.r, px, py)); G.did = true; return; }
   const sel = SC && SC.objs.find(o => o.id===ui.sel);
   if(G.move && sel){ if(isP(G.k)){ if(!G.p0) return; const rc = rayFor(G.k, G.r, px, py), pl = new THREE.Plane(new THREE.Vector3(0, 1, 0), -G.move.y), p = new THREE.Vector3(); if(!rc.ray.intersectPlane(pl, p)) return; sel.x = snapV(G.move.x + p.x - G.p0.x); sel.z = snapV(G.move.z + p.z - G.p0.z); }
     else { const C = ortho[G.k].cam, s = 2 * ortho[G.k].half / G.r.h, R = new THREE.Vector3().setFromMatrixColumn(C.matrixWorld, 0), U = new THREE.Vector3().setFromMatrixColumn(C.matrixWorld, 1), d = R.multiplyScalar(dx * s).add(U.multiplyScalar(-dy * s));
@@ -528,6 +537,7 @@ stage.addEventListener('pointermove', e => { if(!ptr.has(e.pointerId) || !G) ret
   if(G.pan){ const o = ortho[G.k], s = 2 * o.half / G.r.h; o.c = [G.pan[0] - dx * s, G.pan[1] + dy * s]; dirty = true; } });
 const end = e => { if(!ptr.has(e.pointerId)) return; ptr.delete(e.pointerId); if(!G) return;
   if(G.pinch){ if(!ptr.size) G = null; saveCams(); return; }
+  if(G.sun){ if(G.did){ drawLightBox(); changed(); } G = null; return; }
   if(!G.moved && !G.move){ ui.sel = G.hit ? G.hit.ob.id : ui.sel; saveUi(); drawList(); drawSel(); dirty = true; } // a tap selects; tapping empty space keeps the selection
   if(G.did) changed(); saveCams(); G = null; };
 stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
