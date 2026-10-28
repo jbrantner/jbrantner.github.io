@@ -88,10 +88,10 @@ const DEPS = process.env.RIG_DEPS || '';
     const b = new (o.g.position.constructor)(), box = {min:[9, 9, 9], max:[-9, -9, -9]}; o.mesh.traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); ['x', 'y', 'z'].forEach((k, i) => { box.min[i] = Math.min(box.min[i], bb.min[k]); box.max[i] = Math.max(box.max[i], bb.max[k]); }); } });
     return {card:o.card.visible, low:+(box.min[1] - ob.y).toFixed(3), tall:+(box.max[1] - box.min[1]).toFixed(2), turned:Math.abs(o.mesh.rotation.y - Math.PI / 2) < 1e-6}; });
   ok(!m3.card && Math.abs(m3.low) < 0.005 && Math.abs(m3.tall - 0.9) < 0.03 && m3.turned, '🪑 the built-in 3D chair stands on the floor, 0.9 m tall, no picture card, turns with its spot: ' + JSON.stringify(m3));
-  // 🖼 cards on one plane: the one off to the side lies flat to the screen too, not turned towards the camera on its own
+  // 🖼 a card off to the side faces the camera from its own spot (Jordan 2026-10-28: matches the 3D chair beside it)
   const fl = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Object Library/Chair'); ob.x = 2.5; ob.z = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp');
     const cam = SCENE.camOf ? SCENE.camOf('persp') : null, q = o.card.quaternion; return {vis:o.card.visible, same:!!cam && Math.abs(Math.abs(q.dot(cam.quaternion)) - 1) < 1e-6}; });
-  ok(fl.vis && fl.same, '🖼 a card off to the side lies flat to the screen, on the same plane as the rest: ' + JSON.stringify(fl));
+  ok(fl.vis && !fl.same, '🖼 a card off to the side faces the camera from its own spot, leaning with the perspective like a 3D object: ' + JSON.stringify(fl));
   if(process.env.SHOT){ await page.click('.views [data-v="persp"]'); await page.click('[data-sel]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scene3d.png', fullPage:true}); await page.click('.views [data-v="quad"]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scenequad.png'}); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
