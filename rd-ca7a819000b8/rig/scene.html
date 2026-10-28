@@ -54,6 +54,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 <div class="views" role="tablist"><button data-v="cam">📷 Camera</button><button data-v="persp">🕹 Free</button><button data-v="front">Front</button><button data-v="side">Side</button><button data-v="top">Top</button><button data-v="quad">⊞ 4</button></div>
 <div id="stage"><div id="msg"></div><div id="camctl" hidden><button id="camlock"></button><button id="camcopy">⤓ Free view’s angle</button></div></div>
 <div class="cols">
+  <div class="box" id="envbox"></div>
   <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="rall">▶ Render all</button></div><p class="note" id="allmsg">▶ Render all redraws every character's pick in high res (and paints tries for any without one).</p><div class="list" id="objs"></div>
     <p class="note">Tap a name to select it; only the selected one moves. Drag it in any view: Front and Side move it sideways and up, Top, Camera and Free slide it over the floor.</p></div>
   <div class="box" id="selbox"></div>
@@ -71,7 +72,10 @@ import * as THREE from 'three';
 import {paintLook} from './look.js';
 import {TOON, loadBody as fetchBody, bodyMesh as shapedBody, POSES, poseBody, bodyJoints, DEPTH_MAT, drawPose, comboOf, hasNode, upload, faceFix, NEG} from './body.js';
 const QS = new URLSearchParams(location.search), HID = QS.get('h')==='1', D2R = Math.PI / 180, $ = s => document.querySelector(s);
-const LKEY = 'rd-scenes' + (HID ? '-h' : ''), VKEY = 'rd-scene-ui';
+// 🌄 the same page as the Environment tab (?env=1, Jordan 2026-10-28): an environment is a ground (tiling textures, painted in patches),
+// 3D objects and the words for the place; a scene loads one as its background, locked, and adds the characters
+const ENV = QS.get('env')==='1', KIND = s => ENV ? s.kind==='env' : s.kind!=='env';
+const LKEY = (ENV ? 'rd-envs' : 'rd-scenes') + (HID ? '-h' : ''), VKEY = ENV ? 'rd-env-ui' : 'rd-scene-ui', EKEY = 'rd-envs' + (HID ? '-h' : '');
 const esc = s => String(s==null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'})[c]);
 const uid = p => p + Math.random().toString(36).slice(2, 9);
 // ---- where things are kept: Render Deck's PC list (Render first) and the library on it
@@ -90,26 +94,33 @@ const libOf = ref => PC.lib.find(e => e.subfolder===ref);
 // ---- scenes: on the phone always, on the PC when its helper has /renderdeck/scenes; the newer copy wins
 const local = () => { try{ return JSON.parse(localStorage.getItem(LKEY)) || []; }catch(e){ return []; } };
 const keepLocal = L => { try{ localStorage.setItem(LKEY, JSON.stringify(L)); }catch(e){} };
-let SC = null, scenesAll = [], ui = (() => { try{ return JSON.parse(localStorage.getItem(VKEY)) || {}; }catch(e){ return {}; } })();
+let SC = null, ENVS = [], scenesAll = [], ui = (() => { try{ return JSON.parse(localStorage.getItem(VKEY)) || {}; }catch(e){ return {}; } })();
+// 🌄 every saved environment (for a scene's background): on the PC with the scenes, and on this phone
+function envsFrom(remote){ const by = new Map(); let L = []; try{ L = JSON.parse(localStorage.getItem(EKEY)) || []; }catch(e){}
+  for(const s of L.concat(remote.filter(x => x.kind==='env'))){ const o = by.get(s.id); if(!o || (s.saved || 0) > (o.saved || 0)) by.set(s.id, s); }
+  ENVS = [...by.values()].filter(s => !s.gone).sort((a, b) => (a.name || '').localeCompare(b.name || '')); }
+const envOf = id => id && ENVS.find(x => x.id===id);
 async function loadScenes(){ let remote = []; if(PC.url){ try{ const r = await fetch(PC.url + '/renderdeck/scenes' + (HID ? '?hidden=1' : ''), {cache:'no-store'}); if(r.ok) remote = (await r.json()).scenes || []; }catch(e){} }
+  envsFrom(remote); remote = remote.filter(KIND);
+  if(!PC.url) envsFrom([]);
   const by = new Map(); for(const s of local().concat(remote)){ const o = by.get(s.id); if(!o || (s.saved || 0) > (o.saved || 0)) by.set(s.id, s); }
   scenesAll = [...by.values()].filter(s => !s.gone).sort((a, b) => (b.saved || 0) - (a.saved || 0)); keepLocal([...by.values()]);
   // made or changed on this phone while the PC was off: onto the PC now
   if(PC.url) for(const s of by.values()){ const r = remote.find(x => x.id===s.id); if(!s.gone && (!r || (r.saved || 0) < (s.saved || 0))) fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:s})}).catch(() => {}); } }
 let saveT = 0;
-function changed(){ if(!SC) return; SC.saved = Date.now(); const L = local().filter(s => s.id!==SC.id); L.push(SC); keepLocal(L); $('#saved').textContent = 'Saving…'; clearTimeout(saveT); saveT = setTimeout(pushScene, 700); dirty = true; }
+function changed(){ if(!SC) return; SC.saved = Date.now(); const L = local().filter(s => s.id!==SC.id); L.push(SC); keepLocal(L); if(ENV){ ENVS = ENVS.filter(x => x.id!==SC.id).concat([SC]); } $('#saved').textContent = 'Saving…'; clearTimeout(saveT); saveT = setTimeout(pushScene, 700); dirty = true; }
 async function pushScene(){ if(!SC) return; if(!PC.url){ $('#saved').textContent = 'On this phone'; return; }
   try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:SC})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
   catch(e){ $('#saved').textContent = 'On this phone'; } }
-function newScene(name){ const s = {id:uid('sc'), name:name || 'Scene ' + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}; scenesAll.unshift(s); openScene(s); changed(); }
-function openScene(s){ SC = s; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); dirty = true; }
+function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : 'sc'), name:name || (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : {}); scenesAll.unshift(s); openScene(s); changed(); }
+function openScene(s){ SC = s; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); dirty = true; }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
 $('#rall').onclick = () => renderAll();
-$('#new').onclick = () => { const n = prompt('Name for the new scene', 'Scene ' + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
-$('#ren').onclick = () => { if(!SC) return; const n = prompt('Rename this scene', SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
-$('#del').onclick = async () => { if(!SC || !confirm('Delete the scene "' + SC.name + '"? The characters in it stay in the library.')) return; const id = SC.id;
+$('#new').onclick = () => { const n = prompt(ENV ? 'Name for the new environment' : 'Name for the new scene', (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
+$('#ren').onclick = () => { if(!SC) return; const n = prompt(ENV ? 'Rename this environment' : 'Rename this scene', SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
+$('#del').onclick = async () => { if(!SC || !confirm(ENV ? 'Delete the environment "' + SC.name + '"? Scenes that use it lose their background.' : 'Delete the scene "' + SC.name + '"? The characters in it stay in the library.')) return; const id = SC.id;
   keepLocal(local().filter(s => s.id!==id).concat([{id, gone:true, saved:Date.now()}])); scenesAll = scenesAll.filter(s => s.id!==id);
   if(PC.url) fetch(PC.url + '/renderdeck/scenes/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, id})}).catch(() => {});
   if(scenesAll.length) openScene(scenesAll[0]); else newScene(); };
@@ -119,6 +130,98 @@ const scene = new THREE.Scene(); scene.background = new THREE.Color(0x2b2e35);
 const grid = new THREE.GridHelper(20, 40, 0x6b707b, 0x474b54); scene.add(grid);
 const axX = new THREE.Mesh(new THREE.BoxGeometry(20, 0.004, 0.012), new THREE.MeshBasicMaterial({color:0xb85c5c})); axX.position.y = 0.002; scene.add(axX);
 const axZ = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.004, 20), new THREE.MeshBasicMaterial({color:0x5c7fb8})); axZ.position.y = 0.002; scene.add(axZ);
+
+// 🌱 the ground (from Jordan's sandbox, 2026-10-27): a tiling texture with others painted over it in 1 m squares; each square becomes a
+// wobbly round blob that melts into its neighbours, the edge broken up by noise and the texture's own light and dark. Four textures:
+// Jordan's grass and planks, and dirt made with maths; 📥 any of them can be swapped for a picture of your own (kept on the PC)
+const GROUNDS = [['🌱 Grass', 'grounds/grass.jpg'], ['🪵 Old planks', 'grounds/old_planks.jpg'], ['🪵 Painted planks', 'grounds/painted_planks.jpg'], ['🟫 Dirt', '']];
+const GN = 40, GPX = 16, GS = GN * GPX; // a 40 x 40 m painting area of 1 m squares, 16 pixels per square in the blend map
+function dirtUrl(){ const N = 512, c = document.createElement('canvas'); c.width = c.height = N; const x = c.getContext('2d'), im = x.createImageData(N, N);
+  const vn = (u, v, f, s) => { const X = u * f, Y = v * f, i = Math.floor(X), j = Math.floor(Y), a = X - i, b = Y - j, sa = a * a * (3 - 2 * a), sb = b * b * (3 - 2 * b), F = Math.round(f);
+    const r = (ii, jj) => { const v2 = Math.sin(((ii % F + F) % F) * 127.1 + ((jj % F + F) % F) * 311.7 + s * 74.7) * 43758.5453; return v2 - Math.floor(v2); };
+    return (r(i, j) * (1 - sa) + r(i + 1, j) * sa) * (1 - sb) + (r(i, j + 1) * (1 - sa) + r(i + 1, j + 1) * sa) * sb; };
+  for(let y = 0; y < N; y++) for(let xx = 0; xx < N; xx++){ const u = xx / N, v = y / N, n = vn(u, v, 4, 1) * 0.45 + vn(u, v, 12, 2) * 0.3 + vn(u, v, 40, 3) * 0.17 + vn(u, v, 120, 4) * 0.08;
+    const peb = vn(u, v, 64, 5), k = (y * N + xx) * 4, l = 0.72 + n * 0.5 + (peb > 0.78 ? 0.18 : 0) - (peb < 0.12 ? 0.1 : 0);
+    im.data[k] = Math.min(255, 128 * l); im.data[k + 1] = Math.min(255, 96 * l); im.data[k + 2] = Math.min(255, 66 * l); im.data[k + 3] = 255; }
+  x.putImageData(im, 0, 0); return c.toDataURL('image/jpeg', 0.9); }
+GROUNDS[3][1] = dirtUrl();
+function noiseTex(){ const N = 256, d = new Uint8Array(N * N * 4); const F = 8, r = (i, j) => { const v = Math.sin(((i % F + F) % F) * 127.1 + ((j % F + F) % F) * 311.7) * 43758.5453; return v - Math.floor(v); };
+  const r2 = (i, j) => { const v = Math.sin(((i % 32 + 32) % 32) * 269.5 + ((j % 32 + 32) % 32) * 183.3) * 43758.5453; return v - Math.floor(v); };
+  const vn = (X, Y, rr) => { const i = Math.floor(X), j = Math.floor(Y), a = X - i, b = Y - j, sa = a * a * (3 - 2 * a), sb = b * b * (3 - 2 * b); return (rr(i, j) * (1 - sa) + rr(i + 1, j) * sa) * (1 - sb) + (rr(i, j + 1) * (1 - sa) + rr(i + 1, j + 1) * sa) * sb; };
+  for(let y = 0; y < N; y++) for(let x = 0; x < N; x++){ const v = vn(x / N * F, y / N * F, r) * 0.7 + vn(x / N * 32, y / N * 32, r2) * 0.3; d.set([v * 255, v * 255, v * 255, 255], (y * N + x) * 4); }
+  const t = new THREE.DataTexture(d, N, N); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = t.minFilter = THREE.LinearFilter; t.needsUpdate = true; return t; }
+const gTex = url => { const t = new THREE.TextureLoader().setCrossOrigin('anonymous').load(url, () => { dirty = true; }); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
+const TX = GROUNDS.map(g => gTex(g[1])), TXU = GROUNDS.map(g => g[1]);
+const splatD = new Uint8Array(GS * GS * 4), splat = new THREE.DataTexture(splatD, GS, GS); splat.magFilter = splat.minFilter = THREE.LinearFilter; splat.needsUpdate = true;
+const GU = {t0:{value:TX[0]}, t1:{value:TX[1]}, t2:{value:TX[2]}, t3:{value:TX[3]}, splat:{value:splat}, noiseT:{value:noiseTex()}, tileM:{value:2}, base:{value:0}, gHalf:{value:GN / 2}};
+const groundMat = new THREE.ShaderMaterial({uniforms:GU,
+  vertexShader:'varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+  fragmentShader:`uniform sampler2D t0, t1, t2, t3, splat, noiseT; uniform float tileM, gHalf; uniform int base; varying vec3 vW;
+    vec4 tx(int i, vec2 uv){ if(i==0) return texture2D(t0, uv); if(i==1) return texture2D(t1, uv); if(i==2) return texture2D(t2, uv); return texture2D(t3, uv); }
+    void main(){ vec2 uv = vW.xz / tileM; vec3 c = tx(base, uv).rgb; vec2 su = (vW.xz + gHalf) / (2.0 * gHalf);
+      float inside = step(0.0, su.x) * step(su.x, 1.0) * step(0.0, su.y) * step(su.y, 1.0); vec4 s = texture2D(splat, su) * inside;
+      float n = texture2D(noiseT, vW.xz / 3.0).r * 0.65 + texture2D(noiseT, vW.xz / 0.7).r * 0.35;
+      for(int i = 0; i < 4; i++){ float m = i==0 ? s.r : i==1 ? s.g : i==2 ? s.b : s.a; if(i==base || m < 0.01) continue;
+        vec3 ti = tx(i, uv).rgb; float lum = dot(ti, vec3(0.3, 0.59, 0.11));
+        float v = m + (n - 0.5) * 0.55 + (lum - 0.25) * 0.5; float w = smoothstep(0.46, 0.56, v);
+        c = mix(c, ti, w) * (1.0 - 0.35 * w * (1.0 - w)); }
+      gl_FragColor = vec4(c, 1.0);
+      #include <colorspace_fragment>
+    }`});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), groundMat); ground.rotation.x = -Math.PI / 2; ground.position.y = -0.002; groundMat.depthWrite = false; ground.renderOrder = -2; ground.visible = false; scene.add(ground);
+const pgrid = new THREE.GridHelper(GN, GN, 0xffffff, 0xffffff); pgrid.material.transparent = true; pgrid.material.opacity = 0.35; pgrid.position.y = 0.004; pgrid.material.depthWrite = false; pgrid.renderOrder = -1; pgrid.visible = false; scene.add(pgrid);
+setTimeout(() => { for(const m of [grid, axX, axZ]){ m.material.depthWrite = false; m.renderOrder = -1; } }); // floor lines never cut through a picture
+const hash = (a, b, s) => { const v = Math.sin(a * 12.9898 + b * 78.233 + s * 37.719) * 43758.5453; return v - Math.floor(v); };
+const GD = () => ENV ? SC && SC.ground : (envOf(SC && SC.env) || {}).ground; // the ground being shown: this environment's, or the scene's environment's
+function buildSplat(){ const gd = GD(); const L = [0, 1, 2, 3].map(() => new Float32Array(GS * GS));
+  if(gd) for(const [key, mat] of Object.entries(gd.cells || {})){ if(mat===gd.base) continue; const [ci, cj] = key.split(',').map(Number), A = L[mat];
+    const cx = (ci + 0.5 + (hash(ci, cj, 1) - 0.5) * 0.35) * GPX, cy = (cj + 0.5 + (hash(ci, cj, 2) - 0.5) * 0.35) * GPX, R = (0.68 + hash(ci, cj, 3) * 0.22) * GPX;
+    const p1 = hash(ci, cj, 4) * 6.28, p2 = hash(ci, cj, 5) * 6.28, soft = 0.25 * GPX, ext = Math.ceil(R * 1.35 + soft);
+    for(let y = Math.max(0, Math.floor(cy - ext)); y < Math.min(GS, Math.ceil(cy + ext)); y++) for(let x = Math.max(0, Math.floor(cx - ext)); x < Math.min(GS, Math.ceil(cx + ext)); x++){
+      const dx = x + 0.5 - cx, dy = y + 0.5 - cy, d = Math.hypot(dx, dy), th = Math.atan2(dy, dx), r = R * (1 + 0.16 * Math.sin(3 * th + p1) + 0.09 * Math.sin(5 * th + p2));
+      const v = Math.max(0, Math.min(1, (r + soft - d) / (2 * soft))), k = y * GS + x; if(v > A[k]) A[k] = v; } }
+  const tmp = new Float32Array(GS * GS), RB = 5;
+  for(const A of L) for(let pass = 0; pass < 2; pass++){ // box blur, across then down
+    for(let y = 0; y < GS; y++){ let acc = 0; for(let x = -RB; x <= RB; x++) acc += A[y * GS + Math.max(0, Math.min(GS - 1, x))];
+      for(let x = 0; x < GS; x++){ tmp[y * GS + x] = acc / (2 * RB + 1); acc += A[y * GS + Math.min(GS - 1, x + RB + 1)] - A[y * GS + Math.max(0, x - RB)]; } }
+    for(let x = 0; x < GS; x++){ let acc = 0; for(let y = -RB; y <= RB; y++) acc += tmp[Math.max(0, Math.min(GS - 1, y)) * GS + x];
+      for(let y = 0; y < GS; y++){ A[y * GS + x] = acc / (2 * RB + 1); acc += tmp[Math.min(GS - 1, y + RB + 1) * GS + x] - tmp[Math.max(0, y - RB) * GS + x]; } } }
+  for(let k = 0; k < GS * GS; k++) for(let c = 0; c < 4; c++) splatD[k * 4 + c] = Math.round(Math.min(1, L[c][k] * 1.25) * 255);
+  splat.needsUpdate = true; dirty = true; }
+const ownTex = t => t && t.pc + '/view?filename=' + encodeURIComponent(t.name) + '&type=input';
+function applyGround(){ const gd = GD(), on = !!(gd && gd.on!==false);
+  ground.visible = on; grid.visible = axX.visible = axZ.visible = !on; scene.background = new THREE.Color(on ? (gd.sky || 0x9cc7e8) : 0x2b2e35); if(!on){ pgrid.visible = false; dirty = true; return; }
+  GU.base.value = gd.base || 0; GU.tileM.value = gd.tileM || 2;
+  for(let i = 0; i < 4; i++){ const u = ownTex((gd.tex || {})[i]) || GROUNDS[i][1]; if(TXU[i]!==u){ TXU[i] = u; TX[i] = gTex(u); GU['t' + i].value = TX[i]; } }
+  buildSplat(); }
+let painting = false, brush = 1, paintMat = 0, pId = null, pendingSplat = false;
+const gOpt = sel => GROUNDS.map((g, i) => `<option value="${i}" ${i===sel ? 'selected' : ''}>${g[0]}${(GD() && (GD().tex || {})[i]) ? ' (yours)' : ''}</option>`).join('');
+// the box above the object list: 🌄 Environment tab = the ground painter and the place words; a scene = which environment it stands in
+function drawEnvBox(){ const box = $('#envbox'); if(!SC){ box.innerHTML = ''; return; }
+  if(!ENV){ const e = envOf(SC.env);
+    box.innerHTML = `<h2>🌄 Environment</h2><select id="envsel" style="width:100%"><option value="">None (a plain floor)</option>${ENVS.map(x => `<option value="${esc(x.id)}" ${x.id===SC.env ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+      <p class="note">${e ? 'Its ground and objects stand behind your characters (locked here: change them in the 🌄 Environment tab).' + (e.words ? ' The place: <b>' + esc(e.words) + '</b>' : ' It has no place words yet.') : SC.env ? '<span class="warn">That environment was deleted (or is on a PC that is off).</span>' : 'Make one in the 🌄 Environment tab: paint a ground, add objects, describe the place.'}</p>`;
+    $('#envsel').onchange = ev => { SC.env = ev.target.value || undefined; buildObjs(); applyGround(); drawEnvBox(); changed(); }; return; }
+  const gd = SC.ground = SC.ground || {base:0, cells:{}, tileM:2, on:true};
+  box.innerHTML = `<h2>🏙 The place</h2><textarea id="ewords" rows="2" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit" placeholder="What is this place? e.g. old library, tall bookshelves, warm lamp light, evening">${esc(SC.words || '')}</textarea>
+    <p class="note">These words paint the background when a scene in it renders (no people, just the place).</p>
+    <h2 style="margin-top:12px">🌱 Ground</h2>
+    <div class="line"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="gon" ${gd.on!==false ? 'checked' : ''} style="min-height:0"> Ground</label><select id="gsel">${gOpt(gd.base || 0)}</select><span class="note" id="gmv" style="margin:0 0 0 auto">${gd.tileM || 2} m per tile</span></div>
+    <div class="line"><input type="range" id="gm" min="0.5" max="8" step="0.5" value="${gd.tileM || 2}"></div>
+    <div class="line"><button id="gpaint" aria-pressed="${painting}">🖌 Paint</button><select id="gpm">${gOpt(paintMat)}<option value="-1" ${paintMat < 0 ? 'selected' : ''}>🧽 Rub out</option></select><select id="gbr">${[1, 2, 3].map(b => `<option value="${b}" ${b===brush ? 'selected' : ''}>${b} m brush</option>`).join('')}</select><button id="gclr">🗑 Clear</button></div>
+    <p class="note">🖌 Paint, then tap or drag on the ground. Squares next to each other melt into one patch. Top view is easiest.</p>
+    <label class="note" style="display:block">📥 Swap the chosen ground for a picture of your own (a seamless texture works best) <input type="file" id="gf" accept="image/*" style="width:100%"></label>`;
+  const q = s => box.querySelector(s);
+  q('#ewords').oninput = ev => { SC.words = ev.target.value; changed(); };
+  q('#gon').onchange = ev => { gd.on = ev.target.checked; applyGround(); changed(); };
+  q('#gsel').onchange = ev => { gd.base = +ev.target.value; applyGround(); changed(); };
+  q('#gm').oninput = ev => { gd.tileM = +ev.target.value; GU.tileM.value = gd.tileM; q('#gmv').textContent = ev.target.value + ' m per tile'; dirty = true; changed(); };
+  q('#gpaint').onclick = () => { painting = !painting; q('#gpaint').setAttribute('aria-pressed', painting); pgrid.visible = painting; if(painting && gd.on===false){ gd.on = true; q('#gon').checked = true; applyGround(); } dirty = true; };
+  q('#gpm').onchange = ev => { paintMat = +ev.target.value; }; q('#gbr').onchange = ev => { brush = +ev.target.value; };
+  q('#gclr').onclick = () => { if(!Object.keys(gd.cells || {}).length || !confirm('Clear every painted patch?')) return; gd.cells = {}; buildSplat(); changed(); };
+  q('#gf').onchange = async ev => { const f = ev.target.files[0]; if(!f) return; if(!PC.url){ alert('Your PCs are off: the picture is kept on the PC, so turn one on first.'); return; }
+    const fd = new FormData(), slot = gd.base || 0; fd.append('image', f, 'rd-ground-' + uid('') + '.' + ((f.name.match(/\.(\w+)$/) || [, 'png'])[1])); fd.append('overwrite', 'true');
+    try{ const j = await (await fetch(PC.url + '/upload/image', {method:'POST', body:fd})).json(); gd.tex = Object.assign({}, gd.tex, {[slot]:{pc:PC.url, name:j.name}}); applyGround(); drawEnvBox(); changed(); }catch(e){ alert('The PC did not take the picture: ' + (e.message || e)); } }; }
 // the cameras: 3D orbits round a point; Front looks along -z (her front faces +z), Side from her right (+x), Top straight down
 const persp = new THREE.PerspectiveCamera(35, 1, 0.05, 200), orbit = Object.assign({az:0.6, el:0.35, d:7, t:new THREE.Vector3(0, 0.9, 0)}, ui.orbit || {}); orbit.t = new THREE.Vector3().fromArray(ui.orbitT || [0, 0.9, 0]); orbit.el = Math.min(orbit.el, 38 * Math.PI / 180); // (the 38° cap, below)
 const ortho = {front:{dir:[0, 0, 1], up:[0, 1, 0], c:[0, 1.2], half:2.2}, side:{dir:[1, 0, 0], up:[0, 1, 0], c:[0, 1.2], half:2.2}, top:{dir:[0, 1, 0], up:[0, 0, -1], c:[0, 0], half:4}};
@@ -228,7 +331,8 @@ const HAIR_MAT = new THREE.MeshToonMaterial({color:0x8f857d, gradientMap:TOON, s
 function bodyMesh(ht, shape, hair, look){ lights(); const w = shapedBody(BODY, ht, shape, hair, HAIR_MAT); if(look) try{ paintLook(w, look); }catch(err){ console.warn('look: ' + err.message); } return w; } // 💇 her mannequin hair when she has one, 🎨 tinted with her look (the depth guide ignores colours)
 const mqMesh = (ht, shape, hair, look) => BODY ? bodyMesh(ht, shape, hair, look) : mannequinMesh(ht);
 function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(); if(!SC) return;
-  for(const ob of SC.objs){ const e = libOf(ob.ref), g = new THREE.Group(), geo = e && e.geo || {wM:1.07, hM:1.87}, isObj = ob.kind==='obj', ht = isObj ? (e && +e.height) || 1 : 1.7;
+  const env = !ENV && envOf(SC.env), envObjs = env ? (env.objs || []).filter(o => !o.hide).map(o => Object.assign({}, o, {id:'env:' + o.id, fromEnv:true, lock:true})) : []; // 🌄 its environment's objects, locked
+  for(const ob of SC.objs.concat(envObjs)){ const e = libOf(ob.ref), g = new THREE.Group(), geo = e && e.geo || {wM:1.07, hM:1.87}, isObj = ob.kind==='obj', ht = isObj ? (e && +e.height) || 1 : 1.7;
     const card = new THREE.Mesh(new THREE.PlaneGeometry(geo.wM, geo.hM), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide}));
     const missing = new THREE.Mesh(new THREE.BoxGeometry(isObj ? ht * 0.6 : 0.5, ht, isObj ? ht * 0.6 : 0.3), new THREE.MeshBasicMaterial({color:0x8a5560, wireframe:true})); missing.position.y = ht / 2;
     const disc = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), new THREE.MeshBasicMaterial({map:discTex, transparent:true, depthWrite:false, color:0x9aa0ad})); disc.rotation.x = -Math.PI / 2; disc.position.y = 0.006;
@@ -240,6 +344,7 @@ function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(
     // 🧍 every library character also has a mannequin (posed and rendered from), and 📸 the picture last rendered from it
     const mq = !isObj && !mesh ? mqMesh(1.7, e && e.body, e && e.hair, e && e.look) : null, shot = mq ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
     if(mq){ mq.visible = false; shot.visible = false; g.add(mq, shot); }
+    if(ob.fromEnv) disc.visible = false; // 🌄 part of the environment: no ring, it can't be picked here
     g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {mesh, mq, shot, ghost, g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
   dirty = true; }
 // the picture for a camera: the camera's direction in her own turn (her front is +z), its height to the nearest of her heights
@@ -322,7 +427,7 @@ const ptr = new Map(); let G = null;
 function viewAt(px, py){ const R = rects(); for(const [k, r] of Object.entries(R)) if(px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h) return {k, r}; return null; }
 function rayFor(k, r, px, py){ const v = new THREE.Vector2(((px - r.x) / r.w) * 2 - 1, -((py - r.y) / r.h) * 2 + 1), rc = new THREE.Raycaster(); placeCams(rects()); poseFor(k); rc.setFromCamera(v, camOf(k)); return rc; }
 function hitObj(k, r, px, py){ const rc = rayFor(k, r, px, py); let best = null;
-  for(const o of OBJ.values()){ if(o.ob.hide) continue; const hs = rc.intersectObjects([o.card, o.disc, o.missing, o.mesh, o.mq, o.shot].filter(m => m && m.visible), true); if(hs.length && (!best || hs[0].distance < best.d)) best = {o, d:hs[0].distance}; }
+  for(const o of OBJ.values()){ if(o.ob.hide || o.ob.fromEnv) continue; const hs = rc.intersectObjects([o.card, o.disc, o.missing, o.mesh, o.mq, o.shot].filter(m => m && m.visible), true); if(hs.length && (!best || hs[0].distance < best.d)) best = {o, d:hs[0].distance}; }
   return best && best.o; }
 const local2 = e => { const b = stage.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
 const SNAP = () => ui.snap ? 0.25 : 0;
@@ -490,7 +595,7 @@ async function renderAll(){ if(!SC) return; const msg = m => { const el = $('#al
     if(modeOf(ob)==='shot'){ if(ob.shot.hi) continue; msg('⤴ ' + nm + ': redrawing her pick 2×…'); await hiRes(ob); ups++; }
     else { msg('🎬 ' + nm + ' has no pick yet: painting 4 to pick from…'); await renderAngle(ob); tries++; } }
   $('#rall').disabled = false; msg(tries ? 'Done. Pick one for ' + tries + (tries > 1 ? ' characters' : ' character') + ' that had none, then ▶ Render all again for high res.' : ups ? 'Done: every pick is high res.' : 'Every pick was already high res.'); }
-function drawList(){ const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
+function drawList(){ const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = ENV ? '<p class="note">No objects yet. ＋ Object adds one from the 📚 Object Library (the 3D chair is there too).</p>' : '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
   box.innerHTML = SC.objs.map(ob => { const e = libOf(ob.ref); return `<div class="row" aria-selected="${ui.sel===ob.id}"><button class="nm" data-sel="${esc(ob.id)}">${ob.kind==='obj' ? '🪑' : '🧍'} ${esc(ob.label || (e && e.name) || '?')} ${e ? (e.trigger ? `<small>${esc(e.trigger)}</small>` : '') : '<small class="warn">not in the library</small>'}</button>
     <button class="ic" data-eye="${esc(ob.id)}" aria-pressed="${!ob.hide}" aria-label="Show or hide">👁</button><button class="ic" data-lock="${esc(ob.id)}" aria-pressed="${!!ob.lock}" aria-label="Lock">🔒</button></div>`; }).join(''); }
 $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) return; const id = b.dataset.sel || b.dataset.eye || b.dataset.lock, ob = SC.objs.find(o => o.id===id); if(!ob) return;
@@ -541,10 +646,22 @@ $('#chars').onclick = e => { const b = e.target.closest('[data-ref]'); if(!b) re
   const n = SC.objs.length, ob = {id:uid('o'), kind:lib.kind==='obj' ? 'obj' : 'char', ref:lib.subfolder, label:nextLabel(lib.name), x:snapV((n % 4) * 0.9 - 1.35 * (n > 0 ? 1 : 0)), y:0, z:snapV(-Math.floor(n / 4) * 0.9), rot:0, s:1};
   SC.objs.push(ob); ui.sel = ob.id; saveUi(); $('#pick').hidden = true; buildObjs(); drawList(); drawSel(); changed(); };
 $('#pickx').onclick = () => { $('#pick').hidden = true; };
+// 🖌 painting the ground (Environment tab): a tap or drag sets the 1 m squares under the finger to the chosen texture
+function paintAt(e){ const gd = GD(); if(!gd) return; const b = stage.getBoundingClientRect(), px = e.clientX - b.left, py = e.clientY - b.top, at = viewAt(px, py); if(!at) return;
+  const rc = rayFor(at.k, at.r, px, py), p = new THREE.Vector3(); if(!rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), p)) return;
+  const ci = Math.floor(p.x + GN / 2), cj = Math.floor(p.z + GN / 2), o = Math.floor((brush - 1) / 2); let ch = false; gd.cells = gd.cells || {};
+  for(let i = ci - o; i < ci - o + brush; i++) for(let j = cj - o; j < cj - o + brush; j++){ if(i < 0 || j < 0 || i >= GN || j >= GN) continue; const k = i + ',' + j;
+    if(paintMat < 0 || paintMat===(gd.base || 0)){ if(k in gd.cells){ delete gd.cells[k]; ch = true; } } else if(gd.cells[k]!==paintMat){ gd.cells[k] = paintMat; ch = true; } }
+  if(ch && !pendingSplat){ pendingSplat = true; requestAnimationFrame(() => { pendingSplat = false; buildSplat(); }); } }
+stage.addEventListener('pointerdown', e => { if(!ENV || !painting || pId!==null) return; e.stopImmediatePropagation(); e.preventDefault(); pId = e.pointerId; stage.setPointerCapture(e.pointerId); paintAt(e); }, true);
+stage.addEventListener('pointermove', e => { if(!ENV || !painting || e.pointerId!==pId) return; e.stopImmediatePropagation(); paintAt(e); }, true);
+const pEnd = e => { if(e.pointerId!==pId) return; e.stopImmediatePropagation(); pId = null; changed(); };
+stage.addEventListener('pointerup', pEnd, true); stage.addEventListener('pointercancel', pEnd, true);
+if(ENV){ $('#add').hidden = true; $('#rall').parentNode.hidden = true; $('#allmsg').hidden = true; document.title = 'Environment'; }
 // ---- start: the library (for the references), the scenes, the last one open
-(async function start(){ $('#msg').textContent = 'Opening your scenes…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
-  SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene('Scene 1');
+(async function start(){ $('#msg').textContent = ENV ? 'Opening your environments…' : 'Opening your scenes…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
+  SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene(ENV ? 'Environment 1' : 'Scene 1');
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-window.SCENE = {get sc(){ return SC; }, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, ground, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
