@@ -59,7 +59,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
   <div class="box" id="selbox"></div>
 </div>
 <div id="pick" hidden><div class="sheet"><div class="bar" style="padding:0"><b style="font-family:var(--display)" id="pickh">📚 Character Library</b><button id="pickx" style="margin-left:auto">✕</button></div><div class="chars" id="chars"></div></div></div>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
 // 🎬 Scene (Jordan 2026-10-27): a 3D space saved as a scene, with Character Library characters placed in it as references.
 // 🪑 Objects from the Object Library go in the same way (kind 'obj'), stood at their real height.
@@ -216,6 +216,48 @@ function mannequinMesh(ht){ lights(); const g = new THREE.Group(), k = ht / 1.7,
     add(new THREE.BoxGeometry(0.09, 0.06, 0.22), 0.06, sx * 0.095, 0.03, 0.045);       // feet
     add(cap(0.042, 0.56), 0.084, sx * 0.25, 1.08, 0, 1, 1, 1, sx * 0.07); }           // arms
   g.scale.setScalar(k); const w = new THREE.Group(); w.add(g); return w; }
+// 🧍 the anime base body (Jordan 2026-10-28): Anime_Female_A from Jordan's own Base Meshes Character Starter Kit. It is a bought
+// model, so it lives on Render (output/3D Bodies), never in this public repo. Rigged, 27k vertices, grey toon; it stands in for
+// the block mannequin whenever Render has it, sized to the character, in one of a few poses
+const BODY_AT = {sub:'3D Bodies', file:'Anime_Female_A.fbx'};
+let BODY = null, bodyTry = null;
+function loadBody(){ if(BODY!==null || bodyTry || !PC.url) return bodyTry; bodyTry = (async () => { try{
+    const [{FBXLoader}, SU] = await Promise.all([import('three/addons/loaders/FBXLoader.js'), import('three/addons/utils/SkeletonUtils.js')]);
+    const o = await new FBXLoader().loadAsync(PC.url + '/view?filename=' + encodeURIComponent(BODY_AT.file) + '&subfolder=' + encodeURIComponent(BODY_AT.sub) + '&type=output');
+    o.updateMatrixWorld(true); const bb = new THREE.Box3().setFromObject(o), k = 1.7 / (bb.max.y - bb.min.y); o.scale.multiplyScalar(k); o.updateMatrixWorld(true);
+    const b2 = new THREE.Box3().setFromObject(o); o.position.set(-(b2.min.x + b2.max.x) / 2, -b2.min.y, -(b2.min.z + b2.max.z) / 2); const root = new THREE.Group(); root.add(o); root.updateMatrixWorld(true);
+    const skin = new THREE.MeshToonMaterial({color:0xd8d2cc, gradientMap:TOON}), eye = new THREE.MeshToonMaterial({color:0x5a5f6b, gradientMap:TOON});
+    let main = null; o.traverse(m => { if(m.isMesh){ m.material = /Eye/i.test(m.name) ? eye : skin; m.frustumCulled = false; if(!main || m.geometry.attributes.position.count > main.geometry.attributes.position.count) main = m; } });
+    // the face points OpenPose wants (nose, eyes, ears), kept in the head bone's own space so they follow her head
+    const bn = bonesOf(root), head = bn.bn_head, p = new THREE.Vector3(), hy = new THREE.Vector3().setFromMatrixPosition(head.matrixWorld).y; let nose = null, earX = 0;
+    for(let i = 0; i < main.geometry.attributes.position.count; i++){ main.getVertexPosition(i, p); p.applyMatrix4(main.matrixWorld);
+      if(p.y > hy && p.y < hy + 0.1 && Math.abs(p.x) < 0.006 && (!nose || p.z > nose.z)) nose = p.clone(); if(p.y > hy && p.y < hy + 0.09) earX = Math.max(earX, Math.abs(p.x)); }
+    nose = nose || new THREE.Vector3(0, hy + 0.03, 0.1); const hz = new THREE.Vector3().setFromMatrixPosition(head.matrixWorld).z, loc = v => head.worldToLocal(v.clone());
+    const face = {nose:loc(nose), eyeR:loc(nose.clone().add(new THREE.Vector3(-0.034, 0.034, -0.022))), eyeL:loc(nose.clone().add(new THREE.Vector3(0.034, 0.034, -0.022))), earR:loc(new THREE.Vector3(-earX * 0.85, nose.y + 0.012, hz)), earL:loc(new THREE.Vector3(earX * 0.85, nose.y + 0.012, hz))};
+    BODY = {root, SU, face}; buildObjs(); drawSel(); }catch(e){ BODY = false; console.warn('No base body on the PC: ' + (e.message || e)); } })(); return bodyTry; }
+// her bones by name (the FBX nests three nodes per bone; the outermost one turns the rest of the arm or leg with it)
+function bonesOf(root){ const m = {}; root.traverse(b => { if(b.isBone && !m[b.name]) m[b.name] = b; }); return m; }
+function bodyMesh(ht){ lights(); const w = new THREE.Group(), c = BODY.SU.clone(BODY.root); c.scale.setScalar(ht / 1.7); w.add(c); w.userData.body = c; c.traverse(b => { if(b.isBone) b.userData.q0 = b.quaternion.clone(); }); return w; }
+const mqMesh = ht => BODY ? bodyMesh(ht) : mannequinMesh(ht);
+// the poses: where each upper arm, forearm, thigh and shin points, in her own frame (front +z, her left +x)
+const POSES = {stand:{name:'Standing', bn_upperarm01L:[0.2, -1, 0.02], bn_forearm01L:[0.12, -1, 0.14], bn_upperarm01R:[-0.2, -1, 0.02], bn_forearm01R:[-0.12, -1, 0.14]},
+  hip:{name:'Hand on hip', bn_upperarm01L:[0.75, -0.7, -0.2], bn_forearm01L:[-0.55, -0.55, 0.25], bn_upperarm01R:[-0.18, -1, 0.04], bn_forearm01R:[-0.08, -1, 0.2], bn_thigh01R:[-0.02, -1, 0.14], bn_shin01R:[-0.03, -1, -0.12]},
+  walk:{name:'Walking', bn_upperarm01L:[0.16, -1, -0.32], bn_forearm01L:[0.08, -1, -0.05], bn_upperarm01R:[-0.16, -1, 0.32], bn_forearm01R:[-0.1, -0.8, 0.55], bn_thigh01L:[0, -1, 0.38], bn_shin01L:[0, -1, 0.06], bn_thigh01R:[0, -1, -0.28], bn_shin01R:[0, -0.85, -0.5]},
+  sit:{name:'Sitting', bn_upperarm01L:[0.16, -1, 0.3], bn_forearm01L:[-0.15, -0.3, 1], bn_upperarm01R:[-0.16, -1, 0.3], bn_forearm01R:[0.15, -0.3, 1], bn_thigh01L:[0.06, -0.08, 1], bn_shin01L:[0, -1, 0.08], bn_thigh01R:[-0.06, -0.08, 1], bn_shin01R:[0, -1, 0.08]},
+  wave:{name:'Waving', bn_upperarm01L:[0.2, -1, 0.02], bn_forearm01L:[0.12, -1, 0.14], bn_upperarm01R:[-0.85, 0.45, 0.12], bn_forearm01R:[-0.12, 1, 0.12]}};
+const NEXT_BONE = {bn_upperarm01L:'bn_forearm01L', bn_upperarm01R:'bn_forearm01R', bn_forearm01L:'bn_handL', bn_forearm01R:'bn_handR', bn_thigh01L:'bn_shin01L', bn_thigh01R:'bn_shin01R', bn_shin01L:'bn_footL', bn_shin01R:'bn_footR'};
+function poseBody(w, key){ const c = w.userData.body; if(!c || w.userData.pose===key) return; w.userData.pose = key; const P = POSES[key] || POSES.stand, bn = bonesOf(c), rq = new THREE.Quaternion();
+  c.position.y = 0; c.traverse(b => { if(b.isBone && b.userData.q0) b.quaternion.copy(b.userData.q0); }); c.updateMatrixWorld(true); c.getWorldQuaternion(rq);
+  const sk = [], v = new THREE.Vector3(); c.traverse(m => { if(m.isSkinnedMesh) sk.push(m); }); const low0 = () => { let lo = 1e9; for(const m of sk) for(let i = 0; i < m.geometry.attributes.position.count; i += 7){ m.getVertexPosition(i, v); v.applyMatrix4(m.matrixWorld); if(v.y < lo) lo = v.y; } return lo; }, lowRest = low0(); // her lowest point, before and after
+  for(const name of Object.keys(NEXT_BONE)){ if(!P[name]) continue; const b = bn[name], n2 = bn[NEXT_BONE[name]]; if(!b || !n2) continue; c.updateMatrixWorld(true);
+    const p0 = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld), cur = new THREE.Vector3().setFromMatrixPosition(n2.matrixWorld).sub(p0).normalize(), want = new THREE.Vector3(...P[name]).normalize().applyQuaternion(rq);
+    const qW = new THREE.Quaternion().setFromUnitVectors(cur, want), pq = new THREE.Quaternion(), bq = new THREE.Quaternion(); b.parent.getWorldQuaternion(pq); b.getWorldQuaternion(bq); b.quaternion.copy(pq.invert().multiply(qW.multiply(bq))); }
+  c.updateMatrixWorld(true); const dy = low0() - lowRest; if(Math.abs(dy) > 1e-4){ c.position.y -= dy / w.getWorldScale(new THREE.Vector3()).y; c.updateMatrixWorld(true); } } // feet back on the floor (sitting drops her)
+// her OpenPose points from her bones (COCO order: nose, neck, right shoulder/elbow/wrist, left ..., right hip/knee/ankle, left ..., eyes, ears)
+function bodyJoints(w){ const c = w.userData.body, bn = bonesOf(c), at = n => new THREE.Vector3().setFromMatrixPosition(bn[n].matrixWorld), f = BODY.face, h = bn.bn_head; c.updateMatrixWorld(true);
+  const sh = s2 => at('bn_upperarm01' + s2).lerp(at('bn_forearm01' + s2), 0.22), sR = sh('R'), sL = sh('L');
+  return [h.localToWorld(f.nose.clone()), sR.clone().lerp(sL, 0.5), sR, at('bn_forearm01R'), at('bn_handR'), sL, at('bn_forearm01L'), at('bn_handL'), at('bn_thigh01R'), at('bn_shin01R'), at('bn_footR'), at('bn_thigh01L'), at('bn_shin01L'), at('bn_footL'),
+    h.localToWorld(f.eyeR.clone()), h.localToWorld(f.eyeL.clone()), h.localToWorld(f.earR.clone()), h.localToWorld(f.earL.clone())]; }
 function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(); if(!SC) return;
   for(const ob of SC.objs){ const e = libOf(ob.ref), g = new THREE.Group(), geo = e && e.geo || {wM:1.07, hM:1.87}, isObj = ob.kind==='obj', ht = isObj ? (e && +e.height) || 1 : 1.7;
     const card = new THREE.Mesh(new THREE.PlaneGeometry(geo.wM, geo.hM), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide}));
@@ -225,9 +267,9 @@ function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(
     const shd = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({map:shadowTex, transparent:true, depthWrite:false})); shd.rotation.x = -Math.PI / 2; shd.position.y = 0.003; const sw = isObj ? ht * 1.15 : 0.75; shd.scale.set(sw, sw, 1); shd.userData.base = sw;
     const ghost = new THREE.Mesh(card.geometry, new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.02, side:THREE.DoubleSide, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2})); ghost.visible = false; ghost.renderOrder = 1; g.add(ghost);
     for(const m of [shd, disc]){ m.renderOrder = -1; m.material.depthTest = false; } // under the pictures, always
-    const mesh = e && e.mesh==='chair' ? chairMesh(ht) : e && e.mesh==='mannequin' ? mannequinMesh(ht) : null; if(mesh) g.add(mesh);
+    const mesh = e && e.mesh==='chair' ? chairMesh(ht) : e && e.mesh==='mannequin' ? mqMesh(ht) : null; if(mesh) g.add(mesh);
     // 🧍 every library character also has a mannequin (posed and rendered from), and 📸 the picture last rendered from it
-    const mq = !isObj && !mesh ? mannequinMesh(1.7) : null, shot = mq ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
+    const mq = !isObj && !mesh ? mqMesh(1.7) : null, shot = mq ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
     if(mq){ mq.visible = false; shot.visible = false; g.add(mq, shot); }
     g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {mesh, mq, shot, ghost, g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
   dirty = true; }
@@ -262,9 +304,9 @@ function poseFor(view){ const cam = view==='persp' ? shotCam : camOf(view), top 
     const sel = ui.sel===ob.id; o.disc.material.color.set(sel ? 0xffd166 : 0x9aa0ad); o.disc.scale.setScalar(s); o.disc.rotation.z = (ob.rot || 0) * D2R;
     o.label.visible = top; if(top){ o.label.position.set(0, 0.03, 0.62 * s); o.label.rotation.set(-Math.PI / 2, 0, 0); }
     o.missing.visible = !o.e; o.card.visible = false; o.ghost.visible = false;
-    if(o.mesh){ o.mesh.scale.setScalar(s); o.mesh.rotation.y = (ob.rot || 0) * D2R; continue; } // 🪑 a 3D model just turns with its spot: right from every angle
+    if(o.mesh){ o.mesh.scale.setScalar(s); o.mesh.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mesh, ob.pose || 'stand'); continue; } // 🪑 a 3D model just turns with its spot: right from every angle
     if(o.mq){ const md = modeOf(ob); o.mq.visible = md==='mq'; o.shot.visible = false;
-      if(md==='mq'){ o.mq.scale.setScalar(s * mqHeight(o) / 1.7); o.mq.rotation.y = (ob.rot || 0) * D2R; continue; }
+      if(md==='mq'){ o.mq.scale.setScalar(s * mqHeight(o) / 1.7); o.mq.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mq, ob.pose || 'stand'); continue; }
       if(md==='shot'){ if(!top) placeShot(o, cam); continue; } }
     if(!o.e || top) continue;
     const a = pickAngle(o, cam); if(!a) continue; if(view==='persp' || k_isP(cam)) window.PICKINFO = window.PICKINFO || {}, window.PICKINFO[ob.id] = {el:a.el, az:Math.atan2(a.dir.x, a.dir.z) - (ob.rot || 0) * D2R, ring:a.ring, ringEl:(o.e.ringEl || RING_EL0)[a.ring], k16:(a.k16 * 22.5) + '°', name:ob.label || o.e.name}; const t = texOf(a.url), cur = o.card.material.map, use = t && t.userData.ready ? t : cur && cur.userData.ready ? cur : null;
@@ -360,7 +402,7 @@ function placeShot(o, cam){ const ob = o.ob, sh = ob.shot, s = ob.s || 1, t = te
   o.shot.scale.set(sh.w * s, sh.h * s * up, 1); o.shot.quaternion.copy(q); o.shot.position.copy(new THREE.Vector3(-(sh.fx - 0.5) * sh.w * s, (sh.fy - 0.5) * sh.h * s * up, 0).applyQuaternion(q));
   const ft = t.userData.feet; if(ft && ft.by > sh.fy) aboveFloor(o.shot.position, d, (ft.by - sh.fy) * sh.h * s * up); }
 // the guides: the mannequin alone through the camera, cropped round it to about a megapixel
-const DEPTH_MAT = new THREE.ShaderMaterial({uniforms:{uNear:{value:1}, uFar:{value:2}}, vertexShader:'varying float vz; void main(){ vec4 p = modelViewMatrix * vec4(position, 1.0); vz = -p.z; gl_Position = projectionMatrix * p; }',
+const DEPTH_MAT = new THREE.ShaderMaterial({uniforms:{uNear:{value:1}, uFar:{value:2}}, vertexShader:'#include <common>\n#include <skinning_pars_vertex>\nvarying float vz; void main(){\n#include <skinbase_vertex>\n#include <begin_vertex>\n#include <skinning_vertex>\nvec4 p = modelViewMatrix * vec4(transformed, 1.0); vz = -p.z; gl_Position = projectionMatrix * p; }',
   fragmentShader:'uniform float uNear; uniform float uFar; varying float vz; void main(){ float d = clamp((uFar - vz) / (uFar - uNear), 0.0, 1.0); gl_FragColor = vec4(vec3(0.2 + 0.8 * d), 1.0); }'});
 // OpenPose's 18 points on the mannequin (front +z, her right is -x), the limbs between them and their colours
 const MQ_J = [[0, 1.585, 0.1], [0, 1.44, 0], [-0.24, 1.37, 0], [-0.255, 1.08, 0], [-0.275, 0.8, 0], [0.24, 1.37, 0], [0.255, 1.08, 0], [0.275, 0.8, 0], [-0.095, 0.93, 0], [-0.095, 0.5, 0], [-0.095, 0.08, 0],
@@ -369,7 +411,7 @@ const OP_LIMBS = [[1, 2], [1, 5], [2, 3], [3, 4], [5, 6], [6, 7], [1, 8], [8, 9]
 const OP_COL = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]];
 function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rects()); poseFor(view);
   const mode0 = ob.mode; ob.mode = 'mq'; poseFor(view); o.g.updateMatrixWorld(true);
-  const box = new THREE.Box3(); o.mq.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) box.expandByObject(m); });
+  const box = new THREE.Box3(); o.mq.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) box.expandByObject(m, true); });
   const cam = cam0.clone(), corners = []; for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z).project(cam));
   const asp = cam.isOrthographicCamera ? (cam.right - cam.left) / (cam.top - cam.bottom) : cam.aspect, FH = 2000, FW = Math.round(FH * asp);
   let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for(const c of corners){ const px = (c.x + 1) / 2 * FW, py = (1 - c.y) / 2 * FH; x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); }
@@ -392,7 +434,7 @@ function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rect
   const camAt = cam.isOrthographicCamera ? null : cam.position, fwd = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R), side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R);
   const toCam = camAt ? camAt.clone().sub(new THREE.Vector3(ob.x, ob.y + 1.5 * k, ob.z)).normalize() : cam.getWorldDirection(new THREE.Vector3()).negate(), face = fwd.dot(toCam), ear = side.dot(toCam);
   const show = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, face > -0.15, face > -0.15, ear < 0.35, ear > -0.35]; show[0] = face > -0.15;
-  const pts = MQ_J.map(j => { const p = toW(j).project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; });
+  const pts = (o.mq.userData.body ? bodyJoints(o.mq) : MQ_J.map(toW)).map(w0 => { const p = w0.clone().project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; });
   const pose = document.createElement('canvas'); pose.width = W; pose.height = H; const px = pose.getContext('2d'); px.fillStyle = '#000'; px.fillRect(0, 0, W, H); const sw = Math.max(4, Math.round(H / 170));
   OP_LIMBS.forEach(([a2, b2], i) => { if(!show[a2] || !show[b2]) return; const [ax, ay] = pts[a2], [bx, by] = pts[b2], len = Math.hypot(bx - ax, by - ay), ang = Math.atan2(by - ay, bx - ax);
     px.fillStyle = `rgba(${OP_COL[i].join(',')},0.6)`; px.beginPath(); px.ellipse((ax + bx) / 2, (ay + by) / 2, len / 2, sw, ang, 0, Math.PI * 2); px.fill(); });
@@ -458,20 +500,25 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
     <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>
     ${!it && e && !e.mesh ? `<div class="lbl">Show her as</div><div class="line">${[['pics', '🖼 Her angles'], ['mq', '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
+      ${modeOf(ob)==='mq' ? poseRow(ob) : ''}
       ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. A PC paints her 4 times over the mannequin with her LoRA, cut out.</p>` : ''}
       <p class="note" id="rmsg">${esc(RMSG.get(ob.id) || '')}</p>
       ${(ob.tries || []).length ? `<div class="tries">${ob.tries.map((t, i) => `<button data-try="${i}" aria-pressed="${!!ob.shot && ob.shot.file===t.file}"><img src="${esc(((tex.get(shotUrl(t)) || {}).userData || {}).thumb || shotUrl(t))}" data-u="${esc(shotUrl(t))}" crossorigin="anonymous" alt="Try ${i + 1}"></button>`).join('')}</div>` : ''}` : ''}
+    ${e && e.mesh==='mannequin' ? poseRow(ob) : ''}
     <div class="line"><button id="snap" aria-pressed="${!!ui.snap}">🧲 Snap to 25 cm</button><button data-act="dup">⧉ Another one</button><button data-act="rm">✕ Take out of the scene</button></div>`;
   $('#snap').onclick = snapTog;
   box.querySelectorAll('[data-n]').forEach(i => i.oninput = () => { if(ob.lock) return; const k = i.dataset.n, v = parseFloat(i.value); if(!isFinite(v)) return; ob[k] = k==='y' ? Math.max(0, v) : v;
     if(k==='rot') $('#rotv').textContent = Math.round(v) + '°'; if(k==='s') $('#sv').textContent = Math.round(v * 100) + '%'; changed(); });
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
   box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
   if(ob.lock) box.querySelectorAll('input').forEach(i => i.disabled = true); }
+// 🧍 her pose (on the base body; the block mannequin only stands)
+const poseRow = ob => BODY ? `<div class="lbl">Pose</div><div class="line">${Object.entries(POSES).map(([k, p]) => `<button data-pose="${k}" aria-pressed="${(ob.pose || 'stand')===k}">${p.name}</button>`).join('')}</div>` : '';
 function snapTog(){ ui.snap = !ui.snap; saveUi(); drawSel(); }
 const nextLabel = base => { const used = new Set((SC.objs || []).map(o => o.label)); if(!used.has(base)) return base; for(let n = 2; ; n++) if(!used.has(base + ' ' + n)) return base + ' ' + n; };
 // ---- ＋ Character / ＋ Object: the library's people or things
@@ -486,9 +533,9 @@ $('#chars').onclick = e => { const b = e.target.closest('[data-ref]'); if(!b) re
   SC.objs.push(ob); ui.sel = ob.id; saveUi(); $('#pick').hidden = true; buildObjs(); drawList(); drawSel(); changed(); };
 $('#pickx').onclick = () => { $('#pick').hidden = true; };
 // ---- start: the library (for the references), the scenes, the last one open
-(async function start(){ $('#msg').textContent = 'Opening your scenes…'; drawViews(); await findPc(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
+(async function start(){ $('#msg').textContent = 'Opening your scenes…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
   SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene('Scene 1');
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-window.SCENE = {get sc(){ return SC; }, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
