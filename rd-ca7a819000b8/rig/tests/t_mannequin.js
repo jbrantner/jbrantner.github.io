@@ -13,6 +13,7 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
     <script>window.GOT = []; addEventListener('message', e => { if(e.data && e.data.rdmq) GOT.push(e.data); });</script></body>`;
   await page.route('https://app.test/host.html', r => r.fulfill({ contentType:'text/html', body:host }));
   await page.route('https://app.test/rig/**', r => { const f = path.join(__dirname, '..', new URL(r.request().url()).pathname.replace('/rig/', '')); r.fulfill({ contentType:f.endsWith('.js') ? 'text/javascript' : 'text/html', body:fs.readFileSync(f) }); });
+  await page.route('https://app.test/tags.txt', r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', 'tags.txt')) }));
   await page.route('https://fonts.googleapis.com/**', r => r.fulfill({ contentType:'text/css', body:'' }));
   await page.route('https://cdn.jsdelivr.net/npm/**', r => { const u = new URL(r.request().url()).pathname.replace('/npm/', ''), m = u.match(/^(@?[^@]+)@([^/]+)\/(.*)$/);
     const f = path.join(DEPS, {'three':'three-0.160.0'}[m[1]] || 'x', 'package', m[3]); if(!fs.existsSync(f)) return r.fulfill({ status:404, body:'' }); r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(f) }); });
@@ -47,9 +48,14 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   await slide('legs', 1.12); await page.waitForTimeout(300); const legY = await fr.evaluate(() => { const V = MQ.her.position.constructor; MQ.her.updateMatrixWorld(true); let b = null; MQ.her.traverse(x => { if(x.isBone && x.name==='bn_thigh01L' && !b) b = x; }); return new V().setFromMatrixPosition(b.matrixWorld).y; });
   ok(legY > 0.93 && Math.abs((await meas()).top - 1.7) < 0.01, '📏 Leg length puts her hips higher at the same height: ' + legY.toFixed(3));
   await slide('cm', 172); ok(await fr.evaluate(() => MQ.ST.shape.cm===172 && /172 cm/.test(document.querySelector('#o_cm').textContent)), 'Height is kept in cm');
-  await fr.click('[data-p="petite"]'); await page.waitForTimeout(300);
-  ok(await fr.evaluate(() => MQ.ST.shape.cm===148 && MQ.ST.shape.bust===0.8 && +document.querySelector('#s_bust').value===0.8), 'a preset (Petite) sets every slider');
-  ok(await fr.evaluate(() => JSON.parse(localStorage.getItem('rd-mq-ch1')).shape.cm===148), 'her shape is remembered for this character');
+  // 🏷 her body is picked as tags; each sets her to that size
+  const tag = t => fr.click(`[data-tag="${t}"]`);
+  await tag('huge breasts'); await page.waitForTimeout(300); const mH = await meas(); await tag('gigantic breasts'); await page.waitForTimeout(300); const mG = await meas();
+  ok(mG.chestZ > mH.chestZ + 0.02 && (await fr.evaluate(() => MQ.ST.shape.bust))===2.3, '🏷 gigantic breasts is bigger again than huge breasts: ' + mH.chestZ + ' / ' + mG.chestZ);
+  await tag('petite'); await tag('small breasts'); await page.waitForTimeout(300);
+  ok(await fr.evaluate(() => MQ.ST.shape.cm===148 && MQ.ST.shape.bust===0.75 && +document.querySelector('#s_bust').value===0.75 && document.querySelector('[data-tag="petite"]').getAttribute('aria-pressed')==='true'), '🏷 petite and small breasts set her size, and the Fine-tune sliders follow');
+  ok(await fr.evaluate(() => /^petite, small breasts/.test(document.querySelector('#desc').value)), '🏷 her body tags are written into the 🎨 box: ' + await fr.evaluate(() => document.querySelector('#desc').value));
+  ok(await fr.evaluate(() => JSON.parse(localStorage.getItem('rd-mq-ch1')).shape.cm===148 && JSON.parse(localStorage.getItem('rd-mq-ch1')).btags.height==='petite'), 'her shape and tags are remembered for this character');
   // she stands in the A pose: hands out from her hips, below the shoulders
   const ap = await fr.evaluate(() => { const J = MQ.B.bodyJoints(MQ.her, MQ.BODY.face); return {handR:[+J[4].x.toFixed(2), +J[4].y.toFixed(2)], hipR:+J[8].x.toFixed(2), shY:+J[2].y.toFixed(2)}; });
   ok(ap.handR[0] < ap.hipR - 0.15 && ap.handR[1] < ap.shY - 0.3, '🅰 she stands in the A pose (hands well out from her hips): ' + JSON.stringify(ap));
@@ -62,15 +68,39 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   for(const st of ['short', 'ponytail', 'twintails', 'bun', 'none', 'long']){ await fr.click('[data-hs="' + st + '"]'); await page.waitForTimeout(150); }
   ok(!logs.length, 'every hair style builds');
   await fr.click('[data-hs="twintails"]'); await fr.click('[data-hb="blunt"]'); await page.waitForTimeout(200);
-  ok(await fr.evaluate(() => MQ.ST.hair.style==='twintails' && MQ.ST.hair.bangs==='blunt' && /twintails/.test(document.querySelector('#autotags').textContent) && /blunt bangs/.test(document.querySelector('#autotags').textContent) && /small breasts/.test(document.querySelector('#autotags').textContent) && /petite/.test(document.querySelector('#autotags').textContent)), '🏷 her body and hair tags are shown: ' + await fr.evaluate(() => document.querySelector('#autotags').textContent));
+  const box = () => fr.evaluate(() => document.querySelector('#desc').value);
+  ok(await fr.evaluate(() => MQ.ST.hair.style==='twintails' && MQ.ST.hair.bangs==='blunt') && /^petite, small breasts, .*twintails.*blunt bangs/.test(await box()) && !/long hair, very long hair/.test(await box()), '🏷 her hair tags replace the old ones in the 🎨 box: ' + await box());
   // 🎨 Paint 4
-  await fr.fill('#desc', 'long silver hair, blue eyes, white blouse, black pleated skirt');
+  await fr.evaluate(() => { const b = document.querySelector('#desc'); b.value += ', silver hair, blue eyes'; b.dispatchEvent(new Event('input')); });
+  await fr.click('[data-hb="parted"]'); await page.waitForTimeout(100);
+  ok(/parted bangs, sidelocks, silver hair, blue eyes$/.test(await box()) && !/blunt bangs/.test(await box()), '…and her own words stay after them: ' + await box());
+  await fr.fill('#desc', 'silver hair, blue eyes, white blouse, black pleated skirt'); await fr.evaluate(() => document.querySelector('#desc').blur());
+  ok(/^petite, .*twintails.*, silver hair, blue eyes, white blouse/.test(await box()), 'typing over her tags puts them back when she leaves the box');
+  // 👗 her look: searchable tag fields; more than one tag, custom tags, two hair colours → multicolored hair, tips = base + tip colour
+  const fld = k => `.fld[data-f="${k}"]`;
+  await fr.click(fld('hcol') + ' input'); ok(await fr.evaluate(k => document.querySelectorAll(k + ' .dd button').length >= 10, fld('hcol')), '👗 Hair › Colour opens its list of colours');
+  await fr.click(fld('hcol') + ' .dd [data-t="black hair"]'); await fr.click(fld('hcol') + ' .dd [data-t="red hair"]');
+  ok(/black hair, red hair, multicolored hair/.test(await box()), '…two colours add multicolored hair: ' + await box());
+  await fr.click(fld('hmix') + ' input'); await fr.click(fld('hmix') + ' .dd [data-t="colored tips"]');
+  ok(/black hair, red hair, multicolored hair, colored tips, red tips/.test(await box()) && /Base: black hair/.test(await fr.textContent(fld('hmix'))), '…Tips: black is her base and red her tips: ' + await box());
+  await fr.click(fld('hmix') + ' [data-swap]'); ok(/red hair, black hair, multicolored hair, colored tips, black tips/.test(await box()) && !/\bred tips/.test(await box()), '…⇄ Swap makes red her base and black her tips: ' + await box());
+  await fr.fill(fld('hcol') + ' input', ''); await page.waitForTimeout(200);
+  ok(await fr.evaluate(k => /1\.5M/.test(document.querySelector(k + ' .dd [data-t="black hair"]').textContent) && /k$/.test(document.querySelector(k + ' .dd [data-t="dark blue hair"]').textContent), fld('hcol')), '🔢 each tag shows how often Danbooru uses it (black hair 1.5M, dark blue hair in k)');
+  await fr.fill(fld('top') + ' input', 'sail'); await page.waitForTimeout(400);
+  ok(await fr.evaluate(k => [...document.querySelectorAll(k + ' .dd button')].some(b => b.dataset.t==='sailor collar'), fld('top')), '👗 Outfit › Top searches the tags: sail finds sailor collar');
+  await fr.fill(fld('top') + ' input', 'pirate'); await page.waitForTimeout(300);
+  ok(await fr.evaluate(k => [...document.querySelectorAll(k + ' .dd button')].some(b => /pirate/.test(b.dataset.t)), fld('top')), '…and the whole Danbooru list (pirate)');
+  await fr.fill(fld('top') + ' input', 'starry cardigan'); await page.waitForTimeout(150); await fr.click(fld('top') + ' .dd .add');
+  await fr.fill(fld('ecol') + ' input', ''); await fr.click(fld('ecol') + ' .dd [data-t="blue eyes"]'); await fr.click(fld('ecol') + ' .dd [data-t="yellow eyes"]');
+  ok(/blue eyes, yellow eyes, heterochromia/.test(await box()) && /starry cardigan/.test(await box()), '…a custom tag goes in as typed; two eye colours add heterochromia: ' + await box());
+  await fr.click(fld('top') + ' .picked [data-x="0"]'); ok(!/starry cardigan/.test(await box()) && /heterochromia, silver hair, white blouse/.test(await box()), '✕ takes a tag off and out of the box, and keeps her own words: ' + await box());
+  await page.mouse.click(5, 5);
   await fr.evaluate(() => { window.RENDER_POLL = 50; }); await fr.click('#paint'); await fr.waitForFunction(() => document.querySelectorAll('#tries [data-u]').length===4, null, {timeout:20000});
   const g = GRAPHS[0], nodes = Object.values(g), by = c => nodes.filter(n => n.class_type===c);
   const lat = by('EmptyLatentImage')[0].inputs, cns = by('SetUnionControlNetType').map(n => n.inputs.type), ap2 = by('ControlNetApplyAdvanced').map(n => [n.inputs.strength, n.inputs.end_percent]), txt = by('CLIPTextEncode')[0].inputs.text;
   ok(UPS.length===2 && lat.width===768 && lat.height===1344 && lat.batch_size===4, '🎨 sends her depth and skeleton, paints 4 at 768×1344: ' + JSON.stringify(lat));
   ok(JSON.stringify(cns)==='["openpose","depth"]' && ap2[0][0]===0.9 && ap2[1][1] <= 0.5, '…skeleton strong, depth light and letting go early: ' + JSON.stringify(ap2));
-  ok(/silver hair/.test(txt) && /twintails/.test(txt) && /small breasts, petite/.test(txt) && /a-pose/.test(txt) && /white background/.test(txt) && !/AFKJ/.test(txt) && !by('LoraLoader').length, '…with her description, the A pose and white round her; no style LoRA when the Character Creator says none: ' + txt.slice(0, 120));
+  ok(/silver hair/.test(txt) && /twintails/.test(txt) && /petite, small breasts/.test(txt) && (txt.match(/twintails/g) || []).length===1 && /a-pose/.test(txt) && /white background/.test(txt) && !/AFKJ/.test(txt) && !by('LoraLoader').length, '…with her description, the A pose and white round her; no style LoRA when the Character Creator says none: ' + txt.slice(0, 120));
   ok(by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && by('FaceDetailer').length===1 && !by('RemoveBackground').length && /mannequin\/ch1/.test(by('SaveImage')[0].inputs.filename_prefix), '…on iriselTouch, faces fixed, kept on white (the turnaround wants white), saved under mannequin/');
   // the depth guide: her alone, light on dark
   const dep = UPS.find(u => /depth/.test(u.name)); ok(dep && dep.body.length > 4000, 'the depth picture is a real picture: ' + (dep && dep.body.length));
@@ -78,7 +108,7 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   // pick and use
   await fr.click('#tries [data-u]:nth-child(2)'); ok(await fr.evaluate(() => !document.querySelector('#use').disabled && /ch1_00001/.test(MQ.ST.pick)), 'tapping one picks it');
   await fr.click('#use'); await page.waitForTimeout(200); const got = await page.evaluate(() => GOT);
-  ok(got.length===1 && got[0].rdmq==='use' && got[0].id==='ch1' && /ch1_00001/.test(got[0].url) && got[0].shape.cm===148 && /silver hair/.test(got[0].desc) && got[0].hair.style==='twintails' && /twintails/.test(got[0].tags), '✓ Use this one hands her picture, shape, hair, tags and description to the Character Creator: ' + JSON.stringify(got[0]).slice(0, 160));
+  ok(got.length===1 && got[0].rdmq==='use' && got[0].id==='ch1' && /ch1_00001/.test(got[0].url) && got[0].shape.cm===148 && got[0].desc==='silver hair, white blouse, black pleated skirt' && got[0].btags.breasts==='small breasts' && got[0].look.hcol.join()==='red hair,black hair' && /heterochromia/.test(got[0].tags) && got[0].hair.style==='twintails' && /twintails/.test(got[0].tags), '✓ Use this one hands her picture, shape, hair, tags and description to the Character Creator: ' + JSON.stringify(got[0]).slice(0, 160));
   await fr.click('#close'); await page.waitForTimeout(200); ok((await page.evaluate(() => GOT)).some(m => m.rdmq==='close'), '✕ Close asks the Character Creator to close it');
   await fr.click('#paint'); await fr.waitForFunction(() => document.querySelectorAll('#tries [data-u]').length===8, null, {timeout:20000}); ok(true, '🎨 Paint 4 more keeps the earlier tries');
   await page.screenshot({path:path.join(__dirname, 'out', 'mannequin.png'), fullPage:true});
