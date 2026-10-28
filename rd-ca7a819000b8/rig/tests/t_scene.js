@@ -78,7 +78,7 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(await page.evaluate(() => SCENE.sc.name==='Scene 1') && store.size===1, '🗑 deletes it and goes back to the other');
   // 🪑 ＋ Object: from the Object Library, stood at its real height
   await page.click('#addo'); await page.waitForSelector('#chars [data-ref]');
-  ok(await page.evaluate(() => /Object Library/.test(document.querySelector('#pickh').textContent) && document.querySelectorAll('#chars [data-ref]').length===2 && /Chair/.test(document.querySelector('#chars').textContent) && /Wooden chair \(3D\)/.test(document.querySelector('#chars').textContent)), '＋ Object lists only the Object Library, plus the built-in 3D chair');
+  ok(await page.evaluate(() => /Object Library/.test(document.querySelector('#pickh').textContent) && document.querySelectorAll('#chars [data-ref]').length===2 && !/Mannequin/.test(document.querySelector('#chars').textContent) && /Chair/.test(document.querySelector('#chars').textContent) && /Wooden chair \(3D\)/.test(document.querySelector('#chars').textContent)), '＋ Object lists only the Object Library, plus the built-in 3D chair');
   await page.click('#chars [data-ref="Object Library/Chair"]'); await page.waitForTimeout(800);
   const ch = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind==='obj'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('front');
     const ft = o.card.material.map && o.card.material.map.userData.feet; return {ref:ob.ref, sel:SCENE.ui.sel===ob.id, list:/🪑 Chair/.test(document.querySelector('#objs').textContent), tall:ft ? o.geo.hM * o.card.scale.y * ft.ht : null, smax:document.querySelector('[data-n="s"]').max}; });
@@ -89,6 +89,11 @@ const DEPS = process.env.RIG_DEPS || '';
     const b = new (o.g.position.constructor)(), box = {min:[9, 9, 9], max:[-9, -9, -9]}; o.mesh.traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); ['x', 'y', 'z'].forEach((k, i) => { box.min[i] = Math.min(box.min[i], bb.min[k]); box.max[i] = Math.max(box.max[i], bb.max[k]); }); } });
     return {card:o.card.visible, low:+(box.min[1] - ob.y).toFixed(3), tall:+(box.max[1] - box.min[1]).toFixed(2), turned:Math.abs(o.mesh.rotation.y - Math.PI / 2) < 1e-6}; });
   ok(!m3.card && Math.abs(m3.low) < 0.005 && Math.abs(m3.tall - 0.9) < 0.03 && m3.turned, '🪑 the built-in 3D chair stands on the floor, 0.9 m tall, no picture card, turns with its spot: ' + JSON.stringify(m3));
+  // 🧍 the built-in mannequin: 1.7 m on the floor
+  await page.click('#add'); await page.waitForSelector('#chars [data-ref="3D/Mannequin"]'); await page.click('#chars [data-ref="3D/Mannequin"]'); await page.waitForTimeout(500);
+  const mq = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id); SCENE.poseFor('persp'); o.g.updateMatrixWorld(true); let lo = 9, hi = -9;
+    o.mesh.traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); lo = Math.min(lo, bb.min.y); hi = Math.max(hi, bb.max.y); } }); return {low:+(lo - ob.y).toFixed(3), tall:+(hi - lo).toFixed(2)}; });
+  ok(Math.abs(mq.low) < 0.005 && Math.abs(mq.tall - 1.7) < 0.03, '🧍 the built-in 3D mannequin is under ＋ Character and stands on the floor, 1.7 m tall: ' + JSON.stringify(mq));
   // 📏 even size: an angle MiniMax drew smaller is scaled up to the others at that height, so she is the same height all round
   const ev = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind!=='obj'); ob.rot = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects());
     const tall = v => { SCENE.poseFor(v); const ft = o.card.material.map && o.card.material.map.userData.feet; return {url:(o.card.material.map.userData.url || o.card.material.map.image && o.card.material.map.image.src || '').match(/eye_\d+/) + '', h:ft ? +(o.geo.hM * o.card.scale.y * ft.ht).toFixed(3) : null}; };
