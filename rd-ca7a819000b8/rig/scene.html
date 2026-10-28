@@ -159,7 +159,11 @@ function feetOf(im){ const w = 96, h = Math.max(1, Math.round(w * im.height / im
   let tx = 0, tn = 0; for(let y = Math.round(top + (bot - top) * 0.35); y <= Math.round(top + (bot - top) * 0.65); y++) for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ tx += q; tn++; }
   const low = []; for(let q = 0; q < w; q++) for(let y = bot; y >= bot - Math.round((bot - top) * 0.08); y--) if(a[(y * w + q) * 4 + 3] > 128){ low.push(y); break; } low.sort((p, q) => p - q);
   let l0 = w, r0 = -1; for(let y = top; y <= bot; y++) for(let q = 0; q < w; q++) if(a[(y * w + q) * 4 + 3] > 128){ if(q < l0) l0 = q; if(q > r0) r0 = q; }
-  return {wd:Math.max(0, r0 - l0 + 1) / w, ax:tn ? (tx / tn + 0.5) / w : 0.5, ay:low.length ? (low[low.length >> 1] + 1) / h : (bot + 1) / h, ht:(bot + 1 - top) / h}; }
+  return {wd:Math.max(0, r0 - l0 + 1) / w, ax:tn ? (tx / tn + 0.5) / w : 0.5, ay:low.length ? (low[low.length >> 1] + 1) / h : (bot + 1) / h, by:(bot + 1) / h, ht:(bot + 1 - top) / h}; }
+// ⬆ never under the floor (Jordan 2026-10-28): what a picture shows below its feet point (the nearer foot, from above) would sit
+// under the ground on an upright card, so the card slides toward the camera along its line of sight until its lowest part
+// touches the floor: the camera sees exactly the same picture, and from anywhere else she stands on the floor
+function aboveFloor(pos, d, dy){ if(!(dy > 0.001)) return pos; const t = d.y > 0.02 ? Math.min(dy / d.y, 2) : 0; pos.addScaledVector(d, t); pos.y += Math.max(0, dy - t * d.y); return pos; }
 const texOf = (url, cut) => { if(!url) return null; if(!tex.has(url)){ const t = loader.load(url, () => { if(cut) cutWhite(t); t.userData.feet = feetOf(t.image); t.userData.ready = true; dirty = true; }, undefined, () => { t.userData.bad = true; dirty = true; }); t.colorSpace = THREE.SRGBColorSpace; t.userData.url = url; tex.set(url, t); } return tex.get(url); };
 // ✂ a rendered picture that came back on white (a PC without BiRefNet) is cut out here: the white that touches the edges goes
 function cutWhite(t){ const im = t.image, W = im.naturalWidth || im.width, H = im.naturalHeight || im.height; if(!W || !H) return;
@@ -280,6 +284,7 @@ function poseFor(view){ const cam = view==='persp' ? shotCam : camOf(view), top 
     let q; if(window.LOCK_CARDS) q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cdir, new THREE.Vector3(), Math.abs(cdir.y) > 0.99 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0)));
     else { const up = 1 / Math.max(0.3, Math.sqrt(Math.max(0, 1 - cdir.y * cdir.y))); q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(cdir.x, cdir.z)); o.card.scale.y *= up; off.y *= up; }
     o.card.quaternion.copy(q); o.card.position.copy(off.applyQuaternion(q));
+    if(!o.isObj && ft && ft.by > fy) aboveFloor(o.card.position, cdir, (ft.by - fy) * o.geo.hM * o.card.scale.y);
     // ⟷ blend: the neighbouring picture drawn over this one, as strong as the camera is close to its switch point
     const gm = o.ghost.material, t2 = a.url2 && a.w2 > 0.003 ? texOf(a.url2) : null;
     if(t2 && t2.userData.ready){ if(gm.map!==t2){ gm.map = t2; gm.needsUpdate = true; } o.ghost.visible = true; o.ghost.position.copy(o.card.position); o.ghost.quaternion.copy(o.card.quaternion); o.ghost.scale.copy(o.card.scale); gm.opacity = a.w2; dirty = dirty; } } }
@@ -352,7 +357,8 @@ function placeShot(o, cam){ const ob = o.ob, sh = ob.shot, s = ob.s || 1, t = te
   if(o.shot.material.map!==t){ o.shot.material.map = t; o.shot.material.needsUpdate = true; } o.shot.visible = true;
   const p = new THREE.Vector3(ob.x, ob.y + mqHeight(o) * s / 2, ob.z), d = cam.isOrthographicCamera ? cam.getWorldDirection(new THREE.Vector3()).negate() : cam.position.clone().sub(p).normalize();
   const up = 1 / Math.max(0.3, Math.sqrt(Math.max(0, 1 - d.y * d.y))), q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(d.x, d.z));
-  o.shot.scale.set(sh.w * s, sh.h * s * up, 1); o.shot.quaternion.copy(q); o.shot.position.copy(new THREE.Vector3(-(sh.fx - 0.5) * sh.w * s, (sh.fy - 0.5) * sh.h * s * up, 0).applyQuaternion(q)); }
+  o.shot.scale.set(sh.w * s, sh.h * s * up, 1); o.shot.quaternion.copy(q); o.shot.position.copy(new THREE.Vector3(-(sh.fx - 0.5) * sh.w * s, (sh.fy - 0.5) * sh.h * s * up, 0).applyQuaternion(q));
+  const ft = t.userData.feet; if(ft && ft.by > sh.fy) aboveFloor(o.shot.position, d, (ft.by - sh.fy) * sh.h * s * up); }
 // the guides: the mannequin alone through the camera, cropped round it to about a megapixel
 const DEPTH_MAT = new THREE.ShaderMaterial({uniforms:{uNear:{value:1}, uFar:{value:2}}, vertexShader:'varying float vz; void main(){ vec4 p = modelViewMatrix * vec4(position, 1.0); vz = -p.z; gl_Position = projectionMatrix * p; }',
   fragmentShader:'uniform float uNear; uniform float uFar; varying float vz; void main(){ float d = clamp((uFar - vz) / (uFar - uNear), 0.0, 1.0); gl_FragColor = vec4(vec3(0.2 + 0.8 * d), 1.0); }'});
