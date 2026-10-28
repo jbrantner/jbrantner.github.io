@@ -81,8 +81,19 @@ export function hairTags(h0){ const h = hairOf(h0), e = ends(h), t = [];
   if(h.style==='bun') t.push('hair bun, single hair bun'); if(h.style==='none') return '';
   t.push({choppy:'hair between eyes', blunt:'blunt bangs', parted:'parted bangs', none:'forehead'}[h.bangs]); if(h.bangs==='none' && ['ponytail', 'bun'].includes(h.style)) t.push('hair pulled back');
   if(h.side && !['short'].includes(h.style)) t.push('sidelocks'); return t.join(', '); }
-export function bodyTags(s){ const x = Object.assign({cm:160, head:1, shoulders:1, bust:1, waist:1, hips:1, thighs:1, arms:1, legs:1}, s || {}), t = [];
-  t.push(x.bust < 0.65 ? 'flat chest' : x.bust < 0.85 ? 'small breasts' : x.bust < 1.15 ? 'medium breasts' : x.bust < 1.45 ? 'large breasts' : x.bust < 1.8 ? 'huge breasts' : 'gigantic breasts');
-  if(x.cm <= 150) t.push('petite'); if(x.cm >= 175) t.push('tall female'); if(x.waist <= 0.88) t.push('narrow waist'); if(x.hips >= 1.15) t.push('wide hips'); if(x.thighs >= 1.15) t.push('thick thighs');
-  if(x.bust >= 1.3 && x.hips >= 1.1) t.push('curvy'); if(x.legs >= 1.07) t.push('long legs'); if(x.arms >= 1.15 && x.shoulders >= 1.08) t.push('toned'); if(x.thighs <= 0.85 && x.arms <= 0.88 && x.waist <= 0.92) t.push('skinny');
-  return t.join(', '); }
+// 🏷 her body picked as tags (Jordan 2026-10-28: "instead of sliders you have tags"): each group is one choice ('' = not said),
+// and each tag sets the mannequin to that size; later groups win where two set the same part
+export const BODY_GROUPS = [
+  ['height', 'Height', [['petite', {cm:148, head:1.06, legs:0.97}], ['', {}, 'Average'], ['tall female', {cm:176, head:0.96, legs:1.05}]], ''],
+  ['build', 'Build', [['', {}, 'Average'], ['skinny', {arms:0.82, waist:0.88, thighs:0.82, hips:0.92}], ['curvy', {waist:0.9, hips:1.15, thighs:1.12}], ['toned', {shoulders:1.08, arms:1.15, thighs:1.08, waist:0.95}], ['plump', {waist:1.2, hips:1.15, thighs:1.25, arms:1.2}]], ''],
+  ['breasts', 'Breasts', [['flat chest', {bust:0.5}], ['small breasts', {bust:0.75}], ['medium breasts', {bust:1}], ['large breasts', {bust:1.3}], ['huge breasts', {bust:1.7}], ['gigantic breasts', {bust:2.3}]], 'medium breasts'],
+  ['waist', 'Waist', [['', {}], ['narrow waist', {waist:0.84}]], ''],
+  ['hips', 'Hips', [['', {}], ['wide hips', {hips:1.22}]], ''],
+  ['thighs', 'Thighs', [['', {}], ['thick thighs', {thighs:1.28}]], ''],
+  ['legs', 'Legs', [['', {}], ['long legs', {legs:1.08}]], '']];
+export const btagsOf = t => Object.assign(Object.fromEntries(BODY_GROUPS.map(([k, , , d]) => [k, d])), t || {});
+export function shapeFromTags(t0){ const t = btagsOf(t0), s = {cm:160, head:1, shoulders:1, bust:1, waist:1, hips:1, thighs:1, arms:1, legs:1};
+  for(const [k, , opts] of BODY_GROUPS){ const o = opts.find(x => x[0]===t[k]); if(o) Object.assign(s, o[1]); } return s; }
+export const bodyTags = t0 => { const t = btagsOf(t0); return BODY_GROUPS.map(([k]) => t[k]).filter(Boolean).join(', '); };
+// every tag this page may write into the prompt box, so a change takes the old ones out wherever they are
+export const AUTO_TAGS = new Set(BODY_GROUPS.flatMap(([, , o]) => o.map(x => x[0])).concat(['medium hair', 'long hair', 'very long hair', 'short hair', 'bob cut', 'short ponytail', 'ponytail', 'short twintails', 'twintails', 'hair bun', 'single hair bun', 'hair between eyes', 'blunt bangs', 'parted bangs', 'forehead', 'hair pulled back', 'sidelocks']).filter(Boolean));

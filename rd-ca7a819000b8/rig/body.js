@@ -3,7 +3,7 @@
 // Rigged, 27k vertices, grey toon, normalised to 1.7 m with her feet on y = 0 and her front +z (her left is +x).
 import * as THREE from 'three';
 import {addHair} from './hair.js';
-export {HAIR0, HAIR_STYLES, BANG_STYLES, hairOf, hairTags, bodyTags} from './hair.js';
+export {HAIR0, HAIR_STYLES, BANG_STYLES, hairOf, hairTags, bodyTags, BODY_GROUPS, btagsOf, shapeFromTags, AUTO_TAGS} from './hair.js';
 export const BODY_AT = {sub:'3D Bodies', file:'Anime_Female_A.fbx'};
 export const TOON = (() => { const t = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 175, 175, 175, 255, 255, 255, 255, 255]), 3, 1); t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; })();
 // her bones by name (the FBX nests three nodes per bone; the outermost one turns the rest of the arm or leg with it)
@@ -33,7 +33,7 @@ export async function loadBody(url, mats){
 // proportions"). Each is a factor on the kit's own body (1 = as she comes), baked into a copy of her mesh and bones, so she still
 // poses with her own rig. Height is her real height (cm) and only sizes her; the rest are her shape at that height.
 export const SHAPE0 = {cm:160, head:1, shoulders:1, bust:1, waist:1, hips:1, thighs:1, arms:1, legs:1};
-export const SHAPE_KEYS = [['cm', 'Height', 135, 190, 1, 'cm'], ['head', 'Head', 0.8, 1.3, 0.01], ['shoulders', 'Shoulders', 0.8, 1.25, 0.01], ['bust', 'Bust', 0.5, 2, 0.01], ['waist', 'Waist', 0.75, 1.3, 0.01],
+export const SHAPE_KEYS = [['cm', 'Height', 135, 190, 1, 'cm'], ['head', 'Head', 0.8, 1.3, 0.01], ['shoulders', 'Shoulders', 0.8, 1.25, 0.01], ['bust', 'Bust', 0.5, 2.6, 0.01], ['waist', 'Waist', 0.75, 1.3, 0.01],
   ['hips', 'Hips', 0.8, 1.35, 0.01], ['thighs', 'Thighs', 0.75, 1.4, 0.01], ['arms', 'Arms', 0.75, 1.35, 0.01], ['legs', 'Leg length', 0.85, 1.15, 0.01]];
 export const SHAPE_PRESETS = {petite:{name:'Petite', cm:148, head:1.08, shoulders:0.94, bust:0.8, waist:0.95, hips:0.95, thighs:0.95, arms:0.92, legs:0.96},
   average:{name:'Average', ...SHAPE0}, curvy:{name:'Curvy', cm:163, head:1, shoulders:1, bust:1.55, waist:0.92, hips:1.18, thighs:1.2, arms:1.05, legs:1},
