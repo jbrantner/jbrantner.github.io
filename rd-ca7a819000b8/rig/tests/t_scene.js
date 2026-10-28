@@ -27,7 +27,8 @@ const DEPS = process.env.RIG_DEPS || '';
     if(u.pathname==='/renderdeck/scenes') return r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify({scenes:[...store.values()]}) });
     if(u.pathname==='/renderdeck/scenes/save'){ const b = JSON.parse(r.request().postData()); store.set(b.scene.id, b.scene); saves++; return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
     if(u.pathname==='/renderdeck/scenes/delete'){ store.delete(JSON.parse(r.request().postData()).id); return r.fulfill({ contentType:'application/json', headers:H, body:'{"ok":true}' }); }
-    if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
+    if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:u.searchParams.get('filename')==='eye_090.png' && u.searchParams.get('subfolder')==='Character Library/Ellie' // MiniMax drew this angle smaller
+      ? '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="85" y="100" width="30" height="240" fill="#c33"/></svg>' : '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
     r.fulfill({ status:404, headers:H, body:'' }); });
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
   await page.goto('https://app.test/rig/scene.html');
@@ -88,6 +89,11 @@ const DEPS = process.env.RIG_DEPS || '';
     const b = new (o.g.position.constructor)(), box = {min:[9, 9, 9], max:[-9, -9, -9]}; o.mesh.traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); ['x', 'y', 'z'].forEach((k, i) => { box.min[i] = Math.min(box.min[i], bb.min[k]); box.max[i] = Math.max(box.max[i], bb.max[k]); }); } });
     return {card:o.card.visible, low:+(box.min[1] - ob.y).toFixed(3), tall:+(box.max[1] - box.min[1]).toFixed(2), turned:Math.abs(o.mesh.rotation.y - Math.PI / 2) < 1e-6}; });
   ok(!m3.card && Math.abs(m3.low) < 0.005 && Math.abs(m3.tall - 0.9) < 0.03 && m3.turned, '🪑 the built-in 3D chair stands on the floor, 0.9 m tall, no picture card, turns with its spot: ' + JSON.stringify(m3));
+  // 📏 even size: an angle MiniMax drew smaller is scaled up to the others at that height, so she is the same height all round
+  const ev = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.kind!=='obj'); ob.rot = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects());
+    const tall = v => { SCENE.poseFor(v); const ft = o.card.material.map && o.card.material.map.userData.feet; return {url:(o.card.material.map.userData.url || o.card.material.map.image && o.card.material.map.image.src || '').match(/eye_\d+/) + '', h:ft ? +(o.geo.hM * o.card.scale.y * ft.ht).toFixed(3) : null}; };
+    return {front:tall('front'), side:tall('side')}; });
+  ok(ev.front.h && ev.side.h && /090/.test(ev.side.url) && Math.abs(ev.front.h - ev.side.h) < 0.01, '📏 an angle drawn smaller is shown the same height as the rest: ' + JSON.stringify(ev));
   // 🖼 a card off to the side stands upright and leans with the perspective like the 3D chair beside it (Jordan 2026-10-28)
   const fl = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Object Library/Chair'); ob.x = 2.5; ob.z = 0; const o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('persp');
     const cam = SCENE.camOf('persp'), V = o.card.position.constructor, up = new V(0, 1, 0).applyQuaternion(o.card.quaternion), P = (x, y) => o.card.localToWorld(new V(x, y, 0)).project(cam);
