@@ -38,6 +38,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 .grid3 label,.lbl{display:block;font-size:12px;color:var(--soft);margin:6px 0 2px}
 .grid3 input{width:100%}
 .line{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.tries{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}.tries button{padding:0;min-height:0;background:#fff;border:2px solid var(--line);border-radius:8px;overflow:hidden}.tries button[aria-pressed=true]{border-color:var(--sel)}.tries img{width:100%;display:block;aspect-ratio:3/4;object-fit:contain}
 .line input[type=range]{flex:1;min-width:120px;accent-color:var(--accent)}
 #pick{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;z-index:5}
 #pick[hidden]{display:none}
@@ -196,7 +197,10 @@ function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(
     const ghost = new THREE.Mesh(card.geometry, new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.02, side:THREE.DoubleSide, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2})); ghost.visible = false; ghost.renderOrder = 1; g.add(ghost);
     for(const m of [shd, disc]){ m.renderOrder = -1; m.material.depthTest = false; } // under the pictures, always
     const mesh = e && e.mesh==='chair' ? chairMesh(ht) : e && e.mesh==='mannequin' ? mannequinMesh(ht) : null; if(mesh) g.add(mesh);
-    g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {mesh, ghost, g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
+    // 🧍 every library character also has a mannequin (posed and rendered from), and 📸 the picture last rendered from it
+    const mq = !isObj && !mesh ? mannequinMesh(1.7) : null, shot = mq ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
+    if(mq){ mq.visible = false; shot.visible = false; g.add(mq, shot); }
+    g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {mesh, mq, shot, ghost, g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
   dirty = true; }
 // the picture for a camera: the camera's direction in her own turn (her front is +z), its height to the nearest of her heights
 function pickAngle(o, cam){ const ob = o.ob, p = new THREE.Vector3(ob.x, ob.y + (o.isObj ? o.ht : o.geo.hM) * (ob.s || 1) * 0.5, ob.z);
@@ -228,6 +232,9 @@ function poseFor(view){ const cam = camOf(view), top = view==='top';
     o.label.visible = top; if(top){ o.label.position.set(0, 0.03, 0.62 * s); o.label.rotation.set(-Math.PI / 2, 0, 0); }
     o.missing.visible = !o.e; o.card.visible = false; o.ghost.visible = false;
     if(o.mesh){ o.mesh.scale.setScalar(s); o.mesh.rotation.y = (ob.rot || 0) * D2R; continue; } // 🪑 a 3D model just turns with its spot: right from every angle
+    if(o.mq){ const md = modeOf(ob); o.mq.visible = md==='mq'; o.shot.visible = false;
+      if(md==='mq'){ o.mq.scale.setScalar(s * mqHeight(o) / 1.7); o.mq.rotation.y = (ob.rot || 0) * D2R; continue; }
+      if(md==='shot'){ if(!top) placeShot(o, cam); continue; } }
     if(!o.e || top) continue;
     const a = pickAngle(o, cam); if(!a) continue; if(view==='persp' || k_isP(cam)) window.PICKINFO = window.PICKINFO || {}, window.PICKINFO[ob.id] = {el:a.el, az:Math.atan2(a.dir.x, a.dir.z) - (ob.rot || 0) * D2R, ring:a.ring, ringEl:(o.e.ringEl || RING_EL0)[a.ring], k16:(a.k16 * 22.5) + '°', name:ob.label || o.e.name}; const t = texOf(a.url), cur = o.card.material.map, use = t && t.userData.ready ? t : cur && cur.userData.ready ? cur : null;
     if(o.card.material.map!==use){ o.card.material.map = use; o.card.material.needsUpdate = true; } if(!use) continue; o.card.visible = true;
@@ -268,7 +275,7 @@ const ptr = new Map(); let G = null;
 function viewAt(px, py){ const R = rects(); for(const [k, r] of Object.entries(R)) if(px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h) return {k, r}; return null; }
 function rayFor(k, r, px, py){ const v = new THREE.Vector2(((px - r.x) / r.w) * 2 - 1, -((py - r.y) / r.h) * 2 + 1), rc = new THREE.Raycaster(); placeCams(rects()); poseFor(k); rc.setFromCamera(v, camOf(k)); return rc; }
 function hitObj(k, r, px, py){ const rc = rayFor(k, r, px, py); let best = null;
-  for(const o of OBJ.values()){ if(o.ob.hide) continue; const hs = rc.intersectObjects([o.card, o.disc, o.missing, o.mesh].filter(m => m && m.visible), !!o.mesh); if(hs.length && (!best || hs[0].distance < best.d)) best = {o, d:hs[0].distance}; }
+  for(const o of OBJ.values()){ if(o.ob.hide) continue; const hs = rc.intersectObjects([o.card, o.disc, o.missing, o.mesh, o.mq, o.shot].filter(m => m && m.visible), true); if(hs.length && (!best || hs[0].distance < best.d)) best = {o, d:hs[0].distance}; }
   return best && best.o; }
 const local2 = e => { const b = stage.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
 const SNAP = () => ui.snap ? 0.25 : 0;
@@ -301,6 +308,100 @@ stage.addEventListener('wheel', e => { e.preventDefault(); const [px, py] = loca
   if(at.k==='persp') orbit.d = Math.max(1, Math.min(60, orbit.d * f)); else ortho[at.k].half = Math.max(0.3, Math.min(40, ortho[at.k].half * f)); saveCams(); dirty = true; }, {passive:false});
 let camT = 0; function saveCams(){ clearTimeout(camT); camT = setTimeout(() => { ui.orbit = {az:orbit.az, el:orbit.el, d:orbit.d}; ui.orbitT = orbit.t.toArray(); ui.ortho = Object.fromEntries(Object.entries(ortho).map(([k, o]) => [k, {c:o.c, half:o.half}])); saveUi(); }, 300); }
 // ---- the object list (layers) and the selected one's numbers
+// ---- 🎬 render this angle (Jordan 2026-10-28): the mannequin is the truth for where she stands, her pose and her size; a PC
+// paints her over it from the camera you are looking through (depth + skeleton of the mannequin alone, on white, her LoRA),
+// four tries, cut out; the one picked stands in the scene as her picture from then on, until you go back to the mannequin
+const BUSY = new Set(), RMSG = new Map(); // a render on its way, and what it last said, per character (not saved with the scene)
+const modeOf = ob => ob.mode==='mq' ? 'mq' : ob.mode==='shot' && ob.shot ? 'shot' : 'pics';
+const mqHeight = o => { const m1 = o.e && o.e.views && o.e.views.length ? ringMed(o, 1) : 0; return m1 ? m1 * o.geo.hM : 1.7; };
+const shotUrl = sh => sh.pc + '/view?filename=' + encodeURIComponent(sh.file) + '&subfolder=' + encodeURIComponent(sh.sub || '') + '&type=output';
+// the rendered picture stands where the mannequin stood: upright, turned to the camera from its spot, as tall on screen as when it was made
+function placeShot(o, cam){ const ob = o.ob, sh = ob.shot, s = ob.s || 1, t = texOf(shotUrl(sh)); if(!t || !t.userData.ready) return;
+  if(o.shot.material.map!==t){ o.shot.material.map = t; o.shot.material.needsUpdate = true; } o.shot.visible = true;
+  const p = new THREE.Vector3(ob.x, ob.y + mqHeight(o) * s / 2, ob.z), d = cam.isOrthographicCamera ? cam.getWorldDirection(new THREE.Vector3()).negate() : cam.position.clone().sub(p).normalize();
+  const up = 1 / Math.max(0.3, Math.sqrt(Math.max(0, 1 - d.y * d.y))), q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(d.x, d.z));
+  o.shot.scale.set(sh.w * s, sh.h * s * up, 1); o.shot.quaternion.copy(q); o.shot.position.copy(new THREE.Vector3(-(sh.fx - 0.5) * sh.w * s, (sh.fy - 0.5) * sh.h * s * up, 0).applyQuaternion(q)); }
+// the guides: the mannequin alone through the camera, cropped round it to about a megapixel
+const DEPTH_MAT = new THREE.ShaderMaterial({uniforms:{uNear:{value:1}, uFar:{value:2}}, vertexShader:'varying float vz; void main(){ vec4 p = modelViewMatrix * vec4(position, 1.0); vz = -p.z; gl_Position = projectionMatrix * p; }',
+  fragmentShader:'uniform float uNear; uniform float uFar; varying float vz; void main(){ float d = clamp((uFar - vz) / (uFar - uNear), 0.0, 1.0); gl_FragColor = vec4(vec3(0.2 + 0.8 * d), 1.0); }'});
+// OpenPose's 18 points on the mannequin (front +z, her right is -x), the limbs between them and their colours
+const MQ_J = [[0, 1.585, 0.1], [0, 1.44, 0], [-0.24, 1.37, 0], [-0.255, 1.08, 0], [-0.275, 0.8, 0], [0.24, 1.37, 0], [0.255, 1.08, 0], [0.275, 0.8, 0], [-0.095, 0.93, 0], [-0.095, 0.5, 0], [-0.095, 0.08, 0],
+  [0.095, 0.93, 0], [0.095, 0.5, 0], [0.095, 0.08, 0], [-0.035, 1.61, 0.085], [0.035, 1.61, 0.085], [-0.095, 1.585, 0], [0.095, 1.585, 0]];
+const OP_LIMBS = [[1, 2], [1, 5], [2, 3], [3, 4], [5, 6], [6, 7], [1, 8], [8, 9], [9, 10], [1, 11], [11, 12], [12, 13], [1, 0], [0, 14], [14, 16], [0, 15], [15, 17]];
+const OP_COL = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]];
+function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rects()); poseFor(view);
+  const mode0 = ob.mode; ob.mode = 'mq'; poseFor(view); o.g.updateMatrixWorld(true);
+  const box = new THREE.Box3(); o.mq.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) box.expandByObject(m); });
+  const cam = cam0.clone(), corners = []; for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z).project(cam));
+  const asp = cam.isOrthographicCamera ? (cam.right - cam.left) / (cam.top - cam.bottom) : cam.aspect, FH = 2000, FW = Math.round(FH * asp);
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for(const c of corners){ const px = (c.x + 1) / 2 * FW, py = (1 - c.y) / 2 * FH; x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); }
+  let cw = (x1 - x0) * 1.16, ch = (y1 - y0) * 1.1; cw = Math.max(cw, ch * 0.55); const a = cw / ch, // (never narrower than about 9:16, which Illustrious paints best)
+    H = Math.max(512, Math.round(Math.sqrt(1048576 / a) / 64) * 64), W = Math.max(384, Math.round(H * a / 64) * 64);
+  if(cw / ch < W / H) cw = ch * W / H; else ch = cw * H / W; const cx = (x0 + x1) / 2 - cw / 2, cy = (y0 + y1) / 2 - ch / 2;
+  cam.setViewOffset(FW, FH, cx, cy, cw, ch); cam.updateProjectionMatrix(); cam.updateMatrixWorld(true);
+  // depth: only the mannequin (its ink outline hidden), near bright, far dark, nothing black
+  const hid = []; scene.traverse(m => { if(m!==scene && m.visible && !(m===o.g || o.mq===m || isIn(m, o.mq) || isAnc(m, o.g))){ m.visible = false; hid.push(m); } });
+  o.mq.traverse(m => { if(m.isMesh && m.material.side===THREE.BackSide && m.visible){ m.visible = false; hid.push(m); } }); [o.disc, o.label, o.card, o.ghost, o.shot].forEach(m => { if(m && m.visible){ m.visible = false; hid.push(m); } });
+  const dz = []; for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z]){ const v = new THREE.Vector3(x, y, z).applyMatrix4(cam.matrixWorldInverse); dz.push(-v.z); }
+  DEPTH_MAT.uniforms.uNear.value = Math.min(...dz); DEPTH_MAT.uniforms.uFar.value = Math.max(...dz) + 0.05;
+  const rt = new THREE.WebGLRenderTarget(W, H), bg = scene.background, buf = new Uint8Array(W * H * 4); scene.background = new THREE.Color(0x000000); scene.overrideMaterial = DEPTH_MAT;
+  renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null);
+  scene.overrideMaterial = null; scene.background = bg; hid.forEach(m => m.visible = true); rt.dispose();
+  const depth = document.createElement('canvas'); depth.width = W; depth.height = H; const dx = depth.getContext('2d'), id = dx.createImageData(W, H);
+  for(let y = 0; y < H; y++) id.data.set(buf.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4); dx.putImageData(id, 0, 0);
+  // skeleton: OpenPose colours on black; the face points only when it looks this way, an ear only on the side that shows
+  const k = mqHeight(o) * (ob.s || 1) / 1.7, toW = j => new THREE.Vector3(j[0] * k, j[1] * k, j[2] * k).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R).add(new THREE.Vector3(ob.x, ob.y, ob.z));
+  const camAt = cam.isOrthographicCamera ? null : cam.position, fwd = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R), side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), (ob.rot || 0) * D2R);
+  const toCam = camAt ? camAt.clone().sub(new THREE.Vector3(ob.x, ob.y + 1.5 * k, ob.z)).normalize() : cam.getWorldDirection(new THREE.Vector3()).negate(), face = fwd.dot(toCam), ear = side.dot(toCam);
+  const show = [true, true, true, true, true, true, true, true, true, true, true, true, true, true, face > -0.15, face > -0.15, ear < 0.35, ear > -0.35]; show[0] = face > -0.15;
+  const pts = MQ_J.map(j => { const p = toW(j).project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; });
+  const pose = document.createElement('canvas'); pose.width = W; pose.height = H; const px = pose.getContext('2d'); px.fillStyle = '#000'; px.fillRect(0, 0, W, H); const sw = Math.max(4, Math.round(H / 170));
+  OP_LIMBS.forEach(([a2, b2], i) => { if(!show[a2] || !show[b2]) return; const [ax, ay] = pts[a2], [bx, by] = pts[b2], len = Math.hypot(bx - ax, by - ay), ang = Math.atan2(by - ay, bx - ax);
+    px.fillStyle = `rgba(${OP_COL[i].join(',')},0.6)`; px.beginPath(); px.ellipse((ax + bx) / 2, (ay + by) / 2, len / 2, sw, ang, 0, Math.PI * 2); px.fill(); });
+  pts.forEach(([x2, y2], i) => { if(!show[i]) return; px.fillStyle = `rgb(${OP_COL[i].join(',')})`; px.beginPath(); px.arc(x2, y2, sw, 0, Math.PI * 2); px.fill(); });
+  // where her spot (the feet) falls in the picture, and how many metres a pixel is there, so the picture stands back in the same place and size
+  const f = new THREE.Vector3(ob.x, ob.y, ob.z).project(cam), fx = (f.x + 1) / 2, fy = (1 - f.y) / 2;
+  const m0 = new THREE.Vector3(ob.x, ob.y + 1, ob.z).project(cam), mPerPx = 1 / Math.max(1e-6, Math.hypot((m0.x - f.x) / 2 * W, (m0.y - f.y) / 2 * H)), d = toCam;
+  const el = Math.asin(Math.max(-1, Math.min(1, d.y))), hM = H * mPerPx * Math.cos(el);
+  ob.mode = mode0; dirty = true;
+  return {W, H, depth, pose, geo:{w:W * mPerPx * Math.cos(el), h:hM, fx, fy}}; }
+const isIn = (m, root) => { for(let p = m.parent; p; p = p.parent) if(p===root) return true; return false; };
+const isAnc = (m, child) => { for(let p = child.parent; p; p = p.parent) if(p===m) return true; return false; };
+// talking to the PC: its lists, an upload, a graph and waiting for it
+const PROMPT_TAIL = 'full body, standing, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
+const NEG = 'worst quality, low quality, bad quality, lowres, displeasing, very displeasing, old, early, nsfw, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, username, watermark, logo, multiple views, comic, monochrome, greyscale, multiple girls, 2girls';
+async function comboOf(url, cls, field){ try{ const j = await (await fetch(url + '/object_info/' + cls, {cache:'no-store'})).json(); const r = j[cls] && j[cls].input && j[cls].input.required[field]; return r && Array.isArray(r[0]) ? r[0] : []; }catch(e){ return []; } }
+async function upload(url, canvas, name){ const b = await new Promise(r => canvas.toBlob(r, 'image/png')), fd = new FormData(); fd.append('image', b, name); fd.append('overwrite', 'true');
+  const r = await fetch(url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Upload failed (' + r.status + ')'); return (await r.json()).name; }
+async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
+  if(!e || !PC.url){ st('Render (or the PC with her library) is not answering.'); return; } if(BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
+  try{ const url = PC.url; st('Asking ' + url.replace(/^https?:\/\//, '').split('.')[0] + ' for its models…');
+    const [cks, los, cns, bgs] = await Promise.all([comboOf(url, 'CheckpointLoaderSimple', 'ckpt_name'), comboOf(url, 'LoraLoader', 'lora_name'), comboOf(url, 'ControlNetLoader', 'control_net_name'), comboOf(url, 'LoadBackgroundRemovalModel', 'bg_removal_name')]);
+    const ckpt = e.ckpt && cks.includes(e.ckpt) ? e.ckpt : cks.find(n => /iriseltouch/i.test(n)) || cks[0], cn = cns.find(n => /promax|union/i.test(n)), bgm = bgs.find(n => /birefnet/i.test(n)) || bgs[0];
+    if(!ckpt || !cn) throw new Error('This PC needs an Illustrious model and ControlNet ProMax.');
+    const vw = view==='quad' ? 'persp' : view==='top' ? 'persp' : view, G = guidesFor(o, vw), stamp = Date.now().toString(36);
+    st('Sending the mannequin…'); const dn = await upload(url, G.depth, 'rd-scene-depth-' + stamp + '.png'), pn = await upload(url, G.pose, 'rd-scene-pose-' + stamp + '.png');
+    const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
+    const ck = add('CheckpointLoaderSimple', {ckpt_name:ckpt}); let model = [ck, 0], clip = [ck, 1];
+    for(const [l, w] of [[e.style, 1], [e.lora, +e.strength || 1]]) if(l && los.includes(l)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
+    const words = (e.prompt || e.trigger || '1girl, solo').replace(/,\s*$/, ''), pos0 = add('CLIPTextEncode', {clip, text:words + ', ' + PROMPT_TAIL}), neg0 = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:cn});
+    let pos = [pos0, 0], neg = [neg0, 0];
+    for(const [img, type, str, end] of [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
+    const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:1});
+    let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0];
+    if(bgm) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:bgm}), 0], image:out}), 0]}), 0]}), 0];
+    const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_')});
+    const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:g, client_id:'rd-scene'})}), j = await r.json();
+    if(!r.ok || !j.prompt_id) throw new Error('The PC turned it down: ' + JSON.stringify(j.error || j.node_errors || j).slice(0, 200));
+    const t0 = Date.now(); let imgs = null;
+    while(!imgs){ await new Promise(res => setTimeout(res, window.RENDER_POLL || 2000)); st('Painting 4 on ' + url.replace(/^https?:\/\//, '').split('.')[0] + '… ' + Math.round((Date.now() - t0) / 1000) + ' s');
+      const h = await (await fetch(url + '/history/' + j.prompt_id, {cache:'no-store'})).json(), it = h[j.prompt_id];
+      if(it && it.status && it.status.status_str==='error') throw new Error('The render failed on the PC.'); if(it && it.outputs && it.outputs[save]) imgs = it.outputs[save].images || [];
+      if(Date.now() - t0 > 15 * 60000) throw new Error('No answer after 15 minutes.'); }
+    ob.tries = imgs.map(im => ({pc:url, file:im.filename, sub:im.subfolder || '', ...G.geo})); imgs.forEach(im => texOf(shotUrl({pc:url, file:im.filename, sub:im.subfolder})));
+    st(bgm ? 'Pick the one you like.' : 'Pick one (this PC has no BiRefNet, so they are on white).'); changed(); }
+  catch(err){ st(err.message || String(err)); }
+  BUSY.delete(ob.id); drawSel(); }
 function drawList(){ const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
   box.innerHTML = SC.objs.map(ob => { const e = libOf(ob.ref); return `<div class="row" aria-selected="${ui.sel===ob.id}"><button class="nm" data-sel="${esc(ob.id)}">${ob.kind==='obj' ? '🪑' : '🧍'} ${esc(ob.label || (e && e.name) || '?')} ${e ? (e.trigger ? `<small>${esc(e.trigger)}</small>` : '') : '<small class="warn">not in the library</small>'}</button>
     <button class="ic" data-eye="${esc(ob.id)}" aria-pressed="${!ob.hide}" aria-label="Show or hide">👁</button><button class="ic" data-lock="${esc(ob.id)}" aria-pressed="${!!ob.lock}" aria-label="Lock">🔒</button></div>`; }).join(''); }
@@ -318,12 +419,18 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     <div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
     <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>
+    ${!it && e && !e.mesh ? `<div class="lbl">Show her as</div><div class="line">${[['pics', '🖼 Her angles'], ['mq', '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
+      ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Turn the camera to the angle you want, then render: a PC paints her 4 times over the mannequin with her LoRA.</p>` : ''}
+      <p class="note" id="rmsg">${esc(RMSG.get(ob.id) || '')}</p>
+      ${(ob.tries || []).length ? `<div class="tries">${ob.tries.map((t, i) => `<button data-try="${i}" aria-pressed="${!!ob.shot && ob.shot.file===t.file}"><img src="${esc(shotUrl(t))}" alt="Try ${i + 1}"></button>`).join('')}</div>` : ''}` : ''}
     <div class="line"><button id="snap" aria-pressed="${!!ui.snap}">🧲 Snap to 25 cm</button><button data-act="dup">⧉ Another one</button><button data-act="rm">✕ Take out of the scene</button></div>`;
   $('#snap').onclick = snapTog;
   box.querySelectorAll('[data-n]').forEach(i => i.oninput = () => { if(ob.lock) return; const k = i.dataset.n, v = parseFloat(i.value); if(!isFinite(v)) return; ob[k] = k==='y' ? Math.max(0, v) : v;
     if(k==='rot') $('#rotv').textContent = Math.round(v) + '°'; if(k==='s') $('#sv').textContent = Math.round(v * 100) + '%'; changed(); });
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
-  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
+  box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
   if(ob.lock) box.querySelectorAll('input').forEach(i => i.disabled = true); }
@@ -345,5 +452,5 @@ $('#pickx').onclick = () => { $('#pick').hidden = true; };
   SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene('Scene 1');
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-window.SCENE = {get sc(){ return SC; }, get ui(){ return ui; }, objs:OBJ, pickAngle, camOf, placeCams, rects, poseFor, PC, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
