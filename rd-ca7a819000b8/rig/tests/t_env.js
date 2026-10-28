@@ -79,6 +79,10 @@ const DEPS = process.env.RIG_DEPS || '';
     await page.waitForFunction(() => /Done|rror|fail|not/i.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000}).catch(() => {}); console.log('allmsg', await page.textContent('#allmsg'));
     const pv = Object.values(GRAPHS[n1]), set = await page.evaluate(() => SCENE.sc.bgSet);
     ok(set.dn===0.4 && set.cn===0.8 && !pv.some(n => n.class_type==='KSampler') && pv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale') && UPS.some(n => /^rd-scene-bgpick-/.test(n)), '🧪 the picked test becomes the background: only the 2× redraw runs on it: ' + JSON.stringify(set)); }
+  { const n0 = GRAPHS.length; await page.evaluate(() => { scrollTo(0, 0); document.querySelector('#allmsg').textContent = ''; }); await page.click('#newbg');
+    await page.waitForFunction(() => /Done/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
+    const v = Object.values(GRAPHS[n0]), ks = v.find(n => n.class_type==='KSampler'), set = await page.evaluate(() => SCENE.sc.bgSet);
+    ok(ks && ks.inputs.denoise===0.4 && !set.pick && GRAPHS.length===n0 + 2, '🌄 Paint a new background drops the test picture and paints a fresh one at its settings, then the finished picture: ' + JSON.stringify(set)); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
