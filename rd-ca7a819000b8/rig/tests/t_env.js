@@ -66,8 +66,8 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.waitForFunction(() => /Done/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
   const bg = GRAPHS[GRAPHS.length - 2], fin = GRAPHS[GRAPHS.length - 1], bv = Object.values(bg), txt = bv.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text);
   const ks = bv.find(n => n.class_type==='KSampler'), types = bv.filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type);
-  ok(/old library, tall bookshelves/.test(txt[0]) && /no humans/.test(txt[0]) && /1girl/.test(txt[1]) && ks && ks.inputs.denoise===0.55 && types.join()==='depth' && bv.some(n => n.class_type==='VAEEncode') && bv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale') && UPS.filter(n => /^rd-scene-bg/.test(n)).length===2,
-    '🌄 Render all paints the background from the Camera: place words, no people, its own colours (img2img 0.55) + depth 0.8, then 2×: ' + JSON.stringify({txt:txt[0], denoise:ks && ks.inputs.denoise, types}));
+  ok(/old library, tall bookshelves/.test(txt[0]) && /no humans/.test(txt[0]) && /1girl/.test(txt[1]) && ks && ks.inputs.denoise===0.7 && types.join()==='depth' && bv.some(n => n.class_type==='VAEEncode') && bv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale') && UPS.filter(n => /^rd-scene-bg/.test(n)).length===2,
+    '🌄 Render all paints the background from the Camera: place words, no people, its own colours (img2img 0.7) + depth 0.5, then 2×: ' + JSON.stringify({txt:txt[0], denoise:ks && ks.inputs.denoise, types}));
   const fv = Object.values(fin).map(n => n.class_type), sf = await page.evaluate(() => ({bg:SCENE.sc.bg && SCENE.sc.bg.file, fin:SCENE.sc.final && SCENE.sc.final.file, img:!!document.querySelector('#final img')}));
   ok(fv.join()==='LoadImage,SaveImage' && UPS.some(n => /^rd-scene-final/.test(n)) && /_bg_/.test(sf.bg) && /_final_/.test(sf.fin) && sf.img, '🖼 then everyone is laid over it and the finished picture is saved on the PC and shown: ' + JSON.stringify(sf));
   // 🧪 strength test (Jordan 2026-10-28): 9 paintings, denoise × depth, one seed; the picked one becomes the background (then only the 2×)
