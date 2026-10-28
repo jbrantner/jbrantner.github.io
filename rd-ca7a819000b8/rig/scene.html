@@ -275,12 +275,37 @@ function placeLight(){ const L = lightOf(); if(!L) return; const t = shotO.t, D 
   LT.sun.position.copy(t).addScaledVector(dir, D); LT.sun.target.position.set(t.x, 0, t.z); LT.sun.target.updateMatrixWorld(); LT.sun.color.set(L.color); LT.sun.intensity = Math.PI * L.power; LT.amb.color.set(L.fill); LT.amb.intensity = Math.PI * L.fillK;
   sunMark.position.copy(t).addScaledVector(dir, 4); const ln = sunMark.userData.line; ln.geometry.setFromPoints([new THREE.Vector3(), dir.clone().multiplyScalar(-4)]); ln.computeLineDistances(); sunMark.children[0].material.color.set(L.color); }
 // the light pass: only the 3D stand-ins, all white, lit by the sun and fill (the models' own studio light off)
+// Jordan 2026-10-28: a 📸 picture is lit by itself (its own surface, from the depth guide it was painted from), and the 3D stand-in
+// behind it is unseen, only casting its shadow on the ground and objects (drawn with no colour and no depth; the sun's shadow map
+// draws it with its own material)
+const GHOST_MAT = new THREE.MeshBasicMaterial({colorWrite:false, depthWrite:false});
+function litMatOf(o){ const t = texOf(shotUrl(o.ob.shot), true); if(!o.litMat){ o.litMat = new THREE.MeshLambertMaterial({color:0xffffff, alphaTest:0.5, side:THREE.DoubleSide});
+    o.litMat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.rgb = vec3(1.0);'); }; }
+  const m = o.litMat, nt = normalTex(o.ob.shot); if(m.map!==t || m.normalMap!==nt){ m.map = t; m.normalMap = nt; m.needsUpdate = true; } return m; }
+const NTEX = new Map();
+function normalTex(sh){ if(!sh || !sh.depth || !sh.zf) return null; const key = sh.pc + '|' + sh.depth; if(NTEX.has(key)) return NTEX.get(key); NTEX.set(key, null);
+  const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => { try{ NTEX.set(key, depthNormals(im, sh)); dirty = true; }catch(e){} };
+  im.src = sh.pc + '/view?filename=' + encodeURIComponent(sh.depth) + '&type=input'; return null; }
+// depth (near bright 1, far 0.2, nothing 0) → which way each bit of her faces, in the picture's own right/up/out
+function depthNormals(im, sh){ const W = im.naturalWidth, H = im.naturalHeight, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.filter = 'blur(2px)'; x.drawImage(im, 0, 0); x.filter = 'none';
+  const src = x.getImageData(0, 0, W, H).data, out = x.createImageData(W, H), px = sh.w / W, zr = (sh.zf - sh.zn) / 0.8 / 255, hAt = (i, j) => { i = Math.max(0, Math.min(W - 1, i)); j = Math.max(0, Math.min(H - 1, j)); const v = src[(j * W + i) * 4]; return v < 30 ? null : v * zr; };
+  for(let j = 0; j < H; j++) for(let i = 0; i < W; i++){ const h = hAt(i, j), k = (j * W + i) * 4; let nx = 0, ny = 0;
+    if(h!=null){ const l = hAt(i - 2, j), r = hAt(i + 2, j), u = hAt(i, j - 2), d = hAt(i, j + 2), cl = v => Math.max(-3, Math.min(3, v));
+      nx = cl(-(((r ?? h) - (l ?? h)) / ((r==null || l==null ? 2 : 4) * px))); ny = cl(-((u ?? h) - (d ?? h)) / ((u==null || d==null ? 2 : 4) * px)); }
+    const n = Math.hypot(nx, ny, 1); out.data[k] = (nx / n * 0.5 + 0.5) * 255; out.data[k + 1] = (ny / n * 0.5 + 0.5) * 255; out.data[k + 2] = (1 / n * 0.5 + 0.5) * 255; out.data[k + 3] = 255; }
+  x.putImageData(out, 0, 0); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.NoColorSpace; return t; }
 function lightPass(rt, cam, keepBg){ const hid = [], show = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } }, put = m => { if(m && !m.visible){ m.visible = true; show.push(m); } };
-  for(const o of OBJ.values()){ if(o.ob.hide){ continue; } put(o.g); [o.card, o.ghost, o.shot, o.disc, o.label, o.missing, o.shd].forEach(hide); if(o.mq) put(o.mq); if(o.mesh) put(o.mesh); for(const m of [o.mq, o.mesh]) if(m) m.traverse(x => { if(x.isMesh){ x.castShadow = x.receiveShadow = true; if(x.material && x.material.side===THREE.BackSide) hide(x); } }); }
+  const mats = [];
+  for(const o of OBJ.values()){ if(o.ob.hide){ continue; } put(o.g); const pic = modeOf(o.ob)==='shot' && o.shot && o.shot.visible; [o.card, o.ghost, o.disc, o.label, o.missing, o.shd].forEach(hide); if(!pic) hide(o.shot);
+    for(const m of [o.mq, o.mesh]) if(m){ put(m); m.traverse(x => { if(x.isMesh){ x.castShadow = x.receiveShadow = true; if(x.material && x.material.side===THREE.BackSide) hide(x); else if(pic){ mats.push([x, x.material]); x.material = GHOST_MAT; } } }); }
+    if(pic){ o.shot.receiveShadow = false; o.shot.castShadow = false; // (not her own stand-in's shadow: it stands through the middle of her picture)
+      mats.push([o.shot, o.shot.material]); o.shot.material = litMatOf(o); } }
   [camRig, pgrid, grid, axX, axZ, sunMark].forEach(hide); BASE_LIGHTS.forEach(hide); if(!ground.visible) put(catcher); ground.receiveShadow = true; LT.sun.visible = LT.amb.visible = true;
-  const bg = scene.background; scene.background = keepBg ? null : new THREE.Color(1, 1, 1); scene.overrideMaterial = LIGHT_MAT;
+  scene.traverse(x => { if(x.isMesh && x.visible && !mats.some(m => m[0]===x)){ mats.push([x, x.material]); x.material = LIGHT_MAT; } });
+  const bg = scene.background; scene.background = keepBg ? null : new THREE.Color(1, 1, 1);
   renderer.setRenderTarget(rt); renderer.setClearColor(0xffffff, 1); renderer.clear(); renderer.render(scene, cam); renderer.setRenderTarget(null);
-  scene.overrideMaterial = null; scene.background = bg; LT.sun.visible = LT.amb.visible = false; hid.forEach(m => m.visible = true); show.forEach(m => m.visible = false); }
+  mats.forEach(([x, m]) => { x.material = m; });
+  scene.background = bg; LT.sun.visible = LT.amb.visible = false; hid.forEach(m => m.visible = true); show.forEach(m => m.visible = false); }
 // colour × light, drawn on a full-screen quad (the sky, where nothing stands, keeps its own colour: the light pass is white there)
 const MIX = new THREE.ShaderMaterial({uniforms:{tC:{value:null}, tL:{value:null}, dbg:{value:0}}, depthTest:false, depthWrite:false,
   vertexShader:'varying vec2 vU; void main(){ vU = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
@@ -563,7 +588,7 @@ function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rect
   const m0 = new THREE.Vector3(ob.x, ob.y + 1, ob.z).project(cam), mPerPx = 1 / Math.max(1e-6, Math.hypot((m0.x - f.x) / 2 * W, (m0.y - f.y) / 2 * H)), d = toCam;
   const el = Math.asin(Math.max(-1, Math.min(1, d.y))), hM = H * mPerPx * Math.cos(el);
   ob.mode = mode0; dirty = true;
-  return {W, H, depth, pose, colour, geo:{w:W * mPerPx * Math.cos(el), h:hM, fx, fy}}; }
+  return {W, H, depth, pose, colour, geo:{w:W * mPerPx * Math.cos(el), h:hM, fx, fy, zn:DEPTH_MAT.uniforms.uNear.value, zf:DEPTH_MAT.uniforms.uFar.value}}; }
 // what the camera sees right now (whatever is showing), on a plain background
 function shotOf(cam, W, H, bgc){ const rt = new THREE.WebGLRenderTarget(W, H, {colorSpace:THREE.SRGBColorSpace}), bg = scene.background, buf = new Uint8Array(W * H * 4); scene.background = new THREE.Color(bgc);
   renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null); scene.background = bg; rt.dispose();
@@ -624,7 +649,7 @@ async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg
     out = cutOut(add, out, bgm);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_')});
     const imgs = await runGraph(url, g, save, t => st('Painting 4 on ' + pcName(url) + '… ' + t + ' s'));
-    ob.tries = imgs.map(im => ({pc:url, file:im.filename, sub:im.subfolder || '', ...G.geo})); imgs.forEach(im => texOf(shotUrl({pc:url, file:im.filename, sub:im.subfolder}), true));
+    ob.tries = imgs.map(im => ({pc:url, file:im.filename, sub:im.subfolder || '', depth:dn, ...G.geo})); imgs.forEach(im => texOf(shotUrl({pc:url, file:im.filename, sub:im.subfolder}), true)); // (depth: the guide she was painted from, for the 💡 light)
     st(bgm ? 'Pick the one you like. ⤴ High res then redraws it 2× (▶ Render all does every pick).' : 'Pick one (no PC has BiRefNet, so the white round her is cut away here).'); changed(); }
   catch(err){ st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
@@ -822,5 +847,5 @@ if(ENV){ $('#add').hidden = true; $('#rall').parentNode.hidden = true; $('#allms
   SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene(ENV ? 'Environment 1' : 'Scene 1');
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-window.SCENE = {get sc(){ return SC; }, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
