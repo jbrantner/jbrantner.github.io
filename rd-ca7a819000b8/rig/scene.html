@@ -451,12 +451,19 @@ const isAnc = (m, child) => { for(let p = child.parent; p; p = p.parent) if(p===
 const PROMPT_TAIL = 'full body, standing, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
 const NEG = 'worst quality, low quality, bad quality, lowres, displeasing, very displeasing, old, early, nsfw, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, username, watermark, logo, multiple views, comic, monochrome, greyscale, multiple girls, 2girls';
 async function comboOf(url, cls, field){ try{ const j = await (await fetch(url + '/object_info/' + cls, {cache:'no-store'})).json(); const r = j[cls] && j[cls].input && j[cls].input.required[field]; return r && Array.isArray(r[0]) ? r[0] : []; }catch(e){ return []; } }
+const hasNode = async (url, cls) => { try{ const j = await (await fetch(url + '/object_info/' + cls, {cache:'no-store'})).json(); return !!j[cls]; }catch(e){ return false; } };
+// 🙂 Fix faces as the Render tab's Painting block does it (face_yolov8m, SAM outline, wide feather, gentle 0.35 redraw), on all 4
+function faceFix(add, img, model, clip, vae, pos, neg, seed, sam){ const extra = {noise_mask_feather:32}; if(sam) extra.sam_model_opt = [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0];
+  return [add('FaceDetailer', Object.assign({image:img, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed, steps:20, cfg:5.5,
+    sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, denoise:0.35, feather:32, noise_mask:true, force_inpaint:true,
+    bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
+    sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}), 0], wildcard:'', cycle:1}, extra)), 0]; }
 async function upload(url, canvas, name){ const b = await new Promise(r => canvas.toBlob(r, 'image/png')), fd = new FormData(); fd.append('image', b, name); fd.append('overwrite', 'true');
   const r = await fetch(url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Upload failed (' + r.status + ')'); return (await r.json()).name; }
 async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || !PC.url){ st('Render (or the PC with her library) is not answering.'); return; } if(BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
   try{ const url = PC.url; st('Asking ' + url.replace(/^https?:\/\//, '').split('.')[0] + ' for its models…');
-    const [cks, los, cns, bgs] = await Promise.all([comboOf(url, 'CheckpointLoaderSimple', 'ckpt_name'), comboOf(url, 'LoraLoader', 'lora_name'), comboOf(url, 'ControlNetLoader', 'control_net_name'), comboOf(url, 'LoadBackgroundRemovalModel', 'bg_removal_name')]);
+    const [cks, los, cns, bgs, fd, ud, sam] = await Promise.all([comboOf(url, 'CheckpointLoaderSimple', 'ckpt_name'), comboOf(url, 'LoraLoader', 'lora_name'), comboOf(url, 'ControlNetLoader', 'control_net_name'), comboOf(url, 'LoadBackgroundRemovalModel', 'bg_removal_name'), hasNode(url, 'FaceDetailer'), hasNode(url, 'UltralyticsDetectorProvider'), hasNode(url, 'SAMLoader')]);
     const ckpt = e.ckpt && cks.includes(e.ckpt) ? e.ckpt : cks.find(n => /iriseltouch/i.test(n)) || cks[0], cn = cns.find(n => /promax|union/i.test(n)), bgm = bgs.find(n => /birefnet/i.test(n)) || bgs[0];
     if(!ckpt || !cn) throw new Error('This PC needs an Illustrious model and ControlNet ProMax.');
     if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); } const G = guidesFor(o, 'cam'), stamp = Date.now().toString(36);
@@ -467,8 +474,9 @@ async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg
     const words = (e.prompt || e.trigger || '1girl, solo').replace(/,\s*$/, ''), pos0 = add('CLIPTextEncode', {clip, text:words + ', ' + PROMPT_TAIL}), neg0 = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:cn});
     let pos = [pos0, 0], neg = [neg0, 0];
     for(const [img, type, str, end] of [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
-    const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:1});
+    const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:1});
     let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0];
+    if(fd && ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, sam);
     if(bgm) out = [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:bgm}), 0], image:out}), 0]}), 0]}), 0];
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_')});
     const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:g, client_id:'rd-scene'})}), j = await r.json();
@@ -501,7 +509,7 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>
     ${!it && e && !e.mesh ? `<div class="lbl">Show her as</div><div class="line">${[['pics', '🖼 Her angles'], ['mq', '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
       ${modeOf(ob)==='mq' ? poseRow(ob) : ''}
-      ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. A PC paints her 4 times over the mannequin with her LoRA, cut out.</p>` : ''}
+      ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. A PC paints her 4 times over the mannequin with her LoRA, faces fixed, cut out.</p>` : ''}
       <p class="note" id="rmsg">${esc(RMSG.get(ob.id) || '')}</p>
       ${(ob.tries || []).length ? `<div class="tries">${ob.tries.map((t, i) => `<button data-try="${i}" aria-pressed="${!!ob.shot && ob.shot.file===t.file}"><img src="${esc(((tex.get(shotUrl(t)) || {}).userData || {}).thumb || shotUrl(t))}" data-u="${esc(shotUrl(t))}" crossorigin="anonymous" alt="Try ${i + 1}"></button>`).join('')}</div>` : ''}` : ''}
     ${e && e.mesh==='mannequin' ? poseRow(ob) : ''}
