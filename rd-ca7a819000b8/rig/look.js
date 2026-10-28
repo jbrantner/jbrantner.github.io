@@ -44,13 +44,13 @@ export function search(list, own, q, max = 30){ q = q.trim().toLowerCase(); cons
 
 // ---- 🎨 her picks as colours on the mannequin (Jordan 2026-10-28: "to help visualize"). Only the 3D view: the guides Illustrious
 // gets are her skeleton and a depth picture, which never see these colours. Clothes are painted onto her skin by height and limb.
-const COL = {black:'#2a2a30', white:'#f2f2f0', grey:'#9a9ca3', gray:'#9a9ca3', silver:'#c9ccd3', brown:'#7a5236', blonde:'#f0d27a', red:'#d23b3b', orange:'#ee8a3a',
+export const COL = {black:'#2a2a30', white:'#f2f2f0', grey:'#9a9ca3', gray:'#9a9ca3', silver:'#c9ccd3', brown:'#7a5236', blonde:'#f0d27a', red:'#d23b3b', orange:'#ee8a3a',
   pink:'#f49ac0', purple:'#8d5bc0', blue:'#3f6fd1', 'light blue':'#9cc8f2', 'dark blue':'#26386e', navy:'#26386e', aqua:'#3fc6c4', green:'#4f9e55',
   yellow:'#f1d24a', gold:'#d9b04a', beige:'#d9c7a6', denim:'#4b6c9c'};
-const colourIn = t => { const m = Object.keys(COL).sort((a, b) => b.length - a.length).find(c => new RegExp('\\b' + c + '\\b').test(t)); return m ? COL[m] : null; };
+export const colourIn = t => { const m = Object.keys(COL).sort((a, b) => b.length - a.length).find(c => new RegExp('\\b' + c + '\\b').test(t)); return m ? COL[m] : null; };
 const SKIN = {'pale skin':'#f7e9df', tan:'#d3a27c', 'dark skin':'#8c5d40', 'dark-skinned female':'#8c5d40'}, SKIN0 = '#f2dccb';
 // what each piece covers: rest heights as a share of her joints (0 ankle … 1 hip joint … 2 neck), sleeves, and its usual colour
-const PIECES = [
+export const PIECES = [
   [/thighhighs|thigh highs|over-kneehighs/, 'legs', 'below', 0.72, '#2a2a30'], [/pantyhose|leggings|tights/, 'legs', 'below', 1.05, '#2a2a30'], [/kneehighs/, 'legs', 'below', 0.42, '#2a2a30'], [/socks/, 'legs', 'below', 0.15, '#f2f2f0'],
   [/jeans|pants|trousers/, 'bottom', 'span', [0, 1.12], '#3a3d48'], [/long skirt/, 'bottom', 'span', [0.3, 1.12], '#26386e'], [/pencil skirt/, 'bottom', 'span', [0.5, 1.12], '#2a2a30'],
   [/shorts/, 'bottom', 'span', [0.78, 1.12], '#4b6c9c'], [/skirt/, 'bottom', 'span', [0.72, 1.12], '#26386e'],
