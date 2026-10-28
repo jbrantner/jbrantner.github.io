@@ -68,6 +68,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 // Layers-style object list: only the selected one moves. Views: 3D (orbit), and flat Front, Side and Top for exact placing,
 // one at a time or all four. Scenes are kept on the phone and, with the helper, in Scenes/ of the shared output folder.
 import * as THREE from 'three';
+import {paintLook} from './look.js';
 import {TOON, loadBody as fetchBody, bodyMesh as shapedBody, POSES, poseBody, bodyJoints, DEPTH_MAT, drawPose, comboOf, hasNode, upload, faceFix, NEG} from './body.js';
 const QS = new URLSearchParams(location.search), HID = QS.get('h')==='1', D2R = Math.PI / 180, $ = s => document.querySelector(s);
 const LKEY = 'rd-scenes' + (HID ? '-h' : ''), VKEY = 'rd-scene-ui';
@@ -223,8 +224,8 @@ function loadBody(){ if(BODY!==null || bodyTry || !PC.url) return bodyTry; bodyT
     const skin = new THREE.MeshToonMaterial({color:0xd8d2cc, gradientMap:TOON}), eye = new THREE.MeshToonMaterial({color:0x5a5f6b, gradientMap:TOON});
     BODY = await fetchBody(PC.url, name => /Eye/i.test(name) ? eye : skin); buildObjs(); drawSel(); }catch(e){ BODY = false; console.warn('No base body on the PC: ' + (e.message || e)); } })(); return bodyTry; }
 const HAIR_MAT = new THREE.MeshToonMaterial({color:0x8f857d, gradientMap:TOON, side:THREE.DoubleSide});
-function bodyMesh(ht, shape, hair){ lights(); return shapedBody(BODY, ht, shape, hair, HAIR_MAT); } // 💇 her mannequin hair when she has one
-const mqMesh = (ht, shape, hair) => BODY ? bodyMesh(ht, shape, hair) : mannequinMesh(ht);
+function bodyMesh(ht, shape, hair, look){ lights(); const w = shapedBody(BODY, ht, shape, hair, HAIR_MAT); if(look) try{ paintLook(w, look); }catch(err){ console.warn('look: ' + err.message); } return w; } // 💇 her mannequin hair when she has one, 🎨 tinted with her look (the depth guide ignores colours)
+const mqMesh = (ht, shape, hair, look) => BODY ? bodyMesh(ht, shape, hair, look) : mannequinMesh(ht);
 function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(); if(!SC) return;
   for(const ob of SC.objs){ const e = libOf(ob.ref), g = new THREE.Group(), geo = e && e.geo || {wM:1.07, hM:1.87}, isObj = ob.kind==='obj', ht = isObj ? (e && +e.height) || 1 : 1.7;
     const card = new THREE.Mesh(new THREE.PlaneGeometry(geo.wM, geo.hM), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide}));
@@ -236,7 +237,7 @@ function buildObjs(){ for(const o of OBJ.values()) scene.remove(o.g); OBJ.clear(
     for(const m of [shd, disc]){ m.renderOrder = -1; m.material.depthTest = false; } // under the pictures, always
     const mesh = e && e.mesh==='chair' ? chairMesh(ht) : e && e.mesh==='mannequin' ? mqMesh(ht) : null; if(mesh) g.add(mesh);
     // 🧍 every library character also has a mannequin (posed and rendered from), and 📸 the picture last rendered from it
-    const mq = !isObj && !mesh ? mqMesh(1.7, e && e.body, e && e.hair) : null, shot = mq ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
+    const mq = !isObj && !mesh ? mqMesh(1.7, e && e.body, e && e.hair, e && e.look) : null, shot = mq ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
     if(mq){ mq.visible = false; shot.visible = false; g.add(mq, shot); }
     g.add(shd, card, missing, disc, label); scene.add(g); const at = e ? angles(e) : {}; Object.values(at).forEach(texOf); OBJ.set(ob.id, {mesh, mq, shot, ghost, g, card, disc, missing, label, e, at, geo, ob, isObj, ht}); }
   dirty = true; }
@@ -358,7 +359,7 @@ let camT = 0; function saveCams(){ clearTimeout(camT); camT = setTimeout(() => {
 // paints her over it from the camera you are looking through (depth + skeleton of the mannequin alone, on white, her LoRA),
 // four tries, cut out; the one picked stands in the scene as her picture from then on, until you go back to the mannequin
 const BUSY = new Set(), RMSG = new Map(); // a render on its way, and what it last said, per character (not saved with the scene)
-const modeOf = ob => ob.mode==='mq' ? 'mq' : ob.mode==='shot' && ob.shot ? 'shot' : 'pics';
+const modeOf = ob => ob.mode==='shot' && ob.shot ? 'shot' : window.SHOW_PICS && ob.mode!=='mq' ? 'pics' : 'mq'; // Jordan 2026-10-28: in a scene she is only 🧍 Mannequin (the default) or 📸 Rendered
 const mqHeight = o => { const m1 = o.e && o.e.views && o.e.views.length ? ringMed(o, 1) : 0; return m1 ? m1 * o.geo.hM : 1.7; };
 const shotUrl = sh => sh.pc + '/view?filename=' + encodeURIComponent(sh.file) + '&subfolder=' + encodeURIComponent(sh.sub || '') + '&type=output';
 // the rendered picture stands where the mannequin stood: upright, turned to the camera from its spot, as tall on screen as when it was made
@@ -408,7 +409,15 @@ function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rect
 const isIn = (m, root) => { for(let p = m.parent; p; p = p.parent) if(p===root) return true; return false; };
 const isAnc = (m, child) => { for(let p = child.parent; p; p = p.parent) if(p===m) return true; return false; };
 // talking to the PC: its lists, an upload, a graph and waiting for it
-const PROMPT_TAIL = 'full body, standing, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
+const PROMPT_TAIL = 'full body, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
+// her words (Jordan 2026-10-28: a sitting Ellen came out blonde, bootless and "standing"): LoRA trigger + her saved tags + the pose as words; pose and framing words from her card are dropped so they never fight the guide
+const POSE_WORDS = {stand:'standing', hip:'standing, hand on own hip', walk:'walking', sit:'sitting', wave:'standing, waving'};
+const NOT_HERS = /^(standing|sitting|walking|waving|a-pose|t-pose|arms at sides|full body|upper body|simple background|white background|transparent background|solo|1girl|1boy|1other|looking at viewer)$/i;
+function herWords(e, pose){ const seen = new Set(), out = [];
+  const put = t => { t = t.trim().replace(/\s+/g, ' '); const k = t.toLowerCase().replace(/_/g, ' '); if(t && !seen.has(k)){ seen.add(k); out.push(t); } };
+  (e.prompt || e.trigger || '1girl, solo').split(',').forEach(put);
+  (e.tags || '').split(',').filter(t => !NOT_HERS.test(t.trim().replace(/_/g, ' '))).forEach(put);
+  POSE_WORDS[pose || 'stand'].split(',').forEach(put); return out.join(', '); }
 async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || !PC.url){ st('Render (or the PC with her library) is not answering.'); return; } if(BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
   try{ const url = PC.url; st('Asking ' + url.replace(/^https?:\/\//, '').split('.')[0] + ' for its models…');
@@ -420,7 +429,7 @@ async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:ckpt}); let model = [ck, 0], clip = [ck, 1];
     for(const [l, w] of [[e.style, 1], [e.lora, +e.strength || 1]]) if(l && los.includes(l)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
-    const words = (e.prompt || e.trigger || '1girl, solo').replace(/,\s*$/, ''), pos0 = add('CLIPTextEncode', {clip, text:words + ', ' + PROMPT_TAIL}), neg0 = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:cn});
+    const words = herWords(e, ob.pose), pos0 = add('CLIPTextEncode', {clip, text:words + ', ' + PROMPT_TAIL}), neg0 = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:cn});
     let pos = [pos0, 0], neg = [neg0, 0];
     for(const [img, type, str, end] of [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:1});
@@ -456,7 +465,7 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     <div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
     <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>
-    ${!it && e && !e.mesh ? `<div class="lbl">Show her as</div><div class="line">${[['pics', '🖼 Her angles'], ['mq', '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
+    ${!it && e && !e.mesh ? `<div class="lbl">Show her as</div><div class="line">${[['mq', '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
       ${modeOf(ob)==='mq' ? poseRow(ob) : ''}
       ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. A PC paints her 4 times over the mannequin with her LoRA, faces fixed, cut out.</p>` : ''}
       <p class="note" id="rmsg">${esc(RMSG.get(ob.id) || '')}</p>

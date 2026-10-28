@@ -706,7 +706,7 @@ body.scn-open #mainView, body.scn-open .go, body.scn-open #comic, body.scn-open 
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-28.235'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-28.236'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -7453,7 +7453,14 @@ const CM_SENTAT = {};
 const cmPcBusy = url => pcOf(url).load > 0 || (S.cmPoses || []).some(P => (P.orb || []).concat(cmPics(P), P.cands || [], P.cc ? [P.cc.full, P.cc.redraw] : []).some(v => (v.making && v.making.pc===url) || (v.busy && v.busyPc===url)));
 // what is still waiting for a free computer
 const cmPoseWaiting = P => P.stopped || P.remote ? 0 : (P.orb || []).filter(o => !(o.urls || []).length && !o.making && !o.busy && !o.err).length + cmPics(P).filter(v => (!v.url || v.redo) && !v.making && !v.busy && !v.err).length;
-setInterval(() => { if(document.visibilityState!=='visible') return; (S.cmPoses || []).forEach(P => { ccRun(P); m3Resume(P); if(!P.stopped && cmPoseWaiting(P)) cmPoseRun(P, true); }); }, 3000);
+setInterval(() => { if(document.visibilityState!=='visible') return; (S.cmPoses || []).forEach(P => { ccRun(P); m3Resume(P); if(!P.stopped && cmPoseWaiting(P)) cmPoseRun(P, true); }); ccAutoLib(); }, 3000);
+// 📚 a finished character (or object) saves herself to the library, and again when her LoRA is done (Jordan 2026-10-28: "I don't
+// accidentally do all this work on a character and she isn't saved"): her angles, her mannequin on the base skeleton, her LoRA, her tags
+let CC_AUTOLIB = false;
+async function ccAutoLib(){ if(CC_AUTOLIB) return; const all = (ccState().chars || []).filter(c => { const P = ccP(c); return P && !P.stopped && ccProgress(P).step===6; });
+  for(const c of all){ const P = ccP(c), lora = !c.obj && c.lr && c.lr.state==='done' && c.lr.lora ? c.lr.lora : '', sig = [P.id, lora, (P.lk || []).filter(h => h.str==='cc' && h.url && !h.redo).length].join('|');
+    if(c.libAuto===sig || Date.now() - (c.libTry || 0) < 600000) continue; c.libTry = Date.now(); if(!c.name){ c.name = (c.obj ? 'Object ' : 'Character ') + c.id.slice(-4); }
+    CC_AUTOLIB = true; try{ if(await ccLibSave(c, P, lora ? 'lora' : 'done')){ c.libAuto = sig; delete c.libTry; } save(); } finally{ CC_AUTOLIB = false; } break; } }
 function cmPoseRun(P, quiet){ if(P.stopped || P.rigging || P.remote) return; const L = P.from ? {name:'', g:'', from:true} : (S.cmLib || []).find(x => x.id===P.who); if(!L){ if(!quiet) toast('That pose\'s character is gone from 👥 Characters', true); return; }
   let kits = cmIllKits().filter(k => k.cn && (!P.cc || k.bg)); // 🧍 cuts every angle out, so only PCs with BiRefNet; a computer without BiRefNet paints them on white and the 3D viewer cuts the white away (Jordan 2026-10-23: Main sat free)
   if(!kits.length){ if(!quiet) toast('None of your computers that are on has an Illustrious model and ControlNet ProMax', true); return; }
@@ -9883,17 +9890,17 @@ function ccLibEntry(c, P){ const pics0 = () => (P.lk || []).filter(h => h.str===
   const pics = (P.lk || []).filter(h => h.str==='cc' && h.url && !h.redo).map(h => Object.assign(ccOut(h.url) || {}, {ring:h.ring, i:h.i, mid:!!h.mid})).filter(x => x.filename);
   return {name:c.name || 'Character', hidden:!!S.hidden, pics, meta:{trigger:lora ? trig : '', lora, ckpt:K.ckpt, style:K.style, strength:1,
     prompt:lora ? (afkj ? 'AFKJ Style, ' : '') + trig + ', ' + who + ', solo' : (c.tags || ''), tags:c.tags || '', desc:c.desc || '',
-    ringEl:ccRingEl(P), geo:P.geo, fov:P.fov || 30, rig:P.rigV || null, cover:'eye_000.png', from:P.id, body:(P.cc && P.cc.body) || c.body || undefined, hair:(P.cc && P.cc.hair) || c.hair || undefined}}; } // 📏 her mannequin shape, for 🎬 Scene
-async function ccLibSave(c, P){
+    ringEl:ccRingEl(P), geo:P.geo, fov:P.fov || 30, rig:P.rigV || null, cover:'eye_000.png', from:P.id, body:(P.cc && P.cc.body) || c.body || undefined, hair:(P.cc && P.cc.hair) || c.hair || undefined, look:c.mqLook || undefined, btags:c.mqBtags || undefined, words:c.mqDesc!=null ? c.mqDesc : undefined}}; } // 📏 her mannequin (shape, hair, look) on the base body's skeleton, for 🎬 Scene
+async function ccLibSave(c, P, auto){
   if(!CCV.lib || !CCV.lib.pc) await ccLibLoad(); const pc = CCV.lib && CCV.lib.pc;
   if(!pc && !S.test){ toast("None of your PCs has the Character Library yet: it needs the helper update (the PowerShell line in the thread)", true); return; }
   if(c.obj && !CCV.lib.kinds && !S.test){ toast('The Object Library needs the helper update on Render (the PowerShell line in the thread)', true); return; }
   const e = ccLibEntry(c, P), key = c.obj ? 'objs' : 'list', lib = c.obj ? 'Object Library' : 'Character Library', had = (CCV.lib[key] || []).some(x => x.name===e.name);
-  if(!confirm((had ? 'Replace ' + e.name + ' in' : 'Save ' + e.name + ' to') + ' the ' + lib + '? ' + e.pics.length + ' see-through angles' + (c.obj ? ', ' + e.meta.height + ' m tall.' : (e.meta.lora ? ' and her LoRA ' + baseName(e.meta.lora) : ', no LoRA yet') + '.'))) return;
-  if(S.test){ CCV.libLast = e; CCV.lib[key] = (CCV.lib[key] || []).filter(x => x.name!==e.name).concat([Object.assign({}, e.meta, {name:e.name, subfolder:lib + '/' + e.name, saved:Date.now(), views:e.pics.map(p => ({ring:p.ring, i:p.i, mid:p.mid, file:p.filename}))})]); ccDraw(true); return; }
+  if(!auto && !confirm((had ? 'Replace ' + e.name + ' in' : 'Save ' + e.name + ' to') + ' the ' + lib + '? ' + (c.obj ? e.pics.length + ' see-through angles' : 'Her turnaround thumbnail') + (c.obj ? ', ' + e.meta.height + ' m tall.' : (e.meta.body ? ', her mannequin' : '') + ', her tags' + (e.meta.lora ? ' and her LoRA ' + baseName(e.meta.lora) : ', no LoRA yet') + '.'))) return;
+  if(S.test){ CCV.libLast = e; CCV.lib[key] = (CCV.lib[key] || []).filter(x => x.name!==e.name).concat([Object.assign({}, e.meta, {name:e.name, subfolder:lib + '/' + e.name, saved:Date.now(), views:e.pics.map(p => ({ring:p.ring, i:p.i, mid:p.mid, file:p.filename}))})]); ccDraw(true); return true; }
   CCV.libSaving = true; ccDraw();
   try{ const r = await fetch(pc + '/renderdeck/library/save', {method:'POST', headers:JSONH, body:JSON.stringify(e)}), j = await r.json(); if(!r.ok) throw new Error(j.error || r.status);
-    toast(e.name + ' is in the ' + lib); buzz(); await ccLibLoad(); }
+    toast(auto ? '📚 ' + e.name + ' was saved to the ' + lib + (auto==='lora' ? ' with her LoRA' : '') : e.name + ' is in the ' + lib); buzz(); await ccLibLoad(); return true; }
   catch(err){ toast("Couldn't save " + (c.obj ? 'it' : 'her') + ': ' + err.message, true); }
   CCV.libSaving = false; ccDraw(); }
 // a library character in the 3D viewer, as ccSprite does for one being made
@@ -9904,12 +9911,16 @@ function ccLibSprite(e, pc){ const at = (ring, i, mid) => { const v = (e.views |
 function ccLibHtml(c, P){ const ready = !!P && ccProgress(P).step===6, n = CCV.lib ? CCV.lib.list.length : 0;
   if(c && c.obj){ const m = CCV.lib ? (CCV.lib.objs || []).length : 0;
     return `<h2>Object Library</h2><div class="btnrow"><button class="btn hot" data-cc="libsave" ${ready && !CCV.libSaving ? '' : 'disabled'}>${CCV.libSaving ? 'Saving…' : '📚 Save ' + esc(c.name || 'it') + ' to the library'}</button><button class="btn" data-cc="libtab">Open the 📚 Library${m ? ' (' + m + ')' : ''}</button></div>
-    <p class="note">${ready ? 'Its see-through angles and its height go to the 📚 Library tab, ready for 🎬 Scene. Saving again replaces it.' : 'Ready to save once all 5 steps are done.'}</p>`; }
+    <p class="note">${ready ? 'It saved itself to the 📚 Library when it was done (its angles and height, ready for 🎬 Scene). This button saves it again now.' : 'It saves itself to the 📚 Library once all 5 steps are done.'}</p>`; }
   return `<h2>Character Library</h2><div class="btnrow"><button class="btn hot" data-cc="libsave" ${ready && !CCV.libSaving ? '' : 'disabled'}>${CCV.libSaving ? 'Saving…' : '📚 Save ' + esc(c && c.name || 'her') + ' to the library'}</button><button class="btn" data-cc="libtab">Open the 📚 Library${n ? ' (' + n + ')' : ''}</button></div>
-    <p class="note">${ready ? 'Her see-through angles and her LoRA go to the 📚 Library tab. Saving again replaces her.' : 'Ready to save once all 5 steps are done. Her LoRA goes with her when 🎓 has made it.'}</p>`; }
+    <p class="note">${ready ? 'She saved herself to the 📚 Library when she was done (her mannequin, tags and turnaround thumbnail) and saves again with her LoRA when 🎓 has made it. This button saves her again now.' : 'She saves herself to the 📚 Library once all 5 steps are done, and again when 🎓 has made her LoRA.'}</p>`; }
 function ccLibDraw(force){ const box = $('#cc'), L = CCV.lib, list = L ? L.list : [], objs = L ? L.objs || [] : [], one = list.concat(objs).find(e => e.subfolder===CCV.libOpen);
   const sig = JSON.stringify([list.concat(objs).map(e => e.subfolder + e.saved), L && L.pc, L && L.none, CCV.libOpen]); if(!force && sig===CCV.libSig) return; CCV.libSig = sig;
   const nm = n => baseName(n || '').replace(/\.safetensors$/i, ''), cover = e => viewUrl({filename:e.cover || ((e.views || [])[0] || {}).file || '', subfolder:e.subfolder}, L.pc || farmHost());
+  // 🔄 a character's thumbnail is her eye-level turnaround, spinning (Jordan 2026-10-28: "the full turn around as their thumbnail")
+  const turn = e => { const vs = e.views || [], at = (i, mid) => vs.find(v => v.ring===1 && v.i===i && !!v.mid===mid);
+    const fs = [0, 1, 2, 3, 4, 5, 6, 7].flatMap(i => [at(i, false), at(i, true)]).filter(Boolean); return fs.length > 1 ? JSON.stringify(fs.map(v => mini(viewUrl({filename:v.file, subfolder:e.subfolder}, L.pc || farmHost())))) : ''; };
+  const spin = e => { const t = turn(e); return t ? ` data-spin="${esc(t)}"` : ''; };
   let h = `<div class="ccwrap cclibtab"><h2>📚 Library</h2>`;
   if(!L) h += '<p class="note">Looking for your library…</p>';
   else if(L.none && !list.length) h += '<p class="note">The library needs the helper update on Render (the PowerShell line in the thread).</p>';
@@ -9917,13 +9928,16 @@ function ccLibDraw(force){ const box = $('#cc'), L = CCV.lib, list = L ? L.list 
   if(one && one.kind==='obj') h += `<div class="cclibone"><img src="${esc(mini(cover(one)))}" alt=""><div><p><b>${esc(one.name)}</b> · ${(one.views || []).length} angles, see-through · ${esc(String(one.height || 1))} m tall</p>
     ${one.desc ? `<p class="note">${esc(one.desc)}</p>` : ''}<p class="note">Made with ${esc(nm(one.ckpt))}${one.style ? ' + ' + esc(nm(one.style)) : ''}. Tags:</p><p><code>${esc(one.prompt || '')}</code></p>
     <div class="btnrow"><button class="btn" data-cc="lib3d">🧊 Open in 3D</button><button class="btn" data-cc="libcopy">📋 Copy the tags</button><button class="btn" data-cc="libdel">🗑 Take out of the library</button></div></div></div>`;
-  else if(one) h += `<div class="cclibone"><img src="${esc(mini(cover(one)))}" alt=""><div><p><b>${esc(one.name)}</b> · ${(one.views || []).length} angles, see-through</p>
-    ${one.lora ? `<p class="note">LoRA <b>${esc(nm(one.lora))}</b> 1.0 on ${esc(nm(one.ckpt))}${one.style ? ' + ' + esc(nm(one.style)) + ' 1.0' : ''}. Prompt start:</p><p><code>${esc(one.prompt)}</code></p>` : '<p class="note">No LoRA saved with her yet: make it in 🎓, then save her again.</p>'}
+  else if(one) h += `<div class="cclibone"><img src="${esc(mini(cover(one)))}" alt=""${spin(one)}><div><p><b>${esc(one.name)}</b></p>
+    <p class="note">🧍 <b>Her model:</b> ${one.body ? esc(ccShapeText(one.body) + (one.hair ? ' · 💇 ' + (one.hair.style || 'long') : '')) + ', on the base body and its skeleton' : 'made from a picture (no mannequin shape)'}.</p>
+    ${one.lora ? `<p class="note">🎓 <b>Her LoRA:</b> ${esc(nm(one.lora))} 1.0 on ${esc(nm(one.ckpt))}${one.style ? ' + ' + esc(nm(one.style)) + ' 1.0' : ''}. Prompt start:</p><p><code>${esc(one.prompt)}</code></p>` : '<p class="note">🎓 <b>Her LoRA:</b> not made yet. She saves herself again when 🎓 is done.</p>'}
+    ${one.tags ? `<p class="note">🏷 <b>Her tags:</b></p><p><code>${esc(one.tags)}</code></p>` : ''}
     <div class="btnrow"><button class="btn" data-cc="lib3d">🧊 Open in 3D</button>${one.prompt ? '<button class="btn" data-cc="libcopy">📋 Copy the prompt start</button>' : ''}<button class="btn" data-cc="libdel">🗑 Take out of the library</button></div></div></div>`;
-  const grid = (es, sub) => `<div class="cclib">${es.map(e => `<button data-cc="libopen" data-sub="${esc(e.subfolder)}" aria-pressed="${e.subfolder===CCV.libOpen}"><img src="${esc(mini(cover(e)))}" alt="" loading="lazy"><span>${esc(e.name)}</span><small>${esc(sub(e))}</small></button>`).join('')}</div>`;
+  const grid = (es, sub) => `<div class="cclib">${es.map(e => `<button data-cc="libopen" data-sub="${esc(e.subfolder)}" aria-pressed="${e.subfolder===CCV.libOpen}"><img src="${esc(mini(cover(e)))}" alt="" loading="lazy"${e.kind==='obj' ? '' : spin(e)}><span>${esc(e.name)}</span><small>${esc(sub(e))}</small></button>`).join('')}</div>`;
   if(list.length) h += `<h3 class="cclibh">🧍 Characters</h3>` + grid(list, e => e.trigger || 'no LoRA');
   if(objs.length) h += `<h3 class="cclibh">🪑 Objects</h3>` + grid(objs, e => (e.height || 1) + ' m');
   box.innerHTML = h + '</div>'; }
+setInterval(() => { if(document.visibilityState!=='visible') return; document.querySelectorAll('#cc img[data-spin]').forEach(im => { try{ const u = JSON.parse(im.dataset.spin), n = ((+im.dataset.f || 0) + 1) % u.length; im.dataset.f = n; im.src = u[n]; }catch(e){} }); }, 160);
 function ccDraw(force){ const box = $('#cc'); if(!box || box.hidden) return; if(CCV.mode==='lib') return ccLibDraw(force); const s = ccState(), c = ccChar(), P = ccP(c), st = ccStatus(P);
   const f = document.activeElement, typing = f && box.contains(f) && /INPUT|TEXTAREA|SELECT/.test(f.tagName);
   const pcs = allPcs().filter(p => p.url!=='test'), dots = pcs.map(p => `<span class="host"><i class="dot ${p.online ? 'on' : ''}"></i>${esc(pcName(p.url).charAt(0))}</span>`).join('');
