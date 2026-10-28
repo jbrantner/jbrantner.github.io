@@ -49,6 +49,11 @@ const fs = require('fs'), path = require('path');
   const P = await page.evaluate(() => { const P = ccP(ccChar()); return {eye:P.eyeOnly, mq:P.cc.mq, full:P.cc.full.url, body:P.cc.body, views:P.views.length, rings:[...new Set(P.views.map(v => v.ring))], mids:P.mids.length, lk:P.lk.filter(h => h.str==='cc').length, orb:P.orb.map(o => o.step + o.ring)}; });
   ok(P.eye && P.mq && /mq_00002_/.test(P.full) && P.body.cm===152 && P.views===8 && P.rings.join()==='1' && P.mids===8 && P.lk===16 && P.orb.join()==='circle1', 'her turnaround is eye level only: 8 sides + 8 between, one MiniMax turn, 16 to finish: ' + JSON.stringify(P));
   ok(await page.evaluate(() => { const P = ccP(ccChar()), p = ccProgress(P); return p.step===4 && p.nbase===16 && p.nmv===1; }), 'her progress counts only those');
+  // 👁 her eye-level turn came back and was lined up: with no sweeps to guide, the rig still fits her turn so the 16 angles start
+  const rs = await page.evaluate(() => { const P = ccP(ccChar()), o = P.orb[0]; o.urls = Array.from({length:31}, (_, i) => 'https://jordo-desktop.test/view?filename=circle_eye_' + i + '.png'); o.turn = 30; o.pick = [0, 4, 8, 11, 15, 19, 23, 26];
+    P.src = P.src || 'x'; delete P.rigFit; delete P.rigFail; window.__spin = 0; const f = m3RigSpin; m3RigSpin = Q => { window.__spin++; }; m3Resume(P); m3RigSpin = f; return {spin:window.__spin, rigging:!!P.rigging}; });
+  ok(rs.spin===1 && rs.rigging, '👁 a finished eye-level turn goes on to fit the rig (her angles waited for it for ever): ' + JSON.stringify(rs));
+  await page.evaluate(() => { delete ccP(ccChar()).rigging; });
   // ↻ Redo from step 2 keeps the mannequin painting (MiniMax doesn't zoom out)
   await page.evaluate(() => { CM_SENT.length = 0; const P = ccP(ccChar()); ccRedo(P, 2); });
   ok(await page.evaluate(() => { const P = ccP(ccChar()); return /mq_00002_/.test(P.cc.full.url) && !P.cc.redraw.url && P.eyeOnly && P.views.length===8; }), '↻ Redo from step 2 keeps her painting and stays eye level');
