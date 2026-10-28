@@ -53,6 +53,16 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   // she stands in the A pose: hands out from her hips, below the shoulders
   const ap = await fr.evaluate(() => { const J = MQ.B.bodyJoints(MQ.her, MQ.BODY.face); return {handR:[+J[4].x.toFixed(2), +J[4].y.toFixed(2)], hipR:+J[8].x.toFixed(2), shY:+J[2].y.toFixed(2)}; });
   ok(ap.handR[0] < ap.hipR - 0.15 && ap.handR[1] < ap.shY - 0.3, '🅰 she stands in the A pose (hands well out from her hips): ' + JSON.stringify(ap));
+  // 💇 her hair: a style, its bangs, length; it is in the 3D (hung on her head bone) and its tags are shown
+  const hairOf = () => fr.evaluate(() => { let n = 0; MQ.her.traverse(m => { if(m.name==='hair') n++; }); const hg = MQ.her.userData.hair; return {n, onHead:!!(hg && hg.parent && hg.parent.name==='bn_head')}; });
+  const h0 = await hairOf(); ok(h0.n > 10 && h0.onHead, '💇 she starts with long hair hung on her head bone: ' + JSON.stringify(h0));
+  const lowY = () => fr.evaluate(() => { let lo = 9; const V = MQ.her.position.constructor, p = new V(); MQ.her.updateMatrixWorld(true); MQ.her.userData.hair.traverse(m => { if(m.isMesh){ const a = m.geometry.attributes.position; for(let i = 0; i < a.count; i += 3){ p.fromBufferAttribute(a, i).applyMatrix4(m.matrixWorld); lo = Math.min(lo, p.y); } } }); return +lo.toFixed(2); });
+  const longLow = await lowY(); await fr.click('[data-hs="bob"]'); await page.waitForTimeout(300); const bobLow = await lowY();
+  ok(longLow < 1.15 && bobLow > 1.35, 'a bob ends far higher than long hair: ' + longLow + ' / ' + bobLow);
+  for(const st of ['short', 'ponytail', 'twintails', 'bun', 'none', 'long']){ await fr.click('[data-hs="' + st + '"]'); await page.waitForTimeout(150); }
+  ok(!logs.length, 'every hair style builds');
+  await fr.click('[data-hs="twintails"]'); await fr.click('[data-hb="blunt"]'); await page.waitForTimeout(200);
+  ok(await fr.evaluate(() => MQ.ST.hair.style==='twintails' && MQ.ST.hair.bangs==='blunt' && /twintails/.test(document.querySelector('#autotags').textContent) && /blunt bangs/.test(document.querySelector('#autotags').textContent) && /small breasts/.test(document.querySelector('#autotags').textContent) && /petite/.test(document.querySelector('#autotags').textContent)), '🏷 her body and hair tags are shown: ' + await fr.evaluate(() => document.querySelector('#autotags').textContent));
   // 🎨 Paint 4
   await fr.fill('#desc', 'long silver hair, blue eyes, white blouse, black pleated skirt');
   await fr.evaluate(() => { window.RENDER_POLL = 50; }); await fr.click('#paint'); await fr.waitForFunction(() => document.querySelectorAll('#tries [data-u]').length===4, null, {timeout:20000});
@@ -60,7 +70,7 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   const lat = by('EmptyLatentImage')[0].inputs, cns = by('SetUnionControlNetType').map(n => n.inputs.type), ap2 = by('ControlNetApplyAdvanced').map(n => [n.inputs.strength, n.inputs.end_percent]), txt = by('CLIPTextEncode')[0].inputs.text;
   ok(UPS.length===2 && lat.width===768 && lat.height===1344 && lat.batch_size===4, '🎨 sends her depth and skeleton, paints 4 at 768×1344: ' + JSON.stringify(lat));
   ok(JSON.stringify(cns)==='["openpose","depth"]' && ap2[0][0]===0.9 && ap2[1][1] <= 0.5, '…skeleton strong, depth light and letting go early: ' + JSON.stringify(ap2));
-  ok(/silver hair/.test(txt) && /a-pose/.test(txt) && /white background/.test(txt) && !/AFKJ/.test(txt) && !by('LoraLoader').length, '…with her description, the A pose and white round her; no style LoRA when the Character Creator says none: ' + txt.slice(0, 120));
+  ok(/silver hair/.test(txt) && /twintails/.test(txt) && /small breasts, petite/.test(txt) && /a-pose/.test(txt) && /white background/.test(txt) && !/AFKJ/.test(txt) && !by('LoraLoader').length, '…with her description, the A pose and white round her; no style LoRA when the Character Creator says none: ' + txt.slice(0, 120));
   ok(by('CheckpointLoaderSimple')[0].inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && by('FaceDetailer').length===1 && !by('RemoveBackground').length && /mannequin\/ch1/.test(by('SaveImage')[0].inputs.filename_prefix), '…on iriselTouch, faces fixed, kept on white (the turnaround wants white), saved under mannequin/');
   // the depth guide: her alone, light on dark
   const dep = UPS.find(u => /depth/.test(u.name)); ok(dep && dep.body.length > 4000, 'the depth picture is a real picture: ' + (dep && dep.body.length));
@@ -68,7 +78,7 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   // pick and use
   await fr.click('#tries [data-u]:nth-child(2)'); ok(await fr.evaluate(() => !document.querySelector('#use').disabled && /ch1_00001/.test(MQ.ST.pick)), 'tapping one picks it');
   await fr.click('#use'); await page.waitForTimeout(200); const got = await page.evaluate(() => GOT);
-  ok(got.length===1 && got[0].rdmq==='use' && got[0].id==='ch1' && /ch1_00001/.test(got[0].url) && got[0].shape.cm===148 && /silver hair/.test(got[0].desc), '✓ Use this one hands her picture, shape and description to the Character Creator: ' + JSON.stringify(got[0]).slice(0, 160));
+  ok(got.length===1 && got[0].rdmq==='use' && got[0].id==='ch1' && /ch1_00001/.test(got[0].url) && got[0].shape.cm===148 && /silver hair/.test(got[0].desc) && got[0].hair.style==='twintails' && /twintails/.test(got[0].tags), '✓ Use this one hands her picture, shape, hair, tags and description to the Character Creator: ' + JSON.stringify(got[0]).slice(0, 160));
   await fr.click('#close'); await page.waitForTimeout(200); ok((await page.evaluate(() => GOT)).some(m => m.rdmq==='close'), '✕ Close asks the Character Creator to close it');
   await fr.click('#paint'); await fr.waitForFunction(() => document.querySelectorAll('#tries [data-u]').length===8, null, {timeout:20000}); ok(true, '🎨 Paint 4 more keeps the earlier tries');
   await page.screenshot({path:path.join(__dirname, 'out', 'mannequin.png'), fullPage:true});

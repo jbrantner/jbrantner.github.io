@@ -2,6 +2,8 @@
 // Base Meshes Character Starter Kit. It is a bought model, so it lives on Render (output/3D Bodies), never in this public repo.
 // Rigged, 27k vertices, grey toon, normalised to 1.7 m with her feet on y = 0 and her front +z (her left is +x).
 import * as THREE from 'three';
+import {addHair} from './hair.js';
+export {HAIR0, HAIR_STYLES, BANG_STYLES, hairOf, hairTags, bodyTags} from './hair.js';
 export const BODY_AT = {sub:'3D Bodies', file:'Anime_Female_A.fbx'};
 export const TOON = (() => { const t = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 175, 175, 175, 255, 255, 255, 255, 255]), 3, 1); t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; })();
 // her bones by name (the FBX nests three nodes per bone; the outermost one turns the rest of the arm or leg with it)
@@ -72,8 +74,9 @@ function reshape(root, sk, s){ const bn = bonesOf(root), J = n => new THREE.Vect
   for(const [b, w0] of all){ const t = D(w0, re => re.test(b.name) ? 1 : 0); b.parent.updateMatrixWorld(true); b.position.copy(b.parent.worldToLocal(t)); b.updateMatrixWorld(true); } }
 
 // a body to stand in a scene: her shape, sized to ht metres
-export function bodyMesh(B, ht, s){ const T = shapedRoot(B, s), w = new THREE.Group(), c = B.SU.clone(T.root); c.scale.setScalar(ht / 1.7); w.add(c); w.userData.body = c; w.userData.face = T.face;
-  c.traverse(b => { if(b.isBone) b.userData.q0 = b.quaternion.clone(); }); return w; }
+export function bodyMesh(B, ht, s, hair, hairMat){ const T = shapedRoot(B, s), w = new THREE.Group(), c = B.SU.clone(T.root); w.add(c); w.userData.body = c; w.userData.face = T.face;
+  if(hair) addHair(w, hair, hairMat); // 💇 (built at 1.7 m, before she is sized)
+  c.scale.setScalar(ht / 1.7); c.traverse(b => { if(b.isBone) b.userData.q0 = b.quaternion.clone(); }); return w; }
 // the poses: where each upper arm, forearm, thigh and shin points, in her own frame (front +z, her left +x)
 export const POSES = {stand:{name:'Standing', bn_upperarm01L:[0.2, -1, 0.02], bn_forearm01L:[0.12, -1, 0.14], bn_upperarm01R:[-0.2, -1, 0.02], bn_forearm01R:[-0.12, -1, 0.14]},
   hip:{name:'Hand on hip', bn_upperarm01L:[0.75, -0.7, -0.2], bn_forearm01L:[-0.55, -0.55, 0.25], bn_upperarm01R:[-0.18, -1, 0.04], bn_forearm01R:[-0.08, -1, 0.2], bn_thigh01R:[-0.02, -1, 0.14], bn_shin01R:[-0.03, -1, -0.12]},

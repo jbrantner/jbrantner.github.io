@@ -29,11 +29,11 @@ const fs = require('fs'), path = require('path');
   ok(src && /^rig\/mannequin\.html\?/.test(src) && q.get('id')===(await page.evaluate(() => ccChar().id)) && /iriselTouch/.test(q.get('ck') || 'iriselTouch') && /AFKJ/.test(q.get('st')) && q.get('tw')==='AFKJ Style', 'it opens the mannequin page over the screen, for her, with her model and style: ' + src);
   // the mannequin page answers (as rig/mannequin.html does)
   const id = await page.evaluate(() => ccChar().id), fr = page.frames().find(f => /mannequin\.html/.test(f.url()));
-  await fr.evaluate(id => parent.postMessage({rdmq:'use', id, url:'https://jordo-desktop.test/view?filename=mq_00002_.png&subfolder=RenderDeck%2Fmannequin&type=output', shape:{cm:152, head:1.05, bust:1.4, hips:1.1, waist:1, shoulders:1, thighs:1, arms:1, legs:1}, desc:'long silver hair, blue eyes, white blouse, black pleated skirt'}, '*'), id);
+  await fr.evaluate(id => parent.postMessage({rdmq:'use', id, url:'https://jordo-desktop.test/view?filename=mq_00002_.png&subfolder=RenderDeck%2Fmannequin&type=output', shape:{cm:152, head:1.05, bust:1.4, hips:1.1, waist:1, shoulders:1, thighs:1, arms:1, legs:1}, hair:{style:'bob', len:0.5, vol:1, bangs:'blunt', side:true}, tags:'large breasts, short hair, bob cut, blunt bangs', desc:'silver hair, blue eyes, white blouse, black pleated skirt'}, '*'), id);
   await page.waitForTimeout(300);
   const c = await page.evaluate(() => JSON.parse(JSON.stringify(ccChar())));
-  ok(/mq_00002_/.test(c.ref) && c.body.cm===152 && c.body.bust===1.4 && c.tags==='1girl, solo, long silver hair, blue eyes, white blouse, black pleated skirt' && await page.evaluate(() => $('#ccmq').hidden), '✓ Use this one: her picture, shape and tags come back and the mannequin closes: ' + c.tags);
-  ok(await page.evaluate(() => /152 cm · head 105% · bust 140% · hips 110%/.test($('.ccstep[data-cstep="ref"]').textContent) && /Back to the mannequin/.test($('[data-cc="mq"]').textContent)), 'step 1 shows her shape and goes back to the mannequin');
+  ok(/mq_00002_/.test(c.ref) && c.body.cm===152 && c.body.bust===1.4 && c.tags==='1girl, solo, large breasts, short hair, bob cut, blunt bangs, silver hair, blue eyes, white blouse, black pleated skirt' && c.hair.style==='bob' && c.mqDesc==='silver hair, blue eyes, white blouse, black pleated skirt' && await page.evaluate(() => $('#ccmq').hidden), '✓ Use this one: her picture, shape and tags come back and the mannequin closes: ' + c.tags);
+  ok(await page.evaluate(() => /152 cm · head 105% · bust 140% · hips 110% · 💇 bob/.test($('.ccstep[data-cstep="ref"]').textContent) && /Back to the mannequin/.test($('[data-cc="mq"]').textContent)), 'step 1 shows her shape and goes back to the mannequin');
   if(process.env.SHOT) await page.screenshot({path:path.join(process.env.SHOT, 'ccmq-step1.png'), fullPage:true});
   ok(await page.evaluate(() => /doesn’t zoom out/.test($('.ccstep[data-cstep="full"]').textContent) && /eye level/.test($('.ccstep[data-cstep="turn"]').textContent)), 'steps 2 and 4 say what happens: no zoom-out, eye level only');
   // ✕ Close from the page
@@ -53,7 +53,8 @@ const fs = require('fs'), path = require('path');
   await page.evaluate(() => { CM_SENT.length = 0; const P = ccP(ccChar()); ccRedo(P, 2); });
   ok(await page.evaluate(() => { const P = ccP(ccChar()); return /mq_00002_/.test(P.cc.full.url) && !P.cc.redraw.url && P.eyeOnly && P.views.length===8; }), '↻ Redo from step 2 keeps her painting and stays eye level');
   // the library keeps her shape
-  ok(await page.evaluate(() => { const e = ccLibEntry(ccChar(), ccP(ccChar())); return e.meta.body && e.meta.body.cm===152 && e.meta.body.bust===1.4; }), '📚 her Character Library entry keeps her body shape for 🎬 Scene');
+  ok(await page.evaluate(() => { const e = ccLibEntry(ccChar(), ccP(ccChar())); return e.meta.body && e.meta.body.cm===152 && e.meta.body.bust===1.4 && e.meta.hair.style==='bob'; }), '📚 her Character Library entry keeps her body shape and hair for 🎬 Scene');
+  ok(await page.evaluate(() => { const u = new URL('https://app.test/' + (ccOpenMq(ccChar()), $('#ccmq iframe').getAttribute('src'))).searchParams; ccCloseMq(); return u.get('desc')==='silver hair, blue eyes, white blouse, black pleated skirt' && JSON.parse(u.get('hair')).style==='bob'; }), 'reopening the mannequin gives it back her own words and hair (not the added tags)');
   // a character from a picture still starts with MiniMax, also at eye level only
   await page.evaluate(() => { ccNewChar(); ccDraw(true); }); await page.waitForTimeout(100);
   await page.setInputFiles('#ccPick', {name:'her.png', mimeType:'image/png', buffer:PIC}); await page.waitForTimeout(300);
