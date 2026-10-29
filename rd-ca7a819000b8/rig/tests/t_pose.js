@@ -19,7 +19,7 @@ const DEPS = process.env.RIG_DEPS || '';
   const H = {'access-control-allow-origin':'*'};
   const lib = {name:'Ellie', subfolder:'Character Library/Ellie', saved:1000, trigger:'elliex', lora:'elliex.safetensors', prompt:'elliex, 1girl, solo', tags:'1girl, solo, blue hair, standing, full body', geo:{wM:1.07, hM:1.87, aim:[0, 0.935, 0]},
     cover:'eye_000.png', views:[{ring:1, i:0, mid:false, file:'eye_000.png'}]};
-  const store = new Map(); const GRAPHS = []; let KP = null, ACT = [];
+  const store = new Map(); const GRAPHS = []; let KP = null, ACT = [], HOLD = false;
   const OI = {MiniMaxH3ImageToVideo:['prompt', ['x']], SaveVideo:['video', ['x']], UNETLoader:['unet_name', ['minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'other.safetensors']], LoraLoaderModelOnly:['lora_name', ['minimax_h3_fl2v_turbo_8step.safetensors']], CLIPLoader:['clip_name', ['minimax_h3_text_encoder.safetensors']], VAELoader:['vae_name', ['minimax_h3_video_vae_fp16.safetensors']], CheckpointLoaderSimple:['ckpt_name', ['iriselTouchIL_v10.safetensors']], LoraLoader:['lora_name', ['elliex.safetensors']], ControlNetLoader:['control_net_name', ['illustriousXL_controlnetPromax.safetensors']], LoadBackgroundRemovalModel:['bg_removal_name', ['BiRefNet-general.safetensors']]};
   await page.route('https://render.test/**', async r => { const u = new URL(r.request().url()), J = b => r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(b) });
     if(u.pathname==='/renderdeck/library') return J(u.searchParams.get('kind')==='obj' ? {library:1, kinds:['char', 'obj'], objects:[]} : {library:1, kinds:['char', 'obj'], characters:[lib]});
@@ -30,11 +30,12 @@ const DEPS = process.env.RIG_DEPS || '';
     const oi = u.pathname.match(/^\/object_info\/(\w+)$/); if(oi){ const d = OI[oi[1]]; return J(d ? {[oi[1]]:{input:{required:{[d[0]]:[d[1]]}}}} : {}); }
     if(u.pathname==='/upload/image'){ const m = r.request().postDataBuffer().toString('latin1').match(/filename="([^"]+)"/); return J({name:m && m[1]}); }
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return J({prompt_id:'p' + GRAPHS.length}); }
-    const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[GRAPHS.length - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage');
-      const sv = Object.keys(g).find(k => g[k].class_type==='SaveVideo'), sk = Object.keys(g).find(k => g[k].class_type==='SavePoseKpsAsJsonFile');
+    if(u.pathname==='/queue') return J({queue_running:HOLD ? [[0, 'p' + GRAPHS.length]] : [], queue_pending:[]});
+    const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi && HOLD) return J({}); if(hi){ const g = GRAPHS[GRAPHS.length - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage');
+      const sv = Object.keys(g).find(k => g[k].class_type==='SaveVideo'), sk = Object.keys(g).find(k => g[k].class_type==='DWPreprocessor'); // (as on Render: the points are on DWPose's own node, the save node lists nothing)
       if(sv) return J({[hi[1]]:{status:{status_str:'success'}, outputs:{[sv]:{images:[{filename:'Ellie_act_00001.mp4', subfolder:'RenderDeck/pose', type:'output'}], animated:[true]}, [sk]:{openpose_json:[JSON.stringify(ACT.map(fl => ({people:fl ? [{pose_keypoints_2d:fl}] : [], canvas_width:KP.W, canvas_height:KP.H})))]}}}});
       if(save) return J({[hi[1]]:{status:{status_str:'success'}, outputs:{[save]:{images:[0, 1, 2, 3].map(i => ({filename:'ellie_' + i + '.png', subfolder:'RenderDeck/scene', type:'output'}))}}}});
-      return J({[hi[1]]:{status:{status_str:'success'}, outputs:{3:{openpose_json:[JSON.stringify([{people:[{pose_keypoints_2d:KP.flat}], canvas_width:KP.W, canvas_height:KP.H}])]}}}}); }
+      return J({[hi[1]]:{status:{status_str:'success'}, outputs:{2:{openpose_json:[JSON.stringify([{people:[{pose_keypoints_2d:KP.flat}], canvas_width:KP.W, canvas_height:KP.H}])]}}}}); }
     if(u.pathname==='/view' && u.searchParams.get('filename')==='Anime_Female_A.fbx') return r.fulfill({ contentType:'application/octet-stream', headers:H, body:fs.readFileSync(process.env.BODY_FBX) });
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect width="200" height="350" fill="#fff"/><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
     r.fulfill({ status:404, headers:H, body:'' }); });
@@ -104,6 +105,15 @@ const DEPS = process.env.RIG_DEPS || '';
     const e0 = await err(0), lbl = await page.textContent('#actf'), f2 = await page.evaluate(() => { const s = document.querySelector('[data-scrub]'); s.value = 2; s.dispatchEvent(new Event('input')); return !!SCENE.sc.objs[0].bq; });
     ok(eLast <= 12 && e0 <= 12 && /Frame 1 of 4/.test(lbl) && f2, '🦴 scrubbing poses her skeleton like that frame (last ' + eLast + ' px, first ' + e0 + ' px off; a frame with nobody keeps the one before): ' + lbl);
     if(process.env.SHOT){ await page.evaluate(() => { const s = document.querySelector('[data-scrub]'); s.value = 3; s.dispatchEvent(new Event('input')); }); await page.waitForTimeout(400); await page.screenshot({path:process.env.SHOT + '/pose-act.png'}); } }
+  // 🎬 closing the app while the video is being made (Jordan 2026-10-29: closed it at 800 s): it is picked up again when she's opened
+  { await page.evaluate(() => { const ob = SCENE.sc.objs[0]; delete ob.act; SCENE.drawSel(); }); HOLD = true; const n0 = GRAPHS.length;
+    await page.evaluate(() => document.querySelector('[data-act="actout"]').click()); await page.waitForFunction(() => { const j = SCENE.sc.objs[0].actJob; return j && j.pid; }, null, {timeout:15000}); await page.waitForTimeout(800);
+    await page.goto('https://app.test/rig/scene.html?pose=1'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000});
+    await page.waitForFunction(() => { const o = [...SCENE.objs.values()][0]; return o && o.mq && o.mq.userData.body && SCENE.BODY; }, null, {timeout:30000});
+    HOLD = false; await page.evaluate(() => { SCENE.ui.sel = SCENE.sc.objs[0].id; SCENE.drawSel(); });
+    await page.waitForFunction(() => !!(SCENE.sc.objs[0].act && SCENE.sc.objs[0].act.bq), null, {timeout:20000});
+    const r = await page.evaluate(() => ({job:!!SCENE.sc.objs[0].actJob, msg:(document.querySelector('#rmsg') || {}).textContent}));
+    ok(GRAPHS.length===n0 + 1 && !r.job, '🎬 a video still being made when the app was closed is picked up when you come back (not made twice): ' + JSON.stringify(r)); }
   // the views go all the way round her, under the floor and over her head (Jordan 2026-10-29)
   { const el = await page.evaluate(() => window.EL_MAX * 180 / Math.PI); ok(el >= 85, 'the views turn up to ' + Math.round(el) + '° above and below her'); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
