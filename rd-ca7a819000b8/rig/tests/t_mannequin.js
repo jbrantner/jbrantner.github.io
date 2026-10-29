@@ -86,6 +86,10 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   await fr.click(fld('hmix') + ' input'); await fr.click(fld('hmix') + ' .dd [data-t="colored tips"]');
   ok(/black hair, red hair, multicolored hair, colored tips, red tips/.test(await box()) && /Base: black hair/.test(await fr.textContent(fld('hmix'))), '…Tips: black is her base and red her tips: ' + await box());
   await fr.click(fld('hmix') + ' [data-swap]'); ok(/red hair, black hair, multicolored hair, colored tips, black tips/.test(await box()) && !/\bred tips/.test(await box()), '…⇄ Swap makes red her base and black her tips: ' + await box());
+  await fr.click(fld('hmix') + ' input'); await fr.click(fld('hmix') + ' .dd [data-t="colored inner hair"]');
+  ok(/red hair, black hair, multicolored hair, colored inner hair/.test(await box()) && /Outer: red hair · inner: black hair/.test(await fr.textContent(fld('hmix'))), '…Inner hair: the first colour is her outer hair, written first: ' + await box());
+  await fr.click(fld('hmix') + ' [data-swap]'); ok(/black hair, red hair, multicolored hair, colored inner hair/.test(await box()) && /Outer: black hair/.test(await fr.textContent(fld('hmix'))), '…⇄ Swap makes black her outer hair and red her inner: ' + await box());
+  await fr.click(fld('hmix') + ' [data-swap]'); await fr.click(fld('hmix') + ' input'); await fr.click(fld('hmix') + ' .dd [data-t="colored tips"]');
   await fr.fill(fld('hcol') + ' input', ''); await page.waitForTimeout(200);
   ok(await fr.evaluate(k => /1\.5M/.test(document.querySelector(k + ' .dd [data-t="black hair"]').textContent) && /k$/.test(document.querySelector(k + ' .dd [data-t="dark blue hair"]').textContent), fld('hcol')), '🔢 each tag shows how often Danbooru uses it (black hair 1.5M, dark blue hair in k)');
   await fr.fill(fld('top') + ' input', 'sail'); await page.waitForTimeout(400);
