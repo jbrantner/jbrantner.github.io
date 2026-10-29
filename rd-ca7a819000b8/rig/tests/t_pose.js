@@ -55,7 +55,8 @@ const DEPS = process.env.RIG_DEPS || '';
   const pz = await page.evaluate(() => ({closed:document.body.classList.contains('pzc'), bar:!document.querySelector('#pzbar').hidden, cols:getComputedStyle(document.querySelector('.cols')).display}));
   ok(pz.closed && pz.bar && pz.cols==='none', '🤸 the rig is full screen, her settings tucked behind ⚙ Panel: ' + JSON.stringify(pz));
   await page.evaluate(() => document.querySelector('#pzpanel').click()); const pz2 = await page.evaluate(() => getComputedStyle(document.querySelector('.cols')).display); await page.evaluate(() => document.querySelector('#pzpanel').click());
-  ok(pz2!=='none', '⚙ Panel opens her settings');
+  const pz3 = await page.evaluate(() => ({rows:document.querySelectorAll('#objs .row').length, sel:!document.querySelector('#selbox').hidden && document.querySelector('#selbox').parentElement.classList.contains('cols')}));
+  ok(pz2!=='none' && !pz3.rows && pz3.sel, '⚙ Panel opens her settings, with no layer list (she is always the one selected): ' + JSON.stringify(pz3));
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT + '/pose-dots.png'});
   // drag her right wrist up
   const w0 = await page.evaluate(() => { SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam'); const o = [...SCENE.objs.values()][0], p = SCENE.jointPts(o)[4], r = SCENE.rects().cam, v = p.clone().project(SCENE.camOf('cam')), st = document.querySelector('#stage').getBoundingClientRect();
