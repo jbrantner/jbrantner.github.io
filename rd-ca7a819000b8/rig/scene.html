@@ -698,9 +698,10 @@ function placeShot(o, cam){ const ob = o.ob, sh = ob.shot, s = ob.s || 1, t = te
 // OpenPose's 18 points on the mannequin (front +z, her right is -x), the limbs between them and their colours
 const MQ_J = [[0, 1.585, 0.1], [0, 1.44, 0], [-0.24, 1.37, 0], [-0.255, 1.08, 0], [-0.275, 0.8, 0], [0.24, 1.37, 0], [0.255, 1.08, 0], [0.275, 0.8, 0], [-0.095, 0.93, 0], [-0.095, 0.5, 0], [-0.095, 0.08, 0],
   [0.095, 0.93, 0], [0.095, 0.5, 0], [0.095, 0.08, 0], [-0.035, 1.61, 0.085], [0.035, 1.61, 0.085], [-0.095, 1.585, 0], [0.095, 1.585, 0]];
-function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rects()); poseFor(view);
+function guidesFor(o, view, grow){ const cam0 = camOf(view), ob = o.ob; placeCams(rects()); poseFor(view);
   const mode0 = ob.mode; ob.mode = 'mq'; poseFor(view); o.g.updateMatrixWorld(true); const part = o.mq || o.mesh; // 🧍 her mannequin, or 🪑 the 3D object
   const box = new THREE.Box3(); part.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) box.expandByObject(m, true); });
+  if(grow) box.union(grow); // (🎬 Move into the pose: one frame round both her A pose and the pose she moves into)
   const cam = cam0.clone(), corners = []; for(const x of [box.min.x, box.max.x]) for(const y of [box.min.y, box.max.y]) for(const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z).project(cam));
   const asp = cam.isOrthographicCamera ? (cam.right - cam.left) / (cam.top - cam.bottom) : cam.aspect, FH = 2000, FW = Math.round(FH * asp);
   let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for(const c of corners){ const px = (c.x + 1) / 2 * FW, py = (1 - c.y) / 2 * FH; x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); }
@@ -797,7 +798,7 @@ async function renderAngle(ob, free){ const o = OBJ.get(ob.id), e = o && o.e, st
     for(const [l, w] of lorasOf(E, los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
     const pos0 = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, los, await ownTags(ob, free), free)}), neg0 = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '') + (free ? FREE_NEG : '')}), L = free ? null : add('ControlNetLoader', {control_net_name:cn});
     let pos = [pos0, 0], neg = [neg0, 0];
-    for(const [img, type, str, end] of free ? [] : E.obj ? [[dn, 'depth', 0.7, 0.7]] : (POSE /* 🤸 held harder to her rig: Jordan 2026-10-29, it wasn't following the poses */ ? [[pn, 'openpose', 1, 0.85], [dn, 'depth', 0.75, 0.75]] : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]])){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
+    for(const [img, type, str, end] of free ? [] : E.obj ? [[dn, 'depth', 0.7, 0.7]] : (POSE /* 🤸 held harder to her rig (Jordan 2026-10-29, it wasn't following the poses); 🌿 Natural lets go earlier so she relaxes */ ? (SC.loose ? [[pn, 'openpose', 1, 0.55], [dn, 'depth', 0.6, 0.35]] : [[pn, 'openpose', 1, 0.85], [dn, 'depth', 0.75, 0.75]]) : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]])){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:E.obj ? [add('RepeatLatentBatch', {samples:[add('VAEEncode', {pixels:[add('LoadImage', {image:cl}), 0], vae:[ck, 2]}), 0], amount:4}), 0] : [add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:E.obj ? OBJ_DN : 1}); // 🪑 an object starts from its own colours
     let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0];
     if(fd && ud && !E.obj) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, sam);
@@ -967,6 +968,95 @@ async function orbWait(ob, o, st, g){ const J = ob.orbJob, sh = J.sh;
 async function orbResume(ob){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!ob.orbJob || !ob.orbJob.pid || BUSY.has(ob.id) || !(o && o.mq && o.mq.userData.body && BODY && BODY.face)) return; BUSY.add(ob.id); drawSel();
   try{ await orbWait(ob, o, st); }catch(err){ delete ob.orbJob; changed(); st(err.message || String(err)); } BUSY.delete(ob.id); drawSel(); }
+// 🎬 Move into the pose (Jordan 2026-10-29: "the pose is followed really well but it's stiff because the rig is stiff"): her A pose is
+// painted from the 📷 Camera (her LoRA, held to the rig), then MiniMax FL2V films her from it into the rig's pose, the Fun ControlNet
+// steering it loosely with a skeleton video that eases from the A pose into the pose and holds it. 4 frames from the end come back as
+// tries to pick from (⤴ High res cleans one up). One frame (crop) round both poses, so the video and the tries line up with her rig.
+const MOVE_AT = 96, MOVE_CN = {strength:0.7, end:0.7}, MOVE_PICK = [100, 108, 116, 123];
+const movePrompt = d => 'The first frame shows the character standing in an A pose, full body, on a plain white background. [0s-4s] She moves smoothly and naturally into her pose' + ((d || '').trim() ? ': ' + d.trim().replace(/[.!]+$/, '') : '')
+  + ', with relaxed, natural body language, [4s-5s] then holds the pose. Steady camera, no camera movement, the same framing as the first frame, her whole body always inside the frame. Same character, same face, same outfit, same art style, plain white background. No cuts.';
+function aviMjpeg(frames, w, h, fps){ // (Motion-JPEG in an AVI, as the main app sends its skeleton spins)
+  const pad = n => n + (n & 1), movi = frames.reduce((t, f) => t + 8 + pad(f.length), 4), hdrl = 4 + 64 + 12 + 64 + 48, idx = 16 * frames.length;
+  const total = 12 + 8 + hdrl + 8 + movi + 8 + idx, buf = new Uint8Array(total), dv = new DataView(buf.buffer); let p = 0;
+  const cc = s => { for(let i = 0; i < 4; i++) buf[p++] = s.charCodeAt(i); }, u32 = v => { dv.setUint32(p, v, true); p += 4; }, u16 = v => { dv.setUint16(p, v, true); p += 2; };
+  const big = frames.reduce((m, f) => Math.max(m, f.length), 0);
+  cc('RIFF'); u32(total - 8); cc('AVI '); cc('LIST'); u32(hdrl); cc('hdrl');
+  cc('avih'); u32(56); u32(Math.round(1e6 / fps)); u32(big * fps); u32(0); u32(0x10); u32(frames.length); u32(0); u32(1); u32(big + 8); u32(w); u32(h); u32(0); u32(0); u32(0); u32(0);
+  cc('LIST'); u32(4 + 64 + 48); cc('strl');
+  cc('strh'); u32(56); cc('vids'); cc('MJPG'); u32(0); u16(0); u16(0); u32(0); u32(1); u32(fps); u32(0); u32(frames.length); u32(big + 8); u32(0xffffffff); u32(0); u16(0); u16(0); u16(w); u16(h);
+  cc('strf'); u32(40); u32(40); u32(w); u32(h); u16(1); u16(24); cc('MJPG'); u32(w * h * 3); u32(0); u32(0); u32(0); u32(0);
+  cc('LIST'); u32(movi); const m0 = p; cc('movi'); const offs = [];
+  for(const f of frames){ offs.push(p - m0); cc('00dc'); u32(f.length); buf.set(f, p); p += pad(f.length); }
+  cc('idx1'); u32(idx); frames.forEach((f, i) => { cc('00dc'); u32(0x10); u32(offs[i]); u32(f.length); });
+  return buf; }
+// her bones' own turns and her body's position, as they are now
+function rigState(o){ const c = o.mq.userData.body, q = {}; c.traverse(b => { if(b.isBone) q[b.uuid] = b.quaternion.clone(); }); return {q, p:c.position.clone()}; }
+// the skeleton video: each frame her pose part way from the A pose (a) to the pose (b), eased, drawn as OpenPose on black in the crop's pixels
+async function moveFrames(o, a, b, geo, W, H){ const c = o.mq.userData.body, P = picPts(o, geo), sx = W / geo.px[0], sy = H / geo.px[1], out = [], show = Array(18).fill(true), byId = {};
+  c.traverse(x => { if(x.isBone) byId[x.uuid] = x; });
+  // (face points only when she faces this way, an ear only on the side that shows, as the guides do)
+  const ob = o.ob, camAt = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(geo.mw)), Y = new THREE.Vector3(0, 1, 0), toCam = camAt.sub(new THREE.Vector3(ob.x, ob.y + 1.5, ob.z)).normalize();
+  const face = new THREE.Vector3(0, 0, 1).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam), ear = new THREE.Vector3(1, 0, 0).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam);
+  show[0] = show[14] = show[15] = face > -0.15; show[16] = ear < 0.35; show[17] = ear > -0.35;
+  for(let f = 0; f < ACT_LEN; f++){ const t0 = Math.min(1, f / MOVE_AT), t = t0 * t0 * (3 - 2 * t0);
+    for(const [id, qa] of Object.entries(a.q)){ const bn = byId[id], qb = b.q[id]; if(bn && qb) bn.quaternion.copy(qa).slerp(qb, t); }
+    c.position.copy(a.p).lerp(b.p, t); o.g.updateMatrixWorld(true);
+    const pts = bodyJoints(o.mq, BODY.face).map(p => { const [x, y] = P.toPx(p); return [x * sx, y * sy]; });
+    const cv = drawPose(W, H, pts, show), bl = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9)); out.push(new Uint8Array(await bl.arrayBuffer())); if(f % 16===15) await new Promise(r => setTimeout(r, 0)); }
+  o.mq.userData.pose = null; poseFor('cam'); return out; }
+async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
+  if(!e || !PC.url || BUSY.has(ob.id)) return; if(!(o.mq && o.mq.userData.body && BODY && BODY.face)) return st('Her rig (the base body) has not loaded from Render.');
+  BUSY.add(ob.id); drawSel();
+  try{ st('Looking for a PC with MiniMax, its pose ControlNet and DWPose…'); const k = await actKit(); if(!k) throw new Error('No PC has MiniMax H3 FL2V (it is on Render).');
+    const cnf = (await comboOf(k.url, 'ModelPatchLoader', 'name')).find(n => /minimax_h3_fun_controlnet/i.test(n)); if(!cnf || !(await hasNode(k.url, 'MiniMaxH3FunControlNetApply')) || !(await hasNode(k.url, 'LoadVideo'))) throw new Error(pcName(k.url) + " hasn't got MiniMax's pose ControlNet (🧊 Make 3D settings can fetch it).");
+    const E = kitE(ob, e), K = await kitFor(E, 'cn'); if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); }
+    // her pose now, and her A pose: one crop round both
+    const keep = {pose:ob.pose, bq:ob.bq}, boxOf = () => { poseFor('cam'); o.g.updateMatrixWorld(true); const bx = new THREE.Box3(); o.mq.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) bx.expandByObject(m, true); }); return bx; };
+    ob.mode = 'mq'; const bT = boxOf(), sT = rigState(o), key = shotKey(ob); ob.pose = 'apose'; delete ob.bq; const bA = boxOf(), sA = rigState(o);
+    const GA = guidesFor(o, 'cam', bT), wordsA = wordsOf(ob, E, K.los, await ownTags(ob));
+    ob.pose = keep.pose; if(keep.bq) ob.bq = keep.bq; ob.mode = 'mq'; poseFor('cam'); const GT = guidesFor(o, 'cam', bA);
+    const a = GA.W / GA.H, Hv = Math.round(Math.sqrt(576 * 1024 / a) / 32) * 32, Wv = Math.round(Hv * a / 32) * 32;
+    st('Drawing her skeleton moving into the pose…'); const fr = await moveFrames(o, sA, sT, GT.geo, Wv, Hv);
+    // 1. her A pose painted from the camera
+    const stamp = Date.now().toString(36); st('Sending her A pose guides to ' + pcName(K.url) + '…');
+    const dn = await upload(K.url, GA.depth, 'rd-pose-adepth-' + stamp + '.png'), pn = await upload(K.url, GA.pose, 'rd-pose-apose-' + stamp + '.png');
+    const g = {}; let n = 0; const add = (c2, i) => { const id = String(++n); g[id] = {class_type:c2, inputs:i}; return id; };
+    const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
+    for(const [l, w] of lorasOf(E, K.los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
+    const pos0 = add('CLIPTextEncode', {clip, text:wordsA}), neg0 = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:K.cn}); let pos = [pos0, 0], neg = [neg0, 0];
+    for(const [img, type, str, end] of [[pn, 'openpose', 1, 0.85], [dn, 'depth', 0.75, 0.75]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
+    const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:GA.W, height:GA.H, batch_size:1}), 0], denoise:1});
+    let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, K.sam);
+    const sa = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_apose'});
+    const ai = (await runGraph(K.url, g, sa, t => st('🎬 1 of 2: painting her A pose on ' + pcName(K.url) + '… ' + t + ' s')))[0]; if(!ai) throw new Error('Her A pose did not come back.');
+    // 2. MiniMax moves her into the pose, steered loosely by the skeleton video
+    st('Sending her A pose and the skeleton video to ' + pcName(k.url) + '…'); const up = await sendPic(k.url, {pc:K.url, file:ai.filename, sub:ai.subfolder || ''}, 'rd-pose-move-', true);
+    if(window.MOVE_DBG) window.MOVE_DBG(fr);
+    const fd = new FormData(); fd.append('image', new Blob([aviMjpeg(fr, Wv, Hv, ACT_FPS)], {type:'video/x-msvideo'}), 'rd-pose-move-' + stamp + '.avi'); fd.append('overwrite', 'true'); fd.append('type', 'input');
+    const vr = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!vr.ok) throw new Error('Sending the skeleton video failed (' + vr.status + ')'); const vj = await vr.json(), ctl = (vj.subfolder ? vj.subfolder + '/' : '') + vj.name;
+    const m = {}; n = 0; const ad = (c2, i) => { const id = String(++n); m[id] = {class_type:c2, inputs:i}; return id; };
+    const li = ad('LoadImage', {image:up}); let mm = [ad('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0]; if(k.lora) mm = [ad('LoraLoaderModelOnly', {model:mm, lora_name:k.lora, strength_model:1}), 0];
+    const cl = ad('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), va = ad('VAELoader', {vae_name:k.vae});
+    mm = [ad('MiniMaxH3FunControlNetApply', {model:mm, model_patch:[ad('ModelPatchLoader', {name:cnf}), 0], vae:[va, 0], strength:MOVE_CN.strength, start_percent:0, end_percent:MOVE_CN.end, control_video:[ad('GetVideoComponents', {video:[ad('LoadVideo', {file:ctl}), 0]}), 0]}), 0];
+    const iv = ad('MiniMaxH3ImageToVideo', {clip:[cl, 0], vae:[va, 0], prompt:movePrompt(SC.desc), width:Wv, height:Hv, length:ACT_LEN, first_frame:[li, 0]});
+    const gd = ad('BasicGuider', {model:mm, conditioning:[iv, 0]}), sc = ad('BasicScheduler', {model:mm, scheduler:'simple', steps:k.steps, denoise:1});
+    const smp = ad('SamplerCustomAdvanced', {noise:[ad('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)}), 0], guider:[gd, 0], sampler:[ad('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sc, 0], latent_image:[iv, 1]});
+    const dec = ad('VAEDecodeTiled', {samples:[smp, 0], vae:[va, 0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), pre = (HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_move';
+    const sv = ad('SaveVideo', {video:[ad('CreateVideo', {images:[dec, 0], fps:ACT_FPS}), 0], filename_prefix:pre, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+    const saves = MOVE_PICK.map(i => ad('SaveImage', {images:cutOut(ad, [ad('ImageFromBatch', {image:[dec, 0], batch_index:i, length:1}), 0], K.bgm), filename_prefix:pre + '_f' + i}));
+    ob.moveJob = {url:k.url, sv, saves, t0:Date.now(), key, geo:Object.assign({}, GT.geo, {px:[Wv, Hv]})}; changed();
+    await moveWait(ob, st, m); }
+  catch(err){ delete ob.moveJob; changed(); st(err.message || String(err)); }
+  BUSY.delete(ob.id); drawSel(); }
+async function moveWait(ob, st, g){ const J = ob.moveJob;
+  const res = await runGraph(J.url, g, [J.sv, ...J.saves], t => st('🎬 2 of 2: MiniMax is moving her into the pose on ' + pcName(J.url) + '… ' + t + ' s (you can close the app: it is picked up when you come back)'), {pid:J.pid, t0:J.t0, mins:45, onId:id => { J.pid = id; changed(); }});
+  const ims = J.saves.map(s2 => ((res[s2] || {}).images || [])[0]).filter(Boolean); if(!ims.length) throw new Error('The frames did not come back.');
+  const v = ((res[J.sv] || {}).images || [])[0]; ob.move = v ? {pc:J.url, file:v.filename, sub:v.subfolder || ''} : null;
+  ob.tries = ims.map(im => Object.assign({pc:J.url, file:im.filename, sub:im.subfolder || '', key:J.key, move:true}, J.geo)); ims.forEach(im => texOf(shotUrl({pc:J.url, file:im.filename, sub:im.subfolder}), true)); delete ob.moveJob;
+  st('🎬 Done: pick one of the 4 frames from the end of her move, then ⤴ High res cleans it up.'); changed(); dirty = true; }
+async function moveResume(ob){ const st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
+  if(!ob.moveJob || !ob.moveJob.pid || BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
+  try{ await moveWait(ob, st); }catch(err){ delete ob.moveJob; changed(); st(err.message || String(err)); } BUSY.delete(ob.id); drawSel(); }
 // the turn's frames (every ORB_STEP-th, at even steps round the circle: the last frame is the first again) → one 3D pose → her bones
 function fitOrbit(ob, o, sh, frames){ const N = frames.length, views = [];
   for(let i = 0; i < N - 1; i += ORB_STEP){ const kp = frames[i]; let pts = null;
@@ -1205,7 +1295,7 @@ $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) 
   else if(b.dataset.eye){ ob.hide = !ob.hide; changed(); } else { ob.lock = !ob.lock; changed(); }
   drawList(); drawSel(); dirty = true; };
 function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find(o => o.id===ui.sel);
-  if(POSE && SC) SC.objs.forEach(x => { if(x.actJob && x.actJob.pid && !BUSY.has(x.id)) setTimeout(() => actResume(x), 0); if(x.orbJob && x.orbJob.pid && !BUSY.has(x.id)) setTimeout(() => orbResume(x), 0); }); // (🎬 a video still being made when the app was closed)
+  if(POSE && SC) SC.objs.forEach(x => { if(x.actJob && x.actJob.pid && !BUSY.has(x.id)) setTimeout(() => actResume(x), 0); if(x.orbJob && x.orbJob.pid && !BUSY.has(x.id)) setTimeout(() => orbResume(x), 0); if(x.moveJob && x.moveJob.pid && !BUSY.has(x.id)) setTimeout(() => moveResume(x), 0); }); // (🎬 a video still being made when the app was closed)
   if(numbersOnly && ob && box.dataset.id===ob.id){ ['x', 'y', 'z'].forEach(k => { const i = box.querySelector(`[data-n="${k}"]`); if(i && document.activeElement!==i) i.value = ob[k]; }); return; }
   box.dataset.id = ob ? ob.id : '';
   if(!ob){ box.innerHTML = SCM ? '' : `<h2>Selected</h2><p class="note">Nothing selected. Tap a name in Objects (or tap one in a view) to move it.</p>`; placeSel(); return; }
@@ -1219,6 +1309,8 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     ${POSE ? '' : `<div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>`}
     ${paints ? `<div class="lbl">Show ${it ? 'it' : 'her'} as</div><div class="line">${[['mq', it ? '🪑 3D' : '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
       ${modeOf(ob)==='mq' && !it ? poseRow(ob) : ''}
+      ${POSE && modeOf(ob)==='mq' && !it ? `<div class="line"><button data-loose="1" aria-pressed="${!!SC.loose}">🌿 Natural</button><button data-loose="0" aria-pressed="${!SC.loose}">🦴 Exact</button></div><p class="note">${SC.loose ? '🌿 The rig sets the pose, then lets go half way so she relaxes (shoulders, back, hands).' : '🦴 She is held to the rig to the end: the exact pose, but as stiff as the rig.'}</p>
+      <div class="line"><button data-act="move" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Move into the pose</button></div><p class="note">MiniMax films her from her A pose moving into this pose (the rig steering it loosely), so she ends up in it naturally. You get 4 frames from the end to pick from (about 6 minutes on Render).</p>` : ''}
       ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. ${it ? 'A PC paints it 4 times over the 3D model (its own colours and shape) with the style LoRA, cut out.' : 'A PC paints her 4 times over the mannequin with her LoRA, faces fixed, cut out.'}</p>` : ''}
       ${POSE && modeOf(ob)==='mq' && !it ? `<p class="note">🦾 IK rig: drag a pink cube (hands, feet) and the arm or leg follows; a blue dot swings that elbow or knee; the gold ring moves her body with her feet kept planted; the pink dots on her neck and nose bend her back and turn her head. ↶ Undo is at the bottom.</p>${ob.bq ? '<div class="line"><button data-act="unbend">↺ Undo all the bends</button></div>' : ''}` : ''}
       ${POSE && modeOf(ob)==='shot' && !it ? `<div class="line"><button data-act="fit" ${BUSY.has(ob.id) ? 'disabled' : ''}>🦴 Match her skeleton to this picture</button></div><p class="note">DWPose reads her pose in the picture and her rig bends to match it, so you can turn round her and fix it by hand.</p><div class="line"><button data-act="orbit" ${BUSY.has(ob.id) ? 'disabled' : ''}>🔄 Read her from all sides</button></div><p class="note">When one picture hides a limb (legs under a dress, an arm behind her): MiniMax turns the camera all the way round her, frozen in this pose, and her rig takes the pose that fits every side (about 5 minutes on Render).</p>` : ''}
@@ -1236,9 +1328,10 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     if(k==='rot') $('#rotv').textContent = Math.round(v) + '°'; if(k==='s') $('#sv').textContent = Math.round(v * 100) + '%'; changed(); });
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
   box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; if(SC.d3 && ob.mode==='shot'){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-loose]').forEach(b => b.onclick = () => { SC.loose = b.dataset.loose==='1'; drawSel(); changed(); });
   box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; delete ob.bq; drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; if(SC.d3){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
-  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='imagine') return renderAngle(ob, true); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='orbit') return orbOut(ob); if(b.dataset.act==='actout') return actOut(ob); if(b.dataset.act==='vid'){ ob.act.shut = !ob.act.shut; drawSel(); changed(); return; } if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
+  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='imagine') return renderAngle(ob, true); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='orbit') return orbOut(ob); if(b.dataset.act==='move') return moveInto(ob); if(b.dataset.act==='actout') return actOut(ob); if(b.dataset.act==='vid'){ ob.act.shut = !ob.act.shut; drawSel(); changed(); return; } if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
   if(ob.lock) box.querySelectorAll('input').forEach(i => i.disabled = true); }
