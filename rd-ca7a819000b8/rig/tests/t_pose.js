@@ -91,6 +91,8 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.evaluate(() => document.querySelector('[data-act="render"]').click());
   await page.waitForFunction(() => (SCENE.sc.objs[0].tries || []).length===4, null, {timeout:20000});
   const g = GRAPHS[GRAPHS.length - 1], pos = Object.values(g).find(n => n.class_type==='CLIPTextEncode').inputs.text, tr = await page.evaluate(() => SCENE.sc.objs[0].tries[0]);
+  const cn = Object.values(g).filter(n => n.class_type==='ControlNetApplyAdvanced').map(n => n.inputs.strength + '/' + n.inputs.end_percent).join(' ');
+  ok(cn==='1/0.85 0.75/0.75', '🤸 the painting is held hard to her rig: OpenPose 1 until 85%, depth 0.75 until 75%: ' + cn);
   ok(/jumping/.test(pos) && !/standing/.test(pos) && /elliex/.test(pos) && tr.pm && tr.pm.length===16 && tr.mw.length===16 && tr.px.length===2, '🎬 the action goes in her prompt (no "standing"), and each try keeps its camera: ' + pos);
   // pick one, then match: DWPose "sees" her waving
   await page.evaluate(() => document.querySelector('[data-try="0"]').click()); await page.waitForTimeout(200);
