@@ -19,13 +19,22 @@ const links = g => { const errs = []; for(const [id, n] of Object.entries(g)) fo
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  // (eight tabs: the row scrolls by itself, the page doesn't, and no label is cut off)
-  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelectorAll('#tabs button').length===8 && [...document.querySelectorAll('#tabs button')].every(b => b.scrollWidth <= b.clientWidth + 1)), 'the tabs row scrolls sideways on a 375 px phone, the page does not, and every label shows whole');
-  await page.click('#tabs [data-tab="pose"]'); ok(await page.evaluate(() => { const r = $('#tabs [data-tab="pose"]').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 1; }), 'the picked tab scrolls into view');
+  // (three tabs + Scene; the creators open from the 📚 Library, with ← Library back)
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('#tabs button')].map(b => b.dataset.tab).join()==='render,comic,scene,lib' && [...document.querySelectorAll('#tabs button')].every(b => b.scrollWidth <= b.clientWidth + 1)), 'the tab bar is Render, Comic, Scene, Library, with no label cut off on a 375 px phone');
+  await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => [...document.querySelectorAll('[data-cc="libmake"]')].map(b => b.dataset.k).join()==='cc,obj,env,pose' && $('#libBack').hidden), '📚 Library offers ＋ Character, Object, Environment, Pose');
+  await page.click('[data-cc="libmake"][data-k="obj"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => S.tab==='obj' && !$('#libBack').hidden && /Object Creator/.test($('#libBackT').textContent) && $('#tabs [data-tab="lib"]').classList.contains('on')), '＋ Object opens the Object Creator, Library stays lit, ← Library shows');
+  await page.click('#libBack [data-tab="lib"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => S.tab==='lib' && $('#libBack').hidden && !!$('.libmake')), '← Library goes back');
+  await page.evaluate(() => { localStorage.setItem('rd-envs', JSON.stringify([{id:'env1', kind:'env', name:'Old library', objs:[], saved:1}])); localStorage.setItem('rd-posebook', JSON.stringify([{id:'pb1', kind:'posebook', name:'Kick', saved:2}])); return ccAssetsLoad(); });
+  ok(await page.evaluate(() => /Old library/.test($('[data-cc="libenv"]').textContent) && /Kick/.test($('[data-cc="libpose"]').textContent)), 'saved environments and poses are listed in the Library');
+  await page.click('[data-cc="libenv"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => S.tab==='env' && /env=1/.test($('#scn iframe').src) && /open=env1/.test($('#scn iframe').src) && !$('#libBack').hidden), 'tapping an environment opens it in the Environment page');
   await page.click('#tabs [data-tab="render"]');
   // a character first, so the two lists can be told apart
-  await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200); await page.evaluate(() => { ccChar().name = 'Pinky'; save(); ccDraw(true); });
-  await page.click('#tabs [data-tab="obj"]'); await page.waitForTimeout(200);
+  await page.evaluate(() => goTab('cc')); await page.waitForTimeout(200); await page.evaluate(() => { ccChar().name = 'Pinky'; save(); ccDraw(true); });
+  await page.evaluate(() => goTab('obj')); await page.waitForTimeout(200);
   ok(await page.evaluate(() => S.tab==='obj' && !$('#cc').hidden && /Object Creator/.test($('.cctop h1').textContent) && document.querySelectorAll('.ccstep').length===5 && !$('.ccstep[data-cstep="lora"]') && /New object/.test($('.ccchips').textContent) && !/Pinky/.test($('.ccchips').textContent)), '🪑 Object Creator opens with its own list (no Pinky), five steps and no 🎓 LoRA card');
   ok(await page.evaluate(() => $('[data-cc="go"]').disabled && /Make it/.test($('[data-cc="go"]').textContent)), '▶ Make it waits for words or a picture');
   await page.click('.ccstep[data-cstep="ref"] summary');
@@ -72,7 +81,7 @@ const links = g => { const errs = []; for(const [id, n] of Object.entries(g)) fo
   await page.click('[data-cc="libdel"]'); await page.waitForTimeout(100);
   ok(await page.evaluate(() => !CCV.lib.objs.length), '🗑 takes it out');
   // a picture with other things in it: Qwen takes the object out of it
-  await page.click('#tabs [data-tab="obj"]'); await page.waitForTimeout(200); await page.click('[data-cc="new"]'); await page.waitForTimeout(100); await page.evaluate(() => { const d = $('.ccstep[data-cstep="ref"]'); if(!d.open) d.open = true; });
+  await page.evaluate(() => goTab('obj')); await page.waitForTimeout(200); await page.click('[data-cc="new"]'); await page.waitForTimeout(100); await page.evaluate(() => { const d = $('.ccstep[data-cstep="ref"]'); if(!d.open) d.open = true; });
   await page.setInputFiles('#ccPick', {name:'room.png', mimeType:'image/png', buffer:PIC}); await page.waitForTimeout(300);
   await page.fill('[data-ccf="desc"]', 'the brass lamp on the desk');
   const pg = await page.evaluate(async () => { const c = ccChar(), k = Object.assign({}, ocFullKit(), {enc:'TextEncodeQwenImageEditPlus'}), plus = ocFullGraph(k, 'room.png', c, 'p', 1).g, one = ocFullGraph(ocFullKit(), 'room.png', c, 'p', 1).g;
@@ -80,9 +89,9 @@ const links = g => { const errs = []; for(const [id, n] of Object.entries(g)) fo
   ok(pg.img===1 && /^Take the brass lamp on the desk from picture 2 and show it alone on the plain white page of picture 1/.test(pg.plus.prompt) && pg.plus.image1 && pg.plus.image2 && /Leave out everything else/.test(pg.plus.prompt), 'from a picture: "Take … from picture 2" onto the white page of picture 1 (Qwen keeps just that object)');
   ok(/^Show only the brass lamp on the desk from this picture/.test(pg.one), 'and an older Qwen-Image-Edit gets the one-picture wording');
   // the character tab still has only her
-  await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200);
+  await page.evaluate(() => goTab('cc')); await page.waitForTimeout(200);
   ok(await page.evaluate(() => /Pinky/.test($('.ccchips').textContent) && !/Chair|No name/.test($('.ccchips').textContent.replace('Pinky', '')) && /Character Creator/.test($('.cctop h1').textContent) && !ccChar().obj), '🧍 Character Creator still shows only the characters');
-  await page.goto('https://app.test/'); await page.waitForTimeout(400); await page.click('#tabs [data-tab="obj"]'); await page.goto('https://app.test/'); await page.waitForTimeout(500);
+  await page.goto('https://app.test/'); await page.waitForTimeout(400); await page.evaluate(() => goTab('obj')); await page.goto('https://app.test/'); await page.waitForTimeout(500);
   ok(await page.evaluate(() => !$('#cc').hidden && S.tab==='obj' && /Object Creator/.test($('.cctop h1').textContent)), 'left on 🪑 Object Creator, the app reopens on it');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

@@ -13,7 +13,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  await page.click('#tabs [data-tab="obj"]'); await page.waitForTimeout(200);
+  await page.evaluate(() => goTab('obj')); await page.waitForTimeout(200);
   await page.click('.ccstep[data-cstep="ref"] summary');
   await page.click('[data-cc="try"]'); ok(await page.evaluate(() => !(ccChar().tries || []).length), '🎲 Try waits for words or a picture');
   await page.fill('[data-ccf="name"]', 'Chair'); await page.fill('[data-ccf="desc"]', 'a wooden chair'); await page.evaluate(() => document.activeElement.blur());
