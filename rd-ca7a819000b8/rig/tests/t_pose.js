@@ -10,7 +10,7 @@ const DEPS = process.env.RIG_DEPS || '';
   const page = await browser.newPage({ viewport:{width:390, height:900} });
   const logs = []; page.on('pageerror', e => { logs.push('PAGEERROR ' + e.message); if(process.env.DBG) console.log('PAGEERROR', e.message); }); if(process.env.DBG) page.on('console', m => console.log('C', m.text())); page.on('dialog', d => d.accept());
   await page.route('https://app.test/rig/scene.html*', r => r.fulfill({ contentType:'text/html', body:html }));
-  await page.route(/https:\/\/app\.test\/rig\/(body|hair|look)\.js/, r => r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(path.join(__dirname, '..', new URL(r.request().url()).pathname.split('/').pop())) }));
+  await page.route(/https:\/\/app\.test\/rig\/(body|hair|look|orbit)\.js/, r => r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(path.join(__dirname, '..', new URL(r.request().url()).pathname.split('/').pop())) }));
   await page.route('https://fonts.googleapis.com/**', r => r.fulfill({ contentType:'text/css', body:'' }));
   await page.route('https://cdn.jsdelivr.net/npm/**', r => {
     const u = new URL(r.request().url()).pathname.replace('/npm/', ''), m = u.match(/^(@?[^@]+)@([^/]+)\/(.*)$/);
@@ -128,6 +128,21 @@ const DEPS = process.env.RIG_DEPS || '';
     await page.waitForFunction(() => /skeleton matches|rror|No PC|nobody|not sure/.test((document.querySelector('#rmsg') || {}).textContent || ''), null, {timeout:20000});
     const e = await page.evaluate(KP => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id), P = SCENE.picPts(o, ob.shot); SCENE.poseFor('cam'); return SCENE.jointPts(o).slice(2, 14).map((p, i) => { const [x, y] = P.toPx(p), [ex, ey] = KP.px[i + 2]; return Math.round(Math.hypot(x - ex, y - ey)); }); }, KP);
     ok(Math.max(...e) <= 15, '🦴 her rig matches a free painting even where it stands smaller and to one side (px off her own waving pose: ' + e.join(' ') + ')'); }
+  // 🔄 Read her from all sides (Jordan 2026-10-29: her legs were hidden under the dress): MiniMax turns round her pick, DWPose reads every
+  // frame, the turnaround solver finds her 3D pose, and her bones point the same way. Here DWPose "sees" her sitting (thighs pointing at
+  // the camera, the case one picture can't tell) on a turntable.
+  { const T = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id), P = SCENE.picPts(o, ob.shot); ob.pose = 'sit'; delete ob.bq; ob.mode = 'mq'; SCENE.poseFor('cam');
+      const pts = SCENE.jointPts(o), c = pts[8].clone().add(pts[11]).multiplyScalar(0.5), fr = [];
+      for(let i = 0; i < 124; i++){ const a = 2 * Math.PI * i / 123, f = []; pts.forEach(p => { const dx = p.x - c.x, dz = p.z - c.z, q = p.clone(); q.x = c.x + Math.cos(a) * dx + Math.sin(a) * dz; q.z = c.z - Math.sin(a) * dx + Math.cos(a) * dz; const [x, y] = P.toPx(q); f.push(x / P.W, y / P.H, 0.9); }); fr.push(f); }
+      const dirs = [[2, 3], [3, 4], [5, 6], [6, 7], [8, 9], [9, 10], [11, 12], [12, 13]].map(([a, b]) => pts[b].clone().sub(pts[a]).normalize().toArray());
+      ob.pose = 'apose'; ob.mode = 'shot'; SCENE.poseFor('cam'); SCENE.drawSel(); document.querySelector('#rmsg').textContent = ''; return {fr, dirs}; });
+    ACT = T.fr; const n0 = GRAPHS.length; await page.evaluate(() => document.querySelector('[data-act="orbit"]').click());
+    await page.waitForFunction(() => /takes the pose|rror|No PC|nobody|not DWPose|needed|agree|did not/.test((document.querySelector('#rmsg') || {}).textContent || ''), null, {timeout:30000});
+    const av = Object.values(GRAPHS[n0] || {}), iv = (av.find(n => n.class_type==='MiniMaxH3ImageToVideo') || {}).inputs || {};
+    const r = await page.evaluate(dirs => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id); SCENE.poseFor('cam'); const pts = SCENE.jointPts(o);
+      return {msg:document.querySelector('#rmsg').textContent, mode:ob.mode, deg:[[2, 3], [3, 4], [5, 6], [6, 7], [8, 9], [9, 10], [11, 12], [12, 13]].map(([a, b], k) => Math.round(Math.acos(Math.min(1, pts[b].clone().sub(pts[a]).normalize().dot(new pts[a].constructor(...dirs[k])))) * 180 / Math.PI))}; }, T.dirs);
+    ok(/360-degree/.test(iv.prompt || '') && iv.last_frame && iv.first_frame && iv.last_frame[0]===iv.first_frame[0] && av.some(n => n.class_type==='DWPreprocessor'), '🔄 one run turns the camera a full circle round her pick (back to it at the end) and DWPose reads the frames');
+    ok(/takes the pose/.test(r.msg) && r.mode==='mq' && Math.max(...r.deg) <= 12, '🔄 her rig takes the pose seen from every side: arms and legs within ' + Math.max(...r.deg) + '° (' + r.deg.join(' ') + '): ' + r.msg); }
   // the views go all the way round her, under the floor and over her head (Jordan 2026-10-29)
   { const el = await page.evaluate(() => window.EL_MAX * 180 / Math.PI); ok(el >= 85, 'the views turn up to ' + Math.round(el) + '° above and below her'); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
