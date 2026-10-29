@@ -391,3 +391,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 🎬 Scene / 🌄 Environment / 🤸 Pose: the page around the full-height view no longer scrolls too (it had 100 px of padding for the Render bar). Scene's button row wraps instead of hiding buttons off the edge.
 - 🧍 Character / 🪑 Object: the angle read-out and Open in 3D / Auto-spin / Momentum show once there are angles to turn. 📚 "Save again" shows only once it's done (it saves itself then), and is no longer a second pink button beside ▶ Make.
 - ⚙ Settings: the Tailscale setup steps fold under "First-time setup on a new computer"; shorter notes on model downloads.
+
+**v.288 (2026-10-29)**: 🪞 Give her a body. Characters made from a picture before the mannequin (like Ellie) can get one from their 📚 Library card. Her own eye-level pictures lie over the mannequin (see-through, same height, turning with her), her body, hair and look start from her tags, and ✓ Give her this body saves them into her library entry, pictures and LoRA untouched, so 🎬 Scene and 🤸 Pose pose her on a matched base body. Characters that have one get 🪞 Change her body.

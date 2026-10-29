@@ -139,7 +139,18 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.evaluate(() => { $('#cc3d').hidden = true; $('#cc3d').innerHTML = ''; });
   await page.evaluate(() => { const e = CCV.lib.list[0]; e.body = {cm:150, bust:1.2}; e.hair = {style:'bob'}; e.look = {hair:['blue hair']}; }); await page.click('[data-cc="lib3d"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => { const f = $('#ccmq iframe'), q = f && new URL(f.src).searchParams; return !!q && q.get('view')==='1' && JSON.parse(q.get('shape')).cm===150 && JSON.parse(q.get('hair')).style==='bob' && /blue hair/.test(q.get('look')) && q.get('name')==='Pinky' && ($('#cc3d') || {}).hidden!==false; }), '🧍 a character with a mannequin opens in 3D as her mannequin (shape, hair, look), not her pictures');
-  await page.evaluate(() => { ccCloseMq(); const e = CCV.lib.list[0]; delete e.body; delete e.hair; delete e.look; });
+  await page.evaluate(() => { ccCloseMq(); const e = CCV.lib.list[0]; delete e.body; delete e.hair; delete e.look; }); await page.evaluate(() => ccDraw(true)); await page.waitForTimeout(100);
+  // 🪞 an older character with no mannequin gets one: her eye-level pictures over the mannequin, then saved back into her entry in place
+  ok(await page.evaluate(() => /Give her a body/.test(($('[data-cc="libfit"]') || {}).textContent || '')), '🪞 a character made from a picture offers Give her a body');
+  await page.click('[data-cc="libfit"]'); await page.waitForTimeout(200);
+  const FQ = await page.evaluate(() => { const f = $('#ccmq iframe'), q = f && new URL(f.src).searchParams; return q ? {fit:q.get('fit'), name:q.get('name'), tags:q.get('tags'), pics:JSON.parse(q.get('pics') || '[]')} : null; });
+  ok(FQ && FQ.fit==='1' && FQ.name==='Pinky' && FQ.pics.length===16 && FQ.pics.every(p => typeof p[0]==='number' && /Character%20Library%2FPinky/.test(p[1])) && FQ.pics.some(p => p[0]===90), '…the mannequin opens with her 16 eye-level library pictures and her tags: ' + JSON.stringify(FQ && {n:FQ.pics.length, first:FQ.pics[0]}));
+  await page.evaluate(() => { CCV.libLast = null; window.postMessage({rdmq:'fit', id:'Pinky', shape:{cm:155, bust:1.3}, hair:{style:'long', len:0.8}, btags:{breasts:'large breasts'}, look:{hcol:['black hair']}, tags:'1girl, solo, large breasts, long hair, very long hair, black hair'}, location.origin); }); await page.waitForTimeout(300);
+  const FS = await page.evaluate(() => JSON.parse(JSON.stringify(CCV.libLast)));
+  ok(FS && FS.name==='Pinky' && FS.pics.length===48 && FS.pics.every(p => p.subfolder==='Character Library/Pinky' && /\.png$/.test(p.filename)) && FS.meta.body.cm===155 && FS.meta.hair.style==='long' && FS.meta.lora==='pinkyx.safetensors' && FS.meta.prompt==='AFKJ Style, pinkyx, 1girl, solo' && /black hair/.test(FS.meta.tags) && !FS.meta.views && !FS.meta.subfolder && await page.evaluate(() => !$('#ccmq iframe')),
+    '✓ saves her again in place: the same 48 library pictures, her LoRA and prompt kept, her new body, hair and tags: ' + JSON.stringify(FS && {n:FS.pics.length, pic:FS.pics[0], meta:Object.keys(FS.meta)}));
+  ok(await page.evaluate(() => /160|155/.test($('.cclibone').textContent) && /Change her body/.test($('[data-cc="libfit"]').textContent) && /on the base body/.test($('.cclibone').textContent)), '…and her card now says she is on the base body, with Change her body');
+  await page.evaluate(() => { const e = CCV.lib.list[0]; delete e.body; delete e.hair; delete e.look; });
   await page.click('[data-cc="libdel"]'); await page.waitForTimeout(100);
   ok(await page.evaluate(() => !CCV.lib.list.length), '🗑 takes her out of the library');
   await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(300);
