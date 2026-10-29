@@ -218,6 +218,14 @@ const DEPS = process.env.RIG_DEPS || '';
       const v3 = Object.values(GRAPHS[GRAPHS.length - 1]), c3 = v3.map(n => n.class_type), t3 = v3.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text), k3 = v3.find(n => n.class_type==='KSampler'), l3 = v3.filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name), u4 = UPS.slice(u3).map(u => u.name), am = await page.textContent('#allmsg');
       ok(en && /Done/.test(am) && GRAPHS.length===n2 + 1 && k3.inputs.denoise===0.6 && c3.includes('SetLatentNoiseMask') && c3.includes('ImageCompositeMasked') && !c3.includes('DetailerForEach') && l3.join()==='AFKJ Style Illustrious Claude.safetensors' && /hug, scenery, no humans/.test(t3[0]) && /1girl, 1boy, people/.test(t3[1]) && u4.some(n => /^rd-scene-bgmask-/.test(n)) && u4.some(n => /^rd-scene-last-/.test(n)),
         '🖌 Repaint the background paints only outside everyone (style LoRA only, no people, depth kept) and pastes it into the last render: ' + JSON.stringify({en, am, t:t3[0], l3, u4})); }
+    // ⏳ closed while it painted: the job is kept on the scene, and opening the scene again collects it
+    { const g = GRAPHS[GRAPHS.length - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage'), f0 = await page.evaluate(() => SCENE.sc.scene.file);
+      await page.evaluate(([save]) => { SCENE.sc.rsJob = {pid:'pClosed', pc:'https://render.test', save, t0:Date.now(), rec:Object.assign({}, SCENE.sc.scene)}; document.querySelector('#rblend').click(); document.querySelector('#rblend').click(); }, [save]);
+      await page.waitForTimeout(900); await page.goto('https://app.test/rig/scene.html'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000});
+      await page.waitForFunction(() => /Done|rror|no longer/i.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
+      const rj = await page.evaluate(() => ({msg:document.querySelector('#allmsg').textContent, job:!!SCENE.sc.rsJob, file:SCENE.sc.scene && SCENE.sc.scene.file, key:!!(SCENE.sc.scene && SCENE.sc.scene.key), n:(SCENE.sc.renders || []).length}));
+      ok(/Done/.test(rj.msg) && !rj.job && rj.file && rj.key, '⏳ a render still going when the app closed is picked up when the scene opens again (kept with its masks\' key): ' + JSON.stringify({f0, ...rj}));
+      await page.evaluate(() => { window.RENDER_POLL = 50; SCENE.ui.sel = 'ellie2'; SCENE.drawSel(); }); }
     const moved = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.id==='ellie2'); ob.x += 0.5; SCENE.drawSel(); const d = document.querySelector('#selbox [data-act="repaint"]').disabled; ob.x -= 0.5; SCENE.drawSel(); return d; });
     ok(moved && f0, '🖌 once she moves, the masks no longer match the picture, so Repaint waits for a new 🎬 Render Scene: ' + moved);
     await page.evaluate(() => { SCENE.sc.objs = SCENE.sc.objs.filter(o => o.id!=='ellie2'); SCENE.reload(); }); }

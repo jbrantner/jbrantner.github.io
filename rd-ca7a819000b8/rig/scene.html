@@ -147,7 +147,7 @@ async function pushScene(){ if(!SC) return; if(!PC.url){ $('#saved').textContent
   try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:SC})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
   catch(e){ $('#saved').textContent = 'On this phone'; } }
 function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : POSE ? 'ps' : 'sc'), name:name || WORD + ' ' + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : POSE ? {kind:'pose'} : {}); scenesAll.unshift(s); openScene(s); changed(); }
-function openScene(s){ SC = s; if(SCN) s.d3 = true; drawBlend(); drawRbg(); VIMG = ''; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawLightBox(); drawFinal(); showImg(''); drawDesc(); dirty = true; }
+function openScene(s){ SC = s; if(SCN) s.d3 = true; drawBlend(); drawRbg(); if(SCN && s.rsJob) setTimeout(rsResume, 0); VIMG = ''; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawLightBox(); drawFinal(); showImg(''); drawDesc(); dirty = true; }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
@@ -1243,7 +1243,21 @@ async function rsKit(chars, lead, first){ const urls = [first, PC.url, ...(windo
   if(!kits.length) throw new Error('No PC has an Illustrious model and ControlNet ProMax.'); const has = k => chars.filter(o => o.e.lora && k.los.includes(o.e.lora)).length + (k.dfe ? 0.5 : 0);
   kits.sort((a, b) => (has(b) - has(a)) || ((b.url===first) - (a.url===first))); return kits[0]; }
 const rsTools = (add, K) => ({sam:K.samc ? [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0] : null, det:K.ud ? [add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}), 0] : null});
-async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }, btn = $('#rscene'); btn.disabled = true;
+// ⏳ the app can be closed while a 🎬 Render Scene or a 🖌 repaint runs (Jordan 2026-10-29): once the PC has the job it is kept on the scene
+// (SC.rsJob: job id, PC, its Save node, when it started, what the render will be), and opening the scene again waits for it or collects it
+const RS_MINS = 40;
+async function rsRun(url, g, save, tick, rec){ const S = SC;
+  const imgs = await runGraph(url, g, save, tick, {mins:RS_MINS, onId:pid => { S.rsJob = {pid, pc:url, save, t0:Date.now(), rec:Object.assign({}, rec)}; if(S===SC) changed(); }});
+  rsDone(S, imgs); }
+function rsDone(S, imgs){ const job = S.rsJob || {}; delete S.rsJob; if(!imgs || !imgs.length) throw new Error('The PC sent nothing back.');
+  S.scene = Object.assign({}, job.rec, {pc:job.pc, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now()}); addRender('scene', S.scene);
+  if(S===SC){ changed(); showImg(shotUrl(S.scene)); drawFinal(); drawSel(); } }
+let rsWaiting = '';
+async function rsResume(){ const S = SC, job = S && S.rsJob, msg = m => { const el = $('#allmsg'); if(el && S===SC) el.textContent = m; }; if(!job || !job.pid || rsWaiting===job.pid) return; rsWaiting = job.pid;
+  try{ const imgs = await runGraph(job.pc, null, job.save, t => msg('⏳ Still painting on ' + pcName(job.pc) + ' (started while the app was open)… ' + t + ' s'), {pid:job.pid, t0:job.t0, mins:RS_MINS}); rsDone(S, imgs); msg('Done: the render that was going is in the viewer (and in 🖼 Renders).'); }
+  catch(err){ delete S.rsJob; if(S===SC) changed(); msg(err.message || String(err)); }
+  rsWaiting = ''; }
+async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }, btn = $('#rscene'); if(SC.rsJob){ msg('⏳ The last render is still going on ' + pcName(SC.rsJob.pc) + '.'); return; } btn.disabled = true;
   try{ const items = rsItems(), env = envOf(SC.env) || {}, chars = rsChars(items), lead = chars.map(o => o.e).find(e => e.ckpt) || {};
     if(!items.length && !SC.env) throw new Error('Nothing to paint yet: ＋ a character or an object, or pick a 🌄 Environment.');
     msg('🎬 Asking the PCs for their models…'); const K = await rsKit(chars, lead, PC.url), url = K.url;
@@ -1279,10 +1293,8 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     if(blend){ const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, bl = add('KSampler', {model, seed:seed + 99, steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
         latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_BLEND}); out = [add('VAEDecodeTiled', {samples:[bl, 0], vae:[ck, 2], ...TILE}), 0]; }
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    const imgs = await runGraph(url, g, save, t => msg('🎬 Painting the scene' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + ' on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
-    SC.scene = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now(), W:FW, H:FH, key, who:chars.map(o => o.ob.id)};
+    await rsRun(url, g, save, t => msg('🎬 Painting the scene' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
-    addRender('scene', SC.scene); changed(); showImg(shotUrl(SC.scene)); drawSel();
     msg('Done: the rendered scene is in the viewer (and in 🖼 Renders).' + (miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : '') + (!K.dfe && chars.length ? ' (' + pcName(url) + ' has no Impact Pack Detailer, so the characters got no pass of their own.)' : '')); }
   catch(err){ msg(err.message || String(err)); }
   finally{ btn.disabled = false; drawFinal(); } }
@@ -1299,8 +1311,7 @@ async function repaintHer(ob){ const o = OBJ.get(ob.id), st = m => { RMSG.set(ob
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}), lead = chars.map(x => x.e).find(e => e.ckpt) || {}, style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)), T = rsTools(add, K);
     const out = herPass(add, K, ck, [add('LoadImage', {image:last}), 0], o, await rsWords(o, style && /afkj/i.test(style) ? 'AFKJ Style, ' : ''), mk, fk, sc.H, Math.floor(Math.random() * 2 ** 40), T.sam, T.det, chars.length);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    const imgs = await runGraph(url, g, save, t => st('🖌 Repainting ' + (ob.label || 'her') + ' on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
-    SC.scene = Object.assign({}, sc, {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now()}); addRender('scene', SC.scene); changed(); showImg(shotUrl(SC.scene)); drawFinal();
+    await rsRun(url, g, save, t => st('🖌 Repainting ' + (ob.label || 'her') + ' on ' + pcName(url) + '… ' + t + ' s'), sc);
     st('Done: only she was repainted (the one before is still in 🖼 Renders).' + (o.e.lora && !K.los.includes(o.e.lora) ? ' ' + pcName(url) + ' doesn\'t have her LoRA, so it was left out.' : '')); }
   catch(err){ st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
@@ -1326,8 +1337,7 @@ async function repaintBg(){ const msg = m => { const el = $('#allmsg'); if(el) e
     const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:24, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:RS_BG});
     const out = [add('ImageCompositeMasked', {destination:img, source:[add('VAEDecodeTiled', {samples:[ks, 0], vae:[ck, 2], ...TILE}), 0], x:0, y:0, resize_source:false, mask:soft}), 0]; // (everyone else exactly as they were)
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    const imgs = await runGraph(url, g, save, t => msg('🖌 Repainting the background on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
-    SC.scene = Object.assign({}, sc, {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now()}); addRender('scene', SC.scene); changed(); showImg(shotUrl(SC.scene)); drawFinal();
+    await rsRun(url, g, save, t => msg('🖌 Repainting the background on ' + pcName(url) + '… ' + t + ' s'), sc);
     msg('Done: only the background was repainted (the one before is still in 🖼 Renders).'); }
   catch(err){ msg(err.message || String(err)); }
   finally{ drawRbg(); } }
