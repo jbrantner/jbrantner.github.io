@@ -229,6 +229,13 @@ const DEPS = process.env.RIG_DEPS || '';
       const rj = await page.evaluate(() => ({msg:document.querySelector('#allmsg').textContent, job:!!SCENE.sc.rsJob, file:SCENE.sc.scene && SCENE.sc.scene.file, key:!!(SCENE.sc.scene && SCENE.sc.scene.key), n:(SCENE.sc.renders || []).length}));
       ok(/Done/.test(rj.msg) && !rj.job && rj.file && rj.key, '⏳ a render still going when the app closed is picked up when the scene opens again (kept with its masks\' key): ' + JSON.stringify({f0, ...rj}));
       await page.evaluate(() => { window.RENDER_POLL = 50; SCENE.ui.sel = 'ellie2'; SCENE.drawSel(); }); }
+    // ⤴ Upscale: the last render 2× in tiles at 0.35 with the first painting's LoRAs, colour-fixed; then the button rests
+    { await page.evaluate(() => { document.querySelector('#allmsg').textContent = ''; }); const en = await page.evaluate(() => !document.querySelector('#rup').disabled), n4 = GRAPHS.length, w0 = await page.evaluate(() => SCENE.sc.scene.W);
+      await page.click('#rup'); await page.waitForFunction(() => /Done|rror|no /i.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:30000});
+      const v5 = Object.values(GRAPHS[GRAPHS.length - 1]), c5 = v5.map(n => n.class_type), us = v5.find(n => n.class_type==='UltimateSDUpscaleNoUpscale'), sb = v5.find(n => n.class_type==='ImageScaleBy'), l5 = v5.filter(n => n.class_type==='LoraLoader').map(n => n.inputs.lora_name);
+      const st = await page.evaluate(() => ({msg:document.querySelector('#allmsg').textContent, W:SCENE.sc.scene.W, up:SCENE.sc.scene.up, dis:document.querySelector('#rup').disabled}));
+      ok(en && /Done/.test(st.msg) && GRAPHS.length===n4 + 1 && us && us.inputs.denoise===0.35 && sb.inputs.scale_by===2 && c5.includes('RenderDeckUpscaleColorFix') && l5.includes('elliex.safetensors') && st.W===w0 * 2 && st.up && st.dis,
+        '⤴ Upscale redraws the last render 2× in tiles (0.35, the first painting\'s LoRAs, colour fix) and it becomes the latest render: ' + JSON.stringify({en, ...st, l5})); }
     const moved = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.id==='ellie2'); ob.x += 0.5; SCENE.drawSel(); const d = document.querySelector('#selbox [data-act="repaint"]').disabled; ob.x -= 0.5; SCENE.drawSel(); return d; });
     ok(moved && f0, '🖌 once she moves, the masks no longer match the picture, so Repaint waits for a new 🎬 Render Scene: ' + moved);
     await page.evaluate(() => { SCENE.sc.objs = SCENE.sc.objs.filter(o => o.id!=='ellie2'); SCENE.reload(); }); }
