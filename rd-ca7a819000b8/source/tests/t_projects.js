@@ -50,10 +50,12 @@ const fs = require('fs'), path = require('path');
   // Hidden keeps its own
   await page.click('#modeBtn'); await page.waitForTimeout(300); s = await st();
   ok(!s.projs.some(p => p[0]===B) && s.strip===0, 'Hidden has its own projects, none of the normal ones: ' + JSON.stringify(s));
-  await page.click('#projs [data-newproj]'); await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#strip img').length===1, null, {timeout:8000});
+  ok(await page.evaluate(() => $('#projs').hidden && $('#projHead').hidden), 'an empty workstation shows no project row until its first render (v.284)');
+  await page.click('#goBtn'); await page.waitForFunction(() => document.querySelectorAll('#strip img').length===1, null, {timeout:8000});
   const hp = await page.evaluate(() => S.proj);
   await page.click('#modeBtn'); await page.waitForTimeout(300); s = await st();
-  ok(s.proj===B && s.projs.length===2 && !s.projs.some(p => p[0]===hp) && s.strip===4, 'back in the normal workstation: its projects as they were, the Hidden one not among them: ' + JSON.stringify(s));
+  ok(s.proj===B && s.projs.length===2 && (hp==='earlier' || !s.projs.some(p => p[0]===hp)) && s.strip===4, // (Hidden's first render went to its own "earlier" bucket)
+    'back in the normal workstation: its projects as they were, the Hidden one not among them: ' + JSON.stringify(s));
   // kept on reload
   await page.reload(); await page.waitForTimeout(500); s = await st();
   ok(s.proj===B && s.projs.length===2 && /Café scene/.test(s.head) && s.strip===4 && s.shown, 'projects are kept when the app is reopened: ' + JSON.stringify(s));
