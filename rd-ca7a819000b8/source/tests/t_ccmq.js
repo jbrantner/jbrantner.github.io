@@ -17,7 +17,7 @@ const fs = require('fs'), path = require('path');
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200); await page.click('.ccstep[data-cstep="ref"] summary');
+  await page.evaluate(() => goTab('cc')); await page.waitForTimeout(200); await page.click('.ccstep[data-cstep="ref"] summary');
   ok(await page.evaluate(() => [...document.querySelectorAll('[data-cc="start"]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')).join('|')==='🖼 From a picture:true|🧍 From the mannequin:false'), 'step 1 starts from a picture, with 🧍 From the mannequin beside it');
   await page.click('[data-cc="start"][data-v="mq"]'); await page.waitForTimeout(150);
   ok(await page.evaluate(() => ccChar().start==='mq' && !!$('[data-cc="mq"]') && !$('[data-cc="phone"]') && /Not painted yet/.test($('.ccstep[data-cstep="ref"]').textContent)), 'From the mannequin swaps the picture picker for 🧍 Open the mannequin');

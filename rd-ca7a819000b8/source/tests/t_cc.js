@@ -44,11 +44,11 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c?'ok   ':'FAIL ')+m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200);
-  ok(await page.evaluate(() => !$('#cc').hidden && $('#mainView').offsetParent===null && $('#tabs [data-tab="cc"]').classList.contains('on') && document.querySelectorAll('.ccstep').length===6 && /🎓 Her LoRA/.test($('.ccstep[data-cstep="lora"]').textContent) && $('[data-cc="lora"]').disabled), 'the 🧍 Character tab (beside Render and Comic) opens the Character Creator with its five steps and 🎓 Her LoRA (waiting), Render\'s screen hidden');
+  await page.evaluate(() => goTab('cc')); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => !$('#cc').hidden && $('#mainView').offsetParent===null && $('#tabs [data-tab="lib"]').classList.contains('on') && /Character Creator/.test($('#libBackT').textContent) && document.querySelectorAll('.ccstep').length===6 && /🎓 Her LoRA/.test($('.ccstep[data-cstep="lora"]').textContent) && $('[data-cc="lora"]').disabled), 'the 🧍 Character tab (beside Render and Comic) opens the Character Creator with its five steps and 🎓 Her LoRA (waiting), Render\'s screen hidden');
   await page.click('#tabs [data-tab="comic"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => $('#cc').hidden && !$('#comic').hidden && S.tab==='comic'), '📖 Comic swaps it out');
-  await page.click('#tabs [data-tab="render"]'); await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200);
+  await page.click('#tabs [data-tab="render"]'); await page.evaluate(() => goTab('cc')); await page.waitForTimeout(200);
   ok(await page.evaluate(() => !$('#cc').hidden && $('#comic').hidden && S.tab==='cc'), 'and 🧍 Character comes back');
   ok(await page.evaluate(() => $('[data-cc="go"]').disabled && /Pick her picture/.test($('#cc').textContent)), '▶ Make her waits for a picture');
   // step 1: a picture from the phone, a name, tags, the style
@@ -153,7 +153,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   await page.evaluate(() => { const e = CCV.lib.list[0]; delete e.body; delete e.hair; delete e.look; });
   await page.click('[data-cc="libdel"]'); await page.waitForTimeout(100);
   ok(await page.evaluate(() => !CCV.lib.list.length), '🗑 takes her out of the library');
-  await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(300);
+  await page.evaluate(() => goTab('cc')); await page.waitForTimeout(300);
   ok(await page.evaluate(() => S.tab==='cc' && !!$('#ccCv') && !!$('[data-cc="libsave"]')), 'and 🧍 Character comes back with her viewer');
   await page.evaluate(() => { delete ccChar().lr; ccDraw(true); });
   await page.evaluate(() => $('.ccstage').scrollIntoView({block:'center'})); await page.waitForTimeout(100);
@@ -276,7 +276,7 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
   ok(await page.evaluate(() => !$('#cc').hidden && ccChar().name==='Pinky' && !!ccP(ccChar())), 'reopening the page with ?cc opens the Character Creator on her again');
   await page.click('#tabs [data-tab="render"]'); await page.goto('https://app.test/'); await page.waitForTimeout(500);
   ok(await page.evaluate(() => $('#cc').hidden && !$('#mainView').hidden), 'left on Render, the app reopens on Render');
-  await page.click('#tabs [data-tab="cc"]'); await page.goto('https://app.test/'); await page.waitForTimeout(500);
+  await page.evaluate(() => goTab('cc')); await page.goto('https://app.test/'); await page.waitForTimeout(500);
   ok(await page.evaluate(() => !$('#cc').hidden && S.tab==='cc'), 'left on 🧍 Character, the app reopens on it');
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
