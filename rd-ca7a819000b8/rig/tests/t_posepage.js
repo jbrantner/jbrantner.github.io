@@ -32,7 +32,7 @@ const DEPS = process.env.RIG_DEPS || '';
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return J({prompt_id:'p' + GRAPHS.length}); }
     const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[+hi[1].slice(1) - 1], ks = k => Object.keys(g).filter(n => g[n].class_type===k), ok = o => J({[hi[1]]:{status:{status_str:'success', completed:true}, outputs:o}});
       if(ks('Save3DAdvanced').length) return ok({[ks('Save3DAdvanced')[0]]:{'3d':[{filename:'body_00001.glb', subfolder:'Output_Render\\RenderDeck\\pose', type:'output'}], camera_info:[null], model_3d_info:[]}});
-      if(ks('EmptySD3LatentImage').length) return ok(Object.fromEntries(ks('SaveImage').map((k, i) => [k, {images:[{filename:'photo_' + GRAPHS.length + '_' + i + '.png', subfolder:'RenderDeck/pose', type:'output'}]}])));
+      if(ks('SaveImage').length > 1) return ok(Object.fromEntries(ks('SaveImage').map((k, i) => [k, {images:[{filename:'photo_' + GRAPHS.length + '_' + i + '.png', subfolder:'RenderDeck/pose', type:'output'}]}])));
       return ok({[ks('SaveImage')[0]]:{images:[0, 1, 2, 3].map(i => ({filename:'ellie_' + i + '.png', subfolder:'RenderDeck/pose', type:'output'}))}}); }
     if(u.pathname==='/view' && /\.glb$/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'model/gltf-binary', headers:H, body:fs.readFileSync(process.env.SAM_GLB) });
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400"><rect width="300" height="400" fill="#eee"/><rect x="130" y="40" width="40" height="320" fill="#888"/></svg>' });
@@ -44,14 +44,14 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.addInitScript(() => { window.RENDER_POLL = 50; });
   await page.goto('https://app.test/rig/pose.html'); await page.waitForTimeout(800);
   const t0 = await page.evaluate(() => ({hint:!document.querySelector('#hint').hidden, make:document.querySelector('#makeb').disabled, tabs:[...document.querySelectorAll('[data-step]')].map(b => b.disabled), save:document.querySelector('#saveb').disabled}));
-  ok(t0.hint && t0.make && t0.tabs.join()==='false,true,true' && t0.save, 'a new pose: describe it first; Tweak, Render and Save wait for a pose: ' + JSON.stringify(t0)); await shot('new');
+  ok(!t0.hint && t0.make && t0.tabs.join()==='false,true,true' && t0.save, 'a new pose: describe it first; Tweak, Render and Save wait for a pose: ' + JSON.stringify(t0)); await shot('new');
   // 1 Make
   await page.fill('#desc', 'crouching down with her chin on her fists'); await page.click('#makeb');
   await page.waitForFunction(() => document.querySelectorAll('[data-pick]').length===4, null, {timeout:20000});
   const z = Object.values(GRAPHS[0]), txt = z.find(n => n.class_type==='CLIPTextEncode').inputs.text;
   ok(z.filter(n => n.class_type==='KSampler').length===4 && z.find(n => n.class_type==='CLIPLoader').inputs.type==='lumina2' && /chin on her fists/.test(txt) && /whole body/.test(txt), '📸 Make pose: Z-Image Turbo paints 4 people in the pose: ' + txt);
-  ok(await page.evaluate(() => document.querySelector('#makeb').textContent.trim()==='＋ 4 more' && document.querySelector('#createb').disabled), 'then the button offers 4 more, and Create pose waits for a pick');
-  await page.click('#makeb'); await page.waitForFunction(() => document.querySelectorAll('[data-pick]').length===8, null, {timeout:20000});
+  ok(await page.evaluate(() => !document.querySelector('#desc') && !document.querySelector('#pmodel') && !!document.querySelector('#moreb') && !!document.querySelector('#editb') && document.querySelector('#createb').disabled), 'then the pictures take the place of the words (＋ 4 more, ✏️), and Create pose waits for a pick');
+  await page.click('#moreb'); await page.waitForFunction(() => document.querySelectorAll('[data-pick]').length===8, null, {timeout:20000});
   ok(GRAPHS.length===2, '＋ 4 more adds 4 more pictures (8 now)'); await shot('photos');
   await page.click('[data-pick="5"]'); await page.click('#createb');
   await page.waitForFunction(() => window.POSEPAGE.BODY && document.querySelector('[data-step="tweak"]').getAttribute('aria-selected')==='true', null, {timeout:30000});
@@ -89,7 +89,7 @@ const DEPS = process.env.RIG_DEPS || '';
   const sv = [...store.values()][0];
   ok(sv && sv.kind==='posebook' && sv.name==='Chin on fists' && /^data:image\/jpeg/.test(sv.thumb) && sv.sam && sv.rot && sv.head===1.4 && !sv.renders, '💾 saved to the pose library on the PC (name, thumbnail, 3D body, tweaks, head size)');
   await page.click('#libb'); await page.click('#newb'); await page.waitForTimeout(300);
-  ok(await page.evaluate(() => !POSEPAGE.BODY && !document.querySelector('#hint').hidden && POSEPAGE.P.desc===''), '＋ New pose starts clean');
+  ok(await page.evaluate(() => !POSEPAGE.BODY && !!document.querySelector('#desc') && POSEPAGE.P.desc===''), '＋ New pose starts clean, on the words');
   const rot = sv.rot; await page.click('#libb'); await page.waitForSelector('[data-open]'); await shot('library'); await page.click('[data-open]');
   await page.waitForFunction(() => window.POSEPAGE.BODY, null, {timeout:20000});
   const re = await page.evaluate(r => { const B = POSEPAGE.BODY; return Object.entries(r).every(([n, q]) => B.bn[n].quaternion.toArray().every((v, i) => Math.abs(v - q[i]) < 1e-3)) && B.bn.bone_113.scale.x===1.4 && document.querySelector('#title').textContent; }, rot);
@@ -99,12 +99,13 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.evaluate(() => { const ob = document.querySelector('[data-step="make"]'); ob.click(); }); await page.click('#libb'); await page.waitForSelector('[data-del]'); await page.click('[data-del]'); await page.waitForTimeout(300);
   ok([...store.values()][0].gone && await page.evaluate(() => !document.querySelector('[data-open]')), '🗑 delete takes it out of the library');
   // any model can paint the people (Jordan 2026-10-29: Z-Image repeats itself): an Illustrious model gets the same ask as tags
-  { await page.click('#libx'); await page.click('[data-step="make"]'); await page.waitForFunction(() => document.querySelectorAll('#pmodel option').length > 1, null, {timeout:10000});
-    await page.selectOption('#pmodel', 'iriselTouchIL_v10.safetensors'); const lb = await page.evaluate(() => ({b:document.querySelector('#makeb').textContent.trim(), ask:document.querySelector('#ask').textContent}));
-    const n0 = GRAPHS.length; await page.click('#makeb'); await page.waitForFunction(n => window.POSEPAGE.P.photos.length===4 && window.POSEPAGE.P.made.endsWith('iriselTouchIL_v10.safetensors'), n0, {timeout:20000});
+  { await page.click('#libx'); await page.click('[data-step="make"]'); await page.click('#editb'); await page.waitForFunction(() => document.querySelectorAll('#pmodel option').length > 1, null, {timeout:10000});
+    await page.selectOption('#pmodel', 'iriselTouchIL_v10.safetensors');     await page.click('[data-n="-1"]'); await page.click('[data-shape="wide"]'); const lb = await page.evaluate(() => ({b:document.querySelector('#makeb').textContent.trim(), back:!!document.querySelector('#backb'), ask:document.querySelector('#ask').textContent})); const p0 = await page.evaluate(() => POSEPAGE.P.photos.length);
+    const n0 = GRAPHS.length; await page.click('#makeb'); await page.waitForFunction(p0 => window.POSEPAGE.P.photos.length===p0 + 3, p0, {timeout:20000});
     const ig = Object.values(GRAPHS[n0]), t = ig.find(n => n.class_type==='CLIPTextEncode').inputs.text, ng = ig.filter(n => n.class_type==='CLIPTextEncode')[1].inputs.text;
-    ok(lb.b==='Make pose' && /^1girl, solo, crouching/.test(lb.ask) && ig.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && ig.find(n => n.class_type==='EmptyLatentImage').inputs.batch_size===4 && t===lb.ask && /feet out of frame/.test(ng),
-      '🎨 an Illustrious model paints the 4 people instead, asked in tags (shown under What gets asked for): ' + t); }
+    const kept = await page.evaluate(p0 => ({first:POSEPAGE.P.photos[0].from, last:POSEPAGE.P.photos[p0].from}), p0);
+    ok(lb.b==='Make 3' && lb.back && /Z-Image/.test(kept.first) && /iriselTouchIL_v10$/.test(kept.last) && ig.filter(n => n.class_type==='KSampler').length===3 && new Set(ig.filter(n => n.class_type==='KSampler').map(n => n.inputs.seed)).size===3 && /^1girl, solo, crouching/.test(lb.ask) && ig.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && ig.filter(n => n.class_type==='EmptyLatentImage').every(n => n.inputs.batch_size===1 && n.inputs.width===1216 && n.inputs.height===832) && t===lb.ask && /feet out of frame/.test(ng),
+      '🎨 ' + JSON.stringify([lb, kept]) + ' − to 3, ▭ Wide (1216×832), an Illustrious model: 3 separate runs (own seeds, no batch), added beside the Z-Image ones, asked in tags (shown under What gets asked for): ' + t); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
