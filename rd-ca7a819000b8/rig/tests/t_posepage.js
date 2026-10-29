@@ -44,7 +44,7 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.addInitScript(() => { window.RENDER_POLL = 50; });
   await page.goto('https://app.test/rig/pose.html'); await page.waitForTimeout(800);
   const t0 = await page.evaluate(() => ({hint:!document.querySelector('#hint').hidden, make:document.querySelector('#makeb').disabled, tabs:[...document.querySelectorAll('[data-step]')].map(b => b.disabled), save:document.querySelector('#saveb').disabled}));
-  ok(!t0.hint && t0.make && t0.tabs.join()==='false,true,true' && t0.save, 'a new pose: describe it first; Tweak, Render and Save wait for a pose: ' + JSON.stringify(t0)); await shot('new');
+  ok(!t0.hint && t0.make && t0.tabs.join()==='false,true,true,true' && t0.save, 'a new pose: describe it first; Tweak, Render and Save wait for a pose: ' + JSON.stringify(t0)); await shot('new');
   // 1 Make
   await page.fill('#desc', 'crouching down with her chin on her fists'); await page.click('#makeb');
   await page.waitForFunction(() => document.querySelectorAll('[data-pick]').length===4, null, {timeout:20000});
@@ -84,6 +84,29 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(gd.fill > 0.15 && gd.fill < 0.8 && gd.W % 64===0 && gd.H % 64===0, 'its depth fills the cropped guide: ' + JSON.stringify(gd));
   if(process.env.SHOT){ const G = await page.evaluate(() => window.PP_G); fs.writeFileSync(process.env.SHOT + '/pp-depth.png', Buffer.from(G.d.split(',')[1], 'base64')); fs.writeFileSync(process.env.SHOT + '/pp-skel.png', Buffer.from(G.p.split(',')[1], 'base64')); }
   await shot('render');
+  // 4 Touch up (Jordan 2026-10-29): a render opened big → 🖌 Touch up → paint where it may change → plain inpaint tries → one back to 2 as the pose
+  await page.click('[data-big="2"]'); await page.click('#bigtouch'); await page.waitForFunction(() => { const c = document.querySelector('#tmask'); return c.width===300 && !document.querySelector('#touch').hidden; }, null, {timeout:10000});
+  const tw = await page.evaluate(() => ({words:document.querySelector('#twords').value, btn:document.querySelector('#touchb').textContent, pics:document.querySelectorAll('[data-tsel]').length}));
+  ok(/^elliex, 1girl/.test(tw.words) && /Redo all/.test(tw.btn) && tw.pics===1, '🖌 Touch up opens the render on its own with the render\'s words: ' + JSON.stringify(tw)); await shot('touch0');
+  const mb = await page.evaluate(() => { const r = document.querySelector('#tmask').getBoundingClientRect(); return {x:r.left + r.width / 2, y:r.top + r.height * 0.3}; });
+  await page.mouse.move(mb.x, mb.y); await page.mouse.down(); for(let i = 1; i <= 5; i++) await page.mouse.move(mb.x + i * 6, mb.y + i * 8); await page.mouse.up(); await page.waitForTimeout(100);
+  ok(/Repaint marked/.test(await page.textContent('#touchb')), 'painting on it marks the part to change'); await shot('touch1');
+  const n1 = GRAPHS.length; await page.click('#touchb'); await page.waitForFunction(() => document.querySelectorAll('[data-tsel]').length===5, null, {timeout:20000});
+  const tg = Object.values(GRAPHS[n1]), cls = c => tg.filter(n => n.class_type===c), lm = cls('LoadImageMask')[0];
+  ok(cls('KSampler').length===4 && cls('KSampler').every(n => n.inputs.denoise===0.6) && new Set(cls('KSampler').map(n => n.inputs.seed)).size===4 && cls('SetLatentNoiseMask').length===1 && cls('ImageCompositeMasked').length===4 && !cls('ControlNetApplyAdvanced').length
+    && /^rd-pose-mask-/.test(lm.inputs.image) && cls('LoadImage')[0].inputs.image==='RenderDeck/pose/ellie_2.png [output]' && cls('LoraLoader').some(n => n.inputs.lora_name==='elliex.safetensors'),
+    '🎨 Repaint marked: 4 inpaint tries (own seeds, 0.6, her LoRA, no pose guides), pasted back through the softened mask');
+  await page.click('[data-tsel="3"]'); await page.click('#clearb'); const n2 = GRAPHS.length;
+  await page.evaluate(() => { const s = document.querySelector('#den'); s.value = 0.45; s.dispatchEvent(new Event('input')); }); await page.click('[data-tn="-1"]'); await page.click('[data-tn="-1"]');
+  await page.click('#touchb'); await page.waitForFunction(() => document.querySelectorAll('[data-tsel]').length===7, null, {timeout:20000});
+  const tg2 = Object.values(GRAPHS[n2]);
+  ok(tg2.filter(n => n.class_type==='KSampler').every(n => n.inputs.denoise===0.45) && tg2.filter(n => n.class_type==='KSampler').length===2 && !tg2.some(n => n.class_type==='SetLatentNoiseMask') && /photo_\d+_2\.png \[output\]$/.test(tg2.find(n => n.class_type==='LoadImage').inputs.image),
+    'nothing painted: Redo all redoes the picked try as a whole at 0.45, 2 of them');
+  await page.click('[data-tsel="6"]'); const n3 = GRAPHS.length; await page.click('#useb');
+  await page.waitForFunction(() => window.POSEPAGE.BODY && document.querySelector('[data-step="tweak"]').getAttribute('aria-selected')==='true' && document.querySelector('#touch').hidden, null, {timeout:30000});
+  const ug = Object.values(GRAPHS[n3]);
+  ok(ug.some(n => n.class_type==='SAM3DBody_Predict') && /photo_\d+_1\.png \[output\]$/.test(ug.find(n => n.class_type==='LoadImage').inputs.image) && await page.evaluate(() => !document.querySelector('[data-step="touch"]').disabled),
+    '🦴 Use this one for the pose: SAM reads that try and the body comes back to 2 Tweak (Touch up keeps its pictures)'); await shot('touch2');
   // the library
   await page.click('#saveb'); await page.fill('#savename', 'Chin on fists'); await page.click('#saveok'); await page.waitForTimeout(400);
   const sv = [...store.values()][0];

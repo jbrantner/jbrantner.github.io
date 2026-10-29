@@ -23,10 +23,10 @@ select{-webkit-appearance:none;appearance:none;height:44px;padding:0 34px 0 10px
 #hint{position:fixed;left:0;right:0;top:38%;text-align:center;color:var(--soft);padding:0 32px;pointer-events:none;z-index:1}
 #sheet{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));z-index:3;background:rgba(32,34,40,.96);border:1px solid var(--line);border-radius:14px;max-width:560px;margin:0 auto;display:flex;flex-direction:column;max-height:52vh}
 .steps{display:flex;gap:4px;padding:6px}
-.steps button{flex:1;min-width:0;padding:6px 4px;min-height:36px;font:600 14px var(--display);background:none;border-color:transparent;color:var(--soft)}
+.steps button{flex:1;min-width:0;padding:6px 2px;min-height:36px;font:600 13px var(--display);white-space:nowrap;overflow:hidden;background:none;border-color:transparent;color:var(--soft)}
 .steps button[aria-selected=true]{background:var(--panel2);border-color:var(--line);color:var(--text)}
 .steps #fold{flex:0 0 40px;color:var(--soft)}
-#body{overflow:auto;padding:2px 12px 12px;display:grid;gap:8px}
+#body{overflow:auto;padding:2px 12px 12px;display:flex;flex-direction:column;gap:8px}#body>*{flex-shrink:0}
 #sheet.folded #body{display:none}
 .row{display:flex;gap:6px;align-items:center}
 .row>*{flex:1}
@@ -55,16 +55,21 @@ input[type=range]{accent-color:var(--accent);padding:0;border:0;background:none;
 .lib img{display:block;width:100%;aspect-ratio:4/5;object-fit:cover;background:#26282e}
 .lib span{display:block;padding:4px 8px;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lib .del{position:absolute;right:4px;top:4px;min-height:30px;padding:2px 7px;background:rgba(23,24,28,.8)}
-#big{background:rgba(0,0,0,.9);align-items:center}#big img{max-width:100%;max-height:100%;object-fit:contain}
+#big{background:rgba(0,0,0,.9);align-items:center;flex-direction:column;gap:10px;padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px))}#big img{max-width:100%;min-height:0;flex:1;object-fit:contain}
+#big .row{width:min(560px,100%);flex:0 0 auto}
+#touch{position:fixed;inset:0;z-index:2;background:var(--bg);touch-action:none}#touch[hidden]{display:none}
+#touch img,#touch canvas{position:absolute}#touch canvas{opacity:.55;cursor:crosshair}
+.tog button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}.tog button{color:var(--soft)}
 </style></head>
 <body>
 <div id="stage"></div>
+<div id="touch" hidden><img id="timg" alt="The picture being touched up"><canvas id="tmask"></canvas></div>
 <div id="hint">Describe a pose below and tap <b>Make pose</b>.</div>
 <div id="top"><h1 id="title">🤸 New pose</h1><button id="saveb" disabled>💾 Save</button><button id="libb">📚 Poses</button></div>
-<div id="sheet"><div class="steps" role="tablist"><button data-step="make" aria-selected="true">1 Make</button><button data-step="tweak">2 Tweak</button><button data-step="render">3 Render</button><button id="fold" aria-label="Hide the panel">▾</button></div><div id="body"></div></div>
+<div id="sheet"><div class="steps" role="tablist"><button data-step="make" aria-selected="true">1 Make</button><button data-step="tweak">2 Tweak</button><button data-step="render">3 Render</button><button data-step="touch">4 Touch up</button><button id="fold" aria-label="Hide the panel">▾</button></div><div id="body"></div></div>
 <div id="lib" class="modal" hidden><div class="card"><h2>📚 Pose library<button id="libx">✕</button></h2><button id="newb">＋ New pose</button><div class="lib" id="libl"></div></div></div>
 <div id="save" class="modal" hidden><div class="card"><h2>💾 Save to the pose library<button id="savex">✕</button></h2><input id="savename" placeholder="Name, e.g. Crouching, chin on fists" maxlength="60"><button class="go" id="saveok">Save</button></div></div>
-<div id="big" class="modal" hidden><img alt="A render"></div>
+<div id="big" class="modal" hidden><img alt="A render"><div class="row"><button id="bigtouch">🖌 Touch up</button><button id="bigpose">🦴 Use for the pose</button><button class="sm" id="bigx">✕</button></div></div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
 // 🤸 Pose (Jordan 2026-10-29, "re-envision this so it's not so cluttered"): one full 3D view and three steps.
@@ -91,7 +96,7 @@ const viewOf = p => p.pc + '/view?filename=' + encodeURIComponent(p.file) + '&su
 const DKEY = 'rd-posebook-draft' + (HID ? '-h' : ''), LKEY = 'rd-posebook' + (HID ? '-h' : '');
 const get = (k, d) => { try{ return JSON.parse(localStorage.getItem(k)) || d; }catch(e){ return d; } }, put = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
 let EDIT = false, PEND = 0, P0 = null, P = get(DKEY, null) || fresh(), LIB = get(LKEY, []), step = 'make', BUSY = false, MSG = '';
-function fresh(){ return {id:'', name:'', desc:'', model:(P0 || {}).model || '', photos:[], pick:-1, sam:null, head:1.2, rot:null, who:'', own:'', renders:[]}; }
+function fresh(){ return {id:'', name:'', desc:'', model:(P0 || {}).model || '', photos:[], pick:-1, sam:null, head:1.2, rot:null, who:'', own:'', renders:[], touch:null}; }
 const keep = () => put(DKEY, P);
 async function loadLib(){ if(!PC.url) return; try{ const r = await fetch(PC.url + '/renderdeck/scenes' + (HID ? '?hidden=1' : ''), {cache:'no-store'}); if(!r.ok) return;
     const by = new Map(); for(const s of LIB.concat(((await r.json()).scenes || []).filter(s => s.kind==='posebook'))){ const o = by.get(s.id); if(!o || (s.saved || 0) > (o.saved || 0)) by.set(s.id, s); }
@@ -108,7 +113,7 @@ const controls = new OrbitControls(camera, renderer.domElement); controls.target
 let dirty = true, BODY = null; controls.addEventListener('change', () => { dirty = true; });
 // (the body is centred in the space between the top bar and the panel, not behind the panel)
 const shown = () => { const sh = $('#sheet').getBoundingClientRect(); return {top:56, bottom:Math.max(innerHeight * 0.45, sh.top - 8)}; };
-function size(){ const w = innerWidth, h = innerHeight, v = shown(); renderer.setSize(w, h, false); camera.aspect = w / h; camera.setViewOffset(w, h, 0, (h - v.bottom - v.top) / 2, w, h); dirty = true; }
+function size(){ if(step==='touch') layoutTouch(); const w = innerWidth, h = innerHeight, v = shown(); renderer.setSize(w, h, false); camera.aspect = w / h; camera.setViewOffset(w, h, 0, (h - v.bottom - v.top) / 2, w, h); dirty = true; }
 addEventListener('resize', size); new ResizeObserver(size).observe($('#sheet')); size();
 (function loop(){ requestAnimationFrame(loop); controls.update(); if(BODY) placeDots(); if(dirty){ renderer.render(scene, camera); dirty = false; } })();
 // ---- the body SAM 3D Body made (a skinned GLB: its bone_N is the BVH's joint_N), cached per file
@@ -258,11 +263,51 @@ function render(){ return work(async () => { if(!BODY) return; const e = PC.char
   let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, K.sam);
   const sv = add('SaveImage', {images:out, filename_prefix:PRE + '/pose/' + ((e && e.name) || 'own').replace(/[^\w-]+/g, '_')});
   const res = await runGraph(K.url, g, [sv], t => say('Painting ' + ((e && e.name) || 'your character') + ' 4 times on ' + pcName(K.url) + '… ' + t + ' s'), 15);
-  P.renders = (res[sv].images || []).map(im => ({pc:K.url, file:im.filename, sub:im.subfolder || ''})); keep(); say('Tap one to see it big.'); }); }
+  P.renders = (res[sv].images || []).map(im => ({pc:K.url, file:im.filename, sub:im.subfolder || ''})); P.words = words; keep(); say('Tap one to see it big.'); }); }
+// ---- 4 Touch up (Jordan 2026-10-29): plain inpainting over a render, no pose guides, so it can loosen a stiff pose; paint where it may change
+//   (nothing painted = the whole picture, gently); any picture here can go back to 2 as the pose to rebuild the 3D body from
+const tu = () => P.touch || (P.touch = {pics:[], sel:-1, words:'', den:0.6, n:4});
+function touchFrom(p){ const T = tu(), k = viewOf(p); let i = T.pics.findIndex(q => viewOf(q)===k); if(i < 0){ T.pics.push(Object.assign({}, p)); i = T.pics.length - 1; }
+  T.sel = i; if(!T.words) T.words = P.words || ''; keep(); step = 'touch'; MASK.dirty = false; say('Paint over what may change (a stiff arm, the hips…), or leave it bare to redo the whole picture.'); draw(); }
+const MASK = {dirty:false, erase:false, size:40, down:false, last:null};
+function layoutTouch(){ const el = $('#touch'), on = step==='touch' && P.touch && P.touch.pics[P.touch.sel]; el.hidden = !on; if(!on) return;
+  const v = shown(), H = v.bottom - v.top; const im = $('#timg'), c = $('#tmask'), nw = im.naturalWidth, nh = im.naturalHeight; if(!nw) return;
+  const s = Math.min((innerWidth - 16) / nw, (H - 8) / nh), w = nw * s, h = nh * s, l = (innerWidth - w) / 2, t = v.top + (H - h) / 2;
+  for(const e of [im, c]) Object.assign(e.style, {left:l + 'px', top:t + 'px', width:w + 'px', height:h + 'px'});
+  if(c.width!==nw || c.height!==nh){ c.width = nw; c.height = nh; MASK.dirty = false; } }
+function showTouch(){ const T = P.touch, p = T && T.pics[T.sel], im = $('#timg'); if(!p){ layoutTouch(); return; } const src = viewOf(p);
+  if(im.dataset.src!==src){ im.dataset.src = src; im.onload = () => { const c = $('#tmask'); c.width = c.height = 0; layoutTouch(); }; im.src = src; MASK.dirty = false; } layoutTouch(); }
+{ const c = () => $('#tmask'), at = e => { const r = c().getBoundingClientRect(); return [(e.clientX - r.left) * c().width / r.width, (e.clientY - r.top) * c().height / r.height]; };
+  const dab = e => { const x = c().getContext('2d'), p = at(e), q = MASK.last || p, r = c().getBoundingClientRect(); x.globalCompositeOperation = MASK.erase ? 'destination-out' : 'source-over';
+    x.strokeStyle = '#ff5ca8'; x.lineCap = x.lineJoin = 'round'; x.lineWidth = MASK.size * c().width / r.width; x.beginPath(); x.moveTo(q[0], q[1]); x.lineTo(p[0] + 0.01, p[1]); x.stroke(); MASK.last = p; if(!MASK.erase) MASK.dirty = true; };
+  $('#tmask').addEventListener('pointerdown', e => { if(BUSY) return; MASK.down = true; MASK.last = null; $('#tmask').setPointerCapture(e.pointerId); dab(e); });
+  $('#tmask').addEventListener('pointermove', e => { if(MASK.down) dab(e); });
+  for(const ev of ['pointerup', 'pointercancel']) $('#tmask').addEventListener(ev, () => { if(MASK.down){ MASK.down = false; MASK.last = null; draw(); } }); }
+// the painted part as a white-on-black picture the size of the source
+function maskPng(){ const c = $('#tmask'), o = document.createElement('canvas'); o.width = c.width; o.height = c.height; const x = o.getContext('2d'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height), id = x.createImageData(c.width, c.height);
+  let any = false; for(let i = 0; i < d.data.length; i += 4){ const a = d.data[i + 3]; id.data[i] = id.data[i + 1] = id.data[i + 2] = a; id.data[i + 3] = 255; if(a > 20) any = true; } x.putImageData(id, 0, 0); return any ? o : null; }
+function touchUp(){ return work(async () => { const T = P.touch, src = T.pics[T.sel]; if(!src) return; const words = (T.words || '').trim(); if(!words) throw new Error('Say what the picture shows (the words start as the render\'s).');
+  const e = PC.chars.find(c => c.subfolder===P.who), m = maskPng(), N = T.n || 4; say('Asking ' + pcName(src.pc) + ' for its models…'); const K = await kitOn(src.pc, e || {}); if(!K.ckpt) throw new Error(pcName(src.pc) + ' has no checkpoint.');
+  const mn = m ? await upload(K.url, m, 'rd-pose-mask-' + Date.now().toString(36) + '.png') : '';
+  const {g, add} = graph(), ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
+  for(const [l, w] of (e ? [[e.style, 1], [e.lora, +e.strength || 1]] : []).filter(([l]) => l && K.los.includes(l))){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
+  const img = [add('LoadImage', {image:(src.type==='input' ? src.file : (src.sub ? src.sub.replace(/\\/g, '/') + '/' : '') + src.file + ' [output]')}), 0];
+  const pos = add('CLIPTextEncode', {clip, text:words}), neg = add('CLIPTextEncode', {clip, text:NEG}); let lat = [add('VAEEncode', {pixels:img, vae:[ck, 2]}), 0], soft = null;
+  if(m){ const mk = [add('LoadImageMask', {image:mn, channel:'red'}), 0]; lat = [add('SetLatentNoiseMask', {samples:lat, mask:[add('GrowMask', {mask:mk, expand:16, tapered_corners:true}), 0]}), 0];
+    // pasted back over the original through a softened edge, so nothing outside the paint moves
+    soft = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:[add('GrowMask', {mask:mk, expand:8, tapered_corners:true}), 0]}), 0], blur_radius:16, sigma:6}), 0], channel:'red'}), 0]; }
+  const saves = Array.from({length:N}, () => { const seed = Math.floor(Math.random() * 2 ** 40); let out = [add('VAEDecode', {samples:[add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0], latent_image:lat, denoise:+T.den || 0.6}), 0], vae:[ck, 2]}), 0];
+    if(soft) out = [add('ImageCompositeMasked', {destination:img, source:out, x:0, y:0, resize_source:false, mask:soft}), 0]; else if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos, 0], [neg, 0], seed, K.sam);
+    return add('SaveImage', {images:out, filename_prefix:PRE + '/pose/touch'}); });
+  PEND = N; draw(); const seen = new Set(), take = out => { let n = 0; for(const s2 of saves) if(out[s2] && !seen.has(s2)){ seen.add(s2); for(const im of out[s2].images || []){ T.pics.push({pc:K.url, file:im.filename, sub:im.subfolder || ''}); n++; } } if(n){ PEND = Math.max(0, PEND - n); keep(); draw(); } };
+  try{ take(await runGraph(K.url, g, saves, t => say((m ? 'Repainting what you marked' : 'Redoing the whole picture') + ', ' + N + ' tries on ' + pcName(K.url) + '… ' + t + ' s'), 5 + N * 2, take)); } finally { PEND = 0; }
+  say('Tap a try to keep working on it, or 🦴 Use for the pose.'); }); }
+// a picture back to 1 as the pick, and SAM reads the 3D body from it again
+function useForPose(p){ $('#big').hidden = true; if(!p) return; P.photos.push(Object.assign({}, p, {from:'touched up / rendered'})); P.pick = P.photos.length - 1; EDIT = false; step = 'make'; keep(); draw(); createPose(); }
 // ---- the pose library: a name, a thumbnail of the view, and everything above
 function thumb(){ const v = dots.visible; dots.visible = false; renderer.render(scene, camera); const c = document.createElement('canvas'); c.width = 200; c.height = 250; const x = c.getContext('2d'), s = renderer.domElement, a = s.width / s.height;
   const sw = a > 0.8 ? s.height * 0.8 : s.width, sh = sw / 0.8; x.drawImage(s, (s.width - sw) / 2, (s.height - sh) / 2, sw, sh, 0, 0, 200, 250); dots.visible = v; dirty = true; return c.toDataURL('image/jpeg', 0.75); }
-async function savePose(name){ P.name = name; if(!P.id) P.id = uid(); const s = Object.assign(JSON.parse(JSON.stringify(P)), {kind:'posebook', thumb:thumb(), saved:Date.now()}); delete s.renders;
+async function savePose(name){ P.name = name; if(!P.id) P.id = uid(); const s = Object.assign(JSON.parse(JSON.stringify(P)), {kind:'posebook', thumb:thumb(), saved:Date.now()}); delete s.renders; delete s.touch;
   LIB = LIB.filter(x => x.id!==s.id).concat([s]); put(LKEY, LIB); keep(); say(await pushLib(s) ? '💾 Saved to the pose library.' : '💾 Saved on this phone (the PC will get it when it is on).'); draw(); }
 function drawLib(){ const L = LIB.filter(s => !s.gone).sort((a, b) => (b.saved || 0) - (a.saved || 0));
   $('#libl').innerHTML = L.length ? L.map(s => `<div class="it"><button class="op" data-open="${esc(s.id)}"><img src="${esc(s.thumb || '')}" alt=""><span>${esc(s.name || 'Pose')}</span></button><button class="del" data-del="${esc(s.id)}" aria-label="Delete ${esc(s.name)}">🗑</button></div>`).join('') : '<p class="note">No poses saved yet. Make one, then 💾 Save.</p>';
@@ -273,7 +318,8 @@ function openPose(s){ $('#lib').hidden = true; if(!s) return; P = Object.assign(
 // ---- the panel
 function draw(){ const has = !!BODY, ph = P.photos || [];
   $('#title').textContent = '🤸 ' + (P.name || 'New pose'); $('#saveb').disabled = !has || BUSY; $('#hint').hidden = has || BUSY || step==='make'; if(!has) $('#hint').innerHTML = ph.length ? 'Pick a picture below and tap <b>Create pose</b>.' : 'Describe a pose below and tap <b>Make pose</b>.';
-  document.querySelectorAll('[data-step]').forEach(b => { b.setAttribute('aria-selected', b.dataset.step===step); b.disabled = b.dataset.step!=='make' && !has; });
+  document.querySelectorAll('[data-step]').forEach(b => { b.setAttribute('aria-selected', b.dataset.step===step); b.disabled = b.dataset.step==='touch' ? !(P.touch && P.touch.pics.length) : b.dataset.step!=='make' && !has; });
+  if(step!=='touch') $('#touch').hidden = true; else showTouch();
   const B = $('#body'), dis = BUSY ? 'disabled' : '';
   const count = () => `<span class="cnt sm"><button data-n="-1" ${dis} aria-label="Fewer">−</button><b>${P.count || 4}</b><button data-n="1" ${dis} aria-label="More">+</button></span>`;
   // 1 Make: the words and the model until Make pose, then only the pictures (Jordan 2026-10-29: as much of the canvas free as possible); ✏️ brings the words back
@@ -288,6 +334,12 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
   else if(step==='tweak') B.innerHTML = `<p class="note">Drag the dots: <b style="color:#ff5ca8">pink</b> moves a hand or foot, <b style="color:#5cb8ff">blue</b> swings an arm or leg, <b style="color:#ffd166">yellow</b> tips the head or chest. Drag anywhere else to turn the view.</p>
     <div class="row"><button id="undob" ${UNDO.length && !BUSY ? '' : 'disabled'}>↶ Undo</button><button id="resetb" ${dis}>⟲ Back to the picture's pose</button></div>
     <div class="lbl"><span>🙂 Head size</span><b id="headv">${(+P.head || 1.2).toFixed(2)}×</b></div><input type="range" id="head" min="1" max="1.6" step="0.05" value="${P.head || 1.2}">`;
+  else if(step==='touch'){ const T = tu(); B.innerHTML = `<div class="strip" id="strip">${T.pics.map((p, i) => `<button data-tsel="${i}" aria-pressed="${T.sel===i}" ${dis}><img src="${esc(viewOf(p))}" alt="Picture ${i + 1}" loading="lazy"></button>`).join('')}${Array.from({length:PEND}, () => '<span class="wait"></span>').join('')}</div>
+    <div class="row tog"><button class="sm" data-brush="0" aria-pressed="${!MASK.erase}" ${dis} aria-label="Paint" title="Paint where it may change">🖌</button><button class="sm" data-brush="1" aria-pressed="${MASK.erase}" ${dis} aria-label="Erase" title="Erase">🧽</button><input type="range" id="brush" min="10" max="120" step="5" value="${MASK.size}" aria-label="Brush size"><button class="sm" id="clearb" ${dis}>Clear</button></div>
+    <textarea id="twords" rows="2" placeholder="What the picture shows, e.g. 1girl, crouching, relaxed arms">${esc(T.words)}</textarea>
+    <div class="lbl"><span>How much it may change</span><b id="denv">${(+T.den).toFixed(2)}</b></div><input type="range" id="den" min="0.2" max="1" step="0.05" value="${T.den}">
+    <div class="row"><span class="cnt sm"><button data-tn="-1" ${dis} aria-label="Fewer">−</button><b>${T.n || 4}</b><button data-tn="1" ${dis} aria-label="More">+</button></span><button class="go" id="touchb" ${dis}>${MASK.dirty ? '🎨 Repaint marked' : '🎨 Redo all'} ×${T.n || 4}</button></div>
+    <button id="useb" ${dis || (T.pics[T.sel] ? '' : 'disabled')}>🦴 Use this one for the pose</button>`; }
   else B.innerHTML = `<select id="who" ${dis}><option value="">✏️ My own character…</option>${PC.chars.map(c => `<option value="${esc(c.subfolder)}" ${P.who===c.subfolder ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
     ${P.who ? '' : `<textarea id="own" rows="2" placeholder="Describe the character, e.g. 1girl, short red hair, green eyes, school uniform">${esc(P.own)}</textarea>`}
     <button class="go" id="renderb" ${dis}>🎨 Render 4</button><p class="note">Paints from the angle you're looking at: turn the view first.</p>
@@ -307,7 +359,15 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
   on('#resetb', 'onclick', () => { if(!BODY) return; UNDO.push(rotNow()); for(const n of TWEAK) if(BODY.bn[n]) BODY.bn[n].quaternion.copy(BODY.bn[n].userData.q0); fit(false); P.rot = rotNow(); keep(); draw(); });
   on('#head', 'oninput', e => { P.head = +e.target.value; $('#headv').textContent = P.head.toFixed(2) + '×'; if(BODY) fit(false); keep(); });
   on('#who', 'onchange', e => { P.who = e.target.value; keep(); draw(); }); on('#own', 'oninput', e => { P.own = e.target.value; keep(); }); on('#renderb', 'onclick', render);
-  B.querySelectorAll('[data-big]').forEach(b => b.onclick = () => { const im = $('#big img'); im.src = viewOf(P.renders[+b.dataset.big]); $('#big').hidden = false; });
+  B.querySelectorAll('[data-big]').forEach(b => b.onclick = () => { BIG = P.renders[+b.dataset.big]; $('#big img').src = viewOf(BIG); $('#big').hidden = false; });
+  B.querySelectorAll('[data-tsel]').forEach(b => b.onclick = () => { P.touch.sel = +b.dataset.tsel; keep(); draw(); });
+  B.querySelectorAll('[data-brush]').forEach(b => b.onclick = () => { MASK.erase = b.dataset.brush==='1'; draw(); });
+  on('#clearb', 'onclick', () => { const c = $('#tmask'); c.getContext('2d').clearRect(0, 0, c.width, c.height); MASK.dirty = false; draw(); });
+  on('#brush', 'oninput', e => { MASK.size = +e.target.value; });
+  on('#twords', 'oninput', e => { P.touch.words = e.target.value; keep(); });
+  on('#den', 'oninput', e => { P.touch.den = +e.target.value; $('#denv').textContent = P.touch.den.toFixed(2); keep(); });
+  B.querySelectorAll('[data-tn]').forEach(b => b.onclick = () => { P.touch.n = Math.max(1, Math.min(8, (P.touch.n || 4) + +b.dataset.tn)); keep(); draw(); });
+  on('#touchb', 'onclick', touchUp); on('#useb', 'onclick', () => useForPose(P.touch.pics[P.touch.sel]));
   dirty = true; }
 document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => { step = b.dataset.step; $('#sheet').classList.remove('folded'); draw(); });
 $('#fold').onclick = () => { const f = $('#sheet').classList.toggle('folded'); $('#fold').textContent = f ? '▴' : '▾'; };
@@ -315,7 +375,8 @@ $('#libb').onclick = async () => { drawLib(); $('#lib').hidden = false; await lo
 $('#newb').onclick = () => { $('#lib').hidden = true; P0 = P; P = fresh(); UNDO.length = 0; keep(); step = 'make'; say(''); showBody(); draw(); };
 $('#saveb').onclick = () => { $('#savename').value = P.name || P.desc.trim().slice(0, 60); $('#save').hidden = false; $('#savename').focus(); }; $('#savex').onclick = () => { $('#save').hidden = true; };
 $('#saveok').onclick = () => { const n = $('#savename').value.trim(); if(!n) return; $('#save').hidden = true; savePose(n); };
-$('#big').onclick = () => { $('#big').hidden = true; };
+let BIG = null; $('#big').onclick = e => { if(e.target.id==='big' || e.target.tagName==='IMG') $('#big').hidden = true; }; $('#bigx').onclick = () => { $('#big').hidden = true; };
+$('#bigtouch').onclick = () => { $('#big').hidden = true; if(BIG) touchFrom(BIG); }; $('#bigpose').onclick = () => useForPose(BIG);
 (async function start(){ draw(); await findPc(); if(!PC.url) say('Your PCs are off: turn Render on, then reopen this tab.'); draw(); loadLib(); loadModels();
   if(P.sam){ step = 'tweak'; draw(); await work(async () => { say('Bringing the 3D body over…'); await showBody(); frame(); say(''); }); } })();
 window.POSEPAGE = {get P(){ return P; }, get BODY(){ return BODY; }, DOTS, dotAt, reach, swing, guides, samJoints, rotNow, get LIB(){ return LIB; }, camera, controls, redraw:() => { dirty = true; }};
