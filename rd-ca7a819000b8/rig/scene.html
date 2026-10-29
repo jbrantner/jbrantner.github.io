@@ -1038,26 +1038,34 @@ async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg =>
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:GA.W, height:GA.H, batch_size:1}), 0], denoise:1});
     let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, K.sam);
     const sa = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_apose'});
-    const ai = (await runGraph(K.url, g, sa, t => st('🎬 1 of 2: painting her A pose on ' + pcName(K.url) + '… ' + t + ' s')))[0]; if(!ai) throw new Error('Her A pose did not come back.');
-    // 2. MiniMax moves her into the pose, steered loosely by the skeleton video
-    st('Sending her A pose and the skeleton video to ' + pcName(k.url) + '…'); const up = await sendPic(k.url, {pc:K.url, file:ai.filename, sub:ai.subfolder || ''}, 'rd-pose-move-', true);
+    // the skeleton video goes up first, and the whole job is kept on her, so closing the app at any point picks it up again
     if(window.MOVE_DBG) window.MOVE_DBG(fr);
+    st('Sending the skeleton video to ' + pcName(k.url) + '…');
     const fd = new FormData(); fd.append('image', new Blob([aviMjpeg(fr, Wv, Hv, ACT_FPS)], {type:'video/x-msvideo'}), 'rd-pose-move-' + stamp + '.avi'); fd.append('overwrite', 'true'); fd.append('type', 'input');
-    const vr = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!vr.ok) throw new Error('Sending the skeleton video failed (' + vr.status + ')'); const vj = await vr.json(), ctl = (vj.subfolder ? vj.subfolder + '/' : '') + vj.name;
-    const m = {}; n = 0; const ad = (c2, i) => { const id = String(++n); m[id] = {class_type:c2, inputs:i}; return id; };
-    const li = ad('LoadImage', {image:up}); let mm = [ad('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0]; if(k.lora) mm = [ad('LoraLoaderModelOnly', {model:mm, lora_name:k.lora, strength_model:1}), 0];
-    const cl = ad('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), va = ad('VAELoader', {vae_name:k.vae});
-    mm = [ad('MiniMaxH3FunControlNetApply', {model:mm, model_patch:[ad('ModelPatchLoader', {name:cnf}), 0], vae:[va, 0], strength:MOVE_CN.strength, start_percent:0, end_percent:MOVE_CN.end, control_video:[ad('GetVideoComponents', {video:[ad('LoadVideo', {file:ctl}), 0]}), 0]}), 0];
-    const iv = ad('MiniMaxH3ImageToVideo', {clip:[cl, 0], vae:[va, 0], prompt:movePrompt(SC.desc), width:Wv, height:Hv, length:MOVE_LEN, first_frame:[li, 0]});
-    const gd = ad('BasicGuider', {model:mm, conditioning:[iv, 0]}), sc = ad('BasicScheduler', {model:mm, scheduler:'simple', steps:k.steps, denoise:1});
-    const smp = ad('SamplerCustomAdvanced', {noise:[ad('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)}), 0], guider:[gd, 0], sampler:[ad('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sc, 0], latent_image:[iv, 1]});
-    const dec = ad('VAEDecodeTiled', {samples:[smp, 0], vae:[va, 0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), pre = (HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_move';
-    const sv = ad('SaveVideo', {video:[ad('CreateVideo', {images:[dec, 0], fps:ACT_FPS}), 0], filename_prefix:pre, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
-    const saves = MOVE_PICK.map(i => ad('SaveImage', {images:cutOut(ad, [ad('ImageFromBatch', {image:[dec, 0], batch_index:i, length:1}), 0], K.bgm), filename_prefix:pre + '_f' + i}));
-    ob.moveJob = {url:k.url, sv, saves, t0:Date.now(), key, geo:Object.assign({}, GT.geo, {px:[Wv, Hv]})}; changed();
-    await moveWait(ob, st, m); }
+    const vr = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!vr.ok) throw new Error('Sending the skeleton video failed (' + vr.status + ')'); const vj = await vr.json();
+    const J = ob.moveJob = {stage:1, aurl:K.url, sa, t0a:Date.now(), url:k.url, ctl:(vj.subfolder ? vj.subfolder + '/' : '') + vj.name, Wv, Hv, cnf, k:{unet:k.unet, lora:k.lora || '', clip:k.clip, vae:k.vae, steps:k.steps}, bgm:K.bgm || '',
+      desc:SC.desc || '', pre:(HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_move', key, geo:Object.assign({}, GT.geo, {px:[Wv, Hv]})}; changed();
+    const ai = await moveApose(ob, st, g); await moveFilm(ob, st, ai); }
   catch(err){ delete ob.moveJob; changed(); st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
+// 1 of 2 finishing: her A pose painting (g is left out when it is picked up again after the app was closed)
+async function moveApose(ob, st, g){ const J = ob.moveJob;
+  const ai = (await runGraph(J.aurl, g, J.sa, t => st('🎬 1 of 2: painting her A pose on ' + pcName(J.aurl) + '… ' + t + ' s'), {pid:J.apid, t0:J.t0a, mins:20, onId:id => { J.apid = id; changed(); }}))[0];
+  if(!ai) throw new Error('Her A pose did not come back.'); return ai; }
+// 2 of 2: MiniMax moves her from that A pose into the pose, steered by the skeleton video
+async function moveFilm(ob, st, ai){ const J = ob.moveJob, k = J.k;
+  st('Sending her A pose to ' + pcName(J.url) + '…'); const up = await sendPic(J.url, {pc:J.aurl, file:ai.filename, sub:ai.subfolder || ''}, 'rd-pose-move-', true);
+  const m = {}; let n = 0; const ad = (c2, i) => { const id = String(++n); m[id] = {class_type:c2, inputs:i}; return id; };
+  const li = ad('LoadImage', {image:up}); let mm = [ad('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0]; if(k.lora) mm = [ad('LoraLoaderModelOnly', {model:mm, lora_name:k.lora, strength_model:1}), 0];
+  const cl = ad('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), va = ad('VAELoader', {vae_name:k.vae});
+  mm = [ad('MiniMaxH3FunControlNetApply', {model:mm, model_patch:[ad('ModelPatchLoader', {name:J.cnf}), 0], vae:[va, 0], strength:MOVE_CN.strength, start_percent:0, end_percent:MOVE_CN.end, control_video:[ad('GetVideoComponents', {video:[ad('LoadVideo', {file:J.ctl}), 0]}), 0]}), 0];
+  const iv = ad('MiniMaxH3ImageToVideo', {clip:[cl, 0], vae:[va, 0], prompt:movePrompt(J.desc), width:J.Wv, height:J.Hv, length:MOVE_LEN, first_frame:[li, 0]});
+  const gd = ad('BasicGuider', {model:mm, conditioning:[iv, 0]}), sc = ad('BasicScheduler', {model:mm, scheduler:'simple', steps:k.steps, denoise:1});
+  const smp = ad('SamplerCustomAdvanced', {noise:[ad('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)}), 0], guider:[gd, 0], sampler:[ad('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sc, 0], latent_image:[iv, 1]});
+  const dec = ad('VAEDecodeTiled', {samples:[smp, 0], vae:[va, 0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
+  J.sv = ad('SaveVideo', {video:[ad('CreateVideo', {images:[dec, 0], fps:ACT_FPS}), 0], filename_prefix:J.pre, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  J.saves = MOVE_PICK.map(i => ad('SaveImage', {images:cutOut(ad, [ad('ImageFromBatch', {image:[dec, 0], batch_index:i, length:1}), 0], J.bgm), filename_prefix:J.pre + '_f' + i}));
+  J.stage = 2; J.t0 = Date.now(); changed(); await moveWait(ob, st, m); }
 async function moveWait(ob, st, g){ const J = ob.moveJob;
   const res = await runGraph(J.url, g, [J.sv, ...J.saves], t => st('🎬 2 of 2: MiniMax is moving her into the pose on ' + pcName(J.url) + '… ' + t + ' s (you can close the app: it is picked up when you come back)'), {pid:J.pid, t0:J.t0, mins:45, onId:id => { J.pid = id; changed(); }});
   const ims = J.saves.map(s2 => ((res[s2] || {}).images || [])[0]).filter(Boolean); if(!ims.length) throw new Error('The frames did not come back.');
@@ -1065,8 +1073,8 @@ async function moveWait(ob, st, g){ const J = ob.moveJob;
   ob.tries = ims.map(im => Object.assign({pc:J.url, file:im.filename, sub:im.subfolder || '', key:J.key, move:true}, J.geo)); ims.forEach(im => texOf(shotUrl({pc:J.url, file:im.filename, sub:im.subfolder}), true)); delete ob.moveJob;
   st('🎬 Done: pick one of the 4 frames from the end of her move, then ⤴ High res cleans it up.'); changed(); dirty = true; }
 async function moveResume(ob){ const st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
-  if(!ob.moveJob || !ob.moveJob.pid || BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
-  try{ await moveWait(ob, st); }catch(err){ delete ob.moveJob; changed(); st(err.message || String(err)); } BUSY.delete(ob.id); drawSel(); }
+  const J = ob.moveJob; if(!J || !(J.pid || J.apid) || BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
+  try{ if(J.stage===1) await moveFilm(ob, st, await moveApose(ob, st)); else await moveWait(ob, st); }catch(err){ delete ob.moveJob; changed(); st(err.message || String(err)); } BUSY.delete(ob.id); drawSel(); }
 // the turn's frames (every ORB_STEP-th, at even steps round the circle: the last frame is the first again) → one 3D pose → her bones
 function fitOrbit(ob, o, sh, frames){ const N = frames.length, views = [];
   for(let i = 0; i < N - 1; i += ORB_STEP){ const kp = frames[i]; let pts = null;
@@ -1305,7 +1313,7 @@ $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) 
   else if(b.dataset.eye){ ob.hide = !ob.hide; changed(); } else { ob.lock = !ob.lock; changed(); }
   drawList(); drawSel(); dirty = true; };
 function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find(o => o.id===ui.sel);
-  if(POSE && SC) SC.objs.forEach(x => { if(x.actJob && x.actJob.pid && !BUSY.has(x.id)) setTimeout(() => actResume(x), 0); if(x.orbJob && x.orbJob.pid && !BUSY.has(x.id)) setTimeout(() => orbResume(x), 0); if(x.moveJob && x.moveJob.pid && !BUSY.has(x.id)) setTimeout(() => moveResume(x), 0); }); // (🎬 a video still being made when the app was closed)
+  if(POSE && SC) SC.objs.forEach(x => { if(x.actJob && x.actJob.pid && !BUSY.has(x.id)) setTimeout(() => actResume(x), 0); if(x.orbJob && x.orbJob.pid && !BUSY.has(x.id)) setTimeout(() => orbResume(x), 0); if(x.moveJob && (x.moveJob.pid || x.moveJob.apid) && !BUSY.has(x.id)) setTimeout(() => moveResume(x), 0); }); // (🎬 a video still being made when the app was closed)
   if(numbersOnly && ob && box.dataset.id===ob.id){ ['x', 'y', 'z'].forEach(k => { const i = box.querySelector(`[data-n="${k}"]`); if(i && document.activeElement!==i) i.value = ob[k]; }); return; }
   box.dataset.id = ob ? ob.id : '';
   if(!ob){ box.innerHTML = SCM ? '' : `<h2>Selected</h2><p class="note">Nothing selected. Tap a name in Objects (or tap one in a view) to move it.</p>`; placeSel(); return; }

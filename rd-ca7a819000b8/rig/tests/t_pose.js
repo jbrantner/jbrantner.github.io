@@ -192,6 +192,15 @@ const DEPS = process.env.RIG_DEPS || '';
       '🎬 Move into the pose: her A pose painted held to the rig, then MiniMax from it with the skeleton video loosely (0.5): ' + JSON.stringify({txtA, cnA, fun:fun && fun.strength}));
     if(process.env.SHOT){ const fr = await page.evaluate(() => window.MOVE_FR); fr.forEach((u, i) => fs.writeFileSync(process.env.SHOT + '/move' + i + '.jpg', Buffer.from(u.split(',')[1], 'base64'))); }
     ok(/Done: pick/.test(r.msg) && r.tries===4 && r.move && r.pose==='sit' && !r.job && r.px[1] > r.px[0], '🎬 4 frames from the end of her move come back as tries, her rig still in the pose: ' + JSON.stringify(r)); }
+  // 🎬 closing the app while her A pose is still being painted (Jordan 2026-10-29: ran Move, closed the app, nothing came back): both steps are picked up
+  { await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.tries = []; ob.mode = 'mq'; SCENE.drawSel(); }); HOLD = true; const n0 = GRAPHS.length;
+    await page.evaluate(() => document.querySelector('[data-act="move"]').click()); await page.waitForFunction(() => { const j = SCENE.sc.objs[0].moveJob; return j && j.apid; }, null, {timeout:30000}); await page.waitForTimeout(800);
+    await page.goto('https://app.test/rig/scene.html?pose=1'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000});
+    await page.waitForFunction(() => { const o = [...SCENE.objs.values()][0]; return o && o.mq && o.mq.userData.body && SCENE.BODY; }, null, {timeout:30000});
+    HOLD = false; await page.evaluate(() => { SCENE.ui.sel = SCENE.sc.objs[0].id; SCENE.drawSel(); });
+    await page.waitForFunction(() => (SCENE.sc.objs[0].tries || []).filter(t => t.move).length===4 && !SCENE.sc.objs[0].moveJob, null, {timeout:30000});
+    const kinds = GRAPHS.slice(n0).map(g => Object.values(g).some(n => n.class_type==='MiniMaxH3ImageToVideo') ? 'mm' : 'il').join();
+    ok(kinds==='il,mm', '🎬 closed during her A pose: it is picked up and MiniMax still films her (A pose painted once): ' + kinds); }
   // the views go all the way round her, under the floor and over her head (Jordan 2026-10-29)
   { const el = await page.evaluate(() => window.EL_MAX * 180 / Math.PI); ok(el >= 85, 'the views turn up to ' + Math.round(el) + '° above and below her'); }
   // her base body is only on Render: with Main listed first (its library answers, but it has no 3D Bodies), she still gets her rig (Jordan 2026-10-29)
