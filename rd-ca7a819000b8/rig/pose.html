@@ -173,7 +173,8 @@ async function runGraph(url, g, saves, tick, mins, part){ const r = await fetch(
   if(!r.ok || !j.prompt_id) throw new Error('The PC turned it down: ' + JSON.stringify(j.error || j.node_errors || j).slice(0, 200)); const t0 = Date.now();
   for(;;){ await new Promise(res => setTimeout(res, window.RENDER_POLL || 2000)); tick(Math.round((Date.now() - t0) / 1000));
     const h = await (await fetch(url + '/history/' + j.prompt_id, {cache:'no-store'})).json(), it = h[j.prompt_id];
-    if(it && it.status && it.status.status_str==='error') throw new Error('It failed on the PC.'); if(part && it && it.outputs) part(it.outputs); if(it && it.outputs && saves.every(k => it.outputs[k])) return it.outputs;
+    if(it && it.status && it.status.status_str==='error'){ const m = (it.status.messages || []).find(x => x[0]==='execution_error'), e = m && m[1] || {};
+      throw Object.assign(new Error('It failed on the PC' + (e.node_type ? ' (' + e.node_type + ': ' + String(e.exception_message || '').trim().slice(0, 160) + ')' : '.')), {pc:e}); } if(part && it && it.outputs) part(it.outputs); if(it && it.outputs && saves.every(k => it.outputs[k])) return it.outputs;
     if(it && it.status && it.status.completed) throw new Error('The PC finished but sent nothing back.'); if(Date.now() - t0 > (mins || 10) * 60000) throw new Error('No answer after ' + (mins || 10) + ' minutes.'); } }
 const graph = () => { const g = {}; let n = 0; return {g, add:(c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; }}; };
 async function work(fn){ if(BUSY) return; BUSY = true; draw(); try{ await fn(); }catch(err){ say(err.message || String(err)); } BUSY = false; draw(); }
@@ -207,13 +208,16 @@ function myPhoto(f){ return work(async () => { say('Sending your photo…'); con
   P.photos.push({pc:k.url, file:(await r.json()).name, sub:'', type:'input'}); P.pick = P.photos.length - 1; keep(); say('Your photo is in. Tap Create pose.'); }); }
 function createPose(){ return work(async () => { const ph = P.photos[P.pick]; if(!ph) return; say('Looking for a PC with SAM 3D Body…'); const k = await samKit();
   const img = ph.type==='input' ? ph.file : (ph.sub ? ph.sub.replace(/\\/g, '/') + '/' : '') + ph.file + ' [output]';
+  // (2026-10-29: the person finder can miss an anime render at 0.5 and SAM then reads nobody, so it looks again, less fussy; the PC keeps the rest cached)
+  let res, sv; for(const th of [0.5, 0.25, 0.1]){
   const {g, add} = graph(), li = add('LoadImage', {image:img}), sm = add('SAM3DBody_Loader', {model_file:k.sam});
-  const box = add('RTDETR_detect', {model:[add('UNETLoader', {unet_name:k.det, weight_dtype:'default'}), 0], image:[li, 0], threshold:0.5, class_name:'person', max_detections:1});
+  const box = add('RTDETR_detect', {model:[add('UNETLoader', {unet_name:k.det, weight_dtype:'default'}), 0], image:[li, 0], threshold:th, class_name:'person', max_detections:1});
   const fov = k.moge ? [add('MoGeGeometryToFOV', {moge_geometry:[add('MoGeInference', {moge_model:[add('LoadMoGeModel', {model_name:k.moge}), 0], image:[li, 0], resolution_level:9, fov_x_degrees:0, batch_size:4, force_projection:true, apply_mask:true, refine_steps:3}), 0], axis:'vertical', unit:'degrees'}), 0] : 0;
   const pd = add('SAM3DBody_Predict', {sam3d_body_model:[sm, 0], image:[li, 0], run_hand_refinement:true, fov, batch_size:64, bboxes:[box, 0]});
-  const sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps:24, camera_translation:'off', track_index:-1, format:'glb', 'format.mesh_style':'body_mesh', 'format.mesh_style.bone_vis':'off', 'format.mesh_style.shader':'default', 'format.bone_smooth_window':0}), 0],
+  sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps:24, camera_translation:'off', track_index:-1, format:'glb', 'format.mesh_style':'body_mesh', 'format.mesh_style.bone_vis':'off', 'format.mesh_style.shader':'default', 'format.bone_smooth_window':0}), 0],
     filename_prefix:PRE + '/pose/body', viewport_state:{}, width:1024, height:1024});
-  const res = await runGraph(k.url, g, [sv], t => say('SAM 3D Body is reading the pose in 3D on ' + pcName(k.url) + '… ' + t + ' s'));
+  try{ res = await runGraph(k.url, g, [sv], t => say('SAM 3D Body is reading the pose in 3D on ' + pcName(k.url) + '… ' + (th < 0.5 ? '(looking harder for the person) ' : '') + t + ' s')); break; }
+  catch(err){ if(!/no valid tracks/i.test(err.message)) throw err; if(th===0.1) throw new Error("SAM 3D Body couldn't find a person in that picture. A plainer background or the whole body in frame helps."); } }
   const find = x => { if(!x || typeof x!=='object') return null; if(typeof x.filename==='string' && /\.glb$/i.test(x.filename)) return x; for(const v of Object.values(x)){ const r = find(v); if(r) return r; } return null; }, f = find(res[sv]);
   if(!f) throw new Error('SAM 3D Body found no one in that picture.');
   P.sam = {pc:k.url, file:f.filename, sub:f.subfolder || ''}; P.rot = null; P.renders = []; UNDO.length = 0; say('Bringing the 3D body over (about 17 MB)…'); await showBody(); P.rot = rotNow(); keep();
@@ -263,12 +267,12 @@ function render(){ return work(async () => { if(!BODY) return; const e = PC.char
   let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, K.sam);
   const sv = add('SaveImage', {images:out, filename_prefix:PRE + '/pose/' + ((e && e.name) || 'own').replace(/[^\w-]+/g, '_')});
   const res = await runGraph(K.url, g, [sv], t => say('Painting ' + ((e && e.name) || 'your character') + ' 4 times on ' + pcName(K.url) + '… ' + t + ' s'), 15);
-  P.renders = (res[sv].images || []).map(im => ({pc:K.url, file:im.filename, sub:im.subfolder || ''})); P.words = words; keep(); say('Tap one to see it big.'); }); }
+  P.renders = (res[sv].images || []).map(im => ({pc:K.url, file:im.filename, sub:im.subfolder || '', who:e ? e.subfolder : '', words})); P.words = words; keep(); say('Tap one to see it big.'); }); }
 // ---- 4 Touch up (Jordan 2026-10-29): plain inpainting over a render, no pose guides, so it can loosen a stiff pose; paint where it may change
 //   (nothing painted = the whole picture, gently); any picture here can go back to 2 as the pose to rebuild the 3D body from
 const tu = () => P.touch || (P.touch = {pics:[], sel:-1, words:'', den:0.6, n:4});
 function touchFrom(p){ const T = tu(), k = viewOf(p); let i = T.pics.findIndex(q => viewOf(q)===k); if(i < 0){ T.pics.push(Object.assign({}, p)); i = T.pics.length - 1; }
-  T.sel = i; if(!T.words) T.words = P.words || ''; keep(); step = 'touch'; MASK.dirty = false; say('Paint over what may change (a stiff arm, the hips…), or leave it bare to redo the whole picture.'); draw(); }
+  T.sel = i; T.words = p.words || T.pics[i].words || T.words || P.words || ''; T.who = p.who!=null ? p.who : T.pics[i].who!=null ? T.pics[i].who : P.who; keep(); step = 'touch'; MASK.dirty = false; say('Paint over what may change (a stiff arm, the hips…), or leave it bare to redo the whole picture.'); draw(); }
 const MASK = {dirty:false, erase:false, size:40, down:false, last:null};
 function layoutTouch(){ const el = $('#touch'), on = step==='touch' && P.touch && P.touch.pics[P.touch.sel]; el.hidden = !on; if(!on) return;
   const v = shown(), H = v.bottom - v.top; const im = $('#timg'), c = $('#tmask'), nw = im.naturalWidth, nh = im.naturalHeight; if(!nw) return;
@@ -287,7 +291,7 @@ function showTouch(){ const T = P.touch, p = T && T.pics[T.sel], im = $('#timg')
 function maskPng(){ const c = $('#tmask'), o = document.createElement('canvas'); o.width = c.width; o.height = c.height; const x = o.getContext('2d'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height), id = x.createImageData(c.width, c.height);
   let any = false; for(let i = 0; i < d.data.length; i += 4){ const a = d.data[i + 3]; id.data[i] = id.data[i + 1] = id.data[i + 2] = a; id.data[i + 3] = 255; if(a > 20) any = true; } x.putImageData(id, 0, 0); return any ? o : null; }
 function touchUp(){ return work(async () => { const T = P.touch, src = T.pics[T.sel]; if(!src) return; const words = (T.words || '').trim(); if(!words) throw new Error('Say what the picture shows (the words start as the render\'s).');
-  const e = PC.chars.find(c => c.subfolder===P.who), m = maskPng(), N = T.n || 4; say('Asking ' + pcName(src.pc) + ' for its models…'); const K = await kitOn(src.pc, e || {}); if(!K.ckpt) throw new Error(pcName(src.pc) + ' has no checkpoint.');
+  const who = T.who!=null ? T.who : P.who, e = who ? PC.chars.find(c => c.subfolder===who) : null, m = maskPng(), N = T.n || 4; say('Asking ' + pcName(src.pc) + ' for its models…'); const K = await kitOn(src.pc, e || {}); if(!K.ckpt) throw new Error(pcName(src.pc) + ' has no checkpoint.');
   const mn = m ? await upload(K.url, m, 'rd-pose-mask-' + Date.now().toString(36) + '.png') : '';
   const {g, add} = graph(), ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
   for(const [l, w] of (e ? [[e.style, 1], [e.lora, +e.strength || 1]] : []).filter(([l]) => l && K.los.includes(l))){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
@@ -299,7 +303,7 @@ function touchUp(){ return work(async () => { const T = P.touch, src = T.pics[T.
   const saves = Array.from({length:N}, () => { const seed = Math.floor(Math.random() * 2 ** 40); let out = [add('VAEDecode', {samples:[add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0], latent_image:lat, denoise:+T.den || 0.6}), 0], vae:[ck, 2]}), 0];
     if(soft) out = [add('ImageCompositeMasked', {destination:img, source:out, x:0, y:0, resize_source:false, mask:soft}), 0]; else if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos, 0], [neg, 0], seed, K.sam);
     return add('SaveImage', {images:out, filename_prefix:PRE + '/pose/touch'}); });
-  PEND = N; draw(); const seen = new Set(), take = out => { let n = 0; for(const s2 of saves) if(out[s2] && !seen.has(s2)){ seen.add(s2); for(const im of out[s2].images || []){ T.pics.push({pc:K.url, file:im.filename, sub:im.subfolder || ''}); n++; } } if(n){ PEND = Math.max(0, PEND - n); keep(); draw(); } };
+  PEND = N; draw(); const seen = new Set(), take = out => { let n = 0; for(const s2 of saves) if(out[s2] && !seen.has(s2)){ seen.add(s2); for(const im of out[s2].images || []){ T.pics.push({pc:K.url, file:im.filename, sub:im.subfolder || '', who:e ? e.subfolder : '', words}); n++; } } if(n){ PEND = Math.max(0, PEND - n); keep(); draw(); } };
   try{ take(await runGraph(K.url, g, saves, t => say((m ? 'Repainting what you marked' : 'Redoing the whole picture') + ', ' + N + ' tries on ' + pcName(K.url) + '… ' + t + ' s'), 5 + N * 2, take)); } finally { PEND = 0; }
   say('Tap a try to keep working on it, or 🦴 Use for the pose.'); }); }
 // a picture back to 1 as the pick, and SAM reads the 3D body from it again
@@ -371,7 +375,7 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
   on('#head', 'oninput', e => { P.head = +e.target.value; $('#headv').textContent = P.head.toFixed(2) + '×'; if(BODY) fit(false); keep(); });
   on('#who', 'onchange', e => { P.who = e.target.value; keep(); draw(); }); on('#own', 'oninput', e => { P.own = e.target.value; keep(); }); on('#renderb', 'onclick', render);
   B.querySelectorAll('[data-big]').forEach(b => b.onclick = () => { BIG = P.renders[+b.dataset.big]; $('#big img').src = viewOf(BIG); $('#big').hidden = false; });
-  B.querySelectorAll('[data-tsel]').forEach(b => b.onclick = () => { P.touch.sel = +b.dataset.tsel; keep(); draw(); });
+  B.querySelectorAll('[data-tsel]').forEach(b => b.onclick = () => { const T = P.touch, q = T.pics[T.sel = +b.dataset.tsel]; if(q && q.words) T.words = q.words; if(q && q.who!=null) T.who = q.who; keep(); draw(); });
   B.querySelectorAll('[data-brush]').forEach(b => b.onclick = () => { MASK.erase = b.dataset.brush==='1'; draw(); });
   on('#clearb', 'onclick', () => { const c = $('#tmask'); c.getContext('2d').clearRect(0, 0, c.width, c.height); MASK.dirty = false; draw(); });
   on('#brush', 'oninput', e => { MASK.size = +e.target.value; });

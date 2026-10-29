@@ -19,7 +19,7 @@ const DEPS = process.env.RIG_DEPS || '';
     r.fulfill({ contentType:'text/javascript', body:fs.readFileSync(f) }); });
   const H = {'access-control-allow-origin':'*'};
   const lib = {name:'Ellie', subfolder:'Character Library/Ellie', trigger:'elliex', lora:'elliex.safetensors', style:'AFKJ Style Illustrious Claude.safetensors', prompt:'elliex, 1girl, solo', tags:'1girl, solo, blue hair, standing, full body', ckpt:'iriselTouchIL_v10.safetensors'};
-  const store = new Map(), GRAPHS = [];
+  const store = new Map(), GRAPHS = []; let samMiss = false;
   const OI = {UNETLoader:['unet_name', ['z_image_turbo_bf16.safetensors', 'rt_detr_v4-x-hgnet_fp32.safetensors']], CLIPLoader:['clip_name', ['qwen_3_4b.safetensors']], VAELoader:['vae_name', ['ae.safetensors']],
     SAM3DBody_Loader:['model_file', ['sam_3d_body_dinov3_int8_convrot.safetensors']], SAM3DBody_Predict:['image', ['x']], BuildPoseFile:['format', ['x']], LoadMoGeModel:['model_name', ['moge_2_vitl_normal_fp16.safetensors']],
     CheckpointLoaderSimple:['ckpt_name', ['iriselTouchIL_v10.safetensors', 'other.safetensors']], LoraLoader:['lora_name', ['elliex.safetensors', 'AFKJ Style Illustrious Claude.safetensors']], ControlNetLoader:['control_net_name', ['diffusion_pytorch_model_promax.safetensors']]};
@@ -31,6 +31,7 @@ const DEPS = process.env.RIG_DEPS || '';
     if(u.pathname==='/upload/image'){ const m = r.request().postDataBuffer().toString('latin1').match(/filename="([^"]+)"/); return J({name:m && m[1]}); }
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return J({prompt_id:'p' + GRAPHS.length}); }
     const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[+hi[1].slice(1) - 1], ks = k => Object.keys(g).filter(n => g[n].class_type===k), ok = o => J({[hi[1]]:{status:{status_str:'success', completed:true}, outputs:o}});
+      if(ks('Save3DAdvanced').length && samMiss && g[ks('RTDETR_detect')[0]].inputs.threshold===0.5) return J({[hi[1]]:{status:{status_str:'error', completed:false, messages:[['execution_error', {node_type:'BuildPoseFile', exception_message:'build_glb_skeletal: no valid tracks in pose_data'}]]}}});
       if(ks('Save3DAdvanced').length) return ok({[ks('Save3DAdvanced')[0]]:{'3d':[{filename:'body_00001.glb', subfolder:'Output_Render\\RenderDeck\\pose', type:'output'}], camera_info:[null], model_3d_info:[]}});
       if(ks('SaveImage').length > 1) return ok(Object.fromEntries(ks('SaveImage').map((k, i) => [k, {images:[{filename:'photo_' + GRAPHS.length + '_' + i + '.png', subfolder:'RenderDeck/pose', type:'output'}]}])));
       return ok({[ks('SaveImage')[0]]:{images:[0, 1, 2, 3].map(i => ({filename:'ellie_' + i + '.png', subfolder:'RenderDeck/pose', type:'output'}))}}); }
@@ -102,9 +103,11 @@ const DEPS = process.env.RIG_DEPS || '';
   const tg2 = Object.values(GRAPHS[n2]);
   ok(tg2.filter(n => n.class_type==='KSampler').every(n => n.inputs.denoise===0.45) && tg2.filter(n => n.class_type==='KSampler').length===2 && !tg2.some(n => n.class_type==='SetLatentNoiseMask') && /photo_\d+_2\.png \[output\]$/.test(tg2.find(n => n.class_type==='LoadImage').inputs.image),
     'nothing painted: Redo all redoes the picked try as a whole at 0.45, 2 of them');
-  await page.click('[data-tsel="6"]'); const n3 = GRAPHS.length; await page.click('#useb');
+  await page.click('[data-tsel="6"]'); const tw2 = await page.evaluate(() => POSEPAGE.P.touch.who); samMiss = true; const n3 = GRAPHS.length; await page.click('#useb');
   await page.waitForFunction(() => window.POSEPAGE.BODY && document.querySelector('[data-step="tweak"]').getAttribute('aria-selected')==='true' && document.querySelector('#touch').hidden, null, {timeout:30000});
-  const ug = Object.values(GRAPHS[n3]);
+  samMiss = false; const ug = Object.values(GRAPHS[n3 + 1]);
+  ok(tw2==='Character Library/Ellie' && GRAPHS.length===n3 + 2 && Object.values(GRAPHS[n3]).find(n => n.class_type==='RTDETR_detect').inputs.threshold===0.5 && ug.find(n => n.class_type==='RTDETR_detect').inputs.threshold===0.25,
+    'touch up keeps the render\'s own character; when SAM finds nobody (an anime render) it looks again at 0.25');
   ok(ug.some(n => n.class_type==='SAM3DBody_Predict') && /photo_\d+_1\.png \[output\]$/.test(ug.find(n => n.class_type==='LoadImage').inputs.image) && await page.evaluate(() => !document.querySelector('[data-step="touch"]').disabled),
     '🦴 Use this one for the pose: SAM reads that try and the body comes back to 2 Tweak (Touch up keeps its pictures)'); await shot('touch2');
   // the library
