@@ -56,7 +56,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 <div class="cols">
   <div class="box" id="envbox"></div>
   <div class="box" id="lightbox"></div>
-  <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="rall">▶ Render all</button><button id="rscene">🎬 Render Scene</button></div><div id="final"></div><p class="note" id="allmsg">▶ Render all redraws every pick in high res, paints the 🌄 background from the 📷 Camera, and lays everyone over it into one finished picture.</p><div class="list" id="objs"></div>
+  <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="d3" aria-pressed="false" title="Everyone as their 3D mannequin or model, to move and pose">🧍 3D</button><button id="d2" aria-pressed="true" title="Everyone as their rendered picture">📸 2D</button><button id="rall">▶ Render all</button><button id="rscene">🎬 Render Scene</button></div><div id="final"></div><p class="note" id="allmsg">▶ Render all redraws every pick in high res, paints the 🌄 background from the 📷 Camera, and lays everyone over it into one finished picture.</p><div class="list" id="objs"></div>
     <p class="note">Tap a name to select it; only the selected one moves. Drag it in any view: Front and Side move it sideways and up, Top, Camera and Free slide it over the floor.</p></div>
   <div class="box" id="selbox"></div>
 </div>
@@ -118,6 +118,11 @@ function openScene(s){ SC = s; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi()
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
+// 🧍 3D / 📸 2D (Jordan 2026-10-29): 3D shows everyone as mannequins and 3D objects to set up; ▶ Render all brings back the 2D pictures
+// (keeping each pick that still fits its spot, pose and the 📷 Camera, painting new tries for the rest)
+const setD3 = on => { if(!SC) return; SC.d3 = !!on; drawD3(); drawSel(); changed(); dirty = true; };
+function drawD3(){ const on = !!(SC && SC.d3); $('#d3').setAttribute('aria-pressed', on); $('#d2').setAttribute('aria-pressed', !on); }
+$('#d3').onclick = () => setD3(true); $('#d2').onclick = () => setD3(false);
 $('#rall').onclick = () => renderAll(); $('#rscene').onclick = () => renderScene();
 $('#new').onclick = () => { const n = prompt(ENV ? 'Name for the new environment' : 'Name for the new scene', (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
 $('#ren').onclick = () => { if(!SC) return; const n = prompt(ENV ? 'Rename this environment' : 'Rename this scene', SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
@@ -550,7 +555,9 @@ let camT = 0; function saveCams(){ clearTimeout(camT); camT = setTimeout(() => {
 // paints her over it from the camera you are looking through (depth + skeleton of the mannequin alone, on white, her LoRA),
 // four tries, cut out; the one picked stands in the scene as her picture from then on, until you go back to the mannequin
 const BUSY = new Set(), RMSG = new Map(); // a render on its way, and what it last said, per character (not saved with the scene)
-const modeOf = ob => ob.mode==='shot' && ob.shot ? 'shot' : window.SHOW_PICS && ob.mode!=='mq' ? 'pics' : 'mq'; // Jordan 2026-10-28: in a scene she is only 🧍 Mannequin (the default) or 📸 Rendered
+const modeOf = ob => SC && SC.d3 ? 'mq' : ob.mode==='shot' && ob.shot ? 'shot' : window.SHOW_PICS && ob.mode!=='mq' ? 'pics' : 'mq'; // Jordan 2026-10-28: in a scene she is only 🧍 Mannequin (the default) or 📸 Rendered
+const shotKey = ob => JSON.stringify([SC.cam || camState(), +(ob.x || 0).toFixed(2), +(ob.z || 0).toFixed(2), +(ob.y || 0).toFixed(2), ob.rot || 0, ob.s || 1, ob.pose || 'stand']);
+const shotFits = ob => !!ob.shot && (!ob.shot.key || ob.shot.key===shotKey(ob)); // (picks from before v.253 have no key: kept)
 const mqHeight = o => { const m1 = o.e && o.e.views && o.e.views.length ? ringMed(o, 1) : 0; return m1 ? m1 * o.geo.hM : 1.7; };
 const shotUrl = sh => (sh = sh.hi || sh, sh.pc + '/view?filename=' + encodeURIComponent(sh.file) + '&subfolder=' + encodeURIComponent(sh.sub || '') + '&type=output'); // ⤴ its high-res redraw once made
 // the rendered picture stands where the mannequin stood: upright, turned to the camera from its spot, as tall on screen as when it was made
@@ -659,7 +666,7 @@ async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg
     out = cutOut(add, out, bgm);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_')});
     const imgs = await runGraph(url, g, save, t => st('Painting 4 on ' + pcName(url) + '… ' + t + ' s'));
-    ob.tries = imgs.map(im => ({pc:url, file:im.filename, sub:im.subfolder || '', depth:dn, ...G.geo})); imgs.forEach(im => texOf(shotUrl({pc:url, file:im.filename, sub:im.subfolder}), true)); // (depth: the guide she was painted from, for the 💡 light)
+    ob.tries = imgs.map(im => ({pc:url, file:im.filename, sub:im.subfolder || '', depth:dn, key:shotKey(ob), ...G.geo})); imgs.forEach(im => texOf(shotUrl({pc:url, file:im.filename, sub:im.subfolder}), true)); // (depth: the guide she was painted from, for the 💡 light)
     st(bgm ? 'Pick the one you like. ⤴ High res then redraws it 2× (▶ Render all does every pick).' : 'Pick one (no PC has BiRefNet, so the white round her is cut away here).'); changed(); }
   catch(err){ st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
@@ -691,7 +698,8 @@ async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, 
 // ▶ Render all (Jordan 2026-10-28): every character's pick gets ⤴ High res (one with no pick gets 4 tries to pick from, and it stops there);
 // then 🌄 the background is painted from the 📷 Camera, and 🖼 everyone is laid over it into one picture
 async function renderAll(){ if(!SC) return; const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }; const chars = SC.objs.filter(ob => !ob.hide && OBJ.get(ob.id) && OBJ.get(ob.id).shot); // characters, and 🪑 3D objects (painted the same way)
-  $('#rall').disabled = true; let tries = 0;
+  $('#rall').disabled = true; let tries = 0; if(SC.d3){ SC.d3 = false; drawD3(); changed(); }
+  for(const ob of chars) if(ob.shot && shotFits(ob)) ob.mode = 'shot'; else if(ob.shot){ ob.mode = 'mq'; ob.shot = null; } // moved or posed since its pick: paint again
   try{ for(const ob of chars){ const nm = ob.label || 'her';
       if(modeOf(ob)==='shot'){ if(ob.shot.hi) continue; msg('⤴ ' + nm + ': redrawing her pick 2×…'); await hiRes(ob); }
       else { msg('🎬 ' + nm + ' has no pick yet: painting 4 to pick from…'); await renderAngle(ob); tries++; } }
@@ -824,7 +832,7 @@ function scenePose(chars, cam, W, H){ const c = document.createElement('canvas')
   for(const o of chars){ if(!o.mq || !o.mq.userData.body || !BODY) continue; o.g.updateMatrixWorld(true); const pts = bodyJoints(o.mq, BODY.face).map(w => { const p = w.clone().project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; });
     x.drawImage(drawPose(W, H, pts, pts.map(() => true)), 0, 0); } return c; }
 async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }, btn = $('#rscene'); btn.disabled = true;
-  try{ if(!(SC.final && bgFits())){ msg('🎬 First ▶ Render all makes the finished picture…'); await renderAll(); if(!(SC.final && bgFits())) return; }
+  try{ if(SC.d3 || !(SC.final && bgFits())){ msg('🎬 First ▶ Render all makes the finished picture…'); await renderAll(); if(!(SC.final && bgFits())) return; }
     const items = SC.objs.filter(ob => !ob.hide && !ob.fromEnv && OBJ.get(ob.id) && OBJ.get(ob.id).e).map(ob => OBJ.get(ob.id)), env = envOf(SC.env) || {};
     const chars = items.filter(o => o.ob.kind!=='obj'), lead = chars.map(o => o.e).find(e => e.ckpt) || {};
     // the PC: the one with the most of their LoRAs (and ControlNet ProMax)
@@ -873,7 +881,7 @@ function drawFinal(){ const box = $('#final'); if(!box) return; const f = SC && 
     // a background is kept until the camera or environment changes (Jordan 2026-10-28 found it stuck): this paints a fresh one
     + (b ? `<div class="line"><button id="newbg">🌄 Paint a new background</button></div><p class="note">${SC.bgSet && SC.bgSet.pick ? 'Drops your picked 🧪 test picture and paints a new one at denoise ' + SC.bgSet.dn + ', depth ' + SC.bgSet.cn + ', then puts everyone on it.' : 'Paints a new one (a new seed), then puts everyone on it.'}</p>` : '');
   const nb = $('#newbg'); if(nb) nb.onclick = () => { SC.bg = undefined; if(SC.bgSet) delete SC.bgSet.pick; changed(); drawEnvBox(); renderAll(); }; }
-function drawList(){ const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = ENV ? '<p class="note">No objects yet. ＋ Object adds one from the 📚 Object Library (the 3D chair is there too).</p>' : '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
+function drawList(){ drawD3(); const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = ENV ? '<p class="note">No objects yet. ＋ Object adds one from the 📚 Object Library (the 3D chair is there too).</p>' : '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
   box.innerHTML = SC.objs.map(ob => { const e = libOf(ob.ref); return `<div class="row" aria-selected="${ui.sel===ob.id}"><button class="nm" data-sel="${esc(ob.id)}">${ob.kind==='obj' ? '🪑' : '🧍'} ${esc(ob.label || (e && e.name) || '?')} ${e ? (e.trigger ? `<small>${esc(e.trigger)}</small>` : '') : '<small class="warn">not in the library</small>'}</button>
     <button class="ic" data-eye="${esc(ob.id)}" aria-pressed="${!ob.hide}" aria-label="Show or hide">👁</button><button class="ic" data-lock="${esc(ob.id)}" aria-pressed="${!!ob.lock}" aria-label="Lock">🔒</button></div>`; }).join(''); }
 $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) return; const id = b.dataset.sel || b.dataset.eye || b.dataset.lock, ob = SC.objs.find(o => o.id===id); if(!ob) return;
@@ -902,9 +910,9 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
   box.querySelectorAll('[data-n]').forEach(i => i.oninput = () => { if(ob.lock) return; const k = i.dataset.n, v = parseFloat(i.value); if(!isFinite(v)) return; ob[k] = k==='y' ? Math.max(0, v) : v;
     if(k==='rot') $('#rotv').textContent = Math.round(v) + '°'; if(k==='s') $('#sv').textContent = Math.round(v * 100) + '%'; changed(); });
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
-  box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; if(SC.d3 && ob.mode==='shot'){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; drawSel(); changed(); dirty = true; });
-  box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; if(SC.d3){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
@@ -935,11 +943,11 @@ stage.addEventListener('pointerdown', e => { if(!ENV || !painting || pId!==null)
 stage.addEventListener('pointermove', e => { if(!ENV || !painting || e.pointerId!==pId) return; e.stopImmediatePropagation(); paintAt(e); }, true);
 const pEnd = e => { if(e.pointerId!==pId) return; e.stopImmediatePropagation(); pId = null; changed(); };
 stage.addEventListener('pointerup', pEnd, true); stage.addEventListener('pointercancel', pEnd, true);
-if(ENV){ $('#add').hidden = true; $('#rall').parentNode.hidden = true; $('#rscene').hidden = true; $('#allmsg').hidden = true; document.title = 'Environment'; }
+if(ENV){ $('#add').hidden = true; $('#rall').parentNode.hidden = true; $('#rscene').hidden = true; $('#d3').hidden = $('#d2').hidden = true; $('#allmsg').hidden = true; document.title = 'Environment'; }
 // ---- start: the library (for the references), the scenes, the last one open
 (async function start(){ $('#msg').textContent = ENV ? 'Opening your environments…' : 'Opening your scenes…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
   SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene(ENV ? 'Environment 1' : 'Scene 1');
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-window.SCENE = {get sc(){ return SC; }, normalTex, bgKey, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, shotFits, normalTex, bgKey, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
