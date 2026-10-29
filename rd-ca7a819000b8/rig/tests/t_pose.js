@@ -173,6 +173,12 @@ const DEPS = process.env.RIG_DEPS || '';
     ok(/takes the pose/.test(r.msg) && r.mode==='mq' && Math.max(...r.deg) <= 12, '🔄 her rig takes the pose seen from every side: arms and legs within ' + Math.max(...r.deg) + '° (' + r.deg.join(' ') + '): ' + r.msg); }
   // the views go all the way round her, under the floor and over her head (Jordan 2026-10-29)
   { const el = await page.evaluate(() => window.EL_MAX * 180 / Math.PI); ok(el >= 85, 'the views turn up to ' + Math.round(el) + '° above and below her'); }
+  // her base body is only on Render: with Main listed first (its library answers, but it has no 3D Bodies), she still gets her rig (Jordan 2026-10-29)
+  { await page.route('https://main.test/**', r => { const u = new URL(r.request().url()); if(u.pathname==='/renderdeck/library') return r.fulfill({contentType:'application/json', headers:{'access-control-allow-origin':'*'}, body:JSON.stringify({library:1, characters:[lib]})}); r.fulfill({status:404, headers:{'access-control-allow-origin':'*'}, body:''}); });
+    await page.evaluate(() => localStorage.setItem('render-deck-v1', JSON.stringify({servers:[{url:'https://main.test', name:'Main'}, {url:'https://render.test', name:'Render PC'}]})));
+    await page.goto('https://app.test/rig/scene.html?pose=1'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000});
+    const b = await page.waitForFunction(() => SCENE.BODY!==null && SCENE.BODY!==undefined ? (SCENE.BODY ? 'body' : 'none') : null, null, {timeout:30000}).then(h => h.jsonValue()).catch(() => 'timeout');
+    ok(b==='body', '🧍 her rig loads from Render even when Main is listed first: ' + b); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
