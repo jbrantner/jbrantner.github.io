@@ -719,13 +719,18 @@ async function kitFor(e, need){ const urls = [PC.url, ...(window.SCENE_SERVERS |
   const ks = (await Promise.all(urls.map(u => kitOn(u, e).catch(() => null)))).filter(k => k && k.ckpt && k[need]);
   const score = k => (k.lora ? 4 : 0) + (k.bgm ? 2 : 0) + (k.url===PC.url ? 1 : 0); ks.sort((a, b) => score(b) - score(a));
   if(!ks.length) throw new Error(need==='cn' ? 'No PC has an Illustrious model and ControlNet ProMax.' : 'No PC has Ultimate SD Upscale.'); return ks[0]; }
-async function runGraph(url, g, save, tick){ const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:g, client_id:'rd-scene'})}), j = await r.json();
-  if(!r.ok || !j.prompt_id) throw new Error('The PC turned it down: ' + JSON.stringify(j.error || j.node_errors || j).slice(0, 200));
-  const t0 = Date.now();
+// (opt.onId: told the job's id once sent, so a long job can be picked up again after the app is closed; opt.pid: wait for that job instead of sending one;
+// opt.t0: when it was sent; opt.mins: how long to wait)
+async function runGraph(url, g, save, tick, opt){ opt = opt || {}; const j = {prompt_id:opt.pid};
+  if(!opt.pid){ const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:g, client_id:'rd-scene'})}); Object.assign(j, await r.json());
+    if(!r.ok || !j.prompt_id) throw new Error('The PC turned it down: ' + JSON.stringify(j.error || j.node_errors || j).slice(0, 200)); if(opt.onId) opt.onId(j.prompt_id); }
+  const t0 = opt.t0 || Date.now(); let gone = 0;
   for(;;){ await new Promise(res => setTimeout(res, window.RENDER_POLL || 2000)); tick(Math.round((Date.now() - t0) / 1000));
     const h = await (await fetch(url + '/history/' + j.prompt_id, {cache:'no-store'})).json(), it = h[j.prompt_id];
     if(it && it.status && it.status.status_str==='error') throw new Error('The render failed on the PC.'); if(Array.isArray(save) && it && it.outputs && save.every(k => it.outputs[k])) return it.outputs; if(!Array.isArray(save) && it && it.outputs && it.outputs[save]) return it.outputs[save].images || it.outputs[save];
-    if(Date.now() - t0 > 15 * 60000) throw new Error('No answer after 15 minutes.'); } }
+    if(it && it.status && it.status.completed) throw new Error('The PC finished but sent nothing back.');
+    if(!it && opt.pid){ try{ const q = await (await fetch(url + '/queue', {cache:'no-store'})).json(), inQ = [...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===j.prompt_id); gone = inQ ? 0 : gone + 1; if(gone >= 3) throw new Error('That job is no longer on the PC (ComfyUI restarted?).'); }catch(e){ if(gone >= 3) throw e; } }
+    if(Date.now() - t0 > (opt.mins || 15) * 60000) throw new Error('No answer after ' + (opt.mins || 15) + ' minutes.'); } }
 const cutOut = (add, out, bgm) => bgm ? [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:bgm}), 0], image:out}), 0]}), 0]}), 0] : out;
 async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || !PC.url){ st('Render (or the PC with her library) is not answering.'); return; } if(BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
@@ -802,7 +807,9 @@ function dwInputs(dw, image, W, H){ const res = Math.max(512, Math.min(1024, Mat
   for(const [k, spec] of Object.entries(Object.assign({}, dw.input.required || {}, dw.input.optional || {}))){ if(k==='image') continue; const [t, d] = spec;
     inputs[k] = k==='detect_body' ? 'enable' : /detect_(hand|face)/.test(k) ? 'disable' : k==='resolution' ? res : Array.isArray(t) ? ((d && d.default) ?? t[0]) : (d && d.default); if(inputs[k]===undefined) delete inputs[k]; }
   return inputs; }
-async function sendPic(url, sh, pre){ const b = await (await fetch(shotUrl(sh))).blob(), fdt = new FormData(); fdt.append('image', b, pre + Date.now().toString(36) + '.png'); fdt.append('overwrite', 'true');
+async function sendPic(url, sh, pre, white){ let b = await (await fetch(shotUrl(sh))).blob();
+  if(white) try{ const im = await createImageBitmap(b), c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0); b = await new Promise(r => c.toBlob(r, 'image/png')); }catch(e){} // (her cut-out on plain white, as MiniMax and DWPose expect)
+  const fdt = new FormData(); fdt.append('image', b, pre + Date.now().toString(36) + '.png'); fdt.append('overwrite', 'true');
   return (await (await fetch(url + '/upload/image', {method:'POST', body:fdt})).json()).name; }
 function kpFrames(out, W, H){ const raw = (out.openpose_json || out.text || [])[0]; if(!raw) throw new Error('DWPose ran but sent nothing back.');
   const kj = typeof raw==='string' ? JSON.parse(raw) : raw; return (Array.isArray(kj) ? kj : [kj]).map(fr => { const man = fr && fr.people && fr.people[0]; if(!man) return null;
@@ -814,7 +821,7 @@ async function fitSkeleton(ob){ const o = OBJ.get(ob.id), sh = ob.shot, st = msg
   BUSY.add(ob.id); drawSel();
   try{ st('Looking for a PC with DWPose…'); const {url, dw} = await dwPc(); if(!url) throw new Error('No PC has DWPose (the comfyui_controlnet_aux nodes).');
     const [W, H] = sh.px; st('Sending the picture to ' + pcName(url) + '…'); const up = await sendPic(url, sh, 'rd-pose-fit-');
-    const out = await runGraph(url, {1:{class_type:'LoadImage', inputs:{image:up}}, 2:{class_type:'DWPreprocessor', inputs:dwInputs(dw, ['1', 0], W, H)}, 3:{class_type:'SavePoseKpsAsJsonFile', inputs:{pose_kps:['2', 1], filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/dwpose'}}}, '3', t => st('DWPose is reading her pose on ' + pcName(url) + '… ' + t + ' s'));
+    const out = await runGraph(url, {1:{class_type:'LoadImage', inputs:{image:up}}, 2:{class_type:'DWPreprocessor', inputs:dwInputs(dw, ['1', 0], W, H)}, 3:{class_type:'SavePoseKpsAsJsonFile', inputs:{pose_kps:['2', 1], filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/dwpose'}}}, '2', t => st('DWPose is reading her pose on ' + pcName(url) + '… ' + t + ' s'));
     const kp = kpFrames(out, W, H)[0]; if(!kp) throw new Error('DWPose found nobody in the picture.');
     const n = fitTo(ob, o, sh, kp); if(!n) throw new Error('DWPose was not sure of any of her joints.');
     ob.mode = 'mq'; st('🦴 Her skeleton matches the picture (' + n + ' bones). Turn round her in 🕹 Free and drag the pink dots to fix anything.'); changed(); dirty = true; }
@@ -837,7 +844,7 @@ async function actOut(ob){ const o = OBJ.get(ob.id), sh = ob.shot, st = msg => {
   try{ st('Looking for a PC with MiniMax FL2V and DWPose…'); const k = await actKit(); if(!k) throw new Error('No PC has MiniMax H3 FL2V (it is on Render).');
     const {dw} = await dwPc(async u => u===k.url); if(!dw) throw new Error(pcName(k.url) + ' has MiniMax but not DWPose (comfyui_controlnet_aux).');
     const a = sh.px[0] / sh.px[1], H = Math.round(Math.sqrt(576 * 1024 / a) / 32) * 32, W = Math.round(H * a / 32) * 32;
-    st('Sending her first frame to ' + pcName(k.url) + '…'); const up = await sendPic(k.url, sh, 'rd-pose-act-');
+    st('Sending her first frame to ' + pcName(k.url) + '…'); const up = await sendPic(k.url, sh, 'rd-pose-act-', true);
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const li = add('LoadImage', {image:up}); let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0]; if(k.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
     const clip = add('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), vae = add('VAELoader', {vae_name:k.vae});
@@ -846,15 +853,23 @@ async function actOut(ob){ const o = OBJ.get(ob.id), sh = ob.shot, st = msg => {
     const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)}), 0], guider:[gd, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sc, 0], latent_image:[iv, 1]});
     const dec = add('VAEDecodeTiled', {samples:[out, 0], vae:[vae, 0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), pre = (HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (o.e && o.e.name || 'her').replace(/[^\w-]+/g, '_') + '_act';
     const sv = add('SaveVideo', {video:[add('CreateVideo', {images:[dec, 0], fps:ACT_FPS}), 0], filename_prefix:pre, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18}); // (the keys Comic's 🎬 Animate uses on the PCs)
-    const kps = add('SavePoseKpsAsJsonFile', {pose_kps:[add('DWPreprocessor', dwInputs(dw, [dec, 0], W, H)), 1], filename_prefix:pre});
-    const res = await runGraph(k.url, g, [sv, kps], t => st('🎬 MiniMax is filming her on ' + pcName(k.url) + ' (about 5 min), then DWPose reads each frame… ' + t + ' s'));
-    const v = res[sv], f = (v.images || v.videos || v.gifs || [])[0]; if(!f) throw new Error('The video did not come back.');
+    const dwn = add('DWPreprocessor', dwInputs(dw, [dec, 0], W, H)); add('SavePoseKpsAsJsonFile', {pose_kps:[dwn, 1], filename_prefix:pre});
+    ob.actJob = {url:k.url, sv, kps:dwn, t0:Date.now(), sh:{px:sh.px, pm:sh.pm, mw:sh.mw}, words:SC.desc.trim()};
+    await actWait(ob, o, st, g); }
+  catch(err){ delete ob.actJob; changed(); st(err.message || String(err)); }
+  BUSY.delete(ob.id); drawSel(); }
+// (the points come back on DWPose's own node: on Render the save node lists nothing in the history, so waiting for it never ended, 2026-10-29)
+// waiting for the video (and picking it up again when the app was closed while it was being made, Jordan 2026-10-29)
+async function actWait(ob, o, st, g){ const J = ob.actJob, sh = J.sh;
+    const res = await runGraph(J.url, g, [J.sv, J.kps], t => st('🎬 MiniMax is filming her on ' + pcName(J.url) + ', then DWPose reads each frame… ' + t + ' s (you can close the app: it is picked up when you come back)'), {pid:J.pid, t0:J.t0, mins:45, onId:id => { J.pid = id; changed(); }});
+    const v = res[J.sv], kps = J.kps, f = (v.images || v.videos || v.gifs || [])[0]; if(!f) throw new Error('The video did not come back.');
     const frames = kpFrames(res[kps], sh.px[0], sh.px[1]); if(!frames.some(Boolean)) throw new Error('DWPose found nobody in the video.');
-    ob.act = {pc:k.url, file:f.filename, sub:f.subfolder || '', kp:frames, sh:{px:sh.px, pm:sh.pm, mw:sh.mw}, words:SC.desc.trim(), f:0};
+    ob.act = {pc:J.url, file:f.filename, sub:f.subfolder || '', kp:frames, sh, words:J.words, f:0}; delete ob.actJob;
     st('Her skeleton is following the video…'); await trackAct(ob, o); actFrame(ob, frames.length - 1);
     st('🎬 Done: scrub the video to choose her pose, then fine-tune it with the pink dots.'); changed(); }
-  catch(err){ st(err.message || String(err)); }
-  BUSY.delete(ob.id); drawSel(); }
+async function actResume(ob){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
+  if(!ob.actJob || !ob.actJob.pid || BUSY.has(ob.id) || !(o && o.mq && o.mq.userData.body && BODY && BODY.face)) return; BUSY.add(ob.id); drawSel();
+  try{ await actWait(ob, o, st); }catch(err){ delete ob.actJob; changed(); st(err.message || String(err)); } BUSY.delete(ob.id); drawSel(); }
 // her pose at every frame, each one fitted from the frame before (from her A pose), kept as bends
 async function trackAct(ob, o){ const A = ob.act; ob.pose = 'apose'; delete ob.bq; A.bq = [];
   for(let i = 0; i < A.kp.length; i++){ if(A.kp[i]) fitTo(ob, o, A.sh, A.kp[i]); A.bq.push(ob.bq ? Object.assign({}, ob.bq) : null); if(i % 12===11) await new Promise(r => setTimeout(r, 0)); } }
@@ -1068,6 +1083,7 @@ $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) 
   else if(b.dataset.eye){ ob.hide = !ob.hide; changed(); } else { ob.lock = !ob.lock; changed(); }
   drawList(); drawSel(); dirty = true; };
 function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find(o => o.id===ui.sel);
+  if(POSE && SC) SC.objs.forEach(x => { if(x.actJob && x.actJob.pid && !BUSY.has(x.id)) setTimeout(() => actResume(x), 0); }); // (🎬 a video still being made when the app was closed)
   if(numbersOnly && ob && box.dataset.id===ob.id){ ['x', 'y', 'z'].forEach(k => { const i = box.querySelector(`[data-n="${k}"]`); if(i && document.activeElement!==i) i.value = ob[k]; }); return; }
   box.dataset.id = ob ? ob.id : '';
   if(!ob){ box.innerHTML = SCM ? '' : `<h2>Selected</h2><p class="note">Nothing selected. Tap a name in Objects (or tap one in a view) to move it.</p>`; placeSel(); return; }
