@@ -48,20 +48,46 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(await page.evaluate(() => !JSON.parse(localStorage.getItem('rd-scenes') || '[]').length && JSON.parse(localStorage.getItem('rd-poses') || '[]').length===1), 'poses are kept apart from scenes');
   await page.click('#add'); await page.waitForSelector('#chars [data-ref]'); await page.click('#chars [data-ref]');
   await page.waitForFunction(() => { const o = [...SCENE.objs.values()][0]; return o && o.mq && o.mq.userData.body && SCENE.BODY; }, null, {timeout:30000}); await page.waitForTimeout(500);
+  if(process.env.SHOT){ await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT + '/pose-free.png'}); }
   await page.evaluate(() => document.querySelector('[data-v="cam"]').click()); await page.waitForTimeout(300);
   const dots = await page.evaluate(() => ({on:SCENE.jh.visible, n:SCENE.jh.children.length, note:/pink dots/.test(document.querySelector('#selbox').textContent)}));
-  ok(dots.on && dots.n===10 && dots.note, '🦴 her rig shows 10 pink joint dots: ' + JSON.stringify(dots));
+  ok(dots.on && dots.n===11 && dots.note, '🦾 her IK rig shows 11 controls (4 IK cubes, 4 poles, hips, back, head): ' + JSON.stringify(dots));
+  const pz = await page.evaluate(() => ({closed:document.body.classList.contains('pzc'), bar:!document.querySelector('#pzbar').hidden, cols:getComputedStyle(document.querySelector('.cols')).display}));
+  ok(pz.closed && pz.bar && pz.cols==='none', '🤸 the rig is full screen, her settings tucked behind ⚙ Panel: ' + JSON.stringify(pz));
+  await page.evaluate(() => document.querySelector('#pzpanel').click()); const pz2 = await page.evaluate(() => getComputedStyle(document.querySelector('.cols')).display); await page.evaluate(() => document.querySelector('#pzpanel').click());
+  ok(pz2!=='none', '⚙ Panel opens her settings');
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT + '/pose-dots.png'});
   // drag her right wrist up
   const w0 = await page.evaluate(() => { SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam'); const o = [...SCENE.objs.values()][0], p = SCENE.jointPts(o)[4], r = SCENE.rects().cam, v = p.clone().project(SCENE.camOf('cam')), st = document.querySelector('#stage').getBoundingClientRect();
     ['.cols', '.hud'].forEach(k => document.querySelector(k).style.pointerEvents = 'none'); return {x:st.left + r.x + (v.x + 1) / 2 * r.w, y:st.top + r.y + (1 - v.y) / 2 * r.h, wy:p.y}; });
   await page.mouse.move(w0.x, w0.y); await page.mouse.down(); for(let i = 1; i <= 8; i++) await page.mouse.move(w0.x - i * 4, w0.y - i * 12); await page.mouse.up(); await page.waitForTimeout(200);
   const d1 = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id); SCENE.poseFor('cam'); return {bq:Object.keys(ob.bq || {}), wy:SCENE.jointPts(o)[4].y, orb:SCENE.shotO.az, undo:!!document.querySelector('[data-act="unbend"]')}; });
-  ok(d1.bq.join()==='bn_forearm01R' && d1.wy > w0.wy + 0.1 && d1.undo, '🦴 dragging her wrist bends her forearm up (saved as a bend, with ↺ Undo): ' + JSON.stringify({d1, w0}));
+  ok(d1.bq.filter(k => k!=='_root').sort().join()==='bn_forearm01R,bn_upperarm01R' && d1.wy > w0.wy + 0.1 && d1.undo, '🦾 dragging her hand cube lifts it by IK (upper arm and forearm both bend): ' + JSON.stringify({d1, w0}));
+  // the hand reaches where it was dragged to (on its drag plane), and the shoulder stays put
+  { const r = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id), pts = () => SCENE.jointPts(o).map(p => p.clone());
+      const at = (k, p) => { const r = SCENE.rects().cam, v = p.clone().project(SCENE.camOf('cam')), st = document.querySelector('#stage').getBoundingClientRect(); return [st.left + r.x + (v.x + 1) / 2 * r.w, st.top + r.y + (1 - v.y) / 2 * r.h]; };
+      SCENE.poseFor('cam'); const p = pts(), hip = p[8].clone().lerp(p[11], 0.5); return {hip:at('cam', hip), el:at('cam', p[3]), feet:[p[10].toArray(), p[13].toArray()], hipY:hip.y, wr:p[4].toArray(), elW:p[3].toArray()}; });
+    const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    // the gold hip ring: drag her hips down, her feet stay planted and her knees bend
+    await page.mouse.move(...r.hip); await page.mouse.down(); for(let i = 1; i <= 8; i++) await page.mouse.move(r.hip[0], r.hip[1] + i * 6); await page.mouse.up(); await page.waitForTimeout(150);
+    const h = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id); SCENE.poseFor('cam'); const p = SCENE.jointPts(o), hip = p[8].clone().lerp(p[11], 0.5); return {feet:[p[10].toArray(), p[13].toArray()], hipY:hip.y, root:!!(ob.bq && ob.bq._root)}; });
+    const fd = Math.max(dist(h.feet[0], r.feet[0]), dist(h.feet[1], r.feet[1]));
+    ok(h.root && h.hipY < r.hipY - 0.05 && fd < 0.01, '🦾 the gold ring lowers her hips (' + (r.hipY - h.hipY).toFixed(2) + ' m) with her feet kept planted (' + fd.toFixed(3) + ' m)');
+    // ↶ Undo takes back the hips, then the elbow
+    await page.evaluate(() => document.querySelector('#pzundo').click()); const u1 = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id); SCENE.poseFor('cam'); const p = SCENE.jointPts(o); return {hipY:p[8].clone().lerp(p[11], 0.5).y, root:!!(ob.bq && ob.bq._root)}; });
+    ok(Math.abs(u1.hipY - r.hipY) < 0.005, '↶ Undo puts her hips back: ' + JSON.stringify(u1));
+    // a pole: sit her (knees bent), drag her right knee's blue dot sideways: the knee swings, the foot stays
+    const k0 = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id); ob.pose = 'sit'; delete ob.bq; SCENE.poseFor('cam'); const p = SCENE.jointPts(o), r = SCENE.rects().cam, v = p[9].clone().project(SCENE.camOf('cam')), st = document.querySelector('#stage').getBoundingClientRect();
+      return {xy:[st.left + r.x + (v.x + 1) / 2 * r.w, st.top + r.y + (1 - v.y) / 2 * r.h], kn:p[9].toArray(), an:p[10].toArray()}; });
+    await page.mouse.move(...k0.xy); await page.mouse.down(); for(let i = 1; i <= 6; i++) await page.mouse.move(k0.xy[0] - i * 8, k0.xy[1]); await page.mouse.up(); await page.waitForTimeout(150);
+    const q = await page.evaluate(() => { const o = [...SCENE.objs.values()][0]; SCENE.poseFor('cam'); const p = SCENE.jointPts(o); return {kn:p[9].toArray(), an:p[10].toArray()}; });
+    ok(dist(q.an, k0.an) < 0.01 && dist(q.kn, k0.kn) > 0.03, '🦾 dragging the blue knee dot swings the knee (' + dist(q.kn, k0.kn).toFixed(3) + ' m) and the foot stays (' + dist(q.an, k0.an).toFixed(3) + ' m)');
+    await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.pose = 'stand'; delete ob.bq; SCENE.drawSel(); });
+  }
   await page.evaluate(() => ['.cols', '.hud'].forEach(k => document.querySelector(k).style.pointerEvents = ''));
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT + '/pose-bent.png'});
   // describe the action and paint it
-  await page.fill('#sdesc', 'jumping'); await page.waitForTimeout(300);
+  await page.evaluate(() => document.querySelector('#pzpanel').click()); await page.fill('#sdesc', 'jumping'); await page.waitForTimeout(300);
   await page.evaluate(() => document.querySelector('[data-act="render"]').click());
   await page.waitForFunction(() => (SCENE.sc.objs[0].tries || []).length===4, null, {timeout:20000});
   const g = GRAPHS[GRAPHS.length - 1], pos = Object.values(g).find(n => n.class_type==='CLIPTextEncode').inputs.text, tr = await page.evaluate(() => SCENE.sc.objs[0].tries[0]);

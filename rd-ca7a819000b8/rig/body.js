@@ -86,14 +86,16 @@ export const POSES = {stand:{name:'Standing', bn_upperarm01L:[0.2, -1, 0.02], bn
 // 🅰 the character sheet pose: arms about 35° out from her sides, palms in, feet a little apart
 export const APOSE = {name:'A pose', bn_upperarm01L:[0.68, -1, 0.02], bn_forearm01L:[0.6, -1, 0.1], bn_upperarm01R:[-0.68, -1, 0.02], bn_forearm01R:[-0.6, -1, 0.1], bn_thigh01L:[0.07, -1, 0], bn_shin01L:[0.04, -1, 0], bn_thigh01R:[-0.07, -1, 0], bn_shin01R:[-0.04, -1, 0]};
 const NEXT_BONE = {bn_upperarm01L:'bn_forearm01L', bn_upperarm01R:'bn_forearm01R', bn_forearm01L:'bn_handL', bn_forearm01R:'bn_handR', bn_thigh01L:'bn_shin01L', bn_thigh01R:'bn_shin01R', bn_shin01L:'bn_footL', bn_shin01R:'bn_footR'};
-// (bq: 🤸 the Pose Creator's own bends, {bone: local quaternion}, laid over the preset)
+// (bq: 🤸 the Pose Creator's own bends, {bone: local quaternion}, laid over the preset; bq._root: where her hips have been moved to with the
+// IK rig's hip control, her body's own position, which then also stands in for the feet-on-the-floor step: she can jump or crouch)
 export function poseBody(w, key, bq){ const c = w.userData.body, ck = key + (bq ? JSON.stringify(bq) : ''); if(!c || w.userData.pose===ck) return; w.userData.pose = ck; const P = key==='apose' ? APOSE : POSES[key] || POSES.stand, bn = bonesOf(c), rq = new THREE.Quaternion();
   c.position.y = 0; c.traverse(b => { if(b.isBone && b.userData.q0) b.quaternion.copy(b.userData.q0); }); c.updateMatrixWorld(true); c.getWorldQuaternion(rq);
-  const sk = skinned(c), v = new THREE.Vector3(); const low0 = () => { let lo = 1e9; for(const m of sk) for(let i = 0; i < m.geometry.attributes.position.count; i += 7){ m.getVertexPosition(i, v); v.applyMatrix4(m.matrixWorld); if(v.y < lo) lo = v.y; } return lo; }, lowRest = low0(); // her lowest point, before and after
+  const root = bq && bq._root, sk = skinned(c), v = new THREE.Vector3(); const low0 = () => { let lo = 1e9; for(const m of sk) for(let i = 0; i < m.geometry.attributes.position.count; i += 7){ m.getVertexPosition(i, v); v.applyMatrix4(m.matrixWorld); if(v.y < lo) lo = v.y; } return lo; }, lowRest = root ? 0 : low0(); // her lowest point, before and after
   for(const name of Object.keys(NEXT_BONE)){ if(!P[name]) continue; const b = bn[name], n2 = bn[NEXT_BONE[name]]; if(!b || !n2) continue; c.updateMatrixWorld(true);
     const p0 = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld), cur = new THREE.Vector3().setFromMatrixPosition(n2.matrixWorld).sub(p0).normalize(), want = new THREE.Vector3(...P[name]).normalize().applyQuaternion(rq);
     const qW = new THREE.Quaternion().setFromUnitVectors(cur, want), pq = new THREE.Quaternion(), bq = new THREE.Quaternion(); b.parent.getWorldQuaternion(pq); b.getWorldQuaternion(bq); b.quaternion.copy(pq.invert().multiply(qW.multiply(bq))); }
   if(bq) for(const [n, q] of Object.entries(bq)) if(bn[n]) bn[n].quaternion.fromArray(q);
+  if(root){ c.position.fromArray(root); c.updateMatrixWorld(true); return; }
   c.updateMatrixWorld(true); const dy = low0() - lowRest; if(Math.abs(dy) > 1e-4){ c.position.y -= dy / w.getWorldScale(new THREE.Vector3()).y; c.updateMatrixWorld(true); } } // feet back on the floor (sitting drops her)
 // her OpenPose points from her bones (COCO order: nose, neck, right shoulder/elbow/wrist, left ..., right hip/knee/ankle, left ..., eyes, ears)
 export function bodyJoints(w, face){ const c = w.userData.body, bn = bonesOf(c), at = n => new THREE.Vector3().setFromMatrixPosition(bn[n].matrixWorld), f = w.userData.face || face, h = bn.bn_head; c.updateMatrixWorld(true);
