@@ -61,28 +61,14 @@ const DEPS = process.env.RIG_DEPS || '';
   const envId = st.id; await page.evaluate(v => { const e = document.querySelector('#envsel'); e.value = v; e.dispatchEvent(new Event('change')); }, envId); await page.waitForTimeout(400);
   const s1 = await page.evaluate(() => { const o = [...SCENE.objs.values()].find(x => x.ob.fromEnv); return {env:SCENE.sc.env, fromEnv:!!o, lock:o && o.ob.lock, inList:document.querySelector('#objs').textContent.includes('Wooden chair'), ground:SCENE.ground.visible, note:document.querySelector('#envbox').textContent}; });
   ok(s1.env===envId && s1.fromEnv && s1.lock && !s1.inList && s1.ground && /bookshelves/.test(s1.note), '🌄 a scene in that environment shows its ground and its chair (locked, not in the list): ' + JSON.stringify(s1));
-  // ▶ Render all with an environment: the background from the Camera (place words, its own colours + depth, no people, 2×), then everyone on it
-  await page.click('.views [data-v="cam"]'); await page.evaluate(() => { window.RENDER_POLL = 50; scrollTo(0, 0); }); await page.click('#rall');
-  await page.waitForFunction(() => /Done/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
-  const bg = GRAPHS[GRAPHS.length - 2], fin = GRAPHS[GRAPHS.length - 1], bv = Object.values(bg), txt = bv.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text);
-  const ks = bv.find(n => n.class_type==='KSampler'), types = bv.filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type);
-  ok(/old library, tall bookshelves/.test(txt[0]) && /no humans/.test(txt[0]) && /1girl/.test(txt[1]) && ks && ks.inputs.denoise===0.7 && types.join()==='depth' && bv.some(n => n.class_type==='VAEEncode') && bv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale') && UPS.filter(n => /^rd-scene-bg/.test(n)).length===2,
-    '🌄 Render all paints the background from the Camera: place words, no people, its own colours (img2img 0.7) + depth 0.5, then 2×: ' + JSON.stringify({txt:txt[0], denoise:ks && ks.inputs.denoise, types}));
-  const fv = Object.values(fin).map(n => n.class_type), sf = await page.evaluate(() => ({bg:SCENE.sc.bg && SCENE.sc.bg.file, fin:SCENE.sc.final && SCENE.sc.final.file, img:!!document.querySelector('#final img')}));
-  ok(fv.join()==='LoadImage,SaveImage' && UPS.some(n => /^rd-scene-final/.test(n)) && /_bg_/.test(sf.bg) && /_final_/.test(sf.fin) && sf.img, '🖼 then everyone is laid over it and the finished picture is saved on the PC and shown: ' + JSON.stringify(sf));
-  // 🧪 strength test (Jordan 2026-10-28): 9 paintings, denoise × depth, one seed; the picked one becomes the background (then only the 2×)
-  { const n0 = GRAPHS.length; await page.evaluate(() => document.querySelector('#bgtest').click()); await page.waitForSelector('#bgt [data-bt="8"]', {timeout:20000, state:'attached'});
-    const tv = Object.values(GRAPHS[n0]), kss = tv.filter(n => n.class_type==='KSampler'), cas = tv.filter(n => n.class_type==='ControlNetApplyAdvanced');
-    ok(GRAPHS.length===n0 + 1 && kss.length===9 && new Set(kss.map(k => k.inputs.seed)).size===1 && kss.map(k => k.inputs.denoise).join()==='0.4,0.4,0.4,0.55,0.55,0.55,0.7,0.7,0.7' && cas.map(c => c.strength || c.inputs.strength).join()==='0.5,0.8,1,0.5,0.8,1,0.5,0.8,1' && !tv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale'),
-      '🧪 the strength test paints 9 backgrounds in one go (denoise 0.4/0.55/0.7 × depth 0.5/0.8/1, one seed, no 2× yet)');
-    await page.evaluate(() => document.querySelector('#bgt [data-bt="1"]').click()); ok(await page.evaluate(() => !document.querySelector('#bgt [data-bt]') && JSON.parse(localStorage.getItem('rd-bg-default')).cn===0.8 && /default everywhere/.test(document.querySelector('#bgtmsg').textContent)), '🧪 picking a tile closes the test and makes its numbers the default everywhere'); await page.evaluate(() => { scrollTo(0, 0); document.querySelector('#allmsg').textContent = ''; }); const n1 = GRAPHS.length; await page.click('#rall');
-    await page.waitForFunction(() => /Done|rror|fail|not/i.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000}).catch(() => {}); console.log('allmsg', await page.textContent('#allmsg'));
-    const pv = Object.values(GRAPHS[n1]), set = await page.evaluate(() => SCENE.sc.bgSet);
-    ok(set.dn===0.4 && set.cn===0.8 && !pv.some(n => n.class_type==='KSampler') && pv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale') && UPS.some(n => /^rd-scene-bgpick-/.test(n)), '🧪 the picked test becomes the background: only the 2× redraw runs on it: ' + JSON.stringify(set)); }
-  { const n0 = GRAPHS.length; await page.evaluate(() => { scrollTo(0, 0); document.querySelector('#allmsg').textContent = ''; }); await page.evaluate(() => document.querySelector('#newbg').click());
-    await page.waitForFunction(() => /Done/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
-    const v = Object.values(GRAPHS[n0]), ks = v.find(n => n.class_type==='KSampler'), set = await page.evaluate(() => SCENE.sc.bgSet);
-    ok(ks && ks.inputs.denoise===0.4 && !set.pick && GRAPHS.length===n0 + 2, '🌄 Paint a new background drops the test picture and paints a fresh one at its settings, then the finished picture: ' + JSON.stringify(set)); }
+  // 🎬 Render Scene in an environment (renovated 2026-10-29): one painting, the place words + ground words in the background region,
+  // its chair in the depth guide but not a region of its own (it belongs to the place); no old background test or ▶ Render all
+  await page.click('.views [data-v="cam"]'); await page.evaluate(() => { window.RENDER_POLL = 50; scrollTo(0, 0); }); await page.click('#rscene');
+  await page.waitForFunction(() => /Done|rror|No PC|not/i.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
+  { const msgT = await page.textContent('#allmsg'), v = Object.values(GRAPHS[GRAPHS.length - 1]), txt = v.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text), cls = v.map(n => n.class_type);
+    const gone = await page.evaluate(() => ['#rall', '#d3', '#d2'].every(k => document.querySelector(k).hidden) && !document.querySelector('#bgtest'));
+    ok(/Done/.test(msgT) && txt.some(t => /old library, tall bookshelves/.test(t) && /scenery/.test(t)) && cls.filter(c => c==='ConditioningSetMask').length===1 && !cls.includes('DetailerForEach') && UPS.some(n => /^rd-scene-sdepth-/.test(n)) && gone,
+      '🎬 Render Scene paints the place as one picture (its words in the background region, its chair in the depth): ' + JSON.stringify({msgT, txt:txt.map(t => t.slice(0, 60)), gone})); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
