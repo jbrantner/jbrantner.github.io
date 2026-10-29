@@ -403,3 +403,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - Comic panels: the old 3D look / 3D object panel (no longer reachable since the 🧊 3D block) and its buttons are gone.
 - The engine the newer tabs share (turnaround and 3D kits, training shots, MiniMax camera moves, live queue progress) stays. About 2,300 lines and 7 tests for the removed screens are gone.
 - Fixed from v.284: the project row under the preview never showed (a comment swallowed the line that shows it).
+
+**v.291 (2026-10-29): polish pass, part 3.** 📖 Comic: reading the script no longer pops a toast that repeats the "That's N panels" line on the page (only "N pages added" when a script makes several pages); the panel's 🎨 Its full recipe note no longer mentions the removed Change angle / Edit pose.
