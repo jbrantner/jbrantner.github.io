@@ -393,3 +393,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - ⚙ Settings: the Tailscale setup steps fold under "First-time setup on a new computer"; shorter notes on model downloads.
 
 **v.288 (2026-10-29)**: 🪞 Give her a body. Characters made from a picture before the mannequin (like Ellie) can get one from their 📚 Library card. Her own eye-level pictures lie over the mannequin (see-through, same height, turning with her), her body, hair and look start from her tags, and ✓ Give her this body saves them into her library entry, pictures and LoRA untouched, so 🎬 Scene and 🤸 Pose pose her on a matched base body. Characters that have one get 🪞 Change her body.
+
+**v.289 (2026-10-29)**: 💇 Colored inner hair works like Tips: the first hair colour is her outer hair (written first, so Illustrious reads it as her main colour), the next her inner hair, with ⇄ Swap.
