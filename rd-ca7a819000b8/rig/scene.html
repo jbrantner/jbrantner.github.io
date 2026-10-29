@@ -977,9 +977,9 @@ async function orbResume(ob){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(o
   try{ await orbWait(ob, o, st); }catch(err){ delete ob.orbJob; changed(); st(err.message || String(err)); } BUSY.delete(ob.id); drawSel(); }
 // 🎬 Move into the pose (Jordan 2026-10-29: "the pose is followed really well but it's stiff because the rig is stiff"): her A pose is
 // painted from the 📷 Camera (her LoRA, held to the rig), then MiniMax FL2V films her from it into the rig's pose, the Fun ControlNet
-// steering it loosely with a skeleton video that eases from the A pose into the pose and holds it. 4 frames from the end come back as
+// steered by a depth video of the end pose (moveDepth). 4 frames from the end come back as
 // tries to pick from (⤴ High res cleans one up). One frame (crop) round both poses, so the video and the tries line up with her rig.
-const MOVE_LEN = 80, MOVE_AT = 58, MOVE_CN = {strength:0.5, end:0.35} /* let go after 3 of 8 steps: held later, MiniMax painted the skeleton's lines on her arms (Jordan 2026-10-29) */, MOVE_PICK = [63, 69, 74, 79]; // a shorter clip than Act it out: about a third quicker (Jordan 2026-10-29)
+const MOVE_LEN = 80, MOVE_AT = 58, MOVE_CN = {strength:0.75, end:0.6} /* her depth, not the skeleton: held to 0.5/35% the skeleton was too loose, at 0.7/70% its lines were painted on her arms (Jordan 2026-10-29) */, MOVE_PICK = [63, 69, 74, 79]; // a shorter clip than Act it out: about a third quicker (Jordan 2026-10-29)
 const movePrompt = d => 'The first frame shows the character standing in an A pose, full body, on a plain white background. [0s-2.5s] She moves smoothly and naturally into her pose' + ((d || '').trim() ? ': ' + d.trim().replace(/[.!]+$/, '') : '')
   + ', with relaxed, natural body language, [2.5s-3.3s] then holds the pose. Steady camera, no camera movement, the same framing as the first frame, her whole body always inside the frame. Same character, same face, same outfit, same art style, plain white background. No cuts.';
 function aviMjpeg(frames, w, h, fps){ // (Motion-JPEG in an AVI, as the main app sends its skeleton spins)
@@ -996,24 +996,11 @@ function aviMjpeg(frames, w, h, fps){ // (Motion-JPEG in an AVI, as the main app
   for(const f of frames){ offs.push(p - m0); cc('00dc'); u32(f.length); buf.set(f, p); p += pad(f.length); }
   cc('idx1'); u32(idx); frames.forEach((f, i) => { cc('00dc'); u32(0x10); u32(offs[i]); u32(f.length); });
   return buf; }
-// her bones' own turns and her body's position, as they are now
-function rigState(o){ const c = o.mq.userData.body, q = {}; c.traverse(b => { if(b.isBone) q[b.uuid] = b.quaternion.clone(); }); return {q, p:c.position.clone()}; }
-// the skeleton video: each frame her pose part way from the A pose (a) to the pose (b), eased, drawn as OpenPose on black in the crop's pixels
-async function moveFrames(o, a, b, geo, W, H){ const c = o.mq.userData.body, P = picPts(o, geo), sx = W / geo.px[0], sy = H / geo.px[1], out = [], show = Array(18).fill(true), byId = {};
-  c.traverse(x => { if(x.isBone) byId[x.uuid] = x; });
-  // (face points only when she faces this way, an ear only on the side that shows, as the guides do)
-  const ob = o.ob, camAt = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(geo.mw)), Y = new THREE.Vector3(0, 1, 0), toCam = camAt.sub(new THREE.Vector3(ob.x, ob.y + 1.5, ob.z)).normalize();
-  const face = new THREE.Vector3(0, 0, 1).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam), ear = new THREE.Vector3(1, 0, 0).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam);
-  show[0] = show[14] = show[15] = face > -0.15; show[16] = ear < 0.35; show[17] = ear > -0.35;
-  // only the A pose (frame 0) and the end pose (from MOVE_AT) are drawn: the frames between are blank, so MiniMax imagines the move itself
-  // (Jordan 2026-10-29: sliding every bone in a straight line made her stiff)
-  const blank = document.createElement('canvas'); blank.width = W; blank.height = H; const bx = blank.getContext('2d'); bx.fillStyle = '#000'; bx.fillRect(0, 0, W, H);
-  for(let f = 0; f < MOVE_LEN; f++){ const t = f >= MOVE_AT ? 1 : 0;
-    let cv = blank; if(!f || t){ for(const [id, qa] of Object.entries(a.q)){ const bn = byId[id], qb = b.q[id]; if(bn && qb) bn.quaternion.copy(t ? qb : qa); }
-      c.position.copy(t ? b.p : a.p); o.g.updateMatrixWorld(true);
-      cv = drawPose(W, H, bodyJoints(o.mq, BODY.face).map(p => { const [x, y] = P.toPx(p); return [x * sx, y * sy]; }), show); }
-    const bl = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9)); out.push(new Uint8Array(await bl.arrayBuffer())); if(f % 16===15) await new Promise(r => setTimeout(r, 0)); }
-  o.mq.userData.pose = null; poseFor('cam'); return out; }
+// the control video as her depth (Jordan 2026-10-29: the skeleton let go early was too loose, held late it painted its lines on her): her A pose's depth
+// on frame 0, blank frames while MiniMax imagines the move, then the end pose's depth held from MOVE_AT. Depth has no lines to copy, so it can be held harder.
+async function moveDepth(dA, dT, W, H){ const out = [], cvOf = d => { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, W, H); if(d) x.drawImage(d, 0, 0, W, H); return c; };
+  const jpg = async c => new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9))).arrayBuffer()), A = await jpg(cvOf(dA)), B = await jpg(cvOf()), T = await jpg(cvOf(dT));
+  for(let f = 0; f < MOVE_LEN; f++) out.push(!f ? A : f >= MOVE_AT ? T : B); return out; }
 async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || BUSY.has(ob.id)) return; if(!PC.url) return st('No PC is online: start Render, then try again.'); if(!(o.mq && o.mq.userData.body && BODY && BODY.face)) return st('Her rig (the base body) has not loaded from Render.');
   BUSY.add(ob.id); drawSel();
@@ -1022,11 +1009,11 @@ async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg =>
     const E = kitE(ob, e), K = await kitFor(E, 'cn'); if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); }
     // her pose now, and her A pose: one crop round both
     const keep = {pose:ob.pose, bq:ob.bq}, boxOf = () => { poseFor('cam'); o.g.updateMatrixWorld(true); const bx = new THREE.Box3(); o.mq.traverse(m => { if(m.isMesh && m.material.side!==THREE.BackSide) bx.expandByObject(m, true); }); return bx; };
-    ob.mode = 'mq'; const bT = boxOf(), sT = rigState(o), key = shotKey(ob); ob.pose = 'apose'; delete ob.bq; const bA = boxOf(), sA = rigState(o);
+    ob.mode = 'mq'; const bT = boxOf(), key = shotKey(ob); ob.pose = 'apose'; delete ob.bq; const bA = boxOf();
     const GA = guidesFor(o, 'cam', bT), wordsA = wordsOf(ob, E, K.los, await ownTags(ob));
     ob.pose = keep.pose; if(keep.bq) ob.bq = keep.bq; ob.mode = 'mq'; poseFor('cam'); const GT = guidesFor(o, 'cam', bA);
     const a = GA.W / GA.H, Hv = Math.round(Math.sqrt(576 * 1024 / a) / 32) * 32, Wv = Math.round(Hv * a / 32) * 32;
-    st('Drawing her skeleton moving into the pose…'); const fr = await moveFrames(o, sA, sT, GT.geo, Wv, Hv);
+    st('Drawing the control video…'); const fr = await moveDepth(GA.depth, GT.depth, Wv, Hv);
     // 1. her A pose painted from the camera
     const stamp = Date.now().toString(36); st('Sending her A pose guides to ' + pcName(K.url) + '…');
     const dn = await upload(K.url, GA.depth, 'rd-pose-adepth-' + stamp + '.png'), pn = await upload(K.url, GA.pose, 'rd-pose-apose-' + stamp + '.png');
@@ -1038,11 +1025,11 @@ async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg =>
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:GA.W, height:GA.H, batch_size:1}), 0], denoise:1});
     let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, K.sam);
     const sa = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_apose'});
-    // the skeleton video goes up first, and the whole job is kept on her, so closing the app at any point picks it up again
+    // the depth video goes up first, and the whole job is kept on her, so closing the app at any point picks it up again
     if(window.MOVE_DBG) window.MOVE_DBG(fr);
-    st('Sending the skeleton video to ' + pcName(k.url) + '…');
+    st('Sending the depth video to ' + pcName(k.url) + '…');
     const fd = new FormData(); fd.append('image', new Blob([aviMjpeg(fr, Wv, Hv, ACT_FPS)], {type:'video/x-msvideo'}), 'rd-pose-move-' + stamp + '.avi'); fd.append('overwrite', 'true'); fd.append('type', 'input');
-    const vr = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!vr.ok) throw new Error('Sending the skeleton video failed (' + vr.status + ')'); const vj = await vr.json();
+    const vr = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!vr.ok) throw new Error('Sending the depth video failed (' + vr.status + ')'); const vj = await vr.json();
     const J = ob.moveJob = {stage:1, aurl:K.url, sa, t0a:Date.now(), url:k.url, ctl:(vj.subfolder ? vj.subfolder + '/' : '') + vj.name, Wv, Hv, cnf, k:{unet:k.unet, lora:k.lora || '', clip:k.clip, vae:k.vae, steps:k.steps}, bgm:K.bgm || '',
       desc:SC.desc || '', pre:(HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_move', key, geo:Object.assign({}, GT.geo, {px:[Wv, Hv]})}; changed();
     const ai = await moveApose(ob, st, g); await moveFilm(ob, st, ai); }
@@ -1052,7 +1039,7 @@ async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg =>
 async function moveApose(ob, st, g){ const J = ob.moveJob;
   const ai = (await runGraph(J.aurl, g, J.sa, t => st('🎬 1 of 2: painting her A pose on ' + pcName(J.aurl) + '… ' + t + ' s'), {pid:J.apid, t0:J.t0a, mins:20, onId:id => { J.apid = id; changed(); }}))[0];
   if(!ai) throw new Error('Her A pose did not come back.'); return ai; }
-// 2 of 2: MiniMax moves her from that A pose into the pose, steered by the skeleton video
+// 2 of 2: MiniMax moves her from that A pose into the pose, steered by the depth video
 async function moveFilm(ob, st, ai){ const J = ob.moveJob, k = J.k;
   st('Sending her A pose to ' + pcName(J.url) + '…'); const up = await sendPic(J.url, {pc:J.aurl, file:ai.filename, sub:ai.subfolder || ''}, 'rd-pose-move-', true);
   const m = {}; let n = 0; const ad = (c2, i) => { const id = String(++n); m[id] = {class_type:c2, inputs:i}; return id; };
@@ -1322,7 +1309,7 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     ${SCM && e ? '' : e ? (it ? `<p class="note">From the 📚 Library: ${esc(e.name)}, ${esc(String(e.height || 1))} m tall (× its size here). Re-saving it in the library changes it here too.</p>` : `<p class="note">From the 📚 Library: ${esc(e.name)}${e.lora ? ` · LoRA <b>${esc(String(e.lora).replace(/\.safetensors$/i, ''))}</b>` : ''}. Re-saving her in the library changes her here too.</p>`) : `<p class="warn">${it ? 'It is' : 'She is'} not in the library any more (or the PC is off), so a box stands in.</p>`}
     ${SCM && !POSE ? `<input data-ow placeholder="📝 ${it ? 'Words for it' : 'Words for her'} in this scene, e.g. ${it ? 'old, worn' : 'angry, shouting'}" value="${esc(ob.words || '')}" style="width:100%"><p class="note" data-owt style="margin:3px 2px;font-size:12px"></p>` : ''}
     ${POSE ? '' : `<div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>`}
-    ${POSE && !it && paints ? `<div class="line"><button data-act="move" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Move into the pose</button></div><p class="note">MiniMax films her from her A pose moving into this pose (it works out the move itself and only your end pose is steered), so she ends up in it naturally. You get 4 frames from the end to pick from (about 4 minutes on Render).</p>` : ''}
+    ${POSE && !it && paints ? `<div class="line"><button data-act="move" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Move into the pose</button></div><p class="note">MiniMax films her from her A pose moving into this pose (it works out the move itself, and her depth in your pose steers the end), so she ends up in it naturally. You get 4 frames from the end to pick from (about 4 minutes on Render).</p>` : ''}
     ${POSE && !it && paints ? actBox(ob) : ''}
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
     ${POSE ? '' : `<div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>`}
