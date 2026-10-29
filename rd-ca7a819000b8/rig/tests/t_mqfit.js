@@ -46,9 +46,13 @@ if(!FBX){ console.log('skip: BODY_FBX not set'); process.exit(0); }
   await fr.evaluate(() => { const r = document.querySelector('#g_op'); r.value = 0; r.dispatchEvent(new Event('input', {bubbles:true})); }); await page.waitForTimeout(200);
   ok((await g()).on==='none', 'Her picture at 0% hides it');
   await fr.evaluate(() => { const b = [...document.querySelectorAll('#btags [data-g="breasts"]')].find(x => x.dataset.tag==='huge breasts'); b.click(); }); await page.waitForTimeout(200);
+  await fr.selectOption('#hgt', '69'); await page.waitForTimeout(100);
+  ok(await fr.evaluate(() => MQ.ST.shape.cm===175.3 && /5′ 9″ · 175 cm/.test(document.querySelector('#hgt').selectedOptions[0].textContent)), '📏 Height picks 5′ 9″ and keeps it in cm: ' + await fr.evaluate(() => MQ.ST.shape.cm));
+  await fr.evaluate(() => { const b = [...document.querySelectorAll('#btags [data-g="build"]')].find(x => x.dataset.tag==='curvy'); b.click(); }); await page.waitForTimeout(100);
+  ok(await fr.evaluate(() => MQ.ST.shape.cm===175.3 && MQ.ST.shape.hips > 1.1), '…and stays when another body tag is picked');
   await fr.click('#fituse'); await page.waitForTimeout(200);
   const M = await page.evaluate(() => GOT.filter(x => x.rdmq==='fit').pop());
-  ok(M && M.id==='Ellie' && M.shape.bust===1.7 && M.btags.breasts==='huge breasts' && M.hair.style==='long' && /^1girl, huge breasts/.test(M.tags) && /goth/.test(M.tags) && !/large breasts/.test(M.tags) && /black dress/.test(M.tags) && /very long hair/.test(M.tags),
+  ok(M && M.id==='Ellie' && M.shape.bust===1.7 && M.shape.cm===175.3 && M.btags.breasts==='huge breasts' && M.hair.style==='long' && /^1girl, curvy, huge breasts/.test(M.tags) && /goth/.test(M.tags) && !/large breasts/.test(M.tags) && /black dress/.test(M.tags) && /very long hair/.test(M.tags),
     '✓ Give her this body hands her shape, hair, look and her tags (body ones made new, her own words kept) to the Library: ' + JSON.stringify(M && {shape:M.shape, tags:M.tags}));
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); if(fail.length){ console.log(fail.length + ' failed'); process.exit(1); } console.log('all passed');

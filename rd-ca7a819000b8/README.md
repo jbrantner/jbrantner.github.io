@@ -395,3 +395,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 **v.288 (2026-10-29)**: 🪞 Give her a body. Characters made from a picture before the mannequin (like Ellie) can get one from their 📚 Library card. Her own eye-level pictures lie over the mannequin (see-through, same height, turning with her), her body, hair and look start from her tags, and ✓ Give her this body saves them into her library entry, pictures and LoRA untouched, so 🎬 Scene and 🤸 Pose pose her on a matched base body. Characters that have one get 🪞 Change her body.
 
 **v.289 (2026-10-29)**: 💇 Colored inner hair works like Tips: the first hair colour is her outer hair (written first, so Illustrious reads it as her main colour), the next her inner hair, with ⇄ Swap.
+
+**v.290 (2026-10-29)**: 📏 Height in feet and inches on the mannequin page (4′ 6″ to 6′ 3″, shown with cm), always on show above her body tags. Picking another body tag keeps it. 🎬 Scene now stands a character with a mannequin at that height (before, it sized her from her pictures), so short and tall characters stand right beside each other. Library cards show it as 5′ 9″ (175 cm).
