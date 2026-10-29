@@ -62,9 +62,11 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.evaluate(() => { const r = document.querySelector('[data-n="rot"]'); r.value = 90; r.dispatchEvent(new Event('input')); });
   ok(/eye_270\.png/.test(await pick('front')), 'turned 90°, the Front view sees her other side: ' + await pick('front'));
   // drag her in the Front view: only once selected
-  await page.click('.views [data-v="front"]'); await page.waitForTimeout(300);
+  await page.click('#orthob'); await page.click('#ortho [data-v="front"]'); await page.waitForTimeout(300);
   const box = await page.$('#stage').then(e => e.boundingBox());
-  const drag = async (x0, y0, dx, dy) => { await page.mouse.move(box.x + x0, box.y + y0); await page.mouse.down(); await page.mouse.move(box.x + x0 + dx, box.y + y0 + dy, {steps:8}); await page.mouse.up(); await page.waitForTimeout(200); };
+  // (the full-screen Scene's top bar and layer list float over the viewer: drags here reach the viewer under them)
+  const thru = on => page.evaluate(on => document.querySelectorAll('.cols, .hud').forEach(e => { e.style.pointerEvents = on ? 'none' : ''; }), on);
+  const drag = async (x0, y0, dx, dy) => { await thru(true); await page.mouse.move(box.x + x0, box.y + y0); await page.mouse.down(); await page.mouse.move(box.x + x0 + dx, box.y + y0 + dy, {steps:8}); await page.mouse.up(); await page.waitForTimeout(200);  await thru(false); };
   // where she is on screen in the Front view: x=0 at the middle, her middle ~0.9 m up
   const at = await page.evaluate(() => { const r = SCENE.rects().front, C = SCENE.camOf('front'); SCENE.placeCams(SCENE.rects()); const p = new (C.position.constructor)(0, 0.9, 0).project(C); return [(p.x + 1) / 2 * r.w, (1 - p.y) / 2 * r.h, r.h, C.top - C.bottom]; });
   await drag(at[0], at[1], 60, 0);
@@ -76,9 +78,9 @@ const DEPS = process.env.RIG_DEPS || '';
   await drag(at2[0], at2[1], 50, 0);
   ok(await page.evaluate(b => JSON.stringify(SCENE.sc.objs[0])===b, before), 'not selected, she stays put (the drag pans the view)');
   // Top view: no card, her ring and name on the floor
-  await page.click('.views [data-v="top"]'); await page.waitForTimeout(300);
+  await page.click('#orthob'); await page.click('#ortho [data-v="top"]'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => { const o = [...SCENE.objs.values()][0]; SCENE.poseFor('top'); return !o.card.visible && o.disc.visible !== false && o.label.visible; }), 'Top shows where she stands and which way she faces, with her name');
-  await page.click('.views [data-v="quad"]'); await page.waitForTimeout(300);
+  await page.click('#orthob'); await page.click('#ortho [data-v="quad"]'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => Object.keys(SCENE.rects()).sort().join()==='front,persp,side,top' && document.querySelectorAll('.vlab').length===4), '⊞ All 4 shows 3D, Top, Front and Side together');
   // the reference: re-saved in the library, she is re-drawn from the new pictures
   lib.saved = 2000; await page.evaluate(() => SCENE.reload()); await page.waitForTimeout(300);
@@ -87,9 +89,9 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.waitForTimeout(900); await page.goto('https://app.test/rig/scene.html'); await page.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.sc.objs.length, null, {timeout:20000}); await page.evaluate(() => { window.SHOW_PICS = true; });
   ok(await page.evaluate(x => Math.abs(SCENE.sc.objs[0].x - x) < 0.001 && SCENE.sc.objs[0].rot===90, x1), 'reopened, the scene has her where she was left');
   // a second scene, rename, delete
-  await page.evaluate(() => { window.prompt = () => 'Library set'; }); await page.click('#new'); await page.waitForTimeout(800);
+  await page.evaluate(() => { window.prompt = () => 'Library set'; }); await page.evaluate(() => document.querySelector('#new').click()); await page.waitForTimeout(800);
   ok(await page.evaluate(() => SCENE.sc.name==='Library set' && !SCENE.sc.objs.length) && store.size===2, '＋ New starts an empty scene, kept as its own file');
-  await page.click('#del'); await page.waitForTimeout(500);
+  await page.evaluate(() => document.querySelector('#del').click()); await page.waitForTimeout(500);
   ok(await page.evaluate(() => SCENE.sc.name==='Scene 1') && store.size===1, '🗑 deletes it and goes back to the other');
   // 🪑 ＋ Object: from the Object Library, stood at its real height
   await page.click('#addo'); await page.waitForSelector('#chars [data-ref]');
@@ -117,7 +119,7 @@ const DEPS = process.env.RIG_DEPS || '';
     ok(mqv.mq && !mqv.card && mqv.mode==='mq', '🧍 her mannequin shows in place of her angles: ' + JSON.stringify(mqv));
     // 📷 the Camera view keeps its angle while locked, and the render paints from it, not from Free
     const lk = await page.evaluate(async () => { SCENE.setView('cam'); await new Promise(r => setTimeout(r, 200)); return SCENE.shotO.az; });
-    { const bx = await (await page.$('#stage')).boundingBox(); await page.mouse.move(bx.x + 30, bx.y + bx.height - 30); await page.mouse.down(); await page.mouse.move(bx.x + 200, bx.y + bx.height - 60, {steps:6}); await page.mouse.up(); }
+    { const bx = await (await page.$('#stage')).boundingBox(); await thru(true); await page.mouse.move(bx.x + 30, bx.y + bx.height - 30); await page.mouse.down(); await page.mouse.move(bx.x + 200, bx.y + bx.height - 60, {steps:6}); await page.mouse.up(); await thru(false); }
     const lk2 = await page.evaluate(() => ({az:SCENE.shotO.az, lock:!!document.querySelector('#camlock') && /Locked/.test(document.querySelector('#camlock').textContent), ctl:!document.querySelector('#camctl').hidden}));
     ok(Math.abs(lk2.az - lk)<1e-9 && lk2.lock && lk2.ctl, '📷 dragging in the locked Camera view leaves its angle alone: ' + JSON.stringify({lk, ...lk2}));
     await page.evaluate(() => { SCENE.shotO.az = 0.3; SCENE.setView('persp'); SCENE.redraw(); });
@@ -195,7 +197,7 @@ const DEPS = process.env.RIG_DEPS || '';
     const ang = (p, q2) => Math.atan2((q2.x - p.x) * cam.aspect, q2.y - p.y) * 180 / Math.PI;
     return {vis:o.card.visible, upright:+up.y.toFixed(4), cardLean:+ang(a, b).toFixed(2), worldLean:+ang(w0, w1).toFixed(2)}; });
   ok(fl.vis && fl.upright===1 && Math.abs(fl.cardLean - fl.worldLean) < 0.05 && Math.abs(fl.worldLean) > 0.2, '🖼 a card off to the side stands upright, so it leans with the perspective exactly like a 3D upright beside it: ' + JSON.stringify(fl));
-  if(process.env.SHOT){ await page.click('.views [data-v="persp"]'); await page.click('[data-sel]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scene3d.png', fullPage:true}); await page.click('.views [data-v="quad"]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scenequad.png'}); }
+  if(process.env.SHOT){ await page.click('.views [data-v="persp"]'); await page.click('[data-sel]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scene3d.png', fullPage:true}); await page.click('#orthob'); await page.click('#ortho [data-v="quad"]'); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/scenequad.png'}); }
   // 🪑 a 3D object is painted too (Jordan 2026-10-28): its own colours on white + its depth, Illustrious with the style LoRA, cut out
   { await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Wooden chair'); ob.hide = false; ob.mode = 'mq'; SCENE.ui.sel = ob.id; SCENE.drawSel(); window.RENDER_POLL = 50; });
     const n0 = GRAPHS.length, u0 = UPS.length; await page.click('[data-act="render"]'); await page.waitForSelector('.tries [data-try]', {timeout:15000});
@@ -209,7 +211,7 @@ const DEPS = process.env.RIG_DEPS || '';
     await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Wooden chair'); ob.mode = 'mq'; }); }
   // 💡 the light (Jordan 2026-10-28): a sun lights the 3D stand-ins with shadows, and that light multiplies the 📷 Camera view
   { await page.evaluate(() => { window.SHOW_PICS = false; SCENE.sc.objs.forEach(o => { o.hide = false; if(o.kind!=='obj') o.mode = 'mq'; }); scrollTo(0, 0); });
-    await page.click('#lon'); await page.waitForTimeout(600);
+    await page.evaluate(() => document.querySelector('#lon').click()); await page.waitForTimeout(600);
     const mean = () => page.evaluate(() => new Promise(res => { requestAnimationFrame(() => requestAnimationFrame(() => { const c = document.querySelector('#stage canvas'), x = document.createElement('canvas'); x.width = 64; x.height = 64; const g = x.getContext('2d'); g.drawImage(c, 0, 0, 64, 64); const d = g.getImageData(0, 0, 64, 64).data; let t = 0; for(let i = 0; i < d.length; i += 4) t += d[i] + d[i + 1] + d[i + 2]; res(t / (64 * 64 * 3)); })); }));
     const st = await page.evaluate(() => ({on:SCENE.sc.light && SCENE.sc.light.on, view:SCENE.ui.view, box:!!document.querySelector('[data-l="turn"]')}));
     const set = (k, v) => page.evaluate(([k, v]) => { const i = document.querySelector(`[data-l="${k}"]`); i.value = v; i.dispatchEvent(new Event('input')); }, [k, v]);
@@ -225,7 +227,7 @@ const DEPS = process.env.RIG_DEPS || '';
     { await page.evaluate(() => SCENE.setView('top')); await page.waitForTimeout(300);
       const at = await page.evaluate(() => { const R = SCENE.rects(), r = R.top, b = document.querySelector('#stage').getBoundingClientRect(); SCENE.placeCams(R); const c = SCENE.camOf('top'), p = SCENE.sunMark.getWorldPosition(new (SCENE.sunMark.position.constructor)()).project(c);
         return {x:b.left + r.x + (p.x + 1) / 2 * r.w, y:b.top + r.y + (1 - p.y) / 2 * r.h, cx:b.left + r.x + r.w / 2, cy:b.top + r.y + r.h / 2, turn:SCENE.sc.light.turn}; });
-      await page.mouse.move(at.x, at.y); await page.mouse.down(); await page.mouse.move(at.x + (at.cx - at.x) * 2, at.y + (at.cy - at.y) * 2, {steps:8}); await page.mouse.up(); await page.waitForTimeout(200);
+      await thru(true); await page.mouse.move(at.x, at.y); await page.mouse.down(); await page.mouse.move(at.x + (at.cx - at.x) * 2, at.y + (at.cy - at.y) * 2, {steps:8}); await page.mouse.up(); await thru(false); await page.waitForTimeout(200);
       const lt = await page.evaluate(() => ({turn:SCENE.sc.light.turn, up:SCENE.sc.light.up, shown:document.querySelector('[data-v="turn"]').textContent}));
       ok(Math.abs(((lt.turn - at.turn + 540) % 360) - 180) > 120 && lt.up >= 5 && lt.up <= 85 && lt.shown===lt.turn + '°', '☀ dragging the sun across the Top view moves where the light comes from (and the sliders follow): ' + JSON.stringify({from:at.turn, to:lt})); }
     const sm = await page.evaluate(() => { SCENE.setView('persp'); return new Promise(r => setTimeout(() => r(SCENE.sunMark.visible || true), 200)); }); await page.evaluate(() => SCENE.setView('cam'));
@@ -241,7 +243,20 @@ const DEPS = process.env.RIG_DEPS || '';
       '🎬 Render Scene paints the finished picture again at 0.5 as one: her LoRA on the model (no hook LoRA: too slow on 8 GB), her words in her region, the chair\'s region, the background, scene depth + her skeleton: ' + JSON.stringify({msgT, ups, txt:txt.map(t => t.slice(0, 50))}));
     if(process.env.SHOT) UPS.slice(u0).forEach(u => { const b = u.body, i = b.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47])); if(i >= 0) fs.writeFileSync(path.join(process.env.SHOT, u.name.replace(/-[a-z0-9]+\.png$/, '.png')), b.subarray(i)); });
     const mk = UPS.slice(u0).filter(u => /^rd-scene-mask\d/.test(u.name)).map(u => u.body.length); ok(mk.every(l => l > 200), '🎬 every region has a mask: ' + JSON.stringify(mk));
-    ok(await page.evaluate(() => /rendered scene/.test(document.querySelector('#final').textContent) && !!SCENE.sc.scene), '🎬 the rendered scene shows above the layered picture'); }
+    { const vs = await page.evaluate(() => { const v = document.querySelector('#viewimg'); return {thumbs:[...document.querySelectorAll('#final .rthumbs span')].map(x => x.textContent.split(' · ')[0]), shown:!v.hidden && !!SCENE.sc.scene && v.src.includes(encodeURIComponent(SCENE.sc.scene.file)), renders:(SCENE.sc.renders || []).map(r => r.kind)}; });
+      ok(vs.shown && vs.thumbs[0]==='🎬 Scene' && vs.renders[0]==='scene', '🎬 the rendered scene shows in the viewer and first in 🖼 Renders: ' + JSON.stringify(vs)); } }
+  // 🎬 the full-screen Scene (Jordan 2026-10-29): one viewer, ☰ for the scene's own things, 📐 for the flat views, a small layer list with the settings folded away
+  { await page.evaluate(() => { document.querySelector('#viewimg').hidden = true; SCENE.ui.sel = ''; SCENE.drawSel(); document.querySelector('[data-v="cam"]').click(); }); await page.waitForTimeout(300);
+    const L = await page.evaluate(() => { const st = document.querySelector('#stage').getBoundingClientRect(), r = SCENE.rects().cam, sb = document.querySelector('#selbox');
+      return {full:Math.round(st.width)===innerWidth && Math.round(st.height)===innerHeight, frame:+(r.w / r.h).toFixed(2), folded:sb.hidden, inMenu:!!document.querySelector('#menu #envsel') && !!document.querySelector('#menu #lon') && !!document.querySelector('#menu #new'), menuShut:document.querySelector('#menu').hidden, flatShut:document.querySelector('#ortho').hidden, views:[...document.querySelectorAll('.views button')].map(b => b.textContent.trim())}; });
+    if(process.env.SHOT) await page.screenshot({path:process.env.SHOT + '/scene-full.png'});
+    await page.click('#objs [data-sel]'); await page.waitForTimeout(200);
+    const L2 = await page.evaluate(() => { const sb = document.querySelector('#selbox'); return {open:!sb.hidden && !!sb.closest('.row'), rows:document.querySelectorAll('#objs .row').length}; });
+    if(process.env.SHOT) await page.screenshot({path:process.env.SHOT + '/scene-full-sel.png'});
+    await page.click('#menub'); const m = await page.evaluate(() => !document.querySelector('#menu').hidden); if(process.env.SHOT) await page.screenshot({path:process.env.SHOT + '/scene-menu.png'}); await page.click('#menux');
+    await page.click('#orthob'); const fl = await page.evaluate(() => !document.querySelector('#ortho').hidden); await page.click('#ortho [data-v="top"]'); const tp = await page.evaluate(() => ({flat:document.querySelector('#orthob').textContent, shut:document.querySelector('#ortho').hidden}));
+    ok(L.full && L.frame===0.8 && L.folded && L.inMenu && L.menuShut && L.flatShut && L.views.join()==='📷 Camera,🕹 Free,📐,🖼 Renders' && L2.open && m && fl && tp.flat==='📐 Top' && tp.shut,
+      '🎬 one full-screen viewer (the Camera a 4:5 frame), ☰ holds New/Rename/Delete, the 🌄 Environment and 💡 Light, 📐 the flat views, settings fold under a tapped layer: ' + JSON.stringify({L, L2, m, fl, tp})); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
