@@ -98,6 +98,13 @@ const DEPS = process.env.RIG_DEPS || '';
   ok(await page.evaluate(() => POSEPAGE.P.name==='Chin on fists' && document.querySelector('[data-step="tweak"]').getAttribute('aria-selected')==='true'), 'reopening the tab carries on with the same pose');
   await page.evaluate(() => { const ob = document.querySelector('[data-step="make"]'); ob.click(); }); await page.click('#libb'); await page.waitForSelector('[data-del]'); await page.click('[data-del]'); await page.waitForTimeout(300);
   ok([...store.values()][0].gone && await page.evaluate(() => !document.querySelector('[data-open]')), '🗑 delete takes it out of the library');
+  // any model can paint the people (Jordan 2026-10-29: Z-Image repeats itself): an Illustrious model gets the same ask as tags
+  { await page.click('#libx'); await page.click('[data-step="make"]'); await page.waitForFunction(() => document.querySelectorAll('#pmodel option').length > 1, null, {timeout:10000});
+    await page.selectOption('#pmodel', 'iriselTouchIL_v10.safetensors'); const lb = await page.evaluate(() => ({b:document.querySelector('#makeb').textContent.trim(), ask:document.querySelector('#ask').textContent}));
+    const n0 = GRAPHS.length; await page.click('#makeb'); await page.waitForFunction(n => window.POSEPAGE.P.photos.length===4 && window.POSEPAGE.P.made.endsWith('iriselTouchIL_v10.safetensors'), n0, {timeout:20000});
+    const ig = Object.values(GRAPHS[n0]), t = ig.find(n => n.class_type==='CLIPTextEncode').inputs.text, ng = ig.filter(n => n.class_type==='CLIPTextEncode')[1].inputs.text;
+    ok(lb.b==='Make pose' && /^1girl, solo, crouching/.test(lb.ask) && ig.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && ig.find(n => n.class_type==='EmptyLatentImage').inputs.batch_size===4 && t===lb.ask && /feet out of frame/.test(ng),
+      '🎨 an Illustrious model paints the 4 people instead, asked in tags (shown under What gets asked for): ' + t); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();

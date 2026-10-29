@@ -29,6 +29,7 @@ textarea{resize:none;min-height:64px}
 .row>*{flex:1}
 .row>.sm{flex:0 0 auto}
 .note{color:var(--soft);font-size:13px;margin:0}
+details.note summary{cursor:pointer}details.note span{display:block;margin-top:4px;font-size:12px}
 #msg{font-size:13px;color:var(--sel);margin:0}#msg:empty{display:none}
 .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
 .grid button{padding:0;min-height:0;border:2px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
@@ -81,8 +82,8 @@ const viewOf = p => p.pc + '/view?filename=' + encodeURIComponent(p.file) + '&su
 // ---- the pose being made (kept on this phone), and the library (on the PC with the scenes, and on this phone)
 const DKEY = 'rd-posebook-draft' + (HID ? '-h' : ''), LKEY = 'rd-posebook' + (HID ? '-h' : '');
 const get = (k, d) => { try{ return JSON.parse(localStorage.getItem(k)) || d; }catch(e){ return d; } }, put = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
-let P = get(DKEY, null) || fresh(), LIB = get(LKEY, []), step = 'make', BUSY = false, MSG = '';
-function fresh(){ return {id:'', name:'', desc:'', photos:[], pick:-1, sam:null, head:1.2, rot:null, who:'', own:'', renders:[]}; }
+let P0 = null, P = get(DKEY, null) || fresh(), LIB = get(LKEY, []), step = 'make', BUSY = false, MSG = '';
+function fresh(){ return {id:'', name:'', desc:'', model:(P0 || {}).model || '', photos:[], pick:-1, sam:null, head:1.2, rot:null, who:'', own:'', renders:[]}; }
 const keep = () => put(DKEY, P);
 async function loadLib(){ if(!PC.url) return; try{ const r = await fetch(PC.url + '/renderdeck/scenes' + (HID ? '?hidden=1' : ''), {cache:'no-store'}); if(!r.ok) return;
     const by = new Map(); for(const s of LIB.concat(((await r.json()).scenes || []).filter(s => s.kind==='posebook'))){ const o = by.get(s.id); if(!o || (s.saved || 0) > (o.saved || 0)) by.set(s.id, s); }
@@ -164,15 +165,23 @@ async function runGraph(url, g, saves, tick, mins){ const r = await fetch(url + 
 const graph = () => { const g = {}; let n = 0; return {g, add:(c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; }}; };
 async function work(fn){ if(BUSY) return; BUSY = true; draw(); try{ await fn(); }catch(err){ say(err.message || String(err)); } BUSY = false; draw(); }
 const say = m => { MSG = m; const el = $('#msg'); if(el) el.textContent = m; };
-function makePhotos(more){ return work(async () => { const d = P.desc.trim(); say('Looking for a PC with Z-Image…'); const k = await samKit();
-  if(!k.zit || !k.zclip || !k.zvae) throw new Error(pcName(k.url) + " hasn't got Z-Image Turbo (z_image_turbo, qwen_3_4b and ae.safetensors).");
-  const {g, add} = graph(), model = add('ModelSamplingAuraFlow', {model:[add('UNETLoader', {unet_name:k.zit, weight_dtype:'default'}), 0], shift:3}), vae = add('VAELoader', {vae_name:k.zvae});
-  const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.zclip, type:'lumina2', device:'default'}), 0], text:photoPrompt(d)}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
-  const saves = [0, 1, 2, 3].map(() => add('SaveImage', {images:[add('VAEDecode', {samples:[add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 2 ** 40), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0],
-    latent_image:[add('EmptySD3LatentImage', {width:832, height:1216, batch_size:1}), 0], denoise:1}), 0], vae:[vae, 0]}), 0], filename_prefix:PRE + '/pose/photo'}));
-  const res = await runGraph(k.url, g, saves, t => say('Painting 4 people ' + d + ' on ' + pcName(k.url) + '… ' + t + ' s'));
-  const got = saves.map(s => ((res[s] || {}).images || [])[0]).filter(Boolean).map(im => ({pc:k.url, file:im.filename, sub:im.subfolder || ''}));
-  P.photos = more ? P.photos.concat(got) : got; if(!more) P.pick = -1; P.made = d; keep(); say('Tap the one whose pose you like, then Create pose. Not there yet? ＋ 4 more.'); }); }
+// (Jordan 2026-10-29: Z-Image repeats itself, so any model can paint them; an Illustrious-type model gets the same ask as tags)
+const ILLU_NEG = ', cropped, out of frame, close-up, upper body, cowboy shot, portrait, feet out of frame, head out of frame, detailed background, scenery, multiple views, 2girls, multiple girls';
+const illuPrompt = d => '1girl, solo, ' + d.trim().replace(/[.!]+$/, '') + ', plain grey t-shirt, grey leggings, barefoot, full body, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres';
+const askOf = d => P.model ? illuPrompt(d) : photoPrompt(d);
+let MODELS = null; async function loadModels(){ try{ const k = await samKit(); MODELS = await comboOf(k.url, 'CheckpointLoaderSimple', 'ckpt_name'); }catch(e){ MODELS = []; } if(step==='make') draw(); }
+function makePhotos(more){ return work(async () => { const d = P.desc.trim(), m = P.model || ''; say('Looking for a PC with SAM 3D Body…'); const k = await samKit(); const {g, add} = graph(); let saves;
+  if(!m){ if(!k.zit || !k.zclip || !k.zvae) throw new Error(pcName(k.url) + " hasn't got Z-Image Turbo (z_image_turbo, qwen_3_4b and ae.safetensors).");
+    const model = add('ModelSamplingAuraFlow', {model:[add('UNETLoader', {unet_name:k.zit, weight_dtype:'default'}), 0], shift:3}), vae = add('VAELoader', {vae_name:k.zvae});
+    const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.zclip, type:'lumina2', device:'default'}), 0], text:photoPrompt(d)}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
+    saves = [0, 1, 2, 3].map(() => add('SaveImage', {images:[add('VAEDecode', {samples:[add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 2 ** 40), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0],
+      latent_image:[add('EmptySD3LatentImage', {width:832, height:1216, batch_size:1}), 0], denoise:1}), 0], vae:[vae, 0]}), 0], filename_prefix:PRE + '/pose/photo'})); }
+  else { const ck = add('CheckpointLoaderSimple', {ckpt_name:m}), pos = add('CLIPTextEncode', {clip:[ck, 1], text:illuPrompt(d)}), neg = add('CLIPTextEncode', {clip:[ck, 1], text:NEG + ILLU_NEG});
+    saves = [add('SaveImage', {images:[add('VAEDecode', {samples:[add('KSampler', {model:[ck, 0], seed:Math.floor(Math.random() * 2 ** 40), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
+      latent_image:[add('EmptyLatentImage', {width:832, height:1216, batch_size:4}), 0], denoise:1}), 0], vae:[ck, 2]}), 0], filename_prefix:PRE + '/pose/photo'})]; }
+  const res = await runGraph(k.url, g, saves, t => say('Painting 4 ' + d + ' with ' + (m ? m.replace(/\.safetensors$/, '') : 'Z-Image') + ' on ' + pcName(k.url) + '… ' + t + ' s'));
+  const got = saves.flatMap(s => (res[s] || {}).images || []).map(im => ({pc:k.url, file:im.filename, sub:im.subfolder || ''}));
+  P.photos = more ? P.photos.concat(got) : got; if(!more) P.pick = -1; P.made = d + '|' + m; keep(); say('Tap the one whose pose you like, then Create pose. Not there yet? ＋ 4 more.'); }); }
 function myPhoto(f){ return work(async () => { say('Sending your photo…'); const k = await samKit(), fd = new FormData(); fd.append('image', f, 'rd-pose-photo-' + Date.now().toString(36) + '.' + ((f.name || '').split('.').pop() || 'png')); fd.append('overwrite', 'true');
   const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending the photo failed (' + r.status + ')');
   P.photos.push({pc:k.url, file:(await r.json()).name, sub:'', type:'input'}); P.pick = P.photos.length - 1; keep(); say('Your photo is in. Tap Create pose.'); }); }
@@ -252,7 +261,9 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
   document.querySelectorAll('[data-step]').forEach(b => { b.setAttribute('aria-selected', b.dataset.step===step); b.disabled = b.dataset.step!=='make' && !has; });
   const B = $('#body'), dis = BUSY ? 'disabled' : '';
   if(step==='make') B.innerHTML = `<textarea id="desc" rows="2" placeholder="Describe the pose, e.g. crouching down with her chin resting on her fists">${esc(P.desc)}</textarea>
-    <div class="row"><button class="${ph.length ? '' : 'go'}" id="makeb" ${dis || (P.desc.trim() ? '' : 'disabled')}>${ph.length && P.made===P.desc.trim() ? '＋ 4 more' : 'Make pose'}</button><button class="sm" id="photob" ${dis} title="Use a photo of your own">🖼</button><input type="file" accept="image/*" id="photof" hidden></div>
+    <select id="pmodel" aria-label="Model that paints the pose" ${dis}><option value="">Z-Image Turbo (real people)</option>${(MODELS || (P.model ? [P.model] : [])).map(n => `<option value="${esc(n)}" ${P.model===n ? 'selected' : ''}>${esc(n.replace(/\.safetensors$/, ''))}</option>`).join('')}</select>
+    <details class="note"><summary>What gets asked for</summary><span id="ask">${esc(P.desc.trim() ? askOf(P.desc) : '')}</span></details>
+    <div class="row"><button class="${ph.length ? '' : 'go'}" id="makeb" ${dis || (P.desc.trim() ? '' : 'disabled')}>${ph.length && P.made===P.desc.trim() + '|' + (P.model || '') ? '＋ 4 more' : 'Make pose'}</button><button class="sm" id="photob" ${dis} title="Use a photo of your own">🖼</button><input type="file" accept="image/*" id="photof" hidden></div>
     ${ph.length ? `<div class="grid">${ph.map((p, i) => `<button data-pick="${i}" aria-pressed="${P.pick===i}" ${dis}><img src="${esc(viewOf(p))}" alt="Picture ${i + 1}" loading="lazy"></button>`).join('')}</div>
     <button class="go" id="createb" ${BUSY || P.pick < 0 ? 'disabled' : ''}>Create pose</button>` : '<p class="note">Z-Image paints 4 real people in that pose. Pick the best one and it becomes a 3D body you can adjust.</p>'}`;
   else if(step==='tweak') B.innerHTML = `<p class="note">Drag the dots: <b style="color:#ff5ca8">pink</b> moves a hand or foot, <b style="color:#5cb8ff">blue</b> swings an arm or leg, <b style="color:#ffd166">yellow</b> tips the head or chest. Drag anywhere else to turn the view.</p>
@@ -264,8 +275,9 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
     ${(P.renders || []).length ? `<div class="grid">${P.renders.map((p, i) => `<button data-big="${i}"><img src="${esc(viewOf(p))}" alt="Render ${i + 1}" loading="lazy"></button>`).join('')}</div>` : ''}`;
   B.insertAdjacentHTML('beforeend', `<p id="msg">${esc(MSG)}</p>`);
   const on = (s, ev, f) => { const el = B.querySelector(s); if(el) el[ev] = f; };
-  on('#desc', 'oninput', e => { P.desc = e.target.value; keep(); const b = $('#makeb'); b.disabled = BUSY || !P.desc.trim(); b.textContent = ph.length && P.made===P.desc.trim() ? '＋ 4 more' : 'Make pose'; });
-  on('#makeb', 'onclick', () => makePhotos(ph.length && P.made===P.desc.trim())); on('#photob', 'onclick', () => $('#photof').click());
+  on('#pmodel', 'onchange', e => { P.model = e.target.value; keep(); draw(); });
+  on('#desc', 'oninput', e => { P.desc = e.target.value; keep(); $('#ask').textContent = P.desc.trim() ? askOf(P.desc) : ''; const b = $('#makeb'); b.disabled = BUSY || !P.desc.trim(); b.textContent = ph.length && P.made===P.desc.trim() + '|' + (P.model || '') ? '＋ 4 more' : 'Make pose'; });
+  on('#makeb', 'onclick', () => makePhotos(ph.length && P.made===P.desc.trim() + '|' + (P.model || ''))); on('#photob', 'onclick', () => $('#photof').click());
   on('#photof', 'onchange', e => { const f = e.target.files && e.target.files[0]; if(f) myPhoto(f); e.target.value = ''; });
   B.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { P.pick = +b.dataset.pick; keep(); draw(); }); on('#createb', 'onclick', createPose);
   on('#undob', 'onclick', () => { const r = UNDO.pop(); if(!r || !BODY) return; for(const [n, q] of Object.entries(r)) if(BODY.bn[n]) BODY.bn[n].quaternion.fromArray(q); fit(false); P.rot = rotNow(); keep(); draw(); });
@@ -277,11 +289,11 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
 document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => { step = b.dataset.step; $('#sheet').classList.remove('folded'); draw(); });
 $('#fold').onclick = () => { const f = $('#sheet').classList.toggle('folded'); $('#fold').textContent = f ? '▴' : '▾'; };
 $('#libb').onclick = async () => { drawLib(); $('#lib').hidden = false; await loadLib(); drawLib(); }; $('#libx').onclick = () => { $('#lib').hidden = true; };
-$('#newb').onclick = () => { $('#lib').hidden = true; P = fresh(); UNDO.length = 0; keep(); step = 'make'; say(''); showBody(); draw(); };
+$('#newb').onclick = () => { $('#lib').hidden = true; P0 = P; P = fresh(); UNDO.length = 0; keep(); step = 'make'; say(''); showBody(); draw(); };
 $('#saveb').onclick = () => { $('#savename').value = P.name || P.desc.trim().slice(0, 60); $('#save').hidden = false; $('#savename').focus(); }; $('#savex').onclick = () => { $('#save').hidden = true; };
 $('#saveok').onclick = () => { const n = $('#savename').value.trim(); if(!n) return; $('#save').hidden = true; savePose(n); };
 $('#big').onclick = () => { $('#big').hidden = true; };
-(async function start(){ draw(); await findPc(); if(!PC.url) say('Your PCs are off: turn Render on, then reopen this tab.'); draw(); loadLib();
+(async function start(){ draw(); await findPc(); if(!PC.url) say('Your PCs are off: turn Render on, then reopen this tab.'); draw(); loadLib(); loadModels();
   if(P.sam){ step = 'tweak'; draw(); await work(async () => { say('Bringing the 3D body over…'); await showBody(); frame(); say(''); }); } })();
 window.POSEPAGE = {get P(){ return P; }, get BODY(){ return BODY; }, DOTS, dotAt, reach, swing, guides, samJoints, rotNow, get LIB(){ return LIB; }, camera, controls, redraw:() => { dirty = true; }};
 </script>
