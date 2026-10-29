@@ -95,12 +95,15 @@ background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 0 0
 // one at a time or all four. Scenes are kept on the phone and, with the helper, in Scenes/ of the shared output folder.
 import * as THREE from 'three';
 import {paintLook} from './look.js';
-import {TOON, loadBody as fetchBody, bodyMesh as shapedBody, POSES, poseBody, bodyJoints, DEPTH_MAT, drawPose, comboOf, hasNode, upload, faceFix, NEG} from './body.js';
+import {TOON, loadBody as fetchBody, bodyMesh as shapedBody, POSES, poseBody, bonesOf, bodyJoints, DEPTH_MAT, drawPose, comboOf, hasNode, upload, faceFix, NEG} from './body.js';
 const QS = new URLSearchParams(location.search), HID = QS.get('h')==='1', D2R = Math.PI / 180, $ = s => document.querySelector(s);
 // 🌄 the same page as the Environment tab (?env=1, Jordan 2026-10-28): an environment is a ground (tiling textures, painted in patches),
 // 3D objects and the words for the place; a scene loads one as its background, locked, and adds the characters
-const ENV = QS.get('env')==='1', SCM = !ENV, KIND = s => ENV ? s.kind==='env' : s.kind!=='env';
-const LKEY = (ENV ? 'rd-envs' : 'rd-scenes') + (HID ? '-h' : ''), VKEY = ENV ? 'rd-env-ui' : 'rd-scene-ui', EKEY = 'rd-envs' + (HID ? '-h' : '');
+// 🤸 the Pose Creator tab is the same page too (?pose=1, Jordan 2026-10-29): load her rig, describe the action, drag her joints, paint it,
+// pick one and her skeleton is matched to that picture
+const ENV = QS.get('env')==='1', POSE = !ENV && QS.get('pose')==='1', SCM = !ENV, KIND = s => ENV ? s.kind==='env' : POSE ? s.kind==='pose' : s.kind!=='env' && s.kind!=='pose';
+const LKEY = (ENV ? 'rd-envs' : POSE ? 'rd-poses' : 'rd-scenes') + (HID ? '-h' : ''), VKEY = ENV ? 'rd-env-ui' : POSE ? 'rd-pose-ui' : 'rd-scene-ui', EKEY = 'rd-envs' + (HID ? '-h' : '');
+const WORD = ENV ? 'Environment' : POSE ? 'Pose' : 'Scene';
 const esc = s => String(s==null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'})[c]);
 const uid = p => p + Math.random().toString(36).slice(2, 9);
 // ---- where things are kept: Render Deck's PC list (Render first) and the library on it
@@ -137,7 +140,7 @@ function changed(){ if(!SC) return; SC.saved = Date.now(); const L = local().fil
 async function pushScene(){ if(!SC) return; if(!PC.url){ $('#saved').textContent = 'On this phone'; return; }
   try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:SC})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
   catch(e){ $('#saved').textContent = 'On this phone'; } }
-function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : 'sc'), name:name || (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : {}); scenesAll.unshift(s); openScene(s); changed(); }
+function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : POSE ? 'ps' : 'sc'), name:name || WORD + ' ' + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : POSE ? {kind:'pose'} : {}); scenesAll.unshift(s); openScene(s); changed(); }
 function openScene(s){ SC = s; VIMG = ''; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawLightBox(); drawFinal(); showImg(''); drawDesc(); dirty = true; }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
@@ -162,9 +165,9 @@ async function drawDesc(){ const t = (SC && SC.desc) || ''; if(document.activeEl
 $('#sdesc').oninput = e => { if(!SC) return; SC.desc = e.target.value; changed(); clearTimeout(sdT); sdT = setTimeout(drawDesc, 600); };
 function showImg(u){ VIMG = u || ''; const im = $('#viewimg'); if(VIMG) im.src = VIMG; else im.removeAttribute('src'); im.hidden = !VIMG; drawViews(); dirty = true; }
 $('#rall').onclick = () => renderAll(); $('#rscene').onclick = () => renderScene();
-$('#new').onclick = () => { const n = prompt(ENV ? 'Name for the new environment' : 'Name for the new scene', (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
-$('#ren').onclick = () => { if(!SC) return; const n = prompt(ENV ? 'Rename this environment' : 'Rename this scene', SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
-$('#del').onclick = async () => { if(!SC || !confirm(ENV ? 'Delete the environment "' + SC.name + '"? Scenes that use it lose their background.' : 'Delete the scene "' + SC.name + '"? The characters in it stay in the library.')) return; const id = SC.id;
+$('#new').onclick = () => { const n = prompt('Name for the new ' + WORD.toLowerCase(), WORD + ' ' + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
+$('#ren').onclick = () => { if(!SC) return; const n = prompt('Rename this ' + WORD.toLowerCase(), SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
+$('#del').onclick = async () => { if(!SC || !confirm(ENV ? 'Delete the environment "' + SC.name + '"? Scenes that use it lose their background.' : 'Delete the ' + WORD.toLowerCase() + ' "' + SC.name + '"? The characters in it stay in the library.')) return; const id = SC.id;
   keepLocal(local().filter(s => s.id!==id).concat([{id, gone:true, saved:Date.now()}])); scenesAll = scenesAll.filter(s => s.id!==id);
   if(PC.url) fetch(PC.url + '/renderdeck/scenes/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, id})}).catch(() => {});
   if(scenesAll.length) openScene(scenesAll[0]); else newScene(); };
@@ -241,7 +244,7 @@ function applyGround(){ const gd = GD(), on = !!(gd && gd.on!==false);
 let painting = false, brush = 1, paintMat = 0, pId = null, pendingSplat = false;
 const gOpt = sel => GROUNDS.map((g, i) => `<option value="${i}" ${i===sel ? 'selected' : ''}>${g[0]}${(GD() && (GD().tex || {})[i]) ? ' (yours)' : ''}</option>`).join('');
 // the box above the object list: 🌄 Environment tab = the ground painter and the place words; a scene = which environment it stands in
-function drawEnvBox(){ const box = $('#envbox'); if(!SC){ box.innerHTML = ''; return; }
+function drawEnvBox(){ const box = $('#envbox'); if(!SC || POSE){ box.innerHTML = ''; return; }
   if(!ENV){ const e = envOf(SC.env);
     box.innerHTML = `<h2>🌄 Environment</h2><select id="envsel" style="width:100%"><option value="">None (a plain floor)</option>${ENVS.map(x => `<option value="${esc(x.id)}" ${x.id===SC.env ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
       <p class="note">${e ? 'Its ground and objects stand behind your characters (locked here: change them in the 🌄 Environment tab).' + (e.words ? ' The place: <b>' + esc(e.words) + '</b>' : ' It has no place words yet.') + '</p><div class="line"><button id="bgtest">🧪 Background strength test</button></div><p class="note" id="bgtmsg">' + (SC.bgSet && SC.bgSet.pick ? 'Render all uses your picked picture (denoise ' + SC.bgSet.dn + ', depth ' + SC.bgSet.cn + '), and those are now the default everywhere. 🧪 again to change them.' : 'Backgrounds paint at denoise ' + bgDef().dn + ', depth ' + bgDef().cn + '. 🧪 paints 9 ways (denoise ' + BG_DN.join('/') + ' × depth ' + BG_CN.join('/') + ') with one seed: the one you tap becomes the default.') + '</p><div id="bgt"></div><p class="note">' : SC.env ? '<span class="warn">That environment was deleted (or is on a PC that is off).</span>' : 'Make one in the 🌄 Environment tab: paint a ground, add objects, describe the place.'}</p>`;
@@ -367,7 +370,7 @@ function litRender(cam, W, H, target){ placeLight(); const C = rtOf('c' + (targe
   const vp = new THREE.Vector4(), sc = new THREE.Vector4(), st = renderer.getScissorTest(); renderer.getViewport(vp); renderer.getScissor(sc); renderer.setScissorTest(false);
   renderer.setRenderTarget(C); renderer.setClearColor(0x2b2e35, 1); renderer.clear(); renderer.render(scene, cam); lightPass(L, cam);
   MIX.uniforms.dbg.value = window.LIGHT_ONLY ? 1 : 0; MIX.uniforms.tC.value = C.texture; MIX.uniforms.tL.value = L.texture; renderer.setRenderTarget(target || null); if(!target){ renderer.setViewport(vp); renderer.setScissor(sc); renderer.setScissorTest(st); } renderer.render(mixScene, mixCam); renderer.setRenderTarget(null); }
-function drawLightBox(){ const box = $('#lightbox'); if(ENV || !SC){ box.hidden = true; return; } box.hidden = false; const L = lightOf();
+function drawLightBox(){ const box = $('#lightbox'); if(ENV || POSE || !SC){ box.hidden = true; return; } box.hidden = false; const L = lightOf();
   const sl = (k, t, min, max, st, unit) => `<div class="lbl">${t}: <b data-v="${k}">${L[k]}${unit}</b></div><div class="line"><input type="range" data-l="${k}" min="${min}" max="${max}" step="${st}" value="${L[k]}"></div>`;
   box.innerHTML = `<h2>💡 Light<button id="lon" aria-pressed="${L.on}">${L.on ? 'On' : 'Off'}</button></h2>
     ${L.on ? sl('turn', 'Comes from (turn)', -180, 180, 5, '°') + sl('up', 'Height', 5, 85, 1, '°') + `<div class="line"><label class="note" style="margin:0">Colour <input type="color" data-c="color" value="${L.color}"></label>${sl('power', 'Strength', 0, 2, 0.05, '')}</div>`
@@ -499,8 +502,8 @@ function poseFor(view){ const cam = view==='persp' ? shotCam : camOf(view), top 
     o.missing.visible = !o.e; o.card.visible = false; o.ghost.visible = false;
     // the 3D stand-in is always set to her spot, turn and pose, even when her picture shows instead: the 💡 light's shadows come from it
     // (Jordan 2026-10-28: a 📸 Rendered sitting girl cast an A-pose shadow)
-    if(o.mesh){ o.mesh.scale.setScalar(s); o.mesh.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mesh, ob.pose || 'stand'); }
-    if(o.mq){ o.mq.scale.setScalar(s * mqHeight(o) / 1.7); o.mq.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mq, ob.pose || 'stand'); }
+    if(o.mesh){ o.mesh.scale.setScalar(s); o.mesh.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mesh, ob.pose || 'stand', ob.bq); }
+    if(o.mq){ o.mq.scale.setScalar(s * mqHeight(o) / 1.7); o.mq.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mq, ob.pose || 'stand', ob.bq); }
     if(o.mesh && o.shot){ const md = modeOf(ob); o.mesh.visible = md!=='shot'; o.shot.visible = false; if(md==='shot'){ if(!top) placeShot(o, cam); continue; } }
     if(o.mesh) continue; // 🪑 a 3D model just turns with its spot: right from every angle
     if(o.mq){ const md = modeOf(ob); o.mq.visible = md==='mq'; o.shot.visible = false;
@@ -539,7 +542,7 @@ function rects(){ const W = stage.clientWidth, H = stage.clientHeight;
   const w = W / 2, h = H / 2; return {persp:{x:0, y:0, w, h}, top:{x:w, y:0, w, h}, front:{x:0, y:h, w, h}, side:{x:w, y:h, w, h}}; }
 function draw(){ const W = stage.clientWidth, H = stage.clientHeight; if(renderer.domElement.width!==Math.round(W * renderer.getPixelRatio())) renderer.setSize(W, H, false);
   const R = rects(); placeCams(R); renderer.setScissorTest(false); renderer.setClearColor(SCM && view==='cam' ? 0x111216 : 0x2b2e35); renderer.clear(); renderer.setScissorTest(true); renderer.setClearColor(0x2b2e35); // (outside the 📷 frame darker)
-  const lit = lightOn(); if(lit) placeLight(); for(const [k, r] of Object.entries(R)){ const y = H - r.y - r.h; renderer.setViewport(r.x, y, r.w, r.h); renderer.setScissor(r.x, y, r.w, r.h); poseFor(k); camRig.visible = k!=='cam'; sunMark.visible = lit && k!=='cam';
+  const lit = lightOn(); if(lit) placeLight(); for(const [k, r] of Object.entries(R)){ const y = H - r.y - r.h; renderer.setViewport(r.x, y, r.w, r.h); renderer.setScissor(r.x, y, r.w, r.h); poseFor(k); placeJoints(); camRig.visible = k!=='cam'; sunMark.visible = lit && k!=='cam';
     if(lit && k==='cam'){ const pr = renderer.getPixelRatio(); litRender(camOf(k), Math.max(1, Math.round(r.w * pr)), Math.max(1, Math.round(r.h * pr)), null); } else renderer.render(scene, camOf(k)); } sunMark.visible = false;
   renderer.setScissorTest(false);
   stage.querySelectorAll('.vlab').forEach(n => n.remove()); for(const [k, r] of Object.entries(R)){ const d = document.createElement('div'); d.className = 'vlab'; d.textContent = LABEL[k]; d.style.left = (r.x + 6) + 'px'; d.style.top = (r.y + 6) + 'px'; stage.appendChild(d); }
@@ -558,6 +561,22 @@ document.querySelectorAll('.views [data-v], #ortho [data-v]').forEach(b => b.onc
 $('#orthob').onclick = () => { $('#ortho').hidden = !$('#ortho').hidden; };
 function drawViews(){ document.querySelectorAll('.views [data-v], #ortho [data-v]').forEach(b => b.setAttribute('aria-pressed', !VIMG && b.dataset.v===view));
   $('#orthob').setAttribute('aria-pressed', !VIMG && !!FLAT[view]); $('#orthob').textContent = FLAT[view] ? '📐 ' + FLAT[view] : '📐'; $('#rlibb').setAttribute('aria-pressed', !!VIMG); }
+// 🤸 her joints (Pose Creator): a pink dot on each elbow, wrist, knee, ankle, her nose and her neck; dragging one swings the bone above it
+// round its own pivot (the nose turns her head, the neck bends her back), saved as ob.bq on top of the preset pose
+var JOINTS = [['bn_spine02', 1], ['bn_head', 0], ['bn_upperarm01R', 3], ['bn_forearm01R', 4], ['bn_upperarm01L', 6], ['bn_forearm01L', 7], ['bn_thigh01R', 9], ['bn_shin01R', 10], ['bn_thigh01L', 12], ['bn_shin01L', 13]];
+var jh = new THREE.Group(); jh.visible = false; scene.add(jh); // (var, function: the first frames are drawn before these lines run)
+JOINTS.forEach(() => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 8), new THREE.MeshBasicMaterial({color:0xff5ca8, depthTest:false, transparent:true, opacity:0.9})); m.renderOrder = 999; jh.add(m); });
+function jointsOf(){ if(!POSE || !SC || !jh) return null; const ob = SC.objs.find(o => o.id===ui.sel), o = ob && OBJ.get(ob.id); return o && o.mq && o.mq.userData.body && BODY && BODY.face && modeOf(ob)==='mq' && !ob.lock && !ob.hide ? o : null; }
+function jointPts(o){ o.g.updateMatrixWorld(true); return bodyJoints(o.mq, BODY.face); }
+function placeJoints(){ const o = jointsOf(); if(jh) jh.visible = !!o; if(!o) return; const pts = jointPts(o), k = (o.ob.s || 1) * mqHeight(o) / 1.7;
+  JOINTS.forEach(([, i], n) => { jh.children[n].position.copy(pts[i]); jh.children[n].scale.setScalar(k); jh.children[n].material.color.set(typeof G!=='undefined' && G && G.joint && G.joint.n===n ? 0xffd166 : 0xff5ca8); }); }
+// turns bone `name` so that the point `from` (world) swings towards `to`, round the bone's own pivot
+function swing(ob, o, name, from, to){ const b = bonesOf(o.mq.userData.body)[name]; if(!b) return; const p = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld), a = from.clone().sub(p), c = to.clone().sub(p); if(a.lengthSq() < 1e-8 || c.lengthSq() < 1e-8) return;
+  const q = new THREE.Quaternion().setFromUnitVectors(a.normalize(), c.normalize()), pw = b.parent.getWorldQuaternion(new THREE.Quaternion()), bw = b.getWorldQuaternion(new THREE.Quaternion());
+  ob.bq = Object.assign({}, ob.bq, {[name]:pw.invert().multiply(q.multiply(bw)).toArray().map(v => +v.toFixed(5))}); poseBody(o.mq, ob.pose || 'stand', ob.bq); o.mq.updateMatrixWorld(true); }
+function jointAt(k, r, px, py){ placeCams(rects()); poseFor(k); placeJoints(); const o = jointsOf(); if(!o) return null; const cam = camOf(k), pts = jointPts(o); let best = null;
+  JOINTS.forEach(([name, i], n) => { const v = pts[i].clone().project(cam), x = r.x + (v.x + 1) / 2 * r.w, y = r.y + (1 - v.y) / 2 * r.h, d = Math.hypot(x - px, y - py); if(d < 30 && (!best || d < best.d)) best = {d, n, name, i}; });
+  if(!best) return null; const dir = cam.getWorldDirection(new THREE.Vector3()); return Object.assign(best, {o, plane:new THREE.Plane().setFromNormalAndCoplanarPoint(dir, pts[best.i].clone())}); }
 // ---- touch: a finger on the selected one moves it; tapping another selects it; elsewhere it turns (3D) or slides (flat) the view;
 // two fingers or the wheel zoom
 const ptr = new Map(); let G = null;
@@ -571,7 +590,8 @@ const SNAP = () => ui.snap ? 0.25 : 0;
 const snapV = v => SNAP() ? Math.round(v / SNAP()) * SNAP() : Math.round(v * 1000) / 1000;
 stage.addEventListener('pointerdown', e => { stage.setPointerCapture(e.pointerId); const [px, py] = local2(e); ptr.set(e.pointerId, {x:px, y:py});
   if(ptr.size===2){ const a = [...ptr.values()], at = viewAt((a[0].x + a[1].x) / 2, (a[0].y + a[1].y) / 2); G = at && {pinch:true, k:at.k, r:at.r, d0:Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y), m0:[(a[0].x + a[1].x) / 2, (a[0].y + a[1].y) / 2], z0:at && isP(at.k) ? orbOf(at.k).d : at && ortho[at.k].half, c0:at && isP(at.k) ? orbOf(at.k).t.clone() : at && ortho[at.k].c.slice()}; if(G && G.k==='cam' && camLocked()) G = null; return; }
-  const at = viewAt(px, py); if(!at) return; const hit = hitObj(at.k, at.r, px, py), sel = SC && SC.objs.find(o => o.id===ui.sel);
+  const at = viewAt(px, py); if(!at) return; const jt = POSE && jointAt(at.k, at.r, px, py); if(jt){ G = {k:at.k, r:at.r, x0:px, y0:py, moved:true, joint:jt}; dirty = true; return; }
+  const hit = hitObj(at.k, at.r, px, py), sel = SC && SC.objs.find(o => o.id===ui.sel);
   if(lightOn() && at.k!=='cam'){ placeLight(); sunMark.updateMatrixWorld(true); const rc = rayFor(at.k, at.r, px, py); if(rc.intersectObject(sunMark.userData.grab, false).length){ G = {k:at.k, r:at.r, x0:px, y0:py, moved:false, sun:true}; return; } }
   G = {k:at.k, r:at.r, x0:px, y0:py, moved:false, hit};
   if(hit && sel && hit.ob===sel && !sel.lock){ G.move = {x:sel.x, y:sel.y, z:sel.z}; if(isP(at.k)){ const rc = rayFor(at.k, at.r, px, py), pl = new THREE.Plane(new THREE.Vector3(0, 1, 0), -sel.y), p = new THREE.Vector3(); G.p0 = rc.ray.intersectPlane(pl, p) ? p.clone() : null; } }
@@ -581,6 +601,7 @@ stage.addEventListener('pointermove', e => { if(!ptr.has(e.pointerId) || !G) ret
     if(isP(G.k)){ const orbit = orbOf(G.k); orbit.d = Math.max(1, Math.min(60, G.z0 * f)); const s = orbit.d / G.r.h * 0.9, R = new THREE.Vector3(Math.cos(orbit.az), 0, -Math.sin(orbit.az)); orbit.t.copy(G.c0).addScaledVector(R, -(m[0] - G.m0[0]) * s).add(new THREE.Vector3(0, (m[1] - G.m0[1]) * s, 0)); }
     else { const o = ortho[G.k]; o.half = Math.max(0.3, Math.min(40, G.z0 * f)); const s = 2 * o.half / G.r.h; o.c = [G.c0[0] - (m[0] - G.m0[0]) * s, G.c0[1] + (m[1] - G.m0[1]) * s]; }
     dirty = true; return; }
+  if(G.joint){ const J = G.joint, rc = rayFor(G.k, G.r, px, py), p = new THREE.Vector3(); if(!rc.ray.intersectPlane(J.plane, p)) return; swing(J.o.ob, J.o, J.name, jointPts(J.o)[J.i], p); G.did = true; dirty = true; return; }
   const dx = px - G.x0, dy = py - G.y0; if(Math.hypot(dx, dy) > 5) G.moved = true; if(!G.moved) return;
   if(G.sun){ sunFromRay(rayFor(G.k, G.r, px, py)); G.did = true; return; }
   const sel = SC && SC.objs.find(o => o.id===ui.sel);
@@ -593,6 +614,7 @@ stage.addEventListener('pointermove', e => { if(!ptr.has(e.pointerId) || !G) ret
 const end = e => { if(!ptr.has(e.pointerId)) return; ptr.delete(e.pointerId); if(!G) return;
   if(G.pinch){ if(!ptr.size) G = null; saveCams(); return; }
   if(G.sun){ if(G.did){ drawLightBox(); changed(); } G = null; return; }
+  if(G.joint){ G = null; if(SC){ drawSel(); changed(); } dirty = true; return; }
   if(!G.moved && !G.move){ ui.sel = G.hit ? G.hit.ob.id : ui.sel; saveUi(); drawList(); drawSel(); dirty = true; } // a tap selects; tapping empty space keeps the selection
   if(G.did) changed(); saveCams(); G = null; };
 stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
@@ -606,7 +628,7 @@ let camT = 0; function saveCams(){ clearTimeout(camT); camT = setTimeout(() => {
 // four tries, cut out; the one picked stands in the scene as her picture from then on, until you go back to the mannequin
 const BUSY = new Set(), RMSG = new Map(); // a render on its way, and what it last said, per character (not saved with the scene)
 const modeOf = ob => SC && SC.d3 ? 'mq' : ob.mode==='shot' && ob.shot ? 'shot' : window.SHOW_PICS && ob.mode!=='mq' ? 'pics' : 'mq'; // Jordan 2026-10-28: in a scene she is only 🧍 Mannequin (the default) or 📸 Rendered
-const shotKey = ob => JSON.stringify([SC.cam || camState(), +(ob.x || 0).toFixed(2), +(ob.z || 0).toFixed(2), +(ob.y || 0).toFixed(2), ob.rot || 0, ob.s || 1, ob.pose || 'stand']);
+const shotKey = ob => JSON.stringify([SC.cam || camState(), +(ob.x || 0).toFixed(2), +(ob.z || 0).toFixed(2), +(ob.y || 0).toFixed(2), ob.rot || 0, ob.s || 1, ob.pose || 'stand'].concat(ob.bq ? [ob.bq] : []));
 const shotFits = ob => !!ob.shot && (!ob.shot.key || ob.shot.key===shotKey(ob)); // (picks from before v.253 have no key: kept)
 const mqHeight = o => { const m1 = o.e && o.e.views && o.e.views.length ? ringMed(o, 1) : 0; return m1 ? m1 * o.geo.hM : 1.7; };
 const shotUrl = sh => (sh = sh.hi || sh, sh.pc + '/view?filename=' + encodeURIComponent(sh.file) + '&subfolder=' + encodeURIComponent(sh.sub || '') + '&type=output'); // ⤴ its high-res redraw once made
@@ -655,7 +677,8 @@ function guidesFor(o, view){ const cam0 = camOf(view), ob = o.ob; placeCams(rect
   const m0 = new THREE.Vector3(ob.x, ob.y + 1, ob.z).project(cam), mPerPx = 1 / Math.max(1e-6, Math.hypot((m0.x - f.x) / 2 * W, (m0.y - f.y) / 2 * H)), d = toCam;
   const el = Math.asin(Math.max(-1, Math.min(1, d.y))), hM = H * mPerPx * Math.cos(el);
   ob.mode = mode0; dirty = true;
-  return {W, H, depth, pose, colour, geo:{w:W * mPerPx * Math.cos(el), h:hM, fx, fy, zn:DEPTH_MAT.uniforms.uNear.value, zf:DEPTH_MAT.uniforms.uFar.value}}; }
+  return {W, H, depth, pose, colour, geo:{w:W * mPerPx * Math.cos(el), h:hM, fx, fy, zn:DEPTH_MAT.uniforms.uNear.value, zf:DEPTH_MAT.uniforms.uFar.value,
+    px:[W, H], pm:cam.projectionMatrix.toArray().map(v => +v.toPrecision(7)), mw:cam.matrixWorld.toArray().map(v => +v.toPrecision(7))}}; } // (px, pm, mw: the picture's own camera, for 🦴 matching her skeleton to it)
 // what the camera sees right now (whatever is showing), on a plain background
 function shotOf(cam, W, H, bgc){ const rt = new THREE.WebGLRenderTarget(W, H, {colorSpace:THREE.SRGBColorSpace}), bg = scene.background, buf = new Uint8Array(W * H * 4); scene.background = new THREE.Color(bgc);
   renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null); scene.background = bg; rt.dispose();
@@ -672,11 +695,11 @@ const OBJ_TAIL = 'no humans, still life, object focus, simple background, white 
 function kitE(ob, e){ if(ob.kind!=='obj') return e; const who = SC.objs.map(x => libOf(x.ref)).find(c => c && c.kind!=='obj' && c.ckpt) || {};
   return {ckpt:e.ckpt || who.ckpt, style:e.style || who.style, name:e.name, words:(e.tags || e.prompt || e.name || 'object').replace(/\(3D\)/i, '').replace(/^(AFKJ Style,\s*)/i, '').trim().toLowerCase(), obj:true}; }
 // (ow: 📝 its own words in this scene as tags, Jordan 2026-10-29: "angry" belongs where she is posed and painted, not only in Render Scene's 0.5 repaint)
-const wordsOf = (ob, E, los, ow) => E.obj ? [lorasOf(E, los || []).some(([l]) => /afkj/i.test(l)) ? 'AFKJ Style' : '', E.words, ow, OBJ_TAIL].filter(Boolean).join(', ') : herWords(E, ob.pose) + (ow ? ', ' + ow : '') + ', ' + PROMPT_TAIL;
-const ownTags = async ob => (ob.words || '').trim() ? tagsOf(ob.words.trim()) : '';
+const wordsOf = (ob, E, los, ow) => E.obj ? [lorasOf(E, los || []).some(([l]) => /afkj/i.test(l)) ? 'AFKJ Style' : '', E.words, ow, OBJ_TAIL].filter(Boolean).join(', ') : herWords(E, POSE && (SC.desc || '').trim() ? 'none' : ob.pose) + (ow ? ', ' + ow : '') + ', ' + PROMPT_TAIL;
+const ownTags = async ob => { const t = [POSE && SC ? SC.desc : '', ob.words].map(x => (x || '').trim()).filter(Boolean).join(', '); return t ? tagsOf(t) : ''; }; // (🤸 the action described goes with them)
 const lorasOf = (E, los) => (E.obj ? [[E.style || los.find(n => /afkj/i.test(n)), 1]] : [[E.style, 1], [E.lora, +E.strength || 1]]).filter(([l]) => l && los.includes(l));
 // her words (Jordan 2026-10-28: a sitting Ellen came out blonde, bootless and "standing"): LoRA trigger + her saved tags + the pose as words; pose and framing words from her card are dropped so they never fight the guide
-const POSE_WORDS = {stand:'standing', hip:'standing, hand on own hip', walk:'walking', sit:'sitting', wave:'standing, waving'};
+const POSE_WORDS = {none:'', stand:'standing', hip:'standing, hand on own hip', walk:'walking', sit:'sitting', wave:'standing, waving'};
 const NOT_HERS = /^(standing|sitting|walking|waving|a-pose|t-pose|arms at sides|full body|upper body|simple background|white background|transparent background|solo|1girl|1boy|1other|looking at viewer)$/i;
 function herWords(e, pose){ const seen = new Set(), out = [];
   const put = t => { t = t.trim().replace(/\s+/g, ' '); const k = t.toLowerCase().replace(/_/g, ' '); if(t && !seen.has(k)){ seen.add(k); out.push(t); } };
@@ -698,7 +721,7 @@ async function runGraph(url, g, save, tick){ const r = await fetch(url + '/promp
   const t0 = Date.now();
   for(;;){ await new Promise(res => setTimeout(res, window.RENDER_POLL || 2000)); tick(Math.round((Date.now() - t0) / 1000));
     const h = await (await fetch(url + '/history/' + j.prompt_id, {cache:'no-store'})).json(), it = h[j.prompt_id];
-    if(it && it.status && it.status.status_str==='error') throw new Error('The render failed on the PC.'); if(it && it.outputs && it.outputs[save]) return it.outputs[save].images || [];
+    if(it && it.status && it.status.status_str==='error') throw new Error('The render failed on the PC.'); if(it && it.outputs && it.outputs[save]) return it.outputs[save].images || it.outputs[save];
     if(Date.now() - t0 > 15 * 60000) throw new Error('No answer after 15 minutes.'); } }
 const cutOut = (add, out, bgm) => bgm ? [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:bgm}), 0], image:out}), 0]}), 0]}), 0] : out;
 async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
@@ -745,6 +768,46 @@ async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, 
     const hi = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || ''}; texOf(shotUrl(hi), true);
     const t = (ob.tries || []).find(x => x.file===sh.file && x.pc===sh.pc); if(t) t.hi = hi; if(ob.shot && ob.shot.file===sh.file) ob.shot.hi = hi;
     st('⤴ High res done' + (K.bgm ? '' : ' (cut away from the white here: no PC has BiRefNet)') + '.'); changed(); dirty = true; }
+  catch(err){ st(err.message || String(err)); }
+  BUSY.delete(ob.id); drawSel(); }
+// 🦴 Match her skeleton to this picture (Pose Creator phase 2, Jordan 2026-10-29): DWPose reads the 18 body points of the pick on a PC;
+// each point is a ray from the picture's own camera, and each bone (back, head, upper arms, forearms, thighs, shins) turns so its end lands
+// on that ray at the bone's own length, on the side nearest how it was posed (a flat picture can't tell nearer from further)
+const picPts = (o, sh) => { const C = {projectionMatrix:new THREE.Matrix4().fromArray(sh.pm), matrixWorld:new THREE.Matrix4().fromArray(sh.mw)}, [W, H] = sh.px;
+  C.projectionMatrixInverse = C.projectionMatrix.clone().invert(); C.matrixWorldInverse = C.matrixWorld.clone().invert();
+  return {C, W, H, toPx:p => { const v = p.clone().applyMatrix4(C.matrixWorldInverse).applyMatrix4(C.projectionMatrix); return [(v.x + 1) / 2 * W, (1 - v.y) / 2 * H]; },
+    ray:(x, y) => { const nx = x / W * 2 - 1, ny = 1 - y / H * 2, a = new THREE.Vector3(nx, ny, -1).applyMatrix4(C.projectionMatrixInverse).applyMatrix4(C.matrixWorld), b = new THREE.Vector3(nx, ny, 1).applyMatrix4(C.projectionMatrixInverse).applyMatrix4(C.matrixWorld); return new THREE.Ray(a, b.sub(a).normalize()); }}; };
+const shoulderMid = o => { const bn = bonesOf(o.mq.userData.body), at = n => new THREE.Vector3().setFromMatrixPosition(bn[n].matrixWorld); return at('bn_upperarm01R').lerp(at('bn_upperarm01L'), 0.5); }; // (her back bends to put this under the neck point)
+const FIT_ORDER = ['bn_spine02', 'bn_head', 'bn_upperarm01R', 'bn_forearm01R', 'bn_upperarm01L', 'bn_forearm01L', 'bn_thigh01R', 'bn_shin01R', 'bn_thigh01L', 'bn_shin01L'];
+function fitTo(ob, o, sh, kp){ const P = picPts(o, sh), J = Object.fromEntries(JOINTS); ob.mode = 'mq'; poseFor('cam'); let n = 0;
+  // where her hips are in the picture against the mannequin's: the whole figure slid flat, so a shifted painting doesn't bend her legs
+  const p0 = jointPts(o), hipM = [8, 11].map(i => P.toPx(p0[i])), ok = i => kp[i] && kp[i][2] > 0.3;
+  const sh2 = ok(8) && ok(11) ? [(kp[8][0] + kp[11][0] - hipM[0][0] - hipM[1][0]) / 2, (kp[8][1] + kp[11][1] - hipM[0][1] - hipM[1][1]) / 2] : [0, 0];
+  for(const name of FIT_ORDER){ const i = J[name]; if(!ok(i)) continue; const b = bonesOf(o.mq.userData.body)[name]; if(!b) continue;
+    const pts = jointPts(o), piv = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld), cur = name==='bn_spine02' ? shoulderMid(o) : pts[i], L = cur.distanceTo(piv), ray = P.ray(kp[i][0] - sh2[0], kp[i][1] - sh2[1]);
+    const oc = ray.origin.clone().sub(piv), bb = oc.dot(ray.direction), disc = bb * bb - (oc.lengthSq() - L * L), want = cur.clone().sub(piv).normalize(); let X;
+    if(disc >= 0){ const xs = [-bb - Math.sqrt(disc), -bb + Math.sqrt(disc)].map(t => ray.at(t, new THREE.Vector3())); X = xs.sort((u, v) => v.clone().sub(piv).normalize().dot(want) - u.clone().sub(piv).normalize().dot(want))[0]; }
+    else X = ray.at(-bb, new THREE.Vector3());
+    swing(ob, o, name, cur, X); n++; }
+  return n; }
+async function fitSkeleton(ob){ const o = OBJ.get(ob.id), sh = ob.shot, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
+  if(!o || !sh || BUSY.has(ob.id)) return; if(!(o.mq && o.mq.userData.body && BODY && BODY.face)) return st('Her rig (the base body) has not loaded from Render.'); if(!sh.pm) return st('This pick was painted before matching was possible: 🎬 paint it again.');
+  BUSY.add(ob.id); drawSel();
+  try{ st('Looking for a PC with DWPose…'); const urls = [PC.url, ...(window.SCENE_SERVERS || deckServers()).map(s => s.url.replace(/\/+$/, ''))].filter((u, i, a) => u && a.indexOf(u)===i);
+    let url = '', dw = null; for(const u of urls){ try{ const j = await (await fetch(u + '/object_info/DWPreprocessor', {cache:'no-store'})).json(); if(j.DWPreprocessor && await hasNode(u, 'SavePoseKpsAsJsonFile')){ url = u; dw = j.DWPreprocessor; break; } }catch(e){} }
+    if(!url) throw new Error('No PC has DWPose (the comfyui_controlnet_aux nodes).');
+    const [W, H] = sh.px, res = Math.max(512, Math.min(1024, Math.round(Math.max(W, H) / 64) * 64)), inputs = {image:['1', 0]};
+    for(const [k, spec] of Object.entries(Object.assign({}, dw.input.required || {}, dw.input.optional || {}))){ if(k==='image') continue; const [t, d] = spec;
+      inputs[k] = k==='detect_body' ? 'enable' : /detect_(hand|face)/.test(k) ? 'disable' : k==='resolution' ? res : Array.isArray(t) ? ((d && d.default) ?? t[0]) : (d && d.default); if(inputs[k]===undefined) delete inputs[k]; }
+    st('Sending the picture to ' + pcName(url) + '…'); const b = await (await fetch(shotUrl(sh))).blob(), fdt = new FormData(); fdt.append('image', b, 'rd-pose-fit-' + Date.now().toString(36) + '.png'); fdt.append('overwrite', 'true');
+    const up = await (await fetch(url + '/upload/image', {method:'POST', body:fdt})).json();
+    const out = await runGraph(url, {1:{class_type:'LoadImage', inputs:{image:up.name}}, 2:{class_type:'DWPreprocessor', inputs}, 3:{class_type:'SavePoseKpsAsJsonFile', inputs:{pose_kps:['2', 1], filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/dwpose'}}}, '3', t => st('DWPose is reading her pose on ' + pcName(url) + '… ' + t + ' s'));
+    const raw = (out.openpose_json || out.text || [])[0]; if(!raw) throw new Error('DWPose ran but sent nothing back.');
+    const kj = typeof raw==='string' ? JSON.parse(raw) : raw, fr = Array.isArray(kj) ? kj[0] : kj, man = fr && fr.people && fr.people[0]; if(!man) throw new Error('DWPose found nobody in the picture.');
+    const f = man.pose_keypoints_2d, cw = fr.canvas_width || W, ch = fr.canvas_height || H, norm = !f.some((v, i) => i % 3 < 2 && v > 1.5), kp = [];
+    for(let i = 0; i < 18; i++){ const x = f[i * 3], y = f[i * 3 + 1], c = f[i * 3 + 2]; kp.push(!(c > 0.2) || (x <= 0 && y <= 0) ? null : [norm ? x * W : x * W / cw, norm ? y * H : y * H / ch, c]); }
+    const n = fitTo(ob, o, sh, kp); if(!n) throw new Error('DWPose was not sure of any of her joints.');
+    ob.mode = 'mq'; st('🦴 Her skeleton matches the picture (' + n + ' bones). Turn round her in 🕹 Free and drag the pink dots to fix anything.'); changed(); dirty = true; }
   catch(err){ st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
 // ▶ Render all (Jordan 2026-10-28): every character's pick gets ⤴ High res (one with no pick gets 4 tries to pick from, and it stops there);
@@ -945,7 +1008,7 @@ function drawFinal(){ const box = $('#final'); if(!box) return; const list = ((S
 function placeSel(){ if(!SCM) return; const box = $('#selbox'), id = box.dataset.id; let row = null;
   document.querySelectorAll('#objs .row').forEach(r => { const on = !!id && (r.querySelector('[data-sel]') || {}).dataset.sel===id; r.setAttribute('aria-selected', on); if(on) row = r; });
   if(row && box.dataset.id){ row.appendChild(box); box.hidden = false; } else { $('.cols').appendChild(box); box.hidden = true; } }
-function drawList(){ drawD3(); if(SCM) $('.cols').appendChild($('#selbox')); const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = ENV ? '<p class="note">No objects yet. ＋ Object adds one from the 📚 Object Library (the 3D chair is there too).</p>' : '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
+function drawList(){ drawD3(); if(SCM) $('.cols').appendChild($('#selbox')); const box = $('#objs'); if(!SC || !SC.objs.length){ box.innerHTML = ENV ? '<p class="note">No objects yet. ＋ Object adds one from the 📚 Object Library (the 3D chair is there too).</p>' : POSE ? '<p class="note">＋🧍 Load her rig picks a character from the 📚 Library. Then describe the action, drag the pink dots on her joints, and 🎬 paint it.</p>' : '<p class="note">Nothing in this scene yet. ＋ Character or ＋ Object adds one from the 📚 Library.</p>'; return; }
   box.innerHTML = SC.objs.map(ob => { const e = libOf(ob.ref); return `<div class="row" aria-selected="${ui.sel===ob.id}"><button class="nm" data-sel="${esc(ob.id)}">${ob.kind==='obj' ? '🪑' : '🧍'} ${esc(ob.label || (e && e.name) || '?')} ${e ? (e.trigger ? `<small>${esc(e.trigger)}</small>` : '') : '<small class="warn">not in the library</small>'}</button>
     <button class="ic" data-eye="${esc(ob.id)}" aria-pressed="${!ob.hide}" aria-label="Show or hide">👁</button><button class="ic" data-lock="${esc(ob.id)}" aria-pressed="${!!ob.lock}" aria-label="Lock">🔒</button></div>`; }).join(''); placeSel(); }
 $('#objs').onclick = e => { const b = e.target.closest('button'); if(!b || !SC) return; const id = b.dataset.sel || b.dataset.eye || b.dataset.lock, ob = SC.objs.find(o => o.id===id); if(!ob) return;
@@ -959,14 +1022,16 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
   const e = libOf(ob.ref), it = ob.kind==='obj', oo = OBJ.get(ob.id), paints = !!(oo && oo.shot); // characters and 🪑 3D objects get painted
   box.innerHTML = `${SCM ? '' : `<h2>${esc(ob.label || (e && e.name) || '?')}${ob.lock ? ' 🔒' : ''}</h2>`}
     ${SCM && e ? '' : e ? (it ? `<p class="note">From the 📚 Library: ${esc(e.name)}, ${esc(String(e.height || 1))} m tall (× its size here). Re-saving it in the library changes it here too.</p>` : `<p class="note">From the 📚 Library: ${esc(e.name)}${e.lora ? ` · LoRA <b>${esc(String(e.lora).replace(/\.safetensors$/i, ''))}</b>` : ''}. Re-saving her in the library changes her here too.</p>`) : `<p class="warn">${it ? 'It is' : 'She is'} not in the library any more (or the PC is off), so a box stands in.</p>`}
-    ${SCM ? `<input data-ow placeholder="📝 ${it ? 'Words for it' : 'Words for her'} in this scene, e.g. ${it ? 'old, worn' : 'angry, shouting'}" value="${esc(ob.words || '')}" style="width:100%"><p class="note" data-owt style="margin:3px 2px;font-size:12px"></p>` : ''}
-    <div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>
+    ${SCM && !POSE ? `<input data-ow placeholder="📝 ${it ? 'Words for it' : 'Words for her'} in this scene, e.g. ${it ? 'old, worn' : 'angry, shouting'}" value="${esc(ob.words || '')}" style="width:100%"><p class="note" data-owt style="margin:3px 2px;font-size:12px"></p>` : ''}
+    ${POSE ? '' : `<div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>`}
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
-    <div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>
+    ${POSE ? '' : `<div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>`}
     ${paints ? `<div class="lbl">Show ${it ? 'it' : 'her'} as</div><div class="line">${[['mq', it ? '🪑 3D' : '🧍 Mannequin'], ['shot', '📸 Rendered']].map(([m, t]) => `<button data-mode="${m}" aria-pressed="${modeOf(ob)===m}" ${m==='shot' && !ob.shot ? 'disabled' : ''}>${t}</button>`).join('')}</div>
       ${modeOf(ob)==='mq' && !it ? poseRow(ob) : ''}
       ${modeOf(ob)==='mq' ? `<div class="line"><button data-act="render" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Render this angle</button></div><p class="note">Paints from the 📷 Camera view: set its angle there (🔓 to aim, 🔒 to keep it), then render. ${it ? 'A PC paints it 4 times over the 3D model (its own colours and shape) with the style LoRA, cut out.' : 'A PC paints her 4 times over the mannequin with her LoRA, faces fixed, cut out.'}</p>` : ''}
-      ${modeOf(ob)==='shot' ? `<div class="line"><button data-act="hi" ${BUSY.has(ob.id) || ob.shot.hi ? 'disabled' : ''}>${ob.shot.hi ? '✓ High res' : '⤴ High res'}</button></div><p class="note">${ob.shot.hi ? 'This pick has been redrawn 2× and cut out again.' : (it ? 'Redraws this pick 2× bigger in tiles (the same picture, more detail), then cuts it out again.' : 'Redraws this pick 2× bigger in tiles with her LoRA (the same picture, more detail), then cuts her out again.')}</p>` : ''}
+      ${POSE && modeOf(ob)==='mq' && !it ? `<p class="note">Drag the pink dots to bend her: elbows, wrists, knees, ankles, her nose turns her head, her neck bends her back.</p>${ob.bq ? '<div class="line"><button data-act="unbend">↺ Undo all the bends</button></div>' : ''}` : ''}
+      ${POSE && modeOf(ob)==='shot' && !it ? `<div class="line"><button data-act="fit" ${BUSY.has(ob.id) ? 'disabled' : ''}>🦴 Match her skeleton to this picture</button></div><p class="note">DWPose reads her pose in the picture and her rig bends to match it, so you can turn round her and fix it by hand.</p>` : ''}
+      ${modeOf(ob)==='shot' && !POSE ? `<div class="line"><button data-act="hi" ${BUSY.has(ob.id) || ob.shot.hi ? 'disabled' : ''}>${ob.shot.hi ? '✓ High res' : '⤴ High res'}</button></div><p class="note">${ob.shot.hi ? 'This pick has been redrawn 2× and cut out again.' : (it ? 'Redraws this pick 2× bigger in tiles (the same picture, more detail), then cuts it out again.' : 'Redraws this pick 2× bigger in tiles with her LoRA (the same picture, more detail), then cuts her out again.')}</p>` : ''}
       <p class="note" id="rmsg">${esc(RMSG.get(ob.id) || '')}</p>
       ${(ob.tries || []).length ? `<div class="tries">${ob.tries.map((t, i) => `<button data-try="${i}" aria-pressed="${!!ob.shot && ob.shot.file===t.file}"><img src="${esc(((tex.get(shotUrl(t)) || {}).userData || {}).thumb || shotUrl(t))}" data-u="${esc(shotUrl(t))}" crossorigin="anonymous" alt="Try ${i + 1}"></button>`).join('')}</div>` : ''}` : ''}
     ${e && e.mesh==='mannequin' ? poseRow(ob) : ''}
@@ -979,9 +1044,9 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     if(k==='rot') $('#rotv').textContent = Math.round(v) + '°'; if(k==='s') $('#sv').textContent = Math.round(v * 100) + '%'; changed(); });
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
   box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; if(SC.d3 && ob.mode==='shot'){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
-  box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; delete ob.bq; drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; if(SC.d3){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
-  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
+  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
   if(ob.lock) box.querySelectorAll('input').forEach(i => i.disabled = true); }
@@ -1013,10 +1078,12 @@ stage.addEventListener('pointermove', e => { if(!ENV || !painting || e.pointerId
 const pEnd = e => { if(e.pointerId!==pId) return; e.stopImmediatePropagation(); pId = null; changed(); };
 stage.addEventListener('pointerup', pEnd, true); stage.addEventListener('pointercancel', pEnd, true);
 if(ENV){ ['#add', '#rall', '#rscene', '#d3', '#d2', '#rlibb', '#allmsg', '#sdesc'].forEach(k => { $(k).hidden = true; }); document.title = 'Environment'; }
+if(POSE){ ['#addo', '#rall', '#rscene', '#d3', '#d2', '#rlibb', '#allmsg', '#envbox', '#lightbox', '#bgnew'].forEach(k => { $(k).hidden = true; }); document.title = 'Pose Creator';
+  $('#sdesc').placeholder = '📝 Describe the action, e.g. jumping, kicking, looking back over her shoulder'; $('#add').textContent = '＋🧍 Load her rig'; }
 // ---- start: the library (for the references), the scenes, the last one open
-(async function start(){ $('#msg').textContent = ENV ? 'Opening your environments…' : 'Opening your scenes…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
-  SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene(ENV ? 'Environment 1' : 'Scene 1');
+(async function start(){ $('#msg').textContent = 'Opening your ' + WORD.toLowerCase() + 's…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
+  SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene(WORD + ' 1');
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-window.SCENE = {get sc(){ return SC; }, shotFits, normalTex, bgKey, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, POSE, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, bgKey, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
