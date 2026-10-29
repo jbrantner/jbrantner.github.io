@@ -19,7 +19,10 @@ const links = g => { const errs = []; for(const [id, n] of Object.entries(g)) fo
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  ok(await page.evaluate(() => { const t = $('#tabs'); return t.scrollWidth <= t.clientWidth + 1 && document.documentElement.scrollWidth <= innerWidth && document.querySelectorAll('#tabs button').length===7; }), 'seven tabs fit a 375 px phone with no sideways scroll');
+  // (eight tabs: the row scrolls by itself, the page doesn't, and no label is cut off)
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelectorAll('#tabs button').length===8 && [...document.querySelectorAll('#tabs button')].every(b => b.scrollWidth <= b.clientWidth + 1)), 'the tabs row scrolls sideways on a 375 px phone, the page does not, and every label shows whole');
+  await page.click('#tabs [data-tab="pose"]'); ok(await page.evaluate(() => { const r = $('#tabs [data-tab="pose"]').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 1; }), 'the picked tab scrolls into view');
+  await page.click('#tabs [data-tab="render"]');
   // a character first, so the two lists can be told apart
   await page.click('#tabs [data-tab="cc"]'); await page.waitForTimeout(200); await page.evaluate(() => { ccChar().name = 'Pinky'; save(); ccDraw(true); });
   await page.click('#tabs [data-tab="obj"]'); await page.waitForTimeout(200);

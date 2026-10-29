@@ -384,3 +384,10 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - 📚 Library tab lists 🧍 Characters and 🪑 Objects. 🎬 Scene: ＋ Character / ＋ Object; an object stands at its real height (its front outline scaled to it), size 25–300%.
 - Tab bar: six equal tabs that fit a 360 px phone.
 - Helper: `/renderdeck/library?kind=obj`, and `kind:'obj'` on save/delete.
+
+**v.284 (2026-10-29): polish pass, part 1** (Jordan: "look for bloat and bad UX/UI design").
+- Tab bar: one row that scrolls sideways with whole labels (Render, Comic, Character, Object, Environment, Library, Scene, Pose) instead of eight squeezed tabs with cut-off names. The picked tab scrolls into view.
+- 🎨 Render with nothing rendered yet shows one empty message: no empty project row, project header or strip. "Tap ⚙ to connect" only shows while no computer is connected.
+- 🎬 Scene / 🌄 Environment / 🤸 Pose: the page around the full-height view no longer scrolls too (it had 100 px of padding for the Render bar). Scene's button row wraps instead of hiding buttons off the edge.
+- 🧍 Character / 🪑 Object: the angle read-out and Open in 3D / Auto-spin / Momentum show once there are angles to turn. 📚 "Save again" shows only once it's done (it saves itself then), and is no longer a second pink button beside ▶ Make.
+- ⚙ Settings: the Tailscale setup steps fold under "First-time setup on a new computer"; shorter notes on model downloads.
