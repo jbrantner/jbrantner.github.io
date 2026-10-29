@@ -110,10 +110,15 @@ const DEPS = process.env.RIG_DEPS || '';
   // the library
   await page.click('#saveb'); await page.fill('#savename', 'Chin on fists'); await page.click('#saveok'); await page.waitForTimeout(400);
   const sv = [...store.values()][0];
-  ok(sv && sv.kind==='posebook' && sv.name==='Chin on fists' && /^data:image\/jpeg/.test(sv.thumb) && sv.sam && sv.rot && sv.head===1.4 && !sv.renders, '💾 saved to the pose library on the PC (name, thumbnail, 3D body, tweaks, head size)');
+  ok(sv && sv.kind==='posebook' && sv.name==='Chin on fists' && /^data:image\/jpeg/.test(sv.thumb) && sv.spin.length===16 && sv.spin[0]===sv.thumb && new Set(sv.spin).size===16 && sv.sam && sv.rot && sv.head===1.4 && !sv.renders, '💾 saved to the pose library on the PC (name, thumbnail, 3D body, tweaks, head size)');
   await page.click('#libb'); await page.click('#newb'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => !POSEPAGE.BODY && !!document.querySelector('#desc') && POSEPAGE.P.desc===''), '＋ New pose starts clean, on the words');
-  const rot = sv.rot; await page.click('#libb'); await page.waitForSelector('[data-open]'); await shot('library'); await page.click('[data-open]');
+  const rot = sv.rot; await page.click('#libb'); await page.waitForSelector('[data-open]'); await shot('library');
+  { const r = await page.evaluate(() => { const b = document.querySelector('[data-spin]').getBoundingClientRect(); return {x:b.left + b.width / 2, y:b.top + b.height / 2, w:b.width}; }), s0 = await page.getAttribute('[data-spin]', 'src');
+    await page.mouse.move(r.x, r.y); await page.mouse.down(); for(let i = 1; i <= 5; i++) await page.mouse.move(r.x - i * r.w / 10, r.y); await page.mouse.up(); await page.waitForTimeout(150);
+    const s1 = await page.getAttribute('[data-spin]', 'src'), still = await page.evaluate(() => !document.querySelector('#lib').hidden); await shot('libspin');
+    ok(s1!==s0 && still, '🔄 dragging across a library card turns the pose (and doesn\'t open it)'); } await page.waitForTimeout(450);
+  await page.click('[data-open]');
   await page.waitForFunction(() => window.POSEPAGE.BODY, null, {timeout:20000});
   const re = await page.evaluate(r => { const B = POSEPAGE.BODY; return Object.entries(r).every(([n, q]) => B.bn[n].quaternion.toArray().every((v, i) => Math.abs(v - q[i]) < 1e-3)) && B.bn.bone_113.scale.x===1.4 && document.querySelector('#title').textContent; }, rot);
   ok(re==='🤸 Chin on fists', 'opening it from the library brings back the body as it was tweaked: ' + re);

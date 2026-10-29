@@ -52,7 +52,7 @@ input[type=range]{accent-color:var(--accent);padding:0;border:0;background:none;
 .lib{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
 .lib .it{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg)}
 .lib .it button.op{display:block;width:100%;padding:0;border:0;border-radius:0;background:none;text-align:left;min-height:0}
-.lib img{display:block;width:100%;aspect-ratio:4/5;object-fit:cover;background:#26282e}
+.lib img{display:block;width:100%;aspect-ratio:4/5;object-fit:cover;background:#26282e}.lib img[data-spin]{touch-action:pan-y;-webkit-user-drag:none;user-select:none;cursor:ew-resize}
 .lib span{display:block;padding:4px 8px;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lib .del{position:absolute;right:4px;top:4px;min-height:30px;padding:2px 7px;background:rgba(23,24,28,.8)}
 #big{background:rgba(0,0,0,.9);align-items:center;flex-direction:column;gap:10px;padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px))}#big img{max-width:100%;min-height:0;flex:1;object-fit:contain}
@@ -305,16 +305,26 @@ function touchUp(){ return work(async () => { const T = P.touch, src = T.pics[T.
 // a picture back to 1 as the pick, and SAM reads the 3D body from it again
 function useForPose(p){ $('#big').hidden = true; if(!p) return; P.photos.push(Object.assign({}, p, {from:'touched up / rendered'})); P.pick = P.photos.length - 1; EDIT = false; step = 'make'; keep(); draw(); createPose(); }
 // ---- the pose library: a name, a thumbnail of the view, and everything above
-function thumb(){ const v = dots.visible; dots.visible = false; renderer.render(scene, camera); const c = document.createElement('canvas'); c.width = 200; c.height = 250; const x = c.getContext('2d'), s = renderer.domElement, a = s.width / s.height;
-  const sw = a > 0.8 ? s.height * 0.8 : s.width, sh = sw / 0.8; x.drawImage(s, (s.width - sw) / 2, (s.height - sh) / 2, sw, sh, 0, 0, 200, 250); dots.visible = v; dirty = true; return c.toDataURL('image/jpeg', 0.75); }
-async function savePose(name){ P.name = name; if(!P.id) P.id = uid(); const s = Object.assign(JSON.parse(JSON.stringify(P)), {kind:'posebook', thumb:thumb(), saved:Date.now()}); delete s.renders; delete s.touch;
+// (Jordan 2026-10-29: the body fills the card, and a finger dragged across it turns it, like the Character Creator's library)
+// 16 frames round the body from just above eye level, starting from where you're looking, the body framed tight on the card colour
+const SPIN_N = 16;
+function spinShots(){ if(!BODY) return []; const W = 200, H = 250, box = new THREE.Box3().expandByObject(BODY.sk, true), c = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
+  const cam = new THREE.PerspectiveCamera(30, W / H, 0.05, 50), t = Math.tan(cam.fov * Math.PI / 360), r = Math.hypot(sz.x, sz.z) / 2, D = Math.max(sz.y * 1.08 / (2 * t), r * 2.16 / (2 * t * cam.aspect)) + r;
+  const az0 = Math.atan2(camera.position.x - controls.target.x, camera.position.z - controls.target.z), vis = [floor.visible, dots.visible], bg = scene.background, sz0 = renderer.getSize(new THREE.Vector2()), pr = renderer.getPixelRatio();
+  floor.visible = dots.visible = false; scene.background = new THREE.Color(0x26282e); renderer.setPixelRatio(1); renderer.setSize(W * 2, H * 2, false);
+  const out = []; for(let k = 0; k < SPIN_N; k++){ const a = az0 + k / SPIN_N * Math.PI * 2; cam.position.set(c.x + Math.sin(a) * D, c.y + D * 0.12, c.z + Math.cos(a) * D); cam.lookAt(c);
+    renderer.render(scene, cam); const cv = document.createElement('canvas'); cv.width = W; cv.height = H; cv.getContext('2d').drawImage(renderer.domElement, 0, 0, W, H); out.push(cv.toDataURL('image/jpeg', 0.72)); }
+  scene.background = bg; [floor.visible, dots.visible] = vis; renderer.setPixelRatio(pr); renderer.setSize(sz0.x, sz0.y, false); size(); renderer.render(scene, camera); dirty = true; return out; }
+async function savePose(name){ P.name = name; if(!P.id) P.id = uid(); const sp = spinShots(), s = Object.assign(JSON.parse(JSON.stringify(P)), {kind:'posebook', thumb:sp[0] || '', spin:sp, saved:Date.now()}); delete s.renders; delete s.touch;
   LIB = LIB.filter(x => x.id!==s.id).concat([s]); put(LKEY, LIB); keep(); say(await pushLib(s) ? '💾 Saved to the pose library.' : '💾 Saved on this phone (the PC will get it when it is on).'); draw(); }
 function drawLib(){ const L = LIB.filter(s => !s.gone).sort((a, b) => (b.saved || 0) - (a.saved || 0));
-  $('#libl').innerHTML = L.length ? L.map(s => `<div class="it"><button class="op" data-open="${esc(s.id)}"><img src="${esc(s.thumb || '')}" alt=""><span>${esc(s.name || 'Pose')}</span></button><button class="del" data-del="${esc(s.id)}" aria-label="Delete ${esc(s.name)}">🗑</button></div>`).join('') : '<p class="note">No poses saved yet. Make one, then 💾 Save.</p>';
+  $('#libl').innerHTML = L.length ? L.map(s => `<div class="it"><button class="op" data-open="${esc(s.id)}"><img src="${esc(s.thumb || '')}"${(s.spin || []).length > 1 ? ` data-spin="${esc(s.id)}" draggable="false"` : ''} alt=""><span>${esc(s.name || 'Pose')}</span></button><button class="del" data-del="${esc(s.id)}" aria-label="Delete ${esc(s.name)}">🗑</button></div>`).join('') : '<p class="note">No poses saved yet. Make one, then 💾 Save.</p>';
   $('#libl').querySelectorAll('[data-open]').forEach(b => b.onclick = () => openPose(LIB.find(s => s.id===b.dataset.open)));
   $('#libl').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { const s = LIB.find(x => x.id===b.dataset.del); if(!s || !confirm('Delete "' + (s.name || 'this pose') + '" from the library?')) return; s.gone = true; s.saved = Date.now(); put(LKEY, LIB); pushLib(s); drawLib(); }); }
-function openPose(s){ $('#lib').hidden = true; if(!s) return; P = Object.assign(fresh(), JSON.parse(JSON.stringify(s))); delete P.kind; delete P.thumb; delete P.saved; UNDO.length = 0; keep();
-  step = P.sam ? 'tweak' : 'make'; draw(); if(P.sam) work(async () => { say('Bringing the 3D body over…'); await showBody(); frame(); say(''); }); else showBody(); }
+function openPose(s){ $('#lib').hidden = true; if(!s) return; P = Object.assign(fresh(), JSON.parse(JSON.stringify(s))); delete P.kind; delete P.thumb; delete P.spin; delete P.saved; UNDO.length = 0; keep();
+  step = P.sam ? 'tweak' : 'make'; draw(); if(P.sam) work(async () => { say('Bringing the 3D body over…'); await showBody(); frame(); say('');
+    // a pose saved before the turning cards gets its turn now
+    if(!(s.spin || []).length && BODY){ s.spin = spinShots(); s.thumb = s.spin[0] || s.thumb; s.saved = Date.now(); put(LKEY, LIB); pushLib(s); } }); else showBody(); }
 // ---- the panel
 function draw(){ const has = !!BODY, ph = P.photos || [];
   $('#title').textContent = '🤸 ' + (P.name || 'New pose'); $('#saveb').disabled = !has || BUSY; $('#hint').hidden = has || BUSY || step==='make'; if(!has) $('#hint').innerHTML = ph.length ? 'Pick a picture below and tap <b>Create pose</b>.' : 'Describe a pose below and tap <b>Make pose</b>.';
@@ -373,6 +383,13 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
 document.querySelectorAll('[data-step]').forEach(b => b.onclick = () => { step = b.dataset.step; $('#sheet').classList.remove('folded'); draw(); });
 $('#fold').onclick = () => { const f = $('#sheet').classList.toggle('folded'); $('#fold').textContent = f ? '▴' : '▾'; };
 $('#libb').onclick = async () => { drawLib(); $('#lib').hidden = false; await loadLib(); drawLib(); }; $('#libx').onclick = () => { $('#lib').hidden = true; };
+// 👆 a card turns only while a finger drags across it (one card width is a full turn); a turn isn't a tap
+let LSPIN = null, LSPIN_T = 0;
+$('#libl').addEventListener('pointerdown', ev => { const im = ev.target.closest('img[data-spin]'), s = im && LIB.find(x => x.id===im.dataset.spin); if(s) LSPIN = {im, u:s.spin, x:ev.clientX, f:+im.dataset.f || 0, moved:false}; });
+addEventListener('pointermove', ev => { const d = LSPIN; if(!d) return; const dx = ev.clientX - d.x; if(Math.abs(dx) > 6) d.moved = true; if(!d.moved) return;
+  const n = d.u.length, f = (((d.f - Math.round(dx / Math.max(1, d.im.clientWidth) * n)) % n) + n) % n; if(f!==+d.im.dataset.f){ d.im.dataset.f = f; d.im.src = d.u[f]; } });
+addEventListener('pointerup', () => { if(LSPIN && LSPIN.moved) LSPIN_T = Date.now(); LSPIN = null; }); addEventListener('pointercancel', () => { LSPIN = null; });
+$('#libl').addEventListener('click', ev => { if(Date.now() - LSPIN_T < 400){ ev.preventDefault(); ev.stopPropagation(); } }, true);
 $('#newb').onclick = () => { $('#lib').hidden = true; P0 = P; P = fresh(); UNDO.length = 0; keep(); step = 'make'; say(''); showBody(); draw(); };
 $('#saveb').onclick = () => { $('#savename').value = P.name || P.desc.trim().slice(0, 60); $('#save').hidden = false; $('#savename').focus(); }; $('#savex').onclick = () => { $('#save').hidden = true; };
 $('#saveok').onclick = () => { const n = $('#savename').value.trim(); if(!n) return; $('#save').hidden = true; savePose(n); };
