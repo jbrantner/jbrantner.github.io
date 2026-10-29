@@ -82,7 +82,7 @@ body.pz.pzc .cols{display:none}body.pz .cols{bottom:calc(58px + env(safe-area-in
 <div class="cols">
   <div class="box" id="envbox"></div>
   <div class="box" id="lightbox"></div>
-  <div class="box" id="objbox"><div class="line mini"><button id="d3" aria-pressed="false" title="Everyone as their 3D mannequin or model, to move and pose">🧍3D</button><button id="d2" aria-pressed="true" title="Everyone as their rendered picture">📸2D</button><button id="rall">▶ Render all</button><button id="rscene" title="Render Scene: all of it painted as one picture">🎬 Render Scene</button><button id="add" title="Add a character">＋🧍</button><button id="addo" title="Add an object">＋🪑</button></div><input id="sdesc" placeholder="📝 Describe the scene, e.g. 2 girls having a conversation" style="width:100%;margin-top:6px"><p class="note" id="sdtags"></p><p class="note" id="allmsg"></p><div class="list" id="objs"></div></div>
+  <div class="box" id="objbox"><div class="line mini"><button id="d3" aria-pressed="false" title="Everyone as their 3D mannequin or model, to move and pose">🧍3D</button><button id="d2" aria-pressed="true" title="Everyone as their rendered picture">📸2D</button><button id="rall">▶ Render all</button><button id="rscene" title="Render Scene: all of it painted as one picture">🎬 Render Scene</button><button id="rblend" aria-pressed="true" title="After the characters' own passes, a light pass over everything (0.25) so it blends together">🎞 Blend</button><button id="add" title="Add a character">＋🧍</button><button id="addo" title="Add an object">＋🪑</button></div><input id="sdesc" placeholder="📝 Describe the scene, e.g. 2 girls having a conversation" style="width:100%;margin-top:6px"><p class="note" id="sdtags"></p><p class="note" id="allmsg"></p><div class="list" id="objs"></div></div>
   <div class="box" id="selbox"></div>
 </div>
 <div id="menu" class="modal" hidden><div class="sheet"><div class="bar" style="padding:0"><b style="font-family:var(--display)" id="menuh">☰ Scene</b><button id="menux" style="margin-left:auto">✕</button></div>
@@ -147,7 +147,7 @@ async function pushScene(){ if(!SC) return; if(!PC.url){ $('#saved').textContent
   try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:SC})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
   catch(e){ $('#saved').textContent = 'On this phone'; } }
 function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : POSE ? 'ps' : 'sc'), name:name || WORD + ' ' + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : POSE ? {kind:'pose'} : {}); scenesAll.unshift(s); openScene(s); changed(); }
-function openScene(s){ SC = s; if(SCN) s.d3 = true; VIMG = ''; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawLightBox(); drawFinal(); showImg(''); drawDesc(); dirty = true; }
+function openScene(s){ SC = s; if(SCN) s.d3 = true; drawBlend(); VIMG = ''; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawLightBox(); drawFinal(); showImg(''); drawDesc(); dirty = true; }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
@@ -174,7 +174,8 @@ let sdT = null;
 async function drawDesc(){ const t = (SC && SC.desc) || ''; if(document.activeElement!==$('#sdesc')) $('#sdesc').value = t; $('#sdtags').textContent = t.trim() && !POSE ? '→ ' + (await tagsOf(t)) : ''; }
 $('#sdesc').oninput = e => { if(!SC) return; SC.desc = e.target.value; changed(); clearTimeout(sdT); sdT = setTimeout(drawDesc, 600); };
 function showImg(u){ VIMG = u || ''; const im = $('#viewimg'); if(VIMG) im.src = VIMG; else im.removeAttribute('src'); im.hidden = !VIMG; drawViews(); dirty = true; }
-$('#rscene').onclick = () => renderScene();
+$('#rscene').onclick = () => renderScene(); $('#rblend').onclick = () => { if(!SC) return; SC.blend = SC.blend===false; drawBlend(); changed(); };
+const drawBlend = () => $('#rblend').setAttribute('aria-pressed', !!SC && SC.blend!==false);
 $('#new').onclick = () => { const n = prompt('Name for the new ' + WORD.toLowerCase(), WORD + ' ' + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
 $('#ren').onclick = () => { if(!SC) return; const n = prompt('Rename this ' + WORD.toLowerCase(), SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
 $('#del').onclick = async () => { if(!SC || !confirm(ENV ? 'Delete the environment "' + SC.name + '"? Scenes that use it lose their background.' : 'Delete the ' + WORD.toLowerCase() + ' "' + SC.name + '"? The characters in it stay in the library.')) return; const id = SC.id;
@@ -1166,6 +1167,7 @@ function groundWords(env){ const g = env.ground || {}; if(g.on===false) return '
 // minus anyone standing in front of her) is repainted at 0.5 with ONLY her LoRA, and her face fixed. 🖌 Repaint just her redoes
 // that one pass on the last render, from the same masks (worked out again from the scene, so nothing may move in between).
 const RS_DN = 0.5, // her own pass (Jordan 2026-10-29: 0.5 is the sweet spot)
+      RS_BLEND = 0.25, // 🎞 the blend over everything at the end (Jordan 2026-10-29: on by default at 0.25)
       RS_AREA = 1048576, RS_UP = 1.5; // painted at about a megapixel (what Illustrious paints best), then 1.5× before the passes
 const SCN = SCM && !POSE; // (the 🎬 Scene tab itself: no picture cards there any more, everyone is their mannequin)
 function sceneHide(){ const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
@@ -1247,10 +1249,8 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
     const style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)); if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
-    // the first painting: everyone's LoRA on the whole model, a little softer when there are two or more (each file once: two of the same
-    // character loaded hers twice and washed it out, Jordan 2026-10-29); her own pass afterwards brings her back at full strength
-    const cl0 = chars.filter(o => o.e.lora && K.los.includes(o.e.lora)).filter((o, i, a) => a.findIndex(x => x.e.lora===o.e.lora)===i), cw = cl0.length > 1 ? 0.75 : 1;
-    for(const o of cl0){ const w = (+o.e.strength || 1) * cw, id = add('LoraLoader', {model, clip, lora_name:o.e.lora, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
+    // the first painting has the style LoRA only (Jordan 2026-10-29: Ellen got a random braid with every character's LoRA on the whole
+    // picture): each character's LoRA goes on only in her own pass, inside her mask
     const sw = style && /afkj/i.test(style) ? 'AFKJ Style, ' : '', region = (text, i) => add('ConditioningSetMask', {conditioning:[add('CLIPTextEncode', {clip, text}), 0], mask:[add('ImageToMask', {image:[add('LoadImage', {image:mn[i]}), 0], channel:'red'}), 0], strength:1, set_cond_area:'default'});
     const words = []; for(const o of items) words.push(await rsWords(o, sw)); const conds = words.map((t, i) => region(t + ', masterpiece, best quality, amazing quality', i));
     const bw = [sw.replace(/, $/, ''), (env.words || '').trim().replace(/,\s*$/, ''), env.ground ? groundWords(env) : '', 'scenery', 'masterpiece, best quality, amazing quality'].filter(Boolean).join(', ');
@@ -1268,8 +1268,13 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     // then each character's own pass, the farthest first (so whoever is nearer is painted last, on top)
     if(K.dfe && chars.length){ const T = rsTools(add, K); items.map((o, i) => i).filter(i => rsChars([items[i]]).length).sort((a, b) => front[b].d - front[a].d)
         .forEach(i => { out = herPass(add, K, ck, out, items[i], words[i], mn[i], fn[i], FH, seed + 1 + i, T.sam, T.det, chars.length); }); }
+    // 🎞 Blend (Jordan 2026-10-29): the whole picture once more, lightly, with the same regions and the style LoRA only, no ControlNet,
+    // so light and edges melt together after the separate passes (light, so it doesn't pull them away from their own LoRAs)
+    const blend = SC.blend!==false && !!(K.dfe && chars.length);
+    if(blend){ const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, bl = add('KSampler', {model, seed:seed + 99, steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
+        latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_BLEND}); out = [add('VAEDecodeTiled', {samples:[bl, 0], vae:[ck, 2], ...TILE}), 0]; }
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    const imgs = await runGraph(url, g, save, t => msg('🎬 Painting the scene' + (K.dfe && chars.length ? ', then each character in her own pass,' : '') + ' on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
+    const imgs = await runGraph(url, g, save, t => msg('🎬 Painting the scene' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + ' on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
     SC.scene = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now(), W:FW, H:FH, key, who:chars.map(o => o.ob.id)};
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
     addRender('scene', SC.scene); changed(); showImg(shotUrl(SC.scene)); drawSel();
@@ -1398,9 +1403,9 @@ stage.addEventListener('pointerdown', e => { if(!ENV || !painting || pId!==null)
 stage.addEventListener('pointermove', e => { if(!ENV || !painting || e.pointerId!==pId) return; e.stopImmediatePropagation(); paintAt(e); }, true);
 const pEnd = e => { if(e.pointerId!==pId) return; e.stopImmediatePropagation(); pId = null; changed(); };
 stage.addEventListener('pointerup', pEnd, true); stage.addEventListener('pointercancel', pEnd, true);
-if(ENV){ ['#add', '#rall', '#rscene', '#d3', '#d2', '#rlibb', '#allmsg', '#sdesc'].forEach(k => { $(k).hidden = true; }); document.title = 'Environment'; }
+if(ENV){ ['#add', '#rall', '#rscene', '#rblend', '#d3', '#d2', '#rlibb', '#allmsg', '#sdesc'].forEach(k => { $(k).hidden = true; }); document.title = 'Environment'; }
 if(SCN) ['#d3', '#d2', '#rall', '#bgnew'].forEach(k => { $(k).hidden = true; }); // (no picture cards in the Scene tab any more: one 🎬 Render Scene)
-if(POSE){ ['#addo', '#rall', '#rscene', '#d3', '#d2', '#rlibb', '#allmsg', '#envbox', '#lightbox', '#bgnew'].forEach(k => { $(k).hidden = true; }); document.title = 'Pose Creator';
+if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#d3', '#d2', '#rlibb', '#allmsg', '#envbox', '#lightbox', '#bgnew'].forEach(k => { $(k).hidden = true; }); document.title = 'Pose Creator';
   $('#sdesc').placeholder = '📝 Describe the action, e.g. jumping, kicking, looking back over her shoulder'; $('#add').textContent = '＋🧍 Load her rig'; }
 // ---- start: the library (for the references), the scenes, the last one open
 (async function start(){ $('#msg').textContent = 'Opening your ' + WORD.toLowerCase() + 's…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
