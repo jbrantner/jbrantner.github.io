@@ -33,7 +33,7 @@ const fs = require('fs'), path = require('path');
   await page.waitForTimeout(300);
   const c = await page.evaluate(() => JSON.parse(JSON.stringify(ccChar())));
   ok(/mq_00002_/.test(c.ref) && c.body.cm===152 && c.body.bust===1.4 && c.tags==='1girl, solo, large breasts, short hair, bob cut, blunt bangs, silver hair, blue eyes, white blouse, black pleated skirt' && c.hair.style==='bob' && c.mqDesc==='silver hair, blue eyes, white blouse, black pleated skirt' && await page.evaluate(() => $('#ccmq').hidden), '✓ Use this one: her picture, shape and tags come back and the mannequin closes: ' + c.tags);
-  ok(await page.evaluate(() => /152 cm · head 105% · bust 140% · hips 110% · 💇 bob/.test($('.ccstep[data-cstep="ref"]').textContent) && /Back to the mannequin/.test($('[data-cc="mq"]').textContent)), 'step 1 shows her shape and goes back to the mannequin');
+  ok(await page.evaluate(() => /5′ 0″ \(152 cm\) · head 105% · bust 140% · hips 110% · 💇 bob/.test($('.ccstep[data-cstep="ref"]').textContent) && /Back to the mannequin/.test($('[data-cc="mq"]').textContent)), 'step 1 shows her shape and goes back to the mannequin');
   if(process.env.SHOT) await page.screenshot({path:path.join(process.env.SHOT, 'ccmq-step1.png'), fullPage:true});
   ok(await page.evaluate(() => /doesn’t zoom out/.test($('.ccstep[data-cstep="full"]').textContent) && /eye level/.test($('.ccstep[data-cstep="turn"]').textContent)), 'steps 2 and 4 say what happens: no zoom-out, eye level only');
   // ✕ Close from the page

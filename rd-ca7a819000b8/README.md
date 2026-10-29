@@ -405,3 +405,5 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 - Fixed from v.284: the project row under the preview never showed (a comment swallowed the line that shows it).
 
 **v.291 (2026-10-29): polish pass, part 3.** 📖 Comic: reading the script no longer pops a toast that repeats the "That's N panels" line on the page (only "N pages added" when a script makes several pages); the panel's 🎨 Its full recipe note no longer mentions the removed Change angle / Edit pose.
+
+**v.292 (2026-10-29)**: 📏 Height in feet and inches on the mannequin page (4′ 6″ to 6′ 3″, shown with cm), always on show above her body tags. Picking another body tag keeps it. 🎬 Scene now stands a character with a mannequin at that height (before, it sized her from her pictures), so short and tall characters stand right beside each other. Library cards show it as 5′ 9″ (175 cm).
