@@ -56,7 +56,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 <div class="cols">
   <div class="box" id="envbox"></div>
   <div class="box" id="lightbox"></div>
-  <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="rall">▶ Render all</button><button id="rscene">🎬 Render Scene</button><select id="rsdn" title="How much Render Scene repaints"><option value="0.5">Strength 0.5</option><option value="0.6">Strength 0.6</option><option value="0.7">Strength 0.7</option></select></div><div id="final"></div><p class="note" id="allmsg">▶ Render all redraws every pick in high res, paints the 🌄 background from the 📷 Camera, and lays everyone over it into one finished picture.</p><div class="list" id="objs"></div>
+  <div class="box"><h2>Objects<button id="add">＋ Character</button><button id="addo">＋ Object</button></h2><div class="line"><button id="rall">▶ Render all</button><button id="rscene">🎬 Render Scene</button></div><div id="final"></div><p class="note" id="allmsg">▶ Render all redraws every pick in high res, paints the 🌄 background from the 📷 Camera, and lays everyone over it into one finished picture.</p><div class="list" id="objs"></div>
     <p class="note">Tap a name to select it; only the selected one moves. Drag it in any view: Front and Side move it sideways and up, Top, Camera and Free slide it over the floor.</p></div>
   <div class="box" id="selbox"></div>
 </div>
@@ -119,8 +119,6 @@ const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }cat
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
 $('#rall').onclick = () => renderAll(); $('#rscene').onclick = () => renderScene();
-// Render Scene's strength (Jordan 2026-10-29: try it higher), remembered on this phone
-try{ const v = localStorage.getItem('rd-rs-dn'); if(v) $('#rsdn').value = v; }catch(e){} $('#rsdn').onchange = () => { try{ localStorage.setItem('rd-rs-dn', $('#rsdn').value); }catch(e){} };
 $('#new').onclick = () => { const n = prompt(ENV ? 'Name for the new environment' : 'Name for the new scene', (ENV ? 'Environment ' : 'Scene ') + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
 $('#ren').onclick = () => { if(!SC) return; const n = prompt(ENV ? 'Rename this environment' : 'Rename this scene', SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
 $('#del').onclick = async () => { if(!SC || !confirm(ENV ? 'Delete the environment "' + SC.name + '"? Scenes that use it lose their background.' : 'Delete the scene "' + SC.name + '"? The characters in it stay in the library.')) return; const id = SC.id;
@@ -797,7 +795,8 @@ async function compose(msg){ const bg = SC.bg, im = await loadImg(shotUrl(bg)), 
 // (ControlNet ProMax) hold the layout; then 2× in tiles, gently
 // Each one's own LoRA only in her region (hook LoRAs) is off: on Render's 8 GB at 1536² it ran ~80 s a step (Jordan's first try, 2026-10-28);
 // her LoRA goes on the whole model instead, and her words still go to her region only
-const RS_DN = 0.5, RS_HI = 0.25, RS_AREA = 1536 * 1536; // (Jordan 2026-10-28: Illustrious holds up at about 1536² with the VAE tiled)
+const RS_DN = 0.5, // (Jordan tried 0.6 2026-10-29: 0.5 is the sweet spot, and asked for no strength picker)
+      RS_HI = 0.25, RS_AREA = 1536 * 1536; // (Jordan 2026-10-28: Illustrious holds up at about 1536² with the VAE tiled)
 const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8};
 function sceneHide(){ const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
   for(const o of OBJ.values()) [o.card, o.ghost, o.disc, o.label, o.missing, o.shd].forEach(hide); [camRig, pgrid, grid, axX, axZ, sunMark, catcher].forEach(hide); return hid; }
@@ -858,7 +857,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     let ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.5, start_percent:0, end_percent:0.7, vae:[ck, 2]});
     if(pn) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:0.6, start_percent:0, end_percent:0.7, vae:[ck, 2]});
     const lat = add('VAEEncodeTiled', {pixels:[add('ImageScale', {image:[add('LoadImage', {image:flat}), 0], upscale_method:'lanczos', width:W, height:H, crop:'disabled'}), 0], vae:[ck, 2], ...TILE});
-    const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:+$('#rsdn').value || RS_DN});
+    const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:RS_DN});
     let out = [add('VAEDecodeTiled', {samples:[ks, 0], vae:[ck, 2], ...TILE}), 0];
     if(K.usu && window.RS_UPSCALE){ const all = add('CLIPTextEncode', {clip, text:[...words, bw].join(', ')}); out = hiTiles(add, out, model, all, neg, ck, K.cfx, RS_HI); } // (Jordan 2026-10-28: one render, no 2×, until it's worth it)
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
@@ -936,7 +935,7 @@ stage.addEventListener('pointerdown', e => { if(!ENV || !painting || pId!==null)
 stage.addEventListener('pointermove', e => { if(!ENV || !painting || e.pointerId!==pId) return; e.stopImmediatePropagation(); paintAt(e); }, true);
 const pEnd = e => { if(e.pointerId!==pId) return; e.stopImmediatePropagation(); pId = null; changed(); };
 stage.addEventListener('pointerup', pEnd, true); stage.addEventListener('pointercancel', pEnd, true);
-if(ENV){ $('#add').hidden = true; $('#rall').parentNode.hidden = true; $('#rscene').hidden = true; $('#rsdn').hidden = true; $('#allmsg').hidden = true; document.title = 'Environment'; }
+if(ENV){ $('#add').hidden = true; $('#rall').parentNode.hidden = true; $('#rscene').hidden = true; $('#allmsg').hidden = true; document.title = 'Environment'; }
 // ---- start: the library (for the references), the scenes, the last one open
 (async function start(){ $('#msg').textContent = ENV ? 'Opening your environments…' : 'Opening your scenes…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
   SC = null; const last = scenesAll.find(s => s.id===ui.scene) || scenesAll[0]; if(last) openScene(last); else newScene(ENV ? 'Environment 1' : 'Scene 1');
