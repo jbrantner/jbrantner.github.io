@@ -151,8 +151,17 @@ const DEPS = process.env.RIG_DEPS || '';
       ok(GRAPHS.length===n0 + 1 && UPS.length===u0 + 1 && /^rd-scene-hi-/.test(UPS[UPS.length - 1].name) && sc && sc.inputs.scale_by===2 && up && up.inputs.denoise===0.35 && cls.includes('LoraLoader') && cls.includes('RenderDeckUpscaleColorFix') && cls.includes('RemoveBackground') && !cls.includes('KSampler') && !cls.includes('EmptyLatentImage'),
         '⤴ High res sends her pick, 2× in tiles at 0.35 with her LoRA (Keep colours), cut out again: ' + JSON.stringify({cls}));
       ok(hs.hi==='ellie_0.png' && hs.tryHi && /✓ High res/.test(hs.btn) && hs.dis, '⤴ the high-res picture replaces the pick (and stays on that try): ' + JSON.stringify(hs));
+      await page.evaluate(() => { SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie').pose = 'sit'; }); // (her pick was painted sitting: ▶ Render all keeps a pick only while her pose still matches)
       const n1 = GRAPHS.length; await page.click('#rall'); await page.waitForFunction(() => /Every pick is high res/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:15000});
-      ok(GRAPHS.length===n1 && /Pick a 🌄 Environment/.test(await page.textContent('#allmsg')), '▶ Render all skips picks that are already high res (and asks for an environment): ' + await page.textContent('#allmsg')); }
+      ok(GRAPHS.length===n1 && /Pick a 🌄 Environment/.test(await page.textContent('#allmsg')), '▶ Render all skips picks that are already high res (and asks for an environment): ' + await page.textContent('#allmsg')); 
+      // 🧍 3D / 📸 2D (Jordan 2026-10-29): 3D shows her mannequin; ▶ Render all brings her picture back while it still fits her spot and pose
+      await page.click('#d3'); await page.waitForTimeout(300);
+      const d3 = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'), o = SCENE.objs.get(ob.id); SCENE.placeCams(SCENE.rects()); SCENE.poseFor('cam'); return {d3:SCENE.sc.d3, mq:o.mq.visible, shot:o.shot.visible, p3:document.querySelector('#d3').getAttribute('aria-pressed')}; });
+      const n2 = GRAPHS.length; await page.click('#rall'); await page.waitForFunction(() => /Every pick is high res/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:15000});
+      const d2 = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'), o = SCENE.objs.get(ob.id); SCENE.poseFor('cam'); const fit = SCENE.shotFits(ob); ob.x += 0.5; const moved = SCENE.shotFits(ob); ob.x -= 0.5;
+        return {d3:SCENE.sc.d3, mode:ob.mode, file:ob.shot && ob.shot.file, shot:o.shot.visible, fit, moved, p2:document.querySelector('#d2').getAttribute('aria-pressed')}; });
+      ok(d3.d3 && d3.mq && !d3.shot && d3.p3==='true' && GRAPHS.length===n2 && !d2.d3 && d2.mode==='shot' && d2.file==='ellie_1.png' && d2.shot && d2.fit && !d2.moved && d2.p2==='true',
+        '🧍 3D shows her mannequin; ▶ Render all goes back to 📸 2D with her pick (it still fits), and moving her makes it not fit: ' + JSON.stringify({d3, d2})); }
     await page.evaluate(() => { SCENE.sc.objs.forEach(o => { o.hide = false; if(o.mode) o.mode = 'pics'; }); }); }
   // 🕹 Free shows each picture as the 📷 Camera sees it: the same picture, flat, facing the Camera, not turning to Free
   const fr = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); ob.x = 0; ob.z = 0; ob.rot = 0; const o = SCENE.objs.get(ob.id);
