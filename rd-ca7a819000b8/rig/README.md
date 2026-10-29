@@ -54,6 +54,10 @@ Standalone for now; it will fold into Render Deck later. Copyright (c) 2026 Jord
 
 - 2026-10-23: `RIG.poseFromPicture(url, pc)` copies a picture's pose (DWPose on that PC first, else MediaPipe on the phone), for Render Deck's 🧊 Make 3D.
 
+## Pose (`pose.html`)
+
+The 🤸 Pose tab (2026-10-29). One full 3D view and three steps: **1 Make** (describe the pose; Z-Image Turbo paints 4 real people, ＋ 4 more; pick one and **Create pose**: SAM 3D Body turns it into a skinned 3D body), **2 Tweak** (drag the dots: pink hands/feet reach with two-bone IK, blue swings arms/legs, yellow tips head/chest; Undo, back to the picture's pose, head size), **3 Render** (a library character or your own words, painted with Illustrious over the body's depth and an OpenPose skeleton from its bones, from the angle you're looking at). 💾 Save puts it in the pose library (kind `posebook` in the helper's scenes store, with a thumbnail). Test: `tests/t_posepage.js` (needs `RIG_DEPS` and `SAM_GLB`, a body GLB from SAM 3D Body).
+
 ## Scene (`scene.html`)
 
 Render Deck's 🎬 Scene tab: a saved 3D space with Character Library characters placed as references (resolved from
