@@ -71,14 +71,14 @@ background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 0 0
 #pick .chars img{display:block;width:100%;height:150px;object-fit:contain;background:#fff}
 #pick .chars span{display:block;padding:4px 6px;font-weight:700;font-size:13px}
 /* 🤸 Pose Creator (Jordan 2026-10-29): the rig full screen; her settings tucked behind ⚙ Panel */
-#pzbar{position:absolute;left:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));display:flex;gap:6px;z-index:3}#pzbar[hidden]{display:none}#pzbar button{background:rgba(23,24,28,.85);font-weight:700}
+#pzbar{position:absolute;left:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));display:flex;gap:6px;z-index:3}#pzbar[hidden]{display:none}#pzbar button{background:rgba(23,24,28,.85);font-weight:700}#pzmsg{position:absolute;left:8px;right:8px;bottom:calc(54px + env(safe-area-inset-bottom,0px));z-index:3;background:rgba(23,24,28,.92);border:1px solid #33343c;border-radius:8px;padding:7px 10px;font-size:13px;line-height:1.35}#pzmsg[hidden]{display:none}#pzmsg i{display:block;height:3px;background:#ff5ca8;margin-top:6px;border-radius:2px;transition:width .8s linear}#pzmsg i[hidden]{display:none}
 body.pz.pzc .cols{display:none}body.pz .cols{bottom:calc(58px + env(safe-area-inset-bottom,0px))}
 </style></head>
 <body>
 <div class="hud"><div class="bar"><select id="scenes" aria-label="Scene"></select><span class="saved" id="saved"></span><button id="menub" aria-label="Menu">☰</button></div>
 <div class="views" role="tablist"><button data-v="cam">📷 Camera</button><button data-v="persp">🕹 Free</button><button id="orthob" aria-label="Flat views">📐</button><button id="rlibb">🖼 Renders</button></div>
 <div id="ortho" hidden><button data-v="front">Front</button><button data-v="side">Side</button><button data-v="top">Top</button><button data-v="quad">⊞ All 4</button></div></div>
-<div id="stage"><img id="viewimg" hidden alt="A render"><video id="viewvid" hidden muted playsinline preload="auto" crossorigin="anonymous"></video><div id="msg"></div><div id="pzbar" hidden><button id="pzundo" disabled>↶ Undo</button><button id="pzpanel" aria-pressed="false">⚙ Panel</button></div><div id="camctl" hidden><button id="camlock"></button><button id="camcopy">⤓ Free view’s angle</button></div></div>
+<div id="stage"><img id="viewimg" hidden alt="A render"><video id="viewvid" hidden muted playsinline preload="auto" crossorigin="anonymous"></video><div id="msg"></div><div id="pzmsg" hidden><span></span><i hidden></i></div><div id="pzbar" hidden><button id="pzundo" disabled>↶ Undo</button><button id="pzpanel" aria-pressed="false">⚙ Panel</button></div><div id="camctl" hidden><button id="camlock"></button><button id="camcopy">⤓ Free view’s angle</button></div></div>
 <div class="cols">
   <div class="box" id="envbox"></div>
   <div class="box" id="lightbox"></div>
@@ -682,6 +682,13 @@ let camT = 0; function saveCams(){ clearTimeout(camT); camT = setTimeout(() => {
 // paints her over it from the camera you are looking through (depth + skeleton of the mannequin alone, on white, her LoRA),
 // four tries, cut out; the one picked stands in the scene as her picture from then on, until you go back to the mannequin
 const BUSY = new Set(), RMSG = new Map(); // a render on its way, and what it last said, per character (not saved with the scene)
+// 🤸 the rig fills the screen, so what a job says also shows on the stage, with a bar (Jordan 2026-10-29: Move into the pose showed nothing)
+let pzHide = 0; RMSG.set = function(k, v){ Map.prototype.set.call(this, k, v); pzMsg(k); return this; };
+function pzMsg(k){ const el = $('#pzmsg'); if(!POSE || !el) return; const m = RMSG.get(k) || '', bar = el.querySelector('i'); clearTimeout(pzHide);
+  el.querySelector('span').textContent = m; el.hidden = !m;
+  const t = +((/… (\d+) s/.exec(m) || [])[1]), est = /2 of 2/.test(m) ? 230 : /1 of 2/.test(m) ? 70 : /MiniMax/.test(m) ? 380 : 60;
+  bar.hidden = !(t >= 0) || isNaN(t); if(!bar.hidden) bar.style.width = Math.min(96, 4 + 92 * t / est) + '%';
+  if(m && isNaN(t) && !BUSY.has(k)) pzHide = setTimeout(() => { el.hidden = true; }, 12000); }
 const modeOf = ob => SC && SC.d3 ? 'mq' : ob.mode==='shot' && ob.shot ? 'shot' : window.SHOW_PICS && ob.mode!=='mq' ? 'pics' : 'mq'; // Jordan 2026-10-28: in a scene she is only 🧍 Mannequin (the default) or 📸 Rendered
 const shotKey = ob => JSON.stringify([SC.cam || camState(), +(ob.x || 0).toFixed(2), +(ob.z || 0).toFixed(2), +(ob.y || 0).toFixed(2), ob.rot || 0, ob.s || 1, ob.pose || 'stand'].concat(ob.bq ? [ob.bq] : []));
 const shotFits = ob => !!ob.shot && (!ob.shot.key || ob.shot.key===shotKey(ob)); // (picks from before v.253 have no key: kept)
@@ -798,7 +805,7 @@ async function renderAngle(ob, free){ const o = OBJ.get(ob.id), e = o && o.e, st
     for(const [l, w] of lorasOf(E, los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
     const pos0 = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, los, await ownTags(ob, free), free)}), neg0 = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '') + (free ? FREE_NEG : '')}), L = free ? null : add('ControlNetLoader', {control_net_name:cn});
     let pos = [pos0, 0], neg = [neg0, 0];
-    for(const [img, type, str, end] of free ? [] : E.obj ? [[dn, 'depth', 0.7, 0.7]] : (POSE /* 🤸 held harder to her rig (Jordan 2026-10-29, it wasn't following the poses); 🌿 Natural lets go earlier so she relaxes */ ? (SC.loose ? [[pn, 'openpose', 1, 0.55], [dn, 'depth', 0.6, 0.35]] : [[pn, 'openpose', 1, 0.85], [dn, 'depth', 0.75, 0.75]]) : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]])){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
+    for(const [img, type, str, end] of free ? [] : E.obj ? [[dn, 'depth', 0.7, 0.7]] : (POSE /* 🤸 the rig sets the pose, then lets go half way so she relaxes (Jordan 2026-10-29: held to the end was stiff) */ ? [[pn, 'openpose', 1, 0.55], [dn, 'depth', 0.6, 0.35]] : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]])){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:E.obj ? [add('RepeatLatentBatch', {samples:[add('VAEEncode', {pixels:[add('LoadImage', {image:cl}), 0], vae:[ck, 2]}), 0], amount:4}), 0] : [add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:E.obj ? OBJ_DN : 1}); // 🪑 an object starts from its own colours
     let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0];
     if(fd && ud && !E.obj) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, sam);
@@ -972,9 +979,9 @@ async function orbResume(ob){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(o
 // painted from the 📷 Camera (her LoRA, held to the rig), then MiniMax FL2V films her from it into the rig's pose, the Fun ControlNet
 // steering it loosely with a skeleton video that eases from the A pose into the pose and holds it. 4 frames from the end come back as
 // tries to pick from (⤴ High res cleans one up). One frame (crop) round both poses, so the video and the tries line up with her rig.
-const MOVE_AT = 96, MOVE_CN = {strength:0.7, end:0.7}, MOVE_PICK = [100, 108, 116, 123];
-const movePrompt = d => 'The first frame shows the character standing in an A pose, full body, on a plain white background. [0s-4s] She moves smoothly and naturally into her pose' + ((d || '').trim() ? ': ' + d.trim().replace(/[.!]+$/, '') : '')
-  + ', with relaxed, natural body language, [4s-5s] then holds the pose. Steady camera, no camera movement, the same framing as the first frame, her whole body always inside the frame. Same character, same face, same outfit, same art style, plain white background. No cuts.';
+const MOVE_LEN = 80, MOVE_AT = 60, MOVE_CN = {strength:0.7, end:0.7}, MOVE_PICK = [63, 69, 74, 79]; // a shorter clip than Act it out: about a third quicker (Jordan 2026-10-29)
+const movePrompt = d => 'The first frame shows the character standing in an A pose, full body, on a plain white background. [0s-2.5s] She moves smoothly and naturally into her pose' + ((d || '').trim() ? ': ' + d.trim().replace(/[.!]+$/, '') : '')
+  + ', with relaxed, natural body language, [2.5s-3.3s] then holds the pose. Steady camera, no camera movement, the same framing as the first frame, her whole body always inside the frame. Same character, same face, same outfit, same art style, plain white background. No cuts.';
 function aviMjpeg(frames, w, h, fps){ // (Motion-JPEG in an AVI, as the main app sends its skeleton spins)
   const pad = n => n + (n & 1), movi = frames.reduce((t, f) => t + 8 + pad(f.length), 4), hdrl = 4 + 64 + 12 + 64 + 48, idx = 16 * frames.length;
   const total = 12 + 8 + hdrl + 8 + movi + 8 + idx, buf = new Uint8Array(total), dv = new DataView(buf.buffer); let p = 0;
@@ -998,14 +1005,14 @@ async function moveFrames(o, a, b, geo, W, H){ const c = o.mq.userData.body, P =
   const ob = o.ob, camAt = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(geo.mw)), Y = new THREE.Vector3(0, 1, 0), toCam = camAt.sub(new THREE.Vector3(ob.x, ob.y + 1.5, ob.z)).normalize();
   const face = new THREE.Vector3(0, 0, 1).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam), ear = new THREE.Vector3(1, 0, 0).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam);
   show[0] = show[14] = show[15] = face > -0.15; show[16] = ear < 0.35; show[17] = ear > -0.35;
-  for(let f = 0; f < ACT_LEN; f++){ const t0 = Math.min(1, f / MOVE_AT), t = t0 * t0 * (3 - 2 * t0);
+  for(let f = 0; f < MOVE_LEN; f++){ const t0 = Math.min(1, f / MOVE_AT), t = t0 * t0 * (3 - 2 * t0);
     for(const [id, qa] of Object.entries(a.q)){ const bn = byId[id], qb = b.q[id]; if(bn && qb) bn.quaternion.copy(qa).slerp(qb, t); }
     c.position.copy(a.p).lerp(b.p, t); o.g.updateMatrixWorld(true);
     const pts = bodyJoints(o.mq, BODY.face).map(p => { const [x, y] = P.toPx(p); return [x * sx, y * sy]; });
     const cv = drawPose(W, H, pts, show), bl = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9)); out.push(new Uint8Array(await bl.arrayBuffer())); if(f % 16===15) await new Promise(r => setTimeout(r, 0)); }
   o.mq.userData.pose = null; poseFor('cam'); return out; }
 async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
-  if(!e || !PC.url || BUSY.has(ob.id)) return; if(!(o.mq && o.mq.userData.body && BODY && BODY.face)) return st('Her rig (the base body) has not loaded from Render.');
+  if(!e || BUSY.has(ob.id)) return; if(!PC.url) return st('No PC is online: start Render, then try again.'); if(!(o.mq && o.mq.userData.body && BODY && BODY.face)) return st('Her rig (the base body) has not loaded from Render.');
   BUSY.add(ob.id); drawSel();
   try{ st('Looking for a PC with MiniMax, its pose ControlNet and DWPose…'); const k = await actKit(); if(!k) throw new Error('No PC has MiniMax H3 FL2V (it is on Render).');
     const cnf = (await comboOf(k.url, 'ModelPatchLoader', 'name')).find(n => /minimax_h3_fun_controlnet/i.test(n)); if(!cnf || !(await hasNode(k.url, 'MiniMaxH3FunControlNetApply')) || !(await hasNode(k.url, 'LoadVideo'))) throw new Error(pcName(k.url) + " hasn't got MiniMax's pose ControlNet (🧊 Make 3D settings can fetch it).");
@@ -1038,7 +1045,7 @@ async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg =>
     const li = ad('LoadImage', {image:up}); let mm = [ad('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0]; if(k.lora) mm = [ad('LoraLoaderModelOnly', {model:mm, lora_name:k.lora, strength_model:1}), 0];
     const cl = ad('CLIPLoader', {clip_name:k.clip, type:'minimax', device:'default'}), va = ad('VAELoader', {vae_name:k.vae});
     mm = [ad('MiniMaxH3FunControlNetApply', {model:mm, model_patch:[ad('ModelPatchLoader', {name:cnf}), 0], vae:[va, 0], strength:MOVE_CN.strength, start_percent:0, end_percent:MOVE_CN.end, control_video:[ad('GetVideoComponents', {video:[ad('LoadVideo', {file:ctl}), 0]}), 0]}), 0];
-    const iv = ad('MiniMaxH3ImageToVideo', {clip:[cl, 0], vae:[va, 0], prompt:movePrompt(SC.desc), width:Wv, height:Hv, length:ACT_LEN, first_frame:[li, 0]});
+    const iv = ad('MiniMaxH3ImageToVideo', {clip:[cl, 0], vae:[va, 0], prompt:movePrompt(SC.desc), width:Wv, height:Hv, length:MOVE_LEN, first_frame:[li, 0]});
     const gd = ad('BasicGuider', {model:mm, conditioning:[iv, 0]}), sc = ad('BasicScheduler', {model:mm, scheduler:'simple', steps:k.steps, denoise:1});
     const smp = ad('SamplerCustomAdvanced', {noise:[ad('RandomNoise', {noise_seed:Math.floor(Math.random() * 1e9)}), 0], guider:[gd, 0], sampler:[ad('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sc, 0], latent_image:[iv, 1]});
     const dec = ad('VAEDecodeTiled', {samples:[smp, 0], vae:[va, 0], tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), pre = (HID ? 'Hidden' : 'RenderDeck') + '/pose/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_move';
@@ -1304,8 +1311,7 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     ${SCM && e ? '' : e ? (it ? `<p class="note">From the 📚 Library: ${esc(e.name)}, ${esc(String(e.height || 1))} m tall (× its size here). Re-saving it in the library changes it here too.</p>` : `<p class="note">From the 📚 Library: ${esc(e.name)}${e.lora ? ` · LoRA <b>${esc(String(e.lora).replace(/\.safetensors$/i, ''))}</b>` : ''}. Re-saving her in the library changes her here too.</p>`) : `<p class="warn">${it ? 'It is' : 'She is'} not in the library any more (or the PC is off), so a box stands in.</p>`}
     ${SCM && !POSE ? `<input data-ow placeholder="📝 ${it ? 'Words for it' : 'Words for her'} in this scene, e.g. ${it ? 'old, worn' : 'angry, shouting'}" value="${esc(ob.words || '')}" style="width:100%"><p class="note" data-owt style="margin:3px 2px;font-size:12px"></p>` : ''}
     ${POSE ? '' : `<div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>`}
-    ${POSE && !it && paints ? `<div class="line"><button data-loose="1" aria-pressed="${!!SC.loose}">🌿 Natural</button><button data-loose="0" aria-pressed="${!SC.loose}">🦴 Exact</button></div><p class="note">${SC.loose ? '🌿 The rig sets the pose, then lets go half way so she relaxes (shoulders, back, hands).' : '🦴 She is held to the rig to the end: the exact pose, but as stiff as the rig.'}</p>
-      <div class="line"><button data-act="move" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Move into the pose</button></div><p class="note">MiniMax films her from her A pose moving into this pose (the rig steering it loosely), so she ends up in it naturally. You get 4 frames from the end to pick from (about 6 minutes on Render).</p>` : ''}
+    ${POSE && !it && paints ? `<div class="line"><button data-act="move" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Move into the pose</button></div><p class="note">MiniMax films her from her A pose moving into this pose (the rig steering it loosely), so she ends up in it naturally. You get 4 frames from the end to pick from (about 4 minutes on Render).</p>` : ''}
     ${POSE && !it && paints ? actBox(ob) : ''}
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
     ${POSE ? '' : `<div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>`}
@@ -1328,7 +1334,6 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     if(k==='rot') $('#rotv').textContent = Math.round(v) + '°'; if(k==='s') $('#sv').textContent = Math.round(v * 100) + '%'; changed(); });
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
   box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; if(SC.d3 && ob.mode==='shot'){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
-  box.querySelectorAll('[data-loose]').forEach(b => b.onclick = () => { SC.loose = b.dataset.loose==='1'; drawSel(); changed(); });
   box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; delete ob.bq; drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; if(SC.d3){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='imagine') return renderAngle(ob, true); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='orbit') return orbOut(ob); if(b.dataset.act==='move') return moveInto(ob); if(b.dataset.act==='actout') return actOut(ob); if(b.dataset.act==='vid'){ ob.act.shut = !ob.act.shut; drawSel(); changed(); return; } if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }

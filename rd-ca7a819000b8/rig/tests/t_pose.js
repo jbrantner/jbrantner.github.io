@@ -94,7 +94,7 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.waitForFunction(() => (SCENE.sc.objs[0].tries || []).length===4, null, {timeout:20000});
   const g = GRAPHS[GRAPHS.length - 1], pos = Object.values(g).find(n => n.class_type==='CLIPTextEncode').inputs.text, tr = await page.evaluate(() => SCENE.sc.objs[0].tries[0]);
   const cn = Object.values(g).filter(n => n.class_type==='ControlNetApplyAdvanced').map(n => n.inputs.strength + '/' + n.inputs.end_percent).join(' ');
-  ok(cn==='1/0.85 0.75/0.75', '🤸 the painting is held hard to her rig: OpenPose 1 until 85%, depth 0.75 until 75%: ' + cn);
+  ok(cn==='1/0.55 0.6/0.35', '🤸 the rig sets the pose, then lets go half way (Natural is the only setting): ' + cn);
   ok(/jumping/.test(pos) && !/standing/.test(pos) && /elliex/.test(pos) && tr.pm && tr.pm.length===16 && tr.mw.length===16 && tr.px.length===2, '🎬 the action goes in her prompt (no "standing"), and each try keeps its camera: ' + pos);
   // pick one, then match: DWPose "sees" her waving
   await page.evaluate(() => document.querySelector('[data-try="0"]').click()); await page.waitForTimeout(200);
@@ -174,19 +174,21 @@ const DEPS = process.env.RIG_DEPS || '';
     ok(/360-degree/.test(iv.prompt || '') && iv.last_frame && iv.first_frame && iv.last_frame[0]===iv.first_frame[0] && av.some(n => n.class_type==='DWPreprocessor'), '🔄 one run turns the camera a full circle round her pick (back to it at the end) and DWPose reads the frames');
     ok(/takes the pose/.test(r.msg) && r.mode==='mq' && Math.max(...r.deg) <= 12, '🔄 her rig takes the pose seen from every side: arms and legs within ' + Math.max(...r.deg) + '° (' + r.deg.join(' ') + '): ' + r.msg); }
   // 🌿 Natural / 🦴 Exact, and 🎬 Move into the pose (Jordan 2026-10-29: the pose followed the rig well but was stiff)
-  { await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.pose = 'sit'; delete ob.bq; ob.mode = 'mq'; delete ob.act; SCENE.drawSel(); document.querySelector('[data-loose="1"]').click(); });
+  { await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.pose = 'sit'; delete ob.bq; ob.mode = 'mq'; delete ob.act; SCENE.drawSel(); });
     const n0 = GRAPHS.length; await page.evaluate(() => { document.querySelector('#rmsg').textContent = ''; document.querySelector('[data-act="render"]').click(); });
     await page.waitForFunction(() => /Pick/.test((document.querySelector('#rmsg') || {}).textContent || ''), null, {timeout:20000});
     const cn = Object.values(GRAPHS[n0]).filter(n => n.class_type==='ControlNetApplyAdvanced').map(n => n.inputs.strength + '/' + n.inputs.end_percent).join(' ');
-    ok(cn==='1/0.55 0.6/0.35', '🌿 Natural lets the rig go half way: ' + cn);
-    await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.mode = 'mq'; SCENE.drawSel(); document.querySelector('[data-loose="0"]').click(); });
-    if(process.env.SHOT) await page.evaluate(() => { window.MOVE_DBG = fr => { window.MOVE_FR = [0, 48, 123].map(i => 'data:image/jpeg;base64,' + btoa(String.fromCharCode(...fr[i]))); }; });
-    const n1 = GRAPHS.length; await page.evaluate(() => { document.querySelector('#rmsg').textContent = ''; document.querySelector('[data-act="move"]').click(); });
-    await page.waitForFunction(() => /Done: pick|rror|No PC|hasn't|failed|did not/.test((document.querySelector('#rmsg') || {}).textContent || ''), null, {timeout:60000});
+    ok(cn==='1/0.55 0.6/0.35' && !(await page.$('[data-loose]')), '🌿 natural pose, no Natural/Exact switch: ' + cn);
+    await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.mode = 'mq'; SCENE.drawSel(); });
+    if(process.env.SHOT) await page.evaluate(() => { window.MOVE_DBG = fr => { window.MOVE_FR = [0, 40, 79].map(i => 'data:image/jpeg;base64,' + btoa(String.fromCharCode(...fr[i]))); }; });
+    const n1 = GRAPHS.length; await page.evaluate(() => { document.querySelector('#rmsg').textContent = ''; const b = document.querySelector('[data-act="move"]'); if(!document.body.classList.contains('pzc')) document.querySelector('#pzpanel').click(); b.click(); });
+    await page.waitForFunction(() => /Done: pick/.test(document.querySelector('#pzmsg span').textContent), null, {timeout:60000});
+    ok(await page.evaluate(() => !document.querySelector('#pzmsg').hidden && document.body.classList.contains('pzc')), '🎬 with the panel shut, Move shows what it is doing on the stage');
+    await page.waitForFunction(() => /Done: pick|rror|No PC|hasn't|failed|did not/.test((document.querySelector('#rmsg') || {}).textContent || ''), null, {timeout:60000}); await page.evaluate(() => { if(document.body.classList.contains('pzc')) document.querySelector('#pzpanel').click(); });
     const ga = Object.values(GRAPHS[n1] || {}), gm = Object.values(GRAPHS[n1 + 1] || {}), txtA = (ga.find(n => n.class_type==='CLIPTextEncode') || {inputs:{}}).inputs.text || '';
     const cnA = ga.filter(n => n.class_type==='ControlNetApplyAdvanced').map(n => n.inputs.strength + '/' + n.inputs.end_percent).join(' '), fun = (gm.find(n => n.class_type==='MiniMaxH3FunControlNetApply') || {}).inputs, iv = (gm.find(n => n.class_type==='MiniMaxH3ImageToVideo') || {}).inputs || {};
     const r = await page.evaluate(() => { const ob = SCENE.sc.objs[0]; return {msg:document.querySelector('#rmsg').textContent, tries:(ob.tries || []).length, move:!!(ob.tries || [])[0] && ob.tries[0].move, px:ob.tries && ob.tries[0] && ob.tries[0].px, pose:ob.pose, job:!!ob.moveJob}; });
-    ok(/standing/.test(txtA) && cnA==='1/0.85 0.75/0.75' && fun && fun.strength===0.7 && /^rd-pose-move-.*\.avi$/.test(gm.find(n => n.class_type==='LoadVideo').inputs.file) && iv.length===124 && /A pose/.test(iv.prompt) && gm.filter(n => n.class_type==='ImageFromBatch').map(n => n.inputs.batch_index).join()==='100,108,116,123',
+    ok(/standing/.test(txtA) && cnA==='1/0.85 0.75/0.75' && fun && fun.strength===0.7 && /^rd-pose-move-.*\.avi$/.test(gm.find(n => n.class_type==='LoadVideo').inputs.file) && iv.length===80 && /A pose/.test(iv.prompt) && gm.filter(n => n.class_type==='ImageFromBatch').map(n => n.inputs.batch_index).join()==='63,69,74,79',
       '🎬 Move into the pose: her A pose painted held to the rig, then MiniMax from it with the skeleton video loosely (0.7): ' + JSON.stringify({txtA, cnA, fun:fun && fun.strength}));
     if(process.env.SHOT){ const fr = await page.evaluate(() => window.MOVE_FR); fr.forEach((u, i) => fs.writeFileSync(process.env.SHOT + '/move' + i + '.jpg', Buffer.from(u.split(',')[1], 'base64'))); }
     ok(/Done: pick/.test(r.msg) && r.tries===4 && r.move && r.pose==='sit' && !r.job && r.px[1] > r.px[0], '🎬 4 frames from the end of her move come back as tries, her rig still in the pose: ' + JSON.stringify(r)); }
