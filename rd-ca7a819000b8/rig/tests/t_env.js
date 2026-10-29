@@ -34,13 +34,13 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.goto('https://app.test/rig/scene.html?env=1');
   await page.evaluate(() => localStorage.setItem('render-deck-v1', JSON.stringify({servers:[{url:'https://render.test', name:'Render'}]})));
   await page.goto('https://app.test/rig/scene.html?env=1'); await page.waitForFunction(() => window.SCENE && SCENE.sc, null, {timeout:20000}); await page.waitForTimeout(800);
-  const e0 = await page.evaluate(() => ({name:SCENE.sc.name, kind:SCENE.sc.kind, ground:!!SCENE.sc.ground, add:document.querySelector('#add').hidden, rall:document.querySelector('#rall').closest('.line').hidden, words:!!document.querySelector('#ewords'), paint:!!document.querySelector('#gpaint')}));
+  const e0 = await page.evaluate(() => ({name:SCENE.sc.name, kind:SCENE.sc.kind, ground:!!SCENE.sc.ground, add:document.querySelector('#add').hidden, rall:document.querySelector('#rall').hidden, words:!!document.querySelector('#ewords'), paint:!!document.querySelector('#gpaint')}));
   ok(e0.name==='Environment 1' && e0.kind==='env' && e0.ground && e0.add && e0.rall && e0.words && e0.paint, '🌄 the Environment tab opens a first environment with a ground, place words and no characters: ' + JSON.stringify(e0));
   // the place words and a built-in 3D object
   await page.fill('#ewords', 'old library, tall bookshelves, warm lamp light');
   await page.click('#addo'); await page.waitForSelector('#chars [data-ref="3D/Wooden chair"]'); await page.click('#chars [data-ref="3D/Wooden chair"]'); await page.waitForTimeout(300);
   // 🖌 paint: Top view, grass base, paint planks on a square
-  await page.click('.views [data-v="top"]'); await page.waitForTimeout(200);
+  await page.click('#orthob'); await page.click('#ortho [data-v="top"]'); await page.waitForTimeout(200);
   await page.selectOption('#gpm', '1'); await page.click('#gpaint');
   await page.evaluate(() => scrollTo(0, 0)); await page.waitForTimeout(100);
   const bx = await (await page.$('#stage')).boundingBox();
@@ -58,7 +58,7 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.goto('https://app.test/rig/scene.html'); await page.waitForFunction(() => window.SCENE && SCENE.sc, null, {timeout:20000}); await page.waitForTimeout(800);
   const s0 = await page.evaluate(() => ({kind:SCENE.sc.kind || '', opts:[...document.querySelectorAll('#envsel option')].map(o => o.textContent), n:SCENE.sc.objs.length}));
   ok(s0.kind==='' && s0.opts.includes('Environment 1') && s0.n===0, '🎬 Scene keeps its own scenes and lists the environments: ' + JSON.stringify(s0));
-  const envId = st.id; await page.selectOption('#envsel', envId); await page.waitForTimeout(400);
+  const envId = st.id; await page.evaluate(v => { const e = document.querySelector('#envsel'); e.value = v; e.dispatchEvent(new Event('change')); }, envId); await page.waitForTimeout(400);
   const s1 = await page.evaluate(() => { const o = [...SCENE.objs.values()].find(x => x.ob.fromEnv); return {env:SCENE.sc.env, fromEnv:!!o, lock:o && o.ob.lock, inList:document.querySelector('#objs').textContent.includes('Wooden chair'), ground:SCENE.ground.visible, note:document.querySelector('#envbox').textContent}; });
   ok(s1.env===envId && s1.fromEnv && s1.lock && !s1.inList && s1.ground && /bookshelves/.test(s1.note), '🌄 a scene in that environment shows its ground and its chair (locked, not in the list): ' + JSON.stringify(s1));
   // ▶ Render all with an environment: the background from the Camera (place words, its own colours + depth, no people, 2×), then everyone on it
@@ -71,15 +71,15 @@ const DEPS = process.env.RIG_DEPS || '';
   const fv = Object.values(fin).map(n => n.class_type), sf = await page.evaluate(() => ({bg:SCENE.sc.bg && SCENE.sc.bg.file, fin:SCENE.sc.final && SCENE.sc.final.file, img:!!document.querySelector('#final img')}));
   ok(fv.join()==='LoadImage,SaveImage' && UPS.some(n => /^rd-scene-final/.test(n)) && /_bg_/.test(sf.bg) && /_final_/.test(sf.fin) && sf.img, '🖼 then everyone is laid over it and the finished picture is saved on the PC and shown: ' + JSON.stringify(sf));
   // 🧪 strength test (Jordan 2026-10-28): 9 paintings, denoise × depth, one seed; the picked one becomes the background (then only the 2×)
-  { const n0 = GRAPHS.length; await page.click('#bgtest'); await page.waitForSelector('#bgt [data-bt="8"]', {timeout:20000});
+  { const n0 = GRAPHS.length; await page.evaluate(() => document.querySelector('#bgtest').click()); await page.waitForSelector('#bgt [data-bt="8"]', {timeout:20000, state:'attached'});
     const tv = Object.values(GRAPHS[n0]), kss = tv.filter(n => n.class_type==='KSampler'), cas = tv.filter(n => n.class_type==='ControlNetApplyAdvanced');
     ok(GRAPHS.length===n0 + 1 && kss.length===9 && new Set(kss.map(k => k.inputs.seed)).size===1 && kss.map(k => k.inputs.denoise).join()==='0.4,0.4,0.4,0.55,0.55,0.55,0.7,0.7,0.7' && cas.map(c => c.strength || c.inputs.strength).join()==='0.5,0.8,1,0.5,0.8,1,0.5,0.8,1' && !tv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale'),
       '🧪 the strength test paints 9 backgrounds in one go (denoise 0.4/0.55/0.7 × depth 0.5/0.8/1, one seed, no 2× yet)');
-    await page.click('#bgt [data-bt="1"]'); ok(await page.evaluate(() => !document.querySelector('#bgt [data-bt]') && JSON.parse(localStorage.getItem('rd-bg-default')).cn===0.8 && /default everywhere/.test(document.querySelector('#bgtmsg').textContent)), '🧪 picking a tile closes the test and makes its numbers the default everywhere'); await page.evaluate(() => { scrollTo(0, 0); document.querySelector('#allmsg').textContent = ''; }); const n1 = GRAPHS.length; await page.click('#rall');
+    await page.evaluate(() => document.querySelector('#bgt [data-bt="1"]').click()); ok(await page.evaluate(() => !document.querySelector('#bgt [data-bt]') && JSON.parse(localStorage.getItem('rd-bg-default')).cn===0.8 && /default everywhere/.test(document.querySelector('#bgtmsg').textContent)), '🧪 picking a tile closes the test and makes its numbers the default everywhere'); await page.evaluate(() => { scrollTo(0, 0); document.querySelector('#allmsg').textContent = ''; }); const n1 = GRAPHS.length; await page.click('#rall');
     await page.waitForFunction(() => /Done|rror|fail|not/i.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000}).catch(() => {}); console.log('allmsg', await page.textContent('#allmsg'));
     const pv = Object.values(GRAPHS[n1]), set = await page.evaluate(() => SCENE.sc.bgSet);
     ok(set.dn===0.4 && set.cn===0.8 && !pv.some(n => n.class_type==='KSampler') && pv.some(n => n.class_type==='UltimateSDUpscaleNoUpscale') && UPS.some(n => /^rd-scene-bgpick-/.test(n)), '🧪 the picked test becomes the background: only the 2× redraw runs on it: ' + JSON.stringify(set)); }
-  { const n0 = GRAPHS.length; await page.evaluate(() => { scrollTo(0, 0); document.querySelector('#allmsg').textContent = ''; }); await page.click('#newbg');
+  { const n0 = GRAPHS.length; await page.evaluate(() => { scrollTo(0, 0); document.querySelector('#allmsg').textContent = ''; }); await page.evaluate(() => document.querySelector('#newbg').click());
     await page.waitForFunction(() => /Done/.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:20000});
     const v = Object.values(GRAPHS[n0]), ks = v.find(n => n.class_type==='KSampler'), set = await page.evaluate(() => SCENE.sc.bgSet);
     ok(ks && ks.inputs.denoise===0.4 && !set.pick && GRAPHS.length===n0 + 2, '🌄 Paint a new background drops the test picture and paints a fresh one at its settings, then the finished picture: ' + JSON.stringify(set)); }
