@@ -1,5 +1,5 @@
 // 🤸 Pose Creator (Jordan 2026-10-29): scene.html?pose=1. Load her rig, describe the action, drag her joints, paint 4 tries from the
-// 📷 Camera, pick one, and 🦴 match her skeleton to that picture (DWPose on a PC). Run with RIG_DEPS and BODY_FBX like t_scene.js.
+// 📷 Camera, pick one, and 🦴 match her skeleton to that picture (DWPose on a PC). Run with RIG_DEPS and BODY_FBX like t_scene.js (and SAM_GLB, a body GLB from SAM 3D Body, to test the photo's 3D body).
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path');
 const DEPS = process.env.RIG_DEPS || '';
@@ -34,11 +34,13 @@ const DEPS = process.env.RIG_DEPS || '';
     const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi && HOLD) return J({}); if(hi){ const g = GRAPHS[GRAPHS.length - 1], save = Object.keys(g).find(k => g[k].class_type==='SaveImage');
       const sv = Object.keys(g).find(k => g[k].class_type==='SaveVideo'), sk = Object.keys(g).find(k => g[k].class_type==='DWPreprocessor'); // (as on Render: the points are on DWPose's own node, the save node lists nothing)
       const svs = Object.keys(g).filter(k => g[k].class_type==='SaveImage'), s3 = Object.keys(g).find(k => g[k].class_type==='Save3DAdvanced');
-      if(s3) return J({[hi[1]]:{status:{status_str:'success'}, outputs:{[s3]:{'3d':[{filename:'photo_pose_00001.bvh', subfolder:'RenderDeck/pose', type:'output'}]}}}}); // (the key name is a guess: the app looks for any .bvh)
+      if(s3){ const glbOf = k => g[g[k].inputs.model_3d[0]].inputs.format==='glb'; // (Save3DAdvanced's history, as Render gave it)
+        return J({[hi[1]]:{status:{status_str:'success'}, outputs:Object.fromEntries(Object.keys(g).filter(k => g[k].class_type==='Save3DAdvanced').map(k => [k, {'3d':[{filename:glbOf(k) ? 'photo_body_00001.glb' : 'photo_pose_00001.bvh', subfolder:'RenderDeck/pose', type:'output'}], camera_info:[null], model_3d_info:[]}]))}}); }
       if(Object.values(g).some(n => n.class_type==='EmptySD3LatentImage')) return J({[hi[1]]:{status:{status_str:'success'}, outputs:Object.fromEntries(svs.map((k, i) => [k, {images:[{filename:'photo_' + i + '.png', subfolder:'RenderDeck/pose', type:'output'}]}]))}}); if(sv && !sk) return J({[hi[1]]:{status:{status_str:'success'}, outputs:Object.assign({[sv]:{images:[{filename:'Ellie_move_00001.mp4', subfolder:'RenderDeck/pose', type:'output'}], animated:[true]}}, Object.fromEntries(svs.map((k, i) => [k, {images:[{filename:'Ellie_move_f' + i + '.png', subfolder:'RenderDeck/pose', type:'output'}]}])))}});
       if(sv) return J({[hi[1]]:{status:{status_str:'success'}, outputs:{[sv]:{images:[{filename:'Ellie_act_00001.mp4', subfolder:'RenderDeck/pose', type:'output'}], animated:[true]}, [sk]:{openpose_json:[JSON.stringify(ACT.map(fl => ({people:fl ? [{pose_keypoints_2d:fl}] : [], canvas_width:KP.W, canvas_height:KP.H})))]}}}});
       if(save) return J({[hi[1]]:{status:{status_str:'success'}, outputs:{[save]:{images:[0, 1, 2, 3].map(i => ({filename:'ellie_' + i + '.png', subfolder:'RenderDeck/scene', type:'output'}))}}}});
       return J({[hi[1]]:{status:{status_str:'success'}, outputs:{2:{openpose_json:[JSON.stringify([{people:[{pose_keypoints_2d:KP.flat}], canvas_width:KP.W, canvas_height:KP.H}])]}}}}); }
+    if(u.pathname==='/view' && /\.glb$/.test(u.searchParams.get('filename'))) return process.env.SAM_GLB ? r.fulfill({ contentType:'model/gltf-binary', headers:H, body:fs.readFileSync(process.env.SAM_GLB) }) : r.fulfill({status:404, headers:H, body:''});
     if(u.pathname==='/view' && /\.bvh$/.test(u.searchParams.get('filename'))) return r.fulfill({ contentType:'text/plain', headers:H, body:fs.readFileSync(path.join(__dirname, 'crouch.bvh')) });
     if(u.pathname==='/view' && u.searchParams.get('filename')==='Anime_Female_A.fbx') return r.fulfill({ contentType:'application/octet-stream', headers:H, body:fs.readFileSync(process.env.BODY_FBX) });
     if(u.pathname==='/view') return r.fulfill({ contentType:'image/svg+xml', headers:H, body:'<svg xmlns="http://www.w3.org/2000/svg" width="200" height="350"><rect width="200" height="350" fill="#fff"/><rect x="80" y="20" width="40" height="320" fill="#c33"/></svg>' });
@@ -219,7 +221,25 @@ const DEPS = process.env.RIG_DEPS || '';
     ok(bp && bp.inputs.format==='bvh' && det && det.inputs.class_name==='person' && gs.some(n => n.class_type==='SAM3DBody_Predict') && gs.find(n => n.class_type==='LoadMoGeModel').inputs.model_name==='moge_2_vitl_normal_fp16.safetensors',
       '🦴 SAM 3D Body reads the photo (RT-DETR finds the person, MoGe the lens) and writes a BVH');
     ok(/She has the photo/.test(r.msg) && r.bq >= 8 && r.used==='photo_1.png' && r.kneeUp > -0.08 && r.kneeUpL > -0.08 && r.ankle < r.knee && r.elbow < r.shoulder, '🦴 her rig takes the crouch: knees up level with her hips, elbows below her shoulders: ' + JSON.stringify(r));
-    if(process.env.SHOT){ await page.evaluate(() => document.querySelector('#pzpanel').click()); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/pose-photo.png'}); await page.evaluate(() => document.querySelector('#pzpanel').click()); } }
+    if(process.env.SHOT){ await page.evaluate(() => document.querySelector('#pzpanel').click()); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/pose-photo.png'}); await page.evaluate(() => document.querySelector('#pzpanel').click()); }
+    // 🧍 the photo's own 3D body stands in for her mannequin (Jordan 2026-10-29), sized to her, turned her way, on the floor; its depth and joints guide the paintings
+    if(process.env.SAM_GLB){ await page.waitForFunction(() => SCENE.samOn([...SCENE.objs.values()][0]), null, {timeout:20000}).catch(() => {});
+      const gb = gs.find(n => n.class_type==='BuildPoseFile' && n.inputs.format==='glb');
+      const q = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = [...SCENE.objs.values()][0], T = (window.THREE_ || null); if(!SCENE.samOn(o)) return {on:false, msg:document.querySelector('#rmsg').textContent};
+        const J = SCENE.guideJoints(o), lat = J[5].clone().sub(J[2]), r = (ob.rot || 0) * Math.PI / 180, side = {x:Math.cos(r), z:-Math.sin(r)};
+        let y0 = 1e9, y1 = -1e9; o.samG.traverse(m => { if(m.isSkinnedMesh){ const v = m.geometry.attributes.position, p = J[0].clone(); for(let i = 0; i < v.count; i += 7){ m.getVertexPosition(i, p); p.applyMatrix4(m.matrixWorld); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); } } });
+        const mqShown = o.mq.children.filter(c => c!==o.samG).some(c => c.visible), head = o.samG.userData.bn.bone_113.scale.x;
+        const G = SCENE.guidesFor(o, 'cam'); window.SAM_G = {d:G.depth.toDataURL(), p:G.pose.toDataURL()};
+        return {on:true, mqShown, head, faces:+((lat.x * side.x + lat.z * side.z) / lat.length()).toFixed(2), floor:+(y0 - ob.y).toFixed(3), top:+(y1 - ob.y).toFixed(2), knee:+J[9].y.toFixed(2), hip:+J[8].y.toFixed(2), wrist:+J[4].y.toFixed(2), slider:!!document.querySelector('[data-samhead]'), W:G.W, H:G.H}; });
+      ok(gb && gb.inputs['format.mesh_style']==='body_mesh' && q.on && !q.mqShown && q.head===1.2 && q.faces > 0.8 && Math.abs(q.floor) < 0.03 && q.top > 0.8 && q.top < 1.4 && q.knee > q.hip - 0.12 && q.slider,
+        '🧍 the photo\'s 3D body shows in her place: hips her way, feet on the floor, crouched, head 1.2×: ' + JSON.stringify(q));
+      if(process.env.SHOT){ const G = await page.evaluate(() => window.SAM_G); fs.writeFileSync(process.env.SHOT + '/sam-depth.png', Buffer.from(G.d.split(',')[1], 'base64')); fs.writeFileSync(process.env.SHOT + '/sam-pose.png', Buffer.from(G.p.split(',')[1], 'base64'));
+        await page.evaluate(() => document.querySelector('#pzpanel').click()); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/sam-body.png'}); await page.evaluate(() => document.querySelector('#pzpanel').click()); }
+      const h2 = await page.evaluate(() => { const s = document.querySelector('[data-samhead]'); s.value = 1.5; s.dispatchEvent(new Event('input')); const o = [...SCENE.objs.values()][0]; return {head:o.samG.userData.bn.bone_113.scale.x, saved:SCENE.sc.objs[0].sam.head, lbl:document.querySelector('#samhv').textContent}; });
+      ok(h2.head===1.5 && h2.saved===1.5 && /1\.50/.test(h2.lbl), '🙂 Head size grows its head and is kept: ' + JSON.stringify(h2));
+      const back = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = [...SCENE.objs.values()][0]; ob.bq = Object.assign({}, ob.bq, {bn_head:[0, 0.1, 0, 0.995]}); SCENE.redraw(); SCENE.poseFor('cam');
+        return {on:SCENE.samOn(o), mq:o.mq.children.filter(c => c!==o.samG).some(c => c.visible), sam:o.samG.visible}; });
+      ok(!back.on && back.mq && !back.sam, '🦴 moving a joint by hand brings her rig back: ' + JSON.stringify(back)); } }
   // the views go all the way round her, under the floor and over her head (Jordan 2026-10-29)
   { const el = await page.evaluate(() => window.EL_MAX * 180 / Math.PI); ok(el >= 85, 'the views turn up to ' + Math.round(el) + '° above and below her'); }
   // her base body is only on Render: with Main listed first (its library answers, but it has no 3D Bodies), she still gets her rig (Jordan 2026-10-29)
