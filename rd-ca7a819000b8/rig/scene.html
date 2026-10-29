@@ -979,7 +979,7 @@ async function orbResume(ob){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(o
 // painted from the 📷 Camera (her LoRA, held to the rig), then MiniMax FL2V films her from it into the rig's pose, the Fun ControlNet
 // steering it loosely with a skeleton video that eases from the A pose into the pose and holds it. 4 frames from the end come back as
 // tries to pick from (⤴ High res cleans one up). One frame (crop) round both poses, so the video and the tries line up with her rig.
-const MOVE_LEN = 80, MOVE_AT = 60, MOVE_CN = {strength:0.5, end:0.5}, MOVE_PICK = [63, 69, 74, 79]; // a shorter clip than Act it out: about a third quicker (Jordan 2026-10-29)
+const MOVE_LEN = 80, MOVE_AT = 58, MOVE_CN = {strength:0.5, end:0.5}, MOVE_PICK = [63, 69, 74, 79]; // a shorter clip than Act it out: about a third quicker (Jordan 2026-10-29)
 const movePrompt = d => 'The first frame shows the character standing in an A pose, full body, on a plain white background. [0s-2.5s] She moves smoothly and naturally into her pose' + ((d || '').trim() ? ': ' + d.trim().replace(/[.!]+$/, '') : '')
   + ', with relaxed, natural body language, [2.5s-3.3s] then holds the pose. Steady camera, no camera movement, the same framing as the first frame, her whole body always inside the frame. Same character, same face, same outfit, same art style, plain white background. No cuts.';
 function aviMjpeg(frames, w, h, fps){ // (Motion-JPEG in an AVI, as the main app sends its skeleton spins)
@@ -1005,11 +1005,14 @@ async function moveFrames(o, a, b, geo, W, H){ const c = o.mq.userData.body, P =
   const ob = o.ob, camAt = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(geo.mw)), Y = new THREE.Vector3(0, 1, 0), toCam = camAt.sub(new THREE.Vector3(ob.x, ob.y + 1.5, ob.z)).normalize();
   const face = new THREE.Vector3(0, 0, 1).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam), ear = new THREE.Vector3(1, 0, 0).applyAxisAngle(Y, (ob.rot || 0) * D2R).dot(toCam);
   show[0] = show[14] = show[15] = face > -0.15; show[16] = ear < 0.35; show[17] = ear > -0.35;
-  for(let f = 0; f < MOVE_LEN; f++){ const t0 = Math.min(1, f / MOVE_AT), t = t0 * t0 * (3 - 2 * t0);
-    for(const [id, qa] of Object.entries(a.q)){ const bn = byId[id], qb = b.q[id]; if(bn && qb) bn.quaternion.copy(qa).slerp(qb, t); }
-    c.position.copy(a.p).lerp(b.p, t); o.g.updateMatrixWorld(true);
-    const pts = bodyJoints(o.mq, BODY.face).map(p => { const [x, y] = P.toPx(p); return [x * sx, y * sy]; });
-    const cv = drawPose(W, H, pts, show), bl = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9)); out.push(new Uint8Array(await bl.arrayBuffer())); if(f % 16===15) await new Promise(r => setTimeout(r, 0)); }
+  // only the A pose (frame 0) and the end pose (from MOVE_AT) are drawn: the frames between are blank, so MiniMax imagines the move itself
+  // (Jordan 2026-10-29: sliding every bone in a straight line made her stiff)
+  const blank = document.createElement('canvas'); blank.width = W; blank.height = H; const bx = blank.getContext('2d'); bx.fillStyle = '#000'; bx.fillRect(0, 0, W, H);
+  for(let f = 0; f < MOVE_LEN; f++){ const t = f >= MOVE_AT ? 1 : 0;
+    let cv = blank; if(!f || t){ for(const [id, qa] of Object.entries(a.q)){ const bn = byId[id], qb = b.q[id]; if(bn && qb) bn.quaternion.copy(t ? qb : qa); }
+      c.position.copy(t ? b.p : a.p); o.g.updateMatrixWorld(true);
+      cv = drawPose(W, H, bodyJoints(o.mq, BODY.face).map(p => { const [x, y] = P.toPx(p); return [x * sx, y * sy]; }), show); }
+    const bl = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9)); out.push(new Uint8Array(await bl.arrayBuffer())); if(f % 16===15) await new Promise(r => setTimeout(r, 0)); }
   o.mq.userData.pose = null; poseFor('cam'); return out; }
 async function moveInto(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || BUSY.has(ob.id)) return; if(!PC.url) return st('No PC is online: start Render, then try again.'); if(!(o.mq && o.mq.userData.body && BODY && BODY.face)) return st('Her rig (the base body) has not loaded from Render.');
@@ -1311,7 +1314,7 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
     ${SCM && e ? '' : e ? (it ? `<p class="note">From the 📚 Library: ${esc(e.name)}, ${esc(String(e.height || 1))} m tall (× its size here). Re-saving it in the library changes it here too.</p>` : `<p class="note">From the 📚 Library: ${esc(e.name)}${e.lora ? ` · LoRA <b>${esc(String(e.lora).replace(/\.safetensors$/i, ''))}</b>` : ''}. Re-saving her in the library changes her here too.</p>`) : `<p class="warn">${it ? 'It is' : 'She is'} not in the library any more (or the PC is off), so a box stands in.</p>`}
     ${SCM && !POSE ? `<input data-ow placeholder="📝 ${it ? 'Words for it' : 'Words for her'} in this scene, e.g. ${it ? 'old, worn' : 'angry, shouting'}" value="${esc(ob.words || '')}" style="width:100%"><p class="note" data-owt style="margin:3px 2px;font-size:12px"></p>` : ''}
     ${POSE ? '' : `<div class="grid3"><div><label>Across (x, m)</label><input type="number" step="0.05" data-n="x" value="${ob.x}"></div><div><label>Up (y, m)</label><input type="number" step="0.05" min="0" data-n="y" value="${ob.y}"></div><div><label>Front–back (z, m)</label><input type="number" step="0.05" data-n="z" value="${ob.z}"></div></div>`}
-    ${POSE && !it && paints ? `<div class="line"><button data-act="move" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Move into the pose</button></div><p class="note">MiniMax films her from her A pose moving into this pose (the rig steering it loosely), so she ends up in it naturally. You get 4 frames from the end to pick from (about 4 minutes on Render).</p>` : ''}
+    ${POSE && !it && paints ? `<div class="line"><button data-act="move" ${BUSY.has(ob.id) ? 'disabled' : ''}>🎬 Move into the pose</button></div><p class="note">MiniMax films her from her A pose moving into this pose (it works out the move itself and only your end pose is steered), so she ends up in it naturally. You get 4 frames from the end to pick from (about 4 minutes on Render).</p>` : ''}
     ${POSE && !it && paints ? actBox(ob) : ''}
     <div class="lbl">Turn: <b id="rotv">${Math.round(ob.rot || 0)}°</b></div><div class="line"><button data-turn="-45">↺ 45°</button><input type="range" min="-180" max="180" step="5" data-n="rot" value="${ob.rot || 0}"><button data-turn="45">↻ 45°</button></div>
     ${POSE ? '' : `<div class="lbl">Size: <b id="sv">${Math.round((ob.s || 1) * 100)}%</b></div><div class="line"><input type="range" min="${it ? 0.25 : 0.5}" max="${it ? 3 : 1.5}" step="0.01" data-n="s" value="${ob.s || 1}"></div>`}
