@@ -793,8 +793,8 @@ async function compose(msg){ const bg = SC.bg, im = await loadImg(shotUrl(bg)), 
 // the 3D scene through the 📷 Camera) with its own words and its own LoRA (ComfyUI hook LoRAs work only inside their region), the
 // background in the rest with the place words, the style LoRA over everything; the whole scene's depth and the characters' skeletons
 // (ControlNet ProMax) hold the layout; then 2× in tiles, gently
-// Each one's own LoRA in her region (hook LoRAs) is off: on Render's 8 GB at 1536² it ran ~80 s a step (Jordan's first try, 2026-10-28);
-// her look comes from her cut-out under the 0.5 repaint, and her words still go to her region only
+// Each one's own LoRA only in her region (hook LoRAs) is off: on Render's 8 GB at 1536² it ran ~80 s a step (Jordan's first try, 2026-10-28);
+// her LoRA goes on the whole model instead, and her words still go to her region only
 const RS_DN = 0.5, RS_HI = 0.25, RS_AREA = 1536 * 1536; // (Jordan 2026-10-28: Illustrious holds up at about 1536² with the VAE tiled)
 const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8};
 function sceneHide(){ const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
@@ -840,6 +840,10 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
     const style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)); if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
+    // the characters' own LoRAs on the whole model (a plain LoRA costs nothing per step, unlike hook LoRAs); her trigger words still go to her
+    // region only; two or more characters share the model, so each goes in a little softer (Jordan 2026-10-29: keep her details)
+    const cl0 = chars.filter(o => o.e.lora && K.los.includes(o.e.lora)), cw = cl0.length > 1 ? 0.75 : 1;
+    if(!window.RS_HOOKS) for(const o of cl0){ const w = (+o.e.strength || 1) * cw, id = add('LoraLoader', {model, clip, lora_name:o.e.lora, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
     const sw = style && /afkj/i.test(style) ? 'AFKJ Style, ' : '', region = (text, i, lora, w) => { let cl = clip;
         if(lora && window.RS_HOOKS && K.hooks && K.los.includes(lora)) cl = [add('SetClipHooks', {clip, apply_to_conds:true, schedule_clip:false, hooks:[add('CreateHookLora', {lora_name:lora, strength_model:w, strength_clip:w}), 0]}), 0];
         return add('ConditioningSetMask', {conditioning:[add('CLIPTextEncode', {clip:cl, text}), 0], mask:[add('ImageToMask', {image:[add('LoadImage', {image:mn[i]}), 0], channel:'red'}), 0], strength:1, set_cond_area:'default'}); };
@@ -859,7 +863,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     const imgs = await runGraph(url, g, save, t => msg('🎬 Painting the scene as one picture on ' + pcName(url) + (K.usu && window.RS_UPSCALE ? ' (then 2×)' : '') + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
     SC.scene = {pc:url, file:imgs[0].filename, sub:imgs[0].subfolder || '', at:Date.now()}; changed();
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
-    msg('Done: the rendered scene is below.' + (window.RS_HOOKS && !K.hooks && chars.some(o => o.e.lora) ? ' (' + pcName(url) + '\'s ComfyUI is too old for LoRAs in regions, so their LoRAs were left out: update ComfyUI.)' : window.RS_HOOKS && miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : '')); }
+    msg('Done: the rendered scene is below.' + (!window.RS_HOOKS && miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : window.RS_HOOKS && !K.hooks && chars.some(o => o.e.lora) ? ' (' + pcName(url) + '\'s ComfyUI is too old for LoRAs in regions, so their LoRAs were left out: update ComfyUI.)' : window.RS_HOOKS && miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : '')); }
   catch(err){ msg(err.message || String(err)); }
   finally{ btn.disabled = false; drawFinal(); } }
 function drawFinal(){ const box = $('#final'); if(!box) return; const f = SC && SC.final, b = SC && SC.bg, rs = SC && SC.scene;
