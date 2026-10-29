@@ -82,7 +82,7 @@ body.pz.pzc .cols{display:none}body.pz .cols{bottom:calc(58px + env(safe-area-in
 <div class="cols">
   <div class="box" id="envbox"></div>
   <div class="box" id="lightbox"></div>
-  <div class="box" id="objbox"><div class="line mini"><button id="d3" aria-pressed="false" title="Everyone as their 3D mannequin or model, to move and pose">🧍3D</button><button id="d2" aria-pressed="true" title="Everyone as their rendered picture">📸2D</button><button id="rall">▶ Render all</button><button id="rscene" title="Render Scene: all of it painted as one picture">🎬 Render Scene</button><button id="rblend" aria-pressed="true" title="After the characters' own passes, a light pass over everything (0.25) so it blends together">🎞 Blend</button><button id="rbg" disabled title="Paint the background of the last 🎬 Render Scene again, leaving everyone as they are">🖌 Background</button><button id="add" title="Add a character">＋🧍</button><button id="addo" title="Add an object">＋🪑</button></div><input id="sdesc" placeholder="📝 Describe the scene, e.g. 2 girls having a conversation" style="width:100%;margin-top:6px"><p class="note" id="sdtags"></p><p class="note" id="allmsg"></p><div class="list" id="objs"></div></div>
+  <div class="box" id="objbox"><div class="line mini"><button id="d3" aria-pressed="false" title="Everyone as their 3D mannequin or model, to move and pose">🧍3D</button><button id="d2" aria-pressed="true" title="Everyone as their rendered picture">📸2D</button><button id="rall">▶ Render all</button><button id="rscene" title="Render Scene: all of it painted as one picture">🎬 Render Scene</button><button id="rblend" aria-pressed="true" title="After the characters' own passes, a light pass over everything (0.25) so it blends together">🎞 Blend</button><button id="rbg" disabled title="Paint the background of the last 🎬 Render Scene again, leaving everyone as they are">🖌 Background</button><button id="rup" disabled title="The last 🎬 Render Scene 2× bigger, redrawn in tiles">⤴ Upscale</button><button id="add" title="Add a character">＋🧍</button><button id="addo" title="Add an object">＋🪑</button></div><input id="sdesc" placeholder="📝 Describe the scene, e.g. 2 girls having a conversation" style="width:100%;margin-top:6px"><p class="note" id="sdtags"></p><p class="note" id="allmsg"></p><div class="list" id="objs"></div></div>
   <div class="box" id="selbox"></div>
 </div>
 <div id="menu" class="modal" hidden><div class="sheet"><div class="bar" style="padding:0"><b style="font-family:var(--display)" id="menuh">☰ Scene</b><button id="menux" style="margin-left:auto">✕</button></div>
@@ -174,7 +174,7 @@ let sdT = null;
 async function drawDesc(){ const t = (SC && SC.desc) || ''; if(document.activeElement!==$('#sdesc')) $('#sdesc').value = t; $('#sdtags').textContent = t.trim() && !POSE ? '→ ' + (await tagsOf(t)) : ''; }
 $('#sdesc').oninput = e => { if(!SC) return; SC.desc = e.target.value; changed(); clearTimeout(sdT); sdT = setTimeout(drawDesc, 600); };
 function showImg(u){ VIMG = u || ''; const im = $('#viewimg'); if(VIMG) im.src = VIMG; else im.removeAttribute('src'); im.hidden = !VIMG; drawViews(); dirty = true; }
-$('#rscene').onclick = () => renderScene(); $('#rbg').onclick = () => repaintBg(); $('#rblend').onclick = () => { if(!SC) return; SC.blend = SC.blend===false; drawBlend(); changed(); };
+$('#rscene').onclick = () => renderScene(); $('#rbg').onclick = () => repaintBg(); $('#rup').onclick = () => upscaleScene(); $('#rblend').onclick = () => { if(!SC) return; SC.blend = SC.blend===false; drawBlend(); changed(); };
 const drawBlend = () => $('#rblend').setAttribute('aria-pressed', !!SC && SC.blend!==false);
 $('#new').onclick = () => { const n = prompt('Name for the new ' + WORD.toLowerCase(), WORD + ' ' + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
 $('#ren').onclick = () => { if(!SC) return; const n = prompt('Rename this ' + WORD.toLowerCase(), SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
@@ -1356,7 +1356,31 @@ async function repaintBg(){ const msg = m => { const el = $('#allmsg'); if(el) e
     msg('Done: only the background was repainted (the one before is still in 🖼 Renders).'); }
   catch(err){ msg(err.message || String(err)); }
   finally{ drawRbg(); } }
-function drawRbg(){ const b = $('#rbg'); if(b && SCN) b.disabled = !rsBgCan(); }
+// ⤴ Upscale (Jordan 2026-10-29): the last render 2×, redrawn in tiles like the Render tab's Redraw (Ultimate SD Upscale, real noise,
+// 0.35) with the same LoRAs as the first painting, then the colour fix so the tiles keep the picture's colours. Becomes the latest render
+const RS_UP_DN = 0.35;
+async function upscaleScene(){ const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }, btn = $('#rup'), sc = SC && SC.scene; if(!sc || sc.up) return; if(SC.rsJob){ msg('⏳ The last render is still going on ' + pcName(SC.rsJob.pc) + '.'); return; } btn.disabled = true;
+  try{ msg('⤴ Asking the PCs for their models…'); const items = rsItems(), chars = rsChars(items), lead = chars.map(o => o.e).find(e => e.ckpt) || {}, env = envOf(SC.env) || {}, K = await rsKit(chars, lead, sc.pc), url = K.url;
+    if(!K.usu) throw new Error(pcName(url) + ' has no Ultimate SD Upscale, which this needs.');
+    msg('⤴ Sending the picture to ' + pcName(url) + '…'); const b = await (await fetch(shotUrl(sc))).blob(), fd = new FormData(); fd.append('image', b, 'rd-scene-up-' + Date.now().toString(36) + '.png'); fd.append('overwrite', 'true'); const nm = (await (await fetch(url + '/upload/image', {method:'POST', body:fd})).json()).name;
+    const g = {}; let n = 0; const add = (c, x) => { const id = String(++n); g[id] = {class_type:c, inputs:x}; return id; };
+    const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
+    const style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)); if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
+    const cl0 = chars.filter(o => o.e.lora && K.los.includes(o.e.lora)).filter((o, i, a) => a.findIndex(x => x.e.lora===o.e.lora)===i), cw = cl0.length > 1 ? 0.75 : 1;
+    for(const o of cl0){ const w = (+o.e.strength || 1) * cw, id = add('LoraLoader', {model, clip, lora_name:o.e.lora, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
+    const sw = style && /afkj/i.test(style) ? 'AFKJ Style, ' : '', words = []; for(const o of chars) words.push(await rsWords(o, sw));
+    const dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '', place = [(env.words || '').trim().replace(/,\s*$/, ''), env.ground ? groundWords(env) : '', dt].filter(Boolean).join(', ');
+    const pos = add('CLIPTextEncode', {clip, text:[...words, place, 'masterpiece, best quality, amazing quality, absurdres, highres'].filter(Boolean).join(', ')}), neg = add('CLIPTextEncode', {clip, text:rsNeg(chars.length)});
+    const src = [add('LoadImage', {image:nm}), 0], big = [add('ImageScaleBy', {image:src, upscale_method:'lanczos', scale_by:2}), 0];
+    let out = [add('UltimateSDUpscaleNoUpscale', {upscaled_image:big, model, positive:[pos, 0], negative:[neg, 0], vae:[ck, 2], seed:Math.floor(Math.random() * 2 ** 40), steps:20, cfg:5, sampler_name:'dpmpp_2m', scheduler:'karras', denoise:RS_UP_DN,
+      mode_type:'Linear', tile_width:1024, tile_height:1024, mask_blur:16, tile_padding:64, seam_fix_mode:'Band Pass', seam_fix_denoise:0.3, seam_fix_width:64, seam_fix_mask_blur:16, seam_fix_padding:32, force_uniform_tiles:true, tiled_decode:false, batch_size:1}), 0];
+    if(K.cfx) out = [add('RenderDeckUpscaleColorFix', {image:out, image_ref:big, strength:1, levels:5}), 0]; // (the tiles' colours held to the picture)
+    const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene_2x'});
+    await rsRun(url, g, save, t => msg('⤴ Upscaling 2× in tiles on ' + pcName(url) + '… ' + t + ' s'), Object.assign({}, sc, {W:sc.W * 2, H:sc.H * 2, up:true}));
+    msg('Done: the 2× picture is in the viewer (and in 🖼 Renders).'); }
+  catch(err){ msg(err.message || String(err)); }
+  finally{ drawRbg(); } }
+function drawRbg(){ const b = $('#rbg'), u = $('#rup'); if(b && SCN) b.disabled = !rsBgCan(); if(u && SCN) u.disabled = !(SC && SC.scene && SC.scene.key && !SC.scene.up); }
 // 🖼 Renders: every ▶ Render all and 🎬 Render Scene of this scene (newest first) and its background, as thumbnails to see in the viewer
 const addRender = (kind, r) => { if(!SC || !r) return; SC.renders = [Object.assign({kind}, r)].concat((SC.renders || []).filter(x => !(x.file===r.file && x.pc===r.pc))).slice(0, 30); };
 function drawFinal(){ const box = $('#final'); if(!box) return; const list = ((SC && SC.renders) || []).slice(), NM = {scene:'🎬 Scene', final:'🖼 Layers', bg:'🌄 Background'};
@@ -1461,9 +1485,9 @@ stage.addEventListener('pointerdown', e => { if(!ENV || !painting || pId!==null)
 stage.addEventListener('pointermove', e => { if(!ENV || !painting || e.pointerId!==pId) return; e.stopImmediatePropagation(); paintAt(e); }, true);
 const pEnd = e => { if(e.pointerId!==pId) return; e.stopImmediatePropagation(); pId = null; changed(); };
 stage.addEventListener('pointerup', pEnd, true); stage.addEventListener('pointercancel', pEnd, true);
-if(ENV){ ['#add', '#rall', '#rscene', '#rblend', '#rbg', '#d3', '#d2', '#rlibb', '#allmsg', '#sdesc'].forEach(k => { $(k).hidden = true; }); document.title = 'Environment'; }
+if(ENV){ ['#add', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2', '#rlibb', '#allmsg', '#sdesc'].forEach(k => { $(k).hidden = true; }); document.title = 'Environment'; }
 if(SCN) ['#d3', '#d2', '#rall', '#bgnew'].forEach(k => { $(k).hidden = true; }); // (no picture cards in the Scene tab any more: one 🎬 Render Scene)
-if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#d3', '#d2', '#rlibb', '#allmsg', '#envbox', '#lightbox', '#bgnew'].forEach(k => { $(k).hidden = true; }); document.title = 'Pose Creator';
+if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2', '#rlibb', '#allmsg', '#envbox', '#lightbox', '#bgnew'].forEach(k => { $(k).hidden = true; }); document.title = 'Pose Creator';
   $('#sdesc').placeholder = '📝 Describe the action, e.g. jumping, kicking, looking back over her shoulder'; $('#add').textContent = '＋🧍 Load her rig'; }
 // ---- start: the library (for the references), the scenes, the last one open
 (async function start(){ $('#msg').textContent = 'Opening your ' + WORD.toLowerCase() + 's…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
