@@ -1167,7 +1167,8 @@ function groundWords(env){ const g = env.ground || {}; if(g.on===false) return '
 // minus anyone standing in front of her) is repainted at 0.5 with ONLY her LoRA, and her face fixed. 🖌 Repaint just her redoes
 // that one pass on the last render, from the same masks (worked out again from the scene, so nothing may move in between).
 const RS_DN = 0.5, // her own pass (Jordan 2026-10-29: 0.5 is the sweet spot)
-      RS_BLEND = 0.25, // 🎞 the blend over everything at the end (Jordan 2026-10-29: on by default at 0.25)
+      RS_BLEND = 0.25,
+      RS_CM = 0.85, // 🎨 how far the finished picture is pulled back to the first painting's colour and contrast // 🎞 the blend over everything at the end (Jordan 2026-10-29: on by default at 0.25)
       RS_AREA = 1048576, RS_UP = 1.5; // painted at about a megapixel (what Illustrious paints best), then 1.5× before the passes
 const SCN = SCM && !POSE; // (the 🎬 Scene tab itself: no picture cards there any more, everyone is their mannequin)
 function sceneHide(){ const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
@@ -1239,7 +1240,7 @@ function herPass(add, K, ck, img, o, text, mk, fk, FH, seed, sam, det, n){ const
   return out; }
 // the PC: the one with the most of their LoRAs, ControlNet ProMax and the Impact Pack's Detailer
 async function rsKit(chars, lead, first){ const urls = [first, PC.url, ...(window.SCENE_SERVERS || deckServers()).map(x => x.url.replace(/\/+$/, ''))].filter((u, i, a) => u && a.indexOf(u)===i);
-  const kits = (await Promise.all(urls.map(async u => { try{ const k = await kitOn(u, {ckpt:lead.ckpt}); k.dfe = await hasNode(u, 'DetailerForEach') && await hasNode(u, 'MaskToSEGS'); k.samc = k.sam && await hasNode(u, 'SAMDetectorCombined'); return k; }catch(e){ return null; } }))).filter(k => k && k.ckpt && k.cn);
+  const kits = (await Promise.all(urls.map(async u => { try{ const k = await kitOn(u, {ckpt:lead.ckpt}); k.dfe = await hasNode(u, 'DetailerForEach') && await hasNode(u, 'MaskToSEGS'); k.samc = k.sam && await hasNode(u, 'SAMDetectorCombined'); k.ccm = await hasNode(u, 'RenderDeckCutoutColorMatch'); return k; }catch(e){ return null; } }))).filter(k => k && k.ckpt && k.cn);
   if(!kits.length) throw new Error('No PC has an Illustrious model and ControlNet ProMax.'); const has = k => chars.filter(o => o.e.lora && k.los.includes(o.e.lora)).length + (k.dfe ? 0.5 : 0);
   kits.sort((a, b) => (has(b) - has(a)) || ((b.url===first) - (a.url===first))); return kits[0]; }
 const rsTools = (add, K) => ({sam:K.samc ? [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0] : null, det:K.ud ? [add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}), 0] : null});
@@ -1286,7 +1287,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     let ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.55, start_percent:0, end_percent:0.6, vae:[ck, 2]});
     if(pn) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:0.9, start_percent:0, end_percent:0.75, vae:[ck, 2]});
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0], denoise:1});
-    let out = [add('ImageScale', {image:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], upscale_method:'lanczos', width:FW, height:FH, crop:'disabled'}), 0];
+    let out = [add('ImageScale', {image:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], upscale_method:'lanczos', width:FW, height:FH, crop:'disabled'}), 0]; const first = out; // (🎨 the colours every later pass is matched back to)
     // then the background on its own (style LoRA only), then each character's own pass, the farthest first
     out = bgPass(add, K, ck, style, out, mn[items.length], dn, env, dt, FH, seed + 50);
     // (characters farthest first, so whoever is nearer is painted last, on top)
@@ -1297,6 +1298,10 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     const blend = SC.blend!==false && !!(K.dfe && chars.length);
     if(blend){ const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, bl = add('KSampler', {model, seed:seed + 99, steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
         latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_BLEND}); out = [add('VAEDecodeTiled', {samples:[bl, 0], vae:[ck, 2], ...TILE}), 0]; }
+    // 🎨 (Jordan 2026-10-29: the final came out washed out) every pass after the first goes back through the VAE and greys the colours a little;
+    // the finished picture's overall colour and contrast (Lab mean and spread, the whole picture at once, so the repainted background and
+    // the characters' passes keep their own colours) are matched back to the first painting's (Render Deck's colour-match node)
+    if(K.ccm) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:first, strength:RS_CM}), 0];
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
     await rsRun(url, g, save, t => msg('🎬 Painting the scene, then the background' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
@@ -1314,7 +1319,7 @@ async function repaintHer(ob){ const o = OBJ.get(ob.id), st = m => { RMSG.set(ob
     const b = await (await fetch(shotUrl(sc))).blob(), fd = new FormData(); fd.append('image', b, 'rd-scene-last-' + stamp + '.png'); fd.append('overwrite', 'true'); const last = (await (await fetch(url + '/upload/image', {method:'POST', body:fd})).json()).name;
     const g = {}; let n = 0; const add = (c, x) => { const id = String(++n); g[id] = {class_type:c, inputs:x}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}), lead = chars.map(x => x.e).find(e => e.ckpt) || {}, style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)), T = rsTools(add, K);
-    const out = herPass(add, K, ck, [add('LoadImage', {image:last}), 0], o, await rsWords(o, style && /afkj/i.test(style) ? 'AFKJ Style, ' : ''), mk, fk, sc.H, Math.floor(Math.random() * 2 ** 40), T.sam, T.det, chars.length);
+    const src = [add('LoadImage', {image:last}), 0]; let out = herPass(add, K, ck, src, o, await rsWords(o, style && /afkj/i.test(style) ? 'AFKJ Style, ' : ''), mk, fk, sc.H, Math.floor(Math.random() * 2 ** 40), T.sam, T.det, chars.length); if(K.ccm) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:src, strength:RS_CM}), 0];
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
     await rsRun(url, g, save, t => st('🖌 Repainting ' + (ob.label || 'her') + ' on ' + pcName(url) + '… ' + t + ' s'), sc);
     st('Done: only she was repainted (the one before is still in 🖼 Renders).' + (o.e.lora && !K.los.includes(o.e.lora) ? ' ' + pcName(url) + ' doesn\'t have her LoRA, so it was left out.' : '')); }
@@ -1345,7 +1350,7 @@ async function repaintBg(){ const msg = m => { const el = $('#allmsg'); if(el) e
     const b = await (await fetch(shotUrl(sc))).blob(), fd = new FormData(); fd.append('image', b, 'rd-scene-last-' + stamp + '.png'); fd.append('overwrite', 'true'); const last = (await (await fetch(url + '/upload/image', {method:'POST', body:fd})).json()).name;
     const g = {}; let n = 0; const add = (c, x) => { const id = String(++n); g[id] = {class_type:c, inputs:x}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}), style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)), dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '';
-    const out = bgPass(add, K, ck, style, [add('LoadImage', {image:last}), 0], mk, dn, env, dt, sc.H, Math.floor(Math.random() * 2 ** 40));
+    const src = [add('LoadImage', {image:last}), 0]; let out = bgPass(add, K, ck, style, src, mk, dn, env, dt, sc.H, Math.floor(Math.random() * 2 ** 40)); if(K.ccm) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:src, strength:RS_CM}), 0];
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
     await rsRun(url, g, save, t => msg('🖌 Repainting the background on ' + pcName(url) + '… ' + t + ' s'), sc);
     msg('Done: only the background was repainted (the one before is still in 🖼 Renders).'); }
