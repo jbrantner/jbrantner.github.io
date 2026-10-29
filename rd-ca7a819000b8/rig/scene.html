@@ -1287,7 +1287,9 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     if(pn) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:0.9, start_percent:0, end_percent:0.75, vae:[ck, 2]});
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0], denoise:1});
     let out = [add('ImageScale', {image:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], upscale_method:'lanczos', width:FW, height:FH, crop:'disabled'}), 0];
-    // then each character's own pass, the farthest first (so whoever is nearer is painted last, on top)
+    // then the background on its own (style LoRA only), then each character's own pass, the farthest first
+    out = bgPass(add, K, ck, style, out, mn[items.length], dn, env, dt, FH, seed + 50);
+    // (characters farthest first, so whoever is nearer is painted last, on top)
     if(K.dfe && chars.length){ const T = rsTools(add, K); items.map((o, i) => i).filter(i => rsChars([items[i]]).length).sort((a, b) => front[b].d - front[a].d)
         .forEach(i => { out = herPass(add, K, ck, out, items[i], words[i], mn[i], fn[i], FH, seed + 1 + i, T.sam, T.det, chars.length); }); }
     // 🎞 Blend (Jordan 2026-10-29): the whole picture once more, lightly, with the same regions and LoRAs as the first painting, no ControlNet,
@@ -1296,7 +1298,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     if(blend){ const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, bl = add('KSampler', {model, seed:seed + 99, steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
         latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_BLEND}); out = [add('VAEDecodeTiled', {samples:[bl, 0], vae:[ck, 2], ...TILE}), 0]; }
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    await rsRun(url, g, save, t => msg('🎬 Painting the scene' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
+    await rsRun(url, g, save, t => msg('🎬 Painting the scene, then the background' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
     msg('Done: the rendered scene is in the viewer (and in 🖼 Renders).' + (miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : '') + (!K.dfe && chars.length ? ' (' + pcName(url) + ' has no Impact Pack Detailer, so the characters got no pass of their own.)' : '')); }
   catch(err){ msg(err.message || String(err)); }
@@ -1323,22 +1325,27 @@ async function repaintHer(ob){ const o = OBJ.get(ob.id), st = m => { RMSG.set(ob
 // The area is the background region pulled 2% in from everyone (their painted hair and clothes reach past the mannequins), soft-edged.
 const RS_BG = 0.6;
 function rsBgCan(){ return !!(SC && SC.scene && SC.scene.key && SC.scene.key===rsKey(rsItems())); }
+// the background painted again inside its own region, style LoRA only (no character LoRAs, no people), the scene's depth holding the
+// place's shapes; pasted back through a soft mask so everyone else stays exactly as they were. 🖌 Background, and a step of 🎬 Render Scene
+// (Jordan 2026-10-29: "do the whole thing with the characters and the controlnet, then the background separately without the character loras")
+function bgPass(add, K, ck, style, img, mk, dn, env, dt, H, seed){ let model = [ck, 0], clip = [ck, 1];
+  if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
+  const words = [style && /afkj/i.test(style) ? 'AFKJ Style' : '', (env.words || '').trim().replace(/,\s*$/, ''), env.ground ? groundWords(env) : '', dt, 'scenery, no humans, masterpiece, best quality, amazing quality'].filter(Boolean).join(', ');
+  const pos = add('CLIPTextEncode', {clip, text:words}), neg = add('CLIPTextEncode', {clip, text:NEG + BG_NEG});
+  const m0 = [add('GrowMask', {mask:[add('ImageToMask', {image:[add('LoadImage', {image:mk}), 0], channel:'red'}), 0], expand:-Math.round(H * 0.02), tapered_corners:true}), 0];
+  const soft = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:m0}), 0], blur_radius:24, sigma:8}), 0], channel:'red'}), 0];
+  const ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:K.cn}), 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.5, start_percent:0, end_percent:0.6, vae:[ck, 2]});
+  const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, lat = add('SetLatentNoiseMask', {samples:[add('VAEEncodeTiled', {pixels:img, vae:[ck, 2], ...TILE}), 0], mask:soft});
+  const ks = add('KSampler', {model, seed, steps:24, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:RS_BG});
+  return [add('ImageCompositeMasked', {destination:img, source:[add('VAEDecodeTiled', {samples:[ks, 0], vae:[ck, 2], ...TILE}), 0], x:0, y:0, resize_source:false, mask:soft}), 0]; }
 async function repaintBg(){ const msg = m => { const el = $('#allmsg'); if(el) el.textContent = m; }, btn = $('#rbg'); if(!rsBgCan()){ msg('Something moved since the last 🎬 Render Scene: render the scene again first.'); return; } btn.disabled = true;
   try{ msg('🖌 Asking the PCs for their models…'); const items = rsItems(), chars = rsChars(items), lead = chars.map(o => o.e).find(e => e.ckpt) || {}, env = envOf(SC.env) || {}, K = await rsKit(chars, lead, SC.scene.pc), url = K.url;
     const sc = SC.scene, H = Math.round(sc.H / RS_UP), W = Math.round(H * sc.W / sc.H), cam = rsCam(W, H), masks = regionMasks(items, cam, sc.W, sc.H), stamp = Date.now().toString(36);
     msg('🖌 Sending the picture and the background\'s mask to ' + pcName(url) + '…'); const mk = await upload(url, masks[items.length], 'rd-scene-bgmask-' + stamp + '.png'), dn = await upload(url, sceneDepth(cam, sc.W, sc.H, items), 'rd-scene-sdepth-' + stamp + '.png');
     const b = await (await fetch(shotUrl(sc))).blob(), fd = new FormData(); fd.append('image', b, 'rd-scene-last-' + stamp + '.png'); fd.append('overwrite', 'true'); const last = (await (await fetch(url + '/upload/image', {method:'POST', body:fd})).json()).name;
     const g = {}; let n = 0; const add = (c, x) => { const id = String(++n); g[id] = {class_type:c, inputs:x}; return id; };
-    const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
-    const style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)); if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
-    const dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '', words = [style && /afkj/i.test(style) ? 'AFKJ Style' : '', (env.words || '').trim().replace(/,\s*$/, ''), env.ground ? groundWords(env) : '', dt, 'scenery, no humans, masterpiece, best quality, amazing quality'].filter(Boolean).join(', ');
-    const pos = add('CLIPTextEncode', {clip, text:words}), neg = add('CLIPTextEncode', {clip, text:NEG + BG_NEG}), img = [add('LoadImage', {image:last}), 0];
-    const m0 = [add('GrowMask', {mask:[add('ImageToMask', {image:[add('LoadImage', {image:mk}), 0], channel:'red'}), 0], expand:-Math.round(sc.H * 0.02), tapered_corners:true}), 0];
-    const soft = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:m0}), 0], blur_radius:24, sigma:8}), 0], channel:'red'}), 0];
-    const ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:K.cn}), 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.5, start_percent:0, end_percent:0.6, vae:[ck, 2]});
-    const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, lat = add('SetLatentNoiseMask', {samples:[add('VAEEncodeTiled', {pixels:img, vae:[ck, 2], ...TILE}), 0], mask:soft});
-    const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:24, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:RS_BG});
-    const out = [add('ImageCompositeMasked', {destination:img, source:[add('VAEDecodeTiled', {samples:[ks, 0], vae:[ck, 2], ...TILE}), 0], x:0, y:0, resize_source:false, mask:soft}), 0]; // (everyone else exactly as they were)
+    const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}), style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)), dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '';
+    const out = bgPass(add, K, ck, style, [add('LoadImage', {image:last}), 0], mk, dn, env, dt, sc.H, Math.floor(Math.random() * 2 ** 40));
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
     await rsRun(url, g, save, t => msg('🖌 Repainting the background on ' + pcName(url) + '… ' + t + ' s'), sc);
     msg('Done: only the background was repainted (the one before is still in 🖼 Renders).'); }
