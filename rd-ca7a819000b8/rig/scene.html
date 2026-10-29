@@ -671,7 +671,9 @@ const OBJ_DN = 0.62; // how far Illustrious repaints the 3D object's own colours
 const OBJ_TAIL = 'no humans, still life, object focus, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
 function kitE(ob, e){ if(ob.kind!=='obj') return e; const who = SC.objs.map(x => libOf(x.ref)).find(c => c && c.kind!=='obj' && c.ckpt) || {};
   return {ckpt:e.ckpt || who.ckpt, style:e.style || who.style, name:e.name, words:(e.tags || e.prompt || e.name || 'object').replace(/\(3D\)/i, '').replace(/^(AFKJ Style,\s*)/i, '').trim().toLowerCase(), obj:true}; }
-const wordsOf = (ob, E, los) => E.obj ? [lorasOf(E, los || []).some(([l]) => /afkj/i.test(l)) ? 'AFKJ Style' : '', E.words, OBJ_TAIL].filter(Boolean).join(', ') : herWords(E, ob.pose) + ', ' + PROMPT_TAIL;
+// (ow: 📝 its own words in this scene as tags, Jordan 2026-10-29: "angry" belongs where she is posed and painted, not only in Render Scene's 0.5 repaint)
+const wordsOf = (ob, E, los, ow) => E.obj ? [lorasOf(E, los || []).some(([l]) => /afkj/i.test(l)) ? 'AFKJ Style' : '', E.words, ow, OBJ_TAIL].filter(Boolean).join(', ') : herWords(E, ob.pose) + (ow ? ', ' + ow : '') + ', ' + PROMPT_TAIL;
+const ownTags = async ob => (ob.words || '').trim() ? tagsOf(ob.words.trim()) : '';
 const lorasOf = (E, los) => (E.obj ? [[E.style || los.find(n => /afkj/i.test(n)), 1]] : [[E.style, 1], [E.lora, +E.strength || 1]]).filter(([l]) => l && los.includes(l));
 // her words (Jordan 2026-10-28: a sitting Ellen came out blonde, bootless and "standing"): LoRA trigger + her saved tags + the pose as words; pose and framing words from her card are dropped so they never fight the guide
 const POSE_WORDS = {stand:'standing', hip:'standing, hand on own hip', walk:'walking', sit:'sitting', wave:'standing, waving'};
@@ -707,7 +709,7 @@ async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:ckpt}); let model = [ck, 0], clip = [ck, 1];
     for(const [l, w] of lorasOf(E, los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
-    const pos0 = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, los)}), neg0 = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '')}), L = add('ControlNetLoader', {control_net_name:cn});
+    const pos0 = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, los, await ownTags(ob))}), neg0 = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '')}), L = add('ControlNetLoader', {control_net_name:cn});
     let pos = [pos0, 0], neg = [neg0, 0];
     for(const [img, type, str, end] of E.obj ? [[dn, 'depth', 0.7, 0.7]] : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:E.obj ? [add('RepeatLatentBatch', {samples:[add('VAEEncode', {pixels:[add('LoadImage', {image:cl}), 0], vae:[ck, 2]}), 0], amount:4}), 0] : [add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:E.obj ? OBJ_DN : 1}); // 🪑 an object starts from its own colours
@@ -736,7 +738,7 @@ async function hiRes(ob){ const o = OBJ.get(ob.id), e = o && o.e, sh = ob.shot, 
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
     if(K.cfx) for(const [l, w] of lorasOf(E, K.los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
-    const pos = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, K.cfx ? K.los : [])}), neg = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '')});
+    const pos = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, K.cfx ? K.los : [], await ownTags(ob))}), neg = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '')});
     let out = cutOut(add, hiTiles(add, [add('LoadImage', {image:up.name}), 0], model, pos, neg, ck, K.cfx), K.bgm);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_') + '_hi'});
     const imgs = await runGraph(url, g, save, t => st('⤴ Redrawing her 2× on ' + pcName(url) + '… ' + t + ' s')); if(!imgs.length) throw new Error('The PC sent nothing back.');
