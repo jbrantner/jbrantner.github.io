@@ -25,7 +25,7 @@ const DEPS = process.env.RIG_DEPS || '';
     if(u.pathname==='/renderdeck/library') return J(u.searchParams.get('kind')==='obj' ? {library:1, kinds:['char', 'obj'], objects:[]} : {library:1, kinds:['char', 'obj'], characters:[lib]});
     if(u.pathname==='/renderdeck/scenes') return J({scenes:[...store.values()]});
     if(u.pathname==='/renderdeck/scenes/save'){ const b = JSON.parse(r.request().postData()); store.set(b.scene.id, b.scene); return J({ok:true}); }
-    if(u.pathname==='/object_info/DWPreprocessor') return J({DWPreprocessor:{input:{required:{image:['IMAGE'], detect_hand:[['enable', 'disable'], {default:'enable'}], detect_body:[['enable', 'disable'], {default:'enable'}], detect_face:[['enable', 'disable'], {default:'enable'}], resolution:['INT', {default:512}]}, optional:{bbox_detector:[['yolox_l.onnx'], {default:'yolox_l.onnx'}]}}}});
+    if(u.pathname==='/object_info/DWPreprocessor') return J({DWPreprocessor:{input:{required:{image:['IMAGE'], detect_hand:[['enable', 'disable'], {default:'enable'}], detect_body:[['enable', 'disable'], {default:'enable'}], detect_face:[['enable', 'disable'], {default:'enable'}], resolution:['INT', {default:512}]}, optional:{bbox_detector:[['None', 'yolox_l.onnx'], {default:'yolox_l.onnx'}]}}}});
     if(u.pathname==='/object_info/SavePoseKpsAsJsonFile') return J({SavePoseKpsAsJsonFile:{input:{required:{}}}});
     const oi = u.pathname.match(/^\/object_info\/(\w+)$/); if(oi){ const d = OI[oi[1]]; return J(d ? {[oi[1]]:{input:{required:{[d[0]]:[d[1]]}}}} : {}); }
     if(u.pathname==='/upload/image'){ const m = r.request().postDataBuffer().toString('latin1').match(/filename="([^"]+)"/); return J({name:m && m[1]}); }
@@ -80,7 +80,7 @@ const DEPS = process.env.RIG_DEPS || '';
   const px = await page.evaluate(KP => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id), P = SCENE.picPts(o, ob.shot); SCENE.poseFor('cam'); return SCENE.jointPts(o).map((p, i) => { const [x, y] = P.toPx(p); return Math.round(Math.hypot(x - KP.flat[i * 3] * P.W, y - KP.flat[i * 3 + 1] * P.H)); }).slice(0, 14); }, KP);
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]), dw = dist(f.wr, KP.wr), de = dist(f.el, KP.el), dk = dist(f.kn, KP.kn);
   const dg = GRAPHS[GRAPHS.length - 1], dwn = Object.values(dg).find(n => n.class_type==='DWPreprocessor');
-  ok(/matches/.test(f.msg) && f.mode==='mq' && Math.max(...px) <= 12 && dk < 0.02 && dwn.inputs.detect_body==='enable' && dwn.inputs.detect_hand==='disable', '🦴 her skeleton now waves like the picture: every joint within 12 px of it (' + px.join(' ') + '), legs kept (knee ' + dk.toFixed(3) + ' m); depth is the side nearest her rough pose (wrist ' + dw.toFixed(2) + ' m, elbow ' + de.toFixed(2) + ' m from the true wave): ' + JSON.stringify(f));
+  ok(/matches/.test(f.msg) && f.mode==='mq' && Math.max(...px) <= 12 && dk < 0.02 && dwn.inputs.detect_body==='enable' && dwn.inputs.detect_hand==='disable' && dwn.inputs.bbox_detector==='None', '🦴 her skeleton now waves like the picture: every joint within 12 px of it (' + px.join(' ') + '), legs kept (knee ' + dk.toFixed(3) + ' m); depth is the side nearest her rough pose (wrist ' + dw.toFixed(2) + ' m, elbow ' + de.toFixed(2) + ' m from the true wave): ' + JSON.stringify(f));
   if(process.env.SHOT){ await page.evaluate(() => document.querySelector('[data-v="persp"]').click()); await page.waitForTimeout(400); await page.screenshot({path:process.env.SHOT + '/pose-fit.png'}); }
   // 🎬 Act it out (Jordan 2026-10-29): from her A pose, MiniMax films the action, DWPose reads each frame, her skeleton follows as you scrub
   { const a0 = await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.pose = 'apose'; delete ob.bq; ob.mode = 'mq'; SCENE.drawSel(); return !!document.querySelector('[data-act="render"]'); });
@@ -114,6 +114,20 @@ const DEPS = process.env.RIG_DEPS || '';
     await page.waitForFunction(() => !!(SCENE.sc.objs[0].act && SCENE.sc.objs[0].act.bq), null, {timeout:20000});
     const r = await page.evaluate(() => ({job:!!SCENE.sc.objs[0].actJob, msg:(document.querySelector('#rmsg') || {}).textContent}));
     ok(GRAPHS.length===n0 + 1 && !r.job, '🎬 a video still being made when the app was closed is picked up when you come back (not made twice): ' + JSON.stringify(r)); }
+  // ✨ Imagine the pose (Jordan 2026-10-29): her LoRA paints the action freely (full body, white background), the rig is matched to the pick
+  { await page.evaluate(() => { const ob = SCENE.sc.objs[0]; ob.pose = 'apose'; delete ob.bq; ob.mode = 'mq'; SCENE.drawSel(); document.querySelector('#rmsg').textContent = ''; document.querySelector('[data-act="imagine"]').click(); });
+    await page.waitForFunction(() => /Pick/.test((document.querySelector('#rmsg') || {}).textContent || ''), null, {timeout:20000});
+    const g = Object.values(GRAPHS[GRAPHS.length - 1]), txt = g.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text);
+    ok(!g.some(n => /ControlNet/.test(n.class_type)) && /jumping/.test(txt[0]) && /full body/.test(txt[0]) && /white background/.test(txt[0]) && !/standing/.test(txt[0]) && /cropped/.test(txt[1]) && g.some(n => n.class_type==='LoraLoader' && n.inputs.lora_name==='elliex.safetensors'),
+      '✨ Imagine paints her from the words alone (her LoRA, full body, white background, no ControlNet, no cropping): ' + JSON.stringify({txt, cls:g.map(n => n.class_type)}));
+    await page.evaluate(() => document.querySelector('[data-try="2"]').click()); await page.waitForTimeout(200);
+    // DWPose "sees" her waving, smaller and off to one side of the picture
+    KP = await page.evaluate(() => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id), P = SCENE.picPts(o, ob.shot); ob.pose = 'wave'; ob.mode = 'mq'; SCENE.poseFor('cam');
+      const pts = SCENE.jointPts(o).map(p => P.toPx(p)), flat = []; pts.forEach(([x, y]) => flat.push((x * 0.7 + 0.2 * P.W) / P.W, (y * 0.7 + 0.1 * P.H) / P.H, 0.9)); ob.pose = 'apose'; ob.mode = 'shot'; SCENE.poseFor('cam'); return {flat, W:P.W, H:P.H, px:pts}; });
+    await page.evaluate(() => { document.querySelector('#rmsg').textContent = ''; document.querySelector('[data-act="fit"]').click(); });
+    await page.waitForFunction(() => /skeleton matches|rror|No PC|nobody|not sure/.test((document.querySelector('#rmsg') || {}).textContent || ''), null, {timeout:20000});
+    const e = await page.evaluate(KP => { const ob = SCENE.sc.objs[0], o = SCENE.objs.get(ob.id), P = SCENE.picPts(o, ob.shot); SCENE.poseFor('cam'); return SCENE.jointPts(o).slice(2, 14).map((p, i) => { const [x, y] = P.toPx(p), [ex, ey] = KP.px[i + 2]; return Math.round(Math.hypot(x - ex, y - ey)); }); }, KP);
+    ok(Math.max(...e) <= 15, '🦴 her rig matches a free painting even where it stands smaller and to one side (px off her own waving pose: ' + e.join(' ') + ')'); }
   // the views go all the way round her, under the floor and over her head (Jordan 2026-10-29)
   { const el = await page.evaluate(() => window.EL_MAX * 180 / Math.PI); ok(el >= 85, 'the views turn up to ' + Math.round(el) + '° above and below her'); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));

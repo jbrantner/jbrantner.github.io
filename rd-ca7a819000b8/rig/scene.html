@@ -689,6 +689,7 @@ function shotOf(cam, W, H, bgc){ const rt = new THREE.WebGLRenderTarget(W, H, {c
 const isIn = (m, root) => { for(let p = m.parent; p; p = p.parent) if(p===root) return true; return false; };
 const isAnc = (m, child) => { for(let p = child.parent; p; p = p.parent) if(p===m) return true; return false; };
 // talking to the PC: its lists, an upload, a graph and waiting for it
+const FREE_NEG = ', cropped, out of frame, close-up, upper body, cowboy shot, portrait, feet out of frame, head out of frame, detailed background, scenery, multiple views'; // (✨ her whole body on plain white, for a clean DWPose match)
 const PROMPT_TAIL = 'full body, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres, highres';
 // 🪑 a 3D object (Jordan 2026-10-28: "a 3d chair would become a flat image that is painted over by illustrious and uses the same style lora"):
 // its words (the library's, or its name), and the scene's characters' model and style LoRA so it matches them
@@ -697,9 +698,9 @@ const OBJ_TAIL = 'no humans, still life, object focus, simple background, white 
 function kitE(ob, e){ if(ob.kind!=='obj') return e; const who = SC.objs.map(x => libOf(x.ref)).find(c => c && c.kind!=='obj' && c.ckpt) || {};
   return {ckpt:e.ckpt || who.ckpt, style:e.style || who.style, name:e.name, words:(e.tags || e.prompt || e.name || 'object').replace(/\(3D\)/i, '').replace(/^(AFKJ Style,\s*)/i, '').trim().toLowerCase(), obj:true}; }
 // (ow: 📝 its own words in this scene as tags, Jordan 2026-10-29: "angry" belongs where she is posed and painted, not only in Render Scene's 0.5 repaint)
-const wordsOf = (ob, E, los, ow) => E.obj ? [lorasOf(E, los || []).some(([l]) => /afkj/i.test(l)) ? 'AFKJ Style' : '', E.words, ow, OBJ_TAIL].filter(Boolean).join(', ') : herWords(E, actNow(ob) && (SC.desc || '').trim() ? 'none' : ob.pose) + (ow ? ', ' + ow : '') + ', ' + PROMPT_TAIL;
+const wordsOf = (ob, E, los, ow, free) => E.obj ? [lorasOf(E, los || []).some(([l]) => /afkj/i.test(l)) ? 'AFKJ Style' : '', E.words, ow, OBJ_TAIL].filter(Boolean).join(', ') : herWords(E, (actNow(ob) || free) && (SC.desc || '').trim() ? 'none' : ob.pose) + (ow ? ', ' + ow : '') + ', ' + PROMPT_TAIL;
 const actNow = ob => POSE && SC && (ob.pose!=='apose' || !!ob.bq); // (🤸 the A-pose painting is the video's first frame: the action is for the video, and for paintings once she's posed)
-const ownTags = async ob => { const t = [actNow(ob) ? SC.desc : '', ob.words].map(x => (x || '').trim()).filter(Boolean).join(', '); return t ? tagsOf(t) : ''; }; // (🤸 the action described goes with them)
+const ownTags = async (ob, free) => { const t = [actNow(ob) || free ? SC.desc : '', ob.words].map(x => (x || '').trim()).filter(Boolean).join(', '); return t ? tagsOf(t) : ''; }; // (🤸 the action described goes with them)
 const lorasOf = (E, los) => (E.obj ? [[E.style || los.find(n => /afkj/i.test(n)), 1]] : [[E.style, 1], [E.lora, +E.strength || 1]]).filter(([l]) => l && los.includes(l));
 // her words (Jordan 2026-10-28: a sitting Ellen came out blonde, bootless and "standing"): LoRA trigger + her saved tags + the pose as words; pose and framing words from her card are dropped so they never fight the guide
 const POSE_WORDS = {none:'', apose:'standing', stand:'standing', hip:'standing, hand on own hip', walk:'walking', sit:'sitting', wave:'standing, waving'};
@@ -732,24 +733,25 @@ async function runGraph(url, g, save, tick, opt){ opt = opt || {}; const j = {pr
     if(!it && opt.pid){ try{ const q = await (await fetch(url + '/queue', {cache:'no-store'})).json(), inQ = [...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===j.prompt_id); gone = inQ ? 0 : gone + 1; if(gone >= 3) throw new Error('That job is no longer on the PC (ComfyUI restarted?).'); }catch(e){ if(gone >= 3) throw e; } }
     if(Date.now() - t0 > (opt.mins || 15) * 60000) throw new Error('No answer after ' + (opt.mins || 15) + ' minutes.'); } }
 const cutOut = (add, out, bgm) => bgm ? [add('JoinImageWithAlpha', {image:out, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:bgm}), 0], image:out}), 0]}), 0]}), 0] : out;
-async function renderAngle(ob){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
+// (free: ✨ Imagine the pose, Jordan 2026-10-29: no rig guide at all, her LoRA paints the action from the words alone, then the rig is matched to the pick)
+async function renderAngle(ob, free){ const o = OBJ.get(ob.id), e = o && o.e, st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; };
   if(!e || !PC.url){ st('Render (or the PC with her library) is not answering.'); return; } if(BUSY.has(ob.id)) return; BUSY.add(ob.id); drawSel();
   try{ st('Asking the PCs for their models…'); const E = kitE(ob, e), K = await kitFor(E, 'cn'); const {url, ckpt, cn, bgm, fd, ud, sam, los} = K;
     if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); } const G = guidesFor(o, 'cam'), stamp = Date.now().toString(36);
-    st(E.obj ? 'Sending the 3D object…' : 'Sending the mannequin…'); const dn = await upload(url, G.depth, 'rd-scene-depth-' + stamp + '.png'), pn = G.pose && await upload(url, G.pose, 'rd-scene-pose-' + stamp + '.png'), cl = G.colour && await upload(url, G.colour, 'rd-scene-obj-' + stamp + '.png');
+    st(free ? 'Getting ready…' : E.obj ? 'Sending the 3D object…' : 'Sending the mannequin…'); const dn = free ? '' : await upload(url, G.depth, 'rd-scene-depth-' + stamp + '.png'), pn = !free && G.pose && await upload(url, G.pose, 'rd-scene-pose-' + stamp + '.png'), cl = G.colour && await upload(url, G.colour, 'rd-scene-obj-' + stamp + '.png');
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:ckpt}); let model = [ck, 0], clip = [ck, 1];
     for(const [l, w] of lorasOf(E, los)){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
-    const pos0 = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, los, await ownTags(ob))}), neg0 = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '')}), L = add('ControlNetLoader', {control_net_name:cn});
+    const pos0 = add('CLIPTextEncode', {clip, text:wordsOf(ob, E, los, await ownTags(ob, free), free)}), neg0 = add('CLIPTextEncode', {clip, text:NEG + (E.obj ? BG_NEG : '') + (free ? FREE_NEG : '')}), L = free ? null : add('ControlNetLoader', {control_net_name:cn});
     let pos = [pos0, 0], neg = [neg0, 0];
-    for(const [img, type, str, end] of E.obj ? [[dn, 'depth', 0.7, 0.7]] : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
+    for(const [img, type, str, end] of free ? [] : E.obj ? [[dn, 'depth', 0.7, 0.7]] : [[pn, 'openpose', 0.9, 0.75], [dn, 'depth', 0.45, 0.5]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:E.obj ? [add('RepeatLatentBatch', {samples:[add('VAEEncode', {pixels:[add('LoadImage', {image:cl}), 0], vae:[ck, 2]}), 0], amount:4}), 0] : [add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:E.obj ? OBJ_DN : 1}); // 🪑 an object starts from its own colours
     let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0];
     if(fd && ud && !E.obj) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, sam);
     out = cutOut(add, out, bgm);
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (e.name || 'her').replace(/[^\w-]+/g, '_')});
     const imgs = await runGraph(url, g, save, t => st('Painting 4 on ' + pcName(url) + '… ' + t + ' s'));
-    ob.tries = imgs.map(im => ({pc:url, file:im.filename, sub:im.subfolder || '', depth:dn, key:shotKey(ob), ...G.geo})); imgs.forEach(im => texOf(shotUrl({pc:url, file:im.filename, sub:im.subfolder}), true)); // (depth: the guide she was painted from, for the 💡 light)
+    ob.tries = imgs.map(im => Object.assign({pc:url, file:im.filename, sub:im.subfolder || '', depth:dn, key:shotKey(ob), ...G.geo}, free ? {free:true} : {})); imgs.forEach(im => texOf(shotUrl({pc:url, file:im.filename, sub:im.subfolder}), true)); // (depth: the guide she was painted from, for the 💡 light)
     st(bgm ? 'Pick the one you like. ⤴ High res then redraws it 2× (▶ Render all does every pick).' : 'Pick one (no PC has BiRefNet, so the white round her is cut away here).'); changed(); }
   catch(err){ st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
@@ -793,6 +795,11 @@ function fitTo(ob, o, sh, kp){ const P = picPts(o, sh), J = Object.fromEntries(J
   // where her hips are in the picture against the mannequin's: the whole figure slid flat, so a shifted painting doesn't bend her legs
   const p0 = jointPts(o), hipM = [8, 11].map(i => P.toPx(p0[i])), ok = i => kp[i] && kp[i][2] > 0.3;
   const sh2 = ok(8) && ok(11) ? [(kp[8][0] + kp[11][0] - hipM[0][0] - hipM[1][0]) / 2, (kp[8][1] + kp[11][1] - hipM[0][1] - hipM[1][1]) / 2] : [0, 0];
+  // ✨ a freely painted pose was not drawn over her rig: she can stand anywhere in it at any size, so it is first laid over her (hips on her hips,
+  // her neck-to-hips length as hers)
+  if(sh.free && ok(1) && ok(8) && ok(11)){ const kh = [(kp[8][0] + kp[11][0]) / 2, (kp[8][1] + kp[11][1]) / 2], rh = [(hipM[0][0] + hipM[1][0]) / 2, (hipM[0][1] + hipM[1][1]) / 2], rn = P.toPx(shoulderMid(o)), kn = neckPx(kp);
+    const f = Math.hypot(rn[0] - rh[0], rn[1] - rh[1]) / Math.max(1, Math.hypot(kn[0] - kh[0], kn[1] - kh[1]));
+    kp = kp.map(k => k && [rh[0] + (k[0] - kh[0]) * f, rh[1] + (k[1] - kh[1]) * f, k[2]]); sh2[0] = sh2[1] = 0; }
   for(const name of FIT_ORDER){ const i = J[name]; if(!ok(i)) continue; const b = bonesOf(o.mq.userData.body)[name]; if(!b) continue;
     const pts = jointPts(o), piv = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld), cur = name==='bn_spine02' ? shoulderMid(o) : pts[i], L = cur.distanceTo(piv), ray = name==='bn_spine02' ? P.ray(...neckPx(kp).map((v, j) => v - sh2[j])) : P.ray(kp[i][0] - sh2[0], kp[i][1] - sh2[1]);
     const oc = ray.origin.clone().sub(piv), bb = oc.dot(ray.direction), disc = bb * bb - (oc.lengthSq() - L * L), want = cur.clone().sub(piv).normalize(); let X;
@@ -803,9 +810,10 @@ function fitTo(ob, o, sh, kp){ const P = picPts(o, sh), J = Object.fromEntries(J
 // DWPose: the PCs that have it, its inputs (body only), a picture sent over, and the 18 points of each frame it read, in the picture's own pixels
 const pcsAll = () => [PC.url, ...(window.SCENE_SERVERS || deckServers()).map(s => s.url.replace(/\/+$/, ''))].filter((u, i, a) => u && a.indexOf(u)===i);
 async function dwPc(need){ for(const u of pcsAll()){ try{ const j = await (await fetch(u + '/object_info/DWPreprocessor', {cache:'no-store'})).json(); if(j.DWPreprocessor && await hasNode(u, 'SavePoseKpsAsJsonFile') && (!need || await need(u))) return {url:u, dw:j.DWPreprocessor}; }catch(e){} } return {}; }
+// (bbox_detector None: the whole picture is the one person. Its person finders missed anime Ellen on white in 3 of 4 stills and 95 of 124 video frames, Render 2026-10-29)
 function dwInputs(dw, image, W, H){ const res = Math.max(512, Math.min(1024, Math.round(Math.max(W, H) / 64) * 64)), inputs = {image};
   for(const [k, spec] of Object.entries(Object.assign({}, dw.input.required || {}, dw.input.optional || {}))){ if(k==='image') continue; const [t, d] = spec;
-    inputs[k] = k==='detect_body' ? 'enable' : /detect_(hand|face)/.test(k) ? 'disable' : k==='resolution' ? res : Array.isArray(t) ? ((d && d.default) ?? t[0]) : (d && d.default); if(inputs[k]===undefined) delete inputs[k]; }
+    inputs[k] = k==='detect_body' ? 'enable' : /detect_(hand|face)/.test(k) ? 'disable' : k==='resolution' ? res : k==='bbox_detector' && Array.isArray(t) && t.includes('None') ? 'None' : Array.isArray(t) ? ((d && d.default) ?? t[0]) : (d && d.default); if(inputs[k]===undefined) delete inputs[k]; }
   return inputs; }
 async function sendPic(url, sh, pre, white){ let b = await (await fetch(shotUrl(sh))).blob();
   if(white) try{ const im = await createImageBitmap(b), c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0); b = await new Promise(r => c.toBlob(r, 'image/png')); }catch(e){} // (her cut-out on plain white, as MiniMax and DWPose expect)
@@ -820,7 +828,7 @@ async function fitSkeleton(ob){ const o = OBJ.get(ob.id), sh = ob.shot, st = msg
   if(!o || !sh || BUSY.has(ob.id)) return; if(!(o.mq && o.mq.userData.body && BODY && BODY.face)) return st('Her rig (the base body) has not loaded from Render.'); if(!sh.pm) return st('This pick was painted before matching was possible: 🎬 paint it again.');
   BUSY.add(ob.id); drawSel();
   try{ st('Looking for a PC with DWPose…'); const {url, dw} = await dwPc(); if(!url) throw new Error('No PC has DWPose (the comfyui_controlnet_aux nodes).');
-    const [W, H] = sh.px; st('Sending the picture to ' + pcName(url) + '…'); const up = await sendPic(url, sh, 'rd-pose-fit-');
+    const [W, H] = sh.px; st('Sending the picture to ' + pcName(url) + '…'); const up = await sendPic(url, sh, 'rd-pose-fit-', true);
     const out = await runGraph(url, {1:{class_type:'LoadImage', inputs:{image:up}}, 2:{class_type:'DWPreprocessor', inputs:dwInputs(dw, ['1', 0], W, H)}, 3:{class_type:'SavePoseKpsAsJsonFile', inputs:{pose_kps:['2', 1], filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/dwpose'}}}, '2', t => st('DWPose is reading her pose on ' + pcName(url) + '… ' + t + ' s'));
     const kp = kpFrames(out, W, H)[0]; if(!kp) throw new Error('DWPose found nobody in the picture.');
     const n = fitTo(ob, o, sh, kp); if(!n) throw new Error('DWPose was not sure of any of her joints.');
@@ -1116,14 +1124,14 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
   box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; if(SC.d3 && ob.mode==='shot'){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; delete ob.bq; drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; if(SC.d3){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
-  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='actout') return actOut(ob); if(b.dataset.act==='vid'){ ob.act.shut = !ob.act.shut; drawSel(); changed(); return; } if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
+  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='imagine') return renderAngle(ob, true); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='actout') return actOut(ob); if(b.dataset.act==='vid'){ ob.act.shut = !ob.act.shut; drawSel(); changed(); return; } if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
   if(ob.lock) box.querySelectorAll('input').forEach(i => i.disabled = true); }
 // 🧍 her pose (on the base body; the block mannequin only stands)
 // 🎬 the Act it out part of her settings
-const actBox = ob => { const A = ob.act, ok = !!(ob.shot && ob.shot.pm), busy = BUSY.has(ob.id);
-  return (A && A.bq ? `<div class="lbl">🎬 ${esc(A.words || 'Her action')}: <b id="actf">Frame ${(A.f || 0) + 1} of ${A.bq.length}</b></div><div class="line"><input type="range" data-scrub min="0" max="${A.bq.length - 1}" step="1" value="${A.f || 0}" style="flex:1"></div>
+const actBox = ob => { const A = ob.act, ok = !!(ob.shot && ob.shot.pm && !ob.shot.free), busy = BUSY.has(ob.id);
+  return `<div class="line"><button data-act="imagine" ${busy || !(SC.desc || '').trim() ? 'disabled' : ''}>✨ Imagine the pose</button></div><p class="note">${(SC.desc || '').trim() ? 'Her LoRA paints 4 of her doing the action, free (no rig guiding it). Pick one, then 🦴 Match her skeleton to it.' : 'Describe the action at the top first, then ✨ Imagine the pose: her LoRA paints it freely and her rig is matched to the one you pick.'}</p>` + (A && A.bq ? `<div class="lbl">🎬 ${esc(A.words || 'Her action')}: <b id="actf">Frame ${(A.f || 0) + 1} of ${A.bq.length}</b></div><div class="line"><input type="range" data-scrub min="0" max="${A.bq.length - 1}" step="1" value="${A.f || 0}" style="flex:1"></div>
       <div class="line"><button data-act="vid" aria-pressed="${!A.shut}">${A.shut ? '▶ Show the video' : '✕ Hide the video'}</button></div><p class="note">Scrub to the moment you want: her skeleton takes that frame's pose. Then drag the pink dots to fine-tune it.</p>` : '')
     + `<div class="line"><button data-act="actout" ${busy || !ok ? 'disabled' : ''}>🎬 ${A ? 'Act it out again' : 'Act it out'}</button></div>`
     + `<p class="note">${ok ? 'MiniMax films her doing the action you described at the top, starting from the picked painting (about 5 minutes on Render); her skeleton follows the video.' : 'To act it out: in her A pose, 🎬 Render this angle and pick a painting (the video starts from it), describe the action at the top, then 🎬 Act it out.'}</p>`; };
