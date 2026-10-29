@@ -100,6 +100,7 @@ body.pz.pzc .cols{display:none}body.pz .cols{bottom:calc(58px + env(safe-area-in
 import * as THREE from 'three';
 import {paintLook} from './look.js';
 import {solveOrbit} from './orbit.js';
+import {bvhPose} from './bvh.js';
 import {TOON, loadBody as fetchBody, bodyMesh as shapedBody, POSES, APOSE, poseBody, bonesOf, bodyJoints, DEPTH_MAT, drawPose, comboOf, hasNode, upload, faceFix, NEG} from './body.js';
 const QS = new URLSearchParams(location.search), HID = QS.get('h')==='1', D2R = Math.PI / 180, $ = s => document.querySelector(s);
 // 🌄 the same page as the Environment tab (?env=1, Jordan 2026-10-28): an environment is a ground (tiling textures, painted in patches),
@@ -1076,6 +1077,9 @@ function fitOrbit(ob, o, sh, frames){ const N = frames.length, views = [];
   const M = new THREE.Matrix4().fromArray(sh.mw), R = new THREE.Vector3().setFromMatrixColumn(M, 0).normalize(), U = new THREE.Vector3().setFromMatrixColumn(M, 1).normalize(), B = new THREE.Vector3().setFromMatrixColumn(M, 2).normalize();
   const P = {}; for(const [k, x] of Object.entries(X)){ const xr = ct * x.x - s0 * x.z, zr = s0 * x.x + ct * x.z, yc = ce * x.y - se * zr, zc = (se * x.y + ce * zr) * (mirror ? -1 : 1);
     P[nm(k)] = R.clone().multiplyScalar(xr).addScaledVector(U, yc).addScaledVector(B, zc); }
+  return Object.assign(fitDirs(ob, o, P), {used:used.length, n:views.length}); }
+// her bones pointed along a 3D pose (P: OpenPose names → world points), from her A pose
+function fitDirs(ob, o, P){
   const mid = (a, b) => P[a] && P[b] ? P[a].clone().add(P[b]).multiplyScalar(0.5) : null, hip = mid('lhip', 'rhip'), neck = mid('lsh', 'rsh');
   const DIRS = {bn_spine02:[hip, neck], bn_head:[neck, P.nose], bn_upperarm01R:[P.rsh, P.rel], bn_forearm01R:[P.rel, P.rwr], bn_upperarm01L:[P.lsh, P.lel], bn_forearm01L:[P.lel, P.lwr],
     bn_thigh01R:[P.rhip, P.rkn], bn_shin01R:[P.rkn, P.rank], bn_thigh01L:[P.lhip, P.lkn], bn_shin01L:[P.lkn, P.lank]};
@@ -1083,7 +1087,56 @@ function fitOrbit(ob, o, sh, frames){ const N = frames.length, views = [];
   for(const name of FIT_ORDER){ const [p, q] = DIRS[name]; if(!p || !q){ missing.push({bn_head:'head', bn_spine02:'back'}[name] || name.replace(/^bn_|01/g, '').replace(/R$/, ' (right)').replace(/L$/, ' (left)')); continue; }
     const b = bonesOf(o.mq.userData.body)[name]; if(!b) continue; const pts = jointPts(o), piv = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld), cur = name==='bn_spine02' ? shoulderMid(o) : pts[J[name]];
     swing(ob, o, name, cur, piv.clone().addScaledVector(q.clone().sub(p).normalize(), cur.distanceTo(piv))); }
-  return {used:used.length, n:views.length, missing}; }
+  return {missing}; }
+// 📸 Pose from a photo (Jordan 2026-10-29: posing the rig on the phone is hard, and DWPose's flat points couldn't place her legs): Z-Image Turbo paints a
+// real person doing the action (or use your own photo), SAM 3D Body reads that person's pose in 3D (a BVH), and her bones are pointed the same way
+async function samKit(){ for(const u of pcsAll()){ try{ if(!(await hasNode(u, 'SAM3DBody_Predict')) || !(await hasNode(u, 'BuildPoseFile'))) continue;
+    const [sams, unets, moges, clips, vaes] = await Promise.all([comboOf(u, 'SAM3DBody_Loader', 'model_file'), comboOf(u, 'UNETLoader', 'unet_name'), comboOf(u, 'LoadMoGeModel', 'model_name'), comboOf(u, 'CLIPLoader', 'clip_name'), comboOf(u, 'VAELoader', 'vae_name')]);
+    const sam = sams.find(n => /int8/i.test(n)) || sams[0], det = unets.find(n => /rt_detr/i.test(n)); if(!sam || !det) continue;
+    return {url:u, sam, det, moge:moges.find(n => /moge/i.test(n)) || '', zit:unets.find(n => /z_image_turbo/i.test(n)) || '', zclip:clips.find(n => /qwen_3_4b/i.test(n)) || '', zvae:vaes.find(n => /^ae\./i.test(n)) || ''}; }catch(e){} }
+  return null; }
+const photoPrompt = d => 'Full body photo of one woman ' + d.trim().replace(/[.!]+$/, '') + ', plain grey t-shirt and grey leggings, barefoot, plain white studio background, her whole body in frame from head to feet, sharp focus';
+async function posePhotos(ob){ const st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; }; if(BUSY.has(ob.id) || !(SC.desc || '').trim()) return; BUSY.add(ob.id); drawSel();
+  try{ st('Looking for a PC with SAM 3D Body…'); const k = await samKit(); if(!k) throw new Error('No PC has SAM 3D Body (it is on Render).');
+    if(!k.zit || !k.zclip || !k.zvae) throw new Error(pcName(k.url) + " hasn't got Z-Image Turbo (z_image_turbo, qwen_3_4b and ae.safetensors).");
+    const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
+    const model = add('ModelSamplingAuraFlow', {model:[add('UNETLoader', {unet_name:k.zit, weight_dtype:'default'}), 0], shift:3}), vae = add('VAELoader', {vae_name:k.zvae});
+    const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.zclip, type:'lumina2', device:'default'}), 0], text:photoPrompt(SC.desc)}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
+    const saves = [0, 1, 2, 3].map(() => { const ks = add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 2 ** 40), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0],
+      latent_image:[add('EmptySD3LatentImage', {width:832, height:1216, batch_size:1}), 0], denoise:1});
+      return add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:[vae, 0]}), 0], filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/photo'}); });
+    const res = await runGraph(k.url, g, saves, t => st('📸 Z-Image is painting 4 people ' + SC.desc.trim() + ' on ' + pcName(k.url) + '… ' + t + ' s'));
+    ob.photos = saves.map(s2 => ((res[s2] || {}).images || [])[0]).filter(Boolean).map(im => ({pc:k.url, file:im.filename, sub:im.subfolder || ''})); delete ob.photoUsed; changed();
+    st(ob.photos.length ? '📸 Tap the photo whose pose you want: her rig takes it in 3D.' : 'The photos did not come back.'); }
+  catch(err){ st(err.message || String(err)); }
+  BUSY.delete(ob.id); drawSel(); }
+// read the pose of a photo already on the PC (sh) or one from the phone (file), and fit her rig to it
+async function photoPose(ob, sh, file){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; }; if(BUSY.has(ob.id) || !o) return;
+  if(!(o.mq && o.mq.userData.body && BODY)){ st('Her rig (the base body) has not loaded from Render.'); return; } BUSY.add(ob.id); drawSel();
+  try{ st('Looking for a PC with SAM 3D Body…'); const k = await samKit(); if(!k) throw new Error('No PC has SAM 3D Body (it is on Render).');
+    st('Sending the photo to ' + pcName(k.url) + '…'); let img;
+    if(file){ const fd = new FormData(); fd.append('image', file, 'rd-pose-photo-' + Date.now().toString(36) + '.' + ((file.name || '').split('.').pop() || 'png')); fd.append('overwrite', 'true');
+      const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending the photo failed (' + r.status + ')'); img = (await r.json()).name; }
+    else img = await sendPic(k.url, sh, 'rd-pose-photo-');
+    const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
+    const li = add('LoadImage', {image:img}), sm = add('SAM3DBody_Loader', {model_file:k.sam});
+    const box = add('RTDETR_detect', {model:[add('UNETLoader', {unet_name:k.det, weight_dtype:'default'}), 0], image:[li, 0], threshold:0.5, class_name:'person', max_detections:1});
+    const fov = k.moge ? [add('MoGeGeometryToFOV', {moge_geometry:[add('MoGeInference', {moge_model:[add('LoadMoGeModel', {model_name:k.moge}), 0], image:[li, 0], resolution_level:9, fov_x_degrees:0, batch_size:4, force_projection:true, apply_mask:true, refine_steps:3}), 0], axis:'vertical', unit:'degrees'}), 0] : 0;
+    const pd = add('SAM3DBody_Predict', {sam3d_body_model:[sm, 0], image:[li, 0], run_hand_refinement:false, fov, batch_size:64, bboxes:[box, 0]});
+    const sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps:24, camera_translation:'off', track_index:-1, format:'bvh', 'format.units':'cm'}), 0],
+      filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/photo_pose', viewport_state:{}, width:1024, height:1024});
+    const res = await runGraph(k.url, g, [sv], t => st('🦴 SAM 3D Body is reading the pose on ' + pcName(k.url) + '… ' + t + ' s'));
+    const f = (function find(x){ if(!x || typeof x!=='object') return null; if(typeof x.filename==='string' && /\.bvh$/i.test(x.filename)) return x; for(const v of Object.values(x)){ const r = find(v); if(r) return r; } return null; })(res[sv]);
+    if(!f) throw new Error('SAM 3D Body found no one in the photo.');
+    const txt = await (await fetch(k.url + '/view?filename=' + encodeURIComponent(f.filename) + '&subfolder=' + encodeURIComponent(f.subfolder || '') + '&type=' + (f.type || 'output'))).text();
+    const B = bvhPose(txt); if(!B) throw new Error("That pose file isn't from SAM 3D Body's rig.");
+    // turned so the photo's hips face her way (her own ⟳ Turn still sets where she faces)
+    const V = a => new THREE.Vector3(a[0], a[1], a[2]), L = V(B.lhip).sub(V(B.rhip)), yaw = Math.atan2(-L.z, L.x), Y = new THREE.Vector3(0, 1, 0), turn = (ob.rot || 0) * D2R - yaw;
+    const P = {}; for(const [nm, a] of Object.entries(B)) P[nm] = V(a).applyAxisAngle(Y, turn);
+    const r = fitDirs(ob, o, P); ob.mode = 'mq'; if(sh) ob.photoUsed = sh.file; poseFor('cam'); changed(); dirty = true;
+    st('🦴 She has the photo\'s pose' + (r.missing.length ? ' (not: ' + r.missing.join(', ') + ')' : '') + '. Fine-tune it with the rig, then 🎬 Render this angle or Move into the pose.'); }
+  catch(err){ st(err.message || String(err)); }
+  BUSY.delete(ob.id); drawSel(); }
 // her pose at every frame, each one fitted from the frame before (from her A pose), kept as bends
 async function trackAct(ob, o){ const A = ob.act; ob.pose = 'apose'; delete ob.bq; A.bq = [];
   for(let i = 0; i < A.kp.length; i++){ if(A.kp[i]) fitTo(ob, o, A.sh, A.kp[i]); A.bq.push(ob.bq ? Object.assign({}, ob.bq) : null); if(i % 12===11) await new Promise(r => setTimeout(r, 0)); } }
@@ -1333,15 +1386,21 @@ function drawSel(numbersOnly){ const box = $('#selbox'), ob = SC && SC.objs.find
   box.querySelectorAll('[data-turn]').forEach(b => b.onclick = () => { if(ob.lock) return; let r = Math.round(((ob.rot || 0) + +b.dataset.turn) / 5) * 5; r = ((r + 180) % 360 + 360) % 360 - 180; ob.rot = r; drawSel(); changed(); });
   box.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { ob.mode = b.dataset.mode; if(SC.d3 && ob.mode==='shot'){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
   box.querySelectorAll('[data-pose]').forEach(b => b.onclick = () => { ob.pose = b.dataset.pose; delete ob.bq; drawSel(); changed(); dirty = true; });
+  box.querySelectorAll('[data-photo-i]').forEach(b => b.onclick = () => photoPose(ob, ob.photos[+b.dataset.photoI]));
+  { const fi = box.querySelector('[data-photo]'); if(fi) fi.onchange = () => { const f = fi.files && fi.files[0]; if(f) photoPose(ob, null, f); fi.value = ''; }; }
   box.querySelectorAll('[data-try]').forEach(b => b.onclick = () => { ob.shot = Object.assign({}, ob.tries[+b.dataset.try]); ob.mode = 'shot'; if(SC.d3){ SC.d3 = false; drawD3(); } drawSel(); changed(); dirty = true; });
-  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='imagine') return renderAngle(ob, true); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='orbit') return orbOut(ob); if(b.dataset.act==='move') return moveInto(ob); if(b.dataset.act==='actout') return actOut(ob); if(b.dataset.act==='vid'){ ob.act.shut = !ob.act.shut; drawSel(); changed(); return; } if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
+  box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { if(b.dataset.act==='render') return renderAngle(ob); if(b.dataset.act==='imagine') return renderAngle(ob, true); if(b.dataset.act==='hi') return hiRes(ob); if(b.dataset.act==='fit') return fitSkeleton(ob); if(b.dataset.act==='orbit') return orbOut(ob); if(b.dataset.act==='move') return moveInto(ob); if(b.dataset.act==='photos') return posePhotos(ob); if(b.dataset.act==='myphoto') return box.querySelector('[data-photo]').click(); if(b.dataset.act==='actout') return actOut(ob); if(b.dataset.act==='vid'){ ob.act.shut = !ob.act.shut; drawSel(); changed(); return; } if(b.dataset.act==='unbend'){ delete ob.bq; drawSel(); changed(); dirty = true; return; } if(b.dataset.act==='rm'){ if(!confirm('Take ' + (ob.label || (it ? 'it' : 'her')) + ' out of this scene? ' + (it ? 'It stays' : 'She stays') + ' in the library.')) return; SC.objs = SC.objs.filter(o => o!==ob); ui.sel = ''; }
     else { const c = Object.assign({}, ob, {id:uid('o'), x:ob.x + 0.8, lock:false}); c.label = nextLabel(e ? e.name : ob.label); SC.objs.push(c); ui.sel = c.id; }
     saveUi(); buildObjs(); drawList(); drawSel(); changed(); });
   if(ob.lock) box.querySelectorAll('input').forEach(i => i.disabled = true); }
 // 🧍 her pose (on the base body; the block mannequin only stands)
 // 🎬 the Act it out part of her settings
 const actBox = ob => { const A = ob.act, ok = !!(ob.shot && ob.shot.pm && !ob.shot.free), busy = BUSY.has(ob.id);
-  return `<div class="line"><button data-act="imagine" ${busy || !(SC.desc || '').trim() ? 'disabled' : ''}>✨ Imagine the pose</button></div><p class="note">${(SC.desc || '').trim() ? 'Her LoRA paints 4 of her doing the action, free (no rig guiding it). Pick one, then 🦴 Match her skeleton to it.' : 'Describe the action at the top first, then ✨ Imagine the pose: her LoRA paints it freely and her rig is matched to the one you pick.'}</p>` + (A && A.bq ? `<div class="lbl">🎬 ${esc(A.words || 'Her action')}: <b id="actf">Frame ${(A.f || 0) + 1} of ${A.bq.length}</b></div><div class="line"><input type="range" data-scrub min="0" max="${A.bq.length - 1}" step="1" value="${A.f || 0}" style="flex:1"></div>
+  const ph = ob.photos || [], d = (SC.desc || '').trim();
+  return `<div class="line"><button data-act="photos" ${busy || !d ? 'disabled' : ''}>📸 Pose from a photo</button><button data-act="myphoto" ${busy ? 'disabled' : ''}>🖼 Use my photo</button><input type="file" accept="image/*" data-photo hidden></div>
+    <p class="note">${d ? 'Z-Image paints 4 real people doing the action; tap one and SAM 3D Body reads its pose in 3D, then her rig takes it. Or use a photo of your own (you striking the pose works well).' : 'Describe the action at the top, then 📸 Pose from a photo: a real person is painted doing it and her rig takes that pose in 3D. Or 🖼 use a photo of your own.'}</p>`
+    + (ph.length ? `<div class="tries">${ph.map((p, i) => `<button data-photo-i="${i}" aria-pressed="${ob.photoUsed===p.file}" ${busy ? 'disabled' : ''}><img src="${esc(shotUrl(p))}" alt="Photo ${i + 1}"></button>`).join('')}</div>` : '')
+    + `<div class="line"><button data-act="imagine" ${busy || !(SC.desc || '').trim() ? 'disabled' : ''}>✨ Imagine the pose</button></div><p class="note">${(SC.desc || '').trim() ? 'Her LoRA paints 4 of her doing the action, free (no rig guiding it). Pick one, then 🦴 Match her skeleton to it.' : 'Describe the action at the top first, then ✨ Imagine the pose: her LoRA paints it freely and her rig is matched to the one you pick.'}</p>` + (A && A.bq ? `<div class="lbl">🎬 ${esc(A.words || 'Her action')}: <b id="actf">Frame ${(A.f || 0) + 1} of ${A.bq.length}</b></div><div class="line"><input type="range" data-scrub min="0" max="${A.bq.length - 1}" step="1" value="${A.f || 0}" style="flex:1"></div>
       <div class="line"><button data-act="vid" aria-pressed="${!A.shut}">${A.shut ? '▶ Show the video' : '✕ Hide the video'}</button></div><p class="note">Scrub to the moment you want: her skeleton takes that frame's pose. Then fine-tune it with the rig controls.</p>` : '')
     + `<div class="line"><button data-act="actout" ${busy || !ok ? 'disabled' : ''}>🎬 ${A ? 'Act it out again' : 'Act it out'}</button></div>`
     + `<p class="note">${ok ? 'MiniMax films her doing the action you described at the top, starting from the picked painting (about 5 minutes on Render); her skeleton follows the video.' : 'To act it out: in her A pose, 🎬 Render this angle and pick a painting (the video starts from it), describe the action at the top, then 🎬 Act it out.'}</p>`; };
