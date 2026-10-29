@@ -115,7 +115,7 @@ const V = g => Object.values(g), has = (g, c) => V(g).some(n => n.class_type===c
   await page.evaluate(g => { closeSheets(); window.TEST_POSE = []; window.WAIT_MS = 150; S.gallery = [g]; save(); drawStrip(); show(0); }, pic('jump'));
 
   // the row under the picture is gone (✨ Finish stays for drafts); 🧊 is a block you add
-  ok(await page.evaluate(() => [...document.querySelectorAll('#resultActions button')].every(b => b.hidden || b.offsetParent===null)), 'nothing in the row under the picture');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#resultActions button')].filter(b => !b.hidden && b.offsetParent!==null).map(b => b.dataset.act).join()==='recipe,seed'), 'the row under the picture has only ⤵ Use its settings and 🎲 Keep this seed (Jordan 2026-10-29)');
   await page.click('#addBtn'); ok(await page.isVisible('[data-add="d3"]'), '🧊 3D is in the Add a block list'); await page.click('[data-add="d3"]');
   await page.waitForSelector('#d3Body [data-d3="start"]', {timeout:5000}).catch(async e => { console.log('DBG', await page.evaluate(() => JSON.stringify({b:S.blocks.map(b => b.type), open:S.open, body:($('#d3Body') || {}).outerHTML}))); throw e; });
   ok(!(await page.$('.block:has(#d3Body) [data-do="toggle"]')) && /Keep the app open/.test(await page.textContent('#d3Body')), 'the block has no on/off switch (it isn\'t part of the render) and, with no Render helper, says to keep the app open');

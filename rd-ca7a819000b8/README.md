@@ -395,3 +395,11 @@ Each height then becomes four quarter turns made with MiniMax FL2V, each one sta
 **v.288 (2026-10-29)**: 🪞 Give her a body. Characters made from a picture before the mannequin (like Ellie) can get one from their 📚 Library card. Her own eye-level pictures lie over the mannequin (see-through, same height, turning with her), her body, hair and look start from her tags, and ✓ Give her this body saves them into her library entry, pictures and LoRA untouched, so 🎬 Scene and 🤸 Pose pose her on a matched base body. Characters that have one get 🪞 Change her body.
 
 **v.289 (2026-10-29)**: 💇 Colored inner hair works like Tips: the first hair colour is her outer hair (written first, so Illustrious reads it as her main colour), the next her inner hair, with ⇄ Swap.
+**v.290 (2026-10-29): polish pass, part 2: old features removed** (Jordan: "all").
+- 🧍 Characters cards (the button in the Render recipe and its sheet: Pixal3D models, 🪄 Build it all, ⚡ Auto run, 🎞 Training shots, the older LoRA training, the training-set viewer) are gone; the 🧍 Character tab and 🎓 Her LoRA replace them. Card data (S.chars) is kept, so a comic character linked to an old card still gets its pictures.
+- 📷 Change angle and 🤸 Edit pose are gone from the preview and both picture viewers, with their panel under the picture and the strip's progress bars.
+- The Pose board block is gone (old recipes with one drop it); the 🤸 Pose tab replaces it.
+- The row under the preview shows ⤵ Use its settings and 🎲 Keep this seed again (plus ✨ Finish on a draft). Start picture, guide, Make 3D and Full size stay in the picture viewer.
+- Comic panels: the old 3D look / 3D object panel (no longer reachable since the 🧊 3D block) and its buttons are gone.
+- The engine the newer tabs share (turnaround and 3D kits, training shots, MiniMax camera moves, live queue progress) stays. About 2,300 lines and 7 tests for the removed screens are gone.
+- Fixed from v.284: the project row under the preview never showed (a comment swallowed the line that shows it).
