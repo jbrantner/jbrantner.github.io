@@ -747,11 +747,10 @@ const VL = (() => {
     const over = Math.ceil(-L - 1e-9), go = over > 0 ? `Overdrawn ${money(over)} · Cover it` : '';   // v144: no set-out button; the week starts on its own (any day there's room since v268)
     const plan = Math.min(Number(state.partyPlan || 0), planCap()), k = Math.min(Number(state.partyPlan || 0), partyRoom()), dl = sendNowDays(new Date(now));
     let h = clockBanner();
-    const on = n || pu.P || pu.spent;   // v150: Left today over the day stacks; the week's line under them
+    const on = n || pu.P || pu.spent || state.manualWeek;   // v150: Left today over the day stacks; the week's line under them; v323: a week loaded by hand always has its card
     if (on && !heroOpen) {   // v186: the day stacks on their own, as Jordan drew it; a tap opens the card for more
-      const cg = (state.packs || []).length && pu.P > 0;   // v275: categories get their own card (daily and weekly)
+      const cg = pu.P > 0 || !!state.manualWeek;   // v275: categories get their own card (daily and weekly); v323 (Jordan): the pip card with Anything alone too
       const pd = aheadDay(now, cg, t, L, days);
-      h += haveHTML(now);   // v322
       h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + `<div class="mh-wk"><span>This week</span><b class="num${L < 0 ? ' bad' : ''}">${L < 0 ? '−' + moneyExact(-L) : moneyExact(L)}</b></div>` + loadHTML() + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
         + (pu.carried > 0.005 || t < 0 || pd ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, pd)}</div>` : '')
         + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '') + (wkEd ? `<!--hc-ed${cg ? '' : '+'}-->` : '') + `</div>`;
@@ -767,6 +766,7 @@ const VL = (() => {
       + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '')
       + (on ? nextPayHTML(now) : '')   // v193
       + (on ? '' : (bankCheckDue() ? `<div class="bc-nudge"><span>Weekly bank check</span><button class="link" data-bc="go">Check</button><button class="link muted" data-bc="later">Later</button></div>` : '')) + `</div>`;
+    h += haveHTML(now);   // v322; v323 (Jordan): the cushion under the week
     { const it = newsNow(now)[0]; if (it) h += `<div class="hl-news" role="status"><span>${it.html}</span> <span class="hl-news-act">${it.acts}</span></div>`; }   // v267: one at a time
     // v151: the weekly spending −/+ and the bank check, in their own plain panel at the foot
     const dv = wkDraft == null ? weeklyAmt() : wkDraft, dirty = wkDraft != null, dk = Math.ceil(dv / 7 / WORKER_DAY - 1e-9), wkTake = dirty ? wkTakes(dk) : [];   // v177: a draft until Confirm; v294: dollars
