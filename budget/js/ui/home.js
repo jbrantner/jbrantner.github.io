@@ -727,7 +727,9 @@ const VL = (() => {
   // v322 (Jordan): one number first, how much money you have: what's free after bills held, the spending money through
   // the next payday and pots and projects (Savings and the Month cushion together)
   // v322 (Jordan): load the week's money by hand from the cushion
+  let ldOpen = false;   // v323 (Jordan): the load row opens from a small + by This week
   function loadHTML() {
+    if (!ldOpen) return '';
     if (!state.manualWeek) return `<div class="mh-ld"><button class="link" data-ld="on">Load it by hand each week instead</button></div>`;
     return `<div class="mh-ld"><input id="ldAmt" type="number" inputmode="decimal" step="0.01" min="0" placeholder="$" aria-label="Amount to load into this week"><button class="primary" data-ld="go">Load from cushion</button></div>`
       + `<div class="mh-ld mh-ldn">Loaded by hand · <button class="link" data-ld="off">set aside automatically instead</button></div>`;
@@ -751,7 +753,7 @@ const VL = (() => {
     if (on && !heroOpen) {   // v186: the day stacks on their own, as Jordan drew it; a tap opens the card for more
       const cg = pu.P > 0 || !!state.manualWeek;   // v275: categories get their own card (daily and weekly); v323 (Jordan): the pip card with Anything alone too
       const pd = aheadDay(now, cg, t, L, days);
-      h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + `<div class="mh-wk"><span>This week</span><b class="num${L < 0 ? ' bad' : ''}">${L < 0 ? '−' + moneyExact(-L) : moneyExact(L)}</b></div>` + loadHTML() + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
+      h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + `<div class="mh-wk"><span>This week</span><button class="mh-plus" data-ld="tog" aria-expanded="${ldOpen}" aria-label="${state.manualWeek ? 'Load money into this week' : 'Weekly money options'}">${ldOpen ? '−' : '+'}</button><b class="num${L < 0 ? ' bad' : ''}">${L < 0 ? '−' + moneyExact(-L) : moneyExact(L)}</b></div>` + loadHTML() + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
         + (pu.carried > 0.005 || t < 0 || pd ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, pd)}</div>` : '')
         + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '') + (wkEd ? `<!--hc-ed${cg ? '' : '+'}-->` : '') + `</div>`;
     } else
@@ -1006,9 +1008,10 @@ const VL = (() => {
   });
   document.addEventListener('click', e => { if (e.target.closest('[data-cu-open]')) Town.open('cushion'); });   // v322
   document.addEventListener('click', e => { const b = e.target.closest('[data-ld]'); if (!b) return; e.stopPropagation();   // v322
+    if (b.dataset.ld === 'tog') { ldOpen = !ldOpen; render(); if (ldOpen) setTimeout(() => { const i = $('ldAmt'); if (i) i.focus(); }, 30); return; }
     if (b.dataset.ld === 'on') { state.manualWeek = true; save(); render(); toast('From Monday, load your weekly money by hand'); return; }
     if (b.dataset.ld === 'off') { delete state.manualWeek; save(); render(); toast('Your weekly money is set aside from pay again, from Monday'); return; }
-    const v = Number(($('ldAmt') || {}).value); if (loadWeek(v)) { render(); toast(`Loaded ${moneyExact(v)} into this week`); } }, true);
+    const v = Number(($('ldAmt') || {}).value); if (loadWeek(v)) { ldOpen = false; render(); toast(`Loaded ${moneyExact(v)} into this week`); } }, true);
   $('mainScroll').addEventListener('click', e => {   // v140: the whole main screen
     if (e.target.closest('#homeList .vl-hero.hc') && !e.target.closest('button, input, label, .hc-ed')) { wkEd = !wkEd; if (!wkEd) wkDraft = null; renderHome(); return; }   // v310 (Jordan): a tap opens the weekly budget in the card   // v279 (Jordan): anywhere on the weekly card opens the week in detail
     { const hh = e.target.closest('#homeList .vl-hero.hx'); if (hh && !e.target.closest('button, [data-dot]')) { heroOpen = !heroOpen; renderHome(); return; } }   // v184

@@ -7,6 +7,8 @@ The release-by-release history before this file is in the git log. This file sta
 - The Cushion card sits under the This week card (Jordan). It shows on every Home, also before a week has money.
 - The weekly card uses the pip look (Left today, the day bars) when all spending is Anything, with no categories, and
   when the week is loaded by hand and nothing is in it yet. It used to fall back to the old week look.
+- Loading the week by hand sits behind a small + next to This week (Jordan: it doesn't have to be up there all the
+  time); it closes again after a load.
 
 ## 2026-10-30: Savings is what's really in the bank (v322)
 
