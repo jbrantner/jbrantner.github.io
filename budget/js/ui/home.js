@@ -507,7 +507,7 @@ const VL = (() => {
   function townVals(now, quiet) {
     const v = {}, e = earning(now), cm = today().slice(0, 7), pots = potBalances(cm), pu = purseNow(now), D = Town.data, sv = Math.max(0, e.pn.V - partyNow(now) - crewWorkers());   // v311 (E1): savers() once, on this tick's periodNow
     lastSnap = now;
-    const CT = billsMonthWhole(), sRaw = (pots.find(p => p.id === 'savings') || { bal: 0 }).bal, cuC = CT > 0 ? Math.min(CT, sRaw) : 0, cuFull = CT > 0 && cuC >= CT - 0.005;   // v300; v311 (E3): below zero too
+    const CT = billsMonthWhole(), sRaw = (pots.find(p => p.id === 'savings') || { bal: 0 }).bal, cuC = CT > 0 ? Math.max(0, Math.min(CT, sRaw)) : 0, cuFull = CT > 0 && cuC >= CT - 0.005;   // v300; v311 (E3): below zero too
     if (!quiet && !manageOn && cuSav != null && (!(CT > 0) || sRaw > CT + 0.005) !== cuSav) { cuSav = null; setTimeout(renderTown, 0); }   // v311 (E11): the cushion just filled (or dipped): the Savings card comes (or goes)
     const bal = id => id === 'cushion' ? cuC : id === 'savings' ? sRaw - cuC : (pots.find(p => p.id === id) || { bal: 0 }).bal, cs = placeCents(pots);   // v147: cs, for the Top off chips; v300: Savings less the cushion
     // the total, its rate and its bar to the next whole dollar
@@ -585,7 +585,8 @@ const VL = (() => {
   // v322 (Jordan): under Savings (or the cushion), how much of it is already planned by the next payday, what's free,
   // and any pay that hasn't landed in the bank yet
   function savingsLine(S, now) {
-    const pl = savingsPlanned(now), out = [];
+    const pl = savingsPlanned(now), out = [], pw = hoardParts(now).wait;
+    if (S < -0.005) out.push(`Empty for now: later bills need ${money(Math.ceil(-S - 1e-9))} more than you have.${pw >= -S - 0.005 ? ` The ${moneyExact(pw)} still coming covers it.` : ''}`);   // v322: the cushion stops at $0
     if (pl.week >= 1) out.push(`Spending money through ${shortDate(pl.until)} is already taken out.`);
     if (pl.amt >= 1) out.push(`<b>${money(pl.amt)}</b> more goes to pots and projects by ${shortDate(pl.until)}, a day at a time.`);
     return out.join('<br>');
