@@ -2,6 +2,14 @@
 
 The release-by-release history before this file is in the git log. This file starts with the 2026-10-23 cleanup pass.
 
+## 2026-10-30: Cushion under the week, pip week card for Anything alone (v323)
+
+- The Cushion card sits under the This week card (Jordan). It shows on every Home, also before a week has money.
+- The weekly card uses the pip look (Left today, the day bars) when all spending is Anything, with no categories, and
+  when the week is loaded by hand and nothing is in it yet. It used to fall back to the old week look.
+- Loading the week by hand sits behind a small + next to This week (Jordan: it doesn't have to be up there all the
+  time); it closes again after a load.
+
 ## 2026-10-30: Savings is what's really in the bank (v322)
 
 Jordan's Month cushion showed −$592 on payday because the app counted the whole $1,518.72 paycheck as in the bank
