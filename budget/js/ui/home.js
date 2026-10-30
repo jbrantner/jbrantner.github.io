@@ -727,7 +727,9 @@ const VL = (() => {
   // v322 (Jordan): one number first, how much money you have: what's free after bills held, the spending money through
   // the next payday and pots and projects (Savings and the Month cushion together)
   // v322 (Jordan): load the week's money by hand from the cushion
+  let ldOpen = false;   // v323 (Jordan): the load row opens from a small + by This week
   function loadHTML() {
+    if (!ldOpen) return '';
     if (!state.manualWeek) return `<div class="mh-ld"><button class="link" data-ld="on">Load it by hand each week instead</button></div>`;
     return `<div class="mh-ld"><input id="ldAmt" type="number" inputmode="decimal" step="0.01" min="0" placeholder="$" aria-label="Amount to load into this week"><button class="primary" data-ld="go">Load from cushion</button></div>`
       + `<div class="mh-ld mh-ldn">Loaded by hand · <button class="link" data-ld="off">set aside automatically instead</button></div>`;
@@ -747,12 +749,11 @@ const VL = (() => {
     const over = Math.ceil(-L - 1e-9), go = over > 0 ? `Overdrawn ${money(over)} · Cover it` : '';   // v144: no set-out button; the week starts on its own (any day there's room since v268)
     const plan = Math.min(Number(state.partyPlan || 0), planCap()), k = Math.min(Number(state.partyPlan || 0), partyRoom()), dl = sendNowDays(new Date(now));
     let h = clockBanner();
-    const on = n || pu.P || pu.spent;   // v150: Left today over the day stacks; the week's line under them
+    const on = n || pu.P || pu.spent || state.manualWeek;   // v150: Left today over the day stacks; the week's line under them; v323: a week loaded by hand always has its card
     if (on && !heroOpen) {   // v186: the day stacks on their own, as Jordan drew it; a tap opens the card for more
-      const cg = (state.packs || []).length && pu.P > 0;   // v275: categories get their own card (daily and weekly)
+      const cg = pu.P > 0 || !!state.manualWeek;   // v275: categories get their own card (daily and weekly); v323 (Jordan): the pip card with Anything alone too
       const pd = aheadDay(now, cg, t, L, days);
-      h += haveHTML(now);   // v322
-      h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + `<div class="mh-wk"><span>This week</span><b class="num${L < 0 ? ' bad' : ''}">${L < 0 ? '−' + moneyExact(-L) : moneyExact(L)}</b></div>` + loadHTML() + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
+      h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + `<div class="mh-wk"><span>This week</span><button class="mh-plus" data-ld="tog" aria-expanded="${ldOpen}" aria-label="${state.manualWeek ? 'Load money into this week' : 'Weekly money options'}">${ldOpen ? '−' : '+'}</button><b class="num${L < 0 ? ' bad' : ''}">${L < 0 ? '−' + moneyExact(-L) : moneyExact(L)}</b></div>` + loadHTML() + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
         + (pu.carried > 0.005 || t < 0 || pd ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, pd)}</div>` : '')
         + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '') + (wkEd ? `<!--hc-ed${cg ? '' : '+'}-->` : '') + `</div>`;
     } else
@@ -767,6 +768,7 @@ const VL = (() => {
       + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '')
       + (on ? nextPayHTML(now) : '')   // v193
       + (on ? '' : (bankCheckDue() ? `<div class="bc-nudge"><span>Weekly bank check</span><button class="link" data-bc="go">Check</button><button class="link muted" data-bc="later">Later</button></div>` : '')) + `</div>`;
+    h += haveHTML(now);   // v322; v323 (Jordan): the cushion under the week
     { const it = newsNow(now)[0]; if (it) h += `<div class="hl-news" role="status"><span>${it.html}</span> <span class="hl-news-act">${it.acts}</span></div>`; }   // v267: one at a time
     // v151: the weekly spending −/+ and the bank check, in their own plain panel at the foot
     const dv = wkDraft == null ? weeklyAmt() : wkDraft, dirty = wkDraft != null, dk = Math.ceil(dv / 7 / WORKER_DAY - 1e-9), wkTake = dirty ? wkTakes(dk) : [];   // v177: a draft until Confirm; v294: dollars
@@ -1006,11 +1008,12 @@ const VL = (() => {
   });
   document.addEventListener('click', e => { if (e.target.closest('[data-cu-open]')) Town.open('cushion'); });   // v322
   document.addEventListener('click', e => { const b = e.target.closest('[data-ld]'); if (!b) return; e.stopPropagation();   // v322
+    if (b.dataset.ld === 'tog') { ldOpen = !ldOpen; render(); if (ldOpen) setTimeout(() => { const i = $('ldAmt'); if (i) i.focus(); }, 30); return; }
     if (b.dataset.ld === 'on') { state.manualWeek = true; save(); render(); toast('From Monday, load your weekly money by hand'); return; }
     if (b.dataset.ld === 'off') { delete state.manualWeek; save(); render(); toast('Your weekly money is set aside from pay again, from Monday'); return; }
     const v = cents(Number(($('ldAmt') || {}).value)), room = Math.max(0, Math.floor(cushionNow().H * 100 + 1e-6) / 100);   // v324: no more than the cushion has
     if (v > room + 1e-9) { toast(room >= 0.01 ? `The cushion has ${moneyExact(room)}` : 'The cushion is empty right now'); return; }
-    const t = loadWeek(v); if (t) { render(); toastUndo(`Loaded ${moneyExact(v)} into this week`, () => { unloadWeek(t); render(); }); } }, true);
+    const t = loadWeek(v); if (t) { ldOpen = false; render(); toastUndo(`Loaded ${moneyExact(v)} into this week`, () => { unloadWeek(t); render(); }); } }, true);
   $('mainScroll').addEventListener('click', e => {   // v140: the whole main screen
     if (e.target.closest('#homeList .vl-hero.hc') && !e.target.closest('button, input, label, .hc-ed')) { wkEd = !wkEd; if (!wkEd) wkDraft = null; renderHome(); return; }   // v310 (Jordan): a tap opens the weekly budget in the card   // v279 (Jordan): anywhere on the weekly card opens the week in detail
     { const hh = e.target.closest('#homeList .vl-hero.hx'); if (hh && !e.target.closest('button, [data-dot]')) { heroOpen = !heroOpen; renderHome(); return; } }   // v184
