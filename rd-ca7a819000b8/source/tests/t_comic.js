@@ -29,7 +29,7 @@ function check(g){ const errs = [];
     d[0].forEach(k => { if(!(k in n.inputs)) errs.push(id+' '+n.class_type+' missing '+k); });
     for(const [k,v] of Object.entries(n.inputs)) if(Array.isArray(v)){ const t = g[v[0]]; if(!t) errs.push(id+'.'+k+' -> missing '+v[0]); else if(!DEF[t.class_type]) errs.push(t.class_type + ' not known'); else if(v[1] >= DEF[t.class_type][1]) errs.push(id+'.'+k+' -> bad output '+v[1]); } }
   return errs; }
-const OI = () => ({ColorMatch:{input:{required:{method:C(['mkl'])}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler', 'euler_ancestral']), scheduler:C(['normal'])}}},
+const OI = () => ({ColorMatch:{input:{required:{method:C(['mkl'])}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors', 'totZImageturbo.safetensors'])}}}, KSampler:{input:{required:{sampler_name:C(['euler', 'euler_ancestral']), scheduler:C(['normal'])}}},
   LoraLoader:{input:{required:{lora_name:C(['AFKJ Style Illustrious Claude.safetensors', 'librarianx_v2.safetensors'])}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:C(['minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors', 'minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors', 'AFK_minimax_h3_style.safetensors', 'librarianx_v2.safetensors'])}}},
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'z_image_turbo_bf16.safetensors']), weight_dtype:C(['default'])}}},
@@ -201,6 +201,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const G = ALL.slice(n0).map(x => Object.values(x.prompt)), z = G[0], tx = (z.find(x => x.class_type==='CLIPTextEncode') || {inputs:{}}).inputs.text || '', ks = z.find(x => x.class_type==='KSampler').inputs;
     ok(G.length===2 && G.every(g => check(Object.fromEntries(g.map((x, j) => [String(j + 1), x]))).length===0) && z.find(x => x.class_type==='UNETLoader').inputs.unet_name==='z_image_turbo_bf16.safetensors' && !z.some(x => x.class_type==='LoraLoader') && ks.steps===8 && ks.cfg===1 && /walks down the street/.test(tx) && /a girl \(red hair, long skirt\)/.test(tx) && !/ellenx/.test(tx) && /Anime style/.test(tx),
       '⚡ Z-Image Turbo tries: her words as written, her looks for her name, no LoRA: ' + tx); }
+  // a Z-Image finetune that is an all-in-one checkpoint (TOT Z-Image Turbo): picked in "Z-Image model", it brings its own text encoder and VAE
+  ok((await page.$$eval('#comic [data-cmzit] option', o => o.map(x => x.textContent))).join()==='z_image_turbo_bf16,totZImageturbo', 'the Z-Image models on the PCs can be picked');
+  await page.selectOption('#comic [data-cmzit]', 'totZImageturbo.safetensors'); await page.waitForTimeout(100);
+  { const n0 = ALL.length; await page.click('#comic [data-cm="tries"]'); for(let w = 0; w < 100 && ALL.length < n0 + 2; w++) await page.waitForTimeout(200); await page.waitForFunction(() => !cmBusy(cmPage().panels[0]), null, {timeout:30000});
+    const z = Object.values(ALL[n0].prompt); ok(z.find(x => x.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='totZImageturbo.safetensors' && !z.some(x => /UNETLoader|CLIPLoader|VAELoader/.test(x.class_type)) && z.some(x => x.class_type==='ModelSamplingAuraFlow') && check(ALL[n0].prompt).length===0, 'TOT Z-Image Turbo drafts load from its own checkpoint: ' + check(ALL[n0].prompt).join(';')); }
+  await page.evaluate(() => { delete CM().zitModel; });
   await page.click('#comic [data-cmgen="1"]'); await page.click('#comic [data-cmdraft="ill"]');
   await page.click('#cmPage [data-cpi="0"]'); const s0 = await page.evaluate(() => cmPage().panels[0].still || 0);
   await page.click('#cmPage [data-cpi="0"]'); ok(await page.evaluate(s0 => (cmPage().panels[0].still || 0)===s0 + 1, s0) && /2\//.test(await page.textContent('#cmPage [data-cpi="0"] .cpnav')), 'tapping the picked panel shows its next try, on the page');
