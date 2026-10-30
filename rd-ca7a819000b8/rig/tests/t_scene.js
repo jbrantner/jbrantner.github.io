@@ -205,6 +205,7 @@ const DEPS = process.env.RIG_DEPS || '';
       { const ca = bgk && g[bgk.inputs.positive[0]], tx = ca && g[ca.inputs.positive[0]].inputs.text, gm = v.filter(n => n.class_type==='GrowMask' && n.inputs.expand < 0).map(n => n.inputs.expand);
         ok(tx && /no humans/.test(tx) && !/\b\d?girls?\b|\bsolo\b/.test(tx) && gm.length && gm.every(e => e > -15), '🌄 the background pass has the place without its people, and reaches nearly to her outline (no halo ring): ' + JSON.stringify({tx, gm})); }
       { const up = ups.find(u => /^rd-scene-sdepth/.test(u.name)), b = up && up.body, i0 = b ? b.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47])) : -1, j0 = b ? b.lastIndexOf(Buffer.from('IEND')) : -1;
+        if(process.env.DEPTH_OUT && i0 >= 0) require('fs').writeFileSync(process.env.DEPTH_OUT, b.slice(i0, j0 + 8));
         const fl = i0 >= 0 && j0 > i0 ? await page.evaluate(async b64 => { const im = new Image(); im.src = 'data:image/png;base64,' + b64; await im.decode(); const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.drawImage(im, 0, 0);
           const row = y => { const d = x.getImageData(0, y, im.width, 1).data; let n = 0; for(let k = 0; k < d.length; k += 4) if(d[k] > 8) n++; return n / im.width; }; return [row(im.height - 2), row(2)]; }, b.slice(i0, j0 + 8).toString('base64')) : null;
         ok(fl && fl[0] > 0.9, '📐 the depth guide has the floor in it (so the painting takes the Camera\'s angle, not its own eye-level street): ' + JSON.stringify(fl)); }
