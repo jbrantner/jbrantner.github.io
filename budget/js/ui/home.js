@@ -1011,7 +1011,9 @@ const VL = (() => {
     if (b.dataset.ld === 'tog') { ldOpen = !ldOpen; render(); if (ldOpen) setTimeout(() => { const i = $('ldAmt'); if (i) i.focus(); }, 30); return; }
     if (b.dataset.ld === 'on') { state.manualWeek = true; save(); render(); toast('From Monday, load your weekly money by hand'); return; }
     if (b.dataset.ld === 'off') { delete state.manualWeek; save(); render(); toast('Your weekly money is set aside from pay again, from Monday'); return; }
-    const v = Number(($('ldAmt') || {}).value); if (loadWeek(v)) { ldOpen = false; render(); toast(`Loaded ${moneyExact(v)} into this week`); } }, true);
+    const v = cents(Number(($('ldAmt') || {}).value)), room = Math.max(0, Math.floor(cushionNow().H * 100 + 1e-6) / 100);   // v324: no more than the cushion has
+    if (v > room + 1e-9) { toast(room >= 0.01 ? `The cushion has ${moneyExact(room)}` : 'The cushion is empty right now'); return; }
+    const t = loadWeek(v); if (t) { ldOpen = false; render(); toastUndo(`Loaded ${moneyExact(v)} into this week`, () => { unloadWeek(t); render(); }); } }, true);
   $('mainScroll').addEventListener('click', e => {   // v140: the whole main screen
     if (e.target.closest('#homeList .vl-hero.hc') && !e.target.closest('button, input, label, .hc-ed')) { wkEd = !wkEd; if (!wkEd) wkDraft = null; renderHome(); return; }   // v310 (Jordan): a tap opens the weekly budget in the card   // v279 (Jordan): anywhere on the weekly card opens the week in detail
     { const hh = e.target.closest('#homeList .vl-hero.hx'); if (hh && !e.target.closest('button, [data-dot]')) { heroOpen = !heroOpen; renderHome(); return; } }   // v184

@@ -35,7 +35,8 @@ function undoPayment(tid) {
 /* Spending out of Savings (the Month cushion is Savings' first month of bills) or a pot, like a car repair: it leaves
    the bank the same way a payment does, with no goal to bring down, and this week's money isn't touched. */
 const spendSrc = id => id === 'cushion' ? 'savings' : id;
-const spendRoom = id => Math.max(0, Math.floor(placeBal(spendSrc(id)) * 100 + 1e-6) / 100);
+// v324: the cushion's room is the number its card shows (Savings plus what's held for bills after payday), not Savings alone
+const spendRoom = id => Math.max(0, Math.floor((id === 'cushion' ? cushionNow().H : placeBal(spendSrc(id))) * 100 + 1e-6) / 100);
 const spendsOf = id => state.transfers.filter(t => t.spend && t.from === spendSrc(id)).sort((a, b) => (b.at || 0) - (a.at || 0) || b.date.localeCompare(a.date));
 function spendFrom(id, amount, note = '') {
   const from = spendSrc(id); if (from !== 'savings' && !state.pots.some(x => x.id === from)) return null;

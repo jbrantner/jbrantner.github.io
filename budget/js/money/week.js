@@ -30,8 +30,14 @@ function loadWeek(amt) {
   const a = cents(Number(amt)); if (!(a >= 0.01)) return false; const wk = ymd(weekStart());
   if (!state.purse || state.purse.wk !== wk) state.purse = { wk, P: 0, extra: 0 };
   state.purse.extra = cents(Number(state.purse.extra || 0) + a);
-  state.transfers.push({ id: uid(), from: 'savings', to: 'spend', amount: a, date: today(), at: Date.now(), postage: true, load: true });
-  save(); return true;
+  const t = { id: uid(), from: 'savings', to: 'spend', amount: a, date: today(), at: Date.now(), postage: true, load: true };
+  state.transfers.push(t); save(); return t;
+}
+function unloadWeek(t) {   // v324: Undo a load
+  if (!state.transfers.includes(t)) return;
+  state.transfers = state.transfers.filter(x => x !== t);
+  if (state.purse && state.purse.wk === ymd(weekStart(new Date(t.at)))) state.purse.extra = Math.max(0, cents(Number(state.purse.extra || 0) - t.amount));
+  save();
 }
 const weekRunning = (now = Date.now()) => { const f = fundRec(ymd(weekStart(new Date(now)))); return f ? f.amt > 0 : partyNow(now) > 0; };
 const partySize = () => partyNow();
