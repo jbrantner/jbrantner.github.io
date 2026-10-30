@@ -9,9 +9,13 @@ function bankRows() {
   const auto = state.transactions.filter(t => t.auto && t.markedPaid && t.date >= lim && t.date <= td && state.categories.some(c => c.id === t.categoryId))
     .map(t => { const key = t.categoryId + '|' + billMonthOf(t); return { key, kind: 'auto', name: catName(t.categoryId), amt: Math.abs(t.amount), when: `marked paid ${shortDate(t.date)}`, paid: bankPick[key] !== 'no' }; });
   const held = pp.heldList.map(b => ({ key: b.key, b, kind: 'held', name: b.c.name, amt: cents(Number(b.c.budget || 0)), when: b.due ? `due ${shortDate(b.due)}` : `${mon(b.m)}, no due day`, paid: bankPick[b.key] === 'paid' }));
-  return { pp, rows: [...auto, ...held] };
+  // v322: a paycheck from the last few days: has it shown up? (one entered ahead counts from midnight on payday)
+  const pay = pp.checks.list.filter(c => c.date >= lim && c.date <= td && c.D - c.wait >= 0.005)
+    .map(c => ({ key: c.key, kind: 'pay', name: `Your ${shortDate(c.date)} pay`, amt: cents(c.D - c.wait), when: moneyExact(c.D - c.wait), paid: bankPick[c.key] !== 'no' }));
+  return { pp, rows: [...pay, ...auto, ...held] };
 }
-const bankExpect = (rows, pp) => pp.bank - sum(rows.filter(r => r.kind === 'held' && r.paid), r => r.amt) + sum(rows.filter(r => r.kind === 'auto' && !r.paid), r => r.amt);
+const bankExpect = (rows, pp) => pp.bank - sum(rows.filter(r => r.kind === 'held' && r.paid), r => r.amt) + sum(rows.filter(r => r.kind === 'auto' && !r.paid), r => r.amt)
+  - sum(rows.filter(r => r.kind === 'pay' && !r.paid), r => r.amt);   // v322
 function bankDiff(rows, pp) {
   const v = $('bankAmt').value.trim(), B = Number(v), ok = v !== '' && isFinite(B);
   $('bankGo').disabled = !ok;
@@ -24,7 +28,7 @@ function renderBank() {
   $('bankSays').innerHTML = `The app counts <strong class="num">${moneyExact(pp.bank)}</strong> in ${two ? esc(two) + ' together' : 'your bank'} right now.`;
   $('bankForm').classList.toggle('hidden', !bankOpen); $('bankOpen').classList.toggle('hidden', bankOpen);
   if (bankOpen) {
-    $('bankBills').innerHTML = rows.length ? `<div class="muted" style="font-size:13px; margin-top:8px">First: have these come out of your bank yet?</div>` + rows.map(r => `<div class="row spread bank-bill"><span style="min-width:0">${esc(r.name)} <span class="muted" style="font-size:12px">· ${esc(r.when)}</span></span><span class="row" style="gap:4px; flex:none"><button class="chip${r.paid ? ' on' : ''}" data-bank-bill="${esc(r.key)}" data-v="paid">Paid</button><button class="chip${r.paid ? '' : ' on'}" data-bank-bill="${esc(r.key)}" data-v="no">Not yet</button></span></div>`).join('') : '';
+    $('bankBills').innerHTML = rows.length ? `<div class="muted" style="font-size:13px; margin-top:8px">First: ${rows.some(r => r.kind === 'pay') ? 'has your pay come in, and have these come out' : 'have these come out of your bank yet'}?</div>` + rows.map(r => `<div class="row spread bank-bill"><span style="min-width:0">${esc(r.name)} <span class="muted" style="font-size:12px">· ${esc(r.when)}</span></span><span class="row" style="gap:4px; flex:none"><button class="chip${r.paid ? ' on' : ''}" data-bank-bill="${esc(r.key)}" data-v="paid">${r.kind === 'pay' ? "It's here" : 'Paid'}</button><button class="chip${r.paid ? '' : ' on'}" data-bank-bill="${esc(r.key)}" data-v="no">Not yet</button></span></div>`).join('') : '';
     $('bankAsk').textContent = two ? `What ${two} hold now, added up` : 'What your bank shows now';
     bankDiff(rows, pp);
   }
@@ -36,6 +40,7 @@ function bankGo() {
   const { rows } = bankRows(), now = Date.now(), td = today();
   for (const r of rows) {
     if (r.kind === 'held' && r.paid) { state.transactions.push({ ...paidMarker(r.b.c, r.b.m), date: td, billMonth: r.b.m, gameSlain: true, at: now }); delete billSkips()[r.key]; }
+    if (r.kind === 'pay' && !r.paid && state.checks[r.key]) state.checks[r.key].wait = cents(Number(state.checks[r.key].amt) || 0);   // v322: none of it yet
     if (r.kind === 'auto' && !r.paid) { const [id, m] = splitKey(r.key); dropMarker(id, m); billSkips()[r.key] = true; }
   }
   save();   // the books start afresh with those bills, then the fix is whatever's still different

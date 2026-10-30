@@ -2,6 +2,32 @@
 
 The release-by-release history before this file is in the git log. This file starts with the 2026-10-23 cleanup pass.
 
+## 2026-10-30: Savings is what's really in the bank (v322)
+
+Jordan's Month cushion showed −$592 on payday because the app counted the whole $1,518.72 paycheck as in the bank
+when $800 of it (an advance) hadn't landed, and because Savings left out the part of the paycheck still being handed
+out a day at a time. Now:
+- **Savings (and the Month cushion) gets a paycheck whole the moment it lands** (less the bills' share). Its money a
+  day moves out of Savings into weekly spending, pots, projects and debts as it goes, so Savings is always bank −
+  bills held − pots and projects − this week's money not spent yet.
+- **The weekly money through the next payday comes out of Savings on payday** (Jordan: "so I know exactly how much
+  I actually have to spend"), so Savings is what's free. Home now opens with one card, the **Cushion** (Jordan: a pay period that can't make its
+  bills takes it from the cushion, that's what it's for). It is **yours until payday** (paycheck to paycheck:
+  bank − bills due before the next payday − spending money − pots; if bills after it need some of that, "Keep $X of it
+  for bills after (payday)" instead of a negative number; plus any pay not landed yet and It's here). The **Month cushion** moved into that card: "Cushion $X of
+  $(a month of bills)" with a bar, never below $0; tap it for the cushion sheet. The separate cushion card is gone, then the weekly card with **This week**'s lump sum on top of the day-by-day
+  numbers.
+  Under the cushion: "Spending money through (payday) is already taken out" and "$Y more goes to pots and projects
+  by (payday), a day at a time".
+- **Weekly money loaded by hand** (Jordan 16:49, optional): "Load it by hand each week instead" on the This week card.
+  Then nothing is set aside from pay and no week starts on its own; type an amount and Load from cushion moves it into
+  this week (like postage). What's left on Sunday goes back to Savings as ever. "Set aside automatically instead"
+  switches back from the next Monday.
+- **Pay that hasn't landed:** the paycheck sheet has "Still coming" for an advance or second deposit. It isn't counted
+  in the bank until you tap It's here on the cushion card.
+- **The bank check asks about pay too:** a paycheck from the last 3 days shows with It's here / Not yet, next to the
+  bills.
+
 ## 2026-10-27: weekly spending line names the categories (v320)
 
 Settings > Money said "$20.00 a day" under a $140 week, but Home showed about $15 a day, because the weekly Gas

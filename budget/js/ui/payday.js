@@ -9,7 +9,8 @@ function openPay(key) {
   const early = date > today();
   $('payTitle').textContent = ck ? (early ? 'Your next paycheck' : 'This paycheck') : early ? 'Your next paycheck' : 'Payday! What landed?';   // v192
   $('payWhen').textContent = `${early ? 'For your paycheck of ' : ''}${new Date(date + 'T12:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })} · ${inc ? inc.name : 'Paycheck'}`;
-  $('payAmt').value = ck ? Number(ck.amt) : ''; $('payAmt').placeholder = inc && Number(inc.amount) ? `Usually ${money(Number(inc.amount))}` : '$';
+  const w0 = ck ? Math.max(0, Number(ck.wait) || 0) : 0;   // v322: the part still coming
+  $('payAmt').value = ck ? cents(Number(ck.amt) - w0) : ''; $('payWait').value = w0 ? w0 : ''; $('payAmt').placeholder = inc && Number(inc.amount) ? `Usually ${money(Number(inc.amount))}` : '$';
   $('payDel').classList.toggle('hidden', !ck); $('payLater').textContent = ck ? 'Cancel' : 'Later';
   $('payBox').classList.remove('hidden'); payPlan();
   setTimeout(() => { if (payKey === key) $('payAmt').focus(); }, 60);
@@ -18,7 +19,7 @@ function closePay() { payKey = null; $('payBox').classList.add('hidden'); }
 // What happens to it, as you type: the bills' share, what's yours a day until the next payday (its villagers), the cents.
 function payPlan() {
   if (!payKey) return;
-  const v = $('payAmt').value.trim(), D = Number(v), ok = v !== '' && isFinite(D) && D >= 0 && D < 1e7;
+  const v = $('payAmt').value.trim(), W = payWaitVal(), D = Number(v) + W, ok = v !== '' && isFinite(D) && Number(v) >= 0 && D < 1e7;
   $('paySave').disabled = !ok;
   if (!ok) { $('payPlan').textContent = splitKey(payKey)[1] > today() ? 'Type what your pay summary says, cents and all.' : 'Type what landed in your bank, cents and all.'; return; }   // v192
   const [id, date] = splitKey(payKey), inc = state.incomes.find(i => i.id === id), P = periodOf(inc, date);
@@ -31,15 +32,17 @@ function payPlan() {
   if (F) out.push(`${money(F)} is yours: ${early ? `from ${shortDate(date)}, ` : ''}${money((V) * WORKER_DAY)} a day until ${until}` + (extra >= 1 ? `, and ${money(extra)} lands in Savings then.` : '.'));
   else out.push('Nothing coming in a day this pay period.');
   if (V < was) out.push(`That's ${money((was - V) * WORKER_DAY)} a day less than your last normal paycheck${partyNow() + crewWorkers() > V ? ': it comes off projects first, then pots' : ''}.`);
+  if (W) out.push(`${moneyExact(W)} isn't in your bank yet, so Savings counts it once you tap It's here.`);   // v322
   if (cut >= 0.005) out.push(`${Math.round(cut * 100)}¢ goes to spare change.`);
   if (!D) out.push('Nothing landed? Saving $0 counts this payday as nothing.');
   $('payPlan').textContent = out.join(' ');
 }
+const payWaitVal = () => { const w = Number($('payWait').value.trim() || 0); return isFinite(w) && w > 0 ? cents(w) : 0; };   // v322
 function paySave() {
-  const v = $('payAmt').value.trim(), D = Number(v); if (!payKey || v === '' || !(D >= 0)) return;
+  const v = $('payAmt').value.trim(), W = payWaitVal(), D = Number(v) + W; if (!payKey || v === '' || !(Number(v) >= 0)) return;
   const k = payKey, old = (state.checks || {})[k];
   const date = splitKey(k)[1], early = date > today();
-  (state.checks = state.checks || {})[k] = { amt: cents(D), at: old ? old.at : early ? dayMs(date) : Date.now(), ...(early ? { early: true, expected: true } : old && old.early ? { early: true, fit: old.fit, ...(old.expected ? { expected: true } : {}) } : {}) };   // v192: an early one starts on payday
+  (state.checks = state.checks || {})[k] = { amt: cents(D), at: old ? old.at : early ? dayMs(date) : Date.now(), ...(early ? { early: true, expected: true } : old && old.early ? { early: true, fit: old.fit, ...(old.expected ? { expected: true } : {}) } : {}), ...(W ? { wait: W } : {}) };   // v192: an early one starts on payday; v322: wait, the part not landed yet
   booksGen++; needMemo.clear();
   const pd = old || early ? null : paradeParts(k, D);   // v192: no parade before it lands   // v136: before afterCheck can move the party plan
   const n = early ? null : afterCheck(k), say = payNewsText(n);
@@ -49,6 +52,14 @@ function paySave() {
   else toast(say ? say : `Paycheck saved: ${moneyExact(D)}`);
 }
 $('payAmt').addEventListener('input', payPlan);
+$('payWait').addEventListener('input', payPlan);
+// v322: the part of a paycheck that hadn't landed is in the bank now
+function payHere(k) {
+  const ck = (state.checks || {})[k]; if (!ck || !ck.wait) return; const w = ck.wait;
+  delete ck.wait; booksGen++; needMemo.clear(); save(); render();
+  toastUndo(`${moneyExact(w)} landed: it's in Savings now`, () => { ck.wait = w; booksGen++; needMemo.clear(); save(); render(); });
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-pay-here]'); if (b) payHere(b.dataset.payHere); });
 $('payAmt').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('paySave').disabled) paySave(); });
 $('paySave').onclick = paySave;
 $('payLater').onclick = () => { if (payKey && !(state.checks || {})[payKey]) sess('pay-later-' + payKey, '1'); closePay(); };

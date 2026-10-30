@@ -225,7 +225,7 @@ const Town = (() => {
     const head = (t, n) => `<div class="tn-head"><h2 id="townShTitle">${esc(t)}</h2><span class="num">${n}</span></div>`;
     if (id === 'cushion') {   // v301: it is Savings' first month of bills, so its money a day is Savings' (what isn't on spending, pots or projects)
       if (vPickFor !== 'cushion') { cPick = ''; vPickFor = 'cushion'; }
-      const T = billsMonthWhole(), C = Math.min(T, (potBalances(today().slice(0, 7)).find(p => p.id === 'savings') || { bal: 0 }).bal), w = savers(), n = wStep === 5 ? 5 : 1;   // v311: below $0 counts (the card shows it since p_15's E3)
+      const T = billsMonthWhole(), C = Math.min(T, cushionNow().H), w = savers(), n = wStep === 5 ? 5 : 1;   // v311: below $0 counts (the card shows it since p_15's E3)
       const take = donorList('savings').filter(x => x.id !== 'savings' && x.n > 0), give = farmPots().filter(x => x !== 'savings' && canFarm(x) && !crewBuilt(x)).map(x => ({ id: x, name: potName(x), n: Math.max(0, workersAt(x)), lock: isLocked(x) }));
       const chip = (x, k) => `<button class="chip vl-pk" data-w${k}="${esc(x.id)}"${x.lock ? ' disabled' : ''} aria-label="${k === 'from' ? `Take ${money(n * WORKER_DAY)} a day from` : `Give ${money(n * WORKER_DAY)} a day to`} ${esc(x.name)} (${money(x.n * WORKER_DAY)} a day there)">${esc(x.name)} · <b>${x.n}</b></button>`;
       const pick = cPick === 'take' ? `<div class="vl-pick" role="group" aria-label="Take money a day from"><span class="vl-pkl">Take ${n === 5 ? 'five' : 'one'} from</span>${take.length ? take.map(x => chip(x, 'from')).join('') : '<span class="muted" style="font-size:13px">Nobody to take: pots and projects have no money a day.</span>'}</div>`
@@ -252,8 +252,9 @@ const Town = (() => {
       const left = pp.bank - pp.held - pp.L.movedBills, nw = state.payNews, news = nw && pn.list.some(c => c.key === nw.key) ? payNewsText(nw) : '';
       let top = head(D.incomes.length === 1 ? D.incomes[0].name : 'Paychecks', `${money(pp.bank)} <small>in the bank</small>`)
         + `<div class="hoard-math tn-paysum">` + r2('In the bank', money(pp.bank)) + r2("Held for bills", '−' + money(pp.held + pp.L.movedBills)) + r2('Left', money(left), ' sum') + `</div>`
-        + `<p class="sh-line st">${money(Math.max(0, pp.total))} of it is yours now${pp.pending >= 1 ? ` · ${money(pp.pending)} still to come this pay period` : ''}</p>`
-        + (pp.total < -0.5 ? `<p class="sh-line bad">Your bills need ${money(-pp.total)} more than you have, so Savings is below zero until more pay comes in.</p>` : '');
+        + `<p class="sh-line st">${money(Math.max(0, pp.total + pp.pending))} of it is yours now${pp.pending >= 1 ? ` · ${money(pp.pending)} of that goes out a day at a time this pay period` : ''}</p>`   // v322
+        + (pp.wait >= 0.005 ? `<p class="sh-line st">${moneyExact(pp.wait)} of your pay isn't in your bank yet.</p>` : '')
+        + (pp.total + pp.pending < -0.5 ? `<p class="sh-line bad">Your bills need ${money(-(pp.total + pp.pending))} more than you have, so Savings is below zero until more pay comes in.</p>` : '');
       for (const c of pn.list) {
         const yours = c.F, earned = c.start ? Math.max(0, c.F - c.pending) : c.got, nm = D.incomes.length > 1 ? esc(c.inc.name) + ' · ' : '';
         top += `<div class="tn-inc tn-period"><h3 class="tn-h3" style="margin:0 0 2px">${nm}This pay period · ${shortDate(c.date)} – ${c.next ? shortDate(c.next) : '?'}</h3>

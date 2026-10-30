@@ -24,6 +24,15 @@ function weekMigrate() {
 // purse that week, the plan it was for ($7 steps), and the first day it ran.
 // v185: off again (Jordan 2026-10-12 05:53), and the switch went in idea 7; fundRec stays for the weeks it already ran.
 const fundRec = wk => (state.funds || {})[wk] || null;
+// v322 (Jordan 16:49): the weekly money loaded by hand from the cushion instead of set aside from pay. It goes in the
+// purse as extra (like postage); what's left on Sunday goes back to Savings as ever.
+function loadWeek(amt) {
+  const a = cents(Number(amt)); if (!(a >= 0.01)) return false; const wk = ymd(weekStart());
+  if (!state.purse || state.purse.wk !== wk) state.purse = { wk, P: 0, extra: 0 };
+  state.purse.extra = cents(Number(state.purse.extra || 0) + a);
+  state.transfers.push({ id: uid(), from: 'savings', to: 'spend', amount: a, date: today(), at: Date.now(), postage: true, load: true });
+  save(); return true;
+}
 const weekRunning = (now = Date.now()) => { const f = fundRec(ymd(weekStart(new Date(now)))); return f ? f.amt > 0 : partyNow(now) > 0; };
 const partySize = () => partyNow();
 const partyRoom = () => Math.max(0, maxWorkers() - crewWorkers());   // most the weekly budget can be ($7 steps)
@@ -59,7 +68,7 @@ function partyReturns() {
   short = -extra;
   state.purse = { wk, P: 0, extra };
   // the new party sets out (Monday 00:00): as planned, locked until next Monday
-  const t0 = weekStart().getTime(), plan = Number(state.partyPlan || 0); let room = planCap();
+  const t0 = weekStart().getTime(), plan = state.manualWeek ? 0 : Number(state.partyPlan || 0); let room = planCap();   // v322: loaded by hand, nobody sets out
   if (plan > room) {   // v178: the weekly budget comes first: villagers come home from pots and projects to make it, most-staffed first
     const left = {}; for (const id of farmPots()) if (id !== 'savings' && !isLocked(id)) left[id] = Math.min(workersAt(id), workersAt(id, t0));
     while (room < plan) { const id = Object.keys(left).sort((a, b) => left[b] - left[a])[0]; if (!id || left[id] < 1) break; left[id]--; room++; state.workerLog.push({ t: t0, pot: id, delta: -1 }); }

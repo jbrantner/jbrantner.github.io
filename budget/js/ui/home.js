@@ -412,6 +412,7 @@ const VL = (() => {
       return `<div class="pp-card pot sv cush ${!CU.sav && savers() > 0 ? 'live' : 'idle'}${opened.has('cushion') ? ' open' : ''}" style="--cc:${col}" data-vl-row="cushion">`
         + `<button class="pp-head" data-pp-open="cushion" aria-expanded="${opened.has('cushion')}"><span class="pp-nm"><em class="pp-kind" data-t="cu-kind"></em><span class="pp-nmr"><b>Month cushion</b>${(() => { const w = CU.sav ? 0 : Math.max(0, savers()); return w > 0 ? `<span class="pp-vsq" role="img" aria-label="${money(w * WORKER_DAY)} a day">${'<i></i>'.repeat(Math.min(w, 40))}${w > 40 ? `<em>+${w - 40}</em>` : ''}</span>` : ''; })()}</span></span>`
         + `<span class="pp-amt"><span class="num pp-roll" data-rl="cushion"></span><small data-t="of-cushion"></small></span></button>`
+        + `<p class="cu-plan" data-t="sv-plan"></p>`   // v322
         + `<div class="pp-pips ember" data-t="p-cushion" data-pip="cushion" aria-hidden="true"></div>`
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-unit"><span class="pp-ubar"><i></i></span><b class="pp-ul"></b></span><span class="vl-step"><span data-s="cushion"></span></span></span>`
         + `<div class="cu-marks" data-t="cu-marks"></div><p class="cu-cap">Next month's bills, locked in as it fills</p><div class="cu-locks" data-t="cu-locks"></div><p class="cu-say" data-t="cu-say"></p><div class="pp-xv" data-x="cushion"></div></div>`;
@@ -435,6 +436,7 @@ const VL = (() => {
         + `<div class="pp-pips${kind === 'proj' ? '' : ' ember'}" data-t="p-${id}" data-pip="${id}" aria-hidden="true"></div>`
         + (db ? `<p class="pp-dl" data-t="dl-${id}"></p>` : '')   // v295: the debt's line
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-unit"><span class="pp-ubar"><i></i></span><b class="pp-ul"></b></span><span class="vl-step"><span data-s="${id}"></span></span></span>`
+        + (!sv || !CU.sav ? '' : `<p class="cu-plan" data-t="sv-plan"></p>`)   // v322
         + (!sv ? '' : `<div class="pp-meta pp-tidy"><span class="pp-m1"><span data-t="m1-${id}"></span><span class="pp-dot" aria-hidden="true"> · </span><span class="pp-nx" data-t="nx-${id}"></span></span><button class="pp-fill" data-fill="${id}" data-t="fl-${id}"></button></div>`)   // v148: one line; v269: Savings only
         + `<div class="pp-crew"><span class="pp-who vl-r2">${who}<small class="pp-mo" data-t="m2-${id}"></small></span>${step}</div>`   // v148: the month figure with the crew
         + (!sv ? `<div class="pp-acts" id="ppm-${id}">${kind === 'proj' && o.goal > 0 && o.bal >= 0.01 ? (db ? (o.bal >= 1 - 1e-6 ? `<button class="pp-chip pp-pay" data-debt="${id}">I paid ${debtPayText(o.id, o.goal, o.bal)}</button>` : '') : `<button class="pp-chip pp-pay" data-debt="${id}">Make a payment</button>`) : ''}`
@@ -461,7 +463,7 @@ const VL = (() => {
     // v174: pots and projects in one list (color and the label tell them apart), one add button under it
     // v200: no Spare change card; Collect is the button at the bottom left (#spareFab)
     const mwb = `<button class="pp-big alt pp-add pp-mwb" data-mw="1">Split your pay<small>${money(maxWorkers() * WORKER_DAY)} a day · ${money(perMo(maxWorkers()))} a paycheck</small></button>`;   // v190; v195 a paycheck
-    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>'}${planChip()}</div><div class="pp-list pp-one">` + cushCard();   // v298; v300: the cushion first
+    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>'}${planChip()}</div><div class="pp-list pp-one">` + '';   // v298; v322 (Jordan): the cushion is in the top card now
     const dbIts = [];
     { const its = [...D.stock.map(p => [{ id: p.id, name: p.name, goal: p.goal, custom: p.custom }, p.id === 'savings' ? 'save' : 'pot']),
         ...D.projects.map(p => [{ id: p.id, name: p.name, goal: p.goal, bal: p.bal, custom: true, proj: true }, 'proj'])];
@@ -505,7 +507,7 @@ const VL = (() => {
   function townVals(now, quiet) {
     const v = {}, e = earning(now), cm = today().slice(0, 7), pots = potBalances(cm), pu = purseNow(now), D = Town.data, sv = Math.max(0, e.pn.V - partyNow(now) - crewWorkers());   // v311 (E1): savers() once, on this tick's periodNow
     lastSnap = now;
-    const CT = billsMonthWhole(), sRaw = (pots.find(p => p.id === 'savings') || { bal: 0 }).bal, cuC = CT > 0 ? Math.min(CT, sRaw) : 0, cuFull = CT > 0 && cuC >= CT - 0.005;   // v300; v311 (E3): below zero too
+    const CT = billsMonthWhole(), sRaw = (pots.find(p => p.id === 'savings') || { bal: 0 }).bal, cuC = CT > 0 ? Math.max(0, Math.min(CT, sRaw)) : 0, cuFull = CT > 0 && cuC >= CT - 0.005;   // v300; v311 (E3): below zero too
     if (!quiet && !manageOn && cuSav != null && (!(CT > 0) || sRaw > CT + 0.005) !== cuSav) { cuSav = null; setTimeout(renderTown, 0); }   // v311 (E11): the cushion just filled (or dipped): the Savings card comes (or goes)
     const bal = id => id === 'cushion' ? cuC : id === 'savings' ? sRaw - cuC : (pots.find(p => p.id === id) || { bal: 0 }).bal, cs = placeCents(pots);   // v147: cs, for the Top off chips; v300: Savings less the cushion
     // the total, its rate and its bar to the next whole dollar
@@ -574,10 +576,20 @@ const VL = (() => {
       seen[o.id] = B;
     }
     if (CT > 0) cushVals(v, CT, cuC, sv, now, quiet, sRaw);   // v300
+    v['t:sv-plan'] = savingsLine(sRaw, now);   // v322
     // the verdict: the thing to know first
     v['t:vd'] = e.pn.waiting.length ? 'Enter your paycheck to start its money coming in.' : !e.V ? 'No money coming in right now.'
       : soon ? `${esc(soon.name)} is done ~${soon.when}.` : built ? `${esc(built)} is ready to spend ✓` : `Everyone is at work: ${money(e.V * WORKER_DAY)} a day.`;
     return v;
+  }
+  // v322 (Jordan): under Savings (or the cushion), how much of it is already planned by the next payday, what's free,
+  // and any pay that hasn't landed in the bank yet
+  function savingsLine(S, now) {
+    const pl = savingsPlanned(now), out = [];
+
+    if (pl.week >= 1) out.push(`Spending money through ${shortDate(pl.until)} is already taken out.`);
+    if (pl.amt >= 1) out.push(`<b>${money(pl.amt)}</b> more goes to pots and projects by ${shortDate(pl.until)}, a day at a time.`);
+    return out.join('<br>');
   }
   // v300: the cushion card's marks (a week of bills at a time), next month's bills locking in smallest first, the
   // line under them (or, once full, what happens now) and its moments: a toast as a bill locks in or a week fills,
@@ -712,6 +724,24 @@ const VL = (() => {
   // v311 (E9): the weekly card opens its weekly budget by keyboard too, and its buttons say so
   const hcKeys = s => s.replace(/<div class="hl-today([^"]*)" aria-label="([^"]*)"/, '<div class="hl-today$1" role="button" tabindex="0" aria-label="$2. Tap to change your weekly budget"')
     .replace(/ role="button" tabindex="0"/g, `$& aria-expanded="${wkEd}"`).replace('. Tap to edit your categories"', '. Tap to change your weekly budget"');
+  // v322 (Jordan): one number first, how much money you have: what's free after bills held, the spending money through
+  // the next payday and pots and projects (Savings and the Month cushion together)
+  // v322 (Jordan): load the week's money by hand from the cushion
+  function loadHTML() {
+    if (!state.manualWeek) return `<div class="mh-ld"><button class="link" data-ld="on">Load it by hand each week instead</button></div>`;
+    return `<div class="mh-ld"><input id="ldAmt" type="number" inputmode="decimal" step="0.01" min="0" placeholder="$" aria-label="Amount to load into this week"><button class="primary" data-ld="go">Load from cushion</button></div>`
+      + `<div class="mh-ld mh-ldn">Loaded by hand · <button class="link" data-ld="off">set aside automatically instead</button></div>`;
+  }
+  function haveHTML(now) {   // v322 (Jordan): one top card, the cushion: what's yours until the next payday, from $0 up to a month of bills
+    const { H, S, keep, until, later, pp } = cushionNow(now), T = billsMonthWhole(), f = T > 0 ? clamp01(H / T) : 0;
+    const wait = pp.checks.list.filter(c => c.wait >= 0.005).map(c => `<div class="vl-sub">${moneyExact(c.wait)} of your ${shortDate(c.date)} pay isn't in your bank yet <button class="link" data-pay-here="${esc(c.key)}">It's here</button></div>`).join('');
+    const nm = later.length ? ` (${esc(later[later.length - 1].c.name)}${later.length > 1 ? ' and more' : ''})` : '';
+    const heads = keep >= 1 && S < -0.005 ? `<div class="vl-sub">Heads-up: bills after ${shortDate(until)}${nm} need ${money(Math.ceil(-S - 1e-9))} more than your next paycheck holds for them. ${pp.wait >= -S - 0.005 ? `The ${moneyExact(pp.wait)} still coming covers it.` : `If it's still short then, it comes out of here.`}</div>` : '';
+    return `<div class="vl-hero pp-panel mh-have"><button class="mh-cu" data-cu-open="1" aria-label="Month cushion: ${money(H)}${T > 0 ? ` of ${money(T)}` : ''}. Open it">`
+      + `<span class="vl-k">Cushion${T > 0 ? ` <small>of ${money(T)}</small>` : ''} ›</span><span class="vl-total num${H < 0 ? ' bad' : ''}">${H < 0 ? '−' + moneyExact(-H) : moneyExact(H)}</span>`
+      + (T > 0 ? `<span class="mh-bar" aria-hidden="true"><i style="width:${(f * 100).toFixed(1)}%"></i></span>` : '')
+      + `<span class="vl-sub">Yours until payday${until ? `, ${shortDate(until)}` : ''}, after the bills due by then${state.manualWeek ? '' : ' and your spending money'}</span></button>${heads}${wait}</div>`;
+  }
   function homeHTML(now) {
     const pu = purseNow(now), n = partySize(), d = Math.max(0, Math.min(6, Math.floor((now - weekStart(new Date(now))) / DAY_MS))), days = 7 - d, t = todayLeft(pu, new Date(now)), L = pu.purseLeft;
     const over = Math.ceil(-L - 1e-9), go = over > 0 ? `Overdrawn ${money(over)} · Cover it` : '';   // v144: no set-out button; the week starts on its own (any day there's room since v268)
@@ -721,14 +751,15 @@ const VL = (() => {
     if (on && !heroOpen) {   // v186: the day stacks on their own, as Jordan drew it; a tap opens the card for more
       const cg = (state.packs || []).length && pu.P > 0;   // v275: categories get their own card (daily and weekly)
       const pd = aheadDay(now, cg, t, L, days);
-      h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
+      h += haveHTML(now);   // v322
+      h += `<div class="vl-hero pp-panel hc${cg ? ' dw' : ''}" role="group" aria-label="This week, day by day">` + `<div class="mh-wk"><span>This week</span><b class="num${L < 0 ? ' bad' : ''}">${L < 0 ? '−' + moneyExact(-L) : moneyExact(L)}</b></div>` + loadHTML() + hcKeys(cg ? dwHTML(now) : todayNumHTML(t)) + (cg ? '' : stacksHTML(now))
         + (pu.carried > 0.005 || t < 0 || pd ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, pd)}</div>` : '')
         + (go ? `<button class="hl-go${over > 0 ? ' over' : ''}" data-hl="go">${esc(go)}</button>` : '') + (wkEd ? `<!--hc-ed${cg ? '' : '+'}-->` : '') + `</div>`;
     } else
     h += `<div class="vl-hero pp-panel${on ? ' hx' : ''}"${on ? ' aria-expanded="true"' : ''}><div class="vl-k">${on ? 'Left today' : 'Left this week'}</div><div class="vl-total num${on ? '' : L < 0 ? ' bad' : ''}">${on ? money(Math.max(0, t)) : L >= 0 ? money(L) : '−' + money(over)}</div>`
-      + (on ? stacksHTML(now) : '')
+      + (on ? stacksHTML(now) : '') + (state.manualWeek ? loadHTML() : '')   // v322
       + (!on || pu.carried > 0.005 || t < 0 ? `<div class="vl-sub hl-line">${tidyLine(pu, n, t, days, L, over, plan, now, on, on ? aheadDay(now, false, t, L, days) : null)}</div>` : '')   // v151: only a warning, or before spending is set
-      + (on ? '' : ''
+      + (on || state.manualWeek ? '' : ''
       + `<div class="hl-wk" role="group" aria-label="Weekly spending"><button class="hl-wkb" data-hl="wm" aria-label="$7 a week less"${wkShown() <= 0 ? ' disabled' : ''}>−</button>`
       + `<span>Weekly spending: <b class="num">${money(wkShown())}</b> (${moneyExact(wkShown() / 7)} a day)<small>${wkDraft != null ? `was ${money(weeklyAmt())}` : n ? "this week's spending is running · a change counts from today" : plan ? `${money(plan * 7 * WORKER_DAY)} a week · starts Monday` : 'Set your weekly spending with + to start'}</small></span>`
       + `<button class="hl-wkb" data-hl="wp" aria-label="$7 a week more"${wkShown() >= wkTop() ? ' disabled' : ''}>+</button></div>`
@@ -973,6 +1004,11 @@ const VL = (() => {
     if (o === 'editbills') { openBillEdit(); return; }
     Town.open(o);
   });
+  document.addEventListener('click', e => { if (e.target.closest('[data-cu-open]')) Town.open('cushion'); });   // v322
+  document.addEventListener('click', e => { const b = e.target.closest('[data-ld]'); if (!b) return; e.stopPropagation();   // v322
+    if (b.dataset.ld === 'on') { state.manualWeek = true; save(); render(); toast('From Monday, load your weekly money by hand'); return; }
+    if (b.dataset.ld === 'off') { delete state.manualWeek; save(); render(); toast('Your weekly money is set aside from pay again, from Monday'); return; }
+    const v = Number(($('ldAmt') || {}).value); if (loadWeek(v)) { render(); toast(`Loaded ${moneyExact(v)} into this week`); } }, true);
   $('mainScroll').addEventListener('click', e => {   // v140: the whole main screen
     if (e.target.closest('#homeList .vl-hero.hc') && !e.target.closest('button, input, label, .hc-ed')) { wkEd = !wkEd; if (!wkEd) wkDraft = null; renderHome(); return; }   // v310 (Jordan): a tap opens the weekly budget in the card   // v279 (Jordan): anywhere on the weekly card opens the week in detail
     { const hh = e.target.closest('#homeList .vl-hero.hx'); if (hh && !e.target.closest('button, [data-dot]')) { heroOpen = !heroOpen; renderHome(); return; } }   // v184
