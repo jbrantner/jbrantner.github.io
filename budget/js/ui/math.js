@@ -56,9 +56,9 @@ function renderMath() {
   const bals = potBalances(cur), g = id => (bals.find(p => p.id === id) || { bal: 0 }).bal, proj = sum(state.pots, p => g(p.id));
   h += `<div class="math-h">What's yours</div><div class="math-tbl">`
     + line('Savings', money(g('savings'))) + line("This week's money", money(g('spend'))) + (state.pots.length ? line('Pots and projects', money(proj)) : '')
-    + line('Spare change', moneyExact(g('scavenger'))) + line('Yours', money(pp.total), 'sum' + (pp.total < 0 ? ' bad' : ''))
-    + `</div><div class="muted" style="font-size:12.5px">In the bank ${moneyExact(pp.bank)} = held for bills ${money(pp.held)}${Math.abs(pp.L.movedBills) >= 0.01 ? ` + moved to Bills ${money(pp.L.movedBills)}` : ''} + still coming in ${money(pp.pending)} + yours ${money(pp.total)}.</div>`
-    + (pp.total < -0.5 ? `<div class="bad" style="font-size:12.5px; margin-top:4px">Your bills need ${money(-pp.total)} more than you have, so Savings is below zero until more pay comes in.</div>` : '');
+    + line('Spare change', moneyExact(g('scavenger'))) + line('Yours', money((pp.total + pp.pending)), 'sum' + ((pp.total + pp.pending) < 0 ? ' bad' : ''))
+    + `</div><div class="muted" style="font-size:12.5px">In the bank ${moneyExact(pp.bank)} = held for bills ${money(pp.held)}${Math.abs(pp.L.movedBills) >= 0.01 ? ` + moved to Bills ${money(pp.L.movedBills)}` : ''} + yours ${money((pp.total + pp.pending))}.${pp.wait >= 0.005 ? ` ${moneyExact(pp.wait)} of your pay isn't in the bank yet.` : ''}</div>`   // v322
+    + ((pp.total + pp.pending) < -0.5 ? `<div class="bad" style="font-size:12.5px; margin-top:4px">Your bills need ${money(-(pp.total + pp.pending))} more than you have, so Savings is below zero until more pay comes in.</div>` : '');
   if (box.innerHTML !== h) box.innerHTML = h;
 }
 // When more villagers work than this pay period's paycheck covers, say so where the plan is made, with a fix.

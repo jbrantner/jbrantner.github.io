@@ -35,7 +35,7 @@ function bankCheckGo() {
   requestAnimationFrame(() => bcRing(Math.max(0.12, 1 - Math.abs(d) / Math.max(1, Math.abs(exp))), 'off', `${d < 0 ? '−' : '+'}${moneyExact(Math.abs(d))}`));
   const names = rows.slice(0, 3).map(r => esc(r.name)).join(', ');
   $('bcNote').innerHTML = `<b style="color:var(--warn)">Off by ${moneyExact(Math.abs(d))}.</b> Your bank shows ${d < 0 ? 'less' : 'more'} than the app counts. Fix it ${d < 0 ? 'takes it out of' : 'puts it into'} Savings.`
-    + (rows.length ? `<br><span class="muted" style="font-size:13px">Bills held lately (${names}${rows.length > 3 ? '…' : ''}) may have come out already, so Fix it opens Adjust to ask.</span>` : '');
+    + (rows.length ? `<br><span class="muted" style="font-size:13px">${rows.some(r => r.kind === 'pay') ? 'Your pay may not have landed yet, and bills' : 'Bills'} held lately (${names}${rows.length > 3 ? '…' : ''}) may have come out already, so Fix it opens Adjust to ask.</span>` : '');
   $('bcAmt').disabled = true; $('bcGo').textContent = 'Fix it'; $('bcLater').textContent = 'Not now';
 }
 function bankCheckFix() {

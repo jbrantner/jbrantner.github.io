@@ -2,6 +2,20 @@
 
 The release-by-release history before this file is in the git log. This file starts with the 2026-10-23 cleanup pass.
 
+## 2026-10-30: Savings is what's really in the bank (v322)
+
+Jordan's Month cushion showed −$592 on payday because the app counted the whole $1,518.72 paycheck as in the bank
+when $800 of it (an advance) hadn't landed, and because Savings left out the part of the paycheck still being handed
+out a day at a time. Now:
+- **Savings (and the Month cushion) gets a paycheck whole the moment it lands** (less the bills' share). Its money a
+  day moves out of Savings into weekly spending, pots, projects and debts as it goes, so Savings is always bank −
+  bills held − pots and projects − this week's money not spent yet.
+- Under Savings or the cushion: "$X of it goes to your plan by (next payday) · $Y free".
+- **Pay that hasn't landed:** the paycheck sheet has "Still coming" for an advance or second deposit. It isn't counted
+  in the bank until you tap It's here on the cushion card.
+- **The bank check asks about pay too:** a paycheck from the last 3 days shows with It's here / Not yet, next to the
+  bills.
+
 ## 2026-10-27: weekly spending line names the categories (v320)
 
 Settings > Money said "$20.00 a day" under a $140 week, but Home showed about $15 a day, because the weekly Gas

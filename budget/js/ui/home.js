@@ -412,6 +412,7 @@ const VL = (() => {
       return `<div class="pp-card pot sv cush ${!CU.sav && savers() > 0 ? 'live' : 'idle'}${opened.has('cushion') ? ' open' : ''}" style="--cc:${col}" data-vl-row="cushion">`
         + `<button class="pp-head" data-pp-open="cushion" aria-expanded="${opened.has('cushion')}"><span class="pp-nm"><em class="pp-kind" data-t="cu-kind"></em><span class="pp-nmr"><b>Month cushion</b>${(() => { const w = CU.sav ? 0 : Math.max(0, savers()); return w > 0 ? `<span class="pp-vsq" role="img" aria-label="${money(w * WORKER_DAY)} a day">${'<i></i>'.repeat(Math.min(w, 40))}${w > 40 ? `<em>+${w - 40}</em>` : ''}</span>` : ''; })()}</span></span>`
         + `<span class="pp-amt"><span class="num pp-roll" data-rl="cushion"></span><small data-t="of-cushion"></small></span></button>`
+        + `<p class="cu-plan" data-t="sv-plan"></p>`   // v322
         + `<div class="pp-pips ember" data-t="p-cushion" data-pip="cushion" aria-hidden="true"></div>`
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-unit"><span class="pp-ubar"><i></i></span><b class="pp-ul"></b></span><span class="vl-step"><span data-s="cushion"></span></span></span>`
         + `<div class="cu-marks" data-t="cu-marks"></div><p class="cu-cap">Next month's bills, locked in as it fills</p><div class="cu-locks" data-t="cu-locks"></div><p class="cu-say" data-t="cu-say"></p><div class="pp-xv" data-x="cushion"></div></div>`;
@@ -435,6 +436,7 @@ const VL = (() => {
         + `<div class="pp-pips${kind === 'proj' ? '' : ' ember'}" data-t="p-${id}" data-pip="${id}" aria-hidden="true"></div>`
         + (db ? `<p class="pp-dl" data-t="dl-${id}"></p>` : '')   // v295: the debt's line
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-unit"><span class="pp-ubar"><i></i></span><b class="pp-ul"></b></span><span class="vl-step"><span data-s="${id}"></span></span></span>`
+        + (!sv || !CU.sav ? '' : `<p class="cu-plan" data-t="sv-plan"></p>`)   // v322
         + (!sv ? '' : `<div class="pp-meta pp-tidy"><span class="pp-m1"><span data-t="m1-${id}"></span><span class="pp-dot" aria-hidden="true"> · </span><span class="pp-nx" data-t="nx-${id}"></span></span><button class="pp-fill" data-fill="${id}" data-t="fl-${id}"></button></div>`)   // v148: one line; v269: Savings only
         + `<div class="pp-crew"><span class="pp-who vl-r2">${who}<small class="pp-mo" data-t="m2-${id}"></small></span>${step}</div>`   // v148: the month figure with the crew
         + (!sv ? `<div class="pp-acts" id="ppm-${id}">${kind === 'proj' && o.goal > 0 && o.bal >= 0.01 ? (db ? (o.bal >= 1 - 1e-6 ? `<button class="pp-chip pp-pay" data-debt="${id}">I paid ${debtPayText(o.id, o.goal, o.bal)}</button>` : '') : `<button class="pp-chip pp-pay" data-debt="${id}">Make a payment</button>`) : ''}`
@@ -574,10 +576,19 @@ const VL = (() => {
       seen[o.id] = B;
     }
     if (CT > 0) cushVals(v, CT, cuC, sv, now, quiet, sRaw);   // v300
+    v['t:sv-plan'] = savingsLine(sRaw, now);   // v322
     // the verdict: the thing to know first
     v['t:vd'] = e.pn.waiting.length ? 'Enter your paycheck to start its money coming in.' : !e.V ? 'No money coming in right now.'
       : soon ? `${esc(soon.name)} is done ~${soon.when}.` : built ? `${esc(built)} is ready to spend ✓` : `Everyone is at work: ${money(e.V * WORKER_DAY)} a day.`;
     return v;
+  }
+  // v322 (Jordan): under Savings (or the cushion), how much of it is already planned by the next payday, what's free,
+  // and any pay that hasn't landed in the bank yet
+  function savingsLine(S, now) {
+    const pl = savingsPlanned(now), out = [];
+    if (pl.amt >= 1) out.push(`<b>${money(pl.amt)}</b> of it goes to your plan by ${shortDate(pl.until)} · <b class="${S - pl.amt < 0 ? 'bad' : ''}">${money(S - pl.amt)}</b> free`);
+    for (const c of hoardParts(now).checks.list) if (c.wait >= 0.005) out.push(`${moneyExact(c.wait)} of your ${shortDate(c.date)} pay isn't in your bank yet <button class="link" data-pay-here="${esc(c.key)}">It's here</button>`);
+    return out.join('<br>');
   }
   // v300: the cushion card's marks (a week of bills at a time), next month's bills locking in smallest first, the
   // line under them (or, once full, what happens now) and its moments: a toast as a bill locks in or a week fills,

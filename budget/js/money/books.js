@@ -28,15 +28,16 @@ function ledgerAt(td) {
 // day from the payday to the next one, plus the odd dollars on that next payday. A paycheck smaller than its bill
 // share holds all of it, and Savings makes up the difference (top) so the bills stay covered.
 function checkFlows(now) {
-  const out = { list: [], whole: 0, cut: 0, got: 0, pending: 0, top: 0, D: 0 };
+  const out = { list: [], whole: 0, cut: 0, got: 0, pending: 0, top: 0, D: 0, wait: 0 };
   for (const [key, ck] of Object.entries(state.checks || {})) {
     const [id, date] = splitKey(key), at = Number(ck.at); if (!(at <= now)) continue;   // v131: entered early, it counts from when it landed
     const inc = state.incomes.find(i => i.id === id), D = Math.max(0, Number(ck.amt) || 0), whole = Math.floor(D + 1e-9), cut = cents(D - whole);
     const share = shareOf(inc, date), F = Math.max(0, whole - share), top = Math.max(0, share - whole), P = periodOf(inc, date);
     const V = Math.floor(F / P.days / WORKER_DAY + 1e-9), extra = F - V * P.days * WORKER_DAY;
     const got = V * P.days * WORKER_DAY * clamp01((now - P.t0) / (P.t1 - P.t0)) + (now >= P.t1 ? extra : 0);
-    out.whole += whole; out.cut += cut; out.got += got; out.pending += F - got; out.top += top; out.D += D;
-    out.list.push({ key, inc, date, D, whole, cut, share, F, top, V, extra, got, pending: F - got, ...P, at, bonus: isExtraCheck(inc, date) });
+    const wait = Math.min(D, Math.max(0, cents(Number(ck.wait) || 0)));   // v322: part of it not in the bank yet (an advance, a split deposit)
+    out.whole += whole; out.cut += cut; out.got += got; out.pending += F - got; out.top += top; out.D += D; out.wait += wait;
+    out.list.push({ key, inc, date, D, whole, cut, share, F, top, V, extra, got, pending: F - got, ...P, at, wait, bonus: isExtraCheck(inc, date) });
   }
   out.list.sort((a, b) => a.date.localeCompare(b.date));
   return out;
@@ -90,9 +91,9 @@ function extraFlows(now = Date.now()) {
 function hoardParts(now = Date.now()) {
   const ex = extraFlows(now), td = ymd(new Date(now)), L = ledgerAt(td), ck = checkFlows(now), st = startFlows(now), N = needAt(td, now), had = Number(state.savings.start || 0);
   const scav = cents(L.spendCut + L.cut + ck.cut + L.adjCut);
-  const bank = had + L.head + L.bills + L.movedBills + L.fix + ck.whole - L.out - L.spent - L.debt + scav + ex.bank;   // v147: − debt payments
+  const bank = had + L.head + L.bills + L.movedBills + L.fix + ck.whole - L.out - L.spent - L.debt + scav + ex.bank - ck.wait;   // v147: − debt payments; v322: − pay not landed yet
   const pending = ck.pending + st.pending + ex.pending, held = N.need, total = bank - held - L.movedBills - pending;
-  return { had, head: L.head, bills: L.bills, fix: L.fix, pay: ck.whole, paid: ck.D, pending, checks: ck, start: st, out: L.out, held, heldUntil: N.at, heldList: N.heldList,
+  return { had, head: L.head, bills: L.bills, fix: L.fix, pay: ck.whole, paid: ck.D, pending, wait: ck.wait, checks: ck, start: st, out: L.out, held, heldUntil: N.at, heldList: N.heldList,
     spent: L.spent, debt: L.debt, scav, total, bank, L, extra: ex };
 }
 // The pay line on the Party page: a payday waiting for its paycheck, the paycheck coming in, or the next payday.
@@ -154,10 +155,12 @@ function partyToCome(now = Date.now()) {
 }
 function potBalances(m, at) {
   const cur = today().slice(0, 7), now = at != null ? at : m >= cur ? Date.now() : monthEndMs(m) - 1, td = ymd(new Date(now)), pp = hoardParts(now);
-  const purse = m === cur ? purseNow(now).purseLeft - partyToCome(now) : 0;   // v187: the purse less the party's pay still to come
+  const purse = m === cur ? purseNow(now).purseLeft : 0;   // v322: this week's money not spent yet
   const scav = cents(pp.scav + moved('scavenger', td));
   const customs = state.pots.map(p => ({ id: p.id, name: p.name, bal: projectBal(p.id, now), get note() { return farmNote(p.id); }, custom: true }));   // v311: notes when read
-  const savings = pp.total - purse - scav - sum(customs, p => p.bal), short = () => overAssigned(), nh = () => pp.heldList.length;
+  // v322 (Jordan): Savings is what's really in the bank right now that nothing else has: a paycheck lands in it whole,
+  // and its money a day moves out of it into spending, pots, projects and debts as it goes
+  const savings = pp.total + pp.pending - purse - scav - sum(customs, p => p.bal), short = () => overAssigned(), nh = () => pp.heldList.length;
   return [
     { id: 'spend', name: "This week's money", get note() { return `${funWorkers()} on weekly spending · ${money(funPerDay() * 7)} a week`; }, bal: purse },
     { id: 'bills', name: 'Bills', get note() { const n = nh(); return n ? `held for ${n} bill${n === 1 ? '' : 's'} not paid yet` : 'nothing held right now'; }, bal: cents(pp.held + moved('bills', td)) },
@@ -165,6 +168,14 @@ function potBalances(m, at) {
     { id: 'scavenger', name: 'Spare change', note: 'spare change', bal: scav, exact: true },
     ...customs,
   ];
+}
+// v322: how much of Savings is already planned for spending, pots, projects and debts by the next payday (the money a
+// day still to come, less what Savings' own money a day keeps, less this week's money already set aside)
+function savingsPlanned(now = Date.now()) {
+  const pn = periodNow(now), live = pn.list.filter(c => c.V > 0 && now < c.t1); if (!live.length) return { amt: 0, until: null };
+  const V = pn.V || sum(live, c => c.V), keep = V > 0 ? clamp01(Math.max(0, savers()) / V) : 0;
+  const amt = Math.max(0, sum(live, c => c.pending) * (1 - keep) - partyToCome(now));
+  return { amt, until: ymd(new Date(Math.max(...live.map(c => c.t1)))) };
 }
 function farmNote(id) { const w = id === 'savings' ? savers() : workersAt(id); return w > 0 ? `${money(w * WORKER_DAY)} a day · ${rateText(w)}` : 'kept month to month'; }
 const POT_NAMES = { start: 'Money you had', spend: "This week's money", bills: 'Bills', savings: 'Savings', scavenger: 'Spare change' };

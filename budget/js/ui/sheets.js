@@ -252,8 +252,9 @@ const Town = (() => {
       const left = pp.bank - pp.held - pp.L.movedBills, nw = state.payNews, news = nw && pn.list.some(c => c.key === nw.key) ? payNewsText(nw) : '';
       let top = head(D.incomes.length === 1 ? D.incomes[0].name : 'Paychecks', `${money(pp.bank)} <small>in the bank</small>`)
         + `<div class="hoard-math tn-paysum">` + r2('In the bank', money(pp.bank)) + r2("Held for bills", '−' + money(pp.held + pp.L.movedBills)) + r2('Left', money(left), ' sum') + `</div>`
-        + `<p class="sh-line st">${money(Math.max(0, pp.total))} of it is yours now${pp.pending >= 1 ? ` · ${money(pp.pending)} still to come this pay period` : ''}</p>`
-        + (pp.total < -0.5 ? `<p class="sh-line bad">Your bills need ${money(-pp.total)} more than you have, so Savings is below zero until more pay comes in.</p>` : '');
+        + `<p class="sh-line st">${money(Math.max(0, pp.total + pp.pending))} of it is yours now${pp.pending >= 1 ? ` · ${money(pp.pending)} of that goes out a day at a time this pay period` : ''}</p>`   // v322
+        + (pp.wait >= 0.005 ? `<p class="sh-line st">${moneyExact(pp.wait)} of your pay isn't in your bank yet.</p>` : '')
+        + (pp.total + pp.pending < -0.5 ? `<p class="sh-line bad">Your bills need ${money(-(pp.total + pp.pending))} more than you have, so Savings is below zero until more pay comes in.</p>` : '');
       for (const c of pn.list) {
         const yours = c.F, earned = c.start ? Math.max(0, c.F - c.pending) : c.got, nm = D.incomes.length > 1 ? esc(c.inc.name) + ' · ' : '';
         top += `<div class="tn-inc tn-period"><h3 class="tn-h3" style="margin:0 0 2px">${nm}This pay period · ${shortDate(c.date)} – ${c.next ? shortDate(c.next) : '?'}</h3>
