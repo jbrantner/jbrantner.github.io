@@ -463,7 +463,7 @@ const VL = (() => {
     // v174: pots and projects in one list (color and the label tell them apart), one add button under it
     // v200: no Spare change card; Collect is the button at the bottom left (#spareFab)
     const mwb = `<button class="pp-big alt pp-add pp-mwb" data-mw="1">Split your pay<small>${money(maxWorkers() * WORKER_DAY)} a day · ${money(perMo(maxWorkers()))} a paycheck</small></button>`;   // v190; v195 a paycheck
-    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>'}${planChip()}</div><div class="pp-list pp-one">` + cushCard();   // v298; v300: the cushion first
+    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>'}${planChip()}</div><div class="pp-list pp-one">` + '';   // v298; v322 (Jordan): the cushion is in the top card now
     const dbIts = [];
     { const its = [...D.stock.map(p => [{ id: p.id, name: p.name, goal: p.goal, custom: p.custom }, p.id === 'savings' ? 'save' : 'pot']),
         ...D.projects.map(p => [{ id: p.id, name: p.name, goal: p.goal, bal: p.bal, custom: true, proj: true }, 'proj'])];
@@ -585,8 +585,8 @@ const VL = (() => {
   // v322 (Jordan): under Savings (or the cushion), how much of it is already planned by the next payday, what's free,
   // and any pay that hasn't landed in the bank yet
   function savingsLine(S, now) {
-    const pl = savingsPlanned(now), out = [], pw = hoardParts(now).wait;
-    if (S < -0.005) out.push(`Empty for now: later bills need ${money(Math.ceil(-S - 1e-9))} more than you have.${pw >= -S - 0.005 ? ` The ${moneyExact(pw)} still coming covers it.` : ''}`);   // v322: the cushion stops at $0
+    const pl = savingsPlanned(now), out = [];
+
     if (pl.week >= 1) out.push(`Spending money through ${shortDate(pl.until)} is already taken out.`);
     if (pl.amt >= 1) out.push(`<b>${money(pl.amt)}</b> more goes to pots and projects by ${shortDate(pl.until)}, a day at a time.`);
     return out.join('<br>');
@@ -735,8 +735,12 @@ const VL = (() => {
     const nm = later.length ? ` (${esc(later[later.length - 1].c.name)}${later.length > 1 ? ' and more' : ''})` : '';
     const keepLine = !(keep >= 1) ? '' : S >= 0 ? `<div class="vl-sub">Keep ${money(keep)} of it for bills after ${shortDate(until)}${nm} · <b>${moneyExact(S)}</b> is free</div>`
       : `<div class="vl-sub">Keep it for bills after ${shortDate(until)}${nm}: they need ${money(keep)}. ${pp.wait >= -S - 0.005 ? `The ${moneyExact(pp.wait)} still coming covers the rest.` : `That's ${money(-S)} more than you'll have, so go easy until more comes in.`}</div>`;
+    // v322 (Jordan 16:41): the cushion lives in this card: what's free past every bill held, from $0 up to a month of bills
+    const T = billsMonthWhole(), C = T > 0 ? Math.max(0, Math.min(T, S)) : Math.max(0, S), f = T > 0 ? clamp01(C / T) : 0;
+    const cu = `<button class="mh-cu" data-cu-open="1" aria-label="Month cushion: ${money(C)}${T > 0 ? ` of ${money(T)}` : ''}. Open it"><span class="mh-cut"><span>Cushion</span><b class="num">${moneyExact(C)}${T > 0 ? `<small> of ${money(T)}</small>` : ''}</b><span class="mh-go">›</span></span>`
+      + (T > 0 ? `<span class="mh-bar" aria-hidden="true"><i style="width:${(f * 100).toFixed(1)}%"></i></span>` : '') + `<span class="mh-cus">${savingsLine(S, now) || (S > T + 0.005 && T > 0 ? `Full, plus ${money(S - T)} more in Savings` : '')}</span></button>`;
     return `<div class="vl-hero pp-panel mh-have"><div class="vl-k">${until ? `Yours until payday, ${shortDate(until)}` : 'Money you have'}</div><div class="vl-total num${H < 0 ? ' bad' : ''}">${H < 0 ? '−' + moneyExact(-H) : moneyExact(H)}</div>`
-      + `<div class="vl-sub">after bills due by then and your spending money</div>${keepLine}${wait}</div>`;
+      + `<div class="vl-sub">after bills due by then and your spending money</div>${keepLine}${wait}${cu}</div>`;
   }
   function homeHTML(now) {
     const pu = purseNow(now), n = partySize(), d = Math.max(0, Math.min(6, Math.floor((now - weekStart(new Date(now))) / DAY_MS))), days = 7 - d, t = todayLeft(pu, new Date(now)), L = pu.purseLeft;
@@ -1000,6 +1004,7 @@ const VL = (() => {
     if (o === 'editbills') { openBillEdit(); return; }
     Town.open(o);
   });
+  document.addEventListener('click', e => { if (e.target.closest('[data-cu-open]')) Town.open('cushion'); });   // v322
   $('mainScroll').addEventListener('click', e => {   // v140: the whole main screen
     if (e.target.closest('#homeList .vl-hero.hc') && !e.target.closest('button, input, label, .hc-ed')) { wkEd = !wkEd; if (!wkEd) wkDraft = null; renderHome(); return; }   // v310 (Jordan): a tap opens the weekly budget in the card   // v279 (Jordan): anywhere on the weekly card opens the week in detail
     { const hh = e.target.closest('#homeList .vl-hero.hx'); if (hh && !e.target.closest('button, [data-dot]')) { heroOpen = !heroOpen; renderHome(); return; } }   // v184
