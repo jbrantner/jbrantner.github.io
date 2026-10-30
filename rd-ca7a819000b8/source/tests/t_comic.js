@@ -17,7 +17,7 @@ const DEF = {
   ConditioningSetArea:[['conditioning','width','height','x','y','strength'],1], ConditioningCombine:[['conditioning_1','conditioning_2'],1],
   ImageScale:[['image','upscale_method','width','height','crop'],1], VAEEncode:[['pixels','vae'],1], VAEDecode:[['samples','vae'],1], EmptyLatentImage:[['width','height','batch_size'],1],
   ImageBlend:[['image1','image2','blend_factor','blend_mode'],1], ImageToMask:[['image','channel'],1], ThresholdMask:[['mask','value'],1], GrowMask:[['mask','expand'],1], ImageCompositeMasked:[['destination','source','x','y','mask'],1],
-  DepthAnythingV2Preprocessor:[['image','resolution'],1], ImageBatch:[['image1','image2'],1], MaskToImage:[['mask'],1], AnimeLineArtPreprocessor:[['image','resolution'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
+  DepthAnythingV2Preprocessor:[['image','resolution'],1], DWPreprocessor:[['image'],1], ImageBatch:[['image1','image2'],1], MaskToImage:[['mask'],1], AnimeLineArtPreprocessor:[['image','resolution'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
   ModelSamplingAuraFlow:[['model','shift'],1], EmptySD3LatentImage:[['width','height','batch_size'],1], ConditioningZeroOut:[['conditioning'],1],
   Canny:[['image','low_threshold','high_threshold'],1], JoinImageWithAlpha:[['image','alpha'],1], InvertMask:[['mask'],1], VAEEncodeForInpaint:[['pixels','vae','mask','grow_mask_by'],1],
@@ -35,7 +35,7 @@ const OI = () => ({ColorMatch:{input:{required:{method:C(['mkl'])}}}, Checkpoint
   UNETLoader:{input:{required:{unet_name:C(['DasiwaMinimaxH3_dasiwaHybridTurboV2_3203135.safetensors', 'DasiwaMinimaxH3_dasiwaHybridV2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'z_image_turbo_bf16.safetensors']), weight_dtype:C(['default'])}}},
   MiniMaxH3ImageToVideo:{input:{required:{}}}, MiniMaxH3AddGuide:{input:{required:{}}}, CLIPTextEncode:{input:{required:{}}}, ConditioningSetArea:{input:{required:{}}}, ConditioningCombine:{input:{required:{}}},
   ImageScale:{input:{required:{}}}, VAEEncode:{input:{required:{}}}, VAEDecode:{input:{required:{}}}, EmptyLatentImage:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}}, FeatherMask:{input:{required:{}}}, SetLatentNoiseMask:{input:{required:{}}}, ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}},
-  ImageBatch:{input:{required:{}}}, MaskToImage:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, ImageScaleBy:{input:{required:{}}}, DepthAnythingV2Preprocessor:{input:{required:{ckpt_name:C(['depth_anything_v2_vitl.pth'])}}}, ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
+  ImageBatch:{input:{required:{}}}, MaskToImage:{input:{required:{}}}, DWPreprocessor:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, ImageScaleBy:{input:{required:{}}}, DepthAnythingV2Preprocessor:{input:{required:{ckpt_name:C(['depth_anything_v2_vitl.pth'])}}}, ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
   LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:C(['BiRefNet-general.safetensors'])}}}, RemoveBackground:{input:{required:{}}},
   Canny:{input:{required:{}}}, JoinImageWithAlpha:{input:{required:{}}}, InvertMask:{input:{required:{}}}, VAEEncodeForInpaint:{input:{required:{}}}, GrowMask:{input:{required:{}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors', 'qwen_3_4b.safetensors']), type:C(['stable_diffusion','minimax','lumina2'])}}}, ModelSamplingAuraFlow:{input:{required:{}}}, EmptySD3LatentImage:{input:{required:{}}}, ConditioningZeroOut:{input:{required:{}}},
@@ -53,6 +53,9 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   const html = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + fs.readFileSync(path.join(__dirname, '..', 'comfy-app.html'),'utf8');
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport:{width:390,height:844}, hasTouch:true, isMobile:true });
+  // the hidden-for-now panel buttons (Jordan 2026-10-30: Scene, ⤢ full screen, 🎞 animate, ✂, ⧉) still work underneath: pressed from here
+  const act = a => page.evaluate(a => { const b = document.createElement('button'); b.dataset.cm = a; b.hidden = true; document.querySelector('#comic').appendChild(b); b.click(); b.remove(); }, a);
+  const pickSc = v => page.evaluate(v => { const el = document.createElement('select'); el.dataset.cmsc = ''; el.hidden = true; el.innerHTML = `<option value="${v}" selected></option>`; document.querySelector('#comic').appendChild(el); el.dispatchEvent(new Event('change', {bubbles:true})); el.remove(); }, v);
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message+' '+(e.stack||'').split('\n').slice(0,4).join(' / '))); page.on('console', m => { if(m.type()==='error' && !/Failed to load resource/.test(m.text())) logs.push(m.text()); });
   page.on('dialog', d => d.accept());
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
@@ -129,13 +132,13 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#comic [data-cmlay="0"]');
   // the old painting controls are gone: the 3D scene does the painting now
   ok(!(await page.$('#comic [data-cmfold="look"], #comic [data-cmfold="lib"], #comic [data-cmfold="poses"], #comic [data-cm="stills"], #comic [data-cm="still1"], #comic [data-cmshot]')), 'no Comic look, Characters, Poses, Shot or Paint the stills');
-  ok(await page.$('#comic [data-cmsc]') && /Make it 3D/.test(await page.textContent('#comic [data-cm="p3d"]')) && /by hand/.test(await page.textContent('#comic .cmed')), 'a panel has a Scene picker and one 🧊 Make it 3D (no picture yet: set up by hand)');
+  ok(!(await page.$('#comic [data-cmsc], #comic [data-cm="p3d"], #comic [data-cm="anim1"], #comic [data-cm="cut"], #comic [data-cm="pdup"], #comic [data-cm="make3d"]')) && await page.$('#comic .cmed textarea'), 'the panel card is slim (Jordan 2026-10-30): its words; no Scene, ⤢ full screen, 🎞, ✂, ⧉, and no 3D button before there is a picture');
   // panel 1: a new scene
-  await page.selectOption('#comic [data-cmsc]', '+');
+  await pickSc('+');
   const sc1 = await page.evaluate(() => cmPage().panels[0].sc);
   ok(sc1 && await page.evaluate(() => cmPage().panels[0].scName==='Scene 1'), '＋ New scene: panel 1 gets Scene 1');
   // panel 2 opens in 3D with no scene: it takes the panel before's
-  await page.click('#cmPage [data-cpi="1"]'); await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(200);
+  await page.click('#cmPage [data-cpi="1"]'); await act('p3d'); await page.waitForTimeout(200);
   const f = await page.evaluate(() => { const fr = document.querySelector('#scn iframe'); return {src:fr && fr.getAttribute('src'), tab:S.tab, lit:document.querySelector('#tabs [data-tab="comic"]').classList.contains('on'), back:!document.querySelector('#libBack').hidden && document.querySelector('#libBackB').textContent, sc:cmPage().panels[1].sc, pid:cmPage().panels[1].id, r:cmRectsOf(cmPage())[1]}; });
   const q = new URLSearchParams((f.src || '').split('?')[1] || '');
   ok(f.sc===sc1 && /^rig\/scene\.html\?/.test(f.src) && q.get('open')===sc1 && q.get('panel')===f.pid && Math.abs(+q.get('ar') - f.r.w / f.r.h) < 0.01 && /looks behind her/.test(q.get('pdesc')) && q.get('plabel')==='Panel 2', 'panel 2 opens the 3D page in Scene 1, as itself, in its own shape, with its words: ' + f.src);
@@ -144,23 +147,30 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.evaluate(([sc, pid, pc]) => localStorage.setItem('rd-scenes', JSON.stringify([{id:sc, name:'Scene 1', objs:[], saved:Date.now(), panels:{[pid]:{cam:{az:0}, scene:{pc, file:'scene_00001_.png', sub:'RenderDeck/scene', at:Date.now()}}}}])), [sc1, f.pid, PCS.Render.url]);
   await page.click('#libBackB'); await page.waitForTimeout(200);
   ok(await page.isVisible('#comic') && await page.evaluate(() => { const p = cmPage().panels[1]; return /scene_00001_\.png/.test(cmStill(p).url) && cmShown(p).still; }), '← Comic page: panel 2 shows its 3D render');
-  ok(/Panels 1, 2 share this scene/.test(await page.textContent('#comic .cmed')) && /Open it full screen/.test(await page.textContent('#comic [data-cm="p3d"]')), 'it says which panels share the scene, and the button is ⤢ Open it full screen');
-  ok(await page.evaluate(() => { const o = [...document.querySelectorAll('#comic [data-cmsc] option')].map(x => x.textContent); return o[0]==='Scene 1' && o[o.length - 1]==='＋ New scene'; }), 'the Scene list: this comic\'s scenes, then ＋ New scene');
+  ok(!(await page.$('#comic [data-cm="anim1"], #comic [data-cm="cut"], #comic [data-cm="pdup"]')) && /Show it in 3D/.test(await page.textContent('#comic [data-cm="make3d"]')) && /Render as/.test(await page.textContent('#comic [data-cm="rend3d"]')), 'a panel with a picture: 🧊 Show it in 3D, She is + 🎨 Render as; no 🎞 Animate, ✂ or ⧉');
+  // 🎨 Render as her over the picture (not 3D yet): the 🖼 The picture recipe, 2 tries in the panel's shape, the new one shown
+  { await page.evaluate(srv => { CCV.lib = {pc:srv, list:[{name:'Ellen', trigger:'ellenx', lora:'librarianx_v2.safetensors', ckpt:'iriselTouchIL_v10.safetensors', style:'AFKJ Style Illustrious Claude.safetensors', tags:'1girl, red hair, long skirt', subfolder:'Character Library/Ellen'}], objs:[], at:Date.now() + 1e9}; drawComic(); }, PCS.Render.url); await page.selectOption('#comic [data-cmwho]', {index:1}); await page.waitForTimeout(100); const nR = ALL.length, s0 = await page.evaluate(() => (cmPage().panels[1].stills || []).length);
+    await page.click('#comic [data-cm="rend3d"]'); for(let i = 0; i < 150 && ALL.length <= nR; i++) await page.waitForTimeout(100);
+    const g = ALL[nR] && ALL[nR].prompt, n = g ? Object.values(g) : [], cn = n.filter(x => x.class_type==='SetUnionControlNetType').map(x => x.inputs.type), ks = n.find(x => x.class_type==='KSampler'), lo = n.filter(x => x.class_type==='LoraLoader').map(x => x.inputs.lora_name);
+    ok(g && n.some(x => x.class_type==='DWPreprocessor') && n.some(x => x.class_type==='DepthAnythingV2Preprocessor') && n.some(x => x.class_type==='RemoveBackground') && cn.join()==='openpose,depth,canny/lineart/anime_lineart/mlsd' && ks.inputs.denoise===1 && n.find(x => x.class_type==='EmptyLatentImage').inputs.batch_size===2 && lo.length >= 1 && check(g).length===0,
+      '🎨 Render as her over a picture: DWPose + depth + her outlines (ControlNet), her LoRA, 2 tries: ' + JSON.stringify({cn, lo, err:g && check(g)}));
+    await page.waitForFunction(s0 => (cmPage().panels[1].stills || []).length > s0, s0, {timeout:20000}).catch(() => {});
+    ok(await page.evaluate(s0 => { const p = cmPage().panels[1]; return p.stills.length > s0 && p.still===0; }, s0), 'its tries join the panel\'s pictures, the newest shown'); }
   // 🎞 Animate the picture
-  const nA = ALL.length; await page.click('#comic [data-cm="anim1"]');
+  const nA = ALL.length; await act('anim1');
   for(let i = 0; i < 150 && ALL.length <= nA; i++) await page.waitForTimeout(100);
   { const g = ALL[nA].prompt, n = Object.values(g); ok(n.some(x => x.class_type==='MiniMaxH3ImageToVideo') && check(g).length===0, '🎞 Animate this picture: MiniMax from the render as the first frame, a valid graph: ' + check(g).join('; ')); }
   await page.waitForFunction(() => cmPage().panels[1].takes.length, null, {timeout:20000});
   ok(await page.$('#comic .cmscrub') && await page.$('#comic [data-cm="frame"]'), 'its clip scrubs at the bottom, 📸 Use this frame');
   // ⧉ duplicate: same scene, starts as panel 2 in 3D
-  await page.click('#comic [data-cm="pdup"]');
+  await act('pdup');
   { const d = await page.evaluate(() => { const ps = cmPage().panels; return {n:ps.length, sc:ps[2].sc, from:ps[2].from, src:ps[1].id, stills:(ps[2].stills || []).length}; });
     ok(d.n===6 && d.sc===sc1 && d.from===d.src && !d.stills, '⧉ Duplicate: panel 3 in Scene 1, coming from panel 2, with no picture yet: ' + JSON.stringify(d));
-    await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(200);
+    await act('p3d'); await page.waitForTimeout(200);
     const asked = await page.evaluate(() => { const fr = document.querySelector('#scn iframe'); return fr.getAttribute('src'); });
     ok(/pfrom=/.test(asked) || await page.evaluate(() => !cmPage().panels[2].from), 'its first open tells the 3D page to start from panel 2'); await page.click('#libBackB'); }
   // a panel picks another scene
-  await page.click('#cmPage [data-cpi="4"]'); await page.selectOption('#comic [data-cmsc]', '+');
+  await page.click('#cmPage [data-cpi="4"]'); await pickSc('+');
   ok(await page.evaluate(() => cmPage().panels[4].scName==='Scene 2' && cmPage().panels[4].sc!==cmPage().panels[0].sc), 'panel 5 in a new Scene 2');
   ok(!(await page.isVisible('#tabs [data-tab="scene"]')), 'no Scene tab any more');
   await page.click('#comic [data-cmborder="black"]');
@@ -220,7 +230,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const cdp = await page.context().newCDPSession(page), tp = (type, pts) => cdp.send('Input.dispatchTouchEvent', {type, touchPoints:pts.map((q, id) => ({x:q[0], y:q[1], id}))});
     await tp('touchStart', [[cx - 20, cy], [cx + 20, cy]]); for(let k = 1; k <= 5; k++) await tp('touchMove', [[cx - 20 - k * 8, cy], [cx + 20 + k * 8, cy]]); await tp('touchEnd', []);
     const f2 = await page.evaluate(() => cmStill(cmPage().panels[0]).fr); ok(f2 && f2.s > 1.5, 'two fingers apart make it bigger: ' + JSON.stringify(f2));
-    const n0 = ALL.length; await page.click('#comic [data-cm="cut"]'); await page.waitForFunction(() => cmStill(cmPage().panels[0]).cut || cmPage().panels[0].err, null, {timeout:20000});
+    const n0 = ALL.length; await act('cut'); await page.waitForFunction(() => cmStill(cmPage().panels[0]).cut || cmPage().panels[0].err, null, {timeout:20000});
     const g = ALL[n0].prompt, ns = Object.values(g); ok(ns.some(x => x.class_type==='RemoveBackground') && ns.some(x => x.class_type==='JoinImageWithAlpha') && check(g).length===0, '✂ Just the character: BiRefNet cut-out, a valid graph: ' + check(g).join(';'));
     ok(await page.evaluate(f2 => { const st = cmStill(cmPage().panels[0]); return st.cut && st.fr && Math.abs(st.fr.s - f2.s) < 1e-6 && cmPage().panels[0].still===0; }, f2), 'the cut-out shows framed the same, kept as a picture of its own'); }
   // 🧍 Make it 3D: the panel opens in 3D with its picture (the cut-out's original, its framing and the cut-out for her box)
@@ -262,22 +272,22 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.evaluate(() => { CM().sel = 0; drawComic(); }); await page.click('#comic [data-cm="pic2d"]'); await page.waitForTimeout(100);
     ok(!(await page.$(`#cmwins iframe[data-pid="${pid}"]`)), '🖼 Show the picture instead takes the window away');
     await page.click('#comic [data-cm="pic2d"]'); await page.waitForTimeout(100);
-    await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(200);
+    await act('p3d'); await page.waitForTimeout(200);
     const w = await page.evaluate(() => __asks[__asks.length - 1]);
     ok(w && w.panel && w.panel.pid===pid && !w.panel.photo && await page.isVisible('#scn'), '🎬 Open in 3D still opens it full screen (without reading the pose again)');
     ok(await page.evaluate(() => document.querySelector('#cmwins').hidden), 'the windows hide while the 3D page is up');
     await page.click('#libBackB'); }
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT, fullPage:true});
   // the tab is remembered, and a 3D panel reopens on its comic page
-  await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(100);
+  await act('p3d'); await page.waitForTimeout(100);
   await page.reload(); await page.waitForSelector('#cmPage .cpanel');
   ok(await page.isVisible('#comic') && await page.$$eval('#cmPage .cpanel', e => e.length)===6, 'after reopening the app it is on the Comic page');
   // Hidden: its own pages and scenes
   await page.evaluate(() => switchMode());
   ok(await page.isVisible('#comic') && !(await page.$('#cmPage')) && /🙈 Hidden/.test(await page.textContent('#comic')), 'Hidden starts with its own empty comic');
   await page.fill('#cmScript', 'Panel 1: a girl waves. Panel 2: she smiles.'); await page.dispatchEvent('#cmScript', 'input'); await page.click('#comic [data-cm="read"]');
-  ok(await page.evaluate(() => { const o = [...document.querySelectorAll('#comic [data-cmsc] option')].map(x => x.textContent); return !o.some(t => /Scene 1/.test(t)); }), 'Hidden does not list the normal scenes');
-  await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(100);
+  ok(await page.evaluate(() => !cmScList(CM()).some(c => /Scene 1/.test(c.name))), 'Hidden does not list the normal scenes');
+  await act('p3d'); await page.waitForTimeout(100);
   ok(await page.evaluate(() => /h=1/.test(document.querySelector('#scn iframe').getAttribute('src'))), 'Hidden opens its panels in the Hidden 3D page');
   await page.click('#libBackB'); await page.evaluate(() => switchMode());
   ok(await page.evaluate(() => CM().pages[0].panels.length===6), 'back in normal: the page is as it was');

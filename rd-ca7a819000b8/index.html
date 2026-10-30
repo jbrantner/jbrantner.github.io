@@ -623,7 +623,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.325'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.326'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4843,6 +4843,45 @@ async function cmTryJob(cm, pg, p, c, k, W, H, b, i){ c.busy = 'Sending…'; dra
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     c.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:(k.zit ? 0.45 : 0.5) * b * cmSlow(k.url), smp:samplerOf(G.g), w:W, h:H, kind:'try', video:false, all:true}; delete c.busy; save(); drawComic(); cmWait(c); }
   catch(err){ delete c.busy; p.err = "Couldn't make tries for panel " + (i + 1) + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
+// 🎨 Render as her over the panel's picture (Jordan 2026-10-30: "the image workflow with controlnet if it's an image on the panel"): the
+// picture is read for a DWPose skeleton (the pose), a light depth of the whole picture (her shape and the place) and her outlines (hands, held
+// things; cut out with BiRefNet), all let go early, then painted again with her LoRA and words, 2 tries in the panel's shape (the 🤸 Pose
+// tab's 🖼 The picture recipe)
+const CM_PIC_DEPTHS = ['DepthAnythingV2Preprocessor', 'DepthAnythingPreprocessor', 'Zoe-DepthMapPreprocessor', 'MiDaS-DepthMapPreprocessor'];
+const cmHerWords = e => { const seen = new Set(), out = [], add = t => { t = t.trim().replace(/\s+/g, ' '); const k = t.toLowerCase().replace(/_/g, ' '); if(t && !seen.has(k)){ seen.add(k); out.push(t); } };
+  (e.prompt || e.trigger || '1girl, solo').split(',').forEach(add); (e.tags || '').split(',').filter(t => !/^(standing|sitting|walking|a-pose|t-pose|arms at sides|full body|simple background|white background|transparent background)$/i.test(t.trim().replace(/_/g, ' '))).forEach(add); return out.join(', '); };
+function cmPicGraph(k, p, e, src, W, H, batch, prefix){ const I = cmIll(), oi = k.oi, depth = CM_PIC_DEPTHS.find(n => oi[n]);
+  const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:oi[cls] ? fillIn(oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:(e.ckpt && k.ckHas(e.ckpt)) || k.ckpt}); let model = [ck, 0], clip = [ck, 1];
+  const style = k.has(e.style || I.style || ''), lora = (name, w) => { const l = add('LoraLoader', {model, clip, lora_name:name, strength_model:w, strength_clip:w}); model = [l, 0]; clip = [l, 1]; };
+  if(style) lora(style, 1); if(e.lora && k.has(e.lora)) lora(k.has(e.lora), +e.strength || 1);
+  const im = [add('ImageScale', {image:[add('LoadImage', {image:src}), 0], upscale_method:'lanczos', width:W, height:H, crop:'center'}), 0], fit = x => [add('ImageScale', {image:x, upscale_method:'bilinear', width:W, height:H, crop:'disabled'}), 0];
+  const cut = k.bg ? [add('MaskToImage', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:im}), 0]}), 0] : null;
+  const only = x => cut ? [add('ImageBlend', {image1:x, image2:cut, blend_factor:1, blend_mode:'multiply'}), 0] : x;
+  const guide = [...(oi.DWPreprocessor ? [[fit([add('DWPreprocessor', {image:im, detect_hand:'enable', detect_body:'enable', detect_face:'enable', resolution:1024}), 0]), 'openpose', 0.9, 0.5]] : []),
+    ...(depth ? [[fit([add(depth, {image:im, resolution:1024}), 0]), 'depth', 0.5, 0.4]] : []),
+    ...(oi.AnimeLineArtPreprocessor ? [[only(fit([add('AnimeLineArtPreprocessor', {image:im, resolution:1024}), 0])), 'canny/lineart/anime_lineart/mlsd', 0.35, 0.3]] : [])];
+  const sw = /afkj/i.test(style || '') ? (I.words || 'AFKJ Style') : '', words = (cmSrc(p) || '').replace(/\\/g, '').trim();
+  const prompt = [sw, cmHerWords(e), words, 'masterpiece, best quality, amazing quality, newest, absurdres, highres'].filter(Boolean).join(', '), st = styleText('illustrious');
+  let pos = [add('CLIPTextEncode', {clip, text:prompt}), 0], neg = [add('CLIPTextEncode', {clip, text:st.neg}), 0]; const L = add('ControlNetLoader', {control_net_name:k.cn});
+  for(const [image, type, str, end] of guide){ const a = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image, strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a, 0]; neg = [a, 1]; }
+  const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 1e12), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:W, height:H, batch_size:batch}), 0], denoise:1});
+  const save = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], filename_prefix:prefix}); return {g, save, prompt}; }
+async function cmRenderPic(i){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i], st = p && cmStill(p), e = p && p.who3d && cmLibChars().find(x => x.subfolder===p.who3d.ref); if(!st) return;
+  if(!e) return toast('Pick who she is first', true); const pic = cmPicOf(st.cut ? st.src || st.url : st.url); if(!pic && !S.test) return toast("That picture isn't on a PC", true);
+  const kits = cmTryKits().filter(k => k.cn), ok = kits.filter(k => !e.lora || k.has(e.lora)); if(!kits.length) return toast('No computer that is on has an Illustrious model and ControlNet ProMax', true);
+  if(!ok.length && e.lora) toast('No computer that is on has ' + e.name + "'s LoRA, so she goes without", true);
+  const k = (ok.length ? ok : kits).slice().sort((a, b) => (b.url===(pic && pic.pc)) - (a.url===(pic && pic.pc)))[0], [W, H] = cmTrySize(cmRectsOf(pg)[i]);
+  const c = {id:uid('x'), parent:p.id, w:W, h:H, rend:true, busy:'Sending the picture…'}; p.extra = (p.extra || []).concat([c]); p.err = ''; drawComic();
+  try{ const prefix = cmPrefixP(pg, i, 'as');
+    let src = 'test.png'; if(!S.test){ if(pic.pc===k.url) src = (pic.sub ? pic.sub.replace(/\\/g, '/') + '/' : '') + pic.file + ' [output]';
+      else { const b = await (await fetch(st.url)).blob(), fd = new FormData(); fd.append('image', b, 'rd-panel-' + Date.now().toString(36) + '.png'); fd.append('overwrite', 'true');
+        const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('sending the picture failed (' + r.status + ')'); src = (await r.json()).name; } }
+    const G = cmPicGraph(k, p, e, src, W, H, 2, prefix);
+    if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 150)); delete c.busy; cmGot(c, 'try', {urls:['', ''], test:true, w:W, h:H}); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    c.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:1.2 * cmSlow(k.url), smp:samplerOf(G.g), w:W, h:H, kind:'try', video:false, all:true}; delete c.busy; save(); drawComic(); cmWait(c); }
+  catch(err){ delete c.busy; p.err = "Couldn't render panel " + (i + 1) + ' as ' + e.name + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
 // ✋ a picture framed in its panel (Jordan 2026-10-30): moved anywhere (past its edges, leaving white) and made bigger or smaller with two
 // fingers; st.fr = {x, y (its middle from the panel's middle, in % of the panel), s (1 = just covering the panel)}
 function cmFrBox(st, r){ const ia = st.w / st.h, pa = r.w / r.h; return ia > pa ? [100 * ia / pa, 100] : [100, 100 * pa / ia]; }
@@ -4916,7 +4955,7 @@ function cmCycle(p, d){ const n = (p.stills || []).length; if(n < 2) return; p.s
 // its tries land in front of its pictures; the first one shows unless one was picked
 function cmGotTry(c, it){ const p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p) return; const w = c.w || it.w, h = c.h || it.h;
   const add = (it.urls || [it.url]).map(u => u ? {url:u, w, h, try:true, t:Date.now()} : {test:true, w, h, try:true, t:Date.now()}); p.stills = add.concat(p.stills || []).slice(0, 40);
-  if(!p.stillPicked){ p.still = 0; p.show = 'still'; } else p.still = (p.still || 0) + add.length; save(); if(!$('#comic').hidden) drawComic(); }
+  if(!p.stillPicked || c.rend){ p.still = 0; p.show = 'still'; if(c.rend) p.pic2d = true; } else p.still = (p.still || 0) + add.length; save(); if(!$('#comic').hidden) drawComic(); }
 function cmBoxesHtml(cm, pg0){ const ps = pg0 ? pg0.panels : [];
   return ps.map((p, i) => `<div class="cmbox"><div class="obhead"><b>Panel ${i + 1}</b><span><button class="chipbtn" data-cm="pdel" data-i="${i}" aria-label="Remove panel ${i + 1}">✕</button></span></div>
     <textarea data-cmpt="${i}" rows="2" placeholder="What happens in this panel" autocapitalize="sentences">${esc(cmSrc(p) || '')}</textarea>${cmMarksHtml(p, i)}</div>`).join('')
@@ -6205,11 +6244,9 @@ function drawComic0(){
     if(p){ const sh = cmShown(p), t = sh && sh.clip ? p.takes[p.take] : null, sts = p.stills || [], sp = cmScPanel(p), scs = cmScList(cm), same = pg.panels.map((q, j) => q.sc && q.sc===p.sc ? j + 1 : 0).filter(Boolean);
       x += `<div class="obpanel cmed"><div class="obhead"><b>Panel ${cm.sel + 1}</b><span><button class="chipbtn" data-cm="prev" aria-label="Panel before" ${cm.sel ? '' : 'disabled'}>◀</button> <button class="chipbtn" data-cm="next" aria-label="Next panel" ${cm.sel < pg.panels.length - 1 ? '' : 'disabled'}>▶</button></span></div>
         <textarea data-cmp="text" rows="2" placeholder="What happens in this panel">${esc(cmSrc(p))}</textarea>${cmMarksHtml(p, cm.sel)}
-        <div class="row"><label>Scene</label><div class="grow"><select data-cmsc aria-label="Scene of this panel">${p.sc ? '' : '<option value="" selected>Pick a scene…</option>'}${scs.map(c => `<option value="${esc(c.id)}" ${c.id===p.sc ? 'selected' : ''}>${esc(c.name)}${c.here ? '' : ' (another comic)'}</option>`).join('')}<option value="+">＋ New scene</option></select></div></div>
-        ${same.length > 1 ? `<p class="note">Panels ${same.join(', ')} share this scene: its place and characters. Each panel has its own camera, and can move, pose, hide or show anyone just for itself.</p>` : ''}
-        ${(() => { const st = sh && sh.still, pic = st && (st.url || S.test) && !cmBusy(p); if(CM_MK3D[p.id] && !CM_MK3D[p.id].err) return ''; // (one 3D button, Jordan 2026-10-30: from the picked picture when there is one, else set up by hand)
-          return p.is3d || (sp && sp.scene) ? '<div class="btnrow"><button class="btn hot" data-cm="p3d">⤢ Open it full screen in 3D</button></div>'
-            : `<div class="btnrow"><button class="btn hot" data-cm="${pic ? 'make3d' : 'p3d'}">🧊 Make it 3D</button></div><p class="note">${pic ? 'Reads her pose from the picked picture and puts the camera where it saw her from.' : 'No picture yet: opens its 3D scene to set up by hand.'}</p>`; })()}
+        ${(() => { const st = sh && sh.still, pic = st && (st.url || S.test) && !cmBusy(p); if(p.is3d || !pic || (CM_MK3D[p.id] && !CM_MK3D[p.id].err)) return '';
+          // (one 3D button, Jordan 2026-10-30: the scene picker and ⤢ full screen are hidden for now, the card was crowded)
+          return '<div class="btnrow"><button class="btn" data-cm="make3d">🧊 Show it in 3D</button></div><p class="note">Reads her pose from the picked picture with SAM 3D Body.</p>'; })()}
         ${sp && sp.rsJob ? `<p class="note">⏳ Rendering on ${esc(pcName(sp.rsJob.pc))}. Open it in 3D to watch, or come back later.</p>` : ''}`;
       if(p.err) x += `<p class="warn">${esc(p.err)}</p>`;
       if(sts.length) x += `<div class="lbl">Pictures · tap one to use it</div><div class="cmstills">${sts.map((st, j) => `<button data-cmstill="${j}" class="${sh && sh.still===st || (j===(p.still || 0) && p.show!=='clip') ? 'on' : ''}" aria-label="Picture ${sts.length - j}">${st.url ? `<img src="${esc(mini(st.url))}" alt="">` : `<span>Picture ${sts.length - j}</span>`}</button>`).join('')}${p.takes.length ? `<button data-cmshow="clip" class="${sh && sh.clip ? 'on' : ''}"><span>🎞 Clip</span></button>` : ''}</div>`;
@@ -6220,13 +6257,14 @@ function drawComic0(){
         <div class="btnrow"><button class="btn" data-cm="frame">📸 Use this frame</button></div>`;
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
       if(cmBusy(p)) x += `<div class="pbar obbar${(cmLead(p) || {}).making ? '' : ' pulse'}"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p><div class="btnrow"><button class="btn" data-cm="stop">✕ Stop this panel</button></div>`;
-      else if(sts.length) x += `<div class="btnrow"><button class="btn" data-cm="anim1" ${cmFlKits().length ? '' : 'disabled'}>🎞 ${p.takes.length ? 'Animate it again' : 'Animate this picture'}</button></div>`;
-      { const mk = CM_MK3D[p.id]; if(mk && mk.err) x += `<p class="warn">🧍 ${esc(mk.err)}</p>`; else if(mk) x += `<p class="note">🧍 Making it 3D: <span data-mk3d="${p.id}">${esc(mk.msg || '')}</span> Keep the app open; the page stays here.</p>`; else if(p.is3d) x += `<p class="note">🧊 ${p.pic2d ? 'This panel shows its picture.' : 'This panel is a window into its 3D scene: drag it to turn round her, pinch to zoom. ⤢ Open it full screen to pose her or move things.'}</p>
+      { const mk = CM_MK3D[p.id]; if(mk && mk.err) x += `<p class="warn">🧍 ${esc(mk.err)}</p>`; else if(mk) x += `<p class="note">🧍 Making it 3D: <span data-mk3d="${p.id}">${esc(mk.msg || '')}</span> Keep the app open; the page stays here.</p>`; else if(p.is3d || cmStill(p)) x += `${p.is3d ? `<p class="note">🧊 ${p.pic2d ? 'This panel shows its picture.' : "This panel shows SAM's 3D body: drag it to turn round her, pinch to zoom."}</p>` : ''}
         <div class="row"><label>She is</label><div class="grow"><select data-cmwho aria-label="Who the 3D rig is"><option value="">🧍 Mannequin</option>${cmLibChars().map(e => `<option value="${esc(e.subfolder)}" ${p.who3d && p.who3d.ref===e.subfolder ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></div></div>${(() => { const r = CM_REND[p.id]; return r && r.err ? `<p class="warn">🎨 ${esc(r.err)}</p>` : r ? `<p class="note">🎨 <span data-rend="${p.id}">${esc(r.msg || 'Painting…')}</span></p>` : ''; })()}
-        <div class="btnrow"><button class="btn hot" data-cm="rend3d" ${CM_REND[p.id] && !CM_REND[p.id].err ? 'disabled' : ''}>🎨 Render as ${esc((p.who3d && p.who3d.name) || 'her')}</button></div>
-        <div class="btnrow"><button class="btn" data-cm="pic2d">${p.pic2d ? '🧊 Show it in 3D' : '🖼 Show the picture instead'}</button></div>`; }
-      { const st = sh && sh.still; if(st && !cmBusy(p) && !(CM_MK3D[p.id] && !CM_MK3D[p.id].err)) x += `${p.is3d ? `<div class="btnrow"><button class="btn" data-cm="make3d" ${st.url || S.test ? '' : 'disabled'}>🧍 Read her pose again from this picture</button></div>` : ''}<div class="btnrow">${st.cut ? '<span class="note" style="margin:0">✂ Just the character. Pinch and drag it in the panel.</span>' : `<button class="btn" data-cm="cut" ${st.url || S.test ? '' : 'disabled'}>✂ Just the character (take the background out)</button>`}${st.fr ? '<button class="btn" data-cm="frreset">↺ Fit</button>' : ''}</div>`; }
-      x += `<div class="btnrow"><button class="btn" data-cm="pdup">⧉ Duplicate as the next panel</button></div></div>`;
+        <div class="btnrow"><button class="btn hot" data-cm="rend3d" ${(CM_REND[p.id] && !CM_REND[p.id].err) || (p.extra || []).some(c => c.rend) ? 'disabled' : ''}>🎨 Render as ${esc((p.who3d && p.who3d.name) || 'her')}</button></div>
+        <p class="note">${cm3dOn(p) ? "From SAM's 3D body, through the panel's camera." : 'Over this picture: its pose, shape and outlines guide her.'}</p>
+        ${p.is3d ? `<div class="btnrow"><button class="btn" data-cm="pic2d">${p.pic2d ? '🧊 Show it in 3D' : '🖼 Show the picture instead'}</button></div>` : ''}`; }
+      // (Jordan 2026-10-30: read the pose again, ✂ just the character, ⧉ duplicate and 🎞 animate are hidden for now)
+      { const st = sh && sh.still; if(st && st.fr && !cmBusy(p)) x += '<div class="btnrow"><button class="btn" data-cm="frreset">↺ Fit</button></div>'; }
+      x += '</div>';
     }
     x += `<div class="btnrow"><button class="btn" data-cm="export" ${pg.panels.some(q => cmShown(q)) ? '' : 'disabled'}>💾 Save the page</button></div>`;
   }
@@ -6281,7 +6319,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='p3d'){ cmOpen3d(cm.sel); return; }
   else if(a==='cut'){ cmCut(p); return; }
   else if(a==='make3d'){ cmMake3d(cm.sel); return; }
-  else if(a==='rend3d'){ const q = pg && pg.panels[cm.sel]; if(q) cmRender3d(q); return; }
+  else if(a==='rend3d'){ const q = pg && pg.panels[cm.sel]; if(q){ if(cm3dOn(q)) cmRender3d(q); else cmRenderPic(cm.sel); } return; } // (SAM's 3D body when it shows, else the picture)
   else if(a==='pic2d'){ const q = pg && pg.panels[cm.sel]; if(q){ q.pic2d = !q.pic2d; save(); drawComic(); } return; }
   else if(a==='frreset'){ const st = cmStill(p); if(st) delete st.fr; }
   else if(a==='tries'){ cmMakeTries(pg.panels.filter(q => !(cm.genOff || []).includes(q.id))); return; }
