@@ -19,7 +19,7 @@ const DEF = {
   ImageBlend:[['image1','image2','blend_factor','blend_mode'],1], ImageToMask:[['image','channel'],1], ThresholdMask:[['mask','value'],1], GrowMask:[['mask','expand'],1], ImageCompositeMasked:[['destination','source','x','y','mask'],1],
   DepthAnythingV2Preprocessor:[['image','resolution'],1], ImageBatch:[['image1','image2'],1], MaskToImage:[['mask'],1], AnimeLineArtPreprocessor:[['image','resolution'],1], ImageScaleBy:[['image','upscale_method','scale_by'],1], ControlNetLoader:[['control_net_name'],1], SetUnionControlNetType:[['control_net','type'],1], ControlNetApplyAdvanced:[['positive','negative','control_net','image','strength','start_percent','end_percent'],2],
   LoadBackgroundRemovalModel:[['bg_removal_name'],1], RemoveBackground:[['bg_removal_model','image'],1],
-  Canny:[['image','low_threshold','high_threshold'],1], JoinImageWithAlpha:[['image','alpha'],1], InvertMask:[['mask'],1],
+  Canny:[['image','low_threshold','high_threshold'],1], JoinImageWithAlpha:[['image','alpha'],1], InvertMask:[['mask'],1], VAEEncodeForInpaint:[['pixels','vae','mask','grow_mask_by'],1],
   SolidMask:[['value','width','height'],1], MaskComposite:[['destination','source','x','y','operation'],1], FeatherMask:[['mask','left','top','right','bottom'],1], SetLatentNoiseMask:[['samples','mask'],1],
   KSampler:[['model','seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','denoise'],1], LoadDA3Model:[['model_name','weight_dtype'],1], DA3Inference:[['da3_model','image','resolution','resize_method','mode'],1], DA3GeometryToMesh:[['da3_geometry','batch_index','decimation','discontinuity_threshold','confidence_threshold','use_sky_mask','texture'],1], SaveGLB:[['mesh','filename_prefix'],0], LoadMoGeModel:[['model_name'],1], MoGeInference:[['moge_model','image'],1], MoGeRender:[['moge_geometry','output'],1], ImageToMask:[['image','channel'],1], GrowMask:[['mask','expand','tapered_corners'],1], ColorMatch:[['image_ref','image_target','method'],1], KSamplerAdvanced:[['model','add_noise','noise_seed','steps','cfg','sampler_name','scheduler','positive','negative','latent_image','start_at_step','end_at_step','return_with_leftover_noise'],1], SaveImage:[['images','filename_prefix'],0], ImageFromBatch:[['image','batch_index','length'],1], LoadVideo:[['file'],1], GetVideoComponents:[['video'],3], ModelPatchLoader:[['name'],1], MiniMaxH3FunControlNetApply:[['model','model_patch','vae','strength','control_video'],1],
 };
@@ -36,7 +36,7 @@ const OI = () => ({ColorMatch:{input:{required:{method:C(['mkl'])}}}, Checkpoint
   ImageScale:{input:{required:{}}}, VAEEncode:{input:{required:{}}}, VAEDecode:{input:{required:{}}}, EmptyLatentImage:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}}, FeatherMask:{input:{required:{}}}, SetLatentNoiseMask:{input:{required:{}}}, ImageBlend:{input:{required:{}}}, ImageToMask:{input:{required:{}}}, ThresholdMask:{input:{required:{}}}, GrowMask:{input:{required:{}}}, ImageCompositeMasked:{input:{required:{}}},
   ImageBatch:{input:{required:{}}}, MaskToImage:{input:{required:{}}}, AnimeLineArtPreprocessor:{input:{required:{}}}, ImageScaleBy:{input:{required:{}}}, DepthAnythingV2Preprocessor:{input:{required:{ckpt_name:C(['depth_anything_v2_vitl.pth'])}}}, ControlNetLoader:{input:{required:{control_net_name:C(['diffusion_pytorch_model_promax.safetensors'])}}}, SetUnionControlNetType:{input:{required:{}}}, ControlNetApplyAdvanced:{input:{required:{}}},
   LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:C(['BiRefNet-general.safetensors'])}}}, RemoveBackground:{input:{required:{}}},
-  Canny:{input:{required:{}}}, JoinImageWithAlpha:{input:{required:{}}}, InvertMask:{input:{required:{}}},
+  Canny:{input:{required:{}}}, JoinImageWithAlpha:{input:{required:{}}}, InvertMask:{input:{required:{}}}, VAEEncodeForInpaint:{input:{required:{}}}, GrowMask:{input:{required:{}}},
   CLIPLoader:{input:{required:{clip_name:C(['qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors']), type:C(['stable_diffusion','minimax'])}}},
   VAELoader:{input:{required:{vae_name:C(['minimax_h3_video_vae_fp16.safetensors'])}}},
   MiniMaxH3ReferenceToVideo:{input:{required:{}}}, SaveVideo:{input:{required:{}}}, SaveImage:{input:{required:{}}}, CreateVideo:{input:{required:{}}}, ModelPatchLoader:{input:{required:{name:C(['minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors'])}}}, MiniMaxH3FunControlNetApply:{input:{required:{}}}, LoadVideo:{input:{required:{}}}, GetVideoComponents:{input:{required:{}}}, ImageFromBatch:{input:{required:{}}}, LoadImage:{input:{required:{}}}});
@@ -177,7 +177,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   { const hl = await page.$$eval('#comic .cmed .cmhl', b => b.map(x => x.textContent + ':' + x.className)); ok(hl.some(x => /^ellenx:.*\bch\b/.test(x)) && hl.some(x => /^walks:/.test(x)) && hl.some(x => /street:/.test(x)), 'her trigger word and the pieces that can be tags are highlighted: ' + hl.join(' | ')); }
   await page.click('#comic .cmed .cmhl.ch'); ok(/Her LoRA is on/.test(await page.textContent('#comic .cmed .cmsug')), 'tapping her name says her LoRA is on here');
   await page.click('#comic .cmed [data-cmlora]'); ok(await page.evaluate(() => !cmChars(cmPage().panels[0]).length && (cmPage().panels[0].loraOff || []).length===1), 'and can turn it off for this panel');
-  await page.click('#comic .cmed .cmhl.ch'); await page.click('#comic .cmed [data-cmlora]'); ok(await page.evaluate(() => cmChars(cmPage().panels[0]).length===1), 'and on again');
+  await page.waitForTimeout(700); if(!(await page.$('#comic .cmed [data-cmlora]'))) await page.click('#comic .cmed .cmhl.ch'); await page.click('#comic .cmed [data-cmlora]'); ok(await page.evaluate(() => cmChars(cmPage().panels[0]).length===1), 'and on again');
   await page.click('#cmPage [data-cpi="1"]'); await page.fill('#comic [data-cmp="text"]', 'A girl reads a book'); await page.dispatchEvent('#comic [data-cmp="text"]', 'change'); await page.waitForTimeout(200);
   { const b = await page.$$('#comic .cmed .cmhl'), first = b.length ? await b[0].textContent() : ''; ok(first==='A girl', 'the highlight takes in "A girl": ' + first);
     await b[0].click(); const sug = await page.textContent('#comic .cmed .cmsug'); ok(/1girl, solo/.test(sug), 'a tap shows what it can become: ' + sug);
@@ -219,11 +219,32 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const pid = await page.evaluate(() => cmPage().panels[0].id);
     await page.evaluate(pid => postMessage({rd3d:{pid, msg:'SAM 3D Body is reading the pose… 4 s'}}, location.origin), pid); await page.waitForTimeout(100);
     ok(/reading the pose/.test(await page.$eval('#cmPage [data-cpi="0"]', e => e.textContent)), 'the panel shows how it is going: ' + await page.$eval('#cmPage [data-cpi="0"]', e => e.textContent.trim()));
-    await page.evaluate(pid => postMessage({rd3d:{pid, done:true}}, location.origin), pid); await page.waitForTimeout(100);
-    ok(await page.evaluate(() => cmPage().panels[0].is3d) && /3D/.test(await page.$eval('#cmPage [data-cpi="0"] .cp3d', e => e.textContent)) && await page.isVisible('#comic'), 'when it is done the panel is marked 🧊 3D and the page is still up');
-    await page.click('#cmPage [data-cpi="0"]'); await page.waitForTimeout(200);
+    await page.evaluate(pid => postMessage({rd3d:{pid, done:true}}, location.origin), pid); await page.waitForTimeout(300);
+    // then the panel is a window into its 3D scene (Jordan 2026-10-30), over its picture with her taken out (Illustrious inpaint where BiRefNet finds her)
+    const win = await page.evaluate(pid => { const f = document.querySelector(`#cmwins iframe[data-pid="${pid}"]`), el = document.querySelector('#cmPage [data-cpi="0"]'); if(!f || !el) return null; const a = f.getBoundingClientRect(), b = el.getBoundingClientRect();
+      return {src:f.getAttribute('src'), dx:Math.abs(a.left - b.left - el.clientLeft), dy:Math.abs(a.top - b.top - el.clientTop), w:Math.abs(a.width - el.clientWidth), pe:f.style.pointerEvents, is3d:cmPage().panels[0].is3d}; }, pid);
+    ok(win && win.is3d && /win=1/.test(win.src) && /panel=/.test(win.src) && !/photo=/.test(win.src) && win.dx < 1.5 && win.dy < 1.5 && win.w < 1.5 && win.pe==='auto' && await page.isVisible('#comic'), '🧊 the 3D panel is a live window laid exactly over it on the page: ' + JSON.stringify(win));
+    ok(!ALL.some(a => Object.values(a.prompt).some(x => x.class_type==='VAEEncodeForInpaint')) && !(await page.$('#cmPage [data-cpi="0"] img.cpimg')), 'a cut-out picture needs no background painting: white behind her rig');
+    await page.evaluate(() => { const p = cmPage().panels[0], st = cmStill(p); cmPlate(p, Object.assign({}, st, {cut:false, url:st.src})); });
+    await page.waitForTimeout(400); const pl = ALL.map(a => Object.values(a.prompt)).find(g => g.some(x => x.class_type==='VAEEncodeForInpaint'));
+    ok(pl && pl.some(x => x.class_type==='RemoveBackground') && pl.some(x => x.class_type==='GrowMask') && /no humans/.test(pl.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join('|')) && check(Object.fromEntries(pl.map((x, j) => [String(j + 1), x]))).length===0,
+      'her picture without her is painted for behind the window (BiRefNet mask, grown, inpainted as background)');
+    await page.waitForFunction(() => cmPage().panels[0].plate || cmPage().panels[0].err, null, {timeout:20000});
+    ok(await page.evaluate(() => { const p = cmPage().panels[0], im = document.querySelector('#cmPage [data-cpi="0"] img.cpimg'); return !!(p.plate && p.plate.url && im && im.getAttribute('src')===p.plate.url); }), 'the panel shows the picture without her behind its window, framed the same');
+    // who the rig is: a library character
+    const names = await page.$$eval('#comic [data-cmwho] option', o => o.map(x => x.textContent)); ok(names.length > 1 && names[0].includes('Mannequin'), 'she can be the mannequin or a library character: ' + names.join(', '));
+    await page.selectOption('#comic [data-cmwho]', {index:1}); await page.waitForTimeout(200);
+    const src2 = await page.evaluate(pid => document.querySelector(`#cmwins iframe[data-pid="${pid}"]`).getAttribute('src'), pid);
+    ok(/[?&]w3=/.test(src2) && await page.evaluate(() => !!cmPage().panels[0].who3d), 'picking her opens the window again with that character as the rig: ' + src2);
+    // a panel that isn't picked lets taps through, and 🖼 shows the picture again
+    await page.evaluate(() => { CM().sel = 1; drawComic(); }); ok(await page.evaluate(pid => document.querySelector(`#cmwins iframe[data-pid="${pid}"]`).style.pointerEvents, pid)==='none', 'another panel picked: the window lets taps and scrolling through');
+    await page.evaluate(() => { CM().sel = 0; drawComic(); }); await page.click('#comic [data-cm="pic2d"]'); await page.waitForTimeout(100);
+    ok(!(await page.$(`#cmwins iframe[data-pid="${pid}"]`)), '🖼 Show the picture instead takes the window away');
+    await page.click('#comic [data-cm="pic2d"]'); await page.waitForTimeout(100);
+    await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(200);
     const w = await page.evaluate(() => __asks[__asks.length - 1]);
-    ok(w && w.panel && w.panel.pid===pid && !w.panel.photo && await page.isVisible('#scn'), 'tapping the picked 3D panel again opens it full screen (without reading the pose again)');
+    ok(w && w.panel && w.panel.pid===pid && !w.panel.photo && await page.isVisible('#scn'), '🎬 Open in 3D still opens it full screen (without reading the pose again)');
+    ok(await page.evaluate(() => document.querySelector('#cmwins').hidden), 'the windows hide while the 3D page is up');
     await page.click('#libBackB'); }
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT, fullPage:true});
   // the tab is remembered, and a 3D panel reopens on its comic page

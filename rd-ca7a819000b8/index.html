@@ -338,6 +338,7 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cmhl.ch{color:#fff;background:var(--accent)}.cmhl.ch.off{color:var(--soft);background:transparent;text-decoration:line-through}.cmhl.on{outline:2px solid currentColor}
 .cmsug{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 2px}.cmsug>span{color:var(--soft);font-size:13px}.cmsug .btn{min-height:36px;padding:4px 12px;flex:none}
 .cmgen{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0}.cmgen .chipbtn{min-width:36px}
+#cmwins{position:absolute;left:0;top:0;width:0;height:0}#cmwins iframe{position:absolute;border:0;z-index:4;background:transparent;display:block}
 #scnbg{position:fixed;left:-10000px;top:0;width:400px;height:760px;visibility:hidden;pointer-events:none}#scnbg iframe{width:400px;height:760px;border:0}
 .cp3d{position:absolute;top:4px;right:4px;background:rgba(0,0,0,.6);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:800;pointer-events:none}
 .cpnav{position:absolute;inset:auto 0 0 0;display:flex;justify-content:space-between;align-items:center;padding:3px;pointer-events:none}.cpnav button{pointer-events:auto;min-height:30px;min-width:30px;padding:0 8px;border-radius:15px;border:0;background:rgba(0,0,0,.6);color:#fff;font-weight:800}.cpnav b{background:rgba(0,0,0,.6);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px}
@@ -622,7 +623,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.309'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.310'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4830,15 +4831,36 @@ function cmFrCss(st, r){ if(!st || !st.w || !st.h || !r) return ''; const f = Ob
 const cmPicOf = url => { try{ const u = new URL(url), q = u.searchParams; return q.get('filename') ? {pc:u.origin, file:q.get('filename'), sub:q.get('subfolder') || ''} : null; }catch(e){ return null; } };
 function cmMake3d(i){ const pg = cmPage(), p = pg && pg.panels[i], st = p && cmStill(p); if(!st) return; const src = cmPicOf(st.cut ? st.src || st.url : st.url); if(!src && !S.test){ toast("That picture isn't on a PC", true); return; }
   const pp = cmOpen3d(i, {bg:true, photo:Object.assign({}, src || {pc:'test', file:'test.png', sub:''}, {w:st.w, h:st.h, fr:st.fr || null, cut:st.cut ? st.url : ''})}); if(!pp) return;
-  // made out of sight (Jordan 2026-10-30): the comic page stays up while the 3D page works in a hidden frame; tap the panel again to open it full screen
+  // made out of sight (Jordan 2026-10-30): the comic page stays up while the 3D page works in a hidden frame; then the panel is a window into it
   CM_MK3D[p.id] = {msg:'Getting the 3D page ready…'}; let o = $('#scnbg'); if(!o){ o = document.createElement('div'); o.id = 'scnbg'; o.setAttribute('aria-hidden', 'true'); document.body.appendChild(o); }
   const old = o.querySelector(`[data-pid="${p.id}"]`); if(old) old.remove();
-  const fr = document.createElement('iframe'); fr.dataset.pid = p.id; fr.title = 'Making panel ' + (i + 1) + ' 3D'; fr.src = scnPanelSrc('scene', pp) + '&bg=1'; o.appendChild(fr); drawComic(); }
+  const fr = document.createElement('iframe'); fr.dataset.pid = p.id; fr.title = 'Making panel ' + (i + 1) + ' 3D'; fr.src = scnPanelSrc('scene', pp) + '&bg=1'; o.appendChild(fr);
+  delete p.plate; p.stillPicked = true; drawComic(); cmPlate(p, st); }
+// 🧊 a 3D panel is a live window into its scene, on the page (Jordan 2026-10-30: "a window into the 3d render scene but still a comic panel"):
+// one frame per panel laid over the page and kept across redraws (moving a frame would load it again); the picked panel's frame takes the
+// fingers (drag turns round her, pinch zooms; it keeps that camera), the others let a tap through to pick the panel or scroll the page
+const CM_WIN = new Map(); let CM_WINV = 0;
+// behind a 3D panel's window: its picture with her taken out (once made), framed the same; a cut-out leaves just white
+const cm3dPic = (p, st) => !st || !cm3dOn(p) ? st : p.plate && p.plate.url ? Object.assign({}, st, {url:p.plate.url, cut:false}) : st.cut ? Object.assign({}, st, {url:''}) : st;
+const cm3dOn = p => p && p.is3d && !p.pic2d && p.sc && !CM_MK3D[p.id];
+function cmWins(){ let L = $('#cmwins'); if(!L){ L = document.createElement('div'); L.id = 'cmwins'; document.body.appendChild(L); }
+  const pg = cmPage(), box = $('#cmPage'), on = !!(pg && box && !$('#comic').hidden && S.tab==='comic'); L.hidden = !on; if(!on) return;
+  const rects = cmRectsOf(pg), want = new Set();
+  pg.panels.forEach((p, i) => { const el = box.querySelector(`[data-cpi="${i}"]`); if(!cm3dOn(p) || !el) return; want.add(p.id);
+    const r = rects[i] || {w:4, h:5}, src = scnPanelSrc('scene', {scene:p.sc, pid:p.id, ar:r.w / r.h, name:p.scName || ''}) + '&win=1&v=' + CM_WINV + (p.who3d ? '&w3=' + encodeURIComponent(p.who3d.ref) + '&w3n=' + encodeURIComponent(p.who3d.name || '') : '');
+    let f = CM_WIN.get(p.id); if(!f){ f = document.createElement('iframe'); f.title = 'Panel ' + (i + 1) + ' in 3D'; f.dataset.pid = p.id; L.appendChild(f); CM_WIN.set(p.id, f); }
+    if(f.dataset.src!==src){ f.dataset.src = src; f.src = src; }
+    const b = el.getBoundingClientRect(); f.style.cssText = `left:${b.left + scrollX + el.clientLeft}px;top:${b.top + scrollY + el.clientTop}px;width:${el.clientWidth}px;height:${el.clientHeight}px;pointer-events:${i===CM().sel ? 'auto' : 'none'}`; });
+  for(const [pid, f] of CM_WIN) if(!want.has(pid)){ f.remove(); CM_WIN.delete(pid); } }
+addEventListener('resize', () => cmWins()); if(window.ResizeObserver) new ResizeObserver(() => cmWins()).observe(document.body);
+function cmGotWin(d){ const pg = cmPage(), i = pg ? pg.panels.findIndex(q => q.id===d.pid) : -1; if(i < 0) return;
+  if(d.tap && CM().sel!==i){ CM().sel = i; CM_HL = null; save(); drawComic(); }
+  if(d.cam){ const o = $('#scn'); if(o.hidden && o.querySelector('iframe')){ o.innerHTML = ''; delete o.dataset.src; } } } // (a 3D page left open would bring back the old camera)
 const CM_MK3D = {}; // panel id → {msg} while its 3D is being made, {err} if it couldn't be
 function cmGot3d(d){ const p = cmAll().find(q => q.id===d.pid && !q.parent), fr = $('#scnbg') && $('#scnbg').querySelector(`[data-pid="${d.pid}"]`);
   if(d.done || d.err){ if(fr) setTimeout(() => fr.remove(), 50); }
   if(d.done){ delete CM_MK3D[d.pid]; if(p){ p.is3d = true; delete p.err; save(); } const o = $('#scn'); if(o.hidden && o.querySelector('iframe')){ o.innerHTML = ''; delete o.dataset.src; } // (a 3D page left open would show the panel as it was)
-    toast('🧍 ' + (p ? 'Panel ' + (cmPage() && cmPage().panels.indexOf(p) + 1) + ' is 3D' : 'It is 3D') + '. Tap it again to open it.'); if(!$('#comic').hidden) drawComic(); return; }
+    toast('🧍 ' + (p ? 'Panel ' + (cmPage() && cmPage().panels.indexOf(p) + 1) + ' is 3D' : 'It is 3D') + '. Drag it to turn round her, pinch to zoom.'); if(!$('#comic').hidden) drawComic(); return; }
   if(d.err){ CM_MK3D[d.pid] = {err:d.err}; if(!$('#comic').hidden) drawComic(); return; }
   if(CM_MK3D[d.pid] && d.msg){ CM_MK3D[d.pid].msg = d.msg; document.querySelectorAll(`[data-mk3d="${d.pid}"]`).forEach(el => el.textContent = d.msg); } }
 // ✂ just the character: the picked picture with its background taken out (BiRefNet), kept as a picture of its own, framed the same
@@ -4854,6 +4876,26 @@ async function cmCut(p){ const pg = cmPage(), i = pg.panels.indexOf(p), st = cmS
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     c.making = {pc:k.url, id:j.prompt_id, save:sv, t:t0, prefix, mins:0.3 * cmSlow(k.url), smp:samplerOf(g), kind:'cut', video:false}; delete c.busy; save(); drawComic(); cmWait(c); }
   catch(err){ delete c.busy; p.err = "Couldn't cut out panel " + (i + 1) + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
+// 🧊 the panel's picture without her (Jordan 2026-10-30: the 3D panel is "the exact same panel except replace her with a 3d rig"): BiRefNet finds her,
+// the mask grows a little and Illustrious paints that part again as background only. A cut-out picture needs none (white behind her)
+async function cmPlate(p, st){ const pg = cmPage(), i = pg.panels.indexOf(p), url = st.cut ? '' : st.url; if(!url && !S.test){ delete p.plate; return; }
+  const kits = cmIllKits().filter(k => k.bg && k.ckpt && k.oi.GrowMask && k.oi.VAEEncodeForInpaint); if(!kits.length){ delete p.plate; return; }
+  const k = kits.sort((a, b) => (pcOf(a.url).load || 0) * cmSlow(a.url) - (pcOf(b.url).load || 0) * cmSlow(b.url))[0], c = {id:uid('x'), parent:p.id, from:{url, w:st.w, h:st.h}};
+  p.extra = (p.extra || []).concat([c]); c.busy = 'Taking her out of the background…'; drawComic();
+  try{ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+    const I = cmIll(), st0 = styleText('illustrious'), img = S.test ? 'test.png' : await cmUp(url, k.url), prefix = cmPrefixP(pg, i, 'plate'), li = [add('LoadImage', {image:img}), 0];
+    const ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck, 0], clip = [ck, 1]; const style = k.has(I.style || '');
+    if(style){ const l = add('LoraLoader', {model, clip, lora_name:style, strength_model:I.styleW || 1, strength_clip:I.styleW || 1}); model = [l, 0]; clip = [l, 1]; }
+    const tags = cmTryTags(p, (cmSrc(p) || '').replace(/\\/g, '')).split(',').map(x => x.trim()).filter(x => x && !/\b(\d*(girls?|boys?|others?)|solo|woman|man|person|people|she|her|he|him|hair|eyes?|dress|skirt|shirt|smile|looking|standing|sitting|walking|crouching|squatting)\b/i.test(x));
+    const enc = t => [add('CLIPTextEncode', {clip, text:t}), 0], mask = [add('GrowMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:li}), 0], expand:24, tapered_corners:true}), 0];
+    const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 1e12), steps:CM_TRY_STEPS, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:enc(['no humans, scenery, background'].concat(tags, [st0.pos]).filter(Boolean).join(', ')),
+      negative:enc('1girl, 1boy, person, human, people, character, figure, ' + st0.neg), latent_image:[add('VAEEncodeForInpaint', {pixels:li, vae:[ck, 2], mask, grow_mask_by:8}), 0], denoise:1});
+    const sv = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], filename_prefix:prefix});
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 150)); delete c.busy; cmGot(c, 'plate', {url:'', test:true}); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    c.making = {pc:k.url, id:j.prompt_id, save:sv, t:t0, prefix, mins:0.6 * cmSlow(k.url), smp:samplerOf(g), kind:'plate', video:false}; delete c.busy; save(); drawComic(); cmWait(c); }
+  catch(err){ delete c.busy; p.err = "Couldn't take her out of panel " + (i + 1) + "'s background: " + err.message; cmDrop(c); save(); drawComic(); } }
+function cmGotPlate(c, it){ const p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p) return; p.plate = Object.assign(it.url ? {url:it.url} : {test:true}, {of:c.from.url, w:c.from.w, h:c.from.h, t:Date.now()}); save(); if(!$('#comic').hidden) drawComic(); }
 function cmGotCut(c, it){ const p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p) return; const f = c.from || {};
   const st = Object.assign(it.url ? {url:it.url} : {test:true}, {w:f.w, h:f.h, cut:true, src:f.url, fr:f.fr ? JSON.parse(JSON.stringify(f.fr)) : undefined, t:Date.now()});
   p.stills = [st].concat(p.stills || []).slice(0, 40); p.still = 0; p.stillPicked = true; p.show = 'still'; save(); if(!$('#comic').hidden) drawComic(); }
@@ -6049,6 +6091,7 @@ function cmGot(p, kind, it){
   if(kind==='ccstep'){ ccGot(p, it); return; }
   if(kind==='try'){ cmGotTry(p, it); return; }
   if(kind==='cut'){ cmGotCut(p, it); return; }
+  if(kind==='plate'){ cmGotPlate(p, it); return; }
   const cm = CM();
   if(kind==='depth'){ p.depth = it.url || scFakeDepth(); p.yaw = p.pitch = 0;
     if(it.urls && it.urls.length >= 4){ p.bg = it.urls[1]; p.bgDepth = it.urls[2]; p.mask = it.urls[3]; }
@@ -6087,8 +6130,8 @@ function cmSeek(v, frame){ if(v && v.duration) v.currentTime = Math.min(v.durati
 function drawPage(){
   const box = $('#cmPage'), pg = cmPage(); if(!box || !pg) return;
   const cm = CM(), rects = cmRectsOf(pg);
-  box.innerHTML = pg.panels.map((p, i) => { const sh = cmShown(p), r = rects[i], t = sh && sh.clip, st = sh && sh.still, op = (p.pos || {x:50}).x + '% ' + (p.pos || {y:50}).y + '%';
-    return `<div class="cpanel${i===cm.sel ? ' sel' : ''}${st && st.url ? ' pic' : ''}" data-cpi="${i}" style="left:${(100 * r.x).toFixed(2)}%;top:${(100 * r.y / CM_H).toFixed(2)}%;width:${(100 * r.w).toFixed(2)}%;height:${(100 * r.h / CM_H).toFixed(2)}%">
+  box.innerHTML = pg.panels.map((p, i) => { const sh = cmShown(p), r = rects[i], t = sh && sh.clip, st = cm3dPic(p, sh && sh.still), op = (p.pos || {x:50}).x + '% ' + (p.pos || {y:50}).y + '%';
+    return `<div class="cpanel${i===cm.sel ? ' sel' : ''}${st && st.url || cm3dOn(p) ? ' pic' : ''}" data-cpi="${i}" style="left:${(100 * r.x).toFixed(2)}%;top:${(100 * r.y / CM_H).toFixed(2)}%;width:${(100 * r.w).toFixed(2)}%;height:${(100 * r.h / CM_H).toFixed(2)}%">
       ${t && t.test ? `<div class="cptest" style="--hue:${(i * 67 + (t.n || 1) * 29) % 360}">Take ${t.n || 1}<br><small>pretend clip</small></div>` : ''}
       ${st && st.url ? `<img class="cpimg${cmFrCss(st, r) ? ' fr' : ''}" src="${esc(st.url)}" alt="" style="${cmFrCss(st, r) || 'object-position:' + op}" draggable="false"${st.w ? '' : ` data-needwh="${i}"`}>` : ''}
       ${st && st.test ? `<div class="cptest" style="--hue:${(i * 67 + 200) % 360}">Still<br><small>pretend</small></div>` : ''}
@@ -6100,7 +6143,7 @@ function drawPage(){
   box.querySelectorAll('img[data-needwh]').forEach(im => im.addEventListener('load', () => { const q = pg.panels[+im.dataset.needwh], st = q && cmStill(q); if(st && !st.w && im.naturalWidth){ st.w = im.naturalWidth; st.h = im.naturalHeight; save(); drawPage(); } }, {once:true}));
   pg.panels.forEach((p, i) => { const sh = cmShown(p), t = sh && sh.clip; if(!t || !t.url) return; const v = cmVid(t.url), el = box.querySelector(`[data-cpi="${i}"]`);
     v.style.objectPosition = (p.pos || {x:50}).x + '% ' + (p.pos || {y:50}).y + '%'; el.prepend(v); if(v.readyState >= 2 && !CM_PLAY) cmSeek(v, p.frame); });
-  cmBar();
+  cmBar(); cmWins();
 }
 let CM_PLAY = false;
 function cmPlay(on){ CM_PLAY = on; const pg = cmPage(); if(!pg) return;
@@ -6159,7 +6202,8 @@ function drawComic0(){
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
       if(cmBusy(p)) x += `<div class="pbar obbar${(cmLead(p) || {}).making ? '' : ' pulse'}"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p><div class="btnrow"><button class="btn" data-cm="stop">✕ Stop this panel</button></div>`;
       else if(sts.length) x += `<div class="btnrow"><button class="btn" data-cm="anim1" ${cmFlKits().length ? '' : 'disabled'}>🎞 ${p.takes.length ? 'Animate it again' : 'Animate this picture'}</button></div>`;
-      { const mk = CM_MK3D[p.id]; if(mk && mk.err) x += `<p class="warn">🧍 ${esc(mk.err)}</p>`; else if(mk) x += `<p class="note">🧍 Making it 3D: <span data-mk3d="${p.id}">${esc(mk.msg || '')}</span> Keep the app open; the page stays here.</p>`; else if(p.is3d) x += '<p class="note">🧊 This panel is 3D: tap it again to open it full screen and turn round her.</p>'; }
+      { const mk = CM_MK3D[p.id]; if(mk && mk.err) x += `<p class="warn">🧍 ${esc(mk.err)}</p>`; else if(mk) x += `<p class="note">🧍 Making it 3D: <span data-mk3d="${p.id}">${esc(mk.msg || '')}</span> Keep the app open; the page stays here.</p>`; else if(p.is3d) x += `<p class="note">🧊 ${p.pic2d ? 'This panel shows its picture.' : 'This panel is a window into its 3D scene: drag it to turn round her, pinch to zoom. 🎬 Open in 3D to pose her or move things.'}</p>
+        <div class="row"><label>She is</label><div class="grow"><select data-cmwho aria-label="Who the 3D rig is"><option value="">🧍 Mannequin</option>${cmLibChars().map(e => `<option value="${esc(e.subfolder)}" ${p.who3d && p.who3d.ref===e.subfolder ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></div></div><div class="btnrow"><button class="btn" data-cm="pic2d">${p.pic2d ? '🧊 Show it in 3D' : '🖼 Show the picture instead'}</button></div>`; }
       { const st = sh && sh.still; if(st && !cmBusy(p) && !(CM_MK3D[p.id] && !CM_MK3D[p.id].err)) x += `<div class="btnrow"><button class="btn" data-cm="make3d" ${st.url || S.test ? '' : 'disabled'}>🧍 ${p.is3d ? 'Make it 3D again from this picture' : 'Make it 3D (her pose, the camera round her)'}</button></div><div class="btnrow">${st.cut ? '<span class="note" style="margin:0">✂ Just the character. Pinch and drag it in the panel.</span>' : `<button class="btn" data-cm="cut" ${st.url || S.test ? '' : 'disabled'}>✂ Just the character (take the background out)</button>`}${st.fr ? '<button class="btn" data-cm="frreset">↺ Fit</button>' : ''}</div>`; }
       x += `<div class="btnrow"><button class="btn" data-cm="pdup">⧉ Duplicate as the next panel</button></div></div>`;
     }
@@ -6200,7 +6244,7 @@ $('#comic').addEventListener('click', e => {
   if(t.dataset.cmcyc){ const q = pg && pg.panels[cm.sel]; if(q) cmCycle(q, +t.dataset.cmcyc); return; }
   const p = pg && pg.panels[cm.sel], a = t.dataset.cm;
   // a tap picks a panel; a tap on the picked one opens it in 3D
-  if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel){ const q = pg.panels[i]; if(q && q.is3d && !CM_MK3D[q.id]) return cmOpen3d(i); if(q && (q.stills || []).length > 1) cmCycle(q, 1); return; } cm.sel = i; CM_HL = null; }
+  if(t.dataset.cpi!=null){ if(cmDrag.moved) return; const i = +t.dataset.cpi; if(i===cm.sel){ const q = pg.panels[i]; if(q && (q.stills || []).length > 1) cmCycle(q, 1); return; } cm.sel = i; CM_HL = null; }
   else if(t.dataset.cmfold){ cm.open[t.dataset.cmfold] = !cm.open[t.dataset.cmfold]; }
   else if(t.dataset.cmpg!=null){ cmPlay(false); cmGoPage(+t.dataset.cmpg); }
   else if(t.dataset.cmlay!=null){ pg.rows = pg.lays[+t.dataset.cmlay]; }
@@ -6215,6 +6259,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='p3d'){ cmOpen3d(cm.sel); return; }
   else if(a==='cut'){ cmCut(p); return; }
   else if(a==='make3d'){ cmMake3d(cm.sel); return; }
+  else if(a==='pic2d'){ const q = pg && pg.panels[cm.sel]; if(q){ q.pic2d = !q.pic2d; save(); drawComic(); } return; }
   else if(a==='frreset'){ const st = cmStill(p); if(st) delete st.fr; }
   else if(a==='tries'){ cmMakeTries(pg.panels.filter(q => !(cm.genOff || []).includes(q.id))); return; }
   else if(a==='tryless' || a==='trymore'){ cm.tryN = Math.max(1, Math.min(40, (cm.tryN || 10) + (a==='trymore' ? 1 : -1))); }
@@ -6237,6 +6282,8 @@ $('#comic').addEventListener('click', e => {
   if(el.dataset.cmpt!=null && pg){ const i = +el.dataset.cmpt, q = pg.panels[i]; if(!q) return; q.src = el.value; q.text = cmPlainTx(el.value); save();
     if(ev==='change'){ cmCommit(q); cmRecast(); save(); drawComic(); } else cmMarksLive(i); return; }
   if(el.dataset.cmcomic!=null){ if(ev==='change') cmPickComic(+el.value); return; }
+  if(el.dataset.cmwho!=null && pg){ if(ev!=='change') return; const p = pg.panels[cm.sel]; if(!p) return; const e = cmLibChars().find(x => x.subfolder===el.value);
+    p.who3d = e ? {ref:e.subfolder, name:e.name} : {ref:'3D/Mannequin', name:''}; save(); drawComic(); return; } // (its window opens again with her: see cmWins)
   if(el.dataset.cmsc!=null && pg){ if(ev!=='change') return; const p = pg.panels[cm.sel]; if(!p) return;
     if(el.value==='+'){ const n = cmScNew(cm); p.sc = n.id; p.scName = n.name; } else if(el.value){ const c = cmScList(cm).find(x => x.id===el.value); p.sc = el.value; p.scName = c ? c.name : ''; }
     delete p.from; save(); drawComic(); return; }
@@ -6279,7 +6326,14 @@ async function cmPageCanvas(pg){
   for(let i = 0; i < pg.panels.length; i++){
     const p = pg.panels[i], r = rects[i], sh = cmShown(p), t = sh && (sh.clip || sh.still), dx = r.x * u, dy = r.y * u, dw = r.w * u, dh = r.h * u;
     x.fillStyle = '#ddd'; x.fillRect(dx, dy, dw, dh);
-    if(sh && sh.still && t.url){ const im = new Image(); im.crossOrigin = 'anonymous'; await new Promise((ok, no) => { im.onload = ok; im.onerror = () => no(new Error("a still couldn't be loaded")); im.src = t.url; });
+    const wc = cm3dOn(p) && (() => { try{ return CM_WIN.get(p.id).contentDocument.querySelector('#stage canvas'); }catch(e){ return null; } })(); // 🧊 a 3D panel: what its window shows
+    const pst = wc && cm3dPic(p, sh && sh.still);
+    if(pst && pst.url){ const im = new Image(); im.crossOrigin = 'anonymous'; await new Promise(ok => { im.onload = ok; im.onerror = ok; im.src = pst.url; });
+      if(im.naturalWidth){ const st = Object.assign({}, pst, {w:pst.w || im.naturalWidth, h:pst.h || im.naturalHeight}), f = Object.assign({x:0, y:0, s:1}, st.fr), [bw, bh] = cmFrBox(st, r), iw = dw * bw / 100 * f.s, ih = dh * bh / 100 * f.s;
+        x.fillStyle = '#fff'; x.fillRect(dx, dy, dw, dh); x.save(); x.beginPath(); x.rect(dx, dy, dw, dh); x.clip(); x.drawImage(im, dx + dw * (50 + f.x) / 100 - iw / 2, dy + dh * (50 + f.y) / 100 - ih / 2, iw, ih); x.restore(); } }
+    else if(wc){ x.fillStyle = '#fff'; x.fillRect(dx, dy, dw, dh); }
+    if(wc && wc.width){ const sc = Math.max(dw / wc.width, dh / wc.height), sw = dw / sc, sh2 = dh / sc; x.drawImage(wc, (wc.width - sw) / 2, (wc.height - sh2) / 2, sw, sh2, dx, dy, dw, dh); }
+    else if(sh && sh.still && t.url){ const im = new Image(); im.crossOrigin = 'anonymous'; await new Promise((ok, no) => { im.onload = ok; im.onerror = () => no(new Error("a still couldn't be loaded")); im.src = t.url; });
       const st = Object.assign({}, t, {w:t.w || im.naturalWidth, h:t.h || im.naturalHeight}), f = Object.assign({x:0, y:0, s:1}, st.fr), [bw, bh] = cmFrBox(st, r), iw = dw * bw / 100 * f.s, ih = dh * bh / 100 * f.s;
       x.fillStyle = '#fff'; x.fillRect(dx, dy, dw, dh); x.save(); x.beginPath(); x.rect(dx, dy, dw, dh); x.clip();
       x.drawImage(im, dx + dw * (50 + f.x) / 100 - iw / 2, dy + dh * (50 + f.y) / 100 - ih / 2, iw, ih); x.restore(); }
@@ -6643,7 +6697,7 @@ async function ccLibFit(d){ const e = (CCV.lib && CCV.lib.list || []).find(x => 
     ccCloseMq(); toast(e.name + ' has her body: 🎬 Scene and 🤸 Pose use it now'); buzz(); await ccLibLoad(); ccDraw(true); }
   catch(err){ toast("Couldn't save her body: " + err.message, true); } }
 function ccCloseMq(){ const o = $('#ccmq'); if(o){ o.hidden = true; o.innerHTML = ''; } }
-addEventListener('message', e => { const d = e.data; if(e.origin===location.origin && d && d.rd3d) return cmGot3d(d.rd3d); if(e.origin!==location.origin || !d || !d.rdmq) return; if(d.rdmq==='close') return ccCloseMq(); if(d.rdmq==='fit') return ccLibFit(d);
+addEventListener('message', e => { const d = e.data; if(e.origin===location.origin && d && d.rd3d) return cmGot3d(d.rd3d); if(e.origin===location.origin && d && d.rdwin) return cmGotWin(d.rdwin); if(e.origin!==location.origin || !d || !d.rdmq) return; if(d.rdmq==='close') return ccCloseMq(); if(d.rdmq==='fit') return ccLibFit(d);
   if(d.rdmq!=='use') return; const c = (ccState().chars || []).find(x => x.id===d.id); if(!c || ccP(c)) return ccCloseMq();
   c.start = 'mq'; c.ref = d.url; c.body = d.shape || null; c.hair = d.hair || null; c.mqLook = d.look || null; c.mqBtags = d.btags || null; const w = (d.desc || '').trim(); c.mqDesc = w;
   c.tags = /\b1(girl|boy|other)\b/.test(w) ? [w, d.tags].filter(Boolean).join(', ') : ['1girl, solo', d.tags, w].filter(Boolean).join(', '); // her body and hair tags (💇 the mannequin's) with her own words
@@ -6662,7 +6716,7 @@ function scnOpen(tab, w){ w = w || {}; tab = tab===true ? 'env' : SCN_TABS.inclu
   requestAnimationFrame(() => document.documentElement.style.setProperty('--scn-top', Math.round(o.getBoundingClientRect().top + 8) + 'px')); }
 function scnPanelQs(pp){ return ['open=' + encodeURIComponent(pp.scene), 'panel=' + encodeURIComponent(pp.pid), 'ar=' + (+pp.ar).toFixed(3), 'pdesc=' + encodeURIComponent(pp.desc || ''), 'pname=' + encodeURIComponent(pp.name || ''), 'plabel=' + encodeURIComponent(pp.label || ''), pp.from ? 'pfrom=' + encodeURIComponent(pp.from) : '', (pp.who || []).length ? 'who=' + encodeURIComponent(JSON.stringify(pp.who)) : '', pp.photo ? 'photo=' + encodeURIComponent(JSON.stringify(pp.photo)) : ''].filter(Boolean).join('&'); }
 function scnPanelSrc(tab, pp){ return 'rig/scene.html?' + [S.hidden ? 'h=1' : '', scnPanelQs(pp)].filter(Boolean).join('&'); }
-function scnClose(){ $('#scn').hidden = true; document.body.classList.remove('scn-open'); if(SCN_TABS.includes(S.tab)) S.tab = 'render'; drawTabs(); }
+function scnClose(){ CM_WINV++; $('#scn').hidden = true; document.body.classList.remove('scn-open'); if(SCN_TABS.includes(S.tab)) S.tab = 'render'; drawTabs(); }
 function ccClose(){ cancelAnimationFrame(CCV.raf); $('#cc').hidden = true; document.body.classList.remove('cc-open'); if(S.tab==='cc' || S.tab==='lib' || S.tab==='obj') S.tab = 'render'; drawTabs(); if(CC_MODE) history.replaceState(null, '', location.pathname + location.hash); }
 function ccEtaOf(P){ const c = P.cc, hs = [c.full, c.redraw].concat(m3Jobs(P)), h = hs.find(x => x.making); if(!h) return null;
   return liveEta(h.making.id, h.making.smp, h.making.t, 60 * (h.making.mins || 2), h===c.full ? 'Drawing her full body' : h===c.redraw ? 'Redrawing her' : h.step ? 'MiniMax turning round her' : h.str ? 'Finishing an angle' : 'Fixing a face'); }
