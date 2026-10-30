@@ -609,7 +609,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.307'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.308'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4733,10 +4733,10 @@ function cmScSync(){ let ch = false; for(const c of cmComics()) for(const pg of 
   if(ch) save(); return ch; }
 addEventListener('storage', e => { if(e.key && /^rd-scenes/.test(e.key) && !$('#comic').hidden && cmScSync()) drawComic(); });
 // 🎬 open a panel in the 3D page: its scene (the panel before's, or a new one, when it has none yet), its shape, its words
-function cmOpen3d(i){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i]; if(!p) return;
+function cmOpen3d(i, extra){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i]; if(!p) return;
   if(!p.sc){ const before = pg.panels.slice(0, i).reverse().find(q => q.sc) || pg.panels.find(q => q.sc); if(before){ p.sc = before.sc; p.scName = before.scName; } else { const n = cmScNew(cm); p.sc = n.id; p.scName = n.name; } }
   const r = cmRectsOf(pg)[i] || {w:4, h:5}, label = (cm.pages.length > 1 ? 'Page ' + (cm.cur + 1) + ' · ' : '') + 'Panel ' + (i + 1);
-  S.cmPanelLabel = label; save(); goTab('scene', {panel:{scene:p.sc, pid:p.id, ar:r.w / r.h, desc:p.text || '', name:p.scName || '', label, from:p.from || '', who:cmChars(p).map(e => ({ref:e.subfolder, name:e.name}))}}); delete p.from; }
+  S.cmPanelLabel = label; save(); goTab('scene', {panel:{scene:p.sc, pid:p.id, ar:r.w / r.h, desc:p.text || '', name:p.scName || '', label, from:p.from || '', who:cmChars(p).map(e => ({ref:e.subfolder, name:e.name})), photo:(extra || {}).photo || null}}); delete p.from; }
 function cmDelPanel(i){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i]; if(!p) return; const hs = [p].concat(p.extra || [], p.d3 ? [p.d3].concat(d3Orbs(p.d3)) : []), run = hs.filter(h => h.making || h.busy);
   if(((p.stills || []).length || p.takes.length || run.length) && !confirm('Remove panel ' + (i + 1) + '?' + (run.length ? ' Its running jobs will be stopped.' : '') + ' Pictures it made stay in your Library.')) return;
   if(run.length) cmStop(run); try{ localStorage.removeItem('rd-pose-rig-panel-' + cmRigKey(p)); localStorage.removeItem('rd-pose-rig-guides-' + cmRigKey(p)); }catch(e){} pg.panels.splice(i, 1); cmRelayout(pg); cm.sel = Math.max(0, Math.min(cm.sel, pg.panels.length - 1)); if(CM_INS===i) CM_INS = null; cmRecast(); save(); drawComic(); }
@@ -4812,6 +4812,10 @@ async function cmTryJob(cm, pg, p, c, k, W, H, b, i){ c.busy = 'Sending…'; dra
 function cmFrBox(st, r){ const ia = st.w / st.h, pa = r.w / r.h; return ia > pa ? [100 * ia / pa, 100] : [100, 100 * pa / ia]; }
 function cmFrCss(st, r){ if(!st || !st.w || !st.h || !r) return ''; const f = Object.assign({x:0, y:0, s:1}, st.fr), [bw, bh] = cmFrBox(st, r);
   return `left:${(50 + f.x).toFixed(2)}%;top:${(50 + f.y).toFixed(2)}%;width:${(bw * f.s).toFixed(2)}%;height:${(bh * f.s).toFixed(2)}%`; }
+// 🧍 Make it 3D: the panel opens in 3D with its picked picture, whose pose SAM 3D Body reads onto her (or a mannequin), the camera placed to match
+const cmPicOf = url => { try{ const u = new URL(url), q = u.searchParams; return q.get('filename') ? {pc:u.origin, file:q.get('filename'), sub:q.get('subfolder') || ''} : null; }catch(e){ return null; } };
+function cmMake3d(i){ const pg = cmPage(), p = pg && pg.panels[i], st = p && cmStill(p); if(!st) return; const src = cmPicOf(st.cut ? st.src || st.url : st.url); if(!src && !S.test){ toast("That picture isn't on a PC", true); return; }
+  cmOpen3d(i, {photo:Object.assign({}, src || {pc:'test', file:'test.png', sub:''}, {w:st.w, h:st.h, fr:st.fr || null, cut:st.cut ? st.url : ''})}); }
 // ✂ just the character: the picked picture with its background taken out (BiRefNet), kept as a picture of its own, framed the same
 async function cmCut(p){ const pg = cmPage(), i = pg.panels.indexOf(p), st = cmStill(p); if(!st || st.cut) return;
   const kits = cmIllKits().filter(k => k.bg && k.oi.JoinImageWithAlpha && k.oi.InvertMask); if(!kits.length){ toast('None of your computers that are on has BiRefNet for cutting out', true); return; }
@@ -4826,7 +4830,7 @@ async function cmCut(p){ const pg = cmPage(), i = pg.panels.indexOf(p), st = cmS
     c.making = {pc:k.url, id:j.prompt_id, save:sv, t:t0, prefix, mins:0.3 * cmSlow(k.url), smp:samplerOf(g), kind:'cut', video:false}; delete c.busy; save(); drawComic(); cmWait(c); }
   catch(err){ delete c.busy; p.err = "Couldn't cut out panel " + (i + 1) + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
 function cmGotCut(c, it){ const p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p) return; const f = c.from || {};
-  const st = Object.assign(it.url ? {url:it.url} : {test:true}, {w:f.w, h:f.h, cut:true, fr:f.fr ? JSON.parse(JSON.stringify(f.fr)) : undefined, t:Date.now()});
+  const st = Object.assign(it.url ? {url:it.url} : {test:true}, {w:f.w, h:f.h, cut:true, src:f.url, fr:f.fr ? JSON.parse(JSON.stringify(f.fr)) : undefined, t:Date.now()});
   p.stills = [st].concat(p.stills || []).slice(0, 40); p.still = 0; p.stillPicked = true; p.show = 'still'; save(); if(!$('#comic').hidden) drawComic(); }
 // ‹ › a panel's pictures in turn, on the page (the one showing is the one picked)
 function cmCycle(p, d){ const n = (p.stills || []).length; if(n < 2) return; p.still = (((p.still || 0) + d) % n + n) % n; p.stillPicked = true; p.show = 'still'; cmPlay(false); save(); drawComic(); }
@@ -6129,7 +6133,7 @@ function drawComic0(){
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
       if(cmBusy(p)) x += `<div class="pbar obbar${(cmLead(p) || {}).making ? '' : ' pulse'}"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p><div class="btnrow"><button class="btn" data-cm="stop">✕ Stop this panel</button></div>`;
       else if(sts.length) x += `<div class="btnrow"><button class="btn" data-cm="anim1" ${cmFlKits().length ? '' : 'disabled'}>🎞 ${p.takes.length ? 'Animate it again' : 'Animate this picture'}</button></div>`;
-      { const st = sh && sh.still; if(st && !cmBusy(p)) x += `<div class="btnrow">${st.cut ? '<span class="note" style="margin:0">✂ Just the character. Pinch and drag it in the panel.</span>' : `<button class="btn" data-cm="cut" ${st.url || S.test ? '' : 'disabled'}>✂ Just the character (take the background out)</button>`}${st.fr ? '<button class="btn" data-cm="frreset">↺ Fit</button>' : ''}</div>`; }
+      { const st = sh && sh.still; if(st && !cmBusy(p)) x += `<div class="btnrow"><button class="btn" data-cm="make3d" ${st.url || S.test ? '' : 'disabled'}>🧍 Make it 3D (her pose, the camera round her)</button></div><div class="btnrow">${st.cut ? '<span class="note" style="margin:0">✂ Just the character. Pinch and drag it in the panel.</span>' : `<button class="btn" data-cm="cut" ${st.url || S.test ? '' : 'disabled'}>✂ Just the character (take the background out)</button>`}${st.fr ? '<button class="btn" data-cm="frreset">↺ Fit</button>' : ''}</div>`; }
       x += `<div class="btnrow"><button class="btn" data-cm="pdup">⧉ Duplicate as the next panel</button></div></div>`;
     }
     x += `<div class="btnrow"><button class="btn" data-cm="export" ${pg.panels.some(q => cmShown(q)) ? '' : 'disabled'}>💾 Save the page</button></div>`;
@@ -6183,6 +6187,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='anim1'){ cmJobs('anim', [p]); return; }
   else if(a==='p3d'){ cmOpen3d(cm.sel); return; }
   else if(a==='cut'){ cmCut(p); return; }
+  else if(a==='make3d'){ cmMake3d(cm.sel); return; }
   else if(a==='frreset'){ const st = cmStill(p); if(st) delete st.fr; }
   else if(a==='tries'){ cmMakeTries(pg.panels.filter(q => !(cm.genOff || []).includes(q.id))); return; }
   else if(a==='tryless' || a==='trymore'){ cm.tryN = Math.max(1, Math.min(40, (cm.tryN || 10) + (a==='trymore' ? 1 : -1))); }
@@ -6624,7 +6629,7 @@ const SCN_TABS = ['scene', 'env', 'pose'];
 function scnOpen(tab, w){ w = w || {}; tab = tab===true ? 'env' : SCN_TABS.includes(tab) ? tab : 'scene'; const o = $('#scn'), q = [S.hidden ? 'h=1' : '', tab==='env' ? 'env=1' : ''].filter(Boolean).join('&'), src = 'rig/' + (tab==='pose' ? 'pose' : 'scene') + '.html' + (q ? '?' + q : ''); // 🌄 the Environment tab is the same page (?env=1)
   // 📚 from the Library: open that environment / pose (a page already showing gets told; a new one reads it from its address)
   const ask = w.panel ? {rdpanel:w.panel} : w.open ? {rdopen:w.open} : w.fresh ? {rdnew:1} : null, fr = o.querySelector('iframe');
-  if(!fr || o.dataset.src!==src){ const pp = w.panel, extra = ask ? (q ? '&' : '?') + (pp ? ['open=' + encodeURIComponent(pp.scene), 'panel=' + encodeURIComponent(pp.pid), 'ar=' + (+pp.ar).toFixed(3), 'pdesc=' + encodeURIComponent(pp.desc || ''), 'pname=' + encodeURIComponent(pp.name || ''), 'plabel=' + encodeURIComponent(pp.label || ''), pp.from ? 'pfrom=' + encodeURIComponent(pp.from) : '', (pp.who || []).length ? 'who=' + encodeURIComponent(JSON.stringify(pp.who)) : ''].filter(Boolean).join('&') : ask.rdopen ? 'open=' + encodeURIComponent(ask.rdopen) : 'new=1') : ''; o.innerHTML = `<iframe title="Scene" src="${src + extra}"></iframe>`; o.dataset.src = src; }
+  if(!fr || o.dataset.src!==src){ const pp = w.panel, extra = ask ? (q ? '&' : '?') + (pp ? ['open=' + encodeURIComponent(pp.scene), 'panel=' + encodeURIComponent(pp.pid), 'ar=' + (+pp.ar).toFixed(3), 'pdesc=' + encodeURIComponent(pp.desc || ''), 'pname=' + encodeURIComponent(pp.name || ''), 'plabel=' + encodeURIComponent(pp.label || ''), pp.from ? 'pfrom=' + encodeURIComponent(pp.from) : '', (pp.who || []).length ? 'who=' + encodeURIComponent(JSON.stringify(pp.who)) : '', pp.photo ? 'photo=' + encodeURIComponent(JSON.stringify(pp.photo)) : ''].filter(Boolean).join('&') : ask.rdopen ? 'open=' + encodeURIComponent(ask.rdopen) : 'new=1') : ''; o.innerHTML = `<iframe title="Scene" src="${src + extra}"></iframe>`; o.dataset.src = src; }
   else if(ask) try{ fr.contentWindow.postMessage(ask, location.origin); }catch(e){}
   o.hidden = false; document.body.classList.add('scn-open'); S.tab = tab; drawTabs(); scrollTo({top:0});
   requestAnimationFrame(() => document.documentElement.style.setProperty('--scn-top', Math.round(o.getBoundingClientRect().top + 8) + 'px')); }

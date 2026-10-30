@@ -67,6 +67,14 @@ const DEPS = process.env.RIG_DEPS || '';
   // the PC copy is the same record, panels and all
   await page.waitForTimeout(1200);
   ok(store.get('scA') && store.get('scA').panels && Object.keys(store.get('scA').panels).sort().join()==='p1,p2,p3,p4,p5', 'the PC gets the scene with its 5 panels');
+  // 🧍 Make it 3D: the picture's framing → her box in the panel → the 📷 Camera round her
+  await page.evaluate(() => postMessage({rdpanel:{scene:'scA', pid:'p6', ar:1.5}}, location.origin)); await page.waitForFunction(() => SCENE.PANEL.pid==='p6'); await page.waitForTimeout(300);
+  { const v = await page.evaluate(() => { const b0 = SCENE.panelBox({w:1500, h:1000, fr:{x:10, y:0, s:1}}, {x0:0.4, y0:0.2, x1:0.6, y1:0.8});
+      const o = SCENE.objs.get('o2'); SCENE.setCamFrom(o, Math.PI / 2, {x0:0.6, y0:0.25, x1:0.8, y1:0.75}); SCENE.placeCams(SCENE.rects());
+      const cam = SCENE.camOf('cam'), bx = new SCENE.THREE.Box3().expandByObject(o.g, true), lo = new SCENE.THREE.Vector3((bx.min.x + bx.max.x) / 2, bx.min.y, (bx.min.z + bx.max.z) / 2).project(cam), hi = new SCENE.THREE.Vector3((bx.min.x + bx.max.x) / 2, bx.max.y, (bx.min.z + bx.max.z) / 2).project(cam);
+      return {b0, lo:[lo.x, lo.y], hi:[hi.x, hi.y], az:SCENE.sc.cam.az, el:SCENE.sc.cam.el}; });
+    ok(Math.abs(v.b0.x0 - 0.5) < 0.01 && Math.abs(v.b0.y0 - 0.2) < 0.01, 'a picture moved 10% right in its panel moves her box with it: ' + JSON.stringify(v.b0));
+    ok(Math.abs(v.az - Math.PI / 2) < 0.01 && v.el===0 && Math.abs((v.hi[1] - v.lo[1]) / 2 - 0.5) < 0.08 && Math.abs((v.lo[0] + 1) / 2 - 0.7) < 0.06 && Math.abs((1 - v.hi[1]) / 2 - 0.25) < 0.08, 'the Camera goes round her, level, and she fills the frame where her box is: ' + JSON.stringify(v)); }
   // opening the scene itself leaves the panel
   await page.evaluate(() => postMessage({rdopen:'scA'}, location.origin)); await page.waitForFunction(() => !SCENE.PANEL);
   ok(await page.evaluate(() => SCENE.sc.objs.find(o => o.id==='o1').x===0 && getComputedStyle(document.querySelector('#ptitle')).display==='none' && SCENE.CAM_A===0.8), 'opening the scene on its own shows the scene, not a panel');
