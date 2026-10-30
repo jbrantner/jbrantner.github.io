@@ -62,7 +62,7 @@ body.sc .hud{position:fixed;left:0;right:0;top:0;padding-top:env(safe-area-inset
 body.sc #camctl{top:calc(env(safe-area-inset-top,0px) + 106px)}
 body.sc #stage{position:fixed;inset:0;height:auto;min-height:0;margin:0;border:0;border-radius:0}
 /* 📖 a comic panel's window (?win=1): just its camera's view, filling the panel */
-html.win, body.win{background:transparent!important} body.win > :not(#stage), body.win #stage > :not(canvas){display:none!important} body.win #stage{position:fixed;inset:0;height:auto;min-height:0;margin:0;border:0;border-radius:0;background:transparent}
+html.win, body.win{background:transparent!important} html.win{color-scheme:dark} /* (the same as the app round it, or the phone paints the frame white) */ body.win > :not(#stage), body.win #stage > :not(canvas){display:none!important} body.win #stage{position:fixed;inset:0;height:auto;min-height:0;margin:0;border:0;border-radius:0;background:transparent}
 body.sc .cols{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));z-index:3;max-height:48vh;overflow:auto;padding:0;display:block;border-radius:10px}
 body.sc #objbox{background:rgba(32,34,40,.94);padding:6px}
 body.sc #objbox .line{margin-top:0}body.sc #allmsg{margin:4px 2px}body.sc #objs{margin-top:6px}
@@ -200,9 +200,14 @@ async function panelPhoto(ph, who){ const say = m => { const el = $('#allmsg'); 
   const sh = {pc:ph.pc, file:ph.file, sub:ph.sub || ''};
   // her box first: SAM reads her from just that part of the picture, enlarged (Jordan 2026-10-30: a small figure in the background wasn't found in the whole picture)
   const box = await picBox(ph).catch(() => null); delete ob.photoTurn; await photoPose(ob, sh, null, box);
-  const o = OBJ.get(ob.id); if(!o || ob.photoTurn==null){ const e = 'Her pose could not be read from the picture' + (RMSG.get(ob.id) ? ': ' + RMSG.get(ob.id) : '.'); say(e); bgPost({err:e}); return; }
-  const MW = 96, MH = Math.max(24, Math.min(240, Math.round(MW / CAM_A))), M = panelMask(ph, box, MW, MH), fit = M && fitCamMask(o, ob.photoTurn, M, MW, MH);
-  if(!fit || fit.iou < 0.2) setCamFrom(o, ob.photoTurn, panelBox(ph, box)); say('🧍 Her pose is from the picture, and the 📷 Camera is where the picture saw her from. Turn round her in 🕹 Free, or move the Camera.');
+  const o = OBJ.get(ob.id), MW = 96, MH = Math.max(24, Math.min(240, Math.round(MW / CAM_A))), M = o && o.mq && o.mq.userData.body ? panelMask(ph, box, MW, MH) : null;
+  // too little of her for a pose (Jordan 2026-10-30: a face close-up): she keeps the pose she has, facing the picture's camera, and the camera is still found from her outline
+  const read = ob.photoTurn!=null, why = RMSG.get(ob.id) || '';
+  if(!o || (!read && !M)){ const e = 'Her pose could not be read from the picture' + (why ? ': ' + why : '.'); say(e); bgPost({err:e}); return; }
+  const az = read ? ob.photoTurn : (ob.rot || 0) * D2R, fit = M && fitCamMask(o, az, M, MW, MH);
+  if(!read && !(fit && fit.iou >= 0.2)){ const e = 'Her pose could not be read from the picture' + (why ? ': ' + why : '.'); say(e); bgPost({err:e}); return; }
+  if(!fit || fit.iou < 0.2) setCamFrom(o, az, panelBox(ph, box));
+  say(read ? '🧍 Her pose is from the picture, and the 📷 Camera is where the picture saw her from. Turn round her in 🕹 Free, or move the Camera.' : '🧍 Too little of her shows for a pose, so she keeps hers, and the 📷 Camera is placed to match her outline in the picture. Pose her with the rig if she needs it.');
   if(BG){ clearTimeout(saveT); await pushScene(); bgPost({done:true}); } }
 // out of sight (?bg=1): the comic page keeps showing while this page makes the panel 3D, and hears how it is going
 // a window keeps only its panel's camera: written into the newest copy of the scene, so windows of other panels in the same scene don't undo each other
@@ -213,12 +218,18 @@ function winSaveCam(){ if(!PANEL || !SC) return; const c = camState(); if(JSON.s
 // in a window only the people and things are drawn, over the panel's own picture (Jordan 2026-10-30: "the exact same panel except replace her with a 3d rig")
 function winHide(){ for(const m of [grid, axX, axZ, ground, pgrid]) m.visible = false; for(const o of OBJ.values()){ o.disc.visible = o.label.visible = false; if(o.ob.fromEnv) o.g.visible = false; } }
 // 🧍 who the rig is (Jordan 2026-10-30: "a 3d rig that I can make a different character like Ellen or Ellie"): the posed one keeps her pose and spot, and
-// becomes that library character (her body, hair and look; SAM's own body steps aside so hers shows)
-addEventListener('message', e => { const d = e.data; if(WIN && e.origin===location.origin && d && d.rdwho) winWho(d.rdwho); });
+// becomes that library character, still in SAM's posed body from the picture (sized to her); her LoRA gives her look when it is painted
+addEventListener('message', e => { const d = e.data; if(WIN && e.origin===location.origin && d && d.rdwho) winWho(d.rdwho); if(WIN && e.origin===location.origin && d && d.rdrender) winRender(); });
+// 🎨 Render as her, from the comic page: this panel's 🎬 Render Scene, its progress told to the page, then the painting
+async function winRender(){ if(!SC || !PANEL) return winPost({rerr:'The panel did not open in 3D.'}); const el = $('#allmsg'), t0 = Date.now() - 1;
+  const mo = new MutationObserver(() => winPost({msg:el.textContent})); mo.observe(el, {childList:true, characterData:true, subtree:true});
+  try{ await renderScene(); } finally{ mo.disconnect(); }
+  if(SC.scene && SC.scene.at >= t0){ clearTimeout(saveT); await pushScene(); winPost({rendered:true}); } else winPost({rerr:el.textContent || "It couldn't be painted."}); }
 async function winWho(w){ if(!SC || !PANEL || !w) return; w.ref = w.ref || '3D/Mannequin';
   const ob = SC.objs.find(o => o.kind==='char' && !o.hide && o.photoTurn!=null) || SC.objs.find(o => o.kind==='char' && !o.hide); if(!ob || ob.ref===w.ref) return winPost({who:ob && ob.ref});
   const Lr = local().find(s => s.id===PANEL.base.id); if(Lr && Lr.panels) PANEL.base.panels = Object.assign({}, Lr.panels, {[PANEL.pid]:PANEL.base.panels[PANEL.pid]}); // (other windows' cameras kept)
-  ob.ref = w.ref; ob.label = w.name || nextLabel('Mannequin (3D)'); delete ob.sam; ob.mode = 'mq'; buildObjs(); changed(); clearTimeout(saveT); await pushScene(); dirty = true; winPost({who:ob.ref}); }
+  // (SAM's own posed body stays, sized to her: Jordan 2026-10-30, it follows the picture far better than her rig copying it)
+  ob.ref = w.ref; ob.label = w.name || nextLabel('Mannequin (3D)'); ob.mode = 'mq'; buildObjs(); changed(); clearTimeout(saveT); await pushScene(); dirty = true; winPost({who:ob.ref}); }
 let winT = 0; const winPost = d => { if(WIN && PANEL) try{ parent.postMessage({rdwin:Object.assign({pid:PANEL.pid}, d)}, location.origin); }catch(e){} };
 const BG = QS.get('bg')==='1', bgPost = d => { if(BG && PANEL) try{ parent.postMessage({rd3d:Object.assign({pid:PANEL.pid}, d)}, location.origin); }catch(e){} };
 // her box in the picture (0..1, y down): from the cut-out's see-through edge, else a BiRefNet mask made now, else most of the picture
@@ -1632,6 +1643,7 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   if(QS.get('panel') && QS.get('open')) await openPanel({scene:QS.get('open'), pid:QS.get('panel'), ar:QS.get('ar'), desc:QS.get('pdesc') || '', name:QS.get('pname') || '', label:QS.get('plabel') || '', from:QS.get('pfrom') || '', photo:(() => { try{ return JSON.parse(QS.get('photo') || 'null'); }catch(e){ return null; } })(), who:(() => { try{ return JSON.parse(QS.get('who') || '[]'); }catch(e){ return []; } })()});
   else if(QS.get('new') || !last) newScene(); else openScene(last);
   if(WIN && PANEL && QS.has('w3')) await winWho({ref:QS.get('w3'), name:QS.get('w3n') || ''});
+  if(WIN) winPost({ready:true});
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();

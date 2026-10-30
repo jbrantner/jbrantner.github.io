@@ -128,7 +128,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#comic [data-cmlay="0"]');
   // the old painting controls are gone: the 3D scene does the painting now
   ok(!(await page.$('#comic [data-cmfold="look"], #comic [data-cmfold="lib"], #comic [data-cmfold="poses"], #comic [data-cm="stills"], #comic [data-cm="still1"], #comic [data-cmshot]')), 'no Comic look, Characters, Poses, Shot or Paint the stills');
-  ok(await page.$('#comic [data-cmsc]') && /Set it up in 3D/.test(await page.textContent('#comic [data-cm="p3d"]')), 'a panel has a Scene picker and 🎬 Set it up in 3D');
+  ok(await page.$('#comic [data-cmsc]') && /Make it 3D/.test(await page.textContent('#comic [data-cm="p3d"]')) && /by hand/.test(await page.textContent('#comic .cmed')), 'a panel has a Scene picker and one 🧊 Make it 3D (no picture yet: set up by hand)');
   // panel 1: a new scene
   await page.selectOption('#comic [data-cmsc]', '+');
   const sc1 = await page.evaluate(() => cmPage().panels[0].sc);
@@ -143,7 +143,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.evaluate(([sc, pid, pc]) => localStorage.setItem('rd-scenes', JSON.stringify([{id:sc, name:'Scene 1', objs:[], saved:Date.now(), panels:{[pid]:{cam:{az:0}, scene:{pc, file:'scene_00001_.png', sub:'RenderDeck/scene', at:Date.now()}}}}])), [sc1, f.pid, PCS.Render.url]);
   await page.click('#libBackB'); await page.waitForTimeout(200);
   ok(await page.isVisible('#comic') && await page.evaluate(() => { const p = cmPage().panels[1]; return /scene_00001_\.png/.test(cmStill(p).url) && cmShown(p).still; }), '← Comic page: panel 2 shows its 3D render');
-  ok(/Panels 1, 2 share this scene/.test(await page.textContent('#comic .cmed')) && /Open in 3D/.test(await page.textContent('#comic [data-cm="p3d"]')), 'it says which panels share the scene, and the button is Open in 3D');
+  ok(/Panels 1, 2 share this scene/.test(await page.textContent('#comic .cmed')) && /Open it full screen/.test(await page.textContent('#comic [data-cm="p3d"]')), 'it says which panels share the scene, and the button is ⤢ Open it full screen');
   ok(await page.evaluate(() => { const o = [...document.querySelectorAll('#comic [data-cmsc] option')].map(x => x.textContent); return o[0]==='Scene 1' && o[o.length - 1]==='＋ New scene'; }), 'the Scene list: this comic\'s scenes, then ＋ New scene');
   // 🎞 Animate the picture
   const nA = ALL.length; await page.click('#comic [data-cm="anim1"]');
@@ -236,6 +236,18 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.selectOption('#comic [data-cmwho]', {index:1}); await page.waitForTimeout(200);
     const src2 = await page.evaluate(pid => document.querySelector(`#cmwins iframe[data-pid="${pid}"]`).getAttribute('src'), pid);
     ok(/[?&]w3=/.test(src2) && await page.evaluate(() => !!cmPage().panels[0].who3d), 'picking her opens the window again with that character as the rig: ' + src2);
+    // 🎨 Render as her: the panel's Render Scene runs in its window, and the painting comes back as the panel's picture
+    ok(/Render as/.test(await page.textContent('#comic [data-cm="rend3d"]')), 'there is a 🎨 Render as her button: ' + await page.textContent('#comic [data-cm="rend3d"]'));
+    await page.evaluate(pid => { window.__sent = []; const f = document.querySelector(`#cmwins iframe[data-pid="${pid}"]`); f.contentWindow.postMessage = m => __sent.push(m); f.dataset.ready = '1'; }, pid);
+    await page.click('#comic [data-cm="rend3d"]'); await page.waitForTimeout(150);
+    ok(await page.evaluate(() => __sent.some(m => m.rdrender)), 'it asks the panel\'s 3D window to paint');
+    await page.evaluate(([pid, srv]) => { const p = cmPage().panels[0], L = JSON.parse(localStorage.getItem('rd-scenes') || '[]'); let r = L.find(x => x.id===p.sc); if(!r){ r = {id:p.sc, name:'Scene', objs:[], v:1}; L.push(r); }
+      r.panels = r.panels || {}; r.panels[pid] = Object.assign({}, r.panels[pid], {scene:{pc:srv, file:'scene_00001_.png', sub:'RenderDeck/scene', at:Date.now()}}); r.saved = Date.now(); localStorage.setItem('rd-scenes', JSON.stringify(L));
+      postMessage({rdwin:{pid, msg:'🎬 Painting the scene… 12 s'}}, location.origin); }, [pid, PCS.Render.url]); await page.waitForTimeout(100);
+    ok(/Painting the scene/.test(await page.$eval('#cmPage [data-cpi="0"]', e => e.textContent)), 'the panel shows the painting going');
+    await page.evaluate(pid => postMessage({rdwin:{pid, rendered:true}}, location.origin), pid); await page.waitForTimeout(150);
+    ok(await page.evaluate(() => { const p = cmPage().panels[0], st = cmStill(p); return p.pic2d && st && /scene_00001_/.test(st.url) && !document.querySelector(`#cmwins iframe[data-pid="${p.id}"]`); }), 'when it is painted the panel shows the painting (🧊 Show it in 3D goes back)');
+    await page.click('#comic [data-cm="pic2d"]'); await page.waitForTimeout(100);
     // a panel that isn't picked lets taps through, and 🖼 shows the picture again
     await page.evaluate(() => { CM().sel = 1; drawComic(); }); ok(await page.evaluate(pid => document.querySelector(`#cmwins iframe[data-pid="${pid}"]`).style.pointerEvents, pid)==='none', 'another panel picked: the window lets taps and scrolling through');
     await page.evaluate(() => { CM().sel = 0; drawComic(); }); await page.click('#comic [data-cm="pic2d"]'); await page.waitForTimeout(100);
