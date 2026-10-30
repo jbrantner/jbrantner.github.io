@@ -38,17 +38,24 @@ function renderBank() {
 function bankGo() {
   const v = $('bankAmt').value.trim(), B = Number(v); if (v === '' || !isFinite(B)) return;
   const { rows } = bankRows(), now = Date.now(), td = today();
+  const was = { tx: state.transactions.slice(), skips: { ...billSkips() }, waits: {} }, added = [];   // v324: what Undo puts back
   for (const r of rows) {
-    if (r.kind === 'held' && r.paid) { state.transactions.push({ ...paidMarker(r.b.c, r.b.m), date: td, billMonth: r.b.m, gameSlain: true, at: now }); delete billSkips()[r.key]; }
-    if (r.kind === 'pay' && !r.paid && state.checks[r.key]) state.checks[r.key].wait = cents(Number(state.checks[r.key].amt) || 0);   // v322: none of it yet
+    if (r.kind === 'held' && r.paid) { const mk = { ...paidMarker(r.b.c, r.b.m), date: td, billMonth: r.b.m, gameSlain: true, at: now }; state.transactions.push(mk); added.push(mk); delete billSkips()[r.key]; }
+    if (r.kind === 'pay' && !r.paid && state.checks[r.key]) { was.waits[r.key] = state.checks[r.key].wait; state.checks[r.key].wait = cents(Number(state.checks[r.key].amt) || 0); }   // v322: none of it yet
     if (r.kind === 'auto' && !r.paid) { const [id, m] = splitKey(r.key); dropMarker(id, m); billSkips()[r.key] = true; }
   }
+  const undoAll = () => {   // v324: the answers too, not only the balance fix
+    const gone = was.tx.filter(t => !state.transactions.includes(t)), keep = state.transactions.filter(t => !added.includes(t));
+    state.transactions = keep.concat(gone); state.billSkips = was.skips;
+    for (const [k, w] of Object.entries(was.waits)) if (state.checks[k]) { if (w) state.checks[k].wait = w; else delete state.checks[k].wait; }
+  };
+  const answered = added.length || Object.keys(was.waits).length || was.tx.length !== state.transactions.length - added.length;
   save();   // the books start afresh with those bills, then the fix is whatever's still different
   const d = cents(B - hoardParts(now).bank), id = uid();
   if (Math.abs(d) >= 0.005) state.adjusts.push({ id, at: now, date: td, amount: d, bank: cents(B) });
   bankOpen = false; bankPick = {}; $('bankAmt').value = ''; save(); render();
-  if (Math.abs(d) < 0.005) { toast('Your bank matches what the app counts ✓'); return; }
-  toastUndo(`Balance set: ${d > 0 ? '+' : '−'}${moneyExact(Math.abs(d))} ${d > 0 ? 'into' : 'out of'} Savings`, () => { state.adjusts = state.adjusts.filter(a => a.id !== id); save(); render(); });
+  if (Math.abs(d) < 0.005) { if (answered) toastUndo('Your bank matches what the app counts ✓', () => { undoAll(); save(); render(); }); else toast('Your bank matches what the app counts ✓'); return; }
+  toastUndo(`Balance set: ${d > 0 ? '+' : '−'}${moneyExact(Math.abs(d))} ${d > 0 ? 'into' : 'out of'} Savings`, () => { state.adjusts = state.adjusts.filter(a => a.id !== id); undoAll(); save(); render(); });
 }
 $('bankCheckBtn').onclick = () => openBankCheck(false);   // v136
 $('bcAmt').addEventListener('input', () => { const v = $('bcAmt').value.trim(); $('bcGo').disabled = !(v !== '' && isFinite(Number(v))); });

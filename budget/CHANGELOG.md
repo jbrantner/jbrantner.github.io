@@ -2,6 +2,17 @@
 
 The release-by-release history before this file is in the git log. This file starts with the 2026-10-23 cleanup pass.
 
+## 2026-10-30: Bug pass fixes (v324, after v323)
+
+From a short bug pass on Jordan's backup (random tapping, 60-day runs, scripted edge cases on the core loop):
+- **Spend from it on the Cushion** used Savings alone as its limit, so it was greyed out whenever Savings was below
+  $0 even with money showing on the Cushion (Jordan's backup: Cushion $166, button off). Its limit is now the
+  Cushion number.
+- **Load from cushion** had no limit (typing $5,000 by mistake put the Cushion at −$4,728) and no Undo. It now stops
+  at what the Cushion has, and the toast has Undo.
+- **Bank check Undo** took back the balance fix but left its answers: bills it marked paid stayed paid, and a pay
+  marked "not yet" stayed not landed. Undo now puts all of it back (also when the bank matched and there was no fix).
+
 ## 2026-10-30: Savings is what's really in the bank (v322)
 
 Jordan's Month cushion showed −$592 on payday because the app counted the whole $1,518.72 paycheck as in the bank
