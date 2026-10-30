@@ -222,6 +222,9 @@ const DEPS = process.env.RIG_DEPS || '';
     ok(bp && bp.inputs.format==='bvh' && det && det.inputs.class_name==='person' && gs.some(n => n.class_type==='SAM3DBody_Predict') && gs.find(n => n.class_type==='LoadMoGeModel').inputs.model_name==='moge_2_vitl_normal_fp16.safetensors',
       '🦴 SAM 3D Body reads the photo (RT-DETR finds the person, MoGe the lens) and writes a BVH');
     ok(/She has the photo/.test(r.msg) && r.bq >= 8 && r.used==='photo_1.png' && r.kneeUp > -0.08 && r.kneeUpL > -0.08 && r.ankle < r.knee && r.elbow < r.shoulder, '🦴 her rig takes the crouch: knees up level with her hips, elbows below her shoulders: ' + JSON.stringify(r));
+    // (Jordan 2026-10-30: her rig follows SAM's pose closely: back, neck, head, shoulders, arms, hands, legs and feet all point as SAM's do)
+    const fe = await page.evaluate(() => SCENE.SAMFIT.err || {}), bad = Object.entries(fe).filter(([k, v]) => v > (k==='bn_spine01' ? 10 : 6)); // (her hips, measured to her mid back, which the back bones above then bend)
+    ok(Object.keys(fe).length >= 20 && !bad.length, '🦴 every one of her bones points as SAM\'s skeleton does (within 6°): ' + JSON.stringify(fe));
     if(process.env.SHOT){ await page.evaluate(() => document.querySelector('#pzpanel').click()); await page.waitForTimeout(500); await page.screenshot({path:process.env.SHOT + '/pose-photo.png'}); await page.evaluate(() => document.querySelector('#pzpanel').click()); }
     // 🧍 the photo's own 3D body stands in for her mannequin (Jordan 2026-10-29), sized to her, turned her way, on the floor; its depth and joints guide the paintings
     if(process.env.SAM_GLB){ await page.waitForFunction(() => SCENE.samOn([...SCENE.objs.values()][0]), null, {timeout:20000}).catch(() => {});
