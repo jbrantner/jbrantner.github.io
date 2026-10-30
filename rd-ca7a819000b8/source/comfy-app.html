@@ -612,7 +612,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.314'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.315'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4796,17 +4796,27 @@ function cmTryKits(){ return cmIllKits().map(k => Object.assign({}, k, {ckHas:na
 // Illustrious, which wants Danbooru tags. It has no character LoRAs, so she is drawn from her description; 🧊 Make it 3D and 🎨 Render as her
 // bring her back. Same recipe as the 🤸 pose photos (8 steps, cfg 1, res_multistep, AuraFlow shift 3), in the panel's shape, as anime
 const cmDraftWith = cm => cm.draftWith==='ill' ? 'ill' : 'zit';
-function cmZitKits(){ if(S.test) return [{url:'test', zit:'z_image_turbo_bf16.safetensors', clip:'qwen_3_4b.safetensors', vae:'ae.safetensors', has:() => '', ckHas:() => ''}];
-  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '') && p.oi.ModelSamplingAuraFlow && p.oi.EmptySD3LatentImage && p.oi.ConditioningZeroOut).map(p => {
-    const zit = combo(p.oi.UNETLoader, 'unet_name').find(n => /z_image_turbo/i.test(baseName(n))), clip = combo(p.oi.CLIPLoader, 'clip_name').find(n => /qwen_3_4b/i.test(baseName(n))), vae = combo(p.oi.VAELoader, 'vae_name').find(n => /^ae\./i.test(baseName(n)));
-    return zit && clip && vae ? {url:p.url, zit, clip, vae, has:() => '', ckHas:() => ''} : null; }).filter(Boolean); }
+// every Z-Image model a PC has (Jordan 2026-10-30 wants finetunes like TOT Z-Image Turbo to compare): the base diffusion model (with qwen_3_4b and ae),
+// other diffusion models, and all-in-one checkpoints; Comic's "Z-Image model" picks one (cm.zitModel), the base by default
+const ZIT_RE = /z[_ -]?image/i;
+function cmZitModels(oi){ const un = combo(oi.UNETLoader, 'unet_name').filter(n => ZIT_RE.test(baseName(n))).map(name => ({name, ck:false})), ck = combo(oi.CheckpointLoaderSimple, 'ckpt_name').filter(n => ZIT_RE.test(baseName(n))).map(name => ({name, ck:true})); return un.concat(ck); }
+function cmZitKits(cm){ cm = cm || CM(); const want = cm.zitModel || '';
+  const pcs = S.test ? [{url:'test', oi:{UNETLoader:{input:{required:{unet_name:[['z_image_turbo_bf16.safetensors']]}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['totZImageturbo.safetensors']]}}}, CLIPLoader:{input:{required:{clip_name:[['qwen_3_4b.safetensors']]}}}, VAELoader:{input:{required:{vae_name:[['ae.safetensors']]}}}, ModelSamplingAuraFlow:{}, EmptySD3LatentImage:{}, ConditioningZeroOut:{}}}]
+    : allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || ''));
+  return pcs.filter(p => p.oi.ModelSamplingAuraFlow && p.oi.EmptySD3LatentImage && p.oi.ConditioningZeroOut).map(p => {
+    const ms = cmZitModels(p.oi), clip = combo(p.oi.CLIPLoader, 'clip_name').find(n => /qwen_3_4b/i.test(baseName(n))), vae = combo(p.oi.VAELoader, 'vae_name').find(n => /^ae\./i.test(baseName(n)));
+    const m = want ? ms.find(x => baseName(x.name)===baseName(want)) : ms.find(x => !x.ck && /z_image_turbo/i.test(baseName(x.name))) || ms.find(x => !x.ck);
+    return m && (m.ck || (clip && vae)) ? {url:p.url, zit:m.name, zck:m.ck, clip, vae, has:() => '', ckHas:() => ''} : null; }).filter(Boolean); }
+function cmZitChoices(){ const seen = new Map(); for(const p of (S.test ? [{oi:{UNETLoader:{input:{required:{unet_name:[['z_image_turbo_bf16.safetensors']]}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['totZImageturbo.safetensors']]}}}}}] : allPcs().filter(p => p.online && p.oi)))
+    for(const m of cmZitModels(p.oi)) seen.set(baseName(m.name), m); return [...seen.values()]; }
 function cmZitText(p){ let t = (cmSrc(p) || '').replace(/\\/g, ''); for(const e of cmChars(p)) if(e.trigger) t = t.replace(cmRe(e.trigger), 'a girl (' + (e.tags || '').split(',').map(x => x.trim()).filter(x => x && !/^(1girl|solo|1boy)$/i.test(x)).join(', ') + ')');
   return 'Anime style comic panel illustration, clean line art, cel shading. ' + t.trim(); }
 function cmZitGraph(k, p, W, H, batch, prefix){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title:cls}}; return id; };
-  const model = add('ModelSamplingAuraFlow', {model:[add('UNETLoader', {unet_name:k.zit, weight_dtype:'default'}), 0], shift:3}), vae = add('VAELoader', {vae_name:k.vae}), prompt = cmZitText(p);
-  const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.clip, type:'lumina2', device:'default'}), 0], text:prompt}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
+  const ckp = k.zck && add('CheckpointLoaderSimple', {ckpt_name:k.zit}); // (an all-in-one checkpoint brings its own text encoder and VAE)
+  const model = add('ModelSamplingAuraFlow', {model:ckp ? [ckp, 0] : [add('UNETLoader', {unet_name:k.zit, weight_dtype:'default'}), 0], shift:3}), vae = ckp ? [ckp, 2] : [add('VAELoader', {vae_name:k.vae}), 0], prompt = cmZitText(p);
+  const pos = add('CLIPTextEncode', {clip:ckp ? [ckp, 1] : [add('CLIPLoader', {clip_name:k.clip, type:'lumina2', device:'default'}), 0], text:prompt}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
   const ks = add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 1e12), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0], latent_image:[add('EmptySD3LatentImage', {width:W, height:H, batch_size:batch}), 0], denoise:1});
-  const save = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:[vae, 0]}), 0], filename_prefix:prefix}); return {g, save, prompt}; }
+  const save = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae}), 0], filename_prefix:prefix}); return {g, save, prompt}; }
 async function cmMakeTries(list){ const cm = CM(), pg = cmPage(), n = Math.max(1, cm.tryN || 10); if(!pg || !list.length) return; const zi = cmDraftWith(cm)==='zit';
   let kits = zi ? cmZitKits() : cmTryKits(); if(!kits.length){ toast(!S.test && !allPcs().some(x => x.online) ? cmWhy() : zi ? 'None of your computers that are on has Z-Image Turbo (z_image_turbo, qwen_3_4b, ae): pick 🎨 Illustrious' : 'None of your computers that are on has an Illustrious checkpoint', true); return; }
   const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(q => q.making && q.making.pc===k.url).length); buzz();
@@ -6192,6 +6202,7 @@ function drawComic0(){
       <div class="cmpage${cm.border==='black' ? ' dark' : ''}" id="cmPage"></div>
       ${cmHosts(cm).some(h => h.making || h.busy) ? `<div class="btnrow"><button class="btn" data-cm="stopall">✕ Stop all comic jobs (${cmHosts(cm).filter(h => h.making || h.busy).length})</button></div>` : ''}
       <div class="row"><label>Drafts with</label>${seg('data-cmdraft', [['zit', '⚡ Z-Image Turbo'], ['ill', '🎨 Illustrious']], cmDraftWith(cm))}</div>
+      ${(() => { const zs = cmDraftWith(cm)==='zit' ? cmZitChoices() : []; return zs.length > 1 ? `<div class="row"><label>Z-Image model</label><div class="grow"><select data-cmzit aria-label="Z-Image model">${zs.map(m => `<option value="${esc(m.name)}" ${baseName(m.name)===baseName(cm.zitModel || '') || (!cm.zitModel && !m.ck && /z_image_turbo/i.test(baseName(m.name))) ? 'selected' : ''}>${esc(baseName(m.name).replace(/\.safetensors$/i, ''))}</option>`).join('')}</select></div></div>` : ''; })()}
       <div class="cmgen"><b>🎲 Tries</b><span class="cnt sm"><button data-cm="tryless" aria-label="Fewer">−</button><b>${cm.tryN || 10}</b><button data-cm="trymore" aria-label="More">+</button></span><span class="note" style="margin:0">a panel, for</span>${pg.panels.map((q, j) => `<button class="chipbtn${(cm.genOff || []).includes(q.id) ? '' : ' on'}" data-cmgen="${j}" aria-label="Panel ${j + 1}">${j + 1}</button>`).join('')}</div>
       ${(() => { const go = pg.panels.filter(q => !(cm.genOff || []).includes(q.id)); return `<div class="btnrow"><button class="btn hot" data-cm="tries" ${go.length ? '' : 'disabled'}>🎲 Make ${cm.tryN || 10} tries for ${go.length===pg.panels.length ? 'every panel' : go.length + ' panel' + (go.length===1 ? '' : 's')}</button></div>`; })()}
       ${pg.panels.some(q => q.takes.length) ? `<div class="btnrow"><button class="btn" data-cm="play">${CM_PLAY ? '⏸ Stop' : '▶ Play all'}</button></div>` : ''}
@@ -6301,6 +6312,7 @@ $('#comic').addEventListener('click', e => {
   if(el.dataset.cmpt!=null && pg){ const i = +el.dataset.cmpt, q = pg.panels[i]; if(!q) return; q.src = el.value; q.text = cmPlainTx(el.value); save();
     if(ev==='change'){ cmCommit(q); cmRecast(); save(); drawComic(); } else cmMarksLive(i); return; }
   if(el.dataset.cmcomic!=null){ if(ev==='change') cmPickComic(+el.value); return; }
+  if(el.dataset.cmzit!=null){ if(ev!=='change') return; cm.zitModel = el.value; save(); return; }
   if(el.dataset.cmwho!=null && pg){ if(ev!=='change') return; const p = pg.panels[cm.sel]; if(!p) return; const e = cmLibChars().find(x => x.subfolder===el.value);
     p.who3d = e ? {ref:e.subfolder, name:e.name} : {ref:'3D/Mannequin', name:''}; save(); drawComic(); return; } // (its window opens again with her: see cmWins)
   if(el.dataset.cmsc!=null && pg){ if(ev!=='change') return; const p = pg.panels[cm.sel]; if(!p) return;
