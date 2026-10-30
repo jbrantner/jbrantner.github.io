@@ -10,7 +10,9 @@ out a day at a time. Now:
 - **Savings (and the Month cushion) gets a paycheck whole the moment it lands** (less the bills' share). Its money a
   day moves out of Savings into weekly spending, pots, projects and debts as it goes, so Savings is always bank −
   bills held − pots and projects − this week's money not spent yet.
-- Under Savings or the cushion: "$X of it goes to your plan by (next payday) · $Y free".
+- **The weekly money through the next payday comes out of Savings on payday** (Jordan: "so I know exactly how much
+  I actually have to spend"), so Savings is what's free. Under it: "Your weekly money through (payday) ($X) is already
+  taken out" and "$Y more goes to pots and projects by (payday), a day at a time".
 - **Pay that hasn't landed:** the paycheck sheet has "Still coming" for an advance or second deposit. It isn't counted
   in the bank until you tap It's here on the cushion card.
 - **The bank check asks about pay too:** a paycheck from the last 3 days shows with It's here / Not yet, next to the

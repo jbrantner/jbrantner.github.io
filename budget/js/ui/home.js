@@ -586,7 +586,8 @@ const VL = (() => {
   // and any pay that hasn't landed in the bank yet
   function savingsLine(S, now) {
     const pl = savingsPlanned(now), out = [];
-    if (pl.amt >= 1) out.push(`<b>${money(pl.amt)}</b> of it goes to your plan by ${shortDate(pl.until)} · <b class="${S - pl.amt < 0 ? 'bad' : ''}">${money(S - pl.amt)}</b> free`);
+    if (pl.week >= 1) out.push(`Your weekly money through ${shortDate(pl.until)} (${money(pl.week)}) is already taken out.`);
+    if (pl.amt >= 1) out.push(`<b>${money(pl.amt)}</b> more goes to pots and projects by ${shortDate(pl.until)}, a day at a time.`);
     for (const c of hoardParts(now).checks.list) if (c.wait >= 0.005) out.push(`${moneyExact(c.wait)} of your ${shortDate(c.date)} pay isn't in your bank yet <button class="link" data-pay-here="${esc(c.key)}">It's here</button>`);
     return out.join('<br>');
   }

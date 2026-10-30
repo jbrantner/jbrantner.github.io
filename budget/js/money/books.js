@@ -160,7 +160,8 @@ function potBalances(m, at) {
   const customs = state.pots.map(p => ({ id: p.id, name: p.name, bal: projectBal(p.id, now), get note() { return farmNote(p.id); }, custom: true }));   // v311: notes when read
   // v322 (Jordan): Savings is what's really in the bank right now that nothing else has: a paycheck lands in it whole,
   // and its money a day moves out of it into spending, pots, projects and debts as it goes
-  const savings = pp.total + pp.pending - purse - scav - sum(customs, p => p.bal), short = () => overAssigned(), nh = () => pp.heldList.length;
+  // v322b (Jordan): and less the weekly money still to come through the next payday, so Savings is what's free to use
+  const savings = pp.total + pp.pending - purse - scav - sum(customs, p => p.bal) - (m === cur ? savingsPlanned(now).week : 0), short = () => overAssigned(), nh = () => pp.heldList.length;
   return [
     { id: 'spend', name: "This week's money", get note() { return `${funWorkers()} on weekly spending · ${money(funPerDay() * 7)} a week`; }, bal: purse },
     { id: 'bills', name: 'Bills', get note() { const n = nh(); return n ? `held for ${n} bill${n === 1 ? '' : 's'} not paid yet` : 'nothing held right now'; }, bal: cents(pp.held + moved('bills', td)) },
@@ -169,13 +170,14 @@ function potBalances(m, at) {
     ...customs,
   ];
 }
-// v322: how much of Savings is already planned for spending, pots, projects and debts by the next payday (the money a
-// day still to come, less what Savings' own money a day keeps, less this week's money already set aside)
+// v322: the money a day still to come through the next payday, split: the weekly money (already out of Savings) and
+// what goes to pots, projects and debts (still in Savings, moving out a day at a time). Less this week's money already
+// set aside, and less what Savings' own money a day keeps.
 function savingsPlanned(now = Date.now()) {
-  const pn = periodNow(now), live = pn.list.filter(c => c.V > 0 && now < c.t1); if (!live.length) return { amt: 0, until: null };
-  const V = pn.V || sum(live, c => c.V), keep = V > 0 ? clamp01(Math.max(0, savers()) / V) : 0;
-  const amt = Math.max(0, sum(live, c => c.pending) * (1 - keep) - partyToCome(now));
-  return { amt, until: ymd(new Date(Math.max(...live.map(c => c.t1)))) };
+  const pn = periodNow(now), live = pn.list.filter(c => c.V > 0 && now < c.t1); if (!live.length) return { amt: 0, week: 0, until: null };
+  const V = pn.V || sum(live, c => c.V), P = sum(live, c => c.pending), share = k => V > 0 ? clamp01(Math.max(0, k) / V) : 0;
+  const week = Math.max(0, P * share(partyNow(now)) - partyToCome(now)), amt = Math.max(0, P * share(V - Math.max(0, savers()) - Math.max(0, partyNow(now))));
+  return { amt, week, until: ymd(new Date(Math.max(...live.map(c => c.t1)))) };
 }
 function farmNote(id) { const w = id === 'savings' ? savers() : workersAt(id); return w > 0 ? `${money(w * WORKER_DAY)} a day · ${rateText(w)}` : 'kept month to month'; }
 const POT_NAMES = { start: 'Money you had', spend: "This week's money", bills: 'Bills', savings: 'Savings', scavenger: 'Spare change' };
