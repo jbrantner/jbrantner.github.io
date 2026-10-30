@@ -176,7 +176,8 @@ function potBalances(m, at) {
 function savingsPlanned(now = Date.now()) {
   const pn = periodNow(now), live = pn.list.filter(c => c.V > 0 && now < c.t1); if (!live.length) return { amt: 0, week: 0, until: null };
   const V = pn.V || sum(live, c => c.V), P = sum(live, c => c.pending), share = k => V > 0 ? clamp01(Math.max(0, k) / V) : 0;
-  const week = Math.max(0, P * share(partyNow(now)) - partyToCome(now)), amt = Math.max(0, P * share(V - Math.max(0, savers()) - Math.max(0, partyNow(now))));
+  // v322: no weekly money set aside when it's loaded by hand
+  const week = state.manualWeek ? 0 : Math.max(0, P * share(partyNow(now)) - partyToCome(now)), amt = Math.max(0, P * share(V - Math.max(0, savers()) - Math.max(0, partyNow(now))));
   return { amt, week, until: ymd(new Date(Math.max(...live.map(c => c.t1)))) };
 }
 // v322 (Jordan 16:46): the Month cushion, paycheck to paycheck: Savings plus what's held now for bills after the next

@@ -19,6 +19,10 @@ out a day at a time. Now:
   numbers.
   Under the cushion: "Spending money through (payday) is already taken out" and "$Y more goes to pots and projects
   by (payday), a day at a time".
+- **Weekly money loaded by hand** (Jordan 16:49, optional): "Load it by hand each week instead" on the This week card.
+  Then nothing is set aside from pay and no week starts on its own; type an amount and Load from cushion moves it into
+  this week (like postage). What's left on Sunday goes back to Savings as ever. "Set aside automatically instead"
+  switches back from the next Monday.
 - **Pay that hasn't landed:** the paycheck sheet has "Still coming" for an advance or second deposit. It isn't counted
   in the bank until you tap It's here on the cushion card.
 - **The bank check asks about pay too:** a paycheck from the last 3 days shows with It's here / Not yet, next to the

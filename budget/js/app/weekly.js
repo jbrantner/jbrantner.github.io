@@ -17,7 +17,7 @@ function mondayCatchUp() {   // v268: any day, not only Mondays (see autoStartOk
 // (villagers home when nothing is planned) doesn't count as going out.
 function autoStartOk() {
   const wk = ymd(weekStart()), t0 = weekStart().getTime();
-  if (state.lastWeek !== wk || partyNow() > 0 || clockBack()) return false;
+  if (state.manualWeek || state.lastWeek !== wk || partyNow() > 0 || clockBack()) return false;   // v322: loaded by hand
   if (state.workerLog.some(w => w.pot === 'party' && w.t >= t0 && !(w.t === t0 && w.delta < 0))) return false;
   return !(state.purse && state.purse.wk === wk && Number(state.purse.late || 0));
 }
