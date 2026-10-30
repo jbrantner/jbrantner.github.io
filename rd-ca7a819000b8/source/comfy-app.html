@@ -356,7 +356,7 @@ body.cm-open #mainView, body.cm-open .go{display:none}
 .cmstills button{flex:none;width:64px;height:64px;border-radius:10px;overflow:hidden;padding:0;background:var(--bg);border:1px solid var(--line);font-size:11px;font-weight:800;color:var(--soft)}
 .cmstills button.on{outline:3px solid var(--cyan);outline-offset:-3px}
 .cmstills img{width:100%;height:100%;object-fit:cover;display:block}
-.cpanel img.cpimg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.cpanel img.cpimg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}.cpanel img.cpimg.fr{inset:auto;object-fit:fill;max-width:none;transform:translate(-50%,-50%)}.cpanel.pic{background:#fff}
 .cmed .obbar{height:5px;border-radius:9px;background:var(--panel2);margin:8px 0 2px;overflow:hidden}
 .cmed .obbar i{display:block;height:100%;width:2%;background:var(--accent);transition:width .8s linear}
 .obbar.pulse i{width:30%!important;transition:none;animation:obpulse 1.1s ease-in-out infinite alternate}
@@ -609,7 +609,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.306'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.307'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4807,6 +4807,27 @@ async function cmTryJob(cm, pg, p, c, k, W, H, b, i){ c.busy = 'Sending…'; dra
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     c.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:0.5 * b * cmSlow(k.url), smp:samplerOf(G.g), w:W, h:H, kind:'try', video:false, all:true}; delete c.busy; save(); drawComic(); cmWait(c); }
   catch(err){ delete c.busy; p.err = "Couldn't make tries for panel " + (i + 1) + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
+// ✋ a picture framed in its panel (Jordan 2026-10-30): moved anywhere (past its edges, leaving white) and made bigger or smaller with two
+// fingers; st.fr = {x, y (its middle from the panel's middle, in % of the panel), s (1 = just covering the panel)}
+function cmFrBox(st, r){ const ia = st.w / st.h, pa = r.w / r.h; return ia > pa ? [100 * ia / pa, 100] : [100, 100 * pa / ia]; }
+function cmFrCss(st, r){ if(!st || !st.w || !st.h || !r) return ''; const f = Object.assign({x:0, y:0, s:1}, st.fr), [bw, bh] = cmFrBox(st, r);
+  return `left:${(50 + f.x).toFixed(2)}%;top:${(50 + f.y).toFixed(2)}%;width:${(bw * f.s).toFixed(2)}%;height:${(bh * f.s).toFixed(2)}%`; }
+// ✂ just the character: the picked picture with its background taken out (BiRefNet), kept as a picture of its own, framed the same
+async function cmCut(p){ const pg = cmPage(), i = pg.panels.indexOf(p), st = cmStill(p); if(!st || st.cut) return;
+  const kits = cmIllKits().filter(k => k.bg && k.oi.JoinImageWithAlpha && k.oi.InvertMask); if(!kits.length){ toast('None of your computers that are on has BiRefNet for cutting out', true); return; }
+  const k = kits.sort((a, b) => (pcOf(a.url).load || 0) * cmSlow(a.url) - (pcOf(b.url).load || 0) * cmSlow(b.url))[0], c = {id:uid('x'), parent:p.id, from:st};
+  p.extra = (p.extra || []).concat([c]); c.busy = 'Cutting out…'; drawComic();
+  try{ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
+    const img = S.test ? 'test.png' : await cmUp(st.url, k.url), prefix = cmPrefixP(pg, i, 'cut'), li = [add('LoadImage', {image:img}), 0];
+    const out = [add('JoinImageWithAlpha', {image:li, alpha:[add('InvertMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:li}), 0]}), 0]}), 0];
+    const sv = add('SaveImage', {images:out, filename_prefix:prefix});
+    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 150)); delete c.busy; cmGot(c, 'cut', {url:'', test:true}); return; }
+    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
+    c.making = {pc:k.url, id:j.prompt_id, save:sv, t:t0, prefix, mins:0.3 * cmSlow(k.url), smp:samplerOf(g), kind:'cut', video:false}; delete c.busy; save(); drawComic(); cmWait(c); }
+  catch(err){ delete c.busy; p.err = "Couldn't cut out panel " + (i + 1) + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
+function cmGotCut(c, it){ const p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p) return; const f = c.from || {};
+  const st = Object.assign(it.url ? {url:it.url} : {test:true}, {w:f.w, h:f.h, cut:true, fr:f.fr ? JSON.parse(JSON.stringify(f.fr)) : undefined, t:Date.now()});
+  p.stills = [st].concat(p.stills || []).slice(0, 40); p.still = 0; p.stillPicked = true; p.show = 'still'; save(); if(!$('#comic').hidden) drawComic(); }
 // ‹ › a panel's pictures in turn, on the page (the one showing is the one picked)
 function cmCycle(p, d){ const n = (p.stills || []).length; if(n < 2) return; p.still = (((p.still || 0) + d) % n + n) % n; p.stillPicked = true; p.show = 'still'; cmPlay(false); save(); drawComic(); }
 // its tries land in front of its pictures; the first one shows unless one was picked
@@ -5644,7 +5665,7 @@ async function cmWait(p){
   let got = null;
   try{ const f = await waitOut(m.pc, m.id, m.save, m.prefix, m.t, m.video!==false, m.all); got = m.all ? {urls:f.map(x => viewUrl(x, m.pc)), url:viewUrl(f[0], m.pc)} : {url:viewUrl(f, m.pc), pc:m.pc, w:m.w, h:m.h, t:Date.now()};
     if(m.cut) try{ const h = (await (await fetch(m.pc + '/history/' + m.id)).json())[m.id], c = (((h || {}).outputs || {})[m.cut] || {}).images; if(c && c[0]) got.cut = viewUrl(c[0], m.pc); }catch(e){} }
-  catch(err){ if(!m.cancel) p.err = "Couldn't make the " + ({ccstep:'step', still:'still', angle:'new angle', finish:'finished frame', plate:'place', setbg:'set', sprite:'pose picture', sporb:'MiniMax turn', try:'tries', depth:'depth', far:'far background', orbit:'MiniMax view'}[m.kind] || 'clip') + ': ' + err.message; }
+  catch(err){ if(!m.cancel) p.err = "Couldn't make the " + ({ccstep:'step', still:'still', angle:'new angle', finish:'finished frame', plate:'place', setbg:'set', sprite:'pose picture', sporb:'MiniMax turn', try:'tries', cut:'cut-out', depth:'depth', far:'far background', orbit:'MiniMax view'}[m.kind] || 'clip') + ': ' + err.message; }
   finally{ CM_RUN.delete(m.id); if(p.making===m) p.making = null; if(got && !m.cancel) cmGot(p, m.kind || 'clip', got); else { cmDrop(p); save(); if(!$('#comic').hidden) drawComic(); } }
 }
 // an option job that is over (or failed) leaves its panel, passing its error on
@@ -5998,6 +6019,7 @@ async function cmFrameStill(p){
 function cmGot(p, kind, it){
   if(kind==='ccstep'){ ccGot(p, it); return; }
   if(kind==='try'){ cmGotTry(p, it); return; }
+  if(kind==='cut'){ cmGotCut(p, it); return; }
   const cm = CM();
   if(kind==='depth'){ p.depth = it.url || scFakeDepth(); p.yaw = p.pitch = 0;
     if(it.urls && it.urls.length >= 4){ p.bg = it.urls[1]; p.bgDepth = it.urls[2]; p.mask = it.urls[3]; }
@@ -6037,14 +6059,15 @@ function drawPage(){
   const box = $('#cmPage'), pg = cmPage(); if(!box || !pg) return;
   const cm = CM(), rects = cmRectsOf(pg);
   box.innerHTML = pg.panels.map((p, i) => { const sh = cmShown(p), r = rects[i], t = sh && sh.clip, st = sh && sh.still, op = (p.pos || {x:50}).x + '% ' + (p.pos || {y:50}).y + '%';
-    return `<div class="cpanel${i===cm.sel ? ' sel' : ''}" data-cpi="${i}" style="left:${(100 * r.x).toFixed(2)}%;top:${(100 * r.y / CM_H).toFixed(2)}%;width:${(100 * r.w).toFixed(2)}%;height:${(100 * r.h / CM_H).toFixed(2)}%">
+    return `<div class="cpanel${i===cm.sel ? ' sel' : ''}${st && st.url ? ' pic' : ''}" data-cpi="${i}" style="left:${(100 * r.x).toFixed(2)}%;top:${(100 * r.y / CM_H).toFixed(2)}%;width:${(100 * r.w).toFixed(2)}%;height:${(100 * r.h / CM_H).toFixed(2)}%">
       ${t && t.test ? `<div class="cptest" style="--hue:${(i * 67 + (t.n || 1) * 29) % 360}">Take ${t.n || 1}<br><small>pretend clip</small></div>` : ''}
-      ${st && st.url ? `<img class="cpimg" src="${esc(st.url)}" alt="" style="object-position:${op}" draggable="false">` : ''}
+      ${st && st.url ? `<img class="cpimg${cmFrCss(st, r) ? ' fr' : ''}" src="${esc(st.url)}" alt="" style="${cmFrCss(st, r) || 'object-position:' + op}" draggable="false"${st.w ? '' : ` data-needwh="${i}"`}>` : ''}
       ${st && st.test ? `<div class="cptest" style="--hue:${(i * 67 + 200) % 360}">Still<br><small>pretend</small></div>` : ''}
       ${!sh ? `<div class="cpempty"><b>${i + 1}</b><br><span>${esc(p.text)}</span></div>` : ''}
       ${cmBusy(p) ? `<div class="cpbusy"><div class="pbar"><i data-cmbar="${p.id}"></i></div><small data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || 'Waiting…')}</small></div>` : ''}
       ${i===cm.sel && (p.stills || []).length > 1 ? `<div class="cpnav"><button data-cmcyc="-1" aria-label="Try before">‹</button><b>${(p.still || 0) + 1}/${p.stills.length}</b><button data-cmcyc="1" aria-label="Next try">›</button></div>` : ''}
       ${p.err ? '<div class="cperr">!</div>' : ''}<span class="cpn">${i + 1}</span></div>`; }).join('');
+  box.querySelectorAll('img[data-needwh]').forEach(im => im.addEventListener('load', () => { const q = pg.panels[+im.dataset.needwh], st = q && cmStill(q); if(st && !st.w && im.naturalWidth){ st.w = im.naturalWidth; st.h = im.naturalHeight; save(); drawPage(); } }, {once:true}));
   pg.panels.forEach((p, i) => { const sh = cmShown(p), t = sh && sh.clip; if(!t || !t.url) return; const v = cmVid(t.url), el = box.querySelector(`[data-cpi="${i}"]`);
     v.style.objectPosition = (p.pos || {x:50}).x + '% ' + (p.pos || {y:50}).y + '%'; el.prepend(v); if(v.readyState >= 2 && !CM_PLAY) cmSeek(v, p.frame); });
   cmBar();
@@ -6086,7 +6109,7 @@ function drawComic0(){
       <div class="cmgen"><b>🎲 Tries</b><span class="cnt sm"><button data-cm="tryless" aria-label="Fewer">−</button><b>${cm.tryN || 10}</b><button data-cm="trymore" aria-label="More">+</button></span><span class="note" style="margin:0">a panel, for</span>${pg.panels.map((q, j) => `<button class="chipbtn${(cm.genOff || []).includes(q.id) ? '' : ' on'}" data-cmgen="${j}" aria-label="Panel ${j + 1}">${j + 1}</button>`).join('')}</div>
       ${(() => { const go = pg.panels.filter(q => !(cm.genOff || []).includes(q.id)); return `<div class="btnrow"><button class="btn hot" data-cm="tries" ${go.length ? '' : 'disabled'}>🎲 Make ${cm.tryN || 10} tries for ${go.length===pg.panels.length ? 'every panel' : go.length + ' panel' + (go.length===1 ? '' : 's')}</button></div>`; })()}
       ${pg.panels.some(q => q.takes.length) ? `<div class="btnrow"><button class="btn" data-cm="play">${CM_PLAY ? '⏸ Stop' : '▶ Play all'}</button></div>` : ''}
-      <p class="note">${busy ? busy + ' panel' + (busy > 1 ? 's' : '') + ' working. ' : ''}Tap the numbers to leave panels out. Tap a panel to pick it, and again (or ‹ ›) to go through its tries.</p>`;
+      <p class="note">${busy ? busy + ' panel' + (busy > 1 ? 's' : '') + ' working. ' : ''}Tap the numbers to leave panels out. Tap a panel to pick it, and again (or ‹ ›) to go through its tries. Drag the picture to move it, pinch to make it bigger or smaller.</p>`;
     if(cm.route===undefined && !pg.panels.some(q => q.takes.length)) cm.route = 'still';
     const p = pg.panels[cm.sel], rects = cmRectsOf(pg);
     if(p){ const sh = cmShown(p), t = sh && sh.clip ? p.takes[p.take] : null, sts = p.stills || [], sp = cmScPanel(p), scs = cmScList(cm), same = pg.panels.map((q, j) => q.sc && q.sc===p.sc ? j + 1 : 0).filter(Boolean);
@@ -6106,6 +6129,7 @@ function drawComic0(){
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
       if(cmBusy(p)) x += `<div class="pbar obbar${(cmLead(p) || {}).making ? '' : ' pulse'}"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p><div class="btnrow"><button class="btn" data-cm="stop">✕ Stop this panel</button></div>`;
       else if(sts.length) x += `<div class="btnrow"><button class="btn" data-cm="anim1" ${cmFlKits().length ? '' : 'disabled'}>🎞 ${p.takes.length ? 'Animate it again' : 'Animate this picture'}</button></div>`;
+      { const st = sh && sh.still; if(st && !cmBusy(p)) x += `<div class="btnrow">${st.cut ? '<span class="note" style="margin:0">✂ Just the character. Pinch and drag it in the panel.</span>' : `<button class="btn" data-cm="cut" ${st.url || S.test ? '' : 'disabled'}>✂ Just the character (take the background out)</button>`}${st.fr ? '<button class="btn" data-cm="frreset">↺ Fit</button>' : ''}</div>`; }
       x += `<div class="btnrow"><button class="btn" data-cm="pdup">⧉ Duplicate as the next panel</button></div></div>`;
     }
     x += `<div class="btnrow"><button class="btn" data-cm="export" ${pg.panels.some(q => cmShown(q)) ? '' : 'disabled'}>💾 Save the page</button></div>`;
@@ -6158,6 +6182,8 @@ $('#comic').addEventListener('click', e => {
   else if(a==='frame'){ cmFrameStill(p); return; }
   else if(a==='anim1'){ cmJobs('anim', [p]); return; }
   else if(a==='p3d'){ cmOpen3d(cm.sel); return; }
+  else if(a==='cut'){ cmCut(p); return; }
+  else if(a==='frreset'){ const st = cmStill(p); if(st) delete st.fr; }
   else if(a==='tries'){ cmMakeTries(pg.panels.filter(q => !(cm.genOff || []).includes(q.id))); return; }
   else if(a==='tryless' || a==='trymore'){ cm.tryN = Math.max(1, Math.min(40, (cm.tryN || 10) + (a==='trymore' ? 1 : -1))); }
   else if(a==='read'){ cmRead(); return; }
@@ -6185,11 +6211,24 @@ $('#comic').addEventListener('click', e => {
   if(el.dataset.cmf){ cm[el.dataset.cmf] = el.value; save(); if(ev==='change' && el.dataset.cmf!=='script') drawComic(); return; }
   if(el.dataset.cmp==='text' && pg){ const p = pg.panels[cm.sel]; p.src = el.value; p.text = cmPlainTx(el.value); save(); if(ev==='change'){ cmCommit(p); cmRecast(); save(); drawComic(); } else cmMarksLive(cm.sel); return; }
 }));
-// drag inside the picked panel to move the clip in its frame (it's cropped to the panel's shape)
-const cmDrag = {moved:false};
+// drag inside the picked panel to move what it shows: a picture anywhere and pinched bigger or smaller (Jordan 2026-10-30), a clip within its frame
+const cmDrag = {moved:false}, cmPtr = new Map();
 $('#comic').addEventListener('pointerdown', e => {
   const el = e.target.closest('.cpanel.sel'); if(!el) { cmDrag.moved = false; return; }
-  const p = cmPage().panels[+el.dataset.cpi], v = el.querySelector('video,img.cpimg'); cmDrag.moved = false; if(!p || !v) return;
+  const pg = cmPage(), i = +el.dataset.cpi, p = pg.panels[i], v = el.querySelector('video,img.cpimg'); if(!p || !v) return;
+  if(v.tagName==='IMG'){ const st = cmStill(p), r = cmRectsOf(pg)[i]; if(!st || !st.w) return; cmPtr.set(e.pointerId, {x:e.clientX, y:e.clientY}); if(cmPtr.size > 2) return;
+    const box = el.getBoundingClientRect(), pts = () => [...cmPtr.values()], mid = q => q.length > 1 ? {x:(q[0].x + q[1].x) / 2, y:(q[0].y + q[1].y) / 2} : q[0], dist = q => q.length > 1 ? Math.hypot(q[0].x - q[1].x, q[0].y - q[1].y) : 0;
+    let f0 = Object.assign({x:0, y:0, s:1}, st.fr), m0 = mid(pts()), d0 = dist(pts()); if(cmPtr.size===1) cmDrag.moved = false;
+    const mv = ev => { if(!cmPtr.has(ev.pointerId)) return; cmPtr.set(ev.pointerId, {x:ev.clientX, y:ev.clientY}); const q = pts(), m = mid(q), d = dist(q);
+      if(q.length > 1 && !d0){ f0 = Object.assign({x:0, y:0, s:1}, st.fr); m0 = m; d0 = d; } // the second finger came down: pinch from here
+      if(Math.abs(m.x - m0.x) + Math.abs(m.y - m0.y) > 6 || (d0 && Math.abs(d - d0) > 6)) cmDrag.moved = true; if(!cmDrag.moved) return;
+      st.fr = {x:f0.x + (m.x - m0.x) / box.width * 100, y:f0.y + (m.y - m0.y) / box.height * 100, s:d0 && q.length > 1 ? Math.max(0.15, Math.min(8, f0.s * d / d0)) : f0.s};
+      v.setAttribute('style', cmFrCss(st, r)); v.classList.add('fr'); ev.preventDefault(); };
+    const up = ev => { cmPtr.delete(ev.pointerId); if(cmPtr.size) { const q = pts(); f0 = Object.assign({x:0, y:0, s:1}, st.fr); m0 = mid(q); d0 = 0; return; }
+      removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); if(cmDrag.moved) save(); setTimeout(() => cmDrag.moved = false, 0); };
+    if(cmPtr.size===1){ addEventListener('pointermove', mv, {passive:false}); addEventListener('pointerup', up); addEventListener('pointercancel', up); } else d0 = 0;
+    return; }
+  cmDrag.moved = false;
   const vw = v.videoWidth || v.naturalWidth, vh = v.videoHeight || v.naturalHeight; if(!vw) return;
   const box = el.getBoundingClientRect(), sc = Math.max(box.width / vw, box.height / vh), ox = vw * sc - box.width, oy = vh * sc - box.height;
   const x0 = e.clientX, y0 = e.clientY, p0 = Object.assign({x:50, y:50}, p.pos);
@@ -6209,8 +6248,9 @@ async function cmPageCanvas(pg){
     const p = pg.panels[i], r = rects[i], sh = cmShown(p), t = sh && (sh.clip || sh.still), dx = r.x * u, dy = r.y * u, dw = r.w * u, dh = r.h * u;
     x.fillStyle = '#ddd'; x.fillRect(dx, dy, dw, dh);
     if(sh && sh.still && t.url){ const im = new Image(); im.crossOrigin = 'anonymous'; await new Promise((ok, no) => { im.onload = ok; im.onerror = () => no(new Error("a still couldn't be loaded")); im.src = t.url; });
-      const sc = Math.max(dw / im.naturalWidth, dh / im.naturalHeight), sw = dw / sc, sh2 = dh / sc, pos = Object.assign({x:50, y:50}, p.pos);
-      x.drawImage(im, (im.naturalWidth - sw) * pos.x / 100, (im.naturalHeight - sh2) * pos.y / 100, sw, sh2, dx, dy, dw, dh); }
+      const st = Object.assign({}, t, {w:t.w || im.naturalWidth, h:t.h || im.naturalHeight}), f = Object.assign({x:0, y:0, s:1}, st.fr), [bw, bh] = cmFrBox(st, r), iw = dw * bw / 100 * f.s, ih = dh * bh / 100 * f.s;
+      x.fillStyle = '#fff'; x.fillRect(dx, dy, dw, dh); x.save(); x.beginPath(); x.rect(dx, dy, dw, dh); x.clip();
+      x.drawImage(im, dx + dw * (50 + f.x) / 100 - iw / 2, dy + dh * (50 + f.y) / 100 - ih / 2, iw, ih); x.restore(); }
     else if(t && t.url){ const v = cmVid(t.url); await v._ready; await new Promise(ok => { const at = Math.min(v.duration - 0.01, v.duration * (p.frame==null ? CM_FRAME : p.frame) / 1000);
         if(Math.abs(v.currentTime - at) < 0.001 && !v.seeking) return ok(); v.addEventListener('seeked', ok, {once:true}); setTimeout(ok, 1500); v.currentTime = at; });
       const sc = Math.max(dw / v.videoWidth, dh / v.videoHeight), sw = dw / sc, sh = dh / sc, pos = Object.assign({x:50, y:50}, p.pos);
