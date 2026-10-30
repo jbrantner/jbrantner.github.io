@@ -731,7 +731,9 @@ const VL = (() => {
     // what's held now for bills after the next payday (the part that payday's own bill share won't cover)
     const later = until ? pp.heldList.filter(b => !b.due || b.due >= until) : [], keep = until ? Math.max(0, cents(pp.held - sum(pp.heldList.filter(b => b.due && b.due < until), b => b.A))) : 0, H = S + keep;
     const wait = pp.checks.list.filter(c => c.wait >= 0.005).map(c => `<div class="vl-sub">${moneyExact(c.wait)} of your ${shortDate(c.date)} pay isn't in your bank yet <button class="link" data-pay-here="${esc(c.key)}">It's here</button></div>`).join('');
-    const keepLine = keep >= 1 && S < -0.005 ? `<div class="vl-sub">Keep ${moneyExact(Math.min(keep, -S))} of it for bills after ${shortDate(until)} (${esc(later.slice(-2).map(b => b.c.name).join(', '))})</div>` : '';
+    const nm = later.length ? ` (${esc(later[later.length - 1].c.name)}${later.length > 1 ? ' and more' : ''})` : '';
+    const keepLine = !(keep >= 1) ? '' : S >= 0 ? `<div class="vl-sub">Keep ${money(keep)} of it for bills after ${shortDate(until)}${nm} · <b>${moneyExact(S)}</b> is free</div>`
+      : `<div class="vl-sub">Keep it for bills after ${shortDate(until)}${nm}: they need ${money(keep)}. ${pp.wait >= -S - 0.005 ? `The ${moneyExact(pp.wait)} still coming covers the rest.` : `That's ${money(-S)} more than you'll have, so go easy until more comes in.`}</div>`;
     return `<div class="vl-hero pp-panel mh-have"><div class="vl-k">${until ? `Yours until payday, ${shortDate(until)}` : 'Money you have'}</div><div class="vl-total num${H < 0 ? ' bad' : ''}">${H < 0 ? '−' + moneyExact(-H) : moneyExact(H)}</div>`
       + `<div class="vl-sub">after bills due by then and your spending money</div>${keepLine}${wait}</div>`;
   }
