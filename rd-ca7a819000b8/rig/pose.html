@@ -35,7 +35,7 @@ select{-webkit-appearance:none;appearance:none;height:44px;padding:0 34px 0 10px
 details.note summary{cursor:pointer}details.note span{display:block;margin-top:4px;font-size:12px}
 #msg{font-size:13px;color:var(--sel);margin:0}#msg:empty{display:none}
 .strip{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}.strip::-webkit-scrollbar{display:none}
-.strip>*{flex:0 0 calc(25% - 4.5px)}.strip button{padding:0;min-height:0;border:2px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}.strip button[aria-pressed=true]{border-color:var(--accent)}.strip img{display:block;width:100%;aspect-ratio:3/4;object-fit:contain;background:#fff}
+.strip>*{flex:0 0 calc(25% - 4.5px)}.strip button{padding:0;min-height:0;border:2px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}.strip button[aria-pressed=true]{border-color:var(--accent)}.strip button{position:relative}.strip .tick{position:absolute;right:4px;top:4px;width:22px;height:22px;border-radius:50%;background:rgba(23,24,28,.75);border:2px solid #fff;color:#fff;font:800 13px/18px system-ui;text-align:center}.strip button[aria-pressed=true] .tick{background:var(--accent);border-color:var(--accent)}.strip img{display:block;width:100%;aspect-ratio:3/4;object-fit:contain;background:#fff}
 .wait{aspect-ratio:3/4;border-radius:8px;border:2px solid var(--line);background:linear-gradient(100deg,var(--panel2) 30%,#3a3e48 50%,var(--panel2) 70%) 0 0/300% 100%;animation:shim 1.4s linear infinite}@keyframes shim{to{background-position:-150% 0}}
 .shapes button{min-height:34px;padding:4px 6px;font-size:13px;color:var(--soft)}.shapes button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
 .cnt{display:flex;align-items:center;gap:2px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}.cnt button{border:0;background:none;min-width:34px;padding:6px 4px}.cnt b{min-width:16px;text-align:center}
@@ -206,8 +206,8 @@ function makePhotos(){ return work(async () => { const d = P.desc.trim(), m = P.
 function myPhoto(f){ return work(async () => { say('Sending your photo…'); const k = await samKit(), fd = new FormData(); fd.append('image', f, 'rd-pose-photo-' + Date.now().toString(36) + '.' + ((f.name || '').split('.').pop() || 'png')); fd.append('overwrite', 'true');
   const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending the photo failed (' + r.status + ')');
   P.photos.push({pc:k.url, file:(await r.json()).name, sub:'', type:'input'}); P.pick = P.photos.length - 1; keep(); say('Your photo is in. Tap Create pose.'); }); }
-function createPose(){ return work(async () => { const ph = P.photos[P.pick]; if(!ph) return; say('Looking for a PC with SAM 3D Body…'); const k = await samKit();
-  const img = ph.type==='input' ? ph.file : (ph.sub ? ph.sub.replace(/\\/g, '/') + '/' : '') + ph.file + ' [output]';
+// SAM 3D Body reads one picture → the GLB's place on the PC
+async function samRead(ph, k, tick){ const img = ph.type==='input' ? ph.file : (ph.sub ? ph.sub.replace(/\\/g, '/') + '/' : '') + ph.file + ' [output]';
   // (2026-10-29: the person finder can miss an anime render at 0.5 and SAM then reads nobody, so it looks again, less fussy; the PC keeps the rest cached)
   let res, sv; for(const th of [0.5, 0.25, 0.1]){
   const {g, add} = graph(), li = add('LoadImage', {image:img}), sm = add('SAM3DBody_Loader', {model_file:k.sam});
@@ -216,12 +216,26 @@ function createPose(){ return work(async () => { const ph = P.photos[P.pick]; if
   const pd = add('SAM3DBody_Predict', {sam3d_body_model:[sm, 0], image:[li, 0], run_hand_refinement:true, fov, batch_size:64, bboxes:[box, 0]});
   sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps:24, camera_translation:'off', track_index:-1, format:'glb', 'format.mesh_style':'body_mesh', 'format.mesh_style.bone_vis':'off', 'format.mesh_style.shader':'default', 'format.bone_smooth_window':0}), 0],
     filename_prefix:PRE + '/pose/body', viewport_state:{}, width:1024, height:1024});
-  try{ res = await runGraph(k.url, g, [sv], t => say('SAM 3D Body is reading the pose in 3D on ' + pcName(k.url) + '… ' + (th < 0.5 ? '(looking harder for the person) ' : '') + t + ' s')); break; }
+  try{ res = await runGraph(k.url, g, [sv], t => tick((th < 0.5 ? '(looking harder for the person) ' : '') + t + ' s')); break; }
   catch(err){ if(!/no valid tracks/i.test(err.message)) throw err; if(th===0.1) throw new Error("SAM 3D Body couldn't find a person in that picture. A plainer background or the whole body in frame helps."); } }
   const find = x => { if(!x || typeof x!=='object') return null; if(typeof x.filename==='string' && /\.glb$/i.test(x.filename)) return x; for(const v of Object.values(x)){ const r = find(v); if(r) return r; } return null; }, f = find(res[sv]);
-  if(!f) throw new Error('SAM 3D Body found no one in that picture.');
-  P.sam = {pc:k.url, file:f.filename, sub:f.subfolder || ''}; P.rot = null; P.renders = []; UNDO.length = 0; say('Bringing the 3D body over (about 17 MB)…'); await showBody(); P.rot = rotNow(); keep();
+  if(!f) throw new Error('SAM 3D Body found no one in that picture.'); return {pc:k.url, file:f.filename, sub:f.subfolder || ''}; }
+function createPose(){ return work(async () => { const ph = P.photos[P.pick]; if(!ph) return; say('Looking for a PC with SAM 3D Body…'); const k = await samKit();
+  const sam = await samRead(ph, k, t => say('SAM 3D Body is reading the pose in 3D on ' + pcName(k.url) + '… ' + t));
+  P.sam = sam; P.rot = null; P.renders = []; UNDO.length = 0; say('Bringing the 3D body over (about 17 MB)…'); await showBody(); P.rot = rotNow(); keep();
   frame(); step = 'tweak'; say('Here it is. Drag the dots to fix anything, then 3 Render.'); }); }
+// several at once (Jordan 2026-10-30: "turn multiple frames into 3d mannequins at once"): each picked picture becomes its own pose, saved to
+// the library (with its turning card), one after another; the last one stays open in 2 Tweak
+function createMany(){ return work(async () => { const picks = [...MULTI].sort((a, b) => a - b).filter(i => P.photos[i]); if(!picks.length) return; say('Looking for a PC with SAM 3D Body…'); const k = await samKit();
+  const base = JSON.parse(JSON.stringify(P)), name0 = (P.desc || '').trim().slice(0, 48) || 'Pose', made = []; let n = 0;
+  for(const i of picks){ n++; const tag = 'Pose ' + n + ' of ' + picks.length + ': ';
+    try{ const sam = await samRead(P.photos[i], k, t => say(tag + 'SAM 3D Body is reading it on ' + pcName(k.url) + '… ' + t));
+      P = Object.assign(fresh(), {desc:base.desc, model:base.model, shape:base.shape, count:base.count, photos:base.photos, pick:i, sam, head:base.head || 1.2, who:base.who, own:base.own});
+      say(tag + 'bringing the 3D body over…'); await showBody(); P.rot = rotNow(); frame(); await savePose(name0 + ' ' + (made.length + 1)); made.push(P.name); }
+    catch(err){ say(tag + err.message); await new Promise(r => setTimeout(r, 1500)); } }
+  MULTI.clear(); SELMODE = false; if(!made.length) throw new Error("None of them could be read: SAM 3D Body found no one."); step = 'tweak';
+  say('💾 ' + made.length + (made.length===1 ? ' pose' : ' poses') + ' saved to the library (' + made.join(', ') + '). This is the last one.'); }); }
+let SELMODE = false; const MULTI = new Set();
 // the camera round the body, from the front
 function frame(){ if(!BODY) return; const bx = new THREE.Box3().expandByObject(BODY.sk, true), c = bx.getCenter(new THREE.Vector3()), h = Math.max(0.8, bx.max.y - bx.min.y), v = shown();
   const D = h * 1.15 / (2 * Math.tan(camera.fov * Math.PI / 360) * (v.bottom - v.top) / innerHeight), dir = new THREE.Vector3(0.2, 0.12, 1).normalize();
@@ -254,15 +268,41 @@ async function kitOn(url, e){ const [cks, los, cns, fd, ud, sam] = await Promise
   return {url, ckpt:e.ckpt && cks.includes(e.ckpt) ? e.ckpt : cks.find(n => /iriseltouch/i.test(n)) || cks[0], los, cn:cns.find(n => /promax|union/i.test(n)), fd, ud, sam, lora:!e.lora || los.includes(e.lora)}; }
 async function kitFor(e){ const ks = (await Promise.all(pcsAll().map(u => kitOn(u, e).catch(() => null)))).filter(k => k && k.ckpt && k.cn); ks.sort((a, b) => (b.lora - a.lora) || ((b.url===PC.url) - (a.url===PC.url)));
   if(!ks.length) throw new Error('No PC has an Illustrious model and ControlNet ProMax.'); return ks[0]; }
-function render(){ return work(async () => { if(!BODY) return; const e = PC.chars.find(c => c.subfolder===P.who), own = !e;
-  if(own && !P.own.trim()) throw new Error('Pick a character, or describe your own.'); say('Asking the PCs for their models…'); const K = await kitFor(e || {}), G = guides(), stamp = Date.now().toString(36);
-  say('Sending the pose to ' + pcName(K.url) + '…'); const dn = await upload(K.url, G.depth, 'rd-pose-depth-' + stamp + '.png'), pn = await upload(K.url, G.pose, 'rd-pose-skel-' + stamp + '.png');
-  const {g, add} = graph(), ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
+// 🖼 From the picture (Jordan 2026-10-30: "cut the character out and use controlnet on the actual picture"): the picture the pose came from,
+// cut out (BiRefNet) and read for a light depth, its outlines (hands, held things) and a DWPose skeleton when it finds one; from that
+// picture's own camera, so the 3D view's angle doesn't count. Good for close-ups and props the 3D body has no shape for.
+const DEPTHS = ['DepthAnythingV2Preprocessor', 'DepthAnythingPreprocessor', 'Zoe-DepthMapPreprocessor', 'MiDaS-DepthMapPreprocessor'];
+async function picKit(url){ const [has, bgs, dw] = await Promise.all([Promise.all([...DEPTHS, 'AnimeLineArtPreprocessor', 'RemoveBackground'].map(n => hasNode(url, n))), comboOf(url, 'LoadBackgroundRemovalModel', 'bg_removal_name'),
+    fetch(url + '/object_info/DWPreprocessor', {cache:'no-store'}).then(r => r.json()).then(j => j.DWPreprocessor || null).catch(() => null)]);
+  return {depth:DEPTHS.find((n, i) => has[i]) || '', lines:has[DEPTHS.length], bgm:has[DEPTHS.length + 1] ? bgs.find(n => /birefnet/i.test(n)) || '' : '', dw}; }
+function dwInputs(dw, image){ const inputs = {image}; for(const [k, spec] of Object.entries(Object.assign({}, (dw.input || {}).required || {}, (dw.input || {}).optional || {}))){ if(k==='image') continue; const [t, d] = spec;
+    inputs[k] = /detect_(body|hand|face)/.test(k) ? 'enable' : k==='resolution' ? 1024 : k==='bbox_detector' && Array.isArray(t) && t.includes('None') ? 'None' : Array.isArray(t) ? ((d && d.default) ?? t[0]) : (d && d.default); if(inputs[k]===undefined) delete inputs[k]; }
+  return inputs; }
+// a picture onto the painting PC: as it is when it's already there, else fetched from its PC and sent
+async function picOn(url, p){ if(p.pc===url) return p.type==='input' ? p.file : (p.sub ? p.sub.replace(/\\/g, '/') + '/' : '') + p.file + ' [output]';
+  const b = await (await fetch(viewOf(p))).blob(), fd = new FormData(); fd.append('image', b, 'rd-pose-src-' + Date.now().toString(36) + '.png'); fd.append('overwrite', 'true');
+  const r = await fetch(url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending the picture failed (' + r.status + ')'); return (await r.json()).name; }
+const picSize = p => new Promise(ok => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => ok([im.naturalWidth, im.naturalHeight]); im.onerror = () => ok([832, 1216]); im.src = viewOf(p); });
+function render(){ return work(async () => { if(!BODY) return; const e = PC.chars.find(c => c.subfolder===P.who), own = !e, PIC = P.guide==='pic', src = P.photos[P.pick];
+  if(PIC && !src) throw new Error('This pose has no picture to follow: use 🧍 3D body.');
+  if(own && !P.own.trim()) throw new Error('Pick a character, or describe your own.'); say('Asking the PCs for their models…'); const K = await kitFor(e || {}), stamp = Date.now().toString(36), {g, add} = graph(); let G, guide;
+  if(!PIC){ G = guides(); say('Sending the pose to ' + pcName(K.url) + '…'); const dn = await upload(K.url, G.depth, 'rd-pose-depth-' + stamp + '.png'), pn = await upload(K.url, G.pose, 'rd-pose-skel-' + stamp + '.png');
+    // SAM's body is a real person's pose, not a stiff mannequin, so it is followed closely (Jordan 2026-10-30: "follow that much closer now";
+    // was 1/55% + 0.6/35%): the skeleton most of the way, the depth well past half
+    guide = [[[add('LoadImage', {image:pn}), 0], 'openpose', 1, 0.8], [[add('LoadImage', {image:dn}), 0], 'depth', 0.75, 0.6]]; }
+  else { const pk = await picKit(K.url); if(!pk.depth) throw new Error(pcName(K.url) + ' has no depth node (Depth Anything) for reading the picture.');
+    say('Sending the picture to ' + pcName(K.url) + '…'); const [w0, h0] = await picSize(src), a = w0 / h0, H = Math.round(Math.sqrt(1048576 / a) / 64) * 64, W = Math.round(H * a / 64) * 64; G = {W, H};
+    const im = [add('ImageScale', {image:[add('LoadImage', {image:await picOn(K.url, src)}), 0], upscale_method:'lanczos', width:W, height:H, crop:'disabled'}), 0], fit = x => [add('ImageScale', {image:x, upscale_method:'bilinear', width:W, height:H, crop:'disabled'}), 0];
+    const cut = pk.bgm ? [add('MaskToImage', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:pk.bgm}), 0], image:im}), 0]}), 0] : null;
+    const only = x => cut ? [add('ImageBlend', {image1:x, image2:cut, blend_factor:1, blend_mode:'multiply'}), 0] : x; // the person alone, the background black
+    // light: the skeleton (when DWPose finds one) holds the pose, the depth the shape and props, the outlines the hands and held things; all let go early
+    guide = [...(pk.dw ? [[fit([add('DWPreprocessor', dwInputs(pk.dw, im)), 0]), 'openpose', 0.9, 0.5]] : []), [only(fit([add(pk.depth, {image:im, resolution:1024}), 0])), 'depth', 0.5, 0.4],
+      ...(P.lines!==false && pk.lines ? [[only(fit([add('AnimeLineArtPreprocessor', {image:im, resolution:1024}), 0])), 'canny/lineart/anime_lineart/mlsd', 0.35, 0.3]] : [])]; }
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
   for(const [l, w] of (e ? [[e.style, 1], [e.lora, +e.strength || 1]] : []).filter(([l]) => l && K.los.includes(l))){ const id = add('LoraLoader', {model, clip, lora_name:l, strength_model:w, strength_clip:w}); model = [id, 0]; clip = [id, 1]; }
   const words = [own ? P.own.trim() : herWords(e), (P.desc || '').trim(), PROMPT_TAIL].filter(Boolean).join(', ');
   const pos0 = add('CLIPTextEncode', {clip, text:words}), neg0 = add('CLIPTextEncode', {clip, text:NEG}), L = add('ControlNetLoader', {control_net_name:K.cn}); let pos = [pos0, 0], neg = [neg0, 0];
-  // the skeleton sets the pose and lets go half way, the depth holds the shape a third of the way, so she relaxes into it (Jordan 2026-10-29)
-  for(const [img, type, str, end] of [[pn, 'openpose', 1, 0.55], [dn, 'depth', 0.6, 0.35]]){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image:img}), 0], strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
+  for(const [image, type, str, end] of guide){ const a2 = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image, strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a2, 0]; neg = [a2, 1]; }
   const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:G.W, height:G.H, batch_size:4}), 0], denoise:1});
   let out = [add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0]; if(K.fd && K.ud) out = faceFix(add, out, model, clip, [ck, 2], [pos0, 0], [neg0, 0], seed, K.sam);
   const sv = add('SaveImage', {images:out, filename_prefix:PRE + '/pose/' + ((e && e.name) || 'own').replace(/[^\w-]+/g, '_')});
@@ -342,9 +382,11 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
     <div class="row shapes">${Object.entries(SHAPES).map(([k, v]) => `<button data-shape="${k}" aria-pressed="${(P.shape || 'tall')===k}" ${dis}>${v.name}</button>`).join('')}</div>
     <details class="note"><summary>What gets asked for</summary><span id="ask">${esc(P.desc.trim() ? askOf(P.desc) : '')}</span></details>
     <div class="row">${count()}<button class="go" id="makeb" ${dis || (P.desc.trim() ? '' : 'disabled')}>Make ${P.count || 4}</button><button class="sm" id="photob" ${dis} title="Use a photo of your own">🖼</button>${ph.length ? `<button class="sm" id="backb" ${dis} aria-label="Back to the pictures">✕</button>` : ''}<input type="file" accept="image/*" id="photof" hidden></div>`;
-  else if(step==='make') B.innerHTML = `<div class="strip" id="strip">${ph.map((p, i) => `<button data-pick="${i}" aria-pressed="${P.pick===i}" ${dis}><img src="${esc(viewOf(p))}" alt="Picture ${i + 1}" loading="lazy"></button>`).join('')}${Array.from({length:PEND}, () => '<span class="wait"></span>').join('')}</div>
+  else if(step==='make') B.innerHTML = `<div class="strip" id="strip">${ph.map((p, i) => `<button data-pick="${i}" aria-pressed="${SELMODE ? MULTI.has(i) : P.pick===i}" ${dis}>${SELMODE ? `<span class="tick">${MULTI.has(i) ? '✓' : ''}</span>` : ''}<img src="${esc(viewOf(p))}" alt="Picture ${i + 1}" loading="lazy"></button>`).join('')}${Array.from({length:PEND}, () => '<span class="wait"></span>').join('')}</div>
     <div class="row">${count()}<button id="moreb" ${dis}>＋ ${P.count || 4} more</button><button class="sm" id="editb" ${dis} aria-label="Change the words or the model" title="Change the words or the model">✏️</button><button class="sm" id="photob" ${dis} title="Use a photo of your own">🖼</button><input type="file" accept="image/*" id="photof" hidden></div>
-    <button class="go" id="createb" ${BUSY || P.pick < 0 ? 'disabled' : ''}>Create pose</button>`;
+    <div class="row"><button class="sm" id="selb" aria-pressed="${SELMODE}" ${dis} title="Pick several pictures and make a pose from each">${SELMODE ? '✕ One' : '☑ Several'}</button>${SELMODE
+      ? `<button class="go" id="manyb" ${BUSY || !MULTI.size ? 'disabled' : ''}>Create ${MULTI.size || ''} pose${MULTI.size===1 ? '' : 's'}</button>`
+      : `<button class="go" id="createb" ${BUSY || P.pick < 0 ? 'disabled' : ''}>Create pose</button>`}</div>${SELMODE ? '<p class="note">Tap the pictures to tick them. Each becomes its own pose in the 📚 library.</p>' : ''}`;
   else if(step==='tweak') B.innerHTML = `<p class="note">Drag the dots: <b style="color:#ff5ca8">pink</b> moves a hand or foot, <b style="color:#5cb8ff">blue</b> swings an arm or leg, <b style="color:#ffd166">yellow</b> tips the head or chest. Drag anywhere else to turn the view.</p>
     <div class="row"><button id="undob" ${UNDO.length && !BUSY ? '' : 'disabled'}>↶ Undo</button><button id="resetb" ${dis}>⟲ Back to the picture's pose</button></div>
     <div class="lbl"><span>🙂 Head size</span><b id="headv">${(+P.head || 1.2).toFixed(2)}×</b></div><input type="range" id="head" min="1" max="1.6" step="0.05" value="${P.head || 1.2}">`;
@@ -357,7 +399,8 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
     <button id="useb" ${dis || (T.pics[T.sel] ? '' : 'disabled')}>🦴 Use this one for the pose</button>`; }
   else B.innerHTML = `<select id="who" ${dis}><option value="">✏️ My own character…</option>${PC.chars.map(c => `<option value="${esc(c.subfolder)}" ${P.who===c.subfolder ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
     ${P.who ? '' : `<textarea id="own" rows="2" placeholder="Describe the character, e.g. 1girl, short red hair, green eyes, school uniform">${esc(P.own)}</textarea>`}
-    <button class="go" id="renderb" ${dis}>🎨 Render 4</button><p class="note">Paints from the angle you're looking at: turn the view first.</p>
+    <div class="row shapes"><button data-guide="3d" aria-pressed="${P.guide!=='pic'}" ${dis}>🧍 3D body</button><button data-guide="pic" aria-pressed="${P.guide==='pic'}" ${dis || (P.photos[P.pick] ? '' : 'disabled')}>🖼 The picture</button>${P.guide==='pic' ? `<button class="sm" id="linesb" aria-pressed="${P.lines!==false}" ${dis} title="Follow its outlines too (hands, held things)">✏️</button>` : ''}</div>
+    <button class="go" id="renderb" ${dis}>🎨 Render 4</button><p class="note">${P.guide==='pic' ? 'Follows the picture the pose came from, cut out: its depth' + (P.lines!==false ? ', outlines' : '') + ' and skeleton, from its own camera. Best for close-ups and things in her hands.' : "Paints from the angle you're looking at: turn the view first."}</p>
     ${(P.renders || []).length ? `<div class="grid">${P.renders.map((p, i) => `<button data-big="${i}"><img src="${esc(viewOf(p))}" alt="Render ${i + 1}" loading="lazy"></button>`).join('')}</div>` : ''}`;
   B.insertAdjacentHTML('beforeend', `<p id="msg">${esc(MSG)}</p>`);
   const on = (s, ev, f) => { const el = B.querySelector(s); if(el) el[ev] = f; };
@@ -369,11 +412,11 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
   on('#editb', 'onclick', () => { EDIT = true; draw(); }); on('#backb', 'onclick', () => { EDIT = false; draw(); });
   { const st = B.querySelector('#strip'); if(st && PEND) st.scrollLeft = st.scrollWidth; } on('#photob', 'onclick', () => $('#photof').click());
   on('#photof', 'onchange', e => { const f = e.target.files && e.target.files[0]; if(f) myPhoto(f); e.target.value = ''; });
-  B.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { P.pick = +b.dataset.pick; keep(); const f = ph[P.pick] && ph[P.pick].from; if(f) MSG = 'From: ' + f; draw(); }); on('#createb', 'onclick', createPose);
+  B.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { if(SELMODE){ const i = +b.dataset.pick; MULTI.has(i) ? MULTI.delete(i) : MULTI.add(i); draw(); return; } P.pick = +b.dataset.pick; keep(); const f = ph[P.pick] && ph[P.pick].from; if(f) MSG = 'From: ' + f; draw(); }); on('#createb', 'onclick', createPose); on('#manyb', 'onclick', createMany); on('#selb', 'onclick', () => { SELMODE = !SELMODE; MULTI.clear(); if(SELMODE && P.pick >= 0) MULTI.add(P.pick); draw(); });
   on('#undob', 'onclick', () => { const r = UNDO.pop(); if(!r || !BODY) return; for(const [n, q] of Object.entries(r)) if(BODY.bn[n]) BODY.bn[n].quaternion.fromArray(q); fit(false); P.rot = rotNow(); keep(); draw(); });
   on('#resetb', 'onclick', () => { if(!BODY) return; UNDO.push(rotNow()); for(const n of TWEAK) if(BODY.bn[n]) BODY.bn[n].quaternion.copy(BODY.bn[n].userData.q0); fit(false); P.rot = rotNow(); keep(); draw(); });
   on('#head', 'oninput', e => { P.head = +e.target.value; $('#headv').textContent = P.head.toFixed(2) + '×'; if(BODY) fit(false); keep(); });
-  on('#who', 'onchange', e => { P.who = e.target.value; keep(); draw(); }); on('#own', 'oninput', e => { P.own = e.target.value; keep(); }); on('#renderb', 'onclick', render);
+  on('#who', 'onchange', e => { P.who = e.target.value; keep(); draw(); }); on('#own', 'oninput', e => { P.own = e.target.value; keep(); }); on('#renderb', 'onclick', render); B.querySelectorAll('[data-guide]').forEach(b => b.onclick = () => { P.guide = b.dataset.guide; keep(); draw(); }); on('#linesb', 'onclick', () => { P.lines = P.lines===false; keep(); draw(); });
   B.querySelectorAll('[data-big]').forEach(b => b.onclick = () => { BIG = P.renders[+b.dataset.big]; $('#big img').src = viewOf(BIG); $('#big').hidden = false; });
   B.querySelectorAll('[data-tsel]').forEach(b => b.onclick = () => { const T = P.touch, q = T.pics[T.sel = +b.dataset.tsel]; if(q && q.words) T.words = q.words; if(q && q.who!=null) T.who = q.who; keep(); draw(); });
   B.querySelectorAll('[data-brush]').forEach(b => b.onclick = () => { MASK.erase = b.dataset.brush==='1'; draw(); });

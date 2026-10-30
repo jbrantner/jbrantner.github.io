@@ -22,11 +22,12 @@ const DEPS = process.env.RIG_DEPS || '';
   const store = new Map(), GRAPHS = []; let samMiss = false;
   const OI = {UNETLoader:['unet_name', ['z_image_turbo_bf16.safetensors', 'rt_detr_v4-x-hgnet_fp32.safetensors']], CLIPLoader:['clip_name', ['qwen_3_4b.safetensors']], VAELoader:['vae_name', ['ae.safetensors']],
     SAM3DBody_Loader:['model_file', ['sam_3d_body_dinov3_int8_convrot.safetensors']], SAM3DBody_Predict:['image', ['x']], BuildPoseFile:['format', ['x']], LoadMoGeModel:['model_name', ['moge_2_vitl_normal_fp16.safetensors']],
-    CheckpointLoaderSimple:['ckpt_name', ['iriselTouchIL_v10.safetensors', 'other.safetensors']], LoraLoader:['lora_name', ['elliex.safetensors', 'AFKJ Style Illustrious Claude.safetensors']], ControlNetLoader:['control_net_name', ['diffusion_pytorch_model_promax.safetensors']]};
+    CheckpointLoaderSimple:['ckpt_name', ['iriselTouchIL_v10.safetensors', 'other.safetensors']], LoraLoader:['lora_name', ['elliex.safetensors', 'AFKJ Style Illustrious Claude.safetensors']], ControlNetLoader:['control_net_name', ['diffusion_pytorch_model_promax.safetensors']], DepthAnythingV2Preprocessor:['image', ['x']], AnimeLineArtPreprocessor:['image', ['x']], RemoveBackground:['image', ['x']], LoadBackgroundRemovalModel:['bg_removal_name', ['BiRefNet-general.safetensors']]};
   await page.route('https://render.test/**', async r => { const u = new URL(r.request().url()), J = b => r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(b) });
     if(u.pathname==='/renderdeck/library') return J({library:1, kinds:['char', 'obj'], characters:[lib]});
     if(u.pathname==='/renderdeck/scenes') return J({scenes:[...store.values()]});
     if(u.pathname==='/renderdeck/scenes/save'){ const b = JSON.parse(r.request().postData()); store.set(b.scene.id, b.scene); return J({ok:true}); }
+    if(u.pathname==='/object_info/DWPreprocessor') return J({DWPreprocessor:{input:{required:{image:['IMAGE']}, optional:{detect_hand:[['enable', 'disable'], {default:'enable'}], detect_body:[['enable', 'disable'], {default:'enable'}], detect_face:[['enable', 'disable'], {default:'enable'}], resolution:['INT', {default:512}], bbox_detector:[['yolox_l.onnx', 'None'], {default:'yolox_l.onnx'}]}}}});
     const oi = u.pathname.match(/^\/object_info\/(\w+)$/); if(oi){ const d = OI[oi[1]]; return J(d ? {[oi[1]]:{input:{required:{[d[0]]:[d[1]]}}}} : {}); }
     if(u.pathname==='/upload/image'){ const m = r.request().postDataBuffer().toString('latin1').match(/filename="([^"]+)"/); return J({name:m && m[1]}); }
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData()).prompt); return J({prompt_id:'p' + GRAPHS.length}); }
@@ -79,12 +80,22 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.selectOption('#who', 'Character Library/Ellie'); await page.click('#renderb');
   await page.waitForFunction(() => document.querySelectorAll('[data-big]').length===4, null, {timeout:30000});
   const rg = Object.values(GRAPHS[GRAPHS.length - 1]), cn = rg.filter(n => n.class_type==='ControlNetApplyAdvanced').map(n => n.inputs.strength + '/' + n.inputs.end_percent), words = rg.find(n => n.class_type==='CLIPTextEncode').inputs.text;
-  ok(rg.some(n => n.inputs.lora_name==='elliex.safetensors') && rg.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && cn.join()==='1/0.55,0.6/0.35' && /^elliex, 1girl, solo, blue hair, crouching down with her chin on her fists, full body/.test(words),
+  ok(rg.some(n => n.inputs.lora_name==='elliex.safetensors') && rg.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && cn.join()==='1/0.8,0.75/0.6' && /^elliex, 1girl, solo, blue hair, crouching down with her chin on her fists, full body/.test(words),
     '🎨 Render: Ellie on her model and LoRA over the body\'s skeleton and depth: ' + words + ' · ' + cn);
   const gd = await page.evaluate(() => { const G = POSEPAGE.guides(), x = G.depth.getContext('2d').getImageData(0, 0, G.W, G.H).data; let lit = 0; for(let i = 0; i < x.length; i += 4) if(x[i] > 20) lit++; window.PP_G = {d:G.depth.toDataURL(), p:G.pose.toDataURL()}; return {W:G.W, H:G.H, fill:+(lit / (G.W * G.H)).toFixed(2)}; });
   ok(gd.fill > 0.15 && gd.fill < 0.8 && gd.W % 64===0 && gd.H % 64===0, 'its depth fills the cropped guide: ' + JSON.stringify(gd));
   if(process.env.SHOT){ const G = await page.evaluate(() => window.PP_G); fs.writeFileSync(process.env.SHOT + '/pp-depth.png', Buffer.from(G.d.split(',')[1], 'base64')); fs.writeFileSync(process.env.SHOT + '/pp-skel.png', Buffer.from(G.p.split(',')[1], 'base64')); }
   await shot('render');
+  // 🖼 The picture (Jordan 2026-10-30): the pose's own picture, cut out, read for depth, outlines and a DWPose skeleton
+  { await page.click('[data-guide="pic"]'); const n0 = GRAPHS.length; await page.click('#renderb'); await page.waitForFunction(n0 => window.POSEPAGE && document.querySelector('#renderb') && !document.querySelector('#renderb').disabled && document.querySelectorAll('[data-big]').length===4, n0, {timeout:30000}); await page.waitForTimeout(200);
+    const pg = Object.values(GRAPHS[GRAPHS.length - 1]), c = k => pg.filter(n => n.class_type===k), cn = c('ControlNetApplyAdvanced').map(n => n.inputs.strength + '/' + n.inputs.end_percent), types = c('SetUnionControlNetType').map(n => n.inputs.type), dw = c('DWPreprocessor')[0];
+    const lat = c('EmptyLatentImage')[0].inputs, sc = c('ImageScale')[0].inputs;
+    ok(GRAPHS.length===n0 + 1 && c('LoadImage')[0].inputs.image==='RenderDeck/pose/photo_2_1.png [output]' && c('DepthAnythingV2Preprocessor').length===1 && c('RemoveBackground').length===1 && c('ImageBlend').length===2 && c('ImageBlend').every(n => n.inputs.blend_mode==='multiply')
+      && dw && dw.inputs.detect_hand==='enable' && dw.inputs.bbox_detector==='None' && types.join()==='openpose,depth,canny/lineart/anime_lineart/mlsd' && cn.join()==='0.9/0.5,0.5/0.4,0.35/0.3' && lat.width===sc.width && lat.height===sc.height && lat.width % 64===0 && lat.width < lat.height,
+      '🖼 The picture: the pose\'s own picture cut out (BiRefNet) guides it: skeleton, light depth and outlines, at the picture\'s shape: ' + cn.join() + ' ' + lat.width + '×' + lat.height);
+    await page.click('#linesb'); const n1 = GRAPHS.length; await page.click('#renderb'); await page.waitForFunction(n1 => document.querySelector('#renderb') && !document.querySelector('#renderb').disabled, n1, {timeout:30000}); await page.waitForTimeout(300);
+    ok(!Object.values(GRAPHS[GRAPHS.length - 1]).some(n => n.class_type==='AnimeLineArtPreprocessor'), '✏️ off leaves the outlines out'); await shot('picguide');
+    await page.click('#linesb'); await page.click('[data-guide="3d"]'); }
   // 4 Touch up (Jordan 2026-10-29): a render opened big → 🖌 Touch up → paint where it may change → plain inpaint tries → one back to 2 as the pose
   await page.click('[data-big="2"]'); await page.click('#bigtouch'); await page.waitForFunction(() => { const c = document.querySelector('#tmask'); return c.width===300 && !document.querySelector('#touch').hidden; }, null, {timeout:10000});
   const tw = await page.evaluate(() => ({words:document.querySelector('#twords').value, btn:document.querySelector('#touchb').textContent, pics:document.querySelectorAll('[data-tsel]').length}));
@@ -137,6 +148,11 @@ const DEPS = process.env.RIG_DEPS || '';
     const kept = await page.evaluate(p0 => ({first:POSEPAGE.P.photos[0].from, last:POSEPAGE.P.photos[p0].from}), p0);
     ok(lb.b==='Make 3' && lb.back && /Z-Image/.test(kept.first) && /iriselTouchIL_v10$/.test(kept.last) && ig.filter(n => n.class_type==='KSampler').length===3 && new Set(ig.filter(n => n.class_type==='KSampler').map(n => n.inputs.seed)).size===3 && /^1girl, solo, crouching/.test(lb.ask) && ig.find(n => n.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && ig.filter(n => n.class_type==='EmptyLatentImage').every(n => n.inputs.batch_size===1 && n.inputs.width===1216 && n.inputs.height===832) && t===lb.ask && /feet out of frame/.test(ng),
       '🎨 ' + JSON.stringify([lb, kept]) + ' − to 3, ▭ Wide (1216×832), an Illustrious model: 3 separate runs (own seeds, no batch), added beside the Z-Image ones, asked in tags (shown under What gets asked for): ' + t); }
+  // ☑ Several (Jordan 2026-10-30): tick pictures, each becomes its own pose in the library
+  { await page.click('#selb'); for(const i of [0, 1]) await page.click('[data-pick="' + i + '"]'); const lbl = await page.textContent('#manyb'), want = +lbl.match(/\d+/)[0], s0 = [...store.values()].filter(x => !x.gone).length;
+    await page.click('#manyb'); await page.waitForFunction(() => /saved to the library/.test(document.querySelector('#msg') && document.querySelector('#msg').textContent || ''), null, {timeout:60000});
+    const got = [...store.values()].filter(x => !x.gone), st = await page.evaluate(() => ({tab:document.querySelector('[data-step="tweak"]').getAttribute('aria-selected'), body:!!POSEPAGE.BODY}));
+    ok(want >= 2 && got.length===s0 + want && got.slice(-want).every(x => x.sam && x.spin.length===16) && st.tab==='true' && st.body, '☑ Several: ' + lbl.trim() + ' made ' + (got.length - s0) + ' poses, each in the library with its turning card; the last one stays open'); await shot('many'); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
 })();
