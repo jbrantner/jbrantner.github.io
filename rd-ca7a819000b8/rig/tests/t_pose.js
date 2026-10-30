@@ -267,6 +267,12 @@ const DEPS = process.env.RIG_DEPS || '';
         for(let y = 0; y < H; y++) for(let x = 0; x < W; x++) if(M[y * W + x]) for(let k = 1; k < 9; k++) if(x + k < W && y > H * 0.55) M[y * W + x + k] = 1; // (a mat or furniture caught with her)
         const r = SCENE.fitCamMask(o, az, M, W, H); return r && {D:+r.D.toFixed(2), iou:+r.iou.toFixed(2)}; }, [tw]);
       ok(f && f.D > 2.5, '📐 a full-body outline the rig only roughly matches (turned ' + tw + ') still frames her whole, not zoomed in: ' + JSON.stringify(f)); }
+    // a close-up of just her hands (Jordan 2026-10-30: it came out as her whole body far away): the camera is found close to her hands
+    for(const D0 of [0.5, 0.9]){ const f = await page.evaluate(([D0]) => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id), az = ob.photoTurn, T = SCENE.THREE;
+        const g = SCENE.guideJoints(o), t = g[4].clone().lerp(g[7], 0.5), cam = new T.PerspectiveCamera(35, SCENE.CAM_A, 0.02, 2000);
+        cam.position.set(t.x + D0 * Math.sin(az), t.y, t.z + D0 * Math.cos(az)); cam.lookAt(t); cam.updateMatrixWorld(true); cam.updateProjectionMatrix(); const W = 96, H = Math.round(96 / SCENE.CAM_A), M = SCENE.rigMask(o, cam, W, H);
+        const r = SCENE.fitCamMask(o, az, M, W, H); return r && {D:+r.D.toFixed(2), iou:+r.iou.toFixed(2)}; }, [D0]);
+      ok(f && f.iou > 0.5 && Math.abs(f.D / D0 - 1) < 0.3, '📐 a close-up of her hands from ' + D0 + ' m finds the camera close to her hands: ' + JSON.stringify(f)); }
     // a lying-down shape (a plank) the standing rig can't match: before, the rig's middle zoomed in to fill it
     { const f = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id), W = 96, H = Math.round(96 / SCENE.CAM_A), M = new Uint8Array(W * H);
         for(let y = Math.round(H * 0.45); y < H * 0.75; y++) for(let x = 10; x < W - 10; x++) if(Math.abs(y - H * 0.6) < H * (0.04 + 0.12 * (1 - Math.abs(x - W * 0.35) / W))) M[y * W + x] = 1;
