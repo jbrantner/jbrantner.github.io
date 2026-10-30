@@ -1404,6 +1404,9 @@ function scenePose(chars, cam, W, H){ const c = document.createElement('canvas')
 const rsItems = () => SC.objs.filter(ob => !ob.hide && !ob.fromEnv && OBJ.get(ob.id) && OBJ.get(ob.id).e && (OBJ.get(ob.id).mq || OBJ.get(ob.id).mesh)).map(ob => OBJ.get(ob.id));
 const rsKey = items => JSON.stringify([SC.env || '', items.map(o => [o.ob.id, shotKey(o.ob)])]); // (shotKey has the Camera in it)
 const rsChars = items => items.filter(o => o.ob.kind!=='obj' && o.mq);
+// the first painting's ControlNet: the rig's (loose, so she isn't stiff) or SAM's body's (held closer)
+const RS_CN = {d:0.55, de:0.6, p:0.9, pe:0.75, z:0.5}, RS_CN_SAM = {d:0.8, de:0.8, p:1, pe:0.85, z:0.65};
+const rsCN = chars => chars.some(samOn) ? RS_CN_SAM : RS_CN;
 const rsNeg = n => n > 1 ? NEG.replace(/,\s*multiple girls,\s*2girls\s*$/, '') : NEG; // (two or more people are wanted here)
 // the 📷 Camera at the painting's shape, everyone shown as their mannequin / 3D model
 function rsCam(W, H){ if(!SC.d3){ SC.d3 = true; drawD3(); } if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); }
@@ -1493,8 +1496,11 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     if(all) conds.push(add('CLIPTextEncode', {clip, text:all}));
     let pos = conds[0]; for(const c of conds.slice(1)) pos = add('ConditioningCombine', {conditioning_1:[pos, 0], conditioning_2:[c, 0]});
     const neg = add('CLIPTextEncode', {clip, text:rsNeg(chars.length)}), L = add('ControlNetLoader', {control_net_name:K.cn});
-    let ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.55, start_percent:0, end_percent:0.6, vae:[ck, 2]});
-    if(pn) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:0.9, start_percent:0, end_percent:0.75, vae:[ck, 2]});
+    // 🧍 SAM's body is a much better guide than the rig (Jordan 2026-10-30: follow it much closer, it won't be stiff), so when anyone stands
+    // in as SAM's body the depth and skeleton hold on harder and longer; the LoRA still lets go late enough for her own proportions
+    const CN = rsCN(chars);
+    let ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:CN.d, start_percent:0, end_percent:CN.de, vae:[ck, 2]});
+    if(pn) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:CN.p, start_percent:0, end_percent:CN.pe, vae:[ck, 2]});
     const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0], denoise:1});
     let out = [add('ImageScale', {image:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], upscale_method:'lanczos', width:FW, height:FH, crop:'disabled'}), 0]; const first = out; // (🎨 the colours every later pass is matched back to)
     // then the background on its own (style LoRA only), then each character's own pass, the farthest first
@@ -1510,7 +1516,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     let ref = first; if(Z > 1){ const cw = Math.round(FW / Z / 8) * 8, chh = Math.round(FH / Z / 8) * 8, crop = img => [add('ImageScale', {image:[add('ImageCrop', {image:img, width:cw, height:chh, x:Math.round((FW - cw) / 2), y:Math.round((FH - chh) / 2)}), 0], upscale_method:'lanczos', width:FW, height:FH, crop:'disabled'}), 0];
       out = crop(out); ref = crop(first); const cam1 = rsCam(W, H), dz = await up(sceneDepth(cam1, W, H, items), 'cdepth'), TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8};
       const zp = add('CLIPTextEncode', {clip, text:[all, ...words].filter(Boolean).join(', ') + ', masterpiece, best quality, amazing quality, detailed'});
-      const zc = add('ControlNetApplyAdvanced', {positive:[zp, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dz}), 0], strength:0.5, start_percent:0, end_percent:0.5, vae:[ck, 2]});
+      const zc = add('ControlNetApplyAdvanced', {positive:[zp, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dz}), 0], strength:CN.z, start_percent:0, end_percent:CN.z, vae:[ck, 2]});
       const zk = add('KSampler', {model, seed:seed + 77, steps:24, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[zc, 0], negative:[zc, 1], latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_ZOOM});
       out = [add('VAEDecodeTiled', {samples:[zk, 0], vae:[ck, 2], ...TILE}), 0]; }
     const blend = Z <= 1 && SC.blend!==false && !!(K.dfe && chars.length);
@@ -1719,5 +1725,5 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {SAMFIT, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {SAMFIT, rsCN, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
