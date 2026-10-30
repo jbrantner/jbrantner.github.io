@@ -201,7 +201,8 @@ async function panelPhoto(ph, who){ const say = m => { const el = $('#allmsg'); 
   // her box first: SAM reads her from just that part of the picture, enlarged (Jordan 2026-10-30: a small figure in the background wasn't found in the whole picture)
   const box = await picBox(ph).catch(() => null); delete ob.photoTurn; await photoPose(ob, sh, null, box);
   const o = OBJ.get(ob.id); if(!o || ob.photoTurn==null){ const e = 'Her pose could not be read from the picture' + (RMSG.get(ob.id) ? ': ' + RMSG.get(ob.id) : '.'); say(e); bgPost({err:e}); return; }
-  setCamFrom(o, ob.photoTurn, panelBox(ph, box)); say('🧍 Her pose is from the picture, and the 📷 Camera is where the picture saw her from. Turn round her in 🕹 Free, or move the Camera.');
+  const MW = 96, MH = Math.max(24, Math.min(240, Math.round(MW / CAM_A))), M = panelMask(ph, box, MW, MH), fit = M && fitCamMask(o, ob.photoTurn, M, MW, MH);
+  if(!fit || fit.iou < 0.2) setCamFrom(o, ob.photoTurn, panelBox(ph, box)); say('🧍 Her pose is from the picture, and the 📷 Camera is where the picture saw her from. Turn round her in 🕹 Free, or move the Camera.');
   if(BG){ clearTimeout(saveT); await pushScene(); bgPost({done:true}); } }
 // out of sight (?bg=1): the comic page keeps showing while this page makes the panel 3D, and hears how it is going
 // a window keeps only its panel's camera: written into the newest copy of the scene, so windows of other panels in the same scene don't undo each other
@@ -230,7 +231,41 @@ async function picBox(ph){ let url = ph.cut;
   const W = 160, H = Math.max(2, Math.round(W * im.naturalHeight / im.naturalWidth)), c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H);
   const d = x.getImageData(0, 0, W, H).data, cut = !!ph.cut; let x0 = W, y0 = H, x1 = -1, y1 = -1;
   for(let j = 0; j < H; j++) for(let i = 0; i < W; i++){ const k = (j * W + i) * 4, on = cut ? d[k + 3] > 128 : d[k] > 128; if(on){ if(i < x0) x0 = i; if(i > x1) x1 = i; if(j < y0) y0 = j; if(j > y1) y1 = j; } }
-  return x1 < 0 ? null : {x0:x0 / W, y0:y0 / H, x1:(x1 + 1) / W, y1:(y1 + 1) / H, iw:im.naturalWidth, ih:im.naturalHeight}; }
+  return x1 < 0 ? null : {x0:x0 / W, y0:y0 / H, x1:(x1 + 1) / W, y1:(y1 + 1) / H, iw:im.naturalWidth, ih:im.naturalHeight, im, cut}; }
+// 📐 the camera from her outline (Jordan 2026-10-30: close-up face shots came out wrong, "have the mannequin do a better job of copying the character's silhouette"):
+// her outline in the panel (from the cut-out or BiRefNet, placed as the picture sits in it) against the rig's own outline seen from the picture's side,
+// at distances near and far; at each, the rig's outline is lined up on hers by the top of the head (or the middle, if her head is cut off) and the best
+// overlap wins, then is fine-tuned. A face close-up only matches with the camera close to her face: nothing assumes her whole body is in the frame
+function panelMask(ph, b, W, H){ if(!b || !b.im) return null; const f = Object.assign({x:0, y:0, s:1}, ph.fr), ia = b.iw / b.ih, pa = CAM_A;
+  const bw = (ia > pa ? ia / pa : 1) * f.s, bh = (ia > pa ? 1 : pa / ia) * f.s, l = 0.5 + f.x / 100 - bw / 2, t = 0.5 + f.y / 100 - bh / 2;
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(b.im, l * W, t * H, bw * W, bh * H);
+  const d = x.getImageData(0, 0, W, H).data, m = new Uint8Array(W * H); let n = 0; for(let k = 0; k < W * H; k++) if((b.cut ? d[k * 4 + 3] : d[k * 4]) > 128){ m[k] = 1; n++; } return n ? m : null; }
+const MASK_MAT = new THREE.MeshBasicMaterial({color:0xffffff});
+function rigMask(o, cam, W, H){ const part = o.mq || o.mesh; o.g.updateMatrixWorld(true);
+  const hid = []; scene.traverse(m => { if(m!==scene && m.visible && !m.isLight && !(m===o.g || part===m || isIn(m, part) || isAnc(m, o.g))){ m.visible = false; hid.push(m); } });
+  [o.disc, o.label, o.card, o.ghost, o.shot, o.shd, o.missing].forEach(m => { if(m && m.visible){ m.visible = false; hid.push(m); } });
+  part.traverse(m => { if(m.isMesh && m.visible && m.material && m.material.side===THREE.BackSide){ m.visible = false; hid.push(m); } }); // (not her ink outline)
+  const bg = scene.background, rt = new THREE.WebGLRenderTarget(W, H), buf = new Uint8Array(W * H * 4); scene.background = new THREE.Color(0); scene.overrideMaterial = MASK_MAT;
+  renderer.setScissorTest(false); renderer.setRenderTarget(rt); renderer.setClearColor(0, 1); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf); renderer.setRenderTarget(null);
+  scene.overrideMaterial = null; scene.background = bg; hid.forEach(m => m.visible = true); rt.dispose(); dirty = true;
+  const m = new Uint8Array(W * H); for(let y = 0; y < H; y++) for(let x = 0; x < W; x++) m[(H - 1 - y) * W + x] = buf[(y * W + x) * 4] > 127 ? 1 : 0; return m; }
+function maskStats(m, W, H){ let top = -1, bot = -1, n = 0, sx = 0, sy = 0; for(let y = 0; y < H; y++) for(let x = 0; x < W; x++) if(m[y * W + x]){ if(top < 0) top = y; bot = y; n++; sx += x; sy += y; }
+  if(!n) return {n}; const band = top + Math.max(2, (bot - top) * 0.2); let bx = 0, bn = 0; for(let y = top; y <= band && y < H; y++) for(let x = 0; x < W; x++) if(m[y * W + x]){ bx += x; bn++; }
+  return {n, top, bot, cx:sx / n, cy:sy / n, tx:bn ? bx / bn : sx / n}; }
+function fitCamMask(o, az, M, W, H){ const PM = maskStats(M, W, H); if(!PM.n) return null; poseFor('cam'); o.g.updateMatrixWorld(true);
+  const part = o.mq || o.mesh, bx = new THREE.Box3(); part.traverse(m => { if(m.isMesh && m.material && m.material.side!==THREE.BackSide && shownIn(m, part)) bx.expandByObject(m, true); }); // (her body only: not her picture card)
+  if(bx.isEmpty()) return null; const c = bx.getCenter(new THREE.Vector3()), cut = PM.top <= 0; // (her head cut off: line up the middles)
+  const cam = new THREE.PerspectiveCamera(35, CAM_A, 0.02, 2000), tn = Math.tan(17.5 * D2R), right = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
+  // where to aim from D away so her head (or middle) starts out about where hers is in the picture; the leftover is lined up in the picture
+  const aim = D => { const t = c.clone(); t.y = (cut ? c.y : bx.max.y) - (0.5 - (cut ? PM.cy : PM.top) / H) * 2 * D * tn; return t.addScaledVector(right, -((cut ? PM.cx : PM.tx) / W - 0.5) * 2 * D * tn * CAM_A); };
+  const tryD = D => { aimCam(cam, {az, el:0, d:D, t:aim(D)}); cam.aspect = CAM_A; cam.updateProjectionMatrix(); const R = rigMask(o, cam, W, H), RS = maskStats(R, W, H); if(!RS.n) return null;
+    const dx = Math.round(cut ? PM.cx - RS.cx : PM.tx - RS.tx), dy = Math.round(cut ? PM.cy - RS.cy : PM.top - RS.top); let a = 0, u = 0;
+    for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){ const ry = y - dy, rx = x - dx, r = ry >= 0 && ry < H && rx >= 0 && rx < W && R[ry * W + rx], p = M[y * W + x]; if(r && p) a++; if(r || p) u++; }
+    return {D, dx, dy, iou:u ? a / u : 0}; };
+  let best = null; for(let D = 0.25; D < 30; D *= 1.15){ const r = tryD(D); if(r && (!best || r.iou > best.iou)) best = r; } if(!best) return null;
+  for(let D = best.D / 1.15; D < best.D * 1.15; D *= 1.025){ const r = tryD(D); if(r && r.iou > best.iou) best = r; }
+  const D = best.D, t = aim(D).addScaledVector(right, -best.dx / W * 2 * D * tn * CAM_A).add(new THREE.Vector3(0, best.dy / H * 2 * D * tn, 0));
+  shotO.az = az; shotO.el = 0; shotO.d = D; shotO.t.copy(t); SC.cam = camState(); SC.camLock = true; view = 'cam'; ui.view = 'cam'; saveUi(); changed(); drawViews(); dirty = true; return best; }
 // the part of the picture SAM reads (pixels): her box with room round it, enlarged to about 1024 on its long side (never shrunk, at most 4×)
 function samCrop(b){ if(!b || !b.iw || !b.ih) return null; const pw = (b.x1 - b.x0) * 0.25, phh = (b.y1 - b.y0) * 0.15, cl = v => Math.min(1, Math.max(0, v));
   const x0 = Math.floor(cl(b.x0 - pw) * b.iw), y0 = Math.floor(cl(b.y0 - phh) * b.ih), x1 = Math.ceil(cl(b.x1 + pw) * b.iw), y1 = Math.ceil(cl(b.y1 + phh) * b.ih), w = x1 - x0, h = y1 - y0;
@@ -1601,5 +1636,5 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
