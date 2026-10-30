@@ -197,6 +197,18 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.click('#cmPage [data-cpi="0"]'); const s0 = await page.evaluate(() => cmPage().panels[0].still || 0);
   await page.click('#cmPage [data-cpi="0"]'); ok(await page.evaluate(s0 => (cmPage().panels[0].still || 0)===s0 + 1, s0) && /2\//.test(await page.textContent('#cmPage [data-cpi="0"] .cpnav')), 'tapping the picked panel shows its next try, on the page');
   await page.click('#cmPage [data-cpi="0"] [data-cmcyc="-1"]'); ok(await page.evaluate(s0 => (cmPage().panels[0].still || 0)===s0, s0), '‹ goes back');
+  // ✋ the picture moves anywhere in its panel and pinches bigger or smaller; ✂ takes its background out
+  { const box = await page.$eval('#cmPage [data-cpi="0"]', e => { const b = e.getBoundingClientRect(); return {x:b.x, y:b.y, w:b.width, h:b.height}; }), cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+    const st0 = await page.evaluate(() => cmPage().panels[0].still);
+    await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + box.w * 0.4, cy + 10, {steps:5}); await page.mouse.up();
+    const f = await page.evaluate(() => cmStill(cmPage().panels[0]).fr);
+    ok(f && f.x > 30 && f.s===1 && await page.evaluate(st0 => cmPage().panels[0].still===st0, st0) && /left:\s*9\d/.test(await page.$eval('#cmPage [data-cpi="0"] img.cpimg', e => e.getAttribute('style'))), 'dragging moves the picture past the panel\'s edge (and isn\'t a tap): ' + JSON.stringify(f));
+    const cdp = await page.context().newCDPSession(page), tp = (type, pts) => cdp.send('Input.dispatchTouchEvent', {type, touchPoints:pts.map((q, id) => ({x:q[0], y:q[1], id}))});
+    await tp('touchStart', [[cx - 20, cy], [cx + 20, cy]]); for(let k = 1; k <= 5; k++) await tp('touchMove', [[cx - 20 - k * 8, cy], [cx + 20 + k * 8, cy]]); await tp('touchEnd', []);
+    const f2 = await page.evaluate(() => cmStill(cmPage().panels[0]).fr); ok(f2 && f2.s > 1.5, 'two fingers apart make it bigger: ' + JSON.stringify(f2));
+    const n0 = ALL.length; await page.click('#comic [data-cm="cut"]'); await page.waitForFunction(() => cmStill(cmPage().panels[0]).cut || cmPage().panels[0].err, null, {timeout:20000});
+    const g = ALL[n0].prompt, ns = Object.values(g); ok(ns.some(x => x.class_type==='RemoveBackground') && ns.some(x => x.class_type==='JoinImageWithAlpha') && check(g).length===0, '✂ Just the character: BiRefNet cut-out, a valid graph: ' + check(g).join(';'));
+    ok(await page.evaluate(f2 => { const st = cmStill(cmPage().panels[0]); return st.cut && st.fr && Math.abs(st.fr.s - f2.s) < 1e-6 && cmPage().panels[0].still===0; }, f2), 'the cut-out shows framed the same, kept as a picture of its own'); }
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT, fullPage:true});
   // the tab is remembered, and a 3D panel reopens on its comic page
   await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(100);
