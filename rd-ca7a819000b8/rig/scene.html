@@ -46,6 +46,7 @@ select,input{background:var(--panel);border:1px solid var(--line);border-radius:
 .modal .sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 0 0;width:min(560px,100%);max-height:80vh;overflow:auto;padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px));display:grid;gap:8px}
 .modal .sheet .box{background:var(--bg)}
 .hud{position:relative;z-index:3}
+.ptitle{display:none;font:700 14px/1.2 var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw}body.panel .ptitle{display:block}body.panel #scenes,body.panel #new,body.panel #del{display:none}
 #ortho{position:absolute;top:100%;left:12px;right:12px;display:flex;gap:4px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;z-index:4}#ortho[hidden]{display:none}
 #ortho button{flex:1;font:700 12px var(--display)}
 #viewvid{position:absolute;left:8px;top:8px;width:36%;max-height:46%;object-fit:contain;background:#fff;border:1px solid var(--line, #3a3f4b);border-radius:8px;z-index:2;pointer-events:none}
@@ -75,7 +76,7 @@ background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 0 0
 body.pz.pzc .cols{display:none}body.pz .cols{bottom:calc(58px + env(safe-area-inset-bottom,0px))}
 </style></head>
 <body>
-<div class="hud"><div class="bar"><select id="scenes" aria-label="Scene"></select><span class="saved" id="saved"></span><button id="menub" aria-label="Menu">☰</button></div>
+<div class="hud"><div class="bar"><select id="scenes" aria-label="Scene"></select><b id="ptitle" class="ptitle"></b><span class="saved" id="saved"></span><button id="menub" aria-label="Menu">☰</button></div>
 <div class="views" role="tablist"><button data-v="cam">📷 Camera</button><button data-v="persp">🕹 Free</button><button id="orthob" aria-label="Flat views">📐</button><button id="rlibb">🖼 Renders</button></div>
 <div id="ortho" hidden><button data-v="front">Front</button><button data-v="side">Side</button><button data-v="top">Top</button><button data-v="quad">⊞ All 4</button></div></div>
 <div id="stage"><img id="viewimg" hidden alt="A render"><video id="viewvid" hidden muted playsinline preload="auto" crossorigin="anonymous"></video><div id="msg"></div><div id="pzmsg" hidden><span></span><i hidden></i></div><div id="pzbar" hidden><button id="pzundo" disabled>↶ Undo</button><button id="pzpanel" aria-pressed="false">⚙ Panel</button></div><div id="camctl" hidden><button id="camlock"></button><button id="camcopy">⤓ Free view’s angle</button></div></div>
@@ -142,12 +143,42 @@ async function loadScenes(){ let remote = []; if(PC.url){ try{ const r = await f
   // made or changed on this phone while the PC was off: onto the PC now
   if(PC.url) for(const s of by.values()){ const r = remote.find(x => x.id===s.id); if(!s.gone && (!r || (r.saved || 0) < (s.saved || 0))) fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:s})}).catch(() => {}); } }
 let saveT = 0;
-function changed(){ if(!SC) return; SC.saved = Date.now(); drawRbg(); const L = local().filter(s => s.id!==SC.id); L.push(SC); keepLocal(L); if(ENV){ ENVS = ENVS.filter(x => x.id!==SC.id).concat([SC]); } $('#saved').textContent = 'Saving…'; clearTimeout(saveT); saveT = setTimeout(pushScene, 700); dirty = true; }
+function changed(){ if(!SC) return; SC.saved = Date.now(); drawRbg(); const R = rec(); const L = local().filter(s => s.id!==R.id); L.push(R); keepLocal(L); if(ENV){ ENVS = ENVS.filter(x => x.id!==SC.id).concat([SC]); } $('#saved').textContent = 'Saving…'; clearTimeout(saveT); saveT = setTimeout(pushScene, 700); dirty = true; }
 async function pushScene(){ if(!SC) return; if(!PC.url){ $('#saved').textContent = 'On this phone'; return; }
-  try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:SC})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
+  try{ const r = await fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:rec()})}); $('#saved').textContent = r.ok ? 'Saved ✓' : 'On this phone'; }
   catch(e){ $('#saved').textContent = 'On this phone'; } }
 function newScene(name){ const s = Object.assign({id:uid(ENV ? 'env' : POSE ? 'ps' : 'sc'), name:name || WORD + ' ' + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}, ENV ? {kind:'env', words:'', ground:{base:0, cells:{}, tileM:2, on:true}} : POSE ? {kind:'pose'} : {}); scenesAll.unshift(s); openScene(s); changed(); }
 function openScene(s){ SC = s; if(SCN) s.d3 = true; drawBlend(); drawRbg(); if(SCN && s.rsJob) setTimeout(rsResume, 0); VIMG = ''; loadCam(); ui.scene = s.id; ui.sel = ''; saveUi(); buildObjs(); drawScenes(); drawList(); drawSel(); applyGround(); drawEnvBox(); drawLightBox(); drawFinal(); showImg(''); drawDesc(); dirty = true; }
+// ---- 📖 a comic panel (Jordan 2026-10-29: "each panel of the comic would basically be its own camera"): the comic's Scene is shared
+// (environment, light, who is in it, where they stand); a panel keeps its own camera, renders and words, and whatever it changes about
+// someone (moved, posed, hidden or shown) for itself only. SC is then a merged copy; rec() splits it back into the scene record.
+const PANEL_KEYS = ['cam', 'camLock', 'scene', 'rsJob', 'renders', 'desc', 'blend'], OV_KEYS = ['x', 'y', 'z', 'rot', 's', 'hide', 'pose', 'bq', 'words'];
+let PANEL = null; // {pid, base (the scene record in scenesAll), label}
+const cl = x => x===undefined ? undefined : JSON.parse(JSON.stringify(x)), ovNorm = (k, x) => JSON.stringify(k==='hide' ? !!x : x===undefined ? null : x);
+function panelView(base, pid){ const P = (base.panels || {})[pid] || {}, v = cl(base); delete v.panels;
+  for(const k of PANEL_KEYS){ if(P[k]!==undefined) v[k] = cl(P[k]); else delete v[k]; }
+  if(!v.cam && base.cam) v.cam = cl(base.cam);
+  v.objs = (v.objs || []).map(o => { const d = (P.ov || {})[o.id] || {}; for(const k of Object.keys(d)){ if(d[k]===null) delete o[k]; else o[k] = cl(d[k]); } return o; }); return v; }
+function rec(){ if(!PANEL || !SC) return SC; const base = PANEL.base, v = SC, P = Object.assign({}, (base.panels || {})[PANEL.pid]), ov = {}, objs = [];
+  for(const k of PANEL_KEYS){ if(v[k]!==undefined) P[k] = cl(v[k]); else delete P[k]; }
+  for(const o of v.objs || []){ const b = (base.objs || []).find(x => x.id===o.id), nb = cl(o);
+    for(const k of OV_KEYS){ if(b){ if(b[k]===undefined) delete nb[k]; else nb[k] = cl(b[k]); } }
+    if(!b) nb.hide = true; // someone added in a panel joins the scene hidden, and shows in this panel
+    const d = {}; for(const k of OV_KEYS) if(ovNorm(k, o[k])!==ovNorm(k, nb[k])) d[k] = o[k]===undefined ? (k==='hide' ? false : null) : cl(o[k]);
+    if(Object.keys(d).length) ov[o.id] = d; objs.push(nb); }
+  P.ov = ov;
+  for(const k of Object.keys(v)) if(!PANEL_KEYS.includes(k) && k!=='objs' && k!=='panels') base[k] = cl(v[k]);
+  for(const k of Object.keys(base)) if(!PANEL_KEYS.includes(k) && k!=='objs' && k!=='panels' && v[k]===undefined) delete base[k];
+  base.objs = objs; base.panels = Object.assign({}, base.panels, {[PANEL.pid]:P}); return base; }
+// m = {scene, pid, ar (the panel's width / height), desc (its words in the script), name (for a new scene), label}
+async function openPanel(m){ let base = scenesAll.find(s => s.id===m.scene); if(!base){ await loadScenes(); base = scenesAll.find(s => s.id===m.scene); }
+  if(!base){ base = {id:m.scene, name:m.name || 'Scene ' + (scenesAll.length + 1), v:1, objs:[], saved:Date.now()}; scenesAll.unshift(base); }
+  const ps = base.panels = base.panels || {}; let fresh = false;
+  if(!ps[m.pid]){ fresh = true; const last = Object.values(ps).filter(p => p.cam).sort((a, b) => (b.at || 0) - (a.at || 0))[0]; ps[m.pid] = {desc:m.desc || '', at:Date.now()}; if(last) ps[m.pid].cam = cl(last.cam);
+    const src = m.from && ps[m.from]; if(src){ for(const k of ['cam', 'ov', 'blend']) if(src[k]!==undefined) ps[m.pid][k] = cl(src[k]); } } // ⧉ a duplicated panel starts as the one it came from
+  CAM_A = Math.max(0.4, Math.min(2.5, +m.ar || 0.8)); PANEL = {pid:m.pid, base, label:m.label || ''}; document.body.classList.add('panel');
+  $('#ptitle').textContent = (PANEL.label ? PANEL.label + ' · ' : '') + (base.name || 'Scene'); openScene(panelView(base, m.pid)); if(fresh) changed(); dirty = true; }
+function leavePanel(){ if(!PANEL) return; PANEL = null; CAM_A = 0.8; document.body.classList.remove('panel'); }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
 $('#scenes').onchange = e => { const s = scenesAll.find(x => x.id===e.target.value); if(s) openScene(s); };
@@ -549,7 +580,7 @@ function poseFor(view){ const cam = view==='persp' ? shotCam : camOf(view), top 
 // ---- drawing: one view, or all four (3D top left, Top top right, Front bottom left, Side bottom right)
 let dirty = true, view = ui.view || (POSE ? 'persp' : 'cam'); // (🤸 opens on 🕹 Free: the whole screen for her rig)
 // 📷 in the full-screen Scene the Camera keeps a 4:5 frame (what it renders), between the top bar and the layer list
-const CAM_A = 0.8;
+let CAM_A = 0.8; // (a 📖 comic panel uses its own shape)
 function rects(){ const W = stage.clientWidth, H = stage.clientHeight;
   if(view==='cam' && SCM){ const b = stage.getBoundingClientRect(), t = Math.max(0, $('.hud').getBoundingClientRect().bottom - b.top), bt = Math.min(H, $('.cols').getBoundingClientRect().top - b.top - 6), ah = bt - t > 160 ? bt - t : H, ay = bt - t > 160 ? t : 0;
     const w = Math.min(W - 12, ah * CAM_A), h = w / CAM_A; return {cam:{x:Math.round((W - w) / 2), y:Math.round(ay + (ah - h) / 2), w:Math.round(w), h:Math.round(h)}}; }
@@ -1492,10 +1523,12 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
 // ---- start: the library (for the references), the scenes, the last one open
 (async function start(){ $('#msg').textContent = 'Opening your ' + WORD.toLowerCase() + 's…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
   // 📚 opened from the app's Library: that one (?open=id), or a new one (?new=1)
-  SC = null; const last = scenesAll.find(s => s.id===(QS.get('open') || ui.scene)) || scenesAll[0]; if(QS.get('new') || !last) newScene(); else openScene(last);
+  SC = null; const last = scenesAll.find(s => s.id===(QS.get('open') || ui.scene)) || scenesAll[0];
+  if(QS.get('panel') && QS.get('open')) await openPanel({scene:QS.get('open'), pid:QS.get('panel'), ar:QS.get('ar'), desc:QS.get('pdesc') || '', name:QS.get('pname') || '', label:QS.get('plabel') || '', from:QS.get('pfrom') || ''});
+  else if(QS.get('new') || !last) newScene(); else openScene(last);
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
-addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew)) return; if(m.rdnew) return newScene();
+addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {get sc(){ return SC; }, POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
