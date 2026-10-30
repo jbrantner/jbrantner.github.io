@@ -11,8 +11,9 @@ out a day at a time. Now:
   day moves out of Savings into weekly spending, pots, projects and debts as it goes, so Savings is always bank −
   bills held − pots and projects − this week's money not spent yet.
 - **The weekly money through the next payday comes out of Savings on payday** (Jordan: "so I know exactly how much
-  I actually have to spend"), so Savings is what's free. It shows as its own **Spending money** card under the cushion
-  (filled whole on payday: this week's left plus what's set aside to the next payday, "$98 comes in each Monday").
+  I actually have to spend"), so Savings is what's free. Home now opens with **Money you have** (that number, with any
+  pay not landed yet and It's here), then the weekly card with **This week**'s lump sum on top of the day-by-day
+  numbers.
   Under the cushion: "Spending money through (payday) is already taken out" and "$Y more goes to pots and projects
   by (payday), a day at a time".
 - **Pay that hasn't landed:** the paycheck sheet has "Still coming" for an advance or second deposit. It isn't counted
