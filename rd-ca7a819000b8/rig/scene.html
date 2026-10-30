@@ -103,7 +103,7 @@ body.pz.pzc .cols{display:none}body.pz .cols{bottom:calc(58px + env(safe-area-in
 import * as THREE from 'three';
 import {paintLook} from './look.js';
 import {solveOrbit} from './orbit.js';
-import {bvhPose, MHR_OP} from './bvh.js';
+import {bvhPose, bvhJoints, MHR_OP} from './bvh.js';
 import {TOON, loadBody as fetchBody, bodyMesh as shapedBody, POSES, APOSE, poseBody, bonesOf, bodyJoints, DEPTH_MAT, drawPose, comboOf, hasNode, upload, faceFix, NEG} from './body.js';
 const QS = new URLSearchParams(location.search), HID = QS.get('h')==='1', D2R = Math.PI / 180, $ = s => document.querySelector(s);
 // 🌄 the same page as the Environment tab (?env=1, Jordan 2026-10-28): an environment is a ground (tiling textures, painted in patches),
@@ -1229,6 +1229,40 @@ function fitDirs(ob, o, P){
     const b = bonesOf(o.mq.userData.body)[name]; if(!b) continue; const pts = jointPts(o), piv = new THREE.Vector3().setFromMatrixPosition(b.matrixWorld), cur = name==='bn_spine02' ? shoulderMid(o) : pts[J[name]];
     swing(ob, o, name, cur, piv.clone().addScaledVector(q.clone().sub(p).normalize(), cur.distanceTo(piv))); }
   return {missing}; }
+// 🦴 her whole rig from SAM's skeleton (Jordan 2026-10-30: have her rig follow SAM's pose more closely): the back in three parts, the neck,
+// her head (aimed and turned by the eyes), shoulders, arms, hands (by the fingers, turned by the thumb), legs and feet. B is every joint of the BVH,
+// already turned her way. Each bone in turn, parent first, is pointed like SAM's; some are also turned round that line to match a second direction
+const SAM_FIT = [ // [her bone, the point of hers it aims at, SAM's from, SAM's to, (her side line, SAM's side line)]
+  ['bn_spine01', 'bn_spine03', 'Hips', 'joint_036', ['bn_thigh01R', 'bn_thigh01L'], ['joint_018', 'joint_002']],
+  ['bn_spine02', 'bn_spine03', 'joint_034', 'joint_035'], ['bn_spine03', 'bn_spine04', 'joint_035', 'joint_036'],
+  ['bn_spine04', 'bn_spine05', 'joint_036', 'joint_037', ['bn_shoulderR', 'bn_shoulderL'], ['joint_038', 'joint_074']],
+  ['bn_spine05', 'bn_spine06', 'joint_037', 'joint_110'], ['bn_spine06', 'bn_head', 'joint_110', 'joint_113'],
+  ['bn_head', 'eyes', 'joint_113', 'eyes', ['eyeR', 'eyeL'], ['eyeR', 'eyeL']],
+  ['bn_shoulderR', 'bn_upperarm01R', 'joint_038', 'joint_039'], ['bn_upperarm01R', 'bn_forearm01R', 'joint_039', 'joint_040'], ['bn_forearm01R', 'bn_handR', 'joint_040', 'joint_041'],
+  ['bn_handR', 'fingersR', 'joint_041', 'fingersR', ['bn_handR', 'bn_thumb03R'], ['joint_041', 'joint_063']],
+  ['bn_shoulderL', 'bn_upperarm01L', 'joint_074', 'joint_075'], ['bn_upperarm01L', 'bn_forearm01L', 'joint_075', 'joint_076'], ['bn_forearm01L', 'bn_handL', 'joint_076', 'joint_077'],
+  ['bn_handL', 'fingersL', 'joint_077', 'fingersL', ['bn_handL', 'bn_thumb03L'], ['joint_077', 'joint_099']],
+  ['bn_thigh01R', 'bn_shin01R', 'joint_018', 'joint_019'], ['bn_shin01R', 'bn_footR', 'joint_019', 'joint_020'], ['bn_footR', 'bn_toeR_end', 'joint_020', 'joint_024'],
+  ['bn_thigh01L', 'bn_shin01L', 'joint_002', 'joint_003'], ['bn_shin01L', 'bn_footL', 'joint_003', 'joint_004'], ['bn_footL', 'bn_toeL_end', 'joint_004', 'joint_008']];
+function fitSam(ob, o, B){ const V = a => a && new THREE.Vector3(a[0], a[1], a[2]), avg = ns => { const v = new THREE.Vector3(); for(const n of ns){ if(!B[n]) return null; v.add(V(B[n])); } return v.multiplyScalar(1 / ns.length); };
+  const S = n => n==='fingersR' ? avg(['joint_043', 'joint_048', 'joint_052', 'joint_056']) : n==='fingersL' ? avg(['joint_079', 'joint_084', 'joint_088', 'joint_092']) : n==='eyes' || n==='eyeL' || n==='eyeR' ? samEye(n) : V(B[n]);
+  // (which of SAM's eyes is her left: the one further along her shoulders' line, as for SAM's own body)
+  const samEye = n => { const a = V(B.joint_122), b = V(B.joint_124), lat = V(B.joint_075).sub(V(B.joint_039)); if(!a || !b) return null; const [l, r] = lat.dot(a) > lat.dot(b) ? [a, b] : [b, a]; return n==='eyeL' ? l : n==='eyeR' ? r : l.clone().add(r).multiplyScalar(0.5); };
+  ob.pose = 'apose'; delete ob.bq; delete ob.act; poseBody(o.mq, 'apose'); o.mq.updateMatrixWorld(true); ob.mode = 'mq';
+  const bn = bonesOf(o.mq.userData.body), W = n => { if(n==='eyes' || n==='eyeL' || n==='eyeR'){ const p = jointPts(o); return n==='eyeL' ? p[15] : n==='eyeR' ? p[14] : p[14].clone().lerp(p[15], 0.5); }
+    if(n==='fingersR' || n==='fingersL'){ const s2 = n.slice(-1), v = new THREE.Vector3(); for(const f of ['index', 'middle', 'ring', 'pinky']) v.add(W('bn_' + f + '01' + s2)); return v.multiplyScalar(0.25); }
+    return bn[n] ? new THREE.Vector3().setFromMatrixPosition(bn[n].matrixWorld) : null; };
+  let n = 0; for(const [name, aimAt, f0, f1, side, sSide] of SAM_FIT){ const b = bn[name], s0 = S(f0), s1 = S(f1); if(!b || !s0 || !s1) continue; o.mq.updateMatrixWorld(true);
+    const piv = W(name), cur = W(aimAt); if(!piv || !cur) continue; const d = s1.clone().sub(s0); if(d.lengthSq() < 1e-8) continue; d.normalize();
+    swing(ob, o, name, cur, piv.clone().addScaledVector(d, cur.distanceTo(piv))); n++;
+    if(side){ const a = W(side[1]), a0 = W(side[0]), t1 = S(sSide[1]), t0 = S(sSide[0]); if(!a || !a0 || !t1 || !t0) continue; // (turned round the line just set, so her side line lies like SAM's)
+      const v = a.sub(a0), w = t1.sub(t0); v.addScaledVector(d, -v.dot(d)); w.addScaledVector(d, -w.dot(d)); if(v.lengthSq() < 1e-10 || w.lengthSq() < 1e-10) continue; v.normalize(); w.normalize();
+      const ang = Math.atan2(d.dot(new THREE.Vector3().crossVectors(v, w)), v.dot(w)), q = new THREE.Quaternion().setFromAxisAngle(d, ang), pw = b.parent.getWorldQuaternion(new THREE.Quaternion()), bw = b.getWorldQuaternion(new THREE.Quaternion());
+      ob.bq = Object.assign({}, ob.bq, {[name]:pw.invert().multiply(q.multiply(bw)).toArray().map(x => +x.toFixed(5))}); poseBody(o.mq, ob.pose, ob.bq); o.mq.updateMatrixWorld(true); } }
+  o.mq.updateMatrixWorld(true); const err = {}; // (how far each of her bones is from SAM's, in degrees: for the tests)
+  for(const [name, aimAt, f0, f1] of SAM_FIT){ const p = W(name), q = W(aimAt), s0 = S(f0), s1 = S(f1); if(p && q && s0 && s1) err[name] = +(q.sub(p).angleTo(s1.sub(s0)) / D2R).toFixed(1); }
+  SAMFIT.err = err; return {missing:[], n}; }
+const SAMFIT = {};
 // 📸 Pose from a photo (Jordan 2026-10-29: posing the rig on the phone is hard, and DWPose's flat points couldn't place her legs): Z-Image Turbo paints a
 // real person doing the action (or use your own photo), SAM 3D Body reads that person's pose in 3D (a BVH), and her bones are pointed the same way
 async function samKit(){ for(const u of pcsAll()){ try{ if(!(await hasNode(u, 'SAM3DBody_Predict')) || !(await hasNode(u, 'BuildPoseFile'))) continue;
@@ -1278,7 +1312,8 @@ async function photoPose(ob, sh, file, pbox){ const o = OBJ.get(ob.id), st = msg
     // turned so the photo's hips face her way (her own ⟳ Turn still sets where she faces)
     const V = a => new THREE.Vector3(a[0], a[1], a[2]), L = V(B.lhip).sub(V(B.rhip)), yaw = Math.atan2(-L.z, L.x), Y = new THREE.Vector3(0, 1, 0), turn = (ob.rot || 0) * D2R - yaw;
     const P = {}; for(const [nm, a] of Object.entries(B)) P[nm] = V(a).applyAxisAngle(Y, turn);
-    const r = fitDirs(ob, o, P); ob.mode = 'mq'; if(sh) ob.photoUsed = sh.file; delete ob.sam; ob.photoTurn = turn; // (where the photo's camera was, round her: 📖 a panel's camera starts there)
+    const BJ = {}; for(const [nm, a] of Object.entries(bvhJoints(txt))) BJ[nm] = V(a).applyAxisAngle(Y, turn).toArray();
+    let r = fitSam(ob, o, BJ); if(r.n < 12) r = fitDirs(ob, o, P); ob.mode = 'mq'; if(sh) ob.photoUsed = sh.file; delete ob.sam; ob.photoTurn = turn; // (where the photo's camera was, round her: 📖 a panel's camera starts there)
     if(fg){ ob.sam = {pc:k.url, file:fg.filename, sub:fg.subfolder || '', head:SAM_HEAD, key:samKey(ob)}; st('🧍 Bringing over the photo\'s 3D body…'); await samAttach(o); }
     poseFor('cam'); changed(); dirty = true;
     st('🦴 She has the photo\'s pose' + (r.missing.length ? ' (not: ' + r.missing.join(', ') + ')' : '') + (samOn(o) ? ', in the photo\'s own 3D body. Grow its head to suit her, then 🎬 Render this angle or Move into the pose.' : '. Fine-tune it with the rig, then 🎬 Render this angle or Move into the pose.')); }
@@ -1665,5 +1700,5 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {SAMFIT, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
