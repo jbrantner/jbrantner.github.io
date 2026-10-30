@@ -4806,19 +4806,20 @@ function cmZitKits(cm){ cm = cm || CM(); const want = cm.zitModel || '';
   return pcs.filter(p => p.oi.ModelSamplingAuraFlow && p.oi.EmptySD3LatentImage && p.oi.ConditioningZeroOut).map(p => {
     const ms = cmZitModels(p.oi), clip = combo(p.oi.CLIPLoader, 'clip_name').find(n => /qwen_3_4b/i.test(baseName(n))), vae = combo(p.oi.VAELoader, 'vae_name').find(n => /^ae\./i.test(baseName(n)));
     const m = want ? ms.find(x => baseName(x.name)===baseName(want)) : ms.find(x => !x.ck && /z_image_turbo/i.test(baseName(x.name))) || ms.find(x => !x.ck);
-    return m && (m.ck || (clip && vae)) ? {url:p.url, zit:m.name, zck:m.ck, clip, vae, has:() => '', ckHas:() => ''} : null; }).filter(Boolean); }
+    return m && clip && (m.ck || vae) ? {url:p.url, zit:m.name, zck:m.ck, clip, vae, has:() => '', ckHas:() => ''} : null; }).filter(Boolean); }
 function cmZitChoices(){ const seen = new Map(); for(const p of (S.test ? [{oi:{UNETLoader:{input:{required:{unet_name:[['z_image_turbo_bf16.safetensors']]}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['totZImageturbo.safetensors']]}}}}}] : allPcs().filter(p => p.online && p.oi)))
     for(const m of cmZitModels(p.oi)) seen.set(baseName(m.name), m); return [...seen.values()]; }
 function cmZitText(p){ let t = (cmSrc(p) || '').replace(/\\/g, ''); for(const e of cmChars(p)) if(e.trigger) t = t.replace(cmRe(e.trigger), 'a girl (' + (e.tags || '').split(',').map(x => x.trim()).filter(x => x && !/^(1girl|solo|1boy)$/i.test(x)).join(', ') + ')');
   return t.trim(); } // (Z-Image's own look, no style words: Jordan 2026-10-30 keeps drafts realistic, which SAM 3D Body also reads best)
 function cmZitGraph(k, p, W, H, batch, prefix){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title:cls}}; return id; };
-  const ckp = k.zck && add('CheckpointLoaderSimple', {ckpt_name:k.zit}); // (an all-in-one checkpoint brings its own text encoder and VAE)
+  // (a Z-Image checkpoint such as TOT brings its own VAE but no text encoder: its CLIP output is empty, so Qwen is always loaded on its own)
+  const ckp = k.zck && add('CheckpointLoaderSimple', {ckpt_name:k.zit});
   const model = add('ModelSamplingAuraFlow', {model:ckp ? [ckp, 0] : [add('UNETLoader', {unet_name:k.zit, weight_dtype:'default'}), 0], shift:3}), vae = ckp ? [ckp, 2] : [add('VAELoader', {vae_name:k.vae}), 0], prompt = cmZitText(p);
-  const pos = add('CLIPTextEncode', {clip:ckp ? [ckp, 1] : [add('CLIPLoader', {clip_name:k.clip, type:'lumina2', device:'default'}), 0], text:prompt}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
+  const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.clip, type:'lumina2', device:'default'}), 0], text:prompt}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
   const ks = add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 1e12), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0], latent_image:[add('EmptySD3LatentImage', {width:W, height:H, batch_size:batch}), 0], denoise:1});
   const save = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae}), 0], filename_prefix:prefix}); return {g, save, prompt}; }
 async function cmMakeTries(list){ const cm = CM(), pg = cmPage(), n = Math.max(1, cm.tryN || 10); if(!pg || !list.length) return; const zi = cmDraftWith(cm)==='zit';
-  let kits = zi ? cmZitKits() : cmTryKits(); if(!kits.length){ toast(!S.test && !allPcs().some(x => x.online) ? cmWhy() : zi ? 'None of your computers that are on has Z-Image Turbo (z_image_turbo, qwen_3_4b, ae): pick 🎨 Illustrious' : 'None of your computers that are on has an Illustrious checkpoint', true); return; }
+  let kits = zi ? cmZitKits() : cmTryKits(); if(!kits.length){ toast(!S.test && !allPcs().some(x => x.online) ? cmWhy() : zi ? 'None of your computers that are on has Z-Image Turbo (a Z-Image model, qwen_3_4b, ae): pick 🎨 Illustrious' : 'None of your computers that are on has an Illustrious checkpoint', true); return; }
   const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(q => q.making && q.making.pc===k.url).length); buzz();
   for(const p of list){ const i = pg.panels.indexOf(p), r = cmRectsOf(pg)[i], [W, H] = cmTrySize(r), need = zi ? [] : cmChars(p).map(e => e.lora).filter(Boolean); // (no LoRAs in Z-Image: she is drawn from her description)
     const ok = kits.filter(k => need.every(l => k.has(l))), use = ok.length ? ok : kits; if(!ok.length && need.length) toast('No computer that is on has every LoRA panel ' + (i + 1) + ' needs, so it goes without', true);
