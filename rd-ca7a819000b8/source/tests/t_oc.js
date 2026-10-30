@@ -19,8 +19,8 @@ const links = g => { const errs = []; for(const [id, n] of Object.entries(g)) fo
   await page.goto('https://app.test/');
   const fail = []; const ok = (c, m) => { if(!c) fail.push(m); console.log((c ? 'ok   ' : 'FAIL ') + m); };
   await page.click('#openSettings'); await page.click('#testBtn'); await page.evaluate(() => closeSheets());
-  // (three tabs + Scene; the creators open from the 📚 Library, with ← Library back)
-  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('#tabs button')].map(b => b.dataset.tab).join()==='render,comic,scene,lib' && [...document.querySelectorAll('#tabs button')].every(b => b.scrollWidth <= b.clientWidth + 1)), 'the tab bar is Render, Comic, Scene, Library, with no label cut off on a 375 px phone');
+  // (three tabs; the creators open from the 📚 Library, with ← Library back)
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('#tabs button')].map(b => b.dataset.tab).join()==='render,comic,lib' && [...document.querySelectorAll('#tabs button')].every(b => b.scrollWidth <= b.clientWidth + 1)), 'the tab bar is Render, Comic, Library, with no label cut off on a 375 px phone');
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => [...document.querySelectorAll('[data-cc="libmake"]')].map(b => b.dataset.k).join()==='cc,obj,env,pose' && $('#libBack').hidden), '📚 Library offers ＋ Character, Object, Environment, Pose');
   await page.click('[data-cc="libmake"][data-k="obj"]'); await page.waitForTimeout(200);
