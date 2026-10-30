@@ -623,7 +623,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.313'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.314'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4803,19 +4803,34 @@ function cmTryGraph(k, p, W, H, batch, prefix){ const cm = CM(), I = cmIll(), ch
 function cmTryTags(p, words){ return words; } // the words as written (Jordan 2026-10-30: no tag guessing in Comic)
 const cmTrySize = r => { const a = Math.max(1 / 3, Math.min(3, r.w / r.h)), H = Math.sqrt(1048576 / a); return [Math.round(H * a / 64) * 64, Math.round(H / 64) * 64]; };
 function cmTryKits(){ return cmIllKits().map(k => Object.assign({}, k, {ckHas:name => { const ck = combo(k.oi.CheckpointLoaderSimple, 'ckpt_name'); return name && (ck.includes(name) ? name : ck.find(n => baseName(n).toLowerCase()===baseName(name).toLowerCase())) || ''; }})); }
-async function cmMakeTries(list){ const cm = CM(), pg = cmPage(), n = Math.max(1, cm.tryN || 10); if(!pg || !list.length) return;
-  let kits = cmTryKits(); if(!kits.length){ toast(!S.test && !allPcs().some(x => x.online) ? cmWhy() : 'None of your computers that are on has an Illustrious checkpoint', true); return; }
+// ⚡ drafts with Z-Image Turbo (Jordan 2026-10-30, the default): it reads whole sentences (who does what, where the camera is) far better than
+// Illustrious, which wants Danbooru tags. It has no character LoRAs, so she is drawn from her description; 🧊 Make it 3D and 🎨 Render as her
+// bring her back. Same recipe as the 🤸 pose photos (8 steps, cfg 1, res_multistep, AuraFlow shift 3), in the panel's shape, as anime
+const cmDraftWith = cm => cm.draftWith==='ill' ? 'ill' : 'zit';
+function cmZitKits(){ if(S.test) return [{url:'test', zit:'z_image_turbo_bf16.safetensors', clip:'qwen_3_4b.safetensors', vae:'ae.safetensors', has:() => '', ckHas:() => ''}];
+  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '') && p.oi.ModelSamplingAuraFlow && p.oi.EmptySD3LatentImage && p.oi.ConditioningZeroOut).map(p => {
+    const zit = combo(p.oi.UNETLoader, 'unet_name').find(n => /z_image_turbo/i.test(baseName(n))), clip = combo(p.oi.CLIPLoader, 'clip_name').find(n => /qwen_3_4b/i.test(baseName(n))), vae = combo(p.oi.VAELoader, 'vae_name').find(n => /^ae\./i.test(baseName(n)));
+    return zit && clip && vae ? {url:p.url, zit, clip, vae, has:() => '', ckHas:() => ''} : null; }).filter(Boolean); }
+function cmZitText(p){ let t = (cmSrc(p) || '').replace(/\\/g, ''); for(const e of cmChars(p)) if(e.trigger) t = t.replace(cmRe(e.trigger), 'a girl (' + (e.tags || '').split(',').map(x => x.trim()).filter(x => x && !/^(1girl|solo|1boy)$/i.test(x)).join(', ') + ')');
+  return 'Anime style comic panel illustration, clean line art, cel shading. ' + t.trim(); }
+function cmZitGraph(k, p, W, H, batch, prefix){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title:cls}}; return id; };
+  const model = add('ModelSamplingAuraFlow', {model:[add('UNETLoader', {unet_name:k.zit, weight_dtype:'default'}), 0], shift:3}), vae = add('VAELoader', {vae_name:k.vae}), prompt = cmZitText(p);
+  const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.clip, type:'lumina2', device:'default'}), 0], text:prompt}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
+  const ks = add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 1e12), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0], latent_image:[add('EmptySD3LatentImage', {width:W, height:H, batch_size:batch}), 0], denoise:1});
+  const save = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:[vae, 0]}), 0], filename_prefix:prefix}); return {g, save, prompt}; }
+async function cmMakeTries(list){ const cm = CM(), pg = cmPage(), n = Math.max(1, cm.tryN || 10); if(!pg || !list.length) return; const zi = cmDraftWith(cm)==='zit';
+  let kits = zi ? cmZitKits() : cmTryKits(); if(!kits.length){ toast(!S.test && !allPcs().some(x => x.online) ? cmWhy() : zi ? 'None of your computers that are on has Z-Image Turbo (z_image_turbo, qwen_3_4b, ae): pick 🎨 Illustrious' : 'None of your computers that are on has an Illustrious checkpoint', true); return; }
   const load = {}; kits.forEach(k => load[k.url] = (pcOf(k.url).load || 0) + cmAll().filter(q => q.making && q.making.pc===k.url).length); buzz();
-  for(const p of list){ const i = pg.panels.indexOf(p), r = cmRectsOf(pg)[i], [W, H] = cmTrySize(r), need = cmChars(p).map(e => e.lora).filter(Boolean);
+  for(const p of list){ const i = pg.panels.indexOf(p), r = cmRectsOf(pg)[i], [W, H] = cmTrySize(r), need = zi ? [] : cmChars(p).map(e => e.lora).filter(Boolean); // (no LoRAs in Z-Image: she is drawn from her description)
     const ok = kits.filter(k => need.every(l => k.has(l))), use = ok.length ? ok : kits; if(!ok.length && need.length) toast('No computer that is on has every LoRA panel ' + (i + 1) + ' needs, so it goes without', true);
     const jobs = []; for(let left = n; left > 0; left -= 2) jobs.push(Math.min(2, left));
     for(const b of jobs){ const k = use.slice().sort((a, c) => load[a.url] * cmSlow(a.url) - load[c.url] * cmSlow(c.url))[0]; load[k.url]++;
       const c = {id:uid('x'), parent:p.id, w:W, h:H}; p.extra = (p.extra || []).concat([c]); await cmTryJob(cm, pg, p, c, k, W, H, b, i); } } }
 async function cmTryJob(cm, pg, p, c, k, W, H, b, i){ c.busy = 'Sending…'; drawComic();
-  try{ const prefix = cmPrefixP(pg, i, 'try'), G = cmTryGraph(k, p, W, H, b, prefix);
+  try{ const prefix = cmPrefixP(pg, i, 'try'), G = (k.zit ? cmZitGraph : cmTryGraph)(k, p, W, H, b, prefix);
     if(S.test){ CM_SENT.push(G.g); await new Promise(r => setTimeout(r, 150)); delete c.busy; cmGot(c, 'try', {urls:Array.from({length:b}, () => ''), test:true, w:W, h:H}); return; }
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:G.g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    c.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:0.5 * b * cmSlow(k.url), smp:samplerOf(G.g), w:W, h:H, kind:'try', video:false, all:true}; delete c.busy; save(); drawComic(); cmWait(c); }
+    c.making = {pc:k.url, id:j.prompt_id, save:G.save, t:t0, prefix, mins:(k.zit ? 0.45 : 0.5) * b * cmSlow(k.url), smp:samplerOf(G.g), w:W, h:H, kind:'try', video:false, all:true}; delete c.busy; save(); drawComic(); cmWait(c); }
   catch(err){ delete c.busy; p.err = "Couldn't make tries for panel " + (i + 1) + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
 // ✋ a picture framed in its panel (Jordan 2026-10-30): moved anywhere (past its edges, leaving white) and made bigger or smaller with two
 // fingers; st.fr = {x, y (its middle from the panel's middle, in % of the panel), s (1 = just covering the panel)}
@@ -6187,6 +6202,7 @@ function drawComic0(){
       <div class="row"><label>Borders</label>${seg('data-cmborder', [['white', '⬜ White'], ['black', '⬛ Black']], cm.border==='black' ? 'black' : 'white')}</div>
       <div class="cmpage${cm.border==='black' ? ' dark' : ''}" id="cmPage"></div>
       ${cmHosts(cm).some(h => h.making || h.busy) ? `<div class="btnrow"><button class="btn" data-cm="stopall">✕ Stop all comic jobs (${cmHosts(cm).filter(h => h.making || h.busy).length})</button></div>` : ''}
+      <div class="row"><label>Drafts with</label>${seg('data-cmdraft', [['zit', '⚡ Z-Image Turbo'], ['ill', '🎨 Illustrious']], cmDraftWith(cm))}</div>
       <div class="cmgen"><b>🎲 Tries</b><span class="cnt sm"><button data-cm="tryless" aria-label="Fewer">−</button><b>${cm.tryN || 10}</b><button data-cm="trymore" aria-label="More">+</button></span><span class="note" style="margin:0">a panel, for</span>${pg.panels.map((q, j) => `<button class="chipbtn${(cm.genOff || []).includes(q.id) ? '' : ' on'}" data-cmgen="${j}" aria-label="Panel ${j + 1}">${j + 1}</button>`).join('')}</div>
       ${(() => { const go = pg.panels.filter(q => !(cm.genOff || []).includes(q.id)); return `<div class="btnrow"><button class="btn hot" data-cm="tries" ${go.length ? '' : 'disabled'}>🎲 Make ${cm.tryN || 10} tries for ${go.length===pg.panels.length ? 'every panel' : go.length + ' panel' + (go.length===1 ? '' : 's')}</button></div>`; })()}
       ${pg.panels.some(q => q.takes.length) ? `<div class="btnrow"><button class="btn" data-cm="play">${CM_PLAY ? '⏸ Stop' : '▶ Play all'}</button></div>` : ''}
@@ -6247,7 +6263,7 @@ function goTab(t, o){ o = o || {};
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) goTab(b.dataset.tab); };
 $('#libBack').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) goTab(b.dataset.tab); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmhl],[data-cmswap],[data-cmlora],[data-cmgen],[data-cmcyc],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmtake],[data-cmstill],[data-cmshow],[data-cmborder]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmhl],[data-cmswap],[data-cmlora],[data-cmgen],[data-cmcyc],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmtake],[data-cmstill],[data-cmshow],[data-cmborder],[data-cmdraft]'); if(!t) return;
   if(t.dataset.cmhl){ const [i, k] = t.dataset.cmhl.split(':').map(Number); CM_HL = CM_HL && CM_HL.i===i && CM_HL.k===k ? null : {i, k}; drawComic(); return; }
   if(t.dataset.cmswap){ const [i, k, j] = t.dataset.cmswap.split(':').map(Number); cmSwap(i, k, j); buzz(); return; }
   if(t.dataset.cmlora){ const c = t.dataset.cmlora.indexOf(':'), i = +t.dataset.cmlora.slice(0, c), sub = t.dataset.cmlora.slice(c + 1), q = pg && pg.panels[i]; if(!q) return;
@@ -6264,6 +6280,7 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmstill!=null){ p.still = +t.dataset.cmstill; p.stillPicked = true; p.show = 'still'; cmPlay(false); }
   else if(t.dataset.cmshow){ p.show = 'clip'; }
   else if(t.dataset.cmborder){ cm.border = t.dataset.cmborder; }
+  else if(t.dataset.cmdraft){ cm.draftWith = t.dataset.cmdraft; }
   else if(a==='stop'){ cmStop([p].concat(p.extra || [])); return; }
   else if(a==='stopall'){ cmStop(cmHosts(cm), true); return; }
   else if(a==='frame'){ cmFrameStill(p); return; }
