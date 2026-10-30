@@ -740,7 +740,7 @@ const VL = (() => {
     return `<div class="vl-hero pp-panel mh-have"><button class="mh-cu" data-cu-open="1" aria-label="Month cushion: ${money(H)}${T > 0 ? ` of ${money(T)}` : ''}. Open it">`
       + `<span class="vl-k">Cushion${T > 0 ? ` <small>of ${money(T)}</small>` : ''} ›</span><span class="vl-total num${H < 0 ? ' bad' : ''}">${H < 0 ? '−' + moneyExact(-H) : moneyExact(H)}</span>`
       + (T > 0 ? `<span class="mh-bar" aria-hidden="true"><i style="width:${(f * 100).toFixed(1)}%"></i></span>` : '')
-      + `<span class="vl-sub">Yours until payday${until ? `, ${shortDate(until)}` : ''}, after the bills due by then and your spending money</span></button>${heads}${wait}</div>`;
+      + `<span class="vl-sub">Yours until payday${until ? `, ${shortDate(until)}` : ''}, after the bills due by then${state.manualWeek ? '' : ' and your spending money'}</span></button>${heads}${wait}</div>`;
   }
   function homeHTML(now) {
     const pu = purseNow(now), n = partySize(), d = Math.max(0, Math.min(6, Math.floor((now - weekStart(new Date(now))) / DAY_MS))), days = 7 - d, t = todayLeft(pu, new Date(now)), L = pu.purseLeft;
