@@ -44,6 +44,11 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.evaluate(() => { const o = SCENE.sc.objs; o[0].x = 2; o[1].hide = true; SCENE.sc.cam = {az:30, el:5, d:4, t:[0, 1, 0]}; SCENE.changed(); });
   { const r = await recOf(), b1 = r.objs.find(o => o.id==='o1'), b2 = r.objs.find(o => o.id==='o2'), p1 = r.panels.p1;
     ok(b1.x===0 && !b2.hide && p1.ov.o1.x===2 && p1.ov.o2.hide===true && p1.cam.az===30 && !r.cam && p1.desc==='she waves', 'the scene keeps her spot and the chair; panel 1 keeps its move, hide, camera and words: ' + JSON.stringify(p1)); }
+  // SAM's body from panel 1's picture and who she is in panel 1 stay panel 1's (Jordan 2026-10-30: another panel's 3D swapped her back to a mannequin)
+  await page.evaluate(() => { const o = SCENE.sc.objs[0]; o.sam = {pc:'https://render.test', file:'p1_body.glb', sub:'', head:1.2, key:'k1'}; o.photoTurn = 0.4; o.ref = 'Ellen/ellen'; o.label = 'Ellen'; SCENE.changed(); });
+  { const r = await recOf(), b1 = r.objs.find(o => o.id==='o1'), d = r.panels.p1.ov.o1;
+    ok(!b1.sam && b1.photoTurn==null && b1.ref==='3D/Mannequin' && d.sam && d.sam.file==='p1_body.glb' && d.photoTurn===0.4 && d.ref==='Ellen/ellen', 'SAM\'s body, her turn and who she is are panel 1\'s own, not the scene\'s: ' + JSON.stringify(d)); }
+  await page.evaluate(() => { const o = SCENE.sc.objs[0]; delete o.sam; delete o.photoTurn; o.ref = '3D/Mannequin'; o.label = 'Mannequin'; SCENE.changed(); });
   // panel 2: everyone where the scene has them, its camera starting from panel 1's
   await page.evaluate(() => postMessage({rdpanel:{scene:'scA', pid:'p2', ar:0.6, desc:'she smiles', label:'Panel 2'}}, location.origin)); await page.waitForFunction(() => SCENE.PANEL.pid==='p2');
   { const v = await page.evaluate(() => ({x:SCENE.sc.objs[0].x, hide:!!SCENE.sc.objs[1].hide, cam:SCENE.sc.cam && SCENE.sc.cam.az, a:SCENE.CAM_A, desc:SCENE.sc.desc, t:document.querySelector('#ptitle').textContent}));
