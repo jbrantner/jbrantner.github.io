@@ -725,11 +725,15 @@ const VL = (() => {
     .replace(/ role="button" tabindex="0"/g, `$& aria-expanded="${wkEd}"`).replace('. Tap to edit your categories"', '. Tap to change your weekly budget"');
   // v322 (Jordan): one number first, how much money you have: what's free after bills held, the spending money through
   // the next payday and pots and projects (Savings and the Month cushion together)
-  function haveHTML(now) {
-    const S = (potBalances(today().slice(0, 7), now).find(p => p.id === 'savings') || { bal: 0 }).bal, pp = hoardParts(now);
+  function haveHTML(now) {   // v322b (Jordan 16:37): paycheck to paycheck, so a later month's gap doesn't read as a debt today
+    const S = (potBalances(today().slice(0, 7), now).find(p => p.id === 'savings') || { bal: 0 }).bal, pp = hoardParts(now), inc = mainIncome();
+    const until = savingsPlanned(now).until || (inc && Number(inc.amount) > 0 ? nextPayday(inc, today()) : null);
+    // what's held now for bills after the next payday (the part that payday's own bill share won't cover)
+    const later = until ? pp.heldList.filter(b => !b.due || b.due >= until) : [], keep = until ? Math.max(0, cents(pp.held - sum(pp.heldList.filter(b => b.due && b.due < until), b => b.A))) : 0, H = S + keep;
     const wait = pp.checks.list.filter(c => c.wait >= 0.005).map(c => `<div class="vl-sub">${moneyExact(c.wait)} of your ${shortDate(c.date)} pay isn't in your bank yet <button class="link" data-pay-here="${esc(c.key)}">It's here</button></div>`).join('');
-    return `<div class="vl-hero pp-panel mh-have"><div class="vl-k">Money you have</div><div class="vl-total num${S < 0 ? ' bad' : ''}">${S < 0 ? '−' + moneyExact(-S) : moneyExact(S)}</div>`
-      + `<div class="vl-sub">after bills and your spending money</div>${wait}</div>`;
+    const keepLine = keep >= 1 && S < -0.005 ? `<div class="vl-sub">Keep ${moneyExact(Math.min(keep, -S))} of it for bills after ${shortDate(until)} (${esc(later.slice(-2).map(b => b.c.name).join(', '))})</div>` : '';
+    return `<div class="vl-hero pp-panel mh-have"><div class="vl-k">${until ? `Yours until payday, ${shortDate(until)}` : 'Money you have'}</div><div class="vl-total num${H < 0 ? ' bad' : ''}">${H < 0 ? '−' + moneyExact(-H) : moneyExact(H)}</div>`
+      + `<div class="vl-sub">after bills due by then and your spending money</div>${keepLine}${wait}</div>`;
   }
   function homeHTML(now) {
     const pu = purseNow(now), n = partySize(), d = Math.max(0, Math.min(6, Math.floor((now - weekStart(new Date(now))) / DAY_MS))), days = 7 - d, t = todayLeft(pu, new Date(now)), L = pu.purseLeft;
