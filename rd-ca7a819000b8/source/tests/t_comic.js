@@ -234,17 +234,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.evaluate(pid => postMessage({rd3d:{pid, msg:'SAM 3D Body is reading the pose… 4 s'}}, location.origin), pid); await page.waitForTimeout(100);
     ok(/reading the pose/.test(await page.$eval('#cmPage [data-cpi="0"]', e => e.textContent)), 'the panel shows how it is going: ' + await page.$eval('#cmPage [data-cpi="0"]', e => e.textContent.trim()));
     await page.evaluate(pid => postMessage({rd3d:{pid, done:true}}, location.origin), pid); await page.waitForTimeout(300);
-    // then the panel is a window into its 3D scene (Jordan 2026-10-30), over its picture with her taken out (Illustrious inpaint where BiRefNet finds her)
+    // then the panel is a window into its 3D scene (Jordan 2026-10-30), showing the scene itself
     const win = await page.evaluate(pid => { const f = document.querySelector(`#cmwins iframe[data-pid="${pid}"]`), el = document.querySelector('#cmPage [data-cpi="0"]'); if(!f || !el) return null; const a = f.getBoundingClientRect(), b = el.getBoundingClientRect();
       return {src:f.getAttribute('src'), dx:Math.abs(a.left - b.left - el.clientLeft), dy:Math.abs(a.top - b.top - el.clientTop), w:Math.abs(a.width - el.clientWidth), pe:f.style.pointerEvents, is3d:cmPage().panels[0].is3d}; }, pid);
     ok(win && win.is3d && /win=1/.test(win.src) && /panel=/.test(win.src) && !/photo=/.test(win.src) && win.dx < 1.5 && win.dy < 1.5 && win.w < 1.5 && win.pe==='auto' && await page.isVisible('#comic'), '🧊 the 3D panel is a live window laid exactly over it on the page: ' + JSON.stringify(win));
-    ok(!ALL.some(a => Object.values(a.prompt).some(x => x.class_type==='VAEEncodeForInpaint')) && !(await page.$('#cmPage [data-cpi="0"] img.cpimg')), 'a cut-out picture needs no background painting: white behind her rig');
-    await page.evaluate(() => { const p = cmPage().panels[0], st = cmStill(p); cmPlate(p, Object.assign({}, st, {cut:false, url:st.src})); });
-    await page.waitForTimeout(400); const pl = ALL.map(a => Object.values(a.prompt)).find(g => g.some(x => x.class_type==='VAEEncodeForInpaint'));
-    ok(pl && pl.some(x => x.class_type==='RemoveBackground') && pl.some(x => x.class_type==='GrowMask') && /no humans/.test(pl.filter(x => x.class_type==='CLIPTextEncode').map(x => x.inputs.text).join('|')) && check(Object.fromEntries(pl.map((x, j) => [String(j + 1), x]))).length===0,
-      'her picture without her is painted for behind the window (BiRefNet mask, grown, inpainted as background)');
-    await page.waitForFunction(() => cmPage().panels[0].plate || cmPage().panels[0].err, null, {timeout:20000});
-    ok(await page.evaluate(() => { const p = cmPage().panels[0], im = document.querySelector('#cmPage [data-cpi="0"] img.cpimg'); return !!(p.plate && p.plate.url && im && im.getAttribute('src')===p.plate.url); }), 'the panel shows the picture without her behind its window, framed the same');
+    // behind her: the scene's own background and grid floor (Jordan 2026-10-30: preferred to the picture with her painted out), so nothing is painted for it
+    ok(!ALL.some(a => Object.values(a.prompt).some(x => x.class_type==='VAEEncodeForInpaint')) && !(await page.$('#cmPage [data-cpi="0"] img.cpimg')), 'no background is painted and no picture sits under the window');
     // who the rig is: a library character
     const names = await page.$$eval('#comic [data-cmwho] option', o => o.map(x => x.textContent)); ok(names.length > 1 && names[0].includes('Mannequin'), 'she can be the mannequin or a library character: ' + names.join(', '));
     await page.selectOption('#comic [data-cmwho]', {index:1}); await page.waitForTimeout(200);

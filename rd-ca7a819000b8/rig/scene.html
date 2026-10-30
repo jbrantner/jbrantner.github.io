@@ -215,8 +215,8 @@ function winSaveCam(){ if(!PANEL || !SC) return; const c = camState(); if(JSON.s
   const L = local(), R = L.find(s => s.id===PANEL.base.id) || rec(); R.panels = R.panels || {}; R.panels[PANEL.pid] = Object.assign({}, R.panels[PANEL.pid], {cam:c, camLock:true}); R.saved = Date.now();
   PANEL.base.panels = PANEL.base.panels || {}; PANEL.base.panels[PANEL.pid] = Object.assign({}, PANEL.base.panels[PANEL.pid], {cam:c, camLock:true});
   keepLocal(L.filter(s => s.id!==R.id).concat([R])); winPost({cam:c}); clearTimeout(winT); winT = setTimeout(() => { if(PC.url) fetch(PC.url + '/renderdeck/scenes/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hidden:HID, scene:R})}).catch(() => {}); }, 700); }
-// in a window only the people and things are drawn, over the panel's own picture (Jordan 2026-10-30: "the exact same panel except replace her with a 3d rig")
-function winHide(){ for(const m of [grid, axX, axZ, ground, pgrid]) m.visible = false; for(const o of OBJ.values()){ o.disc.visible = o.label.visible = false; if(o.ob.fromEnv) o.g.visible = false; } }
+// a window shows the scene as it is, with its own background and grid floor (Jordan 2026-10-30: preferred over the panel's picture behind her); only the markers go
+function winHide(){ for(const m of [axX, axZ, pgrid]) m.visible = false; for(const o of OBJ.values()) o.disc.visible = o.label.visible = false; }
 // 🧍 who the rig is (Jordan 2026-10-30: "a 3d rig that I can make a different character like Ellen or Ellie"): the posed one keeps her pose and spot, and
 // becomes that library character, still in SAM's posed body from the picture (sized to her); her LoRA gives her look when it is painted
 addEventListener('message', e => { const d = e.data; if(WIN && e.origin===location.origin && d && d.rdwho) winWho(d.rdwho); if(WIN && e.origin===location.origin && d && d.rdrender) winRender(); });
@@ -266,12 +266,22 @@ function maskStats(m, W, H){ let top = -1, bot = -1, n = 0, sx = 0, sy = 0; for(
 function fitCamMask(o, az, M, W, H){ const PM = maskStats(M, W, H); if(!PM.n) return null; poseFor('cam'); o.g.updateMatrixWorld(true);
   const part = o.mq || o.mesh, bx = new THREE.Box3(); part.traverse(m => { if(m.isMesh && m.material && m.material.side!==THREE.BackSide && shownIn(m, part)) bx.expandByObject(m, true); }); // (her body only: not her picture card)
   if(bx.isEmpty()) return null; const c = bx.getCenter(new THREE.Vector3()), cut = PM.top <= 0; // (her head cut off: line up the middles)
-  const cam = new THREE.PerspectiveCamera(35, CAM_A, 0.02, 2000), tn = Math.tan(17.5 * D2R), right = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
+  const tn = Math.tan(17.5 * D2R), right = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
   // where to aim from D away so her head (or middle) starts out about where hers is in the picture; the leftover is lined up in the picture
   const aim = D => { const t = c.clone(); t.y = (cut ? c.y : bx.max.y) - (0.5 - (cut ? PM.cy : PM.top) / H) * 2 * D * tn; return t.addScaledVector(right, -((cut ? PM.cx : PM.tx) / W - 0.5) * 2 * D * tn * CAM_A); };
-  const tryD = D => { aimCam(cam, {az, el:0, d:D, t:aim(D)}); cam.aspect = CAM_A; cam.updateProjectionMatrix(); const R = rigMask(o, cam, W, H), RS = maskStats(R, W, H); if(!RS.n) return null;
-    const dx = Math.round(cut ? PM.cx - RS.cx : PM.tx - RS.tx), dy = Math.round(cut ? PM.cy - RS.cy : PM.top - RS.top); let a = 0, u = 0;
-    for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){ const ry = y - dy, rx = x - dx, r = ry >= 0 && ry < H && rx >= 0 && rx < W && R[ry * W + rx], p = M[y * W + x]; if(r && p) a++; if(r || p) u++; }
+  // the rig is drawn over twice the frame each way, so a rig too big for the frame can't win by filling it (Jordan 2026-10-30: a full-body yoga pose came in
+  // super zoomed in): past an edge of the frame only counts where her outline in the picture runs off that edge too (cut off there, like a close-up)
+  const ox = Math.round(W / 2), oy = Math.round(H / 2), W2 = W + 2 * ox, H2 = H + 2 * oy, A2 = CAM_A * W2 * H / (W * H2), cam2 = new THREE.PerspectiveCamera(35, A2, 0.02, 2000);
+  const edge = (f) => { for(let k = 0; k < 2; k++) for(let i = 0; i < (f < 2 ? H : W); i++) if(f===0 ? M[i * W + k] : f===1 ? M[i * W + W - 1 - k] : f===2 ? M[k * W + i] : M[(H - 1 - k) * W + i]) return true; return false; };
+  const off = {l:edge(0), r:edge(1), t:edge(2), b:edge(3)};
+  // (cam2 has the panel camera's own lens, widened to take in the margin)
+  const tryD = D => { aimCam(cam2, {az, el:0, d:D, t:aim(D)}); cam2.fov = 2 * Math.atan(Math.tan(cam2.fov / 2 * D2R) * H2 / H) / D2R; cam2.aspect = A2; cam2.updateProjectionMatrix(); const R = rigMask(o, cam2, W2, H2), RS = maskStats(R, W2, H2); if(!RS.n) return null;
+    const dx = Math.round(cut ? PM.cx - (RS.cx - ox) : PM.tx - (RS.tx - ox)), dy = Math.round(cut ? PM.cy - (RS.cy - oy) : PM.top - (RS.top - oy)); let a = 0, u = 0;
+    for(let Y = 0; Y < H2; Y++) for(let X = 0; X < W2; X++){ const ry = Y - dy, rx = X - dx, r = ry >= 0 && ry < H2 && rx >= 0 && rx < W2 && R[ry * W2 + rx], x = X - ox, y = Y - oy, inF = x >= 0 && x < W && y >= 0 && y < H, p = inF && M[y * W + x];
+      if(inF){ if(r && p) a++; if(r || p) u++; } else if(r && !((x < 0 ? off.l : x >= W ? off.r : true) && (y < 0 ? off.t : y >= H ? off.b : true))) u++; }
+    // (running past the margin too, on a side where she's whole in the picture: far too big)
+    const runs = (f) => { for(let i = 0; i < (f < 2 ? H2 : W2); i++){ const X = f===0 ? 0 : f===1 ? W2 - 1 : i, Y = f===2 ? 0 : f===3 ? H2 - 1 : i, rx = X - dx, ry = Y - dy; if(rx >= 0 && rx < W2 && ry >= 0 && ry < H2 && R[ry * W2 + rx]) return true; } return false; };
+    if((!off.l && runs(0)) || (!off.r && runs(1)) || (!off.t && runs(2)) || (!off.b && runs(3))) return null;
     return {D, dx, dy, iou:u ? a / u : 0}; };
   let best = null; for(let D = 0.25; D < 30; D *= 1.15){ const r = tryD(D); if(r && (!best || r.iou > best.iou)) best = r; } if(!best) return null;
   for(let D = best.D / 1.15; D < best.D * 1.15; D *= 1.025){ const r = tryD(D); if(r && r.iou > best.iou) best = r; }
@@ -700,8 +710,8 @@ function rects(){ const W = stage.clientWidth, H = stage.clientHeight; if(WIN) r
   if(view!=='quad') return {[view]:{x:0, y:0, w:W, h:H}};
   const w = W / 2, h = H / 2; return {persp:{x:0, y:0, w, h}, top:{x:w, y:0, w, h}, front:{x:0, y:h, w, h}, side:{x:w, y:h, w, h}}; }
 function draw(){ const W = stage.clientWidth, H = stage.clientHeight; if(renderer.domElement.width!==Math.round(W * renderer.getPixelRatio())) renderer.setSize(W, H, false);
-  const R = rects(); placeCams(R); renderer.setScissorTest(false); renderer.setClearColor(SCM && view==='cam' ? 0x111216 : 0x2b2e35, WIN ? 0 : 1); renderer.clear(); renderer.setScissorTest(true); renderer.setClearColor(0x2b2e35, WIN ? 0 : 1); // (outside the 📷 frame darker)
-  const bg0 = scene.background; if(WIN) scene.background = null;
+  const R = rects(); placeCams(R); renderer.setScissorTest(false); renderer.setClearColor(SCM && view==='cam' ? 0x111216 : 0x2b2e35, 1); renderer.clear(); renderer.setScissorTest(true); renderer.setClearColor(0x2b2e35, 1); // (outside the 📷 frame darker)
+  const bg0 = scene.background;
   const lit = !WIN && lightOn(); if(lit) placeLight(); for(const [k, r] of Object.entries(R)){ const y = H - r.y - r.h; renderer.setViewport(r.x, y, r.w, r.h); renderer.setScissor(r.x, y, r.w, r.h); poseFor(k); placeJoints(); if(WIN) winHide(); camRig.visible = k!=='cam'; sunMark.visible = lit && k!=='cam';
     if(lit && k==='cam'){ const pr = renderer.getPixelRatio(); litRender(camOf(k), Math.max(1, Math.round(r.w * pr)), Math.max(1, Math.round(r.h * pr)), null); } else renderer.render(scene, camOf(k)); } sunMark.visible = false;
   renderer.setScissorTest(false); scene.background = bg0;
