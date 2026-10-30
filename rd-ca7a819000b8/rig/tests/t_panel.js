@@ -59,9 +59,14 @@ const DEPS = process.env.RIG_DEPS || '';
   // a ⧉ duplicated panel starts as the one it came from
   await page.evaluate(() => postMessage({rdpanel:{scene:'scA', pid:'p3', ar:1, from:'p1'}}, location.origin)); await page.waitForFunction(() => SCENE.PANEL.pid==='p3');
   ok(await page.evaluate(() => SCENE.sc.objs.find(o => o.id==='o1').x===2 && !!SCENE.sc.objs.find(o => o.id==='o2').hide), 'a duplicated panel starts with its source panel\'s changes');
+  // the people a panel's words name are brought in and shown in it (only there, if new)
+  await page.evaluate(() => postMessage({rdpanel:{scene:'scA', pid:'p4', ar:1, who:[{ref:'3D/Mannequin', name:'Mannequin'}, {ref:'3D/Wooden chair', name:'Chair'}]}}, location.origin)); await page.waitForFunction(() => SCENE.PANEL.pid==='p4'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => SCENE.sc.objs.length===3 && !SCENE.sc.objs.find(o => o.id==='o1').hide && !SCENE.sc.objs.find(o => o.id==='o2').hide), 'named people are shown in the panel, no copies made');
+  await page.evaluate(() => postMessage({rdpanel:{scene:'scA', pid:'p5', ar:1, who:[{ref:'3D/Someone new', name:'Newbie'}]}}, location.origin)); await page.waitForFunction(() => SCENE.PANEL.pid==='p5'); await page.waitForTimeout(200);
+  { const r = await recOf(), nb = r.objs.find(o => o.ref==='3D/Someone new'); ok(nb && nb.hide===true && r.panels.p5.ov[nb.id].hide===false, 'someone named who is not in the scene yet joins it hidden, shown in this panel'); }
   // the PC copy is the same record, panels and all
   await page.waitForTimeout(1200);
-  ok(store.get('scA') && store.get('scA').panels && Object.keys(store.get('scA').panels).sort().join()==='p1,p2,p3', 'the PC gets the scene with its 3 panels');
+  ok(store.get('scA') && store.get('scA').panels && Object.keys(store.get('scA').panels).sort().join()==='p1,p2,p3,p4,p5', 'the PC gets the scene with its 5 panels');
   // opening the scene itself leaves the panel
   await page.evaluate(() => postMessage({rdopen:'scA'}, location.origin)); await page.waitForFunction(() => !SCENE.PANEL);
   ok(await page.evaluate(() => SCENE.sc.objs.find(o => o.id==='o1').x===0 && getComputedStyle(document.querySelector('#ptitle')).display==='none' && SCENE.CAM_A===0.8), 'opening the scene on its own shows the scene, not a panel');

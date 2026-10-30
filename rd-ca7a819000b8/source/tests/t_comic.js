@@ -111,7 +111,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   ok(JSON.stringify(rd.cast)==='[["Character 1","f"],["The man","m"]]', 'the cast: Character 1 (she, from the pronouns) and the man (he): ' + JSON.stringify(rd.cast));
   ok(JSON.stringify(rd.who)==='[["Character 1"],["Character 1"],["The man","Character 1"],["The man","Character 1"],["Character 1"]]', 'who is in each panel, pronouns included: ' + JSON.stringify(rd.who));
   ok(rd.place==='a street' && rd.lays >= 3, 'the place is "a street" and there are layouts to pick from (' + rd.lays + ')');
-  ok(await page.evaluate(() => cmSplit('A girl reads.\nA cat jumps on the desk.\nShe laughs.')[0].length===3 && cmSplit('Page 1: Panel 1: a. Panel 2: b. Page 2: Panel 1: c.').map(p => p.length).join()==='2,1'), 'no Panel markers: one panel a line; Page 2 starts a new page');
+  ok(await page.evaluate(() => cmSplit('A girl reads. A cat jumps on the desk.\n\nShe laughs.\nShe falls over.')[0].join('|')==='A girl reads. A cat jumps on the desk.|She laughs. She falls over.' && cmSplit('A girl reads. She smiles.\nA cat jumps.')[0].length===2 && cmSplit('Page 1: Panel 1: a. Panel 2: b. Page 2: Panel 1: c.').map(p => p.length).join()==='2,1' && cmSplit('Page 1\nA girl reads.\n\nShe laughs.\nPage 2\nA cat jumps.').map(p => p.length).join()==='2,1'), 'no Panel markers: one panel a paragraph (never a sentence); Page 2 starts a new page');
   ok(await page.evaluate(() => { const c = cmCast(['Librarian opens a book.', 'She smiles.'], []); return c.cast.length===1 && c.cast[0].cid==='lib' && c.who[1][0]===c.cast[0].id; }), 'a character card\'s name is that card, and "she" is her');
 
   // the tab
@@ -170,6 +170,34 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.click('#comic [data-cm="export"]');
     await page.waitForFunction(n => S.gallery.length===n + 1, n0, {timeout:15000});
     ok([...PCS.Render.outs, ...PCS.Main.outs].includes('RenderDeck/comics/pages') && await page.evaluate(() => /page_1\.png/.test(S.gallery[0].url)), 'the page is saved into RenderDeck/comics/pages and put at the front of the strip'); }
+  // ✍ the words: names become trigger words with her LoRA on; pieces that can be tags are highlighted and swap in on a tap
+  await page.evaluate(srv => { CCV.lib = {pc:srv, list:[{name:'Ellen', trigger:'ellenx', lora:'librarianx_v2.safetensors', ckpt:'iriselTouchIL_v10.safetensors', style:'AFKJ Style Illustrious Claude.safetensors', tags:'1girl, red hair, long skirt', subfolder:'Character Library/Ellen'}], objs:[], at:Date.now() + 1e9}; }, PCS.Render.url);
+  await page.click('#cmPage [data-cpi="0"]'); await page.fill('#comic [data-cmp="text"]', 'Ellen walks down the street'); await page.dispatchEvent('#comic [data-cmp="text"]', 'change'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => cmSrc(cmPage().panels[0])==='ellenx walks down the street' && cmChars(cmPage().panels[0]).map(e => e.name).join()==='Ellen'), 'typing "Ellen" puts her trigger word in, and her LoRA is on for the panel');
+  { const hl = await page.$$eval('#comic .cmed .cmhl', b => b.map(x => x.textContent + ':' + x.className)); ok(hl.some(x => /^ellenx:.*\bch\b/.test(x)) && hl.some(x => /^walks:/.test(x)) && hl.some(x => /street:/.test(x)), 'her trigger word and the pieces that can be tags are highlighted: ' + hl.join(' | ')); }
+  await page.click('#comic .cmed .cmhl.ch'); ok(/Her LoRA is on/.test(await page.textContent('#comic .cmed .cmsug')), 'tapping her name says her LoRA is on here');
+  await page.click('#comic .cmed [data-cmlora]'); ok(await page.evaluate(() => !cmChars(cmPage().panels[0]).length && (cmPage().panels[0].loraOff || []).length===1), 'and can turn it off for this panel');
+  await page.click('#comic .cmed .cmhl.ch'); await page.click('#comic .cmed [data-cmlora]'); ok(await page.evaluate(() => cmChars(cmPage().panels[0]).length===1), 'and on again');
+  await page.click('#cmPage [data-cpi="1"]'); await page.fill('#comic [data-cmp="text"]', 'A girl reads a book'); await page.dispatchEvent('#comic [data-cmp="text"]', 'change'); await page.waitForTimeout(200);
+  { const b = await page.$$('#comic .cmed .cmhl'), first = b.length ? await b[0].textContent() : ''; ok(first==='A girl', 'the highlight takes in "A girl": ' + first);
+    await b[0].click(); const sug = await page.textContent('#comic .cmed .cmsug'); ok(/1girl, solo/.test(sug), 'a tap shows what it can become: ' + sug);
+    await page.click('#comic .cmed [data-cmswap$=":-1"]'); ok(await page.evaluate(() => /^1girl, solo reads/.test(cmSrc(cmPage().panels[1]))), 'and another tap swaps it in: ' + await page.evaluate(() => cmSrc(cmPage().panels[1]))); }
+  // 🎲 the layout phase: N tries for the ticked panels, spread over both PCs
+  await page.click('#comic [data-cm="tryless"]'); for(let k = 0; k < 6; k++) await page.click('#comic [data-cm="tryless"]');
+  ok(await page.evaluate(() => CM().tryN===3) && /Make 3 tries for every panel/.test(await page.textContent('#comic [data-cm="tries"]')), 'the number of tries can be set (3 here)');
+  for(const j of [2, 3, 4, 5]) await page.click(`#comic [data-cmgen="${j}"]`);
+  ok(/Make 3 tries for 2 panels/.test(await page.textContent('#comic [data-cm="tries"]')), 'panels can be left out (only 1 and 2 here)');
+  { const n0 = ALL.length; await page.click('#comic [data-cm="tries"]');
+    await page.waitForFunction(() => [0, 1].every(i => (cmPage().panels[i].stills || []).filter(s => s.try).length >= 2 && !cmBusy(cmPage().panels[i])), null, {timeout:30000});
+    const G = ALL.slice(n0).map(x => x.prompt), n = g => Object.values(g); ok(G.length===4 && G.every(g => check(g).length===0), '2 panels × 2 jobs (2 + 1 tries), every graph valid: ' + G.length + ' ' + G.map(g => check(g).join(';')).join(' | '));
+    const g1 = G.find(g => n(g).some(x => x.class_type==='CLIPTextEncode' && /ellenx/.test(x.inputs.text)));
+    ok(g1 && n(g1).some(x => x.class_type==='LoraLoader' && x.inputs.lora_name==='librarianx_v2.safetensors') && n(g1).find(x => x.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && /red hair/.test(n(g1).find(x => x.class_type==='CLIPTextEncode').inputs.text), "panel 1's tries: her checkpoint, her LoRA, her trigger word and looks");
+    const r0 = await page.evaluate(() => cmRectsOf(cmPage())[0]), lat = n(g1).find(x => x.class_type==='EmptyLatentImage').inputs; ok(Math.abs(Math.log(lat.width / lat.height) - Math.log(Math.max(1 / 3, Math.min(3, r0.w / r0.h)))) < 0.1 && lat.width % 64===0, 'shaped like its panel: ' + lat.width + '×' + lat.height);
+    ok(new Set(ALL.slice(n0).map(x => x.client_id + (PCS.Render.sent.includes(x) ? 'R' : 'M'))).size===2, 'spread over both computers'); }
+  await page.click('#cmPage [data-cpi="0"]'); const s0 = await page.evaluate(() => cmPage().panels[0].still || 0);
+  await page.click('#cmPage [data-cpi="0"]'); ok(await page.evaluate(s0 => (cmPage().panels[0].still || 0)===s0 + 1, s0) && /2\//.test(await page.textContent('#cmPage [data-cpi="0"] .cpnav')), 'tapping the picked panel shows its next try, on the page');
+  await page.click('#cmPage [data-cpi="0"] [data-cmcyc="-1"]'); ok(await page.evaluate(s0 => (cmPage().panels[0].still || 0)===s0, s0), '‹ goes back');
+  if(process.env.SHOT) await page.screenshot({path:process.env.SHOT, fullPage:true});
   // the tab is remembered, and a 3D panel reopens on its comic page
   await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(100);
   await page.reload(); await page.waitForSelector('#cmPage .cpanel');
