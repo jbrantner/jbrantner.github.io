@@ -1366,7 +1366,7 @@ function groundWords(env){ const g = env.ground || {}; if(g.on===false) return '
 // minus anyone standing in front of her) is repainted at 0.5 with ONLY her LoRA, and her face fixed. 🖌 Repaint just her redoes
 // that one pass on the last render, from the same masks (worked out again from the scene, so nothing may move in between).
 const RS_DN = 0.5, // her own pass (Jordan 2026-10-29: 0.5 is the sweet spot)
-      RS_BLEND = 0.25,
+      RS_BLEND = 0.25, RS_ZOOM = 0.4, // (🔍 the close-up's last pass)
       RS_CM = 0.85, // 🎨 how far the finished picture is pulled back to the first painting's colour and contrast // 🎞 the blend over everything at the end (Jordan 2026-10-29: on by default at 0.25)
       RS_AREA = 1048576, RS_UP = 1.5; // painted at about a megapixel (what Illustrious paints best), then 1.5× before the passes
 const SCN = SCM && !POSE; // (the 🎬 Scene tab itself: no picture cards there any more, everyone is their mannequin)
@@ -1406,6 +1406,13 @@ const rsNeg = n => n > 1 ? NEG.replace(/,\s*multiple girls,\s*2girls\s*$/, '') :
 // the 📷 Camera at the painting's shape, everyone shown as their mannequin / 3D model
 function rsCam(W, H){ if(!SC.d3){ SC.d3 = true; drawD3(); } if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); }
   placeCams(rects()); poseFor('cam'); const cam = shotCam.clone(); cam.aspect = W / H; cam.updateProjectionMatrix(); cam.updateMatrixWorld(true); return cam; }
+// 🔍 how much wider than the Camera to paint, so everyone it shows part of is in the picture whole (1: they all fit already; at most 3×)
+function rsZoomOut(cam, chars){ let z = 1; for(const o of chars){ const part = o.mq; if(!part || !o.g.visible) continue; o.g.updateMatrixWorld(true); const bx = new THREE.Box3();
+    part.traverse(m => { if(m.isMesh && m.material && m.material.side!==THREE.BackSide && shownIn(m, part)) bx.expandByObject(m, true); }); if(bx.isEmpty()) continue;
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for(let i = 0; i < 8; i++){ const p = new THREE.Vector3(i & 1 ? bx.max.x : bx.min.x, i & 2 ? bx.max.y : bx.min.y, i & 4 ? bx.max.z : bx.min.z).applyMatrix4(cam.matrixWorldInverse); if(p.z > -0.01) continue;
+      p.applyMatrix4(cam.projectionMatrix); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+    if(x1 < -1 || x0 > 1 || y1 < -1 || y0 > 1) continue; z = Math.max(z, Math.max(-x0, x1, -y0, y1) / 0.92); } // (only people the Camera sees some of)
+  return z > 1.15 ? Math.min(3, z) : 1; }
 function rsSize(){ placeCams(rects()); const a = shotCam.aspect || 0.8, H = Math.max(512, Math.round(Math.sqrt(RS_AREA / a) / 64) * 64), W = Math.max(512, Math.round(H * a / 64) * 64);
   return {W, H, FW:Math.round(W * RS_UP / 8) * 8, FH:Math.round(H * RS_UP / 8) * 8}; }
 // for each one: where someone nearer the Camera covers the picture (her own pass must leave them alone)
@@ -1461,7 +1468,8 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
   try{ const items = rsItems(), env = envOf(SC.env) || {}, chars = rsChars(items), lead = chars.map(o => o.e).find(e => e.ckpt) || {};
     if(!items.length && !SC.env) throw new Error('Nothing to paint yet: ＋ a character or an object, or pick a 🌄 Environment.');
     msg('🎬 Asking the PCs for their models…'); const K = await rsKit(chars, lead, PC.url), url = K.url;
-    const {W, H, FW, FH} = rsSize(), cam = rsCam(W, H), key = rsKey(items), stamp = Date.now().toString(36), up = (c, n) => upload(url, c, 'rd-scene-' + n + '-' + stamp + '.png');
+    const {W, H, FW, FH} = rsSize(), cam = rsCam(W, H), Z = rsZoomOut(cam, chars), key = rsKey(items), stamp = Date.now().toString(36), up = (c, n) => upload(url, c, 'rd-scene-' + n + '-' + stamp + '.png');
+    if(Z > 1){ cam.fov = 2 * Math.atan(Math.tan(cam.fov / 2 * D2R) * Z) / D2R; cam.updateProjectionMatrix(); } // (her whole figure painted, then cropped back: rsZoomOut)
     msg('🎬 Sending the scene to ' + pcName(url) + '…'); const masks = regionMasks(items, cam, FW, FH), front = rsFront(items, masks, cam);
     const dn = await up(sceneDepth(cam, W, H, items), 'sdepth'), pn = chars.some(o => o.mq.userData.body) && await up(scenePose(chars, cam, W, H), 'spose'), mn = [], fn = [];
     for(let i = 0; i < masks.length; i++) mn.push(await up(masks[i], 'mask' + i)); if(K.dfe) for(let i = 0; i < items.length; i++) fn.push(rsChars([items[i]]).length ? await up(front[i].c, 'front' + i) : '');
@@ -1494,15 +1502,24 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
         .forEach(i => { out = herPass(add, K, ck, out, items[i], words[i], mn[i], fn[i], FH, seed + 1 + i, T.sam, T.det, chars.length); }); }
     // 🎞 Blend (Jordan 2026-10-29): the whole picture once more, lightly, with the same regions and LoRAs as the first painting, no ControlNet,
     // so light and edges melt together after the separate passes (light, so it doesn't pull them away from their own LoRAs)
-    const blend = SC.blend!==false && !!(K.dfe && chars.length);
+    // 🔍 a close-up (Jordan 2026-10-30: "it fits the rig to full view ... renders the whole figure, and then zooms in again to do its last blend pass"):
+    // the Camera's own view cut out of the middle of the whole-figure painting, scaled up, and painted over once more for detail, with the
+    // close-up's own depth and everyone's words; this takes the place of the 🎞 blend
+    let ref = first; if(Z > 1){ const cw = Math.round(FW / Z / 8) * 8, chh = Math.round(FH / Z / 8) * 8, crop = img => [add('ImageScale', {image:[add('ImageCrop', {image:img, width:cw, height:chh, x:Math.round((FW - cw) / 2), y:Math.round((FH - chh) / 2)}), 0], upscale_method:'lanczos', width:FW, height:FH, crop:'disabled'}), 0];
+      out = crop(out); ref = crop(first); const cam1 = rsCam(W, H), dz = await up(sceneDepth(cam1, W, H, items), 'cdepth'), TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8};
+      const zp = add('CLIPTextEncode', {clip, text:[all, ...words].filter(Boolean).join(', ') + ', masterpiece, best quality, amazing quality, detailed'});
+      const zc = add('ControlNetApplyAdvanced', {positive:[zp, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dz}), 0], strength:0.5, start_percent:0, end_percent:0.5, vae:[ck, 2]});
+      const zk = add('KSampler', {model, seed:seed + 77, steps:24, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[zc, 0], negative:[zc, 1], latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_ZOOM});
+      out = [add('VAEDecodeTiled', {samples:[zk, 0], vae:[ck, 2], ...TILE}), 0]; }
+    const blend = Z <= 1 && SC.blend!==false && !!(K.dfe && chars.length);
     if(blend){ const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, bl = add('KSampler', {model, seed:seed + 99, steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
         latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_BLEND}); out = [add('VAEDecodeTiled', {samples:[bl, 0], vae:[ck, 2], ...TILE}), 0]; }
     // 🎨 (Jordan 2026-10-29: the final came out washed out) every pass after the first goes back through the VAE and greys the colours a little;
     // the finished picture's overall colour and contrast (Lab mean and spread, the whole picture at once, so the repainted background and
     // the characters' passes keep their own colours) are matched back to the first painting's (Render Deck's colour-match node)
-    if(K.ccm) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:first, strength:RS_CM}), 0];
+    if(K.ccm) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:ref, strength:RS_CM}), 0];
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    await rsRun(url, g, save, t => msg('🎬 Painting the scene, then the background' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
+    await rsRun(url, g, save, t => msg('🎬 Painting the scene, then the background' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + (Z > 1 ? ' then the close-up' : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
     msg('Done: the rendered scene is in the viewer (and in 🖼 Renders).' + (miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : '') + (!K.dfe && chars.length ? ' (' + pcName(url) + ' has no Impact Pack Detailer, so the characters got no pass of their own.)' : '')); }
   catch(err){ msg(err.message || String(err)); }
