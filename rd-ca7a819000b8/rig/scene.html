@@ -335,8 +335,8 @@ let sdT = null;
 async function drawDesc(){ const t = (SC && SC.desc) || ''; if(document.activeElement!==$('#sdesc')) $('#sdesc').value = t; $('#sdtags').textContent = t.trim() && !POSE ? '→ ' + (await tagsOf(t)) : ''; }
 $('#sdesc').oninput = e => { if(!SC) return; SC.desc = e.target.value; changed(); clearTimeout(sdT); sdT = setTimeout(drawDesc, 600); };
 function showImg(u){ VIMG = u || ''; const im = $('#viewimg'); if(VIMG) im.src = VIMG; else im.removeAttribute('src'); im.hidden = !VIMG; drawViews(); dirty = true; }
-$('#rscene').onclick = () => renderScene(); $('#rbg').onclick = () => repaintBg(); $('#rup').onclick = () => upscaleScene(); $('#rblend').onclick = () => { if(!SC) return; SC.blend = SC.blend===false; drawBlend(); changed(); };
-const drawBlend = () => $('#rblend').setAttribute('aria-pressed', !!SC && SC.blend!==false);
+$('#rscene').onclick = () => renderScene(); $('#rbg').onclick = () => repaintBg(); $('#rup').onclick = () => upscaleScene(); $('#rblend').onclick = () => { if(!SC) return; SC.blend = SC.blend!==true; drawBlend(); changed(); };
+const drawBlend = () => $('#rblend').setAttribute('aria-pressed', !!SC && SC.blend===true);
 $('#new').onclick = () => { const n = prompt('Name for the new ' + WORD.toLowerCase(), WORD + ' ' + (scenesAll.length + 1)); if(n!=null) newScene(n.trim() || undefined); };
 $('#ren').onclick = () => { if(!SC) return; const n = prompt('Rename this ' + WORD.toLowerCase(), SC.name); if(n && n.trim()){ SC.name = n.trim(); drawScenes(); changed(); } };
 $('#del').onclick = async () => { if(!SC || !confirm(ENV ? 'Delete the environment "' + SC.name + '"? Scenes that use it lose their background.' : 'Delete the ' + WORD.toLowerCase() + ' "' + SC.name + '"? The characters in it stay in the library.')) return; const id = SC.id;
@@ -679,6 +679,8 @@ function poseFor(view){ const cam = view==='persp' ? shotCam : camOf(view), top 
     // (Jordan 2026-10-28: a 📸 Rendered sitting girl cast an A-pose shadow)
     if(o.mesh){ o.mesh.scale.setScalar(s); o.mesh.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mesh, ob.pose || 'stand', ob.bq); }
     if(o.mq){ o.mq.scale.setScalar(s * mqHeight(o) / 1.7); o.mq.rotation.y = (ob.rot || 0) * D2R; poseBody(o.mq, ob.pose || 'stand', ob.bq);
+      // (a SAM body that didn't come, a 17 MB download over the phone's link, is asked for again every few seconds rather than leaving her mannequin up: Jordan 2026-10-30)
+      if(o.ob.sam && !o.samG && !o.samTry && Date.now() - (o.samT || 0) > 4000){ o.samT = Date.now(); o.samTry = true; samAttach(o).finally(() => { o.samTry = false; dirty = true; }); }
       if(o.samG){ const on = samOn(o); o.samG.visible = on; o.mq.children.forEach(c => { if(c!==o.samG) c.visible = !on; }); } } // 🧍 the photo's own 3D body in her place while she keeps its pose
     if(o.mesh && o.shot){ const md = modeOf(ob); o.mesh.visible = md!=='shot'; o.shot.visible = false; if(md==='shot'){ if(!top) placeShot(o, cam); continue; } }
     if(o.mesh) continue; // 🪑 a 3D model just turns with its spot: right from every angle
@@ -1331,7 +1333,7 @@ function samGet(s){ const k = s.pc + '|' + s.sub + '|' + s.file; if(!SAMG.has(k)
     const r = await fetch(s.pc + '/view?filename=' + encodeURIComponent(s.file) + '&subfolder=' + encodeURIComponent(s.sub || '') + '&type=output'); if(!r.ok) throw new Error('it did not come (' + r.status + ')');
     return (await new GLTFLoader().parseAsync(await r.arrayBuffer(), '')).scene; })().catch(e => { SAMG.delete(k); console.warn('The photo\'s 3D body: ' + (e.message || e)); return null; }));
   return SAMG.get(k); }
-async function samAttach(o){ const s = o.ob.sam; if(!s || !o.mq) return; const src = await samGet(s); if(!src || OBJ.get(o.ob.id)!==o || o.ob.sam!==s) return;
+async function samAttach(o){ const s = o.ob.sam; if(!s || !o.mq) return; const src = await samGet(s); if(!src || OBJ.get(o.ob.id)!==o || !o.ob.sam || o.ob.sam.file!==s.file) return;
   const SU = await import('three/addons/utils/SkeletonUtils.js'), body = SU.clone(src), mat = new THREE.MeshToonMaterial({color:0xd8d2cc, gradientMap:TOON}), bn = {}; let sk = null;
   body.traverse(m => { if(m.isMesh){ m.material = mat; m.frustumCulled = false; if(m.isSkinnedMesh) sk = m; } if(/^bone_\d+$/.test(m.name)) bn[m.name] = m; });
   if(!sk || !bn.bone_113) return; const g = new THREE.Group(), turn = new THREE.Group(); turn.add(body); g.add(turn); g.userData = {bn, sk, turn};
@@ -1369,7 +1371,7 @@ function groundWords(env){ const g = env.ground || {}; if(g.on===false) return '
 // that one pass on the last render, from the same masks (worked out again from the scene, so nothing may move in between).
 const RS_DN = 0.5, // her own pass (Jordan 2026-10-29: 0.5 is the sweet spot)
       RS_BLEND = 0.25, RS_ZOOM = 0.4, // (🔍 the close-up's last pass)
-      RS_CM = 0.85, // 🎨 how far the finished picture is pulled back to the first painting's colour and contrast // 🎞 the blend over everything at the end (Jordan 2026-10-29: on by default at 0.25)
+      RS_CM = 0.5, // (was 0.85: Jordan 2026-10-30 found the colours oversaturated) // 🎨 how far the finished picture is pulled back to the first painting's colour and contrast // 🎞 the blend over everything at the end (Jordan 2026-10-29: on by default at 0.25)
       RS_AREA = 1048576, RS_UP = 1.5; // painted at about a megapixel (what Illustrious paints best), then 1.5× before the passes
 const SCN = SCM && !POSE; // (the 🎬 Scene tab itself: no picture cards there any more, everyone is their mannequin)
 function sceneHide(){ const hid = [], hide = m => { if(m && m.visible){ m.visible = false; hid.push(m); } };
@@ -1406,7 +1408,8 @@ const rsKey = items => JSON.stringify([SC.env || '', items.map(o => [o.ob.id, sh
 const rsChars = items => items.filter(o => o.ob.kind!=='obj' && o.mq);
 // the first painting's ControlNet: the rig's (loose, so she isn't stiff) or SAM's body's (held closer)
 const RS_CN = {d:0.55, de:0.6, p:0.9, pe:0.75, z:0.5}, RS_CN_SAM = {d:0.8, de:0.8, p:1, pe:0.85, z:0.65};
-const rsCN = chars => chars.some(samOn) ? RS_CN_SAM : RS_CN;
+// (a 📖 comic panel always holds close: Jordan 2026-10-30, her angle didn't match the posed body)
+const rsCN = chars => PANEL || chars.some(samOn) ? RS_CN_SAM : RS_CN;
 const rsNeg = n => n > 1 ? NEG.replace(/,\s*multiple girls,\s*2girls\s*$/, '') : NEG; // (two or more people are wanted here)
 // the 📷 Camera at the painting's shape, everyone shown as their mannequin / 3D model
 function rsCam(W, H){ if(!SC.d3){ SC.d3 = true; drawD3(); } if(view!=='cam'){ view = 'cam'; ui.view = view; saveUi(); drawViews(); }
@@ -1519,7 +1522,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
       const zc = add('ControlNetApplyAdvanced', {positive:[zp, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dz}), 0], strength:CN.z, start_percent:0, end_percent:CN.z, vae:[ck, 2]});
       const zk = add('KSampler', {model, seed:seed + 77, steps:24, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[zc, 0], negative:[zc, 1], latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_ZOOM});
       out = [add('VAEDecodeTiled', {samples:[zk, 0], vae:[ck, 2], ...TILE}), 0]; }
-    const blend = Z <= 1 && SC.blend!==false && !!(K.dfe && chars.length);
+    const blend = Z <= 1 && SC.blend===true && !!(K.dfe && chars.length); // (off unless turned on: Jordan 2026-10-30)
     if(blend){ const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, bl = add('KSampler', {model, seed:seed + 99, steps:20, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
         latent_image:[add('VAEEncodeTiled', {pixels:out, vae:[ck, 2], ...TILE}), 0], denoise:RS_BLEND}); out = [add('VAEDecodeTiled', {samples:[bl, 0], vae:[ck, 2], ...TILE}), 0]; }
     // 🎨 (Jordan 2026-10-29: the final came out washed out) every pass after the first goes back through the VAE and greys the colours a little;

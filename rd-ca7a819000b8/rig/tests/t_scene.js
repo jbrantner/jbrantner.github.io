@@ -183,6 +183,7 @@ const DEPS = process.env.RIG_DEPS || '';
       document.querySelector('#allmsg').textContent = ''; scrollTo(0, 0); SCENE.reload(); });
     await page.waitForTimeout(500);
     await page.evaluate(() => { SCENE.sc.desc = 'hug'; SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie').words = 'angry'; });
+    ok(await page.evaluate(() => document.querySelector('#rblend').getAttribute('aria-pressed')==='false'), '🎞 the blend is off by default (Jordan 2026-10-30)'); await page.click('#rblend'); // (turned on here, to check it)
     const n0 = GRAPHS.length, u0 = UPS.length; await page.click('#rscene'); await page.waitForFunction(() => /Done|rror|No PC|not/i.test((document.querySelector('#allmsg') || {}).textContent || ''), null, {timeout:30000});
     const msgT = await page.textContent('#allmsg'), g = GRAPHS[GRAPHS.length - 1], v = Object.values(g), cls = v.map(n => n.class_type), ups = UPS.slice(u0), un = ups.map(u => u.name), txt = v.filter(n => n.class_type==='CLIPTextEncode').map(n => n.inputs.text);
     const ks = v.find(n => n.class_type==='KSampler'), lat = v.find(n => n.class_type==='EmptyLatentImage'), types = v.filter(n => n.class_type==='SetUnionControlNetType').map(n => n.inputs.type), sc = v.find(n => n.class_type==='ImageScale');
@@ -201,9 +202,9 @@ const DEPS = process.env.RIG_DEPS || '';
       const lor = []; let m = bl && g[bl.inputs.model[0]]; while(m && m.class_type==='LoraLoader'){ lor.push(m.inputs.lora_name); m = g[m.inputs.model[0]]; }
       const bgk = kss.find(k => k.inputs.denoise===0.6), bgl = []; { let m = bgk && g[bgk.inputs.model[0]]; while(m && m.class_type==='LoraLoader'){ bgl.push(m.inputs.lora_name); m = g[m.inputs.model[0]]; } }
       ok(kss.length===3 && bgk && bgl.join()==='AFKJ Style Illustrious Claude.safetensors' && g[bgk.inputs.latent_image[0]].class_type==='SetLatentNoiseMask', '🌄 after the first painting the background is painted again on its own, style LoRA only (no character LoRAs, no people): ' + JSON.stringify(bgl));
-      ok(cfx.class_type==='RenderDeckCutoutColorMatch' && cfx.inputs.strength===0.85 && g[cfx.inputs.image_ref[0]].class_type==='ImageScale', '🎨 the finished picture is colour-matched back to the first painting (passes through the VAE wash it out)');
+      ok(cfx.class_type==='RenderDeckCutoutColorMatch' && cfx.inputs.strength===0.5 && g[cfx.inputs.image_ref[0]].class_type==='ImageScale', '🎨 the finished picture is colour-matched back to the first painting (passes through the VAE wash it out)');
       ok(bl && dec.class_type==='VAEDecodeTiled' && enc.class_type==='VAEEncodeTiled' && g[enc.inputs.pixels[0]].class_type==='DetailerForEach' && g[bl.inputs.positive[0]].class_type==='ConditioningCombine' && lor.join()==='elliex.safetensors,AFKJ Style Illustrious Claude.safetensors' && await page.evaluate(() => document.querySelector('#rblend').getAttribute('aria-pressed')==='true'),
-        '🎞 then the blend: the finished picture once more at 0.25, same regions and LoRAs as the first painting, no ControlNet (🎞 on by default): ' + JSON.stringify({kss:kss.map(k => k.inputs.denoise), lor})); }
+        '🎞 then the blend: the finished picture once more at 0.25, same regions and LoRAs as the first painting, no ControlNet (🎞 when turned on): ' + JSON.stringify({kss:kss.map(k => k.inputs.denoise), lor})); }
     const body = dfe.filter(d => d.inputs.denoise===0.5), first = maskOf(body[0]), fr = ups.filter(u => /^rd-scene-front\d/.test(u.name)), far = fr.find(u => /front0/.test(u.name)), near = fr[fr.length - 1]; // (Ellie is item 0, far back; Ellie 2 the last, in front)
     ok(/^rd-scene-mask0-/.test(first) && fr.length===2 && far.body.length > near.body.length && un.filter(n => /^rd-scene-mask\d/.test(n)).length===4,
       '↕ the farther Ellie goes first (the nearer one is painted on top), and only the farther one has someone in front of her to keep clear of: ' + JSON.stringify({first, front:fr.map(u => u.name + ' ' + u.body.length)}));
