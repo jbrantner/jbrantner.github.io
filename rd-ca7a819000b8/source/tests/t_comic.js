@@ -174,14 +174,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   await page.evaluate(srv => { CCV.lib = {pc:srv, list:[{name:'Ellen', trigger:'ellenx', lora:'librarianx_v2.safetensors', ckpt:'iriselTouchIL_v10.safetensors', style:'AFKJ Style Illustrious Claude.safetensors', tags:'1girl, red hair, long skirt', subfolder:'Character Library/Ellen'}], objs:[], at:Date.now() + 1e9}; }, PCS.Render.url);
   await page.click('#cmPage [data-cpi="0"]'); await page.fill('#comic [data-cmp="text"]', 'Ellen walks down the street'); await page.dispatchEvent('#comic [data-cmp="text"]', 'change'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => cmSrc(cmPage().panels[0])==='ellenx walks down the street' && cmChars(cmPage().panels[0]).map(e => e.name).join()==='Ellen'), 'typing "Ellen" puts her trigger word in, and her LoRA is on for the panel');
-  { const hl = await page.$$eval('#comic .cmed .cmhl', b => b.map(x => x.textContent + ':' + x.className)); ok(hl.some(x => /^ellenx:.*\bch\b/.test(x)) && hl.some(x => /^walks:/.test(x)) && hl.some(x => /street:/.test(x)), 'her trigger word and the pieces that can be tags are highlighted: ' + hl.join(' | ')); }
+  { const hl = await page.$$eval('#comic .cmed .cmhl', b => b.map(x => x.textContent + ':' + x.className)); ok(hl.length===1 && /^ellenx:.*\bch\b/.test(hl[0]), 'only her trigger word is marked: no tag guessing in Comic (Jordan 2026-10-30): ' + hl.join(' | ')); }
   await page.click('#comic .cmed .cmhl.ch'); ok(/Her LoRA is on/.test(await page.textContent('#comic .cmed .cmsug')), 'tapping her name says her LoRA is on here');
   await page.click('#comic .cmed [data-cmlora]'); ok(await page.evaluate(() => !cmChars(cmPage().panels[0]).length && (cmPage().panels[0].loraOff || []).length===1), 'and can turn it off for this panel');
   await page.waitForTimeout(700); if(!(await page.$('#comic .cmed [data-cmlora]'))) await page.click('#comic .cmed .cmhl.ch'); await page.click('#comic .cmed [data-cmlora]'); ok(await page.evaluate(() => cmChars(cmPage().panels[0]).length===1), 'and on again');
   await page.click('#cmPage [data-cpi="1"]'); await page.fill('#comic [data-cmp="text"]', 'A girl reads a book'); await page.dispatchEvent('#comic [data-cmp="text"]', 'change'); await page.waitForTimeout(200);
-  { const b = await page.$$('#comic .cmed .cmhl'), first = b.length ? await b[0].textContent() : ''; ok(first==='A girl', 'the highlight takes in "A girl": ' + first);
-    await b[0].click(); const sug = await page.textContent('#comic .cmed .cmsug'); ok(/1girl, solo/.test(sug), 'a tap shows what it can become: ' + sug);
-    await page.click('#comic .cmed [data-cmswap$=":-1"]'); ok(await page.evaluate(() => /^1girl, solo reads/.test(cmSrc(cmPage().panels[1]))), 'and another tap swaps it in: ' + await page.evaluate(() => cmSrc(cmPage().panels[1]))); }
+  ok(!(await page.$('#comic .cmed .cmhl')), 'words with no character in them have nothing marked');
   // 🎲 the layout phase: N tries for the ticked panels, spread over both PCs
   await page.click('#comic [data-cm="tryless"]'); for(let k = 0; k < 6; k++) await page.click('#comic [data-cm="tryless"]');
   ok(await page.evaluate(() => CM().tryN===3) && /Make 3 tries for every panel/.test(await page.textContent('#comic [data-cm="tries"]')), 'the number of tries can be set (3 here)');
