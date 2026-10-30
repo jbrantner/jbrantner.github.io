@@ -612,7 +612,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.316'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.317'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4844,13 +4844,13 @@ function cmMake3d(i){ const pg = cmPage(), p = pg && pg.panels[i], st = p && cmS
   CM_MK3D[p.id] = {msg:'Getting the 3D page ready…'}; let o = $('#scnbg'); if(!o){ o = document.createElement('div'); o.id = 'scnbg'; o.setAttribute('aria-hidden', 'true'); document.body.appendChild(o); }
   const old = o.querySelector(`[data-pid="${p.id}"]`); if(old) old.remove();
   const fr = document.createElement('iframe'); fr.dataset.pid = p.id; fr.title = 'Making panel ' + (i + 1) + ' 3D'; fr.src = scnPanelSrc('scene', pp) + '&bg=1'; o.appendChild(fr);
-  delete p.plate; p.stillPicked = true; drawComic(); cmPlate(p, st); }
+  delete p.plate; p.stillPicked = true; drawComic(); }
 // 🧊 a 3D panel is a live window into its scene, on the page (Jordan 2026-10-30: "a window into the 3d render scene but still a comic panel"):
 // one frame per panel laid over the page and kept across redraws (moving a frame would load it again); the picked panel's frame takes the
 // fingers (drag turns round her, pinch zooms; it keeps that camera), the others let a tap through to pick the panel or scroll the page
 const CM_WIN = new Map(); let CM_WINV = 0;
-// behind a 3D panel's window: its picture with her taken out (once made), framed the same; a cut-out leaves just white
-const cm3dPic = (p, st) => !st || !cm3dOn(p) ? st : p.plate && p.plate.url ? Object.assign({}, st, {url:p.plate.url, cut:false}) : st.cut ? Object.assign({}, st, {url:''}) : st;
+// a 3D panel's window shows its scene's own background and grid floor (Jordan 2026-10-30: preferred), so no picture under it
+const cm3dPic = (p, st) => !st || !cm3dOn(p) ? st : Object.assign({}, st, {url:''});
 const cm3dOn = p => p && p.is3d && p.sc && !CM_MK3D[p.id] && (!p.pic2d || (CM_REND[p.id] && !CM_REND[p.id].err));
 // 🎨 Render as her (Jordan 2026-10-30: "is there a way to rerender as ellen?"): the panel's 🎬 Render Scene, run in its window, from its camera, with
 // her LoRA (She is); the painting joins the panel's pictures and shows
@@ -4895,25 +4895,6 @@ async function cmCut(p){ const pg = cmPage(), i = pg.panels.indexOf(p), st = cmS
     const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
     c.making = {pc:k.url, id:j.prompt_id, save:sv, t:t0, prefix, mins:0.3 * cmSlow(k.url), smp:samplerOf(g), kind:'cut', video:false}; delete c.busy; save(); drawComic(); cmWait(c); }
   catch(err){ delete c.busy; p.err = "Couldn't cut out panel " + (i + 1) + ': ' + err.message; cmDrop(c); save(); drawComic(); } }
-// 🧊 the panel's picture without her (Jordan 2026-10-30: the 3D panel is "the exact same panel except replace her with a 3d rig"): BiRefNet finds her,
-// the mask grows a little and Illustrious paints that part again as background only. A cut-out picture needs none (white behind her)
-async function cmPlate(p, st){ const pg = cmPage(), i = pg.panels.indexOf(p), url = st.cut ? '' : st.url; if(!url && !S.test){ delete p.plate; return; }
-  const kits = cmIllKits().filter(k => k.bg && k.ckpt && k.oi.GrowMask && k.oi.VAEEncodeForInpaint); if(!kits.length){ delete p.plate; return; }
-  const k = kits.sort((a, b) => (pcOf(a.url).load || 0) * cmSlow(a.url) - (pcOf(b.url).load || 0) * cmSlow(b.url))[0], c = {id:uid('x'), parent:p.id, from:{url, w:st.w, h:st.h}};
-  p.extra = (p.extra || []).concat([c]); c.busy = 'Taking her out of the background…'; drawComic();
-  try{ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:k.oi[cls] ? fillIn(k.oi, cls, inputs) : inputs, _meta:{title:cls}}; return id; };
-    const I = cmIll(), st0 = styleText('illustrious'), img = S.test ? 'test.png' : await cmUp(url, k.url), prefix = cmPrefixP(pg, i, 'plate'), li = [add('LoadImage', {image:img}), 0];
-    const ck = add('CheckpointLoaderSimple', {ckpt_name:k.ckpt}); let model = [ck, 0], clip = [ck, 1]; const style = k.has(I.style || '');
-    if(style){ const l = add('LoraLoader', {model, clip, lora_name:style, strength_model:I.styleW || 1, strength_clip:I.styleW || 1}); model = [l, 0]; clip = [l, 1]; }
-    const tags = cmTryTags(p, (cmSrc(p) || '').replace(/\\/g, '')).split(/[,.;!?]/).map(x => x.trim()).filter(x => x && !/\b(\d*(girls?|boys?|others?)|solo|woman|man|person|people|she|her|he|him|hair|eyes?|dress|skirt|shirt|smile|looking|standing|sitting|walking|crouching|squatting)\b/i.test(x));
-    const enc = t => [add('CLIPTextEncode', {clip, text:t}), 0], mask = [add('GrowMask', {mask:[add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:k.bg}), 0], image:li}), 0], expand:24, tapered_corners:true}), 0];
-    const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 1e12), steps:CM_TRY_STEPS, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:enc(['no humans, scenery, background'].concat(tags, [st0.pos]).filter(Boolean).join(', ')),
-      negative:enc('1girl, 1boy, person, human, people, character, figure, ' + st0.neg), latent_image:[add('VAEEncodeForInpaint', {pixels:li, vae:[ck, 2], mask, grow_mask_by:8}), 0], denoise:1});
-    const sv = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], filename_prefix:prefix});
-    if(S.test){ CM_SENT.push(g); await new Promise(r => setTimeout(r, 150)); delete c.busy; cmGot(c, 'plate', {url:'', test:true}); return; }
-    const t0 = Date.now(), r = await fetch(k.url + '/prompt', {method:'POST', headers:JSONH, body:JSON.stringify({prompt:g, client_id:clientId})}), j = await r.json(); if(!r.ok || !j.prompt_id) throw new Error(explain(j, {}));
-    c.making = {pc:k.url, id:j.prompt_id, save:sv, t:t0, prefix, mins:0.6 * cmSlow(k.url), smp:samplerOf(g), kind:'plate', video:false}; delete c.busy; save(); drawComic(); cmWait(c); }
-  catch(err){ delete c.busy; p.err = "Couldn't take her out of panel " + (i + 1) + "'s background: " + err.message; cmDrop(c); save(); drawComic(); } }
 function cmGotPlate(c, it){ const p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p) return; p.plate = Object.assign(it.url ? {url:it.url} : {test:true}, {of:c.from.url, w:c.from.w, h:c.from.h, t:Date.now()}); save(); if(!$('#comic').hidden) drawComic(); }
 function cmGotCut(c, it){ const p = cmAll().find(x => x.id===c.parent && !x.parent); cmDrop(c); if(!p) return; const f = c.from || {};
   const st = Object.assign(it.url ? {url:it.url} : {test:true}, {w:f.w, h:f.h, cut:true, src:f.url, fr:f.fr ? JSON.parse(JSON.stringify(f.fr)) : undefined, t:Date.now()});

@@ -78,15 +78,16 @@ const DEPS = process.env.RIG_DEPS || '';
   // opening the scene itself leaves the panel
   await page.evaluate(() => postMessage({rdopen:'scA'}, location.origin)); await page.waitForFunction(() => !SCENE.PANEL);
   ok(await page.evaluate(() => SCENE.sc.objs.find(o => o.id==='o1').x===0 && getComputedStyle(document.querySelector('#ptitle')).display==='none' && SCENE.CAM_A===0.8), 'opening the scene on its own shows the scene, not a panel');
-  // 📖 a comic panel's window (?win=1, Jordan 2026-10-30): only the panel camera's view, see-through round the people; drag turns round her and keeps that
+  // 📖 a comic panel's window (?win=1, Jordan 2026-10-30): only the panel camera's view, with the scene's own background and grid floor; drag turns round her and keeps that
   // camera for this panel alone (another window's camera in the same scene isn't undone); a tap tells the comic page; ?w3= makes the posed one a library character
   { const r0 = await recOf(); r0.panels.p1.cam = {az:0.3, el:0, d:4, t:[0, 1, 0]}; r0.panels.p1.camLock = true; r0.objs.find(o => o.id==='o1').photoTurn = 0.3; await page.evaluate(r => { const L = JSON.parse(localStorage.getItem('rd-scenes')).filter(s => s.id!==r.id); L.push(r); localStorage.setItem('rd-scenes', JSON.stringify(L)); }, r0); store.set('scA', r0);
     const wp = page; await wp.setViewportSize({width:300, height:200});
     await wp.goto('https://app.test/rig/scene.html?open=scA&panel=p1&ar=1.5&win=1&w3=Ellen%2Fellen&w3n=Ellen');
     await wp.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.PANEL && document.body.classList.contains('win'), null, {timeout:20000}); await wp.waitForTimeout(600);
     const v = await wp.evaluate(() => { const c = document.querySelector('#stage canvas'), b = c.getBoundingClientRect(), shown = [...document.body.children].filter(e => getComputedStyle(e).display!=='none').map(e => e.id || e.className);
-      return {w:Math.round(b.width), h:Math.round(b.height), shown, bg:getComputedStyle(document.body).backgroundColor, ref:SCENE.sc.objs.find(o => o.id==='o1').ref, label:SCENE.sc.objs.find(o => o.id==='o1').label, az:SCENE.sc.cam.az}; });
-    ok(v.w===300 && v.h===200 && v.shown.join()==='stage' && /rgba\(0, 0, 0, 0\)|transparent/.test(v.bg) && v.az===0.3, 'the window is just the panel camera\'s view, the whole frame, see-through: ' + JSON.stringify(v));
+      const px = new Uint8Array(4), gl = c.getContext('webgl2') || c.getContext('webgl'); gl.readPixels(2, 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      return {w:Math.round(b.width), h:Math.round(b.height), shown, alpha:px[3], grid:SCENE.grid ? SCENE.grid.visible : null, bg:getComputedStyle(document.body).backgroundColor, ref:SCENE.sc.objs.find(o => o.id==='o1').ref, label:SCENE.sc.objs.find(o => o.id==='o1').label, az:SCENE.sc.cam.az}; });
+    ok(v.w===300 && v.h===200 && v.shown.join()==='stage' && v.alpha===255 && v.grid!==false && v.az===0.3, 'the window is just the panel camera\'s view, the whole frame, over the scene\'s own background: ' + JSON.stringify(v));
     ok(v.ref==='Ellen/ellen' && v.label==='Ellen', 'w3 makes the posed one Ellen: ' + v.ref);
     await wp.evaluate(() => { window.__win = []; addEventListener('message', e => e.data && e.data.rdwin && __win.push(e.data.rdwin)); });
     // meanwhile another panel's window turned its camera

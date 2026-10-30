@@ -260,6 +260,18 @@ const DEPS = process.env.RIG_DEPS || '';
         const r = SCENE.fitCamMask(o, az, M, W, H); window.__art = Array.from({length:H}, (_, y) => Array.from({length:W}, (_, x) => M[y * W + x] ? '#' : '.').join('')).join('\n'); return r && {D:+r.D.toFixed(2), iou:+r.iou.toFixed(2), n:SCENE.maskStats(M, W, H).n, top:SCENE.maskStats(M, W, H).top}; }, [D0]);
       if(process.env.DBGM) console.log('MASK', D0, '\n' + await page.evaluate(() => window.__art));
       ok(f && f.iou > 0.75 && Math.abs(f.D / D0 - 1) < 0.2, '📐 her outline seen from ' + D0 + ' m away gives the camera back: ' + JSON.stringify(f)); }
+    // a full-body picture whose pose the rig only roughly matches (Jordan 2026-10-30: a yoga pose came in super zoomed in): a rig too big for the frame mustn't win by filling it
+    for(const tw of [0.9, 1.6]){ const f = await page.evaluate(([tw]) => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id), az = ob.photoTurn, T = SCENE.THREE, D0 = 4.5;
+        const bx = new T.Box3().expandByObject(o.mq, true), t = bx.getCenter(new T.Vector3()); const cam = new T.PerspectiveCamera(35, SCENE.CAM_A, 0.02, 2000);
+        cam.position.set(t.x + D0 * Math.sin(az + tw), t.y, t.z + D0 * Math.cos(az + tw)); cam.lookAt(t); cam.updateMatrixWorld(true); cam.updateProjectionMatrix(); const W = 96, H = Math.round(96 / SCENE.CAM_A), M = SCENE.rigMask(o, cam, W, H);
+        for(let y = 0; y < H; y++) for(let x = 0; x < W; x++) if(M[y * W + x]) for(let k = 1; k < 9; k++) if(x + k < W && y > H * 0.55) M[y * W + x + k] = 1; // (a mat or furniture caught with her)
+        const r = SCENE.fitCamMask(o, az, M, W, H); return r && {D:+r.D.toFixed(2), iou:+r.iou.toFixed(2)}; }, [tw]);
+      ok(f && f.D > 2.5, '📐 a full-body outline the rig only roughly matches (turned ' + tw + ') still frames her whole, not zoomed in: ' + JSON.stringify(f)); }
+    // a lying-down shape (a plank) the standing rig can't match: before, the rig's middle zoomed in to fill it
+    { const f = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id), W = 96, H = Math.round(96 / SCENE.CAM_A), M = new Uint8Array(W * H);
+        for(let y = Math.round(H * 0.45); y < H * 0.75; y++) for(let x = 10; x < W - 10; x++) if(Math.abs(y - H * 0.6) < H * (0.04 + 0.12 * (1 - Math.abs(x - W * 0.35) / W))) M[y * W + x] = 1;
+        const r = SCENE.fitCamMask(o, ob.photoTurn, M, W, H); return r && {D:+r.D.toFixed(2), iou:+r.iou.toFixed(2)}; });
+      ok(f && f.D > 2, '📐 a shape the rig can\'t match isn\'t filled by zooming in on her: ' + JSON.stringify(f)); }
     // a face close-up (Jordan 2026-10-30): SAM finds nobody, so she keeps her pose and the camera still comes from her outline (a cut-out picture of just a head here)
     { NOSAM = true; const art = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 400; c.height = 300; const x = c.getContext('2d'); x.fillStyle = '#000'; x.beginPath(); x.ellipse(200, 170, 90, 120, 0, 0, 7); x.fill(); x.fillRect(60, 260, 280, 40); return c.toDataURL('image/png'); });
       await page.route('https://cut.test/head.png', r => r.fulfill({ contentType:'image/png', headers:{'access-control-allow-origin':'*'}, body:Buffer.from(art.split(',')[1], 'base64') }));
