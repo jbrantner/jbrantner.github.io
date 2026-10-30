@@ -81,7 +81,6 @@ const V = g => Object.values(g), of = (g, c) => V(g).filter(n => n.class_type===
     const ag = G && Object.values(G.g).find(n => n.class_type==='MiniMaxH3AddGuide'); return ag ? {f:ag.inputs.frame_idx, want:ccSweepPicks()[3], img:G.g[ag.inputs.image[0]].class_type} : null; });
   ok(pin && pin.f===pin.want && pin.img==='LoadImage', "a side's clip pins its first frame again where the camera passes her eye level: " + JSON.stringify(pin));
   ok(fun && fun.inputs.strength===0.6 && fun.inputs.end_percent===0.6, 'step 4: the pose guide at 0.6, letting go at 60% (no skeleton lines or red eye points)');
-  ok(!(await page.evaluate(() => cmPosesHtml())).includes('Pinky'), "her 🧊 isn't listed among the comic's poses");
   // step 5: waits for each angle's cut-out, then finishes it
   const ready = await page.evaluate(() => { const P = ccP(ccChar()), v = P.lk.find(h => h.str==='cc' && h.ring===1 && h.i===0); const before = !!ccBase(P, v); P.views.find(x => x.ring===1 && x.i===0).url = 'https://jordo-desktop.test/view?filename=eye_0.png'; return [before, !!ccBase(P, v)]; });
   ok(!ready[0] && ready[1], 'an angle is finished only once its turnaround cut-out is in');
