@@ -183,7 +183,41 @@ async function openPanel(m){ let base = scenesAll.find(s => s.id===m.scene); if(
     if(!o){ o = {id:uid('o'), kind:'char', ref:w.ref, label:w.name || 'Character', x:(j - ((m.who.length - 1) / 2)) * 0.9, y:0, z:0, rot:0, s:1}; SC.objs.push(o); add = true; }
     if(o.hide){ delete o.hide; add = true; } });
   if(add){ buildObjs(); drawList(); drawSel(); }
-  if(fresh || add) changed(); dirty = true; }
+  if(fresh || add) changed(); dirty = true;
+  if(m.photo) panelPhoto(m.photo, m.who); }
+// 📖 🧍 Make it 3D (Jordan 2026-10-30): a panel's picked picture → SAM 3D Body poses her (or a mannequin) → the panel's 📷 Camera is placed
+// where the picture's camera was, as well as can be told: round her the way the picture saw her, at eye level, as far away as makes her
+// as tall in the frame as she is in the picture, and turned so she sits where she sits in it (her box from the cut-out, or BiRefNet)
+// ph = {pc, file, sub, w, h, fr (its framing in the panel), cut (its cut-out's url, if made)}
+async function panelPhoto(ph, who){ if(!SC || !PANEL) return; const say = m => { const el = $('#allmsg'); if(el) el.textContent = m; };
+  let ob = (who || []).map(w => SC.objs.find(x => x.ref===w.ref && !x.hide)).find(Boolean);
+  if(!ob){ ob = SC.objs.find(x => x.ref==='3D/Mannequin' && !x.hide); if(!ob){ ob = {id:uid('o'), kind:'char', ref:'3D/Mannequin', label:nextLabel('Mannequin (3D)'), x:0, y:0, z:0, rot:0, s:1}; SC.objs.push(ob); buildObjs(); drawList(); changed(); } }
+  ui.sel = ob.id; saveUi(); drawSel();
+  for(let i = 0; i < 100 && !(OBJ.get(ob.id) && OBJ.get(ob.id).mq && OBJ.get(ob.id).mq.userData.body && BODY); i++) await new Promise(r => setTimeout(r, 200)); // (her rig loading)
+  const sh = {pc:ph.pc, file:ph.file, sub:ph.sub || ''};
+  const [box] = await Promise.all([picBox(ph).catch(() => null), photoPose(ob, sh)]);
+  const o = OBJ.get(ob.id); if(!o || ob.photoTurn==null){ say('Her pose could not be read from the picture.'); return; }
+  setCamFrom(o, ob.photoTurn, panelBox(ph, box)); say('🧍 Her pose is from the picture, and the 📷 Camera is where the picture saw her from. Turn round her in 🕹 Free, or move the Camera.'); }
+// her box in the picture (0..1, y down): from the cut-out's see-through edge, else a BiRefNet mask made now, else most of the picture
+async function picBox(ph){ let url = ph.cut;
+  if(!url){ const u = ph.pc; if(!(await hasNode(u, 'RemoveBackground'))) return null; const bgm = (await comboOf(u, 'LoadBackgroundRemovalModel', 'bg_removal_name')).find(n => /birefnet/i.test(n)); if(!bgm) return null;
+    const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; }, li = [add('LoadImage', {image:await sendPic(u, ph, 'rd-panel-pic-')}), 0];
+    const m = add('RemoveBackground', {bg_removal_model:[add('LoadBackgroundRemovalModel', {bg_removal_name:bgm}), 0], image:li}), sv = add('SaveImage', {images:[add('MaskToImage', {mask:[m, 0]}), 0], filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/pose/panel_mask'});
+    const ims = await runGraph(u, g, sv, () => {}); const f = ims && ims[0]; if(!f) return null; url = u + '/view?filename=' + encodeURIComponent(f.filename) + '&subfolder=' + encodeURIComponent(f.subfolder || '') + '&type=output'; }
+  const im = await new Promise((ok, no) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => ok(i); i.onerror = no; i.src = url; });
+  const W = 160, H = Math.max(2, Math.round(W * im.naturalHeight / im.naturalWidth)), c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H);
+  const d = x.getImageData(0, 0, W, H).data, cut = !!ph.cut; let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for(let j = 0; j < H; j++) for(let i = 0; i < W; i++){ const k = (j * W + i) * 4, on = cut ? d[k + 3] > 128 : d[k] > 128; if(on){ if(i < x0) x0 = i; if(i > x1) x1 = i; if(j < y0) y0 = j; if(j > y1) y1 = j; } }
+  return x1 < 0 ? null : {x0:x0 / W, y0:y0 / H, x1:(x1 + 1) / W, y1:(y1 + 1) / H}; }
+// the picture's box → the panel's frame, through the picture's framing in its panel (st.fr; the picture covers the panel at s 1)
+function panelBox(ph, b){ b = b || {x0:0.3, y0:0.1, x1:0.7, y1:0.9}; if(!ph.w || !ph.h) return b; const f = Object.assign({x:0, y:0, s:1}, ph.fr), ia = ph.w / ph.h, pa = CAM_A;
+  const bw = (ia > pa ? ia / pa : 1) * f.s, bh = (ia > pa ? 1 : pa / ia) * f.s, l = 0.5 + f.x / 100 - bw / 2, t = 0.5 + f.y / 100 - bh / 2;
+  return {x0:l + b.x0 * bw, x1:l + b.x1 * bw, y0:t + b.y0 * bh, y1:t + b.y1 * bh}; }
+// the 📷 Camera: round her by az, level, at the distance that makes her box's height, aimed so her box's middle lands where it is in the frame
+function setCamFrom(o, az, b){ o.g.updateMatrixWorld(true); const bx = new THREE.Box3().expandByObject(o.g, true); if(bx.isEmpty()) return;
+  const c = bx.getCenter(new THREE.Vector3()), h = Math.max(0.3, bx.max.y - bx.min.y), fh = Math.max(0.05, Math.min(3, b.y1 - b.y0)), tn = Math.tan(17.5 * D2R), D = h / (2 * tn * fh);
+  const ndx = (b.x0 + b.x1) - 1, ndy = 1 - (b.y0 + b.y1), right = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az)), t = c.clone().addScaledVector(right, -ndx * D * tn * CAM_A).add(new THREE.Vector3(0, -ndy * D * tn, 0));
+  shotO.az = az; shotO.el = 0; shotO.d = D; shotO.t.copy(t); SC.cam = camState(); SC.camLock = true; view = 'cam'; ui.view = 'cam'; saveUi(); changed(); drawViews(); dirty = true; }
 function leavePanel(){ if(!PANEL) return; PANEL = null; CAM_A = 0.8; document.body.classList.remove('panel'); }
 const saveUi = () => { try{ localStorage.setItem(VKEY, JSON.stringify(ui)); }catch(e){} };
 function drawScenes(){ $('#scenes').innerHTML = scenesAll.map(s => `<option value="${esc(s.id)}" ${SC && s.id===SC.id ? 'selected' : ''}>${esc(s.name)}</option>`).join(''); }
@@ -1151,7 +1185,7 @@ async function photoPose(ob, sh, file){ const o = OBJ.get(ob.id), st = msg => { 
     // turned so the photo's hips face her way (her own ⟳ Turn still sets where she faces)
     const V = a => new THREE.Vector3(a[0], a[1], a[2]), L = V(B.lhip).sub(V(B.rhip)), yaw = Math.atan2(-L.z, L.x), Y = new THREE.Vector3(0, 1, 0), turn = (ob.rot || 0) * D2R - yaw;
     const P = {}; for(const [nm, a] of Object.entries(B)) P[nm] = V(a).applyAxisAngle(Y, turn);
-    const r = fitDirs(ob, o, P); ob.mode = 'mq'; if(sh) ob.photoUsed = sh.file; delete ob.sam;
+    const r = fitDirs(ob, o, P); ob.mode = 'mq'; if(sh) ob.photoUsed = sh.file; delete ob.sam; ob.photoTurn = turn; // (where the photo's camera was, round her: 📖 a panel's camera starts there)
     if(fg){ ob.sam = {pc:k.url, file:fg.filename, sub:fg.subfolder || '', head:SAM_HEAD, key:samKey(ob)}; st('🧍 Bringing over the photo\'s 3D body…'); await samAttach(o); }
     poseFor('cam'); changed(); dirty = true;
     st('🦴 She has the photo\'s pose' + (r.missing.length ? ' (not: ' + r.missing.join(', ') + ')' : '') + (samOn(o) ? ', in the photo\'s own 3D body. Grow its head to suit her, then 🎬 Render this angle or Move into the pose.' : '. Fine-tune it with the rig, then 🎬 Render this angle or Move into the pose.')); }
@@ -1530,11 +1564,11 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
 (async function start(){ $('#msg').textContent = 'Opening your ' + WORD.toLowerCase() + 's…'; drawViews(); await findPc(); loadBody(); await loadScenes(); $('#msg').textContent = PC.ok ? '' : 'Your PCs are off, so the scene opens from this phone and the characters show as boxes.';
   // 📚 opened from the app's Library: that one (?open=id), or a new one (?new=1)
   SC = null; const last = scenesAll.find(s => s.id===(QS.get('open') || ui.scene)) || scenesAll[0];
-  if(QS.get('panel') && QS.get('open')) await openPanel({scene:QS.get('open'), pid:QS.get('panel'), ar:QS.get('ar'), desc:QS.get('pdesc') || '', name:QS.get('pname') || '', label:QS.get('plabel') || '', from:QS.get('pfrom') || '', who:(() => { try{ return JSON.parse(QS.get('who') || '[]'); }catch(e){ return []; } })()});
+  if(QS.get('panel') && QS.get('open')) await openPanel({scene:QS.get('open'), pid:QS.get('panel'), ar:QS.get('ar'), desc:QS.get('pdesc') || '', name:QS.get('pname') || '', label:QS.get('plabel') || '', from:QS.get('pfrom') || '', photo:(() => { try{ return JSON.parse(QS.get('photo') || 'null'); }catch(e){ return null; } })(), who:(() => { try{ return JSON.parse(QS.get('who') || '[]'); }catch(e){ return []; } })()});
   else if(QS.get('new') || !last) newScene(); else openScene(last);
   // the library again every minute, so a character re-saved there shows up re-drawn here
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>

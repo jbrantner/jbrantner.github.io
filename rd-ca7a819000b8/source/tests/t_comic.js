@@ -209,6 +209,12 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const n0 = ALL.length; await page.click('#comic [data-cm="cut"]'); await page.waitForFunction(() => cmStill(cmPage().panels[0]).cut || cmPage().panels[0].err, null, {timeout:20000});
     const g = ALL[n0].prompt, ns = Object.values(g); ok(ns.some(x => x.class_type==='RemoveBackground') && ns.some(x => x.class_type==='JoinImageWithAlpha') && check(g).length===0, '✂ Just the character: BiRefNet cut-out, a valid graph: ' + check(g).join(';'));
     ok(await page.evaluate(f2 => { const st = cmStill(cmPage().panels[0]); return st.cut && st.fr && Math.abs(st.fr.s - f2.s) < 1e-6 && cmPage().panels[0].still===0; }, f2), 'the cut-out shows framed the same, kept as a picture of its own'); }
+  // 🧍 Make it 3D: the panel opens in 3D with its picture (the cut-out's original, its framing and the cut-out for her box)
+  { await page.evaluate(srv => { const p = cmPage().panels[0], st = cmStill(p); st.url = srv + '/view?filename=cut_1.png&subfolder=RenderDeck%2Fcomics&type=output'; st.src = srv + '/view?filename=try_1.png&subfolder=RenderDeck%2Fcomics&type=output'; delete st.test; window.__asks = []; const was = scnOpen; window.scnOpen = (t, w) => { __asks.push(w); return was(t, w); }; }, PCS.Render.url);
+    await page.evaluate(() => drawComic()); await page.click('#comic [data-cm="make3d"]'); await page.waitForTimeout(200);
+    const w = await page.evaluate(() => __asks[__asks.length - 1]), ph = w && w.panel && w.panel.photo;
+    ok(ph && ph.file==='try_1.png' && ph.sub==='RenderDeck/comics' && /cut_1\.png/.test(ph.cut) && ph.fr && ph.fr.s > 1.5 && ph.w > 0, '🧍 Make it 3D sends the picture SAM should read, its framing and the cut-out: ' + JSON.stringify(ph));
+    await page.click('#libBackB'); }
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT, fullPage:true});
   // the tab is remembered, and a 3D panel reopens on its comic page
   await page.click('#comic [data-cm="p3d"]'); await page.waitForTimeout(100);
