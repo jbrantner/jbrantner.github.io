@@ -612,7 +612,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-30.311'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-10-30.312'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -4831,18 +4831,28 @@ function cmMake3d(i){ const pg = cmPage(), p = pg && pg.panels[i], st = p && cmS
 const CM_WIN = new Map(); let CM_WINV = 0;
 // behind a 3D panel's window: its picture with her taken out (once made), framed the same; a cut-out leaves just white
 const cm3dPic = (p, st) => !st || !cm3dOn(p) ? st : p.plate && p.plate.url ? Object.assign({}, st, {url:p.plate.url, cut:false}) : st.cut ? Object.assign({}, st, {url:''}) : st;
-const cm3dOn = p => p && p.is3d && !p.pic2d && p.sc && !CM_MK3D[p.id];
+const cm3dOn = p => p && p.is3d && p.sc && !CM_MK3D[p.id] && (!p.pic2d || (CM_REND[p.id] && !CM_REND[p.id].err));
+// 🎨 Render as her (Jordan 2026-10-30: "is there a way to rerender as ellen?"): the panel's 🎬 Render Scene, run in its window, from its camera, with
+// her LoRA (She is); the painting joins the panel's pictures and shows
+const CM_REND = {};
+function cmRender3d(p){ CM_REND[p.id] = {msg:'Getting the 3D view ready…', go:true}; drawComic(); const f = CM_WIN.get(p.id); if(f && f.dataset.ready) cmRendGo(p.id, f); }
+function cmRendGo(pid, f){ const r = CM_REND[pid]; if(!r || !r.go) return; delete r.go; try{ f.contentWindow.postMessage({rdrender:1}, location.origin); }catch(e){} }
 function cmWins(){ let L = $('#cmwins'); if(!L){ L = document.createElement('div'); L.id = 'cmwins'; document.body.appendChild(L); }
   const pg = cmPage(), box = $('#cmPage'), on = !!(pg && box && !$('#comic').hidden && S.tab==='comic'); L.hidden = !on; if(!on) return;
   const rects = cmRectsOf(pg), want = new Set();
   pg.panels.forEach((p, i) => { const el = box.querySelector(`[data-cpi="${i}"]`); if(!cm3dOn(p) || !el) return; want.add(p.id);
     const r = rects[i] || {w:4, h:5}, src = scnPanelSrc('scene', {scene:p.sc, pid:p.id, ar:r.w / r.h, name:p.scName || ''}) + '&win=1&v=' + CM_WINV + (p.who3d ? '&w3=' + encodeURIComponent(p.who3d.ref) + '&w3n=' + encodeURIComponent(p.who3d.name || '') : '');
     let f = CM_WIN.get(p.id); if(!f){ f = document.createElement('iframe'); f.title = 'Panel ' + (i + 1) + ' in 3D'; f.dataset.pid = p.id; L.appendChild(f); CM_WIN.set(p.id, f); }
-    if(f.dataset.src!==src){ f.dataset.src = src; f.src = src; }
+    if(f.dataset.src!==src){ f.dataset.src = src; delete f.dataset.ready; f.src = src; }
     const b = el.getBoundingClientRect(); f.style.cssText = `left:${b.left + scrollX + el.clientLeft}px;top:${b.top + scrollY + el.clientTop}px;width:${el.clientWidth}px;height:${el.clientHeight}px;pointer-events:${i===CM().sel ? 'auto' : 'none'}`; });
   for(const [pid, f] of CM_WIN) if(!want.has(pid)){ f.remove(); CM_WIN.delete(pid); } }
 addEventListener('resize', () => cmWins()); if(window.ResizeObserver) new ResizeObserver(() => cmWins()).observe(document.body);
-function cmGotWin(d){ const pg = cmPage(), i = pg ? pg.panels.findIndex(q => q.id===d.pid) : -1; if(i < 0) return;
+function cmGotWin(d){ const pg = cmPage(), i = pg ? pg.panels.findIndex(q => q.id===d.pid) : -1; if(i < 0) return; const p = pg.panels[i], f = CM_WIN.get(d.pid);
+  if(d.ready && f){ f.dataset.ready = '1'; cmRendGo(d.pid, f); }
+  if(d.msg && CM_REND[d.pid]){ CM_REND[d.pid].msg = d.msg; document.querySelectorAll(`[data-rend="${d.pid}"]`).forEach(el => el.textContent = d.msg); }
+  if(d.rerr){ CM_REND[d.pid] = {err:d.rerr}; drawComic(); }
+  if(d.rendered){ delete CM_REND[d.pid]; cmScSync(); const sp = cmScPanel(p), url = sp && sp.scene && cmScUrl(sp.scene), j = url ? (p.stills || []).findIndex(st => st.url===url) : -1;
+    if(j >= 0){ p.still = j; p.stillPicked = true; p.show = 'still'; } p.pic2d = true; save(); drawComic(); toast('🎨 Panel ' + (i + 1) + ' is painted. 🧊 Show it in 3D to go back to the rig.'); }
   if(d.tap && CM().sel!==i){ CM().sel = i; CM_HL = null; save(); drawComic(); }
   if(d.cam){ const o = $('#scn'); if(o.hidden && o.querySelector('iframe')){ o.innerHTML = ''; delete o.dataset.src; } } } // (a 3D page left open would bring back the old camera)
 const CM_MK3D = {}; // panel id → {msg} while its 3D is being made, {err} if it couldn't be
@@ -6127,7 +6137,7 @@ function drawPage(){
       ${!sh ? `<div class="cpempty"><b>${i + 1}</b><br><span>${esc(p.text)}</span></div>` : ''}
       ${cmBusy(p) ? `<div class="cpbusy"><div class="pbar"><i data-cmbar="${p.id}"></i></div><small data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || 'Waiting…')}</small></div>` : ''}
       ${i===cm.sel && (p.stills || []).length > 1 ? `<div class="cpnav"><button data-cmcyc="-1" aria-label="Try before">‹</button><b>${(p.still || 0) + 1}/${p.stills.length}</b><button data-cmcyc="1" aria-label="Next try">›</button></div>` : ''}
-      ${CM_MK3D[p.id] && !CM_MK3D[p.id].err ? `<div class="cpbusy"><div class="pbar pulse"><i></i></div><small data-mk3d="${p.id}">${esc(CM_MK3D[p.id].msg || '')}</small></div>` : p.is3d ? '<span class="cp3d">🧊 3D</span>' : ''}
+      ${CM_REND[p.id] && !CM_REND[p.id].err ? `<div class="cpbusy"><div class="pbar pulse"><i></i></div><small data-rend="${p.id}">${esc(CM_REND[p.id].msg || '')}</small></div>` : ''}${CM_MK3D[p.id] && !CM_MK3D[p.id].err ? `<div class="cpbusy"><div class="pbar pulse"><i></i></div><small data-mk3d="${p.id}">${esc(CM_MK3D[p.id].msg || '')}</small></div>` : p.is3d ? '<span class="cp3d">🧊 3D</span>' : ''}
       ${p.err ? '<div class="cperr">!</div>' : ''}<span class="cpn">${i + 1}</span></div>`; }).join('');
   box.querySelectorAll('img[data-needwh]').forEach(im => im.addEventListener('load', () => { const q = pg.panels[+im.dataset.needwh], st = q && cmStill(q); if(st && !st.w && im.naturalWidth){ st.w = im.naturalWidth; st.h = im.naturalHeight; save(); drawPage(); } }, {once:true}));
   pg.panels.forEach((p, i) => { const sh = cmShown(p), t = sh && sh.clip; if(!t || !t.url) return; const v = cmVid(t.url), el = box.querySelector(`[data-cpi="${i}"]`);
@@ -6182,7 +6192,9 @@ function drawComic0(){
         <textarea data-cmp="text" rows="2" placeholder="What happens in this panel">${esc(cmSrc(p))}</textarea>${cmMarksHtml(p, cm.sel)}
         <div class="row"><label>Scene</label><div class="grow"><select data-cmsc aria-label="Scene of this panel">${p.sc ? '' : '<option value="" selected>Pick a scene…</option>'}${scs.map(c => `<option value="${esc(c.id)}" ${c.id===p.sc ? 'selected' : ''}>${esc(c.name)}${c.here ? '' : ' (another comic)'}</option>`).join('')}<option value="+">＋ New scene</option></select></div></div>
         ${same.length > 1 ? `<p class="note">Panels ${same.join(', ')} share this scene: its place and characters. Each panel has its own camera, and can move, pose, hide or show anyone just for itself.</p>` : ''}
-        <div class="btnrow"><button class="btn hot" data-cm="p3d">🎬 ${sp && sp.scene ? 'Open in 3D' : 'Set it up in 3D'}</button></div>
+        ${(() => { const st = sh && sh.still, pic = st && (st.url || S.test) && !cmBusy(p); if(CM_MK3D[p.id] && !CM_MK3D[p.id].err) return ''; // (one 3D button, Jordan 2026-10-30: from the picked picture when there is one, else set up by hand)
+          return p.is3d || (sp && sp.scene) ? '<div class="btnrow"><button class="btn hot" data-cm="p3d">⤢ Open it full screen in 3D</button></div>'
+            : `<div class="btnrow"><button class="btn hot" data-cm="${pic ? 'make3d' : 'p3d'}">🧊 Make it 3D</button></div><p class="note">${pic ? 'Reads her pose from the picked picture and puts the camera where it saw her from.' : 'No picture yet: opens its 3D scene to set up by hand.'}</p>`; })()}
         ${sp && sp.rsJob ? `<p class="note">⏳ Rendering on ${esc(pcName(sp.rsJob.pc))}. Open it in 3D to watch, or come back later.</p>` : ''}`;
       if(p.err) x += `<p class="warn">${esc(p.err)}</p>`;
       if(sts.length) x += `<div class="lbl">Pictures · tap one to use it</div><div class="cmstills">${sts.map((st, j) => `<button data-cmstill="${j}" class="${sh && sh.still===st || (j===(p.still || 0) && p.show!=='clip') ? 'on' : ''}" aria-label="Picture ${sts.length - j}">${st.url ? `<img src="${esc(mini(st.url))}" alt="">` : `<span>Picture ${sts.length - j}</span>`}</button>`).join('')}${p.takes.length ? `<button data-cmshow="clip" class="${sh && sh.clip ? 'on' : ''}"><span>🎞 Clip</span></button>` : ''}</div>`;
@@ -6194,9 +6206,11 @@ function drawComic0(){
         if(p.takes.length > 1) x += `<div class="row"><label>Takes</label>${seg('data-cmtake', p.takes.map((tk, j) => [j, 'Take ' + (p.takes.length - j)]), p.take)}</div>`; }
       if(cmBusy(p)) x += `<div class="pbar obbar${(cmLead(p) || {}).making ? '' : ' pulse'}"><i data-cmbar="${p.id}"></i></div><p class="note" data-cmtxt="${p.id}">${esc((cmLead(p) || {}).busy || '')}</p><div class="btnrow"><button class="btn" data-cm="stop">✕ Stop this panel</button></div>`;
       else if(sts.length) x += `<div class="btnrow"><button class="btn" data-cm="anim1" ${cmFlKits().length ? '' : 'disabled'}>🎞 ${p.takes.length ? 'Animate it again' : 'Animate this picture'}</button></div>`;
-      { const mk = CM_MK3D[p.id]; if(mk && mk.err) x += `<p class="warn">🧍 ${esc(mk.err)}</p>`; else if(mk) x += `<p class="note">🧍 Making it 3D: <span data-mk3d="${p.id}">${esc(mk.msg || '')}</span> Keep the app open; the page stays here.</p>`; else if(p.is3d) x += `<p class="note">🧊 ${p.pic2d ? 'This panel shows its picture.' : 'This panel is a window into its 3D scene: drag it to turn round her, pinch to zoom. 🎬 Open in 3D to pose her or move things.'}</p>
-        <div class="row"><label>She is</label><div class="grow"><select data-cmwho aria-label="Who the 3D rig is"><option value="">🧍 Mannequin</option>${cmLibChars().map(e => `<option value="${esc(e.subfolder)}" ${p.who3d && p.who3d.ref===e.subfolder ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></div></div><div class="btnrow"><button class="btn" data-cm="pic2d">${p.pic2d ? '🧊 Show it in 3D' : '🖼 Show the picture instead'}</button></div>`; }
-      { const st = sh && sh.still; if(st && !cmBusy(p) && !(CM_MK3D[p.id] && !CM_MK3D[p.id].err)) x += `<div class="btnrow"><button class="btn" data-cm="make3d" ${st.url || S.test ? '' : 'disabled'}>🧍 ${p.is3d ? 'Make it 3D again from this picture' : 'Make it 3D (her pose, the camera round her)'}</button></div><div class="btnrow">${st.cut ? '<span class="note" style="margin:0">✂ Just the character. Pinch and drag it in the panel.</span>' : `<button class="btn" data-cm="cut" ${st.url || S.test ? '' : 'disabled'}>✂ Just the character (take the background out)</button>`}${st.fr ? '<button class="btn" data-cm="frreset">↺ Fit</button>' : ''}</div>`; }
+      { const mk = CM_MK3D[p.id]; if(mk && mk.err) x += `<p class="warn">🧍 ${esc(mk.err)}</p>`; else if(mk) x += `<p class="note">🧍 Making it 3D: <span data-mk3d="${p.id}">${esc(mk.msg || '')}</span> Keep the app open; the page stays here.</p>`; else if(p.is3d) x += `<p class="note">🧊 ${p.pic2d ? 'This panel shows its picture.' : 'This panel is a window into its 3D scene: drag it to turn round her, pinch to zoom. ⤢ Open it full screen to pose her or move things.'}</p>
+        <div class="row"><label>She is</label><div class="grow"><select data-cmwho aria-label="Who the 3D rig is"><option value="">🧍 Mannequin</option>${cmLibChars().map(e => `<option value="${esc(e.subfolder)}" ${p.who3d && p.who3d.ref===e.subfolder ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></div></div>${(() => { const r = CM_REND[p.id]; return r && r.err ? `<p class="warn">🎨 ${esc(r.err)}</p>` : r ? `<p class="note">🎨 <span data-rend="${p.id}">${esc(r.msg || 'Painting…')}</span></p>` : ''; })()}
+        <div class="btnrow"><button class="btn hot" data-cm="rend3d" ${CM_REND[p.id] && !CM_REND[p.id].err ? 'disabled' : ''}>🎨 Render as ${esc((p.who3d && p.who3d.name) || 'her')}</button></div>
+        <div class="btnrow"><button class="btn" data-cm="pic2d">${p.pic2d ? '🧊 Show it in 3D' : '🖼 Show the picture instead'}</button></div>`; }
+      { const st = sh && sh.still; if(st && !cmBusy(p) && !(CM_MK3D[p.id] && !CM_MK3D[p.id].err)) x += `${p.is3d ? `<div class="btnrow"><button class="btn" data-cm="make3d" ${st.url || S.test ? '' : 'disabled'}>🧍 Read her pose again from this picture</button></div>` : ''}<div class="btnrow">${st.cut ? '<span class="note" style="margin:0">✂ Just the character. Pinch and drag it in the panel.</span>' : `<button class="btn" data-cm="cut" ${st.url || S.test ? '' : 'disabled'}>✂ Just the character (take the background out)</button>`}${st.fr ? '<button class="btn" data-cm="frreset">↺ Fit</button>' : ''}</div>`; }
       x += `<div class="btnrow"><button class="btn" data-cm="pdup">⧉ Duplicate as the next panel</button></div></div>`;
     }
     x += `<div class="btnrow"><button class="btn" data-cm="export" ${pg.panels.some(q => cmShown(q)) ? '' : 'disabled'}>💾 Save the page</button></div>`;
@@ -6251,6 +6265,7 @@ $('#comic').addEventListener('click', e => {
   else if(a==='p3d'){ cmOpen3d(cm.sel); return; }
   else if(a==='cut'){ cmCut(p); return; }
   else if(a==='make3d'){ cmMake3d(cm.sel); return; }
+  else if(a==='rend3d'){ const q = pg && pg.panels[cm.sel]; if(q) cmRender3d(q); return; }
   else if(a==='pic2d'){ const q = pg && pg.panels[cm.sel]; if(q){ q.pic2d = !q.pic2d; save(); drawComic(); } return; }
   else if(a==='frreset'){ const st = cmStill(p); if(st) delete st.fr; }
   else if(a==='tries'){ cmMakeTries(pg.panels.filter(q => !(cm.genOff || []).includes(q.id))); return; }
