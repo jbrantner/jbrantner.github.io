@@ -417,6 +417,16 @@ const VL = (() => {
         + `<span class="vl-stepw pp-dime" aria-hidden="true"><span class="pp-unit"><span class="pp-ubar"><i></i></span><b class="pp-ul"></b></span><span class="vl-step"><span data-s="cushion"></span></span></span>`
         + `<div class="cu-marks" data-t="cu-marks"></div><p class="cu-cap">Next month's bills, locked in as it fills</p><div class="cu-locks" data-t="cu-locks"></div><p class="cu-say" data-t="cu-say"></p><div class="pp-xv" data-x="cushion"></div></div>`;
     };
+    // v322 (Jordan): weekly spending as its own pot. It fills whole on payday with the weekly money through the next
+    // payday; this week's part is the week's card, the rest comes in on Mondays.
+    const spendCard = () => {
+      const pu = purseNow(now), pl = savingsPlanned(now), left = pu.purseLeft, tot = left + pl.week, wk = Math.round(weeklyAmt());
+      if (!(wk > 0) && Math.abs(tot) < 0.005) return '';
+      const col = PC[CK.savings] || PC.coral, say = [`This week: <b class="${left < 0 ? 'bad' : ''}">${moneyExact(left)}</b> left`];
+      if (wk > 0) say.push(`${money(wk)} comes in each Monday`);
+      return `<div class="pp-card pot sv spm" style="--cc:${col}" data-vl-row="spendpot"><div class="pp-head" style="cursor:default"><span class="pp-nm"><span class="pp-nmr"><b>Spending money</b></span></span>`
+        + `<span class="pp-amt"><span class="num">${moneyExact(tot)}</span></span></div><p class="cu-plan">${say.join(' · ')}</p></div>`;
+    };
     const card = (o, kind) => {
       const col = CK[o.id] || (kind === 'proj' ? 'blue' : 'pink');
       R.push(o); const id = esc(o.id), nm = esc(o.name), sv = kind === 'save', L = !sv && isLocked(o.id), done = kind === 'proj' && o.bal >= o.goal - 0.005;
@@ -463,7 +473,7 @@ const VL = (() => {
     // v174: pots and projects in one list (color and the label tell them apart), one add button under it
     // v200: no Spare change card; Collect is the button at the bottom left (#spareFab)
     const mwb = `<button class="pp-big alt pp-add pp-mwb" data-mw="1">Split your pay<small>${money(maxWorkers() * WORKER_DAY)} a day · ${money(perMo(maxWorkers()))} a paycheck</small></button>`;   // v190; v195 a paycheck
-    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>'}${planChip()}</div><div class="pp-list pp-one">` + cushCard();   // v298; v300: the cushion first
+    h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3>${plan ? '' : '<button class="pp-plan pp-opt" data-opt-go="1">Optimize</button>'}${planChip()}</div><div class="pp-list pp-one">` + cushCard() + spendCard();   // v298; v300: the cushion first; v322: then Spending money
     const dbIts = [];
     { const its = [...D.stock.map(p => [{ id: p.id, name: p.name, goal: p.goal, custom: p.custom }, p.id === 'savings' ? 'save' : 'pot']),
         ...D.projects.map(p => [{ id: p.id, name: p.name, goal: p.goal, bal: p.bal, custom: true, proj: true }, 'proj'])];
@@ -586,7 +596,7 @@ const VL = (() => {
   // and any pay that hasn't landed in the bank yet
   function savingsLine(S, now) {
     const pl = savingsPlanned(now), out = [];
-    if (pl.week >= 1) out.push(`Your weekly money through ${shortDate(pl.until)} (${money(pl.week)}) is already taken out.`);
+    if (pl.week >= 1) out.push(`Spending money through ${shortDate(pl.until)} is already taken out.`);
     if (pl.amt >= 1) out.push(`<b>${money(pl.amt)}</b> more goes to pots and projects by ${shortDate(pl.until)}, a day at a time.`);
     for (const c of hoardParts(now).checks.list) if (c.wait >= 0.005) out.push(`${moneyExact(c.wait)} of your ${shortDate(c.date)} pay isn't in your bank yet <button class="link" data-pay-here="${esc(c.key)}">It's here</button>`);
     return out.join('<br>');
