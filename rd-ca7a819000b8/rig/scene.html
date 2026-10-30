@@ -1440,7 +1440,7 @@ function herPass(add, K, ck, img, o, text, mk, fk, FH, seed, sam, det, n){ const
   const m = [add('ImageToMask', {image:[add('LoadImage', {image:mk}), 0], channel:'red'}), 0], grow = (mask, f) => [add('GrowMask', {mask, expand:Math.max(1, Math.round(FH * f)), tapered_corners:true}), 0], op = (a, b, operation) => [add('MaskComposite', {destination:a, source:b, x:0, y:0, operation}), 0];
   let mask = grow(m, 0.01); // (the mannequin is slimmer than her hair and clothes)
   if(sam){ const sm = [add('SAMDetectorCombined', {sam_model:sam, segs:[add('MaskToSEGS', {mask:m, combined:true, crop_factor:1.5, bbox_fill:false, drop_size:10, contour_fill:false}), 0], image:img, detection_hint:'mask-points', dilation:8, threshold:0.93, bbox_expansion:0, mask_hint_threshold:0.7, mask_hint_use_negative:'False'}), 0];
-    mask = op(mask, op(sm, grow(m, 0.06), 'multiply'), 'add'); } // what SAM finds of her painted self, but only close to her mannequin
+    mask = op(mask, op(sm, grow(m, 0.025), 'multiply'), 'add'); } // what SAM finds of her painted self, but only close to her mannequin
   mask = op(mask, grow([add('ImageToMask', {image:[add('LoadImage', {image:fk}), 0], channel:'red'}), 0], 0.008), 'subtract'); // never over someone in front (a little extra, so the feathered edge stops at them)
   const pass = (image, segs, gs, mx, dn, f, st) => [add('DetailerForEach', {image, segs, model, clip, vae:[ck, 2], guide_size:gs, guide_size_for:true, max_size:mx, seed, steps:st, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal',
     positive:pos, negative:neg, denoise:dn, feather:f, noise_mask:true, force_inpaint:true, wildcard:'', cycle:1, noise_mask_feather:f}), 0];
@@ -1495,7 +1495,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     conds.push(region(bw, items.length));
     // over everything: how many people, and 📝 Describe the scene
     const nb = chars.filter((o, i) => /\b1boy\b/i.test(words[items.indexOf(o)])).length, ng = chars.length - nb, cnt = (k, w) => k ? (k > 5 ? '6+' + w + 's' : k + w + (k > 1 ? 's' : '')) : '';
-    const dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '', all = [sw.replace(/, $/, ''), cnt(ng, 'girl').replace(/^1girls$/, '1girl'), cnt(nb, 'boy'), ng > 1 ? 'multiple girls' : '', nb > 1 ? 'multiple boys' : '', dt].filter(Boolean).join(', ');
+    const dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '', all = [sw.replace(/, $/, ''), cnt(ng, 'girl').replace(/^1girls$/, '1girl'), cnt(nb, 'boy'), ng > 1 ? 'multiple girls' : '', nb > 1 ? 'multiple boys' : '', dt].filter(Boolean).join(', ').split(',').map(t => t.trim()).filter((t, i, a) => t && a.indexOf(t)===i).join(', '); // (each tag once: "1girl, 1girl")
     if(all) conds.push(add('CLIPTextEncode', {clip, text:all}));
     let pos = conds[0]; for(const c of conds.slice(1)) pos = add('ConditioningCombine', {conditioning_1:[pos, 0], conditioning_2:[c, 0]});
     const neg = add('CLIPTextEncode', {clip, text:rsNeg(chars.length)}), L = add('ControlNetLoader', {control_net_name:K.cn});
@@ -1562,10 +1562,12 @@ function rsBgCan(){ return !!(SC && SC.scene && SC.scene.key && SC.scene.key===r
 // (Jordan 2026-10-29: "do the whole thing with the characters and the controlnet, then the background separately without the character loras")
 function bgPass(add, K, ck, style, img, mk, dn, env, dt, H, seed){ let model = [ck, 0], clip = [ck, 1];
   if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
-  const words = [style && /afkj/i.test(style) ? 'AFKJ Style' : '', (env.words || '').trim().replace(/,\s*$/, ''), env.ground ? groundWords(env) : '', dt, 'scenery, no humans, masterpiece, best quality, amazing quality'].filter(Boolean).join(', ');
+  // (the scene's words without its people: Jordan 2026-10-30's background pass had "1girl" next to "no humans")
+  const place = (dt || '').split(',').map(t => t.trim()).filter(t => t && !/^(\d\+?\s*(girl|boy|other)s?|solo|multiple (girls|boys|others)|(mature|young) (fe)?male|1girl|1boy|solo focus)$/i.test(t)).join(', ');
+  const words = [style && /afkj/i.test(style) ? 'AFKJ Style' : '', (env.words || '').trim().replace(/,\s*$/, ''), env.ground ? groundWords(env) : '', place, 'scenery, no humans, masterpiece, best quality, amazing quality'].filter(Boolean).join(', ');
   const pos = add('CLIPTextEncode', {clip, text:words}), neg = add('CLIPTextEncode', {clip, text:NEG + BG_NEG});
-  const m0 = [add('GrowMask', {mask:[add('ImageToMask', {image:[add('LoadImage', {image:mk}), 0], channel:'red'}), 0], expand:-Math.round(H * 0.02), tapered_corners:true}), 0];
-  const soft = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:m0}), 0], blur_radius:24, sigma:8}), 0], channel:'red'}), 0];
+  const m0 = [add('GrowMask', {mask:[add('ImageToMask', {image:[add('LoadImage', {image:mk}), 0], channel:'red'}), 0], expand:-Math.round(H * 0.006), tapered_corners:true}), 0]; // (was 2%: that ring of the first painting stayed round her as a coloured halo, Jordan 2026-10-30)
+  const soft = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:m0}), 0], blur_radius:8, sigma:3}), 0], channel:'red'}), 0];
   const ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[add('ControlNetLoader', {control_net_name:K.cn}), 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:0.5, start_percent:0, end_percent:0.6, vae:[ck, 2]});
   const TILE = {tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}, lat = add('SetLatentNoiseMask', {samples:[add('VAEEncodeTiled', {pixels:img, vae:[ck, 2], ...TILE}), 0], mask:soft});
   const ks = add('KSampler', {model, seed, steps:24, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[lat, 0], denoise:RS_BG});
