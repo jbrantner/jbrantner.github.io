@@ -189,15 +189,19 @@ async function openPanel(m){ let base = scenesAll.find(s => s.id===m.scene); if(
 // where the picture's camera was, as well as can be told: round her the way the picture saw her, at eye level, as far away as makes her
 // as tall in the frame as she is in the picture, and turned so she sits where she sits in it (her box from the cut-out, or BiRefNet)
 // ph = {pc, file, sub, w, h, fr (its framing in the panel), cut (its cut-out's url, if made)}
-async function panelPhoto(ph, who){ if(!SC || !PANEL) return; const say = m => { const el = $('#allmsg'); if(el) el.textContent = m; };
+async function panelPhoto(ph, who){ const say = m => { const el = $('#allmsg'); if(el) el.textContent = m; bgPost({msg:m}); }; if(!SC || !PANEL) return bgPost({err:'The panel did not open in 3D.'});
   let ob = (who || []).map(w => SC.objs.find(x => x.ref===w.ref && !x.hide)).find(Boolean);
   if(!ob){ ob = SC.objs.find(x => x.ref==='3D/Mannequin' && !x.hide); if(!ob){ ob = {id:uid('o'), kind:'char', ref:'3D/Mannequin', label:nextLabel('Mannequin (3D)'), x:0, y:0, z:0, rot:0, s:1}; SC.objs.push(ob); buildObjs(); drawList(); changed(); } }
-  ui.sel = ob.id; saveUi(); drawSel();
-  for(let i = 0; i < 100 && !(OBJ.get(ob.id) && OBJ.get(ob.id).mq && OBJ.get(ob.id).mq.userData.body && BODY); i++) await new Promise(r => setTimeout(r, 200)); // (her rig loading)
+  ui.sel = ob.id; saveUi(); drawSel(); say('🧍 Loading her rig…');
+  for(let i = 0; i < 300 && !(OBJ.get(ob.id) && OBJ.get(ob.id).mq && OBJ.get(ob.id).mq.userData.body && BODY); i++) await new Promise(r => setTimeout(r, 200)); // (her rig loading)
   const sh = {pc:ph.pc, file:ph.file, sub:ph.sub || ''};
-  const [box] = await Promise.all([picBox(ph).catch(() => null), photoPose(ob, sh)]);
-  const o = OBJ.get(ob.id); if(!o || ob.photoTurn==null){ say('Her pose could not be read from the picture.'); return; }
-  setCamFrom(o, ob.photoTurn, panelBox(ph, box)); say('🧍 Her pose is from the picture, and the 📷 Camera is where the picture saw her from. Turn round her in 🕹 Free, or move the Camera.'); }
+  // her box first: SAM reads her from just that part of the picture, enlarged (Jordan 2026-10-30: a small figure in the background wasn't found in the whole picture)
+  const box = await picBox(ph).catch(() => null); delete ob.photoTurn; await photoPose(ob, sh, null, box);
+  const o = OBJ.get(ob.id); if(!o || ob.photoTurn==null){ const e = 'Her pose could not be read from the picture' + (RMSG.get(ob.id) ? ': ' + RMSG.get(ob.id) : '.'); say(e); bgPost({err:e}); return; }
+  setCamFrom(o, ob.photoTurn, panelBox(ph, box)); say('🧍 Her pose is from the picture, and the 📷 Camera is where the picture saw her from. Turn round her in 🕹 Free, or move the Camera.');
+  if(BG){ clearTimeout(saveT); await pushScene(); bgPost({done:true}); } }
+// out of sight (?bg=1): the comic page keeps showing while this page makes the panel 3D, and hears how it is going
+const BG = QS.get('bg')==='1', bgPost = d => { if(BG && PANEL) try{ parent.postMessage({rd3d:Object.assign({pid:PANEL.pid}, d)}, location.origin); }catch(e){} };
 // her box in the picture (0..1, y down): from the cut-out's see-through edge, else a BiRefNet mask made now, else most of the picture
 async function picBox(ph){ let url = ph.cut;
   if(!url){ const u = ph.pc; if(!(await hasNode(u, 'RemoveBackground'))) return null; const bgm = (await comboOf(u, 'LoadBackgroundRemovalModel', 'bg_removal_name')).find(n => /birefnet/i.test(n)); if(!bgm) return null;
@@ -208,7 +212,12 @@ async function picBox(ph){ let url = ph.cut;
   const W = 160, H = Math.max(2, Math.round(W * im.naturalHeight / im.naturalWidth)), c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H);
   const d = x.getImageData(0, 0, W, H).data, cut = !!ph.cut; let x0 = W, y0 = H, x1 = -1, y1 = -1;
   for(let j = 0; j < H; j++) for(let i = 0; i < W; i++){ const k = (j * W + i) * 4, on = cut ? d[k + 3] > 128 : d[k] > 128; if(on){ if(i < x0) x0 = i; if(i > x1) x1 = i; if(j < y0) y0 = j; if(j > y1) y1 = j; } }
-  return x1 < 0 ? null : {x0:x0 / W, y0:y0 / H, x1:(x1 + 1) / W, y1:(y1 + 1) / H}; }
+  return x1 < 0 ? null : {x0:x0 / W, y0:y0 / H, x1:(x1 + 1) / W, y1:(y1 + 1) / H, iw:im.naturalWidth, ih:im.naturalHeight}; }
+// the part of the picture SAM reads (pixels): her box with room round it, enlarged to about 1024 on its long side (never shrunk, at most 4×)
+function samCrop(b){ if(!b || !b.iw || !b.ih) return null; const pw = (b.x1 - b.x0) * 0.25, phh = (b.y1 - b.y0) * 0.15, cl = v => Math.min(1, Math.max(0, v));
+  const x0 = Math.floor(cl(b.x0 - pw) * b.iw), y0 = Math.floor(cl(b.y0 - phh) * b.ih), x1 = Math.ceil(cl(b.x1 + pw) * b.iw), y1 = Math.ceil(cl(b.y1 + phh) * b.ih), w = x1 - x0, h = y1 - y0;
+  if(w < 16 || h < 16 || (w > b.iw * 0.9 && h > b.ih * 0.9)) return null; // (she fills the picture already)
+  return {x:x0, y:y0, w, h, s:Math.round(Math.min(4, Math.max(1, 1024 / Math.max(w, h))) * 100) / 100}; }
 // the picture's box → the panel's frame, through the picture's framing in its panel (st.fr; the picture covers the panel at s 1)
 function panelBox(ph, b){ b = b || {x0:0.3, y0:0.1, x1:0.7, y1:0.9}; if(!ph.w || !ph.h) return b; const f = Object.assign({x:0, y:0, s:1}, ph.fr), ia = ph.w / ph.h, pa = CAM_A;
   const bw = (ia > pa ? ia / pa : 1) * f.s, bh = (ia > pa ? 1 : pa / ia) * f.s, l = 0.5 + f.x / 100 - bw / 2, t = 0.5 + f.y / 100 - bh / 2;
@@ -547,7 +556,7 @@ function buildObjs(){ if(BODY===false) loadBody(); for(const o of OBJ.values()) 
     const shd = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({map:shadowTex, transparent:true, depthWrite:false})); shd.rotation.x = -Math.PI / 2; shd.position.y = 0.003; const sw = isObj ? ht * 1.15 : 0.75; shd.scale.set(sw, sw, 1); shd.userData.base = sw;
     const ghost = new THREE.Mesh(card.geometry, new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.02, side:THREE.DoubleSide, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2})); ghost.visible = false; ghost.renderOrder = 1; g.add(ghost);
     for(const m of [shd, disc]){ m.renderOrder = -1; m.material.depthTest = false; } // under the pictures, always
-    const mesh = e && e.mesh==='chair' ? chairMesh(ht) : e && e.mesh==='mannequin' ? mqMesh(ht) : null; if(mesh) g.add(mesh);
+    const mesh = e && e.mesh==='chair' ? chairMesh(ht) : null; if(mesh) g.add(mesh); // (the 🧍 Mannequin is a rigged body like a character's, so SAM and the rig can pose it: Jordan 2026-10-30)
     // 🧍 every library character also has a mannequin (posed and rendered from), and 📸 the picture last rendered from it
     const mq = !isObj && !mesh ? mqMesh(1.7, e && e.body, e && e.hair, e && e.look) : null, shot = mq || (isObj && mesh) ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({transparent:true, alphaTest:0.4, side:THREE.DoubleSide})) : null;
     if(mq){ mq.visible = false; shot.visible = false; g.add(mq, shot); } else if(shot){ shot.visible = false; g.add(shot); } // 🪑 a 3D object's 📸 painted picture
@@ -1160,7 +1169,7 @@ async function posePhotos(ob){ const st = msg => { RMSG.set(ob.id, msg); const e
   catch(err){ st(err.message || String(err)); }
   BUSY.delete(ob.id); drawSel(); }
 // read the pose of a photo already on the PC (sh) or one from the phone (file), and fit her rig to it
-async function photoPose(ob, sh, file){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(ob.id, msg); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; }; if(BUSY.has(ob.id) || !o) return;
+async function photoPose(ob, sh, file, pbox){ const o = OBJ.get(ob.id), st = msg => { RMSG.set(ob.id, msg); bgPost({msg}); const el = $('#rmsg'); if(el && $('#selbox').dataset.id===ob.id) el.textContent = msg; }; if(BUSY.has(ob.id) || !o) return;
   if(!(o.mq && o.mq.userData.body && BODY)){ st('Her rig (the base body) has not loaded from Render.'); return; } BUSY.add(ob.id); drawSel();
   try{ st('Looking for a PC with SAM 3D Body…'); const k = await samKit(); if(!k) throw new Error('No PC has SAM 3D Body (it is on Render).');
     st('Sending the photo to ' + pcName(k.url) + '…'); let img;
@@ -1168,8 +1177,9 @@ async function photoPose(ob, sh, file){ const o = OBJ.get(ob.id), st = msg => { 
       const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending the photo failed (' + r.status + ')'); img = (await r.json()).name; }
     else img = await sendPic(k.url, sh, 'rd-pose-photo-');
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
-    const li = add('LoadImage', {image:img}), sm = add('SAM3DBody_Loader', {model_file:k.sam});
-    const box = add('RTDETR_detect', {model:[add('UNETLoader', {unet_name:k.det, weight_dtype:'default'}), 0], image:[li, 0], threshold:0.5, class_name:'person', max_detections:1});
+    let li = add('LoadImage', {image:img}); const sm = add('SAM3DBody_Loader', {model_file:k.sam}), cr = samCrop(pbox);
+    if(cr && await hasNode(k.url, 'ImageCrop')){ li = add('ImageCrop', {image:[li, 0], width:cr.w, height:cr.h, x:cr.x, y:cr.y}); if(cr.s > 1) li = add('ImageScaleBy', {image:[li, 0], upscale_method:'lanczos', scale_by:cr.s}); }
+    const box = add('RTDETR_detect', {model:[add('UNETLoader', {unet_name:k.det, weight_dtype:'default'}), 0], image:[li, 0], threshold:cr ? 0.3 : 0.5, class_name:'person', max_detections:1});
     const fov = k.moge ? [add('MoGeGeometryToFOV', {moge_geometry:[add('MoGeInference', {moge_model:[add('LoadMoGeModel', {model_name:k.moge}), 0], image:[li, 0], resolution_level:9, fov_x_degrees:0, batch_size:4, force_projection:true, apply_mask:true, refine_steps:3}), 0], axis:'vertical', unit:'degrees'}), 0] : 0;
     const pd = add('SAM3DBody_Predict', {sam3d_body_model:[sm, 0], image:[li, 0], run_hand_refinement:true, fov, batch_size:64, bboxes:[box, 0]}); // (hands refined: her 3D body shows them)
     const sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps:24, camera_translation:'off', track_index:-1, format:'bvh', 'format.units':'cm'}), 0],
@@ -1570,5 +1580,5 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>

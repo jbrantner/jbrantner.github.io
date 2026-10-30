@@ -212,8 +212,18 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
   // 🧍 Make it 3D: the panel opens in 3D with its picture (the cut-out's original, its framing and the cut-out for her box)
   { await page.evaluate(srv => { const p = cmPage().panels[0], st = cmStill(p); st.url = srv + '/view?filename=cut_1.png&subfolder=RenderDeck%2Fcomics&type=output'; st.src = srv + '/view?filename=try_1.png&subfolder=RenderDeck%2Fcomics&type=output'; delete st.test; window.__asks = []; const was = scnOpen; window.scnOpen = (t, w) => { __asks.push(w); return was(t, w); }; }, PCS.Render.url);
     await page.evaluate(() => drawComic()); await page.click('#comic [data-cm="make3d"]'); await page.waitForTimeout(200);
-    const w = await page.evaluate(() => __asks[__asks.length - 1]), ph = w && w.panel && w.panel.photo;
-    ok(ph && ph.file==='try_1.png' && ph.sub==='RenderDeck/comics' && /cut_1\.png/.test(ph.cut) && ph.fr && ph.fr.s > 1.5 && ph.w > 0, '🧍 Make it 3D sends the picture SAM should read, its framing and the cut-out: ' + JSON.stringify(ph));
+    // it is made out of sight (Jordan 2026-10-30): the comic page stays up, the 3D page works in a hidden frame
+    const src = await page.evaluate(() => { const f = document.querySelector('#scnbg iframe'); const s = f && f.getAttribute('src'); if(f) f.remove(); return s; }), q = new URLSearchParams((src || '').split('?')[1] || ''), ph = JSON.parse(q.get('photo') || 'null');
+    ok(ph && ph.file==='try_1.png' && ph.sub==='RenderDeck/comics' && /cut_1\.png/.test(ph.cut) && ph.fr && ph.fr.s > 1.5 && ph.w > 0 && q.get('bg')==='1', '🧍 Make it 3D sends the picture SAM should read, its framing and the cut-out: ' + JSON.stringify(ph));
+    ok(await page.isVisible('#comic') && await page.isHidden('#scn') && !(await page.evaluate(() => __asks.length)), 'the comic page stays up while it is made');
+    const pid = await page.evaluate(() => cmPage().panels[0].id);
+    await page.evaluate(pid => postMessage({rd3d:{pid, msg:'SAM 3D Body is reading the pose… 4 s'}}, location.origin), pid); await page.waitForTimeout(100);
+    ok(/reading the pose/.test(await page.$eval('#cmPage [data-cpi="0"]', e => e.textContent)), 'the panel shows how it is going: ' + await page.$eval('#cmPage [data-cpi="0"]', e => e.textContent.trim()));
+    await page.evaluate(pid => postMessage({rd3d:{pid, done:true}}, location.origin), pid); await page.waitForTimeout(100);
+    ok(await page.evaluate(() => cmPage().panels[0].is3d) && /3D/.test(await page.$eval('#cmPage [data-cpi="0"] .cp3d', e => e.textContent)) && await page.isVisible('#comic'), 'when it is done the panel is marked 🧊 3D and the page is still up');
+    await page.click('#cmPage [data-cpi="0"]'); await page.waitForTimeout(200);
+    const w = await page.evaluate(() => __asks[__asks.length - 1]);
+    ok(w && w.panel && w.panel.pid===pid && !w.panel.photo && await page.isVisible('#scn'), 'tapping the picked 3D panel again opens it full screen (without reading the pose again)');
     await page.click('#libBackB'); }
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT, fullPage:true});
   // the tab is remembered, and a 3D panel reopens on its comic page

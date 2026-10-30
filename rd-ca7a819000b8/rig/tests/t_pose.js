@@ -242,6 +242,18 @@ const DEPS = process.env.RIG_DEPS || '';
       ok(!back.on && back.mq && !back.sam, '🦴 moving a joint by hand brings her rig back: ' + JSON.stringify(back)); } }
   // the views go all the way round her, under the floor and over her head (Jordan 2026-10-29)
   { const el = await page.evaluate(() => window.EL_MAX * 180 / Math.PI); ok(el >= 85, 'the views turn up to ' + Math.round(el) + '° above and below her'); }
+  // 📖 🧍 Make it 3D from a comic panel's picture with no named character (Jordan 2026-10-30: "pose couldn't be read"): the stand-in mannequin has a rig
+  // SAM can pose, and SAM reads her from just her part of the picture, enlarged, when she is small in it
+  { await page.goto('https://app.test/rig/scene.html?open=scP&panel=pp1&ar=1.8&plabel=Panel%201&photo=' + encodeURIComponent(JSON.stringify({pc:'https://render.test', file:'try.png', sub:'', w:1344, h:768})));
+    await page.waitForFunction(() => window.SCENE && SCENE.PANEL, null, {timeout:20000}); const n0 = GRAPHS.length;
+    const m = await page.waitForFunction(() => /Her pose is from|could not be read/.test((document.querySelector('#allmsg') || {}).textContent || '') && document.querySelector('#allmsg').textContent, null, {timeout:60000}).then(h => h.jsonValue()).catch(() => 'timeout');
+    const v = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'); return {turn:ob && ob.photoTurn, cam:SCENE.sc.cam}; });
+    ok(/Her pose is from/.test(m) && v.turn!=null && v.cam && v.cam.d > 0, '🧍 a panel with nobody named: the mannequin takes the picture\'s pose and the camera is placed: ' + m + ' ' + JSON.stringify(v));
+    // she is small in that picture (the mask the test PC sends is all white, so here a cut-out box is given): just her part goes to SAM, enlarged
+    const sam = GRAPHS.slice(n0).map(g => Object.values(g)).find(g => g.some(n => n.class_type==='SAM3DBody_Predict')) || [];
+    ok(sam.length && !sam.some(n => n.class_type==='ImageCrop'), 'a picture she fills is read whole');
+    const cr = await page.evaluate(() => SCENE.samCrop({x0:0.45, y0:0.4, x1:0.55, y1:0.7, iw:1344, ih:768}));
+    ok(cr && cr.x > 500 && cr.w < 300 && cr.s > 3 && cr.s <= 4, 'a small figure is cropped round her and enlarged for SAM: ' + JSON.stringify(cr)); }
   // her base body is only on Render: with Main listed first (its library answers, but it has no 3D Bodies), she still gets her rig (Jordan 2026-10-29)
   { await page.route('https://main.test/**', r => { const u = new URL(r.request().url()); if(u.pathname==='/renderdeck/library') return r.fulfill({contentType:'application/json', headers:{'access-control-allow-origin':'*'}, body:JSON.stringify({library:1, characters:[lib]})}); r.fulfill({status:404, headers:{'access-control-allow-origin':'*'}, body:''}); });
     await page.evaluate(() => localStorage.setItem('render-deck-v1', JSON.stringify({servers:[{url:'https://main.test', name:'Main'}, {url:'https://render.test', name:'Render PC'}]})));

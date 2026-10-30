@@ -109,7 +109,7 @@ const DEPS = process.env.RIG_DEPS || '';
   // 🧍 the built-in mannequin: 1.7 m on the floor
   await page.click('#add'); await page.waitForSelector('#chars [data-ref="3D/Mannequin"]'); await page.click('#chars [data-ref="3D/Mannequin"]'); await page.waitForTimeout(500);
   const mq = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id); SCENE.poseFor('persp'); o.g.updateMatrixWorld(true); let lo = 9, hi = -9;
-    o.mesh.traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); lo = Math.min(lo, bb.min.y); hi = Math.max(hi, bb.max.y); } }); return {low:+(lo - ob.y).toFixed(3), tall:+(hi - lo).toFixed(2)}; });
+    (o.mq || o.mesh).traverse(m => { if(m.isMesh && m.material.side!==1){ m.geometry.computeBoundingBox(); const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld); lo = Math.min(lo, bb.min.y); hi = Math.max(hi, bb.max.y); } }); return {low:+(lo - ob.y).toFixed(3), tall:+(hi - lo).toFixed(2)}; });
   ok(Math.abs(mq.low) < 0.005 && Math.abs(mq.tall - 1.7) < 0.03, '🧍 the built-in 3D mannequin is under ＋ Character and stands on the floor, 1.7 m tall: ' + JSON.stringify(mq));
   // 🧍 Ellie as her mannequin in the 📷 Camera
   { await page.evaluate(() => { window.RENDER_POLL = 50; const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); ob.x = 0; ob.z = 0; ob.rot = 0; ob.hide = false; SCENE.sc.objs.forEach(o => { if(o!==ob) o.hide = true; }); SCENE.ui.sel = ob.id; SCENE.setView('persp'); });
