@@ -252,6 +252,13 @@ const DEPS = process.env.RIG_DEPS || '';
     // she is small in that picture (the mask the test PC sends is all white, so here a cut-out box is given): just her part goes to SAM, enlarged
     const sam = GRAPHS.slice(n0).map(g => Object.values(g)).find(g => g.some(n => n.class_type==='SAM3DBody_Predict')) || [];
     ok(sam.length && !sam.some(n => n.class_type==='ImageCrop'), 'a picture she fills is read whole');
+    // 📐 the camera from her outline (Jordan 2026-10-30: close-up face shots): outlines drawn from known cameras, close up and far, are found again
+    for(const [D0, el0] of [[0.55, 0], [1.4, 0], [4.5, 0]]){ const f = await page.evaluate(([D0]) => { const ob = SCENE.sc.objs.find(o => o.ref==='3D/Mannequin'), o = SCENE.objs.get(ob.id), az = ob.photoTurn, T = SCENE.THREE;
+        const bx = new T.Box3().expandByObject(o.mq, true), t = bx.getCenter(new T.Vector3()); t.y = bx.max.y - 0.12 - (D0 < 1 ? 0 : 0.35); const cam = new T.PerspectiveCamera(35, SCENE.CAM_A, 0.02, 2000);
+        cam.position.set(t.x + D0 * Math.sin(az), t.y, t.z + D0 * Math.cos(az)); cam.lookAt(t); cam.updateMatrixWorld(true); cam.updateProjectionMatrix(); const W = 96, H = Math.round(96 / SCENE.CAM_A), M = SCENE.rigMask(o, cam, W, H);
+        const r = SCENE.fitCamMask(o, az, M, W, H); window.__art = Array.from({length:H}, (_, y) => Array.from({length:W}, (_, x) => M[y * W + x] ? '#' : '.').join('')).join('\n'); return r && {D:+r.D.toFixed(2), iou:+r.iou.toFixed(2), n:SCENE.maskStats(M, W, H).n, top:SCENE.maskStats(M, W, H).top}; }, [D0]);
+      if(process.env.DBGM) console.log('MASK', D0, '\n' + await page.evaluate(() => window.__art));
+      ok(f && f.iou > 0.75 && Math.abs(f.D / D0 - 1) < 0.2, '📐 her outline seen from ' + D0 + ' m away gives the camera back: ' + JSON.stringify(f)); }
     const cr = await page.evaluate(() => SCENE.samCrop({x0:0.45, y0:0.4, x1:0.55, y1:0.7, iw:1344, ih:768}));
     ok(cr && cr.x > 500 && cr.w < 300 && cr.s > 3 && cr.s <= 4, 'a small figure is cropped round her and enlarged for SAM: ' + JSON.stringify(cr)); }
   // her base body is only on Render: with Main listed first (its library answers, but it has no 3D Bodies), she still gets her rig (Jordan 2026-10-29)
