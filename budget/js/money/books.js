@@ -179,6 +179,14 @@ function savingsPlanned(now = Date.now()) {
   const week = Math.max(0, P * share(partyNow(now)) - partyToCome(now)), amt = Math.max(0, P * share(V - Math.max(0, savers()) - Math.max(0, partyNow(now))));
   return { amt, week, until: ymd(new Date(Math.max(...live.map(c => c.t1)))) };
 }
+// v322 (Jordan 16:46): the Month cushion, paycheck to paycheck: Savings plus what's held now for bills after the next
+// payday. Each pay period's bills come from its own paycheck; a period that comes up short takes it from the cushion then.
+function cushionNow(now = Date.now()) {
+  const S = (potBalances(ymd(new Date(now)).slice(0, 7), now).find(p => p.id === 'savings') || { bal: 0 }).bal, pp = hoardParts(now), inc = mainIncome();
+  const until = savingsPlanned(now).until || (inc && Number(inc.amount) > 0 ? nextPayday(inc, ymd(new Date(now))) : null);
+  const keep = until ? Math.max(0, cents(pp.held - sum(pp.heldList.filter(b => b.due && b.due < until), b => b.A))) : 0;
+  return { H: S + keep, S, keep, until, later: until ? pp.heldList.filter(b => !b.due || b.due >= until) : [], pp };
+}
 function farmNote(id) { const w = id === 'savings' ? savers() : workersAt(id); return w > 0 ? `${money(w * WORKER_DAY)} a day · ${rateText(w)}` : 'kept month to month'; }
 const POT_NAMES = { start: 'Money you had', spend: "This week's money", bills: 'Bills', savings: 'Savings', scavenger: 'Spare change' };
 const potName = id => POT_NAMES[id] || (state.pots.find(p => p.id === id) || { name: 'Deleted pot' }).name;   // v311: no need to count every balance for a name

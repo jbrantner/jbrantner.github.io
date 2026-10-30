@@ -11,7 +11,8 @@ out a day at a time. Now:
   day moves out of Savings into weekly spending, pots, projects and debts as it goes, so Savings is always bank −
   bills held − pots and projects − this week's money not spent yet.
 - **The weekly money through the next payday comes out of Savings on payday** (Jordan: "so I know exactly how much
-  I actually have to spend"), so Savings is what's free. Home now opens with **Yours until payday** (paycheck to paycheck:
+  I actually have to spend"), so Savings is what's free. Home now opens with one card, the **Cushion** (Jordan: a pay period that can't make its
+  bills takes it from the cushion, that's what it's for). It is **yours until payday** (paycheck to paycheck:
   bank − bills due before the next payday − spending money − pots; if bills after it need some of that, "Keep $X of it
   for bills after (payday)" instead of a negative number; plus any pay not landed yet and It's here). The **Month cushion** moved into that card: "Cushion $X of
   $(a month of bills)" with a bar, never below $0; tap it for the cushion sheet. The separate cushion card is gone, then the weekly card with **This week**'s lump sum on top of the day-by-day

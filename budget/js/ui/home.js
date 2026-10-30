@@ -726,21 +726,15 @@ const VL = (() => {
     .replace(/ role="button" tabindex="0"/g, `$& aria-expanded="${wkEd}"`).replace('. Tap to edit your categories"', '. Tap to change your weekly budget"');
   // v322 (Jordan): one number first, how much money you have: what's free after bills held, the spending money through
   // the next payday and pots and projects (Savings and the Month cushion together)
-  function haveHTML(now) {   // v322b (Jordan 16:37): paycheck to paycheck, so a later month's gap doesn't read as a debt today
-    const S = (potBalances(today().slice(0, 7), now).find(p => p.id === 'savings') || { bal: 0 }).bal, pp = hoardParts(now), inc = mainIncome();
-    const until = savingsPlanned(now).until || (inc && Number(inc.amount) > 0 ? nextPayday(inc, today()) : null);
-    // what's held now for bills after the next payday (the part that payday's own bill share won't cover)
-    const later = until ? pp.heldList.filter(b => !b.due || b.due >= until) : [], keep = until ? Math.max(0, cents(pp.held - sum(pp.heldList.filter(b => b.due && b.due < until), b => b.A))) : 0, H = S + keep;
+  function haveHTML(now) {   // v322 (Jordan): one top card, the cushion: what's yours until the next payday, from $0 up to a month of bills
+    const { H, S, keep, until, later, pp } = cushionNow(now), T = billsMonthWhole(), f = T > 0 ? clamp01(H / T) : 0;
     const wait = pp.checks.list.filter(c => c.wait >= 0.005).map(c => `<div class="vl-sub">${moneyExact(c.wait)} of your ${shortDate(c.date)} pay isn't in your bank yet <button class="link" data-pay-here="${esc(c.key)}">It's here</button></div>`).join('');
     const nm = later.length ? ` (${esc(later[later.length - 1].c.name)}${later.length > 1 ? ' and more' : ''})` : '';
-    const keepLine = !(keep >= 1) ? '' : S >= 0 ? `<div class="vl-sub">Keep ${money(keep)} of it for bills after ${shortDate(until)}${nm} · <b>${moneyExact(S)}</b> is free</div>`
-      : `<div class="vl-sub">Keep it for bills after ${shortDate(until)}${nm}: they need ${money(keep)}. ${pp.wait >= -S - 0.005 ? `The ${moneyExact(pp.wait)} still coming covers the rest.` : `That's ${money(-S)} more than you'll have, so go easy until more comes in.`}</div>`;
-    // v322 (Jordan 16:41): the cushion lives in this card: what's free past every bill held, from $0 up to a month of bills
-    const T = billsMonthWhole(), C = T > 0 ? Math.max(0, Math.min(T, S)) : Math.max(0, S), f = T > 0 ? clamp01(C / T) : 0;
-    const cu = `<button class="mh-cu" data-cu-open="1" aria-label="Month cushion: ${money(C)}${T > 0 ? ` of ${money(T)}` : ''}. Open it"><span class="mh-cut"><span>Cushion</span><b class="num">${moneyExact(C)}${T > 0 ? `<small> of ${money(T)}</small>` : ''}</b><span class="mh-go">›</span></span>`
-      + (T > 0 ? `<span class="mh-bar" aria-hidden="true"><i style="width:${(f * 100).toFixed(1)}%"></i></span>` : '') + `<span class="mh-cus">${savingsLine(S, now) || (S > T + 0.005 && T > 0 ? `Full, plus ${money(S - T)} more in Savings` : '')}</span></button>`;
-    return `<div class="vl-hero pp-panel mh-have"><div class="vl-k">${until ? `Yours until payday, ${shortDate(until)}` : 'Money you have'}</div><div class="vl-total num${H < 0 ? ' bad' : ''}">${H < 0 ? '−' + moneyExact(-H) : moneyExact(H)}</div>`
-      + `<div class="vl-sub">after bills due by then and your spending money</div>${keepLine}${wait}${cu}</div>`;
+    const heads = keep >= 1 && S < -0.005 ? `<div class="vl-sub">Heads-up: bills after ${shortDate(until)}${nm} need ${money(Math.ceil(-S - 1e-9))} more than your next paycheck holds for them. ${pp.wait >= -S - 0.005 ? `The ${moneyExact(pp.wait)} still coming covers it.` : `If it's still short then, it comes out of here.`}</div>` : '';
+    return `<div class="vl-hero pp-panel mh-have"><button class="mh-cu" data-cu-open="1" aria-label="Month cushion: ${money(H)}${T > 0 ? ` of ${money(T)}` : ''}. Open it">`
+      + `<span class="vl-k">Cushion${T > 0 ? ` <small>of ${money(T)}</small>` : ''} ›</span><span class="vl-total num${H < 0 ? ' bad' : ''}">${H < 0 ? '−' + moneyExact(-H) : moneyExact(H)}</span>`
+      + (T > 0 ? `<span class="mh-bar" aria-hidden="true"><i style="width:${(f * 100).toFixed(1)}%"></i></span>` : '')
+      + `<span class="vl-sub">Yours until payday${until ? `, ${shortDate(until)}` : ''}, after the bills due by then and your spending money</span></button>${heads}${wait}</div>`;
   }
   function homeHTML(now) {
     const pu = purseNow(now), n = partySize(), d = Math.max(0, Math.min(6, Math.floor((now - weekStart(new Date(now))) / DAY_MS))), days = 7 - d, t = todayLeft(pu, new Date(now)), L = pu.purseLeft;
