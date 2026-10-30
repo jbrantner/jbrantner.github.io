@@ -78,6 +78,24 @@ const DEPS = process.env.RIG_DEPS || '';
   // opening the scene itself leaves the panel
   await page.evaluate(() => postMessage({rdopen:'scA'}, location.origin)); await page.waitForFunction(() => !SCENE.PANEL);
   ok(await page.evaluate(() => SCENE.sc.objs.find(o => o.id==='o1').x===0 && getComputedStyle(document.querySelector('#ptitle')).display==='none' && SCENE.CAM_A===0.8), 'opening the scene on its own shows the scene, not a panel');
+  // 📖 a comic panel's window (?win=1, Jordan 2026-10-30): only the panel camera's view, see-through round the people; drag turns round her and keeps that
+  // camera for this panel alone (another window's camera in the same scene isn't undone); a tap tells the comic page; ?w3= makes the posed one a library character
+  { const r0 = await recOf(); r0.panels.p1.cam = {az:0.3, el:0, d:4, t:[0, 1, 0]}; r0.panels.p1.camLock = true; r0.objs.find(o => o.id==='o1').photoTurn = 0.3; await page.evaluate(r => { const L = JSON.parse(localStorage.getItem('rd-scenes')).filter(s => s.id!==r.id); L.push(r); localStorage.setItem('rd-scenes', JSON.stringify(L)); }, r0); store.set('scA', r0);
+    const wp = page; await wp.setViewportSize({width:300, height:200});
+    await wp.goto('https://app.test/rig/scene.html?open=scA&panel=p1&ar=1.5&win=1&w3=Ellen%2Fellen&w3n=Ellen');
+    await wp.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.PANEL && document.body.classList.contains('win'), null, {timeout:20000}); await wp.waitForTimeout(600);
+    const v = await wp.evaluate(() => { const c = document.querySelector('#stage canvas'), b = c.getBoundingClientRect(), shown = [...document.body.children].filter(e => getComputedStyle(e).display!=='none').map(e => e.id || e.className);
+      return {w:Math.round(b.width), h:Math.round(b.height), shown, bg:getComputedStyle(document.body).backgroundColor, ref:SCENE.sc.objs.find(o => o.id==='o1').ref, label:SCENE.sc.objs.find(o => o.id==='o1').label, az:SCENE.sc.cam.az}; });
+    ok(v.w===300 && v.h===200 && v.shown.join()==='stage' && /rgba\(0, 0, 0, 0\)|transparent/.test(v.bg) && v.az===0.3, 'the window is just the panel camera\'s view, the whole frame, see-through: ' + JSON.stringify(v));
+    ok(v.ref==='Ellen/ellen' && v.label==='Ellen', 'w3 makes the posed one Ellen: ' + v.ref);
+    await wp.evaluate(() => { window.__win = []; addEventListener('message', e => e.data && e.data.rdwin && __win.push(e.data.rdwin)); });
+    // meanwhile another panel's window turned its camera
+    await wp.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-scenes')), r = L.find(s => s.id==='scA'); r.panels.p2 = Object.assign({}, r.panels.p2, {cam:{az:2, el:0.1, d:5, t:[0, 1, 0]}}); localStorage.setItem('rd-scenes', JSON.stringify(L)); });
+    await wp.mouse.move(150, 100); await wp.mouse.down(); for(let k = 1; k <= 6; k++) await wp.mouse.move(150 - k * 10, 100); await wp.mouse.up(); await wp.waitForTimeout(600);
+    const c = await wp.evaluate(() => { const r = JSON.parse(localStorage.getItem('rd-scenes')).find(s => s.id==='scA'); return {p1:r.panels.p1.cam, p2:r.panels.p2.cam, msgs:__win}; });
+    ok(c.p1.az!==0.3 && c.p2.az===2 && c.msgs.some(m => m.pid==='p1' && m.cam), 'dragging turns round her and keeps it as panel 1\'s camera, panel 2\'s camera untouched: ' + JSON.stringify(c));
+    await wp.mouse.click(150, 100); await wp.waitForTimeout(200); ok(await wp.evaluate(() => __win.some(m => m.tap)), 'a tap in the window tells the comic page');
+    }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
