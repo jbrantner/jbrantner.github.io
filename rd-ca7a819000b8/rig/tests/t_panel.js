@@ -96,6 +96,13 @@ const DEPS = process.env.RIG_DEPS || '';
     const c = await wp.evaluate(() => { const r = JSON.parse(localStorage.getItem('rd-scenes')).find(s => s.id==='scA'); return {p1:r.panels.p1.cam, p2:r.panels.p2.cam, msgs:__win}; });
     ok(c.p1.az!==0.3 && c.p2.az===2 && c.msgs.some(m => m.pid==='p1' && m.cam), 'dragging turns round her and keeps it as panel 1\'s camera, panel 2\'s camera untouched: ' + JSON.stringify(c));
     await wp.mouse.click(150, 100); await wp.waitForTimeout(200); ok(await wp.evaluate(() => __win.some(m => m.tap)), 'a tap in the window tells the comic page');
+    // a window opened again while its render was still going (Jordan 2026-10-30: it said "still going" for good): it collects the finished render itself
+    { GRAPHS.push({9:{class_type:'SaveImage', inputs:{filename_prefix:'RenderDeck/scene/Scene_1_scene'}}}); const pid = 'p' + GRAPHS.length;
+      await wp.evaluate(pid => { const L = JSON.parse(localStorage.getItem('rd-scenes')), r = L.find(s => s.id==='scA'); r.panels.p1 = Object.assign({}, r.panels.p1, {rsJob:{pid, pc:'https://render.test', save:'9', t0:Date.now() - 5000, rec:{W:64, H:64, key:'k'}}}); r.saved = Date.now(); localStorage.setItem('rd-scenes', JSON.stringify(L)); }, pid);
+      store.delete('scA'); await wp.reload(); await wp.waitForFunction(() => window.SCENE && SCENE.sc && SCENE.PANEL, null, {timeout:20000});
+      await wp.waitForFunction(() => { const r = JSON.parse(localStorage.getItem('rd-scenes')).find(s => s.id==='scA'); return r.panels.p1 && !r.panels.p1.rsJob && r.panels.p1.scene; }, null, {timeout:20000}).catch(() => {});
+      const rj = await wp.evaluate(() => { const r = JSON.parse(localStorage.getItem('rd-scenes')).find(s => s.id==='scA'); return {job:!!r.panels.p1.rsJob, file:r.panels.p1.scene && r.panels.p1.scene.file}; });
+      ok(!rj.job && /Scene_1_scene/.test(rj.file || ''), 'a window with a render still marked as going collects it when it opens: ' + JSON.stringify(rj)); }
     }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
