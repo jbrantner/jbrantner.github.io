@@ -1462,8 +1462,12 @@ function qwenPass(add, Q, guide, refs, prompt, W, H, seed, nb){ let model = [add
   const clip = [add('CLIPLoader', {clip_name:Q.c, type:'qwen_image', device:'default'}), 0], vae = [add('VAELoader', {vae_name:Q.v}), 0], ims = {};
   [guide, ...refs].forEach((f, i) => { ims['image' + (i + 1)] = [add('LoadImage', {image:f}), 0]; });
   const enc = text => [add('FluxKontextMultiReferenceLatentMethod', {conditioning:[add('TextEncodeQwenImageEditPlus', Object.assign({clip, vae, prompt:text}, ims)), 0], reference_latents_method:'index_timestep_zero'}), 0];
-  const ks = add('KSampler', {model, seed, steps:Q.l ? 4 : 20, cfg:Q.l ? 1 : 2.5, sampler_name:'euler', scheduler:'simple', positive:enc(prompt), negative:enc(''), latent_image:[add('EmptySD3LatentImage', {width:W, height:H, batch_size:nb || 1}), 0], denoise:1});
-  return [add('VAEDecode', {samples:[ks, 0], vae}), 0]; }
+  // one picture at a time (Jordan 2026-10-31: a batch of 4 on Render's 8 GB card sat at 100% for 11+ minutes, streaming the 19.6 GB model),
+  // each try its own seed, joined into one batch at the end
+  const P = enc(prompt), N = enc(''), lat = [add('EmptySD3LatentImage', {width:W, height:H, batch_size:1}), 0]; let out = null;
+  for(let i = 0; i < (nb || 1); i++){ const ks = add('KSampler', {model, seed:seed + i * 7919, steps:Q.l ? 4 : 20, cfg:Q.l ? 1 : 2.5, sampler_name:'euler', scheduler:'simple', positive:P, negative:N, latent_image:lat, denoise:1});
+    const im = [add('VAEDecode', {samples:[ks, 0], vae}), 0]; out = out ? [add('ImageBatch', {image1:out, image2:im}), 0] : im; }
+  return out; }
 function qwenWords(e, A, place, what){ const look = (e.tags || '').split(',').map(t => t.trim().replace(/_/g, ' ')).filter(t => t && !NOT_HERS.test(t) && !/^(1girl|1boy|solo|afkj style)$/i.test(t) && t.toLowerCase()!==(e.trigger || '').trim().toLowerCase()).join(', ');
   const boy = /\b1boy\b/i.test((e.prompt || '') + ',' + (e.tags || ''));
   return 'Picture 1 is a pose and camera guide: the coloured skeleton is ' + (boy ? 'his' : 'her') + ' pose and the white grid lines are the ground, ' + A.say[0] + '. Draw the ' + (boy ? 'anime man' : 'anime woman') +
