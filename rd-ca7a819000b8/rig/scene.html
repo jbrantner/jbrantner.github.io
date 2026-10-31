@@ -1412,6 +1412,62 @@ function sceneDepth(cam, W, H, items){ const hid = sceneHide(), show = [], put =
 function scenePose(chars, cam, W, H){ const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, W, H); x.globalCompositeOperation = 'lighter';
   for(const o of chars){ if(!o.mq || !o.mq.userData.body || !BODY) continue; o.g.updateMatrixWorld(true); const pts = guideJoints(o).map(w => { const p = w.clone().project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; });
     x.drawImage(drawPose(W, H, pts, pts.map(() => true)), 0, 0); } return c; }
+// 📐 Route 1 (Jordan 2026-10-31, "Route 1: Qwen, then Illustrious 0.45 is looking really good"): panel 1's Camera looks down ~35° and every
+// painting came out at eye level, so the ground goes in as a grid of 1 m white lines seen from the Camera, with nobody over it; Qwen and
+// the canny ControlNet read the Camera's height and tilt from it
+function sceneGrid(cam, W, H, masks){ const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, W, H);
+  x.strokeStyle = '#fff'; x.lineWidth = Math.max(2, Math.round(H / 400)); cam.updateMatrixWorld(true); const inv = cam.matrixWorldInverse, NEAR = 0.05, R = 16, cx = Math.round(cam.position.x), cz = Math.round(cam.position.z);
+  const seg = (a, b) => { a = a.applyMatrix4(inv); b = b.applyMatrix4(inv); if(a.z > -NEAR && b.z > -NEAR) return; // (cut at the Camera, so lines behind it don't wrap round)
+    if(a.z > -NEAR) a.lerp(b, (-NEAR - a.z) / (b.z - a.z)); else if(b.z > -NEAR) b.lerp(a, (-NEAR - b.z) / (a.z - b.z));
+    const p = a.applyMatrix4(cam.projectionMatrix), q = b.applyMatrix4(cam.projectionMatrix); x.beginPath(); x.moveTo((p.x + 1) / 2 * W, (1 - p.y) / 2 * H); x.lineTo((q.x + 1) / 2 * W, (1 - q.y) / 2 * H); x.stroke(); };
+  for(let k = -R; k <= R; k++){ seg(new THREE.Vector3(cx + k, 0, cz - R), new THREE.Vector3(cx + k, 0, cz + R)); seg(new THREE.Vector3(cx - R, 0, cz + k), new THREE.Vector3(cx + R, 0, cz + k)); }
+  // nobody over the ground: each character's outline (grown a little) wiped out of the grid
+  if(masks && masks.length){ const t = document.createElement('canvas'); t.width = W; t.height = H; const tx = t.getContext('2d'); tx.filter = 'blur(' + Math.max(4, Math.round(H / 120)) + 'px)'; masks.forEach(m => tx.drawImage(m, 0, 0, W, H));
+    const md = tx.getImageData(0, 0, W, H).data, id = x.getImageData(0, 0, W, H); for(let p = 0; p < W * H; p++) if(md[p * 4] > 8){ id.data[p * 4] = id.data[p * 4 + 1] = id.data[p * 4 + 2] = 0; } x.putImageData(id, 0, 0); }
+  return c; }
+// the guide Qwen paints from: the grid with her skeleton on top
+function sceneGuide(grid, pose){ const W = grid.width, H = grid.height, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(grid, 0, 0);
+  const id = x.getImageData(0, 0, W, H), pd = pose.getContext('2d').getImageData(0, 0, W, H).data; for(let p = 0; p < W * H * 4; p += 4) if(Math.max(pd[p], pd[p + 1], pd[p + 2]) > 20){ id.data[p] = pd[p]; id.data[p + 1] = pd[p + 1]; id.data[p + 2] = pd[p + 2]; }
+  x.putImageData(id, 0, 0); return c; }
+// 📐 the angle as words, from SAM's body and the Camera (Jordan 2026-10-31: tags for Illustrious, sentences for Qwen): how far the Camera looks
+// down or up, which way her chest faces it, and where her head turns in the picture
+function rsAngle(cam, o){ const dir = new THREE.Vector3(); cam.updateMatrixWorld(true); cam.getWorldDirection(dir); const pitch = Math.round(Math.asin(Math.max(-1, Math.min(1, -dir.y))) / D2R);
+  const tags = [], neg = [], say = []; let g = null; try{ o.g.updateMatrixWorld(true); g = guideJoints(o); }catch(e){}
+  if(pitch >= 20){ tags.push('from above', 'high angle'); neg.push('horizon', 'sky'); say.push('seen from a high camera looking down at about ' + Math.round(pitch / 5) * 5 + ' degrees'); }
+  else if(pitch <= -15){ tags.push('from below', 'low angle'); say.push('seen from a low camera looking up at about ' + Math.round(-pitch / 5) * 5 + ' degrees'); }
+  else say.push('seen from eye level');
+  if(!g || g.length < 18) return {pitch, tags, neg, say}; const flat = v => { v.y = 0; return v.lengthSq() > 1e-8 ? v.normalize() : null; }, ang = (a, b) => a && b ? Math.acos(Math.max(-1, Math.min(1, a.dot(b)))) / D2R : null;
+  const toCam = flat(cam.position.clone().sub(g[1])), body = flat(g[5].clone().sub(g[2]).cross(new THREE.Vector3(0, 1, 0))), head = flat(g[0].clone().sub(g[16].clone().lerp(g[17], 0.5)));
+  const yaw = ang(body, toCam), hy = ang(head, toCam);
+  if(yaw!=null){ if(yaw > 120){ tags.push('from behind'); say.push('her back is to the camera'); }
+    else if(yaw > 75){ if(Math.abs(pitch) < 20) tags.push('from side'); say.push('her body is seen from the side'); }
+    else if(yaw > 35) say.push('her body is turned three-quarters away from the camera'); else say.push('her body faces the camera'); }
+  if(hy!=null && hy > 40 && (yaw==null || yaw <= 120)){ const a = g[0].clone().project(cam), b = g[16].clone().lerp(g[17], 0.5).project(cam);
+    tags.push('looking to the side'); neg.push('looking at viewer'); say.push('her head is turned toward the ' + (a.x > b.x ? 'right' : 'left') + ' of the picture, not looking at the camera'); }
+  return {pitch, yaw, hy, tags, neg, say}; }
+// Qwen-Image-Edit 2511 on her two library views (front, side) and the guide: one picture, her on the skeleton, the ground on the grid
+async function qwenKit(u){ if(!await hasNode(u, 'TextEncodeQwenImageEditPlus')) return null;
+  const [un, ll, cl, va] = await Promise.all([comboOf(u, 'UNETLoader', 'unet_name'), comboOf(u, 'LoraLoaderModelOnly', 'lora_name'), comboOf(u, 'CLIPLoader', 'clip_name'), comboOf(u, 'VAELoader', 'vae_name')]);
+  const m = un.find(n => /qwen.?image.?edit.?2511/i.test(n)), c = cl.find(n => /qwen.?2\.?5.?vl/i.test(n)), v = va.find(n => /qwen.?image.?vae/i.test(n));
+  return m && c && v ? {m, c, v, l:ll.find(n => /2511.*lightning.*4.?step/i.test(n)) || ''} : null; }
+function qwenPass(add, Q, guide, refs, prompt, W, H, seed){ let model = [add('UNETLoader', {unet_name:Q.m, weight_dtype:'default'}), 0];
+  if(Q.l) model = [add('LoraLoaderModelOnly', {model, lora_name:Q.l, strength_model:1}), 0]; model = [add('CFGNorm', {model:[add('ModelSamplingAuraFlow', {model, shift:3.1}), 0], strength:1}), 0];
+  const clip = [add('CLIPLoader', {clip_name:Q.c, type:'qwen_image', device:'default'}), 0], vae = [add('VAELoader', {vae_name:Q.v}), 0], ims = {};
+  [guide, ...refs].forEach((f, i) => { ims['image' + (i + 1)] = [add('LoadImage', {image:f}), 0]; });
+  const enc = text => [add('FluxKontextMultiReferenceLatentMethod', {conditioning:[add('TextEncodeQwenImageEditPlus', Object.assign({clip, vae, prompt:text}, ims)), 0], reference_latents_method:'index_timestep_zero'}), 0];
+  const ks = add('KSampler', {model, seed, steps:Q.l ? 4 : 20, cfg:Q.l ? 1 : 2.5, sampler_name:'euler', scheduler:'simple', positive:enc(prompt), negative:enc(''), latent_image:[add('EmptySD3LatentImage', {width:W, height:H, batch_size:1}), 0], denoise:1});
+  return [add('VAEDecode', {samples:[ks, 0], vae}), 0]; }
+function qwenWords(e, A, place){ const look = (e.tags || '').split(',').map(t => t.trim().replace(/_/g, ' ')).filter(t => t && !NOT_HERS.test(t) && !/^(1girl|1boy|solo|afkj style)$/i.test(t) && t.toLowerCase()!==(e.trigger || '').trim().toLowerCase()).join(', ');
+  const boy = /\b1boy\b/i.test((e.prompt || '') + ',' + (e.tags || ''));
+  return 'Picture 1 is a pose and camera guide: the coloured skeleton is ' + (boy ? 'his' : 'her') + ' pose and the white grid lines are the ground, ' + A.say[0] + '. Draw the ' + (boy ? 'anime man' : 'anime woman') +
+    ' from Picture 2 and Picture 3 (same face, hair, eyes, clothes and anime art style' + (look ? '; ' + look : '') + ') exactly on the skeleton: same pose, body angle, position and size' + (A.say.length > 1 ? '; ' + A.say.slice(1).join('; ').replace(/\bher\b/g, boy ? 'his' : 'her') : '') +
+    '. The ground and background: ' + (place || 'a simple outdoor place') + ', following the grid\'s perspective' + (A.pitch >= 20 ? ', seen from above, no horizon, no sky' : '') + '. Only one person; no lines, grid or skeleton visible in the picture.'; }
+// her front and side views from the 📚 library, sent to the PC
+async function refViews(url, e, stamp){ const vs = e.views || [], pick = re => vs.find(v => re.test(v.file || '')), out = [];
+  for(const [v, n] of [[pick(/^eye_000/) || vs[0], 'front'], [pick(/^eye_090/) || vs[Math.floor(vs.length / 4)], 'side']]){ if(!v || !v.file) continue;
+    const bm = await createImageBitmap(await (await fetch(viewUrl(e, v.file))).blob()), c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height; c.getContext('2d').drawImage(bm, 0, 0);
+    out.push(await upload(url, c, 'rd-scene-ref' + n + '-' + stamp + '.png')); } return out; }
+const RS_Q = 0.45; // Illustrious over Qwen's picture (Jordan liked 0.45: her LoRA's look, Qwen's angle and ground kept)
 // what gets painted: characters (their mannequins) and 🪑 3D objects; the environment's own things are background
 const rsItems = () => SC.objs.filter(ob => !ob.hide && !ob.fromEnv && OBJ.get(ob.id) && OBJ.get(ob.id).e && (OBJ.get(ob.id).mq || OBJ.get(ob.id).mesh)).map(ob => OBJ.get(ob.id));
 const rsKey = items => JSON.stringify([SC.env || '', items.map(o => [o.ob.id, shotKey(o.ob)])]); // (shotKey has the Camera in it)
@@ -1468,8 +1524,8 @@ function herPass(add, K, ck, img, o, text, mk, fk, FH, seed, sam, det, n, cg){ c
   return out; }
 // the PC: the one with the most of their LoRAs, ControlNet ProMax and the Impact Pack's Detailer
 async function rsKit(chars, lead, first){ const urls = [first, PC.url, ...(window.SCENE_SERVERS || deckServers()).map(x => x.url.replace(/\/+$/, ''))].filter((u, i, a) => u && a.indexOf(u)===i);
-  const kits = (await Promise.all(urls.map(async u => { try{ const k = await kitOn(u, {ckpt:lead.ckpt}); k.dfe = await hasNode(u, 'DetailerForEach') && await hasNode(u, 'MaskToSEGS'); k.samc = k.sam && await hasNode(u, 'SAMDetectorCombined'); k.ccm = await hasNode(u, 'RenderDeckCutoutColorMatch'); k.cseg = await hasNode(u, 'ImpactControlNetApplyAdvancedSEGS'); return k; }catch(e){ return null; } }))).filter(k => k && k.ckpt && k.cn);
-  if(!kits.length) throw new Error('No PC has an Illustrious model and ControlNet ProMax.'); const has = k => chars.filter(o => o.e.lora && k.los.includes(o.e.lora)).length + (k.dfe ? 0.5 : 0);
+  const kits = (await Promise.all(urls.map(async u => { try{ const k = await kitOn(u, {ckpt:lead.ckpt}); k.dfe = await hasNode(u, 'DetailerForEach') && await hasNode(u, 'MaskToSEGS'); k.samc = k.sam && await hasNode(u, 'SAMDetectorCombined'); k.ccm = await hasNode(u, 'RenderDeckCutoutColorMatch'); k.cseg = await hasNode(u, 'ImpactControlNetApplyAdvancedSEGS'); k.qw = PANEL ? await qwenKit(u).catch(() => null) : null; return k; }catch(e){ return null; } }))).filter(k => k && k.ckpt && k.cn);
+  if(!kits.length) throw new Error('No PC has an Illustrious model and ControlNet ProMax.'); const has = k => chars.filter(o => o.e.lora && k.los.includes(o.e.lora)).length + (k.dfe ? 0.5 : 0) + (k.qw ? 1 : 0); // (📐 a panel paints best through Qwen: Route 1)
   kits.sort((a, b) => (has(b) - has(a)) || ((b.url===first) - (a.url===first))); return kits[0]; }
 const rsTools = (add, K) => ({sam:K.samc ? [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0] : null, det:K.ud ? [add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}), 0] : null});
 // ⏳ the app can be closed while a 🎬 Render Scene or a 🖌 repaint runs (Jordan 2026-10-29): once the PC has the job it is kept on the scene
@@ -1498,6 +1554,11 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     msg('🎬 Sending the scene to ' + pcName(url) + '…'); const masks = regionMasks(items, cam, FW, FH), front = rsFront(items, masks, cam);
     const dn = await up(sceneDepth(cam, W, H, items), 'sdepth'), pn = chars.some(o => o.mq.userData.body) && await up(scenePose(chars, cam, W, H), 'spose'), mn = [], fn = [];
     for(let i = 0; i < masks.length; i++) mn.push(await up(masks[i], 'mask' + i)); if(K.dfe) for(let i = 0; i < items.length; i++) fn.push(rsChars([items[i]]).length ? await up(front[i].c, 'front' + i) : '');
+    // 📐 Route 1 (Jordan 2026-10-31): one character in a 📖 panel, a PC with Qwen 2511: Qwen draws her from her library views on SAM's skeleton
+    // over the Camera's ground grid, then Illustrious paints over that at 0.45 with her LoRA, the skeleton and the grid, and the angle as tags
+    const qo = PANEL && K.qw && chars.length===1 && pn && (chars[0].e.views || []).length ? chars[0] : null, A = qo ? rsAngle(cam, qo) : null; let gn = '', qg = '', qr = [];
+    if(qo){ const grid = sceneGrid(cam, W, H, items.map((o, i) => rsChars([o]).length ? masks[i] : null).filter(Boolean)); gn = await up(grid, 'sgrid'); qg = await up(sceneGuide(grid, scenePose(chars, cam, W, H)), 'sguide');
+      msg('📐 Sending her front and side views…'); qr = await refViews(url, qo.e, stamp); }
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
     const style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)); if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
@@ -1512,21 +1573,24 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     conds.push(region(bw, items.length));
     // over everything: how many people, and 📝 Describe the scene
     const nb = chars.filter((o, i) => /\b1boy\b/i.test(words[items.indexOf(o)])).length, ng = chars.length - nb, cnt = (k, w) => k ? (k > 5 ? '6+' + w + 's' : k + w + (k > 1 ? 's' : '')) : '';
-    const dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '', all = [sw.replace(/, $/, ''), cnt(ng, 'girl').replace(/^1girls$/, '1girl'), cnt(nb, 'boy'), ng > 1 ? 'multiple girls' : '', nb > 1 ? 'multiple boys' : '', dt].filter(Boolean).join(', ').split(',').map(t => t.trim()).filter((t, i, a) => t && a.indexOf(t)===i).join(', '); // (each tag once: "1girl, 1girl")
+    const dt = (SC.desc || '').trim() ? await tagsOf(SC.desc.trim()) : '', all = [sw.replace(/, $/, ''), cnt(ng, 'girl').replace(/^1girls$/, '1girl'), cnt(nb, 'boy'), ng > 1 ? 'multiple girls' : '', nb > 1 ? 'multiple boys' : '', dt, ...(A ? A.tags : [])].filter(Boolean).join(', ').split(',').map(t => t.trim()).filter((t, i, a) => t && a.indexOf(t)===i).join(', '); // (each tag once: "1girl, 1girl")
     if(all) conds.push(add('CLIPTextEncode', {clip, text:all}));
     let pos = conds[0]; for(const c of conds.slice(1)) pos = add('ConditioningCombine', {conditioning_1:[pos, 0], conditioning_2:[c, 0]});
-    const neg = add('CLIPTextEncode', {clip, text:rsNeg(chars.length)}), L = add('ControlNetLoader', {control_net_name:K.cn});
+    const neg = add('CLIPTextEncode', {clip, text:rsNeg(chars.length) + (A && A.neg.length ? ', ' + A.neg.join(', ') : '')}), L = add('ControlNetLoader', {control_net_name:K.cn});
     // 🧍 SAM's body is a much better guide than the rig (Jordan 2026-10-30: follow it much closer, it won't be stiff), so when anyone stands
     // in as SAM's body the depth and skeleton hold on harder and longer; the LoRA still lets go late enough for her own proportions
     const CN = rsCN(chars);
-    let ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:CN.d, start_percent:0, end_percent:CN.de, vae:[ck, 2]});
-    if(pn) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:CN.p, start_percent:0, end_percent:CN.pe, vae:[ck, 2]});
-    const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1], latent_image:[add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0], denoise:1});
+    const cnA = (p, type, image, strength, end) => add('ControlNetApplyAdvanced', {positive:[p, 0], negative:[p===pos ? neg : p, p===pos ? 0 : 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image:[add('LoadImage', {image}), 0], strength, start_percent:0, end_percent:end, vae:[ck, 2]});
+    let ca; if(qo) ca = cnA(cnA(pos, 'openpose', pn, 1, 0.85), 'canny/lineart/anime_lineart/mlsd', gn, 0.5, 0.5); // (📐 Route 1: as tested, the skeleton and the ground grid; Qwen already has the depth right)
+    else ca = add('ControlNetApplyAdvanced', {positive:[pos, 0], negative:[neg, 0], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'depth'}), 0], image:[add('LoadImage', {image:dn}), 0], strength:CN.d, start_percent:0, end_percent:CN.de, vae:[ck, 2]});
+    if(pn && !qo) ca = add('ControlNetApplyAdvanced', {positive:[ca, 0], negative:[ca, 1], control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type:'openpose'}), 0], image:[add('LoadImage', {image:pn}), 0], strength:CN.p, start_percent:0, end_percent:CN.pe, vae:[ck, 2]});
+    const seed = Math.floor(Math.random() * 2 ** 40), ks = add('KSampler', {model, seed, steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[ca, 0], negative:[ca, 1],
+      latent_image:qo ? [add('VAEEncode', {pixels:[add('ImageScale', {image:qwenPass(add, K.qw, qg, qr, qwenWords(qo.e, A, [(SC.desc || '').trim(), (env.words || '').trim()].filter(Boolean).join('; ')), W, H, seed), upscale_method:'lanczos', width:W, height:H, crop:'disabled'}), 0], vae:[ck, 2]}), 0] : [add('EmptyLatentImage', {width:W, height:H, batch_size:1}), 0], denoise:qo ? RS_Q : 1});
     let out = [add('ImageScale', {image:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], upscale_method:'lanczos', width:FW, height:FH, crop:'disabled'}), 0]; const first = out; // (🎨 the colours every later pass is matched back to)
     // then the background on its own (style LoRA only), then each character's own pass, the farthest first
-    out = bgPass(add, K, ck, style, out, mn[items.length], dn, env, dt, FH, seed + 50);
+    if(!qo) out = bgPass(add, K, ck, style, out, mn[items.length], dn, env, dt, FH, seed + 50); // (📐 Route 1 keeps Qwen's ground and her 0.45 painting, as Jordan liked it)
     // (characters farthest first, so whoever is nearer is painted last, on top)
-    if(K.dfe && chars.length){ const T = rsTools(add, K); items.map((o, i) => i).filter(i => rsChars([items[i]]).length).sort((a, b) => front[b].d - front[a].d)
+    if(K.dfe && chars.length && !qo){ const T = rsTools(add, K); items.map((o, i) => i).filter(i => rsChars([items[i]]).length).sort((a, b) => front[b].d - front[a].d)
         .forEach(i => { out = herPass(add, K, ck, out, items[i], words[i], mn[i], fn[i], FH, seed + 1 + i, T.sam, T.det, chars.length, CN.her ? {L, dn, pn, W:FW} : null); }); }
     // 🎞 Blend (Jordan 2026-10-29): the whole picture once more, lightly, with the same regions and LoRAs as the first painting, no ControlNet,
     // so light and edges melt together after the separate passes (light, so it doesn't pull them away from their own LoRAs)
@@ -1547,7 +1611,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     // the characters' passes keep their own colours) are matched back to the first painting's (Render Deck's colour-match node)
     if(K.ccm) out = [add('RenderDeckCutoutColorMatch', {image:out, image_ref:ref, strength:RS_CM}), 0];
     const save = add('SaveImage', {images:out, filename_prefix:(HID ? 'Hidden' : 'RenderDeck') + '/scene/' + (SC.name || 'scene').replace(/[^\w-]+/g, '_') + '_scene'});
-    await rsRun(url, g, save, t => msg('🎬 Painting the scene, then the background' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + (Z > 1 ? ' then the close-up' : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
+    await rsRun(url, g, save, t => msg(qo ? '📐 Qwen draws her on the skeleton and the ground grid, then Illustrious paints over her at 0.45' + (Z > 1 ? ', then the close-up' : '') + ' on ' + pcName(url) + '… ' + t + ' s' : '🎬 Painting the scene, then the background' + (K.dfe && chars.length ? ', then each character in her own pass' + (blend ? ', then the blend,' : ',') : '') + (Z > 1 ? ' then the close-up' : '') + ' on ' + pcName(url) + '… ' + t + ' s'), {W:FW, H:FH, key, who:chars.map(o => o.ob.id)});
     const miss = chars.filter(o => o.e.lora && !K.los.includes(o.e.lora)).map(o => o.ob.label || o.e.name);
     msg('Done: the rendered scene is in the viewer (and in 🖼 Renders).' + (miss.length ? ' (' + pcName(url) + ' doesn\'t have the LoRA of ' + miss.join(', ') + ', so it was left out.)' : '') + (!K.dfe && chars.length ? ' (' + pcName(url) + ' has no Impact Pack Detailer, so the characters got no pass of their own.)' : '')); }
   catch(err){ msg(err.message || String(err)); }
@@ -1747,5 +1811,5 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {SAMFIT, rsCN, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {SAMFIT, rsCN, rsAngle, sceneGrid, sceneGuide, qwenPass, qwenWords, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
