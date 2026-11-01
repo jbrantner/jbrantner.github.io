@@ -325,6 +325,7 @@ function openSocket(url){
     if(typeof ev.data !== 'string'){ onPreview(url, ev.data); return; }
     let m; try{ m = JSON.parse(ev.data); }catch(e){ return; } const d = m.data || {}, id = d.prompt_id;
     if(m.type==='status'){ const n = d.status && d.status.exec_info && d.status.exec_info.queue_remaining; if(typeof n==='number') p.load = n; drawDots(); return; }
+    if(m.type==='VHS_latentpreview'){ if(p.running && d.length){ const L = LIVE[p.running] = LIVE[p.running] || {}; L.frames = L.frames || []; L.frames.length = Math.max(L.frames.length, d.length); } return; }
     if(!id) return; const L = LIVE[id] = LIVE[id] || {};
     if(m.type==='execution_start'){ L.t0 = Date.now(); p.running = id; }
     else if(m.type==='progress'){ if(L.pn!==d.node){ L.pn = d.node; L.ps = Date.now(); } L.v = d.value; L.max = d.max; L.pt = Date.now(); }
@@ -334,11 +335,29 @@ function openSocket(url){
   };
   w.onclose = () => { if(p.ws===w) p.ws = null; setTimeout(() => { if(pcOf(url).online) openSocket(url); }, 5000); };
 }
+// moving previews: VideoHelperSuite sends every frame of the clip at each step when the prompt asks for it (rate = latent frames per second;
+// one MiniMax H3 latent frame is 4 video frames, so 6 a second plays at real speed). PCs without VHS just send the usual single picture.
+const VHS_RATE = 6, VHS_PREVIEW = {extra_pnginfo:{workflow:{extra:{VHS_latentpreview:true, VHS_latentpreviewrate:VHS_RATE}}}};
+function onVhsFrame(pid, idx, blob){
+  const L = LIVE[pid] = LIVE[pid] || {}; const fr = L.frames = L.frames || [];
+  if(fr[idx]) URL.revokeObjectURL(fr[idx]); fr[idx] = URL.createObjectURL(blob); L.vhsAt = Date.now();
+  if(!L.img){ L.img = fr[idx]; drawLive(); }
+}
+function playFrames(){ // one shared timer that steps every running clip's preview to its next frame
+  for(const pid in LIVE){ const L = LIVE[pid]; if(!L.frames || !L.frames.length) continue;
+    if(L.done){ L.frames.forEach(u => u && u!==L.img && URL.revokeObjectURL(u)); L.frames = null; continue; }
+    const n = L.frames.length; let i = L.fi || 0; for(let k = 0; k < n; k++){ i = (i + 1) % n; if(L.frames[i]) break; }
+    L.fi = i; const u = L.frames[i]; if(!u) continue; L.img = u;
+    const im = document.querySelector(`[data-live="${CSS.escape(pid)}"] img`); if(im && im.src!==u) im.src = u; }
+}
+setInterval(playFrames, 1000 / VHS_RATE);
 function onPreview(url, buf){
   try{ const v = new DataView(buf), type = v.getUint32(0); let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg', pid = pcOf(url).running;
     if(type===4){ const n = v.getUint32(4); const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, n))); pid = meta.prompt_id || pid; mime = meta.image_type || mime; off = 8 + n; }
     else if(type!==1) return;
-    if(!pid) return; const L = LIVE[pid] = LIVE[pid] || {}; if(L.img) URL.revokeObjectURL(L.img); L.img = URL.createObjectURL(new Blob([buf.slice(off)], {type:mime})); drawLive();
+    else if(buf.byteLength > 32 && v.getUint32(8)===1){ // VideoHelperSuite frame: [1][1][frame index][16-byte node id][JPEG]
+      if(pid) onVhsFrame(pid, v.getUint32(12), new Blob([buf.slice(32)], {type:'image/jpeg'})); return; }
+    if(!pid) return; const L = LIVE[pid] = LIVE[pid] || {}; if(L.frames && Date.now() - (L.vhsAt || 0) < 30000) return; if(L.img) URL.revokeObjectURL(L.img); L.img = URL.createObjectURL(new Blob([buf.slice(off)], {type:mime})); drawLive();
   }catch(e){}
 }
 
@@ -571,7 +590,7 @@ async function upload(url, id){
   const j = await r.json(); S.up[k] = (j.subfolder ? j.subfolder + '/' : '') + j.name; save(); return S.up[k];
 }
 async function queueGraph(url, G){
-  const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:G.g, client_id:CID})});
+  const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:G.g, client_id:CID, extra_data:VHS_PREVIEW})});
   let j = {}; try{ j = await r.json(); }catch(e){}
   if(!r.ok || j.error){ const ne = j.node_errors && Object.values(j.node_errors)[0], er = ne && ne.errors && ne.errors[0];
     throw new Error((er ? (ne.class_type + ': ' + (er.details || er.message)) : (j.error && (j.error.message || j.error)) || ('ComfyUI said ' + r.status))); }
