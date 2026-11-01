@@ -302,6 +302,8 @@ const URLS = {};
 async function mediaUrl(id){ if(URLS[id]) return URLS[id]; const b = await blobOf(id); return b ? (URLS[id] = URL.createObjectURL(b)) : ''; }
 async function addMedia(file, kind){
   const id = uid('m'), m = {id, kind, name:file.name || kind, type:file.type || '', size:file.size};
+  // a copy in memory, not the picker's File: iOS can drop the file behind it, and its uploads then arrive empty (Main 2026-11-01)
+  try{ const raw = await file.arrayBuffer(); if(raw.byteLength) file = new Blob([raw], {type:m.type}); }catch(e){}
   BLOBS[id] = file; try{ await IDB.put(id, file); }catch(e){ toast("Couldn't keep it on the phone; it works until you close the app"); }
   if(kind==='img'){ const im = await imgOf(file); m.w = im.naturalWidth; m.h = im.naturalHeight; m.thumb = thumbOf(im); }
   if(kind==='vid'){ try{ Object.assign(m, await mp4Info(file)); }catch(e){} }
@@ -751,7 +753,11 @@ async function upload(url, id){
   const k = id + '|' + url; if(S.up[k]) return S.up[k];
   const b = await blobOf(id), m = S.media[id]; if(!b) throw new Error('"' + (m ? m.name : 'a reference') + '" is no longer on the phone: add it again');
   const ext = (m.name.match(/\.[a-z0-9]+$/i) || [m.kind==='img' ? '.png' : m.kind==='vid' ? '.mp4' : '.wav'])[0].toLowerCase();
-  const fd = new FormData(); fd.append('image', b, 'h3deck_' + id + ext); fd.append('overwrite', 'true'); fd.append('type', 'input'); fd.append('subfolder', 'h3deck');
+  // read it before sending: Safari sends an empty body (or "Load failed") for a blob it can no longer read
+  let raw = null; try{ raw = await b.arrayBuffer(); }catch(e){}
+  if(!raw || !raw.byteLength){ delete BLOBS[id]; try{ const b2 = await blobOf(id); raw = b2 ? await b2.arrayBuffer() : null; }catch(e){ raw = null; } }
+  if(!raw || !raw.byteLength) throw new Error('"' + m.name + '" can\'t be read on the phone any more: take it out and add it again');
+  const fd = new FormData(); fd.append('image', new Blob([raw], {type:m.type || b.type || ''}), 'h3deck_' + id + ext); fd.append('overwrite', 'true'); fd.append('type', 'input'); fd.append('subfolder', 'h3deck');
   // one more go when it fails: a phone upload can arrive empty when the signal drops (Main 2026-11-01)
   let r; try{ r = await fetch(url + '/upload/image', {method:'POST', body:fd}); }catch(e){} if(!r || !r.ok) r = await fetch(url + '/upload/image', {method:'POST', body:fd});
   if(!r.ok) throw new Error('upload to ' + pcName(url) + ' failed (' + r.status + ')');
