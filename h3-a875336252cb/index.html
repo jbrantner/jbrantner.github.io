@@ -341,7 +341,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
+const NEED = ['RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch'];
@@ -742,7 +742,9 @@ function pieceGraph(t, i, oi, names){
     const t2 = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:HEAD, audio:aud, fps:FPS, match_tail:true}); ims = [t2, 0]; aud = [t2, 1]; }
   const vid = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[vid, 0], filename_prefix:t.dir + '/piece_' + String(i + 1).padStart(2, '0'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
-  return {g, save:sv};
+  // the last piece joins them all as its final step (Jordan 2026-11-01: no waiting in the queue for the stitch); needs the Render Deck helper's join node
+  const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
+  return {g, save:sv, join};
 }
 function joinGraph(t){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title:cls}}; return id; };
@@ -834,7 +836,7 @@ async function sendPieces(t, from){
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   for(let i = from; i < t.pieces.length; i++){
     const p = t.pieces[i], G = pieceGraph(t, i, oi, names);
-    p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.save = G.save; p.err = ''; p.file = null;
+    p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.save = G.save; p.join = G.join || null; p.err = ''; p.file = null;
     p.pid = await queueGraph(url, G); p.state = 'queued'; p.tq = Date.now(); save();
   }
   t.final = null; t.joinPid = null; t.state = 'working'; save(); tickSoon(500);
@@ -851,7 +853,8 @@ async function tick(){
       for(const pc of t.pieces){ if(pc.state!=='queued' && pc.state!=='running') continue;
         let h = null; try{ h = (await getJ(t.pc + '/history/' + pc.pid))[pc.pid]; }catch(e){ continue; }
         if(h && h.status && h.status.completed){ const o = (h.outputs || {})[pc.save] || {}, f = (o.images || o.videos || o.gifs || [])[0];
-          if(f){ pc.file = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; pc.state = 'done'; pc.t1 = Date.now(); } else { pc.state = 'failed'; pc.err = 'nothing came back'; } }
+          if(f){ pc.file = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; pc.state = 'done'; pc.t1 = Date.now(); } else { pc.state = 'failed'; pc.err = 'nothing came back'; }
+          const jo = pc.join && (h.outputs || {})[pc.join], jf = jo && (jo.images || jo.videos || [])[0]; if(jf) t.final = {filename:jf.filename, subfolder:jf.subfolder || '', type:'output'}; }
         else if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); pc.state = 'failed'; pc.err = e ? e[1].exception_message : 'ComfyUI hit an error'; }
         else if(!h){ const q = p.queue || {}, inQ = [...(q.queue_running || []), ...(q.queue_pending || [])];
           const at = inQ.findIndex(x => x[1]===pc.pid);
@@ -865,6 +868,7 @@ async function tick(){
         t.pieces.slice(bad + 1).forEach(x => { if(x.state==='queued' || x.state==='running') x.state = 'new'; }); }
       else if(t.pieces.every(x => x.state==='done')){
         if(t.pieces.length===1){ t.final = t.pieces[0].file; t.state = 'done'; }
+        else if(t.final && !t.joinPid){ t.state = 'done'; } // the last piece already joined them
         else if(!t.joinPid && pcOf(t.pc).oi.ConcatenateVideo){ try{ const G = joinGraph(t); t.joinSave = G.save; t.joinPid = await queueGraph(t.pc, G, true); t.tj = Date.now(); }catch(e){ t.state = 'done'; t.joinErr = e.message; } }
         else if(!t.joinPid){ t.state = 'done'; t.joinErr = 'this ComfyUI has no Concatenate Video node'; }
         else { let h = null; try{ h = (await getJ(t.pc + '/history/' + t.joinPid))[t.joinPid]; }catch(e){}
