@@ -32,6 +32,8 @@ input[type=range]{accent-color:var(--accent);padding:0;border:0;background:none;
 #msg{font-size:13px;color:var(--sel);margin:0}#msg:empty{display:none}
 .lbl{font-size:12px;color:var(--soft);display:flex;justify-content:space-between;gap:8px}
 .chips{display:flex;gap:4px}.chips button{flex:1;min-height:34px;padding:4px 6px;font-size:13px;color:var(--soft)}.chips button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
+#propw{flex:1;min-width:0;min-height:36px;width:auto}
+.chips button.sm{flex:0 0 auto;min-width:40px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
 h2{margin:0;font:600 15px var(--display)}
 #prev{width:100%;max-height:26vh;border-radius:10px;background:#000;display:block}
@@ -88,15 +90,23 @@ function fillInputs(def, mine){ const i = def.input || {}, out = {};
   for(const k of Object.keys(i.optional || {})) if(k in mine) out[k] = mine[k];
   return out; }
 // the PC with SAM 3D Body and what it has
-async function samKit(){ const tried = [];
+let KIT = null; // (what the PC has, found once per page; forgotten after a download)
+const EXTRA = ['LoadDA3Model', 'DA3Inference', 'DA3GeometryToMesh', 'SAM3_Detect', 'Pixal3DConditioning', 'CLIPVisionLoader', 'VAELoader', 'ImageCropToMask', 'MaskToImage', 'ImageBatch',
+  'RemeshMesh', 'DecimateMesh', 'MeshSmoothNormals', 'UnwrapMesh', 'BakeTextureFromVoxel', 'ApplyTextureToMesh', 'PaintMesh', 'CFGOverride', 'RescaleCFG', 'MoGeGeometryToFOV'];
+async function samKit(fresh){ if(KIT && !fresh) return KIT; KIT = await findKit(); return KIT; }
+async function findKit(){ const tried = [];
   for(const s of deckServers()){ const u = s.url.replace(/\/+$/, ''); tried.push(s.name || pcName(u));
     try{ const [loader, pred, build, unet, moge, vhs, smooth, track, ckpt] = await Promise.all(['SAM3DBody_Loader', 'SAM3DBody_Predict', 'BuildPoseFile', 'UNETLoader', 'LoadMoGeModel', 'VHS_LoadVideo', 'SAM3DBody_Smooth', 'SAM3_VideoTrack', 'CheckpointLoaderSimple'].map(c => nodeDef(u, c)));
       if(!loader || !pred || !build) continue; const sams = comboIn(loader, 'model_file'), det = comboIn(unet, 'unet_name').find(n => /rt_detr/i.test(n)); if(!sams.length || !det) continue;
-      return {url:u, sam:sams.find(n => /int8/i.test(n)) || sams[0], det, moge:comboIn(moge, 'model_name').find(n => /moge/i.test(n)) || '', vhs, smooth:!!smooth, track:!!track, sam3:comboIn(ckpt, 'ckpt_name').find(n => /sam3/i.test(n)) || ''}; }catch(e){} }
+      const defs = {}; (await Promise.all(EXTRA.map(c => nodeDef(u, c)))).forEach((d, i) => { if(d) defs[EXTRA[i]] = d; });
+      const pick = (cls, f, re) => comboIn(defs[cls], f).find(n => re.test(n)) || '';
+      return {url:u, sam:sams.find(n => /int8/i.test(n)) || sams[0], det, moge:comboIn(moge, 'model_name').find(n => /moge/i.test(n)) || '', vhs, smooth:!!smooth, track:!!track, sam3:comboIn(ckpt, 'ckpt_name').find(n => /sam3/i.test(n)) || '',
+        defs, da3:pick('LoadDA3Model', 'model_name', /depth_anything_3_(base|small)/i), px:comboIn(unet, 'unet_name').find(n => /pixal3d_(int8|bf16)/i.test(n) && !/multiview/i.test(n)) || '',
+        dino:pick('CLIPVisionLoader', 'clip_name', /dino_v3/i), svae:pick('VAELoader', 'vae_name', /trellis_2_shape_vae/i), tvae:pick('VAELoader', 'vae_name', /trellis_2_texture_vae/i)}; }catch(e){} }
   throw new Error('No PC answered with SAM 3D Body (tried ' + tried.join(', ') + '). Is ComfyUI running on Render, and Tailscale on on this phone?'); }
 // ---- what's being made (kept on this phone)
-function fresh(){ return {name:'', vid:null, dur:0, vw:0, vh:0, start:0, end:0, fps:15, hands:false, smooth:'med', job:null, res:null, frames:0, walk:true, feet:'floor', head:1, speed:1, people:1, hide:[]}; }
-let MORE = false; let M = Object.assign(fresh(), get(DKEY, {})), LIB = get(LKEY, []), FILE = null, LOCAL = '', BUSY = false, MSG = '', PROG = null, NEED3 = '', GET3 = null;
+function fresh(){ return {name:'', vid:null, dur:0, vw:0, vh:0, start:0, end:0, fps:15, hands:false, smooth:'med', job:null, res:null, frames:0, walk:true, feet:'floor', head:1, speed:1, people:1, hide:[], props:[], place:null}; }
+let MORE = false, PROPW = '', PROPS = []; let M = Object.assign(fresh(), get(DKEY, {})), LIB = get(LKEY, []), FILE = null, LOCAL = '', BUSY = false, MSG = '', PROG = null, NEED = null, GETTING = false, SIDE = null;
 const keep = () => put(DKEY, M);
 // ---- the 3D view
 const stage = $('#stage'), renderer = new THREE.WebGLRenderer({antialias:true, alpha:true, preserveDrawingBuffer:true}); renderer.setClearColor(0x000000, 0); renderer.setPixelRatio(Math.min(2, devicePixelRatio)); stage.appendChild(renderer.domElement);
@@ -120,7 +130,7 @@ const wp = b => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
 // each person's colour (the first one keeps the plain grey)
 const TINT = [0xd8d2cc, 0x9cc4ea, 0xf0a8c4, 0xb8dca0, 0xf2cf8a, 0xc4b0ec], TINT_CSS = ['#d8d2cc', '#9cc4ea', '#f0a8c4', '#b8dca0', '#f2cf8a', '#c4b0ec'];
 async function fetchGlb(res, what){ const r = await fetch(viewOf(res)); if(!r.ok) throw new Error('The ' + what + ' did not come from ' + pcName(res.pc) + ' (' + r.status + ').'); return new GLTFLoader().parseAsync(await r.arrayBuffer(), ''); }
-function clearAll(){ if(A){ A.mixer.stopAllAction(); align.remove(A.root); A = null; } if(SCN){ align.remove(SCN.root); SCN = null; } shadow.visible = false; }
+function clearAll(){ for(const P of PROPS) if(P.obj && P.obj.parent) P.obj.parent.remove(P.obj); PROPS = []; if(A){ A.mixer.stopAllAction(); align.remove(A.root); A = null; } if(SCN){ align.remove(SCN.root); SCN = null; } shadow.visible = false; }
 function setAlign(m){ align.matrix.copy(m); align.matrixWorldNeedsUpdate = true; }
 // the ground in MoGe's mesh: the biggest flat-ish surface facing up (within 70° of the camera's up) that the feet's line of sight comes down onto.
 // Returns {n, d} (n·x + d = height above it, camera space) or null. A fixed seed, so the same video always finds the same ground.
@@ -144,6 +154,12 @@ function findGround(root, feet){ root.updateMatrixWorld(true); const P = [], v =
 function bonesUnder(track){ const bn = {}; let sk = null; track.traverse(m => { const k = (m.name.match(/^(bone_\d+)(?:_\d+)?$/) || [])[1]; if(k && !bn[k]) bn[k] = m; if(m.isSkinnedMesh && (!sk || m.geometry.attributes.position.count > sk.geometry.attributes.position.count)) sk = m; }); return {bn, sk}; }
 async function loadMotion(res){
   const gl = await fetchGlb(res, '3D animation'); let sg = null; if(res.scene) try{ sg = await fetchGlb({pc:res.pc, ...res.scene}, 'scene'); }catch(e){ sg = null; }
+  // 🏞 the whole place (Depth Anything 3, several frames): its first frame's surface is matched to MoGe's (same frame, metres) by size, then it stands in for MoGe's
+  if(M.place && M.place.files && M.place.files.length) try{ const parts = await Promise.all(M.place.files.map(f => fetchGlb({pc:M.place.pc, ...f}, 'place')));
+    const grp = new THREE.Group(); parts.forEach(p => grp.add(p.scene)); const med = root => { root.updateMatrixWorld(true); const d = [], v = new THREE.Vector3();
+      root.traverse(m => { if(!m.isMesh) return; const pa = m.geometry.attributes.position, st = Math.max(1, Math.floor(pa.count / 4000)); for(let i = 0; i < pa.count; i += st) d.push(v.fromBufferAttribute(pa, i).applyMatrix4(m.matrixWorld).length()); });
+      d.sort((a, b) => a - b); return d.length ? d[d.length >> 1] : 0; };
+    const a = sg ? med(sg.scene) : 0, b = med(parts[0].scene), sc = a > 0 && b > 0 ? a / b : 1; grp.scale.setScalar(sc); grp.updateMatrixWorld(true); sg = {scene:grp, placeScale:sc}; }catch(e){ console.warn('place', e); }
   clearAll(); setAlign(new THREE.Matrix4()); world.position.set(0, 0, 0);
   const root = gl.scene, tracks = []; root.traverse(m => { if(/^track\d+$/.test(m.name)) tracks.push(m); }); tracks.sort((a, b) => a.name.localeCompare(b.name));
   const clip = gl.animations[0]; if(!clip) throw new Error('The file has no animation in it (only one frame was read?).');
@@ -168,7 +184,7 @@ async function loadMotion(res){
   const firstOf = p => Math.max(0, Math.min(F - 1, Math.round(p.t0 * fps)));
   const feet = P.map(p => { at(firstOf(p)); world.updateMatrixWorld(true); let lowJ = null; for(const b of Object.values(p.bn)){ const q = wp(b); if(!lowJ || q.y < lowJ.y) lowJ = q; } const bx = new THREE.Box3().expandByObject(p.sk, true); return {lowJ, gap:lowJ.y - bx.min.y, h:bx.max.y - bx.min.y, f:firstOf(p)}; });
   A.gap = feet[0].gap; A.h = Math.max(...feet.map(x => x.h));
-  if(sg && res.abs){ SCN = {root:sg.scene}; sg.scene.traverse(m => { if(m.isMesh){ const map = m.material && m.material.map; m.material = new THREE.MeshBasicMaterial({map:map || null, color:map ? 0xffffff : 0x8a8f9c, side:THREE.DoubleSide, transparent:true, opacity:0.9}); m.frustumCulled = false; } });
+  if(sg && res.abs){ SCN = {root:sg.scene, place:!!sg.placeScale}; sg.scene.traverse(m => { if(m.isMesh){ const map = m.material && m.material.map; m.material = new THREE.MeshBasicMaterial({map:map || null, color:map ? 0xffffff : 0x8a8f9c, side:THREE.DoubleSide, transparent:true, opacity:0.9}); m.frustumCulled = false; } });
     align.add(sg.scene); const G = findGround(sg.scene, feet[0].lowJ);
     if(G){ const {n, d} = G, q = new THREE.Quaternion().setFromUnitVectors(n, new THREE.Vector3(0, 1, 0)); setAlign(new THREE.Matrix4().makeTranslation(0, d, 0).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)));
       // SAM and MoGe each guess how far away things are: everyone is slid along the camera's lines of sight by one shared amount (the middle of what
@@ -183,6 +199,41 @@ async function loadMotion(res){
   const c = new THREE.Vector3(); for(const p of P){ at(firstOf(p)); p.track.position.copy(p.base[firstOf(p)]); world.updateMatrixWorld(true); c.add(wp(p.bn.bone_001)); } c.divideScalar(P.length); world.position.set(-c.x, 0, -c.z);
   if(!Array.isArray(M.hide) || M.hide.length!==P.length) M.hide = P.map(() => false);
   T = 0; pose(); viewFront(); shadow.visible = true; }
+// ---- 🗡 props: each one's 3D model (Pixal3D builds it facing the camera that saw it: x right, y up, toward the camera) is sized and placed from
+// SAM's outline on its frame and MoGe's 3D surface of that frame (same camera space as the bodies); one within reach of a wrist is held by it
+const loadImg = url => new Promise((ok, no) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => ok(im); im.onerror = () => no(new Error('picture')); im.src = url; });
+function poseRaw(f){ A.mixer.setTime(Math.max(0, Math.min(A.dur - 1e-4, f / A.fps))); for(const p of A.P){ p.track.position.copy(p.base[Math.max(0, Math.min(A.F - 1, f))]); p.track.visible = true; } world.updateMatrixWorld(true); }
+function placeProp(pr, obj, dg, im){ const f = Math.max(0, Math.min(A.F - 1, pr.frame || 0)); poseRaw(f);
+  const W = im.naturalWidth, H = im.naturalHeight, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const cx = cv.getContext('2d'); cx.drawImage(im, 0, 0); const px = cx.getImageData(0, 0, W, H).data;
+  const on = (x, y) => { x = Math.round(x); y = Math.round(y); return x >= 0 && y >= 0 && x < W && y < H && px[(y * W + x) * 4] > 127; };
+  let x0 = W, x1 = -1, y0 = H, y1 = -1; for(let y = 0; y < H; y++) for(let x = 0; x < W; x++) if(px[(y * W + x) * 4] > 127){ if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y; }
+  if(x1 < 0) throw new Error('SAM 3 found no ' + pr.word + ' outline on that frame.');
+  // MoGe's surface: its points inside the outline (where the prop is), and the lens (focal length in pixels) from where every point lands
+  const pts = [], fs = [], all = [], v = new THREE.Vector3();
+  if(dg) dg.scene.traverse(m => { if(!m.isMesh || !m.geometry.attributes.uv) return; const pa = m.geometry.attributes.position, uv = m.geometry.attributes.uv;
+    for(let i = 0; i < pa.count; i++){ v.fromBufferAttribute(pa, i); if(!(v.z < -1e-3)) continue; const qx = uv.getX(i) * (W - 1), qy = uv.getY(i) * (H - 1), a = v.x / -v.z;
+      if(Math.abs(a) > 0.05) fs.push((qx - (W - 1) / 2) / a); if(i % 7===0) all.push(-v.z); if(on(qx, qy)) pts.push(v.clone()); } });
+  const med = a => a.length ? a.slice().sort((p, q) => p - q)[a.length >> 1] : NaN, fl = med(fs) || W / (2 * Math.tan(Math.PI / 6));
+  const ray = (x, y, d) => new THREE.Vector3((x - (W - 1) / 2) / fl * d, -(y - (H - 1) / 2) / fl * d, -d);
+  // the wrists on that frame, in the same camera space (and where they land on the picture)
+  const wr = []; for(const p of A.P) for(const b of ['bone_041', 'bone_077']) if(p.bn[b]){ const q = align.worldToLocal(wp(p.bn[b])); wr.push({p, b:p.bn[b], q, x:(W - 1) / 2 + q.x / -q.z * fl, y:(H - 1) / 2 - q.y / -q.z * fl}); }
+  const pad = Math.max(12, 0.08 * Math.max(x1 - x0, y1 - y0)), inBox = w => w.x > x0 - pad && w.x < x1 + pad && w.y > y0 - pad && w.y < y1 + pad;
+  let d = pts.length >= 30 ? med(pts.map(q => -q.z)) : NaN; const near = wr.filter(inBox).sort((a, b) => a.q.length() - b.q.length())[0];
+  if(!(d > 0)) d = near ? -near.q.z : med(all) || 3;
+  const C = ray((x0 + x1) / 2, (y0 + y1) / 2, d), w = (x1 - x0 + 1) / fl * d, h = (y1 - y0 + 1) / fl * d;
+  const box = new THREE.Box3().setFromObject(obj), sz = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
+  const sc = Math.sqrt(Math.max(1e-6, w / Math.max(1e-4, sz.x)) * Math.max(1e-6, h / Math.max(1e-4, sz.y)));
+  const holder = new THREE.Group(); holder.add(obj); obj.scale.setScalar(sc); obj.position.copy(mid).multiplyScalar(-sc); holder.position.copy(C); align.add(holder); holder.updateMatrixWorld(true);
+  // held: a wrist on the outline (or within 25 cm of the prop's surface points) at about the same distance
+  let held = null; const surf = pts.length >= 30 ? pts : [C];
+  const best = wr.map(x => ({x, dist:Math.min(...surf.map(q => q.distanceTo(x.q)))})).sort((a, b) => a.dist - b.dist)[0];
+  if(best && (best.dist < 0.25 || (inBox(best.x) && Math.abs(-best.x.q.z - d) < 0.5))){ best.x.b.attach(holder); held = A.P.length > 1 ? 'person ' + (best.x.p.i + 1) : 'her'; }
+  return {holder, held, size:Math.max(w, h)}; }
+async function loadProps(){ for(const pr of M.props || []){ try{ const [gl, dg, im] = await Promise.all([fetchGlb({pc:pr.pc, ...pr.mesh}, pr.word), pr.depth ? fetchGlb({pc:pr.pc, ...pr.depth}, 'depth').catch(() => null) : null, loadImg(viewOf({pc:pr.pc, ...pr.mask}))]);
+      gl.scene.traverse(m => { if(m.isMesh){ m.frustumCulled = false; if(m.material) m.material.side = THREE.DoubleSide; } });
+      const r = placeProp(pr, gl.scene, dg, im); PROPS.push({id:pr.id, word:pr.word, obj:r.holder, held:r.held}); }
+    catch(e){ console.warn('prop', pr.word, e); PROPS.push({id:pr.id, word:pr.word, obj:null, err:e.message}); } }
+  if(A) pose(); }
 const lerp = (arr, t, k) => { const x = Math.min(A.F - 1, Math.max(0, t * A.fps)), i = Math.floor(x), j = Math.min(A.F - 1, i + 1), u = x - i, a = arr[i], b = arr[j]; return k ? a[k] + (b[k] - a[k]) * u : a + (b - a) * u; };
 const shownP = () => A ? A.P.filter(p => !M.hide[p.i] && T >= p.t0 - 0.5 / A.fps && T <= p.t1 + 0.5 / A.fps) : [];
 // the middle of the people showing (their hips)
@@ -198,7 +249,7 @@ function pose(){ if(!A) return; A.mixer.setTime(Math.max(0, Math.min(T, A.dur - 
     if(p.bn.bone_113) p.bn.bone_113.scale.setScalar(M.head || 1);
     tr.visible = !M.hide[p.i] && T >= p.t0 - 0.5 / A.fps && T <= p.t1 + 0.5 / A.fps; if(p.sk) p.sk.visible = tr.visible; }
   world.updateMatrixWorld(true); const mid = middle(); shadow.position.x = mid.x; shadow.position.z = mid.z; shadow.scale.setScalar(A.P.length > 1 ? 1.6 : 1);
-  if(SCN) SCN.root.visible = M.scene===true; // (Jordan 2026-11-01: the place is hidden until 🏞 Place; its ground is used either way)
+  if(SCN) SCN.root.visible = M.scene===true; for(const P of PROPS) if(P.obj){ const pr = (M.props || []).find(x => x.id===P.id); P.obj.visible = !(pr && pr.hide); } // (Jordan 2026-11-01: the place is hidden until 🏞 Place; its ground is used either way)
   // 🎯 the camera turns round them: its pivot follows the middle of their hips wherever they go (up a wall too), keeping the same view
   // (Jordan 2026-11-01: the camera stays where it was put: it moves by how far they moved since the last frame, never snaps back to the hips,
   // and stays still the moment someone appears, disappears or is hidden)
@@ -226,17 +277,20 @@ function pipSrc(){ const u = LOCAL || (M.vid ? viewOf({pc:M.vid.pc, file:M.vid.f
 // ---- the ComfyUI job
 const graph = () => { const g = {}; let n = 0; return {g, add:(c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; }}; };
 const SMOOTH = {off:{name:'Off'}, light:{name:'Light', method:'savgol', window:7, bone:0}, med:{name:'Medium', method:'gaussian', window:9, bone:5}, strong:{name:'Strong', method:'gaussian', window:15, bone:11}};
-const LABEL = {SAM3_VideoTrack:'Following each person through the video', CheckpointLoaderSimple:'Loading SAM 3.1 (tells people apart)', CLIPTextEncode:'Loading SAM 3.1 (tells people apart)', VHS_LoadVideo:'Reading the video', LoadVideo:'Reading the video', 'Video Slice':'Reading the video', GetVideoComponents:'Reading the video', ImageScaleToMaxDimension:'Reading the video', RTDETR_detect:'Finding the person on each frame', UNETLoader:'Loading the person finder',
+const LABEL = {DA3Inference:'Depth Anything 3 is reading the frames', LoadDA3Model:'Loading Depth Anything 3', DA3GeometryToMesh:'Making the surfaces', SAM3_Detect:'SAM 3 is finding it', Pixal3DConditioning:'Pixal3D is looking at it',
+  KSampler:'Pixal3D is building it', VaeDecodeShapeTrellis:'Pixal3D: the shape', VaeDecodeTextureTrellis:'Pixal3D: the colours', BakeTextureFromVoxel:'Painting it', UnwrapMesh:'Painting it', DecimateMesh:'Tidying the mesh', SAM3_VideoTrack:'Following each person through the video', CheckpointLoaderSimple:'Loading SAM 3.1 (tells people apart)', CLIPTextEncode:'Loading SAM 3.1 (tells people apart)', VHS_LoadVideo:'Reading the video', LoadVideo:'Reading the video', 'Video Slice':'Reading the video', GetVideoComponents:'Reading the video', ImageScaleToMaxDimension:'Reading the video', RTDETR_detect:'Finding the person on each frame', UNETLoader:'Loading the person finder',
   LoadMoGeModel:'Measuring the lens', MoGeInference:'Measuring the lens', SAM3DBody_Loader:'Loading SAM 3D Body', SAM3DBody_Predict:'SAM 3D Body is reading the body', SAM3DBody_Smooth:'Smoothing the motion', BuildPoseFile:'Building the 3D animation', Save3DAdvanced:'Saving it'};
 const MAXF = 600, frameCount = () => Math.max(1, Math.round(((M.end || M.dur) - (M.start || 0)) * M.fps));
 // the frame size the PC reads (longest side 960, multiples of 8, the video's shape)
 function readSize(){ const w = M.vw || 960, h = M.vh || 540, k = Math.min(1, 960 / Math.max(w, h)); return [Math.max(8, Math.round(w * k / 8) * 8), Math.max(8, Math.round(h * k / 8) * 8)]; }
-function motionGraph(k, o){ const {g, add} = graph(); let imgs, fps;
+function loadFrames(add, k, o){ let imgs, fps;
   if(k.vhs && !o.core){ const [w, h] = readSize(), sz = comboIn(k.vhs, 'force_size');
     const v = add('VHS_LoadVideo', fillInputs(k.vhs, {video:o.file, force_rate:o.fps, custom_width:w, custom_height:h, frame_load_cap:o.cap, skip_first_frames:o.skip, select_every_nth:1, ...(sz.length ? {force_size:sz.includes('Custom') ? 'Custom' : sz[0]} : {})}));
     imgs = [v, 0]; fps = o.fps; }
   else { const gc = add('GetVideoComponents', {video:[add('Video Slice', {video:[add('LoadVideo', {file:o.file}), 0], start_time:o.start, duration:Math.max(0.05, o.end - o.start), strict_duration:false}), 0]});
     imgs = [add('ImageScaleToMaxDimension', {image:[gc, 0], upscale_method:'area', largest_size:960}), 0]; fps = [gc, 2]; }
+  return {imgs, fps}; }
+function motionGraph(k, o){ const {g, add} = graph(), {imgs, fps} = loadFrames(add, k, o);
   const sm = add('SAM3DBody_Loader', {model_file:k.sam}), many = o.people > 1;
   // one person: RT-DETR's best box on each frame. Several (Jordan 2026-11-01, fights and hugs): SAM 3.1's video tracker follows each "person" by
   // its outline from frame to frame, so each keeps the same mannequin even when they cross or hold each other
@@ -251,10 +305,80 @@ function motionGraph(k, o){ const {g, add} = graph(); let imgs, fps;
   const sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps, camera_translation:'absolute', track_index:many ? -1 : 0, format:'glb', 'format.mesh_style':'body_mesh', 'format.mesh_style.bone_vis':'off', 'format.mesh_style.shader':'default', 'format.bone_smooth_window':S.bone || 0}), 0],
     filename_prefix:PRE + '/mocap/motion', viewport_state:{}, width:1024, height:1024});
   return {g, sv, scn}; }
+// the frames the motion was read from (old clips didn't keep them: rebuilt from the clip's settings)
+const loadOf = k => (M.res && M.res.load) || {file:M.vid && M.vid.file, fps:M.fps, start:M.start || 0, end:M.end || M.dur, skip:Math.round((M.start || 0) * M.fps), cap:M.frames || frameCount(), core:!k.vhs};
+// (ours, plus the node's own defaults for anything else it needs; ours are always kept, DynamicCombo sub-inputs like mode.pose_method too)
+const fill = (k, c, i) => k.defs[c] ? {...fillInputs(k.defs[c], i), ...i} : i;
+// 🏞 the whole place (Jordan 2026-11-01, "a sword fight on a bridge"): Depth Anything 3 reads up to 8 frames spread over the clip together, so a
+// moving camera sees more of the place, and gives one 3D surface per frame in a shared space (the first frame's camera); the page scales it to MoGe's metres
+function placeGraph(k, o){ const {g, add} = graph(), {imgs} = loadFrames(add, k, o), F = Math.max(1, o.cap), n = Math.min(8, F);
+  const at = i => n < 2 ? 0 : Math.round(i * (F - 1) / (n - 1)); let batch = [add('ImageFromBatch', {image:imgs, batch_index:0, length:1}), 0];
+  for(let i = 1; i < n; i++) batch = [add('ImageBatch', {image1:batch, image2:[add('ImageFromBatch', {image:imgs, batch_index:at(i), length:1}), 0]}), 0];
+  const da = add('DA3Inference', fill(k, 'DA3Inference', {da3_model:[add('LoadDA3Model', {model_name:k.da3, weight_dtype:'default'}), 0], image:batch, resolution:504, resize_method:'upper_bound_resize',
+    mode:'multiview', 'mode.ref_view_strategy':'first', 'mode.pose_method':o.ray ? 'ray_pose' : 'cam_dec'}));
+  const saves = []; for(let i = 0; i < n; i++) saves.push(add('SaveGLB', {mesh:[add('DA3GeometryToMesh', fill(k, 'DA3GeometryToMesh', {da3_geometry:[da, 0], batch_index:i, decimation:2, discontinuity_threshold:0.04, confidence_threshold:0.15, use_sky_mask:true, texture:true})), 0], filename_prefix:PRE + '/mocap/place'}));
+  return {g, saves, frames:Array.from({length:n}, (_, i) => at(i))}; }
+// 🗡 a prop on one frame: SAM 3 finds it by name, MoGe measures that frame (a 3D surface to place it by, and the lens of the cut-out),
+// Pixal3D builds it in 3D from the cut-out, lined up with the camera that saw it (as in ComfyUI's own Pixal3D template)
+function propGraph(k, o, f, word){ const {g, add} = graph(), {imgs} = loadFrames(add, k, o), img = [add('ImageFromBatch', {image:imgs, batch_index:f, length:1}), 0];
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:k.sam3}), det = add('SAM3_Detect', fill(k, 'SAM3_Detect', {model:[ck, 0], image:img, conditioning:[add('CLIPTextEncode', {clip:[ck, 1], text:word}), 0], threshold:0.4, refine_iterations:2, individual_masks:false})), mask = [det, 0];
+  const mm = add('LoadMoGeModel', {model_name:k.moge}), moge = im => add('MoGeInference', {moge_model:[mm, 0], image:im, resolution_level:9, fov_x_degrees:0, batch_size:4, force_projection:true, apply_mask:true, refine_steps:3});
+  const depth = add('SaveGLB', {mesh:[add('MoGePointMapToMesh', {moge_geometry:[moge(img), 0], batch_index:0, decimation:2, discontinuity_threshold:0.04, texture:true}), 0], filename_prefix:PRE + '/mocap/props/depth'});
+  const msk = add('SaveImage', {images:[add('MaskToImage', {mask}), 0], filename_prefix:PRE + '/mocap/props/mask'});
+  const crop = [add('ImageCropToMask', fill(k, 'ImageCropToMask', {images:img, masks:mask, width:1024, height:1024, pad_factor:1.1, grow_mask:0, background:'#000000'})), 0];
+  const fov = [add('MoGeGeometryToFOV', {moge_geometry:[moge(crop), 0], axis:'horizontal', unit:'degrees'}), 0];
+  const cv = add('CLIPVisionLoader', {clip_name:k.dino}), un = add('UNETLoader', {unet_name:k.px, weight_dtype:'default'}), sv = add('VAELoader', {vae_name:k.svae}), tv = add('VAELoader', {vae_name:k.tvae});
+  const pc = add('Pixal3DConditioning', {clip_vision_model:[cv, 0], image:crop, camera_angle_x:fov});
+  const tame = (from, re) => k.defs.CFGOverride && k.defs.RescaleCFG ? [add('RescaleCFG', {model:[add('CFGOverride', {model:[un, 0], cfg:1, start_percent:from, end_percent:1}), 0], multiplier:re}), 0] : [un, 0];
+  const ms = add('ModelSamplingSD3', {model:tame(0.667, 0.7), shift:5}), m2 = tame(0.769, 0.5), el = add('EmptyTrellis2LatentStructure', {batch_size:1});
+  const ks = (model, pos, neg, lat, seed, steps, cfg, sch) => add('KSampler', {model, positive:pos, negative:neg, latent_image:lat, seed, steps, cfg, sampler_name:'euler', scheduler:sch || 'normal', denoise:1});
+  const s1 = ks([ms, 0], [pc, 0], [pc, 1], [el, 0], 56, 12, 7.5), vs = add('VaeDecodeStructureTrellis2', {samples:[s1, 0], vae:[sv, 0], resolution:'32'});
+  const sh = add('Trellis2ShapeStage', {positive:[pc, 0], negative:[pc, 1], voxel:[vs, 0]}), s2 = ks(m2, [sh, 0], [sh, 1], [sh, 2], 42, 20, 7.5);
+  const up = add('Trellis2UpsampleStage', {positive:[sh, 0], negative:[sh, 1], shape_latent:[s2, 0], vae:[sv, 0], target_resolution:1024}), s3 = ks(m2, [up, 0], [up, 1], [up, 2], 42, 12, 7.5, 'simple');
+  const tx = add('Trellis2TextureStage', {positive:[up, 0], negative:[up, 1], shape_latent:[s3, 0]}), s4 = ks([un, 0], [tx, 0], [tx, 1], [tx, 2], 43, 12, 1);
+  const ds = add('VaeDecodeShapeTrellis', {samples:[s3, 0], vae:[sv, 0]}), dt = add('VaeDecodeTextureTrellis', {samples:[s4, 0], vae:[tv, 0], shape_subdivides:[ds, 1]});
+  let mesh = [ds, 0]; const D = k.defs;
+  if(D.DecimateMesh) mesh = [add('DecimateMesh', fill(k, 'DecimateMesh', {mesh, target_face_count:60000, placement_mode:'midpoint'})), 0]; // (small: it's a prop on a phone)
+  if(D.MeshSmoothNormals) mesh = [add('MeshSmoothNormals', fill(k, 'MeshSmoothNormals', {mesh, crease_angle:180})), 0];
+  if(D.UnwrapMesh && D.BakeTextureFromVoxel && D.ApplyTextureToMesh){ const uw = add('UnwrapMesh', fill(k, 'UnwrapMesh', {mesh, segmenter:'pec', resolution:1024, padding:2, weld_distance:0.0002}));
+    const bk = add('BakeTextureFromVoxel', fill(k, 'BakeTextureFromVoxel', {mesh:[uw, 0], voxel_colors:[dt, 0], texture_size:1024, reference_mesh:[ds, 0]}));
+    mesh = [add('ApplyTextureToMesh', fill(k, 'ApplyTextureToMesh', {mesh:[uw, 0], base_color:[bk, 0], metallic:[bk, 1], roughness:[bk, 2]})), 0]; }
+  else if(D.PaintMesh) mesh = [add('PaintMesh', {mesh, voxel_colors:[dt, 0]}), 0];
+  const save = add('SaveGLB', {mesh, filename_prefix:PRE + '/mocap/props/' + (word.replace(/[^\w-]+/g, '_').slice(0, 30) || 'prop')});
+  return {g, save, depth, msk}; }
+const findFile = (x, re) => { if(!x || typeof x!=='object') return null; if(typeof x.filename==='string' && re.test(x.filename)) return x; for(const v of Object.values(x)){ const r = findFile(v, re); if(r) return r; } return null; };
+const fileOf = f => f ? {file:f.filename, sub:f.subfolder || '', type:f.type || 'output'} : null;
+// a side job (the place or a prop) runs while the motion plays; its progress shows in the message line
+async function runSide(label, k, g, last){ window.LASTG = Object.assign(window.LASTG || {}, Object.fromEntries(Object.entries(g).map(([i, n]) => [i, n.class_type])));
+  const pid = await send(k.url, g); SIDE = {pc:k.url, pid, label, t0:Date.now()}; listen(k.url); draw();
+  const out = await poll(k.url, pid, last, s => { MSG = s || label + '… ' + Math.round((Date.now() - SIDE.t0) / 1000) + ' s'; const m = $('#msg'); if(m) m.textContent = MSG; });
+  SIDE = null; PROG = null; return out; }
+async function buildPlace(){ if(BUSY || SIDE) return; BUSY = true; MSG = 'Looking for Depth Anything 3…'; draw();
+  try{ const k = await samKit(true), miss = missing(k, ['da3']); if(!k.defs.DA3Inference) throw new Error(pcName(k.url) + "'s ComfyUI has no Depth Anything 3 nodes; update ComfyUI there.");
+    if(miss.length){ NEED = {pc:k.url, keys:miss, again:'Tap 🏞 Build the whole place again.'}; throw new Error('Building the place needs Depth Anything 3 on ' + pcName(k.url) + '. Get it below (once).'); }
+    const o = loadOf(k); let r = null;
+    for(const ray of [false, true]){ const {g, saves, frames} = placeGraph(k, {...o, ray});
+      try{ const out = await runSide('Building the place from ' + frames.length + ' frames', k, g, saves[saves.length - 1]); r = {files:saves.map(sv => fileOf(findGlb(out[sv]))).filter(Boolean), frames}; break; }
+      catch(e){ if(!ray && /camera decoder|cam_dec/i.test(e.why || e.message)) continue; throw e; } }
+    if(!r || !r.files.length) throw new Error('Depth Anything 3 sent nothing back.');
+    M.place = {pc:k.url, ...r}; M.scene = true; keep(); BUSY = false; await openResult(); saveClip(); MSG = 'The place is built from ' + r.files.length + ' frames. ' + groundNote(); }
+  catch(e){ SIDE = null; MSG = e.message; } BUSY = false; draw(); }
+async function addProp(){ const inp = $('#propw'), word = (inp && inp.value || '').trim().slice(0, 40); if(!word){ MSG = 'Type what to look for first (like "sword").'; draw(); return; }
+  if(BUSY || SIDE || !A) return; const f = Math.max(0, Math.min(A.F - 1, Math.round(T * A.fps))); BUSY = true; PROPW = word; MSG = 'Looking for what ' + word + ' needs…'; draw();
+  try{ const k = await samKit(true); if(!k.defs.SAM3_Detect || !k.defs.Pixal3DConditioning) throw new Error(pcName(k.url) + "'s ComfyUI has no SAM 3 / Pixal3D nodes; update ComfyUI there.");
+    if(!k.moge) throw new Error(pcName(k.url) + ' has no MoGe model.');
+    const miss = missing(k, ['sam3', 'px', 'dino', 'svae', 'tvae']); if(miss.length){ NEED = {pc:k.url, keys:miss, again:'Tap ＋ Find it again.'}; throw new Error('Props need these on ' + pcName(k.url) + ' first. Get them below (once).'); }
+    const {g, save, depth, msk} = propGraph(k, loadOf(k), f, word), out = await runSide('Finding the ' + word + ' and building it in 3D', k, g, save);
+    const pr = {id:'p' + Math.random().toString(36).slice(2, 8), word, frame:f, pc:k.url, mesh:fileOf(findGlb(out[save])), depth:fileOf(findGlb(out[depth])), mask:fileOf(findFile(out[msk], /\.(png|webp|jpe?g)$/i))};
+    if(!pr.mesh) throw new Error('Pixal3D sent no 3D ' + word + ' back.');
+    M.props = [...(M.props || []), pr]; PROPW = ''; keep(); BUSY = false; await openResult(); setT(f / A.fps); saveClip();
+    const P = PROPS.find(x => x.id===pr.id); MSG = 'The ' + word + ' is in' + (P && P.held ? ', in ' + (P.held==='her' ? 'her' : P.held + "'s") + ' hand.' : P && P.err ? ' but: ' + P.err : ', standing where it was.'); }
+  catch(e){ SIDE = null; MSG = /SAM3_Detect|ImageCropToMask/.test(e.node || '') || /empty|no.*mask|zero/i.test(e.why || '') ? "SAM 3 couldn't find a " + word + ' on this frame. Try a frame where it is clear, or another word.' : e.message; }
+  BUSY = false; draw(); }
 // live progress from the PC (its websocket: which node, frame N of M), with the history as the answer
 let WS = null; const WSN = {};
 function listen(url){ if(WS && WS.url0===url && WS.readyState < 2) return; try{ if(WS) WS.close(); WS = new WebSocket(url.replace(/^http/, 'ws') + '/ws?clientId=' + CID); WS.url0 = url;
-  WS.onmessage = e => { if(typeof e.data!=='string') return; let m; try{ m = JSON.parse(e.data); }catch(x){ return; } const d = m.data || {}; if(!M.job || d.prompt_id && d.prompt_id!==M.job.pid) return;
+  WS.onmessage = e => { if(typeof e.data!=='string') return; let m; try{ m = JSON.parse(e.data); }catch(x){ return; } const d = m.data || {}, J = M.job || SIDE; if(!J || d.prompt_id && d.prompt_id!==J.pid) return;
     if(m.type==='executing' && d.node){ PROG = {node:d.node, v:0, max:0}; showProg(); } if(m.type==='progress'){ PROG = {node:d.node || (PROG || {}).node, v:d.value, max:d.max}; showProg(); } }; }catch(e){} }
 async function poll(url, pid, sv, tick){ const t0 = Date.now();
   for(;;){ await new Promise(r => setTimeout(r, window.RENDER_POLL || 2500)); let it = null;
@@ -274,48 +398,60 @@ async function send(url, g){ const r = await fetch(url + '/prompt', {method:'POS
 async function runJob(){ const J = M.job; listen(J.pc); const t0 = J.t0 || Date.now();
   const tick = s => { MSG = s || ''; if(!s && !PROG) MSG = 'Working on ' + pcName(J.pc) + '… ' + Math.round((Date.now() - t0) / 1000) + ' s'; showProg(); };
   const out = await poll(J.pc, J.pid, J.sv, tick), f = findGlb(out[J.sv]), sc = J.scn ? findGlb(out[J.scn]) : null; if(!f) throw new Error('SAM 3D Body sent back no animation.');
-  M.res = {pc:J.pc, file:f.filename, sub:f.subfolder || '', abs:true, scene:sc ? {file:sc.filename, sub:sc.subfolder || ''} : null, secs:Math.round((Date.now() - t0) / 1000)}; M.fresh = true; M.job = null; PROG = null; keep(); }
+  M.res = {pc:J.pc, file:f.filename, sub:f.subfolder || '', abs:true, scene:sc ? {file:sc.filename, sub:sc.subfolder || ''} : null, secs:Math.round((Date.now() - t0) / 1000), load:J.load || null}; M.fresh = true; M.job = null; PROG = null; keep(); }
 async function copyMotion(rebuild){ if(BUSY) return; BUSY = true; MSG = 'Looking for the PC with SAM 3D Body…'; draw();
-  try{ const k = await samKit();
+  try{ const k = await samKit(true);
     if(!M.vid || M.vid.pc!==k.url){ if(!FILE) throw new Error('Pick the video again (this phone forgot it), then Copy the motion.');
       MSG = 'Sending the video to ' + pcName(k.url) + '…'; draw(); const fd = new FormData(), ext = ((FILE.name || '').match(/\.(\w{2,4})$/) || [0, 'mp4'])[1].toLowerCase();
       fd.append('image', FILE, 'mocap-' + Date.now().toString(36) + '.' + ext); fd.append('overwrite', 'true');
       const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending the video failed (' + r.status + ').'); M.vid = {pc:k.url, file:(await r.json()).name}; keep(); }
     const cap = Math.min(MAXF, frameCount()), base = {file:M.vid.file, fps:M.fps, start:M.start || 0, end:M.end || M.dur, skip:Math.round((M.start || 0) * M.fps), cap, hands:M.hands, smooth:M.smooth, people:M.people || 1};
-    if(base.people > 1 && !(k.track && k.sam3)){ NEED3 = k.url; throw new Error(k.track ? 'Several people needs SAM 3.1 (the video tracker that tells people apart) on ' + pcName(k.url) + '. Get it below (once).' : pcName(k.url) + "'s ComfyUI has no SAM 3 video tracker; update ComfyUI there."); }
+    if(base.people > 1 && !(k.track && k.sam3)){ if(k.track) NEED = {pc:k.url, keys:['sam3'], again:'Copy the motion again.'}; throw new Error(k.track ? 'Several people needs SAM 3.1 (the video tracker that tells people apart) on ' + pcName(k.url) + '. Get it below (once).' : pcName(k.url) + "'s ComfyUI has no SAM 3 video tracker; update ComfyUI there."); }
     // (a person the finder misses at 0.3, or a video VHS can't open, gets one more try: less fussy, or ComfyUI's own video loader)
     let o = {...base, th:0.3, core:!k.vhs}, err = null;
     for(let tries = 0; tries < 3; tries++){ const {g, sv, scn} = motionGraph(k, o); PROG = null; MSG = 'Starting on ' + pcName(k.url) + '…'; draw();
       window.LASTG = Object.fromEntries(Object.entries(g).map(([i, n]) => [i, n.class_type]));
-      M.job = {pc:k.url, pid:await send(k.url, g), sv, scn, t0:Date.now(), frames:cap, cls:window.LASTG}; keep(); draw();
+      M.job = {pc:k.url, pid:await send(k.url, g), sv, scn, t0:Date.now(), frames:cap, cls:window.LASTG, load:{file:o.file, fps:o.fps, start:o.start, end:o.end, skip:o.skip, cap:o.cap, core:!!o.core}}; keep(); draw();
       try{ await runJob(); err = null; break; }
       catch(e){ err = e; M.job = null; keep(); if(/no valid tracks/i.test(e.why || e.message) && o.th > 0.15){ o = {...o, th:0.12}; continue; } if(/VHS/i.test(e.node || '') && !o.core){ o = {...o, core:true}; continue; } break; } }
     if(err) throw err;
     M.frames = cap; await openResult(); saveClip(); MSG = (rebuild ? 'Rebuilt. ' : 'Done in ' + M.res.secs + ' s. ') + groundNote(); }
   catch(e){ MSG = (e.message || String(e)).replace(/no valid tracks in pose_data/i, "SAM 3D Body couldn't find a person in this part of the video"); }
   BUSY = false; draw(); }
-// ---- SAM 3.1 for several people: one 1.7 GB download onto the PC through Render Deck's helper (its usual model download job), once
-const SAM3_URL = 'https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors';
-async function getSam3(){ const u = NEED3; if(!u || GET3) return; GET3 = {pc:u, msg:'Asking ' + pcName(u) + ' to download SAM 3.1…'}; MSG = GET3.msg; draw();
-  try{ const r = await fetch(u + '/renderdeck/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:SAM3_URL, kind:'checkpoints'})}), j = await r.json().catch(() => ({}));
-    if(!r.ok || j.error) throw new Error(r.status===404 ? pcName(u) + " hasn't got Render Deck's helper." : 'The download was turned down: ' + (j.error || r.status));
-    for(let i = 0; i < 1800; i++){ await new Promise(r => setTimeout(r, window.RENDER_POLL || 3000));
-      let js = null; try{ js = await (await fetch(u + '/renderdeck/jobs', {cache:'no-store'})).json(); }catch(e){ continue; }
-      const jb = (js.jobs || []).find(x => /sam3/i.test(x.name || '')); if(!jb) continue;
-      if(/error|fail/i.test(jb.status || '')) throw new Error('The SAM 3.1 download failed on ' + pcName(u) + ' (' + jb.status + ').');
-      if(/done|finish|complete/i.test(jb.status || '')) break;
-      MSG = 'Downloading SAM 3.1 on ' + pcName(u) + (jb.total ? '… ' + Math.round(100 * (jb.done || 0) / jb.total) + '%' : '…'); showProg(); const m = $('#msg'); if(m) m.textContent = MSG; }
-    NEED3 = ''; GET3 = null; MSG = 'SAM 3.1 is on ' + pcName(u) + '. Copy the motion again.'; }
-  catch(e){ GET3 = null; MSG = e.message; } draw(); }
+// ---- models the PC may not have yet: each one downloads once through Render Deck's helper (its usual model download job, Hugging Face)
+const HF = 'https://huggingface.co/Comfy-Org/';
+const MODELS = {sam3:{label:'SAM 3.1', gb:1.7, kind:'checkpoints', url:HF + 'sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors'},
+  da3:{label:'Depth Anything 3', gb:0.54, kind:'geometry_estimation', url:HF + 'Depth-Anything-3/resolve/main/geometry_estimation/depth_anything_3_base.safetensors'},
+  px:{label:'Pixal3D', gb:5.6, kind:'diffusion_models', url:HF + 'Pixal3D/resolve/main/diffusion_models/pixal3d_int8_convrot.safetensors'},
+  dino:{label:'DINOv3 (for Pixal3D)', gb:1.2, kind:'clip_vision', url:HF + 'Pixal3D/resolve/main/clip_vision/dino_v3_L_naf_fp32.safetensors'},
+  svae:{label:'TRELLIS.2 shape VAE', gb:1.1, kind:'vae', url:HF + 'Pixal3D/resolve/main/vae/trellis_2_shape_vae_bf16.safetensors'},
+  tvae:{label:'TRELLIS.2 texture VAE', gb:0.95, kind:'vae', url:HF + 'Pixal3D/resolve/main/vae/trellis_2_texture_vae_bf16.safetensors'}};
+const missing = (k, keys) => keys.filter(x => !k[x]);
+// NEED = {pc, keys, why}: what's missing for the thing just tried; the ⬇ button gets them, one after another
+const needLabel = () => NEED ? NEED.keys.map(x => MODELS[x].label).join(', ') + ' (once, ' + NEED.keys.reduce((a, x) => a + MODELS[x].gb, 0).toFixed(1) + ' GB)' : '';
+const needBtn = () => NEED ? `<button id="needb" style="width:100%;margin-top:6px" ${GETTING ? 'disabled' : ''}>⬇ Get ${esc(needLabel())} on ${esc(pcName(NEED.pc))}</button>` : '';
+async function getModels(){ const N = NEED; if(!N || GETTING) return; GETTING = true; draw(); const u = N.pc;
+  try{ for(const key of N.keys){ const mdl = MODELS[key], file = mdl.url.split('/').pop(); MSG = 'Asking ' + pcName(u) + ' to download ' + mdl.label + '…'; draw();
+      const r = await fetch(u + '/renderdeck/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:mdl.url, kind:mdl.kind})}), j = await r.json().catch(() => ({}));
+      if((!r.ok || j.error) && !/exist|already/i.test(j.error || '')) throw new Error(r.status===404 ? pcName(u) + " hasn't got Render Deck's helper." : 'The ' + mdl.label + ' download was turned down: ' + (j.error || r.status));
+      if(!r.ok) continue; // (already there)
+      for(let i = 0; i < 3600; i++){ await new Promise(r => setTimeout(r, window.RENDER_POLL || 3000));
+        let js = null; try{ js = await (await fetch(u + '/renderdeck/jobs', {cache:'no-store'})).json(); }catch(e){ continue; }
+        const jb = (js.jobs || []).find(x => (x.name || '')===file) || (js.jobs || []).find(x => (x.name || '').includes(file.replace(/\.safetensors$/, ''))); if(!jb) continue;
+        if(/error|fail/i.test(jb.status || '')) throw new Error('The ' + mdl.label + ' download failed on ' + pcName(u) + ' (' + (jb.error || jb.status) + ').');
+        if(/done|finish|complete/i.test(jb.status || '')) break;
+        MSG = 'Downloading ' + mdl.label + ' on ' + pcName(u) + (jb.total ? '… ' + Math.round(100 * (jb.done || 0) / jb.total) + '%' : '…'); const m = $('#msg'); if(m) m.textContent = MSG; } }
+    NEED = null; KIT = null; MSG = 'Done: ' + N.keys.map(x => MODELS[x].label).join(', ') + ' on ' + pcName(u) + '. ' + (N.again || 'Try it again.'); }
+  catch(e){ MSG = e.message; } GETTING = false; draw(); }
 const groundNote = () => !A ? '' : A.ground ? 'Ground found: the camera was ' + A.ground.height.toFixed(1) + ' m up, looking ' + Math.abs(A.ground.pitch).toFixed(0) + '° ' + (A.ground.pitch < 0 ? 'down' : 'up') + '.' : M.res && M.res.scene ? "Couldn't find the ground in the video, so she stands on a plain floor." : '';
-async function openResult(){ MSG = 'Bringing the 3D animation over…'; draw(); await loadMotion(M.res);
+async function openResult(){ MSG = 'Bringing the 3D animation over…'; draw(); await loadMotion(M.res); await loadProps();
   // (a new result with a ground starts on 🦘 Free, so climbs and jumps show; it says what it found)
   if(M.fresh){ M.fresh = false; if(A.ground) M.feet = 'free'; keep(); pose(); } pipSrc(); pip.hidden = !(LOCAL || M.vid); draw();
   // (Jordan 2026-11-01: opens paused on frame 1; ▶ starts it)
   play(false); setT(0); if(!pip.hidden) pip.addEventListener('loadeddata', () => { if(!PLAY) setT(T); }, {once:true}); }
 // ---- the clips list (on this phone; the GLBs and videos stay on the PC)
 function saveClip(){ if(!M.res) return; const id = M.id || (M.id = 'mc' + Math.random().toString(36).slice(2, 9)); if(!M.name) M.name = 'Motion ' + new Date().toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
-  const c = {id, name:M.name, vid:M.vid, dur:M.dur, vw:M.vw, vh:M.vh, start:M.start, end:M.end, fps:M.fps, hands:M.hands, smooth:M.smooth, res:M.res, frames:M.frames, walk:M.walk, feet:M.feet, head:M.head, people:M.people || 1, hide:M.hide || [], made:Date.now()};
+  const c = {id, name:M.name, vid:M.vid, dur:M.dur, vw:M.vw, vh:M.vh, start:M.start, end:M.end, fps:M.fps, hands:M.hands, smooth:M.smooth, res:M.res, frames:M.frames, walk:M.walk, feet:M.feet, head:M.head, people:M.people || 1, hide:M.hide || [], props:M.props || [], place:M.place || null, made:Date.now()};
   LIB = [c, ...LIB.filter(x => x.id!==id)].slice(0, 60); put(LKEY, LIB); keep(); }
 function drawLib(){ $('#libl').innerHTML = LIB.length ? LIB.map(c => `<div class="clip"><button class="op" data-open="${c.id}"><b>${esc(c.name)}</b><small>${c.frames || '?'} frames · ${esc(pcName((c.res || {}).pc || ''))} · ${new Date(c.made).toLocaleDateString()}</small></button><button class="sm" data-ren="${c.id}" aria-label="Rename">✏️</button><button class="sm" data-del="${c.id}" aria-label="Remove from the list">🗑</button></div>`).join('')
   : '<p class="note">Nothing copied yet. Every finished motion lands here.</p>'; }
@@ -331,7 +467,9 @@ $('#file').onchange = e => { const f = e.target.files && e.target.files[0]; e.ta
 function metaIn(v){ const d = v.duration; if(!isFinite(d) || d <= 0 || (Math.abs(d - M.dur) < 1e-3 && M.vw===v.videoWidth)) return; const first = !M.dur; M.dur = d; M.vw = v.videoWidth; M.vh = v.videoHeight; if(first || !M.end || M.end > d){ M.start = 0; M.end = Math.min(d, 10); } keep(); draw(); }
 // ---- the panel
 const fmt = s => (s || 0).toFixed(1) + ' s';
-function showProg(){ const el = $('#prog'), m = $('#msg'); if(m) m.textContent = MSG; if(!el) return; const lab = $('#plab'), J = M.job;
+function showProg(){ const el = $('#prog'), m = $('#msg'); if(m) m.textContent = MSG;
+  if(SIDE && m && PROG && PROG.node){ const k = (window.LASTG || {})[PROG.node]; m.textContent = SIDE.label + (LABEL[k] ? ' · ' + LABEL[k] : '') + (PROG.max > 1 ? ' · ' + PROG.v + ' of ' + PROG.max : '') + ' · ' + Math.round((Date.now() - SIDE.t0) / 1000) + ' s'; }
+  if(!el) return; const lab = $('#plab'), J = M.job;
   if(PROG && PROG.node && J){ const k = (window.LASTG || {})[PROG.node]; const name = LABEL[k] || 'Working'; const nums = PROG.max > 1 ? ' · ' + PROG.v + ' of ' + PROG.max + (k==='SAM3DBody_Predict' ? ' frames' : '') : '';
     lab.textContent = name + nums; el.classList.toggle('run', !(PROG.max > 1)); el.firstChild.style.width = PROG.max > 1 ? Math.round(100 * PROG.v / PROG.max) + '%' : ''; }
   else { lab.textContent = J ? 'Waiting for ' + pcName(J.pc) + '…' : ''; el.classList.add('run'); } }
@@ -344,6 +482,11 @@ function draw(){ const B = $('#body'), old = $('#prev'), at = old ? old.currentT
       <div class="chips"><button id="frontb">Front</button><button id="sideb">Side</button><button data-walk="1" aria-pressed="${M.walk}">🚶 Moves</button><button data-walk="0" aria-pressed="${!M.walk}">📍 In place</button></div>
       <div class="chips"><button data-feet="floor" aria-pressed="${M.feet!=='free'}">📌 Feet on floor</button><button data-feet="free" aria-pressed="${M.feet==='free'}">🦘 Free (climbs, jumps)</button>${SCN ? `<button id="sceneb" aria-pressed="${M.scene===true}">🏞 Place</button>` : ''}</div>
       ${A && A.P.length > 1 ? `<div class="lbl"><span>People (tap to hide or show)</span></div><div class="chips" id="who">${A.P.map(p => `<button data-p="${p.i}" aria-pressed="${!M.hide[p.i]}"><span class="dot" style="background:${TINT_CSS[p.i % TINT_CSS.length]}"></span>${M.hide[p.i] ? '🙈' : '👁'} ${p.i + 1}</button>`).join('')}</div>` : ''}
+      <div class="lbl"><span>🗡 Props (scrub to a frame where it's clear)</span></div>
+      ${(M.props || []).length ? `<div class="chips" id="props">${M.props.map(pr => { const P = PROPS.find(x => x.id===pr.id) || {}; return `<button data-prop="${pr.id}" aria-pressed="${!pr.hide}" title="${esc(P.err || '')}">${pr.hide ? '🙈' : '👁'} ${esc(pr.word)}${P.held ? ' ✋' : ''}${P.err ? ' ⚠' : ''}</button><button class="sm" data-pdel="${pr.id}" aria-label="Remove ${esc(pr.word)}">✕</button>`; }).join('')}</div>` : ''}
+      <div class="row"><input id="propw" type="text" placeholder="sword, shield, chair…" maxlength="40" value="${esc(PROPW)}" aria-label="What to look for"><button id="propb" ${BUSY || SIDE ? 'disabled' : ''}>＋ Find it here</button></div>
+      ${M.place ? '' : `<button id="placeb" style="width:100%;margin-top:6px" ${BUSY || SIDE ? 'disabled' : ''}>🏞 Build the whole place (8 frames)</button>`}
+      ${needBtn()}
       <div class="lbl"><span>🙂 Head size</span><span>${(M.head || 1).toFixed(2)}×</span></div><input type="range" id="head" min="0.8" max="1.6" step="0.02" value="${M.head || 1}">
       <details class="note" id="more" ${MORE ? 'open' : ''}><summary>Smoothing and hands (rebuilds on the PC, quick)</summary>
       <div class="lbl" style="margin-top:6px"><span>Smoothing</span></div><div class="chips" id="smooth">${Object.entries(SMOOTH).map(([k, s]) => `<button data-k="${k}" aria-pressed="${M.smooth===k}">${s.name}</button>`).join('')}</div>
@@ -361,7 +504,7 @@ function draw(){ const B = $('#body'), old = $('#prev'), at = old ? old.currentT
       <div class="chips"><button id="handsb" aria-pressed="${!!M.hands}">✋ Read hands too (slower)</button></div>
       <div class="lbl"><span>People in the video</span></div><div class="chips" id="people">${[[1, '👤 One'], [2, '👥 2'], [3, '3'], [4, '4']].map(([v, t]) => `<button data-v="${v}" aria-pressed="${(M.people || 1)===v}">${t}</button>`).join('')}</div>
       ${(M.people || 1) > 1 ? `<p class="note">Fights, hugs, dances: SAM 3.1 follows each person through the video so everyone keeps their own mannequin. Slower than one person.</p>` : ''}
-      ${NEED3 && (M.people || 1) > 1 ? `<button id="get3b" style="width:100%" ${GET3 ? 'disabled' : ''}>⬇ Get SAM 3.1 on ${esc(pcName(NEED3))} (once, 1.7 GB)</button>` : ''}
+      ${(M.people || 1) > 1 ? needBtn() : ''}
       ${over ? `<p class="note">That's more than ${MAXF} frames: only the first ${MAXF} are read. Trim it or pick fewer frames per second.</p>` : ''}
       <p id="msg">${esc(MSG)}</p>
       <div class="row"><button class="sm" id="pickb">🎬 Other video</button><button class="go" id="gob" ${BUSY ? 'disabled' : ''}>🦴 Copy the motion</button></div>
@@ -376,7 +519,10 @@ function wire(){ const on = (s, ev, f) => { const el = $(s); if(el) el[ev] = f; 
   on('#fps', 'onclick', e => { const b = e.target.closest('button'); if(b){ M.fps = +b.dataset.v; keep(); draw(); } });
   on('#smooth', 'onclick', e => { const b = e.target.closest('button'); if(b){ M.smooth = b.dataset.k; keep(); draw(); } });
   on('#handsb', 'onclick', () => { M.hands = !M.hands; keep(); draw(); });
-  on('#people', 'onclick', e => { const b = e.target.closest('button'); if(b){ M.people = +b.dataset.v; keep(); draw(); } }); on('#get3b', 'onclick', getSam3);
+  on('#propw', 'oninput', e => { PROPW = e.target.value; }); on('#propw', 'onkeydown', e => { if(e.key==='Enter') addProp(); }); on('#propb', 'onclick', addProp); on('#placeb', 'onclick', buildPlace);
+  on('#props', 'onclick', e => { const b = e.target.closest('button'); if(!b) return; if(b.dataset.prop){ const pr = M.props.find(x => x.id===b.dataset.prop); if(pr){ pr.hide = !pr.hide; keep(); saveClip(); pose(); draw(); } }
+    if(b.dataset.pdel){ const pr = M.props.find(x => x.id===b.dataset.pdel); if(pr && confirm('Take the ' + pr.word + ' out? (Its 3D file stays on the PC.)')){ M.props = M.props.filter(x => x!==pr); const P = PROPS.find(x => x.id===pr.id); if(P && P.obj && P.obj.parent) P.obj.parent.remove(P.obj); PROPS = PROPS.filter(x => x!==P); keep(); saveClip(); draw(); } } });
+  on('#people', 'onclick', e => { const b = e.target.closest('button'); if(b){ M.people = +b.dataset.v; keep(); draw(); } }); on('#needb', 'onclick', getModels);
   on('#who', 'onclick', e => { const b = e.target.closest('button[data-p]'); if(!b) return; const i = +b.dataset.p; M.hide[i] = !M.hide[i]; keep(); pose(); draw(); });
   on('#more', 'ontoggle', e => { MORE = e.target.open; });
   on('#gob', 'onclick', () => copyMotion(false)); on('#rebuildb', 'onclick', () => copyMotion(true));
@@ -391,7 +537,7 @@ function wire(){ const on = (s, ev, f) => { const el = $(s); if(el) el[ev] = f; 
 // (so the progress line can name the node: the graph sent)
 window.LASTG = M.job && M.job.cls || {};
 // ---- start: pick up a job that was running, or the last result
-window.MOCAP = {get A(){ return A; }, get M(){ return M; }, get SCN(){ return SCN; }, world, lift, camera, controls, setT, pose};
+window.MOCAP = {get A(){ return A; }, get M(){ return M; }, get SCN(){ return SCN; }, get PROPS(){ return PROPS; }, world, align, lift, camera, controls, setT, pose, reopen:openResult};
 (async () => { draw();
   if(M.job){ BUSY = true; draw(); try{ await runJob(); await openResult(); saveClip(); MSG = 'Done. Drag to turn round ' + (A && A.P.length > 1 ? 'them' : 'her') + ', scrub to step through.'; }catch(e){ M.job = null; keep(); MSG = e.message; } BUSY = false; draw(); }
   else if(M.res){ try{ await openResult(); MSG = ''; }catch(e){ MSG = e.message + ' (Is ' + pcName(M.res.pc) + ' on?)'; } draw(); } })();
