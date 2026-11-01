@@ -50,12 +50,15 @@ header h1 span{color:var(--accent)}
 .block>h3::after{content:"▾";color:var(--dim);font:14px var(--body);transition:transform .15s}
 .block.shut>h3::after{transform:rotate(-90deg)}
 .block.shut>.body{display:none}
-.body{padding:0 14px 14px;display:grid;gap:12px}
+.body{padding:0 14px 14px;display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.loras{display:grid;gap:10px;min-width:0;grid-template-columns:minmax(0,1fr)}.lr{min-width:0;grid-template-columns:minmax(0,1fr);border:1px solid var(--line);border-radius:12px;padding:10px;display:grid;gap:8px}
+.lr .lt{display:flex;gap:8px;align-items:center}.lr .lt select{flex:1;min-width:0;width:auto}.lr .lt b{font-size:13px;min-width:36px;text-align:right}
+.lr .x{padding:6px 10px}
 .row>label{font-size:13.5px;font-weight:700;color:var(--soft)}
 .lab{font-size:13px;font-weight:800;color:var(--soft);margin-bottom:6px;display:flex;justify-content:space-between;gap:8px}
 .lab b{color:var(--text)}
-.note{font-size:13px;color:var(--dim);line-height:1.4}
+.note{font-size:13px;color:var(--dim);line-height:1.4;overflow-wrap:anywhere}
 .note.warn{color:var(--samp)}
 .note.bad{color:var(--bad)}
 .seg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:11px;padding:3px;gap:3px}
@@ -209,13 +212,10 @@ h2 span{flex:1}
       <select id="model"></select>
       <div class="seg" id="speedSeg"><button data-v="turbo">⚡ Turbo</button><button data-v="regular">🎬 Regular</button></div>
       <div class="note" id="modelNote"></div>
-      <div>
-        <div class="lab"><span>Style LoRA</span><b id="loraOut"></b></div>
-        <select id="lora"><option value="">None</option></select>
-        <div class="row" id="loraRow" hidden style="margin-top:8px;flex-wrap:nowrap">
-          <input type="range" id="loraStr" min="0" max="1.5" step="0.05" value="1" style="flex:1">
-          <input id="loraWords" placeholder="Activation words, e.g. AFKJ Style" style="flex:1.4">
-        </div>
+      <div style="min-width:0">
+        <div class="lab"><span>LoRAs</span><b id="loraOut"></b></div>
+        <div id="loraList" class="loras"></div>
+        <button class="btn" id="loraAdd" style="margin-top:8px">➕ Add a LoRA</button>
       </div>
     </div>
   </section>
@@ -281,7 +281,8 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, lora:'', loraStr:1, loraWords:'', aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5}, s.f || {});
+    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5}, s.f || {});
+  if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   s.media = s.media || {}; s.up = s.up || {}; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
 }
@@ -456,6 +457,8 @@ function resolveModel(oi, key, turbo){
   }
   return b ? {unet:b, steps:20, fl2v, label:bn(b)} : null;
 }
+// a take's LoRAs, stacked in order; older takes kept one in lora/loraStr/words
+const lorasOf = t => (t.loras || (t.lora ? [{name:t.lora, str:+t.loraStr || 1, words:t.words || ''}] : [])).filter(l => l.name);
 const styleLoras = oi => combo(oi, 'LoraLoaderModelOnly', 'lora_name').filter(n => /minimax|mmh3|(^|[_\W])h3([_\W]|$)/i.test(bn(n)) && !/turbo/i.test(bn(n)));
 const clipOf = oi => combo(oi, 'CLIPLoader', 'clip_name').find(n => /minimax_h3/i.test(bn(n)));
 const vaeOf = oi => { const l = combo(oi, 'VAELoader', 'vae_name'); return l.find(n => /minimax_h3_video_vae_fp16/i.test(bn(n))) || l.find(n => /minimax_h3_video_vae/i.test(bn(n))); };
@@ -644,7 +647,7 @@ function canRun(url, job){
   if(!oi || !oi.MiniMaxH3ReferenceToVideo || !oi.SaveVideo) return 'has no MiniMax H3 nodes (update ComfyUI)';
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
-  if(job.lora && !combo(oi, 'LoraLoaderModelOnly', 'lora_name').includes(job.lora)) return 'doesn\'t have the LoRA ' + bn(job.lora);
+  { const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), miss = lorasOf(job).find(l => !have.includes(l.name)); if(miss) return 'doesn\'t have the LoRA ' + bn(miss.name); }
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
@@ -681,11 +684,12 @@ function pieceGraph(t, i, oi, names){
   const M = resolveModel(oi, t.model, t.turbo), w = t.w, h = t.h, L = pc.gen, steps = +t.steps || M.steps;
   let model = [add('UNETLoader', {unet_name:M.unet, weight_dtype:'default'}), 0];
   if(M.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:M.lora, strength_model:1}), 0];
-  if(t.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:t.lora, strength_model:+t.loraStr}), 0];
+  for(const l of lorasOf(t)) model = [add('LoraLoaderModelOnly', {model, lora_name:l.name, strength_model:+l.str}), 0];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0], vae = [add('VAELoader', {vae_name:vaeOf(oi)}), 0], avae = [add('VAELoader', {vae_name:avaeOf(oi)}), 0];
   const img = id => [add('LoadImage', {image:names[id]}), 0];
   const useFirst = t.fl && first && t.first, useLast = t.fl && t.lastOn && last && t.lastImg;
-  let prompt = (t.words ? t.words.replace(/[.\s]*$/, '. ') : '') + pc.prompt, cond, lat, guides = 0;
+  const words = lorasOf(t).map(l => (l.words || '').trim()).filter(Boolean).join(', ');
+  let prompt = (words ? words.replace(/[.\s]*$/, '. ') : '') + pc.prompt, cond, lat, guides = 0;
   if(M.fl2v){ // the official First/last frame model
     const iv = add('MiniMaxH3ImageToVideo', Object.assign({clip, vae, prompt, width:w, height:h, length:L}, useFirst ? {first_frame:img(t.first)} : {}, useLast ? {last_frame:img(t.lastImg)} : {}));
     cond = [iv, 0]; lat = [iv, 1];
@@ -788,7 +792,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
   const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(); return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, keys:P ? P.keys : null}; })() : null;
-  return {sm, model:f.model, turbo:f.turbo, lora:f.lora, loraStr:f.loraStr, words:f.lora ? f.loraWords.trim() : '', w, h, steps:f.steps,
+  return {sm, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => ({id:r.id})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow})), auds:R.auds.map(r => ({id:r.id})), follow:R.follow.map(r => ({id:r.id})),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
@@ -939,7 +943,7 @@ async function saveVideo(t){
   }catch(e){ if(e && e.name!=='AbortError') toast("Couldn't get it: " + e.message); }
 }
 function useAgain(t){
-  const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, lora:t.lora || '', loraStr:t.loraStr || 1, loraWords:t.words || '', steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
+  const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
   f.sm = !!t.sm; if(t.sm){ Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => ({id:r.id, on:true})); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow})); f.auds = t.auds.map(r => ({id:r.id, on:true})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
@@ -1017,11 +1021,11 @@ function drawModel(){
   const oi = oiAny.find(o => resolveModel(o, f.model, f.turbo)), M = oi && resolveModel(oi, f.model, f.turbo);
   $('#modelNote').textContent = M ? M.label + ' · ' + (+f.steps || M.steps) + ' steps' + (M.fl2v ? ' · first/last frame only, no references' : '') : '';
   // style LoRAs any PC has
-  const loras = [...new Set(oiAny.flatMap(styleLoras))].sort(), ls = $('#lora');
-  ls.innerHTML = '<option value="">None</option>' + loras.map(n => `<option value="${esc(n)}">${esc(bn(n).replace(/\.safetensors$/, ''))}</option>`).join('');
-  if(f.lora && !loras.includes(f.lora)) loras.length && (f.lora = ''); ls.value = f.lora;
-  $('#loraRow').hidden = !f.lora; $('#loraStr').value = f.loraStr; $('#loraWords').value = f.loraWords; $('#loraOut').textContent = f.lora ? (+f.loraStr).toFixed(2) : '';
-  $('#modelSum').textContent = fams.length ? (famLabel(f.model || '').replace(/^MiniMax H3 /, '') + ' · ' + (f.turbo ? 'Turbo' : 'Regular') + (f.lora ? ' · LoRA' : '')) : '';
+  const loras = [...new Set(oiAny.flatMap(styleLoras))].sort(), on = f.loras.filter(l => l.name);
+  $('#loraList').innerHTML = f.loras.map((l, i) => `<div class="lr" data-li="${i}"><div class="lt"><select data-ln>${(l.name ? '' : '<option value="">Pick a LoRA</option>') + [...new Set([...(l.name ? [l.name] : []), ...loras])].map(n => `<option value="${esc(n)}"${n===l.name ? ' selected' : ''}>${esc(bn(n).replace(/\.safetensors$/, ''))}${loras.includes(n) ? '' : ' (not on the PCs)'}</option>`).join('')}</select><b>${(+l.str).toFixed(2)}</b><button class="btn x" data-lx aria-label="Remove">✕</button></div>
+    <input type="range" data-ls min="0" max="1.5" step="0.05" value="${+l.str}"><input data-lw placeholder="Activation words, e.g. AFKJ Style" value="${esc(l.words || '')}"></div>`).join('');
+  $('#loraAdd').disabled = !loras.length; $('#loraOut').textContent = on.length ? on.length + ' on' : '';
+  $('#modelSum').textContent = fams.length ? (famLabel(f.model || '').replace(/^MiniMax H3 /, '') + ' · ' + (f.turbo ? 'Turbo' : 'Regular') + (on.length ? ' · ' + on.length + ' LoRA' + (on.length > 1 ? 's' : '') : '')) : '';
 }
 function drawCanvas(){
   const f = S.f, {w, h} = dims(), r = w / h;
@@ -1192,9 +1196,13 @@ $('#lastSw').onclick = () => { S.f.last = !S.f.last; save(); drawAll(); };
 $('#refSw').onclick = () => { S.f.ref = !S.f.ref; save(); drawAll(); };
 $('#model').onchange = e => { S.f.model = e.target.value; save(); drawAll(); };
 $('#speedSeg').onclick = e => { const b = e.target.closest('button'); if(!b || b.disabled) return; S.f.turbo = b.dataset.v==='turbo'; save(); drawAll(); };
-$('#lora').onchange = e => { S.f.lora = e.target.value; if(S.f.lora && !S.f.loraWords && /afk/i.test(S.f.lora)) S.f.loraWords = 'AFKJ Style'; save(); drawModel(); };
-$('#loraStr').oninput = e => { S.f.loraStr = +e.target.value; $('#loraOut').textContent = S.f.loraStr.toFixed(2); save(); };
-$('#loraWords').oninput = e => { S.f.loraWords = e.target.value; save(); };
+$('#loraAdd').onclick = () => { S.f.loras.push({name:'', str:1, words:''}); save(); drawModel(); drawGo(); };
+$('#loraList').onchange = e => { const row = e.target.closest('[data-li]'); if(!row || !e.target.matches('[data-ln]')) return; const l = S.f.loras[+row.dataset.li];
+  l.name = e.target.value; if(l.name && !l.words && /afk/i.test(l.name)) l.words = 'AFKJ Style'; save(); drawModel(); drawGo(); };
+$('#loraList').oninput = e => { const row = e.target.closest('[data-li]'); if(!row) return; const l = S.f.loras[+row.dataset.li];
+  if(e.target.matches('[data-ls]')){ l.str = +e.target.value; row.querySelector('b').textContent = l.str.toFixed(2); }
+  if(e.target.matches('[data-lw]')) l.words = e.target.value; save(); };
+$('#loraList').onclick = e => { const x = e.target.closest('[data-lx]'); if(!x) return; S.f.loras.splice(+x.closest('[data-li]').dataset.li, 1); save(); drawModel(); drawGo(); };
 $('#res').oninput = e => { S.f.mp = +e.target.value; save(); drawCanvas(); };
 $('#takesDn').onclick = () => { S.f.takes = Math.max(1, S.f.takes - 1); save(); drawMore(); drawGo(); };
 $('#takesUp').onclick = () => { S.f.takes = Math.min(12, S.f.takes + 1); save(); drawMore(); drawGo(); };
@@ -1204,7 +1212,7 @@ $('#seed').oninput = e => { S.f.seed = e.target.value; save(); };
 $('#maxPiece').oninput = e => { S.f.maxPiece = +e.target.value; $('#maxOut').textContent = fmtS(S.f.maxPiece); S.f.pieceText = {}; save(); drawShot(); drawCanvas(); drawGo(); };
 $('#goBtn').onclick = render;
 $('#setBtn').onclick = () => {
-  openSheet(`<h3>⚙ PCs <button class="btn" data-close>✕</button></h3>` + S.pcs.map((p, i) => { const q = pcOf(p.url), job = {model:S.f.model, turbo:S.f.turbo, lora:S.f.lora, pieces:currentPlan(), vids:refsOn().vids, follow:refsOn().follow, imgs:refsOn().imgs, auds:refsOn().auds};
+  openSheet(`<h3>⚙ PCs <button class="btn" data-close>✕</button></h3>` + S.pcs.map((p, i) => { const q = pcOf(p.url), job = {model:S.f.model, turbo:S.f.turbo, loras:S.f.loras.filter(l => l.name), pieces:currentPlan(), vids:refsOn().vids, follow:refsOn().follow, imgs:refsOn().imgs, auds:refsOn().auds};
     const why = canRun(p.url, job), mc = q.oi && q.oi.MiniMaxH3MotionContext, st = q.stats && q.stats.devices && q.stats.devices[0];
     return `<div class="pcrow"><div class="nm"><i class="dot ${q.online ? 'on' : ''}"></i>${esc(p.name)}</div><span class="tog ${p.on ? 'on' : ''}" data-pcon="${i}"></span>
       <input data-pcname="${i}" value="${esc(p.name)}" style="grid-column:1/-1"><input data-pcurl="${i}" value="${esc(p.url)}" style="grid-column:1/-1" inputmode="url">
