@@ -173,6 +173,15 @@ h2 span{flex:1}
   <section class="block" id="bInputs" style="--c:var(--pic)">
     <h3>Frames and references <span class="sum" id="inSum"></span></h3>
     <div class="body">
+      <div class="sw" id="smSw"><div><div class="t">🪄 Smooth a video</div><div class="d">Pins every 4th frame of your clip; MiniMax paints the frames between</div></div><div class="tog"></div></div>
+      <div id="smBody" hidden>
+        <div class="slots" id="smSlots"></div>
+        <div style="margin-top:10px"><div class="lab"><span>Window starts at</span><b id="smStartOut">0 s</b></div>
+          <input type="range" id="smStart" min="0" max="0" step="0.05" value="0" style="width:100%"></div>
+        <div style="margin-top:6px"><div class="lab"><span>Pin every</span></div><div class="seg" id="smEverySeg"><button data-v="2">2nd frame</button><button data-v="4">4th frame</button><button data-v="8">8th frame</button></div></div>
+        <div class="sw" id="smSoundSw" style="margin-top:8px"><div><div class="t">🔊 Keep its sound</div><div class="d">Pins the clip's own sound too, so voices stay in sync</div></div><div class="tog"></div></div>
+        <div class="note" id="smNote" style="margin-top:6px"></div>
+      </div>
       <div class="sw" id="flSw"><div><div class="t">🎞 First / last frame</div><div class="d">Pin the opening picture, and the ending one if you like</div></div><div class="tog"></div></div>
       <div id="flBody" hidden>
         <div class="slots" id="flSlots"></div>
@@ -266,7 +275,7 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, lora:'', loraStr:1, loraWords:'', aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}}, s.f || {});
+    model:'', turbo:true, lora:'', loraStr:1, loraWords:'', aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true}, s.f || {});
   s.media = s.media || {}; s.up = s.up || {}; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
 }
@@ -289,8 +298,31 @@ async function addMedia(file, kind){
   const id = uid('m'), m = {id, kind, name:file.name || kind, type:file.type || '', size:file.size};
   BLOBS[id] = file; try{ await IDB.put(id, file); }catch(e){ toast("Couldn't keep it on the phone; it works until you close the app"); }
   if(kind==='img'){ const im = await imgOf(file); m.w = im.naturalWidth; m.h = im.naturalHeight; m.thumb = thumbOf(im); }
+  if(kind==='vid'){ try{ Object.assign(m, await mp4Info(file)); }catch(e){} }
   if(kind==='vid' || kind==='aud'){ m.dur = await durOf(file, kind); if(kind==='vid'){ const t = await vidThumb(file); if(t){ m.thumb = t.url; m.w = t.w; m.h = t.h; } } }
   S.media[id] = m; save(); return id;
+}
+// frame rate and whether there's sound, read from the file's MP4/MOV boxes (phone videos are often 30 or 60 fps, H3 clips 24)
+async function mp4Info(blob){
+  const cc = (dv, o) => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+  const kids = (dv, s, e) => { const out = []; let o = s; while(o + 8 <= e){ let sz = dv.getUint32(o), hd = 8; const ty = cc(dv, o + 4);
+    if(sz===1){ sz = Number(dv.getBigUint64(o + 8)); hd = 16; } else if(sz===0) sz = e - o; if(sz < 8) break; out.push({ty, s:o + hd, e:Math.min(e, o + sz)}); o += sz; } return out; };
+  let off = 0, moov = null;
+  while(off + 8 <= blob.size){ const h = new DataView(await blob.slice(off, off + 16).arrayBuffer()); if(h.byteLength < 8) break; let sz = h.getUint32(0), hd = 8; const ty = cc(h, 4);
+    if(sz===1){ sz = Number(h.getBigUint64(8)); hd = 16; } else if(sz===0) sz = blob.size - off;
+    if(ty==='moov'){ moov = new DataView(await blob.slice(off + hd, off + sz).arrayBuffer()); break; } if(sz < 8) break; off += sz; }
+  if(!moov) return {};
+  const find = (b, ty) => b && kids(moov, b.s, b.e).find(k => k.ty===ty);
+  let fps = 0, sound = false;
+  for(const tr of kids(moov, 0, moov.byteLength).filter(k => k.ty==='trak')){
+    const md = find(tr, 'mdia'), hd = find(md, 'hdlr'); if(!hd) continue; const ht = cc(moov, hd.s + 8);
+    if(ht==='soun') sound = true;
+    if(ht==='vide' && !fps){ const mh = find(md, 'mdhd'), st = find(find(find(md, 'minf'), 'stbl'), 'stts'); if(!mh || !st) continue;
+      const ts = moov.getUint32(mh.s + (moov.getUint8(mh.s)===1 ? 20 : 12)), n = moov.getUint32(st.s + 4); let c = 0, d = 0;
+      for(let i = 0; i < n; i++){ const k = moov.getUint32(st.s + 8 + i * 8); c += k; d += k * moov.getUint32(st.s + 12 + i * 8); }
+      if(d) fps = ts * c / d; } }
+  const std = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120].sort((x, y) => Math.abs(x - fps) - Math.abs(y - fps)).find(x => Math.abs(x - fps) < x * 0.005);
+  return {fps:std || Math.round(fps * 1000) / 1000, sound};
 }
 function imgOf(blob){ return new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error("that picture couldn't be read")); i.src = URL.createObjectURL(blob); }); }
 function thumbOf(im){ const c = document.createElement('canvas'), s = 220 / Math.max(im.naturalWidth, im.naturalHeight); c.width = Math.max(1, Math.round(im.naturalWidth * s)); c.height = Math.max(1, Math.round(im.naturalHeight * s)); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); return c.toDataURL('image/jpeg', 0.8); }
@@ -303,7 +335,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
 const NEED = ['UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
-  'VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo'];
+  'VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
@@ -425,7 +457,7 @@ const avaeOf = oi => combo(oi, 'VAELoader', 'vae_name').find(n => /minimax_h3_au
 const ASPECTS = [['16:9',16/9],['9:16',9/16],['1:1',1],['4:3',4/3],['3:4',3/4],['21:9',21/9],['2:3',2/3],['3:2',3/2]];
 const PRESETS = {land:[[640,352],[864,480],[1024,576],[1280,736]], port:[[352,640],[480,864],[576,1024],[736,1280]], sq:[[512,512],[640,640],[768,768],[960,960]]};
 const MAXPX = 768 * 1344; // MiniMax H3's own canvas cap
-function ratio(){ const f = S.f; if(f.aspect==='pic'){ const m = f.fl && S.media[f.first]; if(m && m.w) return m.w / m.h; return 16/9; } return (ASPECTS.find(a => a[0]===f.aspect) || ASPECTS[0])[1]; }
+function ratio(){ const f = S.f; if(f.sm){ const m = S.media[f.smVid]; if(m && m.w) return m.w / m.h; } if(f.aspect==='pic'){ const m = f.fl && S.media[f.first]; if(m && m.w) return m.w / m.h; return 16/9; } return (ASPECTS.find(a => a[0]===f.aspect) || ASPECTS[0])[1]; }
 function dims(){ const r = ratio(), px = Math.min(MAXPX, S.f.mp * 1e6); let w = Math.max(256, Math.round(Math.sqrt(px * r) / 32) * 32), h = Math.max(256, Math.round(w / r / 32) * 32);
   while(w * h > MAXPX){ if(w >= h) w -= 32; else h -= 32; } return {w, h}; }
 
@@ -480,11 +512,18 @@ function piecePrompt(text, pieces, i, total){
     return '[' + t2(a) + '-' + t2(e) + '] ' + (cont ? '(carrying on) ' : '') + b.text; });
   return (lead + global + (global ? '\n' : '') + mine.join('\n')).trim();
 }
-function currentPlan(){ const f = S.f, beats = parseBeats(f.prompt).beats; return plan(+f.seconds || 5, +f.maxPiece || 5, beats); }
+function currentPlan(){ if(S.f.sm) return smoothPlan(); const f = S.f, beats = parseBeats(f.prompt).beats; return plan(+f.seconds || 5, +f.maxPiece || 5, beats); }
 
+// ---------- 🪄 smoothing a video: one window of it, every Nth frame pinned as a keyframe, MiniMax paints the rest ----------
+// Pinned frames are MiniMax keyframes (MiniMaxH3AddGuide): re-injected at every step and never denoised, so always at full strength.
+const SM_MAX = 15, SM_PROMPT = 'The same shot carries on with smooth, steady, natural motion. Nothing new appears and there are no cuts.';
+function smoothSpan(){ const f = S.f, m = S.media[f.smVid] || {}, dur = m.dur || 0, start = Math.min(+f.smStart || 0, Math.max(0, dur - 0.25));
+  return {start:Math.round(start * FPS) / FPS, avail:dur ? dur - start : SM_MAX}; }
+function smoothPlan(){ const {avail} = smoothSpan(), secs = Math.min(+S.f.seconds || 5, SM_MAX, avail); const up = gridUp(secs * FPS), g = up <= avail * FPS + 0.5 ? up : gridDn(Math.max(5, avail * FPS)); return [{start:0, gen:g, deliv:g, ctx:0}]; }
+function smoothKeys(L, every){ const k = []; for(let i = 0; i < L; i += every) k.push(i); if(k[k.length - 1]!==L - 1) k.push(L - 1); return k; }
 // ---------- references: what's on, and the <Picture n> / <Video n> / <Audio n> each one is called ----------
 function refsOn(){
-  const f = S.f; if(!f.ref) return {imgs:[], vids:[], auds:[], follow:[]};
+  const f = S.f; if(!f.ref || f.sm) return {imgs:[], vids:[], auds:[], follow:[]};
   const imgs = f.imgs.filter(r => r.on && S.media[r.id]), vids = f.vids.filter(r => r.on && S.media[r.id]), all = f.auds.filter(r => r.on && S.media[r.id]);
   return {imgs, vids, auds:all.filter(r => !r.follow), follow:all.filter(r => r.follow)};
 }
@@ -506,6 +545,7 @@ function canRun(url, job){
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
   if(job.lora && !combo(oi, 'LoraLoaderModelOnly', 'lora_name').includes(job.lora)) return 'doesn\'t have the LoRA ' + bn(job.lora);
+  if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
   if(job.follow.length && !oi.TrimAudioDuration) return "can't follow a soundtrack (no Trim Audio Duration)";
@@ -520,7 +560,7 @@ function busySecs(url){ // what's ahead on that PC: our own pieces by their esti
 }
 function estSecs(job, url){ // Render: ~24 s a step for a 5 s 864x480 clip, more with size and length; Main 1.26x
   let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20);
-  for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000;
+  for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? smoothKeys(p.gen, job.sm.every).length * (job.w / 32) * (job.h / 32) : 0);
     s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1); }
   return s * pcSpeed(url) + 15 * job.pieces.length;
 }
@@ -573,6 +613,14 @@ function pieceGraph(t, i, oi, names){
     if(useFirst){ cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(t.first), frame_idx:0}), 0]; guides++; }
     if(useLast){ cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(t.lastImg), frame_idx:-1}), 0]; guides++; }
   }
+  if(t.sm){ // 🪄 smoothing: the window is cut from the video on the PC, and every Nth frame of it is pinned where it belongs
+    const sm = t.sm, sf = sm.fps || FPS, lv = add('LoadVideo', {file:names[sm.vid]});
+    const sl = add('Video Slice', {video:[lv, 0], start_time:sm.start, duration:Math.round((L / FPS + 2 / sf) * 1000) / 1000, strict_duration:false});
+    const gc = add('GetVideoComponents', {video:[sl, 0]});
+    for(const k of smoothKeys(L, sm.every)){ const fr = add('ImageFromBatch', {image:[gc, 0], batch_index:Math.round(k * sf / FPS), length:1});
+      cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:k}), 0]; guides++; }
+    if(sm.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[gc, 1], frame_idx:0}), 0];
+  }
   // a soundtrack the clip follows in time: this piece's slice of it, anchored where the piece's new frames start
   t.follow.forEach(r => { const a = add('TrimAudioDuration', {audio:[add('LoadAudio', {audio:names[r.id]}), 0], start_index:pc.start, duration:pc.deliv / FPS});
     cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:LEAD(pc)}), 0]; });
@@ -619,14 +667,16 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 }
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
-  return {model:f.model, turbo:f.turbo, lora:f.lora, loraStr:f.loraStr, words:f.lora ? f.loraWords.trim() : '', w, h, steps:f.steps,
-    fl:f.fl && !!f.first, first:f.fl ? f.first : null, lastOn:f.fl && f.last && !!f.lastImg, lastImg:f.fl && f.last ? f.lastImg : null,
+  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS}; })() : null;
+  return {sm, model:f.model, turbo:f.turbo, lora:f.lora, loraStr:f.loraStr, words:f.lora ? f.loraWords.trim() : '', w, h, steps:f.steps,
+    fl:!sm && f.fl && !!f.first, first:!sm && f.fl ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => ({id:r.id})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow})), auds:R.auds.map(r => ({id:r.id})), follow:R.follow.map(r => ({id:r.id})),
-    prompt:f.prompt, seconds:+f.seconds,
-    pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:(f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
+    prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
+    pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
 function whyNot(){
-  const f = S.f; if(!f.prompt.trim()) return 'Write a prompt first';
+  const f = S.f; if(f.sm && !f.smVid) return 'Pick the video to smooth';
+  if(!f.prompt.trim() && !f.sm) return 'Write a prompt first';
   if(!families().length) return S.pcs.some(p => pcOf(p.url).online) ? 'No MiniMax H3 model found on the PCs' : "Can't reach the PCs. Is Tailscale on?";
   if(f.fl && !f.first) return 'Add a first frame, or turn First / last frame off';
   if(f.fl && f.last && !f.lastImg) return 'Add a last frame, or turn Last frame off';
@@ -655,7 +705,7 @@ async function render(){
 }
 async function sendPieces(t, from){
   const url = t.pc, oi = pcOf(url).oi, names = {};
-  const ids = [t.first, t.lastImg, ...t.imgs.map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
+  const ids = [t.sm && t.sm.vid, t.first, t.lastImg, ...t.imgs.map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   for(let i = from; i < t.pieces.length; i++){
     const p = t.pieces[i], G = pieceGraph(t, i, oi, names);
@@ -769,6 +819,7 @@ async function saveVideo(t){
 }
 function useAgain(t){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, lora:t.lora || '', loraStr:t.loraStr || 1, loraWords:t.words || '', steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
+  f.sm = !!t.sm; if(t.sm){ Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => ({id:r.id, on:true})); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow})); f.auds = t.auds.map(r => ({id:r.id, on:true})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   save(); drawAll(); window.scrollTo({top:0, behavior:'smooth'}); toast('Its settings are back in the form');
@@ -786,7 +837,7 @@ function drawShot(){
   const f = S.f, P = currentPlan(), tot = P.reduce((s, p) => s + p.deliv, 0) / FPS;
   $('#lenOut').textContent = fmtS(+f.seconds);
   $('#pieceBar').innerHTML = P.map((p, i) => `<i style="--w:${p.deliv}">${P.length > 1 ? (i + 1) + ' · ' : ''}${fmtS(p.deliv / FPS)}</i>`).join('');
-  $('#planNote').textContent = P.length===1 ? 'One render of ' + fmtS(tot) + '.' : P.length + ' pieces, about ' + fmtS(tot / P.length) + ' each (' + fmtS(tot) + ' in all), rendered in order on one PC and joined with H3 Motion Context.';
+  $('#planNote').textContent = f.sm ? '🪄 Smoothing a ' + fmtS(tot) + ' window of your video (one render).' : P.length===1 ? 'One render of ' + fmtS(tot) + '.' : P.length + ' pieces, about ' + fmtS(tot / P.length) + ' each (' + fmtS(tot) + ' in all), rendered in order on one PC and joined with H3 Motion Context.';
   $('#shotSum').textContent = fmtS(+f.seconds) + (P.length > 1 ? ' · ' + P.length + ' pieces' : '');
   $('#pieceEdit').hidden = P.length < 2;
   const box = $('#pieceTexts');
@@ -807,11 +858,21 @@ function slotHtml(kind, r, i, label){
 const addSlot = (kind, txt) => `<div class="slot add" data-add="${kind}">＋<br>${txt}</div>`;
 function drawInputs(){
   const f = S.f, L = refLabels();
-  $('#flSw').classList.toggle('on', f.fl); $('#flBody').hidden = !f.fl; $('#lastSw').classList.toggle('on', f.last);
+  $('#smSw').classList.toggle('on', f.sm); $('#smBody').hidden = !f.sm; $('#flSw').hidden = $('#refSw').hidden = f.sm;
+  const sv = S.media[f.smVid], sp = smoothSpan();
+  $('#smSlots').innerHTML = sv ? `<div class="slot has"><img src="${sv.thumb || ''}" alt=""><span class="tag">${esc((sv.fps ? sv.fps + ' fps' : '') + (sv.dur ? ' · ' + fmtS(sv.dur) : ''))}</span><button class="x" data-rm="smVid">✕</button><div class="nm" style="top:auto;bottom:6px">${esc(sv.name)}</div></div>` : addSlot('smv', 'Video to smooth');
+  const sMax = sv && sv.dur ? Math.max(0, Math.floor((sv.dur - 0.25) * 20) / 20) : 0; $('#smStart').max = sMax; $('#smStart').value = Math.min(sp.start, sMax); $('#smStart').disabled = !sMax; $('#smStartOut').textContent = fmtS(sp.start);
+  $$('#smEverySeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smEvery || 4)));
+  $('#smSoundSw').classList.toggle('on', !!f.smSound && !(sv && sv.sound===false)); $('#smSoundSw').hidden = !!(sv && sv.sound===false);
+  if(f.sm){ const L = smoothPlan()[0].gen, n = smoothKeys(L, +f.smEvery || 4).length;
+    $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s). The prompt is optional: describe the action to steer the in-betweens.'
+      + (sv.fps && Math.abs(sv.fps - FPS) > 0.1 ? ' Your clip is ' + sv.fps + ' fps; MiniMax makes 24 fps, so the nearest frames are used.' : '') + (sv.sound===false ? ' This clip has no sound.' : '')
+      : 'Pick a video. It goes to the PC as it is, and the frames are taken from it there.'; }
+  $('#flSw').classList.toggle('on', f.fl); $('#flBody').hidden = !f.fl || f.sm; $('#lastSw').classList.toggle('on', f.last);
   const fm = S.media[f.first], lm = S.media[f.lastImg];
   $('#flSlots').innerHTML = (fm ? `<div class="slot has"><img src="${fm.thumb}" alt=""><span class="tag">First frame</span><button class="x" data-rm="first">✕</button></div>` : addSlot('first', 'First frame'))
     + (f.last ? (lm ? `<div class="slot has"><img src="${lm.thumb}" alt=""><span class="tag">Last frame</span><button class="x" data-rm="lastImg">✕</button></div>` : addSlot('lastImg', 'Last frame')) : '');
-  $('#refSw').classList.toggle('on', f.ref); $('#refBody').hidden = !f.ref;
+  $('#refSw').classList.toggle('on', f.ref); $('#refBody').hidden = !f.ref || f.sm;
   $('#imgSlots').innerHTML = f.imgs.map((r, i) => slotHtml('img', r, i, L[r.id])).join('') + (f.imgs.length < MAXREF.img ? addSlot('img', 'Picture') : '');
   $('#vidSlots').innerHTML = f.vids.map((r, i) => slotHtml('vid', r, i, L[r.id])).join('') + (f.vids.length < MAXREF.vid ? addSlot('vid', 'Video') : '');
   $('#audSlots').innerHTML = f.auds.map((r, i) => slotHtml('aud', r, i, L[r.id])).join('') + (f.auds.length < MAXREF.aud ? addSlot('aud', 'Sound') : '');
@@ -819,7 +880,7 @@ function drawInputs(){
   if(R.vids.length) notes.push('🔊 sends the video\'s own sound too. ⏱ makes a long clip follow the video in time (each piece gets its part); off, every piece sees it from the start. Reference videos are the slow kind: they can triple the time.');
   if(f.auds.length) notes.push('🎤 sample = a voice or sound to copy. 🎵 track = the clip plays along with it in time, each piece taking its part.');
   $('#refNote').innerHTML = esc(notes.join(' '));
-  const bits = []; if(f.fl) bits.push(f.last ? 'first + last' : 'first frame'); if(f.ref){ const n = R.imgs.length + R.vids.length + R.auds.length + R.follow.length; bits.push(n + ' ref' + (n===1 ? '' : 's')); }
+  const bits = []; if(f.sm){ $('#inSum').textContent = '🪄 smoothing' + (sv ? ' · every ' + (+f.smEvery || 4) + (+f.smEvery===2 ? 'nd' : 'th') + ' frame' : ''); return; } if(f.fl) bits.push(f.last ? 'first + last' : 'first frame'); if(f.ref){ const n = R.imgs.length + R.vids.length + R.auds.length + R.follow.length; bits.push(n + ' ref' + (n===1 ? '' : 's')); }
   $('#inSum').textContent = bits.join(' · ') || 'text only';
 }
 function drawModel(){
@@ -848,7 +909,7 @@ function drawCanvas(){
   $('#canvasSum').textContent = w + '×' + h;
   const k = 0.135; $('#shapeBox').style.width = Math.round(w * k) + 'px'; $('#shapeBox').style.height = Math.round(h * k) + 'px'; // the frame drawn to scale: bigger box = more pixels
   $('#shapeLab').textContent = w + '×' + h;
-  const P = currentPlan(), lt = g => g <= 5 ? 2 : ((g - 5) / 17 | 0) * 5 + 2, tok = Math.max(...P.map(p => lt(p.gen))) * (w / 32) * (h / 32);
+  const P = currentPlan(), lt = g => g <= 5 ? 2 : ((g - 5) / 17 | 0) * 5 + 2, tok = (Math.max(...P.map(p => lt(p.gen))) + (f.sm ? smoothKeys(P[0].gen, +f.smEvery || 4).length : 0)) * (w / 32) * (h / 32); // smoothing: each pinned frame is its own block of tokens
   const n = $('#memNote'); n.className = 'note' + (tok > 45000 ? ' warn' : '');
   n.textContent = (tok > 45000 ? 'Big for 8 GB: about ' : 'About ') + Math.round(tok / 1000) + 'k tokens a piece' + (tok > 45000 ? '. References get shrunk to fit, and a very big one can run out of memory on Render or Main.' : ' (Render and Main have 8 GB; references are shrunk to fit the rest).');
 }
@@ -914,10 +975,10 @@ function drawTakes(){
     const chips = n > 1 ? `<div class="pieces">${t.pieces.map((p, i) => `<i style="--w:${p.deliv};${p.state==='done' ? 'color:var(--good)' : p.state==='running' ? 'color:var(--accent);border-color:var(--accent)' : p.state==='failed' ? 'color:var(--bad)' : ''}" data-piece="${t.id}|${i}">${i + 1}${p.state==='done' ? ' ✓' : p.state==='running' ? ' ▶' : p.state==='failed' ? ' ✕' : ''}</i>`).join('')}</div>` : '';
     const f = progress(t), tl = timeLeft(t);
     const acts = t.state==='working' ? `<button class="btn warn" data-act="cancel" data-t="${t.id}">✕ Cancel</button>`
-      : `${t.final || t.pieces.some(p => p.file) ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn" data-act="drop" data-t="${t.id}">🗑</button>`;
+      : `${t.final || t.pieces.some(p => p.file) ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn" data-act="drop" data-t="${t.id}">🗑</button>`;
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(',')].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
-      <div class="tl"><b>${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
+      <div class="tl"><b>${t.sm ? '🪄 ' : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
       <div class="pr">${esc(t.prompt)}</div>${chips}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
@@ -948,7 +1009,7 @@ document.addEventListener('click', async e => {
   if(ds.asp){ f.aspect = ds.asp; }
   else if(ds.pre){ const [w, h] = ds.pre.split('x').map(Number), r = w / h, a = ASPECTS.find(x => Math.abs(x[1] - r) < 0.02); if(a && f.aspect!=='pic') f.aspect = a[0]; f.mp = Math.round(w * h / 1e4) / 100; }
   else if(ds.add){ pickFile(ds.add); return; }
-  else if(ds.rm){ if(ds.rm==='first' || ds.rm==='lastImg') f[ds.rm] = null; else f[ds.rm + 's'].splice(+ds.i, 1); }
+  else if(ds.rm){ if(ds.rm==='first' || ds.rm==='lastImg' || ds.rm==='smVid') f[ds.rm] = null; else f[ds.rm + 's'].splice(+ds.i, 1); }
   else if(ds.tg){ const r = f[ds.tg + 's'][+ds.i]; r.on = !r.on; }
   else if(ds.opt){ const r = f[ds.k + 's'][+ds.i]; r[ds.opt] = !r[ds.opt]; }
   else if(ds.ins){ const ta = $('#prompt'), s = ta.selectionStart || ta.value.length, v = ta.value, ins = ds.ins + ' '; ta.value = v.slice(0, s) + ins + v.slice(ta.selectionEnd || s); ta.focus(); ta.selectionStart = ta.selectionEnd = s + ins.length; f.prompt = ta.value; }
@@ -975,13 +1036,14 @@ document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof 
   const i = l.indexOf(v.src.split('#')[0]); if(i >= 0){ v.src = l[(i + 1) % l.length]; v.play().catch(() => {}); } }, true);
 for(const ev of ['play', 'pause']) document.addEventListener(ev, e => { const v = e.target; if(v instanceof HTMLVideoElement && v.classList.contains('tv')) v.parentElement.classList.toggle('on', ev==='play'); }, true);
 let pickKind = '';
-function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='vid' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img'; fp.click(); }
+function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='vid' || kind==='smv' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img'; fp.click(); }
 $('#filePick').onchange = async e => {
-  const files = [...e.target.files]; if(!files.length) return; const f = S.f, kind = pickKind==='first' || pickKind==='lastImg' ? 'img' : pickKind;
+  const files = [...e.target.files]; if(!files.length) return; const f = S.f, kind = pickKind==='first' || pickKind==='lastImg' ? 'img' : pickKind==='smv' ? 'vid' : pickKind;
   try{
     for(const file of files){
       if(kind==='img' && pickKind==='img' && f.imgs.length >= MAXREF.img) break;
       const id = await addMedia(file, kind);
+      if(pickKind==='smv'){ f.smVid = id; f.smStart = 0; const m = S.media[id]; if(m.dur && m.dur < +f.seconds) f.seconds = Math.min(+f.seconds, m.dur); break; }
       if(pickKind==='first'){ f.first = id; } else if(pickKind==='lastImg'){ f.lastImg = id; }
       else if(kind==='img') f.imgs.push({id, on:true});
       else if(kind==='vid'){ const m = S.media[id]; if(m.dur && m.dur < 2) toast('MiniMax wants reference videos of 2 to 15 s'); f.vids.push({id, on:true, sound:false, follow:false}); }
@@ -997,6 +1059,10 @@ $('#lenNum').oninput = e => setLen(e.target.value);
 $('#pieceToggle').onclick = () => { $('#pieceTexts').hidden = !$('#pieceTexts').hidden; drawShot(); };
 $('#pieceTexts').addEventListener('input', e => { const i = e.target.dataset.pt; if(i==null) return; S.f.pieceText[+i] = e.target.value; save(); });
 $('#flSw').onclick = () => { S.f.fl = !S.f.fl; save(); drawAll(); };
+$('#smSw').onclick = () => { S.f.sm = !S.f.sm; save(); drawAll(); };
+$('#smSoundSw').onclick = () => { S.f.smSound = !S.f.smSound; save(); drawInputs(); };
+$('#smStart').oninput = e => { S.f.smStart = +e.target.value; save(); drawInputs(); drawShot(); };
+$('#smEverySeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smEvery = +b.dataset.v; save(); drawAll(); };
 $('#lastSw').onclick = () => { S.f.last = !S.f.last; save(); drawAll(); };
 $('#refSw').onclick = () => { S.f.ref = !S.f.ref; save(); drawAll(); };
 $('#model').onchange = e => { S.f.model = e.target.value; save(); drawAll(); };
@@ -1033,6 +1099,6 @@ drawAll();
 pingAll().then(() => { drawAll(); tick(); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
-window.H3 = {S, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, smoothPlan, smoothKeys, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
