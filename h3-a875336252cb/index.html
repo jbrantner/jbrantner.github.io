@@ -543,18 +543,25 @@ const SPC = {}; // video|start|frames -> {d:[steps], n, busy, err}
 const SPC_W = 192; let spcT = 0; // frames are measured this wide
 function spcKey(){ const f = S.f, sp = smoothSpan(); return f.smVid + '|' + sp.start + '|' + smoothPlan()[0].gen; }
 async function grabFrames(blob, start, L, sf, onp){
-  const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(blob);
+  // iPhone Safari won't load a video that isn't on the page, isn't muted/inline as attributes, or hasn't been played once
+  const v = document.createElement('video'); v.muted = true; v.defaultMuted = true; v.playsInline = true; v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
+  v.preload = 'auto'; v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1'; document.body.appendChild(v);
+  v.src = URL.createObjectURL(blob);
   try{
-    await new Promise((ok, no) => { v.onloadeddata = ok; v.onerror = () => no(new Error("the phone couldn't open this video")); setTimeout(() => no(new Error('the video took too long to open')), 20000); });
+    await new Promise((ok, no) => { let done = false; const go = () => { if(!done && v.videoWidth){ done = true; ok(); } };
+      v.addEventListener('loadedmetadata', go); v.addEventListener('loadeddata', go); v.addEventListener('canplay', go);
+      v.onerror = () => no(new Error("the phone couldn't open this video")); setTimeout(() => no(new Error('the video took too long to open')), 20000); v.load(); });
+    try{ await v.play(); }catch(e){} v.pause(); // primes the decoder (muted playback is allowed without a tap)
     const w = SPC_W, h = Math.max(16, Math.round(w * v.videoHeight / v.videoWidth)), c = document.createElement('canvas'); c.width = w; c.height = h;
     const x = c.getContext('2d'), out = [];
     for(let o = 0; o < L; o++){ const t = start + (Math.round(o * sf / FPS) + 0.5) / sf; if(v.duration && t > v.duration) break;
       await new Promise(ok => { let tm = 0; const done = () => { clearTimeout(tm); v.removeEventListener('seeked', done); ok(); }; v.addEventListener('seeked', done); tm = setTimeout(done, 4000); v.currentTime = t; });
+      if(v.requestVideoFrameCallback) await new Promise(ok => { const tm = setTimeout(ok, 250); v.requestVideoFrameCallback(() => { clearTimeout(tm); ok(); }); }); // the new frame is really there
       x.drawImage(v, 0, 0, w, h); const px = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
       for(let i = 0; i < w * h; i++) g[i] = px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114;
       out.push(g); if(onp) onp(o + 1, L); }
     return {frames:out, w, h};
-  } finally { URL.revokeObjectURL(v.src); }
+  } finally { URL.revokeObjectURL(v.src); v.removeAttribute('src'); v.remove(); }
 }
 // how far things moved between two frames: a grid of textured patches, each found again in the next frame (block
 // matching, coarse then exact); the 70th-percentile move, so a moving subject counts even when the background holds still
@@ -614,7 +621,8 @@ function drawSpacing(){
   const R = SPC[spcKey()], n = $('#smSpcNote'), cv = $('#smChart');
   if(!R){ n.className = 'note'; n.textContent = 'Tracking points through the window…'; clearTimeout(spcT); spcT = setTimeout(() => { if(!SPC[spcKey()] && S.f.sm && S.f.smSpc) measureSpacing(); }, 700); return; } // waits for the start slider to settle
   if(R.busy){ n.textContent = 'Tracking points through the window… ' + (R.of ? R.got + ' of ' + R.of + ' frames' : ''); return; }
-  if(R.err){ n.className = 'note warn'; n.textContent = "Couldn't measure the spacing (" + R.err + "), so it pins the plain every-" + (+f.smEvery || 4) + ' grid.'; return; }
+  if(R.err){ n.className = 'note warn'; n.innerHTML = esc("Couldn't measure the spacing (" + R.err + "), so it pins the plain every-" + (+f.smEvery || 4) + ' grid. ') + '<button class="btn" id="smSpcRetry" style="margin-top:6px">↻ Measure again</button>';
+    $('#smSpcRetry').onclick = () => { delete SPC[spcKey()]; measureSpacing(); }; return; }
   n.className = 'note'; const L = smoothPlan()[0].gen, P = spacingPlan(R.d, L, +f.smEvery || 4, +f.smEase), d = R.d.slice(0, L - 1);
   const dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 320, H = 110; cv.width = W * dpr; cv.height = H * dpr; const x = cv.getContext('2d'); x.scale(dpr, dpr); x.clearRect(0, 0, W, H);
   const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim(), mx = Math.max(1, ...d, ...P.t) * 1.1, bw = W / (L - 1), y = v => (H - 16) - v / mx * (H - 22);
