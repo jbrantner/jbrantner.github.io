@@ -306,7 +306,7 @@ async def download(request):
             info['name'] = urlparse(url).path.split('/')[-1]
             info['file_url'] = url.replace('/blob/', '/resolve/')
         kind = info['kind'] or body.get('kind')
-        if body.get('kind') == 'diffusion_models' or re.search(r'minimax|wan ?2|hunyuan ?video|ltx', info['base'] or '', re.I):
+        if body.get('kind') == 'diffusion_models' or (kind != 'loras' and re.search(r'minimax|wan ?2|hunyuan ?video|ltx', info['base'] or '', re.I)):  # a video LoRA stays a LoRA
             kind = 'diffusion_models'  # video and other split models load with UNETLoader, not as checkpoints
         name = _clean(body.get('name') or info['name'])
         path = _target(kind, name)
