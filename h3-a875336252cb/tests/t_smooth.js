@@ -21,9 +21,18 @@ const SCHEMA = { // just what the app reads
   ImageFromBatch:{input:{required:{image:['IMAGE'], batch_index:['INT', {default:0}], length:['INT', {default:1}]}}},
   MiniMaxH3AddGuide:{input:{required:{positive:['CONDITIONING'], latent:['LATENT'], frame_idx:['INT', {default:0}]}, optional:{vae:['VAE'], audio_vae:['VAE'], image:['IMAGE'], audio:['AUDIO']}}},
 };
+// SeedVR2 (numz seedvr2_videoupscaler on Render): src/interfaces/*.py
+Object.assign(SCHEMA, {
+  SeedVR2LoadDiTModel:{input:{required:{model:[['seedvr2_ema_3b-Q4_K_M.gguf', 'seedvr2_ema_3b_fp8_e4m3fn.safetensors', 'seedvr2_ema_7b_fp16.safetensors']], device:[['cuda:0', 'cpu']]}, optional:{blocks_to_swap:['INT'], swap_io_components:['BOOLEAN'], offload_device:[['none', 'cpu', 'cuda:0']], cache_model:['BOOLEAN'], attention_mode:[['sdpa']], torch_compile_args:['TORCH_COMPILE_ARGS']}}},
+  SeedVR2LoadVAEModel:{input:{required:{model:[['ema_vae_fp16.safetensors']], device:[['cuda:0', 'cpu']]}, optional:{encode_tiled:['BOOLEAN'], encode_tile_size:['INT'], encode_tile_overlap:['INT'], decode_tiled:['BOOLEAN'], decode_tile_size:['INT'], decode_tile_overlap:['INT'], tile_debug:[['false', 'encode', 'decode']], offload_device:[['none', 'cpu']], cache_model:['BOOLEAN']}}},
+  SeedVR2VideoUpscaler:{input:{required:{image:['IMAGE'], dit:['SEEDVR2_DIT'], vae:['SEEDVR2_VAE'], seed:['INT', {default:42}], resolution:['INT', {default:1080}], max_resolution:['INT', {default:0}], batch_size:['INT', {default:5}], uniform_batch_size:['BOOLEAN', {default:false}], color_correction:[['lab', 'wavelet', 'none']], input_noise_scale:['FLOAT', {default:0}], latent_noise_scale:['FLOAT', {default:0}], offload_device:[['none', 'cpu']], enable_debug:['BOOLEAN', {default:false}]}, optional:{temporal_overlap:['INT'], prepend_frames:['INT']}}},
+});
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo'];
-const ALLOWED = {'Video Slice':['video','start_time','duration','strict_duration'], GetVideoComponents:['video'], ImageFromBatch:['image','batch_index','length'],
+const ALLOWED = {SeedVR2LoadDiTModel:['model','device','blocks_to_swap','swap_io_components','offload_device','cache_model','attention_mode','torch_compile_args'],
+  SeedVR2LoadVAEModel:['model','device','encode_tiled','encode_tile_size','encode_tile_overlap','decode_tiled','decode_tile_size','decode_tile_overlap','tile_debug','offload_device','cache_model','torch_compile_args'],
+  SeedVR2VideoUpscaler:['image','dit','vae','seed','resolution','max_resolution','batch_size','uniform_batch_size','temporal_overlap','prepend_frames','color_correction','input_noise_scale','latent_noise_scale','offload_device','enable_debug'],
+  GetVideoComponents2:[], 'Video Slice':['video','start_time','duration','strict_duration'], GetVideoComponents:['video'], ImageFromBatch:['image','batch_index','length'],
   MiniMaxH3AddGuide:['positive','vae','audio_vae','latent','image','audio','frame_idx'], LoadVideo:['file']};
 
 (async () => {
@@ -32,7 +41,7 @@ const ALLOWED = {'Video Slice':['video','start_time','duration','strict_duration
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8011);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [], uploads = [];
+  const sent = [], uploads = [], frees = [], HIST = {};
   await page.route(PC + '/**', async (rt) => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[{vram_free:7e9, vram_total:8.5e9}]});
     if(p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
@@ -40,6 +49,8 @@ const ALLOWED = {'Video Slice':['video','start_time','duration','strict_duration
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p==='/upload/image'){ uploads.push(1); return J({name:'h3deck_x.mp4', subfolder:'h3deck', type:'input'}); }
     if(p==='/prompt'){ sent.push(JSON.parse(rt.request().postData()).prompt); return J({prompt_id:'p' + sent.length}); }
+    if(p==='/free'){ frees.push(JSON.parse(rt.request().postData())); return J({}); }
+    if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
     if(p.startsWith('/history')) return J({});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   await page.addInitScript(pc => { localStorage.clear(); window.H3_PCS = [{name:'Render', url:pc, on:true, speed:1}]; }, PC);
@@ -125,6 +136,35 @@ const ALLOWED = {'Video Slice':['video','start_time','duration','strict_duration
   const pairs = gd3.map(n => [n.inputs.frame_idx, g3[n.inputs.image[0]].inputs.batch_index]);
   console.log('sent pairs', JSON.stringify(pairs));
   ok(pairs.length < 32 && pairs.some(([o, s]) => o!==s) && pairs[0][0]===0 && pairs[pairs.length - 1][0]===123, 'the graph pins the eased frames (some re-timed, some left out), first and last kept');
+
+  // ---- ⬆ SeedVR2 upscale after the smoothing ----
+  ok(await page.evaluate(() => H3.S.f.smUp===true && H3.S.f.smUpX===2), '⬆ Then upscale is on by default at 2×');
+  console.log('up note:', await page.textContent('#smUpNote'));
+  ok(/864×480 → 1728×960/.test(await page.textContent('#smUpNote')), 'note shows the size after upscaling');
+  const t0 = await page.evaluate(() => { const t = H3.S.takes[0]; return {id:t.id, up:t.up, pid:t.pieces[0].pid, save:t.pieces[0].save, dir:t.dir}; });
+  ok(t0.up && t0.up.scale===2, 'the take carries ⬆ 2×');
+  // the smoothing finishes on the PC
+  HIST[t0.pid] = {status:{completed:true, status_str:'success'}, outputs:{[t0.save]:{images:[{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/' + t0.dir, type:'output'}]}}};
+  const nSent = sent.length;
+  await page.evaluate(() => H3.tick()); await page.waitForTimeout(800); await page.evaluate(() => H3.tick()); await page.waitForTimeout(1200);
+  ok(frees.length===1 && frees[0].unload_models===true, 'MiniMax is unloaded (/free) before the upscale');
+  ok(sent.length===nSent + 1, 'one upscale job queued');
+  const gu = sent[sent.length - 1], nu = Object.values(gu), up = nu.find(n => n.class_type==='SeedVR2VideoUpscaler');
+  const dit = gu[up.inputs.dit[0]].inputs, vae = gu[up.inputs.vae[0]].inputs, lv = nu.find(n => n.class_type==='LoadVideo');
+  ok(dit.model==='seedvr2_ema_3b_fp8_e4m3fn.safetensors' && dit.blocks_to_swap===16 && dit.offload_device==='cpu' && dit.device==='cuda:0', 'DiT: 3B fp8, 16 blocks swapped to the CPU ' + JSON.stringify(dit));
+  ok(vae.encode_tiled && vae.decode_tiled && vae.encode_tile_size===512, 'VAE tiled at 512');
+  ok(up.inputs.resolution===960 && up.inputs.batch_size===5 && up.inputs.color_correction==='lab', '2× of 480 = 960 short edge, batches of 5, LAB colours');
+  ok(lv.inputs.file==='Output_Render/' + t0.dir + '/piece_01_00001_.mp4 [output]', 'it reads the smoothed clip from the output folder: ' + lv.inputs.file);
+  const cvn = nu.find(n => n.class_type==='CreateVideo'); ok(gu[cvn.inputs.images[0]].class_type==='SeedVR2VideoUpscaler' && gu[cvn.inputs.audio[0]].class_type==='GetVideoComponents', 'video from SeedVR2, sound from the smoothed clip');
+  const bad2 = nu.filter(n => ALLOWED[n.class_type]).flatMap(n => Object.keys(n.inputs).filter(k => !ALLOWED[n.class_type].includes(k)).map(k => n.class_type + '.' + k));
+  ok(!bad2.length, 'SeedVR2 input names match the node source ' + bad2.join(','));
+  ok(/Upscaling to 1728×960/.test(await page.textContent('#takes')), 'the card says it is upscaling');
+  const upPid = await page.evaluate(() => H3.S.takes[0].upPid), upSave = await page.evaluate(() => H3.S.takes[0].upSave);
+  HIST[upPid] = {status:{completed:true, status_str:'success'}, outputs:{[upSave]:{images:[{filename:'x_up_00001_.mp4', subfolder:'Output_Render/' + t0.dir, type:'output'}]}}};
+  await page.evaluate(() => H3.tick()); await page.waitForTimeout(1200);
+  const fin = await page.evaluate(() => { const t = H3.S.takes[0]; return {state:t.state, final:t.final.filename, smoothed:t.smoothed.filename}; });
+  ok(fin.state==='done' && fin.final==='x_up_00001_.mp4' && fin.smoothed==='piece_01_00001_.mp4', 'done: the upscaled clip is the final one, the smoothed one is kept');
+  ok(/upscaled to 1728×960/.test(await page.textContent('#takes')), 'card: Done · upscaled');
 
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);

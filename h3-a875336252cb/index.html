@@ -188,6 +188,8 @@ h2 span{flex:1}
           <div style="margin-top:8px"><div class="lab"><span>Easing</span><b id="smEaseOut">0.50</b></div><input type="range" id="smEase" min="0" max="1" step="0.05" value="0.5" style="width:100%"></div>
           <div class="note" id="smSpcNote"></div>
         </div>
+        <div class="sw" id="smUpSw" style="margin-top:8px"><div><div class="t">⬆ Then upscale (SeedVR2)</div><div class="d">After smoothing, SeedVR2 3B upscales the clip, tiled with block swap for the 8 GB card</div></div><div class="tog"></div></div>
+        <div id="smUpBody" hidden style="margin-top:8px"><div class="seg" id="smUpSeg"><button data-v="1.5">1.5×</button><button data-v="2">2×</button></div><div class="note" id="smUpNote" style="margin-top:6px"></div></div>
         <div class="sw" id="smSoundSw" style="margin-top:8px"><div><div class="t">🔊 Keep its sound</div><div class="d">Pins the clip's own sound too, so voices stay in sync</div></div><div class="tog"></div></div>
         <div class="note" id="smNote" style="margin-top:6px"></div>
       </div>
@@ -281,7 +283,7 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5}, s.f || {});
+    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smUp:true, smUpX:2}, s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   s.media = s.media || {}; s.up = s.up || {}; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
@@ -341,7 +343,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
+const NEED = ['SeedVR2VideoUpscaler','SeedVR2LoadDiTModel','SeedVR2LoadVAEModel','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch'];
@@ -648,6 +650,7 @@ function canRun(url, job){
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
   { const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), miss = lorasOf(job).find(l => !have.includes(l.name)); if(miss) return 'doesn\'t have the LoRA ' + bn(miss.name); }
+  if(job.up && !(oi.SeedVR2VideoUpscaler && oi.SeedVR2LoadDiTModel && oi.SeedVR2LoadVAEModel && oi.GetVideoComponents)) return "can't upscale (no SeedVR2 Video Upscaler)";
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
@@ -754,6 +757,41 @@ function joinGraph(t){
   return {g, save:sv};
 }
 
+// ⬆ SeedVR2 upscale of a finished (smoothed) clip, as its own job after it: 3B fp8 model, half its blocks swapped to the
+// CPU, VAE tiled 512, batches of 5 frames with 1 overlapping, LAB colour match (made for Render's 8 GB card). Before it is
+// queued, ComfyUI is asked to unload MiniMax (/free), since the SeedVR2 nodes manage their own memory.
+function upGraph(t, oi){
+  const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
+  const src = t.smoothed || t.final, lv = add('LoadVideo', {file:(src.subfolder ? src.subfolder + '/' : '') + src.filename + ' [output]'}), gc = add('GetVideoComponents', {video:[lv, 0]});
+  const dits = combo(oi, 'SeedVR2LoadDiTModel', 'model'), vaes = combo(oi, 'SeedVR2LoadVAEModel', 'model');
+  const dm = dits.find(x => /3b_fp8/i.test(x)) || dits.find(x => /3b/i.test(x)) || 'seedvr2_ema_3b_fp8_e4m3fn.safetensors', vm = vaes.find(x => /ema_vae/i.test(x)) || vaes[0] || 'ema_vae_fp16.safetensors';
+  const d = add('SeedVR2LoadDiTModel', {model:dm, blocks_to_swap:16, swap_io_components:true, offload_device:'cpu', cache_model:false, attention_mode:'sdpa'});
+  const v = add('SeedVR2LoadVAEModel', {model:vm, encode_tiled:true, encode_tile_size:512, encode_tile_overlap:64, decode_tiled:true, decode_tile_size:512, decode_tile_overlap:64, tile_debug:'false', offload_device:'cpu', cache_model:false});
+  const u = add('SeedVR2VideoUpscaler', {image:[gc, 0], dit:[d, 0], vae:[v, 0], seed:(t.seed || 0) % 2 ** 32, resolution:upEdge(t), max_resolution:0, batch_size:5, uniform_batch_size:true,
+    temporal_overlap:1, prepend_frames:0, color_correction:'lab', input_noise_scale:0, latent_noise_scale:0, offload_device:'cpu', enable_debug:false});
+  const cv = add('CreateVideo', {images:[u, 0], audio:[gc, 1], fps:FPS});
+  const sv = add('SaveVideo', {video:[cv, 0], filename_prefix:t.dir + '/' + t.name + '_up', format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  return {g, save:sv};
+}
+const upEdge = t => Math.round(Math.min(t.w, t.h) * ((t.up && t.up.scale) || 2) / 2) * 2;
+const upSize = t => { const k = upEdge(t) / Math.min(t.w, t.h); return Math.round(t.w * k / 2) * 2 + '×' + Math.round(t.h * k / 2) * 2; };
+async function tickUpscale(t){
+  const p = pcOf(t.pc);
+  if(t.upStage==='start'){
+    if(!p.oi || !p.oi.SeedVR2VideoUpscaler){ t.upErr = pcName(t.pc) + ' has no SeedVR2 Video Upscaler'; return upDone(t); }
+    try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
+    try{ const G = upGraph(t, p.oi); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
+    return; }
+  let h = null; try{ h = (await getJ(t.pc + '/history/' + t.upPid))[t.upPid]; }catch(e){ return; }
+  if(h && h.status && h.status.completed){ const o = (h.outputs || {})[t.upSave] || {}, f = (o.images || o.videos || o.gifs || [])[0];
+    if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.upErr = 'the upscale gave nothing back'; upDone(t); }
+  else if(h && h.status && h.status.status_str==='error'){ t.upErr = ((h.status.messages || []).find(x => x[0]==='execution_error') || [0, {}])[1].exception_message || 'the upscale failed'; upDone(t); }
+  else if(!h){ const q = p.queue || {}, inQ = [...(q.queue_running || []), ...(q.queue_pending || [])];
+    if(inQ.some(x => x[1]===t.upPid)) t.upStage = (q.queue_running || []).some(x => x[1]===t.upPid) ? 'running' : 'queued';
+    else if(Date.now() - (t.tu || 0) > 60000){ t.upErr = 'the upscale left the queue (ComfyUI restarted or it was cancelled)'; upDone(t); } }
+}
+function upDone(t){ t.upStage = 'done'; t.state = 'done'; t.t1 = Date.now(); notify(t); }
+
 // ---------- sending ----------
 function multipart(fields, fileField, fileName, type, raw){
   const boundary = '----h3deck' + Math.random().toString(36).slice(2) + Date.now().toString(36), enc = new TextEncoder(), parts = [];
@@ -794,7 +832,8 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
   const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(); return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, keys:P ? P.keys : null}; })() : null;
-  return {sm, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
+  const up = sm && f.smUp ? {scale:+f.smUpX || 2} : null;
+  return {sm, up, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => ({id:r.id})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow})), auds:R.auds.map(r => ({id:r.id})), follow:R.follow.map(r => ({id:r.id})),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
@@ -850,6 +889,7 @@ async function tick(){
     const busy = S.takes.filter(t => t.state==='working');
     for(const t of busy){
       const p = pcOf(t.pc); if(!p.online) continue;
+      if(t.up && t.upStage && t.upStage!=='done'){ await tickUpscale(t); continue; }
       for(const pc of t.pieces){ if(pc.state!=='queued' && pc.state!=='running') continue;
         let h = null; try{ h = (await getJ(t.pc + '/history/' + pc.pid))[pc.pid]; }catch(e){ continue; }
         if(h && h.status && h.status.completed){ const o = (h.outputs || {})[pc.save] || {}, f = (o.images || o.videos || o.gifs || [])[0];
@@ -875,7 +915,8 @@ async function tick(){
           if(h && h.status && h.status.completed){ const o = (h.outputs || {})[t.joinSave] || {}, f = (o.images || o.videos || o.gifs || [])[0]; if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.joinErr = 'joining gave nothing back'; t.state = 'done'; }
           else if(h && h.status && h.status.status_str==='error'){ t.state = 'done'; t.joinErr = ((h.status.messages || []).find(x => x[0]==='execution_error') || [0, {}])[1].exception_message || 'joining failed'; }
           else if(!h && Date.now() - (t.tj || 0) > 60000 && !((p.queue || {}).queue_pending || []).concat((p.queue || {}).queue_running || []).some(x => x[1]===t.joinPid)){ t.joinPid = null; } }
-        if(t.state==='done'){ t.t1 = Date.now(); notify(t); }
+        if(t.state==='done' && t.up && t.final && !t.upStage){ t.smoothed = t.final; t.state = 'working'; t.upStage = 'start'; tickSoon(300); } // ⬆ then upscale it
+        else if(t.state==='done'){ t.t1 = Date.now(); notify(t); }
       }
     }
     save(); drawTakes();
@@ -892,7 +933,11 @@ async function probeFile(t, i){
 }
 function notify(t){ toast('✓ ' + fmtS(t.pieces.reduce((s, p) => s + p.deliv, 0) / FPS) + ' clip finished on ' + pcName(t.pc)); }
 async function cancelTake(t){
-  const pids = t.pieces.filter(p => p.pid && (p.state==='queued' || p.state==='running')).map(p => p.pid).concat(t.joinPid && t.state==='working' ? [t.joinPid] : []);
+  if(t.upStage && t.upStage!=='done'){ // cancelling the ⬆ upscale keeps the smoothed clip
+    try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:[t.upPid].filter(Boolean)})}); }catch(e){}
+    if(t.upStage==='running'){ try{ await fetch(t.pc + '/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt_id:t.upPid})}); }catch(e){} }
+    t.upErr = 'Cancelled'; t.upStage = 'done'; t.state = 'done'; save(); drawTakes(); return; }
+  const pids = t.pieces.filter(p => p.pid && (p.state==='queued' || p.state==='running')).map(p => p.pid).concat(t.joinPid && t.state==='working' ? [t.joinPid] : []).concat(t.upPid && t.upStage && t.upStage!=='done' ? [t.upPid] : []);
   try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:pids})}); }catch(e){}
   const run = t.pieces.find(p => p.state==='running'); if(run){ try{ await fetch(t.pc + '/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt_id:run.pid})}); }catch(e){} }
   t.pieces.forEach(p => { if(p.state==='queued' || p.state==='running'){ p.state = 'failed'; p.err = 'Cancelled'; } }); t.state = 'failed'; save(); drawTakes();
@@ -900,7 +945,7 @@ async function cancelTake(t){
 async function redoFrom(t, i, newSeed){
   if(!pcOf(t.pc).online){ toast(pcName(t.pc) + " can't be reached: the pieces are saved there, so it has to be that PC"); return; }
   if(newSeed) t.seed = Math.floor(Math.random() * 2 ** 31);
-  t.pieces.slice(i).forEach(p => { p.state = 'new'; p.file = null; p.err = ''; }); t.state = 'working'; t.final = null; t.joinPid = null; t.joinErr = '';
+  t.pieces.slice(i).forEach(p => { p.state = 'new'; p.file = null; p.err = ''; }); t.state = 'working'; t.final = null; t.joinPid = null; t.joinErr = ''; t.upStage = null; t.upPid = null; t.upErr = ''; t.smoothed = null;
   try{ await sendPieces(t, i); toast('Sent again from piece ' + (i + 1)); }catch(e){ t.state = 'failed'; toast('Not sent: ' + e.message, 6000); }
   drawTakes();
 }
@@ -948,7 +993,7 @@ async function saveVideo(t){
 }
 function useAgain(t){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
-  f.sm = !!t.sm; if(t.sm){ Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
+  f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) f.smUpX = t.up.scale; Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => ({id:r.id, on:true})); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow})); f.auds = t.auds.map(r => ({id:r.id, on:true})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); // these boxes are only filled at start, so set them here too
@@ -995,6 +1040,8 @@ function drawInputs(){
   $$('#smEverySeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smEvery || 4)));
   $('#smSoundSw').classList.toggle('on', !!f.smSound && !(sv && sv.sound===false)); $('#smSoundSw').hidden = !!(sv && sv.sound===false);
   drawSpacing();
+  $('#smUpSw').classList.toggle('on', !!f.smUp); $('#smUpBody').hidden = !f.smUp; $$('#smUpSeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smUpX || 2)));
+  if(f.smUp){ const d = dims(), fake = {w:d.w, h:d.h, up:{scale:+f.smUpX || 2}}; $('#smUpNote').textContent = d.w + '×' + d.h + ' → ' + upSize(fake) + '. Runs as its own job after the smoothing, on the same PC (MiniMax is unloaded first); the app has to be open for it to start, like joining. The first run there downloads the SeedVR2 3B model (about 3.4 GB).'; }
   if(f.sm){ const L = smoothPlan()[0].gen, P = currentSpacing(), n = P ? P.keys.length : smoothKeys(L, +f.smEvery || 4).length;
     $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s). The prompt is optional: describe the action to steer the in-betweens.'
       + (sv.fps && Math.abs(sv.fps - FPS) > 0.1 ? ' Your clip is ' + sv.fps + ' fps; MiniMax makes 24 fps, so the nearest frames are used.' : '') + (sv.sound===false ? ' This clip has no sound.' : '')
@@ -1056,7 +1103,10 @@ function drawGo(){
 }
 function stateLine(t){
   const n = t.pieces.length, done = t.pieces.filter(p => p.state==='done').length, run = t.pieces.find(p => p.state==='running'), q = t.pieces.find(p => p.state==='queued');
+  if(t.state==='done' && t.up && t.upStage==='done') return t.upErr ? 'Smoothed, not upscaled: ' + t.upErr : 'Done · upscaled to ' + upSize(t);
   if(t.state==='done') return t.final ? (n > 1 ? n + ' pieces joined' : 'Done') : 'Done, not joined' + (t.joinErr ? ': ' + t.joinErr : '');
+  if(t.state==='working' && t.upStage){ const L = LIVE[t.upPid] || {}, qq = pcOf(t.pc).queue || {}, at = [...(qq.queue_running || []), ...(qq.queue_pending || [])].findIndex(x => x[1]===t.upPid);
+    return '⬆ Upscaling to ' + upSize(t) + ' with SeedVR2' + (at > 0 ? ' once the ' + at + ' job' + (at > 1 ? 's' : '') + ' ahead finish' : L.max ? ' · ' + L.v + ' of ' + L.max : t.upStage==='running' ? '' : ' · starting'); }
   if(t.state==='failed'){ const b = t.pieces.find(p => p.state==='failed'); return (b && b.err==='Cancelled') ? 'Cancelled' : 'Stopped at piece ' + (t.pieces.indexOf(b) + 1) + (b && b.err ? ': ' + b.err : ''); }
   if(t.joinPid){ const qq = pcOf(t.pc).queue || {}, at = [...(qq.queue_running || []), ...(qq.queue_pending || [])].findIndex(x => x[1]===t.joinPid);
     return at > 0 ? 'Joining the ' + n + ' pieces once the ' + (at > 1 ? at + ' renders' : 'render') + ' ahead of it finish' : 'Joining the ' + n + ' pieces'; }
@@ -1067,12 +1117,14 @@ function stateLine(t){
 }
 function progress(t){ // 0..1 by estimates, sharpened by the running piece's steps
   if(t.state!=='working') return t.state==='done' ? 1 : 0;
+  if(t.upStage){ const L = LIVE[t.upPid] || {}; return 0.9 + (L.max ? 0.09 * L.v / L.max : 0); }
   const tot = t.pieces.reduce((s, p) => s + (p.est || 1), 0); let got = 0;
   for(const p of t.pieces){ if(p.state==='done') got += p.est || 1; else if(p.state==='running'){ const L = LIVE[p.pid] || {}; got += (p.est || 1) * (L.max ? 0.1 + 0.8 * L.v / L.max : 0.05); } }
   return Math.min(0.99, got / tot);
 }
 function timeLeft(t){
   if(t.state!=='working') return '';
+  if(t.upStage) return '';
   if(t.joinPid){ // joining takes seconds: only what's ahead of it in the line counts (Jordan 2026-11-01: it said 20 min)
     const q = pcOf(t.pc).queue || {}, all = [...(q.queue_running || []), ...(q.queue_pending || [])], at = all.findIndex(x => x[1]===t.joinPid);
     if(at <= 0) return 'under a minute';
@@ -1153,7 +1205,7 @@ document.addEventListener('click', async e => {
     else if(ds.act==='more') extendSheet(t);
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
     else if(ds.act==='reroll'){ const nt = JSON.parse(JSON.stringify(t)); nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
-      nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null; nt.joinPid = null; nt.joinErr = '';
+      nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null; nt.joinPid = null; nt.joinErr = ''; nt.upStage = null; nt.upPid = null; nt.upErr = ''; nt.smoothed = null;
       const url = pickPc(Object.assign({}, nt, {}), {}); if(!url){ toast('No PC can take it right now'); return; } nt.pc = url; S.takes.unshift(nt); drawTakes();
       try{ await sendPieces(nt, 0); toast('New take on ' + pcName(url)); }catch(e2){ nt.state = 'failed'; toast('Not sent: ' + e2.message, 6000); } }
     else if(ds.act==='use') useAgain(t);
@@ -1193,6 +1245,8 @@ $('#flSw').onclick = () => { S.f.fl = !S.f.fl; save(); drawAll(); };
 $('#smSw').onclick = () => { S.f.sm = !S.f.sm; save(); drawAll(); };
 $('#smSpcSw').onclick = () => { S.f.smSpc = !S.f.smSpc; save(); drawInputs(); drawGo(); };
 $('#smEase').oninput = e => { S.f.smEase = +e.target.value; save(); drawSpacing(); drawInputs(); };
+$('#smUpSw').onclick = () => { S.f.smUp = !S.f.smUp; save(); drawInputs(); drawGo(); };
+$('#smUpSeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smUpX = +b.dataset.v; save(); drawInputs(); };
 $('#smSoundSw').onclick = () => { S.f.smSound = !S.f.smSound; save(); drawInputs(); };
 $('#smStart').oninput = e => { S.f.smStart = +e.target.value; save(); drawInputs(); drawShot(); };
 $('#smEverySeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smEvery = +b.dataset.v; save(); drawAll(); };
@@ -1236,6 +1290,6 @@ drawAll();
 pingAll().then(() => { drawAll(); tick(); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
-window.H3 = {S, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, upGraph, upSize, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
