@@ -11,6 +11,9 @@ App: https://jbrantner.github.io/h3-a875336252cb/ (add it to the home screen). T
 - **Both PCs**: each take goes to the PC that will be free first (Main counts 1.26× slower). A split clip needs H3 Motion Context on that PC. Takes run in ComfyUI's own queue, so they carry on with the app closed; joining happens next time the app is open.
 - Per take: live step progress and preview, ✕ Cancel, ⬇ Save, ➕ Add more (continues from the end), 🎲 New take, tap a piece to replay it or make it again from there.
 
+## Ref Deck
+`refs/` is a companion page for gathering references from a video (frames, clips, sound, voice / background split) that sends them straight into the reference slots. See `refs/README.md`.
+
 ## Why H3 Motion Context
 Checked 2026-11-01: the newer chaining packs (MiniMax H3 Extender, H3 Long Video, Motion Context Auto-Chain, H3 Continuum) all use the same idea, a 22-frame latent tail as the next clip's head. H3 Motion Context was already installed and tested on Render (2026-10-03) and is plain nodes the app can drive through the API.
 
