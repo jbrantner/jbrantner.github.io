@@ -307,7 +307,7 @@ async function getJ(url, opt, ms){ const c = new AbortController(), t = setTimeo
 async function ping(url){
   const p = pcOf(url);
   try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true;
-    if(!p.oi || !was){ const got = await Promise.all(NEED.map(c => getJ(url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))); p.oi = Object.assign({}, ...got);
+    if(!p.oi || !was || Date.now() - (p.oiAt || 0) > 120000){ p.oiAt = Date.now(); const got = await Promise.all(NEED.map(c => getJ(url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))); p.oi = Object.assign({}, ...got);
       try{ localStorage.setItem('h3oi:' + url, JSON.stringify(p.oi)); }catch(e){} openSocket(url); drawAll(); }
     const q = await getJ(url + '/queue', null, 6000); p.queue = q; p.load = (q.queue_running || []).length + (q.queue_pending || []).length;
   }catch(e){ if(p.online){ p.online = false; drawAll(); } p.online = false;
@@ -345,11 +345,12 @@ function onPreview(url, buf){
 // ---------- the models each PC has ----------
 // a MiniMax H3 model is known by its family (the file name without turbo / ids / int8), so DaSiWa Hybrid V2 and
 // DaSiWa Hybrid Turbo V2 are one entry with a Turbo and a Regular file
-const isH3 = n => /minimax|mmh3|dasiwa|(^|[_\W])h3/i.test(bn(n)) && !/qwen|wan|flux|krea|seedvr|hunyuan|trellis|rt_detr/i.test(bn(n));
+const isH3 = n => /minimax|mmh3|dasiwa|singularity|10eros|(^|[_\W])h3/i.test(bn(n)) && !/qwen|wan|flux|krea|seedvr|hunyuan|trellis|rt_detr/i.test(bn(n));
 const famKey = n => bn(n).replace(/\.[a-z0-9]+$/i, '').replace(/turbo/ig, '').replace(/_\d{5,}/g, '').replace(/[_-]?int8/ig, '').replace(/[_\-\s]+/g, '_').replace(/^_|_$/g, '').toLowerCase();
 function famLabel(k){
   if(/fl2v/.test(k)) return 'MiniMax H3 First/last frame (official)';
   if(/ref2v/.test(k)) return 'MiniMax H3 Reference (official)';
+  if(/singularity/.test(k)) return 'Singularity V2 x 10Eros' + ((k.match(/prism_?(\w+)$/) || [])[1] ? ' · PRISM ' + k.match(/prism_?(\w+)$/)[1].toUpperCase() : '');
   let s = k.replace(/^dasiwaminimaxh3_/, '').replace(/^dasiwa/, 'DaSiWa ').replace(/_/g, ' ');
   s = s.replace(/dasiwa ?hybrid ?v?(\d)?/i, (m, d) => 'DaSiWa Hybrid' + (d ? ' V' + d : '')).replace(/\bv(\d)/g, 'V$1').replace(/^h3erosmax/i, 'H3 ErosMax');
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -367,6 +368,8 @@ function families(){
 function resolveModel(oi, key, turbo){
   const files = combo(oi, 'UNETLoader', 'unet_name').filter(n => isH3(n) && famKey(n)===key); if(!files.length) return null;
   const fl2v = /fl2v/.test(key), t = files.find(n => /turbo/i.test(bn(n))), b = files.find(n => !/turbo/i.test(bn(n)));
+  // Singularity (PRISM merges) has the 8-step turbo baked in: Turbo and Regular are the same file at 8 steps, no extra LoRA
+  if(/singularity|prism/.test(key) && b) return {unet:b, steps:8, fl2v, label:bn(b) + ' · turbo built in'};
   if(turbo){
     if(t) return {unet:t, steps:fl2v ? 8 : 4, fl2v, label:bn(t)};
     // the official turbo LoRA for that kind of model; for first/last frame the 8-step one (tested in Camera Orbit) comes first
