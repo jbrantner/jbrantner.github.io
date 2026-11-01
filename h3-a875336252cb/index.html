@@ -602,8 +602,8 @@ async function upload(url, id){
   const r = await fetch(url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('upload to ' + pcName(url) + ' failed (' + r.status + ')');
   const j = await r.json(); S.up[k] = (j.subfolder ? j.subfolder + '/' : '') + j.name; save(); return S.up[k];
 }
-async function queueGraph(url, G){
-  const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:G.g, client_id:CID, extra_data:VHS_PREVIEW})});
+async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the few-second join shouldn't wait behind other takes)
+  const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(Object.assign({prompt:G.g, client_id:CID, extra_data:VHS_PREVIEW}, front ? {front:true} : {}))});
   let j = {}; try{ j = await r.json(); }catch(e){}
   if(!r.ok || j.error){ const ne = j.node_errors && Object.values(j.node_errors)[0], er = ne && ne.errors && ne.errors[0];
     throw new Error((er ? (ne.class_type + ': ' + (er.details || er.message)) : (j.error && (j.error.message || j.error)) || ('ComfyUI said ' + r.status))); }
@@ -680,7 +680,7 @@ async function tick(){
         t.pieces.slice(bad + 1).forEach(x => { if(x.state==='queued' || x.state==='running') x.state = 'new'; }); }
       else if(t.pieces.every(x => x.state==='done')){
         if(t.pieces.length===1){ t.final = t.pieces[0].file; t.state = 'done'; }
-        else if(!t.joinPid && pcOf(t.pc).oi.ConcatenateVideo){ try{ const G = joinGraph(t); t.joinSave = G.save; t.joinPid = await queueGraph(t.pc, G); t.tj = Date.now(); }catch(e){ t.state = 'done'; t.joinErr = e.message; } }
+        else if(!t.joinPid && pcOf(t.pc).oi.ConcatenateVideo){ try{ const G = joinGraph(t); t.joinSave = G.save; t.joinPid = await queueGraph(t.pc, G, true); t.tj = Date.now(); }catch(e){ t.state = 'done'; t.joinErr = e.message; } }
         else if(!t.joinPid){ t.state = 'done'; t.joinErr = 'this ComfyUI has no Concatenate Video node'; }
         else { let h = null; try{ h = (await getJ(t.pc + '/history/' + t.joinPid))[t.joinPid]; }catch(e){}
           if(h && h.status && h.status.completed){ const o = (h.outputs || {})[t.joinSave] || {}, f = (o.images || o.videos || o.gifs || [])[0]; if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.joinErr = 'joining gave nothing back'; t.state = 'done'; }
@@ -856,7 +856,8 @@ function stateLine(t){
   const n = t.pieces.length, done = t.pieces.filter(p => p.state==='done').length, run = t.pieces.find(p => p.state==='running'), q = t.pieces.find(p => p.state==='queued');
   if(t.state==='done') return t.final ? (n > 1 ? n + ' pieces joined' : 'Done') : 'Done, not joined' + (t.joinErr ? ': ' + t.joinErr : '');
   if(t.state==='failed'){ const b = t.pieces.find(p => p.state==='failed'); return (b && b.err==='Cancelled') ? 'Cancelled' : 'Stopped at piece ' + (t.pieces.indexOf(b) + 1) + (b && b.err ? ': ' + b.err : ''); }
-  if(t.joinPid) return 'Joining the ' + n + ' pieces';
+  if(t.joinPid){ const qq = pcOf(t.pc).queue || {}, at = [...(qq.queue_running || []), ...(qq.queue_pending || [])].findIndex(x => x[1]===t.joinPid);
+    return at > 0 ? 'Joining the ' + n + ' pieces once the ' + (at > 1 ? at + ' renders' : 'render') + ' ahead of it finish' : 'Joining the ' + n + ' pieces'; }
   if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? 'Piece ' + (t.pieces.indexOf(run) + 1) + ' of ' + n + ' · ' : '') + (L.max ? 'step ' + L.v + ' of ' + L.max : 'loading'); }
   if(q){ const qq = pcOf(t.pc).queue || {}, all = [...(qq.queue_running || []), ...(qq.queue_pending || [])], at = all.findIndex(x => x[1]===q.pid);
     return (done ? done + ' of ' + n + ' done · ' : '') + (at > 0 ? 'waiting behind ' + at + ' job' + (at > 1 ? 's' : '') : 'starting'); }
@@ -870,6 +871,13 @@ function progress(t){ // 0..1 by estimates, sharpened by the running piece's ste
 }
 function timeLeft(t){
   if(t.state!=='working') return '';
+  if(t.joinPid){ // joining takes seconds: only what's ahead of it in the line counts (Jordan 2026-11-01: it said 20 min)
+    const q = pcOf(t.pc).queue || {}, all = [...(q.queue_running || []), ...(q.queue_pending || [])], at = all.findIndex(x => x[1]===t.joinPid);
+    if(at <= 0) return 'under a minute';
+    let left = 15; for(const x of all.slice(0, at)){ let est = 300, L = LIVE[x[1]];
+      for(const o of S.takes) for(const p of o.pieces) if(p.pid===x[1]) est = p.est || 300;
+      if(L && L.max && L.v){ est = (L.pt - L.ps) / 1000 / L.v * (L.max - L.v) + 25; } left += est; }
+    return left < 60 ? 'under a minute' : 'about ' + Math.round(left / 60) + ' min left'; }
   let left = 0; for(const p of t.pieces){ if(p.state==='queued') left += p.est || 0; else if(p.state==='running'){ const L = LIVE[p.pid] || {};
     if(L.max && L.v){ const r = (L.pt - L.ps) / 1000 / L.v; left += r * (L.max - L.v) + 25; } else left += (p.est || 0) * 0.9; } }
   const ahead = Math.max(0, busySecs(t.pc) - t.pieces.filter(p => p.state==='queued' || p.state==='running').reduce((s, p) => s + (p.est || 0), 0));
