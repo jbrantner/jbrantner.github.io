@@ -19,7 +19,7 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
   in the mesh (RANSAC: the biggest surface within 70° of the camera's up that her feet's line of sight comes down onto, then a
   least-squares fit), turns everything so that ground is level at y = 0 (camera height and tilt shown), and slides her along the
   camera's line of sight (all frames alike, x0.5-2) so her feet meet it on frame 1. A result with a ground starts on 🦘 Free, so
-  climbs show as real height. 🏞 Place shows or hides the scene; Front looks from the video camera's direction.
+  climbs show as real height. 🏞 Place shows the scene (hidden by default; the ground is used either way); Front looks from the video camera's direction.
 - 🎯 Orbit her (on by default): the orbit pivot follows her hips.
 - Several people (2026-11-01, fights and hugs): 👥 2 / 3 / 4 swaps RT-DETR for SAM 3.1's video tracker
   (`CheckpointLoaderSimple` sam3.1_multiplex_fp16 → `CLIPTextEncode` "person" → `SAM3_VideoTrack` max_objects N, detect every

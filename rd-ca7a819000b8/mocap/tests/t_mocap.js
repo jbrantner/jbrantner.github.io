@@ -138,7 +138,7 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   ok(Math.abs(scn) < 0.03, 'the place lies level with its ground at the floor: ' + scn.toFixed(3));
   // 🎯 orbit her: the pivot follows her up the wall
   const piv = await page.evaluate(() => { window.MOCAP.setT(29 / 15); const A = window.MOCAP.A, e = A.P[0].bn.bone_001.matrixWorld.elements; return window.MOCAP.controls.target.distanceTo({x:e[12], y:e[13], z:e[14]}); }); ok(piv < 1e-6, '🎯 Orbit her: the camera pivot is on her hips as she climbs');
-  await page.evaluate(() => window.MOCAP.setT(1)); await shot('ground'); await page.click('#sceneb'); ok(await page.evaluate(() => !window.MOCAP.SCN.root.visible), '🏞 Place hides the scene');
+  await page.evaluate(() => window.MOCAP.setT(1)); await shot('ground'); ok(await page.evaluate(() => !window.MOCAP.SCN.root.visible), 'the place starts hidden (its ground still used)'); await page.click('#sceneb'); ok(await page.evaluate(() => window.MOCAP.SCN.root.visible), '🏞 Place shows the scene'); await page.click('#sceneb'); ok(await page.evaluate(() => !window.MOCAP.SCN.root.visible), '🏞 Place hides it again');
   await page.click('[data-feet="floor"]'); const h29 = await at(29); ok(Math.abs(h29.ank[1] - 0.1) < 0.03, '📌 Feet on floor still pins her lowest point (climb flattened)');
   // a job left running is picked up when the page opens again
   const n = GRAPHS.length, svId = Object.keys(GRAPHS[n - 1].prompt).find(k => GRAPHS[n - 1].prompt[k].class_type==='Save3DAdvanced');
