@@ -160,7 +160,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   ok(/open_regenerate/.test(lora.inputs.lora_name) && lora.inputs.strength_model===0.7 && unet.inputs.unet_name==='minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'FL2VA int8 + regenerate LoRA at 0.7');
   ok(nu.filter(n => n.class_type==='LoraLoaderModelOnly').length===1, 'no turbo LoRA stacked on it');
   ok(iv.inputs.width===W && iv.inputs.height===Hh && iv.inputs.length===t0.L, 'conditioning at the new size, same length (' + iv.inputs.length + ')');
-  ok(ms.inputs.sigmas==='0.7, 0.5, 0.0' && byC('KSamplerSelect').inputs.sampler_name==='euler', 'Light = sigmas 0.7, 0.5, 0, euler');
+  ok(ms.inputs.sigmas==='0.7, 0.5, 0.25, 0.0' && byC('KSamplerSelect').inputs.sampler_name==='euler', 'Light = sigmas 0.7, 0.5, 0.25, 0, euler');
   const cat = gu[sca.inputs.latent_image[0]]; ok(cat.class_type==='LTXVConcatAVLatent' && gu[cat.inputs.video_latent[0]].class_type==='MinimaxH3LatentUpscaler3D' && gu[cat.inputs.audio_latent[0]].class_type==='LTXVSeparateAVLatent' && cat.inputs.audio_latent[1]===1, 'samples the enlarged video latent + an empty audio latent');
   ok(gu[gu[sca.inputs.guider[0]].inputs.conditioning[0]].class_type==='MiniMaxH3ImageToVideo', 'BasicGuider on the prompt (CFG 1)');
   ok(lv.inputs.file==='Output_Render/' + t0.dir + '/piece_01_00001_.mp4 [output]', 'it reads the smoothed clip from the output folder: ' + lv.inputs.file);
