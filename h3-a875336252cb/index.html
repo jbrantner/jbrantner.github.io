@@ -310,13 +310,18 @@ const CID = (() => { let c = ''; try{ c = sessionStorage.getItem('h3cid'); }catc
 function combo(oi, cls, name){ const d = oi && oi[cls]; if(!d) return []; const inp = d.input || {}, spec = (inp.required || {})[name] || (inp.optional || {})[name]; if(!spec) return [];
   if(Array.isArray(spec[0])) return spec[0]; if(spec[0]==='COMBO' && spec[1] && spec[1].options) return spec[1].options; return []; }
 const bn = s => String(s).split(/[\\/]/).pop();
+// where a take's files really are on its PC (piece 2 reads piece 1's saved latent from there)
+const outDir = t => { const p = pcOf(t.pc); if(p.pre == null){ try{ const s = localStorage.getItem('h3pre:' + t.pc); if(s != null) p.pre = s; }catch(e){} } return (p.pre || '') + t.dir; };
 async function getJ(url, opt, ms){ const c = new AbortController(), t = setTimeout(() => c.abort(), ms || 8000);
   try{ const r = await fetch(url, Object.assign({signal:c.signal}, opt || {})); if(!r.ok) throw new Error(r.status + ''); return await r.json(); } finally{ clearTimeout(t); } }
 async function ping(url){
   const p = pcOf(url);
   try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true;
     if(!p.oi || !was || Date.now() - (p.oiAt || 0) > 120000){ p.oiAt = Date.now(); const got = await Promise.all(NEED.map(c => getJ(url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))); p.oi = Object.assign({}, ...got);
-      try{ localStorage.setItem('h3oi:' + url, JSON.stringify(p.oi)); }catch(e){} openSocket(url); drawAll(); }
+      try{ localStorage.setItem('h3oi:' + url, JSON.stringify(p.oi)); }catch(e){}
+      // the Render Deck helper saves into this PC's own subfolder of a shared (Dropbox) output folder, e.g. Output_Render/
+      if(p.pre == null){ try{ const j = await getJ(url + '/renderdeck/images?limit=1', null, 15000); p.pre = j.shared && j.pc ? j.pc + '/' : ''; try{ localStorage.setItem('h3pre:' + url, p.pre); }catch(e){} }catch(e){} }
+      openSocket(url); drawAll(); }
     const q = await getJ(url + '/queue', null, 6000); p.queue = q; p.load = (q.queue_running || []).length + (q.queue_pending || []).length;
   }catch(e){ if(p.online){ p.online = false; drawAll(); } p.online = false;
     if(!p.oi){ try{ p.oi = JSON.parse(localStorage.getItem('h3oi:' + url) || 'null'); }catch(e2){} } }
@@ -568,7 +573,7 @@ function pieceGraph(t, i, oi, names){
   t.follow.forEach(r => { const a = add('TrimAudioDuration', {audio:[add('LoadAudio', {audio:names[r.id]}), 0], start_index:pc.start, duration:pc.deliv / FPS});
     cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:pc.ctx}), 0]; });
   let trim = null;
-  if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:t.dir, clip_index:i});
+  if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir(t), clip_index:i});
     const mc = add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_latent:[ld, 0]}); cond = [mc, 0]; trim = [mc, 1]; }
   const guider = add('BasicGuider', {model, conditioning:cond});
   const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:1});
@@ -690,7 +695,7 @@ async function tick(){
 }
 // ComfyUI forgets finished jobs when it restarts: a piece that finished just before is found by its file
 async function probeFile(t, i){
-  const sub = t.dir, base = 'piece_' + String(i + 1).padStart(2, '0'); let best = null;
+  const sub = outDir(t), base = 'piece_' + String(i + 1).padStart(2, '0'); let best = null;
   for(let n = 1; n <= 30; n++){ const f = {filename:base + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'}; let r;
     try{ r = await fetch(viewUrl(t.pc, f), {method:'HEAD'}); }catch(e){ return best; } if(!r.ok) break;
     if((Date.parse(r.headers.get('Last-Modified') || '') || 0) >= (t.pieces[i].tq || 0) - 60e3) best = f; }
