@@ -138,6 +138,10 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   ok(Math.abs(scn) < 0.03, 'the place lies level with its ground at the floor: ' + scn.toFixed(3));
   // 🎯 orbit her: the pivot follows her up the wall
   const piv = await page.evaluate(() => { window.MOCAP.setT(29 / 15); const A = window.MOCAP.A, e = A.P[0].bn.bone_001.matrixWorld.elements; return window.MOCAP.controls.target.distanceTo({x:e[12], y:e[13], z:e[14]}); }); ok(piv < 1e-6, '🎯 Orbit her: the camera pivot is on her hips as she climbs');
+  // (Jordan: the camera stays where it was put) pan the view up 0.5 m, then scrub: it moves with her climb but doesn't snap back to her hips
+  const cam = await page.evaluate(() => { const M = window.MOCAP; M.setT(0); M.controls.target.y += 0.5; M.camera.position.y += 0.5; const off0 = M.controls.target.y - M.A.P[0].bn.bone_001.matrixWorld.elements[13];
+    M.setT(1); M.setT(29 / 15); return [off0, M.controls.target.y - M.A.P[0].bn.bone_001.matrixWorld.elements[13]]; });
+  ok(Math.abs(cam[0] - 0.5) < 1e-6 && Math.abs(cam[1] - 0.5) < 1e-6, 'a camera moved by hand keeps its place while scrubbing (still 0.5 m above her hips): ' + cam.map(v => v.toFixed(3)));
   await page.evaluate(() => window.MOCAP.setT(1)); await shot('ground'); ok(await page.evaluate(() => !window.MOCAP.SCN.root.visible), 'the place starts hidden (its ground still used)'); await page.click('#sceneb'); ok(await page.evaluate(() => window.MOCAP.SCN.root.visible), '🏞 Place shows the scene'); await page.click('#sceneb'); ok(await page.evaluate(() => !window.MOCAP.SCN.root.visible), '🏞 Place hides it again');
   await page.click('[data-feet="floor"]'); const h29 = await at(29); ok(Math.abs(h29.ank[1] - 0.1) < 0.03, '📌 Feet on floor still pins her lowest point (climb flattened)');
   // a job left running is picked up when the page opens again
@@ -165,7 +169,8 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   ok(Math.abs(pp.dx - 1) < 0.03, 'they stand 1 m apart, as in the video: ' + pp.dx.toFixed(3));
   await shot('two'); await page.click('#who [data-p="0"]');
   ok(await page.evaluate(() => { const A = window.MOCAP.A; return !A.P[0].track.visible && A.P[1].track.visible && window.MOCAP.M.hide[0]===true; }), '👁 tapping person 1 hides them, person 2 stays');
-  ok(await page.evaluate(() => { const A = window.MOCAP.A, e = A.P[1].bn.bone_001.matrixWorld.elements; return window.MOCAP.controls.target.distanceTo({x:e[12], y:e[13], z:e[14]}) < 1e-6; }), '🎯 the pivot moves to the one still showing');
+  const c1 = await page.evaluate(() => window.MOCAP.camera.position.toArray()); await page.click('#who [data-p="0"]'); await page.click('#who [data-p="0"]');
+  ok(JSON.stringify(c1)===JSON.stringify(await page.evaluate(() => window.MOCAP.camera.position.toArray())), 'hiding or showing someone leaves the camera where it is');
   await page.reload(); await page.waitForFunction(() => window.MOCAP.A && window.MOCAP.A.P.length===2, null, {timeout:20000});
   ok(await page.evaluate(() => !window.MOCAP.A.P[0].track.visible && JSON.parse(localStorage.getItem('rd-mocap'))[0].people===2), 'after a reload person 1 is still hidden; the clip remembers 2 people');
   if(process.env.DUMP) fs.writeFileSync(process.env.DUMP, JSON.stringify(GRAPHS.map(x => x.prompt)));

@@ -20,7 +20,7 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
   least-squares fit), turns everything so that ground is level at y = 0 (camera height and tilt shown), and slides her along the
   camera's line of sight (all frames alike, x0.5-2) so her feet meet it on frame 1. A result with a ground starts on 🦘 Free, so
   climbs show as real height. 🏞 Place shows the scene (hidden by default; the ground is used either way); Front looks from the video camera's direction.
-- 🎯 Orbit her (on by default): the orbit pivot follows her hips.
+- 🎯 Orbit her (on by default): the camera moves by however far they moved since the last frame, so a view you panned or turned keeps its place while scrubbing (never snaps back to the hips; still when someone appears or is hidden). Turning it on centres the pivot on them.
 - Several people (2026-11-01, fights and hugs): 👥 2 / 3 / 4 swaps RT-DETR for SAM 3.1's video tracker
   (`CheckpointLoaderSimple` sam3.1_multiplex_fp16 → `CLIPTextEncode` "person" → `SAM3_VideoTrack` max_objects N, detect every
   frame) feeding `SAM3DBody_Predict` track_data, and `BuildPoseFile` keeps every track (track_index -1). Each track00, track01…
