@@ -143,7 +143,7 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   ok(await page.evaluate(() => JSON.parse(localStorage.getItem('rd-mocap')).length===1), 'the finished motion is in 📚 Clips');
   await page.reload(); await page.waitForFunction(() => window.MOCAP.A, null, {timeout:20000}); ok(await page.evaluate(() => !document.querySelector('#pip').hidden && /render\.test\/view.*type=input/.test(document.querySelector('#pip').src)), 'after a reload it comes back with the video from the PC');
   // rebuild with lighter smoothing reuses the uploaded video; VHS failing falls back to ComfyUI's own loader
-  vhsFail = true; await page.evaluate(() => document.querySelector('details').open = true); await page.click('#smooth [data-k="off"]'); await page.click('#rebuildb');
+  vhsFail = true; await page.evaluate(() => document.querySelector('#more').open = true); await page.click('#smooth [data-k="off"]'); await page.click('#rebuildb');
   await page.waitForFunction(n => window.MOCAP.M.res && window.MOCAP.M.res.file==='motion_0000' + n + '_.glb', GRAPHS.length + 2, {timeout:20000});
   const g2 = GRAPHS[GRAPHS.length - 1].prompt, by2 = c => Object.values(g2).find(n => n.class_type===c);
   ok(UPLOADS.length===1 && !by2('VHS_LoadVideo') && by2('LoadVideo').inputs.file===UPLOADS[0] && by2('Video Slice').inputs.start_time===1 && Math.abs(by2('Video Slice').inputs.duration - 3) < 0.01 && by2('ImageScaleToMaxDimension').inputs.largest_size===960, 'VHS failed → ComfyUI LoadVideo + Trim Video 1 s for 3 s, longest side 960, same upload');
@@ -257,6 +257,19 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   const rl = await hipAt(0); ok(rl.hip.every((v, i) => Math.abs(v - r0.hip[i]) < 0.02), 'after a reload she is still moved, turned and raised');
   await page.click('#lineb'); await page.click('#adjx'); const bk = await hipAt(0); ok(bk.hip.every((v, i) => Math.abs(v - o0.hip[i]) < 0.02), '↺ Put her back undoes it');
   await shot('lineup');
+  // 🎬 clips for MiniMax: depth + colour mask from this view (6 fps here to keep the test quick), sent to Render's input
+  await page.evaluate(() => { window.MOCAP_EXPORT_FPS = 6; document.querySelector('#expo').open = true; }); await page.click('#expb');
+  await page.waitForFunction(() => window.MOCAP.EXP.clips.length===2 && !window.MOCAP.EXP.busy, null, {timeout:60000});
+  const ex = await page.evaluate(async () => { const out = {}; for(const c of window.MOCAP.EXP.clips){ const v = document.createElement('video'); v.muted = true; v.src = c.url; await new Promise(r => { v.onloadeddata = r; v.onerror = r; });
+      const cv = document.createElement('canvas'); cv.width = v.videoWidth; cv.height = v.videoHeight; const x = cv.getContext('2d'); x.drawImage(v, 0, 0); const d = x.getImageData(0, 0, cv.width, cv.height).data; let red = 0, bright = 0, n = d.length / 4;
+      for(let i = 0; i < d.length; i += 4){ if(d[i] > 180 && d[i + 1] < 90 && d[i + 2] < 90) red++; if(d[i] > 60 && Math.abs(d[i] - d[i + 1]) < 20 && Math.abs(d[i] - d[i + 2]) < 20) bright++; }
+      out[c.name] = {w:cv.width, h:cv.height, size:c.blob.size, red:c.stats.red, grey:c.stats.grey, frames:c.frames}; } return {out, msg:window.MOCAP.EXP.msg}; });
+  const dn = Object.keys(ex.out).find(n => /^depth_everyone/.test(n)), cn = Object.keys(ex.out).find(n => /^colours_everyone/.test(n));
+  ok(dn && cn && ex.out[dn].size > 0 && ex.out[cn].h===832 && ex.out[cn].w===480, 'two clips (one person): depth and colours, 480x832 like the portrait video: ' + JSON.stringify(ex.out));
+  ok(ex.out[cn].red > 0.005 && ex.out[dn].grey > 0.005 && ex.out[dn].red < 0.001, 'the colour clip has her in flat red, the depth clip has her in grey shades: ' + ex.msg);
+  const up0 = UPLOADS.length; await page.click('#exsend'); await page.waitForFunction(() => /ComfyUI input, mocap folder/.test(window.MOCAP.EXP.msg), null, {timeout:10000});
+  ok(UPLOADS.length===up0 + 2 && UPLOADS.slice(-2).every(n => /_(depth|colours)_everyone\.(webm|mp4)$/.test(n)), 'they go up to Render\'s ComfyUI input: ' + UPLOADS.slice(-2).join(', '));
+  await shot('export');
   if(process.env.DUMP) fs.writeFileSync(process.env.DUMP, JSON.stringify(GRAPHS.map(x => x.prompt)));
   ok(logs.length===0, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);

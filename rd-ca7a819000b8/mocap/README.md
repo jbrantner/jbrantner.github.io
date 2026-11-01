@@ -41,6 +41,13 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
 - ✥ Line her/people up (Jordan 2026-11-01: a punch that no longer lands): tap a mannequin to pick it and drag it along the ground (a drag
   that starts off them still turns the view); ↻ Turn (about the hips) and ↕ Raise sliders; ↺ Put back. One offset per person
   (`M.adj`, metres along the levelled ground + degrees), the same on every frame, saved with the clip. A held prop moves with its hand.
+- 🎬 Clips for MiniMax (Jordan 2026-11-01, a hug between two characters): from the current camera view, 24 fps, long side 832 (multiples
+  of 32, the video's shape): a depth clip (linear between the people's nearest and farthest over the clip, near = white, black
+  background) and a flat colour clip (person 1 red, 2 blue, 3 green, 4 yellow; props grey), for everyone and, with 2+ people, for
+  each person alone. Hidden people are left out; props and the place optional. Recorded with MediaRecorder from a second canvas
+  (webm, or mp4 on Safari), saved on the phone (⬇) or put in Render's ComfyUI input/mocap. MiniMax H3 in ComfyUI has no regional
+  prompting (refs bind by <Picture i> tags in one prompt); the depth clip drives MiniMaxH3FunControlNetApply, and each person's
+  colour clip can be the mask for a repaint pass.
 - Playback: the GLB's frame rate comes from its keyframe times (frames where nobody was found are left out and blended over).
   🚶 Moves keeps the camera translation, 📍 In place drops it; 📌 Feet on floor stands each frame's lowest joint on the floor,
   🦘 Free only the lowest of the clip (jumps). Head size scales bone_113. The video plays beside it and drives the clock.
