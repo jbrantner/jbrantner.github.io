@@ -255,7 +255,7 @@ h2 span{flex:1}
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const FPS = 24, CTX = 22, MAXREF = {img:9, vid:3, aud:3};
+const FPS = 24, CTX = 22, HEAD = 1, LEAD = p => p.ctx ? p.ctx + HEAD : 0, MAXREF = {img:9, vid:3, aud:3};
 const KEY = 'h3deck';
 const DEFAULT_PCS = [{name:'Render', url:'https://jordo-desktop.tailadee9a.ts.net', on:true, speed:1}, {name:'Main', url:'https://jordo-main.tailadee9a.ts.net', on:true, speed:1.26}];
 let S = load();
@@ -456,7 +456,7 @@ function plan(seconds, maxPiece, beats){
     const maxGen = gridDn(cap + 5 + (first ? 0 : CTX)), minGen = first ? 22 : 39;
     let gen = Math.min(maxGen, Math.max(minGen, gridNear(want + (first ? 0 : CTX))));
     if(last && !first){ while(gen - CTX < want - 8 && gen + 17 <= maxGen) gen += 17; }
-    const deliv = gen - (first ? 0 : CTX);
+    const deliv = gen - (first ? 0 : CTX + HEAD); // HEAD: piece 2 on also drops its first decoded frame, which comes out too bright (a flash at the seam)
     out.push({start:cum / FPS, gen, deliv, ctx:first ? 0 : CTX}); cum += deliv;
     if(last && cum < F - 12) cuts.push(F); // rounding left too much: one more piece
     if(out.length > 400) break;
@@ -465,7 +465,7 @@ function plan(seconds, maxPiece, beats){
 }
 const t2 = s => { const r = Math.round(s * 10) / 10; return (r % 1 ? r.toFixed(1) : String(r)) + 's'; };
 function piecePrompt(text, pieces, i, total){
-  const pr = pieces[i], {global, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = pr.ctx / FPS;
+  const pr = pieces[i], {global, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = LEAD(pr) / FPS;
   const lead = i ? 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' : '';
   if(!beats.length){
     if(pieces.length===1) return text.trim();
@@ -553,7 +553,7 @@ function pieceGraph(t, i, oi, names){
       // keeps every reference inside the 8 GB budget (the MMH3 Studio low-memory node): videos read at the size they're used
       const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0), stop_above:72000};
       imgs.forEach((r, k) => { fi['image_' + (k + 1)] = img(r.id); });
-      t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.follow ? Math.max(0, pc.start - pc.ctx / FPS) : 0; });
+      t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; });
       t.auds.forEach((r, k) => { fi['audio_' + (k + 1)] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
       const fit = add('MMH3FitReferences', fi);
       imgs.forEach((r, k) => { refs['ref_images.ref_image_' + k] = [fit, k]; });
@@ -571,7 +571,7 @@ function pieceGraph(t, i, oi, names){
   }
   // a soundtrack the clip follows in time: this piece's slice of it, anchored where the piece's new frames start
   t.follow.forEach(r => { const a = add('TrimAudioDuration', {audio:[add('LoadAudio', {audio:names[r.id]}), 0], start_index:pc.start, duration:pc.deliv / FPS});
-    cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:pc.ctx}), 0]; });
+    cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:LEAD(pc)}), 0]; });
   let trim = null;
   if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir(t), clip_index:i});
     const mc = add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_latent:[ld, 0]}); cond = [mc, 0]; trim = [mc, 1]; }
@@ -580,7 +580,9 @@ function pieceGraph(t, i, oi, names){
   const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat});
   if(chain) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
-  if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1]; }
+  if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
+    // then HEAD more frames (sound too): the first frame after the carried-over overlap decodes too bright and flashes at the join
+    const t2 = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:HEAD, audio:aud, fps:FPS, match_tail:true}); ims = [t2, 0]; aud = [t2, 1]; }
   const vid = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[vid, 0], filename_prefix:t.dir + '/piece_' + String(i + 1).padStart(2, '0'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   return {g, save:sv};
@@ -728,7 +730,7 @@ function extendSheet(t){
     const text = $('#exPrompt').value.trim(); if(!text){ toast('Write what happens next'); return; }
     const secs = +$('#exLen').value, end = t.pieces.reduce((s, p) => s + p.deliv, 0) / FPS, cap = Math.round((+S.f.maxPiece || 5) * FPS);
     // every added piece carries on from the one before, so each one has the pinned head
-    const add = plan(secs, +S.f.maxPiece || 5, parseBeats(text).beats).map(p => { const gen = Math.min(gridDn(cap + 5 + CTX), Math.max(39, gridNear(p.deliv + CTX))); return {gen, deliv:gen - CTX, ctx:CTX, state:'new'}; });
+    const add = plan(secs, +S.f.maxPiece || 5, parseBeats(text).beats).map(p => { const gen = Math.min(gridDn(cap + 5 + CTX), Math.max(39, gridNear(p.deliv + CTX))); return {gen, deliv:gen - CTX - HEAD, ctx:CTX, state:'new'}; });
     let s0 = 0; add.forEach(p => { p.start = s0; s0 += p.deliv / FPS; });
     add.forEach((p, k) => { p.prompt = piecePrompt(text, add, k); if(!/^This continues/.test(p.prompt)) p.prompt = 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' + p.prompt; });
     add.forEach(p => { p.start += end; });
