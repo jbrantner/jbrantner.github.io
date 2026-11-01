@@ -109,41 +109,79 @@ const TOON = (() => { const t = new THREE.DataTexture(new Uint8Array([90, 90, 90
 const shown = () => { const sh = $('#sheet').getBoundingClientRect(); return {top:56, bottom:Math.max(innerHeight * 0.4, sh.top - 8)}; };
 function size(){ const w = innerWidth, h = innerHeight, v = shown(); renderer.setSize(w, h, false); camera.aspect = w / h; camera.setViewOffset(w, h, 0, (h - v.bottom - v.top) / 2, w, h); }
 addEventListener('resize', size); new ResizeObserver(size).observe($('#sheet')); size();
-// ---- the animated body (SAM 3D Body's GLB)
-let A = null; // {g, root, track, bn, sk, mixer, action, dur, F, fps, base:[{x,y,z}], low:[], gap, cx, cz}
-let T = 0, PLAY = false, last = performance.now(), FOLLOW = false;
+// ---- the animated body (SAM 3D Body's GLB) and the ground (MoGe's 3D picture of the video's first frame, in the same camera space)
+// world (centres her start) ⊃ lift (her floor shift, straight up) ⊃ alignB (the ground made level) ⊃ body; world ⊃ alignS (the same) ⊃ the scene
+let A = null, SCN = null; // A: {root, track, bn, sk, mixer, action, dur, F, fps, base:[], low:[], up, gap, h, ground}
+let T = 0, PLAY = false, last = performance.now(), FOLLOW = true;
+const world = new THREE.Group(), lift = new THREE.Group(), alignB = new THREE.Group(), alignS = new THREE.Group(); world.add(lift, alignS); lift.add(alignB); scene.add(world);
+alignB.matrixAutoUpdate = alignS.matrixAutoUpdate = false;
 const wp = b => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
+async function fetchGlb(res, what){ const r = await fetch(viewOf(res)); if(!r.ok) throw new Error('The ' + what + ' did not come from ' + pcName(res.pc) + ' (' + r.status + ').'); return new GLTFLoader().parseAsync(await r.arrayBuffer(), ''); }
+function clearAll(){ if(A){ A.mixer.stopAllAction(); alignB.remove(A.root); A = null; } if(SCN){ alignS.remove(SCN.root); SCN = null; } shadow.visible = false; }
+function setAlign(m){ alignB.matrix.copy(m); alignS.matrix.copy(m); alignB.matrixWorldNeedsUpdate = alignS.matrixWorldNeedsUpdate = true; }
+// the ground in MoGe's mesh: the biggest flat-ish surface facing up (within 70° of the camera's up) that her feet's line of sight comes down onto.
+// Returns {n, d} (n·x + d = height above it, camera space) or null. A fixed seed, so the same video always finds the same ground.
+function findGround(root, feet){ root.updateMatrixWorld(true); const P = [], v = new THREE.Vector3();
+  root.traverse(m => { if(!m.isMesh) return; const pa = m.geometry.attributes.position, step = Math.max(1, Math.floor(pa.count / 6000)); for(let i = 0; i < pa.count; i += step){ v.fromBufferAttribute(pa, i).applyMatrix4(m.matrixWorld); P.push(v.clone()); } });
+  if(P.length < 50) return null; const dist = P.map(p => p.length()).sort((a, b) => a - b), thr = Math.max(0.015, 0.012 * dist[dist.length >> 1]), ray = feet.clone().normalize();
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647; let best = null;
+  for(let it = 0; it < 600; it++){ const a = P[Math.floor(rnd() * P.length)], b = P[Math.floor(rnd() * P.length)], c = P[Math.floor(rnd() * P.length)];
+    const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)); if(n.lengthSq() < 1e-12) continue; n.normalize(); if(n.y < 0) n.negate(); if(n.y < 0.34) continue;
+    const d = -n.dot(a), hit = n.dot(ray); if(!(hit < -1e-3) || -d / hit <= 0) continue; // (looking along her feet's line of sight, the camera is above it and the line comes down onto it)
+    let k = 0; for(const p of P) if(Math.abs(n.dot(p) + d) < thr) k++; if(!best || k > best.k) best = {n, d, k}; }
+  if(!best || best.k < P.length * 0.04) return null;
+  // (refined: the same plane fitted through all its points, least squares in its own frame)
+  const pts = P.filter(p => Math.abs(best.n.dot(p) + best.d) < thr), q = new THREE.Quaternion().setFromUnitVectors(best.n, new THREE.Vector3(0, 1, 0)), qi = q.clone().invert();
+  let sx = 0, sz = 0, sy = 0, sxx = 0, szz = 0, sxz = 0, sxy = 0, szy = 0; for(const p of pts){ const r = p.clone().applyQuaternion(q); sx += r.x; sz += r.z; sy += r.y; sxx += r.x * r.x; szz += r.z * r.z; sxz += r.x * r.z; sxy += r.x * r.y; szy += r.z * r.y; }
+  const N = pts.length, mx = sx / N, mz = sz / N, my = sy / N, cxx = sxx / N - mx * mx, czz = szz / N - mz * mz, cxz = sxz / N - mx * mz, cxy = sxy / N - mx * my, czy = szy / N - mz * my, det = cxx * czz - cxz * cxz;
+  if(Math.abs(det) > 1e-9){ const ga = (cxy * czz - czy * cxz) / det, gb = (czy * cxx - cxy * cxz) / det, n2 = new THREE.Vector3(-ga, 1, -gb).normalize().applyQuaternion(qi), c = new THREE.Vector3(mx, my, mz).applyQuaternion(qi);
+    if(n2.y > 0.3) return {n:n2, d:-n2.dot(c), k:best.k, of:P.length}; }
+  return best; }
 async function loadMotion(res){
-  const r = await fetch(viewOf(res)); if(!r.ok) throw new Error('The 3D animation did not come from ' + pcName(res.pc) + ' (' + r.status + ').');
-  const gl = await new GLTFLoader().parseAsync(await r.arrayBuffer(), ''); if(A){ scene.remove(A.g); A.mixer.stopAllAction(); A = null; }
+  const gl = await fetchGlb(res, '3D animation'); let sg = null; if(res.scene) try{ sg = await fetchGlb({pc:res.pc, ...res.scene}, 'scene'); }catch(e){ sg = null; }
+  clearAll(); setAlign(new THREE.Matrix4()); lift.position.set(0, 0, 0); world.position.set(0, 0, 0);
   const root = gl.scene, mat = new THREE.MeshToonMaterial({color:0xd8d2cc, gradientMap:TOON}), bn = {}; let sk = null, track = null;
   root.traverse(m => { if(m.isMesh){ m.material = mat; m.frustumCulled = false; if(m.isSkinnedMesh && (!sk || m.geometry.attributes.position.count > sk.geometry.attributes.position.count)) sk = m; } if(/^bone_\d+$/.test(m.name) && !bn[m.name]) bn[m.name] = m; if(/^track\d+$/.test(m.name) && !track) track = m; });
   if(!sk || !bn.bone_001) throw new Error("That file isn't a body from SAM 3D Body.");
   const clip = gl.animations[0]; if(!clip) throw new Error('The file has no animation in it (only one frame was read?).');
-  const g = new THREE.Group(); g.add(root); scene.add(g); const mixer = new THREE.AnimationMixer(root), action = mixer.clipAction(clip); action.play();
+  alignB.add(root); const mixer = new THREE.AnimationMixer(root), action = mixer.clipAction(clip); action.play();
   // (its frame rate from the keyframe times: frames the person finder missed are simply left out, so the smallest step is one frame)
   let step = 1e9; for(const tk of clip.tracks){ const t = tk.times; for(let i = 1; i < t.length; i++) if(t[i] - t[i - 1] > 1e-4) step = Math.min(step, t[i] - t[i - 1]); }
   const fps = step < 1e8 ? Math.round(1 / step * 100) / 100 : M.fps || 15, F = Math.max(1, Math.round(clip.duration * fps) + 1); track = track || root;
-  A = {g, root, track, bn, sk, mixer, action, dur:clip.duration, F, fps, base:[], low:[]};
-  // every frame once: where the camera moved her (the track's own translation) and her lowest joint (to stand her on the floor)
-  const bones = Object.values(bn);
-  for(let f = 0; f < F; f++){ mixer.setTime(Math.min(clip.duration - 1e-4, f / fps)); root.updateMatrixWorld(true); A.base.push(track.position.clone()); let lo = 1e9; for(const b of bones) lo = Math.min(lo, wp(b).y); A.low.push(lo); }
-  mixer.setTime(0); root.updateMatrixWorld(true); const bx = new THREE.Box3().expandByObject(sk, true); A.gap = A.low[0] - bx.min.y; // (the sole below the lowest joint)
-  const hip = wp(bn.bone_001); A.hx = hip.x; A.hz = hip.z; A.h = bx.max.y - bx.min.y; A.lowAll = Math.min(...A.low);
+  A = {root, track, bn, sk, mixer, action, dur:clip.duration, F, fps, base:[], low:[], up:new THREE.Vector3(0, 1, 0), ground:null};
+  const bones = Object.values(bn), at = f => mixer.setTime(Math.max(0, Math.min(clip.duration - 1e-4, f / fps)));
+  for(let f = 0; f < F; f++){ at(f); A.base.push(track.position.clone()); }
+  // frame 1: her lowest joint (camera space) and how far her soles sit below it
+  at(0); world.updateMatrixWorld(true); let lowJ = null; for(const b of bones){ const p = wp(b); if(!lowJ || p.y < lowJ.y) lowJ = p; } const bx = new THREE.Box3().expandByObject(sk, true); A.gap = lowJ.y - bx.min.y; A.h = bx.max.y - bx.min.y;
+  if(sg && res.abs){ SCN = {root:sg.scene}; sg.scene.traverse(m => { if(m.isMesh){ const map = m.material && m.material.map; m.material = new THREE.MeshBasicMaterial({map:map || null, color:map ? 0xffffff : 0x8a8f9c, side:THREE.DoubleSide, transparent:true, opacity:0.9}); m.frustumCulled = false; } });
+    alignS.add(sg.scene); const G = findGround(sg.scene, lowJ);
+    if(G){ const {n, d} = G, q = new THREE.Quaternion().setFromUnitVectors(n, new THREE.Vector3(0, 1, 0)); setAlign(new THREE.Matrix4().makeTranslation(0, d, 0).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)));
+      // SAM and MoGe each guess how far away things are; her start is slid along the camera's line of sight (all frames alike) so her feet meet MoGe's ground
+      const b0 = A.base[0], rel = lowJ.clone().sub(b0), nb = n.dot(b0), sc = Math.abs(nb) > 1e-4 ? (A.gap - d - n.dot(rel)) / nb : 1, use = sc > 0.5 && sc < 2 ? sc : 1;
+      for(const b of A.base) b.multiplyScalar(use); A.up = n.clone(); A.ground = {n, d, scale:use, height:d, pitch:Math.asin(Math.max(-1, Math.min(1, -n.z))) * 180 / Math.PI}; } }
+  // every frame once: her lowest joint, straight up from the ground (or the camera's up when there is no ground)
+  for(let f = 0; f < F; f++){ at(f); track.position.copy(A.base[f]); world.updateMatrixWorld(true); let lo = 1e9; for(const b of bones) lo = Math.min(lo, wp(b).y); A.low.push(lo); }
+  A.lowAll = Math.min(...A.low); at(0); track.position.copy(A.base[0]); world.updateMatrixWorld(true); const hip = wp(bn.bone_001); world.position.set(-hip.x, 0, -hip.z);
   T = 0; pose(); viewFront(); shadow.visible = true; }
 const lerp = (arr, t, k) => { const x = Math.min(A.F - 1, Math.max(0, t * A.fps)), i = Math.floor(x), j = Math.min(A.F - 1, i + 1), u = x - i, a = arr[i], b = arr[j]; return k ? a[k] + (b[k] - a[k]) * u : a + (b - a) * u; };
-// sets her to time t: the clip, then walk/in place, feet on the floor or free, her head size
+// sets her to time t: the clip, then walk/in place (in place keeps her height changes), feet on the floor or free, her head size
 function pose(){ if(!A) return; A.mixer.setTime(Math.max(0, Math.min(T, A.dur - 1e-4))); const tr = A.track, b0 = A.base[0];
-  const bx = lerp(A.base, T, 'x'), by = lerp(A.base, T, 'y'), bz = lerp(A.base, T, 'z'); tr.position.set(M.walk ? bx : b0.x, by, M.walk ? bz : b0.z);
+  const b = new THREE.Vector3(lerp(A.base, T, 'x'), lerp(A.base, T, 'y'), lerp(A.base, T, 'z'));
+  if(M.walk) tr.position.copy(b); else tr.position.copy(b0).addScaledVector(A.up, b.clone().sub(b0).dot(A.up));
   if(A.bn.bone_113) A.bn.bone_113.scale.setScalar(M.head || 1);
-  // the floor: each frame's lowest joint stands on it (crouches stay down), or (🦘 free) only the lowest of the whole clip does, so jumps leave it;
-  // where she starts is the middle of the floor
-  A.g.position.set(-A.hx, -((M.feet==='free' ? A.lowAll : lerp(A.low, T)) - A.gap), -A.hz);
-  A.root.updateMatrixWorld(true); A.g.updateMatrixWorld(true); const hip = wp(A.bn.bone_001); shadow.position.x = hip.x; shadow.position.z = hip.z;
-  if(FOLLOW){ const d = new THREE.Vector3(hip.x, controls.target.y, hip.z).sub(controls.target); controls.target.add(d); camera.position.add(d); } }
-// the camera where the video's camera was (in front of her), framing her whole height
-function viewFront(){ if(!A) return; const h = Math.max(1, A.h || 1.7), v = shown(), D = h * 1.25 / (2 * Math.tan(camera.fov * Math.PI / 360) * (v.bottom - v.top) / innerHeight);
-  A.g.updateMatrixWorld(true); const hip = wp(A.bn.bone_001); controls.target.set(hip.x, h * 0.5, hip.z); camera.position.set(hip.x, h * 0.55, hip.z + D); controls.update(); }
+  // the floor: 📌 each frame's lowest joint stands on it (crouches stay down); 🦘 free: on MoGe's ground she keeps her real height (climbs, jumps),
+  // without a ground the lowest point of the whole clip is the floor
+  lift.position.y = M.feet==='free' ? (A.ground ? 0 : -(A.lowAll - A.gap)) : -(lerp(A.low, T) - A.gap);
+  world.updateMatrixWorld(true); const hip = wp(A.bn.bone_001); shadow.position.x = hip.x; shadow.position.z = hip.z;
+  if(SCN) SCN.root.visible = M.scene!==false;
+  // 🎯 the camera turns round her: its pivot follows her hips wherever she goes (up a wall too), keeping the same view of her
+  if(FOLLOW){ const d = hip.clone().sub(controls.target); controls.target.add(d); camera.position.add(d); } }
+// the camera where the video's camera was when there's a ground (so it matches the video), otherwise straight in front of her, framing her whole height
+function viewFront(){ if(!A) return; world.updateMatrixWorld(true); const hip = wp(A.bn.bone_001), h = Math.max(1, A.h || 1.7);
+  const v = shown(), D = h * 1.25 / (2 * Math.tan(camera.fov * Math.PI / 360) * (v.bottom - v.top) / innerHeight); controls.target.copy(hip);
+  // (with a ground: from the video camera's direction and height angle, at the distance that fits her whole body)
+  if(A.ground){ const cam = new THREE.Vector3(0, 0, 0).applyMatrix4(alignS.matrixWorld), dir = cam.sub(hip); if(dir.lengthSq() > 1e-6){ camera.position.copy(hip).addScaledVector(dir.normalize(), D); controls.update(); return; } }
+  camera.position.set(hip.x, hip.y + h * 0.05, hip.z + D); controls.update(); }
 function viewSide(){ if(!A) return; const t = controls.target, d = camera.position.distanceTo(t); camera.position.set(t.x + d, t.y + 0.05, t.z); controls.update(); }
 // ---- playing: the video (if it's showing) is the clock, so they stay together; otherwise the page's own
 const pip = $('#pip');
@@ -174,12 +212,15 @@ function motionGraph(k, o){ const {g, add} = graph(); let imgs, fps;
     imgs = [add('ImageScaleToMaxDimension', {image:[gc, 0], upscale_method:'area', largest_size:960}), 0]; fps = [gc, 2]; }
   const sm = add('SAM3DBody_Loader', {model_file:k.sam});
   const box = add('RTDETR_detect', {model:[add('UNETLoader', {unet_name:k.det, weight_dtype:'default'}), 0], image:imgs, threshold:o.th, class_name:'person', max_detections:1});
-  const fov = k.moge ? [add('MoGeGeometryToFOV', {moge_geometry:[add('MoGeInference', {moge_model:[add('LoadMoGeModel', {model_name:k.moge}), 0], image:[add('ImageFromBatch', {image:imgs, batch_index:0, length:1}), 0], resolution_level:9, fov_x_degrees:0, batch_size:4, force_projection:true, apply_mask:true, refine_steps:3}), 0], axis:'vertical', unit:'degrees'}), 0] : 0;
+  // MoGe on the first frame: the lens for SAM, and a textured 3D mesh of the place (the same camera space as SAM's body) to find the ground in
+  const mg = k.moge ? add('MoGeInference', {moge_model:[add('LoadMoGeModel', {model_name:k.moge}), 0], image:[add('ImageFromBatch', {image:imgs, batch_index:0, length:1}), 0], resolution_level:9, fov_x_degrees:0, batch_size:4, force_projection:true, apply_mask:true, refine_steps:3}) : null;
+  const fov = mg ? [add('MoGeGeometryToFOV', {moge_geometry:[mg, 0], axis:'vertical', unit:'degrees'}), 0] : 0;
+  const scn = mg ? add('SaveGLB', {mesh:[add('MoGePointMapToMesh', {moge_geometry:[mg, 0], batch_index:0, decimation:2, discontinuity_threshold:0.04, texture:true}), 0], filename_prefix:PRE + '/mocap/scene'}) : null;
   let pd = add('SAM3DBody_Predict', {sam3d_body_model:[sm, 0], image:imgs, run_hand_refinement:!!o.hands, fov, batch_size:16, bboxes:[box, 0]});
   const S = SMOOTH[o.smooth] || SMOOTH.med; if(S.method && k.smooth) pd = add('SAM3DBody_Smooth', {mhr_pose_data:[pd, 0], strength:1, method:S.method, window:S.window, rotation_threshold_degrees:30});
-  const sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps, camera_translation:'centered', track_index:0, format:'glb', 'format.mesh_style':'body_mesh', 'format.mesh_style.bone_vis':'off', 'format.mesh_style.shader':'default', 'format.bone_smooth_window':S.bone || 0}), 0],
+  const sv = add('Save3DAdvanced', {model_3d:[add('BuildPoseFile', {pose_data:[pd, 0], sam3d_body_model:[sm, 0], fps, camera_translation:'absolute', track_index:0, format:'glb', 'format.mesh_style':'body_mesh', 'format.mesh_style.bone_vis':'off', 'format.mesh_style.shader':'default', 'format.bone_smooth_window':S.bone || 0}), 0],
     filename_prefix:PRE + '/mocap/motion', viewport_state:{}, width:1024, height:1024});
-  return {g, sv}; }
+  return {g, sv, scn}; }
 // live progress from the PC (its websocket: which node, frame N of M), with the history as the answer
 let WS = null; const WSN = {};
 function listen(url){ if(WS && WS.url0===url && WS.readyState < 2) return; try{ if(WS) WS.close(); WS = new WebSocket(url.replace(/^http/, 'ws') + '/ws?clientId=' + CID); WS.url0 = url;
@@ -190,7 +231,7 @@ async function poll(url, pid, sv, tick){ const t0 = Date.now();
     try{ const h = await (await fetch(url + '/history/' + pid, {cache:'no-store'})).json(); it = h[pid]; }catch(e){ tick('Lost touch with ' + pcName(url) + ', still trying… (the job keeps going on the PC)'); continue; }
     if(it && it.status && it.status.status_str==='error'){ const m = (it.status.messages || []).find(x => x[0]==='execution_error'), e = m && m[1] || {};
       throw Object.assign(new Error('It failed on ' + pcName(url) + (e.node_type ? ' (' + e.node_type + ': ' + String(e.exception_message || '').trim().slice(0, 200) + ')' : '.')), {node:e.node_type || '', why:String(e.exception_message || '')}); }
-    if(it && it.outputs && it.outputs[sv]) return it.outputs[sv];
+    if(it && it.outputs && it.outputs[sv]) return it.outputs;
     if(it && it.status && it.status.completed) throw new Error(pcName(url) + ' finished but sent nothing back.');
     if(!it){ try{ const q = await (await fetch(url + '/queue', {cache:'no-store'})).json(), pend = (q.queue_pending || []).map(x => x[1]), run = (q.queue_running || []).map(x => x[1]);
       if(pend.includes(pid)) tick('Waiting behind ' + (run.length + pend.indexOf(pid)) + ' job(s) on ' + pcName(url) + '…'); else if(run.includes(pid)) tick(null); else if(Date.now() - t0 > 60000) throw new Error(pcName(url) + " doesn't know this job any more (was ComfyUI restarted?)."); }catch(e){ if(/know this job/.test(e.message)) throw e; } }
@@ -202,8 +243,8 @@ async function send(url, g){ const r = await fetch(url + '/prompt', {method:'POS
 // runs the job (or picks up one already running) until the GLB is back
 async function runJob(){ const J = M.job; listen(J.pc); const t0 = J.t0 || Date.now();
   const tick = s => { MSG = s || ''; if(!s && !PROG) MSG = 'Working on ' + pcName(J.pc) + '… ' + Math.round((Date.now() - t0) / 1000) + ' s'; showProg(); };
-  const out = await poll(J.pc, J.pid, J.sv, tick), f = findGlb(out); if(!f) throw new Error('SAM 3D Body sent back no animation.');
-  M.res = {pc:J.pc, file:f.filename, sub:f.subfolder || '', secs:Math.round((Date.now() - t0) / 1000)}; M.job = null; PROG = null; keep(); }
+  const out = await poll(J.pc, J.pid, J.sv, tick), f = findGlb(out[J.sv]), sc = J.scn ? findGlb(out[J.scn]) : null; if(!f) throw new Error('SAM 3D Body sent back no animation.');
+  M.res = {pc:J.pc, file:f.filename, sub:f.subfolder || '', abs:true, scene:sc ? {file:sc.filename, sub:sc.subfolder || ''} : null, secs:Math.round((Date.now() - t0) / 1000)}; M.fresh = true; M.job = null; PROG = null; keep(); }
 async function copyMotion(rebuild){ if(BUSY) return; BUSY = true; MSG = 'Looking for the PC with SAM 3D Body…'; draw();
   try{ const k = await samKit();
     if(!M.vid || M.vid.pc!==k.url){ if(!FILE) throw new Error('Pick the video again (this phone forgot it), then Copy the motion.');
@@ -213,16 +254,21 @@ async function copyMotion(rebuild){ if(BUSY) return; BUSY = true; MSG = 'Looking
     const cap = Math.min(MAXF, frameCount()), base = {file:M.vid.file, fps:M.fps, start:M.start || 0, end:M.end || M.dur, skip:Math.round((M.start || 0) * M.fps), cap, hands:M.hands, smooth:M.smooth};
     // (a person the finder misses at 0.3, or a video VHS can't open, gets one more try: less fussy, or ComfyUI's own video loader)
     let o = {...base, th:0.3, core:!k.vhs}, err = null;
-    for(let tries = 0; tries < 3; tries++){ const {g, sv} = motionGraph(k, o); PROG = null; MSG = 'Starting on ' + pcName(k.url) + '…'; draw();
+    for(let tries = 0; tries < 3; tries++){ const {g, sv, scn} = motionGraph(k, o); PROG = null; MSG = 'Starting on ' + pcName(k.url) + '…'; draw();
       window.LASTG = Object.fromEntries(Object.entries(g).map(([i, n]) => [i, n.class_type]));
-      M.job = {pc:k.url, pid:await send(k.url, g), sv, t0:Date.now(), frames:cap, cls:window.LASTG}; keep(); draw();
+      M.job = {pc:k.url, pid:await send(k.url, g), sv, scn, t0:Date.now(), frames:cap, cls:window.LASTG}; keep(); draw();
       try{ await runJob(); err = null; break; }
       catch(e){ err = e; M.job = null; keep(); if(/no valid tracks/i.test(e.why || e.message) && o.th > 0.15){ o = {...o, th:0.12}; continue; } if(/VHS/i.test(e.node || '') && !o.core){ o = {...o, core:true}; continue; } break; } }
     if(err) throw err;
-    M.frames = cap; await openResult(); saveClip(); MSG = rebuild ? 'Rebuilt.' : 'Done in ' + M.res.secs + ' s. Drag to turn round her, scrub to step through.'; }
+    M.frames = cap; await openResult(); saveClip(); MSG = (rebuild ? 'Rebuilt. ' : 'Done in ' + M.res.secs + ' s. ') + groundNote(); }
   catch(e){ MSG = (e.message || String(e)).replace(/no valid tracks in pose_data/i, "SAM 3D Body couldn't find a person in this part of the video"); }
   BUSY = false; draw(); }
-async function openResult(){ MSG = 'Bringing the 3D animation over…'; draw(); await loadMotion(M.res); pipSrc(); pip.hidden = !(LOCAL || M.vid); draw(); play(true); }
+const groundNote = () => !A ? '' : A.ground ? 'Ground found: the camera was ' + A.ground.height.toFixed(1) + ' m up, looking ' + Math.abs(A.ground.pitch).toFixed(0) + '° ' + (A.ground.pitch < 0 ? 'down' : 'up') + '.' : M.res && M.res.scene ? "Couldn't find the ground in the video, so she stands on a plain floor." : '';
+async function openResult(){ MSG = 'Bringing the 3D animation over…'; draw(); await loadMotion(M.res);
+  // (a new result with a ground starts on 🦘 Free, so climbs and jumps show; it says what it found)
+  if(M.fresh){ M.fresh = false; if(A.ground) M.feet = 'free'; keep(); pose(); } pipSrc(); pip.hidden = !(LOCAL || M.vid); draw();
+  // (Jordan 2026-11-01: opens paused on frame 1; ▶ starts it)
+  play(false); setT(0); if(!pip.hidden) pip.addEventListener('loadeddata', () => { if(!PLAY) setT(T); }, {once:true}); }
 // ---- the clips list (on this phone; the GLBs and videos stay on the PC)
 function saveClip(){ if(!M.res) return; const id = M.id || (M.id = 'mc' + Math.random().toString(36).slice(2, 9)); if(!M.name) M.name = 'Motion ' + new Date().toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
   const c = {id, name:M.name, vid:M.vid, dur:M.dur, vw:M.vw, vh:M.vh, start:M.start, end:M.end, fps:M.fps, hands:M.hands, smooth:M.smooth, res:M.res, frames:M.frames, walk:M.walk, feet:M.feet, head:M.head, made:Date.now()};
@@ -236,7 +282,7 @@ $('#lib').onclick = e => { if(e.target===$('#lib')) $('#lib').hidden = true; con
   if(b.dataset.ren){ const c = LIB.find(x => x.id===b.dataset.ren), n = c && prompt('Name', c.name); if(n){ c.name = n.trim().slice(0, 60) || c.name; if(M.id===c.id) M.name = c.name; put(LKEY, LIB); keep(); drawLib(); draw(); } }
   if(b.dataset.del){ LIB = LIB.filter(x => x.id!==b.dataset.del); put(LKEY, LIB); drawLib(); } };
 // ---- picking a video
-$('#file').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if(!f) return; play(false); if(A){ scene.remove(A.g); A = null; shadow.visible = false; }
+$('#file').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if(!f) return; play(false); clearAll();
   if(LOCAL) URL.revokeObjectURL(LOCAL); FILE = f; LOCAL = URL.createObjectURL(f); M = Object.assign(fresh(), {fps:M.fps, hands:M.hands, smooth:M.smooth, name:(f.name || '').replace(/\.\w+$/, '').slice(0, 60)}); keep(); pip.hidden = true; MSG = ''; draw(); };
 function metaIn(v){ const d = v.duration; if(!isFinite(d) || d <= 0 || (Math.abs(d - M.dur) < 1e-3 && M.vw===v.videoWidth)) return; const first = !M.dur; M.dur = d; M.vw = v.videoWidth; M.vh = v.videoHeight; if(first || !M.end || M.end > d){ M.start = 0; M.end = Math.min(d, 10); } keep(); draw(); }
 // ---- the panel
@@ -250,9 +296,9 @@ function draw(){ const B = $('#body'), old = $('#prev'), at = old ? old.currentT
       <p class="note">${M.job ? (M.job.frames || frameCount()) + ' frames on ' + esc(pcName(M.job.pc)) + '. You can close this page: the PC keeps going and it picks up when you come back.' : ''}</p>`; }
   else if(A || M.res){ const n = A ? A.F : M.frames || 0;
     h = `<div class="row"><button class="sm" id="playb" aria-label="Play or pause">${PLAY ? '❚❚' : '▶'}</button><button class="sm" id="prevf" aria-label="Back one frame">‹</button><input type="range" id="scrub" min="0" max="${Math.max(0, n - 1)}" step="1" value="${A ? Math.round(T * A.fps) : 0}" aria-label="Timeline"><button class="sm" id="nextf" aria-label="Forward one frame">›</button><span class="time" id="tlab"></span></div>
-      <div class="chips" id="speed">${[[0.25, '¼×'], [0.5, '½×'], [1, '1×']].map(([v, t]) => `<button data-v="${v}" aria-pressed="${(M.speed || 1)===v}">${t}</button>`).join('')}<button id="pipb" aria-pressed="${!pip.hidden}">📹 Video</button><button id="followb" aria-pressed="${FOLLOW}">🎯 Follow</button></div>
+      <div class="chips" id="speed">${[[0.25, '¼×'], [0.5, '½×'], [1, '1×']].map(([v, t]) => `<button data-v="${v}" aria-pressed="${(M.speed || 1)===v}">${t}</button>`).join('')}<button id="pipb" aria-pressed="${!pip.hidden}">📹 Video</button><button id="followb" aria-pressed="${FOLLOW}">🎯 Orbit her</button></div>
       <div class="chips"><button id="frontb">Front</button><button id="sideb">Side</button><button data-walk="1" aria-pressed="${M.walk}">🚶 Moves</button><button data-walk="0" aria-pressed="${!M.walk}">📍 In place</button></div>
-      <div class="chips"><button data-feet="floor" aria-pressed="${M.feet!=='free'}">📌 Feet on floor</button><button data-feet="free" aria-pressed="${M.feet==='free'}">🦘 Free (jumps)</button></div>
+      <div class="chips"><button data-feet="floor" aria-pressed="${M.feet!=='free'}">📌 Feet on floor</button><button data-feet="free" aria-pressed="${M.feet==='free'}">🦘 Free (climbs, jumps)</button>${SCN ? `<button id="sceneb" aria-pressed="${M.scene!==false}">🏞 Place</button>` : ''}</div>
       <div class="lbl"><span>🙂 Head size</span><span>${(M.head || 1).toFixed(2)}×</span></div><input type="range" id="head" min="0.8" max="1.6" step="0.02" value="${M.head || 1}">
       <details class="note" id="more" ${MORE ? 'open' : ''}><summary>Smoothing and hands (rebuilds on the PC, quick)</summary>
       <div class="lbl" style="margin-top:6px"><span>Smoothing</span></div><div class="chips" id="smooth">${Object.entries(SMOOTH).map(([k, s]) => `<button data-k="${k}" aria-pressed="${M.smooth===k}">${s.name}</button>`).join('')}</div>
@@ -288,14 +334,14 @@ function wire(){ const on = (s, ev, f) => { const el = $(s); if(el) el[ev] = f; 
   on('#scrub', 'oninput', e => { if(PLAY) play(false); setT(+e.target.value / A.fps); });
   on('#speed', 'onclick', e => { const b = e.target.closest('button[data-v]'); if(!b) return; M.speed = +b.dataset.v; keep(); if(pipOn()) pip.playbackRate = M.speed; draw(); });
   on('#pipb', 'onclick', () => { if(pip.hidden){ if(!pipSrc()) return; pip.hidden = false; if(PLAY) play(true); else pip.addEventListener('loadeddata', () => setT(T), {once:true}); } else { pip.pause(); pip.hidden = true; } draw(); });
-  on('#followb', 'onclick', () => { FOLLOW = !FOLLOW; draw(); }); on('#frontb', 'onclick', viewFront); on('#sideb', 'onclick', viewSide);
+  on('#followb', 'onclick', () => { FOLLOW = !FOLLOW; if(FOLLOW) pose(); draw(); }); on('#sceneb', 'onclick', () => { M.scene = M.scene===false; keep(); pose(); draw(); }); on('#frontb', 'onclick', viewFront); on('#sideb', 'onclick', viewSide);
   document.querySelectorAll('[data-walk]').forEach(b => b.onclick = () => { M.walk = b.dataset.walk==='1'; keep(); pose(); draw(); });
   document.querySelectorAll('[data-feet]').forEach(b => b.onclick = () => { M.feet = b.dataset.feet; keep(); pose(); draw(); });
   on('#head', 'oninput', e => { M.head = +e.target.value; keep(); pose(); const l = e.target.previousElementSibling; if(l) l.lastChild.textContent = M.head.toFixed(2) + '×'; }); }
 // (so the progress line can name the node: the graph sent)
 window.LASTG = M.job && M.job.cls || {};
 // ---- start: pick up a job that was running, or the last result
-window.MOCAP = {get A(){ return A; }, get M(){ return M; }, setT, pose};
+window.MOCAP = {get A(){ return A; }, get M(){ return M; }, get SCN(){ return SCN; }, world, lift, camera, controls, setT, pose};
 (async () => { draw();
   if(M.job){ BUSY = true; draw(); try{ await runJob(); await openResult(); saveClip(); MSG = 'Done. Drag to turn round her, scrub to step through.'; }catch(e){ M.job = null; keep(); MSG = e.message; } BUSY = false; draw(); }
   else if(M.res){ try{ await openResult(); MSG = ''; }catch(e){ MSG = e.message + ' (Is ' + pcName(M.res.pc) + ' on?)'; } draw(); } })();
