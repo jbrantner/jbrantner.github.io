@@ -98,7 +98,8 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   // scrub: the knee bends, she stays on the floor, and moves sideways
   const at = f => page.evaluate(f => { window.MOCAP.setT(f / 15); const A = window.MOCAP.A;
     const p = n => { const e = A.bn[n].matrixWorld.elements; return [e[12], e[13], e[14]]; }; return {hip:p('bone_001'), ank:p('bone_004'), scrub:document.querySelector('#scrub').value, lab:document.querySelector('#tlab').textContent}; }, f);
-  await page.click('#followb'); await page.click('#playb'); const f0 = await at(0), f15 = await at(15), f29 = await at(29);
+  ok(await page.evaluate(() => { const M = window.MOCAP; return document.querySelector('#playb').textContent==='▶' && document.querySelector('#scrub').value==='0'; }), 'it opens paused on frame 1');
+  await page.click('#followb'); const f0 = await at(0), f15 = await at(15), f29 = await at(29);
   ok(Math.abs(f0.ank[1] - f15.ank[1]) < 0.02 && f15.hip[1] < f0.hip[1] - 0.1, 'Feet on floor: mid-squat her hips drop and the foot stays down: ' + JSON.stringify([f0.hip[1].toFixed(2), f15.hip[1].toFixed(2), f0.ank[1].toFixed(2), f15.ank[1].toFixed(2)]));
   ok(Math.abs(f29.hip[0] - f0.hip[0] - 0.6) < 0.02 && Math.abs(f0.hip[0]) < 0.01, '🚶 Moves: she starts in the middle and slides 0.6 m with the camera translation: ' + JSON.stringify([f0.hip, f29.hip]));
   ok(f15.scrub==='15' && /^16 \/ 30/.test(f15.lab), 'the timeline shows frame 16 / 30: ' + f15.lab);
