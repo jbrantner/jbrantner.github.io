@@ -189,8 +189,11 @@ h2 span{flex:1}
           <div style="margin-top:8px"><div class="lab"><span>Easing</span><b id="smEaseOut">0.50</b></div><input type="range" id="smEase" min="0" max="1" step="0.05" value="0.5" style="width:100%"></div>
           <div class="note" id="smSpcNote"></div>
         </div>
-        <div class="sw" id="smUpSw" style="margin-top:8px"><div><div class="t">⬆ Then upscale (SeedVR2)</div><div class="d">After smoothing, SeedVR2 3B upscales the clip, tiled with block swap for the 8 GB card</div></div><div class="tog"></div></div>
-        <div id="smUpBody" hidden style="margin-top:8px"><div class="seg" id="smUpSeg"><button data-v="1.5">1.5×</button><button data-v="2">2×</button></div><div class="note" id="smUpNote" style="margin-top:6px"></div></div>
+        <div class="sw" id="smUpSw" style="margin-top:8px"><div><div class="t">⬆ Then regenerate bigger</div><div class="d">After smoothing, MiniMax repaints the clip larger with fine detail (the open copy of MiniMax's 2K regenerate)</div></div><div class="tog"></div></div>
+        <div id="smUpBody" hidden style="margin-top:8px"><div class="lab"><span>Size</span></div><div class="seg" id="smUpSeg"><button data-v="1.25">1.25×</button><button data-v="1.5">1.5×</button></div>
+          <div style="margin-top:8px"><div class="lab"><span>Repaint</span></div><div class="seg" id="smUpRep"><button data-v="light">Light</button><button data-v="medium">Medium</button><button data-v="full">Full</button></div></div>
+          <div style="margin-top:8px"><div class="lab"><span>Strength</span><b id="smUpStrV"></b></div><input type="range" id="smUpStr" min="0.4" max="1" step="0.05" value="0.8" style="width:100%"></div>
+          <div class="note" id="smUpNote" style="margin-top:6px"></div></div>
         <div class="sw" id="smSoundSw" style="margin-top:8px"><div><div class="t">🔊 Keep its sound</div><div class="d">Pins the clip's own sound too, so voices stay in sync</div></div><div class="tog"></div></div>
         <div class="note" id="smNote" style="margin-top:6px"></div>
       </div>
@@ -284,7 +287,7 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smUp:true, smUpX:2}, s.f || {});
+    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8}, s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   s.media = s.media || {}; s.up = s.up || {}; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
@@ -344,7 +347,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['SeedVR2VideoUpscaler','SeedVR2LoadDiTModel','SeedVR2LoadVAEModel','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
+const NEED = ['MinimaxH3LatentUpscaler3D','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch'];
@@ -659,7 +662,7 @@ function canRun(url, job){
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
   { const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), miss = lorasOf(job).find(l => !have.includes(l.name)); if(miss) return 'doesn\'t have the LoRA ' + bn(miss.name); }
-  if(job.up && !(oi.SeedVR2VideoUpscaler && oi.SeedVR2LoadDiTModel && oi.SeedVR2LoadVAEModel && oi.GetVideoComponents)) return "can't upscale (no SeedVR2 Video Upscaler)";
+  if(job.up){ const why = regenMissing(oi); if(why) return "can't regenerate bigger (" + why + ')'; }
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
@@ -766,38 +769,56 @@ function joinGraph(t){
   return {g, save:sv};
 }
 
-// ⬆ SeedVR2 upscale of a finished (smoothed) clip, as its own job after it: 3B fp8 model, half its blocks swapped to the
-// CPU, VAE tiled 512, batches of 5 frames with 1 overlapping, LAB colour match (made for Render's 8 GB card). Before it is
-// queued, ComfyUI is asked to unload MiniMax (/free), since the SeedVR2 nodes manage their own memory.
+// ⬆ Regenerate bigger (Open-H3-Regenerate-2K, NVlabs; ComfyUI port by father558, rank 128): the finished smoothed clip is
+// VAE-encoded, its latent enlarged by the LBH 3D latent upscaler, then MiniMax FL2V + the regenerate LoRA repaints it in
+// a few euler steps at CFG 1 (official sigmas 0.909375, 0.857143, 0.666667, 0). Its own job after the smoothing, on the
+// same PC; MiniMax is unloaded first (/free). Tested on Render 2026-11-01: 56 frames 512×768 → 768×1152 in 129 s, peak 86°C.
+const REGEN_SIG = {full:'0.909375, 0.857143, 0.666667, 0.0', medium:'0.8, 0.666667, 0.0', light:'0.7, 0.5, 0.0'};
+const regenLora = oi => combo(oi, 'LoraLoaderModelOnly', 'lora_name').find(x => /open_?regenerate/i.test(x));
+const regenUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name'); return u.find(x => /minimax_h3_fl2va.*int8/i.test(x)) || u.find(x => /fl2va.*int8/i.test(x)) || u.find(x => /fl2va/i.test(x)); };
+const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
+function regenMissing(oi){
+  if(!oi.MinimaxH3LatentUpscaler3D) return 'no H3 latent upscaler node'; if(!regenUpModel(oi)) return 'no latent upscaler model';
+  if(!regenLora(oi)) return 'no Open-H3 regenerate LoRA'; if(!regenUnet(oi)) return 'no MiniMax First/last frame model';
+  if(!(oi.ManualSigmas && oi.LTXVSeparateAVLatent && oi.LTXVConcatAVLatent && oi.VAEEncode && oi.GetVideoComponents && oi.MiniMaxH3ImageToVideo)) return 'update ComfyUI';
+  return ''; }
+function upDims(t){ let k = (t.up && t.up.scale) || 1.5; k = Math.min(k, 768 / Math.min(t.w, t.h)); // MiniMax is made for 768p: the short side stays ≤ 768
+  return {w:Math.max(32, Math.floor(t.w * k / 32) * 32), h:Math.max(32, Math.floor(t.h * k / 32) * 32)}; }
+const upSize = t => { const d = upDims(t); return d.w + '×' + d.h; };
+const clipFrames = t => t.pieces.reduce((a, p) => a + (p.deliv || p.gen), 0);
 function upGraph(t, oi){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
-  const src = t.smoothed || t.final, lv = add('LoadVideo', {file:(src.subfolder ? src.subfolder + '/' : '') + src.filename + ' [output]'}), gc = add('GetVideoComponents', {video:[lv, 0]});
-  const dits = combo(oi, 'SeedVR2LoadDiTModel', 'model'), vaes = combo(oi, 'SeedVR2LoadVAEModel', 'model');
-  const dm = dits.find(x => /3b_fp8/i.test(x)) || dits.find(x => /3b/i.test(x)) || 'seedvr2_ema_3b_fp8_e4m3fn.safetensors', vm = vaes.find(x => /ema_vae/i.test(x)) || vaes[0] || 'ema_vae_fp16.safetensors';
-  const d = add('SeedVR2LoadDiTModel', {model:dm, blocks_to_swap:16, swap_io_components:true, offload_device:'cpu', cache_model:false, attention_mode:'sdpa'});
-  const v = add('SeedVR2LoadVAEModel', {model:vm, encode_tiled:true, encode_tile_size:512, encode_tile_overlap:64, decode_tiled:true, decode_tile_size:512, decode_tile_overlap:64, tile_debug:'false', offload_device:'cpu', cache_model:false});
-  const u = add('SeedVR2VideoUpscaler', {image:[gc, 0], dit:[d, 0], vae:[v, 0], seed:(t.seed || 0) % 2 ** 32, resolution:upEdge(t), max_resolution:0, batch_size:5, uniform_batch_size:true,
-    temporal_overlap:1, prepend_frames:0, color_correction:'lab', input_noise_scale:0, latent_noise_scale:0, offload_device:'cpu', enable_debug:false});
-  const cv = add('CreateVideo', {images:[u, 0], audio:[gc, 1], fps:FPS});
+  const u = t.up || {}, d = upDims(t), src = t.smoothed || t.final;
+  const lv = add('LoadVideo', {file:(src.subfolder ? src.subfolder + '/' : '') + src.filename + ' [output]'}), gc = add('GetVideoComponents', {video:[lv, 0]});
+  const vae = [add('VAELoader', {vae_name:vaeOf(oi)}), 0];
+  const enc = add('VAEEncode', {pixels:[gc, 0], vae});
+  const big = add('MinimaxH3LatentUpscaler3D', {latent:[enc, 0], model_name:regenUpModel(oi), mode:'target dimensions', 'mode.width':d.w, 'mode.height':d.h, align:32, enable_temporal_chunking:true, force_unload:true, device:'cuda', precision:'bf16'});
+  const model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
+  const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0];
+  const iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt:t.prompt || SM_PROMPT, width:d.w, height:d.h, length:clipFrames(t)});
+  const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:[big, 0], audio_latent:[sep, 1]});
+  const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed || 42}), 0], guider:[add('BasicGuider', {model, conditioning:[iv, 0]}), 0],
+    sampler:[add('KSamplerSelect', {sampler_name:'euler'}), 0], sigmas:[add('ManualSigmas', {sigmas:REGEN_SIG[u.rep] || REGEN_SIG.medium}), 0], latent_image:[av, 0]});
+  const vl = add('LTXVSeparateAVLatent', {av_latent:[out, 0]});
+  const ims = add('VAEDecodeTiled', {samples:[vl, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8});
+  const cv = add('CreateVideo', {images:[ims, 0], audio:[gc, 1], fps:FPS});
   const sv = add('SaveVideo', {video:[cv, 0], filename_prefix:t.dir + '/' + t.name + '_up', format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   return {g, save:sv};
 }
-const upEdge = t => Math.round(Math.min(t.w, t.h) * ((t.up && t.up.scale) || 2) / 2) * 2;
-const upSize = t => { const k = upEdge(t) / Math.min(t.w, t.h); return Math.round(t.w * k / 2) * 2 + '×' + Math.round(t.h * k / 2) * 2; };
 async function tickUpscale(t){
   const p = pcOf(t.pc);
   if(t.upStage==='start'){
-    if(!p.oi || !p.oi.SeedVR2VideoUpscaler){ t.upErr = pcName(t.pc) + ' has no SeedVR2 Video Upscaler'; return upDone(t); }
+    { const why = p.oi ? regenMissing(p.oi) : 'not reachable'; if(why){ t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
     try{ const G = upGraph(t, p.oi); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
     return; }
   let h = null; try{ h = (await getJ(t.pc + '/history/' + t.upPid))[t.upPid]; }catch(e){ return; }
   if(h && h.status && h.status.completed){ const o = (h.outputs || {})[t.upSave] || {}, f = (o.images || o.videos || o.gifs || [])[0];
-    if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.upErr = 'the upscale gave nothing back'; upDone(t); }
-  else if(h && h.status && h.status.status_str==='error'){ t.upErr = ((h.status.messages || []).find(x => x[0]==='execution_error') || [0, {}])[1].exception_message || 'the upscale failed'; upDone(t); }
+    if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.upErr = 'the regenerate gave nothing back'; upDone(t); }
+  else if(h && h.status && h.status.status_str==='error'){ t.upErr = ((h.status.messages || []).find(x => x[0]==='execution_error') || [0, {}])[1].exception_message || 'the regenerate failed'; upDone(t); }
   else if(!h){ const q = p.queue || {}, inQ = [...(q.queue_running || []), ...(q.queue_pending || [])];
     if(inQ.some(x => x[1]===t.upPid)) t.upStage = (q.queue_running || []).some(x => x[1]===t.upPid) ? 'running' : 'queued';
-    else if(Date.now() - (t.tu || 0) > 60000){ t.upErr = 'the upscale left the queue (ComfyUI restarted or it was cancelled)'; upDone(t); } }
+    else if(Date.now() - (t.tu || 0) > 60000){ t.upErr = 'the regenerate left the queue (ComfyUI restarted or it was cancelled)'; upDone(t); } }
 }
 function upDone(t){ t.upStage = 'done'; t.state = 'done'; t.t1 = Date.now(); notify(t); }
 
@@ -841,7 +862,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
   const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(); return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, keys:P ? P.keys : null}; })() : null;
-  const up = sm && f.smUp ? {scale:+f.smUpX || 2} : null;
+  const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8} : null;
   return {sm, up, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => ({id:r.id})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow})), auds:R.auds.map(r => ({id:r.id})), follow:R.follow.map(r => ({id:r.id})),
@@ -1002,7 +1023,7 @@ async function saveVideo(t){
 }
 function useAgain(t){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
-  f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) f.smUpX = t.up.scale; Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
+  f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => ({id:r.id, on:true})); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow})); f.auds = t.auds.map(r => ({id:r.id, on:true})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); // these boxes are only filled at start, so set them here too
@@ -1049,8 +1070,9 @@ function drawInputs(){
   $$('#smEverySeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smEvery || 4)));
   $('#smSoundSw').classList.toggle('on', !!f.smSound && !(sv && sv.sound===false)); $('#smSoundSw').hidden = !!(sv && sv.sound===false);
   drawSpacing();
-  $('#smUpSw').classList.toggle('on', !!f.smUp); $('#smUpBody').hidden = !f.smUp; $$('#smUpSeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smUpX || 2)));
-  if(f.smUp){ const d = dims(), fake = {w:d.w, h:d.h, up:{scale:+f.smUpX || 2}}; $('#smUpNote').textContent = d.w + '×' + d.h + ' → ' + upSize(fake) + '. Runs as its own job after the smoothing, on the same PC (MiniMax is unloaded first); the app has to be open for it to start, like joining. The first run there downloads the SeedVR2 3B model (about 3.4 GB).'; }
+  $('#smUpSw').classList.toggle('on', !!f.smUp); $('#smUpBody').hidden = !f.smUp; $$('#smUpSeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smUpX || 1.5)));
+  $$('#smUpRep button').forEach(b => b.classList.toggle('on', b.dataset.v===(f.smUpRep || 'medium'))); $('#smUpStr').value = f.smUpStr != null ? f.smUpStr : 0.8; $('#smUpStrV').textContent = (+$('#smUpStr').value).toFixed(2);
+  if(f.smUp){ const d = dims(), fake = {w:d.w, h:d.h, up:{scale:+f.smUpX || 1.5}}; $('#smUpNote').textContent = d.w + '×' + d.h + ' → ' + upSize(fake) + '. Its own job after the smoothing, on the same PC (MiniMax is unloaded first); the app has to be open for it to start, like joining. Light repaints least and keeps the face closest; Full is the official setting with the most new detail (and grain). Lower strength = less grain. Render runs hot: 2.3 s took about 2 min and peaked at 86°C, so keep clips short there.'; }
   if(f.sm){ const L = smoothPlan()[0].gen, P = currentSpacing(), n = P ? P.keys.length : smoothKeys(L, +f.smEvery || 4).length;
     $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s). The prompt is optional: describe the action to steer the in-betweens.'
       + (sv.fps && Math.abs(sv.fps - FPS) > 0.1 ? ' Your clip is ' + sv.fps + ' fps; MiniMax makes 24 fps, so the nearest frames are used.' : '') + (sv.sound===false ? ' This clip has no sound.' : '')
@@ -1112,10 +1134,10 @@ function drawGo(){
 }
 function stateLine(t){
   const n = t.pieces.length, done = t.pieces.filter(p => p.state==='done').length, run = t.pieces.find(p => p.state==='running'), q = t.pieces.find(p => p.state==='queued');
-  if(t.state==='done' && t.up && t.upStage==='done') return t.upErr ? 'Smoothed, not upscaled: ' + t.upErr : 'Done · upscaled to ' + upSize(t);
+  if(t.state==='done' && t.up && t.upStage==='done') return t.upErr ? 'Smoothed, not regenerated: ' + t.upErr : 'Done · regenerated at ' + upSize(t);
   if(t.state==='done') return t.final ? (n > 1 ? n + ' pieces joined' : 'Done') : 'Done, not joined' + (t.joinErr ? ': ' + t.joinErr : '');
   if(t.state==='working' && t.upStage){ const L = LIVE[t.upPid] || {}, qq = pcOf(t.pc).queue || {}, at = [...(qq.queue_running || []), ...(qq.queue_pending || [])].findIndex(x => x[1]===t.upPid);
-    return '⬆ Upscaling to ' + upSize(t) + ' with SeedVR2' + (at > 0 ? ' once the ' + at + ' job' + (at > 1 ? 's' : '') + ' ahead finish' : L.max ? ' · ' + L.v + ' of ' + L.max : t.upStage==='running' ? '' : ' · starting'); }
+    return '⬆ Regenerating at ' + upSize(t) + (at > 0 ? ' once the ' + at + ' job' + (at > 1 ? 's' : '') + ' ahead finish' : L.max ? ' · ' + L.v + ' of ' + L.max : t.upStage==='running' ? '' : ' · starting'); }
   if(t.state==='failed'){ const b = t.pieces.find(p => p.state==='failed'); return (b && b.err==='Cancelled') ? 'Cancelled' : 'Stopped at piece ' + (t.pieces.indexOf(b) + 1) + (b && b.err ? ': ' + b.err : ''); }
   if(t.joinPid){ const qq = pcOf(t.pc).queue || {}, at = [...(qq.queue_running || []), ...(qq.queue_pending || [])].findIndex(x => x[1]===t.joinPid);
     return at > 0 ? 'Joining the ' + n + ' pieces once the ' + (at > 1 ? at + ' renders' : 'render') + ' ahead of it finish' : 'Joining the ' + n + ' pieces'; }
@@ -1256,6 +1278,8 @@ $('#smSpcSw').onclick = () => { S.f.smSpc = !S.f.smSpc; save(); drawInputs(); dr
 $('#smEase').oninput = e => { S.f.smEase = +e.target.value; save(); drawSpacing(); drawInputs(); };
 $('#smUpSw').onclick = () => { S.f.smUp = !S.f.smUp; save(); drawInputs(); drawGo(); };
 $('#smUpSeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smUpX = +b.dataset.v; save(); drawInputs(); };
+$('#smUpRep').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smUpRep = b.dataset.v; save(); drawInputs(); };
+$('#smUpStr').oninput = e => { S.f.smUpStr = +e.target.value; $('#smUpStrV').textContent = S.f.smUpStr.toFixed(2); save(); };
 $('#smSoundSw').onclick = () => { S.f.smSound = !S.f.smSound; save(); drawInputs(); };
 $('#smStart').oninput = e => { S.f.smStart = +e.target.value; save(); drawInputs(); drawShot(); };
 $('#smEverySeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smEvery = +b.dataset.v; save(); drawAll(); };
@@ -1299,6 +1323,6 @@ drawAll();
 pingAll().then(() => { drawAll(); tick(); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
-window.H3 = {S, upGraph, upSize, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

@@ -12,8 +12,8 @@ const path = require('path'), http = require('http'), fs = require('fs');
 const MEDIA = process.env.MEDIA, PC = 'http://render.test';
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = { // just what the app reads
-  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors']], weight_dtype:[['default']]}}},
-  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'minimax_h3_open_regenerate_2k_r128_comfyui_bf16.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
   'Video Slice':{input:{required:{video:['VIDEO'], start_time:['FLOAT', {default:0}], duration:['FLOAT', {default:0}], strict_duration:['BOOLEAN', {default:false}]}}},
@@ -21,17 +21,17 @@ const SCHEMA = { // just what the app reads
   ImageFromBatch:{input:{required:{image:['IMAGE'], batch_index:['INT', {default:0}], length:['INT', {default:1}]}}},
   MiniMaxH3AddGuide:{input:{required:{positive:['CONDITIONING'], latent:['LATENT'], frame_idx:['INT', {default:0}]}, optional:{vae:['VAE'], audio_vae:['VAE'], image:['IMAGE'], audio:['AUDIO']}}},
 };
-// SeedVR2 (numz seedvr2_videoupscaler on Render): src/interfaces/*.py
+// Open-H3 regenerate (object_info read from Render 2026-11-01)
 Object.assign(SCHEMA, {
-  SeedVR2LoadDiTModel:{input:{required:{model:[['seedvr2_ema_3b-Q4_K_M.gguf', 'seedvr2_ema_3b_fp8_e4m3fn.safetensors', 'seedvr2_ema_7b_fp16.safetensors']], device:[['cuda:0', 'cpu']]}, optional:{blocks_to_swap:['INT'], swap_io_components:['BOOLEAN'], offload_device:[['none', 'cpu', 'cuda:0']], cache_model:['BOOLEAN'], attention_mode:[['sdpa']], torch_compile_args:['TORCH_COMPILE_ARGS']}}},
-  SeedVR2LoadVAEModel:{input:{required:{model:[['ema_vae_fp16.safetensors']], device:[['cuda:0', 'cpu']]}, optional:{encode_tiled:['BOOLEAN'], encode_tile_size:['INT'], encode_tile_overlap:['INT'], decode_tiled:['BOOLEAN'], decode_tile_size:['INT'], decode_tile_overlap:['INT'], tile_debug:[['false', 'encode', 'decode']], offload_device:[['none', 'cpu']], cache_model:['BOOLEAN']}}},
-  SeedVR2VideoUpscaler:{input:{required:{image:['IMAGE'], dit:['SEEDVR2_DIT'], vae:['SEEDVR2_VAE'], seed:['INT', {default:42}], resolution:['INT', {default:1080}], max_resolution:['INT', {default:0}], batch_size:['INT', {default:5}], uniform_batch_size:['BOOLEAN', {default:false}], color_correction:[['lab', 'wavelet', 'none']], input_noise_scale:['FLOAT', {default:0}], latent_noise_scale:['FLOAT', {default:0}], offload_device:[['none', 'cpu']], enable_debug:['BOOLEAN', {default:false}]}, optional:{temporal_overlap:['INT'], prepend_frames:['INT']}}},
+  MinimaxH3LatentUpscaler3D:{input:{required:{latent:['*'], model_name:['COMBO', {options:['minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors', 'minimax_h3_latent_upscaler_3d_fp32.pth']}], mode:['COMFY_DYNAMICCOMBO_V3', {options:[]}],
+    align:['INT', {default:32}], enable_temporal_chunking:['BOOLEAN', {default:true}], force_unload:['BOOLEAN', {default:true}], device:['COMBO', {default:'cuda', options:['cuda','rocm','cpu']}], precision:['COMBO', {default:'fp16', options:['fp32','fp16','bf16']}]}}},
+  ManualSigmas:{input:{required:{sigmas:['STRING', {default:'1, 0.5'}]}}},
+  LTXVSeparateAVLatent:{input:{required:{av_latent:['LATENT']}}}, LTXVConcatAVLatent:{input:{required:{video_latent:['LATENT'], audio_latent:['LATENT']}}}, VAEEncode:{input:{required:{pixels:['IMAGE'], vae:['VAE']}}},
 });
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo'];
-const ALLOWED = {SeedVR2LoadDiTModel:['model','device','blocks_to_swap','swap_io_components','offload_device','cache_model','attention_mode','torch_compile_args'],
-  SeedVR2LoadVAEModel:['model','device','encode_tiled','encode_tile_size','encode_tile_overlap','decode_tiled','decode_tile_size','decode_tile_overlap','tile_debug','offload_device','cache_model','torch_compile_args'],
-  SeedVR2VideoUpscaler:['image','dit','vae','seed','resolution','max_resolution','batch_size','uniform_batch_size','temporal_overlap','prepend_frames','color_correction','input_noise_scale','latent_noise_scale','offload_device','enable_debug'],
+const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.width','mode.height','align','enable_temporal_chunking','force_unload','device','precision'], ManualSigmas:['sigmas'],
+  LTXVSeparateAVLatent:['av_latent'], LTXVConcatAVLatent:['video_latent','audio_latent'], VAEEncode:['pixels','vae'], MiniMaxH3ImageToVideo:['clip','vae','prompt','width','height','length','first_frame','last_frame'],
   GetVideoComponents2:[], 'Video Slice':['video','start_time','duration','strict_duration'], GetVideoComponents:['video'], ImageFromBatch:['image','batch_index','length'],
   MiniMaxH3AddGuide:['positive','vae','audio_vae','latent','image','audio','frame_idx'], LoadVideo:['file']};
 
@@ -131,40 +131,49 @@ const ALLOWED = {SeedVR2LoadDiTModel:['model','device','blocks_to_swap','swap_io
   ok(R.d && Math.abs(R.d[30] - 6.9) < 2.5 && R.d[59] > 4 * R.d[30], 'measured: ~7/1000 of the width a frame, and the jump at 59 (' + (R.d ? R.d[30].toFixed(1) + ' vs ' + R.d[59].toFixed(1) : R.err) + ')');
   ok(/1 jump/.test(await page.textContent('#smSpcNote')), 'note reports the jump');
   await page.screenshot({path:path.join(MEDIA, 'spacing.png'), clip:await (await page.$('#smBody')).boundingBox()});
+  ok(await page.evaluate(() => H3.S.f.smUp===false && H3.S.f.smUpX===1.5 && H3.S.f.smUpRep==='medium' && H3.S.f.smUpStr===0.8), '⬆ Regenerate is off by default (1.5×, Medium, 0.8)');
+  await page.click('#smUpSw'); await page.click('#smUpRep [data-v="light"]'); await page.$eval('#smUpStr', e => { e.value = '0.7'; e.dispatchEvent(new Event('input')); });
+  console.log('up note:', await page.textContent('#smUpNote'));
+  ok(/864×480 → 1344×736/.test(await page.textContent('#smUpNote')) || /864×480 → 1280×704/.test(await page.textContent('#smUpNote')) || /→ 1280×/.test(await page.textContent('#smUpNote')), 'note shows the regenerate size');
+  await page.screenshot({path:path.join(MEDIA, 'regen-ui.png'), clip:await (await page.$('#smBody')).boundingBox()});
   await page.click('#goBtn'); await page.waitForTimeout(1500);
   const g3 = sent[sent.length - 1], gd3 = Object.values(g3).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image);
   const pairs = gd3.map(n => [n.inputs.frame_idx, g3[n.inputs.image[0]].inputs.batch_index]);
   console.log('sent pairs', JSON.stringify(pairs));
   ok(pairs.length < 32 && pairs.some(([o, s]) => o!==s) && pairs[0][0]===0 && pairs[pairs.length - 1][0]===123, 'the graph pins the eased frames (some re-timed, some left out), first and last kept');
 
-  // ---- ⬆ SeedVR2 upscale after the smoothing ----
-  ok(await page.evaluate(() => H3.S.f.smUp===true && H3.S.f.smUpX===2), '⬆ Then upscale is on by default at 2×');
-  console.log('up note:', await page.textContent('#smUpNote'));
-  ok(/864×480 → 1728×960/.test(await page.textContent('#smUpNote')), 'note shows the size after upscaling');
-  const t0 = await page.evaluate(() => { const t = H3.S.takes[0]; return {id:t.id, up:t.up, pid:t.pieces[0].pid, save:t.pieces[0].save, dir:t.dir}; });
-  ok(t0.up && t0.up.scale===2, 'the take carries ⬆ 2×');
-  // the smoothing finishes on the PC
+  // ---- ⬆ regenerate after the smoothing ----
+  const t0 = await page.evaluate(() => { const t = H3.S.takes[0]; return {id:t.id, up:t.up, pid:t.pieces[0].pid, save:t.pieces[0].save, dir:t.dir, size:H3.upSize(t), L:t.pieces[0].gen}; });
+  ok(t0.up && t0.up.scale===1.5 && t0.up.rep==='light' && t0.up.str===0.7, 'the take carries ⬆ 1.5×, Light, 0.7 ' + JSON.stringify(t0.up));
   HIST[t0.pid] = {status:{completed:true, status_str:'success'}, outputs:{[t0.save]:{images:[{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/' + t0.dir, type:'output'}]}}};
   const nSent = sent.length;
   await page.evaluate(() => H3.tick()); await page.waitForTimeout(800); await page.evaluate(() => H3.tick()); await page.waitForTimeout(1200);
-  ok(frees.length===1 && frees[0].unload_models===true, 'MiniMax is unloaded (/free) before the upscale');
-  ok(sent.length===nSent + 1, 'one upscale job queued');
-  const gu = sent[sent.length - 1], nu = Object.values(gu), up = nu.find(n => n.class_type==='SeedVR2VideoUpscaler');
-  const dit = gu[up.inputs.dit[0]].inputs, vae = gu[up.inputs.vae[0]].inputs, lv = nu.find(n => n.class_type==='LoadVideo');
-  ok(dit.model==='seedvr2_ema_3b_fp8_e4m3fn.safetensors' && dit.blocks_to_swap===16 && dit.offload_device==='cpu' && dit.device==='cuda:0', 'DiT: 3B fp8, 16 blocks swapped to the CPU ' + JSON.stringify(dit));
-  ok(vae.encode_tiled && vae.decode_tiled && vae.encode_tile_size===512, 'VAE tiled at 512');
-  ok(up.inputs.resolution===960 && up.inputs.batch_size===5 && up.inputs.color_correction==='lab', '2× of 480 = 960 short edge, batches of 5, LAB colours');
+  ok(frees.length===1 && frees[0].unload_models===true, 'MiniMax is unloaded (/free) before the regenerate');
+  ok(sent.length===nSent + 1, 'one regenerate job queued');
+  const gu = sent[sent.length - 1], nu = Object.values(gu), byC = c => nu.find(n => n.class_type===c);
+  const lu = byC('MinimaxH3LatentUpscaler3D'), iv = byC('MiniMaxH3ImageToVideo'), lv = byC('LoadVideo'), ms = byC('ManualSigmas'), sca = byC('SamplerCustomAdvanced');
+  const [W, Hh] = t0.size.split('×').map(Number);
+  ok(lu && lu.inputs.mode==='target dimensions' && lu.inputs['mode.width']===W && lu.inputs['mode.height']===Hh && lu.inputs.precision==='bf16' && /3d_conv_v1_bf16/.test(lu.inputs.model_name), 'latent upscaler: target ' + t0.size + ' ' + JSON.stringify(lu && lu.inputs));
+  ok(Math.min(W, Hh) <= 768 && W % 32===0 && Hh % 32===0, 'size stays inside 768p on a 32 grid: ' + t0.size);
+  ok(gu[lu.inputs.latent[0]].class_type==='VAEEncode' && gu[gu[lu.inputs.latent[0]].inputs.pixels[0]].class_type==='GetVideoComponents', 'it encodes the smoothed clip');
+  const lora = nu.find(n => n.class_type==='LoraLoaderModelOnly'), unet = gu[lora.inputs.model[0]];
+  ok(/open_regenerate/.test(lora.inputs.lora_name) && lora.inputs.strength_model===0.7 && unet.inputs.unet_name==='minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'FL2VA int8 + regenerate LoRA at 0.7');
+  ok(nu.filter(n => n.class_type==='LoraLoaderModelOnly').length===1, 'no turbo LoRA stacked on it');
+  ok(iv.inputs.width===W && iv.inputs.height===Hh && iv.inputs.length===t0.L, 'conditioning at the new size, same length (' + iv.inputs.length + ')');
+  ok(ms.inputs.sigmas==='0.7, 0.5, 0.0' && byC('KSamplerSelect').inputs.sampler_name==='euler', 'Light = sigmas 0.7, 0.5, 0, euler');
+  const cat = gu[sca.inputs.latent_image[0]]; ok(cat.class_type==='LTXVConcatAVLatent' && gu[cat.inputs.video_latent[0]].class_type==='MinimaxH3LatentUpscaler3D' && gu[cat.inputs.audio_latent[0]].class_type==='LTXVSeparateAVLatent' && cat.inputs.audio_latent[1]===1, 'samples the enlarged video latent + an empty audio latent');
+  ok(gu[gu[sca.inputs.guider[0]].inputs.conditioning[0]].class_type==='MiniMaxH3ImageToVideo', 'BasicGuider on the prompt (CFG 1)');
   ok(lv.inputs.file==='Output_Render/' + t0.dir + '/piece_01_00001_.mp4 [output]', 'it reads the smoothed clip from the output folder: ' + lv.inputs.file);
-  const cvn = nu.find(n => n.class_type==='CreateVideo'); ok(gu[cvn.inputs.images[0]].class_type==='SeedVR2VideoUpscaler' && gu[cvn.inputs.audio[0]].class_type==='GetVideoComponents', 'video from SeedVR2, sound from the smoothed clip');
+  const cvn = byC('CreateVideo'); ok(gu[cvn.inputs.images[0]].class_type==='VAEDecodeTiled' && gu[cvn.inputs.audio[0]].class_type==='GetVideoComponents', 'tiled decode, sound from the smoothed clip');
   const bad2 = nu.filter(n => ALLOWED[n.class_type]).flatMap(n => Object.keys(n.inputs).filter(k => !ALLOWED[n.class_type].includes(k)).map(k => n.class_type + '.' + k));
-  ok(!bad2.length, 'SeedVR2 input names match the node source ' + bad2.join(','));
-  ok(/Upscaling to 1728×960/.test(await page.textContent('#takes')), 'the card says it is upscaling');
+  ok(!bad2.length, 'input names match Render ' + bad2.join(','));
+  ok(/Regenerating at /.test(await page.textContent('#takes')), 'the card says it is regenerating');
   const upPid = await page.evaluate(() => H3.S.takes[0].upPid), upSave = await page.evaluate(() => H3.S.takes[0].upSave);
   HIST[upPid] = {status:{completed:true, status_str:'success'}, outputs:{[upSave]:{images:[{filename:'x_up_00001_.mp4', subfolder:'Output_Render/' + t0.dir, type:'output'}]}}};
   await page.evaluate(() => H3.tick()); await page.waitForTimeout(1200);
   const fin = await page.evaluate(() => { const t = H3.S.takes[0]; return {state:t.state, final:t.final.filename, smoothed:t.smoothed.filename}; });
-  ok(fin.state==='done' && fin.final==='x_up_00001_.mp4' && fin.smoothed==='piece_01_00001_.mp4', 'done: the upscaled clip is the final one, the smoothed one is kept');
-  ok(/upscaled to 1728×960/.test(await page.textContent('#takes')), 'card: Done · upscaled');
+  ok(fin.state==='done' && fin.final==='x_up_00001_.mp4' && fin.smoothed==='piece_01_00001_.mp4', 'done: the regenerated clip is the final one, the smoothed one is kept');
+  ok(/regenerated at /.test(await page.textContent('#takes')), 'card: Done · regenerated');
 
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
