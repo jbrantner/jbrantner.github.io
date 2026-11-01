@@ -179,6 +179,12 @@ h2 span{flex:1}
         <div style="margin-top:10px"><div class="lab"><span>Window starts at</span><b id="smStartOut">0 s</b></div>
           <input type="range" id="smStart" min="0" max="0" step="0.05" value="0" style="width:100%"></div>
         <div style="margin-top:6px"><div class="lab"><span>Pin every</span></div><div class="seg" id="smEverySeg"><button data-v="2">2nd frame</button><button data-v="4">4th frame</button><button data-v="8">8th frame</button></div></div>
+        <div class="sw" id="smSpcSw" style="margin-top:8px"><div><div class="t">📐 Even out the spacing</div><div class="d">Tracks points through the window, finds jumps and eases the pinned frames around them</div></div><div class="tog"></div></div>
+        <div id="smSpcBody" hidden style="margin-top:8px">
+          <canvas id="smChart" style="width:100%;height:110px;display:block;border:1px solid var(--line);border-radius:10px;background:var(--bg)"></canvas>
+          <div style="margin-top:8px"><div class="lab"><span>Easing</span><b id="smEaseOut">0.50</b></div><input type="range" id="smEase" min="0" max="1" step="0.05" value="0.5" style="width:100%"></div>
+          <div class="note" id="smSpcNote"></div>
+        </div>
         <div class="sw" id="smSoundSw" style="margin-top:8px"><div><div class="t">🔊 Keep its sound</div><div class="d">Pins the clip's own sound too, so voices stay in sync</div></div><div class="tog"></div></div>
         <div class="note" id="smNote" style="margin-top:6px"></div>
       </div>
@@ -275,7 +281,7 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, lora:'', loraStr:1, loraWords:'', aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true}, s.f || {});
+    model:'', turbo:true, lora:'', loraStr:1, loraWords:'', aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5}, s.f || {});
   s.media = s.media || {}; s.up = s.up || {}; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
 }
@@ -521,6 +527,98 @@ function smoothSpan(){ const f = S.f, m = S.media[f.smVid] || {}, dur = m.dur ||
   return {start:Math.round(start * FPS) / FPS, avail:dur ? dur - start : SM_MAX}; }
 function smoothPlan(){ const {avail} = smoothSpan(), secs = Math.min(+S.f.seconds || 5, SM_MAX, avail); const up = gridUp(secs * FPS), g = up <= avail * FPS + 0.5 ? up : gridDn(Math.max(5, avail * FPS)); return [{start:0, gen:g, deliv:g, ctx:0}]; }
 function smoothKeys(L, every){ const k = []; for(let i = 0; i < L; i += every) k.push(i); if(k[k.length - 1]!==L - 1) k.push(L - 1); return k; }
+// ---------- 📐 spacing: track how far things move from frame to frame, then pin frames where an eased motion puts them ----------
+// An animator's "spacing": the distance travelled between drawings. A jump in the clip is one step far bigger than its
+// neighbours. The eased plan spreads that distance over the frames around it (a Gaussian over the steps, kept to the same
+// total), then each pinned slot (0, 4, 8, …) takes the source frame closest to where the eased motion says it should be.
+// Where no source frame is close (inside a jump), the slot is left unpinned and MiniMax paints it.
+const SPC = {}; // video|start|frames -> {d:[steps], n, busy, err}
+const SPC_W = 192; let spcT = 0; // frames are measured this wide
+function spcKey(){ const f = S.f, sp = smoothSpan(); return f.smVid + '|' + sp.start + '|' + smoothPlan()[0].gen; }
+async function grabFrames(blob, start, L, sf, onp){
+  const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(blob);
+  try{
+    await new Promise((ok, no) => { v.onloadeddata = ok; v.onerror = () => no(new Error("the phone couldn't open this video")); setTimeout(() => no(new Error('the video took too long to open')), 20000); });
+    const w = SPC_W, h = Math.max(16, Math.round(w * v.videoHeight / v.videoWidth)), c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d'), out = [];
+    for(let o = 0; o < L; o++){ const t = start + (Math.round(o * sf / FPS) + 0.5) / sf; if(v.duration && t > v.duration) break;
+      await new Promise(ok => { let tm = 0; const done = () => { clearTimeout(tm); v.removeEventListener('seeked', done); ok(); }; v.addEventListener('seeked', done); tm = setTimeout(done, 4000); v.currentTime = t; });
+      x.drawImage(v, 0, 0, w, h); const px = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+      for(let i = 0; i < w * h; i++) g[i] = px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114;
+      out.push(g); if(onp) onp(o + 1, L); }
+    return {frames:out, w, h};
+  } finally { URL.revokeObjectURL(v.src); }
+}
+// how far things moved between two frames: a grid of textured patches, each found again in the next frame (block
+// matching, coarse then exact); the 70th-percentile move, so a moving subject counts even when the background holds still
+function stepBetween(a, b, w, h){
+  const B = 10, R = 12, G = 12, mags = [];
+  const sad = (bx, by, dx, dy, st, best) => { let s = 0; for(let y = 0; y < B; y += st){ const ra = (by + y) * w + bx, rb = (by + y + dy) * w + bx + dx; for(let x = 0; x < B; x += st) s += Math.abs(a[ra + x] - b[rb + x]); if(s >= best) break; } return s; };
+  for(let by = R; by + B + R <= h; by += G) for(let bx = R; bx + B + R <= w; bx += G){
+    let m = 0, m2 = 0; for(let y = 0; y < B; y++) for(let x = 0; x < B; x++){ const p = a[(by + y) * w + bx + x]; m += p; m2 += p * p; }
+    if(m2 / (B * B) - (m / (B * B)) ** 2 < 30) continue; // flat patch: nothing to follow
+    let best = Infinity, cx = 0, cy = 0;
+    // a small cost per pixel moved: a patch on a plain edge matches anywhere along it, and then "didn't move" wins
+    const pen = (dx, dy, st) => (Math.abs(dx) + Math.abs(dy)) * (B / st) * (B / st) * 0.6;
+    for(let dy = -R; dy <= R; dy += 2) for(let dx = -R; dx <= R; dx += 2){ const p = pen(dx, dy, 2), s = sad(bx, by, dx, dy, 2, best - p) + p; if(s < best){ best = s; cx = dx; cy = dy; } }
+    let b2 = Infinity, fx = cx, fy = cy;
+    for(let dy = cy - 1; dy <= cy + 1; dy++) for(let dx = cx - 1; dx <= cx + 1; dx++){ if(Math.abs(dx) > R || Math.abs(dy) > R) continue; const p = pen(dx, dy, 1), s = sad(bx, by, dx, dy, 1, b2 - p) + p; if(s < b2){ b2 = s; fx = dx; fy = dy; } }
+    // sub-pixel: a parabola through the match and its neighbours on each axis
+    const sub = (m, z, p) => { const den = m - 2 * z + p; return den > 0 ? Math.max(-0.5, Math.min(0.5, (m - p) / (2 * den))) : 0; };
+    const ok = (dx, dy) => Math.abs(dx) <= R && Math.abs(dy) <= R, z = sad(bx, by, fx, fy, 1, Infinity);
+    const sx = ok(fx - 1, fy) && ok(fx + 1, fy) ? sub(sad(bx, by, fx - 1, fy, 1, Infinity), z, sad(bx, by, fx + 1, fy, 1, Infinity)) : 0;
+    const sy = ok(fx, fy - 1) && ok(fx, fy + 1) ? sub(sad(bx, by, fx, fy - 1, 1, Infinity), z, sad(bx, by, fx, fy + 1, 1, Infinity)) : 0;
+    mags.push(Math.hypot(fx + sx, fy + sy)); }
+  if(!mags.length) return {d:0, n:0}; mags.sort((p, q) => p - q); return {d:mags[Math.floor(mags.length * 0.7)], n:mags.length};
+}
+async function measureSpacing(){
+  const f = S.f, k = spcKey(); if(SPC[k]) return SPC[k];
+  const R = SPC[k] = {busy:true, got:0}; drawSpacing();
+  try{
+    const m = S.media[f.smVid] || {}, b = await blobOf(f.smVid); if(!b) throw new Error('the video is no longer on the phone');
+    const L = smoothPlan()[0].gen, {frames, w, h} = await grabFrames(b, smoothSpan().start, L, m.fps || FPS, (i, n) => { R.got = i; R.of = n; drawSpacing(); });
+    if(frames.length < 3) throw new Error('too few frames could be read');
+    const d = [], pts = []; for(let i = 0; i + 1 < frames.length; i++){ const r = stepBetween(frames[i], frames[i + 1], w, h); d.push(r.d * 1000 / w); pts.push(r.n); } // in 1/1000ths of the width
+    while(d.length < L - 1) d.push(d[d.length - 1] || 0);
+    R.d = d; R.pts = Math.round(pts.reduce((x, y) => x + y, 0) / pts.length);
+  }catch(e){ R.err = e.message; }
+  R.busy = false; if(spcKey()===k){ drawInputs(); drawCanvas(); drawGo(); } return R;
+}
+function spacingPlan(d, L, every, strength){
+  const C = [0]; for(let i = 0; i < L - 1; i++) C.push(C[i] + (d[i] || 0));
+  const sig = strength * 6, tot = C[L - 1]; let t = d.slice(0, L - 1);
+  if(sig > 0.1){ const r = Math.ceil(sig * 2.5); t = t.map((_, i) => { let s = 0, ws = 0; for(let k = -r; k <= r; k++){ const j = i + k; if(j < 0 || j >= L - 1) continue; const wt = Math.exp(-k * k / (2 * sig * sig)); s += wt * d[j]; ws += wt; } return s / ws; }); }
+  const ts = t.reduce((a, b) => a + b, 0) || 1, T = [0]; t = t.map(x => x * tot / ts); for(let i = 0; i < L - 1; i++) T.push(T[i] + t[i]);
+  const keys = [], skipped = [];
+  for(const o of smoothKeys(L, every)){
+    if(o===0 || o===L - 1){ keys.push([o, o]); continue; }
+    let s = o, bd = Infinity; for(let j = 0; j < L; j++){ const e = Math.abs(C[j] - T[o]) + 1e-3 * Math.abs(j - o); if(e < bd){ bd = e; s = j; } }
+    const step = Math.max(0.5, (T[Math.min(L - 1, o + 1)] - T[Math.max(0, o - 1)]) / 2);
+    if(Math.abs(C[s] - T[o]) > step * 0.5) skipped.push(o); else keys.push([o, s]); }
+  const med = i => { const w = d.slice(Math.max(0, i - 5), i + 6).sort((a, b) => a - b); return w[w.length >> 1]; };
+  const jumps = []; d.slice(0, L - 1).forEach((x, i) => { if(x > 3 && x > 2.5 * med(i)) jumps.push(i); });
+  return {keys, skipped, jumps, t, moved:keys.filter(([o, s]) => o!==s).length};
+}
+function currentSpacing(){ const f = S.f; if(!f.sm || !f.smSpc || !f.smVid) return null; const R = SPC[spcKey()]; if(!R || !R.d) return null;
+  return spacingPlan(R.d, smoothPlan()[0].gen, +f.smEvery || 4, +f.smEase); }
+function drawSpacing(){
+  const f = S.f, box = $('#smSpcBody'); if(!box) return; $('#smSpcSw').classList.toggle('on', !!f.smSpc); box.hidden = !f.smSpc || !f.smVid;
+  if(box.hidden) return; $('#smEase').value = f.smEase; $('#smEaseOut').textContent = (+f.smEase).toFixed(2);
+  const R = SPC[spcKey()], n = $('#smSpcNote'), cv = $('#smChart');
+  if(!R){ n.className = 'note'; n.textContent = 'Tracking points through the window…'; clearTimeout(spcT); spcT = setTimeout(() => { if(!SPC[spcKey()] && S.f.sm && S.f.smSpc) measureSpacing(); }, 700); return; } // waits for the start slider to settle
+  if(R.busy){ n.textContent = 'Tracking points through the window… ' + (R.of ? R.got + ' of ' + R.of + ' frames' : ''); return; }
+  if(R.err){ n.className = 'note warn'; n.textContent = "Couldn't measure the spacing (" + R.err + "), so it pins the plain every-" + (+f.smEvery || 4) + ' grid.'; return; }
+  n.className = 'note'; const L = smoothPlan()[0].gen, P = spacingPlan(R.d, L, +f.smEvery || 4, +f.smEase), d = R.d.slice(0, L - 1);
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 320, H = 110; cv.width = W * dpr; cv.height = H * dpr; const x = cv.getContext('2d'); x.scale(dpr, dpr); x.clearRect(0, 0, W, H);
+  const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim(), mx = Math.max(1, ...d, ...P.t) * 1.1, bw = W / (L - 1), y = v => (H - 16) - v / mx * (H - 22);
+  const J = new Set(P.jumps); d.forEach((v, i) => { x.fillStyle = J.has(i) ? css('--bad') : css('--dim'); x.fillRect(i * bw + 0.5, y(v), Math.max(1, bw - 1), (H - 16) - y(v)); });
+  x.strokeStyle = css('--accent'); x.lineWidth = 2; x.beginPath(); P.t.forEach((v, i) => { const px = (i + 0.5) * bw; i ? x.lineTo(px, y(v)) : x.moveTo(px, y(v)); }); x.stroke();
+  P.keys.forEach(([o, s]) => { x.fillStyle = o===s ? css('--good') : css('--cyan'); x.beginPath(); x.arc(o * bw, H - 7, 3, 0, 7); x.fill(); });
+  P.skipped.forEach(o => { x.strokeStyle = css('--bad'); x.lineWidth = 1.5; x.beginPath(); x.moveTo(o * bw - 3, H - 10); x.lineTo(o * bw + 3, H - 4); x.moveTo(o * bw + 3, H - 10); x.lineTo(o * bw - 3, H - 4); x.stroke(); });
+  n.innerHTML = esc('Tracked about ' + R.pts + ' points per frame. ' + (P.jumps.length ? P.jumps.length + ' jump' + (P.jumps.length > 1 ? 's' : '') + ' (red bars). ' : 'No jumps found. ')
+    + (P.moved ? P.moved + ' pinned frame' + (P.moved > 1 ? 's' : '') + ' re-timed (blue dots) and ' : '') + (P.skipped.length ? P.skipped.length + ' left for MiniMax to paint (red ✕). ' : '')
+    + P.keys.length + ' pinned in all.') + ' <span style="color:var(--dim)">Bars: how far things move each frame. Pink line: the eased spacing it aims for.</span>';
+}
 // ---------- references: what's on, and the <Picture n> / <Video n> / <Audio n> each one is called ----------
 function refsOn(){
   const f = S.f; if(!f.ref || f.sm) return {imgs:[], vids:[], auds:[], follow:[]};
@@ -560,7 +658,7 @@ function busySecs(url){ // what's ahead on that PC: our own pieces by their esti
 }
 function estSecs(job, url){ // Render: ~24 s a step for a 5 s 864x480 clip, more with size and length; Main 1.26x
   let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20);
-  for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? smoothKeys(p.gen, job.sm.every).length * (job.w / 32) * (job.h / 32) : 0);
+  for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? (job.sm.keys ? job.sm.keys.length : smoothKeys(p.gen, job.sm.every).length) * (job.w / 32) * (job.h / 32) : 0);
     s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1); }
   return s * pcSpeed(url) + 15 * job.pieces.length;
 }
@@ -617,8 +715,9 @@ function pieceGraph(t, i, oi, names){
     const sm = t.sm, sf = sm.fps || FPS, lv = add('LoadVideo', {file:names[sm.vid]});
     const sl = add('Video Slice', {video:[lv, 0], start_time:sm.start, duration:Math.round((L / FPS + 2 / sf) * 1000) / 1000, strict_duration:false});
     const gc = add('GetVideoComponents', {video:[sl, 0]});
-    for(const k of smoothKeys(L, sm.every)){ const fr = add('ImageFromBatch', {image:[gc, 0], batch_index:Math.round(k * sf / FPS), length:1});
-      cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:k}), 0]; guides++; }
+    // pairs [output frame, source frame]: the plain grid, or the 📐 eased spacing (a source frame can land on a different output frame)
+    for(const [o, s] of (sm.keys || smoothKeys(L, sm.every).map(k => [k, k]))){ const fr = add('ImageFromBatch', {image:[gc, 0], batch_index:Math.round(s * sf / FPS), length:1});
+      cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
     if(sm.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[gc, 1], frame_idx:0}), 0];
   }
   // a soundtrack the clip follows in time: this piece's slice of it, anchored where the piece's new frames start
@@ -667,7 +766,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 }
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
-  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS}; })() : null;
+  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(); return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, keys:P ? P.keys : null}; })() : null;
   return {sm, model:f.model, turbo:f.turbo, lora:f.lora, loraStr:f.loraStr, words:f.lora ? f.loraWords.trim() : '', w, h, steps:f.steps,
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => ({id:r.id})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow})), auds:R.auds.map(r => ({id:r.id})), follow:R.follow.map(r => ({id:r.id})),
@@ -676,6 +775,7 @@ function snapshot(){ // the form, frozen into a take
 }
 function whyNot(){
   const f = S.f; if(f.sm && !f.smVid) return 'Pick the video to smooth';
+  if(f.sm && f.smSpc && (SPC[spcKey()] || {busy:true}).busy) return 'Measuring the spacing…';
   if(!f.prompt.trim() && !f.sm) return 'Write a prompt first';
   if(!families().length) return S.pcs.some(p => pcOf(p.url).online) ? 'No MiniMax H3 model found on the PCs' : "Can't reach the PCs. Is Tailscale on?";
   if(f.fl && !f.first) return 'Add a first frame, or turn First / last frame off';
@@ -819,7 +919,7 @@ async function saveVideo(t){
 }
 function useAgain(t){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, lora:t.lora || '', loraStr:t.loraStr || 1, loraWords:t.words || '', steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
-  f.sm = !!t.sm; if(t.sm){ Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
+  f.sm = !!t.sm; if(t.sm){ Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => ({id:r.id, on:true})); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow})); f.auds = t.auds.map(r => ({id:r.id, on:true})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   save(); drawAll(); window.scrollTo({top:0, behavior:'smooth'}); toast('Its settings are back in the form');
@@ -864,7 +964,8 @@ function drawInputs(){
   const sMax = sv && sv.dur ? Math.max(0, Math.floor((sv.dur - 0.25) * 20) / 20) : 0; $('#smStart').max = sMax; $('#smStart').value = Math.min(sp.start, sMax); $('#smStart').disabled = !sMax; $('#smStartOut').textContent = fmtS(sp.start);
   $$('#smEverySeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smEvery || 4)));
   $('#smSoundSw').classList.toggle('on', !!f.smSound && !(sv && sv.sound===false)); $('#smSoundSw').hidden = !!(sv && sv.sound===false);
-  if(f.sm){ const L = smoothPlan()[0].gen, n = smoothKeys(L, +f.smEvery || 4).length;
+  drawSpacing();
+  if(f.sm){ const L = smoothPlan()[0].gen, P = currentSpacing(), n = P ? P.keys.length : smoothKeys(L, +f.smEvery || 4).length;
     $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s). The prompt is optional: describe the action to steer the in-betweens.'
       + (sv.fps && Math.abs(sv.fps - FPS) > 0.1 ? ' Your clip is ' + sv.fps + ' fps; MiniMax makes 24 fps, so the nearest frames are used.' : '') + (sv.sound===false ? ' This clip has no sound.' : '')
       : 'Pick a video. It goes to the PC as it is, and the frames are taken from it there.'; }
@@ -1060,6 +1161,8 @@ $('#pieceToggle').onclick = () => { $('#pieceTexts').hidden = !$('#pieceTexts').
 $('#pieceTexts').addEventListener('input', e => { const i = e.target.dataset.pt; if(i==null) return; S.f.pieceText[+i] = e.target.value; save(); });
 $('#flSw').onclick = () => { S.f.fl = !S.f.fl; save(); drawAll(); };
 $('#smSw').onclick = () => { S.f.sm = !S.f.sm; save(); drawAll(); };
+$('#smSpcSw').onclick = () => { S.f.smSpc = !S.f.smSpc; save(); drawInputs(); drawGo(); };
+$('#smEase').oninput = e => { S.f.smEase = +e.target.value; save(); drawSpacing(); drawInputs(); };
 $('#smSoundSw').onclick = () => { S.f.smSound = !S.f.smSound; save(); drawInputs(); };
 $('#smStart').oninput = e => { S.f.smStart = +e.target.value; save(); drawInputs(); drawShot(); };
 $('#smEverySeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smEvery = +b.dataset.v; save(); drawAll(); };
@@ -1099,6 +1202,6 @@ drawAll();
 pingAll().then(() => { drawAll(); tick(); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
-window.H3 = {S, smoothPlan, smoothKeys, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

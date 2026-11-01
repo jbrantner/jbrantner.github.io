@@ -3,7 +3,10 @@
 // (LoadVideo → Video Slice → GetVideoComponents), every Nth frame goes through ImageFromBatch into its own
 // MiniMaxH3AddGuide at the right frame, plus the last frame, and the sound when the clip has it.
 // Input names are the ones in ComfyUI 0.41.3 (Render): comfy_extras/nodes_video.py, nodes_images.py, nodes_minimax_h3.py.
-// Run: NODE_PATH=$(npm root -g) MEDIA=<folder with v24.mp4 (24 fps + sound), v30.mp4 (30 fps, no sound), v2997.mov> node tests/t_smooth.js
+// Run: NODE_PATH=$(npm root -g) MEDIA=<folder with v24.mp4 (24 fps + sound), v30.mp4 (30 fps, no sound), v2997.mov, jump.webm> node tests/t_smooth.js
+// jump.webm (a 6 px/frame pan with a 40 px jump at frame 60; VP9 so headless Chromium can decode it):
+//   ffmpeg -f lavfi -i testsrc2=size=1920x480:rate=1 -frames:v 1 big.png
+//   ffmpeg -loop 1 -framerate 24 -i big.png -vf "crop=864:480:x='if(lt(n\,60)\,n*6\,n*6+40)':y=0,format=yuv420p" -frames:v 150 -c:v libvpx-vp9 -b:v 2M jump.webm
 const { chromium } = require('playwright');
 const path = require('path'), http = require('http'), fs = require('fs');
 const MEDIA = process.env.MEDIA, PC = 'http://render.test';
@@ -52,6 +55,7 @@ const ALLOWED = {'Video Slice':['video','start_time','duration','strict_duration
 
   // ---- the form ----
   await page.click('#smSw');
+  await page.evaluate(() => { H3.S.f.smSpc = false; }); // the plain grid first; 📐 spacing is checked at the end
   ok(await page.isHidden('#flSw') && await page.isHidden('#refSw'), 'smoothing hides first/last frame and references');
   ok(/Pick the video/.test(await page.textContent('#goWhy')), 'asks for the video first: ' + await page.textContent('#goWhy'));
   const pick = async file => { const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-add="smv"]')]); await fc.setFiles(path.join(MEDIA, file)); await page.waitForTimeout(1500); };
@@ -90,6 +94,37 @@ const ALLOWED = {'Video Slice':['video','start_time','duration','strict_duration
   ok(gd2.length===63 && !gd2.some(n => n.inputs.audio), '63 keyframes (every 2nd of 124 + the last), no sound guide');
   const k10 = gd2.find(n => n.inputs.frame_idx===10); ok(g2[k10.inputs.image[0]].inputs.batch_index===13, '30 fps source: output frame 10 takes source frame 13 (nearest in time)');
   const rv = n2.find(n => n.class_type==='MiniMaxH3ReferenceToVideo'); ok(rv.inputs.height > rv.inputs.width, 'portrait clip → portrait canvas ' + rv.inputs.width + 'x' + rv.inputs.height);
+
+  // ---- 📐 spacing: a pan of 6 px a frame with a 40 px jump between frames 59 and 60 (VP9, so headless Chromium can decode it) ----
+  const plan = await page.evaluate(() => { const d = Array(123).fill(7); d[59] = 53; return H3.spacingPlan(d, 124, 4, 0.5); });
+  console.log('plan keys', JSON.stringify(plan.keys), 'skipped', plan.skipped, 'jumps', plan.jumps);
+  ok(plan.jumps.length===1 && plan.jumps[0]===59, 'the jump is found at frame 59→60');
+  ok(plan.skipped.length >= 1 && plan.skipped.every(o => o >= 48 && o <= 72), 'slots inside the eased jump are left for MiniMax: ' + plan.skipped);
+  ok(plan.keys.every(([o, s], i) => i===0 || (o > plan.keys[i - 1][0] && s >= plan.keys[i - 1][1])), 'pinned frames stay in order');
+  ok(plan.keys.filter(([o, s]) => o < 36 || o > 84).every(([o, s]) => Math.abs(o - s) <= 1), 'far from the jump, frames stay (nearly) where they were');
+  const still = await page.evaluate(() => H3.spacingPlan(Array(123).fill(0), 124, 4, 0.5));
+  ok(still.skipped.length===0 && still.keys.every(([o, s]) => o===s), 'a still clip keeps the plain grid');
+  const zero = await page.evaluate(() => { const d = Array(123).fill(7); d[59] = 53; return H3.spacingPlan(d, 124, 4, 0); });
+  ok(zero.keys.every(([o, s]) => o===s) && zero.skipped.length===0, 'easing 0 = the plain grid');
+
+  await page.click('[data-rm="smVid"]'); await page.evaluate(() => { H3.S.f.smSpc = true; H3.S.f.smEase = 0.5; H3.S.f.seconds = 5; });
+  await page.click('#smEverySeg [data-v="4"]');
+  await pick('jump.webm');
+  await page.evaluate(() => { const m = H3.S.media[H3.S.f.smVid]; m.dur = m.dur || 6.25; m.fps = 24; m.w = 864; m.h = 480; H3.S.f.smStart = 0; });
+  await page.evaluate(() => H3.S.f.smVid && document.querySelector('#smSpcSw') && window.dispatchEvent(new Event('resize')));
+  await page.click('#smEverySeg [data-v="4"]');
+  ok(/Measuring/.test(await page.textContent('#goWhy')) || await page.isDisabled('#goBtn'), 'Render waits while it measures');
+  await page.waitForFunction(() => { const r = H3.SPC[H3.spcKey()]; return r && !r.busy; }, null, {timeout:60000});
+  const R = await page.evaluate(() => H3.SPC[H3.spcKey()]);
+  console.log('measured', R.err || '', JSON.stringify((R.d || []).slice(55, 64).map(x => Math.round(x))), 'points', R.pts, 'note:', await page.textContent('#smSpcNote'));
+  ok(R.d && Math.abs(R.d[30] - 6.9) < 2.5 && R.d[59] > 4 * R.d[30], 'measured: ~7/1000 of the width a frame, and the jump at 59 (' + (R.d ? R.d[30].toFixed(1) + ' vs ' + R.d[59].toFixed(1) : R.err) + ')');
+  ok(/1 jump/.test(await page.textContent('#smSpcNote')), 'note reports the jump');
+  await page.screenshot({path:path.join(MEDIA, 'spacing.png'), clip:await (await page.$('#smBody')).boundingBox()});
+  await page.click('#goBtn'); await page.waitForTimeout(1500);
+  const g3 = sent[sent.length - 1], gd3 = Object.values(g3).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image);
+  const pairs = gd3.map(n => [n.inputs.frame_idx, g3[n.inputs.image[0]].inputs.batch_index]);
+  console.log('sent pairs', JSON.stringify(pairs));
+  ok(pairs.length < 32 && pairs.some(([o, s]) => o!==s) && pairs[0][0]===0 && pairs[pairs.length - 1][0]===123, 'the graph pins the eased frames (some re-timed, some left out), first and last kept');
 
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
