@@ -27,6 +27,17 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
   becomes its own tinted mannequin, hidden outside the frames it was seen in; a chip per person shows or hides it (kept with the
   clip). If SAM 3.1 isn't on the PC, ⬇ Get SAM 3.1 asks Render Deck's helper to download it (1.7 GB, Comfy-Org/sam3.1) once.
   The ground's distance fix is the middle of what each person needs; Orbit and Front centre on the people showing.
+- 🏞 Build the whole place (2026-11-01, Jordan's "sword fight on a bridge"): a second job on the frames the motion was read from (same
+  inputs, so ComfyUI reuses them): up to 8 frames spread over the clip → `ImageBatch` → `DA3Inference` (depth_anything_3_base, multiview,
+  first frame as the anchor; cam_dec, ray_pose if that fails) → one `DA3GeometryToMesh` + `SaveGLB` per frame (RenderDeck/mocap/place).
+  The page sizes the place so its first frame matches MoGe's (metres) and uses it instead of MoGe's backdrop, ground included.
+- 🗡 Props: scrub to a frame where it's clear, type a name ("sword") and ＋ Find it here. One job: that frame → `SAM3_Detect` (SAM 3.1,
+  the word) → `MaskToImage`/`SaveImage` (the outline) + MoGe's 3D surface of the frame (`SaveGLB`, RenderDeck/mocap/props/depth) +
+  `ImageCropToMask` → MoGe lens of the cut-out → `Pixal3DConditioning` → Pixal3D/TRELLIS.2 (as ComfyUI's Pixal3D template, 60k faces,
+  baked texture) → `SaveGLB`. The page sizes it to the outline at the depth MoGe measured there (or the nearest wrist's), facing the
+  camera that saw it, and a wrist on or within 25 cm of it holds it (it rides on that wrist bone). 👁 hides, ✕ removes.
+- Missing models (SAM 3.1, Depth Anything 3, Pixal3D + DINOv3 + the TRELLIS.2 VAEs) get one ⬇ button that downloads them through
+  Render Deck's helper (Hugging Face, Comfy-Org repos).
 - Playback: the GLB's frame rate comes from its keyframe times (frames where nobody was found are left out and blended over).
   🚶 Moves keeps the camera translation, 📍 In place drops it; 📌 Feet on floor stands each frame's lowest joint on the floor,
   🦘 Free only the lowest of the clip (jumps). Head size scales bone_113. The video plays beside it and drives the clock.
