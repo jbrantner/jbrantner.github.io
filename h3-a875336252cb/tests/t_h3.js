@@ -61,6 +61,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     ok(!types(g1).includes('MiniMaxH3MotionContext') && types(g1).includes('MiniMaxH3MotionContextSaveLatent'), 'piece 1: no context in, latent saved');
     ok(types(g2).includes('MiniMaxH3MotionContext') && types(g2).includes('MiniMaxH3MotionContextTrim') && types(g2).filter(t => t==='MiniMaxH3AddGuide').length===1, 'piece 2: Motion Context + Trim, soundtrack only');
     ok(types(g3).filter(t => t==='MiniMaxH3AddGuide').length===2, 'piece 3: last-frame guide + soundtrack');
+    const jn = Object.values(g3).find(n => n.class_type==='RenderDeckH3Join');
+    ok(!types(g1).includes('RenderDeckH3Join') && !types(g2).includes('RenderDeckH3Join') && jn && jn.inputs.before===2 && Array.isArray(jn.inputs.video), 'the last piece joins pieces 1-2 onto itself as its final step');
     const rv = Object.values(g1).find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
     ok(rv.inputs['ref_videos.ref_video_0'] && rv.inputs['ref_video_audios.ref_video_audio_0'] && rv.inputs['ref_audios.ref_audio_0'] && rv.inputs['ref_images.ref_image_1'], 'piece 1 refs: picture, first frame as picture 2, video + sound, voice');
     ok(/^<Picture 2> is the first frame/.test(rv.inputs.prompt), 'hybrid model is told which picture is the first frame');

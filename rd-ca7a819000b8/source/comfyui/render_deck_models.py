@@ -2372,5 +2372,55 @@ class RenderDeckUpscaleColorFix:
         return (torch.stack(out).to(image.dtype),)
 
 
-NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix}
-NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)'}
+class RenderDeckH3Join:
+    """H3 Deck: the last piece of a split clip joins every piece as the final step of its own render, so the
+    stitch never waits in ComfyUI's queue behind other renders. The earlier pieces are found by name when it runs
+    (not when it is queued, which is why a Load Video node can't do it): the newest piece_NN_*.mp4 in the take's folder."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'video': ('VIDEO',), 'folder': ('STRING', {'default': ''}), 'before': ('INT', {'default': 1, 'min': 1, 'max': 99}),
+                             'filename_prefix': ('STRING', {'default': 'H3Deck/joined'})}}
+
+    RETURN_TYPES = ()
+    FUNCTION = 'join'
+    OUTPUT_NODE = True
+    CATEGORY = 'Render Deck'
+
+    def join(self, video, folder, before, filename_prefix):
+        # never fails the render: if joining goes wrong the piece is still kept, and H3 Deck joins it the old way
+        try:
+            return self._join(video, folder, before, filename_prefix)
+        except Exception as e:
+            print('[Render Deck] H3 join:', e)
+            return {'ui': {'h3join_error': [str(e)]}}
+
+    def _join(self, video, folder, before, filename_prefix):
+        from comfy_api.latest import InputImpl, Types
+        root = os.path.realpath(folder_paths.get_output_directory())
+        sub = folder.replace('\\', '/').strip('/')
+        # the take's folder can sit under either PC's subfolder (both PCs share the Dropbox output folder)
+        cands = [sub, _pc() + '/' + sub] + [x + '/' + sub for x in sorted(os.listdir(root)) if os.path.isdir(os.path.join(root, x))]
+        dirs = []
+        for cand in cands:
+            d = os.path.realpath(os.path.join(root, cand))
+            if d.startswith(root + os.sep) and os.path.isdir(d) and d not in dirs:
+                dirs.append(d)
+        if not dirs:
+            raise FileNotFoundError('no folder %s in the output folder' % folder)
+        parts = []
+        for i in range(1, int(before) + 1):
+            tag = 'piece_%02d_' % i
+            files = [os.path.join(d, f) for d in dirs for f in os.listdir(d) if f.startswith(tag) and f.lower().endswith('.mp4')]
+            if not files:
+                raise FileNotFoundError('piece %d is missing in %s' % (i, folder))
+            parts.append(InputImpl.VideoFromFile(max(files, key=os.path.getmtime)))
+        joined = InputImpl.VideoFromList(parts + [video], None, Types.VideoCodec.AUTO)
+        out, filename, counter, subfolder, _ = folder_paths.get_save_image_path(filename_prefix, folder_paths.get_output_directory())
+        name = '%s_%05d_.mp4' % (filename, counter)
+        joined.save_to(os.path.join(out, name), format=Types.VideoContainer('mp4'), codec=Types.VideoCodec.AUTO)
+        return {'ui': {'images': [{'filename': name, 'subfolder': subfolder, 'type': 'output'}], 'animated': (True,)}}
+
+
+NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix, 'RenderDeckH3Join': RenderDeckH3Join}
+NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)', 'RenderDeckH3Join': 'Join the H3 pieces (Render Deck)'}
