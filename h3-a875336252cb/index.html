@@ -262,6 +262,8 @@ let S = load();
 function load(){
   let s = {}; try{ s = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }catch(e){}
   if(window.H3_PCS) s.pcs = window.H3_PCS; // tests
+  // a take whose sending broke off (nothing reached ComfyUI) shows as stopped, so ↻ Try again can send it
+  (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
     model:'', turbo:true, lora:'', loraStr:1, loraWords:'', aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}}, s.f || {});
@@ -603,7 +605,9 @@ async function upload(url, id){
   const b = await blobOf(id), m = S.media[id]; if(!b) throw new Error('"' + (m ? m.name : 'a reference') + '" is no longer on the phone: add it again');
   const ext = (m.name.match(/\.[a-z0-9]+$/i) || [m.kind==='img' ? '.png' : m.kind==='vid' ? '.mp4' : '.wav'])[0].toLowerCase();
   const fd = new FormData(); fd.append('image', b, 'h3deck_' + id + ext); fd.append('overwrite', 'true'); fd.append('type', 'input'); fd.append('subfolder', 'h3deck');
-  const r = await fetch(url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('upload to ' + pcName(url) + ' failed (' + r.status + ')');
+  // one more go when it fails: a phone upload can arrive empty when the signal drops (Main 2026-11-01)
+  let r; try{ r = await fetch(url + '/upload/image', {method:'POST', body:fd}); }catch(e){} if(!r || !r.ok) r = await fetch(url + '/upload/image', {method:'POST', body:fd});
+  if(!r.ok) throw new Error('upload to ' + pcName(url) + ' failed (' + r.status + ')');
   const j = await r.json(); S.up[k] = (j.subfolder ? j.subfolder + '/' : '') + j.name; save(); return S.up[k];
 }
 async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the few-second join shouldn't wait behind other takes)
@@ -633,7 +637,7 @@ function whyNot(){
 async function render(){
   const why = whyNot(); if(why){ toast(why); return; }
   const btn = $('#goBtn'); btn.disabled = true; btn.textContent = 'Sending…';
-  const extra = {}; let sent = 0;
+  const extra = {}; let sent = 0, cur = null;
   try{
     const base = +S.f.seed || 0;
     for(let k = 0; k < (+S.f.takes || 1); k++){
@@ -641,10 +645,12 @@ async function render(){
       t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
       const url = pickPc(t, extra); if(!url) throw new Error('no PC can take it right now');
       t.pc = url; extra[url] = (extra[url] || 0) + estSecs(t, url);
-      S.takes.unshift(t); drawTakes();
-      await sendPieces(t, 0); sent++;
+      S.takes.unshift(t); drawTakes(); cur = t;
+      await sendPieces(t, 0); sent++; cur = null;
     }
-  }catch(e){ toast('Not sent: ' + e.message, 6000); }
+  }catch(e){ toast('Not sent: ' + e.message, 6000);
+    // the take stays on the list as stopped, with why and ↻ Try again, not stuck on "Sending"
+    if(cur){ const p = cur.pieces.find(x => x.state!=='queued' && x.state!=='done') || cur.pieces[0]; p.state = 'failed'; p.err = 'not sent: ' + e.message; cur.state = 'failed'; } }
   btn.disabled = false; drawGo(); save(); drawTakes(); if(sent) toast(sent > 1 ? sent + ' takes sent' : 'Sent to ' + pcName(S.takes[0].pc));
 }
 async function sendPieces(t, from){
