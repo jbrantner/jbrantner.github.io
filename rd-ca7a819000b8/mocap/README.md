@@ -21,6 +21,12 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
   camera's line of sight (all frames alike, x0.5-2) so her feet meet it on frame 1. A result with a ground starts on 🦘 Free, so
   climbs show as real height. 🏞 Place shows or hides the scene; Front looks from the video camera's direction.
 - 🎯 Orbit her (on by default): the orbit pivot follows her hips.
+- Several people (2026-11-01, fights and hugs): 👥 2 / 3 / 4 swaps RT-DETR for SAM 3.1's video tracker
+  (`CheckpointLoaderSimple` sam3.1_multiplex_fp16 → `CLIPTextEncode` "person" → `SAM3_VideoTrack` max_objects N, detect every
+  frame) feeding `SAM3DBody_Predict` track_data, and `BuildPoseFile` keeps every track (track_index -1). Each track00, track01…
+  becomes its own tinted mannequin, hidden outside the frames it was seen in; a chip per person shows or hides it (kept with the
+  clip). If SAM 3.1 isn't on the PC, ⬇ Get SAM 3.1 asks Render Deck's helper to download it (1.7 GB, Comfy-Org/sam3.1) once.
+  The ground's distance fix is the middle of what each person needs; Orbit and Front centre on the people showing.
 - Playback: the GLB's frame rate comes from its keyframe times (frames where nobody was found are left out and blended over).
   🚶 Moves keeps the camera translation, 📍 In place drops it; 📌 Feet on floor stands each frame's lowest joint on the floor,
   🦘 Free only the lowest of the clip (jumps). Head size scales bone_113. The video plays beside it and drives the clock.

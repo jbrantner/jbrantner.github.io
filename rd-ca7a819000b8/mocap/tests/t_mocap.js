@@ -24,19 +24,23 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   await page.goto('https://app.test/maker.html');
   const makeBody = o => page.evaluate(async o => {
     const THREE = await import('three'), {GLTFExporter} = await import('three/addons/exporters/GLTFExporter.js');
-    const track = new THREE.Group(); track.name = 'track00'; const bones = [];
+    const root = new THREE.Scene(), anim = [];
+    for(let k = 0; k < (o.people || 1); k++){
+    // (o.people: more tracks, each standing 1 m further along x; the second one only from frame 10 on, as if they walked in)
+    const track = new THREE.Group(); track.name = 'track' + String(k).padStart(2, '0'); const bones = [];
     for(let i = 1; i <= 127; i++){ const b = new THREE.Bone(); b.name = 'bone_' + String(i).padStart(3, '0'); bones.push(b); }
     const B = n => bones[n - 1], tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (o.tilt || 0) * Math.PI / 180); B(1).position.set(0, 1, 0).applyQuaternion(tilt); B(1).quaternion.copy(tilt); track.add(B(1)); B(2).position.set(0.1, 0, 0); B(1).add(B(2)); B(3).position.set(0, -0.45, 0); B(2).add(B(3)); B(4).position.set(0, -0.45, 0); B(3).add(B(4));
     B(113).position.set(0, 0.6, 0); B(1).add(B(113)); for(let i = 5; i <= 127; i++) if(i!==113) B(1).add(B(i));
     const geo = new THREE.BoxGeometry(0.3, 1.7, 0.2, 2, 12, 2); geo.translate(0, 0.85, 0); const pos = geo.attributes.position, si = [], sw = [];
     for(let i = 0; i < pos.count; i++){ const y = pos.getY(i); si.push(y > 1.45 ? 112 : y < 0.55 ? 2 : y < 1 ? 1 : 0, 0, 0, 0); sw.push(1, 0, 0, 0); }
     geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
-    const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial()); mesh.name = 'body'; track.add(mesh); track.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(bones));
-    const root = new THREE.Scene(); root.add(track); const times = [], kq = [], kp = [];
-    for(let f = 0; f < 30; f++){ if(f===5) continue; times.push(f / 15); const a = Math.sin(f / 29 * Math.PI) * 1.2, q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), a);  kq.push(...q.toArray());
+    const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial()); mesh.name = track.name + '_mesh'; track.add(mesh); track.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(bones));
+    root.add(track); const times = [], kq = [], kp = [];
+    for(let f = k ? 10 : 0; f < 30; f++){ if(f===5) continue; times.push(f / 15); const a = Math.sin(f / 29 * Math.PI) * 1.2, q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), a);  kq.push(...q.toArray());
       // (track00 in camera space: o.at = where she stands, o.climb = metres she goes up, tilted like the camera, all o.far times too far away)
-      const w = o.at ? new THREE.Vector3(o.at[0] + (o.slide ? f / 29 * 0.6 : 0), o.at[1] + (o.climb || 0) * f / 29, o.at[2]) : new THREE.Vector3(f / 29 * 0.6, 0, 0); if(o.at) w.applyQuaternion(tilt).multiplyScalar(o.far || 1); kp.push(w.x, w.y, w.z); }
-    const clip = new THREE.AnimationClip('motion', -1, [new THREE.QuaternionKeyframeTrack('bone_003.quaternion', times, kq), new THREE.VectorKeyframeTrack('track00.position', times, kp)]);
+      const w = o.at ? new THREE.Vector3(o.at[0] + (o.slide ? f / 29 * 0.6 : 0), o.at[1] + (o.climb || 0) * f / 29, o.at[2]) : new THREE.Vector3(f / 29 * 0.6, 0, 0); w.x += k; if(o.at) w.applyQuaternion(tilt).multiplyScalar(o.far || 1); kp.push(w.x, w.y, w.z); }
+    if(!k) anim.push(new THREE.QuaternionKeyframeTrack('bone_003.quaternion', times, kq)); anim.push(new THREE.VectorKeyframeTrack(track.name + '.position', times, kp)); }
+    const clip = new THREE.AnimationClip('motion', -1, anim);
     const out = await new GLTFExporter().parseAsync(root, {binary:true, animations:[clip]}); return [...new Uint8Array(out)]; }, o).then(a => Buffer.from(a));
   // MoGe's mesh of the place: a ground 1.5 m below a camera looking 15° down, and a wall 5 m away (both in camera space)
   const makeScene = () => page.evaluate(async () => { const THREE = await import('three'), {GLTFExporter} = await import('three/addons/exporters/GLTFExporter.js');
@@ -45,15 +49,17 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
     for(const geo of [ground, wall]){ const pa = geo.attributes.position, v = new THREE.Vector3(); for(let i = 0; i < pa.count; i++){ v.fromBufferAttribute(pa, i).applyQuaternion(tilt); pa.setXYZ(i, v.x, v.y, v.z); } g.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color:0x888888}))); }
     const out = await new GLTFExporter().parseAsync(g, {binary:true}); return [...new Uint8Array(out)]; }).then(a => Buffer.from(a));
   let BODY = await makeBody({}), SCENE = null;
-  const H = {'access-control-allow-origin':'*'}, GRAPHS = [], UPLOADS = []; let vhsFail = false, missFirst = false;
+  const H = {'access-control-allow-origin':'*'}, GRAPHS = [], UPLOADS = [], DL = []; let vhsFail = false, missFirst = false;
   const DEF = {SAM3DBody_Loader:{input:{required:{model_file:[['sam_3d_body_dinov3_int8_convrot.safetensors']]}}}, SAM3DBody_Predict:{input:{required:{image:['IMAGE']}}}, BuildPoseFile:{input:{required:{}}},
     UNETLoader:{input:{required:{unet_name:[['z_image_turbo_bf16.safetensors', 'rt_detr_v4-x-hgnet_fp32.safetensors']]}}}, LoadMoGeModel:{input:{required:{model_name:['COMBO', {options:['moge_2_vitl_normal_fp16.safetensors']}]}}},
-    SAM3DBody_Smooth:{input:{required:{}}},
+    SAM3DBody_Smooth:{input:{required:{}}}, SAM3_VideoTrack:{input:{required:{}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['iriselTouchIL_v10.safetensors']]}}},
     VHS_LoadVideo:{input:{required:{video:[['a.mp4']], force_rate:['FLOAT', {default:0}], custom_width:['INT', {default:0}], custom_height:['INT', {default:0}], frame_load_cap:['INT', {default:0}], skip_first_frames:['INT', {default:0}], select_every_nth:['INT', {default:1}]}, optional:{meta_batch:['VHS_BatchManager'], vae:['VAE'], format:[['AnimateDiff', 'None']]}}}};
   await page.route('https://render.test/**', async r => { const u = new URL(r.request().url()), J = b => r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(b) });
     const oi = u.pathname.match(/^\/object_info\/(.+)$/); if(oi){ const c = decodeURIComponent(oi[1]); return J(DEF[c] ? {[c]:DEF[c]} : {}); }
     if(u.pathname==='/upload/image'){ const m = r.request().postDataBuffer().toString('latin1').match(/filename="([^"]+)"/); UPLOADS.push(m && m[1]); return J({name:m && m[1]}); }
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData())); return J({prompt_id:'p' + GRAPHS.length}); }
+    if(u.pathname==='/renderdeck/download'){ DL.push(JSON.parse(r.request().postData())); return J({name:'sam3.1_multiplex_fp16.safetensors'}); }
+    if(u.pathname==='/renderdeck/jobs'){ const done = DL.length > 0; if(done) DEF.CheckpointLoaderSimple.input.required.ckpt_name[0].push('sam3.1_multiplex_fp16.safetensors'); return J({jobs:DL.length ? [{name:'sam3.1_multiplex_fp16.safetensors', status:'done', done:1, total:1}] : []}); }
     if(u.pathname==='/queue') return J({queue_running:[], queue_pending:[]});
     const hi = u.pathname.match(/^\/history\/(\w+)$/); if(hi){ const g = GRAPHS[+hi[1].slice(1) - 1].prompt, ks = k => Object.keys(g).filter(n => g[n].class_type===k), err = (t, m) => J({[hi[1]]:{status:{status_str:'error', completed:false, messages:[['execution_error', {node_type:t, exception_message:m}]]}}});
       if(vhsFail && ks('VHS_LoadVideo').length) return err('VHS_LoadVideo', 'Could not open the video');
@@ -97,7 +103,7 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   ok(a.fps===15 && a.F===30 && a.n==='29' && a.pip, 'the animation plays: 30 frames at 15 fps (from the keyframe times, with the missed frame left out), timeline 0-29, the video beside it: ' + JSON.stringify(a));
   // scrub: the knee bends, she stays on the floor, and moves sideways
   const at = f => page.evaluate(f => { window.MOCAP.setT(f / 15); const A = window.MOCAP.A;
-    const p = n => { const e = A.bn[n].matrixWorld.elements; return [e[12], e[13], e[14]]; }; return {hip:p('bone_001'), ank:p('bone_004'), scrub:document.querySelector('#scrub').value, lab:document.querySelector('#tlab').textContent}; }, f);
+    const p = n => { const e = A.P[0].bn[n].matrixWorld.elements; return [e[12], e[13], e[14]]; }; return {hip:p('bone_001'), ank:p('bone_004'), scrub:document.querySelector('#scrub').value, lab:document.querySelector('#tlab').textContent}; }, f);
   ok(await page.evaluate(() => { const M = window.MOCAP; return document.querySelector('#playb').textContent==='▶' && document.querySelector('#scrub').value==='0'; }), 'it opens paused on frame 1');
   await page.click('#followb'); const f0 = await at(0), f15 = await at(15), f29 = await at(29);
   ok(Math.abs(f0.ank[1] - f15.ank[1]) < 0.02 && f15.hip[1] < f0.hip[1] - 0.1, 'Feet on floor: mid-squat her hips drop and the foot stays down: ' + JSON.stringify([f0.hip[1].toFixed(2), f15.hip[1].toFixed(2), f0.ank[1].toFixed(2), f15.ank[1].toFixed(2)]));
@@ -105,7 +111,7 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   ok(f15.scrub==='15' && /^16 \/ 30/.test(f15.lab), 'the timeline shows frame 16 / 30: ' + f15.lab);
   await page.click('[data-walk="0"]'); const p29 = await at(29); ok(Math.abs(p29.hip[0] - f0.hip[0]) < 0.01, '📍 In place keeps her in the middle');
   await page.click('[data-feet="free"]'); const q15 = await at(15); ok(q15.ank[1] > f15.ank[1] + 0.1, '🦘 Free: the floor is the lowest of the whole clip, so the squatting foot lifts off it (as a jump would)');
-  await page.evaluate(() => { const s = document.querySelector('#head'); s.value = '1.4'; s.dispatchEvent(new Event('input')); }); ok(await page.evaluate(() => Math.abs(window.MOCAP.A.bn.bone_113.scale.x - 1.4) < 1e-6), '🙂 Head size scales the head bone');
+  await page.evaluate(() => { const s = document.querySelector('#head'); s.value = '1.4'; s.dispatchEvent(new Event('input')); }); ok(await page.evaluate(() => Math.abs(window.MOCAP.A.P[0].bn.bone_113.scale.x - 1.4) < 1e-6), '🙂 Head size scales the head bone');
   // orbit: dragging the view turns the camera, not her
   const c0 = await page.evaluate(() => window.MOCAP.world.position.toArray()); await page.mouse.move(200, 300); await page.mouse.down(); await page.mouse.move(300, 280, {steps:6}); await page.mouse.up();
   ok(JSON.stringify(c0)===JSON.stringify(await page.evaluate(() => window.MOCAP.world.position.toArray())), 'dragging orbits the camera round her'); await shot('orbit');
@@ -131,7 +137,7 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   const scn = await page.evaluate(() => { const b = new (window.MOCAP.SCN.root.constructor === Object ? Object : window.MOCAP.camera.position.constructor)(); const box = []; window.MOCAP.world.updateMatrixWorld(true); let lo = 1e9; window.MOCAP.SCN.root.traverse(m => { if(m.isMesh){ const pa = m.geometry.attributes.position; for(let i = 0; i < pa.count; i += 37){ b.fromBufferAttribute(pa, i).applyMatrix4(m.matrixWorld); lo = Math.min(lo, b.y); } } }); return lo; });
   ok(Math.abs(scn) < 0.03, 'the place lies level with its ground at the floor: ' + scn.toFixed(3));
   // 🎯 orbit her: the pivot follows her up the wall
-  const piv = await page.evaluate(() => { window.MOCAP.setT(29 / 15); const A = window.MOCAP.A, e = A.bn.bone_001.matrixWorld.elements; return window.MOCAP.controls.target.distanceTo({x:e[12], y:e[13], z:e[14]}); }); ok(piv < 1e-6, '🎯 Orbit her: the camera pivot is on her hips as she climbs');
+  const piv = await page.evaluate(() => { window.MOCAP.setT(29 / 15); const A = window.MOCAP.A, e = A.P[0].bn.bone_001.matrixWorld.elements; return window.MOCAP.controls.target.distanceTo({x:e[12], y:e[13], z:e[14]}); }); ok(piv < 1e-6, '🎯 Orbit her: the camera pivot is on her hips as she climbs');
   await page.evaluate(() => window.MOCAP.setT(1)); await shot('ground'); await page.click('#sceneb'); ok(await page.evaluate(() => !window.MOCAP.SCN.root.visible), '🏞 Place hides the scene');
   await page.click('[data-feet="floor"]'); const h29 = await at(29); ok(Math.abs(h29.ank[1] - 0.1) < 0.03, '📌 Feet on floor still pins her lowest point (climb flattened)');
   // a job left running is picked up when the page opens again
@@ -139,6 +145,29 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   await page.evaluate(([pid, sv]) => { const d = JSON.parse(localStorage.getItem('rd-mocap-draft')); d.job = {pc:'https://render.test', pid, sv, t0:Date.now(), frames:36, cls:{}}; d.res = null; localStorage.setItem('rd-mocap-draft', JSON.stringify(d)); }, ['p' + n, svId]);
   await page.reload(); await page.waitForFunction(() => window.MOCAP.A && !window.MOCAP.M.job, null, {timeout:20000});
   ok(await page.evaluate(n => window.MOCAP.M.res.file==='motion_0000' + n + '_.glb', n) && GRAPHS.length===n, 'a job still running when the page closed is picked up on reopening (nothing sent again)');
+  // 👥 several people: SAM 3.1 isn't on Render yet → one tap downloads it; then SAM 3.1's video tracker feeds SAM 3D Body, every track kept
+  BODY = await makeBody({people:2}); SCENE = null;
+  await page.setInputFiles('#file', VIDEO); await page.waitForFunction(() => window.MOCAP.M.dur > 0 && !window.MOCAP.M.res, null, {timeout:10000});
+  ok(await page.evaluate(() => window.MOCAP.M.people===1 && !!document.querySelector('#people')), 'a new video starts on 👤 One person');
+  await page.click('#people [data-v="2"]'); const n2 = GRAPHS.length; await page.click('#gob');
+  await page.waitForSelector('#get3b', {timeout:10000}); ok(GRAPHS.length===n2 && /needs SAM 3\.1/.test(await page.textContent('#msg')), 'two people without SAM 3.1 on Render: nothing is sent, it offers ⬇ Get SAM 3.1');
+  await page.click('#get3b'); await page.waitForFunction(() => /SAM 3\.1 is on Render/.test(document.querySelector('#msg').textContent), null, {timeout:10000});
+  ok(DL.length===1 && DL[0].kind==='checkpoints' && /Comfy-Org\/sam3\.1\/resolve\/main\/checkpoints\/sam3\.1_multiplex_fp16\.safetensors$/.test(DL[0].url), 'Get SAM 3.1 asks the helper to download Comfy-Org/sam3.1 into checkpoints: ' + DL[0].url);
+  await page.click('#gob'); await page.waitForFunction(() => window.MOCAP.A && window.MOCAP.A.P.length===2, null, {timeout:30000}); ok(GRAPHS.length===n2 + 1, 'then one job goes to Render');
+  { const g = GRAPHS[GRAPHS.length - 1].prompt, by = c => Object.values(g).find(x => x.class_type===c), ref = id => g[id[0]], tr = by('SAM3_VideoTrack').inputs, pd = by('SAM3DBody_Predict').inputs;
+    ok(!by('RTDETR_detect') && ref(pd.track_data).class_type==='SAM3_VideoTrack' && !pd.bboxes && tr.max_objects===2 && tr.detect_interval===1 && ref(tr.model).inputs.ckpt_name==='sam3.1_multiplex_fp16.safetensors' && ref(tr.conditioning).inputs.text==='person' && ref(tr.images).class_type==='VHS_LoadVideo', 'two people: SAM 3.1 follows up to 2 "person"s through the frames and SAM 3D Body reads each track (no RT-DETR)');
+    ok(by('BuildPoseFile').inputs.track_index===-1, 'every track goes in the animation file'); }
+  const pp = await page.evaluate(() => { const A = window.MOCAP.A; window.MOCAP.setT(0); const v0 = A.P.map(p => p.track.visible); window.MOCAP.setT(20 / 15); const v1 = A.P.map(p => p.track.visible);
+    const hip = p => { const e = p.bn.bone_001.matrixWorld.elements; return [e[12], e[13], e[14]]; }, h = A.P.map(hip);
+    return {v0, v1, dx:h[1][0] - h[0][0], own:A.P[0].bn.bone_001!==A.P[1].bn.bone_001, col:A.P.map(p => p.sk.material.color.getHex()), chips:document.querySelectorAll('#who button').length, t0:A.P[1].t0}; });
+  ok(pp.own && pp.chips===2 && pp.col[0]!==pp.col[1], 'two mannequins, each with its own bones and colour, and a chip each: ' + JSON.stringify(pp.col));
+  ok(pp.v0.join()==='true,false' && pp.v1.join()==='true,true' && Math.abs(pp.t0 - 10 / 15) < 0.01, 'the second person shows up only once they walk in (frame 11): ' + JSON.stringify([pp.v0, pp.v1]));
+  ok(Math.abs(pp.dx - 1) < 0.03, 'they stand 1 m apart, as in the video: ' + pp.dx.toFixed(3));
+  await shot('two'); await page.click('#who [data-p="0"]');
+  ok(await page.evaluate(() => { const A = window.MOCAP.A; return !A.P[0].track.visible && A.P[1].track.visible && window.MOCAP.M.hide[0]===true; }), '👁 tapping person 1 hides them, person 2 stays');
+  ok(await page.evaluate(() => { const A = window.MOCAP.A, e = A.P[1].bn.bone_001.matrixWorld.elements; return window.MOCAP.controls.target.distanceTo({x:e[12], y:e[13], z:e[14]}) < 1e-6; }), '🎯 the pivot moves to the one still showing');
+  await page.reload(); await page.waitForFunction(() => window.MOCAP.A && window.MOCAP.A.P.length===2, null, {timeout:20000});
+  ok(await page.evaluate(() => !window.MOCAP.A.P[0].track.visible && JSON.parse(localStorage.getItem('rd-mocap'))[0].people===2), 'after a reload person 1 is still hidden; the clip remembers 2 people');
   if(process.env.DUMP) fs.writeFileSync(process.env.DUMP, JSON.stringify(GRAPHS.map(x => x.prompt)));
   ok(logs.length===0, 'no page errors: ' + logs.join(' | '));
   await browser.close(); console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
