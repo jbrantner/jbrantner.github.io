@@ -21,3 +21,8 @@ Checked 2026-11-01: the newer chaining packs (MiniMax H3 Extender, H3 Long Video
 `tests/t_h3.js` runs the app against two real ComfyUI servers of the PCs' version (0.41.3) with empty model files: one with ComfyUI-H3-Motion-Context + mmh3_studio_refs.py, one with no custom nodes. Every graph must pass ComfyUI's own checks, and the join runs for real on two ffmpeg clips. See the header of the test for how to run it.
 
 `tests/t_smooth.js` checks 🪄 Smooth against a fake ComfyUI in the browser (the MP4 frame-rate reader, the form, and the keyframe graph with the real nodes' input names). See its header.
+
+`tests/t_touchup.js` checks 👁 Touch up against a fake ComfyUI in the browser: every graph it sends (face mesh eyes/lips, SAM 3 by word and by tap, one frame and the whole clip) uses only nodes and inputs ComfyUI 0.41.3 and the helper have. See its header.
+
+## 👁 Touch up (touchup/)
+A page of its own (the 👁 button in the header) for a clip you already have: put a picture into the eyes (e.g. a spiral), colour the lips, or change any part you name or tap. One ComfyUI job on the PC: LoadVideo → Video Slice → GetVideoComponents (≤1280 px) → masks (MediaPipe face mesh for real faces: whole iris circles sized by the mesh and cut by the eye openings, or the lips; SAM 3 video tracking for a word like "iris:2" or for taps on the first frame) → the Render Deck helper's `RenderDeckTouchUp` (picture warped onto each part's ellipse, steadied over a few frames, with the video's own shading, catchlights and fine texture kept on top; or a recolour that spares teeth and the open mouth) → CreateVideo with the clip's sound and frame rate → SaveVideo. "Try one frame" runs the same graph on a 0.15 s slice and saves a still.

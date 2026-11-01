@@ -2422,5 +2422,215 @@ class RenderDeckH3Join:
         return {'ui': {'images': [{'filename': name, 'subfolder': subfolder, 'type': 'output'}], 'animated': (True,)}}
 
 
-NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix, 'RenderDeckH3Join': RenderDeckH3Join}
-NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)', 'RenderDeckH3Join': 'Join the H3 pieces (Render Deck)'}
+# ---------------------------------------------------------------------------------------------------------------------
+# 👁 Touch up (Jordan 2026-11-01, "swap character eyes with an image"; realism first): on every frame of a clip, put her
+# picture into a masked part (the irises) or recolour it (lipstick), keeping the photo's own light, texture and shine.
+# The masks come from core nodes (MediaPipe face mesh for real faces, SAM 3 for anything named or tapped).
+def _tu_ellipse(m):
+    """centre, half-width, half-height, tilt of a mask (moments, widened to the mask's visible extent: lids hide
+    the top and bottom of an iris, so its width is the honest size). Tilt within +-90 degrees of upright."""
+    import numpy as np
+    ys, xs = np.nonzero(m)
+    cx, cy = xs.mean(), ys.mean()
+    if len(xs) < 3:
+        return cx, cy, 1.0, 1.0, 0.0
+    ev, evec = np.linalg.eigh(np.cov(np.stack([xs - cx, ys - cy])))
+    a, b = 2 * np.sqrt(max(ev[1], 1e-6)), 2 * np.sqrt(max(ev[0], 1e-6))
+    ang = float(np.arctan2(evec[1, 1], evec[0, 1]))
+    u = (xs - cx) * np.cos(ang) + (ys - cy) * np.sin(ang)
+    v = -(xs - cx) * np.sin(ang) + (ys - cy) * np.cos(ang)
+    a = max(a, (np.percentile(u, 99) - np.percentile(u, 1)) / 2)
+    b = max(b, (np.percentile(v, 99) - np.percentile(v, 1)) / 2)
+    if abs(np.cos(ang)) < abs(np.sin(ang)):
+        a, b, ang = b, a, ang - np.pi / 2
+    ang = (ang + np.pi / 2) % np.pi - np.pi / 2
+    return float(cx), float(cy), float(a), float(b), float(ang)
+
+
+def _tu_blur(a, r):
+    from PIL import Image, ImageFilter
+    import numpy as np
+    return np.asarray(Image.fromarray(np.clip(a * 255, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(float(max(0.5, r)))), np.float32) / 255
+
+
+def _tu_place(img, pic, vis, cx, cy, hw, hh, ang, strength, keep_detail, keep_light=0.85):
+    """warp the square picture onto the ellipse, cut by the visible mask, under the photo's own shading/catchlights"""
+    import numpy as np
+    from PIL import Image
+    H, W = vis.shape
+    R = max(hw, hh)
+    x0, x1, y0, y1 = int(max(0, cx - R - 4)), int(min(W, cx + R + 5)), int(max(0, cy - R - 4)), int(min(H, cy + R + 5))
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        return img
+    px = int(max(8, min(pic.shape[0], 2 * R * 1.5)))  # the picture at the iris's own size: the photo's softness, not vector-sharp
+    p = np.asarray(Image.fromarray((pic * 255).astype(np.uint8)).resize((px, px), Image.LANCZOS), np.float32) / 255 if px < pic.shape[0] else pic
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+    dx, dy = xx - cx, yy - cy
+    u = (dx * np.cos(ang) + dy * np.sin(ang)) / max(hw, 1e-3)
+    v = (-dx * np.sin(ang) + dy * np.cos(ang)) / max(hh, 1e-3)
+    ih, iw = p.shape[:2]
+    sx, sy = np.clip((u + 1) / 2 * (iw - 1), 0, iw - 1), np.clip((v + 1) / 2 * (ih - 1), 0, ih - 1)
+    xa, ya = np.floor(sx).astype(int), np.floor(sy).astype(int)
+    xb, yb = np.minimum(xa + 1, iw - 1), np.minimum(ya + 1, ih - 1)
+    fx, fy = (sx - xa)[..., None], (sy - ya)[..., None]
+    smp = p[ya, xa] * (1 - fx) * (1 - fy) + p[ya, xb] * fx * (1 - fy) + p[yb, xa] * (1 - fx) * fy + p[yb, xb] * fx * fy
+    col, alpha = smp[..., :3], smp[..., 3] * ((u * u + v * v) <= 1.0)
+    vm = vis[y0:y1, x0:x1].astype(np.float32)
+    if vm.sum() < 3:
+        return img
+    a = alpha * _tu_blur(vm, max(0.6, 0.04 * min(hw, hh))) * strength
+    patch = img[y0:y1, x0:x1]
+    lum = patch @ np.array([0.299, 0.587, 0.114], np.float32)
+    mm = vm > 0.5
+    mean = float(lum[mm].mean()) if mm.any() else float(lum.mean())
+    shade = np.clip(_tu_blur(lum, max(1.0, 0.25 * min(hw, hh))) / max(mean, 1e-3), 0.35, 1.6) ** keep_light
+    detail = (lum - _tu_blur(lum, max(0.8, 0.06 * min(hw, hh))))[..., None] * keep_detail
+    sat = patch.max(-1) - patch.min(-1)
+    hi = (np.clip((lum - (np.percentile(lum[mm], 92) if mm.any() else 1.0)) * 6, 0, 1) * np.clip(1 - sat * 2.5, 0, 1))[..., None]
+    new = np.clip(col * shade[..., None] + detail, 0, 1)
+    new = new * (1 - hi) + patch * hi  # catchlights stay on top
+    out = img.copy()
+    out[y0:y1, x0:x1] = patch * (1 - a[..., None]) + new * a[..., None]
+    return out
+
+
+def _tu_colour(img, m, rgb, strength):
+    """recolour a soft mask keeping the photo's shading and shine; teeth (pale) and the open mouth (dark) are spared"""
+    import numpy as np
+    if m.max() < 0.05:
+        return img
+    lum = img @ np.array([0.299, 0.587, 0.114], np.float32)
+    hard = m > 0.5
+    med = float(np.median(lum[hard])) if hard.any() else float(lum.mean())
+    sat = img.max(-1) - img.min(-1)
+    spare = np.clip((lum - med - 0.18) * 6, 0, 1) * np.clip(1 - sat * 3, 0, 1) + np.clip((0.35 * med - lum) * 8, 0, 1)
+    shade = np.clip(lum / max(med, 1e-3), 0.25, 2.0)
+    tgt = np.asarray(rgb, np.float32)
+    new = np.clip(tgt[None, None] * shade[..., None], 0, 1)
+    hi = np.clip((lum - (np.percentile(lum[hard], 93) if hard.any() else 1.0)) * 8, 0, 1)[..., None]
+    new = new * (1 - hi) + img * hi
+    a = (m * strength * (1 - np.clip(spare, 0, 1)))[..., None]
+    return img * (1 - a) + new * a
+
+
+class RenderDeckTouchUp:
+    """H3 Deck 👁 Touch up: picture → into each masked part (irises), following its position, size and tilt through the
+    clip (smoothed over a few frames so it doesn't jitter); or colour → recolours the masked part (lipstick).
+    fit_mask (optional) is the WHOLE part even where it is hidden (MediaPipe's iris circles), clip_mask what is visible
+    (the eye openings): the picture is sized by the first and cut by the second."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'images': ('IMAGE',), 'mask': ('MASK',), 'mode': (['picture', 'colour'],),
+                             'strength': ('FLOAT', {'default': 1.0, 'min': 0.0, 'max': 1.0, 'step': 0.05}),
+                             'keep_detail': ('FLOAT', {'default': 0.6, 'min': 0.0, 'max': 1.5, 'step': 0.05}),
+                             'smooth': ('INT', {'default': 5, 'min': 1, 'max': 31}),
+                             'max_parts': ('INT', {'default': 2, 'min': 1, 'max': 8}),
+                             'colour': ('STRING', {'default': '#9e1030'}),
+                             'grow': ('FLOAT', {'default': 1.08, 'min': 0.8, 'max': 1.5, 'step': 0.01})},
+                'optional': {'picture': ('IMAGE',), 'fit_mask': ('MASK',), 'clip_mask': ('MASK',)}}
+
+    RETURN_TYPES = ('IMAGE',)
+    FUNCTION = 'run'
+    CATEGORY = 'Render Deck'
+
+    def run(self, images, mask, mode, strength, keep_detail, smooth, max_parts, colour, grow, picture=None, fit_mask=None, clip_mask=None):
+        import numpy as np
+        import torch
+        import torch.nn.functional as F
+        from scipy import ndimage
+        N, H, W, _ = images.shape
+
+        def fit(mk):  # any mask batch → N x H x W numpy floats at the frames' size
+            if mk is None:
+                return None
+            mk = mk.float()
+            if mk.dim() == 2:
+                mk = mk[None]
+            if mk.shape[-2:] != (H, W):
+                mk = F.interpolate(mk[:, None], size=(H, W), mode='bilinear', align_corners=False)[:, 0]
+            a = mk.cpu().numpy()
+            if a.shape[0] < N:
+                a = np.concatenate([a, np.repeat(a[-1:], N - a.shape[0], 0)], 0)
+            return a[:N]
+        M, FM, CM = fit(mask), fit(fit_mask), fit(clip_mask)
+        vis_all = M if CM is None else M * (CM > 0.5)
+        out = images.clone()
+        rad = max(0, (int(smooth) - 1) // 2)
+        if mode == 'colour':
+            h = colour.lstrip('#')
+            rgb = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)] if len(h) == 6 else [0.62, 0.06, 0.19]
+            for i in range(N):
+                lo, hi_ = max(0, i - min(rad, 1)), min(N, i + min(rad, 1) + 1)  # a light blend over neighbours: no flicker at the edge
+                m = _tu_blur(vis_all[lo:hi_].mean(0), 1.2)
+                img = images[i, ..., :3].cpu().numpy().astype(np.float32)
+                out[i, ..., :3] = torch.from_numpy(_tu_colour(img, m, rgb, strength))
+            return (out,)
+        if picture is None:
+            raise ValueError('Touch up: picture mode needs a picture')
+        pic = picture[0].cpu().numpy().astype(np.float32)
+        pic = np.concatenate([pic[..., :3], pic[..., 3:4] if pic.shape[-1] > 3 else np.ones_like(pic[..., :1])], -1)
+        ph, pw = pic.shape[:2]
+        s = min(ph, pw)
+        pic = pic[(ph - s) // 2:(ph - s) // 2 + s, (pw - s) // 2:(pw - s) // 2 + s]
+        src = FM if FM is not None else vis_all
+        scale = 1.0 if FM is not None else float(grow)
+        # find the parts on each frame (largest blobs), left to right
+        parts = []
+        for i in range(N):
+            lab, n = ndimage.label(src[i] > 0.5)
+            got = []
+            if n:
+                sizes = ndimage.sum(np.ones_like(lab), lab, range(1, n + 1))
+                for k in np.argsort(-sizes)[:max_parts]:
+                    if sizes[k] < 12:
+                        continue
+                    cx, cy, hw, hh, ang = _tu_ellipse(lab == k + 1)
+                    got.append([cx, cy, hw * scale, hh * scale, ang])
+            parts.append(sorted(got, key=lambda p: p[0]))
+        # follow each part through the clip: same count → same order; else nearest to the last place seen
+        K = max([len(p) for p in parts] + [0])
+        track = np.full((N, K, 5), np.nan, np.float32)
+        last = [None] * K
+        for i, got in enumerate(parts):
+            if len(got) == K:
+                for k, g in enumerate(got):
+                    track[i, k] = g
+                    last[k] = g
+            else:
+                free = list(range(K))
+                for g in got:
+                    k = min(free, key=lambda k: (1e9 if last[k] is None else (last[k][0] - g[0]) ** 2 + (last[k][1] - g[1]) ** 2))
+                    free.remove(k)
+                    track[i, k] = g
+                    last[k] = g
+        # the head's roll (between the first two parts) is the tilt for round parts, whose own tilt is noise
+        roll = np.zeros(N, np.float32)
+        if K >= 2:
+            ok = ~np.isnan(track[:, 0, 0]) & ~np.isnan(track[:, 1, 0])
+            roll[ok] = np.arctan2(track[ok, 1, 1] - track[ok, 0, 1], track[ok, 1, 0] - track[ok, 0, 0])
+        def avg(a, i):  # centred moving average over the frames that have it
+            w = a[max(0, i - rad):i + rad + 1]
+            w = w[~np.isnan(w)]
+            return float(w.mean()) if len(w) else float('nan')
+        for i in range(N):
+            img = images[i, ..., :3].cpu().numpy().astype(np.float32)
+            if np.isnan(track[i, :, 0]).all():
+                continue
+            r = avg(np.where(np.isnan(track[:, 0, 0]), np.nan, roll), i) if K >= 2 else 0.0
+            for k in range(K):
+                if np.isnan(track[i, k, 0]):
+                    continue
+                cx, cy, hw, hh = (avg(track[:, k, j], i) for j in range(4))
+                ang = track[i, k, 4]
+                if max(hw, hh) / max(1e-3, min(hw, hh)) < 1.15:
+                    ang = r if not np.isnan(r) else 0.0
+                else:
+                    ang = avg(track[:, k, 4], i)
+                img = _tu_place(img, pic, vis_all[i] > 0.5, cx, cy, hw, hh, ang, strength, keep_detail)
+            out[i, ..., :3] = torch.from_numpy(img)
+        return (out,)
+
+
+NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix, 'RenderDeckH3Join': RenderDeckH3Join, 'RenderDeckTouchUp': RenderDeckTouchUp}
+NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)', 'RenderDeckH3Join': 'Join the H3 pieces (Render Deck)', 'RenderDeckTouchUp': 'Touch up: picture into eyes / colour a part (Render Deck)'}
