@@ -38,6 +38,9 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
   camera that saw it, and a wrist on or within 25 cm of it holds it (it rides on that wrist bone). 👁 hides, ✕ removes.
 - Missing models (SAM 3.1, Depth Anything 3, Pixal3D + DINOv3 + the TRELLIS.2 VAEs) get one ⬇ button that downloads them through
   Render Deck's helper (Hugging Face, Comfy-Org repos).
+- ✥ Line her/people up (Jordan 2026-11-01: a punch that no longer lands): tap a mannequin to pick it and drag it along the ground (a drag
+  that starts off them still turns the view); ↻ Turn (about the hips) and ↕ Raise sliders; ↺ Put back. One offset per person
+  (`M.adj`, metres along the levelled ground + degrees), the same on every frame, saved with the clip. A held prop moves with its hand.
 - Playback: the GLB's frame rate comes from its keyframe times (frames where nobody was found are left out and blended over).
   🚶 Moves keeps the camera translation, 📍 In place drops it; 📌 Feet on floor stands each frame's lowest joint on the floor,
   🦘 Free only the lowest of the clip (jumps). Head size scales bone_113. The video plays beside it and drives the clock.

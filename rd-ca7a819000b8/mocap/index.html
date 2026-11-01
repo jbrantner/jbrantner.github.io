@@ -105,7 +105,7 @@ async function findKit(){ const tried = [];
         dino:pick('CLIPVisionLoader', 'clip_name', /dino_v3/i), svae:pick('VAELoader', 'vae_name', /trellis_2_shape_vae/i), tvae:pick('VAELoader', 'vae_name', /trellis_2_texture_vae/i)}; }catch(e){} }
   throw new Error('No PC answered with SAM 3D Body (tried ' + tried.join(', ') + '). Is ComfyUI running on Render, and Tailscale on on this phone?'); }
 // ---- what's being made (kept on this phone)
-function fresh(){ return {name:'', vid:null, dur:0, vw:0, vh:0, start:0, end:0, fps:15, hands:false, smooth:'med', job:null, res:null, frames:0, walk:true, feet:'floor', head:1, speed:1, people:1, hide:[], props:[], place:null}; }
+function fresh(){ return {name:'', vid:null, dur:0, vw:0, vh:0, start:0, end:0, fps:15, hands:false, smooth:'med', job:null, res:null, frames:0, walk:true, feet:'floor', head:1, speed:1, people:1, hide:[], props:[], place:null, adj:[]}; }
 let MORE = false, PROPW = '', PROPS = []; let M = Object.assign(fresh(), get(DKEY, {})), LIB = get(LKEY, []), FILE = null, LOCAL = '', BUSY = false, MSG = '', PROG = null, NEED = null, GETTING = false, SIDE = null;
 const keep = () => put(DKEY, M);
 // ---- the 3D view
@@ -131,7 +131,8 @@ const wp = b => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
 const TINT = [0xd8d2cc, 0x9cc4ea, 0xf0a8c4, 0xb8dca0, 0xf2cf8a, 0xc4b0ec], TINT_CSS = ['#d8d2cc', '#9cc4ea', '#f0a8c4', '#b8dca0', '#f2cf8a', '#c4b0ec'];
 async function fetchGlb(res, what){ const r = await fetch(viewOf(res)); if(!r.ok) throw new Error('The ' + what + ' did not come from ' + pcName(res.pc) + ' (' + r.status + ').'); return new GLTFLoader().parseAsync(await r.arrayBuffer(), ''); }
 function clearAll(){ for(const P of PROPS) if(P.obj && P.obj.parent) P.obj.parent.remove(P.obj); PROPS = []; if(A){ A.mixer.stopAllAction(); align.remove(A.root); A = null; } if(SCN){ align.remove(SCN.root); SCN = null; } shadow.visible = false; }
-function setAlign(m){ align.matrix.copy(m); align.matrixWorldNeedsUpdate = true; }
+const ALQ = new THREE.Quaternion(); // (the align turn, undone to move someone along the real ground)
+function setAlign(m){ align.matrix.copy(m); align.matrixWorldNeedsUpdate = true; m.decompose(new THREE.Vector3(), ALQ, new THREE.Vector3()); }
 // the ground in MoGe's mesh: the biggest flat-ish surface facing up (within 70° of the camera's up) that the feet's line of sight comes down onto.
 // Returns {n, d} (n·x + d = height above it, camera space) or null. A fixed seed, so the same video always finds the same ground.
 function findGround(root, feet){ root.updateMatrixWorld(true); const P = [], v = new THREE.Vector3();
@@ -163,7 +164,7 @@ async function loadMotion(res){
   clearAll(); setAlign(new THREE.Matrix4()); world.position.set(0, 0, 0);
   const root = gl.scene, tracks = []; root.traverse(m => { if(/^track\d+$/.test(m.name)) tracks.push(m); }); tracks.sort((a, b) => a.name.localeCompare(b.name));
   const clip = gl.animations[0]; if(!clip) throw new Error('The file has no animation in it (only one frame was read?).');
-  const P = (tracks.length ? tracks : [root]).map((track, i) => { const {bn, sk} = bonesUnder(track); return {i, track, bn, sk, base:[], low:[]}; }).filter(p => p.sk && p.bn.bone_001);
+  const P = (tracks.length ? tracks : [root]).map((track, i) => { const {bn, sk} = bonesUnder(track); return {i, track, bn, sk, base:[], low:[], q0:track.quaternion.clone()}; }).filter(p => p.sk && p.bn.bone_001);
   if(!P.length) throw new Error("That file isn't a body from SAM 3D Body.");
   // the meshes are skinned to the tracks' bones: SkinnedMesh sits beside them, so it is found by its track's name (track01_mesh)
   root.traverse(m => { if(m.isSkinnedMesh){ const k = (m.name.match(/^track(\d+)/) || [])[1]; const p = k!=null ? P.find(q => q.track.name==='track' + k) : null; if(p && p.sk!==m && !p.track.getObjectById(m.id)) p.sk = m; } });
@@ -235,6 +236,21 @@ async function loadProps(){ for(const pr of M.props || []){ try{ const [gl, dg, 
     catch(e){ console.warn('prop', pr.word, e); PROPS.push({id:pr.id, word:pr.word, obj:null, err:e.message}); } }
   if(A) pose(); }
 const lerp = (arr, t, k) => { const x = Math.min(A.F - 1, Math.max(0, t * A.fps)), i = Math.floor(x), j = Math.min(A.F - 1, i + 1), u = x - i, a = arr[i], b = arr[j]; return k ? a[k] + (b[k] - a[k]) * u : a + (b - a) * u; };
+const adjOf = i => { const a = (M.adj || [])[i] || {}; return {x:+a.x || 0, y:+a.y || 0, z:+a.z || 0, yaw:+a.yaw || 0}; };
+function setAdj(i, ch){ if(!Array.isArray(M.adj)) M.adj = []; M.adj[i] = Object.assign(adjOf(i), ch); }
+// ✥ Line up: tap a mannequin to pick it, drag it across the ground (the view only turns when the finger starts off them), turn/raise it with the sliders
+let LINE = false, SEL = 0, DRAG = null; const RC = new THREE.Raycaster();
+function hitPerson(ev){ if(!A) return null; const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector2((ev.clientX - r.left) / r.width * 2 - 1, -(ev.clientY - r.top) / r.height * 2 + 1);
+  RC.setFromCamera(v, camera); let best = null; for(const p of A.P){ if(!p.track.visible || !p.sk) continue; p.sk.boundingSphere = null; p.sk.boundingBox = null;
+    const h = RC.intersectObject(p.sk, false)[0]; if(h && (!best || h.distance < best.h.distance)) best = {p, h}; } return best; }
+function markSel(){ if(!A) return; for(const p of A.P) if(p.sk && p.sk.material && p.sk.material.emissive) p.sk.material.emissive.setHex(LINE && p.i===SEL ? 0x3a1830 : 0x000000); }
+renderer.domElement.addEventListener('pointerdown', ev => { if(!LINE || !A) return; const hit = hitPerson(ev); if(!hit) return;
+  SEL = hit.p.i; markSel(); controls.enabled = false; DRAG = {id:ev.pointerId, plane:new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.h.point.y), last:hit.h.point.clone()}; draw(); }, true);
+renderer.domElement.addEventListener('pointermove', ev => { if(!DRAG || ev.pointerId!==DRAG.id) return; const r = renderer.domElement.getBoundingClientRect();
+  RC.setFromCamera(new THREE.Vector2((ev.clientX - r.left) / r.width * 2 - 1, -(ev.clientY - r.top) / r.height * 2 + 1), camera); const q = RC.ray.intersectPlane(DRAG.plane, new THREE.Vector3()); if(!q) return;
+  const d = q.clone().sub(DRAG.last), a = adjOf(SEL); setAdj(SEL, {x:a.x + d.x, z:a.z + d.z}); DRAG.last = q; pose(); });
+const endDrag = ev => { if(!DRAG || (ev && ev.pointerId!==DRAG.id)) return; DRAG = null; controls.enabled = true; LASTMID = null; pose(); keep(); saveClip(); };
+renderer.domElement.addEventListener('pointerup', endDrag); renderer.domElement.addEventListener('pointercancel', endDrag);
 const shownP = () => A ? A.P.filter(p => !M.hide[p.i] && T >= p.t0 - 0.5 / A.fps && T <= p.t1 + 0.5 / A.fps) : [];
 // the middle of the people showing (their hips)
 function middle(){ const L = shownP().length ? shownP() : A.P, c = new THREE.Vector3(); for(const p of L) c.add(wp(p.bn.bone_001)); return c.divideScalar(L.length); }
@@ -246,6 +262,10 @@ function pose(){ if(!A) return; A.mixer.setTime(Math.max(0, Math.min(T, A.dur - 
     // the floor: 📌 each frame's lowest joint stands on it (crouches stay down); 🦘 free: on MoGe's ground they keep their real height (climbs,
     // jumps), without a ground the lowest point of the whole clip is the floor. (Moved along the ground's up, so it is straight up in the world.)
     const shift = M.feet==='free' ? (A.ground ? 0 : -(A.lowAll - A.gap)) : -(lerp(p.low, T) - A.gap); tr.position.addScaledVector(A.up, shift);
+    // ✥ lined up by hand (Jordan 2026-11-01: a punch that no longer lands): a turn about their hips and a move along the ground, the same on every frame
+    tr.quaternion.copy(p.q0); const a = adjOf(p.i);
+    if(a.yaw || a.x || a.y || a.z){ tr.updateWorldMatrix(true, true); const hip = align.worldToLocal(wp(p.bn.bone_001)), q = new THREE.Quaternion().setFromAxisAngle(A.up, a.yaw * Math.PI / 180);
+      tr.position.sub(hip).applyQuaternion(q).add(hip); tr.quaternion.premultiply(q); tr.position.add(new THREE.Vector3(a.x, a.y, a.z).applyQuaternion(ALQ.clone().invert())); }
     if(p.bn.bone_113) p.bn.bone_113.scale.setScalar(M.head || 1);
     tr.visible = !M.hide[p.i] && T >= p.t0 - 0.5 / A.fps && T <= p.t1 + 0.5 / A.fps; if(p.sk) p.sk.visible = tr.visible; }
   world.updateMatrixWorld(true); const mid = middle(); shadow.position.x = mid.x; shadow.position.z = mid.z; shadow.scale.setScalar(A.P.length > 1 ? 1.6 : 1);
@@ -253,7 +273,7 @@ function pose(){ if(!A) return; A.mixer.setTime(Math.max(0, Math.min(T, A.dur - 
   // 🎯 the camera turns round them: its pivot follows the middle of their hips wherever they go (up a wall too), keeping the same view
   // (Jordan 2026-11-01: the camera stays where it was put: it moves by how far they moved since the last frame, never snaps back to the hips,
   // and stays still the moment someone appears, disappears or is hidden)
-  const who = shownP().map(p => p.i).join(); if(FOLLOW && LASTMID && LASTMID.who===who){ const d = mid.clone().sub(LASTMID.v); controls.target.add(d); camera.position.add(d); } LASTMID = {v:mid, who}; }
+  const who = shownP().map(p => p.i).join(); if(FOLLOW && !DRAG && LASTMID && LASTMID.who===who){ const d = mid.clone().sub(LASTMID.v); controls.target.add(d); camera.position.add(d); } LASTMID = {v:mid, who}; }
 // the camera where the video's camera was when there's a ground (so it matches the video), otherwise straight in front, framing their whole height
 function viewFront(){ if(!A) return; world.updateMatrixWorld(true); const hip = middle(), h = Math.max(1, A.h || 1.7) * (A.P.length > 1 ? 1.3 : 1);
   const v = shown(), D = h * 1.25 / (2 * Math.tan(camera.fov * Math.PI / 360) * (v.bottom - v.top) / innerHeight); controls.target.copy(hip); LASTMID = null;
@@ -451,7 +471,7 @@ async function openResult(){ MSG = 'Bringing the 3D animation over…'; draw(); 
   play(false); setT(0); if(!pip.hidden) pip.addEventListener('loadeddata', () => { if(!PLAY) setT(T); }, {once:true}); }
 // ---- the clips list (on this phone; the GLBs and videos stay on the PC)
 function saveClip(){ if(!M.res) return; const id = M.id || (M.id = 'mc' + Math.random().toString(36).slice(2, 9)); if(!M.name) M.name = 'Motion ' + new Date().toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
-  const c = {id, name:M.name, vid:M.vid, dur:M.dur, vw:M.vw, vh:M.vh, start:M.start, end:M.end, fps:M.fps, hands:M.hands, smooth:M.smooth, res:M.res, frames:M.frames, walk:M.walk, feet:M.feet, head:M.head, people:M.people || 1, hide:M.hide || [], props:M.props || [], place:M.place || null, made:Date.now()};
+  const c = {id, name:M.name, vid:M.vid, dur:M.dur, vw:M.vw, vh:M.vh, start:M.start, end:M.end, fps:M.fps, hands:M.hands, smooth:M.smooth, res:M.res, frames:M.frames, walk:M.walk, feet:M.feet, head:M.head, people:M.people || 1, hide:M.hide || [], props:M.props || [], place:M.place || null, adj:M.adj || [], made:Date.now()};
   LIB = [c, ...LIB.filter(x => x.id!==id)].slice(0, 60); put(LKEY, LIB); keep(); }
 function drawLib(){ $('#libl').innerHTML = LIB.length ? LIB.map(c => `<div class="clip"><button class="op" data-open="${c.id}"><b>${esc(c.name)}</b><small>${c.frames || '?'} frames · ${esc(pcName((c.res || {}).pc || ''))} · ${new Date(c.made).toLocaleDateString()}</small></button><button class="sm" data-ren="${c.id}" aria-label="Rename">✏️</button><button class="sm" data-del="${c.id}" aria-label="Remove from the list">🗑</button></div>`).join('')
   : '<p class="note">Nothing copied yet. Every finished motion lands here.</p>'; }
@@ -482,6 +502,12 @@ function draw(){ const B = $('#body'), old = $('#prev'), at = old ? old.currentT
       <div class="chips"><button id="frontb">Front</button><button id="sideb">Side</button><button data-walk="1" aria-pressed="${M.walk}">🚶 Moves</button><button data-walk="0" aria-pressed="${!M.walk}">📍 In place</button></div>
       <div class="chips"><button data-feet="floor" aria-pressed="${M.feet!=='free'}">📌 Feet on floor</button><button data-feet="free" aria-pressed="${M.feet==='free'}">🦘 Free (climbs, jumps)</button>${SCN ? `<button id="sceneb" aria-pressed="${M.scene===true}">🏞 Place</button>` : ''}</div>
       ${A && A.P.length > 1 ? `<div class="lbl"><span>People (tap to hide or show)</span></div><div class="chips" id="who">${A.P.map(p => `<button data-p="${p.i}" aria-pressed="${!M.hide[p.i]}"><span class="dot" style="background:${TINT_CSS[p.i % TINT_CSS.length]}"></span>${M.hide[p.i] ? '🙈' : '👁'} ${p.i + 1}</button>`).join('')}</div>` : ''}
+      <div class="chips"><button id="lineb" aria-pressed="${LINE}">✥ Line ${A && A.P.length > 1 ? 'people' : 'her'} up</button></div>
+      ${LINE && A ? (() => { const a = adjOf(SEL), nm = A.P.length > 1 ? 'person ' + (SEL + 1) : 'her';
+        return `<p class="note">Drag ${A.P.length > 1 ? 'a mannequin' : 'her'} across the ground (drag off ${A.P.length > 1 ? 'them' : 'her'} to turn the view). It stays moved on every frame.</p>
+        <div class="lbl"><span>↻ Turn ${esc(nm)}</span><span id="yawv">${Math.round(a.yaw)}°</span></div><input type="range" id="yaw" min="-180" max="180" step="1" value="${a.yaw}">
+        <div class="lbl"><span>↕ Raise ${esc(nm)}</span><span id="liftv">${a.y.toFixed(2)} m</span></div><input type="range" id="lifty" min="-1" max="1" step="0.01" value="${a.y}">
+        <div class="row"><span class="note" style="flex:1">Moved ${Math.hypot(a.x, a.z).toFixed(2)} m</span><button class="sm" id="adjx">↺ Put ${esc(nm)} back</button></div>`; })() : ''}
       <div class="lbl"><span>🗡 Props (scrub to a frame where it's clear)</span></div>
       ${(M.props || []).length ? `<div class="chips" id="props">${M.props.map(pr => { const P = PROPS.find(x => x.id===pr.id) || {}; return `<button data-prop="${pr.id}" aria-pressed="${!pr.hide}" title="${esc(P.err || '')}">${pr.hide ? '🙈' : '👁'} ${esc(pr.word)}${P.held ? ' ✋' : ''}${P.err ? ' ⚠' : ''}</button><button class="sm" data-pdel="${pr.id}" aria-label="Remove ${esc(pr.word)}">✕</button>`; }).join('')}</div>` : ''}
       <div class="row"><input id="propw" type="text" placeholder="sword, shield, chair…" maxlength="40" value="${esc(PROPW)}" aria-label="What to look for"><button id="propb" ${BUSY || SIDE ? 'disabled' : ''}>＋ Find it here</button></div>
@@ -519,6 +545,10 @@ function wire(){ const on = (s, ev, f) => { const el = $(s); if(el) el[ev] = f; 
   on('#fps', 'onclick', e => { const b = e.target.closest('button'); if(b){ M.fps = +b.dataset.v; keep(); draw(); } });
   on('#smooth', 'onclick', e => { const b = e.target.closest('button'); if(b){ M.smooth = b.dataset.k; keep(); draw(); } });
   on('#handsb', 'onclick', () => { M.hands = !M.hands; keep(); draw(); });
+  on('#lineb', 'onclick', () => { LINE = !LINE; if(A && SEL >= A.P.length) SEL = 0; markSel(); draw(); });
+  on('#yaw', 'oninput', e => { setAdj(SEL, {yaw:+e.target.value}); LASTMID = null; pose(); const l = $('#yawv'); if(l) l.textContent = Math.round(+e.target.value) + '°'; }); on('#yaw', 'onchange', () => { keep(); saveClip(); });
+  on('#lifty', 'oninput', e => { setAdj(SEL, {y:+e.target.value}); LASTMID = null; pose(); const l = $('#liftv'); if(l) l.textContent = (+e.target.value).toFixed(2) + ' m'; }); on('#lifty', 'onchange', () => { keep(); saveClip(); });
+  on('#adjx', 'onclick', () => { setAdj(SEL, {x:0, y:0, z:0, yaw:0}); LASTMID = null; pose(); keep(); saveClip(); draw(); });
   on('#propw', 'oninput', e => { PROPW = e.target.value; }); on('#propw', 'onkeydown', e => { if(e.key==='Enter') addProp(); }); on('#propb', 'onclick', addProp); on('#placeb', 'onclick', buildPlace);
   on('#props', 'onclick', e => { const b = e.target.closest('button'); if(!b) return; if(b.dataset.prop){ const pr = M.props.find(x => x.id===b.dataset.prop); if(pr){ pr.hide = !pr.hide; keep(); saveClip(); pose(); draw(); } }
     if(b.dataset.pdel){ const pr = M.props.find(x => x.id===b.dataset.pdel); if(pr && confirm('Take the ' + pr.word + ' out? (Its 3D file stays on the PC.)')){ M.props = M.props.filter(x => x!==pr); const P = PROPS.find(x => x.id===pr.id); if(P && P.obj && P.obj.parent) P.obj.parent.remove(P.obj); PROPS = PROPS.filter(x => x!==P); keep(); saveClip(); draw(); } } });
