@@ -7,17 +7,18 @@ const path = require('path'), http = require('http'), fs = require('fs');
 const R = 'http://render.test', M = 'http://main.test';
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
-  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
-  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors']], strength_model:['FLOAT', {default:1}]}}},
-  CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
-  VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'qwen_image_edit_2511_fp8_e4m3fn.safetensors', 'z_image_turbo_bf16.safetensors']], weight_dtype:[['default']]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'Qwen-Image-Edit-2509-Lightning-8steps.safetensors', 'Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors', 'qwen_2.5_vl_7b_fp8_scaled.safetensors', 'qwen_3_4b.safetensors']], type:[['minimax', 'qwen_image', 'lumina2']], device:[['default']]}}},
+  VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors', 'qwen_image_vae.safetensors', 'ae.safetensors']]}}},
   GetVideoComponents:{input:{required:{video:['VIDEO']}}},
   ImageFromBatch:{input:{required:{image:['IMAGE'], batch_index:['INT', {default:0}], length:['INT', {default:1}]}}},
   ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
   MiniMaxH3AddGuide:{input:{required:{positive:['CONDITIONING'], latent:['LATENT'], frame_idx:['INT', {default:0}]}, optional:{vae:['VAE'], audio_vae:['VAE'], image:['IMAGE'], audio:['AUDIO']}}},
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
-  'LoadImage','LoadVideo','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo'];
+  'LoadImage','LoadVideo','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo',
+  'TextEncodeQwenImageEditPlus','ModelSamplingAuraFlow','CFGNorm','ImageScaleToTotalPixels','EmptySD3LatentImage','ConditioningZeroOut','CLIPTextEncode','KSampler','VAEDecode','SaveImage','VAEEncode'];
 const types = g => Object.values(g).map(n => n.class_type), node = (g, t) => Object.values(g).find(n => n.class_type===t), nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
 const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v => !Array.isArray(v) || (typeof v[0]==='string' && g[v[0]])));
 
@@ -35,6 +36,7 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
       if(p==='/renderdeck/images') return J({shared:true, pc:PCU===R ? 'Output_Render' : 'Output_Main', images:[]});
       if(p==='/upload/image') return J({name:'h3deck_x.png', subfolder:'h3deck', type:'input'});
       if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pc:PCU, pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
+      if(p==='/view') return rt.fulfill({status:200, contentType:'image/png', headers:{'Access-Control-Allow-Origin':'*'}, body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')});
       if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
       return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   }
@@ -136,6 +138,33 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   await page.evaluate(() => { const x = FILM.ctxOf('cu1'); return FILM.pickCand(x, x.cut.cands.find(c => c.kind==='fix' && c.state==='done')); });
   const v = await page.evaluate(() => { const c = FILM.ctxOf('cu1').cut; return [c.versions.length, /fix_/.test(c.final.file.subfolder), FILM.reviewItems().filter(i => i.type==='fix').length]; });
   ok(v[0]===1 && v[1] && v[2]===0, 'using the redo makes it the cut (old one kept for ↩ Undo), and the room is clear');
+
+
+  // ---- 🪄 pictures for a cast member ----
+  const nq = sent.length;
+  const mk = await page.evaluate(async () => { const f = FILM.S.films[0], c = f.chars[0];
+    const a = await FILM.makePictures(f, c, 'set', {which:[0, 1, 2], from:c.refs[0].id, extra:'round thin-metal glasses'});
+    const b = await FILM.makePictures(f, c, 'new', {tries:4}); return [a, b]; });
+  const qs = sent.slice(nq, nq + 3), zs = sent.slice(nq + 3);
+  ok(mk[0]===3 && mk[1]===2 && qs.every(s => linksOk(s.g)) && zs.every(s => linksOk(s.g)), 'reference set: 3 angle jobs; from words: 4 tries in 2 jobs');
+  const qe = node(qs[1].g, 'TextEncodeQwenImageEditPlus');
+  console.log(qe.inputs.prompt);
+  ok(qe && Array.isArray(qe.inputs.image1) && /three-quarter view facing left/.test(qe.inputs.prompt) && /short black hair/.test(qe.inputs.prompt) && !/tattoo|\{/.test(qe.inputs.prompt) && /round thin-metal glasses/i.test(qe.inputs.prompt), 'angle prompt: her description (minus picture sentences), the extra words, the angle');
+  ok(/2511-Lightning-4steps/.test(node(qs[0].g, 'LoraLoaderModelOnly').inputs.lora_name) && node(qs[0].g, 'KSampler').inputs.steps===4 && node(qs[0].g, 'CLIPLoader').inputs.type==='qwen_image', 'Qwen 2511 + its 4-step Lightning LoRA');
+  ok(node(zs[0].g, 'EmptySD3LatentImage').inputs.batch_size===2 && /^Realistic photo of a woman in her 30s/.test(node(zs[0].g, 'CLIPTextEncode').inputs.text) && node(zs[0].g, 'CLIPLoader').inputs.type==='lumina2', 'Z-Image: realistic photo from her words, 2 a job');
+  for(const s of [...qs, zs[0]]){ const sv = Object.entries(s.g).find(([k, n]) => n.class_type==='SaveImage'); HIST[s.pid] = {status:{completed:true}, outputs:{[sv[0]]:{images:[{filename:'a_00001_.png', subfolder:'Output_Render/x', type:'output'}].concat(s===zs[0] ? [{filename:'a_00002_.png', subfolder:'Output_Render/x', type:'output'}] : [])}}}; }
+  await tick();
+  await page.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'})); await page.waitForTimeout(300);
+  ok(await page.$$eval('[data-act="gAdd"]', b => b.length)===5, 'the card shows 5 new pictures to add (3 angles + 2 from words)');
+  await page.screenshot({path:path.join(__dirname, 'film_make.png'), fullPage:true});
+  const before = await page.evaluate(() => FILM.S.films[0].chars[0].refs.length);
+  await page.click('[data-act="gAll"]'); await page.waitForTimeout(1500);
+  const after = await page.evaluate(() => FILM.S.films[0].chars[0].refs.slice(-5).map(r => r.note));
+  console.log(JSON.stringify(after));
+  ok(await page.evaluate(() => FILM.S.films[0].chars[0].refs.length)===before + 5 && after[2]==='a close-up of the face' && after[3]==='a three-quarter view' && after[4]==='a side profile', 'Add all puts them after her pictures, angles in order with their notes');
+  await page.click('[data-act="mkOpen"]'); await page.waitForTimeout(200);
+  ok(/Reference set/.test(await page.textContent('#sheetCard')) && /Make 8 pictures/.test(await page.textContent('#sheetCard')), 'the 🪄 sheet opens on the reference set with all 8 angles');
+  await page.click('[data-act="close"]');
 
   // ---- screens draw without errors ----
   for(const tab of ['cast', 'scenes', 'look']){ await page.evaluate(t => FILM.go({v:'film', film:FILM.S.films[0].id, tab:t}), tab); await page.waitForTimeout(200); await page.screenshot({path:path.join(__dirname, 'film_' + tab + '.png'), fullPage:true}); }
