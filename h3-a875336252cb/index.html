@@ -187,6 +187,8 @@ h2 span{flex:1}
         <div id="smSpcBody" hidden style="margin-top:8px">
           <canvas id="smChart" style="width:100%;height:110px;display:block;border:1px solid var(--line);border-radius:10px;background:var(--bg)"></canvas>
           <div style="margin-top:8px"><div class="lab"><span>Easing</span><b id="smEaseOut">0.50</b></div><input type="range" id="smEase" min="0" max="1" step="0.05" value="0.5" style="width:100%"></div>
+          <div style="margin-top:8px"><div class="lab"><span>🎬 Punch</span><b id="smPunchOut">off</b></div><input type="range" id="smPunch" min="0" max="1" step="0.05" value="0" style="width:100%">
+            <div class="note" style="margin-top:2px">Animator spacing for each move: a longer ease in, a faster middle and a snappier stop. Holds get stiller. Off = just even.</div></div>
           <div class="note" id="smSpcNote"></div>
         </div>
         <div class="sw" id="smUpSw" style="margin-top:8px"><div><div class="t">⬆ Then regenerate bigger</div><div class="d">After smoothing, MiniMax repaints the clip larger with fine detail (the open copy of MiniMax's 2K regenerate)</div></div><div class="tog"></div></div>
@@ -288,7 +290,7 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true}, s.f || {});
+    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smPunch:0, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true}, s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   s.media = s.media || {}; s.up = s.up || {}; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
@@ -603,11 +605,28 @@ async function measureSpacing(){
   }catch(e){ R.err = e.message; }
   R.busy = false; if(spcKey()===k){ drawInputs(); drawCanvas(); drawGo(); } return R;
 }
-function spacingPlan(d, L, every, strength){
+// 🎬 Punch (Jordan 2026-11-02, "smooth the movement while also keeping it punchy"): after the even-out, each move (a run
+// of frames that travel, between holds) keeps its own distance and length, but its speed curve is re-shaped like an
+// animator's spacing: read on a warped clock (u^a, so the fast part comes later: longer ease in, quicker stop) and raised
+// to a power k (more contrast: slow parts slower, the middle faster). Slow drift between moves is calmed toward a hold.
+// The pinned frames then land where this curve puts them, and MiniMax paints the inbetweens.
+function punchSpeeds(t, punch){
+  const tot = t.reduce((x, y) => x + y, 0); if(!(punch > 0) || !tot) return t.slice();
+  const srt = t.slice().sort((x, y) => x - y), p90 = srt[Math.floor(srt.length * 0.9)] || 0, thr = Math.max(0.3, 0.15 * p90);
+  const k = 1 + 2 * punch, a = 1 + 0.8 * punch, out = t.map(x => x < thr ? x * (1 - 0.8 * punch) : x);
+  for(let i = 0; i < t.length;){ if(t[i] < thr){ i++; continue; } let j = i; while(j < t.length && t[j] >= thr) j++;
+    const n = j - i, seg = t.slice(i, j), D = seg.reduce((x, y) => x + y, 0);
+    const at = u => { const x = Math.min(n - 1, Math.max(0, u)), q = Math.floor(x), r = x - q; return seg[q] * (1 - r) + seg[Math.min(n - 1, q + 1)] * r; };
+    const aw = n <= 48 ? a : 1; // a long steady move (a pan) isn't one gesture: only the contrast, no re-timed clock
+    const P = seg.map((_, q) => at((n - 1) * ((q + 0.5) / n) ** aw) ** k), Ps = P.reduce((x, y) => x + y, 0) || 1;
+    P.forEach((x, q) => { out[i + q] = x * D / Ps; }); i = j; }
+  const os = out.reduce((x, y) => x + y, 0) || 1; return out.map(x => x * tot / os);
+}
+function spacingPlan(d, L, every, strength, punch){
   const C = [0]; for(let i = 0; i < L - 1; i++) C.push(C[i] + (d[i] || 0));
-  const sig = strength * 6, tot = C[L - 1]; let t = d.slice(0, L - 1);
+  const sig = Math.max(strength * 6, punch > 0 ? 2 : 0), tot = C[L - 1]; let t = d.slice(0, L - 1); // punch needs on-4s steps blurred into moves first
   if(sig > 0.1){ const r = Math.ceil(sig * 2.5); t = t.map((_, i) => { let s = 0, ws = 0; for(let k = -r; k <= r; k++){ const j = i + k; if(j < 0 || j >= L - 1) continue; const wt = Math.exp(-k * k / (2 * sig * sig)); s += wt * d[j]; ws += wt; } return s / ws; }); }
-  const ts = t.reduce((a, b) => a + b, 0) || 1, T = [0]; t = t.map(x => x * tot / ts); for(let i = 0; i < L - 1; i++) T.push(T[i] + t[i]);
+  const ts = t.reduce((a, b) => a + b, 0) || 1, T = [0]; t = t.map(x => x * tot / ts); if(punch > 0) t = punchSpeeds(t, punch); for(let i = 0; i < L - 1; i++) T.push(T[i] + t[i]);
   const keys = [], skipped = [];
   for(const o of smoothKeys(L, every)){
     if(o===0 || o===L - 1){ keys.push([o, o]); continue; }
@@ -619,16 +638,16 @@ function spacingPlan(d, L, every, strength){
   return {keys, skipped, jumps, t, moved:keys.filter(([o, s]) => o!==s).length};
 }
 function currentSpacing(){ const f = S.f; if(!f.sm || !f.smSpc || !f.smVid) return null; const R = SPC[spcKey()]; if(!R || !R.d) return null;
-  return spacingPlan(R.d, smoothPlan()[0].gen, +f.smEvery || 4, +f.smEase); }
+  return spacingPlan(R.d, smoothPlan()[0].gen, +f.smEvery || 4, +f.smEase, +f.smPunch || 0); }
 function drawSpacing(){
   const f = S.f, box = $('#smSpcBody'); if(!box) return; $('#smSpcSw').classList.toggle('on', !!f.smSpc); box.hidden = !f.smSpc || !f.smVid;
-  if(box.hidden) return; $('#smEase').value = f.smEase; $('#smEaseOut').textContent = (+f.smEase).toFixed(2);
+  if(box.hidden) return; $('#smEase').value = f.smEase; $('#smEaseOut').textContent = (+f.smEase).toFixed(2); $('#smPunch').value = +f.smPunch || 0; $('#smPunchOut').textContent = +f.smPunch ? (+f.smPunch).toFixed(2) : 'off';
   const R = SPC[spcKey()], n = $('#smSpcNote'), cv = $('#smChart');
   if(!R){ n.className = 'note'; n.textContent = 'Tracking points through the window…'; clearTimeout(spcT); spcT = setTimeout(() => { if(!SPC[spcKey()] && S.f.sm && S.f.smSpc) measureSpacing(); }, 700); return; } // waits for the start slider to settle
   if(R.busy){ n.textContent = 'Tracking points through the window… ' + (R.of ? R.got + ' of ' + R.of + ' frames' : ''); return; }
   if(R.err){ n.className = 'note warn'; n.innerHTML = esc("Couldn't measure the spacing (" + R.err + "), so it pins the plain every-" + (+f.smEvery || 4) + ' grid. ') + '<button class="btn" id="smSpcRetry" style="margin-top:6px">↻ Measure again</button>';
     $('#smSpcRetry').onclick = () => { delete SPC[spcKey()]; measureSpacing(); }; return; }
-  n.className = 'note'; const L = smoothPlan()[0].gen, P = spacingPlan(R.d, L, +f.smEvery || 4, +f.smEase), d = R.d.slice(0, L - 1);
+  n.className = 'note'; const L = smoothPlan()[0].gen, P = spacingPlan(R.d, L, +f.smEvery || 4, +f.smEase, +f.smPunch || 0), d = R.d.slice(0, L - 1);
   const dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 320, H = 110; cv.width = W * dpr; cv.height = H * dpr; const x = cv.getContext('2d'); x.scale(dpr, dpr); x.clearRect(0, 0, W, H);
   const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim(), mx = Math.max(1, ...d, ...P.t) * 1.1, bw = W / (L - 1), y = v => (H - 16) - v / mx * (H - 22);
   const J = new Set(P.jumps); d.forEach((v, i) => { x.fillStyle = J.has(i) ? css('--bad') : css('--dim'); x.fillRect(i * bw + 0.5, y(v), Math.max(1, bw - 1), (H - 16) - y(v)); });
@@ -637,7 +656,7 @@ function drawSpacing(){
   P.skipped.forEach(o => { x.strokeStyle = css('--bad'); x.lineWidth = 1.5; x.beginPath(); x.moveTo(o * bw - 3, H - 10); x.lineTo(o * bw + 3, H - 4); x.moveTo(o * bw + 3, H - 10); x.lineTo(o * bw - 3, H - 4); x.stroke(); });
   n.innerHTML = esc('Tracked about ' + R.pts + ' points per frame. ' + (P.jumps.length ? P.jumps.length + ' jump' + (P.jumps.length > 1 ? 's' : '') + ' (red bars). ' : 'No jumps found. ')
     + (P.moved ? P.moved + ' pinned frame' + (P.moved > 1 ? 's' : '') + ' re-timed (blue dots) and ' : '') + (P.skipped.length ? P.skipped.length + ' left for MiniMax to paint (red ✕). ' : '')
-    + P.keys.length + ' pinned in all.') + ' <span style="color:var(--dim)">Bars: how far things move each frame. Pink line: the eased spacing it aims for.</span>';
+    + P.keys.length + ' pinned in all.') + ' <span style="color:var(--dim)">Bars: how far things move each frame. Pink line: the ' + (+f.smPunch ? 'punchy' : 'eased') + ' spacing it aims for.</span>';
 }
 // ---------- references: what's on, and the <Picture n> / <Video n> / <Audio n> each one is called ----------
 function refsOn(){
@@ -877,7 +896,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 }
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
-  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(); return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, keys:P ? P.keys : null}; })() : null;
+  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(); return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, punch:P ? +f.smPunch || 0 : 0, keys:P ? P.keys : null}; })() : null;
   const upImgs = sm && f.smUp && f.smUpRefs ? (f.smRefs || []).filter(id => S.media[id]).map(id => ({id})) : [];
   const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:upImgs.length > 0} : null;
   return {sm, up, upImgs, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
@@ -1037,7 +1056,7 @@ async function toSmooth(t){
   const f = S.f, m = S.media[id] || {}, secs = Math.min(SM_MAX, m.dur || clipFrames(t) / FPS), text = (t.prompt || '').split('\n\n＋ ').join(' ');
   Object.assign(f, {sm:true, smVid:id, smStart:0, smUp:true, smRefs:(t.upImgs && t.upImgs.length ? t.upImgs : t.imgs || []).map(r => r.id).filter(x => S.media[x]), smUpRefs:true,
     prompt:text===SM_PROMPT ? '' : text, seconds:Math.round(secs * 20) / 20, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', mp:Math.round(t.w * t.h / 1e4) / 100, pieceText:{}});
-  if(t.sm) Object.assign(f, {smEvery:t.sm.every || f.smEvery, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase});
+  if(t.sm) Object.assign(f, {smEvery:t.sm.every || f.smEvery, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0});
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds);
   save(); drawAll(); const box = $('#smSw'); (box || document.body).scrollIntoView({behavior:'smooth', block:'start'});
   toast('Loaded into 🪄 Smooth with ⬆ regenerate on. Check it, then press Render', 5000);
@@ -1085,7 +1104,7 @@ async function saveVideo(t){
 }
 function useAgain(t){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
-  f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
+  f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => ({id:r.id, on:true})); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow})); f.auds = t.auds.map(r => ({id:r.id, on:true})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); // these boxes are only filled at start, so set them here too
@@ -1341,6 +1360,7 @@ $('#flSw').onclick = () => { S.f.fl = !S.f.fl; save(); drawAll(); };
 $('#smSw').onclick = () => { S.f.sm = !S.f.sm; save(); drawAll(); };
 $('#smSpcSw').onclick = () => { S.f.smSpc = !S.f.smSpc; save(); drawInputs(); drawGo(); };
 $('#smEase').oninput = e => { S.f.smEase = +e.target.value; save(); drawSpacing(); drawInputs(); };
+$('#smPunch').oninput = e => { S.f.smPunch = +e.target.value; save(); drawSpacing(); drawInputs(); };
 $('#smUpSw').onclick = () => { S.f.smUp = !S.f.smUp; save(); drawInputs(); drawGo(); };
 $('#smUpRefsSw').onclick = () => { S.f.smUpRefs = !S.f.smUpRefs; save(); drawInputs(); };
 $('#smUpSeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smUpX = +b.dataset.v; save(); drawInputs(); };
@@ -1389,6 +1409,6 @@ drawAll();
 pingAll().then(() => { drawAll(); tick(); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
-window.H3 = {S, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
