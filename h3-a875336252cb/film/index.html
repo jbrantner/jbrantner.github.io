@@ -79,6 +79,12 @@ header h1 span{color:var(--accent)}
 .mini::after{width:14px;height:14px}
 .on>.mini::after,.mini.on::after{transform:translateX(14px)}
 .slots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.castGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 12px}
+.castTile{display:flex;flex-direction:column;gap:3px;padding:0 0 8px;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.castTile img,.castTile>span{width:100%;aspect-ratio:3/4;object-fit:cover;object-position:top;display:grid;place-items:center;background:var(--bg);color:var(--dim);font-size:12px}
+.castTile b{padding:0 8px;font:700 13px/1.2 var(--body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.castTile small{padding:0 8px;color:var(--soft);font-size:11px}
+.block>h3 .hthumb{width:30px;height:30px;border-radius:8px;object-fit:cover;object-position:top;flex:none}
 .slot{position:relative;aspect-ratio:1;border-radius:12px;border:1px dashed var(--line);background:var(--bg);overflow:hidden;display:grid;place-items:center;color:var(--dim);font-size:13px;font-weight:700;text-align:center}
 .slot.has{border-style:solid}
 .slot.off img,.slot.off video,.slot.off .wave{opacity:.25;filter:grayscale(1)}
@@ -803,13 +809,35 @@ async function makePictures(film, c, kind, opt){
     else if(kind==='pic') for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'Clean front shot', G:qwenGraph(k, img, 'Show the same person from picture 1 in a clean reference photo. ' + base + KEEP + ' Front view, looking at the camera, head to waist, neutral relaxed expression. ' + LOOK, W, H, genDir(film, c) + '/front'), n:1});
     else for(const i of opt.which) jobs.push({k, label:ANGLES[i][0], order:i, G:qwenGraph(k, img, 'The same person as in picture 1. ' + base + KEEP + ' ' + ANGLES[i][1] + ' ' + LOOK, W, H, genDir(film, c) + '/angle_' + (i + 1)), n:1});
   }
-  const set = uid('set');
-  for(const j of jobs){ const x = {id:uid('g'), set, kind, label:j.label, order:j.order, pc:j.k.url, save:j.G.save, state:'new', t:Date.now(), files:[]};
-    c.gens.push(x); x.pid = await queueGraph(j.k.url, j.G); x.state = 'queued'; x.tq = Date.now(); save(); }
+  const set = uid('set'), url = jobs[0].k.url, xs = jobs.map(j => ({id:uid('g'), set, kind, label:j.label, order:j.order, pc:url, save:j.G.save, state:'new', t:Date.now(), files:[]}));
+  // Render's helper keeps its own line of jobs on disk and hands them to ComfyUI one at a time, so a ComfyUI crash and restart
+  // (Render 2026-11-02 19:12, Qwen mid-job: 7 waiting pictures gone with ComfyUI's in-memory queue) costs nothing: it sends again.
+  // Older helpers, or a PC the helper doesn't list: straight into ComfyUI's queue as before.
+  if(await farmOk(url)){
+    const r = await fetch(url + '/renderdeck/farm/add', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({jobs:jobs.map((j, i) => ({key:xs[i].id, graph:j.G.g, home:url, pin:url, client_id:CID, prompt:'H3 Film · ' + (c.name || 'cast') + ' · ' + j.label}))})});
+    const a = await r.json().catch(() => ({})); if(!r.ok || a.error) throw new Error(a.error || pcName(url) + "'s helper said " + r.status);
+    xs.forEach(x => { x.farm = 1; x.state = 'queued'; x.tq = Date.now(); c.gens.push(x); }); save();
+  } else for(let i = 0; i < jobs.length; i++){ const x = xs[i]; c.gens.push(x); x.pid = await queueGraph(url, jobs[i].G); x.state = 'queued'; x.tq = Date.now(); save(); }
   tickSoon(800); return jobs.length;
 }
-async function tickGens(){ let changed = false;
+const normU = u => String(u || '').replace(/\/+$/, '');
+async function farmGet(url, since){ return getJ(url + '/renderdeck/farm?since=' + Math.max(0, Math.floor(since || 0)), null, 10000); }
+// does this PC's helper run the job line, with this PC in it and switched on there?
+async function farmOk(url){ const p = pcOf(url); if(p.farmAt && Date.now() - p.farmAt < 120000) return p.farm;
+  try{ const j = await farmGet(url, Date.now() / 1000); const me = (j.pcs || []).find(x => normU(x.url)===normU(url)); p.farm = !!(j.farm && me && !me.off && !me.video); }catch(e){ p.farm = false; }
+  p.farmAt = Date.now(); return p.farm; }
+async function tickGens(){ let changed = false; const FV = {};
   for(const film of S.films) for(const c of film.chars) for(const x of c.gens || []){ if(x.state!=='queued' && x.state!=='running') continue; if(!pcOf(x.pc).online) continue;
+    if(x.farm){ // in the helper's line: waiting, sent to ComfyUI, or finished (its own record, which outlives ComfyUI restarts)
+      if(!(x.pc in FV)){ const since = Math.min(...S.films.flatMap(f => f.chars.flatMap(h => (h.gens || []).filter(g => g.farm && g.pc===x.pc && (g.state==='queued' || g.state==='running')).map(g => g.tq || g.t)))) / 1000 - 300;
+        try{ FV[x.pc] = await farmGet(x.pc, since); }catch(e){ FV[x.pc] = null; } }
+      const v = FV[x.pc]; if(!v) continue;
+      const j = (v.jobs || []).find(y => y.key===x.id), d = (v.done || []).slice().reverse().find(y => y.key===x.id);
+      if(j){ const st = j.state==='running' ? 'running' : 'queued'; if(j.id && j.id!==x.pid){ x.pid = j.id; changed = true; } if(st!==x.state){ x.state = st; changed = true; } }
+      else if(d){ if(d.state==='done'){ x.files = (d.images || []).map(f => ({filename:f.filename, subfolder:f.subfolder || '', type:'output'})); x.state = x.files.length ? 'done' : 'failed'; if(!x.files.length) x.err = 'nothing came back'; }
+        else { x.state = 'failed'; x.err = d.error || 'failed'; } changed = true; }
+      else if(Date.now() - (x.tq || 0) > 60000){ x.state = 'failed'; x.err = pcName(x.pc) + "'s helper has no record of it (it was cancelled there)"; changed = true; }
+      continue; }
     const h = await histOf(x.pc, x.pid); if(h===undefined) continue;
     if(h && h.status && h.status.completed){ const o = ((h.outputs || {})[x.save] || {}).images || []; x.files = o.map(f => ({filename:f.filename, subfolder:f.subfolder || '', type:'output'})); x.state = x.files.length ? 'done' : 'failed'; if(!x.files.length) x.err = 'nothing came back'; changed = true; }
     else if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(m => m[0]==='execution_error'); x.state = 'failed'; x.err = e ? e[1].exception_message : 'ComfyUI hit an error'; changed = true; }
@@ -881,7 +909,11 @@ function refSlots(list, owner){ // ranked pictures: #1 is the most important
 }
 function castTab(film){
   return `<div class="note" style="margin-bottom:10px">Add each character's pictures from most to least important. When a cut has more than one character, the 9 picture slots are shared and each one gets their top pictures first. In the description, {2} means that character's 2nd picture; it's renumbered for every cut, and dropped when that picture isn't used.</div>
-  ${film.chars.map(c => `<section class="block" style="--c:var(--pic)"><h3 data-act="noop">${esc(c.name || 'Character')}<span class="sum">${c.refs.length} pictures</span></h3><div class="body">
+  ${(() => { const shut = film.chars.filter(c => !c.open); // folded characters: a strip of their #1 picture (Jordan 2026-11-02), tap one to open it
+    return shut.length ? `<div class="castGrid">${shut.map(c => { const t = c.refs[0] && THUMB(c.refs[0].id);
+      return `<button class="castTile" data-act="castOpen" data-id="${c.id}">${t ? `<img src="${t}" alt="">` : '<span>No picture</span>'}<b>${esc(c.name || 'Character')}</b><small>${c.refs.length} pictures${(c.gens || []).some(g => !g.gone && (g.state==='queued' || g.state==='running' || g.state==='done')) ? ' · 🪄' : ''}</small></button>`; }).join('')}</div>` : ''; })()}
+  ${film.chars.some(c => c.open) && film.chars.length > 1 ? `<button class="btn" data-act="castShutAll" style="margin-bottom:10px">▦ Fold them all into pictures</button>` : ''}
+  ${film.chars.filter(c => c.open).map(c => `<section class="block" style="--c:var(--pic)"><h3 data-act="castShut" data-id="${c.id}">${c.refs[0] && THUMB(c.refs[0].id) ? `<img class="hthumb" src="${THUMB(c.refs[0].id)}" alt="">` : ''}${esc(c.name || 'Character')}<span class="sum">${c.refs.length} pictures</span></h3><div class="body">
     <div class="row" style="flex-wrap:nowrap"><input data-c="${c.id}" data-k="name" value="${esc(c.name)}" placeholder="Name (used in the prompts)"><button class="btn warn" data-act="delChar" data-id="${c.id}">🗑</button></div>
     <textarea data-c="${c.id}" data-k="desc" placeholder="Who she is and how she looks, e.g. A woman in her 30s with short black hair and a grey wool coat. {2} shows her coat from behind.">${esc(c.desc)}</textarea>
     ${refSlots(c.refs, 'c:' + c.id)}
@@ -1127,10 +1159,14 @@ document.addEventListener('click', async ev => {
       el.disabled = true; for(const x of l) for(let i = 0; i < x.files.length; i++) if(!(x.used || []).includes(i)){ try{ await takeGen(c, x.id, i, false); }catch(e){ toast("Couldn't get one: " + e.message); } } break; }
     case 'gDrop': { const c = film.chars.find(x => x.id===d.c), x = c.gens.find(g => g.id===d.g), inSheet = !!el.closest('#sheet'); (x.used = x.used || []).push(+d.i); if(x.used.length >= x.files.length) x.gone = true; if(inSheet) nextInSheet(c); break; }
     case 'gCancel': case 'gCancelAll': { const c = film.chars.find(x => x.id===d.c), l = (c.gens || []).filter(x => (a==='gCancelAll' || x.id===d.g) && (x.state==='queued' || x.state==='running'));
-      for(const x of l){ x.state = 'running'; await cancelCand(x); x.gone = true; } /* interrupt names the prompt, so ComfyUI only stops it if it is the one running */ toast(l.length > 1 ? l.length + ' jobs cancelled' : 'Cancelled'); break; }
+      const fk = l.filter(x => x.farm); if(fk.length){ for(const u of [...new Set(fk.map(x => x.pc))]){ try{ await fetch(u + '/renderdeck/farm/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({keys:fk.filter(x => x.pc===u).map(x => x.id)})}); }catch(e){} } fk.forEach(x => { x.state = 'failed'; x.err = 'Cancelled'; x.gone = true; }); save(); }
+      for(const x of l.filter(x => !x.farm)){ x.state = 'running'; await cancelCand(x); x.gone = true; } /* interrupt names the prompt, so ComfyUI only stops it if it is the one running */ toast(l.length > 1 ? l.length + ' jobs cancelled' : 'Cancelled'); break; }
     case 'gGone': { const c = film.chars.find(x => x.id===d.c); c.gens.find(g => g.id===d.g).gone = true; break; }
     case 'gClear': { const c = film.chars.find(x => x.id===d.c); (c.gens || []).forEach(x => { if(x.state!=='queued' && x.state!=='running') x.gone = true; }); break; }
-    case 'newChar': film.chars.push({id:uid('ch'), name:'', desc:'', refs:[]}); break;
+    case 'newChar': film.chars.push({id:uid('ch'), name:'', desc:'', refs:[], open:true}); break;
+    case 'castOpen': { const c = film.chars.find(x => x.id===d.id); if(c) c.open = true; break; }
+    case 'castShut': { const c = film.chars.find(x => x.id===d.id); if(c) c.open = false; break; }
+    case 'castShutAll': film.chars.forEach(c => { c.open = false; }); break;
     case 'delChar': if(ask('Take this character out of the film?')){ film.chars = film.chars.filter(c => c.id!==d.id); allCuts().forEach(y => { y.cut.chars = y.cut.chars.filter(i => i!==d.id); }); } break;
     case 'newScene': film.scenes.push({id:uid('s'), name:'Scene ' + (film.scenes.length + 1), place:'', placeRefs:[], cuts:[]}); break;
     case 'delScene': if(ask('Delete this scene and its cuts from the app?')) film.scenes = film.scenes.filter(s => s.id!==d.id); break;
