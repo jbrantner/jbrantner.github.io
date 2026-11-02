@@ -193,6 +193,7 @@ h2 span{flex:1}
         <div id="smUpBody" hidden style="margin-top:8px"><div class="lab"><span>Size</span></div><div class="seg" id="smUpSeg"><button data-v="1.25">1.25×</button><button data-v="1.5">1.5×</button></div>
           <div style="margin-top:8px"><div class="lab"><span>Repaint</span></div><div class="seg" id="smUpRep"><button data-v="light">Light</button><button data-v="medium">Medium</button><button data-v="full">Max detail</button></div></div>
           <div style="margin-top:8px"><div class="lab"><span>Strength</span><b id="smUpStrV"></b></div><input type="range" id="smUpStr" min="0.4" max="1" step="0.05" value="0.8" style="width:100%"></div>
+          <div id="smUpRefsBox" hidden style="margin-top:8px"><div class="sw" id="smUpRefsSw"><div><div class="t">Use its reference pictures</div><div class="d">The take's own pictures help the regenerate keep the face (first 3; Reference model)</div></div><div class="tog"></div></div><div class="slots" id="smUpRefSlots" style="margin-top:6px"></div></div>
           <div class="note" id="smUpNote" style="margin-top:6px"></div></div>
         <div class="sw" id="smSoundSw" style="margin-top:8px"><div><div class="t">🔊 Keep its sound</div><div class="d">Pins the clip's own sound too, so voices stay in sync</div></div><div class="tog"></div></div>
         <div class="note" id="smNote" style="margin-top:6px"></div>
@@ -287,7 +288,7 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8}, s.f || {});
+    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true}, s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   s.media = s.media || {}; s.up = s.up || {}; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
@@ -779,7 +780,8 @@ const REGEN_SIG = {full:'0.909375, 0.857143, 0.75, 0.6, 0.45, 0.3, 0.15, 0.0', m
 const regenLora = oi => combo(oi, 'LoraLoaderModelOnly', 'lora_name').find(x => /open_?regenerate/i.test(x));
 const regenUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name'); return u.find(x => /minimax_h3_fl2va.*int8/i.test(x)) || u.find(x => /fl2va.*int8/i.test(x)) || u.find(x => /fl2va/i.test(x)); };
 const regenRefUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name'); return u.find(x => /minimax_h3_ref2va.*int8/i.test(x)) || u.find(x => /ref2va.*int8/i.test(x)) || u.find(x => /ref2va/i.test(x)); };
-const regenRefsOn = (t, oi) => !!(t.up && t.up.refs && (t.imgs || []).length && oi.MiniMaxH3ReferenceToVideo && regenRefUnet(oi));
+const upRefs = t => (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || []; // pictures carried in from the take it came from, else its own
+const regenRefsOn = (t, oi) => !!(t.up && t.up.refs && upRefs(t).length && oi.MiniMaxH3ReferenceToVideo && regenRefUnet(oi));
 const REGEN_REFS = 3; // reference pictures cost tokens at the new size, so only the first few go in (8 GB card)
 const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
 function regenMissing(oi){
@@ -806,7 +808,7 @@ function upGraph(t, oi, names){
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const length = regenLen(t), prompt = t.prompt || SM_PROMPT;
   let iv;
-  if(refs){ const ri = {}; t.imgs.slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
+  if(refs){ const ri = {}; upRefs(t).slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
     iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:d.w, height:d.h, length, ref_image_size:'match'}, ri)); }
   else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:d.w, height:d.h, length});
   const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:[big, 0], audio_latent:[sep, 1]});
@@ -823,7 +825,7 @@ async function tickUpscale(t){
   if(t.upStage==='start'){
     { const why = p.oi ? regenMissing(p.oi) : 'not reachable'; if(why){ t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
-    try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of t.imgs.slice(0, REGEN_REFS)) names[r.id] = await upload(t.pc, r.id);
+    try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of upRefs(t).slice(0, REGEN_REFS)) names[r.id] = await upload(t.pc, r.id);
       const G = upGraph(t, p.oi, names); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
     return; }
   let h = null; try{ h = (await getJ(t.pc + '/history/' + t.upPid))[t.upPid]; }catch(e){ return; }
@@ -876,8 +878,9 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
   const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(); return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, keys:P ? P.keys : null}; })() : null;
-  const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8} : null;
-  return {sm, up, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
+  const upImgs = sm && f.smUp && f.smUpRefs ? (f.smRefs || []).filter(id => S.media[id]).map(id => ({id})) : [];
+  const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:upImgs.length > 0} : null;
+  return {sm, up, upImgs, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => ({id:r.id})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow})), auds:R.auds.map(r => ({id:r.id})), follow:R.follow.map(r => ({id:r.id})),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
@@ -1023,6 +1026,22 @@ function regenSheet(t){
   };
   draw(); wire();
 }
+// 🪄⬆ Smooth & regenerate (Jordan 2026-11-02): the take's video, prompt, model, LoRAs and size go into 🪄 Smooth with
+// ⬆ Then regenerate bigger on, and its reference pictures go to the regenerate step. Nothing runs until Render is pressed.
+async function toSmooth(t){
+  const src = t.smoothed || t.final; if(!src) return;
+  if(!pcOf(t.pc).online){ toast(pcName(t.pc) + " can't be reached, and the video is there"); return; }
+  let id; try{ toast('Getting the video from ' + pcName(t.pc) + '…'); const r = await fetch(viewUrl(t.pc, src)); if(!r.ok) throw new Error(pcName(t.pc) + ' said ' + r.status);
+    const b = await r.blob(); if(!b.size) throw new Error('it came back empty'); id = await addMedia(new File([b], src.filename, {type:'video/mp4'}), 'vid');
+  }catch(e){ toast("Couldn't get the video: " + e.message, 6000); return; }
+  const f = S.f, m = S.media[id] || {}, secs = Math.min(SM_MAX, m.dur || clipFrames(t) / FPS), text = (t.prompt || '').split('\n\n＋ ').join(' ');
+  Object.assign(f, {sm:true, smVid:id, smStart:0, smUp:true, smRefs:(t.upImgs && t.upImgs.length ? t.upImgs : t.imgs || []).map(r => r.id).filter(x => S.media[x]), smUpRefs:true,
+    prompt:text===SM_PROMPT ? '' : text, seconds:Math.round(secs * 20) / 20, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', mp:Math.round(t.w * t.h / 1e4) / 100, pieceText:{}});
+  if(t.sm) Object.assign(f, {smEvery:t.sm.every || f.smEvery, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase});
+  $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds);
+  save(); drawAll(); const box = $('#smSw'); (box || document.body).scrollIntoView({behavior:'smooth', block:'start'});
+  toast('Loaded into 🪄 Smooth with ⬆ regenerate on. Check it, then press Render', 5000);
+}
 function extendSheet(t){
   openSheet(`<h3>➕ Add more to this clip <button class="btn" data-close>✕</button></h3>
     <div class="note">It carries straight on from the end, on ${esc(pcName(t.pc))} at the same size (the last piece is kept there).</div>
@@ -1115,6 +1134,8 @@ function drawInputs(){
   drawSpacing();
   $('#smUpSw').classList.toggle('on', !!f.smUp); $('#smUpBody').hidden = !f.smUp; $$('#smUpSeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smUpX || 1.5)));
   $$('#smUpRep button').forEach(b => b.classList.toggle('on', b.dataset.v===(f.smUpRep || 'medium'))); $('#smUpStr').value = f.smUpStr != null ? f.smUpStr : 0.8; $('#smUpStrV').textContent = (+$('#smUpStr').value).toFixed(2);
+  { const rs = (f.smRefs || []).filter(id => S.media[id]); $('#smUpRefsBox').hidden = !rs.length; $('#smUpRefsSw').classList.toggle('on', !!f.smUpRefs);
+    $('#smUpRefSlots').innerHTML = rs.map((id, k) => `<div class="slot has ${f.smUpRefs && k < REGEN_REFS ? '' : 'off'}"><img src="${S.media[id].thumb || ''}" alt=""><span class="tag">Picture ${k + 1}</span><button class="x" data-rm="smRef" data-i="${k}">✕</button></div>`).join(''); }
   if(f.smUp){ const d = dims(), fake = {w:d.w, h:d.h, up:{scale:+f.smUpX || 1.5}}; $('#smUpNote').textContent = d.w + '×' + d.h + ' → ' + upSize(fake) + '. Its own job after the smoothing, on the same PC (MiniMax is unloaded first); the app has to be open for it to start, like joining. Medium + strength 0.8 is the best balance from the tests (least grain, face stays close). Full = most detail but more grain, the face drifts and it runs hottest. Light repaints least. Render runs hot: 2.3 s took about 2 min and peaked at 86°C, so keep clips short there.'; }
   if(f.sm){ const L = smoothPlan()[0].gen, P = currentSpacing(), n = P ? P.keys.length : smoothKeys(L, +f.smEvery || 4).length;
     $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s). The prompt is optional: describe the action to steer the in-betweens.'
@@ -1232,7 +1253,7 @@ function drawTakes(){
     const chips = n > 1 ? `<div class="pieces">${t.pieces.map((p, i) => `<i style="--w:${p.deliv};${p.state==='done' ? 'color:var(--good)' : p.state==='running' ? 'color:var(--accent);border-color:var(--accent)' : p.state==='failed' ? 'color:var(--bad)' : ''}" data-piece="${t.id}|${i}">${i + 1}${p.state==='done' ? ' ✓' : p.state==='running' ? ' ▶' : p.state==='failed' ? ' ✕' : ''}</i>`).join('')}</div>` : '';
     const f = progress(t), tl = timeLeft(t);
     const acts = t.state==='working' ? `<button class="btn warn" data-act="cancel" data-t="${t.id}">✕ Cancel</button>`
-      : `${t.final || t.pieces.some(p => p.file) ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.final ? `<button class="btn" data-act="regen" data-t="${t.id}">⬆ Regenerate</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn" data-act="drop" data-t="${t.id}">🗑</button>`;
+      : `${t.final || t.pieces.some(p => p.file) ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.final ? `<button class="btn" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn" data-act="drop" data-t="${t.id}">🗑</button>`;
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(',')].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? '🪄 ' : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
@@ -1266,7 +1287,7 @@ document.addEventListener('click', async e => {
   if(ds.asp){ f.aspect = ds.asp; }
   else if(ds.pre){ const [w, h] = ds.pre.split('x').map(Number), r = w / h, a = ASPECTS.find(x => Math.abs(x[1] - r) < 0.02); if(a && f.aspect!=='pic') f.aspect = a[0]; f.mp = Math.round(w * h / 1e4) / 100; }
   else if(ds.add){ pickFile(ds.add); return; }
-  else if(ds.rm){ if(ds.rm==='first' || ds.rm==='lastImg' || ds.rm==='smVid') f[ds.rm] = null; else f[ds.rm + 's'].splice(+ds.i, 1); }
+  else if(ds.rm){ if(ds.rm==='first' || ds.rm==='lastImg' || ds.rm==='smVid') f[ds.rm] = null; else if(ds.rm==='smRef') f.smRefs.splice(+ds.i, 1); else f[ds.rm + 's'].splice(+ds.i, 1); }
   else if(ds.tg){ const r = f[ds.tg + 's'][+ds.i]; r.on = !r.on; }
   else if(ds.opt){ const r = f[ds.k + 's'][+ds.i]; r[ds.opt] = !r[ds.opt]; }
   else if(ds.ins){ const ta = $('#prompt'), s = ta.selectionStart || ta.value.length, v = ta.value, ins = ds.ins + ' '; ta.value = v.slice(0, s) + ins + v.slice(ta.selectionEnd || s); ta.focus(); ta.selectionStart = ta.selectionEnd = s + ins.length; f.prompt = ta.value; }
@@ -1277,7 +1298,7 @@ document.addEventListener('click', async e => {
     if(ds.act==='cancel'){ if(confirm('Cancel this render?')) await cancelTake(t); }
     else if(ds.act==='save') saveVideo(t);
     else if(ds.act==='more') extendSheet(t);
-    else if(ds.act==='regen') regenSheet(t);
+    else if(ds.act==='regen') await toSmooth(t);
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
     else if(ds.act==='reroll'){ const nt = JSON.parse(JSON.stringify(t)); nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
       nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null; nt.joinPid = null; nt.joinErr = ''; nt.upStage = null; nt.upPid = null; nt.upErr = ''; nt.smoothed = null;
@@ -1301,7 +1322,7 @@ $('#filePick').onchange = async e => {
     for(const file of files){
       if(kind==='img' && pickKind==='img' && f.imgs.length >= MAXREF.img) break;
       const id = await addMedia(file, kind);
-      if(pickKind==='smv'){ f.smVid = id; f.smStart = 0; const m = S.media[id]; if(m.dur && m.dur < +f.seconds) f.seconds = Math.min(+f.seconds, m.dur); break; }
+      if(pickKind==='smv'){ f.smVid = id; f.smStart = 0; f.smRefs = []; const m = S.media[id]; if(m.dur && m.dur < +f.seconds) f.seconds = Math.min(+f.seconds, m.dur); break; }
       if(pickKind==='first'){ f.first = id; } else if(pickKind==='lastImg'){ f.lastImg = id; }
       else if(kind==='img') f.imgs.push({id, on:true});
       else if(kind==='vid'){ const m = S.media[id]; if(m.dur && m.dur < 2) toast('MiniMax wants reference videos of 2 to 15 s'); f.vids.push({id, on:true, sound:false, follow:false}); }
@@ -1321,6 +1342,7 @@ $('#smSw').onclick = () => { S.f.sm = !S.f.sm; save(); drawAll(); };
 $('#smSpcSw').onclick = () => { S.f.smSpc = !S.f.smSpc; save(); drawInputs(); drawGo(); };
 $('#smEase').oninput = e => { S.f.smEase = +e.target.value; save(); drawSpacing(); drawInputs(); };
 $('#smUpSw').onclick = () => { S.f.smUp = !S.f.smUp; save(); drawInputs(); drawGo(); };
+$('#smUpRefsSw').onclick = () => { S.f.smUpRefs = !S.f.smUpRefs; save(); drawInputs(); };
 $('#smUpSeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smUpX = +b.dataset.v; save(); drawInputs(); };
 $('#smUpRep').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smUpRep = b.dataset.v; save(); drawInputs(); };
 $('#smUpStr').oninput = e => { S.f.smUpStr = +e.target.value; $('#smUpStrV').textContent = S.f.smUpStr.toFixed(2); save(); };
@@ -1367,6 +1389,6 @@ drawAll();
 pingAll().then(() => { drawAll(); tick(); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
-window.H3 = {S, regenSheet, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
