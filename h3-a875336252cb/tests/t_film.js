@@ -18,7 +18,7 @@ const SCHEMA = {
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo',
-  'TextEncodeQwenImageEditPlus','ModelSamplingAuraFlow','CFGNorm','ImageScaleToTotalPixels','EmptySD3LatentImage','ConditioningZeroOut','CLIPTextEncode','KSampler','VAEDecode','SaveImage','VAEEncode'];
+  'TextEncodeQwenImageEditPlus','ModelSamplingAuraFlow','CFGNorm','ImageScaleToTotalPixels','EmptySD3LatentImage','ConditioningZeroOut','CLIPTextEncode','KSampler','KSamplerAdvanced','VAEDecode','SaveImage','VAEEncode'];
 const types = g => Object.values(g).map(n => n.class_type), node = (g, t) => Object.values(g).find(n => n.class_type===t), nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
 const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v => !Array.isArray(v) || (typeof v[0]==='string' && g[v[0]])));
 
@@ -146,22 +146,29 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
     const a = await FILM.makePictures(f, c, 'set', {which:[0, 1, 2], from:c.refs[0].id, extra:'round thin-metal glasses'});
     const b = await FILM.makePictures(f, c, 'new', {tries:4}); return [a, b]; });
   const qs = sent.slice(nq, nq + 3), zs = sent.slice(nq + 3);
-  ok(mk[0]===3 && mk[1]===2 && qs.every(s => linksOk(s.g)) && zs.every(s => linksOk(s.g)), 'reference set: 3 angle jobs; from words: 4 tries in 2 jobs');
+  ok(mk[0]===3 && mk[1]===4 && qs.every(s => linksOk(s.g)) && zs.every(s => linksOk(s.g)), 'reference set: 3 angle jobs; from words: 4 tries, one job each');
   const qe = node(qs[1].g, 'TextEncodeQwenImageEditPlus');
   console.log(qe.inputs.prompt);
   ok(qe && Array.isArray(qe.inputs.image1) && /three-quarter view facing left/.test(qe.inputs.prompt) && /short black hair/.test(qe.inputs.prompt) && !/tattoo|\{/.test(qe.inputs.prompt) && /round thin-metal glasses/i.test(qe.inputs.prompt), 'angle prompt: her description (minus picture sentences), the extra words, the angle');
   ok(/2511-Lightning-4steps/.test(node(qs[0].g, 'LoraLoaderModelOnly').inputs.lora_name) && node(qs[0].g, 'KSampler').inputs.steps===4 && node(qs[0].g, 'CLIPLoader').inputs.type==='qwen_image', 'Qwen 2511 + its 4-step Lightning LoRA');
-  ok(node(zs[0].g, 'EmptySD3LatentImage').inputs.batch_size===2 && /^Realistic photo of a woman in her 30s/.test(node(zs[0].g, 'CLIPTextEncode').inputs.text) && node(zs[0].g, 'CLIPLoader').inputs.type==='lumina2', 'Z-Image: realistic photo from her words, 2 a job');
+  const ka = nodes(zs[0].g, 'KSamplerAdvanced');
+  ok(ka.length===2 && ka[0].inputs.end_at_step===1 && ka[1].inputs.start_at_step===1 && ka[0].inputs.positive[0]===ka[0].inputs.negative[0] && ka[1].inputs.add_noise==='disable', 'variety: the first step runs with no prompt, then her words for the rest');
+  ok(node(zs[0].g, 'EmptySD3LatentImage').inputs.batch_size===1 && /^Realistic photo of a woman in her 30s/.test(node(zs[0].g, 'CLIPTextEncode').inputs.text) && node(zs[0].g, 'CLIPLoader').inputs.type==='lumina2', 'Z-Image: realistic photo from her words');
   for(const s of [...qs, zs[0]]){ const sv = Object.entries(s.g).find(([k, n]) => n.class_type==='SaveImage'); HIST[s.pid] = {status:{completed:true}, outputs:{[sv[0]]:{images:[{filename:'a_00001_.png', subfolder:'Output_Render/x', type:'output'}].concat(s===zs[0] ? [{filename:'a_00002_.png', subfolder:'Output_Render/x', type:'output'}] : [])}}}; }
   await tick();
   await page.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'})); await page.waitForTimeout(300);
-  ok(await page.$$eval('[data-act="gAdd"]', b => b.length)===5, 'the card shows 5 new pictures to add (3 angles + 2 from words)');
+  ok(await page.$$eval('.slot [data-act="gAdd"]', b => b.length)===5, 'the card shows 5 new pictures to add (3 angles + 2 from words)');
   await page.screenshot({path:path.join(__dirname, 'film_make.png'), fullPage:true});
+  await page.click('img[data-act="gView"]'); await page.waitForTimeout(200);
+  ok(await page.$$eval('#sheetCard img', i => i.length)===1 && /1 of 5/.test(await page.textContent('#sheetCard')), 'tapping a new picture opens it big (1 of 5)');
+  await page.click('#sheetCard [data-act="gDrop"]'); await page.waitForTimeout(300);
+  ok(/1 of 4/.test(await page.textContent('#sheetCard')), 'throwing it away moves on to the next one');
+  await page.click('#sheetCard [data-act="close"]'); await page.waitForTimeout(200);
   const before = await page.evaluate(() => FILM.S.films[0].chars[0].refs.length);
   await page.click('[data-act="gAll"]'); await page.waitForTimeout(1500);
-  const after = await page.evaluate(() => FILM.S.films[0].chars[0].refs.slice(-5).map(r => r.note));
+  const after = await page.evaluate(() => FILM.S.films[0].chars[0].refs.slice(-4).map(r => r.note));
   console.log(JSON.stringify(after));
-  ok(await page.evaluate(() => FILM.S.films[0].chars[0].refs.length)===before + 5 && after[2]==='a close-up of the face' && after[3]==='a three-quarter view' && after[4]==='a side profile', 'Add all puts them after her pictures, angles in order with their notes');
+  ok(await page.evaluate(() => FILM.S.films[0].chars[0].refs.length)===before + 4 && after[2]==='a three-quarter view' && after[3]==='a side profile', 'Add all puts them after her pictures, angles in order with their notes');
   await page.click('[data-act="mkOpen"]'); await page.waitForTimeout(200);
   ok(/Reference set/.test(await page.textContent('#sheetCard')) && /Make 8 pictures/.test(await page.textContent('#sheetCard')), 'the 🪄 sheet opens on the reference set with all 8 angles');
   await page.click('[data-act="close"]');

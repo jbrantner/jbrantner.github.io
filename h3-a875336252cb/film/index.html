@@ -406,7 +406,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 // ---------- PCs ----------
 const NEED = ['UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3AddGuide','MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode',
-  'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','ModelSamplingAuraFlow','CFGNorm','ImageScaleToTotalPixels','EmptySD3LatentImage','ConditioningZeroOut','CLIPTextEncode','KSampler','VAEDecode','SaveImage','VAEEncode'];
+  'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','ModelSamplingAuraFlow','CFGNorm','ImageScaleToTotalPixels','EmptySD3LatentImage','ConditioningZeroOut','CLIPTextEncode','KSampler','KSamplerAdvanced','VAEDecode','SaveImage','VAEEncode'];
 const PC = {};
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
@@ -749,12 +749,19 @@ function zitKitF(){
   return {why:"None of the PCs that are on has Z-Image Turbo (z_image_turbo, qwen_3_4b, ae)"};
 }
 const whoText = c => String(c.desc || '').split(/(?<=[.!?])\s+|\n+/).filter(t => t.trim() && !/\{\d+\}|<Picture\s*\d+>/i.test(t)).join(' ').trim().replace(/[.\s]*$/, ''); // her words, minus sentences about her own pictures
-function zitGraph(k, text, W, H, batch, prefix){
+// free = how many of the 8 steps run with no prompt at all (Z-Image Turbo gives near-identical faces from any seed;
+// a step or two of pure noise first lets each try start from its own layout and face, then her words take over)
+function zitGraph(k, text, W, H, batch, prefix, free){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
-  const model = add('ModelSamplingAuraFlow', {model:[add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0], shift:3}), vae = [add('VAELoader', {vae_name:k.vae}), 0];
-  const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.clip, type:'lumina2', device:'default'}), 0], text}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
-  const ks = add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 1e12), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0], latent_image:[add('EmptySD3LatentImage', {width:W, height:H, batch_size:batch}), 0], denoise:1});
-  return {g, save:add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae}), 0], filename_prefix:prefix})};
+  const model = [add('ModelSamplingAuraFlow', {model:[add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0], shift:3}), 0], vae = [add('VAELoader', {vae_name:k.vae}), 0];
+  const pos = [add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.clip, type:'lumina2', device:'default'}), 0], text}), 0], neg = [add('ConditioningZeroOut', {conditioning:pos}), 0];
+  const lat = [add('EmptySD3LatentImage', {width:W, height:H, batch_size:batch}), 0], seed = Math.floor(Math.random() * 1e12), S8 = {steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple'};
+  let out;
+  if(free > 0 && k.oi.KSamplerAdvanced){
+    const a = add('KSamplerAdvanced', Object.assign({model, add_noise:'enable', noise_seed:seed, positive:neg, negative:neg, latent_image:lat, start_at_step:0, end_at_step:free, return_with_leftover_noise:'enable'}, S8));
+    out = add('KSamplerAdvanced', Object.assign({model, add_noise:'disable', noise_seed:seed, positive:pos, negative:neg, latent_image:[a, 0], start_at_step:free, end_at_step:10000, return_with_leftover_noise:'disable'}, S8));
+  } else out = add('KSampler', Object.assign({model, seed, positive:pos, negative:neg, latent_image:lat, denoise:1}, S8));
+  return {g, save:add('SaveImage', {images:[add('VAEDecode', {samples:[out, 0], vae}), 0], filename_prefix:prefix})};
 }
 function qwenGraph(k, img, text, W, H, prefix){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
@@ -776,7 +783,7 @@ async function makePictures(film, c, kind, opt){
   const jobs = [];
   if(kind==='new'){ const k = zitKitF(); if(k.why) throw new Error(k.why);
     const text = 'Realistic photo of ' + (who || 'a person') + (extra ? '. ' + sentence(extra).replace(/\.$/, '') : '') + '. Front view, looking at the camera, head to waist, neutral relaxed expression. ' + LOOK;
-    for(let left = Math.max(1, opt.tries || 4); left > 0; left -= 2) jobs.push({k, label:'From words', G:zitGraph(k, text, W, H, Math.min(2, left), genDir(film, c) + '/new'), n:Math.min(2, left)});
+    for(let left = Math.max(1, opt.tries || 4); left > 0; left -= 1) jobs.push({k, label:'From words', G:zitGraph(k, text, W, H, 1, genDir(film, c) + '/new', opt.free != null ? +opt.free : 1), n:Math.min(2, left)});
   } else { const k = qwenKitF(); if(k.why) throw new Error(k.why); const img = await upload(k.url, opt.from);
     const base = (who ? 'This is ' + who + '. ' : '') + (extra ? sentence(extra) + ' ' : '');
     if(kind==='pic') for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'Clean front shot', G:qwenGraph(k, img, 'Show the same person from picture 1 in a clean reference photo. ' + base + KEEP + ' Front view, looking at the camera, head to waist, neutral relaxed expression. ' + LOOK, W, H, genDir(film, c) + '/front'), n:1});
@@ -853,7 +860,7 @@ function filmView(film){
     <div class="tabs">${T('cast', '🎭 Cast')}${T('scenes', '🎬 Scenes')}${T('look', '🎛 Look')}</div>` + body;
 }
 function refSlots(list, owner){ // ranked pictures: #1 is the most important
-  return `<div class="slots">${list.map((r, i) => `<div class="slot has"><img src="${esc(THUMB(r.id))}" alt=""><span class="rk">#${i + 1}</span>${r.note ? `<span class="nt">${esc(r.note)}</span>` : ''}
+  return `<div class="slots">${list.map((r, i) => `<div class="slot has"><img src="${esc(THUMB(r.id))}" alt="" data-act="rView" data-o="${owner}" data-i="${i}"><span class="rk">#${i + 1}</span>${r.note ? `<span class="nt">${esc(r.note)}</span>` : ''}
     <button class="x" data-act="refDel" data-o="${owner}" data-i="${i}" aria-label="Take out">✕</button>
     <span class="mv"><button data-act="refNote" data-o="${owner}" data-i="${i}" aria-label="Note">✏️</button>${i ? `<button data-act="refUp" data-o="${owner}" data-i="${i}" aria-label="More important">◀</button>` : ''}${i < list.length - 1 ? `<button data-act="refDn" data-o="${owner}" data-i="${i}" aria-label="Less important">▶</button>` : ''}</span></div>`).join('')}
     <div class="slot add" data-act="refAdd" data-o="${owner}">＋<br>pictures</div></div>`;
@@ -970,7 +977,7 @@ function fixNote(cut){ const fx = cut.fx, p = fixPlan(cutFrames(cut), fx.a, fx.b
 
 function gensHtml(c){ // pictures made for her, waiting to be added
   const live = (c.gens || []).filter(x => !x.gone); if(!live.length) return '';
-  const tiles = live.flatMap(x => x.state==='done' ? x.files.map((f, i) => (x.used || []).includes(i) ? '' : `<div class="slot has"><img src="${esc(viewUrl(x.pc, f))}" alt="" loading="lazy"><span class="tag">${esc(x.label)}</span>
+  const tiles = live.flatMap(x => x.state==='done' ? x.files.map((f, i) => (x.used || []).includes(i) ? '' : `<div class="slot has"><img src="${esc(viewUrl(x.pc, f))}" alt="" loading="lazy" data-act="gView" data-c="${c.id}" data-g="${x.id}" data-i="${i}"><span class="tag">${esc(x.label)}</span>
       <span class="mv"><button data-act="gTop" data-c="${c.id}" data-g="${x.id}" data-i="${i}" title="Make it her #1">#1</button><button data-act="gAdd" data-c="${c.id}" data-g="${x.id}" data-i="${i}" title="Add it after her pictures">＋</button></span>
       <button class="x" data-act="gDrop" data-c="${c.id}" data-g="${x.id}" data-i="${i}" aria-label="Throw away">✕</button></div>`)
     : [`<div class="slot"><span>${esc(x.label)}<br>${x.state==='failed' ? '✕ ' + esc((x.err || 'failed').slice(0, 60)) : x.state==='running' ? (LIVE[x.pid] && LIVE[x.pid].max ? 'step ' + LIVE[x.pid].v + '/' + LIVE[x.pid].max : 'making…') : 'waiting in line'}</span>${x.state==='failed' ? `<button class="x" data-act="gGone" data-c="${c.id}" data-g="${x.id}">✕</button>` : ''}</div>`]).filter(Boolean);
@@ -980,6 +987,19 @@ function gensHtml(c){ // pictures made for her, waiting to be added
     <div class="btns">${done ? `<button class="btn" data-act="gAll" data-c="${c.id}">＋ Add all, in order</button>` : ''}<button class="btn" data-act="gClear" data-c="${c.id}">Clear these</button></div>
     <div class="note">#1 puts a picture at the top of her ranking; ＋ adds it after the ones she has. You can re-rank with ◀ ▶.</div>`;
 }
+
+// tap a picture: see it big (Jordan 2026-11-02)
+function gViewSheet(c, gid, fi){
+  const list = (c.gens || []).filter(x => !x.gone && x.state==='done').flatMap(x => x.files.map((f, i) => ({x, f, i})).filter(e => !(x.used || []).includes(e.i)));
+  const k = list.findIndex(e => e.x.id===gid && e.i===fi); if(k < 0){ closeSheet(); return; } const e = list[k], A = `data-c="${c.id}" data-g="${e.x.id}" data-i="${e.i}"`;
+  openSheet(`<h3><span>${esc(e.x.label)} · ${k + 1} of ${list.length}</span><button class="btn" data-act="close">✕</button></h3>
+    <img src="${esc(viewUrl(e.x.pc, e.f))}" alt="" style="width:100%;max-height:70vh;object-fit:contain;border-radius:12px;background:#000">
+    <div class="btns">${k ? `<button class="btn" data-act="gView" data-c="${c.id}" data-g="${list[k - 1].x.id}" data-i="${list[k - 1].i}">‹</button>` : ''}${k < list.length - 1 ? `<button class="btn" data-act="gView" data-c="${c.id}" data-g="${list[k + 1].x.id}" data-i="${list[k + 1].i}">›</button>` : ''}
+      <button class="btn pri" data-act="gTop" ${A}>Make it #1</button><button class="btn" data-act="gAdd" ${A}>＋ Add after hers</button><button class="btn warn" data-act="gDrop" ${A}>✕ Throw away</button></div>`);
+}
+function nextInSheet(c){ const n = (c.gens || []).filter(x => !x.gone && x.state==='done').flatMap(x => x.files.map((f, i) => ({x, i})).filter(e => !(x.used || []).includes(e.i)))[0]; if(n) gViewSheet(c, n.x.id, n.i); else closeSheet(); }
+function rViewSheet(owner, i){ const l = refList(owner), r = l && l[i]; if(!r) return; openSheet(`<h3><span>#${i + 1}${r.note ? ' · ' + esc(r.note) : ''}</span><button class="btn" data-act="close">✕</button></h3><img id="rvImg" alt="" style="width:100%;max-height:75vh;object-fit:contain;border-radius:12px;background:#000">`);
+  mediaUrl(r.id).then(u => { const im = $('#rvImg'); if(im) im.src = u || THUMB(r.id); }); }
 let MK = null; // the 🪄 sheet's choices
 function mkSheet(){
   const film = curFilm(), c = film && film.chars.find(x => x.id===MK.ch); if(!c) return closeSheet();
@@ -994,6 +1014,7 @@ function mkSheet(){
       : 'Qwen-Image-Edit makes the same person from each angle you tick, from the picture you pick (her #1 is best). Each angle is its own picture, about 40 s each on Render.'}</div>
     ${MK.kind==='new' ? '' : c.refs.length ? pick : '<div class="note warn">She has no pictures yet: add one, or start ✨ From words.</div>'}
     ${MK.kind==='set' ? `<div class="chips">${ANGLES.map((a, i) => `<button class="chip ${MK.which.includes(i) ? 'on' : ''}" data-act="mkAngle" data-i="${i}">${esc(a[0])}</button>`).join('')}</div>` :
+      (MK.kind==='new' ? `<div><div class="lab"><span>Variety between tries</span></div><div class="seg">${[[0, 'Same'], [1, 'Some'], [2, 'Lots']].map(([v, t]) => `<button class="${MK.free===v ? 'on' : ''}" data-act="mkFree" data-v="${v}">${t}</button>`).join('')}</div><div class="note" style="margin-top:4px">Lets each try start from its own face and framing before her description takes over. Lots can drift from what you wrote.</div></div>` : '') +
       `<div class="row" style="justify-content:space-between"><label>Tries</label><div class="step"><button data-act="mkTries" data-d="-1">−</button><b>${MK.tries}</b><button data-act="mkTries" data-d="1">+</button></div></div>`}
     <div><div class="lab"><span>Her description is used, plus</span></div><textarea id="mkExtra" style="min-height:60px" placeholder="Anything extra for these pictures, e.g. wearing round thin-metal glasses">${esc(MK.extra || '')}</textarea></div>
     ${kit.why ? `<div class="note bad">${esc(kit.why)}</div>` : `<div class="note">Runs on ${esc(pcName(kit.url))}; keeps going if you close the app.</div>`}
@@ -1075,18 +1096,21 @@ document.addEventListener('click', async ev => {
     case 'close': closeSheet(); return;
     case 'newFilm': { const f = newFilm(prompt('Film name', 'New film') || 'New film'); S.films.unshift(f); go({v:'film', film:f.id, tab:'cast'}); return; }
     case 'delFilm': if(ask('Delete "' + film.name + '" from the app? (The videos stay on the PCs.)')){ S.films = S.films.filter(f => f!==film); go({v:'home'}); } return;
-    case 'mkOpen': MK = {ch:d.id, kind:(film.chars.find(c => c.id===d.id) || {refs:[]}).refs.length ? 'set' : 'new', tries:4, which:ANGLES.map((a, i) => i), extra:''}; mkSheet(); return;
+    case 'gView': { const c = film.chars.find(x => x.id===d.c); gViewSheet(c, d.g, +d.i); return; }
+    case 'rView': rViewSheet(d.o, +d.i); return;
+    case 'mkOpen': MK = {ch:d.id, kind:(film.chars.find(c => c.id===d.id) || {refs:[]}).refs.length ? 'set' : 'new', tries:4, free:1, which:ANGLES.map((a, i) => i), extra:''}; mkSheet(); return;
     case 'mkKind': MK.kind = d.v; MK.tries = d.v==='new' ? 4 : 2; mkSheet(); return;
     case 'mkFrom': MK.from = d.id; mkSheet(); return;
     case 'mkAngle': { const i = +d.i; MK.which = MK.which.includes(i) ? MK.which.filter(x => x!==i) : MK.which.concat(i).sort((a, b) => a - b); mkSheet(); return; }
+    case 'mkFree': MK.free = +d.v; mkSheet(); return;
     case 'mkTries': MK.tries = Math.max(1, Math.min(8, MK.tries + +d.d)); mkSheet(); return;
     case 'mkGo': { const c = film.chars.find(x => x.id===MK.ch); el.disabled = true; el.textContent = 'Sending…';
-      try{ const n = await makePictures(film, c, MK.kind, {tries:MK.tries, which:MK.which, from:MK.from, extra:MK.extra}); closeSheet(); toast(n + (n > 1 ? ' jobs' : ' job') + ' sent. The pictures show up on ' + (c.name || 'her') + "'s card."); }
+      try{ const n = await makePictures(film, c, MK.kind, {tries:MK.tries, free:MK.free, which:MK.which, from:MK.from, extra:MK.extra}); closeSheet(); toast(n + (n > 1 ? ' jobs' : ' job') + ' sent. The pictures show up on ' + (c.name || 'her') + "'s card."); }
       catch(e){ toast('Not sent: ' + e.message, 6000); el.disabled = false; el.textContent = 'Try again'; } break; }
-    case 'gTop': case 'gAdd': { const c = film.chars.find(x => x.id===d.c); el.disabled = true; try{ await takeGen(c, d.g, +d.i, a==='gTop'); }catch(e){ toast("Couldn't get it: " + e.message); } break; }
+    case 'gTop': case 'gAdd': { const c = film.chars.find(x => x.id===d.c), inSheet = !!el.closest('#sheet'); el.disabled = true; try{ await takeGen(c, d.g, +d.i, a==='gTop'); toast(a==='gTop' ? 'Now her #1' : 'Added'); }catch(e){ toast("Couldn't get it: " + e.message); } if(inSheet) nextInSheet(c); break; }
     case 'gAll': { const c = film.chars.find(x => x.id===d.c), l = (c.gens || []).filter(x => !x.gone && x.state==='done').sort((p, q) => (p.order != null ? p.order : -1) - (q.order != null ? q.order : -1) || p.t - q.t);
       el.disabled = true; for(const x of l) for(let i = 0; i < x.files.length; i++) if(!(x.used || []).includes(i)){ try{ await takeGen(c, x.id, i, false); }catch(e){ toast("Couldn't get one: " + e.message); } } break; }
-    case 'gDrop': { const c = film.chars.find(x => x.id===d.c), x = c.gens.find(g => g.id===d.g); (x.used = x.used || []).push(+d.i); if(x.used.length >= x.files.length) x.gone = true; break; }
+    case 'gDrop': { const c = film.chars.find(x => x.id===d.c), x = c.gens.find(g => g.id===d.g), inSheet = !!el.closest('#sheet'); (x.used = x.used || []).push(+d.i); if(x.used.length >= x.files.length) x.gone = true; if(inSheet) nextInSheet(c); break; }
     case 'gGone': { const c = film.chars.find(x => x.id===d.c); c.gens.find(g => g.id===d.g).gone = true; break; }
     case 'gClear': { const c = film.chars.find(x => x.id===d.c); (c.gens || []).forEach(x => { if(x.state!=='queued' && x.state!=='running') x.gone = true; }); break; }
     case 'newChar': film.chars.push({id:uid('ch'), name:'', desc:'', refs:[]}); break;
