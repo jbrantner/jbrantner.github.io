@@ -131,6 +131,29 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   console.log('measured', R.err || '', JSON.stringify((R.d || []).slice(55, 64).map(x => Math.round(x))), 'points', R.pts, 'note:', await page.textContent('#smSpcNote'));
   ok(R.d && Math.abs(R.d[30] - 6.9) < 2.5 && R.d[59] > 4 * R.d[30], 'measured: ~7/1000 of the width a frame, and the jump at 59 (' + (R.d ? R.d[30].toFixed(1) + ' vs ' + R.d[59].toFixed(1) : R.err) + ')');
   ok(/1 jump/.test(await page.textContent('#smSpcNote')), 'note reports the jump');
+  // ---- 🎬 Punch ----
+  {
+    const P = await page.evaluate(() => {
+      const d = []; for(let i = 0; i < 60; i++){ const u = (i - 10) / 30; d.push(u > 0 && u < 1 ? 10 * Math.sin(Math.PI * u) : 0); }
+      const sum = a => a.reduce((x, y) => x + y, 0), pk = a => a.indexOf(Math.max(...a));
+      const r = {}; for(const p of [0, 0.5, 1]){ const t = H3.punchSpeeds(d, p); r[p] = {sum:sum(t), peak:pk(t), max:Math.max(...t), first5:sum(t.slice(11, 16)), last5:sum(t.slice(35, 40)), hold:sum(t.slice(0, 10))}; }
+      // an on-4s clip of that move: every step lands on every 4th frame
+      const d4 = []; let acc = 0; for(let i = 0; i < 123; i++){ acc += i < 120 ? d[Math.floor(i / 2)] / 2 : 0; if(i % 4===3){ d4.push(acc); acc = 0; } else d4.push(0); }
+      const a = H3.spacingPlan(d4, 124, 4, 0.5, 0), b = H3.spacingPlan(d4, 124, 4, 0.5, 1);
+      return {r, plain:a.keys.length, punchy:b.keys.length, diff:JSON.stringify(a.keys)!==JSON.stringify(b.keys), skipped:b.skipped.length};
+    });
+    console.log('punch', JSON.stringify(P));
+    ok(Math.abs(P.r[1].sum - P.r[0].sum) < 0.01 && Math.abs(P.r[0.5].sum - P.r[0].sum) < 0.01, 'punch keeps the total distance');
+    ok(P.r[1].peak > P.r[0].peak + 2 && P.r[1].max > P.r[0].max * 1.4, 'punch: the fastest frame comes later and faster (' + P.r[0].peak + '→' + P.r[1].peak + ')');
+    ok(P.r[1].first5 < P.r[0].first5 * 0.4 && P.r[1].last5 < P.r[0].last5, 'punch: slower ease in, quicker stop');
+    ok(P.diff && P.punchy >= 20, 'on-4s clip: punch re-times the pins (' + P.plain + ' vs ' + P.punchy + ' pinned, ' + P.skipped + ' left to paint)');
+    ok(await page.isVisible('#smPunch') && (await page.textContent('#smPunchOut'))==='off', 'Punch slider shows, off by default');
+    await page.$eval('#smPunch', e => { e.value = '0.6'; e.dispatchEvent(new Event('input')); });
+    ok((await page.textContent('#smPunchOut'))==='0.60' && /punchy spacing/.test(await page.textContent('#smSpcNote')), 'slider → 0.60, chart says punchy');
+    const k1 = await page.evaluate(() => H3.snapshot().sm); ok(k1.punch===0.6 && k1.keys, 'the take carries punch 0.6 and its re-timed pins');
+    await page.screenshot({path:path.join(MEDIA, 'punch.png'), clip:await (await page.$('#smBody')).boundingBox()});
+    await page.$eval('#smPunch', e => { e.value = '0'; e.dispatchEvent(new Event('input')); });
+  }
   await page.screenshot({path:path.join(MEDIA, 'spacing.png'), clip:await (await page.$('#smBody')).boundingBox()});
   ok(await page.evaluate(() => H3.S.f.smUp===false && H3.S.f.smUpX===1.5 && H3.S.f.smUpRep==='medium' && H3.S.f.smUpStr===0.8), '⬆ Regenerate is off by default (1.5×, Medium, 0.8)');
   await page.click('#smUpSw'); await page.click('#smUpRep [data-v="light"]'); await page.$eval('#smUpStr', e => { e.value = '0.7'; e.dispatchEvent(new Event('input')); });
