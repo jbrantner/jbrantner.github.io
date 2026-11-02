@@ -179,6 +179,11 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   ok(ed.length===2 && /^Change her hair to green\. Keep everything else/.test(ep) && !/short black hair/.test(ep) && types(ed[0].g).includes('VAEEncode') && !types(ed[0].g).includes('EmptySD3LatentImage') && linksOk(ed[0].g), '✏️ Edit: just the change asked for, on the picture itself (same framing)');
   ok(await page.evaluate(() => FILM.makePictures(FILM.S.films[0], FILM.S.films[0].chars[0], 'edit', {from:FILM.S.films[0].chars[0].refs[0].id, extra:''}).then(() => 'sent', e => e.message)).then(m => /Say what to change/.test(m)), 'Edit with nothing written asks what to change');
 
+  await page.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'})); await page.waitForTimeout(300);
+  const nc = await page.$$eval('[data-act="gCancel"]', b => b.length);
+  await page.click('[data-act="gCancelAll"]'); await page.waitForTimeout(500);
+  ok(nc >= 2 && await page.$$eval('[data-act="gCancel"]', b => b.length)===0, 'waiting picture jobs have ✕, and Cancel the rest clears them (' + nc + ')');
+
   // ---- screens draw without errors ----
   for(const tab of ['cast', 'scenes', 'look']){ await page.evaluate(t => FILM.go({v:'film', film:FILM.S.films[0].id, tab:t}), tab); await page.waitForTimeout(200); await page.screenshot({path:path.join(__dirname, 'film_' + tab + '.png'), fullPage:true}); }
   ok(await page.$$eval('.slot .rk', r => r.length)===0 || true, 'tabs draw');
