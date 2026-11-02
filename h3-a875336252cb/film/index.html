@@ -189,6 +189,9 @@ body{padding-bottom:calc(120px + env(safe-area-inset-bottom))}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .cand{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg);position:relative}
 .cand video,.cand .ph{display:block;width:100%;aspect-ratio:var(--ar,16/9);background:#000;object-fit:cover}
+.cand .ph,.slot[data-live]{position:relative}
+img.live{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.9}
+.cand .ph .lt,.slot[data-live] span{position:relative;z-index:1;text-shadow:0 1px 3px #000}
 .cand .ph{display:grid;place-items:center;color:var(--dim);font-size:12.5px;font-weight:700;text-align:center;padding:6px;background:repeating-conic-gradient(#1a1c22 0 25%,#16171c 0 50%) 0 0/16px 16px}
 .cand .cb{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;font-size:12px;font-weight:800;color:var(--soft);gap:6px}
 .cand.pick{border-color:var(--good)}
@@ -420,17 +423,48 @@ const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
 const pcSpeed = url => +(S.pcs.find(p => p.url===url) || {}).speed || 1;
 const CID = (() => { let c = ''; try{ c = localStorage.getItem('h3filmcid'); }catch(e){} if(!c) c = uid('film-'); try{ localStorage.setItem('h3filmcid', c); }catch(e){} return c; })();
-const VHS_PREVIEW = {};
+const VHS_PREVIEW = {extra_pnginfo:{workflow:{extra:{VHS_latentpreview:true, VHS_latentpreviewrate:6}}}};
 const LIVE = {}; // prompt id -> {v, max}
 function openSocket(url){
   const p = pcOf(url); if(p.ws && p.ws.readyState < 2) return;
   let w; try{ w = p.ws = new WebSocket(url.replace(/^http/, 'ws') + '/ws?clientId=' + CID); }catch(e){ return; }
-  w.onmessage = ev => { if(typeof ev.data!=='string') return; let m; try{ m = JSON.parse(ev.data); }catch(e){ return; } const d = m.data || {}, id = d.prompt_id;
+  w.binaryType = 'arraybuffer';
+  w.onmessage = ev => { if(typeof ev.data!=='string'){ onPreview(url, ev.data); return; } let m; try{ m = JSON.parse(ev.data); }catch(e){ return; } const d = m.data || {}, id = d.prompt_id;
     if(m.type==='status'){ const n = d.status && d.status.exec_info && d.status.exec_info.queue_remaining; if(typeof n==='number') p.load = n; drawDots(); return; }
+    if(m.type==='VHS_latentpreview'){ if(p.running && d.length){ const L = LIVE[p.running] = LIVE[p.running] || {}; L.frames = L.frames || []; L.frames.length = Math.max(L.frames.length, d.length); } return; }
     if(!id) return; const L = LIVE[id] = LIVE[id] || {};
-    if(m.type==='progress'){ L.v = d.value; L.max = d.max; drawLive(); }
+    if(m.type==='execution_start'){ p.running = id; }
+    else if(m.type==='progress'){ L.v = d.value; L.max = d.max; drawLive(); }
+    else if(m.type==='executing' && d.node==null){ L.done = true; tickSoon(300); }
     else if(m.type==='execution_success' || m.type==='execution_error' || m.type==='execution_interrupted' || (m.type==='executing' && d.node==null)) tickSoon(300); };
   w.onclose = () => { if(p.ws===w) p.ws = null; setTimeout(() => { if(pcOf(url).online) openSocket(url); }, 5000); };
+}
+// low-res live preview while it renders (Jordan 2026-11-02, as in H3 Deck): VideoHelperSuite sends every frame of the clip at each
+// step when the prompt asks for it (6 latent frames a second = real speed for MiniMax H3); pictures (Qwen, Z-Image) get ComfyUI's
+// usual single preview picture. Previews only go to the client_id that queued the job, i.e. this phone.
+const VHS_RATE = 6;
+function onVhsFrame(pid, idx, blob){
+  const L = LIVE[pid] = LIVE[pid] || {}, fr = L.frames = L.frames || [];
+  if(fr[idx]) URL.revokeObjectURL(fr[idx]); fr[idx] = URL.createObjectURL(blob); L.vhsAt = Date.now();
+  if(!L.img){ L.img = fr[idx]; drawLive(); }
+}
+function playFrames(){ // one shared timer steps every running clip's preview to its next frame
+  for(const pid in LIVE){ const L = LIVE[pid]; if(!L.frames || !L.frames.length) continue;
+    if(L.done){ L.frames.forEach(u => u && u!==L.img && URL.revokeObjectURL(u)); L.frames = null; continue; }
+    const n = L.frames.length; let i = L.fi || 0; for(let k = 0; k < n; k++){ i = (i + 1) % n; if(L.frames[i]) break; }
+    L.fi = i; const u = L.frames[i]; if(!u) continue; L.img = u;
+    $$(`[data-live="${CSS.escape(pid)}"] img.live`).forEach(im => { if(im.src!==u) im.src = u; }); }
+}
+setInterval(playFrames, 1000 / VHS_RATE);
+function onPreview(url, buf){
+  try{ const v = new DataView(buf), type = v.getUint32(0); let off = 8, mime = v.getUint32(4)===2 ? 'image/png' : 'image/jpeg', pid = pcOf(url).running;
+    if(type===4){ const n = v.getUint32(4); const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, n))); pid = meta.prompt_id || pid; mime = meta.image_type || mime; off = 8 + n; }
+    else if(type!==1) return;
+    else if(buf.byteLength > 32 && v.getUint32(8)===1){ // VideoHelperSuite frame: [1][1][frame index][16-byte node id][JPEG]
+      if(pid) onVhsFrame(pid, v.getUint32(12), new Blob([buf.slice(32)], {type:'image/jpeg'})); return; }
+    if(!pid) return; const L = LIVE[pid] = LIVE[pid] || {}; if(L.frames && Date.now() - (L.vhsAt || 0) < 30000) return;
+    if(L.img) URL.revokeObjectURL(L.img); L.img = URL.createObjectURL(new Blob([buf.slice(off)], {type:mime})); drawLive();
+  }catch(e){}
 }
 function drawDots(){ $('#pcDots').innerHTML = S.pcs.map(p => `<span><i class="dot ${pcOf(p.url).online ? (pcOf(p.url).load ? 'busy' : 'on') : ''}"></i>${esc(p.name[0])}</span>`).join(''); }
 const drawAll = () => { const a = document.activeElement; if(a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && a.type!=='range'){ drawDots(); return; } draw(); };
@@ -1065,7 +1099,7 @@ function gensHtml(c){ // pictures made for her, waiting to be added
   const tiles = live.flatMap(x => x.state==='done' ? x.files.map((f, i) => (x.used || []).includes(i) ? '' : `<div class="slot has"><img src="${esc(viewUrl(x.pc, f))}" alt="" loading="lazy" data-act="gView" data-c="${c.id}" data-g="${x.id}" data-i="${i}"><span class="tag">${esc(x.label)}</span>
       <span class="mv"><button data-act="gTop" data-c="${c.id}" data-g="${x.id}" data-i="${i}" title="Make it her #1">#1</button><button data-act="gAdd" data-c="${c.id}" data-g="${x.id}" data-i="${i}" title="Add it after her pictures">＋</button></span>
       <button class="x" data-act="gDrop" data-c="${c.id}" data-g="${x.id}" data-i="${i}" aria-label="Throw away">✕</button></div>`)
-    : [`<div class="slot"><span>${esc(x.label)}<br>${x.state==='failed' ? '✕ ' + esc((x.err || 'failed').slice(0, 60)) : x.state==='running' ? (LIVE[x.pid] && LIVE[x.pid].max ? 'step ' + LIVE[x.pid].v + '/' + LIVE[x.pid].max : 'making…') : 'waiting in line'}</span>${x.state==='failed' ? `<button class="x" data-act="gGone" data-c="${c.id}" data-g="${x.id}">✕</button>` : `<button class="x" data-act="gCancel" data-c="${c.id}" data-g="${x.id}" aria-label="Cancel">✕</button>`}</div>`]).filter(Boolean);
+    : [`<div class="slot" ${x.state==='failed' ? '' : `data-live="${esc(x.pid || '')}"`}>${x.state==='failed' ? '' : liveImg(x.pid)}<span>${esc(x.label)}<br><b class="lt" style="font-weight:inherit">${x.state==='failed' ? '✕ ' + esc((x.err || 'failed').slice(0, 60)) : x.state==='running' ? (LIVE[x.pid] && LIVE[x.pid].max ? 'step ' + LIVE[x.pid].v + '/' + LIVE[x.pid].max : 'making…') : 'waiting in line'}</b></span>${x.state==='failed' ? `<button class="x" data-act="gGone" data-c="${c.id}" data-g="${x.id}">✕</button>` : `<button class="x" data-act="gCancel" data-c="${c.id}" data-g="${x.id}" aria-label="Cancel">✕</button>`}</div>`]).filter(Boolean);
   if(!tiles.length) return '';
   const done = live.filter(x => x.state==='done').length;
   return `<div class="sub">New pictures</div><div class="slots">${tiles.join('')}</div>
@@ -1125,11 +1159,14 @@ function roomView(items){
 }
 function candTile(c, j){
   const L = LIVE[c.pid] || {}, st = c.state==='done' ? '' : c.state==='running' ? (L.max ? 'step ' + L.v + '/' + L.max : 'rendering…') : c.state==='queued' ? 'waiting in line' : c.state==='failed' ? '✕ ' + (c.err || 'failed') : 'not sent';
-  return `<div class="cand ${c.picked ? 'pick' : ''}" data-cid="${c.id}">${c.state==='done' ? `<video muted playsinline loop preload="metadata" src="${esc(viewUrl(c.pc, c.file))}#t=0.05" data-act="watch" data-id="${c.id}"></video>` : `<div class="ph" data-live="${c.pid || ''}">${esc(st)}</div>`}
+  return `<div class="cand ${c.picked ? 'pick' : ''}" data-cid="${c.id}">${c.state==='done' ? `<video muted playsinline loop preload="metadata" src="${esc(viewUrl(c.pc, c.file))}#t=0.05" data-act="watch" data-id="${c.id}"></video>` : `<div class="ph" data-live="${c.pid || ''}">${liveImg(c.pid)}<span class="lt">${esc(st)}</span></div>`}
     <div class="cb"><span>Take ${j + 1}</span>${c.state==='done' ? `<button class="btn pri" data-act="use" data-id="${c.id}" style="padding:5px 9px">✓ Use</button>` : c.state==='queued' || c.state==='running' ? `<button class="btn" data-act="cancel" data-id="${c.id}" style="padding:5px 9px">✕</button>` : `<button class="btn" data-act="toss" data-id="${c.id}" style="padding:5px 9px">Hide</button>`}</div></div>`;
 }
 function vidHtml(pc, f){ return `<div class="viewer"><video controls playsinline preload="metadata" src="${esc(viewUrl(pc, f))}#t=0.05"></video></div>`; }
-function drawLive(){ $$('[data-live]').forEach(el => { const L = LIVE[el.dataset.live]; if(L && L.max) el.textContent = 'step ' + L.v + '/' + L.max; }); }
+function drawLive(){ $$('[data-live]').forEach(el => { const L = LIVE[el.dataset.live]; if(!L) return;
+  if(L.img){ let im = el.querySelector('img.live'); if(!im){ im = document.createElement('img'); im.className = 'live'; im.alt = ''; el.prepend(im); } if(im.src!==L.img) im.src = L.img; }
+  const t = el.querySelector('.lt') || el; if(L.max) t.textContent = 'step ' + L.v + '/' + L.max; }); }
+const liveImg = pid => { const L = LIVE[pid]; return L && L.img ? `<img class="live" src="${L.img}" alt="">` : ''; };
 function wireVideos(){ $$('.cand video').forEach(v => { v.addEventListener('mouseenter', () => v.play().catch(() => {})); }); }
 // ---------- watching a take in continuity: the picked parts before it (from a few seconds back), then the take ----------
 function findCand(id){ for(const x of allCuts()){ const c = candOf(x.cut, id); if(c) return {x, c}; } return null; }
