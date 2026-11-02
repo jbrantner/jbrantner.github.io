@@ -12,7 +12,7 @@ const path = require('path'), http = require('http'), fs = require('fs');
 const MEDIA = process.env.MEDIA, PC = 'http://render.test';
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = { // just what the app reads
-  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'minimax_h3_open_regenerate_2k_r128_comfyui_bf16.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
@@ -175,6 +175,33 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   ok(fin.state==='done' && fin.final==='x_up_00001_.mp4' && fin.smoothed==='piece_01_00001_.mp4', 'done: the regenerated clip is the final one, the smoothed one is kept');
   ok(/regenerated at /.test(await page.textContent('#takes')), 'card: Done · regenerated');
 
+  {
+  // ---- ⬆ Regenerate on any finished take, with its reference pictures (a joined 2-piece take) ----
+  const tid = await page.evaluate(() => { const o = H3.S.takes[0], t = JSON.parse(JSON.stringify(o)); t.id = 'tregen'; delete t.sm; t.up = null; t.upStage = null; t.upPid = null; t.smoothed = null;
+    t.imgs = [{id:o.sm ? o.sm.vid : Object.keys(H3.S.media)[0]}]; t.prompt = '<Picture 1> walks to the door.';
+    t.pieces = [{gen:73, deliv:73, state:'done', file:{filename:'p1.mp4', subfolder:'x', type:'output'}}, {gen:73, deliv:51, state:'done', file:{filename:'p2.mp4', subfolder:'x', type:'output'}}];
+    t.final = {filename:'joined_00001_.mp4', subfolder:'Output_Render/H3Deck/j', type:'output'}; t.state = 'done'; H3.S.takes.unshift(t); return t.id; });
+  await page.evaluate(() => H3.tick()); await page.waitForTimeout(600);
+  ok(await page.$('[data-act="regen"][data-t="tregen"]'), 'finished take has ⬆ Regenerate');
+  await page.click('[data-act="regen"][data-t="tregen"]'); await page.waitForTimeout(300);
+  ok(await page.isVisible('#rgGo') && await page.$('#rgRefs.on'), 'sheet opens with "Use its reference pictures" on');
+  await page.screenshot({path:path.join(MEDIA, 'regen-sheet.png')});
+  const nR = sent.length; await page.click('#rgGo'); await page.waitForTimeout(300);
+  await page.evaluate(() => H3.tick()); await page.waitForTimeout(1500);
+  ok(sent.length===nR + 1, 'one regenerate job queued');
+  const gr = sent[sent.length - 1], nr = Object.values(gr), byR = c => nr.find(n => n.class_type===c);
+  const rv = byR('MiniMaxH3ReferenceToVideo'), un = byR('UNETLoader'), ifb = byR('ImageFromBatch');
+  ok(rv && rv.inputs.prompt==='<Picture 1> walks to the door.' && rv.inputs['ref_images.ref_image_0'] && gr[rv.inputs['ref_images.ref_image_0'][0]].class_type==='LoadImage', 'Reference model conditioning with the take\'s picture and prompt');
+  ok(un.inputs.unet_name==='minimax_h3_ref2va_pruned_int8_convrot.safetensors' && !byR('MiniMaxH3ImageToVideo'), 'Ref2VA model, not FL2VA');
+  ok(ifb && ifb.inputs.length===107 && rv.inputs.length===107 && gr[byR('VAEEncode').inputs.pixels[0]].class_type==='ImageFromBatch', 'joined 124 frames cut to the 107 grid before encoding');
+  ok(byR('LoadVideo').inputs.file==='Output_Render/H3Deck/j/joined_00001_.mp4 [output]', 'regenerates the joined clip');
+  const tr = await page.evaluate(() => { const t = H3.S.takes.find(x => x.id==='tregen'); return {sm:t.smoothed.filename, pid:t.upPid, save:t.upSave}; });
+  HIST[tr.pid] = {status:{completed:true, status_str:'success'}, outputs:{[tr.save]:{images:[{filename:'j_up_00001_.mp4', subfolder:'Output_Render/H3Deck/j', type:'output'}]}}};
+  await page.evaluate(() => H3.tick()); await page.waitForTimeout(1000);
+  const tf = await page.evaluate(() => { const t = H3.S.takes.find(x => x.id==='tregen'); return {state:t.state, final:t.final.filename, src:t.smoothed.filename}; });
+  ok(tf.state==='done' && tf.final==='j_up_00001_.mp4' && tf.src==='joined_00001_.mp4', 'done; the original is kept as the source for another go');
+
+  }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
