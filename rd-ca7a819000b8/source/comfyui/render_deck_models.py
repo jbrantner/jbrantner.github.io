@@ -2282,6 +2282,15 @@ if any(x['state'] == 'running' for x in AUTO['jobs']):  # a run left going when 
     except Exception as e:
         print('[Render Deck auto] resume later:', e)
 
+# the job line carries on by itself after ComfyUI restarts (a crash wipes ComfyUI's own queue; the line resends what it lost),
+# without waiting for an app to ask for it (H3 Film's pictures, 2026-11-02)
+_farm_load()
+if FARM.get('jobs'):
+    try:
+        PromptServer.instance.loop.call_soon_threadsafe(_farm_start)
+    except Exception as e:
+        print('[Render Deck farm] resume later:', e)
+
 
 
 # ---------- 🧍 Character Creator: the dress colour held to the front (Jordan 2026-10-25, "version B") ----------
