@@ -555,11 +555,13 @@ const CONT = 'This continues straight on from the moment before, in the same sho
 function leadOf(cut, k){ if(!k) return ''; const prev = ((cut.parts[k - 1] || {}).text || '').replace(/\[[^\]]*\]\s*/g, '').replace(/\(carrying on\)\s*/g, '').trim();
   return CONT + (prev ? ' Already happened, and is not repeated: ' + sentence(prev) : '') + ' Now: '; }
 function promptOf(film, scene, cut, k, A, fixText){
-  const words = lorasOf(film).map(l => (l.words || '').trim()).filter(Boolean).join(', ');
+  const words = lorasOf(lookOf(film, cut)).map(l => (l.words || '').trim()).filter(Boolean).join(', ');
   const act = fixText != null ? 'This is a stretch from the middle of a shot: it starts on its first frame and ends on its last frame, with no cut. ' + fixText.trim() : leadOf(cut, k) + ((cut.parts[k] || {}).text || '').trim();
   return [(words ? words.replace(/[.\s]*$/, '.') + ' ' : '') + (film.style || '').trim(), castText(A, scene), act].filter(x => x && x.trim()).join('\n');
 }
 
+// a cut can use its own model, Turbo/Regular and LoRAs (Jordan 2026-11-02); otherwise the film's from 🎛 Look
+const lookOf = (film, cut) => cut && cut.look ? Object.assign({}, film, {model:cut.look.model || film.model, turbo:cut.look.turbo, loras:cut.look.loras || []}) : film;
 // ---------- which PC ----------
 function canRun(url, film, need){
   const p = pcOf(url), oi = p.oi, pc = S.pcs.find(x => x.url===url);
@@ -582,8 +584,8 @@ function busySecs(url){ let ours = 0; const ids = new Set();
   for(const {cut} of allCuts()) for(const c of cut.cands) if(c.pc===url && c.pid && (c.state==='queued' || c.state==='running')){ ours += c.est || 300; ids.add(c.pid); }
   const q = pcOf(url).queue || {}; return ours + [...(q.queue_running || []), ...(q.queue_pending || [])].filter(x => !ids.has(x[1])).length * 300; }
 // Jordan 2026-11-02: a cut stays on one PC from its first take to its last; different cuts share the work between the PCs
-function pickPcFor(film, cut){
-  const urls = film.where==='both' ? S.pcs.map(p => p.url) : [film.where], P = planOf(film, cut), need = {chain:P.length > 1};
+function pickPcFor(film0, cut){
+  const film = lookOf(film0, cut), urls = film.where==='both' ? S.pcs.map(p => p.url) : [film.where], P = planOf(film, cut), need = {chain:P.length > 1};
   const ok = urls.filter(u => !canRun(u, film, need)); if(!ok.length) return null;
   const est = u => busySecs(u) + estSecs(film, P[0].gen, 9, 0, u) * (+cut.takes || 1);
   return ok.sort((a, b) => est(a) - est(b))[0];
@@ -594,7 +596,7 @@ function whyNotStart(film, scene, cut){
   if(!(cut.parts || []).length || cut.parts.some((p, i) => i < planOf(film, cut).length && !p.text.trim())) return 'Every part needs its own action';
   if(!families().length) return S.pcs.some(p => pcOf(p.url).online) ? 'No MiniMax H3 model found on the PCs' : "Can't reach the PCs. Is Tailscale on?";
   if(!film.model) return 'Pick a model in the film\'s 🎛 Look';
-  if(!pickPcFor(film, cut)){ const urls = film.where==='both' ? S.pcs.map(p => p.url) : [film.where]; return urls.map(u => pcName(u) + ' ' + canRun(u, film, {chain:planOf(film, cut).length > 1})).join(' · '); }
+  if(!pickPcFor(film, cut)){ const urls = film.where==='both' ? S.pcs.map(p => p.url) : [film.where]; return urls.map(u => pcName(u) + ' ' + canRun(u, lookOf(film, cut), {chain:planOf(film, cut).length > 1})).join(' · '); }
   return '';
 }
 
@@ -661,9 +663,9 @@ function joinGraph(files, prefix){
 const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 24) || 'x';
 const cutDir = (film, cut) => 'H3Film/' + slug(film.name) + '_' + film.id.slice(-4) + '/' + slug(cut.name) + '_' + cut.id.slice(-4);
 function newCand(film, scene, cut, k, parent, fixText, fix){
-  const A = alloc(film, scene, cut), {w, h} = dimsOf(film), P = cut.plan, id = uid('c');
+  const A = alloc(film, scene, cut), {w, h} = dimsOf(film), P = cut.plan, id = uid('c'), L = lookOf(film, cut);
   const c = {id, kind:fix ? 'fix' : 'part', part:k, parent:parent || null, pc:cut.pc, seed:Math.floor(Math.random() * 2 ** 31), state:'new', t:Date.now(),
-    model:film.model, turbo:film.turbo, loras:lorasOf(film).map(l => Object.assign({}, l)), w, h, pics:A.pics.map(r => r.id), prompt:promptOf(film, scene, cut, k, A, fixText)};
+    model:L.model, turbo:L.turbo, loras:lorasOf(L).map(l => Object.assign({}, l)), w, h, pics:A.pics.map(r => r.id), prompt:promptOf(film, scene, cut, k, A, fixText)};
   if(fix){ c.fix = fix; c.group = fix.group; c.gen = fix.L; c.ctx = 0; c.dir = cutDir(film, cut) + '/fix_' + id.slice(-6); c.text = fixText; }
   else { c.gen = P[k].gen; c.ctx = P[k].ctx; c.dir = cutDir(film, cut) + '/p' + (k + 1) + '_' + id.slice(-6); }
   return c;
@@ -678,6 +680,8 @@ async function sendCand(cut, c){
 }
 async function sendTakes(x, k, parent, n, fixText, fix){
   const {film, scene, cut} = x; let sent = 0;
+  // the cut's look may have changed since it started: its PC must still have that model and those LoRAs
+  if(cut.pc && !fix){ const why = canRun(cut.pc, lookOf(film, cut), {chain:(cut.plan || []).length > 1}); if(why){ toast(pcName(cut.pc) + ' ' + why + '. This cut stays on ' + pcName(cut.pc) + ': change its look in the cut.', 7000); return 0; } }
   for(let j = 0; j < n; j++){ const c = newCand(film, scene, cut, k, parent, fixText, fix); cut.cands.push(c);
     try{ await sendCand(cut, c); sent++; }catch(e){ c.state = 'failed'; c.err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; } }
   save(); tickSoon(800); draw(); return sent;
@@ -996,6 +1000,25 @@ function cutState(cu){
   const r = cs.filter(c => c.state==='done').length, b = cs.filter(c => c.state==='queued' || c.state==='running').length;
   return 'part ' + (k + 1) + ' of ' + cu.plan.length + ': ' + (r ? r + ' ready to review' : '') + (r && b ? ', ' : '') + (b ? b + ' rendering' : '') + (!r && !b ? 'nothing sent' : '') + ' · ' + pcName(cu.pc);
 }
+function loraRows(list, los, own){ // own: the cut's list (data-clora) or the film's (data-lora)
+  const A = own ? 'clora' : 'lora';
+  return `<div class="loras">${list.map((l, i) => `<div class="lr"><div class="lt"><select data-${A}="${i}" data-k="name"><option value="">None</option>${los.map(n => `<option ${n===l.name ? 'selected' : ''}>${esc(n)}</option>`).join('')}${l.name && !los.includes(l.name) ? `<option selected>${esc(l.name)}</option>` : ''}</select><b>${(+l.str).toFixed(2)}</b><button class="btn x" data-act="${A}Del" data-i="${i}">✕</button></div>
+      <input type="range" min="0" max="1.5" step="0.05" value="${l.str}" data-${A}="${i}" data-k="str"><input data-${A}="${i}" data-k="words" value="${esc(l.words || '')}" placeholder="Activation words (optional)"></div>`).join('')}</div>
+    <button class="btn" data-act="${A}Add">➕ Add a LoRA</button>`;
+}
+function cutLook(film, cut){
+  const L = lookOf(film, cut), fams = families().filter(f => !f.fl2v), fam = fams.find(f => f.key===L.model), lw = lorasOf(L).map(l => bn(l.name).replace(/\.safetensors$/i, '')).join(', ');
+  const sum = (fam ? fam.label : famLabel(L.model || '')) + ' · ' + (L.turbo ? 'Turbo' : 'Regular') + (lw ? ' · ' + lw : '');
+  if(!cut.look) return `<section class="block" style="--c:var(--model)"><h3 data-act="noop">Model<span class="sum">the film's</span></h3><div class="body">
+    <div class="note">${esc(sum)}</div><button class="btn" data-act="lookOwn">🎛 Use its own model, LoRAs or Turbo/Regular</button></div></section>`;
+  const los = [...new Set(S.pcs.flatMap(p => pcOf(p.url).oi ? styleLoras(pcOf(p.url).oi) : []))];
+  return `<section class="block" style="--c:var(--model)"><h3 data-act="noop">Model<span class="sum">this cut's own</span></h3><div class="body">
+    <select data-cl="model">${fams.map(f => `<option value="${esc(f.key)}" ${f.key===L.model ? 'selected' : ''}>${esc(f.label)}</option>`).join('') || '<option>Looking for the PCs…</option>'}</select>
+    <div class="seg"><button data-act="cturbo" data-v="1" class="${L.turbo ? 'on' : ''}">⚡ Turbo</button><button data-act="cturbo" data-v="0" class="${L.turbo ? '' : 'on'}">🎬 Regular</button></div>
+    <div class="lab"><span>LoRAs</span></div>${loraRows(cut.look.loras, los, true)}
+    ${cut.plan ? `<div class="note">Changes count from the next takes sent. The cut stays on ${esc(pcName(cut.pc))}, so it needs these there.</div>` : ''}
+    <button class="btn" data-act="lookFilm">↩ Use the film's again</button></div></section>`;
+}
 function lookTab(film){
   const fams = families().filter(f => !f.fl2v), los = [...new Set(S.pcs.flatMap(p => pcOf(p.url).oi ? styleLoras(pcOf(p.url).oi) : []))], {w, h} = dimsOf(film);
   if(!film.model && fams.length){ film.model = (fams.find(f => /dasiwa/.test(f.key)) || fams[0]).key; save(); }
@@ -1005,9 +1028,7 @@ function lookTab(film){
     <select data-f="model">${fams.map(f => `<option value="${esc(f.key)}" ${f.key===film.model ? 'selected' : ''}>${esc(f.label)}</option>`).join('') || '<option>Looking for the PCs…</option>'}</select>
     <div class="seg"><button data-act="turbo" data-v="1" class="${film.turbo ? 'on' : ''}">⚡ Turbo</button><button data-act="turbo" data-v="0" class="${film.turbo ? '' : 'on'}">🎬 Regular</button></div>
     <div class="lab"><span>LoRAs</span></div>
-    <div class="loras">${film.loras.map((l, i) => `<div class="lr"><div class="lt"><select data-lora="${i}" data-k="name"><option value="">None</option>${los.map(n => `<option ${n===l.name ? 'selected' : ''}>${esc(n)}</option>`).join('')}${l.name && !los.includes(l.name) ? `<option selected>${esc(l.name)}</option>` : ''}</select><b>${(+l.str).toFixed(2)}</b><button class="btn x" data-act="loraDel" data-i="${i}">✕</button></div>
-      <input type="range" min="0" max="1.5" step="0.05" value="${l.str}" data-lora="${i}" data-k="str"><input data-lora="${i}" data-k="words" value="${esc(l.words || '')}" placeholder="Activation words (optional)"></div>`).join('')}</div>
-    <button class="btn" data-act="loraAdd">➕ Add a LoRA</button></div></section>
+    ${loraRows(film.loras, los, false)}</div></section>
   <section class="block" style="--c:var(--cyan)"><h3 data-act="noop">Canvas<span class="sum">${w}×${h}</span></h3><div class="body">
     <div class="chips">${['16:9','9:16','1:1','4:3','3:4','21:9','2:3','3:2'].map(a => `<button class="chip ${film.aspect===a ? 'on' : ''}" data-act="aspect" data-v="${a}">${a}</button>`).join('')}</div>
     <div><div class="lab"><span>Resolution</span><b>${w}×${h}</b></div><input type="range" min="0.15" max="1.03" step="0.01" value="${film.mp}" data-f="mp" data-num="1"></div></div></section>
@@ -1051,6 +1072,7 @@ function cutView(x){
       ${out.map(c => `<button class="chip" data-act="castIn" data-id="${c.id}">＋ ${esc(c.name || 'Character')}</button>`).join('')}${film.chars.length ? '' : '<span class="note">Add characters in the film\'s 🎭 Cast first.</span>'}</div>
     <div class="alloc">${allocHtml}</div>
     <div class="note">Characters load in this order, so the first one's pictures are #1, #2… and the next one's follow. − / + sets how many pictures someone gets in this cut.</div></div></section>
+  ${cutLook(film, cut)}
   <section class="block" style="--c:var(--accent)"><h3 data-act="noop">What happens<span class="sum">${fmtS((started ? cutFrames(cut) : P.reduce((a, p) => a + p.deliv, 0)) / FPS)} · ${P.length} part${P.length > 1 ? 's' : ''}</span></h3><div class="body">
     ${started ? '' : nameChips(inCast)}
     <textarea data-cut="action" ${started ? 'readonly' : ''} placeholder="The whole cut, e.g. Ellie walks into the diner and sits at the counter. Mara slides her a coffee. Ellie looks up and smiles. Timed beats like [0s-3s] … go to the part they fall in.">${esc(cut.action || '')}</textarea>
@@ -1276,6 +1298,11 @@ document.addEventListener('click', async ev => {
     case 'castUp': { const l = x.cut.chars, i = l.indexOf(d.id); if(i > 0) [l[i - 1], l[i]] = [l[i], l[i - 1]]; break; }
     case 'cnt': { const A = alloc(x.film, x.scene, x.cut), g = A.groups.find(g => g.c && g.c.id===d.id); x.cut.counts = x.cut.counts || {}; x.cut.counts[d.id] = Math.max(0, Math.min(g.refs.length, g.used.length + +d.d)); break; }
     case 'cntAuto': delete x.cut.counts[d.id]; break;
+    case 'lookOwn': x.cut.look = {model:x.film.model, turbo:x.film.turbo, loras:lorasOf(x.film).map(l => Object.assign({}, l))}; break;
+    case 'lookFilm': delete x.cut.look; break;
+    case 'cturbo': x.cut.look.turbo = d.v==='1'; break;
+    case 'cloraAdd': x.cut.look.loras.push({name:'', str:1, words:''}); break;
+    case 'cloraDel': x.cut.look.loras.splice(+d.i, 1); break;
     case 'cutOut': { x.cut.outfit = x.cut.outfit || {}; if(d.o) x.cut.outfit[d.id] = d.o; else delete x.cut.outfit[d.id]; break; }
     case 'partAuto': x.cut.parts[+d.i].own = false; syncParts(x.film, x.cut); break;
     case 'takes': x.cut.takes = Math.max(1, Math.min(12, (+x.cut.takes || 1) + +d.d)); break;
@@ -1302,7 +1329,7 @@ document.addEventListener('click', async ev => {
 function partTextAt(cut, a, b){ let acc = 0; const out = []; cut.plan.forEach((p, i) => { const s = acc, e = acc + p.deliv - 1; acc += p.deliv; if(e >= a && s <= b) out.push((cut.parts[i] || {}).text || ''); }); return out.join(' ').trim(); }
 async function sendFix(x){
   const {cut} = x, fx = cut.fx; if(!fx.text.trim()){ toast('Say what happens in this stretch'); return; }
-  const why = canRun(cut.final.pc, x.film, {fix:true}); if(why){ toast(pcName(cut.final.pc) + ' ' + why); return; }
+  const why = canRun(cut.final.pc, lookOf(x.film, x.cut), {fix:true}); if(why){ toast(pcName(cut.final.pc) + ' ' + why); return; }
   const p = fixPlan(cutFrames(cut), fx.a, fx.b, fx.ctx ? 12 : 0); p.src = fileArg(cut.final.file); p.sound = true; p.group = uid('g');
   const keepPc = cut.pc; cut.pc = cut.final.pc; // the cut's file is on that PC
   const n = await sendTakes(x, 0, null, fx.takes, fx.text, p); cut.pc = keepPc;
@@ -1331,6 +1358,8 @@ document.addEventListener('input', ev => {
   if(d.oc && film){ const c = film.chars.find(c => c.id===d.oc), o = c && (c.outfits || []).find(o => o.id===d.oo); if(o){ o[d.k] = el.value; save(); } return; }
   if(d.c && film){ const c = film.chars.find(c => c.id===d.c); c[d.k] = el.value; save(); return; }
   if(d.s && film){ const sc = film.scenes.find(s => s.id===d.s); sc[d.k] = el.value; save(); return; }
+  if(d.cl && x && x.cut.look){ x.cut.look[d.cl] = el.value; save(); draw(); return; }
+  if(d.clora != null && x && x.cut.look){ const l = x.cut.look.loras[+d.clora]; l[d.k] = d.k==='str' ? +el.value : el.value; save(); if(el.tagName==='SELECT' || el.type==='range') draw(); return; }
   if(d.lora != null && film){ const l = film.loras[+d.lora]; l[d.k] = d.k==='str' ? +el.value : el.value; save(); if(el.tagName==='SELECT' || el.type==='range') draw(); return; }
   if(d.cut && x){ x.cut[d.cut] = d.cut==='seconds' ? +el.value : el.value; if(d.cut==='action' || d.cut==='seconds'){ syncParts(x.film, x.cut); $$('textarea[data-part]').forEach(t => { const p = x.cut.parts[+t.dataset.part]; if(p && !p.own) t.value = p.text; }); }
     save(); if(d.cut==='seconds') draw(); else drawGo(); return; }

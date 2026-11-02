@@ -253,6 +253,19 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   ok(lp.img && lp.sent, 'a rendering take shows the moving low-res preview (and the prompt asks for it)');
   await page.screenshot({path:path.join(__dirname, 'film_live.png'), fullPage:false});
 
+  // ---- a cut's own model / Turbo-Regular / LoRAs ----
+  await page.evaluate(() => { FILM.S.films[0].scenes[1].cuts.push({id:'cu4', name:'Own', chars:['chE'], counts:{}, seconds:5, action:'Ellie waves.', parts:[], takes:1, cands:[], pick:[]}); FILM.go({v:'cut', film:FILM.S.films[0].id, cut:'cu4'}); }); await page.waitForTimeout(300);
+  await page.click('[data-act="lookOwn"]'); await page.waitForTimeout(200);
+  await page.click('[data-act="cturbo"][data-v="0"]'); await page.waitForTimeout(200);
+  await page.click('[data-act="cloraAdd"]'); await page.waitForTimeout(200);
+  await page.evaluate(() => { FILM.ctxOf('cu4').cut.look.loras[0].name = 'minimax_h3_ref2v_turbo_4step.safetensors'; FILM.draw(); }); await page.waitForTimeout(200);
+  await page.screenshot({path:path.join(__dirname, 'film_cutlook.png'), fullPage:true});
+  const nl = sent.length;
+  const cl = await page.evaluate(async () => { const x = FILM.ctxOf('cu4'); await FILM.startCut(x); const c = x.cut.cands[0]; return {turbo:c.turbo, loras:c.loras.map(l => l.name), film:FILM.S.films[0].turbo, fl:FILM.S.films[0].loras.length, look:JSON.stringify(x.cut.look)}; });
+  console.log(JSON.stringify(cl));
+  const g4 = sent[nl] && sent[nl].g, unets = g4 ? nodes(g4, 'UNETLoader').map(n => n.inputs.unet_name) : [], ll = g4 ? nodes(g4, 'LoraLoaderModelOnly').map(n => n.inputs.lora_name) : [];
+  ok(cl.turbo===false && cl.loras.length===1 && cl.fl===0 && unets.some(u => /Hybrid-V2/.test(u) && !/Turbo/.test(u)) && ll.includes(cl.loras[0]), "the cut's own Regular model and LoRA go into its takes; the film's look is untouched (" + unets + ' / ' + ll + ')');
+
   // ---- the cast folds into a strip of #1 pictures ----
   await page.evaluate(() => { FILM.S.films[0].chars.forEach(c => { c.open = false; }); FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'}); }); await page.waitForTimeout(300);
   ok(await page.$$eval('.castTile img', i => i.length)===2 && await page.$$eval('section.block', b => b.length)===0, 'folded: each character is a tile with their #1 picture');
