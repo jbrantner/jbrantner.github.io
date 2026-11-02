@@ -159,7 +159,13 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   await page.click('#smUpSw'); await page.click('#smUpRep [data-v="light"]'); await page.$eval('#smUpStr', e => { e.value = '0.7'; e.dispatchEvent(new Event('input')); });
   console.log('up note:', await page.textContent('#smUpNote'));
   ok(/864×480 → 1344×736/.test(await page.textContent('#smUpNote')) || /864×480 → 1280×704/.test(await page.textContent('#smUpNote')) || /→ 1280×/.test(await page.textContent('#smUpNote')), 'note shows the regenerate size');
+  ok(await page.isVisible('[data-add="smref"]'), 'a "＋ Reference picture" slot shows under ⬆ regenerate');
+  { const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('[data-add="smref"]')]); await fc.setFiles(path.join(MEDIA, 'big.png')); await page.waitForTimeout(1200); }
+  const rf = await page.evaluate(() => ({n:H3.S.f.smRefs.length, on:H3.S.f.smUpRefs, up:H3.snapshot().upImgs.length}));
+  ok(rf.n===1 && rf.on && rf.up===1 && await page.isVisible('#smUpRefsSw'), 'uploaded picture goes to the regenerate ' + JSON.stringify(rf));
   await page.screenshot({path:path.join(MEDIA, 'regen-ui.png'), clip:await (await page.$('#smBody')).boundingBox()});
+  await page.click('[data-rm="smRef"][data-i="0"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => H3.S.f.smRefs.length===0) && await page.isHidden('#smUpRefsSw'), '✕ removes it');
   await page.click('#goBtn'); await page.waitForTimeout(1500);
   const g3 = sent[sent.length - 1], gd3 = Object.values(g3).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image);
   const pairs = gd3.map(n => [n.inputs.frame_idx, g3[n.inputs.image[0]].inputs.batch_index]);
