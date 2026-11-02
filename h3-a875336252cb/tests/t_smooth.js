@@ -241,8 +241,14 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   ok(LK.skipped.length===3 && LK.skipped.every(o => Math.abs(o - 61.5) < 6) && !LK.keys.some(([o]) => Math.abs(o - 61.5) < 6), 'no pins within 6 frames of the seam ' + JSON.stringify(LK.skipped));
   await page.evaluate(() => { const f = H3.S.f; f.sm = true; f.smVid = Object.keys(H3.S.media).find(id => H3.S.media[id].kind==='vid'); const m = H3.S.media[f.smVid]; m.dur = 8; f.seconds = 5; f.smStart = 0; f.smUp = false; f.smSpc = true; f.smPunch = 0; f.smEvery = 4; H3.drawAll(); });
   await page.click('#smLoopSw'); await page.waitForTimeout(300);
-  ok(await page.isVisible('#smSeam') && await page.isHidden('#smSpcSw') && await page.isHidden('#smSoundSw'), 'loop on: seam slider shows, spacing and sound hide');
+  ok(await page.isVisible('#smSeam') && await page.isVisible('#smSpcSw') && await page.isHidden('#smSoundSw'), 'loop on: seam slider shows, spacing stays, sound hides');
+  const LP = await page.evaluate(() => { const f = H3.S.f, d = []; for(let i = 0; i < 123; i++) d.push(i===20 ? 60 : 6); // a steady pan with a jump at source step 20
+    f.smSeam = 12; f.smEase = 0.5; f.smPunch = 0; const P = H3.planSpacing(d, 124); return {keys:P.keys, skipped:P.skipped, jumps:P.jumps, moved:P.moved, seamAt:P.seamAt, dlen:P.d.length, d82:P.d[82], d61:P.d[61]}; });
+  console.log('loop spacing', JSON.stringify({jumps:LP.jumps, moved:LP.moved, skipped:LP.skipped}));
+  ok(LP.dlen===123 && LP.d82===60 && Math.abs(LP.d61 - 6) < 0.01 && LP.jumps.includes(82), 'loop spacing: steps put in the swapped order (the jump at source 20 is at 82; the wrap step filled in)');
+  ok(LP.moved > 0 && LP.keys.every(([o, sv]) => sv >= 0 && sv < 124) && !LP.keys.some(([o]) => Math.abs(o - 61.5) < 6) && LP.keys[0][1]===62, 'loop spacing: pins eased around the jump, mapped back to source, seam left free');
   console.log('loop note:', await page.textContent('#smLoopNote'));
+  await page.evaluate(() => { H3.S.f.smSpc = false; H3.drawAll(); }); // headless can't measure this clip; the plain loop pins go out
   await page.$eval('#smSeam', e => { e.value = '16'; e.dispatchEvent(new Event('input')); });
   const nL = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
   ok(sent.length===nL + 1, 'loop job sent');
