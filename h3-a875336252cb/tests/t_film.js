@@ -151,8 +151,8 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   console.log(qe.inputs.prompt);
   ok(qe && Array.isArray(qe.inputs.image1) && /three-quarter view facing left/.test(qe.inputs.prompt) && /short black hair/.test(qe.inputs.prompt) && !/tattoo|\{/.test(qe.inputs.prompt) && /round thin-metal glasses/i.test(qe.inputs.prompt), 'angle prompt: her description (minus picture sentences), the extra words, the angle');
   ok(/2511-Lightning-4steps/.test(node(qs[0].g, 'LoraLoaderModelOnly').inputs.lora_name) && node(qs[0].g, 'KSampler').inputs.steps===4 && node(qs[0].g, 'CLIPLoader').inputs.type==='qwen_image', 'Qwen 2511 + its 4-step Lightning LoRA');
-  const ka = nodes(zs[0].g, 'KSamplerAdvanced');
-  ok(ka.length===2 && ka[0].inputs.end_at_step===1 && ka[1].inputs.start_at_step===1 && ka[0].inputs.positive[0]===ka[0].inputs.negative[0] && ka[1].inputs.add_noise==='disable', 'variety: the first step runs with no prompt, then her words for the rest');
+  const zt = zs.map(s => node(s.g, 'CLIPTextEncode').inputs.text); console.log(zt[0]);
+  ok(!types(zs[0].g).includes('KSamplerAdvanced') && new Set(zt).size===4 && zt.every(x => /Plain light-grey studio background/.test(x)), 'variety: each try its own wording, all on a plain background, one normal sampler');
   ok(node(zs[0].g, 'EmptySD3LatentImage').inputs.batch_size===1 && /^Realistic photo of a woman in her 30s/.test(node(zs[0].g, 'CLIPTextEncode').inputs.text) && node(zs[0].g, 'CLIPLoader').inputs.type==='lumina2', 'Z-Image: realistic photo from her words');
   for(const s of [...qs, zs[0]]){ const sv = Object.entries(s.g).find(([k, n]) => n.class_type==='SaveImage'); HIST[s.pid] = {status:{completed:true}, outputs:{[sv[0]]:{images:[{filename:'a_00001_.png', subfolder:'Output_Render/x', type:'output'}].concat(s===zs[0] ? [{filename:'a_00002_.png', subfolder:'Output_Render/x', type:'output'}] : [])}}}; }
   await tick();
