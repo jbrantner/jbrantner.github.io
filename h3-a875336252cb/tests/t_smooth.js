@@ -41,7 +41,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8011);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [], uploads = [], frees = [], HIST = {};
+  const sent = [], uploads = [], frees = [], HIST = {}, views = [];
   await page.route(PC + '/**', async (rt) => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[{vram_free:7e9, vram_total:8.5e9}]});
     if(p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
@@ -52,6 +52,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     if(p==='/free'){ frees.push(JSON.parse(rt.request().postData())); return J({}); }
     if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
     if(p.startsWith('/history')) return J({});
+    if(p==='/view'){ views.push(u.searchParams.get('filename')); return rt.fulfill({status:200, contentType:'video/mp4', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(path.join(MEDIA, 'v24.mp4'))}); }
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   await page.addInitScript(pc => { localStorage.clear(); window.H3_PCS = [{name:'Render', url:pc, on:true, speed:1}]; }, PC);
   await page.goto('http://127.0.0.1:8011/index.html');
@@ -182,8 +183,8 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     t.pieces = [{gen:73, deliv:73, state:'done', file:{filename:'p1.mp4', subfolder:'x', type:'output'}}, {gen:73, deliv:51, state:'done', file:{filename:'p2.mp4', subfolder:'x', type:'output'}}];
     t.final = {filename:'joined_00001_.mp4', subfolder:'Output_Render/H3Deck/j', type:'output'}; t.state = 'done'; H3.S.takes.unshift(t); return t.id; });
   await page.evaluate(() => H3.tick()); await page.waitForTimeout(600);
-  ok(await page.$('[data-act="regen"][data-t="tregen"]'), 'finished take has ⬆ Regenerate');
-  await page.click('[data-act="regen"][data-t="tregen"]'); await page.waitForTimeout(300);
+  ok(await page.$('[data-act="regen"][data-t="tregen"]'), 'finished take has 🪄⬆ Smooth & regenerate');
+  await page.evaluate(() => H3.regenSheet(H3.S.takes.find(x => x.id==='tregen'))); await page.waitForTimeout(300);
   ok(await page.isVisible('#rgGo') && await page.$('#rgRefs.on'), 'sheet opens with "Use its reference pictures" on');
   await page.screenshot({path:path.join(MEDIA, 'regen-sheet.png')});
   const nR = sent.length; await page.click('#rgGo'); await page.waitForTimeout(300);
@@ -201,6 +202,33 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   const tf = await page.evaluate(() => { const t = H3.S.takes.find(x => x.id==='tregen'); return {state:t.state, final:t.final.filename, src:t.smoothed.filename}; });
   ok(tf.state==='done' && tf.final==='j_up_00001_.mp4' && tf.src==='joined_00001_.mp4', 'done; the original is kept as the source for another go');
 
+  }
+  {
+  // ---- 🪄⬆ Smooth & regenerate: the take goes into Smooth with its prompt, LoRAs, size and pictures ----
+  const tid = await page.evaluate(() => { const o = H3.S.takes.find(x => x.id==='tregen'), t = JSON.parse(JSON.stringify(o)); t.id = 'tsend'; t.up = null; t.upStage = null; t.smoothed = null;
+    t.final = {filename:'send_00001_.mp4', subfolder:'Output_Render/H3Deck/s', type:'output'}; t.loras = [{name:'minimax_h3_ref2v_turbo_4step.safetensors', str:0.6, words:'jdx'}];
+    t.prompt = '<Picture 1> walks to the door.\n\n＋ She opens it.'; t.w = 512; t.h = 768; H3.S.takes.unshift(t);
+    H3.S.f.sm = false; H3.S.f.smUp = false; H3.S.f.prompt = 'something else'; return t.id; });
+  await page.evaluate(() => H3.tick()); await page.waitForTimeout(500);
+  await page.click('[data-act="regen"][data-t="tsend"]'); await page.waitForTimeout(2000);
+  ok(views.includes('send_00001_.mp4'), 'the take\'s video is fetched from the PC');
+  const F = await page.evaluate(() => { const f = H3.S.f; return {sm:f.sm, vid:f.smVid, media:!!H3.S.media[f.smVid], up:f.smUp, refs:f.smRefs, upRefs:f.smUpRefs, prompt:f.prompt, loras:f.loras, mp:f.mp, ref0:H3.S.takes.find(x => x.id==='tsend').imgs[0].id}; });
+  ok(F.sm && F.media && F.up && F.upRefs && F.refs.length===1 && F.refs[0]===F.ref0, 'Smooth is on with the video, ⬆ regenerate on, its picture carried ' + JSON.stringify(F.refs));
+  ok(F.prompt==='<Picture 1> walks to the door. She opens it.' && F.loras.length===1 && F.loras[0].str===0.6 && Math.abs(F.mp - 0.39) < 0.01, 'prompt, LoRA and size carried over');
+  ok(await page.isVisible('#smUpRefsBox') && await page.$('#smUpRefsSw.on'), 'the pictures show under ⬆ Then regenerate bigger');
+  await page.screenshot({path:path.join(MEDIA, 'send-to-smooth.png'), clip:await (await page.$('#smBody')).boundingBox()});
+  await page.evaluate(() => { const m = H3.S.media[H3.S.f.smVid]; m.dur = 3; m.w = 512; m.h = 768; H3.S.f.seconds = 3; H3.S.f.smSpc = false; });
+  const snap = await page.evaluate(() => H3.snapshot());
+  ok(snap.up && snap.up.refs && snap.upImgs.length===1 && snap.imgs.length===0 && snap.w===512 && snap.h===768, 'the take keeps the pictures for the regenerate only (smoothing unchanged), 512x768');
+  const nS = sent.length; await page.evaluate(() => H3.drawAll && H3.drawAll()); await page.click('#goBtn'); await page.waitForTimeout(1500);
+  ok(sent.length===nS + 1, 'smoothing job sent');
+  const g1 = Object.values(sent[sent.length - 1]); ok(!g1.some(n => n.class_type==='LoadImage'), 'smoothing graph has no reference pictures');
+  const s1 = await page.evaluate(() => { const t = H3.S.takes[0]; return {pid:t.pieces[0].pid, save:t.pieces[0].save, dir:t.dir}; });
+  HIST[s1.pid] = {status:{completed:true, status_str:'success'}, outputs:{[s1.save]:{images:[{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/' + s1.dir, type:'output'}]}}};
+  const nU = uploads.length; await page.evaluate(() => H3.tick()); await page.waitForTimeout(800); await page.evaluate(() => H3.tick()); await page.waitForTimeout(1500);
+  ok(sent.length===nS + 2, 'then the regenerate is queued');
+  const g2 = sent[sent.length - 1], n2b = Object.values(g2), rv2 = n2b.find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
+  ok(rv2 && rv2.inputs['ref_images.ref_image_0'] && n2b.find(n => n.class_type==='UNETLoader').inputs.unet_name==='minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'regenerate uses Ref2VA with the carried picture');
   }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
