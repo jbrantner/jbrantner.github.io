@@ -233,6 +233,28 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
 
   }
   {
+  // ---- 🔁 loop ----
+  const LK = await page.evaluate(() => H3.loopKeys(124, 4, 12));
+  console.log('loop', JSON.stringify(LK));
+  const h = 62; ok(LK.seamAt===62 && LK.keys.every(([o, s]) => s===(o + h) % 124), 'loop: output frame o shows source (o+62) mod 124, seam at 62');
+  ok(LK.keys[0][0]===0 && LK.keys[0][1]===62 && LK.keys[LK.keys.length - 1][0]===123 && LK.keys[LK.keys.length - 1][1]===61, 'loop ends are the window\'s continuous middle (61 → 62)');
+  ok(LK.skipped.length===3 && LK.skipped.every(o => Math.abs(o - 61.5) < 6) && !LK.keys.some(([o]) => Math.abs(o - 61.5) < 6), 'no pins within 6 frames of the seam ' + JSON.stringify(LK.skipped));
+  await page.evaluate(() => { const f = H3.S.f; f.sm = true; f.smVid = Object.keys(H3.S.media).find(id => H3.S.media[id].kind==='vid'); const m = H3.S.media[f.smVid]; m.dur = 8; f.seconds = 5; f.smStart = 0; f.smUp = false; f.smSpc = true; f.smPunch = 0; f.smEvery = 4; H3.drawAll(); });
+  await page.click('#smLoopSw'); await page.waitForTimeout(300);
+  ok(await page.isVisible('#smSeam') && await page.isHidden('#smSpcSw') && await page.isHidden('#smSoundSw'), 'loop on: seam slider shows, spacing and sound hide');
+  console.log('loop note:', await page.textContent('#smLoopNote'));
+  await page.$eval('#smSeam', e => { e.value = '16'; e.dispatchEvent(new Event('input')); });
+  const nL = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
+  ok(sent.length===nL + 1, 'loop job sent');
+  const gl = sent[sent.length - 1], nl = Object.values(gl), gd = nl.filter(n => n.class_type==='MiniMaxH3AddGuide');
+  const pr = gd.filter(n => n.inputs.image).map(n => [n.inputs.frame_idx, gl[n.inputs.image[0]].inputs.batch_index]);
+  const tk = await page.evaluate(() => H3.S.takes[0].sm);
+  ok(tk.loop===16 && !tk.sound && gd.every(n => n.inputs.image), 'take: loop 16, no sound guide');
+  ok(pr[0][0]===0 && pr[0][1]===62 && !pr.some(([o]) => Math.abs(o - 61.5) < 8), 'graph pins the swapped halves with a free seam ' + JSON.stringify(pr.slice(13, 18)));
+  ok(/🔁/.test(await page.textContent('#takes')), 'card shows 🔁');
+  await page.click('#smLoopSw');
+  }
+  {
   // ---- 🪄⬆ Smooth & regenerate: the take goes into Smooth with its prompt, LoRAs, size and pictures ----
   const tid = await page.evaluate(() => { const o = H3.S.takes.find(x => x.id==='tregen'), t = JSON.parse(JSON.stringify(o)); t.id = 'tsend'; t.up = null; t.upStage = null; t.smoothed = null;
     t.final = {filename:'send_00001_.mp4', subfolder:'Output_Render/H3Deck/s', type:'output'}; t.loras = [{name:'minimax_h3_ref2v_turbo_4step.safetensors', str:0.6, words:'jdx'}];
