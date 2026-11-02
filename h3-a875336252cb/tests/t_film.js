@@ -204,6 +204,39 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   await page.click('[data-act="gCancelAll"]'); await page.waitForTimeout(500);
   ok(FARM.cancelled.length===1 && FARM.jobs.length===0, 'Cancel takes it out of the helper\'s line');
 
+  // ---- 👗 outfits ----
+  FARM.on = false;
+  const of = await page.evaluate(async () => { const f = FILM.S.films[0], c = f.chars[0], x = FILM.ctxOf('cu1');
+    const o = {id:'ofR', name:'Red dress', desc:'a fitted red satin dress and black heels. {2} shows the back of the dress.', refs:[]}; c.outfits = [o];
+    x.cut.outfit = {chE:'ofR'}; const A0 = FILM.alloc(x.film, x.scene, x.cut), t0 = FILM.castText(A0, x.scene), r0 = A0.groups[0].used.map(r => r.id);
+    o.refs = c.refs.slice(5, 8).map(r => ({id:r.id, note:''}));
+    const A1 = FILM.alloc(x.film, x.scene, x.cut), t1 = FILM.castText(A1, x.scene);
+    const base = c.refs.slice(0, 4).map(r => r.id); x.cut.outfit = {}; const t2 = FILM.castText(FILM.alloc(x.film, x.scene, x.cut), x.scene);
+    return {t0, t1, t2, r0same:JSON.stringify(r0)===JSON.stringify(base), r1:A1.groups[0].used.map(r => r.id), want:o.refs.map(r => r.id)}; });
+  console.log(of.t0.split('\n')[0]); console.log(of.t1.split('\n')[0]);
+  ok(of.r0same && /Instead of the clothes above, in this cut Ellie is wearing a fitted red satin dress and black heels\./.test(of.t0) && !/back of the dress/.test(of.t0), 'outfit with no pictures yet: her base pictures, the prompt says what she wears (its {2} dropped)');
+  ok(JSON.stringify(of.r1)===JSON.stringify(of.want) && /<Picture 2> shows the back of the dress/.test(of.t1) && !/grey coat from behind/.test(of.t1) && /short black hair/.test(of.t1), "outfit with pictures: MiniMax gets the outfit's pictures, its {2} is numbered, her base {2} sentence goes");
+  ok(!/wearing/.test(of.t2), 'base outfit: prompt as before');
+  const nd = sent.length;
+  await page.evaluate(() => { const f = FILM.S.films[0], c = f.chars[0]; return FILM.makePictures(f, c, 'dress', {tries:2, from:c.refs[0].id, out:'ofR'}); });
+  const dp = node(sent[nd].g, 'TextEncodeQwenImageEditPlus').inputs.prompt; console.log(dp);
+  ok(sent.length===nd + 2 && /^Dress the person from picture 1 in a fitted red satin dress and black heels\. Keep the face/.test(dp) && !/short black hair|back of the dress/.test(dp), '👗 Dress her: Qwen puts her in the outfit');
+  const sv = Object.entries(sent[nd].g).find(([k, n]) => n.class_type==='SaveImage'); HIST[sent[nd].pid] = {status:{completed:true}, outputs:{[sv[0]]:{images:[{filename:'o_00001_.png', subfolder:'Output_Render/x', type:'output'}]}}};
+  await tick();
+  const og = await page.evaluate(async () => { const c = FILM.S.films[0].chars[0], g = c.gens.find(g => g.out==='ofR' && g.state==='done'); const n0 = c.refs.length; await FILM.takeGen(c, g.id, 0, true); return [c.outfits[0].refs.length, c.refs.length===n0]; });
+  ok(og[0]===4 && og[1], 'a dressed picture goes into the outfit, not her base pictures');
+  await page.evaluate(() => { const c = FILM.S.films[0].chars[0]; c.open = true; c.tab = 'ofR'; FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'}); }); await page.waitForTimeout(300);
+  ok(await page.$$eval('.seg.outs button', b => b.map(x => x.textContent).join('|')).then(t => /Base\|👗 Red dress\|＋ Outfit/.test(t)) && await page.$$eval('[data-oo="ofR"]', i => i.length)===2, 'cast card: Base / 👗 Red dress / ＋ Outfit tabs, the outfit has its name and words');
+  await page.screenshot({path:path.join(__dirname, 'film_outfit.png'), fullPage:true});
+  await page.click('[data-act="mkOpen"][data-out="ofR"]'); await page.waitForTimeout(200);
+  ok(/Dress her/.test(await page.textContent('#sheetCard')) && /Red dress/.test(await page.textContent('#sheetCard')), 'the 🪄 sheet in an outfit offers 👗 Dress her');
+  await page.click('[data-act="close"]');
+  await page.evaluate(() => FILM.go({v:'cut', film:FILM.S.films[0].id, cut:'cu1'})); await page.waitForTimeout(300);
+  await page.click('[data-act="cutOut"][data-o="ofR"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => FILM.ctxOf('cu1').cut.outfit.chE)==='ofR' && await page.$$eval('[data-act="cutOut"].on', b => b[0].textContent).then(t => /Red dress/.test(t)), 'a cut picks her outfit with a chip');
+  await page.screenshot({path:path.join(__dirname, 'film_cutoutfit.png'), fullPage:true});
+  await page.evaluate(() => { FILM.ctxOf('cu1').cut.outfit = {}; });
+
   // ---- the cast folds into a strip of #1 pictures ----
   await page.evaluate(() => { FILM.S.films[0].chars.forEach(c => { c.open = false; }); FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'}); }); await page.waitForTimeout(300);
   ok(await page.$$eval('.castTile img', i => i.length)===2 && await page.$$eval('section.block', b => b.length)===0, 'folded: each character is a tile with their #1 picture');

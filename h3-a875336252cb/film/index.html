@@ -84,6 +84,7 @@ header h1 span{color:var(--accent)}
 .castTile img,.castTile>span{width:100%;aspect-ratio:3/4;object-fit:cover;object-position:top;display:grid;place-items:center;background:var(--bg);color:var(--dim);font-size:12px}
 .castTile b{padding:0 8px;font:700 13px/1.2 var(--body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .castTile small{padding:0 8px;color:var(--soft);font-size:11px}
+.seg.outs{flex-wrap:wrap;margin:2px 0 10px}
 .block>h3 .hthumb{width:30px;height:30px;border-radius:8px;object-fit:cover;object-position:top;flex:none}
 .slot{position:relative;aspect-ratio:1;border-radius:12px;border:1px dashed var(--line);background:var(--bg);overflow:hidden;display:grid;place-items:center;color:var(--dim);font-size:13px;font-weight:700;text-align:center}
 .slot.has{border-style:solid}
@@ -450,16 +451,20 @@ function dimsOf(film){ const r = ratioOf(film), px = Math.min(MAXPX, film.mp * 1
 // the rest are dealt out one by one by rank (everyone's #1, then everyone's #2...), so with 2 characters of 9 pictures each
 // it's 5 + 4. The place (scene pictures) gets its own few after the characters. Numbering follows: character 2's pictures
 // start right after character 1's.
+// 👗 outfits (Jordan 2026-11-02): a character can have other outfits, each with its own ranked pictures and words; a cut picks one
+// per character, and then her pictures for MiniMax are that outfit's (her base ones until the outfit has some) and the prompt says what she wears
+const outfitOf = (c, cut) => { const id = cut && (cut.outfit || {})[c.id]; return (id && (c.outfits || []).find(o => o.id===id)) || null; };
+const outfitPics = o => !!o && o.refs.some(r => S.media[r.id]);
 function alloc(film, scene, cut){
   const budget = Math.max(1, Math.min(MAXPICS, +film.pics || MAXPICS)), counts = cut.counts || {};
-  const chars = cut.chars.map(id => film.chars.find(c => c.id===id)).filter(Boolean).map(c => ({c, refs:c.refs.filter(r => S.media[r.id]), want:counts[c.id]}));
+  const chars = cut.chars.map(id => film.chars.find(c => c.id===id)).filter(Boolean).map(c => { const o = outfitOf(c, cut); return {c, o, refs:(outfitPics(o) ? o.refs : c.refs).filter(r => S.media[r.id]), want:counts[c.id]}; });
   const place = scene && scene.usePlace!==false ? (scene.placeRefs || []).filter(r => S.media[r.id]) : [];
   const placeN = Math.min(place.length, scene && scene.placeN != null ? +scene.placeN : 1, budget);
   let left = budget - placeN;
   chars.forEach(x => { x.n = 0; x.fixed = x.want != null; if(x.fixed){ x.n = Math.max(0, Math.min(+x.want, x.refs.length, left)); left -= x.n; } });
   for(let r = 0; left > 0; r++){ let gave = false; for(const x of chars){ if(x.fixed || left <= 0 || x.refs.length <= r) continue; x.n++; left--; gave = true; } if(!gave) break; }
   const groups = []; let k = 0;
-  chars.forEach(x => { groups.push({kind:'char', c:x.c, refs:x.refs, used:x.refs.slice(0, x.n), first:k + 1, auto:!x.fixed}); k += x.n; });
+  chars.forEach(x => { groups.push({kind:'char', c:x.c, o:x.o, own:outfitPics(x.o), refs:x.refs, used:x.refs.slice(0, x.n), first:k + 1, auto:!x.fixed}); k += x.n; });
   if(placeN){ groups.push({kind:'place', refs:place, used:place.slice(0, placeN), first:k + 1}); k += placeN; }
   return {groups, total:k, budget, pics:groups.flatMap(g => g.used)};
 }
@@ -476,7 +481,10 @@ function castText(A, scene){
   const out = A.groups.map(g => {
     const notes = g.used.map((r, i) => r.note && r.note.trim() ? '<Picture ' + (g.first + i) + '> is ' + sentence(r.note).replace(/^./, c => c.toLowerCase()) : '').filter(Boolean).join(' ');
     if(g.kind==='place') return [picList(g.first, g.used.length) + (g.used.length > 1 ? ' show' : ' shows') + ' the place' + (scene && scene.place ? ': ' + sentence(scene.place) : '.'), notes].filter(Boolean).join(' ');
-    const nm = (g.c.name || 'Character').trim(), d = localRefs(g.c.desc, g);
+    const nm = (g.c.name || 'Character').trim();
+    // in an outfit with its own pictures, her {n} sentences point at base pictures this cut doesn't use, so they go; the outfit's own {n} count instead
+    let d = g.o && g.own ? whoText(g.c) : localRefs(g.c.desc, g); if(d && !/[.!?]$/.test(d)) d += '.';
+    if(g.o){ const w = String(g.o.desc || '').trim() || (g.o.name || '').trim(); if(w) d = (d ? d + ' ' : '') + (g.c.desc ? 'Instead of the clothes above, in this cut ' : 'In this cut, ') + nm + ' is wearing ' + sentence(localRefs(w, g.own ? g : {used:[], first:1})).replace(/^./, ch => ch.toLowerCase()); }
     return [g.used.length ? picList(g.first, g.used.length) + (g.used.length > 1 ? ' show ' : ' shows ') + nm + '.' : '', notes, d ? nm + ': ' + d : ''].filter(Boolean).join(' ');
   }).filter(Boolean);
   if(scene && scene.place && !A.groups.some(g => g.kind==='place')) out.push('The place: ' + sentence(scene.place));
@@ -789,7 +797,8 @@ function qwenGraph(k, img, text, W, H, prefix, keepFrame){
 const genDir = (film, c) => 'H3Film/' + slug(film.name) + '_' + film.id.slice(-4) + '/cast/' + slug(c.name || 'character') + '_' + c.id.slice(-4);
 // kind: 'new' (from words, tries = number of pictures), 'pic' (clean front shot from media id), 'set' (the angles listed in `which`, from media id)
 async function makePictures(film, c, kind, opt){
-  const extra = (opt.extra || '').trim().replace(/[.\s]*$/, ''), who = whoText(c).replace(/^(A|An|The)\b/, m => m.toLowerCase()), W = 896, H = 1152; c.gens = c.gens || [];
+  const O = opt.out && (c.outfits || []).find(o => o.id===opt.out), wear = O ? whoText({desc:O.desc || O.name || ''}).replace(/^./, m => m.toLowerCase()) : '';
+  const extra = (opt.extra || '').trim().replace(/[.\s]*$/, ''), who = O ? '' : whoText(c).replace(/^(A|An|The)\b/, m => m.toLowerCase()), W = 896, H = 1152; c.gens = c.gens || [];
   const jobs = [];
   if(kind==='new'){ const k = zitKitF(); if(k.why) throw new Error(k.why);
     // variety (Jordan 2026-11-02): Z-Image Turbo makes nearly the same picture from any seed, so each try gets its own small
@@ -803,19 +812,24 @@ async function makePictures(film, c, kind, opt){
       jobs.push({k, label:'From words', G:zitGraph(k, text, W, H, 1, genDir(film, c) + '/new', 0), n:1});
     }
   } else { const k = qwenKitF(); if(k.why) throw new Error(k.why); const img = await upload(k.url, opt.from);
-    const base = (who ? 'This is ' + who + '. ' : '') + (extra ? sentence(extra) + ' ' : '');
+    const base = (who ? 'This is ' + who + '. ' : '') + (wear ? 'The person is wearing ' + wear + '. ' : '') + (extra ? sentence(extra) + ' ' : '');
+    if(kind==='dress'){ if(!wear && !extra) throw new Error('Say what she wears in this outfit');
+      for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'👗 ' + (O ? O.name || 'Outfit' : 'Outfit'), G:qwenGraph(k, img, 'Dress the person from picture 1 in ' + (wear || '') + (wear && extra ? '. ' : '') + (extra ? sentence(extra).replace(/\.$/, '') : '') + '. Keep the face, hairstyle, skin and body exactly as they are in picture 1; change only the clothes, shoes and accessories. Full body standing, front view, arms relaxed, the whole body from head to shoes in frame, looking at the camera. ' + LOOK, W, H, genDir(film, c) + '/outfit_' + slug(O ? O.name || 'outfit' : 'outfit')), n:1}); }
+    else
     if(kind==='edit'){ const ask = sentence(extra); if(!ask) throw new Error('Say what to change, e.g. change her hair to green');
       for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'Edit', G:qwenGraph(k, img, ask + ' Keep everything else in picture 1 exactly the same: the same person, face, pose, framing, clothes, background and light. Realistic photo.', W, H, genDir(film, c) + '/edit', true), n:1}); }
     else if(kind==='pic') for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'Clean front shot', G:qwenGraph(k, img, 'Show the same person from picture 1 in a clean reference photo. ' + base + KEEP + ' Front view, looking at the camera, head to waist, neutral relaxed expression. ' + LOOK, W, H, genDir(film, c) + '/front'), n:1});
     else for(const i of opt.which) jobs.push({k, label:ANGLES[i][0], order:i, G:qwenGraph(k, img, 'The same person as in picture 1. ' + base + KEEP + ' ' + ANGLES[i][1] + ' ' + LOOK, W, H, genDir(film, c) + '/angle_' + (i + 1)), n:1});
   }
-  const set = uid('set'), url = jobs[0].k.url, xs = jobs.map(j => ({id:uid('g'), set, kind, label:j.label, order:j.order, pc:url, save:j.G.save, state:'new', t:Date.now(), files:[]}));
+  const set = uid('set'), url = jobs[0].k.url, xs = jobs.map(j => ({id:uid('g'), set, kind, out:O ? O.id : '', label:j.label, order:j.order, pc:url, save:j.G.save, state:'new', t:Date.now(), files:[]}));
   // Render's helper keeps its own line of jobs on disk and hands them to ComfyUI one at a time, so a ComfyUI crash and restart
   // (Render 2026-11-02 19:12, Qwen mid-job: 7 waiting pictures gone with ComfyUI's in-memory queue) costs nothing: it sends again.
   // Older helpers, or a PC the helper doesn't list: straight into ComfyUI's queue as before.
+  let r = null;
   if(await farmOk(url)){
-    const r = await fetch(url + '/renderdeck/farm/add', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({jobs:jobs.map((j, i) => ({key:xs[i].id, graph:j.G.g, home:url, pin:url, client_id:CID, prompt:'H3 Film · ' + (c.name || 'cast') + ' · ' + j.label}))})});
-    const a = await r.json().catch(() => ({})); if(!r.ok || a.error) throw new Error(a.error || pcName(url) + "'s helper said " + r.status);
+    r = await fetch(url + '/renderdeck/farm/add', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({jobs:jobs.map((j, i) => ({key:xs[i].id, graph:j.G.g, home:url, pin:url, client_id:CID, prompt:'H3 Film · ' + (c.name || 'cast') + ' · ' + j.label}))})});
+    if(r.status===404){ pcOf(url).farm = false; r = null; } } // the helper went back to an older one: straight into ComfyUI
+  if(r){ const a = await r.json().catch(() => ({})); if(!r.ok || a.error) throw new Error(a.error || pcName(url) + "'s helper said " + r.status);
     xs.forEach(x => { x.farm = 1; x.state = 'queued'; x.tq = Date.now(); c.gens.push(x); }); save();
   } else for(let i = 0; i < jobs.length; i++){ const x = xs[i]; c.gens.push(x); x.pid = await queueGraph(url, jobs[i].G); x.state = 'queued'; x.tq = Date.now(); save(); }
   tickSoon(800); return jobs.length;
@@ -851,7 +865,8 @@ async function takeGen(c, gid, fi, top){
   const x = (c.gens || []).find(g => g.id===gid), f = x && x.files[fi]; if(!f) return;
   const b = await (await fetch(viewUrl(x.pc, f))).blob(), id = await addMedia(new File([b], f.filename, {type:b.type || 'image/png'}), 'img');
   const r = {id, note:x.kind==='set' ? ANGLES[x.order][2] : ''};
-  if(top) c.refs.unshift(r); else c.refs.push(r);
+  const o = x.out && (c.outfits || []).find(o => o.id===x.out), l = o ? o.refs : c.refs; // made for an outfit: goes to the outfit
+  if(top) l.unshift(r); else l.push(r);
   (x.used = x.used || []).push(fi); save();
 }
 
@@ -911,14 +926,24 @@ function castTab(film){
   return `<div class="note" style="margin-bottom:10px">Add each character's pictures from most to least important. When a cut has more than one character, the 9 picture slots are shared and each one gets their top pictures first. In the description, {2} means that character's 2nd picture; it's renumbered for every cut, and dropped when that picture isn't used.</div>
   ${(() => { const shut = film.chars.filter(c => !c.open); // folded characters: a strip of their #1 picture (Jordan 2026-11-02), tap one to open it
     return shut.length ? `<div class="castGrid">${shut.map(c => { const t = c.refs[0] && THUMB(c.refs[0].id);
-      return `<button class="castTile" data-act="castOpen" data-id="${c.id}">${t ? `<img src="${t}" alt="">` : '<span>No picture</span>'}<b>${esc(c.name || 'Character')}</b><small>${c.refs.length} pictures${(c.gens || []).some(g => !g.gone && (g.state==='queued' || g.state==='running' || g.state==='done')) ? ' · 🪄' : ''}</small></button>`; }).join('')}</div>` : ''; })()}
+      return `<button class="castTile" data-act="castOpen" data-id="${c.id}">${t ? `<img src="${t}" alt="">` : '<span>No picture</span>'}<b>${esc(c.name || 'Character')}</b><small>${c.refs.length} pictures${(c.outfits || []).length ? ' · 👗' + c.outfits.length : ''}${(c.gens || []).some(g => !g.gone && (g.state==='queued' || g.state==='running' || g.state==='done')) ? ' · 🪄' : ''}</small></button>`; }).join('')}</div>` : ''; })()}
   ${film.chars.some(c => c.open) && film.chars.length > 1 ? `<button class="btn" data-act="castShutAll" style="margin-bottom:10px">▦ Fold them all into pictures</button>` : ''}
   ${film.chars.filter(c => c.open).map(c => `<section class="block" style="--c:var(--pic)"><h3 data-act="castShut" data-id="${c.id}">${c.refs[0] && THUMB(c.refs[0].id) ? `<img class="hthumb" src="${THUMB(c.refs[0].id)}" alt="">` : ''}${esc(c.name || 'Character')}<span class="sum">${c.refs.length} pictures</span></h3><div class="body">
     <div class="row" style="flex-wrap:nowrap"><input data-c="${c.id}" data-k="name" value="${esc(c.name)}" placeholder="Name (used in the prompts)"><button class="btn warn" data-act="delChar" data-id="${c.id}">🗑</button></div>
+    ${outfitTabs(c)}${gensHtml(c)}</div></section>`).join('')}
+  <button class="btn pri" data-act="newChar">＋ Add a character</button>`;
+}
+function outfitTabs(c){
+  const os = c.outfits || [], o = os.find(x => x.id===c.tab), T = (id, t) => `<button class="${(o ? o.id : 'base')===id ? 'on' : ''}" data-act="outTab" data-c="${c.id}" data-v="${id}">${t}</button>`;
+  return `<div class="seg outs">${T('base', 'Base')}${os.map(x => T(x.id, '👗 ' + esc(x.name || 'Outfit'))).join('')}<button data-act="outNew" data-c="${c.id}">＋ Outfit</button></div>` + (!o ? `
     <textarea data-c="${c.id}" data-k="desc" placeholder="Who she is and how she looks, e.g. A woman in her 30s with short black hair and a grey wool coat. {2} shows her coat from behind.">${esc(c.desc)}</textarea>
     ${refSlots(c.refs, 'c:' + c.id)}
-    <button class="btn pri" data-act="mkOpen" data-id="${c.id}">🪄 Make pictures</button>${gensHtml(c)}</div></section>`).join('')}
-  <button class="btn pri" data-act="newChar">＋ Add a character</button>`;
+    <button class="btn pri" data-act="mkOpen" data-id="${c.id}">🪄 Make pictures</button>` : `
+    <div class="row" style="flex-wrap:nowrap"><input data-oc="${c.id}" data-oo="${o.id}" data-k="name" value="${esc(o.name)}" placeholder="Outfit name, e.g. Red dress"><button class="btn warn" data-act="outDel" data-c="${c.id}" data-o="${o.id}">🗑</button></div>
+    <textarea data-oc="${c.id}" data-oo="${o.id}" data-k="desc" style="min-height:60px" placeholder="What she wears, e.g. a fitted red satin dress, black heels and small gold earrings. {2} shows the back of the dress.">${esc(o.desc || '')}</textarea>
+    ${refSlots(o.refs, 'o:' + c.id + '/' + o.id)}
+    <div class="note">${o.refs.length ? 'Cuts with this outfit use these pictures instead of her base ones, and the prompt says what she\'s wearing.' : 'Until this outfit has pictures, cuts with it use her base pictures and only the words change. 🪄 Dress her makes them from one of her pictures.'}</div>
+    <button class="btn pri" data-act="mkOpen" data-id="${c.id}" data-out="${o.id}">🪄 Dress her / make pictures</button>`);
 }
 function scenesTab(film){
   return film.scenes.map((sc, si) => `<section class="block" style="--c:var(--cyan)"><h3 data-act="noop">${si + 1}. ${esc(sc.name || 'Scene')}<span class="sum">${sc.cuts.length} cuts</span></h3><div class="body">
@@ -965,6 +990,7 @@ function cutView(x){
   const inCast = cut.chars.map(id => film.chars.find(c => c.id===id)).filter(Boolean), out = film.chars.filter(c => !cut.chars.includes(c.id));
   const allocHtml = A.groups.map(g => `<div class="al"><div class="ah"><span>${g.kind==='place' ? '🏙 The place' : esc(g.c.name || 'Character')} <small class="note">${g.used.length ? picList(g.first, g.used.length).replace(/<Picture (\d+)>/g, '#$1') : 'no pictures'}</small></span>
       ${g.kind==='char' ? `<div class="step"><button data-act="cnt" data-id="${g.c.id}" data-d="-1">−</button><b>${g.used.length}${g.auto ? '' : '•'}</b><button data-act="cnt" data-id="${g.c.id}" data-d="1">+</button></div>${g.auto ? '' : `<button class="btn" data-act="cntAuto" data-id="${g.c.id}">auto</button>`}` : ''}</div>
+      ${g.kind==='char' && (g.c.outfits || []).length ? `<div class="chips">${[{id:'', name:'Base'}].concat(g.c.outfits).map(o => `<button class="chip ${(g.o ? g.o.id : '')===o.id ? 'on' : ''}" data-act="cutOut" data-id="${g.c.id}" data-o="${o.id}">${o.id ? '👗 ' : ''}${esc(o.name || 'Outfit')}</button>`).join('')}</div>${g.o && !g.own ? '<div class="note">This outfit has no pictures yet, so her base pictures are used; the prompt says what she\'s wearing.</div>' : ''}` : ''}
       <div class="strip">${g.refs.map((r, i) => `<div class="s ${used.has(r.id) && i < g.used.length ? '' : 'out'}"><img src="${esc(THUMB(r.id))}" alt="">${i < g.used.length ? `<i>P${g.first + i}</i>` : `<i>#${i + 1}</i>`}</div>`).join('') || '<span class="note">Add pictures in 🎭 Cast</span>'}</div></div>`).join('');
   const parts = P.map((p, i) => { const pt = cut.parts[i] || {text:''}, st = partState(cut, i);
     return `<div class="part"><div class="ph"><span>Part ${i + 1} · ${fmtS(p.deliv / FPS)}</span>${st}</div>
@@ -1049,21 +1075,25 @@ function rViewSheet(owner, i){ const l = refList(owner), r = l && l[i]; if(!r) r
 let MK = null; // the 🪄 sheet's choices
 function mkSheet(){
   const film = curFilm(), c = film && film.chars.find(x => x.id===MK.ch); if(!c) return closeSheet();
-  const K = (k, t) => `<button class="${MK.kind===k ? 'on' : ''}" data-act="mkKind" data-v="${k}">${t}</button>`;
-  if(!MK.from || !c.refs.some(r => r.id===MK.from)) MK.from = c.refs[0] && c.refs[0].id;
+  const K = (k, t) => `<button class="${MK.kind===k ? 'on' : ''}" data-act="mkKind" data-v="${k}">${t}</button>`, O = MK.out && (c.outfits || []).find(o => o.id===MK.out);
+  if(MK.out && !O) MK.out = '';
+  // in an outfit: her outfit pictures first, then her base ones (Dress her starts from a base one)
+  const src = O ? (MK.kind==='dress' ? c.refs.concat(O.refs) : O.refs.concat(c.refs)) : c.refs;
+  if(!MK.from || !src.some(r => r.id===MK.from)) MK.from = src[0] && src[0].id;
   const kit = MK.kind==='new' ? zitKitF() : qwenKitF(), n = MK.kind==='set' ? MK.which.length : MK.tries;
-  const pick = `<div class="sub">Start from</div><div class="strip">${c.refs.map((r, i) => `<div class="s ${r.id===MK.from ? '' : 'out'}" data-act="mkFrom" data-id="${r.id}"><img src="${esc(THUMB(r.id))}" alt=""><i>#${i + 1}</i></div>`).join('')}<div class="s" data-act="refAdd" data-o="c:${c.id}" style="display:grid;place-items:center;color:var(--dim)">＋</div></div>`;
-  openSheet(`<h3><span>🪄 Pictures of ${esc(c.name || 'this character')}</span><button class="btn" data-act="close">✕</button></h3>
-    <div class="seg">${K('new', '✨ From words')}${K('pic', '🖼 From a picture')}${K('set', '📚 Reference set')}${K('edit', '✏️ Edit')}</div>
-    <div class="note">${MK.kind==='new' ? 'Z-Image Turbo makes her from her description (realistic photo, front, plain background). Pick the best as her #1, then make her reference set from it.'
+  const pick = `<div class="sub">Start from</div><div class="strip">${src.map(r => `<div class="s ${r.id===MK.from ? '' : 'out'}" data-act="mkFrom" data-id="${r.id}"><img src="${esc(THUMB(r.id))}" alt=""><i>${O && O.refs.includes(r) ? '👗' : ''}#${(O && O.refs.includes(r) ? O.refs : c.refs).indexOf(r) + 1}</i></div>`).join('')}<div class="s" data-act="refAdd" data-o="${O ? 'o:' + c.id + '/' + O.id : 'c:' + c.id}" style="display:grid;place-items:center;color:var(--dim)">＋</div></div>`;
+  openSheet(`<h3><span>🪄 ${O ? esc(c.name || 'Her') + ' · 👗 ' + esc(O.name || 'Outfit') : 'Pictures of ' + esc(c.name || 'this character')}</span><button class="btn" data-act="close">✕</button></h3>
+    <div class="seg">${O ? K('dress', '👗 Dress her') : K('new', '✨ From words') + K('pic', '🖼 From a picture')}${K('set', '📚 Reference set')}${K('edit', '✏️ Edit')}</div>
+    ${O && !String(O.desc || '').trim() && MK.kind==='dress' ? '<div class="note bad">Write what she wears in the outfit first (or in the box below).</div>' : ''}
+    <div class="note">${MK.kind==='dress' ? 'Qwen-Image-Edit puts the person from the picture you pick (one of her base pictures is best) into this outfit: same face, hair and body, full body from the front on a plain background. Add the best to the outfit, then make its 📚 Reference set from it.' : O && MK.kind==='set' ? 'Qwen-Image-Edit makes her from each angle you tick, from the outfit picture you pick, keeping the outfit. Each angle is its own picture.' : MK.kind==='new' ? 'Z-Image Turbo makes her from her description (realistic photo, front, plain background). Pick the best as her #1, then make her reference set from it.'
       : MK.kind==='edit' ? 'Qwen-Image-Edit changes just what you ask in the picture you pick (e.g. change her hair to green) and keeps the rest: the same person, pose, framing and background. Her description isn\'t used here.'
       : MK.kind==='pic' ? 'Qwen-Image-Edit redraws the picture you pick as a clean front reference photo of the same person on a plain background. Good for a screenshot, a busy photo or a character sheet.'
       : 'Qwen-Image-Edit makes the same person from each angle you tick, from the picture you pick (her #1 is best). Each angle is its own picture, about 40 s each on Render.'}</div>
-    ${MK.kind==='new' ? '' : c.refs.length ? pick : '<div class="note warn">She has no pictures yet: add one, or start ✨ From words.</div>'}
+    ${MK.kind==='new' ? '' : src.length ? pick : '<div class="note warn">She has no pictures yet: add one, or start ✨ From words.</div>'}
     ${MK.kind==='set' ? `<div class="chips">${ANGLES.map((a, i) => `<button class="chip ${MK.which.includes(i) ? 'on' : ''}" data-act="mkAngle" data-i="${i}">${esc(a[0])}</button>`).join('')}</div>` :
       (MK.kind==='new' ? `<div><div class="lab"><span>Variety between tries</span></div><div class="seg">${[[0, 'Same'], [1, 'Some'], [2, 'Lots']].map(([v, t]) => `<button class="${MK.free===v ? 'on' : ''}" data-act="mkFree" data-v="${v}">${t}</button>`).join('')}</div><div class="note" style="margin-top:4px">Some changes the light, expression and framing for each try; Lots also gives each try a couple of its own face details.</div></div>` : '') +
       `<div class="row" style="justify-content:space-between"><label>Tries</label><div class="step"><button data-act="mkTries" data-d="-1">−</button><b>${MK.tries}</b><button data-act="mkTries" data-d="1">+</button></div></div>`}
-    <div><div class="lab"><span>${MK.kind==='edit' ? 'What to change' : 'Her description is used, plus'}</span></div><textarea id="mkExtra" style="min-height:60px" placeholder="${MK.kind==='edit' ? 'e.g. Change her hair to green' : 'Anything extra for these pictures, e.g. wearing a red scarf'}">${esc(MK.extra || '')}</textarea></div>
+    <div><div class="lab"><span>${MK.kind==='edit' ? 'What to change' : O ? 'The outfit\'s words are used, plus' : 'Her description is used, plus'}</span></div><textarea id="mkExtra" style="min-height:60px" placeholder="${MK.kind==='edit' ? 'e.g. Change her hair to green' : 'Anything extra for these pictures, e.g. wearing a red scarf'}">${esc(MK.extra || '')}</textarea></div>
     ${kit.why ? `<div class="note bad">${esc(kit.why)}</div>` : `<div class="note">Runs on ${esc(pcName(kit.url))}; keeps going if you close the app.</div>`}
     <button class="btn pri" data-act="mkGo" ${kit.why || (MK.kind!=='new' && !MK.from) || !n ? 'disabled' : ''}>🪄 Make ${n} picture${n > 1 ? 's' : ''}</button>`);
 }
@@ -1131,6 +1161,7 @@ function drawGo(){
 let pickOwner = '';
 function refList(owner){ const [k, id] = owner.split(':'), f = curFilm() || (curX() || {}).film; if(!f) return null;
   if(k==='c'){ const c = f.chars.find(c => c.id===id); return c && c.refs; }
+  if(k==='o'){ const [ci, oi] = id.split('/'), c = f.chars.find(c => c.id===ci), o = c && (c.outfits || []).find(o => o.id===oi); return o && o.refs; }
   const sc = f.scenes.find(s => s.id===id); if(!sc) return null; return sc.placeRefs = sc.placeRefs || []; }
 document.addEventListener('click', async ev => {
   const nv = ev.target.closest('[data-nav]'); if(nv && !ev.target.closest('[data-act]')){ closeSheet(); go(JSON.parse(nv.dataset.nav)); return; }
@@ -1145,14 +1176,15 @@ document.addEventListener('click', async ev => {
     case 'delFilm': if(ask('Delete "' + film.name + '" from the app? (The videos stay on the PCs.)')){ S.films = S.films.filter(f => f!==film); go({v:'home'}); } return;
     case 'gView': { const c = film.chars.find(x => x.id===d.c); gViewSheet(c, d.g, +d.i); return; }
     case 'rView': rViewSheet(d.o, +d.i); return;
-    case 'mkOpen': MK = {ch:d.id, kind:(film.chars.find(c => c.id===d.id) || {refs:[]}).refs.length ? 'set' : 'new', tries:4, free:1, which:ANGLES.map((a, i) => i), extra:''}; mkSheet(); return;
+    case 'mkOpen': { const c = film.chars.find(c => c.id===d.id) || {refs:[]}, o = d.out && (c.outfits || []).find(o => o.id===d.out);
+      MK = {ch:d.id, out:o ? o.id : '', kind:o ? (o.refs.length ? 'set' : 'dress') : c.refs.length ? 'set' : 'new', tries:o ? 2 : 4, free:1, which:ANGLES.map((a, i) => i), extra:''}; mkSheet(); return; }
     case 'mkKind': MK.kind = d.v; MK.tries = d.v==='new' ? 4 : 2; mkSheet(); return;
     case 'mkFrom': MK.from = d.id; mkSheet(); return;
     case 'mkAngle': { const i = +d.i; MK.which = MK.which.includes(i) ? MK.which.filter(x => x!==i) : MK.which.concat(i).sort((a, b) => a - b); mkSheet(); return; }
     case 'mkFree': MK.free = +d.v; mkSheet(); return;
     case 'mkTries': MK.tries = Math.max(1, Math.min(8, MK.tries + +d.d)); mkSheet(); return;
     case 'mkGo': { const c = film.chars.find(x => x.id===MK.ch); el.disabled = true; el.textContent = 'Sending…';
-      try{ const n = await makePictures(film, c, MK.kind, {tries:MK.tries, free:MK.free, which:MK.which, from:MK.from, extra:MK.extra}); closeSheet(); toast(n + (n > 1 ? ' jobs' : ' job') + ' sent. The pictures show up on ' + (c.name || 'her') + "'s card."); }
+      try{ const n = await makePictures(film, c, MK.kind, {tries:MK.tries, free:MK.free, which:MK.which, from:MK.from, extra:MK.extra, out:MK.out}); closeSheet(); toast(n + (n > 1 ? ' jobs' : ' job') + ' sent. The pictures show up on ' + (c.name || 'her') + "'s card."); }
       catch(e){ toast('Not sent: ' + e.message, 6000); el.disabled = false; el.textContent = 'Try again'; } break; }
     case 'gTop': case 'gAdd': { const c = film.chars.find(x => x.id===d.c), inSheet = !!el.closest('#sheet'); el.disabled = true; try{ await takeGen(c, d.g, +d.i, a==='gTop'); toast(a==='gTop' ? 'Now her #1' : 'Added'); }catch(e){ toast("Couldn't get it: " + e.message); } if(inSheet) nextInSheet(c); break; }
     case 'gAll': { const c = film.chars.find(x => x.id===d.c), l = (c.gens || []).filter(x => !x.gone && x.state==='done').sort((p, q) => (p.order != null ? p.order : -1) - (q.order != null ? q.order : -1) || p.t - q.t);
@@ -1164,6 +1196,10 @@ document.addEventListener('click', async ev => {
     case 'gGone': { const c = film.chars.find(x => x.id===d.c); c.gens.find(g => g.id===d.g).gone = true; break; }
     case 'gClear': { const c = film.chars.find(x => x.id===d.c); (c.gens || []).forEach(x => { if(x.state!=='queued' && x.state!=='running') x.gone = true; }); break; }
     case 'newChar': film.chars.push({id:uid('ch'), name:'', desc:'', refs:[], open:true}); break;
+    case 'outTab': { const c = film.chars.find(x => x.id===d.c); c.tab = d.v==='base' ? '' : d.v; break; }
+    case 'outNew': { const c = film.chars.find(x => x.id===d.c), o = {id:uid('of'), name:'Outfit ' + ((c.outfits || []).length + 1), desc:'', refs:[]}; (c.outfits = c.outfits || []).push(o); c.tab = o.id; break; }
+    case 'outDel': { const c = film.chars.find(x => x.id===d.c), o = (c.outfits || []).find(x => x.id===d.o); if(!o || !ask('Delete the outfit "' + (o.name || 'Outfit') + '"? Cuts that use it go back to her base outfit.')) return;
+      c.outfits = c.outfits.filter(x => x!==o); c.tab = ''; film.scenes.forEach(sc => sc.cuts.forEach(cu => { if(cu.outfit && cu.outfit[c.id]===o.id) delete cu.outfit[c.id]; })); break; }
     case 'castOpen': { const c = film.chars.find(x => x.id===d.id); if(c) c.open = true; break; }
     case 'castShut': { const c = film.chars.find(x => x.id===d.id); if(c) c.open = false; break; }
     case 'castShutAll': film.chars.forEach(c => { c.open = false; }); break;
@@ -1190,6 +1226,7 @@ document.addEventListener('click', async ev => {
     case 'castUp': { const l = x.cut.chars, i = l.indexOf(d.id); if(i > 0) [l[i - 1], l[i]] = [l[i], l[i - 1]]; break; }
     case 'cnt': { const A = alloc(x.film, x.scene, x.cut), g = A.groups.find(g => g.c && g.c.id===d.id); x.cut.counts = x.cut.counts || {}; x.cut.counts[d.id] = Math.max(0, Math.min(g.refs.length, g.used.length + +d.d)); break; }
     case 'cntAuto': delete x.cut.counts[d.id]; break;
+    case 'cutOut': { x.cut.outfit = x.cut.outfit || {}; if(d.o) x.cut.outfit[d.id] = d.o; else delete x.cut.outfit[d.id]; break; }
     case 'partAuto': x.cut.parts[+d.i].own = false; syncParts(x.film, x.cut); break;
     case 'takes': x.cut.takes = Math.max(1, Math.min(12, (+x.cut.takes || 1) + +d.d)); break;
     case 'restart': if(ask('Start this cut over? Its takes stay on the PC but leave the Cutting Room.')){ x.cut.cands.forEach(c => { if(c.state==='queued' || c.state==='running') cancelCand(c); c.tossed = true; }); x.cut.plan = null; x.cut.pick = []; x.cut.final = null; x.cut.joinPid = null; } break;
@@ -1238,6 +1275,7 @@ document.addEventListener('input', ev => {
     if(bar){ bar.style.left = fx.a / F * 100 + '%'; bar.style.width = (fx.b - fx.a) / F * 100 + '%'; } $('#fxNote').textContent = fixNote(x.cut);
     const g = $('[data-act="fxGo"]'); if(g) g.textContent = '✂ Redo ' + fmtS((fx.b - fx.a) / FPS) + ' · ' + fx.takes + ' take' + (fx.takes > 1 ? 's' : ''); save(); return; }
   if(d.f && film){ film[d.f] = d.num ? +el.value : el.value; if(d.f==='name' && el.id==='filmName'){ save(); return; } save(); if(el.tagName==='SELECT' || el.type==='range') draw(); return; }
+  if(d.oc && film){ const c = film.chars.find(c => c.id===d.oc), o = c && (c.outfits || []).find(o => o.id===d.oo); if(o){ o[d.k] = el.value; save(); } return; }
   if(d.c && film){ const c = film.chars.find(c => c.id===d.c); c[d.k] = el.value; save(); return; }
   if(d.s && film){ const sc = film.scenes.find(s => s.id===d.s); sc[d.k] = el.value; save(); return; }
   if(d.lora != null && film){ const l = film.loras[+d.lora]; l[d.k] = d.k==='str' ? +el.value : el.value; save(); if(el.tagName==='SELECT' || el.type==='range') draw(); return; }
