@@ -915,7 +915,14 @@ async def sync(request):
 # when Tailscale reaches the other computer directly, not through a relay). The queue is saved to render_deck_farm.json, so it
 # survives a restart.
 FARM_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_farm.json')
-FARM = {'pcs': [], 'off': [], 'jobs': [], 'done': []}  # pcs: [{url, name}]; jobs: waiting/sent/running; done: finished or failed, newest last
+FARM = {'pcs': [], 'off': [], 'video': [], 'jobs': [], 'done': []}  # pcs: [{url, name}]; jobs: waiting/sent/running; done: finished or failed, newest last
+# video: computers that only make videos (Jordan 2026-11-02: Main keeps just the MiniMax H3 stack, its games need the disk).
+# They take only video jobs, and the model sharing never copies checkpoints or LoRAs to them.
+VIDEO_NODES = re.compile(r'MiniMax|SaveVideo|VHS_VideoCombine|CreateVideo|SaveWEBM|SaveAnimated', re.I)
+
+
+def _is_video(graph):
+    return any(isinstance(n, dict) and VIDEO_NODES.search(str(n.get('class_type') or '')) for n in (graph or {}).values())
 PCSTATE = {}  # url -> {online, running, pending, oi, oi_at, models, synced_at, copies, why}
 _farm_task = None
 _farm_wake = None
@@ -1190,8 +1197,10 @@ async def _farm_round(s):
         for job in FARM['jobs']:
             if job['state'] != 'waiting' or job.get('after'):
                 continue
+            if u in FARM['video'] and not _is_video(job.get('graph')):
+                continue  # a picture job: video-only computers leave it for the others
             graph, missing, why = _fit(u, job)
-            if missing and not why and time.time() - st['asked'] > 1800:  # at most every half hour, so a failed copy doesn't start again at once
+            if missing and not why and u not in FARM['video'] and time.time() - st['asked'] > 1800:  # at most every half hour, so a failed copy doesn't start again at once
                 st['asked'] = time.time()
                 await _sync_pair(s, u, job['home'])
             if graph is None or missing or why:
@@ -1224,7 +1233,7 @@ async def _farm_round(s):
         _last_compare = time.time()
         for dst in on:
             for src in on:
-                if src != dst:
+                if src != dst and dst not in FARM['video']:
                     await _sync_pair(s, dst, src)
     if changed:
         _farm_save()
@@ -1266,17 +1275,19 @@ def _farm_pcs(body):
         FARM['pcs'] = pcs
     if 'off' in body:
         FARM['off'] = [u for u in body['off'] if any(p['url'] == u for p in FARM['pcs'])]
+    if 'video' in body:
+        FARM['video'] = [u for u in (body['video'] or []) if any(p['url'] == u for p in FARM['pcs'])]
 
 
 def _farm_view(since):
     pcs = []
     for p in FARM['pcs']:
         st = _st(p['url'])
-        pcs.append({'url': p['url'], 'name': p['name'], 'online': st['online'], 'off': p['url'] in FARM['off'],
+        pcs.append({'url': p['url'], 'name': p['name'], 'online': st['online'], 'off': p['url'] in FARM['off'], 'video': p['url'] in FARM['video'],
                     'load': len(st['running']) + len(st['pending']), 'copies': st['copies'], 'why': st['why']})
     jobs = [{k: v for k, v in j.items() if k != 'graph'} for j in FARM['jobs']]
     done = [j for j in FARM['done'] if j.get('t_done', 0) > since]
-    return {'farm': 1, 'chain': 1, 'p3d': 1, 'pcs': pcs, 'jobs': jobs, 'done': done, 'now': time.time()}
+    return {'farm': 1, 'chain': 1, 'p3d': 1, 'vid': 1, 'pcs': pcs, 'jobs': jobs, 'done': done, 'now': time.time()}
 
 
 @routes.get('/renderdeck/farm')
@@ -1506,7 +1517,8 @@ async def p3d_add(request):
                 return ''
         servers = [{'url': tn(x.get('url')), 'name': str(x.get('name') or '')[:40]} for x in (b.get('servers') or []) if tn(x.get('url'))]
         P3D['jobs'][str(b['id'])[:40]] = {'P': b['P'], 'rev': 1, 'done': False, 'asks': [], 'hidden': bool(b.get('hidden')), 'servers': servers,
-                                          'off': [u for u in (b.get('off') or []) if any(x['url'] == u for x in servers)], 'app': app, 'farm': farm, 't': time.time()}
+                                          'off': [u for u in (b.get('off') or []) if any(x['url'] == u for x in servers)],
+                                          'video': [u for u in (b.get('video') or []) if any(x['url'] == u for x in servers)] if isinstance(b.get('video'), list) else None, 'app': app, 'farm': farm, 't': time.time()}
         _p3d_save()
         return web.json_response({'ok': 1})
     except Exception as e:
@@ -1542,7 +1554,7 @@ async def p3d_take(request):
             gone.append(k)
             out.append({'id': k, 'drop': True})
         elif not j.get('done') or j['asks']:
-            out.append({'id': k, 'P': j['P'], 'hidden': j['hidden'], 'servers': j['servers'], 'off': j['off'], 'asks': j['asks']})
+            out.append({'id': k, 'P': j['P'], 'hidden': j['hidden'], 'servers': j['servers'], 'off': j['off'], 'video': j.get('video'), 'asks': j['asks']})
             j['asks'] = []
     for k in gone:
         P3D['jobs'].pop(k, None)

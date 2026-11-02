@@ -34,7 +34,7 @@ class Pc:
     def oi(self):
         return {'CheckpointLoaderSimple': {'input': {'required': {'ckpt_name': [['sdxl.safetensors']]}}},
                 'LoraLoader': {'input': {'required': {'lora_name': [list(self.loras)]}}},
-                'KSampler': {'input': {'required': {}}}, 'SaveImage': {'input': {'required': {}}}, 'LoadImage': {'input': {'required': {'image': [[]]}}}}
+                'KSampler': {'input': {'required': {}}}, 'SaveImage': {'input': {'required': {}}}, 'SaveVideo': {'input': {'required': {}}}, 'LoadImage': {'input': {'required': {'image': [[]]}}}}
 
     async def worker(self):
         while True:
@@ -212,6 +212,20 @@ async def main():
         async with s.post(RU + '/renderdeck/farm/cancel', json={'keys': ['p3-c']}) as r: await r.json()
         v = await until(lambda v: any(d['key'] == 'p3-d' for d in v['done']))
         ok(next((d['state'] for d in v['done'] if d['key'] == 'p3-d'), '') == 'failed', 'a step whose earlier step was cancelled fails instead of waiting for ever')
+        # 🎬 video-only Main (Jordan 2026-11-02): it takes video jobs only, and the timed compare never copies to it
+        async with s.post(RU + '/renderdeck/farm/pcs', json={'pcs': pcs, 'off': [], 'video': [MU]}) as r: await r.json()
+        v = await view(); ok([p['video'] for p in v['pcs']] == [False, True] and v.get('vid') == 1, 'the farm knows Main is video-only')
+        json.dump({'mbps': 0, 'auto': True}, open(H.SPEED_FILE, 'w')); H._last_compare = 0
+        R.syncs.clear(); M.syncs.clear(); r0, m0 = len(R.prompts), len(M.prompts)
+        vg = {'1': {'class_type': 'KSampler', 'inputs': {'seed': 3}}, '9': {'class_type': 'SaveVideo', 'inputs': {}}}
+        jobs = [{'key': 'v-pic' + str(i), 'graph': g('pixel.safetensors'), 'home': RU} for i in range(3)] + [{'key': 'v-vid', 'graph': vg, 'home': RU}]
+        async with s.post(RU + '/renderdeck/farm/add', json={'pcs': pcs, 'off': [], 'video': [MU], 'jobs': jobs}) as r: await r.json()
+        v = await until(lambda v: len([d for d in v['done'] if d['key'].startswith('v-')]) == 4, 20)
+        srv = {d['key']: d.get('srv') for d in v['done'] if d['key'].startswith('v-')}
+        ok(all(srv.get('v-pic' + str(i)) == RU for i in range(3)), 'picture jobs all go to Render, even while Main is free: %r' % srv)
+        ok(srv.get('v-vid') == MU, 'the video job goes to free Main: %r' % srv.get('v-vid'))
+        ok(not M.syncs and MU in R.syncs, 'the timed compare copies to Render only, never to Main: R %r M %r' % (R.syncs, M.syncs))
+        ok(json.load(open(H.FARM_FILE))['video'] == [MU], 'video-only is saved with the farm')
     for rn in runners: await rn.cleanup()
     print(('%d FAILED' % len(fails)) if fails else 'all passed')
     os._exit(1 if fails else 0)

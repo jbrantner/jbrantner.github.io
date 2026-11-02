@@ -204,7 +204,7 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     const g1 = G.find(g => n(g).some(x => x.class_type==='CLIPTextEncode' && /ellenx/.test(x.inputs.text)));
     ok(g1 && n(g1).some(x => x.class_type==='LoraLoader' && x.inputs.lora_name==='librarianx_v2.safetensors') && n(g1).find(x => x.class_type==='CheckpointLoaderSimple').inputs.ckpt_name==='iriselTouchIL_v10.safetensors' && /red hair/.test(n(g1).find(x => x.class_type==='CLIPTextEncode').inputs.text), "panel 1's tries: her checkpoint, her LoRA, her trigger word and looks");
     const r0 = await page.evaluate(() => cmRectsOf(cmPage())[0]), lat = n(g1).find(x => x.class_type==='EmptyLatentImage').inputs; ok(Math.abs(Math.log(lat.width / lat.height) - Math.log(Math.max(1 / 3, Math.min(3, r0.w / r0.h)))) < 0.1 && lat.width % 64===0, 'shaped like its panel: ' + lat.width + '×' + lat.height);
-    ok(new Set(ALL.slice(n0).map(x => x.client_id + (PCS.Render.sent.includes(x) ? 'R' : 'M'))).size===2, 'spread over both computers'); }
+    ok(ALL.slice(n0).every(x => PCS.Render.sent.includes(x)), 'comic stills all go to Render: Main is 🎬 video-only'); }
   // ⚡ with Z-Image Turbo (Jordan 2026-10-30): the sentence as written, her name as her looks (no LoRA), 8 steps at cfg 1, in the panel's shape
   await page.click('#comic [data-cmdraft="zit"]'); await page.click('#comic [data-cmgen="1"]');
   { const n0 = ALL.length; await page.click('#comic [data-cm="tries"]'); for(let w = 0; w < 100 && ALL.length < n0 + 2; w++) await page.waitForTimeout(200); await page.waitForFunction(() => !cmBusy(cmPage().panels[0]), null, {timeout:30000});

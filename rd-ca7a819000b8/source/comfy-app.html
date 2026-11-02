@@ -612,7 +612,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-10-31.340'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-11-02.341'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -811,6 +811,15 @@ function pcOf(url){ return PCS[url] || (PCS[url] = {url, oi:null, ws:null, onlin
 function pcName(url){ return url==='test' ? 'Test' : ((S.servers.find(x => x.url===url) || {}).name || srvName(url)); }
 const allPcs = () => S.test ? [] : S.servers.map(x => pcOf(x.url));
 const usable = p => p.online && p.oi && !S.pcOff.includes(p.url);
+// 🎬 video-only computers (Jordan 2026-11-02: Main keeps just the MiniMax H3 stack, its games need the disk): they take video
+// jobs only, never picture renders, comic stills, depth, Qwen or 3D, and the model sharing never copies checkpoints or LoRAs
+// to them. Set per computer in ☰; until it's been set, the computer named Main is video-only.
+const vidList = () => Array.isArray(S.pcVideo) ? S.pcVideo : S.servers.filter(x => x.name==='Main' || /\/\/jordo-main\./i.test(x.url)).map(x => x.url);
+const vidOnly = p => vidList().includes(typeof p==='string' ? p : p.url);
+const VIDEO_NODES = /MiniMax|SaveVideo|VHS_VideoCombine|CreateVideo|SaveWEBM|SaveAnimated/i;
+const isVideo = g => !!g && Object.values(g).some(n => n && VIDEO_NODES.test(n.class_type || ''));
+const takes = (p, e) => usable(p) && (!vidOnly(p) || isVideo(e && e.graph)); // can this computer be given this queued job
+const stillPc = p => usable(p) && !vidOnly(p); // a computer that makes pictures
 const within = ms => (window.AbortSignal && AbortSignal.timeout) ? {signal:AbortSignal.timeout(ms)} : {};
 const JSONH = {'Content-Type':'application/json'};
 // a computer that isn't the connected one: read what it has installed and listen to it
@@ -1095,7 +1104,7 @@ async function go(){ viewPinned = false;
   if(usesTags()) await loadTags(); // Send as tags and added tags need the tag list before the graph is built
   buzz();
   if(!S.test){ if(!had) status('Sending…'); await findFarm(); if(!farm) await Promise.all(allPcs().map(x => pollPc(x))); }
-  const tap = Date.now().toString(36), away = !S.test && !farm && !allPcs().some(usable); // every computer off: they wait on the phone
+  const tap = Date.now().toString(36), away = !S.test && !farm && !allPcs().some(stillPc); // every computer off: they wait on the phone
   let added = 0;
   for(let i = 0; i < runs; i++){
     P.seed = P.lockSeed ? first + i : (i ? randSeed() : first); // a kept seed steps by one so the renders differ
@@ -1130,7 +1139,7 @@ async function go(){ viewPinned = false;
 // renders made with every computer off wait on the phone (outbox); the first computer that's on gets them
 async function deliver(){
   for(const e of S.queue.filter(q => q.outbox)){
-    if(!allPcs().some(usable)) return;
+    if(!allPcs().some(p => takes(p, e))) return;
     delete e.outbox;
     if(farm && farmSafe(e)){ e.farm = true; const err = await farmAdd([e]);
       if(err){ if(/^Could not reach/.test(err)){ e.farm = false; e.outbox = true; save(); return; } failOne(e, err); } }
@@ -1138,15 +1147,16 @@ async function deliver(){
     save();
   }
 }
-function farmSafe(e){ return S.test || allPcs().filter(usable).every(p => { const f = fit(p, e); return f.ok || (f.missing.length && !f.why); }); }
+function farmSafe(e){ return S.test || allPcs().filter(p => takes(p, e)).every(p => { const f = fit(p, e); return f.ok || (f.missing.length && !f.why); }); }
 // send one render to the best computer for it; '' when it went (or waits for a model to arrive), else why it can't go
 async function dispatch(e, skip){
-  const fits = allPcs().filter(p => usable(p) && p!==skip).map(p => [p, fit(p, e)]);
+  const fits = allPcs().filter(p => takes(p, e) && p!==skip).map(p => [p, fit(p, e)]);
   const ready = fits.filter(([p, f]) => f.ok).sort((a, b) => a[0].load - b[0].load || (b[0].url===e.home) - (a[0].url===e.home));
   if(fits.some(([p, f]) => f.missing.length && !f.why)){ autoSync(true); if(!ready.length && syncing) await syncing; } // a computer lacks a model or LoRA: the computers share them
   for(const [p, f] of ready) if(await submit(e, p, f.graph)) return '';
   if(!ready.length && fits.some(([p, f]) => f.missing.length && !f.why && copying(p, f.missing))){ e.state = 'waiting'; save(); return ''; }
   if(e.lastErr) return e.lastErr;
+  if(!fits.length && allPcs().some(p => usable(p) && vidOnly(p))) return allPcs().filter(p => usable(p) && vidOnly(p)).map(p => pcName(p.url)).join(' and ') + ' only makes videos (☰), and no other computer can take this right now. Is Render on, with ComfyUI running?';
   if(!fits.length) return S.servers.some(x => S.pcOff.includes(x.url)) ? 'Every computer that is on is switched off in the queue (☰).' : 'No render computer can be reached. Is ComfyUI running, and is Tailscale on?';
   return fits.map(([p, f]) => f.why || (f.missing.length ? pcName(p.url) + ' is missing ' + f.missing.map(m => baseName(m.name)).join(', ') : '')).filter(Boolean).join('. ') || 'No computer could take this render.';
 }
@@ -1208,13 +1218,13 @@ async function balance(){
   for(const e of S.queue.slice()){
     const from = pcOf(e.srv || '');
     if(e.state!=='sent' || e.moving || !e.graph || !S.pcOff.includes(e.srv) || !from.pending.includes(e.id)) continue;
-    const to = allPcs().filter(usable).map(p => [p, fit(p, e)]).filter(([p, f]) => f.ok).sort((a, b) => a[0].load - b[0].load)[0];
+    const to = allPcs().filter(p => takes(p, e)).map(p => [p, fit(p, e)]).filter(([p, f]) => f.ok).sort((a, b) => a[0].load - b[0].load)[0];
     if(to) await moveJob(e, to[0], to[1].graph);
   }
   for(const p of allPcs()){
     if(!usable(p) || p.load > 0) continue;
     const take = S.queue.filter(e => e.state==='sent' && !e.moving && e.graph && e.srv!==p.url && pcOf(e.srv).running.length && pcOf(e.srv).pending.includes(e.id)).reverse();
-    for(const e of take){ const f = fit(p, e); if(f.ok){ await moveJob(e, p, f.graph); break; } }
+    for(const e of take){ if(!takes(p, e)) continue; const f = fit(p, e); if(f.ok){ await moveJob(e, p, f.graph); break; } }
   }
 }
 async function moveJob(e, to, graph){
@@ -1402,7 +1412,7 @@ async function syncCall(dst, src){
 async function syncAll(){
   const on = allPcs().filter(p => p.online), got = [], errs = [];
   for(const dst of on) for(const src of on){
-    if(dst===src) continue;
+    if(dst===src || vidOnly(dst)) continue;
     const j = await syncCall(dst, src);
     if(j.error){ if(!errs.includes(j.error)) errs.push(j.error); continue; }
     const n = (j.queued || []).length; if(n){ got.push(n + ' to ' + pcName(dst.url) + (j.room ? '' : ' (not enough disk space for all)')); dst.copies.push(...j.queued.map(name => ({name, done:0, total:0}))); }
@@ -1436,7 +1446,7 @@ async function refreshLoaders(p){
 // With the newest helper on it, the render computer named Render keeps the queue itself and hands each render to
 // whichever computer is free, and keeps their models matched, with the app closed. The app adds renders, cancels
 // them, and shows what's happening. Without it, the app does the same itself while it's open (above).
-let farm = null, farmAt = 0, farmPcsAt = 0, farmAsked = '', farmChain = false, farmP3dOk = false; // farmChain: the helper can run 🧊 jobs that wait for each other
+let farm = null, farmAt = 0, farmPcsAt = 0, farmAsked = '', farmChain = false, farmP3dOk = false, farmVid = false; // farmChain: the helper can run 🧊 jobs that wait for each other
 function farmHost(){ const r = S.servers.find(x => x.name==='Render'); return r ? r.url : base(); }
 const tailnet = u => /^https:\/\/[^/]+\.ts\.net$/i.test(u || '');
 async function findFarm(){
@@ -1452,7 +1462,9 @@ async function findFarm(){
     if(!was || Date.now() - farmPcsAt > 300000){ farmPcsAt = Date.now(); farmCall('/pcs', farmPcs()); } // tell it which computers there are
   }catch(e){ if(farm && !pcOf(h).online) farm = null; }
 }
-function farmPcs(){ return {pcs:S.servers.filter(x => tailnet(x.url)).map(x => ({url:x.url, name:x.name})), off:S.pcOff}; }
+// an older helper on Render doesn't know video-only: it is told those computers are off instead, until the new one is in
+function farmPcs(){ const vid = vidList().filter(u => S.servers.some(x => x.url===u));
+  return {pcs:S.servers.filter(x => tailnet(x.url)).map(x => ({url:x.url, name:x.name})), off:farmVid ? S.pcOff : S.pcOff.concat(vid.filter(u => !S.pcOff.includes(u))), video:vid}; }
 async function farmCall(path, body){
   try{ const r = await fetch(farm + '/renderdeck/farm' + path, Object.assign({method:'POST', headers:JSONH, body:JSON.stringify(body)}, within(15000))); const j = await r.json(); if(j.pcs) farmView(j); return j; }
   catch(e){ return {error:'Could not reach ' + pcName(farm) + ', which keeps the queue'}; }
@@ -1472,7 +1484,7 @@ function farmView(v, away){
   if(!v || !v.pcs) return;
   v.pcs.forEach(x => { const p = pcOf(x.url); p.copies = x.copies || []; p.why = x.why || ''; });
   if(!v.jobs) return;
-  farmChain = !!v.chain; farmP3dOk = !!v.p3d;
+  farmChain = !!v.chain; farmP3dOk = !!v.p3d; if(!!v.vid!==farmVid){ farmVid = !!v.vid; if(farm) farmCall('/pcs', farmPcs()); }
   // 🧊 jobs (keys p3-…) belong to their 3D, not to the render queue
   const p3 = j => /^p3-/.test(j.key); cmFarmSeen(v.jobs.filter(p3), (v.done || []).filter(p3)); v = Object.assign({}, v, {jobs:v.jobs.filter(j => !p3(j)), done:(v.done || []).filter(j => !p3(j))});
   S.farmSeen = S.farmSeen || [];
@@ -1526,6 +1538,7 @@ function pcWhat(p, long){
   if(!p.online && p.agent) return p.agent.comfy==='starting' ? 'ComfyUI is starting…' : p.agent.wanted ? 'ComfyUI stopped; starting it again shortly' : 'ComfyUI is closed';
   let w = !p.online ? (long ? 'Not reachable' : 'Offline') : mine ? (mine.prog ? mine.prog.text : 'Starting') + (off && long ? ', then stops taking renders' : '')
     : off ? (long ? 'Not taking renders' : 'Switched off') : p.load ? (long ? 'Busy with ' + p.load + ' job' + (p.load > 1 ? 's' : '') + ' (listed below)' : 'Busy') : 'Free';
+  if(long && p.online && vidOnly(p) && allPcs().length > 1) w += ' · videos only';
   if(p.copies.length) w += long ? ' · copying ' + p.copies.map(c => c.name + (c.total ? ' ' + Math.round(c.done/c.total*100) + '%' : '')).join(', ') : ' · copying models';
   if(long && p.why && p.online && !mine) w += ' · ' + p.why;
   return w;
@@ -1604,6 +1617,7 @@ function drawQueue(){
   $('#pcList').innerHTML = ps.length ? ps.map(p => {
     const off = S.pcOff.includes(p.url), what = pcWhat(p, true);
     return `<div class="pcrow"><i class="dot ${p.online ? 'on' : ''}"></i><div class="grow"><b>${esc(pcName(p.url))}</b><small>${esc(what)}</small>${p.syncNote ? `<small class="warn">${esc(p.syncNote)}</small>` : ''}</div>
+      ${ps.length > 1 ? `<button class="chipbtn ${vidOnly(p) ? 'hot' : ''}" data-vid="${esc(p.url)}" aria-pressed="${vidOnly(p)}" title="Only video jobs go to ${esc(pcName(p.url))}, and no checkpoints or LoRAs are copied to it">🎬 Videos only</button>` : ''}
       ${pcButtons(p)}
       ${ps.length > 1 ? `<button class="tog ${off ? '' : 'on'}" data-pc="${esc(p.url)}" style="--c:var(--cyan)" aria-label="Let ${esc(pcName(p.url))} take renders"></button>` : ''}</div>${pcLine(p)}`; }).join('') : '';
   $('#qList').innerHTML = S.queue.length ? S.queue.map(e => {
@@ -1633,6 +1647,8 @@ $('#pcList').onclick = e => {
     fetch(url + '/queue', {method:'POST', headers:JSONH, body:JSON.stringify({clear:true})}).then(() => { p.line = (p.line || []).filter(x => x.run); drawQueue(); toast(pcName(url) + "'s line is clear"); pollPc(p).then(drawQueue); }).catch(err => toast("Couldn't: " + err.message, true)); return; }
   const ac = e.target.closest('[data-agent]'); if(ac){ agentDo(pcOf(ac.dataset.url), ac.dataset.agent); return; }
   const rs = e.target.closest('[data-restart]'); if(rs){ restartPc(pcOf(rs.dataset.restart)); return; }
+  const vb = e.target.closest('[data-vid]'); if(vb){ const u = vb.dataset.vid, l = vidList(); S.pcVideo = l.includes(u) ? l.filter(x => x!==u) : l.concat(u); save(); drawQueue(); buzz();
+    toast(vidOnly(u) ? pcName(u) + ' now only takes video jobs, and no models are copied to it' : pcName(u) + ' takes every kind of job again'); if(farm) farmCall('/pcs', farmPcs()); if(S.queue.length) tick(); return; }
   const t = e.target.closest('[data-pc]'); if(!t) return; const u = t.dataset.pc;
   S.pcOff = S.pcOff.includes(u) ? S.pcOff.filter(x => x!==u) : S.pcOff.concat(u); save(); drawQueue(); buzz();
   if(farm) farmCall('/pcs', farmPcs()); if(S.queue.length) tick(); };
@@ -3568,7 +3584,7 @@ $('#syncBtn').onclick = async () => {
 // 📦 Copy Qwen once (Jordan 2026-10-22): the Qwen Image Edit set, from the computer that has it to the one that doesn't
 const hasQwen = p => !!(p.oi && combo(p.oi.UNETLoader, 'unet_name').some(n => /qwen.*edit/i.test(baseName(n))));
 $('#qwenBtn').onclick = async () => {
-  const on = allPcs().filter(p => p.online), src = on.find(hasQwen), dst = on.filter(p => p!==src && !hasQwen(p));
+  const on = allPcs().filter(p => p.online), src = on.find(hasQwen), dst = on.filter(p => p!==src && !hasQwen(p) && !vidOnly(p));
   if(!src){ toast(on.length < 2 ? 'Both computers need to be on' : 'Neither computer that is on has Qwen Image Edit', true); return; }
   if(!dst.length){ toast(on.length < 2 ? 'Turn the other computer on first' : 'Both computers already have Qwen Image Edit'); return; }
   const b = $('#qwenBtn'); b.disabled = true; b.textContent = 'Starting…';
@@ -3850,7 +3866,7 @@ const FAKEQ = {UNETLoader:{input:{required:{unet_name:[['qwen_image_edit_fp8_e4m
   VAELoader:{input:{required:{vae_name:[['qwen_image_vae.safetensors']]}}}, LoraLoaderModelOnly:{input:{required:{lora_name:[['Qwen-Image-Edit-Lightning-4steps-V1.0-bf16.safetensors']]}}},
   TextEncodeQwenImageEdit:{input:{required:{}}}, ModelSamplingAuraFlow:{input:{required:{}}}, CFGNorm:{input:{required:{}}}, ImageScaleToTotalPixels:{input:{required:{upscale_method:[['nearest-exact','lanczos']]}}}};
 function qwenKit(){
-  const pcs = S.test ? [{url:'test', oi:FAKEQ}] : allPcs().filter(p => p.online && p.oi).sort((a, b) => (b.url===farmHost()) - (a.url===farmHost()));
+  const pcs = S.test ? [{url:'test', oi:FAKEQ}] : allPcs().filter(p => p.online && p.oi && !vidOnly(p)).sort((a, b) => (b.url===farmHost()) - (a.url===farmHost()));
   let why = '';
   for(const p of pcs){
     const oi = p.oi, ver = n => /2511/.test(n) ? 3 : /2509/.test(n) ? 2 : 1;
@@ -3902,7 +3918,7 @@ const eng3d = () => S.m3d || (S.test || allPcs().some(p => p.online && hasHy(p.o
 function kit3d(eng = eng3d()){
   const spec = eng==='hy' ? HY3D : P3D, re = eng==='hy' ? /hunyuan3d-dit-v2-mv/i : /pixal3d_multiview/i;
   const has = eng==='hy' ? hasHy : oi => !!(oi && oi.Pixal3DMultiViewConditioning && oi.SaveGLB);
-  const pcs = S.test ? [{url:'test', oi:FAKE3D}] : allPcs().filter(p => p.online && has(p.oi));
+  const pcs = S.test ? [{url:'test', oi:FAKE3D}] : allPcs().filter(p => p.online && has(p.oi) && !vidOnly(p));
   const pick = (oi, cls, k, r) => combo(oi[cls], k).find(n => r.test(baseName(n)));
   const main = oi => eng==='hy' ? pick(oi, 'ImageOnlyCheckpointLoader', 'ckpt_name', re) : pick(oi, 'UNETLoader', 'unet_name', re);
   const p = pcs.sort((a, b) => !!main(b.oi) - !!main(a.oi) || (b.url===farmHost()) - (a.url===farmHost()))[0];
@@ -4803,7 +4819,7 @@ const ZIT_RE = /z[_ -]?image/i;
 function cmZitModels(oi){ const un = combo(oi.UNETLoader, 'unet_name').filter(n => ZIT_RE.test(baseName(n))).map(name => ({name, ck:false})), ck = combo(oi.CheckpointLoaderSimple, 'ckpt_name').filter(n => ZIT_RE.test(baseName(n))).map(name => ({name, ck:true})); return un.concat(ck); }
 function cmZitKits(cm){ cm = cm || CM(); const want = cm.zitModel || '';
   const pcs = S.test ? [{url:'test', oi:{UNETLoader:{input:{required:{unet_name:[['z_image_turbo_bf16.safetensors']]}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['totZImageturbo.safetensors']]}}}, CLIPLoader:{input:{required:{clip_name:[['qwen_3_4b.safetensors']]}}}, VAELoader:{input:{required:{vae_name:[['ae.safetensors']]}}}, ModelSamplingAuraFlow:{}, EmptySD3LatentImage:{}, ConditioningZeroOut:{}}}]
-    : allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || ''));
+    : allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !vidOnly(p) && !/training/i.test(p.why || ''));
   return pcs.filter(p => p.oi.ModelSamplingAuraFlow && p.oi.EmptySD3LatentImage && p.oi.ConditioningZeroOut).map(p => {
     const ms = cmZitModels(p.oi), clip = combo(p.oi.CLIPLoader, 'clip_name').find(n => /qwen_3_4b/i.test(baseName(n))), vae = combo(p.oi.VAELoader, 'vae_name').find(n => /^ae\./i.test(baseName(n)));
     const m = want ? ms.find(x => baseName(x.name)===baseName(want)) : ms.find(x => !x.ck && /z_image_turbo/i.test(baseName(x.name))) || ms.find(x => !x.ck);
@@ -5270,7 +5286,7 @@ function m3PanoUi(g){ const P3 = g.d3pano, busy = M3.pbusy, mini2 = u => esc(min
 const farmP3d = () => window.TEST_P3D ? true : !S.test && !!(farm && farmP3dOk); // TEST_P3D: the tests' pretend Render helper
 const p3dUrl = () => window.TEST_P3D || farm;
 async function p3dPost(path, body){ const r = await fetch(p3dUrl() + '/renderdeck/p3d' + path, Object.assign({method:'POST', headers:JSONH, body:JSON.stringify(body)}, within(15000))); if(!r.ok) throw new Error('Render said ' + r.status); return r.json(); }
-async function p3dSend(P){ try{ await p3dPost('/add', {id:P.id, P, hidden:!!S.hidden, servers:S.servers.map(x => ({url:x.url, name:x.name})), off:S.pcOff || [], app:location.origin + location.pathname, farm:p3dUrl()});
+async function p3dSend(P){ try{ await p3dPost('/add', {id:P.id, P, hidden:!!S.hidden, servers:S.servers.map(x => ({url:x.url, name:x.name})), off:S.pcOff || [], video:vidList(), app:location.origin + location.pathname, farm:p3dUrl()});
     P.remote = true; save(); toast('Making it on Render: you can close the app'); }
   catch(e){ P.remote = false; save(); toast("Render couldn't take it, so it is made from the app: keep it open", true); cmPoseRun(P); } }
 async function p3dAsk(P, ask){ try{ await p3dPost('/ask', {id:P.id, ask}); P.rbusy = Date.now(); save(); }catch(e){ toast("Couldn't reach Render: " + e.message, true); } }
@@ -5299,7 +5315,7 @@ async function p3dWork(){ if(!WORKER || WORKER.busy) return; WORKER.busy = true;
   try{ const r = await fetch(WORKER.farm + '/renderdeck/p3d/take', {method:'POST', headers:JSONH, body:JSON.stringify({worker:WORKER.id})}), j = await r.json();
     for(const x of j.jobs || []){ if(x.drop){ const P = (S.cmPoses || []).find(q => q.id===x.id); if(P){ P.stopped = true; cmStop(m3Jobs(P)); S.cmPoses = S.cmPoses.filter(q => q!==P); } continue; }
       let P = (S.cmPoses || []).find(q => q.id===x.id);
-      if(!P){ P = Object.assign(x.P, {remote:false}); S.cmPoses = [P].concat(S.cmPoses || []); if(x.servers && !S.servers.length){ S.servers = x.servers; S.server = (x.servers.find(q => q.name==='Render') || x.servers[0]).url; S.pcOff = x.off || []; save(); await connect(); } }
+      if(!P){ P = Object.assign(x.P, {remote:false}); S.cmPoses = [P].concat(S.cmPoses || []); if(x.servers && !S.servers.length){ S.servers = x.servers; S.server = (x.servers.find(q => q.name==='Render') || x.servers[0]).url; S.pcOff = x.off || []; if(Array.isArray(x.video)) S.pcVideo = x.video; save(); await connect(); } }
       (x.asks || []).forEach(a => p3dApply(P, a)); }
     (S.cmPoses || []).forEach(P => { ccRun(P); m3Resume(P); if(!P.stopped) cmPoseRun(P, true); });
     for(const P of S.cmPoses || []){ const t = JSON.stringify(P), done = p3dSettled(P); if(WORKER.sent[P.id]===t + done) continue; WORKER.sent[P.id] = t + done;
@@ -5813,7 +5829,7 @@ function cmIllKit(p){
 }
 function cmIllKits(){
   if(S.test) return [cmIllKit({url:'test', oi:CM_FAKEILL})].filter(Boolean);
-  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '')).map(cmIllKit).filter(Boolean);
+  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !vidOnly(p) && !/training/i.test(p.why || '')).map(cmIllKit).filter(Boolean);
 }
 const CM_FAKEILL = {RemoveBackground:{input:{required:{}}}, LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:[['BiRefNet-general.safetensors']]}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors', 'iriselTouchIL_v10.safetensors']]}}}, KSampler:{input:{required:{sampler_name:[['euler_ancestral']], scheduler:[['normal']]}}},
   LoraLoader:{input:{required:{lora_name:[['AFKJ Style Illustrious Claude.safetensors', 'librarianx_v2.safetensors']]}}}, SetLatentNoiseMask:{input:{required:{}}}, SolidMask:{input:{required:{}}}, MaskComposite:{input:{required:{}}},
@@ -5939,7 +5955,7 @@ const scLoadImg = url => new Promise((ok, no) => { const im = new Image(); im.cr
 const CM_DEPTH = ['DepthAnythingV2Preprocessor', 'DepthAnythingPreprocessor', 'Zoe-DepthMapPreprocessor', 'MiDaS-DepthMapPreprocessor'];
 function cmDepthKits(){
   if(S.test) return [{url:'test', oi:{}, node:'DepthAnythingV2Preprocessor'}];
-  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '')).map(p => Object.assign({url:p.url, oi:p.oi, node:CM_DEPTH.find(c => p.oi[c])}, cmMoge(p.oi))).filter(k => k.node || k.moge);
+  return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !vidOnly(p) && !/training/i.test(p.why || '')).map(p => Object.assign({url:p.url, oi:p.oi, node:CM_DEPTH.find(c => p.oi[c])}, cmMoge(p.oi))).filter(k => k.node || k.moge);
 }
 // MoGe-2 (ComfyUI's own nodes since late 2025, model moge_2_vitl_normal_fp16 in models/geometry_estimation): much crisper edges
 // than Depth Anything around hair and hands (Jordan 2026-10-21 wanted the 3D look better still), used whenever a computer has it

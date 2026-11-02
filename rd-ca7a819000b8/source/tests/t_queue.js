@@ -82,6 +82,22 @@ const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message));
   ok(await page.evaluate(() => S.servers.map(x => x.name).join())==='Main,Render', 'both computers remembered');
   ok(!M.syncs.length && !R.syncs.length, 'no copying just because the app connected');
 
+  // 🎬 Main is video-only until that's switched off in ☰: pictures all go to Render, and nothing is copied to Main
+  ok(await page.evaluate(() => vidOnly(S.servers.find(x => x.name==='Main').url) && !vidOnly(S.servers.find(x => x.name==='Render').url)), 'Main starts video-only, Render does not');
+  DUR = 300;
+  await page.fill('#prompt', 'video only check'); await page.click('#runsUp'); await page.click('#goBtn');
+  await until(() => S.queue.length===2 && S.queue.every(e => e.state!=='sending'));
+  ok(R.prompts.length===2 && M.prompts.length===0, 'video-only Main takes no picture renders even when free: Render ' + R.prompts.length + ', Main ' + M.prompts.length);
+  await until(() => !S.queue.length, null, 15000);
+  await page.evaluate(() => syncAll());
+  ok(!M.syncs.length && R.syncs.length===1, 'the model sharing copies to Render only, never to video-only Main');
+  await page.click('#queueBtn');
+  ok(/videos only/.test(await page.textContent('#pcList')) && await page.$$eval('#pcList [data-vid].hot', x => x.length)===1, '☰ shows Main as 🎬 Videos only');
+  await page.click('#pcList [data-vid].hot');
+  ok(await page.evaluate(() => S.pcVideo.length===0), 'tapping 🎬 Videos only lets Main take every kind of job again');
+  R.prompts.length = 0; R.syncs.length = 0; DUR = 5000;
+  await page.evaluate(() => { closeSheets(); S.gallery = []; S.runs = 1; save(); drawRuns(); });
+
   // a render needing that LoRA goes to Render while Main is still copying it; once it lands, Main takes the waiting one
   DUR = 5000;
   await page.click('#addBtn'); await page.click('[data-add=lora]');
