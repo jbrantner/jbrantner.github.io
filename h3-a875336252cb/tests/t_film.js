@@ -237,6 +237,13 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   await page.screenshot({path:path.join(__dirname, 'film_cutoutfit.png'), fullPage:true});
   await page.evaluate(() => { FILM.ctxOf('cu1').cut.outfit = {}; });
 
+  // ---- 🏷 name chips write the name where the cursor is ----
+  await page.evaluate(() => { FILM.S.films[0].scenes[1].cuts.push({id:'cu3', name:'Table', chars:['chE'], counts:{}, seconds:5, action:'jumps up on the table.', parts:[], takes:2, cands:[], pick:[]}); FILM.go({v:'cut', film:FILM.S.films[0].id, cut:'cu3'}); }); await page.waitForTimeout(300);
+  await page.focus('textarea[data-cut="action"]'); await page.evaluate(() => $('textarea[data-cut="action"]').setSelectionRange(0, 0));
+  await page.click('.chips.names [data-name="Ellie"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => FILM.ctxOf('cu3').cut.action)==='Ellie jumps up on the table.', '🏷 Ellie goes in at the cursor and is saved (' + await page.evaluate(() => FILM.ctxOf('cu3').cut.action) + ')');
+  await page.screenshot({path:path.join(__dirname, 'film_names.png'), fullPage:false});
+
   // ---- the cast folds into a strip of #1 pictures ----
   await page.evaluate(() => { FILM.S.films[0].chars.forEach(c => { c.open = false; }); FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'}); }); await page.waitForTimeout(300);
   ok(await page.$$eval('.castTile img', i => i.length)===2 && await page.$$eval('section.block', b => b.length)===0, 'folded: each character is a tile with their #1 picture');
