@@ -57,8 +57,8 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
     const pic = async (n) => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'); x.fillStyle = 'hsl(' + n * 37 + ',70%,50%)'; x.fillRect(0, 0, 64, 64);
       const b = await new Promise(ok => c.toBlob(ok, 'image/png')); return addMedia(new File([b], 'p' + n + '.png', {type:'image/png'}), 'img'); };
     const f = FILM.newFilm('Diner'); FILM.S.films.push(f); f.model = FILM.families().find(x => /dasiwa/.test(x.key)).key;
-    const ellie = {id:'chE', name:'Ellie', desc:'A woman in her 30s with short black hair. {2} shows her grey coat from behind. {7} shows the tattoo on her wrist.', refs:[]};
-    const mara = {id:'chM', name:'Mara', desc:'A waitress with red curly hair.', refs:[]};
+    const ellie = {id:'chE', open:true, name:'Ellie', desc:'A woman in her 30s with short black hair. {2} shows her grey coat from behind. {7} shows the tattoo on her wrist.', refs:[]};
+    const mara = {id:'chM', open:true, name:'Mara', desc:'A waitress with red curly hair.', refs:[]};
     for(let i = 0; i < 9; i++){ ellie.refs.push({id:await pic(i), note:i===0 ? 'her face up close' : ''}); mara.refs.push({id:await pic(20 + i), note:''}); }
     f.chars.push(ellie, mara);
     const place = {id:await pic(50), note:''};
@@ -203,6 +203,16 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   await page.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'})); await page.waitForTimeout(300);
   await page.click('[data-act="gCancelAll"]'); await page.waitForTimeout(500);
   ok(FARM.cancelled.length===1 && FARM.jobs.length===0, 'Cancel takes it out of the helper\'s line');
+
+  // ---- the cast folds into a strip of #1 pictures ----
+  await page.evaluate(() => { FILM.S.films[0].chars.forEach(c => { c.open = false; }); FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'}); }); await page.waitForTimeout(300);
+  ok(await page.$$eval('.castTile img', i => i.length)===2 && await page.$$eval('section.block', b => b.length)===0, 'folded: each character is a tile with their #1 picture');
+  await page.screenshot({path:path.join(__dirname, 'film_castgrid.png'), fullPage:true});
+  await page.click('.castTile[data-id="chM"]'); await page.waitForTimeout(200);
+  ok(await page.$$eval('.castTile', i => i.length)===1 && /Mara/.test(await page.textContent('section.block h3')) && await page.$$eval('[data-act="castShutAll"]', b => b.length)===1, 'tapping Mara opens her card; Ellie stays a tile');
+  await page.screenshot({path:path.join(__dirname, 'film_castopen.png'), fullPage:true});
+  await page.click('section.block h3'); await page.waitForTimeout(200);
+  ok(await page.$$eval('.castTile', i => i.length)===2, 'tapping her name folds her back');
 
   // ---- screens draw without errors ----
   for(const tab of ['cast', 'scenes', 'look']){ await page.evaluate(t => FILM.go({v:'film', film:FILM.S.films[0].id, tab:t}), tab); await page.waitForTimeout(200); await page.screenshot({path:path.join(__dirname, 'film_' + tab + '.png'), fullPage:true}); }
