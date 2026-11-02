@@ -626,9 +626,10 @@ function batchOf(add, oi, a, b){ const req = ((oi.ImageBatch || {}).input || {})
 function candGraph(c, oi, names, parentDir){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
   const film = {model:c.model, turbo:c.turbo, loras:c.loras}, {M, model, clip, vae, avae} = modelPart(add, oi, film), L = c.gen, steps = M.steps;
-  const fx = c.fix, guidesN = fx ? fx.pins.length : 0;
+  const fx = c.fix, guidesN = (fx ? fx.pins.length : 0) + (c.first ? 1 : 0);
   const rv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:avae, prompt:c.prompt, width:c.w, height:c.h, length:L, ref_image_size:'match'}, refPart(add, oi, c, names, L, (c.ctx ? 7 : 0) + guidesN)));
   let cond = [rv, 0]; const lat = [rv, 1]; let src = null;
+  if(c.first) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[add('LoadImage', {image:names[c.first]}), 0], frame_idx:0}), 0];
   if(fx){ // the finished cut, its frames pinned around the stretch (first and last frame, plus the context either side)
     src = add('GetVideoComponents', {video:[add('LoadVideo', {file:fx.src}), 0]});
     for(const [o, s] of fx.pins){ const fr = add('ImageFromBatch', {image:[src, 0], batch_index:s, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; }
@@ -666,13 +667,17 @@ function newCand(film, scene, cut, k, parent, fixText, fix){
   const A = alloc(film, scene, cut), {w, h} = dimsOf(film), P = cut.plan, id = uid('c'), L = lookOf(film, cut);
   const c = {id, kind:fix ? 'fix' : 'part', part:k, parent:parent || null, pc:cut.pc, seed:Math.floor(Math.random() * 2 ** 31), state:'new', t:Date.now(),
     model:L.model, turbo:L.turbo, loras:lorasOf(L).map(l => Object.assign({}, l)), w, h, pics:A.pics.map(r => r.id), prompt:promptOf(film, scene, cut, k, A, fixText)};
+  // 🖼 start frame (Jordan 2026-11-02): part 1 starts on this picture (MiniMaxH3AddGuide at frame 0), and while there's a free
+  // picture slot MiniMax also gets it as its last picture, named in the prompt (as H3 Deck does for hybrid models)
+  const first = !fix && k===0 && (cut.firstRefs || []).find(r => S.media[r.id]);
+  if(first){ c.first = first.id; if(c.pics.length < MAXPICS && !c.pics.includes(first.id)){ c.pics.push(first.id); c.prompt = '<Picture ' + c.pics.length + '> is the first frame of this shot. ' + c.prompt; } }
   if(fix){ c.fix = fix; c.group = fix.group; c.gen = fix.L; c.ctx = 0; c.dir = cutDir(film, cut) + '/fix_' + id.slice(-6); c.text = fixText; }
   else { c.gen = P[k].gen; c.ctx = P[k].ctx; c.dir = cutDir(film, cut) + '/p' + (k + 1) + '_' + id.slice(-6); }
   return c;
 }
 async function sendCand(cut, c){
   const url = c.pc, oi = pcOf(url).oi; if(!pcOf(url).online || !oi) throw new Error(pcName(url) + " can't be reached");
-  const names = {}; for(const id of [...new Set(c.pics)]) names[id] = await upload(url, id);
+  const names = {}; for(const id of [...new Set(c.pics.concat(c.first ? [c.first] : []))]) names[id] = await upload(url, id);
   const parent = c.parent && candOf(cut, c.parent);
   const G = candGraph(c, oi, names, parent ? outDirC(parent) : null);
   c.save = G.save; c.est = estSecs(c, c.gen, c.pics.length, c.fix ? c.fix.pins.length : 0, url, c); c.err = ''; c.file = null;
@@ -1006,6 +1011,13 @@ function loraRows(list, los, own){ // own: the cut's list (data-clora) or the fi
       <input type="range" min="0" max="1.5" step="0.05" value="${l.str}" data-${A}="${i}" data-k="str"><input data-${A}="${i}" data-k="words" value="${esc(l.words || '')}" placeholder="Activation words (optional)"></div>`).join('')}</div>
     <button class="btn" data-act="${A}Add">➕ Add a LoRA</button>`;
 }
+function firstBlock(cut, started){
+  const r = (cut.firstRefs || []).find(r => S.media[r.id]), o = 'f:' + cut.id;
+  return `<section class="block" style="--c:var(--cyan)"><h3 data-act="noop">Start frame<span class="sum">${r ? 'part 1 starts on it' : 'optional'}</span></h3><div class="body">
+    <div class="slots">${r ? `<div class="slot has"><img src="${esc(THUMB(r.id))}" alt="" data-act="rView" data-o="${o}" data-i="0">${started ? '' : `<button class="x" data-act="refDel" data-o="${o}" data-i="0" aria-label="Take out">✕</button>`}</div>`
+      : started ? '' : `<div class="slot add" data-act="refAdd" data-o="${o}">＋<br>start frame</div>`}</div>
+    <div class="note">${r ? 'Part 1 begins exactly on this picture (pinned at frame 1). Same shape as the film\'s canvas works best.' : 'Pick a picture for the cut to begin on, e.g. a still you made, or the last frame of another cut.'}${started && !r ? ' This cut has started.' : ''}</div></div></section>`;
+}
 function cutLook(film, cut){
   const L = lookOf(film, cut), fams = families().filter(f => !f.fl2v), fam = fams.find(f => f.key===L.model), lw = lorasOf(L).map(l => bn(l.name).replace(/\.safetensors$/i, '')).join(', ');
   const sum = (fam ? fam.label : famLabel(L.model || '')) + ' · ' + (L.turbo ? 'Turbo' : 'Regular') + (lw ? ' · ' + lw : '');
@@ -1072,6 +1084,7 @@ function cutView(x){
       ${out.map(c => `<button class="chip" data-act="castIn" data-id="${c.id}">＋ ${esc(c.name || 'Character')}</button>`).join('')}${film.chars.length ? '' : '<span class="note">Add characters in the film\'s 🎭 Cast first.</span>'}</div>
     <div class="alloc">${allocHtml}</div>
     <div class="note">Characters load in this order, so the first one's pictures are #1, #2… and the next one's follow. − / + sets how many pictures someone gets in this cut.</div></div></section>
+  ${firstBlock(cut, started)}
   ${cutLook(film, cut)}
   <section class="block" style="--c:var(--accent)"><h3 data-act="noop">What happens<span class="sum">${fmtS((started ? cutFrames(cut) : P.reduce((a, p) => a + p.deliv, 0)) / FPS)} · ${P.length} part${P.length > 1 ? 's' : ''}</span></h3><div class="body">
     ${started ? '' : nameChips(inCast)}
@@ -1233,6 +1246,7 @@ function drawGo(){
 let pickOwner = '';
 function refList(owner){ const [k, id] = owner.split(':'), f = curFilm() || (curX() || {}).film; if(!f) return null;
   if(k==='c'){ const c = f.chars.find(c => c.id===id); return c && c.refs; }
+  if(k==='f'){ const x = allCuts().find(x => x.cut.id===id); if(!x) return null; const l = x.cut.firstRefs = x.cut.firstRefs || []; return l; }
   if(k==='o'){ const [ci, oi] = id.split('/'), c = f.chars.find(c => c.id===ci), o = c && (c.outfits || []).find(o => o.id===oi); return o && o.refs; }
   const sc = f.scenes.find(s => s.id===id); if(!sc) return null; return sc.placeRefs = sc.placeRefs || []; }
 document.addEventListener('click', async ev => {
@@ -1368,6 +1382,7 @@ document.addEventListener('input', ev => {
 document.addEventListener('change', ev => { const el = ev.target; if(el.tagName==='TEXTAREA' || (el.tagName==='INPUT' && el.type!=='range' && el.type!=='file')) draw(); });
 $('#filePick').addEventListener('change', async ev => { const files = [...ev.target.files], l = refList(pickOwner); if(!l) return;
   for(const f of files){ try{ const id = await addMedia(f, 'img'); l.push({id, note:''}); }catch(e){ toast(e.message); } }
+  if(pickOwner.startsWith('f:')) l.splice(0, Math.max(0, l.length - 1)); // one start frame: the newest
   save(); draw(); if(MK && !$('#sheet').hidden) mkSheet(); });
 $('#goBtn').addEventListener('click', async () => { const x = curX(); if(!x) return; $('#goBtn').disabled = true; $('#goBtn').textContent = 'Sending…'; await startCut(x); draw(); });
 $('#roomBtn').addEventListener('click', () => go({v:'room'}));

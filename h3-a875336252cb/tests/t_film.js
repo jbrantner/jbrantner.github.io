@@ -266,6 +266,14 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   const g4 = sent[nl] && sent[nl].g, unets = g4 ? nodes(g4, 'UNETLoader').map(n => n.inputs.unet_name) : [], ll = g4 ? nodes(g4, 'LoraLoaderModelOnly').map(n => n.inputs.lora_name) : [];
   ok(cl.turbo===false && cl.loras.length===1 && cl.fl===0 && unets.some(u => /Hybrid-V2/.test(u) && !/Turbo/.test(u)) && ll.includes(cl.loras[0]), "the cut's own Regular model and LoRA go into its takes; the film's look is untouched (" + unets + ' / ' + ll + ')');
 
+  // ---- 🖼 start frame ----
+  const n5 = sent.length;
+  await page.evaluate(() => { const f = FILM.S.films[0], id = f.chars[1].refs[8].id; f.scenes[1].cuts.push({id:'cu5', name:'Start', chars:['chE'], counts:{chE:3}, seconds:5, action:'Ellie waves.', parts:[], takes:1, cands:[], pick:[], firstRefs:[{id, note:''}]}); FILM.go({v:'cut', film:f.id, cut:'cu5'}); }); await page.waitForTimeout(300);
+  ok(/part 1 starts on it/.test(await page.textContent('#view')), 'the cut shows its start frame');
+  await page.evaluate(() => FILM.startCut(FILM.ctxOf('cu5')));
+  const g5 = sent[n5].g, gd = nodes(g5, 'MiniMaxH3AddGuide'), pr5 = node(g5, 'MiniMaxH3ReferenceToVideo').inputs.prompt;
+  ok(gd.length===1 && gd[0].inputs.frame_idx===0 && g5[gd[0].inputs.image[0]].class_type==='LoadImage' && /^<Picture 4> is the first frame of this shot\./.test(pr5) && linksOk(g5), 'part 1 is pinned to the start frame at frame 0, and MiniMax gets it as picture 4, named in the prompt');
+
   // ---- the cast folds into a strip of #1 pictures ----
   await page.evaluate(() => { FILM.S.films[0].chars.forEach(c => { c.open = false; }); FILM.go({v:'film', film:FILM.S.films[0].id, tab:'cast'}); }); await page.waitForTimeout(300);
   ok(await page.$$eval('.castTile img', i => i.length)===2 && await page.$$eval('section.block', b => b.length)===0, 'folded: each character is a tile with their #1 picture');
