@@ -173,6 +173,12 @@ const linksOk = g => Object.values(g).every(n => Object.values(n.inputs).every(v
   ok(/Reference set/.test(await page.textContent('#sheetCard')) && /Make 8 pictures/.test(await page.textContent('#sheetCard')), 'the 🪄 sheet opens on the reference set with all 8 angles');
   await page.click('[data-act="close"]');
 
+  const ne = sent.length;
+  await page.evaluate(() => { const f = FILM.S.films[0], c = f.chars[0]; return FILM.makePictures(f, c, 'edit', {tries:2, from:c.refs[0].id, extra:'change her hair to green'}); });
+  const ed = sent.slice(ne), ep = node(ed[0].g, 'TextEncodeQwenImageEditPlus').inputs.prompt;
+  ok(ed.length===2 && /^Change her hair to green\. Keep everything else/.test(ep) && !/short black hair/.test(ep) && types(ed[0].g).includes('VAEEncode') && !types(ed[0].g).includes('EmptySD3LatentImage') && linksOk(ed[0].g), '✏️ Edit: just the change asked for, on the picture itself (same framing)');
+  ok(await page.evaluate(() => FILM.makePictures(FILM.S.films[0], FILM.S.films[0].chars[0], 'edit', {from:FILM.S.films[0].chars[0].refs[0].id, extra:''}).then(() => 'sent', e => e.message)).then(m => /Say what to change/.test(m)), 'Edit with nothing written asks what to change');
+
   // ---- screens draw without errors ----
   for(const tab of ['cast', 'scenes', 'look']){ await page.evaluate(t => FILM.go({v:'film', film:FILM.S.films[0].id, tab:t}), tab); await page.waitForTimeout(200); await page.screenshot({path:path.join(__dirname, 'film_' + tab + '.png'), fullPage:true}); }
   ok(await page.$$eval('.slot .rk', r => r.length)===0 || true, 'tabs draw');

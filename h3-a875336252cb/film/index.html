@@ -767,7 +767,7 @@ function zitGraph(k, text, W, H, batch, prefix, free){
   } else out = add('KSampler', Object.assign({model, seed, positive:pos, negative:neg, latent_image:lat, denoise:1}, S8));
   return {g, save:add('SaveImage', {images:[add('VAEDecode', {samples:[out, 0], vae}), 0], filename_prefix:prefix})};
 }
-function qwenGraph(k, img, text, W, H, prefix){
+function qwenGraph(k, img, text, W, H, prefix, keepFrame){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
   let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
   if(k.fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.fast, strength_model:1}), 0];
@@ -776,7 +776,7 @@ function qwenGraph(k, img, text, W, H, prefix){
   const pic = [add('ImageScaleToTotalPixels', {image:[add('LoadImage', {image:img}), 0], upscale_method:'lanczos', megapixels:1}), 0], ims = plus ? {image1:pic} : {image:pic};
   const enc = t => [add(k.enc, Object.assign({clip:cl, prompt:t, vae:va}, ims)), 0];
   // Plus: a new portrait-shaped page (the person can be re-framed, e.g. full body from a face); the older encoder edits the picture's own latent
-  const lat = plus && k.oi.EmptySD3LatentImage ? [add('EmptySD3LatentImage', {width:W, height:H, batch_size:1}), 0] : [add('VAEEncode', {pixels:pic, vae:va}), 0];
+  const lat = plus && !keepFrame && k.oi.EmptySD3LatentImage ? [add('EmptySD3LatentImage', {width:W, height:H, batch_size:1}), 0] : [add('VAEEncode', {pixels:pic, vae:va}), 0];
   const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 1e12), steps:k.steps, cfg:k.cfg, sampler_name:'euler', scheduler:'simple', denoise:1, positive:enc(text), negative:enc(''), latent_image:lat});
   return {g, save:add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:va}), 0], filename_prefix:prefix})};
 }
@@ -798,7 +798,9 @@ async function makePictures(film, c, kind, opt){
     }
   } else { const k = qwenKitF(); if(k.why) throw new Error(k.why); const img = await upload(k.url, opt.from);
     const base = (who ? 'This is ' + who + '. ' : '') + (extra ? sentence(extra) + ' ' : '');
-    if(kind==='pic') for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'Clean front shot', G:qwenGraph(k, img, 'Show the same person from picture 1 in a clean reference photo. ' + base + KEEP + ' Front view, looking at the camera, head to waist, neutral relaxed expression. ' + LOOK, W, H, genDir(film, c) + '/front'), n:1});
+    if(kind==='edit'){ const ask = sentence(extra); if(!ask) throw new Error('Say what to change, e.g. change her hair to green');
+      for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'Edit', G:qwenGraph(k, img, ask + ' Keep everything else in picture 1 exactly the same: the same person, face, pose, framing, clothes, background and light. Realistic photo.', W, H, genDir(film, c) + '/edit', true), n:1}); }
+    else if(kind==='pic') for(let i = 0; i < Math.max(1, opt.tries || 2); i++) jobs.push({k, label:'Clean front shot', G:qwenGraph(k, img, 'Show the same person from picture 1 in a clean reference photo. ' + base + KEEP + ' Front view, looking at the camera, head to waist, neutral relaxed expression. ' + LOOK, W, H, genDir(film, c) + '/front'), n:1});
     else for(const i of opt.which) jobs.push({k, label:ANGLES[i][0], order:i, G:qwenGraph(k, img, 'The same person as in picture 1. ' + base + KEEP + ' ' + ANGLES[i][1] + ' ' + LOOK, W, H, genDir(film, c) + '/angle_' + (i + 1)), n:1});
   }
   const set = uid('set');
@@ -1020,15 +1022,16 @@ function mkSheet(){
   const kit = MK.kind==='new' ? zitKitF() : qwenKitF(), n = MK.kind==='set' ? MK.which.length : MK.tries;
   const pick = `<div class="sub">Start from</div><div class="strip">${c.refs.map((r, i) => `<div class="s ${r.id===MK.from ? '' : 'out'}" data-act="mkFrom" data-id="${r.id}"><img src="${esc(THUMB(r.id))}" alt=""><i>#${i + 1}</i></div>`).join('')}<div class="s" data-act="refAdd" data-o="c:${c.id}" style="display:grid;place-items:center;color:var(--dim)">＋</div></div>`;
   openSheet(`<h3><span>🪄 Pictures of ${esc(c.name || 'this character')}</span><button class="btn" data-act="close">✕</button></h3>
-    <div class="seg">${K('new', '✨ From words')}${K('pic', '🖼 From a picture')}${K('set', '📚 Reference set')}</div>
+    <div class="seg">${K('new', '✨ From words')}${K('pic', '🖼 From a picture')}${K('set', '📚 Reference set')}${K('edit', '✏️ Edit')}</div>
     <div class="note">${MK.kind==='new' ? 'Z-Image Turbo makes her from her description (realistic photo, front, plain background). Pick the best as her #1, then make her reference set from it.'
+      : MK.kind==='edit' ? 'Qwen-Image-Edit changes just what you ask in the picture you pick (e.g. change her hair to green) and keeps the rest: the same person, pose, framing and background. Her description isn\'t used here.'
       : MK.kind==='pic' ? 'Qwen-Image-Edit redraws the picture you pick as a clean front reference photo of the same person on a plain background. Good for a screenshot, a busy photo or a character sheet.'
       : 'Qwen-Image-Edit makes the same person from each angle you tick, from the picture you pick (her #1 is best). Each angle is its own picture, about 40 s each on Render.'}</div>
     ${MK.kind==='new' ? '' : c.refs.length ? pick : '<div class="note warn">She has no pictures yet: add one, or start ✨ From words.</div>'}
     ${MK.kind==='set' ? `<div class="chips">${ANGLES.map((a, i) => `<button class="chip ${MK.which.includes(i) ? 'on' : ''}" data-act="mkAngle" data-i="${i}">${esc(a[0])}</button>`).join('')}</div>` :
       (MK.kind==='new' ? `<div><div class="lab"><span>Variety between tries</span></div><div class="seg">${[[0, 'Same'], [1, 'Some'], [2, 'Lots']].map(([v, t]) => `<button class="${MK.free===v ? 'on' : ''}" data-act="mkFree" data-v="${v}">${t}</button>`).join('')}</div><div class="note" style="margin-top:4px">Some changes the light, expression and framing for each try; Lots also gives each try a couple of its own face details.</div></div>` : '') +
       `<div class="row" style="justify-content:space-between"><label>Tries</label><div class="step"><button data-act="mkTries" data-d="-1">−</button><b>${MK.tries}</b><button data-act="mkTries" data-d="1">+</button></div></div>`}
-    <div><div class="lab"><span>Her description is used, plus</span></div><textarea id="mkExtra" style="min-height:60px" placeholder="Anything extra for these pictures, e.g. wearing round thin-metal glasses">${esc(MK.extra || '')}</textarea></div>
+    <div><div class="lab"><span>${MK.kind==='edit' ? 'What to change' : 'Her description is used, plus'}</span></div><textarea id="mkExtra" style="min-height:60px" placeholder="${MK.kind==='edit' ? 'e.g. Change her hair to green' : 'Anything extra for these pictures, e.g. wearing round thin-metal glasses'}">${esc(MK.extra || '')}</textarea></div>
     ${kit.why ? `<div class="note bad">${esc(kit.why)}</div>` : `<div class="note">Runs on ${esc(pcName(kit.url))}; keeps going if you close the app.</div>`}
     <button class="btn pri" data-act="mkGo" ${kit.why || (MK.kind!=='new' && !MK.from) || !n ? 'disabled' : ''}>🪄 Make ${n} picture${n > 1 ? 's' : ''}</button>`);
 }
