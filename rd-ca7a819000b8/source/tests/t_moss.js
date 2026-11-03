@@ -28,7 +28,7 @@ function check(g){
 const C = a => ['COMBO',{options:a}];
 const full = () => ({
   CheckpointLoaderSimple:{input:{required:{ckpt_name:C(['sdxl.safetensors'])}}},
-  UNETLoader:{input:{required:{unet_name:C(['moss_image_sft_int8_convrot.safetensors','DasiwaMinimaxH3_turbo.safetensors']), weight_dtype:C(['default'])}}},
+  UNETLoader:{input:{required:{unet_name:C(['moss_image_sft_int8_convrot.safetensors','DasiwaMinimaxH3_turbo.safetensors']), weight_dtype:C(['default','fp8_e4m3fn'])}}},
   CLIPLoader:{input:{required:{clip_name:C(['umt5.safetensors','qwen3.5_9b_int8_convrot.safetensors','qwen3.5_9b_w4a8_gptq.safetensors']), type:C(['stable_diffusion','moss_image'])}}},
   VAELoader:{input:{required:{vae_name:C(['ae.safetensors','flux2-vae_small.safetensors'])}}},
   LoraLoader:{input:{required:{lora_name:C(['pixel.safetensors','moss_style_lora.safetensors','moss_image_sft_8step_dmd.safetensors'])}}},
@@ -45,7 +45,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport:{width:390,height:844}, hasTouch:true, isMobile:true });
   const logs = []; page.on('pageerror', e => logs.push('PAGEERROR '+e.message)); page.on('console', m => { if(m.type()==='error' && !/Failed to load resource/.test(m.text())) logs.push(m.text()); });
-  const sent = [], dls = []; let sock = null, n = 0;
+  const sent = [], dls = [], moves = []; let sock = null, n = 0;
   await page.route('https://app.test/', r => r.fulfill({ contentType:'text/html', body:html }));
   for(const f of ['chars.txt','tags.txt','words.txt']) await page.route('https://app.test/'+f, r => r.fulfill({ contentType:'text/plain', body:fs.readFileSync(path.join(__dirname, '..', '..', f), 'utf8') }));
   await page.route(SERVER+'/**', async r => {
@@ -54,6 +54,9 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     if(u.pathname.startsWith('/object_info/')){ const k = u.pathname.slice(13); return r.fulfill({ json:{[k]:OI[k]} }); }
     if(u.pathname==='/queue') return r.fulfill({ json:{queue_running:[], queue_pending:[]} });
     if(u.pathname==='/renderdeck/jobs') return r.fulfill({ json:{jobs:[]} });
+    if(u.pathname==='/renderdeck/move_model'){ const b = JSON.parse(r.request().postData()); moves.push(b);
+      const ck = OI.CheckpointLoaderSimple.input.required.ckpt_name[1].options, un = OI.UNETLoader.input.required.unet_name[1].options;
+      ck.splice(ck.indexOf(b.name), 1); un.push(b.name); return r.fulfill({ json:{ok:true, name:b.name, to:'diffusion_models'} }); }
     if(u.pathname==='/renderdeck/download'){ dls.push(JSON.parse(r.request().postData())); return r.fulfill({ json:{id:'d'+dls.length, name:dls[dls.length-1].name, status:'downloading'} }); }
     if(u.pathname.startsWith('/history') || u.pathname.startsWith('/renderdeck/') || u.pathname.startsWith('/view')) return r.fulfill({ json:{} });
     if(u.pathname==='/prompt'){
@@ -127,6 +130,20 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   g = await graph();
   ok(check(g).length===0 && nodes(g,'CheckpointLoaderSimple').length===1 && nodes(g,'UNETLoader').length===0, 'SDXL checkpoint still gets its own graph');
   ok(!!(await page.$('.block[style*="--model"] [data-seg=style][data-v=illustrious]')) && !(await page.$('.block[style*="--model"] [data-seg=style][data-v=moss]')), 'Style row back, without MOSS in it');
+
+  // 🌿 a MOSS model that landed in the checkpoints folder (dirtyMoss from Civitai): seen as SDXL until moved
+  OI.CheckpointLoaderSimple.input.required.ckpt_name[1].options.push('dirtyMoss_3317613.safetensors');
+  await page.evaluate(async () => { const p = pcOf(base()); p.oi = await (await fetch(base() + '/object_info')).json(); info.ckpt = ckptList(p.oi); renderBlocks(); });
+  await page.selectOption('[data-k=ckpt]', 'dirtyMoss_3317613.safetensors');
+  g = await graph();
+  ok(nodes(g,'CheckpointLoaderSimple').length===1 && (await page.textContent('.block[style*="--model"]')).includes('looks like a MOSS-Image model'), 'dirtyMoss in checkpoints: still a checkpoint, with a hint to move it');
+  page.once('dialog', d => d.accept());
+  await page.locator('[data-do=mossmove]').dispatchEvent('click'); await page.waitForTimeout(500);
+  ok(moves.length===1 && moves[0].name==='dirtyMoss_3317613.safetensors' && moves[0].to==='diffusion_models', 'asks the helper to move it to diffusion_models');
+  g = await graph(); const du = nodes(g,'UNETLoader')[0];
+  ok(check(g).length===0 && du && du.inputs.unet_name==='dirtyMoss_3317613.safetensors' && du.inputs.weight_dtype==='fp8_e4m3fn', 'then it paints as MOSS, the full-size file cast to fp8: '+JSON.stringify(du && du.inputs));
+  ok(titled(g,'Painting').inputs.sampler_name==='er_sde', 'and takes the MOSS settings');
+  ok(nodes(await page.evaluate(() => { S.blocks.find(b=>b.type==='model').ckpt = 'moss_image_sft_int8_convrot.safetensors'; return buildGraph().graph; }),'UNETLoader')[0].inputs.weight_dtype==='default', 'the int8 file loads as it is');
 
   // a computer without MOSS: 🌿 Get MOSS-Image fetches the four files into the right folders
   OI = full(); OI.UNETLoader.input.required.unet_name = C(['DasiwaMinimaxH3_turbo.safetensors']); OI.CLIPLoader.input.required.clip_name = C(['umt5.safetensors']);

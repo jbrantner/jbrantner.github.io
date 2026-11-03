@@ -46,7 +46,7 @@ RETRIES = 8  # a download waits 30 s, 1, 2, 4 … up to 10 minutes after each dr
 # run anywhere. Everything else (Qwen Image Edit, MiniMax, 3D, text encoders, ControlNets) stays on the computer it was
 # installed on, and these names are never copied whatever folder they are in (Jordan 2026-10-20: Qwen stays on Render).
 SYNC_KINDS = ('checkpoints', 'loras')
-STAYS_PUT = re.compile(r'qwen|minimax|hunyuan|trellis|pixal|mistral|flux2', re.I)
+STAYS_PUT = re.compile(r'qwen|minimax|hunyuan|trellis|pixal|mistral|flux2|moss', re.I)  # moss: MOSS-Image is Render only (2026-11-03)
 def _synced(kind, rel):
     return kind in SYNC_KINDS and rel.lower().endswith('.safetensors') and not STAYS_PUT.search(rel)
 # 📦 Copy Qwen once (Jordan 2026-10-22, the WiFi drops were a bad cord): the Qwen-Image-Edit set (edit model, text encoder,
@@ -306,14 +306,42 @@ async def download(request):
             info['name'] = urlparse(url).path.split('/')[-1]
             info['file_url'] = url.replace('/blob/', '/resolve/')
         kind = info['kind'] or body.get('kind')
-        if body.get('kind') == 'diffusion_models' or (kind != 'loras' and re.search(r'minimax|wan ?2|hunyuan ?video|ltx', info['base'] or '', re.I)):  # a video LoRA stays a LoRA
-            kind = 'diffusion_models'  # video and other split models load with UNETLoader, not as checkpoints
+        if body.get('kind') == 'diffusion_models' or (kind != 'loras' and re.search(r'minimax|wan ?2|hunyuan ?video|ltx|moss', info['base'] or '', re.I)):  # a video LoRA stays a LoRA
+            kind = 'diffusion_models'  # video and other split models (MOSS-Image too, 2026-11-03) load with UNETLoader, not as checkpoints
         name = _clean(body.get('name') or info['name'])
         path = _target(kind, name)
         _room(path, info['size'])
         j = _job(name=name, kind=kind, total=info['size'], source=url, base=info['base'], words=info['words'], title=info['title'])
         asyncio.ensure_future(_download(j, info['file_url'], path))
         return web.json_response(j)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+# 🌿 Make it MOSS (Jordan 2026-11-03: a MOSS-Image model from Civitai landed in checkpoints, typed "Checkpoint" there):
+# move a model file between the checkpoints and diffusion_models folders, where UNETLoader can find it. A plain rename on
+# the same disk, never over an existing file; the app asks for it when a checkpoint is marked MOSS-Image.
+MOVABLE = ('checkpoints', 'diffusion_models')
+
+
+@routes.post('/renderdeck/move_model')
+async def move_model(request):
+    try:
+        body = await request.json()
+        src, dst = body.get('from') or 'checkpoints', body.get('to') or 'diffusion_models'
+        if src not in MOVABLE or dst not in MOVABLE or src == dst:
+            raise ValueError('Models move only between checkpoints and diffusion_models')
+        name = (body.get('name') or '').replace('\\', '/')
+        path = folder_paths.get_full_path(src, name)
+        if not path or not os.path.isfile(path) or not path.lower().endswith('.safetensors'):
+            raise ValueError(os.path.basename(name) + ' is not in ' + src)
+        target = os.path.join(_folder(dst), os.path.basename(path))
+        if os.path.exists(target):
+            raise ValueError(os.path.basename(path) + ' is already in ' + dst)
+        await asyncio.to_thread(shutil.move, path, target)
+        for k in MOVABLE:  # ComfyUI keeps its file lists for a while; drop them so the next object_info lists the move
+            getattr(folder_paths, 'filename_list_cache', {}).pop(k, None)
+        return web.json_response({'ok': True, 'name': os.path.basename(path), 'to': dst})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=400)
 
