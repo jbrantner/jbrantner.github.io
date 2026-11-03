@@ -7,11 +7,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
 const SCHEMA = {
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
-  'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo'];
+  'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale'];
 const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g => Object.values(g).map(n => n.class_type);
 (async () => {
   const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
@@ -69,5 +70,21 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   const del = []; await page.route(R + '/queue', rt => { if(rt.request().method()==='POST') del.push(JSON.parse(rt.request().postData()).delete); return rt.fallback(); });
   await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); return H3.cancelTake ? H3.cancelTake(t) : null; }, br3[0].id);
   ok(del.length && !del.flat().includes(first.pids[0]) && del.flat().includes(br3[0].pids[1]), 'cancelling one version leaves the shared piece 1 in line (' + JSON.stringify(del) + ')');
+  // 🎞 a video in the First frame slot is carried on: piece 1 pins its last frames + sound, the take joins it in front
+  const cv = await page.evaluate(R => { const f = H3.S.f; H3.S.media.mv = {id:'mv', kind:'vid', name:'clip.mp4', w:640, h:352, fps:24, sound:true, dur:5, thumb:''};
+    Object.assign(f, {fl:true, first:'mv', last:false, seconds:4, maxPiece:5, takes:1, prompt:'she keeps walking'}); H3.drawAll();
+    const t = H3.snapshot(); t.id = 'tc'; t.pc = R; t.seed = 5; t.dir = 'H3Deck/h3_c'; t.name = 'h3_c'; t.contFile = 'clip.mp4';
+    const oi = H3.PC[R].oi, G = H3.pieceGraph(t, 0, oi, {mv:'clip.mp4'}); t.pieces[0].file = {filename:'piece_01_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_c'};
+    return {t:{cont:t.cont, first:t.first, w:t.w, h:t.h, p:t.pieces.map(p => [p.gen, p.deliv, p.ctx]), pr:t.pieces[0].prompt}, g:G.g, join:G.join, jg:H3.joinGraph(t).g, why:H3.canRun(R, t), note:document.querySelector('#contNote').textContent}; }, R);
+  console.log(JSON.stringify(cv.t), cv.why);
+  const mc = node(cv.g, 'MiniMaxH3MotionContext'), lv = node(cv.g, 'LoadVideo');
+  ok(cv.t.cont==='mv' && !cv.t.first && cv.t.w===640 && cv.t.h===352 && cv.t.p.length===1 && cv.t.p[0][2] > 0 && cv.t.p[0][1] >= 4 * 24 - 12, 'a video as first frame: one carry-on piece at the video\'s own size, with the overlap frames on top (' + JSON.stringify(cv.t.p) + ')');
+  ok(mc && mc.inputs.context_frames && mc.inputs.context_audio && !mc.inputs.context_latent && lv && lv.inputs.file==='clip.mp4' && !types(cv.g).includes('MiniMaxH3MotionContextLoadLatent') && !types(cv.g).includes('MiniMaxH3AddGuide'), "piece 1 pins the video's last frames and sound (Motion Context frames path), no first-frame picture");
+  ok(types(cv.g).includes('MiniMaxH3MotionContextTrim') && !cv.join && /continues straight on/.test(cv.t.pr), 'the overlap is trimmed off, the prompt says it carries on, no folder join');
+  const cc = node(cv.jg, 'ConcatenateVideo'), v0 = cv.jg[cc.inputs['videos.video0'][0]], v1 = cv.jg[cc.inputs['videos.video1'][0]];
+  ok(v0.inputs.file==='clip.mp4' && /piece_01/.test(v1.inputs.file), 'the finished take = your video, then the new part');
+  ok(cv.why==='' && /carried on/.test(cv.note), 'the PC can run it, and the slot explains it');
+  const bad = await page.evaluate(R => { const oi = H3.PC[R].oi; const keep = oi.MiniMaxH3MotionContext; oi.MiniMaxH3MotionContext = {input:{required:{}}}; const t = H3.snapshot(); const w = H3.canRun(R, t); oi.MiniMaxH3MotionContext = keep; return w; }, R);
+  ok(/carry on a video/.test(bad), 'an old H3 Motion Context without frames says so (' + bad + ')');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
