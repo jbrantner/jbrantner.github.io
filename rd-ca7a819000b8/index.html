@@ -623,7 +623,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-11-02.341'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-11-03.342'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -656,14 +656,33 @@ const STYLES = {
     rec:{cfg:6, steps:30, sampler:'dpmpp_2m', scheduler:'karras', size:1024},
     tip:'Write plain sentences.'},
   plain:{name:'Plain', tags:false, clipSkip:0, pos:'', neg:'', tip:'Sends your prompt exactly as typed.'},
+  moss:{name:'MOSS-Image', tags:false, clipSkip:0, moss:true, pos:'',
+    neg:'nsfw, worst quality, bad anatomy, watermark, jpeg artifact', // ComfyUI's own MOSS-Image template negative
+    rec:{cfg:2.5, steps:25, sampler:'er_sde', scheduler:'simple', size:1024},
+    tip:'Write plain sentences, like a photo caption: who, where, the light, the camera. Words in "quotes" are drawn as text in the picture.'},
 };
+// 🌿 MOSS-Image (Jordan 2026-11-03): OpenMOSS's 5B picture model (FLUX.2 latents, a Qwen3.5-9B text encoder), built into
+// ComfyUI 0.42+. It is a split model (UNETLoader + CLIPLoader type moss_image + VAELoader) listed with the checkpoints, so
+// it is picked the same way, and the app builds its own graph for it (buildMoss). Render only: Main makes videos only.
+// Render-sized files: the int8 model (5.4 GB), the w4a8 text encoder (7.3 GB) and the small FLUX.2 VAE (bf16 is too big for 8 GB).
+const MOSS_RE = /moss[_ -]?image/i, MOSS_FAST_RE = /moss.*dmd/i;
+const isMoss = n => MOSS_RE.test(String(n || '').split(/[\\/]/).pop());
+const MOSS_HF = 'https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/';
+const MOSS_FILES = [ // what 🌿 Get MOSS-Image fetches from Hugging Face, through the helper's download (any models folder it knows)
+  {kind:'diffusion_models', url:MOSS_HF + 'diffusion_models/moss_image_sft_int8_convrot.safetensors', what:'the model', gb:5.4},
+  {kind:'text_encoders', url:MOSS_HF + 'text_encoders/qwen3.5_9b_w4a8_gptq.safetensors', what:'its text encoder', gb:7.3},
+  {kind:'vae', url:MOSS_HF + 'vae/flux2-vae_small.safetensors', what:'its VAE', gb:0.25},
+  // ⚡ Fast: lodestones' 8-step DMD distill LoRA (no CFG), renamed so it is known as MOSS's and kept off the LoRA lists
+  {kind:'loras', url:'https://huggingface.co/lodestones/MOSS-Image-SFT-8-steps-dmd/resolve/main/lora.safetensors', name:'moss_image_sft_8step_dmd.safetensors', what:'the ⚡ Fast LoRA', gb:1.2},
+];
 function guessStyle(ckpt){
   const n = (ckpt||'').toLowerCase();
+  if(isMoss(n)) return 'moss';
   if(/pony|pdxl|autismmix/.test(n)) return 'pony';
   if(/illustrious|illu|ilxl|noob|wai/.test(n)) return 'illustrious';
   return 'sdxl'; // the weights look the same for all three, so the name is the only hint; the user corrects it once
 }
-function styleKey(M){ return (S.styles && S.styles[M.ckpt]) || guessStyle(M.ckpt); }
+function styleKey(M){ if(isMoss(M.ckpt)) return 'moss'; const k = S.styles && S.styles[M.ckpt]; return k && k!=='moss' && STYLES[k] ? k : guessStyle(M.ckpt); }
 // when the model's style changes, the Painting block takes that style's usual CFG, steps, sampler and size
 function recText(k){ const r = STYLES[k].rec; return r ? `CFG ${r.cfg}, ${r.steps} steps, ${r.sampler} ${r.scheduler}, ${r.size} size` : ''; }
 function syncRec(force){
@@ -783,9 +802,11 @@ async function connect(){
       : 'Could not reach ComfyUI. Is it running with --enable-cors-header, and is Tailscale on?', true);
   }
 }
+// the Model list: the checkpoints, plus MOSS-Image's split models (UNETLoader), which the app knows how to wire up
+const ckptList = oi => combo(oi.CheckpointLoaderSimple,'ckpt_name').concat(combo(oi.UNETLoader,'unet_name').filter(isMoss));
 function parseInfo(oi){
   return {
-      ckpt: combo(oi.CheckpointLoaderSimple,'ckpt_name'),
+      ckpt: ckptList(oi),
       lora: combo(oi.LoraLoader,'lora_name'),
       cn: combo(oi.ControlNetLoader,'control_net_name'),
       upm: combo(oi.UpscaleModelLoader,'model_name'),
@@ -959,6 +980,7 @@ function buildGraph(opt){
   const add = (cls, inputs, title, c) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title}}; titles[id] = title; g[id]._c = c; return id; };
   const on = t => S.blocks.filter(b => b.type===t && b.on);
   const M = S.blocks.find(b=>b.type==='model'), P = S.blocks.find(b=>b.type==='sampler');
+  if(isMoss(M.ckpt)) return buildMoss(opt);
   const [W,H] = sizeOf(P);
   const ck = add('CheckpointLoaderSimple', {ckpt_name:M.ckpt}, 'Model', '--model');
   let model = [ck,0], clip = [ck,1], vae = [ck,2];
@@ -1084,11 +1106,100 @@ function buildGraph(opt){
   const colors = {}; for(const id in g){ colors[id] = g[id]._c; delete g[id]._c; }
   return {graph:g, titles, colors, notes, seed};
 }
+// 🌿 what the connected computer has for MOSS-Image: its text encoder, VAE and ⚡ Fast LoRA (the official names when it can't say)
+function mossKit(){
+  const oi = (!S.test && pcOf(base()).oi) || null, pick = (node, k, res, dflt) => { const l = oi ? combo(oi[node], k) : [];
+    for(const r of res){ const f = l.find(n => r.test(n.split(/[\\/]/).pop())); if(f) return f; } return oi ? '' : dflt; };
+  return {
+    clip:pick('CLIPLoader', 'clip_name', [/qwen3\.?5.*9b.*w4a8/i, /qwen3\.?5.*9b.*int8/i, /qwen3\.?5.*9b/i], 'qwen3.5_9b_w4a8_gptq.safetensors'),
+    vae:pick('VAELoader', 'vae_name', [/flux2.?vae.?small/i, /flux2.?vae/i], 'flux2-vae_small.safetensors'),
+    fast:pick('LoraLoader', 'lora_name', [MOSS_FAST_RE], 'moss_image_sft_8step_dmd.safetensors'),
+    unet:oi ? combo(oi.UNETLoader, 'unet_name').filter(isMoss) : ['moss_image_sft_int8_convrot.safetensors'],
+    ready:!oi || (!!oi.EmptyFlux2LatentImage && combo(oi.CLIPLoader, 'type').includes('moss_image')), // ComfyUI 0.42 or newer
+  };
+}
+// LoRAs made for MOSS-Image go only with it, and the others only with the checkpoints (by file name); the Fast LoRA is a switch
+function loraList(list){ const M = S.blocks.find(b=>b.type==='model'), m = isMoss(M && M.ckpt);
+  return (list || []).filter(n => !MOSS_FAST_RE.test(n) && /moss/i.test(n.split(/[\\/]/).pop())===m); }
+// the MOSS-Image graph, as ComfyUI's own template wires it: UNETLoader, CLIPLoader (moss_image), Empty Flux 2 Latent,
+// KSampler er_sde/simple, 25 steps, CFG 2.5. LoRAs go on the model only (its text encoder stays as it is).
+// ⚡ Fast adds the 8-step DMD LoRA: 8 steps, CFG 1. Not for MOSS yet: ControlNets (SDXL ones), Fix faces, Finishing pass
+// and the tile Redraw upscale (a plain resize stands in), all SDXL-only for now.
+function buildMoss(opt){
+  opt = opt || {};
+  const g = {}; let n = 0; const titles = {}; const notes = [];
+  const add = (cls, inputs, title, c) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title}}; titles[id] = title; g[id]._c = c; return id; };
+  const on = t => S.blocks.filter(b => b.type===t && b.on);
+  const M = S.blocks.find(b=>b.type==='model'), P = S.blocks.find(b=>b.type==='sampler'), k = mossKit();
+  const [W,H] = sizeOf(P);
+  let model = [add('UNETLoader', {unet_name:M.ckpt, weight_dtype:'default'}, 'Model (MOSS-Image)', '--model'), 0];
+  const clip = [add('CLIPLoader', {clip_name:k.clip, type:'moss_image', device:'default'}, 'Text encoder (Qwen3.5 9B)', '--model'), 0];
+  const vae = [add('VAELoader', {vae_name:k.vae}, 'VAE (FLUX.2)', '--model'), 0];
+  const fast = !!(P.mossFast && k.fast);
+  if(P.mossFast && !k.fast) notes.push('⚡ Fast needs its LoRA (🌿 Get MOSS-Image on the Model block), so this one paints at full length.');
+  if(fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.fast, strength_model:1}, '⚡ Fast (8 steps)', '--lora'), 0];
+  on('lora').filter(b => b.lora).forEach((b, i) => { model = [add('LoraLoaderModelOnly', {model, lora_name:b.lora, strength_model:b.strength}, 'LoRA ' + (i+1), '--lora'), 0]; });
+  const tx = M.quality ? styleText('moss') : {pos:'', neg:''};
+  const pos = add('CLIPTextEncode', {text:joinTags([tx.pos, loraWords()].filter(Boolean).join(', '), sentPrompt()), clip}, 'Prompt', '--samp');
+  const neg = add('CLIPTextEncode', {text:joinTags(tx.neg, S.negative), clip}, 'Avoid', '--samp');
+  if(on('cn').length) notes.push('ControlNet blocks are left out: they are SDXL ControlNets, and MOSS-Image can\'t use them.');
+  let latent, denoise = 1;
+  const pic = on('pic')[0];
+  if(pic){
+    const li = add('LoadImage', {image:pic.image}, 'Start picture', '--pic');
+    const sc = add('ImageScale', {image:[li,0], upscale_method:'lanczos', width:W, height:H, crop:'center'}, 'Fit to size', '--pic');
+    latent = [add('VAEEncode', {pixels:[sc,0], vae}, 'Encode picture', '--pic'), 0];
+    denoise = pic.change;
+    if(S.batch>1) notes.push('Start from picture makes one image per render.');
+  } else {
+    latent = [add('EmptyFlux2LatentImage', {width:W, height:H, batch_size:opt.one ? 1 : S.batch}, 'Blank canvas', '--samp'), 0];
+  }
+  const seed = P.seed, steps = fast ? 8 : P.steps, cfg = fast ? 1 : P.cfg, sampler = fast ? 'euler' : P.sampler, scheduler = fast ? 'simple' : P.scheduler;
+  const T = denoise < 1 ? Math.max(steps, Math.round(steps / denoise)) : steps, s0 = T - steps;
+  const D = opt.draft ? s0 + Math.min(opt.draft, steps - 1) : 0;
+  const ks = D || opt.exact
+    ? add('KSamplerAdvanced', {model, add_noise:'enable', noise_seed:seed, steps:T, cfg, sampler_name:sampler, scheduler, positive:[pos,0], negative:[neg,0], latent_image:latent,
+        start_at_step:s0, end_at_step:D || 10000, return_with_leftover_noise:'disable'}, D ? 'Draft: stop at step ' + (D - s0) : 'Painting', '--samp')
+    : add('KSampler', {seed, steps, cfg, sampler_name:sampler, scheduler, denoise, model, positive:[pos,0], negative:[neg,0], latent_image:latent}, fast ? 'Painting (⚡ 8 steps)' : 'Painting', '--samp');
+  let out = [add('VAEDecode', {samples:[ks,0], vae}, 'Decode', '--samp'), 0];
+  const up = opt.draft ? null : on('up')[0];
+  if(up){
+    if(up.mode==='model' && up.model){
+      const ul = add('UpscaleModelLoader', {model_name:up.model}, 'Upscale model', '--up');
+      out = [add('ImageUpscaleWithModel', {upscale_model:[ul,0], image:out}, 'Upscale (model)', '--up'), 0];
+    } else {
+      if(up.mode==='redraw') notes.push('Redraw upscale is SDXL-only for now, so MOSS-Image gets a plain resize.');
+      out = [add('ImageScaleBy', {image:out, upscale_method:'lanczos', scale_by:up.scale || 2}, 'Upscale x' + (up.scale || 2), '--up'), 0];
+    }
+  }
+  if(P.faces && !opt.draft) notes.push('Fix faces is SDXL-only for now, so it is skipped for MOSS-Image.');
+  add('SaveImage', {filename_prefix:(S.ws && wsPrefix(opt.draft)) || (S.hidden ? HIDDEN : 'RenderDeck') + (opt.draft ? '/drafts/draft' : '/render'), images:out}, 'Save', '--model');
+  const colors = {}; for(const id in g){ colors[id] = g[id]._c; delete g[id]._c; }
+  return {graph:g, titles, colors, notes, seed};
+}
+// 🌿 Get MOSS-Image: the files it lacks, fetched by the picture computer's helper straight from Hugging Face
+function mossPc(){ const p = allPcs().find(x => x.url===base() && stillPc(x)) || allPcs().find(stillPc); return p ? p.url : base(); }
+function mossMissing(){ const k = mossKit(); return MOSS_FILES.filter(f => f.kind==='diffusion_models' ? !k.unet.length : f.kind==='text_encoders' ? !k.clip : f.kind==='vae' ? !k.vae : !k.fast); }
+async function mossGet(){
+  const url = mossPc(), miss = mossMissing(); if(!miss.length){ toast('MOSS-Image is all there'); return; }
+  let ok = 0;
+  for(const f of miss){
+    try{ const r = await fetch(url + '/renderdeck/download', {method:'POST', headers:JSONH, body:JSON.stringify({url:f.url, kind:f.kind, name:f.name || f.url.split('/').pop()})});
+      if(r.status===404){ toast(pcName(url) + "'s helper is too old for downloads: update it first", true); return; }
+      const j = await r.json().catch(() => ({}));
+      if(j.error && !/already on this computer/i.test(j.error)){ toast(j.error, true); continue; } ok++;
+    }catch(e){ toast('Could not reach ' + pcName(url), true); return; }
+  }
+  if(ok){ toast('Getting MOSS-Image on ' + pcName(url) + ': ' + miss.map(f => f.what).join(', ')); buzz(); refreshJobs(); }
+}
 function problems(){
   const p = [];
   if(!info) return ['Connect your render computer or turn on Test mode (⚙).'];
   const M = S.blocks.find(b=>b.type==='model');
   if(!M.ckpt) p.push('Pick a model in the Model block.');
+  if(isMoss(M.ckpt) && !S.test){ const k = mossKit();
+    if(!k.ready) p.push('MOSS-Image needs ComfyUI 0.42 or newer on ' + pcName(base()) + '. Update ComfyUI, then restart it.');
+    if(!k.clip || !k.vae) p.push('MOSS-Image is missing ' + [!k.clip && 'its text encoder', !k.vae && 'its VAE'].filter(Boolean).join(' and ') + ': tap 🌿 Get MOSS-Image on the Model block.'); }
   for(const b of S.blocks){
     const T = TYPES[b.type];
     if(!b.on || T.tool) continue;
@@ -1448,9 +1559,9 @@ async function watchCopies(){
   }
 }
 async function refreshLoaders(p){
-  try{ for(const node of ['CheckpointLoaderSimple','LoraLoader']){
+  try{ for(const node of ['CheckpointLoaderSimple','LoraLoader','UNETLoader','CLIPLoader','VAELoader']){
     const r = await fetch(p.url + '/object_info/' + node, {cache:'no-store'}); const d = (await r.json())[node]; if(d && p.oi) p.oi[node] = d; } }catch(e){}
-  if(p.url===base() && info && p.oi){ info.ckpt = combo(p.oi.CheckpointLoaderSimple,'ckpt_name'); info.lora = combo(p.oi.LoraLoader,'lora_name'); renderBlocks(); }
+  if(p.url===base() && info && p.oi){ info.ckpt = ckptList(p.oi); info.lora = combo(p.oi.LoraLoader,'lora_name'); renderBlocks(); }
 }
 
 // ---------- the farm: the queue kept by the helper on the computer that's always on ----------
@@ -1947,7 +2058,7 @@ function defaults(type){
 }
 function addBlock(type, quiet){
   const b = defaults(type); const list = (info && info[{lora:'lora',cn:'cn',up:'upm'}[type]]) || [];
-  if(type==='lora') b.lora = list[0] || '';
+  if(type==='lora') b.lora = loraList(list)[0] || '';
   if(type==='cn') b.model = list[0] || '';
   if(type==='up' && list.length){ b.model = list.find(m => /anime/i.test(m)) || list[0]; }
   S.blocks.push(b); justAdded = b.id; S.open[b.id] = true; save(); if(!quiet){ closeSheets(); render(); buzz(); setTimeout(()=>{ const el = document.querySelector(`[data-id="${b.id}"]`); el && el.scrollIntoView({behavior:'smooth',block:'center'}); }, 60); }
@@ -1965,21 +2076,31 @@ function seg(key, pairs, cur){
 }
 // Fix faces is one setting (kept on the Painting block), shown on Painting and on a Redraw upscale
 function FACE(c){ const P = S.blocks.find(x=>x.type==='sampler'); return `<button class="chipbtn" data-do="faces" style="${P.faces?'border-color:var(--' + c + ');color:var(--' + c + ')':''}">${P.faces ? '✓ Fix faces' : 'Fix faces: off'}</button>`; }
+// under the Model list: 🌿 Get MOSS-Image while the picture computer lacks any of it, or what's left to do
+function mossBit(moss){
+  if(!info || S.test) return '<p class="note">Checkpoints, plus 🌿 MOSS-Image. Other split models (Flux, Qwen) come later.</p>';
+  const k = mossKit(), miss = mossMissing(), busy = liveJobs.some(x => MOSS_FILES.some(f => (f.name || f.url.split('/').pop())===x.name));
+  const gb = Math.round(miss.reduce((a, f) => a + f.gb, 0) * 10) / 10;
+  return (miss.length && !busy ? `<div class="row"><button class="chipbtn" data-do="mossget">🌿 Get MOSS-Image${k.unet.length ? ': ' + miss.map(f => f.what).join(', ') : ''} (${gb} GB)</button></div>` : '')
+    + (!k.ready ? `<p class="warn">MOSS-Image needs ComfyUI 0.42 or newer on ${esc(pcName(base()))}. Update ComfyUI, then restart it.</p>` : '')
+    + (moss && miss.length ? '' : !k.unet.length ? '<p class="note">🌿 MOSS-Image: a 5B model that writes real text and follows long sentences. It goes on ' + esc(pcName(mossPc())) + ' only and then shows in the list above.</p>' : '');
+}
 function blockBody(b){
   const I = info || {ckpt:[],lora:[],cn:[],upm:[],samplers:FAKE.samplers,schedulers:FAKE.schedulers};
   if(b.type==='model'){ ckptInfo(b.ckpt); const k = styleKey(b), st = STYLES[k], tx = styleText(k), picked = S.styles[b.ckpt];
+    const moss = k==='moss';
     return `<div class="row"><select data-k="ckpt">${opts(I.ckpt, b.ckpt, info ? 'No models found' : 'Connect to see your models')}</select></div>
-    <div class="row"><label>Style</label>${seg('style', Object.entries(STYLES).map(([v,s]) => [v, s.name]), k)}</div>
-    <p class="note">${picked ? '' : 'Guessed from the file name. Tap the right one and it is remembered for this model. '}${esc(st.tip)}${st.rec ? ' Painting is set to ' + recText(k) + ' when you pick this style.' : ''}</p>
+    ${moss ? '' : `<div class="row"><label>Style</label>${seg('style', Object.entries(STYLES).filter(([v,s]) => !s.moss).map(([v,s]) => [v, s.name]), k)}</div>`}
+    <p class="note">${picked || moss ? '' : 'Guessed from the file name. Tap the right one and it is remembered for this model. '}${moss ? '🌿 MOSS-Image, on ' + esc(pcName(mossPc())) + ' only. ' : ''}${esc(st.tip)}${st.rec ? ' Painting is set to ' + recText(k) + ' when you pick this style.' : ''}</p>
     ${st.rec ? `<div class="row" style="padding-left:92px"><button class="chipbtn" data-do="rec">↺ Reset Painting to ${esc(st.name)} settings</button></div>` : ''}
     ${k==='plain' ? '' : `<div class="row" style="padding-left:92px"><button class="chipbtn" data-do="quality" style="${b.quality?'border-color:var(--model);color:var(--model)':''}">${b.quality?'✓ Quality tags added':'Quality tags off'}</button></div>
     ${b.quality ? `<details class="neg"><summary>Edit what gets added for ${esc(st.name)}</summary>
       <div class="lbl" style="margin-top:8px">Before your prompt</div><textarea data-st="pos" style="min-height:60px">${esc(tx.pos)}</textarea>
       <div class="lbl">Before your negative</div><textarea data-st="neg" style="min-height:84px">${esc(tx.neg)}</textarea>
       <div class="row"><button class="chipbtn" data-do="resetStyle">Reset to default</button></div></details>` : ''}`}
-    ${dlLine('checkpoints')}
+    ${dlLine('checkpoints')}${['diffusion_models', 'text_encoders', 'vae'].map(dlLine).join('')}
     <div class="row"><button class="chipbtn" data-do="get" data-v="checkpoints">⬇ Add a model</button><button class="chipbtn" data-do="relist">↻ Refresh list</button></div>
-    <p class="note">Checkpoint models only for now. Flux and other split models come later.</p>`; }
+    ${mossBit(moss)}`; }
   if(b.type==='sampler'){ const [W,H] = sizeOf(b);
     return `<div class="row"><label>Size</label>${seg('size',[[512,'Small'],[768,'Medium'],[1024,'Large']], b.size)}</div>
     <div class="row"><label>Shape</label>${seg('shape',[['square','Square'],['tall','Tall'],['wide','Wide'],['phone','Phone']].concat(b.ratio ? [['panel','Panel']] : []), b.shape)}</div>
@@ -1992,18 +2113,20 @@ function blockBody(b){
     <div class="row"><label>Scheduler</label><div class="grow"><select data-k="scheduler">${opts(I.schedulers, b.scheduler,'')}</select></div></div>
     <div class="row"><label>Seed</label><div class="grow"><input data-k="seed" inputmode="numeric" value="${b.seed}"></div></div>
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="dice">🎲 New seed</button><button class="chipbtn" data-do="lock" style="${b.lockSeed?'border-color:var(--samp);color:var(--samp)':''}">${b.lockSeed?'🔒 Kept':'🔓 New each time'}</button></div>
+    ${isMoss((S.blocks.find(x=>x.type==='model') || {}).ckpt) ? `<div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="mossfast" style="${b.mossFast?'border-color:var(--samp);color:var(--samp)':''}">${b.mossFast ? '⚡ Fast: 8 steps' : '⚡ Fast: off'}</button></div>
+    <p class="note" style="margin-left:92px">${b.mossFast ? 'Fast uses the 8-step LoRA with no CFG, so Steps, Prompt pull, Sampler and Scheduler above are not used.' : 'Fast adds an 8-step LoRA: about 6× quicker, a little less detail.'} Finishing pass and Fix faces are SDXL-only for now.</p>` : `
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="nonoise" style="${b.noNoise!==false?'border-color:var(--samp);color:var(--samp)':''}">${b.noNoise!==false ? '✓ Finishing pass' : 'Finishing pass: off'}</button>${FACE('samp')}</div>
-    <p class="note" style="margin-left:92px">Finishing pass hands the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps to a second sampler with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>
-    ${b.faces ? slider('faceDenoise','Face redraw',0.2,0.6,0.05,b.faceDenoise ?? 0.35) + slider('faceFeather','Face blend',8,64,4,b.faceFeather ?? 32) + '<p class="note" style="margin-left:92px">Lower Face redraw keeps the face closer to the original; higher Face blend softens the edge into the surroundings.</p>' : ''}`; }
+    <p class="note" style="margin-left:92px">Finishing pass hands the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps to a second sampler with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>`}
+    ${b.faces && !isMoss((S.blocks.find(x=>x.type==='model') || {}).ckpt) ? slider('faceDenoise','Face redraw',0.2,0.6,0.05,b.faceDenoise ?? 0.35) + slider('faceFeather','Face blend',8,64,4,b.faceFeather ?? 32) + '<p class="note" style="margin-left:92px">Lower Face redraw keeps the face closer to the original; higher Face blend softens the edge into the surroundings.</p>' : ''}`; }
   if(b.type==='lora'){ const w = S.loraWords[b.lora] || '', lm = loraMeta(b.lora), meta = ((lm && lm.words) || []).filter(x => !w.toLowerCase().split(/,\s*/).includes(x.toLowerCase()));
-    return `<div class="row"><select data-k="lora">${opts(I.lora, b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
+    return `<div class="row"><select data-k="lora">${opts(loraList(I.lora), b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
     ${slider('strength','Strength',-1,2,0.05,b.strength)}
     <div class="row"><label>Activation</label><div class="grow"><input data-lw value="${esc(w)}" placeholder="words this LoRA needs, e.g. AFKJ Style" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
     ${meta.length ? `<div class="row" style="padding-left:92px;flex-wrap:wrap">${meta.map(x => `<button class="chipbtn" data-do="lw" data-v="${esc(x)}">＋ ${esc(x)}</button>`).join('')}</div><p class="note" style="margin-left:92px">${lm.civitai ? 'From Civitai' + (lm.title ? ' (' + esc(lm.title) + ')' : '') + ' and the file itself.' : "From the LoRA file's training captions."}</p>` : ''}
     ${lm && lm.base && !/illustrious|noob|sdxl|pony/i.test(lm.base) ? `<p class="warn">Civitai lists this LoRA for ${esc(lm.base)}, so it probably won't work with an SDXL-family checkpoint.</p>` : ''}
     <p class="note">Added to the start of your prompt whenever this LoRA is on, and remembered for this file.</p>
-    <div class="row" style="padding-left:92px"><button class="chipbtn" data-do="styleonly" style="${b.styleOnly?'border-color:var(--lora);color:var(--lora)':''}">${b.styleOnly ? '✓ Style only' : 'Style only: off'}</button></div>
-    ${b.styleOnly ? `${slider('startStep','LoRA from step',0,10,1,b.startStep ?? 4)}
+    ${isMoss((S.blocks.find(x=>x.type==='model') || {}).ckpt) ? '<p class="note">On MOSS-Image a LoRA goes on the model only, at full length (no Style only).</p>' : `<div class="row" style="padding-left:92px"><button class="chipbtn" data-do="styleonly" style="${b.styleOnly?'border-color:var(--lora);color:var(--lora)':''}">${b.styleOnly ? '✓ Style only' : 'Style only: off'}</button></div>`}
+    ${b.styleOnly && !isMoss((S.blocks.find(x=>x.type==='model') || {}).ckpt) ? `${slider('startStep','LoRA from step',0,10,1,b.startStep ?? 4)}
     <p class="note">Keeps the model's own poses and layout and takes the LoRA's character designs and style. The LoRA switches on at this step: 0–2 for more of its designs, 6–8 for more of the model's variety. For full-strength posing put the pose in the prompt.</p>` : ''}
     ${dlLine('loras')}
     <div class="row"><button class="chipbtn" data-do="get" data-v="loras">⬇ Add a LoRA</button><button class="chipbtn" data-do="relist">↻ Refresh list</button></div>`; }
@@ -2073,7 +2196,7 @@ function loraMeta(file){
 // a checkpoint Civitai recognises gets its style (Illustrious, Pony, SDXL) from there, unless the user already picked one
 const CKPTINFO = {};
 function ckptInfo(file){
-  if(!file || S.test || !info || file in CKPTINFO) return;
+  if(!file || isMoss(file) || S.test || !info || file in CKPTINFO) return;
   CKPTINFO[file] = null;
   fetch(base() + '/renderdeck/model_info?kind=checkpoints&name=' + encodeURIComponent(file)).then(r => r.ok ? r.json() : {}).then(cv => {
     CKPTINFO[file] = cv; const b = (cv.base || '').toLowerCase();
@@ -2134,6 +2257,8 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='faces'){ const P = S.blocks.find(x=>x.type==='sampler'); P.faces = !P.faces; }
   else if(act==='seams' || act==='keepColour'){ b[act] = b[act]===false; }
   else if(act==='nonoise'){ b.noNoise = b.noNoise===false; }
+  else if(act==='mossfast'){ b.mossFast = !b.mossFast; if(b.mossFast && !mossKit().fast) toast('⚡ Fast needs its LoRA: tap 🌿 Get MOSS-Image on the Model block', true); }
+  else if(act==='mossget'){ mossGet(); return; }
   else if(act==='styleonly'){ b.styleOnly = !b.styleOnly; if(b.startStep==null) b.startStep = 4; }
   else if(act==='lw'){ S.loraWords[b.lora] = [S.loraWords[b.lora], d.dataset.v].filter(Boolean).join(', '); }
   else if(act==='get'){ openGet(d.dataset.v); return; }
@@ -3850,9 +3975,11 @@ function fromPng(buf){
   const blocks = JSON.parse(JSON.stringify(S.blocks.filter(b => b.type==='model' || b.type==='sampler')));
   const M = blocks.find(b=>b.type==='model'), P = blocks.find(b=>b.type==='sampler');
   if(ck) M.ckpt = ck.inputs.ckpt_name;
+  const un = one('UNETLoader'); if(!ck && un && isMoss(un.inputs.unet_name)) M.ckpt = un.inputs.unet_name; // 🌿 a MOSS-Image render
+  if(un && isMoss(un.inputs.unet_name)) P.mossFast = nodes.some(n => n.class_type==='LoraLoaderModelOnly' && MOSS_FAST_RE.test(String(n.inputs.lora_name)));
   if(typeof i.steps==='number') P.steps = i.steps; if(typeof i.cfg==='number') P.cfg = i.cfg;
   if(typeof i.sampler_name==='string') P.sampler = i.sampler_name; if(typeof i.scheduler==='string') P.scheduler = i.scheduler;
-  const lat = one('EmptyLatentImage'); if(lat){ const w = lat.inputs.width, h = lat.inputs.height, px = Math.sqrt(w*h);
+  const lat = one('EmptyLatentImage') || one('EmptyFlux2LatentImage'); if(lat){ const w = lat.inputs.width, h = lat.inputs.height, px = Math.sqrt(w*h);
     P.size = px < 640 ? 512 : px < 896 ? 768 : 1024; const r = w/h; P.shape = r > 1.15 ? 'wide' : r < 0.65 ? 'phone' : r < 0.87 ? 'tall' : 'square'; }
   let id = 100; nodes.filter(n => n.class_type==='LoraLoader').forEach(n => blocks.push({id:id++, type:'lora', on:true, lora:n.inputs.lora_name, strength:n.inputs.strength_model}));
   const seed = typeof (i.seed ?? i.noise_seed)==='number' ? (i.seed ?? i.noise_seed) : null;
