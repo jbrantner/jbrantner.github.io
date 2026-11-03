@@ -53,5 +53,21 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   const nb = await page.evaluate(async () => { const b = H3.S.takes[1]; b.pieces.forEach((p, j) => { p.state = 'done'; p.file = p.file || {filename:'piece_0' + (j + 1) + '_00001_.mp4', subfolder:'Output_Render/' + b.dir, type:'output'}; }); b.state = 'done';
     await H3.branchFrom(b, 2, 1, null); const c = H3.S.takes[2]; return {d1:H3.ctxDir(c, 1), d2:H3.ctxDir(c, 2), bdir:'Output_Render/' + b.dir}; });
   ok(nb.d1==='Output_Render/H3Deck/h3_a' && nb.d2===nb.bdir, 'a take of a take finds each saved ending where it was made');
+  // Render with 3 takes on a 10 s clip: piece 1 once, 3 versions of piece 2 that all start from it
+  const n0 = sent.length, k0 = await page.evaluate(() => H3.S.takes.length);
+  await page.evaluate(() => { Object.assign(H3.S.f, {prompt:'she walks to the window, then turns around', seconds:10, maxPiece:5, takes:3, seed:''}); H3.drawAll(); });
+  ok(/same|beginning once/.test(await page.textContent('#takesHow')), 'the Takes row says a long clip keeps one beginning (' + await page.textContent('#takesHow') + ')');
+  await page.click('#goBtn'); await page.waitForTimeout(2000);
+  const R3 = await page.evaluate(k0 => H3.S.takes.slice(0, H3.S.takes.length - k0).map(t => ({id:t.id, from:t.from, pids:t.pieces.map(p => p.pid), ctx:t.ctxDirs, dir:t.dir})), k0);
+  console.log(JSON.stringify(R3));
+  const first = R3.find(t => !t.from), br3 = R3.filter(t => t.from);
+  ok(R3.length===3 && first && br3.length===2 && br3.every(b => b.from.id===first.id && b.from.at===1 && b.pids[0]===first.pids[0] && b.pids[1]!==first.pids[1]), '3 takes: one beginning (piece 1 queued once), 3 different piece 2s');
+  ok(sent.length - n0===4, 'ComfyUI got 4 renders: piece 1, then 3 piece 2s (' + (sent.length - n0) + ')');
+  const ld2 = node(sent[sent.length - 1].g, 'MiniMaxH3MotionContextLoadLatent');
+  ok(ld2 && ld2.inputs.latent_path==='Output_Render/' + first.dir && ld2.inputs.clip_index===1, "the extra piece 2s carry on from the shared piece 1's ending");
+  // cancelling one version keeps the shared piece 1 rendering for the others
+  const del = []; await page.route(R + '/queue', rt => { if(rt.request().method()==='POST') del.push(JSON.parse(rt.request().postData()).delete); return rt.fallback(); });
+  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); return H3.cancelTake ? H3.cancelTake(t) : null; }, br3[0].id);
+  ok(del.length && !del.flat().includes(first.pids[0]) && del.flat().includes(br3[0].pids[1]), 'cancelling one version leaves the shared piece 1 in line (' + JSON.stringify(del) + ')');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
