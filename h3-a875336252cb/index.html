@@ -1293,8 +1293,8 @@ function drawInputs(){
     $('#ctlSlots').innerHTML = cm ? `<div class="slot has"><img src="${cm.thumb || ''}" alt=""><span class="tag">${esc((cm.mode==='pose' ? 'skeleton' : cm.mode==='depth' ? 'depth' : 'guide') + (cm.dur ? ' · ' + fmtS(cm.dur) : ''))}</span><button class="x" data-rm="ctlVid">✕</button><div class="nm" style="top:auto;bottom:6px">${esc(cm.name)}</div></div>` : addSlot('ctl', 'Skeleton or depth clip');
     const ml = MOCAP.list.filter(x => x.it.mode!=='mask'), on = cm && cm.src;
     $('#ctlList').innerHTML = `<div class="sub" style="display:flex;align-items:center;gap:8px"><span style="flex:1">From Mocap</span><button class="btn" data-mocap="r" style="padding:4px 10px">↻</button></div>`
-      + (ml.length ? ml.slice(0, 8).map((x, k) => `<button class="mrow ${on===x.it.id ? 'on' : ''}" data-mocap="${k}" ${MOCAP.busy ? 'disabled' : ''}>${x.it.thumb ? `<img src="${x.it.thumb}" alt="">` : '<span class="mi">🦴</span>'}<span class="mt"><b>${esc(x.it.name || x.it.file)}</b><small>${esc([x.it.mode==='pose' ? 'skeleton' : x.it.mode, x.it.dur ? fmtS(x.it.dur) : '', x.it.people > 1 ? x.it.people + ' people' : '', pcName(x.pc), new Date(x.it.t).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})].filter(Boolean).join(' · '))}</small></span></button>`).join('')
-        : `<div class="note">No Mocap clips found on ${esc(MOCAP.looked.join(' or ') || 'the PCs (not reachable)')}. In Mocap: 🎬 Clips for MiniMax › Make the clips, then 🦴 H3 Deck or ⬆ Put them in the input.</div>`)
+      + (ml.length ? ml.slice(0, 8).map((x, k) => `<button class="mrow ${on===x.it.id ? 'on' : ''}" data-mocap="${k}" ${MOCAP.busy ? 'disabled' : ''}>${x.it.thumb ? `<img src="${x.it.thumb}" alt="">` : '<span class="mi">🦴</span>'}<span class="mt"><b>${esc(x.it.name || x.it.file)}</b><small>${esc([x.it.mode==='pose' ? 'skeleton' : x.it.mode, x.it.dur ? fmtS(x.it.dur) : '', x.it.people > 1 ? x.it.people + ' people' : '', pcName(x.pc), x.it.t ? new Date(x.it.t).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : ''].filter(Boolean).join(' · '))}</small></span></button>`).join('')
+        : `<div class="note">No Mocap clips found on ${esc(MOCAP.looked.join(' or ') || 'the PCs (not reachable)')}. In Mocap: 🎬 Clips for MiniMax › Make the clips, then 🦴 H3 Deck or ⬆ Put them in the input, then ↻ here.</div>`)
       + (MOCAP.err ? `<div class="note" style="color:var(--bad,#ff6b6b)">${esc(MOCAP.err)}</div>` : '');
     $('#ctlStr').value = +f.ctlStr; $('#ctlStrOut').textContent = (+f.ctlStr).toFixed(2); $('#ctlEnd').value = +f.ctlEnd; $('#ctlEndOut').textContent = Math.round(+f.ctlEnd * 100) + '%';
     $('#ctlNote').textContent = !cm ? 'Make one in Mocap (🎬 Clips for MiniMax › 🦴 H3 Deck) and it lands here, or pick a video. Skeleton leaves room for anime proportions and clothes; depth holds the body outline tighter.'
@@ -1585,9 +1585,16 @@ const INBOX_FILE = '/userdata/' + 'h3deck_inbox.json';
 async function pullInbox(){ const list = [], looked = [];
   for(const p of S.pcs){ if(!pcOf(p.url).online) continue; looked.push(p.name); let box = null; try{ const r = await fetch(p.url + INBOX_FILE, {cache:'no-store'}); if(r.ok) box = await r.json(); }catch(e){} if(!box || !Array.isArray(box.items)) continue;
     for(const it of box.items) if(it && it.id && it.file && Date.now() - (it.t || 0) < 7 * 864e5) list.push({pc:p.url, it}); }
+  // and every Mocap clip sitting in a PC's input folder, by its name (no note needed): mocap_<name>_<stamp>_<w>x<h>_<tenths>_<clip>.webm
+  for(const p of S.pcs){ if(!pcOf(p.url).online) continue; let files = null;
+    try{ const r = await fetch(p.url + '/internal/files/input', {cache:'no-store'}); if(r.ok) files = await r.json(); }catch(e){}
+    if(!Array.isArray(files)){ try{ const j = await getJ(p.url + '/object_info/LoadVideo', null, 15000); files = combo(j, 'LoadVideo', 'file'); }catch(e){ files = []; } }
+    for(const raw of files){ const fn = String(raw).replace(/ \[input\]$/, ''), m = /^mocap_(.+?)_([0-9a-z]+)_(\d+)x(\d+)_(\d+)_((skeleton|depth)_(everyone|person\d+))\.(webm|mp4)$/.exec(fn); if(!m) continue;
+      if(list.some(x => x.pc===p.url && x.it.file===fn)) continue; const t = parseInt(m[2], 36);
+      list.push({pc:p.url, it:{id:'f:' + fn, t:t > 1.6e12 && t < 4e12 ? t : 0, slot:'list', file:fn, name:m[1].replace(/-/g, ' ') + ' · ' + m[6].replace(/_/g, ' '), w:+m[3], h:+m[4], dur:+m[5] / 10, fps:FPS, mode:m[7]==='skeleton' ? 'pose' : 'depth', thumb:'', people:1}}); } }
   list.sort((a, b) => (b.it.t || 0) - (a.it.t || 0)); MOCAP.list = list; MOCAP.looked = looked;
   // a clip sent with 🦴 H3 Deck that this phone hasn't seen yet goes straight into Motion guide
-  const fresh = list.find(x => x.it.slot==='ctl' && !S.inbox.includes(x.it.id));
+  const fresh = list.find(x => x.it.slot==='ctl' && !S.inbox.includes(x.it.id) && Date.now() - (x.it.t || 0) < 6 * 3600e3);
   list.forEach(x => { if(!S.inbox.includes(x.it.id)) S.inbox.push(x.it.id); }); S.inbox = S.inbox.slice(-80);
   if(fresh) await useMocap(fresh, true); else drawInputs(); }
 async function useMocap(x, auto){ const it = x.it, f = S.f; MOCAP.busy = true; MOCAP.err = ''; drawInputs();

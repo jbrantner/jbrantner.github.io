@@ -37,6 +37,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
     if(p==='/queue') return J({queue_running:[], queue_pending:[]});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p==='/userdata/h3deck_inbox.json') return J(inbox);
+    if(p==='/internal/files/input') return J(['mocap_Run-test_' + (Date.now() - 3e5).toString(36) + '_480x832_32_skeleton_everyone.webm [input]', 'mocap_Run-test_x_480x832_32_colours_everyone.webm [input]', 'holiday.mp4 [input]']);
     if(p.startsWith('/userdata/')) return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     if(p==='/upload/image'){ uploads.push(1); return J({name:'h3deck_x.png', subfolder:'h3deck', type:'input'}); }
     if(p==='/prompt'){ sent.push(JSON.parse(rt.request().postData()).prompt); return J({prompt_id:'p' + sent.length}); }
@@ -60,12 +61,19 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
 
   // ---- From Mocap: every skeleton/depth clip the PC's note lists, newest first, colour masks left out ----
   const rows = await page.$$eval('#ctlList .mrow', b => b.map(x => [x.textContent, x.classList.contains('on')]));
-  ok(rows.length===2 && /Fight/.test(rows[0][0]) && rows[0][1] && /Walk · depth/.test(rows[1][0]) && /depth · 3.2 s/.test(rows[1][0]), 'From Mocap lists the two clips, the one in use marked: ' + JSON.stringify(rows));
+  ok(rows.length===3 && /Fight/.test(rows[0][0]) && rows[0][1] && /Walk · depth/.test(rows[1][0]) && /depth · 3.2 s/.test(rows[1][0]), 'From Mocap lists the two clips, the one in use marked: ' + JSON.stringify(rows));
   await page.click('#ctlList .mrow:nth-of-type(2)'); await page.waitForFunction(() => (H3.S.media[H3.S.f.ctlVid] || {}).mode==='depth', null, {timeout:5000}).catch(() => {});
   const dp = await page.evaluate(() => ({m:H3.S.media[H3.S.f.ctlVid], a:H3.S.f.aspect, s:H3.S.f.seconds}));
   ok(dp.m.mode==='depth' && dp.a==='9:16' && dp.s===3.2 && views.length===2 && views[1][1]==='walk_depth_everyone.webm', 'tapping one fetches it and uses it (shape and length too): ' + JSON.stringify({mode:dp.m.mode, a:dp.a, s:dp.s}));
   await page.click('#ctlList .mrow:nth-of-type(1)'); await page.waitForTimeout(400);
   ok(views.length===2 && (await page.evaluate(() => H3.S.media[H3.S.f.ctlVid].mode))==='pose', 'going back to the skeleton reuses the copy on the phone');
+
+  // ---- clips found in the input folder by name (no note) ----
+  const all = await page.$$eval('#ctlList .mrow', b => b.map(x => x.textContent));
+  ok(all.length===3 && /Run test · skeleton everyone/.test(all[2]) && /skeleton · 3.2 s/.test(all[2]) && !all.some(t => /colours|holiday/.test(t)), 'the input folder\'s Mocap clips are listed too, masks and other videos left out: ' + JSON.stringify(all));
+  await page.click('#ctlList .mrow:nth-of-type(3)'); await page.waitForFunction(() => /Run test/.test((H3.S.media[H3.S.f.ctlVid] || {}).name || ''), null, {timeout:5000}).catch(() => {});
+  const nv = views.length; const fv = views[views.length - 1]; ok(fv[0]==='' && /^mocap_Run-test_.*_skeleton_everyone\.webm$/.test(fv[1]) && (await page.evaluate(() => H3.S.f.seconds))===3.2, 'tapping it fetches it from the input folder and uses its length: ' + JSON.stringify(fv));
+  await page.click('#ctlList .mrow:nth-of-type(1)'); await page.waitForTimeout(400);
 
   // ---- a 5 s take: one piece ----
   await page.fill('#prompt', 'Two people fight on a bridge. The woman in red is on the left, the tall man in black on the right.');
@@ -108,7 +116,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   // ---- reopening keeps the clip on the phone ----
   await page.reload(); await page.waitForFunction(() => /DaSiWa/.test(document.querySelector('#model').textContent), null, {timeout:20000}); await page.waitForTimeout(500);
   const kept = await page.evaluate(async () => { const id = H3.S.f.ctlVid, req = indexedDB.open('h3deck', 1); const db = await new Promise(r => { req.onsuccess = () => r(req.result); }); return new Promise(r => { const q = db.transaction('media').objectStore('media').get(id); q.onsuccess = () => r(q.result ? q.result.size : 0); }); });
-  ok(kept > 0 && views.length===2, 'after reopening the clip is still on the phone and the note is not fetched again');
+  ok(kept > 0 && views.length===3, 'after reopening the clip is still on the phone and the note is not fetched again');
 
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);

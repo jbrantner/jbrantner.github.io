@@ -44,6 +44,8 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
 - 🦴 Skeleton clip + H3 Deck (Jordan 2026-11-03): the clips now start with an OpenPose skeleton of everyone (18 points built from SAM's bones,
   the same map as rig/scene.html's guide; face points hidden when someone faces away). 🦴 H3 Deck on a skeleton or depth clip uploads it to
   the PC's ComfyUI input/mocap and leaves /userdata/h3deck_inbox.json for H3 Deck, which puts it in its Motion guide (MiniMax Fun ControlNet).
+  Clips go to the top of the input folder as mocap_<name>_<stamp>_<w>x<h>_<tenths>_<clip>.webm so H3 Deck can find them by name. The depth
+  clip's range is set per frame (smoothed over 1/4 s): nearest point white, fading to black a body-depth (at least 1 m) behind.
 - 🎬 Clips for MiniMax (Jordan 2026-11-01, a hug between two characters): from the current camera view, 24 fps, long side 832 (multiples
   of 32, the video's shape): a depth clip (linear between the people's nearest and farthest over the clip, near = white, black
   background) and a flat colour clip (person 1 red, 2 blue, 3 green, 4 yellow; props grey), for everyone and, with 2+ people, for

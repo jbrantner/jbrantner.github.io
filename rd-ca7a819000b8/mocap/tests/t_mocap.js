@@ -264,14 +264,15 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   const ex = await page.evaluate(async () => { const out = {}; for(const c of window.MOCAP.EXP.clips){ const v = document.createElement('video'); v.muted = true; v.src = c.url; await new Promise(r => { v.onloadeddata = r; v.onerror = r; });
       const cv = document.createElement('canvas'); cv.width = v.videoWidth; cv.height = v.videoHeight; const x = cv.getContext('2d'); x.drawImage(v, 0, 0); const d = x.getImageData(0, 0, cv.width, cv.height).data; let red = 0, bright = 0, n = d.length / 4;
       for(let i = 0; i < d.length; i += 4){ if(d[i] > 180 && d[i + 1] < 90 && d[i + 2] < 90) red++; if(d[i] > 60 && Math.abs(d[i] - d[i + 1]) < 20 && Math.abs(d[i] - d[i + 2]) < 20) bright++; }
-      out[c.name] = {w:cv.width, h:cv.height, size:c.blob.size, red:c.stats.red, grey:c.stats.grey, lit:c.stats.lit, frames:c.frames}; } return {out, msg:window.MOCAP.EXP.msg}; });
+      out[c.name] = {w:cv.width, h:cv.height, size:c.blob.size, red:c.stats.red, grey:c.stats.grey, lit:c.stats.lit, mean:c.stats.mean, frames:c.frames}; } return {out, msg:window.MOCAP.EXP.msg}; });
   const dn = Object.keys(ex.out).find(n => /^depth_everyone/.test(n)), cn = Object.keys(ex.out).find(n => /^colours_everyone/.test(n));
   ok(dn && cn && ex.out[dn].size > 0 && ex.out[cn].h===832 && ex.out[cn].w===480, 'two clips (one person): depth and colours, 480x832 like the portrait video: ' + JSON.stringify(ex.out));
   ok(ex.out[cn].red > 0.005 && ex.out[dn].grey > 0.005 && ex.out[dn].red < 0.001, 'the colour clip has her in flat red, the depth clip has her in grey shades: ' + ex.msg);
+  ok(ex.out[dn].mean > 150, 'the depth clip shows her bright with shape (range per frame), not a dark silhouette: mean ' + Math.round(ex.out[dn].mean));
   const sn = Object.keys(ex.out).find(n => /^skeleton_everyone/.test(n));
   if(process.env.SHOTS) fs.writeFileSync(path.join(process.env.SHOTS, 'skeleton.jpg'), Buffer.from((await page.evaluate(() => window.MOCAP.EXP.clips[0].thumb)).split(',')[1], 'base64'));
   ok(sn && ex.out[sn].lit > 0.001 && ex.out[sn].lit < 0.2 && ex.out[sn].grey < 0.01 && ex.out[sn].h===832, 'the skeleton clip has coloured OpenPose limbs on black: ' + JSON.stringify(ex.out[sn]));
-  const up0 = UPLOADS.length; await page.click('#exsend'); await page.waitForFunction(() => /ComfyUI input, mocap folder/.test(window.MOCAP.EXP.msg), null, {timeout:10000});
+  const up0 = UPLOADS.length; await page.click('#exsend'); await page.waitForFunction(() => /ComfyUI input: /.test(window.MOCAP.EXP.msg), null, {timeout:10000});
   ok(UPLOADS.length===up0 + 3 && UPLOADS.slice(-3).every(n => /_(skeleton|depth|colours)_everyone\.(webm|mp4)$/.test(n)), 'they go up to Render\'s ComfyUI input: ' + UPLOADS.slice(-3).join(', '));
   ok(await page.$$eval('[data-h3]', b => b.length)===2, '🦴 H3 Deck on the skeleton and depth clips, not the colour mask');
   await page.click('[data-h3="0"]'); await page.waitForFunction(() => /waiting for H3 Deck/.test(window.MOCAP.EXP.msg), null, {timeout:10000});
