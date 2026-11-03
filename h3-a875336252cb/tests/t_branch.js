@@ -90,5 +90,16 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   await page.evaluate(() => H3.pushTakes()); await page.waitForTimeout(300);
   const ud = UD[UD.length - 1]; let uj = {}; try{ uj = JSON.parse(ud.body); }catch(e){}
   ok(ud && ud.p==='/userdata/h3deck_takes.json' && Array.isArray(uj.takes) && uj.takes.length > 3 && uj.t, 'H3 Deck keeps a copy of its takes on the PC for H3 Film (' + (ud && ud.p) + ')');
+  // tabs: ✂ Cutting Room and 🎞 Films are the film app inside H3 Deck; ✏️ there comes back to the Render tab on that take
+  await page.click('[data-tab="room"]'); await page.waitForTimeout(2500);
+  const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
+  const inRoom = fr && await fr.evaluate(() => ({v:FILM.S.nav.v, n:FILM.reviewList().length, hd:document.querySelector('header').hidden}));
+  ok(inRoom && inRoom.v==='review' && inRoom.n > 0 && inRoom.hd && await page.$eval('#renderTab', e => e.hidden) && await page.$eval('#roomN', e => e.textContent)===String(inRoom.n), '✂ Cutting Room tab shows the film app\'s review of these takes, with a count on the tab (' + JSON.stringify(inRoom) + ')');
+  await page.screenshot({path:path.join(__dirname, 'tabs_room.png')});
+  await page.click('[data-tab="films"]'); await page.waitForTimeout(400);
+  ok(await fr.evaluate(() => FILM.S.nav.v)==='home', '🎞 Films tab shows the films');
+  const tid = await fr.evaluate(() => FILM.reviewList()[0].id); await page.click('[data-tab="room"]'); await page.waitForTimeout(300);
+  await fr.click('.rv[data-take="' + tid + '"] [data-act="deck"]'); await page.waitForTimeout(800);
+  ok(!(await page.$eval('#renderTab', e => e.hidden)) && (await page.$$eval('.take.hl', e => e.map(x => x.dataset.take))).includes(tid), '✏️ in the Cutting Room switches to Render on that take');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
