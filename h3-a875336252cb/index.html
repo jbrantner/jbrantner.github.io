@@ -785,7 +785,7 @@ function pieceGraph(t, i, oi, names){
   t.follow.forEach(r => { const a = add('TrimAudioDuration', {audio:[add('LoadAudio', {audio:names[r.id]}), 0], start_index:pc.start, duration:pc.deliv / FPS});
     cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:LEAD(pc)}), 0]; });
   let trim = null;
-  if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir(t), clip_index:i});
+  if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:ctxDir(t, i), clip_index:i});
     const mc = add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_latent:[ld, 0]}); cond = [mc, 0]; trim = [mc, 1]; }
   const guider = add('BasicGuider', {model, conditioning:cond});
   const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:1});
@@ -798,7 +798,7 @@ function pieceGraph(t, i, oi, names){
   const vid = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[vid, 0], filename_prefix:t.dir + '/piece_' + String(i + 1).padStart(2, '0'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   // the last piece joins them all as its final step (Jordan 2026-11-01: no waiting in the queue for the stitch); needs the Render Deck helper's join node
-  const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
+  const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join && !borrowed(t) ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
   return {g, save:sv, join};
 }
 function joinGraph(t){
@@ -1028,7 +1028,28 @@ async function cancelTake(t){
   const run = t.pieces.find(p => p.state==='running'); if(run){ try{ await fetch(t.pc + '/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt_id:run.pid})}); }catch(e){} }
   t.pieces.forEach(p => { if(p.state==='queued' || p.state==='running'){ p.state = 'failed'; p.err = 'Cancelled'; } }); t.state = 'failed'; save(); drawTakes();
 }
+// 🎲 takes from a piece (Jordan 2026-11-03: "if we like video 1/3 but want versions of 2/3"): new takes keep pieces 1..i of this
+// one (their files stay where they are) and make piece i+1 onwards again, each carrying on from the saved ending of piece i. The
+// saved endings (H3 Motion Context latents) of borrowed pieces live in the take they came from: ctxDirs[j] = that folder.
+const ctxDir = (t, i) => (t.ctxDirs && t.ctxDirs[i]) || outDir(t);
+const borrowed = t => !!(t.ctxDirs && t.ctxDirs.some(Boolean)); // the helper's join only looks in the take's own folder
+async function branchFrom(t, i, n, prompt){
+  if(!pcOf(t.pc).online){ toast(pcName(t.pc) + " can't be reached: piece " + i + "'s ending is saved there, so it has to be that PC"); return; }
+  let at = S.takes.indexOf(t) + 1, sent = 0;
+  for(let k = 0; k < n; k++){
+    const b = JSON.parse(JSON.stringify(t)); b.id = uid('t'); b.t = Date.now(); b.seed = Math.floor(Math.random() * 2 ** 31);
+    b.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + b.id.slice(-4); b.dir = 'H3Deck/' + b.name;
+    b.from = {id:t.id, at:i}; b.ctxDirs = []; for(let j = 1; j <= i; j++) b.ctxDirs[j] = ctxDir(t, j);
+    b.pieces.forEach((p, j) => { if(j >= i){ Object.assign(p, {state:'new', file:null, pid:null, err:''}); } });
+    if(prompt != null) b.pieces[i].prompt = prompt;
+    Object.assign(b, {final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false});
+    S.takes.splice(at++, 0, b); drawTakes();
+    try{ await sendPieces(b, i); sent++; }catch(e){ b.state = 'failed'; b.pieces[i].state = 'failed'; b.pieces[i].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
+  }
+  save(); drawTakes(); if(sent) toast(sent + (sent > 1 ? ' takes' : ' take') + ' of piece ' + (i + 1) + ' sent to ' + pcName(t.pc));
+}
 async function redoFrom(t, i, newSeed){
+  if(t.ctxDirs) t.ctxDirs.length = Math.min(t.ctxDirs.length, i + 1); // pieces from i on are made here now, so their endings are too
   if(!pcOf(t.pc).online){ toast(pcName(t.pc) + " can't be reached: the pieces are saved there, so it has to be that PC"); return; }
   if(newSeed) t.seed = Math.floor(Math.random() * 2 ** 31);
   t.pieces.slice(i).forEach(p => { p.state = 'new'; p.file = null; p.err = ''; }); t.state = 'working'; t.final = null; t.joinPid = null; t.joinErr = ''; t.upStage = null; t.upPid = null; t.upErr = ''; t.smoothed = null;
@@ -1113,6 +1134,17 @@ function pieceSheet(t, i){
     <div class="note">Every piece after it is made again too, since each one carries on from the one before. They stay on ${esc(pcName(t.pc))}.</div>`}`);
   const go = seed => { p.prompt = $('#pcPrompt').value; closeSheet(); redoFrom(t, i, seed); };
   if(!busy){ $('#pcRedo').onclick = () => go(true); $('#pcRedoSame').onclick = () => go(false); }
+  // 🎲 more takes of this piece, keeping the ones before it
+  if(i > 0 && t.pieces.slice(0, i).every(x => x.state==='done' && x.file)){
+    let n = +S.f.takes > 1 ? +S.f.takes : 3;
+    $('#sheetCard').insertAdjacentHTML('beforeend', `<div class="sub" style="margin-top:6px">🎲 Takes from here</div>
+      <div class="note">New takes keep piece${i > 1 ? 's 1–' + i : ' 1'} as it is and make piece ${i + 1}${i + 1 < t.pieces.length ? ' onwards' : ''} again (with the prompt above), each carrying on from the end of piece ${i}. This take stays as it is; the new ones go under it, on ${esc(pcName(t.pc))}.</div>
+      <div class="row" style="justify-content:space-between"><label>How many</label><div class="step"><button id="brMinus">−</button><b id="brN">${n}</b><button id="brPlus">+</button></div></div>
+      <button class="btn pri" id="brGo">🎲 Make ${n} takes of piece ${i + 1}</button>`);
+    const upd = () => { $('#brN').textContent = n; $('#brGo').textContent = '🎲 Make ' + n + ' take' + (n > 1 ? 's' : '') + ' of piece ' + (i + 1); };
+    $('#brMinus').onclick = () => { n = Math.max(1, n - 1); upd(); }; $('#brPlus').onclick = () => { n = Math.min(8, n + 1); upd(); };
+    $('#brGo').onclick = () => { const pr = $('#pcPrompt').value; closeSheet(); branchFrom(t, i, n, pr); };
+  }
 }
 const viewUrl = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
 async function saveVideo(t){
@@ -1300,7 +1332,7 @@ function drawTakes(){
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(',')].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
-      <div class="pr">${esc(t.prompt)}</div>${chips}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr">${esc(t.prompt)}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
   });
@@ -1436,6 +1468,6 @@ drawAll();
 pingAll().then(() => { drawAll(); tick(); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
-window.H3 = {S, drawAll, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, drawAll, branchFrom, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
