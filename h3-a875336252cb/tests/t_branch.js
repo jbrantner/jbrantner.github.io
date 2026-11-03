@@ -95,6 +95,9 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   const pl = await page.evaluate(async () => { const n0 = H3.S.takes.length, got = await H3.pullTakes(); return {n0, got, n:H3.S.takes.length, a:H3.S.takes.find(t => t.id==='tA').prompt, old:!!document.querySelector('.take[data-take="tOld"] video[muted]') || !!document.querySelector('.take[data-take="tOld"] video')}; });
   ok(pl.got===1 && pl.n===pl.n0 + 1 && pl.a!=='CHANGED' && pl.old, 'a fresh copy of the app brings back the takes it is missing from the PC (' + JSON.stringify(pl) + ')');
   ok(await page.$eval('.take[data-take="tOld"] video', v => v.muted), 'clips play without sound unless you tap 🔇');
+  await page.evaluate(() => { H3.S.f.takes = 1; H3.drawAll(); }); await page.click('#goUp'); await page.click('#goUp');
+  ok(await page.evaluate(() => H3.S.f.takes)===3 && await page.textContent('#goN')==='3' && /3 takes/.test(await page.textContent('#goBtn')), 'the takes count is set with −/+ right by the Render button');
+  await page.screenshot({path:path.join(__dirname, 'gobar.png')}); await page.click('#goDn'); await page.click('#goDn');
   // tabs: ✂ Cutting Room and 🎞 Films are the film app inside H3 Deck; ✏️ there comes back to the Render tab on that take
   await page.click('[data-tab="room"]'); await page.waitForTimeout(2500);
   const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
