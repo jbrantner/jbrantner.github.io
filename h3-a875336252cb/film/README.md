@@ -15,3 +15,11 @@
 - The earlier app (cast, scenes, cuts, Cutting Room) is at `old.html`, with its README in `README-old.md` and its data in `h3film`.
 
 Tests: `tests/t_film.js` (this app), `tests/t_film_old.js` (old.html), `tests/t_branch.js` (H3 Deck 🎲).
+
+## ⬇ Export
+
+The film screen's ⬇ Export button sends the edit list (each clip's file, trim, start and track) to Render's
+helper (`POST /renderdeck/h3export`, progress at `GET /renderdeck/h3export?id=`), or to Main when Render is off.
+The helper writes one mp4 into `<PC>/H3Film/` a frame at a time with PyAV (the upper track wins where clips
+overlap; gaps are black and silent; sound is resampled to 48 kHz stereo), so a long film doesn't fill memory.
+Needs the helper from 2026-11-03 or later.

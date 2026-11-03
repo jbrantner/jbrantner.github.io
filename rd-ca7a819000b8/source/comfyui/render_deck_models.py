@@ -2444,6 +2444,205 @@ class RenderDeckH3Join:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# 🎬 H3 Film export (Jordan 2026-11-03, "a video editor for placing clips together"): the timeline becomes one mp4.
+# Not a ComfyUI graph: that would hold every frame of the film in memory as float pictures, too much for Render's
+# 16 GB. Here one frame (and a few seconds of sound) is held at a time, read from the clips and written straight out.
+EXPORTS = {}
+
+
+def _ex_find(f):
+    """The clip's file. Its subfolder starts with the PC that rendered it; both PCs share the Dropbox output folder,
+    and a PC may keep its own output folder, so the same path is also tried under each subfolder of this one."""
+    root = os.path.realpath(folder_paths.get_output_directory())
+    sub = str(f.get('subfolder') or '').replace('\\', '/').strip('/')
+    name = os.path.basename(str(f.get('filename') or ''))
+    tail = sub.split('/', 1)[1] if '/' in sub else ''
+    subs = [x for x in sorted(os.listdir(root)) if os.path.isdir(os.path.join(root, x))]
+    for cand in [sub] + [x + '/' + sub for x in subs] + ([tail] + [x + '/' + tail for x in subs] if tail else []):
+        p = os.path.realpath(os.path.join(root, cand, name))
+        if p.startswith(root + os.sep) and os.path.isfile(p) and p.lower().endswith(('.mp4', '.webm', '.mov', '.mkv')):
+            return p
+    raise FileNotFoundError('%s is not in the output folder (yet: Dropbox may still be copying it)' % name)
+
+
+def _ex_plan(clips):
+    """[(start, end, clip or None)] over the whole film: where clips overlap the upper track (lower number) wins,
+    and stretches with no clip are black and silent."""
+    cs = []
+    for c in clips:
+        a, i, o = float(c['at']), float(c['in']), float(c['out'])
+        if o - i > 0.01:
+            cs.append(dict(c, at=max(0.0, a), in_=i, end=max(0.0, a) + o - i, track=int(c.get('track') or 0)))
+    cs.sort(key=lambda c: c['track'])
+    cuts = sorted({0.0} | {c['at'] for c in cs} | {c['end'] for c in cs})
+    segs = []
+    for a, b in zip(cuts, cuts[1:]):
+        if b - a < 1e-4:
+            continue
+        m = (a + b) / 2
+        c = next((c for c in cs if c['at'] <= m < c['end']), None)
+        if segs and segs[-1][2] is c:
+            segs[-1][1] = b
+        else:
+            segs.append([a, b, c])
+    return segs
+
+
+def _ex_video(path, t0, n, w, h, fps):
+    """n frames from t0 seconds into the clip, sized to the film. Runs out early = the last frame is held."""
+    import av
+    last = None
+    with av.open(path) as src:
+        vs = src.streams.video[0]
+        if t0 > 0.5:
+            src.seek(int(max(0.0, t0 - 1) / vs.time_base), stream=vs)
+        got = 0
+        for fr in src.decode(vs):
+            if fr.time is not None and fr.time < t0 - 0.5 / fps:
+                continue
+            last = fr.reformat(width=w, height=h, format='yuv420p')
+            yield last
+            got += 1
+            if got >= n:
+                return
+    for _ in range(n - got):
+        yield last
+
+
+def _ex_audio(path, t0, ns, rate):
+    """ns samples of stereo sound from t0 seconds in, as a float32 (2, ns) array; silence where the clip has none."""
+    import av, numpy as np
+    out, have = [], 0
+    try:
+        with av.open(path) as src:
+            if not src.streams.audio:
+                return np.zeros((2, ns), np.float32)
+            st = src.streams.audio[0]
+            if t0 > 0.5:
+                src.seek(int(max(0.0, t0 - 1) / st.time_base), stream=st)
+            rs = av.AudioResampler(format='fltp', layout='stereo', rate=rate)
+            skip = None
+            for fr in src.decode(st):
+                if skip is None:  # samples before t0 in the first decoded frame (seeking lands on a packet before it)
+                    skip = max(0, int(round((t0 - (fr.time or 0.0)) * rate)))
+                for r in rs.resample(fr):
+                    a = r.to_ndarray().astype(np.float32).reshape(2, -1)
+                    if skip:
+                        k = min(skip, a.shape[1])
+                        a, skip = a[:, k:], skip - k
+                    out.append(a)
+                    have += a.shape[1]
+                if have >= ns:
+                    break
+    except Exception as e:
+        print('[Render Deck] H3 export sound:', e)
+    a = np.concatenate(out, axis=1)[:, :ns] if out else np.zeros((2, 0), np.float32)
+    return np.pad(a, ((0, 0), (0, ns - a.shape[1]))) if a.shape[1] < ns else a
+
+
+def _ex_run(job, clips):
+    import av, numpy as np
+    from fractions import Fraction
+    try:
+        segs = _ex_plan(clips)
+        if not any(s[2] for s in segs):
+            raise ValueError('The timeline has no clips')
+        for s in segs:
+            if s[2]:
+                s[2]['path'] = _ex_find(s[2])
+        with av.open(next(s[2]['path'] for s in segs if s[2])) as first:
+            v0 = first.streams.video[0]
+            fps = Fraction(v0.average_rate or 24).limit_denominator(1001)
+            w, h = v0.codec_context.width // 2 * 2, v0.codec_context.height // 2 * 2
+        rate, T = 48000, segs[-1][1]
+        job['total'] = int(round(T * fps))
+        out, filename, counter, subfolder, _ = folder_paths.get_save_image_path('H3Film/' + job['name'], folder_paths.get_output_directory())
+        os.makedirs(out, exist_ok=True)
+        name = '%s_%05d_.mp4' % (filename, counter)
+        full = os.path.join(out, name)
+        with av.open(full + '.part', 'w', format='mp4') as dst:
+            codec = next(c for c in ('libx264', 'h264', 'libopenh264', 'mpeg4') if c in av.codecs_available)
+            vo = dst.add_stream(codec, rate=fps)
+            vo.width, vo.height, vo.pix_fmt = w, h, 'yuv420p'
+            if codec == 'libx264':
+                vo.options = {'crf': '17', 'preset': 'medium'}
+            ao = dst.add_stream('aac', rate=rate)
+            ao.layout = 'stereo'
+            black = av.VideoFrame.from_ndarray(np.zeros((h, w, 3), np.uint8), format='rgb24').reformat(format='yuv420p')
+            vi, si = 0, 0
+            for a, b, c in segs:
+                if job.get('cancel'):
+                    raise RuntimeError('Stopped')
+                n = int(round(b * fps)) - vi
+                frames = _ex_video(c['path'], c['in_'] + a - c['at'], n, w, h, float(fps)) if c else (black for _ in range(n))
+                for fr in frames:
+                    fr = fr or black
+                    fr.pts, fr.time_base = vi, Fraction(1) / fps
+                    for p in vo.encode(fr):
+                        dst.mux(p)
+                    vi += 1
+                    job['done'] = vi
+                    if job.get('cancel'):
+                        raise RuntimeError('Stopped')
+                ns = int(round(b * rate)) - si
+                snd = _ex_audio(c['path'], c['in_'] + a - c['at'], ns, rate) if c else np.zeros((2, ns), np.float32)
+                for k in range(0, ns, 4096):
+                    af = av.AudioFrame.from_ndarray(np.ascontiguousarray(snd[:, k:k + 4096]), format='fltp', layout='stereo')
+                    af.sample_rate, af.pts, af.time_base = rate, si + k, Fraction(1, rate)
+                    for p in ao.encode(af):
+                        dst.mux(p)
+                si += ns
+            for st in (vo, ao):
+                for p in st.encode(None):
+                    dst.mux(p)
+        os.replace(full + '.part', full)
+        job.update(state='done', file={'filename': name, 'subfolder': subfolder, 'type': 'output'}, t_done=time.time())
+    except Exception as e:
+        print('[Render Deck] H3 export:', e)
+        job.update(state='failed', error=str(e), t_done=time.time())
+        try:
+            if 'full' in locals() and os.path.exists(full + '.part'):
+                os.remove(full + '.part')
+        except Exception:
+            pass
+
+
+@routes.post('/renderdeck/h3export')
+async def h3export(request):
+    """{name, clips:[{filename, subfolder, in, out, at, track}]} (seconds; track 0 is the top one) -> {id}"""
+    try:
+        import threading
+        body = await request.json()
+        clips = [{'filename': str(c['filename']), 'subfolder': str(c.get('subfolder') or ''), 'in': float(c['in']), 'out': float(c['out']),
+                  'at': float(c['at']), 'track': int(c.get('track') or 0)} for c in body.get('clips', [])][:500]
+        if not clips:
+            raise ValueError('The timeline has no clips')
+        name = re.sub(r'[^\w\- ]+', '_', str(body.get('name') or 'film')).strip()[:60] or 'film'
+        for k in [k for k, j in EXPORTS.items() if j.get('t_done') and time.time() - j['t_done'] > 86400]:
+            EXPORTS.pop(k, None)
+        jid = uuid.uuid4().hex[:12]
+        EXPORTS[jid] = job = {'id': jid, 'name': name, 'state': 'working', 'done': 0, 'total': 0, 't_added': time.time()}
+        threading.Thread(target=_ex_run, args=(job, clips), daemon=True).start()
+        return web.json_response(job)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.get('/renderdeck/h3export')
+async def h3export_get(request):
+    j = EXPORTS.get(request.query.get('id') or '')
+    return web.json_response(j if j else {'error': 'No such export (ComfyUI restarted?)'}, status=200 if j else 404)
+
+
+@routes.post('/renderdeck/h3export/cancel')
+async def h3export_cancel(request):
+    j = EXPORTS.get((await request.json()).get('id') or '')
+    if j:
+        j['cancel'] = True
+    return web.json_response({'ok': bool(j)})
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # 👁 Touch up (Jordan 2026-11-01, "swap character eyes with an image"; realism first): on every frame of a clip, put her
 # picture into a masked part (the irises) or recolour it (lipstick), keeping the photo's own light, texture and shine.
 # The masks come from core nodes (MediaPipe face mesh for real faces, SAM 3 for anything named or tapped).

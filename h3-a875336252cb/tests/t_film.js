@@ -9,10 +9,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8014);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const HIST = {}, Q = {running:[], pending:[]};
+  const EXP = {}, HIST = {}, Q = {running:[], pending:[]};
   await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/queue') return J({queue_running:Q.running.map(x => [0, x]), queue_pending:Q.pending.map(x => [0, x])});
     if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
+    if(p==='/renderdeck/h3export' && rt.request().method()==='POST'){ EXP.body = JSON.parse(rt.request().postData()); EXP.n = 0; return J({id:'x1', state:'working', done:0, total:0}); }
+    if(p==='/renderdeck/h3export'){ EXP.n++; return J(EXP.n < 2 ? {id:'x1', state:'working', done:50, total:200} : {id:'x1', state:'done', done:200, total:200, file:{filename:'Film 1_00001_.mp4', subfolder:'Render/H3Film', type:'output'}}); }
     if(p==='/view') return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   const F = (n, sub) => ({filename:n, subfolder:sub || 'Output_Render/H3Deck/x', type:'output'});
@@ -63,6 +65,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await page.$$eval('[data-pick]', p => p.length)===2, '⇄ Versions lists the take and its 🎲 take');
   await page.click('[data-pick="tB2"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => FILM.clipOf(FILM.S.films[0], FILM.SEL).c.take)==='tB2', 'picking a version swaps the clip');
+  // ⬇ Export sends the edit list (files, trims, track numbers) to the PC and shows its progress, then a link
+  await page.click('[data-act="export"]'); await page.waitForTimeout(400);
+  const eb = EXP.body || {clips:[]};
+  ok(eb.clips.length===3 && eb.clips.every(c => c.filename && c.out > c.in) && eb.clips.filter(c => c.track===1).length===2 && /%/.test(await page.textContent('#exp')), '⬇ Export sends 3 clips with tracks and shows progress (' + JSON.stringify(eb.clips.map(c => [c.filename, c.track, +c.at.toFixed(2)])) + ')');
+  await page.waitForTimeout(3500);
+  ok(/Open the mp4/.test(await page.textContent('#exp')) && await page.evaluate(() => FILM.S.films[0].exp.state)==='done', 'when the PC finishes, the film shows a link to the mp4');
   await page.screenshot({path:path.join(__dirname, 'film_timeline.png'), fullPage:true});
   // ✏️ Edit in H3 Deck opens that take there
   await page.click('[data-act="editDeck"]'); await page.waitForURL(/#take=tB2/); await page.waitForTimeout(800);
