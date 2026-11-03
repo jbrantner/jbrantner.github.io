@@ -98,17 +98,14 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   await page.evaluate(() => { H3.S.f.takes = 1; H3.drawAll(); }); await page.click('#goUp'); await page.click('#goUp');
   ok(await page.evaluate(() => H3.S.f.takes)===3 && await page.textContent('#goN')==='3' && /3 takes/.test(await page.textContent('#goBtn')), 'the takes count is set with −/+ right by the Render button');
   await page.screenshot({path:path.join(__dirname, 'gobar.png')}); await page.click('#goDn'); await page.click('#goDn');
-  // tabs: ✂ Cutting Room and 🎞 Films are the film app inside H3 Deck; ✏️ there comes back to the Render tab on that take
-  await page.click('[data-tab="room"]'); await page.waitForTimeout(2500);
+  // tabs: 🎞 Films is the film app inside H3 Deck (✂ Cutting Room taken out 2026-11-03); ✏️ there comes back to Render on that take
+  ok(!(await page.$('[data-tab="room"]')), 'no ✂ Cutting Room tab');
+  await page.click('[data-tab="films"]'); await page.waitForTimeout(2500);
   const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
-  const inRoom = fr && await fr.evaluate(() => ({v:FILM.S.nav.v, n:FILM.reviewList().length, hd:document.querySelector('header').hidden}));
-  ok(inRoom && inRoom.v==='review' && inRoom.n > 0 && inRoom.hd && await page.$eval('#renderTab', e => e.hidden) && await page.$eval('#roomN', e => e.textContent)===String(inRoom.n), '✂ Cutting Room tab shows the film app\'s review of these takes, with a count on the tab (' + JSON.stringify(inRoom) + ')');
-  await page.screenshot({path:path.join(__dirname, 'tabs_room.png')});
-  await page.click('[data-tab="films"]'); await page.waitForTimeout(400);
-  ok(await fr.evaluate(() => FILM.S.nav.v)==='home', '🎞 Films tab shows the films');
-  const tid = await fr.evaluate(() => FILM.reviewList()[0].id); await page.click('[data-tab="room"]'); await page.waitForTimeout(300);
-  await fr.click('.rv[data-take="' + tid + '"] [data-act="deck"]'); await page.waitForTimeout(800);
-  ok(!(await page.$eval('#renderTab', e => e.hidden)) && (await page.$$eval('.take.hl', e => e.map(x => x.dataset.take))).includes(tid), '✏️ in the Cutting Room switches to Render on that take');
+  ok(fr && await fr.evaluate(() => FILM.S.nav.v==='home' && document.querySelector('header').hidden) && await page.$eval('#renderTab', e => e.hidden), '🎞 Films tab shows the films inside H3 Deck');
+  const tid = await page.evaluate(() => H3.S.takes.find(t => t.state==='done').id);
+  await fr.evaluate(id => { const t = FILM.takeOf(id); window.parent.H3Tab('render', id); }, tid); await page.waitForTimeout(800);
+  ok(!(await page.$eval('#renderTab', e => e.hidden)) && (await page.$$eval('.take.hl', e => e.map(x => x.dataset.take))).includes(tid), '✏️ from Films switches to Render on that take');
   // ➕ options of what comes next: N new takes = the whole finished clip + a new part each, carrying on from its end
   const n1 = sent.length;
   await page.evaluate(() => { H3.extendSheet(H3.S.takes.find(t => t.id==='tA'), 3); }); await page.waitForTimeout(200);
