@@ -9,12 +9,13 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8014);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const EXP = {}, HIST = {}, Q = {running:[], pending:[]};
+  const REMOTE = {}, EXP = {}, HIST = {}, Q = {running:[], pending:[]};
   await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/queue') return J({queue_running:Q.running.map(x => [0, x]), queue_pending:Q.pending.map(x => [0, x])});
     if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
     if(p==='/renderdeck/h3export' && rt.request().method()==='POST'){ EXP.body = JSON.parse(rt.request().postData()); EXP.n = 0; return J({id:'x1', state:'working', done:0, total:0}); }
     if(p==='/renderdeck/h3export'){ EXP.n++; return J(EXP.n < 2 ? {id:'x1', state:'working', done:50, total:200} : {id:'x1', state:'done', done:200, total:200, file:{filename:'Film 1_00001_.mp4', subfolder:'Render/H3Film', type:'output'}}); }
+    if(p==='/userdata/h3deck_takes.json') return REMOTE.j ? J(REMOTE.j) : rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     if(p==='/view') return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   const F = (n, sub) => ({filename:n, subfolder:sub || 'Output_Render/H3Deck/x', type:'output'});
@@ -72,6 +73,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.waitForTimeout(3500);
   ok(/Open the mp4/.test(await page.textContent('#exp')) && await page.evaluate(() => FILM.S.films[0].exp.state)==='done', 'when the PC finishes, the film shows a link to the mp4');
   await page.screenshot({path:path.join(__dirname, 'film_timeline.png'), fullPage:true});
+  // takes come from the PC's copy when this app can't see H3 Deck's storage (iPhone home-screen apps don't share it)
+  REMOTE.j = {v:1, t:Date.now() + 60000, takes:[{id:'tR', pc:R, w:640, h:352, prompt:'from the PC copy', state:'done', pieces:[{deliv:120, file:{filename:'r.mp4', subfolder:'Render/H3Deck/r'}}]}]};
+  const rr = await page.evaluate(async () => { await FILM.pullDeck(); return {has:!!FILM.takeOf('tR'), n:FILM.takes().length, rev:FILM.reviewList().map(t => t.id)}; });
+  ok(rr.has && rr.rev.includes('tR'), "the newest takes list is read from the PC's copy (" + JSON.stringify(rr) + ')');
+  REMOTE.j = null; await page.evaluate(() => { localStorage.setItem('h3deck', JSON.stringify(Object.assign(JSON.parse(localStorage.getItem('h3deck')), {tsav:Date.now() + 120000}))); });
+  ok(await page.evaluate(() => !FILM.takeOf('tR') && !!FILM.takeOf('tB2')), "a newer copy on this phone wins over the PC's");
   // ✏️ Edit in H3 Deck opens that take there
   await page.click('[data-act="editDeck"]'); await page.waitForURL(/#take=tB2/); await page.waitForTimeout(800);
   ok(/#take=tB2$/.test(page.url()) && await page.$$eval('.take.hl', e => e.length)===1, '✏️ Edit in H3 Deck opens H3 Deck on that take');

@@ -19,12 +19,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8013);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [];
+  const sent = [], UD = [];
   await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
     if(p==='/queue') return J({queue_running:[], queue_pending:sent.map(s => [0, s.pid])});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
+    if(p.startsWith('/userdata/')){ UD.push({p, body:rt.request().postData()}); return J({}); }
     if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
     if(p.startsWith('/history/')) return J({});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
@@ -86,5 +87,8 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   ok(cv.why==='' && /carried on/.test(cv.note), 'the PC can run it, and the slot explains it');
   const bad = await page.evaluate(R => { const oi = H3.PC[R].oi; const keep = oi.MiniMaxH3MotionContext; oi.MiniMaxH3MotionContext = {input:{required:{}}}; const t = H3.snapshot(); const w = H3.canRun(R, t); oi.MiniMaxH3MotionContext = keep; return w; }, R);
   ok(/carry on a video/.test(bad), 'an old H3 Motion Context without frames says so (' + bad + ')');
+  await page.evaluate(() => H3.pushTakes()); await page.waitForTimeout(300);
+  const ud = UD[UD.length - 1]; let uj = {}; try{ uj = JSON.parse(ud.body); }catch(e){}
+  ok(ud && ud.p==='/userdata/h3deck_takes.json' && Array.isArray(uj.takes) && uj.takes.length > 3 && uj.t, 'H3 Deck keeps a copy of its takes on the PC for H3 Film (' + (ud && ud.p) + ')');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
