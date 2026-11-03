@@ -25,7 +25,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
     if(p==='/queue') return J({queue_running:[], queue_pending:sent.map(s => [0, s.pid])});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
-    if(p.startsWith('/userdata/')){ UD.push({p, body:rt.request().postData()}); return J({}); }
+    if(p.startsWith('/userdata/')){ if(rt.request().method()==='GET') return UD.remote ? J(UD.remote) : rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); UD.push({p, body:rt.request().postData()}); return J({}); }
     if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
     if(p.startsWith('/history/')) return J({});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
@@ -90,6 +90,11 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   await page.evaluate(() => H3.pushTakes()); await page.waitForTimeout(300);
   const ud = UD[UD.length - 1]; let uj = {}; try{ uj = JSON.parse(ud.body); }catch(e){}
   ok(ud && ud.p==='/userdata/h3deck_takes.json' && Array.isArray(uj.takes) && uj.takes.length > 3 && uj.t, 'H3 Deck keeps a copy of its takes on the PC for H3 Film (' + (ud && ud.p) + ')');
+  // reconnect: takes this copy of the app doesn't have come back from the PC's copy; ones it has stay as they are
+  UD.remote = {v:1, t:Date.now() + 5000, takes:[{id:'tOld', t:1, pc:R, w:640, h:352, model:'x', turbo:true, prompt:'from before', name:'h3_old', dir:'H3Deck/h3_old', imgs:[], vids:[], auds:[], follow:[], state:'done', final:{filename:'old.mp4', subfolder:'Output_Render/H3Deck/h3_old', type:'output'}, pieces:[{gen:121, deliv:121, ctx:0, state:'done', file:{filename:'old.mp4', subfolder:'Output_Render/H3Deck/h3_old', type:'output'}}]}, {id:'tA', prompt:'CHANGED', pieces:[]}]};
+  const pl = await page.evaluate(async () => { const n0 = H3.S.takes.length, got = await H3.pullTakes(); return {n0, got, n:H3.S.takes.length, a:H3.S.takes.find(t => t.id==='tA').prompt, old:!!document.querySelector('.take[data-take="tOld"] video[muted]') || !!document.querySelector('.take[data-take="tOld"] video')}; });
+  ok(pl.got===1 && pl.n===pl.n0 + 1 && pl.a!=='CHANGED' && pl.old, 'a fresh copy of the app brings back the takes it is missing from the PC (' + JSON.stringify(pl) + ')');
+  ok(await page.$eval('.take[data-take="tOld"] video', v => v.muted), 'clips play without sound unless you tap 🔇');
   // tabs: ✂ Cutting Room and 🎞 Films are the film app inside H3 Deck; ✏️ there comes back to the Render tab on that take
   await page.click('[data-tab="room"]'); await page.waitForTimeout(2500);
   const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
