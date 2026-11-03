@@ -208,6 +208,7 @@ h2 span{flex:1}
       <div class="sw" id="flSw"><div><div class="t">🎞 First / last frame</div><div class="d">Pin the opening picture, and the ending one if you like</div></div><div class="tog"></div></div>
       <div id="flBody" hidden>
         <div class="slots" id="flSlots"></div>
+        <div class="note" id="contNote" hidden></div>
         <div class="sw" id="lastSw" style="margin-top:8px"><div><div class="t">Last frame</div><div class="d">The clip ends on this picture (the last piece, when it's split)</div></div><div class="tog"></div></div>
       </div>
       <div class="sw" id="refSw"><div><div class="t">🧩 References</div><div class="d">Up to 9 pictures, 3 videos and 3 sounds, each on or off</div></div><div class="tog"></div></div>
@@ -483,7 +484,9 @@ const ASPECTS = [['16:9',16/9],['9:16',9/16],['1:1',1],['4:3',4/3],['3:4',3/4],[
 const PRESETS = {land:[[640,352],[864,480],[1024,576],[1280,736]], port:[[352,640],[480,864],[576,1024],[736,1280]], sq:[[512,512],[640,640],[768,768],[960,960]]};
 const MAXPX = 768 * 1344; // MiniMax H3's own canvas cap
 function ratio(){ const f = S.f; if(f.sm){ const m = S.media[f.smVid]; if(m && m.w) return m.w / m.h; } if(f.aspect==='pic'){ const m = f.fl && S.media[f.first]; if(m && m.w) return m.w / m.h; return 16/9; } return (ASPECTS.find(a => a[0]===f.aspect) || ASPECTS[0])[1]; }
-function dims(){ const r = ratio(), px = Math.min(MAXPX, S.f.mp * 1e6); let w = Math.max(256, Math.round(Math.sqrt(px * r) / 32) * 32), h = Math.max(256, Math.round(w / r / 32) * 32);
+function dims(){ // carrying on a MiniMax clip: keep its exact size, so it joins without resizing
+  { const m = contOn() && S.media[S.f.first]; if(m && m.w && m.w % 32===0 && m.h % 32===0 && m.w * m.h <= MAXPX) return {w:m.w, h:m.h}; }
+  const r = ratio(), px = Math.min(MAXPX, S.f.mp * 1e6); let w = Math.max(256, Math.round(Math.sqrt(px * r) / 32) * 32), h = Math.max(256, Math.round(w / r / 32) * 32);
   while(w * h > MAXPX){ if(w >= h) w -= 32; else h -= 32; } return {w, h}; }
 
 // ---------- splitting a long clip into pieces ----------
@@ -504,16 +507,16 @@ function parseBeats(text){
   return {global:text.slice(0, marks[0].i).trim(), beats};
 }
 // near-even pieces, each no longer than the longest piece; a cut lands on a beat change when one is close by
-function plan(seconds, maxPiece, beats){
+function plan(seconds, maxPiece, beats, cont){
   const F = Math.max(5, Math.round(seconds * FPS)), cap = Math.round(maxPiece * FPS);
-  if(F <= cap + 4) { const g = gridUp(F); return [{start:0, gen:g, deliv:g, ctx:0}]; }
-  const k = Math.ceil(F / cap), cuts = [];
+  if(F <= cap + 4 && !cont) { const g = gridUp(F); return [{start:0, gen:g, deliv:g, ctx:0}]; }
+  const k = Math.max(1, Math.ceil(F / cap)), cuts = [];
   for(let j = 1; j < k; j++){ let t = j * F / k / FPS; const near = (beats || []).map(b => b.a).filter(a => Math.abs(a - t) <= Math.min(0.8, F / k / FPS * 0.25)).sort((x, y) => Math.abs(x - t) - Math.abs(y - t))[0];
     if(near != null) t = near; cuts.push(Math.round(t * FPS)); }
   cuts.push(F);
   const out = []; let cum = 0;
   for(let j = 0; j < cuts.length; j++){
-    const want = cuts[j] - cum, first = j===0, last = j===cuts.length - 1;
+    const want = cuts[j] - cum, first = j===0 && !cont, last = j===cuts.length - 1; // cont: piece 1 carries on the given video
     const maxGen = gridDn(cap + 5 + (first ? 0 : CTX)), minGen = first ? 22 : 39;
     let gen = Math.min(maxGen, Math.max(minGen, gridNear(want + (first ? 0 : CTX))));
     if(last && !first){ while(gen - CTX < want - 8 && gen + 17 <= maxGen) gen += 17; }
@@ -527,17 +530,20 @@ function plan(seconds, maxPiece, beats){
 const t2 = s => { const r = Math.round(s * 10) / 10; return (r % 1 ? r.toFixed(1) : String(r)) + 's'; };
 function piecePrompt(text, pieces, i, total){
   const pr = pieces[i], {global, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = LEAD(pr) / FPS;
-  const lead = i ? 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' : '';
+  const lead = i || pr.ctx ? 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' : '';
   if(!beats.length){
-    if(pieces.length===1) return text.trim();
-    return lead + global + (i ? ' The action carries on from where it is now and does not start again.' : '') + (i < pieces.length - 1 ? '' : '');
+    if(pieces.length===1) return (lead + text).trim();
+    return lead + global + (i || pr.ctx ? ' The action carries on from where it is now and does not start again.' : '') + (i < pieces.length - 1 ? '' : '');
   }
   const mine = beats.filter(b => b.b > ps + 0.05 && b.a < pe - 0.05).map(b => {
     const a = Math.max(0, b.a - ps) + off, e = Math.min(b.b, pe) - ps + off, cont = b.a < ps - 0.05;
     return '[' + t2(a) + '-' + t2(e) + '] ' + (cont ? '(carrying on) ' : '') + b.text; });
   return (lead + global + (global ? '\n' : '') + mine.join('\n')).trim();
 }
-function currentPlan(){ if(S.f.sm) return smoothPlan(); const f = S.f, beats = parseBeats(f.prompt).beats; return plan(+f.seconds || 5, +f.maxPiece || 5, beats); }
+function currentPlan(){ if(S.f.sm) return smoothPlan(); const f = S.f, beats = parseBeats(f.prompt).beats; return plan(+f.seconds || 5, +f.maxPiece || 5, beats, contOn()); }
+// Jordan 2026-11-03: a video in the First frame slot = "carry on this video": its last frames (and sound) lead into piece 1 through
+// H3 Motion Context (frames path), like a split clip's next piece, and the finished take is that video + the new part
+const contOn = () => { const f = S.f, m = f.fl && !f.sm && S.media[f.first]; return !!(m && m.kind==='vid'); };
 
 // ---------- 🪄 smoothing a video: one window of it, every Nth frame pinned as a keyframe, MiniMax paints the rest ----------
 // Pinned frames are MiniMax keyframes (MiniMaxH3AddGuide): re-injected at every step and never denoised, so always at full strength.
@@ -705,6 +711,8 @@ function canRun(url, job){
   { const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), miss = lorasOf(job).find(l => !have.includes(l.name)); if(miss) return 'doesn\'t have the LoRA ' + bn(miss.name); }
   if(job.up){ const why = regenMissing(oi); if(why) return "can't regenerate bigger (" + why + ')'; }
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
+  if(job.cont && !(((oi.MiniMaxH3MotionContext || {}).input || {}).optional || {}).context_frames) return "can't carry on a video (install or update H3 Motion Context)";
+  if(job.cont && !(oi.LoadVideo && oi.GetVideoComponents)) return "can't carry on a video (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
   if(job.follow.length && !oi.TrimAudioDuration) return "can't follow a soundtrack (no Trim Audio Duration)";
@@ -786,7 +794,11 @@ function pieceGraph(t, i, oi, names){
   t.follow.forEach(r => { const a = add('TrimAudioDuration', {audio:[add('LoadAudio', {audio:names[r.id]}), 0], start_index:pc.start, duration:pc.deliv / FPS});
     cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:LEAD(pc)}), 0]; });
   let trim = null;
-  if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:ctxDir(t, i), clip_index:i});
+  if(pc.ctx && i===0 && t.cont){ // carry on the given video: its last frames are pinned (resized to this clip by the node)
+    const gc = add('GetVideoComponents', {video:[add('LoadVideo', {file:names[t.cont]}), 0]}), snd = (S.media[t.cont] || {}).sound!==false;
+    const mc = add('MiniMaxH3MotionContext', Object.assign({conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_frames:[gc, 0]}, snd ? {audio_vae:avae, context_audio:[gc, 1]} : {}));
+    cond = [mc, 0]; trim = [mc, 1]; }
+  else if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:ctxDir(t, i), clip_index:i});
     const mc = add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_latent:[ld, 0]}); cond = [mc, 0]; trim = [mc, 1]; }
   const guider = add('BasicGuider', {model, conditioning:cond});
   const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:1});
@@ -799,12 +811,18 @@ function pieceGraph(t, i, oi, names){
   const vid = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[vid, 0], filename_prefix:t.dir + '/piece_' + String(i + 1).padStart(2, '0'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   // the last piece joins them all as its final step (Jordan 2026-11-01: no waiting in the queue for the stitch); needs the Render Deck helper's join node
-  const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join && !borrowed(t) ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
+  const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join && !borrowed(t) && !t.cont ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
   return {g, save:sv, join};
 }
 function joinGraph(t){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title:cls}}; return id; };
-  const vids = {}; t.pieces.forEach((p, i) => { vids['videos.video' + i] = [add('LoadVideo', {file:(p.file.subfolder ? p.file.subfolder + '/' : '') + p.file.filename + ' [output]'}), 0]; });
+  const vids = {}, o = t.cont ? 1 : 0;
+  if(t.cont){ const m = S.media[t.cont] || {}; let v = [add('LoadVideo', {file:t.contFile}), 0];
+    if(m.w && (m.w!==t.w || m.h!==t.h)){ const gc = add('GetVideoComponents', {video:v}); // to the take's size, so the join is one size
+      const sc = add('ImageScale', {image:[gc, 0], upscale_method:'lanczos', width:t.w, height:t.h, crop:'center'});
+      v = [add('CreateVideo', Object.assign({images:[sc, 0], fps:m.fps || FPS}, m.sound!==false ? {audio:[gc, 1]} : {})), 0]; }
+    vids['videos.video0'] = v; }
+  t.pieces.forEach((p, i) => { vids['videos.video' + (i + o)] = [add('LoadVideo', {file:(p.file.subfolder ? p.file.subfolder + '/' : '') + p.file.filename + ' [output]'}), 0]; });
   const c = add('ConcatenateVideo', Object.assign({codec:'auto'}, vids));
   const sv = add('SaveVideo', {video:[c, 0], filename_prefix:t.dir + '/' + t.name, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'auto'});
   return {g, save:sv};
@@ -921,7 +939,7 @@ function snapshot(){ // the form, frozen into a take
   const upImgs = sm && f.smUp && f.smUpRefs ? (f.smRefs || []).filter(id => S.media[id]).map(id => ({id})) : [];
   const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:upImgs.length > 0} : null;
   return {sm, up, upImgs, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
-    fl:!sm && f.fl && !!f.first, first:!sm && f.fl ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
+    fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => ({id:r.id})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow})), auds:R.auds.map(r => ({id:r.id})), follow:R.follow.map(r => ({id:r.id})),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
@@ -962,8 +980,9 @@ async function render(){
 }
 async function sendPieces(t, from){
   const url = t.pc, oi = pcOf(url).oi, names = {};
-  const ids = [t.sm && t.sm.vid, t.first, t.lastImg, ...t.imgs.map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
+  const ids = [t.sm && t.sm.vid, t.cont, t.first, t.lastImg, ...t.imgs.map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
+  if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
     const p = t.pieces[i], G = pieceGraph(t, i, oi, names);
     p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.save = G.save; p.join = G.join || null; p.err = ''; p.file = null;
@@ -998,7 +1017,7 @@ async function tick(){
         if(later.length){ try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:later})}); }catch(e){} }
         t.pieces.slice(bad + 1).forEach(x => { if(x.state==='queued' || x.state==='running') x.state = 'new'; }); }
       else if(t.pieces.every(x => x.state==='done')){
-        if(t.pieces.length===1){ t.final = t.pieces[0].file; t.state = 'done'; }
+        if(t.pieces.length===1 && !t.cont){ t.final = t.pieces[0].file; t.state = 'done'; }
         else if(t.final && !t.joinPid){ t.state = 'done'; } // the last piece already joined them
         else if(!t.joinPid && pcOf(t.pc).oi.ConcatenateVideo){ try{ const G = joinGraph(t); t.joinSave = G.save; t.joinPid = await queueGraph(t.pc, G, true); t.tj = Date.now(); }catch(e){ t.state = 'done'; t.joinErr = e.message; } }
         else if(!t.joinPid){ t.state = 'done'; t.joinErr = 'this ComfyUI has no Concatenate Video node'; }
@@ -1231,8 +1250,10 @@ function drawInputs(){
       : 'Pick a video. It goes to the PC as it is, and the frames are taken from it there.'; }
   $('#flSw').classList.toggle('on', f.fl); $('#flBody').hidden = !f.fl || f.sm; $('#lastSw').classList.toggle('on', f.last);
   const fm = S.media[f.first], lm = S.media[f.lastImg];
-  $('#flSlots').innerHTML = (fm ? `<div class="slot has"><img src="${fm.thumb}" alt=""><span class="tag">First frame</span><button class="x" data-rm="first">✕</button></div>` : addSlot('first', 'First frame'))
+  $('#flSlots').innerHTML = (fm ? `<div class="slot has"><img src="${fm.thumb || ''}" alt=""><span class="tag">${fm.kind==='vid' ? '🎞 Carry on' : 'First frame'}</span><button class="x" data-rm="first">✕</button></div>` : addSlot('first', 'First frame or video'))
     + (f.last ? (lm ? `<div class="slot has"><img src="${lm.thumb}" alt=""><span class="tag">Last frame</span><button class="x" data-rm="lastImg">✕</button></div>` : addSlot('lastImg', 'Last frame')) : '');
+  { const cn = $('#contNote'), on = contOn(); cn.hidden = !on;
+    if(on) cn.textContent = 'A video here is carried on: its last ' + CTX + ' frames' + (fm.sound!==false ? ' and its sound' : '') + ' lead into the new part (H3 Motion Context), and the finished take is your video followed by the new part. Length is just the new part.' + (fm.fps && Math.abs(fm.fps - FPS) > 0.1 ? ' Your video is ' + fm.fps + ' fps and MiniMax makes 24, so the motion may change speed at the join.' : ''); }
   $('#refSw').classList.toggle('on', f.ref); $('#refBody').hidden = !f.ref || f.sm;
   $('#imgSlots').innerHTML = f.imgs.map((r, i) => slotHtml('img', r, i, L[r.id])).join('') + (f.imgs.length < MAXREF.img ? addSlot('img', 'Picture') : '');
   $('#vidSlots').innerHTML = f.vids.map((r, i) => slotHtml('vid', r, i, L[r.id])).join('') + (f.vids.length < MAXREF.vid ? addSlot('vid', 'Video') : '');
@@ -1251,15 +1272,17 @@ function drawModel(){
   sel.value = f.model;
   const oiAny = S.pcs.map(p => pcOf(p.url).oi).filter(Boolean), canT = oiAny.some(oi => resolveModel(oi, f.model, true)), canR = oiAny.some(oi => resolveModel(oi, f.model, false));
   if(f.turbo && !canT && canR) f.turbo = false; if(!f.turbo && !canR && canT) f.turbo = true;
-  $$('#speedSeg button').forEach(b => { b.classList.toggle('on', (b.dataset.v==='turbo')===f.turbo); b.disabled = b.dataset.v==='turbo' ? !canT : !canR; });
+  const built = /singularity|prism/.test(f.model || ''); // turbo built into the file: both buttons would send the same render
+  if(built) f.turbo = true;
+  $$('#speedSeg button').forEach(b => { b.classList.toggle('on', (b.dataset.v==='turbo')===f.turbo); b.disabled = b.dataset.v==='turbo' ? !canT : !canR || built; });
   const oi = oiAny.find(o => resolveModel(o, f.model, f.turbo)), M = oi && resolveModel(oi, f.model, f.turbo);
-  $('#modelNote').textContent = M ? M.label + ' · ' + (+f.steps || M.steps) + ' steps' + (M.fl2v ? ' · first/last frame only, no references' : '') : '';
+  $('#modelNote').textContent = M ? M.label + ' · ' + (+f.steps || M.steps) + ' steps' + (M.fl2v ? ' · first/last frame only, no references' : '') + (built ? '. This merge has the turbo baked in, so there is no separate Regular: it is the same file and steps either way.' : '') : '';
   // style LoRAs any PC has
   const loras = [...new Set(oiAny.flatMap(styleLoras))].sort(), on = f.loras.filter(l => l.name);
   $('#loraList').innerHTML = f.loras.map((l, i) => `<div class="lr" data-li="${i}"><div class="lt"><select data-ln>${(l.name ? '' : '<option value="">Pick a LoRA</option>') + [...new Set([...(l.name ? [l.name] : []), ...loras])].map(n => `<option value="${esc(n)}"${n===l.name ? ' selected' : ''}>${esc(bn(n).replace(/\.safetensors$/, ''))}${loras.includes(n) ? '' : ' (not on the PCs)'}</option>`).join('')}</select><b>${(+l.str).toFixed(2)}</b><button class="btn x" data-lx aria-label="Remove">✕</button></div>
     <input type="range" data-ls min="0" max="1.5" step="0.05" value="${+l.str}"><input data-lw placeholder="Activation words, e.g. AFKJ Style" value="${esc(l.words || '')}"></div>`).join('');
   $('#loraAdd').disabled = !loras.length; $('#loraOut').textContent = on.length ? on.length + ' on' : '';
-  $('#modelSum').textContent = fams.length ? (famLabel(f.model || '').replace(/^MiniMax H3 /, '') + ' · ' + (f.turbo ? 'Turbo' : 'Regular') + (on.length ? ' · ' + on.length + ' LoRA' + (on.length > 1 ? 's' : '') : '')) : '';
+  $('#modelSum').textContent = fams.length ? (famLabel(f.model || '').replace(/^MiniMax H3 /, '') + ' · ' + (built ? 'turbo built in' : f.turbo ? 'Turbo' : 'Regular') + (on.length ? ' · ' + on.length + ' LoRA' + (on.length > 1 ? 's' : '') : '')) : '';
 }
 function drawCanvas(){
   const f = S.f, {w, h} = dims(), r = w / h;
@@ -1404,16 +1427,16 @@ document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof 
   const i = l.indexOf(v.src.split('#')[0]); if(i >= 0){ v.src = l[(i + 1) % l.length]; v.play().catch(() => {}); } }, true);
 for(const ev of ['play', 'pause']) document.addEventListener(ev, e => { const v = e.target; if(v instanceof HTMLVideoElement && v.classList.contains('tv')) v.parentElement.classList.toggle('on', ev==='play'); }, true);
 let pickKind = '';
-function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='vid' || kind==='smv' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img' || kind==='smref'; fp.click(); }
+function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='first' ? 'image/*,video/*' : kind==='vid' || kind==='smv' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img' || kind==='smref'; fp.click(); }
 $('#filePick').onchange = async e => {
   const files = [...e.target.files]; if(!files.length) return; const f = S.f, kind = pickKind==='first' || pickKind==='lastImg' || pickKind==='smref' ? 'img' : pickKind==='smv' ? 'vid' : pickKind;
   try{
     for(const file of files){
       if(kind==='img' && pickKind==='img' && f.imgs.length >= MAXREF.img) break;
       if(pickKind==='smref'){ f.smRefs = (f.smRefs || []).filter(x => S.media[x]); if(f.smRefs.length >= REGEN_REFS) break; f.smRefs.push(await addMedia(file, 'img')); f.smUpRefs = true; continue; }
-      const id = await addMedia(file, kind);
+      const id = await addMedia(file, pickKind==='first' && /^video\//.test(file.type || '') ? 'vid' : kind);
       if(pickKind==='smv'){ f.smVid = id; f.smStart = 0; f.smRefs = []; const m = S.media[id]; if(m.dur && m.dur < +f.seconds) f.seconds = Math.min(+f.seconds, m.dur); break; }
-      if(pickKind==='first'){ f.first = id; } else if(pickKind==='lastImg'){ f.lastImg = id; }
+      if(pickKind==='first'){ f.first = id; if(S.media[id].kind==='vid') f.aspect = 'pic'; } // carry on: same shape as the video else if(pickKind==='lastImg'){ f.lastImg = id; }
       else if(kind==='img') f.imgs.push({id, on:true});
       else if(kind==='vid'){ const m = S.media[id]; if(m.dur && m.dur < 2) toast('MiniMax wants reference videos of 2 to 15 s'); f.vids.push({id, on:true, sound:false, follow:false}); }
       else f.auds.push({id, on:true, follow:false});
