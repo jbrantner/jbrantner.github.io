@@ -2852,5 +2852,495 @@ class RenderDeckTouchUp:
         return (out,)
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# 🌀 Auto Clip (Jordan 2026-11-03): 30 s MiniMax H3 clips made from start to finish with nobody watching, one after another.
+# The phone app (h3-a875336252cb/auto/) builds the graphs once, with @@PLACEHOLDERS@@ where each clip differs, and sends them
+# here as the recipe. This loop rolls the wildcards (character, place, hypnosis, action ...), makes the reference
+# character still (Z-Image), then the parts in order (each carries on from the one before through H3 Motion Context),
+# and the last part joins them. Render is shared: the moment anything else wants it (a job from Render Deck, H3 Deck or
+# H3 Film in ComfyUI's line, a farm job waiting for it, LoRA training), the part being made is stopped and made again
+# once Render has been quiet for a while (Jordan: OK to lose that part). Characters are always adults: a fixed guard
+# sentence goes into every prompt and a roll that names a child is thrown away.
+AC_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_autoclip.json')
+AC = {'on': False, 'forever': True, 'left': 0, 'recipe': None, 'cur': None, 'clips': [], 'status': 'off', 'why': '', 'lock': None, 'n': 0}
+AC_CID = 'autoclip'  # the client id of every job this loop queues (the app listens on it for step progress)
+AC_TICK = 3  # seconds between looks at Render
+AC_QUIET = 45  # seconds Render must be free of other work before a stopped part is made again
+AC_GUARD = 'The woman in this video is an adult, clearly over 21 years old.'
+AC_GUARD_PIC = 'She is an adult woman, clearly over 21 years old.'
+AC_CHILD = re.compile(r'\b(child|children|childlike|kid|kids|teen|teens|teenage|teenager|tween|minor|minors|underage|under-age|loli|lolita|shota|'
+                      r'schoolgirl|schoolboy|school uniform|preteen|pre-teen|toddler|infant|little girl|little boy|young girl|young boy|'
+                      r'elementary school|middle school|junior high|high school|jailbait|daughter|niece)\b|\b([1-9]|1[0-7])[- ]?(year[- ]?old|yo|y/o|years? old)\b', re.I)
+_ac_task = None
+_ac_wake = None
+
+
+def _ac_load():
+    try:
+        with open(AC_FILE, encoding='utf-8') as f:
+            AC.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+
+
+def _ac_save():
+    try:
+        tmp = AC_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(AC, f)
+        os.replace(tmp, AC_FILE)
+    except OSError:
+        pass
+
+
+def _ac_pick(items, rnd):
+    items = [x for x in items if str(x).strip()]
+    return str(rnd.choice(items)).strip() if items else ''
+
+
+def _ac_roll(text, lists, clip, part, rnd, depth=0):
+    """Fills a template: __name__ = a line from that list (lists marked 'each' get a new line every part, the rest keep
+    one line for the whole clip), {a|b|c} = one of those. Lines can hold more of either; picks are kept in clip / part."""
+    if depth > 12:
+        return text
+
+    def word(m):
+        name = m.group(1).strip().lower()
+        if name in clip:
+            return clip[name]
+        if name in part:
+            return part[name]
+        L = lists.get(name)
+        if not L:
+            return ''
+        v = _ac_roll(_ac_pick(L.get('items') or [], rnd), lists, clip, part, rnd, depth + 1)
+        (part if L.get('each') else clip)[name] = v
+        return v
+
+    def alt(m):
+        return _ac_roll(rnd.choice(m.group(1).split('|')).strip(), lists, clip, part, rnd, depth + 1)
+
+    for _ in range(20):
+        new = re.sub(r'\{([^{}]*\|[^{}]*)\}', alt, re.sub(r'__([A-Za-z0-9 _-]+?)__', word, text))
+        if new == text:
+            break
+        text = new
+    return text
+
+
+def _ac_tidy(s):
+    s = re.sub(r'\s+', ' ', str(s)).strip()
+    s = re.sub(r'\s+([,.;:!?])', r'\1', s)
+    s = re.sub(r'([,;])\s*([,.;])', r'\2', s)
+    return re.sub(r'\.\s*\.', '.', s)
+
+
+def _ac_plan(R, lock, rnd):
+    """One clip's rolls and prompts. lock: the earlier clip's character picks + still, kept for 'Again with her'."""
+    lists = {str(k).lower(): v for k, v in (R.get('lists') or {}).items()}
+    for _ in range(25):
+        clip = dict((lock or {}).get('picks') or {})
+        hyps = [h for h in R.get('hyp') or [] if h.get('on', True) and (h.get('change') or h.get('look'))]
+        h = rnd.choice(hyps) if hyps else {'name': 'Spiral eyes', 'change': 'her irises turn into slowly turning black-and-white spirals', 'look': 'spiral eyes', 'images': []}
+        pics = [p for p in h.get('images') or [] if p]
+        pic = rnd.choice(pics) if pics else ''
+        clip.update({'hypnosis': h.get('name') or 'hypnosis', 'hypnosis_change': h.get('change') or h.get('look') or '',
+                     'hypnosis_look': h.get('look') or h.get('change') or ''})
+        before = set(clip)
+        who = _ac_tidy(_ac_roll(R.get('character') or '__character__', lists, clip, {}, rnd))
+        char_keys = sorted(set(clip) - before | ({'character'} | set((lock or {}).get('picks') or {})))
+        clip['character'] = who
+        ref_text = _ac_tidy(_ac_roll(R.get('ref_text') or 'Realistic photo of __character__.', lists, clip, {}, rnd) + ' ' + AC_GUARD_PIC)
+        cast = _ac_roll(R.get('cast') or '<Picture 1> is the woman in this video: __character__.', lists, clip, {}, rnd)
+        texts = [p.get('text') or '' for p in R.get('parts') or []]
+        prompts, parts = [], []
+        n = len(R.get('graphs') or [])
+        hyp_from = int(R.get('hyp_from', 2))
+        for i in range(n):
+            part = {}
+            t = _ac_roll(texts[min(i, len(texts) - 1)] if texts else '', lists, clip, part, rnd)
+            if pic and i >= hyp_from:
+                t += ' The eye pattern is the one shown in <Picture 2>.'
+            lead = '' if i == 0 else 'This continues straight on from the moment before, in the same shot with the same camera and no cut. '
+            prompts.append(_ac_tidy(AC_GUARD + ' ' + cast + ' ' + lead + t))
+            parts.append(part)
+        everything = ' '.join([who, ref_text] + prompts)
+        if not AC_CHILD.search(everything):
+            return {'picks': clip, 'part_picks': parts, 'ref_text': ref_text, 'prompts': prompts, 'hyp_pic': pic, 'hyp': clip['hypnosis'], 'char_keys': char_keys}
+        lock = None  # a kept character can't be the problem twice
+    raise ValueError('Every roll named a child or a teen (blocked): check the wildcard lists')
+
+
+def _ac_fill(graph, subs):
+    """A copy of the graph with each @@NAME@@ swapped for its value (a whole-string @@SEED@@ becomes a number)."""
+    def walk(v):
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, str) and '@@' in v:
+            if v in subs and not isinstance(subs[v], str):
+                return subs[v]
+            for k, x in subs.items():
+                v = v.replace(k, str(x))
+        return v
+    return walk(json.loads(json.dumps(graph)))
+
+
+def _ac_me_url():
+    me = re.sub(r'[^a-z0-9]', '', _pc().lower())
+    for p in FARM.get('pcs') or []:
+        if re.sub(r'[^a-z0-9]', '', str(p.get('name', '')).lower()) == me or me and me in re.sub(r'[^a-z0-9]', '', p['url'].lower()):
+            return p['url']
+    return ''
+
+
+def _ac_others(q, mine):
+    """Why Render is wanted by something else right now ('' when it isn't)."""
+    ids = [x[1] for x in q.get('queue_running', []) + q.get('queue_pending', [])]
+    if any(i != mine for i in ids):
+        return 'another job is in Render\'s line'
+    me, now = _ac_me_url(), time.time()
+    for j in FARM.get('jobs') or []:
+        if j.get('state') == 'waiting' and not j.get('after') and now - j.get('t_added', now) > 6 and (not j.get('pin') or not me or j['pin'] == me):
+            return 'a farm job is waiting (' + (j.get('prompt') or 'Render Deck')[:60] + ')'
+    if _kohya_running():
+        return 'a LoRA is training'
+    return ''
+
+
+def _ac_new_clip(R):
+    import random
+    rnd = random.Random()
+    lock = AC.get('lock')
+    P = _ac_plan(R, lock, rnd)
+    AC['n'] = AC.get('n', 0) + 1
+    cid = time.strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex[:4]
+    c = {'id': cid, 'name': 'clip_' + cid, 'dir': 'AutoClip/clip_' + cid, 't': time.time(), 'seed': rnd.randrange(2 ** 31),
+         'stage': 0, 'pid': '', 'tries': 0, 'redo': 0, 'state': 'working', 'parts': [{'state': 'new'} for _ in R.get('graphs') or []],
+         'ref': (lock or {}).get('ref') or '', 'kept': bool(lock), 'recipe': R.get('name') or '', 'loras': R.get('loras') or [], 'model': R.get('model') or ''}
+    c.update(P)
+    if c['ref']:
+        c['stage'] = 1  # 'Again with her': her still is already made
+    AC['lock'] = None
+    return c
+
+
+def _ac_graph(R, c):
+    """The graph for the clip's next step: stage 0 = the reference still, stage k = part k."""
+    pre = (_pc() + '/') if _shared() else ''
+    subs = {'@@SEED@@': c['seed'], '@@DIR@@': c['dir'], '@@OUTDIR@@': pre + c['dir'], '@@NAME@@': c['name'], '@@REF@@': c.get('ref') or ''}
+    if c['stage'] == 0:
+        r = R['ref']
+        subs['@@PROMPT@@'] = c['ref_text']
+        return _ac_fill(r['graph'], subs), str(r['save']), ''
+    i = c['stage'] - 1
+    G = R['graphs'][i]
+    use_pic = bool(c.get('hyp_pic')) and i >= int(R.get('hyp_from', 2)) and G.get('gh')
+    subs['@@PROMPT@@'] = c['prompts'][i]
+    subs['@@HYP@@'] = c.get('hyp_pic') or ''
+    g = G['gh'] if use_pic else G['g']
+    return _ac_fill(g, subs), str(G['saveh'] if use_pic else G['save']), str((G.get('joinh') if use_pic else G.get('join')) or '')
+
+
+def _ac_clean(c):
+    """After the join: the parts and the carried-over latents are spare copies (the joined clip has them all)."""
+    if AC['recipe'] and AC['recipe'].get('keep_parts'):
+        return
+    try:
+        f = c.get('final') or {}
+        d = os.path.realpath(os.path.join(folder_paths.get_output_directory(), f.get('subfolder', '')))
+        root = os.path.realpath(folder_paths.get_output_directory())
+        if not d.startswith(root + os.sep) or 'AutoClip' not in d or not os.path.isdir(d):
+            return
+        for n in os.listdir(d):
+            if n.startswith('piece_') or n.startswith('ctx'):
+                try:
+                    os.remove(os.path.join(d, n))
+                except OSError:
+                    pass
+    except Exception as e:
+        print('[Render Deck auto clip] tidy:', e)
+
+
+def _ac_finish(c, state, why=''):
+    c.update(state=state, why=why, t_done=time.time(), pid='')
+    AC['clips'] = (AC['clips'] + [c])[-300:]
+    AC['cur'] = None
+    if state == 'done':
+        _ac_clean(c)
+        if not AC.get('forever'):
+            AC['left'] = max(0, int(AC.get('left') or 0) - 1)
+            if AC['left'] <= 0:
+                AC['on'] = False
+                AC['status'] = 'finished'
+
+
+async def _ac_stop_mine(s, pid, running):
+    try:
+        if running:
+            await _post(s, _me() + '/interrupt', {'prompt_id': pid}, 10)
+        else:
+            await _post(s, _me() + '/queue', {'delete': [pid]}, 10)
+    except Exception:
+        pass
+
+
+async def _ac_round(s):
+    R = AC.get('recipe')
+    if not R or not R.get('graphs'):
+        AC.update(status='waiting', why='No recipe yet: open Auto Clip and press Start')
+        return
+    try:
+        q = await _get(s, _me() + '/queue', 10)
+    except Exception:
+        AC.update(status='waiting', why='ComfyUI is not answering')
+        return
+    c = AC.get('cur')
+    mine = c.get('pid') if c else ''
+    running = [x[1] for x in q.get('queue_running', [])]
+    other = _ac_others(q, mine)
+    now = time.time()
+    if other:
+        AC['busy_at'] = now
+        if c and mine:  # give Render up: this step is made again later
+            await _ac_stop_mine(s, mine, mine in running)
+            c['pid'] = ''
+            c['redo'] = c.get('redo', 0) + 1
+            if c['stage'] > 0:
+                c['parts'][c['stage'] - 1]['state'] = 'new'
+        AC.update(status='paused', why='Paused: ' + other)
+        return
+    if now - AC.get('busy_at', 0) < AC_QUIET and not mine:
+        AC.update(status='paused', why='Waiting for Render to stay free (%d s)' % (AC_QUIET - (now - AC.get('busy_at', 0))))
+        return
+    if not c:
+        try:
+            c = AC['cur'] = _ac_new_clip(R)
+            AC['cur_recipe'] = R  # the clip finishes with the recipe it started with, even if a new one is sent meanwhile
+        except Exception as e:
+            AC.update(on=False, status='stopped', why=str(e))
+            return
+    AC.update(status='running', why='')
+    if not c.get('pid'):
+        g, save, join = _ac_graph(AC.get('cur_recipe') or R, c)
+        st, r = await _post(s, _me() + '/prompt', {'prompt': g, 'client_id': AC_CID, 'extra_data': R.get('extra_data') or {}})
+        if st != 200 or not r.get('prompt_id'):
+            ne = r.get('node_errors') or {}
+            first = next(iter(ne.values()), {}) if isinstance(ne, dict) else {}
+            er = (first.get('errors') or [{}])[0] if first else {}
+            msg = (first.get('class_type', '') + ': ' + (er.get('details') or er.get('message') or '')) if first else json.dumps(r.get('error') or r)[:200]
+            _ac_finish(c, 'failed', 'ComfyUI turned down ' + ('the still' if c['stage'] == 0 else 'part %d' % c['stage']) + ': ' + msg)
+            return
+        c.update(pid=r['prompt_id'], save=save, join=join, t_sent=now)
+        if c['stage'] > 0:
+            c['parts'][c['stage'] - 1].update(state='queued', t=now)
+        return
+    pid = c['pid']
+    if pid in running:
+        if c['stage'] > 0:
+            c['parts'][c['stage'] - 1]['state'] = 'running'
+        return
+    if any(x[1] == pid for x in q.get('queue_pending', [])):
+        return
+    try:
+        h = (await _get(s, _me() + '/history/' + pid, 10)).get(pid)
+    except Exception:
+        return
+    if not h:
+        if now - c.get('t_sent', now) > 20:  # ComfyUI restarted and forgot it: send it again
+            c['pid'] = ''
+        return
+    stt = h.get('status') or {}
+    if stt.get('status_str') == 'error':
+        msgs = stt.get('messages') or []
+        if any(m[0] == 'execution_interrupted' for m in msgs):  # stopped (by us, or a Cancel in another app): make it again
+            c['pid'] = ''
+            return
+        msg = next((m[1].get('exception_message') for m in msgs if m[0] == 'execution_error'), 'ComfyUI hit an error')
+        c['tries'] = c.get('tries', 0) + 1
+        c['pid'] = ''
+        if c['tries'] >= 2:
+            _ac_finish(c, 'failed', ('The still' if c['stage'] == 0 else 'Part %d' % c['stage']) + ': ' + str(msg).strip()[:300])
+        return
+    if not stt.get('completed'):
+        return
+    outs = h.get('outputs') or {}
+    o = outs.get(c.get('save')) or {}
+    f = (o.get('images') or o.get('videos') or o.get('gifs') or [None])[0]
+    if not f:
+        _ac_finish(c, 'failed', 'Nothing came back from ' + ('the still' if c['stage'] == 0 else 'part %d' % c['stage']))
+        return
+    f = {'filename': f['filename'], 'subfolder': f.get('subfolder', ''), 'type': 'output'}
+    c['pid'], c['tries'] = '', 0
+    if c['stage'] == 0:
+        c['ref'] = (f['subfolder'] + '/' if f['subfolder'] else '') + f['filename'] + ' [output]'
+        c['ref_file'] = f
+    else:
+        c['parts'][c['stage'] - 1].update(state='done', file=f, t1=now)
+    if c['stage'] >= len(c['parts']):
+        jo = outs.get(c.get('join')) or {}
+        jf = (jo.get('images') or jo.get('videos') or [None])[0]
+        c['final'] = {'filename': jf['filename'], 'subfolder': jf.get('subfolder', ''), 'type': 'output'} if jf else f
+        _ac_finish(c, 'done', '' if jf else 'The parts were not joined (the last part is kept)')
+        return
+    c['stage'] += 1
+
+
+async def _ac_loop():
+    global _ac_wake
+    _ac_wake = asyncio.Event()
+    async with aiohttp.ClientSession() as s:
+        while AC.get('on'):
+            try:
+                await _ac_round(s)
+            except Exception as e:
+                print('[Render Deck auto clip]', e)
+                AC['why'] = 'Hiccup: ' + str(e)[:200]
+            _ac_save()
+            try:
+                await asyncio.wait_for(_ac_wake.wait(), AC_TICK)
+            except asyncio.TimeoutError:
+                pass
+            _ac_wake.clear()
+    if AC.get('status') not in ('finished',):
+        AC['status'] = 'off'
+    _ac_save()
+
+
+def _ac_start():
+    global _ac_task
+    if _ac_task is None or _ac_task.done():
+        _ac_task = asyncio.ensure_future(_ac_loop())
+    elif _ac_wake:
+        _ac_wake.set()
+
+
+def _ac_view(since=0):
+    cur = dict(AC['cur']) if AC.get('cur') else None
+    return {'autoclip': 1, 'on': AC['on'], 'forever': AC['forever'], 'left': AC['left'], 'status': AC['status'], 'why': AC['why'], 'cid': AC_CID,
+            'cur': cur, 'lock': bool(AC.get('lock')), 'clips': [x for x in AC['clips'] if x.get('t_done', 0) > since or x.get('t_edit', 0) > since],
+            'recipe_at': (AC.get('recipe') or {}).get('t', 0), 'pc': _pc(), 'out': (_pc() + '/') if _shared() else '', 'now': time.time()}
+
+
+@routes.get('/renderdeck/autoclip')
+async def ac_get(request):
+    try:
+        since = float(request.query.get('since') or 0)
+    except ValueError:
+        since = 0
+    v = _ac_view(since)
+    if request.query.get('recipe'):
+        v['recipe'] = AC.get('recipe')
+    return web.json_response(v)
+
+
+@routes.post('/renderdeck/autoclip/recipe')
+async def ac_recipe(request):
+    """The app's recipe: {name, lists:{name:{items, each}}, character, ref_text, cast, parts:[{text}], hyp:[{name, change,
+    look, images, on}], hyp_from, ref:{graph, save}, graphs:[{g, save, join, gh, saveh, joinh}], extra_data, keep_parts}"""
+    try:
+        R = await request.json()
+        if not isinstance(R.get('graphs'), list) or not R['graphs'] or not isinstance((R.get('ref') or {}).get('graph'), dict):
+            raise ValueError('The recipe needs the still and the part graphs')
+        _ac_plan(R, None, __import__('random').Random())  # throws when every roll is blocked
+        R['t'] = time.time()
+        AC['recipe'] = R
+        _ac_save()
+        return web.json_response(_ac_view(time.time()))
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.post('/renderdeck/autoclip/run')
+async def ac_run(request):
+    """{on, forever, left}: start or stop; stopping takes the step being made out of ComfyUI (the clip is kept to finish later)."""
+    try:
+        b = await request.json()
+        if 'forever' in b:
+            AC['forever'] = bool(b['forever'])
+        if 'left' in b:
+            AC['left'] = max(0, int(b['left'] or 0))
+        if b.get('on'):
+            if not AC.get('recipe'):
+                raise ValueError('Send the recipe first')
+            AC.update(on=True, status='starting', why='')
+            _ac_save()
+            _ac_start()
+        elif 'on' in b:
+            AC.update(on=False, status='off', why='')
+            c = AC.get('cur')
+            if c and c.get('pid'):
+                async with aiohttp.ClientSession() as s:
+                    q = await _get(s, _me() + '/queue', 10)
+                    await _ac_stop_mine(s, c['pid'], any(x[1] == c['pid'] for x in q.get('queue_running', [])))
+                c['pid'] = ''
+                if c['stage'] > 0:
+                    c['parts'][c['stage'] - 1]['state'] = 'new'
+            if b.get('drop') and c:
+                _ac_finish(c, 'skipped', 'Skipped')
+            _ac_save()
+        return web.json_response(_ac_view(0))
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.post('/renderdeck/autoclip/clip')
+async def ac_clip(request):
+    """{id, do: star | unstar | again | delete | skip}. again = the next clip keeps her (the same character rolls and still).
+    delete removes its files (the joined clip, her still, any parts) for real; skip drops the clip being made."""
+    try:
+        b = await request.json()
+        do, cid = b.get('do'), str(b.get('id') or '')
+        if do == 'skip':
+            c = AC.get('cur')
+            if c:
+                if c.get('pid'):
+                    async with aiohttp.ClientSession() as s:
+                        await _ac_stop_mine(s, c['pid'], True)
+                        await _ac_stop_mine(s, c['pid'], False)
+                _ac_finish(c, 'skipped', 'Skipped')
+            if _ac_wake:
+                _ac_wake.set()
+            _ac_save()
+            return web.json_response(_ac_view(0))
+        c = next((x for x in AC['clips'] if x['id'] == cid), None) or (AC['cur'] if AC.get('cur') and AC['cur']['id'] == cid else None)
+        if not c:
+            raise ValueError('No such clip')
+        if do in ('star', 'unstar'):
+            c['star'] = do == 'star'
+        elif do == 'again':
+            # her = the character line and every list it rolled (hair, age ...): the rest (place, hypnosis, actions) rolls anew
+            keep = {k: v for k, v in (c.get('picks') or {}).items() if k in (c.get('char_keys') or ['character'])}
+            AC['lock'] = {'picks': keep, 'ref': c.get('ref') or ''}
+        elif do == 'delete':
+            root = os.path.realpath(folder_paths.get_output_directory())
+            for f in [c.get('final'), c.get('ref_file')] + [p.get('file') for p in c.get('parts') or []]:
+                if not f:
+                    continue
+                p = os.path.realpath(os.path.join(root, f.get('subfolder', ''), f['filename']))
+                if p.startswith(root + os.sep) and 'AutoClip' in p and os.path.isfile(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+            AC['clips'] = [x for x in AC['clips'] if x is not c]
+        else:
+            raise ValueError('Unknown action')
+        c['t_edit'] = time.time()
+        _ac_save()
+        return web.json_response(_ac_view(0))
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+_ac_load()
+if AC.get('on'):  # a run left going when ComfyUI restarted carries on by itself
+    try:
+        PromptServer.instance.loop.call_soon_threadsafe(_ac_start)
+    except Exception as e:
+        print('[Render Deck auto clip] resume later:', e)
+
+
 NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix, 'RenderDeckH3Join': RenderDeckH3Join, 'RenderDeckTouchUp': RenderDeckTouchUp}
 NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)', 'RenderDeckH3Join': 'Join the H3 pieces (Render Deck)', 'RenderDeckTouchUp': 'Touch up: picture into eyes / colour a part (Render Deck)'}
