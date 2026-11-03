@@ -337,7 +337,7 @@ function draw(){
   drawDots(); const r = reviewList(); $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
   const v = N().v, f = v==='film' && filmOf(N().film);
   $('#view').innerHTML = f ? filmView(f) : v==='review' ? reviewView() : homeView();
-  if(f) wireFilm(f);
+  if(f){ wireFilm(f); if(f.exp && f.exp.state==='working') expPoll(f); }
 }
 // redraw what can change by itself without disturbing a playing video or a drag
 function drawSoft(){ if(N().v==='film'){ drawDots(); return; } const pl = $$('#view video').some(v => !v.paused); if(pl) return; draw(); }
@@ -379,10 +379,37 @@ function filmView(f){
   `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-fname value="${esc(f.name)}" placeholder="Film name"><button class="btn warn" data-act="delFilm">🗑</button></div>
   <div class="stage" style="--ar:${ar}"><video id="vA" playsinline preload="auto"></video><video id="vB" playsinline preload="auto"></video><div class="gap" id="gap">${T ? '' : 'Add clips from ✂ Review or ＋ Clip'}</div></div>
   <div class="transport"><button class="btn" data-act="toStart">⏮</button><button class="btn pri" data-act="play" id="playBtn">▶ Play</button><div class="t" id="tc">${fmt(PH)} / ${fmt(T)}</div><button class="btn" data-act="zoom" data-d="-1">−</button><button class="btn" data-act="zoom" data-d="1">＋</button></div>
-  <div class="tools"><button class="btn pri" data-act="addClip">＋ Clip</button><button class="btn" data-act="split" ${sel ? '' : 'disabled'}>✂ Split</button><button class="btn" data-act="versions" ${sel ? '' : 'disabled'}>⇄ Versions</button><button class="btn" data-act="editDeck" ${sel ? '' : 'disabled'}>✏️ Edit in H3 Deck</button><button class="btn warn" data-act="delClip" ${sel ? '' : 'disabled'}>🗑</button><button class="btn" data-act="addTrack">＋ Track</button></div>
+  <div class="tools"><button class="btn pri" data-act="addClip">＋ Clip</button><button class="btn" data-act="split" ${sel ? '' : 'disabled'}>✂ Split</button><button class="btn" data-act="versions" ${sel ? '' : 'disabled'}>⇄ Versions</button><button class="btn" data-act="editDeck" ${sel ? '' : 'disabled'}>✏️ Edit in H3 Deck</button><button class="btn warn" data-act="delClip" ${sel ? '' : 'disabled'}>🗑</button><button class="btn" data-act="addTrack">＋ Track</button><button class="btn" data-act="export" ${T ? '' : 'disabled'}>⬇ Export</button></div>
   <div class="tlw" id="tlw"><div class="tl" id="tl"></div></div>
-  <div class="note" id="selNote" style="margin-top:8px">${sel ? selText(sel, st) : 'Drag a clip to move it (up or down to change track), drag its ends to trim. The upper track plays where clips overlap. Tap the ruler to move the playhead.'}</div>`;
+  <div class="note" id="selNote" style="margin-top:8px">${sel ? selText(sel, st) : 'Drag a clip to move it (up or down to change track), drag its ends to trim. The upper track plays where clips overlap. Tap the ruler to move the playhead.'}</div>
+  <div id="exp">${expHtml(f)}</div>`;
 }
+// ---------- ⬇ Export: the PC's helper writes the timeline to one mp4, frame by frame (H3 Deck's clips are already in its output folder) ----------
+function expHtml(f){ const x = f.exp; if(!x) return '';
+  if(x.state==='working'){ const p = x.total ? Math.round(100 * x.done / x.total) : 0;
+    return `<div class="note" style="margin-top:10px">⬇ Exporting on ${esc(pcName(x.pc))}… ${p}%<div class="bar" style="margin:6px 0"><i style="width:${p}%"></i></div><button class="btn" data-act="expStop">✕ Stop</button></div>`; }
+  if(x.state==='done') return `<div class="note" style="margin-top:10px">⬇ Exported ${esc(x.when || '')}: <a href="${esc(viewUrl(x.pc, x.file))}" target="_blank" rel="noopener" download="${esc(x.file.filename)}">▶ Open the mp4</a> (on ${esc(pcName(x.pc))}, in ${esc(x.file.subfolder)}). Export again after changes.</div>`;
+  return `<div class="note" style="margin-top:10px;color:var(--bad)">⬇ Export didn't finish: ${esc(x.error || x.state)}</div>`; }
+function expClips(f){ const out = [], miss = [];
+  f.tracks.forEach((tr, k) => tr.clips.forEach(c => { const fl = fileOf(takeOf(c.take)); if(!fl){ miss.push(c); return; }
+    out.push({filename:fl.filename, subfolder:fl.subfolder || '', in:c.in, out:c.out, at:c.at, track:k}); }));
+  return {out, miss}; }
+const expPc = () => { const on = pcs().filter(p => p.on!==false && pcOf(p.url).online); return (on.find(p => /render/i.test(p.name)) || on[0] || {}).url; };
+async function exportFilm(f){
+  const {out, miss} = expClips(f); if(miss.length){ toast(miss.length + (miss.length===1 ? ' clip has' : ' clips have') + ' no finished video (still rendering, or gone from H3 Deck)'); return; }
+  const pc = expPc(); if(!pc){ toast("Can't reach Render or Main"); return; }
+  try{ const r = await fetch(pc + '/renderdeck/h3export', {method:'POST', body:JSON.stringify({name:f.name, clips:out})}), j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(r.status===404 && !j.error ? 'paste the newest helper on ' + pcName(pc) + ' first' : j.error || r.status);
+    f.exp = {id:j.id, pc, state:'working', done:0, total:0}; save(); expShow(f); expPoll(f); }
+  catch(e){ toast('Export: ' + e.message, 5000); } }
+function expShow(f){ const el = $('#exp'); if(el && N().v==='film' && N().film===f.id) el.innerHTML = expHtml(f); }
+let expT = 0;
+async function expPoll(f){ clearTimeout(expT); const x = f.exp; if(!x || x.state!=='working') return;
+  try{ const r = await fetch(x.pc + '/renderdeck/h3export?id=' + x.id), j = await r.json();
+    if(!r.ok){ x.state = 'failed'; x.error = j.error || r.status; }
+    else { Object.assign(x, {state:j.state, done:j.done, total:j.total, file:j.file, error:j.error}); if(j.state==='done') x.when = new Date().toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}); }
+    save(); expShow(f); }catch(e){}
+  if(x.state==='working') expT = setTimeout(() => expPoll(f), 1500); }
 const selText = (sel, t) => `<b style="color:var(--text)">${esc(takeLabel(t))}</b><br>Track ${sel.k + 1} · at ${fmt(sel.c.at)} · uses ${fmt(sel.c.in)}–${fmt(sel.c.out)} of ${fmt(sel.c.dur)}${t ? '' : ' · this take is no longer in H3 Deck'}`;
 function drawTL(f){
   const pps = f.pps, T = Math.max(filmSecs(f) + 10, 30), W = Math.ceil(T * pps), tl = $('#tl'); if(!tl) return;
@@ -478,6 +505,8 @@ document.addEventListener('click', async ev => {
       pickSheet('＋ Add a clip (to the end of track 1)', l, null, x => { addClip(f, x, 0); draw(); }); return; }
     case 'split': split(f); break;
     case 'delClip': { const r = clipOf(f, SEL); if(r){ r.tr.clips.splice(r.tr.clips.indexOf(r.c), 1); SEL = null; save(); } break; }
+    case 'export': exportFilm(f); return;
+    case 'expStop': if(f.exp){ fetch(f.exp.pc + '/renderdeck/h3export/cancel', {method:'POST', body:JSON.stringify({id:f.exp.id})}).catch(() => {}); f.exp.state = 'failed'; f.exp.error = 'stopped'; save(); expShow(f); } return;
     case 'addTrack': f.tracks.push({id:uid('tr'), clips:[]}); save(); break;
     case 'delTrack': ev.stopPropagation(); f.tracks.splice(+d.k, 1); save(); break;
     case 'editDeck': { const r = clipOf(f, SEL); if(r) location.href = deckUrl(r.c.take); return; }
@@ -491,7 +520,7 @@ document.addEventListener('input', ev => { const el = ev.target; if(el.dataset.f
 $('#roomBtn').addEventListener('click', () => go({v:'review'}));
 window.addEventListener('storage', e => { if(e.key===DECK) drawSoft(); }); // H3 Deck open in another tab
 document.addEventListener('visibilitychange', () => { if(!document.hidden) tick(); });
-window.FILM = {S, deck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {S, deck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 draw(); tick();
 </script>
 </body></html>
