@@ -41,6 +41,9 @@ mannequin you can scrub through and orbit. Copyright (c) 2026 Jordan Brantner. A
 - ✥ Line her/people up (Jordan 2026-11-01: a punch that no longer lands): tap a mannequin to pick it and drag it along the ground (a drag
   that starts off them still turns the view); ↻ Turn (about the hips) and ↕ Raise sliders; ↺ Put back. One offset per person
   (`M.adj`, metres along the levelled ground + degrees), the same on every frame, saved with the clip. A held prop moves with its hand.
+- 🦴 Skeleton clip + H3 Deck (Jordan 2026-11-03): the clips now start with an OpenPose skeleton of everyone (18 points built from SAM's bones,
+  the same map as rig/scene.html's guide; face points hidden when someone faces away). 🦴 H3 Deck on a skeleton or depth clip uploads it to
+  the PC's ComfyUI input/mocap and leaves /userdata/h3deck_inbox.json for H3 Deck, which puts it in its Motion guide (MiniMax Fun ControlNet).
 - 🎬 Clips for MiniMax (Jordan 2026-11-01, a hug between two characters): from the current camera view, 24 fps, long side 832 (multiples
   of 32, the video's shape): a depth clip (linear between the people's nearest and farthest over the clip, near = white, black
   background) and a flat colour clip (person 1 red, 2 blue, 3 green, 4 yellow; props grey), for everyone and, with 2+ people, for

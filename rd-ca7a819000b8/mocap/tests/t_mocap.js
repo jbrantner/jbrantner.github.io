@@ -59,7 +59,7 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
     const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.2), new THREE.MeshStandardMaterial({color:0xaaaaaa})); m.position.set(5, 5, 5); const g = new THREE.Scene(); g.add(m);
     const out = await new GLTFExporter().parseAsync(g, {binary:true}); return [...new Uint8Array(out)]; }).then(a => Buffer.from(a));
   let BODY = await makeBody({}), SCENE = null, PLACE = null; const DEPTH = await makeDepth(), MASK = await makeMask(), BOX = await makeBox();
-  const H = {'access-control-allow-origin':'*'}, GRAPHS = [], UPLOADS = [], DL = []; let vhsFail = false, missFirst = false, propMiss = false;
+  const H = {'access-control-allow-origin':'*'}, GRAPHS = [], UPLOADS = [], DL = [], INBOX = []; let vhsFail = false, missFirst = false, propMiss = false;
   const DEF = {SAM3DBody_Loader:{input:{required:{model_file:[['sam_3d_body_dinov3_int8_convrot.safetensors']]}}}, SAM3DBody_Predict:{input:{required:{image:['IMAGE']}}}, BuildPoseFile:{input:{required:{}}},
     UNETLoader:{input:{required:{unet_name:[['z_image_turbo_bf16.safetensors', 'rt_detr_v4-x-hgnet_fp32.safetensors']]}}}, LoadMoGeModel:{input:{required:{model_name:['COMBO', {options:['moge_2_vitl_normal_fp16.safetensors']}]}}},
     SAM3DBody_Smooth:{input:{required:{}}}, SAM3_VideoTrack:{input:{required:{}}}, CheckpointLoaderSimple:{input:{required:{ckpt_name:[['iriselTouchIL_v10.safetensors']]}}},
@@ -69,6 +69,7 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
     VHS_LoadVideo:{input:{required:{video:[['a.mp4']], force_rate:['FLOAT', {default:0}], custom_width:['INT', {default:0}], custom_height:['INT', {default:0}], frame_load_cap:['INT', {default:0}], skip_first_frames:['INT', {default:0}], select_every_nth:['INT', {default:1}]}, optional:{meta_batch:['VHS_BatchManager'], vae:['VAE'], format:[['AnimateDiff', 'None']]}}}};
   await page.route('https://render.test/**', async r => { const u = new URL(r.request().url()), J = b => r.fulfill({ contentType:'application/json', headers:H, body:JSON.stringify(b) });
     const oi = u.pathname.match(/^\/object_info\/(.+)$/); if(oi){ const c = decodeURIComponent(oi[1]); return J(DEF[c] ? {[c]:DEF[c]} : {}); }
+    if(u.pathname==='/userdata/h3deck_inbox.json'){ if(r.request().method()==='POST'){ INBOX.push(JSON.parse(r.request().postData())); return J({}); } return r.fulfill({status:404, headers:H, body:''}); }
     if(u.pathname==='/upload/image'){ const m = r.request().postDataBuffer().toString('latin1').match(/filename="([^"]+)"/); UPLOADS.push(m && m[1]); return J({name:m && m[1]}); }
     if(u.pathname==='/prompt'){ GRAPHS.push(JSON.parse(r.request().postData())); return J({prompt_id:'p' + GRAPHS.length}); }
     if(u.pathname==='/renderdeck/download'){ DL.push(JSON.parse(r.request().postData())); return J({name:'sam3.1_multiplex_fp16.safetensors'}); }
@@ -259,16 +260,24 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   await shot('lineup');
   // 🎬 clips for MiniMax: depth + colour mask from this view (6 fps here to keep the test quick), sent to Render's input
   await page.evaluate(() => { window.MOCAP_EXPORT_FPS = 6; document.querySelector('#expo').open = true; }); await page.click('#expb');
-  await page.waitForFunction(() => window.MOCAP.EXP.clips.length===2 && !window.MOCAP.EXP.busy, null, {timeout:60000});
+  await page.waitForFunction(() => window.MOCAP.EXP.clips.length===3 && !window.MOCAP.EXP.busy, null, {timeout:60000});
   const ex = await page.evaluate(async () => { const out = {}; for(const c of window.MOCAP.EXP.clips){ const v = document.createElement('video'); v.muted = true; v.src = c.url; await new Promise(r => { v.onloadeddata = r; v.onerror = r; });
       const cv = document.createElement('canvas'); cv.width = v.videoWidth; cv.height = v.videoHeight; const x = cv.getContext('2d'); x.drawImage(v, 0, 0); const d = x.getImageData(0, 0, cv.width, cv.height).data; let red = 0, bright = 0, n = d.length / 4;
       for(let i = 0; i < d.length; i += 4){ if(d[i] > 180 && d[i + 1] < 90 && d[i + 2] < 90) red++; if(d[i] > 60 && Math.abs(d[i] - d[i + 1]) < 20 && Math.abs(d[i] - d[i + 2]) < 20) bright++; }
-      out[c.name] = {w:cv.width, h:cv.height, size:c.blob.size, red:c.stats.red, grey:c.stats.grey, frames:c.frames}; } return {out, msg:window.MOCAP.EXP.msg}; });
+      out[c.name] = {w:cv.width, h:cv.height, size:c.blob.size, red:c.stats.red, grey:c.stats.grey, lit:c.stats.lit, frames:c.frames}; } return {out, msg:window.MOCAP.EXP.msg}; });
   const dn = Object.keys(ex.out).find(n => /^depth_everyone/.test(n)), cn = Object.keys(ex.out).find(n => /^colours_everyone/.test(n));
   ok(dn && cn && ex.out[dn].size > 0 && ex.out[cn].h===832 && ex.out[cn].w===480, 'two clips (one person): depth and colours, 480x832 like the portrait video: ' + JSON.stringify(ex.out));
   ok(ex.out[cn].red > 0.005 && ex.out[dn].grey > 0.005 && ex.out[dn].red < 0.001, 'the colour clip has her in flat red, the depth clip has her in grey shades: ' + ex.msg);
+  const sn = Object.keys(ex.out).find(n => /^skeleton_everyone/.test(n));
+  if(process.env.SHOTS) fs.writeFileSync(path.join(process.env.SHOTS, 'skeleton.jpg'), Buffer.from((await page.evaluate(() => window.MOCAP.EXP.clips[0].thumb)).split(',')[1], 'base64'));
+  ok(sn && ex.out[sn].lit > 0.001 && ex.out[sn].lit < 0.2 && ex.out[sn].grey < 0.01 && ex.out[sn].h===832, 'the skeleton clip has coloured OpenPose limbs on black: ' + JSON.stringify(ex.out[sn]));
   const up0 = UPLOADS.length; await page.click('#exsend'); await page.waitForFunction(() => /ComfyUI input, mocap folder/.test(window.MOCAP.EXP.msg), null, {timeout:10000});
-  ok(UPLOADS.length===up0 + 2 && UPLOADS.slice(-2).every(n => /_(depth|colours)_everyone\.(webm|mp4)$/.test(n)), 'they go up to Render\'s ComfyUI input: ' + UPLOADS.slice(-2).join(', '));
+  ok(UPLOADS.length===up0 + 3 && UPLOADS.slice(-3).every(n => /_(skeleton|depth|colours)_everyone\.(webm|mp4)$/.test(n)), 'they go up to Render\'s ComfyUI input: ' + UPLOADS.slice(-3).join(', '));
+  ok(await page.$$eval('[data-h3]', b => b.length)===2, '🦴 H3 Deck on the skeleton and depth clips, not the colour mask');
+  await page.click('[data-h3="0"]'); await page.waitForFunction(() => /waiting for H3 Deck/.test(window.MOCAP.EXP.msg), null, {timeout:10000});
+  const it = INBOX.length && INBOX[INBOX.length - 1].items.slice(-1)[0];
+  ok(it && it.slot==='ctl' && it.mode==='pose' && /skeleton_everyone\.(webm|mp4)$/.test(it.file) && it.fps===6 && it.w===480 && it.h===832 && it.dur > 0 && /^data:image\/jpeg/.test(it.thumb), 'leaves H3 Deck a note on the PC with the skeleton clip: ' + JSON.stringify(it && Object.assign({}, it, {thumb:(it.thumb || '').slice(0, 20)})));
+  ok(await page.$('a[href="/h3-a875336252cb/"]'), 'and offers Open H3 Deck');
   await shot('export');
   if(process.env.DUMP) fs.writeFileSync(process.env.DUMP, JSON.stringify(GRAPHS.map(x => x.prompt)));
   ok(logs.length===0, 'no page errors: ' + logs.join(' | '));

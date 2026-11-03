@@ -130,7 +130,7 @@ const wp = b => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
 // each person's colour (the first one keeps the plain grey)
 const TINT = [0xd8d2cc, 0x9cc4ea, 0xf0a8c4, 0xb8dca0, 0xf2cf8a, 0xc4b0ec], TINT_CSS = ['#d8d2cc', '#9cc4ea', '#f0a8c4', '#b8dca0', '#f2cf8a', '#c4b0ec'];
 async function fetchGlb(res, what){ const r = await fetch(viewOf(res)); if(!r.ok) throw new Error('The ' + what + ' did not come from ' + pcName(res.pc) + ' (' + r.status + ').'); return new GLTFLoader().parseAsync(await r.arrayBuffer(), ''); }
-function clearAll(){ if(typeof EXP!=='undefined'){ for(const c of EXP.clips) URL.revokeObjectURL(c.url); EXP.clips = []; EXP.msg = ''; } for(const P of PROPS) if(P.obj && P.obj.parent) P.obj.parent.remove(P.obj); PROPS = []; if(A){ A.mixer.stopAllAction(); align.remove(A.root); A = null; } if(SCN){ align.remove(SCN.root); SCN = null; } shadow.visible = false; }
+function clearAll(){ if(typeof EXP!=='undefined'){ for(const c of EXP.clips) URL.revokeObjectURL(c.url); EXP.clips = []; EXP.msg = ''; EXP.h3 = ''; } for(const P of PROPS) if(P.obj && P.obj.parent) P.obj.parent.remove(P.obj); PROPS = []; if(A){ A.mixer.stopAllAction(); align.remove(A.root); A = null; } if(SCN){ align.remove(SCN.root); SCN = null; } shadow.visible = false; }
 const ALQ = new THREE.Quaternion(); // (the align turn, undone to move someone along the real ground)
 function setAlign(m){ align.matrix.copy(m); align.matrixWorldNeedsUpdate = true; m.decompose(new THREE.Vector3(), ALQ, new THREE.Vector3()); }
 // the ground in MoGe's mesh: the biggest flat-ish surface facing up (within 70° of the camera's up) that the feet's line of sight comes down onto.
@@ -258,6 +258,19 @@ let EXPO = false, EXP = {props:true, place:false, busy:false, clips:[], msg:''};
 function depthMat(range){ const m = new THREE.MeshDepthMaterial(); m.onBeforeCompile = sh => { Object.assign(sh.uniforms, {dNear:{value:range[0]}, dFar:{value:range[1]}, cNear:{value:range[2]}, cFar:{value:range[3]}});
     sh.fragmentShader = 'uniform float dNear; uniform float dFar; uniform float cNear; uniform float cFar;\n' + sh.fragmentShader.replace('gl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );',
       'float vz = -perspectiveDepthToViewZ( fragCoordZ, cNear, cFar ); float l = clamp( ( vz - dNear ) / ( dFar - dNear ), 0.0, 1.0 ); gl_FragColor = vec4( vec3( 1.0 - l ), 1.0 );'); }; return m; }
+// 🦴 OpenPose skeleton from SAM's bones (the 18-point layout ControlNets read; SAM's own openpose render is broken, so it's built here)
+const OP_LIMBS = [[1, 2], [1, 5], [2, 3], [3, 4], [5, 6], [6, 7], [1, 8], [8, 9], [9, 10], [1, 11], [11, 12], [12, 13], [1, 0], [0, 14], [14, 16], [0, 15], [15, 17]];
+const OP_COL = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]];
+const MHR = {lhip:'bone_002', lkn:'bone_003', lank:'bone_004', rhip:'bone_018', rkn:'bone_019', rank:'bone_020', rsh:'bone_039', rel:'bone_040', rwr:'bone_041', lsh:'bone_075', lel:'bone_076', lwr:'bone_077', neck:'bone_110', head:'bone_113', eyeA:'bone_122', eyeB:'bone_124', top:'bone_126'};
+function opJoints(p){ const J = {}; for(const [k, n] of Object.entries(MHR)){ if(!p.bn[n]) return null; J[k] = wp(p.bn[n]); }
+  const lat = J.lsh.clone().sub(J.rsh), [eL, eR] = lat.dot(J.eyeA) > lat.dot(J.eyeB) ? [J.eyeA, J.eyeB] : [J.eyeB, J.eyeA], up = J.top.clone().sub(J.head).normalize(), side = eL.clone().sub(eR), d = side.length(); side.normalize();
+  const fwd = new THREE.Vector3().crossVectors(side, up).normalize(), mid = eL.clone().add(eR).multiplyScalar(0.5), ear = sg => mid.clone().addScaledVector(side, sg * d * 1.3).addScaledVector(fwd, -d * 1.4);
+  return {fwd, pts:[mid.clone().addScaledVector(fwd, d * 0.3).addScaledVector(up, -d * 0.6), J.lsh.clone().lerp(J.rsh, 0.5), J.rsh, J.rel, J.rwr, J.lsh, J.lel, J.lwr, J.rhip, J.rkn, J.rank, J.lhip, J.lkn, J.lank, eR, eL, ear(-1), ear(1)]}; }
+function drawSkeletons(cx, W, H, cam, people){ cx.fillStyle = '#000'; cx.fillRect(0, 0, W, H); const sw = Math.max(4, Math.round(H / 170));
+  for(const p of people){ const j = opJoints(p); if(!j) continue; const away = j.fwd.dot(cam.position.clone().sub(j.pts[0])) < 0;
+    const pr = j.pts.map(w => { const q = w.clone().project(cam); return [(q.x + 1) / 2 * W, (1 - q.y) / 2 * H, q.z < 1]; }), show = pr.map((q, i) => q[2] && !(away && (i===0 || i===14 || i===15)));
+    OP_LIMBS.forEach(([a, b], i) => { if(!show[a] || !show[b]) return; const [ax, ay] = pr[a], [bx, by] = pr[b]; cx.fillStyle = `rgba(${OP_COL[i].join(',')},0.6)`; cx.beginPath(); cx.ellipse((ax + bx) / 2, (ay + by) / 2, Math.hypot(bx - ax, by - ay) / 2, sw, Math.atan2(by - ay, bx - ax), 0, Math.PI * 2); cx.fill(); });
+    pr.forEach(([x, y], i) => { if(!show[i]) return; cx.fillStyle = `rgb(${OP_COL[i].join(',')})`; cx.beginPath(); cx.arc(x, y, sw, 0, Math.PI * 2); cx.fill(); }); } }
 async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clips = []; play(false); const T0 = T, fps = window.MOCAP_EXPORT_FPS || 24;
   const [vw, vh] = [M.vw || 16, M.vh || 9], long = 832, W = vw >= vh ? long : Math.round(long * vw / vh / 32) * 32, H = vw >= vh ? Math.round(long * vh / vw / 32) * 32 : long;
   const cam = new THREE.PerspectiveCamera(camera.fov, W / H, 0.05, 200); cam.position.copy(camera.position); cam.quaternion.copy(camera.quaternion); cam.updateMatrixWorld();
@@ -267,7 +280,8 @@ async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clip
   if(EXP.place && SCN){ const b = new THREE.Box3().setFromObject(SCN.root); if(!b.isEmpty()) hi = Math.max(hi, Math.min(lo + 30, dist(b.getCenter(new THREE.Vector3())) + b.getSize(new THREE.Vector3()).length() / 2)); }
   const range = [Math.max(0.05, lo - 1.2), hi + 1.2, 0.05, 200], dm = depthMat(range);
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const R2 = new THREE.WebGLRenderer({canvas:cv, antialias:true, preserveDrawingBuffer:true}); R2.setPixelRatio(1); R2.setSize(W, H, false); R2.setClearColor(0x000000, 1);
-  const people = A.P.filter(p => !M.hide[p.i]), passes = [{who:people, mode:'depth', name:'depth_everyone'}, {who:people, mode:'mask', name:'colours_everyone'}];
+  const cvP = document.createElement('canvas'); cvP.width = W; cvP.height = H; const cxP = cvP.getContext('2d');
+  const people = A.P.filter(p => !M.hide[p.i]), passes = [{who:people, mode:'pose', name:'skeleton_everyone'}, {who:people, mode:'depth', name:'depth_everyone'}, {who:people, mode:'mask', name:'colours_everyone'}];
   if(people.length > 1) for(const p of people) passes.push({who:[p], mode:'depth', name:'depth_person' + (p.i + 1)}, {who:[p], mode:'mask', name:'colours_person' + (p.i + 1)});
   const swaps = new Map(), keepMat = o => { if(!swaps.has(o)) swaps.set(o, o.material); }, propMeshes = [], placeMeshes = [];
   for(const P of PROPS) if(P.obj) P.obj.traverse(m => { if(m.isMesh) propMeshes.push(m); }); if(SCN) SCN.root.traverse(m => { if(m.isMesh) placeMeshes.push(m); });
@@ -279,19 +293,33 @@ async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clip
       const mats = {}; for(const p of A.P){ keepMat(p.sk); p.sk.material = ps.mode==='depth' ? dm : (mats[p.i] = mats[p.i] || new THREE.MeshBasicMaterial({color:MASKC[p.i % MASKC.length]})); }
       const grey = new THREE.MeshBasicMaterial({color:0x808080}); for(const o of propMeshes){ keepMat(o); o.material = ps.mode==='depth' ? dm : grey; } for(const o of placeMeshes){ keepMat(o); o.material = ps.mode==='depth' ? dm : new THREE.MeshBasicMaterial({color:0x000000}); }
       M.hide = A.P.map(p => !ps.who.includes(p));
-      const stream = cv.captureStream(0), track = stream.getVideoTracks()[0], chunks = [], rec = new MediaRecorder(stream, {mimeType:type, videoBitsPerSecond:8e6});
+      const src = ps.mode==='pose' ? cvP : cv, stream = src.captureStream(0), track = stream.getVideoTracks()[0], chunks = [], rec = new MediaRecorder(stream, {mimeType:type, videoBitsPerSecond:8e6});
       rec.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); }; const done = new Promise(r => { rec.onstop = r; }); rec.start();
       const N = Math.max(1, Math.round(A.dur * fps) + 1);
       for(let f = 0; f < N; f++){ T = Math.min(A.dur, f / fps); const fl = FOLLOW; FOLLOW = false; pose(); FOLLOW = fl;
         for(const P of PROPS) if(P.obj) P.obj.visible = EXP.props && P.obj.visible; if(SCN) SCN.root.visible = !!EXP.place;
-        R2.render(scene, cam); if(track.requestFrame) track.requestFrame();
-        if(f===N >> 1){ const c2 = document.createElement('canvas'); c2.width = 48; c2.height = Math.round(48 * H / W); const x = c2.getContext('2d'); x.drawImage(cv, 0, 0, c2.width, c2.height); const d = x.getImageData(0, 0, c2.width, c2.height).data; let red = 0, grey = 0;
-          for(let i = 0; i < d.length; i += 4){ if(d[i] > 180 && d[i + 1] < 90 && d[i + 2] < 90) red++; if(d[i] > 40 && Math.abs(d[i] - d[i + 1]) < 20 && Math.abs(d[i] - d[i + 2]) < 20) grey++; } ps.stats = {red:red / (d.length / 4), grey:grey / (d.length / 4)}; } await new Promise(r => setTimeout(r, 1000 / fps)); }
-      rec.stop(); await done; const blob = new Blob(chunks, {type:type.split(';')[0]}); EXP.clips.push({name:ps.name + (type.includes('mp4') ? '.mp4' : '.webm'), blob, url:URL.createObjectURL(blob), frames:N, stats:ps.stats}); }
+        if(ps.mode==='pose') drawSkeletons(cxP, W, H, cam, ps.who); else R2.render(scene, cam); if(track.requestFrame) track.requestFrame();
+        if(f===N >> 1){ const c2 = document.createElement('canvas'); c2.width = 48; c2.height = Math.round(48 * H / W); const x = c2.getContext('2d'); x.drawImage(src, 0, 0, c2.width, c2.height); const d = x.getImageData(0, 0, c2.width, c2.height).data; let red = 0, grey = 0, lit = 0;
+          for(let i = 0; i < d.length; i += 4){ if(d[i] > 180 && d[i + 1] < 90 && d[i + 2] < 90) red++; if(d[i] > 40 && Math.abs(d[i] - d[i + 1]) < 20 && Math.abs(d[i] - d[i + 2]) < 20) grey++; if(d[i] + d[i + 1] + d[i + 2] > 120) lit++; } ps.stats = {red:red / (d.length / 4), grey:grey / (d.length / 4), lit:lit / (d.length / 4)};
+          const t3 = document.createElement('canvas'); t3.width = 220; t3.height = Math.round(220 * H / W); t3.getContext('2d').drawImage(src, 0, 0, t3.width, t3.height); ps.thumb = t3.toDataURL('image/jpeg', 0.75); } await new Promise(r => setTimeout(r, 1000 / fps)); }
+      rec.stop(); await done; const blob = new Blob(chunks, {type:type.split(';')[0]}); EXP.clips.push({name:ps.name + (type.includes('mp4') ? '.mp4' : '.webm'), blob, url:URL.createObjectURL(blob), frames:N, stats:ps.stats, thumb:ps.thumb, w:W, h:H, fps, dur:(N - 1) / fps, mode:ps.mode}); }
     EXP.msg = 'Made ' + EXP.clips.length + ' clips (' + W + '×' + H + ', ' + fps + ' fps' + (people.length > 1 ? '; ' + people.map(p => 'person ' + (p.i + 1) + ' = ' + MASKN[p.i % MASKN.length]).join(', ') : '') + ').'; }
   catch(e){ EXP.msg = e.message; }
   for(const [o, m] of swaps) o.material = m; M.hide = was.hide; floor.visible = was.floor; shadow.visible = was.shadow; R2.dispose();
   EXP.busy = false; T = T0; pose(); draw(); }
+// 🦴 → H3 Deck (Jordan 2026-11-03): the clip goes into the PC's ComfyUI input, and a note in that PC's user files tells H3 Deck to put it in
+// its Motion guide slot (a home-screen H3 Deck has its own storage, so the PC carries the hand-off, not the phone)
+async function clipUp(u, c){ if(c.up && c.up[u]) return c.up[u]; const fd = new FormData(); fd.append('image', c.blob, (M.name || 'mocap').replace(/[^\w-]+/g, '_').slice(0, 30) + '_' + Date.now().toString(36) + '_' + c.name); fd.append('subfolder', 'mocap'); fd.append('type', 'input'); fd.append('overwrite', 'true');
+  const r = await fetch(u + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending ' + c.name + ' failed (' + r.status + ').'); const j = await r.json(); (c.up = c.up || {})[u] = (j.subfolder ? j.subfolder + '/' : '') + j.name; return c.up[u]; }
+const H3_INBOX = '/userdata/h3deck_inbox.json';
+async function toH3(i){ const c = EXP.clips[i]; if(!c || EXP.busy) return; EXP.busy = true; draw();
+  try{ const k = KIT || await samKit().catch(() => null), u = k ? k.url : deckServers()[0].url.replace(/\/+$/, ''); EXP.msg = 'Sending ' + c.name + ' to ' + pcName(u) + '…'; const m = $('#expmsg'); if(m) m.textContent = EXP.msg;
+    const file = await clipUp(u, c); let box = {items:[]}; try{ const r = await fetch(u + H3_INBOX, {cache:'no-store'}); if(r.ok) box = await r.json(); }catch(e){}
+    const items = (Array.isArray(box.items) ? box.items : []).filter(x => x && Date.now() - (x.t || 0) < 7 * 864e5).slice(-9);
+    items.push({id:'mc' + Date.now().toString(36), t:Date.now(), slot:'ctl', file, name:(M.name || 'Mocap') + ' · ' + c.name.replace(/\.\w+$/, '').replace(/_/g, ' '), w:c.w, h:c.h, fps:c.fps, dur:c.dur, frames:c.frames, mode:c.mode, thumb:c.thumb || '', people:A.P.filter(p => !M.hide[p.i]).length});
+    const r = await fetch(u + H3_INBOX + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({v:1, items})}); if(!r.ok) throw new Error("Couldn't leave the note for H3 Deck on " + pcName(u) + ' (' + r.status + ').');
+    EXP.h3 = c.name; EXP.msg = c.name + ' is waiting for H3 Deck on ' + pcName(u) + '. Open H3 Deck and it lands in 🦴 Motion guide.'; }
+  catch(e){ EXP.msg = e.message; } EXP.busy = false; draw(); }
 async function sendClips(){ if(!EXP.clips.length || EXP.busy) return; EXP.busy = true; const k = KIT || await samKit().catch(() => null), u = k ? k.url : deckServers()[0].url.replace(/\/+$/, ''), stamp = Date.now().toString(36), names = [];
   try{ for(const c of EXP.clips){ EXP.msg = 'Sending ' + c.name + ' to ' + pcName(u) + '…'; const m = $('#expmsg'); if(m) m.textContent = EXP.msg;
       const fd = new FormData(); fd.append('image', c.blob, (M.name || 'mocap').replace(/[^\w-]+/g, '_').slice(0, 30) + '_' + stamp + '_' + c.name); fd.append('subfolder', 'mocap'); fd.append('type', 'input'); fd.append('overwrite', 'true');
@@ -560,11 +588,12 @@ function draw(){ const B = $('#body'), old = $('#prev'), at = old ? old.currentT
       <div class="row"><input id="propw" type="text" placeholder="sword, shield, chair…" maxlength="40" value="${esc(PROPW)}" aria-label="What to look for"><button id="propb" ${BUSY || SIDE ? 'disabled' : ''}>＋ Find it here</button></div>
       ${M.place ? '' : `<button id="placeb" style="width:100%;margin-top:6px" ${BUSY || SIDE ? 'disabled' : ''}>🏞 Build the whole place (8 frames)</button>`}
       ${needBtn()}
-      <details class="note" id="expo" ${EXPO ? 'open' : ''}><summary>🎬 Clips for MiniMax (depth + colour masks)</summary>
-      <p class="note" style="margin:6px 0">From this camera view, 24 fps: depth (near is white) and flat colours${A && A.P.length > 1 ? ' (' + A.P.filter(p => !M.hide[p.i]).map(p => 'person ' + (p.i + 1) + ' ' + MASKN[p.i % MASKN.length]).join(', ') + '), everyone together and each person alone' : ''}. Hidden people are left out.</p>
+      <details class="note" id="expo" ${EXPO ? 'open' : ''}><summary>🎬 Clips for MiniMax (skeleton, depth, colour masks)</summary>
+      <p class="note" style="margin:6px 0">From this camera view, 24 fps: an OpenPose skeleton, depth (near is white) and flat colours${A && A.P.length > 1 ? ' (' + A.P.filter(p => !M.hide[p.i]).map(p => 'person ' + (p.i + 1) + ' ' + MASKN[p.i % MASKN.length]).join(', ') + '), everyone together and each person alone' : ''}. Hidden people are left out. 🦴 H3 Deck puts a skeleton or depth clip in H3 Deck's Motion guide.</p>
       <div class="chips"><button id="exprops" aria-pressed="${EXP.props}">🗡 Props in them</button>${SCN ? `<button id="explace" aria-pressed="${EXP.place}">🏞 Place in them</button>` : ''}</div>
       <button id="expb" style="width:100%;margin-top:6px" ${EXP.busy ? 'disabled' : ''}>🎬 Make the clips</button>
-      ${EXP.clips.map(c => `<div class="row" style="margin-top:4px"><span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(c.name)}</span><a class="sm btn" href="${c.url}" download="${esc((M.name || 'mocap').replace(/[^\w-]+/g, '_') + '_' + c.name)}">⬇</a></div>`).join('')}
+      ${EXP.clips.map(c => `<div class="row" style="margin-top:4px"><span style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(c.name)}</span><a class="sm btn" href="${c.url}" download="${esc((M.name || 'mocap').replace(/[^\w-]+/g, '_') + '_' + c.name)}">⬇</a>${c.mode==='mask' ? '' : `<button class="sm" data-h3="${EXP.clips.indexOf(c)}" ${EXP.busy ? 'disabled' : ''}>🦴 H3 Deck</button>`}</div>`).join('')}
+      ${EXP.h3 ? `<a class="btn" href="/h3-a875336252cb/" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:6px">Open H3 Deck ›</a>` : ''}
       ${EXP.clips.length ? `<button id="exsend" style="width:100%;margin-top:6px" ${EXP.busy ? 'disabled' : ''}>⬆ Put them in Render's ComfyUI input</button>` : ''}
       <p id="expmsg" class="note">${esc(EXP.msg)}</p></details>
       <div class="lbl"><span>🙂 Head size</span><span>${(M.head || 1).toFixed(2)}×</span></div><input type="range" id="head" min="0.8" max="1.6" step="0.02" value="${M.head || 1}">
@@ -600,7 +629,7 @@ function wire(){ const on = (s, ev, f) => { const el = $(s); if(el) el[ev] = f; 
   on('#smooth', 'onclick', e => { const b = e.target.closest('button'); if(b){ M.smooth = b.dataset.k; keep(); draw(); } });
   on('#handsb', 'onclick', () => { M.hands = !M.hands; keep(); draw(); });
   on('#expo', 'ontoggle', e => { EXPO = e.target.open; }); on('#exprops', 'onclick', () => { EXP.props = !EXP.props; draw(); }); on('#explace', 'onclick', () => { EXP.place = !EXP.place; draw(); });
-  on('#expb', 'onclick', makeClips); on('#exsend', 'onclick', sendClips);
+  on('#expb', 'onclick', makeClips); document.querySelectorAll('[data-h3]').forEach(b => { b.onclick = () => toH3(+b.dataset.h3); }); on('#exsend', 'onclick', sendClips);
   on('#lineb', 'onclick', () => { LINE = !LINE; if(A && SEL >= A.P.length) SEL = 0; markSel(); draw(); });
   on('#yaw', 'oninput', e => { setAdj(SEL, {yaw:+e.target.value}); LASTMID = null; pose(); const l = $('#yawv'); if(l) l.textContent = Math.round(+e.target.value) + '°'; }); on('#yaw', 'onchange', () => { keep(); saveClip(); });
   on('#lifty', 'oninput', e => { setAdj(SEL, {y:+e.target.value}); LASTMID = null; pose(); const l = $('#liftv'); if(l) l.textContent = (+e.target.value).toFixed(2) + ' m'; }); on('#lifty', 'onchange', () => { keep(); saveClip(); });
