@@ -251,7 +251,7 @@ h2 span{flex:1}
   <section class="block shut" id="bMore" style="--c:var(--samp)">
     <h3>More <span class="sum" id="moreSum"></span></h3>
     <div class="body">
-      <div class="row" style="justify-content:space-between"><label>Takes (split across the PCs)</label>
+      <div class="row" style="justify-content:space-between"><label>Takes <span class="note" id="takesHow" style="display:block;margin:0">split across the PCs</span></label>
         <div class="step"><button id="takesDn">−</button><b id="takesOut">1</b><button id="takesUp">+</button></div></div>
       <div><div class="lab"><span>Which PCs</span></div><div class="seg" id="whereSeg"></div></div>
       <div class="row" style="flex-wrap:nowrap"><label style="flex:1">Steps</label><input type="number" id="steps" placeholder="auto" inputmode="numeric" style="width:96px"></div>
@@ -943,13 +943,17 @@ async function render(){
   const extra = {}; let sent = 0, cur = null;
   try{
     const base = +S.f.seed || 0;
-    for(let k = 0; k < (+S.f.takes || 1); k++){
+    const N = +S.f.takes || 1;
+    for(let k = 0; k < N; k++){
       const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base ? base + k : Math.floor(Math.random() * 2 ** 31);
       t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
       const url = pickPc(t, extra); if(!url) throw new Error('no PC can take it right now');
       t.pc = url; extra[url] = (extra[url] || 0) + estSecs(t, url);
       S.takes.unshift(t); drawTakes(); cur = t;
       await sendPieces(t, 0); sent++; cur = null;
+      // Jordan 2026-11-03: on a long clip, "4 takes" = 4 versions that all start with the same beginning: the pieces before the
+      // last are made once, and the other takes are versions of the last piece carrying on from it (same PC, after it in line)
+      if(N > 1 && t.pieces.length > 1 && !t.sm){ sent += await makeBranches(t, t.pieces.length - 1, N - 1); break; }
     }
   }catch(e){ toast('Not sent: ' + e.message, 6000);
     // the take stays on the list as stopped, with why and ↻ Try again, not stuck on "Sending"
@@ -1012,7 +1016,7 @@ async function tick(){
 }
 // ComfyUI forgets finished jobs when it restarts: a piece that finished just before is found by its file
 async function probeFile(t, i){
-  const sub = outDir(t), base = 'piece_' + String(i + 1).padStart(2, '0'); let best = null;
+  const sub = (t.ctxDirs && t.ctxDirs[i + 1]) || outDir(t), base = 'piece_' + String(i + 1).padStart(2, '0'); let best = null;
   for(let n = 1; n <= 30; n++){ const f = {filename:base + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'}; let r;
     try{ r = await fetch(viewUrl(t.pc, f), {method:'HEAD'}); }catch(e){ return best; } if(!r.ok) break;
     if((Date.parse(r.headers.get('Last-Modified') || '') || 0) >= (t.pieces[i].tq || 0) - 60e3) best = f; }
@@ -1024,9 +1028,11 @@ async function cancelTake(t){
     try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:[t.upPid].filter(Boolean)})}); }catch(e){}
     if(t.upStage==='running'){ try{ await fetch(t.pc + '/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt_id:t.upPid})}); }catch(e){} }
     t.upErr = 'Cancelled'; t.upStage = 'done'; t.state = 'done'; save(); drawTakes(); return; }
-  const pids = t.pieces.filter(p => p.pid && (p.state==='queued' || p.state==='running')).map(p => p.pid).concat(t.joinPid && t.state==='working' ? [t.joinPid] : []).concat(t.upPid && t.upStage && t.upStage!=='done' ? [t.upPid] : []);
+  // a piece shared with other takes (the same beginning) keeps rendering for them
+  const mine = p => !S.takes.some(o => o!==t && o.state==='working' && o.pieces.some(x => x.pid===p.pid && (x.state==='queued' || x.state==='running')));
+  const pids = t.pieces.filter(p => p.pid && (p.state==='queued' || p.state==='running') && mine(p)).map(p => p.pid).concat(t.joinPid && t.state==='working' ? [t.joinPid] : []).concat(t.upPid && t.upStage && t.upStage!=='done' ? [t.upPid] : []);
   try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:pids})}); }catch(e){}
-  const run = t.pieces.find(p => p.state==='running'); if(run){ try{ await fetch(t.pc + '/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt_id:run.pid})}); }catch(e){} }
+  const run = t.pieces.find(p => p.state==='running' && mine(p)); if(run){ try{ await fetch(t.pc + '/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt_id:run.pid})}); }catch(e){} }
   t.pieces.forEach(p => { if(p.state==='queued' || p.state==='running'){ p.state = 'failed'; p.err = 'Cancelled'; } }); t.state = 'failed'; save(); drawTakes();
 }
 // 🎲 takes from a piece (Jordan 2026-11-03: "if we like video 1/3 but want versions of 2/3"): new takes keep pieces 1..i of this
@@ -1036,6 +1042,12 @@ const ctxDir = (t, i) => (t.ctxDirs && t.ctxDirs[i]) || outDir(t);
 const borrowed = t => !!(t.ctxDirs && t.ctxDirs.some(Boolean)); // the helper's join only looks in the take's own folder
 async function branchFrom(t, i, n, prompt){
   if(!pcOf(t.pc).online){ toast(pcName(t.pc) + " can't be reached: piece " + i + "'s ending is saved there, so it has to be that PC"); return; }
+  const sent = await makeBranches(t, i, n, prompt);
+  save(); drawTakes(); if(sent) toast(sent + (sent > 1 ? ' takes' : ' take') + ' of piece ' + (i + 1) + ' sent to ' + pcName(t.pc));
+}
+// n takes that share pieces 1..i of t. t may still be rendering: they then follow those pieces' own renders (same ComfyUI ids)
+// and their piece i+1 waits behind t's piece i in the same PC's line, so it starts from t's saved ending.
+async function makeBranches(t, i, n, prompt){
   let at = S.takes.indexOf(t) + 1, sent = 0;
   for(let k = 0; k < n; k++){
     const b = JSON.parse(JSON.stringify(t)); b.id = uid('t'); b.t = Date.now(); b.seed = Math.floor(Math.random() * 2 ** 31);
@@ -1047,7 +1059,7 @@ async function branchFrom(t, i, n, prompt){
     S.takes.splice(at++, 0, b); drawTakes();
     try{ await sendPieces(b, i); sent++; }catch(e){ b.state = 'failed'; b.pieces[i].state = 'failed'; b.pieces[i].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
   }
-  save(); drawTakes(); if(sent) toast(sent + (sent > 1 ? ' takes' : ' take') + ' of piece ' + (i + 1) + ' sent to ' + pcName(t.pc));
+  return sent;
 }
 async function redoFrom(t, i, newSeed){
   if(t.ctxDirs) t.ctxDirs.length = Math.min(t.ctxDirs.length, i + 1); // pieces from i on are made here now, so their endings are too
@@ -1270,6 +1282,7 @@ function drawMore(){
 function drawGo(){
   const why = whyNot(), b = $('#goBtn'); b.disabled = !!why;
   const n = +S.f.takes || 1; b.textContent = 'Render' + (n > 1 ? ' ' + n + ' takes' : '');
+  const long = n > 1 && !S.f.sm && currentPlan().length > 1, th = $('#takesHow'); if(th) th.textContent = long ? 'long clip: the beginning once, ' + n + ' versions of the last piece' : 'split across the PCs';
   $('#goWhy').hidden = !why || /^Write/.test(why); $('#goWhy').textContent = why;
 }
 function stateLine(t){
@@ -1475,6 +1488,6 @@ function showTake(){ const m = /take=([^&]+)/.exec(location.hash); if(!m) return
   setTimeout(() => { const el = document.querySelector(`.take[data-take="${CSS.escape(id)}"]`); if(!el) return; el.scrollIntoView({behavior:'smooth', block:'center'}); el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), 4000); }, 300);
   toast('From 🎬 H3 Film: tap a piece for 🎲 more takes of it, or use the buttons'); }
 window.addEventListener('hashchange', showTake); showTake();
-window.H3 = {S, drawAll, branchFrom, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
