@@ -106,5 +106,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   const tid = await fr.evaluate(() => FILM.reviewList()[0].id); await page.click('[data-tab="room"]'); await page.waitForTimeout(300);
   await fr.click('.rv[data-take="' + tid + '"] [data-act="deck"]'); await page.waitForTimeout(800);
   ok(!(await page.$eval('#renderTab', e => e.hidden)) && (await page.$$eval('.take.hl', e => e.map(x => x.dataset.take))).includes(tid), '✏️ in the Cutting Room switches to Render on that take');
+  // ➕ options of what comes next: N new takes = the whole finished clip + a new part each, carrying on from its end
+  const n1 = sent.length;
+  await page.evaluate(() => { H3.extendSheet(H3.S.takes.find(t => t.id==='tA'), 3); }); await page.waitForTimeout(200);
+  await page.fill('#exPrompt', 'she sits down'); await page.fill('#exLen', '4'); await page.click('#exGo'); await page.waitForTimeout(1500);
+  const nx = await page.evaluate(() => { const a = H3.S.takes.find(t => t.id==='tA'); return {a:a.pieces.length, kids:H3.S.takes.filter(t => t.from && t.from.id==='tA' && t.from.at===3).map(t => ({n:t.pieces.length, st:t.pieces.map(p => p.state), d3:H3.ctxDir(t, 3)}))}; });
+  const ldn = node(sent[sent.length - 1].g, 'MiniMaxH3MotionContextLoadLatent');
+  ok(nx.a===3 && nx.kids.length===3 && nx.kids.every(k => k.n===4 && k.st.slice(0, 3).every(x => x==='done') && k.d3==='Output_Render/H3Deck/h3_a') && sent.length - n1===3 && ldn.inputs.clip_index===3 && ldn.inputs.latent_path==='Output_Render/H3Deck/h3_a', '➕ 3 options of the next part: 3 new takes with the clip\'s 3 pieces + a new 4th from its end; the clip itself stays (' + JSON.stringify(nx) + ')');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();

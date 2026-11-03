@@ -39,7 +39,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.click('[data-take="tA"] [data-act="toFilm"]'); await page.waitForTimeout(200);
   await page.click('[data-take="tB"] [data-act="toFilm"]'); await page.waitForTimeout(200);
   await page.click('[data-take="tB2"] [data-act="skip"]'); await page.waitForTimeout(200);
-  ok(await page.$$eval('.rv', r => r.length)===1, 'added and skipped takes leave the review');
+  ok(await page.evaluate(() => FILM.reviewList().length)===1, 'added and skipped takes leave the review');
   const f = await page.evaluate(() => FILM.S.films[0]); const cl = f.tracks[0].clips;
   ok(f.tracks.length===2 && cl.length===2 && cl[0].at===0 && Math.abs(cl[1].at - 5) < 0.01 && Math.abs(cl[1].out - 221 / 24) < 0.01, '＋ Add to a film makes a film and puts the clips one after another on track 1 (' + JSON.stringify(cl.map(c => [c.at, c.out])) + ')');
   await page.evaluate(id => FILM.go({v:'film', film:id}), f.id); await page.waitForTimeout(300);
@@ -79,6 +79,9 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(rr.has && rr.rev.includes('tR'), "the newest takes list is read from the PC's copy (" + JSON.stringify(rr) + ')');
   REMOTE.j = null; await page.evaluate(() => { localStorage.setItem('h3deck', JSON.stringify(Object.assign(JSON.parse(localStorage.getItem('h3deck')), {tsav:Date.now() + 120000}))); });
   ok(await page.evaluate(() => !FILM.takeOf('tR') && !!FILM.takeOf('tB2')), "a newer copy on this phone wins over the PC's");
+  await page.evaluate(() => { FILM.S.rev.tB2 = 'keep'; FILM.go({v:'review'}); }); await page.waitForTimeout(200);
+  ok(/✓ Kept/.test(await page.textContent('#view')) && !!(await page.$('.rv[data-take="tB2"] [data-act="next"]')), 'kept takes are listed under ✓ Kept with ➕ Next part options');
+  await page.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.evaluate(id => { FILM.SEL = id; FILM.draw(); }, await page.evaluate(() => FILM.S.films[0].tracks[1].clips[1].id)); await page.waitForTimeout(200);
   // ✏️ Edit in H3 Deck opens that take there
   await page.click('[data-act="editDeck"]'); await page.waitForURL(/#take=tB2/); await page.waitForTimeout(800);
   ok(/#take=tB2$/.test(page.url()) && await page.$$eval('.take.hl', e => e.length)===1, '✏️ Edit in H3 Deck opens H3 Deck on that take');

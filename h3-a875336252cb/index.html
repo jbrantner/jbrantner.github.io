@@ -1165,12 +1165,16 @@ async function toSmooth(t){
   save(); drawAll(); const box = $('#smSw'); (box || document.body).scrollIntoView({behavior:'smooth', block:'start'});
   toast('Loaded into 🪄 Smooth with ⬆ regenerate on. Check it, then press Render', 5000);
 }
-function extendSheet(t){
+function extendSheet(t, n0){ n0 = n0 || 1;
   openSheet(`<h3>➕ Add more to this clip <button class="btn" data-close>✕</button></h3>
     <div class="note">It carries straight on from the end, on ${esc(pcName(t.pc))} at the same size (the last piece is kept there).</div>
     <textarea id="exPrompt" placeholder="What happens next">${esc(t.prompt)}</textarea>
     <div><div class="lab"><span>How much longer</span><b id="exOut">5 s</b></div><input type="range" id="exLen" min="1" max="30" step="0.5" value="5" style="width:100%"></div>
+    <div class="row" style="justify-content:space-between"><label>Options of it <span class="note" style="display:block;margin:0">each one a new take starting with this clip</span></label>
+      <div class="step"><button id="exMinus">−</button><b id="exN">${n0}</b><button id="exPlus">+</button></div></div>
     <button class="btn pri" id="exGo" style="padding:13px">Add it</button>`);
+  let n = n0; const drawN = () => { $('#exN').textContent = n; $('#exGo').textContent = n > 1 ? '➕ Make ' + n + ' options of what comes next' : 'Add it'; }; drawN();
+  $('#exMinus').onclick = () => { n = Math.max(1, n - 1); drawN(); }; $('#exPlus').onclick = () => { n = Math.min(8, n + 1); drawN(); };
   $('#exLen').oninput = e => { $('#exOut').textContent = fmtS(+e.target.value); };
   $('#exGo').onclick = async () => {
     const oi = pcOf(t.pc).oi; if(!pcOf(t.pc).online || !oi || !oi.MiniMaxH3MotionContext){ toast(pcName(t.pc) + " can't carry it on right now"); return; }
@@ -1181,6 +1185,11 @@ function extendSheet(t){
     let s0 = 0; add.forEach(p => { p.start = s0; s0 += p.deliv / FPS; });
     add.forEach((p, k) => { p.prompt = piecePrompt(text, add, k); if(!/^This continues/.test(p.prompt)) p.prompt = 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' + p.prompt; });
     add.forEach(p => { p.start += end; });
+    if(n > 1){ // Jordan 2026-11-03: options of the next part, each a new take that starts with this whole clip (its pieces are borrowed)
+      const base = JSON.parse(JSON.stringify(t)), at = t.pieces.length; base.pieces = base.pieces.concat(add); base.prompt = t.prompt + '\n\n＋ ' + text;
+      closeSheet(); const sent = await makeBranches(base, at, n); save(); drawTakes();
+      if(sent){ toast(sent + ' options of what comes next sent to ' + pcName(t.pc)); window.scrollTo({top:$('#takes').offsetTop - 60, behavior:'smooth'}); }
+      return; }
     const from = t.pieces.length; t.pieces = t.pieces.concat(add); t.prompt = t.prompt + '\n\n＋ ' + text; t.state = 'working'; closeSheet(); drawTakes();
     try{ await sendPieces(t, from); toast('Adding ' + fmtS(secs)); }catch(e){ t.pieces = t.pieces.slice(0, from); t.state = 'done'; toast('Not sent: ' + e.message, 6000); }
     drawTakes();
@@ -1540,6 +1549,7 @@ document.addEventListener('visibilitychange', () => { if(!document.hidden){ ping
 function showTake(){ const m = /take=([^&]+)/.exec(location.hash); if(!m) return; const id = decodeURIComponent(m[1]), t = S.takes.find(x => x.id===id);
   if(!t){ toast("That take isn't in H3 Deck on this phone any more"); return; }
   setTimeout(() => { const el = document.querySelector(`.take[data-take="${CSS.escape(id)}"]`); if(!el) return; el.scrollIntoView({behavior:'smooth', block:'center'}); el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), 4000); }, 300);
+  if(/more=1/.test(location.hash) && t.state==='done' && !t.sm){ setTimeout(() => extendSheet(t, 3), 400); return; }
   toast('From 🎬 H3 Film: tap a piece for 🎲 more takes of it, or use the buttons'); }
 window.addEventListener('hashchange', () => { if(/take=/.test(location.hash)) setTab('render'); showTake(); }); showTake();
 // ---------- tabs ----------
@@ -1556,11 +1566,11 @@ function filmNav(tab){ try{ const F = FW && FW.FILM; if(!F) return; const v = F.
   if(tab==='room' && v!=='review') F.go({v:'review'});
   if(tab==='films' && v==='review') F.go(F.S.lastFilm && F.S.films.some(x => x.id===F.S.lastFilm) ? {v:'film', film:F.S.lastFilm} : {v:'home'}); }catch(e){} }
 // called by the film app inside the frame
-window.H3Tab = (tab, takeId) => { if(takeId){ setTab('render'); location.hash = 'take=' + encodeURIComponent(takeId); showTake(); } else setTab(tab); };
+window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('render'); location.hash = 'take=' + encodeURIComponent(takeId) + (more ? '&more=1' : ''); } else setTab(tab); };
 window.H3Badge = n => { $('#roomN').textContent = n ? String(n) : ''; };
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => { if(S.tab && S.tab!=='render') tabTop(); });
 if(S.tab && S.tab!=='render' && !/take=/.test(location.hash)) setTab(S.tab);
-window.H3 = {S, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
