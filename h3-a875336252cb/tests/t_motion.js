@@ -28,7 +28,9 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
   const sent = [], uploads = [], views = []; let schema = SCHEMA;
-  let inbox = {v:1, items:[{id:'mc1', t:Date.now(), slot:'ctl', file:'mocap/fight_skeleton_everyone.webm', name:'Fight · skeleton everyone', w:832, h:480, fps:24, dur:12.2, frames:294, mode:'pose', thumb:'', people:2}]};
+  let inbox = {v:1, items:[{id:'mc0', t:Date.now() - 6e4, slot:'list', file:'mocap/walk_depth_everyone.webm', name:'Walk · depth everyone', w:480, h:832, fps:24, dur:3.2, frames:77, mode:'depth', thumb:'', people:1},
+    {id:'mcm', t:Date.now() - 5e4, slot:'list', file:'mocap/walk_colours_everyone.webm', name:'Walk · colours everyone', w:480, h:832, fps:24, dur:3.2, frames:77, mode:'mask', thumb:'', people:1},
+    {id:'mc1', t:Date.now(), slot:'ctl', file:'mocap/fight_skeleton_everyone.webm', name:'Fight · skeleton everyone', w:832, h:480, fps:24, dur:12.2, frames:294, mode:'pose', thumb:'', people:2}]};
   await page.route(PC + '/**', async (rt) => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[{vram_free:7e9, vram_total:8.5e9}]});
     if(p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); return J(schema[c] ? {[c]:schema[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
@@ -55,6 +57,15 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   ok(!(await page.isHidden('#ctlBody')) && /skeleton/.test(await page.textContent('#ctlSlots')) && /2 people/.test(await page.textContent('#ctlNote')), 'Motion guide shows the clip and notes the two people');
   await page.evaluate(() => H3.pullInbox()); await page.waitForTimeout(300);
   ok(views.length===1, 'the same note is not picked up twice');
+
+  // ---- From Mocap: every skeleton/depth clip the PC's note lists, newest first, colour masks left out ----
+  const rows = await page.$$eval('#ctlList .mrow', b => b.map(x => [x.textContent, x.classList.contains('on')]));
+  ok(rows.length===2 && /Fight/.test(rows[0][0]) && rows[0][1] && /Walk · depth/.test(rows[1][0]) && /depth · 3.2 s/.test(rows[1][0]), 'From Mocap lists the two clips, the one in use marked: ' + JSON.stringify(rows));
+  await page.click('#ctlList .mrow:nth-of-type(2)'); await page.waitForFunction(() => (H3.S.media[H3.S.f.ctlVid] || {}).mode==='depth', null, {timeout:5000}).catch(() => {});
+  const dp = await page.evaluate(() => ({m:H3.S.media[H3.S.f.ctlVid], a:H3.S.f.aspect, s:H3.S.f.seconds}));
+  ok(dp.m.mode==='depth' && dp.a==='9:16' && dp.s===3.2 && views.length===2 && views[1][1]==='walk_depth_everyone.webm', 'tapping one fetches it and uses it (shape and length too): ' + JSON.stringify({mode:dp.m.mode, a:dp.a, s:dp.s}));
+  await page.click('#ctlList .mrow:nth-of-type(1)'); await page.waitForTimeout(400);
+  ok(views.length===2 && (await page.evaluate(() => H3.S.media[H3.S.f.ctlVid].mode))==='pose', 'going back to the skeleton reuses the copy on the phone');
 
   // ---- a 5 s take: one piece ----
   await page.fill('#prompt', 'Two people fight on a bridge. The woman in red is on the left, the tall man in black on the right.');
@@ -97,7 +108,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   // ---- reopening keeps the clip on the phone ----
   await page.reload(); await page.waitForFunction(() => /DaSiWa/.test(document.querySelector('#model').textContent), null, {timeout:20000}); await page.waitForTimeout(500);
   const kept = await page.evaluate(async () => { const id = H3.S.f.ctlVid, req = indexedDB.open('h3deck', 1); const db = await new Promise(r => { req.onsuccess = () => r(req.result); }); return new Promise(r => { const q = db.transaction('media').objectStore('media').get(id); q.onsuccess = () => r(q.result ? q.result.size : 0); }); });
-  ok(kept > 0 && views.length===1, 'after reopening the clip is still on the phone and the note is not fetched again');
+  ok(kept > 0 && views.length===2, 'after reopening the clip is still on the phone and the note is not fetched again');
 
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
