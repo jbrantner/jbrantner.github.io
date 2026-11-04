@@ -1429,6 +1429,17 @@ function sceneGrid(cam, W, H, masks){ const c = document.createElement('canvas')
   if(masks && masks.length){ const t = document.createElement('canvas'); t.width = W; t.height = H; const tx = t.getContext('2d'); tx.filter = 'blur(' + Math.max(4, Math.round(H / 120)) + 'px)'; masks.forEach(m => tx.drawImage(m, 0, 0, W, H));
     const md = tx.getImageData(0, 0, W, H).data, id = x.getImageData(0, 0, W, H); for(let p = 0; p < W * H; p++) if(md[p * 4] > 8){ id.data[p * 4] = id.data[p * 4 + 1] = id.data[p * 4 + 2] = 0; } x.putImageData(id, 0, 0); }
   return c; }
+// her SAM body (or the mannequin) as a plain grey figure seen from the Camera (Jordan 2026-11-04, crouching hand at chin: Qwen's own picture
+// lost the pose, "seems like it's Qwen"; a stick skeleton can't say which way a limb points or where her front is, a lit figure can, and an
+// edit model's easiest job is turning a mannequin into someone): normals rendered, then shaded by one light from over the Camera's shoulder
+function sceneShade(cam, W, H, masks){ const hid = sceneHide(), bg = scene.background, NM = new THREE.MeshNormalMaterial(); hid.push(...[ground].filter(m => m && m.visible)); if(ground) ground.visible = false;
+  scene.background = new THREE.Color(0, 0, 0); scene.overrideMaterial = NM; const c = readRT(cam, W, H); scene.overrideMaterial = null; scene.background = bg; NM.dispose(); hid.forEach(m => m.visible = true); dirty = true;
+  let md = null; if(masks && masks.length){ const t = document.createElement('canvas'); t.width = W; t.height = H; const tx = t.getContext('2d'); masks.forEach(m => tx.drawImage(m, 0, 0, W, H)); md = tx.getImageData(0, 0, W, H).data; }
+  const x = c.getContext('2d'), id = x.getImageData(0, 0, W, H), d = id.data, L = [-0.35, 0.55, 0.76];
+  for(let p = 0; p < W * H * 4; p += 4){ const on = md ? md[p] > 128 : d[p] + d[p + 1] + d[p + 2] > 0; if(!on){ d[p] = d[p + 1] = d[p + 2] = 0; continue; }
+    const n = [d[p] / 127.5 - 1, d[p + 1] / 127.5 - 1, d[p + 2] / 127.5 - 1], l = Math.hypot(...n) || 1, k = Math.max(0, (n[0] * L[0] + n[1] * L[1] + n[2] * L[2]) / l), v = Math.round(255 * (0.3 + 0.62 * k));
+    d[p] = d[p + 1] = d[p + 2] = v; }
+  x.putImageData(id, 0, 0); return c; }
 // the guide Qwen paints from: the grid with her skeleton on top
 function sceneGuide(grid, pose){ const W = grid.width, H = grid.height, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(grid, 0, 0);
   const id = x.getImageData(0, 0, W, H), pd = pose.getContext('2d').getImageData(0, 0, W, H).data; for(let p = 0; p < W * H * 4; p += 4) if(Math.max(pd[p], pd[p + 1], pd[p + 2]) > 20){ id.data[p] = pd[p]; id.data[p + 1] = pd[p + 1]; id.data[p + 2] = pd[p + 2]; }
@@ -1472,10 +1483,10 @@ function qwenPass(add, Q, guide, refs, prompt, W, H, seed, nb){ let model = [add
   return out; }
 function qwenWords(e, A, place, what){ const look = (e.tags || '').split(',').map(t => t.trim().replace(/_/g, ' ')).filter(t => t && !NOT_HERS.test(t) && !/^(1girl|1boy|solo|afkj style)$/i.test(t) && t.toLowerCase()!==(e.trigger || '').trim().toLowerCase()).join(', ');
   const boy = /\b1boy\b/i.test((e.prompt || '') + ',' + (e.tags || ''));
-  return 'Picture 1 is a pose and camera guide: the coloured skeleton is ' + (boy ? 'his' : 'her') + ' pose and the white grid lines are the ground, ' + A.say[0] + '. Draw the ' + (boy ? 'anime man' : 'anime woman') +
-    ' from Picture 2 and Picture 3 (' + (A.back ? 'Picture 2 shows her from behind; ' : '') + 'same face, hair, eyes, clothes and anime art style' + (look ? '; ' + look : '') + ') exactly on the skeleton: same pose, body angle, position and size' + (A.say.length > 1 ? '; ' + A.say.slice(1).join('; ').replace(/\bher\b/g, boy ? 'his' : 'her') : '') +
+  return 'Picture 1 is a pose and camera guide: the grey mannequin is ' + (boy ? 'him' : 'her') + ', in exactly ' + (boy ? 'his' : 'her') + ' pose, and the white grid lines are the ground, ' + A.say[0] + '. Draw the ' + (boy ? 'anime man' : 'anime woman') +
+    ' from Picture 2 and Picture 3 (' + (A.back ? 'Picture 2 shows her from behind; ' : '') + 'same face, hair, eyes, clothes and anime art style' + (look ? '; ' + look : '') + ') in place of the grey mannequin: exactly the same pose, every arm, leg, hand and the head the same, the same body angle, position and size' + (A.say.length > 1 ? '; ' + A.say.slice(1).join('; ').replace(/\bher\b/g, boy ? 'his' : 'her') : '') +
     '.' + (what ? ' In this picture: ' + what.replace(/[.\s]+$/, '') + '.' : '') + ' Replace all the black with a real, fully painted place: ' + (place || 'a sunny paved town street with paving stones') + ', its ground lying in the grid\'s perspective' + (A.pitch >= 20 ? ', seen from above, no horizon, no sky' : '') +
-    '. The grid lines and the skeleton are only a guide: none of them, and no black floor, may be seen in the picture. Only one person.'; }
+    '. The grid lines and the grey mannequin are only a guide: none of them, and no black floor, may be seen in the picture. Only one person.'; }
 // her front and side views from the 📚 library, sent to the PC
 // (Jordan 2026-11-04: kneeling with her back to the Camera came out facing it: with only her front and side to copy, Qwen drew a front;
 // now she is shown to Qwen from behind when the Camera is behind her)
@@ -1578,7 +1589,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     // 📐 Route 1 (Jordan 2026-10-31): one character in a 📖 panel, a PC with Qwen 2511: Qwen draws her from her library views on SAM's skeleton
     // over the Camera's ground grid, then Illustrious paints over that at 0.45 with her LoRA, the skeleton and the grid, and the angle as tags
     const qo = PANEL && K.qw && chars.length===1 && pn && (chars[0].e.views || []).length ? chars[0] : null, A = qo ? rsAngle(cam, qo) : null; let gn = '', qg = '', qr = [];
-    if(qo){ const grid = sceneGrid(cam, W, H, items.map((o, i) => rsChars([o]).length ? masks[i] : null).filter(Boolean)); gn = await up(grid, 'sgrid'); qg = await up(sceneGuide(grid, scenePose(chars, cam, W, H)), 'sguide');
+    if(qo){ const grid = sceneGrid(cam, W, H, items.map((o, i) => rsChars([o]).length ? masks[i] : null).filter(Boolean)); gn = await up(grid, 'sgrid'); qg = await up(sceneGuide(grid, sceneShade(cam, W, H, items.map((o, i) => rsChars([o]).length ? masks[i] : null).filter(Boolean))), 'sguide');
       const back = A.yaw!=null && A.yaw > 120; msg('📐 Sending her ' + (back ? 'back' : 'front') + ' and side views…'); qr = await refViews(url, qo.e, stamp, back); A.back = back; }
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
@@ -1836,5 +1847,5 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {SAMFIT, rsCN, rsAngle, sceneGrid, sceneGuide, qwenPass, qwenWords, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {SAMFIT, rsCN, rsAngle, sceneGrid, sceneGuide, sceneShade, qwenPass, qwenWords, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
