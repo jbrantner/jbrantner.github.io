@@ -27,7 +27,8 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8012);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [], uploads = [], views = []; let schema = SCHEMA;
+  const sent = [], uploads = [], views = []; let schema = SCHEMA, runDepth = false; const RUN = (Date.now() - 3e5).toString(36);
+  const row = async (k, two) => (await page.$$('#ctlList ' + (two ? '.m2' : '.mrow')))[k].click();
   let inbox = {v:1, items:[{id:'mc0', t:Date.now() - 6e4, slot:'list', file:'mocap/walk_depth_everyone.webm', name:'Walk · depth everyone', w:480, h:832, fps:24, dur:3.2, frames:77, mode:'depth', thumb:'', people:1},
     {id:'mcm', t:Date.now() - 5e4, slot:'list', file:'mocap/walk_colours_everyone.webm', name:'Walk · colours everyone', w:480, h:832, fps:24, dur:3.2, frames:77, mode:'mask', thumb:'', people:1},
     {id:'mc1', t:Date.now(), slot:'ctl', file:'mocap/fight_skeleton_everyone.webm', name:'Fight · skeleton everyone', w:832, h:480, fps:24, dur:12.2, frames:294, mode:'pose', thumb:'', people:2}]};
@@ -37,7 +38,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
     if(p==='/queue') return J({queue_running:[], queue_pending:[]});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p==='/userdata/h3deck_inbox.json') return J(inbox);
-    if(p==='/internal/files/input') return J(['mocap_Run-test_' + (Date.now() - 3e5).toString(36) + '_480x832_32_skeleton_everyone.webm [input]', 'mocap_Run-test_x_480x832_32_colours_everyone.webm [input]', 'holiday.mp4 [input]']);
+    if(p==='/internal/files/input') return J(['mocap_Run-test_' + RUN + '_480x832_32_skeleton_everyone.webm [input]', ...(runDepth ? ['mocap_Run-test_' + RUN + '_480x832_32_depth_everyone.webm [input]'] : []), 'mocap_Run-test_x_480x832_32_colours_everyone.webm [input]', 'holiday.mp4 [input]']);
     if(p.startsWith('/userdata/')) return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     if(p==='/upload/image'){ uploads.push(1); return J({name:'h3deck_x.png', subfolder:'h3deck', type:'input'}); }
     if(p==='/prompt'){ sent.push(JSON.parse(rt.request().postData()).prompt); return J({prompt_id:'p' + sent.length}); }
@@ -62,18 +63,18 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   // ---- From Mocap: every skeleton/depth clip the PC's note lists, newest first, colour masks left out ----
   const rows = await page.$$eval('#ctlList .mrow', b => b.map(x => [x.textContent, x.classList.contains('on')]));
   ok(rows.length===3 && /Fight/.test(rows[0][0]) && rows[0][1] && /Walk · depth/.test(rows[1][0]) && /depth · 3.2 s/.test(rows[1][0]), 'From Mocap lists the two clips, the one in use marked: ' + JSON.stringify(rows));
-  await page.click('#ctlList .mrow:nth-of-type(2)'); await page.waitForFunction(() => (H3.S.media[H3.S.f.ctlVid] || {}).mode==='depth', null, {timeout:5000}).catch(() => {});
+  await row(1); await page.waitForFunction(() => (H3.S.media[H3.S.f.ctlVid] || {}).mode==='depth', null, {timeout:5000}).catch(() => {});
   const dp = await page.evaluate(() => ({m:H3.S.media[H3.S.f.ctlVid], a:H3.S.f.aspect, s:H3.S.f.seconds}));
   ok(dp.m.mode==='depth' && dp.a==='9:16' && dp.s===3.2 && views.length===2 && views[1][1]==='walk_depth_everyone.webm', 'tapping one fetches it and uses it (shape and length too): ' + JSON.stringify({mode:dp.m.mode, a:dp.a, s:dp.s}));
-  await page.click('#ctlList .mrow:nth-of-type(1)'); await page.waitForTimeout(400);
+  await row(0); await page.waitForTimeout(400);
   ok(views.length===2 && (await page.evaluate(() => H3.S.media[H3.S.f.ctlVid].mode))==='pose', 'going back to the skeleton reuses the copy on the phone');
 
   // ---- clips found in the input folder by name (no note) ----
   const all = await page.$$eval('#ctlList .mrow', b => b.map(x => x.textContent));
   ok(all.length===3 && /Run test · skeleton everyone/.test(all[2]) && /skeleton · 3.2 s/.test(all[2]) && !all.some(t => /colours|holiday/.test(t)), 'the input folder\'s Mocap clips are listed too, masks and other videos left out: ' + JSON.stringify(all));
-  await page.click('#ctlList .mrow:nth-of-type(3)'); await page.waitForFunction(() => /Run test/.test((H3.S.media[H3.S.f.ctlVid] || {}).name || ''), null, {timeout:5000}).catch(() => {});
+  await row(2); await page.waitForFunction(() => /Run test/.test((H3.S.media[H3.S.f.ctlVid] || {}).name || ''), null, {timeout:5000}).catch(() => {});
   const nv = views.length; const fv = views[views.length - 1]; ok(fv[0]==='' && /^mocap_Run-test_.*_skeleton_everyone\.webm$/.test(fv[1]) && (await page.evaluate(() => H3.S.f.seconds))===3.2, 'tapping it fetches it from the input folder and uses its length: ' + JSON.stringify(fv));
-  await page.click('#ctlList .mrow:nth-of-type(1)'); await page.waitForTimeout(400);
+  await row(0); await page.waitForTimeout(400);
 
   // ---- a 5 s take: one piece ----
   await page.fill('#prompt', 'Two people fight on a bridge. The woman in red is on the left, the tall man in black on the right.');
@@ -113,10 +114,36 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   const n1 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
   ok(sent.length===n1 + 1 && !Object.values(sent[n1]).some(n => n.class_type==='MiniMaxH3FunControlNetApply'), 'Motion guide off = plain graph');
 
+  // ---- skeleton + depth: a skeleton brings its own capture's depth as a light second guide; both ControlNets stack on the model ----
+  await page.click('#ctlSw'); runDepth = true; await page.evaluate(() => H3.pullInbox()); await page.waitForTimeout(300);
+  const runK = (await page.$$eval('#ctlList .mrow', b => b.map(x => x.textContent))).findIndex(t => /Run test · skeleton/.test(t));
+  await row(runK); await page.waitForFunction(() => H3.S.f.ctl2Vid, null, {timeout:5000}).catch(() => {});
+  const pr = await page.evaluate(() => ({a:H3.S.media[H3.S.f.ctlVid] || {}, b:H3.S.media[H3.S.f.ctl2Vid] || {}, s:H3.S.f.ctl2Str, e:H3.S.f.ctl2End}));
+  ok(/Run test · skeleton/.test(pr.a.name) && /Run test · depth/.test(pr.b.name) && pr.s===0.4 && pr.e===0.5, 'tapping the skeleton also puts its depth in as the second guide at 0.4, letting go at 50%: ' + JSON.stringify([pr.a.name, pr.b.name]));
+  ok(!(await page.isHidden('#ctl2Ctl')) && /depth/.test(await page.textContent('#ctl2Slots')) && (await page.textContent('#ctl2StrOut'))==='0.40', 'second guide shows with its own sliders');
+  ok((await page.$$eval('#ctlList .m2.on', b => b.length))===1, 'its row is marked 2nd');
+  const n2 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
+  const g2 = sent[n2] || {}, ap = Object.entries(g2).filter(([, n]) => n.class_type==='MiniMaxH3FunControlNetApply');
+  const outer = ap.find(([, n]) => g2[n.inputs.model[0]].class_type==='MiniMaxH3FunControlNetApply'), inner = outer && g2[outer[1].inputs.model[0]];
+  const fileOf = n => g2[g2[g2[n.inputs.control_video[0]].inputs.video[0]].inputs.video[0]].inputs.file;
+  ok(ap.length===2 && outer && inner && /skeleton/.test(fileOf(inner)) && inner.inputs.strength===0.9 && /depth/.test(fileOf(outer[1])) && outer[1].inputs.strength===0.4 && outer[1].inputs.end_percent===0.5, 'two ControlNets chained: skeleton, then depth 0.4 until 50%');
+  ok(outer && outer[1].inputs.model_patch[0]===inner.inputs.model_patch[0], 'one patch loader feeds both');
+  ok(g2[Object.values(g2).find(n => n.class_type==='BasicGuider').inputs.model[0]]===outer[1], 'the sampler uses the doubly guided model');
+  const tk = await page.evaluate(() => H3.S.takes[0].ctl2); ok(tk && tk.str===0.4 && tk.end===0.5, 'the take keeps the second guide');
+  // 2nd on another row swaps the second guide; picking a skeleton from another capture drops a depth that doesn't belong to it
+  await row(1, true); await page.waitForFunction(() => /Walk/.test((H3.S.media[H3.S.f.ctl2Vid] || {}).name || ''), null, {timeout:5000}).catch(() => {});
+  ok(/Walk · depth/.test(await page.evaluate(() => (H3.S.media[H3.S.f.ctl2Vid] || {}).name)), '2nd puts that clip in the second guide');
+  await row(0); await page.waitForTimeout(400);
+  ok(await page.evaluate(() => !H3.S.f.ctl2Vid && /Fight/.test(H3.S.media[H3.S.f.ctlVid].name)), 'a skeleton from another capture clears a mismatched second guide');
+  const n3 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
+  ok(Object.values(sent[n3] || {}).filter(n => n.class_type==='MiniMaxH3FunControlNetApply').length===1, 'no second clip = one ControlNet');
+  await page.click('#ctlSw'); await page.waitForTimeout(100);
+  const vBefore = views.length;
+
   // ---- reopening keeps the clip on the phone ----
   await page.reload(); await page.waitForFunction(() => /DaSiWa/.test(document.querySelector('#model').textContent), null, {timeout:20000}); await page.waitForTimeout(500);
   const kept = await page.evaluate(async () => { const id = H3.S.f.ctlVid, req = indexedDB.open('h3deck', 1); const db = await new Promise(r => { req.onsuccess = () => r(req.result); }); return new Promise(r => { const q = db.transaction('media').objectStore('media').get(id); q.onsuccess = () => r(q.result ? q.result.size : 0); }); });
-  ok(kept > 0 && views.length===3, 'after reopening the clip is still on the phone and the note is not fetched again');
+  ok(kept > 0 && views.length===vBefore, 'after reopening the clip is still on the phone and the note is not fetched again');
 
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
