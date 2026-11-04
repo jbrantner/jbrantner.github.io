@@ -1446,7 +1446,7 @@ function rsAngle(cam, o){ const dir = new THREE.Vector3(); cam.updateMatrixWorld
   // so it is turned round when it points away from where her nose points; a head turned more than 90° from her chest doesn't happen)
   let body = flat(g[5].clone().sub(g[2]).cross(new THREE.Vector3(0, 1, 0))); if(body && head && body.dot(head) < 0) body.negate();
   const yaw = ang(body, toCam), hy = ang(head, toCam);
-  if(yaw!=null){ if(yaw > 120){ tags.push('from behind'); say.push('her back is to the camera'); }
+  if(yaw!=null){ if(yaw > 120){ tags.push('from behind', 'back'); neg.push('looking at viewer', 'facing viewer'); say.push('her back is to the camera: we see her back and the back of her head, not her face or front'); }
     else if(yaw > 75){ if(Math.abs(pitch) < 20) tags.push('from side'); say.push('her body is seen from the side'); }
     else if(yaw > 35){ say.push('her body is in three-quarter view with her front toward the camera, we do not see her back'); neg.push('from behind', 'back'); }
     else { say.push('her body faces the camera, we do not see her back'); neg.push('from behind', 'back'); } }
@@ -1473,12 +1473,15 @@ function qwenPass(add, Q, guide, refs, prompt, W, H, seed, nb){ let model = [add
 function qwenWords(e, A, place, what){ const look = (e.tags || '').split(',').map(t => t.trim().replace(/_/g, ' ')).filter(t => t && !NOT_HERS.test(t) && !/^(1girl|1boy|solo|afkj style)$/i.test(t) && t.toLowerCase()!==(e.trigger || '').trim().toLowerCase()).join(', ');
   const boy = /\b1boy\b/i.test((e.prompt || '') + ',' + (e.tags || ''));
   return 'Picture 1 is a pose and camera guide: the coloured skeleton is ' + (boy ? 'his' : 'her') + ' pose and the white grid lines are the ground, ' + A.say[0] + '. Draw the ' + (boy ? 'anime man' : 'anime woman') +
-    ' from Picture 2 and Picture 3 (same face, hair, eyes, clothes and anime art style' + (look ? '; ' + look : '') + ') exactly on the skeleton: same pose, body angle, position and size' + (A.say.length > 1 ? '; ' + A.say.slice(1).join('; ').replace(/\bher\b/g, boy ? 'his' : 'her') : '') +
+    ' from Picture 2 and Picture 3 (' + (A.back ? 'Picture 2 shows her from behind; ' : '') + 'same face, hair, eyes, clothes and anime art style' + (look ? '; ' + look : '') + ') exactly on the skeleton: same pose, body angle, position and size' + (A.say.length > 1 ? '; ' + A.say.slice(1).join('; ').replace(/\bher\b/g, boy ? 'his' : 'her') : '') +
     '.' + (what ? ' In this picture: ' + what.replace(/[.\s]+$/, '') + '.' : '') + ' Replace all the black with a real, fully painted place: ' + (place || 'a sunny paved town street with paving stones') + ', its ground lying in the grid\'s perspective' + (A.pitch >= 20 ? ', seen from above, no horizon, no sky' : '') +
     '. The grid lines and the skeleton are only a guide: none of them, and no black floor, may be seen in the picture. Only one person.'; }
 // her front and side views from the 📚 library, sent to the PC
-async function refViews(url, e, stamp){ const vs = e.views || [], pick = re => vs.find(v => re.test(v.file || '')), out = [];
-  for(const [v, n] of [[pick(/^eye_000/) || vs[0], 'front'], [pick(/^eye_090/) || vs[Math.floor(vs.length / 4)], 'side']]){ if(!v || !v.file) continue;
+// (Jordan 2026-11-04: kneeling with her back to the Camera came out facing it: with only her front and side to copy, Qwen drew a front;
+// now she is shown to Qwen from behind when the Camera is behind her)
+async function refViews(url, e, stamp, back){ const vs = e.views || [], pick = re => vs.find(v => re.test(v.file || '')), out = [];
+  const first = back ? [pick(/^eye_180/) || vs[Math.floor(vs.length / 2)], 'back'] : [pick(/^eye_000/) || vs[0], 'front'];
+  for(const [v, n] of [first, [pick(/^eye_090/) || vs[Math.floor(vs.length / 4)], 'side']]){ if(!v || !v.file) continue;
     const bm = await createImageBitmap(await (await fetch(viewUrl(e, v.file))).blob()), c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height; c.getContext('2d').drawImage(bm, 0, 0);
     out.push(await upload(url, c, 'rd-scene-ref' + n + '-' + stamp + '.png')); } return out; }
 const RS_Q = 0.45; // Illustrious over Qwen's picture (Jordan liked 0.45: her LoRA's look, Qwen's angle and ground kept)
@@ -1575,7 +1578,7 @@ async function renderScene(){ if(!SC) return; const msg = m => { const el = $('#
     // over the Camera's ground grid, then Illustrious paints over that at 0.45 with her LoRA, the skeleton and the grid, and the angle as tags
     const qo = PANEL && K.qw && chars.length===1 && pn && (chars[0].e.views || []).length ? chars[0] : null, A = qo ? rsAngle(cam, qo) : null; let gn = '', qg = '', qr = [];
     if(qo){ const grid = sceneGrid(cam, W, H, items.map((o, i) => rsChars([o]).length ? masks[i] : null).filter(Boolean)); gn = await up(grid, 'sgrid'); qg = await up(sceneGuide(grid, scenePose(chars, cam, W, H)), 'sguide');
-      msg('📐 Sending her front and side views…'); qr = await refViews(url, qo.e, stamp); }
+      const back = A.yaw!=null && A.yaw > 120; msg('📐 Sending her ' + (back ? 'back' : 'front') + ' and side views…'); qr = await refViews(url, qo.e, stamp, back); A.back = back; }
     const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:i}; return id; };
     const ck = add('CheckpointLoaderSimple', {ckpt_name:K.ckpt}); let model = [ck, 0], clip = [ck, 1];
     const style = lead.style && K.los.includes(lead.style) ? lead.style : K.los.find(l => /afkj/i.test(l)); if(style){ const id = add('LoraLoader', {model, clip, lora_name:style, strength_model:1, strength_clip:1}); model = [id, 0]; clip = [id, 1]; }
