@@ -125,7 +125,14 @@ const DEPS = process.env.RIG_DEPS || '';
     ok(v.lit > 300 && v.inBody===0 && v.gd[0] > 200 && v.gd[1] < 50, 'the ground grid is drawn from the Camera, wiped where she stands, her skeleton on top: ' + JSON.stringify({lit:v.lit, inBody:v.inBody, gd:v.gd}));
     ok(v.te.length===2 && v.te[0][0]==='P' && v.te[0][1]==='guide.png' && v.te[0][2]==='s.png' && v.te[1][0]==='' && v.rl===2 && v.sh===3.1 && v.ks.steps===4 && v.ks.cfg===1 && v.ks.sampler_name==='euler' && v.lat.width===1024 && v.lat.batch_size===1 && v.nks===4 && v.nib===3 && v.dec==='ImageBatch', 'Qwen 2511 as tested, 4 tries one at a time: guide + front + side, Lightning 4 steps cfg 1, shift 3.1: ' + JSON.stringify(v.ks));
     ok(/Picture 2 shows her from behind/.test(v.wb) && /her back is to the camera/.test(v.wb) && !/Picture 2 shows her from behind/.test(v.w), 'with her back to the Camera Qwen is told Picture 2 is her back view: ' + v.wb);
-    ok(/Picture 2 and Picture 3/.test(v.w) && /short hair, blue hair/.test(v.w) && !/ellenx|standing/.test(v.w) && /a town square/.test(v.w) && /no horizon, no sky/.test(v.w) && /Only one person/.test(v.w) && /In this picture: Walking\./.test(v.w) && /grid lines and the skeleton are only a guide/.test(v.w), 'Qwen\'s words: her look without her trigger, the place, the high camera: ' + v.w); }
+    ok(/Picture 2 and Picture 3/.test(v.w) && /short hair, blue hair/.test(v.w) && !/ellenx|standing/.test(v.w) && /a town square/.test(v.w) && /no horizon, no sky/.test(v.w) && /Only one person/.test(v.w) && /In this picture: Walking\./.test(v.w) && /grid lines and the grey mannequin are only a guide/.test(v.w) && /in place of the grey mannequin/.test(v.w), 'Qwen\'s words: her look without her trigger, the place, the high camera: ' + v.w); }
+  // (Jordan 2026-11-04 "seems like it's Qwen": Qwen now gets her as a grey lit figure, not a stick skeleton)
+  { const v = await page.evaluate(() => { const T = SCENE.THREE, cam = new T.PerspectiveCamera(40, 1.2, 0.05, 200); cam.position.set(0, 1.2, 4); cam.lookAt(0, 0.9, 0); cam.updateMatrixWorld(true);
+      const m = document.createElement('canvas'); m.width = 120; m.height = 100; const mx = m.getContext('2d'); mx.fillStyle = '#000'; mx.fillRect(0, 0, 120, 100); mx.fillStyle = '#fff'; mx.fillRect(40, 10, 40, 90);
+      const d = SCENE.sceneShade(cam, 120, 100, [m]).getContext('2d').getImageData(0, 0, 120, 100).data; let out = 0, grey = 0, col = 0;
+      for(let y = 0; y < 100; y++) for(let x = 0; x < 120; x++){ const p = (y * 120 + x) * 4, inM = x >= 40 && x < 80 && y >= 10; if(!inM && d[p]) out++; if(d[p]!==d[p + 1] || d[p]!==d[p + 2]) col++; if(inM && d[p] > 60) grey++; }
+      return {out, grey, col}; });
+    ok(v.out===0 && v.col===0 && v.grey > 0, 'her grey figure for Qwen: grey only, nothing outside her mask: ' + JSON.stringify(v)); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
