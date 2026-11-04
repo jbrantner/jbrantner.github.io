@@ -349,7 +349,23 @@ function load(){
 }
 let saveT = 0;
 function save(){ clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
-function saveNow(){ S.tsav = Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("The phone's storage is full: clear some finished renders"); } pushSoon(); }
+// Safari gives each site only about 5 MB for this save, whatever the phone has free. The pictures and clips themselves are in
+// IndexedDB; this save holds the form, the takes and a small preview per picture/clip, and old previews were what filled it
+// (Jordan 2026-11-04). tidyMedia drops media nothing uses any more (blob too); hard = also the previews of media that isn't in
+// the form (only the form shows them, and fixThumbs remakes one from the kept file when it comes back).
+function tidyMedia(hard){
+  const used = JSON.stringify({f:S.f, takes:S.takes}), form = JSON.stringify(S.f); let n = 0;
+  for(const id of Object.keys(S.media)){
+    if(!used.includes('"' + id + '"')){ delete S.media[id]; delete BLOBS[id]; IDB.del(id).catch(() => {}); Object.keys(S.up).forEach(k => { if(k.startsWith(id + '|')) delete S.up[k]; }); n++; }
+    else if(hard && S.media[id].thumb && !form.includes('"' + id + '"')){ S.media[id].thumb = ''; S.media[id].tc = 1; n++; } }
+  return n; }
+const THUMBING = {};
+function fixThumbs(){ const form = JSON.stringify(S.f);
+  for(const m of Object.values(S.media)) if(m.tc && !m.thumb && !THUMBING[m.id] && form.includes('"' + m.id + '"')){ THUMBING[m.id] = 1;
+    blobOf(m.id).then(async b => { if(!b) return; if(m.kind==='img') m.thumb = thumbOf(await imgOf(b)); else { const t = await vidThumb(b); if(t) m.thumb = t.url; } if(m.thumb){ delete m.tc; save(); drawInputs(); } }).catch(() => {}); } }
+function saveNow(){ S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(S));
+  try{ put(); }catch(e){ try{ tidyMedia(true); put(); }catch(e2){ toast("H3 Deck's own save space in Safari is full (about 5 MB; not your phone's storage), so the newest changes aren't kept. Tap Clear finished to make room.", 6000); } }
+  pushSoon(); }
 // a copy of the takes list on each PC (ComfyUI's own user files), so 🎬 H3 Film sees them even where it can't share this app's
 // storage (Jordan 2026-11-03: on iPhone each home-screen app keeps its own, so H3 Film saw nothing)
 const TAKES_FILE = '/userdata/' + 'h3deck_takes.json' + '?overwrite=true';
@@ -1402,7 +1418,7 @@ function slotHtml(kind, r, i, label){
 const guideSlot = (m, rm) => `<div class="slot has"><img src="${m.thumb || ''}" alt=""><span class="tag">${esc((m.mode==='pose' ? 'skeleton' : m.mode==='depth' ? 'depth' : 'guide') + (m.dur ? ' · ' + fmtS(m.dur) : ''))}</span><button class="x" data-rm="${rm}">✕</button><div class="nm" style="top:auto;bottom:6px">${esc(m.name)}</div></div>`;
 const addSlot = (kind, txt) => `<div class="slot add" data-add="${kind}">＋<br>${txt}</div>`;
 function drawInputs(){
-  drawH3();
+  drawH3(); fixThumbs();
   const f = S.f, L = refLabels();
   $('#smSw').classList.toggle('on', f.sm); $('#smBody').hidden = !f.sm; $('#flSw').hidden = $('#refSw').hidden = $('#ctlSw').hidden = f.sm;
   { const cm = S.media[f.ctlVid]; $('#ctlSw').classList.toggle('on', !!f.ctl); $('#ctlBody').hidden = !f.ctl || f.sm;
@@ -1745,6 +1761,7 @@ async function useMocap(x, auto, slot){ const it = x.it, f = S.f; MOCAP.busy = t
     toast('🦴 ' + (it.name || 'Mocap clip') + ' is in Motion guide' + (pair ? ', with its depth as the second guide' : ''), auto || pair ? 4500 : 2500); }
   catch(e){ MOCAP.err = e.message; toast(e.message, 5000); }
   MOCAP.busy = false; save(); drawAll(); }
+try{ if(tidyMedia(false)) saveNow(); }catch(e){} // media nothing uses any more, on every start
 pingAll().then(() => { drawAll(); tick(); pullTakes(); pullInbox(); });
 document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') pingAll().then(pullInbox).catch(() => {}); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
@@ -1776,6 +1793,6 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-ta
 window.addEventListener('resize', () => { if(S.tab && S.tab!=='render') tabTop(); });
 if(S.tab==='room') S.tab = 'render'; // ✂ Cutting Room taken out for now (Jordan 2026-11-03: not a fully fledged idea yet)
 if(S.tab && S.tab!=='render' && !/take=/.test(location.hash)) setTab(S.tab);
-window.H3 = {S, h3Prompt, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {S, tidyMedia, saveNow, h3Prompt, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
