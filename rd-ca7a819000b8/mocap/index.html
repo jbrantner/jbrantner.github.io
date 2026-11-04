@@ -255,9 +255,12 @@ renderer.domElement.addEventListener('pointerup', endDrag); renderer.domElement.
 // and a flat colour mask (person 1 red, person 2 blue…) with everyone, then the same for each person alone. Recorded from a second canvas.
 const MASKC = ['#ff2020', '#2060ff', '#20d040', '#ffd020', '#ff40ff', '#20e0e0'], MASKN = ['red', 'blue', 'green', 'yellow', 'pink', 'cyan'];
 let EXPO = false, EXP = {props:true, place:false, busy:false, clips:[], msg:''};
-function depthMat(range){ const m = new THREE.MeshDepthMaterial(), u = m.userData.u = {dNear:{value:range[0]}, dFar:{value:range[1]}, cNear:{value:range[2]}, cFar:{value:range[3]}}; m.onBeforeCompile = sh => { Object.assign(sh.uniforms, u);
-    sh.fragmentShader = 'uniform float dNear; uniform float dFar; uniform float cNear; uniform float cFar;\n' + sh.fragmentShader.replace('gl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );',
-      'float vz = -perspectiveDepthToViewZ( fragCoordZ, cNear, cFar ); float l = clamp( ( vz - dNear ) / ( dFar - dNear ), 0.0, 1.0 ); gl_FragColor = vec4( vec3( 1.0 - l ), 1.0 );'); }; return m; }
+// the distance comes straight from the vertex shader (view-space z, highp): rebuilding it from the depth buffer value lost all
+// precision on iPhone GPUs and she came out solid black (Jordan 2026-11-03)
+function depthMat(range){ const m = new THREE.MeshDepthMaterial(), u = m.userData.u = {dNear:{value:range[0]}, dFar:{value:range[1]}}; m.onBeforeCompile = sh => { Object.assign(sh.uniforms, u);
+    sh.vertexShader = 'varying highp float vMcZ;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n\tvMcZ = -mvPosition.z;');
+    sh.fragmentShader = 'uniform highp float dNear; uniform highp float dFar; varying highp float vMcZ;\n' + sh.fragmentShader.replace('gl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );',
+      'float l = clamp( ( vMcZ - dNear ) / ( dFar - dNear ), 0.0, 1.0 ); gl_FragColor = vec4( vec3( 1.0 - l ), 1.0 );'); }; m.customProgramCacheKey = () => 'mocap-depth-vz'; return m; }
 // 🦴 OpenPose skeleton from SAM's bones (the 18-point layout ControlNets read; SAM's own openpose render is broken, so it's built here)
 const OP_LIMBS = [[1, 2], [1, 5], [2, 3], [3, 4], [5, 6], [6, 7], [1, 8], [8, 9], [9, 10], [1, 11], [11, 12], [12, 13], [1, 0], [0, 14], [14, 16], [0, 15], [15, 17]];
 const OP_COL = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]];
@@ -283,7 +286,7 @@ async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clip
   for(let f = 0; f < N; f++) if(!raw[f]) raw[f] = raw.slice(0, f).reverse().find(Boolean) || raw.find(Boolean) || [1, 2];
   const W8 = Math.max(1, Math.round(fps / 4)), RNG = raw.map((_, f) => { let a = 0, b = 0, n = 0; for(let k = Math.max(0, f - W8); k <= Math.min(N - 1, f + W8); k++){ a += raw[k][0]; b += raw[k][1]; n++; } a /= n; b /= n;
     const near = Math.max(0.05, a - 0.15), span = Math.max(0.3, b - a); return [near, b + Math.max(1, span)]; });
-  const dm = depthMat([RNG[0][0], RNG[0][1], 0.05, 200]);
+  const dm = depthMat([RNG[0][0], RNG[0][1]]);
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const R2 = new THREE.WebGLRenderer({canvas:cv, antialias:true, preserveDrawingBuffer:true}); R2.setPixelRatio(1); R2.setSize(W, H, false); R2.setClearColor(0x000000, 1);
   const cvP = document.createElement('canvas'); cvP.width = W; cvP.height = H; const cxP = cvP.getContext('2d');
   const people = A.P.filter(p => !M.hide[p.i]), passes = [{who:people, mode:'pose', name:'skeleton_everyone'}, {who:people, mode:'depth', name:'depth_everyone'}, {who:people, mode:'mask', name:'colours_everyone'}];
@@ -596,7 +599,7 @@ function draw(){ const B = $('#body'), old = $('#prev'), at = old ? old.currentT
       <div class="row"><input id="propw" type="text" placeholder="sword, shield, chair…" maxlength="40" value="${esc(PROPW)}" aria-label="What to look for"><button id="propb" ${BUSY || SIDE ? 'disabled' : ''}>＋ Find it here</button></div>
       ${M.place ? '' : `<button id="placeb" style="width:100%;margin-top:6px" ${BUSY || SIDE ? 'disabled' : ''}>🏞 Build the whole place (8 frames)</button>`}
       ${needBtn()}
-      <details class="note" id="expo" ${EXPO ? 'open' : ''}><summary>🎬 Clips for MiniMax (skeleton, depth, colour masks) <small style="opacity:.55">v.260</small></summary>
+      <details class="note" id="expo" ${EXPO ? 'open' : ''}><summary>🎬 Clips for MiniMax (skeleton, depth, colour masks) <small style="opacity:.55">v.261</small></summary>
       <p class="note" style="margin:6px 0">From this camera view, 24 fps: an OpenPose skeleton, depth (near is white) and flat colours${A && A.P.length > 1 ? ' (' + A.P.filter(p => !M.hide[p.i]).map(p => 'person ' + (p.i + 1) + ' ' + MASKN[p.i % MASKN.length]).join(', ') + '), everyone together and each person alone' : ''}. Hidden people are left out. 🦴 H3 Deck puts a skeleton or depth clip in H3 Deck's Motion guide.</p>
       <div class="chips"><button id="exprops" aria-pressed="${EXP.props}">🗡 Props in them</button>${SCN ? `<button id="explace" aria-pressed="${EXP.place}">🏞 Place in them</button>` : ''}</div>
       <button id="expb" style="width:100%;margin-top:6px" ${EXP.busy ? 'disabled' : ''}>🎬 Make the clips</button>
