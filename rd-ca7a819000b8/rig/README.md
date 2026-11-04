@@ -64,3 +64,13 @@ Render Deck's 🎬 Scene tab: a saved 3D space with Character Library characters
 the library on each load, so a re-save updates them). Layers-style object list, 3D / Front / Side / Top / All 4 views,
 drag only the selected object. Scenes live on the helper (`/renderdeck/scenes*`) and in localStorage. Test:
 `RIG_DEPS=<three.js deps> node tests/t_scene.js`.
+
+## 📖 Comic panels: Route 1 (Qwen, then Illustrious)
+
+When a panel has one character and the PC has Qwen-Image-Edit 2511, `renderScene` in `scene.html` does this:
+
+1. It builds a guide picture: the Camera's 1 m floor grid (`sceneGrid`), with her drawn on top as a plain grey lit figure (`sceneShade`, v.349). Before v.349 she was an OpenPose stick skeleton.
+2. Qwen draws her in place of the grey figure, using her library views as Pictures 2 and 3. It gets her back view when her back is to the Camera.
+3. Illustrious paints over Qwen's picture at 0.45, with her LoRA, the OpenPose skeleton, SAM depth, the grid canny, and the angle tags from `rsAngle`.
+
+The render saves Qwen's own picture as the second try, so you can tell which step lost the pose.
