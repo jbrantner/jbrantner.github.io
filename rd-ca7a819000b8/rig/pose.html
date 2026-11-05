@@ -163,9 +163,12 @@ const endDrag = () => { if(!drag) return; drag = null; controls.enabled = true; 
 renderer.domElement.addEventListener('pointerup', endDrag); renderer.domElement.addEventListener('pointercancel', endDrag);
 // ---- 1 Make: Z-Image Turbo paints real people doing it (plain clothes, plain background, whole body), SAM 3D Body reads the picked one
 async function samKit(){ for(const u of pcsAll()){ try{ if(!(await hasNode(u, 'SAM3DBody_Predict')) || !(await hasNode(u, 'BuildPoseFile'))) continue;
-    const [sams, unets, moges, clips, vaes] = await Promise.all([comboOf(u, 'SAM3DBody_Loader', 'model_file'), comboOf(u, 'UNETLoader', 'unet_name'), comboOf(u, 'LoadMoGeModel', 'model_name'), comboOf(u, 'CLIPLoader', 'clip_name'), comboOf(u, 'VAELoader', 'vae_name')]);
+    const [sams, unets, moges, clips, vaes, los, dts] = await Promise.all([comboOf(u, 'SAM3DBody_Loader', 'model_file'), comboOf(u, 'UNETLoader', 'unet_name'), comboOf(u, 'LoadMoGeModel', 'model_name'), comboOf(u, 'CLIPLoader', 'clip_name'), comboOf(u, 'VAELoader', 'vae_name'), comboOf(u, 'LoraLoaderModelOnly', 'lora_name').catch(() => []), comboOf(u, 'UNETLoader', 'weight_dtype').catch(() => [])]);
     const sam = sams.find(n => /int8/i.test(n)) || sams[0], det = unets.find(n => /rt_detr/i.test(n)); if(!sam || !det) continue;
-    return {url:u, sam, det, moge:moges.find(n => /moge/i.test(n)) || '', zit:unets.find(n => /z_image_turbo/i.test(n)) || '', zclip:clips.find(n => /qwen_3_4b/i.test(n)) || '', zvae:vaes.find(n => /^ae\./i.test(n)) || ''}; }catch(e){} }
+    return {url:u, sam, det, moge:moges.find(n => /moge/i.test(n)) || '', zit:unets.find(n => /z_image_turbo/i.test(n)) || '', zclip:clips.find(n => /qwen_3_4b/i.test(n)) || '', zvae:vaes.find(n => /^ae\./i.test(n)) || '',
+      // 🌿 MOSS-Image (Jordan 2026-11-05: "Moss could be good for this"): its DiT(s), the Qwen3.5 9B encoder, the FLUX.2 VAE, the 8-step DMD LoRA
+      moss:unets.filter(n => /moss/i.test(n.split(/[\\/]/).pop())), mclip:[/qwen3\.?5.*9b.*w4a8/i, /qwen3\.?5.*9b.*int8/i, /qwen3\.?5.*9b/i].map(r => clips.find(n => r.test(n))).find(Boolean) || '',
+      mvae:vaes.find(n => /flux2.?vae.?small/i.test(n)) || vaes.find(n => /flux2.?vae/i.test(n)) || '', mfast:los.find(n => /moss.*dmd/i.test(n)) || '', fp8:dts.includes('fp8_e4m3fn')}; }catch(e){} }
   throw new Error('No PC has SAM 3D Body (it is on Render): is Render on?'); }
 const photoPrompt = d => 'Full body photo of one woman ' + d.trim().replace(/[.!]+$/, '') + ', plain grey t-shirt and grey leggings, barefoot, plain white studio background, her whole body in frame from head to feet, sharp focus';
 // (opt.mins: how long to wait)
@@ -182,8 +185,9 @@ const say = m => { MSG = m; const el = $('#msg'); if(el) el.textContent = m; };
 // (Jordan 2026-10-29: Z-Image repeats itself, so any model can paint them; an Illustrious-type model gets the same ask as tags)
 const ILLU_NEG = ', cropped, out of frame, close-up, upper body, cowboy shot, portrait, feet out of frame, head out of frame, detailed background, scenery, multiple views, 2girls, multiple girls';
 const illuPrompt = d => '1girl, solo, ' + d.trim().replace(/[.!]+$/, '') + ', plain grey t-shirt, grey leggings, barefoot, full body, simple background, white background, masterpiece, best quality, amazing quality, newest, absurdres';
-const askOf = d => P.model ? illuPrompt(d) : photoPrompt(d);
-let MODELS = null; async function loadModels(){ try{ const k = await samKit(); MODELS = await comboOf(k.url, 'CheckpointLoaderSimple', 'ckpt_name'); }catch(e){ MODELS = []; } if(step==='make') draw(); }
+const isMoss = m => /^moss:/.test(m || ''), askOf = d => P.model && !isMoss(P.model) ? illuPrompt(d) : photoPrompt(d);
+const MOSS_NEG = 'worst quality, bad anatomy, watermark, jpeg artifact, cropped, out of frame, close-up, feet out of frame, head out of frame, two people, multiple people, detailed background';
+let MODELS = null; async function loadModels(){ try{ const k = await samKit(); MODELS = (k.mclip && k.mvae ? k.moss.map(n => 'moss:' + n) : []).concat(await comboOf(k.url, 'CheckpointLoaderSimple', 'ckpt_name')); }catch(e){ MODELS = []; } if(step==='make') draw(); }
 // (Jordan 2026-10-29: as many as you choose, like the Render tab, each its own run with its own seed, never one batch; every prompt's pictures
 // stay side by side, so 4 of one wording and 3 of another can be compared)
 // the picture's shape (Jordan 2026-10-29: a wide one suits a lunge or lying down, a tall one standing)
@@ -194,14 +198,22 @@ function makePhotos(){ return work(async () => { const d = P.desc.trim(), m = P.
     const pos = add('CLIPTextEncode', {clip:[add('CLIPLoader', {clip_name:k.zclip, type:'lumina2', device:'default'}), 0], text:photoPrompt(d)}), neg = add('ConditioningZeroOut', {conditioning:[pos, 0]});
     one = () => add('SaveImage', {images:[add('VAEDecode', {samples:[add('KSampler', {model:[model, 0], seed:Math.floor(Math.random() * 2 ** 40), steps:8, cfg:1, sampler_name:'res_multistep', scheduler:'simple', positive:[pos, 0], negative:[neg, 0],
       latent_image:[add('EmptySD3LatentImage', {width:SZ[0], height:SZ[1], batch_size:1}), 0], denoise:1}), 0], vae:[vae, 0]}), 0], filename_prefix:PRE + '/pose/photo'}); }
+  else if(isMoss(m)){ const un = m.slice(5); if(!k.mclip || !k.mvae || !k.moss.includes(un)) throw new Error(pcName(k.url) + " hasn't got all of MOSS-Image (its model, the Qwen3.5 9B text encoder and the FLUX.2 VAE): get it on Render Deck's Model block.");
+    // (a full-size bf16 MOSS file, like dirtyMoss, is cast to fp8 as it loads so it fits Render's 8 GB; ⚡ the 8-step DMD LoRA when it's there, else 25 steps er_sde CFG 2.5)
+    const cast = k.fp8 && !/int8|fp8|convrot|gguf|nf4|q[4-8]_/i.test(un), fast = !!k.mfast; let model = [add('UNETLoader', {unet_name:un, weight_dtype:cast ? 'fp8_e4m3fn' : 'default'}), 0];
+    if(fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.mfast, strength_model:1}), 0];
+    const clip = [add('CLIPLoader', {clip_name:k.mclip, type:'moss_image', device:'default'}), 0], vae = add('VAELoader', {vae_name:k.mvae});
+    const pos = add('CLIPTextEncode', {clip, text:photoPrompt(d)}), neg = add('CLIPTextEncode', {clip, text:MOSS_NEG});
+    one = () => add('SaveImage', {images:[add('VAEDecode', {samples:[add('KSampler', {model, seed:Math.floor(Math.random() * 2 ** 40), steps:fast ? 8 : 25, cfg:fast ? 1 : 2.5, sampler_name:fast ? 'euler' : 'er_sde', scheduler:'simple', positive:[pos, 0], negative:[neg, 0],
+      latent_image:[add('EmptyFlux2LatentImage', {width:SZ[0], height:SZ[1], batch_size:1}), 0], denoise:1}), 0], vae:[vae, 0]}), 0], filename_prefix:PRE + '/pose/photo'}); }
   else { const ck = add('CheckpointLoaderSimple', {ckpt_name:m}), pos = add('CLIPTextEncode', {clip:[ck, 1], text:illuPrompt(d)}), neg = add('CLIPTextEncode', {clip:[ck, 1], text:NEG + ILLU_NEG});
     one = () => add('SaveImage', {images:[add('VAEDecode', {samples:[add('KSampler', {model:[ck, 0], seed:Math.floor(Math.random() * 2 ** 40), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:[pos, 0], negative:[neg, 0],
       latent_image:[add('EmptyLatentImage', {width:SZ[0], height:SZ[1], batch_size:1}), 0], denoise:1}), 0], vae:[ck, 2]}), 0], filename_prefix:PRE + '/pose/photo'}); }
-  const saves = Array.from({length:N}, one), from = d + (m ? ' · ' + m.replace(/\.safetensors$/, '') : ' · Z-Image');
+  const saves = Array.from({length:N}, one), from = d + (m ? ' · ' + m.replace(/^moss:/, '').replace(/\.safetensors$/, '') : ' · Z-Image');
   // each picture shows as soon as it's done (Jordan 2026-10-29: the thumbnails come in in place of the prompt)
   EDIT = false; PEND = N; keep(); draw(); const seen = new Set();
   const take = out => { let n = 0; for(const s2 of saves) if(out[s2] && !seen.has(s2)){ seen.add(s2); for(const im of out[s2].images || []){ P.photos.push({pc:k.url, file:im.filename, sub:im.subfolder || '', from}); n++; } } if(n){ PEND = Math.max(0, PEND - n); keep(); draw(); } };
-  try{ take(await runGraph(k.url, g, saves, t => say('Painting ' + N + ' ' + from + ' on ' + pcName(k.url) + '… ' + t + ' s'), 5 + N * 2, take)); } finally { PEND = 0; }
+  try{ take(await runGraph(k.url, g, saves, t => say('Painting ' + N + ' ' + from + ' on ' + pcName(k.url) + '… ' + t + ' s'), (isMoss(m) ? 10 + N * 4 : 5 + N * 2), take)); } finally { PEND = 0; }
   say('Tap the one whose pose you like, then Create pose.'); }); }
 function myPhoto(f){ return work(async () => { say('Sending your photo…'); const k = await samKit(), fd = new FormData(); fd.append('image', f, 'rd-pose-photo-' + Date.now().toString(36) + '.' + ((f.name || '').split('.').pop() || 'png')); fd.append('overwrite', 'true');
   const r = await fetch(k.url + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending the photo failed (' + r.status + ')');
@@ -378,7 +390,7 @@ function draw(){ const has = !!BODY, ph = P.photos || [];
   const count = () => `<span class="cnt sm"><button data-n="-1" ${dis} aria-label="Fewer">−</button><b>${P.count || 4}</b><button data-n="1" ${dis} aria-label="More">+</button></span>`;
   // 1 Make: the words and the model until Make pose, then only the pictures (Jordan 2026-10-29: as much of the canvas free as possible); ✏️ brings the words back
   if(step==='make' && (EDIT || !ph.length && !PEND)) B.innerHTML = `<textarea id="desc" rows="2" placeholder="Describe the pose, e.g. crouching down with her chin resting on her fists">${esc(P.desc)}</textarea>
-    <select id="pmodel" aria-label="Model that paints the pose" ${dis}><option value="">Z-Image Turbo (real people)</option>${(MODELS || (P.model ? [P.model] : [])).map(n => `<option value="${esc(n)}" ${P.model===n ? 'selected' : ''}>${esc(n.replace(/\.safetensors$/, ''))}</option>`).join('')}</select>
+    <select id="pmodel" aria-label="Model that paints the pose" ${dis}><option value="">Z-Image Turbo (real people)</option>${(MODELS || (P.model ? [P.model] : [])).map(n => `<option value="${esc(n)}" ${P.model===n ? 'selected' : ''}>${esc((isMoss(n) ? '🌿 ' : '') + n.replace(/^moss:/, '').replace(/\.safetensors$/, '') + (isMoss(n) ? ' (MOSS, real people)' : ''))}</option>`).join('')}</select>
     <div class="row shapes">${Object.entries(SHAPES).map(([k, v]) => `<button data-shape="${k}" aria-pressed="${(P.shape || 'tall')===k}" ${dis}>${v.name}</button>`).join('')}</div>
     <details class="note"><summary>What gets asked for</summary><span id="ask">${esc(P.desc.trim() ? askOf(P.desc) : '')}</span></details>
     <div class="row">${count()}<button class="go" id="makeb" ${dis || (P.desc.trim() ? '' : 'disabled')}>Make ${P.count || 4}</button><button class="sm" id="photob" ${dis} title="Use a photo of your own">🖼</button>${ph.length ? `<button class="sm" id="backb" ${dis} aria-label="Back to the pictures">✕</button>` : ''}<input type="file" accept="image/*" id="photof" hidden></div>`;
