@@ -34,3 +34,10 @@ Checked 2026-11-01: the newer chaining packs (MiniMax H3 Extender, H3 Long Video
 
 ## 👁 Touch up (touchup/)
 A page of its own (the 👁 button in the header) for a clip you already have: put a picture into the eyes (e.g. a spiral), colour the lips, or change any part you name or tap. One ComfyUI job on the PC: LoadVideo → Video Slice → GetVideoComponents (≤1280 px) → masks (MediaPipe face mesh for real faces: whole iris circles sized by the mesh and cut by the eye openings, or the lips; SAM 3 video tracking for a word like "iris:2" or for taps on the first frame) → the Render Deck helper's `RenderDeckTouchUp` (picture warped onto each part's ellipse, steadied over a few frames, with the video's own shading, catchlights and fine texture kept on top; or a recolour that spares teeth and the open mouth) → CreateVideo with the clip's sound and frame rate → SaveVideo. "Try one frame" runs the same graph on a 0.15 s slice and saves a still.
+
+## 🧍 Poses (keys/)
+Pose keys on a timeline, opened as H3 Deck's third tab (an iframe, so it hands its files straight to the Render tab).
+- Poses come from Render Deck's 🤸 pose library (kind `posebook` in the helper's scenes store: a SAM 3D Body GLB + tweaks). ＋ New pose opens Render Deck's pose page over the tab.
+- Every key is shown on one body (the first pose's GLB) with each pose's bone turns copied onto it, so ▶ can play Stepped (hold each key) or Eased (slerp bone by bone). 🎥 Still = one shot camera; 🎥 Moving = a view per key, eased between them.
+- 🎬 Use in Render makes, from the shot camera at the clip's shape (long side 832): an OpenPose skeleton clip and a depth clip (24 fps, the timeline's length) for 🦴 Motion guide, and one grey-mannequin picture per key. In the Render tab those pictures are references with `pose:{t}`; the H3-way prompt makes each a pose subject (`attribute_transfer` onto the person) and says "At MM:SS.mmm, … is in the pose of <Subject n> from <Picture k>" with times counted from each piece's own start.
+- Test: `SAM_GLB=a.glb SAM_GLB2=b.glb RIG_DEPS=<dir with three-0.160.0/package> NODE_PATH=$(npm root -g) node tests/t_posekeys.js`
