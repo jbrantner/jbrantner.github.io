@@ -125,17 +125,27 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   const runK = (await page.$$eval('#ctlList .mrow', b => b.map(x => x.textContent))).findIndex(t => /Run test · skeleton/.test(t));
   await row(runK); await page.waitForFunction(() => H3.S.f.ctl2Vid, null, {timeout:5000}).catch(() => {});
   const pr = await page.evaluate(() => ({a:H3.S.media[H3.S.f.ctlVid] || {}, b:H3.S.media[H3.S.f.ctl2Vid] || {}, s:H3.S.f.ctl2Str, e:H3.S.f.ctl2End}));
-  ok(/Run test · skeleton/.test(pr.a.name) && /Run test · depth/.test(pr.b.name) && pr.s===0.4 && pr.e===0.5, 'tapping the skeleton also puts its depth in as the second guide at 0.4, letting go at 50%: ' + JSON.stringify([pr.a.name, pr.b.name]));
-  ok(!(await page.isHidden('#ctl2Ctl')) && /depth/.test(await page.textContent('#ctl2Slots')) && (await page.textContent('#ctl2StrOut'))==='0.40', 'second guide shows with its own sliders');
+  ok(/Run test · skeleton/.test(pr.a.name) && /Run test · depth/.test(pr.b.name) && pr.s===0.5 && pr.e===0.65, 'tapping the skeleton also puts its depth in as the second guide at 0.5, letting go at 65%: ' + JSON.stringify([pr.a.name, pr.b.name]));
+  ok(!(await page.isHidden('#ctl2Ctl')) && /depth/.test(await page.textContent('#ctl2Slots')) && (await page.textContent('#ctl2StrOut'))==='0.50', 'second guide shows with its own sliders');
   ok((await page.$$eval('#ctlList .m2.on', b => b.length))===1, 'its row is marked 2nd');
   const n2 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
   const g2 = sent[n2] || {}, ap = Object.entries(g2).filter(([, n]) => n.class_type==='MiniMaxH3FunControlNetApply');
   const outer = ap.find(([, n]) => g2[n.inputs.model[0]].class_type==='MiniMaxH3FunControlNetApply'), inner = outer && g2[outer[1].inputs.model[0]];
   const fileOf = n => g2[g2[g2[n.inputs.control_video[0]].inputs.video[0]].inputs.video[0]].inputs.file;
-  ok(ap.length===2 && outer && inner && /skeleton/.test(fileOf(inner)) && inner.inputs.strength===0.9 && /depth/.test(fileOf(outer[1])) && outer[1].inputs.strength===0.4 && outer[1].inputs.end_percent===0.5, 'two ControlNets chained: skeleton, then depth 0.4 until 50%');
+  ok(ap.length===2 && outer && inner && /skeleton/.test(fileOf(inner)) && inner.inputs.strength===0.9 && /depth/.test(fileOf(outer[1])) && outer[1].inputs.strength===0.5 && outer[1].inputs.end_percent===0.65, 'two ControlNets chained: skeleton, then depth 0.4 until 50%');
   ok(outer && outer[1].inputs.model_patch[0]===inner.inputs.model_patch[0], 'one patch loader feeds both');
   ok(g2[Object.values(g2).find(n => n.class_type==='BasicGuider').inputs.model[0]]===outer[1], 'the sampler uses the doubly guided model');
-  const tk = await page.evaluate(() => H3.S.takes[0].ctl2); ok(tk && tk.str===0.4 && tk.end===0.5, 'the take keeps the second guide');
+  const tk = await page.evaluate(() => H3.S.takes[0].ctl2); ok(tk && tk.str===0.5 && tk.end===0.65, 'the take keeps the second guide');
+  // 🎚 one slider sets all four; hand-set values read Custom
+  ok(/Custom/.test(await page.textContent('#followOut')), '🎚 after setting the skeleton by hand the slider says Custom');
+  await page.evaluate(() => { const s = document.querySelector('#follow'); s.value = '1'; s.dispatchEvent(new Event('input')); });
+  const hi = await page.evaluate(() => { const f = H3.S.f; return [f.ctlStr, f.ctlEnd, f.ctl2Str, f.ctl2End]; }), hiW = await page.textContent('#followOut');
+  await page.evaluate(() => { const s = document.querySelector('#follow'); s.value = '0'; s.dispatchEvent(new Event('input')); });
+  const lo = await page.evaluate(() => { const f = H3.S.f; return [f.ctlStr, f.ctlEnd, f.ctl2Str, f.ctl2End]; }), loW = await page.textContent('#followOut');
+  ok(JSON.stringify(hi)==='[1.2,0.95,0.65,0.8]' && JSON.stringify(lo)==='[0.5,0.35,0.15,0.25]' && /Exact/.test(hiW) && /Loose/.test(loW), '🎚 Exact = skeleton 1.2 until 95%, depth 0.65 until 80%; Loose = 0.5/35%, 0.15/25%: ' + JSON.stringify([hi, lo, hiW, loW]));
+  await page.evaluate(() => { const s = document.querySelector('#follow'); s.value = '0.7'; s.dispatchEvent(new Event('input')); });
+  { const n3 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500); const ap3 = Object.values(sent[n3] || {}).filter(n => n.class_type==='MiniMaxH3FunControlNetApply').map(n => [n.inputs.strength, n.inputs.end_percent]).sort((a, b) => b[0] - a[0]);
+    ok(JSON.stringify(ap3)==='[[1,0.75],[0.5,0.65]]' && /Close · 70%/.test(await page.textContent('#followOut')), '🎚 Close (70%, the default) renders skeleton 1.0 until 75% and depth 0.5 until 65%: ' + JSON.stringify(ap3)); }
   // 2nd on another row swaps the second guide; picking a skeleton from another capture drops a depth that doesn't belong to it
   await row(1, true); await page.waitForFunction(() => /Walk/.test((H3.S.media[H3.S.f.ctl2Vid] || {}).name || ''), null, {timeout:5000}).catch(() => {});
   ok(/Walk · depth/.test(await page.evaluate(() => (H3.S.media[H3.S.f.ctl2Vid] || {}).name)), '2nd puts that clip in the second guide');
