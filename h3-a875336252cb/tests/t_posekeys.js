@@ -143,6 +143,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
     const P = await page.evaluate(() => { const f = H3.S.f; return {pins:f.imgs.filter(r => r.pin).map(r => r.pose.t), other:f.imgs.filter(r => !r.pin && r.pose).length, ctl:f.ctl, prompt:f.prompt, mq:f.mq, note:!document.querySelector('#mqNote').hidden}; });
     ok(QW.length===2 && QW.every(g => Object.values(g).some(n => n.class_type==='SaveImage')), '👤 two Qwen stand-in jobs, one per key (' + QW.length + ')');
     { const enc = g => Object.values(g).find(n => n.class_type==='TextEncodeQwenImageEditPlus').inputs; const a = enc(QW[0]), b = enc(QW[1]);
+      console.log('QWEN 1:', a.prompt.slice(0, 160)); console.log('QWEN 2:', b.prompt.slice(0, 160)); ok(/^IMPORTANT: (She faces the camera|Seen from)/.test(a.prompt) && /^IMPORTANT: /.test(b.prompt), 'Qwen is told which way she faces');
       ok(/a woman in her 20s/.test(a.prompt) && !a.image2 && /same person as in Picture 2/.test(b.prompt) && b.image2, 'key 1 is made from the words, key 2 also gets key 1\'s stand-in so it is the same person'); }
     ok(await fr.evaluate(() => document.querySelectorAll('#stStrip [data-st]').length===2 && !document.querySelector('#stStrip').hidden), 'the stand-ins show in a strip on the Poses tab');
     ok(await page.evaluate(() => H3.S.f.imgs.filter(r => r.pin).every(r => /^standin_/.test(H3.S.media[r.id].name))), 'the keyframes sent are the stand-ins');
