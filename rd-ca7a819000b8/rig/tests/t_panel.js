@@ -166,6 +166,11 @@ const DEPS = process.env.RIG_DEPS || '';
   // 🔁 Qwen edits her picture into the figure's pose (Jordan 2026-11-05: Qwen handed the grey figure back)
   { const w = await page.evaluate(() => SCENE.qwenWords({tags:'1girl, short hair, blue dress'}, {pitch:0, tags:[], neg:[], say:['seen from eye level'], white:true, swap:true, back:false}, '', 'She takes her shoes off.'));
     ok(/^Change the pose and camera angle of the anime woman in Picture 1 to exactly match the grey figure in Picture 2/.test(w) && /outfit, colours and anime art style exactly as in Picture 1 \(short hair, blue dress\)/.test(w) && /Picture 3 shows her from the side/.test(w) && /never for her clothes or pose: She takes her shoes off\./.test(w) && /Plain white studio/.test(w) && !/undefined/.test(w), '🔁 swapped Qwen words: ' + w); }
+  // 🩶 Qwen's picture checked for colour inside her outline (Jordan 2026-11-05: the grey figure came back)
+  { const v = await page.evaluate(() => { const mk = col => { const c = document.createElement('canvas'); c.width = 40; c.height = 40; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 40, 40); x.fillStyle = col; x.fillRect(10, 5, 20, 30); return c; };
+      const m = document.createElement('canvas'); m.width = 80; m.height = 80; const mx = m.getContext('2d'); mx.fillStyle = '#000'; mx.fillRect(0, 0, 80, 80); mx.fillStyle = '#fff'; mx.fillRect(20, 10, 40, 60);
+      return {grey:SCENE.colourIn(mk('#8a8a8a'), m), her:SCENE.colourIn(mk('#3aa0e0'), m)}; });
+    ok(v.grey < 5 && v.her > 100, '🩶 a grey figure reads as no colour, her blue dress as plenty: ' + JSON.stringify(v)); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
