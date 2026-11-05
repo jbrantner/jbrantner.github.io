@@ -350,8 +350,32 @@ function exportBackup() {
 }
 function importBackup(file) {
   const r = new FileReader();
-  r.onload = () => { try { const s = JSON.parse(r.result); if (!s || s.v !== 1 || !Array.isArray(s.pots)) throw 0; state = fix(s); save(); render(); toast('Backup restored'); } catch (e) { toast("That file isn't a backup from this app"); } };
+  r.onload = () => {
+    let s = null; try { s = JSON.parse(r.result); } catch (e) {}
+    if (s && s.version === 2 && Array.isArray(s.transactions)) return importMain(s);   // a backup from the main budget app
+    if (!s || s.v !== 1 || !Array.isArray(s.pots)) return toast("That file isn't a budget backup");
+    state = fix(s); save(); render(); toast('Backup restored');
+  };
   r.readAsText(file);
+}
+// A backup from the main app: the worker works out today's balances with the main app's own math, then this asks first.
+function importMain(src) {
+  toast('Reading your main app backup…');
+  let w; try { w = new Worker('js/import-worker.js'); } catch (e) { return toast("This phone can't read that backup here"); }
+  const stop = setTimeout(() => { w.terminate(); toast("Couldn't read it. Are you online?"); }, 20000);
+  w.onmessage = e => {
+    clearTimeout(stop); w.terminate(); const r = e.data;
+    if (!r || !r.ok) return toast("Couldn't read that backup" + (r && r.error ? ` (${r.error})` : ''));
+    const S = fix(r.state), T = S.free + S.bills + S.pots.reduce((a, p) => a + p.bal, 0), np = S.pots.filter(p => p.kind === 'pot').length, nj = S.pots.length - np;
+    const keepAdv = state.adv;
+    confirmAsk('Bring in your main app?', `${m(T)} in all: ${m(S.free)} free money, ${m(S.bills)} set aside for bills, ${S.pots.length ? `${np} pot${np === 1 ? '' : 's'} and ${nj} project${nj === 1 ? '' : 's'}` : 'no pots'}, and ${S.billList.length} bill${S.billList.length === 1 ? '' : 's'}.`
+      + (r.neg.length ? ` ${r.neg.join(', ')} showed below $0 there, so ${r.neg.length === 1 ? 'it starts' : 'they start'} at $0 here.` : '')
+      + ' This replaces what is in this test app. Your main app is not changed.', 'Bring it in', () => {
+      state = S; if (keepAdv) state.adv = keepAdv; save(); opened.clear(); showView('budget'); toast('Brought in from your main app ✓');
+    });
+  };
+  w.onerror = () => { clearTimeout(stop); w.terminate(); toast("Couldn't read that backup"); };
+  w.postMessage(src);
 }
 function sample() {
   const id = () => uid();
