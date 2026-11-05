@@ -157,6 +157,12 @@ const DEPS = process.env.RIG_DEPS || '';
       return {g, w, n, hid}; }, 'worst quality, low quality, bad quality, lowres, displeasing');
     ok(v.g[1].inputs.text==='ellenx, 1girl, short hair, barefoot' && /\(boots:1\.4\), \(shoes:1\.4\)$/.test(v.g[2].inputs.text) && /She has no boots, no shoes/.test(v.g[3].inputs.prompt) && v.g[4].inputs.prompt==='' && !/knee boots/.test(v.w) && /only for her expression/.test(v.w) && /pose always wins/.test(v.w) && v.n && v.hid, '🚫 leave-out words cut from her tags, strong in the negative, told to Qwen; the panel words are only the story; a second copy of her with no SAM body is put away: ' + JSON.stringify(v));
   }
+  // 🦵 her pose in words for Qwen (Jordan 2026-11-05: one leg raised came out both feet down)
+  { const v = await page.evaluate(() => { const T = SCENE.THREE, cam = new T.PerspectiveCamera(40, 1, 0.05, 200); cam.position.set(0, 1, 5); cam.lookAt(0, 1, 0); cam.updateMatrixWorld(true);
+      const P = (x, y) => new T.Vector3(x, y, 0), base = () => [P(0, 1.6), P(0, 1.45), P(-0.18, 1.45), P(-0.25, 1.15), P(-0.27, 0.9), P(0.18, 1.45), P(0.25, 1.15), P(0.27, 0.9), P(-0.1, 0.9), P(-0.1, 0.48), P(-0.1, 0.05), P(0.1, 0.9), P(0.1, 0.48), P(0.1, 0.05), P(-0.03, 1.63), P(0.03, 1.63), P(-0.08, 1.6), P(0.08, 1.6)];
+      const one = base(); one[12] = new T.Vector3(0.12, 0.62, 0.3); one[13] = new T.Vector3(0.12, 0.35, 0.1); const t1 = [], s1 = []; SCENE.poseSay(one, cam, t1, s1);
+      const two = base(), t2 = [], s2 = []; SCENE.poseSay(two, cam, t2, s2); return {t1, s1, t2, s2}; });
+    ok(v.t1.includes('standing on one leg') && /her left leg\) is lifted/.test(v.s1[0]) && /balances on her other foot/.test(v.s1[0]) && !v.t2.length && /both feet/.test(v.s2[0]), '🦵 one leg up is told to Qwen and tagged; both feet down says so: ' + JSON.stringify(v)); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
