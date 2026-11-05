@@ -68,10 +68,12 @@ details summary{cursor:pointer;font-size:13px;color:var(--soft)}
     <label class="chk"><input type="checkbox" id="pics">Pose pictures</label>
     <label class="chk"><input type="checkbox" id="depth">Depth too</label>
   </div>
-  <div class="row"><div class="seg grow" id="clipSeg"><button data-clip="ease" style="flex:1">Guide eased</button><button data-clip="step" style="flex:1">Guide stepped</button></div>
-    <button class="go" id="send">🎬 Use in Render</button></div>
+  <div class="lab"><span>Motion guide</span><span id="clipNote"></span></div>
+  <div class="seg" id="clipSeg"><button data-clip="touch" style="flex:1">📍 Touch points</button><button data-clip="ease" style="flex:1">Eased</button><button data-clip="step" style="flex:1">Stepped</button></div>
+  <div id="touchBox"><div class="lab"><span>Touch point strength</span><span id="tstrLab"></span></div><input type="range" id="tstr" min="0.3" max="1" step="0.05"></div>
+  <div class="row"><span class="grow"></span><button class="go" id="send">🎬 Use in Render</button></div>
   <p id="msg"></p>
-  <p class="note">Each key is a pose from the library at a time on the timeline. 🎬 sends a skeleton clip (plus depth) to the Motion guide, and each key as a pose picture whose time goes into the prompt. <span style="opacity:.55">v.1</span></p>
+  <p class="note">Each key is a pose from the library at a time on the timeline. 🎬 sends a skeleton clip to the Motion guide (📍 only at the keys, or every frame), and each key as a pose picture whose time goes into the prompt. <span style="opacity:.55">v.2</span></p>
 </div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
@@ -94,6 +96,10 @@ const snap = t => Math.round(t * FPS) / FPS;
 // ---- what's kept on the phone
 const KEY = 'h3pk-v1', get = (k, d) => { try{ return JSON.parse(localStorage.getItem(k)) || d; }catch(e){ return d; } }, put = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
 const S = Object.assign({dur:5, mode:'step', clip:'ease', aspect:'', moveCam:false, cam:{p:[0.6, 1.3, 4.4], t:[0, 0.85, 0]}, keys:[], pics:true, depth:true, T:0, base:null}, get(KEY, {}));
+// 📍 Touch points (Jordan 2026-11-05: "I don't want an animation tween between the poses, just touch points"): the guide shows each
+// pose for a few frames round its key and is black in between, so MiniMax moves her its own way from one touch point to the next
+const TOUCH = 2; // frames each side of the key (5 in all, about one latent group of 4 plus its edge)
+if(!S.clipV){ S.clip = 'touch'; S.clipV = 1; } if(S.tstr == null) S.tstr = 0.8;
 if(!S.aspect){ try{ S.aspect = PARENT.H3.S.f.aspect; }catch(e){} S.aspect = S.aspect || '16:9'; }
 let saveT = 0; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => put(KEY, S), 200); };
 const sorted = () => S.keys.slice().sort((a, b) => a.t - b.t);
@@ -193,6 +199,9 @@ function drawKeyRow(){ const k = selKey(); $('#delKey').disabled = !k; ['#yaw', 
   $('#camBtn').textContent = S.moveCam ? '🎥 Moving' : '🎥 Still'; $('#camBtn').classList.toggle('on', S.moveCam);
   document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode===S.mode));
   document.querySelectorAll('#clipSeg button').forEach(b => b.classList.toggle('on', b.dataset.clip===S.clip));
+  $('#touchBox').hidden = S.clip!=='touch'; $('#tstr').value = S.tstr; $('#tstrLab').textContent = (+S.tstr).toFixed(2);
+  $('#clipNote').textContent = S.clip==='touch' ? 'only at the keys, MiniMax moves her between' : S.clip==='ease' ? 'follows every frame, eased between keys' : 'follows every frame, snaps at each key';
+  $('#depth').disabled = S.clip==='touch'; $('#depth').closest('label').style.opacity = S.clip==='touch' ? 0.45 : 1;
   $('#lenLab').textContent = (Math.round(S.dur * 10) / 10) + ' s'; $('#pics').checked = !!S.pics; $('#depth').checked = !!S.depth;
   $('#hint').textContent = !S.keys.length ? (LIB.length ? 'Tap a pose below to put a key at the playhead. Turn the view with a finger, pinch to zoom.' : '') : '';
   $('#send').disabled = !S.keys.length || EXP; }
@@ -206,6 +215,7 @@ $('#aspect').onchange = e => { S.aspect = e.target.value; save(); size(); };
 $('#play').onclick = () => { PLAY = !PLAY; last = performance.now(); $('#play').textContent = PLAY ? '⏸' : '▶'; if(!PLAY){ S.T = snap(S.T); save(); showT(true); drawAll(); } };
 $('#modeSeg').onclick = e => { const b = e.target.closest('[data-mode]'); if(!b) return; S.mode = b.dataset.mode; save(); showT(true); drawKeyRow(); };
 $('#clipSeg').onclick = e => { const b = e.target.closest('[data-clip]'); if(!b) return; S.clip = b.dataset.clip; save(); drawKeyRow(); };
+$('#tstr').oninput = e => { S.tstr = +e.target.value; $('#tstrLab').textContent = S.tstr.toFixed(2); save(); };
 const setDur = d => { const lastK = Math.max(0, ...S.keys.map(k => k.t)); S.dur = Math.max(1, Math.min(30, Math.max(d, Math.ceil(lastK * 2) / 2))); S.T = Math.min(S.T, S.dur); save(); drawAll(); };
 $('#lenDn').onclick = () => setDur(S.dur - 0.5); $('#lenUp').onclick = () => setDur(S.dur + 0.5);
 $('#pics').onchange = e => { S.pics = e.target.checked; save(); }; $('#depth').onchange = e => { S.depth = e.target.checked; save(); };
@@ -259,8 +269,8 @@ let EXP = false;
 async function exportAll(){ if(EXP || !S.keys.length) return; EXP = true; PLAY = false; $('#play').textContent = '▶'; drawKeyRow();
   const T0 = S.T, [W, H] = dimsOf(), N = Math.round(S.dur * FPS) + 1, cam = new THREE.PerspectiveCamera(camera.fov, W / H, 0.05, 60), mode = S.clip;
   const R2 = new THREE.WebGLRenderer({canvas:Object.assign(document.createElement('canvas'), {width:W, height:H}), antialias:true, preserveDrawingBuffer:true}); R2.setPixelRatio(1); R2.setSize(W, H, false);
-  const at = T => { const c = camAt(T, mode); cam.position.fromArray(c.p); cam.lookAt(new THREE.Vector3().fromArray(c.t)); cam.updateMatrixWorld(); };
-  const out = {dur:S.dur, aspect:S.aspect, w:W, h:H, clips:[], keys:[]}, stamp = Date.now().toString(36);
+  const at = T => { const c = camAt(T, mode==='touch' ? 'step' : mode); cam.position.fromArray(c.p); cam.lookAt(new THREE.Vector3().fromArray(c.t)); cam.updateMatrixWorld(); };
+  const out = {dur:S.dur, aspect:S.aspect, w:W, h:H, clips:[], keys:[], str:mode==='touch' ? +S.tstr : null}, stamp = Date.now().toString(36);
   try{
     for(const k of S.keys){ say('Getting ' + k.pz.name + ' ready…'); await ensureBody(k.pz); await quatsOf(k.pz); }
     // the pose pictures: the grey lit mannequin on the floor grid, from the shot camera at that moment
@@ -268,14 +278,17 @@ async function exportAll(){ if(EXP || !S.keys.length) return; EXP = true; PLAY =
       out.keys.push({t:k.t, name:'posekey_' + stamp + '_' + (i + 1) + '_' + Math.round(k.t * 1000) + 'ms.png', blob:await new Promise(r => R2.domElement.toBlob(r, 'image/png'))}); }
     const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
     if(!type) throw new Error("This browser can't record video from a page, so the Motion guide clip can't be made here.");
-    const cvP = Object.assign(document.createElement('canvas'), {width:W, height:H}), cxP = cvP.getContext('2d'), dm = depthMat(), passes = [{mode:'pose', name:'skeleton'}].concat(S.depth ? [{mode:'depth', name:'depth'}] : []);
+    const cvP = Object.assign(document.createElement('canvas'), {width:W, height:H}), cxP = cvP.getContext('2d'), dm = depthMat(), touch = mode==='touch', passes = [{mode:'pose', name:touch ? 'touchpoints' : 'skeleton'}].concat(S.depth && !touch ? [{mode:'depth', name:'depth'}] : []);
+    // (touch points: which key, if any, each frame shows; a black frame is "no guide here")
+    const keyF = sorted().map(k => ({k, f:Math.round(k.t * FPS)})), touchAt = f => (keyF.find(x => Math.abs(x.f - f) <= TOUCH) || {}).k || null;
     const fwdOf = () => new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
     for(const ps of passes){ const src = ps.mode==='pose' ? cvP : R2.domElement, stream = src.captureStream(0), track = stream.getVideoTracks()[0], chunks = [], rec = new MediaRecorder(stream, {mimeType:type, videoBitsPerSecond:8e6});
       rec.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); }; const done = new Promise(r => { rec.onstop = r; }); rec.start();
       const was = {bg:scene.background, floor:floor.visible, mat:BODY.sk.material}; let thumb = '';
       if(ps.mode==='depth'){ scene.background = null; floor.visible = false; BODY.sk.material = dm; R2.setClearColor(0x000000, 1); }
-      try{ for(let f = 0; f < N; f++){ const T = Math.min(S.dur, f / FPS); if(f % 12===0) say('Making the ' + ps.name + ' clip: ' + Math.round(f / N * 100) + '%…'); poseAt(T, mode, true); at(T);
-          if(ps.mode==='pose') drawSkeleton(cxP, W, H, cam);
+      try{ for(let f = 0; f < N; f++){ const T = Math.min(S.dur, f / FPS); if(f % 12===0) say('Making the ' + ps.name + ' clip: ' + Math.round(f / N * 100) + '%…');
+          const tk = touch ? touchAt(f) : null; if(touch){ if(tk){ poseAt(tk.t, 'step', true); at(tk.t); } } else { poseAt(T, mode, true); at(T); }
+          if(ps.mode==='pose'){ if(touch && !tk){ cxP.fillStyle = '#000'; cxP.fillRect(0, 0, W, H); } else drawSkeleton(cxP, W, H, cam); }
           else { const fw = fwdOf(); let lo = 1e9, hi = -1e9; for(const b of Object.values(BODY.bn)){ const d = wp(b).sub(cam.position).dot(fw); if(d > 0.05){ lo = Math.min(lo, d); hi = Math.max(hi, d); } }
             if(lo < 1e9){ dm.userData.u.dNear.value = Math.max(0.05, lo - 0.15); dm.userData.u.dFar.value = hi + Math.max(1, hi - lo); } R2.render(scene, cam); }
           if(track.requestFrame) track.requestFrame();

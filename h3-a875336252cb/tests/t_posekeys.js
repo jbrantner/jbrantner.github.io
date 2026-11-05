@@ -85,7 +85,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
   ok(await fr.evaluate(() => PK.S.keys.find(k => k.t===2).yaw===90), 'Turn her sets the key\'s turn');
 
   // ---- 🎬 Use in Render
-  await fr.evaluate(() => { PK.S.depth = true; PK.S.pics = true; });
+  await fr.evaluate(() => { PK.S.depth = true; PK.S.pics = true; PK.S.clip = 'ease'; PK.drawAll(); });
   await fr.click('#send');
   await page.waitForFunction(() => H3.S.f.ctlVid && H3.S.f.imgs.filter(r => r.pose).length===2, null, {timeout:90000});
   const f = await page.evaluate(() => { const f = H3.S.f, m = H3.S.media; return {ctl:f.ctl, c1:m[f.ctlVid], c2:m[f.ctl2Vid], imgs:f.imgs.map(r => ({pose:r.pose, kind:m[r.id].kind, w:m[r.id].w})), secs:f.seconds, tab:H3.S.tab, ref:f.ref}; });
@@ -99,15 +99,25 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
   if(OUT){ const b = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.keys[1].blob); }); }); fs.writeFileSync(path.join(OUT, 'posekey_2.png'), Buffer.from(b.split(',')[1], 'base64'));
     const c = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[0].blob); }); }); fs.writeFileSync(path.join(OUT, 'skeleton.webm'), Buffer.from(c.split(',')[1], 'base64'));
     const d = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[1].blob); }); }); fs.writeFileSync(path.join(OUT, 'depth.webm'), Buffer.from(d.split(',')[1], 'base64')); }
+  // 📍 Touch points: the skeleton only round each key (black between), no depth, strength from the slider
+  { await page.click('#tabs [data-tab="poses"]'); await fr.evaluate(() => { PK.S.clip = 'touch'; PK.S.tstr = 0.7; PK.drawAll(); }); const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
+    await fr.click('#send'); await page.waitForFunction(n0 => Object.keys(H3.S.media).length >= n0 + 3 && !document.querySelector('#poseTab iframe').contentWindow.document.querySelector('#send').disabled, n0, {timeout:90000});
+    const tf = await page.evaluate(() => ({str:H3.S.f.ctlStr, c2:H3.S.f.ctl2Vid, mode:H3.S.media[H3.S.f.ctlVid].mode, name:H3.S.media[H3.S.f.ctlVid].name}));
+    const b = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[0].blob); }); });
+    const tmp = path.join(require('os').tmpdir(), 'touch.webm'); fs.writeFileSync(tmp, Buffer.from(b.split(',')[1], 'base64'));
+    const st = require('child_process').execSync(`ffmpeg -loglevel error -i ${tmp} -vf signalstats,metadata=print:key=lavfi.signalstats.YMAX:file=- -f null - 2>/dev/null`).toString().match(/YMAX=\d+/g).map(x => +x.slice(5) > 40 ? 1 : 0);
+    const lit = st.map((v, i) => v ? i : -1).filter(i => i >= 0);
+    ok(tf.str===0.7 && !tf.c2 && tf.mode==='pose' && /touchpoints/.test(tf.name), 'touch points: one guide at the slider strength, no depth: ' + JSON.stringify(tf));
+    ok(lit.length===8 && lit.join()==='0,1,2,46,47,48,49,50', 'the skeleton shows only round each key (frames ' + lit.join(',') + ' of ' + st.length + '), black between'); }
   // the graph: pose pictures go in as references and the prompt carries their times
   await page.evaluate(() => { H3.S.f.prompt = 'Ellen dances in the kitchen.'; H3.S.f.h3 = true; });
-  const g = await page.evaluate(() => { const t = H3.snapshot(), oi = H3.PC['http://render.test'].oi, names = {}; [t.ctl.vid, t.ctl2.vid, ...t.imgs.map(r => r.id)].forEach((id, i) => names[id] = 'f' + i); t.id = 't1'; t.pc = 'http://render.test'; t.seed = 1; t.dir = 'H3Deck/h3_t1'; t.name = 'h3_t1'; return {imgs:t.imgs, g:H3.pieceGraph(t, 0, oi, names).g}; });
+  const g = await page.evaluate(() => { const t = H3.snapshot(), oi = H3.PC['http://render.test'].oi, names = {}; [t.ctl.vid, (t.ctl2 || {}).vid, ...t.imgs.map(r => r.id)].filter(Boolean).forEach((id, i) => names[id] = 'f' + i); t.id = 't1'; t.pc = 'http://render.test'; t.seed = 1; t.dir = 'H3Deck/h3_t1'; t.name = 'h3_t1'; return {imgs:t.imgs, g:H3.pieceGraph(t, 0, oi, names).g}; });
   const prompt = Object.values(g.g).map(n => n.inputs && n.inputs.prompt).find(Boolean) || '';
   ok(g.imgs.every(r => r.pose), 'the take keeps the pose times');
   ok(/At 00:02\.000, the person is in the pose of <Subject 2> from <Picture 2>/.test(prompt), 'the take\'s prompt has the timed pose');
-  ok(Object.values(g.g).filter(n => n.class_type==='MiniMaxH3FunControlNetApply').length===2, 'two Fun ControlNet guides in the graph');
+  { const cn = Object.values(g.g).filter(n => n.class_type==='MiniMaxH3FunControlNetApply'); ok(cn.length===1 && JSON.stringify(cn[0].inputs).includes('0.7'), 'one Fun ControlNet guide (touch points) at 0.7 in the graph: ' + JSON.stringify(cn.map(n => n.inputs))); }
   await page.evaluate(() => { H3.S.f.h3 = false; });
-  const g2 = await page.evaluate(() => { const t = H3.snapshot(), oi = H3.PC['http://render.test'].oi, names = {}; [t.ctl.vid, t.ctl2.vid, ...t.imgs.map(r => r.id)].forEach((id, i) => names[id] = 'f' + i); t.id = 't2'; t.pc = 'http://render.test'; t.seed = 1; t.dir = 'H3Deck/h3_t2'; t.name = 'h3_t2'; return H3.pieceGraph(t, 0, oi, names).g; });
+  const g2 = await page.evaluate(() => { const t = H3.snapshot(), oi = H3.PC['http://render.test'].oi, names = {}; [t.ctl.vid, (t.ctl2 || {}).vid, ...t.imgs.map(r => r.id)].filter(Boolean).forEach((id, i) => names[id] = 'f' + i); t.id = 't2'; t.pc = 'http://render.test'; t.seed = 1; t.dir = 'H3Deck/h3_t2'; t.name = 'h3_t2'; return H3.pieceGraph(t, 0, oi, names).g; });
   const prompt2 = Object.values(g2).map(n => n.inputs && n.inputs.prompt).find(Boolean) || ''; console.log(prompt2);
   ok(/At 00:02\.000 the person is in the pose of the grey mannequin in <Picture 2>/.test(prompt2), 'plain prompt too');
   if(OUT){ await page.evaluate(() => { H3.S.f.h3 = true; H3.drawAll(); }); await page.waitForTimeout(300); await page.screenshot({path:path.join(OUT, 'render_tab.png'), fullPage:true}); }
