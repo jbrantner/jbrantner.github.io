@@ -258,6 +258,22 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   const rl = await hipAt(0); ok(rl.hip.every((v, i) => Math.abs(v - r0.hip[i]) < 0.02), 'after a reload she is still moved, turned and raised');
   await page.click('#lineb'); await page.click('#adjx'); const bk = await hipAt(0); ok(bk.hip.every((v, i) => Math.abs(v - o0.hip[i]) < 0.02), '↺ Put her back undoes it');
   await shot('lineup');
+  // ⤵ tip / ⤢ lean (Jordan 2026-11-05: turn her on more than one axis)
+  { const sl = async (id, v) => page.evaluate(([id, v]) => { const s = document.querySelector('#' + id); s.value = String(v); s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); }, [id, v]);
+    const torso = () => page.evaluate(() => { const M = window.MOCAP; M.setT(0); const P = M.A.P[0].bn, w = n => { const e = P[n].matrixWorld.elements; return [e[12], e[13], e[14]]; }, a = w('bone_001'), b = w('bone_113'); const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], L = Math.hypot(...d); return {up:d[1] / L, hip:a}; });
+    const t0 = await torso(); await sl('tip', 90); const t1 = await torso(); await sl('tip', 0); await sl('lean', 90); const t2 = await torso(); await sl('lean', 0);
+    ok(t0.up > 0.8 && Math.abs(t1.up) < 0.3 && Math.abs(t2.up) < 0.3, '⤵ Tip 90° and ⤢ Lean 90° each lay her torso flat (up-ness ' + [t0.up, t1.up, t2.up].map(v => v.toFixed(2)) + ')');
+    ok(Math.hypot(t1.hip[0] - t0.hip[0], t1.hip[2] - t0.hip[2]) < 0.02, 'tipping turns her about her hips'); }
+  // 🎥 camera keys: key the view at two frames, it eases between them
+  { await page.evaluate(() => { const M = window.MOCAP; M.setT(0); M.camera.position.set(0, 1.5, 5); M.controls.target.set(0, 1, 0); M.controls.update(); });
+    await page.click('#ckeys [data-cka]');
+    await page.evaluate(() => { const M = window.MOCAP; M.setT(1.5); M.camera.position.set(4, 1.5, 0); M.controls.target.set(0, 1, 0); M.controls.update(); }); await page.click('#ckeys [data-cka]');
+    const ck = await page.evaluate(() => { const M = window.MOCAP; M.setT(0.75); const mid = M.camera.position.toArray(); M.setT(0); const a = M.camera.position.toArray(); M.setT(1.5); const b = M.camera.position.toArray(); return {n:M.M.ck.length, mid, a, b, chips:document.querySelectorAll('#ckeys [data-ck]').length}; });
+    ok(ck.n===2 && ck.chips===2 && Math.abs(ck.a[0]) < 0.02 && Math.abs(ck.b[0] - 4) < 0.02 && Math.abs(ck.mid[0] - 2) < 0.12 && Math.abs(ck.mid[2] - 2.5) < 0.12, '🎥 two camera keys; the view eases between them: ' + JSON.stringify(ck));
+    await page.evaluate(() => window.MOCAP.setT(window.MOCAP.M.ck[1].t)); await page.click('#ckeys [data-ckd]'); ok(await page.evaluate(() => window.MOCAP.M.ck.length===1), '🗑 removes the key at this frame'); await page.evaluate(() => { window.MOCAP.M.ck = []; window.MOCAP.setT(0); }); }
+  // 🖼 the clip frame on the view, in the video's shape
+  { const fr = await page.evaluate(() => { const r = document.querySelector('#frame').getBoundingClientRect(); return {on:!document.querySelector('#frame').hidden, ar:r.width / r.height, want:window.MOCAP.M.vw / window.MOCAP.M.vh}; });
+    ok(fr.on && Math.abs(fr.ar - fr.want) < 0.03, '🖼 the clip frame is drawn on the view in the video\'s shape: ' + JSON.stringify(fr)); }
   // 🎬 clips for MiniMax: depth + colour mask from this view (6 fps here to keep the test quick), sent to Render's input
   await page.evaluate(() => { window.MOCAP_EXPORT_FPS = 6; document.querySelector('#expo').open = true; }); await page.click('#expb');
   await page.waitForFunction(() => window.MOCAP.EXP.clips.length===3 && !window.MOCAP.EXP.busy, null, {timeout:60000});
