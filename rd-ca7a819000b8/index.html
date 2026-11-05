@@ -623,7 +623,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-11-05.367'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-11-05.368'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -6318,17 +6318,37 @@ async function cmFrameStill(p, quiet){
 // takes show on the panel with the scrubber; 📸 Use this frame keeps a frame as the panel's picture, and 🧍 Read her pose from this frame
 // also has SAM 3D Body read it, the same as a picture (the panel turns 3D, camera matched)
 const cmIsVid = p => p && p.mk==='vid';
-// the model on each PC, like H3 Deck: the official reference model + its turbo LoRA, else Singularity/PRISM (turbo built in, 8 steps),
-// else DaSiWa Hybrid Turbo (4), else any MiniMax H3 reference model at 20 steps
-function cmVidKit(p){ const oi = p.oi; if(!oi || !oi.MiniMaxH3ReferenceToVideo || !oi.SaveVideo) return null; const bn = n => baseName(n || '');
-  const un = combo(oi.UNETLoader, 'unet_name').filter(n => /minimax|mmh3|dasiwa|singularity|10eros|prism/i.test(bn(n)) && !/fl2v|qwen|wan|flux|seedvr|hunyuan/i.test(bn(n)));
-  const lo = combo(oi.LoraLoaderModelOnly, 'lora_name').filter(n => /minimax_h3_ref2v_turbo/i.test(bn(n))).sort((a, b) => /4step/i.test(bn(b)) - /4step/i.test(bn(a)))[0];
-  const off = un.find(n => /ref2va?/i.test(bn(n)) && /int8/i.test(bn(n))) || un.find(n => /ref2va?/i.test(bn(n))), pr = un.find(n => /singularity|prism/i.test(bn(n))), dt = un.find(n => /turbo/i.test(bn(n)));
-  const m = off && lo ? {unet:off, lora:lo, steps:+((bn(lo).match(/(\d+)step/i) || [])[1]) || 4} : pr ? {unet:pr, steps:8} : dt ? {unet:dt, steps:4} : off ? {unet:off, steps:20} : un[0] ? {unet:un[0], steps:20} : null;
+// 🎞 Video model + ⚡ Turbo (Jordan 2026-11-05: "I want it to use turbo and a specific video model"), the same families as H3 Deck: a model
+// is known by its file name without turbo / ids / int8, so a Turbo file and a Regular file are one entry. Turbo = its own turbo file, else
+// the base file + the official ref2v turbo LoRA; Singularity/PRISM has the 8-step turbo built in. Only PCs with the picked model get the job.
+// ⭐ Auto (nothing picked): each PC its best, official reference + turbo LoRA, else PRISM, else DaSiWa Turbo, else any at 20 steps
+const cmIsH3 = n => /minimax|mmh3|dasiwa|singularity|10eros|(^|[_\W])h3/i.test(baseName(n)) && !/qwen|wan|flux|krea|seedvr|hunyuan|trellis|rt_detr|fl2v/i.test(baseName(n));
+const cmH3Fam = n => baseName(n).replace(/\.[a-z0-9]+$/i, '').replace(/turbo/ig, '').replace(/_\d{5,}/g, '').replace(/[_-]?int8/ig, '').replace(/[_\-\s]+/g, '_').replace(/^_|_$/g, '').toLowerCase();
+function cmH3Label(k){ if(/ref2v/.test(k)) return 'MiniMax H3 Reference (official)'; if(/singularity/.test(k)) return 'Singularity V2 x 10Eros' + ((k.match(/prism_?(\w+)$/) || [])[1] ? ' · PRISM ' + k.match(/prism_?(\w+)$/)[1].toUpperCase() : /prism/.test(k) ? ' · PRISM' : '');
+  let t = k.replace(/^dasiwaminimaxh3_/, '').replace(/^dasiwa/, 'DaSiWa ').replace(/_/g, ' ').replace(/dasiwa ?hybrid ?v?(\d)?/i, (m, d) => 'DaSiWa Hybrid' + (d ? ' V' + d : '')).replace(/\bv(\d)/g, 'V$1'); return t.charAt(0).toUpperCase() + t.slice(1); }
+function cmH3Resolve(oi, key, turbo){ const files = combo(oi.UNETLoader, 'unet_name').filter(n => cmIsH3(n) && cmH3Fam(n)===key); if(!files.length) return null;
+  const t = files.find(n => /turbo/i.test(baseName(n))), b = files.find(n => !/turbo/i.test(baseName(n)));
+  if(/singularity|prism/.test(key) && b) return {unet:b, steps:8};
+  if(turbo){ if(t) return {unet:t, steps:4}; const lo = combo(oi.LoraLoaderModelOnly, 'lora_name').filter(n => /minimax_h3_ref2v_turbo/i.test(baseName(n))).sort((x, y) => /4step/i.test(baseName(y)) - /4step/i.test(baseName(x)))[0];
+    return b && lo ? {unet:b, lora:lo, steps:+((baseName(lo).match(/(\d+)step/i) || [])[1]) || 4} : null; }
+  return b ? {unet:b, steps:20} : t ? {unet:t, steps:4} : null; }
+const cmVidTurbo = cm => (cm || CM()).vidTurbo!==false;
+// the model picked; until one is picked, PRISM PIKA (Jordan 2026-11-05: "I'll want it to be the pika hybrid one"; it is on Main, turbo built in)
+function cmVidPick(cm){ cm = cm || CM(); if(cm.vidModel!=null) return cm.vidModel; const pk = cmVidModels().find(m => /prism_?pika/.test(m.key)); return pk ? pk.key : ''; }
+function cmVidKit(p){ const oi = p.oi; if(!oi || !oi.MiniMaxH3ReferenceToVideo || !oi.SaveVideo) return null; const bn = n => baseName(n || ''), cm = CM(), turbo = cmVidTurbo(cm);
+  let m = null;
+  const pick = cmVidPick(cm); if(pick) m = cmH3Resolve(oi, pick, turbo);
+  else { const un = combo(oi.UNETLoader, 'unet_name').filter(cmIsH3), fams = [...new Set(un.map(cmH3Fam))];
+    const order = [fams.find(k => /ref2v/.test(k)), fams.find(k => /singularity|prism/.test(k)), fams.find(k => /dasiwa/.test(k)), ...fams].filter(Boolean);
+    for(const k of order){ m = cmH3Resolve(oi, k, turbo); if(m) break; } if(!m && turbo) for(const k of order){ m = cmH3Resolve(oi, k, false); if(m) break; } }
   const clip = combo(oi.CLIPLoader, 'clip_name').find(n => /minimax_h3/i.test(bn(n))), vl = combo(oi.VAELoader, 'vae_name'), vae = vl.find(n => /minimax_h3_video_vae_fp16/i.test(bn(n))) || vl.find(n => /minimax_h3_video_vae/i.test(bn(n)));
   return m && clip && vae ? Object.assign({url:p.url, oi, clip, vae}, m) : null; }
 function cmVidKits(){ if(S.test) return [cmVidKit({url:'test', oi:CM_FAKE})].filter(Boolean);
   return allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !/training/i.test(p.why || '')).map(cmVidKit).filter(Boolean); }
+// the models the PCs that are on have, with which PCs have each
+function cmVidModels(){ const F = new Map(), pcs = S.test ? [{url:'test', oi:CM_FAKE}] : allPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url));
+  for(const p of pcs) if(p.oi.MiniMaxH3ReferenceToVideo) for(const n of combo(p.oi.UNETLoader, 'unet_name')) if(cmIsH3(n)){ const k = cmH3Fam(n); if(!F.has(k)) F.set(k, {key:k, label:cmH3Label(k), pcs:new Set()}); F.get(k).pcs.add(p.url); }
+  return [...F.values()].sort((a, b) => a.label.localeCompare(b.label)); }
 // the clip's size: the panel's shape (kept between 1:2 and 2:1, which MiniMax handles), 576 on the short side
 const cmVidSize = r => { const a = Math.max(0.5, Math.min(2, (r && r.w || 2) / (r && r.h || 3))); return obCanvas(a, 1, 576); };
 // who is in it: the library characters it names (else who She is), each with her front view and her side view
@@ -6483,9 +6503,13 @@ function drawComic0(){
         <textarea data-cmp="text" rows="2" placeholder="What happens in this panel">${esc(cmSrc(p))}</textarea>${cmMarksHtml(p, cm.sel)}
         <input data-cmp="off" placeholder="🚫 Leave out (e.g. boots, shoes)" value="${esc(p.off || '')}" style="width:100%;margin-top:6px">
         <div class="row"><label>Make with</label>${seg('data-cmmk', [['pic', '🖼 Pictures'], ['vid', '🎬 Video']], cmIsVid(p) ? 'vid' : 'pic')}</div>
-        ${cmIsVid(p) ? (() => { const [W, H] = cmVidSize(rects[cm.sel]), cast = cmVidCast(p), ks = cmVidKits(), run = (p.extra || []).filter(c => c.vid).length;
-          return `<div class="btnrow"><button class="btn hot" data-cm="vid1" ${ks.length ? '' : 'disabled'}>🎬 Make ${p.takes.length || run ? 'another' : 'a'} video</button></div>
-          <p class="note">${ks.length ? `MiniMax H3 makes a 5 s clip in this panel's shape (${W}×${H})${cast.length ? ', with ' + cast.map(c => esc(c.e.name) + "'s " + (c.pics.length > 1 ? 'front and side views' : c.pics.length ? 'view' : 'name only (no library views)')).join(' and ') : ''}. Scrub it, then keep a frame as the picture or read her pose from it.` : esc(cmWhy())}</p>`; })() : ''}
+        ${cmIsVid(p) ? (() => { const [W, H] = cmVidSize(rects[cm.sel]), cast = cmVidCast(p), ks = cmVidKits(), run = (p.extra || []).filter(c => c.vid).length, ms = cmVidModels();
+          const pcN = u => u==='test' ? 'Test' : pcName(u), uses = ks.map(k => pcN(k.url) + ': ' + esc(baseName(k.unet).replace(/\.safetensors$/i, '')) + (k.lora ? ' + turbo LoRA' : '') + ', ' + k.steps + ' steps').join(' · ');
+          return `<div class="row"><label>Video model</label><div class="grow"><select data-cmvm aria-label="Video model"><option value="">⭐ Auto (each PC its best)</option>${ms.map(m => `<option value="${esc(m.key)}" ${cmVidPick(cm)===m.key ? 'selected' : ''}>${esc(m.label)} (${[...m.pcs].map(pcN).join(', ')})</option>`).join('')}${cm.vidModel && !ms.some(m => m.key===cm.vidModel) ? `<option value="${esc(cm.vidModel)}" selected>${esc(cmH3Label(cm.vidModel))} (no PC that is on has it)</option>` : ''}</select></div></div>
+          <div class="row"><label>Speed</label>${seg('data-cmvt', [['1', '⚡ Turbo'], ['0', '🐢 Regular']], cmVidTurbo(cm) ? '1' : '0')}</div>
+          ${uses ? `<p class="note">Uses ${uses}</p>` : ''}
+          <div class="btnrow"><button class="btn hot" data-cm="vid1" ${ks.length ? '' : 'disabled'}>🎬 Make ${p.takes.length || run ? 'another' : 'a'} video</button></div>
+          <p class="note">${!ks.length && cmVidPick(cm) ? 'No PC that is on has that model' + (cmVidTurbo(cm) ? ' with Turbo (its turbo file or the ref2v turbo LoRA)' : '') + '.' : ks.length ? `MiniMax H3 makes a 5 s clip in this panel's shape (${W}×${H})${cast.length ? ', with ' + cast.map(c => esc(c.e.name) + "'s " + (c.pics.length > 1 ? 'front and side views' : c.pics.length ? 'view' : 'name only (no library views)')).join(' and ') : ''}. Scrub it, then keep a frame as the picture or read her pose from it.` : esc(cmWhy())}</p>`; })() : ''}
         ${(() => { if(p.is3d){ // (Jordan 2026-11-05: a panel with SAM's body already, then a new picture made for it: offer to read SAM again from that one;
             // not for the panel's own 🎨 renders, nor the picture SAM already came from)
             // (Jordan 2026-11-05, "I still need like a make model again button": a panel stuck on the old body; always there, from the picked
@@ -6544,7 +6568,7 @@ function goTab(t, o){ o = o || {};
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) goTab(b.dataset.tab); };
 $('#libBack').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) goTab(b.dataset.tab); };
 $('#comic').addEventListener('click', e => {
-  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmhl],[data-cmswap],[data-cmlora],[data-cmgen],[data-cmcyc],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmtake],[data-cmstill],[data-cmshow],[data-cmborder],[data-cmdraft],[data-cmmk]'); if(!t) return;
+  const cm = CM(), pg = cmPage(), t = e.target.closest('[data-cmhl],[data-cmswap],[data-cmlora],[data-cmgen],[data-cmcyc],[data-cm],[data-cmfold],[data-cmpg],[data-cmlay],[data-cpi],[data-cmtake],[data-cmstill],[data-cmshow],[data-cmborder],[data-cmdraft],[data-cmmk],[data-cmvt]'); if(!t) return;
   if(t.dataset.cmhl){ const [i, k] = t.dataset.cmhl.split(':').map(Number); CM_HL = CM_HL && CM_HL.i===i && CM_HL.k===k ? null : {i, k}; drawComic(); return; }
   if(t.dataset.cmswap){ const [i, k, j] = t.dataset.cmswap.split(':').map(Number); cmSwap(i, k, j); buzz(); return; }
   if(t.dataset.cmlora){ const c = t.dataset.cmlora.indexOf(':'), i = +t.dataset.cmlora.slice(0, c), sub = t.dataset.cmlora.slice(c + 1), q = pg && pg.panels[i]; if(!q) return;
@@ -6562,6 +6586,7 @@ $('#comic').addEventListener('click', e => {
   else if(t.dataset.cmshow){ p.show = 'clip'; }
   else if(t.dataset.cmborder){ cm.border = t.dataset.cmborder; }
   else if(t.dataset.cmdraft){ cm.draftWith = t.dataset.cmdraft; }
+  else if(t.dataset.cmvt){ cm.vidTurbo = t.dataset.cmvt==='1'; }
   else if(t.dataset.cmmk){ if(t.dataset.cmmk==='vid') p.mk = 'vid'; else delete p.mk; }
   else if(a==='stop'){ cmStop([p].concat(p.extra || [])); return; }
   else if(a==='stopall'){ cmStop(cmHosts(cm), true); return; }
@@ -6597,6 +6622,7 @@ $('#comic').addEventListener('click', e => {
     if(ev==='change'){ cmCommit(q); cmRecast(); save(); drawComic(); } else cmMarksLive(i); return; }
   if(el.dataset.cmcomic!=null){ if(ev==='change') cmPickComic(+el.value); return; }
   if(el.dataset.cmzit!=null){ if(ev!=='change') return; cm.zitModel = el.value; save(); return; }
+  if(el.dataset.cmvm!=null){ if(ev!=='change') return; cm.vidModel = el.value; save(); drawComic(); return; } // 🎞 (Jordan 2026-11-05)
   if(el.dataset.cmwho!=null && pg){ if(ev!=='change') return; const p = pg.panels[cm.sel]; if(!p) return; const e = cmLibChars().find(x => x.subfolder===el.value);
     p.who3d = e ? {ref:e.subfolder, name:e.name} : {ref:'3D/Mannequin', name:''}; save(); drawComic(); return; } // (its window opens again with her: see cmWins)
   if(el.dataset.cmsc!=null && pg){ if(ev!=='change') return; const p = pg.panels[cm.sel]; if(!p) return;
