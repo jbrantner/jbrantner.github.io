@@ -156,6 +156,7 @@ h2 span{flex:1}
 .tabs .tb{display:inline-block;min-width:16px;margin-left:5px;padding:2px 5px;border-radius:9px;background:var(--accent);color:#111;font-size:11px}
 .tabs .tb:empty{display:none}
 #filmTab,#poseTab{position:fixed;left:0;right:0;bottom:0;top:var(--ft,110px);z-index:10;background:var(--bg)}
+#mocapBox{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}#mocapBox iframe{flex:1;border:0;width:100%}#mocapBox .mbar{display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
 #filmTab iframe,#poseTab iframe{width:100%;height:100%;border:0;display:block;background:var(--bg)}
 body.ftab .go{display:none}
 .gostep{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:4px}
@@ -163,6 +164,7 @@ body.ftab .go{display:none}
 .mrow{display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:6px;margin-top:6px;border:1px solid var(--line);border-radius:10px;background:transparent;color:inherit;font:inherit}.mrow.on{border-color:var(--accent,#ff5ca8)}.mrow img,.mrow .mi{width:44px;height:44px;object-fit:cover;border-radius:6px;flex:0 0 auto;display:grid;place-items:center;background:#000}.mrow .mt{display:flex;flex-direction:column;min-width:0}.mrow b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mrow small{opacity:.7}.mwrap{display:flex;gap:6px;align-items:stretch}.mwrap .mrow{flex:1;min-width:0}.m2{margin-top:6px;flex:0 0 auto;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:transparent;color:inherit;font:inherit;font-size:12px}.m2.on{border-color:var(--accent,#ff5ca8);color:var(--accent,#ff5ca8)}
 </style>
 </head><body>
+<div id="mocapBox" hidden><div class="mbar"><b>🦴 Mocap</b><span class="note" style="flex:1;min-width:0">Copy the motion, check it, then 🎬 MiniMax clips › Send to Render. They show up under 🦴 Motion guide › From Mocap.</span><button class="btn" id="mocapX">Done</button></div><iframe title="Mocap"></iframe></div>
 <div class="wrap">
   <header>
     <h1><span>H3</span> Deck</h1>
@@ -179,6 +181,7 @@ body.ftab .go{display:none}
       <div>
         <div class="tagbar" id="tagBar"></div>
         <textarea id="prompt" placeholder="Describe the shot. Timed beats like [0s-2s] … [2s-5s] … are split across the pieces for you."></textarea>
+        <button class="btn" id="promptBack" hidden style="margin-top:4px">↩ Back to my prompt</button>
       </div>
       <div>
         <div class="lab"><span>Length</span><b id="lenOut">5 s</b></div>
@@ -753,9 +756,9 @@ function drawSpacing(){
 }
 // ---------- references: what's on, and the <Picture n> / <Video n> / <Audio n> each one is called ----------
 function refsOn(){
-  const f = S.f; if(!f.ref || f.sm) return {imgs:[], vids:[], auds:[], follow:[]};
-  const imgs = f.imgs.filter(r => r.on && S.media[r.id]), vids = f.vids.filter(r => r.on && S.media[r.id]), all = f.auds.filter(r => r.on && S.media[r.id]);
-  return {imgs, vids, auds:all.filter(r => !r.follow), follow:all.filter(r => r.follow)};
+  const f = S.f; if(!f.ref || f.sm) return {imgs:[], pins:[], vids:[], auds:[], follow:[]};
+  const all0 = f.imgs.filter(r => r.on && S.media[r.id]), imgs = all0.filter(r => !r.pin), pins = all0.filter(r => r.pin && r.pose), vids = f.vids.filter(r => r.on && S.media[r.id]), all = f.auds.filter(r => r.on && S.media[r.id]);
+  return {imgs, pins, vids, auds:all.filter(r => !r.follow), follow:all.filter(r => r.follow)};
 }
 function refLabels(){ // fixed order: pictures, then each video (its soundtrack's <Audio j> first), then standalone sounds
   const R = refsOn(), L = {}; let a = 0;
@@ -909,7 +912,7 @@ function pieceGraph(t, i, oi, names){
     if(!t.h3) prompt += poseLine(t.imgs, pc.start - LEAD(pc) / FPS, L / FPS);
     if(oi.MMH3FitReferences && (imgs.length || t.vids.length || t.auds.length)){
       // keeps every reference inside the 8 GB budget (the MMH3 Studio low-memory node): videos read at the size they're used
-      const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0), stop_above:72000};
+      const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0) + (t.pins || []).length, stop_above:72000};
       imgs.forEach((r, k) => { fi['image_' + (k + 1)] = img(r.id); });
       t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; });
       t.auds.forEach((r, k) => { fi['audio_' + (k + 1)] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
@@ -927,6 +930,10 @@ function pieceGraph(t, i, oi, names){
     if(useFirst){ cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(t.first), frame_idx:0}), 0]; guides++; }
     if(useLast){ cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(t.lastImg), frame_idx:-1}), 0]; guides++; }
   }
+  // ✨ in-betweens (Jordan 2026-11-05: pose A, B, C… as keyframes and MiniMax animates the in-betweens): each pinned pose picture is a
+  // MiniMax keyframe at its time (MiniMaxH3AddGuide: re-injected every step, never denoised), on the 4-frame latent grid like 🪄 Smooth
+  const pinAt = []; (t.pins || []).forEach(r => { let o = Math.round((r.t - (pc.start - LEAD(pc) / FPS)) * FPS); if(o < -2 || o > L + 1) return; o = o >= L - 3 ? L - 1 : Math.max(0, Math.round(o / 4) * 4);
+    if(pinAt.includes(o)) return; pinAt.push(o); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(r.id), frame_idx:o}), 0]; guides++; });
   if(t.sm){ // 🪄 smoothing: the window is cut from the video on the PC, and every Nth frame of it is pinned where it belongs
     const sm = t.sm, sf = sm.fps || FPS, lv = add('LoadVideo', {file:names[sm.vid]});
     const sl = add('Video Slice', {video:[lv, 0], start_time:sm.start, duration:Math.round((L / FPS + 2 / sf) * 1000) / 1000, strict_duration:false});
@@ -1088,7 +1095,7 @@ function snapshot(){ // the form, frozen into a take
   const ctl2 = ctl && f.ctl2Vid && f.ctl2Vid!==f.ctlVid && S.media[f.ctl2Vid] ? {vid:f.ctl2Vid, str:+f.ctl2Str, end:+f.ctl2End} : null;
   return {sm, up, upImgs, ctl, ctl2, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
-    imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
+    imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     h3:!sm && f.h3 ? {style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
@@ -1129,7 +1136,7 @@ async function render(){
 }
 async function sendPieces(t, from){
   const url = t.pc, oi = pcOf(url).oi, names = {};
-  const ids = [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...t.imgs.map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
+  const ids = [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...t.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
@@ -1347,8 +1354,8 @@ async function saveVideo(t){
 function useAgain(t){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
-  if(t.imgs.length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
-    f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
+  if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
+    f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}}))); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   if(!t.sm){ f.h3 = !!t.h3; if(t.h3) Object.assign(f, {h3Style:t.h3.style || '', h3Sound:t.h3.sound || '', h3Music:t.h3.music || ''}); }
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); // these boxes are only filled at start, so set them here too
   save(); drawAll(); window.scrollTo({top:0, behavior:'smooth'}); toast('Its settings are back in the form');
@@ -1362,7 +1369,7 @@ function drawDots(){
   $('#pcDots').innerHTML = S.pcs.map(p => { const q = pcOf(p.url), cls = !q.online ? '' : q.load ? 'busy' : 'on';
     return `<span title="${esc(p.name)}"><i class="dot ${cls}"></i>${esc(p.name.charAt(0))}${q.online && q.load ? ' ' + q.load : ''}</span>`; }).join('');
 }
-function drawShot(){
+function drawShot(){ { const b = $('#promptBack'); if(b) b.hidden = !S.f.promptWas || S.f.promptWas===S.f.prompt; }
   const f = S.f, P = currentPlan(), tot = P.reduce((s, p) => s + p.deliv, 0) / FPS;
   $('#lenOut').textContent = fmtS(+f.seconds);
   $('#pieceBar').innerHTML = P.map((p, i) => `<i style="--w:${p.deliv}">${P.length > 1 ? (i + 1) + ' · ' : ''}${fmtS(p.deliv / FPS)}</i>`).join('');
@@ -1414,7 +1421,7 @@ function slotHtml(kind, r, i, label){
   const m = S.media[r.id] || {}, off = !r.on, pv = kind==='aud' ? `<div class="wave">${r.follow ? '🎵' : '🎤'}</div><div class="nm">${esc(m.name)}${m.dur ? ' · ' + fmtS(m.dur) : ''}</div>` : `<img src="${m.thumb || ''}" alt="">`;
   const opts = kind==='vid' ? `<button class="opt ${r.sound ? 'on' : ''}" data-opt="sound" data-k="${kind}" data-i="${i}">🔊</button><button class="opt ${r.follow ? 'on' : ''}" data-opt="follow" data-k="${kind}" data-i="${i}">⏱</button>`
     : kind==='aud' ? `<button class="opt ${r.follow ? 'on' : ''}" data-opt="follow" data-k="${kind}" data-i="${i}">${r.follow ? '🎵 track' : '🎤 sample'}</button>` : '';
-  return `<div class="slot has ${off ? 'off' : ''}">${pv}<span class="tag">${esc(off ? 'off' : (label || '') + (r.pose ? ' 🧍 ' + h3Time(+r.pose.t || 0).replace(/^00:/, '') : ''))}</span><button class="x" data-rm="${kind}" data-i="${i}">✕</button>
+  return `<div class="slot has ${off ? 'off' : ''}">${pv}<span class="tag">${esc(off ? 'off' : (label || '') + (r.pose ? (r.pin ? ' 📌 ' : ' 🧍 ') + h3Time(+r.pose.t || 0).replace(/^00:/, '') : ''))}</span><button class="x" data-rm="${kind}" data-i="${i}">✕</button>
     <div class="st"><span class="tog mini ${r.on ? 'on' : ''}" data-tg="${kind}" data-i="${i}"></span>${opts}</div></div>`;
 }
 const guideSlot = (m, rm) => `<div class="slot has"><img src="${m.thumb || ''}" alt=""><span class="tag">${esc((m.mode==='pose' ? 'skeleton' : m.mode==='depth' ? 'depth' : 'guide') + (m.dur ? ' · ' + fmtS(m.dur) : ''))}</span><button class="x" data-rm="${rm}">✕</button><div class="nm" style="top:auto;bottom:6px">${esc(m.name)}</div></div>`;
@@ -1572,7 +1579,7 @@ function drawTakes(){
     const chips = n > 1 ? `<div class="pieces">${t.pieces.map((p, i) => `<i style="--w:${p.deliv};${p.state==='done' ? 'color:var(--good)' : p.state==='running' ? 'color:var(--accent);border-color:var(--accent)' : p.state==='failed' ? 'color:var(--bad)' : ''}" data-piece="${t.id}|${i}">${i + 1}${p.state==='done' ? ' ✓' : p.state==='running' ? ' ▶' : p.state==='failed' ? ' ✕' : ''}</i>`).join('')}</div>` : '';
     const f = progress(t), tl = timeLeft(t);
     const acts = t.state==='working' ? `<button class="btn warn" data-act="cancel" data-t="${t.id}">✕ Cancel</button>`
-      : `${t.final || t.pieces.some(p => p.file) ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.final ? `<button class="btn" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn" data-act="drop" data-t="${t.id}">🗑</button>`;
+      : `${t.final || t.pieces.some(p => p.file) ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.final ? `<button class="btn" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button>` : ''}${t.state==='done' && (t.final || t.pieces.some(p => p.file)) ? `<button class="btn" data-act="mocap" data-t="${t.id}">🦴 To Mocap</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn" data-act="drop" data-t="${t.id}">🗑</button>`;
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(',')].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
@@ -1620,6 +1627,7 @@ document.addEventListener('click', async e => {
     else if(ds.act==='save') saveVideo(t);
     else if(ds.act==='more') extendSheet(t);
     else if(ds.act==='regen') await toSmooth(t);
+    else if(ds.act==='mocap') await toMocap(t);
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
     else if(ds.act==='reroll'){ const nt = JSON.parse(JSON.stringify(t)); nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
       nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null; nt.joinPid = null; nt.joinErr = ''; nt.upStage = null; nt.upPid = null; nt.upErr = ''; nt.smoothed = null;
@@ -1661,6 +1669,16 @@ $('#h3Sound').oninput = e => { S.f.h3Sound = e.target.value; save(); h3Peek(); }
 $('#h3Music').oninput = e => { S.f.h3Music = e.target.value; save(); h3Peek(); };
 $('#h3Refs').oninput = e => { const d = e.target.dataset.h3d; if(!d) return; const [k, i] = d.split(':'), r = {img:S.f.imgs, vid:S.f.vids, aud:S.f.auds}[k][+i]; if(r){ r.desc = e.target.value; save(); h3Peek(); } };
 $('#h3Refs').onclick = e => { const b = e.target.closest('[data-h3k]'); if(!b) return; const [k, i, v] = b.dataset.h3k.split(':'), r = {img:S.f.imgs, vid:S.f.vids, aud:S.f.auds}[k][+i]; if(r){ r.keep = v; save(); drawH3(); } };
+$('#promptBack').onclick = () => { const f = S.f; if(!f.promptWas) return; const was = f.prompt; f.prompt = f.promptWas; f.promptWas = was; $('#prompt').value = f.prompt; save(); drawShot(); drawGo(); };
+// 🦴 a take into Mocap (Jordan 2026-11-05: once the mannequin in-betweens video looks right, SAM turns it into a 3D motion)
+async function toMocap(t){ const f = t.final || (t.pieces.find(p => p.file) || {}).file; if(!f) return;
+  try{ toast('Getting the video…'); const b = await (await fetch(viewUrl(t.pc, f))).blob(), file = new File([b], f.filename, {type:'video/mp4'});
+    const box = $('#mocapBox'), fr = box.querySelector('iframe'); box.hidden = false;
+    if(!fr.src) await new Promise(r => { fr.onload = r; fr.src = '../rd-ca7a819000b8/mocap/?embed=1'; });
+    for(let i = 0; i < 100 && !(fr.contentWindow && fr.contentWindow.MOCAP_OPEN); i++) await new Promise(r => setTimeout(r, 100));
+    fr.contentWindow.MOCAP_OPEN(file); toast('In Mocap: tap Copy the motion.', 4000); }
+  catch(e){ toast("Couldn't open it in Mocap: " + e.message); } }
+$('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#prompt').oninput = e => { S.f.prompt = e.target.value; save(); drawShot(); drawGo(); };
 const setLen = v => { v = Math.max(0.5, Math.min(36000, +v || 5)); S.f.seconds = v; $('#len').value = Math.min(60, v); if(document.activeElement!==$('#lenNum')) $('#lenNum').value = v; save(); drawShot(); drawCanvas(); drawGo(); };
 $('#len').oninput = e => { $('#lenNum').value = e.target.value; setLen(e.target.value); };
@@ -1799,19 +1817,21 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
   const sk = (P.clips || []).find(c => c.mode==='pose'), dp = (P.clips || []).find(c => c.mode==='depth');
   if(sk){ f.ctlVid = await media(sk.blob, sk.name, 'vid', {mode:'pose', w:sk.w, h:sk.h, dur:sk.dur}); f.ctl = true; f.sm = false; got.push('the skeleton as the Motion guide');
     f.ctl2Vid = dp ? await media(dp.blob, dp.name, 'vid', {mode:'depth', w:dp.w, h:dp.h, dur:dp.dur}) : null; if(dp) got.push('its depth as the second guide'); }
-  f.imgs = f.imgs.filter(r => !r.pose); const room = Math.max(0, MAXREF.img - f.imgs.length), keys = (P.keys || []).slice(0, room);
-  for(const k of keys) f.imgs.push({id:await media(k.blob, k.name, 'img'), on:true, desc:'', keep:'', pose:{t:+k.t || 0}});
-  if(keys.length){ f.ref = true; got.push(keys.length + ' pose picture' + (keys.length > 1 ? 's' : '') + ' with their times'); }
+  f.imgs = f.imgs.filter(r => !r.pose); const room = P.pin ? 99 : Math.max(0, MAXREF.img - f.imgs.length), keys = (P.keys || []).slice(0, room);
+  for(const k of keys) f.imgs.push(Object.assign({id:await media(k.blob, k.name, 'img'), on:true, desc:'', keep:'', pose:{t:+k.t || 0}}, P.pin ? {pin:true} : {}));
+  if(keys.length && P.pin){ f.ref = true; f.ctl = false; f.sm = false; f.fl = false; if(P.prompt){ if(f.prompt && f.prompt!==P.prompt) f.promptWas = f.prompt; f.prompt = P.prompt; }
+    got.push(keys.length + ' mannequin keyframe' + (keys.length > 1 ? 's' : '') + ' pinned at their times', 'a mannequin prompt (yours is kept: ↩ in the prompt box brings it back)'); }
+  else if(keys.length){ f.ref = true; got.push(keys.length + ' pose picture' + (keys.length > 1 ? 's' : '') + ' with their times'); }
   if((P.keys || []).length > keys.length) got.push((P.keys.length - keys.length) + ' left out (MiniMax takes ' + MAXREF.img + ' pictures at most)');
   if(sk && P.guide){ const G = P.guide; f.ctlStr = G.str; f.ctlEnd = G.end; if(dp){ f.ctl2Str = G.str2; f.ctl2End = G.end2; } got.push('guide strength ' + G.str.toFixed(2) + (dp ? ', depth ' + G.str2.toFixed(2) : '')); }
   if(sk && P.str != null){ f.ctlStr = P.str; f.ctlEnd = 1; if(dp){ f.ctl2Str = Math.round(P.str * 0.7 * 20) / 20; f.ctl2End = 1; } got.push('guide strength ' + P.str.toFixed(2) + (dp ? ', depth ' + f.ctl2Str.toFixed(2) : '') + ' (touch points, held to the end)'); }
-  if(P.aspect && ASPECTS.some(a => a[0]===P.aspect)) f.aspect = P.aspect;
+  if(P.aspect && ASPECTS.some(a => a[0]===P.aspect)) f.aspect = P.aspect; $('#prompt').value = f.prompt;
   if(P.dur) setLen(Math.round(P.dur * 10) / 10);
   save(); setTab('render'); drawAll(); toast('🧍 In: ' + andList(got) + '. Write who it is and what happens, then Render.', 6000); return got; };
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => { if(S.tab && S.tab!=='render') tabTop(); });
 if(S.tab==='room') S.tab = 'render'; // ✂ Cutting Room taken out for now (Jordan 2026-11-03: not a fully fledged idea yet)
 if(S.tab && S.tab!=='render' && !/take=/.test(location.hash)) setTab(S.tab);
-window.H3 = {S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {toMocap, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
