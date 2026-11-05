@@ -6,7 +6,7 @@ const APP_VERSION = 1;
 const KEY = 'budget-simple';                 // apart from the main app's data (same site, different key)
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const POT_C = '#ffd27a', PROJ_C = '#7ee8d0', BILL_C = '#8e8ee6';
+const POT_C = '#ffd27a', PROJ_C = '#7ee8d0', BILL_C = '#8e8ee6', DEBT_C = '#ffaba4';
 
 /* ---------- money ---------- */
 const toC = v => { const n = parseFloat(String(v).replace(/[^0-9.]/g, '')); return isFinite(n) && n > 0 ? Math.round(n * 100) : 0; };
@@ -16,7 +16,7 @@ const mWhole = c => '$' + Math.floor(Math.max(0, c) / 100).toLocaleString();
 const mSplit = c => { const s = dollars(c), i = s.lastIndexOf('.'); return `$${s.slice(0, i)}<span class="c">${s.slice(i)}</span>`; };
 
 /* ---------- saved data ---------- */
-const blank = () => ({ v: 1, free: 0, bills: 0, pots: [], billList: [], paid: {}, log: [], adv: null });
+const blank = () => ({ v: 1, free: 0, bills: 0, pots: [], billList: [], paid: {}, log: [], adv: null, princ: {} });
 let state = load();
 function load() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return fix(s); } catch (e) {}
@@ -25,8 +25,9 @@ function load() {
 function fix(s) {   // a backup can carry anything: keep only sane, non-negative whole cents
   const b = blank(), c = n => Math.max(0, Math.round(Number(n) || 0));
   b.free = c(s.free); b.bills = c(s.bills);
-  b.pots = (Array.isArray(s.pots) ? s.pots : []).filter(p => p && p.id).map(p => ({ id: String(p.id), name: String(p.name || 'Pot').slice(0, 40), kind: p.kind === 'project' ? 'project' : 'pot', goal: c(p.goal), bal: c(p.bal) }));
-  b.billList = (Array.isArray(s.billList) ? s.billList : []).filter(x => x && x.id).map(x => ({ id: String(x.id), name: String(x.name || 'Bill').slice(0, 40), amt: c(x.amt), due: x.due >= 1 && x.due <= 31 ? Math.round(x.due) : null }));
+  b.pots = (Array.isArray(s.pots) ? s.pots : []).filter(p => p && p.id).map(p => ({ id: String(p.id), name: String(p.name || 'Pot').slice(0, 40), kind: p.kind === 'project' ? 'project' : 'pot', goal: c(p.goal), bal: c(p.bal), debt: p.debt && typeof p.debt === 'object' ? { owed: c(p.debt.owed), start: Math.max(c(p.debt.start), c(p.debt.owed)), apr: Math.min(100, Math.max(0, Number(p.debt.apr) || 0)), min: c(p.debt.min), extra: c(p.debt.extra) } : null }));
+  b.billList = (Array.isArray(s.billList) ? s.billList : []).filter(x => x && x.id).map(x => ({ id: String(x.id), name: String(x.name || 'Bill').slice(0, 40), amt: c(x.amt), due: x.due >= 1 && x.due <= 31 ? Math.round(x.due) : null, debt: x.debt ? String(x.debt) : null }));
+  b.princ = s.princ && typeof s.princ === 'object' ? s.princ : {};
   b.paid = s.paid && typeof s.paid === 'object' ? s.paid : {};
   b.log = Array.isArray(s.log) ? s.log.slice(-500) : [];
   if (s.adv && typeof s.adv === 'object' && /^\d{4}-\d\d-\d\d$/.test(s.adv.next)) b.adv = { start: Math.max(c(s.adv.start), c(s.adv.owed)), owed: c(s.adv.owed), step: c(s.adv.step) || 10000, next: s.adv.next };
@@ -90,7 +91,36 @@ function pips(p) {
   let h = ''; for (let i = 0; i < 10; i++) h += i + 1 <= n ? '<i class="on"></i>' : i < n ? `<i class="part" style="--p:${((n - i) * 100).toFixed(0)}%"></i>` : '<i></i>';
   return `<div class="pp-pips" aria-hidden="true">${h}</div>`;
 }
+// A debt: how long until it's paid off at the minimum (plus any extra a month), and the interest on the way.
+const debtInt = (d, owed) => Math.round(owed * d.apr / 1200);
+function payoff(d, extra = d.extra) {
+  const pay = d.min + extra; let o = d.owed, n = 0, I = 0;
+  if (!o) return { n: 0, I: 0 };
+  if (pay <= debtInt(d, o)) return null;   // interest eats the whole payment
+  while (o > 0 && n < 600) { const i = debtInt(d, o); I += i; o = Math.max(0, o + i - pay); n++; }
+  return n >= 600 ? null : { n, I };
+}
+const monthOut = n => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + n); return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' }); };
+function debtCard(p) {
+  const d = p.debt, o = opened.has(p.id), done = !d.owed, P = payoff(d), base = payoff(d, 0);
+  const prog = { goal: d.start || d.owed, bal: (d.start || d.owed) - d.owed };
+  const when = done ? '<b class="ok">Paid off ✓</b>' : P ? `Paid off <b>${monthOut(P.n)}</b> · ${P.n} month${P.n === 1 ? '' : 's'} · ${m(P.I)} interest` : `<b class="bad">Never paid off at ${m(d.min + d.extra)} a month</b>: interest is ${m(debtInt(d, d.owed))} a month`;
+  const save = P && base && P.n < base.n ? ` <span class="ok">(${base.n - P.n} months sooner, ${m(base.I - P.I)} less interest)</span>` : '';
+  return `<div class="pp-card proj live${o ? ' open xo' : ''}" style="--cc:${DEBT_C}" data-vl-row="${p.id}">`
+    + `<button class="pp-head" data-pp-open="${p.id}" aria-expanded="${o}"><span class="pp-nm"><em class="pp-kind">Debt</em><span class="pp-nmr"><b>${esc(p.name)}</b>${done ? ' <span class="ok">✓</span>' : ''}</span></span>`
+    + `<span class="pp-amt"><span class="num pp-roll">${mSplit(d.owed)}</span><small>owed${d.start > d.owed ? ` of ${mWhole(d.start)}` : ''}</small></span></button>`
+    + pips(prog)
+    + `<p class="bs-advsay">${when}</p>`
+    + `<div class="pp-acts"><button class="pp-chip pp-pay" data-act="debtpay" data-id="${p.id}">Make a payment</button><button class="pp-chip pp-edit" data-act="edit" data-id="${p.id}" aria-label="Edit ${esc(p.name)}">Edit</button></div>`
+    + `<div class="pp-xv"><div id="townShBody"><div class="tn-shtop"><div class="tn-workers tn-slim">`
+    + `<div class="bs-advlist"><div class="row spread"><span>Owed now</span><b class="num">${m(d.owed)}</b></div><div class="row spread"><span>Interest</span><span class="num">${d.apr}% · about ${m(debtInt(d, d.owed))} a month</span></div><div class="row spread"><span>Minimum</span><span class="num">${m(d.min)} a month</span></div><div class="row spread"><span>Saved toward it here</span><span class="num">${m(p.bal)}</span></div></div>`
+    + `<p class="sh-line tn-rate" style="margin-top:12px">Extra each month: <b>${m(d.extra)}</b></p><div class="tn-even">`
+    + [0, 2500, 5000, 10000].map(v => `<button data-act="debtextra" data-id="${p.id}" data-v="${v}"${d.extra === v ? ' class="on"' : ''}>${v ? '+' + mWhole(v) : 'None'}</button>`).join('')
+    + `</div>${save ? `<p class="bs-advsay">${save}</p>` : ''}</div>`
+    + `<div class="tn-acts"><button data-act="putin" data-id="${p.id}">Put money in</button><button data-act="move" data-id="${p.id}">Move money</button></div></div></div></div></div>`;
+}
 function potCard(p) {
+  if (p.debt) return debtCard(p);
   const o = opened.has(p.id), proj = p.kind === 'project', done = p.goal && p.bal >= p.goal;
   return `<div class="pp-card ${proj ? 'proj' : 'pot'} ${p.bal > 0 ? 'live' : 'idle'}${o ? ' open xo' : ''}" style="--cc:${proj ? PROJ_C : POT_C}" data-vl-row="${p.id}">`
     + `<button class="pp-head" data-pp-open="${p.id}" aria-expanded="${o}"><span class="pp-nm"><em class="pp-kind">${proj ? 'Project' : 'Pot'}</em><span class="pp-nmr"><b>${esc(p.name)}</b>${done ? ' <span class="ok">✓</span>' : ''}</span></span>`
@@ -100,9 +130,10 @@ function potCard(p) {
     + `<div class="pp-xv"><div id="townShBody"><div class="tn-shtop"><div class="tn-acts"><button data-act="move" data-id="${p.id}">Move money</button><button data-act="spendfrom" data-id="${p.id}">Spend from it</button></div></div></div></div></div>`;
 }
 function potsHTML() {
-  const ps = state.pots.filter(p => p.kind === 'pot'), pj = state.pots.filter(p => p.kind === 'project');
+  const ps = state.pots.filter(p => p.kind === 'pot' && !p.debt), pj = state.pots.filter(p => p.kind === 'project' && !p.debt), db = state.pots.filter(p => p.debt);
   let h = `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pots and Projects</h3><button class="pp-plan" data-act="sort">Sort money</button></div><div class="pp-list pp-one">`;
   h += [...ps, ...pj].map(potCard).join('') + '</div>';
+  if (db.length) h += `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Debts</h3></div><div class="pp-list pp-one">${db.map(potCard).join('')}</div>`;
   h += `<button class="pp-big alt pp-add" data-act="newpot">＋ Add a pot or project</button>`;
   if (!state.pots.length) h += `<p class="muted bs-empty">Pots hold money you keep (Savings, Emergency). Projects hold money toward a goal (Vacation, Laptop). Money only goes in when you put it there.</p>`;
   return h + advHTML();
@@ -195,11 +226,11 @@ let mv = null;
 function openMoney(mode, opt = {}) {
   mv = { mode, ...opt };
   const all = places(), opts = (ids, sel) => ids.map(id => `<option value="${id}"${id === sel ? ' selected' : ''}>${esc(nameOf(id))} (${mWhole(balOf(id))})</option>`).join('');
-  const T = { add: 'Add money', move: 'Move money', spend: 'Spend', bank: 'Bank check' }[mode];
-  $('mvTitle').textContent = T; $('mvGo').textContent = { add: 'Add', move: 'Move', spend: 'Spend', bank: 'Check' }[mode];
+  const T = { add: 'Add money', move: 'Move money', spend: opt.debt ? 'Make a payment' : 'Spend', bank: 'Bank check' }[mode];
+  $('mvTitle').textContent = T; $('mvGo').textContent = { add: 'Add', move: 'Move', spend: opt.debt ? 'Pay' : 'Spend', bank: 'Check' }[mode];
   $('mvSays').textContent = mode === 'add' ? 'Money that just landed in your bank: a paycheck, a gift, money back. It goes where you pick.'
     : mode === 'bank' ? 'What does your bank app say right now? The difference lands in (or comes out of) Free money.'
-    : mode === 'spend' ? 'Money that left your bank. It comes out of the place you pick.' : '';
+    : mode === 'spend' ? (opt.debt ? `A payment toward ${nameOf(opt.debt)}, on top of the bill. It comes out of the place you pick and lowers what you owe.` : 'Money that left your bank. It comes out of the place you pick.') : '';
   $('mvFromF').classList.toggle('hidden', mode === 'add' || mode === 'bank');
   $('mvToF').classList.toggle('hidden', mode === 'spend' || mode === 'bank');
   $('mvPick').style.gridTemplateColumns = mode === 'move' ? '' : '1fr';
@@ -224,7 +255,8 @@ function mvSync(fromSlider) {
   let pv = '', ok = a > 0;
   if (mv.mode === 'move') { ok = ok && from !== to; pv = from === to ? '<div class="muted">Pick two different places</div>' : row(from, balOf(from), balOf(from) - a) + row(to, balOf(to), balOf(to) + a); }
   else if (mv.mode === 'add') pv = row(to, balOf(to), balOf(to) + a) + `<div class="row spread muted"><span>Everything</span><span class="num">${m(total())} → ${m(total() + a)}</span></div>`;
-  else if (mv.mode === 'spend') pv = max === 0 ? `<div class="muted">${esc(nameOf(from))} is empty. Pick another place.</div>` : row(from, balOf(from), balOf(from) - a);
+  else if (mv.mode === 'spend') { pv = max === 0 ? `<div class="muted">${esc(nameOf(from))} is empty. Pick another place.</div>` : row(from, balOf(from), balOf(from) - a);
+    const dp = mv.debt && potOf(mv.debt); if (dp && dp.debt && max > 0) pv += `<div class="row spread"><span>${esc(dp.name)} owed</span><span class="num">${m(dp.debt.owed)} → <b>${m(dp.debt.owed - Math.min(a, dp.debt.owed))}</b></span></div>`; }
   else if (mv.mode === 'bank') {
     const raw = $('mvAmt').value.trim(), b = raw === '' ? null : Math.round(Math.max(0, parseFloat(raw) || 0) * 100), T = total(), d = b == null ? 0 : b - T;
     ok = b != null && d !== 0;
@@ -241,7 +273,9 @@ function mvGo() {
   const a = toC($('mvAmt').value), from = $('mvFrom').value, to = $('mvTo').value, note = $('mvNote').value.trim();
   if (mv.mode === 'add') { if (!a) return; setBal(to, balOf(to) + a); logIt('in', a, null, to, note); toast(`${m(a)} added to ${nameOf(to)}`); }
   else if (mv.mode === 'move') { const x = Math.min(a, balOf(from)); if (!x || from === to) return; setBal(from, balOf(from) - x); setBal(to, balOf(to) + x); logIt('move', x, from, to); toast(`${m(x)} moved to ${nameOf(to)}`); }
-  else if (mv.mode === 'spend') { const x = Math.min(a, balOf(from)); if (!x) return; setBal(from, balOf(from) - x); logIt('spend', x, from, null, note); toast(`${m(x)} spent from ${nameOf(from)}`); }
+  else if (mv.mode === 'spend') { const x = Math.min(a, balOf(from)); if (!x) return; setBal(from, balOf(from) - x);
+    const dp = mv.debt && potOf(mv.debt); if (dp && dp.debt) { dp.debt.owed = Math.max(0, dp.debt.owed - x); logIt('spend', x, from, null, `Payment to ${dp.name}${note ? ' · ' + note : ''}`); toast(`${m(x)} paid to ${dp.name}`); }
+    else { logIt('spend', x, from, null, note); toast(`${m(x)} spent from ${nameOf(from)}`); } }
   else if (mv.mode === 'bank') {
     const raw = $('mvAmt').value.trim(); if (raw === '') return;
     const d = Math.round(Math.max(0, parseFloat(raw) || 0) * 100) - total();
@@ -255,22 +289,30 @@ function mvGo() {
 let potEdit = null, potKind = 'pot';
 function setKind(k) {
   potKind = k; document.querySelectorAll('#potBox [data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === k));
-  $('potKindSay').textContent = k === 'pot' ? 'A pot holds money you keep, like Savings or Emergency.' : 'A project holds money toward a goal, like Vacation or a laptop.';
-  $('potGoalF').classList.toggle('hidden', k === 'pot'); $('potName').placeholder = k === 'pot' ? 'Savings' : 'Vacation';
+  $('potKindSay').textContent = k === 'pot' ? 'A pot holds money you keep, like Savings or Emergency.' : k === 'debt' ? 'A debt shows what you owe and when it will be paid off. Money you put in it is saved toward payments.' : 'A project holds money toward a goal, like Vacation or a laptop.';
+  $('potGoalF').classList.toggle('hidden', k !== 'project'); $('potDebtF').classList.toggle('hidden', k !== 'debt'); $('potName').placeholder = k === 'pot' ? 'Savings' : k === 'debt' ? 'Credit card' : 'Vacation';
 }
 function openPot(id) {
   const p = id ? potOf(id) : null; potEdit = p ? p.id : null;
   $('potTitle').textContent = p ? 'Edit ' + p.name : 'Add a pot or project';
   $('potName').value = p ? p.name : ''; $('potGoal').value = p && p.goal ? (p.goal / 100).toFixed(2) : ''; $('potErr').textContent = '';
-  $('potDel').hidden = !p; setKind(p ? p.kind : 'pot'); showAsk('potBox');
+  const d = p && p.debt; $('potOwed').value = d ? (d.owed / 100).toFixed(2) : ''; $('potApr').value = d ? d.apr : ''; $('potMin').value = d ? (d.min / 100).toFixed(2) : '';
+  $('potDel').hidden = !p; setKind(p ? (p.debt ? 'debt' : p.kind) : 'pot'); showAsk('potBox');
   setTimeout(() => { try { $('potName').focus(); } catch (e) {} }, 60);
 }
 function potGo() {
   const name = $('potName').value.trim(), goal = potKind === 'project' ? toC($('potGoal').value) : 0;
   if (!name) { $('potErr').textContent = 'Give it a name'; return; }
   if (potKind === 'project' && !goal) { $('potErr').textContent = 'A project needs a goal'; return; }
-  if (potEdit) { const p = potOf(potEdit); p.name = name; p.goal = goal; p.kind = potKind; }
-  else { const id = uid(); state.pots.push({ id, name, kind: potKind, goal, bal: 0 }); opened.clear(); opened.add(id); }
+  let debt = null;
+  if (potKind === 'debt') {
+    const owed = toC($('potOwed').value), apr = Math.min(100, Math.max(0, parseFloat($('potApr').value) || 0)), min = toC($('potMin').value);
+    if (!min) { $('potErr').textContent = 'What is the monthly minimum?'; return; }
+    const was = potEdit && potOf(potEdit).debt; debt = { owed, start: Math.max(owed, was ? was.start : 0), apr, min, extra: was ? was.extra : 0 };
+  }
+  const kind = potKind === 'project' ? 'project' : 'pot';
+  if (potEdit) { const p = potOf(potEdit); p.name = name; p.goal = goal; p.kind = kind; p.debt = debt; }
+  else { const id = uid(); state.pots.push({ id, name, kind, goal, bal: 0, debt }); opened.clear(); opened.add(id); }
   save(); hideAsk(); render();
 }
 function potDel() {
@@ -309,6 +351,7 @@ function markPaid(id) {
   const go = () => {
     state.bills -= fromBills; state.free -= fromFree;
     (state.paid[ym()] = state.paid[ym()] || {})[id] = fromBills + fromFree;
+    const dp = b.debt && potOf(b.debt); if (dp && dp.debt) { const pr = Math.min(dp.debt.owed, Math.max(0, fromBills + fromFree - debtInt(dp.debt, dp.debt.owed))); dp.debt.owed -= pr; state.princ[ym() + '|' + id] = pr; }
     logIt('bill', fromBills + fromFree, fromBills ? 'bills' : 'free', null, b.name + (fromFree && fromBills ? ` (${m(fromFree)} from Free money)` : ''));
     save(); render(); toast(`${b.name} paid ✓`);
   };
@@ -318,7 +361,8 @@ function markPaid(id) {
 function markUnpaid(id) {
   const P = paidNow(), amt = P[id]; if (amt == null) return;
   const back = amt === true ? 0 : Math.max(0, Math.round(amt) || 0);
-  state.bills += back; delete P[id]; if (back) logIt('move', back, null, 'bills', 'Undo paid');
+  state.bills += back; delete P[id];
+  const b = state.billList.find(x => x.id === id), dp = b && b.debt && potOf(b.debt), k = ym() + '|' + id; if (dp && dp.debt && state.princ[k]) dp.debt.owed += state.princ[k]; delete state.princ[k]; if (back) logIt('move', back, null, 'bills', 'Undo paid');
   save(); render(); toast(back ? `${m(back)} back in Bills` : 'Marked not paid');
 }
 
@@ -366,9 +410,9 @@ function importMain(src) {
   w.onmessage = e => {
     clearTimeout(stop); w.terminate(); const r = e.data;
     if (!r || !r.ok) return toast("Couldn't read that backup" + (r && r.error ? ` (${r.error})` : ''));
-    const S = fix(r.state), T = S.free + S.bills + S.pots.reduce((a, p) => a + p.bal, 0), np = S.pots.filter(p => p.kind === 'pot').length, nj = S.pots.length - np;
+    const S = fix(r.state), T = S.free + S.bills + S.pots.reduce((a, p) => a + p.bal, 0), np = S.pots.filter(p => p.kind === 'pot' && !p.debt).length, nd = S.pots.filter(p => p.debt).length, nj = S.pots.length - np - nd;
     const keepAdv = state.adv;
-    confirmAsk('Bring in your main app?', `${m(T)} in all: ${m(S.free)} free money, ${m(S.bills)} set aside for bills, ${S.pots.length ? `${np} pot${np === 1 ? '' : 's'} and ${nj} project${nj === 1 ? '' : 's'}` : 'no pots'}, and ${S.billList.length} bill${S.billList.length === 1 ? '' : 's'}.`
+    confirmAsk('Bring in your main app?', `${m(T)} in all: ${m(S.free)} free money, ${m(S.bills)} set aside for bills, ${np} pot${np === 1 ? '' : 's'}, ${nj} project${nj === 1 ? '' : 's'}, ${nd} debt${nd === 1 ? '' : 's'}, and ${S.billList.length} bill${S.billList.length === 1 ? '' : 's'}.`
       + (r.neg.length ? ` ${r.neg.join(', ')} showed below $0 there, so ${r.neg.length === 1 ? 'it starts' : 'they start'} at $0 here.` : '')
       + ' This replaces what is in this test app. Your main app is not changed.', 'Bring it in', () => {
       state = S; if (keepAdv) state.adv = keepAdv; save(); opened.clear(); showView('budget'); toast('Brought in from your main app ✓');
@@ -439,6 +483,8 @@ document.addEventListener('click', e => {
   else if (a === 'move') openMoney('move', { from: id, to: 'free' });
   else if (a === 'spendfrom') openMoney('spend', { from: id });
   else if (a === 'edit') openPot(id);
+  else if (a === 'debtpay') { const p = potOf(id); openMoney('spend', { from: p.bal > 0 ? id : 'free', debt: id }); }
+  else if (a === 'debtextra') { const p = potOf(id); if (p && p.debt) { p.debt.extra = +t.dataset.v; save(); render(); } }
   else if (a === 'advnew' || a === 'advedit') openAdv('edit');
   else if (a === 'advday') openAdv('day');
   else if (a === 'advstep') { state.adv.step = +t.dataset.v; save(); render(); }

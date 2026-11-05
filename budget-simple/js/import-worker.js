@@ -16,7 +16,7 @@ function boot() {
   if (ready) return ready;
   const v = Date.now();
   ready = Promise.all(FILES.map(f => fetch(`../../budget/js/${f}.js?v=${v}`, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.text(); })))
-    .then(srcs => { (0, eval)(srcs.join('\n;\n') + '\n;self.__main = { load: s => { state = tidy(s); }, pots: () => potBalances(today().slice(0, 7)), paid: () => paidMap(today()), month: () => today().slice(0, 7), st: () => state };'); });
+    .then(srcs => { (0, eval)(srcs.join('\n;\n') + '\n;self.__main = { load: s => { state = tidy(s); try { debtTick(); } catch (e) {} }, goal: id => goalOf(id), minFor: (d, o) => debtMinFor(d, o), pots: () => potBalances(today().slice(0, 7)), paid: () => paidMap(today()), month: () => today().slice(0, 7), st: () => state };'); });
   return ready;
 }
 self.onmessage = async e => {
@@ -28,18 +28,21 @@ self.onmessage = async e => {
     const st = M.st(), cur = M.month(), P = M.paid(), pots = M.pots(), byId = Object.fromEntries(pots.map(p => [p.id, p]));
     const c = n => Math.max(0, Math.round((Number(n) || 0) * 100)), neg = [];
     const bal = id => { const b = byId[id] ? Number(byId[id].bal) || 0 : 0; if (b < -0.004) neg.push(byId[id].name); return c(b); };
-    const free = bal('spend') + bal('savings') + bal('scavenger');
+    const week = bal('spend'), free = bal('savings') + bal('scavenger');
     const goals = st.goals || {}, debts = st.debts || {};
     const out = { v: 1, free, bills: bal('bills'), pots: [], billList: [], paid: {}, log: [], adv: null };
+    if (week > 0) out.pots.push({ id: 'week', name: "This week's money", kind: 'pot', goal: 0, bal: week, debt: null });   // the main app's weekly spending money, still to spend
     for (const p of st.pots || []) {
       if (['spend', 'bills', 'savings', 'scavenger'].includes(p.id)) continue;
-      const g = c(goals[p.id]), isDebt = !!debts[p.id];
-      out.pots.push({ id: p.id, name: String(p.name || 'Pot') + (isDebt ? ' payments' : ''), kind: g > 0 && !isDebt ? 'project' : 'pot', goal: isDebt ? 0 : g, bal: bal(p.id) });
+      const d = debts[p.id], g = c(d ? M.goal(p.id) : goals[p.id]);
+      if (d && d.done) continue;   // paid off there
+      const debt = d ? { owed: g, start: Math.max(g, c(d.start)), apr: Number(d.apr) || 0, min: c(M.minFor(d, g / 100)), extra: 0 } : null;
+      out.pots.push({ id: p.id, name: String(p.name || 'Pot'), kind: g > 0 && !d ? 'project' : 'pot', goal: d ? 0 : g, bal: bal(p.id), debt });
     }
     const paidNow = {};
     for (const b of (st.categories || []).filter(x => x.kind === 'bill')) {
       const amt = c(b.budget), due = b.dueDay >= 1 && b.dueDay <= 31 ? Math.round(b.dueDay) : null;
-      out.billList.push({ id: b.id, name: String(b.name || 'Bill'), amt, due });
+      out.billList.push({ id: b.id, name: String(b.name || 'Bill'), amt, due, debt: b.debtId && debts[b.debtId] ? b.debtId : null });
       const e = P[b.id + '|' + cur]; if (e && amt && c(e.P) >= amt - 50) paidNow[b.id] = c(e.P);
     }
     out.paid[cur] = paidNow;
