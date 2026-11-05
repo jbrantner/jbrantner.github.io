@@ -23,3 +23,21 @@ helper (`POST /renderdeck/h3export`, progress at `GET /renderdeck/h3export?id=`)
 The helper writes one mp4 into `<PC>/H3Film/` a frame at a time with PyAV (the upper track wins where clips
 overlap; gaps are black and silent; sound is resampled to 48 kHz stereo), so a long film doesn't fill memory.
 Needs the helper from 2026-11-03 or later.
+
+## ➕ Carry on from here and ↻ Redo a stretch
+
+Both work inside H3 Deck (the 🎞 Films tab), because H3 Deck does the rendering.
+
+- **➕ Carry on from here**: select a clip and put the playhead where the new part should start (at least 1 s in).
+  H3 Deck opens on Render with the take's settings. The take's video sits in the First frame slot as the video to
+  carry on, cut at the playhead (`media.cut`, then `Video Slice` on the PC). Write what happens next and Render.
+  The take gets `carry {src, at, film, clip, key}`. Films then ends the clip at the playhead, puts the new take right
+  after it (starting at the cut, so the carried-over part isn't shown twice) and moves later clips along.
+- **↻ Redo a stretch**: pick the start, end and words, plus 1 to 3 versions. H3 Deck renders one window on the take's
+  PC with `redoPlan()`. The window runs from up to 12 frames before the stretch to 12 after it, on the 17k+5 grid.
+  The take's own frames there are pinned every 4th frame with `MiniMaxH3AddGuide`, and its sound is pinned too.
+  The result is spliced back into the full take with `ImageFromBatch` and `ImageBatch`. If the stretch reaches the
+  end of the take, only the frames before it are pinned. The first redo to finish replaces the clip's take, and
+  ⇄ Versions lists the original and the other redos.
+
+Test: `CLIP=<a ~5 s video with sound> node tests/t_carry.js`.

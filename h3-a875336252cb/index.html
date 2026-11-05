@@ -434,7 +434,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
 const NEED = ['MinimaxH3LatentUpscaler3D','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
-  'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch'];
+  'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
@@ -861,6 +861,8 @@ function canRun(url, job){
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
   if(job.cont && !(((oi.MiniMaxH3MotionContext || {}).input || {}).optional || {}).context_frames) return "can't carry on a video (install or update H3 Motion Context)";
   if(job.cont && !(oi.LoadVideo && oi.GetVideoComponents)) return "can't carry on a video (update ComfyUI)";
+  if(job.cont && job.contCut && !oi['Video Slice']) return "can't carry on from inside a video (no Video Slice node: update ComfyUI)";
+  if(job.redo && !(oi.LoadVideo && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && (oi.ImageBatch || oi.BatchImagesNode))) return "can't redo a stretch (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
   if(job.ctl && !(oi.MiniMaxH3FunControlNetApply && oi.ModelPatchLoader && oi['Video Slice'] && oi.GetVideoComponents && oi.LoadVideo)) return "can't follow a motion guide (update ComfyUI)";
@@ -961,9 +963,17 @@ function pieceGraph(t, i, oi, names){
   // a soundtrack the clip follows in time: this piece's slice of it, anchored where the piece's new frames start
   t.follow.forEach(r => { const a = add('TrimAudioDuration', {audio:[add('LoadAudio', {audio:names[r.id]}), 0], start_index:pc.start, duration:pc.deliv / FPS});
     cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:LEAD(pc)}), 0]; });
+  // ↻ Redo a stretch (🎞 Films): the take's own frames either side of the stretch are pinned on the 4-frame latent grid, so the new
+  // middle leaves and lands where the take does (the old H3 Film recipe, on the grid like 🪄 Smooth); the take's sound is pinned too
+  let rsrc = null;
+  if(t.redo){ const R = t.redo; rsrc = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]});
+    for(const [o, s] of R.pins){ const fr = add('ImageFromBatch', {image:[rsrc, 0], batch_index:s, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
+    if(R.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:[rsrc, 1], start_index:R.s0 / FPS, duration:L / FPS}), 0], frame_idx:0}), 0]; }
   let trim = null;
   if(pc.ctx && i===0 && t.cont){ // carry on the given video: its last frames are pinned (resized to this clip by the node)
-    const gc = add('GetVideoComponents', {video:[add('LoadVideo', {file:names[t.cont]}), 0]}), snd = (S.media[t.cont] || {}).sound!==false;
+    let cv = [add('LoadVideo', {file:names[t.cont]}), 0];
+    if(t.contCut) cv = [add('Video Slice', {video:cv, start_time:0, duration:t.contCut, strict_duration:false}), 0]; // ➕ from a moment inside it: only up to there
+    const gc = add('GetVideoComponents', {video:cv}), snd = (S.media[t.cont] || {}).sound!==false;
     const mc = add('MiniMaxH3MotionContext', Object.assign({conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_frames:[gc, 0]}, snd ? {audio_vae:avae, context_audio:[gc, 1]} : {}));
     cond = [mc, 0]; trim = [mc, 1]; }
   else if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:ctxDir(t, i), clip_index:i});
@@ -976,16 +986,25 @@ function pieceGraph(t, i, oi, names){
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
     // then HEAD more frames (sound too): the first frame after the carried-over overlap decodes too bright and flashes at the join
     const t2 = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:HEAD, audio:aud, fps:FPS, match_tail:true}); ims = [t2, 0]; aud = [t2, 1]; }
+  if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
+    const R = t.redo; let joined = [add('ImageFromBatch', {image:[rsrc, 0], batch_index:0, length:R.a + 1}), 0];
+    const mid = R.b - R.a - 1; if(mid > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:ims, batch_index:R.a - R.s0 + 1, length:mid}), 0]);
+    if(R.F - R.b > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:[rsrc, 0], batch_index:R.b, length:R.F - R.b}), 0]);
+    ims = joined; if(R.sound) aud = [rsrc, 1]; }
   const vid = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[vid, 0], filename_prefix:t.dir + '/piece_' + String(i + 1).padStart(2, '0'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   // the last piece joins them all as its final step (Jordan 2026-11-01: no waiting in the queue for the stitch); needs the Render Deck helper's join node
   const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join && !borrowed(t) && !t.cont ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
   return {g, save:sv, join};
 }
+function batchOf(add, oi, a, b){ const req = ((oi.ImageBatch || {}).input || {}).required || {};
+  if(oi.ImageBatch && 'image1' in req) return [add('ImageBatch', {image1:a, image2:b}), 0];
+  return [add(oi.ImageBatch ? 'ImageBatch' : 'BatchImagesNode', {'images.image0':a, 'images.image1':b}), 0]; }
 function joinGraph(t){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title:cls}}; return id; };
   const vids = {}, o = t.cont ? 1 : 0;
   if(t.cont){ const m = S.media[t.cont] || {}; let v = [add('LoadVideo', {file:t.contFile}), 0];
+    if(t.contCut) v = [add('Video Slice', {video:v, start_time:0, duration:t.contCut, strict_duration:false}), 0]; // the rest of it is replaced by the new part
     if(m.w && (m.w!==t.w || m.h!==t.h)){ const gc = add('GetVideoComponents', {video:v}); // to the take's size, so the join is one size
       const sc = add('ImageScale', {image:[gc, 0], upscale_method:'lanczos', width:t.w, height:t.h, crop:'center'});
       v = [add('CreateVideo', Object.assign({images:[sc, 0], fps:m.fps || FPS}, m.sound!==false ? {audio:[gc, 1]} : {})), 0]; }
@@ -1109,12 +1128,15 @@ function snapshot(){ // the form, frozen into a take
   const ctl = !sm && f.ctl && f.ctlVid && S.media[f.ctlVid] ? {vid:f.ctlVid, str:+f.ctlStr, end:+f.ctlEnd, face:f.faceOn!==false ? faceOf(S.media[f.ctlVid]) : null} : null;
   const ctl2 = ctl && f.ctl2Vid && f.ctl2Vid!==f.ctlVid && S.media[f.ctl2Vid] ? {vid:f.ctl2Vid, str:+f.ctl2Str, end:+f.ctl2End} : null;
   return {sm, up, upImgs, ctl, ctl2, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
-    fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
+    fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, ...contBits(), lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     h3:!sm && f.h3 ? {style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
+// ➕ Carry on from here (🎞 Films): the take's video is carried on from a moment inside it, not from its end (media.cut, s)
+function contBits(){ const m = contOn() && S.media[S.f.first]; if(!m) return {}; const cut = +m.cut || 0;
+  return {contCut:cut, contSecs:cut || m.dur || 0, carry:m.carry ? Object.assign({}, m.carry) : null}; }
 function whyNot(){
   const f = S.f; if(f.sm && !f.smVid) return 'Pick the video to smooth';
   if(f.sm && f.smSpc && (SPC[spcKey()] || {busy:true}).busy) return 'Measuring the spacing…';
@@ -1486,7 +1508,7 @@ function drawInputs(){
   $('#flSlots').innerHTML = (fm ? `<div class="slot has"><img src="${fm.thumb || ''}" alt=""><span class="tag">${fm.kind==='vid' ? '🎞 Carry on' : 'First frame'}</span><button class="x" data-rm="first">✕</button></div>` : addSlot('first', 'First frame or video'))
     + (f.last ? (lm ? `<div class="slot has"><img src="${lm.thumb}" alt=""><span class="tag">Last frame</span><button class="x" data-rm="lastImg">✕</button></div>` : addSlot('lastImg', 'Last frame')) : '');
   { const cn = $('#contNote'), on = contOn(); cn.hidden = !on;
-    if(on) cn.textContent = 'A video here is carried on: its last ' + CTX + ' frames' + (fm.sound!==false ? ' and its sound' : '') + ' lead into the new part (H3 Motion Context), and the finished take is your video followed by the new part. Length is just the new part.' + (fm.fps && Math.abs(fm.fps - FPS) > 0.1 ? ' Your video is ' + fm.fps + ' fps and MiniMax makes 24, so the motion may change speed at the join.' : ''); }
+    if(on) cn.textContent = (fm.cut ? '➕ Carried on from ' + fmtS(fm.cut) + ' into it (from 🎞 Films): the rest of that video is replaced by the new part. ' : '') + 'A video here is carried on: its last ' + CTX + ' frames' + (fm.sound!==false ? ' and its sound' : '') + ' lead into the new part (H3 Motion Context), and the finished take is your video followed by the new part. Length is just the new part.' + (fm.fps && Math.abs(fm.fps - FPS) > 0.1 ? ' Your video is ' + fm.fps + ' fps and MiniMax makes 24, so the motion may change speed at the join.' : ''); }
   $('#refSw').classList.toggle('on', f.ref); $('#refBody').hidden = !f.ref || f.sm;
   $('#imgSlots').innerHTML = f.imgs.map((r, i) => slotHtml('img', r, i, L[r.id])).join('') + (f.imgs.length < MAXREF.img ? addSlot('img', 'Picture') : '');
   $('#vidSlots').innerHTML = f.vids.map((r, i) => slotHtml('vid', r, i, L[r.id])).join('') + (f.vids.length < MAXREF.vid ? addSlot('vid', 'Video') : '');
@@ -1904,6 +1926,66 @@ function filmNav(tab){ try{ const F = FW && FW.FILM; if(!F) return; const v = F.
 // called by the film app inside the frame
 window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('render'); location.hash = 'take=' + encodeURIComponent(takeId) + (more ? '&more=1' : ''); } else setTab(tab); };
 window.H3Badge = () => {};
+// ---------- 🎞 Films asks for new video (Jordan 2026-11-05: an editor where parts can be remade on the fly) ----------
+const takeFile = t => t && (t.final || (t.pieces.length===1 && !t.cont ? t.pieces[0].file : null));
+const fileArg = f => (f.subfolder ? f.subfolder + '/' : '') + f.filename + ' [output]';
+// frames in a take's finished video
+const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont ? Math.round((t.contSecs || (S.media[t.cont] || {}).dur || 0) * FPS) : 0);
+// ➕ Carry on from here: the form gets the take's settings, and its video (up to the playhead) as the video to carry on;
+// Jordan writes what happens next and renders. Films puts the new take right after the clip.
+window.H3Carry = async o => { const t = S.takes.find(x => x.id===o.take), fl = takeFile(t);
+  if(!t){ toast("That take isn't in H3 Deck on this phone"); return false; }
+  if(!fl){ toast('That take has no finished video yet'); return false; }
+  setTab('render'); window.scrollTo(0, 0);
+  try{ toast('Getting the video…'); const r = await fetch(viewUrl(t.pc, fl)); if(!r.ok) throw new Error(pcName(t.pc) + ' said ' + r.status); const b = await r.blob();
+    useAgain(t);
+    const id = await addMedia(new File([b], fl.filename, {type:'video/mp4'}), 'vid'), m = S.media[id];
+    const at = Math.max(1, Math.min(+o.at || 0, m.dur || takeFrames(t) / FPS || 1e9));
+    const near = Math.abs(at - (m.dur || 0)) < 0.05; // at the very end: the whole video
+    Object.assign(m, {cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:uid('k')}, name:'➕ ' + fmtS(at) + ' into ' + fl.filename});
+    const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:o.prompt || '', pieceText:{}});
+    $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll();
+    setTimeout(() => { $('#prompt').focus(); }, 300);
+    toast('➕ Carrying on from ' + fmtS(at) + ': write what happens next, then Render. Films puts it right after the clip.', 6000); return true; }
+  catch(e){ toast("Couldn't get the take: " + e.message, 5000); return false; } };
+// ↻ Redo a stretch [a, b] s of a finished take: MiniMax renders a window that starts up to ctx frames before a and ends up to
+// ctx after b; the take's frames there are pinned (every 4th, the 4-frame latent grid), so only the frames between a and b change.
+// b at the end of the take = redo to the end (then nothing after is pinned, and the take can get longer or shorter).
+function redoPlan(F, a, b, ctx){
+  a = Math.max(1, Math.min(F - 5, Math.round(a))); b = Math.round(b);
+  const s0 = Math.max(0, a - ctx); a = s0 + Math.floor((a - s0) / 4) * 4;
+  let toEnd = b >= F - 2; if(!toEnd){ b = s0 + Math.ceil((Math.max(a + 4, b) - s0) / 4) * 4; if(b >= F - 1) toEnd = true; }
+  const pins = []; for(let o = 0; o <= a - s0; o += 4) pins.push([o, s0 + o]);
+  if(toEnd){ const L = gridUp(F - s0); return {a, b:s0 + L, s0, L, F:s0 + L, Fout:s0 + L, toEnd, pins}; }
+  const L = gridUp(Math.min(F, b + ctx + 1) - s0), last = Math.min(L - 1, F - 1 - s0);
+  for(let o = b - s0; o <= last; o += 4) pins.push([o, s0 + o]);
+  if(L - 1 <= F - 1 - s0 && !pins.some(p => p[0]===L - 1)) pins.push([L - 1, s0 + L - 1]);
+  return {a, b, s0, L, F, Fout:F, toEnd, pins};
+}
+window.H3Redo = async o => { const src = S.takes.find(x => x.id===o.take), fl = takeFile(src);
+  if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
+  if(!fl){ toast('That take has no finished video yet'); return 0; }
+  if(src.sm){ toast("A 🪄 smoothed take can't have a stretch redone"); return 0; }
+  if(!pcOf(src.pc).online){ toast(pcName(src.pc) + " can't be reached: the take's video is there"); return 0; }
+  const F = takeFrames(src), P = redoPlan(F, (+o.a || 0) * FPS, (+o.b || 0) * FPS, 12), key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1));
+  let sent = 0;
+  for(let k = 0; k < n; k++){
+    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+    t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
+    const text = (o.prompt || '').trim() || (src.pieces.find(p => p.start * FPS <= P.a && (p.start * FPS + p.deliv) > P.a) || src.pieces[0]).prompt;
+    Object.assign(t, {prompt:text, seconds:P.Fout / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, pins:[], mq:'', follow:[],
+      ctxDirs:null, from:null, sm:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false,
+      redo:Object.assign({src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key}, P),
+      pieces:[{start:P.s0 / FPS, gen:P.L, deliv:P.L, ctx:0, prompt:text, state:'new'}]});
+    if(src.cont){ t.ctl = null; t.ctl2 = null; } // its guide's timing doesn't include the carried-on video
+    t.pc = src.pc; const why = canRun(t.pc, t); if(why){ toast(pcName(t.pc) + ' ' + why, 6000); break; }
+    S.takes.unshift(t); drawTakes();
+    try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
+  }
+  save(); drawTakes(); if(sent) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + pcName(src.pc));
+  return sent; };
+window.H3RedoPlan = redoPlan;
+
 // 🧍 the Poses tab sends its clips and key pictures straight over (same app, so Blobs, no PC in between):
 // {dur, aspect, clips:[{mode:'pose'|'depth', blob, name, w, h, dur}], keys:[{t, blob, name}]}
 window.H3PoseKeys = async P => { const f = S.f, got = [];
@@ -1926,6 +2008,6 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-ta
 window.addEventListener('resize', () => { if(S.tab && S.tab!=='render') tabTop(); });
 if(S.tab==='room') S.tab = 'render'; // ✂ Cutting Room taken out for now (Jordan 2026-11-03: not a fully fledged idea yet)
 if(S.tab && S.tab!=='render' && !/take=/.test(location.hash)) setTab(S.tab);
-window.H3 = {toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
