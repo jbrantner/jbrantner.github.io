@@ -137,6 +137,16 @@ const DEPS = process.env.RIG_DEPS || '';
       for(let y = 0; y < 100; y++) for(let x = 0; x < 120; x++){ const p = (y * 120 + x) * 4, inM = x >= 40 && x < 80 && y >= 10; if(!inM && d[p]) out++; if(d[p]!==d[p + 1] || d[p]!==d[p + 2]) col++; if(inM && d[p] > 60) grey++; }
       return {out, grey, col}; });
     ok(v.out===0 && v.col===0 && v.grey > 0, 'her grey figure for Qwen: grey only, nothing outside her mask: ' + JSON.stringify(v)); }
+  // 🎯 (Jordan 2026-11-05) Qwen's view cut down round her, her in the middle; the guide on white; Qwen told to keep it white
+  { const v = await page.evaluate(() => { const T = SCENE.THREE, cam = new T.PerspectiveCamera(40, 0.75, 0.05, 200); cam.position.set(0, 1, 6); cam.lookAt(0, 1, 0); cam.updateMatrixWorld(true);
+      const g = new T.Group(), m = new T.Mesh(new T.BoxGeometry(0.4, 0.9, 0.3), new T.MeshBasicMaterial()); m.position.set(1.2, 0.45, 0); g.add(m); const o = {g, mq:g};
+      const done = SCENE.rsCentre(cam, o, 600, 800), bx = new T.Box3().setFromObject(m); let y0 = 9, y1 = -9, x0 = 9, x1 = -9;
+      for(let i = 0; i < 8; i++){ const p = new T.Vector3(i & 1 ? bx.max.x : bx.min.x, i & 2 ? bx.max.y : bx.min.y, i & 4 ? bx.max.z : bx.min.z).project(cam); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+      const k = document.createElement('canvas'); k.width = 3; k.height = 1; const kx = k.getContext('2d'); kx.fillStyle = '#000'; kx.fillRect(0, 0, 1, 1); kx.fillStyle = '#fff'; kx.fillRect(1, 0, 1, 1); kx.fillStyle = '#808080'; kx.fillRect(2, 0, 1, 1);
+      const wg = [...SCENE.whiteGuide(k).getContext('2d').getImageData(0, 0, 3, 1).data];
+      const w = SCENE.qwenWords({tags:'1girl'}, {pitch:0, tags:[], neg:[], say:['seen from eye level'], white:true}, 'a street', '');
+      return {done, cx:(x0 + x1) / 2, cy:(y0 + y1) / 2, h:(y1 - y0) / 2, wg:[wg[0], wg[4], wg[8]], w}; });
+    ok(v.done && Math.abs(v.cx) < 0.05 && Math.abs(v.cy) < 0.05 && v.h > 0.8 && v.h < 0.9 && v.wg[0]===255 && v.wg[1]===215 && v.wg[2]===128 && /plain white/.test(v.w) && !/a street/.test(v.w), '🎯 her in the middle filling ~85% of the height, the guide on white, Qwen keeps it white: ' + JSON.stringify(Object.assign({}, v, {w:v.w.slice(-260)}))); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
