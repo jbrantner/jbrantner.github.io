@@ -328,6 +328,9 @@ async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clip
   for(const P of PROPS) if(P.obj) P.obj.traverse(m => { if(m.isMesh) propMeshes.push(m); }); if(SCN) SCN.root.traverse(m => { if(m.isMesh) placeMeshes.push(m); });
   const was = {floor:floor.visible, shadow:shadow.visible, scn:SCN && SCN.root.visible, hide:M.hide.slice(), props:PROPS.map(P => P.obj && P.obj.visible)};
   const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+  // 🧭 which way each person faces the camera on every frame (F faces it, S side-on, B back to it, - not in shot), so H3 Deck can say so in
+  // the prompt (Jordan 2026-11-05: MiniMax gives her a face when she has her back to the camera)
+  const FACE = {fps, who:people.map(p => ({i:p.i, s:'', x:0, n:0}))};
   try{ if(!type) throw new Error("This browser can't record video from a page.");
     floor.visible = false; shadow.visible = false; GZ.visible = false;
     for(const [n, ps] of passes.entries()){ EXP.msg = 'Making ' + (n + 1) + ' of ' + passes.length + ': ' + ps.name.replace(/_/g, ' ') + '…'; const m = $('#expmsg'); if(m) m.textContent = EXP.msg;
@@ -338,11 +341,15 @@ async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clip
       rec.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); }; const done = new Promise(r => { rec.onstop = r; }); rec.start();
       for(let f = 0; f < N; f++){ T = Math.min(A.dur, f / fps); dm.userData.u.dNear.value = RNG[f][0]; dm.userData.u.dFar.value = RNG[f][1]; const fl = FOLLOW; FOLLOW = false; pose(); FOLLOW = fl; camTo(T);
         for(const P of PROPS) if(P.obj) P.obj.visible = EXP.props && P.obj.visible; if(SCN) SCN.root.visible = !!EXP.place;
-        if(ps.mode==='pose') drawSkeletons(cxP, W, H, cam, ps.who); else R2.render(scene, cam); if(track.requestFrame) track.requestFrame();
+        if(ps.mode==='pose') drawSkeletons(cxP, W, H, cam, ps.who); else R2.render(scene, cam);
+        if(n===0) for(const [k, p] of people.entries()){ const fc = FACE.who[k], j = opJoints(p), here = T >= p.t0 - 0.5 / A.fps && T <= p.t1 + 0.5 / A.fps; if(!j || !here){ fc.s += '-'; continue; }
+          const tc = cam.position.clone().sub(j.pts[1]), fw = j.fwd.clone(); tc.y = 0; fw.y = 0; const a = tc.length() > 1e-4 && fw.length() > 1e-4 ? fw.angleTo(tc) * 180 / Math.PI : 0;
+          fc.s += a < 55 ? 'F' : a > 125 ? 'B' : 'S'; fc.x += j.pts[1].clone().project(cam).x; fc.n++; } if(track.requestFrame) track.requestFrame();
         if(f===N >> 1){ const c2 = document.createElement('canvas'); c2.width = 48; c2.height = Math.round(48 * H / W); const x = c2.getContext('2d'); x.drawImage(src, 0, 0, c2.width, c2.height); const d = x.getImageData(0, 0, c2.width, c2.height).data; let red = 0, grey = 0, lit = 0, sum = 0, on = 0;
           for(let i = 0; i < d.length; i += 4){ if(d[i] > 180 && d[i + 1] < 90 && d[i + 2] < 90) red++; if(d[i] > 40 && Math.abs(d[i] - d[i + 1]) < 20 && Math.abs(d[i] - d[i + 2]) < 20) grey++; if(d[i] + d[i + 1] + d[i + 2] > 120) lit++; if(d[i] > 8){ sum += d[i]; on++; } } ps.stats = {red:red / (d.length / 4), grey:grey / (d.length / 4), lit:lit / (d.length / 4), mean:on ? sum / on : 0};
           const t3 = document.createElement('canvas'); t3.width = 220; t3.height = Math.round(220 * H / W); t3.getContext('2d').drawImage(src, 0, 0, t3.width, t3.height); ps.thumb = t3.toDataURL('image/jpeg', 0.75); } await new Promise(r => setTimeout(r, 1000 / fps)); }
       rec.stop(); await done; const blob = new Blob(chunks, {type:type.split(';')[0]}); EXP.clips.push({name:ps.name + (type.includes('mp4') ? '.mp4' : '.webm'), blob, url:URL.createObjectURL(blob), frames:N, stats:ps.stats, thumb:ps.thumb, w:W, h:H, fps, dur:(N - 1) / fps, mode:ps.mode}); }
+    FACE.who.forEach(w => { w.x = w.n ? +(w.x / w.n).toFixed(3) : 0; delete w.n; }); EXP.face = FACE; for(const c of EXP.clips) c.face = FACE;
     EXP.msg = 'Made ' + EXP.clips.length + ' clips (' + W + '×' + H + ', ' + fps + ' fps' + (people.length > 1 ? '; ' + people.map(p => 'person ' + (p.i + 1) + ' = ' + MASKN[p.i % MASKN.length]).join(', ') : '') + ').'; }
   catch(e){ EXP.msg = e.message; }
   GZ.visible = true; for(const [o, m] of swaps) o.material = m; M.hide = was.hide; floor.visible = was.floor; shadow.visible = was.shadow; R2.dispose();
@@ -357,7 +364,7 @@ const H3_INBOX = '/userdata/h3deck_inbox.json';
 // the note lists every clip sent to that PC (last 7 days, up to 24); H3 Deck shows them under Motion guide › From Mocap
 async function noteH3(u, add){ let box = {items:[]}; try{ const r = await fetch(u + H3_INBOX, {cache:'no-store'}); if(r.ok) box = await r.json(); }catch(e){}
   const items = (Array.isArray(box.items) ? box.items : []).filter(x => x && Date.now() - (x.t || 0) < 7 * 864e5).slice(-(24 - add.length)), n = A.P.filter(p => !M.hide[p.i]).length;
-  add.forEach(([c, file, slot], k) => items.push({id:'mc' + Date.now().toString(36) + k, t:Date.now(), slot, file, name:(M.name || 'Mocap') + ' · ' + c.name.replace(/\.\w+$/, '').replace(/_/g, ' '), w:c.w, h:c.h, fps:c.fps, dur:c.dur, frames:c.frames, mode:c.mode, thumb:c.thumb || '', people:n}));
+  add.forEach(([c, file, slot], k) => items.push({id:'mc' + Date.now().toString(36) + k, t:Date.now(), slot, file, name:(M.name || 'Mocap') + ' · ' + c.name.replace(/\.\w+$/, '').replace(/_/g, ' '), w:c.w, h:c.h, fps:c.fps, dur:c.dur, frames:c.frames, mode:c.mode, thumb:c.thumb || '', people:n, face:c.face || null}));
   const r = await fetch(u + H3_INBOX + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({v:1, items})}); if(!r.ok) throw new Error("Couldn't leave the note for H3 Deck on " + pcName(u) + ' (' + r.status + ').'); }
 async function toH3(i){ const c = EXP.clips[i]; if(!c || EXP.busy) return; EXP.busy = true; draw();
   try{ const k = KIT || await samKit().catch(() => null), u = k ? k.url : deckServers()[0].url.replace(/\/+$/, ''); EXP.msg = 'Sending ' + c.name + ' to ' + pcName(u) + '…'; const m = $('#expmsg'); if(m) m.textContent = EXP.msg;
