@@ -69,6 +69,7 @@ h2{margin:0;font:600 15px var(--display)}
 // frame, root "track00" moved by the camera translation, 72 face morphs) → Save 3D. This page plays that GLB.
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {TransformControls} from 'three/addons/controls/TransformControls.js';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 const QS = new URLSearchParams(location.search), HID = QS.get('h')==='1', $ = s => document.querySelector(s);
 const esc = s => String(s==null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'})[c]);
@@ -243,20 +244,43 @@ async function loadProps(){ for(const pr of M.props || []){ try{ const [gl, dg, 
     catch(e){ console.warn('prop', pr.word, e); PROPS.push({id:pr.id, word:pr.word, obj:null, err:e.message}); } }
   if(A) pose(); }
 const lerp = (arr, t, k) => { const x = Math.min(A.F - 1, Math.max(0, t * A.fps)), i = Math.floor(x), j = Math.min(A.F - 1, i + 1), u = x - i, a = arr[i], b = arr[j]; return k ? a[k] + (b[k] - a[k]) * u : a + (b - a) * u; };
-const adjOf = i => { const a = (M.adj || [])[i] || {}; return {x:+a.x || 0, y:+a.y || 0, z:+a.z || 0, yaw:+a.yaw || 0, tip:+a.tip || 0, lean:+a.lean || 0}; };
-function setAdj(i, ch){ if(!Array.isArray(M.adj)) M.adj = []; M.adj[i] = Object.assign(adjOf(i), ch); }
+// 📍 place keys (Jordan 2026-11-05: "key its position so I can keep it on the ground"): where a person stands at chosen frames, straight lines
+// between them. Once a person has a key, moving or raising them at another frame adds a key there (auto key, like Maya).
+const pkKeys = i => { const a = (M.adj || [])[i]; return (a && Array.isArray(a.k) ? a.k : []).slice().sort((x, y) => x.t - y.t); };
+function pkAt(ks, t){ if(!ks.length) return null; if(t <= ks[0].t) return ks[0]; for(let j = 0; j < ks.length - 1; j++){ const a = ks[j], b = ks[j + 1]; if(t <= b.t){ const u = (t - a.t) / Math.max(1e-6, b.t - a.t); return {x:a.x + (b.x - a.x) * u, y:a.y + (b.y - a.y) * u, z:a.z + (b.z - a.z) * u}; } } return ks[ks.length - 1]; }
+const keyT = () => A ? Math.round(T * A.fps) / A.fps : 0;
+const pkHere = i => A ? pkKeys(i).find(k => Math.abs(k.t - T) < 0.5 / A.fps) : null;
+const adjOf = (i, t = T) => { const a = (M.adj || [])[i] || {}, r = {x:+a.x || 0, y:+a.y || 0, z:+a.z || 0, yaw:+a.yaw || 0, tip:+a.tip || 0, lean:+a.lean || 0, q:Array.isArray(a.q) && a.q.length===4 ? a.q : null, k:Array.isArray(a.k) ? a.k : []};
+  const p = pkAt(pkKeys(i), t); if(p){ r.x = p.x; r.y = p.y; r.z = p.z; } return r; };
+function setAdj(i, ch){ if(!Array.isArray(M.adj)) M.adj = []; const a = adjOf(i); ch = Object.assign({}, ch);
+  if(a.k.length && ['x', 'y', 'z'].some(n => n in ch) && !ch.k){ const t = keyT(), k = {t, x:'x' in ch ? ch.x : a.x, y:'y' in ch ? ch.y : a.y, z:'z' in ch ? ch.z : a.z};
+    ch.k = a.k.filter(o => Math.abs(o.t - t) >= 0.5 / A.fps).concat([k]); }
+  M.adj[i] = Object.assign(a, ch); }
+function pkAdd(){ if(!A) return; const a = adjOf(SEL), t = keyT(); setAdj(SEL, {k:a.k.filter(o => Math.abs(o.t - t) >= 0.5 / A.fps).concat([{t, x:+a.x.toFixed(4), y:+a.y.toFixed(4), z:+a.z.toFixed(4)}])}); }
+function pkDel(){ const k = pkHere(SEL); if(!k) return; const a = adjOf(SEL); setAdj(SEL, {k:a.k.filter(o => o!==k)}); }
+const pkShow = () => { const c = $('#pkeys'); if(c) c.innerHTML = pkInner(); };
+const pkInner = () => pkKeys(SEL).map(k => `<button data-pk="${k.t}" aria-pressed="${pkHere(SEL)===k}">📍 ${k.t.toFixed(2)} s</button>`).join('') + `<button data-pka="1">${pkHere(SEL) ? '📍 Update this key' : '＋ Key ' + (A && A.P.length > 1 ? 'their' : 'her') + ' place here'}</button>` + (pkHere(SEL) ? '<button data-pkd="1">🗑</button>' : '');
 // ✥ Line up: tap a mannequin to pick it, drag it across the ground (the view only turns when the finger starts off them), turn/raise it with the sliders
 let LINE = false, SEL = 0, DRAG = null; const RC = new THREE.Raycaster();
+// 🎯 rotate rings on her hips, like Maya's rotate tool (Jordan 2026-11-05): red / green / blue turn about one axis, the outer ring about the
+// view, the inside tumbles her freely. A stand-in object sits at her hips in the levelled ground's space; its turn is hers.
+const GZP = new THREE.Object3D(), GZ = new TransformControls(camera, renderer.domElement); GZ.setMode('rotate'); GZ.setSpace('world'); GZ.setSize(1.25); scene.add(GZ);
+// no free-tumble ball inside the rings: a finger inside them grabs her body to drag her along the ground instead
+for(const k of ['picker', 'gizmo']) [...GZ._gizmo[k].rotate.children].filter(c => c.name==='XYZE').forEach(c => c.parent.remove(c));
+GZ.addEventListener('dragging-changed', e => { controls.enabled = !e.value; if(!e.value){ LASTMID = null; keep(); saveClip(); } });
+GZ.addEventListener('objectChange', () => { if(!A) return; setAdj(SEL, {q:GZP.quaternion.toArray().map(v => +v.toFixed(6)), yaw:0, tip:0, lean:0}); LASTMID = null; pose(); });
+function gizmoOn(){ if(!A || !LINE){ GZ.detach(); return; } if(!GZP.parent) align.add(GZP); const p = A.P[SEL] || A.P[0]; GZP.quaternion.copy(rotOf(p, adjOf(p.i))); GZ.attach(GZP); pose(); }
+const gzHit = ev => { if(!GZ.object) return false; const r = renderer.domElement.getBoundingClientRect(); GZ.pointerHover({x:(ev.clientX - r.left) / r.width * 2 - 1, y:-(ev.clientY - r.top) / r.height * 2 + 1, button:0}); return GZ.axis !== null; };
 function hitPerson(ev){ if(!A) return null; const r = renderer.domElement.getBoundingClientRect(), v = new THREE.Vector2((ev.clientX - r.left) / r.width * 2 - 1, -(ev.clientY - r.top) / r.height * 2 + 1);
   RC.setFromCamera(v, camera); let best = null; for(const p of A.P){ if(!p.track.visible || !p.sk) continue; p.sk.boundingSphere = null; p.sk.boundingBox = null;
     const h = RC.intersectObject(p.sk, false)[0]; if(h && (!best || h.distance < best.h.distance)) best = {p, h}; } return best; }
 function markSel(){ if(!A) return; for(const p of A.P) if(p.sk && p.sk.material && p.sk.material.emissive) p.sk.material.emissive.setHex(LINE && p.i===SEL ? 0x3a1830 : 0x000000); }
-renderer.domElement.addEventListener('pointerdown', ev => { if(!LINE || !A) return; const hit = hitPerson(ev); if(!hit) return;
-  SEL = hit.p.i; markSel(); controls.enabled = false; DRAG = {id:ev.pointerId, plane:new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.h.point.y), last:hit.h.point.clone()}; draw(); }, true);
+renderer.domElement.addEventListener('pointerdown', ev => { if(!LINE || !A) return; if(gzHit(ev)){ controls.enabled = false; return; } const hit = hitPerson(ev); if(!hit) return;
+  const was = SEL; SEL = hit.p.i; markSel(); if(was!==SEL) gizmoOn(); controls.enabled = false; DRAG = {id:ev.pointerId, plane:new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.h.point.y), last:hit.h.point.clone()}; draw(); }, true);
 renderer.domElement.addEventListener('pointermove', ev => { if(!DRAG || ev.pointerId!==DRAG.id) return; const r = renderer.domElement.getBoundingClientRect();
   RC.setFromCamera(new THREE.Vector2((ev.clientX - r.left) / r.width * 2 - 1, -(ev.clientY - r.top) / r.height * 2 + 1), camera); const q = RC.ray.intersectPlane(DRAG.plane, new THREE.Vector3()); if(!q) return;
   const d = q.clone().sub(DRAG.last), a = adjOf(SEL); setAdj(SEL, {x:a.x + d.x, z:a.z + d.z}); DRAG.last = q; pose(); });
-const endDrag = ev => { if(!DRAG || (ev && ev.pointerId!==DRAG.id)) return; DRAG = null; controls.enabled = true; LASTMID = null; pose(); keep(); saveClip(); };
+const endDrag = ev => { if(!DRAG || (ev && ev.pointerId!==DRAG.id)) return; DRAG = null; controls.enabled = true; LASTMID = null; pose(); keep(); saveClip(); draw(); };
 renderer.domElement.addEventListener('pointerup', endDrag); renderer.domElement.addEventListener('pointercancel', endDrag);
 // ---- 🎬 clips for MiniMax (Jordan 2026-11-01, a hug between two characters): from this camera view, at 24 fps, a depth clip (near = white)
 // and a flat colour mask (person 1 red, person 2 blue…) with everyone, then the same for each person alone. Recorded from a second canvas.
@@ -305,7 +329,7 @@ async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clip
   const was = {floor:floor.visible, shadow:shadow.visible, scn:SCN && SCN.root.visible, hide:M.hide.slice(), props:PROPS.map(P => P.obj && P.obj.visible)};
   const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
   try{ if(!type) throw new Error("This browser can't record video from a page.");
-    floor.visible = false; shadow.visible = false;
+    floor.visible = false; shadow.visible = false; GZ.visible = false;
     for(const [n, ps] of passes.entries()){ EXP.msg = 'Making ' + (n + 1) + ' of ' + passes.length + ': ' + ps.name.replace(/_/g, ' ') + '…'; const m = $('#expmsg'); if(m) m.textContent = EXP.msg;
       const mats = {}; for(const p of A.P){ keepMat(p.sk); p.sk.material = ps.mode==='depth' ? dm : (mats[p.i] = mats[p.i] || new THREE.MeshBasicMaterial({color:MASKC[p.i % MASKC.length]})); }
       const grey = new THREE.MeshBasicMaterial({color:0x808080}); for(const o of propMeshes){ keepMat(o); o.material = ps.mode==='depth' ? dm : grey; } for(const o of placeMeshes){ keepMat(o); o.material = ps.mode==='depth' ? dm : new THREE.MeshBasicMaterial({color:0x000000}); }
@@ -321,7 +345,7 @@ async function makeClips(){ if(!A || EXP.busy) return; EXP.busy = true; EXP.clip
       rec.stop(); await done; const blob = new Blob(chunks, {type:type.split(';')[0]}); EXP.clips.push({name:ps.name + (type.includes('mp4') ? '.mp4' : '.webm'), blob, url:URL.createObjectURL(blob), frames:N, stats:ps.stats, thumb:ps.thumb, w:W, h:H, fps, dur:(N - 1) / fps, mode:ps.mode}); }
     EXP.msg = 'Made ' + EXP.clips.length + ' clips (' + W + '×' + H + ', ' + fps + ' fps' + (people.length > 1 ? '; ' + people.map(p => 'person ' + (p.i + 1) + ' = ' + MASKN[p.i % MASKN.length]).join(', ') : '') + ').'; }
   catch(e){ EXP.msg = e.message; }
-  for(const [o, m] of swaps) o.material = m; M.hide = was.hide; floor.visible = was.floor; shadow.visible = was.shadow; R2.dispose();
+  GZ.visible = true; for(const [o, m] of swaps) o.material = m; M.hide = was.hide; floor.visible = was.floor; shadow.visible = was.shadow; R2.dispose();
   EXP.busy = false; T = T0; pose(); applyCam(T); draw(); }
 // 🦴 → H3 Deck (Jordan 2026-11-03): the clip goes into the PC's ComfyUI input, and a note in that PC's user files tells H3 Deck to put it in
 // its Motion guide slot (a home-screen H3 Deck has its own storage, so the PC carries the hand-off, not the phone)
@@ -349,6 +373,9 @@ async function sendClips(){ if(!EXP.clips.length || EXP.busy) return; EXP.busy =
 const shownP = () => A ? A.P.filter(p => !M.hide[p.i] && T >= p.t0 - 0.5 / A.fps && T <= p.t1 + 0.5 / A.fps) : [];
 // the middle of the people showing (their hips)
 function middle(){ const L = shownP().length ? shownP() : A.P, c = new THREE.Vector3(); for(const p of L) c.add(wp(p.bn.bone_001)); return c.divideScalar(L.length); }
+// her turn: 🎯 the rotate rings' quaternion (Maya-style, Jordan 2026-11-05), or the older turn/tip/lean angles
+function rotOf(p, a){ if(a.q) return new THREE.Quaternion().fromArray(a.q); const q = new THREE.Quaternion().setFromAxisAngle(A.up, a.yaw * Math.PI / 180);
+  if(a.tip || a.lean){ const [sd, fw] = axesOf(p); q.multiply(new THREE.Quaternion().setFromAxisAngle(sd, a.tip * Math.PI / 180)).multiply(new THREE.Quaternion().setFromAxisAngle(fw, a.lean * Math.PI / 180)); } return q; }
 // her own side and front axes (in the align space, level with the ground), from her hips at the clip's first frame: kept, so tipping doesn't wobble
 function axesOf(p){ if(p.ax) return p.ax; const up = A.up.clone().normalize(), L = p.bn.bone_002 && p.bn.bone_018 ? align.worldToLocal(wp(p.bn.bone_002)).sub(align.worldToLocal(wp(p.bn.bone_018))) : new THREE.Vector3(1, 0, 0);
   L.addScaledVector(up, -L.dot(up)); if(L.lengthSq() < 1e-8) L.set(1, 0, 0); L.normalize(); const F = new THREE.Vector3().crossVectors(L, up).normalize(); return p.ax = [L, F]; }
@@ -363,9 +390,10 @@ function pose(){ if(!A) return; A.mixer.setTime(Math.max(0, Math.min(T, A.dur - 
     // ✥ lined up by hand (Jordan 2026-11-01: a punch that no longer lands): a turn about their hips and a move along the ground, the same on every frame
     tr.quaternion.copy(p.q0); const a = adjOf(p.i);
     // (Jordan 2026-11-05: turn her on more than one axis: ↻ turn about up, ⤵ tip forward/back and ⤢ lean sideways about her own facing at frame 1)
-    if(a.yaw || a.tip || a.lean || a.x || a.y || a.z){ tr.updateWorldMatrix(true, true); const hip = align.worldToLocal(wp(p.bn.bone_001)), q = new THREE.Quaternion().setFromAxisAngle(A.up, a.yaw * Math.PI / 180);
-      if(a.tip || a.lean){ const [sd, fw] = axesOf(p); q.multiply(new THREE.Quaternion().setFromAxisAngle(sd, a.tip * Math.PI / 180)).multiply(new THREE.Quaternion().setFromAxisAngle(fw, a.lean * Math.PI / 180)); }
+    const hip0 = p.i===SEL && LINE ? (tr.updateWorldMatrix(true, true), align.worldToLocal(wp(p.bn.bone_001))) : null;
+    if(a.q || a.yaw || a.tip || a.lean || a.x || a.y || a.z){ tr.updateWorldMatrix(true, true); const hip = align.worldToLocal(wp(p.bn.bone_001)), q = rotOf(p, a);
       tr.position.sub(hip).applyQuaternion(q).add(hip); tr.quaternion.premultiply(q); tr.position.add(new THREE.Vector3(a.x, a.y, a.z).applyQuaternion(ALQ.clone().invert())); }
+    if(hip0 && !GZ.dragging) GZ.object && GZ.object.position.copy(hip0).add(new THREE.Vector3(a.x, a.y, a.z).applyQuaternion(ALQ.clone().invert()));
     if(p.bn.bone_113) p.bn.bone_113.scale.setScalar(M.head || 1);
     tr.visible = !M.hide[p.i] && T >= p.t0 - 0.5 / A.fps && T <= p.t1 + 0.5 / A.fps; if(p.sk) p.sk.visible = tr.visible; }
   world.updateMatrixWorld(true); const mid = middle(); shadow.position.x = mid.x; shadow.position.z = mid.z; shadow.scale.setScalar(A.P.length > 1 ? 1.6 : 1);
@@ -396,7 +424,7 @@ function camAt(t){ const ks = camKeys(); if(!ks.length || M.ckOff) return null; 
 function applyCam(t){ const c = camAt(t); if(!c) return false; camera.position.fromArray(c.p); controls.target.fromArray(c.tg); camera.lookAt(controls.target); LASTMID = null; return true; }
 const ckInner = () => camKeys().map(k => `<button data-ck="${k.t}" aria-pressed="${ckHere()===k}">🎥 ${k.t.toFixed(2)} s</button>`).join('') + `<button data-cka="1">${ckHere() ? '📍 Update this key' : '＋ Key the camera here'}</button>` + (ckHere() ? '<button data-ckd="1">🗑</button>' : '');
 const ckHere = () => A ? camKeys().find(k => Math.abs(k.t - T) < 0.5 / A.fps) : null;
-function setT(t){ if(!A) return; T = Math.max(0, Math.min(A.dur, t)); pose(); applyCam(T); { const c = $('#ckeys'); if(c) c.innerHTML = ckInner(); } if(pipOn()) pip.currentTime = (M.start || 0) + T; scrubShow(); }
+function setT(t){ if(!A) return; T = Math.max(0, Math.min(A.dur, t)); pose(); applyCam(T); { const c = $('#ckeys'); if(c) c.innerHTML = ckInner(); } if(LINE){ const c = $('#pkeys'); if(c) c.innerHTML = pkInner(); const a = adjOf(SEL), l = $('#lifty'), v = $('#liftv'), m = $('#movedv'); if(l) l.value = a.y; if(v) v.textContent = a.y.toFixed(2) + ' m'; if(m) m.textContent = 'Moved ' + Math.hypot(a.x, a.z).toFixed(2) + ' m'; } if(pipOn()) pip.currentTime = (M.start || 0) + T; scrubShow(); }
 function play(on){ PLAY = on; if(pipOn()){ pip.playbackRate = M.speed || 1; if(on){ pip.currentTime = (M.start || 0) + T; pip.play().catch(() => {}); } else pip.pause(); } const b = $('#playb'); if(b) b.textContent = on ? '❚❚' : '▶'; }
 function scrubShow(){ const s = $('#scrub'), l = $('#tlab'); if(!A || !s) return; if(document.activeElement!==s) s.value = String(Math.round(T * A.fps)); if(l) l.textContent = (Math.round(T * A.fps) + 1) + ' / ' + A.F + ' · ' + T.toFixed(1) + ' s'; }
 pip.addEventListener('click', () => pip.classList.toggle('big'));
@@ -617,11 +645,13 @@ function draw(){ const B = $('#body'), old = $('#prev'), at = old ? old.currentT
       <div class="chips"><button id="lineb" aria-pressed="${LINE}">✥ Line ${A && A.P.length > 1 ? 'people' : 'her'} up</button></div>
       ${LINE && A ? (() => { const a = adjOf(SEL), nm = A.P.length > 1 ? 'person ' + (SEL + 1) : 'her';
         return `<p class="note">Drag ${A.P.length > 1 ? 'a mannequin' : 'her'} across the ground (drag off ${A.P.length > 1 ? 'them' : 'her'} to turn the view). It stays moved on every frame.</p>
-        <div class="lbl"><span>↻ Turn ${esc(nm)}</span><span id="yawv">${Math.round(a.yaw)}°</span></div><input type="range" id="yaw" min="-180" max="180" step="1" value="${a.yaw}">
-        <div class="lbl"><span>⤵ Tip ${esc(nm)} forward / back</span><span id="tipv">${Math.round(a.tip)}°</span></div><input type="range" id="tip" min="-180" max="180" step="1" value="${a.tip}">
-        <div class="lbl"><span>⤢ Lean ${esc(nm)} sideways</span><span id="leanv">${Math.round(a.lean)}°</span></div><input type="range" id="lean" min="-180" max="180" step="1" value="${a.lean}">
+        <p class="note">🎯 Turn ${esc(nm)} with the rings on the hips: red, green and blue each turn about one axis, the outer ring about your view. Inside the rings, drag her body to move her.</p>
+        <div class="chips"><button id="gzw" aria-pressed="${GZ.space==='world'}">🌐 World axes</button><button id="gzl" aria-pressed="${GZ.space==='local'}">🧍 Her axes</button><button id="gz0">↺ Straighten</button></div>
         <div class="lbl"><span>↕ Raise ${esc(nm)}</span><span id="liftv">${a.y.toFixed(2)} m</span></div><input type="range" id="lifty" min="-1" max="1" step="0.01" value="${a.y}">
-        <div class="row"><span class="note" style="flex:1">Moved ${Math.hypot(a.x, a.z).toFixed(2)} m</span><button class="sm" id="adjx">↺ Put ${esc(nm)} back</button></div>`; })() : ''}
+        <div class="lbl"><span>📍 Place keys${pkKeys(SEL).length ? ' (' + pkKeys(SEL).length + ')' : ''}</span></div>
+        <p class="note">${pkKeys(SEL).length ? 'Scrub to where the feet float or sink, then drag or raise ' + esc(nm) + ': it keys that frame by itself, in a straight line from the keys either side.' : 'Key ' + esc(nm) + ' to change the place over time: key frame 1, scrub on, move or raise, and it keys there too.'}</p>
+        <div class="chips" id="pkeys">${pkInner()}</div>
+        <div class="row"><span class="note" style="flex:1" id="movedv">Moved ${Math.hypot(a.x, a.z).toFixed(2)} m</span><button class="sm" id="adjx">↺ Put ${esc(nm)} back</button></div>`; })() : ''}
       <div class="lbl"><span>🗡 Props (scrub to a frame where it's clear)</span></div>
       ${(M.props || []).length ? `<div class="chips" id="props">${M.props.map(pr => { const P = PROPS.find(x => x.id===pr.id) || {}; return `<button data-prop="${pr.id}" aria-pressed="${!pr.hide}" title="${esc(P.err || '')}">${pr.hide ? '🙈' : '👁'} ${esc(pr.word)}${P.held ? ' ✋' : ''}${P.err ? ' ⚠' : ''}</button><button class="sm" data-pdel="${pr.id}" aria-label="Remove ${esc(pr.word)}">✕</button>`; }).join('')}</div>` : ''}
       <div class="row"><input id="propw" type="text" placeholder="sword, shield, chair…" maxlength="40" value="${esc(PROPW)}" aria-label="What to look for"><button id="propb" ${BUSY || SIDE ? 'disabled' : ''}>＋ Find it here</button></div>
@@ -669,15 +699,17 @@ function wire(){ const on = (s, ev, f) => { const el = $(s); if(el) el[ev] = f; 
   on('#handsb', 'onclick', () => { M.hands = !M.hands; keep(); draw(); });
   on('#expo', 'ontoggle', e => { EXPO = e.target.open; }); on('#exprops', 'onclick', () => { EXP.props = !EXP.props; draw(); }); on('#explace', 'onclick', () => { EXP.place = !EXP.place; draw(); });
   on('#expb', 'onclick', makeClips); document.querySelectorAll('[data-h3]').forEach(b => { b.onclick = () => toH3(+b.dataset.h3); }); on('#exsend', 'onclick', sendClips);
-  on('#lineb', 'onclick', () => { LINE = !LINE; if(A && SEL >= A.P.length) SEL = 0; markSel(); draw(); });
-  on('#yaw', 'oninput', e => { setAdj(SEL, {yaw:+e.target.value}); LASTMID = null; pose(); const l = $('#yawv'); if(l) l.textContent = Math.round(+e.target.value) + '°'; }); on('#yaw', 'onchange', () => { keep(); saveClip(); });
-  on('#lifty', 'oninput', e => { setAdj(SEL, {y:+e.target.value}); LASTMID = null; pose(); const l = $('#liftv'); if(l) l.textContent = (+e.target.value).toFixed(2) + ' m'; }); on('#lifty', 'onchange', () => { keep(); saveClip(); });
-  for(const k of ['tip', 'lean']){ on('#' + k, 'oninput', e => { setAdj(SEL, {[k]:+e.target.value}); LASTMID = null; pose(); const l = $('#' + k + 'v'); if(l) l.textContent = Math.round(+e.target.value) + '°'; }); on('#' + k, 'onchange', () => { keep(); saveClip(); }); }
+  on('#lineb', 'onclick', () => { LINE = !LINE; if(A && SEL >= A.P.length) SEL = 0; markSel(); gizmoOn(); draw(); });
+  on('#pkeys', 'onclick', e => { if(e.target.closest('[data-pka]')){ pkAdd(); keep(); saveClip(); return draw(); } if(e.target.closest('[data-pkd]')){ pkDel(); LASTMID = null; pose(); keep(); saveClip(); return draw(); }
+    const b = e.target.closest('[data-pk]'); if(!b) return; play(false); setT(+b.dataset.pk); const sc = $('#scrub'); if(sc) sc.value = Math.round(T * A.fps); draw(); });
+  on('#lifty', 'oninput', e => { setAdj(SEL, {y:+e.target.value}); LASTMID = null; pose(); pkShow(); const l = $('#liftv'); if(l) l.textContent = (+e.target.value).toFixed(2) + ' m'; }); on('#lifty', 'onchange', () => { keep(); saveClip(); });
+  on('#gzw', 'onclick', () => { GZ.setSpace('world'); draw(); }); on('#gzl', 'onclick', () => { GZ.setSpace('local'); draw(); });
+  on('#gz0', 'onclick', () => { setAdj(SEL, {q:null, yaw:0, tip:0, lean:0}); LASTMID = null; gizmoOn(); keep(); saveClip(); });
   const ckAdd = () => { if(!A) return; const t = Math.round(T * A.fps) / A.fps, ks = (M.ck || []).filter(k => Math.abs(k.t - t) >= 0.5 / A.fps); ks.push({t, p:camera.position.toArray().map(v => +v.toFixed(4)), tg:controls.target.toArray().map(v => +v.toFixed(4))}); M.ck = ks; M.ckOff = false; keep(); saveClip(); draw(); };
   const ckDel = () => { const k = ckHere(); if(!k) return; M.ck = (M.ck || []).filter(x => x!==k); keep(); saveClip(); draw(); };
   on('#ckoff', 'onclick', () => { M.ckOff = !M.ckOff; keep(); saveClip(); applyCam(T); draw(); });
   on('#ckeys', 'onclick', e => { if(e.target.closest('[data-cka]')) return ckAdd(); if(e.target.closest('[data-ckd]')) return ckDel(); const b = e.target.closest('[data-ck]'); if(!b) return; play(false); setT(+b.dataset.ck); const sc = $('#scrub'); if(sc) sc.value = Math.round(T * A.fps); draw(); });
-  on('#adjx', 'onclick', () => { setAdj(SEL, {x:0, y:0, z:0, yaw:0, tip:0, lean:0}); LASTMID = null; pose(); keep(); saveClip(); draw(); });
+  on('#adjx', 'onclick', () => { setAdj(SEL, {x:0, y:0, z:0, yaw:0, tip:0, lean:0, q:null, k:[]}); gizmoOn(); LASTMID = null; pose(); keep(); saveClip(); draw(); });
   on('#propw', 'oninput', e => { PROPW = e.target.value; }); on('#propw', 'onkeydown', e => { if(e.key==='Enter') addProp(); }); on('#propb', 'onclick', addProp); on('#placeb', 'onclick', buildPlace);
   on('#props', 'onclick', e => { const b = e.target.closest('button'); if(!b) return; if(b.dataset.prop){ const pr = M.props.find(x => x.id===b.dataset.prop); if(pr){ pr.hide = !pr.hide; keep(); saveClip(); pose(); draw(); } }
     if(b.dataset.pdel){ const pr = M.props.find(x => x.id===b.dataset.pdel); if(pr && confirm('Take the ' + pr.word + ' out? (Its 3D file stays on the PC.)')){ M.props = M.props.filter(x => x!==pr); const P = PROPS.find(x => x.id===pr.id); if(P && P.obj && P.obj.parent) P.obj.parent.remove(P.obj); PROPS = PROPS.filter(x => x!==P); keep(); saveClip(); draw(); } } });
@@ -696,7 +728,7 @@ function wire(){ const on = (s, ev, f) => { const el = $(s); if(el) el[ev] = f; 
 // (so the progress line can name the node: the graph sent)
 window.LASTG = M.job && M.job.cls || {};
 // ---- start: pick up a job that was running, or the last result
-window.MOCAP = {camAt, frameRect, axesOf, get A(){ return A; }, get M(){ return M; }, get SCN(){ return SCN; }, get PROPS(){ return PROPS; }, world, align, lift, camera, controls, setT, pose, reopen:openResult, get EXP(){ return EXP; }};
+window.MOCAP = {get DRAG(){ return DRAG; }, GZ, GZP, gizmoOn, gzHit, hitPerson, get LINE(){ return LINE; }, camAt, frameRect, axesOf, get A(){ return A; }, get M(){ return M; }, get SCN(){ return SCN; }, get PROPS(){ return PROPS; }, world, align, lift, camera, controls, setT, pose, reopen:openResult, get EXP(){ return EXP; }};
 (async () => { draw();
   if(M.job){ BUSY = true; draw(); try{ await runJob(); await openResult(); saveClip(); MSG = 'Done. Drag to turn round ' + (A && A.P.length > 1 ? 'them' : 'her') + ', scrub to step through.'; }catch(e){ M.job = null; keep(); MSG = e.message; } BUSY = false; draw(); }
   else if(M.res){ try{ await openResult(); MSG = ''; }catch(e){ MSG = e.message + ' (Is ' + pcName(M.res.pc) + ' on?)'; } draw(); } })();

@@ -242,14 +242,19 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   // ✥ line up: drag her across the (tilted, levelled) ground, turn her, raise her; it holds on every frame and after a reload
   const hipAt = f => page.evaluate(f => { const M = window.MOCAP; M.setT(f / 15); const e = M.A.P[0].bn.bone_001.matrixWorld.elements, k = M.A.P[0].bn.bone_002.matrixWorld.elements; return {hip:[e[12], e[13], e[14]], knee:[k[12] - e[12], k[14] - e[14]], t:M.controls.target.toArray()}; }, f);
   await page.evaluate(() => { window.MOCAP.setT(0); }); const o0 = await hipAt(0), o29 = await hipAt(29); await page.click('#lineb'); if(await page.evaluate(() => !document.querySelector('#pip').hidden)) await page.click('#pipb');
-  ok(await page.evaluate(() => !!document.querySelector('#yaw') && !!document.querySelector('#lifty')), '✥ Line up shows turn and raise sliders');
-  const scr = await page.evaluate(() => { const M = window.MOCAP; M.setT(0); M.controls.update(); M.camera.updateMatrixWorld(); M.world.updateMatrixWorld(true); const e = M.A.P[0].bn.bone_001.matrixWorld.elements, v = {x:e[12], y:e[13] - 0.2, z:e[14]};
-    const c = document.querySelector('#stage canvas').getBoundingClientRect(), p = M.camera.position, m = M.camera; const w = new (M.camera.position.constructor)(v.x, v.y, v.z).project(m); return [c.left + (w.x + 1) / 2 * c.width, c.top + (1 - w.y) / 2 * c.height]; });
+  ok(await page.evaluate(() => !!window.MOCAP.GZ.object && window.MOCAP.GZ.mode==='rotate' && !!document.querySelector('#gz0') && !!document.querySelector('#lifty')), '✥ Line up shows the 🎯 rotate rings on her hips and the raise slider');
+  await page.evaluate(() => window.MOCAP.setT(0)); await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const scr = await page.evaluate(() => { const M = window.MOCAP; const e = M.A.P[0].bn.bone_001.matrixWorld.elements, c = document.querySelector('#stage canvas').getBoundingClientRect();
+    // a spot on her body that isn't on one of the rotate rings (inside the rings her body is grabbed to move her)
+    for(let dy = 0.1; dy < 1.2; dy += 0.05){ const w = new (M.camera.position.constructor)(e[12], e[13] - dy, e[14]).project(M.camera), ev = {clientX:c.left + (w.x + 1) / 2 * c.width, clientY:c.top + (1 - w.y) / 2 * c.height};
+      const g = M.gzHit(ev); M.GZ.axis = null; if(!g && M.hitPerson(ev)) return [ev.clientX, ev.clientY]; } return null; });
+  ok(!!scr, 'there is a spot on her body inside the rings that grabs her, not a ring');
   await page.mouse.move(scr[0], scr[1]); await page.mouse.down(); for(let i = 1; i <= 6; i++) await page.mouse.move(scr[0] + i * 10, scr[1]); await page.mouse.up();
   const d0 = await hipAt(0), d29 = await hipAt(29), mv = [d0.hip[0] - o0.hip[0], d0.hip[1] - o0.hip[1], d0.hip[2] - o0.hip[2]], mv29 = [d29.hip[0] - o29.hip[0], d29.hip[1] - o29.hip[1], d29.hip[2] - o29.hip[2]];
   ok(Math.hypot(mv[0], mv[2]) > 0.1 && Math.abs(mv[1]) < 0.02, 'dragging her moves her along the ground, not up or down: ' + mv.map(v => v.toFixed(3)));
   ok(mv.every((v, i) => Math.abs(v - mv29[i]) < 0.02), 'she stays moved by the same amount on every frame: ' + mv29.map(v => v.toFixed(3)));
-  await page.evaluate(() => { const s = document.querySelector('#yaw'); s.value = '90'; s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); });
+  const turn = (ax, deg) => page.evaluate(([ax, deg]) => { const M = window.MOCAP, V = M.camera.position.constructor; M.GZP.rotateOnWorldAxis(new V(...ax).normalize(), deg * Math.PI / 180); M.GZ.dispatchEvent({type:'objectChange'}); M.GZ.dispatchEvent({type:'dragging-changed', value:false}); }, [ax, deg]);
+  await turn([0, 1, 0], 90);
   const y0 = await hipAt(0), a0 = Math.atan2(d0.knee[1], d0.knee[0]), a1 = Math.atan2(y0.knee[1], y0.knee[0]); let da = (a1 - a0) * 180 / Math.PI; while(da > 180) da -= 360; while(da < -180) da += 360;
   ok(Math.abs(Math.abs(da) - 90) < 3 && Math.hypot(y0.hip[0] - d0.hip[0], y0.hip[2] - d0.hip[2]) < 0.01, '↻ Turn 90° turns her about her hips (hips stay put): ' + da.toFixed(1) + '°');
   await page.evaluate(() => { const s = document.querySelector('#lifty'); s.value = '0.3'; s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); });
@@ -261,9 +266,23 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   // ⤵ tip / ⤢ lean (Jordan 2026-11-05: turn her on more than one axis)
   { const sl = async (id, v) => page.evaluate(([id, v]) => { const s = document.querySelector('#' + id); s.value = String(v); s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); }, [id, v]);
     const torso = () => page.evaluate(() => { const M = window.MOCAP; M.setT(0); const P = M.A.P[0].bn, w = n => { const e = P[n].matrixWorld.elements; return [e[12], e[13], e[14]]; }, a = w('bone_001'), b = w('bone_113'); const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], L = Math.hypot(...d); return {up:d[1] / L, hip:a}; });
-    const t0 = await torso(); await sl('tip', 90); const t1 = await torso(); await sl('tip', 0); await sl('lean', 90); const t2 = await torso(); await sl('lean', 0);
-    ok(t0.up > 0.8 && Math.abs(t1.up) < 0.3 && Math.abs(t2.up) < 0.3, '⤵ Tip 90° and ⤢ Lean 90° each lay her torso flat (up-ness ' + [t0.up, t1.up, t2.up].map(v => v.toFixed(2)) + ')');
-    ok(Math.hypot(t1.hip[0] - t0.hip[0], t1.hip[2] - t0.hip[2]) < 0.02, 'tipping turns her about her hips'); }
+    const t0 = await torso(); await turn([1, 0, 0], 90); const t1 = await torso(); await turn([1, 0, 0], -90); await turn([0, 0, 1], 90); const t2 = await torso(); await turn([0, 0, 1], -90); const t3 = await torso();
+    ok(t0.up > 0.8 && Math.abs(t1.up) < 0.3 && Math.abs(t2.up) < 0.3 && t3.up > 0.8, '🎯 the red and blue rings each lay her torso flat, and turning back stands her up (up-ness ' + [t0.up, t1.up, t2.up, t3.up].map(v => v.toFixed(2)) + ')');
+    ok(await page.evaluate(() => { const M = window.MOCAP, h = M.A.P[0].bn.bone_001.matrixWorld.elements, g = new (M.camera.position.constructor)().setFromMatrixPosition(M.GZP.matrixWorld); return Math.hypot(h[12] - g.x, h[13] - g.y, h[14] - g.z) < 0.05; }), 'the rings sit on her hips');
+    ok(Math.hypot(t1.hip[0] - t0.hip[0], t1.hip[2] - t0.hip[2]) < 0.02, 'the rings turn her about her hips'); }
+  // 📍 place keys: key her at frame 0, raise her at 1 s (auto key), she rises in a straight line between, and it survives a reload
+  { const lift = v => page.evaluate(v => { const s = document.querySelector('#lifty'); s.value = String(v); s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); }, v);
+    await page.evaluate(() => window.MOCAP.setT(0)); const h0 = await hipAt(0), h7 = await hipAt(7.5), h15 = await hipAt(15), h29 = await hipAt(29); await page.evaluate(() => window.MOCAP.setT(0)); await page.click('#pkeys [data-pka]');
+    await page.evaluate(() => window.MOCAP.setT(1)); await lift(0.4);
+    const k = await page.evaluate(() => ({n:(window.MOCAP.M.adj[0].k || []).length, chips:document.querySelectorAll('#pkeys [data-pk]').length}));
+    const g0 = await hipAt(0), g7 = await hipAt(7.5), g15 = await hipAt(15), g29 = await hipAt(29);
+    ok(k.n===2 && k.chips===2 && Math.abs(g0.hip[1] - h0.hip[1]) < 0.01 && Math.abs(g15.hip[1] - h15.hip[1] - 0.4) < 0.01, '📍 key at frame 0, raise at 1 s keys that frame by itself: ' + JSON.stringify(k) + ' ' + (g15.hip[1] - h15.hip[1]).toFixed(3));
+    ok(Math.abs(g7.hip[1] - h7.hip[1] - 0.2) < 0.02 && Math.abs(g29.hip[1] - h29.hip[1] - 0.4) < 0.01, 'halfway between the keys she is halfway up, and after the last key she stays there: ' + [(g7.hip[1] - h7.hip[1]).toFixed(3), (g29.hip[1] - h29.hip[1]).toFixed(3)]);
+    await page.reload(); await page.waitForFunction(() => window.MOCAP.A && window.MOCAP.A.P.length===1, null, {timeout:20000}); await page.waitForTimeout(300);
+    const r15 = await hipAt(15); ok(Math.abs(r15.hip[1] - g15.hip[1]) < 0.01, '📍 place keys come back after a reload');
+    if(!(await page.evaluate(() => window.MOCAP.LINE))) await page.click('#lineb'); await page.evaluate(() => window.MOCAP.setT(1)); await page.click('#pkeys [data-pkd]');
+    ok(await page.evaluate(() => window.MOCAP.M.adj[0].k.length===1), '🗑 removes her key at this frame');
+    await page.click('#adjx'); ok(await page.evaluate(() => window.MOCAP.M.adj[0].k.length===0), '↺ Put her back clears her keys'); }
   // 🎥 camera keys: key the view at two frames, it eases between them
   { await page.evaluate(() => { const M = window.MOCAP; M.setT(0); M.camera.position.set(0, 1.5, 5); M.controls.target.set(0, 1, 0); M.controls.update(); });
     await page.click('#ckeys [data-cka]');
