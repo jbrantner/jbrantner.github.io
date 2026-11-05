@@ -44,6 +44,10 @@ const DEPS = process.env.RIG_DEPS || '';
   await page.evaluate(() => { const o = SCENE.sc.objs; o[0].x = 2; o[1].hide = true; SCENE.sc.cam = {az:30, el:5, d:4, t:[0, 1, 0]}; SCENE.changed(); });
   { const r = await recOf(), b1 = r.objs.find(o => o.id==='o1'), b2 = r.objs.find(o => o.id==='o2'), p1 = r.panels.p1;
     ok(b1.x===0 && !b2.hide && p1.ov.o1.x===2 && p1.ov.o2.hide===true && p1.cam.az===30 && !r.cam && p1.desc==='she waves', 'the scene keeps her spot and the chair; panel 1 keeps its move, hide, camera and words: ' + JSON.stringify(p1)); }
+  // (Jordan 2026-11-05) another panel's page saved its SAM body meanwhile: panel 1 saving after it doesn't write the other panel's old record back
+  await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-scenes')), r = L.find(s => s.id==='scA'); r.panels = Object.assign({}, r.panels, {pz:{ov:{o1:{sam:{file:'pz_new.glb'}}}}}); localStorage.setItem('rd-scenes', JSON.stringify(L)); SCENE.sc.desc = 'she waves.'; SCENE.changed(); });
+  { const r = await recOf(); ok(r.panels.pz && r.panels.pz.ov.o1.sam.file==='pz_new.glb' && r.panels.p1.desc==='she waves.', 'a save from panel 1 keeps what another panel saved meanwhile: ' + JSON.stringify(r.panels.pz)); }
+  await page.evaluate(() => { const L = JSON.parse(localStorage.getItem('rd-scenes')), r = L.find(s => s.id==='scA'); delete r.panels.pz; localStorage.setItem('rd-scenes', JSON.stringify(L)); delete SCENE.PANEL.base.panels.pz; SCENE.sc.desc = 'she waves'; SCENE.changed(); });
   // SAM's body from panel 1's picture and who she is in panel 1 stay panel 1's (Jordan 2026-10-30: another panel's 3D swapped her back to a mannequin)
   await page.evaluate(() => { const o = SCENE.sc.objs[0]; o.sam = {pc:'https://render.test', file:'p1_body.glb', sub:'', head:1.2, key:'k1'}; o.photoTurn = 0.4; o.ref = 'Ellen/ellen'; o.label = 'Ellen'; SCENE.changed(); });
   { const r = await recOf(), b1 = r.objs.find(o => o.id==='o1'), d = r.panels.p1.ov.o1;
