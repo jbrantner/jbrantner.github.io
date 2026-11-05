@@ -156,7 +156,7 @@ function openScene(s){ SC = s; if(SCN) s.d3 = true; drawBlend(); drawRbg(); if(S
 // ---- 📖 a comic panel (Jordan 2026-10-29: "each panel of the comic would basically be its own camera"): the comic's Scene is shared
 // (environment, light, who is in it, where they stand); a panel keeps its own camera, renders and words, and whatever it changes about
 // someone (moved, posed, hidden or shown) for itself only. SC is then a merged copy; rec() splits it back into the scene record.
-const PANEL_KEYS = ['cam', 'camLock', 'scene', 'rsJob', 'renders', 'desc', 'blend'], OV_KEYS = ['x', 'y', 'z', 'rot', 's', 'hide', 'pose', 'bq', 'words', 'sam', 'photoTurn', 'ref', 'label', 'mode']; // (who she is and SAM's body from the panel's picture are the panel's own: Jordan 2026-10-30, another panel's 3D swapped her back to a mannequin)
+const PANEL_KEYS = ['cam', 'camLock', 'scene', 'rsJob', 'renders', 'desc', 'blend', 'off'], OV_KEYS = ['x', 'y', 'z', 'rot', 's', 'hide', 'pose', 'bq', 'words', 'sam', 'photoTurn', 'ref', 'label', 'mode']; // (who she is and SAM's body from the panel's picture are the panel's own: Jordan 2026-10-30, another panel's 3D swapped her back to a mannequin)
 let PANEL = null; // {pid, base (the scene record in scenesAll), label}
 const cl = x => x===undefined ? undefined : JSON.parse(JSON.stringify(x)), ovNorm = (k, x) => JSON.stringify(k==='hide' ? !!x : x===undefined ? null : x);
 function panelView(base, pid){ const P = (base.panels || {})[pid] || {}, v = cl(base); delete v.panels;
@@ -183,22 +183,30 @@ async function openPanel(m){ let base = scenesAll.find(s => s.id===m.scene); if(
   const ps = base.panels = base.panels || {}; let fresh = false;
   if(!ps[m.pid]){ fresh = true; const last = Object.values(ps).filter(p => p.cam).sort((a, b) => (b.at || 0) - (a.at || 0))[0]; ps[m.pid] = {desc:m.desc || '', at:Date.now()}; if(last) ps[m.pid].cam = cl(last.cam);
     const src = m.from && ps[m.from]; if(src){ for(const k of ['cam', 'ov', 'blend']) if(src[k]!==undefined) ps[m.pid][k] = cl(src[k]); } } // ⧉ a duplicated panel starts as the one it came from
+  if(typeof m.off==='string'){ if(m.off.trim()) ps[m.pid].off = m.off; else delete ps[m.pid].off; } // 🚫 the comic panel's "Leave out" words
   CAM_A = Math.max(0.4, Math.min(2.5, +m.ar || 0.8)); PANEL = {pid:m.pid, base, label:m.label || ''}; document.body.classList.add('panel');
   $('#ptitle').textContent = (PANEL.label ? PANEL.label + ' · ' : '') + (base.name || 'Scene'); openScene(panelView(base, m.pid));
   // 📖 the people the panel's words name (Jordan 2026-10-30: her name turns her LoRA on for that panel): shown here, and brought into the scene if new
   let add = false; (m.who || []).forEach((w, j) => { if(!w || !w.ref) return; let o = SC.objs.find(x => x.ref===w.ref);
     if(!o){ o = {id:uid('o'), kind:'char', ref:w.ref, label:w.name || 'Character', x:(j - ((m.who.length - 1) / 2)) * 0.9, y:0, z:0, rot:0, s:1}; SC.objs.push(o); add = true; }
     if(o.hide){ delete o.hide; add = true; } });
+  if(twins()) add = true;
   if(add){ buildObjs(); drawList(); drawSel(); }
   if(fresh || add) changed(); dirty = true;
   if(m.photo) panelPhoto(m.photo, m.who); }
+// (Jordan 2026-11-05: panel 3 showed her old rig beside SAM's body: it held two of her, one never read from the picture, so its rig stood
+// there and the render took it; in a panel the one SAM read is her, and a copy of the same character with no SAM body is put away)
+function twins(keep){ if(!PANEL || !SC) return false; let n = 0;
+  for(const a of SC.objs) if(a.kind==='char' && !a.hide && (a===keep || a.sam)) for(const b of SC.objs) if(b!==a && b!==keep && b.kind==='char' && !b.hide && !b.sam && (b.ref===a.ref || b.ref==='3D/Mannequin')){ b.hide = true; n++; }
+  return n > 0; }
 // 📖 🧍 Make it 3D (Jordan 2026-10-30): a panel's picked picture → SAM 3D Body poses her (or a mannequin) → the panel's 📷 Camera is placed
 // where the picture's camera was, as well as can be told: round her the way the picture saw her, at eye level, as far away as makes her
 // as tall in the frame as she is in the picture, and turned so she sits where she sits in it (her box from the cut-out, or BiRefNet)
 // ph = {pc, file, sub, w, h, fr (its framing in the panel), cut (its cut-out's url, if made)}
 async function panelPhoto(ph, who){ const say = m => { const el = $('#allmsg'); if(el) el.textContent = m; bgPost({msg:m}); }; if(!SC || !PANEL) return bgPost({err:'The panel did not open in 3D.'});
   let ob = (who || []).map(w => SC.objs.find(x => x.ref===w.ref && !x.hide)).find(Boolean);
-  if(!ob){ ob = SC.objs.find(x => x.kind==='char' && !x.hide && x.photoTurn!=null) || SC.objs.find(x => x.ref==='3D/Mannequin' && !x.hide); if(!ob){ ob = {id:uid('o'), kind:'char', ref:'3D/Mannequin', label:nextLabel('Mannequin (3D)'), x:0, y:0, z:0, rot:0, s:1}; SC.objs.push(ob); buildObjs(); drawList(); changed(); } }
+  if(!ob){ ob = SC.objs.find(x => x.kind==='char' && !x.hide && x.photoTurn!=null) || SC.objs.find(x => x.kind==='char' && !x.hide && x.sam) || SC.objs.find(x => x.ref==='3D/Mannequin' && !x.hide) || SC.objs.find(x => x.kind==='char' && !x.hide); if(!ob){ ob = {id:uid('o'), kind:'char', ref:'3D/Mannequin', label:nextLabel('Mannequin (3D)'), x:0, y:0, z:0, rot:0, s:1}; SC.objs.push(ob); buildObjs(); drawList(); changed(); } }
+  if(twins(ob)){ buildObjs(); drawList(); changed(); }
   ui.sel = ob.id; saveUi(); drawSel(); say('🧍 Loading her rig…');
   for(let i = 0; i < 300 && !(OBJ.get(ob.id) && OBJ.get(ob.id).mq && OBJ.get(ob.id).mq.userData.body && BODY); i++) await new Promise(r => setTimeout(r, 200)); // (her rig loading)
   const sh = {pc:ph.pc, file:ph.file, sub:ph.sub || ''};
@@ -223,7 +231,7 @@ function winSaveCam(){ if(!PANEL || !SC) return; const c = camState(); if(JSON.s
 function winHide(){ for(const m of [axX, axZ, pgrid]) m.visible = false; for(const o of OBJ.values()) o.disc.visible = o.label.visible = false; }
 // 🧍 who the rig is (Jordan 2026-10-30: "a 3d rig that I can make a different character like Ellen or Ellie"): the posed one keeps her pose and spot, and
 // becomes that library character, still in SAM's posed body from the picture (sized to her); her LoRA gives her look when it is painted
-addEventListener('message', e => { const d = e.data; if(WIN && e.origin===location.origin && d && d.rdwho) winWho(d.rdwho); if(WIN && e.origin===location.origin && d && d.rdrender) winRender(); });
+addEventListener('message', e => { const d = e.data; if(WIN && e.origin===location.origin && d && d.rdwho) winWho(d.rdwho); if(WIN && e.origin===location.origin && d && d.rdrender){ if(SC && typeof d.off==='string'){ if(d.off.trim()) SC.off = d.off; else delete SC.off; } winRender(); } });
 // 🎨 Render as her, from the comic page: this panel's 🎬 Render Scene, its progress told to the page, then the painting
 async function winRender(){ if(!SC || !PANEL) return winPost({rerr:'The panel did not open in 3D.'}); const el = $('#allmsg'), t0 = Date.now() - 1;
   const mo = new MutationObserver(() => winPost({msg:el.textContent})); mo.observe(el, {childList:true, characterData:true, subtree:true});
@@ -1494,13 +1502,15 @@ function qwenPass(add, Q, guide, refs, prompt, W, H, seed, nb, start){ let model
   for(let i = 0; i < (nb || 1); i++){ const ks = add('KSampler', {model, seed:seed + i * 7919, steps:Q.l ? 4 : 20, cfg:Q.l ? 1 : 2.5, sampler_name:'euler', scheduler:'simple', positive:P, negative:N, latent_image:lat, denoise:RS_QL});
     const im = [add('VAEDecode', {samples:[ks, 0], vae}), 0]; out = out ? [add('ImageBatch', {image1:out, image2:im}), 0] : im; }
   return out; }
-function qwenWords(e, A, place, what){ const look = (e.tags || '').split(',').map(t => t.trim().replace(/_/g, ' ')).filter(t => t && !NOT_HERS.test(t) && !/^(1girl|1boy|solo|afkj style)$/i.test(t) && t.toLowerCase()!==(e.trigger || '').trim().toLowerCase()).join(', ');
+function qwenWords(e, A, place, what){ const look = (e.tags || '').split(',').map(t => t.trim().replace(/_/g, ' ')).filter(t => t && !NOT_HERS.test(t) && !/^(1girl|1boy|solo|afkj style)$/i.test(t) && t.toLowerCase()!==(e.trigger || '').trim().toLowerCase() && !offHit(t, offList())).join(', ');
   const boy = /\b1boy\b/i.test((e.prompt || '') + ',' + (e.tags || ''));
   // (Jordan 2026-11-04, v.349: told to draw her "in place of" the mannequin, Qwen kept it as a statue and stood her beside it; an edit
   // model reads Picture 1 as the picture to change, so the words now say what to turn into what, short, with no "draw" at all)
+  // (Jordan 2026-11-05: panel 1 "...takes her shoes off" came out crouched pulling a boot on, not the mannequin's one-leg stand: the words
+  // outvoted the figure, so they are now told to Qwen as the story only, with the pose kept above them)
   const her = boy ? 'his' : 'her', who = boy ? 'anime man' : 'anime woman';
   return 'Turn the grey mannequin in Picture 1 into the ' + who + ' from Picture 2 and Picture 3' + (A.back ? ' (Picture 3 shows ' + (boy ? 'him' : 'her') + ' from behind)' : '') + ': same face, hair, eyes, clothes and anime art style' + (look ? ', ' + look : '') +
-    '. Keep the mannequin\'s exact pose: every arm, leg, hand and the head stay where they are, same body angle, position and size.' + (A.back ? ' The back of ' + her + ' clothes exactly as in Picture 3.' : '') + ' ' + A.say.join('; ').replace(/\bher\b/g, her) + '.' + (what ? ' ' + what.replace(/[.\s]+$/, '') + '.' : '') +
+    '. Keep the mannequin\'s exact pose: every arm, leg, hand and the head stay where they are, same body angle, position and size.' + (A.back ? ' The back of ' + her + ' clothes exactly as in Picture 3.' : '') + ' ' + A.say.join('; ').replace(/\bher\b/g, her) + '.' + (what ? ' The story at this moment, only for ' + her + ' expression and anything ' + (boy ? 'he' : 'she') + ' holds: ' + what.replace(/[.\s]+$/, '') + '. Do not change the pose to act this out; the mannequin\'s pose always wins.' : '') +
     (A.white ? ' Keep the background plain white, like a studio: only a soft shadow on the floor under ' + (boy ? 'him' : 'her') + '; the light grey grid lines only show how the floor tilts and are not drawn' :
     ' Turn the black background and white grid lines into ' + (place || 'a sunny paved town street with paving stones') + ', its ground in the same perspective as the grid' + (A.pitch >= 20 ? ', seen from above, no horizon, no sky' : '')) +
     '. Nothing grey, no mannequin, no statue, no grid lines' + (A.white ? '' : ' and no black floor') + ' are left. Only one person.'; }
@@ -1597,7 +1607,18 @@ const rsTools = (add, K) => ({sam:K.samc ? [add('SAMLoader', {model_name:'sam_vi
 // ⏳ the app can be closed while a 🎬 Render Scene or a 🖌 repaint runs (Jordan 2026-10-29): once the PC has the job it is kept on the scene
 // (SC.rsJob: job id, PC, its Save node, when it started, what the render will be), and opening the scene again waits for it or collects it
 const RS_MINS = 40;
-async function rsRun(url, g, save, tick, rec){ const S = SC;
+// 🚫 Leave out (Jordan 2026-11-05: she took her shoes off, but her LoRA paints boots): those words are cut from every positive prompt (her LoRA's
+// own tags too), go into the negative strongly, and Qwen is told she has none of them
+const offList = () => ((SC && SC.off) || '').split(/[,\n]+/).map(t => t.trim().replace(/_/g, ' ').replace(/[()]/g, '')).filter(Boolean);
+const offHit = (t, offs) => { const x = t.toLowerCase().replace(/_/g, ' '); return offs.some(o => { const w = o.toLowerCase(), r = w.replace(/s$/, ''); return x.includes(w) || (r.length > 2 && new RegExp('\\b' + r.replace(/[.*+?^${}|[\]\\]/g, '\\$&') + 's?\\b').test(x)); }); };
+function leaveOut(g, offs = offList()){ if(!offs.length) return g;
+  for(const n of Object.values(g)){ const i = n.inputs || {};
+    if(n.class_type==='CLIPTextEncode' && typeof i.text==='string'){
+      if(i.text.startsWith(NEG.slice(0, 30))) i.text += ', ' + offs.map(o => '(' + o + ':1.4)').join(', ');
+      else i.text = i.text.split(',').filter(t => !t.trim() || !offHit(t, offs)).join(','); }
+    if(n.class_type==='TextEncodeQwenImageEditPlus' && i.prompt) i.prompt += ' ' + (/\bhis\b/.test(i.prompt) ? 'He' : 'She') + ' has no ' + offs.join(', no ') + ': none at all, even though Picture 2 and Picture 3 show them.'; }
+  return g; }
+async function rsRun(url, g, save, tick, rec){ const S = SC; leaveOut(g);
   const imgs = await runGraph(url, g, save, tick, {mins:RS_MINS, onId:pid => { S.rsJob = {pid, pc:url, save, t0:Date.now(), rec:Object.assign({}, rec)}; if(S===SC) changed(); }});
   rsDone(S, imgs); }
 function rsDone(S, imgs){ const job = S.rsJob || {}; delete S.rsJob; if(!imgs || !imgs.length) throw new Error('The PC sent nothing back.');
@@ -1884,5 +1905,5 @@ if(POSE){ ['#addo', '#rall', '#rscene', '#rblend', '#rbg', '#rup', '#d3', '#d2',
   setInterval(async () => { if(document.visibilityState!=='visible') return; const before = JSON.stringify(PC.lib.map(e => e.subfolder + e.saved)); await findPc(); if(JSON.stringify(PC.lib.map(e => e.subfolder + e.saved))!==before){ buildObjs(); drawList(); drawSel(); } }, 60000); })();
 addEventListener('message', async e => { const m = e.data; if(e.origin!==location.origin || !m || !(m.rdopen || m.rdnew || m.rdpanel)) return; if(m.rdpanel) return openPanel(m.rdpanel); leavePanel(); if(m.rdnew) return newScene();
   let s = scenesAll.find(x => x.id===m.rdopen); if(!s){ await loadScenes(); s = scenesAll.find(x => x.id===m.rdopen); } if(s) openScene(s); });
-window.SCENE = {SAMFIT, rsCN, rsAngle, sceneGrid, sceneGuide, sceneShade, guideStart, rsCentre, whiteGuide, qwenPass, qwenWords, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
+window.SCENE = {SAMFIT, twins, leaveOut, offList, rsCN, rsAngle, sceneGrid, sceneGuide, sceneShade, guideStart, rsCentre, whiteGuide, qwenPass, qwenWords, get sc(){ return SC; }, get PANEL(){ return PANEL; }, panelBox, samCrop, rigMask, fitCamMask, maskStats, setCamFrom, picBox, THREE, get CAM_A(){ return CAM_A; }, changed:() => changed(), rec:() => rec(), POSE, samOn, guideJoints, guidesFor, jointPts, picPts, fitTo, JOINTS, jointAt, jh, shotFits, normalTex, ground, sunMark, get ui(){ return ui; }, objs:OBJ, drawSel:() => drawSel(), pickAngle, camOf, placeCams, rects, poseFor, PC, shotO, camRig, get BODY(){ return BODY; }, bodyJoints, loadBody, SET_ORBIT_AZ:a => { orbit.az = a; }, setView:v => { view = v; drawViews(); dirty = true; }, redraw:() => { dirty = true; }, reload:async () => { await findPc(); buildObjs(); drawList(); drawSel(); }};
 </script></body></html>
