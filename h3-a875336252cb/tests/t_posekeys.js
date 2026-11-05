@@ -131,18 +131,18 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
   ok(/At 00:02\.000 the person is in the pose of the grey mannequin in <Picture 2>/.test(prompt2), 'plain prompt too');
   if(OUT){ await page.evaluate(() => { H3.S.f.h3 = true; H3.drawAll(); }); await page.waitForTimeout(300); await page.screenshot({path:path.join(OUT, 'render_tab.png'), fullPage:true}); }
   // ---- ✨ Create in-betweens: the keys go to MiniMax as keyframes at their times, with a mannequin prompt, and no guide
-  { await page.click('#tabs [data-tab="poses"]'); await page.evaluate(() => { H3.S.f.prompt = 'Ellen dances in the kitchen.'; H3.S.f.promptWas = ''; });
+  { await page.click('#tabs [data-tab="poses"]'); await page.evaluate(() => { H3.S.f.prompt = 'Ellen dances in the kitchen.'; });
     const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
     await fr.click('#ibBtn'); await page.waitForFunction(n0 => Object.keys(H3.S.media).length >= n0 + 2 && H3.S.tab==='render', n0, {timeout:60000});
-    const P = await page.evaluate(() => { const f = H3.S.f; return {pins:f.imgs.filter(r => r.pin).map(r => r.pose.t), other:f.imgs.filter(r => !r.pin && r.pose).length, ctl:f.ctl, prompt:f.prompt, was:f.promptWas, back:!document.querySelector('#promptBack').hidden}; });
-    ok(P.pins.join()==='0,2' && !P.other && !P.ctl && /grey mannequin/.test(P.prompt) && P.was==='Ellen dances in the kitchen.' && P.back, '✨ in-betweens: two keyframes pinned at 0 s and 2 s, no Motion guide, a mannequin prompt (old one kept): ' + JSON.stringify(P).slice(0, 200));
+    const P = await page.evaluate(() => { const f = H3.S.f; return {pins:f.imgs.filter(r => r.pin).map(r => r.pose.t), other:f.imgs.filter(r => !r.pin && r.pose).length, ctl:f.ctl, prompt:f.prompt, mq:f.mq, note:!document.querySelector('#mqNote').hidden}; });
+    ok(P.pins.join()==='0,2' && !P.other && !P.ctl && P.prompt==='Ellen dances in the kitchen.' && /grey mannequin/.test(P.mq) && P.note, '✨ in-betweens: two keyframes pinned at 0 s and 2 s, no Motion guide, your prompt untouched, the mannequin wording kept out of sight: ' + JSON.stringify(P).slice(0, 200));
     for(const h3 of [true, false]){ await page.evaluate(h3 => { H3.S.f.h3 = h3; }, h3);
       const g = await page.evaluate(() => { const t = H3.snapshot(), oi = H3.PC['http://render.test'].oi, names = {}; [...t.imgs.map(r => r.id), ...t.pins.map(r => r.id)].forEach((id, i) => names[id] = 'f' + i); t.id = 't9'; t.pc = 'http://render.test'; t.seed = 1; t.dir = 'H3Deck/h3_t9'; t.name = 'h3_t9'; return {pins:t.pins, imgs:t.imgs.length, g:H3.pieceGraph(t, 0, oi, names).g}; });
       const nodes = Object.values(g.g), guides = nodes.filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image), rv = nodes.find(n => n.class_type==='MiniMaxH3ReferenceToVideo'), prm = (rv && rv.inputs.prompt) || '';
       const frames = guides.map(n => n.inputs.frame_idx).join(), imgsOk = guides.every(n => g.g[n.inputs.image[0]].class_type==='LoadImage');
-      ok(g.imgs===0 && frames==='0,48' && imgsOk && !Object.keys(rv.inputs).some(k => /ref_images\./.test(k)) && !nodes.some(n => n.class_type==='MiniMaxH3FunControlNetApply') && !/Picture/.test(prm) && /mannequin/.test(prm),
-        (h3 ? '🧾' : 'plain') + ' graph: the pictures are MiniMax keyframes at frames ' + frames + ', not references, and the prompt does not name them'); }
-    await page.click('#promptBack'); ok(await page.evaluate(() => H3.S.f.prompt==='Ellen dances in the kitchen.'), '↩ Back to my prompt brings the old prompt back'); }
+      ok(g.imgs===0 && frames==='0,48' && imgsOk && !Object.keys(rv.inputs).some(k => /ref_images\./.test(k)) && !nodes.some(n => n.class_type==='MiniMaxH3FunControlNetApply') && !/Picture/.test(prm) && /grey mannequin[\s\S]*Ellen dances in the kitchen/.test(prm),
+        (h3 ? '🧾' : 'plain') + ' graph: the pictures are MiniMax keyframes at frames ' + frames + ', not references; the prompt is the hidden mannequin wording + yours'); }
+  }
   ok(await page.evaluate(() => typeof H3.toMocap==='function') && await page.evaluate(() => !!document.querySelector('#mocapBox')), 'takes can go to Mocap');
   ok(glbGets===2, 'each 3D body was fetched once (' + glbGets + ')');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
