@@ -16,7 +16,7 @@ const mWhole = c => '$' + Math.floor(Math.max(0, c) / 100).toLocaleString();
 const mSplit = c => { const s = dollars(c), i = s.lastIndexOf('.'); return `$${s.slice(0, i)}<span class="c">${s.slice(i)}</span>`; };
 
 /* ---------- saved data ---------- */
-const blank = () => ({ v: 1, free: 0, bills: 0, pots: [], billList: [], paid: {}, log: [], adv: null, princ: {} });
+const blank = () => ({ v: 1, free: 0, bills: 0, pots: [], billList: [], paid: {}, log: [], adv: null, princ: {}, payday: null });
 let state = load();
 function load() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return fix(s); } catch (e) {}
@@ -28,6 +28,7 @@ function fix(s) {   // a backup can carry anything: keep only sane, non-negative
   b.pots = (Array.isArray(s.pots) ? s.pots : []).filter(p => p && p.id).map(p => ({ id: String(p.id), name: String(p.name || 'Pot').slice(0, 40), kind: p.kind === 'project' ? 'project' : 'pot', goal: c(p.goal), bal: c(p.bal), debt: p.debt && typeof p.debt === 'object' ? { owed: c(p.debt.owed), start: Math.max(c(p.debt.start), c(p.debt.owed)), apr: Math.min(100, Math.max(0, Number(p.debt.apr) || 0)), min: c(p.debt.min), extra: c(p.debt.extra) } : null }));
   b.billList = (Array.isArray(s.billList) ? s.billList : []).filter(x => x && x.id).map(x => ({ id: String(x.id), name: String(x.name || 'Bill').slice(0, 40), amt: c(x.amt), due: x.due >= 1 && x.due <= 31 ? Math.round(x.due) : null, debt: x.debt ? String(x.debt) : null }));
   b.princ = s.princ && typeof s.princ === 'object' ? s.princ : {};
+  if (s.payday && /^\d{4}-\d\d-\d\d$/.test(s.payday.anchor)) b.payday = { anchor: s.payday.anchor, every: [7, 14].includes(+s.payday.every) ? +s.payday.every : 14 };
   b.paid = s.paid && typeof s.paid === 'object' ? s.paid : {};
   b.log = Array.isArray(s.log) ? s.log.slice(-500) : [];
   if (s.adv && typeof s.adv === 'object' && /^\d{4}-\d\d-\d\d$/.test(s.adv.next)) b.adv = { start: Math.max(c(s.adv.start), c(s.adv.owed)), owed: c(s.adv.owed), step: c(s.adv.step) || 10000, next: s.adv.next };
@@ -68,7 +69,43 @@ function render() {
   if (tab === 'bills') { $('homeList').innerHTML = billsTop(); $('townList').innerHTML = `<div class="bs-billtab">${billsList()}</div>`; }
   else { $('homeList').innerHTML = freeCard() + billsCard(); $('townList').innerHTML = potsHTML(); }
 }
+/* ---------- before payday ---------- */
+// What's safe to spend until the next payday: Free money, plus what's in Bills beyond the bills due before payday.
+const isoOf = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+function nextPayday() {
+  const P = state.payday; if (!P) return null;
+  const t = isoOf(new Date()); let d = new Date(P.anchor + 'T12:00');
+  const step = P.every * 864e5, diff = Math.ceil((new Date(t + 'T12:00') - d) / step);
+  if (diff > 0) d = new Date(d.getTime() + diff * step);
+  return isoOf(d);   // today counts: pay lands that day
+}
+function dueBefore(pay) {   // bills not paid yet that are due before payday (late ones too), this month and next
+  const now = new Date(), out = [], t = isoOf(now);
+  for (let k = 0; k < 2; k++) {
+    const y = now.getFullYear(), mo = now.getMonth() + k, mk = ym(new Date(y, mo, 1)), P = state.paid[mk] || {}, last = new Date(y, mo + 1, 0).getDate();
+    for (const b of state.billList) {
+      if (!b.due || P[b.id]) continue;
+      const d = isoOf(new Date(y, mo, Math.min(b.due, last)));
+      if (d < pay && (k === 0 || d >= t)) out.push({ b, d });
+    }
+  }
+  return out.sort((a, b) => a.d < b.d ? -1 : 1);
+}
+function payNow() {
+  const pay = nextPayday(); if (!pay) return null;
+  const L = dueBefore(pay), need = L.reduce((a, x) => a + x.b.amt, 0), fromBills = Math.min(need, state.bills), short = need - fromBills;
+  const wk = (potOf('week') || { bal: 0 }).bal;   // this week's spending money (from the main app) is for spending too
+  return { pay, L, need, short, wk, safe: Math.max(0, state.free + wk - short), spare: state.bills - fromBills };
+}
 function freeCard() {
+  const N = payNow();
+  if (N) {
+    const T = total();
+    return `<div class="vl-hero pp-panel mh-have"><button class="mh-cu" data-act="add" aria-label="Safe to spend before payday: ${m(N.safe)}. Add money"><span class="vl-k">Safe to spend <small>until ${dayTxt(N.pay)}</small> ›</span>`
+      + `<span class="vl-total num">${m(N.safe)}</span><span class="mh-bar" aria-hidden="true"><i style="width:${(T > 0 ? N.safe / T * 100 : 0).toFixed(1)}%"></i></span>`
+      + `<span class="vl-sub">Free money${N.wk ? ` + this week's money` : ''}${N.short > 0 ? `, less ${m(N.short)} for bills due before payday that Bills can't cover` : `. Bills due before payday are covered ✓`}${N.spare > 0 ? ` · ${m(N.spare)} more in Bills is for bills after payday` : ''}</span></button></div>`;
+  }
+
   const T = total(), f = T > 0 ? state.free / T : 0;
   return `<div class="vl-hero pp-panel mh-have"><button class="mh-cu" data-act="add" aria-label="Free money: ${m(state.free)}. Add money"><span class="vl-k">Free money <small>of ${m(T)}</small> ›</span>`
     + `<span class="vl-total num">${m(state.free)}</span><span class="mh-bar" aria-hidden="true"><i style="width:${(f * 100).toFixed(1)}%"></i></span>`
@@ -82,8 +119,12 @@ function billsCard() {
     : `Set ✓ for the ${unpaid().length === 1 ? 'bill' : unpaid().length + ' bills'} left this month${H > need ? `, plus ${m(H - need)} toward next month` : ''}`;
   return `<div class="vl-hero pp-panel mh-have bs-bills"><button class="mh-cu" data-go="bills" aria-label="Bills: ${m(H)} set aside. Open bills"><span class="vl-k">Bills <small>${need > 0 ? 'of ' + m(need) + ' left' : 'set aside'}</small> ›</span>`
     + `<span class="vl-total num">${m(H)}</span><span class="mh-bar" aria-hidden="true"><i style="width:${(f * 100).toFixed(1)}%"></i></span>`
-    + `<span class="vl-sub">${say}</span></button>`
+    + `<span class="vl-sub">${say}</span>${payLine()}</button>`
     + `<div class="bs-row"><button class="pp-plan" data-act="setaside">Set aside</button>${short > 0 && state.free > 0 ? `<button class="pp-plan" data-act="fillbills">Fill it up</button>` : ''}</div></div>`;
+}
+function payLine() {
+  const N = payNow(); if (!N) return '';
+  return `<span class="vl-sub bs-due">${N.L.length ? `Due before ${dayTxt(N.pay)} payday: <b>${m(N.need)}</b> (${esc(N.L.map(x => x.b.name).join(', '))})${N.short > 0 ? ` · ${m(N.short)} short` : ' ✓'}` : `Nothing due before ${dayTxt(N.pay)} payday ✓`}</span>`;
 }
 function pips(p) {
   if (!p.goal) return '';
@@ -462,6 +503,7 @@ function showView(v) {
   $('view-budget').classList.toggle('hidden', st); $('view-settings').classList.toggle('hidden', !st);
   $('settingsBtn').textContent = st ? '✕' : '⚙';
   document.querySelectorAll('nav button').forEach(x => { const on = x.dataset.view === v; x.classList.toggle('active', on); if (on) x.setAttribute('aria-current', 'page'); else x.removeAttribute('aria-current'); });
+  if (st) paySync();
   if (!st) { render(); const s = $('mainScroll'); if (s) s.scrollTop = 0; }
   window.scrollTo(0, 0);
 }
@@ -512,7 +554,10 @@ $('advCancel').onclick = hideAsk; $('advGo').onclick = advGo;
 $('advDel').onclick = () => confirmAsk('Remove the advance plan?', 'Only the plan goes. No money moves.', 'Remove', () => { state.adv = null; save(); render(); });
 document.querySelectorAll('.ask').forEach(a => a.addEventListener('click', e => { if (e.target === a) hideAsk(); }));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAsk(); });
-$('setAdd').onclick = () => openMoney('add'); $('setBank').onclick = () => openMoney('bank'); $('setHistory').onclick = openHistory;
+$('setAdd').onclick = () => openMoney('add');
+function paySync() { $('setPayAnchor').value = state.payday ? (nextPayday() || state.payday.anchor) : ''; $('setPayEvery').value = state.payday ? String(state.payday.every) : '14'; }
+$('setPaySave').onclick = () => { const a = $('setPayAnchor').value; if (!/^\d{4}-\d\d-\d\d$/.test(a)) { state.payday = null; save(); toast('Payday cleared'); return; }
+  state.payday = { anchor: a, every: +$('setPayEvery').value === 7 ? 7 : 14 }; save(); render(); toast('Payday saved ✓'); }; $('setBank').onclick = () => openMoney('bank'); $('setHistory').onclick = openHistory;
 $('exportBtn').onclick = exportBackup; $('importBtn').onclick = () => $('backupFile').click();
 $('backupFile').onchange = e => { const f = e.target.files[0]; if (f) importBackup(f); e.target.value = ''; };
 $('demoBtn').onclick = () => confirmAsk('Load sample data?', 'This replaces what is in this test app (your main budget app is not touched).', 'Load', () => { state = sample(); save(); showView('budget'); toast('Sample data loaded'); });
