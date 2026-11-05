@@ -296,16 +296,19 @@ const takeOf = id => takes().find(t => t.id===id);
 const pcs = () => (window.FILM_PCS || (deck().pcs && deck().pcs.length ? deck().pcs : DEFAULT_PCS));
 const pcName = url => (pcs().find(p => p.url===url) || {}).name || 'PC';
 const viewUrl = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
-const secsOf = t => (t.pieces || []).reduce((a, p) => a + (p.deliv || 0), 0) / FPS;
+// a take's finished length: a ↻ redo is the whole spliced take; a carried-on take starts with the video it carried on
+const secsOf = t => t.redo && t.redo.Fout ? t.redo.Fout / FPS : (t.pieces || []).reduce((a, p) => a + (p.deliv || 0), 0) / FPS + (t.cont ? +t.contSecs || 0 : 0);
 // the finished file of a take: H3 Deck's own record, or what this app found on the PC while H3 Deck was closed
 function fileOf(t){ if(!t) return null; const sn = S.seen[t.id] || {};
   if(t.final) return t.final; if(sn.final) return sn.final;
   const ps = t.pieces || []; if(ps.length===1 && ps[0].file) return ps[0].file; return null; }
 const doneOf = t => !!fileOf(t) && t.state!=='working' || !!(S.seen[t.id] || {}).final;
 const workingOf = t => t.state==='working' && !(S.seen[t.id] || {}).final && !(S.seen[t.id] || {}).gone;
-const rootOf = t => { let r = t, n = 0; while(r && r.from && n++ < 20){ const p = takeOf(r.from.id); if(!p) break; r = p; } return r; };
-const versionsOf = t => { const r = rootOf(t); return takes().filter(x => rootOf(x)===r); };
-const takeLabel = t => t ? (t.from ? '🎲 ' : '') + (t.prompt || '').split('\n')[0].slice(0, 60) : 'missing take';
+const parentOf = t => t.from ? t.from.id : t.redo ? t.redo.src : null; // 🎲 takes from a piece, and ↻ redos, are versions of their take
+const rootOf = t => { let r = t, n = 0; while(r && parentOf(r) && n++ < 20){ const p = takeOf(parentOf(r)); if(!p) break; r = p; } return r; };
+const versionsOf = t => { if(t.carry && t.carry.key) return takes().filter(x => x.carry && x.carry.key===t.carry.key); // ➕ the takes made from one Carry on
+  const r = rootOf(t); return takes().filter(x => rootOf(x)===r); };
+const takeLabel = t => t ? (t.redo ? '↻ ' : t.carry ? '➕ ' : t.from ? '🎲 ' : '') + (t.prompt || '').split('\n')[0].slice(0, 60) : 'missing take';
 
 // ---------- the PCs: dots, and following H3 Deck's renders while H3 Deck is closed ----------
 const PC = {}; const pcOf = url => PC[url] = PC[url] || {online:false, queue:null};
@@ -342,7 +345,7 @@ const N = () => S.nav;
 const go = nav => { stopPlay(); S.nav = nav; save(); draw(); window.scrollTo(0, 0); };
 const filmOf = id => S.films.find(f => f.id===id);
 function draw(){
-  drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
+  placeNew(); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
   const v = N().v, f = v==='film' && filmOf(N().film);
   $('#view').innerHTML = f ? filmView(f) : v==='review' ? reviewView() : homeView();
   if(f){ wireFilm(f); if(f.exp && f.exp.state==='working') expPoll(f); }
@@ -389,7 +392,7 @@ function filmView(f){
   `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-fname value="${esc(f.name)}" placeholder="Film name"><button class="btn warn" data-act="delFilm">🗑</button></div>
   <div class="stage" style="--ar:${ar}"><video id="vA" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video><video id="vB" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video><div class="gap" id="gap">${T ? '' : 'Add clips from ✂ Review or ＋ Clip'}</div></div>
   <div class="transport"><button class="btn" data-act="toStart">⏮</button><button class="btn pri" data-act="play" id="playBtn">▶ Play</button><div class="t" id="tc">${fmt(PH)} / ${fmt(T)}</div><button class="btn" data-act="snd" id="sndBtn" aria-label="Sound on or off">${S.snd ? '🔊' : '🔇'}</button><button class="btn" data-act="zoom" data-d="-1">−</button><button class="btn" data-act="zoom" data-d="1">＋</button></div>
-  <div class="tools"><button class="btn pri" data-act="addClip">＋ Clip</button><button class="btn" data-act="split" ${sel ? '' : 'disabled'}>✂ Split</button><button class="btn" data-act="versions" ${sel ? '' : 'disabled'}>⇄ Versions</button><button class="btn" data-act="editDeck" ${sel ? '' : 'disabled'}>✏️ Edit in H3 Deck</button><button class="btn warn" data-act="delClip" ${sel ? '' : 'disabled'}>🗑</button><button class="btn" data-act="addTrack">＋ Track</button><button class="btn" data-act="export" ${T ? '' : 'disabled'}>⬇ Export</button></div>
+  <div class="tools"><button class="btn pri" data-act="addClip">＋ Clip</button><button class="btn" data-act="split" ${sel ? '' : 'disabled'}>✂ Split</button><button class="btn" data-act="carry" ${sel ? '' : 'disabled'}>➕ Carry on from here</button><button class="btn" data-act="redo" ${sel ? '' : 'disabled'}>↻ Redo a stretch</button><button class="btn" data-act="versions" ${sel ? '' : 'disabled'}>⇄ Versions</button><button class="btn" data-act="editDeck" ${sel ? '' : 'disabled'}>✏️ Edit in H3 Deck</button><button class="btn warn" data-act="delClip" ${sel ? '' : 'disabled'}>🗑</button><button class="btn" data-act="addTrack">＋ Track</button><button class="btn" data-act="export" ${T ? '' : 'disabled'}>⬇ Export</button></div>
   <div class="tlw" id="tlw"><div class="tl" id="tl"></div></div>
   <div class="note" id="selNote" style="margin-top:8px">${sel ? selText(sel, st) : 'Drag a clip to move it (up or down to change track), drag its ends to trim. The upper track plays where clips overlap. Tap the ruler to move the playhead.'}</div>
   <div id="exp">${expHtml(f)}</div>`;
@@ -453,7 +456,7 @@ function wireFilm(f){
   if(N().scroll) wrap.scrollLeft = N().scroll; wrap.addEventListener('scroll', () => { S.nav.scroll = wrap.scrollLeft; });
   showFrame(f);
 }
-function refreshTools(f){ const sel = SEL && clipOf(f, SEL); $$('.tools [data-act="split"],.tools [data-act="versions"],.tools [data-act="editDeck"],.tools [data-act="delClip"]').forEach(b => b.disabled = !sel);
+function refreshTools(f){ const sel = SEL && clipOf(f, SEL); $$('.tools [data-act="split"],.tools [data-act="carry"],.tools [data-act="redo"],.tools [data-act="versions"],.tools [data-act="editDeck"],.tools [data-act="delClip"]').forEach(b => b.disabled = !sel);
   const n = $('#selNote'); if(n && sel) n.innerHTML = selText(sel, takeOf(sel.c.take)); const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); }
 
 // ---------- playback: two video elements, the next clip loaded in the hidden one ----------
@@ -498,6 +501,55 @@ const deckUrl = id => '../#take=' + encodeURIComponent(id);
 const EMBED = (() => { try{ return window.top!==window && !!window.parent.H3Tab; }catch(e){ return false; } })();
 const toDeck = (id, more) => { if(EMBED){ try{ window.parent.H3Tab('render', id, more); return; }catch(e){} } location.href = deckUrl(id) + (more ? '&more=1' : ''); };
 
+// ---------- ➕ Carry on from here / ↻ Redo a stretch (Jordan 2026-11-05): H3 Deck renders, and the result lands on the timeline ----------
+const deckFn = name => { try{ return EMBED && window.parent[name]; }catch(e){ return null; } };
+// the playhead inside the selected clip, in the take's own time
+function selAt(f){ const r = SEL && clipOf(f, SEL); if(!r) return null; const off = PH - r.c.at; if(off < -0.05 || off > len(r.c) + 0.05) return {r, bad:true}; return {r, tt:r.c.in + Math.max(0, Math.min(len(r.c), off))}; }
+async function carryOn(f){ const s = selAt(f); if(!s) return; if(s.bad){ toast('Put the playhead inside the selected clip (where the new part starts)'); return; }
+  const t = takeOf(s.r.c.take); if(!t || !fileOf(t)){ toast('That clip has no finished video yet'); return; }
+  if(s.tt < 1){ toast('Pick a moment at least 1 s into the take: Motion Context needs the frames before it'); return; }
+  const fn = deckFn('H3Carry'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return; }
+  await fn({take:t.id, at:s.tt, film:f.id, clip:s.r.c.id}); }
+// new takes from H3 Deck that belong on a timeline: a ➕ carry-on goes right after its clip (the clip ends at the playhead and the
+// clips after it move along); the first finished ↻ redo replaces its clip's take (⇄ Versions has the others and the original)
+function placeNew(){ let ch = false; S.placed = S.placed || {};
+  for(const t of takes()){
+    const c = t.carry, rd = t.redo;
+    if(c && c.film && c.key && !S.placed[c.key]){ const f = filmOf(c.film); S.placed[c.key] = true; ch = true; const r = f && clipOf(f, c.clip); if(!r) continue;
+      const e0 = r.c.at + len(r.c); if(c.at > r.c.in + 0.2 && c.at < r.c.out) r.c.out = c.at; const P = r.c.at + len(r.c);
+      const d = secsOf(t) || (c.at + 5), nc = {id:uid('c'), take:t.id, in:Math.min(c.at, d - 0.2), out:d, dur:d, at:P}, shift = P + len(nc) - e0;
+      r.tr.clips.forEach(x => { if(x!==r.c && x.at >= e0 - 1e-3) x.at = Math.max(0, x.at + shift); }); r.tr.clips.push(nc);
+      if(SEL===r.c.id) SEL = nc.id; toast('➕ The new part is on the timeline after the clip' + (doneOf(t) ? '' : ' (rendering)'), 4000); }
+    if(rd && rd.film && rd.key && !S.placed[rd.key] && doneOf(t)){ const f = filmOf(rd.film); S.placed[rd.key] = true; ch = true; const r = f && clipOf(f, rd.clip); if(!r || r.c.take!==rd.src) continue;
+      const nd = secsOf(t) || r.c.dur, wasEnd = r.c.out >= r.c.dur - 0.05; r.c.take = t.id; r.c.dur = nd; r.c.out = wasEnd ? nd : Math.min(r.c.out, nd); if(r.c.in >= r.c.out - 0.2) r.c.in = 0;
+      toast('↻ The redo is in the clip. ⇄ Versions has the others and the original.', 4500); }
+  }
+  if(ch) save(); return ch; }
+// the take's words around a moment (each piece has its own)
+function wordsAt(t, tt){ const ps = t.pieces || []; const p = ps.find(p => tt >= p.start && tt < p.start + (p.deliv || 0) / FPS) || ps[ps.length - 1]; return (p && p.prompt || t.prompt || '').replace(/^This continues straight on[^.]*\.\s*/, ''); }
+function redoSheet(f){ const s = selAt(f); if(!s) return; const t = takeOf(s.r.c.take); if(!t || !fileOf(t)){ toast('That clip has no finished video yet'); return; }
+  if(s.bad){ toast('Put the playhead inside the selected clip (where the stretch starts)'); return; }
+  const D = secsOf(t), o = {a:Math.max(0.2, Math.min(D - 0.5, s.tt)), n:1}; o.b = Math.min(D, o.a + 2);
+  $('#sheetCard').innerHTML = `<h3><span>↻ Redo a stretch</span><button class="btn" data-close>✕</button></h3>
+    <div class="note">MiniMax makes this stretch again and keeps the rest of the take. Half a second of the take's own frames on each side is pinned, so the new stretch leaves and lands where the take does. The joins can look a bit choppy, but there shouldn't be jumps.</div>
+    <video id="rdV" muted playsinline preload="auto" src="${esc(srcOf(s.r.c))}" style="width:100%;border-radius:10px;background:#000;margin:8px 0"></video>
+    <div class="lab" style="margin-top:10px"><span>Starts at</span><b id="rdAv"></b></div><input type="range" id="rdA" min="0.2" max="${(D - 0.3).toFixed(2)}" step="0.04" value="${o.a}" style="width:100%">
+    <div class="lab" style="margin-top:10px"><span>Ends at</span><b id="rdBv"></b></div><input type="range" id="rdB" min="0.4" max="${D.toFixed(2)}" step="0.04" value="${o.b}" style="width:100%">
+    <div class="lab" style="margin-top:10px"><span>What happens in it</span></div><textarea id="rdP" rows="4" style="width:100%;box-sizing:border-box">${esc(wordsAt(t, o.a))}</textarea>
+    <div class="lab" style="margin-top:10px"><span>Versions</span></div><div class="row" id="rdN">${[1, 2, 3].map(k => `<button class="btn ${k===1 ? 'pri' : ''}" data-v="${k}">${k}</button>`).join('')}</div>
+    <div class="note" id="rdNote" style="margin-top:8px"></div>
+    <button class="btn pri" id="rdGo" style="padding:13px;width:100%;margin-top:8px">↻ Redo it</button>`;
+  $('#sheet').hidden = false;
+  const v = $('#rdV'), show = which => { const lim = 6; if(o.b - o.a > lim){ if(which==='a') o.b = o.a + lim; else o.a = o.b - lim; } if(o.b < o.a + 0.3){ if(which==='a') o.b = Math.min(D, o.a + 0.3); else o.a = Math.max(0.2, o.b - 0.3); }
+    $('#rdA').value = o.a; $('#rdB').value = o.b; $('#rdAv').textContent = fmt(o.a); $('#rdBv').textContent = o.b >= D - 0.1 ? 'the end' : fmt(o.b);
+    $('#rdNote').textContent = 'Remakes ' + fmt(o.b - o.a) + (o.b >= D - 0.1 ? ' to the end of the take (nothing after it to land on, so the ending is free)' : '') + ' on ' + pcName(t.pc) + ', where the take is.';
+    try{ v.currentTime = which==='b' ? o.b : o.a; }catch(e){} };
+  $('#rdA').oninput = e => { o.a = +e.target.value; show('a'); }; $('#rdB').oninput = e => { o.b = +e.target.value; show('b'); };
+  $$('#rdN button').forEach(b => b.onclick = () => { o.n = +b.dataset.v; $$('#rdN button').forEach(x => x.classList.toggle('pri', x===b)); });
+  show('a');
+  $('#rdGo').onclick = async () => { const fn = deckFn('H3Redo'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return; }
+    $('#rdGo').disabled = true; const n = await fn({take:t.id, a:o.a, b:o.b >= D - 0.1 ? D + 1 : o.b, prompt:$('#rdP').value, n:o.n, film:f.id, clip:s.r.c.id}); $('#rdGo').disabled = false; if(n) closeSheet(); }; }
+
 document.addEventListener('click', async ev => {
   if(ev.target.id==='sheet' || ev.target.closest('[data-close]')){ closeSheet(); return; }
   const nv = ev.target.closest('[data-nav]'); if(nv && !ev.target.closest('[data-act]')){ go(JSON.parse(nv.dataset.nav)); return; }
@@ -519,6 +571,8 @@ document.addEventListener('click', async ev => {
     case 'addClip': { const l = takes().filter(x => fileOf(x) && x.state!=='working' || (S.seen[x.id] || {}).final).sort((p, q) => (S.rev[q.id]==='keep') - (S.rev[p.id]==='keep'));
       pickSheet('＋ Add a clip (to the end of track 1)', l, null, x => { addClip(f, x, 0); draw(); }); return; }
     case 'split': split(f); break;
+    case 'carry': carryOn(f); return;
+    case 'redo': redoSheet(f); return;
     case 'delClip': { const r = clipOf(f, SEL); if(r){ r.tr.clips.splice(r.tr.clips.indexOf(r.c), 1); SEL = null; save(); } break; }
     case 'export': exportFilm(f); return;
     case 'snd': S.snd = !S.snd; save(); ['#vA', '#vB'].forEach(q => { const v = $(q); if(v) v.muted = !S.snd; }); el.textContent = S.snd ? '🔊' : '🔇'; return; // muted unless asked (Jordan 2026-11-03)
@@ -536,7 +590,7 @@ document.addEventListener('input', ev => { const el = ev.target; if(el.dataset.f
 $('#roomBtn').addEventListener('click', () => go({v:'review'}));
 window.addEventListener('storage', e => { if(e.key===DECK) drawSoft(); }); // H3 Deck open in another tab
 document.addEventListener('visibilitychange', () => { if(!document.hidden) tick(); });
-window.FILM = {S, deck, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {S, deck, placeNew, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px'; }
 draw(); tick();
 </script>
