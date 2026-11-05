@@ -312,6 +312,8 @@ const DEPS = process.env.RIG_DEPS || '', VIDEO = process.env.MOCAP_VIDEO || '';
   ok(await page.$$eval('[data-h3]', b => b.length)===2, '🦴 H3 Deck on the skeleton and depth clips, not the colour mask');
   await page.click('[data-h3="0"]'); await page.waitForFunction(() => /waiting for H3 Deck/.test(window.MOCAP.EXP.msg), null, {timeout:10000});
   const it = INBOX.length && INBOX[INBOX.length - 1].items.slice(-1)[0];
+  { const fc = it && it.face, w = fc && fc.who[0], N = await page.evaluate(() => window.MOCAP.EXP.clips[0].frames);
+    ok(fc && fc.fps===6 && fc.who.length===1 && w.s.length===N && /^[FSB-]+$/.test(w.s) && /[FSB]/.test(w.s), '🧭 the note tells H3 Deck which way she faces on every clip frame: ' + (w && w.s)); }
   ok(it && it.slot==='ctl' && it.mode==='pose' && /skeleton_everyone\.(webm|mp4)$/.test(it.file) && it.fps===6 && it.w===480 && it.h===832 && it.dur > 0 && /^data:image\/jpeg/.test(it.thumb), 'leaves H3 Deck a note on the PC with the skeleton clip: ' + JSON.stringify(it && Object.assign({}, it, {thumb:(it.thumb || '').slice(0, 20)})));
   ok(await page.$('a[href="/h3-a875336252cb/"]'), 'and offers Open H3 Deck');
   await shot('export');

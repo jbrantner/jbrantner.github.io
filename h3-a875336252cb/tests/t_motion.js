@@ -31,7 +31,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   const row = async (k, two) => (await page.$$('#ctlList ' + (two ? '.m2' : '.mrow')))[k].click();
   let inbox = {v:1, items:[{id:'mc0', t:Date.now() - 6e4, slot:'list', file:'mocap/walk_depth_everyone.webm', name:'Walk · depth everyone', w:480, h:832, fps:24, dur:3.2, frames:77, mode:'depth', thumb:'', people:1},
     {id:'mcm', t:Date.now() - 5e4, slot:'list', file:'mocap/walk_colours_everyone.webm', name:'Walk · colours everyone', w:480, h:832, fps:24, dur:3.2, frames:77, mode:'mask', thumb:'', people:1},
-    {id:'mc1', t:Date.now(), slot:'ctl', file:'mocap/fight_skeleton_everyone.webm', name:'Fight · skeleton everyone', w:832, h:480, fps:24, dur:12.2, frames:294, mode:'pose', thumb:'', people:2}]};
+    {id:'mc1', t:Date.now(), slot:'ctl', file:'mocap/fight_skeleton_everyone.webm', name:'Fight · skeleton everyone', w:832, h:480, fps:24, dur:12.2, frames:294, mode:'pose', thumb:'', people:2, face:{fps:24, who:[{i:1, x:0.4, s:'F'.repeat(294)}, {i:0, x:-0.4, s:'B'.repeat(120) + 'S'.repeat(30) + 'F'.repeat(144)}]}}]};
   await page.route(PC + '/**', async (rt) => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[{vram_free:7e9, vram_total:8.5e9}]});
     if(p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); return J(schema[c] ? {[c]:schema[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
@@ -85,6 +85,9 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   await page.click('#goBtn'); await page.waitForTimeout(1500);
   ok(sent.length===1 && uploads.length===0, 'one graph, nothing uploaded (the clip is on the PC already): ' + sent.length + ' / ' + uploads.length);
   const g = sent[0], nodes = Object.values(g), by = c => nodes.filter(n => n.class_type===c);
+  const said = gr => Object.values(gr).map(n => Object.values(n.inputs || {}).filter(v => typeof v==='string').join(' ')).join(' ');
+  ok(/Seen from behind the whole time: the person on the left has their back to the camera/.test(said(g)) && /the person on the right faces the camera/i.test(said(g)), '🧭 the prompt says who has their back to the camera and when they turn: ' + (said(g).match(/[^.]*back to the camera[^.]*\./) || [''])[0]);
+  ok(!(await page.isHidden('#faceRow')) && /back to the camera/.test(await page.textContent('#faceTxt')), '🧭 Motion guide shows the facing words');
   const cn = by('MiniMaxH3FunControlNetApply')[0];
   ok(cn && cn.inputs.strength===0.9 && cn.inputs.end_percent===0.7 && cn.inputs.start_percent===0, 'Fun ControlNet: strength 0.9, lets go at 70%');
   ok(cn && g[cn.inputs.model_patch[0]].class_type==='ModelPatchLoader' && g[cn.inputs.model_patch[0]].inputs.name===PATCH, 'loads the MiniMax H3 ControlNet patch, not another model\'s');
@@ -103,6 +106,9 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   ok(pcs.length >= 2 && sent.length===n0 + pcs.length, 'split take: ' + pcs.length + ' pieces sent');
   pcs.forEach((p, i) => { const gi = sent[n0 + i], s = Object.values(gi).find(n => n.class_type==='Video Slice'), want = Math.max(0, p.start - (p.ctx ? p.ctx + 1 : 0) / 24);
     ok(s && Math.abs(s.inputs.start_time - want) < 1e-6 && Math.abs(s.inputs.duration - (p.gen / 24 + 0.1)) < 0.002, 'piece ' + (i + 1) + ' reads the clip from ' + want.toFixed(3) + ' s for ' + p.gen + ' frames'); });
+  { const p2 = said(sent[n0 + 1]); ok(/the person on the left has their back to the camera, so we never see their face, then at 2\.2 s the person on the left turns side-on to the camera, then at 3\.5 s the person on the left turns to face the camera/i.test(p2), '🧭 piece 2 says when she turns, counted from its own start: ' + p2.slice(p2.indexOf('The person on the left'), p2.indexOf('The person on the left') + 300)); }
+  { const last = said(sent[n0 + pcs.length - 1]); ok(pcs[pcs.length - 1].start > 6.5 ? !/back to the camera/.test(last) && /left faces the camera/.test(last) : true, '🧭 the last piece only says what happens in its own stretch (by then she faces the camera)'); }
+  await page.click('#faceSw'); { const n2 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(2000); ok(!/back to the camera/.test(said(sent[n2])) && /Off/.test(await page.textContent('#faceSw')), '🧭 Off leaves the facing words out'); } await page.click('#faceSw');
 
   // ---- a PC without the ControlNet file says so ----
   schema = Object.assign({}, SCHEMA, {ModelPatchLoader:{input:{required:{name:[['z_image_fun_controlnet.safetensors']]}}}});
