@@ -174,6 +174,8 @@ const DEPS = process.env.RIG_DEPS || '';
   // 📷 the realistic stand-in words (Jordan 2026-11-05 realtest)
   { const w = await page.evaluate(() => SCENE.qwenWords({tags:'ellenx, 1girl, short hair, blue hair, green eyes, blue dress', trigger:'ellenx'}, {pitch:0, tags:[], neg:[], say:['seen from eye level', 'Her pose: the leg on the picture\'s right (her left leg) is lifted'], white:true, real:true}, '', 'She takes her shoes off.'));
     ok(/^Turn the grey mannequin in Picture 1 into a realistic photo of a real young woman with short hair, blue hair, green eyes, blue dress\./.test(w) && /her left leg\) is lifted/.test(w) && !/shoes off|Picture 2|anime art|ellenx/.test(w) && /not anime/.test(w) && /Only one person\.$/.test(w), '📷 realistic stand-in: her looks, the pose, no story, no references: ' + w); }
+  { const w = await page.evaluate(() => SCENE.qwenWords({tags:'1girl, short hair'}, {pitch:0, tags:[], neg:[], say:['seen from eye level'], white:true, real:true, refs:2}, '', ''));
+    ok(/like the anime girl in Picture 2 and Picture 3, but drawn as a real photographed person\. Keep the mannequin/.test(w), '📷 with her two views alongside (R3): ' + w); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
