@@ -16,7 +16,7 @@ const mWhole = c => '$' + Math.floor(Math.max(0, c) / 100).toLocaleString();
 const mSplit = c => { const s = dollars(c), i = s.lastIndexOf('.'); return `$${s.slice(0, i)}<span class="c">${s.slice(i)}</span>`; };
 
 /* ---------- saved data ---------- */
-const blank = () => ({ v: 1, free: 0, bills: 0, pots: [], billList: [], paid: {}, log: [] });
+const blank = () => ({ v: 1, free: 0, bills: 0, pots: [], billList: [], paid: {}, log: [], adv: null });
 let state = load();
 function load() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return fix(s); } catch (e) {}
@@ -29,6 +29,7 @@ function fix(s) {   // a backup can carry anything: keep only sane, non-negative
   b.billList = (Array.isArray(s.billList) ? s.billList : []).filter(x => x && x.id).map(x => ({ id: String(x.id), name: String(x.name || 'Bill').slice(0, 40), amt: c(x.amt), due: x.due >= 1 && x.due <= 31 ? Math.round(x.due) : null }));
   b.paid = s.paid && typeof s.paid === 'object' ? s.paid : {};
   b.log = Array.isArray(s.log) ? s.log.slice(-500) : [];
+  if (s.adv && typeof s.adv === 'object' && /^\d{4}-\d\d-\d\d$/.test(s.adv.next)) b.adv = { start: Math.max(c(s.adv.start), c(s.adv.owed)), owed: c(s.adv.owed), step: c(s.adv.step) || 10000, next: s.adv.next };
   return b;
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast("Couldn't save on this phone"); } }
@@ -104,7 +105,7 @@ function potsHTML() {
   h += [...ps, ...pj].map(potCard).join('') + '</div>';
   h += `<button class="pp-big alt pp-add" data-act="newpot">＋ Add a pot or project</button>`;
   if (!state.pots.length) h += `<p class="muted bs-empty">Pots hold money you keep (Savings, Emergency). Projects hold money toward a goal (Vacation, Laptop). Money only goes in when you put it there.</p>`;
-  return h;
+  return h + advHTML();
 }
 function billsTop() {
   const need = billsLeft(), H = state.bills, f = need > 0 ? Math.min(1, H / need) : (H > 0 ? 1 : 0), short = Math.max(0, need - H);
@@ -122,6 +123,66 @@ function billsList() {
   if (done.length) h += `<div class="pp-bills-h bs-paidh">Paid this month</div>` + done.map(b => `<div class="pp-bill done"><button class="pp-bl" data-act="editbill" data-id="${b.id}"><b>${esc(b.name)}</b><small>${dueText(b)}</small></button><span class="pp-br"><span class="num">${m(P[b.id] === true ? b.amt : P[b.id])}</span><small><span class="ok">paid ✓</span></small></span><button class="vl-pay undo" data-act="unpaid" data-id="${b.id}" aria-label="Undo paid for ${esc(b.name)}">Undo</button></div>`).join('');
   h += `</div><button class="pp-big alt pp-add" data-act="newbill">＋ Add a bill</button>`;
   return h;
+}
+
+/* ---------- pay advance planner ---------- */
+// A pay advance that's paid back each payday and borrowed again. The plan: borrow back `step` less each payday until
+// nothing is borrowed. It only tracks the plan: it doesn't move any money (paychecks still go in with Add money).
+const ADV_C = '#ff8a80';
+const isoAdd = (d, n) => { const x = new Date(d + 'T12:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+const dayTxt = d => new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+function advPlan(a = state.adv) {   // [{date, borrow}] from the next payday until it's 0
+  const out = []; if (!a || !a.owed) return out;
+  let o = a.owed, d = a.next;
+  while (o > 0 && out.length < 60) { o = Math.max(0, o - Math.max(100, a.step)); out.push({ date: d, borrow: o }); d = isoAdd(d, 14); }
+  return out;
+}
+function advHTML() {
+  const a = state.adv;
+  let h = `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Pay advance</h3></div>`;
+  if (!a) return h + `<button class="pp-big alt pp-add" data-act="advnew">＋ Plan to pay off an advance</button>`;
+  const o = opened.has('adv'), P = advPlan(), last = P[P.length - 1];
+  if (!a.owed) return h + `<div class="pp-card proj live" style="--cc:${ADV_C}"><button class="pp-head" data-act="advedit"><span class="pp-nm"><span class="pp-nmr"><b>Advance paid off</b> <span class="ok">✓</span></span></span><span class="pp-amt"><span class="num pp-roll">$0<span class="c">.00</span></span></span></button><p class="muted bs-advsay">Nothing borrowed. Your whole paycheck is yours now.</p></div>`;
+  const prog = { goal: a.start, bal: a.start - a.owed };
+  h += `<div class="pp-card proj live${o ? ' open xo' : ''}" style="--cc:${ADV_C}">`
+    + `<button class="pp-head" data-pp-open="adv" aria-expanded="${o}"><span class="pp-nm"><em class="pp-kind">Borrowed now</em><span class="pp-nmr"><b>Pay advance</b></span></span>`
+    + `<span class="pp-amt"><span class="num pp-roll">${mSplit(a.owed)}</span><small>of ${mWhole(a.start)}</small></span></button>`
+    + pips(prog)
+    + `<p class="bs-advsay">${dayTxt(a.next)} payday: borrow back <b>${P[0].borrow ? m(P[0].borrow) : 'nothing'}</b> · free by ${dayTxt(last.date)}</p>`
+    + `<div class="pp-acts"><button class="pp-chip pp-pay" data-act="advday">Payday done</button><button class="pp-chip pp-edit" data-act="advedit">Edit</button></div>`
+    + `<div class="pp-xv"><div id="townShBody"><div class="tn-shtop"><div class="tn-workers tn-slim"><p class="sh-line tn-rate">Borrow back <b>${m(a.step)} less</b> each payday</p><div class="tn-even">`
+    + [5000, 10000, 15000, 20000].map(v => `<button data-act="advstep" data-v="${v}"${a.step === v ? ' class="on"' : ''}>${mWhole(v)}</button>`).join('')
+    + `</div></div><div class="bs-advlist">${P.map(r => `<div class="row spread"><span>${dayTxt(r.date)}</span><span class="num">${r.borrow ? 'borrow ' + m(r.borrow) : '<b class="ok">borrow nothing ✓</b>'}</span></div>`).join('')}</div>`
+    + `<p class="muted bs-advsay">Each step leaves you ${m(a.step)} less for those two weeks, so plan a little less spending then.</p></div></div></div></div>`;
+  return h;
+}
+let advMode = 'edit';
+function openAdv(mode) {
+  advMode = mode; const a = state.adv, P = advPlan();
+  $('advTitle').textContent = mode === 'day' ? 'Payday done' : a ? 'Edit your advance plan' : 'Pay advance plan';
+  $('advSays').textContent = mode === 'day' ? `The ${a ? m(a.owed) : ''} advance was paid back from this paycheck. How much did you borrow again? The plan says ${P[0] && P[0].borrow ? m(P[0].borrow) : 'nothing'}.`
+    : 'The advance gets paid back from each paycheck and you borrow it again. This plans borrowing back a little less each time until it\'s gone.';
+  ['advOwedF', 'advNextF', 'advStepF'].forEach(i => $(i).classList.toggle('hidden', mode === 'day'));
+  $('advBorrowF').classList.toggle('hidden', mode !== 'day');
+  $('advOwed').value = a ? (a.owed / 100).toFixed(2) : ''; $('advStep').value = a ? (a.step / 100).toFixed(2) : '100.00';
+  $('advNext').value = a ? a.next : nextFriday();
+  $('advBorrow').value = P[0] ? (P[0].borrow / 100).toFixed(2) : '0.00';
+  $('advDel').hidden = mode === 'day' || !a; $('advErr').textContent = ''; showAsk('advBox');
+}
+function nextFriday() { const d = new Date(); d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7)); return d.toISOString().slice(0, 10); }
+function advGo() {
+  if (advMode === 'day') {
+    const a = state.adv, raw = $('advBorrow').value.trim(), b = raw === '' ? 0 : Math.round(Math.max(0, parseFloat(raw) || 0) * 100);
+    a.owed = b; a.start = Math.max(a.start, b); a.next = isoAdd(a.next, 14);
+    logIt('adv', b, null, null, `Advance: borrowed back ${m(b)}`); save(); hideAsk(); render();
+    toast(b ? `Borrowed back ${m(b)} ✓ Next payday ${dayTxt(a.next)}` : 'No advance anymore ✓'); return;
+  }
+  const owed = toC($('advOwed').value), step = toC($('advStep').value), next = $('advNext').value;
+  if (!owed) { $('advErr').textContent = 'How much is the advance?'; return; }
+  if (!step) { $('advErr').textContent = 'How much less each payday?'; return; }
+  if (!/^\d{4}-\d\d-\d\d$/.test(next)) { $('advErr').textContent = 'When is your next payday?'; return; }
+  const a = state.adv; state.adv = { start: a && a.owed ? Math.max(a.start, owed) : owed, owed, step, next };
+  opened.clear(); opened.add('adv'); save(); hideAsk(); render();
 }
 
 /* ---------- toast ---------- */
@@ -273,8 +334,8 @@ function openHistory() {
   const L = state.log.slice().reverse().slice(0, 200);
   const line = x => {
     const d = new Date(x.t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    const what = x.type === 'in' ? `Added to ${esc(nameOf(x.to))}` : x.type === 'move' ? `${x.from ? esc(nameOf(x.from)) : '—'} → ${x.to ? esc(nameOf(x.to)) : '—'}` : x.type === 'spend' ? `Spent from ${esc(nameOf(x.from))}` : x.type === 'bill' ? 'Bill paid' : 'Bank check';
-    const sign = x.type === 'in' || (x.type === 'fix' && x.to) ? '+' : x.type === 'move' ? '' : '−';
+    const what = x.type === 'in' ? `Added to ${esc(nameOf(x.to))}` : x.type === 'move' ? `${x.from ? esc(nameOf(x.from)) : '—'} → ${x.to ? esc(nameOf(x.to)) : '—'}` : x.type === 'spend' ? `Spent from ${esc(nameOf(x.from))}` : x.type === 'bill' ? 'Bill paid' : x.type === 'adv' ? 'Pay advance' : 'Bank check';
+    const sign = x.type === 'adv' ? '' : x.type === 'in' || (x.type === 'fix' && x.to) ? '+' : x.type === 'move' ? '' : '−';
     return `<div class="row spread bs-hist"><span><b>${what}</b><small class="muted">${d}${x.note ? ' · ' + esc(x.note) : ''}</small></span><span class="num">${sign}${m(x.amt)}</span></div>`;
   };
   $('histList').innerHTML = L.length ? L.map(line).join('') : '<p class="muted">Nothing yet.</p>';
@@ -354,6 +415,9 @@ document.addEventListener('click', e => {
   else if (a === 'move') openMoney('move', { from: id, to: 'free' });
   else if (a === 'spendfrom') openMoney('spend', { from: id });
   else if (a === 'edit') openPot(id);
+  else if (a === 'advnew' || a === 'advedit') openAdv('edit');
+  else if (a === 'advday') openAdv('day');
+  else if (a === 'advstep') { state.adv.step = +t.dataset.v; save(); render(); }
   else if (a === 'newpot') openPot(null);
   else if (a === 'newbill') openBill(null);
   else if (a === 'editbill') openBill(id);
@@ -374,6 +438,8 @@ $('potCancel').onclick = hideAsk; $('potGo').onclick = potGo; $('potDel').onclic
 $('billCancel').onclick = hideAsk; $('billGo').onclick = billGo; $('billDel').onclick = billDel;
 $('askNo').onclick = hideAsk; $('askYes').onclick = () => { const f = askYes; askYes = null; hideAsk(); if (f) f(); };
 $('histClose').onclick = hideAsk;
+$('advCancel').onclick = hideAsk; $('advGo').onclick = advGo;
+$('advDel').onclick = () => confirmAsk('Remove the advance plan?', 'Only the plan goes. No money moves.', 'Remove', () => { state.adv = null; save(); render(); });
 document.querySelectorAll('.ask').forEach(a => a.addEventListener('click', e => { if (e.target === a) hideAsk(); }));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAsk(); });
 $('setAdd').onclick = () => openMoney('add'); $('setBank').onclick = () => openMoney('bank'); $('setHistory').onclick = openHistory;
