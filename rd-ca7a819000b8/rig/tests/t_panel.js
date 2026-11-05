@@ -163,6 +163,9 @@ const DEPS = process.env.RIG_DEPS || '';
       const one = base(); one[12] = new T.Vector3(0.12, 0.62, 0.3); one[13] = new T.Vector3(0.12, 0.35, 0.1); const t1 = [], s1 = []; SCENE.poseSay(one, cam, t1, s1);
       const two = base(), t2 = [], s2 = []; SCENE.poseSay(two, cam, t2, s2); return {t1, s1, t2, s2}; });
     ok(v.t1.includes('standing on one leg') && /her left leg\) is lifted/.test(v.s1[0]) && /balances on her other foot/.test(v.s1[0]) && !v.t2.length && /both feet/.test(v.s2[0]), '🦵 one leg up is told to Qwen and tagged; both feet down says so: ' + JSON.stringify(v)); }
+  // 🔁 Qwen edits her picture into the figure's pose (Jordan 2026-11-05: Qwen handed the grey figure back)
+  { const w = await page.evaluate(() => SCENE.qwenWords({tags:'1girl, short hair, blue dress'}, {pitch:0, tags:[], neg:[], say:['seen from eye level'], white:true, swap:true, back:false}, '', 'She takes her shoes off.'));
+    ok(/^Change the pose and camera angle of the anime woman in Picture 1 to exactly match the grey figure in Picture 2/.test(w) && /outfit, colours and anime art style exactly as in Picture 1 \(short hair, blue dress\)/.test(w) && /Picture 3 shows her from the side/.test(w) && /never for her clothes or pose: She takes her shoes off\./.test(w) && /Plain white studio/.test(w) && !/undefined/.test(w), '🔁 swapped Qwen words: ' + w); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
