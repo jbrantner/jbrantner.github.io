@@ -28,10 +28,9 @@ self.onmessage = async e => {
     const st = M.st(), cur = M.month(), P = M.paid(), pots = M.pots(), byId = Object.fromEntries(pots.map(p => [p.id, p]));
     const c = n => Math.max(0, Math.round((Number(n) || 0) * 100)), neg = [];
     const bal = id => { const b = byId[id] ? Number(byId[id].bal) || 0 : 0; if (b < -0.004) neg.push(byId[id].name); return c(b); };
-    const week = bal('spend'), free = bal('savings') + bal('scavenger');
+    const free = bal('spend') + bal('savings') + bal('scavenger');   // one lump: the main app's weekly money is just free money here
     const goals = st.goals || {}, debts = st.debts || {};
     const out = { v: 1, free, bills: bal('bills'), pots: [], billList: [], paid: {}, log: [], adv: null };
-    if (week > 0) out.pots.push({ id: 'week', name: "This week's money", kind: 'pot', goal: 0, bal: week, debt: null });   // the main app's weekly spending money, still to spend
     for (const p of st.pots || []) {
       if (['spend', 'bills', 'savings', 'scavenger'].includes(p.id)) continue;
       const d = debts[p.id], g = c(d ? M.goal(p.id) : goals[p.id]);

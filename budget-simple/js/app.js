@@ -18,6 +18,7 @@ const mSplit = c => { const s = dollars(c), i = s.lastIndexOf('.'); return `$${s
 /* ---------- saved data ---------- */
 const blank = () => ({ v: 1, free: 0, bills: 0, pots: [], billList: [], paid: {}, log: [], adv: null, princ: {}, payday: null });
 let state = load();
+{ const w = state.pots.find(p => p.id === 'week'); if (w) { state.free += w.bal; state.pots = state.pots.filter(p => p !== w); try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} } }   // no weekly budget: one lump
 function load() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.v === 1) return fix(s); } catch (e) {}
   return blank();
@@ -94,8 +95,7 @@ function dueBefore(pay) {   // bills not paid yet that are due before payday (la
 function payNow() {
   const pay = nextPayday(); if (!pay) return null;
   const L = dueBefore(pay), need = L.reduce((a, x) => a + x.b.amt, 0), fromBills = Math.min(need, state.bills), short = need - fromBills;
-  const wk = (potOf('week') || { bal: 0 }).bal;   // this week's spending money (from the main app) is for spending too
-  return { pay, L, need, short, wk, safe: Math.max(0, state.free + wk - short), spare: state.bills - fromBills };
+  return { pay, L, need, short, safe: Math.max(0, state.free - short), spare: state.bills - fromBills };
 }
 function freeCard() {
   const N = payNow();
@@ -103,7 +103,7 @@ function freeCard() {
     const T = total();
     return `<div class="vl-hero pp-panel mh-have"><button class="mh-cu" data-act="add" aria-label="Safe to spend before payday: ${m(N.safe)}. Add money"><span class="vl-k">Safe to spend <small>until ${dayTxt(N.pay)}</small> ›</span>`
       + `<span class="vl-total num">${m(N.safe)}</span><span class="mh-bar" aria-hidden="true"><i style="width:${(T > 0 ? N.safe / T * 100 : 0).toFixed(1)}%"></i></span>`
-      + `<span class="vl-sub">Free money${N.wk ? ` + this week's money` : ''}${N.short > 0 ? `, less ${m(N.short)} for bills due before payday that Bills can't cover` : `. Bills due before payday are covered ✓`}${N.spare > 0 ? ` · ${m(N.spare)} more in Bills is for bills after payday` : ''}</span></button></div>`;
+      + `<span class="vl-sub">Free money${N.short > 0 ? `, less ${m(N.short)} for bills due before payday that Bills can't cover` : `. Bills due before payday are covered ✓`}${N.spare > 0 ? ` · ${m(N.spare)} more in Bills is for bills after payday` : ''}</span></button></div>`;
   }
 
   const T = total(), f = T > 0 ? state.free / T : 0;
