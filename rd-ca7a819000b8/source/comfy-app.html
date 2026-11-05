@@ -613,7 +613,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-11-05.370'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-11-05.371'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -5036,9 +5036,24 @@ function cmPicGraph(k, p, e, src, W, H, batch, prefix){ const I = cmIll(), oi = 
   for(const [image, type, str, end] of guide){ const a = add('ControlNetApplyAdvanced', {positive:pos, negative:neg, control_net:[add('SetUnionControlNetType', {control_net:[L, 0], type}), 0], image, strength:str, start_percent:0, end_percent:end, vae:[ck, 2]}); pos = [a, 0]; neg = [a, 1]; }
   const ks = add('KSampler', {model, seed:Math.floor(Math.random() * 1e12), steps:28, cfg:5.5, sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, latent_image:[add('EmptyLatentImage', {width:W, height:H, batch_size:batch}), 0], denoise:1});
   const save = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:[ck, 2]}), 0], filename_prefix:prefix}); return {g, save, prompt}; }
+// the PCs for 🎨 Render as her over a picture: any that's on with an Illustrious checkpoint (hers, else the usual one) and a union ControlNet
+// (ProMax). Not tied to the comic's own look checkpoint (Jordan 2026-11-05: "no computer with Illustrious and ProMax" with Render on, while
+// her 3D route worked); when none fits, it says what each PC is missing
+function cmPicKit(p, e){ const oi = p.oi; if(!oi || !oi.CheckpointLoaderSimple || !oi.KSampler || !oi.ControlNetApplyAdvanced || !oi.SetUnionControlNetType) return null;
+  const ck = combo(oi.CheckpointLoaderSimple, 'ckpt_name'), lo = combo(oi.LoraLoader, 'lora_name'), find = (list, n) => n && (list.includes(n) ? n : list.find(x => baseName(x).toLowerCase()===baseName(n).toLowerCase())) || '';
+  const ckpt = find(ck, e && e.ckpt) || ck.find(n => /iriseltouch/i.test(baseName(n))) || trainCkpt(oi), cn = combo(oi.ControlNetLoader, 'control_net_name').find(n => /promax|union/i.test(baseName(n)));
+  const bg = oi.RemoveBackground && combo(oi.LoadBackgroundRemovalModel, 'bg_removal_name').find(n => /birefnet/i.test(baseName(n)));
+  return ckpt && cn ? {url:p.url, oi, ckpt, cn, bg, loras:lo, has:n => find(lo, n), ckHas:n => find(ck, n)} : null; }
+function cmPicPcs(){ return S.test ? [{url:'test', online:true, oi:CM_FAKEILL}] : allPcs(); }
+function cmPicKits(e){ return cmPicPcs().filter(p => p.online && p.oi && !S.pcOff.includes(p.url) && !vidOnly(p)).map(p => cmPicKit(p, e)).filter(Boolean); }
+function cmPicWhy(){ const pcs = cmPicPcs(); if(!pcs.some(p => p.online)) return cmWhy();
+  return "Can't paint over the picture: " + pcs.map(p => { const n = pcName(p.url), oi = p.oi;
+    if(!p.online) return n + ' is off'; if(S.pcOff.includes(p.url)) return n + ' is switched off in ☰'; if(vidOnly(p)) return n + ' is 🎬 videos only'; if(!oi) return n + " hasn't sent its node list yet (try again in a moment)";
+    const miss = [!combo(oi.CheckpointLoaderSimple, 'ckpt_name').length && 'a checkpoint', !oi.ControlNetApplyAdvanced && 'ControlNetApplyAdvanced', !oi.SetUnionControlNetType && 'SetUnionControlNetType', !combo(oi.ControlNetLoader, 'control_net_name').some(x => /promax|union/i.test(baseName(x))) && 'a ProMax (union) ControlNet'].filter(Boolean);
+    return n + ' has no ' + (miss.join(', ') || 'usable setup'); }).join('; ') + '.'; }
 async function cmRenderPic(i){ const cm = CM(), pg = cmPage(), p = pg && pg.panels[i], st = p && cmStill(p), e = p && p.who3d && cmLibChars().find(x => x.subfolder===p.who3d.ref); if(!st) return;
   if(!e) return toast('Pick who she is first', true); const pic = cmPicOf(st.cut ? st.src || st.url : st.url); if(!pic && !S.test) return toast("That picture isn't on a PC", true);
-  const kits = cmTryKits().filter(k => k.cn), ok = kits.filter(k => !e.lora || k.has(e.lora)); if(!kits.length) return toast('No computer that is on has an Illustrious model and ControlNet ProMax', true);
+  const kits = cmPicKits(e), ok = kits.filter(k => !e.lora || k.has(e.lora)); if(!kits.length) return toast(cmPicWhy(), true);
   if(!ok.length && e.lora) toast('No computer that is on has ' + e.name + "'s LoRA, so she goes without", true);
   const k = (ok.length ? ok : kits).slice().sort((a, b) => (b.url===(pic && pic.pc)) - (a.url===(pic && pic.pc)))[0], [W, H] = cmTrySize(cmRectsOf(pg)[i]);
   const c = {id:uid('x'), parent:p.id, w:W, h:H, rend:true, busy:'Sending the picture…'}; p.extra = (p.extra || []).concat([c]); p.err = ''; drawComic();
