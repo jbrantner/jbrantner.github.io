@@ -8,6 +8,7 @@ budget, no auto-filling pots, projects or debts. It only organizes money you put
 - **Bills**: money set aside for bills. The Bills tab lists each bill; Paid takes it out of what's set aside (and, if
   that's short, out of Free money after asking). A new month shows every bill unpaid again; what's set aside stays.
 - **Pots** (money you keep) and **Projects** (money toward a goal): Put money in, Move money, Spend from it, Edit.
+- **Pay advance** planner: what is borrowed now, how much to borrow back each payday (step $50-$200 less each time), the schedule and the payoff date. "Payday done" records what was borrowed back. It only tracks the plan; no money moves.
 - **Spend** takes money out of any place. **Bank check** (Settings) matches the app to your bank through Free money.
 
 Every amount is whole cents, and no balance can go below $0: moves and spends are capped at what's there.
