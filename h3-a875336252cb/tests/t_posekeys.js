@@ -7,14 +7,14 @@ const R = 'http://render.test', DEPS = process.env.RIG_DEPS || '', OUT = process
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 if(!process.env.SAM_GLB || !process.env.SAM_GLB2){ console.log('SAM_GLB and SAM_GLB2 are needed'); process.exit(1); }
 const SCHEMA = {
-  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-V2.safetensors']], weight_dtype:[['default']]}}},
-  CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
-  VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'qwen_image_edit_2511_fp8_e4m3fn.safetensors']], weight_dtype:[['default']]}}},
+  CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors', 'qwen_2.5_vl_7b_fp8_scaled.safetensors']], type:[['minimax']], device:[['default']]}}},
+  VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors', 'qwen_image_vae.safetensors']]}}},
   ModelPatchLoader:{input:{required:{name:[['minimax_h3_fun_controlnet_union_int8.safetensors']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[[]], strength_model:['FLOAT', {default:1}]}}},
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
-  'LoadImage','LoadVideo','LoadAudio','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale','Video Slice','MiniMaxH3FunControlNetApply','ImageFromBatch'];
+  'LoadImage','LoadVideo','LoadAudio','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale','Video Slice','MiniMaxH3FunControlNetApply','ImageFromBatch','TextEncodeQwenImageEditPlus'];
 const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thumb:'', sam:{pc:R, file:'body_A.glb', sub:'RenderDeck/pose', type:'output'}, rot:null},
   {kind:'posebook', id:'pzB', name:'Reach', saved:3, head:1.2, thumb:'', sam:{pc:R, file:'body_B.glb', sub:'RenderDeck/pose', type:'output'}, rot:null}];
 (async () => {
@@ -26,7 +26,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
   await ctx.route('https://fonts.googleapis.com/**', r => r.fulfill({contentType:'text/css', body:''}));
   await ctx.route('https://cdn.jsdelivr.net/npm/**', r => { const u = new URL(r.request().url()).pathname.replace('/npm/', ''), m = u.match(/^(@?[^@]+)@([^/]+)\/(.*)$/);
     const f = path.join(DEPS, 'three-0.160.0', 'package', m[3]); if(!fs.existsSync(f)) return r.fulfill({status:404, body:''}); r.fulfill({contentType:'text/javascript', body:fs.readFileSync(f)}); });
-  let glbGets = 0;
+  let glbGets = 0; const QW = [], UP = {};
   await ctx.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, H = {'Access-Control-Allow-Origin':'*'}, J = o => rt.fulfill({status:200, contentType:'application/json', headers:H, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
@@ -35,6 +35,12 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
     if(p==='/renderdeck/scenes') return J({scenes:POSES});
     if(p==='/view' && /\.glb$/.test(u.searchParams.get('filename'))){ glbGets++; return rt.fulfill({contentType:'model/gltf-binary', headers:H, body:fs.readFileSync(u.searchParams.get('filename')==='body_A.glb' ? process.env.SAM_GLB : process.env.SAM_GLB2)}); }
     if(p==='/internal/files/input') return J([]);
+    // 👤 stand-ins: Qwen jobs (the fake hands back the mannequin picture it was given as the "stand-in")
+    if(p==='/upload/image'){ const body = rt.request().postDataBuffer(), m = /filename="([^"]+)"/.exec(body.toString('latin1')), name = m ? m[1] : 'x.png'; const st = body.indexOf(Buffer.from('\x89PNG', 'latin1')); UP[name] = st >= 0 ? body.slice(st) : body; return J({name, subfolder:'', type:'input'}); }
+    if(p==='/prompt'){ const g = JSON.parse(rt.request().postData()).prompt; if(Object.values(g).some(n => n.class_type==='TextEncodeQwenImageEditPlus')){ QW.push(g); return J({prompt_id:'q' + QW.length}); } return J({prompt_id:'x'}); }
+    if(p.startsWith('/history/q')){ const id = p.slice(9), g = QW[+id.slice(1) - 1], sv = Object.keys(g).find(k => g[k].class_type==='SaveImage'), first = Object.values(g).find(n => n.class_type==='LoadImage').inputs.image;
+      return J({[id]:{status:{status_str:'success', completed:true}, outputs:{[sv]:{images:[{filename:'st_' + id + '.png', subfolder:'H3Deck/standins', type:'output', src:first}]}}}}); }
+    if(p==='/view' && /^st_q\d+\.png$/.test(u.searchParams.get('filename'))){ const g = QW[+u.searchParams.get('filename').match(/q(\d+)/)[1] - 1], first = Object.values(g).find(n => n.class_type==='LoadImage').inputs.image; return rt.fulfill({contentType:'image/png', headers:H, body:UP[first] || Buffer.alloc(0)}); }
     return rt.fulfill({status:404, headers:H, body:''}); });
   await page.addInitScript(r => { if(!sessionStorage.getItem('done')){ localStorage.clear(); sessionStorage.setItem('done', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; window.PK_PCS = [r]; }, R);
   await page.goto('http://127.0.0.1:8017/index.html');
@@ -135,12 +141,19 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
     const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
     await fr.click('#ibBtn'); await page.waitForFunction(n0 => Object.keys(H3.S.media).length >= n0 + 2 && H3.S.tab==='render', n0, {timeout:60000});
     const P = await page.evaluate(() => { const f = H3.S.f; return {pins:f.imgs.filter(r => r.pin).map(r => r.pose.t), other:f.imgs.filter(r => !r.pin && r.pose).length, ctl:f.ctl, prompt:f.prompt, mq:f.mq, note:!document.querySelector('#mqNote').hidden}; });
-    ok(P.pins.join()==='0,2' && !P.other && !P.ctl && P.prompt==='Ellen dances in the kitchen.' && /grey mannequin/.test(P.mq) && P.note, '✨ in-betweens: two keyframes pinned at 0 s and 2 s, no Motion guide, your prompt untouched, the mannequin wording kept out of sight: ' + JSON.stringify(P).slice(0, 200));
+    ok(QW.length===2 && QW.every(g => Object.values(g).some(n => n.class_type==='SaveImage')), '👤 two Qwen stand-in jobs, one per key (' + QW.length + ')');
+    { const enc = g => Object.values(g).find(n => n.class_type==='TextEncodeQwenImageEditPlus').inputs; const a = enc(QW[0]), b = enc(QW[1]);
+      ok(/a woman in her 20s/.test(a.prompt) && !a.image2 && /same person as in Picture 2/.test(b.prompt) && b.image2, 'key 1 is made from the words, key 2 also gets key 1\'s stand-in so it is the same person'); }
+    ok(await fr.evaluate(() => document.querySelectorAll('#stStrip [data-st]').length===2 && !document.querySelector('#stStrip').hidden), 'the stand-ins show in a strip on the Poses tab');
+    ok(await page.evaluate(() => H3.S.f.imgs.filter(r => r.pin).every(r => /^standin_/.test(H3.S.media[r.id].name))), 'the keyframes sent are the stand-ins');
+    const plan = await page.evaluate(() => H3.currentPlan().map(p => [p.start, p.gen, p.ctx])); console.log(JSON.stringify(plan));
+    ok(plan.length===2 && plan[1][0] >= 2 && plan[1][0] < 2.8 && plan[1][2] > 0, 'key to key: piece 1 runs to just past the 2 s key, piece 2 carries on from it: ' + JSON.stringify(plan));
+    ok(P.pins.join()==='0,2' && !P.other && !P.ctl && P.prompt==='Ellen dances in the kitchen.' && /One person, the same throughout/.test(P.mq) && P.note, '✨ in-betweens: two keyframes pinned at 0 s and 2 s, no Motion guide, your prompt untouched, the rest of the wording kept out of sight: ' + JSON.stringify(P).slice(0, 200));
     for(const h3 of [true, false]){ await page.evaluate(h3 => { H3.S.f.h3 = h3; }, h3);
       const g = await page.evaluate(() => { const t = H3.snapshot(), oi = H3.PC['http://render.test'].oi, names = {}; [...t.imgs.map(r => r.id), ...t.pins.map(r => r.id)].forEach((id, i) => names[id] = 'f' + i); t.id = 't9'; t.pc = 'http://render.test'; t.seed = 1; t.dir = 'H3Deck/h3_t9'; t.name = 'h3_t9'; return {pins:t.pins, imgs:t.imgs.length, g:H3.pieceGraph(t, 0, oi, names).g}; });
       const nodes = Object.values(g.g), guides = nodes.filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image), rv = nodes.find(n => n.class_type==='MiniMaxH3ReferenceToVideo'), prm = (rv && rv.inputs.prompt) || '';
       const frames = guides.map(n => n.inputs.frame_idx).join(), imgsOk = guides.every(n => g.g[n.inputs.image[0]].class_type==='LoadImage');
-      ok(g.imgs===0 && frames==='0,48' && imgsOk && !Object.keys(rv.inputs).some(k => /ref_images\./.test(k)) && !nodes.some(n => n.class_type==='MiniMaxH3FunControlNetApply') && !/Picture/.test(prm) && /grey mannequin[\s\S]*Ellen dances in the kitchen/.test(prm),
+      ok(g.imgs===0 && frames==='0,48' && imgsOk && !Object.keys(rv.inputs).some(k => /ref_images\./.test(k)) && !nodes.some(n => n.class_type==='MiniMaxH3FunControlNetApply') && !/Picture/.test(prm) && /One person, the same throughout[\s\S]*Ellen dances in the kitchen/.test(prm),
         (h3 ? '🧾' : 'plain') + ' graph: the pictures are MiniMax keyframes at frames ' + frames + ', not references; the prompt is the hidden mannequin wording + yours'); }
   }
   ok(await page.evaluate(() => typeof H3.toMocap==='function') && await page.evaluate(() => !!document.querySelector('#mocapBox')), 'takes can go to Mocap');

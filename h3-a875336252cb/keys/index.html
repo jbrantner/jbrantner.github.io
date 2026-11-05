@@ -71,10 +71,12 @@ details summary{cursor:pointer;font-size:13px;color:var(--soft)}
   <div class="lab"><span>Motion guide</span><span id="clipNote"></span></div>
   <div class="seg" id="clipSeg"><button data-clip="touch" style="flex:1">📍 Touch points</button><button data-clip="ease" style="flex:1">Eased</button><button data-clip="step" style="flex:1">Stepped</button></div>
   <div id="touchBox"><div class="lab"><span>Touch point strength</span><span id="tstrLab"></span></div><input type="range" id="tstr" min="0.3" max="1.5" step="0.05"><div class="lab"><span>Each touch point lasts</span><span id="tholdLab"></span></div><input type="range" id="thold" min="0.2" max="1.5" step="0.1"></div>
+  <div class="row"><label class="chk"><input type="checkbox" id="stOn">👤 Real stand-in</label><input id="stDesc" class="grow" style="min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 8px;color:var(--text);font:inherit" placeholder="who plays it"></div>
+  <div class="strip" id="stStrip" hidden></div>
   <div class="row"><button class="go grow" id="ibBtn" title="The keys become MiniMax keyframes: it animates the mannequin between them. Write what happens in the Render tab's prompt. Like the video? Its take › 🦴 To Mocap turns it into a 3D motion.">✨ Create in-betweens</button><button id="send">🎬 Use in Render</button></div>
-  <p class="note">✨ sends each key as a MiniMax keyframe at its time, so MiniMax acts out the mannequin moving between them. Render it, and when you like a take, its 🦴 To Mocap makes it a 3D motion with a full skeleton and depth guide.</p>
+  <p class="note">✨ turns each key into a real stand-in person (Qwen, same pose and camera), then sends them as MiniMax keyframes at their times: H3 Deck renders one clip from each key to the next and joins them. Tap a stand-in to redo it. Render it, and when you like a take, its 🦴 To Mocap makes it a 3D motion with a full skeleton and depth guide.</p>
   <p id="msg"></p>
-  <p class="note">Each key is a pose from the library at a time on the timeline. 🎬 sends a skeleton clip to the Motion guide (📍 only at the keys, or every frame), and each key as a pose picture whose time goes into the prompt. <span style="opacity:.55">v.6</span></p>
+  <p class="note">Each key is a pose from the library at a time on the timeline. 🎬 sends a skeleton clip to the Motion guide (📍 only at the keys, or every frame), and each key as a pose picture whose time goes into the prompt. <span style="opacity:.55">v.7</span></p>
 </div>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <script type="module">
@@ -103,6 +105,7 @@ const S = Object.assign({dur:5, mode:'step', clip:'ease', aspect:'', moveCam:fal
 const touchHalf = () => Math.max(2, Math.round(S.thold * FPS / 2));
 if(!S.clipV){ S.clip = 'touch'; S.clipV = 1; } if(S.tstr == null) S.tstr = 0.8;
 if(S.clipV < 2){ S.clipV = 2; S.thold = 0.6; S.depth = true; if(S.tstr < 1) S.tstr = 1; } if(S.thold == null) S.thold = 0.6;
+if(S.stOn == null) S.stOn = true; if(!S.stDesc) S.stDesc = 'a woman in her 20s with her hair tied back, in a fitted plain grey t-shirt, black leggings and white sneakers';
 if(!S.aspect){ try{ S.aspect = PARENT.H3.S.f.aspect; }catch(e){} S.aspect = S.aspect || '16:9'; }
 let saveT = 0; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => put(KEY, S), 200); };
 const sorted = () => S.keys.slice().sort((a, b) => a.t - b.t);
@@ -211,7 +214,7 @@ function drawLib(){ const k = selKey();
   $('#libLab').textContent = LIBBUSY && !LIB.length ? 'Pose library: asking the PCs…' : 'Pose library' + (k ? ': tap one to change this key' : ': tap one to put it at ' + tcode(S.T));
   $('#lib').innerHTML = LIB.length ? LIB.map(p => `<button data-pose="${esc(p.id)}" class="${k && k.pz.id===p.id ? 'on' : ''}"><img ${p.thumb ? `src="${esc(p.thumb)}"` : ''} alt=""><span>${esc(p.name)}</span></button>`).join('')
     : `<p class="note" style="padding:6px 2px">${LIBBUSY ? '' : "No saved poses found on the PCs. Make them in Render Deck › 🤸 Pose (describe it, Create pose, tweak), then 💾 Save."}</p>`; }
-function drawAll(){ drawMarks(); drawKeyRow(); drawLib(); drawTime(); }
+function drawAll(){ drawMarks(); drawKeyRow(); drawLib(); drawTime(); $('#stOn').checked = !!S.stOn; if(document.activeElement!==$('#stDesc')) $('#stDesc').value = S.stDesc || ''; drawStand(); }
 $('#aspect').innerHTML = ASPECTS.map(a => `<option value="${a[0]}">${a[0]}</option>`).join(''); $('#aspect').value = S.aspect;
 $('#aspect').onchange = e => { S.aspect = e.target.value; save(); size(); };
 $('#play').onclick = () => { PLAY = !PLAY; last = performance.now(); $('#play').textContent = PLAY ? '⏸' : '▶'; if(!PLAY){ S.T = snap(S.T); save(); showT(true); drawAll(); } };
@@ -268,17 +271,61 @@ function depthMat(){ const m = new THREE.MeshDepthMaterial(), u = m.userData.u =
     sh.fragmentShader = 'uniform highp float dNear; uniform highp float dFar; varying highp float vMcZ;\n' + sh.fragmentShader.replace('gl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );',
       'float l = clamp( ( vMcZ - dNear ) / ( dFar - dNear ), 0.0, 1.0 ); gl_FragColor = vec4( vec3( 1.0 - l ), 1.0 );'); }; m.customProgramCacheKey = () => 'pk-depth-vz'; return m; }
 const dimsOf = () => { const ar = arOf(), L = 832; return ar >= 1 ? [L, Math.round(L / ar / 32) * 32] : [Math.round(L * ar / 32) * 32, L]; };
+// ---- 👤 stand-ins (Jordan 2026-11-05, picked "both together": the grey mannequin is no one MiniMax or SAM knows how to move or read, so
+// each key becomes a plain real person in that pose, seen from the same camera, by Qwen-Image-Edit 2511 (as the 📖 comic panels do);
+// key 1 is made from the words, every later key also gets key 1's stand-in as Picture 2 so it is the same person all the way through)
+const STURL = new Map(); // key id -> object URL of its stand-in (this visit)
+const stSig = k => JSON.stringify([qKey(k.pz), k.yaw || 0, k.x || 0, k.z || 0, S.moveCam ? k.cam : S.cam, S.aspect, S.stDesc, k.stSeed || 0, sorted()[0] && sorted()[0].id===k.id]);
+async function pcJSON(u, path, body){ const r = await fetch(u + path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {cache:'no-store'}); if(!r.ok) throw new Error((path.split('?')[0]) + ' ' + r.status); return r.json(); }
+async function comboOf(u, cls, inp){ try{ const j = await pcJSON(u, '/object_info/' + cls); const v = (((j[cls] || {}).input || {}).required || {})[inp]; return Array.isArray(v && v[0]) ? v[0] : (v && v[1] && v[1].options) || []; }catch(e){ return []; } }
+async function qwenKit(u){ try{ const j = await pcJSON(u, '/object_info/TextEncodeQwenImageEditPlus'); if(!j.TextEncodeQwenImageEditPlus) return null; }catch(e){ return null; }
+  const [un, ll, cl, va] = await Promise.all([comboOf(u, 'UNETLoader', 'unet_name'), comboOf(u, 'LoraLoaderModelOnly', 'lora_name'), comboOf(u, 'CLIPLoader', 'clip_name'), comboOf(u, 'VAELoader', 'vae_name')]);
+  const m = un.find(n => /qwen.?image.?edit.?2511/i.test(n)), c = cl.find(n => /qwen.?2\.?5.?vl/i.test(n)), v = va.find(n => /qwen.?image.?vae/i.test(n));
+  return m && c && v ? {u, m, c, v, l:ll.find(n => /2511.*lightning.*4.?step/i.test(n)) || ''} : null; }
+async function upload(u, blob, name){ const fd = new FormData(); fd.append('image', blob, name); fd.append('overwrite', 'true'); const r = await fetch(u + '/upload/image', {method:'POST', body:fd}); if(!r.ok) throw new Error('Sending a picture failed (' + r.status + ').'); const j = await r.json(); return (j.subfolder ? j.subfolder + '/' : '') + j.name; }
+function standGraph(Q, files, prompt, W, H, seed){ const g = {}; let n = 0; const add = (c, i) => { g[String(++n)] = {class_type:c, inputs:i}; return String(n); };
+  let model = [add('UNETLoader', {unet_name:Q.m, weight_dtype:'default'}), 0]; if(Q.l) model = [add('LoraLoaderModelOnly', {model, lora_name:Q.l, strength_model:1}), 0];
+  model = [add('CFGNorm', {model:[add('ModelSamplingAuraFlow', {model, shift:3.1}), 0], strength:1}), 0];
+  const clip = [add('CLIPLoader', {clip_name:Q.c, type:'qwen_image', device:'default'}), 0], vae = [add('VAELoader', {vae_name:Q.v}), 0], ims = {};
+  files.forEach((f, i) => { ims['image' + (i + 1)] = [add('LoadImage', {image:f}), 0]; });
+  const enc = t => [add('FluxKontextMultiReferenceLatentMethod', {conditioning:[add('TextEncodeQwenImageEditPlus', Object.assign({clip, vae, prompt:t}, ims)), 0], reference_latents_method:'index_timestep_zero'}), 0];
+  const ks = add('KSampler', {model, seed, steps:Q.l ? 4 : 20, cfg:Q.l ? 1 : 2.5, sampler_name:'euler', scheduler:'simple', positive:enc(prompt), negative:enc(''), latent_image:[add('EmptySD3LatentImage', {width:W, height:H, batch_size:1}), 0], denoise:1});
+  const sv = add('SaveImage', {images:[add('VAEDecode', {samples:[ks, 0], vae}), 0], filename_prefix:'H3Deck/standins/st'}); return {g, sv}; }
+const standWords = same => 'Turn the plain grey mannequin in Picture 1 into one real person' + (same ? ': the same person as in Picture 2, with the same face, hair, body and clothes' : ': ' + S.stDesc)
+  + '. Keep exactly the same body pose, every limb where it is, facing the same way, with the same camera angle, distance and framing. Replace the grid floor and grey background with a plain light grey photo studio floor and wall. Only this one person in the picture: no mannequin, statue or second figure anywhere. A real photo.';
+async function runStand(Q, files, prompt, W, H, seed, tick){ const {g, sv} = standGraph(Q, files, prompt, W, H, seed), j = await pcJSON(Q.u, '/prompt', {prompt:g, client_id:'h3pk'}); if(!j.prompt_id) throw new Error('Qwen was turned down: ' + JSON.stringify(j).slice(0, 200));
+  const t0 = Date.now(); for(;;){ await new Promise(r => setTimeout(r, 2000)); tick(Math.round((Date.now() - t0) / 1000));
+    const h = (await pcJSON(Q.u, '/history/' + j.prompt_id))[j.prompt_id]; if(h && h.status && h.status.status_str==='error') throw new Error('Qwen stopped with an error on the PC.');
+    const im = h && h.outputs && h.outputs[sv] && (h.outputs[sv].images || [])[0]; if(im) return {pc:Q.u, file:im.filename, sub:im.subfolder || '', type:im.type || 'output'};
+    if(Date.now() - t0 > 15 * 60000) throw new Error('Qwen took over 15 minutes.'); } }
+const stView = st => st.pc + '/view?filename=' + encodeURIComponent(st.file) + '&subfolder=' + encodeURIComponent(st.sub) + '&type=' + st.type;
+// pics: [{k, blob}] mannequin pictures in key order; returns the stand-in blobs (made only where missing or out of date)
+async function makeStandIns(pics, W, H){ let Q = null; for(const u of pcList()){ Q = await qwenKit(u); if(Q) break; }
+  if(!Q) throw new Error('No PC has Qwen-Image-Edit 2511 (with its text encoder and VAE) for the stand-ins. Turn 👤 Real stand-in off to send the mannequin instead.');
+  const out = []; let firstFile = null;
+  for(const [i, {k, blob}] of pics.entries()){ const sig = stSig(k);
+    if(!(k.st && k.st.sig===sig)){ const files = [await upload(Q.u, blob, 'h3pk_' + k.id + '.png')]; if(i > 0) files.push(firstFile || await (async () => { const b = await (await fetch(stView(pics[0].k.st))).blob(); return upload(Q.u, b, 'h3pk_st1.png'); })());
+      const st = await runStand(Q, files, standWords(i > 0), W, H, 1000 + (k.stSeed || 0) * 7919 + i, s => say('👤 Stand-in ' + (i + 1) + ' of ' + pics.length + ' on the PC… ' + s + ' s'));
+      k.st = Object.assign(st, {sig}); save(); }
+    const b = await (await fetch(stView(k.st))).blob(); if(i===0) firstFile = await upload(Q.u, b, 'h3pk_st1.png');
+    STURL.set(k.id, URL.createObjectURL(b)); drawStand(); out.push(b); }
+  return out; }
+function drawStand(){ const ks = sorted().filter(k => k.st), el = $('#stStrip'); el.hidden = !S.stOn || !ks.length;
+  el.innerHTML = ks.map(k => `<button data-st="${k.id}" title="Tap to redo this stand-in next time"><img src="${esc(STURL.get(k.id) || stView(k.st))}" alt=""><span>${tcode(k.t).replace(/^00:/, '')}${k.st.sig===stSig(k) ? '' : ' ↻'}</span></button>`).join(''); }
+$('#stStrip').onclick = e => { const b = e.target.closest('[data-st]'), k = b && S.keys.find(x => x.id===b.dataset.st); if(!k) return; k.stSeed = (k.stSeed || 0) + 1; save(); drawStand(); say('That stand-in will be made again (new seed) next time you press ✨.'); };
+$('#stOn').onchange = e => { S.stOn = e.target.checked; save(); drawStand(); }; $('#stDesc').oninput = e => { S.stDesc = e.target.value; save(); };
 let EXP = false;
 async function exportAll(pin){ pin = pin===true; if(EXP || !S.keys.length) return; if(pin && S.keys.length < 2){ say('Put at least two keys on the timeline first.'); return; } EXP = true; PLAY = false; $('#play').textContent = '▶'; drawKeyRow();
   const T0 = S.T, [W, H] = dimsOf(), N = Math.round(S.dur * FPS) + 1, cam = new THREE.PerspectiveCamera(camera.fov, W / H, 0.05, 60), mode = S.clip;
   const R2 = new THREE.WebGLRenderer({canvas:Object.assign(document.createElement('canvas'), {width:W, height:H}), antialias:true, preserveDrawingBuffer:true}); R2.setPixelRatio(1); R2.setSize(W, H, false);
   const at = T => { const c = camAt(T, mode==='touch' ? 'step' : mode); cam.position.fromArray(c.p); cam.lookAt(new THREE.Vector3().fromArray(c.t)); cam.updateMatrixWorld(); };
-  const out = {pin, prompt:pin ? mannequinPrompt() : '', dur:S.dur, aspect:S.aspect, w:W, h:H, clips:[], keys:[], str:mode==='touch' ? +S.tstr : null}, stamp = Date.now().toString(36);
+  const out = {pin, prompt:pin ? (S.stOn ? personPrompt() : mannequinPrompt()) : '', dur:S.dur, aspect:S.aspect, w:W, h:H, clips:[], keys:[], str:mode==='touch' ? +S.tstr : null}, stamp = Date.now().toString(36);
   try{
     for(const k of S.keys){ say('Getting ' + k.pz.name + ' ready…'); await ensureBody(k.pz); await quatsOf(k.pz); }
     // the pose pictures: the grey lit mannequin on the floor grid, from the shot camera at that moment
     if(S.pics || pin) for(const [i, k] of sorted().entries()){ say('Pose picture ' + (i + 1) + ' of ' + S.keys.length + '…'); poseAt(k.t, 'step', true); at(k.t); R2.setClearColor(BG, 1); R2.render(scene, cam);
       out.keys.push({t:k.t, name:'posekey_' + stamp + '_' + (i + 1) + '_' + Math.round(k.t * 1000) + 'ms.png', blob:await new Promise(r => R2.domElement.toBlob(r, 'image/png'))}); }
+    if(pin && S.stOn){ const bl = await makeStandIns(sorted().map((k, i) => ({k, blob:out.keys[i].blob})), W, H); bl.forEach((b, i) => { out.keys[i].blob = b; out.keys[i].name = out.keys[i].name.replace('posekey_', 'standin_'); }); }
     if(!pin){ const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
     if(!type) throw new Error("This browser can't record video from a page, so the Motion guide clip can't be made here.");
     const cvP = Object.assign(document.createElement('canvas'), {width:W, height:H}), cxP = cvP.getContext('2d'), dm = depthMat(), touch = mode==='touch', passes = [{mode:'pose', name:touch ? 'touchpoints' : 'skeleton'}].concat(S.depth ? [{mode:'depth', name:touch ? 'touchdepth' : 'depth'}] : []);
@@ -308,6 +355,7 @@ async function exportAll(pin){ pin = pin===true; if(EXP || !S.keys.length) retur
   R2.dispose(); EXP = false; S.T = T0; showT(true); drawAll(); }
 $('#send').onclick = () => exportAll(false); $('#ibBtn').onclick = () => exportAll(true);
 // ✨ the in-betweens prompt: MiniMax animates the mannequin itself from keyframe to keyframe, as a person would move
+function personPrompt(){ return 'One person, the same throughout, in a plain light grey photo studio. They move naturally and continuously from one pose to the next with real weight, balance and follow-through, like a real person acting it out, never freezing, snapping or sliding. ' + (S.moveCam ? 'The camera moves smoothly.' : 'The camera stays still.'); }
 function mannequinPrompt(){ return 'The one who moves is a smooth plain grey mannequin with no face, hair or clothes, on a grid floor in a plain grey studio. It moves naturally and continuously from one pose to the next with real weight, balance and follow-through, like a person acting it out, never freezing, snapping or sliding. '
   + (S.moveCam ? 'The camera moves smoothly.' : 'The camera stays still.'); }
 // ---- start: the keys' poses (from the phone's copy first), then the library from the PCs
@@ -315,6 +363,6 @@ size(); drawAll();
 (async () => { const ks = sorted(); const base = S.base && S.base.sam ? S.base : ks[0] && ks[0].pz;
   if(base){ try{ await ensureBody(base); for(const k of ks) await quatsOf(k.pz); }catch(e){ say(e.message); } }
   showT(true); drawAll(); loadLib(); })();
-window.PK = {S, get LIB(){ return LIB; }, get BODY(){ return BODY; }, Q, poseAt, camAt, span, putPose, exportAll, loadLib, qKey, camera, controls, drawAll, showT, opJoints};
+window.PK = {makeStandIns, standGraph, S, get LIB(){ return LIB; }, get BODY(){ return BODY; }, Q, poseAt, camAt, span, putPose, exportAll, loadLib, qKey, camera, controls, drawAll, showT, opJoints};
 </script>
 </body></html>
