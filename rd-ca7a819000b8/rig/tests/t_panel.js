@@ -171,6 +171,9 @@ const DEPS = process.env.RIG_DEPS || '';
       const m = document.createElement('canvas'); m.width = 80; m.height = 80; const mx = m.getContext('2d'); mx.fillStyle = '#000'; mx.fillRect(0, 0, 80, 80); mx.fillStyle = '#fff'; mx.fillRect(20, 10, 40, 60);
       return {grey:SCENE.colourIn(mk('#8a8a8a'), m), her:SCENE.colourIn(mk('#3aa0e0'), m)}; });
     ok(v.grey < 5 && v.her > 100, '🩶 a grey figure reads as no colour, her blue dress as plenty: ' + JSON.stringify(v)); }
+  // 📷 the realistic stand-in words (Jordan 2026-11-05 realtest)
+  { const w = await page.evaluate(() => SCENE.qwenWords({tags:'ellenx, 1girl, short hair, blue hair, green eyes, blue dress', trigger:'ellenx'}, {pitch:0, tags:[], neg:[], say:['seen from eye level', 'Her pose: the leg on the picture\'s right (her left leg) is lifted'], white:true, real:true}, '', 'She takes her shoes off.'));
+    ok(/^Turn the grey mannequin in Picture 1 into a realistic photo of a real young woman with short hair, blue hair, green eyes, blue dress\./.test(w) && /her left leg\) is lifted/.test(w) && !/shoes off|Picture 2|anime art|ellenx/.test(w) && /not anime/.test(w) && /Only one person\.$/.test(w), '📷 realistic stand-in: her looks, the pose, no story, no references: ' + w); }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
