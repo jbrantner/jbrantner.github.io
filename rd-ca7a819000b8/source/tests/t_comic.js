@@ -255,6 +255,13 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
     await page.selectOption('#comic [data-cmwho]', {index:1}); await page.waitForTimeout(200);
     const src2 = await page.evaluate(pid => document.querySelector(`#cmwins iframe[data-pid="${pid}"]`).getAttribute('src'), pid);
     ok(/[?&]w3=/.test(src2) && await page.evaluate(() => !!cmPage().panels[0].who3d), 'picking her opens the window again with that character as the rig: ' + src2);
+    // (Jordan 2026-11-05) a new picture made for a panel that already has SAM's body: it offers to read SAM again from it, but not for the same picture or a 🎨 render
+    ok(!(await page.$('#comic [data-cm="make3d"]')), 'no "read her pose" while the picked picture is the one SAM came from');
+    await page.evaluate(srv => { const p = cmPage().panels[0]; p.stills.unshift({url:srv + '/view?filename=scene_r.png&subfolder=RenderDeck%2Fscene&type=output', scn:true}); p.still = 0; drawComic(); }, PCS.Render.url); await page.waitForTimeout(100);
+    ok(!(await page.$('#comic [data-cm="make3d"]')), 'nor for one of the panel\'s own 🎨 renders');
+    await page.evaluate(srv => { const p = cmPage().panels[0]; p.stills.unshift({url:srv + '/view?filename=try_2.png&subfolder=RenderDeck%2Fcomics&type=output', w:832, h:1216}); p.still = 0; drawComic(); }, PCS.Render.url); await page.waitForTimeout(100);
+    ok(/Read her pose from this picture/.test((await page.textContent('#comic [data-cm="make3d"]').catch(() => '')) || ''), 'a new picture brings back 🧍 Read her pose from this picture');
+    await page.evaluate(() => { const p = cmPage().panels[0]; p.stills.splice(0, 2); p.still = 0; drawComic(); }); await page.waitForTimeout(100);
     // 🎨 Render as her: the panel's Render Scene runs in its window, and the painting comes back as the panel's picture
     ok(/Render as/.test(await page.textContent('#comic [data-cm="rend3d"]')), 'there is a 🎨 Render as her button: ' + await page.textContent('#comic [data-cm="rend3d"]'));
     await page.evaluate(pid => { window.__sent = []; const f = document.querySelector(`#cmwins iframe[data-pid="${pid}"]`); f.contentWindow.postMessage = m => __sent.push(m); f.dataset.ready = '1'; }, pid);
