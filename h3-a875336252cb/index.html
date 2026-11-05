@@ -1709,7 +1709,7 @@ function guideGraph(k, file){ const g = {}; let n = 0; const add = (c, i) => { c
   const depth = k.depth ? out([add(k.depth, {image:[gc, 0], resolution:512}), 0], 'depth') : null;
   return {g, pose, depth}; }
 let GUIDE_BUSY = false;
-async function guideFrom(blob, name){ if(GUIDE_BUSY) return toast('Already making a guide: one at a time'); GUIDE_BUSY = true; const note = $('#roughNote'), say = t => { if(note) note.textContent = t; toast(t, 3500); };
+async function guideFrom(blob, name){ if(GUIDE_BUSY){ toast('Already making a guide: one at a time'); return false; } GUIDE_BUSY = true; let ok = false; const note = $('#roughNote'), say = t => { if(note) note.textContent = t; toast(t, 3500); };
   try{ say('🎭 Looking for a PC with DWPose…'); const k = await guidePc(); if(!k) throw new Error('no PC that is on has DWPose (ControlNet Aux) and the video nodes; it is on Render');
     const id = await addMedia(blob instanceof File ? blob : new File([blob], name, {type:'video/mp4'}), 'vid'); S.media[id].from = 'rough';
     say('🎭 Sending the video to ' + pcName(k.url) + '…'); const file = await upload(k.url, id), G = guideGraph(k, file);
@@ -1723,12 +1723,18 @@ async function guideFrom(blob, name){ if(GUIDE_BUSY) return toast('Already makin
       const mid = await addMedia(new File([b], f.filename, {type:'video/mp4'}), 'vid'); Object.assign(S.media[mid], {from:'rough', mode}); return mid; };
     const sk = await grab(G.pose, 'pose'); if(!sk) throw new Error('no skeleton came back'); const dp = await grab(G.depth, 'depth'), f = S.f;
     f.ctlVid = sk; f.ctl2Vid = dp || null; f.ctl = true; f.sm = false; Object.assign(f, followSet(GUIDE_FOLLOW)); f.follow = GUIDE_FOLLOW;
-    const m = S.media[sk]; if(m && m.dur) f.seconds = Math.max(1, Math.round(m.dur * 10) / 10);
-    save(); drawAll(); say('🎭 Guide ready: skeleton' + (dp ? ' + light depth' : '') + ' in the 🦴 Motion guide. Add her and the place as reference pictures, write what happens, and render.');
+    const m = S.media[sk]; if(m && m.dur){ f.seconds = Math.max(1, Math.round(m.dur * 10) / 10); $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); } // (those boxes are only filled at start)
+    save(); drawAll(); ok = true; say('🎭 Guide ready: skeleton' + (dp ? ' + light depth' : '') + ' in the 🦴 Motion guide. Add her and the place as reference pictures, write what happens, and render.');
   }catch(e){ say("🎭 Couldn't make the guide: " + e.message); }
-  finally{ GUIDE_BUSY = false; } }
+  finally{ GUIDE_BUSY = false; } return ok; }
+// the rough take's own words, each at its time (Jordan 2026-11-05: the acting needs them too): its timed prompt as it was, else every piece's
+// prompt as a [a s - b s] beat, so each new piece gets the words for its own stretch, both when it spans two of them
+const GUIDE_LEAD = /This continues straight on from the moment before, in the same shot with the same camera and no cut\.\s*|\s*The action carries on from where it is now and does not start again\./g;
+function guideWords(t){ const p0 = (t.prompt || '').trim(); if(p0 && !/＋/.test(p0) && parseBeats(p0).beats.length) return p0;
+  const ps = (t.pieces || []).filter(p => (p.prompt || '').trim()); if(ps.length < 2) return (ps[0] ? ps[0].prompt : p0).replace(GUIDE_LEAD, '').trim();
+  const r = x => Math.round(x * 10) / 10; return ps.map(p => '[' + r(p.start) + 's - ' + r(p.start + p.deliv / FPS) + 's] ' + p.prompt.replace(GUIDE_LEAD, '').trim()).join('\n'); }
 async function guideFromTake(t){ const f = t.final || (t.pieces.find(p => p.file) || {}).file; if(!f) return;
-  try{ toast('Getting the video…'); const b = await (await fetch(viewUrl(t.pc, f))).blob(); await guideFrom(new File([b], f.filename, {type:'video/mp4'}), f.filename); }
+  try{ toast('Getting the video…'); const b = await (await fetch(viewUrl(t.pc, f))).blob(); if(await guideFrom(new File([b], f.filename, {type:'video/mp4'}), f.filename)){ const w = guideWords(t); if(w){ S.f.prompt = w; S.f.pieceText = {}; $('#prompt').value = w; save(); drawAll(); toast("🎭 The take's words came along, each at its time: change who's in it (her name, the place) and keep the acting.", 5000); } } }
   catch(e){ toast("Couldn't get the take: " + e.message); } }
 // 🦴 a take into Mocap (Jordan 2026-11-05: once the mannequin in-betweens video looks right, SAM turns it into a 3D motion)
 async function toMocap(t){ const f = t.final || (t.pieces.find(p => p.file) || {}).file; if(!f) return;
@@ -1920,6 +1926,6 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-ta
 window.addEventListener('resize', () => { if(S.tab && S.tab!=='render') tabTop(); });
 if(S.tab==='room') S.tab = 'render'; // ✂ Cutting Room taken out for now (Jordan 2026-11-03: not a fully fledged idea yet)
 if(S.tab && S.tab!=='render' && !/take=/.test(location.hash)) setTab(S.tab);
-window.H3 = {toMocap, guideFrom, guideGraph, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

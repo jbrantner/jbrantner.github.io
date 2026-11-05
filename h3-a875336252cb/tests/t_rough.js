@@ -44,5 +44,10 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   const st = await page.evaluate(() => { const f = H3.S.f; return {ctl:f.ctl, a:(H3.S.media[f.ctlVid] || {}).mode, b:(H3.S.media[f.ctl2Vid] || {}).mode, s1:f.ctlStr, s2:f.ctl2Str, e2:f.ctl2End, fol:f.follow}; });
   ok(st.ctl && st.a==='pose' && st.b==='depth' && st.s2 < 0.5 && st.e2 < 0.6 && st.s1 > 0.8 && views.length===2, 'skeleton is the Motion guide, depth the light second guide that lets go early: ' + JSON.stringify(st));
   ok(!(await page.isHidden('#ctlBody')) && /Guide ready/.test(await page.textContent('#roughNote')), 'the Motion guide shows them, with a note');
+  // the rough take's words come along, each at its time
+  const w = await page.evaluate(() => [H3.guideWords({prompt:'She walks in.\n\n＋ She sits.', pieces:[{start:0, deliv:120, prompt:'She walks in.'}, {start:5, deliv:120, prompt:'This continues straight on from the moment before, in the same shot with the same camera and no cut. She sits down. The action carries on from where it is now and does not start again.'}]}),
+    H3.guideWords({prompt:'[0s-3s] She waves. [3s-9s] She runs.', pieces:[]}), H3.guideWords({prompt:'She dances.', pieces:[{start:0, deliv:120, prompt:'She dances.'}]})]);
+  ok(w[0]==='[0s - 5s] She walks in.\n[5s - 10s] She sits down.' && w[1]==='[0s-3s] She waves. [3s-9s] She runs.' && w[2]==='She dances.', "a take's words as timed beats, so each new piece gets its own stretch's words: " + JSON.stringify(w));
+  ok(await page.evaluate(() => { const p = H3.plan(13, 5, H3.parseBeats ? [] : []), txt = '[0s - 4s] A.\n[4s - 8s] B.\n[8s - 13s] C.'; return p.length===3 && /A\./.test(H3.piecePrompt(txt, p, 0)) && /B\./.test(H3.piecePrompt(txt, p, 1)) && /C\./.test(H3.piecePrompt(txt, p, 2)); }), '13 s guide → 3 pieces, each with the words for its stretch');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'all passed'); process.exit(fails ? 1 : 0);
 })();
