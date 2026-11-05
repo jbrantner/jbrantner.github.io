@@ -147,6 +147,16 @@ const DEPS = process.env.RIG_DEPS || '';
       const w = SCENE.qwenWords({tags:'1girl'}, {pitch:0, tags:[], neg:[], say:['seen from eye level'], white:true}, 'a street', '');
       return {done, cx:(x0 + x1) / 2, cy:(y0 + y1) / 2, h:(y1 - y0) / 2, wg:[wg[0], wg[4], wg[8]], w}; });
     ok(v.done && Math.abs(v.cx) < 0.05 && Math.abs(v.cy) < 0.05 && v.h > 0.8 && v.h < 0.9 && v.wg[0]===255 && v.wg[1]===215 && v.wg[2]===128 && /plain white/.test(v.w) && !/a street/.test(v.w), '🎯 her in the middle filling ~85% of the height, the guide on white, Qwen keeps it white: ' + JSON.stringify(Object.assign({}, v, {w:v.w.slice(-260)}))); }
+  // 🚫 Leave out + one of her per panel + the words are only the story (Jordan 2026-11-05)
+  { const v = await page.evaluate(NEGT => { const sc = SCENE.sc, keep = sc.off; sc.off = 'boots, shoes';
+      const g = {1:{class_type:'CLIPTextEncode', inputs:{text:'ellenx, 1girl, black boots, short hair, barefoot'}}, 2:{class_type:'CLIPTextEncode', inputs:{text:NEGT}}, 3:{class_type:'TextEncodeQwenImageEditPlus', inputs:{prompt:'Turn her.'}}, 4:{class_type:'TextEncodeQwenImageEditPlus', inputs:{prompt:''}}};
+      SCENE.leaveOut(g); const w = SCENE.qwenWords({tags:'1girl, short hair, knee boots'}, {pitch:0, tags:[], neg:[], say:['seen from eye level']}, '', 'She takes her shoes off.');
+      if(keep===undefined) delete sc.off; else sc.off = keep;
+      const objs = sc.objs, a = {id:'tw1', kind:'char', ref:'Character Library/Ellen', sam:{file:'x.glb'}}, b = {id:'tw2', kind:'char', ref:'Character Library/Ellen'}; objs.push(a, b); const n = SCENE.twins(); const hid = !!b.hide && !a.hide;
+      sc.objs = objs.filter(o => o!==a && o!==b);
+      return {g, w, n, hid}; }, 'worst quality, low quality, bad quality, lowres, displeasing');
+    ok(v.g[1].inputs.text==='ellenx, 1girl, short hair, barefoot' && /\(boots:1\.4\), \(shoes:1\.4\)$/.test(v.g[2].inputs.text) && /She has no boots, no shoes/.test(v.g[3].inputs.prompt) && v.g[4].inputs.prompt==='' && !/knee boots/.test(v.w) && /only for her expression/.test(v.w) && /pose always wins/.test(v.w) && v.n && v.hid, '🚫 leave-out words cut from her tags, strong in the negative, told to Qwen; the panel words are only the story; a second copy of her with no SAM body is put away: ' + JSON.stringify(v));
+  }
   ok(!logs.length, 'no page errors: ' + logs.join(' | '));
   await browser.close();
   console.log(fail.length ? fail.length + ' FAILED' : 'all passed'); process.exit(fail.length ? 1 : 0);
