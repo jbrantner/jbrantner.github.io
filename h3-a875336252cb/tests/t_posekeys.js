@@ -130,6 +130,33 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
   const prompt2 = Object.values(g2).map(n => n.inputs && n.inputs.prompt).find(Boolean) || ''; console.log(prompt2);
   ok(/At 00:02\.000 the person is in the pose of the grey mannequin in <Picture 2>/.test(prompt2), 'plain prompt too');
   if(OUT){ await page.evaluate(() => { H3.S.f.h3 = true; H3.drawAll(); }); await page.waitForTimeout(300); await page.screenshot({path:path.join(OUT, 'render_tab.png'), fullPage:true}); }
+  // ---- ✨ In-betweens: a third key, then the button; a pose on every frame, smooth through the keys, full guides out
+  { await page.click('#tabs [data-tab="poses"]');
+    await fr.evaluate(() => { PK.S.T = 4; PK.drawAll(); }); await fr.click('#lib [data-pose="pzA"]'); await fr.waitForFunction(() => PK.S.keys.length===3, null, {timeout:30000});
+    await fr.evaluate(() => { PK.S.keys.find(k => k.t===2).yaw = 0; PK.S.keys.find(k => k.t===4).x = 1.5; PK.S.ibFol = 0; PK.drawAll(); });
+    await fr.click('#ibBtn');
+    const ib = await fr.evaluate(() => { const S = PK.S, bn = PK.BODY.bn, q = n => bn[n].quaternion.toArray(), J = () => PK.opJoints(bn).pts.map(p => p.toArray());
+      const at = (t, m) => { PK.poseAt(t, m, true); return {q:q('bone_040'), j:J()}; }, d = (a, b) => Math.hypot(...a.map((v, i) => v - b[i])), dj = (a, b) => a.reduce((s, p, i) => s + d(p, b[i]), 0) / a.length;
+      const k2 = at(2, 'step'), i2 = at(2, 'ib'), i1 = at(1, 'ib'), e1 = at(1, 'ease');
+      S.ibFlow = 0; const v0 = dj(at(2 - 1 / 24, 'ib').j, at(2 + 1 / 24, 'ib').j); S.ibFlow = 1; const v1 = dj(at(2 - 1 / 24, 'ib').j, at(2 + 1 / 24, 'ib').j); S.ibFlow = 0.6;
+      return {on:S.ib, mode:S.mode, clip:S.clip, pics:S.pics, n:PK.ibCount(), ticks:document.querySelectorAll('#marks i.ib').length, label:document.querySelector('#ibBtn').textContent,
+        atKey:d(k2.q, i2.q), mid:dj(i1.j, at(0, 'step').j), mid2:dj(i1.j, k2.j), ease:dj(i1.j, e1.j), v0, v1}; });
+    console.log(JSON.stringify(ib));
+    ok(ib.on && ib.mode==='ib' && ib.clip==='ib' && !ib.pics && ib.n===97 - 3 && ib.ticks > 20 && /94 in-betweens/.test(ib.label), '✨ Create in-betweens: ' + ib.n + ' in-between frames, ticks on the timeline, playback and guide switch to them, pose pictures off');
+    ok(ib.atKey < 1e-3, 'an in-between run passes exactly through each key (' + ib.atKey.toExponential(1) + ')');
+    ok(ib.mid > 0.02 && ib.mid2 > 0.02, 'halfway is a new pose, neither key (' + ib.mid.toFixed(3) + ', ' + ib.mid2.toFixed(3) + ' m)');
+    ok(ib.v1 > ib.v0 * 1.3, 'Flow: at full flow she keeps moving through the middle key instead of stopping (' + ib.v0.toFixed(4) + ' to ' + ib.v1.toFixed(4) + ' m per frame)');
+    const fo = await fr.evaluate(() => { const bn = PK.BODY.bn, V = bn.bone_041.position.constructor, h = () => bn.bone_041.getWorldPosition(new V()).sub(bn.bone_001.getWorldPosition(new V())).toArray(), hq = () => bn.bone_001.quaternion.toArray();
+      PK.S.ibFol = 0; PK.poseAt(1, 'ib', true); const a = h(), ha = hq(); PK.S.ibFol = 1; PK.poseAt(1, 'ib', true); const b = h(), hb = hq(); PK.S.ibFol = 0.3; return {hand:Math.hypot(...a.map((v, i) => v - b[i])), hips:Math.hypot(...ha.map((v, i) => v - hb[i]))}; });
+    ok(fo.hand > 0.01 && fo.hips < 1e-6, 'Follow-through: the hand trails behind (moves ' + fo.hand.toFixed(3) + ' m against the hips), the hips themselves do not (' + fo.hips.toExponential(1) + ')');
+    const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
+    await fr.click('#send'); await page.waitForFunction(n0 => Object.keys(H3.S.media).length >= n0 + 2 && !document.querySelector('#poseTab iframe').contentWindow.document.querySelector('#send').disabled, n0, {timeout:90000});
+    const g3 = await page.evaluate(() => { const f = H3.S.f, m = H3.S.media; return {c1:m[f.ctlVid].name, c2:m[f.ctl2Vid] && m[f.ctl2Vid].name, s:f.ctlStr, e:f.ctlEnd, s2:f.ctl2Str, e2:f.ctl2End, pics:f.imgs.filter(r => r.pose).length}; });
+    const b = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[0].blob); }); }); const tmp = path.join(require('os').tmpdir(), 'ib.webm'); fs.writeFileSync(tmp, Buffer.from(b.split(',')[1], 'base64'));
+    const all = require('child_process').execSync(`ffmpeg -loglevel error -i ${tmp} -vf signalstats,metadata=print:key=lavfi.signalstats.YMAX:file=- -f null - 2>/dev/null`).toString().match(/YMAX=\d+/g), lit = all.filter(x => +x.slice(5) > 40).length;
+    if(OUT) fs.writeFileSync(path.join(OUT, 'inbetweens.webm'), fs.readFileSync(tmp));
+    ok(/inbetweens/.test(g3.c1) && /inbetweendepth/.test(g3.c2) && g3.s===1 && g3.e===0.8 && g3.s2===0.5 && g3.pics===0, '🎬 sends the in-between skeleton + depth for the whole clip at 1.0 / 0.5, no pose pictures: ' + JSON.stringify(g3));
+    ok(lit===all.length && lit >= 119, 'the skeleton is on every frame (' + lit + ' of ' + all.length + ' decoded)'); }
   ok(glbGets===2, 'each 3D body was fetched once (' + glbGets + ')');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
