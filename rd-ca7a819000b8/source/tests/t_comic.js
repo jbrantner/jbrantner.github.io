@@ -225,6 +225,16 @@ const SCRIPT = 'page 1:  Panel 1: character 1 walks down a street. Panel 2: she 
       '🎬 the panel video: MiniMax H3 reference-to-video in the panel\'s shape, her front + side views, her name in the words, one person: ' + JSON.stringify({w:rv && rv.inputs.width, h:rv && rv.inputs.height, refs, err:g && check(g), p:rv && rv.inputs.prompt})); }
   await page.waitForFunction(() => cmPage().panels[0].takes.length && !cmBusy(cmPage().panels[0]), null, {timeout:20000});
   ok(await page.evaluate(() => { const p = cmPage().panels[0], was = [p.is3d, p.sc]; p.is3d = true; p.sc = p.sc || 'scX'; const a = !cm3dOn(p) && cmShown(p).clip; p.show = 'still'; const b = cm3dOn(p); p.show = 'clip'; p.is3d = was[0]; p.sc = was[1]; return a && b; }), 'a 3D panel showing its clip hides its 3D window (it covered the video), and shows it again on a picture');
+  // ⇠ ⇢ move a panel, ➕ a panel after it (Jordan 2026-11-05): pictures, takes and rows kept
+  { const before = await page.evaluate(() => ({ids:cmPage().panels.map(p => p.id), rows:cmPage().rows.join(), n0:(cmPage().panels[0].stills || []).length, t0:cmPage().panels[0].takes.length}));
+    await page.click('#cmPage [data-cpi="0"]').catch(() => {}); await page.evaluate(() => { CM().sel = 0; drawComic(); });
+    await page.click('#comic [data-cm="plater"]');
+    const a = await page.evaluate(() => ({ids:cmPage().panels.map(p => p.id), rows:cmPage().rows.join(), sel:CM().sel, n:(cmPage().panels[1].stills || []).length, t:cmPage().panels[1].takes.length}));
+    ok(a.ids[1]===before.ids[0] && a.ids[0]===before.ids[1] && a.rows===before.rows && a.sel===1 && a.n===before.n0 && a.t===before.t0, 'Move later ⇢ swaps panel 1 and 2, same layout, its pictures and clip go with it: ' + JSON.stringify(a));
+    await page.click('#comic [data-cm="pearlier"]'); ok(await page.evaluate(ids => cmPage().panels.map(p => p.id).join()===ids.join() && CM().sel===0, before.ids), '⇠ Move earlier puts it back');
+    await page.click('#comic [data-cm="pafter"]'); const c = await page.evaluate(() => ({n:cmPage().panels.length, sel:CM().sel, empty:!cmPage().panels[1].text, rows:cmPage().rows.reduce((x, y) => x + y, 0)}));
+    ok(c.n===before.ids.length + 1 && c.sel===1 && c.empty && c.rows===c.n, '➕ Panel after adds an empty panel 2 and lays the page out again: ' + JSON.stringify(c));
+    await page.evaluate(() => { cmPage().panels.splice(1, 1); cmRelayout(cmPage()); CM().sel = 0; save(); drawComic(); }); }
   // 🎞 Video model + Turbo (Jordan 2026-11-05)
   { const opts = await page.$$eval('#comic [data-cmvm] option', o => o.map(x => x.value + '=' + x.textContent));
     ok(opts.length >= 2 && opts.some(o => /^dasiwaminimaxh3_dasiwahybridv2=DaSiWa Hybrid V2/.test(o)) && /Turbo/.test(await page.textContent('#comic [data-cmvt="1"]')), 'Video model picker (H3 families, Turbo and Regular one entry) + Turbo switch: ' + opts.join(' | '));
