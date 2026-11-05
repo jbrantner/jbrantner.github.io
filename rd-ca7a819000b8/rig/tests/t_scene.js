@@ -142,6 +142,9 @@ const DEPS = process.env.RIG_DEPS || '';
     ok(bd.stand.body && Math.abs(bd.stand.lo) < 0.03 && bd.stand.hi > 1.5 && bd.stand.noseZ > 0.05 && bd.stand.eyesSide < 0, '🧍 the mannequin is the base body, standing on the floor, face points the right way: ' + JSON.stringify(bd.stand));
     ok(bd.wave.wristR > bd.wave.nose && Math.abs(bd.wave.lo) < 0.03, '👋 Waving puts her right hand above her head, feet still on the floor: ' + JSON.stringify(bd.wave));
     ok(bd.sit.hip < bd.stand.hip - 0.2 && Math.abs(bd.sit.lo) < 0.03, '🪑 Sitting drops her hips with her feet still on the floor: ' + JSON.stringify(bd.sit));
+    { const hw = await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); ob.pose = 'stand'; const o = SCENE.objs.get(ob.id); SCENE.poseFor('cam'); o.g.updateMatrixWorld(true);
+        const T = SCENE.THREE, cam = new T.PerspectiveCamera(40, 1, 0.05, 200); cam.position.set(0, 1, 5); cam.lookAt(0, 1, 0); cam.updateMatrixWorld(true); const A = SCENE.rsAngle(cam, o); ob.pose = 'stand'; return {tags:A.tags, say:A.say}; });
+      ok(!hw.tags.some(t => /looking (down|up)|one leg|kneel|squat/.test(t)) && hw.say.some(t => /both feet/.test(t)), '🗣 her standing rig, level head, is told as standing on both feet with no head tilt: ' + JSON.stringify(hw)); }
     if(process.env.SHOT){ await page.evaluate(() => { const ob = SCENE.sc.objs.find(o => o.ref==='Character Library/Ellie'); SCENE.sc.objs.forEach(o => { o.hide = o!==ob; }); ob.pose = 'hip'; SCENE.ui.sel = ob.id; SCENE.drawSel(); SCENE.setView('cam'); });
       await page.waitForTimeout(500); await page.screenshot({path:path.join(process.env.SHOT, 'body-scene.png'), fullPage:true});
     }
