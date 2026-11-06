@@ -301,7 +301,8 @@ function undo(){ if(!UNDO.length){ toast('Nothing to undo'); return; } const kee
 let saveT = 0; const save = () => { undoNote(); saveRaw(); }; const saveRaw = () => { clearTimeout(saveT); saveT = setTimeout(() => { try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("The phone's storage is full"); } }, 150); };
 // H3 Deck's state, read only (it may be open in another tab and owns it)
 let DK = null, DKraw = '';
-function local(){ let raw = ''; try{ raw = localStorage.getItem(DECK) || ''; }catch(e){} if(raw!==DKraw || !DK){ DKraw = raw; try{ DK = JSON.parse(raw || '{}') || {}; }catch(e){ DK = {}; } DK.takes = DK.takes || []; } return DK; }
+function local(){ try{ if(window.top!==window && window.parent.H3 && window.parent.H3.S && window.parent.H3.S.takes) return window.parent.H3.S; }catch(e){}
+  let raw = ''; try{ raw = localStorage.getItem(DECK) || ''; }catch(e){} if(raw!==DKraw || !DK){ DKraw = raw; try{ DK = JSON.parse(raw || '{}') || {}; }catch(e){ DK = {}; } DK.takes = DK.takes || []; } return DK; }
 // H3 Deck also keeps a copy of its takes on each PC (ComfyUI user files): on iPhone, home-screen apps don't share storage,
 // so the newest of this phone's copy and the PCs' copies is the one shown
 let RM = null; // newest copy read from a PC: {t, pcs, takes}
@@ -547,7 +548,8 @@ function closeGap(f, g){ const tr = f.tracks[g.k]; if(!tr) return; const d = g.b
 // the clip edge (start or end of any clip, or 0) within 10 px of a time, or null
 function edgeNear(f, t){ const thr = 10 / f.pps; let best = null, d = thr; for(const c of f.tracks.flatMap(tr => tr.clips)) for(const x of [c.at, c.at + len(c)]) if(Math.abs(x - t) < d){ d = Math.abs(x - t); best = x; } return best; } // the scroll position we set ourselves (its scroll event isn't a swipe)
 function scrollTo(f){ const w = $('#tlw'); if(!w) return; const x = Math.round(PH * f.pps); if(Math.abs(w.scrollLeft - x) < 1) return; IGN = x; w.scrollLeft = x; }
-function setPH(f, t, show, fromScroll){ PH = Math.max(0, t); if(!fromScroll) scrollTo(f); const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); if(show){ showFrame(f); pushWords(f); } }
+let WORDT = 0;
+function setPH(f, t, show, fromScroll){ PH = Math.max(0, t); if(!fromScroll) scrollTo(f); const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); if(show){ showFrame(f); clearTimeout(WORDT); WORDT = setTimeout(() => pushWords(f), fromScroll ? 250 : 0); } }
 function wireFilm(f){
   drawTL(f); if(f.guide && f.guide.state==='export' && !guideT) guidePoll(f);
   const tl = $('#tl'), wrap = $('#tlw');
@@ -580,10 +582,11 @@ function wireFilm(f){
     const k = +row.dataset.k, t = (ev.clientX - row.getBoundingClientRect().left) / f.pps, g = gapAt(f, k, t);
     GAP = g; if(g){ SEL = null; } drawTL(f); refreshTools(f); const n = $('#selNote'); if(n) n.innerHTML = g ? 'Empty space on track ' + (k + 1) + ': ' + fmt(g.a) + ' to ' + fmt(g.b) + '. 🗑 closes it: everything after it on the track moves ' + fmt(g.b - g.a) + ' earlier.' : ''; });
   tl.addEventListener('click', ev => { const ru = ev.target.closest('#ruler'); if(!ru) return; stopPlay(); setPH(f, Math.max(0, (ev.clientX - ru.getBoundingClientRect().left) / f.pps), true); });
-  wrap.addEventListener('scroll', () => { if(IGN >= 0 && Math.abs(wrap.scrollLeft - IGN) < 2){ IGN = -1; return; } IGN = -1;
-    if(PLAY) stopPlay(); let t = wrap.scrollLeft / f.pps; const e = edgeNear(f, t); if(e!=null) t = e; setPH(f, t, true, true);
+  let SCR = 0; wrap.addEventListener('scroll', () => { if(IGN >= 0 && Math.abs(wrap.scrollLeft - IGN) < 2){ IGN = -1; return; } IGN = -1;
+    if(PLAY) stopPlay(); if(SCR) return; SCR = requestAnimationFrame(() => { SCR = 0; scrubAt(); }); });
+  const scrubAt = () => { let t = wrap.scrollLeft / f.pps; const e = edgeNear(f, t); if(e!=null) t = e; setPH(f, t, true, true);
     // when the swipe stops near a clip's edge, the timeline settles exactly on it (Jordan 2026-11-06: snap like a video editor)
-    clearTimeout(SNAPT); if(e!=null) SNAPT = setTimeout(() => { if(!PLAY && Math.abs(PH - e) < 1e-6) scrollTo(f); }, 160); });
+    clearTimeout(SNAPT); if(e!=null) SNAPT = setTimeout(() => { if(!PLAY && Math.abs(PH - e) < 1e-6) scrollTo(f); }, 160); };
   scrollTo(f);
   showFrame(f);
 }
@@ -596,7 +599,9 @@ function refreshTools(f){ const sel = SEL && clipOf(f, SEL); $$('.tools [data-ac
 let PLAY = null; // {f, t0, ph0, raf}
 const srcOf = c => { const t = takeOf(c.take), fl = fileOf(t); return t && fl ? viewUrl(t.pc, fl) : ''; };
 function vids(){ return [$('#vA'), $('#vB')].filter(Boolean); }
-function cue(v, c, t){ const src = srcOf(c); if(!src) return false; if(v.dataset.src!==src){ v.dataset.src = src; v.src = src; } const want = c.in + (t - c.at); if(Math.abs((v.currentTime || 0) - want) > 0.15){ try{ v.currentTime = want; }catch(e){} } v.dataset.c = c.id; return true; }
+function cue(v, c, t){ const src = srcOf(c); if(!src) return false; if(v.dataset.src!==src){ v.dataset.src = src; v.src = src; v._want = null; } const want = c.in + (t - c.at); v.dataset.c = c.id;
+  if(v.seeking){ v._want = want; if(!v._onsk){ v._onsk = () => { const w = v._want; v._want = null; if(w!=null && Math.abs(v.currentTime - w) > 0.04){ try{ v.currentTime = w; }catch(e){} } }; v.addEventListener('seeked', v._onsk); } return true; }
+  if(Math.abs((v.currentTime || 0) - want) > 0.04){ try{ v.currentTime = want; }catch(e){} } return true; }
 // scrubbing uses both players too (Jordan 2026-11-06: black flash when scrubbing across clips): the player that already has the
 // clip's video is used, otherwise the hidden one loads it while the last picture stays on screen until its frame is ready
 function showFrame(f){ const c = activeAt(f, PH), [a, b] = vids(); if(!a) return;

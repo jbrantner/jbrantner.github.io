@@ -65,3 +65,5 @@ Test: `CLIP=<a ~5 s video with sound> node tests/t_carry.js`.
 Drag snapping: both the start and the end of a dragged clip snap to other clips' edges, the playhead and 0 (18 px on touch), with a dashed line at the snap.
 
 Empty space (2026-11-06): tap the gap between clips on a track (or before the first clip); it is outlined, and its 🗑 button (or the 🗑 tool) closes it, moving every later clip on that track earlier together. Other tracks stay put; ↶ Undo brings it back.
+
+Speed (2026-11-06): inside H3 Deck, Films reads takes straight from H3 Deck (it used to re-read and parse the multi-MB h3deck save several times per scroll event); scroll scrubbing runs once per frame; seeks are coalesced (only the newest wanted time is applied when a seek lands); the Shot box gets the words when a scrub rests (250 ms); H3 Deck takes-list videos only load when on screen.
