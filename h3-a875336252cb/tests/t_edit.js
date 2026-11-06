@@ -123,7 +123,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => FILM.draw()); ok(await fr.evaluate(() => [...document.querySelectorAll('.clip .du')].filter(e => /✨ failed/.test(e.textContent)).length===2), '✨ a pass that fails says ✨ failed on its clip (the fake PC has no Open-H3 LoRA)');
   ok(await fr.evaluate(() => { FILM.takes().filter(x => x.redo && x.redo.qp).forEach(t => { t.state = 'working'; t.upStage = 'run'; t.upErr = ''; }); FILM.draw(); return [...document.querySelectorAll('.clip .du')].filter(e => /✨ working/.test(e.textContent)).length===2; }), '✨ each clip says ✨ working while its pass renders');
   await page.evaluate(() => { H3.S.takes.filter(x => x.redo && x.redo.qp).forEach((t, i) => { t.upStage = 'done'; t.state = 'done'; t.final = {filename:'q' + i + '.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}; }); H3.saveNow(); });
-  await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
+  await fr.evaluate(() => { FILM.liveFilm(); });
   const QW = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => { const t = FILM.takeOf(c.take); return {qp:!!(t && t.redo && t.redo.qp), in:c.in, out:c.out, w:FILM.wordsAt(t, 1)}; }));
   ok(QW.every(x => x.qp && x.w==='she walks to the window') && QW[0].in===0.5 && QW[1].out===5, '✨ both clips now play their quality-pass take, same timing: ' + JSON.stringify(QW));
   await br.close(); srv.close();
