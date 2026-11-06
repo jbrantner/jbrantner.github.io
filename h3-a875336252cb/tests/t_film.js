@@ -44,7 +44,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(f.tracks.length===2 && cl.length===2 && cl[0].at===0 && Math.abs(cl[1].at - 5) < 0.01 && Math.abs(cl[1].out - 221 / 24) < 0.01, '＋ Add to a film makes a film and puts the clips one after another on track 1 (' + JSON.stringify(cl.map(c => [c.at, c.out])) + ')');
   await page.evaluate(id => FILM.go({v:'film', film:id}), f.id); await page.waitForTimeout(300);
   ok(await page.$$eval('.clip', c => c.length)===2, 'the timeline shows the 2 clips');
-  // drag clip 2 down onto track 2 and left by 2 s (24 px a second)
+  // drag clip 2 down onto track 2 and left by 2 s (24 px a second); first slide the timeline so it's under the needle (the needle stays put)
+  await page.evaluate(() => { FILM.PH = 5; FILM.draw(); }); await page.waitForTimeout(200);
   const b = await page.$eval('.clip[data-c="' + cl[1].id + '"]', e => { const r = e.getBoundingClientRect(); return {x:r.x + r.width / 2, y:r.y + r.height / 2}; });
   await page.mouse.move(b.x, b.y); await page.mouse.down(); await page.mouse.move(b.x - 24, b.y + 30, {steps:5}); await page.mouse.move(b.x - 48, b.y + 58, {steps:5}); await page.mouse.up(); await page.waitForTimeout(300);
   const f2 = await page.evaluate(() => FILM.S.films[0]);

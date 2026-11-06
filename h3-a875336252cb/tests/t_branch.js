@@ -102,7 +102,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
   ok(!(await page.$('[data-tab="room"]')), 'no ✂ Cutting Room tab');
   await page.click('[data-tab="films"]'); await page.waitForTimeout(2500);
   const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
-  ok(fr && await fr.evaluate(() => FILM.S.nav.v==='home' && document.querySelector('header').hidden) && await page.$eval('#renderTab', e => e.hidden), '🎞 Films tab shows the films inside H3 Deck');
+  ok(fr && await fr.evaluate(() => FILM.S.nav.v==='home' && document.querySelector('header').hidden) && await page.evaluate(() => !document.querySelector('#renderTab').hidden && !document.querySelector('#filmTab').hidden && !!(document.querySelector('#filmTab').compareDocumentPosition(document.querySelector('#renderTab')) & 4)), '🎞 Films tab shows the films inside H3 Deck, with the Render form under them');
   const tid = await page.evaluate(() => H3.S.takes.find(t => t.state==='done').id);
   await fr.evaluate(id => { const t = FILM.takeOf(id); window.parent.H3Tab('render', id); }, tid); await page.waitForTimeout(800);
   ok(!(await page.$eval('#renderTab', e => e.hidden)) && (await page.$$eval('.take.hl', e => e.map(x => x.dataset.take))).includes(tid), '✏️ from Films switches to Render on that take');

@@ -38,6 +38,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
   const b64 = fs.readFileSync(CLIP).toString('base64');
   await page.evaluate(async b => { const raw = Uint8Array.from(atob(b), c => c.charCodeAt(0)); await H3.guideFrom(new File([raw], 'rough.webm', {type:'video/webm'}), 'rough.webm'); }, b64);
   const g = sent[0] || {}, n = Object.values(g), dw = n.find(x => x.class_type==='DWPreprocessor'), da = n.find(x => x.class_type==='DepthAnythingV2Preprocessor');
+  { const sc = Object.values(sent[0] || {}).filter(x => x.class_type==='ImageScale'); ok(sc.length >= 1 && sc.every(x => x.inputs.width % 16===0 && x.inputs.height % 16===0 && Math.max(x.inputs.width, x.inputs.height)===832), 'the skeleton and depth are scaled to an even size before saving (h264 refuses odd sizes): ' + JSON.stringify(sc.map(x => [x.inputs.width, x.inputs.height]))); }
   ok(sent.length===1 && uploads.length===1 && dw && da && n.filter(x => x.class_type==='SaveVideo').length===2 && dw.inputs.detect_hand==='enable' && dw.inputs.bbox_detector==='yolox_l.onnx' && da.inputs.ckpt_name==='depth_anything_v2_vitl.pth'
     && n.find(x => x.class_type==='LoadVideo').inputs.file==='h3deck/h3deck_rough.webm' && JSON.stringify(n.find(x => x.class_type==='CreateVideo').inputs.fps)===JSON.stringify([Object.keys(g).find(k => g[k].class_type==='GetVideoComponents'), 2]),
     'one job on Render: the video uploaded, DWPose + Depth Anything on every frame, two clips saved at the video\'s own fps: ' + JSON.stringify(n.map(x => x.class_type)));
