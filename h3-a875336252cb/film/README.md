@@ -63,3 +63,5 @@ Test: `CLIP=<a ~5 s video with sound> node tests/t_carry.js`.
 🦴 Guidance track in the timeline tools. Make one track the guide: the PC writes that track as one video on film time (helper h3export, preview size), DWPose + depth read every frame (H3 Deck guideMake), and the skeleton/depth are kept per film (H3 Deck S.guides). Tracks above it follow it by default (🦴 on their label; toggle in the sheet). ➕ Carry on, ↻ Redo, ⏪ Lead in and ＋ More takes on a following track get the guide as the Motion guide from the right film time (ctl.off). ▶ Render over the guide = one take (1-3) per guide clip, same time and length, its words, the form's references/👥 subjects/model/LoRAs, placed on the chosen track (or a new top track). Tests: tests/t_guide.js.
 
 Drag snapping: both the start and the end of a dragged clip snap to other clips' edges, the playhead and 0 (18 px on touch), with a dashed line at the snap.
+
+Empty space (2026-11-06): tap the gap between clips on a track (or before the first clip); it is outlined, and its 🗑 button (or the 🗑 tool) closes it, moving every later clip on that track earlier together. Other tracks stay put; ↶ Undo brings it back.

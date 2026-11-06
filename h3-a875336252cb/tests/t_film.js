@@ -117,6 +117,19 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.evaluate(() => { FILM.S.rev.tB2 = 'keep'; FILM.go({v:'review'}); }); await page.waitForTimeout(200);
   ok(/✓ Kept/.test(await page.textContent('#view')) && !!(await page.$('.rv[data-take="tB2"] [data-act="next"]')), 'kept takes are listed under ✓ Kept with ➕ Next part options');
   await page.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.evaluate(id => { FILM.SEL = id; FILM.draw(); }, await page.evaluate(() => FILM.S.films[0].tracks[1].clips[1].id)); await page.waitForTimeout(200);
+  // 🗑 the empty space between clips: tap it, then close it; the clips after it on that track move along together (Jordan 2026-11-06)
+  const g0 = await page.evaluate(() => { const f = FILM.S.films[0], cs = f.tracks[1].clips.slice().sort((x, y) => x.at - y.at); cs[0].at = 0; const e = cs[0].out - cs[0].in; cs[1].at = e + 3; for(let i = 2; i < cs.length; i++) cs[i].at = cs[i - 1].at + cs[i - 1].out - cs[i - 1].in + 1;
+    FILM.SEL = null; FILM.PH = 0; FILM.save(); FILM.draw(); return {e, ats:cs.map(c => c.at), ids:cs.map(c => c.id), pps:f.pps, ot:f.tracks[0].clips.map(c => c.at)}; });
+  const row = await page.$eval('.trk[data-k="1"]', el => { const r = el.getBoundingClientRect(); return {x:r.x, y:r.y + r.height / 2}; });
+  await page.mouse.click(row.x + (g0.e + 1.5) * g0.pps, row.y); await page.waitForTimeout(200);
+  const gs = await page.evaluate(() => ({g:FILM.getGap(), box:!!document.querySelector('.gapsel'), del:!document.querySelector('[data-act="delClip"]').disabled}));
+  ok(gs.g && Math.abs(gs.g.a - g0.e) < 1e-6 && Math.abs(gs.g.b - g0.ats[1]) < 1e-6 && gs.box && gs.del, 'tapping the empty space between two clips selects exactly that gap (' + JSON.stringify(gs.g) + ')');
+  await page.click('.gapsel [data-act="closeGap"]'); await page.waitForTimeout(200);
+  const g1 = await page.evaluate(ids => { const f = FILM.S.films[0], all = f.tracks[1].clips; return {ats:ids.map(id => all.find(c => c.id===id).at), ot:f.tracks[0].clips.map(c => c.at), gap:FILM.getGap()}; }, g0.ids);
+  ok(Math.abs(g1.ats[1] - g0.e) < 1e-6 && g1.ats.slice(2).every((x, i) => Math.abs(x - (g0.ats[i + 2] - 3)) < 1e-6) && g1.ats[0]===0 && JSON.stringify(g1.ot)===JSON.stringify(g0.ot) && !g1.gap, '🗑 closes it: the next clip butts up and everything after moves 3 s earlier; other tracks stay put');
+  await page.click('#undoBtn'); await page.waitForTimeout(200);
+  { const ua = await page.evaluate(id => FILM.S.films[0].tracks[1].clips.find(c => c.id===id).at, g0.ids[1]); ok(Math.abs(ua - g0.ats[1]) < 1e-6, '↶ undo brings the gap back (' + ua + ')'); }
+  await page.evaluate(id => { FILM.SEL = id; FILM.draw(); }, await page.evaluate(() => FILM.S.films[0].tracks[1].clips[1].id)); await page.waitForTimeout(200);
   // ✏️ Edit in H3 Deck opens that take there
   await page.click('[data-act="editDeck"]'); await page.waitForURL(/#take=tB2/); await page.waitForTimeout(800);
   ok(/#take=tB2$/.test(page.url()) && await page.$$eval('.take.hl', e => e.length)===1, '✏️ Edit in H3 Deck opens H3 Deck on that take');
