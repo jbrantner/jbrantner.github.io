@@ -175,7 +175,7 @@ body.ftab .go{display:none}
     <a class="icon" href="touchup/" aria-label="Touch up a video" title="👁 Touch up: a picture into the eyes, lipstick, any part" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none">👁</a>
     <button class="icon" id="setBtn" aria-label="Settings">⚙</button>
   </header>
-  <nav class="tabs" id="tabs"><button data-tab="render" class="on">🎬 Render</button><button data-tab="films">🎞 Films</button><button data-tab="poses">🧍 Poses</button></nav>
+  <nav class="tabs" id="tabs"><button data-tab="films" class="on">🎞 Films</button><button data-tab="poses">🧍 Poses</button></nav>
   <div id="filmTab" hidden></div>
   <div id="renderTab">
   <div class="note" id="filmFormNote" hidden></div>
@@ -1191,7 +1191,11 @@ async function render(){
   }catch(e){ toast('Not sent: ' + e.message, 6000);
     // the take stays on the list as stopped, with why and ↻ Try again, not stuck on "Sending"
     if(cur){ const p = cur.pieces.find(x => x.state!=='queued' && x.state!=='done') || cur.pieces[0]; p.state = 'failed'; p.err = 'not sent: ' + e.message; cur.state = 'failed'; } }
-  btn.disabled = false; drawGo(); save(); drawTakes(); if(sent) toast(sent > 1 ? sent + ' takes sent' : 'Sent to ' + pcName(S.takes[0].pc));
+  btn.disabled = false; drawGo(); save(); drawTakes();
+  if(sent){ const mine = S.takes.slice(0, sent), used = [...new Set(mine.map(t => t.pc))];
+    // Jordan 2026-11-06: say why a PC was left out when several takes all went to one (a PC runs one render at a time; the rest wait in its line)
+    const left = sent > 1 && used.length===1 && S.f.where==='both' ? S.pcs.filter(p => p.url!==used[0]).map(p => pcName(p.url) + ' ' + (canRun(p.url, mine[0]) || 'was busier')).join(' · ') : '';
+    toast(sent > 1 ? sent + ' takes sent to ' + used.map(pcName).join(' and ') + (left ? '. Not ' + left + ', so they take turns on ' + pcName(used[0]) : '') : 'Sent to ' + pcName(S.takes[0].pc), left ? 8000 : 3200); }
 }
 async function sendPieces(t, from){
   const url = t.pc, oi = pcOf(url).oi, names = {};
@@ -1385,7 +1389,7 @@ function extendSheet(t, n0){ n0 = n0 || 1;
     if(n > 1){ // Jordan 2026-11-03: options of the next part, each a new take that starts with this whole clip (its pieces are borrowed)
       const base = JSON.parse(JSON.stringify(t)), at = t.pieces.length; base.pieces = base.pieces.concat(add); base.prompt = t.prompt + '\n\n＋ ' + text;
       closeSheet(); const sent = await makeBranches(base, at, n); save(); drawTakes();
-      if(sent){ toast(sent + ' options of what comes next sent to ' + pcName(t.pc)); window.scrollTo({top:$('#takes').offsetTop - 60, behavior:'smooth'}); }
+      if(sent){ toast(sent + ' options of what comes next sent to ' + pcName(t.pc)); window.scrollTo({top:$('#takes').getBoundingClientRect().top + window.scrollY - 60, behavior:'smooth'}); }
       return; }
     const from = t.pieces.length; t.pieces = t.pieces.concat(add); t.prompt = t.prompt + '\n\n＋ ' + text; t.state = 'working'; closeSheet(); drawTakes();
     try{ await sendPieces(t, from); toast('Adding ' + fmtS(secs)); }catch(e){ t.pieces = t.pieces.slice(0, from); t.state = 'done'; toast('Not sent: ' + e.message, 6000); }
@@ -1430,7 +1434,7 @@ function useAgain(t, quiet){
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}}))); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   if(!t.sm){ f.h3 = !!t.h3; if(t.h3) Object.assign(f, {h3Style:t.h3.style || '', h3Sound:t.h3.sound || '', h3Music:t.h3.music || ''}); }
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); // these boxes are only filled at start, so set them here too
-  save(); drawAll(); if(quiet) return; window.scrollTo({top:0, behavior:'smooth'}); toast('Its settings are back in the form');
+  save(); drawAll(); if(quiet) return; toForm(); toast('Its settings are back in the form');
 }
 
 // ---------- drawing ----------
@@ -1945,14 +1949,16 @@ document.addEventListener('visibilitychange', () => { if(!document.hidden){ ping
 // ✏️ from H3 Film: index.html#take=<id> shows that take, ready to edit (🎲 takes from a piece, ➕ Add more, 🪄⬆, Use settings)
 function showTake(){ const m = /take=([^&]+)/.exec(location.hash); if(!m) return; const id = decodeURIComponent(m[1]), t = S.takes.find(x => x.id===id);
   if(!t){ toast("That take isn't in H3 Deck on this phone any more"); return; }
-  setTimeout(() => { const el = document.querySelector(`.take[data-take="${CSS.escape(id)}"]`); if(!el) return; el.scrollIntoView({behavior:'smooth', block:'center'}); el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), 4000); }, 300);
+  const go = hl => { const el = document.querySelector(`.take[data-take="${CSS.escape(id)}"]`); if(!el) return; el.scrollIntoView({behavior:'smooth', block:'center'}); if(hl){ el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), 4000); } };
+  setTimeout(() => go(true), 300); setTimeout(() => go(false), 1600); // (again once the Films timeline above it has its height)
   if(/more=1/.test(location.hash) && t.state==='done' && !t.sm){ setTimeout(() => extendSheet(t, 3), 400); return; }
-  toast('From 🎬 H3 Film: tap a piece for 🎲 more takes of it, or use the buttons'); }
-window.addEventListener('hashchange', () => { if(/take=/.test(location.hash)) setTab('render'); showTake(); }); showTake();
+  toast('Its take, under the timeline: tap a piece for 🎲 more takes of it, or use the buttons'); }
+window.addEventListener('hashchange', () => { if(/take=/.test(location.hash)) setTab('films'); showTake(); });
 // ---------- tabs ----------
 let FW = null; // the film app's window, once its tab has been opened
 const tabTop = () => document.documentElement.style.setProperty('--ft', Math.round($('#tabs').getBoundingClientRect().bottom) + 'px');
-function setTab(tab){ S.tab = tab; save(); document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab));
+// Jordan 2026-11-06: the 🎬 Render tab is gone; 🎞 Films (timeline on top, the whole Render form and the takes under it) is the main screen
+function setTab(tab){ if(tab!=='poses') tab = 'films'; S.tab = tab; save(); document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab));
   const film = tab!=='render', box = $('#filmTab'), pb = $('#poseTab'); $('#renderTab').hidden = tab==='poses'; box.hidden = tab!=='films'; pb.hidden = tab!=='poses'; document.body.classList.toggle('ftab', tab==='poses');
   drawFilmNote();
   if(!film) return;
@@ -1989,8 +1995,12 @@ window.H3FilmWords = (w, at, tid) => { if(S.tab!=='films' || !w) return false; c
     S.f.prompt = ''; }
   if(S.f.prompt===w){ FILMSIG = JSON.stringify(S.f); return true; } S.f.prompt = w; S.f.pieceText = {}; pb.value = w; FILMW = at; save(); drawAll(); FILMSIG = JSON.stringify(S.f); return true; };
 window.H3FilmFollow = () => { FILMSIG = null; FILMT = null; FILMED = false; drawFilmNote(); try{ FW.FILM.pushWords(FW.FILM.S.films.find(x => x.id===FW.FILM.S.nav.film)); }catch(e){} };
+// scroll down to the Render form (under the timeline)
+function toForm(){ setTimeout(() => { const el = $('#bShot'); if(el) window.scrollTo({top:el.getBoundingClientRect().top + window.scrollY - 70, behavior:'smooth'}); }, 350); }
+// 🎭 Use as guide from the timeline: the selected clip's take becomes the Motion guide (skeleton + light depth) of the form
+window.H3Guide = id => { const t = S.takes.find(x => x.id===id); if(!t){ toast("That take isn't in H3 Deck on this phone"); return; } toForm(); guideFromTake(t); };
 // called by the film app inside the frame
-window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('render'); location.hash = 'take=' + encodeURIComponent(takeId) + (more ? '&more=1' : ''); } else setTab(tab); };
+window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('films'); location.hash = 'take=' + encodeURIComponent(takeId) + (more ? '&more=1' : ''); } else setTab(tab); };
 window.H3Badge = () => {};
 // ---------- 🎞 Films asks for new video (Jordan 2026-11-05: an editor where parts can be remade on the fly) ----------
 const takeFile = t => t && (t.final || (t.pieces.length===1 && !t.cont ? t.pieces[0].file : null));
@@ -2004,7 +2014,7 @@ const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont ? Math.ro
 window.H3Carry = async o => { const t = S.takes.find(x => x.id===o.take), fl = takeFile(t);
   if(!t){ toast("That take isn't in H3 Deck on this phone"); return false; }
   if(!fl){ toast('That take has no finished video yet'); return false; }
-  if(S.tab!=='films'){ setTab('render'); window.scrollTo(0, 0); }
+  if(S.tab!=='films') setTab('films');
   const dur = takeFrames(t) / FPS, at = Math.max(1, Math.min(+o.at || 0, dur || 1e9)), near = dur && Math.abs(at - dur) < 0.05;
   useAgain(t);
   const id = uid('m'); S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
@@ -2087,11 +2097,10 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
   if(sk && P.str != null){ f.ctlStr = P.str; f.ctlEnd = 1; if(dp){ f.ctl2Str = Math.round(P.str * 0.7 * 20) / 20; f.ctl2End = 1; } got.push('guide strength ' + P.str.toFixed(2) + (dp ? ', depth ' + f.ctl2Str.toFixed(2) : '') + ' (touch points, held to the end)'); }
   if(P.aspect && ASPECTS.some(a => a[0]===P.aspect)) f.aspect = P.aspect; $('#prompt').value = f.prompt;
   if(P.dur) setLen(Math.round(P.dur * 10) / 10);
-  save(); setTab('render'); drawAll(); toast('🧍 In: ' + andList(got) + '. Write who it is and what happens, then Render.', 6000); return got; };
+  save(); setTab('films'); drawAll(); toForm(); toast('🧍 In: ' + andList(got) + '. Write who it is and what happens, then Render.', 6000); return got; };
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
-window.addEventListener('resize', () => { if(S.tab && S.tab!=='render') tabTop(); });
-if(S.tab==='room') S.tab = 'render'; // ✂ Cutting Room taken out for now (Jordan 2026-11-03: not a fully fledged idea yet)
-if(S.tab && S.tab!=='render' && !/take=/.test(location.hash)) setTab(S.tab);
+window.addEventListener('resize', () => tabTop());
+setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
 window.H3 = {tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
