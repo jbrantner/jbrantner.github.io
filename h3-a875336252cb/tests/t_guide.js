@@ -114,6 +114,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const wo = sent.slice(n4), wcn = wo.map(s => nodes(s.g, 'MiniMaxH3FunControlNetApply').length), wpr = wo.map(s => node(s.g, 'MiniMaxH3ReferenceToVideo') && node(s.g, 'MiniMaxH3ReferenceToVideo').inputs.prompt);
   ok(wo.length >= 1 && wcn.every(x => x===0) && wpr.every(p => /walks to the window/.test(p || '')), '💬 words only: the guide clip\'s words, no skeleton or depth (' + JSON.stringify(wcn) + ')');
   await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks = f.tracks.filter(t => t.id!=='trW'); FILM.save(); FILM.draw(); });
+  await page.evaluate(() => window.scrollTo(0, 0)); await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200); await fr.click('[data-gd="fill:words"]'); await page.waitForTimeout(300);
+  const wb = await fr.evaluate(() => { const f = FILM.S.films[0], t = f.tracks[0]; return {follow:t.follow, over:t.over, gh:FILM.ghostsOf(f, 0).length, n:f.tracks.length}; });
+  ok(wb.follow===false && wb.over && wb.gh===2, '＋ New track on top: 💬 words only makes a no-bones track with the guide\'s clips in grey (' + JSON.stringify(wb) + ')');
+  await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks.shift(); FILM.save(); FILM.draw(); });
   // ↻ Redo on a following track gets the guide at the right film time
   const n2 = sent.length; await page.evaluate(() => window.H3Redo({take:'tA', a:1, b:3, prompt:'she turns', n:1, film:'fA', clip:'x', guide:{film:'fA', off:5}})); await page.waitForTimeout(1200);
   const rd = sent.slice(n2)[0], rs = rd ? nodes(rd.g, 'Video Slice').map(n => n.inputs.start_time) : [];
