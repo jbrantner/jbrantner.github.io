@@ -846,17 +846,22 @@ const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['t
 const castOf = n => (S.cast || []).find(c => c.n===+n);
 const castPics = c => { if(!c) return []; if(c.pic){ c.pics = c.pics || []; if(!c.pics.includes(c.pic)) c.pics.unshift(c.pic); } delete c.pic; c.pics = (c.pics || []).filter(id => S.media[id]); return c.pics; }; // (Jordan 2026-11-06: several pictures each)
 const castWho = c => ((c.who || '').trim() || (c.stand || '').trim()).replace(/[\s.]*$/, '');
+const castMore = c => (c && c.desc || '').trim().replace(/\s*\n+\s*/g, ' ').replace(/[\s.]*$/, '');
 function castUsed(t){ const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), ns = new Set();
   txt.replace(SUBRE, (m, n) => { if(castOf(n)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
   const imgs = (t.imgs || []).filter(r => !r.cast);
-  if(pics) for(const n of castUsed(t)){ const c = castOf(n); for(const id of castPics(c)) if(imgs.length < MAXREF.img) imgs.push({id, desc:castWho(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); }
+  if(pics) for(const n of castUsed(t)){ const c = castOf(n); for(const id of castPics(c)) if(imgs.length < MAXREF.img) imgs.push({id, desc:castWho(c), more:castMore(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); }
   return Object.assign({}, t, {imgs}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
   const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) (pics[r.cast] = pics[r.cast] || []).push('<Picture ' + (k + 1) + '>'); });
+  const told = [];
   let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n); if(!c || pics[c.n]) return m;
-    let w = (c.stand || '').trim() || 'someone'; if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
-  if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.');
+    let w = (c.stand || '').trim() || 'someone'; if(castMore(c) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
+  // no picture: the description goes in up front, once ("The woman: long black hair, green eyes, …")
+  if(told.length){ const lead = told.map(c => { const w = (c.stand || '').trim() || 'someone'; return (/^(a|an)\s/i.test(w) ? 'The ' + w.replace(/^(a|an)\s+/i, '') : w.charAt(0).toUpperCase() + w.slice(1)) + ': ' + castMore(c) + '.'; }).join(' ');
+    const m = out.match(/^\s*\[Shot 1\]\s*/i); out = m ? m[0] + lead + ' ' + out.slice(m[0].length) : lead + ' ' + out; }
+  if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.' + (castMore(castOf(n)) ? ' ' + castMore(castOf(n)).replace(/^./, x => x.toUpperCase()) + '.' : ''));
     if(defs.length) out = defs.join(' ') + ' ' + out; }
   return out; }
 const castWords = txt => (txt || '').replace(SUBRE, (m, n) => { const c = castOf(n); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
@@ -877,6 +882,7 @@ function drawCast(){ const L = S.cast || [];
       <div class="castpics">${P.map((id, i) => `<span class="cpw"><img src="${(S.media[id] || {}).thumb || ''}" alt=""><button data-cast="unpic:${i}" aria-label="Take this picture out">✕</button>${i ? `<button class="up" data-cast="first:${i}" aria-label="Make it the first">★</button>` : ''}</span>`).join('')}${P.length < MAXREF.img ? `<button class="castpic" data-cast="pic" title="Add pictures">＋<br>Picture${P.length ? 's' : ''}</button>` : ''}</div>
       <div style="margin-top:8px"><div>
         <input data-castf="who" value="${esc(c.who || '')}" placeholder="Who it is in the picture, e.g. the lady in the red coat">
+        <div class="lab" style="margin-top:8px"><span>More detail</span></div><textarea data-castf="desc" rows="3" style="width:100%;box-sizing:border-box" placeholder="Face, hair, eyes, build, outfit… as much as you like, on several lines. Sent with or without pictures (handy when there's no picture, or only a face).">${esc(c.desc || '')}</textarea>
         ${m ? `<div class="seg" style="margin-top:6px">${KEEPS.map(([v, t]) => `<button data-cast="keep:${v}" class="${(c.keep || 'exact')===v ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}</div></div>
       <div class="note" style="margin-top:6px">${m ? 'Sent as the picture: MiniMax hears "' + tk + ' is ' + esc(castWho(c) || 'the subject') + ', as shown in ' + (P.length > 1 ? 'these ' + P.length + ' pictures' : '&lt;Picture n&gt;') + '". All of them count towards MiniMax\'s 9 pictures.' : 'Sent as "' + esc((c.stand || '').trim() || 'someone') + '" until it has a picture.'}</div>
       ${(c.stand || '').trim() ? `<button class="btn" data-cast="swap" style="margin-top:6px;width:100%" ${hits ? '' : 'disabled'}>🔁 Turn "${esc(c.stand.trim())}" into ${tk} everywhere${hits ? ' (' + hits + ' found)' : ' (none in the prompts)'}</button>` : ''}</div>`; }).join('');
@@ -915,12 +921,12 @@ function h3Prompt(o){
   }
   const defs = [], ret = [], subs = [], groups = []; // pictures with the same words are one subject seen in several pictures
   imgs.forEach((r, k) => { if(r.pose) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
-    if(!g){ g = {key, d, pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || 'char'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); });
+    if(!g){ g = {key, d, more:(r.more || '').trim(), pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || 'char'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); });
   // 👥 the cast's subjects come first, in their own order, so <Subject 1> in the prompt is usually <Subject 1> here too
   groups.sort((x, y) => (x.cast || 1e3) - (y.cast || 1e3)); { const cm = {}; groups.forEach((g, j) => { if(g.cast) cm[g.cast] = '<Subject ' + (j + 1) + '>'; });
     if(Object.keys(cm).length) text = text.replace(SUBRE, (m, n) => cm[+n] || m); }
   groups.forEach((g, j) => { const sl = '<Subject ' + (j + 1) + '>', from = andList(g.pics); subs.push(sl);
-    defs.push(sl + ' is ' + (g.d ? g.d + ', as shown in ' + from : 'the subject shown in ' + from) + '.');
+    defs.push(sl + ' is ' + (g.d ? g.d + ', as shown in ' + from : 'the subject shown in ' + from) + '.' + (g.more ? ' ' + g.more.replace(/[\s.]*$/, '').replace(/^./, x => x.toUpperCase()) + '.' : ''));
     ret.push(sl + ' (' + inShots + '): ' + KEEP[g.keep] + ' - ' + (g.keep==='loose' ? 'only the broad look, colours and feel of ' + from + ' are kept.'
       : g.keep==='mostly' ? 'the main features of ' + from + ' are kept, with small changes allowed.' : g.kind==='place' ? 'the setting, its layout, light and colours from ' + from + ' are kept.'
       : g.kind==='thing' ? 'the shape, materials, details and colours of the object in ' + from + ' are kept.' : 'the identity, face, hair, build, clothing and colours from ' + from + ' are kept.')); });

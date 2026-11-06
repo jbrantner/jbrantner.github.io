@@ -83,6 +83,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.click('[data-cast="rm"]');
   const X = await page.evaluate(() => ({n:H3.S.cast.length, f:H3.S.f.prompt, t:H3.S.takes[0].prompt}));
   ok(X.n===0 && X.f==='a woman walks in. The dog follows a woman.' && X.t==='a woman sits down', '✕ remove puts the stand-in words back: ' + JSON.stringify(X));
+  // ✍ More detail (Jordan 2026-11-06): sent without a picture (up front, once) and with one (in its definition)
+  const CD = await page.evaluate(() => { const keep = H3.S.cast; H3.S.cast = [{n:1, kind:'char', stand:'a woman', desc:'long black hair,\ngreen eyes, freckles', keep:'exact'}]; H3.drawAll();
+    const box = !!document.querySelector('[data-castf="desc"]'), noPic = H3.castText('[Shot 1] <Subject 1> walks in. <Subject 1> sits.', {imgs:[]}, false);
+    const T = {imgs:[{id:'p1', desc:'the lady', more:'long black hair, green eyes, freckles', cast:1, keep:'exact', kind:'char'}]}, P = H3.h3Prompt({text:'<Subject 1> walks in', imgs:T.imgs, secs:5});
+    H3.S.cast = keep; H3.drawAll(); return {box, noPic, def:(P.match(/<Subject 1> is [^\n]*/) || [''])[0]}; });
+  ok(CD.box && CD.noPic==='[Shot 1] The woman: long black hair, green eyes, freckles. A woman walks in. A woman sits.' && /as shown in <Picture 1>\. Long black hair, green eyes, freckles\./.test(CD.def), '✍ a subject\'s More detail box goes in with or without a picture: ' + JSON.stringify(CD));
   await page.evaluate(() => { H3.S.cast.push({n:1, kind:'char', stand:'a woman', who:'the lady in the red coat', pic:'p1', keep:'exact'}); H3.drawAll(); document.querySelector('#bCast').scrollIntoView(); });
   await page.screenshot({path:path.join(__dirname, 'cast.png')}).catch(() => {});
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
