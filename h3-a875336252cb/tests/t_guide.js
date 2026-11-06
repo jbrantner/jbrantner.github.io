@@ -66,6 +66,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(gr && G && G.sk && G.dp && await fr.evaluate(() => FILM.S.films[0].guide.state==='done'), '🦴 its skeleton and depth are read (DWPose + depth) and kept for the film (' + JSON.stringify(G) + ')');
   ok(await fr.evaluate(() => { const f = FILM.S.films[0]; return f.tracks[1].guide && f.tracks[0].follow===true && JSON.stringify(FILM.guideOpt(f, 0, 2))===JSON.stringify({film:'fA', off:2}) && FILM.guideOpt(f, 1, 0)===null; }), 'tracks above follow it, the guide track itself does not');
   ok(await fr.evaluate(() => /🦴 guide/.test(document.querySelector('.trk[data-k="1"] .tn').textContent) && /🦴/.test(document.querySelector('.trk[data-k="0"] .tn').textContent)), 'the track labels say which is the guide and which follow it');
+  // 🔒 the guide track is locked: its clips don't drag, split, delete; 🔓 Unlock lets them
+  const lk = await fr.evaluate(async () => { const f = FILM.S.films[0], c = f.tracks[1].clips[0], at0 = c.at, n0 = f.tracks[1].clips.length;
+    const el = document.querySelector('.clip[data-c="' + c.id + '"]'), r = el.getBoundingClientRect(), o = {bubbles:true, pointerType:'mouse', pointerId:1, clientY:r.top + r.height / 2};
+    el.dispatchEvent(new PointerEvent('pointerdown', Object.assign({clientX:r.left + 20}, o))); el.dispatchEvent(new PointerEvent('pointermove', Object.assign({clientX:r.left + 120}, o))); el.dispatchEvent(new PointerEvent('pointerup', Object.assign({clientX:r.left + 120}, o)));
+    const moved = FILM.S.films[0].tracks[1].clips[0].at!==at0; const del = document.querySelector('[data-act="delClip"]'); if(del){ del.disabled = false; del.click(); } await new Promise(r => setTimeout(r, 100));
+    const left = FILM.S.films[0].tracks[1].clips.length; return {moved, kept:left===n0, locked:FILM.lockedK(FILM.S.films[0], 1), lbl:/🔒/.test(document.querySelector('.trk[data-k="1"] .tn').textContent)}; });
+  ok(!lk.moved && lk.kept && lk.locked && lk.lbl, '🔒 the guide track is locked: a drag doesn\'t move its clip and 🗑 doesn\'t delete it (' + JSON.stringify(lk) + ')');
+  await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(150); await fr.click('[data-gd="lock:1"]'); await page.waitForTimeout(150);
+  ok(await fr.evaluate(() => !FILM.lockedK(FILM.S.films[0], 1)), '🔓 Unlock in the 🦴 sheet lets it be changed');
+  await fr.click('[data-gd="lock:1"]'); await fr.evaluate(() => { document.querySelector('#sheet').hidden = true; FILM.draw(); });
   // ▶ Render over the guide onto track 1: one take per guide clip, at its time, its words, its stretch of the guide
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200);
   page.on('dialog', d => d.accept()); fr.page().on('dialog', () => {});
