@@ -13,8 +13,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/queue') return J({queue_running:Q.running.map(x => [0, x]), queue_pending:Q.pending.map(x => [0, x])});
     if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
-    if(p==='/renderdeck/h3export' && rt.request().method()==='POST'){ EXP.body = JSON.parse(rt.request().postData()); EXP.n = 0; return J({id:'x1', state:'working', done:0, total:0}); }
-    if(p==='/renderdeck/h3export'){ EXP.n++; return J(EXP.n < 2 ? {id:'x1', state:'working', done:50, total:200} : {id:'x1', state:'done', done:200, total:200, file:{filename:'Film 1_00001_.mp4', subfolder:'Render/H3Film', type:'output'}}); }
+    if(p==='/renderdeck/h3export' && rt.request().method()==='POST'){ EXP.body = JSON.parse(rt.request().postData()); EXP.n = 0; EXP.posts = (EXP.posts || 0) + 1; return J({id:'x1', state:'working', done:0, total:0}); }
+    if(p==='/renderdeck/h3export'){ EXP.n++; return J(EXP.n < 2 ? {id:'x1', state:'working', done:50, total:200} : {id:'x1', state:'done', done:200, total:200, file:{filename:'Film 1_00001_.mp4', subfolder:EXP.body && EXP.body.preview ? 'H3Film/_preview' : 'Render/H3Film', type:'output'}}); }
     if(p==='/userdata/h3deck_takes.json') return REMOTE.j ? J(REMOTE.j) : rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     if(p==='/view' && /Film 1_00001_/.test(u.searchParams.get('filename') || '')) return rt.fulfill({status:200, contentType:'video/mp4', headers:{'Access-Control-Allow-Origin':'*'}, body:Buffer.alloc(2048, 1)});
     if(p==='/view') return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
@@ -28,7 +28,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     Object.assign({}, base, {name:'h3_tB2', id:'tB2', pc:R, w:640, h:360, prompt:'She sits down', from:{id:'tB', at:1}, state:'done', pieces:pieces(2, 'done'), final:F('b2.mp4')}),
     Object.assign({}, base, {name:'h3_tW', id:'tW', pc:R, w:640, h:360, prompt:'Still rendering', state:'working', pieces:[{deliv:120, state:'queued', pid:'w1'}, {deliv:101, state:'queued', pid:'w2'}]})]};
   await page.addInitScript(d => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(d)); sessionStorage.setItem('init', '1'); } }, deck);
-  await page.goto('http://127.0.0.1:8014/film/index.html'); await page.waitForTimeout(600);
+  await page.goto('http://127.0.0.1:8014/film/index.html'); await page.waitForTimeout(600); await page.evaluate(() => { FILM.S.autoPrev = false; });
   ok(/No films yet/.test(await page.textContent('#view')) && await page.textContent('#roomBadge')==='4', 'home: no films; ✂ Review counts the 4 takes');
   await page.click('#roomBtn'); await page.waitForTimeout(300);
   ok(await page.$$eval('.rv', r => r.length)===4 && /rendering/i.test(await page.textContent('#view')), 'review shows 3 finished takes and the one still rendering');
@@ -110,12 +110,16 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(EXP.body && EXP.body.preview===true && /Making a smooth preview/.test(await page.textContent('#prevBox')), '⚡ Preview asks the PC for a small temporary video of the film and shows its progress');
   await page.waitForTimeout(3000);
   ok(await page.evaluate(() => FILM.prevOk(FILM.S.films[0])) && /Smooth preview on/.test(await page.textContent('#prevBox')), 'when it is ready the film says ▶ Play uses it');
+  const sc = await page.evaluate(() => { const f = FILM.S.films[0]; FILM.PH = 2; FILM.showFrame(f); const v = document.querySelector('.stage video.on'); return v && v.src; });
+  ok(/Film\+1_00001_\.mp4/.test(sc || ''), 'scrubbing uses the preview too while the edit is unchanged (' + sc + ')');
   await page.evaluate(() => { FILM.PH = 0; }); await page.click('[data-act="play"]'); await page.waitForTimeout(500);
   const pvp = await page.evaluate(() => { const v = document.querySelector('.stage video.on'); return {src:v && v.src, ph:FILM.PH}; });
   await page.click('[data-act="play"]');
   ok(/Film\+1_00001_\.mp4/.test(pvp.src || ''), '▶ Play plays the preview video (' + JSON.stringify(pvp) + ')');
   await page.evaluate(() => { const f = FILM.S.films[0]; f.tracks[1].clips[0].out -= 0.5; FILM.draw(); });
   ok(await page.evaluate(() => !FILM.prevOk(FILM.S.films[0])) && /out of date/.test(await page.textContent('#prevBox')), 'any edit turns the preview off (it says it is out of date)');
+  await page.evaluate(() => { FILM.S.autoPrev = true; FILM.draw(); }); const np = EXP.posts; await page.waitForTimeout(5000);
+  ok(EXP.posts===np + 1 && EXP.body.preview===true, '⚡ a new preview is made by itself a few seconds after an edit (' + np + ' → ' + EXP.posts + ')');
   // takes come from the PC's copy when this app can't see H3 Deck's storage (iPhone home-screen apps don't share it)
   REMOTE.j = {v:1, t:Date.now() + 60000, takes:[{id:'tR', pc:R, w:640, h:352, prompt:'from the PC copy', state:'done', pieces:[{deliv:120, file:{filename:'r.mp4', subfolder:'Render/H3Deck/r'}}]}]};
   const rr = await page.evaluate(async () => { await FILM.pullDeck(); return {has:!!FILM.takeOf('tR'), n:FILM.takes().length, rev:FILM.reviewList().map(t => t.id)}; });
