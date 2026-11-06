@@ -75,7 +75,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const sl = nodes(J, 'Video Slice').map(n => [n.inputs.start_time, n.inputs.duration]), cc = node(J, 'ConcatenateVideo');
   ok(sent.length===sent0 + 1 && JSON.stringify(sl)==='[[0,3],[1,4]]' && cc && cc.inputs['videos.video1'] && node(J, 'SaveVideo'), '⛓ one join job: each clip\'s stretch of its take, end to end: ' + JSON.stringify(sl));
   const ct = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo); t.state = 'done'; t.pieces[0].state = 'done'; t.final = {filename:'j_00001_.mp4', subfolder:'Output_Render/H3Deck/j', type:'output'}; H3.saveNow(); return t.id; });
-  await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
+  // the fake PC can fail the join before the line above marks it done, and a failed join is placed (as a toast) once: undo that
+  await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo); if(t && !FILM.S.films[0].tracks[0].clips.some(c => c.take===t.id)) delete FILM.S.placed[t.combo.key]; FILM.placeNew(); FILM.draw(); });
   const CB = await fr.evaluate(ct => { const f = FILM.S.films[0], cs = f.tracks[0].clips; return {n:cs.length, take:cs[0] && cs[0].take, len:cs[0] && cs[0].out - cs[0].in, at:cs[0] && cs[0].at, w:FILM.wordsAt(FILM.takeOf(ct), 4)}; }, ct);
   ok(CB.n===1 && CB.take===ct && Math.abs(CB.len - 7) < 0.05 && CB.at===0 && CB.w==='she walks to the window', '⛓ once joined, the two clips are one 7 s clip: ' + JSON.stringify(CB));
   await fr.evaluate(() => FILM.undo());
@@ -126,6 +127,24 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.liveFilm(); });
   const QW = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => { const t = FILM.takeOf(c.take); return {qp:!!(t && t.redo && t.redo.qp), in:c.in, out:c.out, w:FILM.wordsAt(t, 1)}; }));
   ok(QW.every(x => x.qp && x.w==='she walks to the window') && QW[0].in===0.5 && QW[1].out===5, '✨ both clips now play their quality-pass take, same timing: ' + JSON.stringify(QW));
+  // picking another ➕ take of the clip keeps the ✨ pass of the first one in the list (Jordan 2026-11-06)
+  await page.evaluate(() => { const b = {t:Date.now(), state:'done', pieces:[], prompt:'p', imgs:[], vids:[], auds:[]};
+    H3.S.takes.unshift(Object.assign({id:'cc1', carry:{key:'ck', film:'', clip:''}}, b), Object.assign({id:'cc2', carry:{key:'ck', film:'', clip:''}}, b), Object.assign({id:'ccq', carry:null, redo:{src:'cc1', root:'cc1', qp:true, nudge:true}}, b)); H3.saveNow(); });
+  ok(await fr.evaluate(() => { const T = FILM.takes(), v = id => FILM.versionsOf(T.find(x => x.id===id)).map(x => x.id).sort().join(); return v('cc2')==='cc1,cc2,ccq' && v('ccq')==='cc1,cc2,ccq'; }), '✨ a pass of one ➕ take stays in the list after picking the other ➕ take');
+  await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !/^cc/.test(x.id)); H3.saveNow(); });
+  // 🔍 bigger, the last step: only each clip's stretch, ×1.5, swaps in with the clip's in/out moved onto the new take
+  await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.qp)); H3.saveNow(); });
+  await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[0].clips = [{id:'b1', take:'tA', in:0.5, out:2.5, dur:5, at:0}]; FILM.draw(); });
+  await fr.click('[data-act="qualitySheet"][data-k="0"]'); await page.waitForTimeout(200);
+  ok(await fr.evaluate(() => /640×352 → 960×512/.test(document.querySelector('#sheetCard').textContent)), '🔍 the sheet offers the bigger last step with its size');
+  await fr.click('#qpBig'); await page.waitForTimeout(600);
+  const BG = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.big); if(!t) return null; const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
+    return {crop:t.up.crop, scale:t.up.scale, cin:t.redo.cin, cout:t.redo.cout, ib:g.filter(n => n.class_type==='ImageFromBatch').map(n => [n.inputs.batch_index, n.inputs.length]), up:!!g.find(n => n.class_type==='MinimaxH3LatentUpscaler3D'), vs:(g.find(n => n.class_type==='Video Slice') || {}).inputs, iv:(g.find(n => /MiniMaxH3(Image|Reference)ToVideo/.test(n.class_type)) || {}).inputs}; }, R);
+  ok(BG && BG.scale===1.5 && BG.crop.L % 17===5 && BG.ib.length===1 && BG.ib[0][0]===BG.crop.s0 && BG.ib[0][1]===BG.crop.L && BG.up && BG.vs && BG.iv.width===960 && BG.iv.height===512 && BG.iv.length===BG.crop.L, '🔍 the graph takes only the stretch, upscales it, cuts the sound to it: ' + JSON.stringify(BG && {crop:BG.crop, ib:BG.ib, vs:BG.vs, w:BG.iv.width, h:BG.iv.height}));
+  await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.big); t.upStage = 'done'; t.state = 'done'; t.final = {filename:'big.mp4', subfolder:'Output_Render/H3Deck/b', type:'output'}; H3.saveNow(); });
+  await fr.evaluate(() => { FILM.liveFilm(); });
+  const BW = await fr.evaluate(() => { const c = FILM.S.films[0].tracks[0].clips[0], t = FILM.takeOf(c.take); return {big:!!(t.redo && t.redo.big), in:c.in, out:c.out, len:c.out - c.in, lab:document.querySelector('.clip .nm').textContent}; });
+  ok(BW.big && Math.abs(BW.len - 2) < 0.05 && BW.in >= 0 && /^🔍/.test(BW.lab), '🔍 the bigger take is in the clip, same length on the timeline: ' + JSON.stringify(BW));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
