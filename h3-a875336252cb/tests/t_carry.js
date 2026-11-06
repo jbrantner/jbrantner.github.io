@@ -63,6 +63,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.click('#goBtn'); await page.waitForTimeout(1500);
   const ct = await page.evaluate(() => { const t = JSON.parse(JSON.stringify(H3.S.takes[0])); t.pieces.forEach((p, i) => { p.file = {filename:'piece_0' + (i + 1) + '_00001_.mp4', subfolder:'Output_Render/' + t.dir}; }); return {id:t.id, cont:t.cont, contCut:t.contCut, contSecs:t.contSecs, carry:t.carry, jg:H3.joinGraph(t).g}; });
   const g1 = sent[n0] && sent[n0].g, vs = g1 && node(g1, 'Video Slice'), gc = g1 && Object.values(g1).find(n => n.class_type==='GetVideoComponents' && n.inputs.video[0]===Object.keys(g1).find(k => g1[k]===vs));
+  const lv0 = g1 && node(g1, 'LoadVideo');
+  ok(lv0 && lv0.inputs.file==='Output_Render/H3Deck/h3_a/h3_a_00001_.mp4 [output]', 'the PC loads the take straight from its output folder (nothing downloaded to the phone and sent back): ' + (lv0 && lv0.inputs.file));
   ok(sent.length===n0 + 1 && vs && vs.inputs.start_time===0 && Math.abs(vs.inputs.duration - 2.5) < 0.01 && gc && node(g1, 'MiniMaxH3MotionContext').inputs.context_frames, 'the new part carries on from the video cut at 2.5 s (Video Slice → Motion Context frames)');
   ok(ct.cont && Math.abs(ct.contCut - 2.5) < 0.01 && Math.abs(ct.contSecs - 2.5) < 0.01 && ct.carry && ct.carry.clip, 'the take remembers the cut and the clip it carries on');
   const jvs = node(ct.jg, 'Video Slice'), cc = node(ct.jg, 'ConcatenateVideo');

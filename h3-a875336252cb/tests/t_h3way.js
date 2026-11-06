@@ -84,6 +84,17 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.fill('[data-h3d="img:0"]', 'Mara, short black hair'); await page.click('[data-h3k="img:0:mostly"]');
   const U = await page.evaluate(() => ({d:H3.S.f.imgs[0].desc, k:H3.S.f.imgs[0].keep, pre:document.querySelector('#h3Pre').textContent}));
   ok(U.d==='Mara, short black hair' && U.k==='mostly' && /<Subject 1> is Mara, short black hair, as shown in <Picture 1>\./.test(U.pre) && /partially_preserved/.test(U.pre), 'typing and the keep buttons update the prompt');
+  // ---- the save space: old previews are cleared instead of the save failing (Jordan 2026-11-04) ----
+  const Q = await page.evaluate(async () => { const big = 'data:image/jpeg;base64,' + 'A'.repeat(60000); const toasts = [];
+    new MutationObserver(m => m.forEach(r => r.addedNodes.forEach(n => n.className==='toast' && toasts.push(n.textContent)))).observe(document.body, {childList:true});
+    for(let i = 0; i < 250; i++) H3.S.media['old' + i] = {id:'old' + i, kind:'img', name:'x', thumb:big};
+    H3.S.takes.unshift({id:'tk', t:Date.now(), pc:'x', imgs:[{id:'old1'}], vids:[], auds:[], follow:[], pieces:[], state:'done'});
+    const keep = H3.S.f.imgs[0].id; H3.S.media[keep].thumb = big; H3.saveNow(); await new Promise(r => setTimeout(r, 300));
+    const saved = JSON.parse(localStorage.getItem('h3deck') || '{}').media || {};
+    return {toasts, n:Object.keys(H3.S.media).length, kept1:!!H3.S.media.old1, thumb1:H3.S.media.old1 && H3.S.media.old1.thumb, formThumb:!!H3.S.media[keep].thumb, savedKeep:!!saved[keep], len:(localStorage.getItem('h3deck') || '').length}; });
+  console.log(JSON.stringify(Object.assign({}, Q, {thumb1:(Q.thumb1 || '').length})));
+  ok(!Q.toasts.some(t => /full/.test(t)) && Q.savedKeep && Q.len > 0, 'a full save space clears old previews and saves, no "full" message');
+  ok(Q.kept1 && !Q.thumb1 && !Q.n.toString().startsWith('25') && Q.formThumb, 'unused media gone, a take\'s picture kept without its preview, the form keeps its previews');
   await page.click('#h3Peek summary'); await page.screenshot({path:path.join(__dirname, 'h3way.png'), fullPage:false, clip:{x:0, y:0, width:390, height:1400}}).catch(() => {});
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
