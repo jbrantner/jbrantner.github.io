@@ -113,38 +113,48 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
   const NW = await fr.evaluate(() => { const c = FILM.S.films[0].tracks[0].clips[0], t = FILM.takeOf(c.take); return {nudge:!!(t.redo && t.redo.nudge), w:FILM.wordsAt(t, 2.5), w0:FILM.wordsAt(t, 0.2), lab:document.querySelector('.clip .nm').textContent}; });
   ok(NW.nudge && NW.w==='she smiles and waves' && NW.w0==='she walks to the window' && /^⬆/.test(NW.lab), '⬆ the nudge goes in the clip, with its words on that stretch: ' + JSON.stringify(NW));
-  // ✨ Quality pass (Jordan 2026-11-06): Regenerate over every clip on a track, one seed, each swaps in when done
-  await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[0].clips = [{id:'q1', take:'tA', in:0.5, out:2.5, dur:5, at:0}, {id:'q2', take:'tA', in:3, out:5, dur:5, at:2}]; FILM.SEL = null; FILM.draw(); });
+  // ✨ Quality pass (Jordan 2026-11-06): all or nothing. The track stays; every clip is redone (one seed, its own words); only when all
+  // are done do they go on a new top track, joined into one clip. A failure changes nothing.
+  await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks = [f.tracks[0]]; f.tracks[0].clips = [{id:'q1', take:'tA', in:0.5, out:2.5, dur:5, at:0}, {id:'q2', take:'tA', in:3, out:5, dur:5, at:2}]; FILM.S.passes = []; FILM.SEL = null; FILM.draw(); });
   await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.nudge)); H3.saveNow(); });
   await fr.click('[data-act="qualitySheet"][data-k="0"]'); await page.waitForTimeout(200);
-  ok(await fr.evaluate(() => /2 clips/.test(document.querySelector('#sheetCard').textContent) && document.querySelector('#qpLv .pri').dataset.v==='0'), '✨ the quality pass sheet counts the clips, Regenerate strength by default');
-  await fr.click('#qpGo'); await page.waitForTimeout(600);
-  const QPS = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).map(t => ({clip:t.redo.clip, seed:t.seed, den:t.up.den, a:t.redo.a, b:t.redo.b, prompt:t.up.prompt, refs:t.up.refs})));
-  ok(QPS.length===2 && QPS[0].seed===QPS[1].seed && QPS.every(x => x.den===0 && /^she walks to the window/.test(x.prompt)) && QPS.map(x => x.clip).sort().join()==="q1,q2" && QPS.find(x => x.clip==="q1").a <= 12 && QPS.find(x => x.clip==="q1").b >= 60, '✨ one regenerate per clip over its stretch, same seed, the take\'s words: ' + JSON.stringify(QPS));
-  await fr.evaluate(() => FILM.draw()); ok(await fr.evaluate(() => [...document.querySelectorAll('.clip .du')].filter(e => /✨ failed/.test(e.textContent)).length===2), '✨ a pass that fails says ✨ failed on its clip (the fake PC has no Open-H3 LoRA)');
-  ok(await fr.evaluate(() => { FILM.takes().filter(x => x.redo && x.redo.qp).forEach(t => { t.state = 'working'; t.upStage = 'run'; t.upErr = ''; }); FILM.draw(); return [...document.querySelectorAll('.clip .du')].filter(e => /✨ working/.test(e.textContent)).length===2; }), '✨ each clip says ✨ working while its pass renders');
-  await page.evaluate(() => { H3.S.takes.filter(x => x.redo && x.redo.qp).forEach((t, i) => { t.upStage = 'done'; t.state = 'done'; t.final = {filename:'q' + i + '.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}; }); H3.saveNow(); });
-  await fr.evaluate(() => { FILM.liveFilm(); });
-  const QW = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => { const t = FILM.takeOf(c.take); return {qp:!!(t && t.redo && t.redo.qp), in:c.in, out:c.out, w:FILM.wordsAt(t, 1)}; }));
-  ok(QW.every(x => x.qp && x.w==='she walks to the window') && QW[0].in===0.5 && QW[1].out===5, '✨ both clips now play their quality-pass take, same timing: ' + JSON.stringify(QW));
+  ok(await fr.evaluate(() => /2 clips/.test(document.querySelector('#sheetCard').textContent) && /all or nothing/.test(document.querySelector('#sheetCard').textContent) && document.querySelector('#qpLv .pri').dataset.v==='0'), '✨ the sheet counts the clips, says all or nothing, Regenerate strength by default');
+  const s5 = sent.length; await fr.click('#qpGo'); await page.waitForTimeout(600);
+  const QPS = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).map(t => ({clip:t.redo.clip, key:t.redo.key, wi:t.redo.wi, seed:t.seed, den:t.up.den, a:t.redo.a, b:t.redo.b, prompt:t.up.prompt})));
+  ok(QPS.length===2 && QPS[0].seed===QPS[1].seed && QPS[0].key===QPS[1].key && QPS.map(x => x.wi).sort().join()==='0,1' && QPS.every(x => !x.clip && x.den===0 && /^she walks to the window/.test(x.prompt)) && QPS.find(x => x.wi===0).a <= 12 && QPS.find(x => x.wi===0).b >= 60, '✨ one regenerate per clip, one pass, same seed, the clips\' words: ' + JSON.stringify(QPS));
+  await page.waitForTimeout(1500); await fr.evaluate(() => FILM.liveFilm());
+  const QF = await fr.evaluate(() => ({n:FILM.S.films[0].tracks.length, takes:FILM.S.films[0].tracks[0].clips.map(c => c.take).join(), p:FILM.S.passes.map(x => x.state).join()}));
+  ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
+  // the same pass when every part finishes
+  await page.evaluate(() => { H3.S.takes.filter(x => x.redo && x.redo.qp).forEach(t => { t.upStage = 'done'; t.state = 'done'; t.upErr = ''; t.final = {filename:'q' + t.redo.wi + '.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}; }); H3.saveNow(); });
+  const s6 = sent.length; await fr.evaluate(() => { FILM.S.passes[0].state = 'working'; FILM.liveFilm(); }); await page.waitForTimeout(500);
+  const QW = await fr.evaluate(() => { const f = FILM.S.films[0]; return {n:f.tracks.length, top:f.tracks[0].clips.map(c => { const t = FILM.takeOf(c.take); return {qp:!!(t && t.redo && t.redo.qp), in:c.in, out:c.out, at:c.at}; }), under:f.tracks[1].clips.map(c => c.take).join()}; });
+  const J3 = (sent[s6] || {}).g || {};
+  ok(QW.n===2 && QW.top.length===2 && QW.top.every(x => x.qp) && QW.top[0].in===0.5 && QW.top[1].at===2 && QW.under==='tA,tA' && nodes(J3, 'ConcatenateVideo').length===1, '✨ all done: a new top track with the passes, joining into one clip, the track under it as it was: ' + JSON.stringify(QW));
+  await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo); t.state = 'done'; t.pieces[0].state = 'done'; t.final = {filename:'qj.mp4', subfolder:'Output_Render/H3Deck/qj', type:'output'}; H3.saveNow(); });
+  await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo); if(t && !FILM.S.films[0].tracks[0].clips.some(c => c.take===t.id)) delete FILM.S.placed[t.combo.key]; FILM.liveFilm(); });
+  const QJ = await fr.evaluate(() => { const tr = FILM.S.films[0].tracks[0]; return {n:tr.clips.length, len:tr.clips[0] && tr.clips[0].out - tr.clips[0].in, cuts:tr.clips[0] && tr.clips[0].qcuts, wins:FILM.qpWins(tr).map(w => [w.in, w.out])}; });
+  ok(QJ.n===1 && Math.abs(QJ.len - 4) < 0.05 && JSON.stringify(QJ.cuts)==='[2]' && JSON.stringify(QJ.wins)==='[[0,2],[2,4]]', '✨ one clip on the top track that remembers its join, so a later pass works part by part: ' + JSON.stringify(QJ));
+  // ↩ clips that got a pass the old way go back to their originals in one tap
+  const QB = await fr.evaluate(() => { const qa = FILM.takes().find(x => x.redo && x.redo.qp && x.redo.wi===0), tr = {id:'tq', clips:[{id:'x1', take:qa.id, in:0.5, out:2.5, dur:5, at:0}]}; const n = FILM.qpBack(tr); return {n, take:tr.clips[0].take, in:tr.clips[0].in}; });
+  ok(QB.n===1 && QB.take==='tA' && QB.in===0.5, '↩ Put the originals back: a ✨ clip plays its original take again: ' + JSON.stringify(QB));
   // picking another ➕ take of the clip keeps the ✨ pass of the first one in the list (Jordan 2026-11-06)
   await page.evaluate(() => { const b = {t:Date.now(), state:'done', pieces:[], prompt:'p', imgs:[], vids:[], auds:[]};
     H3.S.takes.unshift(Object.assign({id:'cc1', carry:{key:'ck', film:'', clip:''}}, b), Object.assign({id:'cc2', carry:{key:'ck', film:'', clip:''}}, b), Object.assign({id:'ccq', carry:null, redo:{src:'cc1', root:'cc1', qp:true, nudge:true}}, b)); H3.saveNow(); });
   ok(await fr.evaluate(() => { const T = FILM.takes(), v = id => FILM.versionsOf(T.find(x => x.id===id)).map(x => x.id).sort().join(); return v('cc2')==='cc1,cc2,ccq' && v('ccq')==='cc1,cc2,ccq'; }), '✨ a pass of one ➕ take stays in the list after picking the other ➕ take');
   await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !/^cc/.test(x.id)); H3.saveNow(); });
-  // 🔍 bigger, the last step: only each clip's stretch, ×1.5, swaps in with the clip's in/out moved onto the new take
-  await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.qp)); H3.saveNow(); });
-  await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[0].clips = [{id:'b1', take:'tA', in:0.5, out:2.5, dur:5, at:0}]; FILM.draw(); });
+  // 🔍 bigger, the last step: on the ✨ track, part by part, ×1.5, all or nothing onto another new top track
+  await fr.evaluate(() => FILM.draw());
   await fr.click('[data-act="qualitySheet"][data-k="0"]'); await page.waitForTimeout(200);
   ok(await fr.evaluate(() => /640×352 → 960×512/.test(document.querySelector('#sheetCard').textContent)), '🔍 the sheet offers the bigger last step with its size');
   await fr.click('#qpBig'); await page.waitForTimeout(600);
-  const BG = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.big); if(!t) return null; const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
-    return {crop:t.up.crop, scale:t.up.scale, cin:t.redo.cin, cout:t.redo.cout, ib:g.filter(n => n.class_type==='ImageFromBatch').map(n => [n.inputs.batch_index, n.inputs.length]), up:!!g.find(n => n.class_type==='MinimaxH3LatentUpscaler3D'), vs:(g.find(n => n.class_type==='Video Slice') || {}).inputs, iv:(g.find(n => /MiniMaxH3(Image|Reference)ToVideo/.test(n.class_type)) || {}).inputs}; }, R);
-  ok(BG && BG.scale===1.5 && BG.crop.L % 17===5 && BG.ib.length===1 && BG.ib[0][0]===BG.crop.s0 && BG.ib[0][1]===BG.crop.L && BG.up && BG.vs && BG.iv.width===960 && BG.iv.height===512 && BG.iv.length===BG.crop.L, '🔍 the graph takes only the stretch, upscales it, cuts the sound to it: ' + JSON.stringify(BG && {crop:BG.crop, ib:BG.ib, vs:BG.vs, w:BG.iv.width, h:BG.iv.height}));
-  await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.big); t.upStage = 'done'; t.state = 'done'; t.final = {filename:'big.mp4', subfolder:'Output_Render/H3Deck/b', type:'output'}; H3.saveNow(); });
-  await fr.evaluate(() => { FILM.liveFilm(); });
-  const BW = await fr.evaluate(() => { const c = FILM.S.films[0].tracks[0].clips[0], t = FILM.takeOf(c.take); return {big:!!(t.redo && t.redo.big), in:c.in, out:c.out, len:c.out - c.in, lab:document.querySelector('.clip .nm').textContent}; });
-  ok(BW.big && Math.abs(BW.len - 2) < 0.05 && BW.in >= 0 && /^🔍/.test(BW.lab), '🔍 the bigger take is in the clip, same length on the timeline: ' + JSON.stringify(BW));
+  const BG = await page.evaluate(R => { const T = H3.S.takes.filter(x => x.redo && x.redo.big), t = T.find(x => x.redo.wi===0); if(!t) return null; const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
+    return {n:T.length, crop:t.up.crop, scale:t.up.scale, ib:g.filter(n => n.class_type==='ImageFromBatch').map(n => [n.inputs.batch_index, n.inputs.length]), up:!!g.find(n => n.class_type==='MinimaxH3LatentUpscaler3D'), vs:(g.find(n => n.class_type==='Video Slice') || {}).inputs, iv:(g.find(n => /MiniMaxH3(Image|Reference)ToVideo/.test(n.class_type)) || {}).inputs}; }, R);
+  ok(BG && BG.n===2 && BG.scale===1.5 && BG.crop.L % 17===5 && BG.ib.length===1 && BG.ib[0][0]===BG.crop.s0 && BG.ib[0][1]===BG.crop.L && BG.up && BG.vs && BG.iv.width===960 && BG.iv.height===512 && BG.iv.length===BG.crop.L, '🔍 one part per join, each only its stretch, upscaled, sound cut to it: ' + JSON.stringify(BG && {n:BG.n, crop:BG.crop, ib:BG.ib, vs:BG.vs, w:BG.iv.width, h:BG.iv.height}));
+  await page.evaluate(() => { H3.S.takes.filter(x => x.redo && x.redo.big).forEach(t => { t.upStage = 'done'; t.state = 'done'; t.upErr = ''; t.final = {filename:'big' + t.redo.wi + '.mp4', subfolder:'Output_Render/H3Deck/b', type:'output'}; }); H3.saveNow(); });
+  await fr.evaluate(() => { FILM.S.passes.forEach(p => { if(p.big) p.state = 'working'; }); FILM.liveFilm(); }); await page.waitForTimeout(300);
+  const BW = await fr.evaluate(() => { FILM.draw(); const f = FILM.S.films[0], cs = f.tracks[0].clips; return {n:f.tracks.length, big:cs.every(c => { const t = FILM.takeOf(c.take); return t && t.redo && t.redo.big; }), lens:cs.map(c => +(c.out - c.in).toFixed(2)), ats:cs.map(c => c.at), lab:document.querySelector('.trk[data-k="0"] .clip .nm').textContent}; });
+  ok(BW.n===3 && BW.big && JSON.stringify(BW.lens)==='[2,2]' && JSON.stringify(BW.ats)==='[0,2]' && /^🔍/.test(BW.lab), '🔍 the bigger parts are on a new top track, same timing: ' + JSON.stringify(BW));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
