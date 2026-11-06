@@ -77,10 +77,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(await fr.evaluate(() => !FILM.lockedK(FILM.S.films[0], 1)), '🔓 Unlock in the 🦴 sheet lets it be changed');
   await fr.click('[data-gd="lock:1"]'); await fr.evaluate(() => { document.querySelector('#sheet').hidden = true; FILM.draw(); });
   // ▶ one clip at a time over the guide (Jordan 2026-11-06): clip 1 = the form's Takes (2 here, split across the PCs), its words and length
-  await page.evaluate(() => { H3.S.f.takes = 2; H3.saveNow(); });
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200);
+  await fr.click('#gdN [data-v="2"]'); await page.waitForTimeout(100);
+  ok(await page.evaluate(() => H3.S.f.takes===2), 'the 🦴 sheet\'s Takes picker sets how many takes (the form\'s Takes)');
   page.on('dialog', d => d.accept()); fr.page().on('dialog', () => {});
-  ok(await fr.evaluate(() => /Clip 1 of 2 over the guide/.test(document.querySelector('[data-gd="fill:0"]').textContent) && !document.querySelector('#gdN')), 'the sheet offers ▶ Clip 1 of 2 over the guide (no takes-per-clip choice)');
+  ok(await fr.evaluate(() => /Clip 1 of 2 over the guide/.test(document.querySelector('[data-gd="fill:0"]').textContent) ), 'the sheet offers ▶ Clip 1 of 2 over the guide');
   const n1 = sent.length; await fr.click('[data-gd="fill:0"]'); await page.waitForTimeout(2500);
   const fills = sent.slice(n1);
   const sl = fills.map(s => nodes(s.g, 'Video Slice').map(n => n.inputs.start_time)), cn = fills.map(s => nodes(s.g, 'MiniMaxH3FunControlNetApply').length), pr = fills.map(s => node(s.g, 'MiniMaxH3ReferenceToVideo') && node(s.g, 'MiniMaxH3ReferenceToVideo').inputs.prompt);
