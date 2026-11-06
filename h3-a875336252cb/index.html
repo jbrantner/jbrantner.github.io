@@ -890,6 +890,7 @@ function canRun(url, job){
   if(job.cont && !(((oi.MiniMaxH3MotionContext || {}).input || {}).optional || {}).context_frames) return "can't carry on a video (install or update H3 Motion Context)";
   if(job.cont && !(oi.LoadVideo && oi.GetVideoComponents)) return "can't carry on a video (update ComfyUI)";
   if(job.cont && job.contCut && !oi['Video Slice']) return "can't carry on from inside a video (no Video Slice node: update ComfyUI)";
+  if(job.lead && !(oi.LoadVideo && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide)) return "can't make a lead-in (update ComfyUI)";
   if(job.redo && !(oi.LoadVideo && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && (oi.ImageBatch || oi.BatchImagesNode))) return "can't redo a stretch (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
@@ -997,6 +998,9 @@ function pieceGraph(t, i, oi, names){
   if(t.redo){ const R = t.redo; rsrc = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]});
     for(const [o, s] of R.pins){ const fr = add('ImageFromBatch', {image:[rsrc, 0], batch_index:s, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
     if(R.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:[rsrc, 1], start_index:R.s0 / FPS, duration:L / FPS}), 0], frame_idx:0}), 0]; }
+  if(t.lead){ // ⏪ lead-in: the clip's first frames are pinned at the END of the window, so the new seconds arrive exactly where it starts
+    const R = t.lead, ls = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]});
+    for(const [o, sf] of R.pins){ const fr = add('ImageFromBatch', {image:[ls, 0], batch_index:sf, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; } }
   let trim = null;
   if(pc.ctx && i===0 && t.cont){ // carry on the given video: its last frames are pinned (resized to this clip by the node)
     let cv = [add('LoadVideo', {file:names[t.cont]}), 0];
@@ -1014,6 +1018,7 @@ function pieceGraph(t, i, oi, names){
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
     // then HEAD more frames (sound too): the first frame after the carried-over overlap decodes too bright and flashes at the join
     const t2 = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:HEAD, audio:aud, fps:FPS, match_tail:true}); ims = [t2, 0]; aud = [t2, 1]; }
+  if(t.lead){ const R = t.lead; ims = [add('ImageFromBatch', {image:ims, batch_index:0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:0, duration:R.B / FPS}), 0]; } // only the new seconds
   if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
     const R = t.redo; let joined = [add('ImageFromBatch', {image:[rsrc, 0], batch_index:0, length:R.a + 1}), 0];
     const mid = R.b - R.a - 1; if(mid > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:ims, batch_index:R.a - R.s0 + 1, length:mid}), 0]);
@@ -2157,6 +2162,32 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
   save(); drawTakes(); if(sent) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
   return sent; };
 window.H3RedoPlan = redoPlan;
+// ⏪ Lead in (Jordan 2026-11-06: "5 seconds before", context in reverse): a window of L frames whose last frames are the clip's own first
+// frames (every 4th, MiniMax's latent grid, plus the very last), so MiniMax makes the B frames before them and lands on the clip.
+// s = the clip's first frame in its take. Only the B new frames are kept: they go on the timeline right before the clip.
+function leadPlan(F, s, secs, ctx){ s = Math.max(0, Math.round(s)); const n = Math.max(12, Math.round(secs * FPS)), B = Math.ceil(n / 4) * 4, room = Math.max(1, Math.min(ctx, F - s));
+  const L = gridUp(B + room), pins = []; for(let o = B; o < L; o += 4){ if(s + o - B < F) pins.push([o, s + o - B]); }
+  if(!pins.some(p => p[0]===L - 1) && s + L - 1 - B < F) pins.push([L - 1, s + L - 1 - B]); return {s, B, L, pins}; }
+window.H3Lead = async o => { const src = deckTake(o.take), fl = takeFile(src);
+  if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
+  if(!fl){ toast('That take has no finished video yet'); return 0; }
+  const F = takeFrames(src), P = leadPlan(F, (+o.at || 0) * FPS, +o.secs || 3, 12), key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)); let sent = 0; const extra = {};
+  for(let k = 0; k < n; k++){
+    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+    t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
+    const text = (o.prompt || '').trim() || src.prompt;
+    Object.assign(t, {prompt:text, seconds:P.B / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, redo:null, pins:[], mq:'', follow:[],
+      ctxDirs:null, from:null, sm:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false, ctl:null, ctl2:null,
+      lead:Object.assign({src:src.id, file:fileArg(fl), film:o.film || '', clip:o.clip || '', key}, P),
+      pieces:[{start:0, gen:P.L, deliv:P.B, ctx:0, prompt:text, state:'new'}]});
+    if(FILMT===src.id){ const fs = snapshot(); Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3}); }
+    t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
+    extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
+    S.takes.unshift(t); drawTakes();
+    try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
+  }
+  save(); drawTakes(); if(sent) toast('⏪ ' + sent + (sent > 1 ? ' lead-ins' : ' lead-in') + ' of ' + fmtS(P.B / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.lead && x.lead.key===key).map(x => pcName(x.pc)))].join(' and '));
+  return sent; };
 
 // 🧍 the Poses tab sends its clips and key pictures straight over (same app, so Blobs, no PC in between):
 // {dur, aspect, clips:[{mode:'pose'|'depth', blob, name, w, h, dur}], keys:[{t, blob, name}]}
@@ -2179,6 +2210,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

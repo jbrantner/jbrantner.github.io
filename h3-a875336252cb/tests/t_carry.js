@@ -214,6 +214,19 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.waitForTimeout(1500);
   const lost = await fr.evaluate(() => { const t = FILM.takeOf(window.LID), fl = FILM.fileOf(t); return {t:!!t, fl:fl && fl.filename, p:t && t.prompt}; });
   ok(lost.fl==='h3_202611060001_zz9q_00001_.mp4' && /waves goodbye/.test(lost.p) && !/continues straight/.test(lost.p), 'a clip whose take was cleared finds its whole video (and words) on the PC again (' + JSON.stringify(lost) + ')');
+  // ⏪ Lead in: new seconds before a clip, whose last frames are the clip's first frames (pinned on the 4-frame grid); only the new part is kept
+  const LP = await page.evaluate(() => H3.leadPlan(120, 0, 3, 12));
+  ok(LP.B===72 && LP.L % 17===5 && LP.L >= LP.B + 12 && LP.pins.every(([o, sf]) => o >= LP.B && sf===o - LP.B && (o % 4===0 || o===LP.L - 1)) && LP.pins.some(p => p[0]===LP.B && p[1]===0), '⏪ the lead-in plan pins the clip\'s first frames at the end of the window (' + JSON.stringify(LP) + ')');
+  const ld0 = await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.in===0); FILM.SEL = c.id; FILM.draw(); return {id:c.id, at:c.at, after:f.tracks.flatMap(tr => tr.clips).filter(x => x.at > c.at && f.tracks.find(tr => tr.clips.includes(x))===f.tracks.find(tr => tr.clips.includes(c))).map(x => [x.id, x.at])}; });
+  await fr.click('[data-act="lead"]'); await page.waitForTimeout(300);
+  ok(await fr.evaluate(() => !document.querySelector('#sheet').hidden && /Lead in/.test(document.querySelector('#sheetCard').textContent)), '⏪ Lead in opens a sheet: how long before, the words, how many takes');
+  await fr.evaluate(() => { document.querySelector('#ldP').value = 'she walks up the path to the window'; });
+  const n7 = sent.length; await fr.click('#ldGo'); await page.waitForTimeout(1500);
+  const lg = sent[n7] && sent[n7].g, ags = lg ? Object.values(lg).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image) : [], cut = lg && Object.values(lg).find(n => n.class_type==='ImageFromBatch' && n.inputs.batch_index===0 && n.inputs.length===72);
+  ok(sent.length===n7 + 1 && ags.length===LP.pins.length && ags.every(n => n.inputs.frame_idx >= 72) && cut, '⏪ its graph pins the clip\'s first frames at the end and keeps only the 3 s before (' + ags.map(n => n.inputs.frame_idx).join(',') + ')');
+  await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(300);
+  const ld1 = await fr.evaluate(o => { const f = FILM.S.films[0], all = f.tracks.flatMap(tr => tr.clips), c = all.find(x => x.id===o.id), lc = all.find(x => FILM.takeOf(x.take) && FILM.takeOf(x.take).lead); return {lead:lc && [lc.at, +(lc.out - lc.in).toFixed(2)], clip:+c.at.toFixed(2), after:o.after.map(([id]) => +all.find(x => x.id===id).at.toFixed(2))}; }, ld0);
+  ok(ld1.lead && ld1.lead[0]===ld0.at && ld1.lead[1]===3 && ld1.clip===+(ld0.at + 3).toFixed(2) && ld1.after.every((x, i) => Math.abs(x - (ld0.after[i][1] + 3)) < 0.02), '⏪ the lead-in goes right before the clip, which (and what follows) moves along 3 s (' + JSON.stringify([ld0, ld1]) + ')');
   // tap the PC dots: status, queue and controls for each PC
   await page.evaluate(() => { window.scrollTo(0, 0); window.confirm = () => true; }); await page.click('#pcDots'); await page.waitForTimeout(800);
   const pcs = await page.evaluate(() => ({boxes:document.querySelectorAll('#pcSheet .pcbox').length, rows:document.querySelectorAll('#pcSheet .qj').length, txt:document.querySelector('#pcSheet').textContent, mine:[...document.querySelectorAll('#pcSheet .qj b')].map(b => b.textContent)}));
