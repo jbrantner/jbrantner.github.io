@@ -67,3 +67,6 @@ Tap the R/M dots at the top. For each PC you get:
 - A "New takes" switch, the same as the one in ⚙.
 
 It refreshes every 3 s while open.
+
+## 👥 Subjects (2026-11-06)
+One cast for every clip, in the 👥 Subjects block under Shot. Write `<Subject 1>` in a prompt (or tap its chip). While the subject has no picture it is sent as its stand-in words ("a woman"). Once it has a picture, the picture goes along with every render and MiniMax hears "<Subject 1> is the lady in the red coat, as shown in <Picture n>". Takes keep the token, so more takes, redo a stretch, carry on and lead in all use the subject as it is now. 🔁 turns the stand-in words already in the form and every take into the token; ✕ puts the words back. Person / Thing / Place changes what MiniMax is told to keep. Tests: tests/t_cast.js.
