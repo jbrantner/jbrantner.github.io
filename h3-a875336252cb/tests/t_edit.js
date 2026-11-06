@@ -15,7 +15,7 @@ const SCHEMA = {
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
-  'Video Slice','ImageFromBatch','TrimAudioDuration'];
+  'Video Slice','ImageFromBatch','TrimAudioDuration','ImageBlur'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (g, t) => nodes(g, t)[0];
 (async () => {
   const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
@@ -122,6 +122,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const s5 = sent.length; await fr.click('#qpGo'); await page.waitForTimeout(600);
   const QPS = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).map(t => ({clip:t.redo.clip, key:t.redo.key, wi:t.redo.wi, seed:t.seed, den:t.up.den, a:t.redo.a, b:t.redo.b, prompt:t.up.prompt})));
   ok(QPS.length===2 && QPS[0].seed===QPS[1].seed && QPS[0].key===QPS[1].key && QPS.map(x => x.wi).sort().join()==='0,1' && QPS.every(x => !x.clip && x.den===0 && /^she walks to the window/.test(x.prompt)) && QPS.find(x => x.wi===0).a <= 12 && QPS.find(x => x.wi===0).b >= 60, '✨ one regenerate per clip, one pass, same seed, the clips\' words: ' + JSON.stringify(QPS));
+  const GC = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0), g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g), bl = g.find(n => n.class_type==='ImageBlur'), enc = g.find(n => n.class_type==='VAEEncode');
+    return {clean:t.up.clean, blur:bl && bl.inputs.sigma, into:enc && JSON.stringify(enc.inputs.pixels), bid:bl && Object.keys(H3.upGraph(t, H3.PC[R].oi, {}).g).find(k => H3.upGraph(t, H3.PC[R].oi, {}).g[k].class_type==='ImageBlur'), sig:g.find(n => n.class_type==='ManualSigmas').inputs.sigmas}; }, R);
+  ok(GC.clean===0.8 && GC.blur===0.8 && GC.into===JSON.stringify([GC.bid, 0]) && /0\.125/.test(GC.sig) && / 0\.0$/.test(GC.sig), '🧽 grain clean-up on by default: frames softened before the encode, one more small step at the end: ' + JSON.stringify(GC));
   await page.waitForTimeout(1500); await fr.evaluate(() => FILM.liveFilm());
   const QF = await fr.evaluate(() => ({n:FILM.S.films[0].tracks.length, takes:FILM.S.films[0].tracks[0].clips.map(c => c.take).join(), p:FILM.S.passes.map(x => x.state).join()}));
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
