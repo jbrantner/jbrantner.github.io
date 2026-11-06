@@ -93,16 +93,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[0].clips = [{id:'cN', take:'tA', in:0, out:5, dur:5, at:0}]; FILM.SEL = 'cN'; FILM.PH = 1.5; FILM.draw(); });
   await fr.click('[data-act="redo"]');
   await fr.click('#rdM [data-v="nudge"]');
-  ok(await fr.evaluate(() => !document.querySelector('#rdRepW').hidden && /Nudge/.test(document.querySelector('#rdGo').textContent)), '⬆ the sheet has a Nudge mode with how much it changes');
-  await fr.click('#rdRep [data-v="medium"]');
+  ok(await fr.evaluate(() => !document.querySelector('#rdRepW').hidden && !!document.querySelector('#rdDen') && /Nudge/.test(document.querySelector('#rdGo').textContent)), '⬆ the sheet has a Nudge mode with how much it changes');
+  await fr.evaluate(() => { const r = document.querySelector('#rdDen'); r.value = '0.93'; r.dispatchEvent(new Event('input')); });
   await fr.evaluate(() => { const ta = document.querySelector('#rdP'); ta.value = 'she smiles and waves'; ta.dataset.typed = '1'; });
   await fr.click('#rdGo'); await page.waitForTimeout(400);
   const NT = await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.nudge); return t && {up:t.up, stage:t.upStage, src:t.smoothed && t.smoothed.filename, pc:t.pc}; });
-  ok(NT && NT.up.part && NT.up.rep==='medium' && NT.up.prompt==='she smiles and waves' && NT.up.scale===1 && NT.src==='h3_a_00001_.mp4', '⬆ a nudge take of that stretch: ' + JSON.stringify(NT && NT.up));
+  ok(NT && NT.up.part && NT.up.den===0.93 && NT.up.prompt==='she smiles and waves' && NT.up.scale===1 && NT.src==='h3_a_00001_.mp4', '⬆ a nudge take of that stretch: ' + JSON.stringify(NT && NT.up));
   const G = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.nudge); return Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g); }, R);
   const fb = G.filter(n => n.class_type==='ImageFromBatch').map(n => [n.inputs.batch_index, n.inputs.length]), i2v = G.find(n => n.class_type==='MiniMaxH3ImageToVideo');
   const P2 = NT.up.part;
-  ok(!G.some(n => n.class_type==='MinimaxH3LatentUpscaler3D') && i2v && i2v.inputs.width===640 && i2v.inputs.height===352 && i2v.inputs.length===P2.L && P2.L % 17===5 && /smiles and waves/.test(i2v.inputs.prompt), '⬆ same size, the window on the frame grid, the new words: ' + JSON.stringify(P2));
+  ok(!G.some(n => n.class_type==='MinimaxH3LatentUpscaler3D') && i2v && i2v.inputs.width===640 && i2v.inputs.height===352 && i2v.inputs.length===P2.L && P2.L % 17===5 && /smiles and waves/.test(i2v.inputs.prompt) && /^0\.9300, 0\.7905/.test(G.find(n => n.class_type==='ManualSigmas').inputs.sigmas), '⬆ same size, the window on the frame grid, the new words: ' + JSON.stringify(P2));
   ok(fb[0][0]===P2.s0 && fb[0][1]===P2.L && JSON.stringify(fb.slice(1))===JSON.stringify([[0, P2.a], [P2.a - P2.s0, P2.b - P2.a], [P2.b, P2.F - P2.b]]) && P2.a <= 36 && P2.b >= 84, '⬆ spliced: the take up to a, the nudged frames, the take from b: ' + JSON.stringify(fb));
   // when it's done, it goes in the clip like a redo (a new version)
   await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.nudge); t.upStage = 'done'; t.state = 'done'; t.final = {filename:'n_up.mp4', subfolder:'Output_Render/H3Deck/n', type:'output'}; H3.saveNow(); });
