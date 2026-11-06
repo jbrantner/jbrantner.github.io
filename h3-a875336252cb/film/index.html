@@ -439,7 +439,7 @@ function drawTL(f){
 const tlOff = () => { const w = $('#tlw'); return Math.round((w ? w.clientWidth : 360) / 2); };
 let IGN = -1; // the scroll position we set ourselves (its scroll event isn't a swipe)
 function scrollTo(f){ const w = $('#tlw'); if(!w) return; const x = Math.round(PH * f.pps); if(Math.abs(w.scrollLeft - x) < 1) return; IGN = x; w.scrollLeft = x; }
-function setPH(f, t, show, fromScroll){ PH = Math.max(0, t); if(!fromScroll) scrollTo(f); const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); if(show) showFrame(f); }
+function setPH(f, t, show, fromScroll){ PH = Math.max(0, t); if(!fromScroll) scrollTo(f); const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); if(show){ showFrame(f); pushWords(f); } }
 function wireFilm(f){
   drawTL(f);
   const tl = $('#tl'), wrap = $('#tlw');
@@ -522,7 +522,7 @@ async function carryOn(f){ const s = selAt(f); if(!s) return; if(s.bad){ toast('
   const t = takeOf(s.r.c.take); if(!t || !fileOf(t)){ toast('That clip has no finished video yet'); return; }
   if(s.tt < 1){ toast('Pick a moment at least 1 s into the take: Motion Context needs the frames before it'); return; }
   const fn = deckFn('H3Carry'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return; }
-  await fn({take:t.id, at:s.tt, film:f.id, clip:s.r.c.id}); }
+  await fn({take:t.id, at:s.tt, film:f.id, clip:s.r.c.id, prompt:wordsAt(t, Math.max(0, s.tt - 0.05))}); }
 // new takes from H3 Deck that belong on a timeline: a ➕ carry-on goes right after its clip (the clip ends at the playhead and the
 // clips after it move along); the first finished ↻ redo replaces its clip's take (⇄ Versions has the others and the original)
 function placeNew(){ let ch = false; S.placed = S.placed || {};
@@ -541,7 +541,24 @@ function placeNew(){ let ch = false; S.placed = S.placed || {};
   }
   if(ch) save(); return ch; }
 // the take's words around a moment (each piece has its own)
-function wordsAt(t, tt){ const ps = t.pieces || []; const p = ps.find(p => tt >= p.start && tt < p.start + (p.deliv || 0) / FPS) || ps[ps.length - 1]; return (p && p.prompt || t.prompt || '').replace(/^This continues straight on[^.]*\.\s*/, ''); }
+// the words behind every moment of a take, in its own time (Jordan 2026-11-06: scrubbing fills the Shot box with them):
+// each piece's prompt over its stretch; a ➕ carry-on starts with the words of the take it carried on (up to the cut);
+// a ↻ redo is its take's words with the redone stretch's words in the middle
+const cleanWords = x => String(x || '').replace(/^This continues straight on[^.]*\.\s*/, '').replace(/\(carrying on\)\s*/g, '').trim();
+const cutSegs = (L, a, b) => L.filter(x => x.b > a + 1e-3 && x.a < b - 1e-3).map(x => ({a:Math.max(x.a, a), b:Math.min(x.b, b), text:x.text}));
+function segsOf(t, d){ d = d || 0; if(!t || d > 8) return [];
+  if(t.redo){ const a = t.redo.a / FPS, b = t.redo.b / FPS, base = segsOf(takeOf(t.redo.src), d + 1); return cutSegs(base, 0, a).concat([{a, b, text:cleanWords((t.pieces[0] || {}).prompt || t.prompt)}], cutSegs(base, b, 1e9)); }
+  let off = 0, out = [];
+  if(t.cont){ off = +t.contSecs || 0; if(t.carry) out = cutSegs(segsOf(takeOf(t.carry.src), d + 1), 0, off); }
+  (t.pieces || []).forEach(p => out.push({a:off + (p.start || 0), b:off + (p.start || 0) + (p.deliv || p.gen || 0) / FPS, text:cleanWords(p.prompt || t.prompt)}));
+  return out.filter(x => x.text); }
+function wordsAt(t, tt){ const L = segsOf(t); return ((L.find(x => tt >= x.a - 1e-3 && tt < x.b) || L[L.length - 1] || {}).text) || cleanWords(t.prompt); }
+// a stretch's words: each different prompt it covers, in order
+function wordsBetween(t, a, b){ const out = []; cutSegs(segsOf(t), a, b).forEach(x => { if(out[out.length - 1]!==x.text) out.push(x.text); }); return out.length ? out.map(x => /[.!?]$/.test(x) ? x : x + '.').join(' ') : wordsAt(t, a); }
+// the Shot box in H3 Deck (under the timeline) follows the playhead
+let LASTW = '';
+function pushWords(f){ if(!EMBED) return; const c = activeAt(f, PH); if(!c) return; const t = takeOf(c.take); if(!t) return; const tt = c.in + PH - c.at, w = wordsAt(t, tt);
+  if(!w || w + t.id===LASTW) return; const fn = deckFn('H3FilmWords'); if(fn) try{ if(fn(w, fmt(tt), t.id)) LASTW = w + t.id; }catch(e){} }
 function redoSheet(f){ const s = selAt(f); if(!s) return; const t = takeOf(s.r.c.take); if(!t || !fileOf(t)){ toast('That clip has no finished video yet'); return; }
   if(s.bad){ toast('Put the playhead inside the selected clip (where the stretch starts)'); return; }
   const D = secsOf(t), o = {a:Math.max(0.2, Math.min(D - 0.5, s.tt)), n:1}; o.b = Math.min(D, o.a + 2);
@@ -550,7 +567,7 @@ function redoSheet(f){ const s = selAt(f); if(!s) return; const t = takeOf(s.r.c
     <video id="rdV" muted playsinline preload="auto" src="${esc(srcOf(s.r.c))}" style="width:100%;border-radius:10px;background:#000;margin:8px 0"></video>
     <div class="lab" style="margin-top:10px"><span>Starts at</span><b id="rdAv"></b></div><input type="range" id="rdA" min="0.2" max="${(D - 0.3).toFixed(2)}" step="0.04" value="${o.a}" style="width:100%">
     <div class="lab" style="margin-top:10px"><span>Ends at</span><b id="rdBv"></b></div><input type="range" id="rdB" min="0.4" max="${D.toFixed(2)}" step="0.04" value="${o.b}" style="width:100%">
-    <div class="lab" style="margin-top:10px"><span>What happens in it</span></div><textarea id="rdP" rows="4" style="width:100%;box-sizing:border-box">${esc(wordsAt(t, o.a))}</textarea>
+    <div class="lab" style="margin-top:10px"><span>What happens in it</span></div><textarea id="rdP" rows="4" style="width:100%;box-sizing:border-box">${esc(wordsBetween(t, o.a, o.b))}</textarea>
     <div class="lab" style="margin-top:10px"><span>Versions</span></div><div class="row" id="rdN">${[1, 2, 3].map(k => `<button class="btn ${k===1 ? 'pri' : ''}" data-v="${k}">${k}</button>`).join('')}</div>
     <div class="note" id="rdNote" style="margin-top:8px"></div>
     <button class="btn pri" id="rdGo" style="padding:13px;width:100%;margin-top:8px">↻ Redo it</button>`;
@@ -558,7 +575,9 @@ function redoSheet(f){ const s = selAt(f); if(!s) return; const t = takeOf(s.r.c
   const v = $('#rdV'), show = which => { const lim = 6; if(o.b - o.a > lim){ if(which==='a') o.b = o.a + lim; else o.a = o.b - lim; } if(o.b < o.a + 0.3){ if(which==='a') o.b = Math.min(D, o.a + 0.3); else o.a = Math.max(0.2, o.b - 0.3); }
     $('#rdA').value = o.a; $('#rdB').value = o.b; $('#rdAv').textContent = fmt(o.a); $('#rdBv').textContent = o.b >= D - 0.1 ? 'the end' : fmt(o.b);
     $('#rdNote').textContent = 'Remakes ' + fmt(o.b - o.a) + (o.b >= D - 0.1 ? ' to the end of the take (nothing after it to land on, so the ending is free)' : '') + ' on whichever PC is free (versions are shared between them).';
-    try{ v.currentTime = which==='b' ? o.b : o.a; }catch(e){} };
+    try{ v.currentTime = which==='b' ? o.b : o.a; }catch(e){}
+    const ta = $('#rdP'); if(ta && !ta.dataset.typed) ta.value = wordsBetween(t, o.a, o.b); };
+  $('#rdP').oninput = e => { e.target.dataset.typed = '1'; };
   $('#rdA').oninput = e => { o.a = +e.target.value; show('a'); }; $('#rdB').oninput = e => { o.b = +e.target.value; show('b'); };
   $$('#rdN button').forEach(b => b.onclick = () => { o.n = +b.dataset.v; $$('#rdN button').forEach(x => x.classList.toggle('pri', x===b)); });
   show('a');
@@ -605,7 +624,7 @@ document.addEventListener('input', ev => { const el = ev.target; if(el.dataset.f
 $('#roomBtn').addEventListener('click', () => go({v:'review'}));
 window.addEventListener('storage', e => { if(e.key===DECK) drawSoft(); }); // H3 Deck open in another tab
 document.addEventListener('visibilitychange', () => { if(!document.hidden) tick(); });
-window.FILM = {S, deck, placeNew, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {S, deck, placeNew, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame

@@ -57,7 +57,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.SEL = window.C1; FILM.PH = 2.5; FILM.draw(); }); await fr.click('[data-act="carry"]');
   await page.waitForFunction(() => { const m = H3.S.media[H3.S.f.first]; return m && m.carry; }, null, {timeout:10000});
   const cf = await page.evaluate(() => { const f = H3.S.f, m = H3.S.media[f.first]; return {fl:f.fl, cut:m.cut, carry:m.carry, prompt:f.prompt, render:!document.querySelector('#renderTab').hidden, note:document.querySelector('#contNote').textContent, secs:f.seconds}; });
-  ok(cf.fl && Math.abs(cf.cut - 2.5) < 0.01 && cf.carry.src==='tA' && cf.carry.film==='fA' && cf.prompt==='' && cf.render && cf.secs===5, '➕ opens Render with the take carried on from 2.5 s, its settings, and an empty prompt (' + JSON.stringify(cf) + ')');
+  ok(cf.fl && Math.abs(cf.cut - 2.5) < 0.01 && cf.carry.src==='tA' && cf.carry.film==='fA' && /walks to the window/.test(cf.prompt) && cf.render && cf.secs===5, '➕ opens Render with the take carried on from 2.5 s, its settings, and the prompt from that moment to edit (' + JSON.stringify(cf) + ')');
   ok(await page.evaluate(() => H3.S.tab==='films' && !document.querySelector('#filmTab').hidden && /Carrying on/.test(document.querySelector('#filmFormNote').textContent)), 'it stays on 🎞 Films: the Render form is right under the timeline, saying it carries on the clip');
   ok(/Carried on from 2.5 s/.test(cf.note), 'the slot says where it carries on from (' + cf.note + ')');
   const n0 = sent.length; await page.evaluate(() => { H3.S.f.prompt = 'she opens the window'; H3.S.f.takes = 1; document.querySelector('#prompt').value = H3.S.f.prompt; H3.drawAll(); });
@@ -115,6 +115,26 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   const tr0 = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => ({take:c.take, at:c.at})));
   ok(sent.length===n2 + 1 && nt.toFilm && nt.toFilm.film==='fA' && tr0[tr0.length - 1].take===nt.id && tr0[tr0.length - 1].at >= Math.max(...tr0.slice(0, -1).map(c => c.at)), 'a Render from the Films tab lands on the end of track 1 of the open film (' + JSON.stringify(nt.toFilm) + ')');
+  // the words behind every moment: the carry-on starts with its source take's words, then its own; a redo's middle has the redo words
+  const sg = await fr.evaluate(([c, r]) => ({c:FILM.segsOf(FILM.takeOf(c)).map(x => [+x.a.toFixed(2), +x.b.toFixed(2), x.text]), r:FILM.segsOf(FILM.takeOf(r)).map(x => [+x.a.toFixed(2), +x.b.toFixed(2), x.text]), mix:FILM.wordsBetween(FILM.takeOf(c), 2, 3)}), [ct.id, rd[1].id]);
+  ok(sg.c.length===2 && sg.c[0][1]===2.5 && /walks to the window/.test(sg.c[0][2]) && /opens the window/.test(sg.c[1][2]) && sg.c[1][0]===2.5, 'a carry-on take remembers both prompts by time (' + JSON.stringify(sg.c) + ')');
+  ok(sg.r.length===3 && /trips/.test(sg.r[1][2]) && /walks/.test(sg.r[0][2]) && /walks/.test(sg.r[2][2]), 'a redone take: its words, the redo words in the stretch, then its words (' + JSON.stringify(sg.r) + ')');
+  ok(/walks to the window\..*opens the window/.test(sg.mix), 'a stretch across both joins the two prompts in order (' + sg.mix + ')');
+  // scrubbing fills the Shot box with the words under the playhead
+  await page.evaluate(() => { H3.S.f.fl = false; H3.S.f.first = null; H3.S.f.model = 'something else'; H3.S.f.loras = [{name:'other.safetensors', str:1, words:''}]; H3.drawAll(); document.activeElement && document.activeElement.blur(); });
+  await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks[0].clips.find(x => x.take===id), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }, ct.id); await page.waitForTimeout(400);
+  const pv = await page.evaluate(() => [H3.S.f.prompt, document.querySelector('#prompt').value]);
+  ok(/opens the window/.test(pv[0]) && pv[0]===pv[1], 'scrubbing onto the carry-on clip puts its prompt in the Shot box (' + pv[0] + ')');
+  const st = await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); return {m:H3.S.f.model===t.model, l:H3.S.f.loras.length, fl:H3.S.f.fl}; }, ct.id);
+  ok(st.m && st.l===0 && !st.fl, 'and everything else that take used: its model and LoRAs (not the video it carried on) (' + JSON.stringify(st) + ')');
+  // change something (a new reference) and scrubbing leaves it alone; ↺ Follow the clip again lets it load clips again
+  await page.evaluate(() => { H3.S.f.loras = [{name:'swap.safetensors', str:1, words:''}]; H3.drawAll(); });
+  await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks[0].clips[0], w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }); await page.waitForTimeout(400);
+  const kept = await page.evaluate(() => ({l:H3.S.f.loras.map(x => x.name), p:H3.S.f.prompt, note:document.querySelector('#filmFormNote').textContent}));
+  ok(kept.l[0]==='swap.safetensors' && /opens the window/.test(kept.p) && /stay while you scrub/.test(kept.note), 'after you change something, scrubbing to another clip keeps your settings (' + JSON.stringify(kept.l) + ')');
+  await page.evaluate(() => H3FilmFollow()); await page.waitForTimeout(300);
+  const fol = await page.evaluate(() => ({l:H3.S.f.loras.length, p:H3.S.f.prompt}));
+  ok(fol.l===0 && /walks to the window/.test(fol.p), '↺ Follow the clip again loads the clip under the playhead (' + JSON.stringify(fol) + ')');
   // a carry-on needs at least a second before it
   await fr.evaluate(() => { FILM.SEL = window.C1; const r = FILM.clipOf(FILM.S.films[0], window.C1); FILM.PH = r.c.at + 0.4; FILM.draw(); });
   const before = await page.evaluate(() => H3.S.f.first); await fr.click('[data-act="carry"]'); await page.waitForTimeout(500);
