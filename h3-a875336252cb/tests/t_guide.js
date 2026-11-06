@@ -112,6 +112,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.evaluate(() => H3.setGuideProg(null));
   console.log(JSON.stringify({gp, gt}));
   ok(gp.a.stage==='skeleton' && gp.a.frame===120 && Math.abs(gp.a.p - 0.39) < 0.01 && gp.a.eta > 5000 && gp.b.stage==='depth' && gp.b.p > 0.8 && /depth<\/b> frame 60 of 240 · \d+%/.test(gt) && /left/.test(gt), '🦴 the guide shows its step, frame n of N, a % bar and about how long is left');
+  // clip by clip: a guide of 3, 1, 2 and 4 s clips with different words → each part of the take gets ONE clip's words, no time codes
+  const cw = await page.evaluate(async () => { const fn = window.H3Fill, n0 = H3.S.takes.length;
+    await fn({film:'fA', name:'Film', track:'tr1', n:1, items:[{at:0, secs:10, prompt:'x', cuts:[3, 4, 6], beats:[{a:0, b:3, w:'she looks up.'}, {a:3, b:4, w:'the camera drops low.'}, {a:4, b:6, w:'she sets the cup down.'}, {a:6, b:10, w:'she walks off.'}]}]});
+    const t = H3.S.takes[0]; return t.pieces.map(p => [+p.start.toFixed(2), p.prompt]); });
+  console.log(JSON.stringify(cw));
+  const cww = cw.map(x => (x[1] || '').replace(/This continues straight on[^.]*\.\s*|\s*The action carries on[^.]*\./g, '').trim());
+  ok(cw.length===4 && cww.join(' / ')==='she looks up. / the camera drops low. / she sets the cup down. / she walks off.' && cw.every(x => !/\[\d/.test(x[1])), 'clip by clip: each part gets only its own clip\'s words, no time codes (' + JSON.stringify(cw) + ')');
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])).catch(() => {});
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();

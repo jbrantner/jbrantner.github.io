@@ -642,7 +642,7 @@ function plan(seconds, maxPiece, beats, cont, keyCuts){
   for(let j = 0; j < cuts.length; j++){
     const want = cuts[j] - cum, first = j===0 && !cont, last = j===cuts.length - 1; // cont: piece 1 carries on the given video
     const maxGen = gridDn(cap + 5 + (first ? 0 : CTX)), minGen = first ? 22 : 39;
-    let gen = Math.min(maxGen, Math.max(minGen, (keyCuts && keyCuts.length ? gridUp : gridNear)(want + (first ? 0 : CTX)))); // (key to key: never short of the key)
+    let gen = Math.min(maxGen, Math.max(minGen, (keyCuts && keyCuts.length && !keyCuts.near ? gridUp : gridNear)(want + (first ? 0 : CTX)))); // (key to key: never short of the key; guide cuts: nearest, so it doesn't drift)
     if(last && !first){ while(gen - CTX < want - 8 && gen + 17 <= maxGen) gen += 17; }
     const deliv = gen - (first ? 0 : CTX + HEAD); // HEAD: piece 2 on also drops its first decoded frame, which comes out too bright (a flash at the seam)
     out.push({start:cum / FPS, gen, deliv, ctx:first ? 0 : CTX}); cum += deliv;
@@ -659,13 +659,16 @@ function piecePrompt(text, pieces, i, total){
     if(pieces.length===1) return (lead + text).trim();
     return lead + global + (i || pr.ctx ? ' The action carries on from where it is now and does not start again.' : '') + (i < pieces.length - 1 ? '' : '');
   }
-  const mine = beats.filter(b => b.b > ps + 0.05 && b.a < pe - 0.05).map(b => {
+  // a beat only counts for a piece it really overlaps (Jordan 2026-11-06: a piece ending a few frames past a guide cut got the next clip's
+  // words too, so "she sets the cup down" came a clip early): at least 0.3 s of it, or half of a shorter beat
+  const ovl = b => Math.min(b.b, pe) - Math.max(b.a, ps), need = b => Math.min(0.3, Math.max(0.05, (Math.min(b.b, 1e9) - b.a) / 2));
+  const mine = beats.filter(b => ovl(b) > need(b)).map(b => {
     const a = Math.max(0, b.a - ps) + off, e = Math.min(b.b, pe) - ps + off, cont = b.a < ps - 0.05;
     return '[' + t2(a) + '-' + t2(e) + '] ' + (cont ? '(carrying on) ' : '') + b.text; });
   return (lead + global + (global ? '\n' : '') + mine.join('\n')).trim();
 }
 function currentPlan(){ if(S.f.sm) return smoothPlan(); const f = S.f, beats = parseBeats(f.prompt).beats, pins = refsOn().pins, cont = contOn();
-  const keyCuts = f._cuts && f._cuts.length && !cont ? f._cuts.map(s => Math.round(s * FPS)) : pins.length >= 2 && !cont ? [...new Set(pins.map(r => Math.round((+r.pose.t || 0) * FPS)))].filter(x => x > 0).sort((a, b) => a - b) : null;
+  const keyCuts = f._cuts && f._cuts.length && !cont ? Object.assign(f._cuts.map(s => Math.round(s * FPS)), {near:true}) : pins.length >= 2 && !cont ? [...new Set(pins.map(r => Math.round((+r.pose.t || 0) * FPS)))].filter(x => x > 0).sort((a, b) => a - b) : null;
   return plan(+f.seconds || 5, +f.maxPiece || 5, beats, cont, keyCuts); }
 // Jordan 2026-11-03: a video in the First frame slot = "carry on this video": its last frames (and sound) lead into piece 1 through
 // H3 Motion Context (frames path), like a split clip's next piece, and the finished take is that video + the new part
@@ -1986,7 +1989,10 @@ async function toMocap(t){ const f = t.final || (t.pieces.find(p => p.file) || {
     fr.contentWindow.MOCAP_OPEN(file); toast('In Mocap: tap Copy the motion.', 4000); }
   catch(e){ toast("Couldn't open it in Mocap: " + e.message); } }
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
-$('#prompt').oninput = e => { S.f.prompt = e.target.value; save(); drawShot(); drawGo(); };
+$('#prompt').oninput = e => { S.f.prompt = e.target.value; filmEdit(e.target.value); save(); drawShot(); drawGo(); };
+// 🎞 editing the words of the clip under the playhead keeps them on that clip's take (the video stays as it is; back to its words = no edit)
+function filmEdit(v){ if(S.tab!=='films' || !FILMTID || !FILMRAW) return; const t = S.takes.find(x => x.id===FILMTID); if(!t) return; const m = S.f.fl && S.media[S.f.first]; if(m && m.carry) return;
+  t.wEdit = t.wEdit || {}; if(!v.trim() || v.trim()===FILMRAW.trim()) delete t.wEdit[FILMRAW]; else t.wEdit[FILMRAW] = v; if(!Object.keys(t.wEdit).length) delete t.wEdit; FILMP = v; }
 const setLen = v => { v = Math.max(0.5, Math.min(36000, +v || 5)); S.f.seconds = v; $('#len').value = Math.min(60, v); if(document.activeElement!==$('#lenNum')) $('#lenNum').value = v; save(); drawShot(); drawCanvas(); drawGo(); };
 $('#len').oninput = e => { $('#lenNum').value = e.target.value; setLen(e.target.value); };
 $('#lenNum').oninput = e => setLen(e.target.value);
@@ -2164,7 +2170,8 @@ const FILMTYPED = () => FILMP!=null && S.f.prompt!==FILMP; // you wrote in the S
 // after a Render (or ➕ carry-on Render) the form follows the playhead again (Jordan 2026-11-06: the prompt got stuck on the last clip)
 function filmFollowAgain(){ FILMSIG = null; FILMT = null; FILMED = false; FILMP = null; const m = S.f.fl && S.media[S.f.first];
   if(m && m.carry){ S.f.fl = false; S.f.first = null; } drawFilmNote(); try{ const F = FW.FILM; F.resetWords(); F.pushWords(F.S.films.find(x => x.id===F.S.nav.film)); }catch(e){} }
-window.H3FilmWords = (w, at, tid) => { if(S.tab!=='films' || !w) return false; const pb = $('#prompt'); if(document.activeElement===pb) return false;
+let FILMRAW = null; // the clip's words as they were rendered (the key of your edit on its take)
+window.H3FilmWords = (w, at, tid, raw) => { if(S.tab!=='films' || !w) return false; const pb = $('#prompt'); if(document.activeElement===pb) return false;
   const m = S.f.fl && S.media[S.f.first]; if(m && m.carry) return false; // ➕ carrying on: the box is for what happens next
   if(FILMTYPED() && FILMTID===tid){ drawFilmNote(); return false; } // your own words stay on the clip you wrote them for; another clip brings its words (Jordan 2026-11-06)
   // Jordan 2026-11-06: everything the clip's take used comes along too (model, LoRAs, references, Motion guide…), once per clip
@@ -2176,7 +2183,7 @@ window.H3FilmWords = (w, at, tid) => { if(S.tab!=='films' || !w) return false; c
     S.f.ctl = !!t.ctl; if(t.ctl){ S.f.ctlVid = t.ctl.vid; S.f.ctlStr = t.ctl.str; S.f.ctlEnd = t.ctl.end; S.f.ctl2Vid = t.ctl2 ? t.ctl2.vid : null; if(t.ctl2){ S.f.ctl2Str = t.ctl2.str; S.f.ctl2End = t.ctl2.end; } }
     S.f.prompt = ''; }
   if(S.f.prompt!==w){ S.f.prompt = w; S.f.pieceText = {}; pb.value = w; FILMW = at; FILMP = w; save(); drawAll(); }
-  FILMP = S.f.prompt; FILMTID = tid; if(!FILMED) FILMSIG = filmSig(); drawFilmNote(); return true; };
+  FILMP = S.f.prompt; FILMTID = tid; FILMRAW = raw || w; if(!FILMED) FILMSIG = filmSig(); drawFilmNote(); return true; };
 window.H3FilmFollow = () => filmFollowAgain();
 // when you stop typing in the Shot box, it catches up with the clip under the playhead (if that's another clip now)
 $('#prompt').addEventListener('blur', () => { if(S.tab!=='films') return; setTimeout(() => { try{ const F = FW.FILM; F.pushWords(F.S.films.find(x => x.id===F.S.nav.film)); }catch(e){} }, 50); });
@@ -2205,6 +2212,11 @@ window.H3Fill = async o => { if(!H3GuideReadyFor(o.film)){ toast('Make the guida
   const f = S.f, keep = {seconds:f.seconds, prompt:f.prompt, pieceText:f.pieceText, fl:f.fl, sm:f.sm, ctl:f.ctl, _cuts:undefined}, n = Math.max(1, Math.min(3, +o.n || 1)), extra = {}; let sent = 0;
   try{ for(const it of o.items || []){ const key = uid('k');
       Object.assign(f, {seconds:Math.max(1, Math.round(it.secs * 100) / 100), prompt:it.prompt || keep.prompt, pieceText:{}, fl:false, sm:false, ctl:false, _cuts:it.cuts || []});
+      // clip by clip (Jordan 2026-11-06: "each clip is its own original prompt"): each part gets the words of the ONE guide clip it covers most,
+      // as written (no time codes), and the usual carry-on lines after the first part; parts can run a few frames past a cut (the frame grid)
+      if(it.beats && it.beats.length > 1){ const P = currentPlan(); if(P.length > 1) P.forEach((p, i) => { const ps = p.start, pe = ps + p.deliv / FPS;
+        const best = it.beats.map(x => [Math.min(x.b, pe) - Math.max(x.a, ps), x]).sort((u, v) => v[0] - u[0])[0][1];
+        f.pieceText[i] = i ? 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' + best.w + ' The action carries on from where it is now and does not start again.' : best.w; }); }
       for(let k = 0; k < n; k++){ const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
         t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
         t.toFilm = {film:o.film, name:o.name || '', key, track:o.track, at:+it.at || 0, cuts:it.cuts || []}; applyGuide(t, {film:o.film, off:it.at});
