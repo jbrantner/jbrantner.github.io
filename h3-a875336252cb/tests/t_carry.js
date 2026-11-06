@@ -165,7 +165,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(sg.r.length===3 && /trips/.test(sg.r[1][2]) && /walks/.test(sg.r[0][2]) && /walks/.test(sg.r[2][2]), 'a redone take: its words, the redo words in the stretch, then its words (' + JSON.stringify(sg.r) + ')');
   ok(/walks to the window\..*trips/.test(sg.mix), 'a stretch across both joins the two prompts in order (' + sg.mix + ')');
   // scrubbing fills the Shot box with the words under the playhead
-  await page.evaluate(() => { H3.S.f.fl = false; H3.S.f.first = null; H3.S.f.model = 'something else'; H3.S.f.loras = [{name:'other.safetensors', str:1, words:''}]; H3.drawAll(); document.activeElement && document.activeElement.blur(); });
+  await page.evaluate(() => { H3.S.f.fl = false; H3.S.f.first = null; H3.S.f.model = 'something else'; H3.S.f.loras = [{name:'other.safetensors', str:1, words:''}]; H3.drawAll(); H3FilmFollow(); document.activeElement && document.activeElement.blur(); });
   await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks[0].clips.find(x => x.take===id), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }, ct.id); await page.waitForTimeout(400);
   const pv = await page.evaluate(() => [H3.S.f.prompt, document.querySelector('#prompt').value]);
   ok(/opens the window/.test(pv[0]) && pv[0]===pv[1], 'scrubbing onto the carry-on clip puts its prompt in the Shot box (' + pv[0] + ')');
@@ -175,10 +175,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.evaluate(() => { H3.S.f.loras = [{name:'swap.safetensors', str:1, words:''}]; H3.drawAll(); });
   await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }); await page.waitForTimeout(400);
   const kept = await page.evaluate(() => ({l:H3.S.f.loras.map(x => x.name), p:H3.S.f.prompt, note:document.querySelector('#filmFormNote').textContent}));
-  ok(kept.l[0]==='swap.safetensors' && /opens the window/.test(kept.p) && /stay while you scrub/.test(kept.note), 'after you change something, scrubbing to another clip keeps your settings (' + JSON.stringify(kept.l) + ')');
+  ok(kept.l[0]==='swap.safetensors' && /walks to the window/.test(kept.p) && /stay while you scrub/.test(kept.note), 'after you change a setting, scrubbing to another clip keeps your settings but still brings that clip\'s words (' + JSON.stringify(kept) + ')');
+  // words you type yourself stay put while you scrub
+  await page.evaluate(() => { H3.S.f.prompt = 'my own words'; document.querySelector('#prompt').value = 'my own words'; });
+  await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks[0].clips.find(x => x.take===id), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }, ct.id); await page.waitForTimeout(400);
+  const typed = await page.evaluate(() => ({p:H3.S.f.prompt, note:document.querySelector('#filmFormNote').textContent}));
+  ok(typed.p==='my own words' && /You wrote in the Shot box/.test(typed.note), 'words you typed stay put while you scrub (' + JSON.stringify(typed) + ')');
   await page.evaluate(() => H3FilmFollow()); await page.waitForTimeout(300);
   const fol = await page.evaluate(() => ({l:H3.S.f.loras.length, p:H3.S.f.prompt}));
-  ok(fol.l===0 && /walks to the window/.test(fol.p), '↺ Follow the clip again loads the clip under the playhead (' + JSON.stringify(fol) + ')');
+  ok(fol.l===0 && /opens the window/.test(fol.p), '↺ Follow the clip again loads the clip under the playhead (the carry-on again) (' + JSON.stringify(fol) + ')');
   // the Render tab is gone: Films is the main screen; 🎭 Use as guide is on the timeline
   ok(await page.evaluate(() => [...document.querySelectorAll('#tabs [data-tab]')].map(b => b.dataset.tab).join())==='films,poses', 'the tabs are 🎞 Films and 🧍 Poses (no 🎬 Render tab)');
   await page.evaluate(() => { window.GUIDED = null; window.H3GuideReal = window.H3Guide; window.H3Guide = id => { window.GUIDED = id; }; });

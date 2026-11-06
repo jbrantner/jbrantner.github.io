@@ -32,7 +32,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const fams = await page.evaluate(() => H3.families().map(f => f.key)); const REF = fams.find(k => /hybrid/.test(k));
   page.on('dialog', d => d.accept());
   const prom = (R, REF) => page.evaluate(([R, REF]) => { const t = H3.snapshot(); t.id = 't' + Math.random(); t.pc = R; t.seed = 3; t.dir = 'H3Deck/x'; t.name = 'x';
-    const g = H3.pieceGraph(t, 0, H3.PC[R].oi, {p1:'p1.png', a:'a.png'}).g, nodes = Object.values(g);
+    const g = H3.pieceGraph(t, 0, H3.PC[R].oi, {p1:'p1.png', p2:'p2.png', a:'a.png'}).g, nodes = Object.values(g);
     return {p:nodes.find(n => n.class_type==='MiniMaxH3ReferenceToVideo').inputs.prompt, imgs:nodes.filter(n => n.class_type==='LoadImage').map(n => n.inputs.image)}; }, [R, REF]);
   await page.evaluate(REF => { Object.assign(H3.S.f, {model:REF, turbo:false, ref:true, imgs:[], fl:false, seconds:5, h3:true, prompt:'<Subject 1> walks to the window. [2s-5s] <Subject 1> waves at <Subject 2>.'}); H3.drawAll(); }, REF);
   await page.click('#castAdd');
@@ -45,6 +45,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   P = await prom(R, REF); console.log(P.p.split('summary:')[0]);
   ok(/<Subject 1> is the lady in the red coat, as shown in <Picture 1>\./.test(P.p) && /\[Shot 1\] <Subject 1> walks to the window/.test(P.p) && P.imgs.join()==='p1.png', 'with a picture: the picture is sent and <Subject 1> is defined by it');
   ok(await page.evaluate(() => /lady in the red coat, as shown in <Picture 1>/.test(document.querySelector('#h3Pre').textContent)), 'the 👁 look shows it too');
+  // several pictures of one subject (Jordan 2026-11-06): all go along, one subject seen in all of them
+  await page.evaluate(() => { H3.S.media.p2 = {id:'p2', kind:'img', name:'p2.png', w:640, h:352, thumb:''}; H3.S.cast[0].pics.push('p2'); H3.drawAll(); });
+  P = await prom(R, REF);
+  ok(/<Subject 1> is the lady in the red coat, as shown in <Picture 1> and <Picture 2>\./.test(P.p) && P.imgs.join()==='p1.png,p2.png' && await page.evaluate(() => document.querySelectorAll('.castpics .cpw').length)===2, 'two pictures: one subject shown in both, two thumbnails (' + P.imgs + ')');
+  await page.click('[data-cast="first:1"]'); ok(await page.evaluate(() => H3.S.cast[0].pics.join())==='p2,p1', '★ makes a picture the first');
+  await page.click('[data-cast="unpic:0"]'); ok(await page.evaluate(() => H3.S.cast[0].pics.join())==='p1', '✕ takes a picture out');
   // with a picture of its own in the form: the form's stays <Picture 1>, the subject's comes after but is still <Subject 1>
   await page.evaluate(() => { H3.S.media.a = {id:'a', kind:'img', name:'a.png', w:640, h:352, thumb:''}; H3.S.f.imgs = [{id:'a', on:true, desc:'the cafe, warm wood'}]; H3.drawAll(); });
   P = await prom(R, REF);
@@ -54,7 +60,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.evaluate(() => { H3.S.cast[0].kind = 'char'; H3.S.f.imgs = []; H3.S.f.h3 = false; H3.drawAll(); }); P = await prom(R, REF);
   ok(/^<Subject 1> is the lady in the red coat, as shown in <Picture 1>\. <Subject 1> walks/.test(P.p), 'plain prompt (🧾 off): who it is goes up front');
   // 🔁 swap: the stand-in words in the form and every take become the token
-  await page.evaluate(() => { H3.S.f.h3 = true; H3.S.cast[0].pic = null; H3.S.f.prompt = 'A woman walks in. The dog follows a woman.';
+  await page.evaluate(() => { H3.S.f.h3 = true; H3.S.cast[0].pics = []; H3.S.f.prompt = 'A woman walks in. The dog follows a woman.';
     H3.S.takes.unshift({id:'tk1', t:Date.now(), pc:'x', model:H3.S.f.model, turbo:false, w:640, h:352, seconds:5, prompt:'a woman sits down', imgs:[], vids:[], auds:[], follow:[], pieces:[{prompt:'a woman sits down'}], state:'done'}); H3.drawAll(); });
   const hits = await page.evaluate(() => H3.castHits('a woman'));
   ok(hits===4 && await page.evaluate(() => /4 found/.test(document.querySelector('[data-cast="swap"]').textContent)), '🔁 counts "a woman" in the form and the takes (' + hits + ')');
@@ -62,7 +68,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const W = await page.evaluate(() => ({f:H3.S.f.prompt, ta:document.querySelector('#prompt').value, t:H3.S.takes[0].prompt, p:H3.S.takes[0].pieces[0].prompt}));
   ok(W.f==='<Subject 1> walks in. The dog follows <Subject 1>.' && W.ta===W.f && W.t==='<Subject 1> sits down' && W.p===W.t, '🔁 swaps them everywhere: ' + JSON.stringify(W));
   // a take made earlier picks up the subject's new picture when it's re-rendered
-  await page.evaluate(() => { H3.S.cast[0].pic = 'p1'; });
+  await page.evaluate(() => { H3.S.cast[0].pics = ['p1']; });
   const T = await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes[0])); Object.assign(t, {model:H3.S.f.model, turbo:false, w:640, h:352, h3:{}, loras:[], lastOn:false, fl:false, pieces:[{start:0, gen:121, deliv:121, ctx:0, prompt:t.prompt}]});
     const n = Object.values(H3.pieceGraph(t, 0, H3.PC[R].oi, {p1:'p1.png'}).g); return {p:n.find(x => x.class_type==='MiniMaxH3ReferenceToVideo').inputs.prompt, im:n.filter(x => x.class_type==='LoadImage').length}; }, R);
   ok(/<Subject 1> is the lady in the red coat/.test(T.p) && T.im===1, 'an older take re-rendered now uses the picture');
