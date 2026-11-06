@@ -10,7 +10,7 @@ const SCHEMA = {
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors']]}}},
   DWPreprocessor:{input:{required:{image:['IMAGE']}, optional:{detect_hand:[['enable', 'disable']], detect_body:[['enable', 'disable']], detect_face:[['enable', 'disable']], resolution:['INT', {default:512}], bbox_detector:[['yolox_l.onnx']], pose_estimator:[['dw-ll_ucoco_384_bs5.torchscript.pt']]}}},
-  DepthAnythingV2Preprocessor:{input:{required:{image:['IMAGE']}, optional:{ckpt_name:[['depth_anything_v2_vitl.pth']], resolution:['INT', {default:512}]}}},
+  DepthAnythingV2Preprocessor:{input:{required:{image:['IMAGE']}, optional:{ckpt_name:[['depth_anything_v2_vitg.pth', 'depth_anything_v2_vitl.pth', 'depth_anything_v2_vitb.pth']], resolution:['INT', {default:512}]}}},
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide','LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','CreateVideo','SaveVideo','GetVideoComponents','ImageFromBatch','MiniMaxH3FunControlNetApply','ModelPatchLoader','Video Slice'];
 (async () => {
