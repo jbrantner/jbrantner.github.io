@@ -43,6 +43,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.addInitScript(r => { if(!sessionStorage.getItem('init')){ localStorage.clear(); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}, {name:'Main', url:'http://main.test', on:true, speed:1.26}]; window.FILM_PCS = [{name:'Render', url:r, on:true}]; }, R);
   await page.goto('http://127.0.0.1:8017/index.html');
   await page.waitForFunction(() => H3.families().length > 0, null, {timeout:20000});
+  // the official model under its other name (Render's hardlink) is the same family as the HF name (Main has only that one)
+  const AL = await page.evaluate(() => { const oi = {UNETLoader:{input:{required:{unet_name:[['minimax_h3_ref2va_pruned_int8_convrot.safetensors']]}}}};
+    return {k1:H3.famKey('minimaxH3INT8INT4_ref2vaINT8Pruned.safetensors'), k2:H3.famKey('minimax_h3_ref2va_pruned_int8_convrot.safetensors'), r:!!H3.resolveModel(oi, 'minimaxh3int4_ref2vapruned', false)}; });
+  ok(AL.k1===AL.k2 && AL.r, 'both names of the official Reference model are one family, so Main (HF name only) can take it: ' + JSON.stringify(AL));
   // a finished 5 s take (one piece, 120 frames)
   const fam = await page.evaluate(() => H3.families().map(f => f.key));
   await page.evaluate(([R, m]) => { H3.S.takes.unshift({id:'tA', t:Date.now(), pc:R, model:m, turbo:true, loras:[], w:640, h:352, seed:1, name:'h3_a', dir:'H3Deck/h3_a', prompt:'she walks to the window', seconds:5, imgs:[], vids:[], auds:[], follow:[],
