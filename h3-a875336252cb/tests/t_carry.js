@@ -58,6 +58,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.waitForFunction(() => { const m = H3.S.media[H3.S.f.first]; return m && m.carry; }, null, {timeout:10000});
   const cf = await page.evaluate(() => { const f = H3.S.f, m = H3.S.media[f.first]; return {fl:f.fl, cut:m.cut, carry:m.carry, prompt:f.prompt, render:!document.querySelector('#renderTab').hidden, note:document.querySelector('#contNote').textContent, secs:f.seconds}; });
   ok(cf.fl && Math.abs(cf.cut - 2.5) < 0.01 && cf.carry.src==='tA' && cf.carry.film==='fA' && cf.prompt==='' && cf.render && cf.secs===5, '➕ opens Render with the take carried on from 2.5 s, its settings, and an empty prompt (' + JSON.stringify(cf) + ')');
+  ok(await page.evaluate(() => H3.S.tab==='films' && !document.querySelector('#filmTab').hidden && /Carrying on/.test(document.querySelector('#filmFormNote').textContent)), 'it stays on 🎞 Films: the Render form is right under the timeline, saying it carries on the clip');
   ok(/Carried on from 2.5 s/.test(cf.note), 'the slot says where it carries on from (' + cf.note + ')');
   const n0 = sent.length; await page.evaluate(() => { H3.S.f.prompt = 'she opens the window'; H3.S.f.takes = 1; document.querySelector('#prompt').value = H3.S.f.prompt; H3.drawAll(); });
   await page.click('#goBtn'); await page.waitForTimeout(1500);
@@ -105,6 +106,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.SEL = null; FILM.PH = 1; FILM.draw(); }); await page.waitForTimeout(200);
   const sl = await fr.evaluate(() => { const w = document.querySelector('#tlw'); return [w.scrollLeft, FILM.S.films[0].pps]; });
   ok(Math.abs(sl[0] - sl[1]) < 2, 'setting the playhead slides the timeline so that moment is under the needle (' + sl + ')');
+  // a plain Render from the Films tab goes onto the open film's timeline (end of track 1)
+  await page.click('[data-tab="films"]'); await page.waitForTimeout(400);
+  await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {fl:false, first:null, prompt:'she waves at the camera', takes:1, seconds:3}); document.querySelector('#prompt').value = f.prompt; H3.drawAll(); });
+  ok(/New takes go into/.test(await page.textContent('#filmFormNote')), 'the form says new takes go into the open film');
+  const n2 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
+  const nt = await page.evaluate(() => { const t = H3.S.takes[0]; return {id:t.id, toFilm:t.toFilm}; });
+  await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
+  const tr0 = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => ({take:c.take, at:c.at})));
+  ok(sent.length===n2 + 1 && nt.toFilm && nt.toFilm.film==='fA' && tr0[tr0.length - 1].take===nt.id && tr0[tr0.length - 1].at >= Math.max(...tr0.slice(0, -1).map(c => c.at)), 'a Render from the Films tab lands on the end of track 1 of the open film (' + JSON.stringify(nt.toFilm) + ')');
   // a carry-on needs at least a second before it
   await fr.evaluate(() => { FILM.SEL = window.C1; const r = FILM.clipOf(FILM.S.films[0], window.C1); FILM.PH = r.c.at + 0.4; FILM.draw(); });
   const before = await page.evaluate(() => H3.S.f.first); await fr.click('[data-act="carry"]'); await page.waitForTimeout(500);

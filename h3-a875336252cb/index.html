@@ -155,9 +155,12 @@ h2 span{flex:1}
 .tabs button.on{border-color:var(--accent);color:var(--accent)}
 .tabs .tb{display:inline-block;min-width:16px;margin-left:5px;padding:2px 5px;border-radius:9px;background:var(--accent);color:#111;font-size:11px}
 .tabs .tb:empty{display:none}
-#filmTab,#poseTab{position:fixed;left:0;right:0;bottom:0;top:var(--ft,110px);z-index:10;background:var(--bg)}
+#poseTab{position:fixed;left:0;right:0;bottom:0;top:var(--ft,110px);z-index:10;background:var(--bg)}
+#filmTab{margin:0 -16px 6px;background:var(--bg)}
+#filmFormNote{margin:4px 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 #mocapBox{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}#mocapBox iframe{flex:1;border:0;width:100%}#mocapBox .mbar{display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
-#filmTab iframe,#poseTab iframe{width:100%;height:100%;border:0;display:block;background:var(--bg)}
+#poseTab iframe{width:100%;height:100%;border:0;display:block;background:var(--bg)}
+#filmTab iframe{width:100%;height:70vh;border:0;display:block;background:var(--bg)}
 body.ftab .go{display:none}
 .gostep{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:4px}
 .gostep b{min-width:22px;text-align:center}
@@ -173,7 +176,9 @@ body.ftab .go{display:none}
     <button class="icon" id="setBtn" aria-label="Settings">⚙</button>
   </header>
   <nav class="tabs" id="tabs"><button data-tab="render" class="on">🎬 Render</button><button data-tab="films">🎞 Films</button><button data-tab="poses">🧍 Poses</button></nav>
+  <div id="filmTab" hidden></div>
   <div id="renderTab">
+  <div class="note" id="filmFormNote" hidden></div>
 
   <section class="block" id="bShot" style="--c:var(--accent)">
     <h3>Shot <span class="sum" id="shotSum"></span></h3>
@@ -318,7 +323,6 @@ body.ftab .go{display:none}
   <div id="takes"></div>
   </div>
 </div>
-<div id="filmTab" hidden></div>
 <div id="poseTab" hidden></div>
 
 <div class="go"><span id="goWhy" hidden></span><div class="in"><div class="step gostep" title="How many takes"><button id="goDn" aria-label="Fewer takes">−</button><b id="goN">1</b><button id="goUp" aria-label="More takes">+</button></div><button id="goBtn">Render</button></div></div>
@@ -1171,9 +1175,10 @@ async function render(){
   const extra = {}; let sent = 0, cur = null;
   try{
     const base = +S.f.seed || 0;
-    const N = +S.f.takes || 1;
+    const N = +S.f.takes || 1, FT0 = filmTarget(), FT = FT0 && Object.assign(FT0, {key:uid('k')});
     for(let k = 0; k < N; k++){
       const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base ? base + k : Math.floor(Math.random() * 2 ** 31);
+      if(!t.carry && FT) t.toFilm = Object.assign({}, FT);
       t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
       const url = pickPc(t, extra); if(!url) throw new Error('no PC can take it right now');
       t.pc = url; extra[url] = (extra[url] || 0) + estSecs(t, url);
@@ -1671,7 +1676,7 @@ function drawLive(){ // the running piece's preview picture and step count, with
     el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%';
     const ph = el.querySelector('[data-live]'), L = run && LIVE[run.pid]; if(ph && L && L.img){ let im = ph.querySelector('img'); if(!im){ ph.textContent = ''; im = document.createElement('img'); im.className = 'live'; ph.appendChild(im); } if(im.src!==L.img) im.src = L.img; } }
 }
-function drawAll(){ drawDots(); drawShot(); drawInputs(); drawModel(); drawCanvas(); drawMore(); drawGo(); drawTakes();
+function drawAll(){ drawFilmNote(); drawDots(); drawShot(); drawInputs(); drawModel(); drawCanvas(); drawMore(); drawGo(); drawTakes();
   for(const id of ['bShot','bInputs','bModel','bCanvas','bMore']) $('#' + id).classList.toggle('shut', S.open[id]===false); }
 
 // ---------- taps ----------
@@ -1754,17 +1759,21 @@ async function guidePc(){ const order = S.pcs.slice().sort((a, b) => /render/i.t
     try{ const want = ['DWPreprocessor', 'LoadVideo', 'GetVideoComponents', 'CreateVideo', 'SaveVideo'].concat(GUIDE_DEPTH), got = await Promise.all(want.map(c => getJ(p.url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))), oi = Object.assign({}, ...got);
       const depth = GUIDE_DEPTH.find(c => oi[c]); if(oi.DWPreprocessor && oi.LoadVideo && oi.GetVideoComponents && oi.CreateVideo && oi.SaveVideo) return {url:p.url, oi, depth}; }catch(e){} }
   return null; }
-function guideGraph(k, file){ const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:k.oi[c] ? guideFill(k.oi[c], i) : i}; return id; };
+function guideGraph(k, file, wh){ const g = {}; let n = 0; const add = (c, i) => { const id = String(++n); g[id] = {class_type:c, inputs:k.oi[c] ? guideFill(k.oi[c], i) : i}; return id; };
   const gc = add('GetVideoComponents', {video:[add('LoadVideo', {file}), 0]}), fps = [gc, 2], stamp = Date.now().toString(36);
-  const out = (img, what) => add('SaveVideo', {video:[add('CreateVideo', {images:img, fps}), 0], filename_prefix:'H3Deck/guides/' + stamp + '_' + what, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  // the skeleton/depth come out at the preprocessor's own size, which can be odd (e.g. 512×911) and the h264 encoder refuses odd
+  // sizes (Jordan 2026-11-06: avcodec_open2 libx264 error): scaled to the video's shape, long side 832, both sides a multiple of 16
+  const [W, H] = guideSize(wh), sized = img => [add('ImageScale', {image:img, upscale_method:'bilinear', width:W, height:H, crop:'disabled'}), 0];
+  const out = (img, what) => add('SaveVideo', {video:[add('CreateVideo', {images:sized(img), fps}), 0], filename_prefix:'H3Deck/guides/' + stamp + '_' + what, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   const pose = out([add('DWPreprocessor', {image:[gc, 0], detect_hand:'enable', detect_body:'enable', detect_face:'enable', resolution:512}), 0], 'skeleton');
   const depth = k.depth ? out([add(k.depth, {image:[gc, 0], resolution:512}), 0], 'depth') : null;
   return {g, pose, depth}; }
+function guideSize(wh){ const w = wh && wh.w || 16, h = wh && wh.h || 9, s = 832 / Math.max(w, h), r = v => Math.max(64, Math.round(v * s / 16) * 16); return [r(w), r(h)]; }
 let GUIDE_BUSY = false;
 async function guideFrom(blob, name){ if(GUIDE_BUSY){ toast('Already making a guide: one at a time'); return false; } GUIDE_BUSY = true; let ok = false; const note = $('#roughNote'), say = t => { if(note) note.textContent = t; toast(t, 3500); };
   try{ say('🎭 Looking for a PC with DWPose…'); const k = await guidePc(); if(!k) throw new Error('no PC that is on has DWPose (ControlNet Aux) and the video nodes; it is on Render');
     const id = await addMedia(blob instanceof File ? blob : new File([blob], name, {type:'video/mp4'}), 'vid'); S.media[id].from = 'rough';
-    say('🎭 Sending the video to ' + pcName(k.url) + '…'); const file = await upload(k.url, id), G = guideGraph(k, file);
+    say('🎭 Sending the video to ' + pcName(k.url) + '…'); const file = await upload(k.url, id), G = guideGraph(k, file, S.media[id]);
     const pid = await queueGraph(k.url, G), t0 = Date.now(); let h = null;
     while(Date.now() - t0 < 20 * 60000){ await new Promise(r => setTimeout(r, 2500)); try{ h = (await getJ(k.url + '/history/' + pid))[pid]; }catch(e){ h = null; }
       if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(e ? e[1].exception_message : 'ComfyUI hit an error'); }
@@ -1943,17 +1952,28 @@ window.addEventListener('hashchange', () => { if(/take=/.test(location.hash)) se
 let FW = null; // the film app's window, once its tab has been opened
 const tabTop = () => document.documentElement.style.setProperty('--ft', Math.round($('#tabs').getBoundingClientRect().bottom) + 'px');
 function setTab(tab){ S.tab = tab; save(); document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab));
-  const film = tab!=='render', box = $('#filmTab'), pb = $('#poseTab'); $('#renderTab').hidden = film; box.hidden = !film || tab==='poses'; pb.hidden = tab!=='poses'; document.body.classList.toggle('ftab', film);
+  const film = tab!=='render', box = $('#filmTab'), pb = $('#poseTab'); $('#renderTab').hidden = tab==='poses'; box.hidden = tab!=='films'; pb.hidden = tab!=='poses'; document.body.classList.toggle('ftab', tab==='poses');
+  drawFilmNote();
   if(!film) return;
   window.scrollTo(0, 0); tabTop();
   // 🧍 Poses (Jordan 2026-11-05): pose keys on a timeline, sent back here as a Motion guide clip + timed pose pictures
   if(tab==='poses'){ if(!pb.firstChild){ const fr = document.createElement('iframe'); fr.src = 'keys/?embed=1'; fr.title = 'Pose keys'; pb.appendChild(fr); } return; }
-  if(!box.firstChild){ const fr = document.createElement('iframe'); fr.src = 'film/?embed=1'; fr.title = 'Cutting Room and Films';
-    fr.onload = () => { FW = fr.contentWindow; filmNav(S.tab); }; box.appendChild(fr); }
+  if(!box.firstChild){ const fr = document.createElement('iframe'); fr.src = 'film/?embed=1'; fr.title = 'Cutting Room and Films'; fr.setAttribute('scrolling', 'no');
+    fr.onload = () => { FW = fr.contentWindow; filmNav(S.tab); fitFilm(); try{ new ResizeObserver(fitFilm).observe(fr.contentDocument.body); }catch(e){} drawFilmNote(); }; box.appendChild(fr); }
   else filmNav(tab); }
 function filmNav(tab){ try{ const F = FW && FW.FILM; if(!F) return; const v = F.S.nav && F.S.nav.v;
   if(tab==='room' && v!=='review') F.go({v:'review'});
   if(tab==='films' && v==='review') F.go(F.S.lastFilm && F.S.films.some(x => x.id===F.S.lastFilm) ? {v:'film', film:F.S.lastFilm} : {v:'home'}); }catch(e){} }
+// the Films frame is as tall as what it shows, so the page scrolls on down into the Render form
+function fitFilm(){ const fr = $('#filmTab iframe'); if(!fr) return; try{ const d = fr.contentDocument; if(!d || !d.body) return; const h = Math.max(200, d.body.scrollHeight); if(Math.abs(fr.offsetHeight - h) > 2) fr.style.height = h + 'px'; }catch(e){} }
+setInterval(() => { if(S.tab==='films' && !document.hidden){ fitFilm(); drawFilmNote(); } }, 1500);
+// the film that new takes from the Films tab go into (its timeline), or null
+function filmTarget(){ try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n || n.v!=='film') return null; const f = F.S.films.find(x => x.id===n.film); return f ? {film:f.id, name:f.name} : null; }catch(e){ return null; } }
+function drawFilmNote(){ const el = $('#filmFormNote'); if(!el) return; const ft = filmTarget(); el.hidden = S.tab!=='films';
+  if(S.tab!=='films') return; const m = S.f.fl && S.media[S.f.first], c = m && m.carry;
+  el.innerHTML = c ? '➕ <b>Carrying on</b> from ' + esc(fmtS(c.at)) + ' of the selected clip. Write what happens next and Render: it goes on the timeline right after that clip.'
+    : ft ? '🎬 <b>New takes go into “' + esc(ft.name) + '”</b>, at the end of track 1. Use ➕ Carry on from here on a clip to continue it instead.'
+    : '🎬 Open a film above and new takes from here go onto its timeline.'; }
 // called by the film app inside the frame
 window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('render'); location.hash = 'take=' + encodeURIComponent(takeId) + (more ? '&more=1' : ''); } else setTab(tab); };
 window.H3Badge = () => {};
@@ -1969,15 +1989,16 @@ const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont ? Math.ro
 window.H3Carry = async o => { const t = S.takes.find(x => x.id===o.take), fl = takeFile(t);
   if(!t){ toast("That take isn't in H3 Deck on this phone"); return false; }
   if(!fl){ toast('That take has no finished video yet'); return false; }
-  setTab('render'); window.scrollTo(0, 0);
+  if(S.tab!=='films'){ setTab('render'); window.scrollTo(0, 0); }
   const dur = takeFrames(t) / FPS, at = Math.max(1, Math.min(+o.at || 0, dur || 1e9)), near = dur && Math.abs(at - dur) < 0.05;
   useAgain(t);
   const id = uid('m'); S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
     cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:uid('k')}, thumb:''};
   const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:o.prompt || '', pieceText:{}});
   $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll();
-  remoteThumb(S.media[id]);
-  setTimeout(() => { $('#prompt').focus(); }, 300);
+  remoteThumb(S.media[id]); drawFilmNote();
+  if(S.tab==='films'){ const y = $('#renderTab').getBoundingClientRect().top + window.scrollY - 60; window.scrollTo({top:y, behavior:'smooth'}); }
+  setTimeout(() => { $('#prompt').focus({preventScroll:S.tab==='films'}); }, 300);
   toast('➕ Carrying on from ' + fmtS(at) + ' (the 🎞 Carry on slot): write what happens next, then Render. Films puts it right after the clip.', 6000); return true; };
 // a picture of the moment it carries on from, for the slot (straight from the PC; if that fails the slot just has no picture)
 function remoteThumb(m){ const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
