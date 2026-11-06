@@ -962,7 +962,7 @@ function canRun(url, job){
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
   { const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), miss = lorasOf(job).find(l => !have.includes(l.name)); if(miss) return 'doesn\'t have the LoRA ' + bn(miss.name); }
-  if(job.up){ const why = regenMissing(oi); if(why) return "can't regenerate bigger (" + why + ')'; }
+  if(job.up){ const why = regenMissing(oi, job); if(why) return "can't regenerate bigger (" + why + ')'; }
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
   if(job.cont && !(((oi.MiniMaxH3MotionContext || {}).input || {}).optional || {}).context_frames) return "can't carry on a video (install or update H3 Motion Context)";
   if(job.cont && !(oi.LoadVideo && oi.GetVideoComponents)) return "can't carry on a video (update ComfyUI)";
@@ -1158,9 +1158,11 @@ const upRefs = t => (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || []; // 
 const regenRefsOn = (t, oi) => !!(t.up && t.up.refs && upRefs(t).length && oi.MiniMaxH3ReferenceToVideo && regenRefUnet(oi));
 const REGEN_REFS = 3; // reference pictures cost tokens at the new size, so only the first few go in (8 GB card)
 const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
-function regenMissing(oi){
-  if(!oi.MinimaxH3LatentUpscaler3D) return 'no H3 latent upscaler node'; if(!regenUpModel(oi)) return 'no latent upscaler model';
-  if(!regenLora(oi)) return 'no Open-H3 regenerate LoRA'; if(!regenUnet(oi)) return 'no MiniMax First/last frame model';
+// t (optional): a same-size window (nudge / ✨ quality pass) needs no upscaler, and with its pictures it runs on the Reference model,
+// so a PC without the First/last frame model (Main) can take it too
+function regenMissing(oi, t){ const part = !!(t && t.up && t.up.part), refs = !!(t && regenRefsOn(t, oi));
+  if(!part && !oi.MinimaxH3LatentUpscaler3D) return 'no H3 latent upscaler node'; if(!part && !regenUpModel(oi)) return 'no latent upscaler model';
+  if(!regenLora(oi)) return 'no Open-H3 regenerate LoRA'; if(!refs && !regenUnet(oi)) return 'no MiniMax First/last frame model';
   if(!(oi.ManualSigmas && oi.LTXVSeparateAVLatent && oi.LTXVConcatAVLatent && oi.VAEEncode && oi.GetVideoComponents && oi.MiniMaxH3ImageToVideo)) return 'update ComfyUI';
   return ''; }
 function upDims(t){ let k = (t.up && t.up.scale) || 1.5; k = Math.min(k, 768 / Math.min(t.w, t.h)); // MiniMax is made for 768p: the short side stays ≤ 768
@@ -1202,7 +1204,7 @@ function upGraph(t, oi, names){
 async function tickUpscale(t){
   const p = pcOf(t.pc);
   if(t.upStage==='start'){
-    { const why = p.oi ? regenMissing(p.oi) : 'not reachable'; if(why){ t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
+    { const why = p.oi ? regenMissing(p.oi, t) : 'not reachable'; if(why){ t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
     try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of upRefs(t).slice(0, REGEN_REFS)) names[r.id] = await upload(t.pc, r.id);
       const G = upGraph(t, p.oi, names); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
