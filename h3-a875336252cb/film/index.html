@@ -439,6 +439,9 @@ function reviewView(){
 let SEL = null, PH = 0; // selected clip id, playhead (s)
 function clipOf(f, id){ for(let k = 0; k < f.tracks.length; k++){ const c = f.tracks[k].clips.find(c => c.id===id); if(c) return {c, k, tr:f.tracks[k]}; } return null; }
 const len = c => c.out - c.in;
+// 🔒 a guidance track is locked (Jordan 2026-11-06: "so it can't be edited accidentally"); 🔓 Unlock in the 🦴 sheet
+const lockedK = (f, k) => { const tr = f && f.tracks[k]; return !!(tr && tr.guide && !tr.unlock); };
+const LOCKMSG = '🔒 The guidance track is locked so it can\'t change by accident. Unlock it in 🦴 Guidance track.';
 function activeAt(f, t){ for(const tr of f.tracks) for(const c of tr.clips) if(t >= c.at && t < c.at + len(c) - 1e-6) return c; return null; } // upper track first
 function filmView(f){
   S.lastFilm = f.id; const T = filmSecs(f), sel = SEL && clipOf(f, SEL), st = sel && takeOf(sel.c.take), ar = (() => { const c = f.tracks.flatMap(t => t.clips).map(c => takeOf(c.take)).find(Boolean); return c ? c.w + '/' + c.h : '16/9'; })();
@@ -535,7 +538,7 @@ function drawTL(f){
   const pps = f.pps, T = Math.max(filmSecs(f) + 10, 30), W = Math.ceil(T * pps), tl = $('#tl'); if(!tl) return;
   const step = pps >= 48 ? 1 : pps >= 16 ? 5 : 10; let ru = ''; for(let s = 0; s <= T; s += step) ru += `<i style="left:${s * pps}px">${fmt(s).replace(' s', 's')}</i>`;
   const OFF = tlOff(); tl.style.width = W + 2 * OFF + 'px'; tl.style.paddingLeft = OFF + 'px'; tl.style.paddingRight = OFF + 'px';
-  tl.innerHTML = `<div class="ruler" id="ruler">${ru}</div>` + f.tracks.map((tr, k) => `<div class="trk" data-k="${k}"><span class="tn">${k + 1}${k===0 ? ' · top' : ''}${tr.guide ? ' · 🦴 guide<span class="gdp"></span>' : guideOpt(f, k, 0) ? ' · 🦴' : ''}${f.tracks.length > 1 && !tr.clips.length ? ` <a data-act="delTrack" data-k="${k}" style="color:var(--bad)">✕</a>` : ''}</span>${tr.clips.map(c => { const t = takeOf(c.take);
+  tl.innerHTML = `<div class="ruler" id="ruler">${ru}</div>` + f.tracks.map((tr, k) => `<div class="trk" data-k="${k}"><span class="tn">${k + 1}${k===0 ? ' · top' : ''}${tr.guide ? ' · 🦴 guide' + (tr.unlock ? ' 🔓' : ' 🔒') + '<span class="gdp"></span>' : guideOpt(f, k, 0) ? ' · 🦴' : ''}${f.tracks.length > 1 && !tr.clips.length ? ` <a data-act="delTrack" data-k="${k}" style="color:var(--bad)">✕</a>` : ''}</span>${tr.clips.map(c => { const t = takeOf(c.take);
     return `<div class="clip ${c.id===SEL ? 'sel' : ''} ${t && fileOf(t) ? '' : t && workingOf(t) ? 'rend' : 'miss'}" data-c="${c.id}" style="left:${c.at * pps}px;width:${Math.max(6, len(c) * pps)}px"><div class="h l" data-h="l"></div><div class="nm">${esc(takeLabel(t))}</div><div class="du">${fmt(len(c))}</div><div class="h r" data-h="r"></div></div>`; }).join('')}${GAP && GAP.k===k ? `<div class="gapsel" style="left:${GAP.a * pps}px;width:${Math.max(6, (GAP.b - GAP.a) * pps)}px"><button data-act="closeGap">🗑 ${fmt(GAP.b - GAP.a)}</button></div>` : ''}</div>`).join('');
   scrollTo(f);
 }
@@ -563,6 +566,7 @@ function wireFilm(f){
     if(ev.pointerType==='touch' && SEL!==r.c.id){ const x0 = ev.clientX, y0 = ev.clientY; el.addEventListener('pointerup', e => { if(Math.abs(e.clientX - x0) < 8 && Math.abs(e.clientY - y0) < 8){ SEL = r.c.id; unGap(tl); $$('.clip.sel').forEach(x => x.classList.remove('sel')); el.classList.add('sel'); refreshTools(f); pushWords(f, true); } }, {once:true}); return; }
     const h = ev.target.dataset.h || '', x0 = ev.clientX, y0 = ev.clientY, c0 = Object.assign({}, r.c), k0 = r.k; let moved = false;
     SEL = r.c.id; unGap(tl); $$('.clip.sel').forEach(x => x.classList.remove('sel')); el.classList.add('sel'); refreshTools(f); pushWords(f, true);
+    if(lockedK(f, r.k)){ if(h) toast(LOCKMSG, 3500); return; } // selected (to look at, copy words), but it doesn't move
     el.setPointerCapture(ev.pointerId); ev.preventDefault();
     const snaps = () => [PH, 0].concat(f.tracks.flatMap(tr => tr.clips.filter(c => c!==r.c).flatMap(c => [c.at, c.at + len(c)])));
     // Jordan 2026-11-06: a clip's edges (start AND end) snap to the edges of the other clips, the playhead and 0; a pink line shows where
@@ -574,7 +578,7 @@ function wireFilm(f){
       else { let na = Math.max(0, c0.at + dx); const L = len(c0); SN = null; const e1 = snap(na, thr), s1 = SN; SN = null; const e2 = snap(na + L, thr) - L, s2 = SN;
         const d1 = s1!=null ? Math.abs(e1 - na) : Infinity, d2 = s2!=null ? Math.abs(e2 - na) : Infinity; // (the end used to lose to an unsnapped start)
         if(d1 <= d2 && d1 < Infinity){ na = e1; SN = s1; } else if(d2 < Infinity){ na = e2; SN = s2; } else SN = null; r.c.at = Math.max(0, na);
-        const k = Math.max(0, Math.min(f.tracks.length - 1, k0 + Math.round(dy / 58))); const cur = clipOf(f, r.c.id); if(cur.k!==k){ cur.tr.clips.splice(cur.tr.clips.indexOf(r.c), 1); f.tracks[k].clips.push(r.c); } }
+        const k = Math.max(0, Math.min(f.tracks.length - 1, k0 + Math.round(dy / 58))); const cur = clipOf(f, r.c.id); if(cur.k!==k && !lockedK(f, k)){ cur.tr.clips.splice(cur.tr.clips.indexOf(r.c), 1); f.tracks[k].clips.push(r.c); } }
       el.style.left = r.c.at * f.pps + 'px'; el.style.width = Math.max(6, len(r.c) * f.pps) + 'px'; const k = clipOf(f, r.c.id).k; const row = tl.querySelector(`.trk[data-k="${k}"]`); if(row && el.parentElement!==row) row.appendChild(el);
       el.querySelector('.du').textContent = fmt(len(r.c)); snapLine(); };
     const up = () => { SN = null; snapLine(); el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); if(moved){ save(); drawTL(f); } refreshTools(f); showFrame(f); };
@@ -790,7 +794,7 @@ async function makeGuide(f, k){ const tr = f.tracks[k]; if(!tr || !tr.clips.leng
   const out = [], miss = []; tr.clips.forEach(c => { const fl = fileOf(takeOf(c.take)); if(!fl){ miss.push(c); return; } out.push({filename:fl.filename, subfolder:fl.subfolder || '', in:c.in, out:c.out, at:c.at, track:0}); });
   if(miss.length){ toast(miss.length + (miss.length===1 ? ' clip on that track has' : ' clips on that track have') + ' no finished video yet'); return; }
   const pc = expPc(); if(!pc){ toast("Can't reach Render or Main"); return; }
-  f.tracks.forEach((x, i) => { x.guide = i===k; if(i < k && x.follow==null) x.follow = true; });
+  f.tracks.forEach((x, i) => { x.guide = i===k; if(i===k) delete x.unlock; if(i < k && x.follow==null) x.follow = true; });
   const sig = trackSig(f, k);
   try{ const r = await fetch(pc + '/renderdeck/h3export', {method:'POST', body:JSON.stringify({name:(f.name || 'film') + ' guide', clips:out, preview:true})}), j = await r.json().catch(() => ({}));
     if(!r.ok) throw new Error(r.status===404 && !j.error ? 'paste the newest helper on ' + pcName(pc) + ' first' : j.error || r.status);
@@ -825,7 +829,7 @@ function guideShow(f){ const el = $('#gdStat'); if(el) el.innerHTML = guideStatu
 function guideRows(f){ const el = $('#gdRows'); if(!el) return; const gk = guideK(f), ready = guideReady(f);
   el.innerHTML = f.tracks.map((tr, k) => { const above = gk >= 0 && k < gk;
     return `<div class="row" style="align-items:center;gap:6px;padding:8px 0;border-top:1px solid var(--line);flex-wrap:wrap"><b style="min-width:70px">Track ${k + 1}</b><span class="note" style="flex:1;margin:0">${tr.clips.length} clip${tr.clips.length===1 ? '' : 's'}${k===gk ? ' · 🦴 the guide' : ''}</span>
-      ${k!==gk ? `<button class="btn" data-gd="make:${k}">🦴 Make it the guide</button>` : `<button class="btn" data-gd="make:${k}">↻ Remake</button><button class="btn" data-gd="off:${k}">✕ Not the guide</button>`}
+      ${k!==gk ? `<button class="btn" data-gd="make:${k}">🦴 Make it the guide</button>` : `<button class="btn" data-gd="make:${k}">↻ Remake</button><button class="btn" data-gd="lock:${k}">${tr.unlock ? '🔒 Lock it' : '🔓 Unlock'}</button><button class="btn" data-gd="off:${k}">✕ Not the guide</button>`}
       ${above ? `<button class="btn ${tr.follow!==false ? 'pri' : ''}" data-gd="follow:${k}">${tr.follow!==false ? '🦴 Follows it' : 'Doesn\'t follow'}</button>${ready ? `<button class="btn" data-gd="fill:${k}">▶ Render over the guide</button>` : ''}` : ''}</div>`; }).join('')
     + (gk >= 0 && ready ? '<button class="btn" data-gd="fill:new" style="width:100%;margin-top:6px">＋ A new track on top, rendered over the guide</button>' : ''); }
 function guideSheet(f){ const o = {n:1};
@@ -836,6 +840,7 @@ function guideSheet(f){ const o = {n:1};
   $('#sheet').hidden = false; guideRows(f);
   $('#gdRows').onclick = async e => { const b = e.target.closest('[data-gd]'); if(!b) return; const [a, v] = b.dataset.gd.split(':'), k = +v;
     if(a==='make'){ await makeGuide(f, k); guideShow(f); guideRows(f); return; }
+    if(a==='lock'){ const tr = f.tracks[k]; if(tr.unlock) delete tr.unlock; else tr.unlock = true; save(); draw(); guideRows(f); toast(tr.unlock ? '🔓 Unlocked: you can change the guide track. Remake the guide after, so the tracks above follow the new version.' : '🔒 Locked', 4000); return; }
     if(a==='off'){ f.tracks[k].guide = false; f.guide = null; save(); draw(); guideShow(f); guideRows(f); return; }
     if(a==='follow'){ f.tracks[k].follow = f.tracks[k].follow===false; save(); draw(); guideRows(f); return; }
     if(a==='fill'){ const gk = guideK(f), g = f.tracks[gk], fn = deckFn('H3Fill'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return; }
@@ -864,6 +869,8 @@ document.addEventListener('click', async ev => {
   if(ev.target.id==='sheet' || ev.target.closest('[data-close]')){ closeSheet(); return; }
   const nv = ev.target.closest('[data-nav]'); if(nv && !ev.target.closest('[data-act]')){ go(JSON.parse(nv.dataset.nav)); return; }
   const el = ev.target.closest('[data-act]'); if(!el) return; const a = el.dataset.act, d = el.dataset, f = N().v==='film' && filmOf(N().film), t = d.t && takeOf(d.t);
+  if(f && ['split', 'carry', 'keepOnly', 'moreTakes', 'useTake', 'redo', 'lead', 'closeGap', 'delClip', 'delTrack'].includes(a)){
+    const r = SEL && clipOf(f, SEL), k = a==='delTrack' ? +d.k : r ? r.k : GAP ? GAP.k : -1; if(k >= 0 && lockedK(f, k)){ ev.stopPropagation(); toast(LOCKMSG, 4000); return; } }
   switch(a){
     case 'newFilm': { const nm = prompt('Name of the film', 'Film ' + (S.films.length + 1)); if(nm==null) return; const nf = {id:uid('f'), name:nm.trim() || 'Film', tracks:[{id:uid('tr'), clips:[]}, {id:uid('tr'), clips:[]}], pps:24}; S.films.unshift(nf); save(); go({v:'film', film:nf.id}); return; }
     case 'delFilm': if(!confirm('Delete "' + f.name + '"? The clips stay in H3 Deck.')) return; S.films = S.films.filter(x => x!==f); save(); go({v:'home'}); return;
@@ -925,7 +932,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
