@@ -227,6 +227,8 @@ img.live{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opaci
 .ruler{height:30px;position:relative;border-bottom:1px solid var(--line);cursor:pointer;background:var(--panel2)}
 .ruler i{position:absolute;top:0;height:100%;border-left:1px solid var(--line);font:600 10px/30px var(--body);pointer-events:none;color:var(--dim);padding-left:3px;font-style:normal;white-space:nowrap}
 .trk{position:relative;height:58px;border-bottom:1px solid var(--line)}
+.gapsel{position:absolute;top:4px;bottom:4px;border:1px dashed var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);border-radius:6px;display:flex;align-items:center;justify-content:center;z-index:2}
+.gapsel button{font-size:12px;padding:5px 8px;border-radius:8px;border:0;background:var(--accent);color:#fff;font-weight:800;white-space:nowrap}
 .trk .tn{position:sticky;left:0;z-index:3;display:inline-block;font-size:10px;font-weight:800;color:var(--dim);padding:2px 5px;background:#111217cc;border-radius:0 0 6px 0}
 .clip{position:absolute;top:6px;height:46px;border-radius:8px;border:1px solid color-mix(in srgb,var(--vid) 60%,var(--line));background:color-mix(in srgb,var(--vid) 18%,var(--panel));overflow:hidden;touch-action:pan-x;user-select:none;-webkit-user-select:none}
 .clip.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent);touch-action:none}
@@ -515,13 +517,19 @@ function drawTL(f){
   const step = pps >= 48 ? 1 : pps >= 16 ? 5 : 10; let ru = ''; for(let s = 0; s <= T; s += step) ru += `<i style="left:${s * pps}px">${fmt(s).replace(' s', 's')}</i>`;
   const OFF = tlOff(); tl.style.width = W + 2 * OFF + 'px'; tl.style.paddingLeft = OFF + 'px'; tl.style.paddingRight = OFF + 'px';
   tl.innerHTML = `<div class="ruler" id="ruler">${ru}</div>` + f.tracks.map((tr, k) => `<div class="trk" data-k="${k}"><span class="tn">${k + 1}${k===0 ? ' · top' : ''}${tr.guide ? ' · 🦴 guide' : guideOpt(f, k, 0) ? ' · 🦴' : ''}${f.tracks.length > 1 && !tr.clips.length ? ` <a data-act="delTrack" data-k="${k}" style="color:var(--bad)">✕</a>` : ''}</span>${tr.clips.map(c => { const t = takeOf(c.take);
-    return `<div class="clip ${c.id===SEL ? 'sel' : ''} ${t && fileOf(t) ? '' : t && workingOf(t) ? 'rend' : 'miss'}" data-c="${c.id}" style="left:${c.at * pps}px;width:${Math.max(6, len(c) * pps)}px"><div class="h l" data-h="l"></div><div class="nm">${esc(takeLabel(t))}</div><div class="du">${fmt(len(c))}</div><div class="h r" data-h="r"></div></div>`; }).join('')}</div>`).join('');
+    return `<div class="clip ${c.id===SEL ? 'sel' : ''} ${t && fileOf(t) ? '' : t && workingOf(t) ? 'rend' : 'miss'}" data-c="${c.id}" style="left:${c.at * pps}px;width:${Math.max(6, len(c) * pps)}px"><div class="h l" data-h="l"></div><div class="nm">${esc(takeLabel(t))}</div><div class="du">${fmt(len(c))}</div><div class="h r" data-h="r"></div></div>`; }).join('')}${GAP && GAP.k===k ? `<div class="gapsel" style="left:${GAP.a * pps}px;width:${Math.max(6, (GAP.b - GAP.a) * pps)}px"><button data-act="closeGap">🗑 ${fmt(GAP.b - GAP.a)}</button></div>` : ''}</div>`).join('');
   scrollTo(f);
 }
 // Jordan 2026-11-05, like DaVinci Resolve: the needle (current frame) stays put and the timeline slides under it, so
 // swiping the timeline scrubs. scrollLeft = PH × pps, because half the box of padding puts 0 s under the needle.
 const tlOff = () => { const w = $('#tlw'); return Math.round((w ? w.clientWidth : 360) / 2); };
-let IGN = -1, SNAPT = 0;
+let IGN = -1, SNAPT = 0, GAP = null; // GAP: the selected empty space {k, a, b}
+// the empty space on track k around time t: from the end of the clip before it (or 0) to the start of the next clip; none after the last clip
+function gapAt(f, k, t){ const cs = (f.tracks[k] || {clips:[]}).clips; if(cs.some(c => t >= c.at && t < c.at + len(c))) return null;
+  const nx = cs.filter(c => c.at >= t - 1e-6).sort((x, y) => x.at - y.at)[0]; if(!nx) return null;
+  const a = Math.max(0, ...cs.filter(c => c.at + len(c) <= t + 1e-6).map(c => c.at + len(c))); return nx.at - a > 0.02 ? {k, a, b:nx.at} : null; }
+function unGap(tl){ if(!GAP) return; GAP = null; const gs = tl.querySelector('.gapsel'); if(gs) gs.outerHTML = ''; }
+function closeGap(f, g){ const tr = f.tracks[g.k]; if(!tr) return; const d = g.b - g.a; tr.clips.forEach(c => { if(c.at >= g.b - 1e-3) c.at = Math.max(0, c.at - d); }); GAP = null; save(); }
 // the clip edge (start or end of any clip, or 0) within 10 px of a time, or null
 function edgeNear(f, t){ const thr = 10 / f.pps; let best = null, d = thr; for(const c of f.tracks.flatMap(tr => tr.clips)) for(const x of [c.at, c.at + len(c)]) if(Math.abs(x - t) < d){ d = Math.abs(x - t); best = x; } return best; } // the scroll position we set ourselves (its scroll event isn't a swipe)
 function scrollTo(f){ const w = $('#tlw'); if(!w) return; const x = Math.round(PH * f.pps); if(Math.abs(w.scrollLeft - x) < 1) return; IGN = x; w.scrollLeft = x; }
@@ -532,9 +540,9 @@ function wireFilm(f){
   tl.addEventListener('pointerdown', ev => {
     const el = ev.target.closest('.clip'); if(!el) return; const r = clipOf(f, el.dataset.c); if(!r) return;
     // a finger on a clip that isn't selected yet swipes the timeline (and selects it on a tap); a selected clip drags
-    if(ev.pointerType==='touch' && SEL!==r.c.id){ const x0 = ev.clientX, y0 = ev.clientY; el.addEventListener('pointerup', e => { if(Math.abs(e.clientX - x0) < 8 && Math.abs(e.clientY - y0) < 8){ SEL = r.c.id; $$('.clip.sel').forEach(x => x.classList.remove('sel')); el.classList.add('sel'); refreshTools(f); } }, {once:true}); return; }
+    if(ev.pointerType==='touch' && SEL!==r.c.id){ const x0 = ev.clientX, y0 = ev.clientY; el.addEventListener('pointerup', e => { if(Math.abs(e.clientX - x0) < 8 && Math.abs(e.clientY - y0) < 8){ SEL = r.c.id; unGap(tl); $$('.clip.sel').forEach(x => x.classList.remove('sel')); el.classList.add('sel'); refreshTools(f); } }, {once:true}); return; }
     const h = ev.target.dataset.h || '', x0 = ev.clientX, y0 = ev.clientY, c0 = Object.assign({}, r.c), k0 = r.k; let moved = false;
-    SEL = r.c.id; $$('.clip.sel').forEach(x => x.classList.remove('sel')); el.classList.add('sel'); refreshTools(f);
+    SEL = r.c.id; unGap(tl); $$('.clip.sel').forEach(x => x.classList.remove('sel')); el.classList.add('sel'); refreshTools(f);
     el.setPointerCapture(ev.pointerId); ev.preventDefault();
     const snaps = () => [PH, 0].concat(f.tracks.flatMap(tr => tr.clips.filter(c => c!==r.c).flatMap(c => [c.at, c.at + len(c)])));
     // Jordan 2026-11-06: a clip's edges (start AND end) snap to the edges of the other clips, the playhead and 0; a pink line shows where
@@ -553,6 +561,10 @@ function wireFilm(f){
     el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
   });
   // tap the ruler: that moment slides to the needle
+  // tap the empty space between two clips (or before the first): that gap is selected, and 🗑 closes it (Jordan 2026-11-06)
+  tl.addEventListener('click', ev => { if(ev.target.closest('.clip,.gapsel,#ruler,.tn')) return; const row = ev.target.closest('.trk'); if(!row) return;
+    const k = +row.dataset.k, t = (ev.clientX - row.getBoundingClientRect().left) / f.pps, g = gapAt(f, k, t);
+    GAP = g; if(g){ SEL = null; } drawTL(f); refreshTools(f); const n = $('#selNote'); if(n) n.innerHTML = g ? 'Empty space on track ' + (k + 1) + ': ' + fmt(g.a) + ' to ' + fmt(g.b) + '. 🗑 closes it: everything after it on the track moves ' + fmt(g.b - g.a) + ' earlier.' : ''; });
   tl.addEventListener('click', ev => { const ru = ev.target.closest('#ruler'); if(!ru) return; stopPlay(); setPH(f, Math.max(0, (ev.clientX - ru.getBoundingClientRect().left) / f.pps), true); });
   wrap.addEventListener('scroll', () => { if(IGN >= 0 && Math.abs(wrap.scrollLeft - IGN) < 2){ IGN = -1; return; } IGN = -1;
     if(PLAY) stopPlay(); let t = wrap.scrollLeft / f.pps; const e = edgeNear(f, t); if(e!=null) t = e; setPH(f, t, true, true);
@@ -561,7 +573,7 @@ function wireFilm(f){
   scrollTo(f);
   showFrame(f);
 }
-function refreshTools(f){ const sel = SEL && clipOf(f, SEL); $$('.tools [data-act="split"],.tools [data-act="guide"],.tools [data-act="carry"],.tools [data-act="redo"],.tools [data-act="lead"],.tools [data-act="versions"],.tools [data-act="editDeck"],.tools [data-act="delClip"]').forEach(b => b.disabled = !sel);
+function refreshTools(f){ const sel = SEL && clipOf(f, SEL); $$('.tools [data-act="split"],.tools [data-act="guide"],.tools [data-act="carry"],.tools [data-act="redo"],.tools [data-act="lead"],.tools [data-act="versions"],.tools [data-act="editDeck"],.tools [data-act="delClip"]').forEach(b => b.disabled = !sel && !(b.dataset.act==='delClip' && GAP));
   const n = $('#selNote'); if(n && sel) n.innerHTML = selText(sel, takeOf(sel.c.take));
   const vsx = $('#vstrip'), key = sel ? sel.c.id + '|' + sel.c.take + '|' + versionsOf(takeOf(sel.c.take) || {}).map(x => x.id + (fileOf(x) ? '1' : '0')).join() : '';
   if(vsx && vsx.dataset.k!==key){ vsx.dataset.k = key; vsx.innerHTML = sel ? stripHtml(sel, takeOf(sel.c.take)) : ''; } const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); }
@@ -834,7 +846,8 @@ document.addEventListener('click', async ev => {
     case 'redo': redoSheet(f); return;
     case 'lead': leadSheet(f); return;
     case 'guideSheet': guideSheet(f); return;
-    case 'delClip': { const r = clipOf(f, SEL); if(r){ r.tr.clips.splice(r.tr.clips.indexOf(r.c), 1); SEL = null; save(); } break; }
+    case 'closeGap': if(GAP){ const d = GAP.b - GAP.a; closeGap(f, GAP); toast('Closed ' + fmt(d) + ' of empty space'); } break;
+    case 'delClip': if(GAP && !SEL){ closeGap(f, GAP); break; } { const r = clipOf(f, SEL); if(r){ r.tr.clips.splice(r.tr.clips.indexOf(r.c), 1); SEL = null; save(); } break; }
     case 'export': exportFilm(f); return;
     case 'preview': previewFilm(f); return;
     case 'snd': S.snd = !S.snd; save(); ['#vA', '#vB'].forEach(q => { const v = $(q); if(v) v.muted = !S.snd; }); el.textContent = S.snd ? '🔊' : '🔇'; return; // muted unless asked (Jordan 2026-11-03)
@@ -859,7 +872,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
