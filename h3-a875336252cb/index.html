@@ -108,6 +108,10 @@ header h1 span{color:var(--accent)}
 .h3r{display:grid;grid-template-columns:44px 1fr;gap:8px;align-items:start}
 .h3r img,.h3r .wave{width:44px;height:44px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:20px}
 .h3r .seg button{padding:5px 4px;font-size:12.5px}
+.cast{border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--bg)}
+.cast .h3r{grid-template-columns:64px 1fr}
+.castpic{width:64px;height:64px;padding:0;border:1px dashed var(--line);border-radius:10px;background:none;color:var(--dim);font-size:12px;line-height:1.2;overflow:hidden}
+.castpic img{width:64px;height:64px;object-fit:cover;border:0;border-radius:0}
 .h3r b{font-size:12.5px;color:var(--soft)}
 #h3Pre{white-space:pre-wrap;font-size:12px;line-height:1.45;max-height:340px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;margin:8px 0 0}
 #h3Peek summary{font-size:13px;font-weight:800;color:var(--cyan);cursor:pointer}
@@ -220,6 +224,15 @@ body.ftab .go{display:none}
         <button class="btn" id="pieceToggle">✏️ Each piece's prompt</button>
         <div class="ptext" id="pieceTexts" hidden style="margin-top:10px"></div>
       </div>
+    </div>
+  </section>
+
+  <section class="block" id="bCast" style="--c:var(--cyan)">
+    <h3>👥 Subjects <span class="sum" id="castSum"></span></h3>
+    <div class="body">
+      <div class="note">One cast for every clip. Write &lt;Subject 1&gt; in a prompt: until it has a picture it is sent as its stand-in words (e.g. "a woman"). Give it a picture later and every render from then on (more takes, redo, carry on, lead in) uses that person, object or place instead.</div>
+      <div id="castList" style="display:grid;gap:10px"></div>
+      <button class="btn" id="castAdd" style="width:100%">＋ Add a subject</button>
     </div>
   </section>
 
@@ -366,7 +379,7 @@ function load(){
     model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smPunch:0, smLoop:false, smSeam:12, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true, ctl:false, ctlVid:null, follow:0.7, ctlStr:1, ctlEnd:0.75, ctl2Vid:null, ctl2Str:0.5, ctl2End:0.65, h3:true, h3Style:'', h3Sound:'', h3Music:''}, s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   if(s.f.follow === undefined){ const o = s.f; o.follow = (+o.ctlStr===1 && +o.ctlEnd===0.8 && +o.ctl2Str===0.4 && +o.ctl2End===0.5) ? 0.7 : null; if(o.follow != null) Object.assign(o, followSet(0.7)); } // 🎚 (2026-11-05)
-  s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
+  s.cast = s.cast || []; s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
 }
 let saveT = 0;
@@ -376,7 +389,7 @@ function save(){ clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
 // (Jordan 2026-11-04). tidyMedia drops media nothing uses any more (blob too); hard = also the previews of media that isn't in
 // the form (only the form shows them, and fixThumbs remakes one from the kept file when it comes back).
 function tidyMedia(hard){
-  const used = JSON.stringify({f:S.f, takes:S.takes}), form = JSON.stringify(S.f); let n = 0;
+  const used = JSON.stringify({f:S.f, takes:S.takes, cast:S.cast}), form = JSON.stringify(S.f); let n = 0;
   for(const id of Object.keys(S.media)){
     if(!used.includes('"' + id + '"')){ delete S.media[id]; delete BLOBS[id]; IDB.del(id).catch(() => {}); Object.keys(S.up).forEach(k => { if(k.startsWith(id + '|')) delete S.up[k]; }); n++; }
     else if(hard && S.media[id].thumb && !form.includes('"' + id + '"')){ S.media[id].thumb = ''; S.media[id].tc = 1; n++; } }
@@ -809,6 +822,47 @@ function refLabels(){ // fixed order: pictures, then each video (its soundtrack'
   return L;
 }
 
+// ---------- 👥 Subjects (Jordan 2026-11-06): one cast for every clip ----------
+// A prompt says <Subject 1>. While that subject has no picture it is sent as its stand-in words ("a woman"); once it has one, the picture
+// goes along and MiniMax hears who it is ("<Subject 1> is the lady, as shown in <Picture 3>"). Takes keep the token, so every later render
+// (more takes, redo a stretch, carry on, lead in) uses the subject as it is NOW: change it once and it changes everywhere.
+const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
+const castOf = n => (S.cast || []).find(c => c.n===+n);
+const castWho = c => ((c.who || '').trim() || (c.stand || '').trim()).replace(/[\s.]*$/, '');
+function castUsed(t){ const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), ns = new Set();
+  txt.replace(SUBRE, (m, n) => { if(castOf(n)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
+function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
+  const imgs = (t.imgs || []).filter(r => !r.cast);
+  if(pics) for(const n of castUsed(t)){ const c = castOf(n); if(c && c.pic && S.media[c.pic] && imgs.length < MAXREF.img) imgs.push({id:c.pic, desc:castWho(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); }
+  return Object.assign({}, t, {imgs}); }
+function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
+  const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) pics[r.cast] = k + 1; });
+  let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n); if(!c || pics[c.n]) return m;
+    let w = (c.stand || '').trim() || 'someone'; if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
+  if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n)) || 'the subject') + ', as shown in <Picture ' + pics[n] + '>.');
+    if(defs.length) out = defs.join(' ') + ' ' + out; }
+  return out; }
+const castWords = txt => (txt || '').replace(SUBRE, (m, n) => { const c = castOf(n); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
+function castHits(w){ // how often the words are in the form and the takes (for 🔁 swap)
+  if(!(w = (w || '').trim())) return 0; const re = new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'); let n = 0;
+  const cnt = x => { n += ((x || '').match(re) || []).length; };
+  cnt(S.f.prompt); Object.values(S.f.pieceText || {}).forEach(cnt); S.takes.forEach(t => { cnt(t.prompt); (t.pieces || []).forEach(p => cnt(p.prompt)); }); return n; }
+function castSwap(re, to){ // every prompt in the form and in every take (the timeline's clips are takes)
+  const f = S.f; f.prompt = (f.prompt || '').replace(re, to); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = f.pieceText[k].replace(re, to);
+  S.takes.forEach(t => { if(t.prompt) t.prompt = t.prompt.replace(re, to); (t.pieces || []).forEach(p => { if(p.prompt) p.prompt = p.prompt.replace(re, to); }); }); }
+function drawCast(){ const L = S.cast || [];
+  $('#castSum').textContent = L.length ? L.length + (L.length > 1 ? ' subjects' : ' subject') + (L.some(c => c.pic && S.media[c.pic]) ? ' · ' + L.filter(c => c.pic && S.media[c.pic]).length + ' with a picture' : '') : '';
+  $('#castList').innerHTML = L.map(c => { const m = c.pic && S.media[c.pic], hits = castHits(c.stand), tk = '&lt;Subject ' + c.n + '&gt;';
+    return `<div class="cast" data-cn="${c.n}"><div class="row" style="justify-content:space-between;align-items:center"><b>${tk}</b><span class="row" style="gap:6px"><button class="btn" data-cast="ins">↧ Into the prompt</button><button class="btn" data-cast="rm" title="Remove: its words go back into the prompts">✕</button></span></div>
+      <div class="seg" style="margin-top:6px">${CASTK.map(([v, t]) => `<button data-cast="kind:${v}" class="${(c.kind || 'char')===v ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <div class="lab" style="margin-top:8px"><span>Stand-in words (sent while there's no picture)</span></div><input data-castf="stand" value="${esc(c.stand || '')}" placeholder="e.g. a woman">
+      <div class="h3r" style="margin-top:8px"><button class="castpic" data-cast="pic" title="Pick its picture">${m ? `<img src="${m.thumb || ''}" alt="">` : '＋<br>Picture'}</button><div>
+        <input data-castf="who" value="${esc(c.who || '')}" placeholder="Who it is in the picture, e.g. the lady in the red coat">
+        ${m ? `<div class="seg" style="margin-top:6px">${KEEPS.map(([v, t]) => `<button data-cast="keep:${v}" class="${(c.keep || 'exact')===v ? 'on' : ''}">${t}</button>`).join('')}<button data-cast="nopic">✕ Picture</button></div>` : ''}</div></div>
+      <div class="note" style="margin-top:6px">${m ? 'Sent as the picture: MiniMax hears "' + tk + ' is ' + esc(castWho(c) || 'the subject') + ', as shown in &lt;Picture n&gt;".' : 'Sent as "' + esc((c.stand || '').trim() || 'someone') + '" until it has a picture.'}</div>
+      ${(c.stand || '').trim() ? `<button class="btn" data-cast="swap" style="margin-top:6px;width:100%" ${hits ? '' : 'disabled'}>🔁 Turn "${esc(c.stand.trim())}" into ${tk} everywhere${hits ? ' (' + hits + ' found)' : ' (none in the prompts)'}</button>` : ''}</div>`; }).join('');
+}
+
 // ---------- 🧾 the H3 way: MiniMax's own prompt format (Jordan 2026-11-04) ----------
 // The hosted H3-Context-IR rewrites every prompt into this structure before H3-Base sees it, and the open checkpoints were
 // trained on it: MiniMaxAI/MiniMax-H3 docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md (Ref2VA: subject_definitions, summary with a
@@ -827,7 +881,7 @@ function h3Gist(text){ // for the summary: the action without timings or our con
   const ss = t.match(/[^.!?]+[.!?]*/g) || []; let g = ss.slice(0, 2).map(x => x.trim()).join(' '); if(g.length > 320) g = g.slice(0, 317).replace(/\s+\S*$/, '') + '…'; return g; }
 // o: {h3:{style, sound, music}, text, words, fl2v, imgs:[{desc, keep}], vids:[{desc, keep, sound}], auds:[{desc, keep}], firstPic (its <Picture n>, 0 = none), first, last, cont, secs}
 function h3Prompt(o){
-  const H = o.h3 || {}, text = (o.text || '').trim().replace(/^\[Shot 1\]\s*/, ''), words = o.words ? dot(o.words) + '\n\n' : '';
+  const H = o.h3 || {}; let text = (o.text || '').trim().replace(/^\[Shot 1\]\s*/, ''); const words = o.words ? dot(o.words) + '\n\n' : '';
   const snd = dot((H.sound || '').trim() || H3_SOUND), mus = (H.music || '').trim() ? dot(H.music) : 'N/A';
   const imgs = o.imgs || [], vids = o.vids || [], auds = o.auds || [];
   const poses = imgs.map((r, k) => r.pose ? {k:k + 1, t:+r.pose.t || 0} : null).filter(Boolean), t0 = +o.t0 || 0, secs = o.secs || 5;
@@ -839,12 +893,16 @@ function h3Prompt(o){
     return words + head + 'integrated_multimodal_description: [Shot 1] ' + h3Style(H.style, true) + '. ' + text.replace(/^[a-z]/, c => c.toUpperCase()) + '\n\noverall_soundscape: ' + snd + '\n\nnon_diegetic_music: ' + mus;
   }
   const defs = [], ret = [], subs = [], groups = []; // pictures with the same words are one subject seen in several pictures
-  imgs.forEach((r, k) => { if(r.pose) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = d.toLowerCase(); let g = d && groups.find(x => x.key===key);
-    if(!g){ g = {key, d, pics:[], keep:KEEP[r.keep] ? r.keep : 'exact'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); });
+  imgs.forEach((r, k) => { if(r.pose) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
+    if(!g){ g = {key, d, pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || 'char'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); });
+  // 👥 the cast's subjects come first, in their own order, so <Subject 1> in the prompt is usually <Subject 1> here too
+  groups.sort((x, y) => (x.cast || 1e3) - (y.cast || 1e3)); { const cm = {}; groups.forEach((g, j) => { if(g.cast) cm[g.cast] = '<Subject ' + (j + 1) + '>'; });
+    if(Object.keys(cm).length) text = text.replace(SUBRE, (m, n) => cm[+n] || m); }
   groups.forEach((g, j) => { const sl = '<Subject ' + (j + 1) + '>', from = andList(g.pics); subs.push(sl);
     defs.push(sl + ' is ' + (g.d ? g.d + ', as shown in ' + from : 'the subject shown in ' + from) + '.');
     ret.push(sl + ' (appears in [Shot 1]): ' + KEEP[g.keep] + ' - ' + (g.keep==='loose' ? 'only the broad look, colours and feel of ' + from + ' are kept.'
-      : g.keep==='mostly' ? 'the main features of ' + from + ' are kept, with small changes allowed.' : 'the identity, face, hair, build, clothing and colours from ' + from + ' are kept.')); });
+      : g.keep==='mostly' ? 'the main features of ' + from + ' are kept, with small changes allowed.' : g.kind==='place' ? 'the setting, its layout, light and colours from ' + from + ' are kept.'
+      : g.kind==='thing' ? 'the shape, materials, details and colours of the object in ' + from + ' are kept.' : 'the identity, face, hair, build, clothing and colours from ' + from + ' are kept.')); });
   // 🧍 pose keys (Jordan 2026-11-05): a grey mannequin picture is a pose subject (the guide lists "actions, expressions, or poses"
   // as subjects), its pose moved onto the person by attribute_transfer, and the time it's reached said in the shot ("At MM:SS.mmm")
   const who = subs[0] || 'the person', timed = [];
@@ -926,6 +984,7 @@ function fill(oi, cls, inputs){ const req = ((oi[cls] || {}).input || {}).requir
   for(const [k, spec] of Object.entries(req)){ if(k in inputs || /^COMFY_/.test(spec[0])) continue; const l = combo(oi, cls, k); if(l.length){ inputs[k] = l[0]; continue; } if(spec[1] && spec[1].default !== undefined) inputs[k] = spec[1].default; }
   return inputs; }
 function pieceGraph(t, i, oi, names){
+  { const M0 = resolveModel(oi, t.model, t.turbo); t = castTake(t, !(M0 && M0.fl2v)); } // 👥 the subjects' pictures, as they are now
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
   const pc = t.pieces[i], first = i===0, last = i===t.pieces.length - 1, chain = !!(oi.MiniMaxH3MotionContextSaveLatent && oi.MiniMaxH3MotionContext);
   const M = resolveModel(oi, t.model, t.turbo), w = t.w, h = t.h, L = pc.gen, steps = +t.steps || M.steps;
@@ -943,7 +1002,7 @@ function pieceGraph(t, i, oi, names){
   const words = lorasOf(t).map(l => (l.words || '').trim()).filter(Boolean).join(', ');
   // (✨ in-betweens: the mannequin wording is added here, out of sight; Jordan's prompt says what happens)
   const say = t.ctl && t.ctl.face ? faceWords(t.ctl.face, Math.max(0, pc.start - LEAD(pc) / FPS), L / FPS) : '';
-  const act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pc.prompt + (say ? (/[.!?]\s*$/.test(pc.prompt) || !pc.prompt.trim() ? ' ' : '. ') + say : '');
+  const pp = castText(pc.prompt, t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
   let prompt = (words ? words.replace(/[.\s]*$/, '. ') : '') + act, cond, lat, guides = 0;
   const h3 = o => t.h3 ? h3Prompt(Object.assign({h3:t.h3, text:act, words, imgs:t.imgs, vids:t.vids, auds:t.auds, cont:!!pc.ctx, secs:L / FPS, t0:pc.start - LEAD(pc) / FPS}, o)) : null;
   if(M.fl2v){ // the official First/last frame model
@@ -1087,7 +1146,7 @@ function upGraph(t, oi, names){
   const model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:refs ? regenRefUnet(oi) : regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0];
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
-  const length = regenLen(t), prompt = t.prompt || SM_PROMPT;
+  const length = regenLen(t), prompt = castWords(t.prompt) || SM_PROMPT;
   let iv;
   if(refs){ const ri = {}; upRefs(t).slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
     iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:d.w, height:d.h, length, ref_image_size:'match'}, ri)); }
@@ -1214,8 +1273,8 @@ async function render(){
     toast(sent > 1 ? sent + ' takes sent to ' + used.map(pcName).join(' and ') + (left ? '. Not ' + left + ', so they take turns on ' + pcName(used[0]) : '') : 'Sent to ' + pcName(S.takes[0].pc), left ? 8000 : 3200); }
 }
 async function sendPieces(t, from){
-  const url = t.pc, oi = pcOf(url).oi, names = {};
-  const ids = [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...t.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
+  const url = t.pc, oi = pcOf(url).oi, names = {}, M0 = resolveModel(oi, t.model, t.turbo), T = castTake(t, !(M0 && M0.fl2v));
+  const ids = [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...t.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
@@ -1520,8 +1579,9 @@ function drawShot(){ { const b = $('#mqNote'), n = refsOn().pins.length; if(b){ 
     return `<div><div class="ph"><span>Piece ${i + 1} · ${fmtS(p.start)} to ${fmtS(p.start + p.deliv / FPS)}${mine != null ? ' · edited' : ''}</span>${mine != null ? `<button data-auto="${i}">↺ Auto</button>` : ''}</div><textarea data-pt="${i}">${esc(mine != null ? mine : auto)}</textarea></div>`; }).join('') +
     '<div class="note">Each piece is told it carries on from the one before. Timed beats in the prompt are moved into the piece they fall in, with their times counted from that piece\'s start.</div>'; }
   const L = refLabels(), tags = Object.entries(L).filter(([, v]) => v!=='soundtrack').map(([, v]) => v.split(' + ').pop());
-  $('#tagBar').innerHTML = tags.length ? [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : '';
-  $('#tagBar').hidden = !tags.length; if(tags.length) $('#tagBar').style.marginBottom = '8px';
+  const cast = (S.cast || []).map(c => `<button data-ins="&lt;Subject ${c.n}&gt;" title="${esc(castWho(c) || '')}">👥 &lt;Subject ${c.n}&gt;</button>`).join('');
+  $('#tagBar').innerHTML = [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
+  const anyTag = tags.length || cast; $('#tagBar').hidden = !anyTag; if(anyTag) $('#tagBar').style.marginBottom = '8px';
   drawH3();
 }
 // 🧾 the H3 way: the switch, who each reference is, and a look at the prompt MiniMax gets
@@ -1546,8 +1606,9 @@ function drawH3(){
 function h3Peek(){
   const f = S.f; if(!f.h3 || f.sm) return; let t; try{ t = snapshot(); }catch(e){ return; }
   const oi = S.pcs.map(p => pcOf(p.url).oi).filter(Boolean).find(o => resolveModel(o, f.model, f.turbo)), M = oi && resolveModel(oi, f.model, f.turbo), fl2v = M ? M.fl2v : /fl2v/.test(f.model || '');
+  t = castTake(t, !fl2v);
   const pc = t.pieces[0], words = lorasOf(t).map(l => (l.words || '').trim()).filter(Boolean).join(', '), extra = !fl2v && t.fl && t.first && t.imgs.length < 9;
-  const txt = h3Prompt({h3:t.h3, text:pc.prompt, words, fl2v, imgs:fl2v ? [] : t.imgs, vids:fl2v ? [] : t.vids, auds:fl2v ? [] : t.auds, cont:!!pc.ctx, secs:pc.gen / FPS,
+  const txt = h3Prompt({h3:t.h3, text:castText(pc.prompt, t, false), words, fl2v, imgs:fl2v ? [] : t.imgs, vids:fl2v ? [] : t.vids, auds:fl2v ? [] : t.auds, cont:!!pc.ctx, secs:pc.gen / FPS,
     first:!!(t.fl && t.first), last:!!(t.lastOn && t.pieces.length===1), firstPic:extra ? t.imgs.length + 1 : 0});
   $('#h3Pre').textContent = txt; $('#h3Peek').querySelector('summary').textContent = '👁 What MiniMax gets' + (t.pieces.length > 1 ? ' (piece 1 of ' + t.pieces.length + ')' : '');
   const n = h3Words(f.prompt), miss = refsOn().imgs.filter(r => !r.pose && !(r.desc || '').trim()).length, notes = [];
@@ -1743,8 +1804,8 @@ function drawLive(){ // the running piece's preview picture and step count, with
     el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%';
     const ph = el.querySelector('[data-live]'), L = run && LIVE[run.pid]; if(ph && L && L.img){ let im = ph.querySelector('img'); if(!im){ ph.textContent = ''; im = document.createElement('img'); im.className = 'live'; ph.appendChild(im); } if(im.src!==L.img) im.src = L.img; } }
 }
-function drawAll(){ drawFilmNote(); drawDots(); drawShot(); drawInputs(); drawModel(); drawCanvas(); drawMore(); drawGo(); drawTakes();
-  for(const id of ['bShot','bInputs','bModel','bCanvas','bMore']) $('#' + id).classList.toggle('shut', S.open[id]===false); }
+function drawAll(){ drawFilmNote(); drawDots(); drawShot(); drawCast(); drawInputs(); drawModel(); drawCanvas(); drawMore(); drawGo(); drawTakes();
+  for(const id of ['bShot','bCast','bInputs','bModel','bCanvas','bMore']) $('#' + id).classList.toggle('shut', S.open[id]===false); }
 
 // ---------- taps ----------
 document.addEventListener('click', async e => {
@@ -1806,6 +1867,7 @@ $('#filePick').onchange = async e => {
     for(const file of files){
       if(kind==='img' && pickKind==='img' && f.imgs.length >= MAXREF.img) break;
       if(pickKind==='rough'){ await guideFrom(file, file.name || 'rough.mp4'); break; }
+      if(pickKind==='cast'){ const c = castOf(pickCast); if(c){ c.pic = await addMedia(file, 'img'); c.keep = c.keep || 'exact'; } break; }
       if(pickKind==='smref'){ f.smRefs = (f.smRefs || []).filter(x => S.media[x]); if(f.smRefs.length >= REGEN_REFS) break; f.smRefs.push(await addMedia(file, 'img')); f.smUpRefs = true; continue; }
       const id = await addMedia(file, pickKind==='first' && /^video\//.test(file.type || '') ? 'vid' : kind);
       if(pickKind==='ctl'){ f.ctlVid = id; f.ctl = true; break; }
@@ -1820,6 +1882,18 @@ $('#filePick').onchange = async e => {
   save(); drawAll();
 };
 $('#h3Sw').onclick = () => { S.f.h3 = !S.f.h3; save(); drawH3(); };
+let pickCast = 0;
+$('#castAdd').onclick = () => { const n = (S.cast || []).reduce((a, c) => Math.max(a, c.n), 0) + 1; S.cast.push({n, kind:'char', stand:n===1 ? 'a woman' : '', who:'', pic:null, keep:'exact'}); save(); drawCast(); drawShot(); };
+$('#castList').oninput = e => { const k = e.target.dataset.castf, c = k && castOf(e.target.closest('[data-cn]').dataset.cn); if(!c) return; c[k] = e.target.value; save(); clearTimeout(castT); castT = setTimeout(() => { const a = document.activeElement, at = a && a.dataset.castf, sel = a && a.selectionStart; drawCast(); drawShot(); if(at){ const x = $('#castList').querySelector(`[data-cn="${c.n}"] [data-castf="${at}"]`); if(x){ x.focus(); try{ x.selectionStart = x.selectionEnd = sel; }catch(er){} } } }, 500); };
+let castT = 0;
+$('#castList').onclick = e => { const b = e.target.closest('[data-cast]'); if(!b) return; const c = castOf(b.closest('[data-cn]').dataset.cn); if(!c) return; const [a, v] = b.dataset.cast.split(':'), tok = '<Subject ' + c.n + '>';
+  if(a==='kind') c.kind = v; else if(a==='keep') c.keep = v; else if(a==='nopic') c.pic = null;
+  else if(a==='pic'){ pickCast = c.n; pickFile('cast'); return; }
+  else if(a==='ins'){ const ta = $('#prompt'), s = ta.selectionStart != null ? ta.selectionStart : ta.value.length, val = ta.value; ta.value = val.slice(0, s) + tok + ' ' + val.slice(ta.selectionEnd || s); S.f.prompt = ta.value; save(); drawShot(); drawCast(); return; }
+  else if(a==='swap'){ const w = (c.stand || '').trim(), n = castHits(w); if(!n) return; if(!confirm('Turn every "' + w + '" in the prompt and in all ' + S.takes.length + ' takes into ' + tok + '? (' + n + ' found)')) return;
+    castSwap(new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), tok); $('#prompt').value = S.f.prompt; toast('🔁 ' + n + ' × "' + w + '" → ' + tok + ': it now follows the subject everywhere'); }
+  else if(a==='rm'){ if(!confirm('Remove ' + tok + '? Its stand-in words go back into every prompt that uses it.')) return; const w = (c.stand || '').trim() || 'someone'; castSwap(new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'gi'), w); S.cast = S.cast.filter(x => x!==c); $('#prompt').value = S.f.prompt; }
+  save(); drawCast(); drawShot(); };
 $('#h3Style').oninput = e => { S.f.h3Style = e.target.value; save(); h3Peek(); };
 $('#h3Sound').oninput = e => { S.f.h3Sound = e.target.value; save(); h3Peek(); };
 $('#h3Music').oninput = e => { S.f.h3Music = e.target.value; save(); h3Peek(); };
@@ -2210,6 +2284,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
