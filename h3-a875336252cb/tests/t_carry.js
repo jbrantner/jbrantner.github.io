@@ -74,23 +74,36 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(ct.cont && Math.abs(ct.contCut - 2.5) < 0.01 && Math.abs(ct.contSecs - 2.5) < 0.01 && ct.carry && ct.carry.clip, 'the take remembers the cut and the clip it carries on');
   const jvs = node(ct.jg, 'Video Slice'), cc = node(ct.jg, 'ConcatenateVideo');
   ok(ct.carry.own && !jvs && (!cc || ct.jg[cc.inputs['videos.video0'][0]].class_type==='LoadVideo'), 'the finished take is only the new part: its own clip, not stitched onto the one before (Jordan 2026-11-06)');
-  // Films puts it right after the clip: the clip ends at 2.5 s, the next clip moves along
+  // Films puts it on a track above, from the exact moment; the original clips stay whole underneath
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
-  const pl = await fr.evaluate(id => { const f = FILM.S.films[0], cs = f.tracks[0].clips.map(c => ({take:c.take, at:+c.at.toFixed(2), in:+c.in.toFixed(2), out:+c.out.toFixed(2)})); return cs; }, ct.id);
-  const nc = pl.find(c => c.take===ct.id);
-  ok(pl.length===3 && pl[0].out===2.5 && nc && nc.at===2.5 && nc.in===0 && nc.out > 4.5 && nc.out < 5.5 && pl[1].at===+(nc.at + nc.out - nc.in).toFixed(2), '➕ the new part sits right after the clip (now ending at 2.5 s) and the clip after it moves along (' + JSON.stringify(pl) + ')');
+  const pl = await fr.evaluate(() => FILM.S.films[0].tracks.map(tr => tr.clips.map(c => ({take:c.take, at:+c.at.toFixed(2), in:+c.in.toFixed(2), out:+c.out.toFixed(2)}))));
+  const nc = pl[0].find(c => c.take===ct.id);
+  ok(pl.length===3 && pl[0].length===1 && nc && nc.at===2.5 && nc.in===0 && nc.out > 4.5 && nc.out < 5.5 && pl[1].length===2 && pl[1].every(c => c.in===0 && c.out===5) && pl[1][1].at===5, '➕ the new part goes on a new track above, starting at 2.5 s, and the original clips stay whole (' + JSON.stringify(pl) + ')');
   ok(await fr.evaluate(() => /Carry on|➕/.test(document.querySelector('#tl').textContent)), 'the new clip is labelled ➕');
   // while it renders the new clip is striped; select it and its takes (the versions of that Carry on) show under it
-  ok(await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks[0].clips.find(x => x.take===id); return !!document.querySelector('.clip.rend[data-c="' + c.id + '"]'); }, ct.id), 'the new part is striped on the timeline while it renders');
+  const cid = await fr.evaluate(id => FILM.S.films[0].tracks[0].clips.find(x => x.take===id).id, ct.id);
+  ok(await fr.evaluate(c => !!document.querySelector('.clip.rend[data-c="' + c + '"]'), cid), 'the new part is striped on the timeline while it renders');
   await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id), v = JSON.parse(JSON.stringify(t)); v.id = 'tV2'; v.t = t.t + 1; v.state = 'done'; v.final = {filename:'v2_00001_.mp4', subfolder:'Output_Main/H3Deck/v2', type:'output'}; v.pieces.forEach(p => p.deliv = 96); H3.S.takes.unshift(v); H3.saveNow(); }, ct.id);
-  await fr.evaluate(id => { const f = FILM.S.films[0]; FILM.SEL = f.tracks[0].clips.find(x => x.take===id).id; FILM.draw(); }, ct.id); await page.waitForTimeout(300);
+  await fr.evaluate(c => { FILM.SEL = c; FILM.draw(); }, cid); await page.waitForTimeout(300);
   const vstr = await fr.evaluate(() => [...document.querySelectorAll('#vstrip [data-act="useTake"]')].map(b => [b.dataset.t, b.classList.contains('on'), b.textContent]));
   ok(vstr.length===2 && vstr[0][1] && /Rendering on/.test(vstr[0][2]) && vstr[1][0]==='tV2', 'the selected clip shows its takes under it, the rendering one striped (' + JSON.stringify(vstr) + ')');
-  const before2 = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => ({take:c.take, at:+c.at.toFixed(2), len:+(c.out - c.in).toFixed(2)})));
   await fr.click('#vstrip [data-t="tV2"]'); await page.waitForTimeout(300);
-  const after2 = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => ({take:c.take, at:+c.at.toFixed(2), len:+(c.out - c.in).toFixed(2)})));
-  const swc = after2.find(c => c.take==='tV2'), last = after2.find(c => c.at > swc.at), lastB = before2.find(c => c.take===last.take && c.at > 2.5);
-  ok(swc && swc.len===4 && Math.abs(last.at - (lastB.at - (before2.find(c => c.take===ct.id).len - 4))) < 0.02, 'tapping a take puts it in the clip, and the clips after it move to fit its length (' + JSON.stringify(after2) + ')');
+  const swc = await fr.evaluate(c => { const r = FILM.clipOf(FILM.S.films[0], c); return {take:r.c.take, len:+(r.c.out - r.c.in).toFixed(2)}; }, cid);
+  ok(swc.take==='tV2' && swc.len===4, 'tapping a take puts it in the clip, at its own length (' + JSON.stringify(swc) + ')');
+  // playing across the cut onto the clip above: always a picture on screen (no black flash), and the upper clip takes over at 2.5 s
+  const pf = await fr.evaluate(() => new Promise(res => { const f = FILM.S.films[0]; FILM.PH = 1.8; FILM.draw(); let gaps = 0, n = 0, after = null; FILM.play(f);
+    const tick = () => { n++; const on = document.querySelectorAll('.stage video.on'), t = FILM.PH; if(t > 1.9 && FILM.activeAt(f, t) && !on.length) gaps++;
+      if(t > 2.9 && !after){ after = on[0] && on[0].dataset.c; } if(t < 3.2) requestAnimationFrame(tick); else { FILM.stopPlay && FILM.stopPlay(); res({gaps, n, after, want:FILM.activeAt(f, 3).id}); } }; requestAnimationFrame(tick); }));
+  ok(pf.gaps===0 && pf.after===pf.want, 'playing across the cut never shows black, and the clip above takes over (' + JSON.stringify(pf) + ')');
+  // ＋ More takes: carry on again from the same moment, with the clip's words; the new takes join its takes, no new clip
+  await page.evaluate(() => { H3.S.f.fl = false; H3.S.f.first = null; H3.drawAll(); });
+  await fr.click('#vstrip [data-act="moreTakes"]'); await page.waitForTimeout(600);
+  const mt = await page.evaluate(() => { const m = H3.S.media[H3.S.f.first]; return {carry:m && m.carry, cut:m && m.cut, prompt:H3.S.f.prompt}; });
+  ok(mt.carry && mt.carry.key===ct.carry.key && Math.abs(mt.cut - 2.5) < 0.01 && /opens the window/.test(mt.prompt), '＋ More takes sets up the same Carry on (same moment, same group, the clip\'s words) (' + JSON.stringify(mt) + ')');
+  const n9 = sent.length, nClips = await fr.evaluate(() => FILM.S.films[0].tracks.reduce((a, tr) => a + tr.clips.length, 0));
+  await page.click('#goBtn'); await page.waitForTimeout(1500); await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
+  const mt2 = await fr.evaluate(c => ({n:FILM.S.films[0].tracks.reduce((a, tr) => a + tr.clips.length, 0), strip:document.querySelectorAll('#vstrip [data-act="useTake"]').length}), cid);
+  ok(sent.length > n9 && mt2.n===nClips && mt2.strip===3, 'its renders join the clip\'s takes (no extra clip) (' + JSON.stringify(mt2) + ')');
   await fr.click('#vstrip [data-t="' + ct.id + '"]'); await page.waitForTimeout(200);
   // ↻ redo 1–2 s of the second clip (the original take)
   await page.click('[data-tab="films"]'); await page.waitForTimeout(500);
@@ -129,8 +142,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const n2 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
   const nt = await page.evaluate(() => { const t = H3.S.takes[0]; return {id:t.id, toFilm:t.toFilm}; });
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
-  const tr0 = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => ({take:c.take, at:c.at})));
-  ok(sent.length===n2 + 1 && nt.toFilm && nt.toFilm.film==='fA' && tr0[tr0.length - 1].take===nt.id && tr0[tr0.length - 1].at >= Math.max(...tr0.slice(0, -1).map(c => c.at)), 'a Render from the Films tab lands on the end of track 1 of the open film (' + JSON.stringify(nt.toFilm) + ')');
+  const tr0 = await fr.evaluate(id => { const f = FILM.S.films[0]; return f.tracks.find(tr => tr.clips.some(c => c.take===id)).clips.map(c => ({take:c.take, at:c.at})); }, await page.evaluate(() => H3.S.takes[0].id));
+  ok(sent.length===n2 + 1 && nt.toFilm && nt.toFilm.film==='fA' && tr0[tr0.length - 1].take===nt.id && tr0[tr0.length - 1].at >= Math.max(...tr0.slice(0, -1).map(c => c.at)), 'a Render from the Films tab lands on the end of the open film (' + JSON.stringify(nt.toFilm) + ')');
   // the words behind every moment: the carry-on starts with its source take's words, then its own; a redo's middle has the redo words
   const sg = await fr.evaluate(([c, r]) => ({c:FILM.segsOf(FILM.takeOf(c)).map(x => [+x.a.toFixed(2), +x.b.toFixed(2), x.text]), r:FILM.segsOf(FILM.takeOf(r)).map(x => [+x.a.toFixed(2), +x.b.toFixed(2), x.text]), mix:FILM.wordsBetween(FILM.takeOf(r), 0.5, 1.5)}), [ct.id, rd[1].id]);
   ok(sg.c.length===1 && sg.c[0][0]===0 && /opens the window/.test(sg.c[0][2]), 'a carry-on clip has its own words from its start (' + JSON.stringify(sg.c) + ')');
@@ -145,7 +158,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(st.m && st.l===0 && !st.fl, 'and everything else that take used: its model and LoRAs (not the video it carried on) (' + JSON.stringify(st) + ')');
   // change something (a new reference) and scrubbing leaves it alone; ↺ Follow the clip again lets it load clips again
   await page.evaluate(() => { H3.S.f.loras = [{name:'swap.safetensors', str:1, words:''}]; H3.drawAll(); });
-  await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks[0].clips[0], w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }); await page.waitForTimeout(400);
+  await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }); await page.waitForTimeout(400);
   const kept = await page.evaluate(() => ({l:H3.S.f.loras.map(x => x.name), p:H3.S.f.prompt, note:document.querySelector('#filmFormNote').textContent}));
   ok(kept.l[0]==='swap.safetensors' && /opens the window/.test(kept.p) && /stay while you scrub/.test(kept.note), 'after you change something, scrubbing to another clip keeps your settings (' + JSON.stringify(kept.l) + ')');
   await page.evaluate(() => H3FilmFollow()); await page.waitForTimeout(300);
@@ -169,7 +182,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const ids = H3.S.takes.map(t => t.id); return {junk:ids.includes('tJunk'), lost:[...used].filter(id => !ids.includes(id))}; });
   ok(!cl.junk && !cl.lost.length, 'Clear finished takes old renders off the list but keeps every take on a Films timeline (' + JSON.stringify(cl) + ')');
   // Films keeps its own copy of each clip's take: a take that leaves H3 Deck's list still plays on the timeline
-  const kp = await page.evaluate(() => { const F = JSON.parse(localStorage.getItem('h3edit')), id = F.films[0].tracks[0].clips[0].take;
+  const kp = await page.evaluate(() => { const F = JSON.parse(localStorage.getItem('h3edit')), id = 'tA';
     const t = H3.S.takes.find(x => x.id===id); H3.S.takes = H3.S.takes.filter(x => x.id!==id); H3.saveNow(); return {id, had:!!(F.keep || {})[id], t:!!t}; });
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(300);
   const kp2 = await fr.evaluate(id => { const t = FILM.takeOf(id); return {t:!!t, f:!!FILM.fileOf(t)}; }, kp.id);
