@@ -96,7 +96,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(pl.length===1 && pl[0][0]===0 && Math.abs(pl[0][2] - 5) < 0.01 && pl[0][3], '▶ clip 1 lands on track 1 at 0 s, 5 s long (' + JSON.stringify(pl) + ')');
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200);
   ok(await fr.evaluate(() => /Clip 2 of 2 over the guide/.test(document.querySelector('[data-gd="fill:0"]').textContent)), 'then the sheet offers ▶ Clip 2 of 2');
-  const n3 = sent.length; await fr.click('[data-gd="fill:0"]'); await page.waitForTimeout(3000);
+  // the track shows the guide clip still to make in grey; tap it, pick takes, ▶ Render this clip (Jordan 2026-11-06)
+  await fr.evaluate(() => { document.querySelector('#sheet').hidden = true; FILM.draw(); }); await page.waitForTimeout(200);
+  const gh = await fr.evaluate(() => ({n:FILM.ghostsOf(FILM.S.films[0], 0).length, el:document.querySelectorAll('.trk[data-k="0"] .ghost').length, lbl:(document.querySelector('.trk[data-k="0"] .ghost') || {}).textContent}));
+  ok(gh.n===1 && gh.el===1 && /2 · tap to render/.test(gh.lbl), 'the guide clip still to make shows on the track in grey (' + JSON.stringify(gh) + ')');
+  await fr.evaluate(() => document.querySelector('.trk[data-k="0"] .ghost').click()); await page.waitForTimeout(200);
+  const gn = await fr.evaluate(() => document.querySelector('#selNote').textContent);
+  ok(/Guide clip 2 of 2/.test(gn) && /carries on from the clip before it/.test(gn) && /Render this clip/.test(gn), 'tapping it shows its words, takes and ▶ Render this clip (' + gn.slice(0, 160) + ')');
+  await fr.evaluate(() => document.querySelector('[data-act="ghostN"][data-v="2"]').click());
+  const n3 = sent.length; await fr.evaluate(() => document.querySelector('[data-act="ghostGo"]').click()); await page.waitForTimeout(3000);
   const c2 = sent.slice(n3), cs2 = c2.map(s => nodes(s.g, 'Video Slice').map(n => n.inputs.start_time)), mc = c2.map(s => Object.values(s.g).some(n => /MotionContext|LoadVideo|VHS_LoadVideo/i.test(n.class_type)));
   const ct2 = await page.evaluate(() => H3.S.takes.filter(t => t.carry && t.carry.len).map(t => ({s:t.seconds, len:t.carry.len, g:!!t.guided || !!(t.ctl && t.ctl.off), off:t.ctl && t.ctl.off})));
   console.log(JSON.stringify({cs2, mc, ct2, toastF:await fr.evaluate(() => (document.querySelector('#toast') || {}).textContent), toastD:await page.evaluate(() => (document.querySelector('#toast') || {}).textContent), why:await page.evaluate(() => { const b = document.querySelector('#goBtn'); return [b.disabled, b.textContent, (document.querySelector('#goWhy') || {}).textContent, H3.S.f.fl, H3.S.tab]; })}));
