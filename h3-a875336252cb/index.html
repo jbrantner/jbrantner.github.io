@@ -359,7 +359,23 @@ function load(){
 }
 let saveT = 0;
 function save(){ clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
-function saveNow(){ S.tsav = Date.now(); try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("The phone's storage is full: clear some finished renders"); } pushSoon(); }
+// Safari gives each site only about 5 MB for this save, whatever the phone has free. The pictures and clips themselves are in
+// IndexedDB; this save holds the form, the takes and a small preview per picture/clip, and old previews were what filled it
+// (Jordan 2026-11-04). tidyMedia drops media nothing uses any more (blob too); hard = also the previews of media that isn't in
+// the form (only the form shows them, and fixThumbs remakes one from the kept file when it comes back).
+function tidyMedia(hard){
+  const used = JSON.stringify({f:S.f, takes:S.takes}), form = JSON.stringify(S.f); let n = 0;
+  for(const id of Object.keys(S.media)){
+    if(!used.includes('"' + id + '"')){ delete S.media[id]; delete BLOBS[id]; IDB.del(id).catch(() => {}); Object.keys(S.up).forEach(k => { if(k.startsWith(id + '|')) delete S.up[k]; }); n++; }
+    else if(hard && S.media[id].thumb && !form.includes('"' + id + '"')){ S.media[id].thumb = ''; S.media[id].tc = 1; n++; } }
+  return n; }
+const THUMBING = {};
+function fixThumbs(){ const form = JSON.stringify(S.f);
+  for(const m of Object.values(S.media)) if(m.tc && !m.thumb && !THUMBING[m.id] && form.includes('"' + m.id + '"')){ THUMBING[m.id] = 1; if(m.remote){ remoteThumb(m); continue; }
+    blobOf(m.id).then(async b => { if(!b) return; if(m.kind==='img') m.thumb = thumbOf(await imgOf(b)); else { const t = await vidThumb(b); if(t) m.thumb = t.url; } if(m.thumb){ delete m.tc; save(); drawInputs(); } }).catch(() => {}); } }
+function saveNow(){ S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(S));
+  try{ put(); }catch(e){ try{ tidyMedia(true); put(); }catch(e2){ toast("H3 Deck's own save space in Safari is full (about 5 MB; not your phone's storage), so the newest changes aren't kept. Tap Clear finished to make room.", 6000); } }
+  pushSoon(); }
 // a copy of the takes list on each PC (ComfyUI's own user files), so 🎬 H3 Film sees them even where it can't share this app's
 // storage (Jordan 2026-11-03: on iPhone each home-screen app keeps its own, so H3 Film saw nothing)
 const TAKES_FILE = '/userdata/' + 'h3deck_takes.json' + '?overwrite=true';
@@ -1093,6 +1109,7 @@ function multipart(fields, fileField, fileName, type, raw){
   return {boundary, bytes};
 }
 async function upload(url, id){
+  if(S.media[id] && S.media[id].remote) return S.media[id].remote; // already in the PCs' shared output folder (➕ Carry on)
   const k = id + '|' + url; if(S.up[k]) return S.up[k];
   const b = await blobOf(id), m = S.media[id]; if(!b) throw new Error('"' + (m ? m.name : 'a reference') + '" is no longer on the phone: add it again');
   const ext = (m.name.match(/\.[a-z0-9]+$/i) || [m.kind==='img' ? '.png' : m.kind==='vid' ? '.mp4' : '.wav'])[0].toLowerCase();
@@ -1164,7 +1181,7 @@ async function render(){
       await sendPieces(t, 0); sent++; cur = null;
       // Jordan 2026-11-03: on a long clip, "4 takes" = 4 versions that all start with the same beginning: the pieces before the
       // last are made once, and the other takes are versions of the last piece carrying on from it (same PC, after it in line)
-      if(N > 1 && t.pieces.length > 1 && !t.sm){ sent += await makeBranches(t, t.pieces.length - 1, N - 1); break; }
+      if(N > 1 && t.pieces.length > 1 && !t.sm && !t.cont){ sent += await makeBranches(t, t.pieces.length - 1, N - 1); break; }
     }
   }catch(e){ toast('Not sent: ' + e.message, 6000);
     // the take stays on the list as stopped, with why and ↻ Try again, not stuck on "Sending"
@@ -1255,12 +1272,24 @@ const borrowed = t => !!(t.ctxDirs && t.ctxDirs.some(Boolean)); // the helper's 
 async function branchFrom(t, i, n, prompt){
   if(!pcOf(t.pc).online){ toast(pcName(t.pc) + " can't be reached: piece " + i + "'s ending is saved there, so it has to be that PC"); return; }
   const sent = await makeBranches(t, i, n, prompt);
-  save(); drawTakes(); if(sent) toast(sent + (sent > 1 ? ' takes' : ' take') + ' of piece ' + (i + 1) + ' sent to ' + pcName(t.pc));
+  save(); drawTakes(); if(sent) toast(sent + (sent > 1 ? ' takes' : ' take') + ' of piece ' + (i + 1) + ' sent to ' + [...new Set(S.takes.slice(0, S.takes.indexOf(t) + sent + 1).filter(x => x.from && x.from.id===t.id).map(x => pcName(x.pc)))].join(' and '));
 }
 // n takes that share pieces 1..i of t. t may still be rendering: they then follow those pieces' own renders (same ComfyUI ids)
 // and their piece i+1 waits behind t's piece i in the same PC's line, so it starts from t's saved ending.
+// Jordan 2026-11-06: options of what comes next split between the PCs too. Once the shared beginning is finished, a version can go
+// to any PC that already sees its saved ending (the shared Dropbox output folder); while it's still rendering it has to wait in line
+// behind it on the same PC.
+const SEEN_CTX = {};
+async function branchPc(b, t, i, extra){
+  if(!t.pieces.slice(0, i).every(p => p.state==='done')) return t.pc;
+  const f = {filename:'ctx_' + String(i).padStart(5, '0') + '.safetensors', subfolder:ctxDir(t, i), type:'output'}, ok = [];
+  for(const p of S.pcs){ const u = p.url; if(canRun(u, b)) continue; if(u===t.pc){ ok.push(u); continue; } const k = u + '|' + f.subfolder + '|' + i;
+    if(!SEEN_CTX[k]){ try{ SEEN_CTX[k] = (await fetch(viewUrl(u, f), {method:'HEAD'})).ok; }catch(e){ SEEN_CTX[k] = false; } }
+    if(SEEN_CTX[k]) ok.push(u); }
+  if(S.f.where && S.f.where!=='both' && ok.includes(S.f.where)) return S.f.where;
+  return ok.sort((x, y) => (busySecs(x) + (extra[x] || 0)) - (busySecs(y) + (extra[y] || 0)))[0] || t.pc; }
 async function makeBranches(t, i, n, prompt){
-  let at = S.takes.indexOf(t) + 1, sent = 0;
+  let at = S.takes.indexOf(t) + 1, sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
     const b = JSON.parse(JSON.stringify(t)); b.id = uid('t'); b.t = Date.now(); b.seed = Math.floor(Math.random() * 2 ** 31);
     b.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + b.id.slice(-4); b.dir = 'H3Deck/' + b.name;
@@ -1268,6 +1297,7 @@ async function makeBranches(t, i, n, prompt){
     b.pieces.forEach((p, j) => { if(j >= i){ Object.assign(p, {state:'new', file:null, pid:null, err:''}); } });
     if(prompt != null) b.pieces[i].prompt = prompt;
     Object.assign(b, {final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false});
+    b.pc = await branchPc(b, t, i, extra); extra[b.pc] = (extra[b.pc] || 0) + estSecs(Object.assign({}, b, {pieces:b.pieces.slice(i)}), b.pc);
     S.takes.splice(at++, 0, b); drawTakes();
     try{ await sendPieces(b, i); sent++; }catch(e){ b.state = 'failed'; b.pieces[i].state = 'failed'; b.pieces[i].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
   }
@@ -1464,7 +1494,7 @@ function slotHtml(kind, r, i, label){
 const guideSlot = (m, rm) => `<div class="slot has"><img src="${m.thumb || ''}" alt=""><span class="tag">${esc((m.mode==='pose' ? 'skeleton' : m.mode==='depth' ? 'depth' : 'guide') + (m.dur ? ' · ' + fmtS(m.dur) : ''))}</span><button class="x" data-rm="${rm}">✕</button><div class="nm" style="top:auto;bottom:6px">${esc(m.name)}</div></div>`;
 const addSlot = (kind, txt) => `<div class="slot add" data-add="${kind}">＋<br>${txt}</div>`;
 function drawInputs(){
-  drawH3();
+  drawH3(); fixThumbs();
   const f = S.f, L = refLabels();
   $('#smSw').classList.toggle('on', f.sm); $('#smBody').hidden = !f.sm; $('#flSw').hidden = $('#refSw').hidden = $('#ctlSw').hidden = f.sm;
   { const cm = S.media[f.ctlVid]; $('#ctlSw').classList.toggle('on', !!f.ctl); $('#ctlBody').hidden = !f.ctl || f.sm;
@@ -1560,7 +1590,7 @@ function drawMore(){
 function drawGo(){
   const why = whyNot(), b = $('#goBtn'); b.disabled = !!why;
   const n = +S.f.takes || 1; b.textContent = 'Render' + (n > 1 ? ' ' + n + ' takes' : ''); $('#goN').textContent = n;
-  const long = n > 1 && !S.f.sm && currentPlan().length > 1, th = $('#takesHow'); if(th) th.textContent = long ? 'long clip: the beginning once, ' + n + ' versions of the last piece' : 'split across the PCs';
+  const long = n > 1 && !S.f.sm && !contOn() && currentPlan().length > 1, th = $('#takesHow'); if(th) th.textContent = long ? 'long clip: the beginning once, ' + n + ' versions of the last piece' : 'split across the PCs';
   $('#goWhy').hidden = !why || /^Write/.test(why); $('#goWhy').textContent = why;
 }
 function stateLine(t){
@@ -1897,6 +1927,7 @@ async function useMocap(x, auto, slot){ const it = x.it, f = S.f; MOCAP.busy = t
     toast('🦴 ' + (it.name || 'Mocap clip') + ' is in Motion guide' + (pair ? ', with its depth as the second guide' : ''), auto || pair ? 4500 : 2500); }
   catch(e){ MOCAP.err = e.message; toast(e.message, 5000); }
   MOCAP.busy = false; save(); drawAll(); }
+try{ if(tidyMedia(false)) saveNow(); }catch(e){} // media nothing uses any more, on every start
 pingAll().then(() => { drawAll(); tick(); pullTakes(); pullInbox(); });
 document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') pingAll().then(pullInbox).catch(() => {}); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
@@ -1933,21 +1964,26 @@ const fileArg = f => (f.subfolder ? f.subfolder + '/' : '') + f.filename + ' [ou
 const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont ? Math.round((t.contSecs || (S.media[t.cont] || {}).dur || 0) * FPS) : 0);
 // ➕ Carry on from here: the form gets the take's settings, and its video (up to the playhead) as the video to carry on;
 // Jordan writes what happens next and renders. Films puts the new take right after the clip.
+// The take's video isn't downloaded to the phone and sent back (Jordan 2026-11-06: the first try rendered without it): the PC
+// loads it straight from its output folder (both PCs share the Dropbox one), as media.remote.
 window.H3Carry = async o => { const t = S.takes.find(x => x.id===o.take), fl = takeFile(t);
   if(!t){ toast("That take isn't in H3 Deck on this phone"); return false; }
   if(!fl){ toast('That take has no finished video yet'); return false; }
   setTab('render'); window.scrollTo(0, 0);
-  try{ toast('Getting the video…'); const r = await fetch(viewUrl(t.pc, fl)); if(!r.ok) throw new Error(pcName(t.pc) + ' said ' + r.status); const b = await r.blob();
-    useAgain(t);
-    const id = await addMedia(new File([b], fl.filename, {type:'video/mp4'}), 'vid'), m = S.media[id];
-    const at = Math.max(1, Math.min(+o.at || 0, m.dur || takeFrames(t) / FPS || 1e9));
-    const near = Math.abs(at - (m.dur || 0)) < 0.05; // at the very end: the whole video
-    Object.assign(m, {cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:uid('k')}, name:'➕ ' + fmtS(at) + ' into ' + fl.filename});
-    const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:o.prompt || '', pieceText:{}});
-    $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll();
-    setTimeout(() => { $('#prompt').focus(); }, 300);
-    toast('➕ Carrying on from ' + fmtS(at) + ': write what happens next, then Render. Films puts it right after the clip.', 6000); return true; }
-  catch(e){ toast("Couldn't get the take: " + e.message, 5000); return false; } };
+  const dur = takeFrames(t) / FPS, at = Math.max(1, Math.min(+o.at || 0, dur || 1e9)), near = dur && Math.abs(at - dur) < 0.05;
+  useAgain(t);
+  const id = uid('m'); S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
+    cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:uid('k')}, thumb:''};
+  const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:o.prompt || '', pieceText:{}});
+  $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll();
+  remoteThumb(S.media[id]);
+  setTimeout(() => { $('#prompt').focus(); }, 300);
+  toast('➕ Carrying on from ' + fmtS(at) + ' (the 🎞 Carry on slot): write what happens next, then Render. Films puts it right after the clip.', 6000); return true; };
+// a picture of the moment it carries on from, for the slot (straight from the PC; if that fails the slot just has no picture)
+function remoteThumb(m){ const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
+  v.onloadeddata = () => { try{ v.currentTime = Math.max(0, (m.cut || m.dur || 1) - 0.05); }catch(e){} };
+  v.onseeked = () => { try{ const c = document.createElement('canvas'), s = 220 / Math.max(v.videoWidth, v.videoHeight); c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); m.thumb = c.toDataURL('image/jpeg', 0.75); save(); drawInputs(); }catch(e){} v.removeAttribute('src'); v.load(); };
+  v.src = m.url; }
 // ↻ Redo a stretch [a, b] s of a finished take: MiniMax renders a window that starts up to ctx frames before a and ends up to
 // ctx after b; the take's frames there are pinned (every 4th, the 4-frame latent grid), so only the frames between a and b change.
 // b at the end of the take = redo to the end (then nothing after is pinned, and the take can get longer or shorter).
@@ -2017,6 +2053,6 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-ta
 window.addEventListener('resize', () => { if(S.tab && S.tab!=='render') tabTop(); });
 if(S.tab==='room') S.tab = 'render'; // ✂ Cutting Room taken out for now (Jordan 2026-11-03: not a fully fledged idea yet)
 if(S.tab && S.tab!=='render' && !/take=/.test(location.hash)) setTab(S.tab);
-window.H3 = {saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
