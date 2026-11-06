@@ -94,12 +94,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   const sw = await fr.evaluate(([id, a]) => { const r = FILM.clipOf(FILM.S.films[0], window.C2); return {take:r.c.take, out:r.c.out, vs:FILM.versionsOf(FILM.takeOf(id)).map(t => t.id)}; }, [rd[1].id]);
   ok(sw.take===rd[1].id && Math.abs(sw.out - 5) < 0.05 && sw.vs.includes('tA') && sw.vs.includes(rd[0].id), '↻ the finished redo replaces the clip\'s take; ⇄ Versions has the original and the other redo (' + JSON.stringify(sw) + ')');
-  // scrub: drag along the ruler and the playhead follows
-  const rb = await (await fr.$('#ruler')).boundingBox();
-  await page.mouse.move(rb.x + 10, rb.y + rb.height / 2); await page.mouse.down(); await page.mouse.move(rb.x + 60, rb.y + rb.height / 2, {steps:4});
-  const mid = await fr.evaluate(() => FILM.PH); await page.mouse.move(rb.x + 120, rb.y + rb.height / 2, {steps:4}); await page.mouse.up();
-  const end = await fr.evaluate(() => FILM.PH), pps = await fr.evaluate(() => FILM.S.films[0].pps);
-  ok(Math.abs(mid - 60 / pps) < 0.15 && Math.abs(end - 120 / pps) < 0.15, 'dragging along the ruler scrubs the playhead (' + mid.toFixed(2) + ' s → ' + end.toFixed(2) + ' s)');
+  // scrub like Resolve: the needle stays in the middle and swiping the timeline moves the time under it
+  const sc = await fr.evaluate(async () => { const w = document.querySelector('#tlw'), pps = FILM.S.films[0].pps, nb = document.querySelector('#needle').getBoundingClientRect(), wb = w.getBoundingClientRect();
+    w.scrollLeft = 3 * pps; await new Promise(r => setTimeout(r, 150)); const a = FILM.PH; w.scrollLeft = 6 * pps; await new Promise(r => setTimeout(r, 150));
+    const ru = document.querySelector('#ruler').getBoundingClientRect();
+    return {a, b:FILM.PH, mid:Math.abs((nb.left + nb.width / 2) - (wb.left + wb.width / 2)) < 2, zero:Math.round(ru.left + 0 - wb.left)}; });
+  ok(Math.abs(sc.a - 3) < 0.05 && Math.abs(sc.b - 6) < 0.05 && sc.mid, 'swiping the timeline scrubs: the needle stays in the middle and the time under it is the playhead (' + JSON.stringify(sc) + ')');
+  await fr.evaluate(() => { FILM.SEL = null; FILM.PH = 1; FILM.draw(); }); await page.waitForTimeout(200);
+  const sl = await fr.evaluate(() => { const w = document.querySelector('#tlw'); return [w.scrollLeft, FILM.S.films[0].pps]; });
+  ok(Math.abs(sl[0] - sl[1]) < 2, 'setting the playhead slides the timeline so that moment is under the needle (' + sl + ')');
   // a carry-on needs at least a second before it
   await fr.evaluate(() => { FILM.SEL = window.C1; const r = FILM.clipOf(FILM.S.films[0], window.C1); FILM.PH = r.c.at + 0.4; FILM.draw(); });
   const before = await page.evaluate(() => H3.S.f.first); await fr.click('[data-act="carry"]'); await page.waitForTimeout(500);
