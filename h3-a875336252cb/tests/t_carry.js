@@ -187,6 +187,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(/opens the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'scrubbing to another clip brings that clip\'s words');
   await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }); await page.waitForTimeout(500);
   ok(/walks to the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'and back on the first clip, its own words again');
+  // fixing a typo in the Shot box sticks to that clip (Jordan 2026-11-06: "when I go to another clip and back … the change has been reverted")
+  await page.evaluate(() => { const pb = document.querySelector('#prompt'); pb.focus(); pb.value = H3.S.f.prompt.replace('window', 'big window'); pb.dispatchEvent(new Event('input', {bubbles:true})); pb.blur(); }); await page.waitForTimeout(300);
+  await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks[0].clips.find(x => x.take===id), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }, ct.id); await page.waitForTimeout(500);
+  const away = await page.evaluate(() => H3.S.f.prompt);
+  await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1.4) * f.pps); }); await page.waitForTimeout(500);
+  const back = await page.evaluate(() => ({p:H3.S.f.prompt, e:H3.S.takes.find(t => t.id==='tA').wEdit}));
+  ok(/opens the window/.test(away) && /big window/.test(back.p) && back.e && Object.values(back.e).some(v => /big window/.test(v)), 'a fix typed in the Shot box stays on that clip after going to another clip and back (' + JSON.stringify(back) + ')');
+  await page.evaluate(() => { delete H3.S.takes.find(t => t.id==='tA').wEdit; });
   // tapping a clip brings its words even when the playhead is somewhere else (Jordan 2026-11-06: "the current take that's selected")
   await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take===id); const el = document.querySelector('.clip[data-c="' + c.id + '"]'); const r = el.getBoundingClientRect();
     el.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, pointerType:'mouse', clientX:r.left + 3, clientY:r.top + r.height / 2, pointerId:1})); document.dispatchEvent(new PointerEvent('pointerup', {bubbles:true, pointerType:'mouse', pointerId:1})); }, ct.id); await page.waitForTimeout(400);
