@@ -74,6 +74,17 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.waitForTimeout(3500);
   ok(/Open the mp4/.test(await page.textContent('#exp')) && await page.evaluate(() => FILM.S.films[0].exp.state)==='done', 'when the PC finishes, the film shows a link to the mp4');
   await page.screenshot({path:path.join(__dirname, 'film_timeline.png'), fullPage:true});
+  // ⚡ Preview: the PC writes the film as one small video; ▶ Play plays it in real time until the edit changes
+  await page.click('[data-act="preview"]'); await page.waitForTimeout(400);
+  ok(EXP.body && EXP.body.preview===true && /Making a smooth preview/.test(await page.textContent('#prevBox')), '⚡ Preview asks the PC for a small temporary video of the film and shows its progress');
+  await page.waitForTimeout(3000);
+  ok(await page.evaluate(() => FILM.prevOk(FILM.S.films[0])) && /Smooth preview on/.test(await page.textContent('#prevBox')), 'when it is ready the film says ▶ Play uses it');
+  await page.evaluate(() => { FILM.PH = 0; }); await page.click('[data-act="play"]'); await page.waitForTimeout(500);
+  const pvp = await page.evaluate(() => { const v = document.querySelector('.stage video.on'); return {src:v && v.src, ph:FILM.PH}; });
+  await page.click('[data-act="play"]');
+  ok(/Film\+1_00001_\.mp4/.test(pvp.src || ''), '▶ Play plays the preview video (' + JSON.stringify(pvp) + ')');
+  await page.evaluate(() => { const f = FILM.S.films[0]; f.tracks[1].clips[0].out -= 0.5; FILM.draw(); });
+  ok(await page.evaluate(() => !FILM.prevOk(FILM.S.films[0])) && /out of date/.test(await page.textContent('#prevBox')), 'any edit turns the preview off (it says it is out of date)');
   // takes come from the PC's copy when this app can't see H3 Deck's storage (iPhone home-screen apps don't share it)
   REMOTE.j = {v:1, t:Date.now() + 60000, takes:[{id:'tR', pc:R, w:640, h:352, prompt:'from the PC copy', state:'done', pieces:[{deliv:120, file:{filename:'r.mp4', subfolder:'Render/H3Deck/r'}}]}]};
   const rr = await page.evaluate(async () => { await FILM.pullDeck(); return {has:!!FILM.takeOf('tR'), n:FILM.takes().length, rev:FILM.reviewList().map(t => t.id)}; });

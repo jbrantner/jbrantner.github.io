@@ -2582,18 +2582,32 @@ def _ex_run(job, clips):
             v0 = first.streams.video[0]
             fps = Fraction(v0.average_rate or 24).limit_denominator(1001)
             w, h = v0.codec_context.width // 2 * 2, v0.codec_context.height // 2 * 2
+            if job.get('preview'):
+                w, h = max(2, int(w * 0.5) // 2 * 2), max(2, int(h * 0.5) // 2 * 2)
         rate, T = 48000, segs[-1][1]
         job['total'] = int(round(T * fps))
-        out, filename, counter, subfolder, _ = folder_paths.get_save_image_path('H3Film/' + job['name'], folder_paths.get_output_directory())
-        os.makedirs(out, exist_ok=True)
-        name = '%s_%05d_.mp4' % (filename, counter)
+        if job.get('preview'):
+            subfolder = 'H3Film/_preview'
+            out = os.path.join(folder_paths.get_output_directory(), subfolder)
+            name = job['name'] + '_' + job['id'][:6] + '.mp4'
+            os.makedirs(out, exist_ok=True)
+            for old in os.listdir(out):  # only the newest preview of each film is kept
+                if old.startswith(job['name'] + '_') and old.endswith('.mp4') and len(old) == len(name):
+                    try:
+                        os.remove(os.path.join(out, old))
+                    except Exception:
+                        pass
+        else:
+            out, filename, counter, subfolder, _ = folder_paths.get_save_image_path('H3Film/' + job['name'], folder_paths.get_output_directory())
+            os.makedirs(out, exist_ok=True)
+            name = '%s_%05d_.mp4' % (filename, counter)
         full = os.path.join(out, name)
         with av.open(full + '.part', 'w', format='mp4') as dst:
             codec = next(c for c in ('libx264', 'h264', 'libopenh264', 'mpeg4') if c in av.codecs_available)
             vo = dst.add_stream(codec, rate=fps)
             vo.width, vo.height, vo.pix_fmt = w, h, 'yuv420p'
             if codec == 'libx264':
-                vo.options = {'crf': '17', 'preset': 'medium'}
+                vo.options = {'crf': '26', 'preset': 'veryfast'} if job.get('preview') else {'crf': '17', 'preset': 'medium'}
             ao = dst.add_stream('aac', rate=rate)
             ao.layout = 'stereo'
             black = av.VideoFrame.from_ndarray(np.zeros((h, w, 3), np.uint8), format='rgb24').reformat(format='yuv420p')
@@ -2649,7 +2663,8 @@ async def h3export(request):
         for k in [k for k, j in EXPORTS.items() if j.get('t_done') and time.time() - j['t_done'] > 86400]:
             EXPORTS.pop(k, None)
         jid = uuid.uuid4().hex[:12]
-        EXPORTS[jid] = job = {'id': jid, 'name': name, 'state': 'working', 'done': 0, 'total': 0, 't_added': time.time()}
+        EXPORTS[jid] = job = {'id': jid, 'name': name, 'state': 'working', 'done': 0, 'total': 0, 't_added': time.time(),
+                              'preview': bool(body.get('preview'))}  # ⚡ H3 Deck's playback preview: half size, fast encode, one file per film (overwritten)
         threading.Thread(target=_ex_run, args=(job, clips), daemon=True).start()
         return web.json_response(job)
     except Exception as e:
