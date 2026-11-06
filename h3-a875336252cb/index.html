@@ -37,7 +37,15 @@ input[type=checkbox]{width:auto}
 header{display:flex;align-items:center;gap:10px;padding:14px 0 12px}
 header h1{font:700 22px/1 var(--display);margin:0;flex:1;letter-spacing:.3px;white-space:nowrap}
 header h1 span{color:var(--accent)}
-.pcdots{display:flex;gap:6px}
+.pcdots{display:flex;gap:6px;cursor:pointer}
+.pcbox{border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:10px;margin-bottom:10px}
+.pcbox .hd{display:flex;align-items:center;gap:8px}.pcbox .hd b{flex:1}
+.pcbox .st{font-size:12.5px;color:var(--dim);margin:4px 0 8px}
+.pcbox .btns{display:flex;gap:6px;flex-wrap:wrap}
+.qj{display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.qj .g{flex:1;min-width:0}.qj b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qj small{color:var(--dim);font-size:12px}
+.qj .bar{height:4px;border-radius:9px;background:var(--panel2);margin-top:5px;overflow:hidden}.qj .bar i{display:block;height:100%;background:var(--accent)}
+.dot.half{background:var(--samp)}
 .pcdots span{display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:800;color:var(--soft);padding:7px 10px;border-radius:99px;background:var(--panel);border:1px solid var(--line)}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--bad);flex:none}
 .dot.on{background:var(--good);box-shadow:0 0 8px var(--good)}
@@ -1444,9 +1452,56 @@ function useAgain(t, quiet){
 function openSheet(html){ $('#sheetCard').innerHTML = html; $('#sheet').hidden = false; }
 function closeSheet(){ $('#sheet').hidden = true; $('#sheetCard').innerHTML = ''; }
 $('#sheet').onclick = e => { if(e.target.id==='sheet' || e.target.closest('[data-close]')) closeSheet(); };
+// tap the PC dots: each PC's status, its whole queue, and controls (like Render Deck's ☰ queue; Jordan 2026-11-06)
+const AGENT = {}; // url -> the Render Deck agent's status (it answers even when ComfyUI is closed), or null
+async function agentLook(url){ try{ const r = await fetch(url + '/agent/status', {cache:'no-store'}); const j = r.ok ? await r.json() : null; AGENT[url] = j && j.agent ? j : null; }catch(e){ AGENT[url] = null; } return AGENT[url]; }
+function jobName(url, e){ const id = e[1];
+  for(const t of S.takes){ const i = (t.pieces || []).findIndex(p => p.pid===id), k = i >= 0 ? (t.pieces.length > 1 ? ' · piece ' + (i + 1) + '/' + t.pieces.length : '') : t.joinPid===id ? ' · joining' : t.upPid===id ? ' · regenerate' : null;
+    if(k!=null) return {mine:true, kind:'🎬 ' + ((t.prompt || '').split('\n')[0].slice(0, 70) || 'H3 take') + k, take:t.id}; }
+  const g = e[2] || {}, cls = Object.values(g).map(n => n && n.class_type || ''), has = re => cls.some(c => re.test(c));
+  const txt = Object.values(g).map(n => n && n.inputs && (n.inputs.prompt || n.inputs.text)).find(v => typeof v==='string' && v.trim());
+  const kind = has(/MiniMax|SaveVideo|CreateVideo/) ? '🎬 Video job' : has(/SaveImage|PreviewImage/) ? '🖼 Picture job' : has(/RenderDeckH3Export|Concatenate/) ? '⬇ Joining video' : '⚙ Job';
+  return {mine:false, kind, text:txt ? txt.slice(0, 90) : ''}; }
+function pcStatus(p){ const q = pcOf(p.url), a = AGENT[p.url], d = q.stats && q.stats.devices && q.stats.devices[0];
+  if(q.restarting) return 'Restarting ComfyUI…';
+  if(!q.online) return a ? (a.comfy==='starting' ? 'The PC is on; ComfyUI is starting…' : 'The PC is on; ComfyUI is closed' + (a.wanted ? ' (starting it again shortly)' : '')) : "Can't reach it (off, asleep, or Tailscale is off on this phone)";
+  const n = q.load || 0; return (n ? 'Busy · ' + n + ' job' + (n > 1 ? 's' : '') : 'Free') + (p.on ? '' : ' · not taking new takes') + (d ? ' · ' + String(d.name || '').replace(/^cuda:\d+\s*/, '').replace(/ : .*/, '') + ', ' + (d.vram_free / 2 ** 30).toFixed(1) + ' of ' + (d.vram_total / 2 ** 30).toFixed(1) + ' GB free' : ''); }
+function pcBox(p, i){ const q = pcOf(p.url), a = AGENT[p.url], half = !q.online && a;
+  const run = (q.queue && q.queue.queue_running) || [], wait = ((q.queue && q.queue.queue_pending) || []).slice().sort((x, y) => x[0] - y[0]);
+  const row = (e, r) => { const j = jobName(p.url, e), L = LIVE[e[1]] || {}, pct = r && L.max ? Math.round(100 * L.v / L.max) : 0;
+    return `<div class="qj"><div class="g"><b>${esc(j.kind)}</b><small>${r ? (L.max ? 'Step ' + L.v + '/' + L.max : 'Working on it now') : 'Waiting'}${j.mine ? ' · from H3 Deck' : ' · from another app'}</small>${j.text ? `<small style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(j.text)}</small>` : ''}${r ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}</div>
+      <button class="btn" data-qx="${i}|${esc(e[1])}|${r ? 1 : 0}|${j.mine ? 1 : 0}" aria-label="Take this job out">✕</button></div>`; };
+  const btn = (act, label, on) => `<button class="btn" data-pca="${i}|${act}" ${on ? '' : 'disabled'}>${label}</button>`;
+  const ctl = a ? (q.online ? btn('restart', '↻ Restart ComfyUI', true) + btn('close', '■ Close ComfyUI', true) : btn('start', '▶ Start ComfyUI', a.comfy!=='starting')) : btn('reboot', '↻ Restart ComfyUI', q.online);
+  return `<div class="pcbox"><div class="hd"><i class="dot ${q.online ? (q.load ? 'busy' : 'on') : half ? 'half' : ''}"></i><b>${esc(p.name)}</b><small style="color:var(--dim)">New takes</small><span class="tog ${p.on ? 'on' : ''}" data-pcon2="${i}" role="switch" aria-checked="${!!p.on}" aria-label="Let ${esc(p.name)} take new takes"></span></div>
+    <div class="st">${esc(pcStatus(p))}</div><div class="btns">${ctl}${wait.length > 1 ? `<button class="btn warn" data-qclear="${i}">Clear the ${wait.length} waiting</button>` : ''}</div>
+    ${run.map(e => row(e, true)).join('')}${wait.slice(0, 20).map(e => row(e, false)).join('')}${wait.length > 20 ? `<div class="note">…and ${wait.length - 20} more waiting</div>` : ''}</div>`; }
+let PCT = 0;
+function drawPcSheet(){ const c = $('#pcSheet'); if(!c){ clearInterval(PCT); PCT = 0; return; } c.innerHTML = S.pcs.map(pcBox).join(''); }
+function openPcs(){ openSheet(`<h3>🖥 PCs <button class="btn" data-close>✕</button></h3><div id="pcSheet"></div><div class="note">Off = that PC gets no new takes from H3 Deck (e.g. Main while you game). What's already in its line keeps going. Names and addresses are in ⚙.</div>`);
+  drawPcSheet(); S.pcs.forEach(p => agentLook(p.url).then(drawPcSheet)); clearInterval(PCT);
+  PCT = setInterval(() => { if(!$('#pcSheet')){ clearInterval(PCT); PCT = 0; return; } Promise.all(S.pcs.map(p => ping(p.url))).then(drawPcSheet); }, 3000);
+  $('#sheetCard').onclick = async ev => { const t = ev.target.closest('[data-pcon2]'); if(t){ const p = S.pcs[+t.dataset.pcon2]; p.on = !p.on; save(); drawAll(); drawPcSheet(); toast(p.name + (p.on ? ' takes new takes again' : ' gets no new takes for now')); return; }
+    const x = ev.target.closest('[data-qx]'); if(x){ const [i, id, r, mine] = x.dataset.qx.split('|'), p = S.pcs[+i];
+      if(!confirm((r==='1' ? 'Stop the job ' + p.name + ' is working on' : 'Take this job out of ' + p.name + "'s line") + '?' + (mine==='1' ? ' Its take stops there.' : " It wasn't sent from H3 Deck."))) return;
+      try{ await fetch(p.url + (r==='1' ? '/interrupt' : '/queue'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(r==='1' ? {prompt_id:id} : {delete:[id]})}); toast(r==='1' ? 'Stopped' : 'Taken out of the line'); }catch(e){ toast("Couldn't reach " + p.name); }
+      await ping(p.url); drawPcSheet(); tickSoon(500); return; }
+    const qc = ev.target.closest('[data-qclear]'); if(qc){ const p = S.pcs[+qc.dataset.qclear], w = ((pcOf(p.url).queue || {}).queue_pending || []).length;
+      if(!confirm('Clear the ' + w + ' waiting jobs in ' + p.name + "'s line? Whatever it is making right now keeps going.")) return;
+      try{ await fetch(p.url + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({clear:true})}); toast(p.name + "'s line is clear"); }catch(e){ toast("Couldn't reach " + p.name); }
+      await ping(p.url); drawPcSheet(); tickSoon(500); return; }
+    const ac = ev.target.closest('[data-pca]'); if(ac){ const [i, act] = ac.dataset.pca.split('|'), p = S.pcs[+i], q = pcOf(p.url);
+      if(act==='close' && !confirm('Close ComfyUI on ' + p.name + '? Anything it is making stops, and it stays closed until you start it.')) return;
+      if((act==='restart' || act==='reboot') && !confirm('Restart ComfyUI on ' + p.name + '? Anything it is making stops; what is waiting carries on once it is back.')) return;
+      if(act==='reboot'){ let went = false, none = true;
+        for(const path of ['/api/manager/reboot', '/manager/reboot', '/v2/manager/reboot']){ try{ const r = await fetch(p.url + path, {cache:'no-store'}); if(r.status===404) continue; none = false; went = r.ok; if(went) break; }catch(e){ none = false; went = true; break; } }
+        toast(went ? 'Restarting ComfyUI on ' + p.name + '…' : none ? p.name + " can't restart from here: ComfyUI-Manager isn't installed there" : p.name + ' did not restart'); if(went){ q.restarting = Date.now(); setTimeout(() => { q.restarting = 0; }, 60000); } drawPcSheet(); return; }
+      let j = {}; try{ j = await (await fetch(p.url + '/agent/' + act, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})).json(); }catch(e){ toast("Couldn't reach " + p.name); return; }
+      toast(p.name + ': ' + (j.message || j.error || 'done')); if(act!=='close'){ q.restarting = Date.now(); setTimeout(() => { q.restarting = 0; }, 60000); }
+      setTimeout(() => agentLook(p.url).then(drawPcSheet), 2500); drawPcSheet(); } }; }
 function drawDots(){
   $('#pcDots').innerHTML = S.pcs.map(p => { const q = pcOf(p.url), cls = !q.online ? '' : q.load ? 'busy' : 'on';
-    return `<span title="${esc(p.name)}"><i class="dot ${cls}"></i>${esc(p.name.charAt(0))}${q.online && q.load ? ' ' + q.load : ''}</span>`; }).join('');
+    return `<span title="${esc(p.name)}: tap for its status and queue"><i class="dot ${cls}"></i>${esc(p.name.charAt(0))}${q.online && q.load ? ' ' + q.load : ''}</span>`; }).join('');
 }
 function drawShot(){ { const b = $('#mqNote'), n = refsOn().pins.length; if(b){ b.hidden = !n || !S.f.mq; b.textContent = '📌 ' + n + ' pose keyframe' + (n===1 ? '' : 's') + ', one piece from each to the next: write what happens (e.g. she ducks a punch and spins away). The rest of the wording is added for you.'; } }
   const f = S.f, P = currentPlan(), tot = P.reduce((s, p) => s + p.deliv, 0) / FPS;
@@ -1874,6 +1929,7 @@ $('#steps').oninput = e => { S.f.steps = e.target.value; save(); drawModel(); };
 $('#seed').oninput = e => { S.f.seed = e.target.value; save(); };
 $('#maxPiece').oninput = e => { S.f.maxPiece = +e.target.value; $('#maxOut').textContent = fmtS(S.f.maxPiece); S.f.pieceText = {}; save(); drawShot(); drawCanvas(); drawGo(); };
 $('#goBtn').onclick = render;
+$('#pcDots').onclick = openPcs; $('#pcDots').setAttribute('role', 'button'); $('#pcDots').setAttribute('aria-label', 'PCs: status, queue and controls');
 $('#setBtn').onclick = () => {
   openSheet(`<h3>⚙ PCs <button class="btn" data-close>✕</button></h3>` + S.pcs.map((p, i) => { const q = pcOf(p.url), job = {model:S.f.model, turbo:S.f.turbo, loras:S.f.loras.filter(l => l.name), pieces:currentPlan(), vids:refsOn().vids, follow:refsOn().follow, imgs:refsOn().imgs, auds:refsOn().auds};
     const why = canRun(p.url, job), mc = q.oi && q.oi.MiniMaxH3MotionContext, st = q.stats && q.stats.devices && q.stats.devices[0];

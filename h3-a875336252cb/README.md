@@ -57,3 +57,13 @@ How it behaves:
 - Scrubbing loads the form with the take and the words under the playhead. This stops once you change something, and ↺ Follow the clip again turns it back on.
 - `#take=<id>` links and ✏️ Its take scroll to that take in the list.
 
+
+## 🖥 PCs panel (2026-11-06)
+Tap the R/M dots at the top. For each PC you get:
+- Its status (free or busy, the GPU with how much VRAM is free, or "on, ComfyUI closed" from the Render Deck agent).
+- Every job in its ComfyUI line, with steps for the one running. H3 takes are named by their prompt and piece; other jobs are labelled by what they make.
+- ✕ on a job, and Clear the waiting jobs.
+- ↻ Restart / ■ Close / ▶ Start ComfyUI through the agent (or ComfyUI-Manager's reboot when the agent isn't there).
+- A "New takes" switch, the same as the one in ⚙.
+
+It refreshes every 3 s while open.
