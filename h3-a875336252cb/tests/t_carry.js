@@ -22,10 +22,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8017);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [], views = [];
+  const sent = [], views = [], QP = [];
   const fake = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
+    if(p==='/queue' && rt.request().method()==='POST'){ QP.push({host:u.origin, body:JSON.parse(rt.request().postData() || '{}')}); return J({}); }
+    if(p==='/agent/status') return J({agent:1, comfy:'up', wanted:true});
     if(p==='/queue') return J({queue_running:[], queue_pending:sent.map(s => [0, s.pid])});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p.startsWith('/userdata/')) return rt.request().method()==='GET' ? rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}) : J({});
@@ -179,6 +181,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.waitForTimeout(1500);
   const lost = await fr.evaluate(() => { const t = FILM.takeOf(window.LID), fl = FILM.fileOf(t); return {t:!!t, fl:fl && fl.filename, p:t && t.prompt}; });
   ok(lost.fl==='h3_202611060001_zz9q_00001_.mp4' && /waves goodbye/.test(lost.p) && !/continues straight/.test(lost.p), 'a clip whose take was cleared finds its whole video (and words) on the PC again (' + JSON.stringify(lost) + ')');
+  // tap the PC dots: status, queue and controls for each PC
+  await page.evaluate(() => { window.scrollTo(0, 0); window.confirm = () => true; }); await page.click('#pcDots'); await page.waitForTimeout(800);
+  const pcs = await page.evaluate(() => ({boxes:document.querySelectorAll('#pcSheet .pcbox').length, rows:document.querySelectorAll('#pcSheet .qj').length, txt:document.querySelector('#pcSheet').textContent, mine:[...document.querySelectorAll('#pcSheet .qj b')].map(b => b.textContent)}));
+  ok(pcs.boxes===2 && pcs.rows > 0 && /Restart ComfyUI/.test(pcs.txt) && /Close ComfyUI/.test(pcs.txt) && /from H3 Deck/.test(pcs.txt), 'tapping the PC dots shows each PC with its status, its queue (H3 takes named) and Restart / Close (' + JSON.stringify({b:pcs.boxes, r:pcs.rows, m:pcs.mine.slice(0, 2)}) + ')');
+  await page.click('#pcSheet [data-pcon2="1"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => H3.S.pcs[1].on===false), 'its switch stops a PC getting new takes');
+  await page.click('#pcSheet [data-pcon2="1"]'); await page.waitForTimeout(200);
+  const q0 = QP.length; await page.click('#pcSheet [data-qx]'); await page.waitForTimeout(500);
+  ok(QP.length===q0 + 1 && (QP[q0].body.delete || QP[q0].body.prompt_id), '✕ on a job takes it out of that PC\'s line (' + JSON.stringify(QP[q0] && QP[q0].body) + ')');
+  await page.screenshot({path:path.join(__dirname, 'pcs.png')}); await page.evaluate(() => document.querySelector('#sheet [data-close]').click());
   await page.screenshot({path:path.join(__dirname, 'carry.png')});
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
