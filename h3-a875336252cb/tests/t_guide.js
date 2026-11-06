@@ -73,11 +73,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const fills = sent.slice(n1);
   const sl = fills.map(s => nodes(s.g, 'Video Slice').map(n => n.inputs.start_time)), cn = fills.map(s => nodes(s.g, 'MiniMaxH3FunControlNetApply').length), pr = fills.map(s => node(s.g, 'MiniMaxH3ReferenceToVideo') && node(s.g, 'MiniMaxH3ReferenceToVideo').inputs.prompt);
   console.log(JSON.stringify({sl, cn, pr}));
-  ok(fills.length===2 && cn.every(x => x===2) && sl[0].every(x => x===0) && sl[1].every(x => Math.abs(x - 5) < 0.01), '▶ two renders, each following its own stretch of the guide: skeleton + depth from 0 s and from 5 s');
-  ok(pr.every(p => /A woman walks to the window/.test(p || '')), 'each gets its guide clip\'s words (👥 <Subject 1> sent as "a woman")');
+  const ft = await page.evaluate(() => H3.S.takes.filter(t => t.toFilm && t.toFilm.track).map(t => ({s:t.seconds, at:t.toFilm.at, cuts:t.toFilm.cuts, g:!!t.guided})));
+  console.log(JSON.stringify(ft));
+  ok(ft.length===1 && Math.abs(ft[0].s - 10) < 0.01 && ft[0].at===0 && JSON.stringify(ft[0].cuts)==='[5]' && ft[0].g, '▶ ONE 10 s take over the whole guide, to be cut at 5 s (' + JSON.stringify(ft) + ')');
+  ok(fills.length >= 1 && cn.every(x => x===2) && sl[0].every(x => x===0), '▶ it follows the guide from 0 s (skeleton + depth)');
+  ok(pr.every(p => /A woman walks to the window/.test(p || '')) && pr.every(p => !/\[\d/.test(p || '')), 'the two clips\' same words are joined into one (👥 <Subject 1> sent as "a woman")');
+  ok(await fr.evaluate(() => !document.querySelector('#gdN')), 'no "takes of each clip" choice any more');
   await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(300);
-  const pl = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => [c.at, FILM.takeOf(c.take) && !!FILM.takeOf(c.take).guided]).sort((a, b) => a[0] - b[0]));
-  ok(pl.length===2 && pl.map(x => x[0]).join()==='0,5' && pl.every(x => x[1]), '▶ they land on track 1 at the guide clips\' times (' + JSON.stringify(pl) + ')');
+  const pl = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => [c.at, c.in, c.out, c.take, FILM.takeOf(c.take) && !!FILM.takeOf(c.take).guided]).sort((a, b) => a[0] - b[0]));
+  ok(pl.length===2 && pl.map(x => x[0] + ':' + x[1] + '-' + Math.round(x[2])).join()==='0:0-5,5:5-10' && pl[0][3]===pl[1][3] && pl.every(x => x[4]), '▶ it lands on track 1 cut into two clips of the same take at the guide\'s cut (' + JSON.stringify(pl) + ')');
   // ↻ Redo on a following track gets the guide at the right film time
   const n2 = sent.length; await page.evaluate(() => window.H3Redo({take:'tA', a:1, b:3, prompt:'she turns', n:1, film:'fA', clip:'x', guide:{film:'fA', off:5}})); await page.waitForTimeout(1200);
   const rd = sent.slice(n2)[0], rs = rd ? nodes(rd.g, 'Video Slice').map(n => n.inputs.start_time) : [];
