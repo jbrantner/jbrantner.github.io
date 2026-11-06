@@ -109,6 +109,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const ct2 = await page.evaluate(() => H3.S.takes.filter(t => t.carry && t.carry.len).map(t => ({s:t.seconds, len:t.carry.len, g:!!t.guided || !!(t.ctl && t.ctl.off), off:t.ctl && t.ctl.off})));
   console.log(JSON.stringify({cs2, mc, ct2, toastF:await fr.evaluate(() => (document.querySelector('#toast') || {}).textContent), toastD:await page.evaluate(() => (document.querySelector('#toast') || {}).textContent), why:await page.evaluate(() => { const b = document.querySelector('#goBtn'); return [b.disabled, b.textContent, (document.querySelector('#goWhy') || {}).textContent, H3.S.f.fl, H3.S.tab]; })}));
   ok(c2.length===2 && ct2.length===2 && ct2.every(x => x.len===5 && Math.abs(x.s - 5) < 0.01) && mc.every(Boolean), '▶ clip 2: two takes carrying on from clip 1\'s take, 5 s each (' + JSON.stringify(ct2) + ')');
+  // 💬 words only: a track set to not follow renders the guide clip's words with no skeleton/depth ControlNet
+  const n4 = sent.length; await fr.evaluate(async () => { const f = FILM.S.films[0]; f.tracks.unshift({id:'trW', clips:[], over:true, follow:false}); FILM.save(); FILM.draw(); const gc = f.tracks.find(t => t.guide).clips.slice().sort((a, b) => a.at - b.at)[0]; await FILM.guideGo(f, 0, gc); }); await page.waitForTimeout(2000);
+  const wo = sent.slice(n4), wcn = wo.map(s => nodes(s.g, 'MiniMaxH3FunControlNetApply').length), wpr = wo.map(s => node(s.g, 'MiniMaxH3ReferenceToVideo') && node(s.g, 'MiniMaxH3ReferenceToVideo').inputs.prompt);
+  ok(wo.length >= 1 && wcn.every(x => x===0) && wpr.every(p => /walks to the window/.test(p || '')), '💬 words only: the guide clip\'s words, no skeleton or depth (' + JSON.stringify(wcn) + ')');
+  await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks = f.tracks.filter(t => t.id!=='trW'); FILM.save(); FILM.draw(); });
   // ↻ Redo on a following track gets the guide at the right film time
   const n2 = sent.length; await page.evaluate(() => window.H3Redo({take:'tA', a:1, b:3, prompt:'she turns', n:1, film:'fA', clip:'x', guide:{film:'fA', off:5}})); await page.waitForTimeout(1200);
   const rd = sent.slice(n2)[0], rs = rd ? nodes(rd.g, 'Video Slice').map(n => n.inputs.start_time) : [];
