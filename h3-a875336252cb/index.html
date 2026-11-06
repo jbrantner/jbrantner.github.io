@@ -379,7 +379,7 @@ function load(){
     model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smPunch:0, smLoop:false, smSeam:12, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true, ctl:false, ctlVid:null, follow:0.7, ctlStr:1, ctlEnd:0.75, ctl2Vid:null, ctl2Str:0.5, ctl2End:0.65, h3:true, h3Style:'', h3Sound:'', h3Music:''}, s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   if(s.f.follow === undefined){ const o = s.f; o.follow = (+o.ctlStr===1 && +o.ctlEnd===0.8 && +o.ctl2Str===0.4 && +o.ctl2End===0.5) ? 0.7 : null; if(o.follow != null) Object.assign(o, followSet(0.7)); } // 🎚 (2026-11-05)
-  s.cast = s.cast || []; s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
+  s.cast = s.cast || []; s.guides = s.guides || {}; s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
 }
 let saveT = 0;
@@ -389,7 +389,7 @@ function save(){ clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
 // (Jordan 2026-11-04). tidyMedia drops media nothing uses any more (blob too); hard = also the previews of media that isn't in
 // the form (only the form shows them, and fixThumbs remakes one from the kept file when it comes back).
 function tidyMedia(hard){
-  const used = JSON.stringify({f:S.f, takes:S.takes, cast:S.cast}), form = JSON.stringify(S.f); let n = 0;
+  const used = JSON.stringify({f:S.f, takes:S.takes, cast:S.cast, guides:S.guides}), form = JSON.stringify(S.f); let n = 0;
   for(const id of Object.keys(S.media)){
     if(!used.includes('"' + id + '"')){ delete S.media[id]; delete BLOBS[id]; IDB.del(id).catch(() => {}); Object.keys(S.up).forEach(k => { if(k.startsWith(id + '|')) delete S.up[k]; }); n++; }
     else if(hard && S.media[id].thumb && !form.includes('"' + id + '"')){ S.media[id].thumb = ''; S.media[id].tc = 1; n++; } }
@@ -995,7 +995,7 @@ function pieceGraph(t, i, oi, names){
   const img = id => [add('LoadImage', {image:names[id]}), 0];
   if(t.ctl){ // 🦴 motion guide (a Mocap skeleton or depth clip): this piece's stretch of it steers every frame; the pictures still say who it is
     const patch = [add('ModelPatchLoader', {name:patchOf(oi)}), 0];
-    const guide = g => { const v = add('Video Slice', {video:[add('LoadVideo', {file:names[g.vid]}), 0], start_time:Math.max(0, pc.start - LEAD(pc) / FPS), duration:Math.round((L / FPS + 0.1) * 1000) / 1000, strict_duration:false});
+    const guide = g => { const v = add('Video Slice', {video:[add('LoadVideo', {file:names[g.vid]}), 0], start_time:Math.max(0, (+g.off || 0) + pc.start - LEAD(pc) / FPS), duration:Math.round((L / FPS + 0.1) * 1000) / 1000, strict_duration:false});
       model = [add('MiniMaxH3FunControlNetApply', {model, model_patch:patch, vae, strength:+g.str, start_percent:0, end_percent:+g.end, control_video:[add('GetVideoComponents', {video:[v, 0]}), 0]}), 0]; };
     guide(t.ctl); if(t.ctl2) guide(t.ctl2); } // a second guide (e.g. depth under the skeleton) wraps the first: both steer every block
   const useFirst = t.fl && first && t.first, useLast = t.fl && t.lastOn && last && t.lastImg;
@@ -1254,6 +1254,7 @@ async function render(){
     for(let k = 0; k < N; k++){
       const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base ? base + k : Math.floor(Math.random() * 2 ** 31);
       if(!t.carry && FT) t.toFilm = Object.assign({}, FT);
+      if(t.carry && t.carry.guide) applyGuide(t, t.carry.guide); // 🦴 a carry-on on a track that follows the guidance track
       t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
       const url = pickPc(t, extra); if(!url) throw new Error('no PC can take it right now');
       t.pc = url; extra[url] = (extra[url] || 0) + estSecs(t, url);
@@ -1923,8 +1924,7 @@ function guideGraph(k, file, wh){ const g = {}; let n = 0; const add = (c, i) =>
   return {g, pose, depth}; }
 function guideSize(wh){ const w = wh && wh.w || 16, h = wh && wh.h || 9, s = 832 / Math.max(w, h), r = v => Math.max(64, Math.round(v * s / 16) * 16); return [r(w), r(h)]; }
 let GUIDE_BUSY = false;
-async function guideFrom(blob, name){ if(GUIDE_BUSY){ toast('Already making a guide: one at a time'); return false; } GUIDE_BUSY = true; let ok = false; const note = $('#roughNote'), say = t => { if(note) note.textContent = t; toast(t, 3500); };
-  try{ say('🎭 Looking for a PC with DWPose…'); const k = await guidePc(); if(!k) throw new Error('no PC that is on has DWPose (ControlNet Aux) and the video nodes; it is on Render');
+async function guideMake(blob, name, say){ say('🎭 Looking for a PC with DWPose…'); const k = await guidePc(); if(!k) throw new Error('no PC that is on has DWPose (ControlNet Aux) and the video nodes; it is on Render');
     const id = await addMedia(blob instanceof File ? blob : new File([blob], name, {type:'video/mp4'}), 'vid'); S.media[id].from = 'rough';
     say('🎭 Sending the video to ' + pcName(k.url) + '…'); const file = await upload(k.url, id), G = guideGraph(k, file, S.media[id]);
     const pid = await queueGraph(k.url, G), t0 = Date.now(); let h = null;
@@ -1935,7 +1935,9 @@ async function guideFrom(blob, name){ if(GUIDE_BUSY){ toast('Already making a gu
     const fileOf = node => { const o = node && (h.outputs || {})[node] || {}; return (o.images || o.videos || o.gifs || [])[0]; };
     const grab = async (node, mode) => { const f = fileOf(node); if(!f) return null; const b = await (await fetch(viewUrl(k.url, {filename:f.filename, subfolder:f.subfolder || '', type:'output'}))).blob();
       const mid = await addMedia(new File([b], f.filename, {type:'video/mp4'}), 'vid'); Object.assign(S.media[mid], {from:'rough', mode}); return mid; };
-    const sk = await grab(G.pose, 'pose'); if(!sk) throw new Error('no skeleton came back'); const dp = await grab(G.depth, 'depth'), f = S.f;
+    const sk = await grab(G.pose, 'pose'); if(!sk) throw new Error('no skeleton came back'); const dp = await grab(G.depth, 'depth'); return {sk, dp}; }
+async function guideFrom(blob, name){ if(GUIDE_BUSY){ toast('Already making a guide: one at a time'); return false; } GUIDE_BUSY = true; let ok = false; const note = $('#roughNote'), say = t => { if(note) note.textContent = t; toast(t, 3500); };
+  try{ const {sk, dp} = await guideMake(blob, name, say), f = S.f;
     f.ctlVid = sk; f.ctl2Vid = dp || null; f.ctl = true; f.sm = false; Object.assign(f, followSet(GUIDE_FOLLOW)); f.follow = GUIDE_FOLLOW;
     const m = S.media[sk]; if(m && m.dur){ f.seconds = Math.max(1, Math.round(m.dur * 10) / 10); $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); } // (those boxes are only filled at start)
     save(); drawAll(); ok = true; say('🎭 Guide ready: skeleton' + (dp ? ' + light depth' : '') + ' in the 🦴 Motion guide. Add her and the place as reference pictures, write what happens, and render.');
@@ -2152,6 +2154,34 @@ window.H3DropTakes = async ids => { const drop = S.takes.filter(t => ids.include
   drop.forEach(t => { const fl = [t.final, t.upFinal, ...(t.pieces || []).map(p => p.file)].filter(x => x && x.filename); (byPc[t.pc] = byPc[t.pc] || []).push(...fl.map(x => ({filename:x.filename, subfolder:x.subfolder || ''}))); });
   for(const [pc, items] of Object.entries(byPc)){ if(!items.length) continue; try{ await fetch(pc + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items})}); }catch(e){} }
   const gone = new Set(drop.map(t => t.id)); S.takes = S.takes.filter(t => !gone.has(t.id)); tidyMedia(); save(); drawTakes(); return gone.size; };
+// 🦴 Guidance track (Jordan 2026-11-06): a whole track of the film becomes the guide. Films exports that track as one video on film time,
+// a PC reads its skeleton and depth, and renders on the tracks above (with 🦴 Follow on) take their stretch of it as the Motion guide.
+window.H3GuideTrack = async o => { if(GUIDE_BUSY){ toast('Already making a guide: one at a time'); return {ok:false, error:'busy'}; } GUIDE_BUSY = true; const say = t => toast(t, 3500);
+  try{ const b = await (await fetch(viewUrl(o.pc, o.file))).blob(), r = await guideMake(new File([b], o.file.filename, {type:'video/mp4'}), o.file.filename, say);
+    Object.values(S.media).forEach(m => { if(m.from==='rough' && !m.mode) m.from = 'guide-src'; });
+    S.guides[o.film] = {sk:r.sk, dp:r.dp || null, sig:o.sig || '', t:Date.now()}; save(); say('🦴 The guidance track is ready: skeleton' + (r.dp ? ' + depth' : '') + '. Renders on the tracks above follow it.'); return {ok:true}; }
+  catch(e){ say("🦴 Couldn't read the guidance track: " + e.message); return {ok:false, error:e.message}; }
+  finally{ GUIDE_BUSY = false; } };
+window.H3GuideReady = film => { const G = S.guides[film]; return !!(G && S.media[G.sk]); };
+function applyGuide(t, g){ const G = g && S.guides[g.film]; if(!G || !S.media[G.sk]) return false; const w = followSet(GUIDE_FOLLOW), off = Math.max(0, +g.off || 0);
+  t.ctl = {vid:G.sk, str:w.ctlStr, end:w.ctlEnd, face:null, off}; t.ctl2 = G.dp && S.media[G.dp] ? {vid:G.dp, str:w.ctl2Str, end:w.ctl2End, off} : null; t.guided = {film:g.film, off}; return true; }
+// ▶ Render a track over the guide: one take (or n) per clip of the guidance track, same time, same length, its words, the form's
+// references, subjects, model and LoRAs; each lands on the chosen track at its clip's time
+window.H3Fill = async o => { if(!H3GuideReadyFor(o.film)){ toast('Make the guidance track first'); return 0; }
+  const f = S.f, keep = {seconds:f.seconds, prompt:f.prompt, pieceText:f.pieceText, fl:f.fl, sm:f.sm, ctl:f.ctl}, n = Math.max(1, Math.min(3, +o.n || 1)), extra = {}; let sent = 0;
+  try{ for(const it of o.items || []){ const key = uid('k');
+      Object.assign(f, {seconds:Math.max(1, Math.round(it.secs * 100) / 100), prompt:it.prompt || keep.prompt, pieceText:{}, fl:false, sm:false, ctl:false});
+      for(let k = 0; k < n; k++){ const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+        t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
+        t.toFilm = {film:o.film, name:o.name || '', key, track:o.track, at:+it.at || 0}; applyGuide(t, {film:o.film, off:it.at});
+        const url = pickPc(t, extra); if(!url) throw new Error('no PC can take it right now'); t.pc = url; extra[url] = (extra[url] || 0) + estSecs(t, url);
+        S.takes.unshift(t); drawTakes();
+        try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; throw e; } } } }
+  catch(e){ toast('Not sent: ' + e.message, 6000); }
+  finally{ Object.assign(f, keep); save(); drawAll(); }
+  if(sent) toast('🦴 ' + sent + (sent > 1 ? ' renders' : ' render') + ' over the guide sent to ' + [...new Set(S.takes.slice(0, sent).map(x => pcName(x.pc)))].join(' and '), 5000);
+  return sent; };
+const H3GuideReadyFor = film => window.H3GuideReady(film);
 window.H3Guide = id => { const t = deckTake(id); if(!t){ toast("That take isn't in H3 Deck on this phone"); return; } toForm(); guideFromTake(t); };
 // called by the film app inside the frame
 window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('films'); location.hash = 'take=' + encodeURIComponent(takeId) + (more ? '&more=1' : ''); } else setTab(tab); };
@@ -2175,7 +2205,7 @@ window.H3Carry = async o => { const t = deckTake(o.take), fl = takeFile(t);
   const dur = takeFrames(t) / FPS, at = Math.max(1, Math.min(+o.at || 0, dur || 1e9)), near = dur && Math.abs(at - dur) < 0.05;
   useAgain(t);
   const id = uid('m'); S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
-    cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:o.key || uid('k'), own:true}, thumb:''};
+    cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:o.key || uid('k'), own:true, guide:o.guide || null}, thumb:''};
   FILMSIG = null; FILMT = null; FILMED = false;
   const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:o.prompt || '', pieceText:{}});
   $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll();
@@ -2228,6 +2258,7 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
     if(src.cont){ t.ctl = null; t.ctl2 = null; } // its guide's timing doesn't include the carried-on video
     if(FILMT===src.id){ const fs = snapshot(); // the form below the timeline holds this take's settings, maybe changed (a new reference): use them
       Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3, ctl:src.cont ? null : fs.ctl, ctl2:src.cont ? null : fs.ctl2}); }
+    if(o.guide) applyGuide(t, o.guide);
     t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
     extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
     S.takes.unshift(t); drawTakes();
@@ -2255,6 +2286,7 @@ window.H3Lead = async o => { const src = deckTake(o.take), fl = takeFile(src);
       lead:Object.assign({src:src.id, file:fileArg(fl), film:o.film || '', clip:o.clip || '', key}, P),
       pieces:[{start:0, gen:P.L, deliv:P.B, ctx:0, prompt:text, state:'new'}]});
     if(FILMT===src.id){ const fs = snapshot(); Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3}); }
+    t.ctl = null; t.ctl2 = null; if(o.guide) applyGuide(t, o.guide);
     t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
     extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
     S.takes.unshift(t); drawTakes();
@@ -2284,6 +2316,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

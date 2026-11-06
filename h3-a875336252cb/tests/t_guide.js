@@ -1,0 +1,91 @@
+// 🦴 Guidance track: one track's skeleton + depth guides the renders on the tracks above it (fake ComfyUI, nothing renders).
+// Run: CLIP=<a ~5 s video> NODE_PATH=$(npm root -g) node tests/t_guide.js
+const { chromium } = require('playwright');
+const path = require('path'), http = require('http'), fs = require('fs');
+const R = 'http://render.test', M = 'http://main.test', CLIP = process.env.CLIP;
+if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); process.exit(2); }
+let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
+const SCHEMA = {
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors']], weight_dtype:[['default']]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
+  CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
+  VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
+  ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
+  ModelPatchLoader:{input:{required:{name:[['minimax_h3_fun_controlnet_union.safetensors']]}}},
+};
+const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
+  'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
+  'Video Slice','ImageFromBatch','TrimAudioDuration','DWPreprocessor','DepthAnythingV2Preprocessor','MiniMaxH3FunControlNetApply'];
+const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (g, t) => nodes(g, t)[0];
+(async () => {
+  const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
+    fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8021);
+  const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
+  page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
+  const sent = [], views = [], QP = [], DEL = [], EXP = [];
+  const fake = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
+    if(p==='/system_stats') return J({devices:[]});
+    if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
+    if(p==='/queue' && rt.request().method()==='POST'){ QP.push({host:u.origin, body:JSON.parse(rt.request().postData() || '{}')}); return J({}); }
+    if(p==='/renderdeck/delete'){ DEL.push(JSON.parse(rt.request().postData() || '{}')); return J({moved:1}); }
+    if(p==='/agent/status') return J({agent:1, comfy:'up', wanted:true});
+    if(p==='/queue') return J({queue_running:[], queue_pending:sent.map(s => [0, s.pid])});
+    if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
+    if(p.startsWith('/userdata/')) return rt.request().method()==='GET' ? rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}) : J({});
+    if(p==='/view'){ views.push(u.searchParams.get('filename')); return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)}); }
+    if(p==='/upload/image') return J({name:'up_' + Date.now() + '.webm', subfolder:'', type:'input'});
+    if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, host:u.origin, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
+    if(p==='/renderdeck/h3export'){ if(rt.request().method()==='POST'){ EXP.push(JSON.parse(rt.request().postData())); return J({id:'gx' + EXP.length}); } return J({state:'done', done:10, total:10, file:{filename:'Film guide_gx1abc.mp4', subfolder:'H3Film/_preview', type:'output'}}); }
+    if(p.startsWith('/history/')){ const pid = p.slice(9), s = sent.find(x => x.pid===pid); if(s && Object.values(s.g).some(n => n.class_type==='DWPreprocessor')){ const outs = {}; Object.entries(s.g).filter(([, n]) => n.class_type==='SaveVideo').forEach(([id, n]) => outs[id] = {images:[{filename:n.inputs.filename_prefix.split('/').pop() + '_00001_.mp4', subfolder:'H3Deck/guides', type:'output'}]}); return J({[pid]:{status:{completed:true, status_str:'success', messages:[]}, outputs:outs}}); } return J({}); }
+    if(p==='/history') return J({pz:{prompt:[0, 'pz', {'5':{class_type:'MiniMaxH3ReferenceToVideo', inputs:{prompt:'This continues straight on. she waves goodbye at the door'}}}], status:{completed:true, messages:[]},
+      outputs:{'9':{images:[{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_202611060001_zz9q', type:'output'}]}, '12':{images:[{filename:'h3_202611060001_zz9q_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_202611060001_zz9q', type:'output'}]}}}});
+    return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
+  await page.route(R + '/**', fake); await page.route(M + '/**', fake);
+  await page.addInitScript(r => { if(!sessionStorage.getItem('init')){ localStorage.clear(); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}, {name:'Main', url:'http://main.test', on:true, speed:1.26}]; window.FILM_PCS = [{name:'Render', url:r, on:true}]; }, R);
+  await page.goto('http://127.0.0.1:8021/index.html');
+  await page.waitForFunction(() => H3.families().length > 0, null, {timeout:20000});
+  // a finished 5 s take (one piece, 120 frames)
+  const fam = await page.evaluate(() => H3.families().map(f => f.key));
+  await page.evaluate(([R, m]) => { H3.S.takes.unshift({id:'tA', t:Date.now(), pc:R, model:m, turbo:true, loras:[], w:640, h:352, seed:1, name:'h3_a', dir:'H3Deck/h3_a', prompt:'she walks to the window', seconds:5, imgs:[], vids:[], auds:[], follow:[],
+    pieces:[{start:0, gen:124, deliv:120, ctx:0, prompt:'she walks to the window', state:'done', file:{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_a', type:'output'}}], state:'done', final:{filename:'h3_a_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_a', type:'output'}}); H3.saveNow(); H3.drawAll(); }, [R, fam.find(k => /hybrid/.test(k)) || fam[0]]);
+  await page.evaluate(m => { H3.S.f.model = m; H3.S.f.turbo = true; H3.S.cast.push({n:1, kind:'char', stand:'a woman', who:'', pic:null, keep:'exact'}); H3.S.takes[0].prompt = '<Subject 1> walks to the window'; H3.S.takes[0].pieces[0].prompt = '<Subject 1> walks to the window'; H3.saveNow(); }, fam.find(k => /hybrid/.test(k)) || fam[0]);
+  await page.click('[data-tab="films"]'); await page.waitForTimeout(2500);
+  const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
+  // track 2 = the rough version: two clips (at 0 and at 5 s); track 1 is empty
+  await fr.evaluate(() => { const f = {id:'fA', name:'Film', tracks:[{id:'tr1', clips:[]}, {id:'tr2', clips:[]}], pps:24}; FILM.S.films.unshift(f); FILM.addClip(f, FILM.takeOf('tA'), 1); FILM.addClip(f, FILM.takeOf('tA'), 1); FILM.go({v:'film', film:'fA'}); });
+  await page.waitForTimeout(400);
+  ok(await fr.evaluate(() => !!document.querySelector('[data-act="guideSheet"]')), 'the timeline has 🦴 Guidance track');
+  await fr.click('[data-act="guideSheet"]'); await page.waitForTimeout(300);
+  ok(await fr.evaluate(() => /No guidance track yet/.test(document.querySelector('#gdStat').textContent) && document.querySelectorAll('#gdRows [data-gd^="make"]').length===2), 'the sheet: no guide yet, 🦴 Make it the guide on each track');
+  const n0 = sent.length; await fr.click('[data-gd="make:1"]');
+  ok(EXP.length===1 && EXP[0].preview && EXP[0].clips.length===2 && EXP[0].clips.every(c => c.track===0) && EXP[0].clips.map(c => c.at).join()==='0,5', '🦴 the PC writes only that track as one video on film time (' + JSON.stringify(EXP[0] && EXP[0].clips.map(c => c.at)) + ')');
+  await fr.waitForFunction(() => FILM.S.films[0].guide && FILM.S.films[0].guide.state==='done', null, {timeout:20000}).catch(() => {});
+  const gr = sent.slice(n0).find(s => Object.values(s.g).some(n => n.class_type==='DWPreprocessor'));
+  const G = await page.evaluate(() => JSON.parse(JSON.stringify(H3.S.guides.fA || null)));
+  ok(gr && G && G.sk && G.dp && await fr.evaluate(() => FILM.S.films[0].guide.state==='done'), '🦴 its skeleton and depth are read (DWPose + depth) and kept for the film (' + JSON.stringify(G) + ')');
+  ok(await fr.evaluate(() => { const f = FILM.S.films[0]; return f.tracks[1].guide && f.tracks[0].follow===true && JSON.stringify(FILM.guideOpt(f, 0, 2))===JSON.stringify({film:'fA', off:2}) && FILM.guideOpt(f, 1, 0)===null; }), 'tracks above follow it, the guide track itself does not');
+  ok(await fr.evaluate(() => /🦴 guide/.test(document.querySelector('.trk[data-k="1"] .tn').textContent) && /🦴/.test(document.querySelector('.trk[data-k="0"] .tn').textContent)), 'the track labels say which is the guide and which follow it');
+  // ▶ Render over the guide onto track 1: one take per guide clip, at its time, its words, its stretch of the guide
+  await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200);
+  page.on('dialog', d => d.accept()); fr.page().on('dialog', () => {});
+  const n1 = sent.length; await fr.click('[data-gd="fill:0"]'); await page.waitForTimeout(2500);
+  const fills = sent.slice(n1);
+  const sl = fills.map(s => nodes(s.g, 'Video Slice').map(n => n.inputs.start_time)), cn = fills.map(s => nodes(s.g, 'MiniMaxH3FunControlNetApply').length), pr = fills.map(s => node(s.g, 'MiniMaxH3ReferenceToVideo') && node(s.g, 'MiniMaxH3ReferenceToVideo').inputs.prompt);
+  console.log(JSON.stringify({sl, cn, pr}));
+  ok(fills.length===2 && cn.every(x => x===2) && sl[0].every(x => x===0) && sl[1].every(x => Math.abs(x - 5) < 0.01), '▶ two renders, each following its own stretch of the guide: skeleton + depth from 0 s and from 5 s');
+  ok(pr.every(p => /A woman walks to the window/.test(p || '')), 'each gets its guide clip\'s words (👥 <Subject 1> sent as "a woman")');
+  await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(300);
+  const pl = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => [c.at, FILM.takeOf(c.take) && !!FILM.takeOf(c.take).guided]).sort((a, b) => a[0] - b[0]));
+  ok(pl.length===2 && pl.map(x => x[0]).join()==='0,5' && pl.every(x => x[1]), '▶ they land on track 1 at the guide clips\' times (' + JSON.stringify(pl) + ')');
+  // ↻ Redo on a following track gets the guide at the right film time
+  const n2 = sent.length; await page.evaluate(() => window.H3Redo({take:'tA', a:1, b:3, prompt:'she turns', n:1, film:'fA', clip:'x', guide:{film:'fA', off:5}})); await page.waitForTimeout(1200);
+  const rd = sent.slice(n2)[0], rs = rd ? nodes(rd.g, 'Video Slice').map(n => n.inputs.start_time) : [];
+  const s0 = await page.evaluate(() => H3.S.takes.find(t => t.redo && t.guided).redo.s0);
+  ok(rd && rs.length===2 && rs.every(x => Math.abs(x - (5 + s0 / 24)) < 0.01), '↻ a redo on a following track uses the guide from where its window sits on the film (' + rs.join(',') + ')');
+  // ✕ Not the guide
+  await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200); await fr.click('[data-gd="off:1"]');
+  ok(await fr.evaluate(() => FILM.guideOpt(FILM.S.films[0], 0, 1)===null), '✕ Not the guide: nothing follows it any more');
+  await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])).catch(() => {});
+  console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
+})();

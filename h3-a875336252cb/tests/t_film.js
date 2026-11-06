@@ -69,6 +69,15 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   // scrubbing near a clip's edge snaps onto it
   const sn = await page.evaluate(() => { const f = FILM.S.films[0], c = f.tracks[1].clips[0], e = c.at + (c.out - c.in), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((e - 4 / f.pps) * f.pps); return new Promise(r => setTimeout(() => r({ph:FILM.PH, e}), 400)); });
   ok(Math.abs(sn.ph - sn.e) < 1e-6, 'scrubbing a few pixels from a clip\'s edge snaps onto the edge (' + JSON.stringify(sn) + ')');
+  // dragging a clip: its END snaps to another clip's start too (Jordan 2026-11-06), with a line where
+  const ds = await page.evaluate(() => { const sel0 = FILM.SEL, f = FILM.S.films[0], x = f.tracks[0].clips[0], y = f.tracks[1].clips[f.tracks[1].clips.length - 1]; x.at = 1; y.at = 9; FILM.PH = 0; FILM.SEL = x.id; FILM.draw(); return {id:x.id, L:x.out - x.in, pps:f.pps, y:y.at, sel0}; });
+  const cx = await page.$eval('.clip[data-c="' + ds.id + '"] .nm', e => { const r = e.getBoundingClientRect(); return {x:r.x + 4, y:r.y + r.height / 2}; });
+  const want = (ds.y - ds.L - 1) * ds.pps - 6; let line = false;
+  await page.mouse.move(cx.x, cx.y); await page.mouse.down(); await page.mouse.move(cx.x + want / 2, cx.y, {steps:4}); await page.mouse.move(cx.x + want, cx.y, {steps:4});
+  line = await page.evaluate(() => { const l = document.querySelector('.snapline'); return !!(l && !l.hidden); }); await page.mouse.up(); await page.waitForTimeout(300);
+  const da = await page.evaluate(id => { const f = FILM.S.films[0], c = f.tracks.flatMap(t => t.clips).find(c => c.id===id); return c.at + c.out - c.in; }, ds.id);
+  ok(Math.abs(da - ds.y) < 1e-6 && line, 'a dragged clip\'s end snaps onto the next clip\'s start, with a line there (' + da.toFixed(3) + ' vs ' + ds.y + ')');
+  await page.click('#undoBtn'); await page.waitForTimeout(200); await page.evaluate(id => { FILM.SEL = id; FILM.draw(); }, ds.sel0);
   // versions: swap for the 🎲 take
   await page.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   ok(await page.$$eval('#vstrip [data-act="useTake"]', p => p.length)===2, 'the selected clip shows its takes under it (the take and its 🎲 take)');
