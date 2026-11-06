@@ -76,28 +76,37 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(150); await fr.click('[data-gd="lock:1"]'); await page.waitForTimeout(150);
   ok(await fr.evaluate(() => !FILM.lockedK(FILM.S.films[0], 1)), '🔓 Unlock in the 🦴 sheet lets it be changed');
   await fr.click('[data-gd="lock:1"]'); await fr.evaluate(() => { document.querySelector('#sheet').hidden = true; FILM.draw(); });
-  // ▶ Render over the guide onto track 1: one take per guide clip, at its time, its words, its stretch of the guide
+  // ▶ one clip at a time over the guide (Jordan 2026-11-06): clip 1 = the form's Takes (2 here, split across the PCs), its words and length
+  await page.evaluate(() => { H3.S.f.takes = 2; H3.saveNow(); });
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200);
   page.on('dialog', d => d.accept()); fr.page().on('dialog', () => {});
+  ok(await fr.evaluate(() => /Clip 1 of 2 over the guide/.test(document.querySelector('[data-gd="fill:0"]').textContent) && !document.querySelector('#gdN')), 'the sheet offers ▶ Clip 1 of 2 over the guide (no takes-per-clip choice)');
   const n1 = sent.length; await fr.click('[data-gd="fill:0"]'); await page.waitForTimeout(2500);
   const fills = sent.slice(n1);
   const sl = fills.map(s => nodes(s.g, 'Video Slice').map(n => n.inputs.start_time)), cn = fills.map(s => nodes(s.g, 'MiniMaxH3FunControlNetApply').length), pr = fills.map(s => node(s.g, 'MiniMaxH3ReferenceToVideo') && node(s.g, 'MiniMaxH3ReferenceToVideo').inputs.prompt);
-  console.log(JSON.stringify({sl, cn, pr}));
-  const ft = await page.evaluate(() => H3.S.takes.filter(t => t.toFilm && t.toFilm.track).map(t => ({s:t.seconds, at:t.toFilm.at, cuts:t.toFilm.cuts, g:!!t.guided, ps:t.pieces.map(p => +p.start.toFixed(2))})));
-  console.log(JSON.stringify(ft));
-  ok(ft.length===1 && Math.abs(ft[0].s - 10) < 0.01 && ft[0].at===0 && JSON.stringify(ft[0].cuts)==='[5]' && ft[0].g && ft[0].ps.length===2 && Math.abs(ft[0].ps[1] - 5) < 0.25, '▶ ONE 10 s take, its parts ending on the guide\'s cut (clip by clip) over the whole guide, to be cut at 5 s (' + JSON.stringify(ft) + ')');
-  ok(fills.length >= 1 && cn.every(x => x===2) && sl[0].every(x => x===0), '▶ it follows the guide from 0 s (skeleton + depth)');
-  ok(pr.every(p => /A woman walks to the window/.test(p || '')) && pr.every(p => !/\[\d/.test(p || '')), 'the two clips\' same words are joined into one (👥 <Subject 1> sent as "a woman")');
-  ok(await fr.evaluate(() => !document.querySelector('#gdN')), 'no "takes of each clip" choice any more');
+  const ft = await page.evaluate(() => H3.S.takes.filter(t => t.toFilm && t.toFilm.track).map(t => ({id:t.id, s:t.seconds, at:t.toFilm.at, len:t.toFilm.len, pc:t.pc, g:!!t.guided})));
+  console.log(JSON.stringify({sl, cn, ft}));
+  ok(ft.length===2 && ft.every(x => Math.abs(x.s - 5) < 0.01 && x.at===0 && x.len===5 && x.g) && fills.length===2 && cn.every(x => x===2) && sl.every(x => x.every(y => y===0)), '▶ clip 1: two 5 s takes from 0 s, each following the guide (' + JSON.stringify(ft) + ')');
+  ok(pr.every(p => /A woman walks to the window/.test(p || '') && !/\[\d/.test(p || '')), 'with that clip\'s own words, no time codes (👥 <Subject 1> sent as "a woman")');
+  // the first take finishes (as a PC would), lands in the clip; the sheet then offers clip 2, which carries on from it
+  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); t.state = 'done'; t.pieces.forEach(p => { p.state = 'done'; p.file = {filename:'piece_01_00001_.mp4', subfolder:'Output_Render/' + t.dir, type:'output'}; }); t.final = {filename:t.name + '_00001_.mp4', subfolder:'Output_Render/' + t.dir, type:'output'}; H3.saveNow(); }, await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); return FILM.S.films[0].tracks[0].clips[0].take; }));
   await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(300);
-  const pl = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => [c.at, c.in, c.out, c.take, FILM.takeOf(c.take) && !!FILM.takeOf(c.take).guided]).sort((a, b) => a[0] - b[0]));
-  ok(pl.length===2 && pl.map(x => x[0] + ':' + x[1] + '-' + Math.round(x[2])).join()==='0:0-5,5:5-10' && pl[0][3]===pl[1][3] && pl.every(x => x[4]), '▶ it lands on track 1 cut into two clips of the same take at the guide\'s cut (' + JSON.stringify(pl) + ')');
+  const pl = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => [c.at, c.in, c.out, !!FILM.takeOf(c.take) && !!FILM.takeOf(c.take).guided]));
+  ok(pl.length===1 && pl[0][0]===0 && Math.abs(pl[0][2] - 5) < 0.01 && pl[0][3], '▶ clip 1 lands on track 1 at 0 s, 5 s long (' + JSON.stringify(pl) + ')');
+  await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200);
+  ok(await fr.evaluate(() => /Clip 2 of 2 over the guide/.test(document.querySelector('[data-gd="fill:0"]').textContent)), 'then the sheet offers ▶ Clip 2 of 2');
+  const n3 = sent.length; await fr.click('[data-gd="fill:0"]'); await page.waitForTimeout(3000);
+  const c2 = sent.slice(n3), cs2 = c2.map(s => nodes(s.g, 'Video Slice').map(n => n.inputs.start_time)), mc = c2.map(s => Object.values(s.g).some(n => /MotionContext|LoadVideo|VHS_LoadVideo/i.test(n.class_type)));
+  const ct2 = await page.evaluate(() => H3.S.takes.filter(t => t.carry && t.carry.len).map(t => ({s:t.seconds, len:t.carry.len, g:!!t.guided || !!(t.ctl && t.ctl.off), off:t.ctl && t.ctl.off})));
+  console.log(JSON.stringify({cs2, mc, ct2, toastF:await fr.evaluate(() => (document.querySelector('#toast') || {}).textContent), toastD:await page.evaluate(() => (document.querySelector('#toast') || {}).textContent), why:await page.evaluate(() => { const b = document.querySelector('#goBtn'); return [b.disabled, b.textContent, (document.querySelector('#goWhy') || {}).textContent, H3.S.f.fl, H3.S.tab]; })}));
+  ok(c2.length===2 && ct2.length===2 && ct2.every(x => x.len===5 && Math.abs(x.s - 5) < 0.01) && mc.every(Boolean), '▶ clip 2: two takes carrying on from clip 1\'s take, 5 s each (' + JSON.stringify(ct2) + ')');
   // ↻ Redo on a following track gets the guide at the right film time
   const n2 = sent.length; await page.evaluate(() => window.H3Redo({take:'tA', a:1, b:3, prompt:'she turns', n:1, film:'fA', clip:'x', guide:{film:'fA', off:5}})); await page.waitForTimeout(1200);
   const rd = sent.slice(n2)[0], rs = rd ? nodes(rd.g, 'Video Slice').map(n => n.inputs.start_time) : [];
   const s0 = await page.evaluate(() => H3.S.takes.find(t => t.redo && t.guided).redo.s0);
   ok(rd && rs.length===2 && rs.every(x => Math.abs(x - (5 + s0 / 24)) < 0.01), '↻ a redo on a following track uses the guide from where its window sits on the film (' + rs.join(',') + ')');
   // ✕ Not the guide
+  await page.evaluate(() => window.scrollTo(0, 0)); await page.waitForTimeout(300);
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200); await fr.click('[data-gd="off:1"]');
   ok(await fr.evaluate(() => FILM.guideOpt(FILM.S.films[0], 0, 1)===null), '✕ Not the guide: nothing follows it any more');
   // 🗑 any track can be deleted, clips and all (asks first); ↶ Undo brings it back
