@@ -22,11 +22,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8017);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [], views = [], QP = [];
+  const sent = [], views = [], QP = [], DEL = [];
   const fake = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
     if(p==='/queue' && rt.request().method()==='POST'){ QP.push({host:u.origin, body:JSON.parse(rt.request().postData() || '{}')}); return J({}); }
+    if(p==='/renderdeck/delete'){ DEL.push(JSON.parse(rt.request().postData() || '{}')); return J({moved:1}); }
     if(p==='/agent/status') return J({agent:1, comfy:'up', wanted:true});
     if(p==='/queue') return J({queue_running:[], queue_pending:sent.map(s => [0, s.pid])});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
@@ -74,11 +75,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(ct.cont && Math.abs(ct.contCut - 2.5) < 0.01 && Math.abs(ct.contSecs - 2.5) < 0.01 && ct.carry && ct.carry.clip, 'the take remembers the cut and the clip it carries on');
   const jvs = node(ct.jg, 'Video Slice'), cc = node(ct.jg, 'ConcatenateVideo');
   ok(ct.carry.own && !jvs && (!cc || ct.jg[cc.inputs['videos.video0'][0]].class_type==='LoadVideo'), 'the finished take is only the new part: its own clip, not stitched onto the one before (Jordan 2026-11-06)');
-  // Films puts it on a track above, from the exact moment; the original clips stay whole underneath
+  // Films puts it right after the cut on the same track: the clip ends at 2.5 s, the new part follows, the next clip moves along
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   const pl = await fr.evaluate(() => FILM.S.films[0].tracks.map(tr => tr.clips.map(c => ({take:c.take, at:+c.at.toFixed(2), in:+c.in.toFixed(2), out:+c.out.toFixed(2)}))));
-  const nc = pl[0].find(c => c.take===ct.id);
-  ok(pl.length===3 && pl[0].length===1 && nc && nc.at===2.5 && nc.in===0 && nc.out > 4.5 && nc.out < 5.5 && pl[1].length===2 && pl[1].every(c => c.in===0 && c.out===5) && pl[1][1].at===5, '➕ the new part goes on a new track above, starting at 2.5 s, and the original clips stay whole (' + JSON.stringify(pl) + ')');
+  const nc = pl[0].find(c => c.take===ct.id), nx = pl[0].find(c => c.take==='tA' && c.at > 2.5);
+  ok(pl.length===2 && pl[0].length===3 && pl[0][0].out===2.5 && nc && nc.at===2.5 && nc.in===0 && nc.out > 4.5 && nc.out < 5.5 && nx && Math.abs(nx.at - (2.5 + nc.out)) < 0.02, '➕ the new part replaces the rest of the clip from 2.5 s on the same track, and the next clip moves along (' + JSON.stringify(pl) + ')');
   ok(await fr.evaluate(() => /Carry on|➕/.test(document.querySelector('#tl').textContent)), 'the new clip is labelled ➕');
   // while it renders the new clip is striped; select it and its takes (the versions of that Carry on) show under it
   const cid = await fr.evaluate(id => FILM.S.films[0].tracks[0].clips.find(x => x.take===id).id, ct.id);
@@ -111,6 +112,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.click('#goBtn'); await page.waitForTimeout(1500); await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   const mt2 = await fr.evaluate(c => ({n:FILM.S.films[0].tracks.reduce((a, tr) => a + tr.clips.length, 0), strip:document.querySelectorAll('#vstrip [data-act="useTake"]').length}), cid);
   ok(sent.length > n9 && mt2.n===nClips && mt2.strip===3, 'its renders join the clip\'s takes (no extra clip) (' + JSON.stringify(mt2) + ')');
+  // ✓ Keep only this: the clip's other finished takes are deleted (list + their videos on the PC); rendering ones stay
+  await page.evaluate(() => { const t = H3.S.takes.find(x => x.id==='tV2'), v = JSON.parse(JSON.stringify(t)); v.id = 'tV3'; v.t = t.t + 2; v.final = {filename:'v3_00001_.mp4', subfolder:'Output_Main/H3Deck/v3', type:'output'}; H3.S.takes.unshift(v); H3.saveNow(); });
+  await fr.evaluate(c => { FILM.SEL = c; FILM.draw(); }, cid); await page.waitForTimeout(300);
+  await page.evaluate(() => { window.confirm = () => true; }); await fr.evaluate(() => { window.confirm = () => true; });
+  await fr.click('#vstrip [data-act="keepOnly"]'); await page.waitForTimeout(600);
+  const ko = await page.evaluate(() => ({v3:!!H3.S.takes.find(x => x.id==='tV3'), v2:!!H3.S.takes.find(x => x.id==='tV2')}));
+  ok(!ko.v3 && ko.v2 && DEL.some(d => d.items.some(i => i.filename==='v3_00001_.mp4')), '✓ Keep only this deletes the other finished takes (and their videos on the PC), keeping the one in use (' + JSON.stringify([ko, DEL.length]) + ')');
   await fr.click('#vstrip [data-t="' + ct.id + '"]'); await page.waitForTimeout(200);
   // ↻ redo 1–2 s of the second clip (the original take)
   await page.click('[data-tab="films"]'); await page.waitForTimeout(500);
