@@ -1014,16 +1014,19 @@ function pieceGraph(t, i, oi, names){
   const vid = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[vid, 0], filename_prefix:t.dir + '/piece_' + String(i + 1).padStart(2, '0'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   // the last piece joins them all as its final step (Jordan 2026-11-01: no waiting in the queue for the stitch); needs the Render Deck helper's join node
-  const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join && !borrowed(t) && !t.cont ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
+  const join = i > 0 && i===t.pieces.length - 1 && oi.RenderDeckH3Join && !borrowed(t) && (!t.cont || ownCarry(t)) ? add('RenderDeckH3Join', {video:[vid, 0], folder:t.dir, before:i, filename_prefix:t.dir + '/' + t.name}) : null;
   return {g, save:sv, join};
 }
 function batchOf(add, oi, a, b){ const req = ((oi.ImageBatch || {}).input || {}).required || {};
   if(oi.ImageBatch && 'image1' in req) return [add('ImageBatch', {image1:a, image2:b}), 0];
   return [add(oi.ImageBatch ? 'ImageBatch' : 'BatchImagesNode', {'images.image0':a, 'images.image1':b}), 0]; }
+// ➕ a carry-on made from 🎞 Films (carry.own, Jordan 2026-11-06): its video is only the new part, its own clip right after the
+// clip it carries on from (not stitched onto it). Motion Context only needs the frames before the cut, which it still gets.
+const ownCarry = t => !!(t && t.cont && t.carry && t.carry.own);
 function joinGraph(t){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs, _meta:{title:cls}}; return id; };
-  const vids = {}, o = t.cont ? 1 : 0;
-  if(t.cont){ const m = S.media[t.cont] || {}; let v = [add('LoadVideo', {file:t.contFile}), 0];
+  const vids = {}, o = t.cont && !ownCarry(t) ? 1 : 0;
+  if(o){ const m = S.media[t.cont] || {}; let v = [add('LoadVideo', {file:t.contFile}), 0];
     if(t.contCut) v = [add('Video Slice', {video:v, start_time:0, duration:t.contCut, strict_duration:false}), 0]; // the rest of it is replaced by the new part
     if(m.w && (m.w!==t.w || m.h!==t.h)){ const gc = add('GetVideoComponents', {video:v}); // to the take's size, so the join is one size
       const sc = add('ImageScale', {image:[gc, 0], upscale_method:'lanczos', width:t.w, height:t.h, crop:'center'});
@@ -1236,7 +1239,7 @@ async function tick(){
         if(later.length){ try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:later})}); }catch(e){} }
         t.pieces.slice(bad + 1).forEach(x => { if(x.state==='queued' || x.state==='running') x.state = 'new'; }); }
       else if(t.pieces.every(x => x.state==='done')){
-        if(t.pieces.length===1 && !t.cont){ t.final = t.pieces[0].file; t.state = 'done'; }
+        if(t.pieces.length===1 && (!t.cont || ownCarry(t))){ t.final = t.pieces[0].file; t.state = 'done'; }
         else if(t.final && !t.joinPid){ t.state = 'done'; } // the last piece already joined them
         else if(!t.joinPid && pcOf(t.pc).oi.ConcatenateVideo){ try{ const G = joinGraph(t); t.joinSave = G.save; t.joinPid = await queueGraph(t.pc, G, true); t.tj = Date.now(); }catch(e){ t.state = 'done'; t.joinErr = e.message; } }
         else if(!t.joinPid){ t.state = 'done'; t.joinErr = 'this ComfyUI has no Concatenate Video node'; }
@@ -2016,10 +2019,10 @@ window.H3Badge = () => {};
 // a take a Films clip uses: H3 Deck's own, or the copy Films kept (e.g. after Clear finished), which comes back onto the list
 function deckTake(id){ let t = id && S.takes.find(x => x.id===id); if(t || !id) return t;
   try{ const k = (JSON.parse(localStorage.getItem('h3edit') || '{}').keep || {})[id]; if(k && !k.recovered){ t = JSON.parse(JSON.stringify(k)); S.takes.push(t); save(); drawTakes(); return t; } if(k) return k; }catch(e){} return null; }
-const takeFile = t => t && (t.final || ((t.pieces || []).length===1 && !t.cont ? t.pieces[0].file : null));
+const takeFile = t => t && (t.final || ((t.pieces || []).length===1 && (!t.cont || ownCarry(t)) ? t.pieces[0].file : null));
 const fileArg = f => (f.subfolder ? f.subfolder + '/' : '') + f.filename + ' [output]';
 // frames in a take's finished video
-const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont ? Math.round((t.contSecs || (S.media[t.cont] || {}).dur || 0) * FPS) : 0);
+const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont && !ownCarry(t) ? Math.round((t.contSecs || (S.media[t.cont] || {}).dur || 0) * FPS) : 0);
 // ➕ Carry on from here: the form gets the take's settings, and its video (up to the playhead) as the video to carry on;
 // Jordan writes what happens next and renders. Films puts the new take right after the clip.
 // The take's video isn't downloaded to the phone and sent back (Jordan 2026-11-06: the first try rendered without it): the PC
@@ -2031,7 +2034,7 @@ window.H3Carry = async o => { const t = deckTake(o.take), fl = takeFile(t);
   const dur = takeFrames(t) / FPS, at = Math.max(1, Math.min(+o.at || 0, dur || 1e9)), near = dur && Math.abs(at - dur) < 0.05;
   useAgain(t);
   const id = uid('m'); S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
-    cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:uid('k')}, thumb:''};
+    cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:uid('k'), own:true}, thumb:''};
   FILMSIG = null; FILMT = null; FILMED = false;
   const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:o.prompt || '', pieceText:{}});
   $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll();
