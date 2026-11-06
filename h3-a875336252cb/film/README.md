@@ -41,3 +41,8 @@ Both work inside H3 Deck (the 🎞 Films tab), because H3 Deck does the renderin
   ⇄ Versions lists the original and the other redos.
 
 Test: `CLIP=<a ~5 s video with sound> node tests/t_carry.js`.
+
+## Clip history (2026-11-06)
+- ➕ Carry on from Films (`carry.own`) renders only the new part. It becomes its own clip right after the clip it carries on from, and isn't stitched onto it. Motion Context still gets the frames before the cut (Video Slice of the earlier take). Older carry-ons, which are stitched, still work the old way.
+- The new clip appears as soon as you press Render, and is striped while it renders.
+- A selected clip shows its takes underneath: the takes of one Carry on, 🎲 more takes, ↻ redos and the original. Tap one to put it in the clip. If the clip ran to its end, it takes the new take's length and later clips move to fit. The ⇄ Versions button is gone.

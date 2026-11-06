@@ -63,9 +63,9 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const sp = await page.evaluate(() => FILM.S.films[0].tracks[1].clips.map(c => [c.at, c.in, c.out].map(x => +x.toFixed(2))));
   ok(sp.length===2 && sp[0][2]===3 && sp[1][0]===6 && sp[1][1]===3, '✂ Split cuts the clip at the playhead (' + JSON.stringify(sp) + ')');
   // versions: swap for the 🎲 take
-  await page.click('[data-act="versions"]'); await page.waitForTimeout(200);
-  ok(await page.$$eval('[data-pick]', p => p.length)===2, '⇄ Versions lists the take and its 🎲 take');
-  await page.click('[data-pick="tB2"]'); await page.waitForTimeout(200);
+  await page.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
+  ok(await page.$$eval('#vstrip [data-act="useTake"]', p => p.length)===2, 'the selected clip shows its takes under it (the take and its 🎲 take)');
+  await page.click('#vstrip [data-t="tB2"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => FILM.clipOf(FILM.S.films[0], FILM.SEL).c.take)==='tB2', 'picking a version swaps the clip');
   // ⬇ Export sends the edit list (files, trims, track numbers) to the PC and shows its progress, then a link
   await page.click('[data-act="export"]'); await page.waitForTimeout(400);
