@@ -93,9 +93,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(swc.take==='tV2' && swc.len===4, 'tapping a take puts it in the clip, at its own length (' + JSON.stringify(swc) + ')');
   // playing across the cut onto the clip above: always a picture on screen (no black flash), and the upper clip takes over at 2.5 s
   const pf = await fr.evaluate(() => new Promise(res => { const f = FILM.S.films[0]; FILM.PH = 1.8; FILM.draw(); let gaps = 0, n = 0, after = null; FILM.play(f);
-    const tick = () => { n++; const on = document.querySelectorAll('.stage video.on'), t = FILM.PH; if(t > 1.9 && FILM.activeAt(f, t) && !on.length) gaps++;
+    const tick = () => { n++; const on = document.querySelectorAll('.stage video.on'), t = FILM.PH; if(t > 1.9 && FILM.activeAt(f, t) && !on.length) gaps++; if(t > 2.3 && t < 2.8 && on[0] && on[0].paused) window.FROZE = (window.FROZE || 0) + 1;
       if(t > 2.9 && !after){ after = on[0] && on[0].dataset.c; } if(t < 3.2) requestAnimationFrame(tick); else { FILM.stopPlay && FILM.stopPlay(); res({gaps, n, after, want:FILM.activeAt(f, 3).id}); } }; requestAnimationFrame(tick); }));
   ok(pf.gaps===0 && pf.after===pf.want, 'playing across the cut never shows black, and the clip above takes over (' + JSON.stringify(pf) + ')');
+  ok(!(await fr.evaluate(() => window.FROZE || 0)), 'the playing clip keeps playing (the sound unlock no longer pauses it)');
   // scrubbing across the cut and back: there is always a picture (the last one stays until the next clip's frame is ready)
   const sf = await fr.evaluate(() => new Promise(res => { const f = FILM.S.films[0], w = document.querySelector('#tlw'); let gaps = 0, k = 0;
     const pos = [2.0, 2.3, 2.6, 3.0, 2.4, 1.5, 2.8, 4.0, 6.0, 2.2];

@@ -2602,7 +2602,7 @@ def _ex_run(job, clips):
             os.makedirs(out, exist_ok=True)
             name = '%s_%05d_.mp4' % (filename, counter)
         full = os.path.join(out, name)
-        with av.open(full + '.part', 'w', format='mp4') as dst:
+        with av.open(full + '.part', 'w', format='mp4', options={'movflags': 'faststart'}) as dst:
             codec = next(c for c in ('libx264', 'h264', 'libopenh264', 'mpeg4') if c in av.codecs_available)
             vo = dst.add_stream(codec, rate=fps)
             vo.width, vo.height, vo.pix_fmt = w, h, 'yuv420p'

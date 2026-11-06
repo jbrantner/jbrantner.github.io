@@ -473,18 +473,22 @@ function prevHtml(f){ const x = f.prev; if(!filmSecs(f)) return '';
   if(x && x.state==='working'){ const p = x.total ? Math.round(100 * x.done / x.total) : 0; return `<div class="note" style="margin:8px 0">⚡ Making a smooth preview on ${esc(pcName(x.pc))}… ${p}%<div class="bar" style="margin:6px 0"><i style="width:${p}%"></i></div></div>`; }
   if(prevOk(f)) return `<div class="note" style="margin:8px 0">⚡ <b>Smooth preview on</b>: ▶ Play plays the whole film as one video, in real time. Any edit turns it off until you make a new one.</div>`;
   return `<div class="row" style="margin:8px 0;align-items:center;flex-wrap:nowrap"><span class="note" style="flex:1;margin:0">${x && x.state==='failed' ? "⚡ The preview didn't finish: " + esc(x.error || '') : x && x.file ? '⚡ The preview is out of date (the edit changed).' : 'Play stutters? ⚡ makes a smooth preview: the PC writes the film as one small temporary video.'}</span><button class="btn" data-act="preview">⚡ Preview</button></div>`; }
+let AUTOPREV = 0;
+function autoPrev(f){ clearTimeout(AUTOPREV); if(!filmSecs(f) || prevOk(f) || (f.prev && f.prev.state==='working' && f.prev.sig===sigOf(f)) || S.autoPrev===false) return;
+  if(f.prev && f.prev.file && !/_preview/.test(f.prev.file.subfolder || '')) return; // an old helper keeps every preview at full size: only by hand there
+  if(expClips(f).miss.length) return; AUTOPREV = setTimeout(() => { if(N().v==='film' && N().film===f.id && !PLAY && !prevOk(f) && !expClips(f).miss.length) previewFilm(f, true); }, 4000); }
 function prevShow(f){ const el = $('#prevBox'); if(el && N().v==='film' && N().film===f.id) el.innerHTML = prevHtml(f); }
-async function previewFilm(f){ const {out, miss} = expClips(f); if(miss.length){ toast(miss.length + (miss.length===1 ? ' clip has' : ' clips have') + ' no finished video yet'); return; }
+async function previewFilm(f, quiet){ const {out, miss} = expClips(f); if(miss.length){ toast(miss.length + (miss.length===1 ? ' clip has' : ' clips have') + ' no finished video yet'); return; }
   const pc = expPc(); if(!pc){ toast("Can't reach Render or Main"); return; } const sig = sigOf(f);
   try{ const r = await fetch(pc + '/renderdeck/h3export', {method:'POST', body:JSON.stringify({name:(f.name || 'film') + ' preview', clips:out, preview:true})}), j = await r.json().catch(() => ({}));
     if(!r.ok) throw new Error(r.status===404 && !j.error ? 'paste the newest helper on ' + pcName(pc) + ' first' : j.error || r.status);
     f.prev = {id:j.id, pc, state:'working', done:0, total:0, sig}; save(); prevShow(f); prevPoll(f); }
-  catch(e){ toast('Preview: ' + e.message, 5000); } }
+  catch(e){ if(!quiet) toast('Preview: ' + e.message, 5000); } }
 let prevT = 0;
 async function prevPoll(f){ clearTimeout(prevT); const x = f.prev; if(!x || x.state!=='working') return;
   try{ const r = await fetch(x.pc + '/renderdeck/h3export?id=' + x.id), j = await r.json();
     if(!r.ok){ x.state = 'failed'; x.error = j.error || r.status; } else Object.assign(x, {state:j.state, done:j.done, total:j.total, file:j.file, error:j.error});
-    save(); prevShow(f); if(x.state==='done') toast('⚡ The smooth preview is ready: tap ▶ Play'); }catch(e){}
+    save(); prevShow(f); if(x.state==='done'){ toast('⚡ Smooth preview ready: Play and scrubbing use it'); if(!PLAY) showFrame(f); } }catch(e){}
   if(x.state==='working') prevT = setTimeout(() => prevPoll(f), 1200); }
 // ---------- ⬇ Export: the PC's helper writes the timeline to one mp4, frame by frame (H3 Deck's clips are already in its output folder) ----------
 function expHtml(f){ const x = f.exp; if(!x) return '';
@@ -551,7 +555,7 @@ function scrollTo(f){ const w = $('#tlw'); if(!w) return; const x = Math.round(P
 let WORDT = 0;
 function setPH(f, t, show, fromScroll){ PH = Math.max(0, t); if(!fromScroll) scrollTo(f); const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); if(show){ showFrame(f); clearTimeout(WORDT); WORDT = setTimeout(() => pushWords(f), fromScroll ? 250 : 0); } }
 function wireFilm(f){
-  drawTL(f); if(f.guide && f.guide.state==='export' && !guideT) guidePoll(f);
+  drawTL(f); if(f.guide && f.guide.state==='export' && !guideT) guidePoll(f); if(f.prev && f.prev.state==='working') prevPoll(f); else autoPrev(f);
   const tl = $('#tl'), wrap = $('#tlw');
   tl.addEventListener('pointerdown', ev => {
     const el = ev.target.closest('.clip'); if(!el) return; const r = clipOf(f, el.dataset.c); if(!r) return;
@@ -599,12 +603,16 @@ function refreshTools(f){ const sel = SEL && clipOf(f, SEL); $$('.tools [data-ac
 let PLAY = null; // {f, t0, ph0, raf}
 const srcOf = c => { const t = takeOf(c.take), fl = fileOf(t); return t && fl ? viewUrl(t.pc, fl) : ''; };
 function vids(){ return [$('#vA'), $('#vB')].filter(Boolean); }
+function seekTo(v, want){ if(v.seeking){ v._want = want; if(!v._onsk){ v._onsk = () => { const w = v._want; v._want = null; if(w!=null && Math.abs(v.currentTime - w) > 0.04){ try{ v.currentTime = w; }catch(e){} } }; v.addEventListener('seeked', v._onsk); } return; }
+  if(Math.abs((v.currentTime || 0) - want) > 0.04){ try{ v.currentTime = want; }catch(e){} } }
 function cue(v, c, t){ const src = srcOf(c); if(!src) return false; if(v.dataset.src!==src){ v.dataset.src = src; v.src = src; v._want = null; } const want = c.in + (t - c.at); v.dataset.c = c.id;
   if(v.seeking){ v._want = want; if(!v._onsk){ v._onsk = () => { const w = v._want; v._want = null; if(w!=null && Math.abs(v.currentTime - w) > 0.04){ try{ v.currentTime = w; }catch(e){} } }; v.addEventListener('seeked', v._onsk); } return true; }
   if(Math.abs((v.currentTime || 0) - want) > 0.04){ try{ v.currentTime = want; }catch(e){} } return true; }
 // scrubbing uses both players too (Jordan 2026-11-06: black flash when scrubbing across clips): the player that already has the
 // clip's video is used, otherwise the hidden one loads it while the last picture stays on screen until its frame is ready
 function showFrame(f){ const c = activeAt(f, PH), [a, b] = vids(); if(!a) return;
+  if(prevOk(f) && filmSecs(f)){ const src = viewUrl(f.prev.pc, f.prev.file); if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; a._want = null; } a.dataset.c = 'prev';
+    a.pause(); seekTo(a, Math.min(PH, filmSecs(f) - 0.02)); a.classList.add('on'); if(b) b.classList.remove('on'); const g = $('#gap'); if(g) g.textContent = ''; return; }
   const g = $('#gap'), src = c && srcOf(c);
   if(c && src){ const cur = [a, b].find(v => v.classList.contains('on')), v = [a, b].find(v => v.dataset.src===src) || [a, b].find(v => v!==cur) || a, o = v===a ? b : a;
     cue(v, c, PH); v.pause(); if(g) g.textContent = '';
@@ -615,7 +623,8 @@ function showFrame(f){ const c = activeAt(f, PH), [a, b] = vids(); if(!a) return
   if(g) g.textContent = filmSecs(f) ? (c ? 'This clip\'s take is missing' : '') : 'Add clips from ✂ Review or ＋ Clip'; }
 function play(f){
   if(PLAY){ stopPlay(); return; } if(PH >= filmSecs(f) - 0.05) PH = 0;
-  vids().forEach(v => { v.muted = !S.snd; v.play().then(() => v.pause()).catch(() => {}); }); // unlock both for sound (iOS)
+  // unlock both for sound (iOS); the pause must not land on the one Play is using (it froze the picture while the time ran on)
+  vids().forEach(v => { v.muted = !S.snd; if(!v.getAttribute('src')) return; v.play().then(() => { if(!(PLAY && (PLAY.prev===v || (PLAY.cur && v.dataset.c===PLAY.cur.id)))) v.pause(); }).catch(() => {}); });
   PLAY = {f, t0:performance.now(), ph0:PH, cur:null}; $('#playBtn').textContent = '⏸ Pause';
   if(prevOk(f)){ const [a, b] = vids(), src = viewUrl(f.prev.pc, f.prev.file); PLAY.prev = a; if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; } a.dataset.c = '';
     try{ a.currentTime = PH; }catch(e){} a.muted = !S.snd; a.classList.add('on'); if(b) b.classList.remove('on'), b.pause(); a.play().catch(() => {}); }
@@ -623,7 +632,7 @@ function play(f){
 }
 function loop(){
   if(!PLAY) return; const {f} = PLAY;
-  if(PLAY.prev){ const v = PLAY.prev, t = v.currentTime || PH; if(v.ended || t >= filmSecs(f) - 0.02){ setPH(f, filmSecs(f)); stopPlay(); return; } PH = t; setPH(f, t, false); PLAY.raf = requestAnimationFrame(loop); return; }
+  if(PLAY.prev){ const v = PLAY.prev, t = v.currentTime || PH; if(v.paused && !v.ended && v.readyState >= 2) v.play().catch(() => {}); if(v.ended || t >= filmSecs(f) - 0.02){ setPH(f, filmSecs(f)); stopPlay(); return; } PH = t; setPH(f, t, false); PLAY.raf = requestAnimationFrame(loop); return; }
   // the clock follows the playing clip's video: when it has to wait for data, time waits too (no skipping and seeking)
   if(PLAY.cur){ const v = vids().find(x => x.dataset.c===PLAY.cur.id && x.classList.contains('on')); if(v){ const now = performance.now();
     if(v.readyState < 3 || v.seeking){ PLAY.ph0 = PH; PLAY.t0 = now; } else if(!v.paused){ const tv = PLAY.cur.at + v.currentTime - PLAY.cur.in; if(Math.abs(tv - (PLAY.ph0 + (now - PLAY.t0) / 1000)) < 0.5){ PLAY.ph0 = tv; PLAY.t0 = now; } } } }
@@ -636,7 +645,7 @@ function loop(){
     const show = () => { if(!PLAY || PLAY.cur!==c) return; v.classList.add('on'); o.classList.remove('on'); o.pause(); prep(); };
     const prep = () => { const nx = nextChange(f, c, t); if(nx) cue(o, nx.c, nx.t); }; // the next one ready in the other player
     if(v.readyState >= 2 && !v.seeking) show(); else { const go = () => { v.removeEventListener('seeked', go); v.removeEventListener('loadeddata', go); show(); }; v.addEventListener('seeked', go); v.addEventListener('loadeddata', go); setTimeout(go, 1200); } }
-  else { const v = [a, b].find(v => v.dataset.c===c.id); if(v && Math.abs(v.currentTime - (c.in + t - c.at)) > 0.6) v.currentTime = c.in + t - c.at; }
+  else { const v = [a, b].find(v => v.dataset.c===c.id); if(v){ if(Math.abs(v.currentTime - (c.in + t - c.at)) > 0.6) v.currentTime = c.in + t - c.at; if(v.paused && !v.ended) v.play().catch(() => {}); } }
   PLAY.raf = requestAnimationFrame(loop);
 }
 function nextClip(f, t){ return activeAt(f, t + 0.01); }
@@ -892,7 +901,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
