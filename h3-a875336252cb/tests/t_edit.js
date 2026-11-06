@@ -92,6 +92,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // ⬆ Nudge a stretch: the ↻ sheet in nudge mode makes a regenerate of only that stretch, at the same size, spliced back
   await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[0].clips = [{id:'cN', take:'tA', in:0, out:5, dur:5, at:0}]; FILM.SEL = 'cN'; FILM.PH = 1.5; FILM.draw(); });
   await fr.click('[data-act="redo"]');
+  ok(await fr.evaluate(() => document.querySelector('#rdM').hidden && /Redo it/.test(document.querySelector('#rdGo').textContent)), '⬆ Nudge is taken out of the ↻ sheet (Jordan: it changed her too much)');
+  await fr.evaluate(() => { document.querySelector('[data-close]').click(); FILM.S.nudgeOn = true; });
+  await fr.click('[data-act="redo"]');
   await fr.click('#rdM [data-v="nudge"]');
   ok(await fr.evaluate(() => !document.querySelector('#rdRepW').hidden && !!document.querySelector('#rdDen') && /Nudge/.test(document.querySelector('#rdGo').textContent)), '⬆ the sheet has a Nudge mode with how much it changes');
   await fr.evaluate(() => { const r = document.querySelector('#rdDen'); r.value = '0.93'; r.dispatchEvent(new Event('input')); });

@@ -124,7 +124,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // ↻ redo 1–2 s of the second clip (the original take)
   await page.click('[data-tab="films"]'); await page.waitForTimeout(500);
   await fr.evaluate(() => { FILM.SEL = window.C2; const r = FILM.clipOf(FILM.S.films[0], window.C2); FILM.PH = r.c.at + 1; FILM.draw(); }); await fr.click('[data-act="redo"]'); await page.waitForTimeout(300);
-  ok(await fr.evaluate(() => !document.querySelector('#sheet').hidden && /Redo or/.test(document.querySelector("#sheetCard").textContent) && /walks to the window/.test(document.querySelector('#rdP').value)), "↻ opens a sheet with the stretch and the take's words there");
+  ok(await fr.evaluate(() => !document.querySelector('#sheet').hidden && /Redo a stretch/.test(document.querySelector("#sheetCard").textContent) && /walks to the window/.test(document.querySelector('#rdP').value)), "↻ opens a sheet with the stretch and the take's words there");
   await fr.evaluate(() => { const b = document.querySelector('#rdB'); b.value = 2; b.dispatchEvent(new Event('input')); document.querySelector('#rdP').value = 'she trips and catches herself'; document.querySelector('#rdN [data-v="2"]').click(); });
   const n1 = sent.length; await fr.click('#rdGo'); await page.waitForTimeout(1500);
   const rd = await page.evaluate(() => H3.S.takes.filter(t => t.redo).map(t => ({id:t.id, pc:t.pc, redo:t.redo, p:t.pieces.map(p => [p.start, p.gen, p.prompt]), fl:t.fl, cont:t.cont})));
