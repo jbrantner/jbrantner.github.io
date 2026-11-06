@@ -1937,13 +1937,25 @@ function guideGraph(k, file, wh){ const g = {}; let n = 0; const add = (c, i) =>
   return {g, pose, depth}; }
 function guideSize(wh){ const w = wh && wh.w || 16, h = wh && wh.h || 9, s = 832 / Math.max(w, h), r = v => Math.max(64, Math.round(v * s / 16) * 16); return [r(w), r(h)]; }
 let GUIDE_BUSY = false;
+// 🦴 how far the skeleton + depth read is (Jordan 2026-11-06: "a progress bar… a rough ETA"): ComfyUI's own per-frame progress of the
+// DWPose node, then the depth node. The skeleton is most of the time (about 3/4 here), so the bar weighs it that way; the time left is
+// from how fast the frames go so far
+let GUIDE_PROG = null;
+function guideProg(G, pid){ const P = GUIDE_PROG; if(!P) return; const L = LIVE[pid] || {}, now = Date.now();
+  if(!L.t0 && !L.pn){ P.stage = 'line'; return; } const cls = L.pn && G.g[L.pn] ? G.g[L.pn].class_type : '', f = L.max ? Math.min(1, L.v / L.max) : 0;
+  P.stage = /DWPre/.test(cls) ? 'skeleton' : /Depth/.test(cls) ? 'depth' : L.v ? P.stage : 'loading'; P.frame = L.v || 0; P.frames = L.max || 0;
+  if(P.stage==='skeleton'){ P.p = 0.03 + 0.72 * f; if(!P.s0) P.s0 = L.ps || now; P.sk = now - P.s0; }
+  else if(P.stage==='depth'){ P.p = 0.75 + 0.23 * f; if(!P.d0) P.d0 = L.ps || now; }
+  else if(P.stage==='loading' && P.p < 0.03) P.p = 0.01;
+  const run = now - (P.s0 || L.t0 || now); P.eta = P.p > 0.06 && run > 4000 ? Math.max(0, run * (1 - P.p) / Math.max(0.01, P.p - 0.03)) : null; }
+window.H3GuideProgress = () => GUIDE_PROG;
 async function guideMake(blob, name, say){ say('🎭 Looking for a PC with DWPose…'); const k = await guidePc(); if(!k) throw new Error('no PC that is on has DWPose (ControlNet Aux) and the video nodes; it is on Render');
     const id = await addMedia(blob instanceof File ? blob : new File([blob], name, {type:'video/mp4'}), 'vid'); S.media[id].from = 'rough';
     say('🎭 Sending the video to ' + pcName(k.url) + '…'); const file = await upload(k.url, id), G = guideGraph(k, file, S.media[id]);
-    const pid = await queueGraph(k.url, G), t0 = Date.now(); let h = null;
-    while(Date.now() - t0 < 20 * 60000){ await new Promise(r => setTimeout(r, 2500)); try{ h = (await getJ(k.url + '/history/' + pid))[pid]; }catch(e){ h = null; }
+    openSocket(k.url); const pid = await queueGraph(k.url, G), t0 = Date.now(); let h = null; GUIDE_PROG = {pc:pcName(k.url), stage:'line', p:0, t0, eta:null};
+    while(Date.now() - t0 < 20 * 60000){ await new Promise(r => setTimeout(r, 2500)); guideProg(G, pid); try{ h = (await getJ(k.url + '/history/' + pid))[pid]; }catch(e){ h = null; }
       if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(e ? e[1].exception_message : 'ComfyUI hit an error'); }
-      if(h && h.status && h.status.completed) break; say('🎭 Reading the skeleton and depth of every frame on ' + pcName(k.url) + '… ' + Math.round((Date.now() - t0) / 1000) + ' s'); }
+      if(h && h.status && h.status.completed) break; if(say.quiet){ const P = GUIDE_PROG; say.quiet(P); } else say('🎭 Reading the skeleton and depth of every frame on ' + pcName(k.url) + '… ' + (GUIDE_PROG && GUIDE_PROG.p > 0.02 ? Math.round(GUIDE_PROG.p * 100) + '%' : Math.round((Date.now() - t0) / 1000) + ' s')); }
     if(!h || !h.status || !h.status.completed) throw new Error('it took too long');
     const fileOf = node => { const o = node && (h.outputs || {})[node] || {}; return (o.images || o.videos || o.gifs || [])[0]; };
     const grab = async (node, mode) => { const f = fileOf(node); if(!f) return null; const b = await (await fetch(viewUrl(k.url, {filename:f.filename, subfolder:f.subfolder || '', type:'output'}))).blob();
@@ -1955,7 +1967,7 @@ async function guideFrom(blob, name){ if(GUIDE_BUSY){ toast('Already making a gu
     const m = S.media[sk]; if(m && m.dur){ f.seconds = Math.max(1, Math.round(m.dur * 10) / 10); $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); } // (those boxes are only filled at start)
     save(); drawAll(); ok = true; say('🎭 Guide ready: skeleton' + (dp ? ' + light depth' : '') + ' in the 🦴 Motion guide. Add her and the place as reference pictures, write what happens, and render.');
   }catch(e){ say("🎭 Couldn't make the guide: " + e.message); }
-  finally{ GUIDE_BUSY = false; } return ok; }
+  finally{ GUIDE_BUSY = false; GUIDE_PROG = null; } return ok; }
 // the rough take's own words, each at its time (Jordan 2026-11-05: the acting needs them too): its timed prompt as it was, else every piece's
 // prompt as a [a s - b s] beat, so each new piece gets the words for its own stretch, both when it spans two of them
 const GUIDE_LEAD = /This continues straight on from the moment before, in the same shot with the same camera and no cut\.\s*|\s*The action carries on from where it is now and does not start again\./g;
@@ -2178,12 +2190,12 @@ window.H3DropTakes = async ids => { const drop = S.takes.filter(t => ids.include
   const gone = new Set(drop.map(t => t.id)); S.takes = S.takes.filter(t => !gone.has(t.id)); tidyMedia(); save(); drawTakes(); return gone.size; };
 // 🦴 Guidance track (Jordan 2026-11-06): a whole track of the film becomes the guide. Films exports that track as one video on film time,
 // a PC reads its skeleton and depth, and renders on the tracks above (with 🦴 Follow on) take their stretch of it as the Motion guide.
-window.H3GuideTrack = async o => { if(GUIDE_BUSY){ toast('Already making a guide: one at a time'); return {ok:false, error:'busy'}; } GUIDE_BUSY = true; const say = t => toast(t, 3500);
+window.H3GuideTrack = async o => { if(GUIDE_BUSY){ toast('Already making a guide: one at a time'); return {ok:false, error:'busy'}; } GUIDE_BUSY = true; const say = t => toast(t, 3500); say.quiet = () => {};
   try{ const b = await (await fetch(viewUrl(o.pc, o.file))).blob(), r = await guideMake(new File([b], o.file.filename, {type:'video/mp4'}), o.file.filename, say);
     Object.values(S.media).forEach(m => { if(m.from==='rough' && !m.mode) m.from = 'guide-src'; });
     S.guides[o.film] = {sk:r.sk, dp:r.dp || null, sig:o.sig || '', t:Date.now()}; save(); say('🦴 The guidance track is ready: skeleton' + (r.dp ? ' + depth' : '') + '. Renders on the tracks above follow it.'); return {ok:true}; }
   catch(e){ say("🦴 Couldn't read the guidance track: " + e.message); return {ok:false, error:e.message}; }
-  finally{ GUIDE_BUSY = false; } };
+  finally{ GUIDE_BUSY = false; GUIDE_PROG = null; } };
 window.H3GuideReady = film => { const G = S.guides[film]; return !!(G && S.media[G.sk]); };
 function applyGuide(t, g){ const G = g && S.guides[g.film]; if(!G || !S.media[G.sk]) return false; const w = followSet(GUIDE_FOLLOW), off = Math.max(0, +g.off || 0);
   t.ctl = {vid:G.sk, str:w.ctlStr, end:w.ctlEnd, face:null, off}; t.ctl2 = G.dp && S.media[G.dp] ? {vid:G.dp, str:w.ctl2Str, end:w.ctl2End, off} : null; t.guided = {film:g.film, off}; return true; }
@@ -2338,6 +2350,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
