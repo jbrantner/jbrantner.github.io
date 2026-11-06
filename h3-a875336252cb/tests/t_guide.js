@@ -55,9 +55,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // track 2 = the rough version: two clips (at 0 and at 5 s); track 1 is empty
   await fr.evaluate(() => { const f = {id:'fA', name:'Film', tracks:[{id:'tr1', clips:[]}, {id:'tr2', clips:[]}], pps:24}; FILM.S.films.unshift(f); FILM.addClip(f, FILM.takeOf('tA'), 1); FILM.addClip(f, FILM.takeOf('tA'), 1); FILM.go({v:'film', film:'fA'}); });
   await page.waitForTimeout(400);
-  ok(await fr.evaluate(() => !!document.querySelector('[data-act="guideSheet"]')), 'the guidance track is back on (Jordan 2026-11-06 07:12)');
-  await fr.click('[data-act="guideToggle"]'); await page.waitForTimeout(200);
-  ok(await fr.evaluate(() => !document.querySelector('[data-act="guideSheet"]') && FILM.guideOpt(FILM.S.films[0], 0, 0)===null && /off/.test(document.querySelector('[data-act="guideToggle"]').textContent)), '🦴 Guide off switches it off');
+  ok(await fr.evaluate(() => !document.querySelector('[data-act="guideSheet"]') && FILM.guideOpt(FILM.S.films[0], 0, 0)===null && /off/.test(document.querySelector('[data-act="guideToggle"]').textContent)), 'the guidance track is off by default again (Jordan 2026-11-06 07:36: it warped the background)');
   await fr.click('[data-act="guideToggle"]'); await page.waitForTimeout(200);
   ok(await fr.evaluate(() => !!document.querySelector('[data-act="guideSheet"]')), 'the timeline has 🦴 Guidance track');
   await fr.click('[data-act="guideSheet"]'); await page.waitForTimeout(300);
