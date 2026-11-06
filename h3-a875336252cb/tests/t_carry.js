@@ -178,12 +178,17 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(kept.l[0]==='swap.safetensors' && /walks to the window/.test(kept.p) && /stay while you scrub/.test(kept.note), 'after you change a setting, scrubbing to another clip keeps your settings but still brings that clip\'s words (' + JSON.stringify(kept) + ')');
   // words you type yourself stay put while you scrub
   await page.evaluate(() => { H3.S.f.prompt = 'my own words'; document.querySelector('#prompt').value = 'my own words'; });
-  await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks[0].clips.find(x => x.take===id), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }, ct.id); await page.waitForTimeout(400);
+  await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1.8) * f.pps); }); await page.waitForTimeout(500);
   const typed = await page.evaluate(() => ({p:H3.S.f.prompt, note:document.querySelector('#filmFormNote').textContent}));
-  ok(typed.p==='my own words' && /You wrote in the Shot box/.test(typed.note), 'words you typed stay put while you scrub (' + JSON.stringify(typed) + ')');
+  ok(typed.p==='my own words' && /You wrote in the Shot box/.test(typed.note), 'words you typed stay while the playhead is on that clip (' + JSON.stringify(typed) + ')');
+  // another clip brings its own words, even after you typed (Jordan 2026-11-06: the box must follow the clip)
+  await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks[0].clips.find(x => x.take===id), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }, ct.id); await page.waitForTimeout(500);
+  ok(/opens the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'scrubbing to another clip brings that clip\'s words');
+  await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }); await page.waitForTimeout(500);
+  ok(/walks to the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'and back on the first clip, its own words again');
   await page.evaluate(() => H3FilmFollow()); await page.waitForTimeout(300);
   const fol = await page.evaluate(() => ({l:H3.S.f.loras.length, p:H3.S.f.prompt}));
-  ok(fol.l===0 && /opens the window/.test(fol.p), '↺ Follow the clip again loads the clip under the playhead (the carry-on again) (' + JSON.stringify(fol) + ')');
+  ok(fol.l===0 && /walks to the window/.test(fol.p), '↺ Follow the clip again loads the clip under the playhead (' + JSON.stringify(fol) + ')');
   // the Render tab is gone: Films is the main screen; 🎭 Use as guide is on the timeline
   ok(await page.evaluate(() => [...document.querySelectorAll('#tabs [data-tab]')].map(b => b.dataset.tab).join())==='films,poses', 'the tabs are 🎞 Films and 🧍 Poses (no 🎬 Render tab)');
   await page.evaluate(() => { window.GUIDED = null; window.H3GuideReal = window.H3Guide; window.H3Guide = id => { window.GUIDED = id; }; });
