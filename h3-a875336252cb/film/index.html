@@ -293,7 +293,38 @@ async function pullDeck(){ let best = RM;
   const ch = best && best!==RM && (!RM || best.t!==RM.t); RM = best; return !!ch; }
 function deck(){ const l = local(); return RM && (RM.t || 0) > (l.tsav || 0) ? RM : l; }
 const takes = () => deck().takes;
-const takeOf = id => takes().find(t => t.id===id);
+// Films keeps its own copy of every take on a timeline (Jordan 2026-11-06: H3 Deck's Clear finished took a timeline clip's take
+// away, and a clip is only a pointer to its take), so a clip never loses its video again
+const takeOf = id => takes().find(t => t.id===id) || (S.keep || {})[id];
+function keepTakes(){ S.keep = S.keep || {}; let ch = false; const used = new Set();
+  S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => used.add(c.take))));
+  used.forEach(id => { const t = takes().find(x => x.id===id); if(!t) return; const k = S.keep[id], fl = fileOf(t);
+    if(!k || (fl && !fileOf(k)) || k.state!==t.state){ S.keep[id] = JSON.parse(JSON.stringify(t)); ch = true; } });
+  Object.keys(S.keep).forEach(id => { if(!used.has(id)){ delete S.keep[id]; ch = true; } });
+  if(ch) save(); return used; }
+// a clip whose take is gone from H3 Deck (cleared before Films kept copies): find its video on the PCs again. The take's folder
+// is H3Deck/h3_<UTC minute it was sent>_<last 4 of its id>, and its id starts with the time it was made, so the file can be
+// looked for by name (and in each PC's recent history, which also gives back its words)
+const LOST = {};
+async function findLost(id){ const on = pcs().filter(p => pcOf(p.url).online); if(!on.length || LOST[id] === 1 || Date.now() - (LOST[id] || 0) < 60000) return; LOST[id] = 1; const tail = id.slice(-4), ms = parseInt(id.slice(1, -4), 36);
+  let hit = null;
+  for(const p of on){ if(hit) break; let h = null; try{ h = await getJ(p.url + '/history?max_items=2000', 20000); }catch(e){ continue; }
+    for(const k of Object.keys(h || {})){ const o = h[k].outputs || {}; for(const n of Object.keys(o)){ (o[n].images || o[n].videos || o[n].gifs || []).forEach(x => {
+      if(!/\.mp4$/i.test(x.filename) || !/H3Deck\/h3_\d+_/.test(x.subfolder || '') || !(x.subfolder || '').endsWith('_' + tail)) return;
+      const whole = !/^piece_/.test(x.filename), at = (h[k].status && h[k].status.messages || []).map(m => m[1] && m[1].timestamp || 0).pop() || 0;
+      if(!hit || (whole && !hit.whole) || (whole===hit.whole && at > hit.at)){ let words = '';
+        Object.values(h[k].prompt && h[k].prompt[2] || {}).forEach(nd => { const v = nd && nd.inputs && (nd.inputs.prompt || nd.inputs.text); if(typeof v==='string' && v.length > words.length) words = v; });
+        hit = {pc:p.url, file:{filename:x.filename, subfolder:x.subfolder || '', type:'output'}, whole, at, words}; } }); } } }
+  if(!hit && ms > 1.6e12){ const pres = [];
+    for(const p of on){ try{ const j = await getJ(p.url + '/renderdeck/images?limit=1', 15000); if(j.shared && j.pc) pres.push(j.pc + '/'); }catch(e){} }
+    if(!pres.length) pres.push('');
+    const names = [0, 60000, -60000].map(d => 'h3_' + new Date(ms + d).toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + tail);
+    outer: for(const p of on) for(const pre of pres) for(const nm of names) for(const fn of [nm + '_00001_.mp4', nm + '_00002_.mp4', 'piece_01_00001_.mp4']){
+      const f = {filename:fn, subfolder:pre + 'H3Deck/' + nm, type:'output'}; try{ if((await fetch(viewUrl(p.url, f), {method:'HEAD'})).ok){ hit = {pc:p.url, file:f, words:''}; break outer; } }catch(e){} } }
+  if(!hit){ LOST[id] = Date.now(); return; } // look again in a minute
+  let d = 0; S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(c.take===id) d = Math.max(d, c.dur || c.out || 0); })));
+  S.keep = S.keep || {}; S.keep[id] = {id, pc:hit.pc, final:hit.file, state:'done', recovered:true, prompt:(hit.words || '').replace(/^This continues straight on[^.]*\.\s*/, ''), pieces:[{deliv:Math.round(d * FPS), start:0, prompt:hit.words || ''}], t:ms};
+  save(); toast('Found a lost clip\'s video on ' + pcName(hit.pc) + ' again', 4000); draw(); }
 const pcs = () => (window.FILM_PCS || (deck().pcs && deck().pcs.length ? deck().pcs : DEFAULT_PCS));
 const pcName = url => (pcs().find(p => p.url===url) || {}).name || 'PC';
 const viewUrl = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
@@ -347,7 +378,7 @@ const N = () => S.nav;
 const go = nav => { stopPlay(); S.nav = nav; save(); draw(); window.scrollTo(0, 0); };
 const filmOf = id => S.films.find(f => f.id===id);
 function draw(){
-  placeNew(); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
+  placeNew(); keepTakes(); S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(!takeOf(c.take)) findLost(c.take); else if(!fileOf(takeOf(c.take)) && !takes().find(x => x.id===c.take)) findLost(c.take); }))); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
   const v = N().v, f = v==='film' && filmOf(N().film);
   $('#view').innerHTML = f ? filmView(f) : v==='review' ? reviewView() : homeView();
   if(f){ wireFilm(f); if(f.exp && f.exp.state==='working') expPoll(f); }

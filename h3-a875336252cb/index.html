@@ -1719,7 +1719,17 @@ document.addEventListener('click', async e => {
     save(); drawTakes(); return; }
   save(); drawAll();
 });
-$('#clearDone').onclick = () => { if(confirm('Take every finished or stopped render off the list? The videos stay on the PCs.')){ S.takes = S.takes.filter(t => t.state==='working'); save(); drawTakes(); } };
+// takes a 🎞 Films timeline uses (and the takes they carry on from or redo) are kept: a clip is only a pointer to its take
+// (Jordan 2026-11-06: clear old stuff, keep what's on the timeline)
+function filmKeeps(){ const keep = new Set(); let F = {}; try{ F = JSON.parse(localStorage.getItem('h3edit') || '{}') || {}; }catch(e){}
+  (F.films || []).forEach(f => (f.tracks || []).forEach(tr => (tr.clips || []).forEach(c => c.take && keep.add(c.take))));
+  const add = id => { const t = id && S.takes.find(x => x.id===id); if(!t || keep.has(t.id + '>')) return; keep.add(t.id); keep.add(t.id + '>');
+    [t.carry && t.carry.src, t.redo && t.redo.src, t.redo && t.redo.root, t.from && t.from.id].forEach(add); };
+  [...keep].forEach(add); return keep; }
+$('#clearDone').onclick = () => { const keep = filmKeeps(), gone = S.takes.filter(t => t.state!=='working' && !keep.has(t.id)), kept = S.takes.filter(t => t.state!=='working' && keep.has(t.id)).length;
+  if(!gone.length){ toast('Every finished take is on a 🎞 Films timeline, so they all stay'); return; }
+  if(confirm('Take ' + gone.length + ' finished or stopped render' + (gone.length===1 ? '' : 's') + ' off the list?' + (kept ? ' ' + kept + ' on your Films timelines stay.' : '') + ' The videos stay on the PCs.')){
+    const g = new Set(gone.map(t => t.id)); S.takes = S.takes.filter(t => !g.has(t.id)); tidyMedia(); save(); drawTakes(); } };
 // a clip still in pieces plays them one after another, then starts over
 document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof HTMLVideoElement) || !v.dataset.list) return; let l; try{ l = JSON.parse(v.dataset.list); }catch(er){ return; }
   const i = l.indexOf(v.src.split('#')[0]); if(i >= 0){ v.src = l[(i + 1) % l.length]; v.play().catch(() => {}); } }, true);
@@ -1989,8 +1999,8 @@ window.H3FilmWords = (w, at, tid) => { if(S.tab!=='films' || !w) return false; c
   // …until you change something (Jordan 2026-11-06: swapping a character reference mustn't be undone by scrubbing): then your
   // settings stay, ↻ Redo and Render use them, and ↺ Follow the clip again lets the playhead load clips again
   if(FILMSIG && JSON.stringify(S.f)!==FILMSIG){ FILMED = true; drawFilmNote(); return false; }
-  const t = tid && S.takes.find(x => x.id===tid);
-  if(t && FILMT!==tid){ FILMT = tid; useAgain(t, true); if(t.cont){ S.f.fl = false; S.f.first = null; } // (a carry-on's own carried video isn't carried again)
+  const t = tid && deckTake(tid);
+  if(t && !t.recovered && FILMT!==tid){ FILMT = tid; useAgain(t, true); if(t.cont){ S.f.fl = false; S.f.first = null; } // (a carry-on's own carried video isn't carried again)
     S.f.ctl = !!t.ctl; if(t.ctl){ S.f.ctlVid = t.ctl.vid; S.f.ctlStr = t.ctl.str; S.f.ctlEnd = t.ctl.end; S.f.ctl2Vid = t.ctl2 ? t.ctl2.vid : null; if(t.ctl2){ S.f.ctl2Str = t.ctl2.str; S.f.ctl2End = t.ctl2.end; } }
     S.f.prompt = ''; }
   if(S.f.prompt===w){ FILMSIG = JSON.stringify(S.f); return true; } S.f.prompt = w; S.f.pieceText = {}; pb.value = w; FILMW = at; save(); drawAll(); FILMSIG = JSON.stringify(S.f); return true; };
@@ -1998,12 +2008,15 @@ window.H3FilmFollow = () => { FILMSIG = null; FILMT = null; FILMED = false; draw
 // scroll down to the Render form (under the timeline)
 function toForm(){ setTimeout(() => { const el = $('#bShot'); if(el) window.scrollTo({top:el.getBoundingClientRect().top + window.scrollY - 70, behavior:'smooth'}); }, 350); }
 // 🎭 Use as guide from the timeline: the selected clip's take becomes the Motion guide (skeleton + light depth) of the form
-window.H3Guide = id => { const t = S.takes.find(x => x.id===id); if(!t){ toast("That take isn't in H3 Deck on this phone"); return; } toForm(); guideFromTake(t); };
+window.H3Guide = id => { const t = deckTake(id); if(!t){ toast("That take isn't in H3 Deck on this phone"); return; } toForm(); guideFromTake(t); };
 // called by the film app inside the frame
 window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('films'); location.hash = 'take=' + encodeURIComponent(takeId) + (more ? '&more=1' : ''); } else setTab(tab); };
 window.H3Badge = () => {};
 // ---------- 🎞 Films asks for new video (Jordan 2026-11-05: an editor where parts can be remade on the fly) ----------
-const takeFile = t => t && (t.final || (t.pieces.length===1 && !t.cont ? t.pieces[0].file : null));
+// a take a Films clip uses: H3 Deck's own, or the copy Films kept (e.g. after Clear finished), which comes back onto the list
+function deckTake(id){ let t = id && S.takes.find(x => x.id===id); if(t || !id) return t;
+  try{ const k = (JSON.parse(localStorage.getItem('h3edit') || '{}').keep || {})[id]; if(k && !k.recovered){ t = JSON.parse(JSON.stringify(k)); S.takes.push(t); save(); drawTakes(); return t; } if(k) return k; }catch(e){} return null; }
+const takeFile = t => t && (t.final || ((t.pieces || []).length===1 && !t.cont ? t.pieces[0].file : null));
 const fileArg = f => (f.subfolder ? f.subfolder + '/' : '') + f.filename + ' [output]';
 // frames in a take's finished video
 const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont ? Math.round((t.contSecs || (S.media[t.cont] || {}).dur || 0) * FPS) : 0);
@@ -2011,7 +2024,7 @@ const takeFrames = t => t.redo ? t.redo.Fout : clipFrames(t) + (t.cont ? Math.ro
 // Jordan writes what happens next and renders. Films puts the new take right after the clip.
 // The take's video isn't downloaded to the phone and sent back (Jordan 2026-11-06: the first try rendered without it): the PC
 // loads it straight from its output folder (both PCs share the Dropbox one), as media.remote.
-window.H3Carry = async o => { const t = S.takes.find(x => x.id===o.take), fl = takeFile(t);
+window.H3Carry = async o => { const t = deckTake(o.take), fl = takeFile(t);
   if(!t){ toast("That take isn't in H3 Deck on this phone"); return false; }
   if(!fl){ toast('That take has no finished video yet'); return false; }
   if(S.tab!=='films') setTab('films');
@@ -2054,7 +2067,7 @@ async function redoPc(t, src, fl, extra){
     if(SEES[k]==null){ try{ const r = await fetch(viewUrl(u, fl), {method:'HEAD'}); SEES[k] = r.ok; }catch(e){ SEES[k] = false; } }
     if(SEES[k]) ok.push(u); }
   return ok.sort((a, b) => (busySecs(a) + (extra[a] || 0) + estSecs(t, a)) - (busySecs(b) + (extra[b] || 0) + estSecs(t, b)))[0] || null; }
-window.H3Redo = async o => { const src = S.takes.find(x => x.id===o.take), fl = takeFile(src);
+window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
   if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
   if(!fl){ toast('That take has no finished video yet'); return 0; }
   if(src.sm){ toast("A 🪄 smoothed take can't have a stretch redone"); return 0; }

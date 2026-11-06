@@ -33,6 +33,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     if(p==='/upload/image') return J({name:'up_' + Date.now() + '.webm', subfolder:'', type:'input'});
     if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, host:u.origin, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
     if(p.startsWith('/history/')) return J({});
+    if(p==='/history') return J({pz:{prompt:[0, 'pz', {'5':{class_type:'MiniMaxH3ReferenceToVideo', inputs:{prompt:'This continues straight on. she waves goodbye at the door'}}}], status:{completed:true, messages:[]},
+      outputs:{'9':{images:[{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_202611060001_zz9q', type:'output'}]}, '12':{images:[{filename:'h3_202611060001_zz9q_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_202611060001_zz9q', type:'output'}]}}}});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
   await page.route(R + '/**', fake); await page.route(M + '/**', fake);
   await page.addInitScript(r => { if(!sessionStorage.getItem('init')){ localStorage.clear(); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}, {name:'Main', url:'http://main.test', on:true, speed:1.26}]; window.FILM_PCS = [{name:'Render', url:r, on:true}]; }, R);
@@ -145,6 +147,26 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.SEL = window.C1; const r = FILM.clipOf(FILM.S.films[0], window.C1); FILM.PH = r.c.at + 0.4; FILM.draw(); });
   const before = await page.evaluate(() => H3.S.f.first); await fr.click('[data-act="carry"]'); await page.waitForTimeout(500);
   ok(await page.evaluate(() => H3.S.f.first)===before, 'carrying on from under 1 s in is refused (Motion Context needs the frames before)');
+  // Clear finished keeps every take a Films timeline uses (a clip only points at its take)
+  await fr.evaluate(() => FILM.save && FILM.save()); await page.waitForTimeout(300);
+  const cl = await page.evaluate(() => { const used = new Set();     const F = JSON.parse(localStorage.getItem('h3edit')); F.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => used.add(c.take))));
+    const j = Object.assign({}, H3.S.takes.find(t => used.has(t.id)), {id:'tJunk', carry:null, redo:null, toFilm:null, state:'done'}); H3.S.takes.push(j); H3.drawTakes && H3.drawTakes();
+    window.confirm = () => true; document.querySelector('#clearDone').hidden = false; document.querySelector('#clearDone').click();
+    const ids = H3.S.takes.map(t => t.id); return {junk:ids.includes('tJunk'), lost:[...used].filter(id => !ids.includes(id))}; });
+  ok(!cl.junk && !cl.lost.length, 'Clear finished takes old renders off the list but keeps every take on a Films timeline (' + JSON.stringify(cl) + ')');
+  // Films keeps its own copy of each clip's take: a take that leaves H3 Deck's list still plays on the timeline
+  const kp = await page.evaluate(() => { const F = JSON.parse(localStorage.getItem('h3edit')), id = F.films[0].tracks[0].clips[0].take;
+    const t = H3.S.takes.find(x => x.id===id); H3.S.takes = H3.S.takes.filter(x => x.id!==id); H3.saveNow(); return {id, had:!!(F.keep || {})[id], t:!!t}; });
+  await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(300);
+  const kp2 = await fr.evaluate(id => { const t = FILM.takeOf(id); return {t:!!t, f:!!FILM.fileOf(t)}; }, kp.id);
+  ok(kp.had && kp2.t && kp2.f, 'a timeline clip keeps its video even after its take leaves H3 Deck (' + JSON.stringify([kp, kp2]) + ')');
+  await page.evaluate(id => { window.H3Guide(id); }, kp.id); await page.waitForTimeout(200);
+  ok(await page.evaluate(id => !!H3.S.takes.find(x => x.id===id), kp.id), 'and using that clip again (🎭 guide, ➕, ↻) puts its take back on H3 Deck\'s list');
+  // a clip whose take was cleared before Films kept copies: its video is found again on the PCs (by the take's folder name)
+  await fr.evaluate(() => { const f = FILM.S.films[0], id = 't' + Date.now().toString(36) + 'zz9q'; window.LID = id; f.tracks[1].clips.push({id:'cL', take:id, in:0, out:4, dur:4, at:0}); FILM.draw(); });
+  await page.waitForTimeout(1500);
+  const lost = await fr.evaluate(() => { const t = FILM.takeOf(window.LID), fl = FILM.fileOf(t); return {t:!!t, fl:fl && fl.filename, p:t && t.prompt}; });
+  ok(lost.fl==='h3_202611060001_zz9q_00001_.mp4' && /waves goodbye/.test(lost.p) && !/continues straight/.test(lost.p), 'a clip whose take was cleared finds its whole video (and words) on the PC again (' + JSON.stringify(lost) + ')');
   await page.screenshot({path:path.join(__dirname, 'carry.png')});
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
