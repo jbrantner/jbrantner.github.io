@@ -126,8 +126,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.SEL = window.C2; const r = FILM.clipOf(FILM.S.films[0], window.C2); FILM.PH = r.c.at + 1; FILM.draw(); }); await fr.click('[data-act="redo"]'); await page.waitForTimeout(300);
   ok(await fr.evaluate(() => !document.querySelector('#sheet').hidden && /Redo a stretch/.test(document.querySelector("#sheetCard").textContent) && /walks to the window/.test(document.querySelector('#rdP').value)), "↻ opens a sheet with the stretch and the take's words there");
   await fr.evaluate(() => { const b = document.querySelector('#rdB'); b.value = 2; b.dispatchEvent(new Event('input')); document.querySelector('#rdP').value = 'she trips and catches herself'; document.querySelector('#rdN [data-v="2"]').click(); });
+  const MS = await fr.evaluate(() => { const m = document.querySelector('#rdMod'); const opts = m ? [...m.options].map(o => o.value) : []; if(m){ m.value = opts[opts.length - 1]; m.dispatchEvent(new Event('change')); } document.querySelector('#rdSp [data-v="0"]').click(); return {opts, pick:m && m.value}; });
+  ok(MS.opts.length >= 1 && MS.pick, '↻ the sheet has a model picker (' + MS.opts.length + ' models) and Turbo/Regular');
   const n1 = sent.length; await fr.click('#rdGo'); await page.waitForTimeout(1500);
-  const rd = await page.evaluate(() => H3.S.takes.filter(t => t.redo).map(t => ({id:t.id, pc:t.pc, redo:t.redo, p:t.pieces.map(p => [p.start, p.gen, p.prompt]), fl:t.fl, cont:t.cont})));
+  const rd = await page.evaluate(() => H3.S.takes.filter(t => t.redo).map(t => ({id:t.id, model:t.model, turbo:t.turbo, pc:t.pc, redo:t.redo, p:t.pieces.map(p => [p.start, p.gen, p.prompt]), fl:t.fl, cont:t.cont})));
+  ok(rd.every(t => t.model===MS.pick && t.turbo===false), '↻ the redo uses the model picked in the sheet, Regular: ' + JSON.stringify(rd.map(t => t.model)));
   ok(rd.length===2 && sent.length===n1 + 2 && rd.every(t => t.redo.src==='tA' && t.redo.key===rd[0].redo.key && t.p.length===1 && t.p[0][2]==='she trips and catches herself' && t.redo.file==='Output_Render/H3Deck/h3_a/h3_a_00001_.mp4 [output]'), '↻ 2 versions sent, each one window on the take\'s PC with the new words (' + JSON.stringify(rd[0] && rd[0].redo) + ')');
   const hosts = sent.slice(n1).map(x => x.host), pcs2 = rd.map(t => t.pc);
   ok(new Set(hosts).size===2 && new Set(pcs2).size===2, '↻ the 2 versions are split between Render and Main (' + JSON.stringify(hosts) + ')');
