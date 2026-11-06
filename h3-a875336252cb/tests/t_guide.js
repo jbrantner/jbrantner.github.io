@@ -55,6 +55,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // track 2 = the rough version: two clips (at 0 and at 5 s); track 1 is empty
   await fr.evaluate(() => { const f = {id:'fA', name:'Film', tracks:[{id:'tr1', clips:[]}, {id:'tr2', clips:[]}], pps:24}; FILM.S.films.unshift(f); FILM.addClip(f, FILM.takeOf('tA'), 1); FILM.addClip(f, FILM.takeOf('tA'), 1); FILM.go({v:'film', film:'fA'}); });
   await page.waitForTimeout(400);
+  ok(await fr.evaluate(() => !document.querySelector('[data-act="guideSheet"]') && FILM.guideOpt(FILM.S.films[0], 0, 0)===null), 'the guidance track is off by default (Jordan 2026-11-06): no 🦴 button');
+  await fr.evaluate(() => { FILM.S.guideOn = true; FILM.draw(); }); await page.waitForTimeout(200);
   ok(await fr.evaluate(() => !!document.querySelector('[data-act="guideSheet"]')), 'the timeline has 🦴 Guidance track');
   await fr.click('[data-act="guideSheet"]'); await page.waitForTimeout(300);
   ok(await fr.evaluate(() => /No guidance track yet/.test(document.querySelector('#gdStat').textContent) && document.querySelectorAll('#gdRows [data-gd^="make"]').length===2), 'the sheet: no guide yet, 🦴 Make it the guide on each track');
