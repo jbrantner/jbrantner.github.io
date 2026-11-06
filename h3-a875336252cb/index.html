@@ -1156,7 +1156,7 @@ function upGraph(t, oi, names){
   const model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:refs ? regenRefUnet(oi) : regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0];
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
-  const length = regenLen(t), prompt = castWords(t.prompt) || SM_PROMPT;
+  const words = u.prompt || t.prompt, prompt = castWords(words) || SM_PROMPT, length = regenLen(t);
   let iv;
   if(refs){ const ri = {}; upRefs(t).slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
     iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:d.w, height:d.h, length, ref_image_size:'match'}, ri)); }
@@ -1412,26 +1412,29 @@ async function redoFrom(t, i, newSeed){
 // prompt and, if it had them, its reference pictures. Runs on the take's PC; the original stays (↩ Original on the card).
 function regenSheet(t){
   const f = S.f, oi = pcOf(t.pc).oi || {}, hasRefs = (t.imgs || []).length > 0, secs = clipFrames(t) / FPS;
-  const o = {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:hasRefs};
+  const o = {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:hasRefs , words:(t.up && t.up.prompt) || t.prompt || ''};
   const draw = () => openSheet(`<h3>⬆ Regenerate bigger <button class="btn" data-close>✕</button></h3>
     <div class="note">MiniMax repaints this take larger with fine detail, using its prompt${hasRefs ? ' and reference pictures' : ''}. Runs on ${esc(pcName(t.pc))}; the original stays.</div>
-    <div><div class="lab"><span>Size</span><b>${t.w}×${t.h} → ${upSize({w:t.w, h:t.h, up:o})}</b></div><div class="seg" id="rgSize"><button data-v="1.25">1.25×</button><button data-v="1.5">1.5×</button></div></div>
+    <div><div class="lab"><span>Size</span><b>${t.w}×${t.h} → ${upSize({w:t.w, h:t.h, up:o})}</b></div><div class="seg" id="rgSize"><button data-v="1">1× (same size)</button><button data-v="1.25">1.25×</button><button data-v="1.5">1.5×</button></div></div>
+    <div><div class="lab"><span>Words</span></div><textarea id="rgW" rows="3" style="width:100%">${esc(o.words)}</textarea><div class="note" style="margin:2px 0 0">Change them to nudge the video: Light or Medium changes a little, Max detail more.</div></div>
     <div><div class="lab"><span>Repaint</span></div><div class="seg" id="rgRep"><button data-v="light">Light</button><button data-v="medium">Medium</button><button data-v="full">Max detail</button></div></div>
     <div><div class="lab"><span>Strength</span><b id="rgStrV">${o.str.toFixed(2)}</b></div><input type="range" id="rgStr" min="0.4" max="1" step="0.05" value="${o.str}" style="width:100%"></div>
     ${hasRefs ? `<div class="sw${o.refs ? ' on' : ''}" id="rgRefs"><div><div class="t">Use its reference pictures</div><div class="d">Helps keep the face (first ${REGEN_REFS} pictures; uses the Reference model, untested so far)</div></div><div class="tog"></div></div>` : ''}
     <div class="note">${fmtS(secs)} of video. Medium + 0.8 was the best balance in the tests. ${secs > 3 ? '<b>Long for Render:</b> 2.3 s already peaked at 86°C there. ' : ''}${regenMissing(oi) ? '<b>' + esc(pcName(t.pc)) + " can't: " + esc(regenMissing(oi)) + '</b>' : ''}</div>
     <button class="btn pri" id="rgGo" style="padding:13px">⬆ Regenerate</button>`);
   const wire = () => {
-    $$('#rgSize button').forEach(b => { b.classList.toggle('on', +b.dataset.v===o.scale); b.onclick = () => { o.scale = +b.dataset.v; draw(); wire(); }; });
-    $$('#rgRep button').forEach(b => { b.classList.toggle('on', b.dataset.v===o.rep); b.onclick = () => { o.rep = b.dataset.v; draw(); wire(); }; });
+    $$('#rgSize button').forEach(b => { b.classList.toggle('on', +b.dataset.v===o.scale); b.onclick = () => { o.words = $('#rgW').value; o.scale = +b.dataset.v; draw(); wire(); }; });
+    $$('#rgRep button').forEach(b => { b.classList.toggle('on', b.dataset.v===o.rep); b.onclick = () => { o.words = $('#rgW').value; o.rep = b.dataset.v; draw(); wire(); }; });
     $('#rgStr').oninput = e => { o.str = +e.target.value; $('#rgStrV').textContent = o.str.toFixed(2); };
-    if($('#rgRefs')) $('#rgRefs').onclick = () => { o.refs = !o.refs; draw(); wire(); };
+    if($('#rgRefs')) $('#rgRefs').onclick = () => { o.words = $('#rgW').value; o.refs = !o.refs; draw(); wire(); };
+    $('#rgW').oninput = e => { o.words = e.target.value; };
     $('#rgGo').onclick = () => {
       const why = !pcOf(t.pc).online ? "can't be reached" : regenMissing(pcOf(t.pc).oi || {}); if(why){ toast(pcName(t.pc) + ': ' + why); return; }
       if(o.refs && !regenRefUnet(pcOf(t.pc).oi)){ toast(pcName(t.pc) + ' has no MiniMax Reference model'); return; }
       Object.assign(f, {smUpX:o.scale, smUpRep:o.rep, smUpStr:o.str});
       if(!t.smoothed) t.smoothed = t.final; // the source stays the original, even when regenerating again
-      t.up = {scale:o.scale, rep:o.rep, str:o.str, refs:!!o.refs}; t.upStage = 'start'; t.upErr = ''; t.upPid = null; t.state = 'working'; t.t0r = Date.now();
+      const words = ($('#rgW').value || '').trim() || t.prompt || '';
+      t.up = {scale:o.scale, rep:o.rep, str:o.str, refs:!!o.refs, prompt:words!==t.prompt ? words : ''}; t.upStage = 'start'; t.upErr = ''; t.upPid = null; t.state = 'working'; t.t0r = Date.now();
       closeSheet(); save(); drawTakes(); tickSoon(200); toast('Regenerating on ' + pcName(t.pc));
     };
   };
@@ -2363,6 +2366,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

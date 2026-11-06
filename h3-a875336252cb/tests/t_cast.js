@@ -73,6 +73,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const n = Object.values(H3.pieceGraph(t, 0, H3.PC[R].oi, {p1:'p1.png'}).g); return {p:n.find(x => x.class_type==='MiniMaxH3ReferenceToVideo').inputs.prompt, im:n.filter(x => x.class_type==='LoadImage').length}; }, R);
   ok(/<Subject 1> is the lady in the red coat/.test(T.p) && T.im===1, 'an older take re-rendered now uses the picture');
   ok(await page.evaluate(() => H3.castWords('<Subject 1> smiles')==='the lady in the red coat smiles'), '⬆ Regenerate gets plain words');
+  // ⬆ Regenerate's Words box nudges the take with new words (Jordan 2026-11-06)
+  const RW = await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes[0])); Object.assign(t, {final:{filename:'a.mp4', subfolder:''}, w:640, h:352, seconds:5, up:{scale:1, rep:'medium', str:0.8, refs:false, prompt:'a woman stands up and waves'}});
+    const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {})); const txt = JSON.stringify(g); return {nudge:/stands up and waves/.test(txt), old:/sits down/.test(txt)}; }, R);
+  ok(RW.nudge && !RW.old, '⬆ Regenerate uses the edited words: ' + JSON.stringify(RW));
+  const SH = await page.evaluate(() => { const t = H3.S.takes[0]; t.final = {filename:'a.mp4', subfolder:''}; H3.regenSheet(t); const w = document.querySelector('#rgW'); const r = {has:!!w, v:w && w.value, one:!!document.querySelector('#rgSize [data-v="1"]')}; const x = document.querySelector('[data-close]'); if(x) x.click(); return r; });
+  ok(SH.has && SH.v==='<Subject 1> sits down' && SH.one, '⬆ Regenerate sheet shows the Words box with the take\'s words, and a 1× size: ' + JSON.stringify(SH));
   // ✕ remove: its words go back
   await page.click('[data-cast="rm"]');
   const X = await page.evaluate(() => ({n:H3.S.cast.length, f:H3.S.f.prompt, t:H3.S.takes[0].prompt}));
