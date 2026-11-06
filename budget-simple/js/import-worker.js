@@ -46,7 +46,7 @@ self.onmessage = async e => {
     }
     out.paid[cur] = paidNow;
     const inc = (st.incomes || []).filter(i => Number(i.amount) > 0 && [7, 14].includes(Number(i.every)) && /^\d{4}-\d\d-\d\d$/.test(i.anchor)).sort((a, b) => b.amount - a.amount)[0];
-    if (inc) out.payday = { anchor: inc.anchor, every: Number(inc.every) };
+    if (inc) out.payday = { anchor: inc.anchor, every: Number(inc.every), amt: c(inc.amount) };
     out.log.push({ t: Date.now(), type: 'in', amt: out.free + out.bills + out.pots.reduce((a, p) => a + p.bal, 0), from: null, to: null, note: 'Brought in from the main app' });
     self.postMessage({ ok: true, state: out, neg, month: cur });
   } catch (err) { self.postMessage({ ok: false, error: String(err && err.message || err) }); }

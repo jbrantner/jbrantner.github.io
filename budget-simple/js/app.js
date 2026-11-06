@@ -29,7 +29,7 @@ function fix(s) {   // a backup can carry anything: keep only sane, non-negative
   b.pots = (Array.isArray(s.pots) ? s.pots : []).filter(p => p && p.id).map(p => ({ id: String(p.id), name: String(p.name || 'Pot').slice(0, 40), kind: p.kind === 'project' ? 'project' : 'pot', goal: c(p.goal), bal: c(p.bal), debt: p.debt && typeof p.debt === 'object' ? { owed: c(p.debt.owed), start: Math.max(c(p.debt.start), c(p.debt.owed)), apr: Math.min(100, Math.max(0, Number(p.debt.apr) || 0)), min: c(p.debt.min), extra: c(p.debt.extra) } : null }));
   b.billList = (Array.isArray(s.billList) ? s.billList : []).filter(x => x && x.id).map(x => ({ id: String(x.id), name: String(x.name || 'Bill').slice(0, 40), amt: c(x.amt), due: x.due >= 1 && x.due <= 31 ? Math.round(x.due) : null, debt: x.debt ? String(x.debt) : null }));
   b.princ = s.princ && typeof s.princ === 'object' ? s.princ : {};
-  if (s.payday && /^\d{4}-\d\d-\d\d$/.test(s.payday.anchor)) b.payday = { anchor: s.payday.anchor, every: [7, 14].includes(+s.payday.every) ? +s.payday.every : 14 };
+  if (s.payday && /^\d{4}-\d\d-\d\d$/.test(s.payday.anchor)) b.payday = { anchor: s.payday.anchor, every: [7, 14].includes(+s.payday.every) ? +s.payday.every : 14, amt: c(s.payday.amt) };
   b.paid = s.paid && typeof s.paid === 'object' ? s.paid : {};
   b.log = Array.isArray(s.log) ? s.log.slice(-500) : [];
   if (s.adv && typeof s.adv === 'object' && /^\d{4}-\d\d-\d\d$/.test(s.adv.next)) b.adv = { start: Math.max(c(s.adv.start), c(s.adv.owed)), owed: c(s.adv.owed), step: c(s.adv.step) || 10000, next: s.adv.next };
@@ -92,12 +92,70 @@ function dueBefore(pay) {   // bills not paid yet that are due before payday (la
   }
   return out.sort((a, b) => a.d < b.d ? -1 : 1);
 }
+// Payday by payday: with the usual paycheck known, look ahead 4 paydays. Each paycheck comes in (less the advance paid
+// back, plus what the plan borrows again), every bill goes out on its due day, and each later pay period spends the same
+// steady amount: a paycheck less its share of a month's bills, planning on a normal month (2 paychecks every 2 weeks, 4
+// weekly), so a 3rd paycheck is a bonus. What's left to spend now is the lowest the money gets along the way, so
+// spending it still leaves every bill covered. Pots and projects aren't counted.
+const AHEAD = 4;
+function billDays(from, to) {   // [{d, amt, name}] bills due from `from` (today) up to, not including, `to`
+  const out = [], f = new Date(from + 'T12:00');
+  for (let k = 0; k < 4; k++) {
+    const y = f.getFullYear(), mo = f.getMonth() + k, mk = ym(new Date(y, mo, 1)), P = state.paid[mk] || {}, last = new Date(y, mo + 1, 0).getDate();
+    for (const b of state.billList) {
+      if (!b.amt || P[b.id]) continue;
+      let d = isoOf(new Date(y, mo, b.due ? Math.min(b.due, last) : 1));
+      if (d < from) { if (k > 0) continue; d = from; }   // late this month: counts today
+      if (d < to) out.push({ d, amt: b.amt, name: b.name });
+    }
+  }
+  return out.sort((a, b) => a.d < b.d ? -1 : 1);
+}
+function ahead() {
+  const P = state.payday; if (!P || !P.amt) return null;
+  const today = isoOf(new Date()), pays = [nextPayday()];
+  for (let i = 1; i <= AHEAD; i++) pays.push(isoAdd(pays[i - 1], P.every));
+  const A = state.adv, plan = advPlan(); let owed = A ? A.owed : 0;
+  const inc = pays.slice(0, AHEAD).map(d => {   // what lands each payday
+    if (!A || !owed || d < A.next) return { d, amt: P.amt };
+    const r = plan.find(x => x.date === d), b = r ? r.borrow : 0, amt = P.amt - owed + b; owed = b; return { d, amt };
+  });
+  const bills = billDays(today, pays[AHEAD]), inAll = inc.reduce((a, x) => a + x.amt, 0);
+  const steady = Math.max(0, Math.floor(inAll / AHEAD - billsMonth() / (P.every === 7 ? 4 : 2)));
+  let bal = state.free + state.bills, low = bal, bi = 0;
+  const walk = upto => { while (bi < bills.length && bills[bi].d < upto) { bal -= bills[bi++].amt; low = Math.min(low, bal); } };
+  for (let i = 0; i < AHEAD; i++) { walk(pays[i]); bal += inc[i].amt - steady; low = Math.min(low, bal); }
+  walk(pays[AHEAD]);
+  const before = bills.filter(x => x.d < pays[0]);
+  return { pay: pays[0], left: Math.max(0, low), steady, through: isoAdd(pays[AHEAD], -1), inc, before, beforeAmt: before.reduce((a, x) => a + x.amt, 0) };
+}
+// More than a normal pay period's worth left: offer to keep the extra in a Cushion pot (whole dollars, from Free money
+// first, then Bills), so the top card shows a normal amount and the extra stays put.
+const cushionExtra = Z => { const days = Math.min(state.payday.every, Math.max(1, Math.round((new Date(Z.pay + 'T12:00') - new Date(isoOf(new Date()) + 'T12:00')) / 864e5)));
+  const x = Math.floor((Z.left - Z.steady * days / state.payday.every) / 100) * 100; return x >= 2500 && x <= state.free + state.bills ? x : 0; };
+function keepCushion() {
+  const Z = ahead(), x = Z && cushionExtra(Z); if (!x) return;
+  const a = Math.min(x, state.free), b = x - a;
+  confirmAsk('Keep it as a cushion?', `${m(x)} more than a normal pay period's spending is here. Move it into your Cushion so it stays put? It comes from Free money${b ? ` (${m(a)}) and Bills (${m(b)})` : ''}. The bills stay covered.`, 'Keep it', () => {
+    let p = state.pots.find(q => /^cushion$/i.test(q.name) && !q.debt);
+    if (!p) { p = { id: uid(), name: 'Cushion', kind: 'project', goal: 100000, bal: 0, debt: null }; state.pots.unshift(p); }
+    state.free -= a; state.bills -= b; p.bal += x; logIt('move', x, a ? 'free' : 'bills', p.id, 'Extra kept as cushion'); save(); hideAsk(); render(); toast(`${m(x)} kept as your cushion ✓`);
+  });
+}
 function payNow() {
   const pay = nextPayday(); if (!pay) return null;
   const L = dueBefore(pay), need = L.reduce((a, x) => a + x.b.amt, 0), fromBills = Math.min(need, state.bills), short = need - fromBills;
   return { pay, L, need, short, safe: Math.max(0, state.free - short), spare: state.bills - fromBills };
 }
 function freeCard() {
+  const Z = ahead();
+  if (Z) {
+    const T = total();
+    return `<div class="vl-hero pp-panel mh-have"><button class="mh-cu" data-act="add" aria-label="Left to spend until ${dayTxt(Z.pay)}: ${m(Z.left)}. Add money"><span class="vl-k">Left to spend <small>until ${dayTxt(Z.pay)}</small> ›</span>`
+      + `<span class="vl-total num">${m(Z.left)}</span><span class="mh-bar" aria-hidden="true"><i style="width:${(T > 0 ? Math.min(1, Z.left / T) * 100 : 0).toFixed(1)}%"></i></span>`
+      + `<span class="vl-sub">Then about <b>${m(Z.steady)}</b> each payday after. Every bill is covered through ${dayTxt(Z.through)}${state.adv && state.adv.owed ? ', with the advance plan' : ''} ✓</span></button>`
+      + `<div class="bs-row"><button class="pp-plan" data-act="ahead">See paydays</button>${cushionExtra(Z) ? `<button class="pp-plan" data-act="cushion">Keep ${mWhole(cushionExtra(Z))} as cushion</button>` : ''}</div></div>`;
+  }
   const N = payNow();
   if (N) {
     const T = total();
@@ -112,8 +170,9 @@ function freeCard() {
     + `<span class="vl-sub">${T === 0 ? 'Tap to add the money you have now' : state.free > 0 ? 'Not in a pot, a project or bills yet. Tap to add money' : 'Every dollar has a place. Tap to add money'}</span></button></div>`;
 }
 function billsCard() {
-  const need = billsLeft(), H = state.bills, f = need > 0 ? Math.min(1, H / need) : (H > 0 ? 1 : 0), short = Math.max(0, need - H);
+  const need = billsLeft(), H = state.bills, f = need > 0 ? Math.min(1, H / need) : (H > 0 ? 1 : 0), Z = ahead(), short = Z ? 0 : Math.max(0, need - H);
   const say = !state.billList.length ? 'Add your bills to see what to set aside'
+    : Z ? (need === 0 ? 'All paid this month' : `${unpaid().length === 1 ? 'One bill' : unpaid().length + ' bills'} left this month. Your paydays cover them through ${dayTxt(Z.through)} ✓`)
     : need === 0 ? (H > 0 ? `All paid this month. ${m(H)} is ready for next month` : 'All paid this month')
     : short > 0 ? `${m(short)} more to set aside for the ${unpaid().length === 1 ? 'bill' : unpaid().length + ' bills'} left this month`
     : `Set ✓ for the ${unpaid().length === 1 ? 'bill' : unpaid().length + ' bills'} left this month${H > need ? `, plus ${m(H - need)} toward next month` : ''}`;
@@ -415,7 +474,22 @@ let askYes = null;
 function confirmAsk(title, says, yes, fn) { $('askTitle').textContent = title; $('askSays').textContent = says; $('askYes').textContent = yes; askYes = fn; showAsk('askBox'); }
 
 /* ---------- history ---------- */
+function openAhead() {   // the look ahead, payday by payday
+  const Z = ahead(); if (!Z) return;
+  const bills = billDays(isoOf(new Date()), isoAdd(Z.through, 1)), row = (a, b, cls = '') => `<div class="row spread bs-hist${cls}"><span>${a}</span><span class="num">${b}</span></div>`;
+  let h = `<p class="muted" style="margin-top:0">Your usual paycheck is ${m(state.payday.amt)}. Pots and projects aren't counted.</p>`;
+  h += `<div class="pp-bills-h">Now until ${dayTxt(Z.pay)}</div>` + row('<b>Left to spend</b>', `<b>${m(Z.left)}</b>`);
+  h += bills.filter(x => x.d < Z.pay).map(x => row(`${esc(x.name)} <small class="muted">${dayTxt(x.d)}</small>`, '−' + m(x.amt))).join('');
+  Z.inc.forEach((x, i) => {
+    const end = i + 1 < Z.inc.length ? Z.inc[i + 1].d : isoAdd(Z.through, 1), L = bills.filter(b => b.d >= x.d && b.d < end);
+    h += `<div class="pp-bills-h">${dayTxt(x.d)} payday</div>` + row('Paycheck lands' + (state.adv && state.adv.owed && x.amt !== state.payday.amt ? ' <small class="muted">(after the advance)</small>' : ''), '+' + m(x.amt))
+      + L.map(b => row(`${esc(b.name)} <small class="muted">${dayTxt(b.d)}</small>`, '−' + m(b.amt))).join('')
+      + row('<b>To spend</b>', `<b>${m(Z.steady)}</b>`);
+  });
+  $('histTitle').textContent = 'Payday by payday'; $('histList').innerHTML = h; showAsk('histBox');
+}
 function openHistory() {
+  $('histTitle').textContent = 'History';
   const L = state.log.slice().reverse().slice(0, 200);
   const line = x => {
     const d = new Date(x.t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -517,6 +591,8 @@ document.addEventListener('click', e => {
   const a = t.dataset.act, id = t.dataset.id;
   if (a === 'add') openMoney('add');
   else if (a === 'sort') openMoney('move', { from: 'free', to: state.pots[0] ? state.pots[0].id : 'bills' });
+  else if (a === 'ahead') openAhead();
+  else if (a === 'cushion') keepCushion();
   else if (a === 'setaside') openMoney('move', { from: 'free', to: 'bills' });
   else if (a === 'billsout') openMoney('move', { from: 'bills', to: 'free' });
   else if (a === 'fillbills') { const x = Math.min(Math.max(0, billsLeft() - state.bills), state.free); openMoney('move', { from: 'free', to: 'bills', amt: x }); }
@@ -555,9 +631,9 @@ $('advDel').onclick = () => confirmAsk('Remove the advance plan?', 'Only the pla
 document.querySelectorAll('.ask').forEach(a => a.addEventListener('click', e => { if (e.target === a) hideAsk(); }));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAsk(); });
 $('setAdd').onclick = () => openMoney('add');
-function paySync() { $('setPayAnchor').value = state.payday ? (nextPayday() || state.payday.anchor) : ''; $('setPayEvery').value = state.payday ? String(state.payday.every) : '14'; }
+function paySync() { $('setPayAnchor').value = state.payday ? (nextPayday() || state.payday.anchor) : ''; $('setPayEvery').value = state.payday ? String(state.payday.every) : '14'; $('setPayAmt').value = state.payday && state.payday.amt ? (state.payday.amt / 100).toFixed(2) : ''; }
 $('setPaySave').onclick = () => { const a = $('setPayAnchor').value; if (!/^\d{4}-\d\d-\d\d$/.test(a)) { state.payday = null; save(); toast('Payday cleared'); return; }
-  state.payday = { anchor: a, every: +$('setPayEvery').value === 7 ? 7 : 14 }; save(); render(); toast('Payday saved ✓'); }; $('setBank').onclick = () => openMoney('bank'); $('setHistory').onclick = openHistory;
+  state.payday = { anchor: a, every: +$('setPayEvery').value === 7 ? 7 : 14, amt: toC($('setPayAmt').value) }; save(); render(); toast('Payday saved ✓'); }; $('setBank').onclick = () => openMoney('bank'); $('setHistory').onclick = openHistory;
 $('exportBtn').onclick = exportBackup; $('importBtn').onclick = () => $('backupFile').click();
 $('backupFile').onchange = e => { const f = e.target.files[0]; if (f) importBackup(f); e.target.value = ''; };
 $('demoBtn').onclick = () => confirmAsk('Load sample data?', 'This replaces what is in this test app (your main budget app is not touched).', 'Load', () => { state = sample(); save(); showView('budget'); toast('Sample data loaded'); });
