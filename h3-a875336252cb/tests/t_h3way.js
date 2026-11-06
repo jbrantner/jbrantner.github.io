@@ -95,6 +95,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   console.log(JSON.stringify(Object.assign({}, Q, {thumb1:(Q.thumb1 || '').length})));
   ok(!Q.toasts.some(t => /full/.test(t)) && Q.savedKeep && Q.len > 0, 'a full save space clears old previews and saves, no "full" message');
   ok(Q.kept1 && !Q.thumb1 && !Q.n.toString().startsWith('25') && Q.formThumb, 'unused media gone, a take\'s picture kept without its preview, the form keeps its previews');
+  // 🎬 shots (Jordan 2026-11-06): ＋ Shot adds [Shot N] markers; the H3 prompt puts each shot on its own line, every subject in every shot
+  const SH = await page.evaluate(() => { const ta = document.querySelector('#prompt'); ta.value = 'she walks to the window'; ta.dispatchEvent(new Event('input'));
+    document.querySelector('[data-shot]').click(); const v1 = ta.value; ta.value += 'close-up of her eyes'; ta.dispatchEvent(new Event('input')); document.querySelector('[data-shot]').click(); const v2 = ta.value;
+    const P = H3.h3Prompt({text:'[Shot 1] she walks to the window [shot 2] close-up of her eyes', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
+    const B = H3.h3Prompt({text:'she walks in [Shot 2] her face', secs:5}); return {v1, v2, P, B}; });
+  ok(SH.v1==='[Shot 1] she walks to the window\n[Shot 2] ' && /\n\[Shot 3\] $/.test(SH.v2), '🎬 ＋ Shot numbers the shots in the Shot box: ' + JSON.stringify([SH.v1, SH.v2]));
+  ok(/\n\[Shot 1\] she walks to the window\n\[Shot 2\] close-up of her eyes/.test(SH.P) && /appears in every shot/.test(SH.P) && /multi-shot/.test(SH.P) && /\[Shot 1\] Live-action, cinematic\. She walks in\n\[Shot 2\] her face/.test(SH.B), '🎬 the H3 prompt puts each shot on its own line: ' + JSON.stringify(SH.P.slice(-400)));
   await page.click('#h3Peek summary'); await page.screenshot({path:path.join(__dirname, 'h3way.png'), fullPage:false, clip:{x:0, y:0, width:390, height:1400}}).catch(() => {});
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
