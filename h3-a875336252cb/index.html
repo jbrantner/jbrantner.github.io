@@ -476,7 +476,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['MinimaxH3LatentUpscaler3D','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
+const NEED = ['MinimaxH3LatentUpscaler3D','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode'];
@@ -1160,6 +1160,9 @@ function joinGraph(t){
 const REGEN_SIG = {full:'0.909375, 0.857143, 0.75, 0.6, 0.45, 0.3, 0.15, 0.0', medium:'0.8, 0.666667, 0.45, 0.2, 0.0', light:'0.7, 0.5, 0.25, 0.0'};
 // ⬆ Nudge's denoise slider (Jordan 2026-11-06): the first sigma is the strength, then steps down to 0
 const denSig = d => { d = Math.max(0.3, Math.min(1, +d)); return [1, 0.85, 0.65, 0.42, 0.2].map(k => (d * k).toFixed(4)).concat(['0.0']).join(', '); };
+// with 🧽 on, the last jump down to 0 is split in two (a big last jump leaves grain behind)
+const sigTail = (sg, cl) => { if(!cl) return sg; const v = sg.split(',').map(x => +x), k = v.length - 2; if(k < 0 || v[k] <= 0.12) return sg;
+  v.splice(k + 1, 0, +(v[k] / 2).toFixed(4)); return v.map(x => x ? String(x) : '0.0').join(', '); };
 const regenLora = oi => combo(oi, 'LoraLoaderModelOnly', 'lora_name').find(x => /open_?regenerate/i.test(x));
 const regenUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name'); return u.find(x => /minimax_h3_fl2va.*int8/i.test(x)) || u.find(x => /fl2va.*int8/i.test(x)) || u.find(x => /fl2va/i.test(x)); };
 const regenRefUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name'); return u.find(x => /minimax_h3_ref2va.*int8/i.test(x)) || u.find(x => /ref2va.*int8/i.test(x)) || u.find(x => /ref2va/i.test(x)); };
@@ -1189,7 +1192,10 @@ function upGraph(t, oi, names){
   const lv = add('LoadVideo', {file:(src.subfolder ? src.subfolder + '/' : '') + src.filename + ' [output]'}), gc = add('GetVideoComponents', {video:[lv, 0]});
   const vae = [add('VAELoader', {vae_name:vaeOf(oi)}), 0];
   const px = part ? [add('ImageFromBatch', {image:[gc, 0], batch_index:part.s0, length:part.L}), 0] : crop ? [add('ImageFromBatch', {image:[gc, 0], batch_index:crop.s0, length:crop.L}), 0] : regenLen(t) < clipFrames(t) ? [add('ImageFromBatch', {image:[gc, 0], batch_index:0, length:regenLen(t)}), 0] : [gc, 0];
-  const enc = add('VAEEncode', {pixels:px, vae});
+  // 🧽 grain clean-up (Jordan 2026-11-06: the pass "adds details to the graininess"): the frames are softened a little before they go in,
+  // so the regenerate draws fresh detail instead of sharpening the grain, and one more small step at the end clears what's left
+  const cl = +u.clean || 0, pxc = cl && oi.ImageBlur ? [add('ImageBlur', {image:px, blur_radius:cl > 1 ? 2 : 1, sigma:cl}), 0] : px;
+  const enc = add('VAEEncode', {pixels:pxc, vae});
   const big = part ? enc : add('MinimaxH3LatentUpscaler3D', {latent:[enc, 0], model_name:regenUpModel(oi), mode:'target dimensions', 'mode.width':d.w, 'mode.height':d.h, align:32, enable_temporal_chunking:true, force_unload:true, device:'cuda', precision:'bf16'});
   const refs = regenRefsOn(t, oi) && names; // ↩ the take's own reference pictures keep the likeness (Ref2VA + the regenerate LoRA)
   const model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:refs ? regenRefUnet(oi) : regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
@@ -1203,7 +1209,7 @@ function upGraph(t, oi, names){
   else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:d.w, height:d.h, length});
   const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:[big, 0], audio_latent:[sep, 1]});
   const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed || 42}), 0], guider:[add('BasicGuider', {model, conditioning:[iv, 0]}), 0],
-    sampler:[add('KSamplerSelect', {sampler_name:'euler'}), 0], sigmas:[add('ManualSigmas', {sigmas:u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium}), 0], latent_image:[av, 0]});
+    sampler:[add('KSamplerSelect', {sampler_name:'euler'}), 0], sigmas:[add('ManualSigmas', {sigmas:sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl)}), 0], latent_image:[av, 0]});
   const vl = add('LTXVSeparateAVLatent', {av_latent:[out, 0]});
   let ims = [add('VAEDecodeTiled', {samples:[vl, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0];
   if(part){ // the take up to a, the nudged frames from a to b, the take from b on (its own sound throughout)
@@ -2386,7 +2392,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:F / FPS, carry:null, combo:null, lead:null, sm:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upPid:null, upErr:'', smoothed:fl, state:'working', reviewed:false, t0r:Date.now(),
-      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, str:o.str != null ? +o.str : 0.8, refs:o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, big ? {crop:{s0, L}} : {part}), upStage:'start',
+      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, str:o.str != null ? +o.str : 0.8, refs:o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, big ? {crop:{s0, L}} : {part}), upStage:'start',
       redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, wi:o.wi != null ? +o.wi : null, nudge:true, qp:!!o.qp, big, cin:(part.a - s0) / FPS, cout:(part.b - s0) / FPS, a:part.a, b:part.b, s0, L, F, Fout:big ? L : F},
       pieces:[{start:0, gen:big ? L : F, deliv:big ? L : F, ctx:0, prompt:text, state:'done', file:null}]});
     if(big) t.seconds = L / FPS;
