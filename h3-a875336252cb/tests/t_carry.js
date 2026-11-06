@@ -95,6 +95,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const tick = () => { n++; const on = document.querySelectorAll('.stage video.on'), t = FILM.PH; if(t > 1.9 && FILM.activeAt(f, t) && !on.length) gaps++;
       if(t > 2.9 && !after){ after = on[0] && on[0].dataset.c; } if(t < 3.2) requestAnimationFrame(tick); else { FILM.stopPlay && FILM.stopPlay(); res({gaps, n, after, want:FILM.activeAt(f, 3).id}); } }; requestAnimationFrame(tick); }));
   ok(pf.gaps===0 && pf.after===pf.want, 'playing across the cut never shows black, and the clip above takes over (' + JSON.stringify(pf) + ')');
+  // scrubbing across the cut and back: there is always a picture (the last one stays until the next clip's frame is ready)
+  const sf = await fr.evaluate(() => new Promise(res => { const f = FILM.S.films[0], w = document.querySelector('#tlw'); let gaps = 0, k = 0;
+    const pos = [2.0, 2.3, 2.6, 3.0, 2.4, 1.5, 2.8, 4.0, 6.0, 2.2];
+    const step = () => { const on = [...document.querySelectorAll('.stage video.on')].some(v => v.readyState >= 2); if(k > 0 && !on) gaps++; if(k >= pos.length * 6){ res({gaps}); return; }
+      if(k % 6===0) w.scrollLeft = Math.round(pos[k / 6] * f.pps); k++; requestAnimationFrame(step); };
+    FILM.PH = 1.8; FILM.draw(); setTimeout(() => requestAnimationFrame(step), 600); }));
+  ok(sf.gaps===0, 'scrubbing across clips never shows black (' + JSON.stringify(sf) + ')');
   // ＋ More takes: carry on again from the same moment, with the clip's words; the new takes join its takes, no new clip
   await page.evaluate(() => { H3.S.f.fl = false; H3.S.f.first = null; H3.drawAll(); });
   await fr.click('#vstrip [data-act="moreTakes"]'); await page.waitForTimeout(600);
