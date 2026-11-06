@@ -1163,7 +1163,11 @@ const denSig = d => { d = Math.max(0.3, Math.min(1, +d)); return [1, 0.85, 0.65,
 const regenLora = oi => combo(oi, 'LoraLoaderModelOnly', 'lora_name').find(x => /open_?regenerate/i.test(x));
 const regenUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name'); return u.find(x => /minimax_h3_fl2va.*int8/i.test(x)) || u.find(x => /fl2va.*int8/i.test(x)) || u.find(x => /fl2va/i.test(x)); };
 const regenRefUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name'); return u.find(x => /minimax_h3_ref2va.*int8/i.test(x)) || u.find(x => /ref2va.*int8/i.test(x)) || u.find(x => /ref2va/i.test(x)); };
-const upRefs = t => (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || []; // pictures carried in from the take it came from, else its own
+// pictures carried in from the take it came from, else its own; the 👥 subjects its words name come FIRST (Jordan 2026-11-06: a ✨ pass
+// looked nothing like her: her pictures live on the subject, not on the take, so the pass had run with no reference at all)
+const upRefs = t => { const own = (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || [], out = [];
+  let cast = []; try{ cast = castTake(Object.assign({}, t, {imgs:[]}), true).imgs; }catch(e){}
+  for(const r of cast.concat(own)) if(r && r.id && !out.some(x => x.id===r.id)) out.push(r); return out; };
 const regenRefsOn = (t, oi) => !!(t.up && t.up.refs && upRefs(t).length && oi.MiniMaxH3ReferenceToVideo && regenRefUnet(oi));
 const REGEN_REFS = 3; // reference pictures cost tokens at the new size, so only the first few go in (8 GB card)
 const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
@@ -1191,7 +1195,8 @@ function upGraph(t, oi, names){
   const model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:refs ? regenRefUnet(oi) : regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0];
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
-  const words = u.prompt || t.prompt, prompt = castWords(words) || SM_PROMPT, length = part ? part.L : regenLen(t);
+  const words = u.prompt || t.prompt, length = part ? part.L : regenLen(t);
+  const prompt = (refs ? castText(words, {imgs:upRefs(t).slice(0, REGEN_REFS)}, true) : castWords(words)) || SM_PROMPT;
   let iv;
   if(refs){ const ri = {}; upRefs(t).slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
     iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:d.w, height:d.h, length, ref_image_size:'match'}, ri)); }
