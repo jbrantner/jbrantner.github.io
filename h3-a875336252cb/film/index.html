@@ -700,7 +700,7 @@ function placeNew(){ let ch = false; S.placed = S.placed || {};
       // Jordan 2026-11-06 (after trying a track above): the new part replaces the rest of the clip from that moment, on the same track;
       // the clip ends there (drag its end to get the rest back) and the clips after it move along
       const e0 = r.c.at + len(r.c); if(c.at > r.c.in + 0.2 && c.at < r.c.out) r.c.out = c.at; const P = r.c.at + len(r.c);
-      const d = secsOf(t) || 5, nc = {id:uid('c'), take:t.id, in:0, out:d, dur:d, at:P}, shift = P + d - e0;
+      const d = secsOf(t) || 5, D = c.len ? Math.min(d, +c.len) : d, nc = {id:uid('c'), take:t.id, in:0, out:D, dur:d, at:P}, shift = P + D - e0;
       r.tr.clips.forEach(x => { if(x!==r.c && x.at >= e0 - 1e-3) x.at = Math.max(0, x.at + shift); }); r.tr.clips.push(nc);
       if(SEL===r.c.id) SEL = nc.id; toast('➕ The new part is on the timeline from ' + fmt(P) + (doneOf(t) ? '' : ' (rendering)'), 4000); continue; }
     if(c && c.film && c.key && !S.placed[c.key]){ const f = filmOf(c.film); S.placed[c.key] = true; ch = true; const r = f && clipOf(f, c.clip); if(!r) continue;
@@ -714,7 +714,7 @@ function placeNew(){ let ch = false; S.placed = S.placed || {};
       const nc = {id:uid('c'), take:t.id, in:0, out:d, dur:d, at}; r.tr.clips.push(nc); SEL = nc.id; toast('⏪ The lead-in is on the timeline before the clip' + (doneOf(t) ? '' : ' (rendering)'), 4000); continue; }
     const tf = t.toFilm; // rendered from the Films tab (H3 Deck's form under the timeline): the first take goes on the end of track 1
     if(tf && tf.film && tf.key && tf.track && !c && !S.placed[tf.key]){ const f = filmOf(tf.film); S.placed[tf.key] = true; ch = true; const tr = f && f.tracks.find(x => x.id===tf.track); if(!tr) continue;
-      const d = secsOf(t) || 5, at = +tf.at || 0, cuts = [0].concat((tf.cuts || []).filter(x => x > 0.05 && x < d - 0.05)).concat([d]);
+      const d = secsOf(t) || 5, at = +tf.at || 0, D = tf.len ? Math.min(d, +tf.len) : d, cuts = [0].concat((tf.cuts || []).filter(x => x > 0.05 && x < D - 0.05)).concat([D]);
       for(let i = 0; i < cuts.length - 1; i++) tr.clips.push({id:uid('c'), take:t.id, in:cuts[i], out:cuts[i + 1], dur:d, at:at + cuts[i]}); continue; }
     if(tf && tf.film && tf.key && !c && !S.placed[tf.key]){ const f = filmOf(tf.film); S.placed[tf.key] = true; ch = true; if(f){ const sel = SEL, ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); SEL = sel || SEL; toast('🎬 The new take is on the end of the film (track ' + (k + 1) + ')' + (doneOf(t) ? '' : ' (rendering)'), 4000); } }
     if(rd && rd.film && rd.key && !S.placed[rd.key] && doneOf(t)){ const f = filmOf(rd.film); S.placed[rd.key] = true; ch = true; const r = f && clipOf(f, rd.clip); if(!r || r.c.take!==rd.src) continue;
@@ -790,6 +790,13 @@ function guidePlan(g){ const cs = g.clips.slice().sort((x, y) => x.at - y.at); i
     const last = beats[beats.length - 1]; if(last && last.w===w && Math.abs(last.b - a) < 0.05) last.b = b; else if(w) beats.push({a, b, w}); });
   const prompt = beats.length > 1 ? beats.map(x => '[' + r(x.a) + 's-' + r(x.b) + 's] ' + x.w).join('\n') : (beats[0] || {}).w || '';
   return {at, secs:end - at, prompt, cuts:cs.slice(1).map(c => r(c.at - at)), beats:beats.map(x => ({a:r(x.a), b:r(x.b), w:x.w}))}; }
+// the next guide clip a following track still needs: the first one starting where the track ends (none on it yet = the first)
+function guideNext(f, k){ const gk = guideK(f), g = f.tracks[gk], tr = f.tracks[k]; if(!g || !tr) return null; const cs = g.clips.slice().sort((x, y) => x.at - y.at); if(!cs.length) return null;
+  const mine = tr.clips.slice().sort((x, y) => x.at - y.at), end = mine.length ? Math.max(...mine.map(c => c.at + len(c))) : -1, prev = mine.find(c => Math.abs(c.at + len(c) - end) < 1e-3) || null;
+  const i = end < 0 ? 0 : cs.findIndex(c => c.at + len(c) > end + 0.35); if(i < 0) return {done:true, n:cs.length};
+  const gc = cs[i], t = takeOf(gc.take), words = (wordsBetween(t, gc.in, gc.out) || '').replace(/\s*\n\s*/g, ' ').replace(/\[[^\]]*\d\s*s[^\]]*\]\s*/g, '').trim();
+  const from = prev ? Math.max(end, gc.at) : gc.at, secs = Math.max(1, gc.at + len(gc) - from);
+  return {i, n:cs.length, gc, prev, at:from, secs:Math.round(secs * 100) / 100, words}; }
 // a clip's words over [a, b] of its take, timed from a (several stretches = timed beats)
 function wordsRange(t, a, b){ const r = x => Math.round(x * 10) / 10, L = cutSegs(segsOf(t), a, b).filter(x => (x.text || '').trim());
   if(!L.length) return wordsAt(t, a); if(L.length===1) return L[0].text; return L.map(x => '[' + r(x.a - a) + 's - ' + r(x.b - a) + 's] ' + x.text).join('\n'); }
@@ -833,11 +840,11 @@ function guideRows(f){ const el = $('#gdRows'); if(!el) return; const gk = guide
   el.innerHTML = f.tracks.map((tr, k) => { const above = gk >= 0 && k < gk;
     return `<div class="row" style="align-items:center;gap:6px;padding:8px 0;border-top:1px solid var(--line);flex-wrap:wrap"><b style="min-width:70px">Track ${k + 1}</b><span class="note" style="flex:1;margin:0">${tr.clips.length} clip${tr.clips.length===1 ? '' : 's'}${k===gk ? ' · 🦴 the guide' : ''}</span>
       ${k!==gk ? `<button class="btn" data-gd="make:${k}">🦴 Make it the guide</button>` : `<button class="btn" data-gd="make:${k}">↻ Remake</button><button class="btn" data-gd="lock:${k}">${tr.unlock ? '🔒 Lock it' : '🔓 Unlock'}</button><button class="btn" data-gd="off:${k}">✕ Not the guide</button>`}
-      ${above ? `<button class="btn ${tr.follow!==false ? 'pri' : ''}" data-gd="follow:${k}">${tr.follow!==false ? '🦴 Follows it' : 'Doesn\'t follow'}</button>${ready ? `<button class="btn" data-gd="fill:${k}">▶ Render over the guide</button>` : ''}` : ''}</div>`; }).join('')
-    + (gk >= 0 && ready ? '<button class="btn" data-gd="fill:new" style="width:100%;margin-top:6px">＋ A new track on top, rendered over the guide</button>' : ''); }
+      ${above ? `<button class="btn ${tr.follow!==false ? 'pri' : ''}" data-gd="follow:${k}">${tr.follow!==false ? '🦴 Follows it' : 'Doesn\'t follow'}</button>${ready ? (() => { const nx = guideNext(f, k); return nx && nx.done ? `<span class="note" style="margin:0">✓ all ${nx.n} guide clips</span>` : nx ? `<button class="btn" data-gd="fill:${k}">▶ Clip ${nx.i + 1} of ${nx.n} over the guide</button>` : ''; })() : ''}` : ''}</div>`; }).join('')
+    + (gk >= 0 && ready ? '<button class="btn" data-gd="fill:new" style="width:100%;margin-top:6px">＋ A new track on top: its first clip over the guide</button>' : ''); }
 function guideSheet(f){ const o = {n:1};
   $('#sheetCard').innerHTML = `<h3><span>🦴 Guidance track</span><button class="btn" data-close>✕</button></h3>
-    <div class="note">One track's skeleton and depth guide everything above it. ▶ Render over the guide makes <b>one take of the whole guide, clip by clip</b>: it's made in parts that end exactly where the guide's clips are cut, each part with only its own clip's words, each carrying on from the one before (so it stays in sync) with the form's references, 👥 subjects, model and LoRAs, and cuts it into clips where the guide's clips are cut. Then select any of those clips and ↻ Redo a stretch for other versions: its edges stay pinned, so it still lines up. ➕ Carry on and ⏪ Lead in on a following track get the matching stretch of the guide too.</div>
+    <div class="note">One track's skeleton and depth guide everything above it. ▶ Clip n over the guide makes the track's <b>next guide clip</b>, as many takes as the form's Takes (split across Render and Main), with that clip's words and length. Pick the best take in the clip (its takes show under it), then tap it again for the next clip: that one carries on from the take you picked, so it starts where it ends with the form's references, 👥 subjects, model and LoRAs, and cuts it into clips where the guide's clips are cut. Then select any of those clips and ↻ Redo a stretch for other versions: its edges stay pinned, so it still lines up. ➕ Carry on and ⏪ Lead in on a following track get the matching stretch of the guide too.</div>
     <div class="note" id="gdStat" style="margin:8px 0">${guideStatus(f)}</div>
     <div id="gdRows"></div>`;
   $('#sheet').hidden = false; guideRows(f);
@@ -847,11 +854,20 @@ function guideSheet(f){ const o = {n:1};
     if(a==='off'){ f.tracks[k].guide = false; f.guide = null; save(); draw(); guideShow(f); guideRows(f); return; }
     if(a==='follow'){ f.tracks[k].follow = f.tracks[k].follow===false; save(); draw(); guideRows(f); return; }
     if(a==='fill'){ const gk = guideK(f), g = f.tracks[gk], fn = deckFn('H3Fill'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return; }
-      const item = guidePlan(g); if(!item){ toast('The guidance track has no clips'); return; }
+      if(!g || !g.clips.length){ toast('The guidance track has no clips'); return; }
       let tr = v==='new' ? null : f.tracks[k];
-      if(!confirm('Render one ' + fmt(item.secs) + ' take over the whole guide' + (tr ? ' onto track ' + (k + 1) : ' onto a new top track') + ', cut into ' + (item.cuts.length + 1) + ' clips at the guide\'s cuts? It uses the form below the timeline (references, subjects, model, LoRAs).')) return;
       if(!tr){ tr = {id:uid('tr'), clips:[], follow:true}; f.tracks.unshift(tr); save(); draw(); }
-      b.disabled = true; const n = await fn({film:f.id, name:f.name, track:tr.id, n:1, items:[item]}); b.disabled = false; if(n){ closeSheet(); draw(); } } }; }
+      const kk = f.tracks.indexOf(tr), nx = guideNext(f, kk); if(!nx || nx.done){ toast('This track already has every guide clip'); return; }
+      const N = deckN();
+      if(nx.prev){ // carry on from the take in the clip before it: its last frames lead in, so it starts where that one ends
+        const pt = takeOf(nx.prev.take); if(!pt || !fileOf(pt)){ toast('The clip before it is still rendering: pick its take first'); return; }
+        const cf = deckFn('H3Carry'); if(!cf){ toast('Open 🎞 Films inside H3 Deck for this'); return; }
+        b.disabled = true; const ok = await cf({take:pt.id, at:nx.prev.out, film:f.id, clip:nx.prev.id, prompt:nx.words, secs:nx.secs, len:nx.secs, guide:guideOpt(f, kk, nx.at), go:true}); b.disabled = false;
+        if(ok){ closeSheet(); draw(); toast('▶ Clip ' + (nx.i + 1) + ' of ' + nx.n + ': ' + N + (N===1 ? ' take' : ' takes') + ', carrying on from clip ' + nx.i + '. Pick the best one, then come back here for the next.', 6000); } return; }
+      b.disabled = true; const n = await fn({film:f.id, name:f.name, track:tr.id, n:N, items:[{at:nx.at, secs:nx.secs, prompt:nx.words, len:nx.secs}]}); b.disabled = false;
+      if(n){ closeSheet(); draw(); toast('▶ Clip 1 of ' + nx.n + ': pick the best take in the clip (its takes are under it), then come back here for the next.', 6000); } } }; }
+// how many takes the form below the timeline makes (H3 Deck's Takes)
+function deckN(){ try{ return Math.max(1, +window.parent.H3.S.f.takes || 1); }catch(e){ return 1; } }
 // ⏪ Lead in: new seconds made BEFORE the selected clip, landing exactly on its first frame (Jordan 2026-11-06)
 function leadSheet(f){ const r = SEL && clipOf(f, SEL); if(!r){ toast('Select a clip first'); return; } const t = takeOf(r.c.take); if(!t || !fileOf(t)){ toast('That clip has no finished video yet'); return; }
   const o = {secs:3, n:1};
