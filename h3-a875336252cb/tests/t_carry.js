@@ -187,6 +187,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(/opens the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'scrubbing to another clip brings that clip\'s words');
   await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1) * f.pps); }); await page.waitForTimeout(500);
   ok(/walks to the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'and back on the first clip, its own words again');
+  // tapping a clip brings its words even when the playhead is somewhere else (Jordan 2026-11-06: "the current take that's selected")
+  await fr.evaluate(id => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take===id); const el = document.querySelector('.clip[data-c="' + c.id + '"]'); const r = el.getBoundingClientRect();
+    el.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, pointerType:'mouse', clientX:r.left + 3, clientY:r.top + r.height / 2, pointerId:1})); document.dispatchEvent(new PointerEvent('pointerup', {bubbles:true, pointerType:'mouse', pointerId:1})); }, ct.id); await page.waitForTimeout(400);
+  ok(/opens the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'tapping a clip (playhead elsewhere) puts that clip\'s words in the Shot box');
+  await fr.evaluate(() => { const f = FILM.S.films[0], c = f.tracks.flatMap(tr => tr.clips).find(x => x.take==='tA' && x.at===0), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((c.at + 1.2) * f.pps); }); await page.waitForTimeout(500);
+  ok(/walks to the window/.test(await page.evaluate(() => H3.S.f.prompt)), 'scrubbing off the selected clip follows the playhead again');
   await page.evaluate(() => H3FilmFollow()); await page.waitForTimeout(300);
   const fol = await page.evaluate(() => ({l:H3.S.f.loras.length, p:H3.S.f.prompt}));
   ok(fol.l===0 && /walks to the window/.test(fol.p), '↺ Follow the clip again loads the clip under the playhead (' + JSON.stringify(fol) + ')');

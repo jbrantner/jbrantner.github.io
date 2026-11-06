@@ -90,6 +90,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // ✕ Not the guide
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200); await fr.click('[data-gd="off:1"]');
   ok(await fr.evaluate(() => FILM.guideOpt(FILM.S.films[0], 0, 1)===null), '✕ Not the guide: nothing follows it any more');
+  // 🦴 progress while the skeleton is read: step, frame n of N, %, time left (from ComfyUI's per-frame progress)
+  const gp = await page.evaluate(() => { const G = {g:{'5':{class_type:'DWPreprocessor'}, '6':{class_type:'DepthAnythingV2Preprocessor'}}}; H3.setGuideProg({pc:'Render', stage:'line', p:0, t0:Date.now() - 20000});
+    H3.LIVE.px = {t0:Date.now() - 20000, pn:'5', ps:Date.now() - 10000, v:120, max:240}; H3.guideProg(G, 'px'); const a = Object.assign({}, H3GuideProgress());
+    H3.LIVE.px = Object.assign(H3.LIVE.px, {pn:'6', ps:Date.now() - 1000, v:60, max:240}); H3.guideProg(G, 'px'); const b = Object.assign({}, H3GuideProgress()); return {a, b}; });
+  const gt = await fr.evaluate(() => { const f = FILM.S.films[0]; return FILM.guideProgText(true); });
+  await page.evaluate(() => H3.setGuideProg(null));
+  console.log(JSON.stringify({gp, gt}));
+  ok(gp.a.stage==='skeleton' && gp.a.frame===120 && Math.abs(gp.a.p - 0.39) < 0.01 && gp.a.eta > 5000 && gp.b.stage==='depth' && gp.b.p > 0.8 && /depth<\/b> frame 60 of 240 · \d+%/.test(gt) && /left/.test(gt), '🦴 the guide shows its step, frame n of N, a % bar and about how long is left');
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])).catch(() => {});
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
