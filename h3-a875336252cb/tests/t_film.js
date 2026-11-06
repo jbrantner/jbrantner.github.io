@@ -72,7 +72,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(Math.abs(sn.ph - sn.e) < 1e-6, 'scrubbing a few pixels from a clip\'s edge snaps onto the edge (' + JSON.stringify(sn) + ')');
   // dragging a clip: its END snaps to another clip's start too (Jordan 2026-11-06), with a line where
   const ds = await page.evaluate(() => { const sel0 = FILM.SEL, f = FILM.S.films[0], x = f.tracks[0].clips[0], y = f.tracks[1].clips[f.tracks[1].clips.length - 1]; x.at = 1; y.at = 9; FILM.PH = 0; FILM.SEL = x.id; FILM.draw(); return {id:x.id, L:x.out - x.in, pps:f.pps, y:y.at, sel0}; });
-  const cx = await page.$eval('.clip[data-c="' + ds.id + '"] .nm', e => { const r = e.getBoundingClientRect(); return {x:r.x + 4, y:r.y + r.height / 2}; });
+  const cx = await page.$eval('.clip[data-c="' + ds.id + '"] .nm', e => { const r = e.getBoundingClientRect(); return {x:r.x + Math.min(50, r.width / 2), y:r.y + r.height / 2}; });
   const want = (ds.y - ds.L - 1) * ds.pps - 6; let line = false;
   await page.mouse.move(cx.x, cx.y); await page.mouse.down(); await page.mouse.move(cx.x + want / 2, cx.y, {steps:4}); await page.mouse.move(cx.x + want, cx.y, {steps:4});
   line = await page.evaluate(() => { const l = document.querySelector('.snapline'); return !!(l && !l.hidden); }); await page.mouse.up(); await page.waitForTimeout(300);
