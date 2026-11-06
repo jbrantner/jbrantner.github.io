@@ -189,6 +189,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.SEL = window.C1; const r = FILM.clipOf(FILM.S.films[0], window.C1); FILM.PH = r.c.at + 0.4; FILM.draw(); });
   const before = await page.evaluate(() => H3.S.f.first); await fr.click('[data-act="carry"]'); await page.waitForTimeout(500);
   ok(await page.evaluate(() => H3.S.f.first)===before, 'carrying on from under 1 s in is refused (Motion Context needs the frames before)');
+  // 🎞 Use this take on a take card in H3 Deck puts it in its clip on the timeline
+  await page.evaluate(() => { const t = H3.S.takes.find(x => x.id==='tV2'), v = JSON.parse(JSON.stringify(t)); v.id = 'tV4'; v.t = t.t + 3; v.final = {filename:'v4_00001_.mp4', subfolder:'Output_Main/H3Deck/v4', type:'output'}; H3.S.takes.unshift(v); H3.saveNow(); H3.drawAll(); });
+  await fr.evaluate(c => { FILM.SEL = c; FILM.draw(); }, cid); await page.evaluate(() => H3.drawAll()); await page.waitForTimeout(200);
+  await page.evaluate(() => document.querySelector('[data-act="useFilm"][data-t="tV4"]').click()); await page.waitForTimeout(300);
+  ok(await fr.evaluate(c => FILM.clipOf(FILM.S.films[0], c).c.take, cid)==='tV4', '🎞 Use this take on a take card puts it in its clip on the timeline');
   // Clear finished keeps every take a Films timeline uses (a clip only points at its take)
   await fr.evaluate(() => FILM.save && FILM.save()); await page.waitForTimeout(300);
   const cl = await page.evaluate(() => { const used = new Set();     const F = JSON.parse(localStorage.getItem('h3edit')); F.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => used.add(c.take))));
