@@ -112,6 +112,18 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
   const NW = await fr.evaluate(() => { const c = FILM.S.films[0].tracks[0].clips[0], t = FILM.takeOf(c.take); return {nudge:!!(t.redo && t.redo.nudge), w:FILM.wordsAt(t, 2.5), w0:FILM.wordsAt(t, 0.2), lab:document.querySelector('.clip .nm').textContent}; });
   ok(NW.nudge && NW.w==='she smiles and waves' && NW.w0==='she walks to the window' && /^⬆/.test(NW.lab), '⬆ the nudge goes in the clip, with its words on that stretch: ' + JSON.stringify(NW));
+  // ✨ Quality pass (Jordan 2026-11-06): Regenerate over every clip on a track, one seed, each swaps in when done
+  await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[0].clips = [{id:'q1', take:'tA', in:0.5, out:2.5, dur:5, at:0}, {id:'q2', take:'tA', in:3, out:5, dur:5, at:2}]; FILM.SEL = null; FILM.draw(); });
+  await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.nudge)); H3.saveNow(); });
+  await fr.click('[data-act="qualitySheet"][data-k="0"]'); await page.waitForTimeout(200);
+  ok(await fr.evaluate(() => /2 clips/.test(document.querySelector('#sheetCard').textContent) && document.querySelector('#qpLv .pri').dataset.v==='0'), '✨ the quality pass sheet counts the clips, Regenerate strength by default');
+  await fr.click('#qpGo'); await page.waitForTimeout(600);
+  const QPS = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).map(t => ({clip:t.redo.clip, seed:t.seed, den:t.up.den, a:t.redo.a, b:t.redo.b, prompt:t.up.prompt, refs:t.up.refs})));
+  ok(QPS.length===2 && QPS[0].seed===QPS[1].seed && QPS.every(x => x.den===0 && /^she walks to the window/.test(x.prompt)) && QPS.map(x => x.clip).sort().join()==="q1,q2" && QPS.find(x => x.clip==="q1").a <= 12 && QPS.find(x => x.clip==="q1").b >= 60, '✨ one regenerate per clip over its stretch, same seed, the take\'s words: ' + JSON.stringify(QPS));
+  await page.evaluate(() => { H3.S.takes.filter(x => x.redo && x.redo.qp).forEach((t, i) => { t.upStage = 'done'; t.state = 'done'; t.final = {filename:'q' + i + '.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}; }); H3.saveNow(); });
+  await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
+  const QW = await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.map(c => { const t = FILM.takeOf(c.take); return {qp:!!(t && t.redo && t.redo.qp), in:c.in, out:c.out, w:FILM.wordsAt(t, 1)}; }));
+  ok(QW.every(x => x.qp && x.w==='she walks to the window') && QW[0].in===0.5 && QW[1].out===5, '✨ both clips now play their quality-pass take, same timing: ' + JSON.stringify(QW));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
