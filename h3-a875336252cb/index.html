@@ -1962,13 +1962,21 @@ function redoPlan(F, a, b, ctx){
   if(L - 1 <= F - 1 - s0 && !pins.some(p => p[0]===L - 1)) pins.push([L - 1, s0 + L - 1]);
   return {a, b, s0, L, F, Fout:F, toEnd, pins};
 }
+// versions of a redo spread over the PCs (Jordan 2026-11-05) like other takes: the take's own PC, or any other that can run it and
+// already sees the take's video (both PCs' output folder is the shared Dropbox one, so it's there once Dropbox has synced it)
+const SEES = {};
+async function redoPc(t, src, fl, extra){
+  const urls = [...new Set([src.pc].concat(S.f.where==='both' ? S.pcs.map(p => p.url) : [S.f.where]))].filter(u => !canRun(u, t)), ok = [];
+  for(const u of urls){ if(u===src.pc){ ok.push(u); continue; } const k = u + '|' + fl.filename;
+    if(SEES[k]==null){ try{ const r = await fetch(viewUrl(u, fl), {method:'HEAD'}); SEES[k] = r.ok; }catch(e){ SEES[k] = false; } }
+    if(SEES[k]) ok.push(u); }
+  return ok.sort((a, b) => (busySecs(a) + (extra[a] || 0) + estSecs(t, a)) - (busySecs(b) + (extra[b] || 0) + estSecs(t, b)))[0] || null; }
 window.H3Redo = async o => { const src = S.takes.find(x => x.id===o.take), fl = takeFile(src);
   if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
   if(!fl){ toast('That take has no finished video yet'); return 0; }
   if(src.sm){ toast("A 🪄 smoothed take can't have a stretch redone"); return 0; }
-  if(!pcOf(src.pc).online){ toast(pcName(src.pc) + " can't be reached: the take's video is there"); return 0; }
   const F = takeFrames(src), P = redoPlan(F, (+o.a || 0) * FPS, (+o.b || 0) * FPS, 12), key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1));
-  let sent = 0;
+  let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
     const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
@@ -1978,11 +1986,12 @@ window.H3Redo = async o => { const src = S.takes.find(x => x.id===o.take), fl = 
       redo:Object.assign({src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key}, P),
       pieces:[{start:P.s0 / FPS, gen:P.L, deliv:P.L, ctx:0, prompt:text, state:'new'}]});
     if(src.cont){ t.ctl = null; t.ctl2 = null; } // its guide's timing doesn't include the carried-on video
-    t.pc = src.pc; const why = canRun(t.pc, t); if(why){ toast(pcName(t.pc) + ' ' + why, 6000); break; }
+    t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
+    extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
     S.takes.unshift(t); drawTakes();
     try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
   }
-  save(); drawTakes(); if(sent) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + pcName(src.pc));
+  save(); drawTakes(); if(sent) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
   return sent; };
 window.H3RedoPlan = redoPlan;
 

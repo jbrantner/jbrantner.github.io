@@ -2,7 +2,7 @@
 // Run: CLIP=<a ~5 s video with sound> NODE_PATH=$(npm root -g) node tests/t_carry.js
 const { chromium } = require('playwright');
 const path = require('path'), http = require('http'), fs = require('fs');
-const R = 'http://render.test', CLIP = process.env.CLIP;
+const R = 'http://render.test', M = 'http://main.test', CLIP = process.env.CLIP;
 if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); process.exit(2); }
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
@@ -23,7 +23,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
   const sent = [], views = [];
-  await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
+  const fake = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
     if(p==='/queue') return J({queue_running:[], queue_pending:sent.map(s => [0, s.pid])});
@@ -31,10 +31,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     if(p.startsWith('/userdata/')) return rt.request().method()==='GET' ? rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}) : J({});
     if(p==='/view'){ views.push(u.searchParams.get('filename')); return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)}); }
     if(p==='/upload/image') return J({name:'up_' + Date.now() + '.webm', subfolder:'', type:'input'});
-    if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
+    if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, host:u.origin, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
     if(p.startsWith('/history/')) return J({});
-    return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
-  await page.addInitScript(r => { if(!sessionStorage.getItem('init')){ localStorage.clear(); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; window.FILM_PCS = [{name:'Render', url:r, on:true}]; }, R);
+    return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
+  await page.route(R + '/**', fake); await page.route(M + '/**', fake);
+  await page.addInitScript(r => { if(!sessionStorage.getItem('init')){ localStorage.clear(); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}, {name:'Main', url:'http://main.test', on:true, speed:1.26}]; window.FILM_PCS = [{name:'Render', url:r, on:true}]; }, R);
   await page.goto('http://127.0.0.1:8017/index.html');
   await page.waitForFunction(() => H3.families().length > 0, null, {timeout:20000});
   // a finished 5 s take (one piece, 120 frames)
@@ -80,7 +81,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const n1 = sent.length; await fr.click('#rdGo'); await page.waitForTimeout(1500);
   const rd = await page.evaluate(() => H3.S.takes.filter(t => t.redo).map(t => ({id:t.id, pc:t.pc, redo:t.redo, p:t.pieces.map(p => [p.start, p.gen, p.prompt]), fl:t.fl, cont:t.cont})));
   ok(rd.length===2 && sent.length===n1 + 2 && rd.every(t => t.redo.src==='tA' && t.redo.key===rd[0].redo.key && t.p.length===1 && t.p[0][2]==='she trips and catches herself' && t.redo.file==='Output_Render/H3Deck/h3_a/h3_a_00001_.mp4 [output]'), '↻ 2 versions sent, each one window on the take\'s PC with the new words (' + JSON.stringify(rd[0] && rd[0].redo) + ')');
-  const g2 = sent[n1].g, R0 = rd[rd.length - 1].redo, ag = nodes(g2, 'MiniMaxH3AddGuide'), ib = nodes(g2, 'ImageFromBatch');
+  const hosts = sent.slice(n1).map(x => x.host), pcs2 = rd.map(t => t.pc);
+  ok(new Set(hosts).size===2 && new Set(pcs2).size===2, '↻ the 2 versions are split between Render and Main (' + JSON.stringify(hosts) + ')');
+  const g2 = sent.slice(n1).find(x => x.host===R).g, R0 = rd[rd.length - 1].redo, ag = nodes(g2, 'MiniMaxH3AddGuide'), ib = nodes(g2, 'ImageFromBatch');
   ok(ag.filter(n => n.inputs.image).length===R0.pins.length && ag.some(n => n.inputs.audio) && ag.filter(n => n.inputs.image).every(n => n.inputs.frame_idx % 4===0 || n.inputs.frame_idx===R0.L - 1), 'every pinned frame is a MiniMax guide on the grid, plus the take\'s sound (' + R0.pins.length + ' frames)');
   ok(Math.abs(R0.a - 24) <= 3 && Math.abs(R0.b - 48) <= 3 && node(g2, 'MiniMaxH3ReferenceToVideo').inputs.length===R0.L, 'the window is the stretch plus half a second each side (' + JSON.stringify({a:R0.a, b:R0.b, s0:R0.s0, L:R0.L}) + ')');
   const bt = nodes(g2, 'ImageBatch'), cv = node(g2, 'CreateVideo');
@@ -91,6 +94,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   const sw = await fr.evaluate(([id, a]) => { const r = FILM.clipOf(FILM.S.films[0], window.C2); return {take:r.c.take, out:r.c.out, vs:FILM.versionsOf(FILM.takeOf(id)).map(t => t.id)}; }, [rd[1].id]);
   ok(sw.take===rd[1].id && Math.abs(sw.out - 5) < 0.05 && sw.vs.includes('tA') && sw.vs.includes(rd[0].id), '↻ the finished redo replaces the clip\'s take; ⇄ Versions has the original and the other redo (' + JSON.stringify(sw) + ')');
+  // scrub: drag along the ruler and the playhead follows
+  const rb = await (await fr.$('#ruler')).boundingBox();
+  await page.mouse.move(rb.x + 10, rb.y + rb.height / 2); await page.mouse.down(); await page.mouse.move(rb.x + 60, rb.y + rb.height / 2, {steps:4});
+  const mid = await fr.evaluate(() => FILM.PH); await page.mouse.move(rb.x + 120, rb.y + rb.height / 2, {steps:4}); await page.mouse.up();
+  const end = await fr.evaluate(() => FILM.PH), pps = await fr.evaluate(() => FILM.S.films[0].pps);
+  ok(Math.abs(mid - 60 / pps) < 0.15 && Math.abs(end - 120 / pps) < 0.15, 'dragging along the ruler scrubs the playhead (' + mid.toFixed(2) + ' s → ' + end.toFixed(2) + ' s)');
   // a carry-on needs at least a second before it
   await fr.evaluate(() => { FILM.SEL = window.C1; const r = FILM.clipOf(FILM.S.films[0], window.C1); FILM.PH = r.c.at + 0.4; FILM.draw(); });
   const before = await page.evaluate(() => H3.S.f.first); await fr.click('[data-act="carry"]'); await page.waitForTimeout(500);
