@@ -16,6 +16,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     if(p==='/renderdeck/h3export' && rt.request().method()==='POST'){ EXP.body = JSON.parse(rt.request().postData()); EXP.n = 0; return J({id:'x1', state:'working', done:0, total:0}); }
     if(p==='/renderdeck/h3export'){ EXP.n++; return J(EXP.n < 2 ? {id:'x1', state:'working', done:50, total:200} : {id:'x1', state:'done', done:200, total:200, file:{filename:'Film 1_00001_.mp4', subfolder:'Render/H3Film', type:'output'}}); }
     if(p==='/userdata/h3deck_takes.json') return REMOTE.j ? J(REMOTE.j) : rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
+    if(p==='/view' && /Film 1_00001_/.test(u.searchParams.get('filename') || '')) return rt.fulfill({status:200, contentType:'video/mp4', headers:{'Access-Control-Allow-Origin':'*'}, body:Buffer.alloc(2048, 1)});
     if(p==='/view') return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   const F = (n, sub) => ({filename:n, subfolder:sub || 'Output_Render/H3Deck/x', type:'output'});
@@ -96,6 +97,13 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(eb.clips.length===3 && eb.clips.every(c => c.filename && c.out > c.in) && eb.clips.filter(c => c.track===1).length===2 && /%/.test(await page.textContent('#exp')), '⬇ Export sends 3 clips with tracks and shows progress (' + JSON.stringify(eb.clips.map(c => [c.filename, c.track, +c.at.toFixed(2)])) + ')');
   await page.waitForTimeout(3500);
   ok(/Open the mp4/.test(await page.textContent('#exp')) && await page.evaluate(() => FILM.S.films[0].exp.state)==='done', 'when the PC finishes, the film shows a link to the mp4');
+  // 📲 the whole exported video goes to the share sheet (Save Video → Photos), fetched onto the phone beforehand
+  await page.waitForFunction(() => FILM.EXPB().blob, null, {timeout:5000}).catch(() => {});
+  await page.evaluate(() => { window.SHARED = null; navigator.canShare = () => true; navigator.share = async o => { window.SHARED = o.files.map(f => [f.name, f.size, f.type]); }; });
+  ok(!!(await page.$('[data-act="expSave"]')), 'the finished export has 📲 Save the whole video to Photos');
+  await page.click('[data-act="expSave"]'); await page.waitForTimeout(300);
+  const sh = await page.evaluate(() => window.SHARED);
+  ok(sh && sh[0][0]==='Film 1_00001_.mp4' && sh[0][1]===2048 && sh[0][2]==='video/mp4', '📲 opens the share sheet with the whole mp4 (' + JSON.stringify(sh) + ')');
   await page.screenshot({path:path.join(__dirname, 'film_timeline.png'), fullPage:true});
   // ⚡ Preview: the PC writes the film as one small video; ▶ Play plays it in real time until the edit changes
   await page.click('[data-act="preview"]'); await page.waitForTimeout(400);

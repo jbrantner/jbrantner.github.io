@@ -401,7 +401,7 @@ function draw(){
   placeNew(); keepTakes(); S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(!takeOf(c.take)) findLost(c.take); else if(!fileOf(takeOf(c.take)) && !takes().find(x => x.id===c.take)) findLost(c.take); }))); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
   const v = N().v, f = v==='film' && filmOf(N().film);
   $('#view').innerHTML = f ? filmView(f) : v==='review' ? reviewView() : homeView();
-  if(f){ wireFilm(f); if(f.exp && f.exp.state==='working') expPoll(f); }
+  if(f){ wireFilm(f); if(f.exp && f.exp.state==='working') expPoll(f); else if(f.exp && f.exp.state==='done') expFetch(f); }
 }
 // redraw what can change by itself without disturbing a playing video or a drag
 function drawSoft(){ if(N().v==='film'){ drawDots(); return; } const pl = $$('#view video').some(v => !v.paused); if(pl) return; draw(); }
@@ -489,7 +489,9 @@ async function prevPoll(f){ clearTimeout(prevT); const x = f.prev; if(!x || x.st
 function expHtml(f){ const x = f.exp; if(!x) return '';
   if(x.state==='working'){ const p = x.total ? Math.round(100 * x.done / x.total) : 0;
     return `<div class="note" style="margin-top:10px">⬇ Exporting on ${esc(pcName(x.pc))}… ${p}%<div class="bar" style="margin:6px 0"><i style="width:${p}%"></i></div><button class="btn" data-act="expStop">✕ Stop</button></div>`; }
-  if(x.state==='done') return `<div class="note" style="margin-top:10px">⬇ Exported ${esc(x.when || '')}: <a href="${esc(viewUrl(x.pc, x.file))}" target="_blank" rel="noopener" download="${esc(x.file.filename)}">▶ Open the mp4</a> (on ${esc(pcName(x.pc))}, in ${esc(x.file.subfolder)}). Export again after changes.</div>`;
+  if(x.state==='done') return `<div class="note" style="margin-top:10px">⬇ Exported ${esc(x.when || '')}${EXPB.key===expKey(x) && EXPB.blob ? '' : EXPB.key===expKey(x) && EXPB.err ? ' (couldn\'t fetch it to the phone: ' + esc(EXPB.err) + ')' : ' · getting it onto the phone…'}
+    <button class="btn pri" data-act="expSave" style="width:100%;padding:13px;margin:8px 0">📲 Save the whole video to Photos</button>
+    <a href="${esc(viewUrl(x.pc, x.file))}" target="_blank" rel="noopener" download="${esc(x.file.filename)}">▶ Open the mp4</a> (on ${esc(pcName(x.pc))}, in ${esc(x.file.subfolder)}). Export again after changes.</div>`;
   return `<div class="note" style="margin-top:10px;color:var(--bad)">⬇ Export didn't finish: ${esc(x.error || x.state)}</div>`; }
 function expClips(f){ const out = [], miss = [];
   f.tracks.forEach((tr, k) => tr.clips.forEach(c => { const fl = fileOf(takeOf(c.take)); if(!fl){ miss.push(c); return; }
@@ -503,13 +505,25 @@ async function exportFilm(f){
     if(!r.ok) throw new Error(r.status===404 && !j.error ? 'paste the newest helper on ' + pcName(pc) + ' first' : j.error || r.status);
     f.exp = {id:j.id, pc, state:'working', done:0, total:0}; save(); expShow(f); expPoll(f); }
   catch(e){ toast('Export: ' + e.message, 5000); } }
+// 📲 Save to Photos (Jordan 2026-11-06: like H3 Deck's ⬇ Save, the share sheet with Save Video): the finished mp4 is fetched onto the
+// phone as soon as the export is done, so the tap can open the share sheet straight away (iOS only allows it right after a tap)
+let EXPB = {key:'', blob:null, err:''};
+const expKey = x => x && x.file ? x.pc + '|' + x.file.subfolder + '/' + x.file.filename : '';
+async function expFetch(f){ const x = f.exp, k = expKey(x); if(!k || EXPB.key===k && (EXPB.blob || EXPB.busy)) return EXPB.blob;
+  EXPB = {key:k, blob:null, err:'', busy:true}; try{ const r = await fetch(viewUrl(x.pc, x.file)); if(!r.ok) throw new Error('HTTP ' + r.status); EXPB.blob = await r.blob(); }catch(e){ EXPB.err = e.message; } EXPB.busy = false; expShow(f); return EXPB.blob; }
+async function expSave(f){ const x = f.exp; if(!x || !x.file) return; let b = EXPB.key===expKey(x) && EXPB.blob; const late = !b;
+  if(!b){ toast('Getting the video…'); b = await expFetch(f); } if(!b){ toast("Couldn't get it: " + (EXPB.err || 'no file')); return; }
+  const file = new File([b], x.file.filename, {type:'video/mp4'});
+  try{ if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file]}); return; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = x.file.filename; a.click(); }
+  catch(e){ if(e && e.name==='NotAllowedError' && late){ toast('It\'s on the phone now: tap 📲 Save again', 5000); return; } if(e && e.name!=='AbortError') toast("Couldn't save it: " + e.message); } }
 function expShow(f){ const el = $('#exp'); if(el && N().v==='film' && N().film===f.id) el.innerHTML = expHtml(f); }
 let expT = 0;
 async function expPoll(f){ clearTimeout(expT); const x = f.exp; if(!x || x.state!=='working') return;
   try{ const r = await fetch(x.pc + '/renderdeck/h3export?id=' + x.id), j = await r.json();
     if(!r.ok){ x.state = 'failed'; x.error = j.error || r.status; }
     else { Object.assign(x, {state:j.state, done:j.done, total:j.total, file:j.file, error:j.error}); if(j.state==='done') x.when = new Date().toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}); }
-    save(); expShow(f); }catch(e){}
+    save(); expShow(f); if(x.state==='done') expFetch(f); }catch(e){}
   if(x.state==='working') expT = setTimeout(() => expPoll(f), 1500); }
 const selText = (sel, t) => `<b style="color:var(--text)">${esc(takeLabel(t))}</b><br>${t && !fileOf(t) && workingOf(t) ? 'Rendering on ' + esc(pcName(t.pc)) + ' · ' : ''}Track ${sel.k + 1} · at ${fmt(sel.c.at)} · uses ${fmt(sel.c.in)}–${fmt(sel.c.out)} of ${fmt(sel.c.dur)}${t ? '' : ' · this take is no longer in H3 Deck'}`;
 function drawTL(f){
@@ -845,6 +859,7 @@ document.addEventListener('click', async ev => {
     case 'guide': { const r = clipOf(f, SEL), fn = deckFn('H3Guide'); if(!r) return; if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return; } fn(r.c.take); return; }
     case 'redo': redoSheet(f); return;
     case 'lead': leadSheet(f); return;
+    case 'expSave': expSave(f); return;
     case 'guideSheet': guideSheet(f); return;
     case 'closeGap': if(GAP){ const d = GAP.b - GAP.a; closeGap(f, GAP); toast('Closed ' + fmt(d) + ' of empty space'); } break;
     case 'delClip': if(GAP && !SEL){ closeGap(f, GAP); break; } { const r = clipOf(f, SEL); if(r){ r.tr.clips.splice(r.tr.clips.indexOf(r.c), 1); SEL = null; save(); } break; }
@@ -872,7 +887,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
