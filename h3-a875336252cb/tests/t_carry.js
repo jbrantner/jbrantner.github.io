@@ -167,6 +167,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   const tr0 = await fr.evaluate(id => { const f = FILM.S.films[0]; return f.tracks.find(tr => tr.clips.some(c => c.take===id)).clips.map(c => ({take:c.take, at:c.at})); }, await page.evaluate(() => H3.S.takes[0].id));
   ok(sent.length===n2 + 1 && nt.toFilm && nt.toFilm.film==='fA' && tr0[tr0.length - 1].take===nt.id && tr0[tr0.length - 1].at >= Math.max(...tr0.slice(0, -1).map(c => c.at)), 'a Render from the Films tab lands on the end of the open film (' + JSON.stringify(nt.toFilm) + ')');
+  // with a clip selected, Render makes more options for that clip (Jordan 2026-11-06) instead of adding to the end
+  const nClipsB = await fr.evaluate(() => { FILM.SEL = window.C1; FILM.draw(); return FILM.S.films[0].tracks.reduce((a, tr) => a + tr.clips.length, 0); });
+  await page.evaluate(() => { H3.S.f.takes = 2; H3.drawAll(); }); await page.waitForTimeout(1700);
+  ok(/options for the selected clip/.test(await page.textContent('#filmFormNote')), 'with a clip selected the form says new takes become options for it');
+  const n3 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
+  const alts = await page.evaluate(() => H3.S.takes.slice(0, 2).map(t => ({id:t.id, clip:t.toFilm && t.toFilm.clip})));
+  await fr.evaluate(() => { FILM.placeNew(); FILM.SEL = window.C1; FILM.draw(); }); await page.waitForTimeout(300);
+  const AO = await fr.evaluate(ids => { const f = FILM.S.films[0], c = FILM.clipOf(f, window.C1).c; return {n:f.tracks.reduce((a, tr) => a + tr.clips.length, 0), alts:c.alts, strip:[...document.querySelectorAll('#vstrip [data-act="useTake"]')].map(b => b.dataset.t)}; }, alts.map(x => x.id));
+  ok(sent.length===n3 + 2 && alts.every(x => x.clip) && AO.n===nClipsB && alts.every(x => AO.alts.includes(x.id) && AO.strip.includes(x.id)), '🎬 the 2 new takes are options under the selected clip, nothing added to the film: ' + JSON.stringify(AO));
+  await page.evaluate(() => { H3.S.f.takes = 1; }); await fr.evaluate(() => { FILM.SEL = null; FILM.draw(); });
   // the words behind every moment: the carry-on starts with its source take's words, then its own; a redo's middle has the redo words
   const sg = await fr.evaluate(([c, r]) => ({c:FILM.segsOf(FILM.takeOf(c)).map(x => [+x.a.toFixed(2), +x.b.toFixed(2), x.text]), r:FILM.segsOf(FILM.takeOf(r)).map(x => [+x.a.toFixed(2), +x.b.toFixed(2), x.text]), mix:FILM.wordsBetween(FILM.takeOf(r), 0.5, 1.5)}), [ct.id, rd[1].id]);
   ok(sg.c.length===1 && sg.c[0][0]===0 && /opens the window/.test(sg.c[0][2]), 'a carry-on clip has its own words from its start (' + JSON.stringify(sg.c) + ')');
