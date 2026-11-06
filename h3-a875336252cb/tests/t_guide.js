@@ -83,9 +83,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const fills = sent.slice(n1);
   const sl = fills.map(s => nodes(s.g, 'Video Slice').map(n => n.inputs.start_time)), cn = fills.map(s => nodes(s.g, 'MiniMaxH3FunControlNetApply').length), pr = fills.map(s => node(s.g, 'MiniMaxH3ReferenceToVideo') && node(s.g, 'MiniMaxH3ReferenceToVideo').inputs.prompt);
   console.log(JSON.stringify({sl, cn, pr}));
-  const ft = await page.evaluate(() => H3.S.takes.filter(t => t.toFilm && t.toFilm.track).map(t => ({s:t.seconds, at:t.toFilm.at, cuts:t.toFilm.cuts, g:!!t.guided})));
+  const ft = await page.evaluate(() => H3.S.takes.filter(t => t.toFilm && t.toFilm.track).map(t => ({s:t.seconds, at:t.toFilm.at, cuts:t.toFilm.cuts, g:!!t.guided, ps:t.pieces.map(p => +p.start.toFixed(2))})));
   console.log(JSON.stringify(ft));
-  ok(ft.length===1 && Math.abs(ft[0].s - 10) < 0.01 && ft[0].at===0 && JSON.stringify(ft[0].cuts)==='[5]' && ft[0].g, '▶ ONE 10 s take over the whole guide, to be cut at 5 s (' + JSON.stringify(ft) + ')');
+  ok(ft.length===1 && Math.abs(ft[0].s - 10) < 0.01 && ft[0].at===0 && JSON.stringify(ft[0].cuts)==='[5]' && ft[0].g && ft[0].ps.length===2 && Math.abs(ft[0].ps[1] - 5) < 0.25, '▶ ONE 10 s take, its parts ending on the guide\'s cut (clip by clip) over the whole guide, to be cut at 5 s (' + JSON.stringify(ft) + ')');
   ok(fills.length >= 1 && cn.every(x => x===2) && sl[0].every(x => x===0), '▶ it follows the guide from 0 s (skeleton + depth)');
   ok(pr.every(p => /A woman walks to the window/.test(p || '')) && pr.every(p => !/\[\d/.test(p || '')), 'the two clips\' same words are joined into one (👥 <Subject 1> sent as "a woman")');
   ok(await fr.evaluate(() => !document.querySelector('#gdN')), 'no "takes of each clip" choice any more');
@@ -100,6 +100,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // ✕ Not the guide
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200); await fr.click('[data-gd="off:1"]');
   ok(await fr.evaluate(() => FILM.guideOpt(FILM.S.films[0], 0, 1)===null), '✕ Not the guide: nothing follows it any more');
+  // 🗑 any track can be deleted, clips and all (asks first); ↶ Undo brings it back
+  const dt = await fr.evaluate(async () => { const f = FILM.S.films[0], n0 = f.tracks.length, c0 = f.tracks[0].clips.length; FILM.draw(); await new Promise(r => setTimeout(r, 100)); const b = document.querySelector('[data-act="delTrack"][data-k="0"]'); if(b) b.click(); await new Promise(r => setTimeout(r, 150));
+    const n1 = FILM.S.films[0].tracks.length; FILM.undo(); await new Promise(r => setTimeout(r, 150)); return {btn:!!b, c0, n0, n1, n2:FILM.S.films[0].tracks.length}; });
+  ok(dt.btn && dt.c0 > 0 && dt.n1===dt.n0 - 1 && dt.n2===dt.n0, '🗑 a track with clips can be deleted, and ↶ Undo brings it back (' + JSON.stringify(dt) + ')');
   // 🦴 progress while the skeleton is read: step, frame n of N, %, time left (from ComfyUI's per-frame progress)
   const gp = await page.evaluate(() => { const G = {g:{'5':{class_type:'DWPreprocessor'}, '6':{class_type:'DepthAnythingV2Preprocessor'}}}; H3.setGuideProg({pc:'Render', stage:'line', p:0, t0:Date.now() - 20000});
     H3.LIVE.px = {t0:Date.now() - 20000, pn:'5', ps:Date.now() - 10000, v:120, max:240}; H3.guideProg(G, 'px'); const a = Object.assign({}, H3GuideProgress());
