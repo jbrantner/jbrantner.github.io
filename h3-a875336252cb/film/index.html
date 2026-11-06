@@ -364,11 +364,18 @@ const doneOf = t => !!fileOf(t) && t.state!=='working' || !!(S.seen[t.id] || {})
 const workingOf = t => t.state==='working' && !(S.seen[t.id] || {}).final && !(S.seen[t.id] || {}).gone;
 const parentOf = t => t.from ? t.from.id : t.redo ? t.redo.src : null; // 🎲 takes from a piece, and ↻ redos, are versions of their take
 const rootOf = t => { let r = t, n = 0; while(r && parentOf(r) && n++ < 20){ const p = takeOf(parentOf(r)); if(!p) break; r = p; } return r; };
-const versionsOf = t => { if(t.lead && t.lead.key) return takes().filter(x => x.lead && x.lead.key===t.lead.key); // ⏪ the takes of one Lead in
+const versions0 = t => { if(t.lead && t.lead.key) return takes().filter(x => x.lead && x.lead.key===t.lead.key); // ⏪ the takes of one Lead in
   if(t.carry && t.carry.key) return takes().filter(x => x.carry && x.carry.key===t.carry.key); // ➕ the takes made from one Carry on
   if(t.toFilm && t.toFilm.key) return takes().filter(x => x.toFilm && x.toFilm.key===t.toFilm.key); // the takes of one Render from the Films tab
   const r = rootOf(t); return takes().filter(x => rootOf(x)===r); };
-const takeLabel = t => t ? (t.combo ? '⛓ ' : t.lead ? '⏪ ' : t.redo ? (t.redo.qp ? '✨ ' : t.redo.nudge ? '⬆ ' : '↻ ') : t.carry ? '➕ ' : t.from ? '🎲 ' : '') + (t.prompt || '').split('\n')[0].slice(0, 60) : 'missing take';
+// a clip's takes include the redos / quality passes made from any of them, and what those were made from (Jordan 2026-11-06: after
+// picking another ➕ take, the ✨ pass of the first one wasn't in the list any more, since a pass isn't part of the carry-on's takes)
+const versionsOf = t => { const all = takes(), set = new Set(versions0(t)); let grew = true;
+  while(grew){ grew = false;
+    for(const x of all) if(!set.has(x) && x.redo && [...set].some(y => y.id===x.redo.src)){ set.add(x); grew = true; }
+    for(const y of [...set]) if(y.redo){ const src = all.find(z => z.id===y.redo.src); if(src){ const more = versions0(src).concat([src]).filter(z => !set.has(z)); if(more.length){ more.forEach(z => set.add(z)); grew = true; } } } }
+  return [...set]; };
+const takeLabel = t => t ? (t.combo ? '⛓ ' : t.lead ? '⏪ ' : t.redo ? (t.redo.big ? '🔍 ' : t.redo.qp ? '✨ ' : t.redo.nudge ? '⬆ ' : '↻ ') : t.carry ? '➕ ' : t.from ? '🎲 ' : '') + (t.prompt || '').split('\n')[0].slice(0, 60) : 'missing take';
 
 // ---------- the PCs: dots, and following H3 Deck's renders while H3 Deck is closed ----------
 const PC = {}; const pcOf = url => PC[url] = PC[url] || {online:false, queue:null};
@@ -745,6 +752,7 @@ function placeNew(){ let ch = false; S.placed = S.placed || {};
       for(let i = 0; i < cuts.length - 1; i++) tr.clips.push({id:uid('c'), take:t.id, in:cuts[i], out:cuts[i + 1], dur:d, at:at + cuts[i]}); continue; }
     if(tf && tf.film && tf.key && !c && !S.placed[tf.key]){ const f = filmOf(tf.film); S.placed[tf.key] = true; ch = true; if(f){ const sel = SEL, ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); SEL = sel || SEL; toast('🎬 The new take is on the end of the film (track ' + (k + 1) + ')' + (doneOf(t) ? '' : ' (rendering)'), 4000); } }
     if(rd && rd.film && rd.key && !S.placed[rd.key] && doneOf(t)){ const f = filmOf(rd.film); S.placed[rd.key] = true; ch = true; const r = f && clipOf(f, rd.clip); if(!r || r.c.take!==rd.src) continue;
+      if(rd.big){ r.c.take = t.id; r.c.dur = secsOf(t) || rd.L / FPS; r.c.in = rd.cin; r.c.out = Math.min(r.c.dur, rd.cout); toast('🔍 A clip is bigger now. ⇄ Versions has the one before.', 4000); continue; }
       const nd = secsOf(t) || r.c.dur, wasEnd = r.c.out >= r.c.dur - 0.05; r.c.take = t.id; r.c.dur = nd; r.c.out = wasEnd ? nd : Math.min(r.c.out, nd); if(r.c.in >= r.c.out - 0.2) r.c.in = 0;
       toast('↻ The redo is in the clip. ⇄ Versions has the others and the original.', 4500); }
   }
@@ -760,6 +768,7 @@ const cutSegs = (L, a, b) => L.filter(x => x.b > a + 1e-3 && x.a < b - 1e-3).map
 function segsOf(t, d, raw){ const L = segsRaw(t, d), E = !raw && t && t.wEdit; return E ? L.map(x => E[x.text]!=null ? Object.assign({}, x, {text:E[x.text]}) : x) : L; }
 function segsRaw(t, d){ d = d || 0; if(!t || d > 8) return [];
   if(t.combo){ let o = 0, out = []; t.combo.parts.forEach(q => { const st = takeOf(q.take); out = out.concat(cutSegs(st ? segsOf(st, d + 1) : [{a:q.in, b:q.out, text:cleanWords(q.prompt)}], q.in, q.out).map(x => ({a:x.a - q.in + o, b:x.b - q.in + o, text:x.text}))); o += q.out - q.in; }); return out.filter(x => x.text); }
+  if(t.redo && t.redo.big){ const o = t.redo.s0 / FPS; return cutSegs(segsOf(takeOf(t.redo.src), d + o + 1), o, o + t.redo.L / FPS).map(x => ({a:x.a - o, b:x.b - o, text:x.text})); } // 🔍 its stretch of the take's words
   if(t.redo && t.redo.qp) return segsOf(takeOf(t.redo.src), d + 1); // ✨ quality pass: the take's own words
   if(t.redo && t.redo.nudge){ const a = t.redo.a / FPS, b = t.redo.b / FPS, base = segsOf(takeOf(t.redo.src), d + 1); return cutSegs(base, 0, a).concat([{a, b, text:cleanWords(t.prompt)}], cutSegs(base, b, 1e9)); }
   if(t.redo){ const a = t.redo.a / FPS, b = t.redo.b / FPS, base = segsOf(takeOf(t.redo.src), d + 1); return cutSegs(base, 0, a).concat([{a, b, text:cleanWords((t.pieces[0] || {}).prompt || t.prompt)}], cutSegs(base, b, 1e9)); }
@@ -837,11 +846,14 @@ const QP_LV = [{v:0.6, label:'Light'}, {v:0, label:'Regenerate'}, {v:0.9, label:
 // on the clip while its pass renders (Jordan 2026-11-06: "did it finish?"): ✨ working / ✨ failed; gone once it swaps in
 function qpBadge(c){ const q = takes().filter(x => x.redo && x.redo.qp && x.redo.clip===c.id && x.redo.src===c.take); if(!q.length) return '';
   const t = q[0]; if(t.state==='failed' || t.upErr) return ' · <b style="color:var(--bad)">✨ failed</b>'; if(t.state==='done' || t.upStage==='done') return ''; return ' · <b style="color:var(--acc,#ff5ca8)">✨ working</b>'; }
+const bigSize = cs => { const t = cs.map(c => takeOf(c.take)).find(x => x && x.w); if(!t) return '×1.5'; const k = Math.min(1.5, 768 / Math.min(t.w, t.h));
+  return t.w + '×' + t.h + ' → ' + Math.floor(t.w * k / 32) * 32 + '×' + Math.floor(t.h * k / 32) * 32; };
 function qpClips(tr){ return tr.clips.slice().sort((a, b) => a.at - b.at).filter(c => fileOf(takeOf(c.take))); }
 async function qualityGo(f, tr, o){ const fn = deckFn('H3Nudge'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return 0; }
   const cs = qpClips(tr); if(!cs.length){ toast('No finished clips on that track'); return 0; }
   const seed = o.seed || Math.floor(Math.random() * 2 ** 31); let n = 0;
-  for(const c of cs){ const k = await fn({take:c.take, a:c.in, b:c.out, prompt:wordsBetween(takeOf(c.take), c.in, c.out) || '', n:1, den:o.den, seed, qp:true, film:f.id, clip:c.id, quiet:true}); n += k ? 1 : 0; }
+  for(const c of cs){ const k = await fn({take:c.take, a:c.in, b:c.out, prompt:wordsBetween(takeOf(c.take), c.in, c.out) || '', n:1, den:o.den, seed, qp:true, scale:o.scale || 1, film:f.id, clip:c.id, quiet:true}); n += k ? 1 : 0; }
+  if(n && o.scale > 1){ toast('🔍 Bigger: ' + n + ' clip' + (n > 1 ? 's' : '') + ' sent, one after another. Each one swaps in when it\'s done (⇄ Versions keeps the one before).', 5500); return n; }
   if(n) toast('✨ Quality pass: ' + n + ' clip' + (n > 1 ? 's' : '') + ' sent. Each one swaps in when it\'s done (⇄ Versions keeps the original).', 5500); return n; }
 function qualitySheet(f, k){ const tr = f.tracks[k]; if(!tr) return; const cs = qpClips(tr), wait = tr.clips.length - cs.length; let den = S.qpDen != null ? S.qpDen : 0;
   $('#sheetCard').innerHTML = `<h3><span>✨ Quality pass · track ${k + 1}</span><button class="btn" data-close>✕</button></h3>
@@ -849,11 +861,15 @@ function qualitySheet(f, k){ const tr = f.tracks[k]; if(!tr) return; const cs = 
     <div class="lab" style="margin-top:10px"><span>Strength</span></div><div class="row" id="qpLv">${QP_LV.map(x => `<button class="btn" data-v="${x.v}">${x.label}</button>`).join('')}</div>
     <div class="note" id="qpHow" style="margin-top:4px"></div>
     <div class="note" style="margin-top:8px">${cs.length} clip${cs.length===1 ? '' : 's'} (${fmt(cs.reduce((a, c) => a + len(c), 0))})${wait ? ' · ' + wait + ' still rendering, left out' : ''}</div>
-    <button class="btn pri" id="qpGo" style="padding:13px;width:100%;margin-top:8px" ${cs.length ? '' : 'disabled'}>✨ Run the quality pass</button>`;
+    <button class="btn pri" id="qpGo" style="padding:13px;width:100%;margin-top:8px" ${cs.length ? '' : 'disabled'}>✨ Run the quality pass</button>
+    <div class="lab" style="margin-top:16px"><span>🔍 Last step: make it bigger</span></div>
+    <div class="note">Once the clips look right, this re-renders every clip on the track ×1.5 with the same model and her pictures (${esc(bigSize(cs))}; MiniMax is made for up to 768 on the short side). Only each clip's own stretch is made, so every clip comes out the same size for the export. It's slower and hotter on Render, so the clips go one after another.</div>
+    <button class="btn" id="qpBig" style="padding:13px;width:100%;margin-top:6px" ${cs.length ? '' : 'disabled'}>🔍 Make the track bigger ×1.5</button>`;
   const lv = () => { $$('#qpLv button').forEach(b => b.classList.toggle('pri', +b.dataset.v===den));
     $('#qpHow').textContent = den===0 ? 'The same as ⬆ Regenerate on a take (what came out on model).' : den < 0.7 ? 'Lighter: keeps more of the original, smaller clean-up.' : 'Stronger: more clean-up and closer to her pictures, but the motion and details can change more.'; };
   $$('#qpLv button').forEach(b => b.onclick = () => { den = S.qpDen = +b.dataset.v; save(); lv(); }); lv();
   $('#qpGo').onclick = async () => { $('#qpGo').disabled = true; if(await qualityGo(f, tr, {den})) closeSheet(); else $('#qpGo').disabled = false; };
+  $('#qpBig').onclick = async () => { $('#qpBig').disabled = true; if(await qualityGo(f, tr, {den:0, scale:1.5})) closeSheet(); else $('#qpBig').disabled = false; };
   $('#sheet').hidden = false; }
 function combineSheet(f){ const r = SEL && clipOf(f, SEL); if(!r) return; const cs = r.tr.clips.slice().sort((a, b) => a.at - b.at), i = cs.indexOf(r.c);
   const on = new Set([r.c.id, (cs[i + 1] || cs[i - 1] || {}).id]);

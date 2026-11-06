@@ -1172,10 +1172,10 @@ const regenLen = t => t.pieces.length===1 ? clipFrames(t) : gridDn(Math.max(5, c
 const clipFrames = t => t.pieces.reduce((a, p) => a + (p.deliv || p.gen), 0);
 function upGraph(t, oi, names){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
-  const u = t.up || {}, part = u.part || null, d = part ? {w:t.w, h:t.h} : upDims(t), src = t.smoothed || t.final;
+  const u = t.up || {}, part = u.part || null, crop = u.crop || null, d = part ? {w:t.w, h:t.h} : upDims(t), src = t.smoothed || t.final;
   const lv = add('LoadVideo', {file:(src.subfolder ? src.subfolder + '/' : '') + src.filename + ' [output]'}), gc = add('GetVideoComponents', {video:[lv, 0]});
   const vae = [add('VAELoader', {vae_name:vaeOf(oi)}), 0];
-  const px = part ? [add('ImageFromBatch', {image:[gc, 0], batch_index:part.s0, length:part.L}), 0] : regenLen(t) < clipFrames(t) ? [add('ImageFromBatch', {image:[gc, 0], batch_index:0, length:regenLen(t)}), 0] : [gc, 0];
+  const px = part ? [add('ImageFromBatch', {image:[gc, 0], batch_index:part.s0, length:part.L}), 0] : crop ? [add('ImageFromBatch', {image:[gc, 0], batch_index:crop.s0, length:crop.L}), 0] : regenLen(t) < clipFrames(t) ? [add('ImageFromBatch', {image:[gc, 0], batch_index:0, length:regenLen(t)}), 0] : [gc, 0];
   const enc = add('VAEEncode', {pixels:px, vae});
   const big = part ? enc : add('MinimaxH3LatentUpscaler3D', {latent:[enc, 0], model_name:regenUpModel(oi), mode:'target dimensions', 'mode.width':d.w, 'mode.height':d.h, align:32, enable_temporal_chunking:true, force_unload:true, device:'cuda', precision:'bf16'});
   const refs = regenRefsOn(t, oi) && names; // ↩ the take's own reference pictures keep the likeness (Ref2VA + the regenerate LoRA)
@@ -1197,7 +1197,9 @@ function upGraph(t, oi, names){
     const mid = [add('ImageFromBatch', {image:ims, batch_index:part.a - part.s0, length:part.b - part.a}), 0]; j = j ? batchOf(add, oi, j, mid) : mid;
     if(part.F - part.b > 0) j = batchOf(add, oi, j, [add('ImageFromBatch', {image:[gc, 0], batch_index:part.b, length:part.F - part.b}), 0]);
     ims = j; }
-  const cv = add('CreateVideo', {images:ims, audio:[gc, 1], fps:FPS});
+  // 🔍 bigger (Films' last step): only the clip's stretch comes out, so its sound is cut to the same stretch
+  const aud = crop ? [add('GetVideoComponents', {video:[add('Video Slice', {video:[lv, 0], start_time:Math.round(crop.s0 / FPS * 1000) / 1000, duration:Math.round(crop.L / FPS * 1000) / 1000, strict_duration:false}), 0]}), 1] : [gc, 1];
+  const cv = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[cv, 0], filename_prefix:t.dir + '/' + t.name + '_up', format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   return {g, save:sv};
 }
@@ -2360,16 +2362,17 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
   if(!fl){ toast('That take has no finished video yet'); return 0; }
   const F = takeFrames(src), a = Math.max(0, Math.min(F - 5, Math.round((+o.a || 0) * FPS))), b = Math.max(a + 5, Math.min(F, Math.round((+o.b || 0) * FPS)));
   let L = gridUp(b - a); if(L > F) L = gridDn(F); const s0 = Math.max(0, Math.min(a - Math.floor((L - (b - a)) / 2), F - L));
-  const part = {a:Math.max(a, s0), b:Math.min(b, s0 + L), s0, L, F}, key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1));
+  const part = {a:Math.max(a, s0), b:Math.min(b, s0 + L), s0, L, F}, key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)), big = +o.scale > 1;
   let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
     const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = o.seed ? +o.seed + k : Math.floor(Math.random() * 2 ** 31);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:F / FPS, carry:null, sm:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upPid:null, upErr:'', smoothed:fl, state:'working', reviewed:false, t0r:Date.now(),
-      up:{scale:1, rep:o.rep || 'light', den:o.den ? +o.den : 0, str:o.str != null ? +o.str : 0.8, refs:o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text, part}, upStage:'start',
-      redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, nudge:true, qp:!!o.qp, a:part.a, b:part.b, s0, L, F, Fout:F},
-      pieces:[{start:0, gen:F, deliv:F, ctx:0, prompt:text, state:'done', file:null}]});
+      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, str:o.str != null ? +o.str : 0.8, refs:o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, big ? {crop:{s0, L}} : {part}), upStage:'start',
+      redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, nudge:true, qp:!!o.qp, big, cin:(part.a - s0) / FPS, cout:(part.b - s0) / FPS, a:part.a, b:part.b, s0, L, F, Fout:big ? L : F},
+      pieces:[{start:0, gen:big ? L : F, deliv:big ? L : F, ctx:0, prompt:text, state:'done', file:null}]});
+    if(big) t.seconds = L / FPS;
     t.pc = await redoPc(t, src, fl, extra) || src.pc; extra[t.pc] = (extra[t.pc] || 0) + 120;
     S.takes.unshift(t); sent++; }
   save(); drawTakes(); tickSoon(200); if(o.quiet) return sent;
