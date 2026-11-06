@@ -62,11 +62,25 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.click('[data-act="split"]'); await page.waitForTimeout(200);
   const sp = await page.evaluate(() => FILM.S.films[0].tracks[1].clips.map(c => [c.at, c.in, c.out].map(x => +x.toFixed(2))));
   ok(sp.length===2 && sp[0][2]===3 && sp[1][0]===6 && sp[1][1]===3, '✂ Split cuts the clip at the playhead (' + JSON.stringify(sp) + ')');
+  // ↶ Undo takes the split back; doing it again brings it back the normal way
+  await page.click('#undoBtn'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => FILM.S.films[0].tracks[1].clips.length)===1, '↶ Undo takes back the split');
+  await page.evaluate(id => { FILM.SEL = id; FILM.PH = 6; FILM.draw(); }, cl[1].id); await page.click('[data-act="split"]'); await page.waitForTimeout(200);
+  // scrubbing near a clip's edge snaps onto it
+  const sn = await page.evaluate(() => { const f = FILM.S.films[0], c = f.tracks[1].clips[0], e = c.at + (c.out - c.in), w = document.querySelector('#tlw'); w.scrollLeft = Math.round((e - 4 / f.pps) * f.pps); return new Promise(r => setTimeout(() => r({ph:FILM.PH, e}), 400)); });
+  ok(Math.abs(sn.ph - sn.e) < 1e-6, 'scrubbing a few pixels from a clip\'s edge snaps onto the edge (' + JSON.stringify(sn) + ')');
   // versions: swap for the 🎲 take
   await page.evaluate(() => FILM.draw()); await page.waitForTimeout(200);
   ok(await page.$$eval('#vstrip [data-act="useTake"]', p => p.length)===2, 'the selected clip shows its takes under it (the take and its 🎲 take)');
   await page.click('#vstrip [data-t="tB2"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => FILM.clipOf(FILM.S.films[0], FILM.SEL).c.take)==='tB2', 'picking a version swaps the clip');
+  // ⤓ One track: what plays now becomes the clips of one track; ↶ Undo brings the tracks back
+  const fl0 = await page.evaluate(() => { const f = FILM.S.films[0]; return {n:f.tracks.length, secs:FILM.filmSecs(f), at:[0.5, 2, 4, 7, 9].map(t => { const c = FILM.activeAt(f, t); return c && [c.take, +(c.in + t - c.at).toFixed(2)]; })}; });
+  await page.evaluate(() => { window.confirm = () => true; }); await page.click('[data-act="flatten"]'); await page.waitForTimeout(200);
+  const fl1 = await page.evaluate(() => { const f = FILM.S.films[0]; return {n:f.tracks.length, secs:FILM.filmSecs(f), at:[0.5, 2, 4, 7, 9].map(t => { const c = FILM.activeAt(f, t); return c && [c.take, +(c.in + t - c.at).toFixed(2)]; })}; });
+  ok(fl1.n===1 && fl1.secs===fl0.secs && JSON.stringify(fl1.at)===JSON.stringify(fl0.at), '⤓ One track merges the tracks and the film plays exactly the same (' + JSON.stringify([fl0, fl1]) + ')');
+  await page.click('#undoBtn'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => FILM.S.films[0].tracks.length)===fl0.n, '↶ Undo brings the tracks back');
   // ⬇ Export sends the edit list (files, trims, track numbers) to the PC and shows its progress, then a link
   await page.click('[data-act="export"]'); await page.waitForTimeout(400);
   const eb = EXP.body || {clips:[]};
