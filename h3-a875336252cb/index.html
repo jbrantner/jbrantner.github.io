@@ -252,6 +252,8 @@ body.ftab .go{display:none}
         <div class="sw" id="smLoopSw" style="margin-top:8px"><div><div class="t">🔁 Make it loop</div><div class="d">Swaps the window's halves so the seam lands in the middle, and MiniMax paints across it. The clip's end then runs straight into its start.</div></div><div class="tog"></div></div>
         <div id="smLoopBody" hidden style="margin-top:8px"><div class="lab"><span>Free frames at the seam</span><b id="smSeamOut">12</b></div><input type="range" id="smSeam" min="4" max="32" step="2" value="12" style="width:100%">
           <div class="note" id="smLoopNote" style="margin-top:2px"></div></div>
+        <div id="smGapBody" hidden style="margin-top:8px"><div class="lab"><span>🪄 Free frames at each join</span><b id="smGapOut">16</b></div><input type="range" id="smGap" min="4" max="48" step="2" value="16" style="width:100%">
+          <div class="note" style="margin-top:2px">No frame is pinned this close to a join between two clips, so MiniMax paints a new path from one clip into the next instead of copying the jump. More frames = a longer, softer blend.</div></div>
         <div class="sw" id="smSpcSw" style="margin-top:8px"><div><div class="t">📐 Even out the spacing</div><div class="d">Tracks points through the window, finds jumps and eases the pinned frames around them</div></div><div class="tog"></div></div>
         <div id="smSpcBody" hidden style="margin-top:8px">
           <canvas id="smChart" style="width:100%;height:110px;display:block;border:1px solid var(--line);border-radius:10px;background:var(--bg)"></canvas>
@@ -708,11 +710,16 @@ function smRefCount(){ let n = 0; try{ n = castTake({prompt:S.f.prompt || '', im
   if(S.f.smUp && S.f.smUpRefs) n += Math.min(REGEN_REFS, (S.f.smRefs || []).filter(id => S.media[id]).length); return n; }
 function smoothPlan(){ const g = smoothTotal(), one = [{start:0, gen:g, deliv:g, ctx:0}]; if(S.f.smLoop) return one;
   const {w, h} = dims(), tpf = (w / 32) * (h / 32), every = +S.f.smEvery || 4, nr = smRefCount(); if(smTok(g, every, tpf, nr) <= SM_TOK) return one;
-  for(let n = 2; n <= 16; n++){ const K = Math.max(n, Math.ceil((g + (n - 1) - 5 * n) / 17)), ks = Array.from({length:n}, (_, i) => Math.floor(K / n) + (i < K % n ? 1 : 0)), gens = ks.map(k => 17 * k + 5);
+  let fb = null; for(let n = 2; n <= 16; n++){ const K = Math.max(n, Math.ceil((g + (n - 1) - 5 * n) / 17)), ks = Array.from({length:n}, (_, i) => Math.floor(K / n) + (i < K % n ? 1 : 0)), gens = ks.map(k => 17 * k + 5);
     if(gens.some(L => smTok(L, every, tpf, nr) > SM_TOK)) continue;
-    const ex = gens.reduce((a, L) => a + L, 0) - g, ov = Array.from({length:n - 1}, (_, i) => Math.floor(ex / (n - 1)) + (i < ex % (n - 1) ? 1 : 0)); let at = 0;
-    return gens.map((L, i) => { const skip = i ? ov[i - 1] : 0; if(i) at -= skip; const p = {start:at / FPS, gen:L, deliv:L - skip, ctx:0, skip}; at += L; return p; }); }
-  return one; }
+    const ex = gens.reduce((a, L) => a + L, 0) - g, ov = Array.from({length:n - 1}, (_, i) => Math.floor(ex / (n - 1)) + (i < ex % (n - 1) ? 1 : 0));
+    const lay = G => { let at = 0; return G.map((L, i) => { const skip = i ? ov[i - 1] : 0; if(i) at -= skip; const p = {start:at / FPS, gen:L, deliv:L - skip, ctx:0, skip}; at += L; return p; }); };
+    // 🪄 blend: the windows don't share motion, so a join must sit well inside one window, never on a seam between two
+    const J = blendJoins(); if(!J.length) return lay(gens);
+    const far = P => Math.min(...J.map(j => Math.min(...P.slice(1).map(p => Math.abs(j - Math.round(p.start * FPS + p.skip))))));
+    let best = null; for(let r = 0; r < n; r++){ const P = lay(gens.slice(r).concat(gens.slice(0, r))); if(!best || far(P) > far(best)) best = P; }
+    if(far(best) >= (+S.f.smGap || 16) / 2 + 6) return best; fb = fb || best; }
+  return fb || one; }
 // 🔁 loop (Jordan 2026-11-02): output frame o shows source frame (o + h) mod L, h = half the window, so the clip's
 // own wrap (last frame → first) sits in the middle at o = L - h and the render's ends are the window's continuous middle.
 // No pins within seam/2 of the wrap: MiniMax paints the turn from the motion on both sides, so momentum carries through.
@@ -816,6 +823,14 @@ function spacingPlan(d, L, every, strength, punch){
   const jumps = []; d.slice(0, L - 1).forEach((x, i) => { if(x > 3 && x > 2.5 * med(i)) jumps.push(i); });
   return {keys, skipped, jumps, t, moved:keys.filter(([o, s]) => o!==s).length};
 }
+// 🪄 Blend (Jordan 2026-11-07: "I was hoping to have a jump actually blend together but it looks exactly the same"): pinned frames on
+// both sides of a join copied the jump, so no frame is pinned for a stretch around each join and MiniMax paints its way across it
+const blendOn = () => !!(S.f.sm && S.f.smBlend && S.f.smBlend.vid===S.f.smVid && !S.f.smLoop);
+const blendJoins = () => blendOn() ? S.f.smBlend.bounds.slice(1).map(b => Math.round(b.off * FPS)) : [];
+function blendGap(keys, L){ const J = blendJoins(); if(!J.length) return keys; const r = Math.max(2, (+S.f.smGap || 16) / 2);
+  return keys.filter(([o]) => o===0 || o===L - 1 || !J.some(j => o >= j - r && o < j + r)); }
+function smKeysFor(L){ const P = currentSpacing(), lp = S.f.smLoop && !P ? loopKeys(L, +S.f.smEvery || 4, +S.f.smSeam || 12) : null, k = P ? P.keys : lp ? lp.keys : null;
+  if(!blendJoins().length) return k; return blendGap(k || smoothKeys(L, +S.f.smEvery || 4).map(x => [x, x]), L); }
 function currentSpacing(){ const f = S.f; if(!f.sm || !f.smSpc || !f.smVid) return null; const R = SPC[spcKey()]; if(!R || !R.d) return null;
   return planSpacing(R.d, smoothTotal()); }
 // the spacing plan for the form; in 🔁 loop mode the measured steps are put in the swapped order first (the wrap step,
@@ -1321,7 +1336,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 }
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
-  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(), lp = f.smLoop && !P ? loopKeys(smoothTotal(), +f.smEvery || 4, +f.smSeam || 12) : null; return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!f.smLoop && !!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, punch:P ? +f.smPunch || 0 : 0, loop:f.smLoop ? +f.smSeam || 12 : 0, keys:P ? P.keys : lp ? lp.keys : null}; })() : null;
+  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(), lp = f.smLoop && !P ? loopKeys(smoothTotal(), +f.smEvery || 4, +f.smSeam || 12) : null; return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!f.smLoop && !!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, punch:P ? +f.smPunch || 0 : 0, loop:f.smLoop ? +f.smSeam || 12 : 0, keys:smKeysFor(smoothTotal()), gap:blendJoins().length ? +f.smGap || 16 : 0}; })() : null;
   const upImgs = sm && f.smUp && f.smUpRefs ? (f.smRefs || []).filter(id => S.media[id]).map(id => ({id})) : [];
   const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:upImgs.length > 0} : null;
   const ctl = !sm && f.ctl && f.ctlVid && S.media[f.ctlVid] ? {vid:f.ctlVid, str:+f.ctlStr, end:+f.ctlEnd, face:f.faceOn!==false ? faceOf(S.media[f.ctlVid]) : null} : null;
@@ -1767,6 +1782,7 @@ function drawInputs(){
   $$('#smEverySeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smEvery || 4)));
   $('#smSoundSw').classList.toggle('on', !!f.smSound && !(sv && sv.sound===false)); $('#smSoundSw').hidden = !!(sv && sv.sound===false) || !!f.smLoop;
   $('#smLoopSw').classList.toggle('on', !!f.smLoop); $('#smLoopBody').hidden = !f.smLoop;
+  $('#smGapBody').hidden = !blendOn(); $('#smGap').value = +f.smGap || 16; $('#smGapOut').textContent = +f.smGap || 16;
   if(f.smLoop){ $('#smSeam').value = +f.smSeam || 12; $('#smSeamOut').textContent = +f.smSeam || 12; const L0 = smoothTotal(), lp = currentSpacing() || loopKeys(L0, +f.smEvery || 4, +f.smSeam || 12);
     $('#smLoopNote').textContent = 'A ' + fmtS(L0 / FPS) + ' loop. The seam is at ' + fmtS(lp.seamAt / FPS) + ' in the new clip, and MiniMax paints the ' + (Math.min(...lp.keys.map(([o]) => o).filter(o => o > lp.seamAt)) - Math.max(...lp.keys.map(([o]) => o).filter(o => o < lp.seamAt)) - 1) + ' frames around it with nothing pinned, so it can turn the motion smoothly. More free frames = a softer turn, but it drifts further from your clip there. The sound is left out (it would jump at the seam). 📐 spacing and 🎬 Punch work on the looped order, seam included.'; }
   drawSpacing();
@@ -1776,7 +1792,7 @@ function drawInputs(){
     $('#smUpRefSlots').innerHTML = rs.map((id, k) => `<div class="slot has ${f.smUpRefs && k < REGEN_REFS ? '' : 'off'}"><img src="${S.media[id].thumb || ''}" alt=""><span class="tag">Picture ${k + 1}</span><button class="x" data-rm="smRef" data-i="${k}">✕</button></div>`).join('')
       + (rs.length < REGEN_REFS ? addSlot('smref', 'Reference picture') : ''); }
   if(f.smUp){ const d = dims(), fake = {w:d.w, h:d.h, up:{scale:+f.smUpX || 1.5}}; $('#smUpNote').textContent = d.w + '×' + d.h + ' → ' + upSize(fake) + '. Its own job after the smoothing, on the same PC (MiniMax is unloaded first); the app has to be open for it to start, like joining. Medium + strength 0.8 is the best balance from the tests (least grain, face stays close). Full = most detail but more grain, the face drifts and it runs hottest. Light repaints least. Render runs hot: 2.3 s took about 2 min and peaked at 86°C, so keep clips short there.'; }
-  if(f.sm){ const L = smoothTotal(), P = currentSpacing() || (f.smLoop ? loopKeys(L, +f.smEvery || 4, +f.smSeam || 12) : null), n = P ? P.keys.length : smoothKeys(L, +f.smEvery || 4).length;
+  if(f.sm){ const L = smoothTotal(), P = currentSpacing() || (f.smLoop ? loopKeys(L, +f.smEvery || 4, +f.smSeam || 12) : null), n = (smKeysFor(L) || smoothKeys(L, +f.smEvery || 4)).length;
     $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s).' + (smoothPlan().length > 1 ? ' To fit in 8 GB it renders as ' + smoothPlan().length + ' parts of about ' + fmtS(smoothPlan()[0].gen / FPS) + ', one after another on one PC, joined at the end.' : '') + ' The prompt is optional: describe the action to steer the in-betweens.'
       + (sv.fps && Math.abs(sv.fps - FPS) > 0.1 ? ' Your clip is ' + sv.fps + ' fps; MiniMax makes 24 fps, so the nearest frames are used.' : '') + (sv.sound===false ? ' This clip has no sound.' : '')
       : 'Pick a video. It goes to the PC as it is, and the frames are taken from it there.'; }
@@ -2119,6 +2135,7 @@ $('#smUpRep').onclick = e => { const b = e.target.closest('button'); if(!b) retu
 $('#smUpStr').oninput = e => { S.f.smUpStr = +e.target.value; $('#smUpStrV').textContent = S.f.smUpStr.toFixed(2); save(); };
 $('#smSoundSw').onclick = () => { S.f.smSound = !S.f.smSound; save(); drawInputs(); };
 $('#smLoopSw').onclick = () => { S.f.smLoop = !S.f.smLoop; save(); drawAll(); };
+$('#smGap').oninput = e => { S.f.smGap = +e.target.value; save(); drawInputs(); drawGo(); };
 $('#smSeam').oninput = e => { S.f.smSeam = +e.target.value; save(); drawInputs(); drawGo(); };
 $('#smStart').oninput = e => { S.f.smStart = +e.target.value; save(); drawInputs(); drawShot(); };
 $('#smEverySeg').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smEvery = +b.dataset.v; save(); drawAll(); };
@@ -2523,6 +2540,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
