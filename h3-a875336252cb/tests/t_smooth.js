@@ -304,8 +304,8 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   // 🪄 blend of 14 s: the parts split away from the joins (windows share no motion), and nothing is pinned near them
   { const B = await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:true, smUp:false, smLoop:false, smSpc:false, smEvery:4, smStart:0, seconds:14.4, mp:0.41, smGap:16,
       smBlend:{vid:f.smVid, bounds:[{off:0, in:0, out:4.8}, {off:4.8, in:0, out:4.8}, {off:9.6, in:0, out:4.8}]}}); const L = H3.smoothTotal(), k = H3.smKeysFor(L), P = H3.smoothPlan();
-      const r = {J:H3.blendJoins(), near:k.filter(([o]) => H3.blendJoins().some(j => Math.abs(o - j) < 8)).length, seams:P.slice(1).map(p => Math.round(p.start * 24 + p.skip)), n:P.length}; f.smBlend = null; return r; });
-    ok(B.J.join()==='115,230' && B.near===0 && B.n > 1 && B.seams.every(x => B.J.every(j => Math.abs(x - j) >= 14)), '🪄 a long blend splits away from its joins and pins nothing near them: ' + JSON.stringify(B)); }
+      const r = {J:H3.blendJoins(), near:k.filter(([o]) => H3.blendJoins().some(j => Math.abs(o - j) < 8)).length, seams:P.slice(1).map(p => Math.round(p.start * 24 + p.skip)), n:P.length}; const d = Array.from({length:L}, (_, i) => i===114 || i===229 ? 80 : 2); r.drift = Math.max(...H3.planSpacing(d, L).keys.map(([o, x]) => Math.abs(o - x))); f.smBlend = null; return r; });
+    ok(B.J.join()==='115,230' && B.near===0 && B.n > 1 && B.seams.every(x => B.J.every(j => Math.abs(x - j) >= 14)) && B.drift <= 1, '🪄 a long blend splits away from its joins, pins nothing near them, and 📐 spacing doesn\'t read the cuts as jumps to even out: ' + JSON.stringify(B)); }
   // 🏷 a LoRA's trigger words are remembered: pick it again later and they fill in
   { const LW = await page.evaluate(async () => { const f = H3.S.f; f.loras = [{name:'', str:1, words:''}]; H3.drawAll(); const sel = document.querySelector('#loraList [data-ln]');
       const opt = [...sel.options].map(o => o.value).find(v => v); if(!opt) return {none:true}; sel.value = opt; sel.dispatchEvent(new Event('change', {bubbles:true}));
