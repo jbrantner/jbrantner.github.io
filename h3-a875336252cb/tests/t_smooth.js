@@ -57,7 +57,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     if(p==='/view'){ views.push(u.searchParams.get('filename')); return rt.fulfill({status:200, contentType:'video/mp4', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(path.join(MEDIA, 'v24.mp4'))}); }
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   await page.addInitScript(pc => { localStorage.clear(); window.H3_PCS = [{name:'Render', url:pc, on:true, speed:1}]; }, PC);
-  await page.goto('http://127.0.0.1:8011/index.html');
+  await page.goto('http://127.0.0.1:8011/index.html'); await page.evaluate(() => { document.getElementById('smMore').open = true; document.getElementById('moreTools').open = true; });
   await page.waitForFunction(() => document.querySelectorAll('#model option').length >= 1 && /DaSiWa/.test(document.querySelector('#model').textContent), null, {timeout:20000});
 
   // ---- the MP4 reader ----

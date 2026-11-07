@@ -55,6 +55,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // 🎞 Films: a film with that take on it
   await page.click('[data-tab="films"]'); await page.waitForTimeout(2500);
   const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
+  await fr.waitForFunction(() => window.FILM && FILM.S).catch(() => {}); await fr.evaluate(() => { FILM.S.moreTools = true; FILM.draw && FILM.draw(); }); // 🧰 the tucked-away tools too
   await fr.evaluate(() => { const f = {id:'fA', name:'Film', tracks:[{id:'tr1', clips:[]}, {id:'tr2', clips:[]}], pps:24}; FILM.S.films.unshift(f); const c = FILM.addClip(f, FILM.takeOf('tA'), 0); const c2 = FILM.addClip(f, FILM.takeOf('tA'), 0); window.C1 = c.id; window.C2 = c2.id; FILM.go({v:'film', film:'fA'}); });
   await page.waitForTimeout(400);
   const sent0 = sent.length;
