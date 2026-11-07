@@ -321,7 +321,11 @@ body.ftab .go{display:none}
     <div class="body">
       <div class="chips" id="aspects"></div>
       <div class="shapeStage"><div id="shapeBox"></div><span id="shapeLab"></span></div>
-      <div>
+      <div id="customWH" hidden>
+        <div class="row" style="align-items:center;gap:8px"><input type="number" id="cw" min="256" max="1344" step="32" inputmode="numeric" style="width:96px"> <b>×</b> <input type="number" id="ch" min="256" max="1344" step="32" inputmode="numeric" style="width:96px"> <button class="chip" id="cSwap" type="button">⇄</button></div>
+        <div class="note" id="customNote" style="margin-top:4px"></div>
+      </div>
+      <div id="resRow">
         <div class="lab"><span>Resolution</span><b id="resOut"></b></div>
         <input type="range" id="res" min="0.15" max="1.03" step="0.01" value="0.41" style="width:100%">
       </div>
@@ -612,9 +616,13 @@ const avaeOf = oi => combo(oi, 'VAELoader', 'vae_name').find(n => /minimax_h3_au
 const ASPECTS = [['16:9',16/9],['9:16',9/16],['1:1',1],['4:3',4/3],['3:4',3/4],['21:9',21/9],['2:3',2/3],['3:2',3/2]];
 const PRESETS = {land:[[640,352],[864,480],[1024,576],[1280,736]], port:[[352,640],[480,864],[576,1024],[736,1280]], sq:[[512,512],[640,640],[768,768],[960,960]]};
 const MAXPX = 768 * 1344; // MiniMax H3's own canvas cap
-function ratio(){ const f = S.f; if(f.sm){ const m = S.media[f.smVid]; if(m && m.w) return m.w / m.h; } if(f.aspect==='pic'){ const m = f.fl && S.media[f.first]; if(m && m.w) return m.w / m.h; return 16/9; } return (ASPECTS.find(a => a[0]===f.aspect) || ASPECTS[0])[1]; }
+function ratio(){ const f = S.f; if(f.sm){ const m = S.media[f.smVid]; if(m && m.w) return m.w / m.h; } if(f.aspect==='pic'){ const m = f.fl && S.media[f.first]; if(m && m.w) return m.w / m.h; return 16/9; } if(f.aspect==='custom') return (+f.cw || 640) / (+f.ch || 352); return (ASPECTS.find(a => a[0]===f.aspect) || ASPECTS[0])[1]; }
+// ✏ Custom canvas (Jordan 2026-11-07): her own width × height, snapped to MiniMax's 32 px grid, shrunk (same shape) if over its cap
+function customDims(){ const f = S.f; let w = Math.max(256, Math.round((+f.cw || 640) / 32) * 32), h = Math.max(256, Math.round((+f.ch || 352) / 32) * 32);
+  if(w * h > MAXPX){ const k = Math.sqrt(MAXPX / (w * h)); w = Math.floor(w * k / 32) * 32; h = Math.floor(h * k / 32) * 32; } return {w, h}; }
 function dims(){ // carrying on a MiniMax clip: keep its exact size, so it joins without resizing
   { const m = contOn() && S.media[S.f.first]; if(m && m.w && m.w % 32===0 && m.h % 32===0 && m.w * m.h <= MAXPX) return {w:m.w, h:m.h}; }
+  if(S.f.aspect==='custom' && !S.f.sm) return customDims();
   const r = ratio(), px = Math.min(MAXPX, S.f.mp * 1e6); let w = Math.max(256, Math.round(Math.sqrt(px * r) / 32) * 32), h = Math.max(256, Math.round(w / r / 32) * 32);
   while(w * h > MAXPX){ if(w >= h) w -= 32; else h -= 32; } return {w, h}; }
 
@@ -1773,7 +1781,10 @@ function drawModel(){
 }
 function drawCanvas(){
   const f = S.f, {w, h} = dims(), r = w / h;
-  $('#aspects').innerHTML = ASPECTS.map(a => `<button class="chip ${f.aspect===a[0] ? 'on' : ''}" data-asp="${a[0]}">${a[0]}</button>`).join('') + (f.fl && f.first ? `<button class="chip ${f.aspect==='pic' ? 'on' : ''}" data-asp="pic">🖼 Like the first frame</button>` : '');
+  $('#aspects').innerHTML = ASPECTS.map(a => `<button class="chip ${f.aspect===a[0] ? 'on' : ''}" data-asp="${a[0]}">${a[0]}</button>`).join('') + (f.fl && f.first ? `<button class="chip ${f.aspect==='pic' ? 'on' : ''}" data-asp="pic">🖼 Like the first frame</button>` : '') + `<button class="chip ${f.aspect==='custom' ? 'on' : ''}" data-asp="custom">✏ Custom</button>`;
+  const cu = f.aspect==='custom'; $('#customWH').hidden = !cu; $('#resRow').hidden = cu; $('#presets').hidden = cu;
+  if(cu){ for(const [id, k] of [['#cw', 'cw'], ['#ch', 'ch']]) if(document.activeElement!==$(id)) $(id).value = f[k] || (k==='cw' ? 640 : 352);
+    const want = (+f.cw || 640) + '×' + (+f.ch || 352), got = w + '×' + h; $('#customNote').textContent = want===got ? 'Sent as ' + got + '.' : 'Sent as ' + got + (w * h >= MAXPX * 0.97 || (Math.round((+f.cw || 640) / 32) * 32) * (Math.round((+f.ch || 352) / 32) * 32) > MAXPX ? ' (MiniMax takes up to ' + (MAXPX / 1e6).toFixed(2) + ' MP, so it was shrunk, same shape)' : ' (MiniMax needs sizes in steps of 32)') + '.'; }
   const set = r > 1.05 ? PRESETS.land : r < 0.95 ? PRESETS.port : PRESETS.sq;
   $('#presets').innerHTML = set.map(([pw, ph]) => `<button class="chip ${Math.abs(pw * ph / 1e6 - f.mp) < 0.03 ? 'on' : ''}" data-pre="${pw}x${ph}">${pw}×${ph}</button>`).join('');
   $('#res').value = f.mp; $('#resOut').textContent = w + ' × ' + h + ' · ' + (w * h / 1e6).toFixed(2) + ' MP';
@@ -1888,7 +1899,7 @@ document.addEventListener('click', async e => {
   const h3 = e.target.closest('.block>h3'); if(h3){ const b = h3.parentElement; S.open[b.id] = b.classList.contains('shut'); b.classList.toggle('shut'); save(); return; }
   const f = S.f, d = e.target.closest('[data-mocap],[data-mocap2],[data-asp],[data-pre],[data-add],[data-rm],[data-tg],[data-opt],[data-ins],[data-shot],[data-w],[data-act],[data-auto],[data-piece]'); if(!d) return;
   const ds = d.dataset;
-  if(ds.asp){ f.aspect = ds.asp; }
+  if(ds.asp){ if(ds.asp==='custom' && f.aspect!=='custom' && !f.cw){ const d = dims(); f.cw = d.w; f.ch = d.h; } f.aspect = ds.asp; }
   else if(ds.pre){ const [w, h] = ds.pre.split('x').map(Number), r = w / h, a = ASPECTS.find(x => Math.abs(x[1] - r) < 0.02); if(a && f.aspect!=='pic') f.aspect = a[0]; f.mp = Math.round(w * h / 1e4) / 100; }
   else if(ds.mocap2!=null){ const x = MOCAP.list.filter(y => y.it.mode!=='mask')[+ds.mocap2]; if(x) await useMocap(x, false, 2); return; }
   else if(ds.mocap){ if(ds.mocap==='r'){ MOCAP.err = ''; pingAll().then(pullInbox); return; } const x = MOCAP.list.filter(y => y.it.mode!=='mask')[+ds.mocap]; if(x) await useMocap(x, false); return; }
@@ -2093,6 +2104,8 @@ $('#loraList').oninput = e => { const row = e.target.closest('[data-li]'); if(!r
   if(e.target.matches('[data-lw]')) l.words = e.target.value; save(); };
 $('#loraList').onclick = e => { const x = e.target.closest('[data-lx]'); if(!x) return; S.f.loras.splice(+x.closest('[data-li]').dataset.li, 1); save(); drawModel(); drawGo(); };
 $('#res').oninput = e => { S.f.mp = +e.target.value; save(); drawCanvas(); };
+for(const k of ['cw', 'ch']){ $('#' + k).oninput = e => { const v = +e.target.value; if(v >= 64){ S.f[k] = v; save(); drawCanvas(); drawGo(); } }; $('#' + k).onchange = () => { const d = customDims(); S.f.cw = d.w; S.f.ch = d.h; save(); $('#cw').value = d.w; $('#ch').value = d.h; drawCanvas(); }; }
+$('#cSwap').onclick = () => { const f = S.f, w = +f.cw || 640; f.cw = +f.ch || 352; f.ch = w; save(); $('#cw').value = f.cw; $('#ch').value = f.ch; drawCanvas(); drawGo(); };
 // Jordan 2026-11-03: the number of takes right by the Render button (it was only under More)
 $('#goDn').onclick = () => $('#takesDn').onclick(); $('#goUp').onclick = () => $('#takesUp').onclick();
 $('#takesDn').onclick = () => { S.f.takes = Math.max(1, S.f.takes - 1); save(); drawMore(); drawGo(); };

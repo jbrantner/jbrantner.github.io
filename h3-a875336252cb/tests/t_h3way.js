@@ -101,6 +101,17 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const P = H3.h3Prompt({text:'[Shot 1] she walks to the window [shot 2] close-up of her eyes', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
     const B = H3.h3Prompt({text:'she walks in [Shot 2] her face', secs:5}); return {v1, v2, P, B}; });
   ok(SH.v1==='[Shot 1] she walks to the window\n[Shot 2] ' && /\n\[Shot 3\] $/.test(SH.v2), '🎬 ＋ Shot numbers the shots in the Shot box: ' + JSON.stringify([SH.v1, SH.v2]));
+  // ✏ Custom canvas (Jordan 2026-11-07): her own width × height, snapped to 32, shrunk if over MiniMax's cap
+  await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.fl = false; H3.S.f.first = null; H3.drawAll(); document.querySelector('#bCanvas').classList.remove('shut'); });
+  await page.click('[data-asp="custom"]'); await page.waitForTimeout(100);
+  await page.fill('#cw', '1000'); await page.fill('#ch', '400'); await page.waitForTimeout(100);
+  const CU = await page.evaluate(() => ({d:H3.dims(), shown:!document.querySelector('#customWH').hidden, res:document.querySelector('#resRow').hidden, note:document.querySelector('#customNote').textContent, snap:H3.snapshot()}));
+  await page.fill('#cw', '1344'); await page.fill('#ch', '1344'); await page.waitForTimeout(100);
+  const CB = await page.evaluate(() => H3.dims());
+  await page.click('#cSwap'); const CS = await page.evaluate(() => [H3.S.f.cw, H3.S.f.ch]);
+  await page.click('[data-asp="16:9"]'); const C0 = await page.evaluate(() => ({d:H3.dims(), shown:!document.querySelector('#customWH').hidden}));
+  ok(CU.shown && CU.res && CU.d.w===992 && CU.d.h===416 && CU.snap.w===992 && /992×416/.test(CU.note) && CB.w===CB.h && CB.w * CB.h <= 768 * 1344 && CB.w % 32===0 && CS.join()===[CB.w, CB.h].join() && !C0.shown && C0.d.w > C0.d.h,
+    '✏ Custom canvas: width × height snapped to 32, over the cap shrunk same shape, back to a ratio chip hides it: ' + JSON.stringify({d:CU.d, shown:CU.shown, res:CU.res, sw:CU.snap.w, note:CU.note, big:CB, CS, back:C0}));
   ok(/\n\[Shot 1\] she walks to the window\n\[Shot 2\] close-up of her eyes/.test(SH.P) && /appears in every shot/.test(SH.P) && /multi-shot/.test(SH.P) && /\[Shot 1\] Live-action, cinematic\. She walks in\n\[Shot 2\] her face/.test(SH.B), '🎬 the H3 prompt puts each shot on its own line: ' + JSON.stringify(SH.P.slice(-400)));
   await page.click('#h3Peek summary'); await page.screenshot({path:path.join(__dirname, 'h3way.png'), fullPage:false, clip:{x:0, y:0, width:390, height:1400}}).catch(() => {});
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
