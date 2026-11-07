@@ -696,7 +696,20 @@ const contOn = () => { const f = S.f, m = f.fl && !f.sm && S.media[f.first]; ret
 const SM_MAX = 15, SM_PROMPT = 'The same shot carries on with smooth, steady, natural motion. Nothing new appears and there are no cuts.';
 function smoothSpan(){ const f = S.f, m = S.media[f.smVid] || {}, dur = m.dur || 0, start = Math.min(+f.smStart || 0, Math.max(0, dur - 0.25));
   return {start:Math.round(start * FPS) / FPS, avail:dur ? dur - start : SM_MAX}; }
-function smoothPlan(){ const {avail} = smoothSpan(), secs = Math.min(+S.f.seconds || 5, SM_MAX, avail); const up = gridUp(secs * FPS), g = up <= avail * FPS + 0.5 ? up : gridDn(Math.max(5, avail * FPS)); return [{start:0, gen:g, deliv:g, ctx:0}]; }
+function smoothTotal(){ const {avail} = smoothSpan(), secs = Math.min(+S.f.seconds || 5, SM_MAX, avail); const up = gridUp(secs * FPS); return up <= avail * FPS + 0.5 ? up : gridDn(Math.max(5, avail * FPS)); }
+// 8 GB (Jordan 2026-11-07, a 14 s blend ran out of memory on Render: 345 frames + 70 pinned frames ≈ 68k tokens): a long smoothing is
+// split into windows that each fit (a 5 s window pinning every 4th frame at 864×480, ~28k tokens, is what has worked on Render). The windows run one after another on
+// one PC and need nothing from each other (the pinned frames hold them to the video); each overlaps the one before by a few frames,
+// which it drops, so the joined clip is exactly as long as one window would have been.
+const SM_TOK = 28500, smLat = g => g <= 5 ? 2 : ((g - 5) / 17 | 0) * 5 + 2;
+const smTok = (L, every, tpf) => (smLat(L) + smoothKeys(L, every).length) * tpf;
+function smoothPlan(){ const g = smoothTotal(), one = [{start:0, gen:g, deliv:g, ctx:0}]; if(S.f.smLoop) return one;
+  const {w, h} = dims(), tpf = (w / 32) * (h / 32), every = +S.f.smEvery || 4; if(smTok(g, every, tpf) <= SM_TOK) return one;
+  for(let n = 2; n <= 16; n++){ const K = Math.max(n, Math.ceil((g + (n - 1) - 5 * n) / 17)), ks = Array.from({length:n}, (_, i) => Math.floor(K / n) + (i < K % n ? 1 : 0)), gens = ks.map(k => 17 * k + 5);
+    if(gens.some(L => smTok(L, every, tpf) > SM_TOK)) continue;
+    const ex = gens.reduce((a, L) => a + L, 0) - g, ov = Array.from({length:n - 1}, (_, i) => Math.floor(ex / (n - 1)) + (i < ex % (n - 1) ? 1 : 0)); let at = 0;
+    return gens.map((L, i) => { const skip = i ? ov[i - 1] : 0; if(i) at -= skip; const p = {start:at / FPS, gen:L, deliv:L - skip, ctx:0, skip}; at += L; return p; }); }
+  return one; }
 // 🔁 loop (Jordan 2026-11-02): output frame o shows source frame (o + h) mod L, h = half the window, so the clip's
 // own wrap (last frame → first) sits in the middle at o = L - h and the render's ends are the window's continuous middle.
 // No pins within seam/2 of the wrap: MiniMax paints the turn from the motion on both sides, so momentum carries through.
@@ -711,7 +724,7 @@ function smoothKeys(L, every){ const k = []; for(let i = 0; i < L; i += every) k
 // Where no source frame is close (inside a jump), the slot is left unpinned and MiniMax paints it.
 const SPC = {}; // video|start|frames -> {d:[steps], n, busy, err}
 const SPC_W = 192; let spcT = 0; // frames are measured this wide
-function spcKey(){ const f = S.f, sp = smoothSpan(); return f.smVid + '|' + sp.start + '|' + smoothPlan()[0].gen; }
+function spcKey(){ const f = S.f, sp = smoothSpan(); return f.smVid + '|' + sp.start + '|' + smoothTotal(); }
 async function grabFrames(blob, start, L, sf, onp){
   // iPhone Safari won't load a video that isn't on the page, isn't muted/inline as attributes, or hasn't been played once
   const v = document.createElement('video'); v.muted = true; v.defaultMuted = true; v.playsInline = true; v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
@@ -760,7 +773,7 @@ async function measureSpacing(){
   const R = SPC[k] = {busy:true, got:0}; drawSpacing();
   try{
     const m = S.media[f.smVid] || {}, b = await blobOf(f.smVid); if(!b) throw new Error('the video is no longer on the phone');
-    const L = smoothPlan()[0].gen, {frames, w, h} = await grabFrames(b, smoothSpan().start, L, m.fps || FPS, (i, n) => { R.got = i; R.of = n; drawSpacing(); });
+    const L = smoothTotal(), {frames, w, h} = await grabFrames(b, smoothSpan().start, L, m.fps || FPS, (i, n) => { R.got = i; R.of = n; drawSpacing(); });
     if(frames.length < 3) throw new Error('too few frames could be read');
     const d = [], pts = []; for(let i = 0; i + 1 < frames.length; i++){ const r = stepBetween(frames[i], frames[i + 1], w, h); d.push(r.d * 1000 / w); pts.push(r.n); } // in 1/1000ths of the width
     while(d.length < L - 1) d.push(d[d.length - 1] || 0);
@@ -801,7 +814,7 @@ function spacingPlan(d, L, every, strength, punch){
   return {keys, skipped, jumps, t, moved:keys.filter(([o, s]) => o!==s).length};
 }
 function currentSpacing(){ const f = S.f; if(!f.sm || !f.smSpc || !f.smVid) return null; const R = SPC[spcKey()]; if(!R || !R.d) return null;
-  return planSpacing(R.d, smoothPlan()[0].gen); }
+  return planSpacing(R.d, smoothTotal()); }
 // the spacing plan for the form; in 🔁 loop mode the measured steps are put in the swapped order first (the wrap step,
 // never measured, takes its neighbours' average), planned there, then mapped back to source frames, with no pins near the seam
 function planSpacing(d, L){ const f = S.f, every = +f.smEvery || 4, ease = +f.smEase, punch = +f.smPunch || 0;
@@ -820,7 +833,7 @@ function drawSpacing(){
   if(R.busy){ n.textContent = 'Tracking points through the window… ' + (R.of ? R.got + ' of ' + R.of + ' frames' : ''); return; }
   if(R.err){ n.className = 'note warn'; n.innerHTML = esc("Couldn't measure the spacing (" + R.err + "), so it pins the plain every-" + (+f.smEvery || 4) + ' grid. ') + '<button class="btn" id="smSpcRetry" style="margin-top:6px">↻ Measure again</button>';
     $('#smSpcRetry').onclick = () => { delete SPC[spcKey()]; measureSpacing(); }; return; }
-  n.className = 'note'; const L = smoothPlan()[0].gen, P = planSpacing(R.d, L), d = P.d;
+  n.className = 'note'; const L = smoothTotal(), P = planSpacing(R.d, L), d = P.d;
   const dpr = window.devicePixelRatio || 1, W = cv.clientWidth || 320, H = 110; cv.width = W * dpr; cv.height = H * dpr; const x = cv.getContext('2d'); x.scale(dpr, dpr); x.clearRect(0, 0, W, H);
   const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim(), mx = Math.max(1, ...d, ...P.t) * 1.1, bw = W / (L - 1), y = v => (H - 16) - v / mx * (H - 22);
   const J = new Set(P.jumps); d.forEach((v, i) => { x.fillStyle = J.has(i) ? css('--bad') : css('--dim'); x.fillRect(i * bw + 0.5, y(v), Math.max(1, bw - 1), (H - 16) - y(v)); });
@@ -1002,7 +1015,7 @@ function busySecs(url){ // what's ahead on that PC: our own pieces by their esti
 }
 function estSecs(job, url){ // Render: ~24 s a step for a 5 s 864x480 clip, more with size and length; Main 1.26x
   let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20);
-  for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? (job.sm.keys ? job.sm.keys.length : smoothKeys(p.gen, job.sm.every).length) * (job.w / 32) * (job.h / 32) : 0);
+  for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? smoothKeys(p.gen, job.sm.every || 4).length * (job.w / 32) * (job.h / 32) : 0);
     s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1) * (job.ctl ? (job.ctl2 ? 1.5 : 1.3) : 1); }
   return s * pcSpeed(url) + 15 * job.pieces.length;
 }
@@ -1076,11 +1089,12 @@ function pieceGraph(t, i, oi, names){
   const pinAt = []; (t.pins || []).forEach(r => { let o = Math.round((r.t - (pc.start - LEAD(pc) / FPS)) * FPS); if(o < -2 || o > L + 1 || (pc.ctx && o < LEAD(pc) + 2)) return; // (a key the carried-over frames already end on) o = o >= L - 3 ? L - 1 : Math.max(0, Math.round(o / 4) * 4);
     if(pinAt.includes(o)) return; pinAt.push(o); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(r.id), frame_idx:o}), 0]; guides++; });
   if(t.sm){ // 🪄 smoothing: the window is cut from the video on the PC, and every Nth frame of it is pinned where it belongs
-    const sm = t.sm, sf = sm.fps || FPS, lv = add('LoadVideo', {file:names[sm.vid]});
-    const sl = add('Video Slice', {video:[lv, 0], start_time:sm.start, duration:Math.round((L / FPS + 2 / sf) * 1000) / 1000, strict_duration:false});
+    const sm = t.sm, sf = sm.fps || FPS, lv = add('LoadVideo', {file:names[sm.vid]}), S0 = Math.round((pc.start || 0) * FPS);
+    const sl = add('Video Slice', {video:[lv, 0], start_time:Math.round((sm.start + S0 / FPS) * 1000) / 1000, duration:Math.round((L / FPS + 2 / sf) * 1000) / 1000, strict_duration:false});
     const gc = add('GetVideoComponents', {video:[sl, 0]});
     // pairs [output frame, source frame]: the plain grid, or the 📐 eased spacing (a source frame can land on a different output frame)
-    for(const [o, s] of (sm.keys || smoothKeys(L, sm.every).map(k => [k, k]))){ const fr = add('ImageFromBatch', {image:[gc, 0], batch_index:Math.round(s * sf / FPS), length:1});
+    const keys = sm.keys ? sm.keys.filter(([o]) => o >= S0 && o < S0 + L).map(([o, s]) => [o - S0, Math.max(0, Math.min(L + 1, s - S0))]) : smoothKeys(L, sm.every).map(k => [k, k]);
+    for(const [o, s] of keys){ const fr = add('ImageFromBatch', {image:[gc, 0], batch_index:Math.round(s * sf / FPS), length:1});
       cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
     if(sm.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[gc, 1], frame_idx:0}), 0];
   }
@@ -1113,6 +1127,7 @@ function pieceGraph(t, i, oi, names){
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
     // then HEAD more frames (sound too): the first frame after the carried-over overlap decodes too bright and flashes at the join
     const t2 = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:HEAD, audio:aud, fps:FPS, match_tail:true}); ims = [t2, 0]; aud = [t2, 1]; }
+  if(t.sm && pc.skip){ ims = [add('ImageFromBatch', {image:ims, batch_index:pc.skip, length:L - pc.skip}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:pc.skip / FPS, duration:(L - pc.skip) / FPS}), 0]; } // 🪄 the frames the window before already has
   if(t.lead){ const R = t.lead; ims = [add('ImageFromBatch', {image:ims, batch_index:0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:0, duration:R.B / FPS}), 0]; } // only the new seconds
   if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
     const R = t.redo; let joined = [add('ImageFromBatch', {image:[rsrc, 0], batch_index:0, length:R.a + 1}), 0];
@@ -1297,7 +1312,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 }
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
-  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(), lp = f.smLoop && !P ? loopKeys(smoothPlan()[0].gen, +f.smEvery || 4, +f.smSeam || 12) : null; return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!f.smLoop && !!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, punch:P ? +f.smPunch || 0 : 0, loop:f.smLoop ? +f.smSeam || 12 : 0, keys:P ? P.keys : lp ? lp.keys : null}; })() : null;
+  const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(), lp = f.smLoop && !P ? loopKeys(smoothTotal(), +f.smEvery || 4, +f.smSeam || 12) : null; return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!f.smLoop && !!f.smSound && m.sound!==false, fps:m.fps || FPS, spc:!!P, ease:+f.smEase, punch:P ? +f.smPunch || 0 : 0, loop:f.smLoop ? +f.smSeam || 12 : 0, keys:P ? P.keys : lp ? lp.keys : null}; })() : null;
   const upImgs = sm && f.smUp && f.smUpRefs ? (f.smRefs || []).filter(id => S.media[id]).map(id => ({id})) : [];
   const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:upImgs.length > 0} : null;
   const ctl = !sm && f.ctl && f.ctlVid && S.media[f.ctlVid] ? {vid:f.ctlVid, str:+f.ctlStr, end:+f.ctlEnd, face:f.faceOn!==false ? faceOf(S.media[f.ctlVid]) : null} : null;
@@ -1742,7 +1757,7 @@ function drawInputs(){
   $$('#smEverySeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smEvery || 4)));
   $('#smSoundSw').classList.toggle('on', !!f.smSound && !(sv && sv.sound===false)); $('#smSoundSw').hidden = !!(sv && sv.sound===false) || !!f.smLoop;
   $('#smLoopSw').classList.toggle('on', !!f.smLoop); $('#smLoopBody').hidden = !f.smLoop;
-  if(f.smLoop){ $('#smSeam').value = +f.smSeam || 12; $('#smSeamOut').textContent = +f.smSeam || 12; const L0 = smoothPlan()[0].gen, lp = currentSpacing() || loopKeys(L0, +f.smEvery || 4, +f.smSeam || 12);
+  if(f.smLoop){ $('#smSeam').value = +f.smSeam || 12; $('#smSeamOut').textContent = +f.smSeam || 12; const L0 = smoothTotal(), lp = currentSpacing() || loopKeys(L0, +f.smEvery || 4, +f.smSeam || 12);
     $('#smLoopNote').textContent = 'A ' + fmtS(L0 / FPS) + ' loop. The seam is at ' + fmtS(lp.seamAt / FPS) + ' in the new clip, and MiniMax paints the ' + (Math.min(...lp.keys.map(([o]) => o).filter(o => o > lp.seamAt)) - Math.max(...lp.keys.map(([o]) => o).filter(o => o < lp.seamAt)) - 1) + ' frames around it with nothing pinned, so it can turn the motion smoothly. More free frames = a softer turn, but it drifts further from your clip there. The sound is left out (it would jump at the seam). 📐 spacing and 🎬 Punch work on the looped order, seam included.'; }
   drawSpacing();
   $('#smUpSw').classList.toggle('on', !!f.smUp); $('#smUpBody').hidden = !f.smUp; $$('#smUpSeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smUpX || 1.5)));
@@ -1751,8 +1766,8 @@ function drawInputs(){
     $('#smUpRefSlots').innerHTML = rs.map((id, k) => `<div class="slot has ${f.smUpRefs && k < REGEN_REFS ? '' : 'off'}"><img src="${S.media[id].thumb || ''}" alt=""><span class="tag">Picture ${k + 1}</span><button class="x" data-rm="smRef" data-i="${k}">✕</button></div>`).join('')
       + (rs.length < REGEN_REFS ? addSlot('smref', 'Reference picture') : ''); }
   if(f.smUp){ const d = dims(), fake = {w:d.w, h:d.h, up:{scale:+f.smUpX || 1.5}}; $('#smUpNote').textContent = d.w + '×' + d.h + ' → ' + upSize(fake) + '. Its own job after the smoothing, on the same PC (MiniMax is unloaded first); the app has to be open for it to start, like joining. Medium + strength 0.8 is the best balance from the tests (least grain, face stays close). Full = most detail but more grain, the face drifts and it runs hottest. Light repaints least. Render runs hot: 2.3 s took about 2 min and peaked at 86°C, so keep clips short there.'; }
-  if(f.sm){ const L = smoothPlan()[0].gen, P = currentSpacing() || (f.smLoop ? loopKeys(L, +f.smEvery || 4, +f.smSeam || 12) : null), n = P ? P.keys.length : smoothKeys(L, +f.smEvery || 4).length;
-    $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s). The prompt is optional: describe the action to steer the in-betweens.'
+  if(f.sm){ const L = smoothTotal(), P = currentSpacing() || (f.smLoop ? loopKeys(L, +f.smEvery || 4, +f.smSeam || 12) : null), n = P ? P.keys.length : smoothKeys(L, +f.smEvery || 4).length;
+    $('#smNote').textContent = sv ? 'Renders ' + fmtS(L / FPS) + ' (' + L + ' frames) from ' + fmtS(sp.start) + ': ' + n + ' of them are your own frames, pinned at full strength, and MiniMax paints the other ' + (L - n) + '. The window length is the Length slider in Shot (up to ' + SM_MAX + ' s).' + (smoothPlan().length > 1 ? ' To fit in 8 GB it renders as ' + smoothPlan().length + ' parts of about ' + fmtS(smoothPlan()[0].gen / FPS) + ', one after another on one PC, joined at the end.' : '') + ' The prompt is optional: describe the action to steer the in-betweens.'
       + (sv.fps && Math.abs(sv.fps - FPS) > 0.1 ? ' Your clip is ' + sv.fps + ' fps; MiniMax makes 24 fps, so the nearest frames are used.' : '') + (sv.sound===false ? ' This clip has no sound.' : '')
       : 'Pick a video. It goes to the PC as it is, and the frames are taken from it there.'; }
   $('#flSw').classList.toggle('on', f.fl); $('#flBody').hidden = !f.fl || f.sm; $('#lastSw').classList.toggle('on', f.last);
@@ -2496,6 +2511,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

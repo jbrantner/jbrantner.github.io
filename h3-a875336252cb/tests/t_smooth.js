@@ -98,7 +98,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
 
   // ---- a 30 fps clip without sound, every 2nd frame ----
   await page.click('[data-rm="smVid"]'); await pick('v30.mp4');
-  await page.evaluate(() => { const m = H3.S.media[H3.S.f.smVid]; m.dur = 6; m.w = 480; m.h = 864; H3.S.f.smStart = 0; });
+  await page.evaluate(() => { const m = H3.S.media[H3.S.f.smVid]; m.dur = 6; m.w = 480; m.h = 864; H3.S.f.smStart = 0; H3.S.f.mp = 0.24; }); // small enough that 63 pinned frames fit in one window
   await page.click('#smEverySeg [data-v="2"]');
   ok(await page.isHidden('#smSoundSw'), 'no sound switch for a silent clip');
   await page.click('#goBtn'); await page.waitForTimeout(1500);
@@ -119,7 +119,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   const zero = await page.evaluate(() => { const d = Array(123).fill(7); d[59] = 53; return H3.spacingPlan(d, 124, 4, 0); });
   ok(zero.keys.every(([o, s]) => o===s) && zero.skipped.length===0, 'easing 0 = the plain grid');
 
-  await page.click('[data-rm="smVid"]'); await page.evaluate(() => { H3.S.f.smSpc = true; H3.S.f.smEase = 0.5; H3.S.f.seconds = 5; });
+  await page.click('[data-rm="smVid"]'); await page.evaluate(() => { H3.S.f.smSpc = true; H3.S.f.smEase = 0.5; H3.S.f.seconds = 5; H3.S.f.mp = 0.41; });
   await page.click('#smEverySeg [data-v="4"]');
   await pick('jump.webm');
   await page.evaluate(() => { const m = H3.S.media[H3.S.f.smVid]; m.dur = m.dur || 6.25; m.fps = 24; m.w = 864; m.h = 480; H3.S.f.smStart = 0; });
@@ -287,6 +287,16 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   const g2 = sent[sent.length - 1], n2b = Object.values(g2), rv2 = n2b.find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
   ok(rv2 && rv2.inputs['ref_images.ref_image_0'] && n2b.find(n => n.class_type==='UNETLoader').inputs.unet_name==='minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'regenerate uses Ref2VA with the carried picture');
   }
+  // ---- 8 GB: a 14 s smoothing (Jordan's blend that ran out of memory) is split into windows that fit, joined to the same length ----
+  { const P = await page.evaluate(() => { const f = H3.S.f, m = H3.S.media[f.smVid]; Object.assign(f, {sm:true, smUp:false, smLoop:false, smSpc:false, smEvery:4, smStart:0, seconds:14.4, mp:0.41}); m.dur = 20; m.w = 832; m.h = 480; return {p:H3.smoothPlan(), g:H3.smoothTotal(), d:H3.dims()}; });
+    const tpf = (P.d.w / 32) * (P.d.h / 32), lt = g => ((g - 5) / 17 | 0) * 5 + 2, keys = L => Math.ceil(L / 4) + ((L - 1) % 4 ? 1 : 0);
+    const tot = P.p.reduce((a, x) => a + x.deliv, 0), fit = P.p.every(x => (lt(x.gen) + keys(x.gen)) * tpf <= 28500), grid = P.p.every(x => x.gen % 17===5);
+    const cont = P.p.every((x, i) => !i || Math.abs(x.start * 24 - (P.p[i - 1].start * 24 + P.p[i - 1].gen - x.skip)) < 0.01);
+    ok(P.p.length > 1 && tot===P.g && fit && grid && cont && !P.p[0].skip && P.p.slice(1).every(x => x.skip >= 1), '🪄 a 14 s smoothing splits into windows that each fit 8 GB, overlapping a few frames, exactly as long: ' + JSON.stringify(P));
+    const n0 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(2000);
+    const gs = sent.slice(n0), sl = gs.map(g => Object.values(g).find(n => n.class_type==='Video Slice').inputs.start_time), ng = gs.map(g => Object.values(g).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image).length);
+    const sk = gs.map(g => Object.values(g).filter(n => n.class_type==='ImageFromBatch' && n.inputs.length > 1).map(n => n.inputs.batch_index));
+    ok(gs.length===P.p.length && sl.every((x, i) => Math.abs(x - P.p[i].start) < 0.002) && ng.every((x, i) => x===keys(P.p[i].gen)) && sk.every((x, i) => i ? x[0]===P.p[i].skip : !x.length), '🪄 each window is its own job: its slice of the video, its own keyframes, and the overlap dropped: ' + JSON.stringify({sl, ng, sk})); }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
