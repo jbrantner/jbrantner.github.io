@@ -69,6 +69,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(cf.fl && Math.abs(cf.cut - 2.5) < 0.01 && cf.carry.src==='tA' && cf.carry.film==='fA' && /walks to the window/.test(cf.prompt) && cf.render && cf.secs===5, '➕ opens Render with the take carried on from 2.5 s, its settings, and the prompt from that moment to edit (' + JSON.stringify(cf) + ')');
   ok(await page.evaluate(() => H3.S.tab==='films' && !document.querySelector('#filmTab').hidden && /Carrying on/.test(document.querySelector('#filmFormNote').textContent)), 'it stays on 🎞 Films: the Render form is right under the timeline, saying it carries on the clip');
   ok(/Carried on from 2.5 s/.test(cf.note), 'the slot says where it carries on from (' + cf.note + ')');
+  ok(/^\[0s-1s\] she walks to the window, carrying on from the moment before\.\n\[1s-\] $/.test(cf.prompt), '➕ fills the first second with the old action and leaves an open line for the new one (' + JSON.stringify(cf.prompt) + ')');
   const n0 = sent.length; await page.evaluate(() => { H3.S.f.prompt = 'she opens the window'; H3.S.f.takes = 1; document.querySelector('#prompt').value = H3.S.f.prompt; H3.drawAll(); });
   await page.click('#goBtn'); await page.waitForTimeout(1500);
   const ct = await page.evaluate(() => { const t = JSON.parse(JSON.stringify(H3.S.takes[0])); t.pieces.forEach((p, i) => { p.file = {filename:'piece_0' + (i + 1) + '_00001_.mp4', subfolder:'Output_Render/' + t.dir}; }); return {id:t.id, cont:t.cont, contCut:t.contCut, contSecs:t.contSecs, carry:t.carry, jg:H3.joinGraph(t).g}; });
