@@ -15,7 +15,7 @@ const SCHEMA = {
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
-  'Video Slice','ImageFromBatch','TrimAudioDuration','ImageBlur'];
+  'Video Slice','ImageFromBatch','TrimAudioDuration','ImageBlur','RepeatImageBatch'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (g, t) => nodes(g, t)[0];
 (async () => {
   const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
@@ -74,7 +74,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const J = sent.slice(sent0).map(s => s.g)[0] || {};
   const sl = nodes(J, 'Video Slice').map(n => [n.inputs.start_time, n.inputs.duration]), cc = node(J, 'ConcatenateVideo');
   ok(sent.length===sent0 + 1 && JSON.stringify(sl)==='[[0,3],[1,4]]' && cc && cc.inputs['videos.video1'] && node(J, 'SaveVideo'), '⛓ one join job: each clip\'s stretch of its take, end to end: ' + JSON.stringify(sl));
-  const ct = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo); t.state = 'done'; t.pieces[0].state = 'done'; t.final = {filename:'j_00001_.mp4', subfolder:'Output_Render/H3Deck/j', type:'output'}; H3.saveNow(); return t.id; });
+  const ct = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo); t.state = 'done'; t.pieces[0].state = 'done'; t.pieces[0].file = {filename:'j_00001_.mp4', subfolder:'Output_Render/H3Deck/j', type:'output'}; t.final = {filename:'j_00001_.mp4', subfolder:'Output_Render/H3Deck/j', type:'output'}; H3.saveNow(); return t.id; });
   // the fake PC can fail the join before the line above marks it done, and a failed join is placed (as a toast) once: undo that
   await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo); if(t && !FILM.S.films[0].tracks[0].clips.some(c => c.take===t.id)) delete FILM.S.placed[t.combo.key]; FILM.placeNew(); FILM.draw(); });
   const CB = await fr.evaluate(ct => { const f = FILM.S.films[0], cs = f.tracks[0].clips; return {n:cs.length, take:cs[0] && cs[0].take, len:cs[0] && cs[0].out - cs[0].in, at:cs[0] && cs[0].at, w:FILM.wordsAt(FILM.takeOf(ct), 4)}; }, ct);
@@ -84,9 +84,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // 🪄 Blend: the ticked clips are joined in a hidden take, loaded into 🪄 Smooth, and the smoothed take comes back split into the clips
   { await fr.evaluate(() => { FILM.SEL = C1; FILM.draw(); }); await fr.click('[data-act="combine"]'); await page.waitForTimeout(200);
     const sb = sent.length; await fr.click('#cbBlend'); await page.waitForTimeout(500);
-    const BT = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.blend); if(!t) return null; t.state = 'done'; t.pieces[0].state = 'done'; t.final = {filename:'b_00001_.mp4', subfolder:'Output_Render/H3Deck/b', type:'output'}; H3.saveNow(); return {id:t.id, b:t.combo.blend.bounds.map(q => [q.off, q.in, q.out, q.at])}; });
+    const BT = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.blend); if(!t) return null; t.state = 'done'; t.pieces[0].state = 'done'; t.pieces[0].file = {filename:'b_00001_.mp4', subfolder:'Output_Render/H3Deck/b', type:'output'}; t.final = {filename:'b_00001_.mp4', subfolder:'Output_Render/H3Deck/b', type:'output'}; H3.saveNow(); return {id:t.id, b:t.combo.blend.bounds.map(q => [q.off, q.in, q.out, q.at])}; });
     ok(BT && JSON.stringify(BT.b)==='[[0,0,5,0],[5,0,5,5]]' && sent.length===sb + 1, '🪄 Blend joins the ticked clips in one hidden job and remembers where each clip sits: ' + JSON.stringify(BT));
-    await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo && x.combo.blend); if(t) delete FILM.S.placed[t.combo.key]; FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(2500);
+    await fr.waitForFunction(() => { const t = FILM.takes().find(x => x.combo && x.combo.blend); return t && FILM.doneOf(t); }, null, {timeout:8000}).catch(() => {});
+    await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo && x.combo.blend); if(t) delete FILM.S.placed[t.combo.key]; FILM.placeNew(); FILM.draw(); }); await page.waitForFunction(() => H3.S.f.sm && H3.S.f.smBlend, null, {timeout:10000}).catch(() => {});
     const BS = await page.evaluate(() => ({sm:H3.S.f.sm, up:H3.S.f.smUp, spc:H3.S.f.smSpc, bl:H3.S.f.smBlend && H3.S.f.smBlend.bounds.length, vid:!!H3.S.f.smVid && H3.S.f.smBlend && H3.S.f.smBlend.vid===H3.S.f.smVid, pr:H3.S.f.prompt}));
     const BTL = await fr.evaluate(() => FILM.S.films[0].tracks.length + ':' + FILM.S.films[0].tracks[0].clips.length);
     ok(BS.sm && !BS.up && BS.spc && BS.bl===2 && BS.vid && /\[0s-5s\] she walks to the window/.test(BS.pr) && BTL==='2:2', '🪄 the joined take loads into Smooth (📐 spacing on, same size), the timeline stays as it was: ' + JSON.stringify({BS, BTL}));
@@ -99,11 +100,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     { const q0 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length), p0 = await fr.evaluate(() => (FILM.S.passes || []).length);
       await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tBl'))); t.id = 'tBl2'; t.blend = Object.assign({}, t.blend, {key:'kb2', chain:{den:0, clean:0.8}}); H3.S.takes.unshift(t); H3.saveNow(); }, R);
       await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(800);
-      const CH = await fr.evaluate(p0 => { const p = FILM.S.passes.slice(p0); return {n:p.length, chain:p[0] && p[0].o.chain, sep:p[0] && p[0].o.sep, top:FILM.S.films[0].tracks[0].clips.map(c => c.take).join()}; }, p0);
+      const CH = await fr.evaluate(p0 => { const p = (FILM.S.passes || []).slice(p0); return {n:p.length, chain:p[0] && p[0].o.chain, sep:p[0] && p[0].o.sep, top:FILM.S.films[0].tracks[0].clips.map(c => c.take).join()}; }, p0);
       const q1 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length);
       ok(CH.n===1 && CH.chain==='big' && CH.sep && CH.top==='tBl2,tBl2' && q1===q0 + 2, '🪄✨🔍 one go: the finished blend goes on a track and its ✨ pass starts by itself (then 🔍): ' + JSON.stringify({CH, q0, q1}));
-      await fr.evaluate(() => { FILM.S.films[0].tracks.shift(); FILM.S.passes = FILM.S.passes.filter(p => p.o.chain!=='big'); }); await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => x.id!=='tBl2' && !(x.redo && x.redo.qp && !x.redo.wi && x.redo.src==='tBl2')); H3.saveNow(); }); }
-    await fr.evaluate(() => { FILM.S.films[0].tracks.shift(); FILM.draw(); }); await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.smBlend = null; H3.S.takes = H3.S.takes.filter(x => x.id!=='tBl' && !(x.combo && x.combo.blend)); H3.saveNow(); H3.drawAll(); }); }
+      await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks = f.tracks.filter(tr => !tr.clips.some(c => c.take==='tBl2' || (FILM.takeOf(c.take) || {redo:null}).redo)); FILM.S.passes = (FILM.S.passes || []).filter(p => p.o.chain!=="big"); }); await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => x.id!=='tBl2' && !(x.redo && x.redo.qp && !x.redo.wi && x.redo.src==='tBl2')); H3.saveNow(); }); }
+    await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks = f.tracks.filter(tr => !tr.clips.some(c => c.take==='tBl')); FILM.draw(); }); await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.smBlend = null; H3.S.takes = H3.S.takes.filter(x => x.id!=='tBl' && !(x.combo && x.combo.blend)); H3.saveNow(); H3.drawAll(); }); }
   // ⛓ a carry-on's takes: "Use this one: join it to the clip before"
   await page.evaluate(R => { H3.S.takes.unshift({id:'tK', t:Date.now(), pc:R, model:H3.S.takes[0].model, turbo:true, loras:[], w:640, h:352, name:'h3_k', dir:'H3Deck/h3_k', prompt:'she opens it', seconds:3, imgs:[], vids:[], auds:[], follow:[], cont:'m1', carry:{src:'tA', at:3, own:true, key:'kk', film:'fA'},
     pieces:[{start:0, gen:73, deliv:72, ctx:0, prompt:'she opens it', state:'done', file:{filename:'k.mp4', subfolder:'Output_Render/H3Deck/h3_k', type:'output'}}], state:'done', final:{filename:'k.mp4', subfolder:'Output_Render/H3Deck/h3_k', type:'output'}}); H3.saveNow(); }, R);
@@ -154,6 +155,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const g = Object.values(H3.upGraph(t, oi, {}).g), ls = g.filter(n => n.class_type==='LoraLoaderModelOnly').map(n => [n.inputs.lora_name, n.inputs.strength_model]), pr = JSON.stringify(g.filter(n => /Minimax|MiniMax/.test(n.class_type)).map(n => n.inputs.prompt).filter(Boolean));
     return {ls, my:/mystyle look/.test(pr), zz:/zzz/.test(pr)}; }, R);
   ok(UL.ls.length===2 && UL.ls[1][0]==='myStyle.safetensors' && UL.ls[1][1]===0.9 && UL.my && !UL.zz, '✨/🔍 the take\'s own LoRAs (that the PC has) and their words go into the pass: ' + JSON.stringify(UL));
+  { const CV = await page.evaluate(R => { const oi = Object.assign({}, H3.PC[R].oi, {RepeatImageBatch:{input:{required:{image:['IMAGE'], amount:['INT', {default:1}]}}}});
+      const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0))); t.up.part = {a:0, b:118, s0:0, L:124, F:118, pad:6};
+      const g = H3.upGraph(t, oi, {}).g, ns = Object.values(g), rp = ns.find(n => n.class_type==='RepeatImageBatch'), fr = ns.filter(n => n.class_type==='ImageFromBatch').map(n => [n.inputs.batch_index, n.inputs.length]);
+      return {rp:rp && rp.inputs.amount, fr}; }, R);
+    ok(CV.rp===6 && CV.fr.some(x => x[0]===0 && x[1]===118) && CV.fr.some(x => x[0]===117 && x[1]===1), '✨ a 118-frame clip is passed whole: its last frame is repeated to fill MiniMax\'s 124, and all 118 come back redone: ' + JSON.stringify(CV)); }
   const OF = await page.evaluate(() => { const oi = {UNETLoader:{input:{required:{unet_name:[['dasiwa_minimax_h3_ref2va_v4_pruned_int8.safetensors', 'singularityV2X10eros_prismPIKA.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'dasiwa_minimax_h3_fl2va_v4.safetensors', 'minimaxH3INT8INT4_fl2vaINT8Pruned.safetensors']]}}}};
     const only = {UNETLoader:{input:{required:{unet_name:[['dasiwa_minimax_h3_ref2va_v4_pruned_int8.safetensors']]}}}};
     return {ref:H3.regenRefUnet(oi), fl:H3.regenUnet(oi), none:H3.regenRefUnet(only) || null}; });
