@@ -421,7 +421,7 @@ function draw(){
   placeNew(); keepTakes(); S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(!takeOf(c.take)) findLost(c.take); else if(!fileOf(takeOf(c.take)) && !takes().find(x => x.id===c.take)) findLost(c.take); }))); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
   const v = N().v, f = v==='film' && filmOf(N().film);
   $('#view').innerHTML = f ? filmView(f) : v==='review' ? reviewView() : homeView();
-  if(f){ wireFilm(f); if(f.exp && f.exp.state==='working') expPoll(f); else if(f.exp && f.exp.state==='done') expFetch(f); }
+  if(f){ wireFilm(f); if(f.exp && f.exp.state==='working') expPoll(f); else if(f.exp && f.exp.state==='done') expFetch(f); if(f.fin && f.fin.state==='working') finPoll(f); }
 }
 // redraw what can change by itself without disturbing a playing video or a drag
 function drawSoft(){ if(N().v==='film'){ drawDots(); return; } const pl = $$('#view video').some(v => !v.paused); if(pl) return; draw(); }
@@ -521,7 +521,7 @@ function expHtml(f){ const x = f.exp; if(!x) return '';
     return `<div class="note" style="margin-top:10px">⬇ Exporting on ${esc(pcName(x.pc))}… ${p}%<div class="bar" style="margin:6px 0"><i style="width:${p}%"></i></div><button class="btn" data-act="expStop">✕ Stop</button></div>`; }
   if(x.state==='done') return `<div class="note" style="margin-top:10px">⬇ Exported ${esc(x.when || '')}${EXPB.key===expKey(x) && EXPB.blob ? '' : EXPB.key===expKey(x) && EXPB.err ? ' (couldn\'t fetch it to the phone: ' + esc(EXPB.err) + ')' : ' · getting it onto the phone…'}
     <button class="btn pri" data-act="expSave" style="width:100%;padding:13px;margin:8px 0">📲 Save the whole video to Photos</button>
-    <a href="${esc(viewUrl(x.pc, x.file))}" target="_blank" rel="noopener" download="${esc(x.file.filename)}">▶ Open the mp4</a> (on ${esc(pcName(x.pc))}, in ${esc(x.file.subfolder)}). Export again after changes.</div>`;
+    <a href="${esc(viewUrl(x.pc, x.file))}" target="_blank" rel="noopener" download="${esc(x.file.filename)}">▶ Open the mp4</a> (on ${esc(pcName(x.pc))}, in ${esc(x.file.subfolder)}). Export again after changes.${finHtml(f)}</div>`;
   return `<div class="note" style="margin-top:10px;color:var(--bad)">⬇ Export didn't finish: ${esc(x.error || x.state)}</div>`; }
 function expClips(f){ const out = [], miss = [];
   f.tracks.forEach((tr, k) => { if(!tr.hide) tr.clips.forEach(c => { const fl = fileOf(takeOf(c.take)); if(!fl){ miss.push(c); return; }
@@ -546,6 +546,36 @@ async function expSave(f){ const x = f.exp; if(!x || !x.file) return; let b = EX
   const file = new File([b], x.file.filename, {type:'video/mp4'});
   try{ if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file]}); return; }
     const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = x.file.filename; a.click(); }
+  catch(e){ if(e && e.name==='NotAllowedError' && late){ toast('It\'s on the phone now: tap 📲 Save again', 5000); return; } if(e && e.name!=='AbortError') toast("Couldn't save it: " + e.message); } }
+// ✨ 4K finish (Jordan 2026-11-07, "the really crisp almost 4k video look"): the exported mp4 is smoothed to 48 fps (RIFE), sharpened
+// 4x (Real-ESRGAN anime video) and written as a high-bitrate 4K HEVC by the PC's helper, next to the export (<name>_4K.mp4)
+let FINB = {key:'', blob:null, err:''};
+function finHtml(f){ const x = f.exp, z = f.fin && x && x.file && f.fin.src===x.file.filename ? f.fin : null;
+  if(!z) return `<button class="btn" data-act="finGo" style="width:100%;padding:13px;margin-top:10px">✨ 4K finish (sharper, smoother 48 fps)</button>
+    <div class="note" style="margin-top:4px">Makes a 4K copy of this export on ${esc(pcName(x.pc))}: smoothed to twice the frame rate, sharpened with an anime video upscaler, saved at a high bitrate. It waits for anything rendering there, and takes about a minute per 10 seconds of film.</div>`;
+  if(z.state==='working'){ const p = z.total ? Math.round(100 * z.done / z.total) : 0;
+    return `<div style="margin-top:10px">✨ 4K finish… ${z.total ? p + '%' : ''} ${esc(z.note || '')}<div class="bar" style="margin:6px 0"><i style="width:${p}%"></i></div><button class="btn" data-act="finStop">✕ Stop</button></div>`; }
+  if(z.state==='done') return `<div style="margin-top:10px">✨ 4K ready: ${esc((z.size || '').replace('x', '×'))} · ${Math.round(z.fps || 0)} fps${z.note ? ' · ' + esc(z.note) : ''}
+    <button class="btn pri" data-act="finSave" style="width:100%;padding:13px;margin:8px 0">📲 Save the 4K video to Photos</button>
+    <a href="${esc(viewUrl(z.pc, z.file))}" target="_blank" rel="noopener" download="${esc(z.file.filename)}">▶ Open the 4K mp4</a> (in ${esc(z.file.subfolder)})</div>`;
+  return `<div style="margin-top:10px;color:var(--bad)">✨ 4K finish didn't finish: ${esc(z.error || z.state)} <button class="btn" data-act="finGo">Try again</button></div>`; }
+async function finGo(f){ const x = f.exp; if(!x || !x.file) return;
+  try{ const r = await fetch(x.pc + '/renderdeck/h3finish', {method:'POST', body:JSON.stringify({filename:x.file.filename, subfolder:x.file.subfolder, long:3840, smooth:true})}), j = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(r.status===404 && !j.error ? 'paste the newest helper on ' + pcName(x.pc) + ' first' : j.error || r.status);
+    f.fin = {id:j.id, pc:x.pc, src:x.file.filename, state:'working', done:0, total:0, note:''}; save(); expShow(f); finPoll(f); toast('✨ 4K finish started on ' + pcName(x.pc)); }
+  catch(e){ toast('4K finish: ' + e.message, 5000); } }
+let finT = 0;
+async function finPoll(f){ clearTimeout(finT); const z = f.fin; if(!z || z.state!=='working') return;
+  try{ const r = await fetch(z.pc + '/renderdeck/h3finish?id=' + z.id), j = await r.json();
+    if(!r.ok){ z.state = 'failed'; z.error = j.error || r.status; } else Object.assign(z, {state:j.state, done:j.done, total:j.total, note:j.note, file:j.file, error:j.error, size:j.size, fps:j.fps});
+    save(); expShow(f); if(z.state==='done') toast('✨ 4K finish is ready', 4000); }catch(e){}
+  if(z.state==='working') finT = setTimeout(() => finPoll(f), 2000); }
+async function finSave(f){ const z = f.fin; if(!z || !z.file) return; const k = z.pc + '|' + z.file.subfolder + '/' + z.file.filename;
+  let b = FINB.key===k && FINB.blob; const late = !b;
+  if(!b){ toast('Getting the 4K video (it\'s big, give it a moment)…', 6000); try{ const r = await fetch(viewUrl(z.pc, z.file)); if(!r.ok) throw new Error('HTTP ' + r.status); b = await r.blob(); FINB = {key:k, blob:b, err:''}; }catch(e){ toast("Couldn't get it: " + e.message); return; } }
+  const file = new File([b], z.file.filename, {type:'video/mp4'});
+  try{ if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file]}); return; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = z.file.filename; a.click(); }
   catch(e){ if(e && e.name==='NotAllowedError' && late){ toast('It\'s on the phone now: tap 📲 Save again', 5000); return; } if(e && e.name!=='AbortError') toast("Couldn't save it: " + e.message); } }
 function expShow(f){ const el = $('#exp'); if(el && N().v==='film' && N().film===f.id) el.innerHTML = expHtml(f); }
 let expT = 0;
@@ -1093,6 +1123,9 @@ document.addEventListener('click', async ev => {
     case 'joinPrev': { const r = SEL && clipOf(f, SEL), p = r && prevTouching(r); if(!p){ toast('There\'s no clip right before it on this track'); return; } await combineGo(f, r.tr, [p, r.c], true); return; }
     case 'lead': leadSheet(f); return;
     case 'expSave': expSave(f); return;
+    case 'finGo': finGo(f); return;
+    case 'finSave': finSave(f); return;
+    case 'finStop': if(f.fin){ fetch(f.fin.pc + '/renderdeck/h3finish/cancel', {method:'POST', body:JSON.stringify({id:f.fin.id})}).catch(() => {}); f.fin.state = 'failed'; f.fin.error = 'stopped'; save(); expShow(f); } return;
     case 'guideSheet': guideSheet(f); return;
     case 'guideToggle': S.guideOn = !GUIDE_ON(); save(); toast(GUIDE_ON() ? '🦴 Guidance track is back: 🦴 Guidance track in the tools' : '🦴 Guidance track switched off'); break;
     case 'ghostN': setDeckN(+d.v); ghostNote(f); return;
@@ -1127,7 +1160,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame

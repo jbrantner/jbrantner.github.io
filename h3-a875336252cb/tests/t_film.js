@@ -13,6 +13,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/queue') return J({queue_running:Q.running.map(x => [0, x]), queue_pending:Q.pending.map(x => [0, x])});
     if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
+    if(p==='/renderdeck/h3finish' && rt.request().method()==='POST'){ EXP.fin = JSON.parse(rt.request().postData()); EXP.fn = 0; return J({id:'f1', state:'working', done:0, total:0}); }
+    if(p==='/renderdeck/h3finish'){ EXP.fn++; return J(EXP.fn < 2 ? {id:'f1', state:'working', done:60, total:240, note:''} : {id:'f1', state:'done', done:240, total:240, size:'2880x3840', fps:48, file:{filename:'Film 1_00001__4K.mp4', subfolder:'Render/H3Film', type:'output'}}); }
     if(p==='/renderdeck/h3export' && rt.request().method()==='POST'){ EXP.body = JSON.parse(rt.request().postData()); EXP.n = 0; EXP.posts = (EXP.posts || 0) + 1; return J({id:'x1', state:'working', done:0, total:0}); }
     if(p==='/renderdeck/h3export'){ EXP.n++; return J(EXP.n < 2 ? {id:'x1', state:'working', done:50, total:200} : {id:'x1', state:'done', done:200, total:200, file:{filename:'Film 1_00001_.mp4', subfolder:EXP.body && EXP.body.preview ? 'H3Film/_preview' : 'Render/H3Film', type:'output'}}); }
     if(p==='/userdata/h3deck_takes.json') return REMOTE.j ? J(REMOTE.j) : rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
@@ -104,6 +106,11 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.click('[data-act="expSave"]'); await page.waitForTimeout(300);
   const sh = await page.evaluate(() => window.SHARED);
   ok(sh && sh[0][0]==='Film 1_00001_.mp4' && sh[0][1]===2048 && sh[0][2]==='video/mp4', '📲 opens the share sheet with the whole mp4 (' + JSON.stringify(sh) + ')');
+  // ✨ 4K finish of the export
+  ok(!!(await page.$('[data-act="finGo"]')), 'the finished export offers ✨ 4K finish');
+  await page.click('[data-act="finGo"]'); await page.waitForTimeout(4500);
+  const FN = await page.evaluate(() => ({fin:FILM.S.films[0].fin, txt:document.querySelector('#exp').textContent}));
+  ok(EXP.fin && EXP.fin.filename==='Film 1_00001_.mp4' && EXP.fin.smooth===true && FN.fin.state==='done' && /4K ready: 2880×3840 · 48 fps/.test(FN.txt) && !!(await page.$('[data-act="finSave"]')), '✨ 4K finish runs on the export and offers the 4K video: ' + JSON.stringify({body:EXP.fin, st:FN.fin.state}));
   await page.screenshot({path:path.join(__dirname, 'film_timeline.png'), fullPage:true});
   // ⚡ Preview: the PC writes the film as one small video; ▶ Play plays it in real time until the edit changes
   await page.click('[data-act="preview"]'); await page.waitForTimeout(400);
