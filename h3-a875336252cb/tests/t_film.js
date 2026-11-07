@@ -88,7 +88,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await page.evaluate(() => FILM.clipOf(FILM.S.films[0], FILM.SEL).c.take)==='tB2', 'picking a version swaps the clip');
   // ⤓ One track: what plays now becomes the clips of one track; ↶ Undo brings the tracks back
   const fl0 = await page.evaluate(() => { const f = FILM.S.films[0]; return {n:f.tracks.length, secs:FILM.filmSecs(f), at:[0.5, 2, 4, 7, 9].map(t => { const c = FILM.activeAt(f, t); return c && [c.take, +(c.in + t - c.at).toFixed(2)]; })}; });
-  await page.evaluate(() => { window.confirm = () => true; }); await page.click('[data-act="flatten"]'); await page.waitForTimeout(200);
+  await page.evaluate(() => { window.confirm = () => true; FILM.S.moreTools = true; FILM.draw(); }); await page.click('[data-act="flatten"]'); await page.waitForTimeout(200);
   const fl1 = await page.evaluate(() => { const f = FILM.S.films[0]; return {n:f.tracks.length, secs:FILM.filmSecs(f), at:[0.5, 2, 4, 7, 9].map(t => { const c = FILM.activeAt(f, t); return c && [c.take, +(c.in + t - c.at).toFixed(2)]; })}; });
   ok(fl1.n===1 && fl1.secs===fl0.secs && JSON.stringify(fl1.at)===JSON.stringify(fl0.at), '⤓ One track merges the tracks and the film plays exactly the same (' + JSON.stringify([fl0, fl1]) + ')');
   await page.click('#undoBtn'); await page.waitForTimeout(200);
