@@ -883,7 +883,7 @@ function qpBack(tr){ let n = 0; for(const c of tr.clips){ let t = takeOf(c.take)
     while(t && t.redo && t.redo.qp){ const src = takeOf(t.redo.src); if(!src) break; if(t.redo.big){ const o = t.redo.s0 / FPS; c.in += o; c.out += o; } c.take = src.id; c.dur = secsOf(src) || c.dur; t = src; moved = true; }
     if(moved) n++; } return n; }
 const qpBackCount = tr => tr.clips.filter(c => { const t = takeOf(c.take); return t && t.redo && t.redo.qp && takeOf(t.redo.src); }).length;
-function passLabel(tr){ const p = passOf(tr); if(!p) return ''; const ts = takes().filter(x => x.redo && x.redo.key===p.key), d = ts.filter(x => x.state==='done' && fileOf(x) && !x.upErr).length;
+function passLabel(tr){ const p = passOf(tr); if(!p){ const q = passFailed(tr); return q ? ` <b style="color:var(--bad)">${q.big ? '🔍' : '✨'} failed</b>` : ''; } const ts = takes().filter(x => x.redo && x.redo.key===p.key), d = ts.filter(x => x.state==='done' && fileOf(x) && !x.upErr).length;
   return ` <b style="color:var(--acc,#ff5ca8)">${p.big ? '🔍' : '✨'} ${d}/${p.wins.length}</b>`; }
 function qpBadge(c){ const q = takes().filter(x => x.redo && x.redo.qp && x.redo.clip===c.id && x.redo.src===c.take); if(!q.length) return '';
   const t = q[0]; if(t.state==='failed' || t.upErr) return ' · <b style="color:var(--bad)">✨ failed</b>'; if(t.state==='done' || t.upStage==='done') return ''; return ' · <b style="color:var(--acc,#ff5ca8)">✨ working</b>'; }
@@ -896,21 +896,37 @@ function qpClips(tr){ return tr.clips.slice().sort((a, b) => a.at - b.at).filter
 function qpWins(tr){ const out = []; tr.clips.slice().sort((a, b) => a.at - b.at).forEach(c => { const cut = [c.in].concat((c.qcuts || []).filter(q => q > c.in + 0.3 && q < c.out - 0.3)).concat([c.out]);
   for(let i = 0; i < cut.length - 1; i++) out.push({take:c.take, in:cut[i], out:cut[i + 1], at:c.at + cut[i] - c.in}); }); return out; }
 const passOf = tr => (S.passes || []).find(p => p.track===tr.id && p.state==='working');
+// the newest pass of the track that failed and hasn't been replaced by a later one (shown on the track, with ↻ Retry)
+const passFailed = tr => { const ps = (S.passes || []).filter(p => p.track===tr.id); const p = ps[ps.length - 1]; return p && p.state==='failed' && p.o && !p.gone ? p : null; };
+async function qpRetry(f, tr){ const p = passFailed(tr), fn = deckFn('H3Nudge'); if(!p || !fn) return 0;
+  const redo = qpParts(p).filter(x => !x.ok); if(!redo.length){ p.state = 'working'; save(); liveFilm(); return 1; }
+  let n = 0; for(const x of redo) n += await qpSend(fn, p, x.i) ? 1 : 0;
+  if(!n){ toast('Couldn\'t send the parts again. Are the PCs on?', 5000); return 0; }
+  p.state = 'working'; p.err = ''; p.failed = []; save(); toast('↻ ' + n + ' part' + (n > 1 ? 's' : '') + ' sent again (the ' + (p.wins.length - redo.length) + ' that worked are kept). Same seed and settings.', 6000); return n; }
 async function qualityGo(f, tr, o){ const fn = deckFn('H3Nudge'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return 0; }
   if(passOf(tr)){ toast('A pass is already running on this track'); return 0; }
   if(tr.clips.some(c => !fileOf(takeOf(c.take)))){ toast('Wait for every clip on the track to finish first (a pass does all of them or none)'); return 0; }
   const wins = qpWins(tr); if(!wins.length){ toast('No clips on that track'); return 0; }
-  const seed = o.seed || Math.floor(Math.random() * 2 ** 31), key = uid('k'), big = (o.scale || 1) > 1, p = {key, film:f.id, track:tr.id, big, wins, state:'working', t:Date.now()}; let n = 0;
+  const seed = o.seed || Math.floor(Math.random() * 2 ** 31), key = uid('k'), big = (o.scale || 1) > 1, p = {key, film:f.id, track:tr.id, big, wins, state:'working', t:Date.now(), o:{den:o.den, clean:o.clean || 0, scale:o.scale || 1, seed}}; let n = 0;
   S.passes = (S.passes || []).filter(x => Date.now() - (x.t || 0) < 7 * 864e5); S.passes.push(p); save();
-  for(let i = 0; i < wins.length; i++){ const w = wins[i]; const k = await fn({take:w.take, a:w.in, b:w.out, prompt:wordsBetween(takeOf(w.take), w.in, w.out) || '', n:1, den:o.den, clean:o.clean || 0, seed, qp:true, scale:o.scale || 1, key, wi:i, quiet:true}); n += k ? 1 : 0; }
-  if(n < wins.length){ p.state = 'failed'; save(); toast((big ? '🔍' : '✨') + ' Only ' + n + ' of ' + wins.length + ' parts could be sent, so nothing will change. Try again when both PCs are on.', 6000); return 0; }
+  for(let i = 0; i < wins.length; i++) n += await qpSend(fn, p, i) ? 1 : 0;
+  if(n < wins.length){ p.state = 'failed'; p.err = 'only ' + n + ' of ' + wins.length + ' parts could be sent'; save(); toast((big ? '🔍' : '✨') + ' Only ' + n + ' of ' + wins.length + ' parts could be sent, so nothing will change. Try again when both PCs are on.', 6000); return 0; }
   toast((big ? '🔍 Bigger' : '✨ Quality pass') + ': ' + n + ' part' + (n > 1 ? 's' : '') + ' sent. When all of them are done they go on a new top track' + (wins.length > 1 ? ', joined into one clip' : '') + '. This track stays as it is.', 6000); save(); return n; }
+const qpSend = (fn, p, i) => { const w = p.wins[i], q = p.o || {};
+  return fn({take:w.take, a:w.in, b:w.out, prompt:wordsBetween(takeOf(w.take), w.in, w.out) || '', n:1, den:q.den, clean:q.clean || 0, seed:q.seed, qp:true, scale:q.scale || 1, key:p.key, wi:i, quiet:true}); };
+const qpOk = x => fileOf(x) && x.state==='done' && !x.upErr;
+const qpBad = x => x.state==='failed' || !!x.upErr || (x.state==='done' && x.upStage==='done' && !fileOf(x));
+// each part: done (one good take is enough, so ↻ retried parts count), failed (every try of it failed), or still running
+function qpParts(p){ const ts = takes().filter(x => x.redo && x.redo.key===p.key);
+  return p.wins.map((w, i) => { const tk = ts.filter(x => x.redo.wi===i), ok = tk.find(qpOk);
+    return ok ? {i, ok} : tk.length && tk.every(qpBad) ? {i, bad:tk[0]} : {i, wait:true}; }); }
 function placePasses(){ let ch = false;
-  for(const p of S.passes || []){ if(p.state!=='working') continue; const f = filmOf(p.film); if(!f){ p.state = 'failed'; ch = true; continue; }
-    const ts = takes().filter(x => x.redo && x.redo.key===p.key), bad = ts.filter(x => x.state==='failed' || x.upErr || (x.state==='done' && x.upStage==='done' && !fileOf(x)));
-    const ok = p.wins.map((w, i) => ts.find(x => x.redo.wi===i && fileOf(x) && x.state==='done' && !x.upErr));
-    if(bad.length && ts.every(x => x.state==='done' || x.state==='failed')){ p.state = 'failed'; ch = true; toast((p.big ? '🔍' : '✨') + ' The pass failed on ' + bad.length + ' part' + (bad.length > 1 ? 's' : '') + ' (' + ((bad[0].upErr || '').slice(0, 80) || 'error') + '), so nothing changed. ✨ to try again.', 7000); continue; }
-    if(ok.some(x => !x)) continue;
+  for(const p of S.passes || []){ if(p.state!=='working') continue; const f = filmOf(p.film); if(!f){ p.state = 'failed'; p.err = 'the film is gone'; ch = true; continue; }
+    const ps = qpParts(p), bad = ps.filter(x => x.bad);
+    if(ps.some(x => x.wait)) continue;
+    if(bad.length){ p.state = 'failed'; p.err = (bad[0].bad.upErr || bad[0].bad.err || (bad[0].bad.pieces && bad[0].bad.pieces[0] && bad[0].bad.pieces[0].err) || 'it gave nothing back').slice(0, 160); p.failed = bad.map(x => x.i); ch = true;
+      toast((p.big ? '🔍' : '✨') + ' ' + bad.length + ' of ' + p.wins.length + ' part' + (p.wins.length > 1 ? 's' : '') + ' failed (' + p.err.slice(0, 80) + '), so nothing changed yet. ✨ on the track has ↻ Retry the failed parts.', 8000); continue; }
+    const ok = ps.map(x => x.ok);
     const ntr = {id:uid('tr'), clips:p.wins.map((w, i) => { const t = ok[i], d = secsOf(t) || (w.out - w.in), a = t.redo.big ? t.redo.cin : w.in, b = t.redo.big ? t.redo.cout : w.out; return {id:uid('c'), take:t.id, in:a, out:Math.min(d, b), dur:d, at:w.at}; })};
     f.tracks.unshift(ntr); p.state = 'done'; p.out = ntr.id; ch = true;
     const cs = ntr.clips, touch = cs.length > 1 && cs.every((c, i) => !i || Math.abs(cs[i - 1].at + len(cs[i - 1]) - c.at) < 0.06);
@@ -924,6 +940,9 @@ function qualitySheet(f, k){ const tr = f.tracks[k]; if(!tr) return; const cs = 
     <div class="note" id="qpHow" style="margin-top:4px"></div>
     <div class="lab" style="margin-top:10px"><span>🧽 Grain</span></div><div class="row" id="qpCl">${QP_CL.map(x => `<button class="btn" data-v="${x.v}">${x.label}</button>`).join('')}</div>
     <div class="note" id="qpClHow" style="margin-top:4px"></div>
+    ${passFailed(tr) ? `<div class="note" style="margin-top:10px;color:var(--bad)">The last ${passFailed(tr).big ? '🔍 bigger' : '✨ pass'} on this track failed on ${(passFailed(tr).failed || []).length || 'some'} of ${passFailed(tr).wins.length} parts: ${esc(passFailed(tr).err || 'error')}</div>
+    <button class="btn pri" id="qpRetry" style="padding:13px;width:100%;margin-top:6px">↻ Retry the failed parts (keeps the ones that worked)</button>
+    <button class="btn" id="qpForget" style="padding:10px;width:100%;margin-top:6px">✕ Forget that pass</button>` : ''}
     <div class="note" style="margin-top:8px">${cs.length} clip${cs.length===1 ? '' : 's'} (${fmt(cs.reduce((a, c) => a + len(c), 0))})${wait ? ' · ' + wait + ' still rendering, left out' : ''}</div>
     <button class="btn pri" id="qpGo" style="padding:13px;width:100%;margin-top:8px" ${cs.length ? '' : 'disabled'}>✨ Run the quality pass</button>
     <div class="lab" style="margin-top:16px"><span>🔍 Last step: make it bigger</span></div>
@@ -936,6 +955,8 @@ function qualitySheet(f, k){ const tr = f.tracks[k]; if(!tr) return; const cs = 
   const cv = () => { $$('#qpCl button').forEach(b => b.classList.toggle('pri', +b.dataset.v===cln));
     $('#qpClHow').textContent = !cln ? 'The clips go in as they are (grain and all).' : cln < 1 ? 'Softens the grain a little before the pass, so it draws fresh detail instead of sharpening the grain, plus one more small clean-up step.' : 'Softens more: smoothest skin and least grain, but the finest details are redrawn too.'; };
   $$('#qpCl button').forEach(b => b.onclick = () => { cln = S.qpClean = +b.dataset.v; save(); cv(); }); cv();
+  if($('#qpRetry')) $('#qpRetry').onclick = async () => { $('#qpRetry').disabled = true; if(await qpRetry(f, tr)){ closeSheet(); draw(); } else $('#qpRetry').disabled = false; };
+  if($('#qpForget')) $('#qpForget').onclick = () => { passFailed(tr).gone = true; save(); closeSheet(); draw(); };
   $('#qpGo').onclick = async () => { $('#qpGo').disabled = true; if(await qualityGo(f, tr, {den, clean:cln})) closeSheet(); else $('#qpGo').disabled = false; };
   if($('#qpBack')) $('#qpBack').onclick = () => { const n = qpBack(tr); save(); closeSheet(); draw(); toast('↩ ' + n + ' clip' + (n > 1 ? 's are' : ' is') + ' back to the original. The ✨ versions are still in Takes of each clip.', 5000); };
   $('#qpBig').onclick = async () => { $('#qpBig').disabled = true; if(await qualityGo(f, tr, {den:0, clean:cln, scale:1.5})) closeSheet(); else $('#qpBig').disabled = false; };
@@ -1162,7 +1183,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
