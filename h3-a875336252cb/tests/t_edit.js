@@ -128,6 +128,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.waitForTimeout(1500); await fr.evaluate(() => FILM.liveFilm());
   const QF = await fr.evaluate(() => ({n:FILM.S.films[0].tracks.length, takes:FILM.S.films[0].tracks[0].clips.map(c => c.take).join(), p:FILM.S.passes.map(x => x.state).join()}));
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
+  // ↻ a failed pass shows on the track; retry sends only the failed parts again, same key and seed, keeping the good ones
+  await fr.evaluate(() => FILM.draw());
+  const RF = await fr.evaluate(() => ({lab:document.querySelector('.trk[data-k="0"]') ? document.querySelector('.trk[data-k="0"]').textContent : document.body.textContent, err:FILM.S.passes[0].err, failed:FILM.S.passes[0].failed}));
+  await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0); t.upStage = 'done'; t.state = 'done'; t.upErr = ''; t.final = {filename:'q0.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}; H3.saveNow(); });
+  const nq0 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length);
+  const RN = await fr.evaluate(async () => { const f = FILM.S.films[0]; return await FILM.qpRetry(f, f.tracks[0]); }); await page.waitForTimeout(300);
+  const RT = await page.evaluate(() => { const q = H3.S.takes.filter(x => x.redo && x.redo.qp); return {n:q.length, wis:q.map(x => x.redo.wi), seeds:[...new Set(q.map(x => x.seed))].length, keys:[...new Set(q.map(x => x.redo.key))].length, tf:q.every(x => !x.toFilm)}; });
+  ok(/✨ failed/.test(RF.lab) && RF.err && RF.failed.length===2 && RN===1 && RT.n===nq0 + 1 && RT.wis[0]===1 && RT.seeds===1 && RT.keys===1 && RT.tf && await fr.evaluate(() => FILM.S.passes[0].state)==='working',
+    '↻ failed pass: "✨ failed" on the track, Retry resends only the failed part with the same seed: ' + JSON.stringify({RF, RN, RT}));
   // the same pass when every part finishes
   await page.evaluate(() => { H3.S.takes.filter(x => x.redo && x.redo.qp).forEach(t => { t.upStage = 'done'; t.state = 'done'; t.upErr = ''; t.final = {filename:'q' + t.redo.wi + '.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}; }); H3.saveNow(); });
   const s6 = sent.length; await fr.evaluate(() => { FILM.S.passes[0].state = 'working'; FILM.liveFilm(); }); await page.waitForTimeout(500);
