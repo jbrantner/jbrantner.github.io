@@ -2782,8 +2782,10 @@ def fin_codec(W, H, fps):
     raise RuntimeError('no video encoder opened')
 
 
-def fin_run(src, dst, up_path, vfi_dir=None, long_side=3840, smooth=True, job=None, temp=None):
-    """src mp4 -> dst mp4 (4K, smoothed, sharpened). job: dict for done/total/note/cancel; temp(): GPU degrees C or None."""
+def fin_run(src, dst, up_path, vfi_dir=None, long_side=3840, smooth=True, job=None, temp=None, out_fps=None):
+    """src mp4 -> dst mp4 (4K, smoothed, sharpened). job: dict for done/total/note/cancel; temp(): GPU degrees C or None.
+    out_fps: the smoothed frame rate (None = twice the clip's; 60 for 24 fps clips = 2.5x, Jordan 2026-11-07 "the 60fps 4k look"):
+    each new frame sits at its own moment between two of the clip's frames and RIFE paints it at that moment."""
     import av, numpy as np, torch
     import torch.nn.functional as F
     from fractions import Fraction
@@ -2809,8 +2811,9 @@ def fin_run(src, dst, up_path, vfi_dir=None, long_side=3840, smooth=True, job=No
         n0 = vs.frames or (int(round(float(vs.duration * vs.time_base) * fps)) if vs.duration else 0)
     k = long_side / max(w0, h0)
     W, H = int(round(w0 * k / 2)) * 2, int(round(h0 * k / 2)) * 2
-    ofps = fps * 2 if rife else fps
-    job['total'] = (n0 or 0) * (2 if rife else 1)
+    ofps = (Fraction(out_fps).limit_denominator(1001) if out_fps and out_fps > fps else fps * 2) if rife else fps
+    step = fps / ofps  # how far through the clip each new frame moves, in the clip's frames
+    job['total'] = int(round((n0 or 0) / step))
     job['size'] = '%dx%d' % (W, H)
     job['fps'] = float(ofps)
     codec, opts = fin_codec(W, H, ofps)
@@ -2818,12 +2821,12 @@ def fin_run(src, dst, up_path, vfi_dir=None, long_side=3840, smooth=True, job=No
     m = 128  # RIFE wants sizes in steps of 128 (zero padding right and bottom, cropped after)
     ph, pw = (h0 + m - 1) // m * m, (w0 + m - 1) // m * m
 
-    def mid(a, b):
+    def mid(a, b, t=0.5):
         if float((a - b).abs().mean()) > 0.18:  # a hard cut: no blend across it
-            return a
+            return a if t < 0.5 else b
         x = F.pad(torch.cat((a, b), 1), (0, pw - w0, 0, ph - h0))
         with torch.autocast(dev.type, dtype=torch.float16, enabled=dev.type == 'cuda'):
-            merged = rife(x, 0.5, [16, 8, 4, 2, 1])[2]
+            merged = rife(x, float(t), [16, 8, 4, 2, 1])[2]
         return merged[-1][:, :, :h0, :w0].float().clamp(0, 1)
 
     def big(t):
@@ -2862,20 +2865,22 @@ def fin_run(src, dst, up_path, vfi_dir=None, long_side=3840, smooth=True, job=No
             if job.get('cancel'):
                 raise RuntimeError('Stopped')
 
-        prev = None
+        prev, i, k = None, 0, [0]  # i: the clip frame prev is; k: the next new frame, at clip time k * step
+
+        def span(a, b, lo):  # the new frames between clip frames lo and lo + 1
+            while k[0] * step < lo + 1:
+                f = k[0] * step - lo
+                put(big(a) if f == 0 or b is None else big(mid(a, b, f)))
+                k[0] += 1
         with torch.no_grad():
             for fr in s.decode(vs):
                 cur = torch.from_numpy(fr.to_ndarray(format='rgb24')).to(dev).permute(2, 0, 1)[None].float() / 255
                 if prev is not None:
-                    put(big(prev))
-                    if rife is not None:
-                        put(big(mid(prev, cur)))
+                    span(prev, cur if rife is not None else None, i)
+                    i += 1
                 prev = cur
             if prev is not None:
-                last = big(prev)
-                put(last)
-                if rife is not None:
-                    put(last)
+                span(prev, None, i)  # the last frame is held
         for p in vo.encode(None):
             o.mux(p)
         if ao is not None:  # the sound as it is, no re-encode
@@ -2953,7 +2958,7 @@ def _fin_job(job, src):
         mm.soft_empty_cache()
         job['note'] = ''
         out = os.path.join(os.path.dirname(src), os.path.splitext(os.path.basename(src))[0] + '_4K.mp4')
-        r = fin_run(src, out + '.part.mp4', up, vfi, int(job.get('long') or 3840), bool(job.get('smooth')), job, _fin_temp)
+        r = fin_run(src, out + '.part.mp4', up, vfi, int(job.get('long') or 3840), bool(job.get('smooth')), job, _fin_temp, job.get('fps_out'))
         os.replace(out + '.part.mp4', out)
         root = os.path.realpath(folder_paths.get_output_directory())
         sub = os.path.relpath(os.path.dirname(out), root).replace('\\', '/')
@@ -2988,7 +2993,8 @@ async def h3finish(request):
         jid = uuid.uuid4().hex[:12]
         FINISHES[jid] = job = {'id': jid, 'state': 'working', 'done': 0, 'total': 0, 'note': '', 't_added': time.time(),
                                'long': max(1280, min(3840, int(body.get('long') or 3840))), 'smooth': body.get('smooth', True) is not False,
-                               'look': 'anime' if body.get('look') == 'anime' else 'live'}
+                               'look': 'anime' if body.get('look') == 'anime' else 'live',
+                               'fps_out': 60 if int(body.get('fps') or 0) == 60 else None}
         threading.Thread(target=_fin_job, args=(job, src), daemon=True).start()
         return web.json_response(job)
     except Exception as e:
