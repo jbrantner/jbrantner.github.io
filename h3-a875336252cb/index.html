@@ -202,6 +202,9 @@ body.ftab .go{display:none}
       <div>
         <div class="tagbar" id="tagBar"></div>
         <textarea id="prompt" placeholder="Describe the shot. Timed beats like [0s-2s] … [2s-5s] … are split across the pieces for you. 🎬 ＋ Shot adds a hard cut: [Shot 1] … [Shot 2] …"></textarea>
+        <div id="beatBar" hidden style="margin-top:8px"><div class="lab"><span>⏱ Which words when (drag a line to move where one ends and the next begins)</span></div>
+          <div id="bbTrack" style="position:relative;height:46px;border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none;user-select:none"></div>
+          <div class="note" id="bbNote" style="margin-top:4px"></div></div>
         <p class="note" id="mqNote" hidden style="margin:4px 0 0"></p>
       </div>
       <div>
@@ -1704,7 +1707,29 @@ function drawDots(){
   $('#pcDots').innerHTML = S.pcs.map(p => { const q = pcOf(p.url), cls = !q.online ? '' : q.load ? 'busy' : 'on';
     return `<span title="${esc(p.name)}: tap for its status and queue"><i class="dot ${cls}"></i>${esc(p.name.charAt(0))}${q.online && q.load ? ' ' + q.load : ''}</span>`; }).join('');
 }
-function drawShot(){ { const b = $('#mqNote'), n = refsOn().pins.length; if(b){ b.hidden = !n || !S.f.mq; b.textContent = '📌 ' + n + ' pose keyframe' + (n===1 ? '' : 's') + ', one piece from each to the next: write what happens (e.g. she ducks a punch and spins away). The rest of the wording is added for you.'; } }
+// ⏱ the timed lines of the words as a bar (Jordan 2026-11-07: "the prompts as a start and stop slider where when one ends the other begins"):
+// each [a-b] line is a block; dragging the line between two blocks moves the end of one and the start of the next together
+const BB_RE = /\[\s*(\d+(?:\.\d+)?)\s*s?\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)?\s*s?\s*\]/g, BB_COL = ['#ff5ca8', '#33c2c9', '#f2b84b', '#8f7cff', '#5fd38a', '#ff8a5c'];
+function bbBeats(text){ const out = []; let m; BB_RE.lastIndex = 0; while((m = BB_RE.exec(text))) out.push({i:m.index, j:m.index + m[0].length, a:+m[1], b:m[2] != null ? +m[2] : null});
+  out.forEach((x, n) => { const e = n + 1 < out.length ? out[n + 1].i : text.length; x.text = text.slice(x.j, e).trim(); }); return out; }
+const bbTotal = () => S.f.sm ? smoothTotal() / FPS : +S.f.seconds || 5;
+function bbSet(text){ const el = $('#prompt'); el.value = text; S.f.prompt = text; filmEdit(text); save(); drawGo(); drawBeatBar(); }
+// moves the line between beat k and k+1 to time v (both labels rewritten, everything else in the words kept)
+function bbMove(k, v){ const text = S.f.prompt || '', L = bbBeats(text), A = L[k], B = L[k + 1]; if(!A || !B) return text; const r = x => Math.round(x * 10) / 10;
+  const lab = (a, b) => '[' + t2(a) + '-' + (b==null ? '' : t2(b)) + ']';
+  return text.slice(0, A.i) + lab(A.a, r(v)) + text.slice(A.j, B.i) + lab(r(v), B.b) + text.slice(B.j); }
+function drawBeatBar(){ const box = $('#beatBar'); if(!box) return; const L = bbBeats(S.f.prompt || ''); box.hidden = L.length < 2; if(box.hidden) return;
+  const T = Math.max(bbTotal(), ...L.map(x => x.b || x.a + 0.5)), tr = $('#bbTrack'), pc = x => (100 * Math.max(0, Math.min(T, x)) / T).toFixed(3) + '%';
+  tr.innerHTML = L.map((x, n) => { const b = x.b != null ? x.b : n + 1 < L.length ? L[n + 1].a : T, c = BB_COL[n % BB_COL.length];
+      return `<div style="position:absolute;top:0;bottom:0;left:${pc(x.a)};width:calc(${pc(b)} - ${pc(x.a)});background:${c}33;border-left:2px solid ${c};padding:3px 5px;font-size:11px;line-height:1.25;overflow:hidden;color:var(--ink,#eee)"><b>${t2(x.a)}</b> ${esc(x.text.slice(0, 60))}</div>`; }).join('')
+    + L.slice(0, -1).map((x, n) => `<div data-bb="${n}" style="position:absolute;top:0;bottom:0;left:calc(${pc(L[n + 1].a)} - 11px);width:22px;cursor:ew-resize;z-index:2"><div style="position:absolute;left:9px;top:0;bottom:0;width:4px;border-radius:2px;background:#fff;opacity:.85"></div></div>`).join('');
+  $('#bbNote').textContent = L.length + ' timed lines over ' + fmtS(T) + '. Each line\'s words play from its start until the next one begins.'; }
+document.addEventListener('pointerdown', e => { const h = e.target.closest && e.target.closest('[data-bb]'); if(!h) return; e.preventDefault(); const k = +h.dataset.bb, tr = $('#bbTrack');
+  const mv = ev => { const L = bbBeats(S.f.prompt || ''), A = L[k], B = L[k + 1]; if(!A || !B) return; const R = tr.getBoundingClientRect(), T = Math.max(bbTotal(), ...L.map(x => x.b || x.a + 0.5));
+    const lo = A.a + 0.3, hi = (B.b != null ? B.b : T) - 0.3, v = Math.max(lo, Math.min(hi, (ev.clientX - R.left) / R.width * T)); bbSet(bbMove(k, v)); };
+  const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
+  window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up); });
+function drawShot(){ drawBeatBar(); { const b = $('#mqNote'), n = refsOn().pins.length; if(b){ b.hidden = !n || !S.f.mq; b.textContent = '📌 ' + n + ' pose keyframe' + (n===1 ? '' : 's') + ', one piece from each to the next: write what happens (e.g. she ducks a punch and spins away). The rest of the wording is added for you.'; } }
   const f = S.f, P = currentPlan(), tot = P.reduce((s, p) => s + p.deliv, 0) / FPS;
   $('#lenOut').textContent = fmtS(+f.seconds);
   $('#pieceBar').innerHTML = P.map((p, i) => `<i style="--w:${p.deliv}">${P.length > 1 ? (i + 1) + ' · ' : ''}${fmtS(p.deliv / FPS)}</i>`).join('');
@@ -2551,6 +2576,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

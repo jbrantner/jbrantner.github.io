@@ -306,6 +306,14 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
       smBlend:{vid:f.smVid, bounds:[{off:0, in:0, out:4.8}, {off:4.8, in:0, out:4.8}, {off:9.6, in:0, out:4.8}]}}); const L = H3.smoothTotal(), k = H3.smKeysFor(L), P = H3.smoothPlan();
       const r = {J:H3.blendJoins(), near:k.filter(([o]) => H3.blendJoins().some(j => Math.abs(o - j) < 8)).length, seams:P.slice(1).map(p => Math.round(p.start * 24 + p.skip)), n:P.length}; const d = Array.from({length:L}, (_, i) => i===114 || i===229 ? 80 : 2); r.drift = Math.max(...H3.planSpacing(d, L).keys.map(([o, x]) => Math.abs(o - x))); f.smBlend = null; return r; });
     ok(B.J.join()==='115,230' && B.near===0 && B.n > 1 && B.seams.every(x => B.J.every(j => Math.abs(x - j) >= 14)) && B.drift <= 1, '🪄 a long blend splits away from its joins, pins nothing near them, and 📐 spacing doesn\'t read the cuts as jumps to even out: ' + JSON.stringify(B)); }
+  // ⏱ which words when: timed lines show as blocks; dragging the line between two moves one's end and the next's start together
+  { await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:false, seconds:10, prompt:'A woman in a room.\n[0s-5s] she walks to the window.\n[5s-10s] she sits down.'}); document.getElementById('prompt').value = f.prompt; H3.drawBeatBar(); });
+    await page.evaluate(() => document.getElementById('beatBar').scrollIntoView());
+    const box = await page.evaluate(() => { const r = document.getElementById('bbTrack').getBoundingClientRect(), h = document.querySelector('[data-bb="0"]').getBoundingClientRect(); return {x:r.left, w:r.width, hx:h.left + h.width / 2, y:h.top + h.height / 2, shown:!document.getElementById('beatBar').hidden}; });
+    await page.mouse.move(box.hx, box.y); await page.mouse.down(); await page.mouse.move(box.x + box.w * 0.3, box.y, {steps:4}); await page.mouse.up();
+    const pr = await page.evaluate(() => H3.S.f.prompt);
+    ok(box.shown && /^A woman in a room\.\n\[0s-3s\] she walks to the window\.\n\[3s-10s\] she sits down\.$/.test(pr), '⏱ dragging the line between two timed lines moves one\'s end and the next\'s start: ' + JSON.stringify(pr));
+    await page.evaluate(() => { H3.S.f.prompt = ''; document.getElementById('prompt').value = ''; H3.drawBeatBar(); }); }
   // 🏷 a LoRA's trigger words are remembered: pick it again later and they fill in
   { const LW = await page.evaluate(async () => { const f = H3.S.f; f.loras = [{name:'', str:1, words:''}]; H3.drawAll(); const sel = document.querySelector('#loraList [data-ln]');
       const opt = [...sel.options].map(o => o.value).find(v => v); if(!opt) return {none:true}; sel.value = opt; sel.dispatchEvent(new Event('change', {bubbles:true}));
