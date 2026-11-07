@@ -383,27 +383,55 @@ const KEY = 'h3deck';
 const DEFAULT_PCS = [{name:'Render', url:'https://jordo-desktop.tailadee9a.ts.net', on:true, speed:1}, {name:'Main', url:'https://jordo-main.tailadee9a.ts.net', on:true, speed:1.26}];
 let S = load();
 let MOCAP = {list:[], looked:[], busy:false, err:''}; // 🦴 every Mocap clip the PCs' notes list, newest first
+function F_DEF(){ return {prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
+    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smBridge:true, smSpc:true, smEase:0.5, smPunch:0, smLoop:false, smSeam:12, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true, ctl:false, ctlVid:null, follow:0.7, ctlStr:1, ctlEnd:0.75, ctl2Vid:null, ctl2Str:0.5, ctl2End:0.65, h3:true, h3Style:'', h3Sound:'', h3Music:''}; }
 function load(){
   let s = {}; try{ s = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }catch(e){}
   if(window.H3_PCS) s.pcs = window.H3_PCS; // tests
   // a take whose sending broke off (nothing reached ComfyUI) shows as stopped, so ↻ Try again can send it
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
-  s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smBridge:true, smSpc:true, smEase:0.5, smPunch:0, smLoop:false, smSeam:12, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true, ctl:false, ctlVid:null, follow:0.7, ctlStr:1, ctlEnd:0.75, ctl2Vid:null, ctl2Str:0.5, ctl2End:0.65, h3:true, h3Style:'', h3Sound:'', h3Music:''}, s.f || {});
+  s.f = Object.assign(F_DEF(), s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   if(s.f.follow === undefined){ const o = s.f; o.follow = (+o.ctlStr===1 && +o.ctlEnd===0.8 && +o.ctl2Str===0.4 && +o.ctl2End===0.5) ? 0.7 : null; if(o.follow != null) Object.assign(o, followSet(0.7)); } // 🎚 (2026-11-05)
-  s.cast = s.cast || []; s.guides = s.guides || {}; s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
+  s.cast = s.cast || []; s.forms = s.forms || {}; s.casts = s.casts || {};
+  if(s.fkey===undefined){ s.fmig = true; s.castOld = JSON.parse(JSON.stringify(s.cast)); } // 🎞 films keep their own form and cast from 2026-11-07: every film starts with the old shared cast
+  s.guides = s.guides || {}; s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
 }
 let saveT = 0;
-function save(){ clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
+function save(){ fileTakes(); clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
+// ---------- 🎞 each film keeps to itself (Jordan 2026-11-07: "a lot of bleed from 1 film to the next with prompts carrying over") ----------
+// Every take belongs to one film (or to none: the one-off videos made with no film open). The form (prompt, length, references,
+// Smooth…) and the 👥 cast are kept per film too: opening another film puts that film's back. A new film starts from the look
+// (model, LoRAs, size) of the one before, with nothing else carried over.
+const LOOK_KEYS = ['model', 'turbo', 'loras', 'aspect', 'mp', 'takes', 'where', 'steps', 'maxPiece', 'h3', 'h3Style'];
+const mineK = () => S.fkey || '';
+let SHOWN = null; // a take opened by its link (✏️ Edit in H3 Deck) shows whatever film it's from
+const inMine = t => t.id===SHOWN || t.film===undefined || (t.film || '')===mineK();
+function freshForm(prev){ const f = F_DEF(); for(const k of LOOK_KEYS) if(prev && prev[k]!==undefined) f[k] = JSON.parse(JSON.stringify(prev[k])); return f; }
+function filmKeyNow(){ try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n) return null;
+  if(n.v==='film') return F.S.films.some(x => x.id===n.film) ? n.film : null; if(n.v==='home') return ''; }catch(e){} return null; }
+function clipFilms(){ const o = {}; try{ const E = JSON.parse(localStorage.getItem('h3edit') || '{}'); (E.films || []).forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { o[c.take] = o[c.take] || f.id; }))); }catch(e){} return o; }
+function fileTakes(){ if(!S.takes) return; let cf = null;
+  for(const t of S.takes){ if(t.film!==undefined) continue;
+    if(!S.fmig){ t.film = mineK(); continue; }
+    cf = cf || clipFilms(); t.film = cf[t.id] || (t.toFilm && t.toFilm.film) || (t.redo && t.redo.film) || (t.combo && t.combo.film) || ''; }
+  if(S.fmig){ for(let k = S.takes.length - 1; k >= 0; k--){ const t = S.takes[k]; if(t.film) continue; // made from a take of a film: that film
+      const s = [t.redo && t.redo.src, t.carry && t.carry.src, t.from && t.from.id, t.lead && t.lead.src].map(id => id && S.takes.find(x => x.id===id)).find(x => x && x.film); if(s) t.film = s.film; } } }
+function syncFilm(){ const k = filmKeyNow(); if(k==null) return false;
+  if(S.fkey===undefined){ S.fkey = k; fileTakes(); S.fmig = false; save(); drawTakes(); return true; } // the first film opened after the update keeps the form as it is
+  if(k===S.fkey) return false;
+  S.forms[S.fkey] = S.f; S.casts[S.fkey] = S.cast;
+  S.f = S.forms[k] || freshForm(S.f); S.cast = S.casts[k] || (S.castOld ? JSON.parse(JSON.stringify(S.castOld)) : []);
+  delete S.forms[k]; delete S.casts[k]; S.fkey = k; FILMT = null; FILMTID = null; save(); drawAll(); drawTakes(); return true; }
+window.H3FilmNav = () => syncFilm();
 // Safari gives each site only about 5 MB for this save, whatever the phone has free. The pictures and clips themselves are in
 // IndexedDB; this save holds the form, the takes and a small preview per picture/clip, and old previews were what filled it
 // (Jordan 2026-11-04). tidyMedia drops media nothing uses any more (blob too); hard = also the previews of media that isn't in
 // the form (only the form shows them, and fixThumbs remakes one from the kept file when it comes back).
 function tidyMedia(hard){
-  const used = JSON.stringify({f:S.f, takes:S.takes, cast:S.cast, guides:S.guides}), form = JSON.stringify(S.f); let n = 0;
+  const used = JSON.stringify({f:S.f, takes:S.takes, cast:S.cast, guides:S.guides, forms:S.forms, casts:S.casts, castOld:S.castOld}), form = JSON.stringify([S.f, S.forms]); let n = 0;
   for(const id of Object.keys(S.media)){
     if(!used.includes('"' + id + '"')){ delete S.media[id]; delete BLOBS[id]; IDB.del(id).catch(() => {}); Object.keys(S.up).forEach(k => { if(k.startsWith(id + '|')) delete S.up[k]; }); n++; }
     else if(hard && S.media[id].thumb && !form.includes('"' + id + '"')){ S.media[id].thumb = ''; S.media[id].tc = 1; n++; } }
@@ -889,35 +917,37 @@ function refLabels(){ // fixed order: pictures, then each video (its soundtrack'
 // goes along and MiniMax hears who it is ("<Subject 1> is the lady, as shown in <Picture 3>"). Takes keep the token, so every later render
 // (more takes, redo a stretch, carry on, lead in) uses the subject as it is NOW: change it once and it changes everywhere.
 const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
-const castOf = n => (S.cast || []).find(c => c.n===+n);
+const castFor = k => k===undefined || (k || '')===mineK() ? S.cast || [] : (S.casts[k || ''] || S.castOld || []);
+const castOf = (n, k) => castFor(k).find(c => c.n===+n);
 const castPics = c => { if(!c) return []; if(c.pic){ c.pics = c.pics || []; if(!c.pics.includes(c.pic)) c.pics.unshift(c.pic); } delete c.pic; c.pics = (c.pics || []).filter(id => S.media[id]); return c.pics; }; // (Jordan 2026-11-06: several pictures each)
 const castWho = c => ((c.who || '').trim() || (c.stand || '').trim()).replace(/[\s.]*$/, '');
 const castMore = c => (c && c.desc || '').trim().replace(/\s*\n+\s*/g, ' ').replace(/[\s.]*$/, '');
 function castUsed(t){ const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), ns = new Set();
-  txt.replace(SUBRE, (m, n) => { if(castOf(n)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
+  txt.replace(SUBRE, (m, n) => { if(castOf(n, t.film)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
   const imgs = (t.imgs || []).filter(r => !r.cast);
-  if(pics) for(const n of castUsed(t)){ const c = castOf(n); for(const id of castPics(c)) if(imgs.length < MAXREF.img) imgs.push({id, desc:castWho(c), more:castMore(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); }
+  if(pics) for(const n of castUsed(t)){ const c = castOf(n, t.film); for(const id of castPics(c)) if(imgs.length < MAXREF.img) imgs.push({id, desc:castWho(c), more:castMore(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); }
   return Object.assign({}, t, {imgs}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
   const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) (pics[r.cast] = pics[r.cast] || []).push('<Picture ' + (k + 1) + '>'); });
   const told = [];
-  let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n); if(!c || pics[c.n]) return m;
+  const fk = T ? T.film : undefined;
+  let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n, fk); if(!c || pics[c.n]) return m;
     let w = (c.stand || '').trim() || 'someone'; if(castMore(c) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
   // no picture: the description goes in up front, once ("The woman: long black hair, green eyes, …")
   if(told.length){ const lead = told.map(c => { const w = (c.stand || '').trim() || 'someone'; return (/^(a|an)\s/i.test(w) ? 'The ' + w.replace(/^(a|an)\s+/i, '') : w.charAt(0).toUpperCase() + w.slice(1)) + ': ' + castMore(c) + '.'; }).join(' ');
     const m = out.match(/^\s*\[Shot 1\]\s*/i); out = m ? m[0] + lead + ' ' + out.slice(m[0].length) : lead + ' ' + out; }
-  if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.' + (castMore(castOf(n)) ? ' ' + castMore(castOf(n)).replace(/^./, x => x.toUpperCase()) + '.' : ''));
+  if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n, fk)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.' + (castMore(castOf(n, fk)) ? ' ' + castMore(castOf(n, fk)).replace(/^./, x => x.toUpperCase()) + '.' : ''));
     if(defs.length) out = defs.join(' ') + ' ' + out; }
   return out; }
-const castWords = txt => (txt || '').replace(SUBRE, (m, n) => { const c = castOf(n); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
+const castWords = (txt, k) => (txt || '').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
 function castHits(w){ // how often the words are in the form and the takes (for 🔁 swap)
   if(!(w = (w || '').trim())) return 0; const re = new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'); let n = 0;
   const cnt = x => { n += ((x || '').match(re) || []).length; };
-  cnt(S.f.prompt); Object.values(S.f.pieceText || {}).forEach(cnt); S.takes.forEach(t => { cnt(t.prompt); (t.pieces || []).forEach(p => cnt(p.prompt)); }); return n; }
+  cnt(S.f.prompt); Object.values(S.f.pieceText || {}).forEach(cnt); S.takes.filter(inMine).forEach(t => { cnt(t.prompt); (t.pieces || []).forEach(p => cnt(p.prompt)); }); return n; }
 function castSwap(re, to){ // every prompt in the form and in every take (the timeline's clips are takes)
   const f = S.f; f.prompt = (f.prompt || '').replace(re, to); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = f.pieceText[k].replace(re, to);
-  S.takes.forEach(t => { if(t.prompt) t.prompt = t.prompt.replace(re, to); (t.pieces || []).forEach(p => { if(p.prompt) p.prompt = p.prompt.replace(re, to); }); }); }
+  S.takes.filter(inMine).forEach(t => { if(t.prompt) t.prompt = t.prompt.replace(re, to); (t.pieces || []).forEach(p => { if(p.prompt) p.prompt = p.prompt.replace(re, to); }); }); }
 function drawCast(){ const L = S.cast || [];
   $('#castSum').textContent = L.length ? L.length + (L.length > 1 ? ' subjects' : ' subject') + (L.some(c => castPics(c).length) ? ' · ' + L.filter(c => castPics(c).length).length + ' with pictures' : '') : '';
   $('#castList').innerHTML = L.map(c => { const P = castPics(c), m = P.length > 0, hits = castHits(c.stand), tk = '&lt;Subject ' + c.n + '&gt;';
@@ -1274,7 +1304,7 @@ function upGraph(t, oi, names){
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
   const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt), length = part ? part.L : regenLen(t);
-  const prompt = (refs ? castText(words, {imgs:upRefs(t).slice(0, REGEN_REFS)}, true) : castWords(words)) || SM_PROMPT;
+  const prompt = (refs ? castText(words, {imgs:upRefs(t).slice(0, REGEN_REFS), film:t.film}, true) : castWords(words, t.film)) || SM_PROMPT;
   let iv;
   if(refs){ const ri = {}; upRefs(t).slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
     iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:d.w, height:d.h, length, ref_image_size:'match'}, ri)); }
@@ -1957,10 +1987,10 @@ const lazyOn = v => { if(v && v.dataset.lazy && !v.getAttribute('src')){ v.prelo
 const LAZY = 'IntersectionObserver' in window ? new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting){ lazyOn(e.target); LAZY.unobserve(e.target); } }), {rootMargin:'300px 0px'}) : null;
 function lazyScan(){ document.querySelectorAll('video[data-lazy]:not([src])').forEach(v => { if(v.dataset.lz) return; v.dataset.lz = 1; if(LAZY) LAZY.observe(v); else lazyOn(v); }); }
 new MutationObserver(() => lazyScan()).observe(document.documentElement, {childList:true, subtree:true});
-function drawTakes(){
-  const box = $('#takes'); if(!S.takes.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; return; }
+function drawTakes(){ fileTakes(); const L = S.takes.filter(inMine);
+  const box = $('#takes'); if(!L.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; return; }
   // keep a playing video playing: only redraw what changed
-  const html = S.takes.map(t => {
+  const html = L.map(t => {
     const secs = t.pieces.reduce((s, p) => s + p.deliv, 0) / FPS, n = t.pieces.length;
     const chips = n > 1 ? `<div class="pieces">${t.pieces.map((p, i) => `<i style="--w:${p.deliv};${p.state==='done' ? 'color:var(--good)' : p.state==='running' ? 'color:var(--accent);border-color:var(--accent)' : p.state==='failed' ? 'color:var(--bad)' : ''}" data-piece="${t.id}|${i}">${i + 1}${p.state==='done' ? ' ✓' : p.state==='running' ? ' ▶' : p.state==='failed' ? ' ✕' : ''}</i>`).join('')}</div>` : '';
     const f = progress(t), tl = timeLeft(t);
@@ -1975,9 +2005,9 @@ function drawTakes(){
   });
   const have = [...box.children].filter(x => x.dataset.take);
   if(have.length!==html.length || have.some((el, i) => el.dataset.take!==html[i].id)){ box.innerHTML = html.map(x => x.html).join(''); }
-  else html.forEach((x, i) => { const el = have[i]; if(el.dataset.sig!==x.sig){ el.outerHTML = x.html; } else { const t = S.takes[i];
+  else html.forEach((x, i) => { const el = have[i]; if(el.dataset.sig!==x.sig){ el.outerHTML = x.html; } else { const t = L[i];
     el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%'; } });
-  $('#clearDone').hidden = !S.takes.some(t => t.state!=='working');
+  $('#clearDone').hidden = !L.some(t => t.state!=='working');
 }
 function drawLive(){ // the running piece's preview picture and step count, without redrawing the list
   for(const t of S.takes){ if(t.state!=='working') continue; const el = document.querySelector(`[data-take="${t.id}"]`); if(!el) continue;
@@ -2036,7 +2066,7 @@ function filmKeeps(){ const keep = new Set(); let F = {}; try{ F = JSON.parse(lo
   const add = id => { const t = id && S.takes.find(x => x.id===id); if(!t || keep.has(t.id + '>')) return; keep.add(t.id); keep.add(t.id + '>');
     [t.carry && t.carry.src, t.redo && t.redo.src, t.redo && t.redo.root, t.from && t.from.id].forEach(add); };
   [...keep].forEach(add); return keep; }
-$('#clearDone').onclick = () => { const keep = filmKeeps(), gone = S.takes.filter(t => t.state!=='working' && !keep.has(t.id)), kept = S.takes.filter(t => t.state!=='working' && keep.has(t.id)).length;
+$('#clearDone').onclick = () => { const keep = filmKeeps(), gone = S.takes.filter(t => inMine(t) && t.state!=='working' && !keep.has(t.id)), kept = S.takes.filter(t => inMine(t) && t.state!=='working' && keep.has(t.id)).length;
   if(!gone.length){ toast('Every finished take is on a 🎞 Films timeline, so they all stay'); return; }
   if(confirm('Take ' + gone.length + ' finished or stopped render' + (gone.length===1 ? '' : 's') + ' off the list?' + (kept ? ' ' + kept + ' on your Films timelines stay.' : '') + ' The videos stay on the PCs.')){
     const g = new Set(gone.map(t => t.id)); S.takes = S.takes.filter(t => !g.has(t.id)); tidyMedia(); save(); drawTakes(); } };
@@ -2303,6 +2333,7 @@ document.addEventListener('visibilitychange', () => { if(!document.hidden){ ping
 // ✏️ from H3 Film: index.html#take=<id> shows that take, ready to edit (🎲 takes from a piece, ➕ Add more, 🪄⬆, Use settings)
 function showTake(){ const m = /take=([^&]+)/.exec(location.hash); if(!m) return; const id = decodeURIComponent(m[1]), t = S.takes.find(x => x.id===id);
   if(!t){ toast("That take isn't in H3 Deck on this phone any more"); return; }
+  if(!inMine(t)){ SHOWN = id; drawTakes(); }
   const go = hl => { const el = document.querySelector(`.take[data-take="${CSS.escape(id)}"]`); if(!el) return; el.scrollIntoView({behavior:'smooth', block:'center'}); if(hl){ el.classList.add('hl'); setTimeout(() => el.classList.remove('hl'), 4000); } };
   setTimeout(() => go(true), 300); setTimeout(() => go(false), 1600); // (again once the Films timeline above it has its height)
   if(/more=1/.test(location.hash) && t.state==='done' && !t.sm){ setTimeout(() => extendSheet(t, 3), 400); return; }
@@ -2327,7 +2358,7 @@ function filmNav(tab){ try{ const F = FW && FW.FILM; if(!F) return; const v = F.
   if(tab==='films' && v==='review') F.go(F.S.lastFilm && F.S.films.some(x => x.id===F.S.lastFilm) ? {v:'film', film:F.S.lastFilm} : {v:'home'}); }catch(e){} }
 // the Films frame is as tall as what it shows, so the page scrolls on down into the Render form
 function fitFilm(){ const fr = $('#filmTab iframe'); if(!fr) return; try{ const d = fr.contentDocument; if(!d || !d.body) return; const h = Math.max(200, d.body.scrollHeight); if(Math.abs(fr.offsetHeight - h) > 2) fr.style.height = h + 'px'; }catch(e){} }
-setInterval(() => { if(S.tab==='films' && !document.hidden){ fitFilm(); drawFilmNote(); } }, 1500);
+setInterval(() => { if(S.tab==='films' && !document.hidden){ syncFilm(); fitFilm(); drawFilmNote(); } }, 1500);
 // the film that new takes from the Films tab go into (its timeline), or null
 function filmTarget(){ try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n || n.v!=='film') return null; const f = F.S.films.find(x => x.id===n.film); if(!f) return null;
   const sel = F.SEL && F.clipOf(f, F.SEL); return sel ? {film:f.id, name:f.name, clip:sel.c.id} : {film:f.id, name:f.name}; }catch(e){ return null; } }
@@ -2608,6 +2639,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
