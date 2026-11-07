@@ -131,6 +131,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       ok(TT && sent.length===sb + 1 && /\[0s-5s\] she walks to the window\.?\n\[5s-10s\] she walks to the window/.test(TT.pr) && TS.sm && /\[5s-10s\]/.test(TS.pr) && TS.bar && TS.follow===false && n1===n0,
         '🧪 Test joins the ticked clips into one and opens it in Smooth with each clip\'s words timed on the ⏱ bar; the playhead doesn\'t replace them: ' + JSON.stringify({TN, TT, TS, n0, n1}));
       await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.prompt = 'she walks to the window'; }); }
+    // ↻ a stretch of a 🪄 smoothed take can be redone (to bridge the seam between its parts)
+    { const RS = await page.evaluate(async () => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tA'))); Object.assign(t, {id:'tSm', sm:{vid:'v', start:0, every:4}}); H3.S.takes.push(t);
+        const k0 = H3.S.takes.length, n = await window.H3Redo({take:'tSm', a:2, b:3}); const nt = H3.S.takes.slice(0, H3.S.takes.length - k0);
+        const out = {n, redo:nt.length && !!nt[0].redo, sm:nt.length ? nt[0].sm : 'none'}; H3.S.takes = H3.S.takes.filter(x => x.id!=='tSm' && !nt.includes(x)); H3.saveNow(); return out; });
+      ok(RS.n===1 && RS.redo && RS.sm===null, '↻ a stretch of a smoothed take can be redone: ' + JSON.stringify(RS)); }
     { const q0 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length), p0 = await fr.evaluate(() => (FILM.S.passes || []).length);
       await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tBl'))); t.id = 'tBl2'; t.blend = Object.assign({}, t.blend, {key:'kb2', chain:{den:0, clean:0.8}}); H3.S.takes.unshift(t); H3.saveNow(); }, R);
       await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(800);
