@@ -1229,10 +1229,14 @@ function upGraph(t, oi, names){
   const enc = add('VAEEncode', {pixels:pxu, vae});
   const big = part || pix ? enc : add('MinimaxH3LatentUpscaler3D', {latent:[enc, 0], model_name:regenUpModel(oi), mode:'target dimensions', 'mode.width':d.w, 'mode.height':d.h, align:32, enable_temporal_chunking:true, force_unload:true, device:'cuda', precision:'bf16'});
   const refs = regenRefsOn(t, oi) && names; // ↩ the take's own reference pictures keep the likeness (Ref2VA + the regenerate LoRA)
-  const model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:refs ? regenRefUnet(oi) : regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
+  let model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:refs ? regenRefUnet(oi) : regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
+  // the take's own LoRAs ride along (Jordan 2026-11-07: "I'm wondering if the Lora worked still for the pass": it didn't, the pass had none), with their words
+  const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), uls = lorasOf(t).filter(l => have.includes(l.name) && l.name!==regenLora(oi));
+  for(const l of uls) model = [add('LoraLoaderModelOnly', {model, lora_name:l.name, strength_model:+l.str || 1}), 0];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0];
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
-  const words = u.prompt || t.prompt, length = part ? part.L : regenLen(t);
+  const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
+  const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt), length = part ? part.L : regenLen(t);
   const prompt = (refs ? castText(words, {imgs:upRefs(t).slice(0, REGEN_REFS)}, true) : castWords(words)) || SM_PROMPT;
   let iv;
   if(refs){ const ri = {}; upRefs(t).slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
@@ -2440,7 +2444,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
     if(big) t.seconds = L / FPS;
     // the pass always runs on the official (vanilla) MiniMax H3 model + the regenerate LoRA, never the take's own model or LoRAs
     // (Jordan 2026-11-07: the card said Pika because the copy kept its source's model name)
-    Object.assign(t, {model:famKey(t.up.refs ? 'minimax_h3_ref2va_pruned_int8_convrot.safetensors' : 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'), turbo:false, loras:[]});
+    Object.assign(t, {model:famKey(t.up.refs ? 'minimax_h3_ref2va_pruned_int8_convrot.safetensors' : 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'), turbo:false, loras:lorasOf(t).filter(l => !/turbo|regenerate|lightning|4.?step|8.?step/i.test(l.name))});
     t.pc = await redoPc(t, src, fl, extra) || src.pc; extra[t.pc] = (extra[t.pc] || 0) + 120;
     S.takes.unshift(t); sent++; }
   save(); drawTakes(); tickSoon(200); if(o.quiet) return sent;
