@@ -257,6 +257,22 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => { FILM.S.passes.forEach(p => { if(p.big) p.state = 'working'; }); FILM.liveFilm(); }); await page.waitForTimeout(300);
   const BW = await fr.evaluate(() => { FILM.draw(); const f = FILM.S.films[0], cs = f.tracks[0].clips; return {n:f.tracks.length, big:cs.every(c => { const t = FILM.takeOf(c.take); return t && t.redo && t.redo.big; }), lens:cs.map(c => +(c.out - c.in).toFixed(2)), ats:cs.map(c => c.at), lab:document.querySelector('.trk[data-k="0"] .clip .nm').textContent}; });
   ok(BW.n===3 && BW.big && JSON.stringify(BW.lens)==='[2,2]' && JSON.stringify(BW.ats)==='[0,2]' && /^🔍/.test(BW.lab), '🔍 the bigger parts are on a new top track, same timing: ' + JSON.stringify(BW));
+  // 🎞 each film keeps its own form, cast and takes (Jordan 2026-11-07: prompts bled from one film to the next)
+  { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url())); const A = await fr.evaluate(() => FILM.S.films[0].id);
+    await page.evaluate(() => { H3.S.f.prompt = 'film A words'; H3.S.f.model = H3.S.f.model || 'mA'; H3.S.cast.push({n:7, kind:'char', stand:'a tall woman', who:'', keep:'exact'}); H3.saveNow(); });
+    const mA = await page.evaluate(() => H3.S.f.model);
+    const B = await fr.evaluate(() => { const f = {id:'fB', name:'Film B', tracks:[{id:'trB', clips:[]}, {id:'trB2', clips:[]}], pps:24}; FILM.S.films.push(f); FILM.go({v:'film', film:'fB'}); return f.id; });
+    await page.waitForTimeout(400);
+    const inB = await page.evaluate(() => ({fkey:H3.S.fkey, pr:H3.S.f.prompt, model:H3.S.f.model, c7:H3.S.cast.some(c => c.n===7)}));
+    await page.evaluate(() => { H3.S.f.prompt = 'film B words'; const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.pieces && x.pieces.length))); Object.assign(t, {id:'tFB', film:undefined}); delete t.film; H3.S.takes.unshift(t); H3.save(); H3.drawTakes(); });
+    const bList = await page.evaluate(() => ({film:H3.S.takes.find(x => x.id==='tFB').film, shown:!!document.querySelector('.take[data-take="tFB"]')}));
+    await fr.evaluate(A => FILM.go({v:'film', film:A}), A); await page.waitForTimeout(400);
+    const inA = await page.evaluate(() => ({fkey:H3.S.fkey, pr:H3.S.f.prompt, c7:H3.S.cast.some(c => c.n===7), shown:!!document.querySelector('.take[data-take="tFB"]')}));
+    await fr.evaluate(() => FILM.go({v:'film', film:'fB'})); await page.waitForTimeout(400);
+    const back = await page.evaluate(() => H3.S.f.prompt);
+    ok(inB.fkey==='fB' && inB.pr==='' && inB.model===mA && !inB.c7 && bList.film==='fB' && bList.shown
+      && inA.fkey===A && inA.pr==='film A words' && inA.c7 && !inA.shown && back==='film B words',
+      '🎞 each film keeps its own prompt, cast and takes: ' + JSON.stringify({inB, bList, inA, back})); }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
