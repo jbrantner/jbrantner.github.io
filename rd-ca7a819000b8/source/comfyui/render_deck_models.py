@@ -2694,6 +2694,10 @@ async def h3export_cancel(request):
 # >>> / <<< marks needs only torch, av and spandrel, so it can be tried outside ComfyUI too.
 # >>> finish4k
 FIN_UP_URL = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth'
+# the upscaler per look (Jordan 2026-11-07: "the videos i make are usually live action"): Real-ESRGAN's general model is the same small,
+# fast video-friendly kind as the anime one, but trained on real photos, so skin and hair stay photographic instead of painted
+FIN_UPS = {'live': ('realesr-general-x4v3.pth', 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth'),
+           'anime': ('realesr-animevideov3.pth', FIN_UP_URL)}
 FIN_RIFE_URL = 'https://huggingface.co/hzwer/RIFE/resolve/main/RIFEv4.26_0921.zip'
 
 
@@ -2892,11 +2896,12 @@ def _fin_job(job, src):
         if job.get('cancel'):
             raise RuntimeError('Stopped')
         job['note'] = 'getting ready'
-        up = folder_paths.get_full_path('upscale_models', 'realesr-animevideov3.pth')
+        upn, upu = FIN_UPS.get(job.get('look') or 'live', FIN_UPS['live'])
+        up = folder_paths.get_full_path('upscale_models', upn)
         if not up:
-            up = os.path.join(folder_paths.get_folder_paths('upscale_models')[0], 'realesr-animevideov3.pth')
-            job['note'] = 'downloading the anime video upscaler (2.5 MB)'
-            _fin_fetch(FIN_UP_URL, up)
+            up = os.path.join(folder_paths.get_folder_paths('upscale_models')[0], upn)
+            job['note'] = 'downloading the upscaler (' + upn + ')'
+            _fin_fetch(upu, up)
         vfi = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'ComfyUI-VFI')
         if job.get('smooth') and os.path.isdir(os.path.join(vfi, 'rife', 'train_log')) and not os.path.isfile(os.path.join(vfi, 'rife', 'train_log', 'flownet.pkl')):
             job['note'] = 'downloading the RIFE smoothing model'
@@ -2942,7 +2947,8 @@ async def h3finish(request):
             raise ValueError('A 4K finish is already running on this PC')
         jid = uuid.uuid4().hex[:12]
         FINISHES[jid] = job = {'id': jid, 'state': 'working', 'done': 0, 'total': 0, 'note': '', 't_added': time.time(),
-                               'long': max(1280, min(3840, int(body.get('long') or 3840))), 'smooth': body.get('smooth', True) is not False}
+                               'long': max(1280, min(3840, int(body.get('long') or 3840))), 'smooth': body.get('smooth', True) is not False,
+                               'look': 'anime' if body.get('look') == 'anime' else 'live'}
         threading.Thread(target=_fin_job, args=(job, src), daemon=True).start()
         return web.json_response(job)
     except Exception as e:
