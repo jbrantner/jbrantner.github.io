@@ -821,6 +821,16 @@ function segsRaw(t, d){ d = d || 0; if(!t || d > 8) return [];
   if(t.cont && !ownCarry(t)){ off = +t.contSecs || 0; if(t.carry) out = cutSegs(segsOf(takeOf(t.carry.src), d + 1), 0, off); }
   (t.pieces || []).forEach(p => out.push({a:off + (p.start || 0), b:off + (p.start || 0) + (p.deliv || p.gen || 0) / FPS, text:cleanWords(p.prompt || t.prompt)}));
   return out.filter(x => x.text); }
+// a take's words with its own timed beats ([2s-5s] …) kept, in the take's time: for 🪄 Blend, whose chunks each need their own beats
+function beatSegs(t){ if(!t) return [];
+  if(t.combo || t.redo || t.blend || (t.cont && !ownCarry(t))) return segsOf(t);
+  const out = []; (t.pieces || []).forEach(p => { const a0 = p.start || 0, b0 = a0 + (p.deliv || p.gen || 0) / FPS, raw = String(p.prompt || t.prompt || '');
+    const re = /\[\s*(\d+(?:\.\d+)?)\s*s?\s*-\s*(\d+(?:\.\d+)?)?\s*s?\s*\]/g, ms = [...raw.matchAll(re)];
+    if(!ms.length){ const w = cleanWords(raw); if(w) out.push({a:a0, b:b0, text:w}); return; }
+    const glob = untime(raw.slice(0, ms[0].index));
+    ms.forEach((m, i) => { const a = a0 + +m[1], b = m[2] != null ? a0 + +m[2] : b0, w = untime(raw.slice(m.index + m[0].length, i + 1 < ms.length ? ms[i + 1].index : raw.length));
+      if(w && Math.min(b, b0) > a) out.push({a, b:Math.min(b, b0), text:(glob ? glob + ' ' : '') + w}); }); });
+  return out; }
 // ➕ Carry on (Jordan 2026-11-07): the first second carries the old action to its end, so the words match the ~0.9 s of real motion
 // the model gets from the clip before; the new action goes on the open line after it (one shot, no cut)
 const carryLead = w => { w = String(w || '').trim().replace(/[.!?]+$/, ''); return w ? '[0s-1s] ' + w + ', carrying on from the moment before.\n[1s-] ' : ''; };
@@ -890,7 +900,8 @@ const BLEND_MAX = 15;
 async function blendGo(f, tr, cs, chain){ const fn = deckFn('H3Combine'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
   cs = cs.slice().sort((a, b) => a.at - b.at); if(cs.find(c => !fileOf(takeOf(c.take)))){ toast('A clip in it is still rendering: wait for it first'); return false; }
   const tot = cs.reduce((a, c) => a + len(c), 0); if(tot > BLEND_MAX + 0.05){ toast('🪄 Smooth takes up to ' + BLEND_MAX + ' s at a time: tick fewer clips (' + fmt(tot) + ' now)', 5000); return false; }
-  let off = 0; const bounds = cs.map(c => { const b = {take:c.take, in:c.in, out:c.out, at:c.at, off, text:wordsBetween(takeOf(c.take), c.in, c.out) || ''}; off += len(c); return b; });
+  let off = 0; const bounds = cs.map(c => { const b = {take:c.take, in:c.in, out:c.out, at:c.at, off, text:untime(wordsBetween(takeOf(c.take), c.in, c.out) || ''),
+    segs:cutSegs(beatSegs(takeOf(c.take)), c.in, c.out).map(x => ({a:Math.round((x.a - c.in + off) * 100) / 100, b:Math.round((x.b - c.in + off) * 100) / 100, text:untime(x.text)})).filter(x => x.text && x.b - x.a > 0.05)}; off += len(c); return b; });
   const ok = await fn({film:f.id, track:tr.id, clips:cs.map(c => c.id), at:cs[0].at, auto:true, parts:cs.map(c => ({take:c.take, in:c.in, out:c.out})), blend:Object.assign({film:f.id, track:tr.id, bounds}, chain ? {chain:{den:S.qpDen != null ? S.qpDen : 0, clean:S.qpClean != null ? S.qpClean : 0.8}} : {})});
   if(ok) toast('🪄 Joining ' + cs.length + ' clips for the blend (a few seconds), then they load into 🪄 Smooth below. The timeline stays as it is.', 6000); return !!ok; }
 async function combineGo(f, tr, cs, auto){ const fn = deckFn('H3Combine'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
@@ -938,8 +949,10 @@ async function qualityGo(f, tr, o){ const fn = deckFn('H3Nudge'); if(!fn){ toast
   for(let i = 0; i < wins.length; i++) n += await qpSend(fn, p, i) ? 1 : 0;
   if(n < wins.length){ p.state = 'failed'; p.err = 'only ' + n + ' of ' + wins.length + ' parts could be sent'; save(); toast((big ? '🔍' : '✨') + ' Only ' + n + ' of ' + wins.length + ' parts could be sent, so nothing will change. Try again when both PCs are on.', 6000); return 0; }
   toast((big ? '🔍 Bigger' : '✨ Quality pass') + ': ' + n + ' part' + (n > 1 ? 's' : '') + ' sent. When all of them are done they go on a new top track' + (wins.length > 1 ? (o.sep ? ' as a blend track (each clip on its own, with its own words)' : ', joined into one clip') : '') + '. This track stays as it is.', 6000); save(); return n; }
+// a take's words without its own timed labels (they were timed for its own render, not for a new window or a blend)
+const untime = x => String(x || '').replace(/\[[^\]]*\d\s*s?[^\]]*\]\s*/g, ' ').replace(/,? carrying on from the moment before\./g, '.').replace(/\s+/g, ' ').trim();
 const qpSend = (fn, p, i) => { const w = p.wins[i], q = p.o || {};
-  const words = (wordsBetween(takeOf(w.take), w.in, w.out) || '').replace(/\[[^\]]*\d\s*s?[^\]]*\]\s*/g, ' ').replace(/,? carrying on from the moment before\./g, '.').replace(/[ \t]+/g, ' ').trim();
+  const words = untime(wordsBetween(takeOf(w.take), w.in, w.out) || '');
   return fn({take:w.take, a:w.in, b:w.out, prompt:words, n:1, den:q.den, clean:q.clean || 0, look:q.look, seed:q.seed, qp:true, scale:q.scale || 1, key:p.key, wi:i, quiet:true}); };
 const qpOk = x => fileOf(x) && x.state==='done' && !x.upErr;
 const qpBad = x => x.state==='failed' || !!x.upErr || (x.state==='done' && x.upStage==='done' && !fileOf(x));

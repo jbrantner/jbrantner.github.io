@@ -297,6 +297,10 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     const gs = sent.slice(n0), sl = gs.map(g => Object.values(g).find(n => n.class_type==='Video Slice').inputs.start_time), ng = gs.map(g => Object.values(g).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image).length);
     const sk = gs.map(g => Object.values(g).filter(n => n.class_type==='ImageFromBatch' && n.inputs.length > 1).map(n => n.inputs.batch_index));
     ok(gs.length===P.p.length && sl.every((x, i) => Math.abs(x - P.p[i].start) < 0.002) && ng.every((x, i) => x===keys(P.p[i].gen)) && sk.every((x, i) => i ? x[0]===P.p[i].skip : !x.length), '🪄 each window is its own job: its slice of the video, its own keyframes, and the overlap dropped: ' + JSON.stringify({sl, ng, sk})); }
+  // reference pictures count toward 8 GB (a 5 s part with 7 pictures ran out of memory on Render): the same 5 s splits once they're in
+  { const R = await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:true, smUp:false, smLoop:false, smSpc:false, smEvery:4, seconds:5, mp:0.41, smRefs:[]}); const a = H3.smoothPlan().length;
+      Object.assign(f, {smUp:true, smUpRefs:true, smRefs:[f.smVid, f.smVid, f.smVid]}); const b = H3.smoothPlan().length; Object.assign(f, {smUp:false, smRefs:[]}); return {a, b}; });
+    ok(R.a===1 && R.b > 1, '🪄 reference pictures count toward the 8 GB budget: a 5 s smoothing with 3 pictures renders in smaller parts: ' + JSON.stringify(R)); }
   // 🏷 a LoRA's trigger words are remembered: pick it again later and they fill in
   { const LW = await page.evaluate(async () => { const f = H3.S.f; f.loras = [{name:'', str:1, words:''}]; H3.drawAll(); const sel = document.querySelector('#loraList [data-ln]');
       const opt = [...sel.options].map(o => o.value).find(v => v); if(!opt) return {none:true}; sel.value = opt; sel.dispatchEvent(new Event('change', {bubbles:true}));
