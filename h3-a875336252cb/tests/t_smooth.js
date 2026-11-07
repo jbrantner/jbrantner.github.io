@@ -306,6 +306,13 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
       smBlend:{vid:f.smVid, bounds:[{off:0, in:0, out:4.8}, {off:4.8, in:0, out:4.8}, {off:9.6, in:0, out:4.8}]}}); const L = H3.smoothTotal(), k = H3.smKeysFor(L), P = H3.smoothPlan();
       const r = {J:H3.blendJoins(), near:k.filter(([o]) => H3.blendJoins().some(j => Math.abs(o - j) < 8)).length, seams:P.slice(1).map(p => Math.round(p.start * 24 + p.skip)), n:P.length}; const d = Array.from({length:L}, (_, i) => i===114 || i===229 ? 80 : 2); r.drift = Math.max(...H3.planSpacing(d, L).keys.map(([o, x]) => Math.abs(o - x))); f.smBlend = null; return r; });
     ok(B.J.join()==='115,230' && B.near===0 && B.n > 1 && B.seams.every(x => B.J.every(j => Math.abs(x - j) >= 14)) && B.drift <= 1, '🪄 a long blend splits away from its joins, pins nothing near them, and 📐 spacing doesn\'t read the cuts as jumps to even out: ' + JSON.stringify(B)); }
+  // every part of a blend starts and ends on a pinned frame, even when the blend's own keys don't land on its edges
+  { await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:true, smUp:false, smLoop:false, smSpc:false, smEvery:8, smStart:0, seconds:14.4, mp:0.41, smGap:24, prompt:'',
+      smBlend:{vid:f.smVid, bounds:[{off:0, in:0, out:4.8}, {off:4.8, in:0, out:4.8}, {off:9.6, in:0, out:4.8}]}}); H3.drawAll && H3.drawAll(); });
+    const P = await page.evaluate(() => H3.smoothPlan()), n0 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(2000);
+    const E = sent.slice(n0).map((g, i) => { const fi = Object.values(g).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image).map(n => n.inputs.frame_idx); return [fi.includes(0), fi.includes(P[i].gen - 1)]; });
+    await page.evaluate(() => { H3.S.f.smBlend = null; H3.S.f.smEvery = 4; });
+    ok(P.length > 1 && E.length===P.length && E.every(([a, b]) => a && b), '🪄 every part starts and ends on a pinned frame: ' + JSON.stringify({parts:P.map(p => p.gen), E})); }
   // ⏱ which words when: timed lines show as blocks; dragging the line between two moves one's end and the next's start together
   { await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:false, seconds:10, prompt:'A woman in a room.\n[0s-5s] she walks to the window.\n[5s-10s] she sits down.'}); document.getElementById('prompt').value = f.prompt; H3.drawBeatBar(); });
     await page.evaluate(() => document.getElementById('beatBar').scrollIntoView());
