@@ -2421,6 +2421,46 @@ class RenderDeckUpscaleColorFix:
         return (torch.stack(out).to(image.dtype),)
 
 
+class RenderDeckUpscaleFit:
+    """🔍 bigger (Jordan 2026-11-07, "do the 4k pass in place of the 1.5 upscale"): every frame through a 4x picture upscaler
+    (Real-ESRGAN, the 4K finish's models), then straight down to the size MiniMax renders at (x1.5, short side <= 768), one
+    frame at a time, so a whole clip at 4x never sits in memory. The regenerate then repaints from these sharp frames
+    instead of the latent upscaler's blurrier ones."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'image': ('IMAGE',), 'model_name': (folder_paths.get_filename_list('upscale_models'),),
+                             'width': ('INT', {'default': 960, 'min': 64, 'max': 4096, 'step': 8}), 'height': ('INT', {'default': 544, 'min': 64, 'max': 4096, 'step': 8})}}
+
+    RETURN_TYPES = ('IMAGE',)
+    FUNCTION = 'fit'
+    CATEGORY = 'Render Deck'
+
+    def fit(self, image, model_name, width, height):
+        import torch
+        import torch.nn.functional as F
+        import comfy.model_management as mm
+        from spandrel import ModelLoader
+        dev = mm.get_torch_device()
+        d = ModelLoader().load_from_file(folder_paths.get_full_path('upscale_models', model_name))
+        net = d.model.eval().to(dev)
+        half = dev.type == 'cuda' and d.supports_half
+        if half:
+            net = net.half()
+        out = torch.empty((image.shape[0], height, width, 3), dtype=image.dtype)
+        try:
+            with torch.no_grad():
+                for i in range(image.shape[0]):
+                    x = image[i:i + 1].permute(0, 3, 1, 2).to(dev)
+                    y = net(x.half() if half else x).float()
+                    y = F.interpolate(y, size=(height, width), mode='bicubic', align_corners=False, antialias=True).clamp(0, 1)
+                    out[i] = y[0].permute(1, 2, 0).cpu()
+        finally:
+            del net
+            mm.soft_empty_cache()
+        return (out,)
+
+
 class RenderDeckH3Join:
     """H3 Deck: the last piece of a split clip joins every piece as the final step of its own render, so the
     stitch never waits in ComfyUI's queue behind other renders. The earlier pieces are found by name when it runs
@@ -3179,5 +3219,5 @@ class RenderDeckTouchUp:
         return (out,)
 
 
-NODE_CLASS_MAPPINGS = {'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix, 'RenderDeckH3Join': RenderDeckH3Join, 'RenderDeckTouchUp': RenderDeckTouchUp}
-NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)', 'RenderDeckH3Join': 'Join the H3 pieces (Render Deck)', 'RenderDeckTouchUp': 'Touch up: picture into eyes / colour a part (Render Deck)'}
+NODE_CLASS_MAPPINGS = {'RenderDeckUpscaleFit': RenderDeckUpscaleFit, 'RenderDeckCutoutColorMatch': RenderDeckCutoutColorMatch, 'RenderDeckUpscaleColorFix': RenderDeckUpscaleColorFix, 'RenderDeckH3Join': RenderDeckH3Join, 'RenderDeckTouchUp': RenderDeckTouchUp}
+NODE_DISPLAY_NAME_MAPPINGS = {'RenderDeckUpscaleFit': 'Upscale 4x then fit to size, frame by frame (Render Deck)', 'RenderDeckCutoutColorMatch': 'Colour match on her cut-out (Render Deck)', 'RenderDeckUpscaleColorFix': 'Upscale colour fix (Render Deck)', 'RenderDeckH3Join': 'Join the H3 pieces (Render Deck)', 'RenderDeckTouchUp': 'Touch up: picture into eyes / colour a part (Render Deck)'}

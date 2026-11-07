@@ -480,7 +480,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['MinimaxH3LatentUpscaler3D','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
+const NEED = ['MinimaxH3LatentUpscaler3D','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode'];
@@ -1184,8 +1184,12 @@ const REGEN_REFS = 3; // reference pictures cost tokens at the new size, so only
 const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
 // t (optional): a same-size window (nudge / ✨ quality pass) needs no upscaler, and with its pictures it runs on the Reference model,
 // so a PC without the First/last frame model (Main) can take it too
-function regenMissing(oi, t){ const part = !!(t && t.up && t.up.part), refs = !!(t && regenRefsOn(t, oi));
-  if(!part && !oi.MinimaxH3LatentUpscaler3D) return 'no H3 latent upscaler node'; if(!part && !regenUpModel(oi)) return 'no latent upscaler model';
+// 🔍 bigger from sharp frames (Jordan 2026-11-07): the 4K finish's Real-ESRGAN 4x, fitted down to MiniMax's size, instead of the latent upscaler
+const pixUpModel = (oi, t) => { const m = combo(oi, 'RenderDeckUpscaleFit', 'model_name'), anime = t && t.up && t.up.look==='anime';
+  return (anime && m.find(x => /animevideov3/i.test(x))) || m.find(x => /realesr-general-x4v3/i.test(x)) || m.find(x => /RealESRGAN_x4plus\./i.test(x)); };
+const pixUpOn = (t, oi) => !!(t && t.up && !t.up.part && t.up.pix!==false && oi.RenderDeckUpscaleFit && pixUpModel(oi, t));
+function regenMissing(oi, t){ const part = !!(t && t.up && t.up.part), refs = !!(t && regenRefsOn(t, oi)), pix = pixUpOn(t, oi);
+  if(!part && !pix && !oi.MinimaxH3LatentUpscaler3D) return 'no H3 latent upscaler node'; if(!part && !pix && !regenUpModel(oi)) return 'no latent upscaler model';
   if(!regenLora(oi)) return 'no Open-H3 regenerate LoRA'; if(!refs && !regenUnet(oi)) return 'no MiniMax First/last frame model';
   if(!(oi.ManualSigmas && oi.LTXVSeparateAVLatent && oi.LTXVConcatAVLatent && oi.VAEEncode && oi.GetVideoComponents && oi.MiniMaxH3ImageToVideo)) return 'update ComfyUI';
   return ''; }
@@ -1203,8 +1207,9 @@ function upGraph(t, oi, names){
   // 🧽 grain clean-up (Jordan 2026-11-06: the pass "adds details to the graininess"): the frames are softened a little before they go in,
   // so the regenerate draws fresh detail instead of sharpening the grain, and one more small step at the end clears what's left
   const cl = +u.clean || 0, pxc = cl && oi.ImageBlur ? [add('ImageBlur', {image:px, blur_radius:cl > 1 ? 2 : 1, sigma:cl}), 0] : px;
-  const enc = add('VAEEncode', {pixels:pxc, vae});
-  const big = part ? enc : add('MinimaxH3LatentUpscaler3D', {latent:[enc, 0], model_name:regenUpModel(oi), mode:'target dimensions', 'mode.width':d.w, 'mode.height':d.h, align:32, enable_temporal_chunking:true, force_unload:true, device:'cuda', precision:'bf16'});
+  const pix = pixUpOn(t, oi), pxu = pix ? [add('RenderDeckUpscaleFit', {image:pxc, model_name:pixUpModel(oi, t), width:d.w, height:d.h}), 0] : pxc;
+  const enc = add('VAEEncode', {pixels:pxu, vae});
+  const big = part || pix ? enc : add('MinimaxH3LatentUpscaler3D', {latent:[enc, 0], model_name:regenUpModel(oi), mode:'target dimensions', 'mode.width':d.w, 'mode.height':d.h, align:32, enable_temporal_chunking:true, force_unload:true, device:'cuda', precision:'bf16'});
   const refs = regenRefsOn(t, oi) && names; // ↩ the take's own reference pictures keep the likeness (Ref2VA + the regenerate LoRA)
   const model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:refs ? regenRefUnet(oi) : regenUnet(oi), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0];
@@ -2405,7 +2410,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:F / FPS, carry:null, combo:null, lead:null, toFilm:null, sm:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upPid:null, upErr:'', smoothed:fl, state:'working', reviewed:false, t0r:Date.now(),
-      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, str:o.str != null ? +o.str : 0.8, refs:o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, big ? {crop:{s0, L}} : {part}), upStage:'start',
+      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, refs:o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, big ? {crop:{s0, L}} : {part}), upStage:'start',
       redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, wi:o.wi != null ? +o.wi : null, nudge:true, qp:!!o.qp, big, cin:(part.a - s0) / FPS, cout:(part.b - s0) / FPS, a:part.a, b:part.b, s0, L, F, Fout:big ? L : F},
       pieces:[{start:0, gen:big ? L : F, deliv:big ? L : F, ctx:0, prompt:text, state:'done', file:null}]});
     if(big) t.seconds = L / FPS;
@@ -2480,6 +2485,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
