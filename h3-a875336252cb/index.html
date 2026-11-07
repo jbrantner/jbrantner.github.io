@@ -272,6 +272,7 @@ body.ftab .go{display:none}
           <div id="smUpRefsBox" hidden style="margin-top:8px"><div class="sw" id="smUpRefsSw"><div><div class="t">Use reference pictures</div><div class="d">Pictures of the character help the regenerate keep the face (up to 3; Reference model)</div></div><div class="tog"></div></div><div class="slots" id="smUpRefSlots" style="margin-top:6px"></div></div>
           <div class="note" id="smUpNote" style="margin-top:6px"></div></div>
         <div class="sw" id="smSoundSw" style="margin-top:8px"><div><div class="t">🔊 Keep its sound</div><div class="d">Pins the clip's own sound too, so voices stay in sync</div></div><div class="tog"></div></div>
+        <div class="sw" id="smBridgeSw" style="margin-top:8px"><div><div class="t">🧵 Bridge the joins</div><div class="d">A long clip renders in parts. When it's done, a short stretch over each join is redone with about 1 s of its real motion held on both sides, so the movement carries straight through</div></div><div class="tog"></div></div>
         <div class="note" id="smNote" style="margin-top:6px"></div>
       </div>
       <div class="sw" id="flSw"><div><div class="t">🎞 First / last frame</div><div class="d">Pin the opening picture, and the ending one if you like</div></div><div class="tog"></div></div>
@@ -389,7 +390,7 @@ function load(){
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
   s.pcs = s.pcs && s.pcs.length ? s.pcs : JSON.parse(JSON.stringify(DEFAULT_PCS));
   s.f = Object.assign({prompt:'', seconds:5, fl:false, last:false, first:null, lastImg:null, ref:false, imgs:[], vids:[], auds:[],
-    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smSpc:true, smEase:0.5, smPunch:0, smLoop:false, smSeam:12, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true, ctl:false, ctlVid:null, follow:0.7, ctlStr:1, ctlEnd:0.75, ctl2Vid:null, ctl2Str:0.5, ctl2End:0.65, h3:true, h3Style:'', h3Sound:'', h3Music:''}, s.f || {});
+    model:'', turbo:true, loras:[], aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smBridge:true, smSpc:true, smEase:0.5, smPunch:0, smLoop:false, smSeam:12, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true, ctl:false, ctlVid:null, follow:0.7, ctlStr:1, ctlEnd:0.75, ctl2Vid:null, ctl2Str:0.5, ctl2End:0.65, h3:true, h3Style:'', h3Sound:'', h3Music:''}, s.f || {});
   if(s.f.lora){ s.f.loras = [{name:s.f.lora, str:+s.f.loraStr || 1, words:s.f.loraWords || ''}]; } delete s.f.lora; delete s.f.loraStr; delete s.f.loraWords; // one LoRA → a list (2026-11-01)
   if(s.f.follow === undefined){ const o = s.f; o.follow = (+o.ctlStr===1 && +o.ctlEnd===0.8 && +o.ctl2Str===0.4 && +o.ctl2End===0.5) ? 0.7 : null; if(o.follow != null) Object.assign(o, followSet(0.7)); } // 🎚 (2026-11-05)
   s.cast = s.cast || []; s.guides = s.guides || {}; s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
@@ -1247,8 +1248,9 @@ function regenMissing(oi, t){ const part = !!(t && t.up && t.up.part), refs = !!
 function upDims(t){ let k = (t.up && t.up.scale) || 1.5; k = Math.min(k, 768 / Math.min(t.w, t.h)); // MiniMax is made for 768p: the short side stays ≤ 768
   return {w:Math.max(32, Math.floor(t.w * k / 32) * 32), h:Math.max(32, Math.floor(t.h * k / 32) * 32)}; }
 const upSize = t => { const d = upDims(t); return d.w + '×' + d.h; };
-const regenLen = t => t.pieces.length===1 ? clipFrames(t) : gridDn(Math.max(5, clipFrames(t) - 2));
+const regenLen = t => { const n = wholeFrames(t); return t.redo ? (gridDn(n)===n ? n : gridDn(Math.max(5, n - 2))) : t.pieces.length===1 ? n : gridDn(Math.max(5, n - 2)); };
 const clipFrames = t => t.pieces.reduce((a, p) => a + (p.deliv || p.gen), 0);
+const wholeFrames = t => t.redo ? t.redo.Fout : clipFrames(t);
 function upGraph(t, oi, names){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
   const u = t.up || {}, part = u.part || null, crop = u.crop || null, d = part ? {w:t.w, h:t.h} : upDims(t), src = t.smoothed || t.final;
@@ -1256,7 +1258,7 @@ function upGraph(t, oi, names){
   const vae = [add('VAELoader', {vae_name:vaeOf(oi)}), 0];
   const win = w => !w.pad || !oi.RepeatImageBatch ? [add('ImageFromBatch', {image:[gc, 0], batch_index:w.s0, length:w.L}), 0]
     : batchOf(add, oi, [add('ImageFromBatch', {image:[gc, 0], batch_index:w.s0, length:w.L - w.pad}), 0], [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:[gc, 0], batch_index:w.F - 1, length:1}), 0], amount:w.pad}), 0]);
-  const px = part ? win(part) : crop ? win(crop) : regenLen(t) < clipFrames(t) ? [add('ImageFromBatch', {image:[gc, 0], batch_index:0, length:regenLen(t)}), 0] : [gc, 0];
+  const px = part ? win(part) : crop ? win(crop) : regenLen(t) < wholeFrames(t) ? [add('ImageFromBatch', {image:[gc, 0], batch_index:0, length:regenLen(t)}), 0] : [gc, 0];
   // 🧽 grain clean-up (Jordan 2026-11-06: the pass "adds details to the graininess"): the frames are softened a little before they go in,
   // so the regenerate draws fresh detail instead of sharpening the grain, and one more small step at the end clears what's left
   const cl = +u.clean || 0, pxc = cl && oi.ImageBlur ? [add('ImageBlur', {image:px, blur_radius:cl > 1 ? 2 : 1, sigma:cl}), 0] : px;
@@ -1352,7 +1354,7 @@ async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the 
 function snapshot(){ // the form, frozen into a take
   const f = S.f, R = refsOn(), {w, h} = dims(), pieces = currentPlan();
   const sm = f.sm && f.smVid ? (() => { const m = S.media[f.smVid] || {}; const P = currentSpacing(), lp = f.smLoop && !P ? loopKeys(smoothTotal(), +f.smEvery || 4, +f.smSeam || 12) : null; return {vid:f.smVid, start:smoothSpan().start, every:+f.smEvery || 4, sound:!f.smLoop && !!f.smSound && m.sound!==false && !blendJoins().length, // 🪄 blend: no sound pinned (Jordan 2026-11-07: only the video needs to follow)
-     fps:m.fps || FPS, spc:!!P, ease:+f.smEase, punch:P ? +f.smPunch || 0 : 0, loop:f.smLoop ? +f.smSeam || 12 : 0, keys:smKeysFor(smoothTotal()), gap:blendJoins().length ? +f.smGap || 24 : 0, joins:blendJoins()}; })() : null;
+     fps:m.fps || FPS, spc:!!P, ease:+f.smEase, punch:P ? +f.smPunch || 0 : 0, loop:f.smLoop ? +f.smSeam || 12 : 0, keys:smKeysFor(smoothTotal()), gap:blendJoins().length ? +f.smGap || 24 : 0, joins:blendJoins(), bridge:f.smBridge!==false}; })() : null;
   const upImgs = sm && f.smUp && f.smUpRefs ? (f.smRefs || []).filter(id => S.media[id]).map(id => ({id})) : [];
   const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:upImgs.length > 0} : null;
   const ctl = !sm && f.ctl && f.ctlVid && S.media[f.ctlVid] ? {vid:f.ctlVid, str:+f.ctlStr, end:+f.ctlEnd, face:f.faceOn!==false ? faceOf(S.media[f.ctlVid]) : null} : null;
@@ -1456,7 +1458,8 @@ async function tick(){
           if(h && h.status && h.status.completed){ const o = (h.outputs || {})[t.joinSave] || {}, f = (o.images || o.videos || o.gifs || [])[0]; if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.joinErr = 'joining gave nothing back'; t.state = 'done'; }
           else if(h && h.status && h.status.status_str==='error'){ t.state = 'done'; t.joinErr = ((h.status.messages || []).find(x => x[0]==='execution_error') || [0, {}])[1].exception_message || 'joining failed'; }
           else if(!h && Date.now() - (t.tj || 0) > 60000 && !((p.queue || {}).queue_pending || []).concat((p.queue || {}).queue_running || []).some(x => x[1]===t.joinPid)){ t.joinPid = null; } }
-        if(t.state==='done' && t.up && t.final && !t.upStage){ t.smoothed = t.final; t.state = 'working'; t.upStage = 'start'; tickSoon(300); } // ⬆ then upscale it
+        if(t.state==='done' && t.final && !t.bridged && !t.upStage && bridgeSeams(t).length){ t.bridged = true; t.t1 = Date.now(); notify(t); const tt = t; setTimeout(() => bridgeNext(tt), 0); }
+        else if(t.state==='done' && t.up && t.final && !t.upStage){ t.smoothed = t.final; t.state = 'working'; t.upStage = 'start'; tickSoon(300); } // ⬆ then upscale it
         else if(t.state==='done'){ t.t1 = Date.now(); notify(t); }
       }
     }
@@ -1650,7 +1653,7 @@ async function saveVideo(t){
 }
 function useAgain(t, quiet){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
-  f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
+  f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}}))); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   if(!t.sm){ f.h3 = !!t.h3; if(t.h3) Object.assign(f, {h3Style:t.h3.style || '', h3Sound:t.h3.sound || '', h3Music:t.h3.music || ''}); }
@@ -1821,6 +1824,7 @@ function drawInputs(){
   $$('#smEverySeg button').forEach(b => b.classList.toggle('on', +b.dataset.v===(+f.smEvery || 4)));
   $('#smSoundSw').classList.toggle('on', !!f.smSound && !(sv && sv.sound===false)); $('#smSoundSw').hidden = !!(sv && sv.sound===false) || !!f.smLoop;
   $('#smLoopSw').classList.toggle('on', !!f.smLoop); $('#smLoopBody').hidden = !f.smLoop;
+  $('#smBridgeSw').classList.toggle('on', f.smBridge!==false); $('#smBridgeSw').hidden = !!f.smLoop || !sv || smoothPlan().length < 2;
   $('#smGapBody').hidden = !blendOn(); $('#smGap').value = +f.smGap || 24; $('#smGapOut').textContent = +f.smGap || 24;
   if(f.smLoop){ $('#smSeam').value = +f.smSeam || 12; $('#smSeamOut').textContent = +f.smSeam || 12; const L0 = smoothTotal(), lp = currentSpacing() || loopKeys(L0, +f.smEvery || 4, +f.smSeam || 12);
     $('#smLoopNote').textContent = 'A ' + fmtS(L0 / FPS) + ' loop. The seam is at ' + fmtS(lp.seamAt / FPS) + ' in the new clip, and MiniMax paints the ' + (Math.min(...lp.keys.map(([o]) => o).filter(o => o > lp.seamAt)) - Math.max(...lp.keys.map(([o]) => o).filter(o => o < lp.seamAt)) - 1) + ' frames around it with nothing pinned, so it can turn the motion smoothly. More free frames = a softer turn, but it drifts further from your clip there. The sound is left out (it would jump at the seam). 📐 spacing and 🎬 Punch work on the looped order, seam included.'; }
@@ -2173,6 +2177,7 @@ $('#smUpSeg').onclick = e => { const b = e.target.closest('button'); if(!b) retu
 $('#smUpRep').onclick = e => { const b = e.target.closest('button'); if(!b) return; S.f.smUpRep = b.dataset.v; save(); drawInputs(); };
 $('#smUpStr').oninput = e => { S.f.smUpStr = +e.target.value; $('#smUpStrV').textContent = S.f.smUpStr.toFixed(2); save(); };
 $('#smSoundSw').onclick = () => { S.f.smSound = !S.f.smSound; save(); drawInputs(); };
+$('#smBridgeSw').onclick = () => { S.f.smBridge = S.f.smBridge===false; save(); drawInputs(); };
 $('#smLoopSw').onclick = () => { S.f.smLoop = !S.f.smLoop; save(); drawAll(); };
 $('#smGap').oninput = e => { S.f.smGap = +e.target.value; save(); drawInputs(); drawGo(); };
 $('#smSeam').oninput = e => { S.f.smSeam = +e.target.value; save(); drawInputs(); drawGo(); };
@@ -2464,12 +2469,12 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
   if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
   if(!fl){ toast('That take has no finished video yet'); return 0; }
   // (a 🪄 smoothed take can have a stretch redone too, Jordan 2026-11-07: to bridge the seam between its parts; the redo works from its finished video)
-  const F = takeFrames(src), P = redoPlan(F, (+o.a || 0) * FPS, (+o.b || 0) * FPS, 12), key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1));
+  const F = takeFrames(src), P = redoPlan(F, (+o.a || 0) * FPS, (+o.b || 0) * FPS, Math.max(4, Math.min(48, +o.ctx || 12))), key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1));
   let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
     const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
-    const text = (o.prompt || '').trim() || (src.pieces.find(p => p.start * FPS <= P.a && (p.start * FPS + p.deliv) > P.a) || src.pieces[0]).prompt;
+    const text = o.bridge ? bridgeWords(o.bridge.words, P) : (o.prompt || '').trim() || (src.pieces.find(p => p.start * FPS <= P.a && (p.start * FPS + p.deliv) > P.a) || src.pieces[0]).prompt;
     Object.assign(t, {prompt:text, seconds:P.Fout / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, pins:[], mq:'', follow:[],
       ctxDirs:null, from:null, sm:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false,
       redo:Object.assign({src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key}, P),
@@ -2479,14 +2484,35 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
       Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3, ctl:src.cont ? null : fs.ctl, ctl2:src.cont ? null : fs.ctl2}); }
     if(o.model){ t.model = o.model; t.turbo = !!o.turbo; } // Jordan 2026-11-06: pick the model for the redo in its sheet
     if(o.guide) applyGuide(t, o.guide);
-    t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
+    if(o.bridge){ t.redo.bridge = o.bridge; t.pc = src.pc; // 🧵 the seams left to bridge after this one; the last one gets the smoothing's ⬆ upscale/regenerate
+      if(!o.bridge.rest.length && o.bridge.up){ t.up = o.bridge.up; t.upImgs = o.bridge.upImgs || []; } }
+    t.pc = o.bridge && !canRun(src.pc, t) ? src.pc : await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
     extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
     S.takes.unshift(t); drawTakes();
     try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
   }
-  save(); drawTakes(); if(sent) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
+  save(); drawTakes(); if(sent && !o.bridge) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
   return sent; };
 window.H3RedoPlan = redoPlan;
+// 🧵 Bridge the seams (Jordan 2026-11-07): a long 🪄 smoothing renders in parts that share no motion, so each join can show a small
+// hitch. When the take is done, a short ↻ redo goes over each join: about 1 s (BRIDGE_CTX frames) of the take's own frames is pinned on
+// each side (every 4th, the latent grid), so MiniMax sees the motion coming in and going out and paints only the few frames at the join
+// to carry that momentum straight through. The joins are bridged one after another, each from the last one's video.
+const BRIDGE_CTX = 24, BRIDGE_HALF = 4;
+function bridgeSeams(t){
+  if(t.redo && t.redo.bridge) return t.redo.bridge.rest;
+  if(!t.sm || t.sm.loop || t.sm.bridge===false || t.pieces.length < 2 || t.joinErr) return [];
+  return t.pieces.slice(1).map(p => Math.round(p.start * FPS + (p.skip || 0))); }
+function bridgeWords(words, P){ const pp = {start:P.s0 / FPS, gen:P.L, deliv:P.L, ctx:0};
+  return (piecePrompt(words || SM_PROMPT, [pp, pp], 0, P.L) + '\nThe movement keeps its speed and direction straight through, with no pause, jump or cut.').trim(); }
+async function bridgeNext(t){ const seams = bridgeSeams(t); if(!seams.length) return 0;
+  const B = t.redo && t.redo.bridge, n = B ? B.n : seams.length, up = B ? B.up : t.up, g = seams[0];
+  const bridge = {rest:seams.slice(1), n, k:n - seams.length + 1, seam:g, words:B ? B.words : t.prompt, up:up || null, upImgs:B ? B.upImgs : (t.upImgs || []), from:B ? B.from : t.id};
+  let sent = 0; try{ sent = await window.H3Redo({take:t.id, a:(g - BRIDGE_HALF) / FPS, b:(g + BRIDGE_HALF) / FPS, ctx:BRIDGE_CTX, n:1, bridge}); }catch(e){ console.warn(e); }
+  if(sent) toast('🧵 Bridging join ' + bridge.k + ' of ' + n + ' (about a minute each)', 5000);
+  else if(up && !t.upStage){ t.smoothed = t.final; t.up = up; t.state = 'working'; t.upStage = 'start'; save(); drawTakes(); tickSoon(300); } // couldn't bridge: ⬆ as it is
+  return sent; }
+window.H3BridgeSeams = bridgeSeams;
 // ⬆ Nudge a stretch (Jordan 2026-11-06: "select a portion of a video and then edit only part of it"): the take's own frames from a to b
 // go through ⬆ Regenerate with new words (vid2vid, same size) and are spliced back; the rest of the take and its sound stay as they are.
 // The window is the 17k+5 grid around the stretch; only a..b is used. A new version of the clip, like ↻ Redo.
@@ -2582,6 +2608,6 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab(S.tab==='poses' && !/take=/.test(location.hash) ? 'poses' : 'films'); showTake();
-window.H3 = {bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+window.H3 = {bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

@@ -313,6 +313,20 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     const E = sent.slice(n0).map((g, i) => { const fi = Object.values(g).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image).map(n => n.inputs.frame_idx); return [fi.includes(0), fi.includes(P[i].gen - 1)]; });
     await page.evaluate(() => { H3.S.f.smBlend = null; H3.S.f.smEvery = 4; });
     ok(P.length > 1 && E.length===P.length && E.every(([a, b]) => a && b), '🪄 every part starts and ends on a pinned frame: ' + JSON.stringify({parts:P.map(p => p.gen), E})); }
+  // 🧵 a smoothing in parts: when it's done, each join is redone with ~1 s of its own frames pinned either side, one after another; the last gets the ⬆
+  { const R = await page.evaluate(async () => { const t = H3.S.takes.find(x => x.sm && x.pieces.length > 1); if(!t) return null;
+      t.pieces.forEach((p, i) => { p.state = 'done'; p.file = {filename:'piece_0' + (i + 1) + '_00001_.mp4', subfolder:t.dir, type:'output'}; });
+      t.final = {filename:t.name + '_00001_.mp4', subfolder:t.dir, type:'output'}; t.state = 'done'; t.up = {scale:1.5, rep:'medium', str:0.8, refs:false, prompt:''}; t.upStage = null;
+      t.prompt = 'A woman in a room.\n[0s-5s] she walks to the window.\n[5s-10s] she turns around.\n[10s-14.4s] she sits down.';
+      const oi = H3.PC[t.pc].oi, hadIB = !!oi.ImageBatch; if(!hadIB) oi.ImageBatch = {input:{required:{image1:['IMAGE'], image2:['IMAGE']}}};
+      const seams = H3.bridgeSeams(t), out = {seams, steps:[]}; let cur = t;
+      for(let k = 0; k < seams.length; k++){ const n0 = H3.S.takes.length; await H3.bridgeNext(cur); const nt = H3.S.takes[0]; if(H3.S.takes.length===n0 || !nt.redo) break;
+        const R = nt.redo; out.steps.push({s0:R.s0, a:R.a, b:R.b, L:R.L, F:R.F, before:R.pins.filter(p => p[1] <= R.a).length, after:R.pins.filter(p => p[1] >= R.b).length, rest:R.bridge.rest.length, up:!!nt.up, pr:nt.prompt, pc:nt.pc===cur.pc});
+        nt.state = 'done'; nt.final = {filename:nt.name + '_00001_.mp4', subfolder:nt.dir, type:'output'}; nt.pieces[0].state = 'done'; cur = nt; }
+      if(!hadIB) delete oi.ImageBatch; document.querySelectorAll('.toast').forEach(x => x.remove()); out.srcUp = t.upStage || null; H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.bridge) && x!==t); H3.saveNow(); return out; });
+    const good = R && R.seams.length >= 2 && R.steps.length===R.seams.length && R.steps.every((x, i) => x.a < R.seams[i] && x.b > R.seams[i] && x.b - x.a <= 12 && x.a - x.s0 >= 24 && x.before >= 6 && x.after >= 6 && x.pc && x.rest===R.seams.length - i - 1 && x.up===(i===R.seams.length - 1))
+      && /keeps its speed/.test(R.steps[0].pr) && !R.srcUp;
+    ok(good, '🧵 each join of a smoothing in parts is bridged in turn with ~1 s pinned either side, then the last one is upscaled: ' + JSON.stringify(R)); }
   // ⏱ which words when: timed lines show as blocks; dragging the line between two moves one's end and the next's start together
   { await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:false, seconds:10, prompt:'A woman in a room.\n[0s-5s] she walks to the window.\n[5s-10s] she sits down.'}); document.getElementById('prompt').value = f.prompt; H3.drawBeatBar(); });
     await page.evaluate(() => document.getElementById('beatBar').scrollIntoView());
