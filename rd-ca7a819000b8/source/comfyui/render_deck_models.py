@@ -2684,6 +2684,284 @@ async def h3export_cancel(request):
         j['cancel'] = True
     return web.json_response({'ok': bool(j)})
 
+# ---------------------------------------------------------------------------------------------------------------------
+# ✨ 4K finish (Jordan 2026-11-07, "the really crisp almost 4k video look"): an exported film is
+#  1. smoothed to twice the frame rate with RIFE (ComfyUI-VFI's IFNet, v4.26 weights), skipping hard cuts,
+#  2. sharpened 4x with Real-ESRGAN's anime video model (realesr-animevideov3: clean lines, no fake skin texture),
+#     then sized so the long side is 3840,
+#  3. written as a high-bitrate HEVC (NVENC on the card when it can, else x265 / x264), sound copied as it is.
+# One frame at a time, like the export (a 4K film as float pictures would not fit in 16 GB). The block between the
+# >>> / <<< marks needs only torch, av and spandrel, so it can be tried outside ComfyUI too.
+# >>> finish4k
+FIN_UP_URL = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth'
+FIN_RIFE_URL = 'https://huggingface.co/hzwer/RIFE/resolve/main/RIFEv4.26_0921.zip'
+
+
+def fin_rife(vfi_dir, dev):
+    """ComfyUI-VFI's RIFE IFNet with flownet.pkl (in rife/train_log), or raise."""
+    import sys, torch
+    ck = os.path.join(vfi_dir, 'rife', 'train_log', 'flownet.pkl')
+    if not os.path.isfile(ck):
+        raise FileNotFoundError('no RIFE weights (flownet.pkl)')
+    if vfi_dir not in sys.path:
+        sys.path.insert(0, vfi_dir)
+    from rife.train_log.IFNet_HDv3 import IFNet
+    sd = torch.load(ck, map_location='cpu', weights_only=True)
+    sd = {(k[7:] if k.startswith('module.') else k): v for k, v in sd.items()}
+    net = IFNet()
+    r = net.load_state_dict(sd, strict=False)
+    if r.missing_keys:  # a silent strict=False miss would leave random weights
+        raise RuntimeError('RIFE weights did not fit (%d missing, e.g. %s)' % (len(r.missing_keys), r.missing_keys[0]))
+    return net.eval().to(dev)
+
+
+def fin_codec(W, H, fps):
+    """the best encoder that really opens at this size: NVENC HEVC, x265, x264"""
+    import av, io, numpy as np
+    for name, opts in (('hevc_nvenc', {'preset': 'p5', 'tune': 'hq', 'rc': 'vbr', 'cq': '18', 'b': '0', 'profile': 'main'}),
+                       ('libx265', {'crf': '17', 'preset': 'medium'}),
+                       ('libx264', {'crf': '15', 'preset': 'medium'})):
+        if name not in av.codecs_available:
+            continue
+        try:
+            with av.open(io.BytesIO(), 'w', format='mp4') as t:
+                s = t.add_stream(name, rate=fps)
+                s.width, s.height, s.pix_fmt, s.options = W, H, 'yuv420p', opts
+                f = av.VideoFrame.from_ndarray(np.zeros((H, W, 3), np.uint8), format='rgb24').reformat(format='yuv420p')
+                for p in s.encode(f):
+                    t.mux(p)
+                for p in s.encode(None):
+                    t.mux(p)
+            return name, opts
+        except Exception as e:
+            print('[Render Deck] 4K finish: %s did not open (%s)' % (name, e))
+    raise RuntimeError('no video encoder opened')
+
+
+def fin_run(src, dst, up_path, vfi_dir=None, long_side=3840, smooth=True, job=None, temp=None):
+    """src mp4 -> dst mp4 (4K, smoothed, sharpened). job: dict for done/total/note/cancel; temp(): GPU degrees C or None."""
+    import av, numpy as np, torch
+    import torch.nn.functional as F
+    from fractions import Fraction
+    from spandrel import ModelLoader
+    job = job if job is not None else {}
+    dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    d = ModelLoader().load_from_file(up_path)
+    up, k_up = d.model.eval().to(dev), int(d.scale or 4)
+    half = dev.type == 'cuda' and d.supports_half
+    if half:
+        up = up.half()
+    rife = None
+    if smooth:
+        try:
+            rife = fin_rife(vfi_dir or '', dev)
+        except Exception as e:
+            job['note'] = 'not smoothed: ' + str(e)
+            print('[Render Deck] 4K finish:', job['note'])
+    with av.open(src) as s:
+        vs = s.streams.video[0]
+        fps = Fraction(vs.average_rate or 24).limit_denominator(1001)
+        w0, h0 = vs.codec_context.width, vs.codec_context.height
+        n0 = vs.frames or (int(round(float(vs.duration * vs.time_base) * fps)) if vs.duration else 0)
+    k = long_side / max(w0, h0)
+    W, H = int(round(w0 * k / 2)) * 2, int(round(h0 * k / 2)) * 2
+    ofps = fps * 2 if rife else fps
+    job['total'] = (n0 or 0) * (2 if rife else 1)
+    job['size'] = '%dx%d' % (W, H)
+    job['fps'] = float(ofps)
+    codec, opts = fin_codec(W, H, ofps)
+    job['codec'] = codec
+    m = 128  # RIFE wants sizes in steps of 128 (zero padding right and bottom, cropped after)
+    ph, pw = (h0 + m - 1) // m * m, (w0 + m - 1) // m * m
+
+    def mid(a, b):
+        if float((a - b).abs().mean()) > 0.18:  # a hard cut: no blend across it
+            return a
+        x = F.pad(torch.cat((a, b), 1), (0, pw - w0, 0, ph - h0))
+        with torch.autocast(dev.type, dtype=torch.float16, enabled=dev.type == 'cuda'):
+            merged = rife(x, 0.5, [16, 8, 4, 2, 1])[2]
+        return merged[-1][:, :, :h0, :w0].float().clamp(0, 1)
+
+    def big(t):
+        y = up(t.half() if half else t).float()
+        y = F.interpolate(y, size=(H, W), mode='bicubic', align_corners=False, antialias=True).clamp(0, 1)
+        return (y[0].permute(1, 2, 0) * 255 + 0.5).byte().cpu().numpy()
+
+    with av.open(src) as s, av.open(dst, 'w', format='mp4', options={'movflags': 'faststart'}) as o:
+        vs = s.streams.video[0]
+        vo = o.add_stream(codec, rate=ofps)
+        vo.width, vo.height, vo.pix_fmt, vo.options = W, H, 'yuv420p', opts
+        if codec != 'libx264':
+            try:
+                vo.codec_tag = 'hvc1'  # so iPhone Photos plays HEVC
+            except Exception:
+                pass
+        aud = s.streams.audio[0] if s.streams.audio else None
+        ao = o.add_stream_from_template(aud) if aud is not None else None
+        n = [0]
+
+        def put(arr):
+            fr = av.VideoFrame.from_ndarray(arr, format='rgb24').reformat(format='yuv420p')
+            fr.pts, fr.time_base = n[0], Fraction(1) / ofps
+            for p in vo.encode(fr):
+                o.mux(p)
+            n[0] += 1
+            job['done'] = n[0]
+            if n[0] % 24 == 0 and temp:  # Render: cool off rather than pass 85 C
+                t = temp()
+                while t and t > 84 and not job.get('cancel'):
+                    job['note'] = 'cooling down (GPU %d C)' % t
+                    time.sleep(5)
+                    t = temp()
+                if job.get('note', '').startswith('cooling'):
+                    job['note'] = ''
+            if job.get('cancel'):
+                raise RuntimeError('Stopped')
+
+        prev = None
+        with torch.no_grad():
+            for fr in s.decode(vs):
+                cur = torch.from_numpy(fr.to_ndarray(format='rgb24')).to(dev).permute(2, 0, 1)[None].float() / 255
+                if prev is not None:
+                    put(big(prev))
+                    if rife is not None:
+                        put(big(mid(prev, cur)))
+                prev = cur
+            if prev is not None:
+                last = big(prev)
+                put(last)
+                if rife is not None:
+                    put(last)
+        for p in vo.encode(None):
+            o.mux(p)
+        if ao is not None:  # the sound as it is, no re-encode
+            s.seek(0)
+            for p in s.demux(aud):
+                if p.dts is None:
+                    continue
+                p.stream = ao
+                o.mux(p)
+    job['total'] = n[0]
+    return {'size': job['size'], 'fps': job['fps'], 'frames': n[0], 'codec': codec, 'smoothed': rife is not None}
+# <<< finish4k
+
+
+FINISHES = {}
+
+
+def _fin_temp():
+    try:
+        import subprocess
+        r = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=5)
+        return int(r.stdout.strip().splitlines()[0])
+    except Exception:
+        return None
+
+
+def _fin_fetch(url, path, member=None):
+    """download url to path (member: the file to take out of a zip)"""
+    import urllib.request, zipfile, tempfile
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.part'
+    with urllib.request.urlopen(url, timeout=60) as r, open(tmp, 'wb') as f:
+        shutil.copyfileobj(r, f, 1 << 20)
+    if member:
+        with zipfile.ZipFile(tmp) as z:
+            name = next((n for n in z.namelist() if n.replace('\\', '/').endswith('/' + member) or n == member), None)
+            if not name:
+                raise FileNotFoundError(member + ' is not in ' + url)
+            with z.open(name) as a, open(path + '.x', 'wb') as b:
+                shutil.copyfileobj(a, b, 1 << 20)
+        os.remove(tmp)
+        tmp = path + '.x'
+    os.replace(tmp, path)
+
+
+def _fin_job(job, src):
+    try:
+        import comfy.model_management as mm
+        job['note'] = 'waiting for ComfyUI to finish what it is rendering'
+        while not job.get('cancel'):  # the card is shared: start once ComfyUI's queue is empty
+            try:
+                busy = PromptServer.instance.prompt_queue.get_tasks_remaining() > 0
+            except Exception:
+                busy = False
+            if not busy:
+                break
+            time.sleep(3)
+        if job.get('cancel'):
+            raise RuntimeError('Stopped')
+        job['note'] = 'getting ready'
+        up = folder_paths.get_full_path('upscale_models', 'realesr-animevideov3.pth')
+        if not up:
+            up = os.path.join(folder_paths.get_folder_paths('upscale_models')[0], 'realesr-animevideov3.pth')
+            job['note'] = 'downloading the anime video upscaler (2.5 MB)'
+            _fin_fetch(FIN_UP_URL, up)
+        vfi = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'ComfyUI-VFI')
+        if job.get('smooth') and os.path.isdir(os.path.join(vfi, 'rife', 'train_log')) and not os.path.isfile(os.path.join(vfi, 'rife', 'train_log', 'flownet.pkl')):
+            job['note'] = 'downloading the RIFE smoothing model'
+            try:
+                _fin_fetch(FIN_RIFE_URL, os.path.join(vfi, 'rife', 'train_log', 'flownet.pkl'), 'flownet.pkl')
+            except Exception as e:
+                print('[Render Deck] 4K finish RIFE download:', e)
+        mm.unload_all_models()
+        mm.soft_empty_cache()
+        job['note'] = ''
+        out = os.path.join(os.path.dirname(src), os.path.splitext(os.path.basename(src))[0] + '_4K.mp4')
+        r = fin_run(src, out + '.part.mp4', up, vfi, int(job.get('long') or 3840), bool(job.get('smooth')), job, _fin_temp)
+        os.replace(out + '.part.mp4', out)
+        root = os.path.realpath(folder_paths.get_output_directory())
+        sub = os.path.relpath(os.path.dirname(out), root).replace('\\', '/')
+        job.update(r, state='done', file={'filename': os.path.basename(out), 'subfolder': sub, 'type': 'output'}, t_done=time.time())
+    except Exception as e:
+        print('[Render Deck] 4K finish:', e)
+        job.update(state='failed', error=str(e), t_done=time.time())
+        try:
+            if 'out' in locals() and os.path.exists(out + '.part.mp4'):
+                os.remove(out + '.part.mp4')
+        except Exception:
+            pass
+    finally:
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+@routes.post('/renderdeck/h3finish')
+async def h3finish(request):
+    """{filename, subfolder, long?, smooth?} (an exported film) -> {id}; the 4K file lands next to it as <name>_4K.mp4"""
+    try:
+        import threading
+        body = await request.json()
+        src = _ex_find({'filename': str(body['filename']), 'subfolder': str(body.get('subfolder') or '')})
+        for k in [k for k, j in FINISHES.items() if j.get('t_done') and time.time() - j['t_done'] > 86400]:
+            FINISHES.pop(k, None)
+        if any(j['state'] == 'working' for j in FINISHES.values()):
+            raise ValueError('A 4K finish is already running on this PC')
+        jid = uuid.uuid4().hex[:12]
+        FINISHES[jid] = job = {'id': jid, 'state': 'working', 'done': 0, 'total': 0, 'note': '', 't_added': time.time(),
+                               'long': max(1280, min(3840, int(body.get('long') or 3840))), 'smooth': body.get('smooth', True) is not False}
+        threading.Thread(target=_fin_job, args=(job, src), daemon=True).start()
+        return web.json_response(job)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=400)
+
+
+@routes.get('/renderdeck/h3finish')
+async def h3finish_get(request):
+    j = FINISHES.get(request.query.get('id') or '')
+    return web.json_response(j if j else {'error': 'No such 4K finish (ComfyUI restarted?)'}, status=200 if j else 404)
+
+
+@routes.post('/renderdeck/h3finish/cancel')
+async def h3finish_cancel(request):
+    j = FINISHES.get((await request.json()).get('id') or '')
+    if j:
+        j['cancel'] = True
+    return web.json_response({'ok': bool(j)})
+
 
 # ---------------------------------------------------------------------------------------------------------------------
 # 👁 Touch up (Jordan 2026-11-01, "swap character eyes with an image"; realism first): on every frame of a clip, put her
