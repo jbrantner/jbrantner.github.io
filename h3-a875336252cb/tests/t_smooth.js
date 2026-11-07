@@ -297,6 +297,13 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     const gs = sent.slice(n0), sl = gs.map(g => Object.values(g).find(n => n.class_type==='Video Slice').inputs.start_time), ng = gs.map(g => Object.values(g).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image).length);
     const sk = gs.map(g => Object.values(g).filter(n => n.class_type==='ImageFromBatch' && n.inputs.length > 1).map(n => n.inputs.batch_index));
     ok(gs.length===P.p.length && sl.every((x, i) => Math.abs(x - P.p[i].start) < 0.002) && ng.every((x, i) => x===keys(P.p[i].gen)) && sk.every((x, i) => i ? x[0]===P.p[i].skip : !x.length), '🪄 each window is its own job: its slice of the video, its own keyframes, and the overlap dropped: ' + JSON.stringify({sl, ng, sk})); }
+  // 🏷 a LoRA's trigger words are remembered: pick it again later and they fill in
+  { const LW = await page.evaluate(async () => { const f = H3.S.f; f.loras = [{name:'', str:1, words:''}]; H3.drawAll(); const sel = document.querySelector('#loraList [data-ln]');
+      const opt = [...sel.options].map(o => o.value).find(v => v); if(!opt) return {none:true}; sel.value = opt; sel.dispatchEvent(new Event('change', {bubbles:true}));
+      const w = document.querySelector('#loraList [data-lw]'); w.value = 'mytrig, glowing eyes'; w.dispatchEvent(new Event('input', {bubbles:true}));
+      f.loras = [{name:'', str:1, words:''}]; H3.drawAll(); const s2 = document.querySelector('#loraList [data-ln]'); s2.value = opt; s2.dispatchEvent(new Event('change', {bubbles:true}));
+      const r = {opt, words:H3.S.f.loras[0].words, box:document.querySelector('#loraList [data-lw]').value}; f.loras = []; H3.drawAll(); return r; });
+    ok((LW.words==='mytrig, glowing eyes' && LW.box===LW.words), '🏷 LoRA trigger words are remembered for that LoRA: ' + JSON.stringify(LW)); }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();

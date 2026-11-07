@@ -1323,7 +1323,7 @@ function snapshot(){ // the form, frozen into a take
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     h3:!sm && f.h3 ? {style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
-    pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
+    pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
 // ➕ Carry on from here (🎞 Films): the take's video is carried on from a moment inside it, not from its end (media.cut, s)
 function contBits(){ const m = contOn() && S.media[S.f.first]; if(!m) return {}; const cut = +m.cut || 0;
@@ -1387,7 +1387,7 @@ let tickT = 0; const tickSoon = ms => { clearTimeout(tickT); tickT = setTimeout(
 async function tick(){
   clearTimeout(tickT);
   try{
-    const busy = S.takes.filter(t => t.state==='working');
+    const busy = S.takes.filter(t => t.state==='working').reverse();
     for(const t of busy){
       const p = pcOf(t.pc); if(!p.online) continue;
       if(t.up && t.upStage && t.upStage!=='done'){ await tickUpscale(t); continue; }
@@ -1537,7 +1537,8 @@ async function toSmooth(t, blend){
   Object.assign(f, {sm:true, smVid:id, smStart:0, smUp:true, smRefs:(t.upImgs && t.upImgs.length ? t.upImgs : t.imgs || []).map(r => r.id).filter(x => S.media[x]), smUpRefs:true,
     prompt:text===SM_PROMPT ? '' : text, seconds:Math.round(secs * 20) / 20, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', mp:Math.round(t.w * t.h / 1e4) / 100, pieceText:{}});
   f.smBlend = blend ? Object.assign({}, blend, {vid:id}) : null;
-  if(blend) Object.assign(f, {smUp:false, smSpc:true, prompt:''}); // 🪄 blend: the same size as the clips around it, keyframes follow the 📐 spacing graph
+  // the clips' own words, each timed to where its clip sits in the blend (Jordan 2026-11-07: "it doesn't seem to be following the prompt")
+  if(blend) Object.assign(f, {smUp:false, smSpc:true, prompt:(SM_PROMPT + '\n' + blend.bounds.filter(b => (b.text || '').trim()).map(b => '[' + t2(b.off) + '-' + t2(b.off + b.out - b.in) + '] ' + b.text.trim()).join('\n')).trim()}); // 🪄 blend: the same size as the clips around it, keyframes follow the 📐 spacing graph
   if(t.sm) Object.assign(f, {smEvery:t.sm.every || f.smEvery, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam});
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds);
   save(); drawAll(); const box = $('#smSw'); (box || document.body).scrollIntoView({behavior:'smooth', block:'start'});
@@ -1803,7 +1804,7 @@ function drawModel(){
   // style LoRAs any PC has
   const loras = [...new Set(oiAny.flatMap(styleLoras))].sort(), on = f.loras.filter(l => l.name);
   $('#loraList').innerHTML = f.loras.map((l, i) => `<div class="lr" data-li="${i}"><div class="lt"><select data-ln>${(l.name ? '' : '<option value="">Pick a LoRA</option>') + [...new Set([...(l.name ? [l.name] : []), ...loras])].map(n => `<option value="${esc(n)}"${n===l.name ? ' selected' : ''}>${esc(bn(n).replace(/\.safetensors$/, ''))}${loras.includes(n) ? '' : ' (not on the PCs)'}</option>`).join('')}</select><b>${(+l.str).toFixed(2)}</b><button class="btn x" data-lx aria-label="Remove">✕</button></div>
-    <input type="range" data-ls min="0" max="1.5" step="0.05" value="${+l.str}"><input data-lw placeholder="Activation words, e.g. AFKJ Style" value="${esc(l.words || '')}"></div>`).join('');
+    <input type="range" data-ls min="0" max="1.5" step="0.05" value="${+l.str}"><input data-lw placeholder="Trigger words and phrases (remembered for this LoRA)" value="${esc(l.words || '')}"></div>`).join('');
   $('#loraAdd').disabled = !loras.length; $('#loraOut').textContent = on.length ? on.length + ' on' : '';
   $('#modelSum').textContent = fams.length ? (famLabel(f.model || '').replace(/^MiniMax H3 /, '') + ' · ' + (built ? 'turbo built in' : f.turbo ? 'Turbo' : 'Regular') + (on.length ? ' · ' + on.length + ' LoRA' + (on.length > 1 ? 's' : '') : '')) : '';
 }
@@ -2126,10 +2127,10 @@ $('#model').onchange = e => { S.f.model = e.target.value; save(); drawAll(); };
 $('#speedSeg').onclick = e => { const b = e.target.closest('button'); if(!b || b.disabled) return; S.f.turbo = b.dataset.v==='turbo'; save(); drawAll(); };
 $('#loraAdd').onclick = () => { S.f.loras.push({name:'', str:1, words:''}); save(); drawModel(); drawGo(); };
 $('#loraList').onchange = e => { const row = e.target.closest('[data-li]'); if(!row || !e.target.matches('[data-ln]')) return; const l = S.f.loras[+row.dataset.li];
-  l.name = e.target.value; if(l.name && !l.words && /afk/i.test(l.name)) l.words = 'AFKJ Style'; save(); drawModel(); drawGo(); };
+  l.name = e.target.value; const kept = l.name && ((S.loraWords || {})[l.name] || ((S.takes.map(t => lorasOf(t).find(x => x.name===l.name && (x.words || '').trim())).find(Boolean)) || {}).words); if(kept && !l.words) l.words = kept; if(l.name && !l.words && /afk/i.test(l.name)) l.words = 'AFKJ Style'; save(); drawModel(); drawGo(); };
 $('#loraList').oninput = e => { const row = e.target.closest('[data-li]'); if(!row) return; const l = S.f.loras[+row.dataset.li];
   if(e.target.matches('[data-ls]')){ l.str = +e.target.value; row.querySelector('b').textContent = l.str.toFixed(2); }
-  if(e.target.matches('[data-lw]')) l.words = e.target.value; save(); };
+  if(e.target.matches('[data-lw]')){ l.words = e.target.value; if(l.name){ S.loraWords = S.loraWords || {}; S.loraWords[l.name] = l.words; } } save(); };
 $('#loraList').onclick = e => { const x = e.target.closest('[data-lx]'); if(!x) return; S.f.loras.splice(+x.closest('[data-li]').dataset.li, 1); save(); drawModel(); drawGo(); };
 $('#res').oninput = e => { S.f.mp = +e.target.value; save(); drawCanvas(); };
 for(const k of ['cw', 'ch']){ $('#' + k).oninput = e => { const v = +e.target.value; if(v >= 64){ S.f[k] = v; save(); drawCanvas(); drawGo(); } }; $('#' + k).onchange = () => { const d = customDims(); S.f.cw = d.w; S.f.ch = d.h; save(); $('#cw').value = d.w; $('#ch').value = d.h; drawCanvas(); }; }
