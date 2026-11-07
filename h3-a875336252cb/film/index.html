@@ -468,7 +468,7 @@ function activeAt(f, t){ for(const tr of f.tracks) if(!tr.hide) for(const c of t
 function filmView(f){
   S.lastFilm = f.id; const T = filmSecs(f), sel = SEL && clipOf(f, SEL), st = sel && takeOf(sel.c.take), ar = (() => { const c = f.tracks.flatMap(t => t.clips).map(c => takeOf(c.take)).find(Boolean); return c ? c.w + '/' + c.h : '16/9'; })();
   return crumb([['Films', {v:'home'}], [f.name]]) +
-  `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-fname value="${esc(f.name)}" placeholder="Film name"><button class="btn warn" data-act="delFilm">🗑</button></div>
+  `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-fname value="${esc(f.name)}" placeholder="Film name"><button class="btn pri" data-act="test" style="white-space:nowrap">🧪 Test</button><button class="btn warn" data-act="delFilm">🗑</button></div>
   <div class="stage" style="--ar:${ar}"><video id="vA" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video><video id="vB" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video><div class="gap" id="gap">${T ? '' : 'Add clips from ✂ Review or ＋ Clip'}</div></div>
   <div class="transport"><button class="btn" data-act="toStart">⏮</button><button class="btn" data-act="undo" id="undoBtn" aria-label="Undo" ${UNDO.length ? '' : 'disabled'}>↶</button><button class="btn pri" data-act="play" id="playBtn">▶ Play</button><div class="t" id="tc">${fmt(PH)} / ${fmt(T)}</div><button class="btn" data-act="snd" id="sndBtn" aria-label="Sound on or off">${S.snd ? '🔊' : '🔇'}</button><button class="btn" data-act="zoom" data-d="-1">−</button><button class="btn" data-act="zoom" data-d="1">＋</button></div>
   <div id="prevBox">${prevHtml(f)}</div>
@@ -773,6 +773,10 @@ function placeNew(){ let ch = placePasses(); S.placed = S.placed || {};
       if(!doneOf(t)){ toast('🪄 Couldn\'t join the clips for the blend: ' + ((t.pieces[0] || {}).err || 'try again'), 5000); continue; }
       const fn = deckFn('H3BlendLoad'); if(fn) fn(t.id, cb.blend); continue; }
     if(cb && cb.blend) continue;
+    if(cb && cb.test && cb.key && !S.placed[cb.key] && (doneOf(t) || t.state==='failed')){ S.placed[cb.key] = true; ch = true;
+      if(!doneOf(t)){ toast('🧪 Couldn\'t join the clips: ' + ((t.pieces[0] || {}).err || 'try again'), 5000); continue; }
+      const fn = deckFn('H3SmoothTake'); if(fn) fn(t.id); continue; }
+    if(cb && cb.test) continue;
     const bl = t.blend; // 🪄 the smoothed blend: split back into the clips it came from, on a new top track
     if(bl && bl.film && !S.placed[t.id + '|blend'] && doneOf(t)){ S.placed[t.id + '|blend'] = true; ch = true; const f = filmOf(bl.film); if(!f) continue;
       const d = secsOf(t) || bl.bounds.reduce((a, q) => a + q.out - q.in, 0), ntr = {id:uid('tr'), blend:true, clips:[]};
@@ -913,6 +917,28 @@ async function oneGo(f, cs){ const fn = deckFn('H3Fill'); if(!fn){ toast('Open �
   const n = await fn({film:f.id, name:f.name, track:tr.id, n:deckN(), free:true, lead:true, items:[{at:P.at, secs:Math.round(P.secs * 100) / 100, prompt:P.prompt, len:P.secs, cuts:P.cuts, beats:P.beats}]});
   if(!n){ f.tracks.splice(f.tracks.indexOf(tr), 1); save(); draw(); return false; }
   toast('🎬 One take of ' + fmt(P.secs) + ' sent, ' + P.beats.length + ' clips\' words in order. It lands on the new top track; the clips under it stay as they are.', 6000); return true; }
+function joinedWords(cs){ let off = 0; const segs = cs.flatMap(c => { const o = off; off += len(c); return cutSegs(beatSegs(takeOf(c.take)), c.in, c.out).map(x => ({a:x.a - c.in + o, b:x.b - c.in + o, text:untime(x.text)})).filter(x => x.text && x.b - x.a > 0.05); });
+  const r1 = x => Math.round(x * 10) / 10; return segs.length > 1 ? segs.map(x => '[' + r1(x.a) + 's-' + r1(x.b) + 's] ' + x.text).join('\n') : (segs[0] || {}).text || ''; }
+// 🧪 Test (Jordan 2026-11-07: "too many options overlapping, let's make a new one and simplify"): tick clips → they're joined into one
+// clip → it opens in 🪄 Smooth (upscale, refine, smooth) with each clip's words timed on the ⏱ bar, to slide where each one goes
+const TEST_MAX = 15;
+function testSheet(f){ const r = SEL && clipOf(f, SEL), tr = r ? r.tr : f.tracks.find(x => !x.hide && x.clips.length); if(!tr){ toast('Put some clips on the timeline first'); return; }
+  const cs = tr.clips.slice().sort((a, b) => a.at - b.at), on = new Set(r ? [r.c.id] : cs.map(c => c.id)), k = f.tracks.indexOf(tr);
+  $('#sheetCard').innerHTML = `<h3><span>🧪 Test</span><button class="btn" data-close>✕</button></h3>
+    <div class="note">Tick the clips (track ${k + 1}, next to each other, up to ${TEST_MAX} s). They're joined into one clip, which opens in 🪄 Smooth with each clip's words timed where it sits. Slide the ⏱ bar to change when each one plays, pick upscale or regenerate there, then Render.</div>
+    <div id="tsL">${cs.map(c => `<label class="row" style="align-items:center;gap:8px;margin:6px 0"><input type="checkbox" data-c="${c.id}" ${on.has(c.id) ? 'checked' : ''}><span>${fmt(c.at)} · ${fmt(len(c))} · ${esc(takeLabel(takeOf(c.take)))}${fileOf(takeOf(c.take)) ? '' : ' (rendering)'}</span></label>`).join('')}</div>
+    <div class="note" id="tsN"></div><button class="btn pri" id="tsGo" style="padding:13px;width:100%;margin-top:8px">🧪 Join and open in Smooth</button>`;
+  $('#sheet').hidden = false;
+  const pick = () => cs.filter(c => on.has(c.id)), note = () => { const ix = cs.map((c, j) => on.has(c.id) ? j : -1).filter(j => j >= 0), gap = ix.length > 1 && ix[ix.length - 1] - ix[0] + 1 !== ix.length, tot = pick().reduce((a, c) => a + len(c), 0);
+    $('#tsN').textContent = !ix.length ? 'Tick at least one.' : gap ? 'Tick clips that sit next to each other.' : tot > TEST_MAX + 0.05 ? 'That\'s ' + fmt(tot) + ': Smooth takes up to ' + TEST_MAX + ' s. Tick fewer.' : ix.length + (ix.length===1 ? ' clip' : ' clips') + ', ' + fmt(tot) + ' in all.';
+    $('#tsGo').disabled = !ix.length || gap || tot > TEST_MAX + 0.05; };
+  $$('#tsL input').forEach(x => x.onchange = () => { if(x.checked) on.add(x.dataset.c); else on.delete(x.dataset.c); note(); }); note();
+  $('#tsGo').onclick = async () => { $('#tsGo').disabled = true; if(await testGo(f, tr, pick())) closeSheet(); else note(); }; }
+async function testGo(f, tr, cs){ cs = cs.slice().sort((a, b) => a.at - b.at); if(cs.find(c => !fileOf(takeOf(c.take)))){ toast('A clip in it is still rendering: wait for it first'); return false; }
+  if(cs.length===1){ const fn = deckFn('H3SmoothTake'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; } return !!(await fn(cs[0].take)); }
+  const fn = deckFn('H3Combine'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
+  const ok = await fn({film:f.id, track:tr.id, clips:cs.map(c => c.id), at:cs[0].at, auto:true, test:true, prompt:joinedWords(cs), parts:cs.map(c => ({take:c.take, in:c.in, out:c.out}))});
+  if(ok) toast('🧪 Joining ' + cs.length + ' clips (a few seconds), then they open in 🪄 Smooth with their words on the ⏱ bar. The timeline stays as it is.', 6000); return !!ok; }
 async function combineGo(f, tr, cs, auto){ const fn = deckFn('H3Combine'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
   cs = cs.slice().sort((a, b) => a.at - b.at); const bad = cs.find(c => !fileOf(takeOf(c.take))); if(bad){ toast('A clip in it is still rendering: wait for it first'); return false; }
   let off = 0; const segs = cs.flatMap(c => { const o = off; off += len(c); return cutSegs(beatSegs(takeOf(c.take)), c.in, c.out).map(x => ({a:x.a - c.in + o, b:x.b - c.in + o, text:untime(x.text)})).filter(x => x.text && x.b - x.a > 0.05); });
@@ -1208,6 +1234,7 @@ document.addEventListener('click', async ev => {
     case 'guide': { const r = clipOf(f, SEL), fn = deckFn('H3Guide'); if(!r) return; if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return; } fn(r.c.take); return; }
     case 'redo': redoSheet(f); return;
     case 'combine': combineSheet(f); return;
+    case 'test': testSheet(f); return;
     case 'joinPrev': { const r = SEL && clipOf(f, SEL), p = r && prevTouching(r); if(!p){ toast('There\'s no clip right before it on this track'); return; } await combineGo(f, r.tr, [p, r.c], true); return; }
     case 'lead': leadSheet(f); return;
     case 'expSave': expSave(f); return;
@@ -1251,7 +1278,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame

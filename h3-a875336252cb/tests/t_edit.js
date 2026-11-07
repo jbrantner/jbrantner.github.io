@@ -116,6 +116,21 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       await page.waitForFunction(() => H3.S.f.sm && H3.S.f.smVid, null, {timeout:10000}).catch(() => {});
       const SM = await page.evaluate(() => ({sm:H3.S.f.sm, vid:!!H3.S.f.smVid, pr:H3.S.f.prompt})); ok(SM.sm && SM.vid && /she walks to the window/.test(SM.pr), '🪄 Smooth on the timeline loads the clip\'s take into Smooth with its words: ' + JSON.stringify(SM));
       await page.evaluate(() => { H3.S.f.sm = false; }); }
+    // 🧪 Test: tick clips → one joined clip (not on the timeline) → it opens in Smooth with each clip's words timed; the playhead leaves it alone
+    { await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.smVid = null; }); const sb = sent.length;
+      await fr.evaluate(() => { FILM.SEL = C1; FILM.draw(); document.querySelector('[data-act="test"]').click(); });
+      await fr.evaluate(() => { document.querySelectorAll('#tsL input').forEach(x => { if(!x.checked){ x.checked = true; x.onchange(); } }); });
+      const TN = await fr.evaluate(() => document.getElementById('tsN').textContent); await fr.evaluate(() => document.getElementById('tsGo').click()); await page.waitForTimeout(500);
+      const TT = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.test); if(!t) return null; t.state = 'done'; t.pieces[0].state = 'done'; t.pieces[0].file = {filename:'tt_00001_.mp4', subfolder:'Output_Render/H3Deck/tt', type:'output'}; t.final = t.pieces[0].file; H3.saveNow(); return {id:t.id, pr:t.prompt}; });
+      await fr.waitForFunction(() => { const t = FILM.takes().find(x => x.combo && x.combo.test); return t && FILM.doneOf(t); }, null, {timeout:8000}).catch(() => {});
+      const n0 = await fr.evaluate(() => FILM.S.films[0].tracks.reduce((a, x) => a + x.clips.length, 0));
+      await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo && x.combo.test); if(t) delete FILM.S.placed[t.combo.key]; FILM.placeNew(); FILM.draw(); });
+      await page.waitForFunction(() => H3.S.f.sm && H3.S.f.smVid, null, {timeout:10000}).catch(() => {});
+      const TS = await page.evaluate(() => ({sm:H3.S.f.sm, up:H3.S.f.smUp, pr:H3.S.f.prompt, bar:!document.getElementById('beatBar').hidden, follow:H3.FILMWORDS ? 1 : window.H3FilmWords('other words', 1, 'tA')}));
+      const n1 = await fr.evaluate(() => FILM.S.films[0].tracks.reduce((a, x) => a + x.clips.length, 0));
+      ok(TT && sent.length===sb + 1 && /\[0s-5s\] she walks to the window\.?\n\[5s-10s\] she walks to the window/.test(TT.pr) && TS.sm && /\[5s-10s\]/.test(TS.pr) && TS.bar && TS.follow===false && n1===n0,
+        '🧪 Test joins the ticked clips into one and opens it in Smooth with each clip\'s words timed on the ⏱ bar; the playhead doesn\'t replace them: ' + JSON.stringify({TN, TT, TS, n0, n1}));
+      await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.prompt = 'she walks to the window'; }); }
     { const q0 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length), p0 = await fr.evaluate(() => (FILM.S.passes || []).length);
       await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tBl'))); t.id = 'tBl2'; t.blend = Object.assign({}, t.blend, {key:'kb2', chain:{den:0, clean:0.8}}); H3.S.takes.unshift(t); H3.saveNow(); }, R);
       await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(800);
