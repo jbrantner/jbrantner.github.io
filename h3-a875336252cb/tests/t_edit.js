@@ -81,6 +81,22 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(CB.n===1 && CB.take===ct && Math.abs(CB.len - 7) < 0.05 && CB.at===0 && CB.w==='she walks to the window', '⛓ once joined, the two clips are one 7 s clip: ' + JSON.stringify(CB));
   await fr.evaluate(() => FILM.undo());
   ok(await fr.evaluate(() => FILM.S.films[0].tracks[0].clips.length===2), '↶ Undo splits them again');
+  // 🪄 Blend: the ticked clips are joined in a hidden take, loaded into 🪄 Smooth, and the smoothed take comes back split into the clips
+  { await fr.evaluate(() => { FILM.SEL = C1; FILM.draw(); }); await fr.click('[data-act="combine"]'); await page.waitForTimeout(200);
+    const sb = sent.length; await fr.click('#cbBlend'); await page.waitForTimeout(500);
+    const BT = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.blend); if(!t) return null; t.state = 'done'; t.pieces[0].state = 'done'; t.final = {filename:'b_00001_.mp4', subfolder:'Output_Render/H3Deck/b', type:'output'}; H3.saveNow(); return {id:t.id, b:t.combo.blend.bounds.map(q => [q.off, q.in, q.out, q.at])}; });
+    ok(BT && JSON.stringify(BT.b)==='[[0,0,5,0],[5,0,5,5]]' && sent.length===sb + 1, '🪄 Blend joins the ticked clips in one hidden job and remembers where each clip sits: ' + JSON.stringify(BT));
+    await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo && x.combo.blend); if(t) delete FILM.S.placed[t.combo.key]; FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(2500);
+    const BS = await page.evaluate(() => ({sm:H3.S.f.sm, up:H3.S.f.smUp, spc:H3.S.f.smSpc, bl:H3.S.f.smBlend && H3.S.f.smBlend.bounds.length, vid:!!H3.S.f.smVid && H3.S.f.smBlend && H3.S.f.smBlend.vid===H3.S.f.smVid}));
+    const BTL = await fr.evaluate(() => FILM.S.films[0].tracks.length + ':' + FILM.S.films[0].tracks[0].clips.length);
+    ok(BS.sm && !BS.up && BS.spc && BS.bl===2 && BS.vid && BTL==='2:2', '🪄 the joined take loads into Smooth (📐 spacing on, same size), the timeline stays as it was: ' + JSON.stringify({BS, BTL}));
+    const n0 = await fr.evaluate(() => FILM.S.films[0].tracks.length);
+    await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tA'))); Object.assign(t, {id:'tBl', pc:R, sm:{vid:H3.S.f.smVid, start:0, every:4}, blend:Object.assign({}, H3.S.f.smBlend, {key:'kb'}), combo:null, carry:null, redo:null, toFilm:null, prompt:'The same shot carries on with smooth, steady, natural motion.', seconds:10, state:'done',
+      pieces:[{start:0, gen:241, deliv:240, ctx:0, prompt:'x', state:'done', file:{filename:'bl.mp4', subfolder:'Output_Render/H3Deck/bl', type:'output'}}], final:{filename:'bl.mp4', subfolder:'Output_Render/H3Deck/bl', type:'output'}}); H3.S.takes.unshift(t); H3.saveNow(); }, R);
+    await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
+    const BP = await fr.evaluate(n0 => { const f = FILM.S.films[0], tr = f.tracks[0]; return {more:f.tracks.length - n0, blend:!!tr.blend, cs:tr.clips.map(c => [c.take, c.in, c.out, c.at]), w:FILM.wordsAt(FILM.takeOf('tBl'), 1)}; }, n0);
+    ok(BP.more===1 && BP.blend && JSON.stringify(BP.cs)==='[["tBl",0,5,0],["tBl",5,10,5]]' && BP.w==='she walks to the window', '🪄 the smoothed blend comes back as the same clips on a new top track, with their own words: ' + JSON.stringify(BP));
+    await fr.evaluate(() => { FILM.S.films[0].tracks.shift(); FILM.draw(); }); await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.smBlend = null; H3.S.takes = H3.S.takes.filter(x => x.id!=='tBl' && !(x.combo && x.combo.blend)); H3.saveNow(); H3.drawAll(); }); }
   // ⛓ a carry-on's takes: "Use this one: join it to the clip before"
   await page.evaluate(R => { H3.S.takes.unshift({id:'tK', t:Date.now(), pc:R, model:H3.S.takes[0].model, turbo:true, loras:[], w:640, h:352, name:'h3_k', dir:'H3Deck/h3_k', prompt:'she opens it', seconds:3, imgs:[], vids:[], auds:[], follow:[], cont:'m1', carry:{src:'tA', at:3, own:true, key:'kk', film:'fA'},
     pieces:[{start:0, gen:73, deliv:72, ctx:0, prompt:'she opens it', state:'done', file:{filename:'k.mp4', subfolder:'Output_Render/H3Deck/h3_k', type:'output'}}], state:'done', final:{filename:'k.mp4', subfolder:'Output_Render/H3Deck/h3_k', type:'output'}}); H3.saveNow(); }, R);
