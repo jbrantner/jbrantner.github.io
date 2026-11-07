@@ -111,6 +111,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       ok(O.length===1 && Math.abs(O[0].secs - 10) < 0.05 && O[0].n===2 && O[0].film && /^she walks to the window/.test(O[0].p[0]) && /\[0s-1s\] she walks to the window, carrying on from the moment before\.\n\[1s-\] she sits down/.test(O[0].p[1]), '🎬 one new take over the ticked clips: a part per clip, the second leading in from the first: ' + JSON.stringify(O));
       await page.evaluate(k0 => { H3.S.takes.splice(0, H3.S.takes.length - k0); H3.S.takes = H3.S.takes.filter(x => x.id!=='tB'); H3.saveNow(); }, k0);
       await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks.flatMap(x => x.clips).find(x => x.id===C2).take = 'tA'; if(!f.tracks[0].clips.length) f.tracks.shift(); FILM.save && FILM.save(); FILM.draw(); }); }
+    // 🪄 Smooth on the timeline: the selected clip's take loads straight into Smooth
+    { await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.smVid = null; }); await fr.evaluate(() => { FILM.SEL = C1; FILM.draw(); document.querySelector('[data-act="smoothClip"]').click(); });
+      await page.waitForFunction(() => H3.S.f.sm && H3.S.f.smVid, null, {timeout:10000}).catch(() => {});
+      const SM = await page.evaluate(() => ({sm:H3.S.f.sm, vid:!!H3.S.f.smVid, pr:H3.S.f.prompt})); ok(SM.sm && SM.vid && /she walks to the window/.test(SM.pr), '🪄 Smooth on the timeline loads the clip\'s take into Smooth with its words: ' + JSON.stringify(SM));
+      await page.evaluate(() => { H3.S.f.sm = false; }); }
     { const q0 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length), p0 = await fr.evaluate(() => (FILM.S.passes || []).length);
       await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tBl'))); t.id = 'tBl2'; t.blend = Object.assign({}, t.blend, {key:'kb2', chain:{den:0, clean:0.8}}); H3.S.takes.unshift(t); H3.saveNow(); }, R);
       await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(800);
