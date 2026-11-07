@@ -301,6 +301,11 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   { const R = await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:true, smUp:false, smLoop:false, smSpc:false, smEvery:4, seconds:5, mp:0.41, smRefs:[]}); const a = H3.smoothPlan().length;
       Object.assign(f, {smUp:true, smUpRefs:true, smRefs:[f.smVid, f.smVid, f.smVid]}); const b = H3.smoothPlan().length; Object.assign(f, {smUp:false, smRefs:[]}); return {a, b}; });
     ok(R.a===1 && R.b > 1, '🪄 reference pictures count toward the 8 GB budget: a 5 s smoothing with 3 pictures renders in smaller parts: ' + JSON.stringify(R)); }
+  // 🪄 blend of 14 s: the parts split away from the joins (windows share no motion), and nothing is pinned near them
+  { const B = await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:true, smUp:false, smLoop:false, smSpc:false, smEvery:4, smStart:0, seconds:14.4, mp:0.41, smGap:16,
+      smBlend:{vid:f.smVid, bounds:[{off:0, in:0, out:4.8}, {off:4.8, in:0, out:4.8}, {off:9.6, in:0, out:4.8}]}}); const L = H3.smoothTotal(), k = H3.smKeysFor(L), P = H3.smoothPlan();
+      const r = {J:H3.blendJoins(), near:k.filter(([o]) => H3.blendJoins().some(j => Math.abs(o - j) < 8)).length, seams:P.slice(1).map(p => Math.round(p.start * 24 + p.skip)), n:P.length}; f.smBlend = null; return r; });
+    ok(B.J.join()==='115,230' && B.near===0 && B.n > 1 && B.seams.every(x => B.J.every(j => Math.abs(x - j) >= 14)), '🪄 a long blend splits away from its joins and pins nothing near them: ' + JSON.stringify(B)); }
   // 🏷 a LoRA's trigger words are remembered: pick it again later and they fill in
   { const LW = await page.evaluate(async () => { const f = H3.S.f; f.loras = [{name:'', str:1, words:''}]; H3.drawAll(); const sel = document.querySelector('#loraList [data-ln]');
       const opt = [...sel.options].map(o => o.value).find(v => v); if(!opt) return {none:true}; sel.value = opt; sel.dispatchEvent(new Event('change', {bubbles:true}));
