@@ -108,9 +108,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(sh && sh[0][0]==='Film 1_00001_.mp4' && sh[0][1]===2048 && sh[0][2]==='video/mp4', '📲 opens the share sheet with the whole mp4 (' + JSON.stringify(sh) + ')');
   // ✨ 4K finish of the export
   ok(!!(await page.$('[data-act="finGo"]')), 'the finished export offers ✨ 4K finish');
+  ok(/real-photo upscaler/.test(await page.textContent('#exp')) && !!(await page.$('[data-act="finLook"][data-v="live"].pri')), '✨ live action is the default look');
+  await page.click('[data-act="finLook"][data-v="anime"]'); ok(/anime video upscaler/.test(await page.textContent('#exp')), '✨ 🌸 Anime switches the upscaler');
+  await page.click('[data-act="finLook"][data-v="live"]');
   await page.click('[data-act="finGo"]'); await page.waitForTimeout(4500);
   const FN = await page.evaluate(() => ({fin:FILM.S.films[0].fin, txt:document.querySelector('#exp').textContent}));
-  ok(EXP.fin && EXP.fin.filename==='Film 1_00001_.mp4' && EXP.fin.smooth===true && FN.fin.state==='done' && /4K ready: 2880×3840 · 48 fps/.test(FN.txt) && !!(await page.$('[data-act="finSave"]')), '✨ 4K finish runs on the export and offers the 4K video: ' + JSON.stringify({body:EXP.fin, st:FN.fin.state}));
+  ok(EXP.fin && EXP.fin.filename==='Film 1_00001_.mp4' && EXP.fin.smooth===true && EXP.fin.look==='live' && FN.fin.state==='done' && /4K ready: 2880×3840 · 48 fps/.test(FN.txt) && !!(await page.$('[data-act="finSave"]')), '✨ 4K finish runs on the export and offers the 4K video: ' + JSON.stringify({body:EXP.fin, st:FN.fin.state}));
   await page.screenshot({path:path.join(__dirname, 'film_timeline.png'), fullPage:true});
   // ⚡ Preview: the PC writes the film as one small video; ▶ Play plays it in real time until the edit changes
   await page.click('[data-act="preview"]'); await page.waitForTimeout(400);
