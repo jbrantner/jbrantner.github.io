@@ -912,11 +912,11 @@ async function qualityGo(f, tr, o){ const fn = deckFn('H3Nudge'); if(!fn){ toast
   if(passOf(tr)){ toast('A pass is already running on this track'); return 0; }
   if(tr.clips.some(c => !fileOf(takeOf(c.take)))){ toast('Wait for every clip on the track to finish first (a pass does all of them or none)'); return 0; }
   const wins = qpWins(tr); if(!wins.length){ toast('No clips on that track'); return 0; }
-  const seed = o.seed || Math.floor(Math.random() * 2 ** 31), key = uid('k'), big = (o.scale || 1) > 1, p = {key, film:f.id, track:tr.id, big, wins, state:'working', t:Date.now(), o:{den:o.den, clean:o.clean || 0, scale:o.scale || 1, seed, look:S.finLook || 'live'}}; let n = 0;
+  const seed = o.seed || Math.floor(Math.random() * 2 ** 31), key = uid('k'), big = (o.scale || 1) > 1, p = {key, film:f.id, track:tr.id, big, wins, state:'working', t:Date.now(), o:{den:o.den, clean:o.clean || 0, scale:o.scale || 1, seed, look:S.finLook || 'live', sep:!!o.sep}}; let n = 0;
   S.passes = (S.passes || []).filter(x => Date.now() - (x.t || 0) < 7 * 864e5); S.passes.push(p); save();
   for(let i = 0; i < wins.length; i++) n += await qpSend(fn, p, i) ? 1 : 0;
   if(n < wins.length){ p.state = 'failed'; p.err = 'only ' + n + ' of ' + wins.length + ' parts could be sent'; save(); toast((big ? '🔍' : '✨') + ' Only ' + n + ' of ' + wins.length + ' parts could be sent, so nothing will change. Try again when both PCs are on.', 6000); return 0; }
-  toast((big ? '🔍 Bigger' : '✨ Quality pass') + ': ' + n + ' part' + (n > 1 ? 's' : '') + ' sent. When all of them are done they go on a new top track' + (wins.length > 1 ? ', joined into one clip' : '') + '. This track stays as it is.', 6000); save(); return n; }
+  toast((big ? '🔍 Bigger' : '✨ Quality pass') + ': ' + n + ' part' + (n > 1 ? 's' : '') + ' sent. When all of them are done they go on a new top track' + (wins.length > 1 ? (o.sep ? ' as a blend track (each clip on its own, with its own words)' : ', joined into one clip') : '') + '. This track stays as it is.', 6000); save(); return n; }
 const qpSend = (fn, p, i) => { const w = p.wins[i], q = p.o || {};
   return fn({take:w.take, a:w.in, b:w.out, prompt:wordsBetween(takeOf(w.take), w.in, w.out) || '', n:1, den:q.den, clean:q.clean || 0, look:q.look, seed:q.seed, qp:true, scale:q.scale || 1, key:p.key, wi:i, quiet:true}); };
 const qpOk = x => fileOf(x) && x.state==='done' && !x.upErr;
@@ -934,13 +934,14 @@ function placePasses(){ let ch = false;
     const ok = ps.map(x => x.ok);
     const ntr = {id:uid('tr'), clips:p.wins.map((w, i) => { const t = ok[i], d = secsOf(t) || (w.out - w.in), a = t.redo.big ? t.redo.cin : w.in, b = t.redo.big ? t.redo.cout : w.out; return {id:uid('c'), take:t.id, in:a, out:Math.min(d, b), dur:d, at:w.at}; })};
     f.tracks.unshift(ntr); p.state = 'done'; p.out = ntr.id; ch = true;
-    const cs = ntr.clips, touch = cs.length > 1 && cs.every((c, i) => !i || Math.abs(cs[i - 1].at + len(cs[i - 1]) - c.at) < 0.06);
-    toast((p.big ? '🔍 Bigger' : '✨ Quality pass') + ' done: it\'s on a new top track' + (touch ? ', joining into one clip now' : '') + '. 🙈 or 🗑 that track to go back.', 6000);
+    // ▦ blend track (Jordan 2026-11-07): the clips stay separate (each keeps its own take and words), matched by the shared seed and settings
+    const sep = p.o && p.o.sep, cs = ntr.clips, touch = !sep && cs.length > 1 && cs.every((c, i) => !i || Math.abs(cs[i - 1].at + len(cs[i - 1]) - c.at) < 0.06); if(sep) ntr.blend = true;
+    toast((p.big ? '🔍 Bigger' : '✨ Quality pass') + ' done: it\'s on a new top track' + (sep ? ' as a blend track, every clip kept on its own with its words' : touch ? ', joining into one clip now' : '') + '. 🙈 or 🗑 that track to go back.', 6000);
     if(touch) setTimeout(() => combineGo(f, ntr, cs, true), 50); }
   return ch; }
 function qualitySheet(f, k){ const tr = f.tracks[k]; if(!tr) return; const cs = qpClips(tr), wait = tr.clips.length - cs.length; let den = S.qpDen != null ? S.qpDen : 0, cln = S.qpClean != null ? S.qpClean : 0.8;
   $('#sheetCard').innerHTML = `<h3><span>✨ Quality pass · track ${k + 1}</span><button class="btn" data-close>✕</button></h3>
-    <div class="note">Runs ⬆ Regenerate over every clip on this track with the official MiniMax H3 reference model and her pictures, so she looks more like her references and the textures clean up. All clips use one seed and the same strength so they match each other, and each keeps its own words. It's all or nothing: this track stays as it is, and only when every clip is done does the result go on a new top track, joined into one clip. If any clip fails, nothing changes.</div>
+    <div class="note">Runs ⬆ Regenerate over every clip on this track with the official MiniMax H3 reference model and her pictures, so she looks more like her references and the textures clean up. All clips use one seed and the same strength so they match each other, and each keeps its own words. It's all or nothing: this track stays as it is, and only when every clip is done does the result go on a new top track (a ▦ blend track of separate clips, or one joined clip, as picked below). If any clip fails, nothing changes.</div>
     <div class="lab" style="margin-top:10px"><span>Strength</span></div><div class="row" id="qpLv">${QP_LV.map(x => `<button class="btn" data-v="${x.v}">${x.label}</button>`).join('')}</div>
     <div class="note" id="qpHow" style="margin-top:4px"></div>
     <div class="lab" style="margin-top:10px"><span>🧽 Grain</span></div><div class="row" id="qpCl">${QP_CL.map(x => `<button class="btn" data-v="${x.v}">${x.label}</button>`).join('')}</div>
@@ -948,6 +949,8 @@ function qualitySheet(f, k){ const tr = f.tracks[k]; if(!tr) return; const cs = 
     ${passFailed(tr) ? `<div class="note" style="margin-top:10px;color:var(--bad)">The last ${passFailed(tr).big ? '🔍 bigger' : '✨ pass'} on this track failed on ${(passFailed(tr).failed || []).length || 'some'} of ${passFailed(tr).wins.length} parts: ${esc(passFailed(tr).err || 'error')}</div>
     <button class="btn pri" id="qpRetry" style="padding:13px;width:100%;margin-top:6px">↻ Retry the failed parts (keeps the ones that worked)</button>
     <button class="btn" id="qpForget" style="padding:10px;width:100%;margin-top:6px">✕ Forget that pass</button>` : ''}
+    <div class="lab" style="margin-top:10px"><span>Result</span></div><div class="row" id="qpSep"><button class="btn" data-v="1">▦ Blend track</button><button class="btn" data-v="0">⛓ One joined clip</button></div>
+    <div class="note" id="qpSepHow" style="margin-top:4px"></div>
     <div class="note" style="margin-top:8px">${cs.length} clip${cs.length===1 ? '' : 's'} (${fmt(cs.reduce((a, c) => a + len(c), 0))})${wait ? ' · ' + wait + ' still rendering, left out' : ''}</div>
     <button class="btn pri" id="qpGo" style="padding:13px;width:100%;margin-top:8px" ${cs.length ? '' : 'disabled'}>✨ Run the quality pass</button>
     <div class="lab" style="margin-top:16px"><span>🔍 Last step: make it bigger</span></div>
@@ -960,11 +963,14 @@ function qualitySheet(f, k){ const tr = f.tracks[k]; if(!tr) return; const cs = 
   const cv = () => { $$('#qpCl button').forEach(b => b.classList.toggle('pri', +b.dataset.v===cln));
     $('#qpClHow').textContent = !cln ? 'The clips go in as they are (grain and all).' : cln < 1 ? 'Softens the grain a little before the pass, so it draws fresh detail instead of sharpening the grain, plus one more small clean-up step.' : 'Softens more: smoothest skin and least grain, but the finest details are redrawn too.'; };
   $$('#qpCl button').forEach(b => b.onclick = () => { cln = S.qpClean = +b.dataset.v; save(); cv(); }); cv();
+  let sep = S.qpSep !== false; const sv = () => { $$('#qpSep button').forEach(b => b.classList.toggle('pri', !!+b.dataset.v===sep));
+    $('#qpSepHow').textContent = sep ? 'Every clip stays its own clip on the new track, with its own words and settings (➕ Carry on, ↻ Redo and the Shot box work per clip). They still match, because they share one seed and the same strength.' : 'The finished clips are joined into one clip on the new track (its joins are remembered for 🔍 bigger).'; };
+  $$('#qpSep button').forEach(b => b.onclick = () => { sep = S.qpSep = !!+b.dataset.v; save(); sv(); }); sv();
   if($('#qpRetry')) $('#qpRetry').onclick = async () => { $('#qpRetry').disabled = true; if(await qpRetry(f, tr)){ closeSheet(); draw(); } else $('#qpRetry').disabled = false; };
   if($('#qpForget')) $('#qpForget').onclick = () => { passFailed(tr).gone = true; save(); closeSheet(); draw(); };
-  $('#qpGo').onclick = async () => { $('#qpGo').disabled = true; if(await qualityGo(f, tr, {den, clean:cln})) closeSheet(); else $('#qpGo').disabled = false; };
+  $('#qpGo').onclick = async () => { $('#qpGo').disabled = true; if(await qualityGo(f, tr, {den, clean:cln, sep})) closeSheet(); else $('#qpGo').disabled = false; };
   if($('#qpBack')) $('#qpBack').onclick = () => { const n = qpBack(tr); save(); closeSheet(); draw(); toast('↩ ' + n + ' clip' + (n > 1 ? 's are' : ' is') + ' back to the original. The ✨ versions are still in Takes of each clip.', 5000); };
-  $('#qpBig').onclick = async () => { $('#qpBig').disabled = true; if(await qualityGo(f, tr, {den:0, clean:cln, scale:1.5})) closeSheet(); else $('#qpBig').disabled = false; };
+  $('#qpBig').onclick = async () => { $('#qpBig').disabled = true; if(await qualityGo(f, tr, {den:0, clean:cln, scale:1.5, sep})) closeSheet(); else $('#qpBig').disabled = false; };
   $('#sheet').hidden = false; }
 function combineSheet(f){ const r = SEL && clipOf(f, SEL); if(!r) return; const cs = r.tr.clips.slice().sort((a, b) => a.at - b.at), i = cs.indexOf(r.c);
   const on = new Set([r.c.id, (cs[i + 1] || cs[i - 1] || {}).id]);

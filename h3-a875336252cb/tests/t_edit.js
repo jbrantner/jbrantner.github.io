@@ -119,6 +119,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.nudge)); H3.saveNow(); });
   await fr.click('[data-act="qualitySheet"][data-k="0"]'); await page.waitForTimeout(200);
   ok(await fr.evaluate(() => /2 clips/.test(document.querySelector('#sheetCard').textContent) && /all or nothing/.test(document.querySelector('#sheetCard').textContent) && document.querySelector('#qpLv .pri').dataset.v==='0'), '✨ the sheet counts the clips, says all or nothing, Regenerate strength by default');
+  ok(await fr.evaluate(() => document.querySelector('#qpSep .pri').dataset.v==='1'), '▦ blend track (separate clips) is the default result');
+  await fr.click('#qpSep [data-v="0"]');
   const s5 = sent.length; await fr.click('#qpGo'); await page.waitForTimeout(600);
   const QPS = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).map(t => ({clip:t.redo.clip, key:t.redo.key, wi:t.redo.wi, seed:t.seed, den:t.up.den, a:t.redo.a, b:t.redo.b, prompt:t.up.prompt})));
   ok(QPS.length===2 && QPS[0].seed===QPS[1].seed && QPS[0].key===QPS[1].key && QPS.map(x => x.wi).sort().join()==='0,1' && QPS.every(x => !x.clip && x.den===0 && /^she walks to the window/.test(x.prompt)) && QPS.find(x => x.wi===0).a <= 12 && QPS.find(x => x.wi===0).b >= 60, '✨ one regenerate per clip, one pass, same seed, the clips\' words: ' + JSON.stringify(QPS));
@@ -149,6 +151,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const QW = await fr.evaluate(() => { const f = FILM.S.films[0]; return {n:f.tracks.length, top:f.tracks[0].clips.map(c => { const t = FILM.takeOf(c.take); return {qp:!!(t && t.redo && t.redo.qp), in:c.in, out:c.out, at:c.at}; }), under:f.tracks[1].clips.map(c => c.take).join()}; });
   const J3 = (sent[s6] || {}).g || {};
   ok(QW.n===2 && QW.top.length===2 && QW.top.every(x => x.qp) && QW.top[0].in===0.5 && QW.top[1].at===2 && QW.under==='tA,tA' && nodes(J3, 'ConcatenateVideo').length===1, '✨ all done: a new top track with the passes, joining into one clip, the track under it as it was: ' + JSON.stringify(QW));
+  { const BC0 = await page.evaluate(() => H3.S.takes.filter(x => x.combo).length); const BL = await fr.evaluate(() => { const f = FILM.S.films[0], p0 = FILM.S.passes[0], n0 = f.tracks.length; FILM.S.passes.push(Object.assign({}, p0, {state:'working', o:Object.assign({}, p0.o, {sep:true})})); FILM.liveFilm();
+      const tr = f.tracks[0]; return {more:f.tracks.length - n0, blend:!!tr.blend, clips:tr.clips.map(c => [c.in, c.at, !!FILM.takeOf(c.take).redo.qp])}; }); await page.waitForTimeout(300);
+    const BC = await page.evaluate(() => H3.S.takes.filter(x => x.combo).length);
+    ok(BL.more===1 && BL.blend && BL.clips.length===2 && BL.clips[0][0]===0.5 && BL.clips[1][1]===2 && BL.clips.every(x => x[2]) && BC===BC0, '▦ blend track: the passes go on a new top track as separate clips, not joined: ' + JSON.stringify({BL, BC, BC0}));
+    await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks.shift(); }); }
   await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo); t.state = 'done'; t.pieces[0].state = 'done'; t.final = {filename:'qj.mp4', subfolder:'Output_Render/H3Deck/qj', type:'output'}; H3.saveNow(); });
   await fr.evaluate(() => { const t = FILM.takes().find(x => x.combo); if(t && !FILM.S.films[0].tracks[0].clips.some(c => c.take===t.id)) delete FILM.S.placed[t.combo.key]; FILM.liveFilm(); });
   const QJ = await fr.evaluate(() => { const tr = FILM.S.films[0].tracks[0]; return {n:tr.clips.length, len:tr.clips[0] && tr.clips[0].out - tr.clips[0].in, cuts:tr.clips[0] && tr.clips[0].qcuts, wins:FILM.qpWins(tr).map(w => [w.in, w.out])}; });
