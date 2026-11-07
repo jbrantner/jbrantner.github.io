@@ -41,7 +41,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8011);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [], uploads = [], frees = [], HIST = {}, views = [];
+  const sent = [], uploads = [], frees = [], HIST = {}, views = [], FIN = [], FINQ = [];
   await page.route(PC + '/**', async (rt) => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[{vram_free:7e9, vram_total:8.5e9}]});
     if(p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
@@ -50,6 +50,8 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     if(p==='/upload/image'){ uploads.push(1); return J({name:'h3deck_x.mp4', subfolder:'h3deck', type:'input'}); }
     if(p==='/prompt'){ sent.push(JSON.parse(rt.request().postData()).prompt); return J({prompt_id:'p' + sent.length}); }
     if(p==='/free'){ frees.push(JSON.parse(rt.request().postData())); return J({}); }
+    if(p==='/renderdeck/h3finish' && rt.request().method()==='POST'){ FIN.push(JSON.parse(rt.request().postData())); return J({id:'fin1', state:'working', done:0, total:0}); }
+    if(p==='/renderdeck/h3finish'){ FINQ.push(u.searchParams.get('id')); return J(FINQ.length > 1 ? {id:'fin1', state:'done', done:300, total:300, fps:60, size:'3840x2160', file:{filename:'x_4K.mp4', subfolder:'Output_Render/H3Deck/x', type:'output'}} : {id:'fin1', state:'working', done:120, total:300}); }
     if(p.startsWith('/history/')){ const id = p.slice(9); return J(HIST[id] ? {[id]:HIST[id]} : {}); }
     if(p.startsWith('/history')) return J({});
     if(p==='/view'){ views.push(u.searchParams.get('filename')); return rt.fulfill({status:200, contentType:'video/mp4', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(path.join(MEDIA, 'v24.mp4'))}); }
@@ -319,14 +321,15 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
       t.final = {filename:t.name + '_00001_.mp4', subfolder:t.dir, type:'output'}; t.state = 'done'; t.up = {scale:1.5, rep:'medium', str:0.8, refs:false, prompt:''}; t.upStage = null;
       t.prompt = 'A woman in a room.\n[0s-5s] she walks to the window.\n[5s-10s] she turns around.\n[10s-14.4s] she sits down.';
       const oi = H3.PC[t.pc].oi, hadIB = !!oi.ImageBatch; if(!hadIB) oi.ImageBatch = {input:{required:{image1:['IMAGE'], image2:['IMAGE']}}};
+      t.sm.fin = {fps:60, look:'live'};
       const seams = H3.bridgeSeams(t), out = {seams, steps:[]}; let cur = t;
       for(let k = 0; k < seams.length; k++){ const n0 = H3.S.takes.length; await H3.bridgeNext(cur); const nt = H3.S.takes[0]; if(H3.S.takes.length===n0 || !nt.redo) break;
-        const R = nt.redo; out.steps.push({s0:R.s0, a:R.a, b:R.b, L:R.L, F:R.F, before:R.pins.filter(p => p[1] <= R.a).length, after:R.pins.filter(p => p[1] >= R.b).length, rest:R.bridge.rest.length, up:!!nt.up, pr:nt.prompt, pc:nt.pc===cur.pc});
+        const R = nt.redo; out.steps.push({s0:R.s0, a:R.a, b:R.b, L:R.L, F:R.F, before:R.pins.filter(p => p[1] <= R.a).length, after:R.pins.filter(p => p[1] >= R.b).length, rest:R.bridge.rest.length, up:!!nt.up, pr:nt.prompt, pc:nt.pc===cur.pc, fin:!!nt.fin});
         nt.state = 'done'; nt.final = {filename:nt.name + '_00001_.mp4', subfolder:nt.dir, type:'output'}; nt.pieces[0].state = 'done'; cur = nt; }
-      if(!hadIB) delete oi.ImageBatch; document.querySelectorAll('.toast').forEach(x => x.remove()); out.srcUp = t.upStage || null; H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.bridge) && x!==t); H3.saveNow(); return out; });
+      if(!hadIB) delete oi.ImageBatch; document.querySelectorAll('.toast').forEach(x => x.remove()); cur.up = null; cur.upStage = null; H3.finStart(cur); out.k4a = cur.k4 && cur.k4.state; out.srcK4 = !!t.k4; await H3.tickFin(cur); out.k4b = cur.k4.state; await H3.tickFin(cur); out.k4p = H3.k4Line(cur); await H3.tickFin(cur); out.k4c = H3.k4Line(cur); document.querySelectorAll('.toast').forEach(x => x.remove()); out.srcUp = t.upStage || null; H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.bridge) && x!==t); H3.saveNow(); return out; });
     const good = R && R.seams.length >= 2 && R.steps.length===R.seams.length && R.steps.every((x, i) => x.a < R.seams[i] && x.b > R.seams[i] && x.b - x.a <= 12 && x.a - x.s0 >= 24 && x.before >= 6 && x.after >= 6 && x.pc && x.rest===R.seams.length - i - 1 && x.up===(i===R.seams.length - 1))
-      && /keeps its speed/.test(R.steps[0].pr) && !R.srcUp;
-    ok(good, '🧵 each join of a smoothing in parts is bridged in turn with ~1 s pinned either side, then the last one is upscaled: ' + JSON.stringify(R)); }
+      && /keeps its speed/.test(R.steps[0].pr) && !R.srcUp && R.steps.every((x, i) => x.fin===(i===R.seams.length - 1)) && R.k4a==='wait' && !R.srcK4 && R.k4b==='working' && /4K 60 fps ready/.test(R.k4c) && FIN.length >= 1 && FIN[FIN.length - 1].fps===60;
+    ok(good, '🧵 each join of a smoothing in parts is bridged in turn with ~1 s pinned either side, then the last one is upscaled and 📺 finished in 4K 60: ' + JSON.stringify({R, FIN})); }
   // ⏱ which words when: timed lines show as blocks; dragging the line between two moves one's end and the next's start together
   { await page.evaluate(() => { const f = H3.S.f; Object.assign(f, {sm:false, seconds:10, prompt:'A woman in a room.\n[0s-5s] she walks to the window.\n[5s-10s] she sits down.'}); document.getElementById('prompt').value = f.prompt; H3.drawBeatBar(); });
     await page.evaluate(() => document.getElementById('beatBar').scrollIntoView());
