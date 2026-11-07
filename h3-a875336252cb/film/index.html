@@ -904,6 +904,15 @@ async function blendGo(f, tr, cs, chain){ const fn = deckFn('H3Combine'); if(!fn
     segs:cutSegs(beatSegs(takeOf(c.take)), c.in, c.out).map(x => ({a:Math.round((x.a - c.in + off) * 100) / 100, b:Math.round((x.b - c.in + off) * 100) / 100, text:untime(x.text)})).filter(x => x.text && x.b - x.a > 0.05)}; off += len(c); return b; });
   const ok = await fn({film:f.id, track:tr.id, clips:cs.map(c => c.id), at:cs[0].at, auto:true, parts:cs.map(c => ({take:c.take, in:c.in, out:c.out})), blend:Object.assign({film:f.id, track:tr.id, bounds}, chain ? {chain:{den:S.qpDen != null ? S.qpDen : 0, clean:S.qpClean != null ? S.qpClean : 0.8}} : {})});
   if(ok) toast('🪄 Joining ' + cs.length + ' clips for the blend (a few seconds), then they load into 🪄 Smooth below. The timeline stays as it is.', 6000); return !!ok; }
+// 🎬 One take (Jordan 2026-11-07: "combine the clips into 1 clip, every clip's prompt is assigned a 5 second section, in order, each with
+// the last clip's prompt as a lead in"): one new take over the ticked clips' span, its parts cut where the clips meet, each part the words
+// of its clip with the clip before's words as the first second; the parts are chained (Motion Context), so they flow into each other
+async function oneGo(f, cs){ const fn = deckFn('H3Fill'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
+  const P = guidePlan({clips:cs}); if(!P || !P.secs){ toast('Nothing to render'); return false; }
+  const tr = {id:uid('tr'), clips:[], over:true}; f.tracks.unshift(tr); save(); draw();
+  const n = await fn({film:f.id, name:f.name, track:tr.id, n:deckN(), free:true, lead:true, items:[{at:P.at, secs:Math.round(P.secs * 100) / 100, prompt:P.prompt, len:P.secs, cuts:P.cuts, beats:P.beats}]});
+  if(!n){ f.tracks.splice(f.tracks.indexOf(tr), 1); save(); draw(); return false; }
+  toast('🎬 One take of ' + fmt(P.secs) + ' sent, ' + P.beats.length + ' clips\' words in order. It lands on the new top track; the clips under it stay as they are.', 6000); return true; }
 async function combineGo(f, tr, cs, auto){ const fn = deckFn('H3Combine'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
   cs = cs.slice().sort((a, b) => a.at - b.at); const bad = cs.find(c => !fileOf(takeOf(c.take))); if(bad){ toast('A clip in it is still rendering: wait for it first'); return false; }
   const ok = await fn({film:f.id, track:tr.id, clips:cs.map(c => c.id), at:cs[0].at, auto:!!auto, parts:cs.map(c => ({take:c.take, in:c.in, out:c.out}))});
@@ -1015,14 +1024,17 @@ function combineSheet(f){ const r = SEL && clipOf(f, SEL); if(!r) return; const 
     <div id="cbL">${cs.map(c => `<label class="row" style="align-items:center;gap:8px;margin:6px 0"><input type="checkbox" data-c="${c.id}" ${on.has(c.id) ? 'checked' : ''}><span>${fmt(c.at)} · ${fmt(len(c))} · ${esc(takeLabel(takeOf(c.take)))}${fileOf(takeOf(c.take)) ? '' : ' (rendering)'}</span></label>`).join('')}</div>
     <div class="note" id="cbN"></div><button class="btn pri" id="cbGo" style="padding:13px;width:100%;margin-top:8px">⛓ Combine them</button>
     <button class="btn" id="cbBlend" style="padding:13px;width:100%;margin-top:8px">🪄 Blend them (smooth the joins, keep the clips)</button>
+    <button class="btn" id="cbOne" style="padding:13px;width:100%;margin-top:8px">🎬 Render them again as one take (each clip's words, in order)</button>
+    <div class="note" style="margin-top:4px">🎬 makes one new take as long as the ticked clips: each clip's words get their own part, in order, and each part starts with the end of the clip before's action, so the parts flow into each other (they're chained like any long take). It uses the form's model, LoRAs, pictures and subjects, and lands on a new top track.</div>
     <button class="btn pri" id="cbAll" style="padding:13px;width:100%;margin-top:8px">🪄✨🔍 Blend, clean up and make bigger, all in one go</button>
     <div class="note" style="margin-top:4px">🪄 Blend runs 🪄 Smooth over the ticked clips as one stretch (keyframes every 4th frame or as the 📐 spacing graph says, MiniMax paints between them, up to ${BLEND_MAX} s), then puts them back as separate clips on a new top track, each with its own words. 🪄✨🔍 does that, then runs the ✨ quality pass (your last strength and grain picks) and 🔍 bigger ×1.5 on the result by itself, each as its own track, so you can compare. Press Render on the Smooth form once; the rest starts on its own while this page is open.</div>`;
     const note = () => { const ix = cs.map((c, j) => on.has(c.id) ? j : -1).filter(j => j >= 0), gap = ix.length > 1 && ix[ix.length - 1] - ix[0] + 1 !== ix.length;
       $('#cbN').textContent = ix.length < 2 ? 'Tick at least two.' : gap ? 'Tick clips that sit next to each other (no unticked clip between them).' : ix.length + ' clips → one clip of ' + fmt(ix.reduce((a, j) => a + len(cs[j]), 0));
-      $('#cbGo').disabled = $('#cbBlend').disabled = $('#cbAll').disabled = ix.length < 2 || gap; };
+      $('#cbGo').disabled = $('#cbBlend').disabled = $('#cbAll').disabled = $('#cbOne').disabled = ix.length < 2 || gap; };
     $$('#cbL input').forEach(x => x.onchange = () => { if(x.checked) on.add(x.dataset.c); else on.delete(x.dataset.c); note(); }); note();
     $('#cbGo').onclick = async () => { $('#cbGo').disabled = true; if(await combineGo(f, r.tr, cs.filter(c => on.has(c.id)))) closeSheet(); else $('#cbGo').disabled = false; };
     $('#cbAll').onclick = async () => { $('#cbAll').disabled = true; if(await blendGo(f, r.tr, cs.filter(c => on.has(c.id)), true)) closeSheet(); else $('#cbAll').disabled = false; };
+    $('#cbOne').onclick = async () => { $('#cbOne').disabled = true; if(await oneGo(f, cs.filter(c => on.has(c.id)))) closeSheet(); else $('#cbOne').disabled = false; };
     $('#cbBlend').onclick = async () => { $('#cbBlend').disabled = true; if(await blendGo(f, r.tr, cs.filter(c => on.has(c.id)))) closeSheet(); else $('#cbBlend').disabled = false; }; };
   draw(); $('#sheet').hidden = false; }
 

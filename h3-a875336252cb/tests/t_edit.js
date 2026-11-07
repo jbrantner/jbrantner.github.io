@@ -103,6 +103,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
     const BP = await fr.evaluate(n0 => { const f = FILM.S.films[0], tr = f.tracks[0]; return {more:f.tracks.length - n0, blend:!!tr.blend, cs:tr.clips.map(c => [c.take, c.in, c.out, c.at]), w:FILM.wordsAt(FILM.takeOf('tBl'), 1)}; }, n0);
     ok(BP.more===1 && BP.blend && JSON.stringify(BP.cs)==='[["tBl",0,5,0],["tBl",5,10,5]]' && BP.w==='she walks to the window', '🪄 the smoothed blend comes back as the same clips on a new top track, with their own words: ' + JSON.stringify(BP));
+    // 🎬 one take over the clips: one new take, a part per clip, in order, the second part starting with the first clip's action
+    { await page.evaluate(() => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tA'))); Object.assign(t, {id:'tB', prompt:'she sits down'}); t.pieces[0].prompt = 'she sits down'; H3.S.takes.push(t); H3.saveNow(); });
+      await fr.evaluate(() => { const c = FILM.S.films[0].tracks.flatMap(x => x.clips).find(x => x.id===C2); c.take = 'tB'; FILM.SEL = C1; FILM.draw(); }); await fr.click('[data-act="combine"]'); await page.waitForTimeout(200);
+      const k0 = await page.evaluate(() => H3.S.takes.length); await fr.evaluate(() => document.getElementById('cbOne').click()); await page.waitForTimeout(600);
+      const O = await page.evaluate(k0 => { const ts = H3.S.takes.slice(0, H3.S.takes.length - k0); return ts.map(t => ({secs:t.seconds, n:t.pieces.length, p:t.pieces.map(p => p.prompt), film:!!t.toFilm})); }, k0);
+      ok(O.length===1 && Math.abs(O[0].secs - 10) < 0.05 && O[0].n===2 && O[0].film && /^she walks to the window/.test(O[0].p[0]) && /\[0s-1s\] she walks to the window, carrying on from the moment before\.\n\[1s-\] she sits down/.test(O[0].p[1]), '🎬 one new take over the ticked clips: a part per clip, the second leading in from the first: ' + JSON.stringify(O));
+      await page.evaluate(k0 => { H3.S.takes.splice(0, H3.S.takes.length - k0); H3.S.takes = H3.S.takes.filter(x => x.id!=='tB'); H3.saveNow(); }, k0);
+      await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks.flatMap(x => x.clips).find(x => x.id===C2).take = 'tA'; if(!f.tracks[0].clips.length) f.tracks.shift(); FILM.save && FILM.save(); FILM.draw(); }); }
     { const q0 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length), p0 = await fr.evaluate(() => (FILM.S.passes || []).length);
       await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tBl'))); t.id = 'tBl2'; t.blend = Object.assign({}, t.blend, {key:'kb2', chain:{den:0, clean:0.8}}); H3.S.takes.unshift(t); H3.saveNow(); }, R);
       await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(800);
