@@ -273,6 +273,23 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     ok(inB.fkey==='fB' && inB.pr==='' && inB.model===mA && !inB.c7 && bList.film==='fB' && bList.shown
       && inA.fkey===A && inA.pr==='film A words' && inA.c7 && !inA.shown && back==='film B words',
       '🎞 each film keeps its own prompt, cast and takes: ' + JSON.stringify({inB, bList, inA, back})); }
+  // 📚 Library: an entry added to a film's cast is a link; an attribute put on a character goes along as its own picture (attribute_transfer)
+  { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
+    await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(200);
+    const tab = await page.evaluate(() => ({lib:!document.getElementById('libTab').hidden, render:document.getElementById('renderTab').hidden}));
+    await page.click('#libTab [data-lib="new"]'); await page.waitForTimeout(200);
+    const L1 = await page.evaluate(() => { const L = H3.S.lib[0]; H3.S.media.mL1 = {kind:'img', name:'laura.png', thumb:''}; H3.S.media.mH1 = {kind:'img', name:'hair.png', thumb:''}; L.pics = ['mL1']; L.name = 'Laura'; H3.libSync(L); H3.openLib(L.id); return L.id; });
+    await page.click('#lbBox [data-lb="add"]'); await page.waitForTimeout(200);
+    const A = await page.evaluate(id => { const c = H3.S.cast.find(x => x.lib===id); const at = H3.libNew('attr'); Object.assign(at, {name:'Silver bob', what:'haircut', pics:['mH1']}); c.attrs = [at.id];
+      const L = H3.S.lib.find(x => x.id===id); L.name = 'Laura Vale'; H3.libSync(L);
+      const T = H3.castTake({prompt:'<Subject ' + c.n + '> walks to the window.', imgs:[], film:H3.S.fkey}, true);
+      const pr = H3.h3Prompt({h3:{}, text:H3.castText('<Subject ' + c.n + '> walks to the window.', T, false), imgs:T.imgs, vids:[], auds:[], secs:5});
+      return {n:c.n, who:c.who, imgs:T.imgs.map(r => r.id + (r.attrOf ? '@' + r.attrOf : '')), at:/attribute_transfer - only the haircut from <Picture 2> is transferred to <Subject 1>/.test(pr), def:/is the haircut shown in <Picture 2>/.test(pr)}; }, L1);
+    await page.evaluate(() => { H3.closeSheet && H3.closeSheet(); document.getElementById('sheet').hidden = true; }); await page.click('#tabs [data-tab="films"]'); await page.waitForTimeout(200);
+    const F0 = await page.evaluate(() => H3.S.fkey); await fr.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.waitForTimeout(400);
+    const B = await page.evaluate(id => ({has:H3.S.cast.some(c => c.lib===id), fkey:H3.S.fkey}), L1);
+    ok(tab.lib && tab.render && A.who==='Laura Vale' && JSON.stringify(A.imgs)===JSON.stringify(['mL1', 'mH1@' + A.n]) && A.at && A.def && B.fkey!==F0 && !B.has,
+      '📚 a Library entry joins one film\'s cast as a link, follows edits, and an attribute is sent with attribute_transfer: ' + JSON.stringify({tab, A, B})); }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();

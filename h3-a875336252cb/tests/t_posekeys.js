@@ -59,7 +59,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
   ok(/At 00:01\.500 the person is in the pose of the grey mannequin in <Picture 2>/.test(PL), 'plain prompts get one line per pose picture: ' + PL.trim());
 
   // ---- the Poses tab
-  await page.click('#tabs [data-tab="poses"]');
+  await page.evaluate(() => H3.setTab('poses'));
   const fr = await (await page.waitForSelector('#poseTab iframe')).contentFrame();
   await fr.waitForFunction(() => window.PK && PK.LIB.length===2, null, {timeout:20000});
   ok(true, 'the pose library comes from the PC (2 poses)');
@@ -106,7 +106,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
     const c = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[0].blob); }); }); fs.writeFileSync(path.join(OUT, 'skeleton.webm'), Buffer.from(c.split(',')[1], 'base64'));
     const d = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[1].blob); }); }); fs.writeFileSync(path.join(OUT, 'depth.webm'), Buffer.from(d.split(',')[1], 'base64')); }
   // 📍 Touch points: the skeleton only round each key (black between), no depth, strength from the slider
-  { await page.click('#tabs [data-tab="poses"]'); await fr.evaluate(() => { PK.S.clip = 'touch'; PK.S.tstr = 0.7; PK.S.thold = 0.2; PK.S.depth = true; PK.drawAll(); }); const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
+  { await page.evaluate(() => H3.setTab('poses')); await fr.evaluate(() => { PK.S.clip = 'touch'; PK.S.tstr = 0.7; PK.S.thold = 0.2; PK.S.depth = true; PK.drawAll(); }); const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
     await fr.click('#send'); await page.waitForFunction(n0 => Object.keys(H3.S.media).length >= n0 + 3 && !document.querySelector('#poseTab iframe').contentWindow.document.querySelector('#send').disabled, n0, {timeout:90000});
     const tf = await page.evaluate(() => ({str:H3.S.f.ctlStr, end:H3.S.f.ctlEnd, c2str:H3.S.f.ctl2Str, c2:H3.S.media[H3.S.f.ctl2Vid] && H3.S.media[H3.S.f.ctl2Vid].name, mode:H3.S.media[H3.S.f.ctlVid].mode, name:H3.S.media[H3.S.f.ctlVid].name}));
     const b = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[0].blob); }); });
@@ -118,7 +118,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
     ok(tf.str===0.7 && tf.end===1 && tf.c2str===0.5 && /touchdepth/.test(tf.c2) && tf.mode==='pose' && /touchpoints/.test(tf.name), 'touch points: skeleton at the slider strength, depth at 0.7 of it, both held to the end: ' + JSON.stringify(tf));
     ok(lit2.join()==='0,1,2,46,47,48,49,50', 'the depth body shows only round each key too (frames ' + lit2.join(',') + ')');
     ok(lit.length===8 && lit.join()==='0,1,2,46,47,48,49,50', 'the skeleton shows only round each key (frames ' + lit.join(',') + ' of ' + st.length + '), black between'); }
-  { await page.click('#tabs [data-tab="poses"]'); await fr.evaluate(() => { PK.S.thold = 0.6; PK.S.depth = false; PK.drawAll(); }); const keep = await page.evaluate(() => ({v:H3.S.f.ctl2Vid, imgs:H3.S.f.imgs})); const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
+  { await page.evaluate(() => H3.setTab('poses')); await fr.evaluate(() => { PK.S.thold = 0.6; PK.S.depth = false; PK.drawAll(); }); const keep = await page.evaluate(() => ({v:H3.S.f.ctl2Vid, imgs:H3.S.f.imgs})); const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
     await fr.click('#send'); await page.waitForFunction(n0 => Object.keys(H3.S.media).length >= n0 + 3 && !document.querySelector('#poseTab iframe').contentWindow.document.querySelector('#send').disabled, n0, {timeout:90000});
     const b = await fr.evaluate(async () => { const r = new FileReader(); return await new Promise(ok => { r.onload = () => ok(r.result); r.readAsDataURL(PK_LAST.clips[0].blob); }); }); const tmp = path.join(require('os').tmpdir(), 'touch3.webm'); fs.writeFileSync(tmp, Buffer.from(b.split(',')[1], 'base64'));
     const lit = require('child_process').execSync(`ffmpeg -loglevel error -i ${tmp} -vf signalstats,metadata=print:key=lavfi.signalstats.YMAX:file=- -f null - 2>/dev/null`).toString().match(/YMAX=\d+/g).map((x, i) => +x.slice(5) > 40 ? i : -1).filter(i => i >= 0);
@@ -137,7 +137,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
   ok(/At 00:02\.000 the person is in the pose of the grey mannequin in <Picture 2>/.test(prompt2), 'plain prompt too');
   if(OUT){ await page.evaluate(() => { H3.S.f.h3 = true; H3.drawAll(); }); await page.waitForTimeout(300); await page.screenshot({path:path.join(OUT, 'render_tab.png'), fullPage:true}); }
   // ---- ✨ Create in-betweens: the keys go to MiniMax as keyframes at their times, with a mannequin prompt, and no guide
-  { await page.click('#tabs [data-tab="poses"]'); await page.evaluate(() => { H3.S.f.prompt = 'Ellen dances in the kitchen.'; });
+  { await page.evaluate(() => H3.setTab('poses')); await page.evaluate(() => { H3.S.f.prompt = 'Ellen dances in the kitchen.'; });
     const n0 = await page.evaluate(() => Object.keys(H3.S.media).length);
     await fr.click('#ibBtn'); await page.waitForFunction(n0 => Object.keys(H3.S.media).length >= n0 + 2 && H3.S.tab==='render', n0, {timeout:60000});
     const P = await page.evaluate(() => { const f = H3.S.f; return {pins:f.imgs.filter(r => r.pin).map(r => r.pose.t), other:f.imgs.filter(r => !r.pin && r.pose).length, ctl:f.ctl, prompt:f.prompt, mq:f.mq, note:!document.querySelector('#mqNote').hidden}; });
