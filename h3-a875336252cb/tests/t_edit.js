@@ -96,6 +96,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
     const BP = await fr.evaluate(n0 => { const f = FILM.S.films[0], tr = f.tracks[0]; return {more:f.tracks.length - n0, blend:!!tr.blend, cs:tr.clips.map(c => [c.take, c.in, c.out, c.at]), w:FILM.wordsAt(FILM.takeOf('tBl'), 1)}; }, n0);
     ok(BP.more===1 && BP.blend && JSON.stringify(BP.cs)==='[["tBl",0,5,0],["tBl",5,10,5]]' && BP.w==='she walks to the window', '🪄 the smoothed blend comes back as the same clips on a new top track, with their own words: ' + JSON.stringify(BP));
+    { const q0 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length), p0 = await fr.evaluate(() => (FILM.S.passes || []).length);
+      await page.evaluate(R => { const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tBl'))); t.id = 'tBl2'; t.blend = Object.assign({}, t.blend, {key:'kb2', chain:{den:0, clean:0.8}}); H3.S.takes.unshift(t); H3.saveNow(); }, R);
+      await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); }); await page.waitForTimeout(800);
+      const CH = await fr.evaluate(p0 => { const p = FILM.S.passes.slice(p0); return {n:p.length, chain:p[0] && p[0].o.chain, sep:p[0] && p[0].o.sep, top:FILM.S.films[0].tracks[0].clips.map(c => c.take).join()}; }, p0);
+      const q1 = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).length);
+      ok(CH.n===1 && CH.chain==='big' && CH.sep && CH.top==='tBl2,tBl2' && q1===q0 + 2, '🪄✨🔍 one go: the finished blend goes on a track and its ✨ pass starts by itself (then 🔍): ' + JSON.stringify({CH, q0, q1}));
+      await fr.evaluate(() => { FILM.S.films[0].tracks.shift(); FILM.S.passes = FILM.S.passes.filter(p => p.o.chain!=='big'); }); await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => x.id!=='tBl2' && !(x.redo && x.redo.qp && !x.redo.wi && x.redo.src==='tBl2')); H3.saveNow(); }); }
     await fr.evaluate(() => { FILM.S.films[0].tracks.shift(); FILM.draw(); }); await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.smBlend = null; H3.S.takes = H3.S.takes.filter(x => x.id!=='tBl' && !(x.combo && x.combo.blend)); H3.saveNow(); H3.drawAll(); }); }
   // ⛓ a carry-on's takes: "Use this one: join it to the clip before"
   await page.evaluate(R => { H3.S.takes.unshift({id:'tK', t:Date.now(), pc:R, model:H3.S.takes[0].model, turbo:true, loras:[], w:640, h:352, name:'h3_k', dir:'H3Deck/h3_k', prompt:'she opens it', seconds:3, imgs:[], vids:[], auds:[], follow:[], cont:'m1', carry:{src:'tA', at:3, own:true, key:'kk', film:'fA'},
