@@ -359,6 +359,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       c.acts = []; H3.S.cast = H3.S.cast.filter(x => x!==c2); H3.S.lib = H3.S.lib.filter(x => x!==K && x!==L2);
       return {ui, v:T.vids.map(r => r.id + '@' + r.actOf + '>' + r.to), tr:/attribute_transfer - only the spinning kick \(the body movement and its timing of the one performing it\) from <Video 1> is transferred to <Subject 1>, who performs it on <Subject 2>/.test(pr), sh:/<Subject 1> performs <Subject \d> \(the spinning kick\) on <Subject 2>\./.test(pr), novid:!/<Video 1> is a reference video/.test(pr)}; }, L1);
     ok(AC.ui.clip && AC.ui.doer && AC.ui.to && AC.v.length===1 && AC.tr && AC.sh && AC.novid, '🥋 an action clip goes in as Video 1, moved onto the doer with attribute_transfer and done to the target: ' + JSON.stringify(AC));
+    const AK = await page.evaluate(id => { const c = H3.S.cast.find(x => x.lib===id); const L2 = H3.libNew('char'); Object.assign(L2, {name:'Ben', pics:['mL1']}); const c2 = H3.libToCast(L2);
+      const K = H3.libNew('act'); Object.assign(K, {name:'Her kick', what:'spinning kick'}); H3.drawCast();
+      const q = s => document.querySelector(s), card = q('#castList [data-cn="' + c2.n + '"]'), btn = card && card.querySelector('[data-cast="act"]'); if(!btn) return {btn:false}; btn.click();
+      q('#akBox [data-ak="id:' + K.id + '"]').click(); q('#akBox [data-ak="side:to"]').click(); const dis = q('#akBox [data-ak="ok"]').disabled;
+      q('#akBox [data-ak="o:' + c.n + '"]').click(); q('#akBox [data-ak="ok"]').click();
+      const got = JSON.stringify(c.acts || []), chip = !!q('#castList [data-cn="' + c2.n + '"] [data-cast="unactto:' + c.n + '>' + K.id + '"]');
+      q('#castList [data-cn="' + c2.n + '"] [data-cast="unactto:' + c.n + '>' + K.id + '"]').click(); const gone = !(c.acts || []).length;
+      H3.S.cast = H3.S.cast.filter(x => x!==c2); H3.S.lib = H3.S.lib.filter(x => x!==K && x!==L2); c.acts = []; H3.drawCast();
+      return {btn:true, dis, ok:got===JSON.stringify([{id:K.id, to:c2.n}]), chip, gone}; }, L1);
+    ok(AK.btn && AK.dis && AK.ok && AK.chip && AK.gone, "🥋 ＋ Action on Ben's card: pick the kick, It's done to Ben, by Laura → Laura does it to Ben: " + JSON.stringify(AK));
     ok(A9.n===9 && A9.at===1 && A9.exc && A9.rep && A9.out, '✨ a character with 9 pictures still leaves room for her attribute, and her own look gives way to it: ' + JSON.stringify(A9));
     await page.evaluate(() => { H3.closeSheet && H3.closeSheet(); document.getElementById('sheet').hidden = true; }); await page.click('#tabs [data-tab="films"]'); await page.waitForTimeout(200);
     const F0 = await page.evaluate(() => H3.S.fkey); await fr.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.waitForTimeout(400);
