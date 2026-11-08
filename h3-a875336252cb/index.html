@@ -204,9 +204,10 @@ body.bare #renderTab .note:not(#filmFormNote),body.bare #renderTab .sw .d,body.b
     <a class="icon xf" href="touchup/" aria-label="Touch up a video" title="👁 Touch up: a picture into the eyes, lipstick, any part" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none">👁</a>
     <button class="icon" id="setBtn" aria-label="Settings">⚙</button>
   </header>
-  <nav class="tabs" id="tabs"><button data-tab="films" class="on">🎞 Films</button><button data-tab="lib">📚 Library</button></nav>
+  <nav class="tabs" id="tabs"><button data-tab="films" class="on">🎞 Films</button><button data-tab="lib">📚 Library</button><button data-tab="renders">🗂 Renders</button></nav>
   <div id="filmTab" hidden></div>
   <div id="libTab" hidden></div>
+  <div id="rendersTab" hidden></div>
   <div id="renderTab">
   <div class="note" id="filmFormNote" hidden></div>
 
@@ -2282,10 +2283,7 @@ const lazyOn = v => { if(v && v.dataset.lazy && !v.getAttribute('src')){ v.prelo
 const LAZY = 'IntersectionObserver' in window ? new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting){ lazyOn(e.target); LAZY.unobserve(e.target); } }), {rootMargin:'300px 0px'}) : null;
 function lazyScan(){ document.querySelectorAll('video[data-lazy]:not([src])').forEach(v => { if(v.dataset.lz) return; v.dataset.lz = 1; if(LAZY) LAZY.observe(v); else lazyOn(v); }); }
 new MutationObserver(() => lazyScan()).observe(document.documentElement, {childList:true, subtree:true});
-function drawTakes(){ fileTakes(); const L = S.takes.filter(inMine);
-  const box = $('#takes'); if(!L.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; return; }
-  // keep a playing video playing: only redraw what changed
-  const html = L.map(t => {
+function takeCard(t){
     const secs = t.pieces.reduce((s, p) => s + p.deliv, 0) / FPS, n = t.pieces.length;
     const chips = n > 1 ? `<div class="pieces">${t.pieces.map((p, i) => `<i style="--w:${p.deliv};${p.state==='done' ? 'color:var(--good)' : p.state==='running' ? 'color:var(--accent);border-color:var(--accent)' : p.state==='failed' ? 'color:var(--bad)' : ''}" data-piece="${t.id}|${i}">${i + 1}${p.state==='done' ? ' ✓' : p.state==='running' ? ' ▶' : p.state==='failed' ? ' ✕' : ''}</i>`).join('')}</div>` : '';
     const f = progress(t), tl = timeLeft(t);
@@ -2297,19 +2295,42 @@ function drawTakes(){ fileTakes(); const L = S.takes.filter(inMine);
       ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr">${esc(t.prompt)}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
-  });
-  const have = [...box.children].filter(x => x.dataset.take);
+}
+// keep a playing video playing: only redraw the cards that changed
+function patchCards(box, L, html){ const have = [...box.children].filter(x => x.dataset.take);
   if(have.length!==html.length || have.some((el, i) => el.dataset.take!==html[i].id)){ box.innerHTML = html.map(x => x.html).join(''); }
   else html.forEach((x, i) => { const el = have[i]; if(el.dataset.sig!==x.sig){ el.outerHTML = x.html; } else { const t = L[i];
-    el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%'; } });
+    el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%'; } }); }
+// 🗂 Renders (Jordan 2026-11-08: "a tab where you can just see everything that has rendered and is rendering"): every take, every film
+const filmNameOf = id => { if(id===undefined) return 'Older videos'; if(!id) return 'One-off videos'; try{ const f = FW && FW.FILM && FW.FILM.S.films.find(x => x.id===id); if(f) return f.name; }catch(e){} return 'A film'; };
+const RT_F = [['all', 'All'], ['working', '⏳ Rendering'], ['done', '✓ Done'], ['failed', '✕ Failed']];
+function drawRenders(){ const tab = $('#rendersTab'); if(!tab || tab.hidden) return; fileTakes();
+  const st = S.rtF || 'all', fm = S.rtFilm == null ? '*' : S.rtFilm, films = [...new Set(S.takes.map(t => t.film === undefined ? '~' : t.film || ''))];
+  const ok = t => (st==='all' || (st==='failed' ? t.state==='failed' : st==='working' ? t.state==='working' : t.state!=='working' && t.state!=='failed')) && (fm==='*' || (t.film === undefined ? '~' : t.film || '')===fm);
+  const all = S.takes.filter(ok), L = all.filter(t => t.state==='working').concat(all.filter(t => t.state!=='working'));
+  const nW = S.takes.filter(t => t.state==='working').length;
+  const head = `<div class="rtHead"><div class="seg" id="rtSeg">${RT_F.map(([v, l]) => `<button data-rt="${v}" class="${st===v ? 'on' : ''}">${l}${v==='working' && nW ? ' ' + nW : ''}</button>`).join('')}</div>
+    <select id="rtFilm" style="width:100%;margin-top:8px"><option value="*">All films</option>${films.map(k => `<option value="${esc(k)}" ${fm===k ? 'selected' : ''}>${esc(filmNameOf(k==='~' ? undefined : k))}</option>`).join('')}</select></div>`;
+  const hs = st + '|' + fm + '|' + nW + '|' + films.join(); if(tab.dataset.h!==hs){ tab.dataset.h = hs; tab.innerHTML = head + '<div id="rtList" class="takes"></div>';
+    $('#rtSeg').onclick = e => { const b = e.target.closest('[data-rt]'); if(!b) return; S.rtF = b.dataset.rt; save(); drawRenders(); };
+    $('#rtFilm').onchange = e => { S.rtFilm = e.target.value; save(); drawRenders(); }; }
+  const box = $('#rtList'); if(!L.length){ box.innerHTML = '<div class="empty">' + (S.takes.length ? 'Nothing here with these filters.' : 'Your renders show up here, from both PCs.') + '</div>'; return; }
+  if(box.querySelector('.empty')) box.innerHTML = '';
+  const html = L.map(t => { const c = takeCard(t), fl = '<div class="note rtFilm">🎞 ' + esc(filmNameOf(t.film)) + '</div>'; return {id:c.id, sig:c.sig, html:c.html.replace('<div class="meta">', '<div class="meta">' + fl)}; });
+  patchCards(box, L, html); }
+function drawTakes(){ fileTakes(); const L = S.takes.filter(inMine); drawRenders();
+  const box = $('#takes'); if(!L.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; return; }
+  // keep a playing video playing: only redraw what changed
+  const html = L.map(takeCard);
+  patchCards(box, L, html);
   $('#clearDone').hidden = !L.some(t => t.state!=='working');
 }
 function drawLive(){ // the running piece's preview picture and step count, without redrawing the list
-  for(const t of S.takes){ if(t.state!=='working') continue; const el = document.querySelector(`[data-take="${t.id}"]`); if(!el) continue;
+  for(const t of S.takes){ if(t.state!=='working') continue; for(const el of document.querySelectorAll(`[data-take="${t.id}"]`)){
     const run = t.pieces.find(p => p.state==='running' || (LIVE[p.pid] && LIVE[p.pid].max && !LIVE[p.pid].done && p.state==='queued'));
     if(run && run.state==='queued'){ run.state = 'running'; }
     el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%';
-    const ph = el.querySelector('[data-live]'), L = run && LIVE[run.pid]; if(ph && L && L.img){ let im = ph.querySelector('img'); if(!im){ ph.textContent = ''; im = document.createElement('img'); im.className = 'live'; ph.appendChild(im); } if(im.src!==L.img) im.src = L.img; } }
+    const ph = el.querySelector('[data-live]'), L = run && LIVE[run.pid]; if(ph && L && L.img){ let im = ph.querySelector('img'); if(!im){ ph.textContent = ''; im = document.createElement('img'); im.className = 'live'; ph.appendChild(im); } if(im.src!==L.img) im.src = L.img; } } }
 }
 function drawBare(){ document.body.classList.toggle('bare', S.bare!==false); const f = S.f;
   $('#smSw').classList.toggle('xk', !!f.sm); $('#ctlSw').classList.toggle('xk', !!f.ctl);
@@ -2661,14 +2682,15 @@ window.addEventListener('hashchange', () => { if(/take=/.test(location.hash)) se
 let FW = null; // the film app's window, once its tab has been opened
 const tabTop = () => document.documentElement.style.setProperty('--ft', Math.round($('#tabs').getBoundingClientRect().bottom) + 'px');
 // Jordan 2026-11-06: the 🎬 Render tab is gone; 🎞 Films (timeline on top, the whole Render form and the takes under it) is the main screen
-function setTab(tab){ if(tab!=='poses' && tab!=='lib') tab = 'films'; S.tab = tab; save(); document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab));
-  const film = tab!=='render', box = $('#filmTab'), pb = $('#poseTab'); $('#renderTab').hidden = tab!=='films'; box.hidden = tab!=='films'; pb.hidden = tab!=='poses'; $('#libTab').hidden = tab!=='lib'; document.body.classList.toggle('ftab', tab!=='films');
+function setTab(tab){ if(tab!=='poses' && tab!=='lib' && tab!=='renders') tab = 'films'; S.tab = tab; save(); document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab));
+  const film = tab!=='render', box = $('#filmTab'), pb = $('#poseTab'); $('#renderTab').hidden = tab!=='films'; box.hidden = tab!=='films'; pb.hidden = tab!=='poses'; $('#libTab').hidden = tab!=='lib'; $('#rendersTab').hidden = tab!=='renders'; document.body.classList.toggle('ftab', tab!=='films');
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab || (tab==='poses' && b.dataset.tab==='lib')));
   drawFilmNote();
   if(!film) return;
   window.scrollTo(0, 0); tabTop();
   // 🧍 Poses (Jordan 2026-11-05): pose keys on a timeline, sent back here as a Motion guide clip + timed pose pictures
   if(tab==='lib'){ drawLib(); return; }
+  if(tab==='renders'){ const r = $('#rendersTab'); r.dataset.h = ''; drawRenders(); return; }
   if(tab==='poses'){ if(!pb.firstChild){ const fr = document.createElement('iframe'); fr.src = 'keys/?embed=1'; fr.title = 'Pose keys'; pb.appendChild(fr); } return; }
   if(!box.firstChild){ const fr = document.createElement('iframe'); fr.src = 'film/?embed=1'; fr.title = 'Cutting Room and Films'; fr.setAttribute('scrolling', 'no');
     fr.onload = () => { FW = fr.contentWindow; filmNav(S.tab); fitFilm(); try{ new ResizeObserver(fitFilm).observe(fr.contentDocument.body); }catch(e){} drawFilmNote(); }; box.appendChild(fr); }
@@ -2990,7 +3012,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
