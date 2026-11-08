@@ -130,7 +130,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await fr.evaluate(() => FILM.guideSheet(FILM.S.films[0])); await page.waitForTimeout(200); await fr.click('[data-gd="off:1"]');
   ok(await fr.evaluate(() => FILM.guideOpt(FILM.S.films[0], 0, 1)===null), '✕ Not the guide: nothing follows it any more');
   // 🗑 any track can be deleted, clips and all (asks first); ↶ Undo brings it back
-  const dt = await fr.evaluate(async () => { const f = FILM.S.films[0], n0 = f.tracks.length, c0 = f.tracks[0].clips.length; FILM.draw(); await new Promise(r => setTimeout(r, 100)); const b = document.querySelector('[data-act="delTrack"][data-k="0"]'); if(b) b.click(); await new Promise(r => setTimeout(r, 150));
+  const dt = await fr.evaluate(async () => { const f = FILM.S.films[0], n0 = f.tracks.length, c0 = f.tracks[0].clips.length; FILM.draw(); await new Promise(r => setTimeout(r, 100)); const mb = document.querySelector('.trk[data-k="0"] [data-act="trackMenu"]'); if(mb) mb.click(); await new Promise(r => setTimeout(r, 50)); const b = document.querySelector('[data-act="delTrack"][data-k="0"]'); if(b) b.click(); await new Promise(r => setTimeout(r, 150));
     const n1 = FILM.S.films[0].tracks.length; FILM.undo(); await new Promise(r => setTimeout(r, 150)); return {btn:!!b, c0, n0, n1, n2:FILM.S.films[0].tracks.length}; });
   ok(dt.btn && dt.c0 > 0 && dt.n1===dt.n0 - 1 && dt.n2===dt.n0, '🗑 a track with clips can be deleted, and ↶ Undo brings it back (' + JSON.stringify(dt) + ')');
   // 🦴 progress while the skeleton is read: step, frame n of N, %, time left (from ComfyUI's per-frame progress)
