@@ -61,10 +61,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const sent0 = sent.length;
   // 🙈 hide track 1: it doesn't play or export, its clips stay
   await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[1].clips.push({id:'cLow', take:'tA', in:0, out:5, dur:5, at:0}); FILM.draw(); });
-  await fr.click('.trk[data-k="0"] [data-act="hideTrack"]');
+  await fr.click('.trk[data-k="0"] [data-act="trackMenu"]'); await fr.click('#sheetCard [data-act="hideTrack"]');
   const H = await fr.evaluate(() => { const f = FILM.S.films[0]; const a = FILM.activeAt(f, 1); return {hide:f.tracks[0].hide, at:a && a.id, exp:FILM.expClips(f).out.map(c => c.track), clips:f.tracks[0].clips.length, cls:document.querySelector('.trk[data-k="0"]').classList.contains('hid')}; });
   ok(H.hide && H.at==='cLow' && H.exp.every(k => k===1) && H.clips===2 && H.cls, '🙈 a hidden track doesn\'t play or export, and keeps its clips: ' + JSON.stringify(H));
-  await fr.click('.trk[data-k="0"] [data-act="hideTrack"]');
+  await fr.click('.trk[data-k="0"] [data-act="trackMenu"]'); await fr.click('#sheetCard [data-act="hideTrack"]');
   ok(await fr.evaluate(() => { const f = FILM.S.films[0]; return !f.tracks[0].hide && FILM.activeAt(f, 1).id===C1; }), '👁 tapping it again shows it');
   await fr.evaluate(() => { FILM.S.films[0].tracks[1].clips = []; FILM.draw(); });
   // ⛓ Combine: the sheet ticks the selected clip and the next one; one join job; the clips become one when it's done
@@ -181,7 +181,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // are done do they go on a new top track, joined into one clip. A failure changes nothing.
   await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks = [f.tracks[0]]; f.tracks[0].clips = [{id:'q1', take:'tA', in:0.5, out:2.5, dur:5, at:0}, {id:'q2', take:'tA', in:3, out:5, dur:5, at:2}]; FILM.S.passes = []; FILM.SEL = null; FILM.draw(); });
   await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !(x.redo && x.redo.nudge)); H3.saveNow(); });
-  await fr.click('[data-act="qualitySheet"][data-k="0"]'); await page.waitForTimeout(200);
+  await fr.click('.trk[data-k="0"] [data-act="trackMenu"]'); await fr.click('#sheetCard [data-act="qualitySheet"]'); await page.waitForTimeout(200);
   ok(await fr.evaluate(() => /2 clips/.test(document.querySelector('#sheetCard').textContent) && /all or nothing/.test(document.querySelector('#sheetCard').textContent) && document.querySelector('#qpLv .pri').dataset.v==='0'), '✨ the sheet counts the clips, says all or nothing, Regenerate strength by default');
   ok(await fr.evaluate(() => document.querySelector('#qpSep .pri').dataset.v==='1'), '▦ blend track (separate clips) is the default result');
   await fr.click('#qpSep [data-v="0"]');
@@ -244,7 +244,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(x => !/^cc/.test(x.id)); H3.saveNow(); });
   // 🔍 bigger, the last step: on the ✨ track, part by part, ×1.5, all or nothing onto another new top track
   await fr.evaluate(() => FILM.draw());
-  await fr.click('[data-act="qualitySheet"][data-k="0"]'); await page.waitForTimeout(200);
+  await fr.click('.trk[data-k="0"] [data-act="trackMenu"]'); await fr.click('#sheetCard [data-act="qualitySheet"]'); await page.waitForTimeout(200);
   ok(await fr.evaluate(() => /640×352 → 960×512/.test(document.querySelector('#sheetCard').textContent)), '🔍 the sheet offers the bigger last step with its size');
   await fr.click('#qpBig'); await page.waitForTimeout(600);
   const BG = await page.evaluate(R => { const T = H3.S.takes.filter(x => x.redo && x.redo.big), t = T.find(x => x.redo.wi===0); if(!t) return null; const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
