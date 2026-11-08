@@ -304,6 +304,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       && R1.ok && JSON.stringify(R1.clips)==='[[0,0,1],[1,1,4],[4,4,5]]' && T1.redo && T1.str===0.7 && T1.lo.join()==='myStyle.safetensors:0.6' && /turns to the window/.test(T1.pr)
       && R4 && T4 && T4.at===12 && T4.tr==='tP1' && !T4.clip,
       '📝 prompt blocks: over video = that stretch remade as its own clip with the block\'s words, LoRAs and strength; after a clip = carry on; empty = a new clip right there: ' + JSON.stringify({src, P1, R1, T1, R4, T4, REDO})); }
+  // ⏱ a rendering clip shows its step and a bar
+  { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
+    const ST = await page.evaluate(() => { const t = H3.S.takes.find(x => x.state==='working' && x.pieces.some(p => p.pid)); if(!t) return null; const p = t.pieces.find(x => x.pid); p.state = 'running'; return {id:t.id, s:H3.stepOf(t)}; });
+    const G = await fr.evaluate(id => { const f = FILM.S.films.find(x => x.tracks.some(tr => tr.clips.some(c => c.take===id))); if(f) FILM.go({v:'film', film:f.id}); return !!f; }, ST && ST.id); await page.waitForTimeout(1500);
+    const D = await fr.evaluate(() => { const el = document.querySelector('.clip.rend .st'), pg = document.querySelector('.clip.rend .pg i'); return {st:el && el.textContent, pg:!!pg}; });
+    ok(ST && /loading|\d+\/\d+/.test(ST.s) && (!G || (D.pg && /loading|\d+\/\d+/.test(D.st))), '⏱ a rendering clip shows its step and a progress bar: ' + JSON.stringify({ST, G, D}));
+    await fr.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.waitForTimeout(300); }
   // 🎞 each film keeps its own form, cast and takes (Jordan 2026-11-07: prompts bled from one film to the next)
   { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url())); const A = await fr.evaluate(() => FILM.S.films[0].id);
     await page.evaluate(() => { H3.S.f.prompt = 'film A words'; document.querySelector('#prompt').value = 'film A words'; H3.S.f.loras = [{name:'aStyle.safetensors', str:1, words:''}]; H3.S.f.model = H3.S.f.model || 'mA'; H3.S.cast.push({n:7, kind:'char', stand:'a tall woman', who:'', keep:'exact'}); H3.saveNow(); });
