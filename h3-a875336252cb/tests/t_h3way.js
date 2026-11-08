@@ -116,5 +116,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     '✏ Custom canvas: width × height snapped to 32, over the cap shrunk same shape, back to a ratio chip hides it: ' + JSON.stringify({d:CU.d, shown:CU.shown, res:CU.res, sw:CU.snap.w, note:CU.note, big:CB, CS, back:C0}));
   ok(/\n\[Shot 1\] she walks to the window\n\[Shot 2\] close-up of her eyes/.test(SH.P) && /appears in every shot/.test(SH.P) && /multi-shot/.test(SH.P) && /\[Shot 1\] Live-action, cinematic\. She walks in\n\[Shot 2\] her face/.test(SH.B), '🎬 the H3 prompt puts each shot on its own line: ' + JSON.stringify(SH.P.slice(-400)));
   await page.click('#h3Peek summary'); await page.screenshot({path:path.join(__dirname, 'h3way.png'), fullPage:false, clip:{x:0, y:0, width:390, height:1400}}).catch(() => {});
+  // 🎨 style chips (Jordan 2026-11-08): a preset goes into the H3 prompt as written; tapping it again goes back to none
+  const ST = await page.evaluate(() => { const q = s => document.querySelector(s); H3.S.f.h3 = true; H3.S.f.sm = false; H3.drawH3 && H3.drawH3();
+    const r = {row:!q('#styleRow').hidden, n:document.querySelectorAll('#styleChips [data-style]').length}; q('#styleChips [data-style="2d"]').click();
+    r.on = q('#styleChips [data-style="2d"]').classList.contains('pri'); r.f = H3.S.f.h3Style; r.box = q('#h3Style').value;
+    r.P = H3.h3Prompt({h3:{style:H3.S.f.h3Style}, text:'she waves', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
+    q('#styleChips [data-style="2d"]').click(); r.off = H3.S.f.h3Style; return r; });
+  ok(ST.row && ST.n===4 && ST.on && /hand-drawn 2D animation/.test(ST.f) && ST.box===ST.f && ST.P.includes(ST.f) && /not live action/.test(ST.P) && ST.off==='', '🎨 style chips: 2D goes into the H3 prompt, tapping it again clears it: ' + JSON.stringify({row:ST.row, n:ST.n, on:ST.on, off:ST.off}));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
