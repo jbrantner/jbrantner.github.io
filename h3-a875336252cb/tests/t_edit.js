@@ -285,18 +285,18 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       '📤 an uploaded clip goes to a PC and comes back as a 24 fps take at a MiniMax size, in its film: ' + JSON.stringify({U, vl:vl && vl.inputs})); }
   // 🎞 each film keeps its own form, cast and takes (Jordan 2026-11-07: prompts bled from one film to the next)
   { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url())); const A = await fr.evaluate(() => FILM.S.films[0].id);
-    await page.evaluate(() => { H3.S.f.prompt = 'film A words'; H3.S.f.model = H3.S.f.model || 'mA'; H3.S.cast.push({n:7, kind:'char', stand:'a tall woman', who:'', keep:'exact'}); H3.saveNow(); });
+    await page.evaluate(() => { H3.S.f.prompt = 'film A words'; document.querySelector('#prompt').value = 'film A words'; H3.S.f.loras = [{name:'aStyle.safetensors', str:1, words:''}]; H3.S.f.model = H3.S.f.model || 'mA'; H3.S.cast.push({n:7, kind:'char', stand:'a tall woman', who:'', keep:'exact'}); H3.saveNow(); });
     const mA = await page.evaluate(() => H3.S.f.model);
     const B = await fr.evaluate(() => { const f = {id:'fB', name:'Film B', tracks:[{id:'trB', clips:[]}, {id:'trB2', clips:[]}], pps:24}; FILM.S.films.push(f); FILM.go({v:'film', film:'fB'}); return f.id; });
     await page.waitForTimeout(400);
-    const inB = await page.evaluate(() => ({fkey:H3.S.fkey, pr:H3.S.f.prompt, model:H3.S.f.model, c7:H3.S.cast.some(c => c.n===7)}));
+    const inB = await page.evaluate(() => ({fkey:H3.S.fkey, pr:H3.S.f.prompt, box:document.querySelector('#prompt').value, loras:H3.S.f.loras.length, model:H3.S.f.model, c7:H3.S.cast.some(c => c.n===7)}));
     await page.evaluate(() => { H3.S.f.prompt = 'film B words'; const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.pieces && x.pieces.length))); Object.assign(t, {id:'tFB', film:undefined}); delete t.film; H3.S.takes.unshift(t); H3.save(); H3.drawTakes(); });
     const bList = await page.evaluate(() => ({film:H3.S.takes.find(x => x.id==='tFB').film, shown:!!document.querySelector('.take[data-take="tFB"]')}));
     await fr.evaluate(A => FILM.go({v:'film', film:A}), A); await page.waitForTimeout(400);
     const inA = await page.evaluate(() => ({fkey:H3.S.fkey, pr:H3.S.f.prompt, c7:H3.S.cast.some(c => c.n===7), shown:!!document.querySelector('.take[data-take="tFB"]')}));
     await fr.evaluate(() => FILM.go({v:'film', film:'fB'})); await page.waitForTimeout(400);
     const back = await page.evaluate(() => H3.S.f.prompt);
-    ok(inB.fkey==='fB' && inB.pr==='' && inB.model===mA && !inB.c7 && bList.film==='fB' && bList.shown
+    ok(inB.fkey==='fB' && inB.pr==='' && inB.box==='' && inB.loras===0 && inB.model===mA && !inB.c7 && bList.film==='fB' && bList.shown
       && inA.fkey===A && inA.pr==='film A words' && inA.c7 && !inA.shown && back==='film B words',
       '🎞 each film keeps its own prompt, cast and takes: ' + JSON.stringify({inB, bList, inA, back})); }
   // 📚 Library: an entry added to a film's cast is a link; an attribute put on a character goes along as its own picture (attribute_transfer)
