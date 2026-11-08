@@ -157,7 +157,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // ⬆ Nudge a stretch: the ↻ sheet in nudge mode makes a regenerate of only that stretch, at the same size, spliced back
   await fr.evaluate(() => { const f = FILM.S.films[0]; f.tracks[0].clips = [{id:'cN', take:'tA', in:0, out:5, dur:5, at:0}]; FILM.SEL = 'cN'; FILM.PH = 1.5; FILM.draw(); });
   await fr.click('[data-act="redo"]');
-  ok(await fr.evaluate(() => document.querySelector('#rdM').hidden && /Redo it/.test(document.querySelector('#rdGo').textContent)), '⬆ Nudge is taken out of the ↻ sheet (Jordan: it changed her too much)');
+  ok(await fr.evaluate(() => document.querySelector('#rdM [data-v="nudge"]').hidden && !!document.querySelector('#rdM [data-v="parts"]') && /Redo it/.test(document.querySelector('#rdGo').textContent)), '⬆ Nudge is taken out of the ↻ sheet (Jordan: it changed her too much)');
   await fr.evaluate(() => { document.querySelector('[data-close]').click(); FILM.S.nudgeOn = true; });
   await fr.click('[data-act="redo"]');
   await fr.click('#rdM [data-v="nudge"]');
@@ -172,6 +172,22 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const P2 = NT.up.part;
   ok(!G.some(n => n.class_type==='MinimaxH3LatentUpscaler3D') && i2v && i2v.inputs.width===640 && i2v.inputs.height===352 && i2v.inputs.length===P2.L && P2.L % 17===5 && /smiles and waves/.test(i2v.inputs.prompt) && /^0\.9300, 0\.7905/.test(G.find(n => n.class_type==='ManualSigmas').inputs.sigmas), '⬆ same size, the window on the frame grid, the new words: ' + JSON.stringify(P2));
   ok(fb[0][0]===P2.s0 && fb[0][1]===P2.L && JSON.stringify(fb.slice(1))===JSON.stringify([[0, P2.a], [P2.a - P2.s0, P2.b - P2.a], [P2.b, P2.F - P2.b]]) && P2.a <= 36 && P2.b >= 84, '⬆ spliced: the take up to a, the nudged frames, the take from b: ' + JSON.stringify(fb));
+  // 🎭 Faces and parts inside ✏️ Edit (Jordan 2026-11-08): only the found part, only in the stretch, with the stretch's words
+  { const EP = await fr.evaluate(async () => { const H = window.parent.H3, keep = H.S.cast, q = s => document.querySelector(s), w = ms => new Promise(z => setTimeout(z, ms));
+      H.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', desc:'green eyes, long black hair', pics:[], keep:'exact'}];
+      const ws = window.parent.H3FaceScan, wg = window.parent.H3FaceScanGet, wn = window.parent.H3Nudge; let asked = null, sent = null;
+      window.parent.H3FaceScan = async o => { asked = o; return {pc:'u', pid:'p1', node:'9', a:0, b:48}; }; window.parent.H3FaceScanGet = async q => ({url:'about:blank#scan'}); window.parent.H3Nudge = async o => { sent = o; return 1; };
+      FILM.SEL = 'cN'; FILM.PH = 1.5; FILM.redoSheet(FILM.S.films[0]); q('#rdM [data-v="parts"]').click();
+      const r = {shown:!q('#rdFcW').hidden, modHid:q('#rdModW').hidden, strHid:q('#rdStrW').hidden, go0:q('#rdGo').textContent};
+      q('#rdGo').click(); r.noSend = !sent; q('#fcWq [data-w="eyes"]').click(); q('#fcFind').click(); await w(2600);
+      r.asked = asked && asked.word==='eyes' && Math.abs(asked.a - 1.5) < 0.01; q('#fcWho [data-fp="1:0"]').click(); q('#fcWho [data-fp="1:1"]').click();
+      r.go = q('#rdGo').textContent; const ch = [...document.querySelectorAll('#fcWho [data-fo]')]; r.chips = ch.map(x => x.textContent); ch[0].click();
+      const ta = q('#rdP'); ta.value = 'her eyes turn into hypnotic spirals'; ta.dataset.typed = '1';
+      q('#rdGo').click(); await w(300); r.sent = sent && {faces:sent.faces, find:sent.find, zoom:sent.zoom, off:sent.descOff, a:sent.a, prompt:sent.prompt, clip:sent.clip, den:sent.den};
+      FILM.redoSheet(FILM.S.films[0]); const A = q('#rdA'); A.value = '0.8'; A.dispatchEvent(new Event('input')); r.reset = !FILM.S.films[0].tracks[0].clips[0].editScan && !!q('#fcFind');
+      q('[data-close]').click(); Object.assign(window.parent, {H3FaceScan:ws, H3FaceScanGet:wg, H3Nudge:wn}); H.S.cast = keep; FILM.S.rdMode = 'redo'; FILM.S.maskWord = 'face'; return r; });
+    ok(EP.shown && EP.modHid && EP.strHid && EP.noSend && EP.asked && /Redraw 2 parts/.test(EP.go) && EP.sent && JSON.stringify(EP.sent.faces)==='[{"n":1,"obj":0},{"n":1,"obj":1}]' && EP.sent.find==='eyes' && EP.sent.zoom && EP.sent.clip==='cN' && /spirals/.test(EP.sent.prompt) && JSON.stringify(EP.sent.off)==='{"1":["green eyes"]}' && EP.reset,
+      '🎭 ✏️ Edit has Faces and parts: finds eyes in the stretch, both eyes picked, a detail left out, sent as a part-only nudge of the stretch; moving the stretch asks to find again: ' + JSON.stringify(EP)); }
   // when it's done, it goes in the clip like a redo (a new version)
   await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.nudge); t.upStage = 'done'; t.state = 'done'; t.final = {filename:'n_up.mp4', subfolder:'Output_Render/H3Deck/n', type:'output'}; H3.saveNow(); });
   await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
