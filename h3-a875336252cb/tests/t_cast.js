@@ -92,6 +92,11 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['a1','a2','a3'], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:['b1','b2'], keep:'exact'}];
     const t = {prompt:'<Subject 1> hugs <Subject 2>', pieces:[{prompt:'<Subject 1> hugs <Subject 2>'}], imgs:[]}; const ids = H3.upPick(t).map(r => r.id); H3.S.cast = keep; return ids; });
   ok(JSON.stringify(R2)==='["a1","a2","b1"]', '✨ a pass on two characters sends both: ' + JSON.stringify(R2));
+  // 👥 four characters share the 9 slots (Jordan 2026-11-08: only 2 of 4 came out)
+  const R4 = await page.evaluate(() => { const keep = H3.S.cast, pics = (k, n) => [...Array(n)].map((_, i) => { const id = k + i; H3.S.media[id] = {thumb:'x', name:id + '.png'}; return id; });
+    H3.S.cast = [{n:1, kind:'char', who:'A', pics:pics('pA', 6), keep:'exact'}, {n:2, kind:'char', who:'B', pics:pics('pB', 4), keep:'exact'}, {n:3, kind:'char', who:'C', pics:pics('pC', 3), keep:'exact'}, {n:4, kind:'char', who:'D', pics:pics('pD', 3), keep:'exact'}];
+    const T = H3.castTake({prompt:'<Subject 1>, <Subject 2>, <Subject 3> and <Subject 4> dance.', imgs:[]}, true), by = {}; T.imgs.forEach(r => by[r.cast] = (by[r.cast] || 0) + 1); H3.S.cast = keep; return {n:T.imgs.length, by}; });
+  ok(R4.n===9 && R4.by[1]===3 && R4.by[2]===2 && R4.by[3]===2 && R4.by[4]===2, '👥 four characters each get pictures (3, 2, 2, 2 of the 9): ' + JSON.stringify(R4));
   // ✍ More detail (Jordan 2026-11-06): sent without a picture (up front, once) and with one (in its definition)
   const CD = await page.evaluate(() => { const keep = H3.S.cast; H3.S.cast = [{n:1, kind:'char', stand:'a woman', desc:'long black hair,\ngreen eyes, freckles', keep:'exact'}]; H3.drawAll();
     const box = !!document.querySelector('[data-castf="desc"]'), noPic = H3.castText('[Shot 1] <Subject 1> walks in. <Subject 1> sits.', {imgs:[]}, false);
