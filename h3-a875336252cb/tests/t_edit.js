@@ -248,7 +248,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       r.asked = asked && asked.take===c.take && asked.a===c.in; r.vid = !!q('#fcV'); r.rows = document.querySelectorAll('#fcWho .chips').length;
       q('#fcWho [data-fp="1:1"]').click(); q('#fcWho [data-fp="2:0"]').click(); q('#fcWho [data-fp="2:1"]').click(); r.go = q('#fcGo').textContent; r.pick = JSON.stringify(c.faceScan.pick);
       const qg = FILM.qualityGo; q('[data-close]').click(); window.parent.H3FaceScan = ws; window.parent.H3FaceScanGet = wg; delete c.faceScan; H.S.cast = keep; return r; });
-    ok(FS.find && FS.go0 && FS.asked && FS.vid && FS.rows===2 && FS.pick==='{"2":1}' && /1 face/.test(FS.go), '🎭 Faces: 🔎 finds the faces, the numbered video shows, a number goes to one person only (Ben took 1 from Laura): ' + JSON.stringify(FS)); }
+    ok(FS.find && FS.go0 && FS.asked && FS.vid && FS.rows===2 && FS.pick==='{"2":[0,1]}' && /2 faces/.test(FS.go), '🎭 Faces: 🔎 finds the faces, the numbered video shows, a number goes to one person only (Ben took 1 from Laura) and a person can have several: ' + JSON.stringify(FS)); }
   { const FN = await page.evaluate(R => { const keep = H3.S.cast; H3.S.media.fa1 = {kind:'img', thumb:'x', name:'fa1.png'}; H3.S.media.fb1 = {kind:'img', thumb:'x', name:'fb1.png'};
       H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['fa1'], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:['fb1'], keep:'exact'}];
       const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0))); t.prompt = t.up.prompt = '<Subject 1> hugs <Subject 2>.'; t.film = H3.S.fkey; t.up.faces = [{n:1, obj:1}, {n:2, obj:0}];
@@ -261,6 +261,20 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const r = {trk:C('SAM3_VideoTrack').length, det:C('SAM3_Detect').length, idx:C('SAM3_TrackToMask').map(n => n.inputs.object_indices), same:JSON.stringify(tk(g))===JSON.stringify(tk(sg).slice(0, 1)), win:JSON.stringify(fb(sg)[0]), pv:sg.some(n => n.class_type==='SAM3_TrackPreview'), txt:sg.find(n => n.class_type==='CLIPTextEncode').inputs.text};
       r.inPass = fb(g).some(x => JSON.stringify(x)===r.win); H3.S.cast = keep; return r; }, R);
     ok(FN.trk===1 && FN.det===0 && FN.idx.join()==='1,0' && FN.same && FN.pv && FN.inPass && FN.txt==='face:4', '🎭 numbered faces: one tracker on the same frames as the scan, each person takes her number: ' + JSON.stringify(FN)); }
+  // 🎭 any part + 🔍 zoom (Jordan 2026-11-08): "eyes" found by SAM 3, two numbers for one person, each eye cropped, drawn big and put back
+  { const ZM = await page.evaluate(R => { const keep = H3.S.cast; H3.S.media.fa1 = {kind:'img', thumb:'x', name:'fa1.png'};
+      H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['fa1'], keep:'exact'}];
+      const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0))); t.prompt = t.up.prompt = 'Close-up of <Subject 1>.'; t.film = H3.S.fkey; t.up.faces = [{n:1, obj:0}, {n:1, obj:1}]; t.up.find = 'eyes'; t.up.zoom = true;
+      const P = H3.PC[R].oi, oi = Object.assign({}, P); ['SAM3_Detect','SAM3_VideoTrack','SAM3_TrackToMask','SAM3_TrackPreview','GrowMask','MaskToImage','ImageToMask','ImageBlur','ImageCompositeMasked','MiniMaxH3ReferenceToVideo','BatchCropFromMask','BatchUncrop','RepeatImageBatch','ImageScale'].forEach(c => { if(!oi[c]) oi[c] = {input:{required:{}}}; });
+      oi.CheckpointLoaderSimple = {input:{required:{ckpt_name:[['sam3.1_multiplex_fp16.safetensors']]}}};
+      const un = ((((P.UNETLoader || {}).input || {}).required || {}).unet_name || [[]])[0]; oi.UNETLoader = {input:{required:{unet_name:[un.concat(['minimax_h3_ref2va_pruned_int8_convrot.safetensors'])]}}};
+      const G = H3.upGraph(t, oi, {fa1:'fa1.png'}).g, g = Object.values(G), C = c => g.filter(n => n.class_type===c), L = t.up.part.L;
+      const crops = C('BatchCropFromMask'), mm = C('MiniMaxH3ReferenceToVideo'), un2 = C('BatchUncrop');
+      const ok1 = crops.every(n => G[n.inputs.masks[0]] && n.inputs.crop_size_mult > 2), sizes = mm.map(n => [n.inputs.width, n.inputs.height]);
+      const txt = C('CLIPTextEncode').map(n => n.inputs.text).find(x => /:4$/.test(x));
+      t.up.zoom = false; const g0 = Object.values(H3.upGraph(t, oi, {fa1:'fa1.png'}).g); H3.S.cast = keep;
+      return {crops:crops.length, un:un2.length, mm:mm.length, ok1, sizes, txt, comp:C('ImageCompositeMasked').length, off:g0.filter(n => n.class_type==='BatchCropFromMask').length, tw:t.w, th:t.h}; }, R);
+    ok(ZM.crops===2 && ZM.un===2 && ZM.mm===2 && ZM.ok1 && ZM.txt==='eyes:4' && ZM.comp===2 && ZM.off===0, '🎭 "eyes" + 🔍 zoom: SAM 3 looks for eyes, each eye is cropped, drawn big by MiniMax and put back; zoom off = no crop: ' + JSON.stringify(ZM)); }
   { const RR = await page.evaluate(async () => { const t = H3.S.takes.find(x => x.state==='done' && !x.redo && x.pieces && x.pieces.length); if(!t) return {none:true};
       const n0 = H3.S.takes.length; document.body.insertAdjacentHTML('beforeend', `<button id="rrT" data-act="reroll" data-t="${t.id}">x</button>`); document.getElementById('rrT').click(); document.getElementById('rrT').remove();
       const box = document.querySelector('#rrP'), was = box && box.value; if(!box) return {sheet:false}; let sent = null; const spy = e => { const x = e.target.closest && e.target.closest('[data-act="rerollGo"]'); if(x) sent = x.dataset.words; }; document.addEventListener('click', spy, true); box.value = 'she dances in the rain'; document.querySelector('#rrGo').click(); document.removeEventListener('click', spy, true); await new Promise(r => setTimeout(r, 300));
