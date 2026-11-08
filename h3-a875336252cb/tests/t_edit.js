@@ -40,7 +40,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       outputs:{'9':{images:[{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_202611060001_zz9q', type:'output'}]}, '12':{images:[{filename:'h3_202611060001_zz9q_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_202611060001_zz9q', type:'output'}]}}}});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
   await page.route(R + '/**', fake); await page.route(M + '/**', fake);
-  await page.addInitScript(r => { if(!sessionStorage.getItem('init')){ localStorage.clear(); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}, {name:'Main', url:'http://main.test', on:true, speed:1.26}]; window.FILM_PCS = [{name:'Render', url:r, on:true}]; }, R);
+  await page.addInitScript(r => { if(!sessionStorage.getItem('init')){ localStorage.clear(); sessionStorage.setItem('init', '1'); } window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}, {name:'Main', url:'http://main.test', on:true, speed:1.26}]; window.FILM_PCS = [{name:'Render', url:r, on:true}]; }, R);
   await page.goto('http://127.0.0.1:8019/index.html');
   await page.waitForFunction(() => H3.families().length > 0, null, {timeout:20000});
   // a finished 5 s take (one piece, 120 frames)
@@ -267,6 +267,22 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const den = g => (g.find(n => n.class_type==='BasicScheduler') || {inputs:{}}).inputs.denoise;
       return {d1:den(g1), enc1:g1.some(n => n.class_type==='VAEEncode'), d2:den(g2), enc2:g2.some(n => n.class_type==='VAEEncode'), lora:g1.filter(n => n.class_type==='LoraLoaderModelOnly').map(n => [n.inputs.lora_name, n.inputs.strength_model])}; }, R);
     ok(RS.d1===0.6 && RS.enc1 && RS.d2===1 && !RS.enc2 && RS.lora.some(([n, s]) => n==='myStyle.safetensors' && s===0.7), '↻ redo strength starts from the take\'s frames at that denoise, and its LoRAs go along: ' + JSON.stringify(RS)); }
+  // 🦴 bare bones + 📤 upload a clip (Jordan 2026-11-08)
+  { await page.click('#setBtn'); await page.click('#bareSw'); await page.waitForTimeout(300);
+    const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
+    const B = await page.evaluate(() => ({bare:document.body.classList.contains('bare'), sm:getComputedStyle(document.querySelector('#smSw')).display, ref:getComputedStyle(document.querySelector('#refSw')).display, S:H3.S.bare}));
+    const FB = await fr.evaluate(() => { const vis = s => { const e = document.querySelector(s); return !!e && getComputedStyle(e).display!=='none'; }; return {bare:document.body.classList.contains('bare'), redo:vis('.tools [data-act="redo"]'), carry:vis('.tools [data-act="carry"]'), lead:vis('.tools [data-act="lead"]'), up:vis('.tools [data-act="upload"]'), more:vis('.tools [data-act="moreTools"]')}; });
+    await page.click('#bareSw'); await page.click('#sheet', {position:{x:5, y:5}});
+    const B2 = await page.evaluate(() => ({bare:document.body.classList.contains('bare'), S:H3.S.bare}));
+    ok(B.bare && B.S===true && B.sm==='none' && B.ref!=='none' && FB.bare && !FB.redo && FB.carry && FB.lead && FB.up && !FB.more && !B2.bare && B2.S===false, '🦴 ⚙ Show all the tools off = bare bones (no smoothing, redo, guides), on = everything back: ' + JSON.stringify({B, FB, B2}));
+    const n0 = await page.evaluate(() => 0);
+    const U = await page.evaluate(async R => { Object.assign(H3.PC[R].oi, {ImageScale:{input:{required:{image:['IMAGE'], upscale_method:[['lanczos']], width:['INT', {default:512}], height:['INT', {default:512}], crop:[['center']]}}},
+        VHS_LoadVideo:{input:{required:{video:[['a.mp4']], force_rate:['FLOAT', {default:0}], custom_width:['INT', {default:0}], custom_height:['INT', {default:0}], frame_load_cap:['INT', {default:0}], skip_first_frames:['INT', {default:0}], select_every_nth:['INT', {default:1}]}, optional:{}}}});
+      const b = await (await fetch(R + '/view?filename=phone.webm')).blob(), file = new File([b], 'phone clip.webm', {type:'video/webm'});
+      const id = await window.H3Upload({file, film:'fU'}), t = H3.S.takes.find(x => x.id===id); return {id, film:t && t.film, w:t && t.w, h:t && t.h, F:t && t.pieces[0].deliv, up:t && t.upName, st:t && t.pieces[0].state}; }, R);
+    const G = sent[sent.length - 1].g, nodes = Object.values(G), vl = nodes.find(n => n.class_type==='VHS_LoadVideo'), sc = nodes.find(n => n.class_type==='ImageScale'), cv = nodes.find(n => n.class_type==='CreateVideo');
+    ok(U.id && U.film==='fU' && U.w % 32===0 && U.h % 32===0 && U.F > 20 && U.up==='phone clip.webm' && U.st==='queued' && vl && vl.inputs.force_rate===24 && /^up_/.test(vl.inputs.video) && sc && sc.inputs.width===U.w && cv && cv.inputs.fps===24 && nodes.some(n => n.class_type==='SaveVideo'),
+      '📤 an uploaded clip goes to a PC and comes back as a 24 fps take at a MiniMax size, in its film: ' + JSON.stringify({U, vl:vl && vl.inputs})); }
   // 🎞 each film keeps its own form, cast and takes (Jordan 2026-11-07: prompts bled from one film to the next)
   { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url())); const A = await fr.evaluate(() => FILM.S.films[0].id);
     await page.evaluate(() => { H3.S.f.prompt = 'film A words'; H3.S.f.model = H3.S.f.model || 'mA'; H3.S.cast.push({n:7, kind:'char', stand:'a tall woman', who:'', keep:'exact'}); H3.saveNow(); });

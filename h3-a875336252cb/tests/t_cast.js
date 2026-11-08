@@ -26,7 +26,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p.startsWith('/userdata/')) return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
-  await page.addInitScript(r => { localStorage.clear(); window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
+  await page.addInitScript(r => { localStorage.clear(); window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await page.goto('http://127.0.0.1:8019/index.html');
   await page.waitForFunction(() => H3.families().length > 1, null, {timeout:20000});
   const fams = await page.evaluate(() => H3.families().map(f => f.key)); const REF = fams.find(k => /hybrid/.test(k));
