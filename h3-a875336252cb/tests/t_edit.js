@@ -228,13 +228,26 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const r = {on:H3.facesOn(t), why:H3.regenMissing ? H3.regenMissing(oi, t) : '', samp:C('SamplerCustomAdvanced').length, refs:refsOf, comp:C('ImageCompositeMasked').length, dets, pr:C('MiniMaxH3ReferenceToVideo').map(n => /<Picture 1>/.test(n.inputs.prompt)), track:C('SAM3_VideoTrack').length, fr:H3.faceRefs(t, 2).map(x => x.id)};
       H3.S.cast = keep; return r; }, R);
     ok(FG.on && FG.samp===2 && JSON.stringify(FG.refs)==='[2,1]' && FG.comp===2 && FG.track===2 && FG.dets.length===2 && /"x":/.test(FG.dets[0]) && JSON.stringify(FG.fr)==='["fb1"]', '🎭 two faces: two MiniMax redraws (2 and 1 pictures, her own only), each face followed by SAM 3 and laid back: ' + JSON.stringify(FG)); }
-  { const FS = await fr.evaluate(() => { const H = window.parent.H3, keep = H.S.cast; H.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:[], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:[], keep:'exact'}];
-      const f = FILM.S.films[0], tr = f.tracks[0], c = tr.clips[0]; FILM.facesSheet(f, tr, c); const q = s => document.querySelector(s);
-      const r = {who:[...document.querySelectorAll('#fcWho button')].map(b => b.textContent), go0:q('#fcGo').disabled};
-      const box = q('#fcBox'), rc = q('#fcV').getBoundingClientRect(); box.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:rc.left + rc.width * 0.3, clientY:rc.top + rc.height * 0.25}));
-      box.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:rc.left + rc.width * 0.7, clientY:rc.top + rc.height * 0.3}));
-      r.dots = q('#fcDots').textContent; r.go = q('#fcGo').textContent; r.h = rc.height > 0; q('[data-close]').click(); H.S.cast = keep; return r; });
-    ok(FS.who.length===2 && /Laura/.test(FS.who[0]) && FS.go0 && FS.h && /Laura/.test(FS.dots) && /Ben/.test(FS.dots) && /2 faces/.test(FS.go), '🎭 Faces sheet: tap Laura\'s face, then Ben\'s (it moves on to the next person by itself): ' + JSON.stringify(FS)); }
+  { const FS = await fr.evaluate(async () => { const H = window.parent.H3, keep = H.S.cast; H.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:[], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:[], keep:'exact'}];
+      const ws = window.parent.H3FaceScan, wg = window.parent.H3FaceScanGet; let asked = null, sent = null; window.parent.H3FaceScan = async o => { asked = o; return {pc:'u', pid:'p1', node:'9', a:0, b:48}; }; window.parent.H3FaceScanGet = async q => ({url:'about:blank#scan'});
+      const f = FILM.S.films[0], tr = f.tracks[0], c = tr.clips[0]; delete c.faceScan; FILM.facesSheet(f, tr, c); const q = s => document.querySelector(s), w = ms => new Promise(z => setTimeout(z, ms));
+      const r = {find:!!q('#fcFind'), go0:q('#fcGo').disabled}; q('#fcFind').click(); await w(2600);
+      r.asked = asked && asked.take===c.take && asked.a===c.in; r.vid = !!q('#fcV'); r.rows = document.querySelectorAll('#fcWho .chips').length;
+      q('#fcWho [data-fp="1:1"]').click(); q('#fcWho [data-fp="2:0"]').click(); q('#fcWho [data-fp="2:1"]').click(); r.go = q('#fcGo').textContent; r.pick = JSON.stringify(c.faceScan.pick);
+      const qg = FILM.qualityGo; q('[data-close]').click(); window.parent.H3FaceScan = ws; window.parent.H3FaceScanGet = wg; delete c.faceScan; H.S.cast = keep; return r; });
+    ok(FS.find && FS.go0 && FS.asked && FS.vid && FS.rows===2 && FS.pick==='{"2":1}' && /1 face/.test(FS.go), '🎭 Faces: 🔎 finds the faces, the numbered video shows, a number goes to one person only (Ben took 1 from Laura): ' + JSON.stringify(FS)); }
+  { const FN = await page.evaluate(R => { const keep = H3.S.cast; H3.S.media.fa1 = {kind:'img', thumb:'x', name:'fa1.png'}; H3.S.media.fb1 = {kind:'img', thumb:'x', name:'fb1.png'};
+      H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['fa1'], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:['fb1'], keep:'exact'}];
+      const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0))); t.prompt = t.up.prompt = '<Subject 1> hugs <Subject 2>.'; t.film = H3.S.fkey; t.up.faces = [{n:1, obj:1}, {n:2, obj:0}];
+      const P = H3.PC[R].oi, oi = Object.assign({}, P); ['SAM3_Detect','SAM3_VideoTrack','SAM3_TrackToMask','SAM3_TrackPreview','GrowMask','MaskToImage','ImageToMask','ImageBlur','ImageCompositeMasked','MiniMaxH3ReferenceToVideo'].forEach(c => { if(!oi[c]) oi[c] = {input:{required:{}}}; });
+      oi.CheckpointLoaderSimple = {input:{required:{ckpt_name:[['sam3.1_multiplex_fp16.safetensors']]}}};
+      const un = ((((P.UNETLoader || {}).input || {}).required || {}).unet_name || [[]])[0]; oi.UNETLoader = {input:{required:{unet_name:[un.concat(['minimax_h3_ref2va_pruned_int8_convrot.safetensors'])]}}};
+      const g = Object.values(H3.upGraph(t, oi, {fa1:'fa1.png', fb1:'fb1.png'}).g), C = c => g.filter(n => n.class_type===c);
+      const sg = Object.values(H3.faceScanGraph(t, {filename:'x.mp4', subfolder:''}, oi, {a:t.up.part.a, b:t.up.part.b}).g), tk = x => x.filter(n => n.class_type==='SAM3_VideoTrack').map(n => [n.inputs.detection_threshold, n.inputs.max_objects]);
+      const fb = x => x.filter(n => n.class_type==='ImageFromBatch').map(n => [n.inputs.batch_index, n.inputs.length]);
+      const r = {trk:C('SAM3_VideoTrack').length, det:C('SAM3_Detect').length, idx:C('SAM3_TrackToMask').map(n => n.inputs.object_indices), same:JSON.stringify(tk(g))===JSON.stringify(tk(sg).slice(0, 1)), win:JSON.stringify(fb(sg)[0]), pv:sg.some(n => n.class_type==='SAM3_TrackPreview'), txt:sg.find(n => n.class_type==='CLIPTextEncode').inputs.text};
+      r.inPass = fb(g).some(x => JSON.stringify(x)===r.win); H3.S.cast = keep; return r; }, R);
+    ok(FN.trk===1 && FN.det===0 && FN.idx.join()==='1,0' && FN.same && FN.pv && FN.inPass && FN.txt==='face:4', '🎭 numbered faces: one tracker on the same frames as the scan, each person takes her number: ' + JSON.stringify(FN)); }
   { const RR = await page.evaluate(async () => { const t = H3.S.takes.find(x => x.state==='done' && !x.redo && x.pieces && x.pieces.length); if(!t) return {none:true};
       const n0 = H3.S.takes.length; document.body.insertAdjacentHTML('beforeend', `<button id="rrT" data-act="reroll" data-t="${t.id}">x</button>`); document.getElementById('rrT').click(); document.getElementById('rrT').remove();
       const box = document.querySelector('#rrP'), was = box && box.value; if(!box) return {sheet:false}; let sent = null; const spy = e => { const x = e.target.closest && e.target.closest('[data-act="rerollGo"]'); if(x) sent = x.dataset.words; }; document.addEventListener('click', spy, true); box.value = 'she dances in the rain'; document.querySelector('#rrGo').click(); document.removeEventListener('click', spy, true); await new Promise(r => setTimeout(r, 300));
@@ -261,9 +274,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const r = {shown:!q('#rendersTab').hidden, films:q('#renderTab').hidden, n:cards().length, all:H3.S.takes.length, fl:!!q('#rtList .rtFilm')};
       const w = H3.S.takes.filter(t => t.state==='working').length; q('#rtSeg [data-rt="done"]').click(); r.done = cards().length; r.doneN = H3.S.takes.filter(t => t.state!=='working' && t.state!=='failed').length;
       q('#rtSeg [data-rt="all"]').click(); const ids = cards().map(e => e.dataset.take), st = ids.map(id => H3.S.takes.find(t => t.id===id).state), fw = st.indexOf('working');
-      r.order = fw < 0 || st.slice(0, w).every(x => x==='working'); return r; });
-    await page.click('#tabs [data-tab="films"]'); await page.waitForTimeout(200);
-    ok(RT.shown && RT.films && RT.n===RT.all && RT.fl && RT.done===RT.doneN && RT.order, '🗂 Renders tab lists every take (rendering first), filters to Done: ' + JSON.stringify(RT)); }
+      r.order = fw < 0 || st.slice(0, w).every(x => x==='working'); const gb = q('#rtList [data-gofilm]'); r.go = !!gb; if(gb){ r.want = gb.dataset.gofilm; gb.click(); } return r; });
+    await page.waitForTimeout(700); const GF = await page.evaluate(() => { const fr = document.querySelector('#filmTab iframe'), F = fr && fr.contentWindow.FILM; return {tab:H3.S.tab, film:F && F.N ? F.N().film : (fr && fr.contentWindow.FILM && fr.contentWindow.FILM.S && fr.contentWindow.FILM.S.nav && fr.contentWindow.FILM.S.nav.film)}; }); RT.gf = GF;
+    ok(RT.shown && RT.films && RT.n===RT.all && RT.fl && RT.done===RT.doneN && RT.order && RT.go && GF.tab==='films', '🗂 Renders tab lists every take (rendering first), filters to Done: ' + JSON.stringify(RT)); }
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
   // ↻ a failed pass shows on the track; retry sends only the failed parts again, same key and seed, keeping the good ones
   await fr.evaluate(() => FILM.draw());
