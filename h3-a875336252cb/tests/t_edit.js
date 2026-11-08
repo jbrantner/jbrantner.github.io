@@ -343,6 +343,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const T = H3.castTake({prompt:'<Subject ' + c.n + '> walks to the window.', imgs:[], film:H3.S.fkey}, true);
       const pr = H3.h3Prompt({h3:{}, text:H3.castText('<Subject ' + c.n + '> walks to the window.', T, false), imgs:T.imgs, vids:[], auds:[], secs:5});
       return {n:c.n, who:c.who, imgs:T.imgs.map(r => r.id + (r.attrOf ? '@' + r.attrOf : '')), at:/attribute_transfer - only the haircut from <Picture 2> is transferred to <Subject 1>/.test(pr), def:/is the haircut shown in <Picture 2>/.test(pr)}; }, L1);
+    const A9 = await page.evaluate(id => { const c = H3.S.cast.find(x => x.lib===id), L = H3.S.lib.find(x => x.id===id), was = L.pics.slice();
+      for(let i = 0; i < 9; i++) H3.S.media['mL9' + i] = {kind:'img', name:'l' + i + '.png', thumb:''}; L.pics = [...Array(9)].map((_, i) => 'mL9' + i); H3.libSync(L);
+      const T = H3.castTake({prompt:'<Subject ' + c.n + '> walks.', imgs:[], film:H3.S.fkey}, true), pr = H3.h3Prompt({h3:{}, text:H3.castText('<Subject ' + c.n + '> walks.', T, false), imgs:T.imgs, vids:[], auds:[], secs:5});
+      L.pics = was; H3.libSync(L); return {n:T.imgs.length, at:T.imgs.filter(r => r.attrOf).length, exc:/except the haircut, which comes from its own subject/.test(pr), rep:/replacing their own/.test(pr)}; }, L1);
+    ok(A9.n===9 && A9.at===1 && A9.exc && A9.rep, '✨ a character with 9 pictures still leaves room for her attribute, and her own look gives way to it: ' + JSON.stringify(A9));
     await page.evaluate(() => { H3.closeSheet && H3.closeSheet(); document.getElementById('sheet').hidden = true; }); await page.click('#tabs [data-tab="films"]'); await page.waitForTimeout(200);
     const F0 = await page.evaluate(() => H3.S.fkey); await fr.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.waitForTimeout(400);
     const B = await page.evaluate(id => ({has:H3.S.cast.some(c => c.lib===id), fkey:H3.S.fkey}), L1);
