@@ -369,6 +369,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       H3.S.cast = H3.S.cast.filter(x => x!==c2); H3.S.lib = H3.S.lib.filter(x => x!==K && x!==L2); c.acts = []; H3.drawCast();
       return {btn:true, dis, ok:got===JSON.stringify([{id:K.id, to:c2.n}]), chip, gone}; }, L1);
     ok(AK.btn && AK.dis && AK.ok && AK.chip && AK.gone, "🥋 ＋ Action on Ben's card: pick the kick, It's done to Ben, by Laura → Laura does it to Ben: " + JSON.stringify(AK));
+    const AO = await page.evaluate(id => { const c = H3.S.cast.find(x => x.lib===id); H3.S.media.mP1 = {kind:'vid', name:'pie.mp4', thumb:'', dur:2};
+      const K = H3.libNew('act'); Object.assign(K, {name:'Pie', what:'pie in the face', vid:'mP1'}); H3.drawCast();
+      const q = s => document.querySelector(s); q('#castList [data-cn="' + c.n + '"] [data-cast="act"]').click();
+      q('#akBox [data-ak="id:' + K.id + '"]').click(); q('#akBox [data-ak="side:to"]').click(); const offBtn = !!q('#akBox [data-ak="o:-1"]'); q('#akBox [data-ak="o:-1"]').click(); q('#akBox [data-ak="ok"]').click();
+      const got = JSON.stringify(c.acts), chip = /from off screen/.test(q('#castList [data-cn="' + c.n + '"]').textContent);
+      const P = '<Subject ' + c.n + '> stands by the door.', T = H3.castTake({prompt:P, imgs:[], vids:[], film:H3.S.fkey}, true), pr = H3.h3Prompt({h3:{}, text:H3.castText(P, T, false), imgs:T.imgs, vids:T.vids, auds:[], secs:5});
+      c.acts = []; H3.S.lib = H3.S.lib.filter(x => x!==K); H3.drawCast();
+      return {offBtn, ok:got===JSON.stringify([{id:K.id, to:0, off:true}]), chip, v:T.vids.length, tr:/who receives it; it comes from someone off screen who is never seen/.test(pr), sh:/\(the pie in the face\) is done to <Subject 1> by someone off screen/.test(pr), noPerf:!/performs/.test(pr)}; }, L1);
+    ok(AO.offBtn && AO.ok && AO.chip && AO.v===1 && AO.tr && AO.sh && AO.noPerf, '🥋 a pie from off screen: done to Laura by someone off screen, nobody in the cast does it: ' + JSON.stringify(AO));
     ok(A9.n===9 && A9.at===1 && A9.exc && A9.rep && A9.out, '✨ a character with 9 pictures still leaves room for her attribute, and her own look gives way to it: ' + JSON.stringify(A9));
     await page.evaluate(() => { H3.closeSheet && H3.closeSheet(); document.getElementById('sheet').hidden = true; }); await page.click('#tabs [data-tab="films"]'); await page.waitForTimeout(200);
     const F0 = await page.evaluate(() => H3.S.fkey); await fr.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.waitForTimeout(400);
