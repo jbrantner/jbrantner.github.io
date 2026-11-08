@@ -1588,7 +1588,7 @@ function snapshot(){ // the form, frozen into a take
   const ctl = !sm && f.ctl && f.ctlVid && S.media[f.ctlVid] ? {vid:f.ctlVid, str:+f.ctlStr, end:+f.ctlEnd, face:f.faceOn!==false ? faceOf(S.media[f.ctlVid]) : null} : null;
   const ctl2 = ctl && f.ctl2Vid && f.ctl2Vid!==f.ctlVid && S.media[f.ctl2Vid] ? {vid:f.ctl2Vid, str:+f.ctl2Str, end:+f.ctl2End} : null;
   return {sm, up, upImgs, ctl, ctl2, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
-    fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, ...contBits(), lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
+    fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, ...contBits(), ...stillBits(), lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     h3:!sm && f.h3 ? {style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
@@ -1598,6 +1598,7 @@ function snapshot(){ // the form, frozen into a take
 // ➕ Carry on from here (🎞 Films): the take's video is carried on from a moment inside it, not from its end (media.cut, s)
 function contBits(){ const m = contOn() && S.media[S.f.first]; if(!m) return {}; const cut = +m.cut || 0;
   return {contCut:cut, contSecs:cut || m.dur || 0, carry:m.carry ? Object.assign({}, m.carry) : null}; }
+const stillBits = () => { const f = S.f, m = !f.sm && f.fl && !contOn() && S.media[f.first]; return m && m.carry && m.carry.still ? {carry:Object.assign({}, m.carry)} : {}; };
 function whyNot(){
   const f = S.f; if(f.sm && !f.smVid) return 'Pick the video to smooth';
   if(f.sm && f.smSpc && (SPC[spcKey()] || {busy:true}).busy) return 'Measuring the spacing…';
@@ -2687,7 +2688,9 @@ window.H3Carry = async o => { const t = deckTake(o.take), fl = takeFile(t);
   if(!t){ toast("That take isn't in H3 Deck on this phone"); return false; }
   if(!fl){ toast('That take has no finished video yet'); return false; }
   if(S.tab!=='films') setTab('films');
-  const dur = takeFrames(t) / FPS, at = Math.max(1, Math.min(+o.at || 0, dur || 1e9)), near = dur && Math.abs(at - dur) < 0.05;
+  const dur = takeFrames(t) / FPS, raw = Math.max(0, Math.min(+o.at || 0, dur || 1e9));
+  if(raw * FPS < CTX + HEAD + 1) return stillCarry(o, t, fl, raw, dur);
+  const at = Math.max(1, raw), near = dur && Math.abs(at - dur) < 0.05;
   useAgain(t);
   const id = uid('m'); S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
     cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:o.key || uid('k'), own:true, guide:o.guide || null, len:+o.len || 0}, thumb:''};
@@ -2700,6 +2703,26 @@ window.H3Carry = async o => { const t = deckTake(o.take), fl = takeFile(t);
   setTimeout(() => { const pb = $('#prompt'); pb.focus({preventScroll:S.tab==='films'}); try{ pb.setSelectionRange(pb.value.length, pb.value.length); }catch(e){} }, 300);
   if(o.go){ setTimeout(() => { const g = $('#goBtn'); if(g && !g.disabled) g.click(); else toast('➕ Set up: ' + (whyNot() || 'tap Render'), 5000); }, 400); return true; } // ▶ next clip over the guide: straight to Render
   toast(o.key ? '＋ More takes of that clip: change the words or settings if you like, then Render. They join its takes.' : '➕ Carrying on from ' + fmtS(at) + ': the first second finishes what was happening; write what happens next after [1s-], then Render. It replaces the rest of the clip from that moment.', 6000); return true; };
+// ➕ too early in the clip for Motion Context (it needs CTX frames before the moment): the frame at that moment becomes the first-frame
+// picture instead, and the new part still lands on the timeline from there (carry.still)
+async function stillCarry(o, t, fl, at, dur){
+  let blob = null; try{ blob = await new Promise((ok, no) => { const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
+    const tm = setTimeout(() => no(new Error('timed out')), 15000);
+    v.onloadeddata = () => { try{ v.currentTime = Math.max(0.02, Math.min(at, (v.duration || dur || 1) - 0.05)); }catch(e){ no(e); } };
+    v.onseeked = () => { try{ const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); c.toBlob(b => { clearTimeout(tm); b ? ok(b) : no(new Error('no picture')); }, 'image/png'); }catch(e){ clearTimeout(tm); no(e); } };
+    v.onerror = () => { clearTimeout(tm); no(new Error("couldn't load the video")); }; v.src = viewUrl(t.pc, fl); }); }catch(e){ toast("Couldn't take the frame at " + fmtS(at) + ': ' + e.message, 6000); return false; }
+  if(S.tab!=='films') setTab('films'); useAgain(t);
+  const id = await addMedia(new File([blob], 'frame_' + fmtS(at).replace(/\W+/g, '') + '.png', {type:'image/png'}), 'img'), m = S.media[id];
+  m.name = '➕ ' + fmtS(at) + ' into ' + fl.filename; m.carry = {src:t.id, at, film:o.film || '', clip:o.clip || '', key:o.key || uid('k'), own:true, still:true, guide:o.guide || null, len:+o.len || 0};
+  FILMSIG = null; FILMT = null; FILMED = false; FILMP = null;
+  const p = String(o.prompt || '').replace(/^\[0s-1s\]\s*/, '').replace(/,? carrying on from the moment before\.\s*\[1s-\]\s*/, '. ').trim();
+  const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:p, pieceText:{}});
+  if(Array.isArray(o.loras)) f.loras = o.loras.map(l => ({name:l.name, str:+l.str || 1, words:l.words || ''}));
+  $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll(); drawFilmNote();
+  if(S.tab==='films'){ const y = $('#renderTab').getBoundingClientRect().top + window.scrollY - 60; window.scrollTo({top:y, behavior:'smooth'}); }
+  setTimeout(() => { const pb = $('#prompt'); pb.focus({preventScroll:S.tab==='films'}); try{ pb.setSelectionRange(pb.value.length, pb.value.length); }catch(e){} }, 300);
+  if(o.go){ setTimeout(() => { const g = $('#goBtn'); if(g && !g.disabled) g.click(); else toast('➕ Set up: ' + (whyNot() || 'tap Render'), 5000); }, 400); return true; }
+  toast('➕ ' + fmtS(at) + ' is too early for Motion Context (it needs about 1 s before it), so that frame is the first-frame picture instead. Write what happens, then Render.', 7000); return true; }
 // a picture of the moment it carries on from, for the slot (straight from the PC; if that fails the slot just has no picture)
 function remoteThumb(m){ const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
   v.onloadeddata = () => { try{ v.currentTime = Math.max(0, (m.cut || m.dur || 1) - 0.05); }catch(e){} };
