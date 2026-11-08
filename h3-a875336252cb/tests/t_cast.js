@@ -117,6 +117,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(DT.shown && DT.chips.join('|')==='long black hair|green eyes|large breasts' && DT.struck && DT.off[1][0]==='large breasts' && DT.snapOff[1][0]==='large breasts'
     && DT.noPic==='The woman: long black hair, green eyes. Close-up of a woman smiling.' && DT.withPic==='tall' && /large breasts/.test(DT.other),
     '🏷 a subject\'s details are chips under the prompt; one switched off stays out of that shot only: ' + JSON.stringify(DT));
+  // 🎭 a Faces pass sends her attributes too (Jordan 2026-11-08: spiral-eyes attribute ignored, green eyes from her description instead)
+  const FA = await page.evaluate(() => { const keep = H3.S.cast, kl = H3.S.lib; ['fq1', 'sp1', 'sp2'].forEach(k => H3.S.media[k] = {thumb:'x', name:k + '.png'});
+    H3.S.lib = (kl || []).concat([{id:'Lsp', kind:'attr', name:'Spiral eyes', what:'hypnotic spiral eyes', pics:['sp1', 'sp2'], keep:'exact'}]);
+    H3.S.cast = [{n:1, kind:'char', who:'Laura', desc:'green eyes, long black hair', pics:['fq1'], attrs:['Lsp'], keep:'exact'}];
+    const t = {prompt:'Close-up of <Subject 1>.', imgs:[], descOff:{1:['green eyes']}}, R = H3.faceRefs(t, 1), P = H3.castText(t.prompt, {imgs:R, descOff:t.descOff}, true);
+    H3.S.cast = keep; H3.S.lib = kl; return {ids:R.map(r => r.id), P}; });
+  ok(FA.ids.join()==='fq1,sp1,sp2' && /hypnotic spiral eyes shown in <Picture 2> and <Picture 3>/.test(FA.P) && !/green eyes/.test(FA.P) && /long black hair/i.test(FA.P), '🎭 Faces pass: her pictures + her attribute pictures, details switched off stay out: ' + JSON.stringify(FA));
   await page.evaluate(() => { H3.S.cast.push({n:1, kind:'char', stand:'a woman', who:'the lady in the red coat', pic:'p1', keep:'exact'}); H3.drawAll(); document.querySelector('#bCast').scrollIntoView(); });
   await page.screenshot({path:path.join(__dirname, 'cast.png')}).catch(() => {});
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
