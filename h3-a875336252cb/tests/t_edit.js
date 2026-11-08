@@ -280,7 +280,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const p = t.up.part; t.up.trk = {a:0, b:p.F}; const g2 = Object.values(H3.upGraph(t, oi, {fa1:'fa1.png', fb1:'fb1.png'}).g), byId = H3.upGraph(t, oi, {fa1:'fa1.png', fb1:'fb1.png'}).g;
       const tr2 = g2.find(n => n.class_type==='SAM3_VideoTrack'), im = byId[tr2.inputs.images[0]]; r.whole = im.class_type==='ImageFromBatch' && im.inputs.batch_index===0 && im.inputs.length===p.F;
       r.cut = fb(g2).filter(x => x[0]===p.a && x[1]===p.b - p.a).length >= 3; H3.S.cast = keep; return r; }, R);
-    ok(FN.trk===1 && FN.det===0 && FN.idx.join()==='1,0' && FN.same && FN.pv && FN.inPass && FN.txt==='face:4' && FN.whole && FN.cut, '🎭 numbered faces (✏️ Edit: tracked over the whole take, masks cut to the stretch): one tracker on the same frames as the scan, each person takes her number: ' + JSON.stringify(FN)); }
+    ok(FN.trk===1 && FN.det===0 && FN.idx.join()==='1,0' && FN.same && FN.pv && FN.inPass && FN.txt==='face:6' && FN.whole && FN.cut, '🎭 numbered faces (✏️ Edit: tracked over the whole take, masks cut to the stretch): one tracker on the same frames as the scan, each person takes her number: ' + JSON.stringify(FN)); }
   // 🎭 any part + 🔍 zoom (Jordan 2026-11-08): "eyes" found by SAM 3, two numbers for one person, each eye cropped, drawn big and put back
   { const ZM = await page.evaluate(R => { const keep = H3.S.cast; H3.S.media.fa1 = {kind:'img', thumb:'x', name:'fa1.png'};
       H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['fa1'], keep:'exact'}];
@@ -291,10 +291,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const G = H3.upGraph(t, oi, {fa1:'fa1.png'}).g, g = Object.values(G), C = c => g.filter(n => n.class_type===c), L = t.up.part.L;
       const crops = C('BatchCropFromMask'), mm = C('MiniMaxH3ReferenceToVideo'), un2 = C('BatchUncrop');
       const ok1 = crops.every(n => G[n.inputs.masks[0]] && n.inputs.crop_size_mult > 2), sizes = mm.map(n => [n.inputs.width, n.inputs.height]);
-      const txt = C('CLIPTextEncode').map(n => n.inputs.text).find(x => /:4$/.test(x));
+      const txt = C('CLIPTextEncode').map(n => n.inputs.text).find(x => /:6$/.test(x));
       t.up.zoom = false; const g0 = Object.values(H3.upGraph(t, oi, {fa1:'fa1.png'}).g); H3.S.cast = keep;
       return {crops:crops.length, un:un2.length, mm:mm.length, ok1, sizes, txt, comp:C('ImageCompositeMasked').length, off:g0.filter(n => n.class_type==='BatchCropFromMask').length, tw:t.w, th:t.h}; }, R);
-    ok(ZM.crops===2 && ZM.un===2 && ZM.mm===2 && ZM.ok1 && ZM.txt==='eyes:4' && ZM.comp===2 && ZM.off===0, '🎭 "eyes" + 🔍 zoom: SAM 3 looks for eyes, each eye is cropped, drawn big by MiniMax and put back; zoom off = no crop: ' + JSON.stringify(ZM)); }
+    ok(ZM.crops===2 && ZM.un===2 && ZM.mm===2 && ZM.ok1 && ZM.txt==='eyes:6' && ZM.comp===2 && ZM.off===0, '🎭 "eyes" + 🔍 zoom: SAM 3 looks for eyes, each eye is cropped, drawn big by MiniMax and put back; zoom off = no crop: ' + JSON.stringify(ZM)); }
   { const RR = await page.evaluate(async () => { const t = H3.S.takes.find(x => x.state==='done' && !x.redo && x.pieces && x.pieces.length); if(!t) return {none:true};
       const n0 = H3.S.takes.length; document.body.insertAdjacentHTML('beforeend', `<button id="rrT" data-act="reroll" data-t="${t.id}">x</button>`); document.getElementById('rrT').click(); document.getElementById('rrT').remove();
       const box = document.querySelector('#rrP'), was = box && box.value; if(!box) return {sheet:false}; let sent = null; const spy = e => { const x = e.target.closest && e.target.closest('[data-act="rerollGo"]'); if(x) sent = x.dataset.words; }; document.addEventListener('click', spy, true); box.value = 'she dances in the rain'; document.querySelector('#rrGo').click(); document.removeEventListener('click', spy, true); await new Promise(r => setTimeout(r, 300));
