@@ -123,7 +123,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const P = o => H3.h3Prompt({h3:Object.assign({style:''}, o), text:'she waves', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
     r.P = P({}); r.B = H3.h3Prompt({h3:{style:''}, text:'she waves', secs:5}); r.Poff = P({quality:false});
     q('#styleChips [data-q]').click(); r.off = H3.S.f.quality===false && /off/.test(q('#styleChips [data-q]').textContent); q('#styleChips [data-q]').click(); r.back = H3.S.f.quality!==false; return r; });
-  ok(ST.row && ST.on && ST.cleared && /style\. The motion is smooth, fluid and natural/.test(ST.P) && /Clothing stays solid, opaque/.test(ST.P) && /cinematic\. The motion is smooth/.test(ST.B) && !/motion is smooth/.test(ST.Poff) && !/skin texture/.test(ST.P) && ST.off && ST.back,
+  ok(ST.row && ST.on && ST.cleared && /style\. The motion is smooth, steady and natural/.test(ST.P) && !/clothing|bod(y|ies)|skin|weight/i.test(ST.P.split('detailed_description:')[1].split('[Shot 1]')[0]) && /cinematic\. The motion is smooth/.test(ST.B) && !/motion is smooth/.test(ST.Poff) && !/skin texture/.test(ST.P) && ST.off && ST.back,
     '✨ motion and quality words: on by default after the style (both prompt formats), off when tapped, the old live-action preset cleared: ' + JSON.stringify({row:ST.row, on:ST.on, cleared:ST.cleared, off:ST.off}));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
