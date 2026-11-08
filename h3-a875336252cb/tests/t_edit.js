@@ -216,6 +216,30 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const r = {n:document.querySelectorAll('#hqLv button').length, on:q('#hqLv button.on') && q('#hqLv button.on').textContent, go:!!q('#hqGo')};
       q('#hqLv [data-v="0.75"]').click(); r.on2 = q('#hqLv button.on').textContent; r.d = q('#hqD').textContent; q('[data-close]').click(); return r; });
     ok(HQ.n===3 && HQ.on==='Strong' && HQ.go && HQ.on2==='Medium' && /close to the clip/.test(HQ.d), '✨ High quality asks how strong: Light / Medium / Strong (Strong first time): ' + JSON.stringify(HQ)); }
+  // 🎭 Faces: one MiniMax redraw per face with only her pictures; SAM 3 follows her face from the tap; only the face is laid back
+  { const FG = await page.evaluate(R => { const keep = H3.S.cast; ['fa1','fa2','fb1'].forEach(k => H3.S.media[k] = {kind:'img', thumb:'x', name:k + '.png'});
+      H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['fa1','fa2'], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:['fb1'], keep:'exact'}];
+      const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0))); t.prompt = t.up.prompt = '<Subject 1> hugs <Subject 2>.'; t.film = H3.S.fkey; t.up.faces = [{n:1, x:0.3, y:0.25}, {n:2, x:0.7, y:0.3}];
+      const P = H3.PC[R].oi, oi = Object.assign({}, P); ['SAM3_Detect','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageBlur','ImageCompositeMasked','MiniMaxH3ReferenceToVideo'].forEach(c => { if(!oi[c]) oi[c] = {input:{required:{}}}; });
+      oi.CheckpointLoaderSimple = {input:{required:{ckpt_name:[['sam3.1_multiplex_fp16.safetensors']]}}};
+      const un = ((((P.UNETLoader || {}).input || {}).required || {}).unet_name || [[]])[0]; oi.UNETLoader = {input:{required:{unet_name:[un.concat(['minimax_h3_ref2va_pruned_int8_convrot.safetensors'])]}}};
+      const names = {fa1:'fa1.png', fa2:'fa2.png', fb1:'fb1.png'}, g = Object.values(H3.upGraph(t, oi, names).g), C = c => g.filter(n => n.class_type===c);
+      const refsOf = C('MiniMaxH3ReferenceToVideo').map(n => Object.keys(n.inputs).filter(k => /^ref_images/.test(k)).length), dets = C('SAM3_Detect').map(n => n.inputs.positive_coords);
+      const r = {on:H3.facesOn(t), why:H3.regenMissing ? H3.regenMissing(oi, t) : '', samp:C('SamplerCustomAdvanced').length, refs:refsOf, comp:C('ImageCompositeMasked').length, dets, pr:C('MiniMaxH3ReferenceToVideo').map(n => /<Picture 1>/.test(n.inputs.prompt)), track:C('SAM3_VideoTrack').length, fr:H3.faceRefs(t, 2).map(x => x.id)};
+      H3.S.cast = keep; return r; }, R);
+    ok(FG.on && FG.samp===2 && JSON.stringify(FG.refs)==='[2,1]' && FG.comp===2 && FG.track===2 && FG.dets.length===2 && /"x":/.test(FG.dets[0]) && JSON.stringify(FG.fr)==='["fb1"]', '🎭 two faces: two MiniMax redraws (2 and 1 pictures, her own only), each face followed by SAM 3 and laid back: ' + JSON.stringify(FG)); }
+  { const FS = await fr.evaluate(() => { const H = window.parent.H3, keep = H.S.cast; H.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:[], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:[], keep:'exact'}];
+      const f = FILM.S.films[0], tr = f.tracks[0], c = tr.clips[0]; FILM.facesSheet(f, tr, c); const q = s => document.querySelector(s);
+      const r = {who:[...document.querySelectorAll('#fcWho button')].map(b => b.textContent), go0:q('#fcGo').disabled};
+      const box = q('#fcBox'), rc = q('#fcV').getBoundingClientRect(); box.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:rc.left + rc.width * 0.3, clientY:rc.top + rc.height * 0.25}));
+      box.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:rc.left + rc.width * 0.7, clientY:rc.top + rc.height * 0.3}));
+      r.dots = q('#fcDots').textContent; r.go = q('#fcGo').textContent; r.h = rc.height > 0; q('[data-close]').click(); H.S.cast = keep; return r; });
+    ok(FS.who.length===2 && /Laura/.test(FS.who[0]) && FS.go0 && FS.h && /Laura/.test(FS.dots) && /Ben/.test(FS.dots) && /2 faces/.test(FS.go), '🎭 Faces sheet: tap Laura\'s face, then Ben\'s (it moves on to the next person by itself): ' + JSON.stringify(FS)); }
+  { const RR = await page.evaluate(async () => { const t = H3.S.takes.find(x => x.state==='done' && !x.redo && x.pieces && x.pieces.length); if(!t) return {none:true};
+      const n0 = H3.S.takes.length; document.body.insertAdjacentHTML('beforeend', `<button id="rrT" data-act="reroll" data-t="${t.id}">x</button>`); document.getElementById('rrT').click(); document.getElementById('rrT').remove();
+      const box = document.querySelector('#rrP'), was = box && box.value; if(!box) return {sheet:false}; let sent = null; const spy = e => { const x = e.target.closest && e.target.closest('[data-act="rerollGo"]'); if(x) sent = x.dataset.words; }; document.addEventListener('click', spy, true); box.value = 'she dances in the rain'; document.querySelector('#rrGo').click(); document.removeEventListener('click', spy, true); await new Promise(r => setTimeout(r, 300));
+      const nt = H3.S.takes[0], toastT = [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' ~ '); return {sent, toastT, sheet:true, was:was===t.prompt, more:H3.S.takes.length===n0 + 1, pr:nt.prompt, pp:nt.pieces.map(p => p.prompt).join(' | '), old:t.prompt}; });
+    ok(RR.sheet && RR.was && RR.sent==='she dances in the rain' && (RR.more ? RR.pr==='she dances in the rain' && /she dances in the rain/.test(RR.pp) : /No PC/.test(RR.toastT)), '🎲 New take lets you change the words first: ' + JSON.stringify(RR)); }
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
   // ↻ a failed pass shows on the track; retry sends only the failed parts again, same key and seed, keeping the good ones
   await fr.evaluate(() => FILM.draw());
