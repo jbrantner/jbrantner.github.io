@@ -129,9 +129,9 @@ function checkGraph(g, name){
   const b64 = fs.readFileSync(path.join(MEDIA, 'clip.webm')).toString('base64');
   const TO = await page.evaluate(async b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
     let got = null; await window.TU_OPEN({blob:new Blob([u], {type:'video/webm'}), name:'take.mp4', start:1.25, len:2.5, pc:'http://render.test', part:'eyes', label:'Clip at 0:04', sent:j => { got = j; }});
-    const S = window.TU.S, r = {start:S.start, len:S.len, part:S.part, note:!document.querySelector('#tuFrom').hidden};
+    const S = window.TU.S, r = {start:S.start, len:S.len, part:S.part, finder:S.finder, note:!document.querySelector('#tuFrom').hidden};
     document.querySelector('#gob').click(); for(let i = 0; i < 40 && !got; i++) await new Promise(z => setTimeout(z, 100)); r.got = got; return r; }, b64);
-  ok(TO.start===1.25 && TO.len===2.5 && TO.part==='eyes' && TO.note && TO.got && TO.got.pid && TO.got.len===2.5, '🎞 opened on a clip: its stretch is set and the sent job is handed back: ' + JSON.stringify(TO));
+  ok(TO.start===1.25 && TO.len===2.5 && TO.part==='eyes' && TO.finder==='sam' && TO.note && TO.got && TO.got.pid && TO.got.len===2.5, '🎞 opened on a clip: its stretch is set and the sent job is handed back: ' + JSON.stringify(TO));
   const gl = sent[sent.length - 1], sl = Object.values(gl).find(n => n.class_type==='Video Slice');
   ok(sl && sl.inputs.start_time===1.25 && sl.inputs.duration===2.5, 'the clip\'s stretch is what gets touched up: ' + JSON.stringify(sl && sl.inputs));
   await page.screenshot({path:path.join(MEDIA, 'touchup.png'), fullPage:true});
