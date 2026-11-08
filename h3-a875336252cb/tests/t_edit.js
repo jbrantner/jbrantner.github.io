@@ -240,6 +240,21 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const box = document.querySelector('#rrP'), was = box && box.value; if(!box) return {sheet:false}; let sent = null; const spy = e => { const x = e.target.closest && e.target.closest('[data-act="rerollGo"]'); if(x) sent = x.dataset.words; }; document.addEventListener('click', spy, true); box.value = 'she dances in the rain'; document.querySelector('#rrGo').click(); document.removeEventListener('click', spy, true); await new Promise(r => setTimeout(r, 300));
       const nt = H3.S.takes[0], toastT = [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' ~ '); return {sent, toastT, sheet:true, was:was===t.prompt, more:H3.S.takes.length===n0 + 1, pr:nt.prompt, pp:nt.pieces.map(p => p.prompt).join(' | '), old:t.prompt}; });
     ok(RR.sheet && RR.was && RR.sent==='she dances in the rain' && (RR.more ? RR.pr==='she dances in the rain' && /she dances in the rain/.test(RR.pp) : /No PC/.test(RR.toastT)), '🎲 New take lets you change the words first: ' + JSON.stringify(RR)); }
+  // 📝 bare bones: no prompt lane; a selected clip shows its words as prompt windows (+ switch sliders) and its LoRAs; ⛓ Combine keeps the windows
+  { const PW = await fr.evaluate(async () => { const H = window.parent.H3, bw = H.S.bare; H.S.bare = true; const f = FILM.S.films[0], tr = f.tracks[0], cs = tr.clips.slice().sort((x, y) => x.at - y.at), c = cs[0], t = FILM.takeOf ? FILM.takeOf(c.take) : H.S.takes.find(x => x.id===c.take);
+      const q = s => document.querySelector(s), box = q('#pbBox'); box.dataset.cp = ''; box.innerHTML = ''; FILM.clipPanel(f, {c, tr, k:0});
+      const r = {lane:FILM.laneHtml ? FILM.laneHtml(f) : 'n/a', boxes0:document.querySelectorAll('#cpW textarea').length, lo:!!q('#cpLo'), vid:!!q('#cpV')};
+      q('#cpW [data-wadd]').click(); r.boxes1 = document.querySelectorAll('#cpW textarea').length; const sl = q('#cpW [data-sw="0"]'); r.sl = !!sl;
+      if(sl){ sl.value = '1.5'; sl.dispatchEvent(new Event('input')); } const ta = q('#cpW [data-w="1"]'); ta.value = 'she sits down'; ta.dispatchEvent(new Event('input'));
+      r.wins = (t.wins || []).map(x => [x.a, x.b, x.text.slice(0, 14)]); r.cin = c.in; r.segs = FILM.segsOf(t).length;
+      delete t.wins; box.dataset.cp = ''; box.innerHTML = '';
+      const on = new Set(cs.slice(0, 2).map(x => x.id)); let got = null; const was = window.parent.H3Combine; window.parent.H3Combine = async o => { got = o; return 1; };
+      FILM.combineBare(f, {c, tr, k:0}, cs, on); r.cb = document.querySelectorAll('#cbW textarea').length; const s2 = q('#cbW [data-sw="0"]'); r.cbs = !!s2;
+      if(s2){ s2.value = String(Math.min(+s2.max - 0.5, (cs[0].out - cs[0].in) + 0.6)); s2.dispatchEvent(new Event('input')); r.vc = q('#cbV').dataset.c===cs[1].id; }
+      q('#cbGo').click(); await new Promise(z => setTimeout(z, 200)); window.parent.H3Combine = was; r.go = got && {w:(got.wins || []).length, p:/\[0s-/.test(got.prompt || '')};
+      const sh = document.getElementById('sheet'); if(sh) sh.hidden = true; H.S.bare = bw; return r; });
+    ok(PW.lane==='' && PW.boxes0===1 && PW.vid && PW.boxes1===2 && PW.sl && PW.wins.some(w => w[2]==='she sits down' && Math.abs(w[0] - (PW.cin + 1.5)) < 0.01) && PW.segs===PW.wins.length && PW.cb===2 && PW.cbs && PW.vc && PW.go && PW.go.w===2 && PW.go.p,
+      '📝 a clip\'s words are prompt windows with switch sliders, and ⛓ Combine keeps them (no prompt lane in bare bones): ' + JSON.stringify(PW)); }
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
   // ↻ a failed pass shows on the track; retry sends only the failed parts again, same key and seed, keeping the good ones
   await fr.evaluate(() => FILM.draw());
