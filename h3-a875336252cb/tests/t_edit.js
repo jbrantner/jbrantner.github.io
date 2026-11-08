@@ -212,6 +212,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(GC.clean===0.8 && GC.blur===0.8 && GC.into===JSON.stringify([GC.bid, 0]) && /0\.125/.test(GC.sig) && / 0\.0$/.test(GC.sig), '🧽 grain clean-up on by default: frames softened before the encode, one more small step at the end: ' + JSON.stringify(GC));
   await page.waitForTimeout(1500); await fr.evaluate(() => FILM.liveFilm());
   const QF = await fr.evaluate(() => ({n:FILM.S.films[0].tracks.length, takes:FILM.S.films[0].tracks[0].clips.map(c => c.take).join(), p:FILM.S.passes.map(x => x.state).join()}));
+  { const HQ = await fr.evaluate(() => { const f = FILM.S.films[0], tr = f.tracks[0], c = tr.clips[0]; FILM.hqSheet(f, tr, c); const q = s => document.querySelector(s);
+      const r = {n:document.querySelectorAll('#hqLv button').length, on:q('#hqLv button.on') && q('#hqLv button.on').textContent, go:!!q('#hqGo')};
+      q('#hqLv [data-v="0.75"]').click(); r.on2 = q('#hqLv button.on').textContent; r.d = q('#hqD').textContent; q('[data-close]').click(); return r; });
+    ok(HQ.n===3 && HQ.on==='Strong' && HQ.go && HQ.on2==='Medium' && /close to the clip/.test(HQ.d), '✨ High quality asks how strong: Light / Medium / Strong (Strong first time): ' + JSON.stringify(HQ)); }
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
   // ↻ a failed pass shows on the track; retry sends only the failed parts again, same key and seed, keeping the good ones
   await fr.evaluate(() => FILM.draw());

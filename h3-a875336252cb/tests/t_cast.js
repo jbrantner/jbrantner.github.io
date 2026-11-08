@@ -87,6 +87,11 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const RR = await page.evaluate(() => { const keep = H3.S.cast; H3.S.media.pR = H3.S.media.pR || {thumb:'x', name:'r.png'}; H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'the lady', pics:['pR'], keep:'exact'}];
     const t = {prompt:'<Subject 1> waves', pieces:[{prompt:'<Subject 1> waves'}], imgs:[{id:'own1'}]}; const ids = H3.upRefs(t).map(r => r.id); H3.S.cast = keep; return ids; });
   ok(JSON.stringify(RR)==='["pR","own1"]', '⬆ a regenerate takes the subject\'s picture first, then the take\'s own: ' + JSON.stringify(RR));
+  // ✨ two characters: each gets a picture in the pass (Jordan 2026-11-08: the second one lost her likeness)
+  const R2 = await page.evaluate(() => { const keep = H3.S.cast; ['a1','a2','a3','b1','b2'].forEach(k => H3.S.media[k] = {thumb:'x', name:k + '.png'});
+    H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['a1','a2','a3'], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:['b1','b2'], keep:'exact'}];
+    const t = {prompt:'<Subject 1> hugs <Subject 2>', pieces:[{prompt:'<Subject 1> hugs <Subject 2>'}], imgs:[]}; const ids = H3.upPick(t).map(r => r.id); H3.S.cast = keep; return ids; });
+  ok(JSON.stringify(R2)==='["a1","a2","b1"]', '✨ a pass on two characters sends both: ' + JSON.stringify(R2));
   // ✍ More detail (Jordan 2026-11-06): sent without a picture (up front, once) and with one (in its definition)
   const CD = await page.evaluate(() => { const keep = H3.S.cast; H3.S.cast = [{n:1, kind:'char', stand:'a woman', desc:'long black hair,\ngreen eyes, freckles', keep:'exact'}]; H3.drawAll();
     const box = !!document.querySelector('[data-castf="desc"]'), noPic = H3.castText('[Shot 1] <Subject 1> walks in. <Subject 1> sits.', {imgs:[]}, false);

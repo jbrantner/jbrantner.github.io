@@ -1489,6 +1489,14 @@ const upRefs = t => { const own = (t.upImgs && t.upImgs.length ? t.upImgs : t.im
   for(const r of cast.concat(own)) if(r && r.id && !out.some(x => x.id===r.id)) out.push(r); return out; };
 const regenRefsOn = (t, oi) => !!(t.up && t.up.refs && upRefs(t).length && oi.MiniMaxH3ReferenceToVideo && regenRefUnet(oi));
 const REGEN_REFS = 3; // reference pictures cost tokens at the new size, so only the first few go in (8 GB card)
+// Jordan 2026-11-08: a ✨ pass on two characters lost the second one's likeness: the first 3 pictures were all the first
+// subject's. Now each subject gets its best picture first (taking turns), and with 4 subjects up to 4 go in.
+const upPick = t => { const all = upRefs(t), keyOf = r => r.cast ? 'c' + r.cast : r.attrOf ? 'a' + r.attrOf + r.lib : r.actOf ? 'x' : 'o', ks = [], by = {};
+  for(const r of all){ const k = keyOf(r); if(!by[k]){ by[k] = []; ks.push(k); } by[k].push(r); }
+  const main = ks.filter(k => k[0]==='c'), rest = ks.filter(k => k[0]!=='c'), n = Math.min(4, Math.max(REGEN_REFS, main.length)), out = [];
+  for(let i = 0; out.length < n && main.some(k => by[k][i]); i++) for(const k of main) if(by[k][i] && out.length < n) out.push(by[k][i]);
+  for(const k of rest) for(const r of by[k]) if(out.length < n) out.push(r);
+  return out.sort((x, y) => all.indexOf(x) - all.indexOf(y)); };
 const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
 // t (optional): a same-size window (nudge / ✨ quality pass) needs no upscaler, and with its pictures it runs on the Reference model,
 // so a PC without the First/last frame model (Main) can take it too
@@ -1530,9 +1538,9 @@ function upGraph(t, oi, names){
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
   const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt), length = part ? part.L : regenLen(t);
-  const prompt = (refs ? castText(words, {imgs:upRefs(t).slice(0, REGEN_REFS), film:t.film}, true) : castWords(words, t.film)) || SM_PROMPT;
+  const prompt = (refs ? castText(words, {imgs:upPick(t), film:t.film}, true) : castWords(words, t.film)) || SM_PROMPT;
   let iv;
-  if(refs){ const ri = {}; upRefs(t).slice(0, REGEN_REFS).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
+  if(refs){ const ri = {}; upPick(t).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
     iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:d.w, height:d.h, length, ref_image_size:'match'}, ri)); }
   else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:d.w, height:d.h, length});
   const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:[big, 0], audio_latent:[sep, 1]});
@@ -1556,7 +1564,7 @@ async function tickUpscale(t){
   if(t.upStage==='start'){
     { const why = p.oi ? regenMissing(p.oi, t) : 'not reachable'; if(why){ t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
-    try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of upRefs(t).slice(0, REGEN_REFS)) names[r.id] = await upload(t.pc, r.id);
+    try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of upPick(t)) names[r.id] = await upload(t.pc, r.id);
       const G = upGraph(t, p.oi, names); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
     return; }
   let h = null; try{ h = (await getJ(t.pc + '/history/' + t.upPid))[t.upPid]; }catch(e){ return; }
@@ -2959,6 +2967,6 @@ window.H3 = {modelList, drawCast, lorasOf, progress, stepOf:t => { // ⏱ a shor
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
-    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
