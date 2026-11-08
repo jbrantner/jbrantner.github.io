@@ -172,7 +172,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // with a clip selected, Render makes more options for that clip (Jordan 2026-11-06) instead of adding to the end
   const nClipsB = await fr.evaluate(() => { FILM.SEL = window.C1; FILM.draw(); return FILM.S.films[0].tracks.reduce((a, tr) => a + tr.clips.length, 0); });
   await page.evaluate(() => { H3.S.f.takes = 2; H3.drawAll(); }); await page.waitForTimeout(1700);
-  ok(/options for the selected clip/.test(await page.textContent('#filmFormNote')), 'with a clip selected the form says new takes become options for it');
+  ok(/versions of the selected clip/.test(await page.textContent('#filmFormNote')), 'with a clip selected the form says new takes become options for it');
   const n3 = sent.length; await page.click('#goBtn'); await page.waitForTimeout(1500);
   const alts = await page.evaluate(() => H3.S.takes.slice(0, 2).map(t => ({id:t.id, clip:t.toFilm && t.toFilm.clip})));
   await fr.evaluate(() => { FILM.placeNew(); FILM.SEL = window.C1; FILM.draw(); }); await page.waitForTimeout(300);
