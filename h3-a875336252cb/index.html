@@ -1354,14 +1354,23 @@ function uplGraph(t, p, oi){
   const u = p.upl; let ims, aud = null;
   if(oi.VHS_LoadVideo){ const r = ((oi.VHS_LoadVideo.input || {}).required) || {}, inp = {};
     for(const [k, s] of Object.entries(r)){ if(Array.isArray(s[0])) inp[k] = s[0][0]; else if(s[1] && s[1].default !== undefined) inp[k] = s[1].default; }
-    Object.assign(inp, {video:u.file, force_rate:FPS, frame_load_cap:0, skip_first_frames:0, select_every_nth:1});
-    if('custom_width' in r){ inp.custom_width = 0; inp.custom_height = 0; } if('force_size' in r) inp.force_size = 'Disabled';
+    Object.assign(inp, {video:u.file, force_rate:FPS, skip_first_frames:0, select_every_nth:1});
+    // shrunk while it loads (a 4K phone video in full would fill the PC's 16 GB), just enough to cover the canvas; the crop below does the rest
+    if('custom_width' in r){ const cover = (u.w && u.h ? u.w / u.h : t.w / t.h) > t.w / t.h; inp.custom_width = cover ? 0 : t.w; inp.custom_height = cover ? t.h : 0; }
+    if('frame_load_cap' in r) inp.frame_load_cap = Math.ceil(t.pieces[0].deliv + 2); if('force_size' in r) inp.force_size = 'Disabled';
     const v = add('VHS_LoadVideo', inp); ims = [v, 0]; if(u.sound) aud = [v, 2]; }
   else { const gc = add('GetVideoComponents', {video:[add('LoadVideo', {file:u.file}), 0]}); ims = [gc, 0]; if(u.sound) aud = [gc, 1]; }
   const sc = add('ImageScale', {image:ims, upscale_method:'lanczos', width:t.w, height:t.h, crop:'center'});
   const sv = add('SaveVideo', {video:[add('CreateVideo', Object.assign({images:[sc, 0], fps:FPS}, aud ? {audio:aud} : {})), 0], filename_prefix:t.dir + '/' + t.name, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':16});
   return {g, save:sv};
 }
+// ✨ ＋ Clip › Make a new one (2026-11-08): the form is cleared of any carry-on and the prompt is ready; with no clip selected
+// the take goes on the end of the film's timeline
+window.H3NewClip = () => { const f = S.f, m = f.fl && S.media[f.first];
+  if(m && m.carry){ f.fl = false; f.first = null; if(f.aspect==='pic') f.aspect = '16:9'; } f.sm = false; save(); drawAll(); drawFilmNote();
+  const y = $('#renderTab').getBoundingClientRect().top + window.scrollY - 60; window.scrollTo({top:y, behavior:'smooth'});
+  setTimeout(() => { const pb = $('#prompt'); pb.focus({preventScroll:true}); }, 300);
+  toast('✨ Write the clip and tap Render: it goes on the end of the timeline', 4500); return true; };
 window.H3Upload = async o => { const file = o.file; if(!file) return null;
   const ok = u => { const p = pcOf(u); return p.online && p.oi && p.oi.CreateVideo && p.oi.SaveVideo && p.oi.ImageScale && (p.oi.VHS_LoadVideo || (p.oi.LoadVideo && p.oi.GetVideoComponents)); };
   const pc = S.pcs.filter(p => p.on).map(p => p.url).find(ok); if(!pc){ toast("Can't reach a PC that can take a video"); return null; }
@@ -1373,7 +1382,7 @@ window.H3Upload = async o => { const file = o.file; if(!file) return null;
   const t = {id:tid, t:Date.now(), name:nm, dir:'H3Deck/' + nm, pc, w, h, seed:Math.floor(Math.random() * 2 ** 31), model:S.f.model, turbo:S.f.turbo, loras:[], steps:'', h3:null, film:o.film || '', upName:m.name,
     prompt:o.prompt || '', seconds:F / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, redo:null, lead:null, combo:null, toFilm:null, from:null, pins:[], follow:[], imgs:[], vids:[], auds:[],
     ctxDirs:null, sm:null, up:null, upImgs:[], ctl:null, ctl2:null, final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false,
-    pieces:[{start:0, gen:F, deliv:F, ctx:0, prompt:'', state:'new', upl:{file:name, sound:m.sound!==false, fps:m.fps || 0}}]};
+    pieces:[{start:0, gen:F, deliv:F, ctx:0, prompt:'', state:'new', upl:{file:name, sound:m.sound!==false, fps:m.fps || 0, w:m.w || 0, h:m.h || 0}}]};
   S.takes.unshift(t); drawTakes();
   try{ await sendPieces(t, 0); }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not uploaded: ' + e.message, 6000); save(); return t.id; }
   if(m.fps && Math.abs(m.fps - FPS) > 0.5 && !pcOf(pc).oi.VHS_LoadVideo) toast('📤 Your clip is ' + Math.round(m.fps) + ' fps; this PC has no Video Helper Suite, so it plays at 24 fps (a little slower)', 7000);
@@ -1629,7 +1638,7 @@ async function sendPieces(t, from){
   for(let i = from; i < t.pieces.length; i++){
     const p = t.pieces[i], G = p.upl ? uplGraph(t, p, oi) : t.combo ? comboGraph(t) : pieceGraph(t, i, oi, names);
     p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.save = G.save; p.join = G.join || null; p.err = ''; p.file = null;
-    p.pid = await queueGraph(url, G); p.state = 'queued'; p.tq = Date.now(); save();
+    p.pid = await queueGraph(url, G, !!p.upl); p.state = 'queued'; p.tq = Date.now(); save(); // 📤 an upload takes seconds: it goes to the front of the PC's line
   }
   t.final = null; t.joinPid = null; t.state = 'working'; save(); tickSoon(500);
 }
