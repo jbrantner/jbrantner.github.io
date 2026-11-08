@@ -235,6 +235,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       box.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:rc.left + rc.width * 0.7, clientY:rc.top + rc.height * 0.3}));
       r.dots = q('#fcDots').textContent; r.go = q('#fcGo').textContent; r.h = rc.height > 0; q('[data-close]').click(); H.S.cast = keep; return r; });
     ok(FS.who.length===2 && /Laura/.test(FS.who[0]) && FS.go0 && FS.h && /Laura/.test(FS.dots) && /Ben/.test(FS.dots) && /2 faces/.test(FS.go), '🎭 Faces sheet: tap Laura\'s face, then Ben\'s (it moves on to the next person by itself): ' + JSON.stringify(FS)); }
+  { const RR = await page.evaluate(async () => { const t = H3.S.takes.find(x => x.state==='done' && !x.redo && x.pieces && x.pieces.length); if(!t) return {none:true};
+      const n0 = H3.S.takes.length; document.body.insertAdjacentHTML('beforeend', `<button id="rrT" data-act="reroll" data-t="${t.id}">x</button>`); document.getElementById('rrT').click(); document.getElementById('rrT').remove();
+      const box = document.querySelector('#rrP'), was = box && box.value; if(!box) return {sheet:false}; let sent = null; const spy = e => { const x = e.target.closest && e.target.closest('[data-act="rerollGo"]'); if(x) sent = x.dataset.words; }; document.addEventListener('click', spy, true); box.value = 'she dances in the rain'; document.querySelector('#rrGo').click(); document.removeEventListener('click', spy, true); await new Promise(r => setTimeout(r, 300));
+      const nt = H3.S.takes[0], toastT = [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' ~ '); return {sent, toastT, sheet:true, was:was===t.prompt, more:H3.S.takes.length===n0 + 1, pr:nt.prompt, pp:nt.pieces.map(p => p.prompt).join(' | '), old:t.prompt}; });
+    ok(RR.sheet && RR.was && RR.sent==='she dances in the rain' && (RR.more ? RR.pr==='she dances in the rain' && /she dances in the rain/.test(RR.pp) : /No PC/.test(RR.toastT)), '🎲 New take lets you change the words first: ' + JSON.stringify(RR)); }
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
   // ↻ a failed pass shows on the track; retry sends only the failed parts again, same key and seed, keeping the good ones
   await fr.evaluate(() => FILM.draw());
