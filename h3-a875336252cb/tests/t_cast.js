@@ -103,6 +103,20 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const T = {imgs:[{id:'p1', desc:'the lady', more:'long black hair, green eyes, freckles', cast:1, keep:'exact', kind:'char'}]}, P = H3.h3Prompt({text:'<Subject 1> walks in', imgs:T.imgs, secs:5});
     H3.S.cast = keep; H3.drawAll(); return {box, noPic, def:(P.match(/<Subject 1> is [^\n]*/) || [''])[0]}; });
   ok(CD.box && CD.noPic==='[Shot 1] The woman: long black hair, green eyes, freckles. A woman walks in. A woman sits.' && /as shown in <Picture 1>\. Long black hair, green eyes, freckles\./.test(CD.def), '✍ a subject\'s More detail box goes in with or without a picture: ' + JSON.stringify(CD));
+  // 🏷 description tags switched off per shot (Jordan 2026-11-08: bust size kept showing up in face close-ups)
+  const DT = await page.evaluate(async () => { const keep = H3.S.cast, kp = H3.S.f.prompt, sh = H3.S.f.sm; H3.S.media.pT = {thumb:'x', name:'pT.png'};
+    H3.S.cast = [{n:1, kind:'char', stand:'a woman', desc:'long black hair, green eyes\nlarge breasts', keep:'exact'}, {n:2, kind:'char', stand:'a man', desc:'tall, bald', pics:['pT'], keep:'exact'}];
+    Object.assign(H3.S.f, {sm:false, prompt:'Close-up of <Subject 1> smiling.', descOff:{}}); H3.drawAll();
+    const chips = [...document.querySelectorAll('#descBar [data-dtag]')].map(b => b.textContent), shown = !document.querySelector('#descBar').hidden;
+    document.querySelector('#descBar [data-tag="large breasts"]').click(); await new Promise(r => setTimeout(r, 50));
+    const off = JSON.parse(JSON.stringify(H3.S.f.descOff)), struck = document.querySelector('#descBar [data-tag="large breasts"]').classList.contains('off');
+    const snap = H3.snapshot(), noPic = H3.castText(snap.prompt, Object.assign({}, snap, {imgs:[]}), false);
+    const T = H3.castTake({prompt:'<Subject 2> nods.', imgs:[], descOff:{2:['bald']}}, true), withPic = T.imgs[0] && T.imgs[0].more;
+    const other = H3.castText('<Subject 1> waves.', {imgs:[]}, false);
+    H3.S.cast = keep; Object.assign(H3.S.f, {prompt:kp, sm:sh, descOff:{}}); H3.drawAll(); return {chips, shown, off, struck, snapOff:snap.descOff, noPic, withPic, other}; });
+  ok(DT.shown && DT.chips.join('|')==='long black hair|green eyes|large breasts' && DT.struck && DT.off[1][0]==='large breasts' && DT.snapOff[1][0]==='large breasts'
+    && DT.noPic==='The woman: long black hair, green eyes. Close-up of a woman smiling.' && DT.withPic==='tall' && /large breasts/.test(DT.other),
+    '🏷 a subject\'s details are chips under the prompt; one switched off stays out of that shot only: ' + JSON.stringify(DT));
   await page.evaluate(() => { H3.S.cast.push({n:1, kind:'char', stand:'a woman', who:'the lady in the red coat', pic:'p1', keep:'exact'}); H3.drawAll(); document.querySelector('#bCast').scrollIntoView(); });
   await page.screenshot({path:path.join(__dirname, 'cast.png')}).catch(() => {});
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);

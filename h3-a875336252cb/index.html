@@ -133,6 +133,9 @@ header h1 span{color:var(--accent)}
 .ptext .ph{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:800;color:var(--soft)}
 .ptext .ph button{font-size:12px;color:var(--cyan);font-weight:800}
 .tagbar{display:flex;gap:6px;flex-wrap:wrap}
+.descrow{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}.descrow .dn{font-size:12.5px;font-weight:800;margin-right:2px}
+.descrow button{padding:5px 9px;border-radius:999px;border:1px solid var(--accent);background:var(--bg);font-size:12.5px;color:var(--text)}
+.descrow button.off{border-color:var(--line);color:var(--soft);text-decoration:line-through;opacity:.6}
 .tagbar button{padding:5px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);font-size:12.5px;font-weight:800;color:var(--soft)}
 .step{display:flex;align-items:center;border:1px solid var(--line);border-radius:11px;background:var(--bg)}
 .step button{width:40px;height:38px;font-size:18px;color:var(--soft)}
@@ -222,6 +225,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
         <div id="beatBar" hidden style="margin-top:8px"><div class="lab"><span>⏱ Which words when (drag a line to move where one ends and the next begins)</span></div>
           <div id="bbTrack" style="position:relative;height:46px;border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none;user-select:none"></div>
           <div class="note" id="bbNote" style="margin-top:4px"></div></div>
+        <div id="descBar" hidden style="margin-top:8px"></div>
         <p class="note" id="mqNote" hidden style="margin:4px 0 0"></p>
       </div>
       <div>
@@ -958,13 +962,30 @@ const castOf = (n, k) => castFor(k).find(c => c.n===+n);
 const castPics = c => { if(!c) return []; if(c.pic){ c.pics = c.pics || []; if(!c.pics.includes(c.pic)) c.pics.unshift(c.pic); } delete c.pic; c.pics = (c.pics || []).filter(id => S.media[id]); return c.pics; }; // (Jordan 2026-11-06: several pictures each)
 const castWho = c => ((c.who || '').trim() || (c.stand || '').trim()).replace(/[\s.]*$/, '');
 const castName = c => (c && ((c.who || '').trim() || (c.lib && libOf(c.lib) && (libOf(c.lib).name || '').trim()))) || ('Subject ' + (c ? c.n : '?'));
-const castMore = c => (c && c.desc || '').trim().replace(/\s*\n+\s*/g, ' ').replace(/[\s.]*$/, '');
+// 🏷 a description's tags (Jordan 2026-11-08: "turn a character's descriptions on and off depending on the shot": bust size in a face close-up):
+// split at commas, new lines, semicolons and full stops; a shot (form S.f / take t) keeps the ones switched off in descOff[n] (lower case)
+const descTags = d => (d || '').split(/\s*(?:[,;\n]|\.(?:\s+|$))\s*/).map(x => x.trim().replace(/[\s.]*$/, '')).filter(Boolean);
+const descKey = x => x.trim().toLowerCase();
+const descOffOf = (c, t) => { const o = c && c.n && t && t.descOff && t.descOff[c.n]; return Array.isArray(o) && o.length ? o : null; };
+const castMore = (c, t) => { const off = descOffOf(c, t); if(off) return descTags(c.desc).filter(x => !off.includes(descKey(x))).join(', ');
+  return (c && c.desc || '').trim().replace(/\s*\n+\s*/g, ' ').replace(/[\s.]*$/, ''); };
+function descBarHtml(t, k, attr){ // the 👥 subjects the shot's words name, each tag a chip: tap to leave it out of this shot
+  const txt = [t.prompt || '', ...Object.values(t.pieceText || {}), ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), ns = new Set();
+  txt.replace(SUBRE, (m, n) => { ns.add(+n); return m; });
+  const rows = [...ns].sort((a, b) => a - b).map(n => castOf(n, k)).filter(c => c && descTags(c.desc).length > 1).map(c => { const off = descOffOf(c, t) || [];
+    return `<div class="descrow"><span class="dn">👥 ${esc(castName(c))}</span>${descTags(c.desc).map(x => `<button class="${off.includes(descKey(x)) ? 'off' : ''}" ${attr}="${c.n}" data-tag="${esc(descKey(x))}">${esc(x)}</button>`).join('')}</div>`; });
+  return rows.length ? '<div class="lab"><span>🏷 Their details in this shot (tap one to leave it out)</span></div>' + rows.join('') : ''; }
+function descFlip(t, n, key){ t.descOff = t.descOff || {}; const o = t.descOff[n] = (t.descOff[n] || []).slice(), i = o.indexOf(key); if(i >= 0) o.splice(i, 1); else o.push(key); if(!o.length) delete t.descOff[n]; }
 // 🎲 New take (Jordan 2026-11-08: "could you let you also adjust the prompt?"): the take's words to change first, a new seed either way
 function rerollSheet(t){ openSheet(`<h3><span>🎲 New take</span><button class="btn" data-close>✕</button></h3><div id="rrBox">
     <div class="note">Same settings, a new seed. Change the words first if you like.</div>
     <textarea id="rrP" rows="6" style="width:100%;box-sizing:border-box;margin-top:8px">${esc(t.prompt || '')}</textarea>
+    <div id="rrTags" style="margin-top:8px"></div>
     <button class="btn pri" id="rrGo" style="width:100%;padding:13px;margin-top:10px">🎲 Make a new take</button></div>`);
-  $('#rrGo').onclick = () => { const b = document.createElement('button'); b.dataset.act = 'rerollGo'; b.dataset.t = t.id; b.dataset.words = $('#rrP').value; b.hidden = true; closeSheet(); document.body.appendChild(b); b.click(); b.remove(); }; }
+  const tg = {prompt:t.prompt || '', descOff:JSON.parse(JSON.stringify(t.descOff || {}))}, drawTags = () => { tg.prompt = $('#rrP').value; $('#rrTags').innerHTML = descBarHtml(tg, t.film, 'data-rtag'); };
+  drawTags(); $('#rrP').addEventListener('input', drawTags);
+  $('#rrTags').onclick = e => { const b = e.target.closest('[data-rtag]'); if(!b) return; descFlip(tg, +b.dataset.rtag, b.dataset.tag); drawTags(); };
+  $('#rrGo').onclick = () => { const b = document.createElement('button'); b.dataset.act = 'rerollGo'; b.dataset.t = t.id; b.dataset.words = $('#rrP').value; b.dataset.off = JSON.stringify(tg.descOff); b.hidden = true; closeSheet(); document.body.appendChild(b); b.click(); b.remove(); }; }
 function castUsed(t){ const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), ns = new Set();
   txt.replace(SUBRE, (m, n) => { if(castOf(n, t.film)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
@@ -979,7 +1000,7 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   for(let left = room0, more = true; left > 0 && more;){ more = false; for(const [n, P] of have){ if(left <= 0) break; if((quota[n] || 0) < P){ quota[n] = (quota[n] || 0) + 1; left--; more = true; } } }
   if(!room0) for(const [n, P] of have) if(P && imgs.length + Object.keys(quota).length < MAXREF.img) quota[n] = 1;
   for(const n of used){ const c = castOf(n, t.film); let k = 0;
-    for(const id of castPics(c)) if(imgs.length < MAXREF.img && k < (quota[n] || 0)){ imgs.push({id, desc:castWho(c), more:castMore(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); k++; }
+    for(const id of castPics(c)) if(imgs.length < MAXREF.img && k < (quota[n] || 0)){ imgs.push({id, desc:castWho(c), more:castMore(c, t), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); k++; }
     for(const [A, P] of apics(c)){ for(const id of P) if(imgs.length < MAXREF.img) imgs.push({id, attrOf:n, lib:A.id, what:(A.what || A.name || 'look').trim(), more:castMore(A), keep:KEEP[A.keep] ? A.keep : 'exact'}); need -= P.length; }
     for(const [x, A] of acts(c)){ const base = {actOf:n, to:x.to && castOf(x.to, t.film) ? x.to : 0, off:!!x.off, lib:A.id, what:(A.what || A.name || 'move').trim(), more:castMore(A)};
       if(A.vid && S.media[A.vid] && vids.length < MAXREF.vid){ vids.push(Object.assign({id:A.vid, sound:false, follow:false, keep:'loose'}, base)); continue; }
@@ -990,11 +1011,11 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
   const told = [];
   const fk = T ? T.film : undefined;
   let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n, fk); if(!c || pics[c.n]) return m;
-    let w = (c.stand || '').trim() || 'someone'; if(castMore(c) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
+    let w = (c.stand || '').trim() || 'someone'; if(castMore(c, T) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
   // no picture: the description goes in up front, once ("The woman: long black hair, green eyes, …")
-  if(told.length){ const lead = told.map(c => { const w = (c.stand || '').trim() || 'someone'; return (/^(a|an)\s/i.test(w) ? 'The ' + w.replace(/^(a|an)\s+/i, '') : w.charAt(0).toUpperCase() + w.slice(1)) + ': ' + castMore(c) + '.'; }).join(' ');
+  if(told.length){ const lead = told.map(c => { const w = (c.stand || '').trim() || 'someone'; return (/^(a|an)\s/i.test(w) ? 'The ' + w.replace(/^(a|an)\s+/i, '') : w.charAt(0).toUpperCase() + w.slice(1)) + ': ' + castMore(c, T) + '.'; }).join(' ');
     const m = out.match(/^\s*\[Shot 1\]\s*/i); out = m ? m[0] + lead + ' ' + out.slice(m[0].length) : lead + ' ' + out; }
-  if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n, fk)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.' + (castMore(castOf(n, fk)) ? ' ' + castMore(castOf(n, fk)).replace(/^./, x => x.toUpperCase()) + '.' : ''));
+  if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n, fk)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.' + (castMore(castOf(n, fk), T) ? ' ' + castMore(castOf(n, fk), T).replace(/^./, x => x.toUpperCase()) + '.' : ''));
     if(defs.length) out = defs.join(' ') + ' ' + out; }
   // ✨ attributes: "<Subject 1> has the haircut shown in <Picture 4>."
   const at = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.attrOf){ const q = r.lib + '|' + r.attrOf; (at[q] = at[q] || {r, p:[]}).p.push('<Picture ' + (k + 1) + '>'); } });
@@ -1509,7 +1530,7 @@ const hqUnets = () => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p
   .filter(x => !officialH3(x) && !/fl2va/i.test(x) && /ref2va|singularity|pika|prism|eros|dasiwa|hybrid|h3/i.test(x)).sort();
 const regenRefsOn = (t, oi) => !!(t.up && (facesOn(t) || (t.up.refs && upRefs(t).length)) && oi.MiniMaxH3ReferenceToVideo && (t.up.unet ? upUnetOf(t, oi, true) : regenRefUnet(oi)));
 const faceRefs = (t, n) => { let r = []; try{ r = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.filter(x => x.cast===+n); }catch(e){}
-  if(!r.length){ const c = castOf(n, t.film); if(c) r = castPics(c).filter(id => S.media[id]).map(id => ({id, desc:castWho(c), more:castMore(c), keep:c.keep || 'exact', cast:+n, kind:'char'})); }
+  if(!r.length){ const c = castOf(n, t.film); if(c) r = castPics(c).filter(id => S.media[id]).map(id => ({id, desc:castWho(c), more:castMore(c, t), keep:c.keep || 'exact', cast:+n, kind:'char'})); }
   return r.slice(0, REGEN_REFS + 1); };
 const facesOn = t => !!(t && t.up && t.up.part && t.up.faces && t.up.faces.length);
 // 🔎 (Jordan 2026-11-08: "on frame 1 it's only showing one of the 2 characters"): SAM 3 looks for faces on every frame, so a face that
@@ -1584,7 +1605,7 @@ function upGraph(t, oi, names){
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
   const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt), length = part ? part.L : regenLen(t);
-  const once = R => { const prompt = (R ? castText(words, {imgs:R, film:t.film}, true) : castWords(words, t.film)) || SM_PROMPT;
+  const once = R => { const prompt = (R ? castText(words, {imgs:R, film:t.film, descOff:t.descOff}, true) : castWords(words, t.film)) || SM_PROMPT;
     let iv;
     if(R){ const ri = {}; R.forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
       iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:d.w, height:d.h, length, ref_image_size:'match'}, ri)); }
@@ -1714,6 +1735,7 @@ function snapshot(){ // the form, frozen into a take
     imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     h3:!sm && f.h3 ? {style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
+    descOff:JSON.parse(JSON.stringify(f.descOff || {})),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -1930,7 +1952,7 @@ async function toSmooth(t, blend){
   }catch(e){ toast("Couldn't get the video: " + e.message, 6000); return; }
   const f = S.f, m = S.media[id] || {}, secs = Math.min(SM_MAX, m.dur || clipFrames(t) / FPS), text = (t.prompt || '').split('\n\n＋ ').join(' ');
   Object.assign(f, {sm:true, smVid:id, smStart:0, smUp:true, smRefs:(t.upImgs && t.upImgs.length ? t.upImgs : t.imgs || []).map(r => r.id).filter(x => S.media[x]), smUpRefs:true,
-    prompt:text===SM_PROMPT ? '' : text, seconds:Math.round(secs * 20) / 20, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', mp:Math.round(t.w * t.h / 1e4) / 100, pieceText:{}});
+    prompt:text===SM_PROMPT ? '' : text, seconds:Math.round(secs * 20) / 20, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', mp:Math.round(t.w * t.h / 1e4) / 100, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {}))});
   f.smBlend = blend ? Object.assign({}, blend, {vid:id}) : null;
   // the clips' own words, each timed to where its clip sits in the blend (Jordan 2026-11-07: "it doesn't seem to be following the prompt")
   if(blend) Object.assign(f, {smUp:false, smSpc:true, prompt:(SM_PROMPT + ' Each action flows straight into the next in one continuous movement, with no jump.' + '\n' + blend.bounds.flatMap(b => b.segs && b.segs.length ? b.segs : (b.text || '').trim() ? [{a:b.off, b:b.off + b.out - b.in, text:b.text.trim()}] : []).map(x => '[' + t2(x.a) + '-' + t2(x.b) + '] ' + x.text).join('\n')).trim()}); // 🪄 blend: the same size as the clips around it, keyframes follow the 📐 spacing graph
@@ -2004,7 +2026,7 @@ async function saveVideo(t){
   }catch(e){ if(e && e.name!=='AbortError') toast("Couldn't get it: " + e.message); }
 }
 function useAgain(t, quiet){
-  const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}});
+  const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {}))});
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}}))); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
@@ -2105,6 +2127,7 @@ function drawShot(){ drawBeatBar(); { const b = $('#mqNote'), n = refsOn().pins.
   const cast = (S.cast || []).map(c => `<button data-ins="&lt;Subject ${c.n}&gt;" title="&lt;Subject ${c.n}&gt;">👥 ${esc(castName(c))}</button>`).join('');
   $('#tagBar').innerHTML = '<button data-shot="1" title="Start a new shot (a hard cut) in this take">🎬 ＋ Shot</button>' + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
   $('#tagBar').hidden = false; $('#tagBar').style.marginBottom = '8px';
+  { const h = f.sm ? '' : descBarHtml(f, undefined, 'data-dtag'); $('#descBar').innerHTML = h; $('#descBar').hidden = !h; }
   drawH3();
 }
 // 🧾 the H3 way: the switch, who each reference is, and a look at the prompt MiniMax gets
@@ -2385,8 +2408,9 @@ document.addEventListener('click', async e => {
   const snd = e.target.closest('.pv .snd'); if(snd){ const v = snd.parentElement.querySelector('video.tv'); if(v){ lazyOn(v); v.muted = !v.muted; snd.textContent = v.muted ? '🔇' : '🔊'; if(v.paused) v.play().catch(() => {}); } return; }
   const tv = e.target.closest('video.tv'); if(tv){ lazyOn(tv); if(tv.paused) tv.play().catch(() => {}); else tv.pause(); return; }
   const h3 = e.target.closest('.block>h3'); if(h3){ const b = h3.parentElement; S.open[b.id] = b.classList.contains('shut'); b.classList.toggle('shut'); save(); return; }
-  const f = S.f, d = e.target.closest('[data-mocap],[data-mocap2],[data-asp],[data-pre],[data-add],[data-rm],[data-tg],[data-opt],[data-ins],[data-shot],[data-w],[data-act],[data-auto],[data-piece]'); if(!d) return;
+  const f = S.f, d = e.target.closest('[data-mocap],[data-mocap2],[data-asp],[data-pre],[data-add],[data-rm],[data-tg],[data-opt],[data-ins],[data-shot],[data-w],[data-act],[data-auto],[data-piece],[data-dtag]'); if(!d) return;
   const ds = d.dataset;
+  if(ds.dtag){ descFlip(f, +ds.dtag, ds.tag); save(); drawShot(); h3Peek(); return; }
   if(ds.asp){ if(ds.asp==='custom' && f.aspect!=='custom' && !f.cw){ const d = dims(); f.cw = d.w; f.ch = d.h; } f.aspect = ds.asp; }
   else if(ds.pre){ const [w, h] = ds.pre.split('x').map(Number), r = w / h, a = ASPECTS.find(x => Math.abs(x[1] - r) < 0.02); if(a && f.aspect!=='pic') f.aspect = a[0]; f.mp = Math.round(w * h / 1e4) / 100; }
   else if(ds.mocap2!=null){ const x = MOCAP.list.filter(y => y.it.mode!=='mask')[+ds.mocap2]; if(x) await useMocap(x, false, 2); return; }
@@ -2413,7 +2437,7 @@ document.addEventListener('click', async e => {
     else if(ds.act==='guide') await guideFromTake(t);
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
     else if(ds.act==='reroll'){ rerollSheet(t); return; }
-    else if(ds.act==='rerollGo'){ const nt = JSON.parse(JSON.stringify(t)); nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
+    else if(ds.act==='rerollGo'){ const nt = JSON.parse(JSON.stringify(t)); if(ds.off) try{ nt.descOff = JSON.parse(ds.off); }catch(e){} nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
       nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null;
       const nw = ds.words; if(nw != null && nw.trim() && nw.trim()!==(t.prompt || '').trim()){ nt.prompt = nw.trim(); nt.pieces.forEach((p, k) => { p.prompt = piecePrompt(nt.prompt, nt.pieces, k); }); } nt.joinPid = null; nt.joinErr = ''; nt.upStage = null; nt.upPid = null; nt.upErr = ''; nt.smoothed = null;
       const url = pickPc(Object.assign({}, nt, {}), {}); if(!url){ toast('No PC can take it right now'); return; } nt.pc = url; S.takes.unshift(nt); drawTakes();
