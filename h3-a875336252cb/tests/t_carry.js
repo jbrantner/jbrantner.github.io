@@ -232,7 +232,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // a carry-on needs at least a second before it
   await fr.evaluate(() => { FILM.SEL = window.C1; const r = FILM.clipOf(FILM.S.films[0], window.C1); FILM.PH = r.c.at + 0.4; FILM.draw(); });
   const before = await page.evaluate(() => H3.S.f.first); await fr.click('[data-act="carry"]'); await page.waitForTimeout(500);
-  ok(await page.evaluate(() => H3.S.f.first)===before, 'carrying on from under 1 s in is refused (Motion Context needs the frames before)');
+  await page.waitForFunction(() => { const m = H3.S.media[H3.S.f.first]; return m && m.carry && m.carry.still; }, null, {timeout:15000}).catch(() => {});
+  ok(await page.evaluate(() => { const m = H3.S.media[H3.S.f.first]; return !!(m && m.kind==='img' && m.carry.still); }), 'carrying on from under 1 s in uses that frame as the first-frame picture (not enough frames for Motion Context)');
+  await page.evaluate(b => { H3.S.f.first = b; H3.S.f.fl = !!b; H3.drawAll(); }, before);
   // 🎞 Use this take on a take card in H3 Deck puts it in its clip on the timeline
   await page.evaluate(() => { const t = H3.S.takes.find(x => x.id==='tV2'), v = JSON.parse(JSON.stringify(t)); v.id = 'tV4'; v.t = t.t + 3; v.final = {filename:'v4_00001_.mp4', subfolder:'Output_Main/H3Deck/v4', type:'output'}; H3.S.takes.unshift(v); H3.saveNow(); H3.drawAll(); });
   await fr.evaluate(c => { FILM.SEL = c; FILM.draw(); }, cid); await page.evaluate(() => H3.drawAll()); await page.waitForTimeout(200);
@@ -281,6 +283,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const q0 = QP.length; await page.click('#pcSheet [data-qx]'); await page.waitForTimeout(500);
   ok(QP.length===q0 + 1 && (QP[q0].body.delete || QP[q0].body.prompt_id), '✕ on a job takes it out of that PC\'s line (' + JSON.stringify(QP[q0] && QP[q0].body) + ')');
   await page.screenshot({path:path.join(__dirname, 'pcs.png')}); await page.evaluate(() => document.querySelector('#sheet [data-close]').click());
+  // ➕ too early for Motion Context (Jordan 2026-11-08): the frame there becomes the first-frame picture, and it still lands after the cut
+  {   await page.evaluate(() => { H3.S.tab = 'films'; }); const C0 = await fr.evaluate(() => { const f = FILM.S.films[0]; const c = f.tracks.flatMap(t => t.clips).find(c => c.take==='tA' && c.in < 0.1); return c && c.id; });
+  await fr.evaluate(id => { FILM.SEL = id; FILM.PH = FILM.S.films[0].tracks.flatMap(t => t.clips).find(c => c.id===id).at + 0.4; FILM.draw(); }, C0); await fr.click('[data-act="carry"]');
+  await page.waitForFunction(() => { const m = H3.S.media[H3.S.f.first]; return m && m.carry && m.carry.still; }, null, {timeout:15000}).catch(() => {});
+  const sq = await page.evaluate(() => { const f = H3.S.f, m = H3.S.media[f.first] || {}; return {kind:m.kind, still:!!(m.carry && m.carry.still), at:m.carry && m.carry.at, fl:f.fl, prompt:f.prompt}; });
+  ok(sq.kind==='img' && sq.still && Math.abs(sq.at - 0.4) < 0.05 && sq.fl && !/\[1s-\]/.test(sq.prompt), '➕ at 0.4 s: the frame there is the first-frame picture (no Motion Context) and the words are plain (' + JSON.stringify(sq) + ')');
+  const n2 = sent.length; await page.evaluate(() => { H3.S.f.prompt = 'she turns'; H3.S.f.takes = 1; document.querySelector('#prompt').value = H3.S.f.prompt; H3.drawAll(); });
+  await page.click('#goBtn'); await page.waitForTimeout(1500);
+  const g2 = sent[n2] && sent[n2].g, sz = await page.evaluate(() => { const t = H3.S.takes[0]; return {cont:t.cont, carry:t.carry}; });
+  ok(g2 && !node(g2, 'MiniMaxH3MotionContext') && node(g2, 'LoadImage') && !sz.cont && sz.carry && sz.carry.still && sz.carry.own, 'it renders from the picture as its first frame, and the take keeps where it goes (' + JSON.stringify(sz) + ')'); }
   await page.screenshot({path:path.join(__dirname, 'carry.png')});
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
