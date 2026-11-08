@@ -462,6 +462,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const B = await page.evaluate(id => ({has:H3.S.cast.some(c => c.lib===id), fkey:H3.S.fkey}), L1);
     ok(tab.lib && tab.render && A.who==='Laura Vale' && JSON.stringify(A.imgs)===JSON.stringify(['mL1', 'mH1@' + A.n]) && A.at && A.def && B.fkey!==F0 && !B.has,
       '📚 a Library entry joins one film\'s cast as a link, follows edits, and an attribute is sent with attribute_transfer: ' + JSON.stringify({tab, A, B})); }
+  // 👁 Touch up from 🎭 Faces / ✏️ Edit (Jordan 2026-11-08): both sheets offer it; a finished touch-up becomes a take and takes the clip's place
+  { const TF = await fr.evaluate(async () => { const H = window.parent.H3, f = FILM.S.films.find(x => x.tracks.some(t => t.clips.some(c => FILM.fileOf(FILM.takeOf(c.take))))); if(!f) return {nof:true};
+      const tr = f.tracks.find(t => t.clips.some(c => FILM.fileOf(FILM.takeOf(c.take)))), c = tr.clips.find(c => FILM.fileOf(FILM.takeOf(c.take))), old = c.take, keepCast = H.S.cast;
+      H.S.cast = [{n:1, kind:'char', who:'Laura', pics:[], keep:'exact'}]; FILM.facesSheet(f, tr, c); const faces = !!document.querySelector('#fcTu'); document.querySelector('[data-close]').click(); H.S.cast = keepCast;
+      H.touchTake({take:old, film:f.id, clip:c.id, a:c.in, len:1.5, pc:H.S.takes.find(x => x.id===old).pc}, {filename:'touchup_00001.mp4', subfolder:'H3Deck/touchup', type:'output'});
+      const nt = H.S.takes[0], r = {faces, old, now:c.take, nt:nt.id, fin:nt.final && nt.final.filename, out:c.out, alts:c.alts, src:nt.touch && nt.touch.src};
+      return r; });
+    ok(!TF.nof && TF.faces && TF.now===TF.nt && TF.fin==='touchup_00001.mp4' && TF.out===1.5 && TF.alts.includes(TF.old) && TF.src===TF.old, '👁 Touch up: offered in 🎭 Faces; the finished touch-up takes the clip\'s place, the old take stays in its versions: ' + JSON.stringify(TF)); }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
