@@ -187,6 +187,7 @@ h2 span{flex:1}
 #poseTab{position:fixed;left:0;right:0;bottom:0;top:var(--ft,110px);z-index:10;background:var(--bg)}
 #filmTab{margin:0 -16px 6px;background:var(--bg)}
 #filmFormNote{margin:4px 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+#tuBox{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}#tuBox iframe{flex:1;border:0;width:100%}#tuBox .mbar{display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
 #mocapBox{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}#mocapBox iframe{flex:1;border:0;width:100%}#mocapBox .mbar{display:flex;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
 #poseTab iframe{width:100%;height:100%;border:0;display:block;background:var(--bg)}
 #filmTab iframe{width:100%;height:70vh;border:0;display:block;background:var(--bg)}
@@ -201,6 +202,7 @@ body.bare .xf:not(.xk){display:none!important}
 body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw .d,body.bare #libTab .note{display:none!important}
 </style>
 </head><body>
+<div id="tuBox" hidden><div class="mbar"><b>👁 Touch up</b><span class="note" style="flex:1;min-width:0">Pick the eyes and your picture, then 👁 Touch up the clip.</span><button class="btn" id="tuX">Done</button></div><iframe title="Touch up"></iframe></div>
 <div id="mocapBox" hidden><div class="mbar"><b>🦴 Mocap</b><span class="note" style="flex:1;min-width:0">Copy the motion, check it, then 🎬 MiniMax clips › Send to Render. They show up under 🦴 Motion guide › From Mocap.</span><button class="btn" id="mocapX">Done</button></div><iframe title="Mocap"></iframe></div>
 <div class="wrap">
   <header>
@@ -2591,6 +2593,35 @@ async function toMocap(t){ const f = t.final || (t.pieces.find(p => p.file) || {
     for(let i = 0; i < 100 && !(fr.contentWindow && fr.contentWindow.MOCAP_OPEN); i++) await new Promise(r => setTimeout(r, 100));
     fr.contentWindow.MOCAP_OPEN(file); toast('In Mocap: tap Copy the motion.', 4000); }
   catch(e){ toast("Couldn't open it in Mocap: " + e.message); } }
+// 👁 Touch up on a Films clip (Jordan 2026-11-08, from 🎭 Faces and ✏️ Edit): the clip's stretch of its take goes to the touch-up page;
+// when the PC is done, the result becomes a take of its own and takes the clip's place (the old take stays in the clip's versions)
+window.H3TouchOpen = async o => { const src = S.takes.find(x => x.id===o.take), f = src && takeFile(src); if(!f){ toast('Wait for the clip to finish first'); return false; }
+  try{ toast('Getting the clip from ' + pcName(src.pc) + '…'); const r = await fetch(viewUrl(src.pc, f)); if(!r.ok) throw new Error(pcName(src.pc) + ' said ' + r.status); const b = await r.blob();
+    const box = $('#tuBox'), fr = box.querySelector('iframe'); box.hidden = false;
+    if(!fr.src) await new Promise(z => { fr.onload = z; fr.src = 'touchup/?embed=1'; });
+    for(let i = 0; i < 100 && !(fr.contentWindow && fr.contentWindow.TU_OPEN); i++) await new Promise(z => setTimeout(z, 100));
+    const a = Math.max(0, +o.a || 0), len = Math.max(0.5, (+o.b || 0) - a);
+    await fr.contentWindow.TU_OPEN({blob:b, name:f.filename, start:a, len, pc:src.pc, part:o.part || 'eyes', label:o.label || 'This clip',
+      sent:j => { S.tus = (S.tus || []).filter(x => Date.now() - x.t < 2 * 864e5); S.tus.push(Object.assign({t:Date.now(), take:src.id, film:o.film || '', clip:o.clip || '', a, len}, j)); save(); tickTouch(); toast('👁 Sent. When it\'s done it takes the clip\'s place.', 5000); }});
+    return true;
+  }catch(e){ toast("Couldn't open Touch up: " + e.message, 6000); return false; } };
+$('#tuX').onclick = () => { $('#tuBox').hidden = true; };
+let tuT = 0;
+async function tickTouch(){ clearTimeout(tuT); const L = (S.tus || []).filter(x => !x.done); if(!L.length) return;
+  for(const j of L){ try{ const h = (await (await fetch(j.pc + '/history/' + j.pid, {cache:'no-store'})).json())[j.pid]; if(!h || !h.status) continue;
+      if(h.status.status_str==='error'){ j.done = 'failed'; toast('👁 Touch up failed on ' + pcName(j.pc), 6000); continue; }
+      if(!h.status.completed) continue; const o = (h.outputs || {})[j.save] || {}, fl = (o.videos || o.images || o.gifs || [])[0];
+      if(!fl){ j.done = 'failed'; toast('👁 Touch up finished but gave nothing back', 6000); continue; }
+      j.done = 'ok'; touchTake(j, {filename:fl.filename, subfolder:fl.subfolder || '', type:fl.type || 'output'}); }catch(e){} }
+  save(); if((S.tus || []).some(x => !x.done)) tuT = setTimeout(tickTouch, 4000); }
+function touchTake(j, file){ const src = S.takes.find(x => x.id===j.take) || {}, F = Math.max(1, Math.round(j.len * FPS)), id = uid('t'), nm = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + id.slice(-4);
+  const t = Object.assign(JSON.parse(JSON.stringify(src)), {id, t:Date.now(), name:nm, dir:'H3Deck/' + nm, pc:j.pc, film:j.film || src.film || '', state:'done', final:file, touch:{src:j.take, a:j.a},
+    seconds:F / FPS, pieces:[{start:0, gen:F, deliv:F, ctx:0, prompt:src.prompt || '', state:'done', file}], cont:null, contFile:null, contCut:0, contSecs:0, carry:null, redo:null, lead:null, combo:null, from:null,
+    sm:null, up:null, upStage:null, upPid:null, upErr:'', smoothed:null, joinPid:null, joinErr:'', joinSave:null, k4:null});
+  delete t.wins; S.takes.unshift(t); save(); drawTakes();
+  let ok = false; try{ const fw = FW || ($('#filmTab iframe') || {}).contentWindow; ok = !!(fw && fw.FILM_TOUCHED && fw.FILM_TOUCHED(j.film, j.clip, id, F / FPS)); }catch(e){}
+  toast(ok ? '👁 Touch up done: it\'s in the clip\'s place now' : '👁 Touch up done: it\'s in 🗂 Renders (its clip is gone)', 6000); }
+setTimeout(tickTouch, 3000);
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#prompt').oninput = e => { S.f.prompt = e.target.value; filmEdit(e.target.value); save(); drawShot(); drawGo(); };
 // 🎞 editing the words of the clip under the playhead keeps them on that clip's take (the video stays as it is; back to its words = no edit)
@@ -3085,7 +3116,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {descTags, descKey, descChips, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {touchTake, descTags, descKey, descChips, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
