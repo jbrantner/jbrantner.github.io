@@ -971,8 +971,13 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   let need = used.reduce((a, n) => a + apics(castOf(n, t.film)).reduce((b, [, P]) => b + P.length, 0), 0); // (2026-11-08: an outfit didn't take, its pictures had no room)
   const vids = (t.vids || []).slice(), acts = c => (c.acts || []).map(x => [x, libOf(x.id)]).filter(([, A]) => A);
   for(const n of used) for(const [x, A] of acts(castOf(n, t.film))) if(!(A.vid && S.media[A.vid] && vids.length < MAXREF.vid)) need += libPics(A).filter(id => S.media[id]).slice(0, 3).length;
+  // each subject's share of the 9 slots (Jordan 2026-11-08: 4 characters, only 2 came out: the first two took every picture):
+  // one picture each first, in cast order, then a second each, and so on, after the attributes' and actions' room
+  const quota = {}, room0 = Math.max(0, MAXREF.img - imgs.length - need), have = used.map(n => [n, castPics(castOf(n, t.film)).length]);
+  for(let left = room0, more = true; left > 0 && more;){ more = false; for(const [n, P] of have){ if(left <= 0) break; if((quota[n] || 0) < P){ quota[n] = (quota[n] || 0) + 1; left--; more = true; } } }
+  if(!room0) for(const [n, P] of have) if(P && imgs.length + Object.keys(quota).length < MAXREF.img) quota[n] = 1;
   for(const n of used){ const c = castOf(n, t.film); let k = 0;
-    for(const id of castPics(c)) if(imgs.length < MAXREF.img && (!k || imgs.length < MAXREF.img - need)){ imgs.push({id, desc:castWho(c), more:castMore(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); k++; }
+    for(const id of castPics(c)) if(imgs.length < MAXREF.img && k < (quota[n] || 0)){ imgs.push({id, desc:castWho(c), more:castMore(c), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}); k++; }
     for(const [A, P] of apics(c)){ for(const id of P) if(imgs.length < MAXREF.img) imgs.push({id, attrOf:n, lib:A.id, what:(A.what || A.name || 'look').trim(), more:castMore(A), keep:KEEP[A.keep] ? A.keep : 'exact'}); need -= P.length; }
     for(const [x, A] of acts(c)){ const base = {actOf:n, to:x.to && castOf(x.to, t.film) ? x.to : 0, off:!!x.off, lib:A.id, what:(A.what || A.name || 'move').trim(), more:castMore(A)};
       if(A.vid && S.media[A.vid] && vids.length < MAXREF.vid){ vids.push(Object.assign({id:A.vid, sound:false, follow:false, keep:'loose'}, base)); continue; }
@@ -2953,6 +2958,9 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
   // take is shorter than MiniMax's next frame count, its last frame is repeated to fill it (cut off again after), instead of a shorter window
   let L = gridUp(b - a), pad = 0; if(L > F){ pad = L - F; } const s0 = pad ? 0 : Math.max(0, Math.min(a - Math.floor((L - (b - a)) / 2), F - L));
   const part = {a, b, s0, L, F, pad}, key = o.key || uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)), big = +o.scale > 1;
+  // (Jordan 2026-11-08: 🎭 on a ✨ High quality clip did little: its video is 1248×704 but the take still said 832×480, so MiniMax was
+  // told the wrong size and the face points landed on the wall) a same-size pass uses the size its video really is
+  const sd = !big && src.up && src.up.crop && src.final ? upDims(src) : null;
   let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
     const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = o.seed ? +o.seed + k : Math.floor(Math.random() * 2 ** 31);
@@ -2962,7 +2970,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
       up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, refs:o.faces && o.faces.length ? true : o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, o.faces && o.faces.length && !big ? {faces:o.faces.map(f => f.obj != null ? {n:+f.n, obj:+f.obj} : {n:+f.n, x:+f.x, y:+f.y})} : {}, big ? {crop:{s0, L, pad, F}} : {part}), upStage:'start',
       redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, wi:o.wi != null ? +o.wi : null, nudge:true, qp:!!o.qp, big, cin:(part.a - s0) / FPS, cout:(part.b - s0) / FPS, a:part.a, b:part.b, s0, L, F, Fout:big ? L : F},
       pieces:[{start:0, gen:big ? L : F, deliv:big ? L : F, ctx:0, prompt:text, state:'done', file:null}]});
-    if(big) t.seconds = L / FPS;
+    if(big) t.seconds = L / FPS; if(sd){ t.w = sd.w; t.h = sd.h; }
     // the pass always runs on the official (vanilla) MiniMax H3 model + the regenerate LoRA, never the take's own model or LoRAs
     // (Jordan 2026-11-07: the card said Pika because the copy kept its source's model name)
     Object.assign(t, {model:famKey(t.up.refs ? 'minimax_h3_ref2va_pruned_int8_convrot.safetensors' : 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'), turbo:false, loras:lorasOf(t).filter(l => !/turbo|regenerate|lightning|4.?step|8.?step/i.test(l.name))});
