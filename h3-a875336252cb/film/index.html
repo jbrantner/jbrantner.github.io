@@ -264,6 +264,15 @@ img.live{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opaci
 .pick .p div{padding:6px 8px;font-size:12px;color:var(--soft)}
 .pick .p.on{border-color:var(--accent)}
 body.bare .xf,body.bare .tools .xtra{display:none!important}
+/* 📝 prompt track (Jordan 2026-11-08) */
+.ptrk{position:relative;height:44px;border-bottom:1px solid var(--line);background:#ffffff05}
+.ptrk .tn{position:sticky;left:0;z-index:3;display:inline-block;font-size:10px;font-weight:800;color:var(--dim);padding:1px 6px;background:#111217dd;border-radius:0 0 6px 0;pointer-events:none;line-height:14px}
+.pblk{position:absolute;top:5px;height:34px;border-radius:7px;border:1px solid color-mix(in srgb,var(--cyan) 60%,var(--line));background:color-mix(in srgb,var(--cyan) 16%,var(--panel));overflow:hidden;touch-action:pan-x;user-select:none;-webkit-user-select:none}
+.pblk.sel{outline:2px solid var(--accent)}
+.pblk.rend{border-style:dashed;background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--cyan) 26%,var(--panel)) 0 7px,color-mix(in srgb,var(--cyan) 8%,var(--panel)) 7px 14px)}
+.pblk .nm{position:absolute;left:13px;right:13px;top:3px;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.pblk .du{position:absolute;right:13px;bottom:2px;font-size:10px;opacity:.8;pointer-events:none}
+.pblk .h{position:absolute;top:0;bottom:0;width:12px;background:#ffffff14}.pblk .h.l{left:0}.pblk .h.r{right:0}
 </style>
 </head><body>
 <div class="wrap">
@@ -606,6 +615,7 @@ function drawTL(f){
   const OFF = tlOff(); tl.style.width = W + 2 * OFF + 'px'; tl.style.paddingLeft = OFF + 'px'; tl.style.paddingRight = OFF + 'px';
   tl.innerHTML = `<div class="ruler" id="ruler">${ru}</div>` + f.tracks.map((tr, k) => `<div class="trk ${tr.hide ? 'hid' : ''}" data-k="${k}"><span class="tn"><a data-act="trackMenu" data-k="${k}" title="Track ${k + 1}">${k + 1}${tr.hide ? ' 🙈' : ''} ⋯</a>${passLabel(tr)}${GUIDE_ON() && tr.guide ? ' · 🦴 guide' + (tr.unlock ? ' 🔓' : ' 🔒') + '<span class="gdp"></span>' : guideOpt(f, k, 0) ? ' · 🦴' : ''}</span>${tr.clips.map(c => { const t = takeOf(c.take);
     return `<div class="clip ${c.id===SEL ? 'sel' : ''} ${t && fileOf(t) ? '' : t && workingOf(t) ? 'rend' : 'miss'}" data-c="${c.id}" style="left:${c.at * pps}px;width:${Math.max(6, len(c) * pps)}px"><div class="h l" data-h="l"></div><div class="nm">${esc(clipLabel(t))}</div><div class="du">${fmt(len(c))}${qpBadge(c)}</div><div class="h r" data-h="r"></div></div>`; }).join('')}${ghostsOf(f, k).map(gc => { const i = guideClips(f).indexOf(gc); return `<div class="ghost ${GHOST && GHOST.k===k && GHOST.gid===gc.id ? 'sel' : ''}" data-g="${gc.id}" data-k="${k}" style="left:${gc.at * pps}px;width:${Math.max(6, len(gc) * pps)}px"><div class="nm">○ ${i + 1} · tap to render</div><div class="du">${fmt(len(gc))}</div></div>`; }).join('')}${GAP && GAP.k===k ? `<div class="gapsel" style="left:${GAP.a * pps}px;width:${Math.max(6, (GAP.b - GAP.a) * pps)}px"><button data-act="closeGap">🗑 ${fmt(GAP.b - GAP.a)}</button></div>` : ''}</div>`).join('');
+  tl.insertAdjacentHTML('beforeend', laneHtml(f));
   scrollTo(f);
 }
 // Jordan 2026-11-05, like DaVinci Resolve: the needle (current frame) stays put and the timeline slides under it, so
@@ -626,6 +636,7 @@ function setPH(f, t, show, fromScroll){ PH = Math.max(0, t); if(!fromScroll) scr
 function wireFilm(f){
   drawTL(f); if(f.guide && f.guide.state==='export' && !guideT) guidePoll(f); if(f.prev && f.prev.state==='working') prevPoll(f); else autoPrev(f);
   const tl = $('#tl'), wrap = $('#tlw');
+  wireLane(f, tl);
   tl.addEventListener('pointerdown', ev => { unfocusDeck();
     const el = ev.target.closest('.clip'); if(!el) return; const r = clipOf(f, el.dataset.c); if(!r) return;
     // a finger on a clip that isn't selected yet swipes the timeline (and selects it on a tap); a selected clip drags
@@ -665,6 +676,96 @@ function wireFilm(f){
   scrollTo(f);
   showFrame(f);
 }
+// ---------- 📝 Prompt track (Jordan 2026-11-08) ----------
+// A lane under the video, like an audio track, of prompt blocks (1 to 5 s). Each block is its own render of that stretch, with its own
+// words and LoRAs: over video it remakes that stretch (cut out as its own clip, so each block is its own video, with "how much it
+// changes"); right after a clip it carries on from it; over empty timeline it's a new clip there.
+const PB_MIN = 1, PB_MAX = 5; let PSEL = null;
+const blocks = f => f.prompts = f.prompts || [];
+const blockOf = (f, id) => blocks(f).find(b => b.id===id);
+const r2 = x => Math.round(x * 100) / 100;
+function blockRoom(f, b, at){ const o = blocks(f).filter(x => x!==b);
+  return {prev:Math.max(0, ...o.filter(x => x.at + x.len <= at + 1e-3).map(x => x.at + x.len)), nxt:Math.min(1e9, ...o.filter(x => x.at >= at - 1e-3).map(x => x.at))}; }
+function addBlock(f, t){ t = Math.max(0, t); const e = edgeNear(f, t); if(e!=null) t = e;
+  if(blocks(f).some(x => t >= x.at - 1e-3 && t < x.at + x.len - 1e-3)) return null;
+  const room = blockRoom(f, null, t).nxt - t; if(room < PB_MIN - 1e-3){ toast('No room for a prompt here (a block is at least 1 s)'); return null; }
+  let L = Math.min(3, room, PB_MAX); const u = activeAt(f, t + 0.02); if(u){ const end = u.at + len(u); if(end - t >= PB_MIN - 1e-3) L = Math.min(L, end - t); }
+  const pv = blocks(f).filter(x => x.at < t).sort((a, b) => b.at - a.at)[0];
+  const b = {id:uid('b'), at:r2(t), len:r2(Math.max(PB_MIN, L)), prompt:'', loras:pv ? JSON.parse(JSON.stringify(pv.loras || [])) : [], str:1}; blocks(f).push(b); PSEL = b.id; save(); return b; }
+// what ▶ Render does with a block
+function blockPlan(f, b){ const c = activeAt(f, b.at + 0.02), r = c && clipOf(f, c.id), t = c && takeOf(c.take);
+  if(c){ if(!fileOf(t)) return {kind:'wait', r}; const a = c.in + (b.at - c.at); return {kind:'over', r, a, b:Math.min(c.out, a + b.len), cut:b.at + b.len > c.at + len(c) + 0.05}; }
+  let best = null; for(const tr of f.tracks) if(!tr.hide) for(const x of tr.clips){ const e = x.at + len(x); if(e <= b.at + 0.02 && b.at - e < 0.3 && fileOf(takeOf(x.take)) && (!best || e > best.c.at + len(best.c))) best = clipOf(f, x.id); }
+  return best ? {kind:'carry', r:best} : {kind:'new'}; }
+const planText = (f, b, P) => P.kind==='over' ? '✏️ Remakes ' + fmt(b.at) + '–' + fmt(b.at + Math.min(b.len, P.b - P.a)) + ' of the video under it' + (P.cut ? ' (only up to where that clip ends)' : '') + ', as its own clip.'
+  : P.kind==='wait' ? 'The video under it is still rendering: wait for it first.' : P.kind==='carry' ? '➕ Carries on from the clip before it for ' + fmt(b.len) + '.' : '✨ A new ' + fmt(b.len) + ' clip here.';
+function laneHtml(f){ const pps = f.pps;
+  return `<div class="ptrk" id="ptrk"><span class="tn">📝 Prompts · tap to add</span>${blocks(f).map(b => { const c = activeAt(f, b.at + 0.02), t = c && takeOf(c.take), rend = t && !fileOf(t) && workingOf(t);
+    const lo = (b.loras || []).length ? ' · 🎨' + b.loras.length : '';
+    return `<div class="pblk ${b.id===PSEL ? 'sel' : ''} ${rend ? 'rend' : ''}" data-b="${b.id}" style="left:${b.at * pps}px;width:${Math.max(6, b.len * pps)}px"><div class="h l" data-h="l"></div><div class="nm">${esc(b.prompt || 'tap to write')}</div><div class="du">${fmt(b.len)}${lo}</div><div class="h r" data-h="r"></div></div>`; }).join('')}</div>`; }
+// split a clip at time t on the timeline: the part from t on is its own clip (returned)
+function cutAt(f, r, t){ const c = r.c, at = t - c.at; if(at <= 0.05 || at >= len(c) - 0.05) return r;
+  const nb = Object.assign({}, c, {id:uid('c'), in:c.in + at, at:t}); delete nb.alts; delete nb.qcuts; c.out = c.in + at; r.tr.clips.push(nb); return {c:nb, tr:r.tr, k:r.k}; }
+async function renderBlock(f, b, quiet){ const P = blockPlan(f, b); if(!(b.prompt || '').trim()){ if(!quiet) toast('Write what happens in it first'); return false; }
+  if(P.kind==='wait'){ if(!quiet) toast(planText(f, b, P)); return false; }
+  if(P.kind==='over'){ const fn = deckFn('H3Redo'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
+    let r = cutAt(f, P.r, b.at); cutAt(f, r, b.at + b.len); save(); const t = takeOf(r.c.take), D = secsOf(t);
+    const n = await fn({take:t.id, a:Math.max(0.2, r.c.in), b:r.c.out >= D - 0.1 ? D + 1 : r.c.out, prompt:b.prompt, n:1, str:+b.str || 1, loras:b.loras || [], film:f.id, clip:r.c.id});
+    b.sent = Date.now(); save(); draw(); return !!n; }
+  SEL = null; draw();
+  if(P.kind==='carry'){ const fn = deckFn('H3Carry'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
+    const ok = await fn({take:P.r.c.take, at:P.r.c.out, film:f.id, clip:P.r.c.id, key:uid('k'), prompt:b.prompt, secs:b.len, len:b.len, go:true, loras:b.loras || []}); b.sent = Date.now(); save(); return !!ok; }
+  const fn = deckFn('H3Make'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return false; }
+  const ok = await fn({prompt:b.prompt, secs:b.len, len:b.len, loras:b.loras || [], film:f.id, track:f.tracks[0].id, at:b.at}); b.sent = Date.now(); save(); return ok; }
+async function renderAll(f){ const L = blocks(f).filter(b => (b.prompt || '').trim()).sort((a, b) => a.at - b.at); let n = 0, later = 0; const going = [];
+  for(const b of L){ const P = blockPlan(f, b);
+    if(P.kind!=='over' && going.some(x => Math.abs(x.at + x.len - b.at) < 0.3)){ later++; continue; } // it carries on from a block that isn't made yet
+    if(P.kind==='wait'){ later++; continue; }
+    if(await renderBlock(f, b, true)){ n++; going.push(b); if(P.kind!=='over') await new Promise(r => setTimeout(r, 1500)); } }
+  toast(n ? '▶ ' + n + ' prompt block' + (n===1 ? '' : 's') + ' sent' + (later ? '; ' + later + ' wait for the video before them (▶ again when it\'s done)' : '') : later ? 'They wait for the video before them' : 'Write words in a block first', 6000); }
+function blockSheet(f, b){ const H = (() => { try{ return window.parent.H3 || null; }catch(e){ return null; } })(), LN = n => String(n || '').split(/[\\/]/).pop().replace(/\.safetensors$/i, '');
+  b.loras = b.loras || []; const P = blockPlan(f, b);
+  $('#sheetCard').innerHTML = `<h3><span>📝 ${fmt(b.at)}–${fmt(b.at + b.len)}</span><button class="btn" data-close>✕</button></h3>
+    <textarea id="pbP" rows="4" style="width:100%;box-sizing:border-box" placeholder="What happens in this stretch">${esc(b.prompt || '')}</textarea>
+    <div class="lab" style="margin-top:10px"><span>Length (renders together)</span><b id="pbLv"></b></div><input type="range" id="pbL" min="${PB_MIN}" max="${PB_MAX}" step="0.25" value="${b.len}" style="width:100%">
+    <div id="pbSW" ${P.kind==='over' ? '' : 'hidden'}><div class="lab" style="margin-top:10px"><span>How much it changes</span><b id="pbSv"></b></div><input type="range" id="pbS" min="0.3" max="1" step="0.05" value="${+b.str || 1}" style="width:100%"></div>
+    ${H && H.redoLoras ? `<div class="lab" style="margin-top:10px"><span>LoRAs</span></div><div id="pbLo"></div>` : ''}
+    <div class="note" id="pbN" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:8px;flex-wrap:nowrap"><button class="btn pri" id="pbGo" style="flex:1;padding:13px">▶ Render this block</button><button class="btn warn" id="pbDel" style="padding:13px">🗑</button></div>
+    ${blocks(f).filter(x => (x.prompt || '').trim()).length > 1 ? '<button class="btn" id="pbAll" style="width:100%;padding:11px;margin-top:6px">▶ Render every block</button>' : ''}`;
+  $('#sheet').hidden = false;
+  const lab = () => { $('#pbLv').textContent = fmt(b.len); if($('#pbSv')) $('#pbSv').textContent = +b.str >= 0.995 ? 'all new' : (+b.str).toFixed(2); $('#pbN').textContent = planText(f, b, blockPlan(f, b)); };
+  $('#pbP').oninput = e => { b.prompt = e.target.value; save(); };
+  $('#pbL').oninput = e => { const room = blockRoom(f, b, b.at).nxt - b.at; b.len = r2(Math.max(PB_MIN, Math.min(+e.target.value, PB_MAX, room))); e.target.value = b.len; save(); lab(); drawTL(f); };
+  if($('#pbS')) $('#pbS').oninput = e => { b.str = +e.target.value; save(); lab(); };
+  const drawL = () => { const el = $('#pbLo'); if(!el) return; const all = (H.redoLoras() || []).filter(n => !b.loras.some(l => l.name===n));
+    el.innerHTML = b.loras.map((l, i) => `<div style="display:grid;grid-template-columns:1fr 64px 34px;gap:6px;align-items:center;margin:4px 0"><span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(LN(l.name))}</span><input type="number" data-ls="${i}" value="${l.str}" step="0.05" min="0" max="2" style="width:64px"><button class="btn" data-lx="${i}">✕</button></div>`).join('')
+      + (all.length ? `<select id="pbLAdd" style="width:100%;margin-top:4px"><option value="">＋ Add a LoRA…</option>${all.map(n => `<option value="${esc(n)}">${esc(LN(n))}</option>`).join('')}</select>` : (b.loras.length ? '' : '<div class="note">No LoRAs found on the PCs.</div>'));
+    el.querySelectorAll('[data-ls]').forEach(x => x.oninput = () => { b.loras[+x.dataset.ls].str = +x.value || 0; save(); });
+    el.querySelectorAll('[data-lx]').forEach(x => x.onclick = () => { b.loras.splice(+x.dataset.lx, 1); save(); drawL(); drawTL(f); });
+    const ad = $('#pbLAdd'); if(ad) ad.onchange = () => { if(ad.value) b.loras.push({name:ad.value, str:1, words:H.loraWords ? H.loraWords(ad.value) : ''}); save(); drawL(); drawTL(f); }; };
+  drawL(); lab();
+  $('#pbDel').onclick = () => { f.prompts = blocks(f).filter(x => x!==b); PSEL = null; save(); closeSheet(); drawTL(f); };
+  $('#pbGo').onclick = async () => { $('#pbGo').disabled = true; const ok = await renderBlock(f, b); if(ok){ closeSheet(); toast('▶ Sent: ' + planText(f, b, P).replace(/^\S+ /, ''), 4000); } else { const g = $('#pbGo'); if(g) g.disabled = false; } };
+  if($('#pbAll')) $('#pbAll').onclick = async () => { closeSheet(); await renderAll(f); }; }
+// drag a block to move it, its ends to resize it (1 to 5 s, never over its neighbours); a tap opens it; a tap on the empty lane adds one
+function wireLane(f, tl){
+  tl.addEventListener('pointerdown', ev => { const el = ev.target.closest('.pblk'); if(!el) return; const b = blockOf(f, el.dataset.b); if(!b) return;
+    const h = ev.target.dataset.h || '', x0 = ev.clientX, y0 = ev.clientY, b0 = Object.assign({}, b); let moved = false;
+    if(ev.pointerType==='touch' && PSEL!==b.id){ el.addEventListener('pointerup', e => { if(Math.abs(e.clientX - x0) < 8 && Math.abs(e.clientY - y0) < 8){ PSEL = b.id; drawTL(f); blockSheet(f, b); } }, {once:true}); return; }
+    PSEL = b.id; $$('.pblk.sel').forEach(x => x.classList.remove('sel')); el.classList.add('sel'); el.setPointerCapture(ev.pointerId); ev.preventDefault();
+    const R = blockRoom(f, b, b0.at), sn = v => { const e = edgeNear(f, v); return e!=null ? e : v; };
+    const mv = e => { const dx = (e.clientX - x0) / f.pps; if(!moved && Math.abs(e.clientX - x0) < 4) return; moved = true;
+      if(h==='l'){ const end = b0.at + b0.len; let na = sn(b0.at + dx); na = Math.max(R.prev, end - PB_MAX, Math.min(end - PB_MIN, na)); b.at = r2(na); b.len = r2(end - na); }
+      else if(h==='r'){ let ne = sn(b0.at + b0.len + dx); ne = Math.min(R.nxt, b0.at + PB_MAX, Math.max(b0.at + PB_MIN, ne)); b.len = r2(ne - b0.at); }
+      else { let na = sn(b0.at + dx); const e2 = edgeNear(f, na + b0.len); if(e2!=null && Math.abs(e2 - (na + b0.len)) < Math.abs(sn(na) - na) + 1e-6) na = e2 - b0.len;
+        const o = blocks(f).filter(x => x!==b), lo = Math.max(0, ...o.filter(x => x.at + x.len <= b0.at + 1e-3).map(x => x.at + x.len)), hi = Math.min(1e9, ...o.filter(x => x.at >= b0.at + b0.len - 1e-3).map(x => x.at)) - b0.len;
+        b.at = r2(Math.max(lo, Math.min(hi, na))); }
+      el.style.left = b.at * f.pps + 'px'; el.style.width = Math.max(6, b.len * f.pps) + 'px'; el.querySelector('.du').textContent = fmt(b.len); };
+    const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); save(); if(moved) drawTL(f); else blockSheet(f, b); };
+    el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); });
+  tl.addEventListener('click', ev => { const ln = ev.target.closest('.ptrk'); if(!ln || ev.target.closest('.pblk')) return;
+    const t = (ev.clientX - ln.getBoundingClientRect().left) / f.pps, b = addBlock(f, t); if(!b) return; drawTL(f); blockSheet(f, b); }); }
 function refreshTools(f){ const sel = SEL && clipOf(f, SEL); if(sel || GAP) GHOST = null; $$('.tools [data-act="split"],.tools [data-act="guide"],.tools [data-act="carry"],.tools [data-act="redo"],.tools [data-act="lead"],.tools [data-act="versions"],.tools [data-act="editDeck"],.tools [data-act="smoothClip"],.tools [data-act="combine"],.tools [data-act="delClip"]').forEach(b => b.disabled = !sel && !(b.dataset.act==='delClip' && GAP));
   const n = $('#selNote'); if(n && sel) n.innerHTML = selText(sel, takeOf(sel.c.take));
   const vsx = $('#vstrip'), key = sel ? sel.c.id + '|' + sel.c.take + '|' + versionsOf(takeOf(sel.c.take) || {}).concat((sel.c.alts || []).map(takeOf).filter(Boolean)).map(x => x.id + (fileOf(x) ? '1' : '0')).join() : '';
@@ -1323,7 +1424,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
   if(r && t0 && (t0.id===t.id || versionsOf(t0).includes(t) || versionsOf(t).includes(t0))){ if(t0.id!==t.id) useTake(f, r, t); return '🎞 That take is in the selected clip now'; }
   for(const tr of f.tracks) for(const c of tr.clips){ const tc = takeOf(c.take); if(tc && tc.id!==t.id && (versionsOf(tc).includes(t) || versionsOf(t).includes(tc))){ SEL = c.id; useTake(f, {c, tr, k:f.tracks.indexOf(tr)}, t); return '🎞 That take replaced its other version on the timeline'; } }
   const ends = f.tracks.map(tr => Math.max(0, ...tr.clips.map(x => x.at + len(x)))), k = ends.indexOf(Math.max(...ends)); addClip(f, t, k); draw(); return '🎞 That take is at the end of the film'; }
-window.FILM = {testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
