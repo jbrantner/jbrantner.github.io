@@ -216,6 +216,19 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const r = {n:document.querySelectorAll('#hqLv button').length, on:q('#hqLv button.on') && q('#hqLv button.on').textContent, go:!!q('#hqGo')};
       q('#hqLv [data-v="0.75"]').click(); r.on2 = q('#hqLv button.on').textContent; r.d = q('#hqD').textContent; q('[data-close]').click(); return r; });
     ok(HQ.n===3 && HQ.on==='Strong' && HQ.go && HQ.on2==='Medium' && /close to the clip/.test(HQ.d), '✨ High quality asks how strong: Light / Medium / Strong (Strong first time): ' + JSON.stringify(HQ)); }
+  // ✨ model pick: vanilla MiniMax by default, or another model on the PCs (Prism Pika); the pass uses it and a PC without it says so
+  { const HM = await fr.evaluate(() => { const H = window.parent.H3, f = FILM.S.films[0], tr = f.tracks[0], c = tr.clips[0], keep = H.hqUnets;
+      H.hqUnets = () => ['singularityV2X10eros_prismPIKA.safetensors']; FILM.hqSheet(f, tr, c); const q = s => document.querySelector(s), o = [...document.querySelectorAll('#hqM option')];
+      const r = {n:o.length, v0:q('#hqM').value, lab:o[1] && o[1].textContent}; q('[data-close]').click(); H.hqUnets = keep; return r; });
+    const HG = await page.evaluate(R => { const P = H3.PC[R].oi, oi = Object.assign({}, P), un = ((((P.UNETLoader || {}).input || {}).required || {}).unet_name || [[]])[0];
+      oi.UNETLoader = {input:{required:{unet_name:[un.concat(['singularityV2X10eros_prismPIKA.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'])]}}};
+      oi.LoraLoaderModelOnly = {input:{required:{lora_name:[['open_regenerate.safetensors']]}}};
+      const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.redo && x.redo.qp && x.redo.wi===0))); t.up.unet = 'singularityV2X10eros_prismPIKA.safetensors'; delete t.up.faces;
+      const un1 = Object.values(H3.upGraph(t, oi, {}).g).filter(n => n.class_type==='UNETLoader').map(n => n.inputs.unet_name);
+      const miss = H3.regenMissing(Object.assign({}, oi, {UNETLoader:{input:{required:{unet_name:[un]}}}}), t); t.up.unet = '';
+      const un0 = Object.values(H3.upGraph(t, oi, {}).g).filter(n => n.class_type==='UNETLoader').map(n => n.inputs.unet_name); return {un1, un0, miss}; }, R);
+    ok(HM.n===2 && HM.v0==='' && HM.lab==='Prism Pika' && HG.un1.join()==='singularityV2X10eros_prismPIKA.safetensors' && /fl2va/.test(HG.un0.join()) && /no singularityV2X10eros_prismPIKA/.test(HG.miss),
+      '✨ High quality can use another model (Prism Pika); vanilla stays the default, a PC without it is skipped: ' + JSON.stringify({HM, HG})); }
   // 🎭 Faces: one MiniMax redraw per face with only her pictures; SAM 3 follows her face from the tap; only the face is laid back
   { const FG = await page.evaluate(R => { const keep = H3.S.cast; ['fa1','fa2','fb1'].forEach(k => H3.S.media[k] = {kind:'img', thumb:'x', name:k + '.png'});
       H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['fa1','fa2'], keep:'exact'}, {n:2, kind:'char', stand:'a man', who:'Ben', pics:['fb1'], keep:'exact'}];
