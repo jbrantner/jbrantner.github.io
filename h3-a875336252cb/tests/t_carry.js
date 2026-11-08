@@ -130,7 +130,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // ↻ redo 1–2 s of the second clip (the original take)
   await page.click('[data-tab="films"]'); await page.waitForTimeout(500);
   await fr.evaluate(() => { FILM.SEL = window.C2; const r = FILM.clipOf(FILM.S.films[0], window.C2); FILM.PH = r.c.at + 1; FILM.draw(); }); await fr.click('[data-act="redo"]'); await page.waitForTimeout(300);
-  ok(await fr.evaluate(() => !document.querySelector('#sheet').hidden && /Redo a stretch/.test(document.querySelector("#sheetCard").textContent) && /walks to the window/.test(document.querySelector('#rdP').value)), "↻ opens a sheet with the stretch and the take's words there");
+  ok(await fr.evaluate(() => !document.querySelector('#sheet').hidden && /Edit a stretch/.test(document.querySelector("#sheetCard").textContent) && /walks to the window/.test(document.querySelector('#rdP').value)), "↻ opens a sheet with the stretch and the take's words there");
   await fr.evaluate(() => { const b = document.querySelector('#rdB'); b.value = 2; b.dispatchEvent(new Event('input')); document.querySelector('#rdP').value = 'she trips and catches herself'; document.querySelector('#rdN [data-v="2"]').click(); });
   const MS = await fr.evaluate(() => { const m = document.querySelector('#rdMod'); const opts = m ? [...m.options].map(o => o.value) : []; if(m){ m.value = opts[opts.length - 1]; m.dispatchEvent(new Event('change')); } document.querySelector('#rdSp [data-v="0"]').click(); return {opts, pick:m && m.value}; });
   ok(MS.opts.length >= 1 && MS.pick, '↻ the sheet has a model picker (' + MS.opts.length + ' models) and Turbo/Regular');
