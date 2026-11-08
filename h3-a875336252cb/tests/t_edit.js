@@ -283,6 +283,27 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const G = sent[sent.length - 1].g, nodes = Object.values(G), vl = nodes.find(n => n.class_type==='VHS_LoadVideo'), sc = nodes.find(n => n.class_type==='ImageScale'), cv = nodes.find(n => n.class_type==='CreateVideo');
     ok(U.id && U.film==='fU' && U.w % 32===0 && U.h % 32===0 && U.F > 20 && U.up==='phone clip.webm' && U.st==='queued' && vl && vl.inputs.force_rate===24 && (vl.inputs.custom_width===U.w) !== (vl.inputs.custom_height===U.h) && vl.inputs.frame_load_cap >= U.F && /^up_/.test(vl.inputs.video) && sc && sc.inputs.width===U.w && cv && cv.inputs.fps===24 && nodes.some(n => n.class_type==='SaveVideo'),
       '📤 an uploaded clip goes to a PC and comes back as a 24 fps take at a MiniMax size, in its film: ' + JSON.stringify({U, vl:vl && vl.inputs})); }
+  // 📝 prompt track (Jordan 2026-11-08): blocks under the video, each its own render with its own words and LoRAs
+  { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
+    await page.evaluate(() => { for(const u of Object.keys(H3.PC)){ const oi = H3.PC[u].oi; if(!oi) continue; oi.ImageBatch = {input:{required:{image1:['IMAGE'], image2:['IMAGE']}}}; oi.LoraLoaderModelOnly = {input:{required:{model:['MODEL'], lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'myStyle.safetensors']], strength_model:['FLOAT', {default:1}]}}}; } });
+    const src = await fr.evaluate(() => { const L = window.parent.H3.S.takes.filter(x => FILM.fileOf(x) && x.state!=='working' && !x.redo && !x.upName && x.pieces.length===1), t = L.find(x => x.id==='tA') || L[0]; return t && t.id; });
+    const P1 = await fr.evaluate(src => { const f = {id:'fPT', name:'Prompt test', tracks:[{id:'tP1', clips:[{id:'cP1', take:src, in:0, out:5, dur:5, at:0}]}, {id:'tP2', clips:[]}], pps:24}; FILM.S.films.push(f); FILM.go({v:'film', film:'fPT'});
+      const b1 = FILM.addBlock(f, 1), b2 = FILM.addBlock(f, 4), b3 = FILM.addBlock(f, 5), b4 = FILM.addBlock(f, 12), b5 = FILM.addBlock(f, 2);
+      FILM.draw && FILM.draw(); return {b1:b1 && [b1.at, b1.len], b2:b2 && [b2.at, b2.len], b3:b3 && [b3.at, b3.len], b4:b4 && [b4.at, b4.len], b5:!!b5, k:[b1, b2, b3, b4].map(b => FILM.blockPlan(f, b).kind), lane:!!document.querySelector('#ptrk'), n:document.querySelectorAll('#ptrk .pblk').length}; }, src);
+    await page.waitForTimeout(300);
+    const n0 = await page.evaluate(() => H3.S.takes.length);
+    const R1 = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.id==='fPT'), b = FILM.blocks(f)[0]; Object.assign(b, {prompt:'she turns to the window', str:0.7, loras:[{name:'myStyle.safetensors', str:0.6, words:''}]});
+      const ok = await FILM.renderBlock(f, b); return {ok, clips:f.tracks[0].clips.map(c => [c.at, c.in, c.out]).sort((x, y) => x[0] - y[0])}; });
+    const T1 = await page.evaluate(() => { const t = H3.S.takes[0]; return {redo:!!t.redo, str:t.redo && t.redo.str, lo:(t.loras || []).map(l => l.name + ':' + l.str), pr:t.prompt, film:t.film}; });
+    const R4 = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.id==='fPT'), b = FILM.blocks(f).find(x => x.at===12); b.prompt = 'a bird lands on the sill'; return await FILM.renderBlock(f, b); });
+    await page.waitForTimeout(1200);
+    const T4 = await page.evaluate(() => { const t = H3.S.takes.find(x => /bird lands/.test(x.prompt || '')); return t && {at:t.toFilm && t.toFilm.at, tr:t.toFilm && t.toFilm.track, clip:t.toFilm && t.toFilm.clip, secs:t.seconds}; });
+    const REDO = await page.evaluate(() => (document.querySelector('.toast:last-child') || {}).textContent || '');
+    await fr.evaluate(() => FILM.go({v:'film', film:FILM.S.films[0].id})); await page.waitForTimeout(400);
+    ok(src && P1.lane && JSON.stringify(P1.b1)==='[1,3]' && JSON.stringify(P1.b2)==='[4,1]' && P1.b3 && P1.b3[0]===5 && P1.b4 && P1.b4[0]===12 && !P1.b5 && P1.k.join()==='over,over,carry,new'
+      && R1.ok && JSON.stringify(R1.clips)==='[[0,0,1],[1,1,4],[4,4,5]]' && T1.redo && T1.str===0.7 && T1.lo.join()==='myStyle.safetensors:0.6' && /turns to the window/.test(T1.pr)
+      && R4 && T4 && T4.at===12 && T4.tr==='tP1' && !T4.clip,
+      '📝 prompt blocks: over video = that stretch remade as its own clip with the block\'s words, LoRAs and strength; after a clip = carry on; empty = a new clip right there: ' + JSON.stringify({src, P1, R1, T1, R4, T4, REDO})); }
   // 🎞 each film keeps its own form, cast and takes (Jordan 2026-11-07: prompts bled from one film to the next)
   { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url())); const A = await fr.evaluate(() => FILM.S.films[0].id);
     await page.evaluate(() => { H3.S.f.prompt = 'film A words'; document.querySelector('#prompt').value = 'film A words'; H3.S.f.loras = [{name:'aStyle.safetensors', str:1, words:''}]; H3.S.f.model = H3.S.f.model || 'mA'; H3.S.cast.push({n:7, kind:'char', stand:'a tall woman', who:'', keep:'exact'}); H3.saveNow(); });
