@@ -5,7 +5,7 @@ from PIL import Image
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'comfy-app.html'), encoding='utf-8').read()
 out = sys.argv[1]; os.makedirs(out, exist_ok=True)
 head = '''<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8"><script src="/rdh3-fresh.js"></script>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black"><meta name="theme-color" content="#120d2e">
