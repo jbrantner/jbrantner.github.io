@@ -268,7 +268,7 @@ body.bare .xf,body.bare .tools .xtra{display:none!important}
 .ptrk{position:relative;height:44px;border-bottom:1px solid var(--line);background:#ffffff05}
 .ptrk .tn{position:sticky;left:0;z-index:3;display:inline-block;font-size:10px;font-weight:800;color:var(--dim);padding:1px 6px;background:#111217dd;border-radius:0 0 6px 0;pointer-events:none;line-height:14px}
 .pblk{position:absolute;top:5px;height:34px;border-radius:7px;border:1px solid color-mix(in srgb,var(--cyan) 60%,var(--line));background:color-mix(in srgb,var(--cyan) 16%,var(--panel));overflow:hidden;touch-action:pan-x;user-select:none;-webkit-user-select:none}
-.pblk.sel{outline:2px solid var(--accent)}
+.pblk.sel{outline:2px solid var(--accent);touch-action:none}.pblk.sel .h{width:18px;background:#ffffff38}
 .pblk.rend{border-style:dashed;background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--cyan) 26%,var(--panel)) 0 7px,color-mix(in srgb,var(--cyan) 8%,var(--panel)) 7px 14px)}
 .pblk .nm{position:absolute;left:13px;right:13px;top:3px;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .pblk .du{position:absolute;right:13px;bottom:2px;font-size:10px;opacity:.8;pointer-events:none}
@@ -689,6 +689,13 @@ const unBlock = () => { if(!PSEL) return; PSEL = null; const x = $('#pbBox'); if
 let GO_N = 0; window.FILM_GO = n => { const g = $('#sheet').hidden ? $('#pbBox #pbGo') : ($('#sheetCard #rdGo') || $('#sheetCard #pbGo')); if(!g || g.disabled) return false; GO_N = n || 1; g.click(); return true; };
 const blocks = f => f.prompts = f.prompts || [];
 const blockOf = (f, id) => blocks(f).find(b => b.id===id);
+function anchorBlocks(f){ let ch = false; const all = f.tracks.flatMap(tr => tr.clips);
+  for(const b of blocks(f)){ let c = b.from && all.find(x => x.id===b.from);
+    if(!c){ c = activeAt(f, b.at + 0.02); if(!c) continue; b.from = c.id; delete b.tin; ch = true; }
+    if(b.tin == null){ b.tin = r2(c.in + (b.at - c.at)); ch = true; }
+    const at = r2(c.at + b.tin - c.in); if(Math.abs(at - b.at) > 0.005){ b.at = at; ch = true; } }
+  return ch; }
+const reanchor = (f, b) => { const c = b.from && f.tracks.flatMap(tr => tr.clips).find(x => x.id===b.from); if(c) b.tin = r2(c.in + (b.at - c.at)); };
 const r2 = x => Math.round(x * 100) / 100;
 function blockRoom(f, b, at){ const o = blocks(f).filter(x => x!==b);
   return {prev:Math.max(0, ...o.filter(x => x.at + x.len <= at + 1e-3).map(x => x.at + x.len)), nxt:Math.min(1e9, ...o.filter(x => x.at >= at - 1e-3).map(x => x.at))}; }
@@ -714,7 +721,7 @@ function blockPlan(f, b){ const c = activeAt(f, b.at + 0.02), r = c && clipOf(f,
   return best ? {kind:'carry', r:best} : {kind:'new'}; }
 const planText = (f, b, P) => P.kind==='over' ? '✏️ Remakes ' + fmt(b.at) + '–' + fmt(b.at + Math.min(b.len, P.b - P.a)) + ' of the video under it' + (P.cut ? ' (only up to where that clip ends)' : '') + ', as its own clip.'
   : P.kind==='wait' ? 'The video under it is still rendering: wait for it first.' : P.kind==='carry' ? '➕ Carries on from the clip before it for ' + fmt(b.len) + '.' : '✨ A new ' + fmt(b.len) + ' clip here.';
-function laneHtml(f){ const pps = f.pps; clipBlocks(f);
+function laneHtml(f){ const pps = f.pps; clipBlocks(f); anchorBlocks(f);
   return `<div class="ptrk" id="ptrk"><span class="tn">📝 Prompts · tap to add</span>${blocks(f).map(b => { const c = activeAt(f, b.at + 0.02), t = c && takeOf(c.take), rend = t && !fileOf(t) && workingOf(t);
     const lo = (b.loras || []).length ? ' · 🎨' + b.loras.length : '';
     return `<div class="pblk ${b.id===PSEL ? 'sel' : ''} ${rend ? 'rend' : ''}" data-b="${b.id}" style="left:${b.at * pps}px;width:${Math.max(6, b.len * pps)}px"><div class="h l" data-h="l"></div><div class="nm">${esc(b.prompt || 'tap to write')}</div><div class="du">${fmt(b.len)}${lo}</div><div class="h r" data-h="r"></div></div>`; }).join('')}</div>`; }
@@ -740,20 +747,29 @@ async function renderAll(f){ const L = blocks(f).filter(b => (b.prompt || '').tr
   toast(n ? '▶ ' + n + ' prompt block' + (n===1 ? '' : 's') + ' sent' + (later ? '; ' + later + ' wait for the video before them (▶ again when it\'s done)' : '') : later ? 'They wait for the video before them' : 'Write words in a block first', 6000); }
 function blockSheet(f, b){ const H = (() => { try{ return window.parent.H3 || null; }catch(e){ return null; } })(), LN = n => String(n || '').split(/[\\/]/).pop().replace(/\.safetensors$/i, '');
   b.loras = b.loras || []; const P = blockPlan(f, b), box = $('#pbBox'); if(!box) return;
+  // how far its ends can go: inside its clip (it moves with it) and not over its neighbours
+  const R0 = (() => { const rm = blockRoom(f, b, b.at), rn = blockRoom(f, b, b.at + b.len), c = b.from && f.tracks.flatMap(tr => tr.clips).find(x => x.id===b.from);
+    return {lo:r2(Math.max(rm.prev, c ? c.at : 0)), hi:r2(Math.min(rn.nxt, c ? c.at + len(c) : 1e9, filmSecs(f) || 1e9))}; })();
   if(SEL){ SEL = null; $$('.clip.sel').forEach(x => x.classList.remove('sel')); refreshTools(f); const vs = $('#vstrip'); if(vs){ vs.innerHTML = ''; vs.dataset.k = ''; } }
   const shut = () => { PSEL = null; box.innerHTML = ''; drawTL(f); };
   box.innerHTML = `<div style="margin-top:10px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:14px"><h3 style="display:flex;justify-content:space-between;align-items:center;margin:0 0 8px"><span>📝 ${fmt(b.at)}–${fmt(b.at + b.len)}</span><button class="btn" id="pbX">✕</button></h3>
     <textarea id="pbP" rows="4" style="width:100%;box-sizing:border-box" placeholder="What happens in this stretch">${esc(b.prompt || '')}</textarea>
-    <div class="lab" style="margin-top:10px"><span>Length (renders together)</span><b id="pbLv"></b></div><input type="range" id="pbL" min="${PB_MIN}" max="${PB_MAX}" step="0.25" value="${b.len}" style="width:100%">
+    <div class="lab" style="margin-top:10px"><span>Starts</span><b id="pbAv"></b></div><input type="range" id="pbA" min="${R0.lo}" max="${R0.hi}" step="0.05" value="${b.at}" style="width:100%">
+    <div class="lab" style="margin-top:10px"><span>Ends</span><b id="pbBv"></b></div><input type="range" id="pbB" min="${R0.lo}" max="${R0.hi}" step="0.05" value="${r2(b.at + b.len)}" style="width:100%">
+    <div class="lab" style="margin-top:6px"><span>Renders together</span><b id="pbLv"></b></div>
+    <button class="btn" id="pbSplit" style="width:100%;padding:10px;margin-top:6px" ${b.len >= 2 * PB_MIN - 1e-3 ? '' : 'disabled'}>✂ Split it in two</button>
     <div id="pbSW" ${P.kind==='over' ? '' : 'hidden'}><div class="lab" style="margin-top:10px"><span>How much it changes</span><b id="pbSv"></b></div><input type="range" id="pbS" min="0.3" max="1" step="0.05" value="${+b.str || 1}" style="width:100%"></div>
     ${H && H.redoLoras ? `<div class="lab" style="margin-top:10px"><span>LoRAs</span></div><div id="pbLo"></div>` : ''}
     <div class="note" id="pbN" style="margin-top:8px"></div>
     <div class="row" style="margin-top:8px;flex-wrap:nowrap"><button class="btn pri" id="pbGo" style="flex:1;padding:13px" ${EMBED && BARE() ? 'hidden' : ''}>▶ Render this block</button><button class="btn warn" id="pbDel" style="padding:13px;${EMBED && BARE() ? 'flex:1' : ''}">🗑 Delete block</button></div>
     ${blocks(f).filter(x => (x.prompt || '').trim()).length > 1 ? '<button class="btn" id="pbAll" style="width:100%;padding:11px;margin-top:6px">▶ Render every block</button>' : ''}</div>`;
   $('#pbX').onclick = shut;
-  const lab = () => { $('#pbLv').textContent = fmt(b.len); box.querySelector('h3 span').textContent = '📝 ' + fmt(b.at) + '–' + fmt(b.at + b.len); if($('#pbSv')) $('#pbSv').textContent = +b.str >= 0.995 ? 'all new' : (+b.str).toFixed(2); $('#pbN').textContent = planText(f, b, blockPlan(f, b)); };
+  const lab = () => { $('#pbLv').textContent = fmt(b.len); $('#pbAv').textContent = fmt(b.at); $('#pbBv').textContent = fmt(b.at + b.len); $('#pbSplit').disabled = b.len < 2 * PB_MIN - 1e-3; box.querySelector('h3 span').textContent = '📝 ' + fmt(b.at) + '–' + fmt(b.at + b.len); if($('#pbSv')) $('#pbSv').textContent = +b.str >= 0.995 ? 'all new' : (+b.str).toFixed(2); $('#pbN').textContent = planText(f, b, blockPlan(f, b)); };
   $('#pbP').oninput = e => { b.prompt = e.target.value; save(); };
-  $('#pbL').oninput = e => { const room = blockRoom(f, b, b.at).nxt - b.at; b.len = r2(Math.max(PB_MIN, Math.min(+e.target.value, PB_MAX, room))); e.target.value = b.len; save(); lab(); drawTL(f); };
+  $('#pbA').oninput = e => { const end = b.at + b.len; let a = Math.max(R0.lo, end - PB_MAX, Math.min(end - PB_MIN, +e.target.value)); b.at = r2(a); b.len = r2(end - b.at); e.target.value = b.at; reanchor(f, b); save(); lab(); drawTL(f); };
+  $('#pbB').oninput = e => { let en = Math.min(R0.hi, b.at + PB_MAX, Math.max(b.at + PB_MIN, +e.target.value)); b.len = r2(en - b.at); e.target.value = r2(b.at + b.len); save(); lab(); drawTL(f); };
+  $('#pbSplit').onclick = () => { if(b.len < 2 * PB_MIN - 1e-3) return; const h = r2(b.len / 2), nb = Object.assign(JSON.parse(JSON.stringify(b)), {id:uid('b'), at:r2(b.at + h), len:r2(b.len - h)});
+    b.len = h; reanchor(f, nb); blocks(f).push(nb); PSEL = b.id; save(); drawTL(f); blockSheet(f, b); toast('✂ Split: two blocks with the same words, each renders on its own', 3000); };
   if($('#pbS')) $('#pbS').oninput = e => { b.str = +e.target.value; save(); lab(); };
   const drawL = () => { const el = $('#pbLo'); if(!el) return; const all = (H.redoLoras() || []).filter(n => !b.loras.some(l => l.name===n));
     el.innerHTML = b.loras.map((l, i) => `<div style="display:grid;grid-template-columns:1fr 64px 34px;gap:6px;align-items:center;margin:4px 0"><span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(LN(l.name))}</span><input type="number" data-ls="${i}" value="${l.str}" step="0.05" min="0" max="2" style="width:64px"><button class="btn" data-lx="${i}">✕</button></div>`).join('')
@@ -775,11 +791,12 @@ function wireLane(f, tl){
     const mv = e => { const dx = (e.clientX - x0) / f.pps; if(!moved && Math.abs(e.clientX - x0) < 4) return; moved = true;
       if(h==='l'){ const end = b0.at + b0.len; let na = sn(b0.at + dx); na = Math.max(R.prev, end - PB_MAX, Math.min(end - PB_MIN, na)); b.at = r2(na); b.len = r2(end - na); }
       else if(h==='r'){ let ne = sn(b0.at + b0.len + dx); ne = Math.min(R.nxt, b0.at + PB_MAX, Math.max(b0.at + PB_MIN, ne)); b.len = r2(ne - b0.at); }
+      else if(b.from){ moved = false; return; }
       else { let na = sn(b0.at + dx); const e2 = edgeNear(f, na + b0.len); if(e2!=null && Math.abs(e2 - (na + b0.len)) < Math.abs(sn(na) - na) + 1e-6) na = e2 - b0.len;
         const o = blocks(f).filter(x => x!==b), lo = Math.max(0, ...o.filter(x => x.at + x.len <= b0.at + 1e-3).map(x => x.at + x.len)), hi = Math.min(1e9, ...o.filter(x => x.at >= b0.at + b0.len - 1e-3).map(x => x.at)) - b0.len;
         b.at = r2(Math.max(lo, Math.min(hi, na))); }
       el.style.left = b.at * f.pps + 'px'; el.style.width = Math.max(6, b.len * f.pps) + 'px'; el.querySelector('.du').textContent = fmt(b.len); };
-    const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); save(); if(moved) drawTL(f); blockSheet(f, b); };
+    const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); reanchor(f, b); save(); if(moved) drawTL(f); blockSheet(f, b); };
     el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); });
   tl.addEventListener('click', ev => { const ln = ev.target.closest('.ptrk'); if(!ln || ev.target.closest('.pblk')) return;
     const t = (ev.clientX - ln.getBoundingClientRect().left) / f.pps, b = addBlock(f, t); if(!b) return; drawTL(f); blockSheet(f, b); }); }
