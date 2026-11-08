@@ -16,7 +16,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const sent = []; // every graph the app queued, with ComfyUI's answer
   page.on('response', async r => { if(r.url().endsWith('/prompt') && r.request().method()==='POST'){ let j = {}; try{ j = await r.json(); }catch(e){} sent.push({url:r.url(), graph:JSON.parse(r.request().postData()).prompt, status:r.status(), ans:j}); } });
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  await page.addInitScript(([a, b]) => { window.H3_PCS = [{name:'Render', url:a, on:true, speed:1}, {name:'Main', url:b, on:true, speed:1.26}]; }, [A, B]);
+  await page.addInitScript(([a, b]) => { window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:a, on:true, speed:1}, {name:'Main', url:b, on:true, speed:1.26}]; }, [A, B]);
   await page.goto(APP);
   await page.waitForFunction(() => document.querySelectorAll('#model option').length > 1, null, {timeout:30000});
   const models = await page.$$eval('#model option', o => o.map(x => x.textContent));

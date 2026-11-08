@@ -31,7 +31,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
       return J({['g' + sent.length]:{status:{completed:true, status_str:'success'}, outputs:Object.fromEntries(saves.map(k => [k, {images:[{filename:g[k].inputs.filename_prefix.split('/').pop() + '_00001_.mp4', subfolder:'Output_Render/H3Deck/guides', type:'output'}], animated:[true]}]))}}); }
     if(p==='/view'){ views.push(u.searchParams.get('filename')); return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)}); }
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
-  await page.addInitScript(pc => { localStorage.clear(); window.H3_PCS = [{name:'Render', url:pc, on:true, speed:1}]; }, PC);
+  await page.addInitScript(pc => { localStorage.clear(); window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:pc, on:true, speed:1}]; }, PC);
   await page.goto('http://127.0.0.1:8013/index.html');
   await page.waitForFunction(() => /DaSiWa/.test(document.querySelector('#model').textContent), null, {timeout:20000});
   ok(/From a rough video/.test(await page.textContent('#roughBtn')), '🎭 From a rough video in the Motion guide');

@@ -45,7 +45,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Add
     if(p.startsWith('/history')) return J({});
     if(p==='/view'){ views.push([u.searchParams.get('subfolder'), u.searchParams.get('filename'), u.searchParams.get('type')]); return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)}); }
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
-  await page.addInitScript(pc => { if(!sessionStorage.getItem('kept')){ localStorage.clear(); sessionStorage.setItem('kept', '1'); } window.H3_PCS = [{name:'Render', url:pc, on:true, speed:1}]; }, PC);
+  await page.addInitScript(pc => { if(!sessionStorage.getItem('kept')){ localStorage.clear(); sessionStorage.setItem('kept', '1'); } window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:pc, on:true, speed:1}]; }, PC);
   await page.goto('http://127.0.0.1:8012/index.html');
   await page.waitForFunction(() => /DaSiWa/.test(document.querySelector('#model').textContent), null, {timeout:20000});
   await page.waitForFunction(() => H3.S.f.ctlVid, null, {timeout:10000}).catch(() => {});

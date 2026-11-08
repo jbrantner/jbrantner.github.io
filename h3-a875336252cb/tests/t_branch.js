@@ -29,7 +29,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t), types = g =
     if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
     if(p.startsWith('/history/')) return J({});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
-  await page.addInitScript(r => { localStorage.clear(); window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
+  await page.addInitScript(r => { localStorage.clear(); window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await page.goto('http://127.0.0.1:8013/index.html');
   await page.waitForFunction(() => H3.families().length > 0, null, {timeout:20000});
   // a finished 3-piece take

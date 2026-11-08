@@ -42,7 +42,7 @@ const POSES = [{kind:'posebook', id:'pzA', name:'Crouch', saved:2, head:1.2, thu
       return J({[id]:{status:{status_str:'success', completed:true}, outputs:{[sv]:{images:[{filename:'st_' + id + '.png', subfolder:'H3Deck/standins', type:'output', src:first}]}}}}); }
     if(p==='/view' && /^st_q\d+\.png$/.test(u.searchParams.get('filename'))){ const g = QW[+u.searchParams.get('filename').match(/q(\d+)/)[1] - 1], first = Object.values(g).find(n => n.class_type==='LoadImage').inputs.image; return rt.fulfill({contentType:'image/png', headers:H, body:UP[first] || Buffer.alloc(0)}); }
     return rt.fulfill({status:404, headers:H, body:''}); });
-  await page.addInitScript(r => { if(!sessionStorage.getItem('done')){ localStorage.clear(); sessionStorage.setItem('done', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; window.PK_PCS = [r]; }, R);
+  await page.addInitScript(r => { if(!sessionStorage.getItem('done')){ localStorage.clear(); sessionStorage.setItem('done', '1'); } window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; window.PK_PCS = [r]; }, R);
   await page.goto('http://127.0.0.1:8017/index.html');
   await page.waitForFunction(() => window.H3 && H3.families().length > 0, null, {timeout:20000});
 
