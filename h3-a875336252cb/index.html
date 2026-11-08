@@ -2088,8 +2088,12 @@ function drawInputs(){
   const bits = []; if(f.sm){ $('#inSum').textContent = '🪄 smoothing' + (sv ? ' · every ' + (+f.smEvery || 4) + (+f.smEvery===2 ? 'nd' : 'th') + ' frame' : ''); return; } if(f.fl) bits.push(f.last ? 'first + last' : 'first frame'); if(f.ctl && f.ctlVid) bits.push('🦴 motion'); if(f.ref){ const n = R.imgs.length + R.vids.length + R.auds.length + R.follow.length; bits.push(n + ' ref' + (n===1 ? '' : 's')); }
   $('#inSum').textContent = bits.join(' · ') || 'text only';
 }
+// 🦴 bare bones (Jordan 2026-11-08): just two models, Singularity V2 (PRISM PIKA) and the official MiniMax H3 Reference (pruned)
+const BARE_FAM = x => /singularity.*prism/i.test(x.key) || /^minimax_h3_ref2va_pruned/.test(x.key);
+const BARE_LABEL = x => /singularity/i.test(x.key) ? 'Singularity V2 (PRISM PIKA)' : 'MiniMax H3 Reference';
+function modelList(){ const all = families(); if(S.bare===false) return all; const b = all.filter(BARE_FAM).map(x => Object.assign({}, x, {label:BARE_LABEL(x)})); return b.length ? b : all; }
 function drawModel(){
-  const f = S.f, fams = families().filter(x => !(f.ref && x.fl2v)), sel = $('#model');
+  const f = S.f, fams = modelList().filter(x => !(f.ref && x.fl2v)), sel = $('#model');
   f.model = normKey(f.model);
   if(!fams.find(x => x.key===f.model) && fams.length) f.model = (fams.find(x => /dasiwa/.test(x.key)) || fams[0]).key;
   sel.innerHTML = fams.length ? fams.map(x => `<option value="${esc(x.key)}">${esc(x.label)}${x.pcs.size < S.pcs.length ? ' (' + [...x.pcs].map(pcName).join(', ') + ' only)' : ''}</option>`).join('') : '<option value="">Connecting to the PCs…</option>';
@@ -2462,7 +2466,7 @@ $('#whereSeg').onclick = e => { const b = e.target.closest('button'); if(b){ S.f
 $('#steps').oninput = e => { S.f.steps = e.target.value; save(); drawModel(); };
 $('#seed').oninput = e => { S.f.seed = e.target.value; save(); };
 $('#maxPiece').oninput = e => { S.f.maxPiece = +e.target.value; $('#maxOut').textContent = fmtS(S.f.maxPiece); S.f.pieceText = {}; save(); drawShot(); drawCanvas(); drawGo(); };
-$('#goBtn').onclick = render;
+$('#goBtn').onclick = () => { try{ if(S.tab==='films' && FW && FW.FILM_GO && FW.FILM_GO(+S.f.takes || 1)) return; }catch(e){} render(); };
 $('#pcDots').onclick = openPcs; $('#pcDots').setAttribute('role', 'button'); $('#pcDots').setAttribute('aria-label', 'PCs: status, queue and controls');
 $('#setBtn').onclick = () => {
   openSheet(`<h3>⚙ PCs <button class="btn" data-close>✕</button></h3><div class="sw ${S.bare===false ? 'on' : ''}" id="bareSw" style="margin-bottom:10px"><div><div class="t">🧰 Show all the tools</div><div class="d">Off = bare bones: clips, carry-ons, lead-ins, uploads and the Library. On = smoothing, redo, guides, 4K and the rest</div></div><div class="tog"></div></div>` + S.pcs.map((p, i) => { const q = pcOf(p.url), job = {model:S.f.model, turbo:S.f.turbo, loras:S.f.loras.filter(l => l.name), pieces:currentPlan(), vids:refsOn().vids, follow:refsOn().follow, imgs:refsOn().imgs, auds:refsOn().auds};
@@ -2613,6 +2617,10 @@ window.H3FilmWords = (w, at, tid, raw) => { if(S.tab!=='films' || !w || S.f.sm) 
   if(S.f.prompt!==w){ S.f.prompt = w; S.f.pieceText = {}; pb.value = w; FILMW = at; FILMP = w; save(); drawAll(); }
   FILMP = S.f.prompt; FILMTID = tid; FILMRAW = raw || w; if(!FILMED) FILMSIG = filmSig(); drawFilmNote(); return true; };
 window.H3FilmFollow = () => filmFollowAgain();
+// 📐 the canvas follows the clip under the playhead (Jordan 2026-11-08), until you change a setting yourself; not while carrying on
+window.H3FilmShape = t => { if(S.tab!=='films' || !t || !t.w || !t.h || S.f.sm || FILMED) return false; const m = S.f.fl && S.media[S.f.first]; if(m && m.carry) return false;
+  const r = t.w / t.h, a = S.bare!==false ? (r > 1.15 ? '16:9' : r < 0.87 ? '9:16' : '1:1') : (ASPECTS.slice().sort((x, y) => Math.abs(x[1] - r) - Math.abs(y[1] - r))[0] || ['16:9'])[0], mp = Math.round(t.w * t.h / 1e4) / 100;
+  if(S.f.aspect===a && Math.abs(+S.f.mp - mp) < 0.005) return false; S.f.aspect = a; S.f.mp = mp; save(); drawCanvas(); drawGo(); if(FILMSIG) FILMSIG = filmSig(); return true; };
 // when you stop typing in the Shot box, it catches up with the clip under the playhead (if that's another clip now)
 $('#prompt').addEventListener('blur', () => { if(S.tab!=='films') return; setTimeout(() => { try{ const F = FW.FILM; F.pushWords(F.S.films.find(x => x.id===F.S.nav.film)); }catch(e){} }, 50); });
 // scroll down to the Render form (under the timeline)
@@ -2866,7 +2874,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {modelList, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
