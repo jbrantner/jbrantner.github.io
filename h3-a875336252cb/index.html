@@ -1636,7 +1636,11 @@ function upGraph(t, oi, names){
     const A = part.a - part.s0, Ln = part.b - part.a, ck = add('CheckpointLoaderSimple', {ckpt_name:sam3Of(oi)});
     fmid = [add('ImageFromBatch', {image:[gc, 0], batch_index:part.a, length:Ln}), 0];
     const first = [add('ImageFromBatch', {image:fmid, batch_index:0, length:1}), 0], grow = Math.max(4, Math.round(Math.min(t.w, t.h) * 0.035)), orig = fmid;
-    let all = null; const allTrk = () => all = all || faceTrack(add, ck, orig, u.find);
+    // ✏️ Edit tracks over the whole take (Jordan 2026-11-08: the 🎭 sheet kept the eyes but Edit lost them: a short stretch that starts
+    // mid-move gives SAM 3 a worse start), then uses only the stretch's frames of each mask
+    const tk = u.trk && u.trk.a <= part.a && u.trk.b >= part.b ? u.trk : null, tFrames = tk ? [add('ImageFromBatch', {image:[gc, 0], batch_index:tk.a, length:tk.b - tk.a}), 0] : orig;
+    const cut = m => !tk ? m : [add('ImageToMask', {image:[add('ImageFromBatch', {image:[add('MaskToImage', {mask:m}), 0], batch_index:part.a - tk.a, length:Ln}), 0], channel:'red'}), 0];
+    let all = null; const allTrk = () => all = all || faceTrack(add, ck, tFrames, u.find);
     // 🔍 zoom (Jordan 2026-11-08: "have the camera zoom in and follow a cropped version of the video where the mask is sort of maximized"):
     // the window is cropped around the part on every frame (KJNodes BatchCropFromMask, smoothed so it follows without shaking), drawn by
     // MiniMax at full size, and put back (BatchUncrop); small parts like eyes get a wider crop so MiniMax still sees what they are
@@ -1647,7 +1651,7 @@ function upGraph(t, oi, names){
       if(fc.obj != null && fc.obj >= 0){ trk = allTrk(); idx = String(fc.obj); }
       else { const det = add('SAM3_Detect', {model:[ck, 0], image:first, positive_coords:JSON.stringify([{x:Math.round(fc.x * t.w), y:Math.round(fc.y * t.h)}]), threshold:0.4, refine_iterations:2, individual_masks:false});
         trk = add('SAM3_VideoTrack', {images:orig, model:[ck, 0], initial_mask:[det, 0], detection_threshold:0.5, max_objects:1, detect_interval:1}); }
-      const raw = [add('SAM3_TrackToMask', {track_data:[trk, 0], object_indices:idx}), 0]; let gen;
+      const raw = idx!=='' ? cut([add('SAM3_TrackToMask', {track_data:[trk, 0], object_indices:idx}), 0]) : [add('SAM3_TrackToMask', {track_data:[trk, 0], object_indices:idx}), 0]; let gen;
       if(zoomOn){ let mi = [add('MaskToImage', {mask:raw}), 0]; // the part over the whole window: its first and last frames held over the frames around it
         if(A > 0) mi = batchOf(add, oi, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:mi, batch_index:0, length:1}), 0], amount:A}), 0], mi);
         if(hold > 0) mi = batchOf(add, oi, mi, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:[add('MaskToImage', {mask:raw}), 0], batch_index:Ln - 1, length:1}), 0], amount:hold}), 0]);
@@ -3058,7 +3062,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:F / FPS, carry:null, combo:null, lead:null, toFilm:null, sm:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upPid:null, upErr:'', smoothed:fl, state:'working', reviewed:false, t0r:Date.now(),
-      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, unet:o.unet || '', refs:o.faces && o.faces.length ? true : o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, o.faces && o.faces.length && !big ? {faces:o.faces.map(f => f.obj != null ? {n:+f.n, obj:+f.obj} : {n:+f.n, x:+f.x, y:+f.y}), find:o.find || '', zoom:!!o.zoom} : {}, big ? {crop:{s0, L, pad, F}} : {part}), upStage:'start',
+      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, unet:o.unet || '', refs:o.faces && o.faces.length ? true : o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, o.faces && o.faces.length && !big ? Object.assign({faces:o.faces.map(f => f.obj != null ? {n:+f.n, obj:+f.obj} : {n:+f.n, x:+f.x, y:+f.y}), find:o.find || '', zoom:!!o.zoom}, o.trk ? {trk:faceAB(src, o.trk.a, o.trk.b)} : {}) : {}, big ? {crop:{s0, L, pad, F}} : {part}), upStage:'start',
       redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, wi:o.wi != null ? +o.wi : null, nudge:true, qp:!!o.qp, big, cin:(part.a - s0) / FPS, cout:(part.b - s0) / FPS, a:part.a, b:part.b, s0, L, F, Fout:big ? L : F},
       pieces:[{start:0, gen:big ? L : F, deliv:big ? L : F, ctx:0, prompt:text, state:'done', file:null}]});
     if(big) t.seconds = L / FPS; if(sd){ t.w = sd.w; t.h = sd.h; }

@@ -180,14 +180,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       FILM.SEL = 'cN'; FILM.PH = 1.5; FILM.redoSheet(FILM.S.films[0]); q('#rdM [data-v="parts"]').click();
       const r = {shown:!q('#rdFcW').hidden, modHid:q('#rdModW').hidden, strHid:q('#rdStrW').hidden, go0:q('#rdGo').textContent};
       q('#rdGo').click(); r.noSend = !sent; q('#fcWq [data-w="eyes"]').click(); q('#fcFind').click(); await w(2600);
-      r.asked = asked && asked.word==='eyes' && Math.abs(asked.a - 1.5) < 0.01; q('#fcWho [data-fp="1:0"]').click(); q('#fcWho [data-fp="1:1"]').click();
+      r.asked = asked && asked.word==='eyes' && asked.a===0 && asked.b >= 4.9; q('#fcWho [data-fp="1:0"]').click(); q('#fcWho [data-fp="1:1"]').click();
       r.go = q('#rdGo').textContent; const ch = [...document.querySelectorAll('#fcWho [data-fo]')]; r.chips = ch.map(x => x.textContent); ch[0].click();
       const ta = q('#rdP'); ta.value = 'her eyes turn into hypnotic spirals'; ta.dataset.typed = '1';
-      q('#rdGo').click(); await w(300); r.sent = sent && {faces:sent.faces, find:sent.find, zoom:sent.zoom, off:sent.descOff, a:sent.a, prompt:sent.prompt, clip:sent.clip, den:sent.den};
-      FILM.redoSheet(FILM.S.films[0]); const A = q('#rdA'); A.value = '0.8'; A.dispatchEvent(new Event('input')); r.reset = !FILM.S.films[0].tracks[0].clips[0].editScan && !!q('#fcFind');
+      q('#rdGo').click(); await w(300); r.sent = sent && {trk:sent.trk, faces:sent.faces, find:sent.find, zoom:sent.zoom, off:sent.descOff, a:sent.a, prompt:sent.prompt, clip:sent.clip, den:sent.den};
+      FILM.redoSheet(FILM.S.films[0]); const A = q('#rdA'); A.value = '0.8'; A.dispatchEvent(new Event('input')); r.reset = !!FILM.S.films[0].tracks[0].clips[0].editScan && !q('#fcFind') && !!q('#fcV');
       q('[data-close]').click(); Object.assign(window.parent, {H3FaceScan:ws, H3FaceScanGet:wg, H3Nudge:wn}); H.S.cast = keep; FILM.S.rdMode = 'redo'; FILM.S.maskWord = 'face'; return r; });
-    ok(EP.shown && EP.modHid && EP.strHid && EP.noSend && EP.asked && /Redraw 2 parts/.test(EP.go) && EP.sent && JSON.stringify(EP.sent.faces)==='[{"n":1,"obj":0},{"n":1,"obj":1}]' && EP.sent.find==='eyes' && EP.sent.zoom && EP.sent.clip==='cN' && /spirals/.test(EP.sent.prompt) && JSON.stringify(EP.sent.off)==='{"1":["green eyes"]}' && EP.reset,
-      '🎭 ✏️ Edit has Faces and parts: finds eyes in the stretch, both eyes picked, a detail left out, sent as a part-only nudge of the stretch; moving the stretch asks to find again: ' + JSON.stringify(EP)); }
+    ok(EP.shown && EP.modHid && EP.strHid && EP.noSend && EP.asked && /Redraw 2 parts/.test(EP.go) && EP.sent && JSON.stringify(EP.sent.faces)==='[{"n":1,"obj":0},{"n":1,"obj":1}]' && EP.sent.find==='eyes' && EP.sent.zoom && EP.sent.clip==='cN' && /spirals/.test(EP.sent.prompt) && JSON.stringify(EP.sent.off)==='{"1":["green eyes"]}' && EP.reset && EP.sent.trk && EP.sent.trk.a===0 && EP.sent.trk.b >= 4.9,
+      '🎭 ✏️ Edit has Faces and parts: finds eyes in the stretch, both eyes picked, a detail left out, sent as a part-only nudge of the stretch; SAM 3 follows it through the whole take, so moving the stretch keeps the scan: ' + JSON.stringify(EP)); }
   // when it's done, it goes in the clip like a redo (a new version)
   await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.nudge); t.upStage = 'done'; t.state = 'done'; t.final = {filename:'n_up.mp4', subfolder:'Output_Render/H3Deck/n', type:'output'}; H3.saveNow(); });
   await fr.evaluate(() => { FILM.placeNew(); FILM.draw(); });
@@ -275,8 +275,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const sg = Object.values(H3.faceScanGraph(t, {filename:'x.mp4', subfolder:''}, oi, {a:t.up.part.a, b:t.up.part.b}).g), tk = x => x.filter(n => n.class_type==='SAM3_VideoTrack').map(n => [n.inputs.detection_threshold, n.inputs.max_objects]);
       const fb = x => x.filter(n => n.class_type==='ImageFromBatch').map(n => [n.inputs.batch_index, n.inputs.length]);
       const r = {trk:C('SAM3_VideoTrack').length, det:C('SAM3_Detect').length, idx:C('SAM3_TrackToMask').map(n => n.inputs.object_indices), same:JSON.stringify(tk(g))===JSON.stringify(tk(sg).slice(0, 1)), win:JSON.stringify(fb(sg)[0]), pv:sg.some(n => n.class_type==='SAM3_TrackPreview'), txt:sg.find(n => n.class_type==='CLIPTextEncode').inputs.text};
-      r.inPass = fb(g).some(x => JSON.stringify(x)===r.win); H3.S.cast = keep; return r; }, R);
-    ok(FN.trk===1 && FN.det===0 && FN.idx.join()==='1,0' && FN.same && FN.pv && FN.inPass && FN.txt==='face:4', '🎭 numbered faces: one tracker on the same frames as the scan, each person takes her number: ' + JSON.stringify(FN)); }
+      r.inPass = fb(g).some(x => JSON.stringify(x)===r.win);
+      // ✏️ Edit: the tracker sees the whole take, each mask is cut back to the stretch
+      const p = t.up.part; t.up.trk = {a:0, b:p.F}; const g2 = Object.values(H3.upGraph(t, oi, {fa1:'fa1.png', fb1:'fb1.png'}).g), byId = H3.upGraph(t, oi, {fa1:'fa1.png', fb1:'fb1.png'}).g;
+      const tr2 = g2.find(n => n.class_type==='SAM3_VideoTrack'), im = byId[tr2.inputs.images[0]]; r.whole = im.class_type==='ImageFromBatch' && im.inputs.batch_index===0 && im.inputs.length===p.F;
+      r.cut = fb(g2).filter(x => x[0]===p.a && x[1]===p.b - p.a).length >= 3; H3.S.cast = keep; return r; }, R);
+    ok(FN.trk===1 && FN.det===0 && FN.idx.join()==='1,0' && FN.same && FN.pv && FN.inPass && FN.txt==='face:4' && FN.whole && FN.cut, '🎭 numbered faces (✏️ Edit: tracked over the whole take, masks cut to the stretch): one tracker on the same frames as the scan, each person takes her number: ' + JSON.stringify(FN)); }
   // 🎭 any part + 🔍 zoom (Jordan 2026-11-08): "eyes" found by SAM 3, two numbers for one person, each eye cropped, drawn big and put back
   { const ZM = await page.evaluate(R => { const keep = H3.S.cast; H3.S.media.fa1 = {kind:'img', thumb:'x', name:'fa1.png'};
       H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['fa1'], keep:'exact'}];
