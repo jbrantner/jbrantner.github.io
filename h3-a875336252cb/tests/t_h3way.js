@@ -45,14 +45,14 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(/<Subject 1> \(appears in \[Shot 1\]\): fully_preserved/.test(P) && /<Subject 2> \(appears in \[Shot 1\]\): weak_reference/.test(P), 'keep levels map to the official markers');
   ok(/<Audio 1> is the voice of Ellen \(S1\)\./.test(P) && /<Audio 1>: reference - /.test(P), 'a sound is a voice reference by default');
   ok(/summary:\n\[reference generation \+ audio reference\] It features <Subject 1>, <Subject 2> and <Subject 3>\. Ellen walks to the window\. She turns/.test(P), 'summary: task tags, subjects, the gist');
-  ok(/detailed_description:\nThe target video is in a live-action, cinematic style\.\n\[Shot 1\] \[0s-5s\] Ellen walks/.test(P), 'style sentence before [Shot 1], untimed words timed from 0 s');
+  ok(/detailed_description:\nThe target video is in a live-action, cinematic style\. The motion is smooth[^\n]*cinematography\.\n\[Shot 1\] \[0s-5s\] Ellen walks/.test(P), 'style sentence before [Shot 1], untimed words timed from 0 s');
   ok(/overall_soundscape:\nRain on the window\./.test(P) && /non_diegetic_music:\nN\/A$/.test(P), 'sound line, and N/A with no music');
 
   const Z = await page.evaluate(() => [H3.h3Prompt({h3:{}, text:'[2s-4s] a fox runs', secs:5}), H3.h3Prompt({h3:{}, text:'a fox keeps running', cont:true, secs:5}), H3.h3Prompt({h3:{}, text:'[0s-] a fox sits. [3s] it runs', secs:5})]);
   ok(!/\[0s-5s\]/.test(Z[0]) && /\[2s-4s\] a fox runs/i.test(Z[0]) && !/\[0s-/.test(Z[1]) && !/\[0s-5s\]/.test(Z[2]), '[0s-] is only added when no times are typed, and never to a piece that carries on: ' + JSON.stringify(Z.map(z => (z.match(/\[Shot 1\][^\n]*/) || [''])[0])));
   const B = await page.evaluate(() => [H3.h3Prompt({h3:{}, text:'a fox runs through snow', fl2v:true, first:true, last:true, secs:5.1667}), H3.h3Prompt({h3:{}, text:'a fox runs', fl2v:true, first:true}), H3.h3Prompt({h3:{}, text:'a fox', fl2v:false})]);
   console.log(B[0]);
-  ok(B[0].startsWith('How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 5.17-second mark of the target video.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. [0s-5.2s] A fox runs'), 'FL2VA: the official alignment line, then the description');
+  ok(B[0].startsWith('How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 5.17-second mark of the target video.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. The motion is smooth') && B[0].includes('cinematography. [0s-5.2s] A fox runs'), 'FL2VA: the official alignment line, then the description');
   ok(B[1].startsWith('For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.'), 'first frame only: the I2VA line');
   ok(B[2].startsWith('integrated_multimodal_description: [Shot 1]') && /overall_soundscape: Natural ambient/.test(B[2]), 'no references at all: the T2VA format, with a natural default sound');
 
@@ -114,14 +114,16 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.click('[data-asp="16:9"]'); const C0 = await page.evaluate(() => ({d:H3.dims(), shown:!document.querySelector('#customWH').hidden}));
   ok(CU.shown && CU.res && CU.d.w===992 && CU.d.h===416 && CU.snap.w===992 && /992×416/.test(CU.note) && CB.w===CB.h && CB.w * CB.h <= 768 * 1344 && CB.w % 32===0 && CS.join()===[CB.w, CB.h].join() && !C0.shown && C0.d.w > C0.d.h,
     '✏ Custom canvas: width × height snapped to 32, over the cap shrunk same shape, back to a ratio chip hides it: ' + JSON.stringify({d:CU.d, shown:CU.shown, res:CU.res, sw:CU.snap.w, note:CU.note, big:CB, CS, back:C0}));
-  ok(/\n\[Shot 1\] she walks to the window\n\[Shot 2\] close-up of her eyes/.test(SH.P) && /appears in every shot/.test(SH.P) && /multi-shot/.test(SH.P) && /\[Shot 1\] Live-action, cinematic\. She walks in\n\[Shot 2\] her face/.test(SH.B), '🎬 the H3 prompt puts each shot on its own line: ' + JSON.stringify(SH.P.slice(-400)));
+  ok(/\n\[Shot 1\] she walks to the window\n\[Shot 2\] close-up of her eyes/.test(SH.P) && /appears in every shot/.test(SH.P) && /multi-shot/.test(SH.P) && /\[Shot 1\] Live-action, cinematic\. The motion is smooth[^\n]*cinematography\. She walks in\n\[Shot 2\] her face/.test(SH.B), '🎬 the H3 prompt puts each shot on its own line: ' + JSON.stringify(SH.P.slice(-400)));
   await page.click('#h3Peek summary'); await page.screenshot({path:path.join(__dirname, 'h3way.png'), fullPage:false, clip:{x:0, y:0, width:390, height:1400}}).catch(() => {});
-  // 🎨 style chips (Jordan 2026-11-08): a preset goes into the H3 prompt as written; tapping it again goes back to none
-  const ST = await page.evaluate(() => { const q = s => document.querySelector(s); H3.S.f.h3 = true; H3.S.f.sm = false; H3.drawH3 && H3.drawH3();
-    const r = {row:!q('#styleRow').hidden, n:document.querySelectorAll('#styleChips [data-style]').length}; q('#styleChips [data-style="2d"]').click();
-    r.on = q('#styleChips [data-style="2d"]').classList.contains('pri'); r.f = H3.S.f.h3Style; r.box = q('#h3Style').value;
-    r.P = H3.h3Prompt({h3:{style:H3.S.f.h3Style}, text:'she waves', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
-    q('#styleChips [data-style="2d"]').click(); r.off = H3.S.f.h3Style; return r; });
-  ok(ST.row && ST.n===4 && ST.on && /hand-drawn 2D animation/.test(ST.f) && ST.box===ST.f && ST.P.includes(ST.f) && /not live action/.test(ST.P) && ST.off==='', '🎨 style chips: 2D goes into the H3 prompt, tapping it again clears it: ' + JSON.stringify({row:ST.row, n:ST.n, on:ST.on, off:ST.off}));
+  // ✨ motion and quality words (Jordan 2026-11-08): on by default, after the style; tapping turns them off; an old preset is cleared
+  const ST = await page.evaluate(() => { const q = s => document.querySelector(s); H3.S.f.h3 = true; H3.S.f.sm = false; delete H3.S.f.quality;
+    H3.S.f.h3Style = 'The target video is photorealistic live-action film footage shot on a real cinema camera: real people with natural skin texture and pores, real locations, natural light and lens depth of field. It is not animation, not a cartoon, not anime, not a 3D render and not CGI.'; H3.drawH3();
+    const r = {row:!q('#styleRow').hidden, on:q('#styleChips [data-q]').classList.contains('pri'), cleared:H3.S.f.h3Style===''};
+    const P = o => H3.h3Prompt({h3:Object.assign({style:''}, o), text:'she waves', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
+    r.P = P({}); r.B = H3.h3Prompt({h3:{style:''}, text:'she waves', secs:5}); r.Poff = P({quality:false});
+    q('#styleChips [data-q]').click(); r.off = H3.S.f.quality===false && /off/.test(q('#styleChips [data-q]').textContent); q('#styleChips [data-q]').click(); r.back = H3.S.f.quality!==false; return r; });
+  ok(ST.row && ST.on && ST.cleared && /style\. The motion is smooth, fluid and natural/.test(ST.P) && /Clothing stays solid, opaque/.test(ST.P) && /cinematic\. The motion is smooth/.test(ST.B) && !/motion is smooth/.test(ST.Poff) && !/skin texture/.test(ST.P) && ST.off && ST.back,
+    '✨ motion and quality words: on by default after the style (both prompt formats), off when tapped, the old live-action preset cleared: ' + JSON.stringify({row:ST.row, on:ST.on, cleared:ST.cleared, off:ST.off}));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
