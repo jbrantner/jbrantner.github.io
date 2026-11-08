@@ -270,11 +270,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // 🦴 bare bones + 📤 upload a clip (Jordan 2026-11-08)
   { await page.click('#setBtn'); await page.click('#bareSw'); await page.waitForTimeout(300);
     const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
-    const B = await page.evaluate(() => ({bare:document.body.classList.contains('bare'), sm:getComputedStyle(document.querySelector('#smSw')).display, ref:getComputedStyle(document.querySelector('#refSw')).display, S:H3.S.bare}));
+    const B = await page.evaluate(() => ({bare:document.body.classList.contains('bare'), sm:getComputedStyle(document.querySelector('#smSw')).display, ref:getComputedStyle(document.querySelector('#refSw')).display, more:getComputedStyle(document.querySelector('#bMore')).display, S:H3.S.bare}));
     const FB = await fr.evaluate(() => { const vis = s => { const e = document.querySelector(s); return !!e && getComputedStyle(e).display!=='none'; }; return {bare:document.body.classList.contains('bare'), redo:vis('.tools [data-act="redo"]'), carry:vis('.tools [data-act="carry"]'), lead:vis('.tools [data-act="lead"]'), up:vis('.tools [data-act="upload"]'), more:vis('.tools [data-act="moreTools"]')}; });
     await page.click('#bareSw'); await page.click('#sheet', {position:{x:5, y:5}});
     const B2 = await page.evaluate(() => ({bare:document.body.classList.contains('bare'), S:H3.S.bare}));
-    ok(B.bare && B.S===true && B.sm==='none' && B.ref!=='none' && FB.bare && !FB.redo && FB.carry && FB.lead && FB.up && !FB.more && !B2.bare && B2.S===false, '🦴 ⚙ Show all the tools off = bare bones (no smoothing, redo, guides), on = everything back: ' + JSON.stringify({B, FB, B2}));
+    ok(B.bare && B.S===true && B.sm==='none' && B.more==='none' && B.ref!=='none' && FB.bare && !FB.redo && FB.carry && FB.lead && FB.up && !FB.more && !B2.bare && B2.S===false, '🦴 ⚙ Show all the tools off = bare bones (no smoothing, redo, guides), on = everything back: ' + JSON.stringify({B, FB, B2}));
     const n0 = await page.evaluate(() => 0);
     const U = await page.evaluate(async R => { Object.assign(H3.PC[R].oi, {ImageScale:{input:{required:{image:['IMAGE'], upscale_method:[['lanczos']], width:['INT', {default:512}], height:['INT', {default:512}], crop:[['center']]}}},
         VHS_LoadVideo:{input:{required:{video:[['a.mp4']], force_rate:['FLOAT', {default:0}], custom_width:['INT', {default:0}], custom_height:['INT', {default:0}], frame_load_cap:['INT', {default:0}], skip_first_frames:['INT', {default:0}], select_every_nth:['INT', {default:1}]}, optional:{}}}});
