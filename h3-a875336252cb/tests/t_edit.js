@@ -255,6 +255,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const sh = document.getElementById('sheet'); if(sh) sh.hidden = true; H.S.bare = bw; return r; });
     ok(PW.lane==='' && PW.boxes0===1 && PW.vid && PW.boxes1===2 && PW.sl && PW.wins.some(w => w[2]==='she sits down' && Math.abs(w[0] - (PW.cin + 1.5)) < 0.01) && PW.segs===PW.wins.length && PW.cb===2 && PW.cbs && PW.vc && PW.go && PW.go.w===2 && PW.go.p,
       '📝 a clip\'s words are prompt windows with switch sliders, and ⛓ Combine keeps them (no prompt lane in bare bones): ' + JSON.stringify(PW)); }
+  // 🗂 Renders tab: every take from every film, rendering ones first, with filters
+  { await page.click('#tabs [data-tab="renders"]'); await page.waitForTimeout(300);
+    const RT = await page.evaluate(() => { const q = s => document.querySelector(s), cards = () => [...document.querySelectorAll('#rtList .take')];
+      const r = {shown:!q('#rendersTab').hidden, films:q('#renderTab').hidden, n:cards().length, all:H3.S.takes.length, fl:!!q('#rtList .rtFilm')};
+      const w = H3.S.takes.filter(t => t.state==='working').length; q('#rtSeg [data-rt="done"]').click(); r.done = cards().length; r.doneN = H3.S.takes.filter(t => t.state!=='working' && t.state!=='failed').length;
+      q('#rtSeg [data-rt="all"]').click(); const ids = cards().map(e => e.dataset.take), st = ids.map(id => H3.S.takes.find(t => t.id===id).state), fw = st.indexOf('working');
+      r.order = fw < 0 || st.slice(0, w).every(x => x==='working'); return r; });
+    await page.click('#tabs [data-tab="films"]'); await page.waitForTimeout(200);
+    ok(RT.shown && RT.films && RT.n===RT.all && RT.fl && RT.done===RT.doneN && RT.order, '🗂 Renders tab lists every take (rendering first), filters to Done: ' + JSON.stringify(RT)); }
   ok(QF.n===1 && QF.takes==='tA,tA' && QF.p==='failed', '✨ the fake PC can\'t run it (no Open-H3 LoRA): the pass fails and nothing changes: ' + JSON.stringify(QF));
   // ↻ a failed pass shows on the track; retry sends only the failed parts again, same key and seed, keeping the good ones
   await fr.evaluate(() => FILM.draw());

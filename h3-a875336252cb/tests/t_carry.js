@@ -224,7 +224,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const fol = await page.evaluate(() => ({l:H3.S.f.loras.length, p:H3.S.f.prompt}));
   ok(fol.l===0 && /walks to the window/.test(fol.p), '↺ Follow the clip again loads the clip under the playhead (' + JSON.stringify(fol) + ')');
   // the Render tab is gone: Films is the main screen; 🎭 Use as guide is on the timeline
-  ok(await page.evaluate(() => [...document.querySelectorAll('#tabs [data-tab]')].map(b => b.dataset.tab).join())==='films,lib', 'the tabs are 🎞 Films and 📚 Library (no 🎬 Render tab)');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#tabs [data-tab]')].map(b => b.dataset.tab).join())==='films,lib,renders', 'the tabs are 🎞 Films, 📚 Library and 🗂 Renders (no 🎬 Render tab)');
   await page.evaluate(() => { window.GUIDED = null; window.H3GuideReal = window.H3Guide; window.H3Guide = id => { window.GUIDED = id; }; });
   await fr.evaluate(() => { FILM.SEL = window.C1; FILM.draw(); }); await fr.click('[data-act="guide"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => window.GUIDED)==='tA', '🎭 Use as guide on the timeline makes the selected clip\'s take the Motion guide');
