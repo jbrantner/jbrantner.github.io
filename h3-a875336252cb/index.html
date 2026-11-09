@@ -2355,13 +2355,24 @@ function drawH3(){
 const CK = {model:'huihui_ai/qwen3-abliterated:8b', port:8443};
 const ckUrl = () => S.llmUrl || ((S.pcs.find(p => /render/i.test(p.name)) || S.pcs[0] || {url:''}).url.replace(/:\d+$/, '') + ':' + CK.port);
 const ckKind = f => f.finOn && finAble(f.model) ? 'VANILLA THEN PIKA' : /prism|pika|singularity|eros/i.test(f.model || '') ? 'PIKA' : 'VANILLA';
-const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio) \d+>/g) || []);
+const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio|Subject) \d+>/g) || []);
 function ckParse(txt){ txt = String(txt || '').replace(/<think>[\s\S]*?<\/think>/g, ''); const a = txt.indexOf('{'), b = txt.lastIndexOf('}'); if(a < 0 || b < a) throw new Error('no answer');
   const j = JSON.parse(txt.slice(a, b + 1)); return {verdict:String(j.verdict || 'fix'), issues:Array.isArray(j.issues) ? j.issues.slice(0, 8) : [], shot:String(j.shot || ''), keep:String(j.keep_out || '').trim()}; }
 // Render's 8 GB card can't hold a render and the 5.6 GB model at once (a check during a render hung on Ollama's 5-minute load limit,
 // 2026-11-09), so a check waits until that PC's ComfyUI queue is empty and then runs by itself
 const ckPc = () => (S.pcs.find(p => /render/i.test(p.name)) || S.pcs[0] || {url:''}).url;
 async function ckBusy(){ if(S.llmUrl) return 0; try{ const q = await getJ(ckPc() + '/queue', null, 6000); return (q.queue_running || []).length + (q.queue_pending || []).length; }catch(e){ return 0; } }
+// 👥 names (Jordan 2026-11-09: "the prompt check seems to replace one of the characters with Ellen, a different character than was assigned").
+// Why: the shot says <Subject 1>, but the FULL PROMPT numbers its subjects in its own order (cast first, then the rest), so the model matched
+// the shot's <Subject 1> with whoever is <Subject 1> in the full prompt. Now the shot goes out with each tag written as the character's own
+// name, the model is told who is who, and the names come back as the same <Subject n> tags.
+function ckNames(shot){ const m = [], used = {};
+  (String(shot).match(/<\s*subject\s*\d+\s*>/gi) || []).forEach(t => { const n = +t.match(/\d+/)[0]; if(m.some(x => x.n===n)) return; const c = castOf(n), nm = c ? castName(c).trim() : '';
+    m.push({n, tag:'<Subject ' + n + '>', name:nm && nm.split(/\s+/).length <= 3 && !/^subject \d+$/i.test(nm) ? nm : ''}); });
+  m.forEach(x => { if(x.name) used[x.name.toLowerCase()] = (used[x.name.toLowerCase()] || 0) + 1; }); m.forEach(x => { if(x.name && used[x.name.toLowerCase()] > 1) x.name = ''; }); return m.filter(x => x.name); }
+const ckEsc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const ckOut = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('<\\s*subject\\s*' + x.n + '\\s*>', 'gi'), x.name), shot);
+const ckBack = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('(^|[^\\w<])' + ckEsc(x.name) + '(?![\\w>])', 'g'), (a, b) => b + x.tag), shot);
 async function checkPrompt(){
   const f = S.f, shot = (f.prompt || '').trim(), btn = $('#ckBtn'), out = $('#ckOut'); if(!shot) return toast('Write the shot first');
   if(S.ckWait) return; let n = await ckBusy();
@@ -2372,10 +2383,12 @@ async function checkPrompt(){
   try{
     const rules = await (await fetch('checker-rules.md', {cache:'no-cache'})).text();
     let full = ''; if(f.h3 && !f.sm){ h3Peek(); full = $('#h3Pre').textContent; }
-    const user = 'MODEL: ' + kind + '\n\nSHOT:\n' + shot + (full ? '\n\nFULL PROMPT:\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, 120 to 250 words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
+    const N = ckNames(shot), who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
+    const user = 'MODEL: ' + kind + who + '\n\nSHOT:\n' + ckOut(shot, N) + (full ? '\n\nFULL PROMPT (context only; its <Subject n> numbers are not the same as the shot\'s, so go by the names in the SHOT):\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, 120 to 250 words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
     const r = await getJ(ckUrl() + '/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:S.llmModel || CK.model, stream:false, think:false, format:'json', keep_alive:0,
       options:{temperature:0.3, num_ctx:8192}, messages:[{role:'system', content:rules}, {role:'user', content:user}]})}, 240000);
-    S.ck = Object.assign(ckParse(r.message && r.message.content), {kind, orig:shot}); drawCk();
+    const A = ckParse(r.message && r.message.content); A.shot = ckBack(A.shot, N); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
+    S.ck = Object.assign(A, {kind, orig:shot}); drawCk();
   }catch(e){ S.ck = {err:/abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
   finally{ btn.disabled = false; btn.textContent = '🔎 Check prompt'; } }
 function drawCk(){ const out = $('#ckOut'), c = S.ck; if(!out) return; out.hidden = !c; if(!c) return;
@@ -2386,7 +2399,7 @@ function drawCk(){ const out = $('#ckOut'), c = S.ck; if(!out) return; out.hidde
   out.innerHTML = `<div class="stl" style="font-weight:700">${c.verdict==='good' ? (changed ? '✅ No problems for ' + esc(c.kind) + '. Here\'s a more detailed version:' : '✅ Looks good for ' + esc(c.kind)) : '🔧 Suggestions for ' + esc(c.kind)}</div>`
     + (c.issues.length ? '<ul style="margin:6px 0 0;padding-left:18px">' + c.issues.map(i => `<li class="note stl" style="margin:3px 0"><b>${esc(i.where || 'shot')}:</b> ${esc(i.problem || '')}${i.fix ? ' → ' + esc(i.fix) : ''}</li>`).join('') + '</ul>' : '')
     + (changed ? `<details open style="margin-top:8px"><summary class="note stl">Suggested shot</summary><pre style="white-space:pre-wrap;margin:6px 0 0">${esc(c.shot)}</pre></details>` : '')
-    + (changed && miss.length ? `<div class="note stl">⚠ It dropped ${esc(miss.join(' '))}; check before using.</div>` : '')
+    + (changed && (miss.length || (c.lost || []).length) ? `<div class="note stl">⚠ It dropped ${esc(miss.concat(c.lost || []).join(', '))}; check before using.</div>` : '')
     + (c.keep ? `<div class="note stl" style="margin-top:6px">🚫 Keep out ideas: ${esc(c.keep)}</div>` : '')
     + '<div class="chips" style="margin-top:8px">' + (changed ? '<button class="btn pri" data-ck="use">Use this shot</button>' : '') + (S.ckUndo != null ? '<button class="btn" data-ck="undo">↩ Undo</button>' : '')
     + (c.keep ? '<button class="btn" data-ck="keep">Add to 🚫 Keep out</button>' : '') + '<button class="btn" data-ck="x">Close</button></div>'; }
@@ -3372,7 +3385,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {Q_STYLES, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
