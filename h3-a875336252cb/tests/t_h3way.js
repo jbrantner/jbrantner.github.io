@@ -124,7 +124,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     r.P0 = P({}); r.Pq = P({quality:true}); r.Bq = H3.h3Prompt({h3:{style:'', quality:true}, text:'she waves', secs:5}); r.own = /my words here/.test(H3.h3Prompt({h3:{style:'', quality:true, qtext:'my words here'}, text:'x', secs:5}));
     q('#styleChips [data-q]').click(); r.on = H3.S.f.quality===true && /on/.test(q('#styleChips [data-q]').textContent) && H3.snapshot().h3.quality===true; q('#styleChips [data-q]').click(); r.back = H3.S.f.quality!==true && H3.snapshot().h3.quality===false; return r; });
   const qs = ST.Pq.split('detailed_description:')[1].split('[Shot 1]')[0];
-  ok(ST.row && ST.off0 && ST.cleared && !/tripod/.test(ST.P0) && /style\. The camera is on a tripod/.test(ST.Pq) && /cinematic\. The camera is on a tripod/.test(ST.Bq) && !/detailed|sharp|professional|skin|clothing|bod(y|ies)|rich|flattering/i.test(qs) && ST.own && ST.on && ST.back,
+  ok(ST.row && ST.off0 && ST.cleared && !/follow-through/.test(ST.P0) && /style\. The motion is smooth, fluid and natural/.test(ST.Pq) && /cinematic\. The motion is smooth, fluid/.test(ST.Bq) && !/skin/i.test(qs) && ST.own && ST.on && ST.back,
     '✨ motion and quality words: off by default, on after a tap (both prompt formats, concrete camera and light words only): ' + JSON.stringify({row:ST.row, off0:ST.off0, cleared:ST.cleared, on:ST.on, back:ST.back}));
   // 🚫 Keep out (Jordan 2026-11-09): on by default, the NAG guider with the keep-out words in place of the plain guider; own words and strength;
   // off = plain guider; a PC without the node gets no 🚫 job while another PC has it; an old take (no neg field) follows the form
