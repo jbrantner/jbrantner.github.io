@@ -161,5 +161,23 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     f.model = H3.families().find(x => /singularity|prism|pika/.test(x.key)).key; H3.drawAll && H3.drawAll(); r.hiddenOnPika = q('#finRow').hidden && !H3.snapshot().fin;
     f.finOn = false; f.model = H3.families().find(x => /hybrid/.test(x.key)).key; H3.drawAll && H3.drawAll(); return r; }, R);
   ok(FP.row && FP.on && FP.fin && FP.split && FP.models && FP.hiddenOnPika, '🔀 Finish on PIKA: split sigmas, first model then PIKA from its latent, hidden when the model is PIKA: ' + JSON.stringify(FP));
+  // 🔎 Check prompt (Jordan 2026-11-09): a local uncensored LLM (Ollama on Render, :8443) checks the shot with checker-rules.md; Use this / Undo / Keep out
+  let ckReq = null; await page.route('http://render.test:8443/**', async rt => { if(rt.request().method()==='OPTIONS') return rt.fulfill({status:204, headers:{'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Headers':'*'}});
+    ckReq = JSON.parse(rt.request().postData()); const shot = ckReq.messages[1].content.includes('[1s-3s]') ? 'She walks in. [1s-3s] She waves.' : 'Mei, in a thick opaque white cotton tank top, walks in from the left. [0s-2s] The camera pushes in slowly.';
+    rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify({message:{content:'<think></think>' + JSON.stringify({verdict:'fix', issues:[{where:'subject', problem:'"large breasts" in Mei\'s description', fix:'switch it off with the 🏷 chip'}], shot, keep_out:'nipples showing through clothing, a brand new thing'})}})}); });
+  const CKR = await page.evaluate(async () => { const q = s => document.querySelector(s), f = H3.S.f; const r = {btn:!!q('#ckBtn') && q('#ckBtn').offsetParent!==null, url:H3.ckUrl()};
+    f.model = 'singularityv2x10eros_prismpika'; f.finOn = false; r.kindP = H3.ckKind(f); f.model = 'minimax_h3_ref2va'; r.kindV = H3.ckKind(f); f.finOn = true; r.kindF = H3.ckKind(f); f.finOn = false; f.model = 'singularityv2x10eros_prismpika';
+    const p = q('#prompt'); p.value = 'Mei walks in. [0s-2s] large breasts bounce'; p.oninput({target:p});
+    q('#ckBtn').click(); for(let i = 0; i < 50 && (q('#ckOut').hidden || q('#ckBtn').disabled); i++) await new Promise(z => setTimeout(z, 100));
+    r.shown = !q('#ckOut').hidden && /Suggestions for PIKA/.test(q('#ckOut').textContent) && /large breasts/.test(q('#ckOut').textContent);
+    q('#ckOut [data-ck="use"]').click(); r.used = /opaque white cotton/.test(f.prompt) && /opaque white cotton/.test(p.value);
+    q('#ckOut [data-ck="undo"]').click(); r.undone = f.prompt==='Mei walks in. [0s-2s] large breasts bounce';
+    f.neg = ''; q('#ckOut [data-ck="keep"]').click(); r.keep = f.negOn!==false && /a brand new thing/.test(f.neg) && (f.neg.match(/nipples showing through clothing/g) || []).length===1;
+    p.value = 'She walks in. [1s-3s] She waves.'; p.oninput({target:p}); q('#ckBtn').click(); await new Promise(z => setTimeout(z, 300)); r.noDrop = !/dropped/.test(q('#ckOut').textContent);
+    H3.S.ck = {verdict:'fix', issues:[], shot:'no tags here', orig:'a [0s-2s] b', keep:'', kind:'PIKA'}; H3.drawCk(); r.drop = /dropped \[0s-2s\]/.test(q('#ckOut').textContent);
+    q('#ckOut [data-ck="x"]').click(); r.closed = q('#ckOut').hidden; f.neg = ''; p.value = ''; p.oninput({target:p}); return r; });
+  ok(CKR.btn && CKR.url==='http://render.test:8443' && CKR.kindP==='PIKA' && CKR.kindV==='VANILLA' && CKR.kindF==='VANILLA THEN PIKA' && CKR.shown && CKR.used && CKR.undone && CKR.keep && CKR.noDrop && CKR.drop && CKR.closed
+    && ckReq && ckReq.model==='huihui_ai/qwen3-abliterated:8b' && ckReq.keep_alive===0 && ckReq.format==='json' && /prompt checker inside H3 Deck/.test(ckReq.messages[0].content) && /^MODEL: PIKA/.test(ckReq.messages[1].content),
+    '🔎 Check prompt: asks the local LLM with the rulebook and the model kind, shows its notes, Use this / Undo / Keep out, warns about dropped tags: ' + JSON.stringify(CKR));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
