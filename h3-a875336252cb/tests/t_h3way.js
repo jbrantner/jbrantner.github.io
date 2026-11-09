@@ -6,14 +6,14 @@ const path = require('path'), http = require('http'), fs = require('fs');
 const R = 'http://render.test';
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
-  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['AFK_Claude_minimaxh3.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
-  'LoadImage','LoadVideo','LoadAudio','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale'];
+  'LoadImage','LoadVideo','LoadAudio','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','SplitSigmas','DisableNoise','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale'];
 const node = (g, t) => Object.values(g).find(n => n.class_type===t);
 (async () => {
   const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
@@ -150,5 +150,16 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(BB.sum && BB.scale, '🚫 the box and its Strength stay visible in bare bones: ' + JSON.stringify(BB));
   ok(NG.chip && NG.box && NG.ph && NG.peek && NG.neg && NG.own && NG.offChip && NG.off && NG.backOn && NG.route && NG.old && NG.again && NG.againOff && NG.againDef,
     '🚫 Keep out: on by default with the NAG guider and the keep-out words, own words and strength, off = plain guider, only to a PC with the node, back into the form: ' + JSON.stringify(NG));
+  // 🔀 Finish on PIKA (Jordan 2026-11-09): the first model samples the first part of the steps, PIKA + the LoRAs the rest from that latent
+  const FP = await page.evaluate(R => { const q = s => document.querySelector(s), f = H3.S.f, oi = H3.PC[R].oi; f.model = H3.families().find(x => /hybrid/.test(x.key)).key; f.finOn = false; f.finAt = 0.5; H3.drawAll && H3.drawAll();
+    const r = {row:!q('#finRow').hidden}; q('#finSw').click(); r.on = f.finOn===true;
+    const t = H3.snapshot(); Object.assign(t, {id:'tf', pc:R, seed:5, dir:'H3Deck/h3_tf', name:'h3_tf'}); r.fin = t.fin && t.fin.at===0.5;
+    const g = H3.pieceGraph(t, 0, oi, {}).g, ks = Object.keys(g), by = c => ks.filter(k => g[k].class_type===c);
+    const sp = by('SplitSigmas')[0], sa = by('SamplerCustomAdvanced'), un = by('UNETLoader').map(k => g[k].inputs.unet_name);
+    r.split = !!sp && sa.length===2 && g[sa[0]].inputs.sigmas[0]===sp && g[sa[0]].inputs.sigmas[1]===0 && g[sa[1]].inputs.sigmas[1]===1 && g[sa[1]].inputs.latent_image[0]===sa[0] && g[g[sa[1]].inputs.noise[0]].class_type==='DisableNoise';
+    r.models = un.length===2 && /Hybrid/.test(un[0]) && /prismPIKA/.test(un[1]);
+    f.model = H3.families().find(x => /singularity|prism|pika/.test(x.key)).key; H3.drawAll && H3.drawAll(); r.hiddenOnPika = q('#finRow').hidden && !H3.snapshot().fin;
+    f.finOn = false; f.model = H3.families().find(x => /hybrid/.test(x.key)).key; H3.drawAll && H3.drawAll(); return r; }, R);
+  ok(FP.row && FP.on && FP.fin && FP.split && FP.models && FP.hiddenOnPika, '🔀 Finish on PIKA: split sigmas, first model then PIKA from its latent, hidden when the model is PIKA: ' + JSON.stringify(FP));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
