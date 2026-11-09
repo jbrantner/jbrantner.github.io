@@ -59,6 +59,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await tap(W.f.indexOf('<Subject 2>') + 3); await page.click('[data-sps="one"]'); await page.click('[data-sp="c:4"]');
   W = await page.evaluate(() => ({f:H3.S.f.prompt, t:H3.S.takes[0].prompt}));
   ok(W.f==='<Subject 4> walks to the window. <Subject 4> waves at <Subject 4>.' && W.t==='<Subject 4> sits down.', 'Only this prompt: the takes keep theirs');
+  // just the one tag tapped (Jordan: "I accidentally made all of the tags the same character… switch only 1 back")
+  await tap(W.f.lastIndexOf('<Subject 4>') + 2); ok(await page.evaluate(() => !!document.querySelector('[data-sps="tag"]')), 'a Just this tag choice');
+  await page.click('[data-sps="tag"]'); await page.click('[data-sp="c:2"]');
+  W = await page.evaluate(() => ({f:H3.S.f.prompt, t:H3.S.takes[0].prompt}));
+  ok(W.f==='<Subject 4> walks to the window. <Subject 4> waves at <Subject 2>.' && W.t==='<Subject 4> sits down.', 'Just this tag: only the tapped one changes: ' + W.f);
+  await tap(2); await page.click('[data-sps="all"]'); await page.click('[data-close]');
   // from the Library
   await tap(2); await page.click('[data-sp="l:Lkat"]');
   W = await page.evaluate(() => ({f:H3.S.f.prompt, c:H3.S.cast.find(c => c.lib==='Lkat')}));
