@@ -212,7 +212,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     q('#ckOut [data-ck="x"]').click(); r.cancel = q('#ckOut').hidden && !q('#ckBtn').disabled; window.fetch = real; p.value = ''; p.oninput({target:p}); return r; });
   ok(CKW.wait && CKW.cancel, '🔎 Check prompt waits while Render renders, Cancel stops it: ' + JSON.stringify(CKW));
   ok(CKR.btn && CKR.url==='http://render.test:8443' && CKR.kindP==='PIKA' && CKR.kindV==='VANILLA' && CKR.kindF==='VANILLA THEN PIKA' && CKR.shown && CKR.used && CKR.undone && CKR.keep && CKR.noDrop && CKR.drop && CKR.added && CKR.closed
-    && ckReq && ckReq.model==='huihui_ai/qwen3-abliterated:8b' && ckReq.keep_alive===0 && ckReq.format==='json' && /prompt checker inside H3 Deck/.test(ckReq.messages[0].content) && /^MODEL: PIKA/.test(ckReq.messages[1].content),
+    && ckReq && ckReq.model==='huihui_ai/qwen3-abliterated:8b' && ckReq.keep_alive==='30m' && ckReq.format==='json' && /prompt checker inside H3 Deck/.test(ckReq.messages[0].content) && /^MODEL: PIKA/.test(ckReq.messages[1].content),
     '🔎 Check prompt: asks the local LLM with the rulebook and the model kind, shows its notes, Use this / Undo / Keep out, warns about dropped tags: ' + JSON.stringify(CKR));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
