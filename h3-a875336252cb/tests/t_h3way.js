@@ -205,6 +205,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     r.new = /smiling/.test(q('#ckOut').textContent) && /Your notes so far: make her smile/.test(q('#ckOut').textContent) && H3.S.ck.msgs.length===5;
     q('#ckOut [data-ck="x"]').click(); p.value = ''; p.oninput({target:p}); return r; });
   ok(CKC.box && CKC.new && /CHANGE REQUEST[^]*make her smile/.test(ckReq.change || ''), '💬 ask the checker for changes: ' + JSON.stringify(CKC));
+  // 💬 Ask the checker button: a note before the first check goes with it
+  const CKA = await page.evaluate(async () => { const q = s => document.querySelector(s), p = q('#prompt'); p.value = 'Mei walks in.'; p.oninput({target:p});
+    q('#ckChat').click(); const r = {box:!!q('#ckAsk') && !q('#ckOut').hidden}; q('#ckAsk').value = 'camera low'; q('#ckAsk').oninput({target:q('#ckAsk')}); q('#ckOut [data-ck="ask0"]').click();
+    for(let i = 0; i < 50 && !(H3.S.ck && H3.S.ck.msgs); i++) await new Promise(z => setTimeout(z, 100));
+    r.sent = !!(H3.S.ck && H3.S.ck.msgs) && /ARTIST'S NOTES[^]*camera low/.test(H3.S.ck.msgs[1].content) && /Your notes so far: camera low/.test(q('#ckOut').textContent);
+    q('#ckOut [data-ck="x"]').click(); p.value = ''; p.oninput({target:p}); return r; });
+  ok(CKA.box && CKA.sent, '💬 Ask the checker button sends the note with the first check: ' + JSON.stringify(CKA));
   // busy Render: the check waits for an empty queue, Cancel stops it
   const CKW = await page.evaluate(async () => { const q = s => document.querySelector(s), f = H3.S.f, p = q('#prompt'); p.value = 'She waves.'; p.oninput({target:p});
     window.__busy = 1; const real = window.fetch; window.fetch = (u, o) => /\/queue$/.test(String(u)) ? Promise.resolve(new Response(JSON.stringify({queue_running:window.__busy ? [[0, 'x']] : [], queue_pending:[]}), {status:200})) : real(u, o);
