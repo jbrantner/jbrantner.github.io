@@ -39,11 +39,11 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const A = await page.evaluate(() => ({cast:JSON.parse(JSON.stringify(H3.S.cast)), chip:document.querySelector('#tagBar').textContent, rows:document.querySelectorAll('#castList .cast').length}));
   ok(A.cast.length===1 && A.cast[0].n===1 && A.cast[0].stand==='a woman' && A.rows===1 && /Subject 1/.test(A.chip), '＋ Add a subject: <Subject 1>, stand-in "a woman", a chip above the prompt');
   let P = await prom(R, REF); console.log(P.p.split('\n\n')[0], '|', P.p.slice(P.p.indexOf('detailed_description')));
-  ok(/\. A woman walks to the window\.\s+\[2s-5s\] A woman waves at <Subject 2>\./.test(P.p) && !/<Subject 1>/.test(P.p) && !P.imgs.length, 'no picture: sent as its stand-in words (capitalised), a token with no subject left as it is');
+  ok(/\. A nude woman walks to the window\.\s+\[2s-5s\] A nude woman waves at <Subject 2>\./.test(P.p) && !/<Subject 1>/.test(P.p) && !P.imgs.length, 'no picture: sent as its stand-in words (capitalised), a token with no subject left as it is');
   // a picture: it goes along, and the prompt says who it is
   await page.evaluate(() => { H3.S.media.p1 = {id:'p1', kind:'img', name:'p1.png', w:640, h:352, thumb:''}; Object.assign(H3.S.cast[0], {pic:'p1', who:'the lady in the red coat'}); H3.drawAll(); });
   P = await prom(R, REF); console.log(P.p.split('summary:')[0]);
-  ok(/<Subject 1> is the lady in the red coat, as shown in <Picture 1>\./.test(P.p) && /\[Shot 1\] <Subject 1> walks to the window/.test(P.p) && P.imgs.join()==='p1.png', 'with a picture: the picture is sent and <Subject 1> is defined by it');
+  ok(/<Subject 1> is the lady in the red coat, as shown in <Picture 1>\./.test(P.p) && /\[Shot 1\] <Subject 1> is nude\. <Subject 1> walks to the window/.test(P.p) && /clothing in that picture is NOT kept/.test(P.p) && P.imgs.join()==='p1.png', 'with a picture: the picture is sent and <Subject 1> is defined by it');
   ok(await page.evaluate(() => /lady in the red coat, as shown in <Picture 1>/.test(document.querySelector('#h3Pre').textContent)), 'the 👁 look shows it too');
   // several pictures of one subject (Jordan 2026-11-06): all go along, one subject seen in all of them
   await page.evaluate(() => { H3.S.media.p2 = {id:'p2', kind:'img', name:'p2.png', w:640, h:352, thumb:''}; H3.S.cast[0].pics.push('p2'); H3.drawAll(); });
@@ -58,7 +58,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.evaluate(() => { H3.S.cast[0].kind = 'place'; H3.drawAll(); }); P = await prom(R, REF);
   ok(/<Subject 1> \(appears in \[Shot 1\]\): fully_preserved - the setting/.test(P.p), 'a 🏞 Place keeps its setting, not a face');
   await page.evaluate(() => { H3.S.cast[0].kind = 'char'; H3.S.f.imgs = []; H3.S.f.h3 = false; H3.drawAll(); }); P = await prom(R, REF);
-  ok(/^<Subject 1> is the lady in the red coat, as shown in <Picture 1>\. <Subject 1> walks/.test(P.p), 'plain prompt (🧾 off): who it is goes up front');
+  ok(/^<Subject 1> is nude, wearing no clothing; the clothes in <Picture 1> are not used\. <Subject 1> is the lady in the red coat, as shown in <Picture 1>\. <Subject 1> walks/.test(P.p), 'plain prompt (🧾 off): who it is goes up front');
   // 🔁 swap: the stand-in words in the form and every take become the token
   await page.evaluate(() => { H3.S.f.h3 = true; H3.S.cast[0].pics = []; H3.S.f.prompt = 'A woman walks in. The dog follows a woman.';
     H3.S.takes.unshift({id:'tk1', t:Date.now(), pc:'x', model:H3.S.f.model, turbo:false, w:640, h:352, seconds:5, prompt:'a woman sits down', imgs:[], vids:[], auds:[], follow:[], pieces:[{prompt:'a woman sits down'}], state:'done'}); H3.drawAll(); });
@@ -102,7 +102,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const box = !!document.querySelector('[data-castf="desc"]'), noPic = H3.castText('[Shot 1] <Subject 1> walks in. <Subject 1> sits.', {imgs:[]}, false);
     const T = {imgs:[{id:'p1', desc:'the lady', more:'long black hair, green eyes, freckles', cast:1, keep:'exact', kind:'char'}]}, P = H3.h3Prompt({text:'<Subject 1> walks in', imgs:T.imgs, secs:5});
     H3.S.cast = keep; H3.drawAll(); return {box, noPic, def:(P.match(/<Subject 1> is [^\n]*/) || [''])[0]}; });
-  ok(CD.box && CD.noPic==='[Shot 1] The woman: long black hair, green eyes, freckles. A woman walks in. A woman sits.' && /as shown in <Picture 1>\. Long black hair, green eyes, freckles\./.test(CD.def), '✍ a subject\'s More detail box goes in with or without a picture: ' + JSON.stringify(CD));
+  ok(CD.box && CD.noPic==='[Shot 1] The woman: long black hair, green eyes, freckles. A nude woman walks in. A nude woman sits.' && /as shown in <Picture 1>\. Long black hair, green eyes, freckles\./.test(CD.def), '✍ a subject\'s More detail box goes in with or without a picture: ' + JSON.stringify(CD));
   // 🏷 description tags switched off per shot (Jordan 2026-11-08: bust size kept showing up in face close-ups)
   const DT = await page.evaluate(async () => { const keep = H3.S.cast, kp = H3.S.f.prompt, sh = H3.S.f.sm; H3.S.media.pT = {thumb:'x', name:'pT.png'};
     H3.S.cast = [{n:1, kind:'char', stand:'a woman', desc:'long black hair, green eyes\nlarge breasts', keep:'exact'}, {n:2, kind:'char', stand:'a man', desc:'tall, bald', pics:['pT'], keep:'exact'}];
@@ -114,8 +114,8 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const T = H3.castTake({prompt:'<Subject 2> nods.', imgs:[], descOff:{2:['bald']}}, true), withPic = T.imgs[0] && T.imgs[0].more;
     const other = H3.castText('<Subject 1> waves.', {imgs:[]}, false);
     H3.S.cast = keep; Object.assign(H3.S.f, {prompt:kp, sm:sh, descOff:{}}); H3.drawAll(); return {chips, shown, off, struck, snapOff:snap.descOff, noPic, withPic, other}; });
-  ok(DT.shown && DT.chips.join('|')==='long black hair|green eyes|large breasts' && DT.struck && DT.off[1][0]==='large breasts' && DT.snapOff[1][0]==='large breasts'
-    && DT.noPic==='The woman: long black hair, green eyes. Close-up of a woman smiling.' && DT.withPic==='tall' && /large breasts/.test(DT.other),
+  ok(DT.shown && DT.chips.join('|')==='long black hair|green eyes|large breasts|🫥 No clothes when no outfit' && DT.struck && DT.off[1][0]==='large breasts' && DT.snapOff[1][0]==='large breasts'
+    && DT.noPic==='The woman: long black hair, green eyes. Close-up of a nude woman smiling.' && DT.withPic==='tall' && /large breasts/.test(DT.other),
     '🏷 a subject\'s details are chips under the prompt; one switched off stays out of that shot only: ' + JSON.stringify(DT));
   // 🎭 a Faces pass sends her attributes too (Jordan 2026-11-08: spiral-eyes attribute ignored, green eyes from her description instead)
   const FA = await page.evaluate(() => { const keep = H3.S.cast, kl = H3.S.lib; ['fq1', 'sp1', 'sp2'].forEach(k => H3.S.media[k] = {thumb:'x', name:k + '.png'});
@@ -126,7 +126,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const R2 = H3.faceRefs(Object.assign({}, t, {descOff:{1:['attr:Lsp']}}), 1), ch = H3.descChips(H3.S.cast[0]).map(x => x.key).filter(k => !/^add:/.test(k)), addK = H3.descChips(H3.S.cast[0]).some(x => x.key==='add:Lhx' && x.add);
     const R3 = H3.faceRefs(Object.assign({}, t, {descOff:{1:['add:Lhx']}}), 1).map(r => r.id), P3 = H3.castText(t.prompt, {imgs:H3.faceRefs(Object.assign({}, t, {descOff:{1:['add:Lhx']}}), 1)}, true);
     H3.S.cast = keep; H3.S.lib = kl; return {ids:R.map(r => r.id), P, off:R2.map(r => r.id), ch, addK, R3, P3:/heart eyes shown in/.test(P3)}; });
-  ok(FA.ids.join()==='fq1,sp1,sp2' && /hypnotic spiral eyes shown in <Picture 2> and <Picture 3>/.test(FA.P) && !/green eyes/.test(FA.P) && /long black hair/i.test(FA.P) && FA.off.join()==='fq1' && FA.ch.join()==='green eyes,long black hair,attr:Lsp' && FA.addK && FA.R3.join()==='fq1,sp1,sp2,hx1' && FA.P3, '🎭 Faces pass (and a Library attribute she doesn\'t have can be turned on for it): her pictures + her attribute pictures, details switched off stay out: ' + JSON.stringify(FA));
+  ok(FA.ids.join()==='fq1,sp1,sp2' && /hypnotic spiral eyes shown in <Picture 2> and <Picture 3>/.test(FA.P) && !/green eyes/.test(FA.P) && /long black hair/i.test(FA.P) && FA.off.join()==='fq1' && FA.ch.join()==='green eyes,long black hair,nude,attr:Lsp' && !/nude/.test(FA.P) && FA.addK && FA.R3.join()==='fq1,sp1,sp2,hx1' && FA.P3, '🎭 Faces pass (and a Library attribute she doesn\'t have can be turned on for it): her pictures + her attribute pictures, details switched off stay out: ' + JSON.stringify(FA));
   await page.evaluate(() => { H3.S.cast.push({n:1, kind:'char', stand:'a woman', who:'the lady in the red coat', pic:'p1', keep:'exact'}); H3.drawAll(); document.querySelector('#bCast').scrollIntoView(); });
   await page.screenshot({path:path.join(__dirname, 'cast.png')}).catch(() => {});
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
