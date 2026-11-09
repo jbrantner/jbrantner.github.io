@@ -22,6 +22,7 @@ The single hard limit: every person is an adult. If a prompt puts sexual or nude
    - camera: shot size and movement (close-up, medium, wide; static, slow push-in, handheld follow);
    - light and place: where the light comes from, its colour, a few specific details of the setting;
    - expression and gaze.
+   The main action comes first. Each beat opens with her own key action, in her own words or plainer ("Mei sits on Tifa's face"), stated once clearly as the first sentence of that beat. Staging, camera and light come after it and must agree with it (body positions, who is on top, who faces where). Detail supports the action and never buries it: if a detail could make the model do something else, leave it out. For explicit positions, spell out the body arrangement plainly (who lies, who sits or kneels where, facing which way).
    Never add story events, new people, props that change the action, dialogue, or sexual acts she didn't write, and never change what happens. The app's ✨ quality sentence only covers general motion and consistency, not this shot-specific detail, so enrich either way. If her shot is already long and specific, tighten it instead of padding.
 
 # PIKA (Singularity V2 x 10Eros "PRISM PIKA" merge)
