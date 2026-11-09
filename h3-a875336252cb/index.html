@@ -2373,37 +2373,48 @@ function ckNames(shot){ const m = [], used = {};
 const ckEsc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const ckOut = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('<\\s*subject\\s*' + x.n + '\\s*>', 'gi'), x.name), shot);
 const ckBack = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('(^|[^\\w<])' + ckEsc(x.name) + '(?![\\w>])', 'g'), (a, b) => b + x.tag), shot);
-async function checkPrompt(){
-  const f = S.f, shot = (f.prompt || '').trim(), btn = $('#ckBtn'), out = $('#ckOut'); if(!shot) return toast('Write the shot first');
+// 💬 talk to it (Jordan 2026-11-09: "is it possible for me to talk to this LLM? like if I had notes or changes that i wanted from it for a
+// prompt?"): after a check the card has a box; a note goes back to the same conversation and the checker returns a new version of its shot
+async function checkPrompt(note){
+  const f = S.f, prev = note && S.ck && S.ck.msgs ? S.ck : null, shot = prev ? prev.orig : (f.prompt || '').trim(), btn = $('#ckBtn'), out = $('#ckOut'); if(!shot) return toast('Write the shot first');
   if(S.ckWait) return; let n = await ckBusy();
   if(n){ const id = S.ckWait = Date.now(); btn.disabled = true; btn.textContent = '⏳ Waiting for Render to finish…';
     while(n && S.ckWait===id && Date.now() - id < 90 * 60000){ S.ck = {wait:n}; drawCk(); await new Promise(z => setTimeout(z, 10000)); if(S.ckWait!==id) break; n = await ckBusy(); }
-    const go = S.ckWait===id && !n; S.ckWait = 0; btn.disabled = false; btn.textContent = '🔎 Check prompt'; if(!go){ if(S.ck && S.ck.wait) S.ck = null; drawCk(); return; } }
-  btn.disabled = true; btn.textContent = '🔎 Checking… (up to a minute)'; const kind = ckKind(f);
-  try{
+    const go = S.ckWait===id && !n; S.ckWait = 0; btn.disabled = false; btn.textContent = '🔎 Check prompt'; if(!go){ if(S.ck && S.ck.wait) S.ck = prev; drawCk(); return; } }
+  btn.disabled = true; btn.textContent = '🔎 Checking… (up to a minute)'; const kind = prev ? prev.kind : ckKind(f);
+  if(prev){ S.ck = Object.assign({}, prev, {busy:note}); drawCk(); }
+  try{ let N, messages;
+    if(prev){ N = prev.N; messages = prev.msgs.concat([{role:'user', content:'CHANGE REQUEST from the artist about your last shot: ' + ckOut(note, N) + '\n\nApply it to your last shot (keep everything else, keep the same people and every tag) and return the same JSON with the full new shot. Only change what she asks for; never add people or acts she did not ask for.'}]); }
+    else {
     const rules = await (await fetch('checker-rules.md', {cache:'no-cache'})).text();
     let full = ''; if(f.h3 && !f.sm){ h3Peek(); full = $('#h3Pre').textContent; }
-    const N = ckNames(shot), who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
+    N = ckNames(shot); const who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
     const user = 'MODEL: ' + kind + who + '\n\nSHOT:\n' + ckOut(shot, N) + (full ? '\n\nFULL PROMPT (context only; its <Subject n> numbers are not the same as the shot\'s, so go by the names in the SHOT):\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, 120 to 250 words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
+    messages = [{role:'system', content:rules}, {role:'user', content:user}]; }
     const r = await getJ(ckUrl() + '/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:S.llmModel || CK.model, stream:false, think:false, format:'json', keep_alive:0,
-      options:{temperature:0.3, num_ctx:8192}, messages:[{role:'system', content:rules}, {role:'user', content:user}]})}, 240000);
-    const A = ckParse(r.message && r.message.content); A.shot = ckBack(A.shot, N); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
-    S.ck = Object.assign(A, {kind, orig:shot}); drawCk();
-  }catch(e){ S.ck = {err:/abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
+      options:{temperature:0.3, num_ctx:prev ? 12288 : 8192}, messages})}, 240000);
+    const raw = r.message && r.message.content, A = ckParse(raw); A.shot = ckBack(A.shot, N); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
+    S.ck = Object.assign(A, {kind, orig:shot, N, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note ? [note] : [])}); drawCk();
+  }catch(e){ if(prev){ S.ck = Object.assign({}, prev, {chatErr:/abort/i.test(e.name + e.message) ? 'That took too long. Try again.' : /no answer|JSON/i.test(e.message) ? 'It answered but not in a form I can read. Try again.' : "Couldn't reach the checker on Render (" + e.message + ')'}); drawCk(); return; }
+    S.ck = {err:/abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
   finally{ btn.disabled = false; btn.textContent = '🔎 Check prompt'; } }
 function drawCk(){ const out = $('#ckOut'), c = S.ck; if(!out) return; out.hidden = !c; if(!c) return;
   if(c.wait){ out.innerHTML = `<div class="note stl">⏳ Render is rendering (${c.wait} job${c.wait > 1 ? 's' : ''} in its queue), and its graphics card can't run the checker at the same time. Your check will run by itself as soon as Render is free. Keep working; just leave the app open.</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Cancel</button></div>`; return; }
   if(c.err){ out.innerHTML = `<div class="note stl">⚠ ${esc(c.err)}</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Close</button></div>`; return; }
   if(c.verdict==='blocked'){ out.innerHTML = `<div class="note stl">⛔ The checker won't work on this one: it reads as sexual content with someone under 18.</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Close</button></div>`; return; }
-  const miss = ckTags(c.orig).filter(t => !c.shot.includes(t)), changed = c.shot && c.shot.trim()!==c.orig;
+  const miss = ckTags(c.orig).filter(t => !c.shot.includes(t)), changed = c.shot && c.shot.trim()!==c.orig, a0 = document.activeElement && document.activeElement.id==='ckAsk';
   out.innerHTML = `<div class="stl" style="font-weight:700">${c.verdict==='good' ? (changed ? '✅ No problems for ' + esc(c.kind) + '. Here\'s a more detailed version:' : '✅ Looks good for ' + esc(c.kind)) : '🔧 Suggestions for ' + esc(c.kind)}</div>`
     + (c.issues.length ? '<ul style="margin:6px 0 0;padding-left:18px">' + c.issues.map(i => `<li class="note stl" style="margin:3px 0"><b>${esc(i.where || 'shot')}:</b> ${esc(i.problem || '')}${i.fix ? ' → ' + esc(i.fix) : ''}</li>`).join('') + '</ul>' : '')
     + (changed ? `<details open style="margin-top:8px"><summary class="note stl">Suggested shot</summary><pre style="white-space:pre-wrap;margin:6px 0 0">${esc(c.shot)}</pre></details>` : '')
     + (changed && (miss.length || (c.lost || []).length) ? `<div class="note stl">⚠ It dropped ${esc(miss.concat(c.lost || []).join(', '))}; check before using.</div>` : '')
     + (changed && ckTags(c.shot).filter(t => /^<Subject/.test(t) && !c.orig.includes(t)).length ? `<div class="note stl">⚠ It brought in ${esc([...new Set(ckTags(c.shot).filter(t => /^<Subject/.test(t) && !c.orig.includes(t)))].join(', '))}, who isn't in your shot; check before using.</div>` : '')
     + (c.keep ? `<div class="note stl" style="margin-top:6px">🚫 Keep out ideas: ${esc(c.keep)}</div>` : '')
+    + ((c.notes || []).length ? `<div class="note stl" style="margin-top:6px">💬 Your notes so far: ${c.notes.map(esc).join(' · ')}</div>` : '')
+    + (c.msgs ? `<div style="display:flex;gap:6px;margin-top:8px;align-items:flex-end"><textarea id="ckAsk" style="flex:1;min-height:44px" placeholder="💬 Ask for changes, e.g. make the camera slower, she should be smiling, shorter" ${c.busy ? 'disabled' : ''}>${esc(S.ckDraft || '')}</textarea><button class="btn" data-ck="ask" ${c.busy ? 'disabled' : ''}>${c.busy ? '…' : 'Send'}</button></div>`
+      + (c.busy ? '<div class="note stl">💬 Working on: ' + esc(c.busy) + '</div>' : '') + (c.chatErr ? '<div class="note stl">⚠ ' + esc(c.chatErr) + '</div>' : '') : '')
     + '<div class="chips" style="margin-top:8px">' + (changed ? '<button class="btn pri" data-ck="use">Use this shot</button>' : '') + (S.ckUndo != null ? '<button class="btn" data-ck="undo">↩ Undo</button>' : '')
-    + (c.keep ? '<button class="btn" data-ck="keep">Add to 🚫 Keep out</button>' : '') + '<button class="btn" data-ck="x">Close</button></div>'; }
+    + (c.keep ? '<button class="btn" data-ck="keep">Add to 🚫 Keep out</button>' : '') + '<button class="btn" data-ck="x">Close</button></div>';
+  const ta = $('#ckAsk'); if(ta){ ta.oninput = e => { S.ckDraft = e.target.value; }; if(a0) ta.focus(); } }
 function ckSet(v){ const p = $('#prompt'); p.value = v; p.oninput({target:p}); }
 function h3Peek(){
   const f = S.f; if(!f.h3 || f.sm) return; let t; try{ t = snapshot(); }catch(e){ return; }
@@ -2881,7 +2892,8 @@ setTimeout(tickTouch, 3000);
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#ckBtn').onclick = () => checkPrompt();
 $('#ckOut').onclick = e => { const b = e.target.closest('[data-ck]'); if(!b) return; const k = b.dataset.ck, c = S.ck;
-  if(k==='x'){ S.ck = null; S.ckUndo = null; if(S.ckWait){ S.ckWait = 0; const b = $('#ckBtn'); b.disabled = false; b.textContent = '🔎 Check prompt'; } }
+  if(k==='ask'){ const v = (S.ckDraft || '').trim(); if(!v || (c && c.busy)) return; S.ckDraft = ''; checkPrompt(v); return; }
+  if(k==='x'){ S.ck = null; S.ckUndo = null; S.ckDraft = ''; if(S.ckWait){ S.ckWait = 0; const b = $('#ckBtn'); b.disabled = false; b.textContent = '🔎 Check prompt'; } }
   else if(k==='use'){ S.ckUndo = S.f.prompt; ckSet(c.shot); c.orig = c.shot.trim(); toast('Shot updated'); }
   else if(k==='undo'){ ckSet(S.ckUndo); c.orig = S.ckUndo.trim(); S.ckUndo = null; }
   else if(k==='keep'){ const cur = keepOut(Object.assign({}, S.f, {negOn:true})), add = c.keep.split(',').map(x => x.trim()).filter(x => x && !cur.toLowerCase().includes(x.toLowerCase()));

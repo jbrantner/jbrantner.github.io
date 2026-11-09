@@ -177,7 +177,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(QS.chips==='🎥 Realistic|🧊 3D|✏ 2D|✍ Custom' && QS.custom && QS.d2 && QS.d3base && QS.own && QS.off && QS.noSkin && QS.tap && QS.again && QS.hide, '✨ style choices: Realistic, 3D, 2D, Custom: ' + JSON.stringify(QS));
   // 🔎 Check prompt (Jordan 2026-11-09): a local uncensored LLM (Ollama on Render, :8443) checks the shot with checker-rules.md; Use this / Undo / Keep out
   let ckReq = null; await page.route('http://render.test:8443/**', async rt => { if(rt.request().method()==='OPTIONS') return rt.fulfill({status:204, headers:{'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Headers':'*'}});
-    ckReq = JSON.parse(rt.request().postData()); const shot = ckReq.messages[1].content.includes('[1s-3s]') ? 'She walks in. [1s-3s] She waves.' : 'Mei, in a thick opaque white cotton tank top, walks in from the left. [0s-2s] The camera pushes in slowly.';
+    ckReq = JSON.parse(rt.request().postData()); const lastU = ckReq.messages[ckReq.messages.length - 1].content; if(/CHANGE REQUEST/.test(lastU)) ckReq.change = lastU; const shot = /CHANGE REQUEST/.test(lastU) ? 'Mei walks in slowly, smiling. [0s-2s] The camera holds still.' : ckReq.messages[1].content.includes('[1s-3s]') ? 'She walks in. [1s-3s] She waves.' : 'Mei, in a thick opaque white cotton tank top, walks in from the left. [0s-2s] The camera pushes in slowly.';
     rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify({message:{content:'<think></think>' + JSON.stringify({verdict:'fix', issues:[{where:'subject', problem:'"large breasts" in Mei\'s description', fix:'switch it off with the 🏷 chip'}], shot, keep_out:'nipples showing through clothing, a brand new thing'})}})}); });
   const CKR = await page.evaluate(async () => { const q = s => document.querySelector(s), f = H3.S.f; const r = {btn:!!q('#ckBtn') && q('#ckBtn').offsetParent!==null, url:H3.ckUrl()};
     f.model = 'singularityv2x10eros_prismpika'; f.finOn = false; r.kindP = H3.ckKind(f); f.model = 'minimax_h3_ref2va'; r.kindV = H3.ckKind(f); f.finOn = true; r.kindF = H3.ckKind(f); f.finOn = false; f.model = 'singularityv2x10eros_prismpika';
@@ -197,6 +197,14 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     H3.S.cast = old; return r; });
   ok(CKN.names==='Mei,Tifa' && CKN.out==='Mei hugs Tifa. [2s-5s] Tifa laughs while <Subject 3> watches.' && CKN.back==="<Subject 1>, in a thick jacket, hugs <Subject 2>. [2s-5s] <Subject 2> laughs as <Subject 1>'s friend <Subject 3> watches; Meiko waves.",
     '🔎 checker sends names for <Subject n> and turns them back into the same tags: ' + JSON.stringify(CKN));
+  // 💬 talk to it: a note after a check goes back into the same conversation and returns a new shot
+  const CKC = await page.evaluate(async () => { const q = s => document.querySelector(s), p = q('#prompt'); p.value = 'Mei walks in. [0s-2s] she waves'; p.oninput({target:p});
+    q('#ckBtn').click(); for(let i = 0; i < 50 && (q('#ckOut').hidden || q('#ckBtn').disabled); i++) await new Promise(z => setTimeout(z, 100));
+    const r = {box:!!q('#ckAsk')}; q('#ckAsk').value = 'make her smile'; q('#ckAsk').oninput({target:q('#ckAsk')}); q('#ckOut [data-ck="ask"]').click();
+    for(let i = 0; i < 50 && !/smiling/.test(q('#ckOut').textContent); i++) await new Promise(z => setTimeout(z, 100));
+    r.new = /smiling/.test(q('#ckOut').textContent) && /Your notes so far: make her smile/.test(q('#ckOut').textContent) && H3.S.ck.msgs.length===5;
+    q('#ckOut [data-ck="x"]').click(); p.value = ''; p.oninput({target:p}); return r; });
+  ok(CKC.box && CKC.new && /CHANGE REQUEST[^]*make her smile/.test(ckReq.change || ''), '💬 ask the checker for changes: ' + JSON.stringify(CKC));
   // busy Render: the check waits for an empty queue, Cancel stops it
   const CKW = await page.evaluate(async () => { const q = s => document.querySelector(s), f = H3.S.f, p = q('#prompt'); p.value = 'She waves.'; p.oninput({target:p});
     window.__busy = 1; const real = window.fetch; window.fetch = (u, o) => /\/queue$/.test(String(u)) ? Promise.resolve(new Response(JSON.stringify({queue_running:window.__busy ? [[0, 'x']] : [], queue_pending:[]}), {status:200})) : real(u, o);
