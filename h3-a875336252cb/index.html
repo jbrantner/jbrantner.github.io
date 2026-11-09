@@ -235,7 +235,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
           <div id="bbTrack" style="position:relative;height:46px;border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none;user-select:none"></div>
           <div class="note" id="bbNote" style="margin-top:4px"></div></div>
         <div id="descBar" hidden style="margin-top:8px"></div>
-        <div class="chips" style="margin-top:8px"><button class="btn" id="ckBtn">🔎 Check prompt</button></div>
+        <div class="chips" style="margin-top:8px"><button class="btn" id="ckBtn">🔎 Check prompt</button><button class="btn" id="ckChat">💬 Ask the checker</button></div>
         <div id="ckOut" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px"></div>
         <div id="styleRow" style="margin-top:8px"><div class="chips" id="styleChips"></div></div>
         <details id="negBox" style="margin-top:6px"><summary class="note stl">🚫 What to keep out (tap to edit)</summary><div style="display:grid;gap:8px;margin-top:8px">
@@ -2375,7 +2375,7 @@ const ckOut = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('<\\s*subject
 const ckBack = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('(^|[^\\w<])' + ckEsc(x.name) + '(?![\\w>])', 'g'), (a, b) => b + x.tag), shot);
 // 💬 talk to it (Jordan 2026-11-09: "is it possible for me to talk to this LLM? like if I had notes or changes that i wanted from it for a
 // prompt?"): after a check the card has a box; a note goes back to the same conversation and the checker returns a new version of its shot
-async function checkPrompt(note){
+async function checkPrompt(note, first){
   const f = S.f, prev = note && S.ck && S.ck.msgs ? S.ck : null, shot = prev ? prev.orig : (f.prompt || '').trim(), btn = $('#ckBtn'), out = $('#ckOut'); if(!shot) return toast('Write the shot first');
   if(S.ckWait) return; let n = await ckBusy();
   if(n){ const id = S.ckWait = Date.now(); btn.disabled = true; btn.textContent = '⏳ Waiting for Render to finish…';
@@ -2390,15 +2390,17 @@ async function checkPrompt(note){
     let full = ''; if(f.h3 && !f.sm){ h3Peek(); full = $('#h3Pre').textContent; }
     N = ckNames(shot); const who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
     const user = 'MODEL: ' + kind + who + '\n\nSHOT:\n' + ckOut(shot, N) + (full ? '\n\nFULL PROMPT (context only; its <Subject n> numbers are not the same as the shot\'s, so go by the names in the SHOT):\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, 120 to 250 words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
-    messages = [{role:'system', content:rules}, {role:'user', content:user}]; }
+    messages = [{role:'system', content:rules}, {role:'user', content:user + (first ? '\n\nTHE ARTIST\'S NOTES FOR THIS CHECK (follow them; they win over your own ideas): ' + ckOut(first, N) : '')}]; }
     const r = await getJ(ckUrl() + '/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:S.llmModel || CK.model, stream:false, think:false, format:'json', keep_alive:'30m',
       options:{temperature:0.3, num_ctx:12288}, messages})}, 240000);
     const raw = r.message && r.message.content, A = ckParse(raw); A.shot = ckBack(A.shot, N); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
-    S.ck = Object.assign(A, {kind, orig:shot, N, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note ? [note] : [])}); drawCk();
+    S.ck = Object.assign(A, {kind, orig:shot, N, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note || first ? [note || first] : [])}); drawCk();
   }catch(e){ const busy = e.message==='503'; if(prev){ S.ck = Object.assign({}, prev, {chatErr:busy ? 'Render just started a render, so the checker stepped aside. Send again when it finishes.' : /abort/i.test(e.name + e.message) ? 'That took too long. Try again.' : /no answer|JSON/i.test(e.message) ? 'It answered but not in a form I can read. Try again.' : "Couldn't reach the checker on Render (" + e.message + ')'}); drawCk(); return; }
     S.ck = {err:busy ? 'Render just started a render, so the checker stepped aside. Check again when it finishes.' : /abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
   finally{ btn.disabled = false; btn.textContent = '🔎 Check prompt'; } }
 function drawCk(){ const out = $('#ckOut'), c = S.ck; if(!out) return; out.hidden = !c; if(!c) return;
+  if(c.compose){ out.innerHTML = `<div class="note stl">💬 Tell the checker what you want for this shot. It rewrites your shot with your notes, then you can keep chatting.</div><div style="display:flex;gap:6px;margin-top:8px;align-items:flex-end"><textarea id="ckAsk" style="flex:1;min-height:56px" placeholder="e.g. make it slower and more sensual, Tifa on her back, camera low">${esc(S.ckDraft || '')}</textarea><button class="btn pri" data-ck="ask0">Send</button></div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Close</button></div>`;
+    const ta = $('#ckAsk'); ta.oninput = e => { S.ckDraft = e.target.value; }; ta.focus(); return; }
   if(c.wait){ out.innerHTML = `<div class="note stl">⏳ Render is rendering (${c.wait} job${c.wait > 1 ? 's' : ''} in its queue), and its graphics card can't run the checker at the same time. Your check will run by itself as soon as Render is free. Keep working; just leave the app open.</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Cancel</button></div>`; return; }
   if(c.err){ out.innerHTML = `<div class="note stl">⚠ ${esc(c.err)}</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Close</button></div>`; return; }
   if(c.verdict==='blocked'){ out.innerHTML = `<div class="note stl">⛔ The checker won't work on this one: it reads as sexual content with someone under 18.</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Close</button></div>`; return; }
@@ -2891,7 +2893,9 @@ function touchTake(j, file){ const src = S.takes.find(x => x.id===j.take) || {},
 setTimeout(tickTouch, 3000);
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#ckBtn').onclick = () => checkPrompt();
+$('#ckChat').onclick = () => { if(S.ck && S.ck.msgs){ drawCk(); const a = $('#ckAsk'); if(a){ a.scrollIntoView({block:'center'}); a.focus(); } return; } if(!(S.f.prompt || '').trim()) return toast('Write the shot first'); S.ck = {compose:true}; drawCk(); };
 $('#ckOut').onclick = e => { const b = e.target.closest('[data-ck]'); if(!b) return; const k = b.dataset.ck, c = S.ck;
+  if(k==='ask0'){ const v = (S.ckDraft || '').trim(); if(!v) return; S.ckDraft = ''; S.ck = null; checkPrompt(null, v); return; }
   if(k==='ask'){ const v = (S.ckDraft || '').trim(); if(!v || (c && c.busy)) return; S.ckDraft = ''; checkPrompt(v); return; }
   if(k==='x'){ S.ck = null; S.ckUndo = null; S.ckDraft = ''; if(S.ckWait){ S.ckWait = 0; const b = $('#ckBtn'); b.disabled = false; b.textContent = '🔎 Check prompt'; } }
   else if(k==='use'){ S.ckUndo = S.f.prompt; ckSet(c.shot); c.orig = c.shot.trim(); toast('Shot updated'); }
