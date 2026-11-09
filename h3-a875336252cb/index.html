@@ -235,7 +235,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
           <div id="bbTrack" style="position:relative;height:46px;border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none;user-select:none"></div>
           <div class="note" id="bbNote" style="margin-top:4px"></div></div>
         <div id="descBar" hidden style="margin-top:8px"></div>
-        <div class="chips" style="margin-top:8px"><button class="btn" id="ckBtn">🔎 Check prompt</button><button class="btn" id="ckChat">💬 Ask the checker</button></div>
+        <div class="chips" style="margin-top:8px"><button class="btn" id="ckBtn">🔎 Check prompt</button><button class="btn" id="ckChat">💬 Ask the checker</button><button class="btn" id="shufBtn">🔀 Shuffle: off</button></div>
         <div id="ckOut" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px"></div>
         <div id="styleRow" style="margin-top:8px"><div class="chips" id="styleChips"></div></div>
         <details id="negBox" style="margin-top:6px"><summary class="note stl">🚫 What to keep out (tap to edit)</summary><div style="display:grid;gap:8px;margin-top:8px">
@@ -763,6 +763,27 @@ function plan(seconds, maxPiece, beats, cont, keyCuts){
   return out;
 }
 const t2 = s => { const r = Math.round(s * 10) / 10; return (r % 1 ? r.toFixed(1) : String(r)) + 's'; };
+// 🔀 Shuffle (Jordan 2026-11-09: PIKA gives near-identical takes for the same words on new seeds): each take sends its sentences in its own
+// order (1), and with 2 also the comma parts inside each sentence. Timed tags ([0s-2s], [Shot 2], "At 3s,") and the carry-on lead stay where they are;
+// the shuffle comes from the take's seed, so every take differs and the same take always gets the same order. Her saved words never change.
+const SHUF = ['off', 'sentences', 'sentences + commas'];
+function rngOf(seed){ let a = (+seed || 1) >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function mix(a, r){ a = a.slice(); for(let i = a.length - 1; i > 0; i--){ const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  if(a.length > 1 && r.orig && a.every((x, i) => x===r.orig[i])) a.push(a.shift()); return a; } // never send it unchanged
+const LOWER = /^(The|A|An|She|He|They|It|Her|His|Their|Its|Then|As|And|But|While|With|In|On|At|Slowly|Gently|Behind|Her|Both|Each)\b/;
+function shuffleWords(text, seed, mode){
+  if(!mode || !text || !text.trim()) return text; const r = rngOf(seed), mx = a => { r.orig = a; const o = mix(a, r); r.orig = null; return o; };
+  const marks = []; let m; const re = new RegExp(BEAT.source + '|\\[\\s*shot\\s*\\d+\\s*\\]|\\n+', 'gi');
+  while((m = re.exec(text))){ if(!m[0].length){ re.lastIndex++; continue; } marks.push([m.index, m.index + m[0].length]); }
+  const seg = s => { const lead = (s.match(/^\s*/) || [''])[0], tail = (s.match(/\s*$/) || [''])[0], body = s.trim(); if(!body) return s;
+    let ss = body.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)|[.!?]+/g) || [body]; ss = ss.map(x => x.trim()).filter(Boolean);
+    const pin = ss.length && /^This continues straight on/.test(ss[0]) ? [ss.shift()] : [];
+    ss = ss.map(x => /[.!?]$/.test(x) ? x : x + '.');
+    if(mode > 1) ss = ss.map(x => { if(/moment before/.test(x)) return x; const end = x.match(/[.!?]+$/)[0], parts = x.slice(0, -end.length).split(/\s*,\s*/).filter(Boolean); if(parts.length < 2) return x;
+      const o = mx(parts).map((q, i) => i ? q.replace(LOWER, w => w.toLowerCase()) : q.replace(/^[a-z]/, c => c.toUpperCase())); return o.join(', ') + end; });
+    if(ss.length > 1) ss = mx(ss);
+    ss = ss.map(x => x.replace(/^[a-z]/, c => c.toUpperCase())); return lead + pin.concat(ss).join(' ') + tail; };
+  let out = '', at = 0; for(const [i, j] of marks){ out += seg(text.slice(at, i)) + text.slice(i, j); at = j; } return out + seg(text.slice(at)); }
 function piecePrompt(text, pieces, i, total){
   const pr = pieces[i], {global, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = LEAD(pr) / FPS;
   const lead = i || pr.ctx ? 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' : '';
@@ -1465,7 +1486,7 @@ function pieceGraph(t, i, oi, names){
   const words = lorasOf(t).map(l => (l.words || '').trim()).filter(Boolean).join(', ');
   // (✨ in-betweens: the mannequin wording is added here, out of sight; Jordan's prompt says what happens)
   const say = t.ctl && t.ctl.face ? faceWords(t.ctl.face, Math.max(0, pc.start - LEAD(pc) / FPS), L / FPS) : '';
-  const pp = castText(pc.prompt, t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
+  const pp = castText(shuffleWords(pc.prompt, (+t.seed || 0) + i * 7919, +t.shuffle || 0), t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
   let prompt = (words ? words.replace(/[.\s]*$/, '. ') : '') + act, cond, lat, guides = 0;
   const h3 = o => t.h3 ? h3Prompt(Object.assign({h3:t.h3, text:act, words, imgs:t.imgs, vids:t.vids, auds:t.auds, cont:!!pc.ctx, secs:L / FPS, t0:pc.start - LEAD(pc) / FPS}, o)) : null;
   if(M.fl2v){ // the official First/last frame model
@@ -1933,7 +1954,7 @@ function snapshot(){ // the form, frozen into a take
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
-    descOff:JSON.parse(JSON.stringify(f.descOff || {})),
+    descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : +f.shuffle || 0,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -2548,7 +2569,7 @@ function drawCanvas(){
   n.textContent = (tok > 45000 ? 'Big for 8 GB: about ' : 'About ') + Math.round(tok / 1000) + 'k tokens a piece' + (tok > 45000 ? '. References get shrunk to fit, and a very big one can run out of memory on Render or Main.' : ' (Render and Main have 8 GB; references are shrunk to fit the rest).');
 }
 function drawMore(){
-  const f = S.f; $('#takesOut').textContent = f.takes; $('#steps').value = f.steps; $('#seed').value = f.seed; $('#maxPiece').value = f.maxPiece; $('#maxOut').textContent = fmtS(+f.maxPiece);
+  const f = S.f; drawShuf(); $('#takesOut').textContent = f.takes; $('#steps').value = f.steps; $('#seed').value = f.seed; $('#maxPiece').value = f.maxPiece; $('#maxOut').textContent = fmtS(+f.maxPiece);
   $('#whereSeg').innerHTML = `<button data-w="both" class="${f.where==='both' ? 'on' : ''}">Both</button>` + S.pcs.map(p => `<button data-w="${esc(p.url)}" class="${f.where===p.url ? 'on' : ''}">${esc(p.name)} only</button>`).join('');
   $('#moreSum').textContent = (f.takes > 1 ? f.takes + ' takes · ' : '') + (f.where==='both' ? 'both PCs' : pcName(f.where) + ' only');
 }
@@ -2622,7 +2643,7 @@ function takeCard(t){
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t)].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
-      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr">${esc(t.prompt)}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr">${t.shuffle ? '🔀 ' + esc(shuffleWords(t.pieces.length===1 ? t.pieces[0].prompt : t.prompt, +t.seed || 0, +t.shuffle)) : esc(t.prompt)}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
 }
@@ -2893,6 +2914,8 @@ function touchTake(j, file){ const src = S.takes.find(x => x.id===j.take) || {},
 setTimeout(tickTouch, 3000);
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#ckBtn').onclick = () => checkPrompt();
+function drawShuf(){ const b = $('#shufBtn'); if(!b) return; const v = +S.f.shuffle || 0; b.textContent = '🔀 Shuffle: ' + SHUF[v]; b.classList.toggle('pri', v > 0); }
+$('#shufBtn').onclick = () => { S.f.shuffle = ((+S.f.shuffle || 0) + 1) % 3; save(); drawShuf(); toast(S.f.shuffle ? '🔀 Each take sends its ' + SHUF[S.f.shuffle] + ' in a new order' : '🔀 Shuffle off'); };
 $('#ckChat').onclick = () => { if(S.ck && S.ck.msgs){ drawCk(); const a = $('#ckAsk'); if(a){ a.scrollIntoView({block:'center'}); a.focus(); } return; } if(!(S.f.prompt || '').trim()) return toast('Write the shot first'); S.ck = {compose:true}; drawCk(); };
 $('#ckOut').onclick = e => { const b = e.target.closest('[data-ck]'); if(!b) return; const k = b.dataset.ck, c = S.ck;
   if(k==='ask0'){ const v = (S.ckDraft || '').trim(); if(!v) return; S.ckDraft = ''; S.ck = null; checkPrompt(null, v); return; }
@@ -3402,7 +3425,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
