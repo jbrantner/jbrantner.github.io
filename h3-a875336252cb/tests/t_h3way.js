@@ -161,6 +161,20 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     f.model = H3.families().find(x => /singularity|prism|pika/.test(x.key)).key; H3.drawAll && H3.drawAll(); r.hiddenOnPika = q('#finRow').hidden && !H3.snapshot().fin;
     f.finOn = false; f.model = H3.families().find(x => /hybrid/.test(x.key)).key; H3.drawAll && H3.drawAll(); return r; }, R);
   ok(FP.row && FP.on && FP.fin && FP.split && FP.models && FP.hiddenOnPika, '🔀 Finish on PIKA: split sigmas, first model then PIKA from its latent, hidden when the model is PIKA: ' + JSON.stringify(FP));
+  // ✨ style choices (Jordan 2026-11-09): 🎥 Realistic / 🧊 3D / ✏ 2D / ✍ Custom (= the quality words); a preset replaces the style line while 🎨 Style is empty
+  const QS = await page.evaluate(() => { const q = s => document.querySelector(s), f = H3.S.f; f.h3 = true; f.sm = false; f.quality = true; f.qstyle = ''; f.h3Style = ''; H3.drawH3();
+    const P = o => H3.h3Prompt({h3:Object.assign({style:'', quality:true}, o), text:'she waves', imgs:[{desc:'a woman', keep:'exact'}], secs:5}), B = o => H3.h3Prompt({h3:Object.assign({style:'', quality:true}, o), text:'she waves', secs:5});
+    const r = {chips:[...q('#styleChips').querySelectorAll('[data-qs]')].map(b => b.textContent).join('|')};
+    r.custom = /The image is stable, sharp/.test(P({qstyle:''})) && /live-action, cinematic style/.test(P({qstyle:''}));
+    r.d2 = /hand-drawn 2D animation/.test(P({qstyle:'2d'})) && !/live-action, cinematic style/.test(P({qstyle:'2d'})) && /line art stays clean/.test(P({qstyle:'2d'}));
+    r.d3base = /\[Shot 1\] The target video is a modern 3D animated/.test(B({qstyle:'3d'})) && /polished lighting/.test(B({qstyle:'3d'}));
+    r.own = /my noir look/.test(P({qstyle:'real', style:'my noir look'})) && !/photorealistic live-action film/.test(P({qstyle:'real', style:'my noir look'}));
+    r.off = !/hand-drawn/.test(P({qstyle:'2d', quality:false}));
+    r.noSkin = Object.values(H3.Q_STYLES).every(x => !/skin|pores|breast|chest|curv/i.test(x.style + x.q));
+    q('#styleChips [data-qs="2d"]').click(); r.tap = f.qstyle==='2d' && H3.snapshot().h3.qstyle==='2d' && q('#styleChips [data-qs="2d"]').classList.contains('pri');
+    const t = H3.snapshot(); f.qstyle = 'real'; H3.useAgain(t, true); r.again = f.qstyle==='2d';
+    q('#styleChips [data-q]').click(); r.hide = !q('#styleChips [data-qs]'); f.qstyle = ''; f.quality = false; H3.drawH3(); return r; });
+  ok(QS.chips==='🎥 Realistic|🧊 3D|✏ 2D|✍ Custom' && QS.custom && QS.d2 && QS.d3base && QS.own && QS.off && QS.noSkin && QS.tap && QS.again && QS.hide, '✨ style choices: Realistic, 3D, 2D, Custom: ' + JSON.stringify(QS));
   // 🔎 Check prompt (Jordan 2026-11-09): a local uncensored LLM (Ollama on Render, :8443) checks the shot with checker-rules.md; Use this / Undo / Keep out
   let ckReq = null; await page.route('http://render.test:8443/**', async rt => { if(rt.request().method()==='OPTIONS') return rt.fulfill({status:204, headers:{'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Headers':'*'}});
     ckReq = JSON.parse(rt.request().postData()); const shot = ckReq.messages[1].content.includes('[1s-3s]') ? 'She walks in. [1s-3s] She waves.' : 'Mei, in a thick opaque white cotton tank top, walks in from the left. [0s-2s] The camera pushes in slowly.';
