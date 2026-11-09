@@ -2358,8 +2358,16 @@ const ckKind = f => f.finOn && finAble(f.model) ? 'VANILLA THEN PIKA' : /prism|p
 const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio) \d+>/g) || []);
 function ckParse(txt){ txt = String(txt || '').replace(/<think>[\s\S]*?<\/think>/g, ''); const a = txt.indexOf('{'), b = txt.lastIndexOf('}'); if(a < 0 || b < a) throw new Error('no answer');
   const j = JSON.parse(txt.slice(a, b + 1)); return {verdict:String(j.verdict || 'fix'), issues:Array.isArray(j.issues) ? j.issues.slice(0, 8) : [], shot:String(j.shot || ''), keep:String(j.keep_out || '').trim()}; }
+// Render's 8 GB card can't hold a render and the 5.6 GB model at once (a check during a render hung on Ollama's 5-minute load limit,
+// 2026-11-09), so a check waits until that PC's ComfyUI queue is empty and then runs by itself
+const ckPc = () => (S.pcs.find(p => /render/i.test(p.name)) || S.pcs[0] || {url:''}).url;
+async function ckBusy(){ if(S.llmUrl) return 0; try{ const q = await getJ(ckPc() + '/queue', null, 6000); return (q.queue_running || []).length + (q.queue_pending || []).length; }catch(e){ return 0; } }
 async function checkPrompt(){
   const f = S.f, shot = (f.prompt || '').trim(), btn = $('#ckBtn'), out = $('#ckOut'); if(!shot) return toast('Write the shot first');
+  if(S.ckWait) return; let n = await ckBusy();
+  if(n){ const id = S.ckWait = Date.now(); btn.disabled = true; btn.textContent = '⏳ Waiting for Render to finish…';
+    while(n && S.ckWait===id && Date.now() - id < 90 * 60000){ S.ck = {wait:n}; drawCk(); await new Promise(z => setTimeout(z, 10000)); if(S.ckWait!==id) break; n = await ckBusy(); }
+    const go = S.ckWait===id && !n; S.ckWait = 0; btn.disabled = false; btn.textContent = '🔎 Check prompt'; if(!go){ if(S.ck && S.ck.wait) S.ck = null; drawCk(); return; } }
   btn.disabled = true; btn.textContent = '🔎 Checking… (up to a minute)'; const kind = ckKind(f);
   try{
     const rules = await (await fetch('checker-rules.md', {cache:'no-cache'})).text();
@@ -2371,6 +2379,7 @@ async function checkPrompt(){
   }catch(e){ S.ck = {err:/abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
   finally{ btn.disabled = false; btn.textContent = '🔎 Check prompt'; } }
 function drawCk(){ const out = $('#ckOut'), c = S.ck; if(!out) return; out.hidden = !c; if(!c) return;
+  if(c.wait){ out.innerHTML = `<div class="note stl">⏳ Render is rendering (${c.wait} job${c.wait > 1 ? 's' : ''} in its queue), and its graphics card can't run the checker at the same time. Your check will run by itself as soon as Render is free. Keep working; just leave the app open.</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Cancel</button></div>`; return; }
   if(c.err){ out.innerHTML = `<div class="note stl">⚠ ${esc(c.err)}</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Close</button></div>`; return; }
   if(c.verdict==='blocked'){ out.innerHTML = `<div class="note stl">⛔ The checker won't work on this one: it reads as sexual content with someone under 18.</div><div class="chips" style="margin-top:6px"><button class="btn" data-ck="x">Close</button></div>`; return; }
   const miss = ckTags(c.orig).filter(t => !c.shot.includes(t)), changed = c.shot && c.shot.trim()!==c.orig;
@@ -2858,7 +2867,7 @@ setTimeout(tickTouch, 3000);
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#ckBtn').onclick = () => checkPrompt();
 $('#ckOut').onclick = e => { const b = e.target.closest('[data-ck]'); if(!b) return; const k = b.dataset.ck, c = S.ck;
-  if(k==='x'){ S.ck = null; S.ckUndo = null; }
+  if(k==='x'){ S.ck = null; S.ckUndo = null; if(S.ckWait){ S.ckWait = 0; const b = $('#ckBtn'); b.disabled = false; b.textContent = '🔎 Check prompt'; } }
   else if(k==='use'){ S.ckUndo = S.f.prompt; ckSet(c.shot); c.orig = c.shot.trim(); toast('Shot updated'); }
   else if(k==='undo'){ ckSet(S.ckUndo); c.orig = S.ckUndo.trim(); S.ckUndo = null; }
   else if(k==='keep'){ const cur = keepOut(Object.assign({}, S.f, {negOn:true})), add = c.keep.split(',').map(x => x.trim()).filter(x => x && !cur.toLowerCase().includes(x.toLowerCase()));

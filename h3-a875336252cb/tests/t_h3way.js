@@ -190,6 +190,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     p.value = 'She walks in. [1s-3s] She waves.'; p.oninput({target:p}); q('#ckBtn').click(); await new Promise(z => setTimeout(z, 300)); r.noDrop = !/dropped/.test(q('#ckOut').textContent);
     H3.S.ck = {verdict:'fix', issues:[], shot:'no tags here', orig:'a [0s-2s] b', keep:'', kind:'PIKA'}; H3.drawCk(); r.drop = /dropped \[0s-2s\]/.test(q('#ckOut').textContent);
     q('#ckOut [data-ck="x"]').click(); r.closed = q('#ckOut').hidden; f.neg = ''; p.value = ''; p.oninput({target:p}); return r; });
+  // busy Render: the check waits for an empty queue, Cancel stops it
+  const CKW = await page.evaluate(async () => { const q = s => document.querySelector(s), f = H3.S.f, p = q('#prompt'); p.value = 'She waves.'; p.oninput({target:p});
+    window.__busy = 1; const real = window.fetch; window.fetch = (u, o) => /\/queue$/.test(String(u)) ? Promise.resolve(new Response(JSON.stringify({queue_running:window.__busy ? [[0, 'x']] : [], queue_pending:[]}), {status:200})) : real(u, o);
+    q('#ckBtn').click(); await new Promise(z => setTimeout(z, 400)); const r = {wait:/Render is rendering/.test(q('#ckOut').textContent) && q('#ckBtn').disabled};
+    q('#ckOut [data-ck="x"]').click(); r.cancel = q('#ckOut').hidden && !q('#ckBtn').disabled; window.fetch = real; p.value = ''; p.oninput({target:p}); return r; });
+  ok(CKW.wait && CKW.cancel, '🔎 Check prompt waits while Render renders, Cancel stops it: ' + JSON.stringify(CKW));
   ok(CKR.btn && CKR.url==='http://render.test:8443' && CKR.kindP==='PIKA' && CKR.kindV==='VANILLA' && CKR.kindF==='VANILLA THEN PIKA' && CKR.shown && CKR.used && CKR.undone && CKR.keep && CKR.noDrop && CKR.drop && CKR.closed
     && ckReq && ckReq.model==='huihui_ai/qwen3-abliterated:8b' && ckReq.keep_alive===0 && ckReq.format==='json' && /prompt checker inside H3 Deck/.test(ckReq.messages[0].content) && /^MODEL: PIKA/.test(ckReq.messages[1].content),
     '🔎 Check prompt: asks the local LLM with the rulebook and the model kind, shows its notes, Use this / Undo / Keep out, warns about dropped tags: ' + JSON.stringify(CKR));
