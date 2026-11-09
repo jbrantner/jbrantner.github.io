@@ -358,6 +358,8 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
       <select id="model"></select>
       <div class="seg" id="speedSeg"><button data-v="turbo">⚡ Turbo</button><button data-v="regular">🎬 Regular</button></div>
       <div class="note" id="modelNote"></div>
+      <div id="finRow" hidden><div class="sw" id="finSw"><div><div class="t">🔀 Finish on PIKA</div><div class="d">This model draws the motion and layout first; PIKA takes over for the last steps of the same render (it draws NSFW bodies better)</div></div><div class="tog"></div></div>
+        <div id="finAtRow" class="row" style="align-items:center;margin-top:6px"><span class="note stl" style="flex:1" id="finAtNote"></span><input type="range" id="finAt" min="0.3" max="0.8" step="0.05" style="width:140px"></div></div>
       <div style="min-width:0">
         <div class="lab"><span>LoRAs</span><b id="loraOut"></b></div>
         <div id="loraList" class="loras"></div>
@@ -572,7 +574,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
 // ---------- the PCs ----------
 const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
-  'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
+  'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
@@ -1378,6 +1380,7 @@ function canRun(url, job){
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
   { const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), miss = lorasOf(job).find(l => !have.includes(l.name)); if(miss) return 'doesn\'t have the LoRA ' + bn(miss.name); }
+  if(job.fin && finAble(job.model) && !(pikaOf(oi) && oi.SplitSigmas && oi.DisableNoise)) return "can't finish on PIKA (no PRISM PIKA file)";
   if(job.neg && !nagOn(oi) && nagAny()) return "doesn't have the 🚫 Keep out node (ComfyUI-NAG-MiniMaxH3)";
   if(job.up){ const why = regenMissing(oi, job); if(why) return "can't regenerate bigger (" + why + ')'; }
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
@@ -1530,7 +1533,14 @@ function pieceGraph(t, i, oi, names){
     if(have < L && oi.RepeatImageBatch) px = batchOf(add, oi, px, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:[rsrc, 0], batch_index:R.s0 + have - 1, length:1}), 0], amount:L - have}), 0]);
     if(have===L || oi.RepeatImageBatch){ const sep = add('LTXVSeparateAVLatent', {av_latent:lat}); lat0 = [add('LTXVConcatAVLatent', {video_latent:[add('VAEEncode', {pixels:px, vae}), 0], audio_latent:[sep, 1]}), 0]; den = Math.max(0.2, +R.str); } }
   const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:den});
-  const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0});
+  let out;
+  if(t.fin && finAble(t.model) && pikaOf(oi) && oi.SplitSigmas && oi.DisableNoise){ // 🔀 first model for the motion, PIKA for the last steps
+    const sp = add('SplitSigmas', {sigmas:[sig, 0], step:finSplit(t, steps)}), smp = [add('KSamplerSelect', {sampler_name:'res_multistep'}), 0];
+    const a1 = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed}), 0], guider:[guider, 0], sampler:smp, sigmas:[sp, 0], latent_image:lat0});
+    let m2 = [add('UNETLoader', {unet_name:pikaOf(oi), weight_dtype:'default'}), 0];
+    for(const l of lorasOf(t)) m2 = [add('LoraLoaderModelOnly', {model:m2, lora_name:l.name, strength_model:+l.str}), 0];
+    out = add('SamplerCustomAdvanced', {noise:[add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[sp, 1], latent_image:[a1, 0]});
+  } else out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0});
   if(chain) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
@@ -1659,6 +1669,12 @@ const upUnetOf = (t, oi, refs) => { const m = t && t.up && t.up.unet, bn = s => 
   if(m) return combo(oi, 'UNETLoader', 'unet_name').find(x => bn(x)===bn(m)) || ''; return refs ? regenRefUnet(oi) : regenUnet(oi); };
 const hqUnets = () => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => combo(pcOf(p.url).oi, 'UNETLoader', 'unet_name')))]
   .filter(x => !officialH3(x) && /prism_?pika/i.test(x)).sort(); // ✨ only PRISM PIKA besides vanilla (Jordan 2026-11-08: "keep it to the just 2 models we use")
+// 🔀 Finish on PIKA (Jordan 2026-11-09: "minimax for the movement and then the last steps would be pika"): the render's sigmas are split;
+// the chosen model samples the high-noise part (motion, layout), PRISM PIKA + the take's LoRAs sample the rest from that latent, same
+// conditioning. f.finOn / f.finAt (share of the steps on the first model) → t.fin = {at}
+const pikaOf = oi => combo(oi, 'UNETLoader', 'unet_name').find(x => /prism_?pika/i.test(x)) || '';
+const finAble = key => !/prism|pika|singularity/i.test(key || '');
+const finSplit = (t, steps) => Math.max(1, Math.min(steps - 1, Math.round(steps * (+t.fin.at || 0.5))));
 const regenRefsOn = (t, oi) => !!(t.up && (facesOn(t) || (t.up.refs && upRefs(t).length)) && oi.MiniMaxH3ReferenceToVideo && (t.up.unet ? upUnetOf(t, oi, true) : regenRefUnet(oi)));
 // her own pictures, then her ✨ attributes' (Jordan 2026-11-08: a Faces pass gave her green eyes, not the spiral-eyes attribute: it only sent her pictures)
 const faceRefs = (t, n) => { let r = [], at = []; try{ const I = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.map(dressed); r = I.filter(x => x.cast===+n); at = I.filter(x => x.attrOf===+n); }catch(e){}
@@ -1897,7 +1913,7 @@ function snapshot(){ // the form, frozen into a take
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, ...contBits(), ...stillBits(), lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
-    neg:keepOut(f), negScale:+f.negScale || NAG.scale,
+    neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
     descOff:JSON.parse(JSON.stringify(f.descOff || {})),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
@@ -2194,6 +2210,7 @@ function useAgain(t, quiet){
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}}))); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
+  f.finOn = !!t.fin; if(t.fin) f.finAt = t.fin.at;
   if(t.neg !== undefined){ f.negOn = !!t.neg; if(t.neg) f.neg = t.neg===KEEP_OUT ? '' : t.neg; if(t.negScale) f.negScale = +t.negScale===NAG.scale ? '' : t.negScale; }
   if(!t.sm){ f.h3 = !!t.h3; if(t.h3) Object.assign(f, {quality:t.h3.quality===true, qtext:t.h3.qtext || '', h3Style:t.h3.style || '', h3Sound:t.h3.sound || '', h3Music:t.h3.music || ''}); }
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); // these boxes are only filled at start, so set them here too
@@ -2421,6 +2438,9 @@ function drawModel(){
   $('#loraList').innerHTML = f.loras.map((l, i) => `<div class="lr" data-li="${i}"><div class="lt"><select data-ln>${(l.name ? '' : '<option value="">Pick a LoRA</option>') + [...new Set([...(l.name ? [l.name] : []), ...loras])].map(n => `<option value="${esc(n)}"${n===l.name ? ' selected' : ''}>${esc(bn(n).replace(/\.safetensors$/, ''))}${loras.includes(n) ? '' : ' (not on the PCs)'}</option>`).join('')}</select><b>${(+l.str).toFixed(2)}</b><button class="btn x" data-lx aria-label="Remove">✕</button></div>
     <input type="range" data-ls min="0" max="1.5" step="0.05" value="${+l.str}"><input data-lw placeholder="Trigger words and phrases (remembered for this LoRA)" value="${esc(l.words || '')}"></div>`).join('');
   $('#loraAdd').disabled = !loras.length; $('#loraOut').textContent = on.length ? on.length + ' on' : '';
+  { const can = finAble(f.model) && oiAny.some(o => pikaOf(o)) && !f.sm, on = can && !!f.finOn, at = +f.finAt || 0.5, st = +f.steps || (M ? M.steps : 20), k = Math.max(1, Math.min(st - 1, Math.round(st * at)));
+    $('#finRow').hidden = !can; $('#finSw').classList.toggle('on', on); $('#finAtRow').hidden = !on;
+    if(document.activeElement!==$('#finAt')) $('#finAt').value = at; $('#finAtNote').textContent = 'Hand over after ' + k + ' of ' + st + ' steps (' + Math.round(at * 100) + '% on this model)'; }
   $('#modelSum').textContent = fams.length ? (famLabel(f.model || '').replace(/^MiniMax H3 /, '') + ' · ' + (built ? 'turbo built in' : f.turbo ? 'Turbo' : 'Regular') + (on.length ? ' · ' + on.length + ' LoRA' + (on.length > 1 ? 's' : '') : '')) : '';
 }
 function drawCanvas(){
@@ -2828,6 +2848,8 @@ $('#ctl2Str').oninput = e => { S.f.ctl2Str = +e.target.value; $('#ctl2StrOut').t
 $('#ctl2End').oninput = e => { S.f.ctl2End = +e.target.value; $('#ctl2EndOut').textContent = Math.round(S.f.ctl2End * 100) + '%'; save(); };
 $('#ctlEnd').oninput = e => { S.f.ctlEnd = +e.target.value; $('#ctlEndOut').textContent = Math.round(S.f.ctlEnd * 100) + '%'; save(); };
 $('#model').onchange = e => { S.f.model = e.target.value; save(); drawAll(); };
+$('#finSw').onclick = () => { S.f.finOn = !S.f.finOn; save(); drawAll(); };
+$('#finAt').oninput = e => { S.f.finAt = +e.target.value; save(); drawModel(); };
 $('#speedSeg').onclick = e => { const b = e.target.closest('button'); if(!b || b.disabled) return; S.f.turbo = b.dataset.v==='turbo'; save(); drawAll(); };
 $('#loraAdd').onclick = () => { S.f.loras.push({name:'', str:1, words:''}); save(); drawModel(); drawGo(); };
 $('#loraList').onchange = e => { const row = e.target.closest('[data-li]'); if(!row || !e.target.matches('[data-ln]')) return; const l = S.f.loras[+row.dataset.li];
@@ -3282,7 +3304,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
