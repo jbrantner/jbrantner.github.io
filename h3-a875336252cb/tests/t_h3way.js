@@ -144,6 +144,10 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     // back in the form from a take: its words and strength, off when it had none
     H3.useAgain(t2, true); r.again = f.negOn!==false && f.neg==='red, red paint' && +f.negScale===3; H3.useAgain(t3, true); r.againOff = f.negOn===false; H3.useAgain(t, true); r.againDef = f.negOn!==false && f.neg==='';
     f.neg = ''; f.negScale = ''; return r; }, R);
+  // (Jordan 2026-11-09: in bare bones she could toggle 🚫 but not find the box: every .note in the form was hidden)
+  const BB = await page.evaluate(() => { document.body.classList.add('bare'); const v = s => { const e = document.querySelector(s); return !!e && getComputedStyle(e).display!=='none'; };
+    const r = {sum:v('#negBox summary'), scale:v('#negScale')}; document.body.classList.remove('bare'); return r; });
+  ok(BB.sum && BB.scale, '🚫 the box and its Strength stay visible in bare bones: ' + JSON.stringify(BB));
   ok(NG.chip && NG.box && NG.ph && NG.peek && NG.neg && NG.own && NG.offChip && NG.off && NG.backOn && NG.route && NG.old && NG.again && NG.againOff && NG.againDef,
     '🚫 Keep out: on by default with the NAG guider and the keep-out words, own words and strength, off = plain guider, only to a PC with the node, back into the form: ' + JSON.stringify(NG));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
