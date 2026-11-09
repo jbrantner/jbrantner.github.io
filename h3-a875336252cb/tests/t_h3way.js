@@ -190,6 +190,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     p.value = 'She walks in. [1s-3s] She waves.'; p.oninput({target:p}); q('#ckBtn').click(); await new Promise(z => setTimeout(z, 300)); r.noDrop = !/dropped/.test(q('#ckOut').textContent);
     H3.S.ck = {verdict:'fix', issues:[], shot:'no tags here', orig:'a [0s-2s] b', keep:'', kind:'PIKA'}; H3.drawCk(); r.drop = /dropped \[0s-2s\]/.test(q('#ckOut').textContent);
     q('#ckOut [data-ck="x"]').click(); r.closed = q('#ckOut').hidden; f.neg = ''; p.value = ''; p.oninput({target:p}); return r; });
+  // 👥 names: the shot goes out with names in place of <Subject n> and they come back as the same tags; an invented name is caught
+  const CKN = await page.evaluate(() => { const old = H3.S.cast; H3.S.cast = [{n:1, who:'Mei'}, {n:2, who:'Tifa'}, {n:3, who:'a tall woman with red hair'}];
+    const shot = '<Subject 1> hugs <Subject 2>. [2s-5s] <Subject 2> laughs while <Subject 3> watches.', N = H3.ckNames(shot), out = H3.ckOut(shot, N);
+    const r = {names:N.map(x => x.name).join(','), out, back:H3.ckBack("Mei, in a thick jacket, hugs Tifa. [2s-5s] Tifa laughs as Mei's friend <Subject 3> watches; Meiko waves.", N)};
+    H3.S.cast = old; return r; });
+  ok(CKN.names==='Mei,Tifa' && CKN.out==='Mei hugs Tifa. [2s-5s] Tifa laughs while <Subject 3> watches.' && CKN.back==="<Subject 1>, in a thick jacket, hugs <Subject 2>. [2s-5s] <Subject 2> laughs as <Subject 1>'s friend <Subject 3> watches; Meiko waves.",
+    '🔎 checker sends names for <Subject n> and turns them back into the same tags: ' + JSON.stringify(CKN));
   // busy Render: the check waits for an empty queue, Cancel stops it
   const CKW = await page.evaluate(async () => { const q = s => document.querySelector(s), f = H3.S.f, p = q('#prompt'); p.value = 'She waves.'; p.oninput({target:p});
     window.__busy = 1; const real = window.fetch; window.fetch = (u, o) => /\/queue$/.test(String(u)) ? Promise.resolve(new Response(JSON.stringify({queue_running:window.__busy ? [[0, 'x']] : [], queue_pending:[]}), {status:200})) : real(u, o);
