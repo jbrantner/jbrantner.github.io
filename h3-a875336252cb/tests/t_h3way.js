@@ -128,10 +128,10 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     '✨ motion and quality words: off by default, on after a tap (both prompt formats, concrete camera and light words only): ' + JSON.stringify({row:ST.row, off0:ST.off0, cleared:ST.cleared, on:ST.on, back:ST.back}));
   // 🚫 Keep out (Jordan 2026-11-09): on by default, the NAG guider with the keep-out words in place of the plain guider; own words and strength;
   // off = plain guider; a PC without the node gets no 🚫 job while another PC has it; an old take (no neg field) follows the form
-  const NG = await page.evaluate(R => { const q = s => document.querySelector(s), f = H3.S.f, oi = H3.PC[R].oi; delete f.negOn; f.neg = ''; f.negScale = ''; H3.drawH3(); H3.h3Peek();
+  const NG = await page.evaluate(R => { const keepOut0 = () => { const g = H3.S.f; delete g.negOn; return H3.keepOut(g)===''; }; const q = s => document.querySelector(s), f = H3.S.f, oi = H3.PC[R].oi; const def0 = keepOut0(); f.negOn = true; f.neg = ''; f.negScale = ''; H3.drawH3(); H3.h3Peek();
     const mk = id => { const t = H3.snapshot(); Object.assign(t, {id, pc:R, seed:1, dir:'H3Deck/h3_' + id, name:'h3_' + id}); return t; };
     const G = t => H3.pieceGraph(t, 0, oi, {}).g, find = (g, c) => Object.keys(g).find(k => g[k].class_type===c);
-    const r = {chip:/on/.test(q('#styleChips [data-neg]').textContent), box:!q('#negBox').hidden, ph:q('#h3Neg').placeholder===H3.KEEP_OUT, peek:/🚫 Keep out \(NAG negative\): nipples showing/.test(q('#h3NegPeek').textContent)};
+    const r = {def0, chip:/on/.test(q('#styleChips [data-neg]').textContent), box:!q('#negBox').hidden, ph:q('#h3Neg').placeholder===H3.KEEP_OUT, peek:/🚫 Keep out \(NAG negative\): nipples showing/.test(q('#h3NegPeek').textContent)};
     const t = mk('tn'), g = G(t), ng = find(g, 'NAGGuiderMiniMaxH3'), ce = find(g, 'CLIPTextEncode');
     r.neg = t.neg===H3.KEEP_OUT && !!ng && !find(g, 'BasicGuider') && !!ce && g[ce].inputs.text===H3.KEEP_OUT && g[ng].inputs.nag_scale===9 && g[ng].inputs.nag_tau===3.48 && g[ng].inputs.nag_alpha===0.5 && g[ng].inputs.nag_sigma_end===0 && g[ng].inputs.nag_negative[0]===ce && g[find(g, 'SamplerCustomAdvanced')].inputs.guider[0]===ng && g[ce].inputs.clip[0]===find(g, 'CLIPLoader');
     f.neg = 'red, red paint'; f.negScale = '3'; const t2 = mk('tn2'), g2 = G(t2), n2 = find(g2, 'NAGGuiderMiniMaxH3');
@@ -148,7 +148,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const BB = await page.evaluate(() => { document.body.classList.add('bare'); const v = s => { const e = document.querySelector(s); return !!e && getComputedStyle(e).display!=='none'; };
     const r = {sum:v('#negBox summary'), scale:v('#negScale')}; document.body.classList.remove('bare'); return r; });
   ok(BB.sum && BB.scale, '🚫 the box and its Strength stay visible in bare bones: ' + JSON.stringify(BB));
-  ok(NG.chip && NG.box && NG.ph && NG.peek && NG.neg && NG.own && NG.offChip && NG.off && NG.backOn && NG.route && NG.old && NG.again && NG.againOff && NG.againDef,
+  ok(NG.def0 && NG.chip && NG.box && NG.ph && NG.peek && NG.neg && NG.own && NG.offChip && NG.off && NG.backOn && NG.route && NG.old && NG.again && NG.againOff && NG.againDef,
     '🚫 Keep out: on by default with the NAG guider and the keep-out words, own words and strength, off = plain guider, only to a PC with the node, back into the form: ' + JSON.stringify(NG));
   // 🔀 Finish on PIKA (Jordan 2026-11-09): the first model samples the first part of the steps, PIKA + the LoRAs the rest from that latent
   const FP = await page.evaluate(R => { const q = s => document.querySelector(s), f = H3.S.f, oi = H3.PC[R].oi; f.model = H3.families().find(x => /hybrid/.test(x.key)).key; f.finOn = false; f.finAt = 0.5; H3.drawAll && H3.drawAll();
