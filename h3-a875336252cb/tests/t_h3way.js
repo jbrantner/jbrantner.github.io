@@ -13,7 +13,7 @@ const SCHEMA = {
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
-  'LoadImage','LoadVideo','LoadAudio','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale'];
+  'LoadImage','LoadVideo','LoadAudio','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale'];
 const node = (g, t) => Object.values(g).find(n => n.class_type===t);
 (async () => {
   const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
@@ -45,14 +45,14 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(/<Subject 1> \(appears in \[Shot 1\]\): fully_preserved/.test(P) && /<Subject 2> \(appears in \[Shot 1\]\): weak_reference/.test(P), 'keep levels map to the official markers');
   ok(/<Audio 1> is the voice of Ellen \(S1\)\./.test(P) && /<Audio 1>: reference - /.test(P), 'a sound is a voice reference by default');
   ok(/summary:\n\[reference generation \+ audio reference\] It features <Subject 1>, <Subject 2> and <Subject 3>\. Ellen walks to the window\. She turns/.test(P), 'summary: task tags, subjects, the gist');
-  ok(/detailed_description:\nThe target video is in a live-action, cinematic style\. The colours are rich[^\n]*steadily\.\n\[Shot 1\] \[0s-5s\] Ellen walks/.test(P), 'style sentence before [Shot 1], untimed words timed from 0 s');
+  ok(/detailed_description:\nThe target video is in a live-action, cinematic style\.\n\[Shot 1\] \[0s-5s\] Ellen walks/.test(P), 'style sentence before [Shot 1], untimed words timed from 0 s');
   ok(/overall_soundscape:\nRain on the window\./.test(P) && /non_diegetic_music:\nN\/A$/.test(P), 'sound line, and N/A with no music');
 
   const Z = await page.evaluate(() => [H3.h3Prompt({h3:{}, text:'[2s-4s] a fox runs', secs:5}), H3.h3Prompt({h3:{}, text:'a fox keeps running', cont:true, secs:5}), H3.h3Prompt({h3:{}, text:'[0s-] a fox sits. [3s] it runs', secs:5})]);
   ok(!/\[0s-5s\]/.test(Z[0]) && /\[2s-4s\] a fox runs/i.test(Z[0]) && !/\[0s-/.test(Z[1]) && !/\[0s-5s\]/.test(Z[2]), '[0s-] is only added when no times are typed, and never to a piece that carries on: ' + JSON.stringify(Z.map(z => (z.match(/\[Shot 1\][^\n]*/) || [''])[0])));
   const B = await page.evaluate(() => [H3.h3Prompt({h3:{}, text:'a fox runs through snow', fl2v:true, first:true, last:true, secs:5.1667}), H3.h3Prompt({h3:{}, text:'a fox runs', fl2v:true, first:true}), H3.h3Prompt({h3:{}, text:'a fox', fl2v:false})]);
   console.log(B[0]);
-  ok(B[0].startsWith('How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 5.17-second mark of the target video.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. The colours are rich') && B[0].includes('steadily. [0s-5.2s] A fox runs'), 'FL2VA: the official alignment line, then the description');
+  ok(B[0].startsWith('How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 5.17-second mark of the target video.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic. [0s-5.2s] A fox runs'), 'FL2VA: the official alignment line, then the description');
   ok(B[1].startsWith('For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.'), 'first frame only: the I2VA line');
   ok(B[2].startsWith('integrated_multimodal_description: [Shot 1]') && /overall_soundscape: Natural ambient/.test(B[2]), 'no references at all: the T2VA format, with a natural default sound');
 
@@ -114,16 +114,37 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.click('[data-asp="16:9"]'); const C0 = await page.evaluate(() => ({d:H3.dims(), shown:!document.querySelector('#customWH').hidden}));
   ok(CU.shown && CU.res && CU.d.w===992 && CU.d.h===416 && CU.snap.w===992 && /992×416/.test(CU.note) && CB.w===CB.h && CB.w * CB.h <= 768 * 1344 && CB.w % 32===0 && CS.join()===[CB.w, CB.h].join() && !C0.shown && C0.d.w > C0.d.h,
     '✏ Custom canvas: width × height snapped to 32, over the cap shrunk same shape, back to a ratio chip hides it: ' + JSON.stringify({d:CU.d, shown:CU.shown, res:CU.res, sw:CU.snap.w, note:CU.note, big:CB, CS, back:C0}));
-  ok(/\n\[Shot 1\] she walks to the window\n\[Shot 2\] close-up of her eyes/.test(SH.P) && /appears in every shot/.test(SH.P) && /multi-shot/.test(SH.P) && /\[Shot 1\] Live-action, cinematic\. The colours are rich[^\n]*steadily\. She walks in\n\[Shot 2\] her face/.test(SH.B), '🎬 the H3 prompt puts each shot on its own line: ' + JSON.stringify(SH.P.slice(-400)));
+  ok(/\n\[Shot 1\] she walks to the window\n\[Shot 2\] close-up of her eyes/.test(SH.P) && /appears in every shot/.test(SH.P) && /multi-shot/.test(SH.P) && /\[Shot 1\] Live-action, cinematic\. She walks in\n\[Shot 2\] her face/.test(SH.B), '🎬 the H3 prompt puts each shot on its own line: ' + JSON.stringify(SH.P.slice(-400)));
   await page.click('#h3Peek summary'); await page.screenshot({path:path.join(__dirname, 'h3way.png'), fullPage:false, clip:{x:0, y:0, width:390, height:1400}}).catch(() => {});
-  // ✨ motion and quality words (Jordan 2026-11-08): on by default, after the style; tapping turns them off; an old preset is cleared
+  // ✨ motion and quality words (Jordan 2026-11-09): OFF by default (every version pulled the Eros merge toward skin); a tap turns them on, after the style
   const ST = await page.evaluate(() => { const q = s => document.querySelector(s); H3.S.f.h3 = true; H3.S.f.sm = false; delete H3.S.f.quality;
     H3.S.f.h3Style = 'The target video is photorealistic live-action film footage shot on a real cinema camera: real people with natural skin texture and pores, real locations, natural light and lens depth of field. It is not animation, not a cartoon, not anime, not a 3D render and not CGI.'; H3.drawH3();
-    const r = {row:!q('#styleRow').hidden, on:q('#styleChips [data-q]').classList.contains('pri'), cleared:H3.S.f.h3Style===''};
+    const r = {row:!q('#styleRow').hidden, off0:/off/.test(q('#styleChips [data-q]').textContent) && !q('#styleChips [data-q]').classList.contains('pri'), cleared:H3.S.f.h3Style===''};
     const P = o => H3.h3Prompt({h3:Object.assign({style:''}, o), text:'she waves', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
-    r.P = P({}); r.B = H3.h3Prompt({h3:{style:''}, text:'she waves', secs:5}); r.Poff = P({quality:false}); r.own = /my words here/.test(H3.h3Prompt({h3:{style:'', qtext:'my words here'}, text:'x', secs:5}));
-    q('#styleChips [data-q]').click(); r.off = H3.S.f.quality===false && /off/.test(q('#styleChips [data-q]').textContent); q('#styleChips [data-q]').click(); r.back = H3.S.f.quality!==false; return r; });
-  ok(ST.row && ST.on && ST.cleared && /style\. The colours are rich, natural/.test(ST.P) && !/clothing|bod(y|ies)|skin|weight/i.test(ST.P.split('detailed_description:')[1].split('[Shot 1]')[0]) && /cinematic\. The colours are rich/.test(ST.B) && !/colours are rich/.test(ST.Poff) && !/detailed|sharp|professional/i.test(ST.P.split('detailed_description:')[1].split('[Shot 1]')[0]) && ST.own && !/skin texture/.test(ST.P) && ST.off && ST.back,
-    '✨ motion and quality words: on by default after the style (both prompt formats), off when tapped, the old live-action preset cleared: ' + JSON.stringify({row:ST.row, on:ST.on, cleared:ST.cleared, off:ST.off}));
+    r.P0 = P({}); r.Pq = P({quality:true}); r.Bq = H3.h3Prompt({h3:{style:'', quality:true}, text:'she waves', secs:5}); r.own = /my words here/.test(H3.h3Prompt({h3:{style:'', quality:true, qtext:'my words here'}, text:'x', secs:5}));
+    q('#styleChips [data-q]').click(); r.on = H3.S.f.quality===true && /on/.test(q('#styleChips [data-q]').textContent) && H3.snapshot().h3.quality===true; q('#styleChips [data-q]').click(); r.back = H3.S.f.quality!==true && H3.snapshot().h3.quality===false; return r; });
+  const qs = ST.Pq.split('detailed_description:')[1].split('[Shot 1]')[0];
+  ok(ST.row && ST.off0 && ST.cleared && !/tripod/.test(ST.P0) && /style\. The camera is on a tripod/.test(ST.Pq) && /cinematic\. The camera is on a tripod/.test(ST.Bq) && !/detailed|sharp|professional|skin|clothing|bod(y|ies)|rich|flattering/i.test(qs) && ST.own && ST.on && ST.back,
+    '✨ motion and quality words: off by default, on after a tap (both prompt formats, concrete camera and light words only): ' + JSON.stringify({row:ST.row, off0:ST.off0, cleared:ST.cleared, on:ST.on, back:ST.back}));
+  // 🚫 Keep out (Jordan 2026-11-09): on by default, the NAG guider with the keep-out words in place of the plain guider; own words and strength;
+  // off = plain guider; a PC without the node gets no 🚫 job while another PC has it; an old take (no neg field) follows the form
+  const NG = await page.evaluate(R => { const q = s => document.querySelector(s), f = H3.S.f, oi = H3.PC[R].oi; delete f.negOn; f.neg = ''; f.negScale = ''; H3.drawH3(); H3.h3Peek();
+    const mk = id => { const t = H3.snapshot(); Object.assign(t, {id, pc:R, seed:1, dir:'H3Deck/h3_' + id, name:'h3_' + id}); return t; };
+    const G = t => H3.pieceGraph(t, 0, oi, {}).g, find = (g, c) => Object.keys(g).find(k => g[k].class_type===c);
+    const r = {chip:/on/.test(q('#styleChips [data-neg]').textContent), box:!q('#negBox').hidden, ph:q('#h3Neg').placeholder===H3.KEEP_OUT, peek:/🚫 Keep out \(NAG negative\): nipples showing/.test(q('#h3NegPeek').textContent)};
+    const t = mk('tn'), g = G(t), ng = find(g, 'NAGGuiderMiniMaxH3'), ce = find(g, 'CLIPTextEncode');
+    r.neg = t.neg===H3.KEEP_OUT && !!ng && !find(g, 'BasicGuider') && !!ce && g[ce].inputs.text===H3.KEEP_OUT && g[ng].inputs.nag_scale===5 && g[ng].inputs.nag_tau===2.5 && g[ng].inputs.nag_alpha===0.25 && g[ng].inputs.nag_negative[0]===ce && g[find(g, 'SamplerCustomAdvanced')].inputs.guider[0]===ng && g[ce].inputs.clip[0]===find(g, 'CLIPLoader');
+    f.neg = 'red, red paint'; f.negScale = '3'; const t2 = mk('tn2'), g2 = G(t2), n2 = find(g2, 'NAGGuiderMiniMaxH3');
+    r.own = t2.neg==='red, red paint' && t2.negScale===3 && g2[n2].inputs.nag_scale===3 && g2[find(g2, 'CLIPTextEncode')].inputs.text==='red, red paint';
+    q('#styleChips [data-neg]').click(); r.offChip = f.negOn===false && /off/.test(q('#styleChips [data-neg]').textContent) && q('#negBox').hidden; const t3 = mk('tn3'), g3 = G(t3); r.off = t3.neg==='' && !!find(g3, 'BasicGuider') && !find(g3, 'NAGGuiderMiniMaxH3');
+    q('#styleChips [data-neg]').click(); r.backOn = f.negOn!==false;
+    const bare = JSON.parse(JSON.stringify(oi)); delete bare.NAGGuiderMiniMaxH3; H3.PC['http://main.test'] = {online:true, oi:bare, load:0}; H3.S.pcs.push({name:'Main', url:'http://main.test', on:true, speed:1});
+    r.route = /Keep out node/.test(H3.canRun('http://main.test', t2)) && H3.canRun(R, t2)==='' && H3.canRun('http://main.test', t3)===''; H3.S.pcs.pop(); delete H3.PC['http://main.test'];
+    const old = JSON.parse(JSON.stringify(t2)); delete old.neg; delete old.negScale; const go = G(old); r.old = !!find(go, 'NAGGuiderMiniMaxH3') && go[find(go, 'CLIPTextEncode')].inputs.text==='red, red paint';
+    // back in the form from a take: its words and strength, off when it had none
+    H3.useAgain(t2, true); r.again = f.negOn!==false && f.neg==='red, red paint' && +f.negScale===3; H3.useAgain(t3, true); r.againOff = f.negOn===false; H3.useAgain(t, true); r.againDef = f.negOn!==false && f.neg==='';
+    f.neg = ''; f.negScale = ''; return r; }, R);
+  ok(NG.chip && NG.box && NG.ph && NG.peek && NG.neg && NG.own && NG.offChip && NG.off && NG.backOn && NG.route && NG.old && NG.again && NG.againOff && NG.againDef,
+    '🚫 Keep out: on by default with the NAG guider and the keep-out words, own words and strength, off = plain guider, only to a PC with the node, back into the form: ' + JSON.stringify(NG));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();

@@ -229,6 +229,10 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
           <div class="note" id="bbNote" style="margin-top:4px"></div></div>
         <div id="descBar" hidden style="margin-top:8px"></div>
         <div id="styleRow" style="margin-top:8px"><div class="chips" id="styleChips"></div></div>
+        <details id="negBox" style="margin-top:6px"><summary class="note">🚫 What to keep out (tap to edit)</summary><div style="display:grid;gap:8px;margin-top:8px">
+          <textarea id="h3Neg" style="min-height:72px"></textarea>
+          <div class="row" style="align-items:center"><span class="note" style="flex:1">Empty = the default. For a nude shot, take out the clothing words or switch 🚫 off. Goes with every pass: render, ✏ Edit and ✨ High quality.</span><label class="note">Strength <input id="negScale" type="number" min="1.5" max="10" step="0.5" inputmode="decimal" style="width:64px"></label></div>
+        </div></details>
         <p class="note" id="mqNote" hidden style="margin:4px 0 0"></p>
       </div>
       <div>
@@ -251,7 +255,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
           <div><div class="lab"><span>✨ Motion and quality words</span></div><textarea id="h3Qual" style="min-height:64px"></textarea><div class="note">Empty = the default. Sent after the style while the ✨ chip is on.</div></div>
           </div></details>
           <div class="note" id="h3Note"></div>
-          <details id="h3Peek"><summary>👁 What MiniMax gets</summary><pre id="h3Pre"></pre></details>
+          <details id="h3Peek"><summary>👁 What MiniMax gets</summary><pre id="h3Pre"></pre><div class="note" id="h3NegPeek"></div></details>
         </div>
       </div>
       <div id="pieceEdit" hidden>
@@ -560,7 +564,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
 // ---------- the PCs ----------
 const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
-  'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
+  'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
@@ -1172,19 +1176,32 @@ const H3_SOUND = 'Natural ambient sound that fits the place, with the physical s
 const ATTR_WEAR = x => /outfit|cloth|dress|wear|costume|uniform|suit|shirt|\btop\b|skirt|pants|trousers|jeans|lingerie|bikini|swimsuit|jacket|coat|armou?r|gown|kimono|robe|corset|shoes|boots|\bhat\b/i.test(x);
 const andList = a => a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
 const dot = x => x.trim().replace(/[\s.]*$/, '') + '.';
-// ✨ motion and quality words (Jordan 2026-11-08: the 🎨 live-action preset's "real skin texture" pushed skin through her clothes; "the
-// equivalent of a quality tag prompt to just try to get the movement and everything really looking good… on by default"). Added after
-// the style in the H3 prompt; tap to switch off (S.f.quality false). Old style presets left in the style box are cleared once.
-// (Jordan 2026-11-08, take 2: still nipples through clothing and stretchy skin. PRISM PIKA is an Eros merge: naming bodies, clothing, skin,
-// weight or follow-through, even to say "stays opaque", pulls it toward bodies and soft jiggle. Only motion, camera and image words now.)
-// (take 3, Jordan 2026-11-09: even the motion/camera/image line brought it back, and switching it off fixed it. The words every version
-// shared were "sharp", "highly detailed" and "professional": asking for more detail made MiniMax draw what's under thin cloth.) Now colour
-// and motion only, softly lit, no detail or sharpness words; editable in 🎨 Style, sounds and music (empty = this)
-const QUALITY = 'The colours are rich, natural and well balanced, with soft, flattering light. The motion is smooth and natural at a realistic pace, and the camera moves steadily.';
+// ✨ motion and quality words (Jordan 2026-11-08 → 2026-11-09). History: the 🎨 live-action preset ("real skin texture and pores"), then
+// three quality lines (bodies/clothing/weight; sharp/detailed/professional; colour/motion only) ALL brought nipples through clothing and
+// stretchy skin on the Singularity × 10Eros merges (PRISM PIKA / PRISM), and switching the line off fixed it. Why: 10Eros is twenty-odd NSFW
+// LoRAs grafted into the model, "reached with the correct prompts", and their training captions carry the SD-era quality boilerplate
+// ("highly detailed, sharp, professional, soft flattering light…"), so a quality line is the very wording that switches those concepts on;
+// MiniMax's own prompt guide says the same from the other side ("prefer specific details over generic quality slogans"). So: OFF by default
+// now, the words are concrete camera/light facts only (no detail, skin or sharpness words), editable in 🎨 Style, sounds and music
+// (empty = this), and the junk list went to 🚫 Keep out, where a negative belongs. Old style presets left in the style box are cleared once.
+const QUALITY = 'The camera is on a tripod and moves slowly and deliberately. The key light is soft and even, with gentle fill and natural colour. Motion unfolds at a realistic pace with believable weight and timing.';
 const OLD_STYLES = ["The target video is photorealistic live-action film footage shot on a real cinema camera: real people with natural skin texture and pores, real locations, natural light and lens depth of field. It is not animation, not a cartoon, not anime, not a 3D render and not CGI.", "The target video is hand-drawn 2D animation: clean line art, cel shading with flat colour and soft shadows, painted backgrounds, drawn on twos like a high-budget anime film. It is not live action, not a photograph and not 3D CGI.", "The target video is a modern 3D animated feature film: stylized CG characters with appealing proportions, soft global illumination, subsurface skin, detailed rendered materials and cinematic camera work. It is not live action, not a photograph and not 2D drawn animation."];
-const qualityOf = H => H && H.quality===false ? '' : String(H && H.qtext || '').trim() || QUALITY;
+const qualityOf = H => H && H.quality===true ? String(H.qtext || '').trim() || QUALITY : '';
+// 🚫 Keep out (Jordan 2026-11-09: "I don't want weird nipples sticking through clothing and other weird stuff like that", and she does NSFW
+// shots too, so the words are hers to edit per film). MiniMax H3 samples at CFG 1 (the checkpoints are guidance-distilled), so a classic
+// negative prompt does nothing; NAG (Normalized Attention Guidance, the ComfyUI-NAG-MiniMaxH3 node pack by BenderBlender, MIT) applies the
+// negative inside every block's attention instead and works on the 8-step merges. On by default; a PC without the node gets no 🚫 jobs while
+// another PC has it (canRun), and with no PC having it the take simply renders without. Costs about 1.5× a step (a second attention pass).
+const KEEP_OUT = 'nipples showing through clothing, see-through or sheer fabric, clothes clinging and showing what is under them, stretched or warped skin, rubbery melting anatomy, extra fingers or limbs, deformed face, frozen frame, flickering, jitter, blurry, low quality, jpeg artifacts, watermark, text, subtitles, muffled or distorted voice';
+const NAG = {scale:5, tau:2.5, alpha:0.25, end:0}; // the node pack's defaults (its author's tested Ref2VA settings)
+const keepOut = f => f && f.negOn===false ? '' : String(f && f.neg || '').trim() || KEEP_OUT;
+const nagOn = oi => !!(oi && oi.NAGGuiderMiniMaxH3 && oi.CLIPTextEncode), nagAny = () => S.pcs.some(p => nagOn(pcOf(p.url).oi));
 function drawStyle(){ const el = $('#styleChips'); if(!el) return; const f = S.f; if(OLD_STYLES.includes((f.h3Style || '').trim())){ f.h3Style = ''; save(); }
-  $('#styleRow').hidden = !!f.sm || !f.h3; el.innerHTML = `<button class="btn${f.quality!==false ? ' pri' : ''}" data-q="1">✨ Motion and quality words: ${f.quality!==false ? 'on' : 'off'}</button>`; }
+  const q = f.quality===true, ng = f.negOn!==false; $('#styleRow').hidden = false;
+  el.innerHTML = (f.sm || !f.h3 ? '' : `<button class="btn${q ? ' pri' : ''}" data-q="1">✨ Motion and quality words: ${q ? 'on' : 'off'}</button>`)
+    + `<button class="btn${ng ? ' pri' : ''}" data-neg="1">🚫 Keep out: ${ng ? 'on' : 'off'}</button>` + (ng && !nagAny() ? '<span class="note" style="align-self:center">needs the NAG node on a PC (not seen yet)</span>' : '');
+  const box = $('#negBox'); if(!box) return; box.hidden = !ng; const e = $('#h3Neg'), sc = $('#negScale');
+  if(document.activeElement!==e) e.value = f.neg || ''; e.placeholder = KEEP_OUT; if(document.activeElement!==sc) sc.value = f.negScale || ''; sc.placeholder = NAG.scale; }
 function h3Style(s, base){ s = (s || '').trim().replace(/[\s.]*$/, '') || 'Live-action, cinematic';
   if(base) return s; // inside [Shot 1] for the base format: "[Shot 1] Live-action, cinematic. …"
   return s.split(/\s+/).length > 8 || /\b(target video|style)\b/i.test(s) ? s + '.' : 'The target video is in a ' + s.replace(/^./, c => c.toLowerCase()) + ' style.'; }
@@ -1281,6 +1298,7 @@ function canRun(url, job){
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
   { const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), miss = lorasOf(job).find(l => !have.includes(l.name)); if(miss) return 'doesn\'t have the LoRA ' + bn(miss.name); }
+  if(job.neg && !nagOn(oi) && nagAny()) return "doesn't have the 🚫 Keep out node (ComfyUI-NAG-MiniMaxH3)";
   if(job.up){ const why = regenMissing(oi, job); if(why) return "can't regenerate bigger (" + why + ')'; }
   if(job.sm && !(oi['Video Slice'] && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && oi.LoadVideo)) return "can't smooth a video (update ComfyUI)";
   if(job.cont && !(((oi.MiniMaxH3MotionContext || {}).input || {}).optional || {}).context_frames) return "can't carry on a video (install or update H3 Motion Context)";
@@ -1305,7 +1323,7 @@ function busySecs(url){ // what's ahead on that PC: our own pieces by their esti
 function estSecs(job, url){ // Render: ~24 s a step for a 5 s 864x480 clip, more with size and length; Main 1.26x
   let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20);
   for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? smoothKeys(p.gen, job.sm.every || 4).length * (job.w / 32) * (job.h / 32) : 0);
-    s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1) * (job.ctl ? (job.ctl2 ? 1.5 : 1.3) : 1); }
+    s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1) * (job.ctl ? (job.ctl2 ? 1.5 : 1.3) : 1) * (job.neg && nagOn(oi) ? 1.5 : 1); }
   return s * pcSpeed(url) + 15 * job.pieces.length;
 }
 // 🦴 the MiniMax H3 Fun ControlNet (union: skeleton, depth, edges) lives in models/model_patches
@@ -1321,6 +1339,12 @@ function pickPc(job, avoid){
 function fill(oi, cls, inputs){ const req = ((oi[cls] || {}).input || {}).required || {};
   for(const [k, spec] of Object.entries(req)){ if(k in inputs || /^COMFY_/.test(spec[0])) continue; const l = combo(oi, cls, k); if(l.length){ inputs[k] = l[0]; continue; } if(spec[1] && spec[1].default !== undefined) inputs[k] = spec[1].default; }
   return inputs; }
+// 🚫 Keep out: NAG's guider instead of the plain one when the take has keep-out words and this PC has the node pack (a take from before
+// 🚫 existed follows the form's words, so ✏ Edit and ✨ High quality on an old take get them too)
+const negOf = t => t.neg !== undefined ? t.neg : keepOut(S.f);
+function guiderOf(add, oi, t, model, cond, clip){ const neg = negOf(t);
+  if(!neg || !nagOn(oi)) return add('BasicGuider', {model, conditioning:cond});
+  return add('NAGGuiderMiniMaxH3', {model, conditioning:cond, nag_negative:[add('CLIPTextEncode', {clip, text:neg}), 0], nag_scale:+t.negScale || NAG.scale, nag_tau:NAG.tau, nag_alpha:NAG.alpha, nag_sigma_end:NAG.end}); }
 function pieceGraph(t, i, oi, names){
   { const M0 = resolveModel(oi, t.model, t.turbo); t = castTake(t, !(M0 && M0.fl2v)); } // 👥 the subjects' pictures, as they are now
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
@@ -1417,7 +1441,7 @@ function pieceGraph(t, i, oi, names){
     cond = [mc, 0]; trim = [mc, 1]; }
   else if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:ctxDir(t, i), clip_index:i});
     const mc = add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_latent:[ld, 0]}); cond = [mc, 0]; trim = [mc, 1]; }
-  const guider = add('BasicGuider', {model, conditioning:cond});
+  const guider = guiderOf(add, oi, t, model, cond, clip);
   // ↻ redo strength (Jordan 2026-11-08: "a strength so I can set how much I want to edit something"): below 1 the window starts from the
   // take's own frames (VAE-encoded, the sound part kept as MiniMax made it) instead of noise, and only the last part of the steps runs
   let lat0 = lat, den = 1;
@@ -1645,7 +1669,7 @@ function upGraph(t, oi, names){
       iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:W, height:Hh, length, ref_image_size:'match'}, ri)); }
     else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:W, height:Hh, length});
     const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:Z ? Z.lat : [big, 0], audio_latent:[sep, 1]});
-    const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed || 42}), 0], guider:[add('BasicGuider', {model, conditioning:[iv, 0]}), 0],
+    const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed || 42}), 0], guider:[guiderOf(add, oi, t, model, [iv, 0], clip), 0],
       sampler:[add('KSamplerSelect', {sampler_name:'euler'}), 0], sigmas:[add('ManualSigmas', {sigmas:sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl)}), 0], latent_image:[av, 0]});
     const vl = add('LTXVSeparateAVLatent', {av_latent:[out, 0]});
     return [add('VAEDecodeTiled', {samples:[vl, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0]; };
@@ -1787,7 +1811,8 @@ function snapshot(){ // the form, frozen into a take
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, ...contBits(), ...stillBits(), lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
-    h3:!sm && f.h3 ? {quality:f.quality!==false, qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
+    neg:keepOut(f), negScale:+f.negScale || NAG.scale,
+    h3:!sm && f.h3 ? {quality:f.quality===true, qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
     descOff:JSON.parse(JSON.stringify(f.descOff || {})),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
@@ -2083,7 +2108,8 @@ function useAgain(t, quiet){
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}}))); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
-  if(!t.sm){ f.h3 = !!t.h3; if(t.h3) Object.assign(f, {quality:t.h3.quality!==false, qtext:t.h3.qtext || '', h3Style:t.h3.style || '', h3Sound:t.h3.sound || '', h3Music:t.h3.music || ''}); }
+  if(t.neg !== undefined){ f.negOn = !!t.neg; if(t.neg) f.neg = t.neg===KEEP_OUT ? '' : t.neg; if(t.negScale) f.negScale = +t.negScale===NAG.scale ? '' : t.negScale; }
+  if(!t.sm){ f.h3 = !!t.h3; if(t.h3) Object.assign(f, {quality:t.h3.quality===true, qtext:t.h3.qtext || '', h3Style:t.h3.style || '', h3Sound:t.h3.sound || '', h3Music:t.h3.music || ''}); }
   $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); // these boxes are only filled at start, so set them here too
   save(); drawAll(); if(quiet) return; toForm(); toast('Its settings are back in the form');
 }
@@ -2209,7 +2235,7 @@ function h3Peek(){
   const pc = t.pieces[0], words = lorasOf(t).map(l => (l.words || '').trim()).filter(Boolean).join(', '), extra = !fl2v && t.fl && t.first && t.imgs.length < 9;
   const txt = h3Prompt({h3:t.h3, text:castText(pc.prompt, t, false), words, fl2v, imgs:fl2v ? [] : t.imgs, vids:fl2v ? [] : t.vids, auds:fl2v ? [] : t.auds, cont:!!pc.ctx, secs:pc.gen / FPS,
     first:!!(t.fl && t.first), last:!!(t.lastOn && t.pieces.length===1), firstPic:extra ? t.imgs.length + 1 : 0});
-  $('#h3Pre').textContent = txt; $('#h3Peek').querySelector('summary').textContent = '👁 What MiniMax gets' + (t.pieces.length > 1 ? ' (piece 1 of ' + t.pieces.length + ')' : '');
+  $('#h3Pre').textContent = txt; { const ng = keepOut(f); $('#h3NegPeek').textContent = '🚫 Keep out (NAG negative): ' + (ng ? ng + (nagAny() ? '' : '  (needs the NAG node on a PC)') : 'off'); } $('#h3Peek').querySelector('summary').textContent = '👁 What MiniMax gets' + (t.pieces.length > 1 ? ' (piece 1 of ' + t.pieces.length + ')' : '');
   const n = h3Words(f.prompt), miss = refsOn().imgs.filter(r => !r.pose && !(r.desc || '').trim()).length, notes = [];
   notes.push(n + ' words in the shot. MiniMax\'s own rewrites run 350 to 500: what each person looks like and does, where they are in the frame, the place, the light, and how the camera moves (e.g. "the camera pushes in slowly").');
   if(miss) notes.push(miss + ' picture' + (miss > 1 ? 's have' : ' has') + ' no words yet, so MiniMax only hears "the subject shown in <Picture n>".');
@@ -2561,7 +2587,9 @@ $('#castList').onclick = e => { const b = e.target.closest('[data-cast]'); if(!b
   else if(a==='rm'){ if(!confirm('Remove ' + tok + '? Its stand-in words go back into every prompt that uses it.')) return; const w = (c.stand || '').trim() || 'someone'; castSwap(new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'gi'), w); S.cast = S.cast.filter(x => x!==c); $('#prompt').value = S.f.prompt; }
   save(); drawCast(); drawShot(); };
 $('#h3Style').oninput = e => { S.f.h3Style = e.target.value; save(); h3Peek(); drawStyle(); };
-$('#styleChips').onclick = e => { if(!e.target.closest('[data-q]')) return; S.f.quality = S.f.quality===false; save(); drawStyle(); h3Peek(); };
+$('#styleChips').onclick = e => { if(e.target.closest('[data-q]')) S.f.quality = S.f.quality!==true; else if(e.target.closest('[data-neg]')) S.f.negOn = S.f.negOn===false; else return; save(); drawStyle(); h3Peek(); };
+$('#h3Neg').oninput = e => { S.f.neg = e.target.value; save(); h3Peek(); };
+$('#negScale').oninput = e => { S.f.negScale = e.target.value; save(); };
 $('#h3Sound').oninput = e => { S.f.h3Sound = e.target.value; save(); h3Peek(); };
 $('#h3Music').oninput = e => { S.f.h3Music = e.target.value; save(); h3Peek(); };
 $('#h3Qual').oninput = e => { S.f.qtext = e.target.value; save(); h3Peek(); };
@@ -3162,7 +3190,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
