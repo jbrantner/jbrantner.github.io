@@ -231,7 +231,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
         <div id="styleRow" style="margin-top:8px"><div class="chips" id="styleChips"></div></div>
         <details id="negBox" style="margin-top:6px"><summary class="note">🚫 What to keep out (tap to edit)</summary><div style="display:grid;gap:8px;margin-top:8px">
           <textarea id="h3Neg" style="min-height:72px"></textarea>
-          <div class="row" style="align-items:center"><span class="note" style="flex:1">Empty = the default. For a nude shot, take out the clothing words or switch 🚫 off. Goes with every pass: render, ✏ Edit and ✨ High quality.</span><label class="note">Strength <input id="negScale" type="number" min="1.5" max="10" step="0.5" inputmode="decimal" style="width:64px"></label></div>
+          <div class="row" style="align-items:center"><span class="note" style="flex:1">Empty = the default. For a nude shot, take out the clothing words or switch 🚫 off. Goes with every pass: render, ✏ Edit and ✨ High quality.</span><label class="note">Strength <input id="negScale" type="number" min="2" max="15" step="1" inputmode="numeric" style="width:64px" title="5 gentle, 9 normal, 15 the most before it warps"></label></div>
         </div></details>
         <p class="note" id="mqNote" hidden style="margin:4px 0 0"></p>
       </div>
@@ -1191,9 +1191,12 @@ const qualityOf = H => H && H.quality===true ? String(H.qtext || '').trim() || Q
 // shots too, so the words are hers to edit per film). MiniMax H3 samples at CFG 1 (the checkpoints are guidance-distilled), so a classic
 // negative prompt does nothing; NAG (Normalized Attention Guidance, the ComfyUI-NAG-MiniMaxH3 node pack by BenderBlender, MIT) applies the
 // negative inside every block's attention instead and works on the 8-step merges. On by default; a PC without the node gets no 🚫 jobs while
-// another PC has it (canRun), and with no PC having it the take simply renders without. Costs about 1.5× a step (a second attention pass).
+// another PC has it (canRun), and with no PC having it the take simply renders without. A second attention pass: free at small sizes, some at full size.
 const KEEP_OUT = 'nipples showing through clothing, see-through or sheer fabric, clothes clinging and showing what is under them, stretched or warped skin, rubbery melting anatomy, extra fingers or limbs, deformed face, frozen frame, flickering, jitter, blurry, low quality, jpeg artifacts, watermark, text, subtitles, muffled or distorted voice';
-const NAG = {scale:5, tau:2.5, alpha:0.25, end:0}; // the node pack's defaults (its author's tested Ref2VA settings)
+// strength (Render sweep 2026-11-09, base model, seed 7): the pack's 5/2.5/0.25 showed nothing; 9/3.5/0.5 turned a sunny scene overcast
+// cleanly; 15/5/1 shrank the car and began to warp; 25/8/1 broke the picture. One number sets all three: 5 gentle, 9 normal, 15 the ceiling
+const NAG = {scale:9, end:0, max:15, min:2};
+const nagArgs = s => { s = Math.max(NAG.min, Math.min(NAG.max, +s || NAG.scale)); return {nag_scale:s, nag_tau:Math.round((1.5 + s * 0.22) * 100) / 100, nag_alpha:Math.min(1, Math.round(s / 18 * 100) / 100), nag_sigma_end:NAG.end}; };
 const keepOut = f => f && f.negOn===false ? '' : String(f && f.neg || '').trim() || KEEP_OUT;
 const nagOn = oi => !!(oi && oi.NAGGuiderMiniMaxH3 && oi.CLIPTextEncode), nagAny = () => S.pcs.some(p => nagOn(pcOf(p.url).oi));
 function drawStyle(){ const el = $('#styleChips'); if(!el) return; const f = S.f; if(OLD_STYLES.includes((f.h3Style || '').trim())){ f.h3Style = ''; save(); }
@@ -1323,7 +1326,7 @@ function busySecs(url){ // what's ahead on that PC: our own pieces by their esti
 function estSecs(job, url){ // Render: ~24 s a step for a 5 s 864x480 clip, more with size and length; Main 1.26x
   let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20);
   for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? smoothKeys(p.gen, job.sm.every || 4).length * (job.w / 32) * (job.h / 32) : 0);
-    s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1) * (job.ctl ? (job.ctl2 ? 1.5 : 1.3) : 1) * (job.neg && nagOn(oi) ? 1.5 : 1); }
+    s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1) * (job.ctl ? (job.ctl2 ? 1.5 : 1.3) : 1) * (job.neg && nagOn(oi) ? 1.2 : 1); }
   return s * pcSpeed(url) + 15 * job.pieces.length;
 }
 // 🦴 the MiniMax H3 Fun ControlNet (union: skeleton, depth, edges) lives in models/model_patches
@@ -1344,7 +1347,7 @@ function fill(oi, cls, inputs){ const req = ((oi[cls] || {}).input || {}).requir
 const negOf = t => t.neg !== undefined ? t.neg : keepOut(S.f);
 function guiderOf(add, oi, t, model, cond, clip){ const neg = negOf(t);
   if(!neg || !nagOn(oi)) return add('BasicGuider', {model, conditioning:cond});
-  return add('NAGGuiderMiniMaxH3', {model, conditioning:cond, nag_negative:[add('CLIPTextEncode', {clip, text:neg}), 0], nag_scale:+t.negScale || NAG.scale, nag_tau:NAG.tau, nag_alpha:NAG.alpha, nag_sigma_end:NAG.end}); }
+  return add('NAGGuiderMiniMaxH3', Object.assign({model, conditioning:cond, nag_negative:[add('CLIPTextEncode', {clip, text:neg}), 0]}, nagArgs(t.negScale))); }
 function pieceGraph(t, i, oi, names){
   { const M0 = resolveModel(oi, t.model, t.turbo); t = castTake(t, !(M0 && M0.fl2v)); } // 👥 the subjects' pictures, as they are now
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
