@@ -578,7 +578,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
 const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
-  'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple'];
+  'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
@@ -1015,6 +1015,7 @@ const castMore = (c, t) => { const off = descOffOf(c, t); if(off) return descTag
 // a subject's switchable chips: her details (when there's more than one) and her ✨ attributes ('attr:<id>'; Jordan 2026-11-08: "it should also be able to be toggled")
 const descChips = c => { const tg = descTags(c && c.desc); return (fitOf(c) ? [{key:'fit', label:'👗 Own outfit'}] : []).concat(tg.length > 1 ? tg.map(x => ({key:descKey(x), label:x})) : [])
   .concat(nudeAble(c) ? [{key:'nude', label:'🫥 No clothes when no outfit'}] : [])
+  .concat(((c && c.poses) || []).map(x => libOf(x.id)).filter(P => P && P.kind==='pose').map(P => ({key:'pose:' + P.id, label:'🧍 ' + poseName(P)})))
   .concat(((c && c.attrs) || []).map(libOf).filter(Boolean).map(A => ({key:'attr:' + A.id, label:(A.kind==='wear' ? '👗 ' : '✨ ') + (A.name || A.what || 'attribute')})))
   // every other ✨ Library attribute too, off until tapped (Jordan 2026-11-08: "no way for me to turn an attribute on for her"): 'add:<id>' in descOff = on for this shot
   .concat((c && (c.kind || 'char')==='char' ? (S.lib || []).filter(A => onK(A.kind) && !(c.attrs || []).includes(A.id)) : []).map(A => ({key:'add:' + A.id, label:(A.kind==='wear' ? '＋👗 ' : '＋✨ ') + (A.name || A.what || 'attribute'), add:true}))); };
@@ -1062,6 +1063,8 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   let need = used.reduce((a, n) => a + apics(castOf(n, t.film)).reduce((b, [, P]) => b + P.length, 0), 0); // (2026-11-08: an outfit didn't take, its pictures had no room)
   const vids = (t.vids || []).slice(), acts = c => (c.acts || []).map(x => [x, libOf(x.id)]).filter(([, A]) => A);
   for(const n of used) for(const [x, A] of acts(castOf(n, t.film))) if(!(A.vid && S.media[A.vid] && vids.length < MAXREF.vid)) need += libPics(A).filter(id => S.media[id]).slice(0, 3).length;
+  const pz = {}; for(const n of used) for(const x of posesOf(castOf(n, t.film), t)){ const P = libOf(x.id); (pz[P.id] = pz[P.id] || {P, who:[]}).who.push({n, p:x.p}); } // 🧍 one picture per pose, whoever takes it
+  need += Object.keys(pz).length;
   // each subject's share of the 9 slots (Jordan 2026-11-08: 4 characters, only 2 came out: the first two took every picture):
   // one picture each first, in cast order, then a second each, and so on, after the attributes' and actions' room
   const quota = {}, room0 = Math.max(0, MAXREF.img - imgs.length - need), have = used.map(n => [n, castPics(castOf(n, t.film)).length]);
@@ -1074,6 +1077,7 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
     for(const [x, A] of acts(c)){ const base = {actOf:n, to:x.to && castOf(x.to, t.film) ? x.to : 0, off:!!x.off, lib:A.id, what:(A.what || A.name || 'move').trim(), more:castMore(A)};
       if(A.vid && S.media[A.vid] && vids.length < MAXREF.vid){ vids.push(Object.assign({id:A.vid, sound:false, follow:false, keep:'loose'}, base)); continue; }
       const P = libPics(A).filter(id => S.media[id]).slice(0, 3); for(const id of P) if(imgs.length < MAXREF.img) imgs.push(Object.assign({id, keep:'loose'}, base)); need -= P.length; } }
+  for(const {P, who} of Object.values(pz)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', when:P.when==='all' ? 'all' : 'start', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:castMore(P), poseOf:who.sort((a, b) => a.p - b.p).map(w => ({n:w.n, p:w.p, w:poseWho(P, w.p)}))});
   return Object.assign({}, t, {imgs, vids}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
   const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) (pics[r.cast] = pics[r.cast] || []).push('<Picture ' + (k + 1) + '>'); });
@@ -1094,6 +1098,8 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
   const nudes = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast && r.nude) (nudes[r.cast] = nudes[r.cast] || []).push('<Picture ' + (k + 1) + '>'); }); // 🫥
   Object.entries(nudes).forEach(([n, p]) => ad.unshift('<Subject ' + n + '> is nude, wearing no clothing; the clothes in ' + andList(p) + ' are not used.'));
   Object.entries(fits).forEach(([n, p]) => ad.unshift('<Subject ' + n + '> wears exactly the outfit shown in ' + andList(p) + ': the same clothes, cut, colours and details.'));
+  ((T && T.imgs) || []).forEach((r, k) => { if(!r.poseOf) return; const nm = n => pics[n] ? '<Subject ' + n + '>' : (castWho(castOf(n, fk)) || 'the person').replace(/^./, x => x.toUpperCase()); // 🧍
+    ad.push('<Picture ' + (k + 1) + '> is a pose reference only' + (r.coded ? ', every person in it painted one flat colour' : '') + ': ' + r.poseOf.map(x => nm(x.n) + (r.when==='all' ? ' holds' : ' starts in') + ' the pose of ' + x.w + ' in it').join(', ') + '. Nobody, no clothes, colours or background from it appear.'); });
   if(plain && ad.length) out = ad.join(' ') + ' ' + out;
   return out; }
 const castWords = (txt, k) => (txt || '').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
@@ -1124,7 +1130,7 @@ function subjHl(){ const ta = $('#prompt'), hl = $('#promptHl'); if(!ta || !hl) 
   hl.querySelectorAll('mark').forEach(m => m.classList.toggle('wr', m.getClientRects().length > 1)); } // a tag broken over two lines shows its own words
 function subjAt(v, p){ let hit = null; (v || '').replace(SUBRE, (m, n, off) => { if(p >= off && p < off + m.length) hit = {n:+n, off, len:m.length}; return m; }); return hit; }
 // scope (Jordan 2026-11-09: "I'd like a way to switch only 1 back so I can fix the prompt"): just the tag tapped, this prompt, or everywhere; the last one picked is kept
-function subjPick(n, at){ const c = castOf(n), others = (S.cast || []).filter(x => x.n!==+n), libs = (S.lib || []).filter(L => !onK(L.kind) && L.kind!=='act' && !(S.cast || []).some(x => x.lib===L.id));
+function subjPick(n, at){ const c = castOf(n), others = (S.cast || []).filter(x => x.n!==+n), libs = (S.lib || []).filter(L => !onK(L.kind) && L.kind!=='act' && L.kind!=='pose' && !(S.cast || []).some(x => x.lib===L.id));
   const th = id => id && S.media[id] ? S.media[id].thumb || '' : '', tile = (key, pic, name, sub, col) => `<button class="btn" data-sp="${key}" style="display:flex;gap:10px;align-items:center;width:100%;text-align:left;margin-top:6px${col ? ';border-color:' + col : ''}">${pic ? `<img src="${pic}" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:8px">` : '<span style="width:44px;text-align:center;font-size:22px">👤</span>'}<span><b>${esc(name)}</b><br><small style="color:var(--soft)">${esc(sub)}</small></span></button>`;
   let sc = S.spScope && (S.spScope!=='tag' || at) ? S.spScope : 'all';
   openSheet(`<h3><span>👥 Who is it?</span><button class="btn" data-close>✕</button></h3><div id="spBox">
@@ -1144,7 +1150,7 @@ function drawCast(){ const L = S.cast || [];
   $('#castSum').textContent = L.length ? L.length + (L.length > 1 ? ' subjects' : ' subject') + (L.some(c => castPics(c).length) ? ' · ' + L.filter(c => castPics(c).length).length + ' with pictures' : '') : '';
   $('#castList').innerHTML = L.map(c => { const P = castPics(c), m = P.length > 0, hits = castHits(c.stand), tk = '&lt;Subject ' + c.n + '&gt;', LB = c.lib && libOf(c.lib);
     const fitB = (c.kind || 'char')==='char' ? `<button class="btn${fitOf(c) ? ' pri' : ''}" data-cast="fit" style="width:100%;margin-top:8px">👗 Wear the outfit in their pictures: ${fitOf(c) ? 'on' : 'off'}</button>${fitOf(c) ? '<div class="note" style="margin-top:4px">Their pictures are the clothing reference too. 👗 Clothing on them in a shot (or its 👗 chip) switches it off there.</div>' : ''}` : '';
-    const attrs = (c.attrs || []).map(libOf).filter(Boolean), ach = fitB + ((c.kind || 'char')==='char' ? `<div class="lab" style="margin-top:8px"><span>👗 Clothing</span></div><div class="chips">${attrs.filter(a => a.kind==='wear').map(a => `<button class="btn" data-cast="unattr:${a.id}">${esc(a.name || a.what || 'clothing')} ✕</button>`).join('')}<button class="btn" data-cast="wear">＋ Clothing</button></div>${nudeAble(c) && !fitOf(c) && !attrs.some(a => a.kind==='wear') ? '<div class="note" style="margin-top:4px">No outfit chosen: sent with no clothes (switch it off for a shot with its 🫥 chip).</div>' : ''}<div class="lab" style="margin-top:8px"><span>✨ Attributes</span></div><div class="chips">${attrs.filter(a => a.kind!=='wear').map(a => `<button class="btn" data-cast="unattr:${a.id}">${esc(a.name || a.what || 'attribute')} ✕</button>`).join('')}<button class="btn" data-cast="attr">＋ Attribute</button></div><div class="lab" style="margin-top:8px"><span>🥋 Actions</span></div><div class="chips">${(c.acts || []).filter(a => libOf(a.id)).map(a => `<button class="btn" data-cast="unact:${a.id}">${esc(libOf(a.id).name || libOf(a.id).what || 'action')}${a.off ? ' ← from off screen' : a.to && castOf(a.to) ? ' → ' + esc(castName(castOf(a.to))) : ''} ✕</button>`).join('')}${actsOnto(c).map(([d, a]) => `<button class="btn" data-cast="unactto:${d.n}>${a.id}">${esc(castName(d))}'s ${esc(libOf(a.id).name || libOf(a.id).what || 'action')} → them ✕</button>`).join('')}<button class="btn" data-cast="act">＋ Action</button></div>` : '');
+    const attrs = (c.attrs || []).map(libOf).filter(Boolean), ach = fitB + ((c.kind || 'char')==='char' ? `<div class="lab" style="margin-top:8px"><span>👗 Clothing</span></div><div class="chips">${attrs.filter(a => a.kind==='wear').map(a => `<button class="btn" data-cast="unattr:${a.id}">${esc(a.name || a.what || 'clothing')} ✕</button>`).join('')}<button class="btn" data-cast="wear">＋ Clothing</button></div>${nudeAble(c) && !fitOf(c) && !attrs.some(a => a.kind==='wear') ? '<div class="note" style="margin-top:4px">No outfit chosen: sent with no clothes (switch it off for a shot with its 🫥 chip).</div>' : ''}<div class="lab" style="margin-top:8px"><span>✨ Attributes</span></div><div class="chips">${attrs.filter(a => a.kind!=='wear').map(a => `<button class="btn" data-cast="unattr:${a.id}">${esc(a.name || a.what || 'attribute')} ✕</button>`).join('')}<button class="btn" data-cast="attr">＋ Attribute</button></div><div class="lab" style="margin-top:8px"><span>🥋 Actions</span></div><div class="chips">${(c.acts || []).filter(a => libOf(a.id)).map(a => `<button class="btn" data-cast="unact:${a.id}">${esc(libOf(a.id).name || libOf(a.id).what || 'action')}${a.off ? ' ← from off screen' : a.to && castOf(a.to) ? ' → ' + esc(castName(castOf(a.to))) : ''} ✕</button>`).join('')}${actsOnto(c).map(([d, a]) => `<button class="btn" data-cast="unactto:${d.n}>${a.id}">${esc(castName(d))}'s ${esc(libOf(a.id).name || libOf(a.id).what || 'action')} → them ✕</button>`).join('')}<button class="btn" data-cast="act">＋ Action</button></div><div class="lab" style="margin-top:8px"><span>🧍 Poses</span></div><div class="chips">${(c.poses || []).filter(x => libOf(x.id)).map(x => { const P = libOf(x.id); return `<button class="btn" data-cast="unpose:${x.id}">${esc(poseName(P))}${x.p >= 0 && (P.ppl || []).length > 1 ? ' (' + esc(POSE_COL[x.p % POSE_COL.length][0]) + ')' : ''} ✕</button>`; }).join('')}<button class="btn" data-cast="pose">＋ Pose</button></div>` : '');
     if(LB) return `<div class="cast" data-cn="${c.n}"><div class="row" style="justify-content:space-between;align-items:center"><b>${esc(LB.name || castName(c))}</b><span class="row" style="gap:6px"><button class="btn" data-cast="ins">↧ Into the prompt</button><button class="btn" data-cast="rm" aria-label="Take it out of this film">✕</button></span></div>
       <div class="castpics" style="margin-top:6px">${P.map(id => `<span class="cpw"><img src="${(S.media[id] || {}).thumb || ''}" alt=""></span>`).join('') || '<span class="note">No picture yet: sent as "' + esc(c.stand || '') + '"</span>'}</div>
       ${ach}<button class="btn" data-cast="lib" style="width:100%;margin-top:8px">📚 Edit in the Library</button></div>`;
@@ -1166,14 +1172,14 @@ function drawCast(){ const L = S.cast || [];
 // A film's 👥 subject made from the Library is a link (c.lib): its name, pictures and words are copied from the entry whenever the entry
 // changes, so a recurring character changes in every film at once. Attributes (a haircut, an eye design…) are put on a film's
 // character (c.attrs) and sent as their own pictures with attribute_transfer: only that feature moves onto the person.
-const LIBK = [['char', '🧑 Characters', '🧑 Character', 'a woman'], ['thing', '📦 Objects', '📦 Object', 'an object'], ['place', '🏞 Places', '🏞 Place', 'a place'], ['attr', '✨ Attributes', '✨ Attribute', ''], ['wear', '👗 Clothing', '👗 Clothing', ''], ['act', '🥋 Actions', '🥋 Action', '']];
+const LIBK = [['char', '🧑 Characters', '🧑 Character', 'a woman'], ['thing', '📦 Objects', '📦 Object', 'an object'], ['place', '🏞 Places', '🏞 Place', 'a place'], ['attr', '✨ Attributes', '✨ Attribute', ''], ['wear', '👗 Clothing', '👗 Clothing', ''], ['act', '🥋 Actions', '🥋 Action', ''], ['pose', '🧍 Poses', '🧍 Pose', '']];
 const libOf = id => (S.lib || []).find(x => x.id===id);
 const onK = k => k==='attr' || k==='wear'; // put ON a character (✨ attribute or 👗 clothing)
 const libPics = L => (L.pics = (L.pics || []).filter(id => S.media[id]));
 const libKind = L => LIBK.find(k => k[0]===L.kind) || LIBK[0];
 function libFill(c, L){ Object.assign(c, {kind:onK(L.kind) ? 'char' : L.kind, stand:(L.stand || '').trim() || libKind(L)[3], who:L.name || '', desc:L.desc || '', pics:libPics(L).slice(), keep:L.keep || 'exact'}); delete c.pic; }
 function libSync(L){ for(const cl of [S.cast, ...Object.values(S.casts || {}), S.castOld || []]) for(const c of cl) if(c.lib===L.id) libFill(c, L); }
-function libInFilm(L){ if(L.kind==='act') return S.cast.filter(c => (c.acts || []).some(a => a.id===L.id)); return onK(L.kind) ? S.cast.filter(c => (c.attrs || []).includes(L.id)) : S.cast.filter(c => c.lib===L.id); }
+function libInFilm(L){ if(L.kind==='pose') return S.cast.filter(c => (c.poses || []).some(x => x.id===L.id)); if(L.kind==='act') return S.cast.filter(c => (c.acts || []).some(a => a.id===L.id)); return onK(L.kind) ? S.cast.filter(c => (c.attrs || []).includes(L.id)) : S.cast.filter(c => c.lib===L.id); }
 function libToCast(L){ let c = S.cast.find(x => x.lib===L.id); if(c) return c;
   c = {n:S.cast.reduce((a, x) => Math.max(a, x.n), 0) + 1, lib:L.id, attrs:[]}; libFill(c, L); S.cast.push(c); return c; }
 function libNew(kind, from){ const L = {id:'L' + Math.random().toString(36).slice(2, 10), kind:kind || 'char', name:'', stand:'', desc:'', pics:[], keep:'exact', what:''};
@@ -1182,35 +1188,39 @@ function libNew(kind, from){ const L = {id:'L' + Math.random().toString(36).slic
 function filmName(){ try{ const f = FW && FW.FILM && FW.FILM.S.films.find(x => x.id===S.fkey); if(f) return f.name; }catch(e){} return S.fkey ? 'this film' : 'one-off videos'; }
 let LIBF = 'all';
 function drawLib(){ const el = $('#libTab'); if(!el || el.hidden) return; const L = (S.lib || []).filter(x => LIBF==='all' || x.kind===LIBF);
-  el.innerHTML = `<div class="note">Everything you reuse, kept once. Add a character, object or place to a film's 👥 cast; put an attribute (a haircut, eye design, tattoo…) on one of its characters. Change an entry here and every film that uses it follows. Adding goes to <b>${esc(filmName())}</b>, the film open in 🎞 Films.</div>
+  el.innerHTML = `<div class="note">Everything you reuse, kept once. Add a character, object or place to a film's 👥 cast; put an attribute (a haircut, eye design, tattoo…) on one of its characters; give a 🧍 pose to who should take it. Change an entry here and every film that uses it follows. Adding goes to <b>${esc(filmName())}</b>, the film open in 🎞 Films.</div>
     <div class="seg wrap" style="margin-top:10px">${[['all', 'All']].concat(LIBK.map(k => [k[0], k[1]])).map(([v, t]) => `<button data-lib="f:${v}" class="${LIBF===v ? 'on' : ''}">${t}</button>`).join('')}</div>
     <button class="btn pri" data-lib="new" style="width:100%;margin-top:10px">＋ New ${LIBF==='all' ? 'entry' : libKind({kind:LIBF})[2].replace(/^\S+\s/, '').toLowerCase()}</button>
-    ${L.length ? `<div class="libGrid">${L.map(x => { const P = libPics(x), on = libInFilm(x).length; return `<button class="libTile${on ? ' in' : ''}" data-lib="open:${x.id}">${P.length ? `<img src="${(S.media[P[0]] || {}).thumb || ''}" alt="">` : `<span>${libKind(x)[2].split(' ')[0]}</span>`}<b>${esc(x.name || 'Unnamed')}</b><small>${esc(libKind(x)[2].replace(/^\S+\s/, ''))}${onK(x.kind) && x.what ? ' · ' + esc(x.what) : ''}${on ? ' · in this film' : ''}</small></button>`; }).join('')}</div>`
+    ${L.length ? `<div class="libGrid">${L.map(x => { const P = libPics(x), on = libInFilm(x).length; return `<button class="libTile${on ? ' in' : ''}" data-lib="open:${x.id}">${P.length ? `<img src="${(S.media[P[0]] || {}).thumb || ''}" alt="">` : `<span>${libKind(x)[2].split(' ')[0]}</span>`}<b>${esc(x.name || 'Unnamed')}</b><small>${esc(libKind(x)[2].replace(/^\S+\s/, ''))}${onK(x.kind) && x.what ? ' · ' + esc(x.what) : ''}${x.kind==='pose' && (x.ppl || []).length ? ' · ' + x.ppl.length + (x.ppl.length > 1 ? ' people' : ' person') : ''}${on ? ' · in this film' : ''}</small></button>`; }).join('')}</div>`
       : `<div class="empty" style="margin-top:12px">Nothing here yet.</div>`}
     <div style="margin-top:18px" class="xf"><button class="btn" data-lib="poses">🧍 Pose keys (the old Poses tab)</button></div>`; }
-function openLib(id){ const L = libOf(id); if(!L) return; const P = libPics(L), K = libKind(L), ac = L.kind==='act', at = onK(L.kind) || ac, V = ac && L.vid && S.media[L.vid], inF = libInFilm(L), chars = S.cast.filter(c => (c.kind || 'char')==='char');
+function openLib(id){ const L = libOf(id); if(!L) return; const P = libPics(L), K = libKind(L), pz = L.kind==='pose', ac = L.kind==='act', at = onK(L.kind) || ac, V = ac && L.vid && S.media[L.vid], inF = libInFilm(L), chars = S.cast.filter(c => (c.kind || 'char')==='char');
   openSheet(`<h3><span>📚 ${esc(L.name || 'New ' + K[2].replace(/^\S+\s/, '').toLowerCase())}</span><button class="btn" data-close>✕</button></h3><div id="lbBox">
     <div class="seg wrap">${LIBK.map(k => `<button data-lb="kind:${k[0]}" class="${L.kind===k[0] ? 'on' : ''}">${k[2]}</button>`).join('')}</div>
-    <div class="lab" style="margin-top:10px"><span>Name</span></div><input data-lbf="name" value="${esc(L.name || '')}" placeholder="${ac ? 'e.g. Her spinning kick' : at ? 'e.g. Short silver bob' : L.kind==='place' ? 'e.g. The rooftop bar' : L.kind==='thing' ? 'e.g. The red umbrella' : 'e.g. Laura, the lady in the red coat'}">
-    ${at ? `<div class="lab" style="margin-top:8px"><span>${ac ? 'What the move is (MiniMax moves only this motion onto the person doing it)' : 'What it is (MiniMax moves only this onto the person)'}</span></div><input data-lbf="what" value="${esc(L.what || '')}" placeholder="${ac ? 'e.g. spinning kick, high five, hair flip' : 'e.g. haircut, eye design, tattoo, outfit'}">`
+    <div class="lab" style="margin-top:10px"><span>Name</span></div><input data-lbf="name" value="${esc(L.name || '')}" placeholder="${pz ? 'e.g. Back to back, arms crossed' : ac ? 'e.g. Her spinning kick' : at ? 'e.g. Short silver bob' : L.kind==='place' ? 'e.g. The rooftop bar' : L.kind==='thing' ? 'e.g. The red umbrella' : 'e.g. Laura, the lady in the red coat'}">
+    ${pz ? '' : at ? `<div class="lab" style="margin-top:8px"><span>${ac ? 'What the move is (MiniMax moves only this motion onto the person doing it)' : 'What it is (MiniMax moves only this onto the person)'}</span></div><input data-lbf="what" value="${esc(L.what || '')}" placeholder="${ac ? 'e.g. spinning kick, high five, hair flip' : 'e.g. haircut, eye design, tattoo, outfit'}">`
       : `<div class="lab" style="margin-top:8px"><span>Stand-in words (sent while it has no picture)</span></div><input data-lbf="stand" value="${esc(L.stand || '')}" placeholder="${esc(K[3])}">`}
     ${ac ? `<div class="lab" style="margin-top:8px"><span>🎞 A clip of the move (2 to 15 s; best, it carries the timing)</span></div>
     <div class="row">${V ? `<span class="cpw"><img src="${V.thumb || ''}" alt=""><button data-lb="unvid" aria-label="Take the clip out">✕</button></span><span class="note">${esc(V.name || 'clip')}${V.dur ? ' · ' + fmtS(V.dur) : ''}</span>` : `<button class="btn" data-lb="vid">＋ Clip</button>`}</div>` : ''}
-    <div class="lab" style="margin-top:8px"><span>${ac ? 'Or pictures of it' : 'Pictures'}${P.length > 1 ? ' (most important first)' : ''}</span></div>
-    <div class="castpics">${P.map((m, i) => `<span class="cpw"><img src="${(S.media[m] || {}).thumb || ''}" alt=""><button data-lb="unpic:${i}" aria-label="Take this picture out">✕</button>${i ? `<button class="up" data-lb="first:${i}" aria-label="Make it the first">↑</button>` : ''}</span>`).join('')}<button class="castpic" data-lb="pic">＋ Picture</button></div>
-    <div class="lab" style="margin-top:8px"><span>More detail</span></div><textarea data-lbf="desc" rows="3" style="width:100%;box-sizing:border-box" placeholder="${at ? 'e.g. chin-length, blunt fringe, silver with dark roots' : 'Face, hair, eyes, build, outfit… sent with or without a picture'}">${esc(L.desc || '')}</textarea>
-    ${P.length && !ac ? `<div class="seg" style="margin-top:8px">${KEEPS.map(([v, t]) => `<button data-lb="keep:${v}" class="${(L.keep || 'exact')===v ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
+    ${pz ? poseLibHtml(L, P, chars) : `<div class="lab" style="margin-top:8px"><span>${ac ? 'Or pictures of it' : 'Pictures'}${P.length > 1 ? ' (most important first)' : ''}</span></div>
+    <div class="castpics">${P.map((m, i) => `<span class="cpw"><img src="${(S.media[m] || {}).thumb || ''}" alt=""><button data-lb="unpic:${i}" aria-label="Take this picture out">✕</button>${i ? `<button class="up" data-lb="first:${i}" aria-label="Make it the first">↑</button>` : ''}</span>`).join('')}<button class="castpic" data-lb="pic">＋ Picture</button></div>`}
+    <div class="lab" style="margin-top:8px"><span>More detail</span></div><textarea data-lbf="desc" rows="3" style="width:100%;box-sizing:border-box" placeholder="${pz ? 'Optional, e.g. her hand rests on his shoulder, heads touching' : at ? 'e.g. chin-length, blunt fringe, silver with dark roots' : 'Face, hair, eyes, build, outfit… sent with or without a picture'}">${esc(L.desc || '')}</textarea>
+    ${P.length && !ac && !pz ? `<div class="seg" style="margin-top:8px">${KEEPS.map(([v, t]) => `<button data-lb="keep:${v}" class="${(L.keep || 'exact')===v ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
     ${L.kind==='char' ? `<button class="btn${L.fit ? ' pri' : ''}" data-lb="fit" style="width:100%;margin-top:8px">👗 Wear the outfit in these pictures: ${L.fit ? 'on' : 'off'}</button>` : ''}
-    <div style="margin-top:12px">${ac ? actPickHtml(L, chars) : at ? (chars.length ? `<div class="lab"><span>Put it on a character in ${esc(filmName())}</span></div><div class="chips">${chars.map(c => { const on = (c.attrs || []).includes(L.id); return `<button class="btn${on ? ' pri' : ''}" data-lb="wear:${c.n}">${on ? '✓ ' : ''}${esc(castName(c))}</button>`; }).join('')}</div>` : `<div class="note">${esc(filmName())} has no characters yet: add one first.</div>`)
+    <div style="margin-top:12px">${pz ? '' : ac ? actPickHtml(L, chars) : at ? (chars.length ? `<div class="lab"><span>Put it on a character in ${esc(filmName())}</span></div><div class="chips">${chars.map(c => { const on = (c.attrs || []).includes(L.id); return `<button class="btn${on ? ' pri' : ''}" data-lb="wear:${c.n}">${on ? '✓ ' : ''}${esc(castName(c))}</button>`; }).join('')}</div>` : `<div class="note">${esc(filmName())} has no characters yet: add one first.</div>`)
       : inF.length ? `<button class="btn" data-lb="out" style="width:100%">✓ In ${esc(filmName())} · take it out</button>` : `<button class="btn pri" data-lb="add" style="width:100%">➕ Add to ${esc(filmName())}</button>`}</div>
     <button class="btn" data-lb="del" style="width:100%;margin-top:14px;color:var(--bad)">🗑 Delete from the Library</button></div>`);
-  const box = $('#lbBox'), redraw = () => { save(); drawLib(); drawCast(); drawShot(); };
+  const box = $('#lbBox'), redraw = () => { save(); drawLib(); drawCast(); drawShot(); }; box.dataset.lid = L.id;
   box.oninput = e => { const k = e.target.dataset.lbf; if(!k) return; L[k] = e.target.value; libSync(L); clearTimeout(LIBT); LIBT = setTimeout(redraw, 300); };
   box.onclick = e => { const b = e.target.closest('[data-lb]'); if(!b) return; const [a, v] = b.dataset.lb.split(':');
     if(a==='kind'){ L.kind = v; libSync(L); }
     else if(a==='keep') L.keep = v;
     else if(a==='fit') L.fit = !L.fit;
-    else if(a==='unpic') libPics(L).splice(+v, 1);
+    else if(a==='unpic'){ libPics(L).splice(+v, 1); if(pz) poseReset(L); }
+    else if(a==='scan'){ poseScan(L); return; }
+    else if(a==='ptake'){ const [pp, n] = v.split('>'); poseGive(L, +pp, +n); }
+    else if(a==='raw') L.raw = !L.raw;
+    else if(a==='when') L.when = v;
     else if(a==='first'){ const [x] = L.pics.splice(+v, 1); L.pics.unshift(x); }
     else if(a==='pic'){ pickLib = L.id; pickFile('lib'); return; }
     else if(a==='vid'){ pickLib = L.id; pickFile('libv'); return; }
@@ -1220,9 +1230,9 @@ function openLib(id){ const L = libOf(id); if(!L) return; const P = libPics(L), 
     else if(a==='add'){ const c = libToCast(L); toast('➕ ' + (L.name || 'It') + ' is in ' + filmName()); }
     else if(a==='out'){ const c = inF[0]; if(c && confirm('Take ' + (L.name || 'it') + ' out of ' + filmName() + '? Its stand-in words go back into the prompts that use it.')){ castSwap(new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'gi'), (c.stand || '').trim() || 'someone'); S.cast = S.cast.filter(x => x!==c); $('#prompt').value = S.f.prompt; } }
     else if(a==='wear'){ const c = castOf(v); if(c){ c.attrs = c.attrs || []; const i = c.attrs.indexOf(L.id); if(i >= 0) c.attrs.splice(i, 1); else c.attrs.push(L.id); } }
-    else if(a==='del'){ const n = [S.cast, ...Object.values(S.casts || {})].reduce((a, cl) => a + cl.filter(c => c.lib===L.id || (c.attrs || []).includes(L.id)).length, 0);
+    else if(a==='del'){ const n = [S.cast, ...Object.values(S.casts || {})].reduce((a, cl) => a + cl.filter(c => c.lib===L.id || (c.attrs || []).includes(L.id) || (c.poses || []).some(x => x.id===L.id)).length, 0);
       if(!confirm('Delete ' + (L.name || 'this entry') + ' from the Library?' + (n ? ' The ' + n + ' film cast' + (n > 1 ? 's' : '') + ' using it keep their own copy.' : ''))) return;
-      for(const cl of [S.cast, ...Object.values(S.casts || {}), S.castOld || []]) for(const c of cl){ if(c.lib===L.id) delete c.lib; if(c.attrs) c.attrs = c.attrs.filter(x => x!==L.id); if(c.acts) c.acts = c.acts.filter(x => x.id!==L.id); }
+      for(const cl of [S.cast, ...Object.values(S.casts || {}), S.castOld || []]) for(const c of cl){ if(c.lib===L.id) delete c.lib; if(c.attrs) c.attrs = c.attrs.filter(x => x!==L.id); if(c.acts) c.acts = c.acts.filter(x => x.id!==L.id); if(c.poses) c.poses = c.poses.filter(x => x.id!==L.id); }
       S.lib = S.lib.filter(x => x!==L); closeSheet(); redraw(); return; }
     libSync(L); redraw(); openLib(L.id); }; }
 let LIBT = 0, pickLib = '';
@@ -1232,10 +1242,96 @@ function actPickHtml(L, chars){ if(!chars.length) return `<div class="note">${es
   return `<div class="lab"><span>Who does it in ${esc(filmName())}</span></div><div class="chips">${chars.map(c => { const on = doers.includes(c); return `<button class="btn${on ? ' pri' : ''}" data-lb="do:${c.n}">${on ? '✓ ' : ''}${esc(castName(c))}</button>`; }).join('')}</div>`
     + doers.map(d => { const x = d.acts.find(a => a.id===L.id); const others = S.cast.filter(c => c!==d);
       return others.length ? `<div class="lab" style="margin-top:8px"><span>${esc(castName(d))} does it to (optional)</span></div><div class="chips">${others.map(c => `<button class="btn${x.to===c.n ? ' pri' : ''}" data-lb="to:${d.n}>${c.n}">${x.to===c.n ? '✓ ' : ''}${esc(castName(c))}</button>`).join('')}</div>` : ''; }).join(''); }
+// ---------- 🧍 Poses in the Library (Jordan 2026-11-09: "a pose library… have the app give it the appropriate prompt so it knows this is a
+// pose reference only… use SAM somehow to identify and separate 2 or more characters and assign them… even if the render side gets a
+// coloured version to help it differentiate") ----------
+// A pose is one picture. 👥 Find the people runs SAM 3 ('person') on a PC; the app paints each person found one flat colour, left to right
+// (red, blue, green…), over a grey, darkened copy with dark outlines between them. That coloured copy is what MiniMax gets, so faces,
+// clothes and colours in the picture have nothing to leak. Each person goes to a film character (c.poses = [{id, p}]: p = their number,
+// -1 = the one person in it), the same way as 🥋 actions; the prompt says it's a pose reference only and whose pose is which colour.
+// L.ppl = [{x, y, a}] (centre and share of the picture, left to right), L.coded = the coloured copy, L.raw = send the original instead,
+// L.when = 'start' (they start in it, default) or 'all' (the whole shot). A shot can switch a pose off with its 🧍 chip (descOff 'pose:<id>').
+const POSE_COL = [['red', '#ff2a2a'], ['blue', '#2f6bff'], ['green', '#1fcf4f'], ['yellow', '#ffd400'], ['purple', '#b04dff'], ['orange', '#ff8a1f']];
+const POSE_LR = ['left-most', 'second from the left', 'third from the left', 'fourth from the left', 'fifth from the left', 'sixth from the left'];
+const poseCoded = L => !!(L && L.coded && S.media[L.coded] && (L.ppl || []).length);
+const poseSendsCoded = L => poseCoded(L) && !L.raw;
+const posePic = L => (L && L.kind==='pose' ? (poseSendsCoded(L) ? L.coded : libPics(L)[0]) : '') || '';
+const poseWho = (L, p) => !(p >= 0) || (L.ppl || []).length < 2 && !poseSendsCoded(L) ? 'the person' : poseSendsCoded(L) ? 'the ' + POSE_COL[p % POSE_COL.length][0] + ' person' : 'the ' + (POSE_LR[p] || 'other') + ' person';
+const poseName = L => (L.name || '').trim() || 'pose';
+const posesOf = (c, t) => { const off = descOffOf(c, t) || []; return ((c && c.poses) || []).filter(x => { const L = libOf(x.id); return L && L.kind==='pose' && posePic(L) && S.media[posePic(L)] && !off.includes('pose:' + x.id); }); };
+function poseReset(L){ delete L.coded; L.ppl = []; delete L.raw; for(const cl of [S.cast, ...Object.values(S.casts || {})]) for(const c of cl) (c.poses || []).forEach(x => { if(x.id===L.id) x.p = -1; }); }
+function poseGive(L, p, n){ const c = castOf(n); if(!c) return; const had = (c.poses || []).find(x => x.id===L.id && x.p===p);
+  for(const o of S.cast) if(o.poses) o.poses = o.poses.filter(x => !(x.id===L.id && (o===c || x.p===p))); // one person each; one taker per person
+  if(!had) (c.poses = c.poses || []).push({id:L.id, p}); }
+const poseTaker = (L, p) => S.cast.find(c => (c.poses || []).some(x => x.id===L.id && x.p===p));
+let POSE_BUSY = '', POSE_MSG = {};
+function poseLibHtml(L, P, chars){ const pic = P[0] && S.media[P[0]], cm = poseCoded(L) && S.media[L.coded], ppl = L.ppl || [], msg = POSE_MSG[L.id] || '';
+  const who = p => chars.map(c => { const on = (c.poses || []).some(x => x.id===L.id && x.p===p); return `<button class="btn${on ? ' pri' : ''}" data-lb="ptake:${p}>${c.n}">${on ? '✓ ' : ''}${esc(castName(c))}</button>`; }).join('');
+  return `<div class="lab" style="margin-top:8px"><span>The pose picture (anyone in it: only their pose is used)</span></div>
+    <div class="castpics">${pic ? `<span class="cpw"><img src="${pic.thumb || ''}" alt=""><button data-lb="unpic:0" aria-label="Take the picture out">✕</button></span>` : ''}${cm ? `<span class="cpw"><img src="${cm.thumb || ''}" alt="The people, colour-coded"></span>` : ''}<button class="castpic" data-lb="pic">${pic ? '↻ Other<br>picture' : '＋ Picture'}</button></div>
+    ${pic ? `<button class="btn${ppl.length ? '' : ' pri'}" data-lb="scan" style="width:100%;margin-top:8px"${POSE_BUSY ? ' disabled' : ''}>👥 ${ppl.length ? 'Find the people again' : 'Find the people (SAM 3)'}</button>` : ''}
+    <div class="note" id="poseNote" style="margin-top:4px">${esc(msg) || (ppl.length ? 'SAM 3 found ' + ppl.length + (ppl.length > 1 ? ' people. Each is painted its own colour, and MiniMax is told whose pose each colour is.' : ' person, painted red so only the pose comes across.') : pic ? 'Two or more people in it? Find the people, then pick who takes each one\'s pose.' : '')}</div>
+    ${!chars.length ? `<div class="note" style="margin-top:8px">${esc(filmName())} has no characters yet: add one first.</div>`
+      : ppl.length ? ppl.map((q, p) => `<div class="lab" style="margin-top:8px"><span><b style="color:${POSE_COL[p % POSE_COL.length][1]}">● ${esc(POSE_COL[p % POSE_COL.length][0].replace(/^./, x => x.toUpperCase()))}</b> (${esc(POSE_LR[p] || '')}) is</span></div><div class="chips">${who(p)}</div>`).join('')
+      : pic ? `<div class="lab" style="margin-top:8px"><span>Who takes this pose in ${esc(filmName())}</span></div><div class="chips">${who(-1)}</div>` : ''}
+    ${cm ? `<button class="btn${L.raw ? '' : ' pri'}" data-lb="raw" style="width:100%;margin-top:8px">🎨 Send the colour-coded copy: ${L.raw ? 'off (the original goes)' : 'on'}</button>` : ''}
+    ${pic ? `<div class="seg" style="margin-top:8px">${[['start', '🎬 They start in it'], ['all', '🧍 The whole shot']].map(([v, t]) => `<button data-lb="when:${v}" class="${(L.when || 'start')===v ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}`; }
+function poseSay(L, txt){ POSE_MSG[L.id] = txt; const n = $('#poseNote'), box = $('#lbBox'); if(n && box && box.dataset.lid===L.id) n.textContent = txt; }
+const poseReopen = L => { const box = $('#lbBox'); save(); drawLib(); drawCast(); drawShot(); if(box && box.dataset.lid===L.id && !$('#sheet').hidden) openLib(L.id); };
+async function samPc(){ const order = S.pcs.slice().sort((a, b) => /render/i.test(b.name || '') - /render/i.test(a.name || ''));
+  for(const p of order){ const P = pcOf(p.url); if(P.online && P.oi && P.oi.SAM3_Detect && P.oi.MaskToImage && P.oi.PreviewImage && P.oi.LoadImage && sam3Of(P.oi)) return p.url; } return ''; }
+function poseScanGraph(oi, file){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
+  const ck = add('CheckpointLoaderSimple', {ckpt_name:sam3Of(oi)}), img = [add('LoadImage', {image:file}), 0];
+  // 'person:6' = up to 6 of them (one by default); one mask each, best first
+  const det = add('SAM3_Detect', {model:[ck, 0], image:img, conditioning:[add('CLIPTextEncode', {clip:[ck, 1], text:'person:' + POSE_COL.length}), 0], threshold:0.45, refine_iterations:2, individual_masks:true});
+  return {g, save:add('PreviewImage', {images:[add('MaskToImage', {mask:[det, 0]}), 0]})}; }
+async function poseScan(L){ if(POSE_BUSY){ toast('Already finding people: one at a time'); return; } const pic = libPics(L)[0]; if(!pic){ toast('Add the pose picture first'); return; }
+  const url = await samPc(); if(!url){ poseSay(L, 'No PC that is on has SAM 3 (sam3.1_multiplex_fp16 in models/checkpoints). Render has it: switch it on and try again.'); return; }
+  POSE_BUSY = L.id; const b = $('[data-lb="scan"]'); if(b) b.disabled = true;
+  try{ poseSay(L, '👥 Sending the picture to ' + pcName(url) + '…'); const file = await upload(url, pic), G = poseScanGraph(pcOf(url).oi, file), pid = await queueGraph(url, G, true), t0 = Date.now(); let h = null;
+    while(Date.now() - t0 < 8 * 60000){ await new Promise(r => setTimeout(r, 1500)); poseSay(L, '👥 SAM 3 is finding the people on ' + pcName(url) + '… ' + Math.round((Date.now() - t0) / 1000) + ' s');
+      try{ h = (await getJ(url + '/history/' + pid))[pid]; }catch(e){ h = null; }
+      if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(e ? e[1].exception_message : 'ComfyUI hit an error'); }
+      if(h && h.status && h.status.completed) break; }
+    if(!h || !h.status || !h.status.completed) throw new Error('it took too long');
+    const fs = (((h.outputs || {})[G.save] || {}).images || []).filter(f => f && f.filename), masks = [];
+    for(const f of fs) masks.push(await imgOf(await (await fetch(viewUrl(url, Object.assign({type:'temp'}, f)))).blob()));
+    const n = await poseCode(L, masks); poseSay(L, n ? '' : 'SAM 3 found nobody in it. Try a clearer picture, or just pick who takes the pose.');
+  }catch(e){ poseSay(L, "👥 Couldn't find the people: " + e.message); }
+  finally{ POSE_BUSY = ''; poseReopen(L); } }
+// the coloured copy: people left to right, each a flat colour shaded by the picture's own light (so limbs still read), the rest grey and dark
+async function poseCode(L, masks){ const im = await imgOf(await blobOf(libPics(L)[0])), s = Math.min(1, 1536 / Math.max(im.naturalWidth, im.naturalHeight)), W = Math.max(1, Math.round(im.naturalWidth * s)), H = Math.max(1, Math.round(im.naturalHeight * s)), N = W * H;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const x = cv.getContext('2d', {willReadFrequently:true});
+  let ms = masks.map(m => { x.clearRect(0, 0, W, H); x.drawImage(m, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data, a = new Uint8Array(N); let n = 0, sx = 0, sy = 0;
+    for(let i = 0; i < N; i++) if(d[i * 4] > 127){ a[i] = 1; n++; sx += i % W; sy += (i / W) | 0; } return {a, n, x:n ? sx / n / W : 0, y:n ? sy / n / H : 0}; }).filter(m => m.n > N * 0.003);
+  const kept = []; for(const m of ms){ let o = 0; for(const k of kept) for(let i = 0; i < N; i++) if(m.a[i] && k.a[i]) o++; if(o < m.n * 0.6) kept.push(m); } // the same person found twice
+  ms = kept.sort((p, q) => p.x - q.x).slice(0, POSE_COL.length);
+  if(!ms.length){ delete L.coded; L.ppl = []; for(const cl of [S.cast, ...Object.values(S.casts || {})]){ let one = false; for(const c of cl) if(c.poses) c.poses = c.poses.filter(x => x.id!==L.id || (!one && (one = true, x.p = -1, true))); } return 0; } // back to one person taking it
+  x.drawImage(im, 0, 0, W, H); const D = x.getImageData(0, 0, W, H), d = D.data, own = new Int8Array(N).fill(-1);
+  ms.forEach((m, k) => { for(let i = 0; i < N; i++) if(m.a[i] && own[i] < 0) own[i] = k; });
+  const rgb = POSE_COL.map(([, h]) => [1, 3, 5].map(j => parseInt(h.slice(j, j + 2), 16))), r = Math.max(1, Math.round(Math.min(W, H) / 320)), edge = new Uint8Array(N);
+  for(let y = 0; y < H; y++) for(let xx = 0; xx < W; xx++){ const i = y * W + xx, o = own[i]; if((xx + 1 < W && own[i + 1]!==o) || (y + 1 < H && own[i + W]!==o)) edge[i] = 1; }
+  for(let y = 0; y < H; y++) for(let xx = 0; xx < W; xx++){ const i = y * W + xx, l = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255, o = own[i];
+    let near = false; if(edge[i]) near = true; else for(let dy = -r; dy <= r && !near; dy++) for(let dx = -r; dx <= r; dx++){ const yy = y + dy, xq = xx + dx; if(yy >= 0 && yy < H && xq >= 0 && xq < W && edge[yy * W + xq]){ near = true; break; } }
+    if(near){ d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 16; continue; }
+    if(o < 0){ const v = Math.round(60 + 70 * l); d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; continue; }
+    const c = rgb[o], f = 0.45 + 0.55 * l; d[i * 4] = Math.round(c[0] * f); d[i * 4 + 1] = Math.round(c[1] * f); d[i * 4 + 2] = Math.round(c[2] * f); }
+  x.putImageData(D, 0, 0); const blob = await new Promise(ok => cv.toBlob(ok, 'image/png'));
+  L.coded = await addMedia(new File([blob], 'pose_' + L.id + '_people.png', {type:'image/png'}), 'img'); L.ppl = ms.map(m => ({x:+m.x.toFixed(3), y:+m.y.toFixed(3), a:+(m.n / N).toFixed(3)}));
+  for(const cl of [S.cast, ...Object.values(S.casts || {})]) for(const c of cl) if(c.poses) c.poses = c.poses.filter(p => p.id!==L.id || p.p < L.ppl.length); // people that are gone
+  return ms.length; }
+// ＋ Pose on a character's card: pick a pose from the Library (or make one), then say which person in it they are
+function posePickSheet(c){ const L = (S.lib || []).filter(x => x.kind==='pose');
+  openSheet(`<h3><span>🧍 A pose for ${esc(castName(c))}</span><button class="btn" data-close>✕</button></h3><div id="ppBox">${L.length ? `<div class="libGrid">${L.map(x => { const P = libPics(x), th = (S.media[x.coded] || S.media[P[0]] || {}).thumb; return `<button class="libTile" data-pp="${x.id}">${th ? `<img src="${th}" alt="">` : '<span>🧍</span>'}<b>${esc(x.name || 'Unnamed')}</b><small>${(x.ppl || []).length > 1 ? x.ppl.length + ' people' : 'Pose'}</small></button>`; }).join('')}</div>` : '<div class="empty">No poses in the Library yet.</div>'}
+    <button class="btn" data-pp="new" style="width:100%;margin-top:12px">＋ New pose in the Library</button></div>`);
+  $('#ppBox').onclick = e => { const b = e.target.closest('[data-pp]'); if(!b) return; let id = b.dataset.pp; closeSheet();
+    if(id==='new'){ setTab('lib'); const N = libNew('pose'); save(); drawLib(); openLib(N.id); return; }
+    const P = libOf(id); if(P && !(P.ppl || []).length && !(c.poses || []).some(x => x.id===id)){ poseGive(P, -1, c.n); save(); drawCast(); drawShot(); }
+    setTab('lib'); openLib(id); }; }
 $('#libTab').onclick = e => { const b = e.target.closest('[data-lib]'); if(!b) return; const [a, v] = b.dataset.lib.split(':');
   if(a==='f'){ LIBF = v; drawLib(); } else if(a==='new'){ const L = libNew(LIBF==='all' ? 'char' : LIBF); save(); drawLib(); openLib(L.id); }
   else if(a==='open') openLib(v); else if(a==='poses') setTab('poses'); };
-function libPickSheet(){ const L = (S.lib || []).filter(x => !onK(x.kind) && x.kind!=='act');
+function libPickSheet(){ const L = (S.lib || []).filter(x => !onK(x.kind) && x.kind!=='act' && x.kind!=='pose');
   openSheet(`<h3><span>📚 Add to ${esc(filmName())}</span><button class="btn" data-close>✕</button></h3><div id="lpBox">${L.length ? `<div class="libGrid">${L.map(x => { const P = libPics(x), on = libInFilm(x).length; return `<button class="libTile${on ? ' in' : ''}" data-lp="${x.id}">${P.length ? `<img src="${(S.media[P[0]] || {}).thumb || ''}" alt="">` : `<span>${libKind(x)[2].split(' ')[0]}</span>`}<b>${esc(x.name || 'Unnamed')}</b><small>${on ? '✓ in this film' : esc(libKind(x)[2].replace(/^\S+\s/, ''))}</small></button>`; }).join('')}</div>` : '<div class="empty">The Library is empty. Make entries in 📚 Library.</div>'}
     <button class="btn" data-lp="new" style="width:100%;margin-top:12px">＋ New in the Library</button></div>`);
   $('#lpBox').onclick = e => { const b = e.target.closest('[data-lp]'); if(!b) return; const id = b.dataset.lp;
@@ -1345,7 +1441,7 @@ function h3Prompt(o){
     return words + head + 'integrated_multimodal_description: [Shot 1] ' + styleOf(H, true) + ' ' + (qualityOf(H) ? qualityOf(H) + ' ' : '') + text.replace(/^[a-z]/, c => c.toUpperCase()) + '\n\noverall_soundscape: ' + snd + '\n\nnon_diegetic_music: ' + mus;
   }
   const defs = [], ret = [], subs = [], groups = []; // pictures with the same words are one subject seen in several pictures
-  imgs.forEach((r, k) => { if(r.pose || r.attrOf || r.actOf) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
+  imgs.forEach((r, k) => { if(r.pose || r.attrOf || r.actOf || r.poseOf) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
     if(!g){ g = {key, d, more:(r.more || '').trim(), pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || 'char'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); if(r.fit) g.fit = true; if(r.nude) g.nude = true; });
   // 👥 the cast's subjects come first, in their own order, so <Subject 1> in the prompt is usually <Subject 1> here too
   groups.sort((x, y) => (x.cast || 1e3) - (y.cast || 1e3)); { const cm = {}; groups.forEach((g, j) => { if(g.cast) cm[g.cast] = '<Subject ' + (j + 1) + '>'; });
@@ -1386,6 +1482,13 @@ function h3Prompt(o){
     ret.push(sl + ' (' + (inside ? 'the pose at ' + h3Time(Math.max(0, at)) : 'not reached in this part') + '): ' + (inside ? 'attribute_transfer - only the body pose of ' + pl + ' is transferred to ' + who + '; the mannequin itself does not appear.' : 'weak_reference - this pose belongs to another part of the video.'));
     if(inside) timed.push({at:Math.max(0, at), sl, pl}); });
   timed.sort((x, y) => x.at - y.at);
+  // 🧍 Library poses (Jordan 2026-11-09): the picture is a pose reference only; on SAM's coloured copy each colour is one person
+  const cap = x => x.replace(/^./, y => y.toUpperCase()); let libPose = '';
+  imgs.forEach((r, k) => { if(!r.poseOf) return; const sl = '<Subject ' + (subs.length + 1) + '>', pl = '<Picture ' + (k + 1) + '>', late = r.when!=='all' && t0 > 0.05, map = r.poseOf.map(x => ({who:subOf(x.n), w:x.w})), many = map.length > 1 || r.ppl > 1; subs.push(sl);
+    defs.push(sl + ' is the body pose' + (many ? 's and places of the people' : '') + ' shown in ' + pl + '. ' + pl + ' is a pose reference only' + (r.coded ? ': each person in it is painted one flat colour so they can be told apart (' + map.map(m => m.w.replace(/^the /, '') + ' is ' + m.who).join(', ') + '); those colours, the grey and the dark outlines never appear in the video.' : ': the people, faces, clothes and place in it never appear in the video.') + (r.more ? ' ' + cap(r.more.replace(/[\s.]*$/, '')) + '.' : ''));
+    if(late){ ret.push(sl + ' (not in this part): weak_reference - this pose belongs to the start of the video.'); return; }
+    ret.push(sl + ' (' + (r.when==='all' ? inShots : 'the opening of [Shot 1]') + '): attribute_transfer - only the ' + (many ? 'body poses, where each person is and how they touch,' : 'body pose') + ' from ' + pl + ' ' + (many ? 'are' : 'is') + ' transferred: ' + map.map(m => m.w + "'s pose goes to " + m.who).join(', ') + '; the faces, hair, bodies, clothes, colours and background in ' + pl + ' do not appear.');
+    libPose += ' ' + map.map(m => cap(m.who) + (r.when==='all' ? ' keeps' : ' starts in') + ' the pose of ' + m.w + ' from ' + sl + '.').join(' '); });
   const poseText = timed.length ? ' ' + timed.map(p => 'At ' + h3Time(p.at) + ', ' + who + ' is in the pose of ' + p.sl + ' from ' + p.pl + '.').join(' ') + ' ' + who.replace(/^the/, 'The') + ' moves smoothly from each pose to the next.' : '';
   let a = 0, aRef = false, aCopy = false;
   vids.forEach((r, k) => { if(r.actOf) return; const vl = '<Video ' + (k + 1) + '>', d = (r.desc || '').trim().replace(/[\s.]*$/, ''), kp = KEEP[r.keep] ? r.keep : 'loose';
@@ -1397,12 +1500,12 @@ function h3Prompt(o){
     ret.push(al + ': ' + (cp ? 'partially_copy - the audio is reused in the target video.' : 'reference - its voice timbre, delivery and sound texture are followed without copying the signal.'));
     if(cp) aCopy = true; else aRef = true; });
   if(o.firstPic){ const pl = '<Picture ' + o.firstPic + '>'; defs.push(pl + ' is the first frame of [Shot 1].'); ret.push(pl + ' ([Shot 1] first frame): fully_preserved - the opening composition, subjects, setting and lighting are kept.'); }
-  const tags = [o.cont && 'video continuation', (o.firstPic || o.first || o.last) && 'keyframe completion', (groups.length || vids.length || poses.length || ag.length) && 'reference generation', aCopy && 'audio reuse', aRef && 'audio reference'].filter(Boolean);
+  const tags = [o.cont && 'video continuation', (o.firstPic || o.first || o.last) && 'keyframe completion', (groups.length || vids.length || poses.length || ag.length || libPose) && 'reference generation', aCopy && 'audio reuse', aRef && 'audio reference'].filter(Boolean);
   if(multi) tags.push('multi-shot');
   const wears = ag.map((g, i) => { const j = groups.findIndex(x => x.cast===g.of); if(j < 0) return ''; const a = '<Subject ' + (groups.length + i + 1) + '>', p = '<Subject ' + (j + 1) + '>';
     return g.fit ? p + ' is wearing ' + a + ' (their own outfit).' : g.wear || ATTR_WEAR(g.what) ? p + ' is wearing ' + a + ' (the ' + g.what + ').' : p + ' has ' + a + ' (the ' + g.what + ').'; }).concat(groups.map((g, j) => g.nude ? '<Subject ' + (j + 1) + '> is nude.' : '')).filter(Boolean).join(' ');
-  const gist = h3Gist(text), sum = '[' + tags.join(' + ') + '] ' + (o.cont ? 'The target video carries straight on from the moment before, in the same shot. ' : '') + (groups.length ? 'It features ' + andList(subs.slice(0, groups.length)) + '. ' : '') + (wears ? wears + ' ' : '') + (acts ? acts + ' ' : '') + gist + (timed.length ? ' ' + who.replace(/^the/, 'The') + ' takes the poses of ' + andList(timed.map(p => p.sl)) + ' at their set times.' : '');
-  const det = styleOf(H) + (qualityOf(H) ? ' ' + qualityOf(H) : '') + '\n[Shot 1] ' + (o.firstPic ? 'The shot begins from <Picture ' + o.firstPic + '>. ' : '') + (wears ? wears + ' ' : '') + (acts ? acts + ' ' : '') + text + poseText;
+  const gist = h3Gist(text), sum = '[' + tags.join(' + ') + '] ' + (o.cont ? 'The target video carries straight on from the moment before, in the same shot. ' : '') + (groups.length ? 'It features ' + andList(subs.slice(0, groups.length)) + '. ' : '') + (wears ? wears + ' ' : '') + (acts ? acts + ' ' : '') + (libPose ? libPose.trim() + ' ' : '') + gist + (timed.length ? ' ' + who.replace(/^the/, 'The') + ' takes the poses of ' + andList(timed.map(p => p.sl)) + ' at their set times.' : '');
+  const det = styleOf(H) + (qualityOf(H) ? ' ' + qualityOf(H) : '') + '\n[Shot 1] ' + (o.firstPic ? 'The shot begins from <Picture ' + o.firstPic + '>. ' : '') + (wears ? wears + ' ' : '') + (acts ? acts + ' ' : '') + (libPose ? libPose.trim() + ' ' : '') + text + poseText;
   return words + 'subject_definitions:\n' + defs.join('\n') + '\n\nsummary:\n' + sum.trim() + '\n\nretention_analysis:\n' + ret.join('\n') + '\n\ndetailed_description:\n' + det + '\n\noverall_soundscape:\n' + snd + '\n\nnon_diegetic_music:\n' + mus;
 }
 function h3Time(s){ const ms = Math.round(s * 1000), m = Math.floor(ms / 60000), r = ms - m * 60000; return String(m).padStart(2, '0') + ':' + String(Math.floor(r / 1000)).padStart(2, '0') + '.' + String(r % 1000).padStart(3, '0'); }
@@ -1703,7 +1806,7 @@ const regenRefUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name').filt
 // looked nothing like her: her pictures live on the subject, not on the take, so the pass had run with no reference at all)
 const upRefs = t => { const own = (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || [], out = [];
   let cast = []; try{ cast = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.map(dressed); }catch(e){}
-  for(const r of cast.concat(own)) if(r && r.id && !out.some(x => x.id===r.id)) out.push(r); return out; };
+  for(const r of cast.concat(own)) if(r && r.id && !r.poseOf && !out.some(x => x.id===r.id)) out.push(r); return out; }; // (🧍 a pose has no place in a finishing pass)
 // ✨ model pick (Jordan 2026-11-08: "pikka could do better for some and I could do a face pass for Minimax later"): t.up.unet = a model
 // chosen in the High quality sheet; none = vanilla MiniMax as before. Matched by file name, so a PC that lacks it isn't sent the pass
 const upUnetOf = (t, oi, refs) => { const m = t && t.up && t.up.unet, bn = s => String(s).split(/[\\/]/).pop();
@@ -2766,6 +2869,7 @@ $('#filePick').onchange = async e => {
       if(kind==='img' && pickKind==='img' && f.imgs.length >= MAXREF.img) break;
       if(pickKind==='rough'){ await guideFrom(file, file.name || 'rough.mp4'); break; }
       if(pickKind==='libv'){ const L = libOf(pickLib); if(L){ L.vid = await addMedia(file, 'vid'); const m = S.media[L.vid]; if(m && m.dur && (m.dur < 2 || m.dur > 15)) toast('MiniMax wants reference clips of 2 to 15 s (this one is ' + fmtS(m.dur) + ')', 6000); } break; }
+      if(pickKind==='lib' && (libOf(pickLib) || {}).kind==='pose'){ const L = libOf(pickLib); L.pics = [await addMedia(file, 'img')]; poseReset(L); break; }
       if(pickKind==='lib'){ const L = libOf(pickLib); if(L){ if(libPics(L).length >= MAXREF.img) break; L.pics.push(await addMedia(file, 'img')); libSync(L); } continue; }
       if(pickKind==='cast'){ const c = castOf(pickCast); if(c){ const P = castPics(c); if(P.length >= MAXREF.img) break; P.push(await addMedia(file, 'img')); c.keep = c.keep || 'exact'; } continue; }
       if(pickKind==='smref'){ f.smRefs = (f.smRefs || []).filter(x => S.media[x]); if(f.smRefs.length >= REGEN_REFS) break; f.smRefs.push(await addMedia(file, 'img')); f.smUpRefs = true; continue; }
@@ -2797,6 +2901,8 @@ $('#castList').onclick = e => { const b = e.target.closest('[data-cast]'); if(!b
   else if(a==='fit'){ const L = c.lib && libOf(c.lib); if(L) L.fit = !L.fit; else c.fit = !c.fit; }
   else if(a==='unact'){ c.acts = (c.acts || []).filter(x => x.id!==v); }
   else if(a==='act'){ actPickSheet(c); return; }
+  else if(a==='pose'){ posePickSheet(c); return; }
+  else if(a==='unpose'){ c.poses = (c.poses || []).filter(x => x.id!==v); }
   else if(a==='unactto'){ const [dn, id] = v.split('>'), d = castOf(dn); if(d) d.acts = (d.acts || []).filter(x => !(x.id===id && x.to===c.n)); }
   else if(a==='save'){ const L = libNew(null, c); c.lib = L.id; c.attrs = c.attrs || []; libSync(L); toast('📚 ' + (L.name || 'It') + ' is in the Library now, for any film'); }
   else if(a==='ins'){ const ta = $('#prompt'), s = ta.selectionStart != null ? ta.selectionStart : ta.value.length, val = ta.value; ta.value = val.slice(0, s) + tok + ' ' + val.slice(ta.selectionEnd || s); S.f.prompt = ta.value; save(); drawShot(); drawCast(); return; }
@@ -3427,7 +3533,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
