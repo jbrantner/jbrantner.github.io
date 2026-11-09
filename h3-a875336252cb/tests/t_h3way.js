@@ -44,7 +44,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(/<Subject 2> is the cafe.*<Picture 3>/.test(P) && /<Subject 3> is the subject shown in <Picture 4>\./.test(P), 'other pictures get their own subjects, a bare one a plain line');
   ok(/<Subject 1> \(appears in \[Shot 1\]\): fully_preserved/.test(P) && /<Subject 2> \(appears in \[Shot 1\]\): weak_reference/.test(P), 'keep levels map to the official markers');
   ok(/<Audio 1> is the voice of Ellen \(S1\)\./.test(P) && /<Audio 1>: reference - /.test(P), 'a sound is a voice reference by default');
-  ok(/summary:\n\[reference generation \+ audio reference\] It features <Subject 1>, <Subject 2> and <Subject 3>\. (Everyone is full human size[^.]*\. )?Ellen walks to the window\. She turns/.test(P), 'summary: task tags, subjects, the gist');
+  ok(/summary:\n\[reference generation \+ audio reference\] It features <Subject 1>, <Subject 2> and <Subject 3>\. Ellen walks to the window\. She turns/.test(P), 'summary: task tags, subjects, the gist');
   ok(/detailed_description:\nThe target video is in a live-action, cinematic style\.\n\[Shot 1\] \[0s-5s\] Ellen walks/.test(P), 'style sentence before [Shot 1], untimed words timed from 0 s');
   ok(/overall_soundscape:\nRain on the window\./.test(P) && /non_diegetic_music:\nN\/A$/.test(P), 'sound line, and N/A with no music');
 
