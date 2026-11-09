@@ -767,7 +767,11 @@ const t2 = s => { const r = Math.round(s * 10) / 10; return (r % 1 ? r.toFixed(1
 // 🔀 Shuffle (Jordan 2026-11-09: PIKA gives near-identical takes for the same words on new seeds): each take sends its sentences in its own
 // order (1), and with 2 also the comma parts inside each sentence. Timed tags ([0s-2s], [Shot 2], "At 3s,") and the carry-on lead stay where they are;
 // the shuffle comes from the take's seed, so every take differs and the same take always gets the same order. Her saved words never change.
-const SHUF = ['off', 'sentences']; // (comma parts: taken out 2026-11-09, Jordan: could swap who does what; shuffleWords keeps mode 2 for later)
+const SHUF = ['off', 'batch', 'always']; // (comma parts: taken out 2026-11-09, Jordan: could swap who does what; shuffleWords keeps its mode 2 for later)
+// 🔀 batch (default): the first take of a batch goes as typed, the ones after it are shuffled; always: every take is shuffled, even a single one
+const shufOn = t => t && (t.shuffle===2 || (t.shuffle===1 && +t.bk > 0));
+const shufSeed = (t, i) => { let h = (+t.seed || 0) + (i || 0) * 7919; for(const c of String(t.id || '')) h = (Math.imul(h, 31) + c.charCodeAt(0)) | 0; return h; }; // the take's id too: a typed seed still gives every take its own order
+const shufMark = (t, k) => { t.shuffle = S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0; t.bk = k; return t; };
 function rngOf(seed){ let a = (+seed || 1) >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 function mix(a, r){ a = a.slice(); for(let i = a.length - 1; i > 0; i--){ const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   if(a.length > 1 && r.orig && a.every((x, i) => x===r.orig[i])) a.push(a.shift()); return a; } // never send it unchanged
@@ -1591,7 +1595,7 @@ function pieceGraph(t, i, oi, names){
   const words = lorasOf(t).map(l => (l.words || '').trim()).filter(Boolean).join(', ');
   // (✨ in-betweens: the mannequin wording is added here, out of sight; Jordan's prompt says what happens)
   const say = t.ctl && t.ctl.face ? faceWords(t.ctl.face, Math.max(0, pc.start - LEAD(pc) / FPS), L / FPS) : '';
-  const pp = castText(shuffleWords(pc.prompt, (+t.seed || 0) + i * 7919, t.shuffle ? 1 : 0), t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
+  const pp = castText(shuffleWords(pc.prompt, shufSeed(t, i), shufOn(t) ? 1 : 0), t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
   let prompt = (words ? words.replace(/[.\s]*$/, '. ') : '') + act, cond, lat, guides = 0;
   const h3 = o => t.h3 ? h3Prompt(Object.assign({h3:t.h3, text:act, words, imgs:t.imgs, vids:t.vids, auds:t.auds, cont:!!pc.ctx, secs:L / FPS, t0:pc.start - LEAD(pc) / FPS}, o)) : null;
   if(M.fl2v){ // the official First/last frame model
@@ -2059,7 +2063,7 @@ function snapshot(){ // the form, frozen into a take
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
-    descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle ? 1 : 0,
+    descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -2086,7 +2090,7 @@ async function render(){
     const base = +S.f.seed || 0;
     const N = +S.f.takes || 1, FT0 = filmTarget(), NX = S.ftNext; S.ftNext = null; if(FT0 && NX) delete FT0.clip; const FT = FT0 && Object.assign(FT0, {key:uid('k')}, NX || {}); // 📝 a prompt block: its place on the timeline
     for(let k = 0; k < N; k++){
-      const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base ? base + k : Math.floor(Math.random() * 2 ** 31);
+      const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base ? base + k : Math.floor(Math.random() * 2 ** 31); shufMark(t, k);
       if(!t.carry && !t.blend && FT) t.toFilm = Object.assign({}, FT);
       if(t.carry && t.carry.guide) applyGuide(t, t.carry.guide); // 🦴 a carry-on on a track that follows the guidance track
       t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
@@ -2213,7 +2217,7 @@ async function branchPc(b, t, i, extra){
 async function makeBranches(t, i, n, prompt){
   let at = S.takes.indexOf(t) + 1, sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
-    const b = JSON.parse(JSON.stringify(t)); b.id = uid('t'); b.t = Date.now(); b.seed = Math.floor(Math.random() * 2 ** 31);
+    const b = JSON.parse(JSON.stringify(t)); b.id = uid('t'); b.t = Date.now(); b.seed = Math.floor(Math.random() * 2 ** 31); shufMark(b, k + 1);
     b.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + b.id.slice(-4); b.dir = 'H3Deck/' + b.name;
     b.from = {id:t.id, at:i}; b.ctxDirs = []; for(let j = 1; j <= i; j++) b.ctxDirs[j] = ctxDir(t, j);
     b.pieces.forEach((p, j) => { if(j >= i){ Object.assign(p, {state:'new', file:null, pid:null, err:''}); } });
@@ -2748,7 +2752,7 @@ function takeCard(t){
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t)].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
-      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr">${t.shuffle ? '🔀 ' + esc(shuffleWords(t.pieces.length===1 ? t.pieces[0].prompt : t.prompt, +t.seed || 0, 1)) : esc(t.prompt)}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr">${shufOn(t) ? '🔀 ' + esc(shuffleWords(t.pieces.length===1 ? t.pieces[0].prompt : t.prompt, shufSeed(t, 0), 1)) : esc(t.prompt)}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
 }
@@ -2835,7 +2839,7 @@ document.addEventListener('click', async e => {
     else if(ds.act==='guide') await guideFromTake(t);
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
     else if(ds.act==='reroll'){ rerollSheet(t); return; }
-    else if(ds.act==='rerollGo'){ const nt = JSON.parse(JSON.stringify(t)); if(ds.off) try{ nt.descOff = JSON.parse(ds.off); }catch(e){} nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
+    else if(ds.act==='rerollGo'){ const nt = JSON.parse(JSON.stringify(t)); if(ds.off) try{ nt.descOff = JSON.parse(ds.off); }catch(e){} nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); shufMark(nt, 1); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
       nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null;
       const nw = ds.words; if(nw != null && nw.trim() && nw.trim()!==(t.prompt || '').trim()){ nt.prompt = nw.trim(); nt.pieces.forEach((p, k) => { p.prompt = piecePrompt(nt.prompt, nt.pieces, k); }); } nt.joinPid = null; nt.joinErr = ''; nt.upStage = null; nt.upPid = null; nt.upErr = ''; nt.smoothed = null;
       const url = pickPc(Object.assign({}, nt, {}), {}); if(!url){ toast('No PC can take it right now'); return; } nt.pc = url; S.takes.unshift(nt); drawTakes();
@@ -3022,8 +3026,8 @@ function touchTake(j, file){ const src = S.takes.find(x => x.id===j.take) || {},
 setTimeout(tickTouch, 3000);
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#ckBtn').onclick = () => checkPrompt();
-function drawShuf(){ const b = $('#shufBtn'); if(!b) return; const v = S.f.shuffle ? 1 : 0; b.textContent = '🔀 Shuffle: ' + SHUF[v]; b.classList.toggle('pri', v > 0); }
-$('#shufBtn').onclick = () => { S.f.shuffle = S.f.shuffle ? 0 : 1; save(); drawShuf(); toast(S.f.shuffle ? '🔀 Each take sends its ' + SHUF[S.f.shuffle] + ' in a new order' : '🔀 Shuffle off'); };
+function drawShuf(){ const b = $('#shufBtn'); if(!b) return; const v = S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0; b.textContent = ['🔀 Randomize: off', '🔀 Randomize batch', '🔀 Randomize'][v]; b.classList.toggle('pri', v > 0); }
+$('#shufBtn').onclick = () => { S.f.shuffle = ((S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0) + 1) % 3; save(); drawShuf(); toast(['🔀 Off: every take goes as typed', '🔀 Randomize batch: the first take goes as typed, the rest get a new sentence order', '🔀 Randomize: every take gets a new sentence order, even a single one'][S.f.shuffle], 5000); };
 $('#ckChat').onclick = () => { if(S.ck && S.ck.msgs){ drawCk(); const a = $('#ckAsk'); if(a){ a.scrollIntoView({block:'center'}); a.focus(); } return; } if(!(S.f.prompt || '').trim()) return toast('Write the shot first'); S.ck = {compose:true}; drawCk(); };
 $('#ckOut').onclick = e => { const b = e.target.closest('[data-ck]'); if(!b) return; const k = b.dataset.ck, c = S.ck;
   if(k==='ask0'){ const v = (S.ckDraft || '').trim(); if(!v) return; S.ckDraft = ''; S.ck = null; checkPrompt(null, v); return; }
@@ -3289,7 +3293,7 @@ window.H3Fill = async o => { if(!o.free && !H3GuideReadyFor(o.film)){ toast('Mak
         // 🎬 one take: a part whose clip changed starts with the end of the clip before's action, then its own (Jordan 2026-11-07)
         f.pieceText[i] = !i ? best.w : pb && pb!==best ? 'This continues straight on from the moment before, in the same shot with the same camera and no cut.\n[0s-1s] ' + pb.w.replace(/[.!?]+$/, '') + ', carrying on from the moment before.\n[1s-] ' + best.w
           : 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' + best.w + ' The action carries on from where it is now and does not start again.'; }); }
-      for(let k = 0; k < n; k++){ const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+      for(let k = 0; k < n; k++){ const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31); shufMark(t, k);
         t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
         t.toFilm = {film:o.film, name:o.name || '', key, track:o.track, at:+it.at || 0, cuts:it.cuts || [], len:it.len || 0}; if(!o.free) applyGuide(t, {film:o.film, off:it.at});
         const url = pickPc(t, extra); if(!url) throw new Error('no PC can take it right now'); t.pc = url; extra[url] = (extra[url] || 0) + estSecs(t, url);
@@ -3390,7 +3394,7 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
   const F = takeFrames(src), P = redoPlan(F, (+o.a || 0) * FPS, (+o.b || 0) * FPS, Math.max(4, Math.min(48, +o.ctx || 12))), key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1));
   let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
-    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31); shufMark(t, k);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = o.bridge ? bridgeWords(o.bridge.words, P) : (o.prompt || '').trim() || (src.pieces.find(p => p.start * FPS <= P.a && (p.start * FPS + p.deliv) > P.a) || src.pieces[0]).prompt;
     Object.assign(t, {prompt:text, seconds:P.Fout / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, pins:[], mq:'', follow:[],
@@ -3450,7 +3454,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
   const sd = !big && src.up && src.up.crop && src.final ? upDims(src) : null;
   let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
-    const t = JSON.parse(JSON.stringify(src)); if(o.descOff) t.descOff = JSON.parse(JSON.stringify(o.descOff)); t.id = uid('t'); t.t = Date.now(); t.seed = o.seed ? +o.seed + k : Math.floor(Math.random() * 2 ** 31);
+    const t = JSON.parse(JSON.stringify(src)); if(o.descOff) t.descOff = JSON.parse(JSON.stringify(o.descOff)); t.id = uid('t'); t.t = Date.now(); t.seed = o.seed ? +o.seed + k : Math.floor(Math.random() * 2 ** 31); shufMark(t, k);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:F / FPS, carry:null, combo:null, lead:null, toFilm:null, sm:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upPid:null, upErr:'', smoothed:fl, state:'working', reviewed:false, t0r:Date.now(),
@@ -3494,7 +3498,7 @@ window.H3Lead = async o => { const src = deckTake(o.take), fl = takeFile(src);
   if(!fl){ toast('That take has no finished video yet'); return 0; }
   const F = takeFrames(src), P = leadPlan(F, (+o.at || 0) * FPS, +o.secs || 3, 12), key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)); let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
-    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31); shufMark(t, k);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:P.B / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, redo:null, pins:[], mq:'', follow:[],
