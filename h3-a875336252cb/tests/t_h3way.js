@@ -188,7 +188,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     q('#ckOut [data-ck="undo"]').click(); r.undone = f.prompt==='Mei walks in. [0s-2s] large breasts bounce';
     f.neg = ''; q('#ckOut [data-ck="keep"]').click(); r.keep = f.negOn!==false && /a brand new thing/.test(f.neg) && (f.neg.match(/nipples showing through clothing/g) || []).length===1;
     p.value = 'She walks in. [1s-3s] She waves.'; p.oninput({target:p}); q('#ckBtn').click(); await new Promise(z => setTimeout(z, 300)); r.noDrop = !/dropped/.test(q('#ckOut').textContent);
-    H3.S.ck = {verdict:'fix', issues:[], shot:'no tags here', orig:'a [0s-2s] b', keep:'', kind:'PIKA'}; H3.drawCk(); r.drop = /dropped \[0s-2s\]/.test(q('#ckOut').textContent);
+    H3.S.ck = {verdict:'fix', issues:[], shot:'no tags here', orig:'a [0s-2s] b', keep:'', kind:'PIKA'}; H3.drawCk(); r.drop = /dropped \[0s-2s\]/.test(q('#ckOut').textContent); H3.S.ck = {verdict:'fix', issues:[], shot:'<Subject 1> and <Subject 4>', orig:'<Subject 1> waves', keep:'', kind:'PIKA'}; H3.drawCk(); r.added = /brought in <Subject 4>/.test(q('#ckOut').textContent);
     q('#ckOut [data-ck="x"]').click(); r.closed = q('#ckOut').hidden; f.neg = ''; p.value = ''; p.oninput({target:p}); return r; });
   // 👥 names: the shot goes out with names in place of <Subject n> and they come back as the same tags; an invented name is caught
   const CKN = await page.evaluate(() => { const old = H3.S.cast; H3.S.cast = [{n:1, who:'Mei'}, {n:2, who:'Tifa'}, {n:3, who:'a tall woman with red hair'}];
@@ -203,7 +203,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     q('#ckBtn').click(); await new Promise(z => setTimeout(z, 400)); const r = {wait:/Render is rendering/.test(q('#ckOut').textContent) && q('#ckBtn').disabled};
     q('#ckOut [data-ck="x"]').click(); r.cancel = q('#ckOut').hidden && !q('#ckBtn').disabled; window.fetch = real; p.value = ''; p.oninput({target:p}); return r; });
   ok(CKW.wait && CKW.cancel, '🔎 Check prompt waits while Render renders, Cancel stops it: ' + JSON.stringify(CKW));
-  ok(CKR.btn && CKR.url==='http://render.test:8443' && CKR.kindP==='PIKA' && CKR.kindV==='VANILLA' && CKR.kindF==='VANILLA THEN PIKA' && CKR.shown && CKR.used && CKR.undone && CKR.keep && CKR.noDrop && CKR.drop && CKR.closed
+  ok(CKR.btn && CKR.url==='http://render.test:8443' && CKR.kindP==='PIKA' && CKR.kindV==='VANILLA' && CKR.kindF==='VANILLA THEN PIKA' && CKR.shown && CKR.used && CKR.undone && CKR.keep && CKR.noDrop && CKR.drop && CKR.added && CKR.closed
     && ckReq && ckReq.model==='huihui_ai/qwen3-abliterated:8b' && ckReq.keep_alive===0 && ckReq.format==='json' && /prompt checker inside H3 Deck/.test(ckReq.messages[0].content) && /^MODEL: PIKA/.test(ckReq.messages[1].content),
     '🔎 Check prompt: asks the local LLM with the rulebook and the model kind, shows its notes, Use this / Undo / Keep out, warns about dropped tags: ' + JSON.stringify(CKR));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
