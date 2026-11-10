@@ -82,6 +82,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || ''), null, {timeout:30000});
   console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
   ok(SENT.length===3, 'three Qwen jobs');
+  ok(/redrawn with Qwen \(P-H3 not ready/.test(await page.evaluate(() => document.querySelector('#lookNote').textContent)), 'no P-H3 yet: Qwen did it, and says why');
   const G = SENT[0], bad = Object.values(G).flatMap(n => Object.keys(n.inputs).filter(k => { const s = SCHEMA[n.class_type]; return !s || !((s.input.required || {})[k] || (s.input.optional || {})[k]); }).map(k => n.class_type + '.' + k));
   const enc = Object.values(G).filter(n => n.class_type==='TextEncodeQwenImageEditPlus'), ld = Object.values(G).filter(n => n.class_type==='LoadImage').map(n => n.inputs.image);
   ok(!bad.length && enc.length===2 && enc[0].inputs.image1 && enc[0].inputs.image2 && !enc[0].inputs.image3 && /^Redraw the person in picture 1 in the visual style of picture 2\./.test(enc[0].inputs.prompt), 'Qwen graph: real inputs only, picture 1 = him, picture 2 = her look ' + JSON.stringify(bad));
@@ -99,6 +100,24 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(await page.evaluate(() => /Redraw Anna and Cat in this look \(2 pictures/.test(document.querySelector('[data-lk="redo"]').textContent)), 'and the button offers to redraw for the new look');
   await page.click('[data-lk="off"]'); X = await prom();
   ok(!/visual style/.test(X.p) && X.imgs.includes(R2.b0), 'off again: as before');
+  // ✨ P-H3 Image on the PC: it does the redraw (Qwen stays the fallback)
+  await page.evaluate(() => { const oi = H3.PC['http://render.test'].oi; ['PH3ImageConditioning', 'MiniMaxH3SigmaShift', 'ManualSigmas', 'SamplerCustomAdvanced', 'KSamplerSelect', 'RandomNoise', 'BasicGuider'].forEach(c => oi[c] = oi[c] || {input:{required:{}}});
+    oi.UNETLoader.input.required.unet_name[0].push('minimax_h3_fl2va_pruned_int8_convrot.safetensors'); oi.LoraLoaderModelOnly.input.required.lora_name[0].push('p-h3-image_lora_bf16.safetensors');
+    oi.CLIPLoader.input.required.clip_name[0].push('p-h3-image_text_encoder_int8.safetensors'); oi.VAELoader.input.required.vae_name[0].push('p-h3-image_vae_int8.safetensors');
+    H3.lookOf().src = 'c'; H3.lookOf().n = 1; H3.lookOf().redo = {}; H3.drawLook(); });
+  ok(await page.evaluate(() => /\(3 pictures, P-H3 on Render\)/.test(document.querySelector('[data-lk="redo"]').textContent) && !!document.querySelector('[data-lk="eng:qwen"]')), 'P-H3 there: the button says P-H3, with a Qwen choice');
+  SENT = []; await page.click('[data-lk="redo"]');
+  await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || ''), null, {timeout:30000});
+  console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
+  const PG = SENT[0], by = c => Object.values(PG).filter(n => n.class_type===c), ci = (by('PH3ImageConditioning')[0] || {}).inputs || {};
+  ok(SENT.length===3 && by('MiniMaxH3SigmaShift')[0].inputs.shift_video===1 && /fl2va_pruned_int8/.test(by('UNETLoader')[0].inputs.unet_name) && /p-h3-image_lora/.test(by('LoraLoaderModelOnly')[0].inputs.lora_name)
+    && by('CLIPLoader')[0].inputs.type==='minimax' && Array.isArray(ci['images.image_1']) && Array.isArray(ci['images.image_2']) && !ci['images.image_3']
+    && by('ManualSigmas')[0].inputs.sigmas.split(',').length===9 && by('KSamplerSelect')[0].inputs.sampler_name==='er_sde' && !by('TextEncodeQwenImageEditPlus').length, 'P-H3 graph: FL2VA + LoRA, shift 1, two pictures on the conditioning, 8 sigmas er_sde');
+  ok(/^Redraw the person in <Picture 1> in the visual style of <Picture 2>\./.test(ci.prompt) && ci.width % 32===0 && ci.height % 32===0 && Math.abs(ci.width * ci.height - 2 * 1048576) < 2 * 1048576 * 0.08 && ci.height > ci.width, 'P-H3 prompt names <Picture n>, canvas 2 MP in her shape ' + ci.width + 'x' + ci.height);
+  ok(await page.evaluate(() => Object.values(H3.lookOf().redo).every(r => r.eng==='ph3')), 'copies marked as P-H3 ones');
+  await page.click('[data-lk="eng:qwen"]');
+  ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
+  await page.click('[data-lk="eng:"]');
   // no Qwen on the PC
   await page.evaluate(() => { const oi = H3.PC['http://render.test'].oi; window.SAVE = oi.TextEncodeQwenImageEditPlus; delete oi.TextEncodeQwenImageEditPlus; });
   ok(await page.evaluate(() => /TextEncodeQwenImageEditPlus/.test(H3.qwenKit().why || '')), 'missing node: says which');

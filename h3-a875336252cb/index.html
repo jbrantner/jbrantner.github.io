@@ -580,7 +580,7 @@ const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleF
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
-  'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','ModelSamplingAuraFlow','CFGNorm','KSampler','VAEDecode','ImageScaleToTotalPixels'];
+  'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','PH3ImageConditioning','MiniMaxH3SigmaShift','ModelSamplingAuraFlow','CFGNorm','KSampler','VAEDecode','ImageScaleToTotalPixels'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
@@ -1459,7 +1459,8 @@ function drawLook(){ const el = $('#lookBox'); if(!el) return; if(S.f.sm){ el.in
     <button class="btn${L.src==='p' ? ' pri' : ''}" data-lk="p">🖼 Style picture</button></div>
     ${L.src==='p' ? `<div class="castpics" style="margin-top:6px">${L.pics.map((id, i) => `<span class="cpw"><img src="${th(id)}" alt=""><button data-lk="unpic:${i}" aria-label="Take this picture out">✕</button></span>`).join('')}${L.pics.length < 2 ? `<button class="castpic" data-lk="pic">＋<br>Picture</button>` : ''}</div>` : ''}
     ${sig ? `<div class="note" style="margin-top:4px">Everyone and everything is told to be in the look of ${esc(srcName)}. For a sure match, redraw the others' pictures in it first.</div>
-      ${others.length ? `<button class="btn" data-lk="redo" style="width:100%;margin-top:8px"${LOOK_BUSY ? ' disabled' : ''}>🪄 Redraw ${esc(andList(others.map(castName)))} in this look${left ? '' : ' again'} (${left || all.length} picture${(left || all.length)===1 ? '' : 's'}, Qwen on Render)</button>` : ''}
+      ${others.length ? `<button class="btn" data-lk="redo" style="width:100%;margin-top:8px"${LOOK_BUSY ? ' disabled' : ''}>🪄 Redraw ${esc(andList(others.map(castName)))} in this look${left ? '' : ' again'} (${left || all.length} picture${(left || all.length)===1 ? '' : 's'}, ${esc(lookEngName(L))})</button>
+        <div class="seg" style="margin-top:6px">${[['', '✨ P-H3 Image (Qwen if not there)'], ['qwen', 'Qwen-Image-Edit']].map(([v, t]) => `<button data-lk="eng:${v}" class="${(L.eng || '')===v ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}
       ${done.length ? `<div class="castpics" style="margin-top:6px">${done.map(id => `<span class="cpw"><img src="${th(L.redo[id].id)}" alt=""><button data-lk="undo:${id}" aria-label="Drop this redrawn copy">✕</button></span>`).join('')}</div>
         <button class="btn${L.use!==false ? ' pri' : ''}" data-lk="use" style="width:100%;margin-top:6px">Use the redrawn pictures: ${L.use!==false ? 'on' : 'off (the originals go)'}</button>` : ''}`
     : L.src==='p' ? '<div class="note" style="margin-top:4px">Add one or two pictures in the look you want (a still from a film, a drawing, a render…).</div>' : ''}
@@ -1474,10 +1475,40 @@ function qwenKit(){ const order = S.pcs.slice().sort((a, b) => /render/i.test(b.
     return {url:p.url, oi, unet, clip, vae, fast, steps:fast ? (/8.?step/i.test(fast) ? 8 : 4) : 20, cfg:fast ? 1 : 2.5}; }
   return {why:why || 'No PC that is on has Qwen-Image-Edit (a qwen_image_edit model in models/diffusion_models). Render has it: switch it on and try again.'}; }
 // no item names in the keep line (2026-11-02: naming glasses made Qwen add them), only the kinds of thing to keep
-function lookText(kind, n){ const what = kind==='thing' ? 'object' : kind==='place' ? 'place' : 'person', sp = n > 1 ? 'pictures 2 and 3' : 'picture 2';
+// ✨ P-H3 Image (Jordan 2026-11-10: yes to P-H3 for 🪄 Redraw, Qwen kept as the fallback): Pruna's still-picture H3, the same family as the
+// video model, so redrawn people should sit closer to how H3 draws them. The job is the one rd-ca7a819000b8/ph3/ sends (Comfy-Org's
+// image_p_h3_image_edit template, ComfyUI 0.44.0+): FL2VA int8 + p-h3-image LoRA (or its own model) → SigmaShift 1/1, PH3ImageConditioning
+// with <Picture 1> = theirs and <Picture 2/3> = the look, er_sde on Pruna's 8 sigmas, no prompt upsampler; 2 MP (Render has 8 GB).
+const PH3_SIGMAS = '1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0', PH3_MP = 2;
+function ph3Kit(){ const order = S.pcs.slice().sort((a, b) => /render/i.test(b.name || '') - /render/i.test(a.name || '')); let why = '';
+  for(const p of order){ const P = pcOf(p.url), oi = P.oi; if(!P.online || !oi || !oi.PH3ImageConditioning) continue;
+    const pick = (l, re, pref) => { const m = l.filter(n => re.test(String(n).replace(/\\/g, '/'))); for(const x of pref || []){ const f = m.find(n => x.test(n)); if(f) return f; } return m[0] || ''; };
+    const unets = combo(oi, 'UNETLoader', 'unet_name'), own = pick(unets, /p-h3-image_[^/]*\.safetensors$/i, [/int8/i, /w4a8/i]);
+    const k = {eng:'ph3', url:p.url, oi, own:!!own, unet:own || pick(unets, /fl2va.*(pruned.*int8|int8.*pruned)|minimaxH3INT8INT4_fl2va/i, [/convrot/i]), lora:pick(combo(oi, 'LoraLoaderModelOnly', 'lora_name'), /p-h3-image_lora/i),
+      te:pick(combo(oi, 'CLIPLoader', 'clip_name'), /p-h3-image_text_encoder/i, [/int8/i, /w4a8/i]), vae:pick(combo(oi, 'VAELoader', 'vae_name'), /p-h3-image_vae/i, [/int8/i])};
+    const miss = [!k.unet && 'the FL2VA int8 model', !k.own && !k.lora && 'the p-h3-image LoRA', !k.te && 'its text encoder', !k.vae && 'its VAE', !(oi.MiniMaxH3SigmaShift && oi.ManualSigmas && oi.SamplerCustomAdvanced && oi.ImageScaleToTotalPixels) && 'some core nodes (update ComfyUI)'].filter(Boolean);
+    if(miss.length){ why = pcName(p.url) + ' has P-H3 nodes but not ' + andList(miss); continue; } return k; }
+  return {why:why || 'No PC that is on has P-H3 Image (ComfyUI 0.44.0+ and its files)'}; }
+// the engine: ✨ P-H3 Image first, Qwen when no PC has P-H3 (or when Qwen is picked)
+function lookKit(L){ if(L.eng!=='qwen'){ const p = ph3Kit(); if(!p.why) return p; const q = qwenKit(); return q.why ? {why:p.why + '. ' + q.why} : Object.assign(q, {eng:'qwen', fell:p.why}); } const q = qwenKit(); if(!q.why) q.eng = 'qwen'; return q; }
+const lookEngName = L => { const k = lookKit(L); return k.why ? (L.eng==='qwen' ? 'Qwen' : 'P-H3') + ' on Render' : (k.eng==='ph3' ? 'P-H3' : 'Qwen') + ' on ' + pcName(k.url); };
+function ph3LookGraph(k, file, styleFiles, kind, seed, w, h){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
+  let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
+  if(!k.own) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
+  model = [add('MiniMaxH3SigmaShift', {model, shift_video:1, shift_audio:1}), 0];
+  const clip = [add('CLIPLoader', {clip_name:k.te, type:'minimax', device:'default'}), 0], vae = [add('VAELoader', {vae_name:k.vae}), 0];
+  const ci = {clip, vae, prompt:lookText(kind, styleFiles.length, true), width:w, height:h};
+  ci['images.image_1'] = [add('ImageScaleToTotalPixels', {image:[add('LoadImage', {image:file}), 0], upscale_method:'lanczos', megapixels:PH3_MP, resolution_steps:32}), 0];
+  styleFiles.slice(0, 2).forEach((f, i) => { ci['images.image_' + (i + 2)] = [add('LoadImage', {image:f}), 0]; });
+  const cond = add('PH3ImageConditioning', ci);
+  const sm = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[add('BasicGuider', {model, conditioning:[cond, 0]}), 0],
+    sampler:[add('KSamplerSelect', {sampler_name:'er_sde'}), 0], sigmas:[add('ManualSigmas', {sigmas:PH3_SIGMAS}), 0], latent_image:[cond, 1]});
+  return {g, save:add('PreviewImage', {images:[add('VAEDecode', {samples:[sm, 0], vae}), 0]})}; }
+const ph3Size = m => { const w = (m && m.w) || 768, h = (m && m.h) || 1024, q = Math.sqrt(PH3_MP * 1048576 / (w * h)); return [Math.max(32, Math.round(w * q / 32) * 32), Math.max(32, Math.round(h * q / 32) * 32)]; };
+function lookText(kind, n, ph3){ const what = kind==='thing' ? 'object' : kind==='place' ? 'place' : 'person', sp = ph3 ? (n > 1 ? '<Picture 2> and <Picture 3>' : '<Picture 2>') : n > 1 ? 'pictures 2 and 3' : 'picture 2', p1 = ph3 ? '<Picture 1>' : 'picture 1';
   const keep = what==='person' ? 'the same person, face, hair, body, clothes, pose and expression' : what==='object' ? 'the same object, shape, parts and colours' : 'the same layout, things in it and colours';
-  return 'Redraw the ' + what + ' in picture 1 in the visual style of ' + sp + '. ' + sp.replace(/^./, c => c.toUpperCase()) + (n > 1 ? ' show' : ' shows') + ' the style only: copy exactly how ' + (n > 1 ? 'they are' : 'it is') + ' rendered, whether a real photograph, 3D animation, 2D anime or a cartoon, with the same line work, shading, colours, light and texture. '
-    + 'Keep picture 1 the same in every other way: ' + keep + ', the same framing and the same background. Take nothing else from ' + sp + '.'; }
+  return 'Redraw the ' + what + ' in ' + p1 + ' in the visual style of ' + sp + '. ' + sp.replace(/^./, c => c.toUpperCase()) + (n > 1 ? ' show' : ' shows') + ' the style only: copy exactly how ' + (n > 1 ? 'they are' : 'it is') + ' rendered, whether a real photograph, 3D animation, 2D anime or a cartoon, with the same line work, shading, colours, light and texture. '
+    + 'Keep ' + p1 + ' the same in every other way: ' + keep + ', the same framing and the same background. Take nothing else from ' + sp + '.'; }
 function lookGraph(k, file, styleFiles, kind, seed){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
   let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
   if(k.fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.fast, strength_model:1}), 0];
@@ -1494,16 +1525,16 @@ async function waitHist(url, pid, ms, tick){ const t0 = Date.now();
     if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(e ? e[1].exception_message : 'ComfyUI hit an error'); }
     if(h && h.status && h.status.completed) return h; }
   throw new Error('it took too long'); }
-async function lookRedo(){ if(LOOK_BUSY) return; const L = lookOf(), sig = lookSig(L); if(!sig) return; const k = qwenKit(); if(k.why){ lookSay(k.why); return; }
+async function lookRedo(){ if(LOOK_BUSY) return; const L = lookOf(), sig = lookSig(L); if(!sig) return; const k = lookKit(L); if(k.why){ lookSay(k.why); return; } const eng = k.eng==='ph3' ? 'P-H3' : 'Qwen';
   const all = lookOthers(L).flatMap(c => castPics(c).slice(0, 3).map(id => ({c, id}))), fresh = all.filter(x => !lookHas(L, x.id, sig)), jobs = fresh.length ? fresh : all; if(!jobs.length) return;
   LOOK_BUSY = sig; let ok = 0; drawLook();
   try{ lookSay('🪄 Sending the look to ' + pcName(k.url) + '…'); const sf = []; for(const id of lookSrcPics(L)) sf.push(await upload(k.url, id));
-    for(const [i, x] of jobs.entries()){ const nm = castName(x.c), say = s => lookSay('🪄 Redrawing ' + nm + ' (' + (i + 1) + ' of ' + jobs.length + ') on ' + pcName(k.url) + '…' + (s ? ' ' + s + ' s' : ''));
-      say(0); const G = lookGraph(k, await upload(k.url, x.id), sf, x.c.kind || 'char', Math.floor(Math.random() * 1e9)), pid = await queueGraph(k.url, G, false);
+    for(const [i, x] of jobs.entries()){ const nm = castName(x.c), say = s => lookSay('🪄 ' + eng + ' is redrawing ' + nm + ' (' + (i + 1) + ' of ' + jobs.length + ') on ' + pcName(k.url) + '…' + (s ? ' ' + s + ' s' : ''));
+      say(0); const file = await upload(k.url, x.id), seed = Math.floor(Math.random() * 1e9), G = k.eng==='ph3' ? ph3LookGraph(k, file, sf, x.c.kind || 'char', seed, ...ph3Size(S.media[x.id])) : lookGraph(k, file, sf, x.c.kind || 'char', seed), pid = await queueGraph(k.url, G, false);
       const h = await waitHist(k.url, pid, 15 * 60000, say), f = (((h.outputs || {})[G.save] || {}).images || [])[0]; if(!f) throw new Error('ComfyUI sent no picture back');
       const b = await (await fetch(viewUrl(k.url, Object.assign({type:'temp'}, f)))).blob(), id = await addMedia(new File([b], 'look_' + nm.replace(/\W+/g, '_') + '.png', {type:b.type || 'image/png'}), 'img');
-      S.media[id].from = 'look'; L.redo[x.id] = {id, sig}; ok++; save(); drawLook(); }
-    L.use = true; lookSay('🪄 Done: ' + ok + ' redrawn. They go with every take in this film while "Use the redrawn pictures" is on.');
+      S.media[id].from = 'look'; L.redo[x.id] = {id, sig, eng:k.eng}; ok++; save(); drawLook(); }
+    L.use = true; lookSay('🪄 Done: ' + ok + ' redrawn with ' + eng + (k.fell ? ' (P-H3 not ready: ' + k.fell + ')' : '') + '. They go with every take in this film while "Use the redrawn pictures" is on.');
   }catch(e){ lookSay("🪄 Couldn't redraw " + (ok ? 'the rest' : 'them') + ': ' + e.message); }
   finally{ LOOK_BUSY = ''; save(); drawLook(); try{ h3Peek(); }catch(e){} } }
 function h3Style(s, base){ s = (s || '').trim().replace(/[\s.]*$/, '') || 'Live-action, cinematic';
@@ -3032,7 +3063,7 @@ $('#h3Style').oninput = e => { S.f.h3Style = e.target.value; save(); h3Peek(); d
 $('#lookBox').onclick = e => { const b = e.target.closest('[data-lk]'); if(!b || b.disabled) return; const L = lookOf(), [a, v] = b.dataset.lk.split(/:(.*)/);
   if(a==='pic'){ pickFile('look'); return; } if(a==='redo'){ lookRedo(); return; }
   if(a==='off') L.src = ''; else if(a==='c'){ L.src = 'c'; L.n = +v; } else if(a==='p'){ L.src = 'p'; if(!L.pics.length) pickFile('look'); }
-  else if(a==='unpic') L.pics.splice(+v, 1); else if(a==='undo') delete L.redo[v]; else if(a==='use') L.use = L.use===false;
+  else if(a==='unpic') L.pics.splice(+v, 1); else if(a==='undo') delete L.redo[v]; else if(a==='use') L.use = L.use===false; else if(a==='eng') L.eng = v || '';
   if(!LOOK_BUSY) LOOK_MSG = ''; save(); drawLook(); try{ h3Peek(); }catch(e){} };
 $('#styleChips').onclick = e => { const qs = e.target.closest('[data-qs]'); if(qs) S.f.qstyle = qs.dataset.qs; else if(e.target.closest('[data-q]')) S.f.quality = S.f.quality!==true; else if(e.target.closest('[data-neg]')) S.f.negOn = S.f.negOn!==true; else return; save(); drawStyle(); h3Peek(); };
 $('#h3Neg').oninput = e => { S.f.neg = e.target.value; save(); h3Peek(); };
@@ -3661,6 +3692,6 @@ window.H3 = {ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, p
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
-    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, lookGraph, lookRedo, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, lookGraph, ph3Kit, lookKit, lookRedo, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
