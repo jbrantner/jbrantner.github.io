@@ -296,6 +296,29 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.click('#goBtn'); await page.waitForTimeout(1500);
   const g2 = sent[n2] && sent[n2].g, sz = await page.evaluate(() => { const t = H3.S.takes[0]; return {cont:t.cont, carry:t.carry}; });
   ok(g2 && !node(g2, 'MiniMaxH3MotionContext') && node(g2, 'LoadImage') && !sz.cont && sz.carry && sz.carry.still && sz.carry.own, 'it renders from the picture as its first frame, and the take keeps where it goes (' + JSON.stringify(sz) + ')'); }
+
+  { // ➕ from a clip that is itself a carry-on (Jordan 2026-11-10): only the words playing at that moment lead in, not the whole earlier prompt
+    const P0 = '[0s-1s] she walks to the window, carrying on from the moment before.\n[1s-] <Subject 1> opens the window';
+    await page.evaluate(P0 => { const s = H3.S.takes.find(x => x.carry && x.carry.own && x.cont && !x.carry.still), t = JSON.parse(JSON.stringify(s)); t.id = 'tCh'; t.t = Date.now() + 5; t.prompt = P0; t.state = 'done';
+      t.pieces.forEach(p => { p.prompt = 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' + P0; p.state = 'done'; p.file = {filename:'piece_01_00001_.mp4', subfolder:'Output_Render/' + t.dir, type:'output'}; });
+      t.final = {filename:'ch_00001_.mp4', subfolder:'Output_Render/H3Deck/ch', type:'output'}; H3.S.takes.unshift(t); H3.saveNow(); }, P0);
+    await page.evaluate(() => { H3.S.tab = 'films'; });
+    const cid2 = await fr.evaluate(() => { const f = FILM.S.films[0]; const c = FILM.addClip(f, FILM.takeOf('tCh'), 0); FILM.SEL = c.id; FILM.PH = c.at + 2; FILM.draw(); return c.id; });
+    await page.evaluate(() => { H3.S.f.prompt = ''; document.querySelector('#prompt').value = ''; });
+    await fr.click('[data-act="carry"]'); await page.waitForFunction(() => /\[1s-\]/.test(H3.S.f.prompt), null, {timeout:10000}).catch(() => {});
+    const chp = await page.evaluate(() => H3.S.f.prompt);
+    ok(chp==='[0s-1s] <Subject 1> opens the window, carrying on from the moment before.\n[1s-] ', '➕ from a carry-on clip leads in with only what it was doing at that moment, no old tags or old lead-in (' + JSON.stringify(chp) + ')');
+    await fr.evaluate(c => { FILM.PH = FILM.S.films[0].tracks.flatMap(t => t.clips).find(x => x.id===c).at + 0.5; FILM.draw(); }, cid2);
+    // the words at 0.5 s are the old lead-in line: still plain words
+    const nw = await fr.evaluate(() => FILM.nowWords ? FILM.nowWords(FILM.takeOf('tCh'), 0.5) : null);
+    if(nw!=null) ok(nw==='she walks to the window.', 'inside its first second the words are the lead-in action, plain (' + nw + ')');
+    // ⏱ the bar: overlapping and empty lines never pile up; subjects show by name
+    const bb = await page.evaluate(() => { H3.S.f.prompt = '[0s-1s] [1s-2s] [2s-3s] <Subject 1> smoking. [3s-5.9s] , carrying on from the moment before. [2s-5.9s] <Subject 1> has green eyes'; document.querySelector('#prompt').value = H3.S.f.prompt; H3.drawAll();
+      const bs = [...document.querySelectorAll('#bbTrack > div:not([data-bb])')].map(d => d.getBoundingClientRect()).map(r => [Math.round(r.left), Math.round(r.right)]);
+      let over = 0; for(let i = 1; i < bs.length; i++) if(bs[i][0] < bs[i - 1][1] - 1) over++;
+      return {n:bs.length, over, txt:document.querySelector('#bbTrack').textContent, note:document.querySelector('#bbNote').textContent}; });
+    ok(bb.over===0 && /overlaps/.test(bb.note) && /no words/.test(bb.note), '⏱ the words bar never draws one line over another and flags the overlap and the empty lines (' + JSON.stringify(bb) + ')');
+  }
   await page.screenshot({path:path.join(__dirname, 'carry.png')});
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
