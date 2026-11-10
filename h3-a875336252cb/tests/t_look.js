@@ -148,9 +148,15 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   console.log(ftg.prompt);
   ok(!fby('ImageScaleToTotalPixels').length && fby('LoadImage').length===2 && Array.isArray(fci['images.image_2']) && !fci['images.image_3'] && Math.abs(fci.width / fci.height - vd.w / vd.h) < 0.05 && fci.width * fci.height > 1.8e6, 'first frame: a new P-H3 picture from both of them, at the video\'s shape, 2 MP');
   ok(/Anna from <Picture 1> and Ben from <Picture 2> laugh together/.test(ftg.prompt) && /the look of <Picture 1>/.test(ftg.prompt) && /^Aspect ratio: /.test(ftg.prompt), 'its words: who is in which picture, and Anna\'s look');
-  ok(await page.evaluate(id => { const f = H3.S.f, L = H3.lookOf(); return f.fl===true && f.first===L.frame && !!H3.S.media[L.frame] && /starts from this picture/.test(document.querySelector('#lookBox').textContent); }), 'it becomes the 🎞 first frame, shown under 🎨');
+  ok(await page.evaluate(() => { const f = H3.S.f, L = H3.lookOf(); return !f.fl && f.first!==L.frame && !!H3.S.media[L.frame] && /its look, not its framing/.test(document.querySelector('#lookBox').textContent); }), 'it is NOT the first frame: a style reference, shown under 🎨');
+  X = await prom(); const fid = await page.evaluate(() => H3.lookOf().frame), fk = X.imgs.indexOf(fid) + 1;
+  ok(fk > 0 && new RegExp('<Picture ' + fk + '> is an example frame of this scene in that look: the framing, the layout and who is in frame come from the shot\'s own words').test(X.p) && /is the visual style shown in/.test(X.p), 'takes send it as part of the style subject, framing from the words');
+  ok(await page.evaluate(fid => !H3.frameRefs().some(r => r.id===fid), fid), 'painting again leaves the old frame out');
+  await page.click('[data-lk="fuse"]'); X = await prom();
+  ok(!X.imgs.includes(fid), 'switched off: not sent');
+  await page.click('[data-lk="fuse"]');
   await page.click('[data-lk="funuse"]');
-  ok(await page.evaluate(() => !H3.S.f.fl && !H3.S.f.first && !H3.lookOf().frame), '✕ takes it off');
+  ok(await page.evaluate(() => !H3.S.f.fl && !H3.lookOf().frame), '✕ takes it off');
   await page.click('[data-lk="eng:qwen"]');
   ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
   await page.click('[data-lk="eng:"]');
