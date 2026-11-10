@@ -131,8 +131,14 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(/^Aspect ratio: 2:3\nRequest: Redraw the person in <Picture 1> in the visual style of <Picture 2>\./.test(tg.prompt) && ci.width % 32===0 && ci.height % 32===0 && Math.abs(ci.width * ci.height - 2 * 1048576) < 2 * 1048576 * 0.08 && ci.height > ci.width, 'P-H3 prompt names <Picture n>, canvas 2 MP in her shape ' + ci.width + 'x' + ci.height);
   ok(await page.evaluate(() => Object.values(H3.lookOf().redo).every(r => r.eng==='ph3')), 'copies marked as P-H3 ones');
   await page.click('#lookBox [data-lk^="big:"]');
-  ok(await page.evaluate(() => document.querySelectorAll('#sheetCard figure img').length===2 && /Original · 64×96/.test(document.querySelector('#sheetCard').textContent) && /Redrawn · 64×96 \(P-H3\)/.test(document.querySelector('#sheetCard').textContent)), 'tap a redrawn tile: before and after, whole, with sizes');
-  await page.evaluate(() => document.querySelector('[data-close]').click());
+  const fv = async () => page.evaluate(() => { const b = document.querySelector('#picFull'), im = b && b.querySelector('img'); return b ? {t:b.textContent, fit:im.style.maxWidth, w:im.getBoundingClientRect().width, nw:im.naturalWidth, save:!!b.querySelector('a[download]')} : null; });
+  await page.waitForTimeout(200); let F = await fv();
+  ok(F && /Redrawn \(P-H3\) · 64×96/.test(F.t) && /Original/.test(F.t) && F.fit==='100%' && F.save, 'tap a redrawn tile: full screen, fitted, with the original a tap away and ⬇ Save ' + JSON.stringify(F));
+  await page.click('#picFull button[data-pf="one"]'); F = await fv();
+  ok(F.fit==='none' && Math.round(F.w)===F.nw, '🔍 Full size: 1:1 pixels ' + JSON.stringify(F));
+  await page.click('#picFull [data-pf="go:1"]'); F = await fv();
+  ok(/Original · 64×96/.test(F.t), 'Original shows');
+  await page.click('#picFull [data-pf="x"]'); ok(!(await fv()), '✕ closes it');
   await page.click('[data-lk="eng:qwen"]');
   ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
   await page.click('[data-lk="eng:"]');
