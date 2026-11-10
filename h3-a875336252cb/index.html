@@ -238,6 +238,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
         <div class="chips" style="margin-top:8px"><button class="btn" id="ckBtn">🔎 Check prompt</button><button class="btn" id="ckChat">💬 Ask the checker</button><button class="btn" id="shufBtn">🔀 Shuffle: off</button></div>
         <div id="ckOut" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px"></div>
         <div id="styleRow" style="margin-top:8px"><div class="chips" id="styleChips"></div></div>
+        <div id="lookBox" style="margin-top:8px"></div>
         <details id="negBox" style="margin-top:6px"><summary class="note stl">🚫 What to keep out (tap to edit)</summary><div style="display:grid;gap:8px;margin-top:8px">
           <textarea id="h3Neg" style="min-height:72px"></textarea>
           <div class="row" style="align-items:center"><span class="note stl" style="flex:1">Empty = the default. For a nude shot, take out the clothing words or switch 🚫 off. Goes with the render; ✏ Edit and ✨ High quality redraws run without it.</span><label class="note stl">Strength <input id="negScale" type="number" min="2" max="10" step="1" inputmode="numeric" style="width:64px" title="5 gentle, 9 normal, 10 the most"></label></div>
@@ -578,7 +579,8 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
 const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
-  'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage'];
+  'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
+  'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','ModelSamplingAuraFlow','CFGNorm','KSampler','VAEDecode','ImageScaleToTotalPixels'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
@@ -1063,12 +1065,15 @@ function castUsed(t){ const txt = [t.prompt || '', ...(t.pieces || []).map(p => 
   txt.replace(SUBRE, (m, n) => { if(castOf(n, t.film)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
   const imgs = (t.imgs || []).filter(r => !r.cast);
-  const used = pics ? castUsed(t) : [], apics = c => attrsOf(c, t).map(libOf).filter(Boolean).map(A => [A, libPics(A).filter(id => S.media[id]).slice(0, 2)]);
+  const used = pics ? castUsed(t) : [], lk = pics && t.look && t.look.src ? t.look : null, lkN = lk && lk.src==='c' ? +lk.n || 0 : 0, apics = c => attrsOf(c, t).map(libOf).filter(Boolean).map(A => [A, libPics(A).filter(id => S.media[id]).slice(0, 2)]);
   let need = used.reduce((a, n) => a + apics(castOf(n, t.film)).reduce((b, [, P]) => b + P.length, 0), 0); // (2026-11-08: an outfit didn't take, its pictures had no room)
   const vids = (t.vids || []).slice(), acts = c => (c.acts || []).map(x => [x, libOf(x.id)]).filter(([, A]) => A);
   for(const n of used) for(const [x, A] of acts(castOf(n, t.film))) if(!(A.vid && S.media[A.vid] && vids.length < MAXREF.vid)) need += libPics(A).filter(id => S.media[id]).slice(0, 3).length;
   const pz = {}; for(const n of used) for(const x of posesOf(castOf(n, t.film), t)){ const P = libOf(x.id); (pz[P.id] = pz[P.id] || {P, who:[]}).who.push({n, p:x.p}); } // 🧍 one picture per pose, whoever takes it
   need += Object.keys(pz).length;
+  // 🎨 one look for everyone: style pictures (or the chosen character's first picture, when she isn't in this shot) go as style-only refs
+  const stylePics = !lk ? [] : (lk.src==='p' ? (lk.pics || []) : lkN && !used.includes(lkN) ? castPics(castOf(lkN, t.film)).slice(0, 1) : []).filter(id => S.media[id]).slice(0, 2); need += stylePics.length;
+  const lookId = (c, id) => lk && c.n!==lkN && lk.redo && lk.redo[id] && S.media[lk.redo[id]] ? lk.redo[id] : id; // 🪄 her picture redrawn in that look
   // each subject's share of the 9 slots (Jordan 2026-11-08: 4 characters, only 2 came out: the first two took every picture):
   // one picture each first, in cast order, then a second each, and so on, after the attributes' and actions' room
   const quota = {}, room0 = Math.max(0, MAXREF.img - imgs.length - need), have = used.map(n => [n, castPics(castOf(n, t.film)).length]);
@@ -1076,12 +1081,13 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   if(!room0) for(const [n, P] of have) if(P && imgs.length + Object.keys(quota).length < MAXREF.img) quota[n] = 1;
   for(const n of used){ const c = castOf(n, t.film); let k = 0;
     const fit = fitOn(c, t), nude = nudeOn(c, t);
-    for(const id of castPics(c)) if(imgs.length < MAXREF.img && k < (quota[n] || 0)){ imgs.push(Object.assign({id, desc:castWho(c), more:castMore(c, t), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}, fit ? {fit:true} : {}, nude ? {nude:true} : {})); k++; }
+    for(const id of castPics(c)) if(imgs.length < MAXREF.img && k < (quota[n] || 0)){ imgs.push(Object.assign({id:lookId(c, id), desc:castWho(c), more:castMore(c, t), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}, fit ? {fit:true} : {}, nude ? {nude:true} : {}, lkN && n===lkN ? {lookSrc:true} : {})); k++; }
     for(const [A, P] of apics(c)){ for(const id of P) if(imgs.length < MAXREF.img) imgs.push(Object.assign({id, attrOf:n, lib:A.id, what:(A.what || A.name || (A.kind==='wear' ? 'outfit' : 'look')).trim(), more:castMore(A), keep:KEEP[A.keep] ? A.keep : 'exact'}, isWear(A) ? {wear:true} : {})); need -= P.length; }
     for(const [x, A] of acts(c)){ const base = {actOf:n, to:x.to && castOf(x.to, t.film) ? x.to : 0, off:!!x.off, lib:A.id, what:(A.what || A.name || 'move').trim(), more:castMore(A)};
       if(A.vid && S.media[A.vid] && vids.length < MAXREF.vid){ vids.push(Object.assign({id:A.vid, sound:false, follow:false, keep:'loose'}, base)); continue; }
       const P = libPics(A).filter(id => S.media[id]).slice(0, 3); for(const id of P) if(imgs.length < MAXREF.img) imgs.push(Object.assign({id, keep:'loose'}, base)); need -= P.length; } }
   for(const {P, who} of Object.values(pz)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', when:P.when==='all' ? 'all' : 'start', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:castMore(P), poseOf:who.sort((a, b) => a.p - b.p).map(w => ({n:w.n, p:w.p, w:poseWho(P, w.p)}))});
+  for(const id of stylePics) if(imgs.length < MAXREF.img) imgs.push({id, style:true, styleOf:lkN, keep:'loose'});
   return Object.assign({}, t, {imgs, vids}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
   const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) (pics[r.cast] = pics[r.cast] || []).push('<Picture ' + (k + 1) + '>'); });
@@ -1104,6 +1110,9 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
   Object.entries(fits).forEach(([n, p]) => ad.unshift('<Subject ' + n + '> wears exactly the outfit shown in ' + andList(p) + ': the same clothes, cut, colours and details.'));
   ((T && T.imgs) || []).forEach((r, k) => { if(!r.poseOf) return; const nm = n => pics[n] ? '<Subject ' + n + '>' : (castWho(castOf(n, fk)) || 'the person').replace(/^./, x => x.toUpperCase()); // 🧍
     ad.push('<Picture ' + (k + 1) + '> is a pose reference only' + (r.coded ? ', every person in it painted one flat colour' : '') + ': ' + r.poseOf.map(x => nm(x.n) + (r.when==='all' ? ' holds' : ' starts in') + ' the pose of ' + x.w + ' in it').join(', ') + '. Nobody, no clothes, colours or background from it appear.'); });
+  { const sty = [], I = (T && T.imgs) || [], src = I.find(r => r.lookSrc); I.forEach((r, k) => { if(r.style) sty.push('<Picture ' + (k + 1) + '>'); }); // 🎨
+    if(sty.length) ad.push(andList(sty) + (sty.length > 1 ? ' are style references' : ' is a style reference') + ' only: the whole video, every person, object and place, is shown in ' + (sty.length > 1 ? 'their' : 'its') + ' visual style; the people, things and place in ' + (sty.length > 1 ? 'them' : 'it') + ' do not appear.');
+    else if(src) ad.push('Everyone and everything is shown in the same visual style as <Subject ' + src.cast + '>.'); }
   if(plain && ad.length) out = ad.join(' ') + ' ' + out;
   return out; }
 const castWords = (txt, k) => (txt || '').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
@@ -1150,7 +1159,7 @@ function subjSwap(n, m, all, at){ const re = new RegExp('<\\s*subject\\s*' + n +
   else if(all) castSwap(re, tok); else { f.prompt = (f.prompt || '').replace(re, tok); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = f.pieceText[k].replace(re, tok); }
   if(!at && f.descOff && f.descOff[n] && !f.descOff[m]){ f.descOff[m] = f.descOff[n].filter(x => /^add:/.test(x)); if(!f.descOff[m].length) delete f.descOff[m]; } // her own 🏷 details don't fit someone else
   $('#prompt').value = f.prompt || ''; filmEdit(f.prompt || ''); save(); drawCast(); drawShot(); try{ h3Peek(); }catch(e){} }
-function drawCast(){ const L = S.cast || [];
+function drawCast(){ const L = S.cast || []; try{ drawLook(); }catch(e){}
   $('#castSum').textContent = L.length ? L.length + (L.length > 1 ? ' subjects' : ' subject') + (L.some(c => castPics(c).length) ? ' · ' + L.filter(c => castPics(c).length).length + ' with pictures' : '') : '';
   $('#castList').innerHTML = L.map(c => { const P = castPics(c), m = P.length > 0, hits = castHits(c.stand), tk = '&lt;Subject ' + c.n + '&gt;', LB = c.lib && libOf(c.lib);
     const fitB = (c.kind || 'char')==='char' ? `<button class="btn${fitOf(c) ? ' pri' : ''}" data-cast="fit" style="width:100%;margin-top:8px">👗 Wear the outfit in their pictures: ${fitOf(c) ? 'on' : 'off'}</button>${fitOf(c) ? '<div class="note" style="margin-top:4px">Their pictures are the clothing reference too. 👗 Clothing on them in a shot (or its 👗 chip) switches it off there.</div>' : ''}` : '';
@@ -1413,13 +1422,85 @@ const nagArgs = s => { s = Math.max(NAG.min, Math.min(NAG.max, +s || NAG.scale))
 // Jordan 2026-11-09 03:05: "the negative prompt definitely messes it up … a failure at least on the pika one" → OFF by default (negOn===true = on)
 const keepOut = f => f && f.negOn===true ? String(f.neg || '').trim() || KEEP_OUT : '';
 const nagOn = oi => !!(oi && oi.NAGGuiderMiniMaxH3 && oi.CLIPTextEncode), nagAny = () => S.pcs.some(p => nagOn(pcOf(p.url).oi));
-function drawStyle(){ const el = $('#styleChips'); if(!el) return; const f = S.f; if(OLD_STYLES.includes((f.h3Style || '').trim())){ f.h3Style = ''; save(); }
+function drawStyle(){ try{ drawLook(); }catch(e){} const el = $('#styleChips'); if(!el) return; const f = S.f; if(OLD_STYLES.includes((f.h3Style || '').trim())){ f.h3Style = ''; save(); }
   const q = f.quality===true, ng = f.negOn===true; $('#styleRow').hidden = false;
   el.innerHTML = (f.sm || !f.h3 ? '' : `<button class="btn${q ? ' pri' : ''}" data-q="1">✨ Motion and quality words: ${q ? 'on' : 'off'}</button>`
       + (q ? Object.keys(Q_STYLES).concat('').map(k => `<button class="btn${(f.qstyle || '')===k ? ' pri' : ''}" data-qs="${k}">${k ? Q_STYLES[k].label : '✍ Custom'}</button>`).join('') : ''))
     + `<button class="btn${ng ? ' pri' : ''}" data-neg="1">🚫 Keep out: ${ng ? 'on' : 'off'}</button>` + (ng && !nagAny() ? '<span class="note" style="align-self:center">needs the NAG node on a PC (not seen yet)</span>' : '');
   const box = $('#negBox'); if(!box) return; box.hidden = !ng; const e = $('#h3Neg'), sc = $('#negScale');
   if(document.activeElement!==e) e.value = f.neg || ''; e.placeholder = KEEP_OUT; if(document.activeElement!==sc) sc.value = f.negScale || ''; sc.placeholder = NAG.scale; }
+// ---------- 🎨 Same look for everyone (Jordan 2026-11-10: "have something match the style of a character and apply it to the other
+// characters? So if 1 is realistic the others will be realistic? Same with cartoony and anime") ----------
+// S.f.look (per film, like the rest of the form) = {src:'' | 'c' (a film character's look) | 'p' (1-2 style pictures), n, pics, redo:{picId:{id, sig}}, use}
+// The words tell MiniMax everything is in that one look, but MiniMax copies each reference picture's own look closely, so 🪄 Redraw has
+// Qwen-Image-Edit (Render) redraw the other subjects' pictures in that look first. The copies live in this film's form only (the Library's
+// pictures stay as they are), are used only while they match the look they were made for (sig), and "Use the redrawn pictures" switches them off.
+const lookOf = () => { const L = S.f.look = S.f.look || {src:'', n:0, pics:[], redo:{}, use:true}; L.pics = (L.pics || []).filter(id => S.media[id]); L.redo = L.redo || {}; return L; };
+const lookSrcPics = L => L.src==='p' ? L.pics.slice(0, 2) : L.src==='c' ? castPics(castOf(L.n)).slice(0, 1) : [];
+const lookSig = L => { const P = lookSrcPics(L); return P.length ? L.src + (L.src==='c' ? L.n : '') + ':' + P.join(',') : ''; };
+const lookOthers = L => (S.cast || []).filter(c => !(L.src==='c' && c.n===+L.n) && castPics(c).length);
+const lookHas = (L, id, sig) => !!(L.redo[id] && L.redo[id].sig===sig && S.media[L.redo[id].id]);
+function lookSnap(){ const L = S.f.look; if(!L || !L.src) return null; const sig = lookSig(lookOf()); if(!sig) return null; const redo = {};
+  if(L.use!==false) for(const id of Object.keys(L.redo)) if(lookHas(L, id, sig)) redo[id] = L.redo[id].id;
+  return {src:L.src, n:L.src==='c' ? +L.n : 0, pics:L.src==='p' ? L.pics.slice(0, 2) : [], redo}; }
+let LOOK_BUSY = '', LOOK_MSG = '';
+function lookSay(t){ LOOK_MSG = t; const n = $('#lookNote'); if(n) n.textContent = t; }
+function drawLook(){ const el = $('#lookBox'); if(!el) return; if(S.f.sm){ el.innerHTML = ''; return; } const L = lookOf(), sig = lookSig(L), th = id => (S.media[id] || {}).thumb || '';
+  const chars = (S.cast || []).filter(c => castPics(c).length), others = sig ? lookOthers(L) : [], all = others.flatMap(c => castPics(c).slice(0, 3)), done = all.filter(id => lookHas(L, id, sig)), left = all.length - done.length;
+  const srcName = L.src==='c' ? (castOf(L.n) ? castName(castOf(L.n)) + "'s pictures" : 'a character who is no longer in this film') : 'the style picture' + (L.pics.length > 1 ? 's' : '');
+  el.innerHTML = `<div class="lab"><span>🎨 Same look for everyone</span></div><div class="chips">
+    <button class="btn${!L.src ? ' pri' : ''}" data-lk="off">Off</button>
+    ${chars.map(c => `<button class="btn${L.src==='c' && +L.n===c.n ? ' pri' : ''}" data-lk="c:${c.n}">${esc(castName(c))}'s look</button>`).join('')}
+    <button class="btn${L.src==='p' ? ' pri' : ''}" data-lk="p">🖼 Style picture</button></div>
+    ${L.src==='p' ? `<div class="castpics" style="margin-top:6px">${L.pics.map((id, i) => `<span class="cpw"><img src="${th(id)}" alt=""><button data-lk="unpic:${i}" aria-label="Take this picture out">✕</button></span>`).join('')}${L.pics.length < 2 ? `<button class="castpic" data-lk="pic">＋<br>Picture</button>` : ''}</div>` : ''}
+    ${sig ? `<div class="note" style="margin-top:4px">Everyone and everything is told to be in the look of ${esc(srcName)}. For a sure match, redraw the others' pictures in it first.</div>
+      ${others.length ? `<button class="btn" data-lk="redo" style="width:100%;margin-top:8px"${LOOK_BUSY ? ' disabled' : ''}>🪄 Redraw ${esc(andList(others.map(castName)))} in this look${left ? '' : ' again'} (${left || all.length} picture${(left || all.length)===1 ? '' : 's'}, Qwen on Render)</button>` : ''}
+      ${done.length ? `<div class="castpics" style="margin-top:6px">${done.map(id => `<span class="cpw"><img src="${th(L.redo[id].id)}" alt=""><button data-lk="undo:${id}" aria-label="Drop this redrawn copy">✕</button></span>`).join('')}</div>
+        <button class="btn${L.use!==false ? ' pri' : ''}" data-lk="use" style="width:100%;margin-top:6px">Use the redrawn pictures: ${L.use!==false ? 'on' : 'off (the originals go)'}</button>` : ''}`
+    : L.src==='p' ? '<div class="note" style="margin-top:4px">Add one or two pictures in the look you want (a still from a film, a drawing, a render…).</div>' : ''}
+    <div class="note" id="lookNote" style="margin-top:4px">${esc(LOOK_MSG)}</div>`; }
+// the PC that can run Qwen-Image-Edit (Render first), like Render Deck's qwenKit
+function qwenKit(){ const order = S.pcs.slice().sort((a, b) => /render/i.test(b.name || '') - /render/i.test(a.name || '')); let why = '';
+  for(const p of order){ const P = pcOf(p.url), oi = P.oi; if(!P.online || !oi) continue; const ver = n => /2511/.test(n) ? 3 : /2509/.test(n) ? 2 : 1;
+    const unet = combo(oi, 'UNETLoader', 'unet_name').filter(n => /qwen.*edit/i.test(bn(n))).sort((a, b) => ver(b) - ver(a))[0]; if(!unet) continue;
+    const clip = combo(oi, 'CLIPLoader', 'clip_name').find(n => /qwen.?2\.5.?vl/i.test(bn(n))), vae = combo(oi, 'VAELoader', 'vae_name').find(n => /qwen.?image.?vae/i.test(bn(n)));
+    if(!oi.TextEncodeQwenImageEditPlus || !clip || !vae || !oi.KSampler || !oi.VAEDecode || !oi.ImageScaleToTotalPixels){ why = pcName(p.url) + ' has Qwen-Image-Edit but not ' + (!oi.TextEncodeQwenImageEditPlus ? 'the TextEncodeQwenImageEditPlus node (update ComfyUI)' : !clip ? 'its text encoder (qwen_2.5_vl_7b)' : !vae ? 'its VAE (qwen_image_vae)' : 'the KSampler / VAEDecode / ImageScaleToTotalPixels nodes'); continue; }
+    const v = ver(unet), fast = combo(oi, 'LoraLoaderModelOnly', 'lora_name').filter(n => /qwen.?image.?edit.*lightning/i.test(bn(n))).sort((a, b) => (ver(b)===v) - (ver(a)===v) || /4.?step/i.test(b) - /4.?step/i.test(a))[0];
+    return {url:p.url, oi, unet, clip, vae, fast, steps:fast ? (/8.?step/i.test(fast) ? 8 : 4) : 20, cfg:fast ? 1 : 2.5}; }
+  return {why:why || 'No PC that is on has Qwen-Image-Edit (a qwen_image_edit model in models/diffusion_models). Render has it: switch it on and try again.'}; }
+// no item names in the keep line (2026-11-02: naming glasses made Qwen add them), only the kinds of thing to keep
+function lookText(kind, n){ const what = kind==='thing' ? 'object' : kind==='place' ? 'place' : 'person', sp = n > 1 ? 'pictures 2 and 3' : 'picture 2';
+  const keep = what==='person' ? 'the same person, face, hair, body, clothes, pose and expression' : what==='object' ? 'the same object, shape, parts and colours' : 'the same layout, things in it and colours';
+  return 'Redraw the ' + what + ' in picture 1 in the visual style of ' + sp + '. ' + sp.replace(/^./, c => c.toUpperCase()) + (n > 1 ? ' show' : ' shows') + ' the style only: copy exactly how ' + (n > 1 ? 'they are' : 'it is') + ' rendered, whether a real photograph, 3D animation, 2D anime or a cartoon, with the same line work, shading, colours, light and texture. '
+    + 'Keep picture 1 the same in every other way: ' + keep + ', the same framing and the same background. Take nothing else from ' + sp + '.'; }
+function lookGraph(k, file, styleFiles, kind, seed){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(k.oi, cls, inputs), _meta:{title:cls}}; return id; };
+  let model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
+  if(k.fast) model = [add('LoraLoaderModelOnly', {model, lora_name:k.fast, strength_model:1}), 0];
+  if(k.oi.ModelSamplingAuraFlow) model = [add('ModelSamplingAuraFlow', {model, shift:3}), 0]; if(k.oi.CFGNorm) model = [add('CFGNorm', {model, strength:1}), 0];
+  const cl = [add('CLIPLoader', {clip_name:k.clip, type:'qwen_image'}), 0], va = [add('VAELoader', {vae_name:k.vae}), 0];
+  const pic = [add('ImageScaleToTotalPixels', {image:[add('LoadImage', {image:file}), 0], upscale_method:'lanczos', megapixels:1}), 0], ims = {image1:pic};
+  styleFiles.slice(0, 2).forEach((f, i) => { ims['image' + (i + 2)] = [add('LoadImage', {image:f}), 0]; });
+  const enc = t => [add('TextEncodeQwenImageEditPlus', Object.assign({clip:cl, prompt:t, vae:va}, ims)), 0];
+  const ks = add('KSampler', {model, seed, steps:k.steps, cfg:k.cfg, sampler_name:'euler', scheduler:'simple', denoise:1, positive:enc(lookText(kind, styleFiles.length)), negative:enc(''), latent_image:[add('VAEEncode', {pixels:pic, vae:va}), 0]});
+  return {g, save:add('PreviewImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:va}), 0]})}; }
+async function waitHist(url, pid, ms, tick){ const t0 = Date.now();
+  while(Date.now() - t0 < ms){ await new Promise(r => setTimeout(r, 1500)); if(tick) tick(Math.round((Date.now() - t0) / 1000)); let h = null;
+    try{ h = (await getJ(url + '/history/' + pid))[pid]; }catch(e){}
+    if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(e ? e[1].exception_message : 'ComfyUI hit an error'); }
+    if(h && h.status && h.status.completed) return h; }
+  throw new Error('it took too long'); }
+async function lookRedo(){ if(LOOK_BUSY) return; const L = lookOf(), sig = lookSig(L); if(!sig) return; const k = qwenKit(); if(k.why){ lookSay(k.why); return; }
+  const all = lookOthers(L).flatMap(c => castPics(c).slice(0, 3).map(id => ({c, id}))), fresh = all.filter(x => !lookHas(L, x.id, sig)), jobs = fresh.length ? fresh : all; if(!jobs.length) return;
+  LOOK_BUSY = sig; let ok = 0; drawLook();
+  try{ lookSay('🪄 Sending the look to ' + pcName(k.url) + '…'); const sf = []; for(const id of lookSrcPics(L)) sf.push(await upload(k.url, id));
+    for(const [i, x] of jobs.entries()){ const nm = castName(x.c), say = s => lookSay('🪄 Redrawing ' + nm + ' (' + (i + 1) + ' of ' + jobs.length + ') on ' + pcName(k.url) + '…' + (s ? ' ' + s + ' s' : ''));
+      say(0); const G = lookGraph(k, await upload(k.url, x.id), sf, x.c.kind || 'char', Math.floor(Math.random() * 1e9)), pid = await queueGraph(k.url, G, false);
+      const h = await waitHist(k.url, pid, 15 * 60000, say), f = (((h.outputs || {})[G.save] || {}).images || [])[0]; if(!f) throw new Error('ComfyUI sent no picture back');
+      const b = await (await fetch(viewUrl(k.url, Object.assign({type:'temp'}, f)))).blob(), id = await addMedia(new File([b], 'look_' + nm.replace(/\W+/g, '_') + '.png', {type:b.type || 'image/png'}), 'img');
+      S.media[id].from = 'look'; L.redo[x.id] = {id, sig}; ok++; save(); drawLook(); }
+    L.use = true; lookSay('🪄 Done: ' + ok + ' redrawn. They go with every take in this film while "Use the redrawn pictures" is on.');
+  }catch(e){ lookSay("🪄 Couldn't redraw " + (ok ? 'the rest' : 'them') + ': ' + e.message); }
+  finally{ LOOK_BUSY = ''; save(); drawLook(); try{ h3Peek(); }catch(e){} } }
 function h3Style(s, base){ s = (s || '').trim().replace(/[\s.]*$/, '') || 'Live-action, cinematic';
   if(base) return s; // inside [Shot 1] for the base format: "[Shot 1] Live-action, cinematic. …"
   return s.split(/\s+/).length > 8 || /\b(target video|style)\b/i.test(s) ? s + '.' : 'The target video is in a ' + s.replace(/^./, c => c.toLowerCase()) + ' style.'; }
@@ -1445,11 +1526,15 @@ function h3Prompt(o){
     return words + head + 'integrated_multimodal_description: [Shot 1] ' + styleOf(H, true) + ' ' + (qualityOf(H) ? qualityOf(H) + ' ' : '') + text.replace(/^[a-z]/, c => c.toUpperCase()) + '\n\noverall_soundscape: ' + snd + '\n\nnon_diegetic_music: ' + mus;
   }
   const defs = [], ret = [], subs = [], groups = []; // pictures with the same words are one subject seen in several pictures
-  imgs.forEach((r, k) => { if(r.pose || r.attrOf || r.actOf || r.poseOf) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
-    if(!g){ g = {key, d, more:(r.more || '').trim(), pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || 'char'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); if(r.fit) g.fit = true; if(r.nude) g.nude = true; });
+  imgs.forEach((r, k) => { if(r.pose || r.attrOf || r.actOf || r.poseOf || r.style) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
+    if(!g){ g = {key, d, more:(r.more || '').trim(), pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || 'char'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); if(r.fit) g.fit = true; if(r.nude) g.nude = true; if(r.lookSrc) g.lookSrc = true; });
   // 👥 the cast's subjects come first, in their own order, so <Subject 1> in the prompt is usually <Subject 1> here too
   groups.sort((x, y) => (x.cast || 1e3) - (y.cast || 1e3)); { const cm = {}; groups.forEach((g, j) => { if(g.cast) cm[g.cast] = '<Subject ' + (j + 1) + '>'; });
     if(Object.keys(cm).length) text = text.replace(SUBRE, (m, n) => cm[+n] || m); }
+  // 🎨 one look (Jordan 2026-11-10: "if 1 is realistic the others will be realistic"): a character's look or style pictures set the style of
+  // everything; the others keep who they are, shown in that style. LOOKT stands for its <Subject n> until the style subject is numbered.
+  const styleIx = []; imgs.forEach((r, k) => { if(r.style) styleIx.push('<Picture ' + (k + 1) + '>'); });
+  const lookG = groups.find(g => g.lookSrc), matchOn = !!(styleIx.length || lookG), LOOKT = '\u0001LOOK\u0001';
   groups.forEach((g, j) => { const sl = '<Subject ' + (j + 1) + '>', from = andList(g.pics); subs.push(sl);
     defs.push(sl + ' is ' + (g.d ? g.d + ', as shown in ' + from : 'the subject shown in ' + from) + '.' + (g.more ? ' ' + g.more.replace(/[\s.]*$/, '').replace(/^./, x => x.toUpperCase()) + '.' : ''));
     ret.push(sl + ' (' + inShots + '): ' + KEEP[g.keep] + ' - ' + (g.keep==='loose' ? 'only the broad look, colours and feel of ' + from + ' are kept.'
@@ -1458,7 +1543,8 @@ function h3Prompt(o){
       : (() => { const w = [...new Set(imgs.filter(r => r.attrOf && r.attrOf===g.cast).map(r => r.what || 'look'))], cl = imgs.some(r => r.attrOf===g.cast && r.wear) || w.some(ATTR_WEAR), hr = w.some(x => /hair/i.test(x));
           if(g.nude) return 'the ' + andList(['identity', 'face'].concat(hr ? [] : ['hair'], ['build and skin tone'])) + ' from ' + from + ' are kept; the clothing in ' + (g.pics.length > 1 ? 'those pictures' : 'that picture') + ' is NOT kept: ' + sl + ' is nude, wearing no clothing' + (w.length ? ', and ' + andList(w.map(x => 'the ' + x)) + ' ' + (w.length > 1 ? 'come' : 'comes') + ' from ' + (w.length > 1 ? 'their own subjects' : 'its own subject') + ' below.' : '.');
           const keep = ['identity', 'face'].concat(hr ? [] : ['hair'], ['build'], cl ? [] : ['clothing and colours']);
-          return 'the ' + andList(keep) + ' from ' + from + ' are kept' + (w.length ? (cl ? '; their clothing from ' + (g.pics.length > 1 ? 'those pictures' : 'that picture') + ' is NOT kept' : '') + ', because ' + andList(w.map(x => 'the ' + x)) + ' ' + (w.length > 1 ? 'come' : 'comes') + ' from ' + (w.length > 1 ? 'their own subjects' : 'its own subject') + ' below instead.' : '.'); })())); });
+          return 'the ' + andList(keep) + ' from ' + from + ' are kept' + (w.length ? (cl ? '; their clothing from ' + (g.pics.length > 1 ? 'those pictures' : 'that picture') + ' is NOT kept' : '') + ', because ' + andList(w.map(x => 'the ' + x)) + ' ' + (w.length > 1 ? 'come' : 'comes') + ' from ' + (w.length > 1 ? 'their own subjects' : 'its own subject') + ' below instead.' : '.'); })()));
+    if(matchOn) ret[ret.length - 1] += g===lookG ? ' Its visual style is the look of the whole video.' : ' ' + sl + ' is shown in the same visual style as ' + LOOKT + '.'; });
   // ✨ attributes (📚 Library): only that feature of the picture goes onto the person (attribute_transfer)
   const ag = groups.filter(g => g.fit && g.cast).map(g => ({fit:true, lib:'fit', of:g.cast, what:'outfit', more:'', keep:'exact', pics:g.pics.slice()})); // 👗 her own outfit first
   imgs.forEach((r, k) => { if(!r.attrOf) return; let g = ag.find(x => x.lib===r.lib && x.of===r.attrOf); if(!g){ g = {lib:r.lib, of:r.attrOf, what:r.what || 'look', more:(r.more || '').trim(), keep:r.keep || 'exact', pics:[], wear:!!r.wear}; ag.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); });
@@ -1493,6 +1579,11 @@ function h3Prompt(o){
     if(late){ ret.push(sl + ' (not in this part): weak_reference - this pose belongs to the start of the video.'); return; }
     ret.push(sl + ' (' + (r.when==='all' ? inShots : 'the opening of [Shot 1]') + '): attribute_transfer - only the ' + (many ? 'body poses, where each person is and how they touch,' : 'body pose') + ' from ' + pl + ' ' + (many ? 'are' : 'is') + ' transferred: ' + map.map(m => m.w + "'s pose goes to " + m.who).join(', ') + '; the faces, hair, bodies, clothes, colours and background in ' + pl + ' do not appear.');
     libPose += ' ' + map.map(m => cap(m.who) + (r.when==='all' ? ' keeps' : ' starts in') + ' the pose of ' + m.w + ' from ' + sl + '.').join(' '); });
+  let lookName = lookG ? '<Subject ' + (groups.indexOf(lookG) + 1) + '>' : '';
+  if(styleIx.length){ const sl = '<Subject ' + (subs.length + 1) + '>', from = andList(styleIx), them = styleIx.length > 1 ? 'those pictures' : 'that picture'; subs.push(sl); lookName = sl;
+    defs.push(sl + ' is the visual style shown in ' + from + '. ' + (styleIx.length > 1 ? 'Those pictures are' : 'That picture is') + ' a style reference only.');
+    ret.push(sl + ' (' + inShots + '): attribute_transfer - only the visual style of ' + from + ' (how it is rendered, whether live action, 3D animation, 2D anime or cartoon, with its line work, shading, colours, light and texture) is applied to the whole video, to every person, object and place; the people, things and background in ' + them + ' do not appear.'); }
+  const lookLine = matchOn ? 'The whole target video is in one single visual style, the look of ' + lookName + ': every person, object and place is shown in that same style, with the same rendering, line work, shading, colours, light and texture, so they all match.' : '';
   const poseText = timed.length ? ' ' + timed.map(p => 'At ' + h3Time(p.at) + ', ' + who + ' is in the pose of ' + p.sl + ' from ' + p.pl + '.').join(' ') + ' ' + who.replace(/^the/, 'The') + ' moves smoothly from each pose to the next.' : '';
   let a = 0, aRef = false, aCopy = false;
   vids.forEach((r, k) => { if(r.actOf) return; const vl = '<Video ' + (k + 1) + '>', d = (r.desc || '').trim().replace(/[\s.]*$/, ''), kp = KEEP[r.keep] ? r.keep : 'loose';
@@ -1504,14 +1595,14 @@ function h3Prompt(o){
     ret.push(al + ': ' + (cp ? 'partially_copy - the audio is reused in the target video.' : 'reference - its voice timbre, delivery and sound texture are followed without copying the signal.'));
     if(cp) aCopy = true; else aRef = true; });
   if(o.firstPic){ const pl = '<Picture ' + o.firstPic + '>'; defs.push(pl + ' is the first frame of [Shot 1].'); ret.push(pl + ' ([Shot 1] first frame): fully_preserved - the opening composition, subjects, setting and lighting are kept.'); }
-  const tags = [o.cont && 'video continuation', (o.firstPic || o.first || o.last) && 'keyframe completion', (groups.length || vids.length || poses.length || ag.length || libPose) && 'reference generation', aCopy && 'audio reuse', aRef && 'audio reference'].filter(Boolean);
+  const tags = [o.cont && 'video continuation', (o.firstPic || o.first || o.last) && 'keyframe completion', (groups.length || vids.length || poses.length || ag.length || libPose || styleIx.length) && 'reference generation', aCopy && 'audio reuse', aRef && 'audio reference'].filter(Boolean);
   if(multi) tags.push('multi-shot');
   const wears = ag.map((g, i) => { const j = groups.findIndex(x => x.cast===g.of); if(j < 0) return ''; const a = '<Subject ' + (groups.length + i + 1) + '>', p = '<Subject ' + (j + 1) + '>';
     return g.fit ? p + ' is wearing ' + a + ' (their own outfit).' : g.wear || ATTR_WEAR(g.what) ? p + ' is wearing ' + a + ' (the ' + g.what + ').' : p + ' has ' + a + ' (the ' + g.what + ').'; }).concat(groups.map((g, j) => g.nude ? '<Subject ' + (j + 1) + '> is nude.' : '')).filter(Boolean).join(' ');
   // (📏 a 'same size / full human size' line was tried 2026-11-09 and taken out: any size words made the woman come out smaller)
-  const gist = h3Gist(text), sum = '[' + tags.join(' + ') + '] ' + (o.cont ? 'The target video carries straight on from the moment before, in the same shot. ' : '') + (groups.length ? 'It features ' + andList(subs.slice(0, groups.length)) + '. ' : '') + (wears ? wears + ' ' : '') + (acts ? acts + ' ' : '') + (libPose ? libPose.trim() + ' ' : '') + gist + (timed.length ? ' ' + who.replace(/^the/, 'The') + ' takes the poses of ' + andList(timed.map(p => p.sl)) + ' at their set times.' : '');
-  const det = styleOf(H) + (qualityOf(H) ? ' ' + qualityOf(H) : '') + '\n[Shot 1] ' + (o.firstPic ? 'The shot begins from <Picture ' + o.firstPic + '>. ' : '') + (wears ? wears + ' ' : '') + (acts ? acts + ' ' : '') + (libPose ? libPose.trim() + ' ' : '') + text + poseText;
-  return words + 'subject_definitions:\n' + defs.join('\n') + '\n\nsummary:\n' + sum.trim() + '\n\nretention_analysis:\n' + ret.join('\n') + '\n\ndetailed_description:\n' + det + '\n\noverall_soundscape:\n' + snd + '\n\nnon_diegetic_music:\n' + mus;
+  const gist = h3Gist(text), sum = '[' + tags.join(' + ') + '] ' + (o.cont ? 'The target video carries straight on from the moment before, in the same shot. ' : '') + (groups.length ? 'It features ' + andList(subs.slice(0, groups.length)) + '. ' : '') + (wears ? wears + ' ' : '') + (lookLine ? 'Everything is shown in the visual style of ' + lookName + '. ' : '') + (acts ? acts + ' ' : '') + (libPose ? libPose.trim() + ' ' : '') + gist + (timed.length ? ' ' + who.replace(/^the/, 'The') + ' takes the poses of ' + andList(timed.map(p => p.sl)) + ' at their set times.' : '');
+  const det = (lookLine ? lookLine + ((H.style || '').trim() ? ' ' + styleOf(H) : '') : styleOf(H)) + (qualityOf(H) ? ' ' + qualityOf(H) : '') + '\n[Shot 1] ' + (o.firstPic ? 'The shot begins from <Picture ' + o.firstPic + '>. ' : '') + (wears ? wears + ' ' : '') + (acts ? acts + ' ' : '') + (libPose ? libPose.trim() + ' ' : '') + text + poseText;
+  return words + 'subject_definitions:\n' + defs.join('\n') + '\n\nsummary:\n' + sum.trim() + '\n\nretention_analysis:\n' + ret.join('\n').split(LOOKT).join(lookName) + '\n\ndetailed_description:\n' + det + '\n\noverall_soundscape:\n' + snd + '\n\nnon_diegetic_music:\n' + mus;
 }
 function h3Time(s){ const ms = Math.round(s * 1000), m = Math.floor(ms / 60000), r = ms - m * 60000; return String(m).padStart(2, '0') + ':' + String(Math.floor(r / 1000)).padStart(2, '0') + '.' + String(r % 1000).padStart(3, '0'); }
 // the same for a plain prompt (🧾 off): one line per pose picture with its time
@@ -1811,7 +1902,7 @@ const regenRefUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name').filt
 // looked nothing like her: her pictures live on the subject, not on the take, so the pass had run with no reference at all)
 const upRefs = t => { const own = (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || [], out = [];
   let cast = []; try{ cast = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.map(dressed); }catch(e){}
-  for(const r of cast.concat(own)) if(r && r.id && !r.poseOf && !out.some(x => x.id===r.id)) out.push(r); return out; }; // (🧍 a pose has no place in a finishing pass)
+  for(const r of cast.concat(own)) if(r && r.id && !r.poseOf && !r.style && !out.some(x => x.id===r.id)) out.push(r); return out; }; // (🧍 a pose has no place in a finishing pass)
 // ✨ model pick (Jordan 2026-11-08: "pikka could do better for some and I could do a face pass for Minimax later"): t.up.unet = a model
 // chosen in the High quality sheet; none = vanilla MiniMax as before. Matched by file name, so a PC that lacks it isn't sent the pass
 const upUnetOf = (t, oi, refs) => { const m = t && t.up && t.up.unet, bn = s => String(s).split(/[\\/]/).pop();
@@ -2064,7 +2155,7 @@ function snapshot(){ // the form, frozen into a take
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
-    descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0,
+    look:sm ? null : lookSnap(), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -2873,7 +2964,7 @@ document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof 
   const i = l.indexOf(v.src.split('#')[0]); if(i >= 0){ v.src = l[(i + 1) % l.length]; v.play().catch(() => {}); } }, true);
 for(const ev of ['play', 'pause']) document.addEventListener(ev, e => { const v = e.target; if(v instanceof HTMLVideoElement && v.classList.contains('tv')) v.parentElement.classList.toggle('on', ev==='play'); }, true);
 let pickKind = '';
-function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='first' ? 'image/*,video/*' : kind==='vid' || kind==='libv' || kind==='smv' || kind==='ctl' || kind==='ctl2' || kind==='rough' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img' || kind==='smref' || kind==='cast' || kind==='lib'; fp.click(); }
+function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='first' ? 'image/*,video/*' : kind==='vid' || kind==='libv' || kind==='smv' || kind==='ctl' || kind==='ctl2' || kind==='rough' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img' || kind==='look' || kind==='smref' || kind==='cast' || kind==='lib'; fp.click(); }
 $('#filePick').onchange = async e => {
   const files = [...e.target.files]; if(!files.length) return; const f = S.f, kind = pickKind==='first' || pickKind==='lastImg' || pickKind==='smref' ? 'img' : pickKind==='smv' || pickKind==='ctl' || pickKind==='ctl2' ? 'vid' : pickKind;
   try{
@@ -2884,6 +2975,7 @@ $('#filePick').onchange = async e => {
       if(pickKind==='lib' && (libOf(pickLib) || {}).kind==='pose'){ const L = libOf(pickLib); L.pics = [await addMedia(file, 'img')]; poseReset(L); break; }
       if(pickKind==='lib'){ const L = libOf(pickLib); if(L){ if(libPics(L).length >= MAXREF.img) break; L.pics.push(await addMedia(file, 'img')); libSync(L); } continue; }
       if(pickKind==='cast'){ const c = castOf(pickCast); if(c){ const P = castPics(c); if(P.length >= MAXREF.img) break; P.push(await addMedia(file, 'img')); c.keep = c.keep || 'exact'; } continue; }
+      if(pickKind==='look'){ const L = lookOf(); if(L.pics.length >= 2) break; L.pics.push(await addMedia(file, 'img')); L.src = 'p'; continue; }
       if(pickKind==='smref'){ f.smRefs = (f.smRefs || []).filter(x => S.media[x]); if(f.smRefs.length >= REGEN_REFS) break; f.smRefs.push(await addMedia(file, 'img')); f.smUpRefs = true; continue; }
       const id = await addMedia(file, pickKind==='first' && /^video\//.test(file.type || '') ? 'vid' : kind);
       if(pickKind==='ctl'){ f.ctlVid = id; f.ctl = true; break; }
@@ -2923,6 +3015,11 @@ $('#castList').onclick = e => { const b = e.target.closest('[data-cast]'); if(!b
   else if(a==='rm'){ if(!confirm('Remove ' + tok + '? Its stand-in words go back into every prompt that uses it.')) return; const w = (c.stand || '').trim() || 'someone'; castSwap(new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'gi'), w); S.cast = S.cast.filter(x => x!==c); $('#prompt').value = S.f.prompt; }
   save(); drawCast(); drawShot(); };
 $('#h3Style').oninput = e => { S.f.h3Style = e.target.value; save(); h3Peek(); drawStyle(); };
+$('#lookBox').onclick = e => { const b = e.target.closest('[data-lk]'); if(!b || b.disabled) return; const L = lookOf(), [a, v] = b.dataset.lk.split(/:(.*)/);
+  if(a==='pic'){ pickFile('look'); return; } if(a==='redo'){ lookRedo(); return; }
+  if(a==='off') L.src = ''; else if(a==='c'){ L.src = 'c'; L.n = +v; } else if(a==='p'){ L.src = 'p'; if(!L.pics.length) pickFile('look'); }
+  else if(a==='unpic') L.pics.splice(+v, 1); else if(a==='undo') delete L.redo[v]; else if(a==='use') L.use = L.use===false;
+  if(!LOOK_BUSY) LOOK_MSG = ''; save(); drawLook(); try{ h3Peek(); }catch(e){} };
 $('#styleChips').onclick = e => { const qs = e.target.closest('[data-qs]'); if(qs) S.f.qstyle = qs.dataset.qs; else if(e.target.closest('[data-q]')) S.f.quality = S.f.quality!==true; else if(e.target.closest('[data-neg]')) S.f.negOn = S.f.negOn!==true; else return; save(); drawStyle(); h3Peek(); };
 $('#h3Neg').oninput = e => { S.f.neg = e.target.value; save(); h3Peek(); };
 $('#negScale').oninput = e => { S.f.negScale = e.target.value; save(); };
@@ -3549,6 +3646,6 @@ window.H3 = {addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, pose
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
-    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, lookGraph, lookRedo, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
