@@ -78,5 +78,16 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const one = H3.h3Prompt({h3:{}, text:'<Subject 1> waves.', imgs:[{id:'p1', desc:'Ellen', cast:1}], secs:5});
     return {two, one}; });
   ok(!/human size|life size|miniature|tiny|close-up|how big/i.test(Z.two + Z.one), 'no size words at all (they made her smaller)');
+  // ➕ carry-on lead-in stays the anchor; a prompt put in by the 🔎 checker (ckSet) is shuffled per take like any other
+  const LEAD = '[0s-1s] She sits down. She smiles, carrying on from the moment before.\n';
+  const CW = LEAD + '[1s-] Mei turns to the window. Rain runs down the glass. The camera pushes in slowly. Soft grey light falls across her face.';
+  const C = await page.evaluate(([R, REF, CW]) => { H3.S.f.model = REF; H3.S.f.shuffle = 1; H3.ckSet(CW); const out = [];
+    for(const k of [0, 1, 2, 3]){ const t = H3.snapshot(); t.id = 'ck' + k; t.pc = R; t.seed = 100 + k; t.bk = k; t.dir = 'H3Deck/x'; t.name = 'x';
+      const g = H3.pieceGraph(t, 0, H3.PC[R].oi, {}).g; const n = Object.values(g).find(n => n.inputs && typeof n.inputs.prompt==='string'); out.push({p:n.inputs.prompt, card:H3.sentWords(t), form:H3.S.f.prompt}); } return out; }, [R, REF, CW]);
+  ok(C.every(x => x.form===CW), 'checker words are in the form, unchanged');
+  ok(C.every(x => x.p.includes(LEAD)), 'lead-in sent word for word, first, on every take');
+  const REST = 'Mei turns to the window. Rain runs down the glass. The camera pushes in slowly. Soft grey light falls across her face.';
+  ok(C[0].p.includes(REST) && C.slice(1).every(x => !x.p.includes(REST)) && new Set(C.slice(1).map(x => x.p)).size===3, 'checker prompt: take 1 as typed, takes 2-4 each shuffled after the lead-in: ' + C.map(x => x.card.replace(/\n/g, ' / ')).join(' || '));
+  ok(C.slice(1).every(x => x.p.includes(x.card.split('\n').pop().trim())), 'card shows exactly what was sent');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
