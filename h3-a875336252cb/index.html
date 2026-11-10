@@ -1452,7 +1452,13 @@ const lookHas = (L, id, sig) => !!(L.redo[id] && L.redo[id].sig===sig && S.media
 function lookSnap(){ const L = S.f.look; if(!L || !L.src) return null; const sig = lookSig(lookOf()); if(!sig) return null; const redo = {};
   if(L.use!==false) for(const id of Object.keys(L.redo)) if(lookHas(L, id, sig)) redo[id] = L.redo[id].id;
   return {src:L.src, n:L.src==='c' ? +L.n : 0, pics:L.src==='p' ? L.pics.slice(0, 2) : [], redo}; }
-let LOOK_BUSY = '', LOOK_MSG = '', LOOK_STEP = '';
+let LOOK_BUSY = '', LOOK_MSG = '', LOOK_STEP = '', LOOK_PROG = null; // LOOK_PROG {i, n, pid, t0}: the picture being redrawn, for the bar
+// 🪄 progress (Jordan 2026-11-10: "a loading bar or something that shows the images progress"): the whole run as one bar, from pictures done
+// plus ComfyUI's live steps of the one running (its websocket, LIVE[pid]); time left from how long the pictures so far took
+function lookProgHtml(){ const P = LOOK_PROG; if(!P) return ''; const L = (P.pid && LIVE[P.pid]) || {}, fr = L.max ? Math.min(1, L.v / L.max) : 0, done = P.i + fr, pct = Math.round(done / P.n * 100);
+  const el = (Date.now() - P.t0) / 1000, left = done > 0.15 ? Math.max(0, el / done * (P.n - done)) : 0, mm = x => x >= 90 ? Math.round(x / 60) + ' min' : Math.round(x) + ' s';
+  return `<div class="bar" style="margin-top:6px"><i style="width:${pct}%;transition:width .4s"></i></div><div class="note" style="margin-top:3px;display:flex;justify-content:space-between"><span>Picture ${P.i + 1} of ${P.n}${L.max ? ' · step ' + L.v + '/' + L.max : P.pid ? ' · loading' : ' · sending'}</span><span>${pct}%${left >= 1 ? ' · about ' + mm(left) + ' left' : ''}</span></div>`; }
+const lookProgDraw = () => { const e = $('#lookProg'); if(e) e.innerHTML = lookProgHtml(); };
 function lookSay(t){ LOOK_MSG = t; const n = $('#lookNote'); if(n) n.textContent = t; }
 function drawLook(){ const el = $('#lookBox'); if(!el) return; if(S.f.sm){ el.innerHTML = ''; return; } const L = lookOf(), sig = lookSig(L), th = id => (S.media[id] || {}).thumb || '';
   const chars = (S.cast || []).filter(c => castPics(c).length), others = sig ? lookOthers(L) : [], all = others.flatMap(c => castPics(c).slice(0, 3)), done = all.filter(id => lookHas(L, id, sig)), left = all.length - done.length;
@@ -1465,10 +1471,10 @@ function drawLook(){ const el = $('#lookBox'); if(!el) return; if(S.f.sm){ el.in
     ${sig ? `<div class="note" style="margin-top:4px">Everyone and everything is told to be in the look of ${esc(srcName)}. For a sure match, redraw the others' pictures in it first.</div>
       ${others.length ? `<button class="btn${LOOK_BUSY ? ' busy' : ' pri'}" data-lk="redo" style="width:100%;margin-top:8px"${LOOK_BUSY ? ' disabled' : ''}>${LOOK_BUSY ? '⏳ Redrawing' + (LOOK_STEP ? ' ' + LOOK_STEP : '') + '… (1 to 2 minutes a picture)' : `🪄 Redraw ${esc(andList(others.map(castName)))} in this look${left ? '' : ' again'} (${left || all.length} picture${(left || all.length)===1 ? '' : 's'}, ${esc(lookEngName(L))})`}</button>
         <div class="chips" style="margin-top:6px"><span class="note" style="align-self:center">Redraw with</span>${[['', '✨ P-H3'], ['qwen', 'Qwen']].map(([v, t]) => `<button class="btn${(L.eng || '')===v ? ' pri' : ''}" data-lk="eng:${v}">${t}</button>`).join('')}</div>` : ''}
-      ${done.length ? `<div class="castpics" style="margin-top:6px">${done.map(id => `<span class="cpw"><img src="${th(L.redo[id].id)}" alt=""><button data-lk="undo:${id}" aria-label="Drop this redrawn copy">✕</button></span>`).join('')}</div>
+      ${done.length ? `<div class="castpics" style="margin-top:6px">${done.map(id => `<span class="cpw" style="width:auto"><img src="${th(L.redo[id].id)}" alt="" data-lk="big:${id}" style="width:auto;max-width:120px;object-fit:contain"><button data-lk="undo:${id}" aria-label="Drop this redrawn copy">✕</button></span>`).join('')}</div><div class="note" style="margin-top:2px">Tap one to see it next to the original, whole.</div>
         <button class="btn${L.use!==false ? ' pri' : ''}" data-lk="use" style="width:100%;margin-top:6px">Use the redrawn pictures: ${L.use!==false ? 'on' : 'off (the originals go)'}</button>` : ''}`
     : L.src==='p' ? '<div class="note" style="margin-top:4px">Add one or two pictures in the look you want (a still from a film, a drawing, a render…).</div>' : ''}
-    <div class="note" id="lookNote" style="margin-top:4px">${esc(LOOK_MSG)}</div>`; }
+    <div id="lookProg">${lookProgHtml()}</div><div class="note" id="lookNote" style="margin-top:4px">${esc(LOOK_MSG)}</div>`; }
 // the PC that can run Qwen-Image-Edit (Render first), like Render Deck's qwenKit
 function qwenKit(){ const order = S.pcs.slice().sort((a, b) => /render/i.test(b.name || '') - /render/i.test(a.name || '')); let why = '';
   for(const p of order){ const P = pcOf(p.url), oi = P.oi; if(!P.online || !oi) continue; const ver = n => /2511/.test(n) ? 3 : /2509/.test(n) ? 2 : 1;
@@ -1514,7 +1520,7 @@ function ph3LookGraph(k, file, styleFiles, kind, seed, w, h){ const g = {}; let 
   return {g, save:add('PreviewImage', {images:[add('VAEDecode', {samples:[sm, 0], vae}), 0]})}; }
 const PH3_RATIOS = [['1:1', 1], ['4:3', 4/3], ['3:4', 3/4], ['3:2', 3/2], ['2:3', 2/3], ['16:9', 16/9], ['9:16', 9/16]];
 const ph3Ratio = (w, h) => PH3_RATIOS.reduce((b, x) => Math.abs(Math.log(x[1] / (w / h))) < Math.abs(Math.log(b[1] / (w / h))) ? x : b)[0];
-const ph3Size = m => { const w = (m && m.w) || 768, h = (m && m.h) || 1024, q = Math.sqrt(PH3_MP * 1048576 / (w * h)); return [Math.max(32, Math.round(w * q / 32) * 32), Math.max(32, Math.round(h * q / 32) * 32)]; };
+const ph3Size = ([w, h]) => { w = w || 768; h = h || 1024; const q = Math.sqrt(PH3_MP * 1048576 / (w * h)); return [Math.max(32, Math.round(w * q / 32) * 32), Math.max(32, Math.round(h * q / 32) * 32)]; };
 function lookText(kind, n, ph3){ const what = kind==='thing' ? 'object' : kind==='place' ? 'place' : 'person', sp = ph3 ? (n > 1 ? '<Picture 2> and <Picture 3>' : '<Picture 2>') : n > 1 ? 'pictures 2 and 3' : 'picture 2', p1 = ph3 ? '<Picture 1>' : 'picture 1';
   const keep = what==='person' ? 'the same person, face, hair, body, clothes, pose and expression' : what==='object' ? 'the same object, shape, parts and colours' : 'the same layout, things in it and colours';
   return 'Redraw the ' + what + ' in ' + p1 + ' in the visual style of ' + sp + '. ' + sp.replace(/^./, c => c.toUpperCase()) + (n > 1 ? ' show' : ' shows') + ' the style only: copy exactly how ' + (n > 1 ? 'they are' : 'it is') + ' rendered, whether a real photograph, 3D animation, 2D anime or a cartoon, with the same line work, shading, colours, light and texture. '
@@ -1529,6 +1535,13 @@ function lookGraph(k, file, styleFiles, kind, seed){ const g = {}; let n = 0; co
   const enc = t => [add('TextEncodeQwenImageEditPlus', Object.assign({clip:cl, prompt:t, vae:va}, ims)), 0];
   const ks = add('KSampler', {model, seed, steps:k.steps, cfg:k.cfg, sampler_name:'euler', scheduler:'simple', denoise:1, positive:enc(lookText(kind, styleFiles.length)), negative:enc(''), latent_image:[add('VAEEncode', {pixels:pic, vae:va}), 0]});
   return {g, save:add('PreviewImage', {images:[add('VAEDecode', {samples:[ks, 0], vae:va}), 0]})}; }
+// before and after, whole (Jordan 2026-11-10: the square tiles looked like the tall picture had been cut off)
+async function lookBig(id){ const r = lookOf().redo[id]; if(!r) return; const [a, b] = await Promise.all([mediaUrl(id), mediaUrl(r.id)]), m = S.media[id] || {}, n = S.media[r.id] || {};
+  openSheet(`<h3><span>🪄 Before and after</span><button class="btn" data-close>✕</button></h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <figure style="margin:0"><img src="${a}" alt="" style="width:100%;border-radius:10px"><figcaption class="note">Original${m.w ? ' · ' + m.w + '×' + m.h : ''}</figcaption></figure>
+    <figure style="margin:0"><img src="${b}" alt="" style="width:100%;border-radius:10px"><figcaption class="note">Redrawn${n.w ? ' · ' + n.w + '×' + n.h : ''}${r.eng ? ' (' + (r.eng==='ph3' ? 'P-H3' : 'Qwen') + ')' : ''}</figcaption></figure></div>`); }
+// the picture's real size (a picture without its size noted would otherwise be redrawn at a guessed 3:4 and come back cut)
+async function picDims(id){ const m = S.media[id] || {}; if(m.w && m.h) return [m.w, m.h]; try{ const im = await imgOf(await blobOf(id)); m.w = im.naturalWidth; m.h = im.naturalHeight; return [m.w, m.h]; }catch(e){ return [768, 1024]; } }
 async function waitHist(url, pid, ms, tick){ const t0 = Date.now();
   while(Date.now() - t0 < ms){ await new Promise(r => setTimeout(r, 1500)); if(tick) tick(Math.round((Date.now() - t0) / 1000)); let h = null;
     try{ h = (await getJ(url + '/history/' + pid))[pid]; }catch(e){}
@@ -1537,16 +1550,16 @@ async function waitHist(url, pid, ms, tick){ const t0 = Date.now();
   throw new Error('it took too long'); }
 async function lookRedo(){ if(LOOK_BUSY) return; const L = lookOf(), sig = lookSig(L); if(!sig) return; const k = lookKit(L); if(k.why){ lookSay(k.why); return; } const eng = k.eng==='ph3' ? 'P-H3' : 'Qwen';
   const all = lookOthers(L).flatMap(c => castPics(c).slice(0, 3).map(id => ({c, id}))), fresh = all.filter(x => !lookHas(L, x.id, sig)), jobs = fresh.length ? fresh : all; if(!jobs.length) return;
-  LOOK_BUSY = sig; LOOK_STEP = '1 of ' + jobs.length; let ok = 0; drawLook();
+  LOOK_BUSY = sig; LOOK_STEP = '1 of ' + jobs.length; LOOK_PROG = {i:0, n:jobs.length, pid:'', t0:Date.now()}; let ok = 0; drawLook();
   try{ lookSay('🪄 Sending the look to ' + pcName(k.url) + '…'); const sf = []; for(const id of lookSrcPics(L)) sf.push(await upload(k.url, id));
-    for(const [i, x] of jobs.entries()){ const nm = castName(x.c), say = s => lookSay('🪄 ' + eng + ' is redrawing ' + nm + ' (' + (i + 1) + ' of ' + jobs.length + ') on ' + pcName(k.url) + '…' + (s ? ' ' + s + ' s' : ''));
-      LOOK_STEP = (i + 1) + ' of ' + jobs.length; drawLook(); say(0); const file = await upload(k.url, x.id), seed = Math.floor(Math.random() * 1e9), G = k.eng==='ph3' ? ph3LookGraph(k, file, sf, x.c.kind || 'char', seed, ...ph3Size(S.media[x.id])) : lookGraph(k, file, sf, x.c.kind || 'char', seed), pid = await queueGraph(k.url, G, false);
+    for(const [i, x] of jobs.entries()){ const nm = castName(x.c), say = s => lookSay('🪄 ' + eng + ' is redrawing ' + nm + ' (' + (i + 1) + ' of ' + jobs.length + ') on ' + pcName(k.url) + '…' + (s ? ' ' + s + ' s' : '')) || lookProgDraw();
+      LOOK_STEP = (i + 1) + ' of ' + jobs.length; LOOK_PROG.i = i; LOOK_PROG.pid = ''; drawLook(); say(0); try{ openSocket(k.url); }catch(e){} const file = await upload(k.url, x.id), seed = Math.floor(Math.random() * 1e9), G = k.eng==='ph3' ? ph3LookGraph(k, file, sf, x.c.kind || 'char', seed, ...ph3Size(await picDims(x.id))) : lookGraph(k, file, sf, x.c.kind || 'char', seed), pid = await queueGraph(k.url, G, false); LOOK_PROG.pid = pid; lookProgDraw();
       const h = await waitHist(k.url, pid, 15 * 60000, say), f = (((h.outputs || {})[G.save] || {}).images || [])[0]; if(!f) throw new Error('ComfyUI sent no picture back');
       const b = await (await fetch(viewUrl(k.url, Object.assign({type:'temp'}, f)))).blob(), id = await addMedia(new File([b], 'look_' + nm.replace(/\W+/g, '_') + '.png', {type:b.type || 'image/png'}), 'img');
       S.media[id].from = 'look'; L.redo[x.id] = {id, sig, eng:k.eng}; ok++; save(); drawLook(); }
     L.use = true; lookSay('🪄 Done: ' + ok + ' redrawn with ' + eng + (k.fell ? ' (P-H3 not ready: ' + k.fell + ')' : '') + '. They go with every take in this film while "Use the redrawn pictures" is on.');
   }catch(e){ lookSay("🪄 Couldn't redraw " + (ok ? 'the rest' : 'them') + ': ' + e.message); }
-  finally{ LOOK_BUSY = ''; LOOK_STEP = ''; save(); drawLook(); try{ h3Peek(); }catch(e){} } }
+  finally{ LOOK_BUSY = ''; LOOK_STEP = ''; LOOK_PROG = null; save(); drawLook(); try{ h3Peek(); }catch(e){} } }
 function h3Style(s, base){ s = (s || '').trim().replace(/[\s.]*$/, '') || 'Live-action, cinematic';
   if(base) return s; // inside [Shot 1] for the base format: "[Shot 1] Live-action, cinematic. …"
   return s.split(/\s+/).length > 8 || /\b(target video|style)\b/i.test(s) ? s + '.' : 'The target video is in a ' + s.replace(/^./, c => c.toLowerCase()) + ' style.'; }
@@ -3071,7 +3084,7 @@ $('#castList').onclick = e => { const b = e.target.closest('[data-cast]'); if(!b
   save(); drawCast(); drawShot(); };
 $('#h3Style').oninput = e => { S.f.h3Style = e.target.value; save(); h3Peek(); drawStyle(); };
 $('#lookBox').onclick = e => { const b = e.target.closest('[data-lk]'); if(!b || b.disabled) return; const L = lookOf(), [a, v] = b.dataset.lk.split(/:(.*)/);
-  if(a==='pic'){ pickFile('look'); return; } if(a==='redo'){ lookRedo(); return; }
+  if(a==='pic'){ pickFile('look'); return; } if(a==='redo'){ lookRedo(); return; } if(a==='big'){ lookBig(v); return; }
   if(a==='off') L.src = ''; else if(a==='c'){ L.src = 'c'; L.n = +v; } else if(a==='p'){ L.src = 'p'; if(!L.pics.length) pickFile('look'); }
   else if(a==='unpic') L.pics.splice(+v, 1); else if(a==='undo') delete L.redo[v]; else if(a==='use') L.use = L.use===false; else if(a==='eng') L.eng = v || '';
   if(!LOOK_BUSY) LOOK_MSG = ''; save(); drawLook(); try{ h3Peek(); }catch(e){} };
@@ -3702,6 +3715,6 @@ window.H3 = {ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, p
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
-    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, lookGraph, ph3Kit, lookKit, lookRedo, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, LIVE_:() => LIVE, lookProgHtml, lookGraph, ph3Kit, lookKit, lookRedo, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

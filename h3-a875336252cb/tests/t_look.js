@@ -27,7 +27,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8024);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  let SENT = [], OUT = '', UP = 0;
+  let SENT = [], OUT = '', UP = 0, HOLD = false;
   await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
@@ -35,6 +35,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p==='/upload/image') return J({name:'up' + (++UP) + '.png', subfolder:'h3deck', type:'input'});
     if(p==='/prompt'){ SENT.push(JSON.parse(rt.request().postData()).prompt); return J({prompt_id:'pid' + SENT.length}); }
+    if(p.startsWith('/history/') && HOLD) return J({});
     if(p.startsWith('/history/')){ const i = +p.replace(/\D/g, '') - 1, G = SENT[i], save = Object.keys(G).find(k => G[k].class_type==='PreviewImage'); return J({['pid' + (i + 1)]:{status:{status_str:'success', completed:true, messages:[]}, outputs:{[save]:{images:[{filename:'q' + i + '.png', subfolder:'', type:'temp'}]}}}}); }
     if(p==='/view') return rt.fulfill({status:200, contentType:'image/png', headers:{'Access-Control-Allow-Origin':'*'}, body:Buffer.from(OUT, 'base64')});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
@@ -78,14 +79,20 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.click('[data-lk="c:1"]');
   const btn = await page.evaluate(() => (document.querySelector('[data-lk="redo"]') || {}).textContent || '');
   ok(/Redraw Ben and Cat in this look \(3 pictures, Qwen on Render\)/.test(btn), 'the redraw button names the others and counts their pictures: ' + btn);
+  HOLD = true; await page.evaluate(() => { H3.LIVE_().pid1 = {v:4, max:8}; });
   await page.click('[data-lk="redo"]');
   await page.waitForFunction(() => { const b = document.querySelector('[data-lk="redo"]'); return b && b.disabled; }, null, {timeout:10000});
+  await page.waitForFunction(() => /step 4\/8/.test((document.querySelector('#lookProg') || {}).textContent || ''), null, {timeout:10000}).catch(() => {});
+  const pg = await page.evaluate(() => ({t:document.querySelector('#lookProg').textContent, w:(document.querySelector('#lookProg .bar i') || {style:{}}).style.width}));
+  ok(/Picture 1 of 3 · step 4\/8/.test(pg.t) && /17%/.test(pg.t) && pg.w==='17%', 'progress bar: picture 1 of 3, its live steps, overall % ' + JSON.stringify(pg));
   const busy = await page.evaluate(() => { const b = document.querySelector('[data-lk="redo"]'), cs = getComputedStyle(b); return {t:b.textContent, cls:b.className, dash:cs.borderTopStyle, anim:cs.animationName}; });
   if(process.env.SHOT) await page.locator('#lookBox').screenshot({path:process.env.SHOT.replace(/\.png$/, '_busy.png')});
+  HOLD = false;
   ok(/Redrawing 1 of 3…/.test(busy.t) && /busy/.test(busy.cls) && !/pri/.test(busy.cls) && busy.dash==='dashed' && busy.anim==='busyp', 'while it runs: locked, dashed, pulsing, "Redrawing 1 of 3" ' + JSON.stringify(busy));
   await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || ''), null, {timeout:30000});
   console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
   ok(SENT.length===3, 'three Qwen jobs');
+  ok(await page.evaluate(() => !document.querySelector('#lookProg .bar')), 'done: the bar goes');
   ok(await page.evaluate(() => { const b = document.querySelector('[data-lk="redo"]'); return !b.disabled && /pri/.test(b.className) && getComputedStyle(b).borderTopStyle==='solid'; }), 'done: pink and pressable again');
   ok(/redrawn with Qwen \(P-H3 not ready/.test(await page.evaluate(() => document.querySelector('#lookNote').textContent)), 'no P-H3 yet: Qwen did it, and says why');
   const G = SENT[0], bad = Object.values(G).flatMap(n => Object.keys(n.inputs).filter(k => { const s = SCHEMA[n.class_type]; return !s || !((s.input.required || {})[k] || (s.input.optional || {})[k]); }).map(k => n.class_type + '.' + k));
@@ -109,7 +116,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.evaluate(() => { const oi = H3.PC['http://render.test'].oi; ['PH3ImageConditioning', 'MiniMaxH3SigmaShift', 'ManualSigmas', 'SamplerCustomAdvanced', 'KSamplerSelect', 'RandomNoise', 'BasicGuider'].forEach(c => oi[c] = oi[c] || {input:{required:{}}});
     oi.UNETLoader.input.required.unet_name[0].push('minimax_h3_fl2va_pruned_int8_convrot.safetensors'); oi.LoraLoaderModelOnly.input.required.lora_name[0].push('p-h3-image_lora_bf16.safetensors');
     oi.TextGenerateV2 = {input:{required:{}}}; oi.CLIPLoader.input.required.clip_name[0].push('p-h3-image_text_encoder_int8.safetensors', 'p-h3-image_prompt_upsampler_w4a8.safetensors'); oi.VAELoader.input.required.vae_name[0].push('p-h3-image_vae_int8.safetensors');
-    H3.lookOf().src = 'c'; H3.lookOf().n = 1; H3.lookOf().redo = {}; H3.drawLook(); });
+    H3.lookOf().src = 'c'; H3.lookOf().n = 1; H3.lookOf().redo = {}; delete H3.S.media[P.c].w; delete H3.S.media[P.c].h; H3.drawLook(); });
   ok(await page.evaluate(() => /\(3 pictures, P-H3 on Render\)/.test(document.querySelector('[data-lk="redo"]').textContent) && !!document.querySelector('[data-lk="eng:qwen"]')), 'P-H3 there: the button says P-H3, with a Qwen choice');
   SENT = []; await page.click('[data-lk="redo"]');
   await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || ''), null, {timeout:30000});
@@ -120,8 +127,12 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     && by('ManualSigmas')[0].inputs.sigmas.split(',').length===9 && by('KSamplerSelect')[0].inputs.sampler_name==='er_sde' && !by('TextEncodeQwenImageEditPlus').length, 'P-H3 graph: FL2VA + LoRA, shift 1, two pictures on the conditioning, 8 sigmas er_sde');
   const tg = (by('TextGenerateV2')[0] || {}).inputs || {}, tgId = Object.keys(PG).find(k => PG[k].class_type==='TextGenerateV2');
   ok(tg.thinking===false && tg.sampling_mode==='off' && tg.max_length===1536 && /upsampler_w4a8/.test(PG[tg.clip[0]].inputs.clip_name) && Array.isArray(tg['images.image1']) && Array.isArray(tg['images.image2']) && ci.prompt[0]===tgId, 'P-H3 prompt writer on, thinking off (Render: thinking flipped the picture), its words go to the conditioning');
+  { const c3 = Object.values(SENT[2]).find(n => n.class_type==='PH3ImageConditioning').inputs; ok(c3.height > c3.width * 1.42, 'a picture with no size noted is measured, not guessed: ' + c3.width + 'x' + c3.height); }
   ok(/^Aspect ratio: 2:3\nRequest: Redraw the person in <Picture 1> in the visual style of <Picture 2>\./.test(tg.prompt) && ci.width % 32===0 && ci.height % 32===0 && Math.abs(ci.width * ci.height - 2 * 1048576) < 2 * 1048576 * 0.08 && ci.height > ci.width, 'P-H3 prompt names <Picture n>, canvas 2 MP in her shape ' + ci.width + 'x' + ci.height);
   ok(await page.evaluate(() => Object.values(H3.lookOf().redo).every(r => r.eng==='ph3')), 'copies marked as P-H3 ones');
+  await page.click('#lookBox [data-lk^="big:"]');
+  ok(await page.evaluate(() => document.querySelectorAll('#sheetCard figure img').length===2 && /Original · 64×96/.test(document.querySelector('#sheetCard').textContent) && /Redrawn · 64×96 \(P-H3\)/.test(document.querySelector('#sheetCard').textContent)), 'tap a redrawn tile: before and after, whole, with sizes');
+  await page.evaluate(() => document.querySelector('[data-close]').click());
   await page.click('[data-lk="eng:qwen"]');
   ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
   await page.click('[data-lk="eng:"]');
