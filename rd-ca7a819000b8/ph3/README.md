@@ -10,7 +10,7 @@ references named in the request) or make a new one. Copyright (c) 2026 Jordan Br
   p-h3-image_* diffusion model is there) → `MiniMaxH3SigmaShift` 1.0/1.0 → `BasicGuider` ← `PH3ImageConditioning` (p-h3-image text
   encoder + VAE; `images.image_N`) ; `RandomNoise` + `KSamplerSelect` er_sde + `ManualSigmas` (Pruna's 8-step grid) → `SamplerCustomAdvanced`
   → `VAEDecode` → `SaveImage` RenderDeck/ph3/ph3.
-- Auto prompt: "Aspect ratio: R\nRequest: …" + the pictures → `TextGenerateV2` (p-h3-image_prompt_upsampler, greedy, thinking on, 1536)
+- Auto prompt: "Aspect ratio: R\nRequest: …" + the pictures → `TextGenerateV2` (p-h3-image_prompt_upsampler, greedy, 1536; thinking on for new pictures, off for edits: with it on, whole-picture edits came back rotated 180° on Render)
   → the conditioning; `PreviewAny` sends the written prompt back ("The prompt it wrote"). Off: the words go straight in (the node adds "Edit <Picture 1>.").
 - Size 2 / 4 / 8 MP (ComfyUI megapixels, 1024²). New pictures: canvas at that ratio, multiples of 32 (8 MP 4:3 = 3360x2496). Edits: Picture 1
   is scaled to that size (`ImageScaleToTotalPixels`) and the canvas set to it, so references are read no bigger.

@@ -49,7 +49,7 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
   ok(by('MiniMaxH3SigmaShift')[0].inputs.shift_video===1 && by('MiniMaxH3SigmaShift')[0].inputs.shift_audio===1, 'shifts 1.0/1.0');
   const ci = by('PH3ImageConditioning')[0].inputs; ok(Array.isArray(ci['images.image_1']) && Array.isArray(ci['images.image_2']) && !ci['images.image_3'], 'two pictures on the conditioning');
   ok(ci.width===1760 && ci.height===2368, 'canvas = Picture 1 at 4 MP (' + ci.width + 'x' + ci.height + ')');
-  const tg = by('TextGenerateV2')[0].inputs; ok(/^Aspect ratio: 3:4\nRequest: put the hat/.test(tg.prompt) && tg['images.image2'] && tg.thinking===true && tg.sampling_mode==='off' && tg.max_length===1536, 'auto prompt asks Pruna\'s writer');
+  const tg = by('TextGenerateV2')[0].inputs; ok(/^Aspect ratio: 3:4\nRequest: put the hat/.test(tg.prompt) && tg['images.image2'] && tg.thinking===false && tg.sampling_mode==='off' && tg.max_length===1536, 'auto prompt asks Pruna\'s writer');
   ok(by('ManualSigmas')[0].inputs.sigmas.split(',').length===9 && by('KSamplerSelect')[0].inputs.sampler_name==='er_sde', '8-step sigmas, er_sde');
   ok(by('SaveImage')[0].inputs.filename_prefix==='RenderDeck/ph3/ph3', 'saved under RenderDeck/ph3');
   ok(by('ImageScaleToTotalPixels').length===1, 'only Picture 1 is scaled');
