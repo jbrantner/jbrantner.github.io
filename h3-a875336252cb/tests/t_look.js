@@ -120,6 +120,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.click('[data-lk="eng:qwen"]');
   ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
   await page.click('[data-lk="eng:"]');
+  if(process.env.SHOT) await page.locator('#lookBox').screenshot({path:process.env.SHOT});
   // no Qwen on the PC
   await page.evaluate(() => { const oi = H3.PC['http://render.test'].oi; window.SAVE = oi.TextEncodeQwenImageEditPlus; delete oi.TextEncodeQwenImageEditPlus; });
   ok(await page.evaluate(() => /TextEncodeQwenImageEditPlus/.test(H3.qwenKit().why || '')), 'missing node: says which');
