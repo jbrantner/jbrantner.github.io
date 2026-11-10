@@ -2604,6 +2604,15 @@ const ckOut = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('<\\s*subject
 const ckBack = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('(^|[^\\w<])' + ckEsc(x.name) + '(?![\\w>])', 'g'), (a, b) => b + x.tag), shot);
 // 💬 talk to it (Jordan 2026-11-09: "is it possible for me to talk to this LLM? like if I had notes or changes that i wanted from it for a
 // prompt?"): after a check the card has a box; a note goes back to the same conversation and the checker returns a new version of its shot
+// ➕ the lead-in (Jordan 2026-11-10: "if it's a continuation shot I don't want the LLM to edit the previous shot's prompt that leads into the
+// new shot … only suggest a more detailed version of what happens after the 0-1 second lead in"): a carry-on's [0s-1s] line is split off, the
+// checker only sees what comes after it (told what the lead-in says, as context), and the lead-in goes back on the front word for word
+function ckLead(shot){ shot = String(shot || ''); const m = shot.match(/^\s*\[\s*0\s*s?\s*-\s*1\s*s?\s*\][^\[]*/); if(!m) return {lead:'', rest:shot};
+  const md = S.media[S.f.first], carry = !!(S.f.fl && md && md.carry); if(!carry && !/carrying on from the moment before/i.test(m[0])) return {lead:'', rest:shot};
+  return {lead:m[0], rest:shot.slice(m[0].length)}; }
+function ckJoin(lead, shot){ if(!lead || !String(shot || '').trim()) return shot; shot = String(shot || '').trim();
+  // whatever it wrote for the first second (a copy of the lead-in or its own version) is dropped: the lead-in stays as written
+  shot = shot.replace(/^\s*\[\s*0\s*s?\s*-\s*1\s*s?\s*\][^\[]*/, '').trim(); return lead.replace(/\s*$/, '\n') + shot; }
 async function checkPrompt(note, first){
   const f = S.f, prev = note && S.ck && S.ck.msgs ? S.ck : null, shot = prev ? prev.orig : (f.prompt || '').trim(), btn = $('#ckBtn'), out = $('#ckOut'); if(!shot) return toast('Write the shot first');
   if(S.ckWait) return; let n = await ckBusy();
@@ -2612,18 +2621,19 @@ async function checkPrompt(note, first){
     const go = S.ckWait===id && !n; S.ckWait = 0; btn.disabled = false; btn.textContent = '🔎 Check prompt'; if(!go){ if(S.ck && S.ck.wait) S.ck = prev; drawCk(); return; } }
   btn.disabled = true; btn.textContent = '🔎 Checking… (up to a minute)'; const kind = prev ? prev.kind : ckKind(f);
   if(prev){ S.ck = Object.assign({}, prev, {busy:note}); drawCk(); }
-  try{ let N, messages;
-    if(prev){ N = prev.N; messages = prev.msgs.concat([{role:'user', content:'CHANGE REQUEST from the artist about your last shot: ' + ckOut(note, N) + '\n\nApply it to your last shot (keep everything else, keep the same people and every tag) and return the same JSON with the full new shot. Only change what she asks for; never add people or acts she did not ask for.'}]); }
+  try{ let N, messages, L = {lead:''};
+    if(prev){ N = prev.N; L = {lead:prev.lead || ''}; messages = prev.msgs.concat([{role:'user', content:'CHANGE REQUEST from the artist about your last shot: ' + ckOut(note, N) + '\n\nApply it to your last shot (keep everything else, keep the same people and every tag) and return the same JSON with the full new shot. Only change what she asks for; never add people or acts she did not ask for.'}]); }
     else {
     const rules = await (await fetch('checker-rules.md', {cache:'no-cache'})).text();
     let full = ''; if(f.h3 && !f.sm){ h3Peek(); full = $('#h3Pre').textContent; }
-    N = ckNames(shot); const who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
-    const user = 'MODEL: ' + kind + who + '\n\nSHOT:\n' + ckOut(shot, N) + (full ? '\n\nFULL PROMPT (context only; its <Subject n> numbers are not the same as the shot\'s, so go by the names in the SHOT):\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, 120 to 250 words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
+    L = ckLead(shot); N = ckNames(shot); const who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
+    const lead = L.lead ? '\n\nTHIS SHOT CARRIES ON FROM THE CLIP BEFORE. Its first second is already written and is NOT yours to change or repeat: ' + ckOut(L.lead.trim(), N) + '\nThe SHOT below is only what happens after that first second. Keep its [1s-…] tags; never write a [0s-1s] line.' : '';
+    const user = 'MODEL: ' + kind + who + lead + '\n\nSHOT:\n' + ckOut(L.lead ? L.rest.trim() : shot, N) + (full ? '\n\nFULL PROMPT (context only; its <Subject n> numbers are not the same as the shot\'s, so go by the names in the SHOT):\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, 120 to 250 words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
     messages = [{role:'system', content:rules}, {role:'user', content:user + (first ? '\n\nTHE ARTIST\'S NOTES FOR THIS CHECK (follow them; they win over your own ideas): ' + ckOut(first, N) : '')}]; }
     const r = await getJ(ckUrl() + '/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:S.llmModel || CK.model, stream:false, think:false, format:'json', keep_alive:'30m',
       options:{temperature:0.3, num_ctx:12288}, messages})}, 240000);
-    const raw = r.message && r.message.content, A = ckParse(raw); A.shot = ckBack(A.shot, N); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
-    S.ck = Object.assign(A, {kind, orig:shot, N, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note || first ? [note || first] : [])}); drawCk();
+    const raw = r.message && r.message.content, A = ckParse(raw); A.shot = ckJoin(L.lead, ckBack(A.shot, N)); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
+    S.ck = Object.assign(A, {kind, orig:shot, N, lead:L.lead, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note || first ? [note || first] : [])}); drawCk();
   }catch(e){ const busy = e.message==='503'; if(prev){ S.ck = Object.assign({}, prev, {chatErr:busy ? 'Render just started a render, so the checker stepped aside. Send again when it finishes.' : /abort/i.test(e.name + e.message) ? 'That took too long. Try again.' : /no answer|JSON/i.test(e.message) ? 'It answered but not in a form I can read. Try again.' : "Couldn't reach the checker on Render (" + e.message + ')'}); drawCk(); return; }
     S.ck = {err:busy ? 'Render just started a render, so the checker stepped aside. Check again when it finishes.' : /abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
   finally{ btn.disabled = false; btn.textContent = '🔎 Check prompt'; } }
