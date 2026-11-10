@@ -139,6 +139,18 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.click('#picFull [data-pf="go:1"]'); F = await fv();
   ok(/Original · 64×96/.test(F.t), 'Original shows');
   await page.click('#picFull [data-pf="x"]'); ok(!(await fv()), '✕ closes it');
+  // 🖼 the first frame in the look, painted by P-H3 from the shot's subjects (redrawn ones) at the video's shape
+  SENT = []; await page.click('[data-lk="frame"]');
+  await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || '') && /🖼/.test(document.querySelector('#lookNote').textContent), null, {timeout:30000});
+  console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
+  const FG = SENT[0], fby = c => Object.values(FG).filter(n => n.class_type===c), fci = fby('PH3ImageConditioning')[0].inputs, ftg = fby('TextGenerateV2')[0].inputs;
+  const vd = await page.evaluate(() => H3.dims()), ids = await page.evaluate(() => ({a:P.a, b:H3.lookOf().redo[P.b].id}));
+  console.log(ftg.prompt);
+  ok(!fby('ImageScaleToTotalPixels').length && fby('LoadImage').length===2 && Array.isArray(fci['images.image_2']) && !fci['images.image_3'] && Math.abs(fci.width / fci.height - vd.w / vd.h) < 0.05 && fci.width * fci.height > 1.8e6, 'first frame: a new P-H3 picture from both of them, at the video\'s shape, 2 MP');
+  ok(/Anna from <Picture 1> and Ben from <Picture 2> laugh together/.test(ftg.prompt) && /the look of <Picture 1>/.test(ftg.prompt) && /^Aspect ratio: /.test(ftg.prompt), 'its words: who is in which picture, and Anna\'s look');
+  ok(await page.evaluate(id => { const f = H3.S.f, L = H3.lookOf(); return f.fl===true && f.first===L.frame && !!H3.S.media[L.frame] && /starts from this picture/.test(document.querySelector('#lookBox').textContent); }), 'it becomes the 🎞 first frame, shown under 🎨');
+  await page.click('[data-lk="funuse"]');
+  ok(await page.evaluate(() => !H3.S.f.fl && !H3.S.f.first && !H3.lookOf().frame), '✕ takes it off');
   await page.click('[data-lk="eng:qwen"]');
   ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
   await page.click('[data-lk="eng:"]');
