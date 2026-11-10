@@ -79,9 +79,14 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   const btn = await page.evaluate(() => (document.querySelector('[data-lk="redo"]') || {}).textContent || '');
   ok(/Redraw Ben and Cat in this look \(3 pictures, Qwen on Render\)/.test(btn), 'the redraw button names the others and counts their pictures: ' + btn);
   await page.click('[data-lk="redo"]');
+  await page.waitForFunction(() => { const b = document.querySelector('[data-lk="redo"]'); return b && b.disabled; }, null, {timeout:10000});
+  const busy = await page.evaluate(() => { const b = document.querySelector('[data-lk="redo"]'), cs = getComputedStyle(b); return {t:b.textContent, cls:b.className, dash:cs.borderTopStyle, anim:cs.animationName}; });
+  if(process.env.SHOT) await page.locator('#lookBox').screenshot({path:process.env.SHOT.replace(/\.png$/, '_busy.png')});
+  ok(/Redrawing 1 of 3…/.test(busy.t) && /busy/.test(busy.cls) && !/pri/.test(busy.cls) && busy.dash==='dashed' && busy.anim==='busyp', 'while it runs: locked, dashed, pulsing, "Redrawing 1 of 3" ' + JSON.stringify(busy));
   await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || ''), null, {timeout:30000});
   console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
   ok(SENT.length===3, 'three Qwen jobs');
+  ok(await page.evaluate(() => { const b = document.querySelector('[data-lk="redo"]'); return !b.disabled && /pri/.test(b.className) && getComputedStyle(b).borderTopStyle==='solid'; }), 'done: pink and pressable again');
   ok(/redrawn with Qwen \(P-H3 not ready/.test(await page.evaluate(() => document.querySelector('#lookNote').textContent)), 'no P-H3 yet: Qwen did it, and says why');
   const G = SENT[0], bad = Object.values(G).flatMap(n => Object.keys(n.inputs).filter(k => { const s = SCHEMA[n.class_type]; return !s || !((s.input.required || {})[k] || (s.input.optional || {})[k]); }).map(k => n.class_type + '.' + k));
   const enc = Object.values(G).filter(n => n.class_type==='TextEncodeQwenImageEditPlus'), ld = Object.values(G).filter(n => n.class_type==='LoadImage').map(n => n.inputs.image);
