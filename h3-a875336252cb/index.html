@@ -771,11 +771,11 @@ const t2 = s => { const r = Math.round(s * 10) / 10; return (r % 1 ? r.toFixed(1
 // the shuffle comes from the take's seed, so every take differs and the same take always gets the same order. Her saved words never change.
 const SHUF = ['off', 'batch', 'always']; // (comma parts: taken out 2026-11-09, Jordan: could swap who does what; shuffleWords keeps its mode 2 for later)
 // 🔀 batch (default): the first take of a batch goes as typed, the ones after it are shuffled; always: every take is shuffled, even a single one
-const shufOn = t => t && (t.shuffle===2 || (t.shuffle===1 && +t.bk > 0));
+const shufOn = (t, i) => !!t && (t.shuffle===2 || (t.shuffle===1 && (+t.bk > 0 || +i > 0))); // batch: part 2 on of a long take is shuffled too (Jordan 2026-11-10: 10 s of running shouldn't send the same words twice)
 const shufSeed = (t, i) => { let h = (+t.seed || 0) + (i || 0) * 7919; for(const c of String(t.id || '')) h = (Math.imul(h, 31) + c.charCodeAt(0)) | 0; return h; }; // the take's id too: a typed seed still gives every take its own order
 // what each piece actually sends after 🔀 (the take card shows it in full on a tap)
-const sentWords = t => { const P = (t && t.pieces) || []; if(!shufOn(t)) return t ? t.prompt || '' : '';
-  return P.length===1 ? shuffleWords(P[0].prompt, shufSeed(t, 0), 1) : P.map((p, i) => 'Piece ' + (i + 1) + ': ' + shuffleWords(p.prompt, shufSeed(t, i), 1)).join('\n'); };
+const sentWords = t => { const P = (t && t.pieces) || []; if(!P.some((p, i) => shufOn(t, i))) return t ? t.prompt || '' : '';
+  return P.length===1 ? shuffleWords(P[0].prompt, shufSeed(t, 0), 1) : P.map((p, i) => 'Part ' + (i + 1) + (shufOn(t, i) ? ' 🔀' : '') + ': ' + shuffleWords(p.prompt, shufSeed(t, i), shufOn(t, i) ? 1 : 0)).join('\n'); };
 const PROPEN = new Set();
 const shufMark = (t, k) => { t.shuffle = S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0; t.bk = k; return t; };
 function rngOf(seed){ let a = (+seed || 1) >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -789,13 +789,13 @@ function shuffleWords(text, seed, mode){
   const seg = s => { const lead = (s.match(/^\s*/) || [''])[0], tail = (s.match(/\s*$/) || [''])[0], body = s.trim(); if(!body) return s;
     if(/carrying on from the moment before/i.test(body)) return s; // ➕ a carry-on's [0s-1s] lead-in is the anchor (Jordan 2026-11-10): never mixed, never moved
     let ss = body.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)|[.!?]+/g) || [body]; ss = ss.map(x => x.trim()).filter(Boolean);
-    const pin = ss.length && /^This continues straight on/.test(ss[0]) ? [ss.shift()] : [];
-    if(ss.length < 2 && mode < 2) return s; // one sentence: nothing to move, sent exactly as typed
+    const pin = ss.length && /^This continues straight on/.test(ss[0]) ? [ss.shift()] : [], END = /^The action carries on from where it is now/, end = ss.filter(x => END.test(x)); ss = ss.filter(x => !END.test(x));
+    if(ss.length < 2 && mode < 2) return s; // one sentence: nothing to move, sent exactly as typed (a part's own closing line stays last)
     ss = ss.map(x => /[.!?]$/.test(x) ? x : x + '.');
     if(mode > 1) ss = ss.map(x => { if(/moment before/.test(x)) return x; const end = x.match(/[.!?]+$/)[0], parts = x.slice(0, -end.length).split(/\s*,\s*/).filter(Boolean); if(parts.length < 2) return x;
       const o = mx(parts).map((q, i) => i ? q.replace(LOWER, w => w.toLowerCase()) : q.replace(/^[a-z]/, c => c.toUpperCase())); return o.join(', ') + end; });
     if(ss.length > 1) ss = mx(ss);
-    ss = ss.map(x => x.replace(/^[a-z]/, c => c.toUpperCase())); return lead + pin.concat(ss).join(' ') + tail; };
+    ss = ss.map(x => x.replace(/^[a-z]/, c => c.toUpperCase())); return lead + pin.concat(ss, end).join(' ') + tail; };
   let out = '', at = 0; for(const [i, j] of marks){ out += seg(text.slice(at, i)) + text.slice(i, j); at = j; } return out + seg(text.slice(at)); }
 function piecePrompt(text, pieces, i, total){
   const pr = pieces[i], {global, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = LEAD(pr) / FPS;
@@ -1692,7 +1692,7 @@ function pieceGraph(t, i, oi, names){
   const words = lorasOf(t).map(l => (l.words || '').trim()).filter(Boolean).join(', ');
   // (✨ in-betweens: the mannequin wording is added here, out of sight; Jordan's prompt says what happens)
   const say = t.ctl && t.ctl.face ? faceWords(t.ctl.face, Math.max(0, pc.start - LEAD(pc) / FPS), L / FPS) : '';
-  const pp = castText(shuffleWords(pc.prompt, shufSeed(t, i), shufOn(t) ? 1 : 0), t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
+  const pp = castText(shuffleWords(pc.prompt, shufSeed(t, i), shufOn(t, i) ? 1 : 0), t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
   let prompt = (words ? words.replace(/[.\s]*$/, '. ') : '') + act, cond, lat, guides = 0;
   const h3 = o => t.h3 ? h3Prompt(Object.assign({h3:t.h3, text:act, words, imgs:t.imgs, vids:t.vids, auds:t.auds, cont:!!pc.ctx, secs:L / FPS, t0:pc.start - LEAD(pc) / FPS}, o)) : null;
   if(M.fl2v){ // the official First/last frame model
@@ -2195,9 +2195,8 @@ async function render(){
       t.pc = url; extra[url] = (extra[url] || 0) + estSecs(t, url);
       S.takes.unshift(t); drawTakes(); cur = t;
       await sendPieces(t, 0); sent++; cur = null;
-      // Jordan 2026-11-03: on a long clip, "4 takes" = 4 versions that all start with the same beginning: the pieces before the
-      // last are made once, and the other takes are versions of the last piece carrying on from it (same PC, after it in line)
-      if(N > 1 && t.pieces.length > 1 && !t.sm && !t.cont){ sent += await makeBranches(t, t.pieces.length - 1, N - 1); break; }
+      // (2026-11-03 to 11-10 a batch on a long clip made the beginning once and N versions of the last part; Jordan 2026-11-10: a batch of 3
+      // on a 10 s clip should be 3 separate full-length clips, so every take is now made whole)
     }
   }catch(e){ toast('Not sent: ' + e.message, 6000);
     // the take stays on the list as stopped, with why and ↻ Try again, not stuck on "Sending"
@@ -2799,7 +2798,7 @@ function drawMore(){
 function drawGo(){
   const why = whyNot(), b = $('#goBtn'); b.disabled = !!why;
   const n = +S.f.takes || 1; b.textContent = 'Render' + (n > 1 ? ' ' + n + ' takes' : ''); $('#goN').textContent = n;
-  const long = n > 1 && !S.f.sm && !contOn() && currentPlan().length > 1, th = $('#takesHow'); if(th) th.textContent = long ? 'long clip: the beginning once, ' + n + ' versions of the last piece' : 'split across the PCs';
+  const long = n > 1 && !S.f.sm && !contOn() && currentPlan().length > 1, th = $('#takesHow'); if(th) th.textContent = long ? n + ' separate full-length clips' : 'split across the PCs';
   $('#goWhy').hidden = !why || /^Write/.test(why); $('#goWhy').textContent = why;
 }
 function stateLine(t){ const b = stateLine0(t); return t.k4 && t.state==='done' ? b + ' · ' + k4Line(t) : b; }
@@ -2866,7 +2865,7 @@ function takeCard(t){
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t)].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
-      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${shufOn(t) ? '🔀 ' : ''}${esc(sentWords(t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(sentWords(t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
 }
