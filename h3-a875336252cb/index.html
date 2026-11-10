@@ -164,7 +164,7 @@ header h1 span{color:var(--accent)}
 .take .meta{padding:10px 12px;display:grid;gap:8px}
 .take .tl{display:flex;justify-content:space-between;gap:10px;font-weight:800;font-size:14px}
 .take .tl span{color:var(--soft);font-weight:700;font-size:12.5px;text-align:right}
-.take .pr{font-size:13px;color:var(--soft);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.take .pr{font-size:13px;color:var(--soft);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer}.take .pr.open{display:block;-webkit-line-clamp:unset;white-space:pre-wrap}
 .bar{height:5px;border-radius:9px;background:var(--panel2);overflow:hidden}
 .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .4s}
 .btns{display:flex;gap:6px;flex-wrap:wrap}
@@ -773,6 +773,10 @@ const SHUF = ['off', 'batch', 'always']; // (comma parts: taken out 2026-11-09, 
 // 🔀 batch (default): the first take of a batch goes as typed, the ones after it are shuffled; always: every take is shuffled, even a single one
 const shufOn = t => t && (t.shuffle===2 || (t.shuffle===1 && +t.bk > 0));
 const shufSeed = (t, i) => { let h = (+t.seed || 0) + (i || 0) * 7919; for(const c of String(t.id || '')) h = (Math.imul(h, 31) + c.charCodeAt(0)) | 0; return h; }; // the take's id too: a typed seed still gives every take its own order
+// what each piece actually sends after 🔀 (the take card shows it in full on a tap)
+const sentWords = t => { const P = (t && t.pieces) || []; if(!shufOn(t)) return t ? t.prompt || '' : '';
+  return P.length===1 ? shuffleWords(P[0].prompt, shufSeed(t, 0), 1) : P.map((p, i) => 'Piece ' + (i + 1) + ': ' + shuffleWords(p.prompt, shufSeed(t, i), 1)).join('\n'); };
+const PROPEN = new Set();
 const shufMark = (t, k) => { t.shuffle = S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0; t.bk = k; return t; };
 function rngOf(seed){ let a = (+seed || 1) >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 function mix(a, r){ a = a.slice(); for(let i = a.length - 1; i > 0; i--){ const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
@@ -783,6 +787,7 @@ function shuffleWords(text, seed, mode){
   const marks = []; let m; const re = new RegExp(BEAT.source + '|\\[\\s*shot\\s*\\d+\\s*\\]|\\n+', 'gi');
   while((m = re.exec(text))){ if(!m[0].length){ re.lastIndex++; continue; } marks.push([m.index, m.index + m[0].length]); }
   const seg = s => { const lead = (s.match(/^\s*/) || [''])[0], tail = (s.match(/\s*$/) || [''])[0], body = s.trim(); if(!body) return s;
+    if(/carrying on from the moment before/i.test(body)) return s; // ➕ a carry-on's [0s-1s] lead-in is the anchor (Jordan 2026-11-10): never mixed, never moved
     let ss = body.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)|[.!?]+/g) || [body]; ss = ss.map(x => x.trim()).filter(Boolean);
     const pin = ss.length && /^This continues straight on/.test(ss[0]) ? [ss.shift()] : [];
     if(ss.length < 2 && mode < 2) return s; // one sentence: nothing to move, sent exactly as typed
@@ -2861,7 +2866,7 @@ function takeCard(t){
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t)].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
-      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr">${shufOn(t) ? '🔀 ' + esc(shuffleWords(t.pieces.length===1 ? t.pieces[0].prompt : t.prompt, shufSeed(t, 0), 1)) : esc(t.prompt)}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${shufOn(t) ? '🔀 ' : ''}${esc(sentWords(t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
 }
@@ -3141,6 +3146,7 @@ function touchTake(j, file){ const src = S.takes.find(x => x.id===j.take) || {},
 setTimeout(tickTouch, 3000);
 $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pingAll().then(pullInbox); };
 $('#ckBtn').onclick = () => checkPrompt();
+document.addEventListener('click', e => { const p = e.target.closest('.take .pr[data-pr]'); if(!p) return; const id = p.dataset.pr; if(PROPEN.has(id)) PROPEN.delete(id); else PROPEN.add(id); p.classList.toggle('open', PROPEN.has(id)); });
 function drawShuf(){ const b = $('#shufBtn'); if(!b) return; const v = S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0; b.textContent = ['🔀 Randomize: off', '🔀 Randomize batch', '🔀 Randomize'][v]; b.classList.toggle('pri', v > 0); }
 $('#shufBtn').onclick = () => { S.f.shuffle = ((S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0) + 1) % 3; save(); drawShuf(); toast(['🔀 Off: every take goes as typed', '🔀 Randomize batch: the first take goes as typed, the rest get a new sentence order', '🔀 Randomize: every take gets a new sentence order, even a single one'][S.f.shuffle], 5000); };
 $('#ckChat').onclick = () => { if(S.ck && S.ck.msgs){ drawCk(); const a = $('#ckAsk'); if(a){ a.scrollIntoView({block:'center'}); a.focus(); } return; } if(!(S.f.prompt || '').trim()) return toast('Write the shot first'); S.ck = {compose:true}; drawCk(); };
@@ -3652,7 +3658,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
 setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
-window.H3 = {addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
