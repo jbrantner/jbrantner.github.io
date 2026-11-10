@@ -580,7 +580,7 @@ const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleF
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
-  'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','PH3ImageConditioning','MiniMaxH3SigmaShift','ModelSamplingAuraFlow','CFGNorm','KSampler','VAEDecode','ImageScaleToTotalPixels'];
+  'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','PH3ImageConditioning','MiniMaxH3SigmaShift','TextGenerateV2','ModelSamplingAuraFlow','CFGNorm','KSampler','VAEDecode','ImageScaleToTotalPixels'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
@@ -1478,15 +1478,17 @@ function qwenKit(){ const order = S.pcs.slice().sort((a, b) => /render/i.test(b.
 // ✨ P-H3 Image (Jordan 2026-11-10: yes to P-H3 for 🪄 Redraw, Qwen kept as the fallback): Pruna's still-picture H3, the same family as the
 // video model, so redrawn people should sit closer to how H3 draws them. The job is the one rd-ca7a819000b8/ph3/ sends (Comfy-Org's
 // image_p_h3_image_edit template, ComfyUI 0.44.0+): FL2VA int8 + p-h3-image LoRA (or its own model) → SigmaShift 1/1, PH3ImageConditioning
-// with <Picture 1> = theirs and <Picture 2/3> = the look, er_sde on Pruna's 8 sigmas, no prompt upsampler; 2 MP (Render has 8 GB).
+// with <Picture 1> = theirs and <Picture 2/3> = the look, er_sde on Pruna's 8 sigmas; 2 MP (Render has 8 GB). Render test 2026-11-10: with no
+// prompt writer the edit barely happens, and with the writer's thinking on it writes H3's video-brief format and the picture comes back
+// rotated (4 of 4), so the writer (p-h3-image_prompt_upsampler, TextGenerateV2) is on with thinking OFF, as ph3/ does for edits (~80 s, 7.4 GB).
 const PH3_SIGMAS = '1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0', PH3_MP = 2;
 function ph3Kit(){ const order = S.pcs.slice().sort((a, b) => /render/i.test(b.name || '') - /render/i.test(a.name || '')); let why = '';
   for(const p of order){ const P = pcOf(p.url), oi = P.oi; if(!P.online || !oi || !oi.PH3ImageConditioning) continue;
     const pick = (l, re, pref) => { const m = l.filter(n => re.test(String(n).replace(/\\/g, '/'))); for(const x of pref || []){ const f = m.find(n => x.test(n)); if(f) return f; } return m[0] || ''; };
     const unets = combo(oi, 'UNETLoader', 'unet_name'), own = pick(unets, /p-h3-image_[^/]*\.safetensors$/i, [/int8/i, /w4a8/i]);
     const k = {eng:'ph3', url:p.url, oi, own:!!own, unet:own || pick(unets, /fl2va.*(pruned.*int8|int8.*pruned)|minimaxH3INT8INT4_fl2va/i, [/convrot/i]), lora:pick(combo(oi, 'LoraLoaderModelOnly', 'lora_name'), /p-h3-image_lora/i),
-      te:pick(combo(oi, 'CLIPLoader', 'clip_name'), /p-h3-image_text_encoder/i, [/int8/i, /w4a8/i]), vae:pick(combo(oi, 'VAELoader', 'vae_name'), /p-h3-image_vae/i, [/int8/i])};
-    const miss = [!k.unet && 'the FL2VA int8 model', !k.own && !k.lora && 'the p-h3-image LoRA', !k.te && 'its text encoder', !k.vae && 'its VAE', !(oi.MiniMaxH3SigmaShift && oi.ManualSigmas && oi.SamplerCustomAdvanced && oi.ImageScaleToTotalPixels) && 'some core nodes (update ComfyUI)'].filter(Boolean);
+      te:pick(combo(oi, 'CLIPLoader', 'clip_name'), /p-h3-image_text_encoder/i, [/int8/i, /w4a8/i]), up:pick(combo(oi, 'CLIPLoader', 'clip_name'), /p-h3-image_prompt_upsampler/i, [/w4a8/i, /int8/i]), vae:pick(combo(oi, 'VAELoader', 'vae_name'), /p-h3-image_vae/i, [/int8/i])};
+    const miss = [!k.unet && 'the FL2VA int8 model', !k.own && !k.lora && 'the p-h3-image LoRA', !k.te && 'its text encoder', !k.vae && 'its VAE', !(k.up && oi.TextGenerateV2) && 'its prompt writer (p-h3-image_prompt_upsampler)', !(oi.MiniMaxH3SigmaShift && oi.ManualSigmas && oi.SamplerCustomAdvanced && oi.ImageScaleToTotalPixels) && 'some core nodes (update ComfyUI)'].filter(Boolean);
     if(miss.length){ why = pcName(p.url) + ' has P-H3 nodes but not ' + andList(miss); continue; } return k; }
   return {why:why || 'No PC that is on has P-H3 Image (ComfyUI 0.44.0+ and its files)'}; }
 // the engine: ✨ P-H3 Image first, Qwen when no PC has P-H3 (or when Qwen is picked)
@@ -1497,13 +1499,17 @@ function ph3LookGraph(k, file, styleFiles, kind, seed, w, h){ const g = {}; let 
   if(!k.own) model = [add('LoraLoaderModelOnly', {model, lora_name:k.lora, strength_model:1}), 0];
   model = [add('MiniMaxH3SigmaShift', {model, shift_video:1, shift_audio:1}), 0];
   const clip = [add('CLIPLoader', {clip_name:k.te, type:'minimax', device:'default'}), 0], vae = [add('VAELoader', {vae_name:k.vae}), 0];
-  const ci = {clip, vae, prompt:lookText(kind, styleFiles.length, true), width:w, height:h};
-  ci['images.image_1'] = [add('ImageScaleToTotalPixels', {image:[add('LoadImage', {image:file}), 0], upscale_method:'lanczos', megapixels:PH3_MP, resolution_steps:32}), 0];
-  styleFiles.slice(0, 2).forEach((f, i) => { ci['images.image_' + (i + 2)] = [add('LoadImage', {image:f}), 0]; });
+  const ims = [[add('ImageScaleToTotalPixels', {image:[add('LoadImage', {image:file}), 0], upscale_method:'lanczos', megapixels:PH3_MP, resolution_steps:32}), 0]].concat(styleFiles.slice(0, 2).map(f => [add('LoadImage', {image:f}), 0]));
+  const ti = {clip:[add('CLIPLoader', {clip_name:k.up, type:'minimax', device:'default'}), 0], prompt:'Aspect ratio: ' + ph3Ratio(w, h) + '\nRequest: ' + lookText(kind, styleFiles.length, true),
+    max_length:1536, sampling_mode:'off', thinking:false, use_default_template:true, mtp:'auto'};
+  ims.forEach((im, i) => { ti['images.image' + (i + 1)] = im; });
+  const ci = {clip, vae, prompt:[add('TextGenerateV2', ti), 0], width:w, height:h}; ims.forEach((im, i) => { ci['images.image_' + (i + 1)] = im; });
   const cond = add('PH3ImageConditioning', ci);
   const sm = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[add('BasicGuider', {model, conditioning:[cond, 0]}), 0],
     sampler:[add('KSamplerSelect', {sampler_name:'er_sde'}), 0], sigmas:[add('ManualSigmas', {sigmas:PH3_SIGMAS}), 0], latent_image:[cond, 1]});
   return {g, save:add('PreviewImage', {images:[add('VAEDecode', {samples:[sm, 0], vae}), 0]})}; }
+const PH3_RATIOS = [['1:1', 1], ['4:3', 4/3], ['3:4', 3/4], ['3:2', 3/2], ['2:3', 2/3], ['16:9', 16/9], ['9:16', 9/16]];
+const ph3Ratio = (w, h) => PH3_RATIOS.reduce((b, x) => Math.abs(Math.log(x[1] / (w / h))) < Math.abs(Math.log(b[1] / (w / h))) ? x : b)[0];
 const ph3Size = m => { const w = (m && m.w) || 768, h = (m && m.h) || 1024, q = Math.sqrt(PH3_MP * 1048576 / (w * h)); return [Math.max(32, Math.round(w * q / 32) * 32), Math.max(32, Math.round(h * q / 32) * 32)]; };
 function lookText(kind, n, ph3){ const what = kind==='thing' ? 'object' : kind==='place' ? 'place' : 'person', sp = ph3 ? (n > 1 ? '<Picture 2> and <Picture 3>' : '<Picture 2>') : n > 1 ? 'pictures 2 and 3' : 'picture 2', p1 = ph3 ? '<Picture 1>' : 'picture 1';
   const keep = what==='person' ? 'the same person, face, hair, body, clothes, pose and expression' : what==='object' ? 'the same object, shape, parts and colours' : 'the same layout, things in it and colours';
