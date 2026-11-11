@@ -46,6 +46,12 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const shots = '[Shot 1] A wide view. Birds fly.\n[Shot 2] A close-up. She smiles.';
     return {txt, a, b, a2, c, off, tm, ld, sh:W(shots, 9, 1)}; });
   const sents = s => s.match(/[^.!?]+[.!?]/g).map(x => x.trim()).sort().join('|');
+  // a long take past its last timed line (Jordan 2026-11-11: lines ending at 5.9 s on a 15 s take left parts 2 and 3 with no action): the last line carries on
+  const pk = await page.evaluate(() => { const t = '[1s-2s] She sits down, carrying on from the moment before.\n[2s-5.9s] Her hands move slowly. She sways. She breathes softly.'; const pl = H3.plan(15, 5, H3.parseBeats(t).beats);
+    const P = pl.map((p, i) => H3.piecePrompt(t, pl, i)), T = {seed:7, id:'tX', shuffle:1, bk:0, pieces:pl.map((p, i) => Object.assign({}, p, {prompt:P[i]}))}; return {P, n:pl.length, sent:H3.sentWords(T)}; });
+  ok(pk.n===3 && pk.P.slice(1).every(x => /\(carrying on\) Her hands move slowly\. She sways\. She breathes softly\./.test(x) && /^This continues straight on/.test(x)) && /Part 2 🔀/.test(pk.sent) && /Part 3 🔀/.test(pk.sent) && /She sways/.test(pk.sent.split('Part 3')[1] || '') && pk.sent.split('\n').filter(x => /^Part [23]/.test(x)).every(x => /no cut\. \[1s-[\d.]+s\] \(carrying on\) /.test(x))
+    && pk.P.slice(1).every(x => +(x.match(/\[1s-([\d.]+)s\]/) || [0, 0])[1] > 4),
+    'parts past the last timed line keep its words, each part shuffled: ' + JSON.stringify(pk));
   ok(r.off===r.txt, 'off leaves the words alone');
   ok(r.a===r.a2, 'same seed, same order: ' + r.a);
   ok(r.a!==r.txt && r.b!==r.txt, 'sentences change order');
