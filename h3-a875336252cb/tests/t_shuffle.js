@@ -64,7 +64,8 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   // 🔀 sent with the take, per take seed; button cycles
   await page.evaluate(() => { Object.assign(H3.S.f, {model:'', h3:false, imgs:[], seconds:5, prompt:'One is red. Two is blue. Three is green. Four is pink.'}); H3.S.cast = []; });
   const lbl = () => page.$eval('#shufBtn', b => b.textContent);
-  ok((await lbl())==='🔀 Randomize batch', 'button starts on Randomize batch');
+  ok((await lbl())==='🔀 Randomize: off', 'button starts off (Jordan 2026-11-11: off by default)');
+  await page.click('#shufBtn'); ok((await lbl())==='🔀 Randomize batch', 'tap → Randomize batch');
   ok(await page.evaluate(() => H3.S.f.quality===true && H3.S.f.qstyle===''), '✨ quality words start on, ✍ Custom');
   await page.click('#shufBtn'); ok((await lbl())==='🔀 Randomize', 'tap → Randomize (always)');
   await page.click('#shufBtn'); ok((await lbl())==='🔀 Randomize: off', 'tap → off');
