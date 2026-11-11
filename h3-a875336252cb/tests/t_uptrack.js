@@ -149,6 +149,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const SD = await page.evaluate(([keys, sm]) => keys.map(k => { const t = H3.S.takes.find(x => x.redo && x.redo.key===k); return t && {src:t.redo.src, fromSm:sm.includes(t.redo.src), cin:t.redo.cin}; }), [SC.keys, SA.sm]);
   ok(SA.n===3 && SA.state==='smooth' && SB.length===3 && SB.every(x => / \[output\]$/.test(x.file) && x.lv.includes(x.file) && x.keys >= 10) && SC.state==='hq' && SC.hq===3 && SD.every(x => x && x.fromSm && x.cin===0),
     '🪄 Smooth first: each clip is smoothed from the PC\'s own file (keyframes pinned), and when all 3 are done ✨ runs on the smoothed takes: ' + JSON.stringify({SA, SB, SC, SD}));
+  // ✂ a clip longer than 5 s is split into near-even parts of at most 5 s before ✨ (12 s → 3 × 4 s, touching, same take, ⛓ joins)
+  const SPL = await fr.evaluate(() => { const f = {id:'fS', name:'S', tracks:[{id:'trS', clips:[{id:'cS', take:'tA', in:0, out:12, dur:12, at:2}, {id:'cT', take:'tA', in:0, out:5, dur:5, at:14}]}], pps:24}; const tr = f.tracks[0];
+    const n = FILM.splitLong(f, tr, tr.clips.slice()); const cs = tr.clips.slice().sort((a, b) => a.at - b.at); return {n, cs:cs.map(c => [+c.at.toFixed(2), +c.in.toFixed(2), +c.out.toFixed(2), c.take, !!c.cut])}; });
+  ok(SPL.n===2 && SPL.cs.length===4 && JSON.stringify(SPL.cs.map(c => c.slice(0, 3)))==='[[2,0,4],[6,4,8],[10,8,12],[14,0,5]]' && SPL.cs.every(c => c[3]==='tA' && !c[4]), '✂ a 12 s clip goes to ✨ as 3 touching 4 s parts (a 5 s clip stays whole): ' + JSON.stringify(SPL));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
