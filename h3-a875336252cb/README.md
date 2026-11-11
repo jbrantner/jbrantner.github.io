@@ -98,4 +98,6 @@ In 🎞 Films (tools row, or a track's menu). Runs in three steps and remembers 
 
 ✨ Same quality words for the whole track (in the ⬆ Upscale track sheet): Off (the default) / 🎥 Realistic / 🧊 3D / ✏ 2D / ✍ Custom. The words are editable, remembered in `S.upQ`, and saved as `f.upRun.qw`. They're added to every ✨ pass of the track (`up.qw`), to 🎭 Faces and its blend while the run is going, and to the 🧵 seam bridges. A bridge whose take has its own ✨ line on has that line switched off, so the words aren't sent twice. Without this option, ✨/🎭 passes send only the clip's own words, cast and LoRA words.
 
+⬆ The ✨ step is all or nothing. Each finished ✨ pass of the run waits (`p.state='ready'`), and only once every clip's pass is done do they all take their clips' places together (`swapIn`). If any pass fails, or the run is stopped during ✨, the waiting results are let go (`upDrop`, `p.dropped`). Every clip then keeps its original and the run stops with `R.err`. 🎭 Faces and single-clip ✨ still swap on their own.
+
 Test: `CLIP=<a ~5 s video with sound> NODE_PATH=$(npm root -g) node tests/t_uptrack.js`.

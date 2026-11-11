@@ -79,7 +79,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     return {qw:t.up.qw, inPrompt:(txt.match(/photorealistic live-action/g) || []).length}; }); }, [R, HQ]);
   ok(S1.qOff==='' && S1.qHidden && /photorealistic/.test(S1.qText) && QW.every(x => /photorealistic/.test(x.qw) && x.inPrompt >= 1), '✨ same quality words for the whole track: off by default; 🎥 Realistic fills its words and every ✨ pass sends them: ' + JSON.stringify({S1q:[S1.qOff, S1.qHidden], QW}));
   await done(HQ[0].id, 'hq1_00001.mp4');
-  const W1 = await fr.evaluate(() => { FILM.placeNew(); const f = FILM.S.films[0]; return f.upRun.state; });
+  const W1 = await fr.evaluate(() => { FILM.placeNew(); const f = FILM.S.films[0], cs = f.tracks[0].clips.slice().sort((a, b) => a.at - b.at); return f.upRun.state + (cs.some(c => FILM.takeOf(c.take).redo && FILM.takeOf(c.take).redo.qp) ? ' swapped early' : ''); });
   await done(HQ[1].id, 'hq2_00001.mp4'); await done(HQ[2].id, 'hq3_00001.mp4');
   const S2 = await fr.evaluate(async () => { FILM.placeNew(); FILM.draw(); await new Promise(z => setTimeout(z, 100)); const f = FILM.S.films[0], cs = f.tracks[0].clips.slice().sort((a, b) => a.at - b.at);
     return {state:f.upRun.state, takes:cs.map(c => FILM.takeOf(c.take).redo && FILM.takeOf(c.take).redo.qp), seamBtn:!!document.querySelector('[data-act="upSeams"]'), skip:!!document.querySelector('[data-act="upSkip"]'), cs:cs.map(c => [c.at, +c.in.toFixed(2), +c.out.toFixed(2)])}; });
@@ -125,6 +125,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.evaluate(() => { H3.S.takes.unshift({id:'tX', t:Date.now(), pc:'http://render.test', state:'failed', pieces:[{state:'failed', err:'boom'}], combo:{seam:{rk:'kX', run:'u2'}, parts:[]}, prompt:''}); H3.saveNow(); });
   const S5 = await fr.evaluate(async () => { await new Promise(z => setTimeout(z, 300)); FILM.placeNew(); FILM.draw(); const f = FILM.S.films[0]; return {err:f.upRun.err, again:(document.querySelector('[data-act="upSeams"]') || {}).textContent}; });
   ok(/boom/.test(S5.err) && /again/.test(S5.again || ''), 'a failed seam shows its error and offers 🧵 Blend the seams again: ' + JSON.stringify(S5));
+  // all or nothing: a run where one ✨ clip fails puts NO ✨ result in (the done ones are let go), and the run stops
+  const AN = await fr.evaluate(async () => { const f = FILM.S.films[0], tr = f.tracks[0]; tr.clips.forEach(c => { c.cut = false; }); f.upRun = null; const before = tr.clips.map(c => c.take);
+    const n = await FILM.upTrackGo(f, tr, 0.9, ''); return {n, before, keys:f.upRun.hq.map(h => h.key)}; });
+  const AT = await page.evaluate(keys => keys.map(k => (H3.S.takes.find(x => x.redo && x.redo.key===k) || {}).id), AN.keys);
+  await done(AT[0], 'an1_00001.mp4'); await done(AT[2], 'an3_00001.mp4');
+  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); Object.assign(t, {state:'failed', upErr:'boom'}); H3.saveNow(); }, AT[1]);
+  const AF = await fr.evaluate(async before => { await new Promise(z => setTimeout(z, 300)); FILM.placeNew(); const f = FILM.S.films[0], tr = f.tracks[0];
+    return {state:f.upRun.state, err:f.upRun.err, same:tr.clips.every((c, i) => c.take===before[i]), dropped:(FILM.S.passes || []).filter(p => p.dropped).length}; }, AN.before);
+  ok(AN.n===3 && AT.every(Boolean) && AF.state==='stopped' && /1 of 3/.test(AF.err) && AF.same && AF.dropped===2, '⬆ all or nothing: with 1 of 3 ✨ clips failed, no clip gets ✨ (the 2 done ones are let go) and the run stops: ' + JSON.stringify({AN:AN.n, AF}));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
