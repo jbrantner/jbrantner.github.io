@@ -100,4 +100,6 @@ In 🎞 Films (tools row, or a track's menu). Runs in three steps and remembers 
 
 ⬆ The ✨ step is all or nothing. Each finished ✨ pass of the run waits (`p.state='ready'`), and only once every clip's pass is done do they all take their clips' places together (`swapIn`). If any pass fails, or the run is stopped during ✨, the waiting results are let go (`upDrop`, `p.dropped`). Every clip then keeps its original and the run stops with `R.err`. 🎭 Faces and single-clip ✨ still swap on their own.
 
+🪄 Smooth first (a checkbox in the sheet, remembered in `S.upSm`) puts a smoothing step before ✨. `H3SmoothClip` smooths each clip's stretch of its take the way 🪄 Smooth does: every 4th frame is pinned, MiniMax paints the frames between, and the sound is pinned. It uses the take's model, LoRAs, pictures and words, and reads the video straight from the PC's output (`sm.file`), so it runs with the app closed. `R.state='smooth'` waits for every smoothing. If one fails nothing changes; when all are done, `upHqSend` runs ✨ on the smoothed takes. Long clips are smoothed in windows that fit 8 GB, with no seam bridge (`sm.bridge:false`); the ✨ pass after them redraws the whole clip anyway.
+
 Test: `CLIP=<a ~5 s video with sound> NODE_PATH=$(npm root -g) node tests/t_uptrack.js`.

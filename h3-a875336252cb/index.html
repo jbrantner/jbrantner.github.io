@@ -844,14 +844,14 @@ const smTok = (L, every, tpf, refs) => (smLat(L) + smoothKeys(L, every).length) 
 // reference pictures in a smoothing: the 👥 subjects its words name (a blend's words name the cast, 7 pictures on 2026-11-07) and ⬆ regenerate's own
 function smRefCount(){ let n = 0; try{ n = castTake({prompt:S.f.prompt || '', imgs:[]}, true).imgs.length; }catch(e){}
   if(S.f.smUp && S.f.smUpRefs) n += Math.min(REGEN_REFS, (S.f.smRefs || []).filter(id => S.media[id]).length); return n; }
-function smoothPlan(){ const g = smoothTotal(), one = [{start:0, gen:g, deliv:g, ctx:0}]; if(S.f.smLoop) return one;
-  const {w, h} = dims(), tpf = (w / 32) * (h / 32), every = +S.f.smEvery || 4, nr = smRefCount(); if(smTok(g, every, tpf, nr) <= SM_TOK) return one;
+function smoothPlan(o){ const g = o ? o.g : smoothTotal(), one = [{start:0, gen:g, deliv:g, ctx:0}]; if(!o && S.f.smLoop) return one;
+  const {w, h} = o || dims(), tpf = (w / 32) * (h / 32), every = o ? o.every : +S.f.smEvery || 4, nr = o ? o.nr : smRefCount(); if(smTok(g, every, tpf, nr) <= SM_TOK) return one;
   let fb = null; for(let n = 2; n <= 16; n++){ const K = Math.max(n, Math.ceil((g + (n - 1) - 5 * n) / 17)), ks = Array.from({length:n}, (_, i) => Math.floor(K / n) + (i < K % n ? 1 : 0)), gens = ks.map(k => 17 * k + 5);
     if(gens.some(L => smTok(L, every, tpf, nr) > SM_TOK)) continue;
     const ex = gens.reduce((a, L) => a + L, 0) - g, ov = Array.from({length:n - 1}, (_, i) => Math.floor(ex / (n - 1)) + (i < ex % (n - 1) ? 1 : 0));
     const lay = G => { let at = 0; return G.map((L, i) => { const skip = i ? ov[i - 1] : 0; if(i) at -= skip; const p = {start:at / FPS, gen:L, deliv:L - skip, ctx:0, skip}; at += L; return p; }); };
     // 🪄 blend: the windows don't share motion, so a join must sit well inside one window, never on a seam between two
-    const J = blendJoins(); if(!J.length) return lay(gens);
+    const J = o ? [] : blendJoins(); if(!J.length) return lay(gens);
     const far = P => Math.min(...J.map(j => Math.min(...P.slice(1).map(p => Math.abs(j - Math.round(p.start * FPS + p.skip))))));
     let best = null; for(let r = 0; r < n; r++){ const P = lay(gens.slice(r).concat(gens.slice(0, r))); if(!best || far(P) > far(best)) best = P; }
     if(far(best) >= (+S.f.smGap || 24) / 2 + 6) return best; fb = fb || best; }
@@ -1858,7 +1858,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   const pinAt = []; (t.pins || []).forEach(r => { let o = Math.round((r.t - (pc.start - LEAD(pc) / FPS)) * FPS); if(o < -2 || o > L + 1 || (pc.ctx && o < LEAD(pc) + 2)) return; // (a key the carried-over frames already end on) o = o >= L - 3 ? L - 1 : Math.max(0, Math.round(o / 4) * 4);
     if(pinAt.includes(o)) return; pinAt.push(o); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(r.id), frame_idx:o}), 0]; guides++; });
   if(t.sm){ // 🪄 smoothing: the window is cut from the video on the PC, and every Nth frame of it is pinned where it belongs
-    const sm = t.sm, sf = sm.fps || FPS, lv = add('LoadVideo', {file:names[sm.vid]}), S0 = Math.round((pc.start || 0) * FPS);
+    const sm = t.sm, sf = sm.fps || FPS, lv = add('LoadVideo', {file:sm.file || names[sm.vid]}), S0 = Math.round((pc.start || 0) * FPS);
     const sl = add('Video Slice', {video:[lv, 0], start_time:Math.round((sm.start + S0 / FPS) * 1000) / 1000, duration:Math.round((L / FPS + 2 / sf) * 1000) / 1000, strict_duration:false});
     const gc = add('GetVideoComponents', {video:[sl, 0]});
     // pairs [output frame, source frame]: the plain grid, or the 📐 eased spacing (a source frame can land on a different output frame)
@@ -3786,6 +3786,27 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
   save(); drawTakes(); tickSoon(200); if(o.quiet) return sent;
   toast('⬆ ' + sent + (sent > 1 ? ' nudges' : ' nudge') + ' of ' + fmtS(part.a / FPS) + '–' + fmtS(part.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
   return sent; };
+// 🪄 Smooth a clip (Jordan 2026-11-11: "Does the quality pass have a smoothing option? … added as an option for the upscale track"): the
+// clip's stretch of its take (a..b s) is smoothed like 🪄 Smooth does (every Nth frame pinned as a MiniMax keyframe, MiniMax paints the
+// in-betweens, the take's own sound pinned), at its own size, with its own model, LoRAs, pictures and words. The video is read
+// straight from the PC's output (no phone copy), so it all runs with the app closed. The result is a take (t.smClip) of exactly the stretch.
+window.H3SmoothClip = async o => { const src = deckTake(o.take), fl = takeFile(src);
+  if(!src || !fl){ toast('That clip has no finished video yet'); return null; }
+  const F = takeFrames(src), a = Math.max(0, Math.min(F - 5, Math.round((+o.a || 0) * FPS))), b = Math.max(a + 5, Math.min(F, Math.round((+o.b || 0) * FPS))), n0 = b - a;
+  const g = gridUp(n0), every = Math.max(2, Math.min(8, +o.every || 4)), t = JSON.parse(JSON.stringify(src));
+  t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+  t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
+  const text = (o.prompt || '').trim() || SM_PROMPT, T = castTake({prompt:text, imgs:src.imgs || [], film:src.film}, true);
+  const pieces = smoothPlan({g, w:src.w, h:src.h, every, nr:(T.imgs || []).length});
+  Object.assign(t, {prompt:text, seconds:n0 / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, combo:null, redo:null, lead:null, toFilm:null, pins:[], mq:'', follow:[], vids:[], auds:[],
+    ctl:null, ctl2:null, ctxDirs:null, from:null, fin:null, h3:null, look:null, shuffle:0, blend:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false,
+    sm:{vid:'', file:fileArg(fl), start:a / FPS, every, sound:src.sound!==false, fps:FPS, spc:false, ease:0, punch:0, loop:0, keys:null, gap:0, joins:[], bridge:false, fin:null},
+    smClip:{key:o.key || uid('k'), src:src.id, a:a / FPS, b:b / FPS, film:o.film || '', clip:o.clip || ''},
+    pieces:pieces.map((q, i) => Object.assign({}, q, {prompt:pieces.length > 1 ? piecePrompt(text, pieces, i) : text, state:'new'}))});
+  t.pc = await redoPc(t, src, fl, {}) || (!canRun(src.pc, t) ? src.pc : null); if(!t.pc){ toast(pcName(src.pc) + ' ' + (canRun(src.pc, t) || "can't take it right now"), 6000); return null; }
+  S.takes.unshift(t); drawTakes();
+  try{ await sendPieces(t, 0); }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; save(); return null; }
+  save(); return t.id; };
 // ⛓ Combine clips (Jordan 2026-11-06): the clips' stretches of their takes joined into one take, which takes their place on the timeline
 window.H3Combine = async o => { const parts = [];
   for(const q of o.parts || []){ const t = deckTake(q.take), fl = takeFile(t); if(!t || !fl){ toast('A clip in it has no finished video yet'); return 0; }

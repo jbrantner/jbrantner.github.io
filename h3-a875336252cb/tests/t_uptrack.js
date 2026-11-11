@@ -134,6 +134,17 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const AF = await fr.evaluate(async before => { await new Promise(z => setTimeout(z, 300)); FILM.placeNew(); const f = FILM.S.films[0], tr = f.tracks[0];
     return {state:f.upRun.state, err:f.upRun.err, same:tr.clips.every((c, i) => c.take===before[i]), dropped:(FILM.S.passes || []).filter(p => p.dropped).length}; }, AN.before);
   ok(AN.n===3 && AT.every(Boolean) && AF.state==='stopped' && /1 of 3/.test(AF.err) && AF.same && AF.dropped===2, '⬆ all or nothing: with 1 of 3 ✨ clips failed, no clip gets ✨ (the 2 done ones are let go) and the run stops: ' + JSON.stringify({AN:AN.n, AF}));
+  // 🪄 Smooth first: every clip is smoothed (keyframes pinned from its own stretch, read straight from the PC's output), then ✨ runs on the smoothed takes
+  const gS = sent.length;
+  const SA = await fr.evaluate(async () => { const f = FILM.S.films[0], tr = f.tracks[0]; f.upRun = null; const before = tr.clips.map(c => c.take);
+    const n = await FILM.upTrackGo(f, tr, 0.9, '', '', true); return {n, before, state:f.upRun.state, sm:f.upRun.sm.map(h => h.take), clips:tr.clips.map(c => [c.in, c.out])}; });
+  const SF = await page.evaluate(ids => ids.map(id => (H3.S.takes.find(x => x.id===id) || {}).sm), SA.sm);
+  const SB = sent.slice(gS, gS + 3).map(x => Object.values(x.g)).map((g, i) => ({file:SF[i] && SF[i].file, keys:g.filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image).length, lv:g.filter(n => n.class_type==='LoadVideo').map(n => n.inputs.file)}));
+  for(const id of SA.sm) await done(id, 'sm_' + id + '.mp4');
+  const SC = await fr.evaluate(async () => { FILM.placeNew(); await new Promise(z => setTimeout(z, 2500)); FILM.placeNew(); const f = FILM.S.films[0]; return {state:f.upRun.state, hq:f.upRun.hq.length, keys:f.upRun.hq.map(h => h.key)}; });
+  const SD = await page.evaluate(([keys, sm]) => keys.map(k => { const t = H3.S.takes.find(x => x.redo && x.redo.key===k); return t && {src:t.redo.src, fromSm:sm.includes(t.redo.src), cin:t.redo.cin}; }), [SC.keys, SA.sm]);
+  ok(SA.n===3 && SA.state==='smooth' && SB.length===3 && SB.every(x => / \[output\]$/.test(x.file) && x.lv.includes(x.file) && x.keys >= 10) && SC.state==='hq' && SC.hq===3 && SD.every(x => x && x.fromSm && x.cin===0),
+    '🪄 Smooth first: each clip is smoothed from the PC\'s own file (keyframes pinned), and when all 3 are done ✨ runs on the smoothed takes: ' + JSON.stringify({SA, SB, SC, SD}));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
