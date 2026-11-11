@@ -44,5 +44,16 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   answer = JSON.stringify({verdict:'fix', issues:[], shot:'[0s-5s] She dances in the rain.'});
   await setShot('[0s-5s] she dances', false); const q3 = await run();
   ok(q3 && /SHOT:\n\[0s-5s\] she dances/.test(q3.messages[1].content) && !/CARRIES ON/.test(q3.messages[1].content) && await page.evaluate(() => H3.S.ck.shot)==='[0s-5s] She dances in the rain.', 'a shot that is not a carry-on goes to the checker whole, as before');
+  // 🎯 Pika (Jordan 2026-11-11): the clip length goes along, and the word range follows the model (PIKA fuller, vanilla shorter)
+  ok(q3 && /CLIP LENGTH: \d+(\.\d+)? seconds/.test(q3.messages[1].content), 'the checker is told how long the clip is');
+  await page.evaluate(() => { H3.S.f.model = 'singularityV2X10eros_prismPIKA'; H3.S.f.finOn = false; }); const q4 = await run();
+  ok(q4 && /^MODEL: PIKA/.test(q4.messages[1].content) && /180 to 300 words/.test(q4.messages[1].content), 'PIKA asks for the fuller 180-300 word shot');
+  await page.evaluate(() => { H3.S.f.model = 'minimax_h3_ref2va_pruned_int8_convrot'; }); const q5 = await run();
+  ok(q5 && /^MODEL: VANILLA/.test(q5.messages[1].content) && /120 to 200 words/.test(q5.messages[1].content), 'vanilla asks for 120-200 words');
+  // H3 speech tags from the checker pass through the app's prompt untouched (no timing tag taken from [English])
+  const d = await page.evaluate(() => { const t = '[0s-3s] Mei (S1) whispers softly: <d>[English] Come here.</d> [3s-5s] She smiles.'; H3.S.f.prompt = t; document.querySelector('#prompt').value = t; H3.drawAll(); H3.S.f.h3 = true; try{ return document.querySelector('#h3Pre') ? (h3Peek(), document.querySelector('#h3Pre').textContent) : ''; }catch(e){ return 'ERR ' + e.message; } });
+  ok(!d || /<d>\[English\] Come here\.<\/d>/.test(d), 'a <d>[English] …</d> line survives into what MiniMax gets (' + JSON.stringify(String(d).slice(0, 200)) + ')');
+  const rules = fs.readFileSync(path.join(root, 'checker-rules.md'), 'utf8');
+  ok(/# PIKA/.test(rules) && /# VANILLA THEN PIKA/.test(rules) && /\[0s-1s\] lead-in is fixed/.test(rules) && /CLIP LENGTH/.test(rules), 'checker-rules.md has the PIKA, VANILLA THEN PIKA, lead-in and clip-length rules');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
