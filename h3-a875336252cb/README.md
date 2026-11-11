@@ -96,4 +96,6 @@ In 🎞 Films (tools row, or a track's menu). Runs in three steps and remembers 
 
 🫧 Every 🎭 mask pass (Faces, and ✏️ Edit's parts) now ends with one very light (0.35) vanilla MiniMax pass over its window, with everyone's pictures, so the mask edges blend into the frame (`up.blend`, on unless set false; `BLEND_DEN`).
 
+✨ Same quality words for the whole track (in the ⬆ Upscale track sheet): Off (the default) / 🎥 Realistic / 🧊 3D / ✏ 2D / ✍ Custom. The words are editable, remembered in `S.upQ`, and saved as `f.upRun.qw`. They're added to every ✨ pass of the track (`up.qw`), to 🎭 Faces and its blend while the run is going, and to the 🧵 seam bridges. A bridge whose take has its own ✨ line on has that line switched off, so the words aren't sent twice. Without this option, ✨/🎭 passes send only the clip's own words, cast and LoRA words.
+
 Test: `CLIP=<a ~5 s video with sound> NODE_PATH=$(npm root -g) node tests/t_uptrack.js`.
