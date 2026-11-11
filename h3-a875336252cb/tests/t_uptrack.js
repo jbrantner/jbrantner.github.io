@@ -81,6 +81,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await done(HQ[0].id, 'hq1_00001.mp4');
   const W1 = await fr.evaluate(() => { FILM.placeNew(); const f = FILM.S.films[0], cs = f.tracks[0].clips.slice().sort((a, b) => a.at - b.at); return f.upRun.state + (cs.some(c => FILM.takeOf(c.take).redo && FILM.takeOf(c.take).redo.qp) ? ' swapped early' : ''); });
   await done(HQ[1].id, 'hq2_00001.mp4'); await done(HQ[2].id, 'hq3_00001.mp4');
+  // ✏ an edit (↻ redo a stretch) of a ✨ clip is drawn at the ✨ size, not the take's old smaller size
+  const ED = await page.evaluate(async id => { const src = H3.S.takes.find(x => x.id===id), k0 = H3.S.takes.length; const n = await window.H3Redo({take:id, a:1, b:2}); const t = H3.S.takes[0];
+    const ok = n && t.redo && t.redo.src===id; const out = {n, ok, w:t.w, h:t.h, sw:src.w, sh:src.h}; if(ok) H3.S.takes.shift(); return out; }, HQ[0].id);
+  ok(ED.ok && ED.w===960 && ED.h===512 && ED.sw < 960, '✏ editing a stretch of a ✨ clip draws it at the ✨ size (' + ED.w + '×' + ED.h + '), not the old ' + ED.sw + '×' + ED.sh + ': ' + JSON.stringify(ED));
   const S2 = await fr.evaluate(async () => { FILM.placeNew(); FILM.draw(); await new Promise(z => setTimeout(z, 100)); const f = FILM.S.films[0], cs = f.tracks[0].clips.slice().sort((a, b) => a.at - b.at);
     return {state:f.upRun.state, takes:cs.map(c => FILM.takeOf(c.take).redo && FILM.takeOf(c.take).redo.qp), seamBtn:!!document.querySelector('[data-act="upSeams"]'), skip:!!document.querySelector('[data-act="upSkip"]'), cs:cs.map(c => [c.at, +c.in.toFixed(2), +c.out.toFixed(2)])}; });
   ok(W1==='hq' && S2.state==='faces' && S2.takes.every(Boolean) && S2.seamBtn && S2.skip, '2 🎭: it waits while a clip is still going, then stops with 🧵 Blend the seams / Done, no seams once every ✨ clip is in place: ' + JSON.stringify({W1, S2}));
