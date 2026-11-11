@@ -3159,15 +3159,20 @@ function drawRenders(){ const tab = $('#rendersTab'); if(!tab || tab.hidden) ret
   if(box.querySelector('.empty')) box.innerHTML = '';
   const html = L.map(t => { const c = takeCard(t), has = (() => { try{ return !!(t.film && FW && FW.FILM && FW.FILM.S.films.some(x => x.id===t.film)); }catch(e){ return false; } })();
     // which clip and take it is in its film (the same numbers as "Takes of this clip" up top); tap it to go there with that take picked out
-    const w = has ? (() => { try{ return FW.FILM.takeWhere(t.id); }catch(e){ return null; } })() : null;
-    const wl = w && w.clip ? '🎬 Clip ' + w.ci + ' · Take ' + w.n + (w.of > 1 ? ' of ' + w.of : '') + (w.use ? ' · in use' : '') : w ? 'Not on the timeline' : '';
+    const w = has ? whereOf(t) : null, wl = whereLabel(w);
     const fl = '<div class="note rtFilm" style="display:flex;align-items:center;gap:8px;justify-content:space-between"><span>🎞 ' + esc(filmNameOf(t.film)) + (wl ? '<br><b class="rtWhere">' + esc(wl) + '</b>' : '') + '</span>' + (has ? '<button class="btn" data-gofilm="' + esc(t.film) + '" data-gotake="' + esc(t.id) + '" style="padding:6px 10px">' + (w && w.clip ? '🎞 Go to this take' : '🎞 Go to film') + '</button>' : '') + '</div>'; return {id:c.id, sig:c.sig + '|' + wl, html:c.html.replace('<div class="meta">', '<div class="meta">' + fl)}; });
   patchCards(box, L, html); }
+// which clip and take a render is in its film: the same numbers as "Takes of this clip" up top (Jordan 2026-11-11)
+const whereOf = t => { try{ return t.film && FW && FW.FILM && FW.FILM.takeWhere ? FW.FILM.takeWhere(t.id) : null; }catch(e){ return null; } };
+const whereLabel = w => w && w.clip ? '🎬 Clip ' + w.ci + ' · Take ' + w.n + (w.of > 1 ? ' of ' + w.of : '') + (w.use ? ' · in use' : '') : w ? 'Not on the timeline' : '';
 function goFilm(id, take){ setTab('films'); try{ const F = FW && FW.FILM; if(!F) return; F.go({v:'film', film:id}); if(take && F.selTake) setTimeout(() => F.selTake(take), 300); }catch(e){} }
 function drawTakes(){ fileTakes(); const L = S.takes.filter(inMine); drawRenders();
   const box = $('#takes'); if(!L.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; return; }
   // keep a playing video playing: only redraw what changed
-  const html = L.map(takeCard);
+  // Films' renders under the canvas say which clip and take each one is; ⬆ Pick it selects that clip up top with the take picked out
+  const html = L.map(t => { const c = takeCard(t), w = whereOf(t), wl = whereLabel(w); if(!wl) return c;
+    const fl = '<div class="rtWhere" style="font-size:13px;margin:4px 0;display:flex;align-items:center;gap:8px;justify-content:space-between"><b>' + esc(wl) + '</b>' + (w.clip ? '<button class="btn" data-pick="' + esc(t.id) + '" style="padding:6px 10px">⬆ Pick it</button>' : '') + '</div>';
+    return {id:c.id, sig:c.sig + '|' + wl, html:c.html.replace('<div class="meta">', '<div class="meta">' + fl)}; });
   patchCards(box, L, html);
   $('#clearDone').hidden = !L.some(t => t.state!=='working');
 }
@@ -3189,6 +3194,7 @@ function drawAll(){ drawBare(); drawFilmNote(); drawDots(); drawShot(); drawCast
 
 // ---------- taps ----------
 document.addEventListener('click', async e => {
+  const pk = e.target.closest('[data-pick]'); if(pk){ e.stopPropagation(); try{ if(FW.FILM.selTake(pk.dataset.pick)) $('#filmTab').scrollIntoView({behavior:'smooth', block:'start'}); else toast('That clip isn\'t on this film\'s timeline'); }catch(err){} return; }
   const snd = e.target.closest('.pv .snd'); if(snd){ const v = snd.parentElement.querySelector('video.tv'); if(v){ lazyOn(v); v.muted = !v.muted; snd.textContent = v.muted ? '🔇' : '🔊'; if(v.paused) v.play().catch(() => {}); } return; }
   const tv = e.target.closest('video.tv'); if(tv){ lazyOn(tv); if(tv.paused) tv.play().catch(() => {}); else tv.pause(); return; }
   const h3 = e.target.closest('.block>h3'); if(h3){ const b = h3.parentElement; S.open[b.id] = b.classList.contains('shut'); b.classList.toggle('shut'); save(); return; }
@@ -3641,7 +3647,9 @@ function filmNav(tab){ try{ const F = FW && FW.FILM; if(!F) return; const v = F.
   if(tab==='films' && v==='review') F.go(F.S.lastFilm && F.S.films.some(x => x.id===F.S.lastFilm) ? {v:'film', film:F.S.lastFilm} : {v:'home'}); }catch(e){} }
 // the Films frame is as tall as what it shows, so the page scrolls on down into the Render form
 function fitFilm(){ const fr = $('#filmTab iframe'); if(!fr) return; try{ const d = fr.contentDocument; if(!d || !d.body) return; const h = Math.max(200, d.body.scrollHeight); if(Math.abs(fr.offsetHeight - h) > 2) fr.style.height = h + 'px'; }catch(e){} }
-setInterval(() => { if(S.tab==='films' && !document.hidden){ syncFilm(); fitFilm(); drawFilmNote(); } }, 1500);
+let WHK = ''; // the renders' clip/take labels follow the timeline: redraw them when its clips or their takes change
+setInterval(() => { if(S.tab==='films' && !document.hidden){ syncFilm(); fitFilm(); drawFilmNote();
+  try{ const k = JSON.stringify(FW.FILM.S.films.map(f => f.tracks.map(tr => tr.clips.map(c => [c.id, c.at, c.take, c.alts])))); if(k!==WHK){ WHK = k; drawTakes(); } }catch(e){} } }, 1500);
 // the film that new takes from the Films tab go into (its timeline), or null
 function filmTarget(){ try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n || n.v!=='film') return null; const f = F.S.films.find(x => x.id===n.film); if(!f) return null;
   const sel = F.SEL && F.clipOf(f, F.SEL); return sel ? {film:f.id, name:f.name, clip:sel.c.id} : {film:f.id, name:f.name}; }catch(e){ return null; } }
