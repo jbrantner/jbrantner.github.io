@@ -1465,8 +1465,8 @@ function lookSnap(){ const L = S.f.look; if(!L || !L.src) return null; const sig
 let LOOK_BUSY = '', LOOK_MSG = '', LOOK_STEP = '', LOOK_PROG = null; // LOOK_PROG {i, n, pid, t0}: the picture being redrawn, for the bar
 // 🪄 progress (Jordan 2026-11-10: "a loading bar or something that shows the images progress"): the whole run as one bar, from pictures done
 // plus ComfyUI's live steps of the one running (its websocket, LIVE[pid]); time left from how long the pictures so far took
-function lookProgHtml(){ const P = LOOK_PROG; if(!P) return ''; const L = (P.pid && LIVE[P.pid]) || {}, fr = L.max ? Math.min(1, L.v / L.max) : 0, done = P.i + fr, pct = Math.round(done / P.n * 100);
-  const el = (Date.now() - P.t0) / 1000, left = done > 0.15 ? Math.max(0, el / done * (P.n - done)) : 0, mm = x => x >= 90 ? Math.round(x / 60) + ' min' : Math.round(x) + ' s';
+function lookProgHtml(){ const P = LOOK_PROG; if(!P) return ''; const L = (P.pid && LIVE[P.pid]) || {}, fr = L.max ? Math.min(1, L.v / L.max) : 0, done = P.i + fr, pct = Math.round(done / P.n * 100), dn = done - (P.i0 || 0);
+  const el = (Date.now() - P.t0) / 1000, left = dn > 0.15 ? Math.max(0, el / dn * (P.n - done)) : 0, mm = x => x >= 90 ? Math.round(x / 60) + ' min' : Math.round(x) + ' s';
   return `<div class="bar" style="margin-top:6px"><i style="width:${pct}%;transition:width .4s"></i></div><div class="note" style="margin-top:3px;display:flex;justify-content:space-between"><span>${P.what ? P.what : 'Picture ' + (P.i + 1) + ' of ' + P.n}${L.max ? ' · step ' + L.v + '/' + L.max : P.pid ? ' · loading' : ' · sending'}</span><span>${pct}%${left >= 1 ? ' · about ' + mm(left) + ' left' : ''}</span></div>`; }
 const lookProgDraw = () => { const e = $('#lookProg'); if(e) e.innerHTML = lookProgHtml(); };
 function lookSay(t){ LOOK_MSG = t; const n = $('#lookNote'); if(n) n.textContent = t; }
@@ -1550,13 +1550,18 @@ async function lookFrame(){ if(FRAME_BUSY || LOOK_BUSY) return; const L = lookOf
   if(!refs.filter(r => r.n).length){ lookSay('🖼 Name someone or somewhere from 👥 Subjects in the shot first (tap their chip), so there is something to paint.'); return; }
   const {w, h} = dims(), [W, H] = ph3Size([w, h]); FRAME_BUSY = true; LOOK_PROG = {i:0, n:1, pid:'', t0:Date.now(), what:'The first frame'}; drawLook();
   try{ lookSay('🖼 Sending the pictures to ' + pcName(k.url) + '…'); const files = []; for(const r of refs) files.push(await upload(k.url, r.id)); try{ openSocket(k.url); }catch(e){}
-    const G = ph3Graph(k, files, {fresh:true, text:frameText(refs), w:W, h:H, seed:Math.floor(Math.random() * 1e9)}), pid = await queueGraph(k.url, G, false); LOOK_PROG.pid = pid; lookProgDraw();
-    const hh = await waitHist(k.url, pid, 20 * 60000, s => { lookSay('🖼 P-H3 is painting the first frame on ' + pcName(k.url) + '… ' + s + ' s'); lookProgDraw(); }), f = (((hh.outputs || {})[G.save] || {}).images || [])[0];
-    if(!f) throw new Error('ComfyUI sent no picture back'); const b = await (await fetch(viewUrl(k.url, Object.assign({type:'temp'}, f)))).blob();
-    const id = await addMedia(new File([b], 'first_frame_look.png', {type:b.type || 'image/png'}), 'img'); S.media[id].from = 'look';
-    L.frame = id; L.frameOn = true; lookSay('🖼 Done: it goes with every take as a style reference (its look, not its framing). Tap it to see it full size; ✕ takes it off.');
+    const G = ph3Graph(k, files, {fresh:true, text:frameText(refs), w:W, h:H, seed:Math.floor(Math.random() * 1e9)}), pid = await queueGraph(k.url, G, false);
+    L.fpend = {pid, url:k.url, save:G.save}; save();
   }catch(e){ lookSay("🖼 Couldn't paint the first frame: " + e.message); }
-  finally{ FRAME_BUSY = false; LOOK_PROG = null; save(); drawAll(); } }
+  FRAME_BUSY = false; LOOK_PROG = null; if(L.fpend) await frameCollect(L); else { save(); drawAll(); } }
+async function frameCollect(L){ const x = L.fpend; if(FRAME_BUSY || !x) return; const mine = () => lookOf()===L;
+  FRAME_BUSY = true; LOOK_PROG = {i:0, n:1, pid:x.pid, t0:Date.now(), what:'The reference frame'}; drawLook(); try{ openSocket(x.url); }catch(e){}
+  try{ const hh = await waitHist(x.url, x.pid, 60 * 60000, s => { if(!mine()) return; lookSay('🖼 P-H3 is painting the reference frame on ' + pcName(x.url) + '… ' + s + ' s. You can close the app: it comes in when you open it again.'); lookProgDraw(); }, true), f = (((hh.outputs || {})[x.save] || {}).images || [])[0];
+    if(!f) throw new Error('ComfyUI sent no picture back'); const b = await (await fetch(viewUrl(x.url, Object.assign({type:'temp'}, f)))).blob();
+    const id = await addMedia(new File([b], 'first_frame_look.png', {type:b.type || 'image/png'}), 'img'); S.media[id].from = 'look';
+    L.frame = id; L.frameOn = true; if(mine()) lookSay('🖼 Done: it goes with every take as a style reference (its look, not its framing). Tap it to see it full size; ✕ takes it off.');
+  }catch(e){ if(mine()) lookSay("🖼 Couldn't paint the first frame: " + e.message); }
+  finally{ delete L.fpend; FRAME_BUSY = false; LOOK_PROG = null; save(); drawAll(); } }
 const PH3_RATIOS = [['1:1', 1], ['4:3', 4/3], ['3:4', 3/4], ['3:2', 3/2], ['2:3', 2/3], ['16:9', 16/9], ['9:16', 9/16]];
 const ph3Ratio = (w, h) => PH3_RATIOS.reduce((b, x) => Math.abs(Math.log(x[1] / (w / h))) < Math.abs(Math.log(b[1] / (w / h))) ? x : b)[0];
 const ph3Size = ([w, h]) => { w = w || 768; h = h || 1024; const q = Math.sqrt(PH3_MP * 1048576 / (w * h)); return [Math.max(32, Math.round(w * q / 32) * 32), Math.max(32, Math.round(h * q / 32) * 32)]; };
@@ -1591,24 +1596,43 @@ function picFull(list, at){ let k = at || 0, one = false; const box = document.c
   draw(); document.body.appendChild(box); }
 // the picture's real size (a picture without its size noted would otherwise be redrawn at a guessed 3:4 and come back cut)
 async function picDims(id){ const m = S.media[id] || {}; if(m.w && m.h) return [m.w, m.h]; try{ const im = await imgOf(await blobOf(id)); m.w = im.naturalWidth; m.h = im.naturalHeight; return [m.w, m.h]; }catch(e){ return [768, 1024]; } }
-async function waitHist(url, pid, ms, tick){ const t0 = Date.now();
-  while(Date.now() - t0 < ms){ await new Promise(r => setTimeout(r, 1500)); if(tick) tick(Math.round((Date.now() - t0) / 1000)); let h = null;
-    try{ h = (await getJ(url + '/history/' + pid))[pid]; }catch(e){}
+async function waitHist(url, pid, ms, tick, lost){ const t0 = Date.now(); let n = 0;
+  while(Date.now() - t0 < ms){ await new Promise(r => setTimeout(r, 1500)); if(tick) tick(Math.round((Date.now() - t0) / 1000)); let h = null, seen = false;
+    try{ h = (await getJ(url + '/history/' + pid))[pid]; seen = true; }catch(e){}
+    // lost: every so often, a job that is neither done nor in the PC's line any more is gone (ComfyUI restarted while the app was closed)
+    if(lost && seen && !h && ++n % 8===0){ try{ const q = await getJ(url + '/queue'), inQ = [...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x && x[1]===pid);
+      if(!inQ){ h = (await getJ(url + '/history/' + pid))[pid]; if(!h) throw new Error(pcName(url) + "'s ComfyUI no longer has it (restarted?)"); } }catch(e){ if(/no longer has it/.test(e.message)) throw e; } }
     if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); throw new Error(e ? e[1].exception_message : 'ComfyUI hit an error'); }
     if(h && h.status && h.status.completed) return h; }
   throw new Error('it took too long'); }
-async function lookRedo(){ if(LOOK_BUSY) return; const L = lookOf(), sig = lookSig(L); if(!sig) return; const k = lookKit(L); if(k.why){ lookSay(k.why); return; } const eng = k.eng==='ph3' ? 'P-H3' : 'Qwen';
+// 📴 safe to close (Jordan 2026-11-11: "am I able to close the app while that runs?"): every picture is put in the PC's line at once and
+// noted in the film's look (L.pend), so the PC does them all with the app closed; opening the app again picks up the finished ones
+async function lookRedo(){ if(LOOK_BUSY) return; const L = lookOf(), sig = lookSig(L); if(!sig) return; const k = lookKit(L); if(k.why){ lookSay(k.why); return; }
   const all = lookOthers(L).flatMap(c => castPics(c).slice(0, 3).map(id => ({c, id}))), fresh = all.filter(x => !lookHas(L, x.id, sig)), jobs = fresh.length ? fresh : all; if(!jobs.length) return;
-  LOOK_BUSY = sig; LOOK_STEP = '1 of ' + jobs.length; LOOK_PROG = {i:0, n:jobs.length, pid:'', t0:Date.now()}; let ok = 0; drawLook();
+  L.pend = (L.pend || []).filter(x => x.sig===sig); const n0 = L.pend.length;
+  LOOK_BUSY = sig; LOOK_STEP = ''; LOOK_PROG = {i:0, n:n0 + jobs.length, pid:'', t0:Date.now()}; drawLook();
   try{ lookSay('🪄 Sending the look to ' + pcName(k.url) + '…'); const sf = []; for(const id of lookSrcPics(L)) sf.push(await upload(k.url, id));
-    for(const [i, x] of jobs.entries()){ const nm = castName(x.c), say = s => lookSay('🪄 ' + eng + ' is redrawing ' + nm + ' (' + (i + 1) + ' of ' + jobs.length + ') on ' + pcName(k.url) + '…' + (s ? ' ' + s + ' s' : '')) || lookProgDraw();
-      LOOK_STEP = (i + 1) + ' of ' + jobs.length; LOOK_PROG.i = i; LOOK_PROG.pid = ''; drawLook(); say(0); try{ openSocket(k.url); }catch(e){} const file = await upload(k.url, x.id), seed = Math.floor(Math.random() * 1e9), G = k.eng==='ph3' ? ph3LookGraph(k, file, sf, x.c.kind || 'char', seed, ...ph3Size(await picDims(x.id))) : lookGraph(k, file, sf, x.c.kind || 'char', seed), pid = await queueGraph(k.url, G, false); LOOK_PROG.pid = pid; lookProgDraw();
-      const h = await waitHist(k.url, pid, 15 * 60000, say), f = (((h.outputs || {})[G.save] || {}).images || [])[0]; if(!f) throw new Error('ComfyUI sent no picture back');
-      const b = await (await fetch(viewUrl(k.url, Object.assign({type:'temp'}, f)))).blob(), id = await addMedia(new File([b], 'look_' + nm.replace(/\W+/g, '_') + '.png', {type:b.type || 'image/png'}), 'img');
-      S.media[id].from = 'look'; L.redo[x.id] = {id, sig, eng:k.eng}; ok++; save(); drawLook(); }
-    L.use = true; lookSay('🪄 Done: ' + ok + ' redrawn with ' + eng + (k.fell ? ' (P-H3 not ready: ' + k.fell + ')' : '') + '. They go with every take in this film while "Use the redrawn pictures" is on.');
-  }catch(e){ lookSay("🪄 Couldn't redraw " + (ok ? 'the rest' : 'them') + ': ' + e.message); }
-  finally{ LOOK_BUSY = ''; LOOK_STEP = ''; LOOK_PROG = null; save(); drawLook(); try{ h3Peek(); }catch(e){} } }
+    for(const [i, x] of jobs.entries()){ const nm = castName(x.c); lookSay('🪄 Sending ' + nm + ' (' + (i + 1) + ' of ' + jobs.length + ') to ' + pcName(k.url) + '…');
+      const file = await upload(k.url, x.id), seed = Math.floor(Math.random() * 1e9), G = k.eng==='ph3' ? ph3LookGraph(k, file, sf, x.c.kind || 'char', seed, ...ph3Size(await picDims(x.id))) : lookGraph(k, file, sf, x.c.kind || 'char', seed), pid = await queueGraph(k.url, G, false);
+      L.pend.push({pid, url:k.url, orig:x.id, sig, eng:k.eng, nm, save:G.save, fell:k.fell || ''}); L.pendN = L.pend.length; save(); }
+  }catch(e){ lookSay("🪄 Couldn't send " + (L.pend.length > n0 ? 'the rest' : 'them') + ': ' + e.message); }
+  LOOK_BUSY = ''; LOOK_PROG = null; if(L.pend.length) await lookCollect(L); else { delete L.pend; delete L.pendN; save(); drawLook(); } }
+async function lookCollect(L){ const P = L.pend; if(LOOK_BUSY || !P || !P.length) return; const N = Math.max(L.pendN || 0, P.length), mine = () => lookOf()===L;
+  LOOK_BUSY = P[0].sig; LOOK_PROG = {i:N - P.length, i0:N - P.length, n:N, pid:'', t0:Date.now()}; let ok = 0, err = '', eng = '', fell = ''; drawLook();
+  try{ while(P.length){ const x = P[0], i = N - P.length; eng = x.eng==='ph3' ? 'P-H3' : 'Qwen'; fell = x.fell || fell;
+      const say = s => { if(!mine()) return; lookSay('🪄 ' + eng + ' is redrawing ' + x.nm + ' (' + (i + 1) + ' of ' + N + ') on ' + pcName(x.url) + '…' + (s ? ' ' + s + ' s.' : '') + ' You can close the app: ' + pcName(x.url) + ' carries on and the pictures come in when you open it again.'); lookProgDraw(); };
+      LOOK_STEP = (i + 1) + ' of ' + N; LOOK_PROG.i = i; LOOK_PROG.pid = x.pid; drawLook(); say(0); try{ openSocket(x.url); }catch(e){}
+      try{ const h = await waitHist(x.url, x.pid, 60 * 60000, say, true), f = (((h.outputs || {})[x.save] || {}).images || [])[0]; if(!f) throw new Error('ComfyUI sent no picture back');
+        const b = await (await fetch(viewUrl(x.url, Object.assign({type:'temp'}, f)))).blob(), id = await addMedia(new File([b], 'look_' + x.nm.replace(/\W+/g, '_') + '.png', {type:b.type || 'image/png'}), 'img');
+        S.media[id].from = 'look'; L.redo[x.orig] = {id, sig:x.sig, eng:x.eng}; ok++; }
+      catch(e){ err = x.nm + ': ' + e.message; }
+      P.shift(); save(); drawLook(); }
+    if(ok) L.use = true;
+    if(mine()) lookSay(ok ? '🪄 Done: ' + ok + ' redrawn with ' + eng + (fell ? ' (P-H3 not ready: ' + fell + ')' : '') + '. They go with every take in this film while "Use the redrawn pictures" is on.' + (err ? " One didn't come back (" + err + ')' : '') : "🪄 Couldn't redraw them: " + err);
+  }finally{ if(!P.length){ delete L.pend; delete L.pendN; } LOOK_BUSY = ''; LOOK_STEP = ''; LOOK_PROG = null; save(); drawLook(); try{ h3Peek(); }catch(e){} } }
+// on opening: pick up what the PCs finished while the app was closed, in every film (the open one first)
+async function lookResume(){ for(const f of [S.f, ...Object.values(S.forms || {})]){ const L = f && f.look; if(!L) continue;
+    if(L.fpend) await frameCollect(L); if(L.pend && L.pend.length) await lookCollect(L); } }
 function h3Style(s, base){ s = (s || '').trim().replace(/[\s.]*$/, '') || 'Live-action, cinematic';
   if(base) return s; // inside [Shot 1] for the base format: "[Shot 1] Live-action, cinematic. …"
   return s.split(/\s+/).length > 8 || /\b(target video|style)\b/i.test(s) ? s + '.' : 'The target video is in a ' + s.replace(/^./, c => c.toLowerCase()) + ' style.'; }
@@ -3393,6 +3417,7 @@ $('#setBtn').onclick = () => {
 for(const p of S.pcs){ try{ const oi = JSON.parse(localStorage.getItem('h3oi:' + p.url) || 'null'); if(oi) pcOf(p.url).oi = oi; }catch(e){} }
 $('#prompt').value = S.f.prompt; $('#lenNum').value = S.f.seconds; $('#len').value = Math.min(60, S.f.seconds);
 drawAll();
+setTimeout(() => { lookResume().catch(() => {}); }, 1500); // 📴 redraws the PC finished while the app was closed
 // 🦴 clips Mocap left for us on a PC (its ComfyUI input + a note in its user files): fetched once, kept on the phone, put in Motion guide
 const INBOX_FILE = '/userdata/' + 'h3deck_inbox.json';
 async function pullInbox(){ const list = [], looked = [];
@@ -3821,6 +3846,6 @@ window.H3 = {ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, p
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
-    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, picFull, lookFrame, frameRefs, frameText, LIVE_:() => LIVE, lookProgHtml, lookGraph, ph3Kit, lookKit, lookRedo, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, picFull, lookFrame, frameRefs, frameText, LIVE_:() => LIVE, lookProgHtml, lookGraph, ph3Kit, lookKit, lookRedo, lookCollect, lookResume, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>

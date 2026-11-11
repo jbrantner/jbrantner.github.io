@@ -31,7 +31,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
-    if(p==='/queue') return J({queue_running:[], queue_pending:[]});
+    if(p==='/queue') return J({queue_running:[], queue_pending:HOLD ? SENT.map((g, i) => [i, 'pid' + (i + 1)]) : []});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p==='/upload/image') return J({name:'up' + (++UP) + '.png', subfolder:'h3deck', type:'input'});
     if(p==='/prompt'){ SENT.push(JSON.parse(rt.request().postData()).prompt); return J({prompt_id:'pid' + SENT.length}); }
@@ -39,7 +39,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     if(p.startsWith('/history/')){ const i = +p.replace(/\D/g, '') - 1, G = SENT[i], save = Object.keys(G).find(k => G[k].class_type==='PreviewImage'); return J({['pid' + (i + 1)]:{status:{status_str:'success', completed:true, messages:[]}, outputs:{[save]:{images:[{filename:'q' + i + '.png', subfolder:'', type:'temp'}]}}}}); }
     if(p==='/view') return rt.fulfill({status:200, contentType:'image/png', headers:{'Access-Control-Allow-Origin':'*'}, body:Buffer.from(OUT, 'base64')});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
-  await page.addInitScript(r => { localStorage.clear(); window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
+  await page.addInitScript(r => { if(!sessionStorage.t){ sessionStorage.t = '1'; localStorage.clear(); } window.H3_FULL = true; window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await page.goto('http://127.0.0.1:8024/index.html');
   await page.waitForFunction(() => H3.families().length > 0 && H3.PC['http://render.test'] && H3.PC['http://render.test'].oi && H3.PC['http://render.test'].oi.TextEncodeQwenImageEditPlus, null, {timeout:20000});
   const REF = await page.evaluate(() => H3.families().map(f => f.key).find(k => /hybrid/.test(k)));
@@ -161,6 +161,21 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
   await page.click('[data-lk="eng:"]');
   if(process.env.SHOT) await page.locator('#lookBox').screenshot({path:process.env.SHOT});
+  // 📴 close the app mid-redraw: every picture is already in the PC's line; reopening picks them up
+  HOLD = true; SENT = []; await page.click('[data-lk="redo"]');
+  await page.waitForFunction(() => (H3.lookOf().pend || []).length===3, null, {timeout:15000});
+  const NOTE = await page.evaluate(() => document.querySelector('#lookNote').textContent);
+  ok(SENT.length===3 && /You can close the app/.test(NOTE), 'all three are in the PC\'s line before the first comes back, and it says you can close: ' + NOTE);
+  await page.waitForTimeout(600); await page.reload();
+  await page.waitForFunction(() => window.H3 && H3.lookOf, null, {timeout:20000});
+  ok(await page.evaluate(() => (H3.lookOf().pend || []).length===3), 'reopened: the three are still noted as on their way');
+  HOLD = false;
+  await page.waitForFunction(() => !H3.lookOf().pend && /Done/.test((document.querySelector('#lookNote') || {}).textContent || ''), null, {timeout:30000});
+  ok(await page.evaluate(() => { const L = H3.lookOf(), sig = H3.lookSig ? H3.lookSig(L) : null; return Object.values(L.redo).filter(r => H3.S.media[r.id] && /q[012]\.png|look_/.test(H3.S.media[r.id].name || 'look_')).length >= 3; }), 'and the finished pictures came in after reopening');
+  // a job the PC lost (ComfyUI restarted) is given up, not waited on forever
+  HOLD = true; await page.evaluate(() => { H3.lookOf().pend = [{pid:'gone', url:'http://render.test', orig:Object.keys(H3.lookOf().redo)[0], sig:'x', eng:'qwen', nm:'Ben', save:'1'}]; H3.lookOf().pendN = 1; });
+  await page.evaluate(() => H3.lookCollect(H3.lookOf())); HOLD = false;
+  ok(await page.evaluate(() => !H3.lookOf().pend && /no longer has it/.test(document.querySelector('#lookNote').textContent)), 'a lost job: says ComfyUI no longer has it');
   // no Qwen on the PC
   await page.evaluate(() => { const oi = H3.PC['http://render.test'].oi; window.SAVE = oi.TextEncodeQwenImageEditPlus; delete oi.TextEncodeQwenImageEditPlus; });
   ok(await page.evaluate(() => /TextEncodeQwenImageEditPlus/.test(H3.qwenKit().why || '')), 'missing node: says which');
