@@ -86,7 +86,9 @@ Under the style chips: pick a film character's look (`<Name>'s look`) or add one
 In 🎞 Films (tools row, or a track's menu). Runs in three steps and remembers where it is with the film (`f.upRun`), so the app can be closed:
 1. ✨ High quality on every finished clip of the track, with Prism Pika (vanilla MiniMax if no PC has it), each clip its own pass, one shared strength.
 2. It stops. Do 🎭 Faces on any clip you want, then tap 🧵 Blend the seams (or "Done, no seams").
-3. Clips that touch are joined (only for this: `combo.seam`) and each join gets the 🧵 bridge redo (24 frames pinned on each side, 8 at the join repainted), one after another on Prism Pika at the ✨ size. The bridged video goes back into the same clips, each at its own stretch; the old takes stay in the clips' versions. The phone sends each next seam, so keep the app open for this step.
+3. Clips that touch get their seams bridged in ONE ComfyUI job (`seamGraph`, `combo.seam.one`): the clips are joined in the graph, then each join gets the 🧵 bridge redo (24 frames pinned on each side, 8 at the join repainted) from the frames the seam before left, on Prism Pika at the ✨ size, loaders shared so the model loads once. The app can be closed. The bridged video goes back into the same clips, each at its own stretch; the old takes stay in the clips' versions.
+
+✨ passes only run on a PC that has the Open-H3 regenerate LoRA: one sent elsewhere moves over, and a PC that doesn't see the video yet waits (up to 15 min) for Dropbox. A ✨ take's card names the model the pass runs on.
 
 🫧 Every 🎭 mask pass (Faces, and ✏️ Edit's parts) now ends with one very light (0.35) vanilla MiniMax pass over its window, with everyone's pictures, so the mask edges blend into the frame (`up.blend`, on unless set false; `BLEND_DEN`).
 
