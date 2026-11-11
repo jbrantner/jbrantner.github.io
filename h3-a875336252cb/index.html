@@ -487,6 +487,7 @@ function syncFilm(){ const k = filmKeyNow(); if(k==null) return false;
   S.forms[S.fkey] = S.f; S.casts[S.fkey] = S.cast;
   S.f = S.forms[k] || freshForm(S.f); S.cast = S.casts[k] || seedCast(k);
   delete S.forms[k]; delete S.casts[k]; S.fkey = k; FILMT = null; FILMTID = null;
+  S.ck = null; S.ckUndo = null; S.ckDraft = ''; try{ drawCk(); }catch(e){} // 💬 the checker's chat belonged to the other film (Jordan 2026-11-11: it answered about the film open before)
   $('#prompt').value = S.f.prompt || ''; $('#lenNum').value = S.f.seconds; $('#len').value = Math.min(60, S.f.seconds); // these boxes are only filled at start (the old prompt stayed in the box)
   save(); drawAll(); drawTakes(); return true; }
 window.H3FilmNav = () => syncFilm();
@@ -2713,6 +2714,9 @@ function ckJoin(lead, shot){ if(!lead || !String(shot || '').trim()) return shot
   // whatever it wrote for the first second (a copy of the lead-in or its own version) is dropped: the lead-in stays as written
   shot = shot.replace(/^\s*\[\s*0\s*s?\s*-\s*1\s*s?\s*\][^\[]*/, '').trim(); return lead.replace(/\s*$/, '\n') + shot; }
 async function checkPrompt(note, first){
+  // 💬 a change request carries on the chat only while it is about the shot in the box now (same film, same words); otherwise it starts a
+  // fresh check of the current shot with the request as its notes (Jordan 2026-11-11: it suggested changes to the previous film's prompt)
+  if(note && S.ck && S.ck.msgs && ((S.ck.film || '')!==(S.fkey || '') || (S.f.prompt || '').trim()!==S.ck.orig)){ first = note; note = null; S.ck = null; S.ckUndo = null; }
   const f = S.f, prev = note && S.ck && S.ck.msgs ? S.ck : null, shot = prev ? prev.orig : (f.prompt || '').trim(), btn = $('#ckBtn'), out = $('#ckOut'); if(!shot) return toast('Write the shot first');
   if(S.ckWait) return; let n = await ckBusy();
   if(n){ const id = S.ckWait = Date.now(); btn.disabled = true; btn.textContent = '⏳ Waiting for Render to finish…';
@@ -2732,7 +2736,7 @@ async function checkPrompt(note, first){
     const r = await getJ(ckUrl() + '/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:S.llmModel || CK.model, stream:false, think:false, format:'json', keep_alive:'30m',
       options:{temperature:0.3, num_ctx:12288}, messages})}, 240000);
     const raw = r.message && r.message.content, A = ckParse(raw); A.shot = ckJoin(L.lead, ckBack(A.shot, N)); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
-    S.ck = Object.assign(A, {kind, orig:shot, N, lead:L.lead, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note || first ? [note || first] : [])}); drawCk();
+    S.ck = Object.assign(A, {kind, orig:shot, film:S.fkey || '', N, lead:L.lead, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note || first ? [note || first] : [])}); drawCk();
   }catch(e){ const busy = e.message==='503'; if(prev){ S.ck = Object.assign({}, prev, {chatErr:busy ? 'Render just started a render, so the checker stepped aside. Send again when it finishes.' : /abort/i.test(e.name + e.message) ? 'That took too long. Try again.' : /no answer|JSON/i.test(e.message) ? 'It answered but not in a form I can read. Try again.' : "Couldn't reach the checker on Render (" + e.message + ')'}); drawCk(); return; }
     S.ck = {err:busy ? 'Render just started a render, so the checker stepped aside. Check again when it finishes.' : /abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
   finally{ btn.disabled = false; btn.textContent = '🔎 Check prompt'; } }
