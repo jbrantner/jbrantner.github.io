@@ -329,7 +329,7 @@ function openMoney(mode, opt = {}) {
   const T = { add: 'Add money', move: 'Move money', spend: opt.debt ? 'Make a payment' : 'Spend', bank: 'Bank check' }[mode];
   $('mvTitle').textContent = T; $('mvGo').textContent = { add: 'Add', move: 'Move', spend: opt.debt ? 'Pay' : 'Spend', bank: 'Check' }[mode];
   $('mvSays').textContent = mode === 'add' ? 'Money that just landed in your bank: a paycheck, a gift, money back. It goes where you pick.'
-    : mode === 'bank' ? 'What does your bank app say right now? The difference lands in (or comes out of) Free money.'
+    : mode === 'bank' ? 'What does your bank app say right now? The app changes to match it. Extra goes into Free money; money that left comes out of Free money first.'
     : mode === 'spend' ? (opt.debt ? `A payment toward ${nameOf(opt.debt)}, on top of the bill. It comes out of the place you pick and lowers what you owe.` : 'Money that left your bank. It comes out of the place you pick.') : '';
   $('mvFromF').classList.toggle('hidden', mode === 'add' || mode === 'bank');
   $('mvToF').classList.toggle('hidden', mode === 'spend' || mode === 'bank');
@@ -343,6 +343,13 @@ function openMoney(mode, opt = {}) {
   $('mvAmt').placeholder = mode === 'bank' ? 'Bank balance' : '0.00';
   showAsk('moveBox'); mvSync();
   setTimeout(() => { try { $('mvAmt').focus(); $('mvAmt').select(); } catch (e) {} }, 60);
+}
+// v2: a bank check always makes the app match the bank. Money the bank no longer has comes out of Free money first,
+// then pots and projects (biggest first), then money saved in debts, and Bills last. It can never take more than the app holds.
+function bankTake(c) {
+  const pots = state.pots.filter(p => p.bal > 0), order = ['free', ...pots.filter(p => !p.debt).sort((a, b) => b.bal - a.bal).map(p => p.id), ...pots.filter(p => p.debt).sort((a, b) => b.bal - a.bal).map(p => p.id), 'bills'];
+  const out = []; for (const id of order) { if (c <= 0) break; const x = Math.min(c, balOf(id)); if (x > 0) { out.push([id, x]); c -= x; } }
+  return out;
 }
 const mvMax = () => mv.mode === 'add' || mv.mode === 'bank' ? Infinity : balOf($('mvFrom').value);
 function mvSync(fromSlider) {
@@ -362,10 +369,7 @@ function mvSync(fromSlider) {
     ok = b != null && d !== 0;
     pv = b == null ? '' : d === 0 ? '<div class="ok">Matches ✓ Nothing to change</div>'
       : d > 0 ? `<div>Your bank has <b>${m(d)}</b> more than the app. It goes into Free money.</div>`
-      : -d <= state.free ? `<div>Your bank has <b>${m(-d)}</b> less than the app. It comes out of Free money.</div>`
-      : state.free === 0 ? `<div>Your bank has <b>${m(-d)}</b> less than the app, and Free money is empty. Use Spend from it on the pot (or Bills) it came out of.</div>`
-      : `<div>Your bank has <b>${m(-d)}</b> less than the app. ${m(state.free)} comes out of Free money; the other ${m(-d - state.free)} needs Spend from it on the pot (or Bills) it came out of.</div>`;
-    if (b != null && d < 0 && -d > state.free && state.free === 0) ok = false;
+      : `<div>Your bank has <b>${m(-d)}</b> less than the app. It comes out of:</div>` + bankTake(-d).map(([id, x]) => row(id, balOf(id), balOf(id) - x)).join('');
   }
   $('mvPreview').innerHTML = pv; $('mvGo').disabled = !ok;
 }
@@ -380,7 +384,8 @@ function mvGo() {
     const raw = $('mvAmt').value.trim(); if (raw === '') return;
     const d = Math.round(Math.max(0, parseFloat(raw) || 0) * 100) - total();
     if (d > 0) { state.free += d; logIt('fix', d, null, 'free', 'Bank check'); toast(`${m(d)} added to Free money`); }
-    else if (d < 0) { const x = Math.min(-d, state.free); state.free -= x; logIt('fix', x, 'free', null, 'Bank check'); toast(x < -d ? `${m(x)} taken from Free money. ${m(-d - x)} still to take from a pot` : `${m(x)} taken from Free money`); }
+    else if (d < 0) { const parts = bankTake(-d); parts.forEach(([id, x]) => { setBal(id, balOf(id) - x); logIt('fix', x, id, null, 'Bank check'); });
+      toast(parts.length > 1 ? `${m(-d)} taken out: ${parts.map(([id, x]) => `${m(x)} from ${nameOf(id)}`).join(', ')}` : `${m(-d)} taken from ${nameOf(parts[0][0])}`); }
   }
   save(); hideAsk(); render();
 }
