@@ -88,6 +88,8 @@ In 🎞 Films (tools row, or a track's menu). Runs in three steps and remembers 
 2. It stops. Do 🎭 Faces on any clip you want, then tap 🧵 Blend the seams (or "Done, no seams").
 3. Clips that touch get their seams bridged in ONE ComfyUI job (`seamGraph`, `combo.seam.one`): the clips are joined in the graph, then each join gets the 🧵 bridge redo (24 frames pinned on each side, 8 at the join repainted) from the frames the seam before left, on Prism Pika at the ✨ size, loaders shared so the model loads once. The app can be closed. The bridged video goes back into the same clips, each at its own stretch; the old takes stay in the clips' versions.
 
+🔗 ✨ with context (2026-11-11): in ⬆ Upscale track, a clip that carries on from the one before it (➕ carry-on, ⏪ lead-in, or the next stretch of the same take; touching, same size) carries on from that clip's ✨ result through H3 Motion Context: each pass saves its latent (`up.chain` {dir, idx, prev}, SaveLatent clip_index idx+1), the next one loads it (LoadLatent clip_index idx) and is queued right after it on the same PC. Each chained window is exactly its clip's frames, with frames in front (room for the context, then the clip's first frame held) that are cut off after. A cut starts a new chain.
+
 ✨ passes only run on a PC that has the Open-H3 regenerate LoRA: one sent elsewhere moves over, and a PC that doesn't see the video yet waits (up to 15 min) for Dropbox. A ✨ take's card names the model the pass runs on.
 
 🫧 Every 🎭 mask pass (Faces, and ✏️ Edit's parts) now ends with one very light (0.35) vanilla MiniMax pass over its window, with everyone's pictures, so the mask edges blend into the frame (`up.blend`, on unless set false; `BLEND_DEN`).
