@@ -105,3 +105,6 @@ In 🎞 Films (tools row, or a track's menu). Runs in three steps and remembers 
 🪄 Smooth first (a checkbox in the sheet, remembered in `S.upSm`) puts a smoothing step before ✨. `H3SmoothClip` smooths each clip's stretch of its take the way 🪄 Smooth does: every 4th frame is pinned, MiniMax paints the frames between, and the sound is pinned. It uses the take's model, LoRAs, pictures and words, and reads the video straight from the PC's output (`sm.file`), so it runs with the app closed. `R.state='smooth'` waits for every smoothing. If one fails nothing changes; when all are done, `upHqSend` runs ✨ on the smoothed takes. Long clips are smoothed in windows that fit 8 GB, with no seam bridge (`sm.bridge:false`); the ✨ pass after them redraws the whole clip anyway.
 
 Test: `CLIP=<a ~5 s video with sound> NODE_PATH=$(npm root -g) node tests/t_uptrack.js`.
+
+## 🧹 Start fresh (2026-11-11)
+⚙ › 🧹 Start fresh… takes every render off the list on this phone and in the PCs' copies (h3deck_takes.json / h3deck_films.json), clears ↶ Undo, and optionally the films (on by default) and the 📚 Library (off by default). Older copies on a PC that was off are ignored (S.fresh). The video files themselves are not deleted by this. Test: tests/t_fresh.js.

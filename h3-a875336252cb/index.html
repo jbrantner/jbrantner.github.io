@@ -524,12 +524,12 @@ async function pullTakes(){
   let best = null;
   for(const p of S.pcs){ if(!pcOf(p.url).online) continue; try{ const r = await fetch(p.url + '/userdata/h3deck_takes.json', {cache:'no-store'}); if(!r.ok) continue; const j = await r.json(); if(j && Array.isArray(j.takes) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
   if(!best) return 0;
-  const have = new Set(S.takes.map(t => t.id)), add = best.takes.filter(t => t && t.id && !have.has(t.id));
+  const have = new Set(S.takes.map(t => t.id)), add = best.takes.filter(t => t && t.id && !have.has(t.id) && (t.t || 0) > (S.fresh || 0));
   if(!add.length) return 0;
   S.takes = S.takes.concat(add).sort((a, b) => (b.t || 0) - (a.t || 0)); save(); drawTakes(); tickSoon(300);
   toast(add.length + (add.length > 1 ? ' renders' : ' render') + ' brought back from the PCs'); return add.length; }
 async function pushTakes(){
-  const body = JSON.stringify({v:1, t:S.tsav || Date.now(), pcs:S.pcs, takes:S.takes});
+  const body = JSON.stringify({v:1, t:S.tsav || Date.now(), fresh:S.fresh || 0, pcs:S.pcs, takes:S.takes});
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url]===body) continue;
     try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} }  pushFilms(); }
 // ---------- 🛟 films and Library kept safe on the PCs (Jordan 2026-11-11: her films and Library were gone, the renders were there) ----------
@@ -543,10 +543,10 @@ let RESCUED = false; // nothing is pushed until the app has looked for a copy (a
 function filmsNow(){ try{ const F = FW && FW.FILM; if(F && F.S && F.S.films) return {E:F.S, live:true}; }catch(e){}
   let E = {}; try{ E = JSON.parse(localStorage.getItem('h3edit') || '{}') || {}; }catch(e){} E.films = E.films || []; return {E, live:false}; }
 function backupBody(){ const {E} = filmsNow(), films = JSON.parse(JSON.stringify(E.films || [], (k, v) => k==='exp' || k==='prev' ? undefined : v));
-  if(!films.length && !(S.lib || []).length) return null;
+  if(!films.length && !(S.lib || []).length && !S.fresh) return null; // 🧹 after Start fresh an empty copy is meant (an emptied phone has no S.fresh)
   const keep = {lib:S.lib || [], forms:S.forms || {}, casts:S.casts || {}, cast:S.cast || [], fkey:S.fkey, films}, txt = JSON.stringify(keep), media = {}, up = {};
   for(const id of Object.keys(S.media || {})) if(txt.includes('"' + id + '"')){ media[id] = S.media[id]; Object.keys(S.up || {}).forEach(k => { if(k.startsWith(id + '|')) up[k] = S.up[k]; }); }
-  return JSON.stringify(Object.assign({v:1, t:Date.now(), media, up}, keep)); }
+  return JSON.stringify(Object.assign({v:1, t:Date.now(), fresh:S.fresh || 0, media, up}, keep)); }
 async function pushFilms(){ if(!RESCUED) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url + '|films']===sig) continue;
     try{ const r = await fetch(p.url + FILMS_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url + '|films'] = sig; }catch(e){} } }
@@ -582,7 +582,7 @@ async function rescue(){ try{
   await pullTakes().catch(() => 0);
   let best = null;
   for(const p of S.pcs){ if(!pcOf(p.url).online) continue; try{ const r = await fetch(p.url + '/userdata/h3deck_films.json', {cache:'no-store'}); if(!r.ok) continue; const j = await r.json();
-    if(j && (Array.isArray(j.films) || Array.isArray(j.lib)) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
+    if(j && (Array.isArray(j.films) || Array.isArray(j.lib)) && (j.t || 0) > (S.fresh || 0) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
   const {E} = filmsNow(), noFilms = !(E.films || []).length, noLib = !(S.lib || []).length, said = [];
   if(best && (noFilms || noLib)){
     if(noFilms && (best.films || []).length){ putFilms(best.films); said.push(best.films.length + (best.films.length===1 ? ' film' : ' films')); }
@@ -3485,7 +3485,9 @@ $('#setBtn').onclick = () => {
       <div class="why">${q.online ? (why ? '⚠ ' + esc(why) + ' (for the shot in the form).' : '✓ Can take the shot in the form.') + (mc ? ' Has H3 Motion Context.' : ' No H3 Motion Context, so only clips up to the longest piece.') + (st ? ' VRAM free ' + (st.vram_free / 2 ** 30).toFixed(1) + ' of ' + (st.vram_total / 2 ** 30).toFixed(1) + ' GB.' : '') + (q.load ? ' ' + q.load + ' in its queue.' : '') : "Can't be reached: is ComfyUI on there, and Tailscale on this phone?"}</div></div>`; }).join('')
     + `<div class="note">Both PCs run ComfyUI with --enable-cors-header "*". A long clip's pieces all run on one PC (each needs the one before it), so with Both picked, takes go to whichever PC frees up first (Main counts as 1.26× slower).</div>
     <div class="row" style="flex-wrap:nowrap"><label style="flex:1">Memory budget for references (tokens)</label><input type="number" id="budget" value="${esc(S.f.budget || 45000)}" style="width:110px" inputmode="numeric"></div>
-    <button class="btn" id="pcSave" style="padding:12px">Save and reconnect</button>`);
+    <button class="btn" id="pcSave" style="padding:12px">Save and reconnect</button>
+    <button class="btn" id="freshBtn" style="padding:12px;margin-top:10px">🧹 Start fresh…</button>`);
+  $('#freshBtn').onclick = freshSheet;
   $('#sheetCard').onclick = ev => { if(ev.target.closest('#bareSw')){ S.bare = S.bare===false; $('#bareSw').classList.toggle('on', S.bare===false); save(); drawAll();
       try{ const fr = $('#filmTab iframe'); if(fr && fr.contentWindow.draw) fr.contentWindow.draw(); }catch(e){} return; }
     const t = ev.target.closest('[data-pcon]'); if(t){ const p = S.pcs[+t.dataset.pcon]; p.on = !p.on; t.classList.toggle('on', p.on); save(); drawAll(); } };
@@ -3493,6 +3495,31 @@ $('#setBtn').onclick = () => {
     S.f.budget = +$('#budget').value || 45000; save(); closeSheet(); Object.keys(PC).forEach(k => delete PC[k]); pingAll().then(drawAll); };
 };
 
+// ---------- 🧹 Start fresh (Jordan 2026-11-11: "clear my renders and everything ... I want to start over") ----------
+// Empties the renders list on this phone and the PCs' copies of it, so they don't come back on their own. Films and the
+// 📚 Library are optional. The video files themselves are deleted on the PCs separately (Claude did that for her).
+// S.fresh: copies on the PCs older than this are ignored, so a PC that was off at the time can't bring the old list back.
+function freshSheet(){ const n = S.takes.length; let films = 0; try{ films = (filmsNow().E.films || []).length; }catch(e){}
+  openSheet(`<h3>🧹 Start fresh <button class="btn" data-close>✕</button></h3>
+    <div class="note">Takes all ${n} render${n===1 ? '' : 's'} off the list, here and in the copy on each PC, and clears ↶ Undo. Anything still rendering finishes on its PC but won't show up.</div>
+    <div class="sw on" id="frFilms" style="margin-top:10px"><div><div class="t">🎞 Films too (${films})</div><div class="d">Their timelines, prompt blocks and each film's own form and cast</div></div><div class="tog"></div></div>
+    <div class="sw" id="frLib" style="margin-top:8px"><div><div class="t">📚 Library too (${(S.lib || []).length})</div><div class="d">Characters, objects, places, clothing, attributes and poses</div></div><div class="tog"></div></div>
+    <button class="btn" id="frGo" style="padding:12px;margin-top:12px;border-color:#ff5ca8;color:#ff5ca8">Delete them from H3 Deck</button>`);
+  $('#sheetCard').onclick = ev => { const sw = ev.target.closest('#frFilms,#frLib'); if(sw) sw.classList.toggle('on'); };
+  $('#frGo').onclick = () => { const f = $('#frFilms').classList.contains('on'), l = $('#frLib').classList.contains('on');
+    if(!confirm('Start fresh? This takes the renders' + (f ? ', the films' : '') + (l ? ', the Library' : '') + ' off H3 Deck for good.')) return;
+    startFresh({films:f, lib:l}); closeSheet(); toast('🧹 Fresh start: ' + ['renders', f && 'films', l && 'Library'].filter(Boolean).join(', ') + ' cleared', 5000); }; }
+function startFresh(o){ o = o || {};
+  S.fresh = Date.now(); S.takes = []; S.inbox = []; S.filmsRebuilt = true;
+  if(o.films){ S.forms = {}; S.casts = {}; S.fkey = ''; S.castOld = [];
+    const {E, live} = filmsNow(); E.films = []; E.keep = {}; E.nav = {v:'home'};
+    if(live){ try{ const F = FW.FILM; F.S.keep = {}; F.S.nav = {v:'home'}; F.SEL = null; F.setFilms('[]', []); }catch(e){} }
+    else { try{ localStorage.setItem('h3edit', JSON.stringify(E)); }catch(e){} } }
+  if(o.lib){ S.lib = []; S.cast = []; S.casts = {}; S.castOld = []; }
+  UNDOS = []; REDOS = []; UNDO_BANK = {}; UNDO_CUR = null;
+  tidyMedia(true); pushed = {}; RESCUED = true; save(); drawAll(); try{ drawLib(); }catch(e){} drawTakes(); undoRebase(); undoBtns();
+  clearTimeout(pushT); setTimeout(() => pushTakes(), 300); }
+window.H3Fresh = startFresh;
 // ---------- start ----------
 for(const p of S.pcs){ try{ const oi = JSON.parse(localStorage.getItem('h3oi:' + p.url) || 'null'); if(oi) pcOf(p.url).oi = oi; }catch(e){} }
 $('#prompt').value = S.f.prompt; $('#lenNum').value = S.f.seconds; $('#len').value = Math.min(60, S.f.seconds);
