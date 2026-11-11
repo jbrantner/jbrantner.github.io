@@ -1276,12 +1276,17 @@ async function upTrackGo(f, tr, den, unet, qw){ const cs = qpClips(tr); if(!cs.l
 function upTick(){ let ch = false;
   for(const f of S.films || []){ const R = upRunOf(f); if(!R) continue;
     if(R.state==='hq'){ const ps = R.hq.map(h => (S.passes || []).find(p => p.key===h.key)); if(ps.some(p => p && p.state==='working')) continue;
-      R.failed = R.hq.filter((h, i) => !ps[i] || ps[i].state!=='done').map(h => h.clip); R.state = 'faces'; ch = true; notifyUp('✨ High quality is done on the track' + (R.failed.length ? ' (' + R.failed.length + ' failed)' : '') + '. Do 🎭 Faces on any clip now, then 🧵 Blend the seams.'); continue; }
+      const okAll = ps.every(p => p && p.state==='ready' && takeOf(p.res)); ch = true;
+      if(!okAll){ R.failed = R.hq.filter((h, i) => !ps[i] || ps[i].state!=='ready').map(h => h.clip); upDrop(R); R.state = 'stopped'; R.err = R.failed.length + ' of ' + R.hq.length + ' ✨ clips failed';
+        notifyUp('⬆ ' + R.err + ', so every clip on the track stays as it was (no clip got ✨). Tap ⬆ Upscale track to try again.'); continue; }
+      ps.forEach(p => { p.state = 'done'; swapIn(f, p, takeOf(p.res)); }); R.failed = []; R.state = 'faces'; notifyUp('✨ High quality is done on every clip of the track. Do 🎭 Faces on any clip now, then 🧵 Blend the seams.'); continue; }
     if(R.state==='seams'){ const mine = sj => sj && (R.seams || []).includes(sj.rk), bad = takes().find(t => (t.combo && mine(t.combo.seam) && (t.state==='failed' || t.joinErr || t.bridgeErr)) || (t.redo && t.redo.bridge && mine(t.redo.bridge.sj) && (t.state==='failed' || t.bridgeErr)));
       if(bad && !R.err){ R.err = (t => t.joinErr || t.bridgeErr || (t.pieces && t.pieces[0] && t.pieces[0].err) || 'a seam failed')(bad); ch = true; toast('🧵 ' + R.err + '. 🧵 Blend the seams again to retry.', 7000); }
       if((R.seams || []).every(k => S.placed[k])){ R.state = 'done'; ch = true; notifyUp('⬆ Upscale track done: every seam is blended.'); } } }
   return ch; }
 const notifyUp = m => toast(m, 8000);
+// the run's waiting ✨ results are let go: their clips keep the original (the takes stay in H3 Deck)
+function upDrop(R){ for(const h of R.hq || []){ const p = (S.passes || []).find(x => x.key===h.key); if(p && (p.state==='ready' || p.state==='working')){ p.state = 'done'; p.dropped = true; } } }
 async function upSeamsGo(f, R){ const tr = f.tracks.find(x => x.id===R.track); if(!tr){ toast('That track is gone'); return false; }
   const ids = new Set(tr.clips.map(c => c.id)); if((S.passes || []).some(p => p.state==='working' && p.o && ids.has(p.o.swap))){ toast('Wait for the ✨ / 🎭 passes on this track to finish first'); return false; }
   if(tr.clips.some(c => !fileOf(takeOf(c.take)))){ toast('Wait for every clip on the track to finish first'); return false; }
@@ -1300,7 +1305,7 @@ function seamPlace(t, bj){ const f = filmOf(bj.film), tr = f && f.tracks.find(x 
     c.alts = c.alts || [c.take]; if(!c.alts.includes(t.id)) c.alts.push(t.id); c.was = {take:c.take, in:c.in, out:c.out, dur:c.dur};
     Object.assign(c, {take:t.id, in:b.off, out:d ? Math.min(d, b.off + b.len) : b.off + b.len, dur:d || c.dur}); n++; }
   if(n < bj.bounds.length) toast('🧵 Some clips changed while the seams were blending, so ' + (bj.bounds.length - n) + ' kept what they had', 6000); }
-const upStageText = R => R.state==='hq' ? (() => { const ps = R.hq.map(h => (S.passes || []).find(p => p.key===h.key)), d = ps.filter(p => p && p.state!=='working').length; return '✨ High quality: ' + d + ' of ' + R.hq.length + ' clips done'; })()
+const upStageText = R => R.state==='hq' ? (() => { const ps = R.hq.map(h => (S.passes || []).find(p => p.key===h.key)), d = ps.filter(p => p && p.state!=='working').length; return '✨ High quality: ' + d + ' of ' + R.hq.length + ' clips done. They all go into their clips together when every one is done (if one fails, none do).'; })()
   : R.state==='faces' ? '🎭 ✨ is done' + (R.failed && R.failed.length ? ' (' + R.failed.length + ' failed: ✨ them by hand)' : '') + '. Tap a clip › 🎭 Faces if a face needs it. Check the ⛓ / ✂ marks on the joins (tap one to switch it): only ⛓ joins get blended.' + seamCount(R)
   : R.err ? '🧵 ' + R.err : '🧵 Blending the seams: ' + (R.seams || []).filter(k => S.placed[k]).length + ' of ' + (R.seams || []).length + ' stretches back in';
 const seamCount = R => { const f = S.films.find(x => (x.upRun || {})===R), tr = f && f.tracks.find(x => x.id===R.track); if(!tr) return ''; const j = shotsOf(tr).joins; return ' (' + j.filter(x => !x.cut).length + ' ⛓, ' + j.filter(x => x.cut).length + ' ✂)'; };
@@ -1415,6 +1420,13 @@ const qpBad = x => x.state==='failed' || !!x.upErr || (x.state==='done' && x.upS
 function qpParts(p){ const ts = takes().filter(x => x.redo && x.redo.key===p.key);
   return p.wins.map((w, i) => { const tk = ts.filter(x => x.redo.wi===i), ok = tk.find(qpOk);
     return ok ? {i, ok} : tk.length && tk.every(qpBad) ? {i, bad:tk[0]} : {i, wait:true}; }); }
+// a finished ✨ / 🎭 take into its clip's place (the old one stays in the clip's versions)
+function swapIn(f, p, t){ const r = clipOf(f, p.o.swap); if(!r){ toast('✨ High quality is done, but its clip is gone (the take is in the Library)', 6000); return false; }
+  const d = secsOf(t) || len(r.c); r.c.was = {take:r.c.take, in:r.c.in, out:r.c.out, dur:r.c.dur}; Object.assign(r.c, {take:t.id, in:t.redo.big ? t.redo.cin : r.c.in, out:Math.min(d, t.redo.big ? t.redo.cout : r.c.out), dur:d}); return true; }
+// ⬆ Upscale track's ✨ step is all or nothing (Jordan 2026-11-11: "If the whole [track] doesn't get the quality pass finished I want it to revert
+// the clips to the original", some clips looked over baked from a run that only half finished): a finished ✨ pass of the run waits,
+// and only when every clip's pass is done do they all take their clips' places together; if any fails or the run is stopped, none do
+const upHqOf = (f, p) => { const R = f.upRun; return R && R.hq && !(p.o && p.o.faces) && R.hq.some(h => h.key===p.key) ? R : null; };
 function placePasses(){ let ch = false;
   for(const p of S.passes || []){ if(p.state!=='working') continue; const f = filmOf(p.film); if(!f){ p.state = 'failed'; p.err = 'the film is gone'; ch = true; continue; }
     const ps = qpParts(p), bad = ps.filter(x => x.bad);
@@ -1422,8 +1434,8 @@ function placePasses(){ let ch = false;
     if(bad.length){ p.state = 'failed'; p.err = (bad[0].bad.upErr || bad[0].bad.err || (bad[0].bad.pieces && bad[0].bad.pieces[0] && bad[0].bad.pieces[0].err) || 'it gave nothing back').slice(0, 160); p.failed = bad.map(x => x.i); ch = true;
       toast((p.big ? '🔍' : '✨') + ' ' + bad.length + ' of ' + p.wins.length + ' part' + (p.wins.length > 1 ? 's' : '') + ' failed (' + p.err.slice(0, 80) + '), so nothing changed yet. ✨ on the track has ↻ Retry the failed parts.', 8000); continue; }
     const ok = ps.map(x => x.ok);
-    if(p.o && p.o.swap){ const r = clipOf(f, p.o.swap), t = ok[0]; p.state = 'done'; ch = true; if(!r){ toast('✨ High quality is done, but its clip is gone (the take is in the Library)', 6000); continue; }
-      const d = secsOf(t) || len(r.c); r.c.was = {take:r.c.take, in:r.c.in, out:r.c.out, dur:r.c.dur}; Object.assign(r.c, {take:t.id, in:t.redo.big ? t.redo.cin : r.c.in, out:Math.min(d, t.redo.big ? t.redo.cout : r.c.out), dur:d});
+    if(p.o && p.o.swap){ const R = upHqOf(f, p); if(R){ p.state = 'ready'; p.res = ok[0].id; ch = true; continue; } // ⬆ all or nothing: upTick swaps the whole track at once
+      p.state = 'done'; ch = true; if(!swapIn(f, p, ok[0])) continue;
       toast((p.o.faces ? '🎭 Faces' : '✨ High quality') + ' done: it\'s in the clip\'s place now', 6000); continue; }
     const ntr = {id:uid('tr'), clips:p.wins.map((w, i) => { const t = ok[i], d = secsOf(t) || (w.out - w.in), a = t.redo.big ? t.redo.cin : w.in, b = t.redo.big ? t.redo.cout : w.out; return {id:uid('c'), take:t.id, in:a, out:Math.min(d, b), dur:d, at:w.at}; })};
     f.tracks.unshift(ntr); p.state = 'done'; p.out = ntr.id; ch = true;
@@ -1730,7 +1742,7 @@ document.addEventListener('click', async ev => {
     case 'upSeams': { const R = upRunOf(f); if(R){ el.disabled = true; await upSeamsGo(f, R); } draw(); return; }
     case 'seamTog': { const r = clipOf(f, d.c); if(!r) return; ev.stopPropagation(); r.c.cut = !r.c.cut; if(!r.c.cut) delete r.c.cut; save(); toast(r.c.cut ? '✂ A cut here: 🧵 Blend the seams leaves it as it is' : '⛓ One continuous shot here: 🧵 Blend the seams blends it', 3500); break; }
     case 'upSkip': { const R = upRunOf(f); if(R){ R.state = 'done'; R.end = 'no seams'; save(); toast('⬆ Upscale track finished without blending the seams'); } break; }
-    case 'upStop': { const R = upRunOf(f); if(R && confirm('Stop following this upscale? Passes already sent still finish and go into their clips.')){ R.state = 'stopped'; save(); } break; }
+    case 'upStop': { const R = upRunOf(f); if(R && confirm(R.state==='hq' ? 'Stop this upscale? No clip gets ✨: they all stay as they are (passes already on the PCs still run, their takes stay in H3 Deck).' : 'Stop following this upscale? The clips keep what they have now.')){ if(R.state==='hq') upDrop(R); R.state = 'stopped'; save(); } break; }
     case 'hideTrack': { ev.stopPropagation(); const tr = f.tracks[+d.k]; if(!tr) return; tr.hide = !tr.hide; save(); toast(tr.hide ? '🙈 Track ' + (+d.k + 1) + ' is hidden: it doesn\'t play or export. Tap 🙈 to show it.' : '👁 Track ' + (+d.k + 1) + ' plays again', 3500); break; }
     case 'delTrack': { ev.stopPropagation(); const k = +d.k, tr = f.tracks[k]; if(!tr) return; const n = tr.clips.length;
       if(n && !confirm('Delete track ' + (k + 1) + ' and its ' + n + (n===1 ? ' clip' : ' clips') + ' from the timeline? The takes stay in H3 Deck, and ↶ Undo brings the track back.')) return;
