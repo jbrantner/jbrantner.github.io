@@ -205,6 +205,14 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     r.new = /smiling/.test(q('#ckOut').textContent) && /Your notes so far: make her smile/.test(q('#ckOut').textContent) && H3.S.ck.msgs.length===5;
     q('#ckOut [data-ck="x"]').click(); p.value = ''; p.oninput({target:p}); return r; });
   ok(CKC.box && CKC.new && /CHANGE REQUEST[^]*make her smile/.test(ckReq.change || ''), '💬 ask the checker for changes: ' + JSON.stringify(CKC));
+  // 💬 a chat about another prompt (another film, or the box changed) starts fresh on the shot in the box, with the note as the first notes
+  const CKS = await page.evaluate(async () => { const q = s => document.querySelector(s), p = q('#prompt'); p.value = 'Tifa sits down.'; p.oninput({target:p});
+    H3.S.ck = {verdict:'fix', issues:[], shot:'old film shot', orig:'Old film prompt', keep:'', kind:'PIKA', film:'other', msgs:[{role:'system', content:'x'}, {role:'user', content:'Old film prompt'}, {role:'assistant', content:'{}'}]}; H3.drawCk();
+    q('#ckAsk').value = 'camera high'; q('#ckAsk').oninput({target:q('#ckAsk')}); q('#ckOut [data-ck="ask"]').click();
+    for(let i = 0; i < 50 && !(H3.S.ck && H3.S.ck.orig==='Tifa sits down.'); i++) await new Promise(z => setTimeout(z, 100));
+    const r = {fresh:!!H3.S.ck && H3.S.ck.orig==='Tifa sits down.' && /Tifa sits down/.test(H3.S.ck.msgs[1].content) && !/Old film prompt/.test(JSON.stringify(H3.S.ck.msgs)) && /camera high/.test(H3.S.ck.msgs[1].content)};
+    q('#ckOut [data-ck="x"]').click(); p.value = ''; p.oninput({target:p}); return r; });
+  ok(CKS.fresh, '💬 a stale checker chat restarts on the current shot: ' + JSON.stringify(CKS));
   // 💬 Ask the checker button: a note before the first check goes with it
   const CKA = await page.evaluate(async () => { const q = s => document.querySelector(s), p = q('#prompt'); p.value = 'Mei walks in.'; p.oninput({target:p});
     q('#ckChat').click(); const r = {box:!!q('#ckAsk') && !q('#ckOut').hidden}; q('#ckAsk').value = 'camera low'; q('#ckAsk').oninput({target:q('#ckAsk')}); q('#ckOut [data-ck="ask0"]').click();
