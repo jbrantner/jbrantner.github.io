@@ -1777,9 +1777,9 @@ const negOf = t => t.neg !== undefined ? t.neg : keepOut(S.f);
 function guiderOf(add, oi, t, model, cond, clip){ const neg = negOf(t);
   if(!neg || !nagOn(oi)) return add('BasicGuider', {model, conditioning:cond});
   return add('NAGGuiderMiniMaxH3', Object.assign({model, conditioning:cond, nag_negative:[add('CLIPTextEncode', {clip, text:neg}), 0]}, nagArgs(t.negScale))); }
-function pieceGraph(t, i, oi, names){
+function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, im, au} = draw into that graph, from those frames, and hand back the spliced frames
   { const M0 = resolveModel(oi, t.model, t.turbo); t = castTake(t, !(M0 && M0.fl2v)); } // 👥 the subjects' pictures, as they are now
-  const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
+  const g = X ? X.g : {}; let n = 0; const add = X ? X.add : (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
   const pc = t.pieces[i], first = i===0, last = i===t.pieces.length - 1, chain = !!(oi.MiniMaxH3MotionContextSaveLatent && oi.MiniMaxH3MotionContext);
   const M = resolveModel(oi, t.model, t.turbo), w = t.w, h = t.h, L = pc.gen, steps = +t.steps || M.steps;
   let model = [add('UNETLoader', {unet_name:M.unet, weight_dtype:'default'}), 0];
@@ -1857,10 +1857,10 @@ function pieceGraph(t, i, oi, names){
     cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:LEAD(pc)}), 0]; });
   // ↻ Redo a stretch (🎞 Films): the take's own frames either side of the stretch are pinned on the 4-frame latent grid, so the new
   // middle leaves and lands where the take does (the old H3 Film recipe, on the grid like 🪄 Smooth); the take's sound is pinned too
-  let rsrc = null;
-  if(t.redo){ const R = t.redo; rsrc = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]});
-    for(const [o, s] of R.pins){ const fr = add('ImageFromBatch', {image:[rsrc, 0], batch_index:s, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
-    if(R.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:[rsrc, 1], start_index:R.s0 / FPS, duration:L / FPS}), 0], frame_idx:0}), 0]; }
+  let rsrc = null, rIm = null, rAu = null;
+  if(t.redo){ const R = t.redo; if(X){ rIm = X.im; rAu = X.au; rsrc = 1; } else { rsrc = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]}); rIm = [rsrc, 0]; rAu = [rsrc, 1]; }
+    for(const [o, s] of R.pins){ const fr = add('ImageFromBatch', {image:rIm, batch_index:s, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
+    if(R.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:rAu, start_index:R.s0 / FPS, duration:L / FPS}), 0], frame_idx:0}), 0]; }
   if(t.lead){ // ⏪ lead-in: the clip's first frames are pinned at the END of the window, so the new seconds arrive exactly where it starts
     const R = t.lead, ls = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]});
     for(const [o, sf] of R.pins){ const fr = add('ImageFromBatch', {image:[ls, 0], batch_index:sf, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; } }
@@ -1878,8 +1878,8 @@ function pieceGraph(t, i, oi, names){
   // take's own frames (VAE-encoded, the sound part kept as MiniMax made it) instead of noise, and only the last part of the steps runs
   let lat0 = lat, den = 1;
   if(t.redo && +t.redo.str > 0 && +t.redo.str < 0.995 && rsrc && oi.VAEEncode && oi.LTXVSeparateAVLatent && oi.LTXVConcatAVLatent){ const R = t.redo, have = Math.min(L, R.F - R.s0);
-    let px = [add('ImageFromBatch', {image:[rsrc, 0], batch_index:R.s0, length:have}), 0];
-    if(have < L && oi.RepeatImageBatch) px = batchOf(add, oi, px, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:[rsrc, 0], batch_index:R.s0 + have - 1, length:1}), 0], amount:L - have}), 0]);
+    let px = [add('ImageFromBatch', {image:rIm, batch_index:R.s0, length:have}), 0];
+    if(have < L && oi.RepeatImageBatch) px = batchOf(add, oi, px, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:rIm, batch_index:R.s0 + have - 1, length:1}), 0], amount:L - have}), 0]);
     if(have===L || oi.RepeatImageBatch){ const sep = add('LTXVSeparateAVLatent', {av_latent:lat}); lat0 = [add('LTXVConcatAVLatent', {video_latent:[add('VAEEncode', {pixels:px, vae}), 0], audio_latent:[sep, 1]}), 0]; den = Math.max(0.2, +R.str); } }
   const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:den});
   let out;
@@ -1890,7 +1890,7 @@ function pieceGraph(t, i, oi, names){
     for(const l of lorasOf(t)) m2 = [add('LoraLoaderModelOnly', {model:m2, lora_name:l.name, strength_model:+l.str}), 0];
     out = add('SamplerCustomAdvanced', {noise:[add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[sp, 1], latent_image:[a1, 0]});
   } else out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0});
-  if(chain) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
+  if(chain && !X) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
     // then HEAD more frames (sound too): the first frame after the carried-over overlap decodes too bright and flashes at the join
@@ -1898,10 +1898,11 @@ function pieceGraph(t, i, oi, names){
   if(t.sm && pc.skip){ ims = [add('ImageFromBatch', {image:ims, batch_index:pc.skip, length:L - pc.skip}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:pc.skip / FPS, duration:(L - pc.skip) / FPS}), 0]; } // 🪄 the frames the window before already has
   if(t.lead){ const R = t.lead; ims = [add('ImageFromBatch', {image:ims, batch_index:0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:0, duration:R.B / FPS}), 0]; } // only the new seconds
   if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
-    const R = t.redo; let joined = [add('ImageFromBatch', {image:[rsrc, 0], batch_index:0, length:R.a + 1}), 0];
+    const R = t.redo; let joined = [add('ImageFromBatch', {image:rIm, batch_index:0, length:R.a + 1}), 0];
     const mid = R.b - R.a - 1; if(mid > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:ims, batch_index:R.a - R.s0 + 1, length:mid}), 0]);
-    if(R.F - R.b > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:[rsrc, 0], batch_index:R.b, length:R.F - R.b}), 0]);
-    ims = joined; if(R.sound) aud = [rsrc, 1]; }
+    if(R.F - R.b > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:rIm, batch_index:R.b, length:R.F - R.b}), 0]);
+    ims = joined; if(R.sound) aud = rAu; }
+  if(X) return {ims, aud};
   const vid = add('CreateVideo', {images:ims, audio:aud, fps:FPS});
   const sv = add('SaveVideo', {video:[vid, 0], filename_prefix:t.dir + '/piece_' + String(i + 1).padStart(2, '0'), format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   // the last piece joins them all as its final step (Jordan 2026-11-01: no waiting in the queue for the stitch); needs the Render Deck helper's join node
@@ -1927,6 +1928,29 @@ function comboGraph(t){
   const sv = add('SaveVideo', {video:[c, 0], filename_prefix:t.dir + '/' + t.name, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
   return {g, save:sv};
 }
+// 🧵 ⬆ Upscale track's seams as ONE job on the PC (Jordan 2026-11-11: "any way to safely do that with the app closed"): the clips are
+// joined in the graph (as ⛓ Combine does), then each seam gets the 🧵 bridge redo (1 s of real motion pinned each side, the frames at the
+// join repainted) from the frames the seam before it left, all in the same ComfyUI job, so nothing waits on the phone. Loaders with the
+// same inputs are shared, so the model loads once.
+function seamGraph(t, oi, names){
+  const g = {}, seen = {}; let n = 0; const add = (cls, inputs) => { const v = fill(oi, cls, inputs), k = cls + '|' + JSON.stringify(v); if(seen[k]) return seen[k]; const id = String(++n); g[id] = {class_type:cls, inputs:v, _meta:{title:cls}}; seen[k] = id; return id; };
+  const vids = {};
+  t.combo.parts.forEach((q, i) => { let v = [add('LoadVideo', {file:q.file}), 0];
+    v = [add('Video Slice', {video:v, start_time:Math.max(0, q.in), duration:Math.max(0.05, q.out - q.in), strict_duration:false}), 0];
+    if(q.w && (q.w!==t.w || q.h!==t.h)){ const gc = add('GetVideoComponents', {video:v}); const sc = add('ImageScale', {image:[gc, 0], upscale_method:'lanczos', width:t.w, height:t.h, crop:'center'});
+      v = [add('CreateVideo', {images:[sc, 0], audio:[gc, 1], fps:FPS}), 0]; }
+    vids['videos.video' + i] = v; });
+  const gc = add('GetVideoComponents', {video:[add('ConcatenateVideo', Object.assign({codec:'auto'}, vids)), 0]});
+  const F = Math.round(t.combo.parts.reduce((a, q) => a + (q.out - q.in), 0) * FPS); let im = [gc, 0]; const au = [gc, 1];
+  (t.combo.seam.frames || []).forEach((sf, k) => { const P = redoPlan(F, sf - BRIDGE_HALF, sf + BRIDGE_HALF, BRIDGE_CTX);
+    P.F = P.Fout = F + 240; // (the joined length is only known to a frame or two: the tail after the seam is taken whole, ImageFromBatch stops at the end)
+    const pp = {start:P.s0 / FPS, gen:P.L, deliv:P.L, ctx:0, prompt:bridgeWords(t.prompt, P), state:'new'};
+    const w = Object.assign({}, t, {seed:(+t.seed || 42) + k, combo:null, redo:Object.assign({sound:true}, P), pieces:[pp], sm:null, lead:null, cont:null, ctl:null, ctl2:null, fl:false, pins:[], follow:[], vids:[], auds:[]});
+    im = pieceGraph(w, 0, oi, names, {add, g, im, au}).ims; });
+  const sv = add('SaveVideo', {video:[add('CreateVideo', {images:im, audio:au, fps:FPS}), 0], filename_prefix:t.dir + '/' + t.name, format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':18});
+  return {g, save:sv};
+}
+const seamOne = t => !!(t && t.combo && t.combo.seam && t.combo.seam.one);
 // 📤 an uploaded clip (Jordan 2026-11-08: "or even upload a clip"): loaded at 24 fps (Video Helper Suite when the PC has it, which
 // keeps the speed of a 30 or 60 fps phone video), sized to the canvas MiniMax would use for its shape, saved like a take
 function uplGraph(t, p, oi){
@@ -2175,7 +2199,12 @@ function upGraph(t, oi, names){
 async function tickUpscale(t){
   const p = pcOf(t.pc);
   if(t.upStage==='start'){
-    { const why = p.oi ? regenMissing(p.oi, t) : 'not reachable'; if(why){ t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
+    { const why = p.oi ? regenMissing(p.oi, t) : 'not reachable'; if(why){
+        // (Jordan 2026-11-11: a ✨ pass went to Main, which has no Open-H3 regenerate LoRA, and kept the original) another PC that can do it takes it
+        const alt = S.pcs.map(x => x.url).find(u => u!==t.pc && !canRun(u, t)); if(alt && !t.upMoved){ t.upMoved = true; t.pc = alt; t.t0r = Date.now(); save(); return; }
+        t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
+    { const fl = t.smoothed || t.final; // a video made on the other PC: wait (up to 15 min) for Dropbox to bring it over before queueing
+      if(fl && Date.now() - (t.t0r || t.t || 0) < 15 * 60000){ let seen = true; try{ seen = (await fetch(viewUrl(t.pc, fl), {method:'HEAD'})).ok; }catch(e){} if(!seen) return; } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
     try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of facesOn(t) ? t.up.faces.flatMap(f => faceRefs(t, f.n)) : upPick(t)) if(!names[r.id]) names[r.id] = await upload(t.pc, r.id);
       const G = upGraph(t, p.oi, names); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
@@ -2323,11 +2352,11 @@ async function render(){
 }
 async function sendPieces(t, from){
   const url = t.pc, oi = pcOf(url).oi, names = {}, M0 = resolveModel(oi, t.model, t.turbo), T = castTake(t, !(M0 && M0.fl2v));
-  const ids = t.combo ? [] : [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...T.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
+  const ids = t.combo ? (seamOne(t) ? T.imgs.map(r => r.id) : []) : [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...T.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
-    const p = t.pieces[i], G = p.upl ? uplGraph(t, p, oi) : t.combo ? comboGraph(t) : pieceGraph(t, i, oi, names);
+    const p = t.pieces[i], G = p.upl ? uplGraph(t, p, oi) : seamOne(t) ? seamGraph(t, oi, names) : t.combo ? comboGraph(t) : pieceGraph(t, i, oi, names);
     p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.save = G.save; p.join = G.join || null; p.err = ''; p.file = null;
     p.pid = await queueGraph(url, G, !!p.upl); p.state = 'queued'; p.tq = Date.now(); save(); // 📤 an upload takes seconds: it goes to the front of the PC's line
   }
@@ -2982,7 +3011,7 @@ function takeCard(t){
       : `${t.k4 && t.k4.state==='done' ? `<button class="btn pri" data-act="save4k" data-t="${t.id}">📲 Save 4K 60</button>` : ''}${t.final || t.pieces.some(p => p.file) ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.final ? `<button class="btn xf" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button>` : ''}${t.state==='done' && (t.final || t.pieces.some(p => p.file)) ? `${S.tab==='films' && filmTarget() ? `<button class="btn pri" data-act="useFilm" data-t="${t.id}">🎞 Use this take</button>` : ''}<button class="btn xf" data-act="mocap" data-t="${t.id}">🦴 To Mocap</button><button class="btn xf" data-act="guide" data-t="${t.id}">🎭 Use as guide</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn" data-act="drop" data-t="${t.id}">🗑</button>`;
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t)].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
-      <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
+      <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.up && t.up.unet ? famKey(t.up.unet) : t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
       ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(sentWords(t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
@@ -3666,7 +3695,7 @@ window.H3RedoPlan = redoPlan;
 const BRIDGE_CTX = 24, BRIDGE_HALF = 4;
 function bridgeSeams(t){
   if(t.redo && t.redo.bridge) return t.redo.bridge.rest;
-  if(t.combo && t.combo.seam) return t.joinErr ? [] : t.combo.seam.frames || [];
+  if(t.combo && t.combo.seam) return t.joinErr || t.combo.seam.one ? [] : t.combo.seam.frames || [];
   if(!t.sm || t.sm.loop || t.sm.bridge===false || t.pieces.length < 2 || t.joinErr) return [];
   return t.pieces.slice(1).map(p => Math.round(p.start * FPS + (p.skip || 0))); }
 function bridgeWords(words, P){ const pp = {start:P.s0 / FPS, gen:P.L, deliv:P.L, ctx:0};
@@ -3708,7 +3737,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
     // the pass always runs on the official (vanilla) MiniMax H3 model + the regenerate LoRA, never the take's own model or LoRAs
     // (Jordan 2026-11-07: the card said Pika because the copy kept its source's model name)
     Object.assign(t, {model:famKey(t.up.refs ? 'minimax_h3_ref2va_pruned_int8_convrot.safetensors' : 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'), turbo:false, loras:lorasOf(t).filter(l => !/turbo|regenerate|lightning|4.?step|8.?step/i.test(l.name))});
-    t.pc = await redoPc(t, src, fl, extra) || src.pc; extra[t.pc] = (extra[t.pc] || 0) + 120;
+    t.pc = await redoPc(t, src, fl, extra) || S.pcs.map(p => p.url).find(u => !canRun(u, t)) || src.pc; extra[t.pc] = (extra[t.pc] || 0) + 120; // (no PC sees the video yet: one that can run it waits for Dropbox)
     S.takes.unshift(t); sent++; }
   save(); drawTakes(); tickSoon(200); if(o.quiet) return sent;
   toast('⬆ ' + sent + (sent > 1 ? ' nudges' : ' nudge') + ' of ' + fmtS(part.a / FPS) + '–' + fmtS(part.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
@@ -3720,7 +3749,8 @@ window.H3Combine = async o => { const parts = [];
   if(parts.length < 2){ toast('Pick at least two clips'); return 0; }
   const src = deckTake(parts[0].take), F = Math.round(parts.reduce((a, q) => a + (q.out - q.in), 0) * FPS);
   const ok = u => { const p = pcOf(u); return p.online && p.oi && p.oi.ConcatenateVideo; };
-  const pc = [src.pc].concat(S.pcs.map(p => p.url)).find(ok); if(!pc){ toast("Can't reach a PC that can join videos"); return 0; }
+  const ok2 = u => ok(u) && (!o.seam || !o.seam.unet || !!pcOf(u).oi.UNETLoader && combo(pcOf(u).oi, 'UNETLoader', 'unet_name').includes(o.seam.unet));
+  const pc = [src.pc].concat(S.pcs.map(p => p.url)).find(ok2) || [src.pc].concat(S.pcs.map(p => p.url)).find(ok); if(!pc){ toast("Can't reach a PC that can join videos"); return 0; }
   const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.pc = pc;
   t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
   Object.assign(t, {prompt:o.prompt || parts.map(q => q.prompt).filter(Boolean).join(' '), seconds:F / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, redo:null, lead:null, toFilm:null, from:null, pins:[], follow:[], imgs:[], vids:[], auds:[],
@@ -3732,7 +3762,7 @@ window.H3Combine = async o => { const parts = [];
   if(o.seam){ // ⬆ Upscale track's 🧵 seams: the joins of the clips, in frames of the joined video, bridged one after another
     let acc = 0; const fr = []; parts.forEach((q, i) => { if(i) fr.push(Math.round(acc * FPS)); acc += q.out - q.in; });
     let root = src; while(root && root.redo && root.redo.src){ const r = deckTake(root.redo.src); if(!r) break; root = r; }
-    t.combo.seam = Object.assign({}, o.seam, {frames:fr});
+    t.combo.seam = Object.assign({}, o.seam, {frames:fr, one:true}); t.seed = Math.floor(Math.random() * 2 ** 31);
     Object.assign(t, {model:o.seam.unet ? famKey(o.seam.unet) : root.model, turbo:o.seam.unet ? true : root.turbo, steps:o.seam.unet ? '' : root.steps, loras:JSON.parse(JSON.stringify(lorasOf(root))), imgs:JSON.parse(JSON.stringify(root.imgs || [])), h3:root.h3, film:root.film || t.film, fin:null}); }
   S.takes.unshift(t); drawTakes();
   try{ await sendPieces(t, 0); }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not joined: ' + e.message, 6000); save(); return 0; }

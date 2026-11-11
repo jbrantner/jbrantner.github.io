@@ -53,35 +53,46 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()));
   await fr.waitForFunction(() => window.FILM && FILM.S).catch(() => {}); await fr.evaluate(() => { FILM.S.moreTools = true; FILM.draw && FILM.draw(); }); // 🧰 the tucked-away tools too
   const done = (id, fn) => page.evaluate(([id, fn]) => { const t = H3.S.takes.find(x => x.id===id); Object.assign(t, {state:'done', upStage:t.up ? 'done' : t.upStage, final:{filename:fn, subfolder:'Output_Render/H3Deck/' + t.name, type:'output'}}); t.pieces.forEach(p => { p.state = 'done'; p.file = p.file || t.final; }); H3.saveNow(); }, [id, fn]);
-  // a film: two 5 s clips that touch on track 1, and a clip on its own further along
-  await fr.evaluate(() => { const f = {id:'fA', name:'Film', tracks:[{id:'tr1', clips:[]}], pps:24}; FILM.S.films.unshift(f); const a = FILM.addClip(f, FILM.takeOf('tA'), 0), b = FILM.addClip(f, FILM.takeOf('tA'), 0); b.in = 1; b.out = 4; window.CA = a.id; window.CB = b.id; FILM.go({v:'film', film:'fA'}); });
+  // a film: three clips that touch on track 1 (5 s, 3 s, 5 s)
+  await fr.evaluate(() => { const f = {id:'fA', name:'Film', tracks:[{id:'tr1', clips:[]}], pps:24}; FILM.S.films.unshift(f); const a = FILM.addClip(f, FILM.takeOf('tA'), 0), b = FILM.addClip(f, FILM.takeOf('tA'), 0); b.in = 1; b.out = 4; const c = FILM.addClip(f, FILM.takeOf('tA'), 0); c.at = 8; FILM.go({v:'film', film:'fA'}); });
   await page.waitForTimeout(400);
   const T0 = await fr.evaluate(() => { const f = FILM.S.films[0], cs = f.tracks[0].clips; return {btn:!!document.querySelector('[data-act="upTrack"]'), at:cs.map(c => [c.at, c.in, c.out])}; });
-  ok(T0.btn && T0.at[1][0]===5, '⬆ Upscale track button is in the (bare) tools; the two clips touch: ' + JSON.stringify(T0));
+  ok(T0.btn && T0.at[1][0]===5 && T0.at[2][0]===8, '⬆ Upscale track button is in the (bare) tools; the three clips touch: ' + JSON.stringify(T0));
   const S1 = await fr.evaluate(async () => { document.querySelector('[data-act="upTrack"]').click(); await new Promise(z => setTimeout(z, 200)); const q = s => document.querySelector(s);
     const r = {title:q('#sheetCard h3') && q('#sheetCard h3').textContent, pika:/Prism Pika/.test(q('#sheetCard').textContent), go:q('#utGo') && q('#utGo').textContent};
-    q('#utGo').click(); await new Promise(z => setTimeout(z, 1500)); const f = FILM.S.films[0]; r.run = f.upRun && {state:f.upRun.state, hq:f.upRun.hq.length, unet:f.upRun.unet}; r.banner = (document.body.textContent.match(/⬆ Upscale track 1[^⏹]*/) || [''])[0]; return r; });
-  const HQ = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).map(t => ({id:t.id, clip:t.redo.clip, unet:t.up.unet, scale:t.up.scale, den:t.up.den})));
-  ok(/Upscale track 1/.test(S1.title) && S1.pika && /2 clips/.test(S1.go) && S1.run && S1.run.state==='hq' && S1.run.hq===2 && HQ.length===2 && HQ.every(h => /prismPIKA/.test(h.unet) && h.scale===1.5) && /0 of 2/.test(S1.banner), '1 ✨: the sheet offers Prism Pika; both clips get ✨ High quality ×1.5 on Prism Pika, the box says 0 of 2: ' + JSON.stringify({S1, HQ}));
+    q('#utGo').click(); await new Promise(z => setTimeout(z, 2000)); const f = FILM.S.films[0]; r.run = f.upRun && {state:f.upRun.state, hq:f.upRun.hq.length, unet:f.upRun.unet}; r.banner = (document.body.textContent.match(/⬆ Upscale track 1[^⏹]*/) || [''])[0]; return r; });
+  const HQ = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).map(t => ({id:t.id, unet:t.up.unet, scale:t.up.scale, den:t.up.den})));
+  ok(/Upscale track 1/.test(S1.title) && S1.pika && /3 clips/.test(S1.go) && S1.run && S1.run.state==='hq' && S1.run.hq===3 && HQ.length===3 && HQ.every(h => /prismPIKA/.test(h.unet) && h.scale===1.5) && /0 of 3/.test(S1.banner), '1 ✨: the sheet offers Prism Pika; every clip gets ✨ High quality ×1.5 on Prism Pika, the box says 0 of 3: ' + JSON.stringify({S1, HQ}));
   await done(HQ[0].id, 'hq1_00001.mp4');
   const W1 = await fr.evaluate(() => { FILM.placeNew(); const f = FILM.S.films[0]; return f.upRun.state; });
-  await done(HQ[1].id, 'hq2_00001.mp4');
+  await done(HQ[1].id, 'hq2_00001.mp4'); await done(HQ[2].id, 'hq3_00001.mp4');
   const S2 = await fr.evaluate(async () => { FILM.placeNew(); FILM.draw(); await new Promise(z => setTimeout(z, 100)); const f = FILM.S.films[0], cs = f.tracks[0].clips.slice().sort((a, b) => a.at - b.at);
     return {state:f.upRun.state, takes:cs.map(c => FILM.takeOf(c.take).redo && FILM.takeOf(c.take).redo.qp), seamBtn:!!document.querySelector('[data-act="upSeams"]'), skip:!!document.querySelector('[data-act="upSkip"]'), cs:cs.map(c => [c.at, +c.in.toFixed(2), +c.out.toFixed(2)])}; });
-  ok(W1==='hq' && S2.state==='faces' && S2.takes.every(Boolean) && S2.seamBtn && S2.skip, '2 🎭: it waits while a clip is still going, then stops with 🧵 Blend the seams / Done, no seams once both ✨ clips are in place: ' + JSON.stringify({W1, S2}));
-  const S3 = await fr.evaluate(async () => { document.querySelector('[data-act="upSeams"]').click(); await new Promise(z => setTimeout(z, 1500)); const f = FILM.S.films[0]; return {state:f.upRun.state, seams:(f.upRun.seams || []).length}; });
-  const CB = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.seam); return t && {id:t.id, frames:t.combo.seam.frames, model:t.model, w:t.w, h:t.h, parts:t.combo.parts.length, bounds:t.combo.seam.bounds.map(b => [b.off, b.len])}; });
+  ok(W1==='hq' && S2.state==='faces' && S2.takes.every(Boolean) && S2.seamBtn && S2.skip, '2 🎭: it waits while a clip is still going, then stops with 🧵 Blend the seams / Done, no seams once every ✨ clip is in place: ' + JSON.stringify({W1, S2}));
+  const g0 = sent.length;
+  const S3 = await fr.evaluate(async () => { document.querySelector('[data-act="upSeams"]').click(); await new Promise(z => setTimeout(z, 2000)); const f = FILM.S.films[0]; return {state:f.upRun.state, seams:(f.upRun.seams || []).length}; });
+  const CB = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.seam); return t && {id:t.id, frames:t.combo.seam.frames, one:t.combo.seam.one, model:t.model, w:t.w, h:t.h, parts:t.combo.parts.length}; });
   const S3b = await fr.evaluate(() => { FILM.placeNew(); const f = FILM.S.films[0]; return f.tracks[0].clips.length; });
-  ok(S3.state==='seams' && S3.seams===1 && CB && JSON.stringify(CB.frames)==='[120]' && /pika/.test(CB.model) && CB.w===960 && CB.h===512 && CB.parts===2 && S3b===2, '3 🧵: the two touching clips are joined only for bridging (the track keeps its 2 clips), the seam at frame 120, on Prism Pika, at the ✨ size: ' + JSON.stringify({S3, CB, S3b}));
+  ok(S3.state==='seams' && S3.seams===1 && CB && CB.one && JSON.stringify(CB.frames)==='[120,192]' && /pika/.test(CB.model) && CB.w===960 && CB.h===512 && CB.parts===3 && S3b===3, '3 🧵: the three clips are joined only for bridging (the track keeps its 3 clips), seams at frames 120 and 192, on Prism Pika, at the ✨ size: ' + JSON.stringify({S3, CB, S3b}));
+  // the whole seam step is ONE job: join, both bridges chained in the graph, one save; the model loads once
+  const G = sent.slice(g0).map(x => x.g), J = G[G.length - 1] || {}, Nd = c => Object.entries(J).filter(([, n]) => n.class_type===c);
+  const ifb = id => J[id] && J[id].class_type==='ImageFromBatch' ? J[id].inputs.image[0] : null, guides = Nd('MiniMaxH3AddGuide').filter(([, n]) => n.inputs.image).map(([, n]) => ifb(n.inputs.image[0]));
+  const comp = Nd('GetVideoComponents').map(([id]) => id), srcs = [...new Set(guides)];
+  const GJ = {jobs:G.length, samp:Nd('SamplerCustomAdvanced').length, unet:Nd('UNETLoader').length, save:Nd('SaveVideo').length, cat:Nd('ConcatenateVideo').length, slices:Nd('Video Slice').length, srcs:srcs.length, fromJoin:srcs.filter(s => comp.includes(s)).length,
+    unetName:(Nd('UNETLoader')[0] || [0, {inputs:{}}])[1].inputs.unet_name, wh:Nd('MiniMaxH3ReferenceToVideo').concat(Nd('MiniMaxH3ImageToVideo')).map(([, n]) => [n.inputs.width, n.inputs.height])};
+  const links = Object.values(J).every(n => Object.values(n.inputs).every(v => !Array.isArray(v) || typeof v[0]!=='string' || J[v[0]]));
+  ok(GJ.jobs===1 && GJ.samp===2 && GJ.unet===1 && GJ.save===1 && GJ.cat===1 && GJ.slices===3 && GJ.srcs===2 && GJ.fromJoin===1 && /prismPIKA/.test(GJ.unetName) && GJ.wh.every(x => x[0]===960 && x[1]===512) && links, 'one job on the PC: the 3 clips joined, 2 bridges (the second pins frames from the first one\'s result), Prism Pika loaded once, one save, every link valid: ' + JSON.stringify(GJ));
+  const SG = await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); return {seams:H3.bridgeSeams(t).length}; }, CB.id);
   await done(CB.id, 'seam_00001.mp4');
-  const n0 = await page.evaluate(() => H3.S.takes.length);
-  const BR = await page.evaluate(async id => { const t = H3.S.takes.find(x => x.id===id); const n = await H3.bridgeNext(t); const b = H3.S.takes.find(x => x.redo && x.redo.bridge && x.redo.bridge.sj);
-    return {n, id:b && b.id, rest:b && b.redo.bridge.rest.length, a:b && b.redo.a, bb:b && b.redo.b, s0:b && b.redo.s0, model:b && b.model, w:b && b.w}; }, CB.id);
-  ok(BR.n===1 && BR.rest===0 && BR.a <= 120 && BR.bb >= 120 && BR.s0 <= 120 - 24 && /pika/.test(BR.model) && BR.w===960, '🧵 the seam gets a bridge redo around frame 120 with about 1 s pinned before it: ' + JSON.stringify(BR));
-  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); t.redo.Fout = 216; }, BR.id); await done(BR.id, 'bridge_00001.mp4');
+  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); t.pieces[0].deliv = 312; }, CB.id);
   const S4 = await fr.evaluate(id => { FILM.placeNew(); FILM.draw(); const f = FILM.S.films[0], cs = f.tracks[0].clips.slice().sort((a, b) => a.at - b.at);
-    return {state:f.upRun.state, cs:cs.map(c => [c.take===id, +c.at.toFixed(2), +c.in.toFixed(2), +c.out.toFixed(2), (c.alts || []).length]), box:!!document.body.textContent.match(/⬆ Upscale track 1 ·/)}; }, BR.id);
-  ok(S4.state==='done' && S4.cs[0][0] && S4.cs[1][0] && S4.cs[0][2]===0 && S4.cs[0][3]===5 && S4.cs[1][2]===5 && S4.cs[1][3]===8 && S4.cs[1][1]===5 && S4.cs[0][4]===2 && !S4.box, 'the bridged video goes back into both clips at their own stretches (the ✨ takes stay in their versions) and the box goes away: ' + JSON.stringify(S4));
+    return {state:f.upRun.state, cs:cs.map(c => [c.take===id, +c.at.toFixed(2), +c.in.toFixed(2), +c.out.toFixed(2), (c.alts || []).length]), box:!!document.body.textContent.match(/⬆ Upscale track 1 ·/)}; }, CB.id);
+  ok(SG.seams===0 && S4.state==='done' && S4.cs.every(c => c[0]) && S4.cs[0][2]===0 && S4.cs[0][3]===5 && S4.cs[1][2]===5 && S4.cs[1][3]===8 && S4.cs[2][2]===8 && S4.cs[2][3]===13 && S4.cs[0][4]===2 && !S4.box, 'when the job is done (no bridges sent from the phone) its video goes back into all 3 clips at their own stretches (the ✨ takes stay in their versions) and the box goes away: ' + JSON.stringify({SG, S4}));
+  // a ✨ pass sent to a PC with no Open-H3 regenerate LoRA (Main, 2026-11-11) moves to one that has it, instead of keeping the original
+  const MV = await page.evaluate(async ([R, M]) => { const oi = JSON.parse(JSON.stringify(H3.PC[M].oi)); oi.LoraLoaderModelOnly.input.required.lora_name[0] = oi.LoraLoaderModelOnly.input.required.lora_name[0].filter(x => !/regenerate/i.test(x)); H3.PC[M].oi = oi;
+    const src = H3.S.takes.find(x => x.id==='tA'); src.pc = M; const n = await window.H3Nudge({take:'tA', a:0, b:5, den:0.9, scale:1.5, qp:true, quiet:true, key:'kMv'}); const t = H3.S.takes.find(x => x.redo && x.redo.key==='kMv');
+    const first = t.pc; t.pc = M; await H3.tick(); await new Promise(z => setTimeout(z, 300)); src.pc = R; return {n, first, now:t.pc, err:t.upErr || ''}; }, [R, M]);
+  ok(MV.n===1 && MV.first===R && MV.now===R && !MV.err, '✨ goes to a PC that has the regenerate LoRA, and one sent to a PC without it moves over instead of keeping the original: ' + JSON.stringify(MV));
   // retry: a seam that fails shows the error and 🧵 Blend the seams again
   const RT = await fr.evaluate(() => { const f = FILM.S.films[0]; f.upRun = {id:'u2', track:'tr1', state:'seams', seams:['kX'], hq:[]}; return true; });
   await page.evaluate(() => { H3.S.takes.unshift({id:'tX', t:Date.now(), pc:'http://render.test', state:'failed', pieces:[{state:'failed', err:'boom'}], combo:{seam:{rk:'kX', run:'u2'}, parts:[]}, prompt:''}); H3.saveNow(); });
