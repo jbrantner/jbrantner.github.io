@@ -1265,7 +1265,16 @@ function shotsOf(tr){ const cs = tr.clips.slice().sort((a, b) => a.at - b.at), g
   return {gi, joins}; }
 // ✨ (Jordan 2026-11-11: "have an option to have the same quality tags go for the whole track"): the run's words go on every pass of its track
 const upQw = (f, trid) => { const R = upRunOf(f); return R && R.track===trid && R.qw || ''; };
-async function upTrackGo(f, tr, den, unet, qw, smooth){ const cs = qpClips(tr); if(!cs.length) return 0; const R = {id:uid('u'), track:tr.id, state:'hq', den, unet:unet || '', qw:String(qw || '').trim(), hq:[], t:Date.now()};
+// ✂ long clips go in parts (Jordan 2026-11-11: "double check that hires still splits up a 10 second clip … not … in one go"; it didn't: a
+// ✨ pass sent the whole clip as one window, and a 10 s clip at the ✨ size is far too much for Render's 8 GB): a clip longer than
+// HQ_MAX is split on the timeline into near-even parts of at most HQ_MAX s (same take, touching, ⛓ joins), so each ✨ pass is one
+// part and each part carries on from the one before through H3 Motion Context; the 🧵 seams blend the joins
+const HQ_MAX = 5;
+function splitLong(f, tr, cs){ let n = 0;
+  for(const c of cs){ const L = len(c), k = Math.ceil(L / HQ_MAX - 0.04); if(k < 2) continue; let r = {c, tr, k:f.tracks.indexOf(tr)}; const at0 = c.at;
+    for(let i = 1; i < k; i++) r = cutAt(f, r, at0 + L * i / k); n += k - 1; }
+  if(n) save(); return n; }
+async function upTrackGo(f, tr, den, unet, qw, smooth){ if(splitLong(f, tr, qpClips(tr))) draw(); const cs = qpClips(tr); if(!cs.length) return 0; const R = {id:uid('u'), track:tr.id, state:'hq', den, unet:unet || '', qw:String(qw || '').trim(), hq:[], t:Date.now()};
   if(smooth){ const fn = deckFn('H3SmoothClip'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return 0; } R.state = 'smooth'; R.sm = []; let n = 0;
     for(const c of cs){ const key = uid('k'), id = await fn({take:c.take, a:c.in, b:c.out, prompt:untime(wordsBetween(takeOf(c.take), c.in, c.out) || ''), key, film:f.id, clip:c.id});
       R.sm.push({clip:c.id, key, take:id || ''}); if(id) n++; }
@@ -1275,7 +1284,7 @@ async function upTrackGo(f, tr, den, unet, qw, smooth){ const cs = qpClips(tr); 
 // a smoothing nobody needs any more is marked so (it still finishes on the PC; its take stays in H3 Deck)
 function dropSmooth(id){ const t = takeOf(id); if(t && t.state==='working') t.smDropped = true; }
 // ✨ on every clip (after 🪄 smoothing, each clip's ✨ works from its smoothed take: the same stretch, from 0)
-async function upHqSend(f, tr, R, cs){ let n = 0, ch = null, k = 0; R.state = 'hq'; R.hq = [];
+async function upHqSend(f, tr, R, cs, solo){ let n = 0, ch = null, k = 0; R.state = 'hq'; R.hq = [];
   const src = c => { const h = (R.sm || []).find(x => x.clip===c.id), st = h && takeOf(h.take); return st ? Object.assign({}, c, {take:st.id, in:0, out:Math.min(len(c), secsOf(st) || len(c)), dur:secsOf(st) || len(c)}) : c; };
   for(let i = 0; i < cs.length; i++){ const c0 = cs[i], c = src(c0), on = !!ch && carriesOn(src(cs[i - 1]), c);
     const ctxc = on ? {dir:ch.dir, idx:++k, prev:ch.prev, pc:ch.pc} : {dir:'H3Deck/hqctx_' + R.id + '_' + i, idx:(k = 0), prev:'', pc:''};
@@ -1283,6 +1292,7 @@ async function upHqSend(f, tr, R, cs){ let n = 0, ch = null, k = 0; R.state = 'h
     const tk = p && takes().find(x => x.redo && x.redo.key===p.key); ch = tk ? {dir:ctxc.dir, prev:tk.id, pc:tk.pc} : null;
     if(p){ R.hq.push({clip:c.id, key:p.key, ctx:on}); n++; } }
   if(!n){ if(R.sm){ R.state = 'stopped'; R.err = '✨ could not be sent after smoothing'; save(); } toast('⬆ Nothing could be sent. Are the PCs on?', 5000); return 0; }
+  if(solo){ save(); toast('✨ High quality sent in ' + n + ' parts of at most ' + HQ_MAX + ' s, each carrying on from the one before. Each one takes its part\'s place when it\'s done.', 7000); return n; }
   f.upRun = R; save(); toast('⬆ ✨ High quality sent for ' + n + ' clip' + (n > 1 ? 's' : '') + (n < cs.length ? ' (' + (cs.length - n) + ' couldn\'t be sent)' : '') + '. When they\'re all done it stops for 🎭 Faces.', 6000); return n; }
 // moves each film's upscale along (from placeNew, on every tick)
 function upTick(){ let ch = false;
@@ -1338,7 +1348,7 @@ const HQ_LV = [{v:0.6, label:'Light', d:'Keeps most of the clip as it is; small 
 const unetLabel = x => { const b = String(x).split(/[\\/]/).pop().replace(/\.safetensors$/, ''); return /prism_?pika/i.test(b) ? 'Prism Pika' : /singularity/i.test(b) ? 'Singularity V2 x 10Eros' : b; };
 function hqSheet(f, tr, c){ const cur = HQ_LV.some(x => x.v===S.hqDen) ? S.hqDen : 0.9, H = window.parent.H3, ms = (H && H.hqUnets ? H.hqUnets() : []), um = ms.includes(S.hqUnet) ? S.hqUnet : '';
   $('#sheetCard').innerHTML = `<h3><span>✨ High quality</span><button class="btn" data-close>✕</button></h3>
-    <div class="note">Bigger and cleaner, by vanilla MiniMax. The lower it is, the more of the clip it keeps as it was.</div>
+    <div class="note">Bigger and cleaner, by vanilla MiniMax. The lower it is, the more of the clip it keeps as it was.${len(c) > HQ_MAX + 0.2 ? ' This clip is ' + fmt(len(c)) + ' long, so it is split into parts of at most ' + HQ_MAX + ' s first, each carrying on from the one before.' : ''}</div>
     <div class="lab" style="margin-top:10px"><span>How strong</span></div><div class="seg" id="hqLv">${HQ_LV.map(x => `<button data-v="${x.v}" class="${x.v===cur ? 'on' : ''}">${x.label}</button>`).join('')}</div>
     <div class="note" id="hqD" style="margin-top:6px"></div>
     <div class="lab" style="margin-top:10px"><span>Model</span></div><select id="hqM" style="width:100%"><option value="">Vanilla MiniMax (best likeness)</option>${ms.map(x => `<option value="${esc(x)}" ${x===um ? 'selected' : ''}>${esc(unetLabel(x))}</option>`).join('')}</select>
@@ -1346,7 +1356,7 @@ function hqSheet(f, tr, c){ const cur = HQ_LV.some(x => x.v===S.hqDen) ? S.hqDen
     <button class="btn pri" id="hqGo" style="padding:13px;width:100%;margin-top:10px">✨ Make it high quality</button>`;
   $('#sheet').hidden = false; let den = cur; const dl = () => { $('#hqD').textContent = HQ_LV.find(x => x.v===den).d; }; dl();
   $$('#hqLv button').forEach(b => b.onclick = () => { den = +b.dataset.v; $$('#hqLv button').forEach(x => x.classList.toggle('on', x===b)); dl(); });
-  $('#hqGo').onclick = async () => { const um2 = $('#hqM').value; S.hqDen = den; S.hqUnet = um2; save(); $('#hqGo').disabled = true; const n = await hqGo(f, tr, c, den, um2); $('#hqGo').disabled = false; if(n){ closeSheet(); draw(); } }; }
+  $('#hqGo').onclick = async () => { const um2 = $('#hqM').value; S.hqDen = den; S.hqUnet = um2; save(); $('#hqGo').disabled = true; const a0 = c.at, L0 = len(c), n = L0 > HQ_MAX + 0.2 && splitLong(f, tr, [c]) ? (draw(), await upHqSend(f, tr, {id:uid('u'), den, unet:um2, qw:'', hq:[]}, qpClips(tr).filter(x => x.at >= a0 - 0.01 && x.at < a0 + L0 - 0.05), true)) : await hqGo(f, tr, c, den, um2); $('#hqGo').disabled = false; if(n){ closeSheet(); draw(); } }; }
 // 🎭 Faces (Jordan 2026-11-08): with two people the second face drifted. Tap each face on the first frame and say who it is; MiniMax redraws
 // the clip once per face with only that person's pictures, and only her face is laid back over the clip
 const FACE_COL = ['#1f78b5', '#ff800d', '#2ba12b', '#d62629', '#9466bd', '#8c574a'];
@@ -1789,7 +1799,7 @@ function useFromDeck(id){ const f = N().v==='film' && filmOf(N().film), t = take
 // 🎞 Go to film from 🗂 Renders: select the clip that shows that take (or one of its versions) and put the playhead on it
 function selTake(id){ const f = N().v==='film' && filmOf(N().film); if(!f) return false; const all = f.tracks.flatMap(tr => tr.clips);
   const c = all.find(x => x.take===id) || all.find(x => (x.alts || []).includes(id) || (x.was && x.was.take===id)); if(!c) return false; SEL = c.id; PH = c.at; draw(); return true; }
-window.FILM = {upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
