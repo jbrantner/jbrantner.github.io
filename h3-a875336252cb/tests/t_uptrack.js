@@ -62,8 +62,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const T0 = await fr.evaluate(() => { const f = FILM.S.films[0], cs = f.tracks[0].clips; return {btn:!!document.querySelector('[data-act="upTrack"]'), at:cs.map(c => [c.at, c.in, c.out])}; });
   ok(T0.btn && T0.at[1][0]===5 && T0.at[2][0]===8, '⬆ Upscale track button is in the (bare) tools; the three clips touch: ' + JSON.stringify(T0));
   const S1 = await fr.evaluate(async () => { document.querySelector('[data-act="upTrack"]').click(); await new Promise(z => setTimeout(z, 200)); const q = s => document.querySelector(s);
-    const r = {title:q('#sheetCard h3') && q('#sheetCard h3').textContent, pika:/Prism Pika/.test(q('#sheetCard').textContent), go:q('#utGo') && q('#utGo').textContent};
-    q('#utGo').click(); await new Promise(z => setTimeout(z, 2000)); const f = FILM.S.films[0]; r.run = f.upRun && {state:f.upRun.state, hq:f.upRun.hq.length, unet:f.upRun.unet}; r.banner = (document.body.textContent.match(/⬆ Upscale track 1[^⏹]*/) || [''])[0]; return r; });
+    const r = {title:q('#sheetCard h3') && q('#sheetCard h3').textContent, pika:/Prism Pika/.test(q('#sheetCard').textContent), go:q('#utGo') && q('#utGo').textContent, qOff:q('#utQ .on') && q('#utQ .on').dataset.q, qHidden:q('#utQt').hidden};
+    q('#utQ [data-q="real"]').click(); r.qText = q('#utQt').value; q('#utGo').click(); await new Promise(z => setTimeout(z, 2000)); const f = FILM.S.films[0]; r.run = f.upRun && {state:f.upRun.state, hq:f.upRun.hq.length, unet:f.upRun.unet}; r.banner = (document.body.textContent.match(/⬆ Upscale track 1[^⏹]*/) || [''])[0]; return r; });
   const HQ = await page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp).reverse().map(t => ({id:t.id, src:t.redo.src, unet:t.up.unet, scale:t.up.scale, den:t.up.den, ch:t.up.chain, cin:t.redo.cin, cout:t.redo.cout, L:t.redo.L, pc:t.pc})));
   // 🔗 context: clip 2 (a carry-on) carries on from clip 1's ✨ latent; clip 3 (a cut) starts fresh; each window is exactly its clip
   const CX = await page.evaluate(([R, H]) => { const oi = H3.PC[R].oi, G = id => Object.values(H3.upGraph(H3.S.takes.find(x => x.id===id), oi, {}).g), C = (g, c) => g.filter(n => n.class_type===c);
@@ -74,6 +74,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(chainOk && CX[0].mc===0 && CX[0].sv.length===1 && CX[0].sv[0][0]===1 && /hqctx_/.test(CX[0].sv[0][1]) && CX[1].mc===1 && CX[1].ld.length===1 && CX[1].ld[0][0]===1 && CX[1].ld[0][1].endsWith(HQ[0].ch.dir) && CX[1].pre >= 23 && (CX[1].pre + 72 - 5) % 17===0 && CX[1].len.every(x => x===CX[1].pre + 72) && CX[1].rep.includes(CX[1].pre) && CX[1].cut===1 && CX[2].mc===1 && CX[2].ld[0][0]===2,
     '🔗 ✨ with context: the carry-on clip carries on from the clip before\'s ✨ latent (H3 Motion Context, same PC, its window is the clip itself with room in front, cut off after); the cut starts fresh: ' + JSON.stringify({HQ:HQ.map(h => ({ch:h.ch, cin:h.cin, cout:h.cout, L:h.L})), CX}));
   ok(/Upscale track 1/.test(S1.title) && S1.pika && /3 clips/.test(S1.go) && S1.run && S1.run.state==='hq' && S1.run.hq===3 && HQ.length===3 && HQ.every(h => /prismPIKA/.test(h.unet) && h.scale===1.5) && /0 of 3/.test(S1.banner), '1 ✨: the sheet offers Prism Pika; every clip gets ✨ High quality ×1.5 on Prism Pika, the box says 0 of 3: ' + JSON.stringify({S1, HQ}));
+  // ✨ same quality words for the whole track: 🎥 Realistic picked in the sheet goes on every ✨ pass (and into its prompt once)
+  const QW = await page.evaluate(([R, H]) => { const oi = H3.PC[R].oi; return H.map(h => { const t = H3.S.takes.find(x => x.id===h.id), g = H3.upGraph(t, oi, {}).g, txt = JSON.stringify(g);
+    return {qw:t.up.qw, inPrompt:(txt.match(/photorealistic live-action/g) || []).length}; }); }, [R, HQ]);
+  ok(S1.qOff==='' && S1.qHidden && /photorealistic/.test(S1.qText) && QW.every(x => /photorealistic/.test(x.qw) && x.inPrompt >= 1), '✨ same quality words for the whole track: off by default; 🎥 Realistic fills its words and every ✨ pass sends them: ' + JSON.stringify({S1q:[S1.qOff, S1.qHidden], QW}));
   await done(HQ[0].id, 'hq1_00001.mp4');
   const W1 = await fr.evaluate(() => { FILM.placeNew(); const f = FILM.S.films[0]; return f.upRun.state; });
   await done(HQ[1].id, 'hq2_00001.mp4'); await done(HQ[2].id, 'hq3_00001.mp4');
@@ -97,8 +101,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const comp = Nd('GetVideoComponents').map(([id]) => id), srcs = [...new Set(guides)];
   const GJ = {jobs:G.length, samp:Nd('SamplerCustomAdvanced').length, unet:Nd('UNETLoader').length, save:Nd('SaveVideo').length, cat:Nd('ConcatenateVideo').length, slices:Nd('Video Slice').length, srcs:srcs.length, fromJoin:srcs.filter(s => comp.includes(s)).length,
     unetName:(Nd('UNETLoader')[0] || [0, {inputs:{}}])[1].inputs.unet_name, wh:Nd('MiniMaxH3ReferenceToVideo').concat(Nd('MiniMaxH3ImageToVideo')).map(([, n]) => [n.inputs.width, n.inputs.height])};
+  const seamQ = /photorealistic live-action/.test(JSON.stringify(J));
   const links = Object.values(J).every(n => Object.values(n.inputs).every(v => !Array.isArray(v) || typeof v[0]!=='string' || J[v[0]]));
-  ok(GJ.jobs===1 && GJ.samp===2 && GJ.unet===1 && GJ.save===1 && GJ.cat===1 && GJ.slices===3 && GJ.srcs===2 && GJ.fromJoin===1 && /prismPIKA/.test(GJ.unetName) && GJ.wh.every(x => x[0]===960 && x[1]===512) && links, 'one job on the PC: the 3 clips joined, 2 bridges (the second pins frames from the first one\'s result), Prism Pika loaded once, one save, every link valid: ' + JSON.stringify(GJ));
+  ok(GJ.jobs===1 && GJ.samp===2 && GJ.unet===1 && GJ.save===1 && GJ.cat===1 && GJ.slices===3 && GJ.srcs===2 && GJ.fromJoin===1 && /prismPIKA/.test(GJ.unetName) && GJ.wh.every(x => x[0]===960 && x[1]===512) && links && seamQ, 'one job on the PC: the 3 clips joined, 2 bridges (the second pins frames from the first one\'s result), Prism Pika loaded once, one save, every link valid, the track\'s quality words in the bridges: ' + JSON.stringify(Object.assign({seamQ}, GJ)));
   const SG = await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); return {seams:H3.bridgeSeams(t).length}; }, CB.id);
   await done(CB.id, 'seam_00001.mp4');
   await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); t.pieces[0].deliv = 312; }, CB.id);
