@@ -2085,6 +2085,7 @@ const upSize = t => { const d = upDims(t); return d.w + '×' + d.h; };
 const regenLen = t => { const n = wholeFrames(t); return t.redo ? (gridDn(n)===n ? n : gridDn(Math.max(5, n - 2))) : t.pieces.length===1 ? n : gridDn(Math.max(5, n - 2)); };
 const clipFrames = t => t.pieces.reduce((a, p) => a + (p.deliv || p.gen), 0);
 const wholeFrames = t => t.redo ? t.redo.Fout : clipFrames(t);
+const BLEND_DEN = 0.35; // 🫧 how much the blend after a mask pass redraws (the lightest the sigmas allow is 0.3)
 function upGraph(t, oi, names){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
   const u = t.up || {}, part = u.part || null, crop = u.crop || null, d = part ? {w:t.w, h:t.h} : upDims(t), src = t.smoothed || t.final;
@@ -2108,14 +2109,14 @@ function upGraph(t, oi, names){
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
   const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt), length = part ? part.L : regenLen(t);
-  const once = (R, Z) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (R ? castText(words, {imgs:R.map(dressed), film:t.film, descOff:t.descOff, noNude:true}, true) : castWords(words, t.film)) || SM_PROMPT;
+  const once = (R, Z, SG) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (R ? castText(words, {imgs:R.map(dressed), film:t.film, descOff:t.descOff, noNude:true}, true) : castWords(words, t.film)) || SM_PROMPT;
     let iv;
     if(R){ const ri = {}; R.forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
       iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:W, height:Hh, length, ref_image_size:'match'}, ri)); }
     else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:W, height:Hh, length});
     const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:Z ? Z.lat : [big, 0], audio_latent:[sep, 1]});
     const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed || 42}), 0], guider:[add('BasicGuider', {model, conditioning:[iv, 0]}), 0], // (no 🚫 here: Jordan 2026-11-09 found ✨ High quality "really awful" with NAG 9 on a light redraw)
-      sampler:[add('KSamplerSelect', {sampler_name:'euler'}), 0], sigmas:[add('ManualSigmas', {sigmas:sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl)}), 0], latent_image:[av, 0]});
+      sampler:[add('KSamplerSelect', {sampler_name:'euler'}), 0], sigmas:[add('ManualSigmas', {sigmas:SG || sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl)}), 0], latent_image:[av, 0]});
     const vl = add('LTXVSeparateAVLatent', {av_latent:[out, 0]});
     return [add('VAEDecodeTiled', {samples:[vl, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0]; };
   const faces = facesOn(t) && refs ? u.faces.filter(f => { const R = faceRefs(t, f.n); return R.length && R.every(r => names[r.id]); }) : [];
@@ -2151,7 +2152,15 @@ function upGraph(t, oi, names){
       else gen = [add('ImageFromBatch', {image:once(faceRefs(t, fc.n)), batch_index:A, length:Ln}), 0];
       let m = [add('GrowMask', {mask:raw, expand:grow, tapered_corners:true}), 0];
       m = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:m}), 0], blur_radius:Math.min(31, grow), sigma:Math.max(1, grow / 2)}), 0], channel:'red'}), 0];
-      fmid = [add('ImageCompositeMasked', {destination:fmid, source:gen, x:0, y:0, resize_source:false, mask:m}), 0]; } }
+      fmid = [add('ImageCompositeMasked', {destination:fmid, source:gen, x:0, y:0, resize_source:false, mask:m}), 0]; }
+    // 🫧 blend the masks in (Jordan 2026-11-11: "the face pass could have some ghosting around where the mask is … an automatic pass to
+    // blend it" on every mask pass): the window with the repainted parts in goes through one very light vanilla MiniMax pass, with the
+    // pictures of everyone repainted, so the edges of the masks melt into the frame; only the stretch's frames are kept, as before
+    if(u.blend!==false){ const L0 = part.L, pre = A > 0 ? [add('ImageFromBatch', {image:px, batch_index:0, length:A}), 0] : null, post = L0 - A - Ln > 0 ? [add('ImageFromBatch', {image:px, batch_index:A + Ln, length:L0 - A - Ln}), 0] : null;
+      let wb = pre ? batchOf(add, oi, pre, fmid) : fmid; if(post) wb = batchOf(add, oi, wb, post);
+      const seen = {}, R = faces.flatMap(fc => faceRefs(t, fc.n)).filter(r => !seen[r.id] && (seen[r.id] = 1)).slice(0, 9);
+      const bl = once(R, {lat:[add('VAEEncode', {pixels:wb, vae}), 0], w:d.w, h:d.h}, denSig(BLEND_DEN));
+      fmid = [add('ImageFromBatch', {image:bl, batch_index:A, length:Ln}), 0]; } }
   if(part){ // the take up to a, the nudged frames from a to b, the take from b on (its own sound throughout)
     let j = part.a > 0 ? [add('ImageFromBatch', {image:[gc, 0], batch_index:0, length:part.a}), 0] : null;
     const mid = fmid || [add('ImageFromBatch', {image:ims, batch_index:part.a - part.s0, length:part.b - part.a}), 0]; j = j ? batchOf(add, oi, j, mid) : mid;
@@ -3657,6 +3666,7 @@ window.H3RedoPlan = redoPlan;
 const BRIDGE_CTX = 24, BRIDGE_HALF = 4;
 function bridgeSeams(t){
   if(t.redo && t.redo.bridge) return t.redo.bridge.rest;
+  if(t.combo && t.combo.seam) return t.joinErr ? [] : t.combo.seam.frames || [];
   if(!t.sm || t.sm.loop || t.sm.bridge===false || t.pieces.length < 2 || t.joinErr) return [];
   return t.pieces.slice(1).map(p => Math.round(p.start * FPS + (p.skip || 0))); }
 function bridgeWords(words, P){ const pp = {start:P.s0 / FPS, gen:P.L, deliv:P.L, ctx:0};
@@ -3664,7 +3674,9 @@ function bridgeWords(words, P){ const pp = {start:P.s0 / FPS, gen:P.L, deliv:P.L
 async function bridgeNext(t){ const seams = bridgeSeams(t); if(!seams.length) return 0;
   const B = t.redo && t.redo.bridge, n = B ? B.n : seams.length, up = B ? B.up : t.up, g = seams[0];
   const bridge = {rest:seams.slice(1), n, k:n - seams.length + 1, seam:g, words:B ? B.words : t.prompt, up:up || null, upImgs:B ? B.upImgs : (t.upImgs || []), from:B ? B.from : t.id, fin:B ? B.fin || null : (t.sm && t.sm.fin) || null};
+  { const sj = B ? B.sj : t.combo && t.combo.seam; if(sj) bridge.sj = sj; } // ⬆ Upscale track: where the bridged video goes back in Films
   let sent = 0; try{ sent = await window.H3Redo({take:t.id, a:(g - BRIDGE_HALF) / FPS, b:(g + BRIDGE_HALF) / FPS, ctx:BRIDGE_CTX, n:1, bridge}); }catch(e){ console.warn(e); }
+  if(!sent && bridge.sj){ t.bridgeErr = 'join ' + bridge.k + ' could not be sent'; save(); }
   if(sent) toast('🧵 Bridging join ' + bridge.k + ' of ' + n + ' (about a minute each)', 5000);
   else if(up && !t.upStage){ t.smoothed = t.final; t.up = up; t.state = 'working'; t.upStage = 'start'; save(); drawTakes(); tickSoon(300); } // couldn't bridge: ⬆ as it is
   return sent; }
@@ -3715,6 +3727,13 @@ window.H3Combine = async o => { const parts = [];
     ctxDirs:null, sm:null, up:null, upImgs:[], ctl:null, ctl2:null, final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false,
     combo:{parts, film:o.film || '', track:o.track || '', clips:o.clips || [], at:+o.at || 0, key:uid('k'), auto:!!o.auto, blend:o.blend || null, test:!!o.test}, wins:Array.isArray(o.wins) && o.wins.length ? o.wins : null,
     pieces:[{start:0, gen:F, deliv:F, ctx:0, prompt:'', state:'new'}]});
+  // (a ✨ High quality take's video is bigger than the size its take was rendered at: the joined take says the size it really is)
+  if(src.up && src.up.crop && src.final && src.up.scale > 1){ const d = upDims(src); t.w = d.w; t.h = d.h; }
+  if(o.seam){ // ⬆ Upscale track's 🧵 seams: the joins of the clips, in frames of the joined video, bridged one after another
+    let acc = 0; const fr = []; parts.forEach((q, i) => { if(i) fr.push(Math.round(acc * FPS)); acc += q.out - q.in; });
+    let root = src; while(root && root.redo && root.redo.src){ const r = deckTake(root.redo.src); if(!r) break; root = r; }
+    t.combo.seam = Object.assign({}, o.seam, {frames:fr});
+    Object.assign(t, {model:o.seam.unet ? famKey(o.seam.unet) : root.model, turbo:o.seam.unet ? true : root.turbo, steps:o.seam.unet ? '' : root.steps, loras:JSON.parse(JSON.stringify(lorasOf(root))), imgs:JSON.parse(JSON.stringify(root.imgs || [])), h3:root.h3, film:root.film || t.film, fin:null}); }
   S.takes.unshift(t); drawTakes();
   try{ await sendPieces(t, 0); }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not joined: ' + e.message, 6000); save(); return 0; }
   save(); drawTakes(); return 1; };
