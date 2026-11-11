@@ -528,7 +528,73 @@ async function pullTakes(){
 async function pushTakes(){
   const body = JSON.stringify({v:1, t:S.tsav || Date.now(), pcs:S.pcs, takes:S.takes});
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url]===body) continue;
-    try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} } }
+    try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} }  pushFilms(); }
+// ---------- 🛟 films and Library kept safe on the PCs (Jordan 2026-11-11: her films and Library were gone, the renders were there) ----------
+// The phone can clear a site's saved data by itself. The takes already had a copy on each PC (h3deck_takes.json), so they came
+// back; the films (Films' own save, 'h3edit') and the 📚 Library didn't. Now they have a copy too (h3deck_films.json), and when
+// the app starts with no films or no Library, it brings them back from the newest copy, pictures and all (the pictures are
+// fetched back from the PC's input/h3deck folder, where each one was sent the first time it went into a render).
+// With no copy on the PCs, the films are rebuilt from the renders (each take knows its film), once.
+const FILMS_FILE = '/userdata/' + 'h3deck_films.json' + '?overwrite=true';
+let RESCUED = false; // nothing is pushed until the app has looked for a copy (an empty phone must not overwrite a good one)
+function filmsNow(){ try{ const F = FW && FW.FILM; if(F && F.S && F.S.films) return {E:F.S, live:true}; }catch(e){}
+  let E = {}; try{ E = JSON.parse(localStorage.getItem('h3edit') || '{}') || {}; }catch(e){} E.films = E.films || []; return {E, live:false}; }
+function backupBody(){ const {E} = filmsNow(), films = JSON.parse(JSON.stringify(E.films || [], (k, v) => k==='exp' || k==='prev' ? undefined : v));
+  if(!films.length && !(S.lib || []).length) return null;
+  const keep = {lib:S.lib || [], forms:S.forms || {}, casts:S.casts || {}, cast:S.cast || [], fkey:S.fkey, films}, txt = JSON.stringify(keep), media = {}, up = {};
+  for(const id of Object.keys(S.media || {})) if(txt.includes('"' + id + '"')){ media[id] = S.media[id]; Object.keys(S.up || {}).forEach(k => { if(k.startsWith(id + '|')) up[k] = S.up[k]; }); }
+  return JSON.stringify(Object.assign({v:1, t:Date.now(), media, up}, keep)); }
+async function pushFilms(){ if(!RESCUED) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
+  for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url + '|films']===sig) continue;
+    try{ const r = await fetch(p.url + FILMS_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url + '|films'] = sig; }catch(e){} } }
+async function mediaBack(ids, up){ let n = 0;
+  for(const id of ids){ const m = S.media[id]; if(!m || m.remote) continue; let have = null; try{ have = await IDB.get(id); }catch(e){} if(have) continue;
+    const ext = ((m.name || '').match(/\.[a-z0-9]+$/i) || [m.kind==='img' ? '.png' : m.kind==='vid' ? '.mp4' : '.wav'])[0].toLowerCase();
+    for(const p of S.pcs){ if(!pcOf(p.url).online) continue; const nm = (up || {})[id + '|' + p.url] || S.up[id + '|' + p.url] || 'h3deck/h3deck_' + id + ext, i = nm.lastIndexOf('/');
+      try{ const r = await fetch(p.url + '/view?type=input&subfolder=' + encodeURIComponent(i > 0 ? nm.slice(0, i) : '') + '&filename=' + encodeURIComponent(nm.slice(i + 1)), {cache:'no-store'});
+        if(!r.ok) continue; const b = await r.blob(); if(!b.size) continue; await IDB.put(id, b); BLOBS[id] = b; n++; break; }catch(e){} } }
+  return n; }
+function putFilms(films){ const {E, live} = filmsNow(); E.films = films.concat(E.films || []); if(live){ try{ FW.FILM.save(); FW.FILM.draw(); }catch(e){} }
+  else { try{ localStorage.setItem('h3edit', JSON.stringify(E)); }catch(e){} try{ if(FW) FW.location.reload(); }catch(e){} } }
+// the films, from the renders alone: each film's finished takes in the order they were made, options of a clip under that clip,
+// a carry-on after the clip it carries on from, a lead-in before it
+function rebuildFilms(){ const by = {};
+  for(const t of S.takes || []){ if(!t.film || t.combo || t.blend || (t.redo && t.redo.bridge) || t.state==='failed') continue; (by[t.film] = by[t.film] || []).push(t); }
+  const out = [], rid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  Object.entries(by).forEach(([fid, ts], i) => { ts.sort((a, b) => (a.t || 0) - (b.t || 0)); const seq = [], ofTake = {}, ofKey = {};
+    const nameOf = ts.map(t => (t.toFilm && t.toFilm.name) || (t.carry && t.carry.name) || '').find(Boolean);
+    for(const t of ts){ const tf = t.toFilm || {}, src = (t.redo && t.redo.src) || (tf.clip && null);
+      const key = tf.key && (tf.clip ? tf.key : null);
+      let g = (src && ofTake[src]) || (key && ofKey[key]);
+      if(g){ g.alts.push(t.id); ofTake[t.id] = g; continue; }
+      g = {take:t.id, alts:[t.id], d:Math.max(0.5, (t.pieces || []).reduce((a, p) => a + (p.deliv || 0), 0) / FPS || +t.seconds || 5)};
+      const cs = t.carry && t.carry.src && ofTake[t.carry.src], ls = t.lead && t.lead.src && ofTake[t.lead.src];
+      if(cs) seq.splice(seq.indexOf(cs) + 1, 0, g); else if(ls) seq.splice(seq.indexOf(ls), 0, g); else seq.push(g);
+      ofTake[t.id] = g; if(key) ofKey[key] = g; }
+    let at = 0; const clips = seq.map(g => { const c = {id:rid('c'), take:g.take, in:0, out:g.d, dur:g.d, at}; if(g.alts.length > 1) c.alts = g.alts; at += g.d; return c; });
+    if(clips.length) out.push({id:fid, name:(nameOf || 'Film ' + (i + 1)) + ' (rebuilt)', rebuilt:true, tracks:[{id:rid('tr'), clips}, {id:rid('tr'), clips:[]}], pps:24}); });
+  return out; }
+async function rescue(){ try{
+  for(let i = 0; i < 40 && S.tab==='films' && !(FW && FW.FILM); i++) await new Promise(res => setTimeout(res, 250)); // Films' own save is read once it's open
+  await pullTakes().catch(() => 0);
+  let best = null;
+  for(const p of S.pcs){ if(!pcOf(p.url).online) continue; try{ const r = await fetch(p.url + '/userdata/h3deck_films.json', {cache:'no-store'}); if(!r.ok) continue; const j = await r.json();
+    if(j && (Array.isArray(j.films) || Array.isArray(j.lib)) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
+  const {E} = filmsNow(), noFilms = !(E.films || []).length, noLib = !(S.lib || []).length, said = [];
+  if(best && (noFilms || noLib)){
+    if(noFilms && (best.films || []).length){ putFilms(best.films); said.push(best.films.length + (best.films.length===1 ? ' film' : ' films')); }
+    if(noLib && (best.lib || []).length){ S.lib = best.lib; said.push(best.lib.length + ' Library ' + (best.lib.length===1 ? 'entry' : 'entries')); }
+    for(const [k, v] of Object.entries(best.forms || {})) if(S.forms[k]===undefined && k!==mineK()) S.forms[k] = v;
+    for(const [k, v] of Object.entries(best.casts || {})) if(S.casts[k]===undefined && k!==mineK()) S.casts[k] = v;
+    if(!(S.cast || []).length && (best.cast || []).length && (best.fkey || '')===mineK()) S.cast = best.cast;
+    for(const [id, m] of Object.entries(best.media || {})) if(!S.media[id]) S.media[id] = m;
+    for(const [k, v] of Object.entries(best.up || {})) if(!S.up[k]) S.up[k] = v;
+    if(said.length){ save(); drawAll(); try{ drawLib(); }catch(e){} toast('🛟 ' + said.join(' and ') + ' brought back from the PCs', 6000);
+      mediaBack(Object.keys(best.media || {}), best.up).then(n => { if(n){ save(); drawAll(); try{ drawLib(); }catch(e){} } }); } }
+  if(!(filmsNow().E.films || []).length && !S.filmsRebuilt){ const fs = rebuildFilms();
+    if(fs.length){ S.filmsRebuilt = true; putFilms(fs); save(); toast('🛟 ' + fs.length + (fs.length===1 ? ' film' : ' films') + ' rebuilt from your renders. The clips are in the order they were made; check the cuts.', 8000); } }
+  }catch(e){} RESCUED = true; pushFilms(); }
+setInterval(() => { pushTakes(); pushFilms(); }, 60000);
 function toast(t, ms){ const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), ms || 3200); }
 
 // ---------- media kept on the phone (IndexedDB), so a reference can be sent to whichever PC takes the job ----------
@@ -3492,7 +3558,7 @@ async function useMocap(x, auto, slot){ const it = x.it, f = S.f; MOCAP.busy = t
   catch(e){ MOCAP.err = e.message; toast(e.message, 5000); }
   MOCAP.busy = false; save(); drawAll(); }
 try{ if(tidyMedia(false)) saveNow(); }catch(e){} // media nothing uses any more, on every start
-pingAll().then(() => { drawAll(); tick(); pullTakes(); pullInbox(); });
+pingAll().then(() => { drawAll(); tick(); rescue(); pullInbox(); });
 document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') pingAll().then(pullInbox).catch(() => {}); });
 setInterval(() => { if(!document.hidden) pingAll().then(() => { drawGo(); drawTakes(); }); }, 10000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden){ pingAll().then(() => { drawAll(); tickSoon(0); }); } });
