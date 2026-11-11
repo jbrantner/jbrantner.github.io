@@ -22,6 +22,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const lab = await page.$$eval('#takes .take', e => e.map(x => x.dataset.take + ':' + ((x.querySelector('.rtWhere') || {}).textContent || '')));
   console.log(lab);
   ok(lab.some(x => /^c3:.*Clip 2 · Take 3 of 3/.test(x)) && lab.some(x => /^c2:.*Take 2 of 3 · in use/.test(x)) && lab.some(x => /^a:.*Clip 1 · Take 1/.test(x)), 'the renders under the canvas say their clip and take');
+  // a playing card isn't rebuilt by the redraws (Jordan 2026-11-11: the video kept reloading)
+  await page.evaluate(() => { window.__el = document.querySelector('#takes [data-take="c3"]'); FW.FILM.S.films[0].tracks[0].clips[0].at = 0.5; FW.FILM.save(); }); await page.waitForTimeout(3500);
+  await page.evaluate(() => drawTakes()); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => window.__el === document.querySelector('#takes [data-take="c3"]')), 'redraws keep the same card (its video keeps playing)');
   await page.click('#takes [data-pick="c3"]'); await page.waitForTimeout(400);
   const st = await page.evaluate(() => { const b = FW.document.querySelector('#vstrip [data-t="c3"]'); return {sel:FW.FILM.SEL, hl:!!(b && b.classList.contains('hl'))}; });
   ok(st.sel==='x2' && st.hl, '⬆ Pick it selects clip 2 up top with Take 3 picked out (' + JSON.stringify(st) + ')');
