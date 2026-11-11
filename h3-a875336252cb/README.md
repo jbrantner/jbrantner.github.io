@@ -108,3 +108,5 @@ Test: `CLIP=<a ~5 s video with sound> NODE_PATH=$(npm root -g) node tests/t_uptr
 
 ## 🧹 Start fresh (2026-11-11)
 ⚙ › 🧹 Start fresh… takes every render off the list on this phone and in the PCs' copies (h3deck_takes.json / h3deck_films.json), clears ↶ Undo, and optionally the films (on by default) and the 📚 Library (off by default). Older copies on a PC that was off are ignored (S.fresh). The video files themselves are not deleted by this. Test: tests/t_fresh.js.
+
+✍ Words-only clothing and attributes (2026-11-11): the ＋ Clothing / ＋ Attribute sheet on a character has "✍ Or just type it" (e.g. "a grey knit sweater"). It makes a 📚 Library entry with no picture and puts it on her; a 👗/✨ entry with no picture is sent as its words (More detail, else its name) inside her description ("Wearing a grey knit sweater."), dresses her (no 🫥 nude) and tells MiniMax her pictures' clothes aren't kept. It has a chip per shot like the others. `libWords()`, `wordsOn()`, `castMoreT()` in index.html; test tests/t_words.js.
