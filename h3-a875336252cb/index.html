@@ -2247,7 +2247,10 @@ function upGraph(t, oi, names){
   const enc = add('VAEEncode', {pixels:pxu, vae});
   const big = part || pix ? enc : add('MinimaxH3LatentUpscaler3D', {latent:[enc, 0], model_name:regenUpModel(oi), mode:'target dimensions', 'mode.width':d.w, 'mode.height':d.h, align:32, enable_temporal_chunking:true, force_unload:true, device:'cuda', precision:'bf16'});
   const refs = regenRefsOn(t, oi) && names; // ↩ the take's own reference pictures keep the likeness (Ref2VA + the regenerate LoRA)
-  let model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:upUnetOf(t, oi, !!refs), weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
+  // a Ref2VA model (Prism Pika) always goes through MiniMaxH3ReferenceToVideo, pictures or not (Jordan 2026-11-12: ✨ failed on an 📤 uploaded
+  // clip, which has no pictures: the Pika model was being driven by the first/last-frame node), as the main render does
+  const uName = upUnetOf(t, oi, !!refs), refModel = !!uName && !/fl2v/i.test(uName);
+  let model = [add('LoraLoaderModelOnly', {model:[add('UNETLoader', {unet_name:uName, weight_dtype:'default'}), 0], lora_name:regenLora(oi), strength_model:u.str != null ? +u.str : 0.8}), 0];
   // the take's own LoRAs ride along (Jordan 2026-11-07: "I'm wondering if the Lora worked still for the pass": it didn't, the pass had none), with their words
   const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), uls = lorasOf(t).filter(l => have.includes(l.name) && l.name!==regenLora(oi));
   for(const l of uls) model = [add('LoraLoaderModelOnly', {model, lora_name:l.name, strength_model:+l.str || 1}), 0];
@@ -2257,7 +2260,7 @@ function upGraph(t, oi, names){
   const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt) + (u.qw && !(u.prompt || t.prompt || '').includes(u.qw) ? ' ' + u.qw : ''), length = part ? part.L : pre ? crop.L + pre : regenLen(t);
   const once = (R, Z, SG) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (R ? castText(words, {imgs:R.map(dressed), film:t.film, descOff:t.descOff, noNude:true}, true) : castWords(words, t.film)) || SM_PROMPT;
     let iv;
-    if(R){ const ri = {}; R.forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
+    if(R || refModel){ const ri = {}; (R || []).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
       iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:W, height:Hh, length, ref_image_size:'match'}, ri)); }
     else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:W, height:Hh, length});
     const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:Z ? Z.lat : [big, 0], audio_latent:[sep, 1]});
