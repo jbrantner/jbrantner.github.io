@@ -153,6 +153,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const SPL = await fr.evaluate(() => { const f = {id:'fS', name:'S', tracks:[{id:'trS', clips:[{id:'cS', take:'tA', in:0, out:12, dur:12, at:2}, {id:'cT', take:'tA', in:0, out:5, dur:5, at:14}]}], pps:24}; const tr = f.tracks[0];
     const n = FILM.splitLong(f, tr, tr.clips.slice()); const cs = tr.clips.slice().sort((a, b) => a.at - b.at); return {n, cs:cs.map(c => [+c.at.toFixed(2), +c.in.toFixed(2), +c.out.toFixed(2), c.take, !!c.cut])}; });
   ok(SPL.n===2 && SPL.cs.length===4 && JSON.stringify(SPL.cs.map(c => c.slice(0, 3)))==='[[2,0,4],[6,4,8],[10,8,12],[14,0,5]]' && SPL.cs.every(c => c[3]==='tA' && !c[4]), '✂ a 12 s clip goes to ✨ as 3 touching 4 s parts (a 5 s clip stays whole): ' + JSON.stringify(SPL));
+  // 📤 an uploaded clip (no pictures, no words): ✨ on Prism Pika still goes through the reference node (the Pika model can't take the first/last-frame one)
+  await page.evaluate(([R]) => { H3.S.takes.unshift({id:'tU', t:Date.now(), name:'h3_u', dir:'H3Deck/h3_u', pc:R, w:832, h:480, seed:3, model:H3.S.f.model, turbo:H3.S.f.turbo, loras:[], steps:'', h3:null, film:'', upName:'my.mp4', prompt:'', seconds:5, fl:false, first:null, lastOn:false, lastImg:null, cont:null, carry:null, redo:null, lead:null, combo:null, toFilm:null, from:null, pins:[], follow:[], imgs:[], vids:[], auds:[], sm:null, up:null, upImgs:[], ctl:null, ctl2:null, smoothed:null, state:'done', reviewed:false,
+    pieces:[{start:0, gen:120, deliv:120, ctx:0, prompt:'', state:'done', upl:{file:'up.mp4', sound:true, fps:30, w:1080, h:1920}, file:{filename:'h3_u_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_u', type:'output'}}], final:{filename:'h3_u_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_u', type:'output'}}); H3.saveNow(); }, [R]);
+  await fr.waitForFunction(() => !!FILM.takeOf('tU'), null, {timeout:5000}).catch(() => {});
+  const UPn = await fr.evaluate(async () => { const f = {id:'fU', name:'U', tracks:[{id:'trU', clips:[]}], pps:24}; FILM.S.films.unshift(f); FILM.addClip(f, FILM.takeOf('tU'), 0); return FILM.upTrackGo(f, f.tracks[0], 0.9, 'singularityV2X10eros_prismPIKA.safetensors'); });
+  const UG = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.src==='tU'); if(!t) return null; const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
+    return {ref:g.filter(n => n.class_type==='MiniMaxH3ReferenceToVideo').length, i2v:g.filter(n => n.class_type==='MiniMaxH3ImageToVideo').length, prompt:(g.find(n => n.inputs && n.inputs.prompt) || {inputs:{}}).inputs.prompt}; }, R);
+  ok(UPn===1 && UG && UG.ref===1 && UG.i2v===0 && UG.prompt, '📤 an uploaded clip with no pictures or words: ✨ on Prism Pika uses the reference node (not first/last frame) and still has words: ' + JSON.stringify({UPn, UG}));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
