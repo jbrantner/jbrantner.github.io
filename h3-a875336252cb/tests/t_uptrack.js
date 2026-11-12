@@ -161,6 +161,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const UG = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.src==='tU'); if(!t) return null; const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
     return {ref:g.filter(n => n.class_type==='MiniMaxH3ReferenceToVideo').length, i2v:g.filter(n => n.class_type==='MiniMaxH3ImageToVideo').length, prompt:(g.find(n => n.inputs && n.inputs.prompt) || {inputs:{}}).inputs.prompt}; }, R);
   ok(UPn===1 && UG && UG.ref===1 && UG.i2v===0 && UG.prompt, '📤 an uploaded clip with no pictures or words: ✨ on Prism Pika uses the reference node (not first/last frame) and still has words: ' + JSON.stringify({UPn, UG}));
+  // ✨ on Prism Pika keeps every picture the render had (6 here), fitted by MMH3FitReferences like the render; vanilla still takes the first few
+  const PK = await page.evaluate(R => { const src = H3.S.takes.find(x => x.id==='tA'), t = JSON.parse(JSON.stringify(src)); t.id = 'tPk'; t.imgs = [1, 2, 3, 4, 5, 6].map(i => ({id:'mP' + i, desc:'', keep:'exact'}));
+    t.up = {scale:1.5, den:0.9, clean:0.8, look:'live', str:0.8, refs:true, prompt:'she waves', unet:'singularityV2X10eros_prismPIKA.safetensors', crop:{s0:0, L:120, pad:0, F:120}}; t.smoothed = t.final;
+    const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g), rv = g.find(n => n.class_type==='MiniMaxH3ReferenceToVideo'), fit = g.find(n => n.class_type==='MMH3FitReferences');
+    t.up.unet = ''; const g2 = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g), rv2 = g2.find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
+    return {pika:Object.keys(rv.inputs).filter(k => /ref_image_/.test(k)).length, fit:!!fit && Object.keys(fit.inputs).filter(k => /^image_/.test(k)).length, vanilla:rv2 ? Object.keys(rv2.inputs).filter(k => /ref_image_/.test(k)).length : 0, vfit:g2.some(n => n.class_type==='MMH3FitReferences')}; }, R);
+  ok(PK.pika >= 6 && PK.fit===PK.pika && PK.vanilla <= 4 && !PK.vfit, '✨ on Prism Pika sends all 6 of the take\'s pictures through MMH3FitReferences (vanilla keeps its first few): ' + JSON.stringify(PK));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
