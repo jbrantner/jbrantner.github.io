@@ -143,6 +143,9 @@ header h1 span{color:var(--accent)}
 .phl mark.wr i::after{content:attr(data-n);position:absolute;left:-2px;right:-2px;top:0;bottom:0;display:flex;align-items:center;justify-content:center;background:var(--cc);color:#15161b;font-size:12.5px;font-weight:800;border-radius:6px;white-space:nowrap;overflow:hidden;padding:0 2px}
 .phl mark.wr i+i::after{content:'';}
 .phl mark::after{content:attr(data-n);position:absolute;left:-2px;right:-2px;top:0;bottom:0;display:flex;align-items:center;justify-content:center;background:var(--cc);color:#15161b;font-size:12.5px;font-weight:800;border-radius:6px;white-space:nowrap;overflow:hidden;padding:0 2px}
+.srow{display:flex;gap:8px;align-items:center;margin-top:6px}.srow img{width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--line);flex:none}
+.srow .rchip{padding:5px 9px;border-radius:999px;border:1px solid var(--rc);background:var(--bg);color:var(--rc);font-size:12.5px;font-weight:800;white-space:nowrap;flex:none}
+.srow input{flex:1;min-width:0;font-size:14px;padding:7px 9px}.srow .x{flex:none;padding:5px 9px}
 .tagbar button{padding:5px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);font-size:12.5px;font-weight:800;color:var(--soft)}
 .step{display:flex;align-items:center;border:1px solid var(--line);border-radius:11px;background:var(--bg)}
 .step button{width:40px;height:38px;font-size:18px;color:var(--soft)}
@@ -241,6 +244,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
           <div id="bbTrack" style="position:relative;height:46px;border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none;user-select:none"></div>
           <div class="note" id="bbNote" style="margin-top:4px"></div></div>
         <div id="descBar" hidden style="margin-top:8px"></div>
+        <div id="srefBox" style="margin-top:8px"></div>
         <div class="chips" style="margin-top:8px"><button class="btn" id="ckBtn">🔎 Check prompt</button><button class="btn" id="ckChat">💬 Ask the checker</button><button class="btn" id="shufBtn">🔀 Shuffle: off</button></div>
         <div id="ckOut" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px"></div>
         <div id="styleRow" style="margin-top:8px"><div class="chips" id="styleChips"></div></div>
@@ -1090,6 +1094,16 @@ function refLabels(){ // fixed order: pictures, then each video (its soundtrack'
 // A prompt says <Subject 1>. While that subject has no picture it is sent as its stand-in words ("a woman"); once it has one, the picture
 // goes along and MiniMax hears who it is ("<Subject 1> is the lady, as shown in <Picture 3>"). Takes keep the token, so every later render
 // (more takes, redo a stretch, carry on, lead in) uses the subject as it is NOW: change it once and it changes everywhere.
+// 🖼 Ref images for one shot (Jordan 2026-11-12: "add general reference images for the shot… as tags like you do with characters, 'Ref Image 1'"):
+// the shot's own pictures (S.f.imgs that aren't pose keys), numbered in order; the prompt says <Ref Image k>, which is sent as that picture's
+// <Subject n> (H3 way) or <Picture n> (plain). They live on the shot and its takes only, never in the 📚 Library.
+const REFRE = /<\s*ref\s*image\s*(\d+)\s*>/gi, shotRefs = f => ((f && f.imgs) || []).filter(r => !r.pose && !r.pin);
+const refGone = (imgs, k, T) => { const r = (imgs || []).find(x => x.rk===+k) || (T && T.refOff && T.refOff[k] != null ? {desc:T.refOff[k]} : null), d = r && (r.desc || '').trim().replace(/[\s.]*$/, ''); return d ? (/^(a|an|the)\s/i.test(d) ? d.replace(/^(a|an)\s/i, 'the ') : 'the ' + d) : 'it'; }; // its picture isn't sent
+function refRenum(f, map){ // <Ref Image old> → <Ref Image new> (null = taken out) in the Shot box and the edited pieces
+  const fix = v => (v || '').replace(REFRE, (m, n) => map[+n]===undefined ? m : map[+n]===null ? '' : '\u0002' + map[+n] + '\u0002').replace(/\u0002(\d+)\u0002/g, '<Ref Image $1>').replace(/ {2,}/g, ' ');
+  f.prompt = fix(f.prompt); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = fix(f.pieceText[k]); const ta = $('#prompt'); if(ta && f===S.f) ta.value = f.prompt; }
+function rmImg(f, i){ const r = f.imgs[i]; if(!r) return; const SR = shotRefs(f), k = SR.indexOf(r) + 1; f.imgs.splice(i, 1);
+  if(k){ const map = {[k]:null}; for(let j = k + 1; j <= SR.length; j++) map[j] = j - 1; refRenum(f, map); } }
 const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
 const castFor = k => k===undefined || (k || '')===mineK() ? S.cast || [] : (S.casts[k || ''] || S.castOld || []);
 const castOf = (n, k) => castFor(k).find(c => c.n===+n);
@@ -1155,8 +1169,10 @@ function rerollSheet(t){ openSheet(`<h3><span>🎲 New take</span><button class=
 function castUsed(t){ const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), ns = new Set();
   txt.replace(SUBRE, (m, n) => { if(castOf(n, t.film)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
-  const imgs = (t.imgs || []).filter(r => !r.cast);
-  const used = pics ? castUsed(t) : [], lk = pics && t.look && t.look.src ? t.look : null, lkN = lk && lk.src==='c' ? +lk.n || 0 : 0, apics = c => attrsOf(c, t).map(libOf).filter(Boolean).map(A => [A, libPics(A).filter(id => S.media[id]).slice(0, 2)]);
+  const used = pics ? castUsed(t) : [];
+  // 🖼 the shot's own pictures leave room for one picture of each subject its words name (Jordan 2026-11-12)
+  const imgs = (t.imgs || []).filter(r => !r.cast).slice(0, Math.max(0, MAXREF.img - used.filter(n => castPics(castOf(n, t.film)).length).length));
+  const lk = pics && t.look && t.look.src ? t.look : null, lkN = lk && lk.src==='c' ? +lk.n || 0 : 0, apics = c => attrsOf(c, t).map(libOf).filter(Boolean).map(A => [A, libPics(A).filter(id => S.media[id]).slice(0, 2)]);
   let need = used.reduce((a, n) => a + apics(castOf(n, t.film)).reduce((b, [, P]) => b + P.length, 0), 0); // (2026-11-08: an outfit didn't take, its pictures had no room)
   const vids = (t.vids || []).slice(), acts = c => (c.acts || []).map(x => [x, libOf(x.id)]).filter(([, A]) => A);
   for(const n of used) for(const [x, A] of acts(castOf(n, t.film))) if(!(A.vid && S.media[A.vid] && vids.length < MAXREF.vid)) need += libPics(A).filter(id => S.media[id]).slice(0, 3).length;
@@ -1180,11 +1196,13 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   for(const {P, who} of Object.values(pz)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', when:P.when==='all' ? 'all' : 'start', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:castMore(P), poseOf:who.sort((a, b) => a.p - b.p).map(w => ({n:w.n, p:w.p, w:poseWho(P, w.p)}))});
   for(const id of stylePics) if(imgs.length < MAXREF.img) imgs.push({id, style:true, styleOf:lkN, keep:'loose'});
   if(lk && lk.frame && S.media[lk.frame] && imgs.length < MAXREF.img) imgs.push({id:lk.frame, style:true, frame:true, keep:'loose'}); // 🖼 the painted example frame: its look only
-  return Object.assign({}, t, {imgs, vids}); }
+  const drop = (t.imgs || []).filter(r => !r.cast && r.rk && !imgs.includes(r)); // 🖼 ref images with no room: their words stand in
+  return Object.assign({}, t, {imgs, vids}, drop.length ? {refOff:Object.assign({}, t.refOff, ...drop.map(r => ({[r.rk]:r.desc || ''})))} : {}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
   const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) (pics[r.cast] = pics[r.cast] || []).push('<Picture ' + (k + 1) + '>'); });
   const told = [];
   const fk = T ? T.film : undefined;
+  { const I = (T && T.imgs) || []; txt = (txt || '').replace(REFRE, (m, n) => { const k = I.findIndex(r => r.rk===+n); return k < 0 ? refGone(I, n, T) : plain ? '<Picture ' + (k + 1) + '>' : m; }); } // 🖼
   let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n, fk); if(!c || pics[c.n]) return m;
     let w = (c.stand || '').trim() || 'someone'; if(!(T && T.noNude) && nudeOn(c, T)) w = /^(a|an)\s+/i.test(w) ? 'a nude ' + w.replace(/^(a|an)\s+/i, '') : /^(the|someone)$/i.test(w) ? w + ' nude' : 'nude ' + w; // 🫥
     if(castMoreT(c, T) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
@@ -1207,7 +1225,7 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
     else if(src) ad.push('Everyone and everything is shown in the same visual style as <Subject ' + src.cast + '>.'); }
   if(plain && ad.length) out = ad.join(' ') + ' ' + out;
   return out; }
-const castWords = (txt, k) => (txt || '').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
+const castWords = (txt, k) => (txt || '').replace(REFRE, 'it').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
 function castHits(w){ // how often the words are in the form and the takes (for 🔁 swap)
   if(!(w = (w || '').trim())) return 0; const re = new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'); let n = 0;
   const cnt = x => { n += ((x || '').match(re) || []).length; };
@@ -1224,13 +1242,29 @@ function castSwap(re, to){ // every prompt in the form and in every take (the ti
 const SUBC = ['#ff5ca8', '#4fd1ff', '#ffd24f', '#7ee787', '#c79bff', '#ff9b5c', '#5cffd8', '#ff7b7b'];
 const chipName = c => { const nm = castName(c); return /^Subject \d+$/.test(nm) ? ((c.stand || '').trim() || nm) : nm; };
 const subColor = n => SUBC[(Math.max(1, +n || 1) - 1) % SUBC.length];
+const REFC = '#d8dbe4';
+// 🖼 the shot's ref images, under the Shot box: picture, its chip (tap = put <Ref Image k> in the words), what it is (optional), ✕
+const srefMax = f => Math.max(0, MAXREF.img - (f.imgs || []).filter(r => r.pose && !r.pin).length - castUsed({prompt:f.prompt || '', pieces:[], film:S.fkey}).length);
+function srefNote(f){ try{ const R = refsOn(), T = castTake({prompt:f.prompt || '', pieces:[], imgs:R.imgs, film:S.fkey, descOff:f.descOff, look:lookSnap()}, true), used = castUsed({prompt:f.prompt || '', pieces:[], film:S.fkey});
+    const want = used.reduce((a, n) => a + castPics(castOf(n, S.fkey)).length, 0), got = T.imgs.filter(r => r.cast).length, SR = shotRefs(f), mine = T.imgs.filter(r => SR.includes(r)).length, on = SR.filter(r => r.on).length;
+    return 'Sends ' + T.imgs.length + ' of MiniMax\'s ' + MAXREF.img + ' pictures: ' + mine + ' ref image' + (mine===1 ? '' : 's') + (used.length ? ' and ' + got + ' of the characters\' ' + want : '') + '.' + (got < want ? ' The characters send fewer of their pictures to make room (each still gets at least one).' : '') + (mine < on ? ' ' + (on - mine) + ' ref image' + (on - mine===1 ? " doesn't" : "s don't") + ' fit and stay' + (on - mine===1 ? 's' : '') + ' behind (their words stand in).' : '') + ' Only this shot uses them; they don\'t go into the 📚 Library.';
+  }catch(e){ return ''; } }
+let SREFSIG = '';
+function drawShotRefs(){ const f = S.f, box = $('#srefBox'); if(!box) return; const SR = f.sm ? [] : shotRefs(f), room = srefMax(f) - SR.length;
+  const sig = JSON.stringify([f.sm, SR.map(r => [r.id, r.on, (S.media[r.id] || {}).thumb ? 1 : 0]), room > 0]);
+  if(sig!==SREFSIG && !box.contains(document.activeElement)){ SREFSIG = sig; box.hidden = !!f.sm;
+    box.innerHTML = '<div class="lab"><span>🖼 Ref images for this shot</span></div>' + SR.map((r, i) => { const m = S.media[r.id] || {}, k = f.imgs.indexOf(r);
+      return `<div class="srow"${r.on ? '' : ' style="opacity:.5"'}><img src="${m.thumb || ''}" alt=""><button class="rchip" style="--rc:${REFC}" data-ins="&lt;Ref Image ${i + 1}&gt;" title="Put it in the words">🖼 Ref Image ${i + 1}</button><input data-srd="${k}" placeholder="What it is (optional)" value="${esc(r.desc || '')}"><button class="btn x" data-rm="sref" data-i="${k}" aria-label="Take it off">✕</button></div>`; }).join('')
+      + `<div class="row" style="margin-top:6px;align-items:center"><button class="btn" data-add="sref"${room > 0 ? '' : ' disabled'}>＋ Ref image</button><span class="note" style="flex:1">${SR.length ? '' : 'A picture only this shot uses. Tap its chip to put &lt;Ref Image 1&gt; in the words.'}${room > 0 || SR.length ? '' : ' No room: the characters in the words use all 9 pictures.'}</span></div><div class="note" id="srefNote" style="margin-top:4px"></div>`; }
+  const n = $('#srefNote'); if(n) n.textContent = SR.length ? srefNote(f) : ''; }
 let HLV = null;
 function subjHl(){ const ta = $('#prompt'), hl = $('#promptHl'); if(!ta || !hl) return; const v = ta.value; HLV = v;
-  if(!/<\s*subject\s*\d+\s*>/i.test(v)){ hl.hidden = true; return; }
+  if(!/<\s*subject\s*\d+\s*>|<\s*ref\s*image\s*\d+\s*>/i.test(v)){ hl.hidden = true; return; }
   // a tag broken over two lines (Jordan 2026-11-09: "some of the tags are the names and other tags came out as subject 3"): each half is
   // its own coloured piece, the name on the first; a subject with no name yet shows its stand-in words ("a woman")
-  let h = '', i = 0; v.replace(SUBRE, (m, n, off) => { const c = castOf(n), nm = esc(c ? chipName(c) : 'not in this film'), k = m.search(/\s\S*$/), a = k > 0 ? m.slice(0, k) : m, b = k > 0 ? m.slice(k) : '';
-    h += esc(v.slice(i, off)) + `<mark style="--cc:${c ? subColor(n) : '#8a8f9c'}" data-n="${nm}"><i data-n="${nm}">${esc(a)}</i>${b ? `<i>${esc(b)}</i>` : ''}</mark>`; i = off + m.length; return m; });
+  const SR = shotRefs(S.f);
+  let h = '', i = 0; v.replace(/<\s*subject\s*(\d+)\s*>|<\s*ref\s*image\s*(\d+)\s*>/gi, (m, n, rn, off) => { const c = n && castOf(n), r = rn && SR[+rn - 1], nm = esc(rn ? (r ? '🖼 Ref Image ' + rn : 'no ref image ' + rn) : c ? chipName(c) : 'not in this film'), k = m.search(/\s\S*$/), a = k > 0 ? m.slice(0, k) : m, b = k > 0 ? m.slice(k) : '';
+    h += esc(v.slice(i, off)) + `<mark style="--cc:${rn ? (r && r.on ? REFC : '#8a8f9c') : c ? subColor(n) : '#8a8f9c'}" data-n="${nm}"><i data-n="${nm}">${esc(a)}</i>${b ? `<i>${esc(b)}</i>` : ''}</mark>`; i = off + m.length; return m; });
   hl.innerHTML = h + esc(v.slice(i)) + '\n'; hl.hidden = false; hl.style.width = ta.clientWidth + 'px'; hl.style.height = ta.clientHeight + 'px'; hl.scrollTop = ta.scrollTop;
   hl.querySelectorAll('mark').forEach(m => m.classList.toggle('wr', m.getClientRects().length > 1)); } // a tag broken over two lines shows its own words
 function subjAt(v, p){ let hit = null; (v || '').replace(SUBRE, (m, n, off) => { if(p >= off && p < off + m.length) hit = {n:+n, off, len:m.length}; return m; }); return hit; }
@@ -1744,6 +1778,7 @@ function h3Prompt(o){
   if(!o.cont && !multi && text && !parseBeats(text).beats.length) text = '[0s-' + t2(o.secs || 5) + '] ' + text.replace(/^[a-z]/, c => c.toUpperCase());
   const imgs = o.imgs || [], vids = o.vids || [], auds = o.auds || [];
   const poses = imgs.map((r, k) => r.pose ? {k:k + 1, t:+r.pose.t || 0} : null).filter(Boolean), t0 = +o.t0 || 0, secs = o.secs || 5;
+  if(o.fl2v || !imgs.some(r => r.rk)) text = text.replace(REFRE, (m, n) => refGone(imgs, n)); // 🖼 a ref image that isn't sent
   if(o.fl2v || !(imgs.length || vids.length || auds.length || o.firstPic)){ // the base format (FL2VA model, or no references at all)
     const S2 = (o.secs || 5).toFixed(2);
     const head = !o.fl2v ? '' : o.first && o.last ? 'How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the ' + S2 + '-second mark of the target video.\n\n'
@@ -1753,10 +1788,12 @@ function h3Prompt(o){
   }
   const defs = [], ret = [], subs = [], groups = []; // pictures with the same words are one subject seen in several pictures
   imgs.forEach((r, k) => { if(r.pose || r.attrOf || r.actOf || r.poseOf || r.style) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
-    if(!g){ g = {key, d, more:(r.more || '').trim(), pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || 'char'}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); if(r.fit) g.fit = true; if(r.nude) g.nude = true; if(r.twear) g.twear = true; if(r.lookSrc) g.lookSrc = true; });
+    if(!g){ g = {key, d, more:(r.more || '').trim(), pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || (r.rk ? 'ref' : 'char')}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); if(r.fit) g.fit = true; if(r.nude) g.nude = true; if(r.twear) g.twear = true; if(r.lookSrc) g.lookSrc = true; });
   // 👥 the cast's subjects come first, in their own order, so <Subject 1> in the prompt is usually <Subject 1> here too
   groups.sort((x, y) => (x.cast || 1e3) - (y.cast || 1e3)); { const cm = {}; groups.forEach((g, j) => { if(g.cast) cm[g.cast] = '<Subject ' + (j + 1) + '>'; });
-    if(Object.keys(cm).length) text = text.replace(SUBRE, (m, n) => cm[+n] || m); }
+    if(Object.keys(cm).length) text = text.replace(SUBRE, (m, n) => cm[+n] || m);
+    const rm = {}; imgs.forEach((r, k) => { if(r.rk){ const j = groups.findIndex(g => g.pics.includes('<Picture ' + (k + 1) + '>')); if(j >= 0) rm[r.rk] = '<Subject ' + (j + 1) + '>'; } }); // 🖼 <Ref Image k> → its subject
+    text = text.replace(REFRE, (m, n) => rm[+n] || refGone(imgs, n)); }
   // 🎨 one look (Jordan 2026-11-10: "if 1 is realistic the others will be realistic"): a character's look or style pictures set the style of
   // everything; the others keep who they are, shown in that style. LOOKT stands for its <Subject n> until the style subject is numbered.
   const styleIx = []; imgs.forEach((r, k) => { if(r.style) styleIx.push('<Picture ' + (k + 1) + '>'); });
@@ -1766,6 +1803,7 @@ function h3Prompt(o){
     ret.push(sl + ' (' + inShots + '): ' + KEEP[g.keep] + ' - ' + (g.keep==='loose' ? 'only the broad look, colours and feel of ' + from + ' are kept.'
       : g.keep==='mostly' ? 'the main features of ' + from + ' are kept, with small changes allowed.' : g.kind==='place' ? 'the setting, its layout, light and colours from ' + from + ' are kept.'
       : g.kind==='thing' ? 'the shape, materials, details and colours of the object in ' + from + ' are kept.'
+      : g.kind==='ref' ? 'what is shown in ' + from + ' (who or what it is, its look, shape, colours and details) is kept.'
       : (() => { const w = [...new Set(imgs.filter(r => r.attrOf && r.attrOf===g.cast).map(r => r.what || 'look'))], cl = imgs.some(r => r.attrOf===g.cast && r.wear) || w.some(ATTR_WEAR) || !!g.twear, hr = w.some(x => /hair/i.test(x));
           if(g.nude) return 'the ' + andList(['identity', 'face'].concat(hr ? [] : ['hair'], ['build and skin tone'])) + ' from ' + from + ' are kept; the clothing in ' + (g.pics.length > 1 ? 'those pictures' : 'that picture') + ' is NOT kept: ' + sl + ' is nude, wearing no clothing' + (w.length ? ', and ' + andList(w.map(x => 'the ' + x)) + ' ' + (w.length > 1 ? 'come' : 'comes') + ' from ' + (w.length > 1 ? 'their own subjects' : 'its own subject') + ' below.' : '.');
           const keep = ['identity', 'face'].concat(hr ? [] : ['hair'], ['build'], cl ? [] : ['clothing and colours']);
@@ -2455,7 +2493,7 @@ function snapshot(){ // the form, frozen into a take
   const ctl2 = ctl && f.ctl2Vid && f.ctl2Vid!==f.ctlVid && S.media[f.ctl2Vid] ? {vid:f.ctl2Vid, str:+f.ctl2Str, end:+f.ctl2End} : null;
   return {sm, up, upImgs, ctl, ctl2, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})), w, h, steps:f.steps,
     fl:!sm && f.fl && !!f.first, first:!sm && f.fl && !contOn() ? f.first : null, cont:contOn() ? f.first : null, ...contBits(), ...stillBits(), lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
-    imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {})), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
+    imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {}, shotRefs(f).includes(r) ? {rk:shotRefs(f).indexOf(r) + 1} : {})), refOff:(() => { const o = {}; shotRefs(f).forEach((r, i) => { if(!R.imgs.includes(r)) o[i + 1] = r.desc || ''; }); return o; })(), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
@@ -2752,7 +2790,10 @@ function useAgain(t, quiet){
   const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {}))});
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
-    f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}}))); f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
+    f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}})));
+    { const map = {}; t.imgs.filter(r => !r.pose).forEach((r, j) => { if(r.rk && r.rk!==j + 1) map[r.rk] = j + 1; }); if(Object.keys(map).length) refRenum(f, map); } // 🖼 an off one wasn't kept: the numbers close up
+    f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
+  else f.imgs = (f.imgs || []).filter(r => r.pose || r.pin); // 🖼 another shot's ref images don't come along
   f.finOn = !!t.fin; if(t.fin) f.finAt = t.fin.at;
   if(t.neg !== undefined){ f.negOn = !!t.neg; if(t.neg) f.neg = t.neg===KEEP_OUT ? '' : t.neg; if(t.negScale) f.negScale = +t.negScale===NAG.scale ? '' : t.negScale; }
   if(!t.sm){ f.h3 = !!t.h3; if(t.h3) Object.assign(f, {quality:t.h3.quality===true, qstyle:t.h3.qstyle || '', qtext:t.h3.qtext || '', h3Style:t.h3.style || '', h3Sound:t.h3.sound || '', h3Music:t.h3.music || ''}); }
@@ -2855,9 +2896,11 @@ function drawShot(){ drawBeatBar(); { const b = $('#mqNote'), n = refsOn().pins.
   if(!box.hidden){ box.innerHTML = P.map((p, i) => { const auto = piecePrompt(f.prompt, P, i), mine = f.pieceText[i];
     return `<div><div class="ph"><span>Piece ${i + 1} · ${fmtS(p.start)} to ${fmtS(p.start + p.deliv / FPS)}${mine != null ? ' · edited' : ''}</span>${mine != null ? `<button data-auto="${i}">↺ Auto</button>` : ''}</div><textarea data-pt="${i}">${esc(mine != null ? mine : auto)}</textarea></div>`; }).join('') +
     '<div class="note">Each piece is told it carries on from the one before. Timed beats in the prompt are moved into the piece they fall in, with their times counted from that piece\'s start.</div>'; }
-  const L = refLabels(), tags = Object.entries(L).filter(([, v]) => v!=='soundtrack').map(([, v]) => v.split(' + ').pop());
+  const SRid = new Set(shotRefs(f).map(r => r.id)), L = refLabels(), tags = Object.entries(L).filter(([id, v]) => v!=='soundtrack' && !SRid.has(id)).map(([, v]) => v.split(' + ').pop());
+  const rch = f.sm ? '' : shotRefs(f).map((r, i) => `<button data-ins="&lt;Ref Image ${i + 1}&gt;" title="&lt;Ref Image ${i + 1}&gt;" style="border-color:${REFC};color:${REFC}">🖼 Ref Image ${i + 1}</button>`).join('');
+  drawShotRefs();
   const cast = (S.cast || []).map(c => `<button data-ins="&lt;Subject ${c.n}&gt;" title="&lt;Subject ${c.n}&gt;" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👥 ${esc(castName(c))}</button>`).join('');
-  $('#tagBar').innerHTML = '<button data-shot="1" title="Start a new shot (a hard cut) in this take">🎬 ＋ Shot</button>' + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
+  $('#tagBar').innerHTML = '<button data-shot="1" title="Start a new shot (a hard cut) in this take">🎬 ＋ Shot</button>' + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + rch + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
   $('#tagBar').hidden = false; $('#tagBar').style.marginBottom = '8px';
   { const h = f.sm ? '' : descBarHtml(f, undefined, 'data-dtag'); $('#descBar').innerHTML = h; $('#descBar').hidden = !h; }
   subjHl(); drawH3();
@@ -3247,7 +3290,7 @@ document.addEventListener('click', async e => {
   else if(ds.mocap2!=null){ const x = MOCAP.list.filter(y => y.it.mode!=='mask')[+ds.mocap2]; if(x) await useMocap(x, false, 2); return; }
   else if(ds.mocap){ if(ds.mocap==='r'){ MOCAP.err = ''; pingAll().then(pullInbox); return; } const x = MOCAP.list.filter(y => y.it.mode!=='mask')[+ds.mocap]; if(x) await useMocap(x, false); return; }
   else if(ds.add){ pickFile(ds.add); return; }
-  else if(ds.rm){ if(ds.rm==='first' || ds.rm==='lastImg' || ds.rm==='smVid' || ds.rm==='ctlVid' || ds.rm==='ctl2Vid') f[ds.rm] = null; else if(ds.rm==='smRef') f.smRefs.splice(+ds.i, 1); else f[ds.rm + 's'].splice(+ds.i, 1); }
+  else if(ds.rm){ if(ds.rm==='first' || ds.rm==='lastImg' || ds.rm==='smVid' || ds.rm==='ctlVid' || ds.rm==='ctl2Vid') f[ds.rm] = null; else if(ds.rm==='smRef') f.smRefs.splice(+ds.i, 1); else if(ds.rm==='img' || ds.rm==='sref') rmImg(f, +ds.i); else f[ds.rm + 's'].splice(+ds.i, 1); }
   else if(ds.tg){ const r = f[ds.tg + 's'][+ds.i]; r.on = !r.on; }
   else if(ds.opt){ const r = f[ds.k + 's'][+ds.i]; r[ds.opt] = !r[ds.opt]; }
   else if(ds.shot){ const ta = $('#prompt'), v = ta.value.replace(/\s+$/, ''), nums = [...v.matchAll(/\[shot\s*(\d+)\]/gi)].map(m => +m[1]);
@@ -3294,12 +3337,14 @@ document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof 
   const i = l.indexOf(v.src.split('#')[0]); if(i >= 0){ v.src = l[(i + 1) % l.length]; v.play().catch(() => {}); } }, true);
 for(const ev of ['play', 'pause']) document.addEventListener(ev, e => { const v = e.target; if(v instanceof HTMLVideoElement && v.classList.contains('tv')) v.parentElement.classList.toggle('on', ev==='play'); }, true);
 let pickKind = '';
-function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='first' ? 'image/*,video/*' : kind==='vid' || kind==='libv' || kind==='smv' || kind==='ctl' || kind==='ctl2' || kind==='rough' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img' || kind==='look' || kind==='smref' || kind==='cast' || kind==='lib'; fp.click(); }
+function pickFile(kind){ pickKind = kind; const fp = $('#filePick'); fp.value = ''; fp.accept = kind==='first' ? 'image/*,video/*' : kind==='vid' || kind==='libv' || kind==='smv' || kind==='ctl' || kind==='ctl2' || kind==='rough' ? 'video/*' : kind==='aud' ? 'audio/*,video/*' : 'image/*'; fp.multiple = kind==='img' || kind==='sref' || kind==='look' || kind==='smref' || kind==='cast' || kind==='lib'; fp.click(); }
 $('#filePick').onchange = async e => {
   const files = [...e.target.files]; if(!files.length) return; const f = S.f, kind = pickKind==='first' || pickKind==='lastImg' || pickKind==='smref' ? 'img' : pickKind==='smv' || pickKind==='ctl' || pickKind==='ctl2' ? 'vid' : pickKind;
   try{
     for(const file of files){
       if(kind==='img' && pickKind==='img' && f.imgs.length >= MAXREF.img) break;
+      if(pickKind==='sref'){ if(shotRefs(f).length >= srefMax(f)){ toast('No more room: MiniMax takes ' + MAXREF.img + ' pictures, and the characters in the words need theirs', 5000); break; }
+        f.imgs.push({id:await addMedia(file, 'img'), on:true, desc:'', keep:''}); f.ref = true; const k = shotRefs(f).length; if(k===1) toast('🖼 Tap Ref Image 1 to put it in the words', 4000); continue; }
       if(pickKind==='rough'){ await guideFrom(file, file.name || 'rough.mp4'); break; }
       if(pickKind==='libv'){ const L = libOf(pickLib); if(L){ L.vid = await addMedia(file, 'vid'); const m = S.media[L.vid]; if(m && m.dur && (m.dur < 2 || m.dur > 15)) toast('MiniMax wants reference clips of 2 to 15 s (this one is ' + fmtS(m.dur) + ')', 6000); } break; }
       if(pickKind==='lib' && (libOf(pickLib) || {}).kind==='pose'){ const L = libOf(pickLib); L.pics = [await addMedia(file, 'img')]; poseReset(L); break; }
@@ -3488,6 +3533,7 @@ const setLen = v => { v = Math.max(0.5, Math.min(36000, +v || 5)); S.f.seconds =
 $('#len').oninput = e => { $('#lenNum').value = e.target.value; setLen(e.target.value); };
 $('#lenNum').oninput = e => setLen(e.target.value);
 $('#pieceToggle').onclick = () => { $('#pieceTexts').hidden = !$('#pieceTexts').hidden; drawShot(); };
+$('#srefBox').addEventListener('input', e => { const i = e.target.dataset.srd; if(i==null) return; const r = S.f.imgs[+i]; if(r){ r.desc = e.target.value; save(); h3Peek(); } });
 $('#pieceTexts').addEventListener('input', e => { const i = e.target.dataset.pt; if(i==null) return; S.f.pieceText[+i] = e.target.value; save(); });
 $('#flSw').onclick = () => { S.f.fl = !S.f.fl; save(); drawAll(); };
 $('#smSw').onclick = () => { S.f.sm = !S.f.sm; save(); drawAll(); };
@@ -3800,6 +3846,7 @@ window.H3Carry = async o => { const t = deckTake(o.take), fl = takeFile(t);
     cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:o.film || '', clip:o.clip || '', key:o.key || uid('k'), own:true, guide:o.guide || null, len:+o.len || 0}, thumb:''};
   FILMSIG = null; FILMT = null; FILMED = false; FILMP = null;
   const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:o.prompt || '', pieceText:{}});
+  if(!/<\s*ref\s*image\s*\d+\s*>/i.test(f.prompt)) f.imgs = (f.imgs || []).filter(r => r.pose || r.pin); // 🖼 a new shot starts without the last shot's ref images (kept only when its words still name one)
   if(Array.isArray(o.loras)) f.loras = o.loras.map(l => ({name:l.name, str:+l.str || 1, words:l.words || ''})); // 📝 a prompt block's own LoRAs
   $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll();
   remoteThumb(S.media[id]); drawFilmNote();
@@ -3821,6 +3868,7 @@ async function stillCarry(o, t, fl, at, dur){
   FILMSIG = null; FILMT = null; FILMED = false; FILMP = null;
   const p = String(o.prompt || '').replace(/^\[0s-1s\]\s*/, '').replace(/,? carrying on from the moment before\.\s*\[1s-\]\s*/, '. ').trim();
   const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:p, pieceText:{}});
+  if(!/<\s*ref\s*image\s*\d+\s*>/i.test(f.prompt)) f.imgs = (f.imgs || []).filter(r => r.pose || r.pin); // 🖼
   if(Array.isArray(o.loras)) f.loras = o.loras.map(l => ({name:l.name, str:+l.str || 1, words:l.words || ''}));
   $('#prompt').value = f.prompt; setLen(+o.secs || 5); save(); drawAll(); drawFilmNote();
   if(S.tab==='films'){ const y = $('#renderTab').getBoundingClientRect().top + window.scrollY - 60; window.scrollTo({top:y, behavior:'smooth'}); }
@@ -4104,7 +4152,7 @@ function undoWatch(doc){ if(!doc || doc.__undoW) return; doc.__undoW = 1;
 undoWatch(document);
 setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
