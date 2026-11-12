@@ -174,6 +174,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const LG = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.qp && x.up && x.up.str===0); if(!t) return null; const lor = g => Object.values(g).filter(n => n.class_type==='LoraLoaderModelOnly' && /regenerate/.test(n.inputs.lora_name)).length;
     const off = lor(H3.upGraph(t, H3.PC[R].oi, {}).g); t.up.str = 0.8; const on = lor(H3.upGraph(t, H3.PC[R].oi, {}).g); t.up.str = 0; return {off, on}; }, R);
   ok(LO.seg && LO.saved===0 && LG && LG.off===0 && LG.on===1, 'Upscale LoRA Off in the ✨ sheet: the pass runs without the regenerate LoRA (and it is remembered): ' + JSON.stringify({LO, LG}));
+  // ✨ on Pika samples like the render (res_multistep, simple, 8 steps, the strength as denoise) and writes the H3-way prompt when the take had it
+  const PS = await page.evaluate(R => { const src = H3.S.takes.find(x => x.id==='tA'), t = JSON.parse(JSON.stringify(src)); t.id = 'tPs'; t.imgs = [{id:'mQ1', desc:'a woman with a red bob', keep:'exact'}]; t.h3 = {quality:false, qstyle:'', qtext:'', style:'', sound:'', music:''};
+    t.up = {scale:1.5, den:0.9, clean:0.8, look:'live', str:0, refs:true, prompt:'she waves', unet:'singularityV2X10eros_prismPIKA.safetensors', crop:{s0:0, L:120, pad:0, F:120}}; t.smoothed = t.final;
+    const g = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g), bs = g.find(n => n.class_type==='BasicScheduler'), ks = g.find(n => n.class_type==='KSamplerSelect'), rv = g.find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
+    t.up.unet = ''; const g2 = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
+    return {bs:bs && [bs.inputs.steps, bs.inputs.denoise, bs.inputs.scheduler], ks:ks && ks.inputs.sampler_name, h3:/integrated_multimodal_description|\[Shot 1\]/.test(rv.inputs.prompt), p:rv.inputs.prompt.slice(0, 200), vanillaManual:g2.some(n => n.class_type==='ManualSigmas') && !g2.some(n => n.class_type==='BasicScheduler')}; }, R);
+  ok(PS.bs && PS.bs[0]===8 && PS.bs[1]===0.9 && PS.ks==='res_multistep' && PS.h3 && PS.vanillaManual, '✨ on Pika samples like the render (8 steps res_multistep, strength = denoise) with the H3-way prompt; vanilla keeps its own: ' + JSON.stringify(PS));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
