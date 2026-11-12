@@ -96,7 +96,7 @@ In 🎞 Films (tools row, or a track's menu). Runs in three steps and remembers 
 
 ✨ passes only run on a PC that has the Open-H3 regenerate LoRA: one sent elsewhere moves over, and a PC that doesn't see the video yet waits (up to 15 min) for Dropbox. A ✨ take's card names the model the pass runs on.
 
-🫧 Every 🎭 mask pass (Faces, and ✏️ Edit's parts) now ends with one very light (0.35) vanilla MiniMax pass over its window, with everyone's pictures, so the mask edges blend into the frame (`up.blend`, on unless set false; `BLEND_DEN`).
+🫧 The light (0.35) blend pass after a 🎭 mask pass is OFF since 2026-11-12 (Jordan: only the face pass on its own). It runs only when `up.blend` is true (`BLEND_DEN`).
 
 ✨ Same quality words for the whole track (in the ⬆ Upscale track sheet): Off (the default) / 🎥 Realistic / 🧊 3D / ✏ 2D / ✍ Custom. The words are editable, remembered in `S.upQ`, and saved as `f.upRun.qw`. They're added to every ✨ pass of the track (`up.qw`), to 🎭 Faces and its blend while the run is going, and to the 🧵 seam bridges. A bridge whose take has its own ✨ line on has that line switched off, so the words aren't sent twice. Without this option, ✨/🎭 passes send only the clip's own words, cast and LoRA words.
 
