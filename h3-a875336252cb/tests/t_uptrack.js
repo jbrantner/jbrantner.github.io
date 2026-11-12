@@ -168,6 +168,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     t.up.unet = ''; const g2 = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g), rv2 = g2.find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
     return {pika:Object.keys(rv.inputs).filter(k => /ref_image_/.test(k)).length, fit:!!fit && Object.keys(fit.inputs).filter(k => /^image_/.test(k)).length, vanilla:rv2 ? Object.keys(rv2.inputs).filter(k => /ref_image_/.test(k)).length : 0, vfit:g2.some(n => n.class_type==='MMH3FitReferences')}; }, R);
   ok(PK.pika >= 6 && PK.fit===PK.pika && PK.vanilla <= 4 && !PK.vfit, '✨ on Prism Pika sends all 6 of the take\'s pictures through MMH3FitReferences (vanilla keeps its first few): ' + JSON.stringify(PK));
+  // Upscale LoRA Off: the ✨ sheet's choice reaches the pass, and the graph has no regenerate LoRA (0.8 still has it)
+  const LO = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.id==='fA'), tr = f.tracks[0], c = tr.clips[0]; (FILM.S.passes || []).forEach(p => { if(p.o && p.o.swap===c.id) p.state = 'done'; });
+    FILM.hqSheet(f, tr, c); await new Promise(z => setTimeout(z, 100)); const b = document.querySelector('#hqLo [data-v="0"]'); const seg = !!b; b && b.click(); document.querySelector('#hqGo').click(); await new Promise(z => setTimeout(z, 1500)); return {seg, saved:FILM.S.hqLora}; });
+  const LG = await page.evaluate(R => { const t = H3.S.takes.find(x => x.redo && x.redo.qp && x.up && x.up.str===0); if(!t) return null; const lor = g => Object.values(g).filter(n => n.class_type==='LoraLoaderModelOnly' && /regenerate/.test(n.inputs.lora_name)).length;
+    const off = lor(H3.upGraph(t, H3.PC[R].oi, {}).g); t.up.str = 0.8; const on = lor(H3.upGraph(t, H3.PC[R].oi, {}).g); t.up.str = 0; return {off, on}; }, R);
+  ok(LO.seg && LO.saved===0 && LG && LG.off===0 && LG.on===1, 'Upscale LoRA Off in the ✨ sheet: the pass runs without the regenerate LoRA (and it is remembered): ' + JSON.stringify({LO, LG}));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
