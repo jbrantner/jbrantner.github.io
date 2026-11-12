@@ -2207,6 +2207,11 @@ const upPick = t => { const all = upRefs(t), keyOf = r => r.cast ? 'c' + r.cast 
   for(let i = 0; out.length < n && main.some(k => by[k][i]); i++) for(const k of main) if(by[k][i] && out.length < n) out.push(by[k][i]);
   for(const k of rest) for(const r of by[k]) if(out.length < n) out.push(r);
   return out.sort((x, y) => all.indexOf(x) - all.indexOf(y)); };
+// ✨ on Prism Pika (Jordan 2026-11-12: "I do the pika model with reference and it recreates her perfectly. I upscale it and she looks very
+// different"): the render had all her pictures, fitted to the 8 GB budget by MMH3FitReferences; the ✨ pass only had the first 3-4, at full
+// size. A Pika pass now gets every picture the take's render had (up to 9), through the same fit node, like the render
+const upFitAll = (t, oi) => !!(oi && oi.MMH3FitReferences && t && t.up && t.up.unet && !officialH3(t.up.unet) && !facesOn(t));
+const upRefSet = (t, oi) => upFitAll(t, oi) ? upRefs(t).slice(0, 9) : upPick(t);
 const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
 // t (optional): a same-size window (nudge / ✨ quality pass) needs no upscaler, and with its pictures it runs on the Reference model,
 // so a PC without the First/last frame model (Main) can take it too
@@ -2258,9 +2263,12 @@ function upGraph(t, oi, names){
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
   const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt) + (u.qw && !(u.prompt || t.prompt || '').includes(u.qw) ? ' ' + u.qw : ''), length = part ? part.L : pre ? crop.L + pre : regenLen(t);
-  const once = (R, Z, SG) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (R ? castText(words, {imgs:R.map(dressed), film:t.film, descOff:t.descOff, noNude:true}, true) : castWords(words, t.film)) || SM_PROMPT;
+  const once = (R, Z, SG, FIT) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (R ? castText(words, {imgs:R.map(dressed), film:t.film, descOff:t.descOff, noNude:true}, true) : castWords(words, t.film)) || SM_PROMPT;
     let iv;
-    if(R || refModel){ const ri = {}; (R || []).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
+    if(R || refModel){ const ri = {};
+      if(FIT && R && R.length){ const fi = {width:W, height:Hh, length, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, length / FPS)), image_size:'match', keyframes:chn && chn.prev ? 7 : 0, stop_above:72000};
+        R.forEach((r, k) => { fi['image_' + (k + 1)] = [add('LoadImage', {image:names[r.id]}), 0]; }); const fit = add('MMH3FitReferences', fi); R.forEach((r, k) => { ri['ref_images.ref_image_' + k] = [fit, k]; }); }
+      else (R || []).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
       iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:W, height:Hh, length, ref_image_size:'match'}, ri)); }
     else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:W, height:Hh, length});
     const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:Z ? Z.lat : [big, 0], audio_latent:[sep, 1]});
@@ -2273,7 +2281,7 @@ function upGraph(t, oi, names){
     const dec = [add('VAEDecodeTiled', {samples:[vl, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0];
     return pre && !Z ? [add('ImageFromBatch', {image:dec, batch_index:pre, length:crop.L}), 0] : dec; };
   const faces = facesOn(t) && refs ? u.faces.filter(f => { const R = faceRefs(t, f.n); return R.length && R.every(r => names[r.id]); }) : [];
-  let ims = faces.length ? null : once(refs ? upPick(t) : null), fmid = null;
+  let ims = faces.length ? null : once(refs ? upRefSet(t, oi) : null, null, null, upFitAll(t, oi)), fmid = null;
   if(faces.length){ // 🎭 one MiniMax redraw per face; only her face goes back over the clip, the rest stays as it was
     const A = part.a - part.s0, Ln = part.b - part.a, ck = add('CheckpointLoaderSimple', {ckpt_name:sam3Of(oi)});
     fmid = [add('ImageFromBatch', {image:[gc, 0], batch_index:part.a, length:Ln}), 0];
@@ -2338,7 +2346,7 @@ async function tickUpscale(t){
     { const fl = t.smoothed || t.final; // a video made on the other PC: wait (up to 15 min) for Dropbox to bring it over before queueing
       if(fl && Date.now() - (t.t0r || t.t || 0) < 15 * 60000){ let seen = true; try{ seen = (await fetch(viewUrl(t.pc, fl), {method:'HEAD'})).ok; }catch(e){} if(!seen) return; } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
-    try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of facesOn(t) ? t.up.faces.flatMap(f => faceRefs(t, f.n)) : upPick(t)) if(!names[r.id]) names[r.id] = await upload(t.pc, r.id);
+    try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of facesOn(t) ? t.up.faces.flatMap(f => faceRefs(t, f.n)) : upRefSet(t, p.oi)) if(!names[r.id]) names[r.id] = await upload(t.pc, r.id);
       const G = upGraph(t, p.oi, names); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
     return; }
   let h = null; try{ h = (await getJ(t.pc + '/history/' + t.upPid))[t.upPid]; }catch(e){ return; }
