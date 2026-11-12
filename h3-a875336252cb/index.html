@@ -2265,7 +2265,13 @@ function upGraph(t, oi, names){
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
   const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt) + (u.qw && !(u.prompt || t.prompt || '').includes(u.qw) ? ' ' + u.qw : ''), length = part ? part.L : pre ? crop.L + pre : regenLen(t);
-  const once = (R, Z, SG, FIT) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (R ? castText(words, {imgs:R.map(dressed), film:t.film, descOff:t.descOff, noNude:true}, true) : castWords(words, t.film)) || SM_PROMPT;
+  // ✨ on Prism Pika = the render itself, started from the clip (Jordan 2026-11-12: "If the first pass does it almost perfectly, then why would
+  // introducing the image with the same parameters but with the denoise turned down … be less accurate?"). It wasn't the same parameters:
+  // ✨ wrote a plain prompt and sampled 5 euler steps from its own sigma list. A Pika pass now writes the prompt the H3 way like the render
+  // (her description and keep-her-look lines, when the take was made that way) and samples like the render (res_multistep, simple, 8 steps),
+  // with the strength as the scheduler's denoise
+  const h3Of = R => { if(!t.h3 || !R || !R.length) return ''; try{ const imgs = R.map(dressed); return h3Prompt({h3:t.h3, text:castText(words, {imgs, film:t.film, descOff:t.descOff, noNude:true}, false), imgs, vids:[], auds:[], cont:!!(chn && chn.prev), secs:length / FPS, t0:0}); }catch(e){ console.warn(e); return ''; } };
+  const once = (R, Z, SG, FIT) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (FIT && h3Of(R)) || (R ? castText(words, {imgs:R.map(dressed), film:t.film, descOff:t.descOff, noNude:true}, true) : castWords(words, t.film)) || SM_PROMPT;
     let iv;
     if(R || refModel){ const ri = {};
       if(FIT && R && R.length){ const fi = {width:W, height:Hh, length, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, length / FPS)), image_size:'match', keyframes:chn && chn.prev ? 7 : 0, stop_above:72000};
@@ -2277,7 +2283,8 @@ function upGraph(t, oi, names){
     let cond = [iv, 0]; // 🔗 carries on from the ✨ result of the clip before (its saved latent, at the same size)
     if(chn && chn.prev && !Z) cond = [add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:[iv, 1], context_length:String(CTX), audio_context_length:24, context_latent:[add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir({pc:t.pc, dir:chn.dir}), clip_index:chn.idx}), 0]}), 0];
     const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed || 42}), 0], guider:[add('BasicGuider', {model, conditioning:cond}), 0], // (no 🚫 here: Jordan 2026-11-09 found ✨ High quality "really awful" with NAG 9 on a light redraw)
-      sampler:[add('KSamplerSelect', {sampler_name:'euler'}), 0], sigmas:[add('ManualSigmas', {sigmas:SG || sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl)}), 0], latent_image:[av, 0]});
+      sampler:[add('KSamplerSelect', {sampler_name:FIT && !SG && u.den ? 'res_multistep' : 'euler'}), 0],
+      sigmas:FIT && !SG && u.den && oi.BasicScheduler ? [add('BasicScheduler', {model, scheduler:'simple', steps:8, denoise:Math.max(0.3, Math.min(1, +u.den))}), 0] : [add('ManualSigmas', {sigmas:SG || sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl)}), 0], latent_image:[av, 0]});
     if(chn && !Z && oi.MiniMaxH3MotionContextSaveLatent) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:chn.dir + '/ctx', clip_index:chn.idx + 1}); // for the clip after it
     const vl = add('LTXVSeparateAVLatent', {av_latent:[out, 0]});
     const dec = [add('VAEDecodeTiled', {samples:[vl, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0];
