@@ -181,6 +181,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     t.up.unet = ''; const g2 = Object.values(H3.upGraph(t, H3.PC[R].oi, {}).g);
     return {bs:bs && [bs.inputs.steps, bs.inputs.denoise, bs.inputs.scheduler], ks:ks && ks.inputs.sampler_name, h3:/integrated_multimodal_description|\[Shot 1\]/.test(rv.inputs.prompt), p:rv.inputs.prompt.slice(0, 200), vanillaManual:g2.some(n => n.class_type==='ManualSigmas') && !g2.some(n => n.class_type==='BasicScheduler')}; }, R);
   ok(PS.bs && PS.bs[0]===8 && PS.bs[1]===0.9 && PS.ks==='res_multistep' && PS.h3 && PS.vanillaManual, '✨ on Pika samples like the render (8 steps res_multistep, strength = denoise) with the H3-way prompt; vanilla keeps its own: ' + JSON.stringify(PS));
+  // 🌙 Do it all: when ✨ is done, every one-person clip gets 🎭 by itself (first face SAM 3 finds, her pictures), then the seams start
+  await page.evaluate(() => { H3.S.media.mF1 = {kind:'img', thumb:'x', name:'mF1.png'}; H3.S.cast = [{n:1, kind:'char', stand:'a woman', who:'Laura', pics:['mF1'], keep:'exact'}]; H3.S.takes.forEach(t => { if(!t.film) t.film = H3.S.fkey; }); H3.saveNow(); });
+  const AL = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.tracks.some(t => t.id==='tr1')), tr = f.tracks.find(t => t.id==='tr1'); tr.clips.forEach(c => delete c.cut); FILM.S.passes = []; FILM.S.faceDen = 0.6; FILM.S.faceLora = 0;
+    const who = tr.clips.map(c => FILM.autoFaceOf(c)); f.upRun = {id:'u4', track:tr.id, state:'faces', all:true, hq:[], qw:''};
+    FILM.upTick(); await new Promise(z => setTimeout(z, 2500)); const R = f.upRun, ps = (FILM.S.passes || []).filter(p => (R.fk || []).includes(p.key));
+    const r = {who, fk:(R.fk || []).length, skip:R.fskip, faces:ps.map(p => JSON.stringify(p.o.faces) + p.o.find + p.o.den + ':' + p.o.str), state0:R.state, box:FILM.upRunHtml(f).includes('🌙 🎭 Faces')};
+    ps.forEach(p => { p.state = 'failed'; }); FILM.upTick(); await new Promise(z => setTimeout(z, 2500)); r.state1 = f.upRun.state; r.seams = (f.upRun.seams || []).length; return r; });
+  ok(AL.who.every(n => n===1) && AL.fk===3 && AL.skip===0 && AL.faces.every(x => x==='[{"n":1,"obj":0}]face0.6:0') && AL.state0==='faces' && AL.box && AL.state1==='seams' && AL.seams===1, '🌙 Do it all: ✨ done → 🎭 on every one-person clip by itself (her first face, the last 🎭 strength and LoRA), and when they\'re done (failed ones keep their clip) the 🧵 seams start: ' + JSON.stringify(AL));
+  const AL2 = await fr.evaluate(() => { const f = FILM.S.films.find(x => x.tracks.some(t => t.id==='tr1')), c = f.tracks.find(t => t.id==='tr1').clips[0], H = window.parent.H3; H.S.cast.push({n:2, kind:'char', stand:'a man', who:'Ben', pics:['mF1'], keep:'exact'}); const two = FILM.autoFaceOf(c); H.S.cast.pop(); return {two}; });
+  ok(AL2.two===null, '🌙 a clip that could be two people is left for the morning: ' + JSON.stringify(AL2));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
