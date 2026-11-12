@@ -189,6 +189,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const r = {who, fk:(R.fk || []).length, skip:R.fskip, faces:ps.map(p => JSON.stringify(p.o.faces) + p.o.find + p.o.den + ':' + p.o.str), state0:R.state, box:FILM.upRunHtml(f).includes('🌙 🎭 Faces')};
     ps.forEach(p => { p.state = 'failed'; }); FILM.upTick(); await new Promise(z => setTimeout(z, 2500)); r.state1 = f.upRun.state; r.seams = (f.upRun.seams || []).length; return r; });
   ok(AL.who.every(n => n===1) && AL.fk===3 && AL.skip===0 && AL.faces.every(x => x==='[{"n":1,"obj":0}]face0.6:0') && AL.state0==='faces' && AL.box && AL.state1==='seams' && AL.seams===1, '🌙 Do it all: ✨ done → 🎭 on every one-person clip by itself (her first face, the last 🎭 strength and LoRA), and when they\'re done (failed ones keep their clip) the 🧵 seams start: ' + JSON.stringify(AL));
+  const NF = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.tracks.some(t => t.id==='tr1')), tr = f.tracks.find(t => t.id==='tr1'); const p0 = (FILM.S.passes || []).length;
+    f.upRun = {id:'u5', track:tr.id, state:'faces', all:true, noFaces:true, hq:[], qw:''}; FILM.upTick(); await new Promise(z => setTimeout(z, 2500));
+    return {state:f.upRun.state, seams:(f.upRun.seams || []).length, faces:(FILM.S.passes || []).slice(p0).filter(p => p.o && p.o.faces).length}; });
+  ok(NF.state==='seams' && NF.seams===1 && NF.faces===0, '🌙 without 🎭: ✨ done → straight to the 🧵 seams, no face pass sent: ' + JSON.stringify(NF));
   const AL2 = await fr.evaluate(() => { const f = FILM.S.films.find(x => x.tracks.some(t => t.id==='tr1')), c = f.tracks.find(t => t.id==='tr1').clips[0], H = window.parent.H3; H.S.cast.push({n:2, kind:'char', stand:'a man', who:'Ben', pics:['mF1'], keep:'exact'}); const two = FILM.autoFaceOf(c); H.S.cast.pop(); return {two}; });
   ok(AL2.two===null, '🌙 a clip that could be two people is left for the morning: ' + JSON.stringify(AL2));
   await br.close(); srv.close();
