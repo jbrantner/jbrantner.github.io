@@ -195,6 +195,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(NF.state==='seams' && NF.seams===1 && NF.faces===0, '🌙 without 🎭: ✨ done → straight to the 🧵 seams, no face pass sent: ' + JSON.stringify(NF));
   const AL2 = await fr.evaluate(() => { const f = FILM.S.films.find(x => x.tracks.some(t => t.id==='tr1')), c = f.tracks.find(t => t.id==='tr1').clips[0], H = window.parent.H3; H.S.cast.push({n:2, kind:'char', stand:'a man', who:'Ben', pics:['mF1'], keep:'exact'}); const two = FILM.autoFaceOf(c); H.S.cast.pop(); return {two}; });
   ok(AL2.two===null, '🌙 a clip that could be two people is left for the morning: ' + JSON.stringify(AL2));
+  // 🧵 at most 3 clips per seams job (Main ran out of RAM on 12 at 1280×704): 5 ⛓ clips = [1,2,3] + [4,5] first, then the 3|4 join
+  const SR = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.tracks.some(t => t.id==='tr1')), tr = f.tracks.find(t => t.id==='tr1'), t0 = tr.clips[0];
+    const keep = tr.clips; tr.clips = [0, 1, 2, 3, 4].map(i => Object.assign({}, t0, {id:'cs' + i, at:i * 2, in:i * 2, out:i * 2 + 2, cut:false}));
+    f.upRun = {id:'u6', track:tr.id, state:'faces', hq:[], qw:''}; const R = f.upRun; await FILM.upSeamsGo(f, R);
+    const r = {a:R.seams.length, b:JSON.stringify(R.seamB)}; R.seams.forEach(k => FILM.S.placed[k] = true); FILM.upTick(); await new Promise(z => setTimeout(z, 2500));
+    r.after = R.seams.length; r.state = R.state; r.bLeft = R.seamB; R.seams.forEach(k => FILM.S.placed[k] = true); FILM.upTick(); r.end = R.state; tr.clips = keep; return r; });
+  const SRp = await page.evaluate(() => H3.S.takes.filter(x => x.combo && x.combo.seam && x.combo.seam.run==='u6').map(t => t.combo.parts.length).sort().join(','));
+  ok(SR.a===2 && SR.b==='[["cs2","cs3"]]' && SR.after===3 && SR.state==='seams' && SR.bLeft===null && SR.end==='done' && SRp==='2,2,3', '🧵 seams in jobs of at most 3 clips: [1,2,3] and [4,5] first, then the join between them; done when all are back: ' + JSON.stringify({SR, SRp}));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();

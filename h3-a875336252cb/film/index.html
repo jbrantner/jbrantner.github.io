@@ -1335,7 +1335,10 @@ function upTick(){ let ch = false;
       upSeamsGo(f, R).then(ok => { UPS[R.id] = false; if(!ok){ R.state = 'stopped'; R.err = '🌙 the seams could not be sent'; notifyUp('⬆ 🎭 Faces is done, but the 🧵 seams couldn\'t be sent. Tap ⬆ Upscale track › 🧵 Blend the seams.'); } save(); draw(); }); continue; }
     if(R.state==='seams'){ const mine = sj => sj && (R.seams || []).includes(sj.rk), bad = takes().find(t => (t.combo && mine(t.combo.seam) && (t.state==='failed' || t.joinErr || t.bridgeErr)) || (t.redo && t.redo.bridge && mine(t.redo.bridge.sj) && (t.state==='failed' || t.bridgeErr)));
       if(bad && !R.err){ R.err = (t => t.joinErr || t.bridgeErr || (t.pieces && t.pieces[0] && t.pieces[0].err) || 'a seam failed')(bad); ch = true; toast('🧵 ' + R.err + '. 🧵 Blend the seams again to retry.', 7000); }
-      if((R.seams || []).every(k => S.placed[k])){ R.state = 'done'; ch = true; notifyUp('⬆ Upscale track done: every seam is blended.'); } } }
+      if((R.seams || []).every(k => S.placed[k]) && R.seamB && R.seamB.length && !UPS[R.id] && !R.err){ const tr = f.tracks.find(x => x.id===R.track); if(!tr){ R.state = 'stopped'; R.err = 'the track is gone'; ch = true; continue; }
+        const gs = R.seamB.map(ids => ids.map(id => tr.clips.find(c => c.id===id))).filter(g => g.every(Boolean)); R.seamB = null; UPS[R.id] = true; ch = true;
+        seamSend(f, tr, R, gs).then(n => { UPS[R.id] = false; if(!n && gs.length){ R.err = 'the joins between the groups could not be sent'; } else notifyUp('🧵 Round 2: blending the ' + n + ' join' + (n===1 ? '' : 's') + ' between the groups.'); save(); draw(); }); continue; }
+      if((R.seams || []).every(k => S.placed[k]) && !(R.seamB && R.seamB.length) && !UPS[R.id]){ R.state = 'done'; ch = true; notifyUp('⬆ Upscale track done: every seam is blended.'); } } }
   return ch; }
 const notifyUp = m => toast(m, 8000);
 // a run step being sent right now (kept off the saved film, so a closed app never leaves a run stuck as 'sending')
@@ -1357,15 +1360,24 @@ async function upFacesAll(f, tr, R){ const cs = qpClips(tr), fk = []; let skip =
   notifyUp('🌙 🎭 Faces sent on ' + R.fk.length + ' clip' + (R.fk.length===1 ? '' : 's') + (R.fskip ? ' (' + R.fskip + ' left as they are: nobody or several people in them)' : '') + '. 🧵 The seams start when they\'re done.'); }
 // the run's waiting ✨ results are let go: their clips keep the original (the takes stay in H3 Deck)
 function upDrop(R){ for(const h of R.hq || []){ const p = (S.passes || []).find(x => x.key===h.key); if(p && (p.state==='ready' || p.state==='working')){ p.state = 'done'; p.dropped = true; } } }
+const SEAM_MAX = 3;
+async function seamSend(f, tr, R, groups){ let n = 0;
+  for(const gr of groups){ let off = 0; const bounds = gr.map(c => { const b = {clip:c.id, take:c.take, off, len:len(c)}; off += len(c); return b; }), rk = uid('k');
+    if(await combineGo(f, tr, gr, true, null, {seam:{run:R.id, rk, film:f.id, track:tr.id, bounds, unet:R.unet, qw:R.qw || ''}})){ R.seams.push(rk); n++; } }
+  return n; }
 async function upSeamsGo(f, R){ const tr = f.tracks.find(x => x.id===R.track); if(!tr){ toast('That track is gone'); return false; }
   const ids = new Set(tr.clips.map(c => c.id)); if((S.passes || []).some(p => p.state==='working' && p.o && ids.has(p.o.swap))){ toast('Wait for the ✨ / 🎭 passes on this track to finish first'); return false; }
   if(tr.clips.some(c => !fileOf(takeOf(c.take)))){ toast('Wait for every clip on the track to finish first'); return false; }
   const cs = tr.clips.slice().sort((a, b) => a.at - b.at), groups = []; let g = [];
   for(const c of cs){ const p = g[g.length - 1]; if(p && !c.cut && Math.abs(p.at + len(p) - c.at) < 0.06) g.push(c); else { if(g.length > 1) groups.push(g); g = [c]; } } if(g.length > 1) groups.push(g);
   if(!groups.length){ R.state = 'done'; R.end = 'no seams'; save(); toast('⬆ No ⛓ joins on this track (every join is a ✂ cut or a gap), so there are no seams to blend. Done.', 6000); return true; }
-  R.seams = []; R.err = ''; let n = 0;
-  for(const gr of groups){ let off = 0; const bounds = gr.map(c => { const b = {clip:c.id, take:c.take, off, len:len(c)}; off += len(c); return b; }), rk = uid('k');
-    if(await combineGo(f, tr, gr, true, null, {seam:{run:R.id, rk, film:f.id, track:tr.id, bounds, unet:R.unet, qw:R.qw || ''}})){ R.seams.push(rk); n++; } }
+  // (Jordan 2026-11-12: the 12-clip seams job failed on Main, "HostBuffer.read_file_slice failed": Windows error 1450, out of RAM, with
+  // all 12 ✨ clips at 1280×704 held at once next to the 20 GB Pika model) at most SEAM_MAX clips go in one job. A longer run of ⛓ clips
+  // goes in two rounds: first chunks of SEAM_MAX clips, then, once those are back in their clips, the joins between two chunks
+  const A = [], B = [];
+  for(const gr of groups){ if(gr.length <= SEAM_MAX){ A.push(gr); continue; }
+    for(let i = 0; i < gr.length; i += SEAM_MAX){ const ch = gr.slice(i, i + SEAM_MAX); if(ch.length > 1) A.push(ch); if(i + SEAM_MAX < gr.length) B.push([gr[i + SEAM_MAX - 1].id, gr[i + SEAM_MAX].id]); } }
+  R.seams = []; R.err = ''; R.seamB = B.length ? B : null; const n = await seamSend(f, tr, R, A);
   if(!n){ toast('🧵 Couldn\'t send the seams. Are the PCs on?', 5000); return false; }
   R.state = 'seams'; save(); const j = groups.reduce((a, x) => a + x.length - 1, 0);
   toast('🧵 Blending ' + j + ' seam' + (j > 1 ? 's' : '') + ' as one job on the PC (about a minute each). You can close the app: they go back into the clips when you open it again.', 7000); return true; }
