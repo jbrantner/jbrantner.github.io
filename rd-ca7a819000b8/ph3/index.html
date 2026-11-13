@@ -41,10 +41,6 @@ h2{margin:0;font:600 15px var(--display)}
 .bar.run i{width:35%!important;animation:slide 1.3s ease-in-out infinite alternate}@keyframes slide{from{margin-left:0}to{margin-left:65%}}
 .res{position:relative;border-radius:12px;overflow:hidden;background:#000;touch-action:pan-y}
 .res img{display:block;width:100%;height:auto}
-.res .before{position:absolute;inset:0;overflow:hidden}
-.res .before img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:fill}
-.res .line{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 4px #000}
-.res .tag{position:absolute;top:6px;font:600 11px var(--display);background:rgba(0,0,0,.6);border-radius:5px;padding:2px 6px}
 .row{display:flex;gap:6px}.row>*{flex:1;min-width:0}
 details{font-size:13px;color:var(--soft)}details pre{white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace;color:var(--text);background:var(--bg);border-radius:8px;padding:8px;margin:6px 0 0;max-height:40vh;overflow:auto}
 .lib{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
@@ -92,8 +88,9 @@ const RATIOS = [['1:1', 1], ['4:3', 4/3], ['3:4', 3/4], ['3:2', 3/2], ['2:3', 2/
 function canvasOf(ratio, mp){ const r = (RATIOS.find(x => x[0]===ratio) || RATIOS[0])[1], a = mp * 1048576; return [Math.round(Math.sqrt(a * r) / 32) * 32, Math.round(Math.sqrt(a / r) / 32) * 32]; }
 const nearRatio = (w, h) => RATIOS.reduce((b, x) => Math.abs(Math.log(x[1] / (w / h))) < Math.abs(Math.log(b[1] / (w / h))) ? x : b)[0];
 // ---- what's on screen (kept on this phone)
-const S = Object.assign({mode:'edit', prompt:'', auto:true, ratio:'3:4', mp:4, pics:[], seed:0, keepSeed:false, pc:'', job:null, cur:null, lib:[]}, get(KEY, {}));
-let MSG = '', BAD = false, BUSY = false, PROG = null, KIT = {}, NEED = null, GETTING = false, CMP = 50, OPEN = null;
+const S = Object.assign({mode:'edit', prompt:'', auto:true, ratio:'3:4', mp:4, pics:[], seed:0, keepSeed:false, pc:'', count:1, jobs:[], cur:null, lib:[]}, get(KEY, {}));
+if(S.job){ S.jobs = (S.jobs || []).concat([Object.assign({n:1, i:0}, S.job)]); delete S.job; } // (a job from before batches)
+let MSG = '', BAD = false, BUSY = false, KIT = {}, NEED = null, GETTING = false;
 const keep = () => put(KEY, S);
 // ---- what each PC has
 const optsOf = spec => !spec ? [] : Array.isArray(spec[0]) ? spec[0] : spec[0]==='COMBO' ? (spec[1] && spec[1].options) || [] : [];
@@ -108,6 +105,8 @@ async function kitOf(url){ const d = await nodeDefs(url, ['PH3ImageConditioning'
     lora:pick(loras, /p-h3-image_lora/i), te:pick(clips, /p-h3-image_text_encoder/i, [/int8/i, /w4a8/i]), up:pick(clips, /p-h3-image_prompt_upsampler/i, [/w4a8/i, /int8/i]), vae:pick(vaes, /p-h3-image_vae/i, [/int8/i])}; }
 const missingOf = k => ['unet', 'lora', 'te', 'up', 'vae'].filter(x => x==='lora' ? !k.own && !k.lora : !k[x]).filter(x => x!=='up' || S.auto);
 async function scan(){ const out = {}; await Promise.all(deckServers().map(async s => { try{ out[s.url] = await kitOf(s.url); }catch(e){ out[s.url] = {url:s.url, off:true}; } })); KIT = out; return out; }
+// the PCs a batch can use: every one that's on with P-H3 and all its files (Render first), or just the one picked
+function readyPcs(){ const l = deckServers().map(s => KIT[s.url]).filter(k => k && !k.off && k.ok && !missingOf(k).length); return S.pc ? l.filter(k => k.url===S.pc) : l; }
 function bestPc(){ const l = deckServers().map(s => KIT[s.url]).filter(k => k && !k.off);
   if(S.pc && KIT[S.pc] && !KIT[S.pc].off) return KIT[S.pc];
   return l.find(k => k.ok && !missingOf(k).length) || l.find(k => k.ok) || l[0] || null; }
@@ -151,48 +150,58 @@ function graph(k, o){ const g = {}; let n = 0; const add = (cls, inputs) => { co
   return {g, sv, pv, up}; }
 async function send(url, g){ const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:g, client_id:CID})}), j = await r.json().catch(() => ({}));
   if(!r.ok || !j.prompt_id) throw new Error(pcName(url) + ' turned it down: ' + JSON.stringify(j.node_errors && Object.keys(j.node_errors).length ? j.node_errors : j.error || j).slice(0, 400)); return j.prompt_id; }
-// live progress (its websocket): which node, step N of 8
-let WS = null;
-function listen(url){ if(WS && WS.url0===url && WS.readyState < 2) return; try{ if(WS) WS.close(); WS = new WebSocket(url.replace(/^http/, 'ws') + '/ws?clientId=' + CID); WS.url0 = url;
-  WS.onmessage = e => { if(typeof e.data!=='string') return; let m; try{ m = JSON.parse(e.data); }catch(x){ return; } const d = m.data || {}, J = S.job; if(!J || d.prompt_id && d.prompt_id!==J.pid) return;
-    if(m.type==='executing' && d.node){ PROG = {node:d.node, v:0, max:0}; showProg(); } if(m.type==='progress'){ PROG = {node:d.node || (PROG || {}).node, v:d.value, max:d.max}; showProg(); } }; }catch(e){} }
-const stepName = id => { const J = S.job, c = J && J.cls && J.cls[id]; return c==='TextGenerateV2' ? 'Writing the prompt' : c==='SamplerCustomAdvanced' ? 'Drawing' : c==='VAEDecode' ? 'Finishing' : /Loader/.test(c || '') ? 'Loading the model' : c==='PH3ImageConditioning' ? 'Reading the pictures' : 'Working'; };
+// live progress (each PC's websocket): which node, step N of 8, per job
+const WSS = {}, PROGS = {};
+function listen(url){ const w0 = WSS[url]; if(w0 && w0.readyState < 2) return; try{ const ws = WSS[url] = new WebSocket(url.replace(/^http/, 'ws') + '/ws?clientId=' + CID);
+  ws.onmessage = e => { if(typeof e.data!=='string') return; let m; try{ m = JSON.parse(e.data); }catch(x){ return; } const d = m.data || {}, J = S.jobs.find(j => j.pid===d.prompt_id); if(!J) return;
+    if(m.type==='executing' && d.node){ PROGS[J.pid] = {node:d.node, v:0, max:0}; showProg(); } if(m.type==='progress'){ PROGS[J.pid] = {node:d.node || (PROGS[J.pid] || {}).node, v:d.value, max:d.max}; showProg(); } }; }catch(e){} }
+const stepName = (J, id) => { const c = J && J.cls && J.cls[id]; return c==='TextGenerateV2' ? 'writing the prompt' : c==='SamplerCustomAdvanced' ? 'drawing' : c==='VAEDecode' ? 'finishing' : /Loader/.test(c || '') ? 'loading the model' : c==='PH3ImageConditioning' ? 'reading the pictures' : 'working'; };
 async function poll(J){ const t0 = Date.now(), url = J.pc;
   for(;;){ await new Promise(r => setTimeout(r, window.PH3_POLL || 2000)); let it = null;
-    try{ const h = await (await fetch(url + '/history/' + J.pid, {cache:'no-store'})).json(); it = h[J.pid]; }catch(e){ MSG = 'Lost touch with ' + pcName(url) + ', still trying… (it keeps going on the PC)'; showProg(); continue; }
+    try{ const h = await (await fetch(url + '/history/' + J.pid, {cache:'no-store'})).json(); it = h[J.pid]; }catch(e){ J.note = 'lost touch, still trying'; continue; }
     if(it && it.status && it.status.status_str==='error'){ const m = (it.status.messages || []).find(x => x[0]==='execution_error'), e = m && m[1] || {};
       throw new Error('It failed on ' + pcName(url) + (e.node_type ? ' (' + e.node_type + ': ' + String(e.exception_message || '').trim().slice(0, 240) + ')' : '.')); }
     if(it && it.outputs && it.outputs[J.sv]) return it.outputs;
     if(it && it.status && it.status.completed) throw new Error(pcName(url) + ' finished but sent no picture back.');
     if(!it){ try{ const q = await (await fetch(url + '/queue', {cache:'no-store'})).json(), pend = (q.queue_pending || []).map(x => x[1]), run = (q.queue_running || []).map(x => x[1]);
-      if(pend.includes(J.pid)){ MSG = 'Waiting behind ' + (run.length + pend.indexOf(J.pid)) + ' job(s) on ' + pcName(url) + '…'; PROG = null; }
-      else if(!run.includes(J.pid) && Date.now() - t0 > 60000) throw new Error(pcName(url) + " doesn't know this job any more (was ComfyUI restarted?)."); }catch(e){ if(/know this job/.test(e.message)) throw e; } }
-    else MSG = '';
-    showProg(); if(Date.now() - t0 > 60 * 60000) throw new Error('No answer after an hour.'); } }
+      if(pend.includes(J.pid)){ J.note = 'waiting'; delete PROGS[J.pid]; }
+      else if(!run.includes(J.pid) && Date.now() - t0 > 60000) throw new Error(pcName(url) + " doesn't know this job any more (was ComfyUI restarted?)."); else J.note = ''; }catch(e){ if(/know this job/.test(e.message)) throw e; } }
+    else J.note = '';
+    if(Date.now() - t0 > 90 * 60000) throw new Error('No answer after 90 minutes.'); } }
+// ✨ Make it: N pictures (Jordan 2026-11-13: "a batch number so it knows how many to generate"), each its own job with its own seed,
+// dealt round the PCs that have P-H3 (Render, Main…); each PC's ComfyUI queue takes its share one after another
 async function make(){ if(BUSY) return; const text = S.prompt.trim(); BAD = false;
   if(!text){ say('Say what you want first.', true); return; } if(S.mode==='edit' && !S.pics.length){ say('Add Picture 1, the one to change.', true); return; }
-  BUSY = true; say('Looking for a PC with P-H3…');
-  try{ await scan(); const k = bestPc(); if(!k) throw new Error('No PC answered. Is ComfyUI running on Render, and Tailscale on on this phone?');
-    if(!k.ok) throw new Error(pcName(k.url) + "'s ComfyUI is too old for P-H3 (it needs 0.44.0 or newer). Update ComfyUI there.");
-    const miss = missingOf(k); if(miss.length){ NEED = {pc:k.url, keys:miss}; throw new Error(pcName(k.url) + ' is missing ' + miss.map(x => FILES[x].label).join(', ') + '. Get them below (once).'); }
-    numbered(); const pics = [];
-    if(S.mode==='edit') for(const p of S.pics){ say('Sending Picture ' + p.n + ' to ' + pcName(k.url) + '…'); pics.push(await upload(k.url, p)); }
-    const seed = S.keepSeed && S.seed ? S.seed : Math.floor(Math.random() * 2 ** 48);
-    let w = 0, h = 0, ratio = S.ratio; if(S.mode==='make') [w, h] = canvasOf(S.ratio, S.mp); else { const p = S.pics[0], k = Math.sqrt(S.mp * 1048576 / (p.w * p.h)); ratio = nearRatio(p.w, p.h); w = Math.max(32, Math.round(p.w * k / 32) * 32); h = Math.max(32, Math.round(p.h * k / 32) * 32); }
-    const o = {text, auto:S.auto, ratio, mp:S.mp, w, h, pics, seed}, {g, sv, pv} = graph(k, o);
-    window.LASTG = g; PROG = null; say('Starting on ' + pcName(k.url) + '…'); listen(k.url);
-    S.job = {pc:k.url, pid:await send(k.url, g), sv, pv, t0:Date.now(), cls:Object.fromEntries(Object.entries(g).map(([i, n]) => [i, n.class_type])),
-      rec:{mode:S.mode, prompt:text, auto:S.auto, ratio, mp:S.mp, seed, pics:S.mode==='edit' ? S.pics.map(p => ({id:p.id, n:p.n, w:p.w, h:p.h, thumb:p.thumb, up:p.up, src:p.src})) : []}};
-    S.seed = seed; keep(); draw(); await finish(); }
+  BUSY = true; say('Looking for PCs with P-H3…');
+  try{ await scan(); const pcs = readyPcs();
+    if(!pcs.length){ const k = bestPc(); if(!k || k.off) throw new Error('No PC answered. Is ComfyUI running on Render, and Tailscale on on this phone?');
+      if(!k.ok) throw new Error(pcName(k.url) + "'s ComfyUI is too old for P-H3 (it needs 0.44.0 or newer). Update ComfyUI there.");
+      const miss = missingOf(k); NEED = {pc:k.url, keys:miss}; throw new Error(pcName(k.url) + ' is missing ' + miss.map(x => FILES[x].label).join(', ') + '. Get them below (once).'); }
+    numbered(); const n = Math.max(1, Math.min(8, S.count || 1)), use = pcs.slice(0, n), pics = {};
+    if(S.mode==='edit') for(const k of use){ pics[k.url] = []; for(const p of S.pics){ say('Sending Picture ' + p.n + ' to ' + pcName(k.url) + '…'); pics[k.url].push(await upload(k.url, p)); } }
+    const seed0 = S.keepSeed && S.seed ? S.seed : Math.floor(Math.random() * 2 ** 48);
+    let w = 0, h = 0, ratio = S.ratio; if(S.mode==='make') [w, h] = canvasOf(S.ratio, S.mp); else { const p = S.pics[0], f = Math.sqrt(S.mp * 1048576 / (p.w * p.h)); ratio = nearRatio(p.w, p.h); w = Math.max(32, Math.round(p.w * f / 32) * 32); h = Math.max(32, Math.round(p.h * f / 32) * 32); }
+    const recPics = S.mode==='edit' ? S.pics.map(p => ({id:p.id, n:p.n, w:p.w, h:p.h, thumb:p.thumb, up:p.up, src:p.src})) : [], t0 = Date.now(), batch = 'b' + t0.toString(36);
+    for(let i = 0; i < n; i++){ const k = use[i % use.length], seed = (seed0 + i) % 2 ** 48, {g, sv, pv} = graph(k, {text, auto:S.auto, ratio, mp:S.mp, w, h, pics:pics[k.url] || [], seed});
+      window.LASTG = g; say('Starting ' + (i + 1) + ' of ' + n + ' on ' + pcName(k.url) + '…'); listen(k.url);
+      S.jobs.push({pc:k.url, pid:await send(k.url, g), sv, pv, t0, i, n, batch, cls:Object.fromEntries(Object.entries(g).map(([j, x]) => [j, x.class_type])),
+        rec:{mode:S.mode, prompt:text, auto:S.auto, ratio, mp:S.mp, seed, pics:recPics}}); keep(); }
+    S.seed = seed0; MSG = ''; keep(); draw(); await finishAll(); }
   catch(e){ say(e.message || String(e), true); }
   BUSY = false; draw(); }
-async function finish(){ const J = S.job; if(!J) return; listen(J.pc); BUSY = true; draw();
-  try{ const out = await poll(J), im = ((out[J.sv] || {}).images || [])[0]; if(!im) throw new Error('No picture came back.');
-    const txt = J.pv && out[J.pv] && (out[J.pv].text || out[J.pv].string);
-    const r = Object.assign({id:'p' + Date.now().toString(36), pc:J.pc, file:im.filename, sub:im.subfolder || '', made:Date.now(), secs:Math.round((Date.now() - J.t0) / 1000), up:Array.isArray(txt) ? txt.join('\n') : txt || ''}, J.rec);
-    S.lib.unshift(r); S.lib = S.lib.slice(0, 200); S.cur = r.id; S.job = null; PROG = null; CMP = 50; keep(); say('Done in ' + r.secs + ' s on ' + pcName(J.pc) + '.'); }
-  catch(e){ S.job = null; PROG = null; keep(); say(e.message || String(e), true); }
-  BUSY = false; draw(); }
+// waits for every job still out (also ones left running when the page closed); each picture joins the list as it lands
+let WAITING = null;
+function finishAll(){ if(WAITING) return WAITING; if(!S.jobs.length) return Promise.resolve(); BUSY = true; draw(); const errs = [];
+  WAITING = Promise.all(S.jobs.slice().map(async J => { listen(J.pc);
+    try{ const out = await poll(J), im = ((out[J.sv] || {}).images || [])[0]; if(!im) throw new Error('No picture came back from ' + pcName(J.pc) + '.');
+      const txt = J.pv && out[J.pv] && (out[J.pv].text || out[J.pv].string);
+      const r = Object.assign({id:'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), pc:J.pc, file:im.filename, sub:im.subfolder || '', made:Date.now(), secs:Math.round((Date.now() - J.t0) / 1000), batch:J.batch, up:Array.isArray(txt) ? txt.join('\n') : txt || ''}, J.rec);
+      S.lib.unshift(r); S.lib = S.lib.slice(0, 300); { const c = curRec(); if(!c || c.batch!==J.batch) S.cur = r.id; } /* (the first of a batch to land shows; the rest go in its strip) */ J.done = true; }
+    catch(e){ errs.push(e.message || String(e)); J.done = true; }
+    S.jobs = S.jobs.filter(x => x!==J); delete PROGS[J.pid]; keep(); draw(); }))
+    .then(() => { WAITING = null; BUSY = false;
+      if(errs.length) say(errs[0] + (errs.length > 1 ? ' (' + errs.length + ' failed)' : ''), true); else say('Done.'); draw(); });
+  return WAITING; }
 // ---- downloads through Render Deck's helper (one after another; it shows the % while it goes)
 async function getFiles(){ const N = NEED; if(!N || GETTING) return; GETTING = true; draw(); const u = N.pc;
   try{ for(const key of N.keys){ const f = FILES[key], name = f.url.split('/').pop(); say('Asking ' + pcName(u) + ' to download ' + f.label + '…');
@@ -209,21 +218,27 @@ async function getFiles(){ const N = NEED; if(!N || GETTING) return; GETTING = t
   catch(e){ say(e.message, true); } GETTING = false; draw(); }
 // ---- screen
 function say(m, bad){ MSG = m || ''; BAD = !!bad; const el = $('#msg'); if(el){ el.textContent = MSG; el.className = BAD ? 'bad' : ''; } }
-function showProg(){ const m = $('#msg'), b = $('#bar'); const J = S.job;
-  if(J && !MSG){ const secs = Math.round((Date.now() - J.t0) / 1000); if(m){ m.className = ''; m.textContent = PROG ? stepName(PROG.node) + (PROG.max > 1 ? ' ' + PROG.v + ' / ' + PROG.max : '') + '… ' + secs + ' s' : 'Working on ' + pcName(J.pc) + '… ' + secs + ' s'; } }
+// one line per PC: how many it has left and what the one it's on is doing
+function showProg(){ const m = $('#msg'), b = $('#bar'), J = S.jobs;
+  if(J.length && !MSG){ const secs = Math.round((Date.now() - Math.min(...J.map(j => j.t0))) / 1000), by = {};
+    for(const j of J) (by[j.pc] = by[j.pc] || []).push(j);
+    const lines = Object.entries(by).map(([pc, l]) => { const run = l.find(j => PROGS[j.pid]), p = run && PROGS[run.pid];
+      return pcName(pc) + ': ' + l.length + ' left' + (p ? ', ' + stepName(run, p.node) + (p.max > 1 ? ' ' + p.v + '/' + p.max : '') : l.some(j => j.note==='waiting') ? ', waiting its turn' : ''); });
+    if(m){ m.className = ''; m.textContent = lines.join(' · ') + ' · ' + secs + ' s'; } }
   else if(m){ m.textContent = MSG; m.className = BAD ? 'bad' : ''; }
-  if(b){ b.hidden = !BUSY && !J; const i = b.querySelector('i'); const det = PROG && PROG.max > 1; b.classList.toggle('run', !det); if(i) i.style.width = det ? Math.round(100 * PROG.v / PROG.max) + '%' : ''; } }
-setInterval(() => { if(S.job) showProg(); }, 1000);
+  if(b){ b.hidden = !BUSY && !J.length; const i = b.querySelector('i'), tot = J.length ? Math.max(...J.map(j => j.n || 1)) : 0, run = J.map(j => PROGS[j.pid]).find(p => p && p.max > 1);
+    const det = !!(tot && run); b.classList.toggle('run', !det); if(i) i.style.width = det ? Math.round(100 * ((tot - J.length) + run.v / run.max) / tot) + '%' : ''; } }
+setInterval(() => { if(S.jobs.length) showProg(); }, 1000);
 const curRec = () => S.lib.find(r => r.id===S.cur);
-function resultHtml(r){ const pic = r.pics && r.pics[0], src = viewOf(r);
-  const cmp = r.mode==='edit' && pic && pic.thumb;
-  return `<div class="card"><h2>Result</h2>
-    <div class="res" id="res"><img src="${esc(src)}" alt="The result" id="resimg">${cmp ? `<div class="before" id="before" style="clip-path:inset(0 ${100 - CMP}% 0 0)"><img src="${esc(pic.src ? viewOf(pic.src) : pic.up ? viewOf({pc:r.pc, file:pic.up[r.pc] || '', type:'input'}) : pic.thumb)}" alt="Before"></div><div class="line" style="left:${CMP}%"></div><span class="tag" style="left:6px">Before</span><span class="tag" style="right:6px">After</span>` : ''}</div>
-    ${cmp ? '<p class="note">Drag across the picture to compare.</p>' : ''}
+// (no before/after slider: Jordan 2026-11-13 "we don't need the before/after slider")
+function resultHtml(r){ const src = viewOf(r), sib = r.batch ? S.lib.filter(x => x.batch===r.batch) : [];
+  return `<div class="card"><h2>Result${sib.length > 1 ? ' ' + (sib.length - sib.indexOf(r)) + ' of ' + sib.length : ''}</h2>
+    <div class="res" id="res"><img src="${esc(src)}" alt="The result" id="resimg"></div>
+    ${sib.length > 1 ? `<div class="lib" style="grid-template-columns:repeat(4,1fr)">${sib.slice().reverse().map(x => `<button data-open="${x.id}" aria-label="Open"${x===r ? ' style="border-color:var(--accent)"' : ''}><img loading="lazy" src="${esc(viewOf(x))}" alt=""></button>`).join('')}</div>` : ''}
     <p class="note">${esc(r.mode==='edit' ? 'Edit' : 'New picture')} · ${r.secs || '?'} s on ${esc(pcName(r.pc))} · seed ${r.seed}${r.auto ? ' · auto prompt' : ''}</p>
     ${r.up ? `<details><summary>The prompt it wrote</summary><pre>${esc(r.up)}</pre></details>` : ''}
     <div class="row"><button id="useit">✏ Edit this</button><button id="again">↻ Again</button><a class="btn" style="justify-content:center" href="${esc(src)}" target="_blank" rel="noopener">⬇ Open</a></div></div>`; }
-function draw(){ const el = $('#app'); numbered(); const r = curRec(), J = S.job;
+function draw(){ const el = $('#app'); numbered(); const r = curRec(), J = S.jobs.length;
   let h = `<div class="card"><div class="chips" role="group" aria-label="What to do"><button data-mode="edit" aria-pressed="${S.mode==='edit'}">✏ Edit a picture</button><button data-mode="make" aria-pressed="${S.mode==='make'}">🎨 New picture</button></div>`;
   if(S.mode==='edit'){ h += `<div class="lbl">Picture 1 is the one that changes. Pictures 2–9 are references; name them in the request ("the jacket from Picture 2").</div><div class="pics">`
       + S.pics.map((p, i) => `<div class="pic${i ? '' : ' one'}"><img src="${esc(p.thumb)}" alt="Picture ${p.n}"><b>${p.n}</b><button class="x" data-del="${i}" aria-label="Remove Picture ${p.n}">✕</button></div>`).join('')
@@ -234,8 +249,10 @@ function draw(){ const el = $('#app'); numbered(); const r = curRec(), J = S.job
     <div class="chips" role="group">${[2, 4, 8].map(m => `<button data-mp="${m}" aria-pressed="${S.mp===m}">${m} MP${m===4 ? ' · default' : m===8 ? ' · best, slow' : ' · quick'}</button>`).join('')}</div>
     <div class="tog"><span>Auto prompt<small>Pruna's prompt writer expands your request first. Turn it off to send your words as they are.</small></span><button class="sw" id="auto" aria-pressed="${S.auto}" aria-label="Auto prompt"></button></div>
     <div class="tog"><span>Keep the seed<small>${S.seed ? 'Last seed ' + S.seed : 'A new seed each time'}</small></span><button class="sw" id="kseed" aria-pressed="${S.keepSeed}" aria-label="Keep the seed"></button></div>
+    <div class="lbl">How many${readyPcs().length > 1 && !S.pc ? ' (shared between ' + readyPcs().map(k => pcName(k.url)).join(' and ') + ')' : ''}</div>
+    <div class="chips" role="group">${[1, 2, 3, 4, 6, 8].map(c => `<button data-count="${c}" aria-pressed="${(S.count || 1)===c}">${c}</button>`).join('')}</div>
     <div class="lbl">PC</div><div class="chips" role="group"><button data-pc="" aria-pressed="${!S.pc}">Auto</button>${deckServers().map(s => `<button data-pc="${esc(s.url)}" aria-pressed="${S.pc===s.url}">${esc(s.name || pcName(s.url))}</button>`).join('')}</div>
-    <button class="go" id="make" ${BUSY ? 'disabled' : ''}>${J ? 'Making…' : '✨ Make it'}</button>
+    <button class="go" id="make" ${BUSY ? 'disabled' : ''}>${J ? 'Making ' + J + '…' : '✨ Make ' + ((S.count || 1) > 1 ? S.count + ' pictures' : 'it')}</button>
     <div class="bar" id="bar" hidden><i></i></div><p id="msg"></p>
     ${NEED ? `<div class="need"><span>${esc(pcName(NEED.pc))} needs ${esc(NEED.keys.map(x => FILES[x].label + ' (' + FILES[x].gb + ' GB)').join(', '))}.</span><button id="getb" ${GETTING ? 'disabled' : ''}>⬇ Get them on ${esc(pcName(NEED.pc))}</button></div>` : ''}</div>`;
   if(r) h += resultHtml(r);
@@ -244,15 +261,14 @@ function draw(){ const el = $('#app'); numbered(); const r = curRec(), J = S.job
   el.innerHTML = h; showProg(); wire(); }
 function wire(){ const on = (s, f, ev) => { const e = $(s); if(e) e[ev || 'onclick'] = f; };
   $('#app').onclick = e => { const b = e.target.closest('button'); if(!b) return; const d = b.dataset;
-    if(d.mode){ S.mode = d.mode; keep(); draw(); } else if(d.ratio){ S.ratio = d.ratio; keep(); draw(); } else if(d.mp){ S.mp = +d.mp; keep(); draw(); }
+    if(d.mode){ S.mode = d.mode; keep(); draw(); } else if(d.ratio){ S.ratio = d.ratio; keep(); draw(); } else if(d.mp){ S.mp = +d.mp; keep(); draw(); } else if(d.count){ S.count = +d.count; keep(); draw(); }
     else if(d.pc!==undefined){ S.pc = d.pc; NEED = null; keep(); draw(); } else if(d.del!==undefined){ S.pics.splice(+d.del, 1); keep(); draw(); }
-    else if(d.open){ S.cur = d.open; CMP = 50; keep(); draw(); scrollTo({top:$('#res') ? $('#res').closest('.card').offsetTop - 8 : 0, behavior:'smooth'}); } };
+    else if(d.open){ S.cur = d.open; keep(); draw(); scrollTo({top:$('#res') ? $('#res').closest('.card').offsetTop - 8 : 0, behavior:'smooth'}); } };
   on('#addpic', () => $('#file').click()); on('#make', make); on('#getb', getFiles);
   on('#auto', () => { S.auto = !S.auto; keep(); draw(); }); on('#kseed', () => { S.keepSeed = !S.keepSeed; keep(); draw(); });
   on('#prompt', e => { S.prompt = e.target.value; keep(); }, 'oninput');
   on('#useit', useIt); on('#again', again); on('#forget', () => { S.lib = S.lib.filter(x => x.id!==S.cur); S.cur = null; keep(); draw(); });
-  const res = $('#res'); if(res && $('#before')){ const mv = e => { const rc = res.getBoundingClientRect(), x = (e.touches ? e.touches[0].clientX : e.clientX) - rc.left; CMP = Math.max(0, Math.min(100, 100 * x / rc.width)); $('#before').style.clipPath = 'inset(0 ' + (100 - CMP) + '% 0 0)'; res.querySelector('.line').style.left = CMP + '%'; };
-    res.onpointerdown = e => { mv(e); res.setPointerCapture(e.pointerId); res.onpointermove = mv; }; res.onpointerup = res.onpointercancel = () => { res.onpointermove = null; }; } }
+}
 // ✏ Edit this: the result becomes Picture 1 (it's already on that PC); the references stay
 function useIt(){ const r = curRec(); if(!r) return; const img = $('#resimg');
   const p = {id:'r' + Date.now().toString(36), w:img && img.naturalWidth || 1024, h:img && img.naturalHeight || 1024, thumb:img && img.complete && img.naturalWidth ? (() => { try{ return thumbOf(img); }catch(e){ return viewOf(r); } })() : viewOf(r), src:{pc:r.pc, file:r.file, sub:r.sub, type:'output'}};
@@ -263,7 +279,7 @@ $('#file').onchange = async e => { const f = e.target.files[0]; e.target.value =
   try{ const s = await shrink(f), id = Math.random().toString(36).slice(2, 10); BLOBS[id] = s.blob; S.pics.push({id, w:s.w, h:s.h, thumb:s.thumb}); keep(); draw(); }catch(x){ say(x.message, true); } };
 draw();
 // a job that was running when the page closed carries on
-if(S.job) finish();
-scan().then(() => { const k = bestPc(); if(k && !BUSY && !S.job){ if(k.off) say("Can't reach the PCs. Is ComfyUI running on Render, and Tailscale on on this phone?", true); else if(!k.ok) say(pcName(k.url) + "'s ComfyUI is too old for P-H3 (it needs 0.44.0 or newer).", true); else { const m = missingOf(k); if(m.length){ NEED = {pc:k.url, keys:m}; draw(); } } } }).catch(() => {});
+if(S.jobs.length) finishAll();
+scan().then(() => { draw(); const k = bestPc(); if(k && !BUSY && !S.jobs.length){ if(k.off) say("Can't reach the PCs. Is ComfyUI running on Render, and Tailscale on on this phone?", true); else if(!k.ok) say(pcName(k.url) + "'s ComfyUI is too old for P-H3 (it needs 0.44.0 or newer).", true); else { const m = missingOf(k); if(m.length){ NEED = {pc:k.url, keys:m}; draw(); } } } }).catch(() => {});
 </script>
 </body></html>

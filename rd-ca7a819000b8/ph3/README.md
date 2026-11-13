@@ -14,5 +14,8 @@ references named in the request) or make a new one. Copyright (c) 2026 Jordan Br
   → the conditioning; `PreviewAny` sends the written prompt back ("The prompt it wrote"). Off: the words go straight in (the node adds "Edit <Picture 1>.").
 - Size 2 / 4 / 8 MP (ComfyUI megapixels, 1024²). New pictures: canvas at that ratio, multiples of 32 (8 MP 4:3 = 3360x2496). Edits: Picture 1
   is scaled to that size (`ImageScaleToTotalPixels`) and the canvas set to it, so references are read no bigger.
+- How many (1-8, Jordan 2026-11-13): each picture is its own job with the next seed, dealt round every PC that has P-H3 and all its files
+  (Render and Main; the PC chips can pin one). Each lands in the list as it finishes; a batch's pictures show as a strip under the result.
+  The progress line shows each PC's count left and its step. No before/after slider (Jordan didn't need it).
 - Missing files get one ⬇ button that downloads them through Render Deck's helper (Hugging Face: Comfy-Org/MiniMax-H3, PrunaAI/p-h3-image-comfy).
 - Test: `NODE_PATH=$(npm root -g) node ph3/tests/t_ph3.js` (a stand-in ComfyUI checks the job).
