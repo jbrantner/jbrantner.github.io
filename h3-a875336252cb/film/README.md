@@ -73,3 +73,14 @@ Jordan: "render one track and generate in another", and slide a whole track. Bar
 - Every track shows, ＋ Track is in the tools, and a selected clip drags up or down to another track.
 - 🎬 track: new clips (Render from the form with no clip selected, 📤 Upload, 🎞 One you've made) go on the end of the track you tapped last (a clip or empty space on it), or the one picked with 🎬 New clips go on this track in its ⋯ menu. ＋ Track makes the new track the 🎬 track. Before any tap it's the track that ends last, as before. Kept in memory while the app is open (`ACT`).
 - ⇔ Select the whole track (track ⋯ menu): every clip on it is selected (`TSEL`); dragging any of them slides them all, keeping their spacing, never before 0 s. Any of their starts or ends snaps to the edges of clips on the other tracks, the playhead and 0 (pink line). Done (in the note) or tapping empty space / a clip on another track ends it. ↶ Undo takes a slide back. Test: tests/t_tracks.js.
+
+## ⧉ Picture in picture (2026-11-13)
+
+Jordan: "videos can overlay other videos… scale and rotate and move an entire track". A track's ⋯ › ⧉ Picture in picture
+gives the track `xf = {s, r, x, y, snd}`: s = size (1 = fitted inside the frame), r = turn in degrees clockwise, x / y = its
+middle as a share of the frame's width / height from the middle, snd = its sound is mixed in. Such a track sits over the
+tracks below it (the first full-frame clip underneath shows around it); a full-frame track above still covers it.
+The panel under the picture has Size / Turn / Left·right / Up·down sliders, corner buttons, ↻ 90°, 🔊, ⬜ Full frame again;
+on the picture, drag = move, two fingers = size + turn (clicks onto quarter turns). Preview/scrub layers one `<video>` per
+overlay track with CSS; ⬇ Export and ⚡ preview send `xf` per clip and the helper draws it with PIL (job answers `ov:1`;
+an older helper's preview isn't used for a film with overlays). Test: `tests/t_overlay.js` (uses ffmpeg for two clips).
