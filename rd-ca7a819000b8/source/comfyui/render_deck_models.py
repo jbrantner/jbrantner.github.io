@@ -2533,14 +2533,29 @@ def _ex_find(f):
     raise FileNotFoundError('%s is not in the output folder (yet: Dropbox may still be copying it)' % name)
 
 
+def _ex_xf(x):
+    """⧉ a picture-in-picture track's size / turn / place (H3 Deck Films, 2026-11-13): s = size (1 = fitted inside the frame),
+    r = turn in degrees clockwise, x / y = its middle as a share of the frame's width / height from the frame's middle,
+    snd = its sound is mixed in. None = a full-frame clip (covers the tracks below)."""
+    if not isinstance(x, dict):
+        return None
+    try:
+        return {'s': max(0.05, min(2.0, float(x.get('s', 1)))), 'r': float(x.get('r', 0)) % 360.0,
+                'x': max(-1.0, min(1.0, float(x.get('x', 0)))), 'y': max(-1.0, min(1.0, float(x.get('y', 0)))),
+                'snd': x.get('snd') is not False}
+    except Exception:
+        return None
+
+
 def _ex_plan(clips):
-    """[(start, end, clip or None)] over the whole film: where clips overlap the upper track (lower number) wins,
-    and stretches with no clip are black and silent."""
+    """[(start, end, clip or None, overlays)] over the whole film: where full-frame clips overlap the upper track (lower
+    number) wins, and stretches with no clip are black and silent. overlays = the ⧉ clips (with xf) on tracks above that
+    full-frame clip, bottom one first; a full-frame clip on a track above an overlay covers it."""
     cs = []
     for c in clips:
         a, i, o = float(c['at']), float(c['in']), float(c['out'])
         if o - i > 0.01:
-            cs.append(dict(c, at=max(0.0, a), in_=i, end=max(0.0, a) + o - i, track=int(c.get('track') or 0)))
+            cs.append(dict(c, at=max(0.0, a), in_=i, end=max(0.0, a) + o - i, track=int(c.get('track') or 0), xf=_ex_xf(c.get('xf'))))
     cs.sort(key=lambda c: c['track'])
     cuts = sorted({0.0} | {c['at'] for c in cs} | {c['end'] for c in cs})
     segs = []
@@ -2548,15 +2563,45 @@ def _ex_plan(clips):
         if b - a < 1e-4:
             continue
         m = (a + b) / 2
-        c = next((c for c in cs if c['at'] <= m < c['end']), None)
-        if segs and segs[-1][2] is c:
+        base, ov = None, []
+        for c in cs:
+            if c['at'] <= m < c['end']:
+                if c['xf']:
+                    ov.append(c)
+                else:
+                    base = c
+                    break
+        ov = tuple(reversed(ov))
+        if segs and segs[-1][2] is base and [id(x) for x in segs[-1][3]] == [id(x) for x in ov]:
             segs[-1][1] = b
         else:
-            segs.append([a, b, c])
+            segs.append([a, b, base, ov])
     return segs
 
 
-def _ex_video(path, t0, n, w, h, fps):
+def _ex_over(o, t0, n, W, H, fps):
+    """n frames of a ⧉ overlay clip as (PIL RGBA picture, left, top) to paste on a W x H frame: fitted inside the frame,
+    sized by xf.s, turned by xf.r (clockwise, see-through corners) and centred at the frame's middle + (x * W, y * H)."""
+    from PIL import Image
+    xf, (cw, ch) = o['xf'], o['dims']
+    fa, ca = W / float(H), cw / float(max(1, ch))
+    fw, fh = (W, W / ca) if ca > fa else (H * ca, H)
+    ow, oh = max(2, int(round(fw * xf['s']))), max(2, int(round(fh * xf['s'])))
+    cx, cy = W / 2.0 + xf['x'] * W, H / 2.0 + xf['y'] * H
+    r = xf['r']
+    for fr in _ex_video(o['path'], t0, n, ow, oh, fps, fmt='rgba'):
+        if fr is None:
+            yield None
+            continue
+        im = fr.to_image()
+        if im.mode != 'RGBA':
+            im = im.convert('RGBA')
+        if abs(r) > 1e-3:
+            im = im.rotate(-r, resample=Image.BICUBIC, expand=True)
+        yield im, int(round(cx - im.width / 2.0)), int(round(cy - im.height / 2.0))
+
+
+def _ex_video(path, t0, n, w, h, fps, fmt='yuv420p'):
     """n frames from t0 seconds into the clip, sized to the film. Runs out early = the last frame is held."""
     import av
     last = None
@@ -2568,7 +2613,7 @@ def _ex_video(path, t0, n, w, h, fps):
         for fr in src.decode(vs):
             if fr.time is not None and fr.time < t0 - 0.5 / fps:
                 continue
-            last = fr.reformat(width=w, height=h, format='yuv420p')
+            last = fr.reformat(width=w, height=h, format=fmt)
             yield last
             got += 1
             if got >= n:
@@ -2613,12 +2658,17 @@ def _ex_run(job, clips):
     from fractions import Fraction
     try:
         segs = _ex_plan(clips)
-        if not any(s[2] for s in segs):
+        if not any(s[2] or s[3] for s in segs):
             raise ValueError('The timeline has no clips')
         for s in segs:
-            if s[2]:
-                s[2]['path'] = _ex_find(s[2])
-        with av.open(next(s[2]['path'] for s in segs if s[2])) as first:
+            for c in ([s[2]] if s[2] else []) + list(s[3]):
+                if 'path' not in c:
+                    c['path'] = _ex_find(c)
+                if c['xf'] and 'dims' not in c:
+                    with av.open(c['path']) as src:
+                        cc = src.streams.video[0].codec_context
+                        c['dims'] = (cc.width or 16, cc.height or 9)
+        with av.open(next((s[2]['path'] for s in segs if s[2]), None) or next(s[3][0]['path'] for s in segs if s[3])) as first:
             v0 = first.streams.video[0]
             fps = Fraction(v0.average_rate or 24).limit_denominator(1001)
             w, h = v0.codec_context.width // 2 * 2, v0.codec_context.height // 2 * 2
@@ -2652,13 +2702,21 @@ def _ex_run(job, clips):
             ao.layout = 'stereo'
             black = av.VideoFrame.from_ndarray(np.zeros((h, w, 3), np.uint8), format='rgb24').reformat(format='yuv420p')
             vi, si = 0, 0
-            for a, b, c in segs:
+            for a, b, c, ovs in segs:
                 if job.get('cancel'):
                     raise RuntimeError('Stopped')
                 n = int(round(b * fps)) - vi
                 frames = _ex_video(c['path'], c['in_'] + a - c['at'], n, w, h, float(fps)) if c else (black for _ in range(n))
+                overs = [_ex_over(o, o['in_'] + a - o['at'], n, w, h, float(fps)) for o in ovs]
                 for fr in frames:
                     fr = fr or black
+                    if overs:  # ⧉ picture-in-picture tracks drawn over the full-frame picture, bottom one first
+                        im = fr.to_image().convert('RGB')
+                        for g in overs:
+                            p = next(g, None)
+                            if p:
+                                im.paste(p[0], (p[1], p[2]), p[0])
+                        fr = av.VideoFrame.from_image(im).reformat(format='yuv420p')
                     fr.pts, fr.time_base = vi, Fraction(1) / fps
                     for p in vo.encode(fr):
                         dst.mux(p)
@@ -2668,6 +2726,11 @@ def _ex_run(job, clips):
                         raise RuntimeError('Stopped')
                 ns = int(round(b * rate)) - si
                 snd = _ex_audio(c['path'], c['in_'] + a - c['at'], ns, rate) if c else np.zeros((2, ns), np.float32)
+                for o in ovs:
+                    if o['xf']['snd']:
+                        snd = snd + _ex_audio(o['path'], o['in_'] + a - o['at'], ns, rate)
+                if ovs:
+                    snd = np.clip(snd, -1.0, 1.0).astype(np.float32)
                 for k in range(0, ns, 4096):
                     af = av.AudioFrame.from_ndarray(np.ascontiguousarray(snd[:, k:k + 4096]), format='fltp', layout='stereo')
                     af.sample_rate, af.pts, af.time_base = rate, si + k, Fraction(1, rate)
@@ -2691,12 +2754,13 @@ def _ex_run(job, clips):
 
 @routes.post('/renderdeck/h3export')
 async def h3export(request):
-    """{name, clips:[{filename, subfolder, in, out, at, track}]} (seconds; track 0 is the top one) -> {id}"""
+    """{name, clips:[{filename, subfolder, in, out, at, track, xf?}]} (seconds; track 0 is the top one; xf = ⧉ size/turn/place,
+    see _ex_xf) -> {id, ov:1} (ov tells the app this helper draws picture-in-picture tracks)"""
     try:
         import threading
         body = await request.json()
         clips = [{'filename': str(c['filename']), 'subfolder': str(c.get('subfolder') or ''), 'in': float(c['in']), 'out': float(c['out']),
-                  'at': float(c['at']), 'track': int(c.get('track') or 0)} for c in body.get('clips', [])][:500]
+                  'at': float(c['at']), 'track': int(c.get('track') or 0), 'xf': _ex_xf(c.get('xf'))} for c in body.get('clips', [])][:500]
         if not clips:
             raise ValueError('The timeline has no clips')
         name = re.sub(r'[^\w\- ]+', '_', str(body.get('name') or 'film')).strip()[:60] or 'film'
@@ -2704,7 +2768,7 @@ async def h3export(request):
             EXPORTS.pop(k, None)
         jid = uuid.uuid4().hex[:12]
         EXPORTS[jid] = job = {'id': jid, 'name': name, 'state': 'working', 'done': 0, 'total': 0, 't_added': time.time(),
-                              'preview': bool(body.get('preview'))}  # ⚡ H3 Deck's playback preview: half size, fast encode, one file per film (overwritten)
+                              'ov': 1, 'preview': bool(body.get('preview'))}  # ⚡ H3 Deck's playback preview: half size, fast encode, one file per film (overwritten)
         threading.Thread(target=_ex_run, args=(job, clips), daemon=True).start()
         return web.json_response(job)
     except Exception as e:
