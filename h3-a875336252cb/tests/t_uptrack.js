@@ -159,6 +159,20 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const RK = await page.evaluate(async () => { const a = H3.S.takes.find(x => x.id==='tA'), t = JSON.parse(JSON.stringify(a)); Object.assign(t, {id:'tK', state:'failed', final:null}); t.pieces[0].state = 'failed'; t.pieces[0].err = 'boom';
     H3.S.takes.unshift(t); const ok1 = await H3.retryTake(t); const r = {ok:ok1, state:t.state, piece:t.pieces[0].state, err:t.pieces[0].err, tries:t.retries}; H3.S.takes = H3.S.takes.filter(x => x.id!=='tK'); return r; });
   ok(RK.ok && RK.state==='working' && RK.piece==='queued' && !RK.err && RK.tries===1, '↻ retryTake sends the failed piece again: ' + JSON.stringify(RK));
+  // ↩ Revert upscale: the track goes back to the clips it had when ⬆ Upscale track was tapped, the run's passes are let go
+  const RV = await fr.evaluate(async () => { const f = FILM.S.films[0], tr = f.tracks[0]; f.upRun = null; const before = JSON.stringify(tr.clips.map(c => [c.take, c.in, c.out, c.at]));
+    await FILM.upTrackGo(f, tr, 0.9, ''); const keys = f.upRun.hq.map(h => h.key); tr.clips[0].take = 'tB'; FILM.draw(); const btn = !!document.querySelector('[data-act="upRevert"]');
+    const n = FILM.upRevert(f); const after = JSON.stringify(tr.clips.map(c => [c.take, c.in, c.out, c.at]));
+    return {btn, n, same:after===before, state:f.upRun.state, dropped:keys.every(k => (FILM.S.passes.find(p => p.key===k) || {}).dropped)}; });
+  ok(RV.btn && RV.n===3 && RV.same && RV.state==='reverted' && RV.dropped, '↩ Revert upscale puts the track back as it was and lets the run go: ' + JSON.stringify(RV));
+  // ↩ a run from before the copy: each clip is followed back from its 🧵 seam and ✨ takes to its original take and stretch
+  await page.evaluate(() => { const a = H3.S.takes.find(x => x.id==='tA'); const q = JSON.parse(JSON.stringify(a)); Object.assign(q, {id:'tQ', redo:{qp:true, src:'tA', a:24, b:72}});
+    const sm = JSON.parse(JSON.stringify(a)); Object.assign(sm, {id:'tS', redo:null, combo:{seam:{one:true, rk:'kS', bounds:[{clip:'cRV', take:'tQ', off:0, len:2}]}, parts:[]}}); H3.S.takes.unshift(q, sm); H3.saveNow(); });
+  await fr.waitForFunction(() => !!FILM.takeOf('tS'), null, {timeout:5000}).catch(() => {});
+  const RO = await fr.evaluate(() => { const f = {id:'fRV', name:'RV', tracks:[{id:'trRV', clips:[{id:'cRV', take:'tS', in:0, out:2, dur:2, at:3}]}], pps:24}; FILM.S.films.push(f);
+    f.upRun = {id:'uRV', track:'trRV', state:'done', hq:[], seams:['kS']}; const n = FILM.upRevert(f), c = f.tracks[0].clips[0]; FILM.S.films = FILM.S.films.filter(x => x!==f); return {n, c:[c.take, c.in, c.out, c.at]}; });
+  ok(RO.n===1 && JSON.stringify(RO.c)==='["tA",1,3,3]', '↩ an older run is followed back through its seam and ✨ takes to the original take and stretch: ' + JSON.stringify(RO));
+  await fr.evaluate(() => { FILM.S.films[0].upRun = null; FILM.S.passes.forEach(p => { if(p.state==='working' || p.state==='ready'){ p.state = 'done'; p.dropped = true; } }); });
   // 🪄 Smooth first: every clip is smoothed (keyframes pinned from its own stretch, read straight from the PC's output), then ✨ runs on the smoothed takes
   const gS = sent.length;
   const SA = await fr.evaluate(async () => { const f = FILM.S.films[0], tr = f.tracks[0]; f.upRun = null; const before = tr.clips.map(c => c.take);
