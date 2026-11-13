@@ -40,6 +40,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.waitForFunction(n => H3.S.ck && /flings/.test(H3.S.ck.shot || '') && !H3.S.ck.busy, n2, {timeout:10000}).catch(() => {});
   const ck2 = await page.evaluate(() => H3.S.ck.shot);
   ok(ck2===LEAD + '[1s-] She flings the window open fast.', '💬 a follow-up note keeps the lead-in as well (' + JSON.stringify(ck2) + ')');
+  // 🎬 a cut on the action written with a [Shot 1] in front: the lead-in is still kept away from the checker
+  answer = JSON.stringify({verdict:'fix', issues:[], shot:'[Shot 1] [0s-1s] something new.\n[Shot 2] [1s-] The camera cuts on the action to a close-up as she flings it open.'});
+  await setShot('[Shot 1] ' + LEAD + '[Shot 2] [1s-] The camera cuts on the action to a close-up as she opens it', true); const qs = await run(), ss = await page.evaluate(() => H3.S.ck.shot);
+  ok(qs && !/walks to the window, carrying/.test(qs.messages[1].content.split('SHOT:\n')[1].split('\n\nFULL PROMPT')[0]) && ss===('[Shot 1] ' + LEAD).replace(/\s*$/, '\n') + '[Shot 2] [1s-] The camera cuts on the action to a close-up as she flings it open.', '🎬 [Shot 1] in front: the lead-in still stays out of the checker (' + JSON.stringify(ss) + ')');
   // a plain shot that is not a carry-on is sent whole, as before
   answer = JSON.stringify({verdict:'fix', issues:[], shot:'[0s-5s] She dances in the rain.'});
   await setShot('[0s-5s] she dances', false); const q3 = await run();

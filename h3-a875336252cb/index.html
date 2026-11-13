@@ -240,7 +240,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
     <div class="body">
       <div>
         <div class="tagbar" id="tagBar"></div>
-        <div class="pwrap"><textarea id="prompt" placeholder="Describe the shot. Timed beats like [0s-2s] … [2s-5s] … are split across the pieces for you. 🎬 ＋ Shot adds a hard cut: [Shot 1] … [Shot 2] …"></textarea><div class="phl" id="promptHl" aria-hidden="true" hidden></div></div>
+        <div class="pwrap"><textarea id="prompt" placeholder="Describe the shot. Timed beats like [0s-2s] … [2s-5s] … are split across the pieces for you. 🎬 ＋ Shot cuts on the action to a new angle: [Shot 2] …"></textarea><div class="phl" id="promptHl" aria-hidden="true" hidden></div></div>
         <div id="beatBar" hidden style="margin-top:8px"><div class="lab"><span>⏱ Which words when (drag a line to move where one ends and the next begins)</span></div>
           <div id="bbTrack" style="position:relative;height:46px;border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none;user-select:none"></div>
           <div class="note" id="bbNote" style="margin-top:4px"></div></div>
@@ -870,7 +870,7 @@ function shuffleWords(text, seed, mode){
     if(/carrying on from the moment before/i.test(body)) return s; // ➕ a carry-on's [0s-1s] lead-in is the anchor (Jordan 2026-11-10): never mixed, never moved
     let ss = body.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)|[.!?]+/g) || [body]; ss = ss.map(x => x.trim()).filter(Boolean);
     const co = /^\(carrying on\)\s*/.test(ss[0] || '') ? (ss[0] = ss[0].replace(/^\(carrying on\)\s*/, ''), '(carrying on) ') : '';
-    const pin = ss.length && /^This continues straight on/.test(ss[0]) ? [ss.shift()] : [], END = /^The action carries on from where it is now/, end = ss.filter(x => END.test(x)); ss = ss.filter(x => !END.test(x));
+    const pin = ss.length && /^(This continues straight on|The camera cuts on the action)/.test(ss[0]) ? [ss.shift()] : [], END = /^The action carries on from where it is now/, end = ss.filter(x => END.test(x)); ss = ss.filter(x => !END.test(x));
     if(ss.length < 2 && mode < 2) return s; // one sentence: nothing to move, sent exactly as typed (a part's own closing line stays last)
     ss = ss.map(x => /[.!?]$/.test(x) ? x : x + '.');
     if(mode > 1) ss = ss.map(x => { if(/moment before/.test(x)) return x; const end = x.match(/[.!?]+$/)[0], parts = x.slice(0, -end.length).split(/\s*,\s*/).filter(Boolean); if(parts.length < 2) return x;
@@ -881,12 +881,20 @@ function shuffleWords(text, seed, mode){
     ss = ss.map(x => x.replace(/^[a-z]/, c => c.toUpperCase())); return lead + co + pin.concat(ss, end).join(' ') + tail; };
   let out = '', at = 0; for(const [i, j] of marks){ out += seg(text.slice(at, i)) + text.slice(i, j); at = j; } return out + seg(text.slice(at)); }
 const plainBeat = x => String(x || '').replace(/,?\s*carrying on from the moment before\.?/i, '').replace(/[\s.,]+/g, '').length > 0;
+// 🎬 shots (Jordan 2026-11-13, cut on the action): a "[Shot n]" typed just before a timed tag belongs to that beat, so it goes with it into
+// whichever piece the beat lands in; a piece that cuts to a new shot isn't told "same shot, no cut"; a leading [Shot 1] stays in front
+const SHOTM = /\[\s*shot\s*(\d+)\s*\]/i, SHOT1 = /^\s*\[\s*shot\s*1\s*\]\s*/i, CUTTO = /\[\s*shot\s*(?:[2-9]|\d\d+)\s*\]/i;
 function piecePrompt(text, pieces, i, total){
-  const pr = pieces[i], {global, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = LEAD(pr) / FPS;
-  const lead = i || pr.ctx ? 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ' : '';
+  const s1 = SHOT1.test(text || ''), S1 = s1 ? '[Shot 1] ' : ''; if(s1) text = text.replace(SHOT1, '');
+  const pr = pieces[i], {global:g0, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = LEAD(pr) / FPS;
+  let global = g0; { const tail = /\s*(\[\s*shot\s*\d+\s*\])\s*$/i, gm = global.match(tail); if(gm && beats.length){ global = global.slice(0, gm.index).trim(); beats[0].shot = gm[1]; }
+    beats.forEach((b, n) => { const m = b.text.match(tail); if(m && beats[n + 1]){ b.text = b.text.slice(0, m.index).trim(); beats[n + 1].shot = m[1]; } }); }
+  const same = 'This continues straight on from the moment before, in the same shot with the same camera and no cut. ', cutLead = 'This continues straight on from the moment before. ';
+  let lead = i || pr.ctx ? same : '';
   if(!beats.length){
-    if(pieces.length===1) return (lead + text).trim();
-    return lead + global + (i || pr.ctx ? ' The action carries on from where it is now and does not start again.' : '') + (i < pieces.length - 1 ? '' : '');
+    if(lead && CUTTO.test(text)) lead = cutLead;
+    if(pieces.length===1) return (S1 + lead + text).trim();
+    return S1 + lead + global + (i || pr.ctx ? ' The action carries on from where it is now and does not start again.' : '') + (i < pieces.length - 1 ? '' : '');
   }
   // a beat only counts for a piece it really overlaps (Jordan 2026-11-06: a piece ending a few frames past a guide cut got the next clip's
   // words too, so "she sets the cup down" came a clip early): at least 0.3 s of it, or half of a shorter beat
@@ -896,8 +904,9 @@ function piecePrompt(text, pieces, i, total){
   const ovl = b => Math.min(b.b, pe) - Math.max(b.a, ps), need = b => Math.min(0.3, Math.max(0.05, (Math.min(b.b, 1e9) - b.a) / 2));
   const mine = beats.filter(b => ovl(b) > need(b)).map(b => {
     const a = Math.max(0, b.a - ps) + off, e = Math.min(b.b, pe) - ps + off, cont = b.a < ps - 0.05;
-    return '[' + t2(a) + '-' + t2(e) + '] ' + (cont ? '(carrying on) ' : '') + b.text; });
-  return (lead + global + (global ? '\n' : '') + mine.join('\n')).trim();
+    return (b.shot && !cont ? b.shot + ' ' : '') + '[' + t2(a) + '-' + t2(e) + '] ' + (cont ? '(carrying on) ' : '') + b.text; });
+  if(lead && (mine.some(x => CUTTO.test(x)) || CUTTO.test(global))) lead = cutLead;
+  return (S1 + lead + global + (global ? '\n' : '') + mine.join('\n')).trim();
 }
 function currentPlan(){ if(S.f.sm) return smoothPlan(); const f = S.f, beats = parseBeats(f.prompt).beats, pins = refsOn().pins, cont = contOn();
   const keyCuts = f._cuts && f._cuts.length && !cont ? Object.assign(f._cuts.map(s => Math.round(s * FPS)), {near:true}) : pins.length >= 2 && !cont ? [...new Set(pins.map(r => Math.round((+r.pose.t || 0) * FPS)))].filter(x => x > 0).sort((a, b) => a - b) : null;
@@ -1324,6 +1333,42 @@ function lineSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off :
     for(const j of Object.keys(f.pieceText || {})) f.pieceText[j] = f.pieceText[j].replace(re, ''); if(ta) ta.value = f.prompt; filmEdit(f.prompt); save(); closeSheet(); drawShot(); try{ h3Peek(); }catch(e){} };
   if(!old) setTimeout(() => { const x = $('#dlText'); if(x) x.focus(); }, 50); }
 document.addEventListener('click', e => { const b = e.target.closest('[data-dlg]'); if(b) lineSheet(0); });
+// 🎬 ＋ Shot = a cut on the action (Jordan 2026-11-13: "when a new shot is created that it does the cut prompt"; ➕ carry-on already gives the
+// continuous shot): pick the new angle and who, say what they're doing at the cut, and the new [Shot n] line goes in. On a fresh ➕ carry-on
+// ("[0s-1s] lead-in [1s-]" with nothing after it) the shot takes over the open [1s-] line, so the lead-in plays and the cut lands at 1 s.
+const CUT_ANGLES = ['close-up', 'medium shot from the front', 'over-the-shoulder shot', 'low side angle', 'high angle from above', 'wide shot from behind', 'side profile'];
+const cutArt = a => /^(a|an|the)\s/i.test(a) ? a : (/^[aeiou]/i.test(a) ? 'an ' : 'a ') + a;
+function cutLine(D){ const who = D.n ? '<Subject ' + D.n + '>' : '', act = (D.act || '').trim().replace(/[.\s]+$/, '');
+  const head = 'The camera cuts on the action to ' + cutArt((D.angle || 'close-up').trim()) + ' as ' + (who ? who + ' ' : ''), tail = ', same place, same lighting, same outfit.';
+  return {head:head + act, tail, text:head + act + tail}; }
+function cutPut(v, N, body){ v = String(v || '').replace(/\s+$/, ''); const open = v.match(/\[\s*\d+(?:\.\d+)?\s*s?\s*-\s*\]\s*$/);
+  if(open) return {pre:v.slice(0, open.index).replace(/\s+$/, '') + '\n[Shot ' + N + '] ' + open[0].trim() + ' ', body};
+  return {pre:(v ? v + '\n' : '') + '[Shot ' + N + '] ', body}; }
+function cutSheet(){ const f = S.f, ta = $('#prompt'), v = (ta ? ta.value : f.prompt) || '', nums = [...v.matchAll(/\[shot\s*(\d+)\]/gi)].map(m => +m[1]), N = nums.length ? Math.max(...nums) + 1 : 2;
+  const ppl = (S.cast || []).filter(c => (c.kind || 'char')==='char'), inP = [...v.matchAll(SUBRE)].map(m => +m[1]);
+  const D = {angle:S.cutAngle || 'close-up', n:(ppl.find(c => c.n===inP[inP.length - 1]) || ppl[0] || {}).n || 0, act:''};
+  openSheet(`<h3><span>🎬 New shot: cut on the action</span><button class="btn" data-close>✕</button></h3><div id="cutBox">
+    <div class="lab"><span>New angle</span></div><div class="chips" id="cutAng">${CUT_ANGLES.map(a => `<button class="btn" data-ca="${esc(a)}">${esc(a)}</button>`).join('')}</div>
+    <input id="cutOwn" style="width:100%;box-sizing:border-box;margin-top:6px" placeholder="or type your own angle">
+    ${ppl.length ? `<div class="lab" style="margin-top:10px"><span>Who</span></div><div class="chips" id="cutWho">${ppl.map(c => `<button class="btn" data-cw="${c.n}" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👤 ${esc(chipName(c))}</button>`).join('')}</div>` : ''}
+    <div class="lab" style="margin-top:10px"><span>What they're doing at the cut</span></div><input id="cutAct" style="width:100%;box-sizing:border-box" placeholder="e.g. finishes swinging the door open and steps through">
+    <div class="note" id="cutPrev" style="margin-top:8px;word-break:break-word"></div>
+    <div class="chips" style="margin-top:10px"><button class="btn pri" id="cutGo">↧ Put it in the shot</button><button class="btn" id="cutPlain">Plain cut</button></div></div>`);
+  const draw = () => { const own = $('#cutOwn').value.trim(); $('#cutAng').querySelectorAll('[data-ca]').forEach(b => b.classList.toggle('pri', !own && b.dataset.ca===D.angle));
+    const w = $('#cutWho'); if(w) w.querySelectorAll('[data-cw]').forEach(b => { const on = +b.dataset.cw===+D.n; b.classList.toggle('pri', on); b.style.background = on ? subColor(b.dataset.cw) : ''; b.style.color = on ? '#15161b' : subColor(b.dataset.cw); });
+    const c = castOf(D.n), L = cutLine(Object.assign({}, D, {angle:own || D.angle})), put = cutPut(v, N, '');
+    $('#cutPrev').textContent = 'Goes in as: ' + (put.pre + L.text).slice(put.pre.lastIndexOf('[Shot')).replace(SUBRE, () => c ? chipName(c) : 'Subject ' + D.n); };
+  draw();
+  $('#cutAng').onclick = e => { const b = e.target.closest('[data-ca]'); if(!b) return; D.angle = b.dataset.ca; $('#cutOwn').value = ''; draw(); };
+  if($('#cutWho')) $('#cutWho').onclick = e => { const b = e.target.closest('[data-cw]'); if(!b) return; D.n = +b.dataset.cw; draw(); };
+  $('#cutOwn').oninput = draw; $('#cutAct').oninput = e => { D.act = e.target.value; draw(); };
+  const done = (txt, at) => { f.prompt = txt; if(ta){ ta.value = txt; ta.focus(); ta.selectionStart = ta.selectionEnd = at; } filmEdit(f.prompt); save(); closeSheet(); drawShot(); try{ h3Peek(); }catch(e){} };
+  $('#cutGo').onclick = () => { const own = $('#cutOwn').value.trim(), angle = own || D.angle; if(!own) S.cutAngle = D.angle;
+    const L = cutLine(Object.assign({}, D, {angle})), put = cutPut(v, N, ''), txt = put.pre + L.text;
+    done(txt, D.act.trim() ? txt.length : put.pre.length + L.head.length);
+    if(!D.act.trim()) toast('🎬 Type what they\'re doing at the cut (e.g. "finishes swinging the door open"), right where the cursor is.', 5000); };
+  $('#cutPlain').onclick = () => { const put = cutPut(v, N, ''), txt = put.pre; done(txt, txt.length); toast('🎬 Write what the camera sees after the cut.', 4000); }; }
+document.addEventListener('click', e => { const b = e.target.closest('[data-shot]'); if(b){ e.stopPropagation(); cutSheet(); } }, true);
 function subjAt(v, p){ let hit = null; (v || '').replace(SUBRE, (m, n, off) => { if(p >= off && p < off + m.length) hit = {n:+n, off, len:m.length}; return m; }); return hit; }
 // scope (Jordan 2026-11-09: "I'd like a way to switch only 1 back so I can fix the prompt"): just the tag tapped, this prompt, or everywhere; the last one picked is kept
 function subjPick(n, at){ const c = castOf(n), others = (S.cast || []).filter(x => x.n!==+n), libs = (S.lib || []).filter(L => !onK(L.kind) && L.kind!=='act' && L.kind!=='pose' && !(S.cast || []).some(x => x.lib===L.id));
@@ -2960,7 +3005,7 @@ function drawShot(){ drawBeatBar(); { const b = $('#mqNote'), n = refsOn().pins.
   const rch = f.sm ? '' : shotRefs(f).map((r, i) => `<button data-ins="&lt;Ref Image ${i + 1}&gt;" title="&lt;Ref Image ${i + 1}&gt;" style="border-color:${REFC};color:${REFC}">🖼 Ref Image ${i + 1}</button>`).join('');
   drawShotRefs();
   const cast = (S.cast || []).map(c => `<button data-ins="&lt;Subject ${c.n}&gt;" title="&lt;Subject ${c.n}&gt;" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👥 ${esc(castName(c))}</button>`).join('');
-  $('#tagBar').innerHTML = '<button data-shot="1" title="Start a new shot (a hard cut) in this take">🎬 ＋ Shot</button>' + (f.sm ? '' : '<button data-dlg="1" title="A line someone says: pick who, type the words">💬 ＋ Line</button>') + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + rch + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
+  $('#tagBar').innerHTML = '<button data-shot="1" title="Cut on the action to a new angle (a new [Shot n] in this take)">🎬 ＋ Shot</button>' + (f.sm ? '' : '<button data-dlg="1" title="A line someone says: pick who, type the words">💬 ＋ Line</button>') + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + rch + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
   $('#tagBar').hidden = false; $('#tagBar').style.marginBottom = '8px';
   { const h = f.sm ? '' : descBarHtml(f, undefined, 'data-dtag'); $('#descBar').innerHTML = h; $('#descBar').hidden = !h; }
   subjHl(); drawH3();
@@ -3016,12 +3061,12 @@ const ckBack = (shot, N) => N.reduce((t, x) => t.replace(new RegExp('(^|[^\\w<])
 // ➕ the lead-in (Jordan 2026-11-10: "if it's a continuation shot I don't want the LLM to edit the previous shot's prompt that leads into the
 // new shot … only suggest a more detailed version of what happens after the 0-1 second lead in"): a carry-on's [0s-1s] line is split off, the
 // checker only sees what comes after it (told what the lead-in says, as context), and the lead-in goes back on the front word for word
-function ckLead(shot){ shot = String(shot || ''); const m = shot.match(/^\s*\[\s*0\s*s?\s*-\s*1\s*s?\s*\][^\[]*/); if(!m) return {lead:'', rest:shot};
+function ckLead(shot){ shot = String(shot || ''); const m = shot.match(/^\s*(?:\[\s*shot\s*1\s*\]\s*)?\[\s*0\s*s?\s*-\s*1\s*s?\s*\][^\[]*/i); if(!m) return {lead:'', rest:shot}; // 🎬 also behind a [Shot 1]
   const md = S.media[S.f.first], carry = !!(S.f.fl && md && md.carry); if(!carry && !/carrying on from the moment before/i.test(m[0])) return {lead:'', rest:shot};
   return {lead:m[0], rest:shot.slice(m[0].length)}; }
 function ckJoin(lead, shot){ if(!lead || !String(shot || '').trim()) return shot; shot = String(shot || '').trim();
   // whatever it wrote for the first second (a copy of the lead-in or its own version) is dropped: the lead-in stays as written
-  shot = shot.replace(/^\s*\[\s*0\s*s?\s*-\s*1\s*s?\s*\][^\[]*/, '').trim(); return lead.replace(/\s*$/, '\n') + shot; }
+  shot = shot.replace(/^\s*(?:\[\s*shot\s*1\s*\]\s*)?\[\s*0\s*s?\s*-\s*1\s*s?\s*\][^\[]*/i, '').trim(); return lead.replace(/\s*$/, '\n') + shot; }
 async function checkPrompt(note, first){
   // 💬 a change request carries on the chat only while it is about the shot in the box now (same film, same words); otherwise it starts a
   // fresh check of the current shot with the request as its notes (Jordan 2026-11-11: it suggested changes to the previous film's prompt)
@@ -3356,9 +3401,6 @@ document.addEventListener('click', async e => {
   else if(ds.rm){ if(ds.rm==='first' || ds.rm==='lastImg' || ds.rm==='smVid' || ds.rm==='ctlVid' || ds.rm==='ctl2Vid') f[ds.rm] = null; else if(ds.rm==='smRef') f.smRefs.splice(+ds.i, 1); else if(ds.rm==='img' || ds.rm==='sref') rmImg(f, +ds.i); else f[ds.rm + 's'].splice(+ds.i, 1); }
   else if(ds.tg){ const r = f[ds.tg + 's'][+ds.i]; r.on = !r.on; }
   else if(ds.opt){ const r = f[ds.k + 's'][+ds.i]; r[ds.opt] = !r[ds.opt]; }
-  else if(ds.shot){ const ta = $('#prompt'), v = ta.value.replace(/\s+$/, ''), nums = [...v.matchAll(/\[shot\s*(\d+)\]/gi)].map(m => +m[1]);
-    ta.value = !nums.length ? (v ? '[Shot 1] ' + v + '\n[Shot 2] ' : '[Shot 1] ') : v + '\n[Shot ' + (Math.max(...nums) + 1) + '] ';
-    ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; f.prompt = ta.value; toast('🎬 Write what the camera sees after the cut. Keep each shot to one camera move or a still frame; a take with shots is best kept to one piece (≤ the longest piece).', 5000); }
   else if(ds.ins){ const ta = $('#prompt'), s = ta.selectionStart || ta.value.length, v = ta.value, ins = ds.ins + ' '; ta.value = v.slice(0, s) + ins + v.slice(ta.selectionEnd || s); ta.focus(); ta.selectionStart = ta.selectionEnd = s + ins.length; f.prompt = ta.value; }
   else if(ds.w){ f.where = ds.w; }
   else if(ds.auto!=null){ delete f.pieceText[+ds.auto]; }
@@ -4215,7 +4257,7 @@ function undoWatch(doc){ if(!doc || doc.__undoW) return; doc.__undoW = 1;
 undoWatch(document);
 setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {lineOut, lineSheet, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {cutSheet, cutLine, cutPut, lineOut, lineSheet, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
