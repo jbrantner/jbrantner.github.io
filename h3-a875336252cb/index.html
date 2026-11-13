@@ -139,6 +139,7 @@ header h1 span{color:var(--accent)}
 .pwrap{position:relative}
 .phl{position:absolute;left:1px;top:1px;box-sizing:border-box;margin:0;padding:10px 12px;font:inherit;font-size:16px;white-space:pre-wrap;overflow-wrap:break-word;word-wrap:break-word;color:transparent;overflow:hidden;pointer-events:none;border-radius:9px}
 .phl mark{position:relative;color:transparent;background:var(--cc);border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+.phl mark.dl::after,.phl mark.dl.wr i::after{background:var(--bg);color:var(--cc);border:1.5px solid var(--cc);box-sizing:border-box}
 .phl mark.wr::after{display:none}.phl mark i{font-style:normal;position:relative}
 .phl mark.wr i::after{content:attr(data-n);position:absolute;left:-2px;right:-2px;top:0;bottom:0;display:flex;align-items:center;justify-content:center;background:var(--cc);color:#15161b;font-size:12.5px;font-weight:800;border-radius:6px;white-space:nowrap;overflow:hidden;padding:0 2px}
 .phl mark.wr i+i::after{content:'';}
@@ -874,7 +875,9 @@ function shuffleWords(text, seed, mode){
     ss = ss.map(x => /[.!?]$/.test(x) ? x : x + '.');
     if(mode > 1) ss = ss.map(x => { if(/moment before/.test(x)) return x; const end = x.match(/[.!?]+$/)[0], parts = x.slice(0, -end.length).split(/\s*,\s*/).filter(Boolean); if(parts.length < 2) return x;
       const o = mx(parts).map((q, i) => i ? q.replace(LOWER, w => w.toLowerCase()) : q.replace(/^[a-z]/, c => c.toUpperCase())); return o.join(', ') + end; });
-    if(ss.length > 1) ss = mx(ss);
+    { const fx = ss.map(x => DLG1.test(x)); // 💬 a sentence with a line of dialogue keeps its place, so the talk stays in order; the others move around it
+      if(fx.some(Boolean)){ const fr = ss.filter((x, i) => !fx[i]), o = fr.length > 1 ? mx(fr) : fr; let j = 0; ss = ss.map((x, i) => fx[i] ? x : o[j++]); }
+      else if(ss.length > 1) ss = mx(ss); }
     ss = ss.map(x => x.replace(/^[a-z]/, c => c.toUpperCase())); return lead + co + pin.concat(ss, end).join(' ') + tail; };
   let out = '', at = 0; for(const [i, j] of marks){ out += seg(text.slice(at, i)) + text.slice(i, j); at = j; } return out + seg(text.slice(at)); }
 const plainBeat = x => String(x || '').replace(/,?\s*carrying on from the moment before\.?/i, '').replace(/[\s.,]+/g, '').length > 0;
@@ -1104,6 +1107,29 @@ function refRenum(f, map){ // <Ref Image old> → <Ref Image new> (null = taken 
   f.prompt = fix(f.prompt); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = fix(f.pieceText[k]); const ta = $('#prompt'); if(ta && f===S.f) ta.value = f.prompt; }
 function rmImg(f, i){ const r = f.imgs[i]; if(!r) return; const SR = shotRefs(f), k = SR.indexOf(r) + 1; f.imgs.splice(i, 1);
   if(k){ const map = {[k]:null}; for(let j = k + 1; j <= SR.length; j++) map[j] = j - 1; refRenum(f, map); } }
+// 💬 dialogue (Jordan 2026-11-13: "a line of dialogue be me selecting the character chip and then typing the line into a box that then wraps it in
+// its appropriate syntax but displays it as 'Character name line 1' in the prompt"): the words hold a short <Dialogue k> tag (a chip with the
+// speaker's name), the line itself lives in S.lines[k] {n, text, how, vo, lang} (a take keeps its own copy in t.lines). Only when a prompt is
+// sent does the tag become MiniMax H3's own form (VIDEO_PROMPT_WRITING_GUIDE): "<Subject 2> (S1) says softly, <d>[English] Did you bring it?</d>".
+// (S1), (S2)… count speakers in the order they first speak in that prompt, not by subject number; a voiceover adds "while their lips remain completely closed."
+const DLGRE = /<\s*dialogue\s*(\d+)\s*>/gi, DLG1 = /<\s*dialogue\s*\d+\s*>/i;
+const lineOf = (k, T) => (T && T.lines && T.lines[k]) || (S.lines || {})[k] || null;
+const lineSay = s => { s = String(s || '').replace(/[<>]/g, '').replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim(); if(!s) return '';
+  s = s.replace(/\s*(?:\.{2,}|…)+\s*$/, '.').replace(/\s*(?:\.{2,}|…)+\s*/g, ', ').replace(/^[,\s]+/, ''); // the guide: ellipses hurt how clearly it's said
+  return /[.?!]$/.test(s) ? s : s.replace(/[,;:\s]+$/, '') + '.'; };
+const lineHow = s => String(s || '').replace(/[<>]/g, '').replace(/^\s*(says|said|say)\b\s*/i, '').trim().replace(/[\s.,;:!?]+$/, '');
+const lineLang = L => (String((L && L.lang) || '').replace(/[^\p{L} -]/gu, '').trim() || 'English').replace(/^./, c => c.toUpperCase());
+function lineOut(txt, T){ txt = txt == null ? '' : String(txt); if(!DLG1.test(txt)) return txt; const ids = {}; let nx = 0;
+  return txt.replace(/<\s*dialogue\s*(\d+)\s*>(\s*\.(?!\.))?/gi, (m, k) => { const L = lineOf(k, T), say = L && lineSay(L.text); if(!say) return '';
+    const key = L.n ? 'n' + L.n : 'k' + k, id = ids[key] = ids[key] || ++nx, how = lineHow(L.how), who = L.n ? '<Subject ' + L.n + '>' : 'A voice';
+    return who + ' (S' + id + ') says' + (L.vo ? ' in an off-screen voiceover' + (how ? ', ' + how : '') + ': ' : (how ? ' ' + how : '') + ', ') + '<d>[' + lineLang(L) + '] ' + say + '</d>' + (L.vo ? ' while their lips remain completely closed.' : ''); }); }
+const lineSubs = (txt, T) => String(txt || '').replace(DLGRE, (m, k) => { const L = lineOf(k, T); return L && L.n ? '<Subject ' + L.n + '>' : ''; }); // who speaks counts as named
+const lineKeys = txt => [...String(txt || '').matchAll(DLGRE)].map(m => +m[1]);
+function lineSnap(f){ const o = {}; for(const k of lineKeys([f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'))){ const L = lineOf(k); if(L) o[k] = Object.assign({}, L); } return o; }
+// the chip: "Laura line 1" (her first line in these words, her second is "Laura line 2")
+function lineLabel(k, txt, film){ const L = lineOf(k), c = L && L.n && castOf(L.n, film); if(!L) return 'missing line';
+  const nm = c ? chipName(c) : L.n ? 'Subject ' + L.n : 'Voice'; let i = 0, at = 0; for(const j of lineKeys(txt)){ const M = lineOf(j); if(M && (M.n || 0)===(L.n || 0)){ i++; if(j===+k){ at = i; break; } } }
+  return nm + ' line ' + (at || 1); }
 const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
 const castFor = k => k===undefined || (k || '')===mineK() ? S.cast || [] : (S.casts[k || ''] || S.castOld || []);
 const castOf = (n, k) => castFor(k).find(c => c.n===+n);
@@ -1166,7 +1192,7 @@ function rerollSheet(t){ openSheet(`<h3><span>🎲 New take</span><button class=
   drawTags(); $('#rrP').addEventListener('input', drawTags);
   $('#rrTags').onclick = e => { const b = e.target.closest('[data-rtag]'); if(!b) return; descFlip(tg, +b.dataset.rtag, b.dataset.tag); drawTags(); };
   $('#rrGo').onclick = () => { const b = document.createElement('button'); b.dataset.act = 'rerollGo'; b.dataset.t = t.id; b.dataset.words = $('#rrP').value; b.dataset.off = JSON.stringify(tg.descOff); b.hidden = true; closeSheet(); document.body.appendChild(b); b.click(); b.remove(); }; }
-function castUsed(t){ const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), ns = new Set();
+function castUsed(t){ const txt = lineSubs([t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), t), ns = new Set(); // 💬 a speaker counts as in the shot
   txt.replace(SUBRE, (m, n) => { if(castOf(n, t.film)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
   const used = pics ? castUsed(t) : [];
@@ -1200,7 +1226,7 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   return Object.assign({}, t, {imgs, vids}, drop.length ? {refOff:Object.assign({}, t.refOff, ...drop.map(r => ({[r.rk]:r.desc || ''})))} : {}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
   const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) (pics[r.cast] = pics[r.cast] || []).push('<Picture ' + (k + 1) + '>'); });
-  const told = [];
+  const told = []; txt = lineOut(txt, T); // 💬 <Dialogue k> → (Sx) … <d>[English] …</d>
   const fk = T ? T.film : undefined;
   { const I = (T && T.imgs) || []; txt = (txt || '').replace(REFRE, (m, n) => { const k = I.findIndex(r => r.rk===+n); return k < 0 ? refGone(I, n, T) : plain ? '<Picture ' + (k + 1) + '>' : m; }); } // 🖼
   let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n, fk); if(!c || pics[c.n]) return m;
@@ -1225,7 +1251,7 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
     else if(src) ad.push('Everyone and everything is shown in the same visual style as <Subject ' + src.cast + '>.'); }
   if(plain && ad.length) out = ad.join(' ') + ' ' + out;
   return out; }
-const castWords = (txt, k) => (txt || '').replace(REFRE, 'it').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
+const castWords = (txt, k) => lineOut(txt || '').replace(REFRE, 'it').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
 function castHits(w){ // how often the words are in the form and the takes (for 🔁 swap)
   if(!(w = (w || '').trim())) return 0; const re = new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'); let n = 0;
   const cnt = x => { n += ((x || '').match(re) || []).length; };
@@ -1259,14 +1285,45 @@ function drawShotRefs(){ const f = S.f, box = $('#srefBox'); if(!box) return; co
   const n = $('#srefNote'); if(n) n.textContent = SR.length ? srefNote(f) : ''; }
 let HLV = null;
 function subjHl(){ const ta = $('#prompt'), hl = $('#promptHl'); if(!ta || !hl) return; const v = ta.value; HLV = v;
-  if(!/<\s*subject\s*\d+\s*>|<\s*ref\s*image\s*\d+\s*>/i.test(v)){ hl.hidden = true; return; }
+  if(!/<\s*subject\s*\d+\s*>|<\s*ref\s*image\s*\d+\s*>|<\s*dialogue\s*\d+\s*>/i.test(v)){ hl.hidden = true; return; }
   // a tag broken over two lines (Jordan 2026-11-09: "some of the tags are the names and other tags came out as subject 3"): each half is
   // its own coloured piece, the name on the first; a subject with no name yet shows its stand-in words ("a woman")
   const SR = shotRefs(S.f);
-  let h = '', i = 0; v.replace(/<\s*subject\s*(\d+)\s*>|<\s*ref\s*image\s*(\d+)\s*>/gi, (m, n, rn, off) => { const c = n && castOf(n), r = rn && SR[+rn - 1], nm = esc(rn ? (r ? '🖼 Ref Image ' + rn : 'no ref image ' + rn) : c ? chipName(c) : 'not in this film'), k = m.search(/\s\S*$/), a = k > 0 ? m.slice(0, k) : m, b = k > 0 ? m.slice(k) : '';
-    h += esc(v.slice(i, off)) + `<mark style="--cc:${rn ? (r && r.on ? REFC : '#8a8f9c') : c ? subColor(n) : '#8a8f9c'}" data-n="${nm}"><i data-n="${nm}">${esc(a)}</i>${b ? `<i>${esc(b)}</i>` : ''}</mark>`; i = off + m.length; return m; });
+  let h = '', i = 0; v.replace(/<\s*subject\s*(\d+)\s*>|<\s*ref\s*image\s*(\d+)\s*>|<\s*dialogue\s*(\d+)\s*>/gi, (m, n, rn, dn, off) => { const D = dn && lineOf(dn), dc = D && D.n && castOf(D.n), c = n && castOf(n), r = rn && SR[+rn - 1], nm = esc(dn ? lineLabel(dn, v) : rn ? (r ? '🖼 Ref Image ' + rn : 'no ref image ' + rn) : c ? chipName(c) : 'not in this film'), k = m.search(/\s\S*$/), a = k > 0 ? m.slice(0, k) : m, b = k > 0 ? m.slice(k) : '';
+    h += esc(v.slice(i, off)) + `<mark class="${dn ? 'dl' : ''}" style="--cc:${dn ? (dc ? subColor(D.n) : '#8a8f9c') : rn ? (r && r.on ? REFC : '#8a8f9c') : c ? subColor(n) : '#8a8f9c'}" data-n="${nm}"><i data-n="${nm}">${esc(a)}</i>${b ? `<i>${esc(b)}</i>` : ''}</mark>`; i = off + m.length; return m; });
   hl.innerHTML = h + esc(v.slice(i)) + '\n'; hl.hidden = false; hl.style.width = ta.clientWidth + 'px'; hl.style.height = ta.clientHeight + 'px'; hl.scrollTop = ta.scrollTop;
   hl.querySelectorAll('mark').forEach(m => m.classList.toggle('wr', m.getClientRects().length > 1)); } // a tag broken over two lines shows its own words
+function lineAt(v, p){ let hit = null; (v || '').replace(DLGRE, (m, k, off) => { if(p >= off && p < off + m.length) hit = {k:+k, off, len:m.length}; return m; }); return hit; }
+// 💬 the line sheet: who says it (a character chip), what they say, how (optional), off-screen voice. New: the tag goes in where the cursor was.
+function lineSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off : (ta && ta.selectionStart != null ? ta.selectionStart : (f.prompt || '').length), old = k && lineOf(k);
+  const ppl = (S.cast || []).filter(c => (c.kind || 'char')==='char'), who0 = old ? old.n : (ppl.find(c => c.n===S.dlWho) || ppl.find(c => new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'i').test(f.prompt || '')) || ppl[0] || {}).n || 0;
+  const D = {n:who0, text:old ? old.text || '' : '', how:old ? old.how || '' : '', vo:!!(old && old.vo), lang:old ? old.lang || '' : ''};
+  openSheet(`<h3><span>💬 ${old ? 'Line of dialogue' : 'Add a line of dialogue'}</span><button class="btn" data-close>✕</button></h3><div id="dlBox">
+    <div class="lab"><span>Who says it</span></div><div class="chips" id="dlWho">${ppl.map(c => `<button class="btn" data-dw="${c.n}" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👤 ${esc(chipName(c))}</button>`).join('') || '<span class="note">Add a character to this film\'s 👥 cast first.</span>'}</div>
+    <div class="lab" style="margin-top:10px"><span>What they say</span></div><textarea id="dlText" rows="3" style="width:100%;box-sizing:border-box" placeholder="e.g. Did you bring it?">${esc(D.text)}</textarea>
+    <div class="lab" style="margin-top:8px"><span>How (optional)</span></div><input id="dlHow" style="width:100%;box-sizing:border-box" placeholder="e.g. softly, with a laugh, in a whisper" value="${esc(D.how)}">
+    <div class="chips" style="margin-top:8px"><button class="btn" id="dlVo"></button></div>
+    <div class="note" id="dlPrev" style="margin-top:8px;word-break:break-word"></div>
+    <div class="chips" style="margin-top:10px"><button class="btn pri" id="dlGo">${old ? 'Save' : '↧ Put it in the shot'}</button>${old ? '<button class="btn" id="dlRm">🗑 Take it out of the shot</button>' : ''}</div></div>`);
+  const draw = () => { $('#dlWho').querySelectorAll('[data-dw]').forEach(b => { const on = +b.dataset.dw===+D.n; b.classList.toggle('pri', on); b.style.background = on ? subColor(b.dataset.dw) : ''; b.style.color = on ? '#15161b' : subColor(b.dataset.dw); });
+    $('#dlVo').textContent = '🎙 Off-screen voice (lips stay closed): ' + (D.vo ? 'on' : 'off'); $('#dlVo').classList.toggle('pri', D.vo);
+    const c = castOf(D.n), out = lineOut('<Dialogue 0>', {lines:{0:D}}).replace(SUBRE, () => c ? chipName(c) : 'Subject ' + D.n);
+    $('#dlPrev').textContent = out ? 'Sent to MiniMax as: ' + out : 'Type the line to see how it\'s sent.'; };
+  draw();
+  $('#dlWho').onclick = e => { const b = e.target.closest('[data-dw]'); if(!b) return; D.n = +b.dataset.dw; draw(); };
+  $('#dlText').oninput = e => { D.text = e.target.value; draw(); }; $('#dlHow').oninput = e => { D.how = e.target.value; draw(); };
+  $('#dlVo').onclick = () => { D.vo = !D.vo; draw(); };
+  $('#dlGo').onclick = () => { if(!D.n) return toast('Pick who says it'); if(!lineSay(D.text)) return toast('Type what they say');
+    S.lines = S.lines || {}; S.dlWho = D.n; const L = {n:D.n, text:D.text.trim(), how:D.how.trim(), vo:D.vo}; if(D.lang) L.lang = D.lang;
+    if(old) S.lines[k] = L;
+    else { const used = Object.keys(S.lines).map(Number); k = Math.max(0, +S.lineNo || 0, ...used) + 1; S.lineNo = k; S.lines[k] = L;
+      const v = f.prompt || '', p = Math.min(pos, v.length), tok = '<Dialogue ' + k + '>', pre = p && !/\s$/.test(v.slice(0, p)) ? ' ' : '', post = /^\s/.test(v.slice(p)) || p >= v.length ? '' : ' ';
+      f.prompt = v.slice(0, p) + pre + tok + post + v.slice(p); if(ta){ ta.value = f.prompt; ta.selectionStart = ta.selectionEnd = p + pre.length + tok.length; } filmEdit(f.prompt); }
+    save(); closeSheet(); drawShot(); try{ h3Peek(); }catch(e){} };
+  if(old) $('#dlRm').onclick = () => { const re = new RegExp('[ \\t]?<\\s*dialogue\\s*' + k + '\\s*>', 'gi'); f.prompt = (f.prompt || '').replace(re, '').replace(/^ /, '');
+    for(const j of Object.keys(f.pieceText || {})) f.pieceText[j] = f.pieceText[j].replace(re, ''); if(ta) ta.value = f.prompt; filmEdit(f.prompt); save(); closeSheet(); drawShot(); try{ h3Peek(); }catch(e){} };
+  if(!old) setTimeout(() => { const x = $('#dlText'); if(x) x.focus(); }, 50); }
+document.addEventListener('click', e => { const b = e.target.closest('[data-dlg]'); if(b) lineSheet(0); });
 function subjAt(v, p){ let hit = null; (v || '').replace(SUBRE, (m, n, off) => { if(p >= off && p < off + m.length) hit = {n:+n, off, len:m.length}; return m; }); return hit; }
 // scope (Jordan 2026-11-09: "I'd like a way to switch only 1 back so I can fix the prompt"): just the tag tapped, this prompt, or everywhere; the last one picked is kept
 function subjPick(n, at){ const c = castOf(n), others = (S.cast || []).filter(x => x.n!==+n), libs = (S.lib || []).filter(L => !onK(L.kind) && L.kind!=='act' && L.kind!=='pose' && !(S.cast || []).some(x => x.lib===L.id));
@@ -1283,6 +1340,9 @@ function subjPick(n, at){ const c = castOf(n), others = (S.cast || []).filter(x 
 function subjSwap(n, m, all, at){ const re = new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'gi'), tok = '<Subject ' + m + '>', f = S.f;
   if(at){ const p = f.prompt || ''; if(re.test(p.slice(at.off, at.off + at.len))) f.prompt = p.slice(0, at.off) + tok + p.slice(at.off + at.len); }
   else if(all) castSwap(re, tok); else { f.prompt = (f.prompt || '').replace(re, tok); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = f.pieceText[k].replace(re, tok); }
+  if(!at){ const ks = new Set(lineKeys([f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'))); // 💬 their lines go with the tag
+    if(all) S.takes.filter(inMine).forEach(t => { lineKeys(t.prompt).forEach(k => ks.add(k)); Object.values(t.lines || {}).forEach(L => { if(L.n===+n) L.n = +m; }); });
+    ks.forEach(k => { const L = (S.lines || {})[k]; if(L && L.n===+n) L.n = +m; }); }
   if(!at && f.descOff && f.descOff[n] && !f.descOff[m]){ f.descOff[m] = f.descOff[n].filter(x => /^add:/.test(x)); if(!f.descOff[m].length) delete f.descOff[m]; } // her own 🏷 details don't fit someone else
   $('#prompt').value = f.prompt || ''; filmEdit(f.prompt || ''); save(); drawCast(); drawShot(); try{ h3Peek(); }catch(e){} }
 function drawCast(){ const L = S.cast || []; try{ drawLook(); }catch(e){}
@@ -1764,8 +1824,8 @@ async function lookResume(){ for(const f of [S.f, ...Object.values(S.forms || {}
 function h3Style(s, base){ s = (s || '').trim().replace(/[\s.]*$/, '') || 'Live-action, cinematic';
   if(base) return s; // inside [Shot 1] for the base format: "[Shot 1] Live-action, cinematic. …"
   return s.split(/\s+/).length > 8 || /\b(target video|style)\b/i.test(s) ? s + '.' : 'The target video is in a ' + s.replace(/^./, c => c.toLowerCase()) + ' style.'; }
-function h3Gist(text){ // for the summary: the action without timings or our continuation lead, two sentences at most
-  const t = text.replace(/\[[^\]]*\d\s*s?[^\]]*\]\s*/g, ' ').replace(/\(carrying on\)\s*/g, '').replace(/This continues straight on[^.]*\.\s*/, '').replace(/The action carries on[^.]*\.\s*/, '').replace(/\s+/g, ' ').trim();
+function h3Gist(text){ // for the summary: the action without timings or our continuation lead, two sentences at most (💬 no dialogue: what's said stays in the shot)
+  const t = text.replace(/\s*\(S\d+(?:,S\d+)*\)/g, '').replace(/[,:]?\s*<d>[\s\S]*?<\/d>(\s*while their lips remain completely closed\.)?/g, '.').replace(/\[[^\]]*\d\s*s?[^\]]*\]\s*/g, ' ').replace(/\(carrying on\)\s*/g, '').replace(/This continues straight on[^.]*\.\s*/, '').replace(/The action carries on[^.]*\.\s*/, '').replace(/\s+/g, ' ').trim();
   const ss = t.match(/[^.!?]+[.!?]*/g) || []; let g = ss.slice(0, 2).map(x => x.trim()).join(' '); if(g.length > 320) g = g.slice(0, 317).replace(/\s+\S*$/, '') + '…'; return g; }
 // o: {h3:{style, sound, music}, text, words, fl2v, imgs:[{desc, keep}], vids:[{desc, keep, sound}], auds:[{desc, keep}], firstPic (its <Picture n>, 0 = none), first, last, cont, secs}
 function h3Prompt(o){
@@ -2497,7 +2557,7 @@ function snapshot(){ // the form, frozen into a take
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
-    look:sm ? null : lookSnap(), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0,
+    look:sm ? null : lookSnap(), lines:lineSnap(f), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -2787,7 +2847,7 @@ async function saveVideo(t){
   }catch(e){ if(e && e.name!=='AbortError') toast("Couldn't get it: " + e.message); }
 }
 function useAgain(t, quiet){
-  const f = S.f; Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {}))});
+  const f = S.f; if(t.lines){ S.lines = S.lines || {}; for(const [k, L] of Object.entries(t.lines)) S.lines[k] = Object.assign({}, L); } /* 💬 the take's own lines */ Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl, first:t.first, last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {}))});
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}})));
@@ -2900,7 +2960,7 @@ function drawShot(){ drawBeatBar(); { const b = $('#mqNote'), n = refsOn().pins.
   const rch = f.sm ? '' : shotRefs(f).map((r, i) => `<button data-ins="&lt;Ref Image ${i + 1}&gt;" title="&lt;Ref Image ${i + 1}&gt;" style="border-color:${REFC};color:${REFC}">🖼 Ref Image ${i + 1}</button>`).join('');
   drawShotRefs();
   const cast = (S.cast || []).map(c => `<button data-ins="&lt;Subject ${c.n}&gt;" title="&lt;Subject ${c.n}&gt;" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👥 ${esc(castName(c))}</button>`).join('');
-  $('#tagBar').innerHTML = '<button data-shot="1" title="Start a new shot (a hard cut) in this take">🎬 ＋ Shot</button>' + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + rch + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
+  $('#tagBar').innerHTML = '<button data-shot="1" title="Start a new shot (a hard cut) in this take">🎬 ＋ Shot</button>' + (f.sm ? '' : '<button data-dlg="1" title="A line someone says: pick who, type the words">💬 ＋ Line</button>') + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + rch + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
   $('#tagBar').hidden = false; $('#tagBar').style.marginBottom = '8px';
   { const h = f.sm ? '' : descBarHtml(f, undefined, 'data-dtag'); $('#descBar').innerHTML = h; $('#descBar').hidden = !h; }
   subjHl(); drawH3();
@@ -2930,7 +2990,10 @@ function drawH3(){
 const CK = {model:'huihui_ai/qwen3-abliterated:8b', port:8443};
 const ckUrl = () => S.llmUrl || ((S.pcs.find(p => /render/i.test(p.name)) || S.pcs[0] || {url:''}).url.replace(/:\d+$/, '') + ':' + CK.port);
 const ckKind = f => f.finOn && finAble(f.model) ? 'VANILLA THEN PIKA' : /prism|pika|singularity|eros/i.test(f.model || '') ? 'PIKA' : 'VANILLA';
-const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio|Subject) \d+>/g) || []);
+const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio|Subject|Ref Image|Dialogue) \d+>/g) || []);
+// 💬 the checker is told what each <Dialogue n> says (so it writes the action around the talk) but keeps the tag itself: the words and their H3 form stay ours
+const ckLines = (shot, N) => { const L = lineKeys(shot).map(k => [k, lineOf(k)]).filter(([, x]) => x && lineSay(x.text)); if(!L.length) return '';
+  return '\n\nDIALOGUE (each <Dialogue n> is a spoken line already written; keep every <Dialogue n> tag exactly where it is, never write the words out, never add new dialogue): ' + L.map(([k, x]) => '<Dialogue ' + k + '> = ' + ckOut(x.n ? '<Subject ' + x.n + '>' : 'a voice', N) + (x.vo ? ' in an off-screen voiceover' : '') + ' says' + (lineHow(x.how) ? ' ' + lineHow(x.how) : '') + ': "' + lineSay(x.text) + '"').join('; '); };
 function ckParse(txt){ txt = String(txt || '').replace(/<think>[\s\S]*?<\/think>/g, ''); const a = txt.indexOf('{'), b = txt.lastIndexOf('}'); if(a < 0 || b < a) throw new Error('no answer');
   const j = JSON.parse(txt.slice(a, b + 1)); return {verdict:String(j.verdict || 'fix'), issues:Array.isArray(j.issues) ? j.issues.slice(0, 8) : [], shot:String(j.shot || ''), keep:String(j.keep_out || '').trim()}; }
 // Render's 8 GB card can't hold a render and the 5.6 GB model at once (a check during a render hung on Ollama's 5-minute load limit,
@@ -2975,15 +3038,15 @@ async function checkPrompt(note, first){
     else {
     const rules = await (await fetch('checker-rules.md', {cache:'no-cache'})).text();
     let full = ''; if(f.h3 && !f.sm){ h3Peek(); full = $('#h3Pre').textContent; }
-    L = ckLead(shot); N = ckNames(shot); const who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
+    L = ckLead(shot); N = ckNames(lineSubs(shot) + ' ' + shot); const who = N.length ? '\n\nPEOPLE IN THIS SHOT (use exactly these names, nobody else): ' + N.map(x => x.name).join(', ') : '';
     const lead = L.lead ? '\n\nTHIS SHOT CARRIES ON FROM THE CLIP BEFORE. Its first second is already written and is NOT yours to change or repeat: ' + ckOut(L.lead.trim(), N) + '\nThe SHOT below is only what happens after that first second. Keep its [1s-…] tags; never write a [0s-1s] line.' : '';
     // 🎯 Pika (Jordan 2026-11-11: "I think it prompts differently than Minimax vanilla"): the word range follows the model, and the clip length goes along so the beats fit it
     const wr = kind==='VANILLA' ? '120 to 200' : '180 to 300', secs = +f.seconds > 0 ? '\n\nCLIP LENGTH: ' + (+f.seconds) + ' seconds' : '';
-    const user = 'MODEL: ' + kind + secs + who + lead + '\n\nSHOT:\n' + ckOut(L.lead ? L.rest.trim() : shot, N) + (full ? '\n\nFULL PROMPT (context only; its <Subject n> numbers are not the same as the shot\'s, so go by the names in the SHOT):\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, ' + wr + ' words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
+    const user = 'MODEL: ' + kind + secs + who + ckLines(shot, N) + lead + '\n\nSHOT:\n' + ckOut(L.lead ? L.rest.trim() : shot, N) + (full ? '\n\nFULL PROMPT (context only; its <Subject n> numbers are not the same as the shot\'s, so go by the names in the SHOT):\n' + full : '') + '\n\nReturn the JSON. The "shot" must be the full enriched shot, ' + wr + ' words (tighten instead if mine is already longer), keeping every [..] tag, name and <Picture n> exactly.';
     messages = [{role:'system', content:rules}, {role:'user', content:user + (first ? '\n\nTHE ARTIST\'S NOTES FOR THIS CHECK (follow them; they win over your own ideas): ' + ckOut(first, N) : '')}]; }
     const r = await getJ(ckUrl() + '/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:S.llmModel || CK.model, stream:false, think:false, format:'json', keep_alive:'30m',
       options:{temperature:0.3, num_ctx:12288}, messages})}, 240000);
-    const raw = r.message && r.message.content, A = ckParse(raw); A.shot = ckJoin(L.lead, ckBack(A.shot, N)); A.lost = N.filter(x => !A.shot.includes(x.tag)).map(x => x.name);
+    const raw = r.message && r.message.content, A = ckParse(raw); A.shot = ckJoin(L.lead, ckBack(A.shot, N)); A.lost = N.filter(x => !(A.shot + ' ' + lineSubs(A.shot)).includes(x.tag)).map(x => x.name);
     S.ck = Object.assign(A, {kind, orig:shot, film:S.fkey || '', N, lead:L.lead, msgs:messages.concat([{role:'assistant', content:String(raw || '')}]), notes:(prev ? prev.notes || [] : []).concat(note || first ? [note || first] : [])}); drawCk();
   }catch(e){ const busy = e.message==='503'; if(prev){ S.ck = Object.assign({}, prev, {chatErr:busy ? 'Render just started a render, so the checker stepped aside. Send again when it finishes.' : /abort/i.test(e.name + e.message) ? 'That took too long. Try again.' : /no answer|JSON/i.test(e.message) ? 'It answered but not in a form I can read. Try again.' : "Couldn't reach the checker on Render (" + e.message + ')'}); drawCk(); return; }
     S.ck = {err:busy ? 'Render just started a render, so the checker stepped aside. Check again when it finishes.' : /abort/i.test(e.name + e.message) ? 'The checker took too long (over 4 minutes).' : /no answer|JSON/i.test(e.message) ? 'The checker answered but not in a form I can read. Try again.' : "Couldn't reach the prompt checker on Render. Is the PC on and Ollama running? (" + e.message + ')'}; drawCk(); }
@@ -3523,7 +3586,7 @@ $('#ckOut').onclick = e => { const b = e.target.closest('[data-ck]'); if(!b) ret
   drawCk(); };
 $('#prompt').oninput = e => { S.f.prompt = e.target.value; filmEdit(e.target.value); save(); drawShot(); drawGo(); };
 $('#prompt').addEventListener('scroll', () => { const h = $('#promptHl'); if(h) h.scrollTop = $('#prompt').scrollTop; });
-$('#prompt').addEventListener('click', e => { const ta = e.target; if(ta.selectionStart!==ta.selectionEnd) return; const h = subjAt(ta.value, ta.selectionStart); if(!h) return; ta.blur(); subjPick(h.n, h); });
+$('#prompt').addEventListener('click', e => { const ta = e.target; if(ta.selectionStart!==ta.selectionEnd) return; { const d = lineAt(ta.value, ta.selectionStart); if(d){ ta.blur(); lineSheet(d.k, d); return; } } const h = subjAt(ta.value, ta.selectionStart); if(!h) return; ta.blur(); subjPick(h.n, h); });
 try{ new ResizeObserver(() => subjHl()).observe($('#prompt')); }catch(e){}
 setInterval(() => { const ta = $('#prompt'); if(ta && ta.value!==HLV) subjHl(); }, 700); // the words set from elsewhere (scrubbing, a take's ✏ words)
 // 🎞 editing the words of the clip under the playhead keeps them on that clip's take (the video stays as it is; back to its words = no edit)
@@ -4152,7 +4215,7 @@ function undoWatch(doc){ if(!doc || doc.__undoW) return; doc.__undoW = 1;
 undoWatch(document);
 setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {lineOut, lineSheet, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
