@@ -91,5 +91,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // touching clips: select the first one, ⇿ Fill a gap adds time between it and the next
   const tp = await fr.evaluate(() => { FILM.GAP = null; FILM.SEL = window.C1; FILM.draw(); const P = FILM.fillPair(FILM.S.films[0]); return {b:P && P.B && P.B.id, gap:P && P.gap, on:!document.querySelector('.tools [data-act="fill"]').disabled}; });
   ok(tp.on && tp.b && tp.gap < 1e-3, 'with a clip selected, ⇿ Fill a gap goes between it and the next clip, even when they touch (' + JSON.stringify(tp) + ')');
+  // trimmed clips (Jordan 2026-11-13: "the frame that's showing"): the fill starts on the last frame on screen and lands on the first one
+  { await fr.evaluate(() => { const f = FILM.S.films[0], all = f.tracks.flatMap(tr => tr.clips), c1 = all.find(x => x.id===window.C1), c2 = all.find(x => x.id===window.C2);
+      const tr = f.tracks.find(t => t.clips.includes(c1)); tr.clips = tr.clips.filter(x => x===c1 || x===c2); c1.out = 3.5; c2.in = 1.25; c2.at = c1.at + 3.5 + 1; FILM.GAP = null; FILM.SEL = c1.id; FILM.draw(); });
+    await fr.click('.tools [data-act="fill"]'); await page.waitForTimeout(300);
+    const n1 = sent.length; await fr.click('#flGo'); await page.waitForTimeout(1500);
+    const g2 = sent[n1] && sent[n1].g, lv = g2 ? Object.entries(g2).filter(([k, n]) => n.class_type==='LoadVideo') : [], src = id => Object.entries(g2).find(([k, n]) => n.class_type==='GetVideoComponents' && n.inputs.video[0]===id);
+    const fromVid = (gcId) => Object.values(g2).filter(n => n.class_type==='ImageFromBatch' && n.inputs.image[0]===gcId).map(n => n.inputs.batch_index);
+    const per = lv.map(([id]) => { const gc = src(id); return gc ? fromVid(gc[0]) : []; });
+    const pinsA = per.find(a => a.includes(83)), pinsB = per.find(a => a.includes(30));
+    ok(pinsA && Math.max(...pinsA)===83 && pinsB && Math.min(...pinsB)===30, '⇿ with trimmed clips the fill starts on clip A\'s last frame showing (3.5 s → frame 83) and lands on clip B\'s first frame showing (1.25 s → frame 30): ' + JSON.stringify(per)); }
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
