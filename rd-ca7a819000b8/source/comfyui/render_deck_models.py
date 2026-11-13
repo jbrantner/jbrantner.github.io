@@ -2321,6 +2321,206 @@ if FARM.get('jobs'):
 
 
 
+# ---------- 🌙 H3 Deck keeps going with the phone away (Jordan 2026-11-13) ----------
+# "I'd like it to run fully autonomously if possible with the phone off": the phone says it's here (POST /renderdeck/h3run/beat,
+# every 15 s while H3 Deck is on screen) and whether anything is still running. When it has been gone a while with work left,
+# this helper opens H3 Deck itself, hidden (Edge or Chrome, headless, like the 3D maker above), served from this computer with
+# ?worker=1. That copy starts from the phone's last copy of everything (ComfyUI's user file h3deck_run.json) and carries the work
+# on: ✨, 🎭, the 🧵 seams, retries. When the phone is back, the hidden copy is told to stop (go: false), saves its last copy, says
+# bye and is closed; the phone then takes that copy over. Only one hidden copy runs at a time (its id, wid).
+H3RUN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_h3run.json')
+H3RUN_APP = 'https://jbrantner.github.io/h3-a875336252cb/'
+H3RUN_GONE = 90     # s without a word from the phone before the hidden copy opens
+H3RUN_AWAY = 20     # ... when the phone said it was going into the background
+H3RUN = {'want': False, 'farm': '', 'wid': ''}
+_h3r = {'proc': None, 'phone': 0.0, 'away': False, 'seen': 0.0, 'opened': 0.0, 'yield': 0.0, 'bye': False, 'task': None, 'loaded': False}
+_h3r_cache = {}
+
+
+def _h3r_load():
+    if _h3r['loaded']:
+        return
+    _h3r['loaded'] = True
+    try:
+        with open(H3RUN_FILE, encoding='utf-8') as f:
+            H3RUN.update(json.load(f))
+    except Exception:
+        pass
+    _h3r['phone'] = time.time()  # (after a restart, the phone gets its 90 s again before anything opens)
+
+
+def _h3r_save():
+    try:
+        tmp = H3RUN_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(H3RUN, f)
+        os.replace(tmp, H3RUN_FILE)
+    except Exception as e:
+        print('[Render Deck 🌙]', e)
+
+
+def _h3r_alive():
+    p = _h3r['proc']
+    if p is not None and p.poll() is None:
+        return True
+    # a copy opened before this helper restarted: alive while it still checks in
+    return bool(H3RUN.get('wid')) and time.time() - _h3r['seen'] < 30
+
+
+def _h3r_open():
+    import subprocess
+    exe = _p3d_browser()
+    if not exe or not H3RUN.get('farm'):
+        return False
+    wid = 'w' + uuid.uuid4().hex[:10]
+    url = H3RUN['farm'].rstrip('/') + '/renderdeck/h3app/?worker=1&wid=' + wid
+    prof = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'user', 'render_deck_h3_worker_profile')
+    # (it reaches the other PC by its Tailscale address too: no local-network prompt, which a hidden browser can't answer)
+    args = [exe, '--headless=new', '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--autoplay-policy=no-user-gesture-required',
+            '--disable-features=PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,BlockInsecurePrivateNetworkRequests,LocalNetworkAccessChecks',
+            '--user-data-dir=' + prof, url]
+    _h3r['proc'] = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    H3RUN['wid'] = wid
+    _h3r.update(opened=time.time(), seen=time.time(), bye=False, **{'yield': 0.0})
+    _h3r_save()
+    print('[Render Deck 🌙] the phone is away with work left: H3 Deck opened hidden to carry it on')
+    return True
+
+
+def _h3r_close(why=''):
+    p = _h3r['proc']
+    _h3r['proc'] = None
+    if p is not None and p.poll() is None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    if H3RUN.get('wid'):
+        H3RUN['wid'] = ''
+        _h3r_save()
+    _h3r['seen'] = 0.0
+    if why:
+        print('[Render Deck 🌙] hidden H3 Deck closed:', why)
+
+
+def _h3r_step(now=None):
+    """one look at things: open, tell to stop, or close the hidden copy. Returns what it did (for the tests)"""
+    now = now or time.time()
+    gone = now - _h3r['phone'] > (H3RUN_AWAY if _h3r['away'] else H3RUN_GONE)
+    if _h3r_alive():
+        if _h3r['bye']:
+            _h3r_close('its work is done or the phone is back')
+            return 'closed'
+        if not gone:  # the phone is back: the copy stops at its next check-in; closed when it says bye, or after 40 s
+            _h3r['yield'] = _h3r['yield'] or now
+            if now - _h3r['yield'] > 40:
+                _h3r_close('the phone is back')
+                return 'closed'
+            return 'yield'
+        if now - max(_h3r['seen'], _h3r['opened']) > 600:  # stopped checking in: opened again on the next look
+            _h3r_close('it stopped checking in')
+            return 'closed'
+        return 'running'
+    if H3RUN.get('want') and gone:
+        return 'opened' if _h3r_open() else 'no browser'
+    return 'idle'
+
+
+async def _h3r_loop():
+    while True:
+        try:
+            _h3r_step()
+        except Exception as e:
+            print('[Render Deck 🌙]', e)
+        await asyncio.sleep(10)
+
+
+def _h3r_start():
+    _h3r_load()
+    if _h3r['task'] is None or _h3r['task'].done():
+        _h3r['task'] = asyncio.ensure_future(_h3r_loop())
+
+
+@routes.post('/renderdeck/h3run/beat')
+async def h3run_beat(request):
+    _h3r_start()
+    try:
+        b = await request.json()
+    except Exception:
+        b = {}
+    now = time.time()
+    if b.get('who') == 'worker':
+        wid = str(b.get('wid') or '')
+        if H3RUN.get('wid') and wid != H3RUN['wid']:
+            return web.json_response({'go': False, 'push': False})  # an older copy: it stops without saving over the current one
+        if not H3RUN.get('wid'):
+            H3RUN['wid'] = wid
+        _h3r['seen'] = now
+        H3RUN['want'] = bool(b.get('want'))
+        back = _h3r['yield'] or now - _h3r['phone'] <= (H3RUN_AWAY if _h3r['away'] else H3RUN_GONE)
+        return web.json_response({'go': not back})
+    _h3r['phone'] = now
+    _h3r['away'] = bool(b.get('away'))
+    H3RUN['want'] = bool(b.get('want'))
+    if b.get('farm') and re.fullmatch(r'https?://[A-Za-z0-9.\-:\[\]]+', str(b['farm'])):
+        H3RUN['farm'] = str(b['farm'])
+    if b.get('back') and _h3r_alive():
+        _h3r['yield'] = _h3r['yield'] or now
+    _h3r_save()
+    return web.json_response({'ok': True, 'worker': _h3r_alive()})
+
+
+@routes.post('/renderdeck/h3run/bye')
+async def h3run_bye(request):
+    try:
+        b = await request.json()
+    except Exception:
+        b = {}
+    if str(b.get('wid') or '') == H3RUN.get('wid'):
+        H3RUN['want'] = bool(b.get('want')) and not _h3r['yield']
+        _h3r['bye'] = True
+        _h3r_step()
+    return web.json_response({'ok': True})
+
+
+@routes.get('/renderdeck/h3run')
+async def h3run_get(request):
+    _h3r_start()
+    return web.json_response({'h3run': 1, 'worker': _h3r_alive(), 'want': H3RUN.get('want', False), 'phone_ago': round(time.time() - _h3r['phone'])})
+
+
+@routes.get('/renderdeck/h3app/{tail:.*}')
+async def h3run_app(request):
+    """H3 Deck (and its Films page) fetched from GitHub Pages and served from here, for the hidden copy"""
+    tail = request.match_info.get('tail') or ''
+    if not re.fullmatch(r'[A-Za-z0-9_\-./]*', tail) or '..' in tail or tail.endswith('sw.js'):
+        return web.Response(status=404)
+    if tail == '' or tail.endswith('/'):
+        tail += 'index.html'
+    hit = _h3r_cache.get(tail)
+    if not hit or time.time() - hit[0] > 120:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as ss:
+                async with ss.get(H3RUN_APP + tail) as r:
+                    if r.status != 200:
+                        return web.Response(status=r.status)
+                    hit = (time.time(), await r.read(), r.headers.get('Content-Type', 'application/octet-stream'))
+                    _h3r_cache[tail] = hit
+        except Exception as e:
+            if not hit:
+                return web.Response(status=502, text=str(e))
+    return web.Response(body=hit[1], headers={'Content-Type': hit[2], 'Cache-Control': 'no-store'})
+
+
+_h3r_load()
+if H3RUN.get('want'):  # work was left going when ComfyUI restarted: the phone gets its 90 s, then the hidden copy opens
+    try:
+        PromptServer.instance.loop.call_soon_threadsafe(_h3r_start)
+    except Exception as e:
+        print('[Render Deck 🌙] resume later:', e)
+
+
 # ---------- 🧍 Character Creator: the dress colour held to the front (Jordan 2026-10-25, "version B") ----------
 # A mean/std colour match in Lab, measured and applied only on her (the white round her left out, where a whole-frame match
 # darkened the side views to maroon), at a strength, with a soft 1 px edge. Both pictures are her on white.

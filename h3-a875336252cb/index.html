@@ -440,6 +440,13 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const FPS = 24, CTX = 22, HEAD = 1, LEAD = p => p.ctx ? p.ctx + HEAD : 0, MAXREF = {img:9, vid:3, aud:3};
 const KEY = 'h3deck';
+// 🌙 the hidden copy (Jordan 2026-11-13: "I'd like it to run fully autonomously if possible with the phone off"): Render's helper opens
+// H3 Deck itself, hidden, with ?worker=1, once the phone has been away a while with something still running. It starts from the copy
+// of everything the phone last sent (h3deck_run.json on Render: H3 Deck's state and Films'), carries the work on exactly as the
+// phone would, and when the phone comes back it stops and the phone takes its copy over
+const WORKER = /[?&]worker=1/.test(location.search), WID = (location.search.match(/[?&]wid=([\w-]+)/) || [])[1] || '';
+if(WORKER){ try{ const x = new XMLHttpRequest(); x.open('GET', location.origin + '/userdata/h3deck_run.json?t=' + Date.now(), false); x.send();
+  if(x.status===200){ const j = JSON.parse(x.responseText); localStorage.clear(); if(j.deck) localStorage.setItem(KEY, JSON.stringify(j.deck)); if(j.edit) localStorage.setItem('h3edit', JSON.stringify(j.edit)); } }catch(e){} }
 const DEFAULT_PCS = [{name:'Render', url:'https://jordo-desktop.tailadee9a.ts.net', on:true, speed:1}, {name:'Main', url:'https://jordo-main.tailadee9a.ts.net', on:true, speed:1.26}];
 let S = load();
 let MOCAP = {list:[], looked:[], busy:false, err:''}; // 🦴 every Mocap clip the PCs' notes list, newest first
@@ -516,7 +523,7 @@ const THUMBING = {};
 function fixThumbs(){ const form = JSON.stringify(S.f);
   for(const m of Object.values(S.media)) if(m.tc && !m.thumb && !THUMBING[m.id] && form.includes('"' + m.id + '"')){ THUMBING[m.id] = 1; if(m.remote){ remoteThumb(m); continue; }
     blobOf(m.id).then(async b => { if(!b) return; if(m.kind==='img') m.thumb = thumbOf(await imgOf(b)); else { const t = await vidThumb(b); if(t) m.thumb = t.url; } if(m.thumb){ delete m.tc; save(); drawInputs(); } }).catch(() => {}); } }
-function saveNow(){ S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(S));
+function saveNow(){ if(ADOPTING) return; S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(S));
   try{ put(); }catch(e){ try{ tidyMedia(true); put(); }catch(e2){ toast("H3 Deck's own save space in Safari is full (about 5 MB; not your phone's storage), so the newest changes aren't kept. Tap Clear finished to make room.", 6000); } }
   pushSoon(); }
 // a copy of the takes list on each PC (ComfyUI's own user files), so 🎬 H3 Film sees them even where it can't share this app's
@@ -534,7 +541,7 @@ async function pullTakes(){
   if(!add.length) return 0;
   S.takes = S.takes.concat(add).sort((a, b) => (b.t || 0) - (a.t || 0)); save(); drawTakes(); tickSoon(300);
   toast(add.length + (add.length > 1 ? ' renders' : ' render') + ' brought back from the PCs'); return add.length; }
-async function pushTakes(){
+async function pushTakes(){ if(HOLD) return; if(WORKER || runWork()) pushRunSoon();
   const body = JSON.stringify({v:1, t:S.tsav || Date.now(), fresh:S.fresh || 0, pcs:S.pcs, takes:S.takes});
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url]===body) continue;
     try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} }  pushFilms(); }
@@ -553,7 +560,7 @@ function backupBody(){ const {E} = filmsNow(), films = JSON.parse(JSON.stringify
   const keep = {lib:S.lib || [], forms:S.forms || {}, casts:S.casts || {}, cast:S.cast || [], fkey:S.fkey, films}, txt = JSON.stringify(keep), media = {}, up = {};
   for(const id of Object.keys(S.media || {})) if(txt.includes('"' + id + '"')){ media[id] = S.media[id]; Object.keys(S.up || {}).forEach(k => { if(k.startsWith(id + '|')) up[k] = S.up[k]; }); }
   return JSON.stringify(Object.assign({v:1, t:Date.now(), fresh:S.fresh || 0, media, up}, keep)); }
-async function pushFilms(){ if(!RESCUED) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
+async function pushFilms(){ if(!RESCUED || HOLD) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url + '|films']===sig) continue;
     try{ const r = await fetch(p.url + FILMS_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url + '|films'] = sig; }catch(e){} } }
 async function mediaBack(ids, up){ let n = 0;
@@ -604,6 +611,58 @@ async function rescue(){ try{
     if(fs.length){ S.filmsRebuilt = true; putFilms(fs); save(); toast('🛟 ' + fs.length + (fs.length===1 ? ' film' : ' films') + ' rebuilt from your renders. The clips are in the order they were made; check the cuts.', 8000); } }
   }catch(e){} RESCUED = true; pushFilms(); }
 setInterval(() => { pushTakes(); pushFilms(); }, 60000);
+// ---------- 🌙 keeps running with the phone away ----------
+// The phone tells Render's helper it's here (every 15 s while H3 Deck is on screen) and whether anything is still running. With the
+// phone gone for 90 s and work left, the helper opens the hidden copy. The phone keeps a copy of everything on Render while work is
+// running (h3deck_run.json). While the app is in the background it does nothing (HOLD), so the two never act at once; when it comes
+// back it asks the helper to stop the hidden copy, waits for its last copy, and takes that over (the app reloads once).
+const RUN_FILE = '/userdata/' + 'h3deck_run.json';
+let HOLD = !WORKER, ADOPTING = false, HIDE_T = 0, RUNOK = false, WSTOP = false, WIDLE = 0, RUNSIG = '', runT = 0;
+const BOOT_TSAV = S.tsav || 0;
+const runHost = () => WORKER ? location.origin : ((S.pcs.find(p => p.on!==false && /render|desktop/i.test((p.name || '') + ' ' + p.url)) || S.pcs.find(p => p.on!==false) || {}).url || '');
+// something that moves on by itself: a take still rendering, a ✨ / 🎭 pass, or an ⬆ Upscale track run that isn't waiting for her
+function runWork(){ if(S.takes.some(t => t.state==='working' || (t.k4 && (t.k4.state==='wait' || t.k4.state==='working')))) return true;
+  const E = filmsState(); return (E.passes || []).some(p => p.state==='working') || (E.films || []).some(f => { const R = f.upRun; return R && (R.state==='smooth' || R.state==='hq' || (R.state==='seams' && !R.err) || (R.state==='faces' && R.all)); }); }
+function filmsState(){ try{ const F = FW && FW.FILM; if(F && F.S) return F.S; }catch(e){} try{ return JSON.parse(localStorage.getItem('h3edit') || '{}') || {}; }catch(e){ return {}; } }
+function runBody(by){ return JSON.stringify({v:1, t:Date.now(), by, wid:WID, deck:S, edit:filmsState()}); }
+function pushRunSoon(){ clearTimeout(runT); runT = setTimeout(() => pushRun(WORKER ? 'worker' : 'phone'), WORKER ? 1500 : 3000); }
+async function pushRun(by, force){ const u = runHost(); if(!u || (HOLD && !force)) return false; const body = runBody(by), sig = body.replace(/^\{"v":1,"t":\d+,/, '');
+  if(sig===RUNSIG && !force) return true;
+  try{ const r = await fetch(u + RUN_FILE + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok){ RUNSIG = sig; return true; } }catch(e){} return false; }
+const postJ = async (u, o, ms) => { const c = new AbortController(), k = setTimeout(() => c.abort(), ms || 8000);
+  try{ const r = await fetch(u, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(o), signal:c.signal}); return r.ok ? await r.json() : null; }catch(e){ return null; } finally{ clearTimeout(k); } };
+async function beat(){ if(WORKER || document.hidden || HOLD) return; const u = runHost(); if(!u) return;
+  const st = await postJ(u + '/renderdeck/h3run/beat', {who:'phone', want:runWork(), farm:u}); RUNOK = !!st; }
+// back on screen (or opened again): the hidden copy is stopped and its newer copy is taken over
+async function takeBack(){ const u = runHost(); if(!u){ HOLD = false; return; }
+  let st = await postJ(u + '/renderdeck/h3run/beat', {who:'phone', want:runWork(), farm:u, back:true}, 6000);
+  if(!st){ HOLD = false; tickSoon(0); return; } RUNOK = true; // (an older helper: nothing ran without the phone)
+  if(st.worker){ toast('🌙 Render kept things going while the app was closed: taking over from it…', 8000);
+    for(let i = 0; i < 30 && st && st.worker; i++){ await new Promise(z => setTimeout(z, 2000)); try{ st = await (await fetch(u + '/renderdeck/h3run', {cache:'no-store'})).json(); }catch(e){} } }
+  let j = null; try{ const r = await fetch(u + RUN_FILE + '?t=' + Date.now(), {cache:'no-store'}); if(r.ok) j = await r.json(); }catch(e){}
+  let seen = ''; try{ seen = sessionStorage.getItem('h3adoptT') || ''; }catch(e){}
+  if(j && j.by==='worker' && j.deck && (j.t || 0) > (HIDE_T || BOOT_TSAV) && String(j.t)!==seen){ adopt(j); return; }
+  HOLD = false; tickSoon(0); if(runWork()) pushRun('phone', true); }
+function adopt(j){ ADOPTING = true; clearTimeout(saveT);
+  try{ const fr = document.querySelector('#filmTab iframe'); if(fr) fr.remove(); }catch(e){} FW = null; // (Films' own save would write over it)
+  try{ const d = j.deck; d.tab = S.tab; localStorage.setItem(KEY, JSON.stringify(d)); if(j.edit){ const E = j.edit; try{ const cur = JSON.parse(localStorage.getItem('h3edit') || '{}'); if(cur.nav) E.nav = cur.nav; }catch(e){} localStorage.setItem('h3edit', JSON.stringify(E)); }
+    sessionStorage.setItem('h3adoptT', String(j.t)); sessionStorage.setItem('h3adoptMsg', '1'); }catch(e){ ADOPTING = false; HOLD = false; return; }
+  location.reload(); }
+if(!WORKER){
+  setInterval(beat, 15000);
+  document.addEventListener('visibilitychange', () => { if(document.hidden){ if(HOLD) return; HIDE_T = Date.now(); const w = runWork(); if(w) pushRun('phone', true); const u = runHost();
+      if(u && RUNOK) postJ(u + '/renderdeck/h3run/beat', {who:'phone', want:w, farm:u, away:true}); HOLD = RUNOK; }
+    else if(HOLD) takeBack(); });
+  try{ if(sessionStorage.getItem('h3adoptMsg')){ sessionStorage.removeItem('h3adoptMsg'); setTimeout(() => toast('🌙 Picked up where Render left off: everything it did while the app was closed is here.', 7000), 1500); } }catch(e){}
+  setTimeout(takeBack, 0);
+} else {
+  // the hidden copy: says it's here every 5 s; stops (after a last copy) when the phone is back or nothing is left to do for 2 minutes
+  const wbeat = async () => { if(WSTOP) return; const st = await postJ(location.origin + '/renderdeck/h3run/beat', {who:'worker', wid:WID, want:runWork()});
+    if(st && st.go===false){ WSTOP = HOLD = true; if(st.push!==false) await pushRun('worker', true); await postJ(location.origin + '/renderdeck/h3run/bye', {wid:WID, want:runWork()}); return; }
+    if(!runWork()){ WIDLE = WIDLE || Date.now(); if(Date.now() - WIDLE > 120000){ WSTOP = HOLD = true; await pushRun('worker', true); await postJ(location.origin + '/renderdeck/h3run/bye', {wid:WID, want:false}); return; } } else WIDLE = 0;
+    pushRun('worker'); };
+  setInterval(wbeat, 5000); setTimeout(wbeat, 1500);
+}
 function toast(t, ms){ const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), ms || 3200); }
 
 // ---------- media kept on the phone (IndexedDB), so a reference can be sent to whichever PC takes the job ----------
@@ -613,7 +672,7 @@ const IDB = (() => { let db = null;
   return {put:(k, v) => tx('readwrite', s => s.put(v, k)), get:k => tx('readonly', s => s.get(k)), del:k => tx('readwrite', s => s.delete(k))};
 })();
 const BLOBS = {}; // media id -> Blob (this session)
-async function blobOf(id){ if(BLOBS[id]) return BLOBS[id]; try{ const b = await IDB.get(id); if(b) BLOBS[id] = b; return b || null; }catch(e){ return null; } }
+async function blobOf(id){ if(BLOBS[id]) return BLOBS[id]; try{ const b = await IDB.get(id); if(b) BLOBS[id] = b; if(!b && WORKER && await mediaBack([id])) return BLOBS[id] || null; return b || null; }catch(e){ return null; } }
 const URLS = {};
 async function mediaUrl(id){ if(URLS[id]) return URLS[id]; const b = await blobOf(id); return b ? (URLS[id] = URL.createObjectURL(b)) : ''; }
 async function addMedia(file, kind){
@@ -2547,7 +2606,9 @@ async function tickUpscale(t){
         // (Jordan 2026-11-11: a ✨ pass went to Main, which has no Open-H3 regenerate LoRA, and kept the original) another PC that can do it takes it
         const alt = t.up.chain ? null : S.pcs.map(x => x.url).find(u => u!==t.pc && !canRun(u, t)); if(alt && !t.upMoved){ t.upMoved = true; t.pc = alt; t.t0r = Date.now(); save(); return; }
         t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
-    { const ch = t.up && t.up.chain, pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev); // 🔗 queued right after the clip it carries on from
+    { const ch = t.up && t.up.chain; let pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev); // 🔗 queued right after the clip it carries on from
+      // ↻ the clip before was sent again (a retry of its ✨ part): carry on from that newer try
+      if(pv && (pv.upErr || pv.state==='failed') && pv.redo){ const alt = S.takes.find(x => x.id!==pv.id && x.redo && x.redo.key===pv.redo.key && x.redo.wi===pv.redo.wi && !x.upErr && x.state!=='failed'); if(alt){ pv = alt; ch.prev = alt.id; } }
       if(pv && (pv.upErr || pv.state==='failed')){ t.upErr = 'the clip before it failed, so there was nothing to carry on from'; return upDone(t); }
       if(pv && pv.upStage==='start') return; }
     { const fl = t.smoothed || t.final; // a video made on the other PC: wait (up to 15 min) for Dropbox to bring it over before queueing
@@ -2713,7 +2774,7 @@ async function sendPieces(t, from){
 // ---------- following the pieces ----------
 let tickT = 0, REBAL_AT = 0; const tickSoon = ms => { clearTimeout(tickT); tickT = setTimeout(tick, ms || 0); };
 async function tick(){
-  clearTimeout(tickT);
+  clearTimeout(tickT); if(HOLD){ tickT = setTimeout(tick, 2000); return; }
   try{
     for(const t of S.takes) if(t.k4 && (t.k4.state==='wait' || t.k4.state==='working')) await tickFin(t);
     const busy = S.takes.filter(t => t.state==='working').reverse();
@@ -2728,7 +2789,8 @@ async function tick(){
         else if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); pc.state = 'failed'; pc.err = e ? e[1].exception_message : 'ComfyUI hit an error'; }
         else if(!h){ const q = p.queue || {}, inQ = [...(q.queue_running || []), ...(q.queue_pending || [])];
           const at = inQ.findIndex(x => x[1]===pc.pid);
-          if(at < 0 && Date.now() - (pc.tq || 0) > 20000){ const f = await probeFile(t, t.pieces.indexOf(pc));
+          if(at < 0 && Date.now() - (pc.tq || 0) > 20000){ let h2 = null; try{ h2 = (await getJ(t.pc + '/history/' + pc.pid))[pc.pid]; }catch(e){} if(h2) continue; // (it finished between the two looks)
+            const f = await probeFile(t, t.pieces.indexOf(pc));
             if(f){ pc.file = f; pc.state = 'done'; pc.t1 = Date.now(); } else { pc.state = 'failed'; pc.err = 'It left ' + pcName(t.pc) + "'s queue (ComfyUI restarted or it was cancelled)"; } }
           else if(at >= 0){ pc.state = (q.queue_running || []).some(x => x[1]===pc.pid) ? 'running' : 'queued'; } }
       }
@@ -2757,7 +2819,8 @@ async function tick(){
 }
 // ComfyUI forgets finished jobs when it restarts: a piece that finished just before is found by its file
 async function probeFile(t, i){
-  const sub = (t.ctxDirs && t.ctxDirs[i + 1]) || outDir(t), base = 'piece_' + String(i + 1).padStart(2, '0'); let best = null;
+  // (🧵 a seams job in one go saves under the take's own name, not piece_01: Jordan's 2026-11-13 join was done but marked "left the queue")
+  const sub = (t.ctxDirs && t.ctxDirs[i + 1]) || outDir(t), base = seamOne(t) ? t.name : 'piece_' + String(i + 1).padStart(2, '0'); let best = null;
   for(let n = 1; n <= 30; n++){ const f = {filename:base + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'}; let r;
     try{ r = await fetch(viewUrl(t.pc, f), {method:'HEAD'}); }catch(e){ return best; } if(!r.ok) break;
     if((Date.parse(r.headers.get('Last-Modified') || '') || 0) >= (t.pieces[i].tq || 0) - 60e3) best = f; }
@@ -2823,6 +2886,20 @@ async function redoFrom(t, i, newSeed){
   try{ await sendPieces(t, i); toast('Sent again from piece ' + (i + 1)); }catch(e){ t.state = 'failed'; toast('Not sent: ' + e.message, 6000); }
   drawTakes();
 }
+// ↻ a failed take of an ⬆ Upscale track run sent again by itself (Jordan 2026-11-13: "restarting part if it fails rather than waiting
+// for me to hit restart the parts that failed"): its PC's memory is freed first (the seams failed on Main for want of RAM), then the
+// failed piece and the ones after it go again, or a failed ✨ regenerate step starts over. False when its PC can't be reached
+// (nothing is sent, so the try isn't used up)
+async function retryTake(t){ if(!t) return false; const p = pcOf(t.pc); if(!p.online) return false;
+  try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
+  let i = (t.pieces || []).findIndex(x => x.state==='failed'); if(i < 0 && t.state==='failed') i = Math.max(0, (t.pieces || []).findIndex(x => x.state!=='done'));
+  t.retries = (t.retries || 0) + 1;
+  if(i >= 0){ if(t.ctxDirs) t.ctxDirs.length = Math.min(t.ctxDirs.length, i + 1); t.pieces.slice(i).forEach(x => { x.state = 'new'; x.file = null; x.err = ''; });
+    Object.assign(t, {state:'working', final:null, joinPid:null, joinErr:'', upPid:null, upErr:'', bridgeErr:''}); if(t.up) t.upStage = null;
+    try{ await sendPieces(t, i); }catch(e){ t.state = 'failed'; t.pieces[i].state = 'failed'; t.pieces[i].err = 'not sent: ' + e.message; save(); return false; } save(); drawTakes(); return true; }
+  if(t.up && (t.upErr || (t.upStage==='done' && !t.final))){ Object.assign(t, {upErr:'', upPid:null, upStage:'start', state:'working', t0r:Date.now(), upMoved:false}); if(!t.final && t.smoothed) t.final = null; save(); tickSoon(300); drawTakes(); return true; }
+  if(t.joinErr){ Object.assign(t, {joinErr:'', joinPid:null, final:null, state:'working'}); save(); tickSoon(300); return true; }
+  return false; }
 // ➕ Add more: new pieces after the last one, carried on by H3 Motion Context from the last piece's saved latent
 // ⬆ Regenerate any finished take (Jordan 2026-11-02): same regenerate as after 🪄 Smooth, from the take's own video, with its
 // prompt and, if it had them, its reference pictures. Runs on the take's PC; the original stays (↩ Original on the card).
@@ -4118,6 +4195,8 @@ window.H3QualityKit = () => ({styles:Object.fromEntries(Object.entries(Q_STYLES)
 // ⬆ Nudge a stretch (Jordan 2026-11-06: "select a portion of a video and then edit only part of it"): the take's own frames from a to b
 // go through ⬆ Regenerate with new words (vid2vid, same size) and are spliced back; the rest of the take and its sound stay as they are.
 // The window is the 17k+5 grid around the stretch; only a..b is used. A new version of the clip, like ↻ Redo.
+window.H3HOLD = () => HOLD; window.H3WORKER = WORKER;
+window.H3Retry = async id => retryTake(S.takes.find(x => x.id===id));
 window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
   if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
   if(!fl){ toast('That take has no finished video yet'); return 0; }
@@ -4269,7 +4348,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
   save(); setTab('films'); drawAll(); toForm(); toast('🧍 In: ' + andList(got) + '. Write who it is and what happens, then Render.', 6000); return got; };
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
-setTab((S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
+setTab(!WORKER && (S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
 // ---------- ↶ Undo / ↷ Redo (Jordan 2026-11-09: "i need an undo button on h3 render deck") ----------
 // One history for the whole app: the Shot box and every setting of the form (each film's own), the cast, the 📚 Library,
 // the Films timelines and prompt blocks, the words of the takes, and takes taken off the list. Only what you did yourself
@@ -4330,6 +4409,6 @@ window.H3 = {rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, l
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
-    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, picFull, lookFrame, frameRefs, frameText, LIVE_:() => LIVE, lookProgHtml, lookGraph, ph3Kit, lookKit, lookRedo, lookCollect, lookResume, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, gapPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, picFull, lookFrame, frameRefs, frameText, LIVE_:() => LIVE, lookProgHtml, lookGraph, ph3Kit, lookKit, lookRedo, lookCollect, lookResume, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, retryTake, runWork, takeBack, pushRun, runBody, HOLD_:() => HOLD, setHOLD:v => { HOLD = v; }, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, gapPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
