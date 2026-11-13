@@ -17,11 +17,11 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
     VAELoader:{input:{required:{vae_name:[['p-h3-image_vae_int8_convrot.safetensors']]}}}});
   await page.route('https://app.test/**', r => r.fulfill({contentType:'text/html', body:html}));
   await page.route(/fonts\.googleapis|rdh3-fresh|icon-tape/, r => r.fulfill({status:200, body:''}));
-  await page.route(/jordo-main/, r => r.abort());
-  await page.route(PC + '/**', async r => { const u = new URL(r.request().url());
+  let mainOn = false, hosts = [];
+  const handler = async r => { const u = new URL(r.request().url()); if(/jordo-main/.test(u.host) && !mainOn) return r.abort();
     if(u.pathname==='/object_info') return r.fulfill({contentType:'application/json', body:JSON.stringify(info())});
     if(u.pathname==='/upload/image'){ uploads++; return r.fulfill({contentType:'application/json', body:JSON.stringify({name:'ph3_up' + uploads + '.jpg', subfolder:'', type:'input'})}); }
-    if(u.pathname==='/prompt'){ const b = JSON.parse(r.request().postData()); prompts.push(b.prompt); const pid = 'pid' + prompts.length;
+    if(u.pathname==='/prompt'){ const b = JSON.parse(r.request().postData()); prompts.push(b.prompt); hosts.push(u.host); const pid = 'pid' + prompts.length;
       const g = b.prompt, sv = Object.keys(g).find(k => g[k].class_type==='SaveImage'), pv = Object.keys(g).find(k => g[k].class_type==='PreviewAny');
       const outputs = {[sv]:{images:[{filename:'ph3_0000' + prompts.length + '_.png', subfolder:'RenderDeck/ph3', type:'output'}]}}; if(pv) outputs[pv] = {text:['Edit <Picture 1>. A longer brief.']};
       hist[pid] = {status:{status_str:'success', completed:true}, outputs}; return r.fulfill({contentType:'application/json', body:JSON.stringify({prompt_id:pid})}); }
@@ -30,7 +30,8 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
     if(u.pathname==='/view') return r.fulfill({contentType:'image/png', body:PNG});
     if(u.pathname==='/renderdeck/download'){ const b = JSON.parse(r.request().postData()); downloads.push(b); if(/lora/.test(b.url)) have.lora = true; return r.fulfill({contentType:'application/json', body:'{"ok":true}'}); }
     if(u.pathname==='/renderdeck/jobs') return r.fulfill({contentType:'application/json', body:JSON.stringify({jobs:downloads.map(d => ({name:d.url.split('/').pop(), status:'done'}))})});
-    r.fulfill({status:404, body:''}); });
+    r.fulfill({status:404, body:''}); };
+  await page.route(PC + '/**', handler); await page.route('https://jordo-main.tailadee9a.ts.net/**', handler);
   await page.addInitScript(() => { window.PH3_POLL = 50; });
   await page.goto('https://app.test/rd-ca7a819000b8/ph3/');
   // the LoRA is missing: the page offers it and gets it through the helper
@@ -56,7 +57,7 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
   // every link points at a real node and output
   ok(Object.values(g).every(n => Object.values(n.inputs).every(v => !Array.isArray(v) || (g[v[0]] && typeof v[1]==='number'))), 'links are whole');
   ok(uploads===2, 'both pictures sent'); ok(/A longer brief/.test(await page.textContent('details pre')), 'shows the prompt it wrote');
-  ok(await page.$('#before'), 'before/after compare');
+  ok(!(await page.$('#before')), 'no before/after slider');
   // Edit this: the result becomes Picture 1 (no new upload of it: it's fetched from the PC), the reference stays
   await page.click('#useit'); ok(await page.evaluate(() => document.querySelectorAll('.pic img').length)===2, 'result is Picture 1, reference kept');
   await page.fill('#prompt', 'make it night'); await page.click('#auto'); await page.click('#make'); await page.waitForFunction(() => document.querySelectorAll('.lib button').length===2, null, {timeout:8000});
@@ -65,6 +66,12 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
   await page.click('[data-mode=make]'); await page.click('[data-ratio="4:3"]'); await page.click('[data-mp="8"]'); await page.fill('#prompt', 'a red bicycle'); await page.click('#make');
   await page.waitForFunction(() => document.querySelectorAll('.lib button').length===3, null, {timeout:8000});
   const c3 = Object.values(prompts[2]).find(n => n.class_type==='PH3ImageConditioning').inputs; ok(c3.width===3360 && c3.height===2496 && !c3['images.image_1'], 'new picture 8 MP 4:3 = 3360x2496');
+  // a batch of 4 with Main on too: 2 each, seeds in a row, all 4 land in the list
+  mainOn = true; const n0 = prompts.length; await page.click('[data-count="4"]'); ok(/Make 4 pictures/.test(await page.textContent('#make')), 'button says Make 4 pictures');
+  await page.click('#make'); await page.waitForFunction(() => document.querySelectorAll('.card .lib').length && document.querySelectorAll('.lib button').length >= 3 + 4 + 4, null, {timeout:10000});
+  const hs = hosts.slice(n0); ok(prompts.length - n0===4 && hs.filter(h => /main/.test(h)).length===2 && hs.filter(h => /desktop/.test(h)).length===2, 'batch of 4 split 2 Render / 2 Main');
+  const seeds = prompts.slice(n0).map(g => Object.values(g).find(x => x.class_type==='RandomNoise').inputs.noise_seed); ok(new Set(seeds).size===4, 'each picture its own seed');
+  ok(/1 of 4|Result \d of 4/.test(await page.textContent('.card h2:not(:first-child), .card')) || /of 4/.test(await page.content()), 'result says N of 4');
   await page.screenshot({path:path.join(__dirname, 'ph3.png'), fullPage:true});
   fs.unlinkSync(pic); await browser.close(); console.log(fail ? fail + ' FAILED' : 'all passed'); process.exit(fail ? 1 : 0);
 })();
