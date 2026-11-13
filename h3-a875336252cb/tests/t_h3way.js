@@ -99,10 +99,10 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(Q.kept1 && !Q.thumb1 && !Q.n.toString().startsWith('25') && Q.formThumb, 'unused media gone, a take\'s picture kept without its preview, the form keeps its previews');
   // 🎬 shots (Jordan 2026-11-06): ＋ Shot adds [Shot N] markers; the H3 prompt puts each shot on its own line, every subject in every shot
   const SH = await page.evaluate(() => { const ta = document.querySelector('#prompt'); ta.value = 'she walks to the window'; ta.dispatchEvent(new Event('input'));
-    document.querySelector('[data-shot]').click(); const v1 = ta.value; ta.value += 'close-up of her eyes'; ta.dispatchEvent(new Event('input')); document.querySelector('[data-shot]').click(); const v2 = ta.value;
+    document.querySelector('[data-shot]').click(); document.querySelector('#cutPlain').click(); const v1 = ta.value; ta.value += 'close-up of her eyes'; ta.dispatchEvent(new Event('input')); document.querySelector('[data-shot]').click(); document.querySelector('#cutPlain').click(); const v2 = ta.value;
     const P = H3.h3Prompt({text:'[Shot 1] she walks to the window [shot 2] close-up of her eyes', imgs:[{desc:'a woman', keep:'exact'}], secs:5});
     const B = H3.h3Prompt({text:'she walks in [Shot 2] her face', secs:5}); return {v1, v2, P, B}; });
-  ok(SH.v1==='[Shot 1] she walks to the window\n[Shot 2] ' && /\n\[Shot 3\] $/.test(SH.v2), '🎬 ＋ Shot numbers the shots in the Shot box: ' + JSON.stringify([SH.v1, SH.v2]));
+  ok(SH.v1==='she walks to the window\n[Shot 2] ' && /\n\[Shot 3\] $/.test(SH.v2), '🎬 ＋ Shot › Plain cut numbers the shots in the Shot box ([Shot 1] is implied): ' + JSON.stringify([SH.v1, SH.v2]));
   // ✏ Custom canvas (Jordan 2026-11-07): her own width × height, snapped to 32, shrunk if over MiniMax's cap
   await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.fl = false; H3.S.f.first = null; H3.drawAll(); document.querySelector('#bCanvas').classList.remove('shut'); });
   await page.click('[data-asp="custom"]'); await page.waitForTimeout(100);
