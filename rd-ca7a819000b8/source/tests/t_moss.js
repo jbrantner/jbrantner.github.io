@@ -94,7 +94,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   let ks = titled(g,'Painting').inputs;
   ok(ks.sampler_name==='er_sde' && ks.scheduler==='simple' && ks.steps===25 && ks.cfg===2.5, 'MOSS settings: '+[ks.sampler_name,ks.scheduler,ks.steps,ks.cfg].join(' '));
   ok(titled(g,'Prompt').inputs.text==='a woman holding a sign that says "OPEN", rainy street at night', 'prompt goes as written: '+titled(g,'Prompt').inputs.text);
-  ok(/^nsfw, worst quality, bad anatomy, watermark, jpeg artifact/.test(titled(g,'Avoid').inputs.text), 'MOSS negative: '+titled(g,'Avoid').inputs.text);
+  ok(/^worst quality, bad anatomy, watermark, jpeg artifact/.test(titled(g,'Avoid').inputs.text), 'MOSS negative: '+titled(g,'Avoid').inputs.text);
 
   await page.click('#addBtn'); await page.click('[data-add=lora]');
   const lo = await page.$$eval('[data-k=lora] option', o => o.map(x=>x.textContent));
