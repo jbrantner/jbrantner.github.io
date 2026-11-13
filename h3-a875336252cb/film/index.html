@@ -219,7 +219,7 @@ img.live{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opaci
 .stage video.on{opacity:1}
 .stage .gap{position:absolute;inset:0;display:grid;place-items:center;color:#555;font-size:13px;font-weight:700}
 /* ⧉ overlay tracks (picture in picture, 2026-11-13): a track with a size/turn/place sits over the tracks below */
-.stage .ovl{position:absolute;transform-origin:50% 50%;opacity:0;pointer-events:none;z-index:2}
+.stage .ovl{position:absolute;transform-origin:50% 50%;opacity:0;pointer-events:none;z-index:2;overflow:hidden}
 .stage .ovl.on{opacity:1}
 .stage .ovl video{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;opacity:1}
 .stage.xfed{touch-action:none;outline:2px solid var(--accent);outline-offset:-2px}
@@ -510,11 +510,13 @@ const lockedK = (f, k) => { const tr = f && f.tracks[k]; return !!(GUIDE_ON() &&
 const LOCKMSG = '🔒 The guidance track is locked so it can\'t change by accident. Unlock it in 🦴 Guidance track.';
 function activeAt(f, t, base){ for(const tr of f.tracks) if(!tr.hide && !(base && tr.xf)) for(const c of tr.clips) if(t >= c.at && t < c.at + len(c) - 1e-6) return c; return null; } // upper track first
 function filmView(f){
-  S.lastFilm = f.id; const T = filmSecs(f), sel = SEL && clipOf(f, SEL), st = sel && takeOf(sel.c.take), ar = (() => { const c = f.tracks.filter(t => !t.xf).concat(f.tracks.filter(t => t.xf)).flatMap(t => t.clips).map(c => takeOf(c.take)).find(Boolean); return c ? c.w + '/' + c.h : '16/9'; })();
+  if(!f.canvas && f.tracks.some(x => x.clips.length)) f.canvas = canvasOf(f); // the shape is picked once and then stays (Jordan 2026-11-13)
+  S.lastFilm = f.id; const T = filmSecs(f), sel = SEL && clipOf(f, SEL), st = sel && takeOf(sel.c.take), ar = canvasAr(f);
   return crumb([['Films', {v:'home'}], [f.name]]) +
   `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-fname value="${esc(f.name)}" placeholder="Film name"><button class="btn pri xf" data-act="test" style="white-space:nowrap">🧪 Test</button><button class="btn warn" data-act="delFilm">🗑</button></div>
+  <div class="row" style="margin:-2px 0 8px;gap:6px">${Object.keys(CANV).map(k => `<button class="btn ${canvasOf(f)===k ? 'pri' : ''}" data-act="canvas" data-v="${k}" style="padding:7px 10px">${CANV[k][2]}</button>`).join('')}</div>
   <div class="stage" style="--ar:${ar}"><video id="vA" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video><video id="vB" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video>${ovlHtml(f)}<div class="gap" id="gap">${T ? '' : 'Add clips from ✂ Review or ＋ Clip'}</div></div>
-  <div id="xfBox">${xfHtml(f)}</div>
+  <div id="xfBox">${xfHtml(f)}</div><div id="cropBox">${cropHtml(f)}</div>
   <div class="transport"><button class="btn" data-act="toStart">⏮</button><button class="btn" data-act="undo" id="undoBtn" aria-label="Undo" ${(EMB_UNDO() ? parent.H3UndoN() : UNDO.length) ? '' : 'disabled'}>↶</button><button class="btn pri" data-act="play" id="playBtn">▶ Play</button><div class="t" id="tc">${fmt(PH)} / ${fmt(T)}</div><button class="btn" data-act="snd" id="sndBtn" aria-label="Sound on or off">${S.snd ? '🔊' : '🔇'}</button><button class="btn" data-act="zoom" data-d="-1">−</button><button class="btn" data-act="zoom" data-d="1">＋</button></div>
   <div id="prevBox">${prevHtml(f)}</div>
   ${upRunHtml(f)}
@@ -548,23 +550,23 @@ function useTake(f, r, x){ const c = r.c, wasEnd = c.out >= c.dur - 0.05, e0 = c
   save(); draw(); }
 // ---------- ⚡ Preview (Jordan 2026-11-06: playback of separate clips over Tailscale is slow): the PC writes the timeline as one
 // small temporary video, and ▶ Play plays that in real time while the edit hasn't changed since ----------
-const sigOf = f => { const {out, miss} = expClips(f); return miss.length ? '' : JSON.stringify(out.map(c => [c.filename, c.subfolder, +c.in.toFixed(3), +c.out.toFixed(3), +c.at.toFixed(3), c.track].concat(c.xf ? [c.xf] : []))); };
-const prevOk = f => { const x = f.prev; return !!(x && x.state==='done' && x.file && x.sig===sigOf(f) && (x.ov || !hasOv(f))); };
+const sigOf = f => { const {out, miss} = expClips(f); return miss.length ? '' : canvasOf(f) + JSON.stringify(out.map(c => [c.filename, c.subfolder, +c.in.toFixed(3), +c.out.toFixed(3), +c.at.toFixed(3), c.track].concat(c.xf ? [c.xf] : [], c.crop ? [c.crop] : []))); };
+const prevOk = f => { const x = f.prev; return !!(x && x.state==='done' && x.file && x.sig===sigOf(f) && (x.ov || !hasOv(f)) && (x.cv || !needsFit(f) && !hasCrop(f))); };
 function prevHtml(f){ const x = f.prev; if(!filmSecs(f)) return '';
   if(x && x.state==='working'){ const p = x.total ? Math.round(100 * x.done / x.total) : 0; return `<div class="note" style="margin:8px 0">⚡ Making a smooth preview on ${esc(pcName(x.pc))}… ${p}%<div class="bar" style="margin:6px 0"><i style="width:${p}%"></i></div></div>`; }
   if(prevOk(f)) return `<div class="note" style="margin:8px 0">⚡ <b>Smooth preview on</b>: ▶ Play plays the whole film as one video, in real time. Any edit turns it off until you make a new one.</div>`;
-  if(x && x.state==='done' && x.sig===sigOf(f) && !x.ov && hasOv(f)) return `<div class="note" style="margin:8px 0">⚡ ${esc(pcName(x.pc))}'s helper is older and can't draw ⧉ picture-in-picture tracks yet, so the smooth preview is off for this film. Paste the newest helper there.</div>`;
+  if(x && x.state==='done' && x.sig===sigOf(f) && (!x.ov && hasOv(f) || !x.cv && (needsFit(f) || hasCrop(f)))) return `<div class="note" style="margin:8px 0">⚡ ${esc(pcName(x.pc))}'s helper is older and can't draw ⧉ picture-in-picture tracks, ✂ crops or fit clips into the canvas yet, so the smooth preview is off for this film. Paste the newest helper there.</div>`;
   return `<div class="row" style="margin:8px 0;align-items:center;flex-wrap:nowrap"><span class="note" style="flex:1;margin:0">${x && x.state==='failed' ? "⚡ The preview didn't finish: " + esc(x.error || '') : x && x.file ? '⚡ The preview is out of date (the edit changed).' : 'Play stutters? ⚡ Preview makes it smooth.'}</span><button class="btn" data-act="preview">⚡ Preview</button></div>`; }
 let AUTOPREV = 0;
-function autoPrev(f){ clearTimeout(AUTOPREV); if(!filmSecs(f) || prevOk(f) || (f.prev && f.prev.state==='done' && f.prev.sig===sigOf(f) && !f.prev.ov) || (f.prev && f.prev.state==='working' && f.prev.sig===sigOf(f)) || S.autoPrev===false) return;
+function autoPrev(f){ clearTimeout(AUTOPREV); if(!filmSecs(f) || prevOk(f) || (f.prev && f.prev.state==='done' && f.prev.sig===sigOf(f) && (!f.prev.ov || !f.prev.cv)) || (f.prev && f.prev.state==='working' && f.prev.sig===sigOf(f)) || S.autoPrev===false) return;
   if(f.prev && f.prev.file && !/_preview/.test(f.prev.file.subfolder || '')) return; // an old helper keeps every preview at full size: only by hand there
   if(expClips(f).miss.length) return; AUTOPREV = setTimeout(() => { if(N().v==='film' && N().film===f.id && !PLAY && !prevOk(f) && !expClips(f).miss.length) previewFilm(f, true); }, 4000); }
 function prevShow(f){ const el = $('#prevBox'); if(el && N().v==='film' && N().film===f.id) el.innerHTML = prevHtml(f); }
 async function previewFilm(f, quiet){ const {out, miss} = expClips(f); if(miss.length){ toast(miss.length + (miss.length===1 ? ' clip has' : ' clips have') + ' no finished video yet'); return; }
   const pc = expPc(); if(!pc){ toast("Can't reach Render or Main"); return; } const sig = sigOf(f);
-  try{ const r = await fetch(pc + '/renderdeck/h3export', {method:'POST', body:JSON.stringify({name:(f.name || 'film') + ' preview', clips:out, preview:true})}), j = await r.json().catch(() => ({}));
+  try{ const r = await fetch(pc + '/renderdeck/h3export', {method:'POST', body:JSON.stringify({name:(f.name || 'film') + ' preview', clips:out, preview:true, canvas:CANV[canvasOf(f)].slice(0, 2)})}), j = await r.json().catch(() => ({}));
     if(!r.ok) throw new Error(r.status===404 && !j.error ? 'paste the newest helper on ' + pcName(pc) + ' first' : j.error || r.status);
-    f.prev = {id:j.id, pc, state:'working', done:0, total:0, sig, ov:j.ov ? 1 : 0}; save(); prevShow(f); prevPoll(f); }
+    f.prev = {id:j.id, pc, state:'working', done:0, total:0, sig, ov:j.ov ? 1 : 0, cv:j.cv ? 1 : 0}; save(); prevShow(f); prevPoll(f); }
   catch(e){ if(!quiet) toast('Preview: ' + e.message, 5000); } }
 let prevT = 0;
 async function prevPoll(f){ clearTimeout(prevT); const x = f.prev; if(!x || x.state!=='working') return;
@@ -582,16 +584,17 @@ function expHtml(f){ const x = f.exp; if(!x) return '';
   return `<div class="note" style="margin-top:10px;color:var(--bad)">⬇ Export didn't finish: ${esc(x.error || x.state)}</div>`; }
 function expClips(f){ const out = [], miss = [];
   f.tracks.forEach((tr, k) => { if(!tr.hide) tr.clips.forEach(c => { const fl = fileOf(takeOf(c.take)); if(!fl){ miss.push(c); return; }
-    out.push(Object.assign({filename:fl.filename, subfolder:fl.subfolder || '', in:c.in, out:c.out, at:c.at, track:k}, tr.xf ? {xf:xfOf(tr)} : {})); }); });
+    out.push(Object.assign({filename:fl.filename, subfolder:fl.subfolder || '', in:c.in, out:c.out, at:c.at, track:k}, tr.xf ? {xf:xfOf(tr)} : {}, cropOf(tr) ? {crop:cropOf(tr)} : {})); }); });
   return {out, miss}; }
 const expPc = () => { const on = pcs().filter(p => p.on!==false && pcOf(p.url).online); return (on.find(p => /render/i.test(p.name)) || on[0] || {}).url; };
 async function exportFilm(f){
   const {out, miss} = expClips(f); if(miss.length){ toast(miss.length + (miss.length===1 ? ' clip has' : ' clips have') + ' no finished video (still rendering, or gone from H3 Deck)'); return; }
   const pc = expPc(); if(!pc){ toast("Can't reach Render or Main"); return; }
-  try{ const r = await fetch(pc + '/renderdeck/h3export', {method:'POST', body:JSON.stringify({name:f.name, clips:out})}), j = await r.json().catch(() => ({}));
+  try{ const r = await fetch(pc + '/renderdeck/h3export', {method:'POST', body:JSON.stringify({name:f.name, clips:out, canvas:CANV[canvasOf(f)].slice(0, 2)})}), j = await r.json().catch(() => ({}));
     if(!r.ok) throw new Error(r.status===404 && !j.error ? 'paste the newest helper on ' + pcName(pc) + ' first' : j.error || r.status);
     f.exp = {id:j.id, pc, state:'working', done:0, total:0}; save(); expShow(f); expPoll(f);
-    if(hasOv(f) && !j.ov) toast('⬇ ' + pcName(pc) + '\'s helper is older: ⧉ picture-in-picture tracks come out full size. Paste the newest helper there and export again.', 7000); }
+    if((needsFit(f) || hasCrop(f)) && !j.cv) toast('⬇ ' + pcName(pc) + '\'s helper is older: crops are left out and clips that aren\'t the canvas shape come out stretched. Paste the newest helper there and export again.', 7000);
+    else if(hasOv(f) && !j.ov) toast('⬇ ' + pcName(pc) + '\'s helper is older: ⧉ picture-in-picture tracks come out full size. Paste the newest helper there and export again.', 7000); }
   catch(e){ toast('Export: ' + e.message, 5000); } }
 // 📲 Save to Photos (Jordan 2026-11-06: like H3 Deck's ⬇ Save, the share sheet with Save Video): the finished mp4 is fetched onto the
 // phone as soon as the export is done, so the tap can open the share sheet straight away (iOS only allows it right after a tap)
@@ -651,7 +654,7 @@ function drawTL(f){
   const pps = f.pps, T = Math.max(filmSecs(f) + 10, 30), W = Math.ceil(T * pps), tl = $('#tl'); if(!tl) return;
   const step = pps >= 48 ? 1 : pps >= 16 ? 5 : 10; let ru = ''; for(let s = 0; s <= T; s += step) ru += `<i style="left:${s * pps}px">${fmt(s).replace(' s', 's')}</i>`;
   const OFF = tlOff(); tl.style.width = W + 2 * OFF + 'px'; tl.style.paddingLeft = OFF + 'px'; tl.style.paddingRight = OFF + 'px';
-  tl.innerHTML = `<div class="ruler" id="ruler">${ru}</div>` + f.tracks.map((tr, k) => { const SH = shotsOf(tr); return `<div class="trk ${tr.hide ? 'hid' : ''}${TSEL===tr.id ? ' grp' : ''}" data-k="${k}"><span class="tn"><a data-act="trackMenu" data-k="${k}" title="Track ${k + 1}">${k + 1}${tr.hide ? ' 🙈' : ''}${f.tracks.length > 1 && actK(f)===k ? ' 🎬' : ''} ⋯</a>${TSEL===tr.id ? '<span class="grpl"> · ⇔ whole track</span>' : ''}${tr.xf ? ' · ⧉' : ''}${passLabel(tr)}${GUIDE_ON() && tr.guide ? ' · 🦴 guide' + (tr.unlock ? ' 🔓' : ' 🔒') + '<span class="gdp"></span>' : guideOpt(f, k, 0) ? ' · 🦴' : ''}</span>${tr.clips.map(c => { const t = takeOf(c.take);
+  tl.innerHTML = `<div class="ruler" id="ruler">${ru}</div>` + f.tracks.map((tr, k) => { const SH = shotsOf(tr); return `<div class="trk ${tr.hide ? 'hid' : ''}${TSEL===tr.id ? ' grp' : ''}" data-k="${k}"><span class="tn"><a data-act="trackMenu" data-k="${k}" title="Track ${k + 1}">${k + 1}${tr.hide ? ' 🙈' : ''}${f.tracks.length > 1 && actK(f)===k ? ' 🎬' : ''} ⋯</a>${TSEL===tr.id ? '<span class="grpl"> · ⇔ whole track</span>' : ''}${tr.xf ? ' · ⧉' : ''}${cropOf(tr) ? ' · ✂' : ''}${passLabel(tr)}${GUIDE_ON() && tr.guide ? ' · 🦴 guide' + (tr.unlock ? ' 🔓' : ' 🔒') + '<span class="gdp"></span>' : guideOpt(f, k, 0) ? ' · 🦴' : ''}</span>${tr.clips.map(c => { const t = takeOf(c.take);
     return `<div class="clip ${c.id===SEL || TSEL===tr.id ? 'sel' : ''} ${t && fileOf(t) ? '' : t && workingOf(t) ? 'rend' : 'miss'}" data-c="${c.id}" style="left:${c.at * pps}px;width:${Math.max(6, len(c) * pps)}px"><div class="h l" data-h="l"></div><div class="nm">${esc(clipLabel(t))}</div><div class="du">${fmt(len(c))}${qpBadge(c)}</div>${t && !fileOf(t) && workingOf(t) ? '<div class="st"></div><div class="pg"><i></i></div>' : ''}<div class="sg" style="background:${SHOT_COL[(SH.gi[c.id] || 0) % SHOT_COL.length]}"></div><div class="h r" data-h="r"></div></div>`; }).join('')}${SH.joins.map(j => `<button class="seam${j.cut ? ' cut' : ''}" data-act="seamTog" data-c="${j.c.id}" style="left:${j.at * pps}px" title="${j.cut ? 'A cut: tap to make it one continuous shot' : 'One continuous shot: tap to make it a cut'}">${j.cut ? '✂' : '⛓'}</button>`).join('')}${ghostsOf(f, k).map(gc => { const i = guideClips(f).indexOf(gc); return `<div class="ghost ${GHOST && GHOST.k===k && GHOST.gid===gc.id ? 'sel' : ''}" data-g="${gc.id}" data-k="${k}" style="left:${gc.at * pps}px;width:${Math.max(6, len(gc) * pps)}px"><div class="nm">○ ${i + 1} · tap to render</div><div class="du">${fmt(len(gc))}</div></div>`; }).join('')}${GAP && GAP.k===k ? `<div class="gapsel" style="left:${GAP.a * pps}px;width:${Math.max(6, (GAP.b - GAP.a) * pps)}px"><button data-act="fill">⇿ Fill</button><button data-act="closeGap">🗑 ${fmt(GAP.b - GAP.a)}</button></div>` : ''}</div>`; }).join('');
   tl.insertAdjacentHTML('beforeend', laneHtml(f));
   scrollTo(f);
@@ -687,7 +690,7 @@ function scrollTo(f){ const w = $('#tlw'); if(!w) return; const x = Math.round(P
 let WORDT = 0;
 function setPH(f, t, show, fromScroll){ PH = Math.max(0, t); if(!fromScroll) scrollTo(f); const tc = $('#tc'); if(tc) tc.textContent = fmt(PH) + ' / ' + fmt(filmSecs(f)); if(show){ showFrame(f); clearTimeout(WORDT); WORDT = setTimeout(() => pushWords(f), fromScroll ? 250 : 0); } }
 function wireFilm(f){
-  drawTL(f); wireXf(f); if(f.guide && f.guide.state==='export' && !guideT) guidePoll(f); if(f.prev && f.prev.state==='working') prevPoll(f); else autoPrev(f);
+  drawTL(f); wireXf(f); wireCrop(f); if(f.guide && f.guide.state==='export' && !guideT) guidePoll(f); if(f.prev && f.prev.state==='working') prevPoll(f); else autoPrev(f);
   const tl = $('#tl'), wrap = $('#tlw');
   wireLane(f, tl);
   tl.addEventListener('pointerdown', ev => { unfocusDeck();
@@ -902,6 +905,42 @@ function refreshTools(f){ const sel = SEL && clipOf(f, SEL); clipPanel(f, sel); 
 // full-frame clip), r = turn in degrees (clockwise), x / y = where its middle sits, as a share of the frame's width / height from
 // the middle (0.25 = a quarter of the width to the right), snd = its sound plays too. A track without xf covers the tracks below
 // as before. The PC's ⬇ Export and ⚡ preview draw it the same way (helper: clip.xf; the job answers ov:1).
+// 🖼 the film's canvas (Jordan 2026-11-13: "I don't want the canvas dimensions to change with the video. I want to pick the
+// dimensions… and have it stay that way. Clips that don't fit will just scale to fit"): f.canvas = 'wide' | 'tall' | 'square';
+// a film without one takes the shape nearest its first full-frame clip. Clips are fitted inside it (bars, never stretched).
+const CANV = {wide:[16, 9, '▭ Wide 16:9'], tall:[9, 16, '▯ Tall 9:16'], square:[1, 1, '◻ Square 1:1']};
+function canvasOf(f){ if(f.canvas && CANV[f.canvas]) return f.canvas;
+  const t = f.tracks.filter(x => !x.xf).concat(f.tracks.filter(x => x.xf)).flatMap(x => x.clips).map(c => takeOf(c.take)).find(t => t && t.w && t.h), a = t ? t.w / t.h : 16 / 9;
+  return a > 1.2 ? 'wide' : a < 0.83 ? 'tall' : 'square'; }
+const canvasAr = f => { const c = CANV[canvasOf(f)]; return c[0] + '/' + c[1]; };
+// does a clip have to be fitted (its shape isn't the canvas's)? an older helper stretches those
+const hasCrop = f => f.tracks.some(tr => !tr.hide && cropOf(tr) && tr.clips.length);
+const needsFit = f => { const c = CANV[canvasOf(f)], a = c[0] / c[1]; return f.tracks.some(tr => !tr.hide && !tr.xf && tr.clips.some(x => { const t = takeOf(x.take); return t && t.w && t.h && Math.abs(t.w / t.h / a - 1) > 0.02; })); };
+// ✂ crop (Jordan 2026-11-13: "I also want the ability to crop a video"): tr.crop = {l, t, r, b}, the share cut off each edge of
+// every clip on the track. What's left is fitted into the canvas (or the ⧉ picture's box) like any clip. The PC's export crops the same.
+let CROPED = null; // the track being cropped (its panel shows under the picture)
+const cropOf = tr => { const c = tr && tr.crop; return c && (c.l || c.t || c.r || c.b) ? {l:+c.l || 0, t:+c.t || 0, r:+c.r || 0, b:+c.b || 0} : null; };
+const trackOfClip = (f, c) => f.tracks.find(tr => tr.clips.includes(c));
+const takeAr = c => { const t = takeOf(c.take); return t && t.w && t.h ? t.w / t.h : 16 / 9; };
+// the clip's shape after cropping
+const cropAr = (ca, k) => k ? ca * (1 - k.l - k.r) / Math.max(0.01, 1 - k.t - k.b) : ca;
+// a full-frame player showing clip c: plain "contain" when uncropped, else sized and clipped so the kept part fits the canvas
+function baseCrop(v, f, c){ const k = c && cropOf(trackOfClip(f, c)); if(!k){ if(v.dataset.crop){ v.dataset.crop = ''; ['left', 'top', 'width', 'height', 'objectFit', 'clipPath', 'inset'].forEach(p => { v.style[p] = ''; }); } return; }
+  const st = v.parentNode, fa = st && st.clientHeight ? st.clientWidth / st.clientHeight : 16 / 9, b = fitIn(fa, cropAr(takeAr(c), k)), kw = 1 - k.l - k.r, kh = 1 - k.t - k.b, W = b.w / kw, H = b.h / kh;
+  Object.assign(v.style, {inset:'auto', left:((1 - b.w) / 2 - k.l * W) * 100 + '%', top:((1 - b.h) / 2 - k.t * H) * 100 + '%', width:W * 100 + '%', height:H * 100 + '%', objectFit:'fill', clipPath:`inset(${k.t * 100}% ${k.r * 100}% ${k.b * 100}% ${k.l * 100}%)`}); v.dataset.crop = '1'; }
+// a ⧉ picture's player: the box is the kept part; the video inside is larger and shifted, the box hides the rest
+function ovCrop(v, k){ if(!k){ ['left', 'top', 'width', 'height'].forEach(p => { v.style[p] = ''; }); return; } const kw = 1 - k.l - k.r, kh = 1 - k.t - k.b;
+  Object.assign(v.style, {left:-k.l / kw * 100 + '%', top:-k.t / kh * 100 + '%', width:100 / kw + '%', height:100 / kh + '%'}); }
+function cropHtml(f){ const k = f.tracks.findIndex(x => x.id===CROPED), tr = f.tracks[k]; if(!tr) return ''; const c = Object.assign({l:0, t:0, r:0, b:0}, tr.crop || {});
+  const sl = (n, l) => `<label>${l}<input type="range" data-cr="${n}" min="0" max="45" step="1" value="${Math.round(c[n] * 100)}"><output data-co="${n}">${Math.round(c[n] * 100)}%</output></label>`;
+  return `<div class="xfbox"><b style="font-size:14px">✂ Crop track ${k + 1}</b><div class="note" style="margin:0">Cuts the edges off every clip on this track. What's left is scaled to fit the canvas${tr.xf ? ' (or its ⧉ picture)' : ''}, never stretched. Export crops the same.</div>
+  ${sl('l', 'Left')}${sl('r', 'Right')}${sl('t', 'Top')}${sl('b', 'Bottom')}
+  <div class="row"><button class="btn" data-act="cropOff">↺ No crop</button><button class="btn pri" data-act="cropDone" style="margin-left:auto">✓ Done</button></div></div>`; }
+function wireCrop(f){ const box = $('#cropBox'); if(!box) return;
+  box.addEventListener('input', ev => { const i = ev.target.closest('[data-cr]'), tr = f.tracks.find(x => x.id===CROPED); if(!i || !tr) return;
+    tr.crop = Object.assign({l:0, t:0, r:0, b:0}, tr.crop || {}); tr.crop[i.dataset.cr] = +i.value / 100; const o = box.querySelector(`[data-co="${i.dataset.cr}"]`); if(o) o.textContent = i.value + '%';
+    if(!PLAY) showFrame(f); });
+  box.addEventListener('change', ev => { if(ev.target.closest('[data-cr]')){ save(); drawTL(f); prevShow(f); autoPrev(f); } }); }
 let XFED = null; // the track whose size / turn / place is being set (its panel shows under the picture)
 const XF0 = {s:0.5, r:0, x:0.25, y:0};
 const xfOf = tr => tr && tr.xf ? Object.assign({}, XF0, {snd:true}, tr.xf) : null;
@@ -915,12 +954,12 @@ const fitIn = (fa, ca) => ca > fa ? {w:1, h:fa / ca} : {w:ca / fa, h:1};
 const ovlHtml = f => f.tracks.map((tr, k) => tr.xf ? `<div class="ovl" data-tr="${esc(tr.id)}" style="z-index:${10 + f.tracks.length - k}"><video playsinline muted preload="auto"></video></div>` : '').join('');
 const usePrev = f => prevOk(f) && !XFED;
 function ovAspect(f, tr, el){ const v = el && el.firstChild, c = tr.clips.find(c => PH >= c.at && PH < c.at + len(c)) || tr.clips[0], t = c && takeOf(c.take);
-  return t && t.w && t.h ? t.w / t.h : v && v.videoWidth ? v.videoWidth / v.videoHeight : 16 / 9; }
+  return cropAr(t && t.w && t.h ? t.w / t.h : v && v.videoWidth ? v.videoWidth / v.videoHeight : 16 / 9, cropOf(tr)); }
 function ovPlace(f, el){ const st = el.parentNode, tr = f.tracks.find(x => x.id===el.dataset.tr), xf = xfOf(tr); if(!xf || !st) return;
   const fa = st.clientWidth && st.clientHeight ? st.clientWidth / st.clientHeight : 16 / 9, b = fitIn(fa, ovAspect(f, tr, el));
   el.style.left = (50 + xf.x * 100 - b.w * 50).toFixed(3) + '%'; el.style.top = (50 + xf.y * 100 - b.h * 50).toFixed(3) + '%';
   el.style.width = (b.w * 100).toFixed(3) + '%'; el.style.height = (b.h * 100).toFixed(3) + '%'; el.style.transform = `rotate(${xf.r}deg) scale(${xf.s})`;
-  el.classList.toggle('ed', XFED===tr.id); }
+  el.classList.toggle('ed', XFED===tr.id); if(el.firstChild) ovCrop(el.firstChild, cropOf(tr)); }
 function ovShow(f, t, playing){ const st = $('.stage'); if(!st) return; st.classList.toggle('xfed', !!XFED && f.tracks.some(x => x.id===XFED));
   const L = usePrev(f) ? {ov:[]} : layersAt(f, t);
   $$('.stage .ovl').forEach(el => { ovPlace(f, el); const v = el.firstChild, hit = L.ov.find(o => o.tr.id===el.dataset.tr);
@@ -954,7 +993,7 @@ function wireXf(f){ const st = $('.stage'), box = $('#xfBox'); if(!st) return; o
   $$('.stage .ovl video').forEach(v => v.addEventListener('loadedmetadata', () => { const el = v.parentNode; if(el) ovPlace(f, el); }));
   if(box) box.addEventListener('input', ev => { const i = ev.target.closest('[data-xf]'), tr = f.tracks.find(x => x.id===XFED); if(!i || !tr || !tr.xf) return;
     const n = i.dataset.xf, v = +i.value; tr.xf[n] = n==='r' ? v : v / 100; xfClamp(tr.xf); xfSync(f); });
-  if(box) box.addEventListener('change', ev => { if(ev.target.closest('[data-xf]')) save(); });
+  if(box) box.addEventListener('change', ev => { if(ev.target.closest('[data-xf]')){ save(); prevShow(f); autoPrev(f); } });
   // drag = move, two fingers = size and turn (and move with their middle); a turn near a quarter turn clicks onto it
   const P = new Map(); let G = null;
   const grab = () => { const tr = f.tracks.find(x => x.id===XFED); G = tr && tr.xf ? {tr, xf:Object.assign({}, tr.xf), p:[...P.values()].map(p => ({x:p.x, y:p.y}))} : null; };
@@ -975,16 +1014,15 @@ const srcOf = c => { const t = takeOf(c.take), fl = fileOf(t); return t && fl ? 
 function vids(){ return [$('#vA'), $('#vB')].filter(Boolean); }
 function seekTo(v, want){ if(v.seeking){ v._want = want; if(!v._onsk){ v._onsk = () => { const w = v._want; v._want = null; if(w!=null && Math.abs(v.currentTime - w) > 0.04){ try{ v.currentTime = w; }catch(e){} } }; v.addEventListener('seeked', v._onsk); } return; }
   if(Math.abs((v.currentTime || 0) - want) > 0.04){ try{ v.currentTime = want; }catch(e){} } }
-function cue(v, c, t){ const src = srcOf(c); if(!src) return false; if(v.dataset.src!==src){ v.dataset.src = src; v.src = src; v._want = null; } const want = c.in + (t - c.at); v.dataset.c = c.id;
+function cue(v, c, t){ const src = srcOf(c); if(!src) return false; if(!v.parentNode || !v.parentNode.classList.contains('ovl')){ const f = N().v==='film' && filmOf(N().film); if(f) baseCrop(v, f, c); } if(v.dataset.src!==src){ v.dataset.src = src; v.src = src; v._want = null; } const want = c.in + (t - c.at); v.dataset.c = c.id;
   if(v.seeking){ v._want = want; if(!v._onsk){ v._onsk = () => { const w = v._want; v._want = null; if(w!=null && Math.abs(v.currentTime - w) > 0.04){ try{ v.currentTime = w; }catch(e){} } }; v.addEventListener('seeked', v._onsk); } return true; }
   if(Math.abs((v.currentTime || 0) - want) > 0.04){ try{ v.currentTime = want; }catch(e){} } return true; }
 // scrubbing uses both players too (Jordan 2026-11-06: black flash when scrubbing across clips): the player that already has the
 // clip's video is used, otherwise the hidden one loads it while the last picture stays on screen until its frame is ready
 function showFrame(f){ const c = activeAt(f, PH, true), [a, b] = vids(); if(!a) return;
-  { const t = c && takeOf(c.take), st = document.querySelector('.stage'); if(st && t && t.w && t.h) st.style.setProperty('--ar', t.w + '/' + t.h); }
   ovShow(f, PH, false);
   if(usePrev(f) && filmSecs(f)){ const src = viewUrl(f.prev.pc, f.prev.file); if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; a._want = null; } a.dataset.c = 'prev';
-    a.pause(); seekTo(a, Math.min(PH, filmSecs(f) - 0.02)); a.classList.add('on'); if(b) b.classList.remove('on'); const g = $('#gap'); if(g) g.textContent = ''; return; }
+    baseCrop(a, f, null); a.pause(); seekTo(a, Math.min(PH, filmSecs(f) - 0.02)); a.classList.add('on'); if(b) b.classList.remove('on'); const g = $('#gap'); if(g) g.textContent = ''; return; }
   const g = $('#gap'), src = c && srcOf(c);
   if(c && src){ const cur = [a, b].find(v => v.classList.contains('on')), v = [a, b].find(v => v.dataset.src===src) || [a, b].find(v => v!==cur) || a, o = v===a ? b : a;
     cue(v, c, PH); v.pause(); if(g) g.textContent = '';
@@ -999,7 +1037,7 @@ function play(f){
   vids().forEach(v => { v.muted = !S.snd; if(!v.getAttribute('src')) return; v.play().then(() => { if(!(PLAY && (PLAY.prev===v || (PLAY.cur && v.dataset.c===PLAY.cur.id)))) v.pause(); }).catch(() => {}); });
   ovVids().forEach(v => { v.muted = !ovSnd(f, v); if(!v.getAttribute('src')) return; v.play().then(() => { if(!(PLAY && !PLAY.prev && v.parentNode.classList.contains('on'))) v.pause(); }).catch(() => {}); });
   PLAY = {f, t0:performance.now(), ph0:PH, cur:null}; $('#playBtn').textContent = '⏸ Pause';
-  if(usePrev(f)){ ovShow(f, PH, false); const [a, b] = vids(), src = viewUrl(f.prev.pc, f.prev.file); PLAY.prev = a; if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; } a.dataset.c = '';
+  if(usePrev(f)){ ovShow(f, PH, false); const [a, b] = vids(), src = viewUrl(f.prev.pc, f.prev.file); PLAY.prev = a; baseCrop(a, f, null); if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; } a.dataset.c = '';
     try{ a.currentTime = PH; }catch(e){} a.muted = !S.snd; a.classList.add('on'); if(b) b.classList.remove('on'), b.pause(); a.play().catch(() => {}); }
   loop();
 }
@@ -2017,17 +2055,24 @@ document.addEventListener('click', async ev => {
         ${f.tracks.length > 1 ? `<button class="btn" data-act="actOn" data-k="${k}" data-m="1" style="padding:12px">🎬 New clips go on this track${actK(f)===k ? ' (now)' : ''}</button>` : ''}
         <button class="btn" data-act="hideTrack" data-k="${k}" data-m="1" style="padding:12px">${tr.hide ? '👁 Show this track' : '🙈 Hide this track'} (hidden tracks don't play or export)</button>
         <button class="btn" data-act="xfOn" data-k="${k}" data-m="1" style="padding:12px">${tr.xf ? '⧉ Change its size, turn and place' : '⧉ Picture in picture: size, turn and move this track over the ones below'}</button>
+        <button class="btn" data-act="cropOn" data-k="${k}" data-m="1" style="padding:12px">✂ Crop this track's video${cropOf(tr) ? ' (cropped now)' : ''}</button>
         ${tr.xf ? `<button class="btn" data-act="xfOff" data-k="${k}" data-m="1" style="padding:12px">⬜ Full frame again (covers the tracks below)</button>` : ''}
         <button class="btn" data-act="upTrack" data-k="${k}" data-m="1" style="padding:12px">⬆ Upscale this track (✨ then 🎭 then 🧵)</button>
         <button class="btn xf" data-act="qualitySheet" data-k="${k}" data-m="1" style="padding:12px">✨ Quality pass on this track</button>
         ${f.tracks.length > 1 ? `<button class="btn" data-act="delTrack" data-k="${k}" data-m="1" style="padding:12px;color:var(--bad)">🗑 Delete this track</button>` : ''}</div>`;
       $('#sheet').hidden = false; return; }
     case 'qualitySheet': { ev.stopPropagation(); qualitySheet(f, +d.k); return; }
-    case 'xfOn': { ev.stopPropagation(); const tr = f.tracks[+d.k]; if(!tr) return; if(!tr.xf) tr.xf = Object.assign({}, XF0); XFED = tr.id; if(PLAY) stopPlay();
+    case 'xfOn': { ev.stopPropagation(); const tr = f.tracks[+d.k]; if(!tr) return; if(!tr.xf) tr.xf = Object.assign({}, XF0); XFED = tr.id; CROPED = null; if(PLAY) stopPlay();
       if(tr.clips.length && !tr.clips.some(c => PH >= c.at && PH < c.at + len(c))) PH = tr.clips[0].at + 0.05;
       save(); draw(); const st = $('.stage'); if(st && st.scrollIntoView) st.scrollIntoView({block:'nearest'}); return; }
     case 'xfOff': { const tr = d.k != null && d.k!=='' ? f.tracks[+d.k] : f.tracks.find(x => x.id===XFED); if(!tr) return; ev.stopPropagation(); delete tr.xf; if(XFED===tr.id) XFED = null; save(); break; }
     case 'xfDone': XFED = null; break;
+    case 'cropOn': { ev.stopPropagation(); const tr = f.tracks[+d.k]; if(!tr) return; CROPED = tr.id; XFED = null; if(PLAY) stopPlay();
+      if(tr.clips.length && !tr.clips.some(c => PH >= c.at && PH < c.at + len(c))) PH = tr.clips[0].at + 0.05;
+      draw(); const st = $('.stage'); if(st && st.scrollIntoView) st.scrollIntoView({block:'nearest'}); return; }
+    case 'cropOff': { const tr = f.tracks.find(x => x.id===CROPED); if(tr){ delete tr.crop; save(); } break; }
+    case 'cropDone': CROPED = null; break;
+    case 'canvas': if(!CANV[d.v]) return; f.canvas = d.v; save(); break;
     case 'xfPut': case 'xfTurn': case 'xfSnd': { const tr = f.tracks.find(x => x.id===XFED); if(!tr || !tr.xf) return;
       if(a==='xfPut') xfPut(f, tr, d.v); else if(a==='xfTurn') tr.xf.r = (Math.round((tr.xf.r || 0) / 90) * 90 + 90); else { tr.xf.snd = tr.xf.snd===false; el.textContent = tr.xf.snd ? '🔊 Its sound on' : '🔇 Its sound off'; ovVids().forEach(v => { v.muted = !ovSnd(f, v); }); }
       xfClamp(tr.xf); save(); xfSync(f); return; }
@@ -2065,7 +2110,7 @@ function selTake(id){ const f = N().v==='film' && filmOf(N().film); if(!f) retur
   const c = (w && w.clip && all.find(x => x.id===w.clip)) || all.find(x => x.take===id) || all.find(x => (x.alts || []).includes(id) || (x.was && x.was.take===id)); if(!c) return false; SEL = c.id; PH = c.at; draw();
   // and point at that take in "Takes of this clip", so one tap puts it in the clip
   const b = document.querySelector('#vstrip [data-t="' + CSS.escape(id) + '"]'); if(b){ b.classList.add('hl'); b.scrollIntoView({block:'nearest', inline:'center'}); setTimeout(() => b.classList.remove('hl'), 4000); } return true; }
-window.FILM = {getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame

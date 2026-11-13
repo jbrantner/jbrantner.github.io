@@ -4,12 +4,13 @@
 const { chromium } = require('playwright');
 const path = require('path'), http = require('http'), fs = require('fs'), os = require('os'), cp = require('child_process');
 const R = 'http://render.test';
+const FILM_AR = (a, b) => Math.abs(a - b) < 0.03;
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 (async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ovl-'));
   try{ cp.execSync(`ffmpeg -loglevel error -y -f lavfi -i testsrc2=size=640x360:rate=24:duration=6 -c:v libvpx -b:v 1M "${tmp}/h.webm"`);
     cp.execSync(`ffmpeg -loglevel error -y -f lavfi -i "color=c=red:size=360x640:rate=24:duration=6,drawbox=x=0:y=0:w=360:h=80:color=yellow:t=fill" -c:v libvpx -b:v 1M "${tmp}/v.webm"`); }
-  catch(e){ console.log('no ffmpeg: the clips stay empty'); }
+  catch(e){ console.log('no ffmpeg: the clips stay empty (' + String(e.message).slice(0, 200) + ')'); }
   const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8032);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}, hasTouch:true});
@@ -31,6 +32,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     FILM.S.films = [{id:'f1', name:'Film 1', pps:24, tracks:[{id:'trV', clips:[{id:'v', take:'tV', in:0, out:4, dur:6, at:1}]}, {id:'trH', clips:[{id:'h', take:'tH', in:0, out:6, dur:6, at:0}]}]}];
     FILM.PH = 2; FILM.go({v:'film', film:'f1'}); });
   await page.waitForTimeout(400);
+  ok(await page.evaluate(() => FILM.S.films[0].canvas)==='tall', '🖼 a film without a canvas takes the shape of its first clip and keeps it');
+  await page.click('[data-act="canvas"][data-v="wide"]'); await page.waitForTimeout(300);
   // before: the top track covers the one below (no overlay)
   let L = await page.evaluate(() => { const l = FILM.layersAt(FILM.S.films[0], 2); return {base:l.base && l.base.id, ov:l.ov.map(o => o.c.id)}; });
   ok(L.base==='v' && !L.ov.length, 'without ⧉ the upper track covers the track below (' + JSON.stringify(L) + ')');
@@ -92,7 +95,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   // an old helper (answers without ov) can't draw overlays: its preview is not used
   await page.evaluate(() => { const f = FILM.S.films[0]; f.prev = {id:'p1', pc:'http://render.test', state:'done', sig:FILM.sigOf(f), file:{filename:'p.mp4', subfolder:'H3Film/_preview'}}; });
   ok(!(await page.evaluate(() => FILM.prevOk(FILM.S.films[0]))), "an old helper's preview (no overlays in it) isn't played");
-  await page.evaluate(() => { FILM.S.films[0].prev.ov = 1; });
+  await page.evaluate(() => { FILM.S.films[0].prev.ov = 1; FILM.S.films[0].prev.cv = 1; });
   ok(await page.evaluate(() => FILM.prevOk(FILM.S.films[0])), "a new helper's preview (ov) is played");
   // ⬜ Full frame again
   await page.click('#tl .trk[data-k="0"] [data-act="trackMenu"]'); await page.waitForTimeout(150);
@@ -101,5 +104,36 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(!f.tracks[0].xf && !(await page.$('.stage .ovl')), '⬜ Full frame again puts the track back to covering the one below');
   await page.evaluate(() => FILM.undo()); await page.waitForTimeout(200);
   ok(!!(await page.evaluate(() => FILM.S.films[0].tracks[0].xf)), '↶ Undo brings the picture in picture back');
+  // 🖼 the canvas stays the shape picked (Jordan 2026-11-13), whatever clip shows; clips fit inside (contain, never stretched)
+  await page.evaluate(() => { const f = FILM.S.films[0]; delete f.tracks[0].xf; FILM.PH = 2; FILM.draw(); }); await page.waitForTimeout(300);
+  const ar = async () => page.$eval('.stage', e => +(e.clientWidth / e.clientHeight).toFixed(2));
+  const a1 = await ar(); await page.evaluate(() => { FILM.PH = 0.5; FILM.showFrame(FILM.S.films[0]); }); await page.waitForTimeout(200); const a2 = await ar();
+  await page.evaluate(() => { FILM.PH = 2; FILM.showFrame(FILM.S.films[0]); }); await page.waitForTimeout(200); const a3 = await ar();
+  ok(FILM_AR(a1, 16 / 9) && FILM_AR(a2, 16 / 9) && FILM_AR(a3, 16 / 9), '▭ Wide: the picture stays 16:9 over the wide and the tall clip (' + [a1, a2, a3] + ')');
+  ok(await page.$eval('#vA', v => getComputedStyle(v).objectFit)==='contain', 'clips are fitted inside, not stretched');
+  await page.click('[data-act="canvas"][data-v="square"]'); await page.waitForTimeout(300);
+  ok(FILM_AR(await ar(), 1), '◻ Square makes it 1:1');
+  ok(await page.evaluate(() => FILM.needsFit(FILM.S.films[0])), 'clips of another shape need fitting');
+  await page.evaluate(() => { const f = FILM.S.films[0]; f.prev = {id:'p2', pc:'http://render.test', state:'done', ov:1, sig:FILM.sigOf(f), file:{filename:'p.mp4', subfolder:'H3Film/_preview'}}; });
+  ok(!(await page.evaluate(() => FILM.prevOk(FILM.S.films[0]))), "an older helper's preview (stretched clips) isn't played");
+  await page.evaluate(() => { FILM.S.films[0].prev.cv = 1; });
+  ok(await page.evaluate(() => FILM.prevOk(FILM.S.films[0])), "a new helper's preview (cv) is played");
+  // ✂ crop a track (Jordan 2026-11-13: "I also want the ability to crop a video")
+  await page.evaluate(() => { FILM.PH = 0.5; FILM.draw(); }); await page.waitForTimeout(300);
+  await page.click('#tl .trk[data-k="1"] [data-act="trackMenu"]'); await page.waitForTimeout(150);
+  await page.click('#sheetCard [data-act="cropOn"]'); await page.waitForTimeout(300);
+  ok(!!(await page.$('#cropBox .xfbox')), 'track ⋯ › ✂ Crop opens the crop panel');
+  for(const [n, v] of [['l', 33], ['r', 33]]) await page.$eval(`#cropBox [data-cr="${n}"]`, (i, v) => { i.value = v; i.dispatchEvent(new Event('input', {bubbles:true})); i.dispatchEvent(new Event('change', {bubbles:true})); }, v);
+  f = await page.evaluate(() => FILM.S.films[0]);
+  ok(Math.abs(f.tracks[1].crop.l - 0.33) < 1e-9 && Math.abs(f.tracks[1].crop.r - 0.33) < 1e-9, 'the sliders set the crop');
+  const cq = await page.evaluate(() => { const v = [...document.querySelectorAll('#vA,#vB')].find(v => v.dataset.c==='h'); return v ? {cp:v.style.clipPath, w:parseFloat(v.style.width)} : null; });
+  ok(cq && /inset\(0%? 33%/.test(cq.cp) && cq.w > 100, 'the wide clip shows cropped, its middle fitted to the canvas (' + JSON.stringify(cq) + ')');
+  ok((await page.evaluate(() => FILM.expClips(FILM.S.films[0]).out.find(c => c.filename==='h.webm').crop.l))===0.33, '⬇ Export sends the crop');
+  ok(/✂/.test(await page.textContent('#tl .trk[data-k="1"] .tn')), 'the track label shows ✂');
+  if(process.env.SHOT2){ await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); }
+  await page.click('#cropBox [data-act="cropOff"]'); await page.waitForTimeout(200);
+  ok(!(await page.evaluate(() => FILM.S.films[0].tracks[1].crop)) && await page.evaluate(() => !document.querySelector('#vA').style.clipPath && !document.querySelector('#vB').style.clipPath), '↺ No crop takes it off');
+  await page.click('#cropBox [data-act="cropDone"]'); await page.waitForTimeout(200);
+  ok(!(await page.$('#cropBox .xfbox')), '✓ Done closes the crop panel');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); fs.rmSync(tmp, {recursive:true, force:true}); process.exit(fails ? 1 : 0);
 })();
