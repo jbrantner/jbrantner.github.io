@@ -84,3 +84,13 @@ The panel under the picture has Size / Turn / Left·right / Up·down sliders, co
 on the picture, drag = move, two fingers = size + turn (clicks onto quarter turns). Preview/scrub layers one `<video>` per
 overlay track with CSS; ⬇ Export and ⚡ preview send `xf` per clip and the helper draws it with PIL (job answers `ov:1`;
 an older helper's preview isn't used for a film with overlays). Test: `tests/t_overlay.js` (uses ffmpeg for two clips).
+
+## 🖼 Canvas and ✂ Crop (2026-11-13)
+
+Jordan: the canvas shouldn't change with the video. Each film has `f.canvas` = `wide` (16:9), `tall` (9:16) or `square`,
+picked with the buttons above the picture (a film without one takes the shape nearest its first clip, once). The preview
+stays that shape; clips of another shape are scaled to fit with bars, never stretched. ⬇ Export / ⚡ preview send
+`canvas:[w, h]`; the helper makes the output that shape (long side = the first clip's) and fits clips (`_ex_fit`).
+✂ Crop (track ⋯): `tr.crop = {l, t, r, b}` share cut off each edge of every clip on the track; the rest is fitted like a
+clip of that shape (into the canvas, or into the ⧉ picture's box). Preview uses clip-path on the player; the helper crops
+with PIL (`_ex_pics`). The helper's job answers `cv:1`; an older helper's preview isn't used when clips need fitting or cropping.

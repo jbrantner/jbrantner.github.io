@@ -2579,23 +2579,64 @@ def _ex_plan(clips):
     return segs
 
 
+def _ex_pics(c, t0, n, tw, th, fps, mode):
+    """n frames of clip c as PIL pictures of tw x th, cropped first when it has a ✂ crop."""
+    k = c.get('crop')
+    if not k:
+        for fr in _ex_video(c['path'], t0, n, tw, th, fps, fmt='rgba' if mode == 'RGBA' else 'rgb24'):
+            yield None if fr is None else fr.to_image().convert(mode)
+        return
+    from PIL import Image
+    cw, ch = c['dims']
+    box = (int(round(k['l'] * cw)), int(round(k['t'] * ch)), int(round(cw * (1 - k['r']))), int(round(ch * (1 - k['b']))))
+    for fr in _ex_video(c['path'], t0, n, cw, ch, fps, fmt='rgb24'):
+        yield None if fr is None else fr.to_image().crop(box).resize((tw, th), Image.BICUBIC).convert(mode)
+
+
+def _ex_dims(c):
+    """the clip's size after its ✂ crop"""
+    cw, ch = c.get('dims') or (16, 9)
+    k = c.get('crop')
+    return (cw * (1 - k['l'] - k['r']), ch * (1 - k['t'] - k['b'])) if k else (cw, ch)
+
+
+def _ex_fit(c, t0, n, W, H, fps):
+    """🖼 a full-frame clip on the film's canvas (2026-11-13): a clip of another shape is scaled to fit inside it, with black
+    bars, never stretched."""
+    import av
+    from PIL import Image
+    cw, ch = _ex_dims(c) if c.get('dims') else (W, H)
+    ca, fa = cw / float(max(1, ch)), W / float(H)
+    if abs(ca / fa - 1) <= 0.02 and not c.get('crop'):
+        yield from _ex_video(c['path'], t0, n, W, H, fps)
+        return
+    fw, fh = (W, W / ca) if ca > fa else (H * ca, H)
+    fw, fh = max(2, int(round(fw))), max(2, int(round(fh)))
+    if abs(ca / fa - 1) <= 0.02:
+        fw, fh = W, H
+    for pic in _ex_pics(c, t0, n, fw, fh, fps, 'RGB'):
+        if pic is None:
+            yield None
+            continue
+        im = Image.new('RGB', (W, H))
+        im.paste(pic, ((W - fw) // 2, (H - fh) // 2))
+        yield av.VideoFrame.from_image(im).reformat(format='yuv420p')
+
+
 def _ex_over(o, t0, n, W, H, fps):
     """n frames of a ⧉ overlay clip as (PIL RGBA picture, left, top) to paste on a W x H frame: fitted inside the frame,
     sized by xf.s, turned by xf.r (clockwise, see-through corners) and centred at the frame's middle + (x * W, y * H)."""
     from PIL import Image
-    xf, (cw, ch) = o['xf'], o['dims']
+    xf, (cw, ch) = o['xf'], _ex_dims(o)
     fa, ca = W / float(H), cw / float(max(1, ch))
     fw, fh = (W, W / ca) if ca > fa else (H * ca, H)
     ow, oh = max(2, int(round(fw * xf['s']))), max(2, int(round(fh * xf['s'])))
     cx, cy = W / 2.0 + xf['x'] * W, H / 2.0 + xf['y'] * H
     r = xf['r']
-    for fr in _ex_video(o['path'], t0, n, ow, oh, fps, fmt='rgba'):
-        if fr is None:
+    for im in _ex_pics(o, t0, n, ow, oh, fps, 'RGBA'):
+        if im is None:
             yield None
             continue
-        im = fr.to_image()
-        if im.mode != 'RGBA':
-            im = im.convert('RGBA')
         if abs(r) > 1e-3:
             im = im.rotate(-r, resample=Image.BICUBIC, expand=True)
         yield im, int(round(cx - im.width / 2.0)), int(round(cy - im.height / 2.0))
@@ -2664,7 +2705,7 @@ def _ex_run(job, clips):
             for c in ([s[2]] if s[2] else []) + list(s[3]):
                 if 'path' not in c:
                     c['path'] = _ex_find(c)
-                if c['xf'] and 'dims' not in c:
+                if 'dims' not in c:
                     with av.open(c['path']) as src:
                         cc = src.streams.video[0].codec_context
                         c['dims'] = (cc.width or 16, cc.height or 9)
@@ -2672,6 +2713,11 @@ def _ex_run(job, clips):
             v0 = first.streams.video[0]
             fps = Fraction(v0.average_rate or 24).limit_denominator(1001)
             w, h = v0.codec_context.width // 2 * 2, v0.codec_context.height // 2 * 2
+            cv = job.get('canvas')
+            if cv:  # 🖼 the film's own shape (wide / tall / square), its long side as long as the first clip's
+                L = max(w, h)
+                w, h = (L, L * cv[1] / cv[0]) if cv[0] >= cv[1] else (L * cv[0] / cv[1], L)
+                w, h = max(2, int(round(w)) // 2 * 2), max(2, int(round(h)) // 2 * 2)
             if job.get('preview'):
                 w, h = max(2, int(w * 0.5) // 2 * 2), max(2, int(h * 0.5) // 2 * 2)
         rate, T = 48000, segs[-1][1]
@@ -2706,7 +2752,7 @@ def _ex_run(job, clips):
                 if job.get('cancel'):
                     raise RuntimeError('Stopped')
                 n = int(round(b * fps)) - vi
-                frames = _ex_video(c['path'], c['in_'] + a - c['at'], n, w, h, float(fps)) if c else (black for _ in range(n))
+                frames = (_ex_fit(c, c['in_'] + a - c['at'], n, w, h, float(fps)) if job.get('canvas') or c.get('crop') else _ex_video(c['path'], c['in_'] + a - c['at'], n, w, h, float(fps))) if c else (black for _ in range(n))
                 overs = [_ex_over(o, o['in_'] + a - o['at'], n, w, h, float(fps)) for o in ovs]
                 for fr in frames:
                     fr = fr or black
@@ -2752,15 +2798,35 @@ def _ex_run(job, clips):
             pass
 
 
+def _ex_crop(x):
+    """✂ the share cut off each edge {l, t, r, b} (0..0.45 each); None = no crop."""
+    if not isinstance(x, dict):
+        return None
+    try:
+        k = {e: max(0.0, min(0.45, float(x.get(e) or 0))) for e in 'ltrb'}
+        return k if any(k.values()) else None
+    except Exception:
+        return None
+
+
+def _ex_canvas(x):
+    """🖼 the film's canvas shape [w, h] (e.g. [16, 9], [9, 16], [1, 1]); None = the first clip's size, as before."""
+    try:
+        a, b = float(x[0]), float(x[1])
+        return (a, b) if a > 0 and b > 0 and 0.2 < a / b < 5 else None
+    except Exception:
+        return None
+
+
 @routes.post('/renderdeck/h3export')
 async def h3export(request):
-    """{name, clips:[{filename, subfolder, in, out, at, track, xf?}]} (seconds; track 0 is the top one; xf = ⧉ size/turn/place,
-    see _ex_xf) -> {id, ov:1} (ov tells the app this helper draws picture-in-picture tracks)"""
+    """{name, clips:[{filename, subfolder, in, out, at, track, xf?}], canvas?:[w, h]} (seconds; track 0 is the top one; xf = ⧉ size/turn/place,
+    see _ex_xf) -> {id, ov:1, cv:1} (ov / cv tell the app this helper draws picture-in-picture tracks / fits clips into the canvas)"""
     try:
         import threading
         body = await request.json()
         clips = [{'filename': str(c['filename']), 'subfolder': str(c.get('subfolder') or ''), 'in': float(c['in']), 'out': float(c['out']),
-                  'at': float(c['at']), 'track': int(c.get('track') or 0), 'xf': _ex_xf(c.get('xf'))} for c in body.get('clips', [])][:500]
+                  'at': float(c['at']), 'track': int(c.get('track') or 0), 'xf': _ex_xf(c.get('xf')), 'crop': _ex_crop(c.get('crop'))} for c in body.get('clips', [])][:500]
         if not clips:
             raise ValueError('The timeline has no clips')
         name = re.sub(r'[^\w\- ]+', '_', str(body.get('name') or 'film')).strip()[:60] or 'film'
@@ -2768,7 +2834,7 @@ async def h3export(request):
             EXPORTS.pop(k, None)
         jid = uuid.uuid4().hex[:12]
         EXPORTS[jid] = job = {'id': jid, 'name': name, 'state': 'working', 'done': 0, 'total': 0, 't_added': time.time(),
-                              'ov': 1, 'preview': bool(body.get('preview'))}  # ⚡ H3 Deck's playback preview: half size, fast encode, one file per film (overwritten)
+                              'ov': 1, 'cv': 1, 'canvas': _ex_canvas(body.get('canvas')), 'preview': bool(body.get('preview'))}  # ⚡ H3 Deck's playback preview: half size, fast encode, one file per film (overwritten)
         threading.Thread(target=_ex_run, args=(job, clips), daemon=True).start()
         return web.json_response(job)
     except Exception as e:
