@@ -67,3 +67,9 @@ Drag snapping: both the start and the end of a dragged clip snap to other clips'
 Empty space (2026-11-06): tap the gap between clips on a track (or before the first clip); it is outlined, and its 🗑 button (or the 🗑 tool) closes it, moving every later clip on that track earlier together. Other tracks stay put; ↶ Undo brings it back.
 
 Speed (2026-11-06): inside H3 Deck, Films reads takes straight from H3 Deck (it used to re-read and parse the multi-MB h3deck save several times per scroll event); scroll scrubbing runs once per frame; seeks are coalesced (only the newest wanted time is applied when a seek lands); the Shot box gets the words when a scrub rests (250 ms); H3 Deck takes-list videos only load when on screen.
+
+## Separate tracks in bare bones (2026-11-13)
+Jordan: "render one track and generate in another", and slide a whole track. Bare bones had hidden empty tracks, ＋ Track and dragging between tracks; they're back (nothing else unhidden).
+- Every track shows, ＋ Track is in the tools, and a selected clip drags up or down to another track.
+- 🎬 track: new clips (Render from the form with no clip selected, 📤 Upload, 🎞 One you've made) go on the end of the track you tapped last (a clip or empty space on it), or the one picked with 🎬 New clips go on this track in its ⋯ menu. ＋ Track makes the new track the 🎬 track. Before any tap it's the track that ends last, as before. Kept in memory while the app is open (`ACT`).
+- ⇔ Select the whole track (track ⋯ menu): every clip on it is selected (`TSEL`); dragging any of them slides them all, keeping their spacing, never before 0 s. Any of their starts or ends snaps to the edges of clips on the other tracks, the playhead and 0 (pink line). Done (in the note) or tapping empty space / a clip on another track ends it. ↶ Undo takes a slide back. Test: tests/t_tracks.js.
