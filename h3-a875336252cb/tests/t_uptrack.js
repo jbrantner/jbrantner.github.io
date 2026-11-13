@@ -125,7 +125,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const CT2 = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.seam && x.combo.seam.run==='u3'); return t && {parts:t.combo.parts.length, frames:t.combo.seam.frames}; });
   ok(CT.state==='seams' && CT.n===1 && CT2 && CT2.parts===2 && JSON.stringify(CT2.frames)==='[120]', '✂ a cut join is left as a hard cut: only the ⛓ joins are blended: ' + JSON.stringify({CT, CT2}));
   // retry: a seam that fails shows the error and 🧵 Blend the seams again
-  const RT = await fr.evaluate(() => { const f = FILM.S.films[0]; f.upRun = {id:'u2', track:'tr1', state:'seams', seams:['kX'], hq:[]}; return true; });
+  const RT = await fr.evaluate(() => { const f = FILM.S.films[0]; f.upRun = {id:'u2', track:'tr1', state:'seams', seams:['kX'], hq:[], tries:{tX:2}}; return true; });
   await page.evaluate(() => { H3.S.takes.unshift({id:'tX', t:Date.now(), pc:'http://render.test', state:'failed', pieces:[{state:'failed', err:'boom'}], combo:{seam:{rk:'kX', run:'u2'}, parts:[]}, prompt:''}); H3.saveNow(); });
   const S5 = await fr.evaluate(async () => { await new Promise(z => setTimeout(z, 300)); FILM.placeNew(); FILM.draw(); const f = FILM.S.films[0]; return {err:f.upRun.err, again:(document.querySelector('[data-act="upSeams"]') || {}).textContent}; });
   ok(/boom/.test(S5.err) && /again/.test(S5.again || ''), 'a failed seam shows its error and offers 🧵 Blend the seams again: ' + JSON.stringify(S5));
@@ -135,9 +135,30 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const AT = await page.evaluate(keys => keys.map(k => (H3.S.takes.find(x => x.redo && x.redo.key===k) || {}).id), AN.keys);
   await done(AT[0], 'an1_00001.mp4'); await done(AT[2], 'an3_00001.mp4');
   await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); Object.assign(t, {state:'failed', upErr:'boom'}); H3.saveNow(); }, AT[1]);
-  const AF = await fr.evaluate(async before => { await new Promise(z => setTimeout(z, 300)); FILM.placeNew(); const f = FILM.S.films[0], tr = f.tracks[0];
+  const AF = await fr.evaluate(async before => { await new Promise(z => setTimeout(z, 300)); const R0 = FILM.S.films[0].upRun; R0.tries = {}; R0.hq.forEach(h => R0.tries[h.key] = 2); FILM.placeNew(); const f = FILM.S.films[0], tr = f.tracks[0];
     return {state:f.upRun.state, err:f.upRun.err, same:tr.clips.every((c, i) => c.take===before[i]), dropped:(FILM.S.passes || []).filter(p => p.dropped).length}; }, AN.before);
   ok(AN.n===3 && AT.every(Boolean) && AF.state==='stopped' && /1 of 3/.test(AF.err) && AF.same && AF.dropped===2, '⬆ all or nothing: with 1 of 3 ✨ clips failed, no clip gets ✨ (the 2 done ones are let go) and the run stops: ' + JSON.stringify({AN:AN.n, AF}));
+  // ↻ a failed ✨ clip of the run is sent again by itself (after a short wait), the run keeps going; the parts that worked are kept
+  const RY = await fr.evaluate(async () => { const f = FILM.S.films[0], tr = f.tracks[0]; f.upRun = null; const n = await FILM.upTrackGo(f, tr, 0.9, ''); return {n, keys:f.upRun.hq.map(h => h.key)}; });
+  const RYT = await page.evaluate(keys => keys.map(k => (H3.S.takes.find(x => x.redo && x.redo.key===k) || {}).id), RY.keys);
+  await done(RYT[0], 'ry1_00001.mp4'); await done(RYT[2], 'ry3_00001.mp4');
+  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); Object.assign(t, {state:'failed', upErr:'out of memory'}); H3.saveNow(); }, RYT[1]);
+  const RY1 = await fr.evaluate(async k => { await new Promise(z => setTimeout(z, 300)); FILM.placeNew(); const R = FILM.S.films[0].upRun, r = {state0:R.state, wait:!!(R.failAt || {})[k]};
+    R.failAt[k] = Date.now() - 60000; FILM.placeNew(); await new Promise(z => setTimeout(z, 2500)); FILM.placeNew();
+    const p = FILM.S.passes.find(x => x.key===k); return Object.assign(r, {state:R.state, tries:(R.tries || {})[k], pass:p.state, takes:FILM.takes().filter(x => x.redo && x.redo.key===k).length}); }, RY.keys[1]);
+  ok(RY.n===3 && RY1.state0==='hq' && RY1.wait && RY1.state==='hq' && RY1.tries===1 && RY1.pass==='working' && RY1.takes===2, '↻ a failed ✨ clip is sent again by itself after a short wait (try 1 of 2) and the run keeps going: ' + JSON.stringify(RY1));
+  await fr.evaluate(() => { FILM.S.films[0].upRun = null; FILM.S.passes.forEach(p => { if(p.state==='working' || p.state==='ready'){ p.state = 'done'; p.dropped = true; } }); });
+  // ↻ a failed 🧵 seam is sent again by itself (H3 Deck's retry), and only after its tries are used up does the run show the error
+  const RS = await fr.evaluate(async () => { const f = FILM.S.films[0], calls = []; const old = window.parent.H3Retry; window.parent.H3Retry = async id => { calls.push(id); return true; };
+    f.upRun = {id:'u8', track:'tr1', state:'seams', seams:['kZ'], hq:[], failAt:{tZ:Date.now() - 60000}}; await new Promise(z => setTimeout(z, 50));
+    window.parent.H3.S.takes.unshift({id:'tZ', t:Date.now(), pc:'http://render.test', state:'failed', pieces:[{state:'failed', err:'HostBuffer.read_file_slice failed'}], combo:{seam:{rk:'kZ', run:'u8', one:true}, parts:[]}, prompt:''});
+    FILM.upTick(); await new Promise(z => setTimeout(z, 300)); const R = f.upRun, r = {calls:calls.slice(), tries:R.tries && R.tries.tZ, err:R.err || ''};
+    R.tries.tZ = 2; FILM.upTick(); r.err2 = R.err; window.parent.H3Retry = old; window.parent.H3.S.takes = window.parent.H3.S.takes.filter(x => x.id!=='tZ'); f.upRun = null; return r; });
+  ok(RS.calls.join()==='tZ' && RS.tries===1 && !RS.err && /HostBuffer/.test(RS.err2 || ''), '↻ a failed 🧵 seam is sent again by itself; after 2 tries the run shows the error: ' + JSON.stringify(RS));
+  // ↻ H3 Deck's retry of a failed take: the PC's memory is freed, then the failed piece goes again
+  const RK = await page.evaluate(async () => { const a = H3.S.takes.find(x => x.id==='tA'), t = JSON.parse(JSON.stringify(a)); Object.assign(t, {id:'tK', state:'failed', final:null}); t.pieces[0].state = 'failed'; t.pieces[0].err = 'boom';
+    H3.S.takes.unshift(t); const ok1 = await H3.retryTake(t); const r = {ok:ok1, state:t.state, piece:t.pieces[0].state, err:t.pieces[0].err, tries:t.retries}; H3.S.takes = H3.S.takes.filter(x => x.id!=='tK'); return r; });
+  ok(RK.ok && RK.state==='working' && RK.piece==='queued' && !RK.err && RK.tries===1, '↻ retryTake sends the failed piece again: ' + JSON.stringify(RK));
   // 🪄 Smooth first: every clip is smoothed (keyframes pinned from its own stretch, read straight from the PC's output), then ✨ runs on the smoothed takes
   const gS = sent.length;
   const SA = await fr.evaluate(async () => { const f = FILM.S.films[0], tr = f.tracks[0]; f.upRun = null; const before = tr.clips.map(c => c.take);
@@ -196,7 +217,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const who = tr.clips.map(c => FILM.autoFaceOf(c)); f.upRun = {id:'u4', track:tr.id, state:'faces', all:true, hq:[], qw:''};
     FILM.upTick(); await new Promise(z => setTimeout(z, 2500)); const R = f.upRun, ps = (FILM.S.passes || []).filter(p => (R.fk || []).includes(p.key));
     const r = {who, fk:(R.fk || []).length, skip:R.fskip, faces:ps.map(p => JSON.stringify(p.o.faces) + p.o.find + p.o.den + ':' + p.o.str), state0:R.state, box:FILM.upRunHtml(f).includes('🌙 🎭 Faces')};
-    ps.forEach(p => { p.state = 'failed'; }); FILM.upTick(); await new Promise(z => setTimeout(z, 2500)); r.state1 = f.upRun.state; r.seams = (f.upRun.seams || []).length; return r; });
+    R.tries = {}; ps.forEach(p => { p.state = 'failed'; R.tries[p.key] = 2; }); FILM.upTick(); await new Promise(z => setTimeout(z, 2500)); r.state1 = f.upRun.state; r.seams = (f.upRun.seams || []).length; return r; });
   ok(AL.who.every(n => n===1) && AL.fk===3 && AL.skip===0 && AL.faces.every(x => x==='[{"n":1,"obj":0}]face0.6:0') && AL.state0==='faces' && AL.box && AL.state1==='seams' && AL.seams===1, '🌙 Do it all: ✨ done → 🎭 on every one-person clip by itself (her first face, the last 🎭 strength and LoRA), and when they\'re done (failed ones keep their clip) the 🧵 seams start: ' + JSON.stringify(AL));
   const NF = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.tracks.some(t => t.id==='tr1')), tr = f.tracks.find(t => t.id==='tr1'); const p0 = (FILM.S.passes || []).length;
     f.upRun = {id:'u5', track:tr.id, state:'faces', all:true, noFaces:true, hq:[], qw:''}; FILM.upTick(); await new Promise(z => setTimeout(z, 2500));
