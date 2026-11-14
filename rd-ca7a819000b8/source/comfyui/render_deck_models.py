@@ -2998,6 +2998,105 @@ def _ex_run(job, clips):
             pass
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# ⚡ scrub copies (Jordan 2026-11-14, "Is there any way to improve the playback and scrubbing for the video edits?"):
+# the phone plays and scrubs a small copy of each clip instead of the full one over Tailscale. Long side 640, a keyframe
+# every 6 frames (any spot is at most 5 frames from one, so a seek is instant), same frame rate, length and sound as the
+# clip, moov at the front. Made once, kept in user/render_deck_h3proxy next to the helper (newest 400 kept), then the
+# phone keeps its own copy too. GET /renderdeck/h3proxy?filename&subfolder&type = the copy (made first if it's new).
+PX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'user', 'render_deck_h3proxy')
+PX_LONG, PX_GOP, PX_KEEP = 640, 6, 400
+_px_busy = {}
+_px_sem = None
+
+
+def _px_path(src):
+    import hashlib
+    st = os.stat(src)
+    k = hashlib.sha1(('%s|%d|%d|v1' % (os.path.realpath(src), st.st_size, int(st.st_mtime))).encode('utf-8')).hexdigest()[:24]
+    return os.path.join(PX_DIR, k + '.mp4')
+
+
+def _px_make(src, out):
+    import av, numpy as np
+    from fractions import Fraction
+    with av.open(src) as f:
+        vs = f.streams.video[0]
+        fps = Fraction(vs.average_rate or 24).limit_denominator(1001)
+        cw, ch = vs.codec_context.width or 16, vs.codec_context.height or 9
+        dur = float(vs.duration * vs.time_base) if vs.duration else (f.duration / 1e6 if f.duration else 0.0)
+        n = int(vs.frames or 0) or max(1, int(round(dur * float(fps))))
+        snd = bool(f.streams.audio)
+    k = PX_LONG / float(max(cw, ch))
+    w, h = (cw, ch) if k >= 1 else (cw * k, ch * k)
+    w, h = max(2, int(round(w)) // 2 * 2), max(2, int(round(h)) // 2 * 2)
+    rate = 48000
+    os.makedirs(PX_DIR, exist_ok=True)
+    with av.open(out + '.part', 'w', format='mp4', options={'movflags': 'faststart'}) as dst:
+        codec = next(c for c in ('libx264', 'h264', 'libopenh264', 'mpeg4') if c in av.codecs_available)
+        vo = dst.add_stream(codec, rate=fps)
+        vo.width, vo.height, vo.pix_fmt = w, h, 'yuv420p'
+        vo.codec_context.gop_size = PX_GOP
+        if codec == 'libx264':
+            vo.options = {'crf': '27', 'preset': 'veryfast', 'keyint_min': str(PX_GOP), 'sc_threshold': '0', 'bf': '0'}
+        ao = None
+        if snd:  # (every stream is added before anything is written)
+            ao = dst.add_stream('aac', rate=rate)
+            ao.layout = 'stereo'
+        for i, fr in enumerate(_ex_video(src, 0.0, n, w, h, float(fps))):
+            if fr is None:
+                break
+            fr.pts, fr.time_base = i, Fraction(1) / fps
+            for p in vo.encode(fr):
+                dst.mux(p)
+        for p in vo.encode(None):
+            dst.mux(p)
+        if ao:
+            ns = int(round(n / float(fps) * rate))
+            a = _ex_audio(src, 0.0, ns, rate)
+            for k0 in range(0, ns, 4096):
+                af = av.AudioFrame.from_ndarray(np.ascontiguousarray(a[:, k0:k0 + 4096]), format='fltp', layout='stereo')
+                af.sample_rate, af.pts, af.time_base = rate, k0, Fraction(1, rate)
+                for p in ao.encode(af):
+                    dst.mux(p)
+            for p in ao.encode(None):
+                dst.mux(p)
+    os.replace(out + '.part', out)
+    try:  # keep the newest PX_KEEP copies
+        old = sorted((os.path.join(PX_DIR, x) for x in os.listdir(PX_DIR) if x.endswith('.mp4')), key=os.path.getmtime)
+        for x in old[:-PX_KEEP]:
+            os.remove(x)
+    except Exception:
+        pass
+
+
+@routes.get('/renderdeck/h3proxy')
+async def h3proxy(request):
+    global _px_sem
+    try:
+        q = request.query
+        src = _ex_find({'filename': q.get('filename') or '', 'subfolder': q.get('subfolder') or ''})
+        out = _px_path(src)
+        if not os.path.isfile(out):
+            if _px_sem is None:
+                _px_sem = asyncio.Semaphore(2)  # (two at a time: the CPU stays free for ComfyUI)
+            fut = _px_busy.get(out)
+            if fut is None:
+                async def run():
+                    async with _px_sem:
+                        if not os.path.isfile(out):
+                            await asyncio.get_event_loop().run_in_executor(None, _px_make, src, out)
+                fut = _px_busy[out] = asyncio.ensure_future(run())
+                fut.add_done_callback(lambda _f: _px_busy.pop(out, None))
+            await asyncio.shield(fut)
+        return web.FileResponse(out, headers={'Content-Type': 'video/mp4', 'Cache-Control': 'max-age=31536000, immutable', 'X-H3-Proxy': '1'})
+    except FileNotFoundError as e:
+        return web.json_response({'error': str(e)}, status=404)
+    except Exception as e:
+        print('[Render Deck] scrub copy:', e)
+        return web.json_response({'error': str(e)}, status=500)
+
+
 def _ex_crop(x):
     """✂ the share cut off each edge {l, t, r, b} (0..0.45 each); None = no crop."""
     if not isinstance(x, dict):

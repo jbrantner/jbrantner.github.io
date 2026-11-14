@@ -405,6 +405,45 @@ async function findLost(id){ const on = pcs().filter(p => pcOf(p.url).online); i
 const pcs = () => (window.FILM_PCS || (deck().pcs && deck().pcs.length ? deck().pcs : DEFAULT_PCS));
 const pcName = url => (pcs().find(p => p.url===url) || {}).name || 'PC';
 const viewUrl = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
+// ⚡ scrubbing (Jordan 2026-11-14: "Is there any way to improve the playback and scrubbing for the video edits? Should it be kept
+// locally on the phone?"): the timeline plays a small scrub copy of each clip made by the PC's helper (/renderdeck/h3proxy: long
+// side 640, a keyframe every 6 frames, same length and sound), kept on the phone (Cache API) and played from memory, so a seek
+// never waits for Tailscale or for the decoder to run up from the clip's first frame. Until a clip's copy is on the phone it plays
+// from the PC as before. A PC with an older helper: the full clip is kept on the phone instead. Export always uses the full clips.
+const PXC = 'h3scrub1', PXMAX = 300, PX = {url:{}, busy:{}, q:[], run:0, old:{}, of:{}};
+const pxKey = (pc, f) => 'https://h3scrub.local/' + encodeURIComponent(pc + '|' + (f.subfolder || '') + '/' + f.filename);
+const pxUrl = (pc, f) => pc + '/renderdeck/h3proxy?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
+function playUrl(pc, f){ if(!pc || !f || !f.filename) return ''; const k = pxKey(pc, f); if(PX.url[k]) return PX.url[k]; pxWant(pc, f); return viewUrl(pc, f); }
+function pxWant(pc, f, first){ if(!pc || !f || !f.filename || typeof caches==='undefined') return; const k = pxKey(pc, f); if(PX.url[k] || PX.busy[k]) return;
+  PX.busy[k] = 1; PX.q[first ? 'unshift' : 'push']([k, pc, f]); pxRun(); }
+function pxRun(){ while(PX.run < 2 && PX.q.length){ const [k, pc, f] = PX.q.shift(); PX.run++; pxGet(k, pc, f).catch(() => {}).finally(() => { PX.run--; delete PX.busy[k]; pxRun(); }); } }
+function pxSeen(k){ try{ const L = JSON.parse(localStorage.getItem('h3scrub') || '{}'); L[k] = Date.now(); const ks = Object.keys(L).sort((a, b) => L[a] - L[b]);
+    const drop = ks.slice(0, Math.max(0, ks.length - PXMAX)); drop.forEach(x => delete L[x]); localStorage.setItem('h3scrub', JSON.stringify(L));
+    if(drop.length) caches.open(PXC).then(C => drop.forEach(x => C.delete(x))).catch(() => {}); }catch(e){} }
+async function pxGet(k, pc, f){
+  const C = await caches.open(PXC); let r = await C.match(k);
+  if(!r){ let got = null;
+    if(!PX.old[pc]){ try{ const x = await fetch(pxUrl(pc, f)); if(x.ok && x.headers.get('X-H3-Proxy')) got = x;
+        else if(x.status===404 && !/json/.test(x.headers.get('Content-Type') || '')) PX.old[pc] = 1; // (no such page: this PC's helper is older)
+        else return; }catch(e){ return; } }
+    if(!got){ try{ const x = await fetch(viewUrl(pc, f)); if(!x.ok) return; got = x; }catch(e){ return; } }
+    const b = await got.blob(); if(!b.size) return; r = new Response(b, {headers:{'Content-Type':'video/mp4'}}); try{ await C.put(k, r.clone()); }catch(e){} }
+  const b = await r.blob(); if(!b.size) return; PX.url[k] = URL.createObjectURL(b.type ? b : new Blob([b], {type:'video/mp4'})); PX.of[PX.url[k]] = decodeURIComponent(k.split('/').pop()); pxSeen(k); pxSwap(viewUrl(pc, f), PX.url[k]); }
+// a paused video still showing the clip from the PC switches to the phone's copy, at the same spot
+function pxSwap(full, blob){ document.querySelectorAll('video').forEach(v => { const cur = v.getAttribute('src') || ''; if(cur.split('#')[0]!==full || !v.paused) return;
+  const at = v.currentTime || 0, frag = cur.includes('#') ? '#' + cur.split('#')[1] : ''; if(v.dataset.src===full || v.dataset.src===cur) v.dataset.src = blob + frag;
+  v.src = blob + frag; if(at > 0.01) v.addEventListener('loadedmetadata', () => { try{ v.currentTime = at; }catch(e){} }, {once:true}); }); }
+// opening the app: the shot on screen gets its kept copies before it's drawn (so it never starts on the PC's full clips)
+async function pxBoot(){ if(typeof caches==='undefined') return; let L = {}; try{ L = JSON.parse(localStorage.getItem('h3scrub') || '{}'); }catch(e){}
+  const f = N().v==='film' && filmOf(N().film); if(!f) return; const want = [];
+  for(const c of f.tracks.flatMap(tr => tr.clips)){ const t = takeOf(c.take), fl = fileOf(t); if(t && fl && L[pxKey(t.pc, fl)]) want.push([pxKey(t.pc, fl), t.pc, fl]); }
+  if(f.prev && f.prev.file && L[pxKey(f.prev.pc, f.prev.file)]) want.push([pxKey(f.prev.pc, f.prev.file), f.prev.pc, f.prev.file]);
+  if(!want.length) return; const C = await caches.open(PXC);
+  await Promise.all(want.map(async ([k, pc, fl]) => { try{ const r = await C.match(k); if(!r) return; const b = await r.blob(); if(b.size){ PX.url[k] = URL.createObjectURL(b.type ? b : new Blob([b], {type:'video/mp4'})); PX.of[PX.url[k]] = decodeURIComponent(k.split('/').pop()); } }catch(e){} })); }
+const pxName = u => PX.of[String(u || '').split('#')[0]] || u || ''; // (which clip a scrub copy is)
+// every clip of the film (or shot) on screen is fetched ahead, the one under the playhead first
+function pxFilm(f, at){ if(!f) return; const cs = f.tracks.flatMap(tr => tr.clips).filter(c => !c.gap).sort((a, b) => Math.abs(a.at - (at || 0)) - Math.abs(b.at - (at || 0)));
+  for(const c of cs){ const t = takeOf(c.take), fl = fileOf(t); if(t && fl) pxWant(t.pc, fl); } if(f.prev && f.prev.file) pxWant(f.prev.pc, f.prev.file); }
 // a take's finished length: a ↻ redo is the whole spliced take; a carried-on take starts with the video it carried on
 const ownCarry = t => !!(t && t.carry && t.carry.own && (t.cont || t.carry.still)); // ➕ from Films: its video is only the new part (its own clip)
 const secsOf = t => t.redo && t.redo.Fout ? t.redo.Fout / FPS : (t.pieces || []).reduce((a, p) => a + (p.deliv || 0), 0) / FPS + (t.cont && !ownCarry(t) ? +t.contSecs || 0 : 0);
@@ -574,7 +613,7 @@ function draw(){ document.body.classList.toggle('bare', BARE());
   if(mv){ go({v:'film', film:editOf(mv).id}); return; }
   $('#view').innerHTML = f ? (f.edit ? editView(f) : filmView(f)) : mv ? movieView(mv) : v==='review' ? reviewView() : homeView();
   if(mv){ wireMovie(mv); const V = mvFilm(mv); if(V.exp && V.exp.state==='working') expPoll(V); else if(V.exp && V.exp.state==='done') expFetch(V); }
-  if(f){ wireFilm(f); { const b = PSEL && blockOf(f, PSEL); if(b) blockSheet(f, b); } clipPanel(f, SEL && clipOf(f, SEL)); /* a redraw keeps the selected clip's words panel (it went blank after any refresh) */ if(f.exp && f.exp.state==='working') expPoll(f); else if(f.exp && f.exp.state==='done') expFetch(f); if(f.fin && f.fin.state==='working') finPoll(f); }
+  if(f){ wireFilm(f); pxFilm(f, PH); { const b = PSEL && blockOf(f, PSEL); if(b) blockSheet(f, b); } clipPanel(f, SEL && clipOf(f, SEL)); /* a redraw keeps the selected clip's words panel (it went blank after any refresh) */ if(f.exp && f.exp.state==='working') expPoll(f); else if(f.exp && f.exp.state==='done') expFetch(f); if(f.fin && f.fin.state==='working') finPoll(f); }
 }
 // redraw what can change by itself without disturbing a playing video or a drag
 function drawSoft(){ if(N().v==='film'){ drawDots(); return; } const pl = $$('#view video').some(v => !v.paused); if(pl) return; draw(); }
@@ -591,7 +630,7 @@ function homeView(){
 // 🎞 a film: its shots in order. Tap a shot to open its own timeline; ⬆⬇ to reorder; ▶ plays them all; ⬇ Export joins them.
 function movieView(m){ const sh = shotsOfM(m), V = mvFilm(m), T = movieSecs(m), ar = canvasAr(V);
   const thumb = f => { const c = f.tracks.flatMap(tr => tr.hide ? [] : tr.clips).sort((a, b) => a.at - b.at)[0], t = c && takeOf(c.take), fl = t && fileOf(t);
-    return fl ? `<video muted playsinline preload="metadata" src="${esc(viewUrl(t.pc, fl))}#t=${(c.in + 0.05).toFixed(2)}"></video>` : (c ? 'rendering…' : 'empty'); };
+    return fl ? `<video muted playsinline preload="metadata" src="${esc(playUrl(t.pc, fl))}#t=${(c.in + 0.05).toFixed(2)}"></video>` : (c ? 'rendering…' : 'empty'); };
   return crumb([['Films', {v:'home'}], [m.name]]) +
   `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-mname value="${esc(m.name)}" placeholder="Film name"><button class="btn warn" data-act="mvDel" aria-label="Delete film">🗑</button></div>
   <video class="mvplay" id="mvV" playsinline style="--ar:${ar}" ${S.snd ? '' : 'muted'}></video>
@@ -609,7 +648,7 @@ function editView(f){ const m = movieOf(f.movie), sh = shotsOfM(m), T = filmSecs
   const use = {}; f.tracks.forEach(tr => tr.clips.forEach(c => { if(isNest(c.take)) use[c.take.slice(NEST.length)] = (use[c.take.slice(NEST.length)] || 0) + 1; }));
   const stat = x => { const q = x.nx, n = use[x.id] || 0; if(!n) return ''; if(q && q.state==='working') return ' · ⏳ updating in the film'; if(q && q.state==='failed' && q.sig===sigOf(x)) return ' · ⚠ couldn\'t update: ' + esc(q.error || ''); if(!sigOf(x)) return ' · in the film (waiting for its clips)'; return nestStale(x) ? ' · ⏳ updating in the film' : ' · ✓ in the film' + (n > 1 ? ' ×' + n : ''); };
   const thumb = x => { const c = x.tracks.flatMap(tr => tr.hide ? [] : tr.clips).sort((a, b) => a.at - b.at)[0], t = c && takeOf(c.take), fl = t && fileOf(t);
-    return fl ? `<video muted playsinline preload="metadata" src="${esc(viewUrl(t.pc, fl))}#t=${(c.in + 0.05).toFixed(2)}"></video>` : (c ? 'rendering…' : 'empty'); };
+    return fl ? `<video muted playsinline preload="metadata" src="${esc(playUrl(t.pc, fl))}#t=${(c.in + 0.05).toFixed(2)}"></video>` : (c ? 'rendering…' : 'empty'); };
   const selShot = st && st.nestOf && filmOf(st.nestOf);
   return crumb([['Films', {v:'home'}], [m ? m.name : f.name]]) +
   `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-mname value="${esc(m ? m.name : f.name)}" placeholder="Film name"><button class="btn warn" data-act="mvDel" aria-label="Delete film">🗑</button></div>
@@ -632,7 +671,7 @@ function mvStop(){ if(!MVP) return; const v = MVP.v; MVP = null; try{ v.pause();
 function mvPlay(m){ if(MVP){ mvStop(); return; } const v = $('#mvV'); if(!v) return; const segs = mvSegs(mvFilm(m)); if(!segs.length){ toast('No finished clips to play yet'); return; }
   MVP = {segs, i:-1, v}; const b = $('#mvPlayBtn'); if(b) b.textContent = '⏸ Stop';
   const next = () => { if(!MVP || MVP.v!==v) return; MVP.i++; const g = MVP.segs[MVP.i]; if(!g){ mvStop(); return; } const t = takeOf(g.c.take), fl = t && fileOf(t); if(!fl){ next(); return; }
-    const src = viewUrl(t.pc, fl), from = g.c.in + (g.a - g.c.at); MVP.end = g.c.in + (g.b - g.c.at);
+    const src = playUrl(t.pc, fl), from = g.c.in + (g.a - g.c.at); MVP.end = g.c.in + (g.b - g.c.at);
     const start = () => { try{ v.currentTime = from; }catch(e){} v.play().catch(() => {}); };
     if(v.dataset.src!==src){ v.dataset.src = src; v.src = src; v.addEventListener('loadedmetadata', start, {once:true}); } else start(); };
   v.ontimeupdate = () => { if(MVP && MVP.v===v && v.currentTime >= MVP.end - 0.03) next(); };
@@ -704,7 +743,7 @@ function takeWhere(id){ const t = takeOf(id); if(!t || !t.film) return null; con
 function stripHtml(sel, t0){ if(!t0) return '';
   const vs = clipVers(sel.c, t0); if(vs.length < 2 && fileOf(t0) && !(t0.carry && t0.carry.key) && !(t0.carry && prevTouching(sel))) return '';
   return `<div class="lab" style="margin-top:8px"><span>Takes of this clip</span><small>tap one to use it</small>${t0.carry && t0.carry.key ? '<button class="btn" data-act="moreTakes" style="margin-left:auto;padding:6px 10px">＋ More takes</button>' : ''}${t0.carry && fileOf(t0) && prevTouching(sel) ? '<button class="btn pri" data-act="joinPrev" style="padding:6px 10px">⛓ Use this one: join it to the clip before</button>' : ''}${vs.length > 1 && fileOf(t0) ? `<button class="btn" data-act="keepOnly" style="padding:6px 10px;${t0.carry && t0.carry.key ? '' : 'margin-left:auto'}">✓ Keep only this</button>` : ''}</div><div class="vstrip">${vs.map((x, n) => { const fl = fileOf(x), w = !fl && workingOf(x), on = x.id===t0.id;
-    const pic = fl ? `<video muted playsinline preload="metadata" src="${esc(viewUrl(x.pc, fl))}#t=0.5"></video>` : `<span class="ph">${w ? 'Rendering on ' + esc(pcName(x.pc)) : x.state==='failed' ? "Didn't finish" : 'No video'}</span>`;
+    const pic = fl ? `<video muted playsinline preload="metadata" src="${esc(playUrl(x.pc, fl))}#t=0.5"></video>` : `<span class="ph">${w ? 'Rendering on ' + esc(pcName(x.pc)) : x.state==='failed' ? "Didn't finish" : 'No video'}</span>`;
     return `<button class="v ${on ? 'on' : ''}" data-act="useTake" data-t="${esc(x.id)}">${pic}<div class="l">${on ? '<b>In use</b> · ' : ''}${x.redo ? '↻ ' : ''}Take ${n + 1} · ${fmt(secsOf(x))}${S.rev[x.id]==='keep' ? ' · ✓' : ''}</div></button>`; }).join('')}</div>`; }
 // put another take in a clip: a clip that ran to the end of its take runs to the end of the new one, and clips after it move along
 function useTake(f, r, x){ const c = r.c, wasEnd = c.out >= c.dur - 0.05, e0 = c.at + len(c), nd = secsOf(x) || c.dur;
@@ -1185,7 +1224,7 @@ function wireXf(f){ const st = $('.stage'), box = $('#xfBox'); if(!st) return; o
   st.addEventListener('pointerup', up); st.addEventListener('pointercancel', up); }
 // ---------- playback: two video elements, the next clip loaded in the hidden one ----------
 let PLAY = null; // {f, t0, ph0, raf}
-const srcOf = c => { const t = takeOf(c.take), fl = fileOf(t); return t && fl ? viewUrl(t.pc, fl) : ''; };
+const srcOf = c => { const t = takeOf(c.take), fl = fileOf(t); return t && fl ? playUrl(t.pc, fl) : ''; };
 function vids(){ return [$('#vA'), $('#vB')].filter(Boolean); }
 function seekTo(v, want){ if(v.seeking){ v._want = want; if(!v._onsk){ v._onsk = () => { const w = v._want; v._want = null; if(w!=null && Math.abs(v.currentTime - w) > 0.04){ try{ v.currentTime = w; }catch(e){} } }; v.addEventListener('seeked', v._onsk); } return; }
   if(Math.abs((v.currentTime || 0) - want) > 0.04){ try{ v.currentTime = want; }catch(e){} } }
@@ -1196,7 +1235,7 @@ function cue(v, c, t){ const src = srcOf(c); if(!src) return false; if(!v.parent
 // clip's video is used, otherwise the hidden one loads it while the last picture stays on screen until its frame is ready
 function showFrame(f){ const c = activeAt(f, PH, true), [a, b] = vids(); if(!a) return;
   ovShow(f, PH, false);
-  if(usePrev(f) && filmSecs(f)){ const src = viewUrl(f.prev.pc, f.prev.file); if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; a._want = null; } a.dataset.c = 'prev';
+  if(usePrev(f) && filmSecs(f)){ const src = playUrl(f.prev.pc, f.prev.file); if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; a._want = null; } a.dataset.c = 'prev';
     baseCrop(a, f, null); a.pause(); seekTo(a, Math.min(PH, filmSecs(f) - 0.02)); a.classList.add('on'); if(b) b.classList.remove('on'); const g = $('#gap'); if(g) g.textContent = ''; return; }
   const g = $('#gap'), src = c && srcOf(c);
   if(c && src){ const cur = [a, b].find(v => v.classList.contains('on')), v = [a, b].find(v => v.dataset.src===src) || [a, b].find(v => v!==cur) || a, o = v===a ? b : a;
@@ -1212,7 +1251,7 @@ function play(f){
   vids().forEach(v => { v.muted = !S.snd; if(!v.getAttribute('src')) return; v.play().then(() => { if(!(PLAY && (PLAY.prev===v || (PLAY.cur && v.dataset.c===PLAY.cur.id)))) v.pause(); }).catch(() => {}); });
   ovVids().forEach(v => { v.muted = !ovSnd(f, v); if(!v.getAttribute('src')) return; v.play().then(() => { if(!(PLAY && !PLAY.prev && v.parentNode.classList.contains('on'))) v.pause(); }).catch(() => {}); });
   PLAY = {f, t0:performance.now(), ph0:PH, cur:null}; $('#playBtn').textContent = '⏸ Pause';
-  if(usePrev(f)){ ovShow(f, PH, false); const [a, b] = vids(), src = viewUrl(f.prev.pc, f.prev.file); PLAY.prev = a; baseCrop(a, f, null); if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; } a.dataset.c = '';
+  if(usePrev(f)){ ovShow(f, PH, false); const [a, b] = vids(), src = playUrl(f.prev.pc, f.prev.file); PLAY.prev = a; baseCrop(a, f, null); if(a.dataset.src!==src){ a.dataset.src = src; a.src = src; } a.dataset.c = '';
     try{ a.currentTime = PH; }catch(e){} a.muted = !S.snd; a.classList.add('on'); if(b) b.classList.remove('on'), b.pause(); a.play().catch(() => {}); }
   loop();
 }
@@ -2371,7 +2410,7 @@ function selTake(id){ const f = N().v==='film' && filmOf(N().film); if(!f) retur
   const c = (w && w.clip && all.find(x => x.id===w.clip)) || all.find(x => x.take===id) || all.find(x => (x.alts || []).includes(id) || (x.was && x.was.take===id)); if(!c) return false; SEL = c.id; PH = c.at; draw();
   // and point at that take in "Takes of this clip", so one tap puts it in the clip
   const b = document.querySelector('#vstrip [data-t="' + CSS.escape(id) + '"]'); if(b){ b.classList.add('hl'); b.scrollIntoView({block:'nearest', inline:'center'}); setTimeout(() => b.classList.remove('hl'), 4000); } return true; }
-window.FILM = {untime, takeOf, editOf, nestTake, nestTick, nestPut, nestFit, nestStale, isNest, splitTracks, movieOf, mvFilm, mvSegs, fullName, shotLabel, shotNo, ensureMovies, newShot, shotsOfM, movieOfShot, upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {untime, pxName, pxFilm, playUrl, PX, takeOf, editOf, nestTake, nestTick, nestPut, nestFit, nestStale, isNest, splitTracks, movieOf, mvFilm, mvSegs, fullName, shotLabel, shotNo, ensureMovies, newShot, shotsOfM, movieOfShot, upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
@@ -2380,7 +2419,7 @@ if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true;
     const sh = $('#sheet'); if(sh){ sh.style.top = top + 'px'; sh.style.height = h + 'px'; sh.style.bottom = 'auto'; } document.documentElement.style.setProperty('--vt', top + 'px'); document.documentElement.style.setProperty('--vh', h + 'px'); };
   try{ window.parent.addEventListener('scroll', fit, {passive:true}); window.parent.addEventListener('resize', fit); }catch(e){}
   new MutationObserver(fit).observe($('#sheet'), {attributes:true}); new MutationObserver(fit).observe(document.body, {childList:true}); fit(); window.FILM_FIT = fit; }
-draw(); tick();
+Promise.race([pxBoot().catch(() => {}), new Promise(z => setTimeout(z, 500))]).then(() => { draw(); tick(); });
 document.addEventListener('click', e => { const p = e.target.closest('.rv .pr[data-pr]'); if(p) p.classList.toggle('open'); });
 </script>
 </body></html>
