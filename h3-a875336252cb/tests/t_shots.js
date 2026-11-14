@@ -11,11 +11,11 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8043);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; }); page.on('dialog', d => d.accept());
-  const exp = [];
+  const exp = [], polls = {};
   await page.route(R + '/**', rt => { const u = new URL(rt.request().url()), p = u.pathname, H = {'Access-Control-Allow-Origin':'*'}, J = o => rt.fulfill({status:200, contentType:'application/json', headers:H, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]}); if(p==='/queue') return J({queue_running:[], queue_pending:[]}); if(p==='/object_info') return J({}); if(p.startsWith('/history')) return J({});
-    if(p==='/renderdeck/h3export' && rt.request().method()==='GET') return J({state:'working', done:0, total:1});
-    if(p==='/renderdeck/h3export'){ const pd = rt.request().postData(); if(pd) exp.push(JSON.parse(pd)); return J({id:'x1', ov:1, cv:1}); } if(p==='/renderdeck/h3export/status') return J({state:'working', done:0, total:1});
+    if(p==='/renderdeck/h3export' && rt.request().method()==='GET'){ const id = u.searchParams.get('id'), n = (polls[id] = (polls[id] || 0) + 1); return J(n < 2 ? {state:'working', done:0, total:1} : {state:'done', done:1, total:1, file:{filename:id + '.mp4', subfolder:'Output_Render/H3Export', type:'output'}}); }
+    if(p==='/renderdeck/h3export'){ const pd = rt.request().postData(); if(pd) exp.push(JSON.parse(pd)); return J({id:'x' + exp.length, ov:1, cv:1}); }
     return rt.fulfill({status:404, headers:H, body:''}); });
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const tk = (id, film) => ({id, t:1, pc:R, w:640, h:360, seconds:5, prompt:id, dir:'H3Deck/' + id, film, state:'done', final:F(id + '.mp4'), pieces:[{prompt:id, state:'done', deliv:120, file:F(id + '.mp4')}]});
@@ -40,7 +40,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await page.evaluate(() => H3.S.cast.map(c => c.name).join())==='Laura', 'Beach\'s cast is Laura');
   // the film screen
   await fr.click('.crumb button:nth-of-type(2)'); await page.waitForTimeout(300);
-  ok((await FS()).nav.v==='movie' && await fr.$$eval('.shot', e => e.length)===1, 'tapping the film name shows its shots (1)');
+  ok(await fr.evaluate(() => { const f = FILM.S.films.find(x => x.id===FILM.S.nav.film); return f && f.edit && f.movie==='fA'; }) && await fr.$$eval('.shot', e => e.length)===1, 'tapping the film name shows the film\'s own timeline and its shots (1)');
   await fr.click('[data-act="mvNewShot"]'); await page.waitForTimeout(600);
   const s2 = await fr.evaluate(() => FILM.S.nav.film);
   const cr = (await fr.$eval('.crumb', e => e.textContent)).replace(/\s+/g, ''); ok(/Beach›Shot2/.test(cr), 'crumb: Films › Beach › Shot 2: ' + cr);
@@ -56,28 +56,45 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await page.evaluate(() => H3.S.cast.map(c => c.name).join())==='Kat', 'Forest keeps its own cast (Kat)');
   await fr.evaluate(id => FILM.go({v:'film', film:id}), s2); await page.waitForTimeout(600);
   ok(await page.evaluate(() => H3.S.cast.map(c => c.name).join())==='Laura,Mia', 'back in Beach\'s Shot 2: Laura and Mia');
-  // reorder, film timeline, export
+  // 🎬 nested shots on the film's own timeline
   await fr.evaluate(() => { const f = FILM.S.films.find(x => x.id===FILM.S.nav.film); f.tracks[0].clips.push({id:'c9', take:'tB', in:0, out:2, dur:5, at:0}); FILM.save(); FILM.go({v:'movie', movie:'fA'}); }); await page.waitForTimeout(400);
-  ok(await fr.$$eval('.shot', e => e.length)===2, 'the film shows 2 shots');
-  let V = await fr.evaluate(() => FILM.mvFilm(FILM.movieOf('fA')).tracks[0].clips.map(c => [c.take, c.at].join('@')).join(','));
-  ok(V==='tA@0,tB@5', 'the film timeline is the shots end to end: ' + V);
+  ok(await fr.$$eval('.shot', e => e.length)===2, 'the film shows 2 shots under its timeline');
   await fr.click('.shot:nth-of-type(2) [data-act="mvMove"][data-d="-1"]'); await page.waitForTimeout(300);
-  V = await fr.evaluate(() => FILM.mvFilm(FILM.movieOf('fA')).tracks[0].clips.map(c => [c.take, c.at].join('@')).join(','));
-  ok(V==='tB@0,tA@2', '⬆ moves Shot 2 first: ' + V);
-  ok(await fr.evaluate(() => FILM.mvSegs(FILM.mvFilm(FILM.movieOf('fA'))).length)===2, '▶ Play the film plays both shots in a row');
-  await fr.click('[data-act="mvExport"]'); await page.waitForTimeout(600);
-  ok(exp.length===1 && exp[0].name==='Beach' && exp[0].clips.map(c => c.filename + '@' + c.at).join()==='tB.mp4@0,tA.mp4@2', '⬇ Export sends the whole film in shot order: ' + JSON.stringify(exp.map(x => x.clips.map(c => c.filename + '@' + c.at))));
-  ok(await fr.evaluate(() => FILM.movieOf('fA').exp && FILM.movieOf('fA').exp.id==='x1'), 'the export is kept on the film');
-  ok(await fr.$eval('#exp', e => /Exporting/.test(e.textContent)), 'the film screen shows the export');
+  ok(await fr.evaluate(() => FILM.movieOf('fA').shots[0]!=='fA'), '⬆ moves Shot 2 first in the list');
+  await fr.click('.shot:nth-of-type(2) [data-act="nestPut"]'); await page.waitForTimeout(300);
+  const E = () => fr.evaluate(() => FILM.editOf(FILM.movieOf('fA')).tracks.map(tr => tr.clips.map(c => [c.take, c.at, c.in, c.out, c.dur].join('@')).join(',')).join('|'));
+  ok(await E()==='shot:fA@0@0@5@5', '🎬 Put in film puts the shot on the film timeline as one clip: ' + await E());
+  ok(exp.length===1 && exp[0].clips.map(c => c.filename).join()==='tA.mp4', 'and its video is made on the PC (⬇ export of that shot)');
+  ok(await fr.evaluate(() => FILM.takeOf('shot:fA').state)==='working', 'it shows as rendering until the video is ready');
+  await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300);
+  ok(await fr.evaluate(() => { const t = FILM.takeOf('shot:fA'); return t.state==='done' && t.final.filename==='x1.mp4'; }), 'then the clip plays the shot\'s video (x1.mp4)');
+  ok(await fr.$eval('.shot:nth-of-type(2) small', e => /in the film/.test(e.textContent)), 'the shot says ✓ in the film');
+  // trim it on the film, then change the shot: the clip updates and keeps its cut
+  await fr.evaluate(() => { const c = FILM.editOf(FILM.movieOf('fA')).tracks[0].clips[0]; c.in = 1; c.out = 4; FILM.save(); });
+  await fr.evaluate(() => { const s = FILM.S.films.find(f => f.id==='fA'); s.tracks[0].clips.push({id:'c7', take:'tB', in:0, out:3, dur:5, at:5}); FILM.save(); });
+  ok(await fr.evaluate(() => FILM.nestStale(FILM.S.films.find(f => f.id==='fA'))), 'a change to the shot marks its film clip out of date');
+  for(let i = 0; i < 3; i++){ await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); }
+  ok(exp.length===2 && exp[1].clips.length===2, 'the shot is exported again by itself');
+  ok(await fr.evaluate(() => FILM.takeOf('shot:fA').final.filename)==='x2.mp4' && await E()==='shot:fA@0@1@4@8', 'the film clip now plays the new version and keeps its cut (1–4 of 8 s): ' + await E());
+  // the shot gets shorter than the cut: the cut is shortened
+  await fr.evaluate(() => { const s = FILM.S.films.find(f => f.id==='fA'); s.tracks[0].clips = s.tracks[0].clips.filter(c => c.id==='c7'); s.tracks[0].clips[0].at = 0; FILM.save(); });
+  for(let i = 0; i < 3; i++){ await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); }
+  ok(await E()==='shot:fA@0@1@3@3', 'a shot that got shorter cuts the clip back to its new end: ' + await E());
+  // 🎬 Put all in, ⬇ Export of the film
+  await fr.click('[data-act="nestAll"]'); await page.waitForTimeout(300); for(let i = 0; i < 3; i++){ await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); }
+  ok((await E()).split(',').length===3, '🎬 Put all in adds every shot after it: ' + await E());
+  const n0 = exp.length; await fr.click('[data-act="export"]'); await page.waitForTimeout(500);
+  ok(exp.length===n0 + 1 && exp[n0].name==='Beach' && exp[n0].clips.every(c => /^x\d+\.mp4$/.test(c.filename)), '⬇ Export of the film sends the shots\' videos: ' + JSON.stringify(exp[n0] && exp[n0].clips.map(c => c.filename + '@' + c.at)));
+  ok(await page.evaluate(() => H3.S.fkey)!==await fr.evaluate(() => FILM.S.nav.film), 'the film timeline doesn\'t take over the Render form');
   // home lists films, not shots
   await fr.evaluate(() => FILM.go({v:'home'})); await page.waitForTimeout(300);
   ok(await fr.$$eval('#view .item', e => e.map(x => x.textContent).join('|')).then(t => /Beach.*2 shots/.test(t) && /Forest.*1 shot/.test(t) && /Old.*2 shots/.test(t)), 'Films lists films with their shot counts');
   // a shot deleted, then the film
   await fr.evaluate(id => FILM.go({v:'film', film:id}), s2); await page.waitForTimeout(400);
   await fr.click('[data-act="delFilm"]'); await page.waitForTimeout(400);
-  ok(await fr.evaluate(() => FILM.S.nav.v==='movie' && FILM.movieOf('fA').shots.join()==='fA'), '🗑 on a shot takes it out of the film and shows the film');
+  ok(await fr.evaluate(() => FILM.S.films.find(x => x.id===FILM.S.nav.film).edit && FILM.movieOf('fA').shots.join()==='fA' && !FILM.editOf(FILM.movieOf('fA')).tracks.some(tr => tr.clips.some(c => c.take!=='shot:fA'))), '🗑 on a shot takes it (and its film clips) out of the film and shows the film');
   await fr.click('[data-act="mvDel"]'); await page.waitForTimeout(400);
-  ok(await fr.evaluate(() => !FILM.movieOf('fA') && !FILM.S.films.some(f => f.id==='fA') && FILM.S.nav.v==='home'), '🗑 on the film deletes it and its shots');
+  ok(await fr.evaluate(() => !FILM.movieOf('fA') && !FILM.S.films.some(f => f.id==='fA' || f.edit && f.movie==='fA') && FILM.S.nav.v==='home'), '🗑 on the film deletes it and its shots');
   // new film opens its first shot
   await page.evaluate(() => { window.prompt = () => 'Party'; }); await fr.evaluate(() => { window.prompt = () => 'Party'; });
   await fr.click('[data-act="newFilm"]'); await page.waitForTimeout(500);
