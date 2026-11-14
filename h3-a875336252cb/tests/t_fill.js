@@ -133,5 +133,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     ok(nd.length===1 && nd[0].take===ft.id && nd[0].den===0.7 && nd[0].scale===1.5 && /ref2va_x/.test(nd[0].unet), '⇿ once the fill is done it gets ✨ High quality like its neighbours (' + JSON.stringify(nd) + ')');
     await fr.evaluate(() => { FILM.placeNew(); }); await page.waitForTimeout(300);
     ok(await page.evaluate(() => (window.NUDGED || []).length===1), '…only once'); }
+  // a ✨ clip after the gap: the fill starts from the take the ✨ was made from (QA 2026-11-14: it took the ✨ pass's Regular 20 steps)
+  { await page.evaluate(() => { const a = H3.S.takes.find(x => x.id==='tA'), q = H3.S.takes.find(x => x.id==='tQ'); a.turbo = true; q.turbo = false; q.steps = 20; H3.saveNow(); });
+    await fr.evaluate(() => { delete FILM.S.fillModel; delete FILM.S.fillTurbo; const f = FILM.S.films[0], all = f.tracks.flatMap(tr => tr.clips), c1 = all.find(x => x.id===window.C1), c2 = all.find(x => x.id===window.C2);
+      const tr = f.tracks.find(t => t.clips.includes(c1)); tr.clips = [c1, c2]; Object.assign(c1, {take:'tA'}); Object.assign(c2, {take:'tQ'}); FILM.GAP = null; FILM.SEL = c1.id; FILM.draw(); });
+    await fr.click('.tools [data-act="fill"]'); await page.waitForTimeout(300);
+    const sp = await fr.evaluate(() => { const b = document.querySelector('#flSp [data-v="1"]'); return b ? b.classList.contains('pri') : null; });
+    ok(sp===true, '⇿ next to a ✨ clip the fill starts on Turbo, like the take the ✨ was made from (' + sp + ')');
+    await fr.evaluate(() => { const c = document.querySelector('[data-close]'); if(c) c.click(); }); }
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
