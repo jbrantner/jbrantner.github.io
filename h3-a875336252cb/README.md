@@ -52,6 +52,7 @@ Speed: measured at 4× CPU slowdown with 160 takes and 6 films of 3 × 25 clips,
 
 ## 🎞 Films are folders of shots (2026-11-13)
 Jordan: "make films like a folder and each shot is like the current film is… tap a shot and it goes to that shot timeline" and "make sure each shot has access to all characters in a film". In film/: `S.movies = [{id, name, shots:[ids in order]}]`; a shot is an entry of `S.films` (its own timeline, words, takes and form) with `f.movie`. `ensureMovies()` turns any film without one into a film of one shot with the **same id and name**, so old films, their casts and the 🛟 rebuild all carry over. Screens: Films (list of films) › a film (its shots with ⬆⬇, ＋ New shot, ▶ Play the film, ⬇ Export of all shots end to end via `mvFilm()`) › a shot (the old film screen, with ‹ Shot n of N › and 🎞 All shots). H3 Deck keys the cast by film (`castK()`, `S.mv` = shot → film, kept in the deck so it works with the frame closed); forms stay per shot. The PC copy keeps `movies` and `mv`. Test: tests/t_shots.js.
+✂ Once (`S.trSplit`, Jordan 2026-11-13): every extra track that has clips becomes its own shot right after its shot (clips moved to start at 0, ⧉ dropped, its ⬆ upscale / 🦴 guide run, takes' `t.film` and a copy of the form go with it); empty extra tracks are dropped. `splitTracks()`.
 
 ## Screens (2026-11-06)
 

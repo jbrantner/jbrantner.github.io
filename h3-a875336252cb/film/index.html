@@ -489,6 +489,24 @@ function ensureMovies(){ S.movies = S.movies || []; let ch = false; const have =
     if(!m){ m = {id:f.movie || f.id, name:f.name, shots:[]}; S.movies.unshift(m); f.movie = m.id; ch = true; }
     if(!m.shots.includes(f.id)){ m.shots.push(f.id); ch = true; } }
   return ch; }
+// ✂ one track per shot (Jordan 2026-11-13: "could any multi-track shots left over from the old way… be converted into their own
+// shots? Each track is its own shot inside the film"): once, every extra track that has clips becomes its own shot right after
+// it, its clips moved to start at 0, with its ⬆ upscale / 🦴 guide run, its takes and a copy of the shot's form (H3 Deck).
+function splitTracks(){ if(S.trSplit) return false; S.trSplit = 1; let n = 0; let H = null; try{ H = window.parent!==window && window.parent.H3; }catch(e){}
+  for(const f of S.films.slice()){ const extra = f.tracks.slice(1).filter(tr => tr.clips.length); if(!extra.length) continue; const m = movieOfShot(f); if(!m) continue;
+    let pos = m.shots.indexOf(f.id); const base = f.name && f.name!==m.name ? f.name : '';
+    extra.forEach(tr => { const t0 = Math.min(...tr.clips.map(c => c.at)), k = f.tracks.indexOf(tr);
+      tr.clips.forEach(c => { c.at = Math.max(0, +(c.at - t0).toFixed(4)); }); delete tr.xf; delete tr.hide;
+      const nf = {id:uid('f'), name:base ? base + ' · track ' + (k + 1) : '', movie:m.id, tracks:[tr], pps:f.pps || 24, canvas:f.canvas || 'wide'};
+      if(f.upRun && f.upRun.track===tr.id){ nf.upRun = f.upRun; delete f.upRun; }
+      if(f.guide && f.guide.track===tr.id){ nf.guide = f.guide; f.guide = null; }
+      f.tracks.splice(k, 1); S.films.splice(S.films.indexOf(f) + 1, 0, nf); m.shots.splice(++pos, 0, nf.id); n++;
+      if(H && H.S){ try{ const ids = new Set(tr.clips.flatMap(c => [c.take].concat(c.alts || [])));
+        (H.S.takes || []).forEach(t => { if(ids.has(t.id)) t.film = nf.id; });
+        const fm = H.S.fkey===f.id ? H.S.f : (H.S.forms || {})[f.id]; if(fm) H.S.forms[nf.id] = Object.assign(JSON.parse(JSON.stringify(fm)), {prompt:''}); H.save(); }catch(e){} } });
+    f.tracks = f.tracks.filter((tr, k) => !k || tr.clips.length); }
+  if(n) setTimeout(() => toast('✂ ' + n + (n===1 ? ' extra track is' : ' extra tracks are') + ' now ' + (n===1 ? 'its own shot' : 'their own shots') + ', right after the shot ' + (n===1 ? 'it was' : 'they were') + ' in.', 6000), 300);
+  return true; }
 const shotsOfM = m => m ? m.shots.map(filmOf).filter(Boolean) : [];
 const movieOfShot = f => f && movieOf(f.movie);
 const shotNo = f => { const m = movieOfShot(f); return m ? m.shots.indexOf(f.id) + 1 : 1; };
@@ -511,7 +529,7 @@ const ACT = {}; let TSEL = null; // 🎬 ACT[film] = track new clips go on; TSEL
 const BARE = () => { try{ return deck().bare===true; }catch(e){ return false; } }; // 🦴 bare bones (2026-11-08), switched in H3 Deck's ⚙
 function draw(){ document.body.classList.toggle('bare', BARE());
   placeNew(); keepTakes(); S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(!takeOf(c.take)) findLost(c.take); else if(!fileOf(takeOf(c.take)) && !takes().find(x => x.id===c.take)) findLost(c.take); }))); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
-  if(ensureMovies()) saveRaw();
+  if(ensureMovies() | splitTracks()) saveRaw();
   const v = N().v, f = v==='film' && filmOf(N().film), mv = v==='movie' && movieOf(N().movie);
   $('#view').innerHTML = f ? filmView(f) : mv ? movieView(mv) : v==='review' ? reviewView() : homeView();
   if(mv){ wireMovie(mv); const V = mvFilm(mv); if(V.exp && V.exp.state==='working') expPoll(V); else if(V.exp && V.exp.state==='done') expFetch(V); }
@@ -2284,7 +2302,7 @@ function selTake(id){ const f = N().v==='film' && filmOf(N().film); if(!f) retur
   const c = (w && w.clip && all.find(x => x.id===w.clip)) || all.find(x => x.take===id) || all.find(x => (x.alts || []).includes(id) || (x.was && x.was.take===id)); if(!c) return false; SEL = c.id; PH = c.at; draw();
   // and point at that take in "Takes of this clip", so one tap puts it in the clip
   const b = document.querySelector('#vstrip [data-t="' + CSS.escape(id) + '"]'); if(b){ b.classList.add('hl'); b.scrollIntoView({block:'nearest', inline:'center'}); setTimeout(() => b.classList.remove('hl'), 4000); } return true; }
-window.FILM = {movieOf, mvFilm, mvSegs, fullName, shotLabel, shotNo, ensureMovies, newShot, shotsOfM, movieOfShot, upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {splitTracks, movieOf, mvFilm, mvSegs, fullName, shotLabel, shotNo, ensureMovies, newShot, shotsOfM, movieOfShot, upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
