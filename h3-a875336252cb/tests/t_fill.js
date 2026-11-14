@@ -75,19 +75,25 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(await fr.evaluate(() => !!document.querySelector('.gapsel [data-act="fill"]') && !document.querySelector('.tools [data-act="fill"]').disabled), 'the selected empty space has ⇿ Fill (and ⇿ Fill a gap in the tools is on)');
   await fr.click('.gapsel [data-act="fill"]'); await page.waitForTimeout(300);
   const sh = await fr.evaluate(() => ({open:!document.querySelector('#sheet').hidden, txt:document.querySelector('#sheetCard').textContent, secs:document.querySelector('#flS').value, words:document.querySelector('#flP').value}));
+  const sp = await fr.evaluate(() => ({a:+document.querySelector('#flSA').value, b:+document.querySelector('#flEB').value, sum:document.querySelector('#flSum').textContent}));
+  ok(Math.abs(sp.a - 4.5) < 0.01 && Math.abs(sp.b - 0.5) < 0.01 && /New part: 3\.0 s/.test(sp.sum), '⇿ the blend starts half a second before clip 1 ends and lands half a second into clip 2, plus the 2 s gap (' + JSON.stringify(sp) + ')');
+  const GQ = await page.evaluate(() => H3.gapPlan(120, 4.5 * 24, 120, 12, 3, 24));
+  ok(GQ.C===24 && GQ.pinsA[GQ.pinsA.length - 1][1]===107 && GQ.pinsA[0][1]===83 && GQ.pins[0][1]===12 && GQ.pins.some(p => p[1] >= 12 + 20), '⇿ a second of each clip beyond the blend points is the context (' + JSON.stringify([GQ.pinsA, GQ.pins]) + ')');
   ok(sh.open && /Fill a gap/.test(sh.txt) && sh.secs==='2' && /^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] $/.test(sh.words), '⇿ opens a sheet with the gap\'s length and the carry-on anchor line (' + JSON.stringify(sh) + ')');
   await fr.evaluate(() => { const p = document.querySelector('#flP'); p.value += 'she turns from the window'; const c = document.querySelector('#flCut'); c.checked = true; c.onchange({target:c});
     const a = document.querySelector('#flA'); a.value = 'close-up'; a.oninput({target:a}); const w = document.querySelector('#flW'); w.value = 'she reaches for the handle'; w.oninput({target:w}); });
+  const MD = await fr.evaluate(() => { const m = document.querySelector('#flMod'); if(!m) return {box:false}; const k = m.options[m.options.length - 1].value; m.value = k; m.onchange({target:m}); document.querySelector('#flSp [data-v="0"]').click(); return {box:true, k, n:m.options.length}; });
   const n0 = sent.length; await fr.click('#flGo'); await page.waitForTimeout(1500);
   const g = sent[n0] && sent[n0].g, ags = g ? Object.values(g).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image) : [], lvs = g ? nodes(g, 'LoadVideo') : [];
-  const keep = g && Object.values(g).find(n => n.class_type==='ImageFromBatch' && n.inputs.batch_index===GP.k0 && n.inputs.length===GP.B);
-  ok(sent.length===n0 + 1 && lvs.length===2 && ags.length===GP.pinsA.length + GP.pins.length && ags.some(n => n.inputs.frame_idx===0) && ags.some(n => n.inputs.frame_idx===GP.L - 1) && keep, '⇿ its graph loads both clips, pins A\'s end from frame 0 and B\'s start at the end, and keeps only the new frames (' + ags.map(n => n.inputs.frame_idx).join(',') + ')');
+  const keep = g && Object.values(g).find(n => n.class_type==='ImageFromBatch' && n.inputs.batch_index===GQ.k0 && n.inputs.length===GQ.B);
+  ok(sent.length===n0 + 1 && lvs.length===2 && ags.length===GQ.pinsA.length + GQ.pins.length && ags.some(n => n.inputs.frame_idx===0) && ags.some(n => n.inputs.frame_idx===GQ.L - 1) && keep, '⇿ its graph loads both clips, pins A\'s end from frame 0 and B\'s start at the end, and keeps only the new frames (' + ags.map(n => n.inputs.frame_idx).join(',') + ')');
   const tk = await page.evaluate(() => { const t = H3.S.takes.find(x => x.lead && x.lead.gap); return t && {prompt:t.prompt, gap:t.lead.gap.clip, clip:t.lead.clip}; });
-  ok(tk && /^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] she turns from the window\n\[1\.5s-\] \[Shot 2\] The camera cuts on the action to a close-up as she reaches for the handle, same place, same lighting, same outfit\.$/.test(tk.prompt), '🎬 cut on the action adds the cut line at its moment (anchor line untouched): ' + JSON.stringify(tk && tk.prompt));
+  { const tm = await page.evaluate(() => { const t = H3.S.takes.find(x => x.lead && x.lead.gap); return {model:t.model, turbo:t.turbo}; }); ok(MD.box && tm.model===MD.k && tm.turbo===false, '⇿ the sheet picks the model and Turbo/Regular for the fill (' + JSON.stringify([MD, tm]) + ')'); }
+  ok(tk && /^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] she turns from the window\n\[2\.5s-\] \[Shot 2\] The camera cuts on the action to a close-up as she reaches for the handle, same place, same lighting, same outfit\.$/.test(tk.prompt), '🎬 cut on the action adds the cut line at its moment (anchor line untouched): ' + JSON.stringify(tk && tk.prompt));
   await fr.evaluate(() => FILM.draw()); await page.waitForTimeout(400);
   const pl = await fr.evaluate(() => { const f = FILM.S.films[0], all = f.tracks.flatMap(tr => tr.clips), c1 = all.find(x => x.id===window.C1), c2 = all.find(x => x.id===window.C2), fc = all.find(x => FILM.takeOf(x.take) && FILM.takeOf(x.take).lead && FILM.takeOf(x.take).lead.gap);
-    return {c1:[c1.at, c1.out - c1.in], c2:c2.at, fill:fc && [fc.at, fc.out - fc.in], label:document.querySelector('.clip.sel .nm') && document.querySelector('.clip.sel .nm').textContent}; });
-  ok(pl.fill && Math.abs(pl.fill[0] - (pl.c1[0] + pl.c1[1])) < 1e-3 && Math.abs(pl.fill[1] - GP.B / 24) < 1e-3 && Math.abs(pl.c2 - (pl.fill[0] + pl.fill[1])) < 1e-3 && /^⇿/.test(pl.label || ''), '⇿ the fill sits right after clip A and clip B moves to where it ends (' + JSON.stringify(pl) + ')');
+    return {c1:[c1.at, c1.out - c1.in], c2:c2.at, c2in:c2.in, fill:fc && [fc.at, fc.out - fc.in], label:document.querySelector('.clip.sel .nm') && document.querySelector('.clip.sel .nm').textContent}; });
+  ok(pl.fill && Math.abs(pl.c1[1] - 4.5) < 0.01 && Math.abs(pl.c2in - 0.5) < 0.01 && Math.abs(pl.fill[0] - (pl.c1[0] + pl.c1[1])) < 1e-3 && Math.abs(pl.fill[1] - GQ.B / 24) < 1e-3 && Math.abs(pl.c2 - (pl.fill[0] + pl.fill[1])) < 1e-3 && /^⇿/.test(pl.label || ''), '⇿ the fill sits right after clip A and clip B moves to where it ends (' + JSON.stringify(pl) + ')');
   // touching clips: select the first one, ⇿ Fill a gap adds time between it and the next
   const tp = await fr.evaluate(() => { FILM.GAP = null; FILM.SEL = window.C1; FILM.draw(); const P = FILM.fillPair(FILM.S.films[0]); return {b:P && P.B && P.B.id, gap:P && P.gap, on:!document.querySelector('.tools [data-act="fill"]').disabled}; });
   ok(tp.on && tp.b && tp.gap < 1e-3, 'with a clip selected, ⇿ Fill a gap goes between it and the next clip, even when they touch (' + JSON.stringify(tp) + ')');
@@ -95,11 +101,20 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   { await fr.evaluate(() => { const f = FILM.S.films[0], all = f.tracks.flatMap(tr => tr.clips), c1 = all.find(x => x.id===window.C1), c2 = all.find(x => x.id===window.C2);
       const tr = f.tracks.find(t => t.clips.includes(c1)); tr.clips = tr.clips.filter(x => x===c1 || x===c2); c1.out = 3.5; c2.in = 1.25; c2.at = c1.at + 3.5 + 1; FILM.GAP = null; FILM.SEL = c1.id; FILM.draw(); });
     await fr.click('.tools [data-act="fill"]'); await page.waitForTimeout(300);
+    // the two blend points never take more than 5 s of the clips together
+    const cl = await fr.evaluate(() => { const A = document.querySelector('#flSA'), B = document.querySelector('#flEB'); A.value = A.min; A.oninput({target:A}); B.value = B.max; B.oninput({target:B});
+      return {a:+A.value, b:+B.value, ov:(3.5 - +A.value) + (+B.value - 1.25)}; });
+    ok(cl.ov <= 5 + 1e-3 && cl.ov > 4.9, '⇿ moving one blend point past 5 s of overlap pulls the other back (' + JSON.stringify(cl) + ')');
+    await fr.evaluate(() => { const A = document.querySelector('#flSA'), B = document.querySelector('#flEB'); A.value = A.max; A.oninput({target:A}); B.value = B.min; B.oninput({target:B}); });
     const n1 = sent.length; await fr.click('#flGo'); await page.waitForTimeout(1500);
     const g2 = sent[n1] && sent[n1].g, lv = g2 ? Object.entries(g2).filter(([k, n]) => n.class_type==='LoadVideo') : [], src = id => Object.entries(g2).find(([k, n]) => n.class_type==='GetVideoComponents' && n.inputs.video[0]===id);
     const fromVid = (gcId) => Object.values(g2).filter(n => n.class_type==='ImageFromBatch' && n.inputs.image[0]===gcId).map(n => n.inputs.batch_index);
     const per = lv.map(([id]) => { const gc = src(id); return gc ? fromVid(gc[0]) : []; });
     const pinsA = per.find(a => a.includes(83)), pinsB = per.find(a => a.includes(30));
     ok(pinsA && Math.max(...pinsA)===83 && pinsB && Math.min(...pinsB)===30, '⇿ with trimmed clips the fill starts on clip A\'s last frame showing (3.5 s → frame 83) and lands on clip B\'s first frame showing (1.25 s → frame 30): ' + JSON.stringify(per)); }
+  // a 🎬 nested shot (no H3 Deck take): its export file is used, sized to the fill, with a take of the shot for the settings
+  { const n2 = sent.length; await page.evaluate(() => window.H3GapFill({a:{file:{filename:'shot1.mp4', subfolder:'Output_Render/H3Film', type:'output'}, frames:120, w:1600, h:900}, outA:4, takeB:'tA', inB:0.5, secs:2, prompt:'x', n:1, film:'fA', clipA:'', clipB:''}));
+    await page.waitForTimeout(1200); const g3 = sent[n2] && sent[n2].g;
+    ok(g3 && nodes(g3, 'LoadVideo').some(n => n.inputs.file==='Output_Render/H3Film/shot1.mp4 [output]') && nodes(g3, 'ImageScale').length > 0, '⇿ a nested shot\'s export can be the clip before (loaded from its file, scaled to the fill)'); }
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
