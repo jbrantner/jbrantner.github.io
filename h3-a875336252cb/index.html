@@ -2330,10 +2330,12 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     if(R.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:rAu, start_index:R.s0 / FPS, duration:L / FPS}), 0], frame_idx:0}), 0]; }
   if(t.lead){ // ⏪ lead-in: the clip's first frames are pinned at the END of the window, so the new seconds arrive exactly where it starts
     const R = t.lead, ls = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]});
-    for(const [o, sf] of R.pins){ const fr = add('ImageFromBatch', {image:[ls, 0], batch_index:sf, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
+    for(const [o, sf] of R.pins){ let fr = [add('ImageFromBatch', {image:[ls, 0], batch_index:sf, length:1}), 0];
+      if(R.gap && R.gap.scaleB && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (⇿ the clip after can be another size, e.g. a 🎬 shot export)
+      cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; }
     if(R.gap){ const G = R.gap, as = add('GetVideoComponents', {video:[add('LoadVideo', {file:G.file}), 0]}); // ⇿ the clip before: its last frames start the window
       for(const [o, sf] of G.pins){ let fr = [add('ImageFromBatch', {image:[as, 0], batch_index:sf, length:1}), 0];
-        if(G.w && G.h && (G.w!==w || G.h!==h) && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (a clip of another size)
+        if(((G.w && G.h && (G.w!==w || G.h!==h)) || G.scaleB) && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (a clip of another size)
         cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; } } }
   let trim = null;
   if(pc.ctx && i===0 && t.cont){ // carry on the given video: its last frames are pinned (resized to this clip by the node)
@@ -4441,11 +4443,16 @@ function gapPlan(FA, ea, FB, sb, secs, ctx){ // (the frames on screen: a clip tr
   for(let o = e; o < L; o += 4){ if(sb + o - e < FB) pins.push([o, sb + o - e]); }
   if(!pins.some(p => p[0]===L - 1) && sb + L - 1 - e < FB) pins.push([L - 1, sb + L - 1 - e]);
   return {s:sb, ea, C, k0, B:N, L, pins, pinsA}; }
-window.H3GapFill = async o => { const srcA = deckTake(o.takeA), flA = takeFile(srcA), src = deckTake(o.takeB), fl = takeFile(src);
-  if(!src || !srcA){ toast("Those takes aren't in H3 Deck on this phone"); return 0; }
+// (Jordan 2026-11-14: pick where the blend starts on the clip before and where it lands on the clip after; the frames up to the start
+// and from the landing point on are the context, a second of each, pinned; the new part = the overlap replaced + any added seconds.)
+// o.a / o.b = {file, frames, w, h} for a clip that isn't an H3 Deck take (a 🎬 nested shot); o.base = a take to copy the settings from.
+const FILL_CTX = 24;
+window.H3GapFill = async o => { const srcA = deckTake(o.takeA), tB = deckTake(o.takeB), src = tB || deckTake(o.base), flA = o.a ? o.a.file : takeFile(srcA), fl = o.b ? o.b.file : takeFile(tB);
+  if(!src || (!srcA && !o.a)){ toast("Those takes aren't in H3 Deck on this phone"); return 0; }
   if(!fl || !flA){ toast('Both clips need a finished video first'); return 0; }
-  const P = gapPlan(takeFrames(srcA), (+o.outA || 0) * FPS, takeFrames(src), (+o.inB || 0) * FPS, +o.secs || 2, 12);
-  const gap = {src:srcA.id, clip:o.clipA || '', file:fileArg(flA), pins:P.pinsA, w:srcA.w, h:srcA.h};
+  const FA = o.a ? +o.a.frames : takeFrames(srcA), FB = o.b ? +o.b.frames : takeFrames(tB);
+  const P = gapPlan(FA, (+o.outA || 0) * FPS, FB, (+o.inB || 0) * FPS, +o.secs || 2, FILL_CTX);
+  const gap = {src:srcA ? srcA.id : '', clip:o.clipA || '', file:fileArg(flA), pins:P.pinsA, w:o.a ? o.a.w : srcA.w, h:o.a ? o.a.h : srcA.h, aOut:+o.outA || 0, bIn:+o.inB || 0, scaleB:true};
   return leadGo(src, fl, P, Object.assign({}, o, {clip:o.clipB}), {gap}, '⇿', 'gap fill'); };
 async function leadGo(src, fl, P, o, more, icon, word){ const key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)); let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
@@ -4457,6 +4464,7 @@ async function leadGo(src, fl, P, o, more, icon, word){ const key = uid('k'), n 
       lead:Object.assign({src:src.id, file:fileArg(fl), film:o.film || '', clip:o.clip || '', key}, P, more || {}),
       pieces:[{start:0, gen:P.L, deliv:P.B, ctx:0, prompt:text, state:'new'}]});
     if(FILMT===src.id){ const fs = snapshot(); Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3}); }
+    if(o.model){ t.model = o.model; t.turbo = !!o.turbo; } // ⇿ / ⏪ the model picked in the sheet (Jordan 2026-11-14: fill was stuck on the clip's own model)
     if(Array.isArray(o.loras)) t.loras = o.loras.filter(l => l && l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})); // ⏪ the sheet's LoRAs
     t.ctl = null; t.ctl2 = null; if(o.guide) applyGuide(t, o.guide);
     t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
@@ -4553,6 +4561,6 @@ window.H3 = {sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync,
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
-    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, picFull, lookFrame, frameRefs, frameText, LIVE_:() => LIVE, lookProgHtml, lookGraph, ph3Kit, lookKit, lookRedo, lookCollect, lookResume, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, retryTake, runWork, takeBack, pushRun, runBody, HOLD_:() => HOLD, setHOLD:v => { HOLD = v; }, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, gapPlan, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
+    return t.pieces.some(p => p.state==='queued') ? 'waiting' : 'sending'; }, lookOf, lookSnap, picFull, lookFrame, frameRefs, frameText, LIVE_:() => LIVE, lookProgHtml, lookGraph, ph3Kit, lookKit, lookRedo, lookCollect, lookResume, qwenKit, drawLook, redoLoras:() => [...new Set(S.pcs.filter(p => pcOf(p.url).online && pcOf(p.url).oi).flatMap(p => styleLoras(pcOf(p.url).oi)))].sort(), loraWords:n => { const l = (S.f.loras || []).find(x => x.name===n) || S.takes.flatMap(t => lorasOf(t)).find(x => x.name===n && x.words); return l ? l.words || '' : ''; }, hqUnets, upUnetOf, finStart, tickFin, retryTake, runWork, takeBack, pushRun, runBody, HOLD_:() => HOLD, setHOLD:v => { HOLD = v; }, k4Line, drawLib, openLib, libSync, libToCast, libNew, castTake, h3Prompt, castText, drawTakes, save, syncFilm, bridgeSeams, bridgeNext, bbBeats, bbMove, drawBeatBar, smKeysFor, blendJoins, smoothPlan, smoothTotal, dims, regenRefUnet, regenUnet, pixUpOn, pixUpModel, normKey, resolveModel, famKey, FILMT:() => FILMT, regenSheet, upGraph, guideProg, LIVE, setGuideProg:v => { GUIDE_PROG = v; }, applyGuide, guideMake, castTake, castText, castWords, castHits, leadPlan, gapPlan, FILL_CTX, tidyMedia, saveNow, redoPlan, takeFrames, toMocap, guideFrom, guideGraph, guideWords, S, h3Prompt, h3Time, poseLine, refLabels, h3Gist, drawH3, pullInbox, patchOf, extendSheet, setTab, pushTakes, pullTakes, drawAll, branchFrom, makeBranches, cancelTake, pieceSheet, redoFrom, ctxDir, planSpacing, loopKeys, punchSpeeds, regenSheet, toSmooth, upRefs, upPick, upGraph, upSize, upDims, REGEN_SIG, tick, smoothPlan, smoothKeys, spacingPlan, stepBetween, grabFrames, blobOf, SPC, spcKey, mp4Info, plan, piecePrompt, parseBeats, pieceGraph, joinGraph, snapshot, pickPc, canRun, families, resolveModel, dims, PC, currentPlan};
 </script>
 </body></html>
