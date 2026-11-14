@@ -32,7 +32,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     FILM.S.films = [{id:'f1', name:'Film 1', pps:24, tracks:[{id:'trV', clips:[{id:'v', take:'tV', in:0, out:4, dur:6, at:1}]}, {id:'trH', clips:[{id:'h', take:'tH', in:0, out:6, dur:6, at:0}]}]}];
     FILM.PH = 2; FILM.go({v:'film', film:'f1'}); });
   await page.waitForTimeout(400);
-  ok(await page.evaluate(() => FILM.S.films[0].canvas)==='tall', '🖼 a film without a canvas takes the shape of its first clip and keeps it');
+  ok(await page.evaluate(() => FILM.S.films[0].canvas)==='wide', '🖼 a film without a canvas starts ▭ wide, even when its first clip is tall (Jordan 2026-11-13)');
   await page.click('[data-act="canvas"][data-v="wide"]'); await page.waitForTimeout(300);
   // before: the top track covers the one below (no overlay)
   let L = await page.evaluate(() => { const l = FILM.layersAt(FILM.S.films[0], 2); return {base:l.base && l.base.id, ov:l.ov.map(o => o.c.id)}; });

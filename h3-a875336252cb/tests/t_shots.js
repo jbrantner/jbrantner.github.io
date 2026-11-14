@@ -76,6 +76,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.evaluate(() => { window.prompt = () => 'Party'; }); await fr.evaluate(() => { window.prompt = () => 'Party'; });
   await fr.click('[data-act="newFilm"]'); await page.waitForTimeout(500);
   ok(await fr.evaluate(() => { const m = FILM.S.movies.find(x => x.name==='Party'); return m && m.shots.length===1 && FILM.S.nav.film===m.shots[0] && FILM.S.films.find(f => f.id===m.shots[0]).tracks.length===1; }), '＋ New film makes Party with Shot 1 (one track) and opens it');
+  ok(await fr.evaluate(() => { const m = FILM.S.movies.find(x => x.name==='Party'); return FILM.S.films.find(f => f.id===m.shots[0]).canvas==='wide'; }), 'a new film is ▭ wide');
+  await page.waitForTimeout(600); ok(await page.evaluate(() => H3.S.f.aspect)==='16:9', 'and its Render form starts wide (16:9): ' + await page.evaluate(() => H3.S.f.aspect));
   // the PC copy has the films
   ok(await page.evaluate(() => { const b = JSON.parse(H3.backupBody ? H3.backupBody() : '{}'); return (b.movies || []).some(m => m.name==='Party'); }), 'the copy on the PCs keeps the films');
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
