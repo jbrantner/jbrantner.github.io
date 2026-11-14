@@ -51,7 +51,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(U.on==='p1' && U.pic, 'tapping her picture picks it, and 🖼 Like the first frame is offered: ' + JSON.stringify(U));
   G = await graph();
   ok(G.t.fl && G.t.first==='p1' && G.t.startPic==='p1', 'the take has it as its first frame: ' + JSON.stringify(G.t));
-  ok(G.pics.length===3 && G.pics[0]==='cut:p1.png' && G.pics[1]==='p2.png' && G.pics[2]==='p1.png', 'it stays her reference (cut so it stays a ref) and goes again whole as the first frame picture: ' + G.pics);
+  ok(G.pics.length===3 && G.pics[0]==='p1.png' && G.pics[1]==='p2.png' && G.pics[2]==='p1.png', 'it stays her reference (not cut: a take with a first frame sends every picture whole) and goes again as the first frame picture: ' + G.pics);
   ok(G.guides.length===1 && G.guides[0][0]==='p1.png' && G.guides[0][1]===0, 'pinned at frame 0: ' + JSON.stringify(G.guides));
   ok(/<Subject 1> is Aphmau, as shown in <Picture 1> and <Picture 2>/.test(G.p) && /<Picture 3> is the first frame of \[Shot 1\]/.test(G.p) && /begins from <Picture 3>/.test(G.p), 'prompt: she is Pictures 1-2, Picture 3 is the first frame');
   await page.evaluate(() => { H3.S.f.aspect = 'pic'; H3.drawAll(); }); G = await page.evaluate(() => { const t = H3.snapshot(); return [t.w, t.h]; });

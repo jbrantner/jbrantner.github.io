@@ -54,6 +54,6 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const sh = await page.evaluate(() => [H3.refShape('p1', 480, 864), H3.refShape('nope', 640, 640)]);
   ok(sh[0] && sh[1]===null, 'a picture with no size noted goes as it is');
   A = await run(1280, 704, [[1920, 1080]], true);
-  ok(A.length===2 && A[0].crop && !A[1].crop && A[1].from==='fr.png', 'a first frame picture (meant to be frame 0) is never cut: ' + JSON.stringify(A));
+  ok(A.length===2 && !A[0].crop && !A[1].crop && A[1].from==='fr.png', 'a take with a first frame cuts nothing (Jordan: turn it off when there is a first frame): ' + JSON.stringify(A));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
