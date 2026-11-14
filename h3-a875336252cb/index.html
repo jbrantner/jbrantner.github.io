@@ -485,6 +485,12 @@ function save(){ SAVE_REV++; fileTakes(); clearTimeout(saveT); saveT = setTimeou
 // (model, size) of the one before, with nothing else carried over: no prompt, no LoRAs (Jordan 2026-11-08).
 const LOOK_KEYS = ['model', 'turbo', 'aspect', 'mp', 'takes', 'where', 'steps', 'maxPiece', 'h3', 'h3Style'];
 const mineK = () => S.fkey || '';
+// 🎞 the cast belongs to the film, not the shot (Jordan 2026-11-13: "make sure each shot has access to all characters in a film"):
+// S.mv[shot] = its film, kept from the Films frame so it works with the frame closed too. An old film is its own film's id.
+function mvSync(){ try{ const F = FW && FW.FILM; if(!F || !F.S || !F.S.films) return; const o = {}; F.S.films.forEach(f => { if(f.movie && f.movie!==f.id) o[f.id] = f.movie; });
+  if(JSON.stringify(o)!==JSON.stringify(S.mv || {})) S.mv = o; }catch(e){} }
+const castK = k => (S.mv || {})[k || ''] || k || '';
+const mineCK = () => castK(mineK());
 let SHOWN = null; // a take opened by its link (✏️ Edit in H3 Deck) shows whatever film it's from
 const inMine = t => t.id===SHOWN || t.film===undefined || (t.film || '')===mineK();
 function freshForm(prev){ const f = F_DEF(); for(const k of LOOK_KEYS) if(prev && prev[k]!==undefined) f[k] = JSON.parse(JSON.stringify(prev[k])); return f; }
@@ -501,9 +507,10 @@ function syncFilm(){ const k = filmKeyNow(); if(k==null) return false;
   if(S.fkey===undefined){ S.fkey = k; fileTakes(); S.fmig = false; save(); drawTakes(); return true; } // the first film opened after the update keeps the form as it is
   if(k===S.fkey) return false;
   try{ undoCheck(false); }catch(e){} // ↶ what you did before opening another film is kept as its own step
-  S.forms[S.fkey] = S.f; S.casts[S.fkey] = S.cast;
-  S.f = S.forms[k] || freshForm(S.f); S.cast = S.casts[k] || seedCast(k);
-  delete S.forms[k]; delete S.casts[k]; S.fkey = k; FILMT = null; FILMTID = null;
+  mvSync(); const ck0 = castK(S.fkey), ck = castK(k); // 🎞 shots of one film share its cast
+  S.forms[S.fkey] = S.f; if(ck0!==ck) S.casts[ck0] = S.cast;
+  S.f = S.forms[k] || freshForm(S.f); if(ck0!==ck){ S.cast = S.casts[ck] || seedCast(k); delete S.casts[ck]; }
+  delete S.forms[k]; S.fkey = k; FILMT = null; FILMTID = null;
   S.ck = null; S.ckUndo = null; S.ckDraft = ''; try{ drawCk(); }catch(e){} // 💬 the checker's chat belonged to the other film (Jordan 2026-11-11: it answered about the film open before)
   $('#prompt').value = S.f.prompt || ''; $('#lenNum').value = S.f.seconds; $('#len').value = Math.min(60, S.f.seconds); // these boxes are only filled at start (the old prompt stayed in the box)
   save(); drawAll(); drawTakes(); undoRebase(); return true; }
@@ -558,7 +565,7 @@ function filmsNow(){ try{ const F = FW && FW.FILM; if(F && F.S && F.S.films) ret
   let E = {}; try{ E = JSON.parse(localStorage.getItem('h3edit') || '{}') || {}; }catch(e){} E.films = E.films || []; return {E, live:false}; }
 function backupBody(){ const {E} = filmsNow(), films = JSON.parse(JSON.stringify(E.films || [], (k, v) => k==='exp' || k==='prev' ? undefined : v));
   if(!films.length && !(S.lib || []).length && !S.fresh) return null; // 🧹 after Start fresh an empty copy is meant (an emptied phone has no S.fresh)
-  const keep = {lib:S.lib || [], forms:S.forms || {}, casts:S.casts || {}, cast:S.cast || [], fkey:S.fkey, films}, txt = JSON.stringify(keep), media = {}, up = {};
+  const keep = {lib:S.lib || [], forms:S.forms || {}, casts:S.casts || {}, cast:S.cast || [], fkey:S.fkey, films, movies:JSON.parse(JSON.stringify(E.movies || [], (k, v) => k==='exp' || k==='fin' ? undefined : v)), mv:S.mv || {}}, txt = JSON.stringify(keep), media = {}, up = {};
   for(const id of Object.keys(S.media || {})) if(txt.includes('"' + id + '"')){ media[id] = S.media[id]; Object.keys(S.up || {}).forEach(k => { if(k.startsWith(id + '|')) up[k] = S.up[k]; }); }
   return JSON.stringify(Object.assign({v:1, t:Date.now(), fresh:S.fresh || 0, media, up}, keep)); }
 async function pushFilms(){ if(!RESCUED || HOLD) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
@@ -571,7 +578,7 @@ async function mediaBack(ids, up){ let n = 0;
       try{ const r = await fetch(p.url + '/view?type=input&subfolder=' + encodeURIComponent(i > 0 ? nm.slice(0, i) : '') + '&filename=' + encodeURIComponent(nm.slice(i + 1)), {cache:'no-store'});
         if(!r.ok) continue; const b = await r.blob(); if(!b.size) continue; await IDB.put(id, b); BLOBS[id] = b; n++; break; }catch(e){} } }
   return n; }
-function putFilms(films){ const {E, live} = filmsNow(); E.films = films.concat(E.films || []); if(live){ try{ FW.FILM.save(); FW.FILM.draw(); }catch(e){} }
+function putFilms(films, movies){ const {E, live} = filmsNow(); E.films = films.concat(E.films || []); if(movies && movies.length) E.movies = movies.concat(E.movies || []); if(live){ try{ FW.FILM.save(); FW.FILM.draw(); }catch(e){} }
   else { try{ localStorage.setItem('h3edit', JSON.stringify(E)); }catch(e){} try{ if(FW) FW.location.reload(); }catch(e){} } }
 // the films, from the renders alone: each film's finished takes in the order they were made, options of a clip under that clip,
 // a carry-on after the clip it carries on from, a lead-in before it
@@ -599,11 +606,12 @@ async function rescue(){ try{
     if(j && (Array.isArray(j.films) || Array.isArray(j.lib)) && (j.t || 0) > (S.fresh || 0) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
   const {E} = filmsNow(), noFilms = !(E.films || []).length, noLib = !(S.lib || []).length, said = [];
   if(best && (noFilms || noLib)){
-    if(noFilms && (best.films || []).length){ putFilms(best.films); said.push(best.films.length + (best.films.length===1 ? ' film' : ' films')); }
+    if(noFilms && (best.films || []).length){ putFilms(best.films, best.movies); said.push(best.films.length + (best.films.length===1 ? ' film' : ' films')); }
     if(noLib && (best.lib || []).length){ S.lib = best.lib; said.push(best.lib.length + ' Library ' + (best.lib.length===1 ? 'entry' : 'entries')); }
     for(const [k, v] of Object.entries(best.forms || {})) if(S.forms[k]===undefined && k!==mineK()) S.forms[k] = v;
-    for(const [k, v] of Object.entries(best.casts || {})) if(S.casts[k]===undefined && k!==mineK()) S.casts[k] = v;
-    if(!(S.cast || []).length && (best.cast || []).length && (best.fkey || '')===mineK()) S.cast = best.cast;
+    if(best.mv && !S.mv) S.mv = best.mv;
+    for(const [k, v] of Object.entries(best.casts || {})) if(S.casts[k]===undefined && k!==mineCK()) S.casts[k] = v;
+    if(!(S.cast || []).length && (best.cast || []).length && castK(best.fkey || '')===mineCK()) S.cast = best.cast;
     for(const [id, m] of Object.entries(best.media || {})) if(!S.media[id]) S.media[id] = m;
     for(const [k, v] of Object.entries(best.up || {})) if(!S.up[k]) S.up[k] = v;
     if(said.length){ save(); drawAll(); try{ drawLib(); }catch(e){} toast('🛟 ' + said.join(' and ') + ' brought back from the PCs', 6000);
@@ -1200,7 +1208,7 @@ function lineLabel(k, txt, film){ const L = lineOf(k), c = L && L.n && castOf(L.
   const nm = c ? chipName(c) : L.n ? 'Subject ' + L.n : 'Voice'; let i = 0, at = 0; for(const j of lineKeys(txt)){ const M = lineOf(j); if(M && (M.n || 0)===(L.n || 0)){ i++; if(j===+k){ at = i; break; } } }
   return nm + ' line ' + (at || 1); }
 const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
-const castFor = k => k===undefined || (k || '')===mineK() ? S.cast || [] : (S.casts[k || ''] || S.castOld || []);
+const castFor = k => k===undefined || castK(k)===mineCK() ? S.cast || [] : (S.casts[castK(k)] || S.castOld || []);
 const castOf = (n, k) => castFor(k).find(c => c.n===+n);
 const castPics = c => { if(!c) return []; if(c.pic){ c.pics = c.pics || []; if(!c.pics.includes(c.pic)) c.pics.unshift(c.pic); } delete c.pic; c.pics = (c.pics || []).filter(id => S.media[id]); return c.pics; }; // (Jordan 2026-11-06: several pictures each)
 const castWho = c => ((c.who || '').trim() || (c.stand || '').trim()).replace(/[\s.]*$/, '');
@@ -1493,7 +1501,7 @@ function libToCast(L){ let c = S.cast.find(x => x.lib===L.id); if(c) return c;
 function libNew(kind, from){ const L = {id:'L' + Math.random().toString(36).slice(2, 10), kind:kind || 'char', name:'', stand:'', desc:'', pics:[], keep:'exact', what:''};
   if(from) Object.assign(L, {kind:from.kind || 'char', name:castWho(from) || '', stand:from.stand || '', desc:from.desc || '', pics:castPics(from).slice(), keep:from.keep || 'exact'});
   S.lib.unshift(L); return L; }
-function filmName(){ try{ const f = FW && FW.FILM && FW.FILM.S.films.find(x => x.id===S.fkey); if(f) return f.name; }catch(e){} return S.fkey ? 'this film' : 'one-off videos'; }
+function filmName(){ try{ const F = FW && FW.FILM, f = F && F.S.films.find(x => x.id===S.fkey); if(f) return F.fullName ? F.fullName(f.id) : f.name; }catch(e){} return S.fkey ? 'this film' : 'one-off videos'; }
 let LIBF = 'all';
 function drawLib(){ const el = $('#libTab'); if(!el || el.hidden) return; const L = (S.lib || []).filter(x => libHere(x) && (LIBF==='all' || x.kind===LIBF));
   el.innerHTML = `<div class="note">Everything you reuse, kept once. Add a character, object or place to a film's 👥 cast; put an attribute (a haircut, eye design, tattoo…) on one of its characters; give a 🧍 pose to who should take it. Change an entry here and every film that uses it follows. Adding goes to <b>${esc(filmName())}</b>, the film open in 🎞 Films.</div>
@@ -3511,7 +3519,7 @@ function patchCards(box, L, html){ const have = [...box.children].filter(x => x.
   else html.forEach((x, i) => { const el = have[i]; if(el.dataset.sig!==x.sig){ el.outerHTML = x.html; } else { const t = L[i];
     el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%'; } }); }
 // 🗂 Renders (Jordan 2026-11-08: "a tab where you can just see everything that has rendered and is rendering"): every take, every film
-const filmNameOf = id => { if(id===undefined) return 'Older videos'; if(!id) return 'One-off videos'; try{ const f = FW && FW.FILM && FW.FILM.S.films.find(x => x.id===id); if(f) return f.name; }catch(e){} return 'A film'; };
+const filmNameOf = id => { if(id===undefined) return 'Older videos'; if(!id) return 'One-off videos'; try{ const F = FW && FW.FILM, f = F && F.S.films.find(x => x.id===id); if(f) return F.fullName ? F.fullName(f.id) : f.name; }catch(e){} return 'A film'; };
 const RT_F = [['all', 'All'], ['working', '⏳ Rendering'], ['done', '✓ Done'], ['failed', '✕ Failed']];
 function drawRenders(){ const tab = $('#rendersTab'); if(!tab || tab.hidden) return; fileTakes();
   const st = S.rtF || 'all', fm = S.rtFilm == null ? '*' : S.rtFilm, films = [...new Set(S.takes.map(t => t.film === undefined ? '~' : t.film || ''))];
@@ -4025,15 +4033,16 @@ function fitFilm(){ const fr = $('#filmTab iframe'); if(!fr) return; try{ const 
 let WHK = ''; // the renders' clip/take labels follow the timeline: redraw them when its clips or their takes change
 let WHR = ''; // ⚡ the Films frame's save count when WHK was last worked out
 setInterval(() => { if(S.tab==='films' && !document.hidden){ syncFilm(); fitFilm(); drawFilmNote();
-  try{ const r = FW.FILM_REV || 0; if(r===WHR) return; WHR = r; const k = JSON.stringify(FW.FILM.S.films.map(f => f.tracks.map(tr => tr.clips.map(c => [c.id, c.at, c.take, c.alts])))); if(k!==WHK){ WHK = k; drawTakes(); } }catch(e){} } }, 1500);
+  try{ const r = FW.FILM_REV || 0; if(r===WHR) return; WHR = r; mvSync(); const k = JSON.stringify(FW.FILM.S.films.map(f => f.tracks.map(tr => tr.clips.map(c => [c.id, c.at, c.take, c.alts])))); if(k!==WHK){ WHK = k; drawTakes(); } }catch(e){} } }, 1500);
 // the film that new takes from the Films tab go into (its timeline), or null
 function filmTarget(){ try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n || n.v!=='film') return null; const f = F.S.films.find(x => x.id===n.film); if(!f) return null;
-  const sel = F.SEL && F.clipOf(f, F.SEL); return sel ? {film:f.id, name:f.name, clip:sel.c.id} : {film:f.id, name:f.name}; }catch(e){ return null; } }
+  const nm = F.fullName ? F.fullName(f.id) : f.name, sel = F.SEL && F.clipOf(f, F.SEL); return sel ? {film:f.id, name:nm, clip:sel.c.id} : {film:f.id, name:nm}; }catch(e){ return null; } }
 function drawFilmNote(){ const el = $('#filmFormNote'); if(!el) return; const ft = filmTarget(); el.hidden = S.tab!=='films';
   if(S.tab!=='films') return; const m = S.f.fl && S.media[S.f.first], c = m && m.carry;
   const H = c ? '➕ <b>Carrying on</b> from ' + esc(fmtS(c.at)) + ' of the selected clip. Write what happens next and Render: it replaces the rest of the clip from that moment, and the clips after it move along.' + (c.more ? '' : '')
     : ft && ft.clip ? '🎬 <b>New takes become versions of the selected clip</b>: tap one under the clip to use it. Tap empty timeline to add to the end instead.'
     : ft ? '🎬 <b>New takes go into “' + esc(ft.name) + '”</b>, at its end. Use ➕ Carry on from here on a clip to continue it instead.' + (FILMTYPED() ? ' <b>You wrote in the Shot box, so its words stay while the playhead is on this clip</b> (another clip brings its own words). <a href="#" onclick="H3FilmFollow();return false">↺ Follow the clip again</a>' : FILMED ? ' <b>You changed the settings, so they stay while you scrub</b> (the words still follow each clip); ↻ Redo and Render use them. <a href="#" onclick="H3FilmFollow();return false">↺ Follow the clip again</a>' : FILMW ? ' The form has the settings and words of the clip under the playhead (from ' + esc(FILMW) + '); change anything and it stays put.' : '')
+    : (() => { try{ return FW.FILM.S.nav.v==='movie'; }catch(e){ return false; } })() ? '🎬 Tap a shot above to put new takes on its timeline (or ＋ New shot). Takes made here now are one-off videos.'
     : '🎬 No film open: takes made here are one-off videos. Open a film above to put them on its timeline.';
   if(el.__h!==H){ el.__h = H; el.innerHTML = H; } }
 // 🎞 the Shot box follows the Films playhead: the words of the moment under it (not while you're typing in it)
@@ -4416,7 +4425,7 @@ setTab(!WORKER && (S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.h
 // film) are folded in quietly. A run of typing is one step. Takes whose videos were deleted on the PCs can't come back.
 let UNDOS = [], REDOS = [], UNDO_CUR = null, UNDO_IDS = [], UNDO_BANK = {}, UNDO_USR = 0, UNDO_TYPE = 0, UNDO_PUSHT = 0, UNDO_BUSY = false;
 const UNDO_FKEYS = ['exp', 'prev', 'pmade', 'pps', 'fin'];
-function undoDeck(){ const k = mineK(), forms = Object.assign({}, S.forms, {[k]:S.f}), casts = Object.assign({}, S.casts, {[k]:S.cast});
+function undoDeck(){ const k = mineK(), forms = Object.assign({}, S.forms, {[k]:S.f}), casts = Object.assign({}, S.casts, {[mineCK()]:S.cast});
   return JSON.stringify({forms, casts, lib:S.lib || [], guides:S.guides || {}, words:(S.takes || []).map(t => [t.id, t.prompt, (t.pieces || []).map(p => p.prompt)])}); }
 function undoFilm(){ try{ const F = FW && FW.FILM; if(!F || !F.S || !F.S.films) return null; return JSON.stringify(F.S.films, (k, v) => UNDO_FKEYS.includes(k) ? undefined : v); }catch(e){ return null; } }
 function undoState(){ return {d:undoDeck(), f:undoFilm()}; }
@@ -4438,8 +4447,8 @@ function undoCheck(user){ if(UNDO_BUSY) return; if(!UNDO_CUR){ undoRebase(); ret
   if(now.f==null && UNDO_CUR.f!=null) now.f = UNDO_CUR.f; // the Films frame isn't open: keep what it had
   UNDO_CUR = now; UNDO_IDS = ids; undoBtns(); }
 function undoPut(st, back, gone){ UNDO_BUSY = true; try{
-    const o = JSON.parse(st.d), k = mineK();
-    S.f = o.forms[k] || S.f; delete o.forms[k]; S.forms = o.forms; S.cast = o.casts[k] || S.cast; delete o.casts[k]; S.casts = o.casts; S.lib = o.lib; S.guides = o.guides;
+    const o = JSON.parse(st.d), k = mineK(), ck = mineCK();
+    S.f = o.forms[k] || S.f; delete o.forms[k]; S.forms = o.forms; S.cast = o.casts[ck] || S.cast; delete o.casts[ck]; S.casts = o.casts; S.lib = o.lib; S.guides = o.guides;
     const W = {}; o.words.forEach(w => W[w[0]] = w); (S.takes || []).forEach(t => { const w = W[t.id]; if(!w) return; t.prompt = w[1]; (t.pieces || []).forEach((p, i) => { if(w[2][i] !== undefined) p.prompt = w[2][i]; }); });
     if(back){ const have = new Set(S.takes.map(t => t.id)); gone.forEach(id => { const t = UNDO_BANK[id]; if(t && !have.has(id)) S.takes.push(t); }); S.takes.sort((a, b) => (b.t || 0) - (a.t || 0)); }
     else { const g = new Set(gone); S.takes = S.takes.filter(t => !g.has(t.id)); }
@@ -4470,7 +4479,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {QWORDS, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }

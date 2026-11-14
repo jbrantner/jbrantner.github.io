@@ -163,6 +163,15 @@ body{padding-bottom:calc(120px + env(safe-area-inset-bottom))}
 .item .t{font-weight:800;flex:1;min-width:0}
 .item .t small{display:block;font-weight:600;color:var(--dim);font-size:12.5px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item .go2{color:var(--dim);font-size:18px}
+/* 🎞 films are folders of shots (Jordan 2026-11-13) */
+.shots{display:grid;gap:8px}
+.shot{display:flex;gap:10px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);cursor:pointer}
+.shot .th{width:96px;flex:none;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:#000;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:11px}
+.shot .th video{width:100%;height:100%;object-fit:cover;pointer-events:none;display:block}
+.shot .t{flex:1;min-width:0;font-weight:800}.shot .t small{display:block;font-weight:600;color:var(--dim);font-size:12.5px;margin-top:2px}
+.shot .mv{display:flex;flex-direction:column;gap:4px}.shot .mv .btn{padding:4px 9px}
+.shotnav{display:flex;gap:6px;align-items:center;margin:-6px 0 10px;font-size:12.5px;color:var(--dim);font-weight:700}.shotnav .btn{padding:5px 10px}
+.mvplay{width:100%;aspect-ratio:var(--ar,16/9);background:#000;border-radius:var(--r);display:block;margin-bottom:8px}
 .slot .rk{position:absolute;left:5px;top:5px;padding:2px 7px;border-radius:99px;background:var(--accent);color:var(--accent-ink);font-size:11px;font-weight:800}
 .slot .mv{position:absolute;right:4px;bottom:4px;display:flex;gap:3px}
 .slot .mv button{width:26px;height:26px;border-radius:8px;background:#111217e6;border:1px solid var(--line);font-size:12px;color:var(--soft)}
@@ -333,6 +342,7 @@ function load(){
   let s = {}; try{ s = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }catch(e){}
   s.films = s.films || []; s.seen = s.seen || {}; s.rev = s.rev || {}; s.nav = s.nav || {v:'home'};
   s.films.forEach(f => { if(!f.tracks) f.tracks = [{id:uid('tr'), clips:[]}, {id:uid('tr'), clips:[]}]; if(f.pps == null) f.pps = 24; });
+  s.movies = s.movies || [];
   return s;
 }
 // ↶ Undo (Jordan 2026-11-06): each change to a film's clips, tracks or name is remembered (50 steps, while the app is open)
@@ -464,16 +474,47 @@ async function tick(){ clearTimeout(tickT);
 
 // ---------- screens ----------
 const N = () => S.nav;
-const go = nav => { stopPlay(); S.nav = nav; save(); draw(); window.scrollTo(0, 0); const fn = deckFn('H3FilmNav'); if(fn) try{ fn(); }catch(e){} };
+const go = nav => { stopPlay(); mvStop(); S.nav = nav; save(); draw(); window.scrollTo(0, 0); const fn = deckFn('H3FilmNav'); if(fn) try{ fn(); }catch(e){} };
 // 🎞 a take belongs to one film (Jordan 2026-11-07): lists in a film show only its own (and old takes from before films kept to themselves)
 const ofFilm = (t, f) => !t || t.film===undefined || (t.film || '')===(f ? f.id : '');
 const filmOf = id => S.films.find(f => f.id===id);
+// ---------- 🎞 films are folders of shots (Jordan 2026-11-13: "make films like a folder and each shot is like the current film is") ----------
+// S.movies = [{id, name, shots:[shot ids in order]}]. A shot is what a film used to be (an entry in S.films with its own timeline,
+// words, takes and form) and knows its film in f.movie. The cast belongs to the film, so every shot has all its characters (H3 Deck
+// keys the cast by f.movie). An old film becomes one shot of a film with the same id and name, so its cast carries straight over.
+const movieOf = id => (S.movies || []).find(m => m.id===id);
+function ensureMovies(){ S.movies = S.movies || []; let ch = false; const have = new Set(S.films.map(f => f.id));
+  for(const m of S.movies){ const n = m.shots.length; m.shots = m.shots.filter(id => have.has(id)); if(m.shots.length!==n) ch = true; }
+  for(const f of S.films){ let m = f.movie && movieOf(f.movie);
+    if(!m){ m = {id:f.movie || f.id, name:f.name, shots:[]}; S.movies.unshift(m); f.movie = m.id; ch = true; }
+    if(!m.shots.includes(f.id)){ m.shots.push(f.id); ch = true; } }
+  return ch; }
+const shotsOfM = m => m ? m.shots.map(filmOf).filter(Boolean) : [];
+const movieOfShot = f => f && movieOf(f.movie);
+const shotNo = f => { const m = movieOfShot(f); return m ? m.shots.indexOf(f.id) + 1 : 1; };
+const shotLabel = f => { const m = movieOfShot(f); return !m || !f.name || f.name===m.name ? 'Shot ' + shotNo(f) : f.name; };
+const fullName = id => { const f = filmOf(id), m = movieOfShot(f); return !f ? '' : m && m.shots.length > 1 ? m.name + ' › ' + shotLabel(f) : (m ? m.name : f.name); };
+const newShot = (m, name) => { const f = {id:uid('f'), name:name || '', movie:m.id, tracks:[{id:uid('tr'), clips:[]}], pps:24}; S.films.unshift(f); m.shots.push(f.id); return f; };
+const movieSecs = m => shotsOfM(m).reduce((a, f) => a + filmSecs(f), 0);
+// the whole film as one timeline: each shot's tracks laid end to end (track k of every shot on track k), for ▶ and ⬇ Export
+function mvFilm(m){ const sh = shotsOfM(m); let at = 0; const nT = Math.max(1, ...sh.map(f => f.tracks.length)), tracks = Array.from({length:nT}, (_, k) => ({id:m.id + '_t' + k, clips:[]}));
+  for(const f of sh){ f.tracks.forEach((tr, k) => { if(tr.hide) return; const T = tracks[k]; if(tr.xf) T.xf = tr.xf; if(tr.crop) T.crop = tr.crop;
+      tr.clips.forEach(c => T.clips.push(Object.assign({}, c, {at:c.at + at, id:f.id + '/' + c.id}))); }); at += filmSecs(f); }
+  const V = Object.create(m); Object.defineProperty(V, 'tracks', {value:tracks}); V.pps = 24; const c0 = sh.find(f => f.canvas); if(c0) V.canvas = c0.canvas;
+  Object.defineProperty(V, 'exp', {get:() => m.exp, set:v => { m.exp = v; }}); Object.defineProperty(V, 'fin', {get:() => m.fin, set:v => { m.fin = v; }}); return V; }
+// what plays when, with the upper full-frame track winning (for ▶ Play the film)
+function mvSegs(V){ const all = V.tracks.flatMap(tr => tr.clips), ts = [...new Set(all.flatMap(c => [c.at, c.at + len(c)]).map(x => +x.toFixed(4)))].sort((a, b) => a - b), out = [];
+  for(let i = 0; i + 1 < ts.length; i++){ const a = ts[i], b = ts[i + 1]; if(b - a < 1e-3) continue; const c = activeAt(V, (a + b) / 2, true); if(!c) continue;
+    const L = out[out.length - 1]; if(L && L.c===c && Math.abs(L.b - a) < 1e-3) L.b = b; else out.push({c, a, b}); }
+  return out; }
 const ACT = {}; let TSEL = null; // 🎬 ACT[film] = track new clips go on; TSEL: the id of the track whose clips are all selected (⇔ slide the whole track)
 const BARE = () => { try{ return deck().bare===true; }catch(e){ return false; } }; // 🦴 bare bones (2026-11-08), switched in H3 Deck's ⚙
 function draw(){ document.body.classList.toggle('bare', BARE());
   placeNew(); keepTakes(); S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(!takeOf(c.take)) findLost(c.take); else if(!fileOf(takeOf(c.take)) && !takes().find(x => x.id===c.take)) findLost(c.take); }))); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
-  const v = N().v, f = v==='film' && filmOf(N().film);
-  $('#view').innerHTML = f ? filmView(f) : v==='review' ? reviewView() : homeView();
+  if(ensureMovies()) saveRaw();
+  const v = N().v, f = v==='film' && filmOf(N().film), mv = v==='movie' && movieOf(N().movie);
+  $('#view').innerHTML = f ? filmView(f) : mv ? movieView(mv) : v==='review' ? reviewView() : homeView();
+  if(mv){ wireMovie(mv); const V = mvFilm(mv); if(V.exp && V.exp.state==='working') expPoll(V); else if(V.exp && V.exp.state==='done') expFetch(V); }
   if(f){ wireFilm(f); { const b = PSEL && blockOf(f, PSEL); if(b) blockSheet(f, b); } clipPanel(f, SEL && clipOf(f, SEL)); /* a redraw keeps the selected clip's words panel (it went blank after any refresh) */ if(f.exp && f.exp.state==='working') expPoll(f); else if(f.exp && f.exp.state==='done') expFetch(f); if(f.fin && f.fin.state==='working') finPoll(f); }
 }
 // redraw what can change by itself without disturbing a playing video or a drag
@@ -482,11 +523,39 @@ const crumb = parts => `<div class="crumb">${parts.map(([t, nav]) => nav ? `<but
 function filmSecs(f){ return Math.max(0, ...f.tracks.flatMap(tr => tr.clips.map(c => c.at + (c.out - c.in)))); }
 function homeView(){
   return `<h2><span>Films</span><button class="btn pri" data-act="newFilm">＋ New film</button></h2>
-  <div class="list">${S.films.map(f => { const n = f.tracks.reduce((a, t) => a + t.clips.length, 0);
-    return `<div class="item" data-nav='${esc(JSON.stringify({v:'film', film:f.id}))}'><div class="t">🎬 ${esc(f.name)}<small>${n} clip${n===1 ? '' : 's'} · ${fmt(filmSecs(f))}</small></div><span class="go2">›</span></div>`; }).join('')
+  <div class="list">${(S.movies || []).map(m => { const n = m.shots.length;
+    return `<div class="item" data-nav='${esc(JSON.stringify({v:'movie', movie:m.id}))}'><div class="t">🎬 ${esc(m.name)}<small>${n} shot${n===1 ? '' : 's'} · ${fmt(movieSecs(m))}</small></div><span class="go2">›</span></div>`; }).join('')
     || '<div class="empty">No films yet. Tap ＋ New film, then render clips below: each one lands on its timeline.</div>'}</div>
   ${BARE() ? '' : '<div class="note" style="margin-top:14px">The earlier H3 Film (cast, scenes and cuts) is still at <a href="old.html" style="color:var(--cyan)">old.html</a>.</div>'}`;
 }
+
+// 🎞 a film: its shots in order. Tap a shot to open its own timeline; ⬆⬇ to reorder; ▶ plays them all; ⬇ Export joins them.
+function movieView(m){ const sh = shotsOfM(m), V = mvFilm(m), T = movieSecs(m), ar = canvasAr(V);
+  const thumb = f => { const c = f.tracks.flatMap(tr => tr.hide ? [] : tr.clips).sort((a, b) => a.at - b.at)[0], t = c && takeOf(c.take), fl = t && fileOf(t);
+    return fl ? `<video muted playsinline preload="metadata" src="${esc(viewUrl(t.pc, fl))}#t=${(c.in + 0.05).toFixed(2)}"></video>` : (c ? 'rendering…' : 'empty'); };
+  return crumb([['Films', {v:'home'}], [m.name]]) +
+  `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-mname value="${esc(m.name)}" placeholder="Film name"><button class="btn warn" data-act="mvDel" aria-label="Delete film">🗑</button></div>
+  <video class="mvplay" id="mvV" playsinline style="--ar:${ar}" ${S.snd ? '' : 'muted'}></video>
+  <div class="row" style="margin-bottom:12px;gap:8px"><button class="btn pri" data-act="mvPlay" id="mvPlayBtn" ${T ? '' : 'disabled'}>▶ Play the film</button><span class="note" style="margin:0;flex:1" id="mvTc">${fmt(T)} · ${sh.length} shot${sh.length===1 ? '' : 's'}</span><button class="btn" data-act="mvExport" ${T ? '' : 'disabled'}>⬇ Export</button></div>
+  <div class="shots">${sh.map((f, i) => { const n = f.tracks.reduce((a, t) => a + t.clips.length, 0);
+    return `<div class="shot" data-nav='${esc(JSON.stringify({v:'film', film:f.id}))}'><div class="th">${thumb(f)}</div><div class="t">${i + 1}. ${esc(shotLabel(f))}<small>${n} clip${n===1 ? '' : 's'} · ${fmt(filmSecs(f))}</small></div>
+      <div class="mv"><button class="btn" data-act="mvMove" data-s="${esc(f.id)}" data-d="-1" ${i ? '' : 'disabled'} aria-label="Move up">⬆</button><button class="btn" data-act="mvMove" data-s="${esc(f.id)}" data-d="1" ${i < sh.length - 1 ? '' : 'disabled'} aria-label="Move down">⬇</button></div></div>`; }).join('')
+    || '<div class="empty">No shots yet.</div>'}</div>
+  <button class="btn pri" data-act="mvNewShot" style="width:100%;padding:13px;margin-top:10px">＋ New shot</button>
+  <div class="note" style="margin-top:8px">Tap a shot to work on its own timeline: carry on, fill a gap, ✨, takes. Every shot has all of this film's characters.</div>
+  <div id="exp">${expHtml(V)}</div>`; }
+function wireMovie(m){ const v = $('#mvV'); if(!v) return; v.onclick = () => mvPlay(m); }
+var MVP = null; // ▶ the film playing: {segs, i, v}
+function mvStop(){ if(!MVP) return; const v = MVP.v; MVP = null; try{ v.pause(); }catch(e){} const b = $('#mvPlayBtn'); if(b) b.textContent = '▶ Play the film'; }
+function mvPlay(m){ if(MVP){ mvStop(); return; } const v = $('#mvV'); if(!v) return; const segs = mvSegs(mvFilm(m)); if(!segs.length){ toast('No finished clips to play yet'); return; }
+  MVP = {segs, i:-1, v}; const b = $('#mvPlayBtn'); if(b) b.textContent = '⏸ Stop';
+  const next = () => { if(!MVP || MVP.v!==v) return; MVP.i++; const g = MVP.segs[MVP.i]; if(!g){ mvStop(); return; } const t = takeOf(g.c.take), fl = t && fileOf(t); if(!fl){ next(); return; }
+    const src = viewUrl(t.pc, fl), from = g.c.in + (g.a - g.c.at); MVP.end = g.c.in + (g.b - g.c.at);
+    const start = () => { try{ v.currentTime = from; }catch(e){} v.play().catch(() => {}); };
+    if(v.dataset.src!==src){ v.dataset.src = src; v.src = src; v.addEventListener('loadedmetadata', start, {once:true}); } else start(); };
+  v.ontimeupdate = () => { if(MVP && MVP.v===v && v.currentTime >= MVP.end - 0.03) next(); };
+  v.onended = () => { if(MVP && MVP.v===v) next(); };
+  next(); }
 
 // ---------- ✂ Review: what H3 Deck is making and has made ----------
 function reviewList(){ return takes().filter(t => !S.rev[t.id] && (workingOf(t) || doneOf(t))); }
@@ -522,8 +591,10 @@ function activeAt(f, t, base){ for(const tr of f.tracks) if(!tr.hide && !(base &
 function filmView(f){
   if(!f.canvas && f.tracks.some(x => x.clips.length)) f.canvas = canvasOf(f); // the shape is picked once and then stays (Jordan 2026-11-13)
   S.lastFilm = f.id; const T = filmSecs(f), sel = SEL && clipOf(f, SEL), st = sel && takeOf(sel.c.take), ar = canvasAr(f);
-  return crumb([['Films', {v:'home'}], [f.name]]) +
-  `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-fname value="${esc(f.name)}" placeholder="Film name"><button class="btn pri xf" data-act="test" style="white-space:nowrap">🧪 Test</button><button class="btn warn" data-act="delFilm">🗑</button></div>
+  const M = movieOfShot(f), sn = shotNo(f), sh = shotsOfM(M);
+  return crumb([['Films', {v:'home'}]].concat(M ? [[M.name, {v:'movie', movie:M.id}]] : []).concat([[shotLabel(f)]])) +
+  (M && sh.length > 1 ? `<div class="shotnav"><button class="btn" data-act="shotGo" data-d="-1" ${sn > 1 ? '' : 'disabled'} aria-label="Previous shot">‹</button><span>Shot ${sn} of ${sh.length}</span><button class="btn" data-act="shotGo" data-d="1" ${sn < sh.length ? '' : 'disabled'} aria-label="Next shot">›</button><span style="flex:1"></span><button class="btn" data-nav='${esc(JSON.stringify({v:'movie', movie:M.id}))}'>🎞 All shots</button></div>` : '') +
+  `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-fname value="${esc(f.name)}" placeholder="Shot name"><button class="btn pri xf" data-act="test" style="white-space:nowrap">🧪 Test</button><button class="btn warn" data-act="delFilm">🗑</button></div>
   <div class="row xf" style="margin:-2px 0 8px;gap:6px">${Object.keys(CANV).map(k => `<button class="btn ${canvasOf(f)===k ? 'pri' : ''}" data-act="canvas" data-v="${k}" style="padding:7px 10px">${CANV[k][2]}</button>`).join('')}</div>
   <div class="stage" style="--ar:${ar}"><video id="vA" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video><video id="vB" playsinline preload="auto" ${S.snd ? '' : 'muted'}></video>${ovlHtml(f)}<div class="gap" id="gap">${T ? '' : 'Add clips from ✂ Review or ＋ Clip'}</div></div>
   <div id="xfBox">${xfHtml(f)}</div><div id="cropBox">${cropHtml(f)}</div>
@@ -651,7 +722,7 @@ async function finSave(f){ const z = f.fin; if(!z || !z.file) return; const k = 
   try{ if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file]}); return; }
     const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = z.file.filename; a.click(); }
   catch(e){ if(e && e.name==='NotAllowedError' && late){ toast('It\'s on the phone now: tap 📲 Save again', 5000); return; } if(e && e.name!=='AbortError') toast("Couldn't save it: " + e.message); } }
-function expShow(f){ const el = $('#exp'); if(el && N().v==='film' && N().film===f.id) el.innerHTML = expHtml(f); }
+function expShow(f){ const el = $('#exp'); if(el && (N().v==='film' && N().film===f.id || N().v==='movie' && N().movie===f.id)) el.innerHTML = expHtml(f); }
 let expT = 0;
 async function expPoll(f){ clearTimeout(expT); const x = f.exp; if(!x || x.state!=='working') return;
   try{ const r = await fetch(x.pc + '/renderdeck/h3export?id=' + x.id), j = await r.json();
@@ -2047,13 +2118,23 @@ function fillSheet(f){ const P = fillPair(f);
 document.addEventListener('click', async ev => {
   if(ev.target.id==='sheet' || ev.target.closest('[data-close]')){ closeSheet(); return; }
   const nv = ev.target.closest('[data-nav]'); if(nv && !ev.target.closest('[data-act]')){ go(JSON.parse(nv.dataset.nav)); return; }
-  const el = ev.target.closest('[data-act]'); if(!el) return; const a = el.dataset.act, d = el.dataset, f = N().v==='film' && filmOf(N().film), t = d.t && takeOf(d.t);
+  const el = ev.target.closest('[data-act]'); if(!el) return; const a = el.dataset.act, d = el.dataset, t = d.t && takeOf(d.t), f = N().v==='film' ? filmOf(N().film) : N().v==='movie' && ['expSave', 'expStop'].includes(a) && movieOf(N().movie) ? mvFilm(movieOf(N().movie)) : false;
   if(d.m) closeSheet(); // a choice from the track menu
   if(f && ['split', 'carry', 'keepOnly', 'moreTakes', 'useTake', 'redo', 'lead', 'fill', 'closeGap', 'delClip', 'delTrack', 'combine', 'joinPrev'].includes(a)){
     const r = SEL && clipOf(f, SEL), k = a==='delTrack' ? +d.k : r ? r.k : GAP ? GAP.k : -1; if(k >= 0 && lockedK(f, k)){ ev.stopPropagation(); toast(LOCKMSG, 4000); return; } }
   switch(a){
-    case 'newFilm': { const nm = prompt('Name of the film', 'Film ' + (S.films.length + 1)); if(nm==null) return; const nf = {id:uid('f'), name:nm.trim() || 'Film', tracks:[{id:uid('tr'), clips:[]}, {id:uid('tr'), clips:[]}], pps:24}; S.films.unshift(nf); save(); go({v:'film', film:nf.id}); return; }
-    case 'delFilm': if(!confirm('Delete "' + f.name + '"? The clips stay in H3 Deck.')) return; S.films = S.films.filter(x => x!==f); save(); go({v:'home'}); return;
+    case 'newFilm': { const nm = prompt('Name of the film', 'Film ' + ((S.movies || []).length + 1)); if(nm==null) return; const M = {id:uid('m'), name:nm.trim() || 'Film', shots:[]}; S.movies = S.movies || []; S.movies.unshift(M);
+      const nf = newShot(M); save(); go({v:'film', film:nf.id}); return; }
+    case 'delFilm': { const M = movieOfShot(f); if(!confirm('Delete ' + (M ? 'shot "' + shotLabel(f) + '" from ' + M.name : '"' + f.name + '"') + '? The clips stay in H3 Deck.')) return;
+      S.films = S.films.filter(x => x!==f); if(M) M.shots = M.shots.filter(id => id!==f.id); save(); go(M ? {v:'movie', movie:M.id} : {v:'home'}); return; }
+    case 'shotGo': { const M = movieOfShot(f), i = M ? M.shots.indexOf(f.id) + (+d.d) : -1; if(M && M.shots[i]) go({v:'film', film:M.shots[i]}); return; }
+    case 'mvNewShot': { const M = movieOf(N().movie); if(!M) return; const nf = newShot(M); save(); go({v:'film', film:nf.id}); toast('🎬 ' + shotLabel(nf) + ': render its clips below. Every character of ' + M.name + ' is here.', 4500); return; }
+    case 'mvMove': { ev.stopPropagation(); const M = movieOf(N().movie), i = M ? M.shots.indexOf(d.s) : -1, j = i + (+d.d); if(i < 0 || j < 0 || j >= M.shots.length) return;
+      [M.shots[i], M.shots[j]] = [M.shots[j], M.shots[i]]; save(); draw(); return; }
+    case 'mvDel': { const M = movieOf(N().movie); if(!M) return; if(!confirm('Delete the film "' + M.name + '" and its ' + M.shots.length + ' shot' + (M.shots.length===1 ? '' : 's') + '? The clips stay in H3 Deck.')) return;
+      const ids = new Set(M.shots); S.films = S.films.filter(x => !ids.has(x.id)); S.movies = S.movies.filter(x => x!==M); save(); go({v:'home'}); return; }
+    case 'mvExport': { const M = movieOf(N().movie); if(M) exportFilm(mvFilm(M)); return; }
+    case 'mvPlay': { const M = movieOf(N().movie); if(M) mvPlay(M); return; }
     case 'keep': S.rev[t.id] = 'keep'; toast('Kept: it\'s at the top of ＋ Clip in 🎞 Films. ➕ Next part options carries it on.', 4500); break;
     case 'skip': S.rev[t.id] = 'skip'; break;
     case 'unkeep': delete S.rev[t.id]; break;
@@ -2172,7 +2253,8 @@ document.addEventListener('click', async ev => {
   }
   draw();
 });
-document.addEventListener('input', ev => { const el = ev.target; if(el.dataset.fname != null){ const f = filmOf(N().film); if(f){ f.name = el.value; save(); } } });
+document.addEventListener('input', ev => { const el = ev.target; if(el.dataset.fname != null){ const f = filmOf(N().film); if(f){ f.name = el.value; save(); } }
+  if(el.dataset.mname != null){ const m = movieOf(N().movie); if(m){ m.name = el.value; save(); } } });
 $('#roomBtn').addEventListener('click', () => go({v:'review'}));
 window.addEventListener('storage', e => { if(e.key===DECK) drawSoft(); }); // H3 Deck open in another tab
 document.addEventListener('visibilitychange', () => { if(!document.hidden) tick(); });
@@ -2188,7 +2270,7 @@ function selTake(id){ const f = N().v==='film' && filmOf(N().film); if(!f) retur
   const c = (w && w.clip && all.find(x => x.id===w.clip)) || all.find(x => x.take===id) || all.find(x => (x.alts || []).includes(id) || (x.was && x.was.take===id)); if(!c) return false; SEL = c.id; PH = c.at; draw();
   // and point at that take in "Takes of this clip", so one tap puts it in the clip
   const b = document.querySelector('#vstrip [data-t="' + CSS.escape(id) + '"]'); if(b){ b.classList.add('hl'); b.scrollIntoView({block:'nearest', inline:'center'}); setTimeout(() => b.classList.remove('hl'), 4000); } return true; }
-window.FILM = {upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {movieOf, mvFilm, mvSegs, fullName, shotLabel, shotNo, ensureMovies, newShot, shotsOfM, movieOfShot, upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame
