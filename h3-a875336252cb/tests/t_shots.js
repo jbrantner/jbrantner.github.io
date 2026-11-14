@@ -19,17 +19,23 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     return rt.fulfill({status:404, headers:H, body:''}); });
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const tk = (id, film) => ({id, t:1, pc:R, w:640, h:360, seconds:5, prompt:id, dir:'H3Deck/' + id, film, state:'done', final:F(id + '.mp4'), pieces:[{prompt:id, state:'done', deliv:120, file:F(id + '.mp4')}]});
-  const deck = {pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA', 'fA'), tk('tB', 'fB')], tab:'films', fkey:'fA', cast:[{n:1, name:'Laura', desc:'a woman'}], casts:{fB:[{n:1, name:'Kat', desc:'a cat'}]}};
+  const deck = {pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA', 'fA'), tk('tB', 'fB'), tk('tC', 'fC'), tk('tD', 'fC')], tab:'films', fkey:'fA', cast:[{n:1, name:'Laura', desc:'a woman'}], casts:{fB:[{n:1, name:'Kat', desc:'a cat'}]}};
   const edit = {films:[{id:'fA', name:'Beach', pps:24, tracks:[{id:'a1', clips:[{id:'c1', take:'tA', in:0, out:5, dur:5, at:0}]}, {id:'a2', clips:[]}]},
-    {id:'fB', name:'Forest', pps:24, tracks:[{id:'b1', clips:[{id:'c2', take:'tB', in:1, out:4, dur:5, at:0}]}]}], nav:{v:'film', film:'fA'}, lastFilm:'fA'};
+    {id:'fB', name:'Forest', pps:24, tracks:[{id:'b1', clips:[{id:'c2', take:'tB', in:1, out:4, dur:5, at:0}]}]},
+    {id:'fC', name:'Old', pps:24, canvas:'tall', tracks:[{id:'o1', clips:[{id:'c5', take:'tC', in:0, out:5, dur:5, at:0}]}, {id:'o2', clips:[{id:'c6', take:'tD', in:0, out:2, dur:5, at:3}], xf:{s:0.4, r:0, x:0, y:0}}, {id:'o3', clips:[]}]}], nav:{v:'film', film:'fA'}, lastFilm:'fA'};
   await page.addInitScript(([r, d, e]) => { if(!sessionStorage.getItem('i')){ sessionStorage.setItem('i', '1'); localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(d)); localStorage.setItem('h3edit', JSON.stringify(e)); }
     window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; window.FILM_PCS = window.H3_PCS; }, [R, deck, edit]);
   await page.goto('http://127.0.0.1:8043/index.html'); await page.waitForFunction(() => window.H3 && H3.S, null, {timeout:20000});
   let fr = null; for(let i = 0; i < 60 && !fr; i++){ fr = page.frames().find(f => /film\/\?embed=1/.test(f.url()) && f.url()); if(fr && !(await fr.evaluate(() => !!window.FILM).catch(() => false))) fr = null; if(!fr) await page.waitForTimeout(250); }
   await page.waitForTimeout(800);
   const FS = () => fr.evaluate(() => ({movies:FILM.S.movies.map(m => [m.id, m.name, m.shots.join('+')].join(':')).join(','), nav:FILM.S.nav}));
-  ok((await FS()).movies==='fB:Forest:fB,fA:Beach:fA' || (await FS()).movies==='fA:Beach:fA,fB:Forest:fB', 'old films became films of one shot each, same ids and names: ' + (await FS()).movies);
-  ok(await fr.evaluate(() => FILM.S.films.every(f => f.movie===f.id)), 'each old film is a shot of its own film');
+  ok(await fr.evaluate(() => { const m = FILM.movieOf('fC'), sh = m.shots.map(id => FILM.S.films.find(f => f.id===id));
+    return sh.length===2 && sh[0].id==='fC' && sh[0].tracks.length===1 && sh[0].tracks[0].id==='o1' && sh[1].tracks[0].id==='o2' && sh[1].tracks[0].clips[0].at===0 && !sh[1].tracks[0].xf && sh[1].canvas==='tall'; }),
+    '✂ an old shot with two tracks became two shots in its film, the second track starting at 0 (empty track dropped)');
+  ok(await page.evaluate(() => { const t = H3.S.takes.find(x => x.id==='tD'); return t.film!=='fC' && t.film===H3.S.takes.find(x => x.id==='tD').film; }) && await fr.evaluate(id => FILM.movieOf('fC').shots[1]===id, await page.evaluate(() => H3.S.takes.find(x => x.id==='tD').film)), '✂ its take now belongs to the new shot');
+  ok(await fr.evaluate(() => { const n = FILM.S.films.length; FILM.splitTracks(); return FILM.S.films.length===n; }), '✂ it only happens once');
+  ok(/fA:Beach:fA/.test((await FS()).movies) && /fB:Forest:fB/.test((await FS()).movies), 'old films became films of one shot each, same ids and names: ' + (await FS()).movies);
+  ok(await fr.evaluate(() => ['fA', 'fB', 'fC'].every(id => FILM.S.films.find(f => f.id===id).movie===id)), 'each old film is a shot of its own film');
   ok(/Beach/.test(await fr.$eval('.crumb', e => e.textContent)) && /Shot 1/.test(await fr.$eval('.crumb', e => e.textContent)), 'the shot screen says Films › Beach › Shot 1: ' + await fr.$eval('.crumb', e => e.textContent));
   ok(await page.evaluate(() => H3.S.cast.map(c => c.name).join())==='Laura', 'Beach\'s cast is Laura');
   // the film screen
@@ -65,7 +71,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await fr.$eval('#exp', e => /Exporting/.test(e.textContent)), 'the film screen shows the export');
   // home lists films, not shots
   await fr.evaluate(() => FILM.go({v:'home'})); await page.waitForTimeout(300);
-  ok(await fr.$$eval('#view .item', e => e.map(x => x.textContent).join('|')).then(t => /Beach.*2 shots/.test(t) && /Forest.*1 shot/.test(t)), 'Films lists films with their shot counts');
+  ok(await fr.$$eval('#view .item', e => e.map(x => x.textContent).join('|')).then(t => /Beach.*2 shots/.test(t) && /Forest.*1 shot/.test(t) && /Old.*2 shots/.test(t)), 'Films lists films with their shot counts');
   // a shot deleted, then the film
   await fr.evaluate(id => FILM.go({v:'film', film:id}), s2); await page.waitForTimeout(400);
   await fr.click('[data-act="delFilm"]'); await page.waitForTimeout(400);
