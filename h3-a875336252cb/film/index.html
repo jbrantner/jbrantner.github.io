@@ -1734,18 +1734,27 @@ function upWordsSheet(f, c){ const t = takeOf(c.take), H = (() => { try{ return 
 function facesSheet(f, tr, c){ const t = takeOf(c.take); if(!fileOf(t)){ toast('Wait for the clip to finish first'); return; }
   const P = partsCtx(t); if(!P) return; const {H, ppl} = P;
   const key = c.take + '|' + c.in.toFixed(2) + '|' + c.out.toFixed(2), F = partsF(t);
+  // (Jordan 2026-11-14: "For find a face could we have the option to select the checkpoint? I want to use Pika for it … And the ability to
+  // include Lora's and prompts") the model (remembered in S.faceUnet), the LoRAs (the clip's own to start) and the words for this pass
+  const ms = H.hqUnets ? H.hqUnets() : [], um = ms.includes(S.faceUnet) ? S.faceUnet : '', fw0 = untime(wordsBetween(t, c.in, c.out) || '');
+  const flo = JSON.parse(JSON.stringify((() => { try{ return H.lorasOf(t) || []; }catch(e){ return t.loras || []; } })())).filter(l => l && l.name && !/turbo|regenerate|lightning|4.?step|8.?step/i.test(l.name));
   $('#sheetCard').innerHTML = `<h3><span>🎭 Faces and parts</span><button class="btn" data-close>✕</button></h3>
     <div class="note">SAM 3 finds what you name and numbers each one. Scrub the video, then say whose each number is. MiniMax redraws each one with only that person's pictures, and only that part goes back in. Nothing else in the clip is redrawn.</div>
     ${partsHtml(F)}
+    <div class="lab" style="margin-top:10px"><span>Model</span></div><select id="fcM" style="width:100%"><option value="">Vanilla MiniMax (best likeness)</option>${ms.map(x => `<option value="${esc(x)}" ${x===um ? 'selected' : ''}>${esc(unetLabel(x))}</option>`).join('')}</select>
+    ${ms.length ? '' : '<div class="note" style="margin-top:4px">Only vanilla MiniMax is on the PCs that are on right now.</div>'}
+    ${H.redoLoras ? `<div class="lab" style="margin-top:10px"><span>🎨 LoRAs</span></div><div id="fcLoras"></div>` : ''}
+    <div class="lab" style="margin-top:10px"><span>Prompt</span></div><textarea id="fcP" rows="4" style="width:100%" placeholder="The clip's own words are used when this is empty">${esc(fw0)}</textarea>
+    <div class="note" style="margin-top:4px">Starts as the clip's own words. Change them or add your own for this pass only.</div>
     <button class="btn pri" id="fcGo" style="padding:13px;width:100%;margin-top:10px" disabled>🎭 Repaint the faces</button>
     <button class="btn" id="fcTu" style="padding:11px;width:100%;margin-top:8px">👁 Put a picture in the eyes instead (Touch up)</button>
     <div class="note" style="margin-top:4px">MiniMax can't draw small patterns like spiral eyes at this size. Touch up lays your own picture onto each iris on every frame.</div>`;
   $('#fcTu').onclick = () => touchClip(f, c);
-  $('#sheet').hidden = false;
+  $('#sheet').hidden = false; loraBox($('#fcLoras'), flo, H);
   const UI = partsWire(F, {t, H, ppl, take:c.take, a:() => c.in, b:() => c.out, key:() => key, get:() => c.faceScan, set:z => { if(z) c.faceScan = z; else delete c.faceScan; },
     paint:k => { const fw = /^faces?$/i.test(F.word) ? 'face' : 'part'; $('#fcGo').disabled = !k; $('#fcGo').textContent = k ? '🎭 Repaint ' + k + ' ' + fw + (k > 1 ? 's' : '') : '🎭 Pick a number for someone first'; }});
-  $('#fcGo').onclick = async () => { const faces = UI.faces(); if(!faces.length) return; S.faceDen = F.den; save(); $('#fcGo').disabled = true;
-    const one = Object.assign({}, c, {qcuts:[]}), n = await qualityGo(f, {id:tr.id + ':' + c.id, clips:[one]}, {den:F.den, clean:0.8, scale:1, look:'live', sep:true, swap:c.id, track:tr.id, faces, descOff:F.off, find:F.word, zoom:F.zoom, str:F.lo});
+  $('#fcGo').onclick = async () => { const faces = UI.faces(); if(!faces.length) return; const um2 = $('#fcM').value, pw = $('#fcP').value.trim(); S.faceDen = F.den; S.faceUnet = um2; save(); $('#fcGo').disabled = true;
+    const one = Object.assign({}, c, {qcuts:[]}), n = await qualityGo(f, {id:tr.id + ':' + c.id, clips:[one]}, {den:F.den, clean:0.8, scale:1, look:'live', sep:true, swap:c.id, track:tr.id, faces, descOff:F.off, find:F.word, zoom:F.zoom, str:F.lo, unet:um2, loras:flo, prompt:pw});
     $('#fcGo').disabled = false; if(n){ closeSheet(); draw(); toast('🎭 Faces: sent. When it\'s done it takes this clip\'s place (the original stays in the clip\'s versions).', 6000); } }; }
 // 🎭 the Faces and parts controls, shared by the 🎭 Faces sheet and ✏️ Edit (Jordan 2026-11-08: "add faces to the edit tab, with eye masks
 // and everything"): what SAM 3 finds, the numbered scan, whose each number is, her detail/attribute chips, 🔍 zoom and strength
@@ -1806,7 +1815,7 @@ async function qualityGo(f, tr, o){ const fn = deckFn('H3Nudge'); if(!fn){ toast
   if(passOf(tr)){ toast('A pass is already running on this track'); return 0; }
   if(tr.clips.some(c => !fileOf(takeOf(c.take)))){ toast('Wait for every clip on the track to finish first (a pass does all of them or none)'); return 0; }
   const wins = qpWins(tr); if(!wins.length){ toast('No clips on that track'); return 0; }
-  const seed = o.seed || Math.floor(Math.random() * 2 ** 31), key = uid('k'), big = (o.scale || 1) > 1, p = {key, film:f.id, track:tr.id, big, wins, state:'working', t:Date.now(), o:{den:o.den, clean:o.clean || 0, scale:o.scale || 1, seed, look:o.look || S.finLook || 'live', sep:!!o.sep, chain:o.chain || '', swap:o.swap || '', faces:o.faces || null, find:o.find || '', zoom:!!o.zoom, descOff:o.descOff || null, unet:o.unet || '', ctxc:o.ctxc || null, qw:o.qw != null ? o.qw : upQw(f, o.track || tr.id), str:o.str != null ? +o.str : undefined}}; let n = 0;
+  const seed = o.seed || Math.floor(Math.random() * 2 ** 31), key = uid('k'), big = (o.scale || 1) > 1, p = {key, film:f.id, track:tr.id, big, wins, state:'working', t:Date.now(), o:{den:o.den, clean:o.clean || 0, scale:o.scale || 1, seed, look:o.look || S.finLook || 'live', sep:!!o.sep, chain:o.chain || '', swap:o.swap || '', faces:o.faces || null, find:o.find || '', zoom:!!o.zoom, descOff:o.descOff || null, unet:o.unet || '', ctxc:o.ctxc || null, qw:o.qw != null ? o.qw : upQw(f, o.track || tr.id), str:o.str != null ? +o.str : undefined, loras:Array.isArray(o.loras) ? o.loras : null, prompt:o.prompt || ''}}; let n = 0;
   S.passes = (S.passes || []).filter(x => Date.now() - (x.t || 0) < 7 * 864e5); S.passes.push(p); save();
   for(let i = 0; i < wins.length; i++) n += await qpSend(fn, p, i) ? 1 : 0;
   if(n < wins.length){ p.state = 'failed'; p.err = 'only ' + n + ' of ' + wins.length + ' parts could be sent'; save(); toast((big ? '🔍' : '✨') + ' Only ' + n + ' of ' + wins.length + ' parts could be sent, so nothing will change. Try again when both PCs are on.', 6000); return 0; }
@@ -1817,7 +1826,7 @@ async function qualityGo(f, tr, o){ const fn = deckFn('H3Nudge'); if(!fn){ toast
 const untime = x => String(x || '').replace(/This continues straight on from the moment before[^.]*\.\s*/g, '').replace(/\(carrying on\)\s*/g, '').replace(/\[[^\]]*\d\s*s?[^\]]*\]\s*/g, ' ').replace(/,? carrying on from the moment before\./g, '.').replace(/\s+/g, ' ').trim();
 const qpSend = (fn, p, i) => { const w = p.wins[i], q = p.o || {};
   const words = untime(wordsBetween(takeOf(w.take), w.in, w.out) || '');
-  return fn({take:w.take, a:w.in, b:w.out, prompt:words, n:1, den:q.den, clean:q.clean || 0, look:q.look, seed:q.seed, qp:true, scale:q.scale || 1, faces:q.faces || undefined, find:q.find || '', zoom:!!q.zoom, descOff:q.descOff || undefined, unet:q.unet || '', ctxc:q.ctxc || undefined, qw:q.qw || '', str:q.str != null ? q.str : undefined, key:p.key, wi:i, quiet:true}); };
+  return fn({take:w.take, a:w.in, b:w.out, prompt:q.prompt || words, n:1, loras:Array.isArray(q.loras) ? q.loras : undefined, den:q.den, clean:q.clean || 0, look:q.look, seed:q.seed, qp:true, scale:q.scale || 1, faces:q.faces || undefined, find:q.find || '', zoom:!!q.zoom, descOff:q.descOff || undefined, unet:q.unet || '', ctxc:q.ctxc || undefined, qw:q.qw || '', str:q.str != null ? q.str : undefined, key:p.key, wi:i, quiet:true}); };
 const qpOk = x => fileOf(x) && x.state==='done' && !x.upErr;
 const qpBad = x => x.state==='failed' || !!x.upErr || (x.state==='done' && x.upStage==='done' && !fileOf(x));
 // each part: done (one good take is enough, so ↻ retried parts count), failed (every try of it failed), or still running
