@@ -2201,6 +2201,26 @@ function movable(t, from, run, pend){
   const pids = new Set(t.pieces.map(x => x.pid)); // pieces shared with 🎲 takes from here stay where their saved endings are
   return !S.takes.some(o => o!==t && o.pieces.some(x => pids.has(x.pid)));
 }
+// ✨ / 🎭 passes waiting in a PC's line move too (Jordan 2026-11-14: "Shouldn't main be taking this extra Render project?"), unless they
+// carry on from a ✨ that isn't done yet, or a later clip's ✨ is already lined up to carry on from them there. One that carries on from a
+// finished ✨ can go: the other PC reads that ✨'s saved ending from its folder through Dropbox (once it sees that ✨'s video there)
+function movableUp(t, from, run, pend){
+  if(t.pc!==from || t.state!=='working' || !t.up || t.upStage!=='queued' || !t.upPid || run.has(t.upPid) || !pend.includes(t.upPid) || t.noMove || MOVE_NOW.has(t.id)) return false;
+  const ch = t.up.chain, pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev); if(ch && ch.prev && !(pv && pv.state==='done' && pv.final && !pv.upErr)) return false;
+  return !S.takes.some(o => o!==t && o.up && o.up.chain && o.up.chain.prev===t.id && o.upStage && o.upStage!=='start'); }
+async function moveUp(t, to){ const from = t.pc, fl = t.smoothed || t.final, oi = (pcOf(to) || {}).oi;
+  if(!oi || regenMissing(oi, t)) return false;
+  const ch = t.up.chain, pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev);
+  for(const v of [fl, pv && pv.final]) if(v){ try{ if(!(await fetch(viewUrl(to, v), {method:'HEAD'})).ok) return false; }catch(e){ return false; } } // (that PC can't see the videos yet)
+  MOVE_NOW.add(t.id);
+  try{ try{ await fetch(from + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:[t.upPid]})}); }catch(e){ return false; }
+    let q = null; try{ q = await getJ(from + '/queue', null, 6000); }catch(e){ return false; }
+    if([...(q.queue_running || []), ...(q.queue_pending || [])].some(x => x[1]===t.upPid)) return false; // it started just then: it stays
+    t.pc = to; t.upPid = null; t.upSave = null; t.upStage = 'start'; t.t0r = Date.now(); t.moved = (t.moved || 0) + 1;
+    S.takes.forEach(o => { if(o.up && o.up.chain && o.up.chain.prev===t.id && o.upStage==='start'){ o.pc = to; o.up.chain.pc = to; } }); // (clips lined up to carry on from it follow it)
+    if(ch){ if(pv && !ch.from) ch.from = pv.pc; ch.pc = to; } // (its saved ending to carry on from stays in the folder of the PC that made it)
+    toast('⇄ ' + pcName(to) + ' was free, so it took a waiting ✨ pass from ' + pcName(from), 4000); tickSoon(300); return true; }
+  finally{ MOVE_NOW.delete(t.id); } }
 async function rebalance(){
   if(MOVING || S.f.where!=='both' || S.pcs.length < 2) return 0; MOVING = true; let moved = 0;
   try{
@@ -2208,13 +2228,13 @@ async function rebalance(){
     for(const P of S.pcs){ const u = P.url, q = Q[u]; if(!P.on || !q || (q.queue_running || []).length || (q.queue_pending || []).length) continue;
       let best = null;
       for(const from of Object.keys(Q)){ if(from===u) continue; const oq = Q[from], run = new Set((oq.queue_running || []).map(x => x[1])), order = (oq.queue_pending || []).slice().sort((a, b) => a[0] - b[0]).map(x => x[1]);
-        const est = id => { for(const t of S.takes) for(const x of t.pieces) if(x.pid===id) return x.est || 300; return 300; };
-        for(const t of S.takes){ if(!movable(t, from, run, order) || canRun(u, t)) continue;
-          const at = Math.min(...t.pieces.map(x => order.indexOf(x.pid)));
+        const est = id => { for(const t of S.takes){ if(t.upPid===id) return estSecs(t, from); for(const x of t.pieces) if(x.pid===id) return x.est || 300; } return 300; };
+        for(const t of S.takes){ const up = movableUp(t, from, run, order); if(!(up || movable(t, from, run, order)) || canRun(u, t)) continue;
+          const at = up ? order.indexOf(t.upPid) : Math.min(...t.pieces.map(x => order.indexOf(x.pid)));
           const ahead = [...run].reduce((s, id) => s + est(id) / 2, 0) + order.slice(0, at).reduce((s, id) => s + est(id), 0); // (half of the running one is a guess at what's left)
           if(estSecs(t, u) >= ahead + estSecs(t, from)) continue; // it would still finish sooner where it is
-          if(!best || at > best.at) best = {t, at, from}; } }
-      if(best && await moveTake(best.t, u)){ moved++; Q[u] = {queue_running:[[0, 'moved']], queue_pending:[]}; } }
+          if(!best || at > best.at) best = {t, at, from, up}; } }
+      if(best && await (best.up ? moveUp(best.t, u) : moveTake(best.t, u))){ moved++; Q[u] = {queue_running:[[0, 'moved']], queue_pending:[]}; } }
   }catch(e){ console.warn(e); }
   MOVING = false; if(moved){ save(); drawTakes(); } return moved;
 }
@@ -2649,7 +2669,7 @@ function upGraph(t, oi, names){
     else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:W, height:Hh, length});
     const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:Z ? Z.lat : [big, 0], audio_latent:[sep, 1]});
     let cond = [iv, 0]; // 🔗 carries on from the ✨ result of the clip before (its saved latent, at the same size)
-    if(chn && chn.prev && !Z) cond = [add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:[iv, 1], context_length:String(CTX), audio_context_length:24, context_latent:[add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir({pc:t.pc, dir:chn.dir}), clip_index:chn.idx}), 0]}), 0];
+    if(chn && chn.prev && !Z) cond = [add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:[iv, 1], context_length:String(CTX), audio_context_length:24, context_latent:[add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir({pc:chn.from || t.pc, dir:chn.dir}), clip_index:chn.idx}), 0]}), 0];
     const out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed || 42}), 0], guider:[add('BasicGuider', {model, conditioning:cond}), 0], // (no 🚫 here: Jordan 2026-11-09 found ✨ High quality "really awful" with NAG 9 on a light redraw)
       sampler:[add('KSamplerSelect', {sampler_name:FIT && !SG && u.den ? 'res_multistep' : 'euler'}), 0],
       sigmas:[add('ManualSigmas', {sigmas:SG || (FIT && u.den ? sig8(u.den) : sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl))}), 0], latent_image:[av, 0]});
@@ -2719,7 +2739,7 @@ async function tickUpscale(t){
   if(t.upStage==='start'){
     { const why = p.oi ? regenMissing(p.oi, t) : 'not reachable'; if(why){
         // (Jordan 2026-11-11: a ✨ pass went to Main, which has no Open-H3 regenerate LoRA, and kept the original) another PC that can do it takes it
-        const alt = t.up.chain ? null : S.pcs.map(x => x.url).find(u => u!==t.pc && !canRun(u, t)); if(alt && !t.upMoved){ t.upMoved = true; t.pc = alt; t.t0r = Date.now(); save(); return; }
+        const alt = t.up.chain && t.up.chain.prev ? null : S.pcs.map(x => x.url).find(u => u!==t.pc && !canRun(u, t)); if(alt && !t.upMoved){ t.upMoved = true; t.pc = alt; t.t0r = Date.now(); save(); return; }
         t.upErr = pcName(t.pc) + ': ' + why; return upDone(t); } }
     { const ch = t.up && t.up.chain; let pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev); // 🔗 queued right after the clip it carries on from
       // ↻ the clip before was sent again (a retry of its ✨ part): carry on from that newer try
@@ -4557,7 +4577,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
