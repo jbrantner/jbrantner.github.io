@@ -1552,7 +1552,7 @@ async function upHqSend(f, tr, R, cs, solo){ let n = 0, ch = null, k = 0; R.stat
   const src = c => { const h = (R.sm || []).find(x => x.clip===c.id), st = h && takeOf(h.take); return st ? Object.assign({}, c, {take:st.id, in:0, out:Math.min(len(c), secsOf(st) || len(c)), dur:secsOf(st) || len(c)}) : c; };
   for(let i = 0; i < cs.length; i++){ const c0 = cs[i], c = src(c0), on = !!ch && carriesOn(src(cs[i - 1]), c);
     const ctxc = on ? {dir:ch.dir, idx:++k, prev:ch.prev, pc:ch.pc} : {dir:'H3Deck/hqctx_' + R.id + '_' + i, idx:(k = 0), prev:'', pc:''};
-    const sent = await hqGo(f, tr, c, R.den, R.unet, ctxc, R.qw, R.lstr); const p = sent && (S.passes || []).filter(x => x.state==='working' && x.o && x.o.swap===c.id).pop();
+    const sent = await hqGo(f, tr, c, R.den, R.unet, ctxc, R.qw, R.lstr, {loras:R.loras, prompt:R.prompt}); const p = sent && (S.passes || []).filter(x => x.state==='working' && x.o && x.o.swap===c.id).pop();
     const tk = p && takes().find(x => x.redo && x.redo.key===p.key); ch = tk ? {dir:ctxc.dir, prev:tk.id, pc:tk.pc} : null;
     if(p){ R.hq.push({clip:c.id, key:p.key, ctx:on}); n++; } }
   if(!n){ if(R.sm){ R.state = 'stopped'; R.err = '✨ could not be sent after smoothing'; save(); } toast('⬆ Nothing could be sent. Are the PCs on?', 5000); return 0; }
@@ -1700,6 +1700,8 @@ const HQ_LO = [{v:0, label:'Off'}, {v:0.4, label:'0.4'}, {v:0.8, label:'0.8'}], 
 const HQ_LV = [{v:0.6, label:'Light', d:'Keeps most of the clip as it is; small clean-up.'}, {v:0.75, label:'Medium', d:'Cleaner, still close to the clip.'}, {v:0.9, label:'Strong', d:'The most clean-up; vanilla MiniMax redraws the most.'}];
 const unetLabel = x => { const b = String(x).split(/[\\/]/).pop().replace(/\.safetensors$/, ''); return /prism_?pika/i.test(b) ? 'Prism Pika' : /singularity/i.test(b) ? 'Singularity V2 x 10Eros' : b; };
 function hqSheet(f, tr, c){ let lo = hqLo(); const cur = HQ_LV.some(x => x.v===S.hqDen) ? S.hqDen : 0.9, H = window.parent.H3, ms = (H && H.hqUnets ? H.hqUnets() : []), um = ms.includes(S.hqUnet) ? S.hqUnet : '';
+  // (Jordan 2026-11-14: "Same with high quality I'd like to adjust the prompt and Lora for that too") the LoRAs (the clip's own to start) and the words
+  const t0 = takeOf(c.take), hw0 = untime(wordsBetween(t0, c.in, c.out) || ''), hlo = JSON.parse(JSON.stringify((() => { try{ return H.lorasOf(t0) || []; }catch(e){ return (t0 && t0.loras) || []; } })())).filter(l => l && l.name && !/turbo|regenerate|lightning|4.?step|8.?step/i.test(l.name));
   $('#sheetCard').innerHTML = `<h3><span>✨ High quality</span><button class="btn" data-close>✕</button></h3>
     <div class="note">Bigger and cleaner, by vanilla MiniMax. The lower it is, the more of the clip it keeps as it was.${len(c) > HQ_MAX + 0.2 ? ' This clip is ' + fmt(len(c)) + ' long, so it is split into parts of at most ' + HQ_MAX + ' s first, each carrying on from the one before.' : ''}</div>
     <div class="lab" style="margin-top:10px"><span>How strong</span></div><div class="seg" id="hqLv">${HQ_LV.map(x => `<button data-v="${x.v}" class="${x.v===cur ? 'on' : ''}">${x.label}</button>`).join('')}</div>
@@ -1708,11 +1710,14 @@ function hqSheet(f, tr, c){ let lo = hqLo(); const cur = HQ_LV.some(x => x.v===S
     <div class="note" style="margin-top:6px">${ms.length ? 'Pick another model if it suits the clip better; you can do a 🎭 Faces pass with vanilla MiniMax after.' : 'Only vanilla MiniMax is on the PCs that are on right now.'}</div>
     <div class="lab" style="margin-top:10px"><span>Upscale LoRA</span></div><div class="seg" id="hqLo">${HQ_LO.map(x => `<button data-v="${x.v}" class="${x.v===lo ? 'on' : ''}">${x.label}</button>`).join('')}</div>
     <div class="note" style="margin-top:4px">The Open-H3 Regenerate LoRA was made for vanilla MiniMax. Off lets Prism Pika redraw on its own (Jordan's test, 2026-11-12).</div>
+    ${H && H.redoLoras ? `<div class="lab" style="margin-top:10px"><span>🎨 LoRAs</span></div><div id="hqLoras"></div>` : ''}
+    <div class="lab" style="margin-top:10px"><span>Prompt</span></div><textarea id="hqP" rows="4" style="width:100%" placeholder="The clip's own words are used when this is empty">${esc(hw0)}</textarea>
+    <div class="note" style="margin-top:4px">Starts as the clip's own words. Change them or add your own for this pass only.</div>
     <button class="btn pri" id="hqGo" style="padding:13px;width:100%;margin-top:10px">✨ Make it high quality</button>`;
   $$('#hqLo button').forEach(b => b.onclick = () => { lo = +b.dataset.v; $$('#hqLo button').forEach(x => x.classList.toggle('on', x===b)); });
-  $('#sheet').hidden = false; let den = cur; const dl = () => { $('#hqD').textContent = HQ_LV.find(x => x.v===den).d; }; dl();
+  $('#sheet').hidden = false; loraBox($('#hqLoras'), hlo, H); let den = cur; const dl = () => { $('#hqD').textContent = HQ_LV.find(x => x.v===den).d; }; dl();
   $$('#hqLv button').forEach(b => b.onclick = () => { den = +b.dataset.v; $$('#hqLv button').forEach(x => x.classList.toggle('on', x===b)); dl(); });
-  $('#hqGo').onclick = async () => { const um2 = $('#hqM').value; S.hqDen = den; S.hqUnet = um2; S.hqLora = lo; save(); $('#hqGo').disabled = true; const a0 = c.at, L0 = len(c), n = L0 > HQ_MAX + 0.2 && splitLong(f, tr, [c]) ? (draw(), await upHqSend(f, tr, {id:uid('u'), den, unet:um2, qw:'', lstr:lo, hq:[]}, qpClips(tr).filter(x => x.at >= a0 - 0.01 && x.at < a0 + L0 - 0.05), true)) : await hqGo(f, tr, c, den, um2, null, undefined, lo); $('#hqGo').disabled = false; if(n){ closeSheet(); draw(); } }; }
+  $('#hqGo').onclick = async () => { const um2 = $('#hqM').value, pw = $('#hqP').value.trim(), ex = {loras:hlo, prompt:pw && pw!==hw0 ? pw : ''}; S.hqDen = den; S.hqUnet = um2; S.hqLora = lo; save(); $('#hqGo').disabled = true; const a0 = c.at, L0 = len(c), n = L0 > HQ_MAX + 0.2 && splitLong(f, tr, [c]) ? (draw(), await upHqSend(f, tr, {id:uid('u'), den, unet:um2, qw:'', lstr:lo, hq:[], loras:ex.loras, prompt:ex.prompt}, qpClips(tr).filter(x => x.at >= a0 - 0.01 && x.at < a0 + L0 - 0.05), true)) : await hqGo(f, tr, c, den, um2, null, undefined, lo, ex); $('#hqGo').disabled = false; if(n){ closeSheet(); draw(); } }; }
 // 🎭 Faces (Jordan 2026-11-08): with two people the second face drifted. Tap each face on the first frame and say who it is; MiniMax redraws
 // the clip once per face with only that person's pictures, and only her face is laid back over the clip
 const FACE_COL = ['#1f78b5', '#ff800d', '#2ba12b', '#d62629', '#9466bd', '#8c574a'];
@@ -1808,9 +1813,9 @@ async function touchClip(f, c){ const fn = deckFn('H3TouchOpen'); if(!fn){ toast
 window.FILM_TOUCHED = (fid, cid, tid, d) => { const f = S.films.find(x => x.id===fid), r = f && clipOf(f, cid); if(!r) return false;
   r.c.alts = r.c.alts || [r.c.take]; if(!r.c.alts.includes(tid)) r.c.alts.push(tid);
   r.c.was = {take:r.c.take, in:r.c.in, out:r.c.out, dur:r.c.dur}; Object.assign(r.c, {take:tid, in:0, out:d, dur:d}); save(); try{ draw(); }catch(e){} return true; };
-async function hqGo(f, tr, c, den, unet, ctxc, qw, lstr){ if(!tr || !c) return 0; const t = takeOf(c.take); if(!fileOf(t)){ toast('Wait for the clip to finish first'); return 0; }
+async function hqGo(f, tr, c, den, unet, ctxc, qw, lstr, ex){ ex = ex || {}; if(!tr || !c) return 0; const t = takeOf(c.take); if(!fileOf(t)){ toast('Wait for the clip to finish first'); return 0; }
   if((S.passes || []).some(p => p.state==='working' && p.o && p.o.swap===c.id)){ toast('✨ That clip is already being made high quality'); return 0; }
-  return qualityGo(f, {id:tr.id + ':' + c.id, clips:[c]}, {den:den || S.hqDen || 0.9, clean:0.8, scale:1.5, look:'live', sep:true, swap:c.id, track:tr.id, unet:unet || '', ctxc:ctxc || null, qw:qw != null ? qw : undefined, str:lstr != null ? +lstr : hqLo()}); }
+  return qualityGo(f, {id:tr.id + ':' + c.id, clips:[c]}, {den:den || S.hqDen || 0.9, clean:0.8, scale:1.5, look:'live', sep:true, swap:c.id, track:tr.id, unet:unet || '', ctxc:ctxc || null, qw:qw != null ? qw : undefined, str:lstr != null ? +lstr : hqLo(), loras:Array.isArray(ex.loras) ? ex.loras : undefined, prompt:ex.prompt || ''}); }
 async function qualityGo(f, tr, o){ const fn = deckFn('H3Nudge'); if(!fn){ toast('Open 🎞 Films inside H3 Deck for this'); return 0; }
   if(passOf(tr)){ toast('A pass is already running on this track'); return 0; }
   if(tr.clips.some(c => !fileOf(takeOf(c.take)))){ toast('Wait for every clip on the track to finish first (a pass does all of them or none)'); return 0; }

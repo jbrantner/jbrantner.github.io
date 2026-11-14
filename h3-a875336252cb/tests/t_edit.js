@@ -525,6 +525,18 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
       const nt = H.S.takes[0], r = {faces, old, now:c.take, nt:nt.id, fin:nt.final && nt.final.filename, out:c.out, alts:c.alts, src:nt.touch && nt.touch.src};
       return r; });
     ok(!TF.nof && TF.faces && TF.now===TF.nt && TF.fin==='touchup_00001.mp4' && TF.out===1.5 && TF.alts.includes(TF.old) && TF.src===TF.old, '👁 Touch up: offered in 🎭 Faces; the finished touch-up takes the clip\'s place, the old take stays in its versions: ' + JSON.stringify(TF)); }
+  // ✨ High quality: LoRAs and words too (Jordan 2026-11-14: "Same with high quality I'd like to adjust the prompt and Lora for that too")
+  { const fr = page.frames().find(f => /film\/\?embed=1/.test(f.url())); const HQ = await fr.evaluate(async () => { const H = window.parent.H3, hu = H.hqUnets, rl = H.redoLoras, nu = window.parent.H3Nudge, w = ms => new Promise(z => setTimeout(z, ms));
+      H.hqUnets = () => ['singularityV2X10eros_prismPIKA.safetensors']; H.redoLoras = () => ['styleA.safetensors', 'styleB.safetensors'];
+      let got = []; window.parent.H3Nudge = async o => { got.push(o); return 1; };
+      const f = FILM.S.films[0], tr = f.tracks[0], c = tr.clips[0], q = s => document.querySelector(s), keepP = FILM.S.passes; FILM.S.passes = [];
+      FILM.hqSheet(f, tr, c); const r = {p0:q('#hqP').value, add:!!q('#hqLoras [data-ladd]')};
+      q('#hqGo').click(); await w(400); r.same = got[0] && got[0].prompt!=='' && !/Studio light/.test(got[0].prompt); FILM.S.passes = []; got = []; if(q('[data-close]')) q('[data-close]').click();
+      FILM.hqSheet(f, tr, c); const ad = q('#hqLoras [data-ladd]'); ad.value = 'styleA.safetensors'; ad.onchange(); const ss = [...document.querySelectorAll('#hqLoras [data-ls]')]; ss[ss.length - 1].value = '0.5'; ss[ss.length - 1].oninput();
+      q('#hqP').value = 'Studio light, sharp detail.'; q('#hqGo').click(); await w(400);
+      r.prompt = got[0] && got[0].prompt; r.loras = got[0] && JSON.stringify((got[0].loras || []).map(l => [l.name, l.str]));
+      FILM.S.passes = keepP; window.parent.H3Nudge = nu; H.hqUnets = hu; H.redoLoras = rl; if(q('[data-close]')) q('[data-close]').click(); return r; });
+    ok(HQ.p0.length > 0 && HQ.add && HQ.same && HQ.prompt==='Studio light, sharp detail.' && /\["styleA.safetensors",0.5\]/.test(HQ.loras), '✨ High quality: LoRAs and words for the pass (untouched words = the clip\'s own, per part): ' + JSON.stringify(HQ)); }
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
