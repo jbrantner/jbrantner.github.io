@@ -2331,7 +2331,8 @@ if FARM.get('jobs'):
 H3RUN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'render_deck_h3run.json')
 H3RUN_APP = 'https://jbrantner.github.io/h3-a875336252cb/'
 H3RUN_GONE = 90     # s without a word from the phone before the hidden copy opens
-H3RUN_AWAY = 20     # ... when the phone said it was going into the background
+H3RUN_AWAY = 90     # ... when the phone said it was going into the background (was 20: QA 2026-11-14, Render opened the hidden copy
+                    # 59 times in 13 h, often for 7-30 s while Jordan switched apps; she OK'd 90 s)
 H3RUN = {'want': False, 'farm': '', 'wid': ''}
 _h3r = {'proc': None, 'phone': 0.0, 'away': False, 'seen': 0.0, 'opened': 0.0, 'yield': 0.0, 'bye': False, 'task': None, 'loaded': False}
 _h3r_cache = {}
