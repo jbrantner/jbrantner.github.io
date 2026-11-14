@@ -732,7 +732,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
+const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
@@ -2271,6 +2271,18 @@ async function moveTake1(t, to){
 }
 
 // ---------- the graph for one piece ----------
+// 🖼 a reference picture with the video's own shape (Jordan 2026-11-14: "a lot of them started with one of the characters reference image almost
+// like it was a first frame"). MiniMax packs each picture into the sequence one time step before frame 0, on the same area-normalised grid as
+// the video's frames, so a picture that ref_image_size 'match' sizes exactly like a frame reads as "the frame before" and some seeds copy it
+// into frame 0 (seen on 640x640 takes with square photos). Such a picture is cut to 84% of its width (centred), so it never lines up with a frame.
+const REF_ALIGN = 0.08, REF_CUT = 0.84;
+function refShape(id, W, H){ const m = S.media[id] || {}; if(!(m.w && m.h && W && H)) return null;
+  const s = Math.min(1, Math.sqrt((W * H) / (m.w * m.h))), tw = Math.max(16, Math.round(m.w * s / 16) * 16), th = Math.max(16, Math.round(m.h * s / 16) * 16);
+  if(Math.abs(Math.log((tw / th) / (W / H))) >= REF_ALIGN) return null;
+  const cw = Math.max(16, Math.round(m.w * REF_CUT)); return {width:cw, height:m.h, x:Math.floor((m.w - cw) / 2), y:0}; }
+function refPic(add, oi, name, id, W, H){ const li = [add('LoadImage', {image:name}), 0], c = refShape(id, W, H);
+  const req = ((oi.ImageCrop || {}).input || {}).required || {};
+  return c && 'width' in req && 'x' in req ? [add('ImageCrop', Object.assign({image:li}, c)), 0] : li; }
 function fill(oi, cls, inputs){ const req = ((oi[cls] || {}).input || {}).required || {};
   for(const [k, spec] of Object.entries(req)){ if(k in inputs || /^COMFY_/.test(spec[0])) continue; const l = combo(oi, cls, k); if(l.length){ inputs[k] = l[0]; continue; } if(spec[1] && spec[1].default !== undefined) inputs[k] = spec[1].default; }
   return inputs; }
@@ -2318,7 +2330,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     if(oi.MMH3FitReferences && (imgs.length || t.vids.length || t.auds.length)){
       // keeps every reference inside the 8 GB budget (the MMH3 Studio low-memory node): videos read at the size they're used
       const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0) + (t.pins || []).length, stop_above:72000};
-      imgs.forEach((r, k) => { fi['image_' + (k + 1)] = img(r.id); });
+      imgs.forEach((r, k) => { fi['image_' + (k + 1)] = extraFirst && k===imgs.length - 1 ? img(r.id) : refPic(add, oi, names[r.id], r.id, w, h); });
       t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; });
       t.auds.forEach((r, k) => { fi['audio_' + (k + 1)] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
       const fit = add('MMH3FitReferences', fi);
@@ -2327,7 +2339,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       // the fit node only counts standalone sounds; they go to MiniMax straight from their loaders
       t.auds.forEach((r, k) => { refs['ref_audios.ref_audio_' + k] = fi['audio_' + (k + 1)]; });
     } else {
-      imgs.forEach((r, k) => { refs['ref_images.ref_image_' + k] = img(r.id); });
+      imgs.forEach((r, k) => { refs['ref_images.ref_image_' + k] = extraFirst && k===imgs.length - 1 ? img(r.id) : refPic(add, oi, names[r.id], r.id, w, h); });
       t.auds.forEach((r, k) => { refs['ref_audios.ref_audio_' + k] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
     }
     const rv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:avae, prompt, width:w, height:h, length:L, ref_image_size:'match'}, refs));
@@ -2682,8 +2694,8 @@ function upGraph(t, oi, names){
     let iv;
     if(R || refModel){ const ri = {};
       if(FIT && R && R.length){ const fi = {width:W, height:Hh, length, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, length / FPS)), image_size:'match', keyframes:chn && chn.prev ? 7 : 0, stop_above:72000};
-        R.forEach((r, k) => { fi['image_' + (k + 1)] = [add('LoadImage', {image:names[r.id]}), 0]; }); const fit = add('MMH3FitReferences', fi); R.forEach((r, k) => { ri['ref_images.ref_image_' + k] = [fit, k]; }); }
-      else (R || []).forEach((r, k) => { ri['ref_images.ref_image_' + k] = [add('LoadImage', {image:names[r.id]}), 0]; });
+        R.forEach((r, k) => { fi['image_' + (k + 1)] = refPic(add, oi, names[r.id], r.id, W, Hh); }); const fit = add('MMH3FitReferences', fi); R.forEach((r, k) => { ri['ref_images.ref_image_' + k] = [fit, k]; }); }
+      else (R || []).forEach((r, k) => { ri['ref_images.ref_image_' + k] = refPic(add, oi, names[r.id], r.id, W, Hh); });
       iv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:[add('VAELoader', {vae_name:avaeOf(oi)}), 0], prompt, width:W, height:Hh, length, ref_image_size:'match'}, ri)); }
     else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:W, height:Hh, length});
     const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:Z ? Z.lat : [big, 0], audio_latent:[sep, 1]});
@@ -4603,7 +4615,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
