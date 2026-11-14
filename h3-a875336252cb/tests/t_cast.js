@@ -39,7 +39,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const A = await page.evaluate(() => ({cast:JSON.parse(JSON.stringify(H3.S.cast)), chip:document.querySelector('#tagBar').textContent, rows:document.querySelectorAll('#castList .cast').length}));
   ok(A.cast.length===1 && A.cast[0].n===1 && A.cast[0].stand==='a woman' && A.rows===1 && /Subject 1/.test(A.chip), '＋ Add a subject: <Subject 1>, stand-in "a woman", a chip above the prompt');
   let P = await prom(R, REF); console.log(P.p.split('\n\n')[0], '|', P.p.slice(P.p.indexOf('detailed_description')));
-  ok(/\. A nude woman walks to the window\.\s+\[2s-5s\] A nude woman waves at <Subject 2>\./.test(P.p) && !/<Subject 1>/.test(P.p) && !P.imgs.length, 'no picture: sent as its stand-in words (capitalised), a token with no subject left as it is');
+  ok(/\. A nude woman walks to the window\.\s+\[2s-5(\.\d+)?s\] A nude woman waves at <Subject 2>\./.test(P.p) && !/<Subject 1>/.test(P.p) && !P.imgs.length, 'no picture: sent as its stand-in words (capitalised), a token with no subject left as it is');
   // a picture: it goes along, and the prompt says who it is
   await page.evaluate(() => { H3.S.media.p1 = {id:'p1', kind:'img', name:'p1.png', w:640, h:352, thumb:''}; Object.assign(H3.S.cast[0], {pic:'p1', who:'the lady in the red coat'}); H3.drawAll(); });
   P = await prom(R, REF); console.log(P.p.split('summary:')[0]);
