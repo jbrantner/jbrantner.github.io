@@ -1,4 +1,4 @@
-// 🎞 Films separate tracks in bare bones (Jordan 2026-11-13): every track shows, clips drag between tracks, new clips go on the
+// 🎞 Films separate tracks with ⚙ Show all tools (Jordan 2026-11-13; since the later "one track" pick they need Show all tools, see t_onetrack.js): every track shows, clips drag between tracks, new clips go on the
 // 🎬 track (the one tapped last), and ⇔ Select the whole track slides all its clips together, snapping to other tracks' clip edges.
 // Run: NODE_PATH=$(npm root -g) node tests/t_tracks.js
 const { chromium } = require('playwright');
@@ -14,23 +14,23 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const base = {model:'m', turbo:true, loras:[], imgs:[], vids:[], auds:[], follow:[], seconds:5, seed:1, dir:'H3Deck/x', pc:R, w:640, h:360, state:'done', pieces:[{deliv:120, gen:124, ctx:0, state:'done', pid:'p', file:F('p.mp4')}]};
   const tk = (id, extra) => Object.assign({}, base, {id, name:'h3_' + id, prompt:id, final:F(id + '.mp4')}, extra || {});
-  const deck = {bare:true, pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA'), tk('tB'), tk('tC'), tk('tD')]};
+  const deck = {bare:false, pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA'), tk('tB'), tk('tC'), tk('tD')]};
   await page.addInitScript(d => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(d)); sessionStorage.setItem('init', '1'); } }, deck);
   await page.goto('http://127.0.0.1:8031/film/index.html'); await page.waitForTimeout(500);
   const fid = await page.evaluate(() => { FILM.S.autoPrev = false; FILM.S.guideOn = false; const L = 5;
     const f = {id:'f1', name:'Film 1', pps:24, tracks:[{id:'tr1', clips:[{id:'a', take:'tA', in:0, out:L, dur:L, at:0}, {id:'b', take:'tB', in:0, out:L, dur:L, at:L}]}, {id:'tr2', clips:[]}]};
     FILM.S.films = [f]; FILM.PH = 0; FILM.go({v:'film', film:'f1'}); return f.id; });
   await page.waitForTimeout(300);
-  ok(await page.evaluate(() => document.body.classList.contains('bare')), 'bare bones is on');
-  ok(await page.$$eval('#tl .trk', r => r.length)===2, 'an empty second track still shows in bare bones');
-  ok(await page.$eval('.tools [data-act="addTrack"]', b => getComputedStyle(b).display!=='none'), '＋ Track shows in bare bones');
+  ok(await page.evaluate(() => !document.body.classList.contains('bare')), 'Show all tools is on');
+  ok(await page.$$eval('#tl .trk', r => r.length)===2, 'an empty second track still shows with Show all tools');
+  ok(await page.$eval('.tools [data-act="addTrack"]', b => getComputedStyle(b).display!=='none'), '＋ Track shows with Show all tools');
 
   // drag clip b down onto track 2 (bare bones used to keep clips on their track)
   const pt = async id => page.$eval('.clip[data-c="' + id + '"]', e => { const r = e.getBoundingClientRect(); return {x:r.x + r.width / 2, y:r.y + r.height / 2}; });
   await page.evaluate(() => { FILM.PH = 5; FILM.SEL = 'b'; FILM.draw(); }); await page.waitForTimeout(200);
   let b = await pt('b'); await page.mouse.move(b.x, b.y); await page.mouse.down(); await page.mouse.move(b.x, b.y + 30, {steps:4}); await page.mouse.move(b.x, b.y + 58, {steps:4}); await page.mouse.up(); await page.waitForTimeout(300);
   let f = await page.evaluate(() => FILM.S.films[0]);
-  ok(f.tracks[1].clips.some(c => c.id==='b') && f.tracks[0].clips.length===1, 'a clip drags down to track 2 in bare bones');
+  ok(f.tracks[1].clips.some(c => c.id==='b') && f.tracks[0].clips.length===1, 'a clip drags down to track 2 with Show all tools');
   ok(await page.evaluate(() => FILM.actK(FILM.S.films[0]))===1, 'the track of the clip tapped last is the 🎬 track');
   // put b back on track 1 at 5 s, and two clips on track 2 at 2 s and 12 s
   await page.evaluate(() => { const f = FILM.S.films[0]; f.tracks = [{id:'tr1', clips:[{id:'a', take:'tA', in:0, out:5, dur:5, at:0}, {id:'b', take:'tB', in:0, out:5, dur:5, at:5}]}, {id:'tr2', clips:[{id:'c', take:'tC', in:0, out:3, dur:5, at:2}, {id:'d', take:'tD', in:0, out:2, dur:5, at:12}]}]; FILM.SEL = null; FILM.PH = 10; FILM.draw(); });

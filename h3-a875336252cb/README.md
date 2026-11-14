@@ -46,6 +46,10 @@ Pose keys on a timeline, opened as H3 Deck's 🧍 Poses tab (an iframe, so it ha
 - 🎬 Use in Render makes, from the shot camera at the clip's shape (long side 832): an OpenPose skeleton clip and a depth clip (24 fps, the timeline's length) for 🦴 Motion guide, and one grey-mannequin picture per key. In the Render tab those pictures are references with `pose:{t}`; the H3-way prompt makes each a pose subject (`attribute_transfer` onto the person) and says "At MM:SS.mmm, … is in the pose of <Subject n> from <Picture k>" with times counted from each piece's own start.
 - Test: `SAM_GLB=a.glb SAM_GLB2=b.glb RIG_DEPS=<dir with three-0.160.0/package> NODE_PATH=$(npm root -g) node tests/t_posekeys.js`
 
+## 🎞 One track and speed (2026-11-13)
+Jordan picked "One track, extras hidden": without ⚙ › 🧰 Show all the tools, the Films timeline shows one track. Empty extra tracks, ＋ Track, the canvas row, ☰ reorder and the track menu's ⇔ / ⬆⬇ move / ⧉ picture in picture / ✂ crop are hidden (a track that already has clips, or already uses ⧉ or ✂, still shows them). Nothing is deleted; Show all tools brings it all back. Pure editing goes to a real video editor via ⬇ Export. Test: tests/t_onetrack.js (t_tracks, t_trkorder and t_overlay now run with Show all tools).
+Speed: measured at 4× CPU slowdown with 160 takes and 6 films of 3 × 25 clips, the app opens in ~1.8 s either way. The ↶ Undo watcher used to JSON-copy every film, take and setting every 0.7 s; it now compares only after a save (`SAVE_REV` here, `FILM_REV` in the Films frame), at least every 5 s, and never in the background. The Films timer re-reads the timelines only when the frame saved, and the film note is only rewritten when its words change. Idle CPU went from 4.6% to 2.8%.
+
 ## Screens (2026-11-06)
 
 There are two tabs. 🎞 Films is the main screen. 🧍 Poses is the second.
