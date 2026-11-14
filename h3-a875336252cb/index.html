@@ -950,7 +950,7 @@ function shuffleWords(text, seed, mode){
       else if(ss.length > 1) ss = mx(ss); }
     ss = ss.map(x => x.replace(/^[a-z]/, c => c.toUpperCase())); return lead + co + pin.concat(ss, end).join(' ') + tail; };
   let out = '', at = 0; for(const [i, j] of marks){ out += seg(text.slice(at, i)) + text.slice(i, j); at = j; } return out + seg(text.slice(at)); }
-const plainBeat = x => String(x || '').replace(/,?\s*carrying on from the moment before\.?/i, '').replace(/[\s.,]+/g, '').length > 0;
+const plainBeat = x => String(x || '').replace(/The scene keeps carrying on from the moment before\.?/i, '').replace(/,?\s*carrying on from the moment before\.?/i, '').replace(/[\s.,]+/g, '').length > 0;
 // 🎬 shots (Jordan 2026-11-13, cut on the action): a "[Shot n]" typed just before a timed tag belongs to that beat, so it goes with it into
 // whichever piece the beat lands in; a piece that cuts to a new shot isn't told "same shot, no cut"; a leading [Shot 1] stays in front
 const SHOTM = /\[\s*shot\s*(\d+)\s*\]/i, SHOT1 = /^\s*\[\s*shot\s*1\s*\]\s*/i, CUTTO = /\[\s*shot\s*(?:[2-9]|\d\d+)\s*\]/i;
@@ -1205,6 +1205,8 @@ const lineLang = L => (String((L && L.lang) || '').replace(/[^\p{L} -]/gu, '').t
 const actWords = s => String(s || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
 const actLow = (L, w) => L && L.n && /^[A-Z][a-z]/.test(w) && !/^I\b/.test(w) ? w[0].toLowerCase() + w.slice(1) : w; // "<Subject 1> spins", not "<Subject 1> Spins"
 const tagEnd = (v, p) => { (v || '').replace(/<[^<>\n]*>/g, (m, off) => { if(p > off && p < off + m.length) p = off + m.length; return m; }); return p; }; // never put a new chip inside another tag
+// on a take's card an action chip reads as its words (2026-11-14: a bare "<Action 5>" looked like it was never filled in)
+const actShow = (txt, T) => String(txt || '').replace(ACTRE, (m, k) => { const L = lineOf(k, T), w = L && actWords(L.text); return w ? '🥋 ' + (L.name ? L.name + ': ' : '') + w : m; });
 function actOut(txt, T){ return txt.replace(/<\s*action\s*(\d+)\s*>(\s*([.!?])(?!\.))?/gi, (m, k, dt, mk, off, all) => { const nx = all.slice(off + m.length); const L = lineOf(k, T); let w = L && actWords(L.text); if(!w) return dt ? mk : '';
     const end = (w.match(/[.!?]$/) || [''])[0]; w = actLow(L, w.replace(/[\s.,;:!?]+$/, ''));
     return (L.n ? '<Subject ' + L.n + '> ' : '') + w + (mk || (/^\s*(?:$|\n|[A-Z<\[])/.test(nx) ? end : '')); }); } // its own full stop only where a sentence ends
@@ -2800,7 +2802,9 @@ async function upload(url, id){
   if(!r.ok) throw new Error('upload of "' + m.name + '" to ' + pcName(url) + ' failed (' + r.status + ')');
   const j = await r.json(); S.up[k] = (j.subfolder ? j.subfolder + '/' : '') + j.name; save(); return S.up[k];
 }
-async function queueGraph(url, G, front){ // front: next in ComfyUI's line (the few-second join shouldn't wait behind other takes)
+async function queueGraph(url, G, front){
+  for(const [id, nd] of Object.entries(G.g)){ const k = nd.class_type==='LoadVideo' ? 'file' : nd.class_type==='LoadImage' ? 'image' : ''; // (a reference that was never sent: say which, instead of ComfyUI's "missing 1 required positional argument")
+    if(k && (typeof nd.inputs[k] !== 'string' || !nd.inputs[k])) throw new Error('a ' + (k==='file' ? 'video' : 'picture') + ' for node ' + id + ' was never sent to ' + pcName(url)); } // front: next in ComfyUI's line (the few-second join shouldn't wait behind other takes)
   const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(Object.assign({prompt:G.g, client_id:CID, extra_data:VHS_PREVIEW}, front ? {front:true} : {}))});
   let j = {}; try{ j = await r.json(); }catch(e){}
   if(!r.ok || j.error){ const ne = j.node_errors && Object.values(j.node_errors)[0], er = ne && ne.errors && ne.errors[0];
@@ -2871,7 +2875,7 @@ async function render(){
 }
 async function sendPieces(t, from){
   const url = t.pc, oi = pcOf(url).oi, names = {}, M0 = resolveModel(oi, t.model, t.turbo), T = castTake(t, !(M0 && M0.fl2v));
-  const ids = t.combo ? (seamOne(t) ? T.imgs.map(r => r.id) : []) : [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...T.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
+  const ids = t.combo ? (seamOne(t) ? [...T.imgs.map(r => r.id), ...T.vids.map(r => r.id)] : []) : [t.sm && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...T.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
@@ -3575,7 +3579,7 @@ function takeCard(t){
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t)].join('|');
     return {id:t.id, sig, html:`<div class="take" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.up && t.up.unet ? famKey(t.up.unet) : t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}</span></div>
-      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(sentWords(t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(actShow(sentWords(t), t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
 }
@@ -4231,7 +4235,7 @@ async function stillCarry(o, t, fl, at, dur){
   const id = await addMedia(new File([blob], 'frame_' + fmtS(at).replace(/\W+/g, '') + '.png', {type:'image/png'}), 'img'), m = S.media[id];
   m.name = '➕ ' + fmtS(at) + ' into ' + fl.filename; m.carry = {src:t.id, at, film:o.film || '', clip:o.clip || '', key:o.key || uid('k'), own:true, still:true, guide:o.guide || null, len:+o.len || 0};
   FILMSIG = null; FILMT = null; FILMED = false; FILMP = null;
-  const p = String(o.prompt || '').replace(/^\[0s-1s\]\s*/, '').replace(/,? carrying on from the moment before\.\s*\[1s-\]\s*/, '. ').trim();
+  const p = String(o.prompt || '').replace(/^\[0s-1s\]\s*The scene keeps carrying on from the moment before\.\s*(?:\[1s-\]\s*)?/i, '').replace(/^\[0s-1s\]\s*/, '').replace(/,? carrying on from the moment before\.\s*\[1s-\]\s*/, '. ').trim();
   const f = S.f; Object.assign(f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:p, pieceText:{}});
   if(!/<\s*ref\s*image\s*\d+\s*>/i.test(f.prompt)) f.imgs = (f.imgs || []).filter(r => r.pose || r.pin); // 🖼
   if(Array.isArray(o.loras)) f.loras = o.loras.map(l => ({name:l.name, str:+l.str || 1, words:l.words || ''}));
@@ -4545,7 +4549,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
