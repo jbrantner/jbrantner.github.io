@@ -84,10 +84,10 @@ async def main():
     g = await J(await cl.get('/renderdeck/h3run'))
     ok(r.get('worker') is True and r2.get('go') is False and r2.get('push') is not False and st1 == 'yield' and g['worker'] is False and H._h3r['proc'] is None,
        'phone back: the copy is told to stop, saves, says bye and is closed: %s' % [r, r2, st1, g])
-    # the phone goes into the background (says so): the copy opens after 20 s, not 90
+    # the phone goes into the background (says so): a quick app switch opens nothing; the copy opens after 90 s
     await cl.post('/renderdeck/h3run/beat', json={'who': 'phone', 'want': True, 'farm': 'https://jordo-desktop.tailadee9a.ts.net', 'away': True})
-    a10, a30 = H._h3r_step(time.time() + 10), H._h3r_step(time.time() + 30)
-    ok(a10 == 'idle' and a30 == 'opened' and len(opened) == 2, 'phone went to the background: opens after 20 s: %s' % [a10, a30])
+    a30, a95 = H._h3r_step(time.time() + 30), H._h3r_step(time.time() + 95)
+    ok(a30 == 'idle' and a95 == 'opened' and len(opened) == 2, 'phone went to the background: nothing at 30 s, opens after 90 s: %s' % [a30, a95])
     # the copy finishes everything: bye with nothing left → closed, nothing opens again
     await cl.post('/renderdeck/h3run/bye', json={'wid': 'w2', 'want': False})
     ok(H._h3r['proc'] is None and not H.H3RUN['want'] and H._h3r_step(time.time() + 500) == 'idle' and len(opened) == 2, 'all done: the copy is closed and nothing opens again')
