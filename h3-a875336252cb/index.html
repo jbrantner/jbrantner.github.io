@@ -632,8 +632,8 @@ let HOLD = !WORKER, ADOPTING = false, HIDE_T = 0, RUNOK = false, WSTOP = false, 
 const BOOT_TSAV = S.tsav || 0;
 const runHost = () => WORKER ? location.origin : ((S.pcs.find(p => p.on!==false && /render|desktop/i.test((p.name || '') + ' ' + p.url)) || S.pcs.find(p => p.on!==false) || {}).url || '');
 // something that moves on by itself: a take still rendering, a ✨ / 🎭 pass, or an ⬆ Upscale track run that isn't waiting for her
-function runWork(){ if(S.takes.some(t => t.state==='working' || (t.k4 && (t.k4.state==='wait' || t.k4.state==='working')))) return true;
-  const E = filmsState(); return (E.passes || []).some(p => p.state==='working') || (E.films || []).some(f => { const R = f.upRun; return R && (R.state==='smooth' || R.state==='hq' || (R.state==='seams' && !R.err) || (R.state==='faces' && R.all)); }); }
+function runWork(){ if(S.takes.some(t => t.state==='working' || (t.state==='failed' && t.selfAt) || (t.k4 && (t.k4.state==='wait' || t.k4.state==='working')))) return true;
+  const E = filmsState(); return (E.passes || []).some(p => p.state==='working') || (E.films || []).some(f => { if(f.nx && f.nx.state==='working') return true; const R = f.upRun; return R && (R.state==='smooth' || R.state==='hq' || (R.state==='seams' && !R.err) || (R.state==='faces' && R.all)); }); }
 function filmsState(){ try{ const F = FW && FW.FILM; if(F && F.S) return F.S; }catch(e){} try{ return JSON.parse(localStorage.getItem('h3edit') || '{}') || {}; }catch(e){ return {}; } }
 function runBody(by){ return JSON.stringify({v:1, t:Date.now(), by, wid:WID, deck:S, edit:filmsState()}); }
 function pushRunSoon(){ clearTimeout(runT); runT = setTimeout(() => pushRun(WORKER ? 'worker' : 'phone'), WORKER ? 1500 : 3000); }
@@ -2883,10 +2883,20 @@ async function sendPieces(t, from){
 }
 
 // ---------- following the pieces ----------
+// ↻ a piece that vanished from a PC's line or was stopped there (not by a cancel here, not a real error) is sent again by itself,
+// 45 s later, at most twice (Jordan 2026-11-14: "Main keeps failing"; 2026-11-13: "restarting part if it fails rather than waiting for me")
+const SELF_TRIES = 2, SELF_WAIT = 45000;
+// one tab follows the takes: two open copies on one phone would each move, retry or give up on the same takes
+const TAB = Math.random().toString(36).slice(2);
+function lead(){ if(WORKER) return true; try{ const o = JSON.parse(localStorage.getItem('h3lead') || 'null'), now = Date.now();
+  if(o && o.id!==TAB && now - o.t < 15000) return false; localStorage.setItem('h3lead', JSON.stringify({id:TAB, t:now})); }catch(e){} return true; }
 let tickT = 0, REBAL_AT = 0; const tickSoon = ms => { clearTimeout(tickT); tickT = setTimeout(tick, ms || 0); };
 async function tick(){
   clearTimeout(tickT); if(HOLD){ tickT = setTimeout(tick, 2000); return; }
+  if(!lead()){ tickT = setTimeout(tick, 4000); return; } // another tab of H3 Deck on this phone is following the takes
   try{
+    for(const t of S.takes) if(t.state==='failed' && t.selfAt && Date.now() >= t.selfAt && pcOf(t.pc).online){ t.selfAt = 0; t.selfTries = (t.selfTries || 0) + 1;
+      if(await retryTake(t)) toast('↻ ' + pcName(t.pc) + ' lost a take, so it was sent again by itself (try ' + t.selfTries + ' of ' + SELF_TRIES + ')', 5000); }
     for(const t of S.takes) if(t.k4 && (t.k4.state==='wait' || t.k4.state==='working')) await tickFin(t);
     const busy = S.takes.filter(t => t.state==='working').reverse();
     for(const t of busy){
@@ -2897,15 +2907,19 @@ async function tick(){
         if(h && h.status && h.status.completed){ const o = (h.outputs || {})[pc.save] || {}, f = (o.images || o.videos || o.gifs || [])[0];
           if(f){ pc.file = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; pc.state = 'done'; pc.t1 = Date.now(); } else { pc.state = 'failed'; pc.err = 'nothing came back'; }
           const jo = pc.join && (h.outputs || {})[pc.join], jf = jo && (jo.images || jo.videos || [])[0]; if(jf) t.final = {filename:jf.filename, subfolder:jf.subfolder || '', type:'output'}; }
-        else if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'); pc.state = 'failed'; pc.err = e ? e[1].exception_message : 'ComfyUI hit an error'; }
+        else if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error'), cut = (h.status.messages || []).some(x => x[0]==='execution_interrupted');
+          pc.state = 'failed'; pc.err = e ? e[1].exception_message : cut ? 'something stopped it on ' + pcName(t.pc) + ' (a cancel reached it)' : 'ComfyUI hit an error'; pc.lost = !e; }
         else if(!h){ const q = p.queue || {}, inQ = [...(q.queue_running || []), ...(q.queue_pending || [])];
           const at = inQ.findIndex(x => x[1]===pc.pid);
           if(at < 0 && Date.now() - (pc.tq || 0) > 20000){ let h2 = null; try{ h2 = (await getJ(t.pc + '/history/' + pc.pid))[pc.pid]; }catch(e){} if(h2) continue; // (it finished between the two looks)
+            let q2 = null; try{ q2 = await getJ(t.pc + '/queue', null, 6000); }catch(e){ continue; } // (a fresh look: the saved one can be old after a network drop)
+            p.queue = q2; if([...(q2.queue_running || []), ...(q2.queue_pending || [])].some(x => x[1]===pc.pid)) continue;
             const f = await probeFile(t, t.pieces.indexOf(pc));
-            if(f){ pc.file = f; pc.state = 'done'; pc.t1 = Date.now(); } else { pc.state = 'failed'; pc.err = 'It left ' + pcName(t.pc) + "'s queue (ComfyUI restarted or it was cancelled)"; } }
+            if(f){ pc.file = f; pc.state = 'done'; pc.t1 = Date.now(); } else { pc.state = 'failed'; pc.lost = true; pc.err = 'It left ' + pcName(t.pc) + "'s queue (ComfyUI restarted or it was cancelled)"; } }
           else if(at >= 0){ pc.state = (q.queue_running || []).some(x => x[1]===pc.pid) ? 'running' : 'queued'; } }
       }
       if(t.pieces.some(x => x.state==='failed')){ t.state = 'failed'; const bad = t.pieces.findIndex(x => x.state==='failed');
+        if(t.pieces[bad].lost && (t.selfTries || 0) < SELF_TRIES){ t.selfAt = Date.now() + SELF_WAIT; t.pieces[bad].lost = false; }
         const later = t.pieces.slice(bad + 1).filter(x => x.pid && (x.state==='queued' || x.state==='running')).map(x => x.pid);
         if(later.length){ try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:later})}); }catch(e){} }
         t.pieces.slice(bad + 1).forEach(x => { if(x.state==='queued' || x.state==='running') x.state = 'new'; }); }
@@ -2948,7 +2962,7 @@ async function cancelTake(t){
   const pids = t.pieces.filter(p => p.pid && (p.state==='queued' || p.state==='running') && mine(p)).map(p => p.pid).concat(t.joinPid && t.state==='working' ? [t.joinPid] : []).concat(t.upPid && t.upStage && t.upStage!=='done' ? [t.upPid] : []);
   try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:pids})}); }catch(e){}
   const run = t.pieces.find(p => p.state==='running' && mine(p)); if(run){ try{ await fetch(t.pc + '/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt_id:run.pid})}); }catch(e){} }
-  t.pieces.forEach(p => { if(p.state==='queued' || p.state==='running'){ p.state = 'failed'; p.err = 'Cancelled'; } }); t.state = 'failed'; save(); drawTakes();
+  t.pieces.forEach(p => { if(p.state==='queued' || p.state==='running'){ p.state = 'failed'; p.err = 'Cancelled'; } }); t.state = 'failed'; t.selfAt = 0; save(); drawTakes();
 }
 // 🎲 takes from a piece (Jordan 2026-11-03: "if we like video 1/3 but want versions of 2/3"): new takes keep pieces 1..i of this
 // one (their files stay where they are) and make piece i+1 onwards again, each carrying on from the saved ending of piece i. The
@@ -3001,7 +3015,7 @@ async function redoFrom(t, i, newSeed){
 // for me to hit restart the parts that failed"): its PC's memory is freed first (the seams failed on Main for want of RAM), then the
 // failed piece and the ones after it go again, or a failed ✨ regenerate step starts over. False when its PC can't be reached
 // (nothing is sent, so the try isn't used up)
-async function retryTake(t){ if(!t) return false; const p = pcOf(t.pc); if(!p.online) return false;
+async function retryTake(t){ if(!t) return false; const p = pcOf(t.pc); if(!p.online) return false; t.selfAt = 0;
   try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
   let i = (t.pieces || []).findIndex(x => x.state==='failed'); if(i < 0 && t.state==='failed') i = Math.max(0, (t.pieces || []).findIndex(x => x.state!=='done'));
   t.retries = (t.retries || 0) + 1;
@@ -3178,7 +3192,8 @@ function openPcs(){ openSheet(`<h3>🖥 PCs <button class="btn" data-close>✕</
   $('#sheetCard').onclick = async ev => { const t = ev.target.closest('[data-pcon2]'); if(t){ const p = S.pcs[+t.dataset.pcon2]; p.on = !p.on; save(); drawAll(); drawPcSheet(); toast(p.name + (p.on ? ' takes new takes again' : ' gets no new takes for now')); return; }
     const x = ev.target.closest('[data-qx]'); if(x){ const [i, id, r, mine] = x.dataset.qx.split('|'), p = S.pcs[+i];
       if(!confirm((r==='1' ? 'Stop the job ' + p.name + ' is working on' : 'Take this job out of ' + p.name + "'s line") + '?' + (mine==='1' ? ' Its take stops there.' : " It wasn't sent from H3 Deck."))) return;
-      try{ await fetch(p.url + (r==='1' ? '/interrupt' : '/queue'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(r==='1' ? {prompt_id:id} : {delete:[id]})}); toast(r==='1' ? 'Stopped' : 'Taken out of the line'); }catch(e){ toast("Couldn't reach " + p.name); }
+      try{ await fetch(p.url + (r==='1' ? '/interrupt' : '/queue'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(r==='1' ? {prompt_id:id} : {delete:[id]})}); toast(r==='1' ? 'Stopped' : 'Taken out of the line');
+        S.takes.forEach(t => t.pieces.forEach(x => { if(x.pid===id && (x.state==='queued' || x.state==='running')){ x.state = 'failed'; x.err = 'Cancelled'; t.state = 'failed'; t.selfAt = 0; } })); save(); }catch(e){ toast("Couldn't reach " + p.name); }
       await ping(p.url); drawPcSheet(); tickSoon(500); return; }
     const qc = ev.target.closest('[data-qclear]'); if(qc){ const p = S.pcs[+qc.dataset.qclear], w = ((pcOf(p.url).queue || {}).queue_pending || []).length;
       if(!confirm('Clear the ' + w + ' waiting jobs in ' + p.name + "'s line? Whatever it is making right now keeps going.")) return;
@@ -3503,7 +3518,7 @@ function stateLine0(t){
   if(t.state==='done') return t.final ? (n > 1 ? n + ' pieces joined' : 'Done') : 'Done, not joined' + (t.joinErr ? ': ' + t.joinErr : '');
   if(t.state==='working' && t.upStage){ const L = LIVE[t.upPid] || {}, qq = pcOf(t.pc).queue || {}, at = [...(qq.queue_running || []), ...(qq.queue_pending || [])].findIndex(x => x[1]===t.upPid);
     return '⬆ Regenerating at ' + upSize(t) + (at > 0 ? ' once the ' + at + ' job' + (at > 1 ? 's' : '') + ' ahead finish' : L.max ? ' · ' + L.v + ' of ' + L.max : t.upStage==='running' ? '' : ' · starting'); }
-  if(t.state==='failed'){ const b = t.pieces.find(p => p.state==='failed'); return (b && b.err==='Cancelled') ? 'Cancelled' : 'Stopped at piece ' + (t.pieces.indexOf(b) + 1) + (b && b.err ? ': ' + b.err : ''); }
+  if(t.state==='failed'){ const b = t.pieces.find(p => p.state==='failed'); return (b && b.err==='Cancelled') ? 'Cancelled' : 'Stopped at piece ' + (t.pieces.indexOf(b) + 1) + (b && b.err ? ': ' + b.err : '') + (t.selfAt ? ' · sending it again by itself in ' + Math.max(1, Math.round((t.selfAt - Date.now()) / 1000)) + ' s' : ''); }
   if(t.joinPid){ const qq = pcOf(t.pc).queue || {}, at = [...(qq.queue_running || []), ...(qq.queue_pending || [])].findIndex(x => x[1]===t.joinPid);
     return at > 0 ? 'Joining the ' + n + ' pieces once the ' + (at > 1 ? at + ' renders' : 'render') + ' ahead of it finish' : 'Joining the ' + n + ' pieces'; }
   if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? 'Piece ' + (t.pieces.indexOf(run) + 1) + ' of ' + n + ' · ' : '') + (L.max ? 'step ' + L.v + ' of ' + L.max : 'loading'); }
