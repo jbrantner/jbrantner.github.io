@@ -960,6 +960,7 @@ const plainBeat = x => String(x || '').replace(/The scene keeps carrying on from
 // 🎬 shots (Jordan 2026-11-13, cut on the action): a "[Shot n]" typed just before a timed tag belongs to that beat, so it goes with it into
 // whichever piece the beat lands in; a piece that cuts to a new shot isn't told "same shot, no cut"; a leading [Shot 1] stays in front
 const SHOTM = /\[\s*shot\s*(\d+)\s*\]/i, SHOT1 = /^\s*\[\s*shot\s*1\s*\]\s*/i, CUTTO = /\[\s*shot\s*(?:[2-9]|\d\d+)\s*\]/i;
+const MOVE_ON = 'The action keeps moving forward from where it is now and does not repeat what has already happened.';
 function piecePrompt(text, pieces, i, total){
   const s1 = SHOT1.test(text || ''), S1 = s1 ? '[Shot 1] ' : ''; if(s1) text = text.replace(SHOT1, '');
   const pr = pieces[i], {global:g0, beats} = parseBeats(text), ps = pr.start, pe = pr.start + pr.deliv / FPS, off = LEAD(pr) / FPS;
@@ -978,9 +979,12 @@ function piecePrompt(text, pieces, i, total){
   // action at all): every part past it keeps her last words, and 🔀 gives each part its own order
   { const L = beats.filter(b => plainBeat(b.text)).pop(); if(L && L===beats[beats.length - 1] && L.b < pe) L.b = Infinity; }
   const ovl = b => Math.min(b.b, pe) - Math.max(b.a, ps), need = b => Math.min(0.3, Math.max(0.05, (Math.min(b.b, 1e9) - b.a) / 2));
-  const mine = beats.filter(b => ovl(b) > need(b)).map(b => {
+  // a part with no new line of its own (Jordan 2026-11-14: "a continuation shot just repeats the same action on loop"): the carried line
+  // is told to move on, so MiniMax doesn't play the motion it was handed through H3 Motion Context over again
+  const got = beats.filter(b => ovl(b) > need(b)), stale = i > 0 && got.length && got.every(b => b.a < ps - 0.05);
+  const mine = got.map(b => {
     const a = Math.max(0, b.a - ps) + off, e = Math.min(b.b, pe) - ps + off, cont = b.a < ps - 0.05;
-    return (b.shot && !cont ? b.shot + ' ' : '') + '[' + t2(a) + '-' + t2(e) + '] ' + (cont ? '(carrying on) ' : '') + b.text; });
+    return (b.shot && !cont ? b.shot + ' ' : '') + '[' + t2(a) + '-' + t2(e) + '] ' + (cont ? '(carrying on) ' : '') + b.text + (cont && stale ? (/[.!?]\s*$/.test(b.text) ? ' ' : '. ') + MOVE_ON : ''); });
   if(lead && (mine.some(x => CUTTO.test(x)) || CUTTO.test(global))) lead = cutLead;
   return (S1 + lead + global + (global ? '\n' : '') + mine.join('\n')).trim();
 }
@@ -2276,10 +2280,13 @@ const negOf = t => t.neg !== undefined ? t.neg : keepOut(S.f);
 function guiderOf(add, oi, t, model, cond, clip){ const neg = negOf(t);
   if(!neg || !nagOn(oi)) return add('BasicGuider', {model, conditioning:cond});
   return add('NAGGuiderMiniMaxH3', Object.assign({model, conditioning:cond, nag_negative:[add('CLIPTextEncode', {clip, text:neg}), 0]}, nagArgs(t.negScale))); }
+// 🎲 each part of a long take gets its own seed (Jordan 2026-11-14: parts 2+ looped part 1's action; they all ran on the take's one seed):
+// part 1 keeps the take's seed, so a take made before this starts the same; later parts step off it
+const pieceSeed = (t, i) => { const s = Math.floor(+t.seed || 0); return i ? (s + i * 1000003) % 2147483647 : s; };
 function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, im, au} = draw into that graph, from those frames, and hand back the spliced frames
   { const M0 = resolveModel(oi, t.model, t.turbo); t = castTake(t, !(M0 && M0.fl2v)); } // 👥 the subjects' pictures, as they are now
   const g = X ? X.g : {}; let n = 0; const add = X ? X.add : (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
-  const pc = t.pieces[i], first = i===0, last = i===t.pieces.length - 1, chain = !!(oi.MiniMaxH3MotionContextSaveLatent && oi.MiniMaxH3MotionContext);
+  const seed = pieceSeed(t, i), pc = t.pieces[i], first = i===0, last = i===t.pieces.length - 1, chain = !!(oi.MiniMaxH3MotionContextSaveLatent && oi.MiniMaxH3MotionContext);
   const M = resolveModel(oi, t.model, t.turbo), w = t.w, h = t.h, L = pc.gen, steps = +t.steps || M.steps;
   let model = [add('UNETLoader', {unet_name:M.unet, weight_dtype:'default'}), 0];
   if(M.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:M.lora, strength_model:1}), 0];
@@ -2390,11 +2397,11 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   let out;
   if(t.fin && finAble(t.model) && pikaOf(oi) && oi.SplitSigmas && oi.DisableNoise){ // 🔀 first model for the motion, PIKA for the last steps
     const sp = add('SplitSigmas', {sigmas:[sig, 0], step:finSplit(t, steps)}), smp = [add('KSamplerSelect', {sampler_name:'res_multistep'}), 0];
-    const a1 = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed}), 0], guider:[guider, 0], sampler:smp, sigmas:[sp, 0], latent_image:lat0});
+    const a1 = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:smp, sigmas:[sp, 0], latent_image:lat0});
     let m2 = [add('UNETLoader', {unet_name:pikaOf(oi), weight_dtype:'default'}), 0];
     for(const l of lorasOf(t)) m2 = [add('LoraLoaderModelOnly', {model:m2, lora_name:l.name, strength_model:+l.str}), 0];
     out = add('SamplerCustomAdvanced', {noise:[add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[sp, 1], latent_image:[a1, 0]});
-  } else out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:t.seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0});
+  } else out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0});
   if(chain && !X) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
@@ -4596,7 +4603,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
