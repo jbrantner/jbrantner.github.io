@@ -116,5 +116,22 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   { const n2 = sent.length; await page.evaluate(() => window.H3GapFill({a:{file:{filename:'shot1.mp4', subfolder:'Output_Render/H3Film', type:'output'}, frames:120, w:1600, h:900}, outA:4, takeB:'tA', inB:0.5, secs:2, prompt:'x', n:1, film:'fA', clipA:'', clipB:''}));
     await page.waitForTimeout(1200); const g3 = sent[n2] && sent[n2].g;
     ok(g3 && nodes(g3, 'LoadVideo').some(n => n.inputs.file==='Output_Render/H3Film/shot1.mp4 [output]') && nodes(g3, 'ImageScale').length > 0, '⇿ a nested shot\'s export can be the clip before (loaded from its file, scaled to the fill)'); }
+  // ✨ neighbours (Jordan 2026-11-14: the fill looked lower res than the ✨ clips): the fill gets ✨ with the same settings when it's done
+  { await page.evaluate(() => { const a = H3.S.takes.find(x => x.id==='tA'), q = JSON.parse(JSON.stringify(a)); Object.assign(q, {id:'tQ', redo:{qp:true, key:'kq', src:'tA', a:0, b:120, Fout:120, F:120, s0:0, L:121, pins:[]}, up:{scale:1.5, crop:{s0:0, L:121}}, final:{filename:'q.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}}); H3.S.takes.push(q); H3.saveNow();
+      window.H3Nudge = async o => { (window.NUDGED = window.NUDGED || []).push(o); return 1; }; });
+    await fr.evaluate(() => { FILM.S.passes = (FILM.S.passes || []).concat([{key:'kq', state:'done', o:{den:0.7, unet:'minimax_h3_ref2va_x.safetensors', str:0.6, loras:[]}}]);
+      const f = FILM.S.films[0], all = f.tracks.flatMap(tr => tr.clips), c1 = all.find(x => x.id===window.C1), c2 = all.find(x => x.id===window.C2), tr = f.tracks.find(t => t.clips.includes(c1));
+      tr.clips = [c1, c2]; Object.assign(c1, {take:'tQ', in:0, out:5, dur:5, at:0}); Object.assign(c2, {in:0, out:5, dur:5, at:6}); FILM.GAP = null; FILM.SEL = c1.id; FILM.draw(); });
+    await fr.click('.tools [data-act="fill"]'); await page.waitForTimeout(300);
+    ok(await fr.evaluate(() => !!document.querySelector('#flHQ') && document.querySelector('#flHQ').checked), '⇿ next to a ✨ clip the sheet offers ✨ Match the High quality clips, ticked');
+    const n4 = await page.evaluate(() => H3.S.takes.length); await fr.click('#flGo'); await page.waitForTimeout(1200);
+    const ft = await page.evaluate(() => { const t = H3.S.takes.find(x => x.lead && x.lead.gap && x.lead.gap.hq); return t && {id:t.id, hq:t.lead.gap.hq}; });
+    ok(ft && ft.hq.den===0.7 && /ref2va_x/.test(ft.hq.unet) && ft.hq.str===0.6, '⇿ the fill keeps the ✨ clip\'s pass settings (' + JSON.stringify(ft) + ')');
+    await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); t.state = 'done'; t.pieces[0].state = 'done'; t.final = {filename:'fill.mp4', subfolder:'Output_Render/H3Deck/fill', type:'output'}; H3.saveNow(); }, ft.id);
+    await fr.evaluate(() => { FILM.placeNew(); }); await page.waitForTimeout(1500);
+    const nd = await page.evaluate(() => (window.NUDGED || []).map(o => ({take:o.take, den:o.den, unet:o.unet, scale:o.scale, str:o.str})));
+    ok(nd.length===1 && nd[0].take===ft.id && nd[0].den===0.7 && nd[0].scale===1.5 && /ref2va_x/.test(nd[0].unet), '⇿ once the fill is done it gets ✨ High quality like its neighbours (' + JSON.stringify(nd) + ')');
+    await fr.evaluate(() => { FILM.placeNew(); }); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => (window.NUDGED || []).length===1), '…only once'); }
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0);
 })();
