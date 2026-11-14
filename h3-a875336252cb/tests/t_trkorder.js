@@ -14,7 +14,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const base = {model:'m', turbo:true, loras:[], imgs:[], vids:[], auds:[], follow:[], seconds:5, seed:1, dir:'H3Deck/x', pc:R, w:640, h:360, state:'done', pieces:[{deliv:120, gen:124, ctx:0, state:'done', pid:'p', file:F('p.mp4')}]};
   const tk = (id, extra) => Object.assign({}, base, {id, name:'h3_' + id, prompt:id, final:F(id + '.mp4')}, extra || {});
-  const deck = {bare:true, pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA'), tk('tB'), tk('tC')]};
+  const deck = {bare:false, pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA'), tk('tB'), tk('tC')]};
   await page.addInitScript(d => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(d)); sessionStorage.setItem('init', '1'); } }, deck);
   await page.goto('http://127.0.0.1:8037/film/index.html'); await page.waitForTimeout(500);
   await page.evaluate(() => { FILM.S.autoPrev = false; FILM.S.guideOn = false;
@@ -39,7 +39,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await ids()==='tr1,tr2,tr3', '↶ Undo puts the order back');
 
   // drag track 3's ☰ up two rows with a finger
-  const h = await page.$eval('#tl .trk[data-k="2"] .tdrag', e => { const r = e.getBoundingClientRect(); return {x:r.x + r.width / 2, y:r.y + r.height / 2}; });
+  const h = await page.$eval('#tl .trk[data-k="2"] .tdrag', e => { e.scrollIntoView({block:'center'}); const r = e.getBoundingClientRect(); return {x:r.x + r.width / 2, y:r.y + r.height / 2}; });
   const rh = await page.$eval('#tl .trk', e => e.offsetHeight);
   await page.mouse.move(h.x, h.y); await page.mouse.down(); await page.mouse.move(h.x, h.y - rh, {steps:5});
   ok(await page.$$eval('#tl .trk.tmove', r => r.length)===1, 'the dragged track lifts while moving');
@@ -49,7 +49,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await page.evaluate(() => FILM.SEL)==null, 'dragging the handle does not select or move a clip');
   ok(await page.evaluate(() => FILM.S.films[0].tracks.every(t => t.clips.length===1 && t.clips[0].at===0)), 'clips stay where they were on their tracks');
   // a short drag (less than half a row) changes nothing
-  const h2 = await page.$eval('#tl .trk[data-k="1"] .tdrag', e => { const r = e.getBoundingClientRect(); return {x:r.x + r.width / 2, y:r.y + r.height / 2}; });
+  const h2 = await page.$eval('#tl .trk[data-k="1"] .tdrag', e => { e.scrollIntoView({block:'center'}); const r = e.getBoundingClientRect(); return {x:r.x + r.width / 2, y:r.y + r.height / 2}; });
   await page.mouse.move(h2.x, h2.y); await page.mouse.down(); await page.mouse.move(h2.x, h2.y + rh * 0.3, {steps:3}); await page.mouse.up(); await page.waitForTimeout(200);
   ok(await ids()==='tr3,tr1,tr2', 'a small wiggle of ☰ keeps the order');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);

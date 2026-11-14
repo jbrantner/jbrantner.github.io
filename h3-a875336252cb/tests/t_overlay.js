@@ -25,7 +25,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const base = {model:'m', turbo:true, loras:[], imgs:[], vids:[], auds:[], follow:[], seconds:6, seed:1, dir:'H3Deck/x', pc:R, state:'done', pieces:[{deliv:144, gen:148, ctx:0, state:'done', pid:'p', file:F('p.mp4')}]};
-  const deck = {bare:true, pcs:[{name:'Render', url:R, on:true}], takes:[Object.assign({}, base, {id:'tH', name:'h3_tH', prompt:'wide', w:640, h:360, final:F('h.webm')}), Object.assign({}, base, {id:'tV', name:'h3_tV', prompt:'tall', w:360, h:640, final:F('v.webm')})]};
+  const deck = {bare:false, pcs:[{name:'Render', url:R, on:true}], takes:[Object.assign({}, base, {id:'tH', name:'h3_tH', prompt:'wide', w:640, h:360, final:F('h.webm')}), Object.assign({}, base, {id:'tV', name:'h3_tV', prompt:'tall', w:360, h:640, final:F('v.webm')})]};
   await page.addInitScript(d => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(d)); sessionStorage.setItem('init', '1'); } }, deck);
   await page.goto('http://127.0.0.1:8032/film/index.html'); await page.waitForTimeout(500);
   await page.evaluate(() => { FILM.S.autoPrev = false; FILM.S.guideOn = false;
