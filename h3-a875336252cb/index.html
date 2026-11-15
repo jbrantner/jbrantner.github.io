@@ -982,7 +982,7 @@ function shuffleWords(text, seed, mode){
     ss = ss.map(x => /[.!?]$/.test(x) ? x : x + '.');
     if(mode > 1) ss = ss.map(x => { if(/moment before/.test(x)) return x; const end = x.match(/[.!?]+$/)[0], parts = x.slice(0, -end.length).split(/\s*,\s*/).filter(Boolean); if(parts.length < 2) return x;
       const o = mx(parts).map((q, i) => i ? q.replace(LOWER, w => w.toLowerCase()) : q.replace(/^[a-z]/, c => c.toUpperCase())); return o.join(', ') + end; });
-    { const fx = ss.map(x => DLG1.test(x)); // 💬 a sentence with a line of dialogue keeps its place, so the talk stays in order; the others move around it
+    { const fx = ss.map(x => DLG1.test(x) || /<\s*pose\s*\d+\s*>/i.test(x)); // (🧍 a pose chip too: it's reached at that moment) // 💬 a sentence with a line of dialogue keeps its place, so the talk stays in order; the others move around it
       if(fx.some(Boolean)){ const fr = ss.filter((x, i) => !fx[i]), o = fr.length > 1 ? mx(fr) : fr; let j = 0; ss = ss.map((x, i) => fx[i] ? x : o[j++]); }
       else if(ss.length > 1) ss = mx(ss); }
     ss = ss.map(x => x.replace(/^[a-z]/, c => c.toUpperCase())); return lead + co + pin.concat(ss, end).join(' ') + tail; };
@@ -1236,7 +1236,23 @@ const DLGRE = /<\s*dialogue\s*(\d+)\s*>/gi, DLG1 = /<\s*dialogue\s*\d+\s*>/i;
 // 🥋 action chips (Jordan 2026-11-14: "actions should be an insertable chip so you can name the action they're doing"): <Action k> in the words,
 // the action itself in S.lines[k] {act:1, n, name, text} (same store and counter as dialogue, so takes, ↩ Use settings and "Who is it?" carry it).
 // The chip reads "Katara · Twirl"; only when sent does it become "<Subject 1> spins slowly on the spot, her skirt flaring."
-const ACTRE = /<\s*action\s*(\d+)\s*>/gi, LNRE = /<\s*(?:dialogue|action)\s*(\d+)\s*>/gi, LN1 = /<\s*(?:dialogue|action)\s*\d+\s*>/i;
+const ACTRE = /<\s*action\s*(\d+)\s*>/gi, LNRE = /<\s*(?:dialogue|action|pose)\s*(\d+)\s*>/gi, LN1 = /<\s*(?:dialogue|action|pose)\s*\d+\s*>/i;
+// 🧍 pose chips (Jordan 2026-11-15: "Can we have poses prompt sort of like actions and dialog does?"): <Pose k> at a moment in the words, the
+// pose in S.lines[k] {pose:1, n, lib (a 📚 Library pose), p (which person in its picture, -1 = the person), name, text, hold}. The chip reads
+// "Katara · Kneel"; sent, the pose picture goes along as a stand-in (only its pose and expression are used, never that person's look) and
+// the words become "<Subject 1> moves into the pose of the red person from <Subject 4>." A pose with no room left goes as its words alone.
+const POSERE = /<\s*pose\s*(\d+)\s*>/gi, POSE1 = /<\s*pose\s*\d+\s*>/i, PMARK = /\u0002(\d+)\u0005([^\u0005\u0003]*)\u0005([^\u0003]*)\u0003/g;
+const pchLib = L => { const P = L && L.pose && libOf(L.lib); return P && P.kind==='pose' && posePic(P) && S.media[posePic(P)] ? P : null; };
+const pchName = L => actWords(L && L.name) || (L && libOf(L.lib) ? poseName(libOf(L.lib)) : '') || 'pose';
+// the sentence a pose chip sends; its "the pose of … from <Subject m>" part is a marker that h3Prompt (or a plain prompt) fills in once the pose
+// picture has its number, or that falls back to plain words when the picture isn't sent (no room, ✨ passes, no pictures at all)
+function poseChOut(txt, T){ return txt.replace(/<\s*pose\s*(\d+)\s*>(\s*([.!?])(?!\.))?/gi, (m, k, dt, mk, off, all) => { const nx = all.slice(off + m.length), L = lineOf(k, T); if(!L || !L.pose) return dt ? mk : '';
+    let w = actWords(L.text); const end = (w.match(/[.!?]$/) || ['.'])[0], nm = pchName(L).toLowerCase(), who = L.n ? '<Subject ' + L.n + '> ' : '';
+    w = actLow(L, w.replace(/[\s.,;:!?]+$/, ''));
+    const mark = (pre, fb) => '\u0002' + k + '\u0005' + pre + '\u0005' + fb + '\u0003';
+    const s = w ? who + w + mark(L.hold ? ', holding ' : ', in ', '') : who + (L.hold ? 'holds ' : 'moves into ') + mark('', 'a ' + nm + ' pose');
+    return (who ? s : s.replace(/^./, c => c.toUpperCase())) + (mk || (/^\s*(?:$|\n|[A-Z<\[])/.test(nx) ? end : '')); }); }
+const pmarkOut = (txt, f) => String(txt == null ? '' : txt).replace(PMARK, (m, k, pre, fb) => { const r = f && f(+k); return r ? pre + r : fb; });
 const lineOf = (k, T) => (T && T.lines && T.lines[k]) || (S.lines || {})[k] || null;
 const lineSay = s => { s = String(s || '').replace(/[<>]/g, '').replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim(); if(!s) return '';
   s = s.replace(/\s*(?:\.{2,}|…)+\s*$/, '.').replace(/\s*(?:\.{2,}|…)+\s*/g, ', ').replace(/^[,\s]+/, ''); // the guide: ellipses hurt how clearly it's said
@@ -1247,11 +1263,12 @@ const actWords = s => String(s || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').
 const actLow = (L, w) => L && L.n && /^[A-Z][a-z]/.test(w) && !/^I\b/.test(w) ? w[0].toLowerCase() + w.slice(1) : w; // "<Subject 1> spins", not "<Subject 1> Spins"
 const tagEnd = (v, p) => { (v || '').replace(/<[^<>\n]*>/g, (m, off) => { if(p > off && p < off + m.length) p = off + m.length; return m; }); return p; }; // never put a new chip inside another tag
 // on a take's card an action chip reads as its words (2026-11-14: a bare "<Action 5>" looked like it was never filled in)
-const actShow = (txt, T) => String(txt || '').replace(ACTRE, (m, k) => { const L = lineOf(k, T), w = L && actWords(L.text); return w ? '🥋 ' + (L.name ? L.name + ': ' : '') + w : m; });
+const actShow = (txt, T) => String(txt || '').replace(ACTRE, (m, k) => { const L = lineOf(k, T), w = L && actWords(L.text); return w ? '🥋 ' + (L.name ? L.name + ': ' : '') + w : m; })
+  .replace(POSERE, (m, k) => { const L = lineOf(k, T); return L && L.pose ? '🧍 ' + pchName(L) + (actWords(L.text) ? ': ' + actWords(L.text) : '') : m; });
 function actOut(txt, T){ return txt.replace(/<\s*action\s*(\d+)\s*>(\s*([.!?])(?!\.))?/gi, (m, k, dt, mk, off, all) => { const nx = all.slice(off + m.length); const L = lineOf(k, T); let w = L && actWords(L.text); if(!w) return dt ? mk : '';
     const end = (w.match(/[.!?]$/) || [''])[0]; w = actLow(L, w.replace(/[\s.,;:!?]+$/, ''));
     return (L.n ? '<Subject ' + L.n + '> ' : '') + w + (mk || (/^\s*(?:$|\n|[A-Z<\[])/.test(nx) ? end : '')); }); } // its own full stop only where a sentence ends
-function lineOut(txt, T){ txt = txt == null ? '' : String(txt); if(/<\s*action\s*\d+\s*>/i.test(txt)) txt = actOut(txt, T); if(!DLG1.test(txt)) return txt; const ids = {}; let nx = 0;
+function lineOut(txt, T){ txt = txt == null ? '' : String(txt); if(/<\s*action\s*\d+\s*>/i.test(txt)) txt = actOut(txt, T); if(POSE1.test(txt)) txt = poseChOut(txt, T); if(!DLG1.test(txt)) return txt; const ids = {}; let nx = 0;
   return txt.replace(/<\s*dialogue\s*(\d+)\s*>(\s*\.(?!\.))?/gi, (m, k) => { const L = lineOf(k, T), say = L && lineSay(L.text); if(!say) return '';
     const key = L.n ? 'n' + L.n : 'k' + k, id = ids[key] = ids[key] || ++nx, how = lineHow(L.how), who = L.n ? '<Subject ' + L.n + '>' : 'A voice';
     return who + ' (S' + id + ') says' + (L.vo ? ' in an off-screen voiceover' + (how ? ', ' + how : '') + ': ' : (how ? ' ' + how : '') + ', ') + '<d>[' + lineLang(L) + '] ' + say + '</d>' + (L.vo ? ' while their lips remain completely closed.' : ''); }); }
@@ -1261,7 +1278,8 @@ function lineSnap(f){ const o = {}; for(const k of lineKeys([f.prompt || '', ...
 // the chip: "Laura line 1" (her first line in these words, her second is "Laura line 2")
 function lineLabel(k, txt, film){ const L = lineOf(k), c = L && L.n && castOf(L.n, film); if(!L) return 'missing line';
   if(L.act) return '🥋 ' + (c ? chipName(c) + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '') + (actWords(L.name) || 'action');
-  const nm = c ? chipName(c) : L.n ? 'Subject ' + L.n : 'Voice'; let i = 0, at = 0; for(const j of lineKeys(txt)){ const M = lineOf(j); if(M && !M.act && (M.n || 0)===(L.n || 0)){ i++; if(j===+k){ at = i; break; } } }
+  if(L.pose) return '🧍 ' + (c ? chipName(c) + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '') + pchName(L);
+  const nm = c ? chipName(c) : L.n ? 'Subject ' + L.n : 'Voice'; let i = 0, at = 0; for(const j of lineKeys(txt)){ const M = lineOf(j); if(M && !M.act && !M.pose && (M.n || 0)===(L.n || 0)){ i++; if(j===+k){ at = i; break; } } }
   return nm + ' line ' + (at || 1); }
 const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
 const castFor = k => k===undefined || castK(k)===mineCK() ? S.cast || [] : (S.casts[castK(k)] || S.castOld || []);
@@ -1336,6 +1354,9 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   const vids = (t.vids || []).slice(), acts = c => (c.acts || []).map(x => [x, libOf(x.id)]).filter(([, A]) => A);
   for(const n of used) for(const [x, A] of acts(castOf(n, t.film))) if(!(A.vid && S.media[A.vid] && vids.length < MAXREF.vid)) need += libPics(A).filter(id => S.media[id]).slice(0, 3).length;
   const pz = {}; for(const n of used) for(const x of posesOf(castOf(n, t.film), t)){ const P = libOf(x.id); (pz[P.id] = pz[P.id] || {P, who:[]}).who.push({n, p:x.p}); } // 🧍 one picture per pose, whoever takes it
+  const pch = {}; if(pics) for(const m of [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n').matchAll(POSERE)){ const L = lineOf(m[1], t), P = pchLib(L); // 🧍 pose chips: one picture per pose too
+    if(P && L.n && castOf(L.n, t.film)){ const g = pch[P.id] = pch[P.id] || {P, who:[]}; if(!g.who.some(w => w.k===+m[1])) g.who.push({k:+m[1], n:L.n, p:(P.ppl || []).length > 1 || poseSendsCoded(P) ? +L.p || 0 : -1}); } }
+  need += Object.keys(pch).length;
   need += Object.keys(pz).length;
   // 🎨 one look for everyone: style pictures (or the chosen character's first picture, when she isn't in this shot) go as style-only refs
   const stylePics = !lk ? [] : (lk.src==='p' ? (lk.pics || []) : lkN && !used.includes(lkN) ? castPics(castOf(lkN, t.film)).slice(0, 1) : []).filter(id => S.media[id]).slice(0, 2); need += stylePics.length + (lk && lk.frame && S.media[lk.frame] ? 1 : 0);
@@ -1354,6 +1375,7 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
       // clip or pictures themselves, only their stick-figure skeleton copies (actSkelOf); one not made yet is left out
       if(A.vid && S.media[A.vid] && vids.length < MAXREF.vid){ const sk = sk0(A.vid); if(sk) vids.push(Object.assign({id:sk, sound:false, follow:false, keep:'loose'}, base)); continue; }
       const P0 = libPics(A).filter(id => S.media[id]).slice(0, 3), P = P0.map(sk0).filter(Boolean); for(const id of P) if(imgs.length < MAXREF.img) imgs.push(Object.assign({id, keep:'loose'}, base)); need -= P0.length; } }
+  for(const {P, who} of Object.values(pch)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:castMore(P), poseCh:who.map(w => ({k:w.k, n:w.n, p:w.p, w:poseWho(P, w.p)}))});
   for(const {P, who} of Object.values(pz)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', when:P.when==='all' ? 'all' : 'start', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:castMore(P), poseOf:who.sort((a, b) => a.p - b.p).map(w => ({n:w.n, p:w.p, w:poseWho(P, w.p)}))});
   for(const id of stylePics) if(imgs.length < MAXREF.img) imgs.push({id, style:true, styleOf:lkN, keep:'loose'});
   if(lk && lk.frame && S.media[lk.frame] && imgs.length < MAXREF.img) imgs.push({id:lk.frame, style:true, frame:true, keep:'loose'}); // 🖼 the painted example frame: its look only
@@ -1381,12 +1403,15 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
   Object.entries(fits).forEach(([n, p]) => ad.unshift('<Subject ' + n + '> wears exactly the outfit shown in ' + andList(p) + ': the same clothes, cut, colours and details.'));
   ((T && T.imgs) || []).forEach((r, k) => { if(!r.poseOf) return; const nm = n => pics[n] ? '<Subject ' + n + '>' : (castWho(castOf(n, fk)) || 'the person').replace(/^./, x => x.toUpperCase()); // 🧍
     ad.push('<Picture ' + (k + 1) + '> is a pose reference only' + (r.coded ? ', every person in it painted one flat colour' : '') + ': ' + r.poseOf.map(x => nm(x.n) + (r.when==='all' ? ' holds' : ' starts in') + ' the pose of ' + x.w + ' in it').join(', ') + '. Nobody, no clothes, colours or background from it appear.'); });
+  if(plain){ const pm = {}; ((T && T.imgs) || []).forEach((r, k) => { if(!r.poseCh) return; const pl = '<Picture ' + (k + 1) + '>'; r.poseCh.forEach(x => { pm[x.k] = 'the pose' + (r.coded ? '' : ' and facial expression') + ' of ' + x.w + ' in ' + pl; }); // 🧍 pose chips
+      if(r.poseCh.some(x => out.includes('\u0002' + x.k + '\u0005'))) ad.push(pl + ' is a pose reference only' + (r.coded ? ', every person in it painted one flat colour' : ': the person in it is a stand-in') + '; only the body pose' + (r.coded ? '' : ' and facial expression') + ' is used, never their face, hair, skin, body shape or clothes, and nothing of its place appears.'); });
+    out = pmarkOut(out, k => pm[k]); }
   { const sty = [], I = (T && T.imgs) || [], src = I.find(r => r.lookSrc); I.forEach((r, k) => { if(r.style) sty.push('<Picture ' + (k + 1) + '>'); }); // 🎨
     if(sty.length) ad.push(andList(sty) + (sty.length > 1 ? ' are style references' : ' is a style reference') + ' only: the whole video, every person, object and place, is shown in ' + (sty.length > 1 ? 'their' : 'its') + ' visual style; the people, things and place in ' + (sty.length > 1 ? 'them' : 'it') + ' do not appear.' + (I.some(r => r.style && r.frame) ? ' The framing, the layout and who is in frame come from the words.' : ''));
     else if(src) ad.push('Everyone and everything is shown in the same visual style as <Subject ' + src.cast + '>.'); }
   if(plain && ad.length) out = ad.join(' ') + ' ' + out;
   return out; }
-const castWords = (txt, k) => lineOut(txt || '').replace(REFRE, 'it').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
+const castWords = (txt, k) => pmarkOut(lineOut(txt || '')).replace(REFRE, 'it').replace(SUBRE, (m, n) => { const c = castOf(n, k); return c ? castWho(c) || 'someone' : m; }); // no pictures at all (⬆ Regenerate)
 function castHits(w){ // how often the words are in the form and the takes (for 🔁 swap)
   if(!(w = (w || '').trim())) return 0; const re = new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'); let n = 0;
   const cnt = x => { n += ((x || '').match(re) || []).length; };
@@ -1435,11 +1460,11 @@ function drawShotRefs(){ const f = S.f, box = $('#srefBox'); if(!box) return; co
   const n = $('#srefNote'); if(n) n.textContent = SR.length ? srefNote(f) : ''; }
 let HLV = null;
 function subjHl(){ const ta = $('#prompt'), hl = $('#promptHl'); if(!ta || !hl) return; const v = ta.value; HLV = v;
-  if(!/<\s*subject\s*\d+\s*>|<\s*ref\s*image\s*\d+\s*>|<\s*(?:dialogue|action)\s*\d+\s*>/i.test(v)){ hl.hidden = true; return; }
+  if(!/<\s*subject\s*\d+\s*>|<\s*ref\s*image\s*\d+\s*>|<\s*(?:dialogue|action|pose)\s*\d+\s*>/i.test(v)){ hl.hidden = true; return; }
   // a tag broken over two lines (Jordan 2026-11-09: "some of the tags are the names and other tags came out as subject 3"): each half is
   // its own coloured piece, the name on the first; a subject with no name yet shows its stand-in words ("a woman")
   const SR = shotRefs(S.f);
-  let h = '', i = 0; v.replace(/<\s*subject\s*(\d+)\s*>|<\s*ref\s*image\s*(\d+)\s*>|<\s*(?:dialogue|action)\s*(\d+)\s*>/gi, (m, n, rn, dn, off) => { const D = dn && lineOf(dn), dc = D && D.n && castOf(D.n), c = n && castOf(n), r = rn && SR[+rn - 1], nm = esc(dn ? lineLabel(dn, v) : rn ? (r ? '🖼 Ref Image ' + rn : 'no ref image ' + rn) : c ? chipName(c) : 'not in this film'), k = m.search(/\s\S*$/), a = k > 0 ? m.slice(0, k) : m, b = k > 0 ? m.slice(k) : '';
+  let h = '', i = 0; v.replace(/<\s*subject\s*(\d+)\s*>|<\s*ref\s*image\s*(\d+)\s*>|<\s*(?:dialogue|action|pose)\s*(\d+)\s*>/gi, (m, n, rn, dn, off) => { const D = dn && lineOf(dn), dc = D && D.n && castOf(D.n), c = n && castOf(n), r = rn && SR[+rn - 1], nm = esc(dn ? lineLabel(dn, v) : rn ? (r ? '🖼 Ref Image ' + rn : 'no ref image ' + rn) : c ? chipName(c) : 'not in this film'), k = m.search(/\s\S*$/), a = k > 0 ? m.slice(0, k) : m, b = k > 0 ? m.slice(k) : '';
     h += esc(v.slice(i, off)) + `<mark class="${dn ? 'dl' : ''}" style="--cc:${dn ? (dc ? subColor(D.n) : '#8a8f9c') : rn ? (r && r.on ? REFC : '#8a8f9c') : c ? subColor(n) : '#8a8f9c'}" data-n="${nm}"><i data-n="${nm}">${esc(a)}</i>${b ? `<i>${esc(b)}</i>` : ''}</mark>`; i = off + m.length; return m; });
   hl.innerHTML = h + esc(v.slice(i)) + '\n'; hl.hidden = false; hl.style.width = ta.clientWidth + 'px'; hl.style.height = ta.clientHeight + 'px'; hl.scrollTop = ta.scrollTop;
   hl.querySelectorAll('mark').forEach(m => m.classList.toggle('wr', m.getClientRects().length > 1)); } // a tag broken over two lines shows its own words
@@ -1506,6 +1531,49 @@ function actSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off : 
     for(const j of Object.keys(f.pieceText || {})) f.pieceText[j] = f.pieceText[j].replace(re, ''); if(ta) ta.value = f.prompt; filmEdit(f.prompt); save(); closeSheet(); drawShot(); try{ h3Peek(); }catch(e){} };
   if(!old) setTimeout(() => { const x = $('#acName'); if(x) x.focus(); }, 50); }
 document.addEventListener('click', e => { const b = e.target.closest('[data-acn]'); if(b) actSheet(0); });
+// 🧍 the pose sheet: who takes it, which 📚 Library pose (and which person in its picture), moves into it or holds it, a name for the chip and
+// optional words. The chip goes in where the cursor was, so the pose is reached at that moment of the words.
+function poseChSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off : (ta && ta.selectionStart != null ? ta.selectionStart : (f.prompt || '').length), old = k && lineOf(k);
+  const ppl = (S.cast || []).filter(c => (c.kind || 'char')==='char'), who0 = old ? old.n || 0 : (ppl.find(c => c.n===S.dlWho) || ppl.find(c => new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'i').test(f.prompt || '')) || ppl[0] || {}).n || 0;
+  const LP = (S.lib || []).filter(x => x.kind==='pose'), D = {n:who0, lib:old ? old.lib || '' : (LP.length===1 ? LP[0].id : ''), p:old ? +old.p || 0 : 0, hold:!!(old && old.hold), name:old ? old.name || '' : '', text:old ? old.text || '' : ''};
+  const th = x => (S.media[x.coded] || S.media[libPics(x)[0]] || {}).thumb;
+  openSheet(`<h3><span>🧍 ${old ? 'Pose' : 'Add a pose'}</span><button class="btn" data-close>✕</button></h3><div id="pcBox">
+    <div class="lab"><span>Who takes it</span></div><div class="chips" id="pcWho">${ppl.map(c => `<button class="btn" data-pw="${c.n}" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👤 ${esc(chipName(c))}</button>`).join('') || '<span class="note">Add a character to this film\'s 👥 cast first.</span>'}</div>
+    <div class="lab" style="margin-top:10px"><span>Which pose (📚 Library)</span></div>${LP.length ? `<div class="libGrid" id="pcLib">${LP.map(x => `<button class="libTile" data-pl="${x.id}">${th(x) ? `<img src="${th(x)}" alt="">` : '<span>🧍</span>'}<b>${esc(x.name || 'Unnamed')}</b><small>${(x.ppl || []).length > 1 ? x.ppl.length + ' people' : 'Pose'}</small></button>`).join('')}</div>` : '<div class="note">No poses in the Library yet.</div>'}
+    <button class="btn" id="pcNew" style="margin-top:8px">＋ New pose in the Library</button>
+    <div id="pcPpl"></div>
+    <div class="chips" style="margin-top:10px" id="pcHow"><button class="btn" data-ph="0">Moves into it</button><button class="btn" data-ph="1">Holds it</button></div>
+    <div class="lab" style="margin-top:10px"><span>Name it (what the chip says)</span></div><input id="pcName" style="width:100%;box-sizing:border-box" placeholder="the pose's own name" value="${esc(D.name)}">
+    <div class="lab" style="margin-top:8px"><span>What it looks like (optional)</span></div><textarea id="pcText" rows="2" style="width:100%;box-sizing:border-box" placeholder="e.g. kneels on the bed, hands resting on her thighs">${esc(D.text)}</textarea>
+    <div class="note" style="margin-top:6px">The pose picture goes along as a stand-in: only its pose and facial expression are used, never that person's face, hair, body or clothes.</div>
+    <div class="note" id="pcPrev" style="margin-top:8px;word-break:break-word"></div>
+    <div class="chips" style="margin-top:10px"><button class="btn pri" id="pcGo">${old ? 'Save' : '↧ Put it in the shot'}</button>${old ? '<button class="btn" id="pcRm">🗑 Take it out of the shot</button>' : ''}</div></div>`);
+  const draw = () => { $('#pcWho').querySelectorAll('[data-pw]').forEach(b => { const on = +b.dataset.pw===+D.n, col = subColor(b.dataset.pw); b.classList.toggle('pri', on); b.style.background = on ? col : ''; b.style.color = on ? '#15161b' : col; });
+    if($('#pcLib')) $('#pcLib').querySelectorAll('[data-pl]').forEach(b => b.classList.toggle('in', b.dataset.pl===D.lib));
+    $('#pcHow').querySelectorAll('[data-ph]').forEach(b => b.classList.toggle('pri', !!+b.dataset.ph===D.hold));
+    const P = libOf(D.lib), many = P && ((P.ppl || []).length > 1 || poseSendsCoded(P)), n = many ? Math.max(1, (P.ppl || []).length) : 0; if(n && D.p >= n) D.p = 0;
+    $('#pcPpl').innerHTML = !n ? '' : `<div class="lab" style="margin-top:10px"><span>Which person in the picture</span></div><div class="chips">${Array.from({length:n}, (x, i) => `<button class="btn${i===D.p ? ' pri' : ''}" data-pp="${i}"${poseSendsCoded(P) ? ` style="border-color:${POSE_COL[i % POSE_COL.length][1]}"` : ''}>${esc(poseWho(P, i).replace(/^the /, '').replace(/ person$/, ''))}</button>`).join('')}</div>`;
+    $('#pcName').placeholder = P ? poseName(P) : 'the pose\'s own name';
+    const c = castOf(D.n), L = Object.assign({pose:1}, D, {name:D.name || (P ? poseName(P) : '')}), out = P ? pmarkOut(lineOut('<Pose 0>.', {lines:{0:L}}), () => 'the pose and facial expression of ' + poseWho(P, many ? D.p : -1) + ' from the pose picture').replace(SUBRE, () => c ? chipName(c) : 'Subject ' + D.n) : '';
+    $('#pcPrev').textContent = out ? 'Sent to MiniMax as: ' + out : 'Pick a pose to see how it\'s sent.'; };
+  draw();
+  $('#pcWho').onclick = e => { const b = e.target.closest('[data-pw]'); if(!b) return; D.n = +b.dataset.pw; draw(); };
+  if($('#pcLib')) $('#pcLib').onclick = e => { const b = e.target.closest('[data-pl]'); if(!b) return; D.lib = b.dataset.pl; D.p = 0; draw(); };
+  $('#pcPpl').onclick = e => { const b = e.target.closest('[data-pp]'); if(!b) return; D.p = +b.dataset.pp; draw(); };
+  $('#pcHow').onclick = e => { const b = e.target.closest('[data-ph]'); if(!b) return; D.hold = !!+b.dataset.ph; draw(); };
+  $('#pcNew').onclick = () => { closeSheet(); setTab('lib'); const N = libNew('pose'); save(); drawLib(); openLib(N.id); toast('🧍 Add the pose picture, then come back to the Shot box and tap 🧍 ＋ Pose', 5000); };
+  $('#pcName').oninput = e => { D.name = e.target.value; draw(); }; $('#pcText').oninput = e => { D.text = e.target.value; draw(); };
+  $('#pcGo').onclick = () => { if(!D.n) return toast('Pick who takes the pose'); const P = libOf(D.lib); if(!P) return toast('Pick a pose from the Library');
+    if(!posePic(P) || !S.media[posePic(P)]) toast('🧍 That pose has no picture yet, so only its words go until you add one', 5000);
+    S.lines = S.lines || {}; S.dlWho = D.n; const L = {pose:1, n:+D.n, lib:P.id, p:(P.ppl || []).length > 1 || poseSendsCoded(P) ? D.p : -1, name:actWords(D.name) || poseName(P), text:D.text.trim()}; if(D.hold) L.hold = true;
+    if(old) S.lines[k] = L;
+    else { const used = Object.keys(S.lines).map(Number); k = Math.max(0, +S.lineNo || 0, ...used) + 1; S.lineNo = k; S.lines[k] = L;
+      const v = f.prompt || '', p = tagEnd(v, Math.min(pos, v.length)), tok = '<Pose ' + k + '>', pre = p && !/\s$/.test(v.slice(0, p)) ? ' ' : '', post = /^\s/.test(v.slice(p)) || p >= v.length ? '' : ' ';
+      f.prompt = v.slice(0, p) + pre + tok + post + v.slice(p); if(ta){ ta.value = f.prompt; ta.selectionStart = ta.selectionEnd = p + pre.length + tok.length; } filmEdit(f.prompt); }
+    save(); closeSheet(); drawShot(); try{ h3Peek(); }catch(e){} };
+  if(old) $('#pcRm').onclick = () => { const re = new RegExp('[ \\t]?<\\s*pose\\s*' + k + '\\s*>', 'gi'); f.prompt = (f.prompt || '').replace(re, '').replace(/^ /, '');
+    for(const j of Object.keys(f.pieceText || {})) f.pieceText[j] = f.pieceText[j].replace(re, ''); if(ta) ta.value = f.prompt; filmEdit(f.prompt); save(); closeSheet(); drawShot(); try{ h3Peek(); }catch(e){} }; }
+document.addEventListener('click', e => { const b = e.target.closest('[data-psn]'); if(b) poseChSheet(0); });
 // 🎬 ＋ Shot = a cut on the action (Jordan 2026-11-13: "when a new shot is created that it does the cut prompt"; ➕ carry-on already gives the
 // continuous shot): pick the new angle and who, say what they're doing at the cut, and the new [Shot n] line goes in. On a fresh ➕ carry-on
 // ("[0s-1s] lead-in [1s-]" with nothing after it) the shot takes over the open [1s-] line, so the lead-in plays and the cut lands at 1 s.
@@ -2123,10 +2191,11 @@ function h3Prompt(o){
     const head = !o.fl2v ? '' : o.first && o.last ? 'How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the ' + S2 + '-second mark of the target video.\n\n'
       : o.first ? 'For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\n'
       : o.last ? 'How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) aligns with the ' + S2 + '-second mark of the target video.\n\n' : '';
+    text = pmarkOut(text); // 🧍 no pictures: a pose chip is its words
     return words + head + 'integrated_multimodal_description: [Shot 1] ' + styleOf(H, true) + ' ' + (qualityOf(H) ? qualityOf(H) + ' ' : '') + text.replace(/^[a-z]/, c => c.toUpperCase()) + '\n\noverall_soundscape: ' + snd + '\n\nnon_diegetic_music: ' + mus;
   }
   const defs = [], ret = [], subs = [], groups = []; // pictures with the same words are one subject seen in several pictures
-  imgs.forEach((r, k) => { if(r.pose || r.attrOf || r.actOf || r.poseOf || r.style) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
+  imgs.forEach((r, k) => { if(r.pose || r.attrOf || r.actOf || r.poseOf || r.poseCh || r.style) return; const d = (r.desc || '').trim().replace(/[\s.]*$/, ''), key = r.cast ? '👥' + r.cast : d.toLowerCase(); let g = (d || r.cast) && groups.find(x => x.key===key);
     if(!g){ g = {key, d, more:(r.more || '').trim(), pics:[], keep:KEEP[r.keep] ? r.keep : 'exact', cast:r.cast || 0, kind:r.kind || (r.rk ? 'ref' : 'char')}; groups.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); if(r.fit) g.fit = true; if(r.nude) g.nude = true; if(r.twear) g.twear = true; if(r.lookSrc) g.lookSrc = true; });
   // 👥 the cast's subjects come first, in their own order, so <Subject 1> in the prompt is usually <Subject 1> here too
   groups.sort((x, y) => (x.cast || 1e3) - (y.cast || 1e3)); { const cm = {}; groups.forEach((g, j) => { if(g.cast) cm[g.cast] = '<Subject ' + (j + 1) + '>'; });
@@ -2183,6 +2252,16 @@ function h3Prompt(o){
     if(late){ ret.push(sl + ' (not in this part): weak_reference - this pose belongs to the start of the video.'); return; }
     ret.push(sl + ' (' + (r.when==='all' ? inShots : 'the opening of [Shot 1]') + '): attribute_transfer - only the ' + (many ? 'body poses, where each person is and how they touch,' : 'body pose') + ' from ' + pl + ' ' + (many ? 'are' : 'is') + ' transferred: ' + map.map(m => m.w + "'s pose goes to " + m.who).join(', ') + '; the faces, hair, bodies, clothes, colours and background in ' + pl + ' do not appear.');
     libPose += ' ' + map.map(m => cap(m.who) + (r.when==='all' ? ' keeps' : ' starts in') + ' the pose of ' + m.w + ' from ' + sl + '.').join(' '); });
+  // 🧍 pose chips (2026-11-15): each pose picture is its own subject, a stand-in: only its pose (and the face's expression) goes onto whoever the
+  // chip names, at the moment the chip sits in the words (Jordan, with 🥋 actions: "no character details" from the reference)
+  const pcm = {}; let pchOn = false;
+  imgs.forEach((r, k) => { if(!r.poseCh) return; const sl = '<Subject ' + (subs.length + 1) + '>', pl = '<Picture ' + (k + 1) + '>', mine = r.poseCh.filter(x => text.includes('\u0002' + x.k + '\u0005')), pe = r.coded ? 'body pose' : 'body pose and facial expression'; subs.push(sl); pchOn = true;
+    defs.push(sl + ' is the ' + pe + ' shown in ' + pl + '. ' + pl + ' is a pose reference only' + (r.coded ? ': each person in it is painted one flat colour so they can be told apart; those colours, the grey and the dark outlines never appear in the video.' : ': the person in it is a stand-in whose face, hair, skin, body shape, clothes and place never appear in the video.') + (r.more ? ' ' + cap(r.more.replace(/[\s.]*$/, '')) + '.' : ''));
+    if(!mine.length){ ret.push(sl + ' (not in this part): weak_reference - this pose belongs to another part of the video.'); return; }
+    const to = [...new Set(mine.map(x => x.w + "'s " + (r.coded ? 'pose' : 'pose and expression') + ' go' + (r.coded ? 'es' : '') + ' to ' + subOf(x.n)))];
+    ret.push(sl + ' (at the moment' + (mine.length > 1 ? 's' : '') + ' the words name): attribute_transfer - only the ' + pe + ' from ' + pl + ' ' + (r.coded ? 'is' : 'are') + ' transferred: ' + to.join(', ') + '; each keeps their own face, hair, body and clothes from their own pictures, and the stand-in\'s face, hair, skin, body shape, clothes, colours and background never appear.');
+    mine.forEach(x => { pcm[x.k] = 'the ' + (r.coded ? 'pose' : 'pose and facial expression') + ' of ' + x.w + ' from ' + sl; }); });
+  text = pmarkOut(text, k => pcm[k]);
   let lookName = lookG ? '<Subject ' + (groups.indexOf(lookG) + 1) + '>' : '';
   if(styleIx.length){ const sl = '<Subject ' + (subs.length + 1) + '>', from = andList(styleIx), them = styleIx.length > 1 ? 'those pictures' : 'that picture'; subs.push(sl); lookName = sl;
     const fr = []; imgs.forEach((r, k) => { if(r.style && r.frame) fr.push('<Picture ' + (k + 1) + '>'); });
@@ -2200,7 +2279,7 @@ function h3Prompt(o){
     ret.push(al + ': ' + (cp ? 'partially_copy - the audio is reused in the target video.' : 'reference - its voice timbre, delivery and sound texture are followed without copying the signal.'));
     if(cp) aCopy = true; else aRef = true; });
   if(o.firstPic){ const pl = '<Picture ' + o.firstPic + '>'; defs.push(pl + ' is the first frame of [Shot 1].'); ret.push(pl + ' ([Shot 1] first frame): fully_preserved - the opening composition, subjects, setting and lighting are kept.'); }
-  const tags = [o.cont && 'video continuation', (o.firstPic || o.first || o.last) && 'keyframe completion', (groups.length || vids.length || poses.length || ag.length || libPose || styleIx.length) && 'reference generation', aCopy && 'audio reuse', aRef && 'audio reference'].filter(Boolean);
+  const tags = [o.cont && 'video continuation', (o.firstPic || o.first || o.last) && 'keyframe completion', (groups.length || vids.length || poses.length || ag.length || libPose || pchOn || styleIx.length) && 'reference generation', aCopy && 'audio reuse', aRef && 'audio reference'].filter(Boolean);
   if(multi) tags.push('multi-shot');
   const wears = ag.map((g, i) => { const j = groups.findIndex(x => x.cast===g.of); if(j < 0) return ''; const a = '<Subject ' + (groups.length + i + 1) + '>', p = '<Subject ' + (j + 1) + '>';
     return g.fit ? p + ' is wearing ' + a + ' (their own outfit).' : g.wear || ATTR_WEAR(g.what) ? p + ' is wearing ' + a + ' (the ' + g.what + ').' : p + ' has ' + a + ' (the ' + g.what + ').'; }).concat(groups.map((g, j) => g.nude ? '<Subject ' + (j + 1) + '> is nude.' : '')).filter(Boolean).join(' ');
@@ -2632,7 +2711,7 @@ const regenRefUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name').filt
 // looked nothing like her: her pictures live on the subject, not on the take, so the pass had run with no reference at all)
 const upRefs = t => { const own = (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || [], out = [];
   let cast = []; try{ cast = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.map(dressed); }catch(e){}
-  for(const r of cast.concat(own)) if(r && r.id && !r.poseOf && !r.style && !out.some(x => x.id===r.id)) out.push(r); return out; }; // (🧍 a pose has no place in a finishing pass)
+  for(const r of cast.concat(own)) if(r && r.id && !r.poseOf && !r.poseCh && !r.style && !out.some(x => x.id===r.id)) out.push(r); return out; }; // (🧍 a pose has no place in a finishing pass)
 // ✨ model pick (Jordan 2026-11-08: "pikka could do better for some and I could do a face pass for Minimax later"): t.up.unet = a model
 // chosen in the High quality sheet; none = vanilla MiniMax as before. Matched by file name, so a PC that lacks it isn't sent the pass
 const upUnetOf = (t, oi, refs) => { const m = t && t.up && t.up.unet, bn = s => String(s).split(/[\\/]/).pop();
@@ -3401,7 +3480,7 @@ function drawShot(){ drawBeatBar(); { const b = $('#mqNote'), n = refsOn().pins.
   const rch = f.sm ? '' : shotRefs(f).map((r, i) => `<button data-ins="&lt;Ref Image ${i + 1}&gt;" title="&lt;Ref Image ${i + 1}&gt;" style="border-color:${REFC};color:${REFC}">🖼 Ref Image ${i + 1}</button>`).join('');
   drawShotRefs(); drawStartPic();
   const cast = (S.cast || []).map(c => `<button data-ins="&lt;Subject ${c.n}&gt;" title="&lt;Subject ${c.n}&gt;" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👥 ${esc(castName(c))}</button>`).join('');
-  $('#tagBar').innerHTML = '<button data-shot="1" title="Cut on the action to a new angle (a new [Shot n] in this take)">🎬 ＋ Shot</button>' + (f.sm ? '' : '<button data-dlg="1" title="A line someone says: pick who, type the words">💬 ＋ Line</button><button data-acn="1" title="A named action: pick who, name it, write what they do">🥋 ＋ Action</button>') + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + rch + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
+  $('#tagBar').innerHTML = '<button data-shot="1" title="Cut on the action to a new angle (a new [Shot n] in this take)">🎬 ＋ Shot</button>' + (f.sm ? '' : '<button data-dlg="1" title="A line someone says: pick who, type the words">💬 ＋ Line</button><button data-acn="1" title="A named action: pick who, name it, write what they do">🥋 ＋ Action</button><button data-psn="1" title="A 📚 Library pose at this moment: pick who and which pose">🧍 ＋ Pose</button>') + [...new Set(tags)].map(x => `<button data-ins="${esc(x)}">${esc(x)}</button>`).join('') + rch + (cast || (tags.length ? '<button data-ins="<Subject 1>">&lt;Subject 1&gt;</button>' : ''));
   $('#tagBar').hidden = false; $('#tagBar').style.marginBottom = '8px';
   { const h = f.sm ? '' : descBarHtml(f, undefined, 'data-dtag'); $('#descBar').innerHTML = h; $('#descBar').hidden = !h; }
   subjHl(); drawH3();
@@ -3431,13 +3510,16 @@ function drawH3(){
 const CK = {model:'huihui_ai/qwen3-abliterated:8b', port:8443};
 const ckUrl = () => S.llmUrl || ((S.pcs.find(p => /render/i.test(p.name)) || S.pcs[0] || {url:''}).url.replace(/:\d+$/, '') + ':' + CK.port);
 const ckKind = f => f.finOn && finAble(f.model) ? 'VANILLA THEN PIKA' : /prism|pika|singularity|eros/i.test(f.model || '') ? 'PIKA' : 'VANILLA';
-const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio|Subject|Ref Image|Dialogue|Action) \d+>/g) || []);
+const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio|Subject|Ref Image|Dialogue|Action|Pose) \d+>/g) || []);
 // 💬 the checker is told what each <Dialogue n> says (so it writes the action around the talk) but keeps the tag itself: the words and their H3 form stay ours
-const ckLines = (shot, N) => ckActs(shot, N) + ckDlg(shot, N);
+const ckLines = (shot, N) => ckActs(shot, N) + ckPoses(shot, N) + ckDlg(shot, N);
+// 🧍 the checker is told what each <Pose n> is and keeps the tag where it is (the pose is reached at that moment)
+const ckPoses = (shot, N) => { const L = [...String(shot || '').matchAll(POSERE)].map(m => [m[1], lineOf(m[1])]).filter(([, x]) => x && x.pose); if(!L.length) return '';
+  return '\n\nPOSES (each <Pose n> is a pose already placed at that moment, shown by a pose picture; keep every <Pose n> tag exactly where it is, never describe the pose picture or write its words out, it already says who takes the pose): ' + L.map(([k, x]) => '<Pose ' + k + '> = ' + ckOut(x.n ? '<Subject ' + x.n + '> ' : '', N) + (actWords(x.text) ? actLow(x, actWords(x.text)) + ', ' : '') + (x.hold ? 'holding' : 'moving into') + ' the pose "' + pchName(x) + '"').join('; '); };
 // 🥋 the checker is told what each <Action n> is, keeps the tag, and writes around it (the action's words stay hers)
 const ckActs = (shot, N) => { const L = [...String(shot || '').matchAll(ACTRE)].map(m => [m[1], lineOf(m[1])]).filter(([, x]) => x && x.act && actWords(x.text)); if(!L.length) return '';
   return '\n\nACTIONS (each <Action n> is an action already written; keep every <Action n> tag exactly where it is, never write its words out, it already says who does it): ' + L.map(([k, x]) => '<Action ' + k + '> = ' + ckOut(x.n ? '<Subject ' + x.n + '> ' : '', N) + actLow(x, actWords(x.text))).join('; '); };
-const ckDlg = (shot, N) => { const L = lineKeys(shot).map(k => [k, lineOf(k)]).filter(([, x]) => x && !x.act && lineSay(x.text)); if(!L.length) return '';
+const ckDlg = (shot, N) => { const L = lineKeys(shot).map(k => [k, lineOf(k)]).filter(([, x]) => x && !x.act && !x.pose && lineSay(x.text)); if(!L.length) return '';
   return '\n\nDIALOGUE (each <Dialogue n> is a spoken line already written; keep every <Dialogue n> tag exactly where it is, never write the words out, never add new dialogue): ' + L.map(([k, x]) => '<Dialogue ' + k + '> = ' + ckOut(x.n ? '<Subject ' + x.n + '>' : 'a voice', N) + (x.vo ? ' in an off-screen voiceover' : '') + ' says' + (lineHow(x.how) ? ' ' + lineHow(x.how) : '') + ': "' + lineSay(x.text) + '"').join('; '); };
 function ckParse(txt){ txt = String(txt || '').replace(/<think>[\s\S]*?<\/think>/g, ''); const a = txt.indexOf('{'), b = txt.lastIndexOf('}'); if(a < 0 || b < a) throw new Error('no answer');
   const j = JSON.parse(txt.slice(a, b + 1)); return {verdict:String(j.verdict || 'fix'), issues:Array.isArray(j.issues) ? j.issues.slice(0, 8) : [], shot:String(j.shot || ''), keep:String(j.keep_out || '').trim()}; }
@@ -4071,7 +4153,7 @@ $('#ckOut').onclick = e => { const b = e.target.closest('[data-ck]'); if(!b) ret
   drawCk(); };
 $('#prompt').oninput = e => { S.f.prompt = e.target.value; filmEdit(e.target.value); save(); drawShot(); drawGo(); };
 $('#prompt').addEventListener('scroll', () => { const h = $('#promptHl'); if(h) h.scrollTop = $('#prompt').scrollTop; });
-$('#prompt').addEventListener('click', e => { const ta = e.target; if(ta.selectionStart!==ta.selectionEnd) return; { const d = lineAt(ta.value, ta.selectionStart); if(d){ ta.blur(); const L = lineOf(d.k); (L && L.act ? actSheet : lineSheet)(d.k, d); return; } } const h = subjAt(ta.value, ta.selectionStart); if(!h) return; ta.blur(); subjPick(h.n, h); });
+$('#prompt').addEventListener('click', e => { const ta = e.target; if(ta.selectionStart!==ta.selectionEnd) return; { const d = lineAt(ta.value, ta.selectionStart); if(d){ ta.blur(); const L = lineOf(d.k); (L && L.act ? actSheet : L && L.pose ? poseChSheet : lineSheet)(d.k, d); return; } } const h = subjAt(ta.value, ta.selectionStart); if(!h) return; ta.blur(); subjPick(h.n, h); });
 try{ new ResizeObserver(() => subjHl()).observe($('#prompt')); }catch(e){}
 setInterval(() => { const ta = $('#prompt'); if(ta && ta.value!==HLV) subjHl(); }, 700); // the words set from elsewhere (scrubbing, a take's ✏ words)
 // 🎞 editing the words of the clip under the playhead keeps them on that clip's take (the video stays as it is; back to its words = no edit)
@@ -4737,7 +4819,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
