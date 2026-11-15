@@ -85,6 +85,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   // a later part that doesn't have the chip: weak reference
   P = await page.evaluate(() => { const t = H3.castTake(Object.assign(H3.snapshot(), {pieces:[{prompt:'<Pose 1>'}, {prompt:'Laura smiles.'}]}), true); return H3.h3Prompt({h3:t.h3, text:H3.castText('<Subject 1> smiles.', t, false), imgs:t.imgs, vids:[], auds:[], secs:5}); });
   ok(/\(not in this part\): weak_reference - this pose belongs to another part/.test(P), 'a part without the chip: weak reference');
+  // words written as their own sentences come after the pose, never glued to the name
+  await page.evaluate(() => { H3.S.lines[9] = {pose:1, n:2, lib:'Lk', p:-1, name:'Kneel', text:'She kneels slowly. She looks up at the viewer.'}; });
+  ok(await page.evaluate(() => H3.pmarkOut(H3.lineOut('<Pose 9>'), () => 'the pose of the person from <Subject 3>'))==='<Subject 2> moves into the pose of the person from <Subject 3>. She kneels slowly. She looks up at the viewer.', 'own sentences follow the pose: ' + await page.evaluate(() => H3.pmarkOut(H3.lineOut('<Pose 9>'), () => 'X')));
+  // the same picture as an 🥋 action on her card goes once, as the pose
+  P = await page.evaluate(() => { H3.S.lib.push({id:'La', kind:'act', name:'Kneel act', what:'kneel', pics:['k1']}); H3.S.cast[1].acts = [{id:'La', to:0}];
+    const t = H3.castTake(Object.assign(H3.snapshot(), {prompt:'<Pose 9>', pieces:[{prompt:'<Pose 9>'}]}), true); const r = t.imgs.filter(x => x.id==='k1'); H3.S.cast[1].acts = []; return r.map(x => x.poseCh ? 'pose' : x.actOf ? 'act' : '?'); });
+  ok(P.join()==='pose', 'one picture, sent as the pose: ' + P);
   // 🗑
   await page.evaluate(() => { const ta = document.querySelector('#prompt'); ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length - 3; ta.dispatchEvent(new MouseEvent('click', {bubbles:true})); }); await page.waitForTimeout(150);
   await page.click('#pcRm'); await page.waitForTimeout(150);
