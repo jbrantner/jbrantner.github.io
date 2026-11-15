@@ -252,7 +252,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
         <div id="descBar" hidden style="margin-top:8px"></div>
         <div id="srefBox" style="margin-top:8px"></div>
         <div id="startBox" style="margin-top:8px" hidden></div>
-        <div class="chips tight" style="margin-top:8px"><button class="btn sm" id="ckBtn">🔎 Check prompt</button><button class="btn sm" id="ckChat">💬 Ask the checker</button><button class="btn sm" id="shufBtn">🔀 Shuffle: off</button></div>
+        <div class="chips tight" style="margin-top:8px"><button class="btn sm" id="ckBtn">🔎 Check prompt</button><button class="btn sm" id="ckChat">💬 Ask the checker</button><button class="btn sm" id="shufBtn">🔀 Shuffle: off</button><button class="btn sm" id="fillBtn">🔁 Fill spare slots: off</button></div>
         <div id="ckOut" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px"></div>
         <p class="note" id="mqNote" hidden style="margin:4px 0 0"></p>
       </div>
@@ -1352,6 +1352,23 @@ function rerollSheet(t){ openSheet(`<h3><span>🎲 New take</span><button class=
   $('#rrGo').onclick = () => { const b = document.createElement('button'); b.dataset.act = 'rerollGo'; b.dataset.t = t.id; b.dataset.words = $('#rrP').value; b.dataset.off = JSON.stringify(tg.descOff); b.hidden = true; closeSheet(); document.body.appendChild(b); b.click(); b.remove(); }; }
 function castUsed(t){ const txt = lineSubs([t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), t), ns = new Set(); // 💬 a speaker counts as in the shot
   txt.replace(SUBRE, (m, n) => { if(castOf(n, t.film)) ns.add(+n); return m; }); return [...ns].sort((a, b) => a - b); }
+// 🔁 Fill spare slots (Jordan 2026-11-15: "load in the pose and then fill any remaining spaces with the references of the character"): the
+// pictures of the subjects in the words go again, round robin (her 1, 2, 3, 1, 2, …, subjects taking turns), until the 9 slots are full.
+// Each copy is its own reference block at its own time position, so it adds weight, but it also costs tokens on every step (about 2 × a
+// frame's tokens each: 9 instead of 4 pictures ≈ +40% step time at 5 s 832×480), so copies only go while they fit the memory budget
+// without MMH3FitReferences having to shrink the real pictures. Copies sit right after the last subject picture (a pose / style stays last).
+function fillRoom(t, imgs, vids){ const w = +t.w || 832, h = +t.h || 480, rows = Math.floor(w / 32) * Math.floor(h / 32);
+  const gens = (t.pieces || []).map(p => +p.gen || 0).filter(Boolean), fr = Math.max(5, gens.length ? Math.max(...gens) : Math.round((+t.seconds || 5) * FPS));
+  let F = fr; while(F % 17 !== 5) F++; const lat = F <= 5 ? 2 : Math.floor((F - 5) / 17) * 5 + 2;
+  const kf = (t.fl || t.startPic ? 1 : 0) + (t.lastOn ? 1 : 0) + (gens.length > 1 || t.cont ? 7 : 0) + (t.pins || []).length;
+  const base = lat * rows + 2 * Math.round(F / FPS * 40) + kf * rows + 700 + (t.auds || []).length * 80 * 15;
+  const vid = (vids || []).length * (lat + Math.ceil(lat / 2)) * rows, one = 2 * rows + 20;
+  return Math.max(0, Math.floor(((+S.f.budget || 45000) - base - vid - imgs.length * one) / one)); }
+function fillSpare(t, imgs, vids){ const by = {}, order = []; imgs.forEach(r => { if(r.cast && !r.dup){ if(!by[r.cast]){ by[r.cast] = []; order.push(r.cast); } by[r.cast].push(r); } });
+  let room = Math.min(MAXREF.img - imgs.length, fillRoom(t, imgs, vids)); if(!order.length || room <= 0) return;
+  let at = 0; imgs.forEach((r, k) => { if(r.cast) at = k + 1; }); const add = [];
+  for(let j = 0; room > 0; j++) for(const n of order){ if(room <= 0) break; const L = by[n]; add.push(Object.assign({}, L[j % L.length], {dup:true})); room--; }
+  imgs.splice(at, 0, ...add); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
   const used = pics ? castUsed(t) : [];
   // 🖼 the shot's own pictures leave room for one picture of each subject its words name (Jordan 2026-11-12)
@@ -1387,6 +1404,7 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   for(const {P, who} of Object.values(pz)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', when:P.when==='all' ? 'all' : 'start', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:castMore(P), poseOf:who.sort((a, b) => a.p - b.p).map(w => ({n:w.n, p:w.p, w:poseWho(P, w.p)}))});
   for(const id of stylePics) if(imgs.length < MAXREF.img) imgs.push({id, style:true, styleOf:lkN, keep:'loose'});
   if(lk && lk.frame && S.media[lk.frame] && imgs.length < MAXREF.img) imgs.push({id:lk.frame, style:true, frame:true, keep:'loose'}); // 🖼 the painted example frame: its look only
+  if(pics && t.fill) fillSpare(t, imgs, vids);
   const drop = (t.imgs || []).filter(r => !r.cast && r.rk && !imgs.includes(r)); // 🖼 ref images with no room: their words stand in
   return Object.assign({}, t, {imgs, vids}, drop.length ? {refOff:Object.assign({}, t.refOff, ...drop.map(r => ({[r.rk]:r.desc || ''})))} : {}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
@@ -2754,7 +2772,7 @@ const finAble = key => !/prism|pika|singularity/i.test(key || '');
 const finSplit = (t, steps) => Math.max(1, Math.min(steps - 1, Math.round(steps * (+t.fin.at || 0.5))));
 const regenRefsOn = (t, oi) => !!(t.up && (facesOn(t) || (t.up.refs && upRefs(t).length)) && oi.MiniMaxH3ReferenceToVideo && (t.up.unet ? upUnetOf(t, oi, true) : regenRefUnet(oi)));
 // her own pictures, then her ✨ attributes' (Jordan 2026-11-08: a Faces pass gave her green eyes, not the spiral-eyes attribute: it only sent her pictures)
-const faceRefs = (t, n) => { let r = [], at = []; try{ const I = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.map(dressed); r = I.filter(x => x.cast===+n); at = I.filter(x => x.attrOf===+n); }catch(e){}
+const faceRefs = (t, n) => { let r = [], at = []; try{ const I = castTake(Object.assign({}, t, {imgs:[], fill:0}), true).imgs.map(dressed); r = I.filter(x => x.cast===+n); at = I.filter(x => x.attrOf===+n); }catch(e){}
   if(!r.length){ const c = castOf(n, t.film); if(c) r = castPics(c).filter(id => S.media[id]).map(id => ({id, desc:castWho(c), more:castMore(c, t), keep:c.keep || 'exact', cast:+n, kind:'char'})); }
   return r.slice(0, REGEN_REFS + 1).concat(at); };
 const facesOn = t => !!(t && t.up && t.up.part && t.up.faces && t.up.faces.length);
@@ -3058,7 +3076,7 @@ function snapshot(){ // the form, frozen into a take
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
-    look:sm ? null : lookSnap(), lines:lineSnap(f), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0,
+    look:sm ? null : lookSnap(), lines:lineSnap(f), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0, fill:!sm && f.fillRefs ? 1 : 0,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -3403,7 +3421,7 @@ async function saveVideo(t){
   }catch(e){ if(e && e.name!=='AbortError') toast("Couldn't get it: " + e.message); }
 }
 function useAgain(t, quiet){
-  const f = S.f; if(t.lines){ S.lines = S.lines || {}; for(const [k, L] of Object.entries(t.lines)) S.lines[k] = Object.assign({}, L); } /* 💬 the take's own lines */ Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl && !t.startPic, first:t.startPic ? null : t.first, startPic:t.startPic || '', last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {}))});
+  const f = S.f; if(t.lines){ S.lines = S.lines || {}; for(const [k, L] of Object.entries(t.lines)) S.lines[k] = Object.assign({}, L); } /* 💬 the take's own lines */ Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl && !t.startPic, first:t.startPic ? null : t.first, startPic:t.startPic || '', last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {})), fillRefs:!!t.fill});
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}})));
@@ -3765,7 +3783,7 @@ function drawCanvas(){
   n.textContent = (tok > 45000 ? 'Big for 8 GB: about ' : 'About ') + Math.round(tok / 1000) + 'k tokens a piece' + (tok > 45000 ? '. References get shrunk to fit, and a very big one can run out of memory on Render or Main.' : ' (Render and Main have 8 GB; references are shrunk to fit the rest).');
 }
 function drawMore(){
-  const f = S.f; drawShuf(); $('#takesOut').textContent = f.takes; $('#steps').value = f.steps; $('#seed').value = f.seed; $('#maxPiece').value = f.maxPiece; $('#maxOut').textContent = fmtS(+f.maxPiece);
+  const f = S.f; drawShuf(); drawFill(); $('#takesOut').textContent = f.takes; $('#steps').value = f.steps; $('#seed').value = f.seed; $('#maxPiece').value = f.maxPiece; $('#maxOut').textContent = fmtS(+f.maxPiece);
   $('#whereSeg').innerHTML = `<button data-w="both" class="${f.where==='both' ? 'on' : ''}">Both</button>` + S.pcs.map(p => `<button data-w="${esc(p.url)}" class="${f.where===p.url ? 'on' : ''}">${esc(p.name)} only</button>`).join('');
   $('#moreSum').textContent = (f.takes > 1 ? f.takes + ' takes · ' : '') + (f.where==='both' ? 'both PCs' : pcName(f.where) + ' only');
 }
@@ -4177,6 +4195,9 @@ $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pin
 $('#ckBtn').onclick = () => checkPrompt();
 document.addEventListener('click', e => { const b = e.target.closest('.take [data-tm]'); if(!b) return; const id = b.dataset.tm, c = b.closest('.take'); if(TMORE.has(id)) TMORE.delete(id); else TMORE.add(id); c.classList.toggle('mopen', TMORE.has(id)); });
 document.addEventListener('click', e => { const p = e.target.closest('.take .pr[data-pr]'); if(!p) return; const id = p.dataset.pr; if(PROPEN.has(id)) PROPEN.delete(id); else PROPEN.add(id); p.classList.toggle('open', PROPEN.has(id)); });
+function drawFill(){ const b = $('#fillBtn'); if(!b) return; b.textContent = '🔁 Fill spare slots: ' + (S.f.fillRefs ? 'on' : 'off'); b.classList.toggle('pri', !!S.f.fillRefs); }
+$('#fillBtn').onclick = () => { S.f.fillRefs = !S.f.fillRefs; save(); drawFill(); try{ h3Peek(); }catch(e){}
+  toast(S.f.fillRefs ? '🔁 On: the pictures of the characters in the words go again (1, 2, 3, 1, 2, …) until all 9 slots are full. A pose picture still goes once. Each extra picture makes every step slower (9 instead of 4 ≈ 40% longer at 5 s), and copies stop where they would make the real pictures smaller.' : '🔁 Off: each picture goes once', 8000); };
 function drawShuf(){ const b = $('#shufBtn'); if(!b) return; const v = S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0; b.textContent = ['🔀 Randomize: off', '🔀 Randomize batch', '🔀 Randomize'][v]; b.classList.toggle('pri', v > 0); }
 $('#shufBtn').onclick = () => { S.f.shuffle = ((S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0) + 1) % 3; save(); drawShuf(); toast(['🔀 Off: every take goes as typed', '🔀 Randomize batch: the first take goes as typed, the rest get a new sentence order', '🔀 Randomize: every take gets a new sentence order, even a single one'][S.f.shuffle], 5000); };
 $('#ckChat').onclick = () => { if(S.ck && S.ck.msgs){ drawCk(); const a = $('#ckAsk'); if(a){ a.scrollIntoView({block:'center'}); a.focus(); } return; } if(!(S.f.prompt || '').trim()) return toast('Write the shot first'); S.ck = {compose:true}; drawCk(); };
