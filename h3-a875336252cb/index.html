@@ -1246,6 +1246,9 @@ const POSERE = /<\s*pose\s*(\d+)\s*>/gi, POSE1 = /<\s*pose\s*\d+\s*>/i, PMARK = 
 const pchLib = L => { const P = L && L.pose && libOf(L.lib); return P && P.kind==='pose' && posePic(P) && S.media[posePic(P)] ? P : null; };
 const poseDesc = P => actWords(((P && P.desc) || '').replace(/\s*\n+\s*/g, ' ')).replace(/[\s.]+$/, ''); // 🧍 the Library pose's own description
 const pchText = L => actWords(L && L.text) || poseDesc(L && libOf(L.lib)); // a chip with no words of its own says the Library description
+// 👥 a pose with several people (Jordan 2026-11-15: "character 1 is red and character 2 is blue"): L.also = [{p, n}] gives the picture's other
+// people to other characters; the chip's own n/p stays the first one
+const pchAlso = L => ((L && L.pose && L.also) || []).filter(x => x && +x.n > 0 && x.p >= 0 && x.p!==+L.p);
 const pchName = L => actWords(L && L.name) || (L && libOf(L.lib) ? poseName(libOf(L.lib)) : '') || 'pose';
 // the sentence a pose chip sends; its "the pose of … from <Subject m>" part is a marker that h3Prompt (or a plain prompt) fills in once the pose
 // picture has its number, or that falls back to plain words when the picture isn't sent (no room, ✨ passes, no pictures at all)
@@ -1256,8 +1259,9 @@ function poseChOut(txt, T){ return txt.replace(/<\s*pose\s*(\d+)\s*>(\s*([.!?])(
     // words that are their own sentences ("She stares at the viewer…", Jordan's Library descriptions, 2026-11-15) come after the pose, not
     // glued to "<Subject 1>" ("<Subject 1> she desperately…"); words that go on from the name ("kneels on the bed") stay one sentence
     const own = /^(?:she|he|they|her|his|their|it|the|a|an)\b/i.test(w) || /[.!?]\s+\S/.test(w);
-    const s = !w ? who + (L.hold ? 'holds ' : 'moves into ') + mark('', 'a ' + nm + ' pose')
-      : own && (who || same) ? who + (L.hold ? 'holds ' : 'moves into ') + mark('', 'a ' + nm + ' pose') + '. ' + w.replace(/^./, c => c.toUpperCase())
+    const fb = 'a ' + nm + ' pose' + (pchAlso(L).length ? ' with ' + andList(pchAlso(L).map(x => '<Subject ' + x.n + '>')) : '');
+    const s = !w ? who + (L.hold ? 'holds ' : 'moves into ') + mark('', fb)
+      : own && (who || same) ? who + (L.hold ? 'holds ' : 'moves into ') + mark('', fb) + '. ' + w.replace(/^./, c => c.toUpperCase())
       : who + w + mark(L.hold ? ', holding ' : ', in ', '');
     return (who || same ? s : s.replace(/^./, c => c.toUpperCase())) + (mk || (/^\s*(?:$|\n|[A-Z<\[])/.test(nx) ? end : '')); }); }
 const pmarkOut = (txt, f) => String(txt == null ? '' : txt).replace(PMARK, (m, k, pre, fb) => { const r = f && f(+k); return r ? pre + r : fb; });
@@ -1291,13 +1295,13 @@ function lineOut(txt, T){ txt = txt == null ? '' : String(txt); if(/<\s*action\s
   return txt.replace(/<\s*dialogue\s*(\d+)\s*>(\s*\.(?!\.))?/gi, (m, k) => { const L = lineOf(k, T), say = L && lineSay(L.text); if(!say) return '';
     const key = L.n ? 'n' + L.n : 'k' + k, id = ids[key] = ids[key] || ++nx, how = lineHow(L.how), who = L.n ? '<Subject ' + L.n + '>' : 'A voice';
     return who + ' (S' + id + ') says' + (L.vo ? ' in an off-screen voiceover' + (how ? ', ' + how : '') + ': ' : (how ? ' ' + how : '') + ', ') + '<d>[' + lineLang(L) + '] ' + say + '</d>' + (L.vo ? ' while their lips remain completely closed.' : ''); }); }
-const lineSubs = (txt, T) => String(txt || '').replace(LNRE, (m, k) => { const L = lineOf(k, T); return L && L.n ? '<Subject ' + L.n + '>' : ''; }); // who speaks counts as named
+const lineSubs = (txt, T) => String(txt || '').replace(LNRE, (m, k) => { const L = lineOf(k, T); return (L && L.n ? '<Subject ' + L.n + '>' : '') + pchAlso(L).map(x => ' <Subject ' + x.n + '>').join(''); }); // who speaks counts as named
 const lineKeys = txt => [...String(txt || '').matchAll(LNRE)].map(m => +m[1]);
 function lineSnap(f){ try{ autoSync(f); }catch(e){} const o = {}; for(const k of lineKeys([f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'))){ const L = lineOf(k); if(L) o[k] = Object.assign({}, L); } return o; }
 // the chip: "Laura line 1" (her first line in these words, her second is "Laura line 2")
 function lineLabel(k, txt, film){ const L = lineOf(k), c = L && L.n && castOf(L.n, film); if(!L) return 'missing line';
   if(L.act) return '🥋 ' + (c ? chipName(c) + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '') + (actWords(L.name) || 'action');
-  if(L.pose) return '🧍 ' + (c ? chipName(c) + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '') + pchName(L);
+  if(L.pose){ const o = pchAlso(L).map(x => castOf(x.n, film)).filter(Boolean).map(chipName); return '🧍 ' + (c ? chipName(c) + (o.length ? ' + ' + o.join(' + ') : '') + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '') + pchName(L); }
   const nm = c ? chipName(c) : L.n ? 'Subject ' + L.n : 'Voice'; let i = 0, at = 0; for(const j of lineKeys(txt)){ const M = lineOf(j); if(M && !M.act && !M.pose && (M.n || 0)===(L.n || 0)){ i++; if(j===+k){ at = i; break; } } }
   return nm + ' line ' + (at || 1); }
 const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
@@ -1391,7 +1395,8 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   for(const n of used) for(const [x, A] of acts(castOf(n, t.film))) if(!(A.vid && S.media[A.vid] && vids.length < MAXREF.vid)) need += libPics(A).filter(id => S.media[id]).slice(0, 3).length;
   const pz = {}; for(const n of used) for(const x of posesOf(castOf(n, t.film), t)){ const P = libOf(x.id); (pz[P.id] = pz[P.id] || {P, who:[]}).who.push({n, p:x.p}); } // 🧍 one picture per pose, whoever takes it
   const pch = {}; if(pics) for(const m of [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n').matchAll(POSERE)){ const L = lineOf(m[1], t), P = pchLib(L); // 🧍 pose chips: one picture per pose too
-    if(P && L.n && castOf(L.n, t.film)){ const g = pch[P.id] = pch[P.id] || {P, who:[]}; if(!g.who.some(w => w.k===+m[1])) g.who.push({k:+m[1], n:L.n, p:(P.ppl || []).length > 1 || poseSendsCoded(P) ? +L.p || 0 : -1}); } }
+    if(P && L.n && castOf(L.n, t.film)){ const g = pch[P.id] = pch[P.id] || {P, who:[]}, many = (P.ppl || []).length > 1 || poseSendsCoded(P); if(!g.who.some(w => w.k===+m[1])){ g.who.push({k:+m[1], n:L.n, p:many ? +L.p || 0 : -1, main:1});
+      if(many) for(const x of pchAlso(L)) if(castOf(x.n, t.film) && x.p < Math.max(1, (P.ppl || []).length)) g.who.push({k:+m[1], n:+x.n, p:+x.p}); } } }
   need += Object.keys(pch).length;
   need += Object.keys(pz).length;
   // 🎨 one look for everyone: style pictures (or the chosen character's first picture, when she isn't in this shot) go as style-only refs
@@ -1412,7 +1417,7 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
       if(A.vid && S.media[A.vid] && vids.length < MAXREF.vid){ const sk = sk0(A.vid); if(sk) vids.push(Object.assign({id:sk, sound:false, follow:false, keep:'loose'}, base)); continue; }
       const P0 = libPics(A).filter(id => S.media[id]).slice(0, 3), P = P0.map(sk0).filter(Boolean); for(const id of P) if(imgs.length < MAXREF.img) imgs.push(Object.assign({id, keep:'loose'}, base)); need -= P0.length; } }
   for(const {P, who} of Object.values(pch)) for(let j = imgs.length - 1; j >= 0; j--) if(imgs[j].actOf && imgs[j].id===posePic(P)) imgs.splice(j, 1); // 🧍 the same picture never goes twice (2026-11-15: an 🥋 action on her card and a pose chip sent one stand-in picture as two references)
-  for(const {P, who} of Object.values(pch)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:who.some(w => pchText(lineOf(w.k, t)).toLowerCase().includes(poseDesc(P).toLowerCase())) ? '' : castMore(P), poseCh:who.map(w => ({k:w.k, n:w.n, p:w.p, w:poseWho(P, w.p)}))});
+  for(const {P, who} of Object.values(pch)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:who.some(w => pchText(lineOf(w.k, t)).toLowerCase().includes(poseDesc(P).toLowerCase())) ? '' : castMore(P), poseCh:who.map(w => Object.assign({k:w.k, n:w.n, p:w.p, w:poseWho(P, w.p)}, w.main ? {main:1} : {}))});
   for(const {P, who} of Object.values(pz)) if(imgs.length < MAXREF.img) imgs.push({id:posePic(P), lib:P.id, keep:'loose', when:P.when==='all' ? 'all' : 'start', coded:poseSendsCoded(P), ppl:(P.ppl || []).length, more:castMore(P), poseOf:who.sort((a, b) => a.p - b.p).map(w => ({n:w.n, p:w.p, w:poseWho(P, w.p)}))});
   for(const id of stylePics) if(imgs.length < MAXREF.img) imgs.push({id, style:true, styleOf:lkN, keep:'loose'});
   if(lk && lk.frame && S.media[lk.frame] && imgs.length < MAXREF.img) imgs.push({id:lk.frame, style:true, frame:true, keep:'loose'}); // 🖼 the painted example frame: its look only
@@ -1441,7 +1446,7 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
   Object.entries(fits).forEach(([n, p]) => ad.unshift('<Subject ' + n + '> wears exactly the outfit shown in ' + andList(p) + ': the same clothes, cut, colours and details.'));
   ((T && T.imgs) || []).forEach((r, k) => { if(!r.poseOf) return; const nm = n => pics[n] ? '<Subject ' + n + '>' : (castWho(castOf(n, fk)) || 'the person').replace(/^./, x => x.toUpperCase()); // 🧍
     ad.push('<Picture ' + (k + 1) + '> is a pose reference only' + (r.coded ? ', every person in it painted one flat colour' : '') + ': ' + r.poseOf.map(x => nm(x.n) + (r.when==='all' ? ' holds' : ' starts in') + ' the pose of ' + x.w + ' in it').join(', ') + '. Nobody, no clothes, colours or background from it appear.'); });
-  if(plain){ const pm = {}; ((T && T.imgs) || []).forEach((r, k) => { if(!r.poseCh) return; const pl = '<Picture ' + (k + 1) + '>'; r.poseCh.forEach(x => { pm[x.k] = 'the pose' + (r.coded ? '' : ' and facial expression') + ' of ' + x.w + ' in ' + pl; }); // 🧍 pose chips
+  if(plain){ const pm = {}; ((T && T.imgs) || []).forEach((r, k) => { if(!r.poseCh) return; const pl = '<Picture ' + (k + 1) + '>'; r.poseCh.forEach(x => { if(x.main || !r.poseCh.some(y => y.k===x.k && y.main)) pm[x.k] = 'the pose' + (r.coded ? '' : ' and facial expression') + ' of ' + x.w + ' in ' + pl; }); r.poseCh.forEach(x => { if(!x.main && r.poseCh.some(y => y.k===x.k && y.main)) pm[x.k] = (pm[x.k] || '') + ', while <Subject ' + x.n + '> takes the pose of ' + x.w; }); // 🧍 pose chips
       if(r.poseCh.some(x => out.includes('\u0002' + x.k + '\u0005'))) ad.push(pl + ' is a pose reference only' + (r.coded ? ', every person in it painted one flat colour' : ': the person in it is a stand-in') + '; only the body pose' + (r.coded ? '' : ' and facial expression') + ' is used, never their face, hair, skin, body shape or clothes, and nothing of its place appears.'); });
     out = pmarkOut(out, k => pm[k]); }
   { const sty = [], I = (T && T.imgs) || [], src = I.find(r => r.lookSrc); I.forEach((r, k) => { if(r.style) sty.push('<Picture ' + (k + 1) + '>'); }); // 🎨
@@ -1576,6 +1581,7 @@ function poseChSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off
   const ppl = (S.cast || []).filter(c => (c.kind || 'char')==='char'), who0 = old ? old.n || 0 : (ppl.find(c => c.n===S.dlWho) || ppl.find(c => new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'i').test(f.prompt || '')) || ppl[0] || {}).n || 0;
   const LP = (S.lib || []).filter(x => x.kind==='pose'), D = {n:old ? (old.auto ? -1 : old.n || who0) : -1, lib:old ? old.lib || '' : (LP.length===1 ? LP[0].id : ''), p:old ? +old.p || 0 : 0, hold:!!(old && old.hold), name:old ? old.name || '' : '', text:old ? pchText(old) : ''};
   if(!old && D.lib) D.text = poseDesc(libOf(D.lib)); // (Jordan 2026-11-15: the box starts with the Library description)
+  D.also = {}; ((old && old.also) || []).forEach(x => { if(x && x.p >= 0) D.also[x.p] = +x.n || 0; }); // 👥 the picture's other people → characters
   const autoN = () => autoWho(old ? f.prompt : (f.prompt || '').slice(0, pos) + ' <Pose 999999> ' + (f.prompt || '').slice(pos), old ? k : 999999), nOf = () => D.n < 0 ? autoN() : D.n;
   const th = x => (S.media[x.coded] || S.media[libPics(x)[0]] || {}).thumb;
   openSheet(`<h3><span>🧍 ${old ? 'Pose' : 'Add a pose'}</span><button class="btn" data-close>✕</button></h3><div id="pcBox">
@@ -1593,21 +1599,25 @@ function poseChSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off
     if($('#pcLib')) $('#pcLib').querySelectorAll('[data-pl]').forEach(b => b.classList.toggle('in', b.dataset.pl===D.lib));
     $('#pcHow').querySelectorAll('[data-ph]').forEach(b => b.classList.toggle('pri', !!+b.dataset.ph===D.hold));
     const P = libOf(D.lib), many = P && ((P.ppl || []).length > 1 || poseSendsCoded(P)), n = many ? Math.max(1, (P.ppl || []).length) : 0; if(n && D.p >= n) D.p = 0;
-    $('#pcPpl').innerHTML = !n ? '' : `<div class="lab" style="margin-top:10px"><span>Which person in the picture</span></div><div class="chips">${Array.from({length:n}, (x, i) => `<button class="btn${i===D.p ? ' pri' : ''}" data-pp="${i}"${poseSendsCoded(P) ? ` style="border-color:${POSE_COL[i % POSE_COL.length][1]}"` : ''}>${esc(poseWho(P, i).replace(/^the /, '').replace(/ person$/, ''))}</button>`).join('')}</div>`;
+    const fig = i => esc(poseWho(P, i).replace(/^the /, '').replace(/ person$/, '')), bc = i => poseSendsCoded(P) ? ` style="border-color:${POSE_COL[i % POSE_COL.length][1]}"` : '';
+    $('#pcPpl').innerHTML = !n ? '' : `<div class="lab" style="margin-top:10px"><span>Which person in the picture is ${esc((castOf(nOf()) && chipName(castOf(nOf()))) || 'them')}</span></div><div class="chips">${Array.from({length:n}, (x, i) => `<button class="btn${i===D.p ? ' pri' : ''}" data-pp="${i}"${bc(i)}>${fig(i)}</button>`).join('')}</div>`
+      + (n > 1 ? `<div class="lab" style="margin-top:10px"><span>👥 The others in the picture</span></div>` + Array.from({length:n}, (x, i) => i===D.p ? '' : `<div class="chips" style="margin-top:4px;align-items:center"><span class="btn"${bc(i)} style="pointer-events:none${poseSendsCoded(P) ? ';border-color:' + POSE_COL[i % POSE_COL.length][1] : ''}">${fig(i)} →</span>${ppl.filter(c => c.n!==nOf()).map(c => `<button class="btn${+D.also[i]===c.n ? ' pri' : ''}" data-pa="${i}:${c.n}" style="border-color:${subColor(c.n)};${+D.also[i]===c.n ? 'background:' + subColor(c.n) + ';color:#15161b' : 'color:' + subColor(c.n)}">${esc(chipName(c))}</button>`).join('')}<button class="btn${!+D.also[i] ? ' pri' : ''}" data-pa="${i}:0">Nobody</button></div>`).join('') : '');
     $('#pcName').placeholder = P ? poseName(P) : 'the pose\'s own name';
-    const N = nOf(), c = castOf(N), L = Object.assign({pose:1}, D, {n:N, name:D.name || (P ? poseName(P) : '')}), out = P ? pmarkOut(lineOut('<Pose 0>.', {lines:{0:L}}), () => 'the pose and facial expression of ' + poseWho(P, many ? D.p : -1) + ' from the pose picture').replace(SUBRE, () => c ? chipName(c) : 'Subject ' + N) : '';
+    const N = nOf(), c = castOf(N), L = Object.assign({pose:1}, D, {n:N, name:D.name || (P ? poseName(P) : '')}), AL = many ? Object.entries(D.also).filter(([p, n]) => +n > 0 && +p!==D.p && +n!==N) : [], out = P ? pmarkOut(lineOut('<Pose 0>.', {lines:{0:Object.assign(L, {also:AL.map(([p, n]) => ({p:+p, n:+n}))})}}), () => 'the pose and facial expression of ' + poseWho(P, many ? D.p : -1) + ' from the pose picture' + AL.map(([p, n]) => ', while <Subject ' + n + '> takes the pose of ' + poseWho(P, +p)).join('')).replace(SUBRE, (m, x) => { const cc = castOf(x); return cc ? chipName(cc) : 'Subject ' + x; }) : '';
     $('#pcPrev').textContent = (out ? 'Sent to MiniMax as: ' + out : 'Pick a pose to see how it\'s sent.') + (D.n < 0 ? ' (↩ ' + (c ? chipName(c) + ', the character named before it' : 'no character named before it yet') + ')' : ''); };
   draw();
   $('#pcWho').onclick = e => { const b = e.target.closest('[data-pw]'); if(!b) return; D.n = +b.dataset.pw; draw(); };
   if($('#pcLib')) $('#pcLib').onclick = e => { const b = e.target.closest('[data-pl]'); if(!b) return; const was = poseDesc(libOf(D.lib)); D.lib = b.dataset.pl; D.p = 0;
     if(!actWords(D.text) || actWords(D.text)===was){ D.text = poseDesc(libOf(D.lib)); $('#pcText').value = D.text; } draw(); }; // 🧍 its Library description comes along (yours, once you change it, stays)
-  $('#pcPpl').onclick = e => { const b = e.target.closest('[data-pp]'); if(!b) return; D.p = +b.dataset.pp; draw(); };
+  $('#pcPpl').onclick = e => { const a = e.target.closest('[data-pa]'); if(a){ const [i, n] = a.dataset.pa.split(':').map(Number); for(const j of Object.keys(D.also)) if(n && +D.also[j]===n) D.also[j] = 0; D.also[i] = n; draw(); return; } // one figure each
+    const b = e.target.closest('[data-pp]'); if(!b) return; D.p = +b.dataset.pp; delete D.also[D.p]; draw(); };
   $('#pcHow').onclick = e => { const b = e.target.closest('[data-ph]'); if(!b) return; D.hold = !!+b.dataset.ph; draw(); };
   $('#pcNew').onclick = () => { closeSheet(); setTab('lib'); const N = libNew('pose'); save(); drawLib(); openLib(N.id); toast('🧍 Add the pose picture, then come back to the Shot box and tap 🧍 ＋ Pose', 5000); };
   $('#pcName').oninput = e => { D.name = e.target.value; draw(); }; $('#pcText').oninput = e => { D.text = e.target.value; draw(); };
   $('#pcGo').onclick = () => { if(!D.n) return toast('Pick who takes the pose'); const P = libOf(D.lib); if(!P) return toast('Pick a pose from the Library');
     if(!posePic(P) || !S.media[posePic(P)]) toast('🧍 That pose has no picture yet, so only its words go until you add one', 5000);
     S.lines = S.lines || {}; if(D.n > 0) S.dlWho = D.n; const L = {pose:1, n:Math.max(0, nOf()), lib:P.id, p:(P.ppl || []).length > 1 || poseSendsCoded(P) ? D.p : -1, name:actWords(D.name) || poseName(P), text:D.text.trim()}; if(D.hold) L.hold = true; if(D.n < 0) L.auto = 1;
+    if(L.p >= 0){ const also = Object.entries(D.also).map(([p, n]) => ({p:+p, n:+n})).filter(x => x.n > 0 && x.p!==L.p && x.n!==L.n && x.p < Math.max(1, (P.ppl || []).length)); if(also.length) L.also = also; }
     if(old) S.lines[k] = L;
     else { const used = Object.keys(S.lines).map(Number); k = Math.max(0, +S.lineNo || 0, ...used) + 1; S.lineNo = k; S.lines[k] = L;
       const v = f.prompt || '', p = tagEnd(v, Math.min(pos, v.length)), tok = '<Pose ' + k + '>', pre = p && !/\s$/.test(v.slice(0, p)) ? ' ' : '', post = /^\s/.test(v.slice(p)) || p >= v.length ? '' : ' ';
@@ -1670,7 +1680,7 @@ function subjSwap(n, m, all, at){ const re = new RegExp('<\\s*subject\\s*' + n +
   else if(all) castSwap(re, tok); else { f.prompt = (f.prompt || '').replace(re, tok); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = f.pieceText[k].replace(re, tok); }
   if(!at){ const ks = new Set(lineKeys([f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'))); // 💬 their lines go with the tag
     if(all) S.takes.filter(inMine).forEach(t => { lineKeys(t.prompt).forEach(k => ks.add(k)); Object.values(t.lines || {}).forEach(L => { if(L.n===+n) L.n = +m; }); });
-    ks.forEach(k => { const L = (S.lines || {})[k]; if(L && L.n===+n) L.n = +m; }); }
+    ks.forEach(k => { const L = (S.lines || {})[k]; if(L && L.n===+n) L.n = +m; pchAlso(L).forEach(x => { if(+x.n===+n) x.n = +m; }); }); }
   if(!at && f.descOff && f.descOff[n] && !f.descOff[m]){ f.descOff[m] = f.descOff[n].filter(x => /^add:/.test(x)); if(!f.descOff[m].length) delete f.descOff[m]; } // her own 🏷 details don't fit someone else
   $('#prompt').value = f.prompt || ''; filmEdit(f.prompt || ''); save(); drawCast(); drawShot(); try{ h3Peek(); }catch(e){} }
 function drawCast(){ const L = S.cast || []; try{ drawLook(); }catch(e){}
@@ -2302,7 +2312,8 @@ function h3Prompt(o){
     if(!mine.length){ ret.push(sl + ' (not in this part): weak_reference - this pose belongs to another part of the video.'); return; }
     const to = [...new Set(mine.map(x => x.w + "'s " + (r.coded ? 'pose' : 'pose and expression') + ' go' + (r.coded ? 'es' : '') + ' to ' + subOf(x.n)))];
     ret.push(sl + ' (at the moment' + (mine.length > 1 ? 's' : '') + ' the words name): attribute_transfer - only the ' + pe + ' from ' + pl + ' ' + (r.coded ? 'is' : 'are') + ' transferred: ' + to.join(', ') + '; each keeps their own face, hair, body and clothes from their own pictures, and the stand-in\'s face, hair, skin, body shape, clothes, colours and background never appear.');
-    mine.forEach(x => { pcm[x.k] = 'the ' + (r.coded ? 'pose' : 'pose and facial expression') + ' of ' + x.w + ' from ' + sl; }); });
+    mine.forEach(x => { if(x.main || !mine.some(y => y.k===x.k && y.main)) pcm[x.k] = 'the ' + (r.coded ? 'pose' : 'pose and facial expression') + ' of ' + x.w + ' from ' + sl; });
+    mine.forEach(x => { if(x.main || !mine.some(y => y.k===x.k && y.main)) return; pcm[x.k] = (pcm[x.k] || '') + ', while ' + subOf(x.n) + ' takes the pose of ' + x.w; }); }); // 👥 the others in the same picture
   text = pmarkOut(text, k => pcm[k]);
   let lookName = lookG ? '<Subject ' + (groups.indexOf(lookG) + 1) + '>' : '';
   if(styleIx.length){ const sl = '<Subject ' + (subs.length + 1) + '>', from = andList(styleIx), them = styleIx.length > 1 ? 'those pictures' : 'that picture'; subs.push(sl); lookName = sl;
@@ -3611,7 +3622,7 @@ const ckTags = t => (String(t || '').match(/\[[^\]]*\]|<(Picture|Video|Audio|Sub
 const ckLines = (shot, N) => ckActs(shot, N) + ckPoses(shot, N) + ckDlg(shot, N);
 // 🧍 the checker is told what each <Pose n> is and keeps the tag where it is (the pose is reached at that moment)
 const ckPoses = (shot, N) => { const L = [...String(shot || '').matchAll(POSERE)].map(m => [m[1], lineOf(m[1])]).filter(([, x]) => x && x.pose); if(!L.length) return '';
-  return '\n\nPOSES (each <Pose n> is a pose already placed at that moment, shown by a pose picture; keep every <Pose n> tag exactly where it is, never describe the pose picture or write its words out, it already says who takes the pose): ' + L.map(([k, x]) => '<Pose ' + k + '> = ' + ckOut(x.n ? '<Subject ' + x.n + '> ' : '', N) + (pchText(x) ? actLow(x, pchText(x)) + ', ' : '') + (x.hold ? 'holding' : 'moving into') + ' the pose "' + pchName(x) + '"').join('; '); };
+  return '\n\nPOSES (each <Pose n> is a pose already placed at that moment, shown by a pose picture; keep every <Pose n> tag exactly where it is, never describe the pose picture or write its words out, it already says who takes the pose): ' + L.map(([k, x]) => '<Pose ' + k + '> = ' + ckOut(x.n ? '<Subject ' + x.n + '> ' : '', N) + (pchText(x) ? actLow(x, pchText(x)) + ', ' : '') + (x.hold ? 'holding' : 'moving into') + ' the pose "' + pchName(x) + '"' + (pchAlso(x).length ? ' together with ' + pchAlso(x).map(y => ckOut('<Subject ' + y.n + '>', N)).join(' and ') : '')).join('; '); };
 // 🥋 the checker is told what each <Action n> is, keeps the tag, and writes around it (the action's words stay hers)
 const ckActs = (shot, N) => { const L = [...String(shot || '').matchAll(ACTRE)].map(m => [m[1], lineOf(m[1])]).filter(([, x]) => x && x.act && actWords(x.text)); if(!L.length) return '';
   return '\n\nACTIONS (each <Action n> is an action already written; keep every <Action n> tag exactly where it is, never write its words out, it already says who does it): ' + L.map(([k, x]) => '<Action ' + k + '> = ' + ckOut(x.n ? '<Subject ' + x.n + '> ' : '', N) + actLow(x, actWords(x.text))).join('; '); };

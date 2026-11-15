@@ -92,6 +92,19 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   P = await page.evaluate(() => { H3.S.lib.push({id:'La', kind:'act', name:'Kneel act', what:'kneel', pics:['k1']}); H3.S.cast[1].acts = [{id:'La', to:0}];
     const t = H3.castTake(Object.assign(H3.snapshot(), {prompt:'<Pose 9>', pieces:[{prompt:'<Pose 9>'}]}), true); const r = t.imgs.filter(x => x.id==='k1'); H3.S.cast[1].acts = []; return r.map(x => x.poseCh ? 'pose' : x.actOf ? 'act' : '?'); });
   ok(P.join()==='pose', 'one picture, sent as the pose: ' + P);
+  // 👥 two people in one pose: Mia is red, Laura is blue, one chip
+  await page.evaluate(() => { H3.S.f.prompt = '[0s-5s] <Pose 1>'; H3.S.lines[1] = {pose:1, n:2, lib:'Lg', p:0, name:'Hug', text:''}; const ta = document.querySelector('#prompt'); ta.value = H3.S.f.prompt; H3.drawAll(); });
+  await page.evaluate(() => { const ta = document.querySelector('#prompt'); ta.focus(); ta.selectionStart = ta.selectionEnd = 10; ta.dispatchEvent(new MouseEvent('click', {bubbles:true})); }); await page.waitForTimeout(200);
+  const others = await page.evaluate(() => [...document.querySelectorAll('#pcPpl [data-pa]')].map(b => b.dataset.pa + '=' + b.textContent)); ok(others.join()==='1:1=Laura,1:0=Nobody', 'the others row offers blue → Laura or Nobody: ' + others);
+  await page.click('#pcPpl [data-pa="1:1"]'); await page.waitForTimeout(80);
+  prev = await page.textContent('#pcPrev'); ok(/Mia moves into the pose and facial expression of the red person from the pose picture, while Laura takes the pose of the blue person/.test(prev), 'preview names both: ' + prev);
+  await page.click('#pcGo'); await page.waitForTimeout(150);
+  U = await page.evaluate(() => ({L:H3.lineOf(1), hl:[...document.querySelectorAll('#promptHl mark')].map(m => m.dataset.n)}));
+  ok(JSON.stringify(U.L.also)==='[{"p":1,"n":1}]' && U.hl.join()==='🧍 Mia + Laura · Hug', 'saved, chip says both: ' + JSON.stringify(U));
+  P = await prom(R, REF);
+  ok(P.imgs.includes('p1.png') && P.imgs.includes('q1.png') && P.imgs.filter(x => x==='g1c.png').length===1, 'both characters\' pictures go, the pose picture once: ' + P.imgs);
+  ok(/<Subject 2> moves into the pose of the red person from <Subject 3>, while <Subject 1> takes the pose of the blue person\./.test(P.p) && /the red person's pose goes to <Subject 2>, the blue person's pose goes to <Subject 1>/.test(P.p), 'sent with both: ' + (P.p.split('detailed_description:')[1] || '').slice(0, 400));
+  ok(await page.evaluate(() => H3.pmarkOut(H3.lineOut('<Pose 1>')))==='<Subject 2> moves into a hug pose with <Subject 1>.', 'no picture: the words name both');
   // 🗑
   await page.evaluate(() => { const ta = document.querySelector('#prompt'); ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length - 3; ta.dispatchEvent(new MouseEvent('click', {bubbles:true})); }); await page.waitForTimeout(150);
   await page.click('#pcRm'); await page.waitForTimeout(150);
