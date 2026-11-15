@@ -531,10 +531,19 @@ function tidyMedia(hard){
     else if(hard && S.media[id].thumb && !form.includes('"' + id + '"')){ S.media[id].thumb = ''; S.media[id].tc = 1; n++; } }
   return n; }
 const THUMBING = {};
-function fixThumbs(){ const form = JSON.stringify(S.f);
+// 📚 (Jordan 2026-11-15, "names load but no images?"): when the save got full, tidyMedia(true) dropped the small previews of
+// everything outside the form, the Library's and cast's too, and only the form's came back. Those now come back as well, but only
+// for this session (a blob link of the kept picture, never written into the save, so the save stays small).
+const MEMTH = new Set(), memThumb = u => { MEMTH.add(u); return u; };
+async function shownThumb(m){ const b = await blobOf(m.id); if(!b) return '';
+  if(m.kind==='img') return memThumb(URL.createObjectURL(b)); const t = await vidThumb(b); if(!t || !t.url) return ''; try{ return memThumb(URL.createObjectURL(await (await fetch(t.url)).blob())); }catch(e){ return ''; } }
+function fixThumbs(){ const form = JSON.stringify(S.f), shown = JSON.stringify([S.lib, S.cast, S.casts, S.forms]);
+  for(const m of Object.values(S.media)){ if(/^blob:/.test(m.thumb || '') && !MEMTH.has(m.thumb)){ m.thumb = ''; m.tc = 1; } // (a link from an earlier session)
+    if(!m.thumb && !THUMBING[m.id] && !m.remote && !form.includes('"' + m.id + '"') && shown.includes('"' + m.id + '"')){ THUMBING[m.id] = 1; m.tc = 1;
+      shownThumb(m).then(u => { delete THUMBING[m.id]; if(u && !m.thumb){ m.thumb = u; drawAll(); try{ drawLib(); }catch(e){} } }).catch(() => { delete THUMBING[m.id]; }); } }
   for(const m of Object.values(S.media)) if(m.tc && !m.thumb && !THUMBING[m.id] && form.includes('"' + m.id + '"')){ THUMBING[m.id] = 1; if(m.remote){ remoteThumb(m); continue; }
     blobOf(m.id).then(async b => { if(!b) return; if(m.kind==='img') m.thumb = thumbOf(await imgOf(b)); else { const t = await vidThumb(b); if(t) m.thumb = t.url; } if(m.thumb){ delete m.tc; save(); drawInputs(); } }).catch(() => {}); } }
-function saveNow(){ if(ADOPTING) return; S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(S));
+function saveNow(){ if(ADOPTING) return; S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(S, (k, v) => k==='thumb' && typeof v==='string' && v.startsWith('blob:') ? '' : v));
   try{ put(); }catch(e){ try{ tidyMedia(true); put(); }catch(e2){ toast("H3 Deck's own save space in Safari is full (about 5 MB; not your phone's storage), so the newest changes aren't kept. Tap Clear finished to make room.", 6000); } }
   pushSoon(); }
 // a copy of the takes list on each PC (ComfyUI's own user files), so 🎬 H3 Film sees them even where it can't share this app's
@@ -690,7 +699,15 @@ const IDB = (() => { let db = null;
   return {put:(k, v) => tx('readwrite', s => s.put(v, k)), get:k => tx('readonly', s => s.get(k)), del:k => tx('readwrite', s => s.delete(k))};
 })();
 const BLOBS = {}; // media id -> Blob (this session)
-async function blobOf(id){ if(BLOBS[id]) return BLOBS[id]; try{ const b = await IDB.get(id); if(b) BLOBS[id] = b; if(!b && WORKER && await mediaBack([id])) return BLOBS[id] || null; return b || null; }catch(e){ return null; } }
+// (Jordan 2026-11-15, "names load but no images?": the phone can drop its IndexedDB while the save stays; every picture also sits
+// in the PCs' input/h3deck folder, so a missing one is fetched back from there, and tried again when a PC comes on)
+const MISS = {};
+async function blobOf(id){ if(BLOBS[id]) return BLOBS[id]; try{ const b = await IDB.get(id); if(b){ BLOBS[id] = b; return b; }
+    if(Date.now() - (MISS[id] || 0) > 30000){ MISS[id] = Date.now(); if(await mediaBack([id])){ delete MISS[id]; return BLOBS[id] || null; } }
+    return null; }catch(e){ return null; } }
+let MISSDRAW = 0;
+function missBack(){ if(!Object.keys(MISS).length || MISSDRAW) return; MISSDRAW = 1; const ids = Object.keys(MISS); ids.forEach(id => delete MISS[id]);
+  mediaBack(ids).then(n => { if(n){ ids.forEach(id => { delete URLS[id]; }); save(); drawAll(); try{ drawLib(); }catch(e){} } }).catch(() => {}).finally(() => { MISSDRAW = 0; }); }
 const URLS = {};
 async function mediaUrl(id){ if(URLS[id]) return URLS[id]; const b = await blobOf(id); return b ? (URLS[id] = URL.createObjectURL(b)) : ''; }
 async function addMedia(file, kind){
@@ -753,7 +770,7 @@ async function getJ(url, opt, ms){ const c = new AbortController(), t = setTimeo
   try{ const r = await fetch(url, Object.assign({signal:c.signal}, opt || {})); if(!r.ok) throw new Error(r.status + ''); return await r.json(); } finally{ clearTimeout(t); } }
 async function ping(url){
   const p = pcOf(url);
-  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true; markDown(url, false);
+  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true; markDown(url, false); if(!was) setTimeout(missBack, 0);
     if(!p.oi || !was || Date.now() - (p.oiAt || 0) > 120000){ p.oiAt = Date.now(); const got = await Promise.all(NEED.map(c => getJ(url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))); p.oi = Object.assign({}, ...got);
       try{ localStorage.setItem('h3oi:' + url, JSON.stringify(p.oi)); }catch(e){}
       // the Render Deck helper saves into this PC's own subfolder of a shared (Dropbox) output folder, e.g. Output_Render/
@@ -1576,7 +1593,7 @@ function libNew(kind, from){ const L = {id:'L' + Math.random().toString(36).slic
   S.lib.unshift(L); return L; }
 function filmName(){ try{ const F = FW && FW.FILM, f = F && F.S.films.find(x => x.id===S.fkey); if(f) return F.fullName ? F.fullName(f.id) : f.name; }catch(e){} return S.fkey ? 'this film' : 'one-off videos'; }
 let LIBF = 'all';
-function drawLib(){ const el = $('#libTab'); if(!el || el.hidden) return; const L = (S.lib || []).filter(x => libHere(x) && (LIBF==='all' || x.kind===LIBF));
+function drawLib(){ const el = $('#libTab'); if(!el || el.hidden) return; fixThumbs(); const L = (S.lib || []).filter(x => libHere(x) && (LIBF==='all' || x.kind===LIBF));
   el.innerHTML = `<div class="note">Everything you reuse, kept once. Add a character, object or place to a film's 👥 cast; put an attribute (a haircut, eye design, tattoo…) on one of its characters; give a 🧍 pose to who should take it. Change an entry here and every film that uses it follows. Adding goes to <b>${esc(filmName())}</b>, the film open in 🎞 Films.</div>
     <div class="seg wrap" style="margin-top:10px">${[['all', 'All']].concat(LIBK.map(k => [k[0], k[1]])).map(([v, t]) => `<button data-lib="f:${v}" class="${LIBF===v ? 'on' : ''}">${t}</button>`).join('')}</div>
     <button class="btn pri" data-lib="new" style="width:100%;margin-top:10px">＋ New ${LIBF==='all' ? 'entry' : libKind({kind:LIBF})[2].replace(/^\S+\s/, '').toLowerCase()}</button>
