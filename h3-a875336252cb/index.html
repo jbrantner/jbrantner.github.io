@@ -1276,7 +1276,7 @@ function autoWho(txt, k, T){ txt = String(txt || ''); const re = new RegExp('<\\
 // "<Subject 1> looks to her left and <Pose 2>": the chip goes on her sentence ("… and moves into …"), no second "<Subject 1>"
 function sameClause(all, off, L){ if(!L || !L.auto || !L.n) return false; const pre = String(all).slice(0, off), m = [...pre.matchAll(/<\s*subject\s*(\d+)\s*>/gi)].pop(); if(!m) return false;
   const mid = pre.slice(m.index + m[0].length); return !!m && +m[1]===+L.n && !/[.!?\n\]]/.test(mid) && !/<\s*(?:pose|action|dialogue)\s*\d+\s*>|\u0002/i.test(mid) && /\S\s*$/.test(pre); }
-function autoSync(f, T){ const txt = [f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'); for(const k of lineKeys(txt)){ const L = lineOf(k, T); if(L && L.auto && (L.pose || L.act)) L.n = autoWho(f.prompt && new RegExp('<\\s*(?:pose|action)\\s*' + k + '\\s*>', 'i').test(f.prompt) ? f.prompt : txt, k, T); } }
+function autoSync(f, T){ const txt = [f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'); for(const k of lineKeys(txt)){ const L = lineOf(k, T); if(L && L.auto && (L.pose || L.act)) L.n = autoWho(f.prompt && new RegExp('<\\s*(?:pose|action)\\s*' + k + '\\s*>', 'i').test(f.prompt) ? f.prompt : txt, k, T) || L.n; } } // (nobody named in the words: it stays with who had it)
 const lineSay = s => { s = String(s || '').replace(/[<>]/g, '').replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim(); if(!s) return '';
   s = s.replace(/\s*(?:\.{2,}|…)+\s*$/, '.').replace(/\s*(?:\.{2,}|…)+\s*/g, ', ').replace(/^[,\s]+/, ''); // the guide: ellipses hurt how clearly it's said
   return /[.?!]$/.test(s) ? s : s.replace(/[,;:\s]+$/, '') + '.'; };
@@ -1300,8 +1300,8 @@ const lineKeys = txt => [...String(txt || '').matchAll(LNRE)].map(m => +m[1]);
 function lineSnap(f){ try{ autoSync(f); }catch(e){} const o = {}; for(const k of lineKeys([f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'))){ const L = lineOf(k); if(L) o[k] = Object.assign({}, L); } return o; }
 // the chip: "Laura line 1" (her first line in these words, her second is "Laura line 2")
 function lineLabel(k, txt, film){ const L = lineOf(k), c = L && L.n && castOf(L.n, film); if(!L) return 'missing line';
-  if(L.act) return '🥋 ' + (c ? chipName(c) + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '') + (actWords(L.name) || 'action');
-  if(L.pose){ const o = pchAlso(L).map(x => castOf(x.n, film)).filter(Boolean).map(chipName); return '🧍 ' + (c ? chipName(c) + (o.length ? ' + ' + o.join(' + ') : '') + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '') + pchName(L); }
+  if(L.act) return '🥋 ' + (c ? chipName(c) + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '❓ who? · ') + (actWords(L.name) || 'action');
+  if(L.pose){ const o = pchAlso(L).map(x => castOf(x.n, film)).filter(Boolean).map(chipName); return '🧍 ' + (c ? chipName(c) + (o.length ? ' + ' + o.join(' + ') : '') + ' · ' : L.n ? 'Subject ' + L.n + ' · ' : '❓ who? · ') + pchName(L) + (pchLib(L) ? '' : ' ⚠'); } // (⚠ its Library pose is gone or has no picture: words only)
   const nm = c ? chipName(c) : L.n ? 'Subject ' + L.n : 'Voice'; let i = 0, at = 0; for(const j of lineKeys(txt)){ const M = lineOf(j); if(M && !M.act && !M.pose && (M.n || 0)===(L.n || 0)){ i++; if(j===+k){ at = i; break; } } }
   return nm + ' line ' + (at || 1); }
 const SUBRE = /<\s*subject\s*(\d+)\s*>/gi, CASTK = [['char', '🧑 Person'], ['thing', '📦 Thing'], ['place', '🏞 Place']];
@@ -1391,7 +1391,11 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   const imgs = (t.imgs || []).filter(r => !r.cast).slice(0, Math.max(0, MAXREF.img - used.filter(n => castPics(castOf(n, t.film)).length).length));
   const lk = pics && t.look && t.look.src ? t.look : null, lkN = lk && lk.src==='c' ? +lk.n || 0 : 0, apics = c => attrsOf(c, t).map(libOf).filter(Boolean).map(A => [A, libPics(A).filter(id => S.media[id]).slice(0, 2)]);
   let need = used.reduce((a, n) => a + apics(castOf(n, t.film)).reduce((b, [, P]) => b + P.length, 0), 0); // (2026-11-08: an outfit didn't take, its pictures had no room)
-  const vids = (t.vids || []).slice(), acts = c => (c.acts || []).map(x => [x, libOf(x.id)]).filter(([, A]) => A);
+  // 🥋 an action chip picked from the 📚 Library brings that action's clip / pictures along for the one doing it, like an action on her card
+  // (2026-11-15: Jordan's Library action with a clip went in as a chip and only its words were sent, so it never showed in 🎚 Reference strength)
+  const chActs = {}; if(pics) for(const m of [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n').matchAll(ACTRE)){ const L = lineOf(m[1], t), A = L && L.act && +L.n > 0 && actLib(L);
+    if(A && actRefs(A)) (chActs[L.n] = chActs[L.n] || []).push({id:A.id, to:0, ch:+m[1]}); }
+  const vids = (t.vids || []).slice(), acts = c => { const own = c.acts || []; return own.concat((chActs[c.n] || []).filter((x, i, a) => !own.some(y => y.id===x.id) && a.findIndex(y => y.id===x.id)===i)).map(x => [x, libOf(x.id)]).filter(([, A]) => A); };
   for(const n of used) for(const [x, A] of acts(castOf(n, t.film))) if(!(A.vid && S.media[A.vid] && vids.length < MAXREF.vid)) need += libPics(A).filter(id => S.media[id]).slice(0, 3).length;
   const pz = {}; for(const n of used) for(const x of posesOf(castOf(n, t.film), t)){ const P = libOf(x.id); (pz[P.id] = pz[P.id] || {P, who:[]}).who.push({n, p:x.p}); } // 🧍 one picture per pose, whoever takes it
   const pch = {}; if(pics) for(const m of [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n').matchAll(POSERE)){ const L = lineOf(m[1], t), P = pchLib(L); // 🧍 pose chips: one picture per pose too
@@ -1546,14 +1550,16 @@ document.addEventListener('click', e => { const b = e.target.closest('[data-dlg]
 // (Jordan 2026-11-15: "why are there actions in a shot that aren't in my library?": the picks were every chip ever made, so old and
 // edited ones piled up; now they are the 📚 Library's actions only, and a new chip is kept there when 📚 Keep it in the Library is on)
 const actLibOf = name => (S.lib || []).find(x => x.kind==='act' && actWords(x.name || x.what).toLowerCase()===actWords(name).toLowerCase());
-function actBook(){ return (S.lib || []).filter(x => x.kind==='act').map(A => ({name:actWords(A.name || A.what), text:actWords(A.what || A.name)})).filter(x => x.name && x.text); }
+const actLib = L => { const A = L && L.lib && libOf(L.lib); return A && A.kind==='act' ? A : L && L.act && L.name ? actLibOf(L.name) || null : null; }; // 🥋 the chip's 📚 Library action (older chips: by name)
+const actRefs = A => !!(A && ((A.vid && S.media[A.vid]) || libPics(A).some(id => S.media[id]))); // it has a clip or pictures to send
+function actBook(){ return (S.lib || []).filter(x => x.kind==='act').map(A => ({id:A.id, name:actWords(A.name || A.what), text:actWords(A.what || A.name), clip:actRefs(A)})).filter(x => x.name && x.text); }
 function actSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off : (ta && ta.selectionStart != null ? ta.selectionStart : (f.prompt || '').length), old = k && lineOf(k);
   const ppl = (S.cast || []).filter(c => (c.kind || 'char')==='char'), who0 = old ? old.n || 0 : (ppl.find(c => c.n===S.dlWho) || ppl.find(c => new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'i').test(f.prompt || '')) || ppl[0] || {}).n || 0;
-  const D = {n:old ? (old.auto ? -1 : old.n || 0) : -1, name:old ? old.name || '' : '', text:old ? old.text || '' : '', keep:!old}, B = actBook(); void who0;
-  const autoN = () => autoWho(old ? f.prompt : (f.prompt || '').slice(0, pos) + ' <Action 999999> ' + (f.prompt || '').slice(pos), old ? k : 999999), nOf = () => D.n < 0 ? autoN() : D.n;
+  const D = {n:old ? (old.auto ? -1 : old.n || 0) : -1, name:old ? old.name || '' : '', text:old ? old.text || '' : '', keep:!old, lib:old ? old.lib || '' : ''}, B = actBook();
+  const autoN = () => autoWho(old ? f.prompt : (f.prompt || '').slice(0, pos) + ' <Action 999999> ' + (f.prompt || '').slice(pos), old ? k : 999999), nOf = () => D.n < 0 ? autoN() || who0 : D.n;
   openSheet(`<h3><span>🥋 ${old ? 'Action' : 'Add an action'}</span><button class="btn" data-close>✕</button></h3><div id="acBox">
     <div class="lab"><span>Who does it</span></div><div class="chips" id="acWho">${ppl.map(c => `<button class="btn" data-aw="${c.n}" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👤 ${esc(chipName(c))}</button>`).join('')}<button class="btn" data-aw="-1">↩ Named before it</button><button class="btn" data-aw="0">🌀 Nobody in particular</button></div>
-    ${B.length ? `<div class="lab" style="margin-top:10px"><span>📚 Your Library actions</span></div><div class="chips" id="acBook">${B.map((x, i) => `<button class="btn" data-ab="${i}" title="${esc(x.text)}">${esc(x.name)}</button>`).join('')}</div>` : ''}
+    ${B.length ? `<div class="lab" style="margin-top:10px"><span>📚 Your Library actions</span></div><div class="chips" id="acBook">${B.map((x, i) => `<button class="btn" data-ab="${i}" title="${esc(x.text)}">${x.clip ? '🎞 ' : ''}${esc(x.name)}</button>`).join('')}</div>` : ''}
     <div class="lab" style="margin-top:10px"><span>Name it (what the chip says)</span></div><input id="acName" style="width:100%;box-sizing:border-box" placeholder="e.g. Twirl" value="${esc(D.name)}">
     <div class="lab" style="margin-top:8px"><span>What they do</span></div><textarea id="acText" rows="3" style="width:100%;box-sizing:border-box" placeholder="e.g. spins slowly on the spot, her skirt flaring out">${esc(D.text)}</textarea>
     <div class="note" id="acPrev" style="margin-top:8px;word-break:break-word"></div>
@@ -1561,15 +1567,18 @@ function actSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off : 
   const draw = () => { $('#acWho').querySelectorAll('[data-aw]').forEach(b => { const n = +b.dataset.aw, on = n===+D.n, col = n > 0 ? subColor(n) : ''; b.classList.toggle('pri', on); if(n > 0){ b.style.background = on ? col : ''; b.style.color = on ? '#15161b' : col; } });
     const N = nOf(), c = castOf(N), out = actWords(D.text) ? lineOut('<Action 0>.', {lines:{0:Object.assign({act:1}, D, {n:N})}}).replace(SUBRE, () => c ? chipName(c) : 'Subject ' + N) : '';
     const inLib = !!actLibOf(D.name || ''); $('#acKeep').textContent = inLib ? '📚 Already in the Library' : '📚 Keep it in the Library: ' + (D.keep ? 'on' : 'off'); $('#acKeep').classList.toggle('pri', inLib || D.keep); $('#acKeep').disabled = inLib;
-    $('#acPrev').textContent = (out ? 'Sent to MiniMax as: ' + out : 'Write what they do to see how it\'s sent.') + (D.n < 0 ? ' (↩ ' + (c ? chipName(c) + ', the character named before it' : 'no character named before it yet') + ')' : ''); };
+    const A = actLib({act:1, lib:D.lib, name:D.name});
+    $('#acPrev').textContent = (out ? 'Sent to MiniMax as: ' + out : 'Write what they do to see how it\'s sent.') + (D.n < 0 ? ' (↩ ' + (autoN() ? chipName(c) + ', the character named before it' : c ? 'nobody is named before it, so ' + chipName(c) + ' does it until you name someone' : 'nobody is named before it yet') + ')' : '')
+      + (A && actRefs(A) ? ' 🎞 Its 📚 Library ' + (A.vid && S.media[A.vid] ? 'clip' : 'pictures') + (A.vid && S.media[A.vid] ? ' goes' : ' go') + ' along for the movement (see 🎚 Reference strength).' : ''); };
   draw();
   $('#acWho').onclick = e => { const b = e.target.closest('[data-aw]'); if(!b) return; D.n = +b.dataset.aw; draw(); };
-  if($('#acBook')) $('#acBook').onclick = e => { const b = e.target.closest('[data-ab]'); if(!b) return; const x = B[+b.dataset.ab]; D.name = x.name; D.text = x.text; $('#acName').value = x.name; $('#acText').value = x.text; draw(); };
+  if($('#acBook')) $('#acBook').onclick = e => { const b = e.target.closest('[data-ab]'); if(!b) return; const x = B[+b.dataset.ab]; D.name = x.name; D.text = x.text; D.lib = x.id; $('#acName').value = x.name; $('#acText').value = x.text; draw(); };
   $('#acKeep').onclick = () => { D.keep = !D.keep; draw(); };
   $('#acName').oninput = e => { D.name = e.target.value; draw(); }; $('#acText').oninput = e => { D.text = e.target.value; draw(); };
   $('#acGo').onclick = () => { if(!actWords(D.text)) return toast('Write what they do'); const name = actWords(D.name) || actWords(D.text).split(' ').slice(0, 3).join(' ');
     S.lines = S.lines || {}; if(D.n > 0) S.dlWho = D.n; const L = {act:1, n:Math.max(0, nOf()), name, text:D.text.trim()}; if(D.n < 0) L.auto = 1;
     if(D.keep && !actLibOf(name)){ const N = libNew('act'); Object.assign(N, {name, what:L.text}); try{ libSync(N); }catch(e){} }
+    { const A = actLib({act:1, lib:D.lib, name}); if(A) L.lib = A.id; } // 🥋 its 📚 Library action: the clip / pictures go along
     if(old) S.lines[k] = L;
     else { const used = Object.keys(S.lines).map(Number); k = Math.max(0, +S.lineNo || 0, ...used) + 1; S.lineNo = k; S.lines[k] = L;
       const v = f.prompt || '', p = tagEnd(v, Math.min(pos, v.length)), tok = '<Action ' + k + '>', pre = p && !/\s$/.test(v.slice(0, p)) ? ' ' : '', post = /^\s/.test(v.slice(p)) || p >= v.length ? '' : ' ';
@@ -1586,7 +1595,7 @@ function poseChSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off
   const LP = (S.lib || []).filter(x => x.kind==='pose'), D = {n:old ? (old.auto ? -1 : old.n || who0) : -1, lib:old ? old.lib || '' : (LP.length===1 ? LP[0].id : ''), p:old ? +old.p || 0 : 0, hold:!!(old && old.hold), name:old ? old.name || '' : '', text:old ? pchText(old) : ''};
   if(!old && D.lib) D.text = poseDesc(libOf(D.lib)); // (Jordan 2026-11-15: the box starts with the Library description)
   D.also = {}; ((old && old.also) || []).forEach(x => { if(x && x.p >= 0) D.also[x.p] = +x.n || 0; }); // 👥 the picture's other people → characters
-  const autoN = () => autoWho(old ? f.prompt : (f.prompt || '').slice(0, pos) + ' <Pose 999999> ' + (f.prompt || '').slice(pos), old ? k : 999999), nOf = () => D.n < 0 ? autoN() : D.n;
+  const autoN = () => autoWho(old ? f.prompt : (f.prompt || '').slice(0, pos) + ' <Pose 999999> ' + (f.prompt || '').slice(pos), old ? k : 999999), nOf = () => D.n < 0 ? autoN() || who0 : D.n;
   const th = x => (S.media[x.coded] || S.media[libPics(x)[0]] || {}).thumb;
   openSheet(`<h3><span>🧍 ${old ? 'Pose' : 'Add a pose'}</span><button class="btn" data-close>✕</button></h3><div id="pcBox">
     <div class="lab"><span>Who takes it</span></div><div class="chips" id="pcWho">${ppl.map(c => `<button class="btn" data-pw="${c.n}" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👤 ${esc(chipName(c))}</button>`).join('') + (ppl.length ? '<button class="btn" data-pw="-1">↩ Named before it</button>' : '') || '<span class="note">Add a character to this film\'s 👥 cast first.</span>'}</div>
@@ -1608,7 +1617,8 @@ function poseChSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off
       + (n > 1 ? `<div class="lab" style="margin-top:10px"><span>👥 The others in the picture</span></div>` + Array.from({length:n}, (x, i) => i===D.p ? '' : `<div class="chips" style="margin-top:4px;align-items:center"><span class="btn"${bc(i)} style="pointer-events:none${poseSendsCoded(P) ? ';border-color:' + POSE_COL[i % POSE_COL.length][1] : ''}">${fig(i)} →</span>${ppl.filter(c => c.n!==nOf()).map(c => `<button class="btn${+D.also[i]===c.n ? ' pri' : ''}" data-pa="${i}:${c.n}" style="border-color:${subColor(c.n)};${+D.also[i]===c.n ? 'background:' + subColor(c.n) + ';color:#15161b' : 'color:' + subColor(c.n)}">${esc(chipName(c))}</button>`).join('')}<button class="btn${!+D.also[i] ? ' pri' : ''}" data-pa="${i}:0">Nobody</button></div>`).join('') : '');
     $('#pcName').placeholder = P ? poseName(P) : 'the pose\'s own name';
     const N = nOf(), c = castOf(N), L = Object.assign({pose:1}, D, {n:N, name:D.name || (P ? poseName(P) : '')}), AL = many ? Object.entries(D.also).filter(([p, n]) => +n > 0 && +p!==D.p && +n!==N) : [], out = P ? pmarkOut(lineOut('<Pose 0>.', {lines:{0:Object.assign(L, {also:AL.map(([p, n]) => ({p:+p, n:+n}))})}}), () => 'the pose and facial expression of ' + poseWho(P, many ? D.p : -1) + ' from the pose picture' + AL.map(([p, n]) => ', while <Subject ' + n + '> takes the pose of ' + poseWho(P, +p)).join('')).replace(SUBRE, (m, x) => { const cc = castOf(x); return cc ? chipName(cc) : 'Subject ' + x; }) : '';
-    $('#pcPrev').textContent = (out ? 'Sent to MiniMax as: ' + out : 'Pick a pose to see how it\'s sent.') + (D.n < 0 ? ' (↩ ' + (c ? chipName(c) + ', the character named before it' : 'no character named before it yet') + ')' : ''); };
+    $('#pcPrev').textContent = (out ? 'Sent to MiniMax as: ' + out : 'Pick a pose to see how it\'s sent.') + (D.n < 0 ? ' (↩ ' + (autoN() ? chipName(c) + ', the character named before it' : c ? 'nobody is named before it, so ' + chipName(c) + ' takes it until you name someone' : 'nobody is named before it yet') + ')' : '')
+      + (old && old.lib && !libOf(old.lib) ? ' ⚠ The pose this chip used is no longer in the 📚 Library: pick one.' : P && !pchLib({pose:1, lib:P.id}) ? ' ⚠ This pose has no picture yet, so only its words go (and it won\'t show in 🎚 Reference strength) until you add one in the 📚 Library.' : ''); };
   draw();
   $('#pcWho').onclick = e => { const b = e.target.closest('[data-pw]'); if(!b) return; D.n = +b.dataset.pw; draw(); };
   if($('#pcLib')) $('#pcLib').onclick = e => { const b = e.target.closest('[data-pl]'); if(!b) return; const was = poseDesc(libOf(D.lib)); D.lib = b.dataset.pl; D.p = 0;
@@ -2544,25 +2554,27 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     cond = [rv, 0]; lat = [rv, 1];
     // 🎚 reference strength: a picture at X% is only in the conditioning for the first X% of the steps; one more MiniMaxH3ReferenceToVideo
     // per drop point, without the pictures that have dropped (their words stand in), joined with ConditioningSetTimestepRange + Combine
-    const win = imgs.map(r => refWin(t, r)), edges = [...new Set([0, 1, ...win.flat()])].sort((a, b) => a - b), all = imgs.map((r, k) => k);
-    if(edges.length > 2 && oi.ConditioningSetTimestepRange && oi.ConditioningCombine){ const stages = [];
-      for(let e = 0; e < edges.length - 1; e++){ const a = edges[e], b = edges[e + 1], act = all.filter(k => win[k][0] <= a + 1e-6 && win[k][1] >= b - 1e-6), last = stages[stages.length - 1];
-        if(last && last.act.join()===act.join()) last.b = b; else stages.push({a, b, act}); }
-      if(stages.length > 1){ const parts = stages.map(st => add('ConditioningSetTimestepRange', {conditioning:[st.act.length===all.length ? rv : stageRv(st.act), 0], start:st.a, end:st.b}));
+    // (🥋 an action's clip, a reference video, has a window too: 2026-11-15)
+    const win = imgs.map(r => refWin(t, r)), vwin = t.vids.map(r => refWin(t, r)), edges = [...new Set([0, 1, ...win.flat(), ...vwin.flat()])].sort((a, b) => a - b), all = imgs.map((r, k) => k), allV = t.vids.map((r, k) => k);
+    if(edges.length > 2 && oi.ConditioningSetTimestepRange && oi.ConditioningCombine){ const stages = [], on = (W, a, b) => k => W[k][0] <= a + 1e-6 && W[k][1] >= b - 1e-6;
+      for(let e = 0; e < edges.length - 1; e++){ const a = edges[e], b = edges[e + 1], act = all.filter(on(win, a, b)), vact = allV.filter(on(vwin, a, b)), last = stages[stages.length - 1];
+        if(last && last.act.join()===act.join() && last.vact.join()===vact.join()) last.b = b; else stages.push({a, b, act, vact}); }
+      if(stages.length > 1){ const parts = stages.map(st => add('ConditioningSetTimestepRange', {conditioning:[st.act.length===all.length && st.vact.length===allV.length ? rv : stageRv(st.act, st.vact), 0], start:st.a, end:st.b}));
         let cc = [parts[0], 0]; for(const q of parts.slice(1)) cc = [add('ConditioningCombine', {conditioning_1:cc, conditioning_2:[q, 0]}), 0]; cond = cc; } }
-    function stageRv(act){ // the steps where some pictures are off: only the ones that are on; the freed slots go to the characters' pictures that are still on
+    function stageRv(act, vact){ // the steps where some pictures are off: only the ones that are on; the freed slots go to the characters' pictures that are still on
       // (Jordan 2026-11-15: "as you denoise the strength goes up for the character reference?"), round robin like 🔁 Fill spare slots
       const keepI = act.slice(), r2 = {}, castI = keepI.filter(k => imgs[k].cast && !imgs[k].dup), free = imgs.length - act.length;
       if(castI.length && free > 0){ const by = {}, ord = []; castI.forEach(k => { const n = imgs[k].cast; if(!by[n]){ by[n] = []; ord.push(n); } by[n].push(k); });
         const used = {}; castI.forEach(k => { const n = imgs[k].cast; used[n] = (used[n] || 0) + 1; }); const dups = [];
         for(let j = 0; dups.length < free; j++) for(const n of ord){ if(dups.length >= free) break; dups.push(by[n][(used[n] + j) % by[n].length]); }
         let at = 0; keepI.forEach((k, j) => { if(imgs[k].cast) at = j + 1; }); keepI.splice(at, 0, ...dups.map(k => -1 - k)); }
-      const src = k => k < 0 ? -1 - k : k, t2 = Object.assign({}, t, {imgs:keepI.filter(k => src(k) < t.imgs.length).map(k => k < 0 ? Object.assign({}, t.imgs[src(k)], {dup:true}) : t.imgs[k])});
+      const src = k => k < 0 ? -1 - k : k, t2 = Object.assign({}, t, {imgs:keepI.filter(k => src(k) < t.imgs.length).map(k => k < 0 ? Object.assign({}, t.imgs[src(k)], {dup:true}) : t.imgs[k]), vids:vact.map(k => t.vids[k])});
       keepI.forEach((k, j) => { r2['ref_images.ref_image_' + j] = refs['ref_images.ref_image_' + src(k)]; });
-      for(const [key, v] of Object.entries(refs)) if(!/^ref_images\./.test(key)) r2[key] = v;
+      vact.forEach((k, j) => { for(const nm of ['ref_videos.ref_video_', 'ref_video_audios.ref_video_audio_']) if(refs[nm + k]) r2[nm + j] = refs[nm + k]; }); // the clips still on, renumbered
+      for(const [key, v] of Object.entries(refs)) if(!/^ref_(images|videos|video_audios)\./.test(key)) r2[key] = v;
       const xf = extraFirst && keepI.includes(imgs.length - 1) ? keepI.indexOf(imgs.length - 1) + 1 : 0, p2 = castText(shuffleWords(pc.prompt, shufSeed(t, i), shufOn(t, i) ? 1 : 0), t2, !t.h3), a2 = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + p2 + (say ? (/[.!?]\s*$/.test(p2) || !p2.trim() ? ' ' : '. ') + say : '');
       let pr2 = (words ? words.replace(/[.\s]*$/, '. ') : '') + a2;
-      if(t.h3) pr2 = h3({text:a2, imgs:t2.imgs, firstPic:xf, first:!!useFirst, last:!!useLast}); else if(xf) pr2 = '<Picture ' + xf + '> is the first frame of this shot. ' + pr2;
+      if(t.h3) pr2 = h3({text:a2, imgs:t2.imgs, vids:t2.vids, firstPic:xf, first:!!useFirst, last:!!useLast}); else if(xf) pr2 = '<Picture ' + xf + '> is the first frame of this shot. ' + pr2;
       if(!t.h3) pr2 += poseLine(t2.imgs, pc.start - LEAD(pc) / FPS, L / FPS);
       return add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:avae, prompt:pr2, width:w, height:h, length:L, ref_image_size:'match'}, r2)); }
     if(useFirst){ cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(t.first), frame_idx:0}), 0]; guides++; }
@@ -4265,9 +4277,10 @@ const rstrWin = (f, k) => { const v = (f.rstr || {})[k]; let a = 0, b = 100; if(
   b = Math.max(10, Math.min(100, b)); a = Math.max(0, Math.min(b - 10, a)); return [a, b]; };
 const rstrSnap = f => { const o = {}; for(const k of Object.keys(f.rstr || {}).concat(f.pstr ? ['p'] : [])){ const [a, b] = rstrWin(f, k); if(a > 0 || b < 100) o[k] = [a / 100, b / 100]; } return Object.keys(o).length ? o : null; };
 const rstrForm = t => { const o = {}; for(const [k, v] of Object.entries(t.rstr || {})){ const [a, b] = winOf(v); o[k] = {s:Math.round(a * 100), e:Math.round(b * 100)}; } if(t.pstr && !o.p) o.p = {s:0, e:Math.round(t.pstr * 100)}; return o; };
-function rstrGroups(){ let I = []; try{ if(!S.f.sm) I = castTake(Object.assign(snapshot(), {fill:0}), true).imgs; }catch(e){ try{ I = castTake({prompt:S.f.prompt || '', pieces:[], imgs:[], film:S.fkey, descOff:S.f.descOff}, true).imgs; }catch(e2){} }
+function rstrGroups(){ let I = []; const all = T => T.imgs.concat((T.vids || []).filter(r => r.actOf)); // (🥋 an action's clip goes as a video: it has a slider too)
+  try{ if(!S.f.sm) I = all(castTake(Object.assign(snapshot(), {fill:0}), true)); }catch(e){ try{ I = all(castTake({prompt:S.f.prompt || '', pieces:[], imgs:[], film:S.fkey, descOff:S.f.descOff, lines:lineSnap(S.f)}, true)); }catch(e2){} }
   const G = []; for(const r of I){ const k = refKey(r); if(!k) continue; let g = G.find(x => x.k===k); if(!g){ g = {k, n:0, label:''}; G.push(g);
-      const L = r.lib && libOf(r.lib); g.label = r.cast ? '👥 ' + (chipName(castOf(r.cast, S.fkey)) || 'Subject ' + r.cast) : k==='p' ? '🧍 Pose / action pictures' : r.rk ? '🖼 Ref Image ' + r.rk : r.attrOf ? '✨ ' + ((L && (L.name || L.what)) || r.what || 'attribute') : '🎨 Style pictures'; } g.n++; }
+      const L = r.lib && libOf(r.lib); g.label = r.cast ? '👥 ' + (chipName(castOf(r.cast, S.fkey)) || 'Subject ' + r.cast) : k==='p' ? '🧍 Pose / action references' : r.rk ? '🖼 Ref Image ' + r.rk : r.attrOf ? '✨ ' + ((L && (L.name || L.what)) || r.what || 'attribute') : '🎨 Style pictures'; } g.n++; }
   return G; }
 let RSTRSIG = '';
 function drawRstr(){ const box = $('#rstrBox'); if(!box) return; const G = rstrGroups(); box.hidden = !G.length; if(!G.length) return;
