@@ -39,16 +39,16 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   await page.click('#goBtn'); await page.waitForTimeout(2500);
   // Laura has a 🥋 move from the Library with its own video; a 🧵 seam join of two clips whose words name her
   const R = await page.evaluate(async () => { const S = H3.S, t0 = S.takes[0];
-    S.media.mPic = {kind:'img', name:'laura.png', remote:'h3deck/laura.png'}; S.media.mMove = {kind:'vid', name:'twirl.mp4', remote:'h3deck/twirl.mp4'}; S.media.mSk = {kind:'vid', name:'twirl_skel.mp4', remote:'h3deck/twirl_skel.mp4'};
-    S.lib = (S.lib || []).concat([{id:'Lm1', kind:'act', name:'Twirl', vid:'mMove', pics:[], skel:{mMove:'mSk'}}]);
+    S.media.mPic = {kind:'img', name:'laura.png', remote:'h3deck/laura.png'}; S.media.mMove = {kind:'vid', name:'twirl.mp4', remote:'h3deck/twirl.mp4'};
+    S.lib = (S.lib || []).concat([{id:'Lm1', kind:'act', name:'Twirl', vid:'mMove', pics:[]}]);
     const cast = [{n:1, kind:'char', who:'Laura', pics:['mPic'], keep:'exact', acts:[{id:'Lm1'}]}]; S.cast = cast; S.casts = S.casts || {}; S.casts[t0.film || S.fkey] = cast;
     const t = JSON.parse(JSON.stringify(t0)); Object.assign(t, {id:'tSeam', state:'new', prompt:'[0s-5s] <Subject 1> dances.\n[5s-10s] <Subject 1> twirls.', film:t0.film || S.fkey, imgs:[], vids:[],
       combo:{parts:[{file:'H3Deck/a.mp4 [output]', in:0, out:5, w:t0.w, h:t0.h}, {file:'H3Deck/b.mp4 [output]', in:0, out:5, w:t0.w, h:t0.h}], seam:{one:true, frames:[120], qw:''}}, pieces:[{state:'new', start:0, gen:240, deliv:240, ctx:0}]});
     S.takes.unshift(t); let err = ''; try{ await H3.sendPieces(t, 0); }catch(e){ err = e.message; } return {err, used:H3.castTake(t, true).vids.map(v => v.id)}; });
   const G = PCS[M].sent[PCS[M].sent.length - 1] || {}, LV = Object.values(G).filter(n => n.class_type==='LoadVideo').map(n => n.inputs.file);
   console.log(JSON.stringify(R), LV);
-  ok(R.used.includes('mSk') && !R.used.includes('mMove'), 'the bridge uses the skeleton copy of Laura\'s move video (never the clip itself)');
-  ok(!R.err && LV.length===3 && LV.every(f => typeof f==='string' && f) && LV.includes('h3deck/twirl_skel.mp4'), 'the seam job is sent with every video named: ' + JSON.stringify(LV));
+  ok(R.used.includes('mMove'), 'the bridge uses Laura\'s move video');
+  ok(!R.err && LV.length===3 && LV.every(f => typeof f==='string' && f) && LV.includes('h3deck/twirl.mp4'), 'the seam job is sent with every video named: ' + JSON.stringify(LV));
   // a graph with a video that was never sent says so plainly instead of ComfyUI's riddle
   const E = await page.evaluate(async () => { try{ await H3.queueGraph('http://main.test', {g:{1:{class_type:'LoadVideo', inputs:{}}}}); return ''; }catch(e){ return e.message; } });
   ok(/video for node 1 was never sent to Main/.test(E), 'a missing video is caught before sending: ' + E);

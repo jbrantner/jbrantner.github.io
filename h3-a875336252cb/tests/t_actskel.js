@@ -1,4 +1,4 @@
-// 🥋🦴 Library action references go as stick-figure skeleton copies only (no look from the person in the clip).
+// 🥋 Library action references: the clip itself, worded as movement/expressions only; 🦴 Skeleton only sends DWPose copies (with face dots) instead.
 // Run: NODE_PATH=$(npm root -g) node tests/t_actskel.js
 const { chromium } = require('playwright');
 const path = require('path'), http = require('http'), fs = require('fs');
@@ -49,12 +49,16 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.evaluate(() => { H3.S.media.av = {id:'av', kind:'vid', name:'av.mp4', w:640, h:352, dur:3, thumb:''}; H3.S.media.sk = {id:'sk', kind:'vid', name:'sk.mp4', w:640, h:352, dur:3, thumb:''};
     const A = H3.libNew('act'); Object.assign(A, {name:'Twirl', what:'twirl', vid:'av'}); H3.S.lib.push(A); window.__A = A; H3.S.cast[0].acts = [{id:A.id, to:0}]; });
   let P = await prom(R, REF);
+  ok(P.vids.join()==='av.mp4' && /is a stand-in: their face, hair, skin, body shape, clothes and the place never appear; <Subject 1> keeps their own face, hair and body from their own pictures/.test(P.p) && /movement, pose and facial expressions/.test(P.p), 'by default the clip itself goes, worded as movement and expressions only: ' + P.p.split('\n').filter(l => /twirl/.test(l)).join(' // '));
+  ok(await page.evaluate(() => H3.actNeeds(window.__A).length===0), 'by default no skeleton copy is needed');
+  await page.evaluate(() => { window.__A.skelOn = true; });
+  P = await prom(R, REF);
   ok(!P.vids.includes('av.mp4') && !P.vids.length, 'with no skeleton copy yet, the raw clip is never sent: ' + P.vids);
   ok(await page.evaluate(() => H3.actNeeds(window.__A).join()==='av'), 'the clip needs a motion-only copy');
   await page.evaluate(() => { window.__A.skel = {av:'sk'}; });
   P = await prom(R, REF);
   ok(P.vids.join()==='sk.mp4', 'only the skeleton copy goes as the reference video: ' + P.vids);
-  ok(/stick-figure skeleton in <Video 1>/.test(P.p) && /motion and pose guide only/.test(P.p) && /keeps their own face, hair, body and clothes/.test(P.p) && !/the people, clothes and place in/.test(P.p), 'the words say it is a skeleton, motion only: ' + (P.p.match(/<Subject \d> is the twirl[^\n]*/) || [''])[0]);
+  ok(/stick-figure skeleton in <Video 1>/.test(P.p) && /motion, pose and facial expression guide only/.test(P.p) && /keeps their own face, hair and body from their own pictures/.test(P.p) && !/the people, clothes and place in/.test(P.p), 'the words say it is a skeleton, motion only: ' + (P.p.match(/<Subject \d> is the twirl[^\n]*/) || [''])[0]);
   ok(await page.evaluate(() => H3.actNeeds(window.__A).length===0), 'nothing left to make');
   // pictures instead of a clip
   await page.evaluate(() => { H3.S.media.ap = {id:'ap', kind:'img', name:'ap.png', w:640, h:352, thumb:''}; H3.S.media.aps = {id:'aps', kind:'img', name:'aps.png', w:640, h:352, thumb:''}; Object.assign(window.__A, {vid:'', pics:['ap'], skel:{}}); });
@@ -64,6 +68,6 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   // the skeleton graph: DWPose with body + hands, no face, image and video
   const G = await page.evaluate(() => { const k = {oi:{}}; const a = H3.actSkelGraph(k, 'x.png', false), b = H3.actSkelGraph(k, 'x.mp4', true, {w:640, h:352}); const cls = g => Object.values(g.g).map(n => n.class_type);
     const dw = Object.values(b.g).find(n => n.class_type==='DWPreprocessor').inputs; return {a:cls(a), b:cls(b), dw}; });
-  ok(G.a.join()==='LoadImage,DWPreprocessor,SaveImage' && G.b.includes('SaveVideo') && G.dw.detect_face==='disable' && G.dw.detect_body==='enable' && G.dw.detect_hand==='enable', 'skeleton graphs: ' + JSON.stringify(G));
+  ok(G.a.join()==='LoadImage,DWPreprocessor,SaveImage' && G.b.includes('SaveVideo') && G.dw.detect_face==='enable' && G.dw.detect_body==='enable' && G.dw.detect_hand==='enable', 'skeleton graphs: ' + JSON.stringify(G));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
