@@ -2719,9 +2719,25 @@ const regenUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name').filter(
 const regenRefUnet = oi => { const u = combo(oi, 'UNETLoader', 'unet_name').filter(officialH3); return u.find(x => /minimax_h3_ref2va.*int8/i.test(x)) || u.find(x => /ref2va.*int8/i.test(x)) || u.find(x => /ref2va/i.test(x)); };
 // pictures carried in from the take it came from, else its own; the 👥 subjects its words name come FIRST (Jordan 2026-11-06: a ✨ pass
 // looked nothing like her: her pictures live on the subject, not on the take, so the pass had run with no reference at all)
-const upRefs = t => { const own = (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || [], out = [];
+const upRefs = t => { if(t && t.up && Array.isArray(t.up.only)) return nudgeRefs(t); const own = (t.upImgs && t.upImgs.length ? t.upImgs : t.imgs) || [], out = [];
   let cast = []; try{ cast = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.map(dressed); }catch(e){}
   for(const r of cast.concat(own)) if(r && r.id && !r.poseOf && !r.poseCh && !r.style && !out.some(x => x.id===r.id)) out.push(r); return out; }; // (🧍 a pose has no place in a finishing pass)
+// 🎯 Nudge toward a character (Jordan 2026-11-15: "select chips in the high quality pass sort of like an image2image … without the upscale …
+// nudge it toward a character we want"; "the character has the same hair color [as the pose picture] so it's defaulting to the reference
+// character … if I had the movement but not the reference image of the pose but did have the character reference I'd probably be able to get
+// it close"; "have the pose description still included just not the image"): a same-size pass whose only pictures are the picked people's
+// own (every one they have, up to 9, then their ✨/👗 attributes'), never a pose, action, style or shot picture; the clip itself is the motion
+const nudgeRefs = t => { const only = (t.up.only || []).map(Number), out = [];
+  let at = []; try{ at = castTake(Object.assign({}, t, {imgs:[]}), true).imgs.filter(r => r.attrOf && only.includes(+r.attrOf)); }catch(e){}
+  for(const n of only){ const c = castOf(n, t.film); if(!c) continue; for(const id of castPics(c)) if(S.media[id] && out.length < MAXREF.img && !out.some(x => x.id===id))
+    out.push(Object.assign({id, desc:castWho(c), more:castMoreT(c, t), keep:c.keep || 'exact', cast:n, kind:c.kind || 'char'}, fitOn(c, t) ? {fit:true} : {})); }
+  for(const r of at) if(out.length < MAXREF.img && !out.some(x => x.id===r.id)) out.push(r);
+  return out; };
+// the picked people's 🧍 card poses as words only (a pose chip in the words already falls back to its words when its picture isn't sent)
+const nudgePoseWords = t => { if(!t || !t.up || !Array.isArray(t.up.only)) return ''; const out = [];
+  for(const n of t.up.only.map(Number)){ const c = castOf(n, t.film); if(!c) continue;
+    for(const x of posesOf(c, t)){ const P = libOf(x.id), w = poseDesc(P) || (P && P.name ? poseName(P).toLowerCase() : ''); if(w) out.push('<Subject ' + n + '> ' + (P.when==='all' ? 'holds' : 'starts in') + ' this pose: ' + w + '.'); } }
+  return out.join(' '); };
 // ✨ model pick (Jordan 2026-11-08: "pikka could do better for some and I could do a face pass for Minimax later"): t.up.unet = a model
 // chosen in the High quality sheet; none = vanilla MiniMax as before. Matched by file name, so a PC that lacks it isn't sent the pass
 const upUnetOf = (t, oi, refs) => { const m = t && t.up && t.up.unet, bn = s => String(s).split(/[\\/]/).pop();
@@ -2834,7 +2850,7 @@ function upGraph(t, oi, names){
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0];
   // MiniMax snaps lengths up to its 17k+5 frame grid; a joined take usually isn't on it, so it is cut down to the grid first
   const lw = uls.map(l => (l.words || '').trim()).filter(Boolean).filter(w => !(u.prompt || t.prompt || '').includes(w)).join(', ');
-  const words = (lw ? lw + '. ' : '') + (u.prompt || t.prompt) + (u.qw && !(u.prompt || t.prompt || '').includes(u.qw) ? ' ' + u.qw : ''), length = part ? part.L : pre ? crop.L + pre : regenLen(t);
+  const npw = nudgePoseWords(t), words = (lw ? lw + '. ' : '') + (npw && !(u.prompt || t.prompt || '').includes(npw) ? npw + ' ' : '') + (u.prompt || t.prompt) + (u.qw && !(u.prompt || t.prompt || '').includes(u.qw) ? ' ' + u.qw : ''), length = part ? part.L : pre ? crop.L + pre : regenLen(t);
   // ✨ on Prism Pika = the render itself, started from the clip (Jordan 2026-11-12: "If the first pass does it almost perfectly, then why would
   // introducing the image with the same parameters but with the denoise turned down … be less accurate?"). It wasn't the same parameters:
   // ✨ wrote a plain prompt and sampled 5 euler steps from its own sigma list. A Pika pass now writes the prompt the H3 way like the render
@@ -4633,7 +4649,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:F / FPS, carry:null, combo:null, lead:null, toFilm:null, sm:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upPid:null, upErr:'', smoothed:fl, state:'working', reviewed:false, t0r:Date.now(),
-      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, unet:o.unet || '', qw:String(o.qw || '').trim(), refs:o.faces && o.faces.length ? true : o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, o.faces && o.faces.length && !big ? Object.assign({faces:o.faces.map(f => f.obj != null ? {n:+f.n, obj:+f.obj} : {n:+f.n, x:+f.x, y:+f.y}), find:o.find || '', zoom:!!o.zoom}, o.trk ? {trk:faceAB(src, o.trk.a, o.trk.b)} : {}) : {}, big ? {crop:{s0, L, pad, F}} : {part}, chn ? {chain:chn} : {}), upStage:'start',
+      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, ...(Array.isArray(o.only) ? {only:o.only.map(Number)} : {}), unet:o.unet || '', qw:String(o.qw || '').trim(), refs:o.faces && o.faces.length ? true : Array.isArray(o.only) ? o.only.length > 0 : o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, o.faces && o.faces.length && !big ? Object.assign({faces:o.faces.map(f => f.obj != null ? {n:+f.n, obj:+f.obj} : {n:+f.n, x:+f.x, y:+f.y}), find:o.find || '', zoom:!!o.zoom}, o.trk ? {trk:faceAB(src, o.trk.a, o.trk.b)} : {}) : {}, big ? {crop:{s0, L, pad, F}} : {part}, chn ? {chain:chn} : {}), upStage:'start',
       redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, wi:o.wi != null ? +o.wi : null, nudge:true, qp:!!o.qp, big, cin:(part.a - s0) / FPS, cout:(part.b - s0) / FPS, a:part.a, b:part.b, s0, L, F, Fout:big ? L : F},
       pieces:[{start:0, gen:big ? L : F, deliv:big ? L : F, ctx:0, prompt:text, state:'done', file:null}]});
     if(big) t.seconds = L / FPS; if(sd){ t.w = sd.w; t.h = sd.h; }
