@@ -93,6 +93,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(B.up.passes===1 && G.ks===1, 'one pass picked: one sampler: ' + G.ks);
   ok(G.imgs.join()==='a1.png,p1.png,p2.png' && G.up===0, 'Laura\'s pictures and her spiral-eyes picture, no pose picture: ' + G.imgs);
   ok(/red hair/i.test(G.p) && !/green eyes/.test(G.p) && /kneel/i.test(G.p), 'her words without green eyes, the pose\'s words kept: ' + G.p.slice(0, 600));
+  // 🫥 (Jordan 2026-11-15: ✨ made takes less NSFW) a person sent nude in the render stays nude in the pass; the picked model is the one loaded
+  ok(/<Subject 1> is nude|nude, wearing no clothing/.test(G.p) && G.unet.some(x => /prismPIKA/.test(x)), 'the nudge keeps her nude like the render, on Pika: ' + JSON.stringify(G.unet));
+  const HQ = await page.evaluate(([R, id]) => { const t0 = H3.S.takes.find(x => x.id===id), t = JSON.parse(JSON.stringify(t0)), names = {}; ['p1', 'p2', 'q1', 'q2', 'q3', 'k1', 'a1'].forEach(k => names[k] = k + '.png');
+    delete t.up.only; delete t.up.passes; t.id = 'tHQ'; const g = Object.values(H3.upGraph(t, H3.PC[R].oi, names).g), rv = g.find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
+    return {p:rv ? rv.inputs.prompt : '', unet:g.filter(n => n.class_type==='UNETLoader').map(n => n.inputs.unet_name)}; }, [R, B.id]);
+  ok(/is nude|nude, wearing no clothing/.test(HQ.p) && !/clothing in .* is kept/i.test(HQ.p) && HQ.unet.some(x => /prismPIKA/.test(x)), '✨ High quality on Pika loads Pika and keeps the render\'s nude line: ' + JSON.stringify(HQ.unet) + ' ' + HQ.p.slice(0, 400));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
