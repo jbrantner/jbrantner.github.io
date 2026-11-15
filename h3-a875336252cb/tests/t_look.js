@@ -58,6 +58,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   let X = await prom(); ok(!/visual style/.test(X.p) && X.imgs.length===3, 'off: no style words, the three pictures');
   ok(await page.evaluate(() => [...document.querySelectorAll('#lookBox [data-lk]')].map(b => b.textContent).join('|')).then(s => /Off\|Anna's look\|Ben's look\|Cat's look\|🖼 Style picture/.test(s)), 'the 🎨 row: Off, each character\'s look, a style picture');
   // Anna's look
+  await page.evaluate(() => ['bLook', 'bModel', 'bCanvas'].forEach(id => { H3.S.open[id] = true; document.getElementById(id).classList.remove('shut'); })); // these boxes start folded (declutter 2026-11-15)
   await page.click('[data-lk="c:1"]'); X = await prom();
   console.log(X.p.slice(X.p.indexOf('retention_analysis'), X.p.indexOf('overall_soundscape')));
   ok(/<Subject 1> \(appears in \[Shot 1\]\): fully_preserved - .*\. Its visual style is the look of the whole video\./.test(X.p) && /<Subject 2> \(appears in \[Shot 1\]\): fully_preserved - .*\. <Subject 2> is shown in the same visual style as <Subject 1>\./.test(X.p), "Anna's look: her retention sets it, Ben is shown in her style");
