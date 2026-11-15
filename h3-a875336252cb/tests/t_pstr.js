@@ -1,4 +1,4 @@
-// 🧍 Pose picture strength: the pose stand-in only in the first share of the steps (ConditioningSetTimestepRange + ConditioningCombine)
+// 🎚 Reference strength: a picture group only in the first share of the steps (ConditioningSetTimestepRange + ConditioningCombine)
 // Run: NODE_PATH=$(npm root -g) node tests/t_pstr.js
 const { chromium } = require('playwright');
 const path = require('path'), http = require('http'), fs = require('fs');
@@ -45,11 +45,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     H3.S.lines = H3.S.lines || {}; H3.S.lines[1] = {pose:1, n:1, lib:'Lk', p:-1, name:'Kneel', text:''};
     document.querySelector('#prompt').value = H3.S.f.prompt; H3.drawAll(); }, REF);
   await page.waitForTimeout(300);
-  ok(await page.evaluate(() => !document.querySelector('#pstrRow').hidden), 'the slider shows when a pose picture is in the shot');
+  ok(await page.evaluate(() => !document.querySelector('#rstrBox').hidden), 'the 🎚 box shows when the shot has pictures');
+  let rows = await page.evaluate(() => [...document.querySelectorAll('#rstrList [data-rs]')].map(x => x.dataset.rs + x.dataset.end + '=' + x.value));
+  ok(rows.join()==='c1s=0,c1e=100,ps=0,pe=100', 'Starts/Stops for Laura and for the pose picture, every step: ' + rows);
   let G = await graph();
   ok(G.n===1 && !G.combined && G.pics[0].length===3, 'at 100%: one reference node, 3 pictures: ' + JSON.stringify(G.pics));
-  await page.evaluate(() => { const s = document.querySelector('#pstr'); s.value = 40; s.dispatchEvent(new Event('input')); });
-  ok(await page.evaluate(() => H3.S.f.pstr===40 && H3.snapshot().pstr===0.4) && await page.textContent('#pstrOut')==='40%', 'slider sets 40% and the take keeps 0.4');
+  await page.evaluate(() => { const s = document.querySelector('#rstrList [data-rs="p"][data-end="e"]'); s.value = 40; s.dispatchEvent(new Event('input', {bubbles:true})); });
+  ok(await page.evaluate(() => H3.S.f.rstr.p.e===40 && JSON.stringify(H3.snapshot().rstr.p)==='[0,0.4]') && await page.textContent('[data-rso="p"]')==='first 40%', 'slider sets 40% and the take keeps 0.4');
   G = await graph();
   ok(G.n===2 && G.pics[0].length===3 && G.pics[1].length===3 && JSON.stringify(G.pics[1])===JSON.stringify(['fit0', 'fit1', 'fit0']), 'at 40%: a second node without the pose picture, her picture 1 again in its slot: ' + JSON.stringify(G.pics));
   ok(JSON.stringify(G.tr)==='[[0,0,0.4],[1,0.4,1]]' && G.combined && G.toGuider, 'with pose for 0-40%, without for 40-100%, combined into the guider: ' + JSON.stringify(G.tr) + ' ' + G.toGuider);
@@ -61,8 +63,25 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   // no pose picture → nothing changes, slider hidden
   await page.evaluate(() => { H3.S.f.prompt = '[0s-5s] <Subject 1> waits by the window.'; document.querySelector('#prompt').value = H3.S.f.prompt; H3.drawAll(); });
   G = await graph(); ok(G.n===1, 'no pose picture: one node');
-  ok(await page.evaluate(() => document.querySelector('#pstrRow').hidden), 'and no slider');
-  await page.evaluate(() => { const t = H3.snapshot(); t.pstr = 0; H3.useAgain(t, true); });
-  ok(await page.evaluate(() => H3.S.f.pstr===100), 'Use again restores 100%');
+  rows = await page.evaluate(() => [...document.querySelectorAll('#rstrList [data-rs]')].map(x => x.dataset.rs)); ok(rows.join()==='c1,c1', 'and no pose slider: ' + rows);
+  // a character at 60% and a second character: three stages, the later ones refilled with whoever is still on
+  await page.evaluate(() => { H3.S.media.q1 = {id:'q1', kind:'img', name:'q1.png', w:640, h:352, thumb:''}; H3.S.cast.push({n:2, kind:'char', who:'Mia', pics:['q1'], keep:'exact'});
+    H3.S.f.prompt = '[0s-5s] <Subject 1> and <Subject 2> wait by the window. <Pose 1>'; document.querySelector('#prompt').value = H3.S.f.prompt; H3.S.f.rstr = {p:{s:0, e:30}, c1:{s:0, e:60}}; H3.drawAll(); });
+  const G3 = await page.evaluate((R) => { const t = H3.snapshot(); t.id = 'tz'; t.pc = R; t.seed = 3; t.dir = 'H3Deck/x'; t.name = 'x';
+    const g = H3.pieceGraph(t, 0, H3.PC[R].oi, {p1:'p1.png', p2:'p2.png', q1:'q1.png', k1:'k1.png'}).g, N = Object.values(g), rvs = N.filter(n => n.class_type==='MiniMaxH3ReferenceToVideo');
+    return {n:rvs.length, k:rvs.map(r => Object.keys(r.inputs).filter(k => /^ref_images\./.test(k)).sort().map(k => r.inputs[k][1]).join('')), tr:N.filter(n => n.class_type==='ConditioningSetTimestepRange').map(n => [n.inputs.start, n.inputs.end]), cc:N.filter(n => n.class_type==='ConditioningCombine').length, p3:rvs[2] && rvs[2].inputs.prompt}; }, R);
+  ok(G3.n===3 && JSON.stringify(G3.tr)==='[[0,0.3],[0.3,0.6],[0.6,1]]' && G3.cc===2, 'three stages 0-30-60-100: ' + JSON.stringify(G3.tr));
+  ok(G3.k.join('|')==='0123|0120|2222', 'pictures per stage (fit outputs; 0,1 Laura, 2 Mia, 3 pose; freed slots to who is still on): ' + G3.k.join('|'));
+  ok(/Mia, as shown in <Picture 1>, <Picture 2>, <Picture 3> and <Picture 4>/.test(G3.p3) && !/Laura, as shown/.test(G3.p3), 'the last stage: Mia\'s pictures only, Laura by her words: ' + (G3.p3 || '').split('summary:')[0].slice(0, 300));
+  rows = await page.evaluate(() => [...document.querySelectorAll('#rstrList [data-rs]')].map(x => x.dataset.rs + x.dataset.end + '=' + x.value)); ok(rows.join()==='c1s=0,c1e=60,c2s=0,c2e=100,ps=0,pe=30', 'sliders: ' + rows);
+  // ▶ start late: Mia only from 50% on, the pose picture only 20-70%
+  await page.evaluate(() => { H3.S.f.rstr = {p:{s:20, e:70}, c2:{s:50, e:100}}; H3.drawAll(); });
+  const G4 = await page.evaluate((R) => { const t = H3.snapshot(); t.id = 'tw'; t.pc = R; t.seed = 3; t.dir = 'H3Deck/x'; t.name = 'x';
+    const g = H3.pieceGraph(t, 0, H3.PC[R].oi, {p1:'p1.png', p2:'p2.png', q1:'q1.png', k1:'k1.png'}).g, N = Object.values(g), rvs = N.filter(n => n.class_type==='MiniMaxH3ReferenceToVideo');
+    const tr = N.filter(n => n.class_type==='ConditioningSetTimestepRange'); return {tr:tr.map(n => [n.inputs.start, n.inputs.end, Object.keys(g[n.inputs.conditioning[0]].inputs).filter(k => /^ref_images\./.test(k)).sort().map(k => g[n.inputs.conditioning[0]].inputs[k][1]).join('')])}; }, R);
+  ok(JSON.stringify(G4.tr)==='[[0,0.2,"0101"],[0.2,0.5,"0103"],[0.5,0.7,"0123"],[0.7,1,"0120"]]', 'windows: 0-20 Laura only (her pictures in the free slots), 20-50 + pose, 50-70 all, 70-100 no pose: ' + JSON.stringify(G4.tr));
+  ok(await page.textContent('[data-rso="c2"]')==='from 50% on' && await page.textContent('[data-rso="p"]')==='20–70%', 'labels: ' + await page.textContent('[data-rso="p"]'));
+  await page.evaluate(() => { const t = H3.snapshot(); t.rstr = null; t.pstr = 0.4; H3.useAgain(t, true); });
+  ok(await page.evaluate(() => H3.rstrPct ? true : true) && await page.evaluate(() => JSON.stringify(H3.S.f.rstr))==='{"p":{"s":0,"e":40}}', 'Use again on an older take brings its pose strength back: ' + await page.evaluate(() => JSON.stringify(H3.S.f.rstr)));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
