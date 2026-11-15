@@ -253,6 +253,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
         <div id="srefBox" style="margin-top:8px"></div>
         <div id="startBox" style="margin-top:8px" hidden></div>
         <div class="chips tight" style="margin-top:8px"><button class="btn sm" id="ckBtn">🔎 Check prompt</button><button class="btn sm" id="ckChat">💬 Ask the checker</button><button class="btn sm" id="shufBtn">🔀 Shuffle: off</button><button class="btn sm" id="fillBtn">🔁 Fill spare slots: off</button></div>
+        <div id="pstrRow" hidden style="margin-top:8px"><div class="lab"><span>🧍 Pose picture strength</span><b id="pstrOut">100%</b></div><input type="range" id="pstr" min="10" max="100" step="5" value="100" style="width:100%"><div class="note" id="pstrNote"></div></div>
         <div id="ckOut" hidden style="margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px"></div>
         <p class="note" id="mqNote" hidden style="margin:4px 0 0"></p>
       </div>
@@ -763,7 +764,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide',
+const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide','ConditioningSetTimestepRange','ConditioningCombine',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
@@ -2513,6 +2514,25 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     }
     const rv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:avae, prompt, width:w, height:h, length:L, ref_image_size:'match'}, refs));
     cond = [rv, 0]; lat = [rv, 1];
+    const weak = t.pstr > 0 && t.pstr < 1 && oi.ConditioningSetTimestepRange && oi.ConditioningCombine ? imgs.map((r, k) => standIn(r) ? k : -1).filter(k => k >= 0) : [];
+    if(weak.length){ // 🧍 pose picture strength: the stand-in pictures only for the first share of the steps
+      // (Jordan 2026-11-15: "as you denoise the strength goes up for the character reference?"): the freed slots go to her pictures
+      // again (round robin, like 🔁 Fill spare slots) for the later steps, so she has more pictures exactly while her face is drawn
+      const keepI = imgs.map((r, k) => k).filter(k => !weak.includes(k)), r2 = {}, castI = keepI.filter(k => imgs[k].cast && !imgs[k].dup);
+      if(castI.length){ const by = {}, ord = []; castI.forEach(k => { const n = imgs[k].cast; if(!by[n]){ by[n] = []; ord.push(n); } by[n].push(k); });
+        const used = {}; castI.forEach(k => { const n = imgs[k].cast; used[n] = (used[n] || 0) + 1; }); const dups = [];
+        for(let j = 0; dups.length < weak.length; j++) for(const n of ord){ if(dups.length >= weak.length) break; dups.push(by[n][(used[n] + j) % by[n].length]); }
+        let at = 0; keepI.forEach((k, j) => { if(imgs[k].cast) at = j + 1; }); keepI.splice(at, 0, ...dups.map(k => -1 - k)); }
+      const src = k => k < 0 ? -1 - k : k, t2 = Object.assign({}, t, {imgs:keepI.filter(k => src(k) < t.imgs.length).map(k => k < 0 ? Object.assign({}, t.imgs[src(k)], {dup:true}) : t.imgs[k])});
+      keepI.forEach((k, j) => { r2['ref_images.ref_image_' + j] = refs['ref_images.ref_image_' + src(k)]; });
+      for(const [key, v] of Object.entries(refs)) if(!/^ref_images\./.test(key)) r2[key] = v;
+      const xf = extraFirst ? keepI.indexOf(imgs.length - 1) + 1 : 0, p2 = castText(shuffleWords(pc.prompt, shufSeed(t, i), shufOn(t, i) ? 1 : 0), t2, !t.h3), a2 = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + p2 + (say ? (/[.!?]\s*$/.test(p2) || !p2.trim() ? ' ' : '. ') + say : '');
+      let pr2 = (words ? words.replace(/[.\s]*$/, '. ') : '') + a2;
+      if(t.h3) pr2 = h3({text:a2, imgs:t2.imgs, firstPic:xf, first:!!useFirst, last:!!useLast}); else if(xf) pr2 = '<Picture ' + xf + '> is the first frame of this shot. ' + pr2;
+      if(!t.h3) pr2 += poseLine(t2.imgs, pc.start - LEAD(pc) / FPS, L / FPS);
+      const rv2 = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:avae, prompt:pr2, width:w, height:h, length:L, ref_image_size:'match'}, r2)), at = Math.round(t.pstr * 100) / 100;
+      const c1 = add('ConditioningSetTimestepRange', {conditioning:[rv, 0], start:0, end:at}), c2 = add('ConditioningSetTimestepRange', {conditioning:[rv2, 0], start:at, end:1});
+      cond = [add('ConditioningCombine', {conditioning_1:[c1, 0], conditioning_2:[c2, 0]}), 0]; }
     if(useFirst){ cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(t.first), frame_idx:0}), 0]; guides++; }
     if(useLast){ cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:img(t.lastImg), frame_idx:-1}), 0]; guides++; }
   }
@@ -3076,7 +3096,7 @@ function snapshot(){ // the form, frozen into a take
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:!sm && f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim()} : null,
-    look:sm ? null : lookSnap(), lines:lineSnap(f), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0, fill:!sm && f.fillRefs ? 1 : 0,
+    look:sm ? null : lookSnap(), lines:lineSnap(f), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0, fill:!sm && f.fillRefs ? 1 : 0, pstr:!sm && +f.pstr > 0 && +f.pstr < 100 ? +f.pstr / 100 : 0,
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -3421,7 +3441,7 @@ async function saveVideo(t){
   }catch(e){ if(e && e.name!=='AbortError') toast("Couldn't get it: " + e.message); }
 }
 function useAgain(t, quiet){
-  const f = S.f; if(t.lines){ S.lines = S.lines || {}; for(const [k, L] of Object.entries(t.lines)) S.lines[k] = Object.assign({}, L); } /* 💬 the take's own lines */ Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl && !t.startPic, first:t.startPic ? null : t.first, startPic:t.startPic || '', last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {})), fillRefs:!!t.fill});
+  const f = S.f; if(t.lines){ S.lines = S.lines || {}; for(const [k, L] of Object.entries(t.lines)) S.lines[k] = Object.assign({}, L); } /* 💬 the take's own lines */ Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl && !t.startPic, first:t.startPic ? null : t.first, startPic:t.startPic || '', last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {})), fillRefs:!!t.fill, pstr:t.pstr ? Math.round(t.pstr * 100) : 100});
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
     f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}})));
@@ -3653,7 +3673,7 @@ function drawCk(){ const out = $('#ckOut'), c = S.ck; if(!out) return; out.hidde
     + (c.keep ? '<button class="btn" data-ck="keep">Add to 🚫 Keep out</button>' : '') + '<button class="btn" data-ck="x">Close</button></div>';
   const ta = $('#ckAsk'); if(ta){ ta.oninput = e => { S.ckDraft = e.target.value; }; if(a0) ta.focus(); } }
 function ckSet(v){ const p = $('#prompt'); p.value = v; p.oninput({target:p}); }
-function h3Peek(){
+function h3Peek(){ try{ drawPstr(); }catch(e){}
   const f = S.f; if(!f.h3 || f.sm) return; let t; try{ t = snapshot(); }catch(e){ return; }
   const oi = S.pcs.map(p => pcOf(p.url).oi).filter(Boolean).find(o => resolveModel(o, f.model, f.turbo)), M = oi && resolveModel(oi, f.model, f.turbo), fl2v = M ? M.fl2v : /fl2v/.test(f.model || '');
   t = castTake(t, !fl2v);
@@ -4195,7 +4215,16 @@ $('#mocapX').onclick = () => { $('#mocapBox').hidden = true; MOCAP.err = ''; pin
 $('#ckBtn').onclick = () => checkPrompt();
 document.addEventListener('click', e => { const b = e.target.closest('.take [data-tm]'); if(!b) return; const id = b.dataset.tm, c = b.closest('.take'); if(TMORE.has(id)) TMORE.delete(id); else TMORE.add(id); c.classList.toggle('mopen', TMORE.has(id)); });
 document.addEventListener('click', e => { const p = e.target.closest('.take .pr[data-pr]'); if(!p) return; const id = p.dataset.pr; if(PROPEN.has(id)) PROPEN.delete(id); else PROPEN.add(id); p.classList.toggle('open', PROPEN.has(id)); });
-function drawFill(){ const b = $('#fillBtn'); if(!b) return; b.textContent = '🔁 Fill spare slots: ' + (S.f.fillRefs ? 'on' : 'off'); b.classList.toggle('pri', !!S.f.fillRefs); }
+// 🧍 Pose picture strength (Jordan 2026-11-15: "Is there any way to lessen the strength of a reference image?"): MiniMax has no weight per
+// picture. What it can do: the pose/action stand-in pictures are in the conditioning only for the first part of the steps (where the
+// layout and the body pose are decided); a second MiniMaxH3ReferenceToVideo without them (and with words for them) takes over for the
+// rest (where the face, hair and clothes are drawn), joined with ConditioningSetTimestepRange + ConditioningCombine, one sampler
+const standIn = r => !!(r && (r.poseOf || r.poseCh || r.actOf));
+function drawPstr(){ const row = $('#pstrRow'); if(!row) return; let on = false; try{ on = !S.f.sm && castTake({prompt:S.f.prompt || '', pieces:[], imgs:[], film:S.fkey, descOff:S.f.descOff}, true).imgs.some(standIn); }catch(e){}
+  row.hidden = !on; const v = +S.f.pstr > 0 ? +S.f.pstr : 100; $('#pstr').value = v; $('#pstrOut').textContent = v + '%';
+  $('#pstrNote').textContent = v >= 100 ? 'The pose picture is used for every step.' : 'The pose picture is only used for the first ' + v + '% of the steps (the body pose), then its words take over and its slot goes to her pictures again while her face, hair and clothes are drawn. Costs one more text-encoder pass.'; }
+function drawFill(){ drawPstr(); const b = $('#fillBtn'); if(!b) return; b.textContent = '🔁 Fill spare slots: ' + (S.f.fillRefs ? 'on' : 'off'); b.classList.toggle('pri', !!S.f.fillRefs); }
+$('#pstr').oninput = () => { S.f.pstr = +$('#pstr').value; save(); drawPstr(); };
 $('#fillBtn').onclick = () => { S.f.fillRefs = !S.f.fillRefs; save(); drawFill(); try{ h3Peek(); }catch(e){}
   toast(S.f.fillRefs ? '🔁 On: the pictures of the characters in the words go again (1, 2, 3, 1, 2, …) until all 9 slots are full. A pose picture still goes once. Each extra picture makes every step slower (9 instead of 4 ≈ 40% longer at 5 s), and copies stop where they would make the real pictures smaller.' : '🔁 Off: each picture goes once', 8000); };
 function drawShuf(){ const b = $('#shufBtn'); if(!b) return; const v = S.f.shuffle===2 ? 2 : S.f.shuffle ? 1 : 0; b.textContent = ['🔀 Randomize: off', '🔀 Randomize batch', '🔀 Randomize'][v]; b.classList.toggle('pri', v > 0); }
