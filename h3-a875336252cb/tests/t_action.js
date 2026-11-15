@@ -75,10 +75,14 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const snap = await page.evaluate(() => H3.snapshot().lines); ok(snap && snap[1] && snap[1].act && snap[1].text==='twirls twice', 'the take keeps its actions: ' + JSON.stringify(snap));
   // new action sheet offers earlier ones as quick picks; nobody in particular
   await page.click('#tagBar [data-acn]'); await page.waitForTimeout(150);
-  const book = await page.evaluate(() => [...document.querySelectorAll('#acBook [data-ab]')].map(b => b.textContent)); ok(book.includes('Twirl'), 'Your actions lists Twirl: ' + book);
+  await page.evaluate(() => { H3.S.lines[40] = {act:1, n:1, name:'Old gone one', text:'waves'}; }); await page.click('[data-close]'); await page.waitForTimeout(100); await page.click('#tagBar [data-acn]'); await page.waitForTimeout(150);
+  const book = await page.evaluate(() => [...document.querySelectorAll('#acBook [data-ab]')].map(b => b.textContent));
+  ok(book.join()==='Twirl', 'the picks are the Library\'s actions only (Twirl was kept there; an old chip not in the Library is not listed): ' + book);
+  ok(await page.evaluate(() => H3.S.lib.filter(x => x.kind==='act').map(x => x.name + '=' + x.what).join()==='Twirl=Spins slowly on the spot, her skirt flaring out.'), 'the new action was kept in the Library once');
+  ok(await page.evaluate(() => document.querySelector('#acKeep').textContent)==='📚 Keep it in the Library: on', 'Keep it in the Library is on for a new one');
   await page.click('#acBook [data-ab="0"]'); await page.click('#acWho [data-aw="0"]'); await page.click('#acGo'); await page.waitForTimeout(150);
   U = await page.evaluate(() => ({p:H3.S.f.prompt, o:H3.lineOut(H3.S.f.prompt)}));
-  ok(U.p==='Laura waits. <Action 1> <Action 6>' && U.o==='Laura waits. <Subject 2> twirls twice twirls twice', 'a chip tapped earlier never splits the new one; nobody in particular sends just the words: ' + JSON.stringify(U));
+  ok(U.p==='Laura waits. <Action 1> <Action 41>' && U.o==='Laura waits. <Subject 2> twirls twice Spins slowly on the spot, her skirt flaring out.' && await page.evaluate(() => H3.S.lib.filter(x => x.kind==='act').length===1), 'a chip tapped earlier never splits the new one; nobody in particular sends just the words: ' + JSON.stringify(U));
   // 🗑
   await page.evaluate(() => { const ta = document.querySelector('#prompt'); ta.focus(); ta.selectionStart = ta.selectionEnd = 16; ta.dispatchEvent(new MouseEvent('click', {bubbles:true})); }); await page.waitForTimeout(150);
   await page.click('#acRm'); await page.waitForTimeout(150);
