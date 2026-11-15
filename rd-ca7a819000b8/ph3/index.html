@@ -53,6 +53,7 @@ details{font-size:13px;color:var(--soft)}details pre{white-space:pre-wrap;font:1
   <div id="app"></div>
 </main>
 <input type="file" id="file" accept="image/*" hidden>
+<script src="h3i-prompts.js"></script>
 <script>
 // ✨ P-H3 Image (Jordan 2026-11-09: "let's try the better one… make a quick app UI for me to use the workflow").
 // Pruna's P-H3-Image (MiniMax H3 fine-tuned for still pictures) in one ComfyUI job, built like Comfy-Org's own templates
@@ -82,13 +83,24 @@ const FILES = {
   te:{label:'P-H3 text encoder', gb:5.1, kind:'text_encoders', url:PR + 'text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors'},
   up:{label:'P-H3 prompt writer', gb:6.7, kind:'text_encoders', url:PR + 'text_encoders/p-h3-image_prompt_upsampler_w4a8.safetensors'},
   vae:{label:'P-H3 VAE', gb:3.1, kind:'vae', url:PR + 'vae/p-h3-image_vae_int8_convrot.safetensors'}};
+// 🆕 MiniMax H3 Image (Jordan 2026-11-15: "build it"): MiniMax's own still-picture model (Nov 10 2026), not Pruna's. 33B DiT, 6 steps, CFG 1,
+// euler/simple, works at 4-20 MP (best ~16), up to 16 pictures. Files from Comfy-Org/MiniMax-H3-Image; w4a8 first (Render has 8 GB VRAM / 16 GB RAM).
+// The text encoder is the H3 video one (nvfp4 first, as H3 Deck); the prompt writer is Qwen 3.5 9B (MOSS already uses it).
+const CO = 'https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/';
+const FILES_I = {
+  unet:{label:'MiniMax H3 Image (w4a8)', gb:12.5, kind:'diffusion_models', url:CO + 'diffusion_models/minimax_h3_image_pruned_w4a8.safetensors'},
+  te:{label:'MiniMax H3 text encoder', gb:15.7, kind:'text_encoders', url:CO + 'text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors'},
+  up:{label:'Qwen 3.5 9B prompt writer', gb:7.3, kind:'text_encoders', url:CO + 'text_encoders/qwen3.5_9b_w4a8_gptq.safetensors'},
+  vae:{label:'H3 Image VAE', gb:1.2, kind:'vae', url:CO + 'vae/minimax_h3_image_vae_fp16.safetensors'}};
+const MODELS = {ph3:{name:'✨ P-H3', mps:[[2, 'quick'], [4, 'default'], [8, 'best, slow']]}, h3i:{name:'🆕 H3 Image', mps:[[4, 'default'], [8, ''], [16, 'best, very slow']]}};
+const isI = () => S.model==='h3i', filesOf = m => m==='h3i' ? FILES_I : FILES;
 const SIGMAS = '1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0';
 const RATIOS = [['1:1', 1], ['4:3', 4/3], ['3:4', 3/4], ['3:2', 3/2], ['2:3', 2/3], ['16:9', 16/9], ['9:16', 9/16]];
 // a canvas of about mp megapixels (ComfyUI's: 1024², as its Resolution Selector) at that ratio, sides multiples of 32 (8 MP 4:3 = 3360x2496 as Pruna's table)
 function canvasOf(ratio, mp){ const r = (RATIOS.find(x => x[0]===ratio) || RATIOS[0])[1], a = mp * 1048576; return [Math.round(Math.sqrt(a * r) / 32) * 32, Math.round(Math.sqrt(a / r) / 32) * 32]; }
 const nearRatio = (w, h) => RATIOS.reduce((b, x) => Math.abs(Math.log(x[1] / (w / h))) < Math.abs(Math.log(b[1] / (w / h))) ? x : b)[0];
 // ---- what's on screen (kept on this phone)
-const S = Object.assign({mode:'edit', prompt:'', auto:true, ratio:'3:4', mp:4, pics:[], seed:0, keepSeed:false, pc:'', count:1, jobs:[], cur:null, lib:[]}, get(KEY, {}));
+const S = Object.assign({model:'ph3', mode:'edit', prompt:'', auto:true, ratio:'3:4', mp:4, pics:[], seed:0, keepSeed:false, pc:'', count:1, jobs:[], cur:null, lib:[]}, get(KEY, {}));
 if(S.job){ S.jobs = (S.jobs || []).concat([Object.assign({n:1, i:0}, S.job)]); delete S.job; } // (a job from before batches)
 let MSG = '', BAD = false, BUSY = false, KIT = {}, NEED = null, GETTING = false;
 const keep = () => put(KEY, S);
@@ -96,19 +108,26 @@ const keep = () => put(KEY, S);
 const optsOf = spec => !spec ? [] : Array.isArray(spec[0]) ? spec[0] : spec[0]==='COMBO' ? (spec[1] && spec[1].options) || [] : [];
 const comboIn = (def, f) => { const i = def && def.input || {}; return optsOf((i.required || {})[f] || (i.optional || {})[f]); };
 async function nodeDefs(url, list){ const r = await fetch(url + '/object_info', {cache:'no-store'}); if(!r.ok) throw new Error(r.status); const j = await r.json(); return Object.fromEntries(list.map(c => [c, j[c] || null])); }
-async function kitOf(url){ const d = await nodeDefs(url, ['PH3ImageConditioning', 'TextGenerateV2', 'MiniMaxH3SigmaShift', 'ManualSigmas', 'UNETLoader', 'LoraLoaderModelOnly', 'CLIPLoader', 'VAELoader', 'ImageScaleToTotalPixels']);
+async function kitOf(url){ const d = await nodeDefs(url, ['PH3ImageConditioning', 'TextGenerateV2', 'MiniMaxH3SigmaShift', 'ManualSigmas', 'UNETLoader', 'LoraLoaderModelOnly', 'CLIPLoader', 'VAELoader', 'ImageScaleToTotalPixels',
+    'MiniMaxH3ImageConditioning', 'JsonExtractString', 'ConditioningZeroOut', 'KSampler']);
   const unets = comboIn(d.UNETLoader, 'unet_name'), loras = comboIn(d.LoraLoaderModelOnly, 'lora_name'), clips = comboIn(d.CLIPLoader, 'clip_name'), vaes = comboIn(d.VAELoader, 'vae_name');
   const pick = (l, re, pref) => { const m = l.filter(n => re.test(n.replace(/\\/g, '/'))); for(const p of pref || []){ const f = m.find(n => p.test(n)); if(f) return f; } return m[0] || ''; };
   const own = pick(unets, /p-h3-image_[^/]*\.safetensors$/i, [/int8/i, /w4a8/i]);
-  return {url, ok:!!(d.PH3ImageConditioning && d.TextGenerateV2 && d.MiniMaxH3SigmaShift && d.ManualSigmas), up2:!!d.TextGenerateV2, scale:!!d.ImageScaleToTotalPixels,
+  // 🆕 H3 Image's own kit (k.h3i): its model, the H3 encoder, Qwen 3.5 9B writer, its VAE
+  const h3i = {ok:!!(d.MiniMaxH3ImageConditioning && d.TextGenerateV2 && d.JsonExtractString && d.ConditioningZeroOut && d.KSampler), scale:!!d.ImageScaleToTotalPixels,
+    unet:pick(unets, /minimax_h3_image_pruned[^/]*\.safetensors$/i, [/w4a8/i, /int8/i]), te:pick(clips, /qwen3vl_32b_minimax_h3/i, [/nvfp4/i, /int8/i]),
+    up:pick(clips, /qwen3\.?5.*9b/i, [/w4a8/i, /int8/i]), vae:pick(vaes, /minimax_h3_image_vae/i)};
+  return {url, h3i, ok:!!(d.PH3ImageConditioning && d.TextGenerateV2 && d.MiniMaxH3SigmaShift && d.ManualSigmas), up2:!!d.TextGenerateV2, scale:!!d.ImageScaleToTotalPixels,
     unet:own || pick(unets, /fl2va.*(pruned.*int8|int8.*pruned)|minimaxH3INT8INT4_fl2va/i, [/convrot/i]), own:!!own,
     lora:pick(loras, /p-h3-image_lora/i), te:pick(clips, /p-h3-image_text_encoder/i, [/int8/i, /w4a8/i]), up:pick(clips, /p-h3-image_prompt_upsampler/i, [/w4a8/i, /int8/i]), vae:pick(vaes, /p-h3-image_vae/i, [/int8/i])}; }
-const missingOf = k => ['unet', 'lora', 'te', 'up', 'vae'].filter(x => x==='lora' ? !k.own && !k.lora : !k[x]).filter(x => x!=='up' || S.auto);
+// km: a PC's kit for the model picked (P-H3's fields, or H3 Image's own)
+const km = k => !k || k.off || !isI() ? k : Object.assign({url:k.url}, k.h3i || {ok:false});
+const missingOf = k => (isI() ? ['unet', 'te', 'up', 'vae'] : ['unet', 'lora', 'te', 'up', 'vae']).filter(x => x==='lora' ? !k.own && !k.lora : !k[x]).filter(x => x!=='up' || S.auto);
 async function scan(){ const out = {}; await Promise.all(deckServers().map(async s => { try{ out[s.url] = await kitOf(s.url); }catch(e){ out[s.url] = {url:s.url, off:true}; } })); KIT = out; return out; }
 // the PCs a batch can use: every one that's on with P-H3 and all its files (Render first), or just the one picked
-function readyPcs(){ const l = deckServers().map(s => KIT[s.url]).filter(k => k && !k.off && k.ok && !missingOf(k).length); return S.pc ? l.filter(k => k.url===S.pc) : l; }
-function bestPc(){ const l = deckServers().map(s => KIT[s.url]).filter(k => k && !k.off);
-  if(S.pc && KIT[S.pc] && !KIT[S.pc].off) return KIT[S.pc];
+function readyPcs(){ const l = deckServers().map(s => km(KIT[s.url])).filter(k => k && !k.off && k.ok && !missingOf(k).length); return S.pc ? l.filter(k => k.url===S.pc) : l; }
+function bestPc(){ const l = deckServers().map(s => km(KIT[s.url])).filter(k => k && !k.off);
+  if(S.pc && KIT[S.pc] && !KIT[S.pc].off) return km(KIT[S.pc]);
   return l.find(k => k.ok && !missingOf(k).length) || l.find(k => k.ok) || l[0] || null; }
 // ---- pictures: shrunk on the phone to at most 8.4 MP (P-H3 scales anything above that down anyway) and kept as JPEG
 function shrink(file){ return new Promise((ok, no) => { const u = URL.createObjectURL(file), im = new Image();
@@ -148,6 +167,29 @@ function graph(k, o){ const g = {}; let n = 0; const add = (cls, inputs) => { co
   const sv = add('SaveImage', {images:[add('VAEDecode', {samples:[s, 0], vae}), 0], filename_prefix:PRE});
   const pv = up ? add('PreviewAny', {source:[up, 0]}) : null;
   return {g, sv, pv, up}; }
+// 🆕 H3 Image's job, as Comfy-Org's templates image_minimax_h3_image_edit / image_minimax_h3_image_t2i (ComfyUI 0.45):
+//   UNETLoader minimax_h3_image_pruned_* → KSampler (6 steps, CFG 1, euler, simple) ← MiniMaxH3ImageConditioning (H3 encoder + its VAE,
+//   images.image_N, canvas) / ConditioningZeroOut as the negative → VAEDecode → SaveImage RenderDeck/ph3/h3i.
+//   Auto prompt: the template's own writer texts (h3i-prompts.js) with the request in → TextGenerateV2 (Qwen 3.5 9B, thinking on, 8192)
+//   → JsonExtractString expanded_caption → the conditioning; PreviewAny sends the caption back.
+function graphI(k, o){ const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs}; return id; };
+  const model = [add('UNETLoader', {unet_name:k.unet, weight_dtype:'default'}), 0];
+  const clip = [add('CLIPLoader', {clip_name:k.te, type:'minimax', device:'default'}), 0], vae = [add('VAELoader', {vae_name:k.vae}), 0];
+  const imgs = o.pics.map((f, i) => { let im = [add('LoadImage', {image:f}), 0];
+    if(i===0 && k.scale) im = [add('ImageScaleToTotalPixels', {image:im, upscale_method:'lanczos', megapixels:o.mp, resolution_steps:32}), 0];
+    return im; });
+  let prompt = o.text, cap = null;
+  if(o.auto){ const P = window.H3I_PE || {}, req = imgs.length ? o.text : 'Aspect ratio ' + o.ratio + '. ' + o.text;
+    const ti = {clip:[add('CLIPLoader', {clip_name:k.up, type:'minimax', device:'default'}), 0], system_prompt:P.sys || '', prompt:String(imgs.length ? P.edit : P.t2i).split('{input text}').join(req),
+      max_length:8192, sampling_mode:'off', thinking:true, use_default_template:true, mtp:'auto'};
+    imgs.forEach((im, i) => ti['images.image' + (i + 1)] = im);
+    cap = add('JsonExtractString', {json_string:[add('TextGenerateV2', ti), 0], key:'expanded_caption'}); prompt = [cap, 0]; }
+  const ci = {clip, vae, prompt, width:o.w || 0, height:o.h || 0}; imgs.forEach((im, i) => ci['images.image_' + (i + 1)] = im);
+  const cond = add('MiniMaxH3ImageConditioning', ci), neg = add('ConditioningZeroOut', {conditioning:[cond, 0]});
+  const s = add('KSampler', {model, positive:[cond, 0], negative:[neg, 0], latent_image:[cond, 1], seed:o.seed, steps:6, cfg:1, sampler_name:'euler', scheduler:'simple', denoise:1});
+  const sv = add('SaveImage', {images:[add('VAEDecode', {samples:[s, 0], vae}), 0], filename_prefix:PRE.replace(/ph3$/, 'h3i')});
+  const pv = cap ? add('PreviewAny', {source:[cap, 0]}) : null;
+  return {g, sv, pv, up:cap}; }
 async function send(url, g){ const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:g, client_id:CID})}), j = await r.json().catch(() => ({}));
   if(!r.ok || !j.prompt_id) throw new Error(pcName(url) + ' turned it down: ' + JSON.stringify(j.node_errors && Object.keys(j.node_errors).length ? j.node_errors : j.error || j).slice(0, 400)); return j.prompt_id; }
 // live progress (each PC's websocket): which node, step N of 8, per job
@@ -155,7 +197,7 @@ const WSS = {}, PROGS = {};
 function listen(url){ const w0 = WSS[url]; if(w0 && w0.readyState < 2) return; try{ const ws = WSS[url] = new WebSocket(url.replace(/^http/, 'ws') + '/ws?clientId=' + CID);
   ws.onmessage = e => { if(typeof e.data!=='string') return; let m; try{ m = JSON.parse(e.data); }catch(x){ return; } const d = m.data || {}, J = S.jobs.find(j => j.pid===d.prompt_id); if(!J) return;
     if(m.type==='executing' && d.node){ PROGS[J.pid] = {node:d.node, v:0, max:0}; showProg(); } if(m.type==='progress'){ PROGS[J.pid] = {node:d.node || (PROGS[J.pid] || {}).node, v:d.value, max:d.max}; showProg(); } }; }catch(e){} }
-const stepName = (J, id) => { const c = J && J.cls && J.cls[id]; return c==='TextGenerateV2' ? 'writing the prompt' : c==='SamplerCustomAdvanced' ? 'drawing' : c==='VAEDecode' ? 'finishing' : /Loader/.test(c || '') ? 'loading the model' : c==='PH3ImageConditioning' ? 'reading the pictures' : 'working'; };
+const stepName = (J, id) => { const c = J && J.cls && J.cls[id]; return c==='TextGenerateV2' ? 'writing the prompt' : c==='SamplerCustomAdvanced' || c==='KSampler' ? 'drawing' : c==='VAEDecode' ? 'finishing' : /Loader/.test(c || '') ? 'loading the model' : /ImageConditioning$/.test(c || '') ? 'reading the pictures' : 'working'; };
 async function poll(J){ const t0 = Date.now(), url = J.pc;
   for(;;){ await new Promise(r => setTimeout(r, window.PH3_POLL || 2000)); let it = null;
     try{ const h = await (await fetch(url + '/history/' + J.pid, {cache:'no-store'})).json(); it = h[J.pid]; }catch(e){ J.note = 'lost touch, still trying'; continue; }
@@ -172,20 +214,20 @@ async function poll(J){ const t0 = Date.now(), url = J.pc;
 // dealt round the PCs that have P-H3 (Render, Main…); each PC's ComfyUI queue takes its share one after another
 async function make(){ if(BUSY) return; const text = S.prompt.trim(); BAD = false;
   if(!text){ say('Say what you want first.', true); return; } if(S.mode==='edit' && !S.pics.length){ say('Add Picture 1, the one to change.', true); return; }
-  BUSY = true; say('Looking for PCs with P-H3…');
+  BUSY = true; const MN = isI() ? 'H3 Image' : 'P-H3'; say('Looking for PCs with ' + MN + '…');
   try{ await scan(); const pcs = readyPcs();
     if(!pcs.length){ const k = bestPc(); if(!k || k.off) throw new Error('No PC answered. Is ComfyUI running on Render, and Tailscale on on this phone?');
-      if(!k.ok) throw new Error(pcName(k.url) + "'s ComfyUI is too old for P-H3 (it needs 0.44.0 or newer). Update ComfyUI there.");
-      const miss = missingOf(k); NEED = {pc:k.url, keys:miss}; throw new Error(pcName(k.url) + ' is missing ' + miss.map(x => FILES[x].label).join(', ') + '. Get them below (once).'); }
+      if(!k.ok) throw new Error(pcName(k.url) + "'s ComfyUI is too old for " + MN + ' (it needs ' + (isI() ? '0.45.0' : '0.44.0') + ' or newer). Update ComfyUI there.');
+      const miss = missingOf(k); NEED = {pc:k.url, keys:miss, model:S.model}; throw new Error(pcName(k.url) + ' is missing ' + miss.map(x => filesOf(S.model)[x].label).join(', ') + '. Get them below (once).'); }
     numbered(); const n = Math.max(1, Math.min(8, S.count || 1)), use = pcs.slice(0, n), pics = {};
     if(S.mode==='edit') for(const k of use){ pics[k.url] = []; for(const p of S.pics){ say('Sending Picture ' + p.n + ' to ' + pcName(k.url) + '…'); pics[k.url].push(await upload(k.url, p)); } }
     const seed0 = S.keepSeed && S.seed ? S.seed : Math.floor(Math.random() * 2 ** 48);
     let w = 0, h = 0, ratio = S.ratio; if(S.mode==='make') [w, h] = canvasOf(S.ratio, S.mp); else { const p = S.pics[0], f = Math.sqrt(S.mp * 1048576 / (p.w * p.h)); ratio = nearRatio(p.w, p.h); w = Math.max(32, Math.round(p.w * f / 32) * 32); h = Math.max(32, Math.round(p.h * f / 32) * 32); }
     const recPics = S.mode==='edit' ? S.pics.map(p => ({id:p.id, n:p.n, w:p.w, h:p.h, thumb:p.thumb, up:p.up, src:p.src})) : [], t0 = Date.now(), batch = 'b' + t0.toString(36);
-    for(let i = 0; i < n; i++){ const k = use[i % use.length], seed = (seed0 + i) % 2 ** 48, {g, sv, pv} = graph(k, {text, auto:S.auto, ratio, mp:S.mp, w, h, pics:pics[k.url] || [], seed});
+    for(let i = 0; i < n; i++){ const k = use[i % use.length], seed = (seed0 + i) % 2 ** 48, {g, sv, pv} = (isI() ? graphI : graph)(k, {text, auto:S.auto, ratio, mp:S.mp, w, h, pics:pics[k.url] || [], seed});
       window.LASTG = g; say('Starting ' + (i + 1) + ' of ' + n + ' on ' + pcName(k.url) + '…'); listen(k.url);
       S.jobs.push({pc:k.url, pid:await send(k.url, g), sv, pv, t0, i, n, batch, cls:Object.fromEntries(Object.entries(g).map(([j, x]) => [j, x.class_type])),
-        rec:{mode:S.mode, prompt:text, auto:S.auto, ratio, mp:S.mp, seed, pics:recPics}}); keep(); }
+        rec:{model:S.model, mode:S.mode, prompt:text, auto:S.auto, ratio, mp:S.mp, seed, pics:recPics}}); keep(); }
     S.seed = seed0; MSG = ''; keep(); draw(); await finishAll(); }
   catch(e){ say(e.message || String(e), true); }
   BUSY = false; draw(); }
@@ -204,7 +246,7 @@ function finishAll(){ if(WAITING) return WAITING; if(!S.jobs.length) return Prom
   return WAITING; }
 // ---- downloads through Render Deck's helper (one after another; it shows the % while it goes)
 async function getFiles(){ const N = NEED; if(!N || GETTING) return; GETTING = true; draw(); const u = N.pc;
-  try{ for(const key of N.keys){ const f = FILES[key], name = f.url.split('/').pop(); say('Asking ' + pcName(u) + ' to download ' + f.label + '…');
+  try{ for(const key of N.keys){ const f = filesOf(N.model)[key], name = f.url.split('/').pop(); say('Asking ' + pcName(u) + ' to download ' + f.label + '…');
       const r = await fetch(u + '/renderdeck/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:f.url, kind:f.kind})}), j = await r.json().catch(() => ({}));
       if((!r.ok || j.error) && !/exist|already/i.test(j.error || '')) throw new Error(r.status===404 ? pcName(u) + " hasn't got Render Deck's helper." : 'The ' + f.label + ' download was turned down: ' + (j.error || r.status));
       if(!r.ok) continue;
@@ -235,33 +277,36 @@ function resultHtml(r){ const src = viewOf(r), sib = r.batch ? S.lib.filter(x =>
   return `<div class="card"><h2>Result${sib.length > 1 ? ' ' + (sib.length - sib.indexOf(r)) + ' of ' + sib.length : ''}</h2>
     <div class="res" id="res"><img src="${esc(src)}" alt="The result" id="resimg"></div>
     ${sib.length > 1 ? `<div class="lib" style="grid-template-columns:repeat(4,1fr)">${sib.slice().reverse().map(x => `<button data-open="${x.id}" aria-label="Open"${x===r ? ' style="border-color:var(--accent)"' : ''}><img loading="lazy" src="${esc(viewOf(x))}" alt=""></button>`).join('')}</div>` : ''}
-    <p class="note">${esc(r.mode==='edit' ? 'Edit' : 'New picture')} · ${r.secs || '?'} s on ${esc(pcName(r.pc))} · seed ${r.seed}${r.auto ? ' · auto prompt' : ''}</p>
+    <p class="note">${r.model==='h3i' ? '🆕 H3 Image · ' : ''}${esc(r.mode==='edit' ? 'Edit' : 'New picture')} · ${r.secs || '?'} s on ${esc(pcName(r.pc))} · seed ${r.seed}${r.auto ? ' · auto prompt' : ''}</p>
     ${r.up ? `<details><summary>The prompt it wrote</summary><pre>${esc(r.up)}</pre></details>` : ''}
     <div class="row"><button id="useit">✏ Edit this</button><button id="again">↻ Again</button><a class="btn" style="justify-content:center" href="${esc(src)}" target="_blank" rel="noopener">⬇ Open</a></div></div>`; }
 function draw(){ const el = $('#app'); numbered(); const r = curRec(), J = S.jobs.length;
-  let h = `<div class="card"><div class="chips" role="group" aria-label="What to do"><button data-mode="edit" aria-pressed="${S.mode==='edit'}">✏ Edit a picture</button><button data-mode="make" aria-pressed="${S.mode==='make'}">🎨 New picture</button></div>`;
-  if(S.mode==='edit'){ h += `<div class="lbl">Picture 1 is the one that changes. Pictures 2–9 are references; name them in the request ("the jacket from Picture 2").</div><div class="pics">`
+  const M = MODELS[S.model] || MODELS.ph3; if(!M.mps.some(x => x[0]===S.mp)) S.mp = 4;
+  let h = `<div class="card"><div class="chips" role="group" aria-label="Model">${Object.entries(MODELS).map(([id, m]) => `<button data-model="${id}" aria-pressed="${S.model===id}">${m.name}</button>`).join('')}</div>
+    ${isI() ? `<p class="note">MiniMax's own H3 Image model: 6 steps, up to 16 pictures. It needs 4 MP or more to look right.</p>` : ''}
+    <div class="chips" role="group" aria-label="What to do"><button data-mode="edit" aria-pressed="${S.mode==='edit'}">✏ Edit a picture</button><button data-mode="make" aria-pressed="${S.mode==='make'}">🎨 New picture</button></div>`;
+  if(S.mode==='edit'){ h += `<div class="lbl">Picture 1 is the one that changes. Pictures 2–${isI() ? 16 : 9} are references; name them in the request ("the jacket from Picture 2").</div><div class="pics">`
       + S.pics.map((p, i) => `<div class="pic${i ? '' : ' one'}"><img src="${esc(p.thumb)}" alt="Picture ${p.n}"><b>${p.n}</b><button class="x" data-del="${i}" aria-label="Remove Picture ${p.n}">✕</button></div>`).join('')
-      + (S.pics.length < 9 ? `<button class="pic add" id="addpic" aria-label="Add a picture">＋</button>` : '') + `</div>`; }
+      + (S.pics.length < (isI() ? 16 : 9) ? `<button class="pic add" id="addpic" aria-label="Add a picture">＋</button>` : '') + `</div>`; }
   else h += `<div class="lbl">Shape</div><div class="chips" role="group">${RATIOS.map(([k]) => `<button data-ratio="${k}" aria-pressed="${S.ratio===k}">${k}</button>`).join('')}</div>`;
   h += `<textarea id="prompt" placeholder="${S.mode==='edit' ? 'What to change, e.g. make it night time, keep everything else the same' : 'What to draw: start with what the picture is, then the details'}">${esc(S.prompt)}</textarea>
     <div class="lbl">Size ${S.mode==='make' ? '(' + canvasOf(S.ratio, S.mp).join('×') + ')' : '(Picture 1 is drawn at this size)'}</div>
-    <div class="chips" role="group">${[2, 4, 8].map(m => `<button data-mp="${m}" aria-pressed="${S.mp===m}">${m} MP${m===4 ? ' · default' : m===8 ? ' · best, slow' : ' · quick'}</button>`).join('')}</div>
-    <div class="tog"><span>Auto prompt<small>Pruna's prompt writer expands your request first. Turn it off to send your words as they are.</small></span><button class="sw" id="auto" aria-pressed="${S.auto}" aria-label="Auto prompt"></button></div>
+    <div class="chips" role="group">${M.mps.map(([m, t]) => `<button data-mp="${m}" aria-pressed="${S.mp===m}">${m} MP${t ? ' · ' + t : ''}</button>`).join('')}</div>
+    <div class="tog"><span>Auto prompt<small>${isI() ? 'Qwen 3.5 writes the full description first, with MiniMax\'s own instructions (slower: it thinks first).' : 'Pruna\'s prompt writer expands your request first.'} Turn it off to send your words as they are.</small></span><button class="sw" id="auto" aria-pressed="${S.auto}" aria-label="Auto prompt"></button></div>
     <div class="tog"><span>Keep the seed<small>${S.seed ? 'Last seed ' + S.seed : 'A new seed each time'}</small></span><button class="sw" id="kseed" aria-pressed="${S.keepSeed}" aria-label="Keep the seed"></button></div>
     <div class="lbl">How many${readyPcs().length > 1 && !S.pc ? ' (shared between ' + readyPcs().map(k => pcName(k.url)).join(' and ') + ')' : ''}</div>
     <div class="chips" role="group">${[1, 2, 3, 4, 6, 8].map(c => `<button data-count="${c}" aria-pressed="${(S.count || 1)===c}">${c}</button>`).join('')}</div>
     <div class="lbl">PC</div><div class="chips" role="group"><button data-pc="" aria-pressed="${!S.pc}">Auto</button>${deckServers().map(s => `<button data-pc="${esc(s.url)}" aria-pressed="${S.pc===s.url}">${esc(s.name || pcName(s.url))}</button>`).join('')}</div>
     <button class="go" id="make" ${BUSY ? 'disabled' : ''}>${J ? 'Making ' + J + '…' : '✨ Make ' + ((S.count || 1) > 1 ? S.count + ' pictures' : 'it')}</button>
     <div class="bar" id="bar" hidden><i></i></div><p id="msg"></p>
-    ${NEED ? `<div class="need"><span>${esc(pcName(NEED.pc))} needs ${esc(NEED.keys.map(x => FILES[x].label + ' (' + FILES[x].gb + ' GB)').join(', '))}.</span><button id="getb" ${GETTING ? 'disabled' : ''}>⬇ Get them on ${esc(pcName(NEED.pc))}</button></div>` : ''}</div>`;
+    ${NEED ? `<div class="need"><span>${esc(pcName(NEED.pc))} needs ${esc(NEED.keys.map(x => filesOf(NEED.model)[x].label + ' (' + filesOf(NEED.model)[x].gb + ' GB)').join(', '))}.</span><button id="getb" ${GETTING ? 'disabled' : ''}>⬇ Get them on ${esc(pcName(NEED.pc))}</button></div>` : ''}</div>`;
   if(r) h += resultHtml(r);
   if(S.lib.length) h += `<div class="card"><h2>📚 Made here (${S.lib.length})</h2><div class="lib">${S.lib.map(x => `<button data-open="${x.id}" aria-label="Open"><img loading="lazy" src="${esc(viewOf(x))}" alt=""></button>`).join('')}</div>
     ${r ? '<button id="forget">🗑 Take this one off the list</button>' : ''}</div>`;
   el.innerHTML = h; showProg(); wire(); }
 function wire(){ const on = (s, f, ev) => { const e = $(s); if(e) e[ev || 'onclick'] = f; };
   $('#app').onclick = e => { const b = e.target.closest('button'); if(!b) return; const d = b.dataset;
-    if(d.mode){ S.mode = d.mode; keep(); draw(); } else if(d.ratio){ S.ratio = d.ratio; keep(); draw(); } else if(d.mp){ S.mp = +d.mp; keep(); draw(); } else if(d.count){ S.count = +d.count; keep(); draw(); }
+    if(d.model){ S.model = d.model; NEED = null; keep(); draw(); afterScan(); } else if(d.mode){ S.mode = d.mode; keep(); draw(); } else if(d.ratio){ S.ratio = d.ratio; keep(); draw(); } else if(d.mp){ S.mp = +d.mp; keep(); draw(); } else if(d.count){ S.count = +d.count; keep(); draw(); }
     else if(d.pc!==undefined){ S.pc = d.pc; NEED = null; keep(); draw(); } else if(d.del!==undefined){ S.pics.splice(+d.del, 1); keep(); draw(); }
     else if(d.open){ S.cur = d.open; keep(); draw(); scrollTo({top:$('#res') ? $('#res').closest('.card').offsetTop - 8 : 0, behavior:'smooth'}); } };
   on('#addpic', () => $('#file').click()); on('#make', make); on('#getb', getFiles);
@@ -273,13 +318,17 @@ function wire(){ const on = (s, f, ev) => { const e = $(s); if(e) e[ev || 'oncli
 function useIt(){ const r = curRec(); if(!r) return; const img = $('#resimg');
   const p = {id:'r' + Date.now().toString(36), w:img && img.naturalWidth || 1024, h:img && img.naturalHeight || 1024, thumb:img && img.complete && img.naturalWidth ? (() => { try{ return thumbOf(img); }catch(e){ return viewOf(r); } })() : viewOf(r), src:{pc:r.pc, file:r.file, sub:r.sub, type:'output'}};
   S.pics = [p].concat(S.pics.slice(1)); S.mode = 'edit'; S.prompt = ''; keep(); draw(); scrollTo({top:0, behavior:'smooth'}); }
-function again(){ const r = curRec(); if(!r) return; S.mode = r.mode; S.prompt = r.prompt; S.auto = r.auto; S.mp = r.mp || S.mp; if(r.mode==='make') S.ratio = r.ratio;
+function again(){ const r = curRec(); if(!r) return; S.model = r.model || 'ph3'; S.mode = r.mode; S.prompt = r.prompt; S.auto = r.auto; S.mp = r.mp || S.mp; if(r.mode==='make') S.ratio = r.ratio;
   else if(r.pics && r.pics.length) S.pics = r.pics.map(p => Object.assign({}, p)); keep(); draw(); make(); }
 $('#file').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if(!f) return;
   try{ const s = await shrink(f), id = Math.random().toString(36).slice(2, 10); BLOBS[id] = s.blob; S.pics.push({id, w:s.w, h:s.h, thumb:s.thumb}); keep(); draw(); }catch(x){ say(x.message, true); } };
 draw();
 // a job that was running when the page closed carries on
 if(S.jobs.length) finishAll();
-scan().then(() => { draw(); const k = bestPc(); if(k && !BUSY && !S.jobs.length){ if(k.off) say("Can't reach the PCs. Is ComfyUI running on Render, and Tailscale on on this phone?", true); else if(!k.ok) say(pcName(k.url) + "'s ComfyUI is too old for P-H3 (it needs 0.44.0 or newer).", true); else { const m = missingOf(k); if(m.length){ NEED = {pc:k.url, keys:m}; draw(); } } } }).catch(() => {});
+// after a scan (and when the model changes): say if the PC can't do it, or offer the files it's missing
+function afterScan(){ const k = bestPc(); if(!k || BUSY || S.jobs.length) return; if(k.off) say("Can't reach the PCs. Is ComfyUI running on Render, and Tailscale on on this phone?", true);
+  else if(!k.ok) say(pcName(k.url) + "'s ComfyUI is too old for " + (isI() ? 'H3 Image (it needs 0.45.0' : 'P-H3 (it needs 0.44.0') + ' or newer).', true);
+  else { say(''); const m = missingOf(k); if(m.length){ NEED = {pc:k.url, keys:m, model:S.model}; draw(); } } }
+scan().then(() => { draw(); afterScan(); }).catch(() => {});
 </script>
 </body></html>

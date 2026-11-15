@@ -9,13 +9,14 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const browser = await chromium.launch(); const page = await browser.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGEERROR', e.message); fail++; });
-  let have = {lora:false, te:true, up:true, vae:true}, prompts = [], uploads = 0, downloads = [], hist = {};
-  const info = () => ({PH3ImageConditioning:{input:{}}, TextGenerateV2:{input:{}}, MiniMaxH3SigmaShift:{input:{}}, ManualSigmas:{input:{}}, ImageScaleToTotalPixels:{input:{}},
-    UNETLoader:{input:{required:{unet_name:[['minimaxH3INT8INT4_fl2vaINT8Pruned.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors']]}}},
+  let have = {lora:false, te:true, up:true, vae:true, ivae:false}, prompts = [], uploads = 0, downloads = [], hist = {};
+  const info = () => ({PH3ImageConditioning:{input:{}}, MiniMaxH3ImageConditioning:{input:{}}, JsonExtractString:{input:{}}, ConditioningZeroOut:{input:{}}, KSampler:{input:{}}, TextGenerateV2:{input:{}}, MiniMaxH3SigmaShift:{input:{}}, ManualSigmas:{input:{}}, ImageScaleToTotalPixels:{input:{}},
+    UNETLoader:{input:{required:{unet_name:[['minimaxH3INT8INT4_fl2vaINT8Pruned.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'minimax_h3_image_pruned_int8_convrot.safetensors', 'minimax_h3_image_pruned_w4a8.safetensors']]}}},
     LoraLoaderModelOnly:{input:{required:{lora_name:[['afkj.safetensors'].concat(have.lora ? ['p-h3-image_lora_bf16.safetensors'] : [])]}}},
-    CLIPLoader:{input:{required:{clip_name:[['qwen3vl.safetensors', 'p-h3-image_text_encoder_int8_convrot.safetensors', 'p-h3-image_prompt_upsampler_w4a8.safetensors']]}}},
-    VAELoader:{input:{required:{vae_name:[['p-h3-image_vae_int8_convrot.safetensors']]}}}});
-  await page.route('https://app.test/**', r => r.fulfill({contentType:'text/html', body:html}));
+    CLIPLoader:{input:{required:{clip_name:[['qwen3vl.safetensors', 'p-h3-image_text_encoder_int8_convrot.safetensors', 'p-h3-image_prompt_upsampler_w4a8.safetensors', 'qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors', 'qwen3.5_9b_w4a8_gptq.safetensors']]}}},
+    VAELoader:{input:{required:{vae_name:[['p-h3-image_vae_int8_convrot.safetensors'].concat(have.ivae ? ['minimax_h3_image_vae_fp16.safetensors'] : [])]}}}});
+  const pe = fs.readFileSync(path.join(__dirname, '..', 'h3i-prompts.js'), 'utf8');
+  await page.route('https://app.test/**', r => /h3i-prompts\.js$/.test(r.request().url()) ? r.fulfill({contentType:'text/javascript', body:pe}) : r.fulfill({contentType:'text/html', body:html}));
   await page.route(/fonts\.googleapis|rdh3-fresh|icon-tape/, r => r.fulfill({status:200, body:''}));
   let mainOn = false, hosts = [];
   const handler = async r => { const u = new URL(r.request().url()); if(/jordo-main/.test(u.host) && !mainOn) return r.abort();
@@ -28,7 +29,7 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
     if(u.pathname.startsWith('/history/')) return r.fulfill({contentType:'application/json', body:JSON.stringify({[u.pathname.split('/').pop()]:hist[u.pathname.split('/').pop()]})});
     if(u.pathname==='/queue') return r.fulfill({contentType:'application/json', body:'{"queue_running":[],"queue_pending":[]}'});
     if(u.pathname==='/view') return r.fulfill({contentType:'image/png', body:PNG});
-    if(u.pathname==='/renderdeck/download'){ const b = JSON.parse(r.request().postData()); downloads.push(b); if(/lora/.test(b.url)) have.lora = true; return r.fulfill({contentType:'application/json', body:'{"ok":true}'}); }
+    if(u.pathname==='/renderdeck/download'){ const b = JSON.parse(r.request().postData()); downloads.push(b); if(/lora/.test(b.url)) have.lora = true; if(/minimax_h3_image_vae/.test(b.url)) have.ivae = true; return r.fulfill({contentType:'application/json', body:'{"ok":true}'}); }
     if(u.pathname==='/renderdeck/jobs') return r.fulfill({contentType:'application/json', body:JSON.stringify({jobs:downloads.map(d => ({name:d.url.split('/').pop(), status:'done'}))})});
     r.fulfill({status:404, body:''}); };
   await page.route(PC + '/**', handler); await page.route('https://jordo-main.tailadee9a.ts.net/**', handler);
@@ -72,6 +73,29 @@ let fail = 0; const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); i
   const hs = hosts.slice(n0); ok(prompts.length - n0===4 && hs.filter(h => /main/.test(h)).length===2 && hs.filter(h => /desktop/.test(h)).length===2, 'batch of 4 split 2 Render / 2 Main');
   const seeds = prompts.slice(n0).map(g => Object.values(g).find(x => x.class_type==='RandomNoise').inputs.noise_seed); ok(new Set(seeds).size===4, 'each picture its own seed');
   ok(/1 of 4|Result \d of 4/.test(await page.textContent('.card h2:not(:first-child), .card')) || /of 4/.test(await page.content()), 'result says N of 4');
+  // 🆕 H3 Image: switch model, its missing VAE is offered and fetched, then one edit with its own job (official template)
+  mainOn = false; await page.click('[data-count="1"]'); await page.click('[data-model=h3i]');
+  await page.waitForSelector('#getb', {timeout:5000}); ok(/H3 Image VAE/.test(await page.textContent('.need')) && !/LoRA/.test(await page.textContent('.need')), 'H3 Image: missing VAE is offered');
+  ok(await page.$$eval('[data-mp]', b => b.map(x => x.dataset.mp).join(','))==='4,8,16', 'H3 Image sizes 4/8/16 MP');
+  await page.click('#getb'); await page.waitForFunction(() => /Got everything/.test(document.querySelector('#msg').textContent), null, {timeout:5000});
+  ok(downloads.some(d => d.kind==='vae' && /Comfy-Org\/MiniMax-H3-Image\/.*minimax_h3_image_vae_fp16/.test(d.url)), 'H3 Image VAE downloaded into vae');
+  await page.click('[data-mode=edit]'); await page.setInputFiles('#file', pic); await page.waitForSelector('.pic.one');
+  if(!(await page.$eval('#auto', b => b.getAttribute('aria-pressed')==='true'))) await page.click('#auto');
+  const ni = prompts.length; await page.fill('#prompt', 'make it night'); const nl = await page.$$eval('.lib button', b => b.length); await page.click('#make');
+  for(let i = 0; i < 80 && (await page.$$eval('.lib button', b => b.length)) <= nl; i++) await page.waitForTimeout(100);
+  if(prompts.length <= ni) console.log('msg:', await page.textContent('#msg'));
+  const gi = prompts[ni], bi = c => Object.values(gi).filter(n => n.class_type===c);
+  ok(gi && bi('UNETLoader')[0].inputs.unet_name==='minimax_h3_image_pruned_w4a8.safetensors' && !bi('LoraLoaderModelOnly').length && !bi('MiniMaxH3SigmaShift').length, 'H3 Image: w4a8 model, no LoRA, no shift');
+  const ks = bi('KSampler')[0].inputs; ok(ks.steps===6 && ks.cfg===1 && ks.sampler_name==='euler' && ks.scheduler==='simple' && ks.denoise===1, 'H3 Image: KSampler 6 steps CFG 1 euler/simple');
+  ok(gi[ks.negative[0]].class_type==='ConditioningZeroOut' && gi[ks.positive[0]].class_type==='MiniMaxH3ImageConditioning' && ks.latent_image[1]===1, 'H3 Image: zeroed negative, latent from the conditioning');
+  const clips = bi('CLIPLoader').map(c => c.inputs.clip_name); ok(clips.includes('qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors') && clips.includes('qwen3.5_9b_w4a8_gptq.safetensors'), 'H3 Image: H3 encoder + Qwen 3.5 writer');
+  const tgi = bi('TextGenerateV2')[0].inputs; ok(tgi.thinking===true && tgi.max_length===8192 && /make it night/.test(tgi.prompt) && !/\{input text\}/.test(tgi.prompt) && /exactly one JSON object/.test(tgi.system_prompt) && tgi['images.image1'], 'H3 Image: template writer texts with the request in');
+  ok(bi('JsonExtractString')[0].inputs.key==='expanded_caption' && Array.isArray(bi('MiniMaxH3ImageConditioning')[0].inputs.prompt), 'H3 Image: caption pulled from the JSON into the conditioning');
+  ok(bi('SaveImage')[0].inputs.filename_prefix==='RenderDeck/ph3/h3i' && bi('VAELoader')[0].inputs.vae_name==='minimax_h3_image_vae_fp16.safetensors', 'H3 Image: its VAE, saved as RenderDeck/ph3/h3i');
+  ok(Object.values(gi).every(n => Object.values(n.inputs).every(v => !Array.isArray(v) || (gi[v[0]] && typeof v[1]==='number'))), 'H3 Image: links are whole');
+  ok(/H3 Image/.test(await page.textContent('#res + * , .card .note') || '') || /🆕 H3 Image ·/.test(await page.content()), 'result says H3 Image');
+  await page.screenshot({path:path.join(__dirname, 'h3i.png'), fullPage:true});
+  await page.click('[data-model=ph3]'); ok(await page.$$eval('[data-mp]', b => b.map(x => x.dataset.mp).join(','))==='2,4,8', 'back to P-H3 sizes');
   await page.screenshot({path:path.join(__dirname, 'ph3.png'), fullPage:true});
   fs.unlinkSync(pic); await browser.close(); console.log(fail ? fail + ' FAILED' : 'all passed'); process.exit(fail ? 1 : 0);
 })();
