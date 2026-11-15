@@ -106,6 +106,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   // ✏ Custom canvas (Jordan 2026-11-07): her own width × height, snapped to 32, shrunk if over MiniMax's cap
   await page.evaluate(() => { H3.S.f.sm = false; H3.S.f.fl = false; H3.S.f.first = null; H3.drawAll(); document.querySelector('#bCanvas').classList.remove('shut'); });
   await page.click('[data-asp="custom"]'); await page.waitForTimeout(100);
+  await page.evaluate(() => ['bLook', 'bModel', 'bCanvas'].forEach(id => { H3.S.open[id] = true; document.getElementById(id).classList.remove('shut'); })); // these boxes start folded (declutter 2026-11-15)
   await page.fill('#cw', '1000'); await page.fill('#ch', '400'); await page.waitForTimeout(100);
   const CU = await page.evaluate(() => ({d:H3.dims(), shown:!document.querySelector('#customWH').hidden, res:document.querySelector('#resRow').hidden, note:document.querySelector('#customNote').textContent, snap:H3.snapshot()}));
   await page.fill('#cw', '1344'); await page.fill('#ch', '1344'); await page.waitForTimeout(100);
