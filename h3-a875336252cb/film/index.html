@@ -406,14 +406,34 @@ async function findLost(id){ const on = pcs().filter(p => pcOf(p.url).online); i
     if(!pres.length) pres.push('');
     const names = [0, 60000, -60000].map(d => 'h3_' + new Date(ms + d).toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + tail);
     outer: for(const p of on) for(const pre of pres) for(const nm of names) for(const fn of [nm + '_00001_.mp4', nm + '_00002_.mp4', 'piece_01_00001_.mp4']){
-      const f = {filename:fn, subfolder:pre + 'H3Deck/' + nm, type:'output'}; try{ if((await fetch(viewUrl(p.url, f), {method:'HEAD'})).ok){ hit = {pc:p.url, file:f, words:''}; break outer; } }catch(e){} } }
+      const f = {filename:fn, subfolder:pre + 'H3Deck/' + nm, type:'output'}; try{ if((await fetch(rawView(p.url, f), {method:'HEAD'})).ok){ hit = {pc:p.url, file:f, words:''}; break outer; } }catch(e){} } }
   if(!hit){ LOST[id] = Date.now(); return; } // look again in a minute
   let d = 0; S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(c.take===id) d = Math.max(d, c.dur || c.out || 0); })));
   S.keep = S.keep || {}; S.keep[id] = {id, pc:hit.pc, final:hit.file, state:'done', recovered:true, prompt:(hit.words || '').replace(/^This continues straight on[^.]*\.\s*/, ''), pieces:[{deliv:Math.round(d * FPS), start:0, prompt:hit.words || ''}], t:ms};
   save(); toast('Found a lost clip\'s video on ' + pcName(hit.pc) + ' again', 4000); draw(); }
 const pcs = () => (window.FILM_PCS || (deck().pcs && deck().pcs.length ? deck().pcs : DEFAULT_PCS));
 const pcName = url => (pcs().find(p => p.url===url) || {}).name || 'PC';
-const viewUrl = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
+// 🔌 a PC that's off (Jordan 2026-11-15: "if one computer is offline (usually main) I'm still able to scrub and access video
+// clips"): both PCs save into the same Dropbox output folder (Output_Main/…, Output_Render/…), so a finished clip of a PC that
+// can't be reached is played, scrubbed and fetched from the other PC's copy of it. A PC counts as off after a failed ping (and,
+// for the first seconds after opening, if it was off last time); a video or picture that fails to load from one PC tries the next.
+const DOWNK = 'h3down', downOf = url => { const p = pcOf(url); if(p.down != null) return p.down; try{ const t = (JSON.parse(localStorage.getItem(DOWNK) || '{}'))[url]; return !!t && Date.now() - t < 6 * 3600e3; }catch(e){ return false; } };
+function markDown(url, down){ const p = pcOf(url), was = downOf(url); p.down = down; try{ const L = JSON.parse(localStorage.getItem(DOWNK) || '{}'); if(down) L[url] = L[url] || Date.now(); else delete L[url]; localStorage.setItem(DOWNK, JSON.stringify(L)); }catch(e){}
+  if(down && !was) reroute(url); }
+const liveOf = (url, f) => { if(!url || !f || (f.type || 'output')!=='output' || !downOf(url)) return url; const o = pcs().map(p => p.url).filter(u => u && u!==url && !downOf(u)); return o.find(u => pcOf(u).online) || o[0] || url; };
+// (rawView = that PC itself: asking "can this PC see the file yet?" must not be answered by the other one)
+const rawView = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
+const viewUrl = (url, f) => rawView(liveOf(url, f), f);
+// the PC a /view or scrub-copy link points at, and the same link on another PC (null: not a clip of the shared output folder)
+function otherSrc(src, tried){ const m = /^(https?:\/\/[^/]+)(\/(?:view|renderdeck\/h3proxy)\?[^#]*)(#.*)?$/.exec(String(src || '')); if(!m) return null;
+  let q; try{ q = new URLSearchParams(m[2].split('?')[1]); }catch(e){ return null; } if((q.get('type') || 'output')!=='output') return null;
+  const u = pcs().map(p => p.url).filter(x => x && x!==m[1] && !tried.includes(x)).sort((a, b) => downOf(a) - downOf(b))[0]; return u ? {pc:m[1], src:u + m[2] + (m[3] || '')} : null; }
+function hopEl(el){ const src = el.getAttribute('src') || ''; const tried = (el.dataset.tried || '').split(' ').filter(Boolean), n = otherSrc(src, tried); if(!n) return false;
+  tried.push(n.pc); el.dataset.tried = tried.join(' '); const at = el.currentTime || 0; if(el.dataset.src===src) el.dataset.src = n.src; el.src = n.src;
+  if(at > 0.01) el.addEventListener('loadedmetadata', () => { try{ el.currentTime = at; }catch(e){} }, {once:true}); return true; }
+document.addEventListener('error', e => { const el = e.target; if(el && /^(VIDEO|IMG)$/.test(el.tagName)) hopEl(el); }, true);
+// a PC just went off: what's on screen from it moves to the other PC
+function reroute(url){ document.querySelectorAll('video[src], img[src]').forEach(el => { if((el.getAttribute('src') || '').startsWith(url + '/')) hopEl(el); }); }
 // ⚡ scrubbing (Jordan 2026-11-14: "Is there any way to improve the playback and scrubbing for the video edits? Should it be kept
 // locally on the phone?"): the timeline plays a small scrub copy of each clip made by the PC's helper (/renderdeck/h3proxy: long
 // side 640, a keyframe every 6 frames, same length and sound), kept on the phone (Cache API) and played from memory, so a seek
@@ -432,14 +452,18 @@ function pxSeen(k){ try{ const L = JSON.parse(localStorage.getItem('h3scrub') ||
 async function pxGet(k, pc, f){
   const C = await caches.open(PXC); let r = await C.match(k);
   if(!r){ let got = null;
-    if(!PX.old[pc]){ try{ const x = await fetch(pxUrl(pc, f)); if(x.ok && x.headers.get('X-H3-Proxy')) got = x;
-        else if(x.status===404 && !/json/.test(x.headers.get('Content-Type') || '')) PX.old[pc] = 1; // (no such page: this PC's helper is older)
-        else return; }catch(e){ return; } }
-    if(!got){ try{ const x = await fetch(viewUrl(pc, f)); if(!x.ok) return; got = x; }catch(e){ return; } }
+    // 🔌 the clip's own PC first, then the other one (it has the clip too, through Dropbox), so an off PC's clips still get copies
+    const at = (f.type || 'output')==='output' ? [pc].concat(pcs().map(p => p.url).filter(u => u && u!==pc)).sort((a, b) => downOf(a) - downOf(b)) : [pc];
+    for(const u of at){
+      if(!PX.old[u]){ try{ const x = await fetch(pxUrl(u, f)); if(x.ok && x.headers.get('X-H3-Proxy')){ got = x; break; }
+          if(x.status===404 && !/json/.test(x.headers.get('Content-Type') || '')) PX.old[u] = 1; // (no such page: this PC's helper is older)
+          else continue; }catch(e){ continue; } }
+      try{ const x = await fetch(rawView(u, f)); if(x.ok){ got = x; break; } }catch(e){} }
+    if(!got) return;
     const b = await got.blob(); if(!b.size) return; r = new Response(b, {headers:{'Content-Type':'video/mp4'}}); try{ await C.put(k, r.clone()); }catch(e){} }
   const b = await r.blob(); if(!b.size) return; PX.url[k] = URL.createObjectURL(b.type ? b : new Blob([b], {type:'video/mp4'})); PX.of[PX.url[k]] = decodeURIComponent(k.split('/').pop()); pxSeen(k); pxSwap(viewUrl(pc, f), PX.url[k]); }
 // a paused video still showing the clip from the PC switches to the phone's copy, at the same spot
-function pxSwap(full, blob){ document.querySelectorAll('video').forEach(v => { const cur = v.getAttribute('src') || ''; if(cur.split('#')[0]!==full || !v.paused) return;
+function pxSwap(full, blob){ const tail = full.replace(/^https?:\/\/[^/]+/, ''); document.querySelectorAll('video').forEach(v => { const cur = v.getAttribute('src') || ''; if(cur.split('#')[0].replace(/^https?:\/\/[^/]+/, '')!==tail || !v.paused) return;
   const at = v.currentTime || 0, frag = cur.includes('#') ? '#' + cur.split('#')[1] : ''; if(v.dataset.src===full || v.dataset.src===cur) v.dataset.src = blob + frag;
   v.src = blob + frag; if(at > 0.01) v.addEventListener('loadedmetadata', () => { try{ v.currentTime = at; }catch(e){} }, {once:true}); }); }
 // opening the app: the shot on screen gets its kept copies before it's drawn (so it never starts on the PC's full clips)
@@ -487,7 +511,7 @@ const takeLabel = t => t && t.upName && !t.prompt ? '📤 ' + t.upName : t ? (t.
 // ---------- the PCs: dots, and following H3 Deck's renders while H3 Deck is closed ----------
 const PC = {}; const pcOf = url => PC[url] = PC[url] || {online:false, queue:null};
 async function getJ(url, ms){ const c = new AbortController(), t = setTimeout(() => c.abort(), ms || 8000); try{ const r = await fetch(url, {signal:c.signal}); if(!r.ok) throw new Error(r.status + ''); return await r.json(); } finally{ clearTimeout(t); } }
-async function ping(url){ const p = pcOf(url); try{ p.queue = await getJ(url + '/queue', 6000); p.online = true; }catch(e){ p.online = false; } }
+async function ping(url){ const p = pcOf(url); try{ p.queue = await getJ(url + '/queue', 6000); p.online = true; markDown(url, false); }catch(e){ p.online = false; markDown(url, true); } }
 function drawDots(){ $('#pcDots').innerHTML = pcs().map(p => { const q = pcOf(p.url).queue || {}, busy = (q.queue_running || []).length + (q.queue_pending || []).length; return `<span><i class="dot ${pcOf(p.url).online ? (busy ? 'busy' : 'on') : ''}"></i>${esc((p.name || '?')[0])}</span>`; }).join(''); }
 // a take still "working" in H3 Deck's record: look at its pieces on the PC (finished ones are kept in this app's record)
 async function follow(){
@@ -2490,7 +2514,7 @@ function selTake(id){ const f = N().v==='film' && filmOf(N().film); if(!f) retur
   const c = (w && w.clip && all.find(x => x.id===w.clip)) || all.find(x => x.take===id) || all.find(x => (x.alts || []).includes(id) || (x.was && x.was.take===id)); if(!c) return false; SEL = c.id; PH = c.at; draw();
   // and point at that take in "Takes of this clip", so one tap puts it in the clip
   const b = document.querySelector('#vstrip [data-t="' + CSS.escape(id) + '"]'); if(b){ b.classList.add('hl'); b.scrollIntoView({block:'nearest', inline:'center'}); setTimeout(() => b.classList.remove('hl'), 4000); } return true; }
-window.FILM = {isHQ, hqOf, hqPrevCtx, untime, pxName, pxFilm, playUrl, PX, takeOf, editOf, nestTake, nestTick, nestPut, nestFit, nestStale, isNest, splitTracks, movieOf, mvFilm, mvSegs, fullName, shotLabel, shotNo, ensureMovies, newShot, shotsOfM, movieOfShot, upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
+window.FILM = {viewUrl, downOf, liveOf, isHQ, hqOf, hqPrevCtx, untime, pxName, pxFilm, playUrl, PX, takeOf, editOf, nestTake, nestTick, nestPut, nestFit, nestStale, isNest, splitTracks, movieOf, mvFilm, mvSegs, fullName, shotLabel, shotNo, ensureMovies, newShot, shotsOfM, movieOfShot, upRevert, upOrigOf, getXFED:() => XFED, setXFED:v => { XFED = v; }, layersAt, xfOf, ovShow, hasOv, canvasOf, needsFit, cropOf, getCROPED:() => CROPED, fillPair, fillWords, fillSheet, actK, getTSEL:() => TSEL, moveTrack, setTSEL:v => { TSEL = v; }, ACT, upWordsSheet, autoFaceOf, upFacesAll, takeWhere, setFilms, splitLong, HQ_MAX, upTrackSheet, upTrackGo, upTick, upSeamsGo, seamPlace, upRunOf, upRunHtml, selTake, laneHtml, takeOf, hqSheet, facesSheet, HQ_LV, winsBox, clipPanel, combineBare, segsOf, combineSheet, addBlock, blockPlan, renderBlock, renderAll, blockSheet, blocks, fileOf, testGo, joinedWords, doneOf, blendGo, qpRetry, passFailed, qpParts, finGo, finHtml, qpBack, placePasses, qpWins, passOf, liveFilm, qualityGo, qualitySheet, qpClips, combineGo, combineSheet, prevTouching, ghostsOf, guideGo, nxFor, getGhost:() => GHOST, lockedK, guideProgText, guidePlan, showFrame, autoPrev, expSave, expFetch, EXPB:() => EXPB, resetWords:() => { LASTW = ''; }, gapAt, closeGap, getGap:() => GAP, save:() => save(), S, deck, placeNew, leadSheet, guideSheet, guideOpt, makeGuide, wordsRange, trackSig, useFromDeck, undo, flatten, edgeNear, get UNDO(){ return UNDO; }, previewFilm, prevOk, sigOf, play, stopPlay, nextChange, useTake, stripHtml, pushWords:f => { LASTW = ''; if(f) pushWords(f); }, segsOf, wordsAt, nowWords, wordsBetween, selAt, carryOn, redoSheet, pullDeck, takes, takeOf, fileOf, reviewList, versionsOf, activeAt, addClip, split, filmSecs, clipOf, go, draw, tick, follow, pcOf, exportFilm, expClips, get SEL(){ return SEL; }, set SEL(v){ SEL = v; }, get GAP(){ return GAP; }, set GAP(v){ GAP = v; }, get PH(){ return PH; }, set PH(v){ PH = v; }};
 if(EMBED){ const hd = document.querySelector('header'); if(hd) hd.hidden = true; document.body.style.paddingTop = '4px';
   const st = document.createElement('style'); st.textContent = 'body{min-height:0!important;padding-bottom:8px!important}.toast{top:calc(var(--vt,0px) + 14px)!important}.sheet .card{max-height:calc(var(--vh,600px) * .88)!important}'; document.head.appendChild(st);
   // H3 Deck makes this frame as tall as its content and scrolls the page, so "fixed" here means the visible part of the frame

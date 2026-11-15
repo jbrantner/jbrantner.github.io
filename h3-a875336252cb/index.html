@@ -753,7 +753,7 @@ async function getJ(url, opt, ms){ const c = new AbortController(), t = setTimeo
   try{ const r = await fetch(url, Object.assign({signal:c.signal}, opt || {})); if(!r.ok) throw new Error(r.status + ''); return await r.json(); } finally{ clearTimeout(t); } }
 async function ping(url){
   const p = pcOf(url);
-  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true;
+  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true; markDown(url, false);
     if(!p.oi || !was || Date.now() - (p.oiAt || 0) > 120000){ p.oiAt = Date.now(); const got = await Promise.all(NEED.map(c => getJ(url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))); p.oi = Object.assign({}, ...got);
       try{ localStorage.setItem('h3oi:' + url, JSON.stringify(p.oi)); }catch(e){}
       // the Render Deck helper saves into this PC's own subfolder of a shared (Dropbox) output folder, e.g. Output_Render/
@@ -761,7 +761,7 @@ async function ping(url){
       openSocket(url); drawAll(); }
     const q = await getJ(url + '/queue', null, 6000); p.queue = q; p.load = (q.queue_running || []).length + (q.queue_pending || []).length;
     const rn = (q.queue_running || [])[0]; if(rn && rn[1]) p.running = rn[1]; // also when the app opened after it started (no execution_start seen)
-  }catch(e){ if(p.online){ p.online = false; drawAll(); } p.online = false;
+  }catch(e){ if(p.online){ p.online = false; drawAll(); } p.online = false; markDown(url, true);
     if(!p.oi){ try{ p.oi = JSON.parse(localStorage.getItem('h3oi:' + url) || 'null'); }catch(e2){} } }
   drawDots();
 }
@@ -2237,7 +2237,7 @@ function movableUp(t, from, run, pend){
 async function moveUp(t, to){ const from = t.pc, fl = t.smoothed || t.final, oi = (pcOf(to) || {}).oi;
   if(!oi || regenMissing(oi, t)) return false;
   const ch = t.up.chain, pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev);
-  for(const v of [fl, pv && pv.final]) if(v){ try{ if(!(await fetch(viewUrl(to, v), {method:'HEAD'})).ok) return false; }catch(e){ return false; } } // (that PC can't see the videos yet)
+  for(const v of [fl, pv && pv.final]) if(v){ try{ if(!(await fetch(rawView(to, v), {method:'HEAD'})).ok) return false; }catch(e){ return false; } } // (that PC can't see the videos yet)
   MOVE_NOW.add(t.id);
   try{ try{ await fetch(from + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:[t.upPid]})}); }catch(e){ return false; }
     let q = null; try{ q = await getJ(from + '/queue', null, 6000); }catch(e){ return false; }
@@ -2273,7 +2273,7 @@ async function moveTake1(t, to){
   if(t.combo){ const oi = (pcOf(to) || {}).oi || {}; if(!oi.ConcatenateVideo || (t.combo.seam && t.combo.seam.unet && !combo(oi, 'UNETLoader', 'unet_name').includes(t.combo.seam.unet))) return false;
     for(const q of t.combo.parts){ const p = String(q.file || '').replace(/ \[output\]$/, ''), i = p.lastIndexOf('/'); if(!p) return false;
       const fl = {filename:p.slice(i + 1), subfolder:i > 0 ? p.slice(0, i) : '', type:'output'};
-      try{ if(!(await fetch(viewUrl(to, fl), {method:'HEAD'})).ok) return false; }catch(e){ return false; } } }
+      try{ if(!(await fetch(rawView(to, fl), {method:'HEAD'})).ok) return false; }catch(e){ return false; } } }
   try{ await post(from, {delete:pids}); }catch(e){ return false; }
   let q = null; try{ q = await getJ(from + '/queue', null, 6000); }catch(e){}
   const there = q ? [...(q.queue_running || []), ...(q.queue_pending || [])].map(x => x[1]) : pids;
@@ -2794,7 +2794,7 @@ async function tickUpscale(t){
       if(pv && (pv.upErr || pv.state==='failed')){ t.upErr = 'the clip before it failed, so there was nothing to carry on from'; return upDone(t); }
       if(pv && pv.upStage==='start') return; }
     { const fl = t.smoothed || t.final; // a video made on the other PC: wait (up to 15 min) for Dropbox to bring it over before queueing
-      if(fl && Date.now() - (t.t0r || t.t || 0) < 15 * 60000){ let seen = true; try{ seen = (await fetch(viewUrl(t.pc, fl), {method:'HEAD'})).ok; }catch(e){} if(!seen) return; } }
+      if(fl && Date.now() - (t.t0r || t.t || 0) < 15 * 60000){ let seen = true; try{ seen = (await fetch(rawView(t.pc, fl), {method:'HEAD'})).ok; }catch(e){} if(!seen) return; } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
     try{ const names = {}; if(regenRefsOn(t, p.oi)) for(const r of facesOn(t) ? t.up.faces.flatMap(f => faceRefs(t, f.n)) : upRefSet(t, p.oi)) if(!names[r.id]) names[r.id] = await upload(t.pc, r.id);
       const G = upGraph(t, p.oi, names); t.upSave = G.save; t.upPid = await queueGraph(t.pc, G); t.tu = Date.now(); t.upStage = 'queued'; }catch(e){ t.upErr = e.message; upDone(t); }
@@ -3027,7 +3027,7 @@ async function probeFile(t, i){
   // (🧵 a seams job in one go saves under the take's own name, not piece_01: Jordan's 2026-11-13 join was done but marked "left the queue")
   const sub = (t.ctxDirs && t.ctxDirs[i + 1]) || outDir(t), base = seamOne(t) ? t.name : 'piece_' + String(i + 1).padStart(2, '0'); let best = null;
   for(let n = 1; n <= 30; n++){ const f = {filename:base + '_' + String(n).padStart(5, '0') + '_.mp4', subfolder:sub, type:'output'}; let r;
-    try{ r = await fetch(viewUrl(t.pc, f), {method:'HEAD'}); }catch(e){ return best; } if(!r.ok) break;
+    try{ r = await fetch(rawView(t.pc, f), {method:'HEAD'}); }catch(e){ return best; } if(!r.ok) break;
     if((Date.parse(r.headers.get('Last-Modified') || '') || 0) >= (t.pieces[i].tq || 0) - 60e3) best = f; }
   return best;
 }
@@ -3064,7 +3064,7 @@ async function branchPc(b, t, i, extra){
   if(!t.pieces.slice(0, i).every(p => p.state==='done')) return t.pc;
   const f = {filename:'ctx_' + String(i).padStart(5, '0') + '.safetensors', subfolder:ctxDir(t, i), type:'output'}, ok = [];
   for(const p of S.pcs){ const u = p.url; if(canRun(u, b)) continue; if(u===t.pc){ ok.push(u); continue; } const k = u + '|' + f.subfolder + '|' + i;
-    if(!SEEN_CTX[k]){ try{ SEEN_CTX[k] = (await fetch(viewUrl(u, f), {method:'HEAD'})).ok; }catch(e){ SEEN_CTX[k] = false; } }
+    if(!SEEN_CTX[k]){ try{ SEEN_CTX[k] = (await fetch(rawView(u, f), {method:'HEAD'})).ok; }catch(e){ SEEN_CTX[k] = false; } }
     if(SEEN_CTX[k]) ok.push(u); }
   if(S.f.where && S.f.where!=='both' && ok.includes(S.f.where)) return S.f.where;
   return ok.sort((x, y) => (busySecs(x) + (extra[x] || 0)) - (busySecs(y) + (extra[y] || 0)))[0] || t.pc; }
@@ -3213,7 +3213,25 @@ function pieceSheet(t, i){
     $('#brGo').onclick = () => { const pr = $('#pcPrompt').value; closeSheet(); branchFrom(t, i, n, pr); };
   }
 }
-const viewUrl = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
+// 🔌 a PC that's off (Jordan 2026-11-15: "if one computer is offline (usually main) I'm still able to scrub and access video
+// clips"): both PCs save into the same Dropbox output folder, so a finished clip of a PC that can't be reached is played and
+// fetched from the other PC's copy of it. A PC counts as off after a failed ping (and, until the first ping, if it was off last
+// time); a video or picture that fails to load from one PC tries the next. Same as Films (film/index.html).
+const DOWNK = 'h3down', downOf = url => { const p = pcOf(url); if(p.down != null) return p.down; try{ const t = (JSON.parse(localStorage.getItem(DOWNK) || '{}'))[url]; return !!t && Date.now() - t < 6 * 3600e3; }catch(e){ return false; } };
+function markDown(url, down){ const p = pcOf(url), was = downOf(url); p.down = down; try{ const L = JSON.parse(localStorage.getItem(DOWNK) || '{}'); if(down) L[url] = L[url] || Date.now(); else delete L[url]; localStorage.setItem(DOWNK, JSON.stringify(L)); }catch(e){}
+  if(down && !was) reroute(url); }
+const liveOf = (url, f) => { if(!url || !f || (f.type || 'output')!=='output' || !downOf(url)) return url; const o = S.pcs.map(p => p.url).filter(u => u && u!==url && !downOf(u)); return o.find(u => pcOf(u).online) || o[0] || url; };
+// (rawView = that PC itself: asking "can this PC see the file yet?" must not be answered by the other one)
+const rawView = (url, f) => url + '/view?' + new URLSearchParams({filename:f.filename, subfolder:f.subfolder || '', type:f.type || 'output'});
+const viewUrl = (url, f) => rawView(liveOf(url, f), f);
+function otherSrc(src, tried){ const m = /^(https?:\/\/[^/]+)(\/(?:view|renderdeck\/h3proxy)\?[^#]*)(#.*)?$/.exec(String(src || '')); if(!m) return null;
+  let q; try{ q = new URLSearchParams(m[2].split('?')[1]); }catch(e){ return null; } if((q.get('type') || 'output')!=='output') return null;
+  const u = S.pcs.map(p => p.url).filter(x => x && x!==m[1] && !tried.includes(x)).sort((a, b) => downOf(a) - downOf(b))[0]; return u ? {pc:m[1], src:u + m[2] + (m[3] || '')} : null; }
+function hopEl(el){ const src = el.getAttribute('src') || ''; const tried = (el.dataset.tried || '').split(' ').filter(Boolean), n = otherSrc(src, tried); if(!n) return false;
+  tried.push(n.pc); el.dataset.tried = tried.join(' '); const at = el.currentTime || 0; if(el.dataset.src===src) el.dataset.src = n.src; el.src = n.src;
+  if(at > 0.01) el.addEventListener('loadedmetadata', () => { try{ el.currentTime = at; }catch(e){} }, {once:true}); return true; }
+document.addEventListener('error', e => { const el = e.target; if(el && /^(VIDEO|IMG)$/.test(el.tagName)) hopEl(el); }, true);
+function reroute(url){ document.querySelectorAll('video[src], img[src]').forEach(el => { if((el.getAttribute('src') || '').startsWith(url + '/')) hopEl(el); }); }
 async function saveVideo(t){
   const f = t.final || (t.pieces.find(p => p.file) || {}).file; if(!f) return;
   try{ toast('Getting the video…'); const b = await (await fetch(viewUrl(t.pc, f))).blob(), file = new File([b], f.filename, {type:'video/mp4'});
@@ -4345,7 +4363,7 @@ const SEES = {};
 async function redoPc(t, src, fl, extra){
   const urls = [...new Set([src.pc].concat(S.f.where==='both' ? S.pcs.map(p => p.url) : [S.f.where]))].filter(u => !canRun(u, t)), ok = [];
   for(const u of urls){ if(u===src.pc){ ok.push(u); continue; } const k = u + '|' + fl.filename;
-    if(SEES[k]==null){ try{ const r = await fetch(viewUrl(u, fl), {method:'HEAD'}); SEES[k] = r.ok; }catch(e){ SEES[k] = false; } }
+    if(SEES[k]==null){ try{ const r = await fetch(rawView(u, fl), {method:'HEAD'}); SEES[k] = r.ok; }catch(e){ SEES[k] = false; } }
     if(SEES[k]) ok.push(u); }
   return ok.sort((a, b) => (busySecs(a) + (extra[a] || 0) + estSecs(t, a)) - (busySecs(b) + (extra[b] || 0) + estSecs(t, b)))[0] || null; }
 window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
@@ -4631,7 +4649,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, actOut, actBook, lineOf, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
