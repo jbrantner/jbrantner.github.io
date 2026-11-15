@@ -203,7 +203,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     const t = FILM.takeOf(c.take); return {chip:!!chip, prompt:t.prompt, film:t.film, label:FILM.takeOf(c.take).upName}; });
   const UWG = await page.evaluate(R => { const t = H3.S.takes.find(x => x.id==='tU'), u = JSON.parse(JSON.stringify(t)); u.id = 'tUw'; u.up = {scale:1, den:0.6, clean:0.8, look:'live', str:0, refs:true, prompt:u.prompt, unet:'singularityV2X10eros_prismPIKA.safetensors', crop:{s0:0, L:120, pad:0, F:120}}; u.smoothed = u.final;
     const refs = H3.upRefs(u).map(r => r.id), g = Object.values(H3.upGraph(u, H3.PC[R].oi, {mW1:'mW1.png'}).g), rv = g.find(n => n.class_type==='MiniMaxH3ReferenceToVideo');
-    return {refs, p:(rv && rv.inputs.prompt || '').slice(0, 160)}; }, R);
+    return {refs, p:(rv && rv.inputs.prompt || '').slice(0, 400)}; }, R);
   ok(UW.chip && UW.prompt==='<Subject 1> sits in a gaming chair.' && UW.film==='fU' && UWG.refs.includes('mW1') && /gaming chair/.test(UWG.p), '📝 Who and words: an imported clip gets her and its words, and ✨ then sends her picture and those words: ' + JSON.stringify({UW, UWG}));
   // ✨ on Prism Pika keeps every picture the render had (6 here), fitted by MMH3FitReferences like the render; vanilla still takes the first few
   const PK = await page.evaluate(R => { const src = H3.S.takes.find(x => x.id==='tA'), t = JSON.parse(JSON.stringify(src)); t.id = 'tPk'; t.imgs = [1, 2, 3, 4, 5, 6].map(i => ({id:'mP' + i, desc:'', keep:'exact'}));

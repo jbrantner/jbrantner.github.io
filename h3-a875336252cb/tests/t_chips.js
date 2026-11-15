@@ -98,8 +98,9 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(!/nude/.test(P.p) && !minorChip, 'never for anyone whose words read as under 18');
   await page.evaluate(() => { H3.S.cast[0].desc = ''; H3.S.cast[0].stand = 'a woman'; const p = H3.S.cast[0].pics; H3.S.cast[0].pics = []; H3.S.cast[0]._p = p; H3.drawAll(); }); P = await prom(R, REF);
   ok(/A nude woman walks/.test(P.p), 'no picture: "a nude woman": ' + P.p.slice(0, 160));
-  const HQ = await page.evaluate(() => { H3.S.cast[0].pics = H3.S.cast[0]._p; const r = H3.upRefs({prompt:'<Subject 1> walks.', imgs:[]}); return r.some(x => x.nude); });
-  ok(!HQ, '✨ High quality / 🎭 Faces passes over a finished video leave its clothes alone');
+  // (Jordan 2026-11-15: ✨ made takes less NSFW) ✨ keeps the render's nude line; only 🎭 Faces (faceRefs) leaves the clothes alone
+  const HQ = await page.evaluate(() => { H3.S.cast[0].pics = H3.S.cast[0]._p; const r = H3.upRefs({prompt:'<Subject 1> walks.', imgs:[]}), fr = H3.faceRefs({prompt:'<Subject 1> walks.', imgs:[]}, 1); return {hq:r.some(x => x.nude), faces:fr.some(x => x.nude)}; });
+  ok(HQ.hq && !HQ.faces, '✨ High quality keeps her nude like the render; 🎭 Faces leaves the clothes alone: ' + JSON.stringify(HQ));
   const LK = await page.evaluate(() => { H3.setTab('lib'); const k = [...document.querySelectorAll('[data-lib^="f:"]')].map(b => b.textContent); H3.setTab('films'); return k; });
   ok(LK.includes('👗 Clothing') && LK.includes('✨ Attributes'), '📚 Clothing is its own Library kind: ' + LK);
   // Library entry: the switch lives on the entry, every film follows
