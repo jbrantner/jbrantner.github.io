@@ -69,7 +69,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const nudges = () => page.evaluate(() => H3.S.takes.filter(x => x.redo && x.redo.qp && x.up && x.up.only).map(t => ({id:t.id, up:t.up, prompt:t.prompt, descOff:t.descOff, model:t.model})));
   const graph = id => page.evaluate(([R, id]) => { const t = H3.S.takes.find(x => x.id===id), names = {}; ['p1', 'p2', 'q1', 'q2', 'q3', 'k1', 'a1'].forEach(k => names[k] = k + '.png');
     const g = Object.values(H3.upGraph(t, H3.PC[R].oi, names).g), C = c => g.filter(n => n.class_type===c), rv = C('MiniMaxH3ReferenceToVideo')[0];
-    return {up:C('MinimaxH3LatentUpscaler3D').length, imgs:C('LoadImage').map(n => n.inputs.image).sort(), w:rv && rv.inputs.width, h:rv && rv.inputs.height, p:rv ? rv.inputs.prompt : '', sig:C('ManualSigmas').map(n => n.inputs.sigmas), fit:C('MMH3FitReferences').length, unet:C('UNETLoader').map(n => n.inputs.unet_name), lora:C('LoraLoaderModelOnly').length}; }, [R, id]);
+    return {up:C('MinimaxH3LatentUpscaler3D').length, imgs:C('LoadImage').map(n => n.inputs.image).sort(), w:rv && rv.inputs.width, h:rv && rv.inputs.height, p:rv ? rv.inputs.prompt : '', sig:C('ManualSigmas').map(n => n.inputs.sigmas), fit:C('MMH3FitReferences').length, ks:C('SamplerCustomAdvanced').length, seeds:C('RandomNoise').map(n => n.inputs.noise_seed), dec:C('VAEDecodeTiled').length, unet:C('UNETLoader').map(n => n.inputs.unet_name), lora:C('LoraLoaderModelOnly').length}; }, [R, id]);
   // 1) toward Mia instead: Laura off, Mia on, strength 0.5, vanilla
   await fr.evaluate(async () => { document.querySelector('#nuWho [data-n="1"]').click(); document.querySelector('#nuWho [data-n="2"]').click(); const r = document.querySelector('#nuDen'); r.value = '0.5'; r.dispatchEvent(new Event('input'));
     document.querySelector('#nuM').value = ''; document.querySelector('#nuGo').click(); await new Promise(z => setTimeout(z, 2500)); });
@@ -81,14 +81,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   ok(G.imgs.join()==='q1.png,q2.png,q3.png', 'only Mia\'s pictures go (no pose, no Laura): ' + G.imgs);
   ok(/kneel/i.test(G.p) && !/pose reference/i.test(G.p), 'the pose\'s words stay, its picture doesn\'t: ' + G.p);
   ok(G.sig.length===1 && /^0\.5/.test(G.sig[0]), 'sampling starts at the strength: ' + G.sig);
+  ok(A.up.passes===3 && G.ks===3 && new Set(G.seeds).size===3 && G.dec===1, '3 passes by default: 3 samplers, 3 seeds, one decode: ' + JSON.stringify({p:A.up.passes, ks:G.ks, seeds:G.seeds, dec:G.dec}));
   // 2) toward Laura with "green eyes" off, on Pika (the first pass is set aside: one pass per track at a time)
   await fr.evaluate(() => { FILM.S.passes = []; });
   O = await open();
-  await fr.evaluate(async () => { [...document.querySelectorAll('#nuTags [data-tag]')].find(b => b.textContent==='green eyes').click(); const o = [...document.querySelectorAll('#nuM option')].find(x => /pika/i.test(x.value)); if(o) document.querySelector('#nuM').value = o.value;
+  await fr.evaluate(async () => { [...document.querySelectorAll('#nuTags [data-tag]')].find(b => b.textContent==='green eyes').click(); document.querySelector('#nuPs [data-v="1"]').click(); const o = [...document.querySelectorAll('#nuM option')].find(x => /pika/i.test(x.value)); if(o) document.querySelector('#nuM').value = o.value;
     document.querySelector('#nuGo').click(); await new Promise(z => setTimeout(z, 2500)); });
   N = await nudges(); const B = N.find(x => x.id!==A.id);
   ok(B && B.up.only.join()==='1' && JSON.stringify(B.descOff)==='{"1":["green eyes"]}' && /pika/i.test(B.up.unet), 'toward Laura on Pika, green eyes off for this pass: ' + JSON.stringify(B && {only:B.up.only, off:B.descOff, unet:B.up.unet}));
   G = await graph(B.id);
+  ok(B.up.passes===1 && G.ks===1, 'one pass picked: one sampler: ' + G.ks);
   ok(G.imgs.join()==='a1.png,p1.png,p2.png' && G.up===0, 'Laura\'s pictures and her spiral-eyes picture, no pose picture: ' + G.imgs);
   ok(/red hair/i.test(G.p) && !/green eyes/.test(G.p) && /kneel/i.test(G.p), 'her words without green eyes, the pose\'s words kept: ' + G.p.slice(0, 600));
   await br.close(); srv.close();
