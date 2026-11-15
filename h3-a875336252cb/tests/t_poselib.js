@@ -115,5 +115,13 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.waitForFunction(() => /nobody/.test((document.querySelector('#poseNote') || {}).textContent || ''), null, {timeout:20000}).catch(() => {});
   console.log(await page.evaluate(() => JSON.stringify({n:(document.querySelector("#poseNote")||{}).textContent, ppl:POSE.ppl, c:H3.S.cast.map(c => c.poses)})));
   ok(await page.evaluate(() => /found nobody/.test(document.querySelector('#poseNote').textContent) && !(POSE.ppl || []).length && !H3.S.cast.some(c => (c.poses || []).some(x => x.p >= 0))), 'nobody found: says so, back to one pose taker');
+  // 🧽 spotty SAM masks are cleaned: holes filled, small gaps closed, specks dropped, a separate hand kept, the outline not grown
+  const M = await page.evaluate(() => { const W = 300, H = 300, a = new Uint8Array(W * H), set = (x0, y0, x1, y1, v) => { for(let y = y0; y < y1; y++) for(let x = x0; x < x1; x++) a[y * W + x] = v; };
+    set(100, 50, 200, 250, 1); set(130, 100, 170, 140, 0); for(let k = 0; k < 40; k++){ const x = 105 + (k * 37) % 90, y = 60 + (k * 53) % 180; set(x, y, x + 2, y + 2, 0); } // a body with a hole and pin-holes
+    set(150, 50, 152, 250, 0); set(220, 120, 240, 140, 1); set(20, 20, 23, 23, 1); // a thin crack, a hand apart from it, a speck far away
+    const m = H3.maskClean(a, W, H), at = (x, y) => m[y * W + x]; let holes = 0; for(let y = 50; y < 250; y++) for(let x = 100; x < 200; x++) if(!at(x, y)) holes++;
+    return {holes, hand:at(230, 130), speck:at(21, 21), out:at(90, 150) + at(210, 60) + at(100 - 4, 40)}; });
+  ok(M.holes===0 && M.hand===1 && M.speck===0 && M.out===0, '🧽 mask cleaning: holes and cracks filled, the hand kept, the speck gone, no growing outside: ' + JSON.stringify(M));
+  const SD = Object.values(SENT).find(n => n.class_type==='SAM3_Detect'); ok(SD.inputs.threshold===0.35 && SD.inputs.refine_iterations===4, 'SAM finds people at 0.35 and refines 4 times');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
