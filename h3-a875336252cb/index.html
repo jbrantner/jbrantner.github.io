@@ -156,6 +156,7 @@ header h1 span{color:var(--accent)}
 #goBtn{flex:1;padding:15px;border-radius:14px;background:var(--accent);color:var(--accent-ink);font:700 18px/1 var(--display);font-variant-ligatures:none;letter-spacing:.4px;box-shadow:0 6px 22px -8px var(--accent)}
 #goBtn:disabled{background:var(--panel2);color:var(--dim);box-shadow:none}
 #goWhy{font-size:12.5px;color:var(--samp);text-align:center;max-width:608px;margin:0 auto 6px;display:block}
+#goEta{font-size:11.5px;color:var(--dim);text-align:center;max-width:608px;margin:0 auto 6px;display:block}#goEta[hidden]{display:none}
 .take.hl{box-shadow:0 0 0 2px var(--accent)}
 .take .tmore{display:none}.take.mopen .tmore{display:contents}
 .take .btns{gap:5px}.take .btns .btn{padding:7px 9px;font-size:12.5px}.take .tl .pcl{display:flex;align-items:center;gap:8px}.take .tmb{padding:3px 10px;font-size:14px;line-height:1}.take .meta{padding:10px}.take.mopen .tmb{border-color:var(--cyan);color:var(--cyan)}
@@ -435,7 +436,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
 </div>
 <div id="poseTab" hidden></div>
 
-<div class="go"><span id="goWhy" hidden></span><div class="in"><div class="step gostep" title="How many takes"><button id="goDn" aria-label="Fewer takes">−</button><b id="goN">1</b><button id="goUp" aria-label="More takes">+</button></div><button id="goBtn">Render</button></div></div>
+<div class="go"><span id="goWhy" hidden></span><span id="goEta" hidden></span><div class="in"><div class="step gostep" title="How many takes"><button id="goDn" aria-label="Fewer takes">−</button><b id="goN">1</b><button id="goUp" aria-label="More takes">+</button></div><button id="goBtn">Render</button></div></div>
 <input type="file" id="filePick" hidden>
 <div id="sheet" class="sheet" hidden><div class="card" id="sheetCard"></div></div>
 
@@ -580,7 +581,10 @@ async function pushTakes(){ if(HOLD) return; if(WORKER || runWork()) pushRunSoon
   // (never an empty list over the PCs' copy, unless 🧹 Start fresh meant it: QA 2026-11-14, a fresh copy of the app that couldn't read
   // the PCs' copy yet sent an empty one over it 4 s after opening)
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url]===body || (!S.takes.length && !S.fresh)) continue;
-    try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} }  pushFilms(); }
+    // (overnight QA 2026-11-16: Windows refused the write now and then, "[WinError 5] Access is denied" while another copy of the app was
+    // writing the same file; one more try 3 s later instead of waiting a minute for the next save)
+    for(let a = 0; a < 2 && pushed[p.url]!==body; a++){ if(a) await new Promise(z => setTimeout(z, 3000));
+      try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} } }  pushFilms(); }
 // ---------- 🛟 films and Library kept safe on the PCs (Jordan 2026-11-11: her films and Library were gone, the renders were there) ----------
 // The phone can clear a site's saved data by itself. The takes already had a copy on each PC (h3deck_takes.json), so they came
 // back; the films (Films' own save, 'h3edit') and the 📚 Library didn't. Now they have a copy too (h3deck_films.json), and when
@@ -665,7 +669,8 @@ function runBody(by){ return JSON.stringify({v:1, t:Date.now(), by, wid:WID, dec
 function pushRunSoon(){ clearTimeout(runT); runT = setTimeout(() => pushRun(WORKER ? 'worker' : 'phone'), WORKER ? 1500 : 3000); }
 async function pushRun(by, force){ const u = runHost(); if(!u || (HOLD && !force)) return false; const body = runBody(by), sig = body.replace(/^\{"v":1,"t":\d+,/, '');
   if(sig===RUNSIG && !force) return true;
-  try{ const r = await fetch(u + RUN_FILE + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok){ RUNSIG = sig; return true; } }catch(e){} return false; }
+  for(let a = 0; a < 2; a++){ if(a) await new Promise(z => setTimeout(z, 2000)); // (one more try: "Connection lost" on Render 2026-11-16 03:57)
+    try{ const r = await fetch(u + RUN_FILE + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok){ RUNSIG = sig; return true; } }catch(e){} } return false; }
 const postJ = async (u, o, ms) => { const c = new AbortController(), k = setTimeout(() => c.abort(), ms || 8000);
   try{ const r = await fetch(u, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(o), signal:c.signal}); return r.ok ? await r.json() : null; }catch(e){ return null; } finally{ clearTimeout(k); } };
 async function beat(){ if(WORKER || document.hidden || HOLD) return; const u = runHost(); if(!u) return;
@@ -2445,11 +2450,22 @@ function busySecs(url){ // what's ahead on that PC: our own pieces by their esti
   const q = pcOf(url).queue || {}, other = [...(q.queue_running || []), ...(q.queue_pending || [])].filter(x => !ids.has(x[1])).length;
   return ours + other * 300;
 }
-function estSecs(job, url){ // Render: ~24 s a step for a 5 s 864x480 clip, more with size and length; Main 1.26x
-  let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20);
-  for(const p of job.pieces){ const lt = p.gen <= 5 ? 2 : ((p.gen - 5) / 17 | 0) * 5 + 2, tok = lt * (job.w / 32) * (job.h / 32) + (job.imgs || []).length * 900 + (job.vids || []).length * 6000 + (job.sm ? smoothKeys(p.gen, job.sm.every || 4).length * (job.w / 32) * (job.h / 32) : 0);
-    s += 70 + steps * 24 * Math.pow(tok / 15000, 1.15) * (job.vids && job.vids.length ? 2 : 1) * (job.ctl ? (job.ctl2 ? 1.5 : 1.3) : 1) * (job.neg && nagOn(oi) ? 1.2 : 1); }
-  return s * pcSpeed(url) + 15 * job.pieces.length;
+// How long a take runs, fitted to 106 of Jordan's real jobs on Render and 21 on Main (overnight QA 2026-11-16; the old guess ran 30-100%
+// short on later parts and with many pictures). Per part: the text encoder reading the pictures (about 6 s + 3.2 s a picture, + 25 s a
+// reference video, on Render; skipped when ComfyUI still has the same words and pictures from the part before), then the steps, each
+// 21.3 s at 16.9k tokens and growing with the tokens to the power 1.57 (pictures ~870 tokens each, a part that carries on adds the 22
+// frames it starts from), then decode + save (~38 s for 5 s). Main: steps 1.26x, text encoder 1.7x, decode 1.35x.
+function partTokens(job, p, i){ const w = +job.w || 832, h = +job.h || 480, rows = (w / 32) * (h / 32), F = +p.gen || 121, lt = F <= 5 ? 2 : ((F - 5) / 17 | 0) * 5 + 2, area = Math.sqrt(w * h / (864 * 480));
+  const nI = (job.imgs || []).length, nV = (job.vids || []).length, ctx = p.ctx || ((i > 0 || job.cont) && !(job.sm)) ? 6 * rows : 0;
+  const gen = lt * rows + 2 * Math.round(F / FPS * 40), refs = (nI || nV ? 600 : 0) + nI * 870 * area + nV * 5800 * area;
+  return {gen, all:gen + refs + ctx + (job.sm ? smoothKeys(F, job.sm.every || 4).length * rows : 0), nI, nV, area}; }
+function estSecs(job, url){
+  let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20), sp = pcSpeed(url);
+  (job.pieces || []).forEach((p, i) => { const T = partTokens(job, p, i);
+    const same = i > 1 && (p.prompt || '')===((job.pieces[i - 1] || {}).prompt || ''), te = same ? 1 : (6 + 3.2 * T.nI + 25 * T.nV) * Math.pow(T.area * T.area, 1.2);
+    const it = 21.3 * Math.pow(T.all / 16900, 1.57) * (job.ctl ? (job.ctl2 ? 1.5 : 1.3) : 1) * (job.neg && nagOn(oi) ? 1.2 : 1);
+    s += te * Math.pow(sp, 2.3) + steps * it * sp + 38 * (T.gen / 15400) * Math.pow(sp, 1.3); });
+  return s + 5 * (job.pieces || []).length;
 }
 // 🦴 the MiniMax H3 Fun ControlNet (union: skeleton, depth, edges) lives in models/model_patches
 function patchOf(oi){ const l = combo(oi, 'ModelPatchLoader', 'name'); return l.find(n => /minimax|h3/i.test(n) && /control|union|fun/i.test(n)) || l.find(n => /fun.?control|control.?union/i.test(n) && !/z.?image|qwen|wan|flux|sdxl|ltx/i.test(n)) || ''; }
@@ -2490,6 +2506,9 @@ async function moveUp(t, to){ const from = t.pc, fl = t.smoothed || t.final, oi 
     if(ch){ if(pv && !ch.from) ch.from = pv.pc; ch.pc = to; } // (its saved ending to carry on from stays in the folder of the PC that made it)
     toast('⇄ ' + pcName(to) + ' was free, so it took a waiting ✨ pass from ' + pcName(from), 4000); tickSoon(300); return true; }
   finally{ MOVE_NOW.delete(t.id); } }
+// what's left of the job a PC is running: its guess less the time it has run (the websocket saw it start), else its steps done so far,
+// else half (overnight QA 2026-11-16: "half of it" was the whole guess, and the guesses ran 30-100% short on later parts)
+function runLeft(id, est){ const L = LIVE[id]; if(L && L.t0) return Math.max(30, est - (Date.now() - L.t0) / 1000); if(L && L.max > 1 && L.v > 0) return Math.max(30, est * (1 - L.v / L.max)); return est / 2; }
 async function rebalance(){
   if(MOVING || S.f.where!=='both' || S.pcs.length < 2) return 0; MOVING = true; let moved = 0;
   try{
@@ -2500,7 +2519,7 @@ async function rebalance(){
         const est = id => { for(const t of S.takes){ if(t.upPid===id) return estSecs(t, from); for(const x of t.pieces) if(x.pid===id) return x.est || 300; } return 300; };
         for(const t of S.takes){ const up = movableUp(t, from, run, order); if(!(up || movable(t, from, run, order)) || ((!t.combo || t.combo.seam) && canRun(u, t))) continue; // (a plain ⛓ join only needs Concatenate Video: moveTake checks it)
           const at = up ? order.indexOf(t.upPid) : Math.min(...t.pieces.map(x => order.indexOf(x.pid)));
-          const ahead = [...run].reduce((s, id) => s + est(id) / 2, 0) + order.slice(0, at).reduce((s, id) => s + est(id), 0); // (half of the running one is a guess at what's left)
+          const ahead = [...run].reduce((s, id) => s + runLeft(id, est(id)), 0) + order.slice(0, at).reduce((s, id) => s + est(id), 0);
           if(estSecs(t, u) >= ahead + estSecs(t, from)) continue; // it would still finish sooner where it is
           if(!best || at > best.at) best = {t, at, from, up}; } }
       if(best && await (best.up ? moveUp(best.t, u) : moveTake(best.t, u))){ moved++; Q[u] = {queue_running:[[0, 'moved']], queue_pending:[]}; } }
@@ -3273,6 +3292,7 @@ async function tick(){
     for(const t of S.takes) if(t.state==='failed' && t.selfAt && Date.now() >= t.selfAt && pcOf(t.pc).online){ t.selfAt = 0; t.selfTries = (t.selfTries || 0) + 1;
       if(await retryTake(t)) toast('↻ ' + pcName(t.pc) + ' lost a take, so it was sent again by itself (try ' + t.selfTries + ' of ' + SELF_TRIES + ')', 5000); }
     for(const t of S.takes) if(t.k4 && (t.k4.state==='wait' || t.k4.state==='working')) await tickFin(t);
+    await lateFinish();
     const busy = S.takes.filter(t => t.state==='working').reverse();
     for(const t of busy){
       const p = pcOf(t.pc); if(!p.online || MOVE_NOW.has(t.id)) continue;
@@ -3316,6 +3336,22 @@ async function tick(){
     save(); drawTakes();
   }catch(e){ console.warn(e); }
   tickT = setTimeout(tick, S.takes.some(t => t.state==='working' || (t.k4 && (t.k4.state==='wait' || t.k4.state==='working'))) ? 4000 : 15000);
+}
+// 🛟 a take marked stopped whose clip was made after all (overnight QA 2026-11-16: take …tn07 read "Cancelled" while its job, sent
+// again, finished on Main 47 s later, and nothing pointed at the video): for a few hours after it stopped, a stopped take looks for its
+// parts' files now and then, and if every part is there it carries on as finished (joined like any other take)
+const LATE = {}, LATE_H = 6 * 3600e3, LATE_EVERY = 180e3, LATE_TRIES = 6;
+async function lateFinish(){ const now = Date.now();
+  for(const t of S.takes){ if(t.state!=='failed' || t.selfAt || t.up || t.upStage || t.combo || t.from || t.sm || !(t.pieces || []).length || !pcOf(t.pc).online) continue;
+    const last = Math.max(0, ...t.pieces.map(p => +p.tq || 0)); if(!last || now - last > LATE_H) continue;
+    const L = LATE[t.id] = LATE[t.id] || {n:0, at:0}; if(L.n >= LATE_TRIES || now - L.at < LATE_EVERY) continue; L.n++; L.at = now;
+    const found = []; let all = true;
+    for(let i = 0; i < t.pieces.length; i++){ const p = t.pieces[i]; if(p.state==='done' && p.file){ found.push(p.file); continue; }
+      let f = null; try{ f = await probeFile(t, i); }catch(e){} if(!f){ all = false; break; } found.push(f); }
+    if(!all) continue;
+    t.pieces.forEach((p, i) => { if(p.state!=='done'){ p.file = found[i]; p.state = 'done'; p.err = ''; p.lost = false; p.t1 = p.t1 || now; } });
+    Object.assign(t, {state:'working', late:1}); delete LATE[t.id];
+    toast('🛟 A take marked stopped on ' + pcName(t.pc) + ' had finished after all, so it\'s back', 6000); }
 }
 // ComfyUI forgets finished jobs when it restarts: a piece that finished just before is found by its file
 async function probeFile(t, i){
@@ -3911,7 +3947,18 @@ function drawGo(){
   const n = +S.f.takes || 1; b.textContent = 'Render' + (n > 1 ? ' ' + n + ' takes' : ''); $('#goN').textContent = n;
   const long = n > 1 && !S.f.sm && !contOn() && currentPlan().length > 1, th = $('#takesHow'); if(th) th.textContent = long ? n + ' separate full-length clips' : 'split across the PCs';
   $('#goWhy').hidden = !why || /^Write/.test(why); $('#goWhy').textContent = why;
+  clearTimeout(ETA_T); ETA_T = setTimeout(drawEta, 700);
 }
+// ⏱ how long a take will run, before Render (overnight QA 2026-11-16: a take's time is mostly set by how many pictures go with it; 9
+// pictures run ~50% longer than 4, a reference video ~80% longer), from the same fitted guess the app uses to split takes between PCs
+let ETA_T = 0;
+function drawEta(){ const e = $('#goEta'); if(!e) return; let txt = '';
+  try{ if(!whyNot() && !S.f.sm){ const t = snapshot(), T = castTake(t, true), job = Object.assign({}, t, {imgs:T.imgs, vids:T.vids || t.vids || []});
+      const on = S.pcs.filter(p => p.on!==false && pcOf(p.url).online && (S.f.where==='both' || S.f.where===p.url));
+      const m = s => s < 90 ? Math.round(s) + ' s' : Math.round(s / 60) + ' min';
+      if(on.length) txt = '⏱ About ' + on.map(p => m(estSecs(job, p.url)) + (on.length > 1 ? ' on ' + p.name : '')).join(', ') + ' a take'
+        + (job.imgs.length ? ' · ' + job.imgs.length + ' picture' + (job.imgs.length > 1 ? 's' : '') : '') + ((job.vids || []).length ? ' + ' + job.vids.length + ' clip' + (job.vids.length > 1 ? 's' : '') : '') + (job.pieces.length > 1 ? ' · ' + job.pieces.length + ' parts' : ''); } }catch(err){ txt = ''; }
+  e.textContent = txt; e.hidden = !txt; }
 function stateLine(t){ const b = stateLine0(t); return t.k4 && t.state==='done' ? b + ' · ' + k4Line(t) : b; }
 function stateLine0(t){
   const n = t.pieces.length, done = t.pieces.filter(p => p.state==='done').length, run = t.pieces.find(p => p.state==='running'), q = t.pieces.find(p => p.state==='queued');
