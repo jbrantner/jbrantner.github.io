@@ -77,6 +77,36 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   // 🔁 repeat: the end of the film starts it again
   const S5 = await fr.evaluate(async () => { const f = FILM.S.films[0]; FILM.go({v:'film', film:'fL'}); await new Promise(z => setTimeout(z, 200)); document.querySelector('#repBtn').click(); const on = FILM.S.rep; let again = 0; const o = FILM.go; FILM.PH = 15; FILM.playEnd(f); again = FILM.PH; const playing = document.querySelector('#playBtn').textContent; FILM.S.rep = false; return {on, again, playing}; });
   ok(S5.on===true && S5.again < 0.5 && /Pause/.test(S5.playing), '🔁 next to ▶ Play: at the end the film plays again from the start: ' + JSON.stringify(S5));
+  // ---------- 🪄 Smooth the whole track / 🔁 loop with 🪄 smoothing (Jordan 2026-11-16) ----------
+  // three 1.5 s clips: the joined track is 4.5 s (108 frames), clip edges at 36 and 72
+  await fr.evaluate(() => { const f = {id:'fS', name:'Smooth', tracks:[{id:'trS', clips:[]}], pps:24}; FILM.S.films.unshift(f); ['tA', 'tB', 'tC'].forEach(id => { const c = FILM.addClip(f, FILM.takeOf(id), 0); c.out = 1.5; }); f.tracks[0].clips.forEach((c, i) => { c.at = i * 1.5; }); FILM.go({v:'film', film:'fS'}); });
+  await page.waitForTimeout(300);
+  const M0 = await fr.evaluate(async () => { const q = s => document.querySelector(s); q('.trk [data-act="trackMenu"]').click(); await new Promise(z => setTimeout(z, 100)); const r = {smBtn:!!q('#sheetCard [data-act="smoothTrack"]')};
+    FILM.loopTrackSheet(FILM.S.films[0], 0); await new Promise(z => setTimeout(z, 100)); r.tog = !!q('#ltSm'); q('#ltSm').click(); r.on = FILM.S.loopSm; q('#ltFr [data-v="16"]').click(); q('[data-act="loopTrackGo"]').click(); await new Promise(z => setTimeout(z, 2500)); return r; });
+  const LC = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.blend && x.combo.blend.loop); return t && {id:t.id, back:t.combo.blend.back, seam:t.combo.blend.seam, clips:t.combo.blend.bounds.map(b => [b.take, b.off, b.out - b.in, !!b.clip])}; });
+  ok(M0.smBtn && M0.tog && M0.on && LC && LC.back && LC.seam===16 && JSON.stringify(LC.clips)==='[["tA",0,1.5,true],["tB",1.5,1.5,true],["tC",3,1.5,true]]', 'track ⋯ has 🪄 Smooth the whole track; the 🔁 sheet has 🪄 Smooth the whole loop too, which joins the whole track in order for a looping smoothing: ' + JSON.stringify({M0, LC}));
+  // the join is done → it loads into 🪄 Smooth as a loop turned at a clip edge, the words moved with it
+  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); Object.assign(t, {state:'done', final:{filename:'joined.mp4', subfolder:'Output_Render/H3Deck/' + t.name, type:'output'}}); t.pieces.forEach(p => { p.state = 'done'; p.file = t.final; }); H3.saveNow(); }, LC.id);
+  await fr.evaluate(() => FILM.placeNew()); await page.waitForTimeout(3000);
+  const SF = await page.evaluate(() => { const f = H3.S.f; f.seconds = 4.5; return {sm:f.sm, loop:f.smLoop, h:f.smLoopH, seam:f.smSeam, spc:f.smSpc, back:f.smBack && {loop:f.smBack.loop, n:f.smBack.bounds.length}, blend:!!f.smBlend, prompt:f.prompt}; });
+  ok(SF.sm && SF.loop && (SF.h===36 || SF.h===72) && SF.seam===16 && SF.spc && SF.back && SF.back.loop && SF.back.n===3 && !SF.blend && /\[0s-1\.5s\] she spins/.test(SF.prompt), 'loaded into 🪄 Smooth: loop on at a clip edge, 📐 spacing on, 16 free frames, the result marked to go back into the 3 clips, timed words turned with the loop: ' + JSON.stringify(SF));
+  // a big size splits the loop into parts, none of them cut near the turn; each part's graph pins only real frames
+  const PG = await page.evaluate(([R]) => { const f = H3.S.f; f.smSpc = false; f.mp = 0.9; f.aspect = '16:9'; const P = H3.smoothPlan(), L = H3.smoothTotal(), H = f.smLoopH, turn = L - H;
+    const snap = H3.snapshot(), t = Object.assign({id:'tLP', pc:R, name:'lp', dir:'H3Deck/lp', seed:1}, snap), oi = H3.PC[R].oi, names = {[f.smVid]:'joined.mp4'}, out = [];
+    t.pieces.forEach((p, i) => { const g = H3.pieceGraph(t, i, oi, names).g, N = c => Object.values(g).filter(n => n.class_type===c), links = Object.values(g).every(n => Object.values(n.inputs).every(v => !Array.isArray(v) || typeof v[0]!=='string' || g[v[0]]));
+      out.push({gen:p.gen, start:p.start, guides:N('MiniMaxH3AddGuide').length, slices:N('Video Slice').length, links, idx:N('ImageFromBatch').every(n => n.inputs.batch_index >= 0)}); });
+    const seams = P.slice(1).map(p => Math.round(p.start * 24 + (p.skip || 0)));
+    return {L, H, turn, parts:P.length, far:Math.min(...seams.map(s => Math.abs(s - turn))), lh:snap.sm.lh, lt:snap.sm.lt, back:!!snap.back, out}; }, [R]);
+  ok(PG.parts > 1 && PG.far >= 14 && PG.lh===PG.H && PG.lt===PG.L && PG.back && PG.out.every(o => o.links && o.idx && o.guides > 4) && PG.out.some(o => o.slices===2), 'a looped smoothing too big for one window renders in parts, no part seam near the turn; the part across the turn takes frames from both ends of the video (2 slices); every link valid: ' + JSON.stringify(PG));
+  // done → back into the same clips: each clip gets its own stretch of the turned video, end running into start
+  const BP = await fr.evaluate(([H, L]) => { const f = FILM.S.films[0], tr = f.tracks[0], bk = {film:f.id, track:tr.id, loop:true, lh:H, lt:L, bounds:tr.clips.slice().sort((a, b) => a.at - b.at).map((c, i) => ({clip:c.id, take:c.take, off:i * 1.5, len:1.5}))};
+    const t = {id:'tSm', pieces:[{deliv:L}]}; FILM.S.extraTake = t; const n = FILM.backPlace(Object.assign(FILM.takeOf('tA') ? {} : {}, t), bk); return {n, cs:tr.clips.slice().sort((a, b) => a.at - b.at).map(c => [c.take, c.at, +c.in.toFixed(3), +c.out.toFixed(3)])}; }, [PG.H, PG.L]);
+  const exp = [0, 1, 2].map(i => { const s0 = i * 36, s1 = Math.min(PG.L, s0 + 36), o0 = ((s0 - PG.H) % PG.L + PG.L) % PG.L; return ['tSm', i * 1.5, +(o0 / 24).toFixed(3), +((o0 + s1 - s0) / 24).toFixed(3)]; });
+  ok(BP.n===3 && JSON.stringify(BP.cs)===JSON.stringify(exp), 'back in place: every clip shows its own stretch of the turned video, the clips stay where they are: ' + JSON.stringify({BP, exp}));
+  // 🪄 Smooth the whole track (no loop): blend-style smoothing that goes back into the same clips
+  const ST = await fr.evaluate(async () => { const f = FILM.S.films.find(x => x.id==='fL'); return FILM.smoothTrackGo(f, f.tracks[0]); });
+  const SC = await page.evaluate(() => { const t = H3.S.takes.find(x => x.combo && x.combo.blend && x.combo.blend.back && !x.combo.blend.loop); return t && {n:t.combo.blend.bounds.length}; });
+  ok(ST && SC && SC.n===3, '🪄 Smooth the whole track joins all its clips for a smoothing that comes back into them: ' + JSON.stringify(SC));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
