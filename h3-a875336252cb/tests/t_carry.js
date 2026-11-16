@@ -29,7 +29,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     if(p==='/queue' && rt.request().method()==='POST'){ QP.push({host:u.origin, body:JSON.parse(rt.request().postData() || '{}')}); return J({}); }
     if(p==='/renderdeck/delete'){ DEL.push(JSON.parse(rt.request().postData() || '{}')); return J({moved:1}); }
     if(p==='/agent/status') return J({agent:1, comfy:'up', wanted:true});
-    if(p==='/queue') return J({queue_running:[], queue_pending:sent.map(s => [0, s.pid])});
+    if(p==='/queue') return J({queue_running:[], queue_pending:sent.filter(s => s.host===u.origin).map(s => [0, s.pid])});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p.startsWith('/userdata/')) return rt.request().method()==='GET' ? rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}) : J({});
     if(p==='/view'){ views.push(u.searchParams.get('filename')); return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)}); }
