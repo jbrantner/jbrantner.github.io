@@ -772,6 +772,21 @@ function combo(nodeInfo, name){
   return [];
 }
 
+// Fix faces' two files as this computer names them: the face finder (Impact Pack bbox YOLO) and the SAM outline model.
+// det is '' when the computer has the nodes but not the face model (the 2026-11-13 slim-down took them off), so Fix faces is
+// skipped with a warning instead of failing the whole render; sam '' just leaves the outline out (box mask). No lists known
+// (test mode, or a computer we never heard from): the usual names, as before.
+function faceFiles(oi){
+  const D = {det:'bbox/face_yolov8m.pt', sam:'sam_vit_b_01ec64.pth'};
+  if(!oi || !oi.UltralyticsDetectorProvider) return D;
+  const listed = (d, k) => !!(d && d.input && ((d.input.required || {})[k] || (d.input.optional || {})[k])); // no list given: can't tell, use the usual name
+  const dl = combo(oi.UltralyticsDetectorProvider, 'model_name'), sl = oi.SAMLoader ? combo(oi.SAMLoader, 'model_name') : [];
+  const bn = n => n.split(/[\\/]/).pop().toLowerCase();
+  return {det:!listed(oi.UltralyticsDetectorProvider, 'model_name') ? D.det : dl.find(n => bn(n)==='face_yolov8m.pt') || dl.find(n => /^bbox[\\/].*face/i.test(n)) || '',
+    sam:!listed(oi.SAMLoader, 'model_name') ? D.sam : sl.find(n => bn(n)==='sam_vit_b_01ec64.pth') || sl.find(n => /sam_vit/i.test(n)) || ''};
+}
+const homeOi = () => S.test ? null : (pcOf(base()).oi || null);
+const FACES_MISSING = 'Fix faces was skipped: this computer is missing its face model (face_yolov8m). The picture renders without it.';
 // the model lists of each computer are kept on the phone: with the computer off, the app still opens ready to render,
 // and renders wait on the phone until a computer is on (offline: the lists in use are the saved ones)
 let offline = false;
@@ -1099,12 +1114,14 @@ function buildGraph(opt){
       out = [add('ImageScaleBy', {image:out, upscale_method:'lanczos', scale_by:up.scale}, 'Upscale x' + up.scale, '--up'), 0];
     }
   }
-  if(P.faces && !opt.draft){
+  const ff = faceFiles(homeOi());
+  if(P.faces && !opt.draft && !ff.det) notes.push(FACES_MISSING);
+  if(P.faces && !opt.draft && ff.det){
     // faces are found and redrawn up close with the LoRAs on. To blend in: the mask follows the face's shape (SAM)
     // instead of a box, its edge is feathered wide, the redraw is gentle, and it uses the render's own sampler and CFG
-    const det = add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}, 'Find faces', '--up');
+    const det = add('UltralyticsDetectorProvider', {model_name:ff.det}, 'Find faces', '--up');
     const extra = {noise_mask_feather:P.faceFeather ?? 32};
-    if(info && info.nodes.has('SAMLoader')) extra.sam_model_opt = [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}, 'Face outline', '--up'), 0];
+    if(info && info.nodes.has('SAMLoader') && ff.sam) extra.sam_model_opt = [add('SAMLoader', {model_name:ff.sam, device_mode:'AUTO'}, 'Face outline', '--up'), 0];
     out = [add('FaceDetailer', Object.assign({image:out, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed, steps:20, cfg:P.cfg,
       sampler_name:P.sampler, scheduler:P.scheduler, positive:pp, negative:nn, denoise:P.faceDenoise ?? 0.35, feather:P.faceFeather ?? 32, noise_mask:true, force_inpaint:true,
       bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
@@ -1261,11 +1278,12 @@ async function go(){ viewPinned = false;
   buzz();
   if(!S.test){ if(!had) status('Sending…'); await findFarm(); if(!farm) await Promise.all(allPcs().map(x => pollPc(x))); }
   const tap = Date.now().toString(36), away = !S.test && !farm && !allPcs().some(stillPc); // every computer off: they wait on the phone
-  let added = 0;
+  let added = 0, faceSkip = false;
   for(let i = 0; i < runs; i++){
     P.seed = P.lockSeed ? first + i : (i ? randSeed() : first); // a kept seed steps by one so the renders differ
     // a draft also carries the full render it can become, built now so later recipe changes don't touch it
     const built = buildGraph(S.draft ? {draft:draftStep(P), one:true} : null), fin = S.draft ? buildGraph({one:true, exact:true}) : null;
+    if(built.notes.includes(FACES_MISSING) || (fin && fin.notes.includes(FACES_MISSING))) faceSkip = true;
     const e = {key:tap + i + Math.random().toString(36).slice(2,6), id:null, srv:S.test ? 'test' : null, home:S.test ? 'test' : base(), state:'sending', hidden:!!S.hidden,
       graph:built.graph, titles:built.titles, seed:built.seed, prompt:S.prompt, ckpt:M.ckpt, n:i+1, of:runs, images:[], snap:snapshot(built.seed),
       size:sizeOf(P), pics:on1('pic') || S.draft ? 1 : S.batch, steps:S.draft ? draftStep(P) : P.steps};
@@ -1287,7 +1305,8 @@ async function go(){ viewPinned = false;
     else if(err){ S.queue = S.queue.filter(q => !mine.includes(q)); save(); failAll(err); added = 0; } }
   if(S.queue.slice(-added).some(e => e.outbox)){ save(); toast((added > 1 ? 'Saved' : 'Saved it') + ' on the phone: it goes to a computer as soon as one is on'); drawGo(); drawStatus(); drawQueue(); schedule(3000); P.seed = first; save(); renderBlocks(); return; }
   P.seed = first; save(); renderBlocks(); drawGo(); drawStatus(); drawQueue();
-  if(added && had) toast(added > 1 ? added + ' renders added to the queue' : 'Added to the queue');
+  if(added && faceSkip) toast(FACES_MISSING, true);
+  else if(added && had) toast(added > 1 ? added + ' renders added to the queue' : 'Added to the queue');
   if(S.test) testRun(); else schedule(1500);
 }
 // can the farm be given this render? Not when a computer that's on can't run it at all (Main has no ControlNets, so no
@@ -2154,7 +2173,7 @@ function blockBody(b){
     <p class="note" style="margin-left:92px">${b.mossFast ? 'Fast uses the 8-step LoRA with no CFG, so Steps, Prompt pull, Sampler and Scheduler above are not used.' : 'Fast adds an 8-step LoRA: about 6× quicker, a little less detail.'} Finishing pass and Fix faces are SDXL-only for now.</p>` : `
     <div class="row" style="padding-left:92px;flex-wrap:wrap"><button class="chipbtn" data-do="nonoise" style="${b.noNoise!==false?'border-color:var(--samp);color:var(--samp)':''}">${b.noNoise!==false ? '✓ Finishing pass' : 'Finishing pass: off'}</button>${FACE('samp')}</div>
     <p class="note" style="margin-left:92px">Finishing pass hands the last ${Math.max(1, b.steps - Math.round(b.steps*0.8))} steps to a second sampler with no added noise, like your Illustrious_Main. Fix faces redraws each face up close at the very end, after any upscale.</p>`}
-    ${b.faces && !isMoss((S.blocks.find(x=>x.type==='model') || {}).ckpt) ? slider('faceDenoise','Face redraw',0.2,0.6,0.05,b.faceDenoise ?? 0.35) + slider('faceFeather','Face blend',8,64,4,b.faceFeather ?? 32) + '<p class="note" style="margin-left:92px">Lower Face redraw keeps the face closer to the original; higher Face blend softens the edge into the surroundings.</p>' : ''}`; }
+    ${b.faces && !isMoss((S.blocks.find(x=>x.type==='model') || {}).ckpt) ? slider('faceDenoise','Face redraw',0.2,0.6,0.05,b.faceDenoise ?? 0.35) + slider('faceFeather','Face blend',8,64,4,b.faceFeather ?? 32) + '<p class="note" style="margin-left:92px">Lower Face redraw keeps the face closer to the original; higher Face blend softens the edge into the surroundings.</p>' + (!faceFiles(homeOi()).det ? '<p class="warn" style="margin-left:92px">This computer is missing the face model (face_yolov8m), so Fix faces is skipped for now.</p>' : '') : ''}`; }
   if(b.type==='lora'){ const w = S.loraWords[b.lora] || '', lm = loraMeta(b.lora), meta = ((lm && lm.words) || []).filter(x => !w.toLowerCase().split(/,\s*/).includes(x.toLowerCase()));
     return `<div class="row"><select data-k="lora">${opts(loraList(I.lora), b.lora, info ? 'No LoRAs found' : 'Connect to see your LoRAs')}</select></div>
     ${slider('strength','Strength',-1,2,0.05,b.strength)}
@@ -5915,11 +5934,12 @@ function cmPoseGraph(k, L, gd, v, seed, prefix){
 // Fix faces as the Painting block does it (face_yolov8m, SAM outline, wide feather, gentle redraw), for 🧊's pictures; left out on
 // a computer without the Impact Pack nodes
 function cmFace(add, k, img, model, clip, vae, pos, neg, seed, dn){ if(!k.oi.FaceDetailer || !k.oi.UltralyticsDetectorProvider) return img;
-  const extra = {noise_mask_feather:32}; if(k.oi.SAMLoader) extra.sam_model_opt = [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0];
+  const ff = faceFiles(k.oi); if(!ff.det) return img;
+  const extra = {noise_mask_feather:32}; if(k.oi.SAMLoader && ff.sam) extra.sam_model_opt = [add('SAMLoader', {model_name:ff.sam, device_mode:'AUTO'}), 0];
   return [add('FaceDetailer', Object.assign({image:img, model, clip, vae, guide_size:512, guide_size_for:true, max_size:1024, seed:seed || 1, steps:20, cfg:5.5,
     sampler_name:'euler_ancestral', scheduler:'normal', positive:pos, negative:neg, denoise:dn || 0.35, feather:32, noise_mask:true, force_inpaint:true,
     bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
-    sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}), 0], wildcard:'', cycle:1}, extra)), 0]; }
+    sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[add('UltralyticsDetectorProvider', {model_name:ff.det}), 0], wildcard:'', cycle:1}, extra)), 0]; }
 // a computer is busy while ComfyUI has anything in its line or one of our pose jobs is being sent to it or made on it
 const CM_SENTAT = {};
 const cmPcBusy = url => pcOf(url).load > 0 || (S.cmPoses || []).some(P => (P.orb || []).concat(cmPics(P), P.cands || [], P.cc ? [P.cc.full, P.cc.redraw] : []).some(v => (v.making && v.making.pc===url) || (v.busy && v.busyPc===url)));
@@ -6984,10 +7004,11 @@ function ccIll(add, k, c, extra){ const ck = add('CheckpointLoaderSimple', {ckpt
   const own = ccOwnLoras(c, k); own.forEach(o => { const l = add('LoraLoader', {model, clip, lora_name:o.name, strength_model:o.w, strength_clip:o.w}); model = [l,0]; clip = [l,1]; });
   const tx = styleText('illustrious'), pos = [add('CLIPTextEncode', {clip, text:ccJoin(ccTrigger(c, k), ...own.map(o => (S.loraWords || {})[o.name] || ''), tx.pos, c.obj ? 'no humans, still life, object focus, ' + (c.tags || '') : c.tags || '1girl, solo', c.obj ? '' : 'full body, standing, arms at sides, closed mouth', extra, CM_WHITE)}), 0];
   const neg = [add('CLIPTextEncode', {clip, text:ccJoin(tx.neg, c.obj ? OC_NEG : CC_NEG)}), 0]; return {model, clip, vae, pos, neg}; }
-function ccFace(add, k, img, I, seed, guide){ if(!k.oi.FaceDetailer || !k.oi.UltralyticsDetectorProvider) return img; const extra = {noise_mask_feather:32}; if(k.oi.SAMLoader) extra.sam_model_opt = [add('SAMLoader', {model_name:'sam_vit_b_01ec64.pth', device_mode:'AUTO'}), 0];
+function ccFace(add, k, img, I, seed, guide){ if(!k.oi.FaceDetailer || !k.oi.UltralyticsDetectorProvider) return img; const ff = faceFiles(k.oi); if(!ff.det) return img;
+  const extra = {noise_mask_feather:32}; if(k.oi.SAMLoader && ff.sam) extra.sam_model_opt = [add('SAMLoader', {model_name:ff.sam, device_mode:'AUTO'}), 0];
   return [add('FaceDetailer', Object.assign({image:img, model:I.model, clip:I.clip, vae:I.vae, positive:I.pos, negative:I.neg, guide_size:guide, guide_size_for:true, max_size:guide * 1.5, seed, steps:20, cfg:5, sampler_name:'euler', scheduler:'normal',
     denoise:0.25, feather:24, noise_mask:true, force_inpaint:true, bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:2.5, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
-    sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[add('UltralyticsDetectorProvider', {model_name:'bbox/face_yolov8m.pt'}), 0], wildcard:'', cycle:1}, extra)), 0]; }
+    sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[add('UltralyticsDetectorProvider', {model_name:ff.det}), 0], wildcard:'', cycle:1}, extra)), 0]; }
 const ccLine = (add, k, I, img, res, strength, end, type, cn) => { const ap = add('ControlNetApplyAdvanced', {positive:I.pos, negative:I.neg, control_net:[add('SetUnionControlNetType', {control_net:cn, type:type || 'canny/lineart/anime_lineart/mlsd'}), 0],
   image:type==='tile' ? img : [add('AnimeLineArtPreprocessor', {image:img, resolution:res}), 0], strength, start_percent:0, end_percent:end, vae:I.vae}); I.pos = [ap,0]; I.neg = [ap,1]; };
 const ccWhite = (add, w, h) => [add('EmptyImage', {width:w, height:h, batch_size:1, color:16777215}), 0];

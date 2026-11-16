@@ -285,6 +285,29 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   page.once('dialog', d => d.accept()); await page.click('#draftDrop'); ok(await page.isHidden('#drafts'), 'Put away clears the drafts list');
   await page.click('#draftBtn'); await page.click('#runsDown'); ok((await page.textContent('#goBtn'))==='Render', 'draft mode off again');
 
+  // Fix faces with the face model missing on the computer (2026-11-15): skipped with a warning, never a failed render
+  const ffr = await page.evaluate(() => {
+    const P = S.blocks.find(b => b.type==='sampler'), pc = pcOf(base()), was = {faces:P.faces, oi:pc.oi, test:S.test};
+    const withLists = (det, sam) => Object.assign({}, was.oi || {}, {FaceDetailer:{input:{required:{}}}, UltralyticsDetectorProvider:{input:{required:{model_name:[det]}}}, SAMLoader:{input:{required:{model_name:[sam]}}}});
+    const types = g => Object.values(g).map(x => x.class_type);
+    const hadSam = info.nodes.has('SAMLoader'); info.nodes.add('SAMLoader');
+    S.test = false; P.faces = true;
+    pc.oi = withLists([], []); const a = buildGraph();
+    pc.oi = withLists(['bbox/face_yolov8m.pt', 'segm/person_yolov8m-seg.pt'], ['sam_vit_b_01ec64.pth']); const b = buildGraph();
+    pc.oi = withLists(['bbox\\face_yolov8m.pt'], []); const c = buildGraph();
+    const warnShown = (pc.oi = withLists([], []), renderBlocks(), /missing the face model/.test(document.body.textContent));
+    if(!hadSam) info.nodes.delete('SAMLoader');
+    Object.assign(P, {faces:was.faces}); pc.oi = was.oi; S.test = was.test; renderBlocks();
+    const fdOf = g => Object.values(g).find(x => x.class_type==='UltralyticsDetectorProvider');
+    return {aSkip:!types(a.graph).includes('FaceDetailer') && a.notes.includes(FACES_MISSING),
+      bDet:(fdOf(b.graph) || {inputs:{}}).inputs.model_name, bSam:types(b.graph).includes('SAMLoader'),
+      cDet:(fdOf(c.graph) || {inputs:{}}).inputs.model_name, cSam:types(c.graph).includes('SAMLoader'), warnShown};
+  });
+  ok(ffr.aSkip, 'Fix faces is skipped (with a note) when the computer has no face model');
+  ok(ffr.bDet==='bbox/face_yolov8m.pt' && ffr.bSam, 'Fix faces uses the face model and SAM outline when they are there');
+  ok(ffr.cDet==='bbox\\face_yolov8m.pt' && !ffr.cSam, 'Fix faces takes the computer\'s own spelling and goes without SAM when SAM is missing');
+  ok(ffr.warnShown, 'the Fix faces block warns that the face model is missing');
+
   // switching a block off removes it
   await page.locator('.block[style*="--lora"] [data-do=toggle]').dispatchEvent('click');
   await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); ok(!(await page.textContent('#json')).includes('LoraLoader'), 'switched-off block left out');
