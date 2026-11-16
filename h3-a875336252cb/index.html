@@ -3097,6 +3097,8 @@ function upGraph(t, oi, names){
 async function tickUpscale(t){
   const p = pcOf(t.pc);
   if(t.upStage==='start'){
+    // (↻ sent again after a restart: wait for the ✨ before it to finish, its ending is what this carries on from)
+    if(t.waitPrev){ const pv = t.up && t.up.chain && S.takes.find(x => x.id===t.up.chain.prev); if(pv && pv.upStage && pv.upStage!=='done' && !pv.upErr && pv.state!=='failed') return; }
     { const why = p.oi ? regenMissing(p.oi, t) : 'not reachable'; if(why){
         // (Jordan 2026-11-11: a ✨ pass went to Main, which has no Open-H3 regenerate LoRA, and kept the original) another PC that can do it takes it
         const alt = t.up.chain && t.up.chain.prev ? null : S.pcs.map(x => x.url).find(u => u!==t.pc && !canRun(u, t)); if(alt && !t.upMoved){ t.upMoved = true; t.pc = alt; t.t0r = Date.now(); save(); return; }
@@ -3105,7 +3107,8 @@ async function tickUpscale(t){
       // ↻ the clip before was sent again (a retry of its ✨ part): carry on from that newer try
       if(pv && (pv.upErr || pv.state==='failed') && pv.redo){ const alt = S.takes.find(x => x.id!==pv.id && x.redo && x.redo.key===pv.redo.key && x.redo.wi===pv.redo.wi && !x.upErr && x.state!=='failed'); if(alt){ pv = alt; ch.prev = alt.id; } }
       if(pv && (pv.upErr || pv.state==='failed')){ t.upErr = 'the clip before it failed, so there was nothing to carry on from'; return upDone(t); }
-      if(pv && pv.upStage==='start') return; }
+      if(pv && pv.upStage==='start') return;
+      delete t.waitPrev; }
     { const fl = t.smoothed || t.final; // a video made on the other PC: wait (up to 15 min) for Dropbox to bring it over before queueing
       if(fl && Date.now() - (t.t0r || t.t || 0) < 15 * 60000){ let seen = true; try{ seen = (await fetch(rawView(t.pc, fl), {method:'HEAD'})).ok; }catch(e){} if(!seen) return; } }
     try{ await fetch(t.pc + '/free', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({unload_models:true, free_memory:true})}); }catch(e){}
@@ -3115,12 +3118,19 @@ async function tickUpscale(t){
   let h = null; try{ h = (await getJ(t.pc + '/history/' + t.upPid))[t.upPid]; }catch(e){ return; }
   if(h && h.status && h.status.completed){ const o = (h.outputs || {})[t.upSave] || {}, f = (o.images || o.videos || o.gifs || [])[0];
     if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.upErr = 'the regenerate gave nothing back'; upDone(t); }
-  else if(h && h.status && h.status.status_str==='error'){ t.upErr = ((h.status.messages || []).find(x => x[0]==='execution_error') || [0, {}])[1].exception_message || 'the regenerate failed'; upDone(t); }
+  else if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error');
+    if(!e && upAgain(t)) return; t.upErr = (e || [0, {}])[1].exception_message || 'the regenerate was stopped on ' + pcName(t.pc); upDone(t); }
   else if(!h){ const q = p.queue || {}, inQ = [...(q.queue_running || []), ...(q.queue_pending || [])];
     if(inQ.some(x => x[1]===t.upPid)) t.upStage = (q.queue_running || []).some(x => x[1]===t.upPid) ? 'running' : 'queued';
-    else if(Date.now() - (t.tu || 0) > 60000){ t.upErr = 'the regenerate left the queue (ComfyUI restarted or it was cancelled)'; upDone(t); } }
+    else if(Date.now() - (t.tu || 0) > 60000){ if(upAgain(t)) return; t.upErr = 'the regenerate left the queue (ComfyUI restarted or it was cancelled)'; upDone(t); } }
 }
-function upDone(t){ t.upStage = 'done'; t.state = 'done'; t.t1 = Date.now(); notify(t); finStart(t); }
+// ↻ a ✨ / ⬆ regenerate that dropped out of the PC's line without an error of its own (a restart, a crash, a stop from somewhere else) goes
+// again by itself, twice at most (Jordan 2026-11-16: Take 3's regenerate left the queue when she restarted Render and the take kept the
+// original). Her own ✕ Cancel never gets here (it ends the pass itself); a real ComfyUI error is not retried.
+const UP_TRIES = 2;
+function upAgain(t){ if((t.upTries || 0) >= UP_TRIES) return false; t.upTries = (t.upTries || 0) + 1;
+  Object.assign(t, {upStage:'start', upPid:null, upErr:'', t0r:Date.now()}); if(t.up && t.up.chain && t.up.chain.prev) t.waitPrev = 1; toast('↻ The regenerate of a take left ' + pcName(t.pc) + "'s line, so it was sent again (try " + t.upTries + ' of ' + UP_TRIES + ')', 5000); save(); return true; }
+function upDone(t){ delete t.waitPrev; t.upStage = 'done'; t.state = 'done'; t.t1 = Date.now(); notify(t); finStart(t); }
 // 📺 4K at 60 fps (Jordan 2026-11-07: "a smoothing pass that upscales, refines, and adds the 60fps 4k look and feel"): the last step of a
 // 🪄 smoothing, after its bridges and ⬆ regenerate. The Render Deck helper (/renderdeck/h3finish) makes <name>_4K.mp4 next to the take's
 // video, one frame at a time: RIFE paints each 60 fps frame at its own moment between two 24 fps frames, then Real-ESRGAN to 3840.
@@ -4022,8 +4032,8 @@ function takeCard(t){
     // the extra tools sit behind ⋯ on each card (TMORE remembers which cards are open)
     const has = t.final || t.pieces.some(p => p.file), done = t.state==='done' && has;
     const acts = t.state==='working' ? `<button class="btn warn" data-act="cancel" data-t="${t.id}">✕ Cancel</button>`
-      : `${t.k4 && t.k4.state==='done' ? `<button class="btn pri" data-act="save4k" data-t="${t.id}">📲 Save 4K 60</button>` : ''}${done && S.tab==='films' && filmTarget() ? `<button class="btn pri" data-act="useFilm" data-t="${t.id}">🎞 Use this take</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<span class="tmore">${has ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && t.final ? `<button class="btn xf" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button><button class="btn" data-act="loop" data-t="${t.id}">🔁 Make it loop</button>` : ''}${done ? `<button class="btn xf" data-act="mocap" data-t="${t.id}">🦴 To Mocap</button><button class="btn xf" data-act="guide" data-t="${t.id}">🎭 Use as guide</button>` : ''}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn warn" data-act="drop" data-t="${t.id}">🗑 Delete</button></span>`;
-    const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t)].join('|');
+      : `${t.k4 && t.k4.state==='done' ? `<button class="btn pri" data-act="save4k" data-t="${t.id}">📲 Save 4K 60</button>` : ''}${done && S.tab==='films' && filmTarget() ? `<button class="btn pri" data-act="useFilm" data-t="${t.id}">🎞 Use this take</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.up && t.upErr && t.upErr!=='Cancelled' ? `<button class="btn" data-act="upretry" data-t="${t.id}">↻ Regenerate again</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<span class="tmore">${has ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && t.final ? `<button class="btn xf" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button><button class="btn" data-act="loop" data-t="${t.id}">🔁 Make it loop</button>` : ''}${done ? `<button class="btn xf" data-act="mocap" data-t="${t.id}">🦴 To Mocap</button><button class="btn xf" data-act="guide" data-t="${t.id}">🎭 Use as guide</button>` : ''}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn warn" data-act="drop" data-t="${t.id}">🗑 Delete</button></span>`;
+    const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t), t.upStage || '', t.upErr || ''].join('|');
     return {id:t.id, sig, html:`<div class="take${TMORE.has(t.id) ? ' mopen' : ''}" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.up && t.up.unet ? famKey(t.up.unet) : t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}${t.state==='working' ? '' : `<button class="btn tmb" data-tm="${t.id}" aria-label="More for this take" title="⬇ Save, ↩ Use settings, 🗑 and more">⋯</button>`}</span></div>
       ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(actShow(sentWords(t), t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
@@ -4123,6 +4133,7 @@ document.addEventListener('click', async e => {
     else if(ds.act==='loop') await toSmooth(t, null, true);
     else if(ds.act==='mocap') await toMocap(t);
     else if(ds.act==='guide') await guideFromTake(t);
+    else if(ds.act==='upretry'){ t.upTries = 0; retryTake(t).then(ok => { if(!ok) toast(pcName(t.pc) + " can't take it right now"); drawTakes(); }); }
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
     else if(ds.act==='reroll'){ rerollSheet(t); return; }
     else if(ds.act==='rerollGo'){ const nt = JSON.parse(JSON.stringify(t)); if(ds.off) try{ nt.descOff = JSON.parse(ds.off); }catch(e){} nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); shufMark(nt, 1); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
