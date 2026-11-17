@@ -51,6 +51,8 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(W.n===3 && W.lib===1, 'options live apart from the 📚 Library: ' + JSON.stringify(W));
   // give Laura the wildcard
   await page.click('#tabs [data-tab="films"]');
+  // (no Films frame in this test, so the form stays the wildcard one: put Laura back by hand)
+  await page.evaluate(() => { H3.S.cast = [{n:1, kind:'char', who:'Laura', pics:['p1'], keep:'exact', attrs:[]}]; H3.S.f.prompt = '<Subject 1> walks to the window.'; H3.drawAll(); });
   await page.click('#castList [data-cn="1"] [data-cast="wild"]');
   await page.click('[data-ws="cat:wear"]'); await page.click('[data-ws="cat:hair"]'); await page.click('[data-ws="try"]');
   ok(await page.evaluate(() => /Outfit: .*Hair: Silver bob/.test(document.querySelector('#wsTry').textContent)), 'Try a roll shows a mix: ' + await page.evaluate(() => document.querySelector('#wsTry').textContent));
@@ -87,10 +89,23 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(await page.evaluate(() => { const t = H3.wildMark(H3.snapshot()); return !t.wild[1].picks.some(p => /school/.test(p.label)); }), 'an option that reads under 18 is never rolled');
 
   // 🎬 Wildcard clips: the tab has its own form and list, no timeline
+  await page.evaluate(() => { H3.S.fkey = ''; delete H3.S.forms['~wild']; delete H3.S.casts['~wild']; });
   await page.click('#tabs [data-tab="wild"]'); await page.waitForTimeout(300);
   const wt = await page.evaluate(() => ({fk:H3.S.fkey, form:!document.querySelector('#renderTab').hidden, film:document.querySelector('#filmTab').hidden, go:getComputedStyle(document.querySelector('.go') || document.body).display!=='none', cast:H3.S.cast.length, prompt:H3.S.f.prompt}));
   ok(wt.fk==='~wild' && wt.form && wt.film && wt.go, 'Wildcards tab: its own form + Render button, no Films timeline: ' + JSON.stringify(wt));
-  ok(wt.cast===0 && !wt.prompt, 'it starts with its own empty cast and prompt: ' + JSON.stringify(wt));
+  ok(!wt.prompt, 'it starts with its own empty prompt: ' + JSON.stringify(wt));
+  // 🎲 ready-made Wildcard subject 1, 2
+  const pre = await page.evaluate(() => H3.S.cast.map(c => [c.n, c.who, c.wild && c.wild.on, c.wild && c.wild.all]));
+  ok(JSON.stringify(pre)===JSON.stringify([[1, 'Wildcard subject 1', true, true], [2, 'Wildcard subject 2', true, true]]), 'two ready-made wildcard subjects: ' + JSON.stringify(pre));
+  ok(await page.evaluate(() => /Wildcard subject 1/.test(document.querySelector('#tagBar').textContent)), 'their chips are in the Shot box bar');
+  await page.click('#tagBar [data-wdn]');
+  const p3 = await page.evaluate(() => ({c:H3.S.cast.map(c => c.who), p:H3.S.f.prompt}));
+  ok(p3.c[2]==='Wildcard subject 3' && /<Subject 3>/.test(p3.p), '🎲 ＋ Wildcard adds subject 3 and puts its chip in: ' + JSON.stringify(p3));
+  const r3 = await page.evaluate(() => { H3.S.f.prompt = '<Subject 1> waves. Then <Subject 1> sits.'; const t = H3.wildMark(H3.snapshot()); return t.wild && t.wild[1] && t.wild[1].picks.map(p => p.cat); });
+  ok(r3 && r3.some(x => /Hair/.test(x)) && !r3.some(x => /Outfit/.test(x)), 'a ready-made one rolls every category with usable options (the under-18 outfits are skipped): ' + JSON.stringify(r3));
+  const P2 = await prom(await page.evaluate(() => { const t = H3.wildMark(H3.snapshot()); return t; }));
+  ok((P2.p.match(/<Subject 1>/g) || []).length >= 2 && !/<Subject 2>/.test(P2.p.split('\n').filter(l => /waves|sits/.test(l)).join()), 'the same subject twice in one take is one person (one tag)');
+  await page.evaluate(() => { H3.S.f.prompt = ''; });
   await page.evaluate(() => { H3.S.cast = [{n:1, kind:'char', who:'Ava', pics:['p1'], keep:'exact', attrs:[], wild:{on:true, cats:['hair'], who:[]}}]; H3.S.f.prompt = 'In a park. <Subject 1> smiles.'; H3.drawAll(); });
   // 🥋 random action options + chip
   await page.click('#wdOpts summary').catch(() => {});
