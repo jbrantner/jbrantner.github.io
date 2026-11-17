@@ -48,11 +48,12 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   ok(await page.evaluate(id => H3.wildJob(H3.S.takes.find(t => t.id===id)), wildIds[0]), 'a take in 🎲 Wildcard clips counts as a wildcard job');
   ok(await page.evaluate(() => H3.wildJob({redo:{src:H3.S.takes.find(t => t.film==='~wild').id}})), 'a pass made from a wildcard clip counts too');
   ok(!(await page.evaluate(() => H3.wildJob({film:''}))), 'a one-off take does not');
+  ok(!(await page.evaluate(() => H3.wildJob({film:'f1', wild:{1:{a:['x'], picks:[]}}}))), 'a film take with a 🎲 rolled character does not (only the 🎲 Wildcards tab counts)');
   // nothing moves before the switch
   ok(await page.evaluate(() => H3.wildSweep(true))===0, 'with no 🎲 PC nothing moves');
   // 🎲 Render takes Wildcard clips only
   await page.evaluate(() => { H3.S.pcs[0].wild = true; });
-  const why = await page.evaluate(() => H3.wildBlock('http://render.test', {film:''}));
+  const why = await page.evaluate(() => H3.wildBlock('http://render.test', {film:'', pieces:[{gen:121}], imgs:[], vids:[], auds:[], follow:[], model:H3.S.f.model}));
   ok(/Wildcard/.test(why), 'Render refuses a plain take: ' + why);
   ok(/Render/.test(await page.evaluate(() => H3.wildBlock('http://main.test', {film:'~wild', pieces:[{gen:121}], imgs:[], vids:[], auds:[], follow:[], model:H3.S.f.model}))), 'Main leaves Wildcard clips to Render');
   let moved = 0; for(let i = 0; i < 4; i++) moved += await page.evaluate(() => H3.wildSweep(true));
@@ -67,6 +68,10 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   // Main free: ⇄ doesn't take Wildcard clips back off Render
   PCS[M].line = []; await page.evaluate(M => { H3.S.takes.filter(t => t.pc===M).forEach(t => { t.pieces.forEach(p => { p.state = 'done'; }); t.state = 'done'; }); }, M);
   ok(await page.evaluate(() => H3.rebalance())===0, 'a free Main does not take Wildcard clips from Render');
+  // Main switched off: plain takes don't get stuck, Render takes them
+  await page.evaluate(() => { H3.S.pcs[1].on = false; });
+  ok(!(await page.evaluate(() => H3.wildBlock('http://render.test', {film:'', pieces:[{gen:121}], imgs:[], vids:[], auds:[], follow:[], model:H3.S.f.model}))), 'with Main off, Render still takes a plain take');
+  await page.evaluate(() => { H3.S.pcs[1].on = true; });
   // Render switched off or unreachable: Main takes Wildcard clips again
   await page.evaluate(() => { H3.S.pcs[0].on = false; });
   ok(!(await page.evaluate(() => H3.wildBlock('http://main.test', {film:'~wild'}))), 'with Render off, Main can take Wildcard clips');
