@@ -195,6 +195,15 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       return {o:Object.keys(o).sort(), dressed}; });
     ok(r.o.join()==='self:rolled,zelda:own', 'each take is Zelda (her own look) or the wildcard (a rolled mix): ' + r.o.join(' / '));
     ok(r.dressed, '"wear the rolled options too" dresses the Library pick'); }
+  // 🎲 a subject's tag is a folder of who it can be (Jordan 2026-11-16)
+  { const r = await page.evaluate(() => { const S = H3.S; S.lib.push({id:'Lkt', kind:'char', name:'Katara', stand:'a woman', desc:'', pics:['p2'], keep:'exact'});
+      const c = S.cast.find(x => x.wpre) || S.cast[0]; c.wild = {on:true, all:true, cats:[], who:[]}; H3.subjPick(c.n);
+      const has = !!document.querySelector('#spBox [data-wf="lib:Lkt"]') && !!document.querySelector('#spBox [data-wf="self"]');
+      document.querySelector('#spBox [data-wf="lib:Lkt"]').click(); const on = document.querySelector('#spBox [data-wf="lib:Lkt"]').classList.contains('pri') && document.querySelector('#spBox [data-wf="self"]').classList.contains('pri');
+      document.querySelector('#sheetCard [data-close]').click(); const o = {}; for(let i = 0; i < 40; i++){ const R = H3.wildRoll([c])[c.n]; o[R.who ? 'Katara' : 'wild'] = 1; }
+      return {has, on, o:Object.keys(o).sort(), w:c.wild}; });
+    ok(r.has && r.on, 'tapping a wildcard subject\'s tag shows 🎲 Who it can be, and ticking Katara keeps the wildcard ticked too: ' + JSON.stringify(r.w));
+    ok(r.o.join()==='Katara,wild', 'each take is the wildcard or Katara: ' + r.o.join(' / ')); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
