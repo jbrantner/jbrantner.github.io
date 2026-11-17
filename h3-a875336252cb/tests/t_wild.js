@@ -148,6 +148,18 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       return {seen:[...seen].sort(), hid, pic}; });
     ok(r.seen.join('|')==='outfit:goth outfit with a petite figure|outfit:goth outfit with a tall figure', '{Size} nests that category\'s roll: ' + r.seen.join(' / '));
     ok(r.hid, 'a nested category is not said twice'); ok(r.pic, 'the outfit picture goes in whatever words are picked'); }
+  // 🧑 the stand-in rolls too (Jordan 2026-11-16)
+  { const r = await page.evaluate(() => { const o = new Set(), bad = []; for(let i = 0; i < 60; i++){ const w = H3.wStandRoll('a woman. a mature woman | a teen girl. a young adult woman'); o.add(w); if(/teen/.test(w)) bad.push(w); }
+      const c = {n:9, kind:'char', who:'W', stand:'a woman. a mature woman', pics:[], attrs:[], wild:{on:true, cats:[]}}, R = H3.wildRoll([c]), t = {wild:R}, x = H3.wildCast(c, t);
+      return {o:[...o].sort(), bad, st:x.stand, same:H3.wildCast(c, t)===x, pick:R && R[9].picks.map(p => p.cat + '=' + p.label).join(), plain:H3.wStandRoll('a woman.')}; });
+    ok(r.o.join('|')==='a mature woman|a woman|a young adult woman' && !r.bad.length, 'the stand-in rolls one of its choices, never one under 18: ' + r.o.join(' / '));
+    ok(/^a (mature )?woman$/.test(r.st) && r.same && /Stand-in=/.test(r.pick), 'one stand-in for the whole take: ' + r.st + ' · ' + r.pick);
+    ok(r.plain==='', 'a plain stand-in is left alone'); }
+  // 🔀 rolled lines come in a new order (Jordan 2026-11-16)
+  { const o = await page.evaluate(() => { H3.wcats(); const A = H3.wildNew('hair'); A.desc = 'blue hair'; const B = H3.wildNew('eyes'); B.desc = 'green eyes'; const W = H3.wildNew('wear'); W.desc = 'a red dress';
+      const c = {n:9, kind:'char', who:'W', stand:'a woman', pics:[], attrs:[], wild:{on:true, cats:['hair', 'eyes', 'wear']}}, seen = new Set();
+      for(let i = 0; i < 40; i++){ const t = {wild:H3.wildRoll([c])}; seen.add(H3.wildWords(c, t).map(x => x[0]).join(',')); } return [...seen]; });
+    ok(o.length >= 4, 'the rolled lines come in different orders: ' + o.join(' / ')); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
