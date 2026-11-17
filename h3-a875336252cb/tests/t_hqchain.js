@@ -66,6 +66,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // ✨ on A: it keeps its ending (a chain of its own, index 0, saved at 1)
   await sheet(0); await go(); let H = await hqs();
   const A = H[0];
+  { const CL = await page.evaluate(() => { const t = H3.S.takes.find(x => x.redo && x.redo.qp), g = Object.values(H3.upGraph(t, H3.PC[t.pc].oi, {}).g); return {clean:t.up.clean, blur:g.filter(n => n.class_type==='ImageBlur').length}; });
+    ok(CL.clean===0 && CL.blur===0, '✨ High quality sends the frames without the 🧽 pre-blur (thin details like ring eyes stay sharp): ' + JSON.stringify(CL)); }
   ok(H.length===1 && A.ch && /hqctx_/.test(A.ch.dir) && A.ch.idx===0 && !A.ch.prev, '✨ on clip A keeps its ending for the clip after: ' + JSON.stringify(A && A.ch));
   // while A's ✨ still renders, B's sheet says it carries on from it (and waits)
   const s1 = await sheet(1);
