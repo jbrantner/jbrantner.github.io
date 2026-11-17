@@ -84,6 +84,17 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   await page.click('[data-pcwild="0"]'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => H3.S.pcs[0].wild && !H3.S.pcs[1].wild), 'tapping it on Render makes Render the 🎲 PC');
   await page.screenshot({path:path.join(__dirname, 'wildpc.png')});
+  // 🎲 the Wildcards form never carries over into Films (Jordan 2026-11-17: "Still does it when the random scene is on")
+  await page.evaluate(() => { document.querySelector('[data-close]') && document.querySelector('[data-close]').click(); H3.setTab('wild'); });
+  await page.waitForTimeout(500);
+  ok(await page.evaluate(() => H3.S.fkey===H3.WK), 'on the 🎲 tab the form is the Wildcards one');
+  await page.evaluate(() => H3.setTab('films')); await page.waitForFunction(() => { const f = document.querySelector('#filmTab iframe'); return f && f.contentWindow.FILM && f.contentWindow.FILM.S; }, null, {timeout:15000});
+  // a film's own timeline open (edit mode: that used to keep whatever form was there, the 🎲 one included)
+  await page.evaluate(() => { H3.setTab('wild'); const F = document.querySelector('#filmTab iframe').contentWindow.FILM; F.S.films.push({id:'fz', name:'Test film', edit:true, tracks:[]}); F.S.nav = {v:'film', film:'fz'}; H3.setTab('films'); });
+  await page.waitForTimeout(300);
+  ok(await page.evaluate(() => H3.filmKeyNow())==='fz', 'from 🎲 to a film timeline, the form is the film\'s, not the 🎲 one');
+  await page.evaluate(() => H3.syncFilm());
+  ok(await page.evaluate(() => H3.S.fkey!==H3.WK), 'so Render there doesn\'t make 🎲 Wildcard clips (form now ' + await page.evaluate(() => JSON.stringify(H3.S.fkey)) + ')');
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
