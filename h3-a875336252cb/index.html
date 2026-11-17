@@ -4607,10 +4607,38 @@ function filmKeeps(){ const keep = new Set(); let F = {}; try{ F = JSON.parse(lo
   [...keep].forEach(add); return keep; }
 $('#clearDone').onclick = () => { const keep = filmKeeps(), gone = S.takes.filter(t => inMine(t) && t.state!=='working' && !keep.has(t.id)), kept = S.takes.filter(t => inMine(t) && t.state!=='working' && keep.has(t.id)).length;
   if(!gone.length){ toast('Every finished take is on a 🎞 Films timeline, so they all stay'); return; }
-  if(confirm('Take ' + gone.length + ' finished or stopped render' + (gone.length===1 ? '' : 's') + ' off the list?' + (kept ? ' ' + kept + ' on your Films timelines stay.' : '') + ' The videos stay on the PCs.')){
-    const g = new Set(gone.map(t => t.id)); S.takes = S.takes.filter(t => !g.has(t.id)); tidyMedia(); save(); drawTakes(); } };
+  clearSheet(gone, 'Clear finished', 'Takes ' + gone.length + ' finished or stopped render' + (gone.length===1 ? '' : 's') + ' off the list.' + (kept ? ' ' + kept + ' on your Films timelines stay.' : ''), n => toast('🧹 ' + gone.length + ' cleared' + n, 6000)); };
+// 🗑 clearing can delete the videos too (Jordan 2026-11-17, asked if clearing deletes from Dropbox: "Yes"). Opt-in on the clear sheet,
+// with a confirm that says how many files go. Never a file another take on the list, a 🎞 Films clip or film copy, or a picked
+// upload still points at (takes that share pieces, carry-ons). The helper's /renderdeck/delete removes them for real in the shared
+// Dropbox output (Dropbox's Deleted files can bring them back) and moves them to "Deleted by Render Deck" otherwise.
+const tFiles = t => [t.final, t.upFinal, t.smoothed, t.k4 && t.k4.file, ...(t.pieces || []).map(p => p.file)].filter(x => x && x.filename);
+const fKey = x => (x.subfolder || '') + '/' + x.filename;
+function filesToDrop(gone){ const g = new Set(gone.map(t => t.id)), used = new Set();
+  S.takes.filter(t => !g.has(t.id)).forEach(t => tFiles(t).forEach(x => used.add(fKey(x))));
+  const walk = (o, d) => { if(!o || typeof o!=='object' || d > 12) return; if(typeof o.filename==='string') used.add(fKey(o)); for(const v of Object.values(o)) walk(v, d + 1); };
+  try{ walk(JSON.parse(localStorage.getItem('h3edit') || '{}'), 0); }catch(e){} walk(S.media, 0);
+  const byPc = {}, seen = new Set(); let n = 0, off = 0;
+  for(const t of gone) for(const x of tFiles(t)){ const k = fKey(x); if(used.has(k) || seen.has(t.pc + '|' + k)) continue; seen.add(t.pc + '|' + k);
+    if(!pcOf(t.pc).online){ off++; continue; } (byPc[t.pc] = byPc[t.pc] || []).push({filename:x.filename, subfolder:x.subfolder || ''}); n++; }
+  return {byPc, n, off}; }
+async function dropFiles(plan){ let moved = 0;
+  for(const [pc, items] of Object.entries(plan.byPc)){ try{ const r = await fetch(pc + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items})}); moved += (await r.json()).moved || 0; }catch(e){} }
+  return moved; }
+function clearSheet(gone, title, note, done){ const plan = filesToDrop(gone), del = !!S.clearDel && plan.n > 0;
+  openSheet(`<h3>🧹 ${esc(title)} <button class="btn" data-close>✕</button></h3><div class="note">${esc(note)}</div>
+    ${plan.n ? `<div class="sw${del ? ' on' : ''}" id="clDel" style="margin-top:10px"><div><div class="t">🗑 Also delete their videos (${plan.n})</div><div class="d">From the PCs and Dropbox. Videos another take or a 🎞 Films clip still uses stay.${plan.off ? ' ' + plan.off + ' on a PC that\'s off stay.' : ''}</div></div><div class="tog"></div></div>`
+      : `<div class="note" style="margin-top:8px">${plan.off ? 'Their videos are on a PC that\'s off, so they stay.' : 'No videos of their own to delete.'}</div>`}
+    <button class="btn" id="clGo" style="padding:12px;margin-top:12px;border-color:#ff5ca8;color:#ff5ca8">${del ? '🗑 Clear and delete ' + plan.n + ' video' + (plan.n===1 ? '' : 's') : 'Clear them off the list'}</button>`);
+  const sw = $('#clDel'), go = $('#clGo'); if(sw) sw.onclick = () => { sw.classList.toggle('on'); const on = sw.classList.contains('on'); S.clearDel = on; save();
+    go.textContent = on ? '🗑 Clear and delete ' + plan.n + ' video' + (plan.n===1 ? '' : 's') : 'Clear them off the list'; };
+  go.onclick = async () => { const d = !!(sw && sw.classList.contains('on'));
+    if(d && !confirm('Delete ' + plan.n + ' video file' + (plan.n===1 ? '' : 's') + ' from the PCs and Dropbox? Dropbox\'s Deleted files can bring them back for a while.')) return;
+    closeSheet(); const g = new Set(gone.map(t => t.id)); S.takes = S.takes.filter(t => !g.has(t.id)); tidyMedia(); save(); drawTakes();
+    let msg = ''; if(d){ const m = await dropFiles(plan); msg = m ? '; ' + m + ' video' + (m===1 ? '' : 's') + ' deleted' + (m < plan.n ? ' (' + (plan.n - m) + ' weren\'t there)' : '') : '; no videos deleted: the PCs need the helper update for that'; }
+    done(msg); }; }
 // 🧹 Clear failed (Jordan 2026-11-17: "a button that clears failed or canceled renders from Renders and Wildcards. Leaving only those that
-// have actually rendered"): takes off the list only, never a file. Before a stopped take goes, its parts are looked for on its PC (the
+// have actually rendered"): takes off the list; their videos too only if you switch 🗑 on (clearSheet). Before a stopped take goes, its parts are looked for on its PC (the
 // PC's history, then the files, as 🛟 lateFinish does): if every part is there it rendered after all, so it comes back as finished.
 // Cancelled is a stopped take too (state 'failed', err 'Cancelled'), and so is one waiting to send itself again (2026-11-17, Jordan:
 // "make sure clearing failed also includes canceled. Just anything that didn't complete"). Kept: takes a 🎞 Films timeline uses, a take
@@ -4636,10 +4664,13 @@ async function clearFailed(L, btn){ if(CLEARING) return;
       if(found.length===ps.length){ ps.forEach((p, i) => { if(p.state!=='done'){ p.file = found[i]; p.state = 'done'; p.err = ''; p.lost = false; p.t1 = p.t1 || Date.now(); } });
         Object.assign(t, {state:'working', late:1, selfAt:0}); delete LATE[t.id]; back++; continue; }
       gone.add(t.id); }
-    if(gone.size){ S.takes = S.takes.filter(t => !gone.has(t.id)); tidyMedia(); }
     save(); drawTakes(); if(back) tickSoon(300);
   }finally{ CLEARING = false; if(btn && btn.isConnected){ btn.disabled = false; btn.textContent = was; } }
-  toast('🧹 ' + (gone.size ? gone.size + ' failed render' + (gone.size===1 ? '' : 's') + ' cleared' : 'Nothing cleared') + (back ? '; ' + back + ' had rendered after all, so ' + (back===1 ? 'it\'s' : 'they\'re') + ' back' : '') + (off ? '; ' + off + ' on a PC that\'s off stay until it\'s on' : '') + (held ? '; ' + held + ' kept (on a Films timeline)' : ''), 6000); }
+  const extra = (back ? '; ' + back + ' had rendered after all, so ' + (back===1 ? 'it\'s' : 'they\'re') + ' back' : '') + (off ? '; ' + off + ' on a PC that\'s off stay until it\'s on' : '') + (held ? '; ' + held + ' kept (on a Films timeline)' : '');
+  const G = S.takes.filter(t => gone.has(t.id)), says = n => toast('🧹 ' + G.length + ' failed render' + (G.length===1 ? '' : 's') + ' cleared' + n + extra, 6000);
+  if(!G.length){ toast('🧹 Nothing cleared' + extra, 6000); return; }
+  if(!filesToDrop(G).n){ S.takes = S.takes.filter(t => !gone.has(t.id)); tidyMedia(); save(); drawTakes(); says(''); return; } // nothing of their own on a PC: no need to ask
+  clearSheet(G, 'Clear failed', 'Takes ' + G.length + ' failed or cancelled render' + (G.length===1 ? '' : 's') + ' off the list.' + extra.replace(/^; /, ' ').replace(/; /g, ', '), says); }
 $('#clearFail').onclick = e => clearFailed(S.takes.filter(inMine), e.currentTarget);
 // a clip still in pieces plays them one after another, then starts over
 document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof HTMLVideoElement) || !v.dataset.list) return; let l; try{ l = JSON.parse(v.dataset.list); }catch(er){ return; }
@@ -5037,11 +5068,28 @@ function freshSheet(){ const n = S.takes.length; let films = 0; try{ films = (fi
     <div class="note">Takes all ${n} render${n===1 ? '' : 's'} off the list, here and in the copy on each PC, and clears ↶ Undo. Anything still rendering finishes on its PC but won't show up.</div>
     <div class="sw on" id="frFilms" style="margin-top:10px"><div><div class="t">🎞 Films too (${films})</div><div class="d">Their timelines, prompt blocks and each film's own form and cast</div></div><div class="tog"></div></div>
     <div class="sw" id="frLib" style="margin-top:8px"><div><div class="t">📚 Library too (${(S.lib || []).length})</div><div class="d">Characters, objects, places, clothing, attributes and poses</div></div><div class="tog"></div></div>
+    <div class="sw" id="frWipe" style="margin-top:8px"><div><div class="t">🗑 Delete the videos too</div><div class="d">Every H3 Deck video, film export and saved ending on the PCs and in Dropbox, and the small playback copies. Render Deck's pictures, uploads and models stay.</div></div><div class="tog"></div></div>
     <button class="btn" id="frGo" style="padding:12px;margin-top:12px;border-color:#ff5ca8;color:#ff5ca8">Delete them from H3 Deck</button>`);
-  $('#sheetCard').onclick = ev => { const sw = ev.target.closest('#frFilms,#frLib'); if(sw) sw.classList.toggle('on'); };
-  $('#frGo').onclick = () => { const f = $('#frFilms').classList.contains('on'), l = $('#frLib').classList.contains('on');
-    if(!confirm('Start fresh? This takes the renders' + (f ? ', the films' : '') + (l ? ', the Library' : '') + ' off H3 Deck for good.')) return;
-    startFresh({films:f, lib:l}); closeSheet(); toast('🧹 Fresh start: ' + ['renders', f && 'films', l && 'Library'].filter(Boolean).join(', ') + ' cleared', 5000); }; }
+  $('#sheetCard').onclick = ev => { const sw = ev.target.closest('#frFilms,#frLib,#frWipe'); if(sw) sw.classList.toggle('on'); };
+  $('#frGo').onclick = async () => { const f = $('#frFilms').classList.contains('on'), l = $('#frLib').classList.contains('on'), w = $('#frWipe').classList.contains('on');
+    let plan = null; if(w){ $('#frGo').textContent = '🔎 Counting the videos…'; plan = await h3WipeCount(); $('#frGo').textContent = 'Delete them from H3 Deck';
+      if(!plan.pcs.length){ toast(plan.old.length ? plan.old.join(' and ') + ' need' + (plan.old.length===1 ? 's' : '') + ' the helper update before it can delete videos, so nothing was cleared yet.' : 'No PC can be reached to delete the videos, so nothing was cleared. Try again when one is on.', 7000); return; } }
+    if(!confirm('Start fresh? This takes the renders' + (f ? ', the films' : '') + (l ? ', the Library' : '') + ' off H3 Deck for good.' + (plan ? ' It also deletes ' + plan.files + ' video file' + (plan.files===1 ? '' : 's') + ' (' + fmtGB(plan.bytes) + ') from ' + plan.where + '. Dropbox\'s Deleted files can bring them back for a while.' : ''))) return;
+    startFresh({films:f, lib:l}); closeSheet(); toast('🧹 Fresh start: ' + ['renders', f && 'films', l && 'Library'].filter(Boolean).join(', ') + ' cleared' + (plan ? '; deleting the videos…' : ''), 5000);
+    if(plan){ const r = await h3Wipe(plan); toast('🗑 ' + r.files + ' H3 Deck video file' + (r.files===1 ? '' : 's') + ' deleted (' + fmtGB(r.bytes) + ')' + (r.old.length ? '. ' + r.old.join(' and ') + ' need' + (r.old.length===1 ? 's' : '') + ' the helper update first, so ' + (r.old.length===1 ? 'its' : 'their') + ' videos are still there' : '') + (plan.off.length ? '. ' + plan.off.join(' and ') + ' was off: its playback copies are still there' : ''), 9000); } }; }
+// 🗑 Start fresh can delete the videos too (Jordan 2026-11-17: "when I have a reset ... I want the traces of it gone"): the helper's
+// /renderdeck/h3wipe deletes every H3Deck / H3Film output folder and the ⚡ scrub copies. In the shared Dropbox output one PC's
+// wipe covers both PCs' folders, so the count is the biggest PC's, not the sum.
+const fmtGB = b => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : Math.max(1, Math.round(b / 1e6)) + ' MB';
+async function h3WipeCount(){ const pcs = [], off = [], old = []; let files = 0, bytes = 0, shared = true;
+  for(const p of S.pcs){ if(!pcOf(p.url).online){ off.push(p.name); continue; }
+    let j = null; try{ const r = await fetch(p.url + '/renderdeck/h3wipe', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({dry:true})}); if(r.ok) j = await r.json(); }catch(e){}
+    if(!j || j.files == null){ old.push(p.name); continue; } pcs.push(p);
+    if(j.shared){ files = Math.max(files, j.files); bytes = Math.max(bytes, j.bytes); } else { shared = false; files += j.files; bytes += j.bytes; } }
+  return {pcs, off, old, files, bytes, where:shared && pcs.length ? 'Dropbox (both PCs)' : pcs.map(p => p.name).join(' and ')}; }
+async function h3Wipe(plan){ let files = 0, bytes = 0;
+  for(const p of plan.pcs){ try{ const r = await fetch(p.url + '/renderdeck/h3wipe', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); const j = await r.json(); files += j.files || 0; bytes += j.bytes || 0; }catch(e){} }
+  return {files, bytes, old:plan.old}; }
 function startFresh(o){ o = o || {};
   S.fresh = Date.now(); S.takes = []; S.inbox = []; S.filmsRebuilt = true;
   if(o.films){ S.forms = {}; S.casts = {}; S.fkey = ''; S.castOld = [];
@@ -5825,7 +5873,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
