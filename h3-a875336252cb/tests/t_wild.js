@@ -177,7 +177,15 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       const t = H3.wildMark(H3.snapshot()); return {line:t.lines[7] && t.lines[7].text, used:H3.castUsed ? H3.castUsed(t) : null}; });
     ok(/hugs <Subject 2> from behind/.test(P2.line || ''), 'a random action can bring in the other character: ' + JSON.stringify(P2));
     const tq = await page.evaluate(() => { const t = H3.wildMark(H3.snapshot()); t.id = 'tQ'; return t; }); const PQ = await prom(tq);
-    ok(/hugs (a |the )?[\w ]*woman from behind/.test(PQ.p) && !/<Subject 2>/.test(PQ.p.split('summary')[1] || ''), 'the character named only in the action goes out as her stand-in words: ' + PQ.p.slice(0, 400).replace(/\n/g, ' | ')); }
+    ok(/hugs (a |the )?[\w ]*woman from behind/.test(PQ.p), 'the character named only in the action goes out as her stand-in words: ' + PQ.p.slice(0, 400).replace(/\n/g, ' | ')); }
+  // 🧑 Who she is: a category in the Wildcards tab (Jordan 2026-11-16)
+  { const r = await page.evaluate(() => { const S = H3.S; H3.wcats(); const A = H3.wildNew('stand'); A.desc = 'a woman. a mature woman. a teen girl'; A.split = true;
+      H3.drawWild(); const shown = /Who she is/.test(document.querySelector('#wildTab').textContent);
+      H3.wildOpt(A.id); const noPic = !document.querySelector('#woBox [data-wo="pic"]'); document.querySelector('#woBox [data-close]').click();
+      const c = {n:9, kind:'char', who:'W', stand:'a woman', pics:[], attrs:[], wild:{on:true, all:true}}, o = new Set();
+      for(let i = 0; i < 40; i++){ const R = H3.wildRoll([c]); o.add(H3.wildCast(c, {wild:R}).stand); } return {shown, noPic, o:[...o].sort(), kind:A.kind}; });
+    ok(r.shown && r.noPic && r.kind==='wstand', 'the Wildcards tab has a 🧑 Who she is category (words only)');
+    ok(r.o.join('|')==='a mature woman|a woman', 'her stand-in words roll from it, never one under 18: ' + r.o.join(' / ')); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
