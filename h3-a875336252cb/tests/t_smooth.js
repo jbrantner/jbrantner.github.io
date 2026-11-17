@@ -260,6 +260,8 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
   ok(tk.loop===16 && !tk.sound && gd.every(n => n.inputs.image), 'take: loop 16, no sound guide');
   ok(pr[0][0]===0 && pr[0][1]===62 && !pr.some(([o]) => Math.abs(o - 61.5) < 8), 'graph pins the swapped halves with a free seam ' + JSON.stringify(pr.slice(13, 18)));
   ok(/🔁/.test(await page.textContent('#takes')), 'card shows 🔁');
+  { const T = await page.evaluate(() => { const t = H3.S.takes[0]; return {p0:t.pieces[0], lt:t.sm.lt}; }), trim = nl.filter(n => n.class_type==='ImageFromBatch' && !n.inputs.length.toString().includes(',') && n.inputs.batch_index===1 && n.inputs.length===T.p0.gen - 1);
+    ok(T.p0.skip===1 && T.p0.deliv===T.p0.gen - 1 && T.lt===T.p0.gen && trim.length===1, '🔁 the loop drops the render\'s first frame (MiniMax repeats it: a hold at every turn), the mapping keeps the whole window: ' + JSON.stringify(T)); }
   await page.click('#smLoopSw');
   }
   {
@@ -269,7 +271,7 @@ const ALLOWED = {MinimaxH3LatentUpscaler3D:['latent','model_name','mode','mode.w
     t.prompt = '<Picture 1> walks to the door.\n\n＋ She opens it.'; t.w = 512; t.h = 768; H3.S.takes.unshift(t);
     H3.S.f.sm = false; H3.S.f.smUp = false; H3.S.f.prompt = 'something else'; return t.id; });
   await page.evaluate(() => H3.tick()); await page.waitForTimeout(500);
-  await page.click('[data-act="regen"][data-t="tsend"]'); await page.waitForTimeout(2000);
+  await page.$eval('[data-act="regen"][data-t="tsend"]', b => b.click()); await page.waitForTimeout(2000);
   ok(views.includes('send_00001_.mp4'), 'the take\'s video is fetched from the PC');
   const F = await page.evaluate(() => { const f = H3.S.f; return {sm:f.sm, vid:f.smVid, media:!!H3.S.media[f.smVid], up:f.smUp, refs:f.smRefs, upRefs:f.smUpRefs, prompt:f.prompt, loras:f.loras, mp:f.mp, ref0:H3.S.takes.find(x => x.id==='tsend').imgs[0].id}; });
   ok(F.sm && F.media && F.up && F.upRefs && F.refs.length===1 && F.refs[0]===F.ref0, 'Smooth is on with the video, ⬆ regenerate on, its picture carried ' + JSON.stringify(F.refs));
