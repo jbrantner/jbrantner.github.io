@@ -44,8 +44,9 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   await page.waitForFunction(() => H3.families().length > 0, null, {timeout:20000});
   const fam = await page.evaluate(() => H3.families().map(f => f.key));
   await page.evaluate(([R, m]) => {
-    ['p1', 'p2', 'q1', 'q2', 'q3', 'q4'].forEach(k => H3.S.media[k] = {id:k, kind:'img', name:k + '.png', w:640, h:352, thumb:''});
-    const cast = [{n:1, kind:'char', who:'Laura', stand:'a woman', desc:'long red hair, green eyes', pics:['p1', 'p2'], keep:'exact'}, {n:2, kind:'char', who:'Mia', stand:'a girl', desc:'short black bob', pics:['q1', 'q2', 'q3', 'q4'], keep:'exact'}];
+    ['p1', 'p2', 'q1', 'q2', 'q3', 'q4', 'a1'].forEach(k => H3.S.media[k] = {id:k, kind:'img', name:k + '.png', w:640, h:352, thumb:''});
+    H3.S.lib = (H3.S.lib || []).concat([{id:'La', kind:'attr', name:'spiral eyes', what:'eyes', pics:['a1']}]);
+    const cast = [{n:1, kind:'char', who:'Laura', stand:'a woman', desc:'long red hair, green eyes', pics:['p1', 'p2'], attrs:['La'], keep:'exact'}, {n:2, kind:'char', who:'Mia', stand:'a girl', desc:'short black bob', pics:['q1', 'q2', 'q3', 'q4'], keep:'exact'}];
     H3.S.cast = cast; H3.S.casts = H3.S.casts || {}; H3.S.casts[H3.castK('fA')] = cast;
     const t = {id:'tA', t:Date.now(), pc:R, model:m, turbo:false, loras:[], w:640, h:352, seed:1, name:'h3_tA', dir:'H3Deck/h3_tA', film:'fA', prompt:'<Subject 1> dances on the rooftop.', seconds:5, imgs:[], vids:[], auds:[], follow:[],
       pieces:[{start:0, gen:124, deliv:120, ctx:0, prompt:'<Subject 1> dances on the rooftop.', state:'done', file:{filename:'piece_01_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_tA', type:'output'}}], state:'done', final:{filename:'h3_tA_00001_.mp4', subfolder:'Output_Render/H3Deck/h3_tA', type:'output'}};
@@ -58,7 +59,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   const open = (cin, cout) => fr.evaluate(async ([a, b]) => { const f = FILM.S.films[0], tr = f.tracks[0], c = tr.clips[0]; c.in = a; c.out = b; FILM.swapSheet(f, tr, c); await new Promise(z => setTimeout(z, 150));
     return {txt:document.querySelector('#sheetCard').textContent, on:[...document.querySelectorAll('#swWho .pri')].map(b => b.textContent), looks:[...document.querySelectorAll('#swPpl [data-l]')].map(x => x.value), m:document.querySelector('#swM').value}; }, [cin, cout]);
   const swaps = () => page.evaluate(() => H3.S.takes.filter(x => x.swap).map(t => ({id:t.id, swap:t.swap, redo:t.redo, imgs:t.imgs.map(r => r.id), vids:t.vids, loras:t.loras, model:t.model, prompt:t.prompt, pc:t.pc})));
-  const graph = id => page.evaluate(([R, id]) => { const t = H3.S.takes.find(x => x.id===id), names = {}; ['p1', 'p2', 'q1', 'q2', 'q3', 'q4'].forEach(k => names[k] = k + '.png');
+  const graph = id => page.evaluate(([R, id]) => { const t = H3.S.takes.find(x => x.id===id), names = {}; ['p1', 'p2', 'q1', 'q2', 'q3', 'q4', 'a1'].forEach(k => names[k] = k + '.png');
     const G = H3.pieceGraph(t, 0, H3.PC[R].oi, names).g, g = Object.values(G), C = c => g.filter(n => n.class_type===c), rv = C('MiniMaxH3ReferenceToVideo')[0], fit = C('MMH3FitReferences')[0];
     const cv = C('CreateVideo')[0], src = x => x && G[x[0]] ? G[x[0]].class_type : '';
     return {imgs:C('LoadImage').map(n => n.inputs.image).sort(), vids:C('LoadVideo').map(n => n.inputs.file), p:rv ? rv.inputs.prompt : '', L:rv && rv.inputs.length, rvid:!!(rv && rv.inputs['ref_videos.ref_video_0']), raud:!!(rv && rv.inputs['ref_video_audios.ref_video_audio_0']),
@@ -72,13 +73,14 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   await fr.evaluate(async () => { const g = document.querySelector('#swPpl [data-g="1"]'); g.value = 'the woman in the black dress'; document.querySelector('#swGo').click(); await new Promise(z => setTimeout(z, 2500)); });
   let S1 = await swaps(); const A = S1[0];
   ok(S1.length===1 && A.redo.swap && A.redo.src==='tA' && A.redo.a===0 && A.redo.b===120 && A.redo.film==='fA' && A.swap.pika && A.swap.sound, 'one swap take of the whole clip, a version of the take: ' + JSON.stringify(A && {a:A.redo.a, b:A.redo.b}));
-  ok(A.imgs.join()==='p1,p2' && A.vids.length===1 && /h3_tA_00001_\.mp4 \[output\]$/.test(A.vids[0].file) && A.vids[0].start===0 && A.vids[0].sound===true, 'her two pictures, and the clip read from the PC with its sound: ' + JSON.stringify(A.vids));
+  ok(A.imgs.join()==='p1,p2,a1' && A.vids.length===1 && /h3_tA_00001_\.mp4 \[output\]$/.test(A.vids[0].file) && A.vids[0].start===0 && A.vids[0].sound===true, 'her two pictures and her ✨ spiral eyes picture, and the clip read from the PC with its sound: ' + JSON.stringify(A.vids));
   ok(A.loras.length===1 && A.loras[0].name===FLEX && /ref2va_pruned/i.test(A.model + ''), 'vanilla model + Pika Flex LoRA: ' + A.model + ' ' + JSON.stringify(A.loras));
   let G = await graph(A.id);
   ok(G.sig.join()==='1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0' && G.ks.join()==='lcm' && G.bs===0, 'Pika\'s six lcm steps: ' + G.sig + ' ' + G.ks);
   ok(G.unet.some(x => /ref2va_pruned_int8/.test(x)) && G.lora.join()===FLEX + '@1', 'the official model with the Flex LoRA at 1.0: ' + G.unet + ' ' + G.lora);
-  ok(G.imgs.join()==='p1.png,p2.png' && G.rvid && G.raud && G.fit && G.fit.start===0 && G.fit.sound===true, 'the pictures and the clip (with its sound) go to MiniMax: ' + JSON.stringify(G.fit));
+  ok(G.imgs.join()==='a1.png,p1.png,p2.png' && G.rvid && G.raud && G.fit && G.fit.start===0 && G.fit.sound===true, 'the pictures and the clip (with its sound) go to MiniMax: ' + JSON.stringify(G.fit));
   ok(/<Subject 1> is the woman in the black dress in <Video 1>, selected for replacement\./.test(G.p) && /<Subject 2> is the person in <Picture 1> and <Picture 2>, with the same face and this appearance: a woman, long red hair, green eyes\./.test(G.p), 'the swap\'s subject lines: ' + G.p.slice(0, 400));
+  ok(/<Subject 2> has the eyes shown in <Picture 3>, and only that is taken from that picture\./.test(G.p) && /<Picture 3>: attribute_transfer - apply only the eyes to <Subject 2>/.test(G.p) && /<Subject 2> has the eyes from <Picture 3> throughout\./.test(G.p), 'her ✨ attribute carries into the swap (Jordan 2026-11-17)');
   ok(/^subject_definitions:/.test(G.p) && /\nsummary:\n\[video editing\] Replace <Subject 1> with <Subject 2>/.test(G.p) && /<Subject 1>: removed - replace the woman in the black dress with <Subject 2> throughout\./.test(G.p) && /The original sound of <Video 1> continues throughout\./.test(G.p) && /Everyone else stays as they are/.test(G.p), 'the six parts, as the workflow writes them');
   ok(!/Laura|dances/.test(G.p), 'the take\'s own words and names don\'t leak in');
   ok(G.ifb.includes('0+120') && G.aud==='GetVideoComponents' && G.guides===0, 'the swapped frames are the whole take, with the clip\'s sound, nothing pinned: ' + G.ifb + ' ' + G.aud);
@@ -97,9 +99,9 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
     const o = [...document.querySelectorAll('#swM option')].find(x => /pika/i.test(x.value)); const s = document.querySelector('#swM'); s.value = o.value; s.dispatchEvent(new Event('change'));
     document.querySelector('#swPpl [data-g="2"]').value = 'the man in the hat'; document.querySelector('#swGo').click(); await new Promise(z => setTimeout(z, 2500)); });
   S1 = await swaps(); const C2 = S1[0]; G = await graph(C2.id);
-  ok(C2.imgs.join()==='p1,p2,q1,q2,q3' && !C2.swap.pika && !C2.loras.length && C2.swap.sound===false, 'two people: hers and three of Mia\'s pictures, no Flex LoRA: ' + C2.imgs);
+  ok(C2.imgs.join()==='p1,p2,a1,q1,q2,q3' && !C2.swap.pika && !C2.loras.length && C2.swap.sound===false, 'two people: hers and three of Mia\'s pictures, no Flex LoRA: ' + C2.imgs);
   ok(G.unet.some(x => /prismPIKA/.test(x)) && !G.sig.length && G.ks.join()==='res_multistep', 'Prism Pika with its own sampler: ' + G.unet + ' ' + G.ks);
-  ok(/<Subject 1> is the person on the left in <Video 1>/.test(G.p) && /<Subject 2> is the man in the hat in <Video 1>/.test(G.p) && /<Subject 4> is the person in <Picture 3>, <Picture 4> and <Picture 5>/.test(G.p) && /Replace <Subject 1> with <Subject 3> and <Subject 2> with <Subject 4>/.test(G.p) && /change only the people\./.test(G.p), 'the people who go are 1-2, the new ones 3-4: ' + G.p.slice(0, 700));
+  ok(/<Subject 1> is the person on the left in <Video 1>/.test(G.p) && /<Subject 2> is the man in the hat in <Video 1>/.test(G.p) && /<Subject 4> is the person in <Picture 4>, <Picture 5> and <Picture 6>/.test(G.p) && /<Subject 3> has the eyes shown in <Picture 3>/.test(G.p) && /Replace <Subject 1> with <Subject 3> and <Subject 2> with <Subject 4>/.test(G.p) && /change only the people\./.test(G.p), 'the people who go are 1-2, the new ones 3-4: ' + G.p.slice(0, 700));
   ok(!G.raud && G.fit.sound===false && G.aud==='TrimAudioDuration', 'sound off: MiniMax makes the sound: ' + G.aud);
   ok(/The steady sound of the place continues/.test(G.p), 'the soundscape line says so');
   // 4) the take card and the timeline label
