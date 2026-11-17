@@ -1367,9 +1367,24 @@ const chipOn = (x, off) => x.add ? off.includes(x.key) : !off.includes(x.key);
 // ✍ words-only clothing and attributes (Jordan 2026-11-11: "a custom option where I can just put text in… put someone in a sweater"):
 // a 👗/✨ Library entry with no picture is sent as its words (More detail, else its name) in the person's own description
 const libWords = A => (A && onK(A.kind) && !libPics(A).length) ? ((A.desc || '').trim() || (A.name || '').trim()).replace(/\s*\n+\s*/g, ' ').replace(/[\s.]*$/, '') : '';
-const wordsOn = (c, t) => c ? attrsOf(c, t).map(libOf).filter(A => libWords(A)).map(A => isWear(A) && !/^(wearing|dressed|in|with)\b/i.test(libWords(A)) ? 'wearing ' + libWords(A) : libWords(A)) : [];
+const wordsOn = (c, t) => c ? attrsOf(c, t).filter(id => !wildRolled(c, t, id)).map(libOf).filter(A => libWords(A)).map(A => isWear(A) && !/^(wearing|dressed|in|with)\b/i.test(libWords(A)) ? 'wearing ' + libWords(A) : libWords(A)) : [];
 const wordsWear = (c, t) => !!c && attrsOf(c, t).map(libOf).some(A => libWords(A) && isWear(A));
-const castMoreT = (c, t) => [castMore(c, t)].concat(wordsOn(c, t)).filter(Boolean).join(', ');
+const castMoreT0 = (c, t) => [castMore(c, t)].concat(wordsOn(c, t)).filter(Boolean).join(', ');
+// 🎲 rolled words go in labelled by their category (Jordan 2026-11-17: an eye option only took sometimes, blue hair came out partly brown;
+// "even if we have preset categories, this is the hair category…"): with a picture "hair: long blue hair; eyes: …" in her definition,
+// with no picture one sentence each, under the name the words use for her ("The first woman's hair: long blue hair.")
+const wildRolled = (c, t, id) => { const r = wildOf(c, t); return !!(r && (r.a || []).includes(id)); };
+const wildWords = (c, t) => { const r = wildOf(c, t); return !r ? [] : (r.a || []).map(libOf).filter(A => A && libWords(A)).map(A => { const C = wcatOf(A.cat), lab = (C ? C.name.replace(/^\S+\s/, '') : A.kind==='wear' ? 'outfit' : A.what || 'look').toLowerCase(); return [lab, libWords(A)]; }); };
+const castMoreT = (c, t) => [castMoreT0(c, t), wildWords(c, t).map(([l, w]) => l + ': ' + w).join('; ')].filter(Boolean).join('; ');
+const wildSents = (c, t, nm) => wildWords(c, t).map(([l, w]) => nm.replace(/^./, x => x.toUpperCase()) + "'s " + l + ': ' + w + '.').join(' ');
+// several subjects with no picture and the same stand-in ("a woman", as the 🎲 Wildcard subjects are) each get their own name in the words:
+// "the first woman", "the second woman"; before, both were "the woman" and their descriptions ran into each other
+const ORDS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+const standOf = c => ((c && c.stand) || '').trim() || 'someone';
+function noPicName(c, T){ if(!c || !T) return null; const pics = new Set(((T.imgs) || []).filter(r => r.cast).map(r => +r.cast)); if(pics.has(+c.n)) return null;
+  const key = standOf(c).toLowerCase().replace(/^(a|an|the)\s+/, ''), same = castUsed(T).filter(n => !pics.has(+n)).map(n => castOf(n, T.film, T)).filter(x => x && standOf(x).toLowerCase().replace(/^(a|an|the)\s+/, '')===key);
+  const i = same.findIndex(x => x.n===c.n); if(same.length < 2 || i < 0 || i >= ORDS.length) return null; return 'the ' + ORDS[i] + ' ' + key; }
+const leadName = (c, T) => noPicName(c, T) || (w => /^(a|an)\s/i.test(w) ? 'the ' + w.replace(/^(a|an)\s+/i, '') : w)(standOf(c));
 const attrsOf = (c, t) => { const off = descOffOf(c, t) || [], r = wildOf(c, t), base = r ? (c.attrs || []).filter(id => !(r.drop || []).includes(id)).concat((r.a || []).filter(id => libOf(id))) : (c.attrs || []); return [...new Set(base.concat(off.filter(k => /^add:/.test(k)).map(k => k.slice(4))))].filter(id => !off.includes('attr:' + id)); };
 // ---------- 🎲 Wildcards (Jordan 2026-11-16: "generates a clip of different characters with different attributes, sort of like a wildcard";
 // "the library of attributes and outfits etc be separate from the normal library") ----------
@@ -1576,6 +1591,7 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   for(const id of stylePics) if(imgs.length < MAXREF.img) imgs.push({id, style:true, styleOf:lkN, keep:'loose'});
   if(lk && lk.frame && S.media[lk.frame] && imgs.length < MAXREF.img) imgs.push({id:lk.frame, style:true, frame:true, keep:'loose'}); // 🖼 the painted example frame: its look only
   if(pics && t.fill) fillSpare(t, imgs, vids);
+  { const T0 = Object.assign({}, t, {imgs}); for(const r of imgs) if(r.attrOf && !imgs.some(x => +x.cast===+r.attrOf)){ const c = castOf(r.attrOf, t.film, t); if(c) r.wearer = leadName(c, T0); } } // 🎲 who an attribute goes on, by the name the words use
   const drop = (t.imgs || []).filter(r => !r.cast && r.rk && !imgs.includes(r)); // 🖼 ref images with no room: their words stand in
   return Object.assign({}, t, {imgs, vids}, drop.length ? {refOff:Object.assign({}, t.refOff, ...drop.map(r => ({[r.rk]:r.desc || ''})))} : {}); }
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
@@ -1584,16 +1600,18 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
   const fk = T ? T.film : undefined;
   { const I = (T && T.imgs) || []; txt = (txt || '').replace(REFRE, (m, n) => { const k = I.findIndex(r => r.rk===+n); return k < 0 ? refGone(I, n, T) : plain ? '<Picture ' + (k + 1) + '>' : m; }); } // 🖼
   let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n, fk, T); if(!c || pics[c.n]) return m;
-    let w = (c.stand || '').trim() || 'someone'; if(!(T && T.noNude) && nudeOn(c, T)) w = /^(a|an)\s+/i.test(w) ? 'a nude ' + w.replace(/^(a|an)\s+/i, '') : /^(the|someone)$/i.test(w) ? w + ' nude' : 'nude ' + w; // 🫥
-    if(castMoreT(c, T) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
+    const nm = noPicName(c, T), nd = !(T && T.noNude) && nudeOn(c, T);
+    let w = nm || (c.stand || '').trim() || 'someone'; if(nd && !nm) w = /^(a|an)\s+/i.test(w) ? 'a nude ' + w.replace(/^(a|an)\s+/i, '') : /^(the|someone)$/i.test(w) ? w + ' nude' : 'nude ' + w; // 🫥
+    if((castMoreT(c, T) || (nm && nd)) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
   // no picture: the description goes in up front, once ("The woman: long black hair, green eyes, …")
-  if(told.length){ const lead = told.map(c => { const w = (c.stand || '').trim() || 'someone'; return (/^(a|an)\s/i.test(w) ? 'The ' + w.replace(/^(a|an)\s+/i, '') : w.charAt(0).toUpperCase() + w.slice(1)) + ': ' + castMoreT(c, T) + '.'; }).join(' ');
+  if(told.length){ const lead = told.map(c => { const nm = leadName(c, T), N = nm.charAt(0).toUpperCase() + nm.slice(1), m0 = castMoreT0(c, T);
+      return [m0 ? N + ': ' + m0 + '.' : '', noPicName(c, T) && !(T && T.noNude) && nudeOn(c, T) ? N + ' is nude.' : '', wildSents(c, T, nm)].filter(Boolean).join(' '); }).filter(Boolean).join(' ');
     const m = out.match(/^\s*\[Shot 1\]\s*/i); out = m ? m[0] + lead + ' ' + out.slice(m[0].length) : lead + ' ' + out; }
   if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n, fk, T)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.' + (castMoreT(castOf(n, fk, T), T) ? ' ' + castMoreT(castOf(n, fk, T), T).replace(/^./, x => x.toUpperCase()) + '.' : ''));
     if(defs.length) out = defs.join(' ') + ' ' + out; }
   // ✨ attributes: "<Subject 1> has the haircut shown in <Picture 4>."
   const at = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.attrOf){ const q = r.lib + '|' + r.attrOf; (at[q] = at[q] || {r, p:[]}).p.push('<Picture ' + (k + 1) + '>'); } });
-  const ad = Object.values(at).map(({r, p}) => (pics[r.attrOf] ? '<Subject ' + r.attrOf + '>' : ((castWho(castOf(r.attrOf, fk, T)) || 'the person').replace(/^./, x => x.toUpperCase()))) + ' has the ' + r.what + ' shown in ' + andList(p) + ', and only that is taken from ' + (p.length > 1 ? 'those pictures' : 'that picture') + '.');
+  const ad = Object.values(at).map(({r, p}) => (pics[r.attrOf] ? '<Subject ' + r.attrOf + '>' : ((r.wearer || castWho(castOf(r.attrOf, fk, T)) || 'the person').replace(/^./, x => x.toUpperCase()))) + ' has the ' + r.what + ' shown in ' + andList(p) + ', and only that is taken from ' + (p.length > 1 ? 'those pictures' : 'that picture') + '.');
   const fits = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast && r.fit) (fits[r.cast] = fits[r.cast] || []).push('<Picture ' + (k + 1) + '>'); }); // 👗
   const nudes = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast && r.nude) (nudes[r.cast] = nudes[r.cast] || []).push('<Picture ' + (k + 1) + '>'); }); // 🫥
   Object.entries(nudes).forEach(([n, p]) => ad.unshift('<Subject ' + n + '> is nude, wearing no clothing; the clothes in ' + andList(p) + ' are not used.'));
@@ -2479,8 +2497,8 @@ function h3Prompt(o){
     if(matchOn) ret[ret.length - 1] += g===lookG ? ' Its visual style is the look of the whole video.' : ' ' + sl + ' is shown in the same visual style as ' + LOOKT + '.'; });
   // ✨ attributes (📚 Library): only that feature of the picture goes onto the person (attribute_transfer)
   const ag = groups.filter(g => g.fit && g.cast).map(g => ({fit:true, lib:'fit', of:g.cast, what:'outfit', more:'', keep:'exact', pics:g.pics.slice()})); // 👗 her own outfit first
-  imgs.forEach((r, k) => { if(!r.attrOf) return; let g = ag.find(x => x.lib===r.lib && x.of===r.attrOf); if(!g){ g = {lib:r.lib, of:r.attrOf, what:r.what || 'look', more:(r.more || '').trim(), keep:r.keep || 'exact', pics:[], wear:!!r.wear}; ag.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); });
-  ag.forEach(g => { const sl = '<Subject ' + (subs.length + 1) + '>', from = andList(g.pics), j = groups.findIndex(x => x.cast===g.of), wearer = j >= 0 ? '<Subject ' + (j + 1) + '>' : (castWho(castOf(g.of)) || 'the person'); subs.push(sl);
+  imgs.forEach((r, k) => { if(!r.attrOf) return; let g = ag.find(x => x.lib===r.lib && x.of===r.attrOf); if(!g){ g = {lib:r.lib, of:r.attrOf, what:r.what || 'look', more:(r.more || '').trim(), keep:r.keep || 'exact', pics:[], wear:!!r.wear, wearer:r.wearer || ''}; ag.push(g); } g.pics.push('<Picture ' + (k + 1) + '>'); });
+  ag.forEach(g => { const sl = '<Subject ' + (subs.length + 1) + '>', from = andList(g.pics), j = groups.findIndex(x => x.cast===g.of), wearer = j >= 0 ? '<Subject ' + (j + 1) + '>' : (g.wearer || castWho(castOf(g.of)) || 'the person'); subs.push(sl);
     if(g.fit){ const them = g.pics.length > 1 ? 'those pictures' : 'that picture';
       defs.push(sl + ' is the outfit ' + wearer + ' wears in ' + from + ': every piece of clothing, shoes and accessories.');
       ret.push(sl + ' (' + inShots + '): attribute_transfer - the outfit from ' + from + ' (exactly as shown: the same design, cut, colours, materials and details) is what ' + wearer + ' wears the whole time; nothing new is added to it and nothing else from ' + them + ' is changed.'); return; }
