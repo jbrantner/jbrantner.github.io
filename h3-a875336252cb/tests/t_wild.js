@@ -108,6 +108,10 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   await page.click('#tagBar [data-wdn]'); await page.click('[data-wa="lib:Lmia"]');
   const pm = await page.evaluate(() => ({c:H3.S.cast.find(c => c.lib==='Lmia'), p:H3.S.f.prompt}));
   ok(pm.c && new RegExp('<Subject ' + pm.c.n + '>').test(pm.p), '👥 ＋ Character › a Library character joins the cast with its chip in: ' + pm.p);
+  // two no-picture wildcard subjects: each its own name, rolled words labelled by category
+  const P3 = await prom(await page.evaluate(() => { H3.S.f.prompt = '<Subject 1> dances while <Subject 2> watches.'; H3.S.cast.filter(c => c.n <= 2).forEach(c => { c.pics = []; c.stand = 'a woman'; }); return H3.wildMark(H3.snapshot()); }));
+  ok(/The first woman is nude\. The second woman is nude\./.test(P3.p) && /the second woman watches/.test(P3.p) && /The first woman dances/.test(P3.p), 'two wildcard women get their own names and a labelled hair line: ' + (P3.p.match(/\[0s[^\n]*/) || [''])[0].slice(0, 300));
+  ok(!/The woman:/.test(P3.p), 'no shared "The woman:" description any more');
   await page.evaluate(() => { H3.S.f.prompt = ''; });
   await page.evaluate(() => { H3.S.cast = [{n:1, kind:'char', who:'Ava', pics:['p1'], keep:'exact', attrs:[], wild:{on:true, cats:['hair'], who:[]}}]; H3.S.f.prompt = 'In a park. <Subject 1> smiles.'; H3.drawAll(); });
   // 🥋 random action options + chip
