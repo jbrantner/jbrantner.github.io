@@ -18,7 +18,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8071);
   const br = await chromium.launch(), ctx = await br.newContext({viewport:{width:390, height:844}}), page = await ctx.newPage();
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const PCS = {[M]:{name:'Main', line:[], run:false, dels:[], n:0, hist:{}}}; let ints = []; const FILES = new Set();
+  const PCS = {[M]:{name:'Main', line:[], run:false, dels:[], n:0, hist:{}}}; let ints = []; const FILES = new Set(), DELS = [], WIPES = [];
   await page.route(M + '/**', async rt => { const P = PCS[M], u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(rt.request().method()==='OPTIONS') return rt.fulfill({status:200, headers:{'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Headers':'*', 'Access-Control-Allow-Methods':'*'}, body:''});
     if(p==='/system_stats') return J({devices:[]});
@@ -28,6 +28,8 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
     if(p==='/interrupt'){ ints.push(JSON.parse(rt.request().postData() || '{}').prompt_id); return J({}); }
     if(p==='/free') return J({});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Main', images:[]});
+    if(p==='/renderdeck/delete'){ const b = JSON.parse(rt.request().postData() || '{}'); DELS.push(...b.items); return J({moved:b.items.length}); }
+    if(p==='/renderdeck/h3wipe'){ const b = JSON.parse(rt.request().postData() || '{}'); WIPES.push(!!b.dry); return J({files:12, bytes:3e9, copies:4, shared:true, pc:'Output_Main'}); }
     if(p==='/prompt'){ const pid = 'M' + (++P.n); P.line.push(pid); return J({prompt_id:pid}); }
     if(p.startsWith('/history/')){ const id = p.slice(9); return J(P.hist[id] ? {[id]:P.hist[id]} : {}); }
     if(p.startsWith('/view')){ const fn = u.searchParams.get('subfolder') + '|' + u.searchParams.get('filename'); if(FILES.has(fn)) return rt.fulfill({status:200, headers:{'Access-Control-Allow-Origin':'*', 'Access-Control-Expose-Headers':'Last-Modified', 'Last-Modified':new Date().toUTCString(), 'Content-Type':'video/mp4'}, body:''});
@@ -69,6 +71,27 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   ok(!(await ids()).includes(D) && (await ids()).includes(C), 'cleared from the Renders tab, the rendered take kept');
   await page.click('#tabs [data-tab="wild"]'); await page.waitForTimeout(600);
   ok(await page.evaluate(() => !!document.querySelector('#renderTab:not([hidden]) #clearFail')), 'the Wildcards screen has the button with its clip list');
+  // 🗑 Clear finished can delete the videos too: opt-in switch, confirm with the count, never a file another take still uses
+  const E = await page.evaluate(() => { const mk = (n, f, extra) => Object.assign({id:'tq' + n, t:Date.now(), name:'h3_x' + n, dir:'H3Deck/h3_x' + n, pc:H3.S.pcs[0].url, film:H3.S.takes[0].film, state:'done', pieces:[{state:'done', deliv:120, file:f}], final:f}, extra || {});
+    const a = {filename:'piece_01_00001_.mp4', subfolder:'Output_Main/H3Deck/h3_xA'}, b = {filename:'piece_01_00001_.mp4', subfolder:'Output_Main/H3Deck/h3_xB'};
+    H3.S.takes.unshift(mk('A', a), mk('B', b), mk('C', b)); H3.save(); return 1; });
+  const plan = await page.evaluate(() => { const p = H3.filesToDrop(H3.S.takes.filter(t => t.id==='tqA' || t.id==='tqB')); return Object.values(p.byPc).flat().map(x => x.subfolder); });
+  ok(plan.length===1 && plan[0].endsWith('h3_xA'), "only the take's own video is planned; a video another take on the list uses stays: " + JSON.stringify(plan));
+  await page.click('#tabs [data-tab="films"]'); await page.waitForTimeout(400);
+  await page.evaluate(() => { H3.S.takes = H3.S.takes.filter(t => /^tq/.test(t.id)); H3.S.takes.find(t => t.id==='tqC').state = 'working'; H3.save(); H3.drawTakes(); });
+  await page.click('#clearDone'); await page.waitForSelector('#clDel');
+  ok(await page.evaluate(() => !document.getElementById('clDel').classList.contains('on') && /off the list/.test(document.getElementById('clGo').textContent)), 'deleting is off until you switch it on');
+  await page.click('#clDel'); ok(/delete 1 video/.test(await page.textContent('#clGo')), 'the button says how many videos go: ' + await page.textContent('#clGo'));
+  let said = ''; page.once('dialog', d => { said = d.message(); d.accept(); }); await page.click('#clGo'); await page.waitForTimeout(800);
+  ok(/Delete 1 video file/.test(said), 'a confirm says how many files: ' + said);
+  ok(DELS.length===1 && DELS[0].subfolder.endsWith('h3_xA'), 'the helper was asked to delete just that one: ' + JSON.stringify(DELS));
+  ok(JSON.stringify(await ids())===JSON.stringify(['tqC']), 'both finished takes left the list, the rendering one stays');
+  // 🧹 Start fresh › 🗑 Delete the videos too: counts, confirms, wipes
+  await page.click('#setBtn'); await page.click('#freshBtn'); await page.click('#frWipe'); said = '';
+  page.once('dialog', d => { said = d.message(); d.accept(); }); await page.click('#frGo'); await page.waitForTimeout(1500);
+  ok(/deletes 12 video files \(3\.00 GB\) from Dropbox/.test(said), 'Start fresh says how many videos go: ' + said);
+  ok(JSON.stringify(WIPES)==='[true,false]', 'it counted, then wiped: ' + JSON.stringify(WIPES));
+  ok((await ids()).length===0, 'and the list is empty');
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();

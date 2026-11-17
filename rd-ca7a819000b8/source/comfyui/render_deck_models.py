@@ -6,8 +6,9 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   POST /renderdeck/upload?kind=..&name=..   -> receive a file sent from the phone (multipart field "file")
   GET  /renderdeck/model_info?kind=..&name=.. -> Civitai's trigger words and base model for a file, found by its fingerprint
   GET  /renderdeck/images, /renderdeck/thumb  -> the pictures in the output folder, newest first, and small previews
-  POST /renderdeck/delete {items}             -> move pictures into "Deleted by Render Deck" in the output folder
+  POST /renderdeck/delete {items}             -> move pictures (and H3 Deck videos) into "Deleted by Render Deck" in the output folder
                                                (a shared Dropbox output folder deletes for real; Dropbox keeps them in Deleted files)
+  POST /renderdeck/h3wipe {dry}               -> 🧹 H3 Deck's Start fresh: every H3Deck / H3Film output folder and the scrub copies
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
   POST /renderdeck/sync {source}              -> copy the checkpoints and LoRAs another computer has and this one lacks (not Qwen/MiniMax/3D)
@@ -597,10 +598,13 @@ def _save_path_per_pc(filename_prefix, output_dir, *a, **kw):
 folder_paths.get_save_image_path = _save_path_per_pc
 
 
-def _out_path(subfolder, filename):
+VIDS = ('.mp4', '.webm', '.mov', '.latent', '.wav', '.flac', '.mp3')  # 🗑 H3 Deck's videos (and their saved endings) can be deleted too
+
+
+def _out_path(subfolder, filename, vids=False):
     root = os.path.realpath(folder_paths.get_output_directory())
     path = os.path.realpath(os.path.join(root, subfolder or '', os.path.basename(filename or '')))
-    if not path.startswith(root + os.sep) or not path.lower().endswith(PICS):
+    if not path.startswith(root + os.sep) or not path.lower().endswith(PICS + (VIDS if vids else ())):
         raise ValueError('Not a picture in the output folder')
     return root, path
 
@@ -658,7 +662,7 @@ async def delete(request):
     items, moved, shared = (await request.json()).get('items', []), 0, _shared()
     for it in items:
         try:
-            root, path = _out_path(it.get('subfolder'), it.get('filename'))
+            root, path = _out_path(it.get('subfolder'), it.get('filename'), vids=True)
             if shared:
                 os.remove(path)
                 moved += 1
@@ -675,6 +679,81 @@ async def delete(request):
             pass
     return web.json_response({'moved': moved})
 
+
+
+# ---------- 🧹 H3 Deck Start fresh: its traces on this computer (Jordan 2026-11-17: "when I have a reset ... I want the traces of it gone") ----------
+# Every output folder named H3Deck or H3Film, up to two folders down (H3Deck, Output_Main/H3Deck, Output_Main/Hidden/H3Deck),
+# plus the ⚡ scrub copies in user/render_deck_h3proxy. In a shared Dropbox output folder they are deleted for real (both computers'
+# folders, since both are in it; Dropbox's Deleted files can bring them back for a while), otherwise moved into "Deleted by Render Deck".
+# {dry: true} only counts. Pictures and renders of Render Deck itself, the input folder and models are never touched.
+H3_DIRS = ('H3Deck', 'H3Film')
+
+
+def _h3_dirs():
+    root = os.path.realpath(folder_paths.get_output_directory())
+    found = []
+    for d, dirs, files in os.walk(root):
+        rel = os.path.relpath(d, root)
+        depth = 0 if rel == '.' else rel.count(os.sep) + 1
+        keep = []
+        for x in dirs:
+            if x in H3_DIRS:
+                found.append(os.path.join(d, x))
+            elif depth < 2 and x != TRASH and x not in (LIBRARY, OBJLIB) and not x.startswith('.'):
+                keep.append(x)
+        dirs[:] = keep
+    return root, found
+
+
+def _tree_size(d):
+    n = b = 0
+    for dd, _, files in os.walk(d):
+        for f in files:
+            try:
+                b += os.path.getsize(os.path.join(dd, f)); n += 1
+            except OSError:
+                pass
+    return n, b
+
+
+@routes.post('/renderdeck/h3wipe')
+async def h3wipe(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dry, shared = bool(body.get('dry')), _shared()
+
+    def run():
+        root, dirs = _h3_dirs()
+        files = size = 0
+        for d in dirs:
+            n, b = _tree_size(d)
+            files += n; size += b
+        px = [os.path.join(PX_DIR, f) for f in (os.listdir(PX_DIR) if os.path.isdir(PX_DIR) else []) if f.lower().endswith('.mp4')]
+        if dry:
+            return {'files': files, 'bytes': size, 'copies': len(px), 'shared': shared, 'pc': _pc()}
+        gone = 0
+        for d in dirs:
+            try:
+                if shared:
+                    shutil.rmtree(d, ignore_errors=True)
+                else:
+                    dest = os.path.join(root, TRASH, os.path.relpath(d, root))
+                    if os.path.exists(dest):
+                        dest += '_%d' % int(time.time())
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    shutil.move(d, dest)
+                gone += 1
+            except Exception:
+                pass
+        for f in px:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        return {'files': files, 'bytes': size, 'copies': len(px), 'dirs': gone, 'shared': shared, 'pc': _pc()}
+    return web.json_response(await asyncio.get_running_loop().run_in_executor(None, run))
 
 # ---------- 📚 Character Library: a finished Character Creator character kept for later (Jordan 2026-10-27) ----------
 # One folder per character in the shared output folder (Character Library/<name>, or Hidden/Character Library/<name>):
