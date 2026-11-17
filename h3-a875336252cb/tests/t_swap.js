@@ -107,6 +107,13 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   // 4) the take card and the timeline label
   const lab = await fr.evaluate(id => FILM.clipLabel ? FILM.clipLabel(FILM.takeOf(id)) : '', C2.id);
   ok(/^🔄 Laura in for the person, Mia in for the man in the hat/.test(C2.prompt) && !/^↻/.test(lab), 'the take\'s label: ' + C2.prompt);
+  // 5) ✨ High quality (vanilla: only the first few pictures) keeps her attribute's picture even when she has more pictures than slots
+  const HQ = await page.evaluate(([R]) => { const c = H3.S.cast.find(x => x.n===1); c.pics = ['p1', 'p2', 'q4']; const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tA'))); t.id = 'tHQ';
+    t.up = {scale:2, rep:'light', den:0.3, clean:0.8, look:'live', str:0.8, unet:'', qw:'', refs:true, prompt:t.prompt, crop:{s0:0, L:124, pad:0, F:120}};
+    const pick = H3.upPick(t).map(r => r.id); let p = ''; try{ const names = {}; ['p1', 'p2', 'q1', 'q2', 'q3', 'q4', 'a1'].forEach(k => names[k] = k + '.png');
+      const g = Object.values(H3.upGraph(t, H3.PC[R].oi, names).g), rv = g.find(n => n.class_type==='MiniMaxH3ReferenceToVideo'); p = rv ? rv.inputs.prompt : ''; }catch(e){ p = 'ERR ' + e.message; } return {pick, p}; }, [R]);
+  ok(HQ.pick.includes('a1') && HQ.pick.filter(x => /^[pq]/.test(x)).length >= 1 && HQ.pick.length <= 4, '✨ High quality keeps her ✨ spiral eyes picture: ' + HQ.pick);
+  ok(/eyes shown in <Picture \d>/.test(HQ.p), '✨ High quality\'s words name the attribute picture: ' + HQ.p.slice(0, 500));
   await br.close(); srv.close();
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
