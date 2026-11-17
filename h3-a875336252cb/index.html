@@ -437,7 +437,7 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
     </div>
   </section>
 
-  <h2><span>Renders</span><button class="btn" id="clearDone" hidden>Clear finished</button></h2>
+  <h2><span>Renders</span><span style="display:flex;gap:6px"><button class="btn" id="clearFail" hidden>🧹 Clear failed</button><button class="btn" id="clearDone" hidden>Clear finished</button></span></h2>
   <div id="takes"></div>
   </div>
 </div>
@@ -4378,12 +4378,13 @@ function drawRenders(){ const tab = $('#rendersTab'); if(!tab || tab.hidden) ret
   const st = S.rtF || 'all', fm = S.rtFilm == null ? '*' : S.rtFilm, films = [...new Set(S.takes.map(t => t.film === undefined ? '~' : t.film || ''))];
   const ok = t => (st==='all' || (st==='failed' ? t.state==='failed' : st==='working' ? t.state==='working' : t.state!=='working' && t.state!=='failed')) && (fm==='*' || (t.film === undefined ? '~' : t.film || '')===fm);
   const all = S.takes.filter(ok), L = all.filter(t => t.state==='working').concat(all.filter(t => t.state!=='working'));
-  const nW = S.takes.filter(t => t.state==='working').length;
+  const nW = S.takes.filter(t => t.state==='working').length, inFm = t => fm==='*' || (t.film === undefined ? '~' : t.film || '')===fm, nF = S.takes.filter(t => isFailed(t) && inFm(t)).length;
   const head = `<div class="rtHead"><div class="seg" id="rtSeg">${RT_F.map(([v, l]) => `<button data-rt="${v}" class="${st===v ? 'on' : ''}">${l}${v==='working' && nW ? ' ' + nW : ''}</button>`).join('')}</div>
-    <select id="rtFilm" style="width:100%;margin-top:8px"><option value="*">All films</option>${films.map(k => `<option value="${esc(k)}" ${fm===k ? 'selected' : ''}>${esc(filmNameOf(k==='~' ? undefined : k))}</option>`).join('')}</select></div>`;
-  const hs = st + '|' + fm + '|' + nW + '|' + films.join(); if(tab.dataset.h!==hs){ tab.dataset.h = hs; tab.innerHTML = head + '<div id="rtList" class="takes"></div>';
+    <button class="btn" id="rtClearFail" style="width:100%;margin-top:8px"${nF ? '' : ' hidden'}>🧹 Clear failed (${nF})</button><select id="rtFilm" style="width:100%;margin-top:8px"><option value="*">All films</option>${films.map(k => `<option value="${esc(k)}" ${fm===k ? 'selected' : ''}>${esc(filmNameOf(k==='~' ? undefined : k))}</option>`).join('')}</select></div>`;
+  const hs = st + '|' + fm + '|' + nW + '|' + nF + '|' + films.join(); if(tab.dataset.h!==hs){ tab.dataset.h = hs; tab.innerHTML = head + '<div id="rtList" class="takes"></div>';
     $('#rtSeg').onclick = e => { const b = e.target.closest('[data-rt]'); if(!b) return; S.rtF = b.dataset.rt; save(); drawRenders(); };
     $('#rtFilm').onchange = e => { S.rtFilm = e.target.value; save(); drawRenders(); };
+    $('#rtClearFail').onclick = e => clearFailed(S.takes.filter(inFm), e.currentTarget);
     // 🎞 Go to film (Jordan 2026-11-08): opens the film the video is from, with its clip selected when it's on the timeline
     tab.addEventListener('click', e => { const b = e.target.closest('[data-gofilm]'); if(!b) return; e.stopPropagation(); goFilm(b.dataset.gofilm, b.dataset.gotake); }); }
   const box = $('#rtList'); if(!L.length){ box.innerHTML = '<div class="empty">' + (S.takes.length ? 'Nothing here with these filters.' : 'Your renders show up here, from both PCs.') + '</div>'; return; }
@@ -4401,14 +4402,14 @@ const whereOf = t => { try{ return t.film && FW && FW.FILM && FW.FILM.takeWhere 
 const whereLabel = w => w && w.clip ? '🎬 Clip ' + w.ci + ' · Take ' + w.n + (w.of > 1 ? ' of ' + w.of : '') + (w.use ? ' · in use' : '') : w ? 'Not on the timeline' : '';
 function goFilm(id, take){ setTab('films'); try{ const F = FW && FW.FILM; if(!F) return; F.go({v:'film', film:id}); if(take && F.selTake) setTimeout(() => F.selTake(take), 300); }catch(e){} }
 function drawTakes(){ fileTakes(); const L = S.takes.filter(inMine); drawRenders();
-  const box = $('#takes'); if(!L.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; return; }
+  const box = $('#takes'); if(!L.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; $('#clearFail').hidden = true; return; }
   // keep a playing video playing: only redraw what changed
   // Films' renders under the canvas say which clip and take each one is; ⬆ Pick it selects that clip up top with the take picked out
   const html = L.map(t => { const c = takeCard(t), w = whereOf(t), wl = whereLabel(w); if(!wl) return c;
     const fl = '<div class="rtWhere" style="font-size:13px;margin:4px 0;display:flex;align-items:center;gap:8px;justify-content:space-between"><b>' + esc(wl) + '</b>' + (w.clip ? '<button class="btn" data-pick="' + esc(t.id) + '" style="padding:6px 10px">⬆ Pick it</button>' : '') + '</div>';
     return withSig(c, wl, fl); });
   patchCards(box, L, html);
-  $('#clearDone').hidden = !L.some(t => t.state!=='working');
+  $('#clearDone').hidden = !L.some(t => t.state!=='working'); $('#clearFail').hidden = !L.some(isFailed);
 }
 function drawLive(){ // the running piece's preview picture and step count, without redrawing the list
   for(const t of S.takes){ if(t.state!=='working') continue; for(const el of document.querySelectorAll(`[data-take="${t.id}"]`)){
@@ -4484,6 +4485,37 @@ $('#clearDone').onclick = () => { const keep = filmKeeps(), gone = S.takes.filte
   if(!gone.length){ toast('Every finished take is on a 🎞 Films timeline, so they all stay'); return; }
   if(confirm('Take ' + gone.length + ' finished or stopped render' + (gone.length===1 ? '' : 's') + ' off the list?' + (kept ? ' ' + kept + ' on your Films timelines stay.' : '') + ' The videos stay on the PCs.')){
     const g = new Set(gone.map(t => t.id)); S.takes = S.takes.filter(t => !g.has(t.id)); tidyMedia(); save(); drawTakes(); } };
+// 🧹 Clear failed (Jordan 2026-11-17: "a button that clears failed or canceled renders from Renders and Wildcards. Leaving only those that
+// have actually rendered"): takes off the list only, never a file. Before a stopped take goes, its parts are looked for on its PC (the
+// PC's history, then the files, as 🛟 lateFinish does): if every part is there it rendered after all, so it comes back as finished.
+// Kept: takes a 🎞 Films timeline uses, a take a running take carries on from, one about to be sent again by itself, and a take on a PC
+// that's off (it can't be checked yet).
+const noClip = t => !t.final && !t.smoothed && !(t.pieces || []).some(p => p.file);
+const isFailed = t => t.state==='failed' || (t.state==='done' && noClip(t));
+async function partFile(t, i){ const p = t.pieces[i]; if(p.file) return p.file;
+  if(p.pid){ let h = null; try{ h = (await getJ(t.pc + '/history/' + p.pid))[p.pid]; }catch(e){}
+    const o = h && h.status && h.status.completed && (h.outputs || {})[p.save], f = o && (o.images || o.videos || o.gifs || [])[0];
+    if(f) return {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; }
+  try{ return await probeFile(t, i); }catch(e){ return null; } }
+let CLEARING = false;
+async function clearFailed(L, btn){ if(CLEARING) return;
+  const keep = filmKeeps(); S.takes.filter(t => t.state==='working').forEach(w => [w.carry && w.carry.src, w.redo && w.redo.src, w.redo && w.redo.root, w.from && w.from.id].forEach(id => id && keep.add(id)));
+  const bad = L.filter(isFailed), cand = bad.filter(t => !keep.has(t.id) && !(t.state==='failed' && t.selfAt)), held = bad.length - cand.length;
+  if(!cand.length){ toast(bad.length ? 'The failed ones are on a 🎞 Films timeline or being sent again, so they stay' : 'Nothing failed here'); return; }
+  CLEARING = true; const was = btn && btn.textContent; if(btn){ btn.disabled = true; btn.textContent = '🔎 Checking…'; }
+  const gone = new Set(); let back = 0, off = 0;
+  try{ for(const t of cand){ const ps = t.pieces || [];
+      if(t.state!=='failed' || !ps.length){ gone.add(t.id); continue; }
+      if(!pcOf(t.pc).online){ off++; continue; }
+      const found = []; for(let i = 0; i < ps.length; i++){ const f = await partFile(t, i); if(!f) break; found.push(f); }
+      if(found.length===ps.length){ ps.forEach((p, i) => { if(p.state!=='done'){ p.file = found[i]; p.state = 'done'; p.err = ''; p.lost = false; p.t1 = p.t1 || Date.now(); } });
+        Object.assign(t, {state:'working', late:1}); delete LATE[t.id]; back++; continue; }
+      gone.add(t.id); }
+    if(gone.size){ S.takes = S.takes.filter(t => !gone.has(t.id)); tidyMedia(); }
+    save(); drawTakes(); if(back) tickSoon(300);
+  }finally{ CLEARING = false; if(btn && btn.isConnected){ btn.disabled = false; btn.textContent = was; } }
+  toast('🧹 ' + (gone.size ? gone.size + ' failed render' + (gone.size===1 ? '' : 's') + ' cleared' : 'Nothing cleared') + (back ? '; ' + back + ' had rendered after all, so ' + (back===1 ? 'it\'s' : 'they\'re') + ' back' : '') + (off ? '; ' + off + ' on a PC that\'s off stay until it\'s on' : '') + (held ? '; ' + held + ' kept (on a Films timeline or being sent again)' : ''), 6000); }
+$('#clearFail').onclick = e => clearFailed(S.takes.filter(inMine), e.currentTarget);
 // a clip still in pieces plays them one after another, then starts over
 document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof HTMLVideoElement) || !v.dataset.list) return; let l; try{ l = JSON.parse(v.dataset.list); }catch(er){ return; }
   const i = l.indexOf(v.src.split('#')[0]); if(i >= 0){ v.src = l[(i + 1) % l.length]; v.play().catch(() => {}); } }, true);
@@ -5453,7 +5485,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
