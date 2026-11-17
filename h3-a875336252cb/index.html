@@ -1374,7 +1374,8 @@ const castMoreT0 = (c, t) => [castMore(c, t)].concat(wordsOn(c, t)).filter(Boole
 // "even if we have preset categories, this is the hair category…"): with a picture "hair: long blue hair; eyes: …" in her definition,
 // with no picture one sentence each, under the name the words use for her ("The first woman's hair: long blue hair.")
 const wildRolled = (c, t, id) => { const r = wildOf(c, t); return !!(r && (r.a || []).includes(id)); };
-const wildWords = (c, t) => { const r = wildOf(c, t); return !r ? [] : (r.a || []).map(libOf).filter(A => A && wPickWords(A)).map(A => { const C = wcatOf(A.cat), lab = (C ? C.name.replace(/^\S+\s/, '') : A.kind==='wear' ? 'outfit' : A.what || 'look').toLowerCase(); return [lab, wPickWords(A)]; }); };
+const wTxtOf = (r, A) => r && r.txt && r.txt[A.id]!=null ? r.txt[A.id] : wPickWords(A);
+const wildWords = (c, t) => { const r = wildOf(c, t); return !r ? [] : (r.a || []).filter(id => !(r.hide || []).includes(id)).map(libOf).filter(A => A && wTxtOf(r, A)).map(A => { const C = wcatOf(A.cat), lab = (C ? C.name.replace(/^\S+\s/, '') : A.kind==='wear' ? 'outfit' : A.what || 'look').toLowerCase(); return [lab, wTxtOf(r, A)]; }); };
 // a picture option's own words (or name) go in too (Jordan 2026-11-17: pink ring eyes from a picture still missed one of the two women), so the words say whose they are as well as the picture
 const wPickWords = A => libWords(A) || (libPics(A).length ? ((A.desc || '').trim() || (A.name || '').trim()).replace(/\s*\n+\s*/g, ' ').replace(/[\s.]*$/, '') : '');
 const castMoreT = (c, t) => [castMoreT0(c, t), wildWords(c, t).map(([l, w]) => l + ': ' + w).join('; ')].filter(Boolean).join('; ');
@@ -1431,6 +1432,18 @@ function wildCast(c, t){ const r = wildOf(c, t), L = r && r.who && libOf(r.who);
   let m = WILDC.get(r); if(m && m.src===c && m.L===L) return m.c;
   const x = Object.assign({}, c, {lib:L.id}); delete x.fitHere; delete x.fit; libFill(x, L); WILDC.set(r, {src:c, L, c:x}); return x; }
 const rnd = n => Math.floor(Math.random() * n);
+// 🎲 choices inside one option (Jordan 2026-11-16: "goth outfit. Punk outfit. Cute outfit." picks one; "a wildcard inside a wildcard", e.g. a
+// goth outfit covering {small|medium|large} breasts, so the outfit's picture goes in whatever size is picked):
+// · with ✂ One sentence per take on (A.split), the words are split at periods and one piece is used each take;
+// · {a|b|c} picks one of a, b, c each take; {Figure} (a category's name) puts that category's roll for her in, and its line isn't repeated.
+// The picks are made once per take per character (r.txt), so carry-ons and later mentions keep them; the option's picture always goes in.
+const wcatByName = s => { s = (s || '').trim().toLowerCase(); return s ? wcats().find(C => C.kind!=='act' && (C.name.toLowerCase()===s || C.name.replace(/^\S+\s/, '').toLowerCase()===s)) : null; };
+const wSplit = s => { const out = []; let d = 0, cur = ''; for(const ch of s){ if(ch==='{') d++; else if(ch==='}') d = Math.max(0, d - 1); if(ch==='.' && !d){ out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map(x => x.trim()).filter(Boolean); };
+const wHasChoice = A => !!A && (!!A.split || /\{[^{}]+\}/.test(A.desc || '') || (!A.desc && /\{[^{}]+\}/.test(A.name || '')));
+function wChoose(raw, split, catText){ let s = (raw || '').trim().replace(/\s*\n+\s*/g, ' ');
+  if(split){ const P = wSplit(s); if(P.length > 1) s = P[rnd(P.length)]; }
+  for(let i = 0; i < 6 && /\{[^{}]*\}/.test(s); i++) s = s.replace(/\{([^{}]*)\}/g, (m, b) => { if(b.includes('|')){ const o = b.split('|').map(x => x.trim()); return o[rnd(o.length)]; } const C = wcatByName(b); return C && catText ? catText(C.id) : b.trim(); });
+  return s.replace(/\s{2,}/g, ' ').replace(/[\s.]*$/, ''); }
 function wildRoll(cast){ const out = {};
   for(const c of cast || S.cast || []){ const w = c.wild; if(!w || !w.on || (c.kind || 'char')!=='char') continue; const r = {a:[], drop:[], picks:[]};
     const who = (w.who || []).filter(id => { const L = libOf(id); return L && L.kind==='char' && !MINOR.test([L.name, L.stand, L.desc].join(' ')); });
@@ -1438,8 +1451,17 @@ function wildRoll(cast){ const out = {};
     for(const k of wCatsOf(w)){ const C = wcatOf(k); if(!C || C.kind==='act') continue; const O = wopts(k).filter(A => !MINOR.test([A.name, A.desc].join(' ')) && (libPics(A).length || libWords(A))); if(!O.length) continue;
       const A = O[rnd(O.length)]; r.a.push(A.id); r.picks.push({cat:C.name, label:A.name || libWords(A) || 'one with a picture', id:A.id});
       if(C.kind==='wear') r.drop.push(...(c.attrs || []).filter(id => isWear(libOf(id)))); } // a rolled outfit takes the place of the one she has on
+    wildTexts(r);
     if(r.picks.length) out[c.n] = r; }
   return Object.keys(out).length ? out : null; }
+function wildTexts(r){ const byCat = {}, ok = A => A && !MINOR.test([A.name, A.desc].join(' ')) && (libPics(A).length || libWords(A)); r.a.forEach(id => { const A = libOf(id); if(A) byCat[A.cat] = id; });
+  const busy = new Set(), textOf = (A, d) => { if(r.txt && r.txt[A.id]!=null) return r.txt[A.id]; if(busy.has(A.id) || d > 4) return wPickWords(A) || '';
+    busy.add(A.id); let s = ''; for(let i = 0; i < 6; i++){ s = wChoose((A.desc || '').trim() || (A.name || '').trim(), A.split, k => { let id = byCat[k]; if(!id){ const O = wopts(k).filter(ok); if(!O.length) return ''; id = byCat[k] = O[rnd(O.length)].id; }
+      if(!(r.hide = r.hide || []).includes(id) && id!==A.id) r.hide.push(id); return textOf(libOf(id), d + 1); }); if(!MINOR.test(s)) break; s = ''; }
+    busy.delete(A.id); (r.txt = r.txt || {})[A.id] = s; return s; };
+  for(const id of r.a){ const A = libOf(id); if(wHasChoice(A)) textOf(A, 0); }
+  if(!r.txt) return r; for(const p of r.picks){ const A = p.id && libOf(p.id); if(!A || r.txt[A.id]==null) continue; const w = r.txt[A.id]; p.label = (A.name && !A.split && !/\{/.test(A.name) ? A.name + ': ' : '') + (w.length > 60 ? w.slice(0, 57) + '…' : w) || p.label; }
+  return r; }
 function wildMark(t){ delete t.wild; delete t.wildFrom;
   const src = [t.carry && t.carry.src, t.lead && t.lead.src, t.redo && t.redo.src, t.from && t.from.id].map(id => id && S.takes.find(x => x.id===id)).find(x => x && x.wild);
   if(src){ t.wild = JSON.parse(JSON.stringify(src.wild)); t.wildFrom = 'carry'; return wildActs(t); }
@@ -1451,7 +1473,8 @@ function wildActs(t, src){ delete t.wildActs; src = src || [t.carry && t.carry.s
   const O = wopts('act').filter(A => wActWords(A) && !MINOR.test(wActWords(A))), keep = ((S.wildKeep || {})[filmK()] || {})._acts;
   for(const [k, L] of Object.entries(t.lines || {})){ if(!L || !L.act || !L.rand) continue;
     const id = (src && src.wildActs && src.wildActs[k]) || (keep && keep[k]) || (O.length ? O[rnd(O.length)].id : ''), A = id && libOf(id); if(!A) continue;
-    t.lines[k] = Object.assign({}, L, {name:A.name || wActWords(A).split(' ').slice(0, 3).join(' '), text:wActWords(A)}); delete t.lines[k].lib; (t.wildActs = t.wildActs || {})[k] = id; }
+    const at = src && src.wildActs && src.wildActs[k] && ((src.lines || {})[k] || {}).text, txt = at || (wHasChoice(A) ? wChoose(wActWords(A), A.split) || wActWords(A) : wActWords(A));
+    t.lines[k] = Object.assign({}, L, {name:A.name || txt.split(' ').slice(0, 3).join(' '), text:txt}); delete t.lines[k].lib; (t.wildActs = t.wildActs || {})[k] = id; }
   return t; }
 const wildAny = () => (S.cast || []).some(c => c.wild && c.wild.on && (wCatsOf(c.wild).length || (c.wild.who || []).length));
 function wildLine(t, html){ if(!t || (!t.wild && !t.wildActs)) return ''; const parts = Object.entries(t.wild || {}).map(([n, r]) => { const c = castOf(n, t.film); return (c ? castName(c) : 'Subject ' + n) + ': ' + (r.picks || []).map(p => p.label).join(' · '); });
@@ -1478,6 +1501,8 @@ function wildOpt(id){ const A = (S.wlib || []).find(x => x.id===id); if(!A) retu
     <div class="lab"><span>Name</span></div><input data-wof="name" value="${esc(A.name || '')}" placeholder="${ac ? 'e.g. Twirl (what the chip says)' : A.kind==='wear' ? 'e.g. Red silk slip dress' : 'e.g. Short silver bob'}">
     <div class="lab" style="margin-top:8px"><span>${ac ? 'What they do (sent as the 🥋 action chip\'s words, for whoever the chip points at)' : 'Words (sent in her description; with no picture, these are the option)'}</span></div>
     <textarea data-wof="desc" rows="3" style="width:100%;box-sizing:border-box" placeholder="${ac ? 'e.g. spins slowly on the spot, her skirt flaring out' : A.kind==='wear' ? 'e.g. a red silk slip dress with thin straps' : 'e.g. chin-length silver bob with a blunt fringe'}">${esc(A.desc || '')}</textarea>
+    ${`<button class="btn${A.split ? ' pri' : ''}" data-wo="split" style="width:100%;margin-top:6px">✂ One sentence per take: ${A.split ? 'on' : 'off'}</button>`}
+    <div class="wdNote" style="margin-top:4px">${A.split ? 'Each sentence (ending in a period) is its own choice: one is picked every take. ' : 'On: each sentence (ending in a period) is its own choice, one picked every take. '}<b>{small|medium|large}</b> picks one of those every take; <b>{${esc((wcats().find(x => x.kind!=='act' && x.id!==A.cat) || {name:'🧍 Figure'}).name.replace(/^\S+\s/, ''))}}</b> puts in that category's roll for her.${P.length ? ' The picture goes in every take, whichever words are picked.' : ''}</div>
     <div class="wdNote" id="woBust" style="margin-top:4px${bust ? '' : ';display:none'}">⚠ Breast words in a description were what pushed nipples through clothes before. Words like "curvy figure" or "slim build" are safer.</div>
     ${ac ? '' : `<div class="lab" style="margin-top:8px"><span>Picture (optional: MiniMax moves only this ${esc((A.what || C.name.replace(/^\S+\s/, '')).toLowerCase())} onto her)</span></div>
     <div class="castpics">${P.map((m, i) => `<span class="cpw"><img src="${(S.media[m] || {}).thumb || ''}" alt=""><button data-wo="unpic:${i}" aria-label="Take this picture out">✕</button></span>`).join('')}${P.length < 2 ? '<button class="castpic" data-wo="pic">＋ Picture</button>' : ''}</div>`}
@@ -1489,12 +1514,13 @@ function wildOpt(id){ const A = (S.wlib || []).find(x => x.id===id); if(!A) retu
   box.onclick = e => { const b = e.target.closest('[data-wo]'); if(!b) return; const [a, v] = b.dataset.wo.split(':');
     if(a==='pic'){ pickLib = A.id; pickFile('lib'); return; }
     if(a==='unpic') libPics(A).splice(+v, 1);
+    if(a==='split') A.split = !A.split;
     if(a==='del'){ if(!confirm('Delete ' + (A.name || 'this option') + '?')) return; S.wlib = S.wlib.filter(x => x!==A); save(); closeSheet(); drawWild(); drawCast(); return; }
     save(); drawWild(); wildOpt(A.id); }; }
 function wildNote(c){ const w = c.wild; if(!w || !w.on) return ''; const K = wCatsOf(w).map(wcatOf).filter(Boolean), keep = (S.wildKeep || {})[filmK()], who = (w.who || []).map(libOf).filter(Boolean);
   return `<div class="wdNote" style="margin-top:4px">🎲 Each take rolls ${K.length ? K.map(C => esc(C.name) + ' (' + wopts(C.id).length + ')').join(' · ') : 'nothing yet'}${who.length ? ' · 🧑 one of ' + who.length + ' characters' : ''}.</div>${keep ? '<div class="wdNote" style="margin-top:4px">🔒 Using a kept mix for now. <button class="btn sm" data-cast="wildfree">🎲 Roll again</button></div>' : ''}`; }
 function wildNew(cat){ const C = wcatOf(cat); if(!C) return null; S.wlib = S.wlib || [];
-  const A = {id:'W' + Math.random().toString(36).slice(2, 10), cat, kind:C.kind==='wear' ? 'wear' : C.kind==='act' ? 'wact' : 'attr', what:C.kind==='wear' ? 'outfit' : C.what || C.name.replace(/^\S+\s/, '').toLowerCase(), name:'', desc:'', pics:[], keep:'exact'};
+  const A = {id:'W' + Math.random().toString(36).slice(2, 10), cat, kind:C.kind==='wear' ? 'wear' : C.kind==='act' ? 'wact' : 'attr', what:C.kind==='wear' ? 'outfit' : C.what || C.name.replace(/^\S+\s/, '').toLowerCase(), name:'', desc:'', pics:[], keep:'exact', split:true}; // ✂ new options split at periods (Jordan 2026-11-16); older ones keep their whole words
   S.wlib.push(A); return A; }
 function wildSheet(c){ const w = c.wild = c.wild || {on:true, cats:[], who:[]}, K = wcats(), chars = (S.lib || []).filter(L => L.kind==='char' && libHere(L) && L.id!==c.lib);
   const bust = wCatsOf(w).some(k => wopts(k).some(A => BUSTW.test([A.name, A.desc].join(' '))));
@@ -5342,7 +5368,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }

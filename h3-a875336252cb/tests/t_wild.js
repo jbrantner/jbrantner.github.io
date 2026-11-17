@@ -130,6 +130,24 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   { const wl = await page.evaluate(t => H3.wildLine(t), ta); ok(/Ava: .* \/ 🥋 (Twirl|Wave)/.test(wl), 'the take card line lists the action: ' + wl); }
   const sameA = await page.evaluate(t => { H3.S.takes.unshift(t); const n = H3.snapshot(); n.carry = {src:t.id}; H3.wildMark(n); H3.S.takes.shift(); return JSON.stringify(n.wildActs)===JSON.stringify(t.wildActs); }, ta);
   ok(sameA, 'a carry-on keeps the same action');
+  // ✂ choices inside one option (Jordan 2026-11-16): periods split, {a|b|c} picks, {Category} nests, the picture always goes
+  { const ch = await page.evaluate(() => { const o = new Set(); for(let i = 0; i < 40; i++) o.add(H3.wChoose('goth outfit. Punk outfit. Cute outfit.', true)); return [...o].sort(); });
+    ok(ch.join('|')==='Cute outfit|Punk outfit|goth outfit', 'split at periods: one of three each time: ' + ch.join(' / ')); }
+  { const w = await page.evaluate(() => H3.wChoose('goth outfit. Punk outfit.', false)); ok(w==='goth outfit. Punk outfit', 'with ✂ off the words stay whole: ' + w); }
+  { const ch = await page.evaluate(() => { const o = new Set(); for(let i = 0; i < 40; i++) o.add(H3.wChoose('a goth outfit covering her {small|medium|large} chest', false)); return [...o].sort(); });
+    ok(ch.length===3 && ch.every(x => /^a goth outfit covering her (small|medium|large) chest$/.test(x)), '{a|b|c} picks one: ' + ch.join(' / ')); }
+  { const r = await page.evaluate(() => { H3.wcats(); const S = H3.S;
+      S.wcats.push({id:'cx', name:'📏 Size', kind:'attr', what:'size'});
+      S.wlib = (S.wlib || []).filter(A => !['wear', 'cx'].includes(A.cat));
+      const o = H3.wildNew('wear'); Object.assign(o, {name:'Goth', desc:'goth outfit with a {Size} figure', pics:['h1']});
+      const z1 = H3.wildNew('cx'); z1.desc = 'petite'; const z2 = H3.wildNew('cx'); z2.desc = 'tall';
+      const c = {n:9, kind:'char', who:'W', stand:'a woman', pics:[], attrs:[], wild:{on:true, cats:['wear', 'cx']}};
+      const seen = new Set(); let hid = true, pic = true;
+      for(let i = 0; i < 30; i++){ const R = H3.wildRoll([c])[9], t = {wild:{9:R}}; const W = H3.wildWords(c, t); seen.add(W.map(x => x.join(':')).join(' ; '));
+        if(W.some(x => x[0]==='size')) hid = false; if(!H3.attrsOf(c, t).includes(o.id)) pic = false; }
+      return {seen:[...seen].sort(), hid, pic}; });
+    ok(r.seen.join('|')==='outfit:goth outfit with a petite figure|outfit:goth outfit with a tall figure', '{Size} nests that category\'s roll: ' + r.seen.join(' / '));
+    ok(r.hid, 'a nested category is not said twice'); ok(r.pic, 'the outfit picture goes in whatever words are picked'); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
