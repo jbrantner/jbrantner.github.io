@@ -19,7 +19,7 @@ const SCHEMA = {
   AudioAdjustVolume:{input:{required:{audio:['AUDIO'], volume:['INT', {default:1}]}}},
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3AddGuide','MMH3FitReferences','LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
-  'VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale','Video Slice','ImageFromBatch','TrimAudioDuration','AudioConcat','MelBandRoFormerSampler'];
+  'VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale','Video Slice','ImageFromBatch','TrimAudioDuration','AudioConcat','MelBandRoFormerSampler','H3AudioRefineSampler','RepeatImageBatch','ImageBatch','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent'];
 (async () => {
   const root = path.join(__dirname, '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8049);
@@ -82,6 +82,24 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   ok(G.fs.length===2 && G.fs.every(x => x.d===7 && x.img==='ImageFromBatch' && x.st===25) && G.ifb.join()==='0+168,168+168' && G.ac===1, 'two 7 s Foley pieces joined end to end: ' + G.ifb + ' ' + JSON.stringify(G.fs.map(x => x.d)));
   ok(!/music/.test(G.fs[0].neg) && /speech/.test(G.fs[0].neg), '🎵 lets music in, speech stays out: ' + G.fs[0].neg);
   ok(G.mel.join()==='MelBandRoformer_fp16.safetensors' && G.melIn.join()==='GetVideoComponents' && G.mg.join()==='AudioAdjustVolume+MelBandRoFormerSampler:add' && G.vol.join()==='-12', 'MiniMax\'s voices (MelBand) over the effects at -12 dB: ' + G.mg + ' ' + G.vol);
+  // 2b) 🎙 a voice-over: MiniMax makes the sound with the picture frozen (H3 Audio Refine), MelBand keeps its voice, over the Foley effects
+  await page.evaluate(() => { H3.soundSheet(H3.S.takes.find(x => x.id==='tA')); });
+  await page.evaluate(async () => { const v = document.querySelector('#sndVo'); v.value = 'She never thought she would see this place again'; v.dispatchEvent(new Event('input')); document.querySelector('#sndVoHow').value = 'calm older woman\'s';
+    document.querySelector('#sndGo').click(); await new Promise(z => setTimeout(z, 1500)); });
+  S1 = await snd(); const V = S1.find(x => x.snd.vo);
+  ok(V && V.snd.vo==='She never thought she would see this place again' && V.snd.voHow==="calm older woman's" && V.snd.db===-10 && /^🎙 "She never/.test(V.prompt), 'a voice-over take, effects 10 dB down under it: ' + JSON.stringify(V && V.snd));
+  const GV = await page.evaluate(([R, id]) => { const t = H3.S.takes.find(x => x.id===id), G = H3.sndGraph(t, t.pieces[0], H3.PC[R].oi).g, g = Object.values(G), C = c => g.filter(n => n.class_type===c), src = x => x && G[x[0]] ? G[x[0]].class_type : '';
+    const rf = C('H3AudioRefineSampler')[0], rv = C('MiniMaxH3ReferenceToVideo')[0], cv = C('CreateVideo')[0], ids = Object.keys(G), at = c => ids.findIndex(k => G[k].class_type===c);
+    return {rf:rf && {ad:rf.inputs.audio_denoise, vd:rf.inputs.video_denoise, cfg:rf.inputs.cfg, st:rf.inputs.steps, lat:src(rf.inputs.latent), pos:src(rf.inputs.positive)}, p:rv && rv.inputs.prompt, L:rv && rv.inputs.length, wh:rv && [rv.inputs.width, rv.inputs.height],
+      sc:C('ImageScale').map(n => n.inputs.width + 'x' + n.inputs.height), rep:C('RepeatImageBatch').map(n => n.inputs.amount), tr:C('TrimAudioDuration').map(n => n.inputs.duration), mel:C('MelBandRoFormerSampler').map(n => src(n.inputs.audio)),
+      mg:C('AudioMerge').map(n => src(n.inputs.audio1) + '+' + src(n.inputs.audio2)), aud:src(cv.inputs.audio), img:src(cv.inputs.images), mmFirst:at('UNETLoader') < at('HunyuanModelLoader'), unet:C('UNETLoader').map(n => n.inputs.unet_name)}; }, [R, V.id]);
+  ok(GV.rf && GV.rf.ad===1 && GV.rf.vd===0 && GV.rf.cfg===1 && GV.rf.lat==='LTXVConcatAVLatent' && GV.rf.pos==='MiniMaxH3ReferenceToVideo', 'H3 Audio Refine: video frozen, sound made from scratch at CFG 1: ' + JSON.stringify(GV.rf));
+  ok(/says in an off-screen voiceover: <d>\[English\] She never thought she would see this place again\.<\/d>/.test(GV.p) && /A calm older woman's voice/.test(GV.p) && /lips completely closed/.test(GV.p), 'the voice-over line in MiniMax\'s words: ' + GV.p);
+  ok(GV.L===124 && GV.rep.join()==='4' && GV.tr.join()==='5' && GV.sc.length===1, 'on MiniMax\'s 17k+5 grid (120 → 124, the last frame held 4 more), its sound cut back to 5 s: ' + GV.L + ' ' + GV.sc);
+  ok(GV.mel.join()==='TrimAudioDuration' && GV.mg.join()==='AudioAdjustVolume+MelBandRoFormerSampler' && GV.aud==='AudioMerge' && GV.img==='GetVideoComponents', 'only MiniMax\'s voice is kept, laid over the effects; the frames are the clip\'s own: ' + GV.mg);
+  ok(GV.mmFirst && GV.unet.length===1, 'MiniMax runs before Foley loads: ' + GV.unet);
+  const longVo = await page.evaluate(async () => { const n0 = H3.S.takes.filter(x => x.snd).length; const r = await window.H3Sound({take:'tB', prompt:'x', vo:'Hello there'}); return {r, n:H3.S.takes.filter(x => x.snd).length - n0}; });
+  ok(longVo.r===0 && longVo.n===0, 'a 14 s clip is too long for a voice-over (8 s on 8 GB)');
   // 3) a PC without the nodes can't take it, and says why
   const why = await page.evaluate(() => H3.sndMissing({LoadVideo:{}}, {voice:false}));
   ok(/HunyuanVideo-Foley/.test(why), 'a PC without Foley says so: ' + why);
