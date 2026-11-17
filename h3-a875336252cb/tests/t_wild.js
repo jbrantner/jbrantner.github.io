@@ -98,13 +98,16 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   const pre = await page.evaluate(() => H3.S.cast.map(c => [c.n, c.who, c.wild && c.wild.on, c.wild && c.wild.all]));
   ok(JSON.stringify(pre)===JSON.stringify([[1, 'Wildcard subject 1', true, true], [2, 'Wildcard subject 2', true, true]]), 'two ready-made wildcard subjects: ' + JSON.stringify(pre));
   ok(await page.evaluate(() => /Wildcard subject 1/.test(document.querySelector('#tagBar').textContent)), 'their chips are in the Shot box bar');
-  await page.click('#tagBar [data-wdn]');
+  await page.click('#tagBar [data-wdn]'); await page.click('[data-wa="wild"]');
   const p3 = await page.evaluate(() => ({c:H3.S.cast.map(c => c.who), p:H3.S.f.prompt}));
   ok(p3.c[2]==='Wildcard subject 3' && /<Subject 3>/.test(p3.p), '🎲 ＋ Wildcard adds subject 3 and puts its chip in: ' + JSON.stringify(p3));
   const r3 = await page.evaluate(() => { H3.S.f.prompt = '<Subject 1> waves. Then <Subject 1> sits.'; const t = H3.wildMark(H3.snapshot()); return t.wild && t.wild[1] && t.wild[1].picks.map(p => p.cat); });
   ok(r3 && r3.some(x => /Hair/.test(x)) && !r3.some(x => /Outfit/.test(x)), 'a ready-made one rolls every category with usable options (the under-18 outfits are skipped): ' + JSON.stringify(r3));
   const P2 = await prom(await page.evaluate(() => { const t = H3.wildMark(H3.snapshot()); return t; }));
   ok((P2.p.match(/<Subject 1>/g) || []).length >= 2 && !/<Subject 2>/.test(P2.p.split('\n').filter(l => /waves|sits/.test(l)).join()), 'the same subject twice in one take is one person (one tag)');
+  await page.click('#tagBar [data-wdn]'); await page.click('[data-wa="lib:Lmia"]');
+  const pm = await page.evaluate(() => ({c:H3.S.cast.find(c => c.lib==='Lmia'), p:H3.S.f.prompt}));
+  ok(pm.c && new RegExp('<Subject ' + pm.c.n + '>').test(pm.p), '👥 ＋ Character › a Library character joins the cast with its chip in: ' + pm.p);
   await page.evaluate(() => { H3.S.f.prompt = ''; });
   await page.evaluate(() => { H3.S.cast = [{n:1, kind:'char', who:'Ava', pics:['p1'], keep:'exact', attrs:[], wild:{on:true, cats:['hair'], who:[]}}]; H3.S.f.prompt = 'In a park. <Subject 1> smiles.'; H3.drawAll(); });
   // 🥋 random action options + chip
