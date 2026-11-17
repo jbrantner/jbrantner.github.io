@@ -25,6 +25,14 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(/Loopability \d+\/100/.test(A.note), 'the loop box shows the loopability: ' + A.note);
   const W = await page.evaluate(() => { H3.loopWhole(); return {st:H3.S.f.smStart, s:H3.S.f.seconds, p:H3.S.f.prompt}; });
   ok(W.st===0 && W.s >= 7.9 && /slides in/.test(W.p), 'Whole clip puts it all back: ' + JSON.stringify(W));
+  // ✂ start/end sliders (Jordan 2026-11-17): they set the window, move the words, and the preview plays the stretch
+  const C = await page.evaluate(async () => { H3.S.f.smLoop = true; H3.drawAll && H3.drawAll(); await new Promise(z => setTimeout(z, 300)); const box = document.querySelector('#smCut'), r = {shown:!box.hidden};
+    H3.cutSet('a', 2); H3.cutSet('b', 6); await new Promise(z => setTimeout(z, 500)); const v = document.querySelector('#smCutV');
+    return Object.assign(r, {st:H3.S.f.smStart, s:H3.S.f.seconds, p:H3.S.f.prompt, a:document.querySelector('#smCutAOut').textContent, b:document.querySelector('#smCutBOut').textContent, src:!!v.getAttribute('src') || !!v.src, t:v.currentTime}); });
+  ok(C.shown && C.st===2 && C.s===4 && /^\[0s-4s\] It swings/.test(C.p) && /2(\.0)? s/.test(C.a) && C.src, '✂ Loop from / to set the window (2 s → 6 s), move the words, and the preview has the clip: ' + JSON.stringify(C));
+  // the search gives up instead of hanging: a reading that runs past its time stops with a reason (the whole clip is used)
+  const BG = await page.evaluate(async id => { const b = await (await fetch('/clip.webm')).blob(); try{ await H3.grabFrames(b, 0, 64, 24, null, 3, {until:Date.now() - 1}); return 'no stop'; }catch(e){ return e.message; } }, id);
+  ok(/too long/.test(BG), 'reading the frames stops at its time limit: ' + BG);
   ok(await page.evaluate(() => H3.shiftTimed('[1s-] carries on.', 2, 3)==='[0s-] carries on.'), 'an open line keeps running');
   // (Jordan 2026-11-17: "use the longest loop it can find") a 10 s clip that swings every 2 s, with a slow drift so a short stretch matches a
   // little better than a long one: at least half the clip is used, not the 2 s one
