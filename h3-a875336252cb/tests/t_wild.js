@@ -222,6 +222,19 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       b.click(); const ok1 = /Kat/.test(document.querySelector('#sheetCard h3').textContent) && document.querySelectorAll('#wlBox [data-wli]').length===1;
       document.querySelector('#wlBox [data-wlback]').click(); return ok1 && !!document.querySelector('#spBox') ? 'ok' : 'bad'; });
     ok(r==='ok', 'the 🧩 button by a Library character in the tag sheet edits her LoRAs and comes back: ' + r); }
+  // 🎬 Random scene: a whole base prompt per take, subject chips as slots (Jordan 2026-11-17)
+  { const r = await page.evaluate(() => { const S = H3.S; H3.wcats(); S.wlib = (S.wlib || []).filter(A => A.cat!=='scene');
+      const A = H3.wildNew('scene'); A.name = 'Beach'; A.desc = 'On a beach, <Subject 1> dances.'; A.split = false; const B = H3.wildNew('scene'); B.name = 'Rain'; B.desc = 'In the rain, <Subject 1> spins.'; B.split = false;
+      H3.wildOpt(A.id); const slotRow = !!document.querySelector('#woBox [data-wo="sub:1"]') && !document.querySelector('#woBox [data-wo="sub:someone"]') && !document.querySelector('#woBox [data-wo="pic"]'); document.querySelector('#sheetCard [data-close]').click();
+      H3.drawWild(); document.querySelector('#wildTab [data-wt="scene"]').click(); const on = H3.S.f.wildScene===true && H3.sceneOn();
+      H3.S.f.prompt = ''; const seen = new Set(); let t; for(let i = 0; i < 30; i++){ t = H3.sceneSnap(); seen.add(t.prompt); }
+      H3.S.f.prompt = 'Slow motion.'; const t2 = H3.sceneSnap(); const form = H3.S.f.prompt;
+      return {slotRow, on, seen:[...seen].sort(), t2:t2.prompt, piece:t2.pieces[0].prompt, form, id:!!t2.wildScene, line:H3.wildLine(Object.assign(t2, {wild:null}))}; });
+    ok(r.slotRow, 'a 🎬 scene option has subject chip slots and no picture');
+    ok(r.on && r.seen.join('|')==='In the rain, <Subject 1> spins.|On a beach, <Subject 1> dances.', 'each take picks a scene as its words: ' + r.seen.join(' / '));
+    ok(/^(On a beach|In the rain).*\nSlow motion\.$/.test(r.t2) && /Slow motion/.test(r.piece) && r.form==='Slow motion.', 'the Shot box words come after the scene and the form is untouched: ' + JSON.stringify([r.t2, r.form]));
+    ok(/🎬 (Beach|Rain)/.test(r.line), 'the take card says which scene: ' + r.line);
+    await page.evaluate(() => { H3.S.f.wildScene = false; }); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
