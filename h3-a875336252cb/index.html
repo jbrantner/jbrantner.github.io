@@ -328,7 +328,9 @@ body.bare #renderTab .note:not(#filmFormNote):not(.stl),body.bare #renderTab .sw
         <div style="margin-top:6px"><div class="lab"><span>Pin every</span></div><div class="seg" id="smEverySeg"><button data-v="2">2nd frame</button><button data-v="4">4th frame</button><button data-v="8">8th frame</button></div></div>
         <div class="sw" id="smLoopSw" style="margin-top:8px"><div><div class="t">🔁 Make it loop</div><div class="d">Swaps the window's halves so the seam lands in the middle, and MiniMax paints across it. The clip's end then runs straight into its start.</div></div><div class="tog"></div></div>
         <div id="smLoopBody" hidden style="margin-top:8px"><div class="lab"><span>Free frames at the seam</span><b id="smSeamOut">12</b></div><input type="range" id="smSeam" min="4" max="32" step="2" value="12" style="width:100%">
-          <div class="note" id="smLoopNote" style="margin-top:2px"></div></div>
+          <div class="note" id="smLoopNote" style="margin-top:2px"></div>
+          <div class="row" style="gap:6px;margin-top:8px"><button class="btn" id="smFindGo" style="flex:1">🔍 Find the best loop</button><button class="btn" id="smWhole">Whole clip</button></div>
+          <div class="note" id="smFindOut" style="margin-top:4px"></div></div>
         <div id="smGapBody" hidden style="margin-top:8px"><div class="lab"><span>🪄 Free frames at each join</span><b id="smGapOut">24</b></div><input type="range" id="smGap" min="4" max="48" step="2" value="24" style="width:100%">
           <div class="note" style="margin-top:2px">No frame is pinned this close to a join between two clips, so MiniMax paints a new path from one clip into the next instead of copying the jump. More frames = a longer, softer blend.</div></div>
         <div class="sw" id="smSpcSw" style="margin-top:8px"><div><div class="t">📐 Even out the spacing</div><div class="d">Tracks points through the window, finds jumps and eases the pinned frames around them</div></div><div class="tog"></div></div>
@@ -1087,7 +1089,7 @@ function smoothKeys(L, every){ const k = []; for(let i = 0; i < L; i += every) k
 const SPC = {}; // video|start|frames -> {d:[steps], n, busy, err}
 const SPC_W = 192; let spcT = 0; // frames are measured this wide
 function spcKey(){ const f = S.f, sp = smoothSpan(); return f.smVid + '|' + sp.start + '|' + smoothTotal(); }
-async function grabFrames(blob, start, L, sf, onp){
+async function grabFrames(blob, start, L, sf, onp, step){ step = step || 1;
   // iPhone Safari won't load a video that isn't on the page, isn't muted/inline as attributes, or hasn't been played once
   const v = document.createElement('video'); v.muted = true; v.defaultMuted = true; v.playsInline = true; v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
   v.preload = 'auto'; v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1'; document.body.appendChild(v);
@@ -1099,7 +1101,7 @@ async function grabFrames(blob, start, L, sf, onp){
     try{ await v.play(); }catch(e){} v.pause(); // primes the decoder (muted playback is allowed without a tap)
     const w = SPC_W, h = Math.max(16, Math.round(w * v.videoHeight / v.videoWidth)), c = document.createElement('canvas'); c.width = w; c.height = h;
     const x = c.getContext('2d'), out = [];
-    for(let o = 0; o < L; o++){ const t = start + (Math.round(o * sf / FPS) + 0.5) / sf; if(v.duration && t > v.duration) break;
+    for(let o = 0; o < L; o++){ const t = start + (Math.round(o * step * sf / FPS) + 0.5) / sf; if(v.duration && t > v.duration) break;
       await new Promise(ok => { let tm = 0; const done = () => { clearTimeout(tm); v.removeEventListener('seeked', done); ok(); }; v.addEventListener('seeked', done); tm = setTimeout(done, 4000); v.currentTime = t; });
       if(v.requestVideoFrameCallback) await new Promise(ok => { const tm = setTimeout(ok, 250); v.requestVideoFrameCallback(() => { clearTimeout(tm); ok(); }); }); // the new frame is really there
       x.drawImage(v, 0, 0, w, h); const px = x.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
@@ -1143,6 +1145,38 @@ async function measureSpacing(){
   }catch(e){ R.err = e.message; }
   R.busy = false; if(spcKey()===k){ drawInputs(); drawCanvas(); drawGo(); } return R;
 }
+// 🔍 Find the best loop (Jordan 2026-11-16: "find the best place for a video to loop and then loop it there… some of these videos begin with
+// someone walking in the room, which you can't loop. Is there a way to measure loop ability?"). Frames are read 8 a second, small and grey;
+// a stretch from frame i to frame j loops well when the frames around j look like the frames around i (same picture AND the same motion
+// going into the seam: five frames on each side are compared in step). Loopability = 100 when they match, 0 when the turn is as big a change
+// as one second of the clip normally is. A longer loop gets a small bonus, so a stretch is only cut off when it really doesn't loop.
+const LOOP_SF = 8, LOOP_MIN = 2;
+function loopScore(F, w, h, minN){ const n = F.length, W = w >> 2, H = h >> 2, sm = F.map(g => { const o = new Float32Array(W * H); for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){ let a = 0; for(let yy = 0; yy < 4; yy++) for(let xx = 0; xx < 4; xx++) a += g[(y * 4 + yy) * w + x * 4 + xx]; o[y * W + x] = a / 16; } return o; });
+  const D = []; for(let i = 0; i < n; i++){ D.push(new Float32Array(n)); } for(let i = 0; i < n; i++) for(let j = i + 1; j < n; j++){ let a = 0; const p = sm[i], q = sm[j]; for(let k = 0; k < p.length; k++) a += Math.abs(p[k] - q[k]); D[i][j] = D[j][i] = a / p.length; }
+  const sec = [], s1 = LOOP_SF; for(let i = 0; i + s1 < n; i++) sec.push(D[i][i + s1]); sec.sort((a, b) => a - b); const base = Math.max(2, sec.length ? sec[Math.floor(sec.length / 2)] : 10);
+  const seam = (i, j) => { let a = 0, c = 0; for(let k = -2; k <= 2; k++){ const p = i + k, q = j + k; if(p < 0 || q >= n || q - p < 1) continue; a += D[p][q] * (k===0 ? 2 : 1); c += k===0 ? 2 : 1; } return c ? a / c : Infinity; };
+  const sc = (i, j) => Math.max(0, Math.min(100, Math.round(100 * (1 - seam(i, j) / base))));
+  let best = null; for(let i = 0; i < n; i++) for(let j = i + minN; j < n; j++){ const s0 = sc(i, j), v = s0 + 15 * (j - i) / (n - 1); if(!best || v > best.v) best = {i, j, score:s0, v}; }
+  return {best, whole:n > 2 ? sc(0, n - 1) : 0, base}; }
+async function findLoop(id, onp){ const m = S.media[id] || {}, b = await blobOf(id); if(!b) throw new Error('the video is no longer on the phone');
+  const dur = Math.min(SM_MAX + 2, m.dur || 15), N = Math.floor(dur * LOOP_SF), step = FPS / LOOP_SF;
+  const {frames, w, h} = await grabFrames(b, 0, N, m.fps || FPS, onp, step); const n = frames.length; if(n < LOOP_SF * LOOP_MIN) throw new Error('the clip is too short to look for a loop in');
+  const {best, whole} = loopScore(frames, w, h, Math.min(n - 1, LOOP_SF * LOOP_MIN)); if(!best) throw new Error('no loop found');
+  return {vid:id, score:best.score, whole, start:Math.round(best.i / LOOP_SF * 100) / 100, secs:Math.round((best.j - best.i) / LOOP_SF * 100) / 100, dur:n / LOOP_SF}; }
+// the clip's timed words moved to the loop's own clock (a line that ends before the loop starts is left out)
+function shiftTimed(text, start, len){ if(!(start > 0)) return text; const out = [];
+  for(const ln of (text || '').split('\n')){ const m = ln.match(/^\s*\[(\d+(?:\.\d+)?)s?-(\d+(?:\.\d+)?)?s?\]\s*(.*)$/); if(!m){ out.push(ln); continue; }
+    const a = +m[1] - start, b = m[2]!=null && m[2]!=='' ? +m[2] - start : null; if(b!=null && b <= 0.05) continue; if(a >= len - 0.05) continue;
+    out.push('[' + t2(Math.max(0, a)) + '-' + (b!=null ? t2(Math.min(len, b)) : '') + '] ' + m[3]); }
+  return out.join('\n'); }
+function loopFitOk(L){ return L && L.vid===S.f.smVid; }
+async function loopApply(quiet){ const f = S.f; if(!f.smVid) return null; f.smFind = {busy:true, vid:f.smVid}; if(!quiet) drawAll();
+  try{ const L = await findLoop(f.smVid, quiet ? null : (i, n) => { const e = $('#smFindOut'); if(e) e.textContent = '🔍 Reading frames ' + i + '/' + n + '…'; });
+    f.smFind = L; f.smStart = L.start; f.seconds = L.secs; if(f.smFindText==null) f.smFindText = f.prompt || ''; f.prompt = shiftTimed(f.smFindText, L.start, L.secs);
+    if(!quiet){ $('#prompt').value = f.prompt; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); } return L;
+  }catch(e){ f.smFind = {err:e.message, vid:f.smVid}; return null; }
+  finally{ save(); if(!quiet){ try{ drawAll(); }catch(e){} } } }
+function loopWhole(){ const f = S.f, m = S.media[f.smVid] || {}; f.smStart = 0; f.seconds = Math.round(Math.min(SM_MAX, m.dur || f.seconds) * 20) / 20; if(f.smFindText!=null){ f.prompt = f.smFindText; $('#prompt').value = f.prompt; } if(f.smFind) f.smFind.used = 'whole'; $('#lenNum').value = f.seconds; $('#len').value = Math.min(60, f.seconds); save(); drawAll(); }
 // 🎬 Punch (Jordan 2026-11-02, "smooth the movement while also keeping it punchy"): after the even-out, each move (a run
 // of frames that travel, between holds) keeps its own distance and length, but its speed curve is re-shaped like an
 // animator's spacing: read on a warped clock (u^a, so the fast part comes later: longer ease in, quicker stop) and raised
@@ -3706,7 +3740,7 @@ async function toSmooth(t, blend, loop, quiet){
   const f = S.f, m = S.media[id] || {}, secs = Math.min(SM_MAX, m.dur || clipFrames(t) / FPS), text = (t.prompt || '').split('\n\n＋ ').join(' ');
   Object.assign(f, {sm:true, smVid:id, smStart:0, smUp:true, smRefs:(t.upImgs && t.upImgs.length ? t.upImgs : t.imgs || []).map(r => r.id).filter(x => S.media[x]), smUpRefs:true,
     prompt:text===SM_PROMPT ? '' : text, seconds:Math.round(secs * 20) / 20, model:t.model, turbo:t.turbo, loras:lorasOf(t).map(l => Object.assign({}, l)), steps:t.steps || '', mp:Math.round(t.w * t.h / 1e4) / 100, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {}))});
-  f.smBlend = blend && !blend.loop ? Object.assign({}, blend, {vid:id}) : null; f.smLoopH = 0;
+  f.smBlend = blend && !blend.loop ? Object.assign({}, blend, {vid:id}) : null; f.smLoopH = 0; f.smFind = null; f.smFindText = null;
   f.smBack = blend && blend.back ? {vid:id, film:blend.film, track:blend.track, bounds:blend.bounds.map(b => ({clip:b.clip, take:b.take, off:b.off, len:b.out - b.in})), loop:!!blend.loop} : null;
   // the clips' own words, each timed to where its clip sits in the blend (Jordan 2026-11-07: "it doesn't seem to be following the prompt")
   if(blend) Object.assign(f, {smUp:false, smSpc:true, prompt:(SM_PROMPT + ' Each action flows straight into the next in one continuous movement, with no jump.' + '\n' + blend.bounds.flatMap(b => b.segs && b.segs.length ? b.segs : (b.text || '').trim() ? [{a:b.off, b:b.off + b.out - b.in, text:b.text.trim()}] : []).map(x => '[' + t2(x.a) + '-' + t2(x.b) + '] ' + x.text).join('\n')).trim()}); // 🪄 blend: the same size as the clips around it, keyframes follow the 📐 spacing graph
@@ -3718,6 +3752,7 @@ async function toSmooth(t, blend, loop, quiet){
   if(t.sm) Object.assign(f, {smEvery:t.sm.every || f.smEvery, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam});
   // 🔁 Make it loop (Jordan 2026-11-15: its own button again, no ⚙ Show all tools): Smooth with loop on, no regenerate, 📐 spacing on
   if(loop) Object.assign(f, {smLoop:true, smUp:false, smSpc:true, smBlend:null, smSeam:+f.smSeam || 12});
+  if(loop){ if(!quiet) toast('🔍 Finding the best place in the clip to loop…', 8000); await loopApply(true); } // 🔍 straight to the stretch that loops best
   else if(!blend && !t.sm) f.smLoop = false;
   else if(blend && !blend.loop) f.smLoop = false;
   if(quiet) return id;
@@ -3738,7 +3773,7 @@ async function wildLoopGo(t){ if(WLOOP_BUSY) return false; WLOOP_BUSY = true; t.
     const id = await toSmooth(t, null, !!t.wildLoop, true); if(!id) throw new Error('the video could not be fetched');
     S.f.smUp = !!t.wildUp; if(t.wildUp) Object.assign(S.f, {smUpRep:'medium', smUpStr:0}); // (Jordan 2026-11-17: medium strength, no LoRA) ⬆ Upscale (Jordan 2026-11-16: "an upscale and loop option that you can toggle for a batch"): ⬆ Regenerate in the same pass
     if(S.f.smSpc){ let R = await measureSpacing(); for(let i = 0; i < 120 && R && R.busy; i++){ await new Promise(r => setTimeout(r, 500)); R = SPC[spcKey()]; } }
-    const t2 = snapshot(); t2.id = uid('t'); t2.t = Date.now(); t2.seed = Math.floor(Math.random() * 2 ** 31); t2.film = t.film; t2.loopOf = t.id;
+    const t2 = snapshot(); t2.id = uid('t'); t2.t = Date.now(); t2.seed = Math.floor(Math.random() * 2 ** 31); t2.film = t.film; t2.loopOf = t.id; if(t.wildLoop && S.f.smFind && S.f.smFind.score!=null) t2.loopFit = {score:S.f.smFind.score, whole:S.f.smFind.whole, start:S.f.smFind.start, secs:S.f.smFind.secs};
     if(t.wild) t2.wild = JSON.parse(JSON.stringify(t.wild)); if(t.wildActs) t2.wildActs = Object.assign({}, t.wildActs);
     t2.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t2.id.slice(-4); t2.dir = 'H3Deck/' + t2.name;
     // the PC reads its own finished file (no upload back from the phone) and does it on the same PC, where the file already is
@@ -4116,6 +4151,8 @@ function drawInputs(){
   $('#smFinSw').classList.toggle('on', f.smFin!==false); $('#smFinLook').hidden = f.smFin===false; $$('#smFinLook button').forEach(b => b.classList.toggle('on', b.dataset.v===(f.smFinLook || 'live')));
   $('#smBridgeSw').classList.toggle('on', f.smBridge!==false); $('#smBridgeSw').hidden = !!f.smLoop || !sv || smoothPlan().length < 2;
   $('#smGapBody').hidden = !blendOn(); $('#smGap').value = +f.smGap || 24; $('#smGapOut').textContent = +f.smGap || 24;
+  { const L = f.smFind, e = $('#smFindOut'); if(e) e.textContent = !L || L.vid!==f.smVid ? 'Looks for the stretch of the clip whose end runs best into its start (someone walking in at the start can be left out) and puts the window there.' : L.busy ? '🔍 Reading the frames…' : L.err ? "🔍 Couldn't look: " + L.err : '🔍 Loopability ' + L.score + '/100 for ' + fmtS(L.start) + ' → ' + fmtS(L.start + L.secs) + ' (the whole clip: ' + L.whole + '/100).' + (L.used==='whole' ? ' Using the whole clip now.' : ' The window is set to it.') + (L.score < 40 ? ' Nothing in this clip loops well: the seam will be a bigger turn.' : '');
+    const g = $('#smFindGo'); if(g) g.disabled = !!(L && L.busy); }
   if(f.smLoop){ $('#smSeam').value = +f.smSeam || 12; $('#smSeamOut').textContent = +f.smSeam || 12; const L0 = smoothTotal(), lp = currentSpacing() || loopKeys(L0, +f.smEvery || 4, +f.smSeam || 12);
     $('#smLoopNote').textContent = 'A ' + fmtS(L0 / FPS) + ' loop. The seam is at ' + fmtS(lp.seamAt / FPS) + ' in the new clip, and MiniMax paints the ' + (Math.min(...lp.keys.map(([o]) => o).filter(o => o > lp.seamAt)) - Math.max(...lp.keys.map(([o]) => o).filter(o => o < lp.seamAt)) - 1) + ' frames around it with nothing pinned, so it can turn the motion smoothly. More free frames = a softer turn, but it drifts further from your clip there. The sound is left out (it would jump at the seam). 📐 spacing and 🎬 Punch work on the looped order, seam included.'; }
   drawSpacing();
@@ -4279,7 +4316,7 @@ function takeCard(t){
     const sig = [t.state, t.loopTake || '', t.loopErr || '', t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t), t.upStage || '', t.upErr || ''].join('|');
     return {id:t.id, sig, html:`<div class="take${TMORE.has(t.id) ? ' mopen' : ''}" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.up && t.up.unet ? famKey(t.up.unet) : t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}${t.state==='working' ? '' : `<button class="btn tmb" data-tm="${t.id}" aria-label="More for this take" title="⬇ Save, ↩ Use settings, 🗑 and more">⋯</button>`}</span></div>
-      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}${t.loopOf ? '<div class="wdNote">' + (t.sm && t.sm.loop ? '🔁 ' : '') + (t.up ? '⬆ ' : '') + 'the ' + [t.sm && t.sm.loop ? 'looping' : '', t.up ? 'upscaled' : ''].filter(Boolean).join(', ') + ' copy of a wildcard clip</div>' : (t.wildLoop || t.wildUp) && !t.loopTake && t.state!=='failed' ? '<div class="wdNote">' + (t.wildLoop ? '🔁 ' : '') + (t.wildUp ? '⬆ ' : '') + 'a ' + [t.wildLoop ? 'looping' : '', t.wildUp ? 'upscaled' : ''].filter(Boolean).join(', ') + ' copy follows when it\'s done' + (t.loopErr ? ' (' + esc(t.loopErr) + ')' : '') + '</div>' : ''}${t.wild || t.wildActs ? `<div class="wdNote wdRoll">🎲 ${esc(wildLine(t))} <button class="btn sm" data-act="wildKeep" data-t="${t.id}">🔒 Keep this mix</button></div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(actShow(sentWords(t), t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}${t.loopOf ? '<div class="wdNote">' + (t.sm && t.sm.loop ? '🔁 ' : '') + (t.up ? '⬆ ' : '') + 'the ' + [t.sm && t.sm.loop ? 'looping' : '', t.up ? 'upscaled' : ''].filter(Boolean).join(', ') + ' copy of a wildcard clip' + (t.loopFit ? ' · 🔍 loopability ' + t.loopFit.score + '/100, ' + fmtS(t.loopFit.start) + ' → ' + fmtS(t.loopFit.start + t.loopFit.secs) : '') + '</div>' : (t.wildLoop || t.wildUp) && !t.loopTake && t.state!=='failed' ? '<div class="wdNote">' + (t.wildLoop ? '🔁 ' : '') + (t.wildUp ? '⬆ ' : '') + 'a ' + [t.wildLoop ? 'looping' : '', t.wildUp ? 'upscaled' : ''].filter(Boolean).join(', ') + ' copy follows when it\'s done' + (t.loopErr ? ' (' + esc(t.loopErr) + ')' : '') + '</div>' : ''}${t.wild || t.wildActs ? `<div class="wdNote wdRoll">🎲 ${esc(wildLine(t))} <button class="btn sm" data-act="wildKeep" data-t="${t.id}">🔒 Keep this mix</button></div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(actShow(sentWords(t), t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
 }
@@ -4727,6 +4764,8 @@ $('#smFinSw').onclick = () => { S.f.smFin = S.f.smFin===false; save(); drawInput
 $('#smFinLook').onclick = e => { const b = e.target.closest('[data-v]'); if(!b) return; S.f.smFinLook = b.dataset.v; save(); drawInputs(); };
 $('#smBridgeSw').onclick = () => { S.f.smBridge = S.f.smBridge===false; save(); drawInputs(); };
 $('#smLoopSw').onclick = () => { S.f.smLoop = !S.f.smLoop; save(); drawAll(); };
+$('#smFindGo').onclick = () => { if(!(S.f.smFind && S.f.smFind.busy)) loopApply(); };
+$('#smWhole').onclick = () => loopWhole();
 $('#smGap').oninput = e => { S.f.smGap = +e.target.value; save(); drawInputs(); drawGo(); };
 $('#smSeam').oninput = e => { S.f.smSeam = +e.target.value; save(); drawInputs(); drawGo(); };
 $('#smStart').oninput = e => { S.f.smStart = +e.target.value; save(); drawInputs(); drawShot(); };
@@ -5368,7 +5407,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {grabFrames, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
