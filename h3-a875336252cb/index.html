@@ -116,7 +116,7 @@ header h1 span{color:var(--accent)}
 .castpic img{width:64px;height:64px;object-fit:cover;border:0;border-radius:0}
 .castpics{display:flex;flex-wrap:wrap;gap:8px}
 #libTab{padding:4px 0 120px}
-#wildTab{padding:4px 0 120px}
+#wildTab{padding:4px 0 12px}
 .wdNote{color:var(--dim);font-size:13px;line-height:1.4}
 .wdCat{margin-top:14px;padding:10px;border:1px solid var(--line);border-radius:12px}
 .wdCat .libTile>span{aspect-ratio:auto;height:52px}
@@ -517,7 +517,10 @@ const inMine = t => t.id===SHOWN || t.film===undefined || (t.film || '')===mineK
 function freshForm(prev, k){ const f = F_DEF(); for(const x of LOOK_KEYS) if(x!=='aspect' && prev && prev[x]!==undefined) f[x] = JSON.parse(JSON.stringify(prev[x]));
   // ▭ a new film or shot starts wide (Jordan 2026-11-13), or in its film's shape
   try{ const fm = k && FW && FW.FILM && FW.FILM.S.films.find(x => x.id===k), cv = fm && fm.canvas; f.aspect = {wide:'16:9', tall:'9:16', square:'1:1'}[cv] || '16:9'; }catch(e){ f.aspect = '16:9'; } return f; }
-function filmKeyNow(){ try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n) return null;
+// 🎲 Wildcard clips (Jordan 2026-11-16: "renders for wild card be its own thing too… no timeline, I just want the clips generated"):
+// the 🎲 Wildcards tab is a film of its own with no timeline: its own form, cast and takes (t.film = WK), shown as a plain list
+const WK = '~wild';
+function filmKeyNow(){ if(S.tab==='wild') return WK; try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n) return null;
   if(n.v==='film'){ const f = F.S.films.find(x => x.id===n.film); return f && !f.edit ? n.film : null; } if(n.v==='home') return ''; }catch(e){} return null; } // 🎬 the film's own timeline keeps the form as it is
 function clipFilms(){ const o = {}; try{ const E = JSON.parse(localStorage.getItem('h3edit') || '{}'); (E.films || []).forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { o[c.take] = o[c.take] || f.id; }))); }catch(e){} return o; }
 function fileTakes(){ if(!S.takes) return; let cf = null;
@@ -527,6 +530,7 @@ function fileTakes(){ if(!S.takes) return; let cf = null;
   if(S.fmig){ for(let k = S.takes.length - 1; k >= 0; k--){ const t = S.takes[k]; if(t.film) continue; // made from a take of a film: that film
       const s = [t.redo && t.redo.src, t.carry && t.carry.src, t.from && t.from.id, t.lead && t.lead.src].map(id => id && S.takes.find(x => x.id===id)).find(x => x && x.film); if(s) t.film = s.film; } } }
 function syncFilm(){ const k = filmKeyNow(); if(k==null) return false;
+  if(S.fkey===undefined && k===WK){ S.fkey = ''; fileTakes(); S.fmig = false; } // (🎲 Wildcard clips are never the form you had)
   if(S.fkey===undefined){ S.fkey = k; fileTakes(); S.fmig = false; save(); drawTakes(); return true; } // the first film opened after the update keeps the form as it is
   if(k===S.fkey) return false;
   try{ undoCheck(false); }catch(e){} // ↶ what you did before opening another film is kept as its own step
@@ -1374,8 +1378,9 @@ const attrsOf = (c, t) => { const off = descOffOf(c, t) || [], r = wildOf(c, t),
 // words only = in her description). S.wcats = the categories. A character's c.wild = {on, cats:[cat ids], who:[Library character ids]}.
 // Every new take rolls one option per category (t.wild[n] = {a:[ids], who, drop, picks}); a carry-on, lead-in or redo of a rolled take keeps
 // its mix, and 🔒 Keep this mix (S.wildKeep per film) makes every new take use one mix until it's let go.
-const WCAT0 = [{id:'wear', name:'👗 Outfit', kind:'wear'}, {id:'hair', name:'💇 Hair', kind:'attr', what:'hairstyle'}, {id:'eyes', name:'👁 Eyes', kind:'attr', what:'eyes'}, {id:'body', name:'🧍 Figure', kind:'attr', what:'figure'}];
-const wcats = () => (S.wcats = S.wcats && S.wcats.length ? S.wcats : JSON.parse(JSON.stringify(WCAT0)));
+const WCAT0 = [{id:'wear', name:'👗 Outfit', kind:'wear'}, {id:'hair', name:'💇 Hair', kind:'attr', what:'hairstyle'}, {id:'eyes', name:'👁 Eyes', kind:'attr', what:'eyes'}, {id:'body', name:'🧍 Figure', kind:'attr', what:'figure'}, {id:'act', name:'🥋 Action', kind:'act'}];
+const wcats = () => { S.wcats = S.wcats && S.wcats.length ? S.wcats : JSON.parse(JSON.stringify(WCAT0)); if(!S.wcats.some(x => x.id==='act')) S.wcats.push(JSON.parse(JSON.stringify(WCAT0.find(x => x.id==='act')))); return S.wcats; };
+const wActWords = A => ((A && (A.desc || A.name)) || '').trim().replace(/\s*\n+\s*/g, ' ');
 const wcatOf = id => wcats().find(x => x.id===id);
 const wopts = cat => (S.wlib || []).filter(x => x.cat===cat);
 const wildOf = (c, t) => { const W = c && t && t.wild; return (W && W[c.n]) || null; };
@@ -1390,37 +1395,50 @@ function wildRoll(cast){ const out = {};
   for(const c of cast || S.cast || []){ const w = c.wild; if(!w || !w.on || (c.kind || 'char')!=='char') continue; const r = {a:[], drop:[], picks:[]};
     const who = (w.who || []).filter(id => { const L = libOf(id); return L && L.kind==='char' && !MINOR.test([L.name, L.stand, L.desc].join(' ')); });
     if(who.length){ r.who = who[rnd(who.length)]; r.picks.push({cat:'🧑 Who', label:libOf(r.who).name || 'someone'}); }
-    for(const k of w.cats || []){ const C = wcatOf(k); if(!C) continue; const O = wopts(k).filter(A => !MINOR.test([A.name, A.desc].join(' ')) && (libPics(A).length || libWords(A))); if(!O.length) continue;
+    for(const k of w.cats || []){ const C = wcatOf(k); if(!C || C.kind==='act') continue; const O = wopts(k).filter(A => !MINOR.test([A.name, A.desc].join(' ')) && (libPics(A).length || libWords(A))); if(!O.length) continue;
       const A = O[rnd(O.length)]; r.a.push(A.id); r.picks.push({cat:C.name, label:A.name || libWords(A) || 'one with a picture', id:A.id});
       if(C.kind==='wear') r.drop.push(...(c.attrs || []).filter(id => isWear(libOf(id)))); } // a rolled outfit takes the place of the one she has on
     if(r.picks.length) out[c.n] = r; }
   return Object.keys(out).length ? out : null; }
 function wildMark(t){ delete t.wild; delete t.wildFrom;
   const src = [t.carry && t.carry.src, t.lead && t.lead.src, t.redo && t.redo.src, t.from && t.from.id].map(id => id && S.takes.find(x => x.id===id)).find(x => x && x.wild);
-  if(src){ t.wild = JSON.parse(JSON.stringify(src.wild)); t.wildFrom = 'carry'; return t; }
-  const keep = (S.wildKeep || {})[filmK()]; if(keep){ t.wild = JSON.parse(JSON.stringify(keep)); t.wildFrom = 'keep'; return t; }
-  const r = wildRoll(); if(r) t.wild = r; return t; }
+  if(src){ t.wild = JSON.parse(JSON.stringify(src.wild)); t.wildFrom = 'carry'; return wildActs(t); }
+  const keep = (S.wildKeep || {})[filmK()]; if(keep && Object.keys(keep).some(x => x!=='_acts')){ t.wild = JSON.parse(JSON.stringify(keep)); delete t.wild._acts; t.wildFrom = 'keep'; return wildActs(t); }
+  const r = wildRoll(); if(r) t.wild = r; return wildActs(t); }
+// 🥋 a 🎲 random action chip (L.rand): every take picks one of the 🎲 Wildcards tab's 🥋 Action options for it; the doer is still the chip's
+// <Subject n>, so a 🧑 Who roll swaps who does it. A carry-on keeps the clip before's actions. t.wildActs = {k: option id}
+function wildActs(t, src){ delete t.wildActs; src = src || [t.carry && t.carry.src, t.lead && t.lead.src, t.redo && t.redo.src, t.from && t.from.id].map(id => id && S.takes.find(x => x.id===id)).find(x => x && x.wildActs);
+  const O = wopts('act').filter(A => wActWords(A) && !MINOR.test(wActWords(A))), keep = ((S.wildKeep || {})[filmK()] || {})._acts;
+  for(const [k, L] of Object.entries(t.lines || {})){ if(!L || !L.act || !L.rand) continue;
+    const id = (src && src.wildActs && src.wildActs[k]) || (keep && keep[k]) || (O.length ? O[rnd(O.length)].id : ''), A = id && libOf(id); if(!A) continue;
+    t.lines[k] = Object.assign({}, L, {name:A.name || wActWords(A).split(' ').slice(0, 3).join(' '), text:wActWords(A)}); delete t.lines[k].lib; (t.wildActs = t.wildActs || {})[k] = id; }
+  return t; }
 const wildAny = () => (S.cast || []).some(c => c.wild && c.wild.on && ((c.wild.cats || []).length || (c.wild.who || []).length));
-function wildLine(t, html){ if(!t || !t.wild) return ''; const parts = Object.entries(t.wild).map(([n, r]) => { const c = castOf(n, t.film); return (c ? castName(c) : 'Subject ' + n) + ': ' + (r.picks || []).map(p => p.label).join(' · '); });
-  return (t.wildFrom==='carry' ? 'same mix as the clip before · ' : t.wildFrom==='keep' ? '🔒 kept mix · ' : '') + parts.join(' / '); }
+function wildLine(t, html){ if(!t || (!t.wild && !t.wildActs)) return ''; const parts = Object.entries(t.wild || {}).map(([n, r]) => { const c = castOf(n, t.film); return (c ? castName(c) : 'Subject ' + n) + ': ' + (r.picks || []).map(p => p.label).join(' · '); });
+  const acts = Object.entries(t.wildActs || {}).map(([k, id]) => '🥋 ' + (((t.lines || {})[k] || {}).name || (libOf(id) || {}).name || 'action'));
+  return (t.wildFrom==='carry' ? 'same mix as the clip before · ' : t.wildFrom==='keep' ? '🔒 kept mix · ' : '') + parts.concat(acts).join(' / '); }
 // the 🎲 Wildcards tab: categories, each with its options (a picture and/or words)
 function drawWild(){ const el = $('#wildTab'); if(!el || el.hidden) return; fixThumbs(); const K = wcats(), keep = (S.wildKeep || {})[filmK()];
-  el.innerHTML = `<div class="wdNote">Wildcard options, kept apart from the 📚 Library. Give a character the categories to roll (🎞 Films › her card › 🎲 Wildcard) and every new take picks one option from each, so each clip gets a different mix. The take card says what it rolled.</div>
+  const nO = (S.wlib || []).length, open = S.wdOpen!=null ? S.wdOpen : !nO;
+  el.innerHTML = `<div class="wdNote">🎬 <b>Wildcard clips</b>: their own clips, with no timeline. Add characters under 👥 Subjects below and switch on 🎲 Wildcard on their card, write the shot (a 🥋 action chip can be 🎲 random too) and Render. Every take rolls a new mix; a long clip is split into parts and joined into one video.</div>
+    <details id="wdOpts" style="margin-top:10px"${open ? ' open' : ''}><summary style="cursor:pointer;font-weight:700;padding:8px 0">🎲 Wildcard options (${nO})</summary>
+    <div class="wdNote">Kept apart from the 📚 Library. Each option is words, a picture, or both.</div>
     ${keep ? `<div class="wdNote" style="margin-top:8px">🔒 Every new take in ${esc(filmName())} uses one kept mix. <button class="btn sm" data-wt="free">🎲 Roll new mixes again</button></div>` : ''}
     ${K.map(C => { const O = wopts(C.id); return `<div class="wdCat"><div class="row" style="justify-content:space-between;align-items:center"><b>${esc(C.name)}</b><span class="note">${O.length} option${O.length===1 ? '' : 's'}${C.kind==='wear' ? ' · clothing' : ''}</span></div>
-      <div class="libGrid">${O.map(A => { const P = libPics(A); return `<button class="libTile" data-wt="open:${A.id}">${P.length ? `<img src="${(S.media[P[0]] || {}).thumb || ''}" alt="">` : `<span>✍</span>`}<b>${esc(A.name || libWords(A) || 'Unnamed')}</b><small>${P.length ? (A.desc ? 'picture + words' : 'picture') : 'words only'}</small></button>`; }).join('')}
+      <div class="libGrid">${O.map(A => { const P = libPics(A); return `<button class="libTile" data-wt="open:${A.id}">${P.length ? `<img src="${(S.media[P[0]] || {}).thumb || ''}" alt="">` : `<span>✍</span>`}<b>${esc(A.name || libWords(A) || wActWords(A) || 'Unnamed')}</b><small>${P.length ? (A.desc ? 'picture + words' : 'picture') : 'words only'}</small></button>`; }).join('')}
       <button class="libTile" data-wt="new:${C.id}"><span>＋</span><b>Add</b><small>a new option</small></button></div>
       ${!WCAT0.some(x => x.id===C.id) ? `<button class="btn sm" data-wt="delcat:${C.id}" style="margin-top:6px">🗑 Remove this category</button>` : ''}</div>`; }).join('')}
     <div class="lab" style="margin-top:14px"><span>＋ A new category</span></div>
-    <div class="row" style="gap:6px"><input id="wdCatName" placeholder="e.g. 💄 Makeup, 👠 Shoes, 🎨 Hair colour" style="flex:1;min-width:0"><button class="btn" data-wt="addcat:attr">＋ Add</button><button class="btn" data-wt="addcat:wear" title="Clothing: it dresses her">＋ 👗</button></div>`; }
-function wildOpt(id){ const A = (S.wlib || []).find(x => x.id===id); if(!A) return; const C = wcatOf(A.cat) || {name:'Option'}, P = libPics(A), bust = BUSTW.test([A.name, A.desc].join(' '));
+    <div class="row" style="gap:6px"><input id="wdCatName" placeholder="e.g. 💄 Makeup, 👠 Shoes, 🎨 Hair colour" style="flex:1;min-width:0"><button class="btn" data-wt="addcat:attr">＋ Add</button><button class="btn" data-wt="addcat:wear" title="Clothing: it dresses her">＋ 👗</button></div></details>`;
+  $('#wdOpts').ontoggle = e => { S.wdOpen = e.target.open; save(); }; }
+function wildOpt(id){ const A = (S.wlib || []).find(x => x.id===id); if(!A) return; const C = wcatOf(A.cat) || {name:'Option'}, P = libPics(A), bust = BUSTW.test([A.name, A.desc].join(' ')), ac = A.kind==='wact';
   openSheet(`<h3><span>🎲 ${esc(C.name)}</span><button class="btn" data-close>✕</button></h3><div id="woBox">
-    <div class="lab"><span>Name</span></div><input data-wof="name" value="${esc(A.name || '')}" placeholder="${A.kind==='wear' ? 'e.g. Red silk slip dress' : 'e.g. Short silver bob'}">
-    <div class="lab" style="margin-top:8px"><span>Words (sent in her description; with no picture, these are the option)</span></div>
-    <textarea data-wof="desc" rows="3" style="width:100%;box-sizing:border-box" placeholder="${A.kind==='wear' ? 'e.g. a red silk slip dress with thin straps' : 'e.g. chin-length silver bob with a blunt fringe'}">${esc(A.desc || '')}</textarea>
+    <div class="lab"><span>Name</span></div><input data-wof="name" value="${esc(A.name || '')}" placeholder="${ac ? 'e.g. Twirl (what the chip says)' : A.kind==='wear' ? 'e.g. Red silk slip dress' : 'e.g. Short silver bob'}">
+    <div class="lab" style="margin-top:8px"><span>${ac ? 'What they do (sent as the 🥋 action chip\'s words, for whoever the chip points at)' : 'Words (sent in her description; with no picture, these are the option)'}</span></div>
+    <textarea data-wof="desc" rows="3" style="width:100%;box-sizing:border-box" placeholder="${ac ? 'e.g. spins slowly on the spot, her skirt flaring out' : A.kind==='wear' ? 'e.g. a red silk slip dress with thin straps' : 'e.g. chin-length silver bob with a blunt fringe'}">${esc(A.desc || '')}</textarea>
     <div class="wdNote" id="woBust" style="margin-top:4px${bust ? '' : ';display:none'}">⚠ Breast words in a description were what pushed nipples through clothes before. Words like "curvy figure" or "slim build" are safer.</div>
-    <div class="lab" style="margin-top:8px"><span>Picture (optional: MiniMax moves only this ${esc((A.what || C.name.replace(/^\S+\s/, '')).toLowerCase())} onto her)</span></div>
-    <div class="castpics">${P.map((m, i) => `<span class="cpw"><img src="${(S.media[m] || {}).thumb || ''}" alt=""><button data-wo="unpic:${i}" aria-label="Take this picture out">✕</button></span>`).join('')}${P.length < 2 ? '<button class="castpic" data-wo="pic">＋ Picture</button>' : ''}</div>
+    ${ac ? '' : `<div class="lab" style="margin-top:8px"><span>Picture (optional: MiniMax moves only this ${esc((A.what || C.name.replace(/^\S+\s/, '')).toLowerCase())} onto her)</span></div>
+    <div class="castpics">${P.map((m, i) => `<span class="cpw"><img src="${(S.media[m] || {}).thumb || ''}" alt=""><button data-wo="unpic:${i}" aria-label="Take this picture out">✕</button></span>`).join('')}${P.length < 2 ? '<button class="castpic" data-wo="pic">＋ Picture</button>' : ''}</div>`}
     <button class="btn pri" data-close style="width:100%;margin-top:14px">Done</button>
     <button class="btn" data-wo="del" style="width:100%;margin-top:8px;color:var(--bad)">🗑 Delete this option</button></div>`);
   const box = $('#woBox');
@@ -1434,7 +1452,7 @@ function wildOpt(id){ const A = (S.wlib || []).find(x => x.id===id); if(!A) retu
 function wildNote(c){ const w = c.wild; if(!w || !w.on) return ''; const K = (w.cats || []).map(wcatOf).filter(Boolean), keep = (S.wildKeep || {})[filmK()], who = (w.who || []).map(libOf).filter(Boolean);
   return `<div class="wdNote" style="margin-top:4px">🎲 Each take rolls ${K.length ? K.map(C => esc(C.name) + ' (' + wopts(C.id).length + ')').join(' · ') : 'nothing yet'}${who.length ? ' · 🧑 one of ' + who.length + ' characters' : ''}.</div>${keep ? '<div class="wdNote" style="margin-top:4px">🔒 Using a kept mix for now. <button class="btn sm" data-cast="wildfree">🎲 Roll again</button></div>' : ''}`; }
 function wildNew(cat){ const C = wcatOf(cat); if(!C) return null; S.wlib = S.wlib || [];
-  const A = {id:'W' + Math.random().toString(36).slice(2, 10), cat, kind:C.kind==='wear' ? 'wear' : 'attr', what:C.kind==='wear' ? 'outfit' : C.what || C.name.replace(/^\S+\s/, '').toLowerCase(), name:'', desc:'', pics:[], keep:'exact'};
+  const A = {id:'W' + Math.random().toString(36).slice(2, 10), cat, kind:C.kind==='wear' ? 'wear' : C.kind==='act' ? 'wact' : 'attr', what:C.kind==='wear' ? 'outfit' : C.what || C.name.replace(/^\S+\s/, '').toLowerCase(), name:'', desc:'', pics:[], keep:'exact'};
   S.wlib.push(A); return A; }
 function wildSheet(c){ const w = c.wild = c.wild || {on:true, cats:[], who:[]}, K = wcats(), chars = (S.lib || []).filter(L => L.kind==='char' && libHere(L) && L.id!==c.lib);
   const bust = (w.cats || []).some(k => wopts(k).some(A => BUSTW.test([A.name, A.desc].join(' '))));
@@ -1442,7 +1460,7 @@ function wildSheet(c){ const w = c.wild = c.wild || {on:true, cats:[], who:[]}, 
     <div class="wdNote">Each new take rolls one option from every category you tick, from the 🎲 Wildcards tab. A clip carried on from a rolled clip keeps its mix.</div>
     <button class="btn${w.on ? ' pri' : ''}" data-ws="on" style="width:100%;margin-top:8px">🎲 Roll a new mix every take: ${w.on ? 'on' : 'off'}</button>
     <div class="lab" style="margin-top:10px"><span>What to roll</span></div>
-    <div class="chips">${K.map(C => { const on = (w.cats || []).includes(C.id), n = wopts(C.id).length; return `<button class="btn${on ? ' pri' : ''}" data-ws="cat:${C.id}"${n ? '' : ' title="No options yet"'}>${on ? '✓ ' : ''}${esc(C.name)} (${n})</button>`; }).join('')}</div>
+    <div class="chips">${K.filter(C => C.kind!=='act').map(C => { const on = (w.cats || []).includes(C.id), n = wopts(C.id).length; return `<button class="btn${on ? ' pri' : ''}" data-ws="cat:${C.id}"${n ? '' : ' title="No options yet"'}>${on ? '✓ ' : ''}${esc(C.name)} (${n})</button>`; }).join('')}</div>
     ${(w.cats || []).some(k => !wopts(k).length) ? '<div class="wdNote" style="margin-top:4px">A ticked category with no options yet is skipped: add some in the 🎲 Wildcards tab.</div>' : ''}
     ${bust ? '<div class="wdNote" style="margin-top:4px">⚠ Some options use breast words, which pushed nipples through clothes before.</div>' : ''}
     <div class="lab" style="margin-top:10px"><span>🧑 Who (optional): a different 📚 Library character each take</span></div>
@@ -1665,17 +1683,20 @@ const actRefs = A => !!(A && ((A.vid && S.media[A.vid]) || libPics(A).some(id =>
 function actBook(){ return (S.lib || []).filter(x => x.kind==='act').map(A => ({id:A.id, name:actWords(A.name || A.what), text:actWords(A.what || A.name), clip:actRefs(A)})).filter(x => x.name && x.text); }
 function actSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off : (ta && ta.selectionStart != null ? ta.selectionStart : (f.prompt || '').length), old = k && lineOf(k);
   const ppl = (S.cast || []).filter(c => (c.kind || 'char')==='char'), who0 = old ? old.n || 0 : (ppl.find(c => c.n===S.dlWho) || ppl.find(c => new RegExp('<\\s*subject\\s*' + c.n + '\\s*>', 'i').test(f.prompt || '')) || ppl[0] || {}).n || 0;
-  const D = {n:old ? (old.auto ? -1 : old.n || 0) : -1, name:old ? old.name || '' : '', text:old ? old.text || '' : '', keep:!old, lib:old ? old.lib || '' : '', as:Object.assign({}, old && old.as)}, B = actBook();
+  const D = {n:old ? (old.auto ? -1 : old.n || 0) : -1, name:old ? old.name || '' : '', text:old ? old.text || '' : '', keep:!old, lib:old ? old.lib || '' : '', as:Object.assign({}, old && old.as), rand:!!(old && old.rand)}, B = actBook();
   const autoN = () => autoWho(old ? f.prompt : (f.prompt || '').slice(0, pos) + ' <Action 999999> ' + (f.prompt || '').slice(pos), old ? k : 999999), nOf = () => D.n < 0 ? autoN() || who0 : D.n;
   openSheet(`<h3><span>🥋 ${old ? 'Action' : 'Add an action'}</span><button class="btn" data-close>✕</button></h3><div id="acBox">
     <div class="lab"><span>Who does it</span></div><div class="chips" id="acWho">${ppl.map(c => `<button class="btn" data-aw="${c.n}" style="border-color:${subColor(c.n)};color:${subColor(c.n)}">👤 ${esc(chipName(c))}</button>`).join('')}<button class="btn" data-aw="-1">↩ Named before it</button><button class="btn" data-aw="0">🌀 Nobody in particular</button></div>
     ${B.length ? `<div class="lab" style="margin-top:10px"><span>📚 Your Library actions</span></div><div class="chips" id="acBook">${B.map((x, i) => `<button class="btn" data-ab="${i}" title="${esc(x.text)}">${x.clip ? '🎞 ' : ''}${esc(x.name)}</button>`).join('')}</div>` : ''}
     <div id="acCols"></div>
-    <div class="lab" style="margin-top:10px"><span>Name it (what the chip says)</span></div><input id="acName" style="width:100%;box-sizing:border-box" placeholder="e.g. Twirl" value="${esc(D.name)}">
+    <button class="btn" id="acRand" style="width:100%;margin-top:10px"></button>
+    <div id="acOwn"><div class="lab" style="margin-top:10px"><span>Name it (what the chip says)</span></div><input id="acName" style="width:100%;box-sizing:border-box" placeholder="e.g. Twirl" value="${esc(D.name)}">
     <div class="lab" style="margin-top:8px"><span>What they do</span></div><textarea id="acText" rows="3" style="width:100%;box-sizing:border-box" placeholder="e.g. spins slowly on the spot, her skirt flaring out">${esc(D.text)}</textarea>
     <div class="note" id="acPrev" style="margin-top:8px;word-break:break-word"></div>
-    <div class="chips" style="margin-top:10px"><button class="btn" id="acKeep"></button></div><div class="chips" style="margin-top:10px"><button class="btn pri" id="acGo">${old ? 'Save' : '↧ Put it in the shot'}</button>${old ? '<button class="btn" id="acRm">🗑 Take it out of the shot</button>' : ''}</div></div>`);
-  const draw = () => { $('#acWho').querySelectorAll('[data-aw]').forEach(b => { const n = +b.dataset.aw, on = n===+D.n, col = n > 0 ? subColor(n) : ''; b.classList.toggle('pri', on); if(n > 0){ b.style.background = on ? col : ''; b.style.color = on ? '#15161b' : col; } });
+    <div class="chips" style="margin-top:10px"><button class="btn" id="acKeep"></button></div></div><div class="note" id="acRandN" style="margin-top:8px"></div><div class="chips" style="margin-top:10px"><button class="btn pri" id="acGo">${old ? 'Save' : '↧ Put it in the shot'}</button>${old ? '<button class="btn" id="acRm">🗑 Take it out of the shot</button>' : ''}</div></div>`);
+  const draw = () => { const nO = wopts('act').filter(A => wActWords(A)).length; $('#acRand').textContent = '🎲 A random action every take: ' + (D.rand ? 'on' : 'off'); $('#acRand').classList.toggle('pri', D.rand);
+    $('#acOwn').hidden = D.rand; $('#acRandN').hidden = !D.rand; $('#acRandN').textContent = nO ? 'Each take picks one of the ' + nO + ' 🥋 Action options in the 🎲 Wildcards tab, done by who you pick above.' : 'Add some 🥋 Action options in the 🎲 Wildcards tab first: until then nothing is sent for this chip.';
+    $('#acWho').querySelectorAll('[data-aw]').forEach(b => { const n = +b.dataset.aw, on = n===+D.n, col = n > 0 ? subColor(n) : ''; b.classList.toggle('pri', on); if(n > 0){ b.style.background = on ? col : ''; b.style.color = on ? '#15161b' : col; } });
     const N = nOf(), c = castOf(N), out = actWords(D.text) ? lineOut('<Action 0>.', {lines:{0:Object.assign({act:1}, D, {n:N})}}).replace(SUBRE, () => c ? chipName(c) : 'Subject ' + N) : '';
     const inLib = !!actLibOf(D.name || ''); $('#acKeep').textContent = inLib ? '📚 Already in the Library' : '📚 Keep it in the Library: ' + (D.keep ? 'on' : 'off'); $('#acKeep').classList.toggle('pri', inLib || D.keep); $('#acKeep').disabled = inLib;
     const A = actLib({act:1, lib:D.lib, name:D.name}), CL = actCols(A);
@@ -1687,11 +1708,12 @@ function actSheet(k, at){ const f = S.f, ta = $('#prompt'), pos = at ? at.off : 
   if($('#acBook')) $('#acBook').onclick = e => { const b = e.target.closest('[data-ab]'); if(!b) return; const x = B[+b.dataset.ab]; D.name = x.name; D.text = x.text; D.lib = x.id; $('#acName').value = x.name; $('#acText').value = x.text; draw(); };
   $('#acCols').onclick = e => { const b = e.target.closest('[data-ac]'); if(!b) return; const [cn, n] = b.dataset.ac.split(':'); for(const j of Object.keys(D.as)) if(+n && +D.as[j]===+n) D.as[j] = 0; D.as[cn] = +n; draw(); }; // one colour each
   $('#acKeep').onclick = () => { D.keep = !D.keep; draw(); };
+  $('#acRand').onclick = () => { D.rand = !D.rand; draw(); };
   $('#acName').oninput = e => { D.name = e.target.value; draw(); }; $('#acText').oninput = e => { D.text = e.target.value; draw(); };
-  $('#acGo').onclick = () => { if(!actWords(D.text)) return toast('Write what they do'); const name = actWords(D.name) || actWords(D.text).split(' ').slice(0, 3).join(' ');
-    S.lines = S.lines || {}; if(D.n > 0) S.dlWho = D.n; const L = {act:1, n:Math.max(0, nOf()), name, text:D.text.trim()}; if(D.n < 0) L.auto = 1;
-    if(D.keep && !actLibOf(name)){ const N = libNew('act'); Object.assign(N, {name, what:L.text}); try{ libSync(N); }catch(e){} }
-    { const A = actLib({act:1, lib:D.lib, name}); if(A) L.lib = A.id; const as = {}; for(const cn of actCols(A)) if(+D.as[cn] > 0) as[cn] = +D.as[cn]; if(Object.keys(as).length) L.as = as; } // 🥋 its 📚 Library action: the clip / pictures go along
+  $('#acGo').onclick = () => { if(!D.rand && !actWords(D.text)) return toast('Write what they do'); const name = D.rand ? '🎲 Random action' : actWords(D.name) || actWords(D.text).split(' ').slice(0, 3).join(' ');
+    S.lines = S.lines || {}; if(D.n > 0) S.dlWho = D.n; const L = {act:1, n:Math.max(0, nOf()), name, text:D.rand ? '' : D.text.trim()}; if(D.n < 0) L.auto = 1; if(D.rand) L.rand = 1;
+    if(D.keep && !D.rand && !actLibOf(name)){ const N = libNew('act'); Object.assign(N, {name, what:L.text}); try{ libSync(N); }catch(e){} }
+    if(!D.rand){ const A = actLib({act:1, lib:D.lib, name}); if(A) L.lib = A.id; const as = {}; for(const cn of actCols(A)) if(+D.as[cn] > 0) as[cn] = +D.as[cn]; if(Object.keys(as).length) L.as = as; } // 🥋 its 📚 Library action: the clip / pictures go along
     if(old) S.lines[k] = L;
     else { const used = Object.keys(S.lines).map(Number); k = Math.max(0, +S.lineNo || 0, ...used) + 1; S.lineNo = k; S.lines[k] = L;
       const v = f.prompt || '', p = tagEnd(v, Math.min(pos, v.length)), tok = '<Action ' + k + '>', pre = p && !/\s$/.test(v.slice(0, p)) ? ' ' : '', post = /^\s/.test(v.slice(p)) || p >= v.length ? '' : ' ';
@@ -1862,7 +1884,7 @@ function libToCast(L){ let c = S.cast.find(x => x.lib===L.id); if(c) return c;
 function libNew(kind, from){ const L = {id:'L' + Math.random().toString(36).slice(2, 10), kind:kind || 'char', name:'', stand:'', desc:'', pics:[], keep:'exact', what:''};
   if(from) Object.assign(L, {kind:from.kind || 'char', name:castWho(from) || '', stand:from.stand || '', desc:from.desc || '', pics:castPics(from).slice(), keep:from.keep || 'exact'});
   S.lib.unshift(L); return L; }
-function filmName(){ try{ const F = FW && FW.FILM, f = F && F.S.films.find(x => x.id===S.fkey); if(f) return F.fullName ? F.fullName(f.id) : f.name; }catch(e){} return S.fkey ? 'this film' : 'one-off videos'; }
+function filmName(){ if(S.fkey===WK) return '🎲 Wildcard clips'; try{ const F = FW && FW.FILM, f = F && F.S.films.find(x => x.id===S.fkey); if(f) return F.fullName ? F.fullName(f.id) : f.name; }catch(e){} return S.fkey ? 'this film' : 'one-off videos'; }
 let LIBF = 'all';
 function drawLib(){ const el = $('#libTab'); if(!el || el.hidden) return; fixThumbs(); const L = (S.lib || []).filter(x => libHere(x) && (LIBF==='all' || x.kind===LIBF));
   el.innerHTML = `<div class="note">Everything you reuse, kept once. Add a character, object or place to a film's 👥 cast; put an attribute (a haircut, eye design, tattoo…) on one of its characters; give a 🧍 pose to who should take it. Change an entry here and every film that uses it follows. Adding goes to <b>${esc(filmName())}</b>, the film open in 🎞 Films.</div>
@@ -3372,7 +3394,7 @@ async function render(){
     const base = +S.f.seed || 0;
     const N = +S.f.takes || 1, FT0 = filmTarget(), NX = S.ftNext; S.ftNext = null; if(FT0 && NX) delete FT0.clip; const FT = FT0 && Object.assign(FT0, {key:uid('k')}, NX || {}); // 📝 a prompt block: its place on the timeline
     for(let k = 0; k < N; k++){
-      const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base ? base + k : Math.floor(Math.random() * 2 ** 31); shufMark(t, k); wildMark(t); // 🎲 a fresh mix each take
+      const t = snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base ? base + k : Math.floor(Math.random() * 2 ** 31); shufMark(t, k); if(mineK()===WK) t.film = WK; wildMark(t); // 🎲 a fresh mix each take (🎲 Wildcard clips: its own list, no timeline)
       if(!t.carry && !t.blend && !t.back && FT) t.toFilm = Object.assign({}, FT);
       if(t.carry && t.carry.guide) applyGuide(t, t.carry.guide); // 🦴 a carry-on on a track that follows the guidance track
       t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
@@ -4163,7 +4185,7 @@ function takeCard(t){
     const sig = [t.state, t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t), t.upStage || '', t.upErr || ''].join('|');
     return {id:t.id, sig, html:`<div class="take${TMORE.has(t.id) ? ' mopen' : ''}" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.up && t.up.unet ? famKey(t.up.unet) : t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}${t.state==='working' ? '' : `<button class="btn tmb" data-tm="${t.id}" aria-label="More for this take" title="⬇ Save, ↩ Use settings, 🗑 and more">⋯</button>`}</span></div>
-      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}${t.wild ? `<div class="wdNote wdRoll">🎲 ${esc(wildLine(t))} <button class="btn sm" data-act="wildKeep" data-t="${t.id}">🔒 Keep this mix</button></div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(actShow(sentWords(t), t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
+      ${t.from ? `<div class="note">🎲 a take of piece ${t.from.at + 1}, after piece${t.from.at > 1 ? 's 1–' + t.from.at : ' 1'} of ${(() => { const o = S.takes.find(x => x.id===t.from.id); return o ? esc(o.name.slice(-4)) : 'an earlier take'; })()}</div>` : ''}${t.wild || t.wildActs ? `<div class="wdNote wdRoll">🎲 ${esc(wildLine(t))} <button class="btn sm" data-act="wildKeep" data-t="${t.id}">🔒 Keep this mix</button></div>` : ''}<div class="pr${PROPEN.has(t.id) ? ' open' : ''}" data-pr="${t.id}" title="Tap to see all the words">${t.pieces.some((p, i) => shufOn(t, i)) && t.pieces.length===1 ? '🔀 ' : ''}${esc(actShow(sentWords(t), t))}</div>${chips}${n > 1 && t.state!=='working' ? '<div class="note">Tap a piece: 🎲 more takes of it, keeping the ones before.</div>' : ''}
       <div class="stl note">${esc(stateLine(t))}${tl ? ' · ' + tl : ''}</div>${t.state==='working' ? `<div class="bar"><i style="width:${Math.round(f * 100)}%"></i></div>` : ''}
       <div class="btns">${acts}</div></div></div>`};
 }
@@ -4173,7 +4195,7 @@ function patchCards(box, L, html){ const have = [...box.children].filter(x => x.
   else html.forEach((x, i) => { const el = have[i]; if(el.dataset.sig!==x.sig){ el.outerHTML = x.html; } else { const t = L[i];
     el.querySelector('.stl').textContent = stateLine(t) + (timeLeft(t) ? ' · ' + timeLeft(t) : ''); const b = el.querySelector('.bar i'); if(b) b.style.width = Math.round(progress(t) * 100) + '%'; } }); }
 // 🗂 Renders (Jordan 2026-11-08: "a tab where you can just see everything that has rendered and is rendering"): every take, every film
-const filmNameOf = id => { if(id===undefined) return 'Older videos'; if(!id) return 'One-off videos'; try{ const F = FW && FW.FILM, f = F && F.S.films.find(x => x.id===id); if(f) return F.fullName ? F.fullName(f.id) : f.name; }catch(e){} return 'A film'; };
+const filmNameOf = id => { if(id===undefined) return 'Older videos'; if(id===WK) return '🎲 Wildcard clips'; if(!id) return 'One-off videos'; try{ const F = FW && FW.FILM, f = F && F.S.films.find(x => x.id===id); if(f) return F.fullName ? F.fullName(f.id) : f.name; }catch(e){} return 'A film'; };
 const RT_F = [['all', 'All'], ['working', '⏳ Rendering'], ['done', '✓ Done'], ['failed', '✕ Failed']];
 function drawRenders(){ const tab = $('#rendersTab'); if(!tab || tab.hidden) return; fileTakes();
   const st = S.rtF || 'all', fm = S.rtFilm == null ? '*' : S.rtFilm, films = [...new Set(S.takes.map(t => t.film === undefined ? '~' : t.film || ''))];
@@ -4263,7 +4285,7 @@ document.addEventListener('click', async e => {
     else if(ds.act==='upretry'){ t.upTries = 0; retryTake(t).then(ok => { if(!ok) toast(pcName(t.pc) + " can't take it right now"); drawTakes(); }); }
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
     else if(ds.act==='reroll'){ rerollSheet(t); return; }
-    else if(ds.act==='wildKeep'){ S.wildKeep = S.wildKeep || {}; S.wildKeep[filmK()] = JSON.parse(JSON.stringify(t.wild || {})); save(); drawCast(); toast('🔒 New takes in ' + filmName() + ' use this mix. Let go of it in the 🎲 Wildcards tab or on her card.', 5000); return; }
+    else if(ds.act==='wildKeep'){ S.wildKeep = S.wildKeep || {}; S.wildKeep[filmK()] = Object.assign(JSON.parse(JSON.stringify(t.wild || {})), t.wildActs ? {_acts:Object.assign({}, t.wildActs)} : {}); save(); drawCast(); toast('🔒 New takes in ' + filmName() + ' use this mix. Let go of it in the 🎲 Wildcards tab or on her card.', 5000); return; }
     else if(ds.act==='rerollGo'){ const nt = JSON.parse(JSON.stringify(t)); if(ds.off) try{ nt.descOff = JSON.parse(ds.off); }catch(e){} nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); shufMark(nt, 1); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
       nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null;
       const nw = ds.words; if(nw != null && nw.trim() && nw.trim()!==(t.prompt || '').trim()){ nt.prompt = nw.trim(); nt.pieces.forEach((p, k) => { p.prompt = piecePrompt(nt.prompt, nt.pieces, k); }); } nt.joinPid = null; nt.joinErr = ''; nt.upStage = null; nt.upPid = null; nt.upErr = ''; nt.smoothed = null;
@@ -4778,14 +4800,14 @@ let FW = null; // the film app's window, once its tab has been opened
 const tabTop = () => document.documentElement.style.setProperty('--ft', Math.round($('#tabs').getBoundingClientRect().bottom) + 'px');
 // Jordan 2026-11-06: the 🎬 Render tab is gone; 🎞 Films (timeline on top, the whole Render form and the takes under it) is the main screen
 function setTab(tab){ if(tab!=='poses' && tab!=='lib' && tab!=='renders' && tab!=='wild') tab = 'films'; S.tab = tab; save(); document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab));
-  const film = tab!=='render', box = $('#filmTab'), pb = $('#poseTab'); $('#renderTab').hidden = tab!=='films'; box.hidden = tab!=='films'; pb.hidden = tab!=='poses'; $('#libTab').hidden = tab!=='lib'; $('#wildTab').hidden = tab!=='wild'; $('#rendersTab').hidden = tab!=='renders'; document.body.classList.toggle('ftab', tab!=='films');
+  const film = tab!=='render', box = $('#filmTab'), pb = $('#poseTab'); $('#renderTab').hidden = tab!=='films' && tab!=='wild'; box.hidden = tab!=='films'; pb.hidden = tab!=='poses'; $('#libTab').hidden = tab!=='lib'; $('#wildTab').hidden = tab!=='wild'; $('#rendersTab').hidden = tab!=='renders'; document.body.classList.toggle('ftab', tab!=='films' && tab!=='wild'); document.body.classList.toggle('wtab', tab==='wild');
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===tab || (tab==='poses' && b.dataset.tab==='lib')));
   drawFilmNote();
   if(!film) return;
   window.scrollTo(0, 0); tabTop();
   // 🧍 Poses (Jordan 2026-11-05): pose keys on a timeline, sent back here as a Motion guide clip + timed pose pictures
   if(tab==='lib'){ drawLib(); return; }
-  if(tab==='wild'){ drawWild(); return; }
+  if(tab==='wild'){ try{ syncFilm(); }catch(e){} drawWild(); drawAll(); return; }
   if(tab==='renders'){ const r = $('#rendersTab'); r.dataset.h = ''; drawRenders(); return; }
   if(tab==='poses'){ if(!pb.firstChild){ const fr = document.createElement('iframe'); fr.src = 'keys/?embed=1'; fr.title = 'Pose keys'; pb.appendChild(fr); } return; }
   if(!box.firstChild){ const fr = document.createElement('iframe'); fr.src = 'film/?embed=1'; fr.title = 'Cutting Room and Films'; fr.setAttribute('scrolling', 'no');

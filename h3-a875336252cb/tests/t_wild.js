@@ -85,5 +85,29 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   // grown-ups only
   await page.evaluate(() => { H3.S.wlib.forEach(A => { if(A.cat==='wear') A.desc = 'a school uniform for a 15 year old'; }); H3.S.cast[0].wild.who = []; });
   ok(await page.evaluate(() => { const t = H3.wildMark(H3.snapshot()); return !t.wild[1].picks.some(p => /school/.test(p.label)); }), 'an option that reads under 18 is never rolled');
+
+  // 🎬 Wildcard clips: the tab has its own form and list, no timeline
+  await page.click('#tabs [data-tab="wild"]'); await page.waitForTimeout(300);
+  const wt = await page.evaluate(() => ({fk:H3.S.fkey, form:!document.querySelector('#renderTab').hidden, film:document.querySelector('#filmTab').hidden, go:getComputedStyle(document.querySelector('.go') || document.body).display!=='none', cast:H3.S.cast.length, prompt:H3.S.f.prompt}));
+  ok(wt.fk==='~wild' && wt.form && wt.film && wt.go, 'Wildcards tab: its own form + Render button, no Films timeline: ' + JSON.stringify(wt));
+  ok(wt.cast===0 && !wt.prompt, 'it starts with its own empty cast and prompt: ' + JSON.stringify(wt));
+  await page.evaluate(() => { H3.S.cast = [{n:1, kind:'char', who:'Ava', pics:['p1'], keep:'exact', attrs:[], wild:{on:true, cats:['hair'], who:[]}}]; H3.S.f.prompt = 'In a park. <Subject 1> smiles.'; H3.drawAll(); });
+  // 🥋 random action options + chip
+  await page.click('#wdOpts summary').catch(() => {});
+  await page.evaluate(() => { document.querySelector('#wdOpts').open = true; });
+  for(const [n, d] of [['Twirl', 'spins slowly on the spot'], ['Wave', 'waves at the camera']]){ await page.click('[data-wt="new:act"]'); await page.fill('[data-wof="name"]', n); await page.fill('[data-wof="desc"]', d); await page.click('#sheetCard [data-close]'); }
+  ok(await page.evaluate(() => !document.querySelector('#woBox')), 'action options have no picture box (sheet closed)');
+  await page.evaluate(() => H3.actSheet(0)); await page.click('#acWho [data-aw="1"]'); await page.click('#acRand'); await page.click('#acGo');
+  const ln = await page.evaluate(() => { const k = Object.keys(H3.S.lines).find(k => H3.S.lines[k].rand); return {k, L:H3.S.lines[k], p:H3.S.f.prompt}; });
+  ok(ln.k && ln.L.n===1 && new RegExp('<Action ' + ln.k + '>').test(ln.p), 'a 🎲 random action chip goes in the shot: ' + JSON.stringify(ln));
+  const acts = await page.evaluate(() => { const o = new Set(); for(let i = 0; i < 30; i++){ const t = H3.wildMark(H3.snapshot()); o.add(Object.values(t.lines).filter(L => L.act).map(L => L.text).join()); } return [...o]; });
+  ok(acts.length===2, 'takes roll different actions: ' + acts.join(' / '));
+  const ta = await page.evaluate(() => { const t = H3.wildMark(H3.snapshot()); t.id = 'tW'; return t; }); P = await prom(ta);
+  ok(/<Subject 1> (spins slowly on the spot|waves at the camera)/.test(P.p), 'the rolled action is sent for her: ' + (P.p.match(/<Subject 1> (spins|waves)[^.]*\./) || [''])[0]);
+  { const wl = await page.evaluate(t => H3.wildLine(t), ta); ok(/Ava: .* \/ 🥋 (Twirl|Wave)/.test(wl), 'the take card line lists the action: ' + wl); }
+  const sameA = await page.evaluate(t => { H3.S.takes.unshift(t); const n = H3.snapshot(); n.carry = {src:t.id}; H3.wildMark(n); H3.S.takes.shift(); return JSON.stringify(n.wildActs)===JSON.stringify(t.wildActs); }, ta);
+  ok(sameA, 'a carry-on keeps the same action');
+  // back to Films: its own form comes back
+  await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
