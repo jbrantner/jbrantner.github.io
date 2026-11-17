@@ -204,6 +204,24 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       return {has, on, o:Object.keys(o).sort(), w:c.wild}; });
     ok(r.has && r.on, 'tapping a wildcard subject\'s tag shows 🎲 Who it can be, and ticking Katara keeps the wildcard ticked too: ' + JSON.stringify(r.w));
     ok(r.o.join()==='Katara,wild', 'each take is the wildcard or Katara: ' + r.o.join(' / ')); }
+  // 🧩 LoRAs on wildcard picks (Jordan 2026-11-17)
+  { const r = await page.evaluate(() => { const S = H3.S; H3.wcats(); S.wlib = (S.wlib || []).filter(A => A.cat!=='eyes');
+      const A = H3.wildNew('eyes'); A.desc = 'glowing eyes'; H3.wildOpt(A.id); const addOk = !document.querySelector('#woBox [data-wla]').disabled;
+      document.querySelector('#woBox [data-wla]').click(); const sel = document.querySelector('#woBox [data-wln]'); sel.value = 'AFK_Claude_minimaxh3.safetensors'; sel.dispatchEvent(new Event('change', {bubbles:true}));
+      document.querySelector('#sheetCard [data-close]').click();
+      const c = {n:9, kind:'char', who:'W', stand:'a woman', pics:[], attrs:[], wild:{on:true, cats:['eyes']}}, t = {loras:[], wild:H3.wildRoll([c])}; H3.wildLoras(t);
+      const Lk = {id:'Lkl', kind:'char', name:'Kat', stand:'a woman', desc:'', pics:['p2'], keep:'exact', loras:[{name:'AFK_Claude_minimaxh3.safetensors', str:0.7}]}; S.lib.push(Lk);
+      const c2 = {n:8, kind:'char', who:'W2', stand:'a woman', pics:[], attrs:[], wild:{on:true, cats:[], who:['Lkl']}}, t2 = {loras:[{name:'AFK_Claude_minimaxh3.safetensors', str:0.4}], wild:H3.wildRoll([c2])}; H3.wildLoras(t2);
+      const t3 = {loras:[], wild:H3.wildRoll([c2])}; H3.wildLoras(t3);
+      return {addOk, opt:A.loras, t:t.loras, wl:t.wildLoras, kept:t2.loras, lib:t3.loras}; });
+    ok(r.addOk && r.opt.length===1 && r.opt[0].name==='AFK_Claude_minimaxh3.safetensors', 'an option can carry a LoRA: ' + JSON.stringify(r.opt));
+    ok(r.t.length===1 && r.t[0].name==='AFK_Claude_minimaxh3.safetensors' && r.wl.length===1, 'a rolled option brings its LoRA into the take: ' + JSON.stringify(r.t));
+    ok(r.kept.length===1 && r.kept[0].str===0.4, 'a LoRA already on in the form keeps its strength: ' + JSON.stringify(r.kept));
+    ok(r.lib.length===1 && r.lib[0].str===0.7, 'a Library character picked for a tag brings her LoRA: ' + JSON.stringify(r.lib)); }
+  { const r = await page.evaluate(() => { const S = H3.S, c = S.cast.find(x => x.wpre) || S.cast[0]; H3.subjPick(c.n); const b = document.querySelector('#spBox [data-wf="lora:Lkl"]'); if(!b) return 'no 🧩 button';
+      b.click(); const ok1 = /Kat/.test(document.querySelector('#sheetCard h3').textContent) && document.querySelectorAll('#wlBox [data-wli]').length===1;
+      document.querySelector('#wlBox [data-wlback]').click(); return ok1 && !!document.querySelector('#spBox') ? 'ok' : 'bad'; });
+    ok(r==='ok', 'the 🧩 button by a Library character in the tag sheet edits her LoRAs and comes back: ' + r); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);

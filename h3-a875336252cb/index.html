@@ -1496,8 +1496,8 @@ function wildRoll(cast){ const out = {};
     const st = wStandRoll(c.stand); if(st){ r.stand = st; r.picks.push({cat:'🧑 Stand-in', label:st}); }
     for(const k of wCatsOf(w)){ const C = wcatOf(k); if(!C || C.kind==='act') continue;
       if(C.kind==='stand'){ if(r.stand) continue; const O = wopts(k).filter(A => wActWords(A)); if(!O.length) continue; let st = ''; // each picked choice is checked, so one under-18 choice doesn't sink the rest
-        for(let i = 0; i < 12 && !st; i++){ const A = O[rnd(O.length)], w0 = wChoose(wActWords(A), A.split); if(w0 && !MINOR.test(w0)) st = w0; }
-        if(st){ r.stand = st; r.picks.unshift({cat:C.name, label:st}); } continue; } const O = wopts(k).filter(A => !MINOR.test([A.name, A.desc].join(' ')) && (libPics(A).length || libWords(A))); if(!O.length) continue;
+        let sid = ''; for(let i = 0; i < 12 && !st; i++){ const A = O[rnd(O.length)], w0 = wChoose(wActWords(A), A.split); if(w0 && !MINOR.test(w0)){ st = w0; sid = A.id; } }
+        if(st){ r.stand = st; r.standId = sid; r.picks.unshift({cat:C.name, label:st, id:sid}); } continue; } const O = wopts(k).filter(A => !MINOR.test([A.name, A.desc].join(' ')) && (libPics(A).length || libWords(A))); if(!O.length) continue;
       const A = O[rnd(O.length)]; r.a.push(A.id); r.picks.push({cat:C.name, label:A.name || libWords(A) || 'one with a picture', id:A.id});
       if(C.kind==='wear') r.drop.push(...(c.attrs || []).filter(id => isWear(libOf(id)))); } // a rolled outfit takes the place of the one she has on
     wildTexts(r);
@@ -1531,11 +1531,37 @@ function wildActs(t, src){ delete t.wildActs; src = src || [t.carry && t.carry.s
     const id = (src && src.wildActs && src.wildActs[k]) || (keep && keep[k]) || (O.length ? O[rnd(O.length)].id : ''), A = id && libOf(id); if(!A) continue;
     const at = src && src.wildActs && src.wildActs[k] && ((src.lines || {})[k] || {}).text, txt = at || wActText(A, t, L);
     t.lines[k] = Object.assign({}, L, {name:A.name || txt.split(' ').slice(0, 3).join(' '), text:txt}); delete t.lines[k].lib; (t.wildActs = t.wildActs || {})[k] = id; }
-  return t; }
+  return wildLoras(t); }
+// 🧩 LoRAs on wildcard picks (Jordan 2026-11-17: "add LoRA support for actions or characters, any wildcards really"): a rolled option, a
+// 🧑 Who she is pick, a 🥋 random action or a 📚 Library character picked for a tag brings its LoRAs into that take (t.loras), so the take
+// only goes to a PC that has them. A LoRA that's already on in the form keeps its own strength.
+const wLorasOf = A => ((A && A.loras) || []).filter(l => l && l.name);
+function wildLoras(t){ const add = [];
+  for(const r of Object.values(t.wild || {})){ if(!r || typeof r!=='object') continue; [...(r.a || []), r.standId, r.who].filter(Boolean).forEach(id => add.push(...wLorasOf(libOf(id)))); }
+  Object.values(t.wildActs || {}).forEach(id => add.push(...wLorasOf(libOf(id))));
+  if(!add.length){ delete t.wildLoras; return t; }
+  const L = lorasOf(t).map(l => Object.assign({}, l)), have = new Set(L.map(l => l.name)), got = [];
+  for(const l of add){ if(have.has(l.name)) continue; have.add(l.name); got.push(l.name); L.push({name:l.name, str:+l.str || 1, words:(l.words || '').trim()}); }
+  t.loras = L; if(got.length) t.wildLoras = got; else delete t.wildLoras; return t; }
+const wLoraNames = () => [...new Set(Object.values(PC).map(p => p && p.oi).filter(Boolean).flatMap(styleLoras))].sort();
+function wLoraHtml(arr){ const N = wLoraNames();
+  return `<div class="lab" style="margin-top:10px"><span>🧩 LoRAs (go in with this pick, only to a PC that has them)</span></div><div class="loras">` + arr.map((l, i) => `<div class="lr" data-wli="${i}"><div class="lt"><select data-wln>${(l.name ? '' : '<option value="">Pick a LoRA</option>') + [...new Set([...(l.name ? [l.name] : []), ...N])].map(n => `<option value="${esc(n)}"${n===l.name ? ' selected' : ''}>${esc(bn(n).replace(/\.safetensors$/, ''))}${N.includes(n) ? '' : ' (not on the PCs)'}</option>`).join('')}</select><b>${(+l.str || 1).toFixed(2)}</b><button class="btn x" data-wlx aria-label="Remove">✕</button></div>
+    <input type="range" data-wls min="0" max="1.5" step="0.05" value="${+l.str || 1}"><input data-wlw placeholder="Trigger words (optional)" value="${esc(l.words || '')}"></div>`).join('') + `</div>
+    <button class="btn sm" data-wla style="margin-top:6px"${N.length ? '' : ' disabled'}>＋ 🧩 LoRA</button>${N.length ? '' : '<div class="note" style="margin-top:4px">No H3 LoRAs found: the PCs need to be on.</div>'}`; }
+function wLoraWire(box, get, redraw){
+  box.addEventListener('change', e => { const row = e.target.closest('[data-wli]'); if(!row || !e.target.matches('[data-wln]')) return; const l = get()[+row.dataset.wli]; l.name = e.target.value; if(l.name && !l.words) l.words = (S.loraWords || {})[l.name] || ''; save(); redraw(); });
+  box.addEventListener('input', e => { const row = e.target.closest('[data-wli]'); if(!row) return; const l = get()[+row.dataset.wli];
+    if(e.target.matches('[data-wls]')){ l.str = +e.target.value; row.querySelector('b').textContent = l.str.toFixed(2); } if(e.target.matches('[data-wlw]')) l.words = e.target.value; save(); });
+  box.addEventListener('click', e => { if(e.target.closest('[data-wla]')){ get(true).push({name:'', str:1, words:''}); save(); redraw(); return; }
+    const x = e.target.closest('[data-wlx]'); if(x){ get().splice(+x.closest('[data-wli]').dataset.wli, 1); save(); redraw(); } }); }
+function wLoraSheet(L, back){ openSheet(`<h3><span>🧩 ${esc(L.name || 'LoRAs')}</span><button class="btn" data-close>✕</button></h3><div id="wlBox"><div class="note">When ${esc(L.name || 'they')} is picked on the 🎲 Wildcards screen, these LoRAs go in with that take.</div>${wLoraHtml(L.loras = L.loras || [])}
+    <button class="btn pri" data-wlback style="width:100%;margin-top:14px">Done</button></div>`);
+  const box = $('#wlBox'); wLoraWire(box, () => (L.loras = L.loras || []), () => wLoraSheet(L, back)); box.addEventListener('click', e => { if(e.target.closest('[data-wlback]')){ L.loras = (L.loras || []).filter(l => l.name); save(); back ? back() : closeSheet(); } }); }
 const wildAny = () => (S.cast || []).some(c => c.wild && c.wild.on && (wCatsOf(c.wild).length || (c.wild.who || []).length));
 function wildLine(t, html){ if(!t || (!t.wild && !t.wildActs)) return ''; const parts = Object.entries(t.wild || {}).map(([n, r]) => { const c = castOf(n, t.film); return (c ? castName(c) : 'Subject ' + n) + ': ' + (r.picks || []).map(p => p.label).join(' · '); });
   const acts = Object.entries(t.wildActs || {}).map(([k, id]) => '🥋 ' + (((t.lines || {})[k] || {}).name || (libOf(id) || {}).name || 'action'));
-  return (t.wildFrom==='carry' ? 'same mix as the clip before · ' : t.wildFrom==='keep' ? '🔒 kept mix · ' : '') + parts.concat(acts).join(' / '); }
+  const lz = (t.wildLoras || []).map(n => '🧩 ' + bn(n).replace(/\.safetensors$/, ''));
+  return (t.wildFrom==='carry' ? 'same mix as the clip before · ' : t.wildFrom==='keep' ? '🔒 kept mix · ' : '') + parts.concat(acts, lz).join(' / '); }
 // the 🎲 Wildcards tab: categories, each with its options (a picture and/or words)
 function drawWild(){ const el = $('#wildTab'); if(!el || el.hidden) return; fixThumbs(); const K = wcats(), keep = (S.wildKeep || {})[filmK()];
   const nO = (S.wlib || []).length, open = S.wdOpen!=null ? S.wdOpen : !nO;
@@ -1546,7 +1572,7 @@ function drawWild(){ const el = $('#wildTab'); if(!el || el.hidden) return; fixT
     <div class="wdNote">Kept apart from the 📚 Library. Each option is words, a picture, or both.</div>
     ${keep ? `<div class="wdNote" style="margin-top:8px">🔒 Every new take in ${esc(filmName())} uses one kept mix. <button class="btn sm" data-wt="free">🎲 Roll new mixes again</button></div>` : ''}
     ${K.map(C => { const O = wopts(C.id); return `<div class="wdCat"><div class="row" style="justify-content:space-between;align-items:center"><b>${esc(C.name)}</b><span class="note">${O.length} option${O.length===1 ? '' : 's'}${C.kind==='wear' ? ' · clothing' : ''}</span></div>
-      <div class="libGrid">${O.map(A => { const P = libPics(A); return `<button class="libTile" data-wt="open:${A.id}">${P.length ? `<img src="${(S.media[P[0]] || {}).thumb || ''}" alt="">` : `<span>✍</span>`}<b>${esc(A.name || libWords(A) || wActWords(A) || 'Unnamed')}</b><small>${P.length ? (A.desc ? 'picture + words' : 'picture') : 'words only'}</small></button>`; }).join('')}
+      <div class="libGrid">${O.map(A => { const P = libPics(A); return `<button class="libTile" data-wt="open:${A.id}">${P.length ? `<img src="${(S.media[P[0]] || {}).thumb || ''}" alt="">` : `<span>✍</span>`}<b>${esc(A.name || libWords(A) || wActWords(A) || 'Unnamed')}</b><small>${P.length ? (A.desc ? 'picture + words' : 'picture') : 'words only'}${wLorasOf(A).length ? ' · 🧩 ' + wLorasOf(A).length : ''}</small></button>`; }).join('')}
       <button class="libTile" data-wt="new:${C.id}"><span>＋</span><b>Add</b><small>a new option</small></button></div>
       ${!WCAT0.some(x => x.id===C.id) ? `<button class="btn sm" data-wt="delcat:${C.id}" style="margin-top:6px">🗑 Remove this category</button>` : ''}</div>`; }).join('')}
     <div class="lab" style="margin-top:14px"><span>＋ A new category</span></div>
@@ -1565,9 +1591,10 @@ function wildOpt(id){ if(WO_ID!==id){ WO_POS = null; WO_ID = id; } const A = (S.
     <div class="wdNote" id="woBust" style="margin-top:4px${bust ? '' : ';display:none'}">⚠ Breast words in a description were what pushed nipples through clothes before. Words like "curvy figure" or "slim build" are safer.</div>
     ${ac || ws ? '' : `<div class="lab" style="margin-top:8px"><span>Picture (optional: MiniMax moves only this ${esc((A.what || C.name.replace(/^\S+\s/, '')).toLowerCase())} onto her)</span></div>
     <div class="castpics">${P.map((m, i) => `<span class="cpw"><img src="${(S.media[m] || {}).thumb || ''}" alt=""><button data-wo="unpic:${i}" aria-label="Take this picture out">✕</button></span>`).join('')}${P.length < 2 ? '<button class="castpic" data-wo="pic">＋ Picture</button>' : ''}</div>`}
+    ${wLoraHtml(A.loras = A.loras || [])}
     <button class="btn pri" data-close style="width:100%;margin-top:14px">Done</button>
     <button class="btn" data-wo="del" style="width:100%;margin-top:8px;color:var(--bad)">🗑 Delete this option</button></div>`);
-  const box = $('#woBox');
+  const box = $('#woBox'); wLoraWire(box, () => (A.loras = A.loras || []), () => { drawWild(); wildOpt(A.id); });
   box.oninput = e => { const k = e.target.dataset.wof; if(!k) return; A[k] = e.target.value; const b = $('#woBust'); if(b) b.style.display = BUSTW.test([A.name, A.desc].join(' ')) ? '' : 'none';
     if(k==='desc' && MINOR.test(A.desc)) toast('Wildcard options are for adults only: an option that reads as under 18 is never rolled'); save(); clearTimeout(LIBT); LIBT = setTimeout(drawWild, 300); };
   box.onclick = e => { const b = e.target.closest('[data-wo]'); if(!b) return; const [a, v] = b.dataset.wo.split(':');
@@ -1957,7 +1984,7 @@ function subjPick(n, at){ const c = castOf(n), others = (S.cast || []).filter(x 
     <div class="seg wrap" style="margin-top:10px">${(at ? [['tag', 'Just this tag']] : []).concat([['one', 'This prompt'], ['all', 'Everywhere in ' + filmName()]]).map(([v, t]) => `<button data-sps="${v}" class="${sc===v ? 'on' : ''}">${esc(t)}</button>`).join('')}</div>
     ${others.map(x => tile('c:' + x.n, th(castPics(x)[0]), castName(x), '<Subject ' + x.n + '>', subColor(x.n))).join('') || '<div class="note" style="margin-top:10px">No one else is in this film\'s 👥 cast yet.</div>'}
     ${libs.length ? '<div class="lab" style="margin-top:12px"><span>📚 From the Library (adds them to this film)</span></div>' + libs.map(L => tile('l:' + L.id, th(libPics(L)[0]), L.name || 'Unnamed', libKind(L)[2])).join('') : ''}</div>`);
-  $('#spBox').onclick = e => { const f0 = e.target.closest('[data-wf]'); if(f0 && c){ wildFolderTap(c, f0.dataset.wf); subjPick(n, at); return; }
+  $('#spBox').onclick = e => { const f0 = e.target.closest('[data-wf]'); if(f0 && c){ if(/^lora:/.test(f0.dataset.wf)){ const LB = libOf(f0.dataset.wf.slice(5)); if(LB) wLoraSheet(LB, () => subjPick(n, at)); return; } wildFolderTap(c, f0.dataset.wf); subjPick(n, at); return; }
     const s = e.target.closest('[data-sps]'); if(s){ sc = S.spScope = s.dataset.sps; save(); $('#spBox').querySelectorAll('[data-sps]').forEach(b => b.classList.toggle('on', b===s)); return; }
     const b = e.target.closest('[data-sp]'); if(!b) return; const [k, v] = b.dataset.sp.split(/:(.*)/), L = k==='l' && libOf(v), to = k==='c' ? castOf(v) : L && libToCast(L); if(!to) return;
     subjSwap(n, to.n, sc==='all', sc==='tag' && at); closeSheet(); toast('👥 ' + (c ? castName(c) : '<Subject ' + n + '>') + ' → ' + castName(to) + (sc==='all' ? ' everywhere in ' + filmName() : sc==='tag' ? ' (just this tag)' : ' in this prompt')); }; }
@@ -1968,7 +1995,7 @@ function wildFolder(c){ if(mineK()!==WK || !c || (c.kind || 'char')!=='char') re
   const tick = (key, on, pic, name, sub) => `<button class="btn${on ? ' pri' : ''}" data-wf="${key}" style="display:flex;gap:10px;align-items:center;width:100%;text-align:left;margin-top:6px">${pic ? `<img src="${pic}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:8px">` : '<span style="width:36px;text-align:center">🎲</span>'}<span style="flex:1"><b>${on ? '✓ ' : ''}${esc(name)}</b><br><small class="note">${esc(sub)}</small></span></button>`;
   return `<div class="lab"><span>🎲 Who it can be: each take picks one of the ticked</span></div>
     ${tick('self', self, '', castName(c), c.wild && c.wild.on ? 'a wildcard: a rolled mix every take' : 'as they are')}
-    ${L.map(x => tick('lib:' + x.id, who.includes(x.id), (S.media[libPics(x)[0]] || {}).thumb || '', x.name || 'Unnamed', w.whoOwn===false ? '📚 wearing the rolled options' : '📚 keeps her own look')).join('') || '<div class="note" style="margin-top:6px">Add characters to the 📚 Library to put them in here.</div>'}
+    ${L.map(x => `<div class="row" style="gap:6px;align-items:center;flex-wrap:nowrap"><div style="flex:1;min-width:0">${tick('lib:' + x.id, who.includes(x.id), (S.media[libPics(x)[0]] || {}).thumb || '', x.name || 'Unnamed', (w.whoOwn===false ? '📚 wearing the rolled options' : '📚 keeps her own look') + (wLorasOf(x).length ? ' · 🧩 ' + wLorasOf(x).map(l => bn(l.name).replace(/\.safetensors$/, '')).join(', ') : ''))}</div><button class="btn sm" data-wf="lora:${x.id}" style="margin-top:6px" aria-label="LoRAs">🧩</button></div>`).join('') || '<div class="note" style="margin-top:6px">Add characters to the 📚 Library to put them in here.</div>'}
     <div class="note" style="margin-top:4px">${who.length + (self ? 1 : 0) > 1 ? 'Every take of this tag (and every 🥋 action that points at it) is one of these ' + (who.length + (self ? 1 : 0)) + ', the same one all through the take.' : 'Tick more than one to have each take pick.'}</div>`; }
 function wildFolderTap(c, k){ const w = c.wild = c.wild || {on:false, cats:[], who:[]}; w.who = w.who || []; const hadSelf = !w.who.length || !!w.self;
   if(k==='self'){ if(!w.who.length) return toast('Tick someone else first: there has to be at least one'); w.self = !hadSelf; }
@@ -5486,7 +5513,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
