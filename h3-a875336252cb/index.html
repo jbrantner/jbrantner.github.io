@@ -786,7 +786,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide','ConditioningSetTimestepRange','ConditioningCombine',
+const NEED = ['HunyuanModelLoader','HunyuanDependenciesLoader','HunyuanFoleySampler','MelBandRoFormerModelLoader','MelBandRoFormerSampler','AudioMerge','AudioAdjustVolume','AudioConcat','MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide','ConditioningSetTimestepRange','ConditioningCombine',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','EmptyImage','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
@@ -1715,7 +1715,7 @@ function fillSpare(t, imgs, vids){ const by = {}, order = []; imgs.forEach(r => 
   for(let j = 0; room > 0; j++) for(const n of order){ if(room <= 0) break; const L = by[n]; add.push(Object.assign({}, L[j % L.length], {dup:true})); room--; }
   imgs.splice(at, 0, ...add); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
-  if(t && t.swap) return t; // 🔄 a person swap sends exactly its own pictures, under its own subject numbers
+  if(t && (t.swap || t.snd)) return t; // 🔊 a sound pass sends no pictures; 🔄 a person swap sends exactly its own pictures, under its own subject numbers
   const used = pics ? castUsed(t) : [];
   // 🖼 the shot's own pictures leave room for one picture of each subject its words name (Jordan 2026-11-12)
   const imgs = (t.imgs || []).filter(r => !r.cast).slice(0, Math.max(0, MAXREF.img - used.filter(n => castPics(castOf(n, t.film, t)).length).length));
@@ -2778,6 +2778,7 @@ function canRun(url, job){
   const p = pcOf(url), oi = p.oi, pc = S.pcs.find(x => x.url===url);
   if(!pc || !pc.on) return 'switched off in ⚙';
   if(!p.online) return "can't be reached";
+  if(job.snd) return sndMissing(oi, job.snd); // 🔊 a sound pass needs only Foley (and MelBand for the voices)
   if(!oi || !oi.MiniMaxH3ReferenceToVideo || !oi.SaveVideo) return 'has no MiniMax H3 nodes (update ComfyUI)';
   const m = resolveModel(oi, job.model, job.turbo); if(!m) return 'has no ' + (job.turbo ? 'Turbo' : 'Regular') + ' file for ' + famLabel(job.model);
   if(!clipOf(oi) || !vaeOf(oi) || !avaeOf(oi)) return 'is missing the MiniMax H3 text encoder or VAEs';
@@ -2816,6 +2817,7 @@ function partTokens(job, p, i){ const w = +job.w || 832, h = +job.h || 480, rows
   const gen = lt * rows + 2 * Math.round(F / FPS * 40), refs = (nI || nV ? 600 : 0) + nI * 870 * area + nV * 5800 * area;
   return {gen, all:gen + refs + ctx + (job.sm ? smoothKeys(F, job.sm.every || 4).length * rows : 0), nI, nV, area}; }
 function estSecs(job, url){
+  if(job.snd){ const sp = pcSpeed(url), F = (job.pieces[0] || {}).gen || 120; return Math.round((55 + F / FPS * 9 * (+job.snd.steps || 50) / 50 + (job.snd.voice ? 8 : 0) + F / FPS * 2) * sp); } // 🔊 (Render 2026-11-17: ~100 s for 5 s at 50 steps; ~50 s of it loading, as MiniMax jobs push Foley out)
   let s = 0; const oi = pcOf(url).oi, M = oi && resolveModel(oi, job.model, job.turbo), steps = +job.steps || (M ? M.steps : 20), sp = pcSpeed(url);
   (job.pieces || []).forEach((p, i) => { const T = partTokens(job, p, i);
     const same = i > 1 && (p.prompt || '')===((job.pieces[i - 1] || {}).prompt || ''), te = same ? 1 : (6 + 3.2 * T.nI + 25 * T.nV) * Math.pow(T.area * T.area, 1.2);
@@ -3669,7 +3671,7 @@ async function sendPieces(t, from){
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
-    const p = t.pieces[i], G = p.upl ? uplGraph(t, p, oi) : seamOne(t) ? seamGraph(t, oi, names) : t.combo ? comboGraph(t) : pieceGraph(t, i, oi, names);
+    const p = t.pieces[i], G = p.upl ? uplGraph(t, p, oi) : p.snd ? sndGraph(t, p, oi) : seamOne(t) ? seamGraph(t, oi, names) : t.combo ? comboGraph(t) : pieceGraph(t, i, oi, names);
     p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.save = G.save; p.join = G.join || null; p.err = ''; p.file = null;
     p.pid = await queueGraph(url, G, !!p.upl); p.state = 'queued'; p.tq = Date.now(); save(); // 📤 an upload takes seconds: it goes to the front of the PC's line
   }
@@ -4478,7 +4480,7 @@ function takeCard(t){
     // the extra tools sit behind ⋯ on each card (TMORE remembers which cards are open)
     const has = t.final || t.pieces.some(p => p.file), done = t.state==='done' && has;
     const acts = t.state==='working' ? `<button class="btn warn" data-act="cancel" data-t="${t.id}">✕ Cancel</button>`
-      : `${t.k4 && t.k4.state==='done' ? `<button class="btn pri" data-act="save4k" data-t="${t.id}">📲 Save 4K 60</button>` : ''}${done && S.tab==='films' && filmTarget() ? `<button class="btn pri" data-act="useFilm" data-t="${t.id}">🎞 Use this take</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.up && t.upErr && t.upErr!=='Cancelled' ? `<button class="btn" data-act="upretry" data-t="${t.id}">↻ Regenerate again</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<span class="tmore">${has ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && t.final ? `<button class="btn xf" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button><button class="btn" data-act="loop" data-t="${t.id}">🔁 Make it loop</button>` : ''}${done ? `<button class="btn xf" data-act="mocap" data-t="${t.id}">🦴 To Mocap</button><button class="btn xf" data-act="guide" data-t="${t.id}">🎭 Use as guide</button>` : ''}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn warn" data-act="drop" data-t="${t.id}">🗑 Delete</button></span>`;
+      : `${t.k4 && t.k4.state==='done' ? `<button class="btn pri" data-act="save4k" data-t="${t.id}">📲 Save 4K 60</button>` : ''}${done && S.tab==='films' && filmTarget() ? `<button class="btn pri" data-act="useFilm" data-t="${t.id}">🎞 Use this take</button>` : ''}${t.state==='done' && !t.sm ? `<button class="btn pri" data-act="more" data-t="${t.id}">➕ Add more</button>` : ''}${t.state==='done' && t.up && t.upErr && t.upErr!=='Cancelled' ? `<button class="btn" data-act="upretry" data-t="${t.id}">↻ Regenerate again</button>` : ''}${t.state==='failed' ? `<button class="btn pri" data-act="retry" data-t="${t.id}">↻ Try again</button>` : `<button class="btn" data-act="reroll" data-t="${t.id}">🎲 New take</button>`}<span class="tmore">${has ? `<button class="btn" data-act="save" data-t="${t.id}">⬇ Save</button>` : ''}${t.state==='done' && t.final ? `<button class="btn xf" data-act="regen" data-t="${t.id}">🪄⬆ Smooth & regenerate</button><button class="btn" data-act="loop" data-t="${t.id}">🔁 Make it loop</button>` : ''}${done && t.state==='done' ? `<button class="btn" data-act="sound" data-t="${t.id}">🔊 Add sound</button>` : ''}${done ? `<button class="btn xf" data-act="mocap" data-t="${t.id}">🦴 To Mocap</button><button class="btn xf" data-act="guide" data-t="${t.id}">🎭 Use as guide</button>` : ''}<button class="btn" data-act="use" data-t="${t.id}">↩ Use settings</button><button class="btn warn" data-act="drop" data-t="${t.id}">🗑 Delete</button></span>`;
     const sig = [t.state, t.loopTake || '', t.loopErr || '', t.final && t.final.filename, t.pieces.map(p => p.state + (p.file ? p.file.filename : '')).join(','), k4Line(t), t.upStage || '', t.upErr || ''].join('|');
     return {id:t.id, sig, html:`<div class="take${TMORE.has(t.id) ? ' mopen' : ''}" data-take="${t.id}" data-sig="${esc(sig)}"><div class="pv">${playerHtml(t)}</div><div class="meta">
       <div class="tl"><b>${t.sm ? (t.sm.loop ? '🔁 ' : '🪄 ') : ''}${fmtS(secs)} · ${esc(famLabel(t.up && t.up.unet ? famKey(t.up.unet) : t.model).replace(/^MiniMax H3 /, ''))}${t.turbo ? ' ⚡' : ''}</b><span class="pcl">${esc(pcName(t.pc))} · ${t.w}×${t.h}${t.state==='working' ? '' : `<button class="btn tmb" data-tm="${t.id}" aria-label="More for this take" title="⬇ Save, ↩ Use settings, 🗑 and more">⋯</button>`}</span></div>
@@ -4578,11 +4580,12 @@ document.addEventListener('click', async e => {
     else if(ds.act==='more') extendSheet(t);
     else if(ds.act==='regen') await toSmooth(t);
     else if(ds.act==='loop') await toSmooth(t, null, true);
+    else if(ds.act==='sound'){ soundSheet(t); return; }
     else if(ds.act==='mocap') await toMocap(t);
     else if(ds.act==='guide') await guideFromTake(t);
     else if(ds.act==='upretry'){ t.upTries = 0; retryTake(t).then(ok => { if(!ok) toast(pcName(t.pc) + " can't take it right now"); drawTakes(); }); }
     else if(ds.act==='retry'){ const i = t.pieces.findIndex(p => p.state!=='done'); redoFrom(t, Math.max(0, i), false); }
-    else if(ds.act==='reroll'){ rerollSheet(t); return; }
+    else if(ds.act==='reroll'){ if(t.snd){ soundSheet(deckTake(t.redo && t.redo.src) || t, t.redo && t.redo.film ? {film:t.redo.film, clip:t.redo.clip} : {}); return; } rerollSheet(t); return; }
     else if(ds.act==='wildKeep'){ S.wildKeep = S.wildKeep || {}; S.wildKeep[filmK()] = Object.assign(JSON.parse(JSON.stringify(t.wild || {})), t.wildActs ? {_acts:Object.assign({}, t.wildActs)} : {}); save(); drawCast(); toast('🔒 New takes in ' + filmName() + ' use this mix. Let go of it in the 🎲 Wildcards tab or on her card.', 5000); return; }
     else if(ds.act==='rerollGo'){ const nt = JSON.parse(JSON.stringify(t)); if(ds.off) try{ nt.descOff = JSON.parse(ds.off); }catch(e){} nt.id = uid('t'); nt.t = Date.now(); nt.seed = Math.floor(Math.random() * 2 ** 31); shufMark(nt, 1); nt.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + nt.id.slice(-4); nt.dir = 'H3Deck/' + nt.name;
       nt.pieces.forEach(p => { p.state = 'new'; p.file = null; p.pid = null; p.err = ''; }); nt.final = null;
@@ -5439,6 +5442,107 @@ window.H3Swap = async o => { const src = deckTake(o.take), fl = takeFile(src);
   }
   save(); drawTakes(); if(sent) toast('🔄 ' + (sent > 1 ? sent + ' swaps' : 'Swap') + ' of ' + fmtS(A / FPS) + '–' + fmtS(B / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and ') + '. It drops into the clip when it\'s done.', 6000);
   return sent; };
+// 🔊 Add sound (Jordan 2026-11-17: "the audio on these videos is pretty terrible. I've basically muted all videos"): a second pass on a
+// finished clip. HunyuanVideo-Foley (phazei's ComfyUI nodes, fp8, under 8 GB) watches the clip and makes its sound effects and room sound
+// from a short "what it sounds like" line, with speech and (unless 🎵) music kept out. 💬 Keep their voices: MelBand RoFormer pulls the
+// voices out of MiniMax's own sound (they match the lips), and they go back on top of the new effects. Foley runs on up to SND_CHUNK
+// seconds at a time (it was trained on short clips), the pieces joined end to end. The result is a version of the take: in Films it
+// drops into the clip like ↻ redo does, and ⇄ Versions has the silent-film original.
+const SND_CHUNK = 10, SND_MAX = 60, SND_DB_VOICE = -10, SND_DB_FX = -3, SND_NEG = 'speech, talking, voice, singing, noisy, harsh, distorted', SND_NEG_MUSIC = 'music';
+const sndModel = oi => { const l = combo(oi, 'HunyuanModelLoader', 'model_name'); return l.find(n => /foley/i.test(bn(n)) && /fp8_e4m3fn/i.test(bn(n))) || l.find(n => /foley/i.test(bn(n)) && /fp8/i.test(bn(n))) || l.find(n => /foley/i.test(bn(n))) || ''; };
+const sndVae = oi => combo(oi, 'HunyuanDependenciesLoader', 'vae_name').find(n => /fp16/i.test(bn(n))) || combo(oi, 'HunyuanDependenciesLoader', 'vae_name')[0] || '';
+const sndSync = oi => combo(oi, 'HunyuanDependenciesLoader', 'synchformer_name').find(n => /fp16/i.test(bn(n))) || combo(oi, 'HunyuanDependenciesLoader', 'synchformer_name')[0] || '';
+const sndMel = oi => { const l = combo(oi, 'MelBandRoFormerModelLoader', 'model_name'); return l.find(n => /mel.?band|roformer/i.test(bn(n)) && /vocal/i.test(bn(n))) || l.find(n => /mel.?band|roformer/i.test(bn(n))) || ''; };
+// why a PC can't do a sound pass ('' = it can); s: the pass's own settings
+function sndMissing(oi, s){
+  if(!oi) return "can't be reached";
+  if(!(oi.HunyuanFoleySampler && oi.HunyuanModelLoader && oi.HunyuanDependenciesLoader)) return 'has no HunyuanVideo-Foley nodes';
+  if(!sndModel(oi) || !sndVae(oi) || !sndSync(oi)) return 'is missing the HunyuanVideo-Foley files (models/foley)';
+  if(!(oi.LoadVideo && oi.GetVideoComponents && oi.CreateVideo && oi.SaveVideo && oi.ImageFromBatch && oi.AudioConcat)) return "can't read a video (update ComfyUI)";
+  if(s && s.voice && !(oi.MelBandRoFormerSampler && sndMel(oi) && oi.AudioMerge)) return "can't keep the voices (no MelBand RoFormer vocals model or Audio Merge)";
+  return ''; }
+const sndAny = voice => S.pcs.some(p => p.on && pcOf(p.url).online && !sndMissing(pcOf(p.url).oi, {voice}));
+// near-even pieces of at most SND_CHUNK seconds, in frames
+function sndChunks(F){ const k = Math.max(1, Math.ceil(F / (SND_CHUNK * FPS))), out = []; let a = 0;
+  for(let i = 0; i < k; i++){ const b = i===k - 1 ? F : Math.round(F * (i + 1) / k); out.push([a, b - a]); a = b; } return out; }
+// does the take have spoken lines (💬 <Dialogue n>, or a 🔄 swap where they talk)?
+function sndTalks(t){ for(let x = t, k = 0; x && k < 8; x = x.redo && deckTake(x.redo.src), k++){ const w = [x.prompt].concat((x.pieces || []).map(p => p.prompt)).join(' ');
+    if(/<\s*dialogue\s*\d+\s*>/i.test(w) || (x.swap && x.swap.talk)) return true; } return false; }
+function sndGraph(t, p, oi){
+  const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
+  const s = p.snd, gc = add('GetVideoComponents', {video:[add('LoadVideo', {file:s.file}), 0]}), ims = [gc, 0];
+  const mdl = add('HunyuanModelLoader', {model_name:sndModel(oi), precision:'bf16', quantization:'auto'}), dep = add('HunyuanDependenciesLoader', {vae_name:sndVae(oi), synchformer_name:sndSync(oi)});
+  const neg = SND_NEG + (s.music ? '' : ', ' + SND_NEG_MUSIC); let fx = null;
+  sndChunks(s.F).forEach(([a, L], i) => { const im = s.F > L ? [add('ImageFromBatch', {image:ims, batch_index:a, length:L}), 0] : ims;
+    const au = [add('HunyuanFoleySampler', {hunyuan_model:[mdl, 0], hunyuan_deps:[dep, 0], frame_rate:FPS, duration:Math.round(L / FPS * 1000) / 1000, prompt:s.prompt, negative_prompt:neg,
+      cfg_scale:+s.cfg || 4.5, steps:+s.steps || 50, sampler:'euler', batch_size:1, seed:(Math.floor(+t.seed || 0) + i) % 2147483647, force_offload:true, image:im}), 0];
+    fx = fx ? [add('AudioConcat', {audio1:fx, audio2:au, direction:'after'}), 0] : au; });
+  if(+s.db && oi.AudioAdjustVolume) fx = [add('AudioAdjustVolume', {audio:fx, volume:Math.round(+s.db)}), 0];
+  let aud = fx;
+  if(s.voice){ const v = add('MelBandRoFormerSampler', {model:[add('MelBandRoFormerModelLoader', {model_name:sndMel(oi)}), 0], audio:[gc, 1]});
+    aud = [add('AudioMerge', {audio1:fx, audio2:[v, 0], merge_method:'add'}), 0]; }
+  const sv = add('SaveVideo', {video:[add('CreateVideo', {images:ims, audio:aud, fps:FPS}), 0], filename_prefix:t.dir + '/piece_01', format:'mp4', 'format.codec':'h264', 'format.codec.encoding':'re-encode', 'format.codec.encoding.crf':16});
+  return {g, save:sv}; }
+// o: {take, film, clip, prompt, voice, music, db, steps, n (versions)}
+window.H3Sound = async o => { const src = deckTake(o.take), fl = takeFile(src);
+  if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
+  if(!fl){ toast('That take has no finished video yet'); return 0; }
+  const F = takeFrames(src); if(F > SND_MAX * FPS + 2){ toast('🔊 Sound goes on clips up to ' + SND_MAX + ' s. ✂ Split it first.', 6000); return 0; }
+  const s0 = {prompt:String(o.prompt || '').trim() || 'The natural sounds of the scene: room tone, footsteps, cloth movement, small movements.', voice:!!o.voice, music:!!o.music, db:Math.max(-20, Math.min(10, Math.round(+o.db || 0))), steps:Math.max(10, Math.min(100, +o.steps || 50)), cfg:4.5};
+  const key = uid('k'), n = Math.max(1, Math.min(3, +o.n || 1)), label = '🔊 ' + s0.prompt.slice(0, 70) + (s0.voice ? ' (+ voices)' : '');
+  const urls = [...new Set([src.pc].concat(S.f.where==='both' ? S.pcs.map(p => p.url) : [S.f.where]))].filter(u => { const P = S.pcs.find(x => x.url===u); return P && P.on && pcOf(u).online && !sndMissing(pcOf(u).oi, s0); });
+  const ok = []; for(const u of urls){ if(u===src.pc){ ok.push(u); continue; } const k = u + '|' + fl.filename;
+    if(SEES[k]==null){ try{ SEES[k] = (await fetch(rawView(u, fl), {method:'HEAD'})).ok; }catch(e){ SEES[k] = false; } } if(SEES[k]) ok.push(u); }
+  if(!ok.length){ const why = S.pcs.map(p => pcName(p.url) + ' ' + (pcOf(p.url).online ? sndMissing(pcOf(p.url).oi, s0) || "can't see the clip" : "can't be reached")).join('; '); toast('🔊 No PC can add sound yet: ' + why, 8000); return 0; }
+  let sent = 0; const extra = {};
+  for(let k = 0; k < n; k++){
+    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+    t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
+    Object.assign(t, {back:null, prompt:label, seconds:F / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, combo:null, lead:null, toFilm:null, pins:[], mq:'', follow:[], auds:[], imgs:[], vids:[],
+      ctl:null, ctl2:null, ctxDirs:null, from:null, sm:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false, k4:null,
+      swap:null, h3:null, neg:'', fin:null, shuffle:0, noMove:true, snd:Object.assign({}, s0),
+      redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:false, film:o.film || '', clip:o.clip || '', key, snd:true, a:0, b:F, s0:0, L:F, F, Fout:F, pins:[]},
+      pieces:[{start:0, gen:F, deliv:F, ctx:0, prompt:label, state:'new', snd:Object.assign({file:fileArg(fl), F}, s0)}]});
+    if(src.up && src.up.crop && src.final && +src.up.scale > 1){ const d = upDims(src); t.w = d.w; t.h = d.h; }
+    t.pc = ok.slice().sort((a, b) => (busySecs(a) + (extra[a] || 0)) - (busySecs(b) + (extra[b] || 0)))[0];
+    extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
+    S.takes.unshift(t); drawTakes();
+    try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
+  }
+  save(); drawTakes(); if(sent) toast('🔊 ' + (sent > 1 ? sent + ' sound passes' : 'Sound pass') + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and ') + (o.film ? '. It drops into the clip when it\'s done.' : '.'), 6000);
+  return sent; };
+// the sheet (from a take card's ⋯ or Films' clip tools); o: {film, clip, many:[{take, clip}] (Films' track ⋯: every clip on the track, each its own pass)}
+function soundSheet(t, o){ o = o || {}; const many = (o.many || []).map(x => ({t:deckTake(x.take), clip:x.clip})).filter(x => x.t && takeFile(x.t));
+  if(o.many){ if(!many.length){ toast('None of the clips on that track has a finished video in H3 Deck on this phone'); return; } t = many[0].t; }
+  if(!takeFile(t)){ toast('Wait for the clip to finish first'); return; }
+  const F = many.length ? many.reduce((a, x) => a + takeFrames(x.t), 0) : takeFrames(t), talks = many.length ? many.some(x => sndTalks(x.t)) : sndTalks(t), w0 = (t.h3 && t.h3.sound) || '';
+  // (Render 2026-11-17: Foley comes out near full scale, rms 0.22, the pulled-out voices at rms 0.09, so a plain add buried the voices and could clip:
+  // the effects go 10 dB down under voices, 3 dB down on their own, until the slider is moved)
+  const dbAuto = v => v ? SND_DB_VOICE : SND_DB_FX, W = {prompt:S.sndLast && S.sndLast.src===t.id ? S.sndLast.prompt : w0, voice:talks, music:!!S.sndMusic, db:dbAuto(talks), dbSet:false, steps:S.sndSteps || 50, n:1};
+  openSheet(`<h3><span>🔊 Add sound</span><button class="btn" data-close>✕</button></h3>
+    <div class="note">HunyuanVideo-Foley watches the clip and makes new sound effects and room sound for it (no speech). MiniMax's own sound is replaced${talks ? ', except the voices if you keep them' : ''}. The clip itself isn't changed.</div>
+    <div><div class="lab"><span>What it sounds like</span></div><textarea id="sndP" rows="3" style="width:100%;box-sizing:border-box" placeholder="e.g. Rain on the window, a clock ticking, her heels on a wooden floor, fabric rustling">${esc(W.prompt)}</textarea>
+    <div class="note" style="margin-top:4px">Name the sounds, not the picture. Empty = natural sounds of the scene.</div></div>
+    <div class="chips" id="sndOpt"></div><div class="note" id="sndOptN"></div>
+    <div><div class="lab"><span>Effects loudness <b id="sndDbV"></b></span></div><input type="range" id="sndDb" min="-20" max="3" step="1" value="${W.db}" style="width:100%"></div>
+    <div><div class="lab"><span>Quality (steps)</span></div><div class="seg" id="sndSt">${[[25, 'Quick'], [50, 'Full']].map(([v, l]) => `<button data-v="${v}" class="${W.steps===v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    <div><div class="lab"><span>Versions</span></div><div class="seg" id="sndN">${[1, 2, 3].map(k => `<button data-v="${k}" class="${k===1 ? 'on' : ''}">${k}</button>`).join('')}</div></div>
+    ${many.length > 1 ? `<div class="note">${many.length} clips, each with its own pass (and the same words): ${o.skip ? o.skip + ' still rendering are left out. ' : ''}a cut between clips can change the sound there.</div>` : ''}
+    <button class="btn pri" id="sndGo" style="padding:13px;width:100%">🔊 Add sound to ${many.length > 1 ? many.length + ' clips (' + fmtS(F / FPS) + ')' : fmtS(F / FPS)}</button>`);
+  const paint = () => { if(!W.dbSet){ W.db = dbAuto(W.voice); const r = $('#sndDb'); if(r) r.value = W.db; } $('#sndOpt').innerHTML = [['voice', '💬 Keep their voices'], ['music', '🎵 Music allowed']].map(([k, l]) => `<button class="btn${W[k] ? ' pri' : ''}" data-o="${k}">${l}</button>`).join('');
+    $('#sndOptN').textContent = (W.voice ? 'The voices are pulled out of MiniMax\'s sound (so they still match the lips) and laid over the new effects.' : 'Only the new effects: MiniMax\'s sound is dropped.') + (talks && !W.voice ? ' This clip has 💬 lines: they\'ll be silent.' : '') + (W.music ? ' Foley may add music.' : '');
+    $('#sndDbV').textContent = (W.db > 0 ? '+' : '') + W.db + ' dB'; };
+  paint();
+  $('#sndOpt').onclick = e => { const b = e.target.closest('[data-o]'); if(!b) return; W[b.dataset.o] = !W[b.dataset.o]; paint(); };
+  $('#sndDb').oninput = e => { W.db = +e.target.value; W.dbSet = true; paint(); };
+  $$('#sndSt button').forEach(b => b.onclick = () => { W.steps = +b.dataset.v; $$('#sndSt button').forEach(x => x.classList.toggle('on', x===b)); });
+  $$('#sndN button').forEach(b => b.onclick = () => { W.n = +b.dataset.v; $$('#sndN button').forEach(x => x.classList.toggle('on', x===b)); });
+  $('#sndGo').onclick = async () => { const gb = $('#sndGo'); gb.disabled = true; W.prompt = $('#sndP').value;
+    S.sndLast = {src:t.id, prompt:W.prompt}; S.sndMusic = W.music; S.sndSteps = W.steps; save();
+    const one = x => window.H3Sound({take:x.t.id, film:o.film || '', clip:x.clip || '', prompt:W.prompt, voice:W.voice && (!many.length || sndTalks(x.t)), music:W.music, db:W.db, steps:W.steps, n:W.n});
+    let sent = 0; for(const x of many.length ? many : [{t, clip:o.clip}]){ const k = await one(x); if(!k) break; sent += k; }
+    if(sent) closeSheet(); else gb.disabled = false; }; }
+window.H3SoundSheet = o => { if(o.many){ soundSheet(null, o); return true; } const t = deckTake(o.take); if(!t){ toast("That take isn't in H3 Deck on this phone"); return false; } soundSheet(t, o); return true; };
 window.H3Bridging = id => { const t = deckTake(id); return !!(t && bridgeSeams(t).length); }; // (🪄 Smooth track: the last 🧵 bridge goes back, not this)
 // 🧵 Bridge the seams (Jordan 2026-11-07): a long 🪄 smoothing renders in parts that share no motion, so each join can show a small
 // hitch. When the take is done, a short ↻ redo goes over each join: about 1 s (BRIDGE_CTX frames) of the take's own frames is pinned on
@@ -5689,7 +5793,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {soundSheet, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
