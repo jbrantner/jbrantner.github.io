@@ -186,6 +186,15 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       for(let i = 0; i < 40; i++){ const R = H3.wildRoll([c]); o.add(H3.wildCast(c, {wild:R}).stand); } return {shown, noPic, o:[...o].sort(), kind:A.kind}; });
     ok(r.shown && r.noPic && r.kind==='wstand', 'the Wildcards tab has a 🧑 Who she is category (words only)');
     ok(r.o.join('|')==='a mature woman|a woman', 'her stand-in words roll from it, never one under 18: ' + r.o.join(' / ')); }
+  // 🧑 Who can include the wildcard itself; Library picks keep their own look (Jordan 2026-11-16)
+  { const r = await page.evaluate(() => { const S = H3.S; H3.wcats(); const Lc = {id:'Lcz', kind:'char', name:'Zelda', stand:'a woman', desc:'', pics:['p2'], keep:'exact'}; S.lib.push(Lc);
+      const H = H3.wildNew('hair'); H.desc = 'pink hair';
+      const c = {n:9, kind:'char', who:'Wildcard subject 9', stand:'a woman', pics:[], attrs:[], wild:{on:true, cats:['hair'], who:['Lcz'], self:true}}, o = {};
+      for(let i = 0; i < 40; i++){ const R = H3.wildRoll([c])[9]; const k = R.who ? 'zelda:' + (R.a.length ? 'rolled' : 'own') : 'self:' + (R.a.length ? 'rolled' : 'none'); o[k] = 1; }
+      c.wild.whoOwn = false; let dressed = false; for(let i = 0; i < 30; i++){ const R = H3.wildRoll([c])[9]; if(R.who && R.a.length) dressed = true; }
+      return {o:Object.keys(o).sort(), dressed}; });
+    ok(r.o.join()==='self:rolled,zelda:own', 'each take is Zelda (her own look) or the wildcard (a rolled mix): ' + r.o.join(' / '));
+    ok(r.dressed, '"wear the rolled options too" dresses the Library pick'); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
