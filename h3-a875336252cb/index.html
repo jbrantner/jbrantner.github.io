@@ -1713,6 +1713,7 @@ function fillSpare(t, imgs, vids){ const by = {}, order = []; imgs.forEach(r => 
   for(let j = 0; room > 0; j++) for(const n of order){ if(room <= 0) break; const L = by[n]; add.push(Object.assign({}, L[j % L.length], {dup:true})); room--; }
   imgs.splice(at, 0, ...add); }
 function castTake(t, pics){ // the take as it's sent: the pictures of the subjects its words use go after its own
+  if(t && t.swap) return t; // 🔄 a person swap sends exactly its own pictures, under its own subject numbers
   const used = pics ? castUsed(t) : [];
   // 🖼 the shot's own pictures leave room for one picture of each subject its words name (Jordan 2026-11-12)
   const imgs = (t.imgs || []).filter(r => !r.cast).slice(0, Math.max(0, MAXREF.img - used.filter(n => castPics(castOf(n, t.film, t)).length).length));
@@ -2786,6 +2787,7 @@ function canRun(url, job){
   if(job.cont && !(oi.LoadVideo && oi.GetVideoComponents)) return "can't carry on a video (update ComfyUI)";
   if(job.cont && job.contCut && !oi['Video Slice']) return "can't carry on from inside a video (no Video Slice node: update ComfyUI)";
   if(job.lead && !(oi.LoadVideo && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide)) return "can't make a lead-in (update ComfyUI)";
+  if(job.swap && !(oi.MMH3FitReferences && oi.LoadVideo && oi.GetVideoComponents && oi.ImageFromBatch && (!job.swap.pika || (oi.ManualSigmas && oi.KSamplerSelect)))) return "can't swap a person (update ComfyUI or MMH3 Fit References)";
   if(job.redo && !(oi.LoadVideo && oi.GetVideoComponents && oi.ImageFromBatch && oi.MiniMaxH3AddGuide && (oi.ImageBatch || oi.BatchImagesNode))) return "can't redo a stretch (update ComfyUI)";
   if(job.pieces.length > 1 && !(oi.MiniMaxH3MotionContext && oi.MiniMaxH3MotionContextLoadLatent)) return "can't join pieces: H3 Motion Context isn't installed";
   if(job.vids.length && !(oi.MMH3FitReferences && oi.LoadVideo)) return "can't take reference videos (no MMH3 Fit References node)";
@@ -2960,7 +2962,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       // keeps every reference inside the 8 GB budget (the MMH3 Studio low-memory node): videos read at the size they're used
       const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0) + (t.pins || []).length, stop_above:72000};
       imgs.forEach((r, k) => { fi['image_' + (k + 1)] = useFirst ? img(r.id) : refPic(add, oi, names[r.id], r.id, w, h); });
-      t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; });
+      t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:r.file || names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.start != null ? +r.start : r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; }); // (🔄 a swap's clip is read straight from the PC's output, from its own start)
       t.auds.forEach((r, k) => { fi['audio_' + (k + 1)] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
       const fit = add('MMH3FitReferences', fi);
       imgs.forEach((r, k) => { refs['ref_images.ref_image_' + k] = [fit, k]; });
@@ -2971,6 +2973,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       imgs.forEach((r, k) => { refs['ref_images.ref_image_' + k] = useFirst ? img(r.id) : refPic(add, oi, names[r.id], r.id, w, h); });
       t.auds.forEach((r, k) => { refs['ref_audios.ref_audio_' + k] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
     }
+    if(t.swap) prompt = t.swap.text; // 🔄 the swap's own six-part prompt
     const rv = add('MiniMaxH3ReferenceToVideo', Object.assign({clip, vae, audio_vae:avae, prompt, width:w, height:h, length:L, ref_image_size:'match'}, refs));
     cond = [rv, 0]; lat = [rv, 1];
     // 🎚 reference strength: a picture at X% is only in the conditioning for the first X% of the steps; one more MiniMaxH3ReferenceToVideo
@@ -3070,15 +3073,17 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     let px = [add('ImageFromBatch', {image:rIm, batch_index:R.s0, length:have}), 0];
     if(have < L && oi.RepeatImageBatch) px = batchOf(add, oi, px, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:rIm, batch_index:R.s0 + have - 1, length:1}), 0], amount:L - have}), 0]);
     if(have===L || oi.RepeatImageBatch){ const sep = add('LTXVSeparateAVLatent', {av_latent:lat}); lat0 = [add('LTXVConcatAVLatent', {video_latent:[add('VAEEncode', {pixels:px, vae}), 0], audio_latent:[sep, 1]}), 0]; den = Math.max(0.2, +R.str); } }
-  const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:den});
   let out;
+  if(t.swap && t.swap.pika){ // 🔄 Pika Flex's own six steps (the person swap workflow): lcm, CFG 1
+    out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'lcm'}), 0], sigmas:[add('ManualSigmas', {sigmas:SWAP_SIGMAS}), 0], latent_image:lat0});
+  } else { const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:den});
   if(t.fin && finAble(t.model) && pikaOf(oi) && oi.SplitSigmas && oi.DisableNoise){ // 🔀 first model for the motion, PIKA for the last steps
     const sp = add('SplitSigmas', {sigmas:[sig, 0], step:finSplit(t, steps)}), smp = [add('KSamplerSelect', {sampler_name:'res_multistep'}), 0];
     const a1 = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:smp, sigmas:[sp, 0], latent_image:lat0});
     let m2 = [add('UNETLoader', {unet_name:pikaOf(oi), weight_dtype:'default'}), 0];
     for(const l of lorasOf(t)) m2 = [add('LoraLoaderModelOnly', {model:m2, lora_name:l.name, strength_model:+l.str}), 0];
     out = add('SamplerCustomAdvanced', {noise:[add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[sp, 1], latent_image:[a1, 0]});
-  } else out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0});
+  } else out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0}); }
   if(chain && !X) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
@@ -3086,7 +3091,17 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     const t2 = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:HEAD, audio:aud, fps:FPS, match_tail:true}); ims = [t2, 0]; aud = [t2, 1]; }
   if(t.sm && pc.skip){ ims = [add('ImageFromBatch', {image:ims, batch_index:pc.skip, length:L - pc.skip}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:pc.skip / FPS, duration:(L - pc.skip) / FPS}), 0]; } // 🪄 the frames the window before already has
   if(t.lead){ const R = t.lead, k0 = R.gap ? +R.k0 || 0 : 0; ims = [add('ImageFromBatch', {image:ims, batch_index:k0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:k0 / FPS, duration:R.B / FPS}), 0]; } // only the new seconds
-  if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
+  if(t.redo && t.redo.swap){ // 🔄 the swapped stretch in place of the clip's frames; the rest of the take as it was
+    const R = t.redo, n0 = R.b - R.a; let joined = R.a > 0 ? [add('ImageFromBatch', {image:rIm, batch_index:0, length:R.a}), 0] : null;
+    const mid = [add('ImageFromBatch', {image:ims, batch_index:0, length:n0}), 0]; joined = joined ? batchOf(add, oi, joined, mid) : mid;
+    if(R.F - R.b > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:rIm, batch_index:R.b, length:R.F - R.b}), 0]);
+    ims = joined;
+    // 🔊 the clip's own sound (the workflow's default), else MiniMax's sound for the swapped stretch (the take's sound either side of it)
+    if(t.swap.sound || (!oi.AudioConcat && (R.a > 0 || R.F - R.b > 0))) aud = rAu;
+    else { const tr = (a, s, d) => [add('TrimAudioDuration', {audio:a, start_index:Math.round(s * 1000) / 1000, duration:Math.round(d * 1000) / 1000}), 0];
+      let au = tr(aud, 0, n0 / FPS); if(R.a > 0) au = [add('AudioConcat', {audio1:tr(rAu, 0, R.a / FPS), audio2:au, direction:'after'}), 0];
+      if(R.F - R.b > 0) au = [add('AudioConcat', {audio1:au, audio2:tr(rAu, R.b / FPS, (R.F - R.b) / FPS), direction:'after'}), 0]; aud = au; } }
+  else if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
     const R = t.redo; let joined = [add('ImageFromBatch', {image:rIm, batch_index:0, length:R.a + 1}), 0];
     const mid = R.b - R.a - 1; if(mid > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:ims, batch_index:R.a - R.s0 + 1, length:mid}), 0]);
     if(R.F - R.b > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:rIm, batch_index:R.b, length:R.F - R.b}), 0]);
@@ -5313,6 +5328,76 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
   save(); drawTakes(); if(sent && !o.bridge) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
   return sent; };
 window.H3RedoPlan = redoPlan;
+// 🔄 Swap person (Jordan 2026-11-17, after AusBoss's "MiniMax H3 Pika Person Swap" workflow on Civitai): the clip goes in as <Video 1>
+// and each new person's pictures as <Picture n>; MiniMax makes the clip again with them in place of the people named, keeping the place,
+// the moves, the camera and (by default) the clip's own sound. As the workflow does: vanilla MiniMax + Pika's Flex LoRA at 1.0 on Pika's
+// six lcm steps (CFG 1); another model can be picked. The prompt is the workflow's six-part swap wording (AusBoss nodes' H3 Prompt Writer, MIT).
+// The result is a version of the take with only the clip's stretch swapped, so it drops into the clip like ↻ redo does.
+const SWAP_SIGMAS = '1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0', SWAP_MAX = 8, SWAP_PICS = 3;
+const SWAP_SPOTS = {2:['left', 'right'], 3:['left', 'centre', 'right'], 4:['far left', 'left', 'right', 'far right']};
+const swapLora = oi => combo(oi, 'LoraLoaderModelOnly', 'lora_name').find(n => /pika[^\\/]*flex|flex[^\\/]*pika/i.test(bn(n))) || '';
+const swapLoraAny = () => { for(const p of S.pcs){ const n = swapLora(pcOf(p.url).oi); if(n) return n; } return ''; };
+// ppl: [{goes, looks, pics (how many pictures)}] in order. The people who go are <Subject 1..k>, the new ones <Subject k+1..2k>, and the
+// new people's pictures are numbered in order. o: {sound (the clip's own sound plays), talk (they speak as in the clip), clothes (keep the clip's clothes)}
+function swapText(ppl, o){ o = o || {}; const k = ppl.length, sen = x => String(x || '').trim().replace(/\s+/g, ' ').replace(/[.\s]+$/, '');
+  const goes = ppl.map((p, i) => sen(p.goes).replace(/^(?:replace|swap(?:\s+out)?)\s+/i, '').replace(/\s+in the (?:clip|video)$/i, '') || (k > 1 ? 'the person on the ' + SWAP_SPOTS[k][i] : 'the original person'));
+  let pic = 0; const P = ppl.map(p => { const a = []; for(let j = 0; j < Math.max(1, +p.pics || 1); j++) a.push('<Picture ' + (++pic) + '>'); return a.length > 1 ? a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1] : a[0]; });
+  const Go = i => '<Subject ' + (i + 1) + '>', In = i => '<Subject ' + (k + i + 1) + '>', many = k > 1;
+  const defs = ['<Video 1> supplies the place, the action, the timing, the camera movement and the look.'];
+  ppl.forEach((p, i) => defs.push(Go(i) + ' is ' + goes[i] + ' in <Video 1>, selected for replacement.'));
+  ppl.forEach((p, i) => { const L = sen(p.looks);
+    defs.push(o.clothes ? In(i) + ' is the person in ' + P[i] + ', with the same face and hair' + (L ? ' (' + L + ')' : '') + ', wearing the clothes of ' + goes[i] + ' in <Video 1>.'
+      : L ? In(i) + ' is the person in ' + P[i] + ', with the same face and this appearance: ' + L + '. The background and lighting of ' + P[i] + ' are not transferred.'
+      : In(i) + ' is the person in ' + P[i] + ', with the same face, hair and clothes.'); });
+  const sum = '[video editing] Replace ' + ppl.map((p, i) => Go(i) + ' with ' + In(i)).join(' and ') + ' while preserving the original action, place, camera and look of <Video 1>.';
+  const ret = ['<Video 1>: partially_preserved - keep the place, the action, the timing, the camera movement and the look; change only the ' + (many ? 'people' : 'person') + '.'];
+  ppl.forEach((p, i) => ret.push(Go(i) + ': removed - replace ' + goes[i] + ' with ' + In(i) + ' throughout.'));
+  ppl.forEach((p, i) => ret.push(In(i) + ' (appears in [Shot 1]): ' + (o.clothes ? 'attribute_transfer - apply only the face and hair to the original performance; the clothes of ' + goes[i] + ' in <Video 1> stay as they are; the background of ' + P[i] + ' is not transferred.'
+    : 'attribute_transfer - apply the defined appearance to the original performance; the background of ' + P[i] + ' is not transferred.')));
+  const shot = ppl.map((p, i) => { const L = sen(p.looks);
+    const looks = o.clothes ? 'has the face and hair of the person in ' + P[i] + ', in the clothes of ' + goes[i] + ' in <Video 1>' : L ? 'has the defined appearance from ' + P[i] + ': ' + L : 'has the face, hair and clothes of the person in ' + P[i];
+    return In(i) + ' occupies the starting position of ' + goes[i] + ' and follows the same route, movements, timing and pace. ' + In(i) + ' ' + looks + '. The replacement stays present throughout, from the first frame, ending at the original performance\'s final position. Do not show ' + goes[i] + ' in that role at any time; there is no transition or morph into the replacement.'; });
+  shot.push(!many && goes[0]==='the original person' ? 'Show one person throughout.' : 'Everyone else stays as they are in <Video 1>.');
+  if(o.sound && o.talk) ppl.forEach((p, i) => shot.push(In(i) + ' speaks as in <Video 1>, each word landing exactly on the lip movement of <Video 1>.'));
+  shot.push('The camera follows the movement of <Video 1>.');
+  return 'subject_definitions:\n' + defs.join('\n') + '\n\nsummary:\n' + sum + '\n\nretention_analysis:\n' + ret.join('\n') + '\n\ndetailed_description:\nRetain the look of <Video 1>.\n[Shot 1] ' + shot.join(' ')
+    + '\n\noverall_soundscape:\n' + (o.sound ? 'The original sound of <Video 1> continues throughout.' : 'The steady sound of the place continues throughout.') + '\n\nnon_diegetic_music:\nN/A'; }
+// o: {take, a, b (s in the take: the clip's stretch), film, clip, ppl:[{n, goes, looks, pics:[media ids]}], model:'' (= vanilla + Pika Flex) or a
+// model key, sound, talk, clothes, n (versions)}
+// the film's characters who can come in: their pictures and a 'looks like' line from their card (Jordan writes the descriptions herself)
+const swapPeople = (film, t) => castFor(film).filter(c => (c.kind || 'char')==='char').map(c => { const w = wildCast(c, t) || c, more = (() => { try{ return castMoreT(w, t || {film}); }catch(e){ return castMore(w, t || {film}); } })();
+  return {n:c.n, name:castName(c), pics:castPics(w).slice(), looks:[String(w.stand || '').trim().replace(/[\s.]*$/, ''), more].filter(Boolean).join(', ')}; });
+window.H3Swap = async o => { const src = deckTake(o.take), fl = takeFile(src);
+  if(!src){ toast("That take isn't in H3 Deck on this phone"); return 0; }
+  if(!fl){ toast('That take has no finished video yet'); return 0; }
+  const F = takeFrames(src), A = Math.max(0, Math.min(F - 9, Math.round((+o.a || 0) * FPS))), B = Math.max(A + 9, Math.min(F, Math.round((o.b != null ? +o.b : F / FPS) * FPS))), n0 = B - A, L = gridUp(n0);
+  if(n0 > SWAP_MAX * FPS + 2){ toast('🔄 Swap takes up to ' + SWAP_MAX + ' s at a time. ✂ Split the clip first.', 6000); return 0; }
+  const ppl = (o.ppl || []).filter(p => p && (p.pics || []).length).slice(0, 4); if(!ppl.length){ toast('Pick who comes in first (someone with pictures)'); return 0; }
+  const per = Math.max(1, Math.min(SWAP_PICS, Math.floor(9 / ppl.length))), imgs = [];
+  ppl.forEach(p => { p.use = p.pics.slice(0, per); p.use.forEach(id => imgs.push({id, cast:+p.n || 0, desc:'', keep:'exact'})); });
+  const opt = {sound:o.sound!==false, talk:!!o.talk, clothes:!!o.clothes}, text = swapText(ppl.map(p => ({goes:p.goes, looks:p.looks, pics:p.use.length})), opt);
+  let pika = !o.model, lora = ''; if(pika){ lora = swapLoraAny(); if(!lora){ toast('🔄 No PC has the Pika Flex LoRA (pika_h3_flex_ref2va_v1) yet. Pick another model in the sheet, or add the LoRA first.', 7000); return 0; } }
+  const label = '🔄 ' + ppl.map(p => (p.name || 'Someone') + ' in for ' + (String(p.goes || '').trim() || 'the person')).join(', '), key = uid('k'), n = Math.max(1, Math.min(3, +o.n || 1));
+  let sent = 0; const extra = {};
+  for(let k = 0; k < n; k++){
+    const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31);
+    t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
+    Object.assign(t, {back:null, prompt:label, seconds:F / FPS, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, combo:null, lead:null, toFilm:null, pins:[], mq:'', follow:[], auds:[],
+      ctl:null, ctl2:null, ctxDirs:null, from:null, sm:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false,
+      h3:null, neg:'', rstr:null, pstr:0, fin:null, shuffle:0, look:null, blend:null, refOff:null, imgs, vids:[{file:fileArg(fl), sound:opt.sound, start:A / FPS}],
+      swap:Object.assign({text, pika, ppl:ppl.map(p => ({n:+p.n || 0, name:p.name || '', goes:p.goes || '', looks:p.looks || '', pics:p.use.length}))}, opt),
+      redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:false, film:o.film || '', clip:o.clip || '', key, swap:true, a:A, b:B, s0:A, L, F, Fout:F, pins:[]},
+      pieces:[{start:0, gen:L, deliv:L, ctx:0, prompt:label, state:'new'}]});
+    if(pika){ t.model = famKey('minimax_h3_ref2va_pruned_int8_convrot.safetensors'); t.turbo = false; t.steps = 6; t.loras = [{name:lora, str:1, words:''}]; }
+    else { t.model = o.model; t.turbo = !!o.turbo; t.steps = 0; t.loras = []; }
+    if(src.up && src.up.crop && src.final && +src.up.scale > 1){ const d = upDims(src); t.w = d.w; t.h = d.h; } // (a ✨ take's video is bigger than the take says)
+    t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
+    extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
+    S.takes.unshift(t); drawTakes();
+    try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
+  }
+  save(); drawTakes(); if(sent) toast('🔄 ' + (sent > 1 ? sent + ' swaps' : 'Swap') + ' of ' + fmtS(A / FPS) + '–' + fmtS(B / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and ') + '. It drops into the clip when it\'s done.', 6000);
+  return sent; };
 window.H3Bridging = id => { const t = deckTake(id); return !!(t && bridgeSeams(t).length); }; // (🪄 Smooth track: the last 🧵 bridge goes back, not this)
 // 🧵 Bridge the seams (Jordan 2026-11-07): a long 🪄 smoothing renders in parts that share no motion, so each join can show a small
 // hitch. When the take is done, a short ↻ redo goes over each join: about 1 s (BRIDGE_CTX frames) of the take's own frames is pinned on
@@ -5562,7 +5647,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
