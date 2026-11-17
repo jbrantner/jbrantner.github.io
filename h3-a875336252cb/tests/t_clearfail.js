@@ -52,11 +52,12 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   PCS[M].line = []; await tick();
   ok((await T(A)).state==='failed' && (await T(B)).state==='failed' && (await T(C)).state==='done', 'two read stopped, one finished');
   ok(await page.evaluate(() => !document.getElementById('clearFail').hidden), 'the 🧹 Clear failed button shows under Renders');
+  await page.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); t.pieces[0].err = 'ComfyUI hit an error'; t.pieces[0].lost = true; t.selfAt = Date.now() + 9e6; }, B); // B errored and is waiting to send itself again
   const aDir = await page.evaluate(id => H3.outDir(H3.S.takes.find(x => x.id===id)), A); FILES.add(aDir + '|piece_01_00001_.mp4'); // A's clip is on the PC after all
   await page.click('#clearFail'); await page.waitForFunction(() => document.getElementById('clearFail').textContent.includes('Clear failed'), null, {timeout:15000}); await page.waitForTimeout(300);
   const left = await ids(); console.log(JSON.stringify(left), A, B, C);
   ok(left.includes(C), 'the rendered take stays');
-  ok(!left.includes(B), 'the cancelled take with no clip is gone');
+  ok(!left.includes(B), 'the errored take waiting to resend itself, with no clip, is gone');
   let a = await T(A); ok(a && a.late && (a.state==='working' || a.state==='done'), 'the cancelled take whose clip turned up stays and comes back: ' + JSON.stringify(a));
   await tick(); a = await T(A); ok(a.state==='done' && a.final==='piece_01_00001_.mp4', 'it finishes with its clip');
   ok(await page.evaluate(() => document.getElementById('clearFail').hidden), 'nothing failed left, so the button hides');

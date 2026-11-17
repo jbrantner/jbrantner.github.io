@@ -4488,8 +4488,9 @@ $('#clearDone').onclick = () => { const keep = filmKeeps(), gone = S.takes.filte
 // 🧹 Clear failed (Jordan 2026-11-17: "a button that clears failed or canceled renders from Renders and Wildcards. Leaving only those that
 // have actually rendered"): takes off the list only, never a file. Before a stopped take goes, its parts are looked for on its PC (the
 // PC's history, then the files, as 🛟 lateFinish does): if every part is there it rendered after all, so it comes back as finished.
-// Kept: takes a 🎞 Films timeline uses, a take a running take carries on from, one about to be sent again by itself, and a take on a PC
-// that's off (it can't be checked yet).
+// Cancelled is a stopped take too (state 'failed', err 'Cancelled'), and so is one waiting to send itself again (2026-11-17, Jordan:
+// "make sure clearing failed also includes canceled. Just anything that didn't complete"). Kept: takes a 🎞 Films timeline uses, a take
+// a running take carries on from, and a take stopped in the last few hours on a PC that's off (it can't be checked yet).
 const noClip = t => !t.final && !t.smoothed && !(t.pieces || []).some(p => p.file);
 const isFailed = t => t.state==='failed' || (t.state==='done' && noClip(t));
 async function partFile(t, i){ const p = t.pieces[i]; if(p.file) return p.file;
@@ -4500,21 +4501,21 @@ async function partFile(t, i){ const p = t.pieces[i]; if(p.file) return p.file;
 let CLEARING = false;
 async function clearFailed(L, btn){ if(CLEARING) return;
   const keep = filmKeeps(); S.takes.filter(t => t.state==='working').forEach(w => [w.carry && w.carry.src, w.redo && w.redo.src, w.redo && w.redo.root, w.from && w.from.id].forEach(id => id && keep.add(id)));
-  const bad = L.filter(isFailed), cand = bad.filter(t => !keep.has(t.id) && !(t.state==='failed' && t.selfAt)), held = bad.length - cand.length;
-  if(!cand.length){ toast(bad.length ? 'The failed ones are on a 🎞 Films timeline or being sent again, so they stay' : 'Nothing failed here'); return; }
+  const bad = L.filter(isFailed), cand = bad.filter(t => !keep.has(t.id)), held = bad.length - cand.length;
+  if(!cand.length){ toast(bad.length ? 'The failed ones are on a 🎞 Films timeline, so they stay' : 'Nothing failed here'); return; }
   CLEARING = true; const was = btn && btn.textContent; if(btn){ btn.disabled = true; btn.textContent = '🔎 Checking…'; }
   const gone = new Set(); let back = 0, off = 0;
   try{ for(const t of cand){ const ps = t.pieces || [];
       if(t.state!=='failed' || !ps.length){ gone.add(t.id); continue; }
-      if(!pcOf(t.pc).online){ off++; continue; }
+      if(!pcOf(t.pc).online){ const last = Math.max(0, ...ps.map(p => +p.tq || 0)); if(Date.now() - last < LATE_H){ off++; continue; } gone.add(t.id); continue; }
       const found = []; for(let i = 0; i < ps.length; i++){ const f = await partFile(t, i); if(!f) break; found.push(f); }
       if(found.length===ps.length){ ps.forEach((p, i) => { if(p.state!=='done'){ p.file = found[i]; p.state = 'done'; p.err = ''; p.lost = false; p.t1 = p.t1 || Date.now(); } });
-        Object.assign(t, {state:'working', late:1}); delete LATE[t.id]; back++; continue; }
+        Object.assign(t, {state:'working', late:1, selfAt:0}); delete LATE[t.id]; back++; continue; }
       gone.add(t.id); }
     if(gone.size){ S.takes = S.takes.filter(t => !gone.has(t.id)); tidyMedia(); }
     save(); drawTakes(); if(back) tickSoon(300);
   }finally{ CLEARING = false; if(btn && btn.isConnected){ btn.disabled = false; btn.textContent = was; } }
-  toast('🧹 ' + (gone.size ? gone.size + ' failed render' + (gone.size===1 ? '' : 's') + ' cleared' : 'Nothing cleared') + (back ? '; ' + back + ' had rendered after all, so ' + (back===1 ? 'it\'s' : 'they\'re') + ' back' : '') + (off ? '; ' + off + ' on a PC that\'s off stay until it\'s on' : '') + (held ? '; ' + held + ' kept (on a Films timeline or being sent again)' : ''), 6000); }
+  toast('🧹 ' + (gone.size ? gone.size + ' failed render' + (gone.size===1 ? '' : 's') + ' cleared' : 'Nothing cleared') + (back ? '; ' + back + ' had rendered after all, so ' + (back===1 ? 'it\'s' : 'they\'re') + ' back' : '') + (off ? '; ' + off + ' on a PC that\'s off stay until it\'s on' : '') + (held ? '; ' + held + ' kept (on a Films timeline)' : ''), 6000); }
 $('#clearFail').onclick = e => clearFailed(S.takes.filter(inMine), e.currentTarget);
 // a clip still in pieces plays them one after another, then starts over
 document.addEventListener('ended', e => { const v = e.target; if(!(v instanceof HTMLVideoElement) || !v.dataset.list) return; let l; try{ l = JSON.parse(v.dataset.list); }catch(er){ return; }
