@@ -1338,7 +1338,7 @@ const lineSay = s => { s = String(s || '').replace(/[<>]/g, '').replace(/[“”
   return /[.?!]$/.test(s) ? s : s.replace(/[,;:\s]+$/, '') + '.'; };
 const lineHow = s => String(s || '').replace(/[<>]/g, '').replace(/^\s*(says|said|say)\b\s*/i, '').trim().replace(/[\s.,;:!?]+$/, '');
 const lineLang = L => (String((L && L.lang) || '').replace(/[^\p{L} -]/gu, '').trim() || 'English').replace(/^./, c => c.toUpperCase());
-const actWords = s => String(s || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
+const actWords = s => String(s || '').replace(/<\s*subject\s*(\d+)\s*>/gi, '\u0001$1\u0002').replace(/[<>]/g, '').replace(/\u0001(\d+)\u0002/g, '<Subject $1>').replace(/\s+/g, ' ').trim(); // 👥 other characters' chips stay in (Jordan 2026-11-16)
 const actLow = (L, w) => L && L.n && /^[A-Z][a-z]/.test(w) && !/^I\b/.test(w) ? w[0].toLowerCase() + w.slice(1) : w; // "<Subject 1> spins", not "<Subject 1> Spins"
 const tagEnd = (v, p) => { (v || '').replace(/<[^<>\n]*>/g, (m, off) => { if(p > off && p < off + m.length) p = off + m.length; return m; }); return p; }; // never put a new chip inside another tag
 // on a take's card an action chip reads as its words (2026-11-14: a bare "<Action 5>" looked like it was never filled in)
@@ -1351,7 +1351,7 @@ function lineOut(txt, T){ txt = txt == null ? '' : String(txt); if(/<\s*action\s
   return txt.replace(/<\s*dialogue\s*(\d+)\s*>(\s*\.(?!\.))?/gi, (m, k) => { const L = lineOf(k, T), say = L && lineSay(L.text); if(!say) return '';
     const key = L.n ? 'n' + L.n : 'k' + k, id = ids[key] = ids[key] || ++nx, how = lineHow(L.how), who = L.n ? '<Subject ' + L.n + '>' : 'A voice';
     return who + ' (S' + id + ') says' + (L.vo ? ' in an off-screen voiceover' + (how ? ', ' + how : '') + ': ' : (how ? ' ' + how : '') + ', ') + '<d>[' + lineLang(L) + '] ' + say + '</d>' + (L.vo ? ' while their lips remain completely closed.' : ''); }); }
-const lineSubs = (txt, T) => String(txt || '').replace(LNRE, (m, k) => { const L = lineOf(k, T); return (L && L.n ? '<Subject ' + L.n + '>' : '') + pchAlso(L).concat(actAs(L)).map(x => ' <Subject ' + x.n + '>').join(''); }); // who speaks counts as named
+const lineSubs = (txt, T) => String(txt || '').replace(LNRE, (m, k) => { const L = lineOf(k, T); return (L && L.n ? '<Subject ' + L.n + '>' : '') + pchAlso(L).concat(actAs(L)).map(x => ' <Subject ' + x.n + '>').join('') + (L && L.act ? [...String(L.text || '').matchAll(/<\s*subject\s*(\d+)\s*>/gi)].map(x => ' <Subject ' + x[1] + '>').join('') : ''); }); // who speaks counts as named
 const lineKeys = txt => [...String(txt || '').matchAll(LNRE)].map(m => +m[1]);
 function lineSnap(f){ try{ autoSync(f); }catch(e){} const o = {}; for(const k of lineKeys([f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'))){ const L = lineOf(k); if(L) o[k] = Object.assign({}, L); } return o; }
 // the chip: "Laura line 1" (her first line in these words, her second is "Laura line 2")
@@ -1511,11 +1511,16 @@ function wildMark(t){ delete t.wild; delete t.wildFrom;
   const r = wildRoll(); if(r) t.wild = r; return wildActs(t); }
 // 🥋 a 🎲 random action chip (L.rand): every take picks one of the 🎲 Wildcards tab's 🥋 Action options for it; the doer is still the chip's
 // <Subject n>, so a 🧑 Who roll swaps who does it. A carry-on keeps the clip before's actions. t.wildActs = {k: option id}
+// 👥 an action option can name others (Jordan 2026-11-16: "how do I randomize an action if there's no way to put in placeholder wildcard or library
+// characters"): a <Subject n> chip names that character; {someone} is one of the other characters in the shot, picked once per take
+function wActText(A, t, L){ let w = wActWords(A); if(/\{\s*someone(?:\s+else)?\s*\}/i.test(w)){ const used = castUsed(Object.assign({}, t, {lines:{}})).map(Number).filter(n => n!==+(L && L.n)), all = (S.cast || []).filter(c => (c.kind || 'char')==='char' && c.n!==+(L && L.n)).map(c => c.n), P = used.length ? used : all;
+    const who = P.length ? '<Subject ' + P[rnd(P.length)] + '>' : 'someone'; w = w.replace(/\{\s*someone(?:\s+else)?\s*\}/gi, who); }
+  return wHasChoice(A) || /\{/.test(w) ? wChoose(w, A.split) || w : w; }
 function wildActs(t, src){ delete t.wildActs; src = src || [t.carry && t.carry.src, t.lead && t.lead.src, t.redo && t.redo.src, t.from && t.from.id].map(id => id && S.takes.find(x => x.id===id)).find(x => x && x.wildActs);
   const O = wopts('act').filter(A => wActWords(A) && !MINOR.test(wActWords(A))), keep = ((S.wildKeep || {})[filmK()] || {})._acts;
   for(const [k, L] of Object.entries(t.lines || {})){ if(!L || !L.act || !L.rand) continue;
     const id = (src && src.wildActs && src.wildActs[k]) || (keep && keep[k]) || (O.length ? O[rnd(O.length)].id : ''), A = id && libOf(id); if(!A) continue;
-    const at = src && src.wildActs && src.wildActs[k] && ((src.lines || {})[k] || {}).text, txt = at || (wHasChoice(A) ? wChoose(wActWords(A), A.split) || wActWords(A) : wActWords(A));
+    const at = src && src.wildActs && src.wildActs[k] && ((src.lines || {})[k] || {}).text, txt = at || wActText(A, t, L);
     t.lines[k] = Object.assign({}, L, {name:A.name || txt.split(' ').slice(0, 3).join(' '), text:txt}); delete t.lines[k].lib; (t.wildActs = t.wildActs || {})[k] = id; }
   return t; }
 const wildAny = () => (S.cast || []).some(c => c.wild && c.wild.on && (wCatsOf(c.wild).length || (c.wild.who || []).length));
@@ -1538,9 +1543,12 @@ function drawWild(){ const el = $('#wildTab'); if(!el || el.hidden) return; fixT
     <div class="lab" style="margin-top:14px"><span>＋ A new category</span></div>
     <div class="row" style="gap:6px"><input id="wdCatName" placeholder="e.g. 💄 Makeup, 👠 Shoes, 🎨 Hair colour" style="flex:1;min-width:0"><button class="btn" data-wt="addcat:attr">＋ Add</button><button class="btn" data-wt="addcat:wear" title="Clothing: it dresses her">＋ 👗</button></div></details>`;
   $('#wdOpts').ontoggle = e => { S.wdOpen = e.target.open; save(); }; }
-function wildOpt(id){ const A = (S.wlib || []).find(x => x.id===id); if(!A) return; const C = wcatOf(A.cat) || {name:'Option'}, P = libPics(A), bust = BUSTW.test([A.name, A.desc].join(' ')), ac = A.kind==='wact';
+let WO_POS = null, WO_ID = null; document.addEventListener('focusout', e => { if(e.target && e.target.dataset && e.target.dataset.wof==='desc') WO_POS = e.target.selectionStart; });
+function wildOpt(id){ if(WO_ID!==id){ WO_POS = null; WO_ID = id; } const A = (S.wlib || []).find(x => x.id===id); if(!A) return; const C = wcatOf(A.cat) || {name:'Option'}, P = libPics(A), bust = BUSTW.test([A.name, A.desc].join(' ')), ac = A.kind==='wact';
   openSheet(`<h3><span>🎲 ${esc(C.name)}</span><button class="btn" data-close>✕</button></h3><div id="woBox">
     <div class="lab"><span>Name</span></div><input data-wof="name" value="${esc(A.name || '')}" placeholder="${ac ? 'e.g. Twirl (what the chip says)' : A.kind==='wear' ? 'e.g. Red silk slip dress' : 'e.g. Short silver bob'}">
+    ${ac ? `<div class="lab" style="margin-top:8px"><span>👥 Put someone in the words (tap, it goes in at the cursor)</span></div><div class="chips">${(S.cast || []).filter(c => (c.kind || 'char')==='char').map(c => `<button class="btn sm" data-wo="sub:${c.n}">${esc(chipName(c))}</button>`).join('')}<button class="btn sm" data-wo="sub:someone">🎲 someone else</button></div>
+    <div class="wdNote" style="margin-top:4px">The chip's own character does it; a name here is someone else in the action (e.g. <i>hugs &lt;Subject 2&gt; from behind</i>). 🎲 someone else is one of the others in the shot, picked each take.</div>` : ''}
     <div class="lab" style="margin-top:8px"><span>${ac ? 'What they do (sent as the 🥋 action chip\'s words, for whoever the chip points at)' : 'Words (sent in her description; with no picture, these are the option)'}</span></div>
     <textarea data-wof="desc" rows="3" style="width:100%;box-sizing:border-box" placeholder="${ac ? 'e.g. spins slowly on the spot, her skirt flaring out' : A.kind==='wear' ? 'e.g. a red silk slip dress with thin straps' : 'e.g. chin-length silver bob with a blunt fringe'}">${esc(A.desc || '')}</textarea>
     ${`<button class="btn${A.split ? ' pri' : ''}" data-wo="split" style="width:100%;margin-top:6px">✂ One sentence per take: ${A.split ? 'on' : 'off'}</button>`}
@@ -1557,6 +1565,8 @@ function wildOpt(id){ const A = (S.wlib || []).find(x => x.id===id); if(!A) retu
     if(a==='pic'){ pickLib = A.id; pickFile('lib'); return; }
     if(a==='unpic') libPics(A).splice(+v, 1);
     if(a==='split') A.split = !A.split;
+    if(a==='sub'){ const ta = box.querySelector('[data-wof="desc"]'), tok = v==='someone' ? '{someone}' : '<Subject ' + v + '>', p = ta.selectionStart != null && document.activeElement===ta ? ta.selectionStart : (WO_POS != null ? WO_POS : ta.value.length), x = ta.value, pre = p && !/\s$/.test(x.slice(0, p)) ? ' ' : '';
+      A.desc = x.slice(0, p) + pre + tok + ' ' + x.slice(p).replace(/^\s+/, ''); WO_POS = p + pre.length + tok.length + 1; save(); drawWild(); wildOpt(A.id); const t2a = $('#woBox [data-wof="desc"]'); if(t2a){ t2a.focus(); t2a.selectionStart = t2a.selectionEnd = WO_POS; } return; }
     if(a==='del'){ if(!confirm('Delete ' + (A.name || 'this option') + '?')) return; S.wlib = S.wlib.filter(x => x!==A); save(); closeSheet(); drawWild(); drawCast(); return; }
     save(); drawWild(); wildOpt(A.id); }; }
 function wildNote(c){ const w = c.wild; if(!w || !w.on) return ''; const K = wCatsOf(w).map(wcatOf).filter(Boolean), keep = (S.wildKeep || {})[filmK()], who = (w.who || []).map(libOf).filter(Boolean);
@@ -5415,7 +5425,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }

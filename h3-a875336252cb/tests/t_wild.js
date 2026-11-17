@@ -160,6 +160,24 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       const c = {n:9, kind:'char', who:'W', stand:'a woman', pics:[], attrs:[], wild:{on:true, cats:['hair', 'eyes', 'wear']}}, seen = new Set();
       for(let i = 0; i < 40; i++){ const t = {wild:H3.wildRoll([c])}; seen.add(H3.wildWords(c, t).map(x => x[0]).join(',')); } return [...seen]; });
     ok(o.length >= 4, 'the rolled lines come in different orders: ' + o.join(' / ')); }
+  // 👥 an action option can name others: <Subject n> chips and 🎲 {someone} (Jordan 2026-11-16)
+  { const r = await page.evaluate(() => { H3.wcats(); const S = H3.S; S.wlib = (S.wlib || []).filter(A => A.cat!=='act');
+      const A = H3.wildNew('act'); A.name = 'Hug'; A.desc = 'hugs {someone} from behind'; A.split = false;
+      const c2 = S.cast.find(c => c.n===2) || (S.cast.push({n:2, kind:'char', who:'Bea', stand:'a woman', pics:[], attrs:[]}), S.cast.find(c => c.n===2));
+      const out = new Set(); for(let i = 0; i < 20; i++) out.add(H3.wActText(A, {prompt:'<Subject 1> and <Subject 2> in a park.', pieces:[]}, {n:1}));
+      const B = H3.wildNew('act'); B.desc = 'pulls <Subject 2> close'; B.split = false;
+      H3.wildOpt(A.id); const chips = [...document.querySelectorAll('#woBox [data-wo^="sub:"]')].map(b => b.textContent);
+      document.querySelector('#woBox [data-wo="sub:2"]').click(); const after = S.wlib.find(x => x.id===A.id).desc; document.querySelector('#woBox [data-close]').click();
+      return {out:[...out], kept:H3.wActText(B, {prompt:'', pieces:[]}, {n:1}), chips, after}; });
+    ok(r.out.length===1 && r.out[0]==='hugs <Subject 2> from behind', '🎲 someone else is the other character in the shot: ' + r.out.join(' / '));
+    ok(r.kept==='pulls <Subject 2> close', 'a <Subject n> chip stays in the action words: ' + r.kept);
+    ok(r.chips.length >= 2 && /someone else/.test(r.chips.join()) && /<Subject 2>/.test(r.after), 'the action option has chip buttons that put a name in: ' + r.chips.join(', ') + ' → ' + r.after);
+    const P2 = await page.evaluate(() => { const S = H3.S; S.lines = {7:{act:1, n:1, name:'🎲 Random action', text:'', rand:1}}; S.f.prompt = 'In a park. <Subject 1> <Action 7>.';
+      const A = S.wlib.find(x => x.name==='Hug'); S.wlib = S.wlib.filter(x => x.cat!=='act' || x===A);
+      const t = H3.wildMark(H3.snapshot()); return {line:t.lines[7] && t.lines[7].text, used:H3.castUsed ? H3.castUsed(t) : null}; });
+    ok(/hugs <Subject 2> from behind/.test(P2.line || ''), 'a random action can bring in the other character: ' + JSON.stringify(P2));
+    const tq = await page.evaluate(() => { const t = H3.wildMark(H3.snapshot()); t.id = 'tQ'; return t; }); const PQ = await prom(tq);
+    ok(/hugs (a |the )?[\w ]*woman from behind/.test(PQ.p) && !/<Subject 2>/.test(PQ.p.split('summary')[1] || ''), 'the character named only in the action goes out as her stand-in words: ' + PQ.p.slice(0, 400).replace(/\n/g, ' | ')); }
   // back to Films: its own form comes back
   await page.evaluate(() => H3.setTab ? H3.setTab('films') : document.querySelector('#tabs [data-tab="films"]').click());
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
