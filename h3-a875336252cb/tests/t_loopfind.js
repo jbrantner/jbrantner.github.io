@@ -26,5 +26,11 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const W = await page.evaluate(() => { H3.loopWhole(); return {st:H3.S.f.smStart, s:H3.S.f.seconds, p:H3.S.f.prompt}; });
   ok(W.st===0 && W.s >= 7.9 && /slides in/.test(W.p), 'Whole clip puts it all back: ' + JSON.stringify(W));
   ok(await page.evaluate(() => H3.shiftTimed('[1s-] carries on.', 2, 3)==='[0s-] carries on.'), 'an open line keeps running');
+  // (Jordan 2026-11-17: "use the longest loop it can find") a 10 s clip that swings every 2 s, with a slow drift so a short stretch matches a
+  // little better than a long one: at least half the clip is used, not the 2 s one
+  const LG = await page.evaluate(() => { const w = 16, h = 16, F = []; for(let k = 0; k < 80; k++){ const g = new Uint8Array(w * h), ph = Math.sin(2 * Math.PI * k / 16), dr = k * 0.6;
+      for(let y = 0; y < h; y++) for(let x = 0; x < w; x++) g[y * w + x] = Math.max(0, Math.min(255, 128 + 100 * ph * Math.cos((x + y) / 5) + dr)); F.push(g); }
+    const r = H3.loopScore(F, w, h, 16); return {secs:(r.best.j - r.best.i) / 8, score:r.best.score}; });
+  ok(LG.secs >= 4.9 && LG.score >= 60, 'a slowly drifting 10 s clip loops at least half of it (not the 2 s that matches a little better): ' + JSON.stringify(LG));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();

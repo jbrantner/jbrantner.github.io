@@ -1149,14 +1149,21 @@ async function measureSpacing(){
 // someone walking in the room, which you can't loop. Is there a way to measure loop ability?"). Frames are read 8 a second, small and grey;
 // a stretch from frame i to frame j loops well when the frames around j look like the frames around i (same picture AND the same motion
 // going into the seam: five frames on each side are compared in step). Loopability = 100 when they match, 0 when the turn is as big a change
-// as one second of the clip normally is. A longer loop gets a small bonus, so a stretch is only cut off when it really doesn't loop.
-const LOOP_SF = 8, LOOP_MIN = 2;
+// as one second of the clip normally is. The LONGEST stretch within LOOP_TOL points of the best is used, at least half
+// the clip whenever half the clip loops OK, so the loop isn't a couple of seconds of a long clip.
+const LOOP_SF = 8, LOOP_MIN = 2, LOOP_TOL = 10, LOOP_OK = 60;
 function loopScore(F, w, h, minN){ const n = F.length, W = w >> 2, H = h >> 2, sm = F.map(g => { const o = new Float32Array(W * H); for(let y = 0; y < H; y++) for(let x = 0; x < W; x++){ let a = 0; for(let yy = 0; yy < 4; yy++) for(let xx = 0; xx < 4; xx++) a += g[(y * 4 + yy) * w + x * 4 + xx]; o[y * W + x] = a / 16; } return o; });
   const D = []; for(let i = 0; i < n; i++){ D.push(new Float32Array(n)); } for(let i = 0; i < n; i++) for(let j = i + 1; j < n; j++){ let a = 0; const p = sm[i], q = sm[j]; for(let k = 0; k < p.length; k++) a += Math.abs(p[k] - q[k]); D[i][j] = D[j][i] = a / p.length; }
   const sec = [], s1 = LOOP_SF; for(let i = 0; i + s1 < n; i++) sec.push(D[i][i + s1]); sec.sort((a, b) => a - b); const base = Math.max(2, sec.length ? sec[Math.floor(sec.length / 2)] : 10);
   const seam = (i, j) => { let a = 0, c = 0; for(let k = -2; k <= 2; k++){ const p = i + k, q = j + k; if(p < 0 || q >= n || q - p < 1) continue; a += D[p][q] * (k===0 ? 2 : 1); c += k===0 ? 2 : 1; } return c ? a / c : Infinity; };
   const sc = (i, j) => Math.max(0, Math.min(100, Math.round(100 * (1 - seam(i, j) / base))));
-  let best = null; for(let i = 0; i < n; i++) for(let j = i + minN; j < n; j++){ const s0 = sc(i, j), v = s0 + 15 * (j - i) / (n - 1); if(!best || v > best.v) best = {i, j, score:s0, v}; }
+  // (Jordan 2026-11-17: "use the longest loop it can find … so I don't have a 15 second loop that then uses 2 seconds of footage"): a loop
+  // uses at least half the clip when any such stretch loops OK (LOOP_OK); among those, the LONGEST one within LOOP_TOL points of the best
+  // one wins. Only a clip with no OK half-length stretch (someone walking in for most of it) falls back to shorter loops, same rule.
+  const all = []; for(let i = 0; i < n; i++) for(let j = i + minN; j < n; j++) all.push([i, j, sc(i, j)]);
+  const pick = L => { let top = 0; for(const x of L) if(x[2] > top) top = x[2]; let b = null;
+    for(const [i, j, s0] of L){ if(s0 < top - LOOP_TOL) continue; if(!b || j - i > b.j - b.i || (j - i===b.j - b.i && s0 > b.score)) b = {i, j, score:s0, v:s0}; } return b; };
+  const half = all.filter(x => x[1] - x[0] >= (n - 1) / 2), hb = half.length ? pick(half) : null, best = hb && hb.score >= LOOP_OK ? hb : pick(all) || hb;
   return {best, whole:n > 2 ? sc(0, n - 1) : 0, base}; }
 async function findLoop(id, onp){ const m = S.media[id] || {}, b = await blobOf(id); if(!b) throw new Error('the video is no longer on the phone');
   const dur = Math.min(SM_MAX + 2, m.dur || 15), N = Math.floor(dur * LOOP_SF), step = FPS / LOOP_SF;
