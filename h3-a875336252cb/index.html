@@ -2774,7 +2774,19 @@ function poseLine(imgs, t0, secs){ const out = []; (imgs || []).forEach((r, k) =
 const h3Words = s => (s.match(/[A-Za-z0-9'’-]+/g) || []).length;
 
 // ---------- which PC can run a take ----------
-function canRun(url, job){
+// 🎲 Wildcards only (Jordan 2026-11-17: "a switch ... moves all wildcard jobs onto the current computer that is switched on and that computer only
+// accepts wildcard jobs"). p.wild on a PC: it takes 🎲 Wildcard clips only, and every 🎲 Wildcard clip goes to it while it is on and reachable
+// (if it is off or can't be reached, or lacks what a clip needs, the other PCs take them as before). Waiting takes already in a line move over (wildSweep).
+function wildJob(j, d){ if(!j) return false; if(j.film===WK || (j.set && j.set.film===WK) || (j.wild && Object.keys(j.wild).some(k => k!=='_acts'))) return true;
+  if(d) return false; const ids = [j.redo && j.redo.src, j.carry && j.carry.src, j.from && j.from.id, j.lead && j.lead.src, j.loopOf, j.toFilm && j.toFilm.src];
+  return ids.some(id => id && wildJob(S.takes.find(x => x.id===id), 1)); }
+const wildPcs = () => S.pcs.filter(p => p.on && p.wild && pcOf(p.url).online);
+function wildBlock(url, job){ const P = S.pcs.find(x => x.url===url); if(!P) return '';
+  const w = wildJob(job); if(P.wild && !w) return 'only takes 🎲 Wildcard clips right now';
+  if(w && !P.wild){ const to = wildPcs().find(p => p.url!==url && !canRun0(p.url, job)); if(to) return 'leaves 🎲 Wildcard clips to ' + to.name; }
+  return ''; }
+function canRun(url, job){ const why = canRun0(url, job); return why || wildBlock(url, job); }
+function canRun0(url, job){
   const p = pcOf(url), oi = p.oi, pc = S.pcs.find(x => x.url===url);
   if(!pc || !pc.on) return 'switched off in ⚙';
   if(!p.online) return "can't be reached";
@@ -2829,7 +2841,7 @@ function estSecs(job, url){
 // 🦴 the MiniMax H3 Fun ControlNet (union: skeleton, depth, edges) lives in models/model_patches
 function patchOf(oi){ const l = combo(oi, 'ModelPatchLoader', 'name'); return l.find(n => /minimax|h3/i.test(n) && /control|union|fun/i.test(n)) || l.find(n => /fun.?control|control.?union/i.test(n) && !/z.?image|qwen|wan|flux|sdxl|ltx/i.test(n)) || ''; }
 function pickPc(job, avoid){
-  const urls = S.f.where==='both' ? S.pcs.map(p => p.url) : [S.f.where];
+  const urls = S.f.where==='both' || (wildPcs().length && wildJob(job)) ? S.pcs.map(p => p.url) : [S.f.where];
   const ok = urls.filter(u => !canRun(u, job)), extra = avoid || {};
   if(!ok.length) return null;
   return ok.sort((a, b) => (busySecs(a) + (extra[a] || 0) + estSecs(job, a)) - (busySecs(b) + (extra[b] || 0) + estSecs(job, b)))[0];
@@ -2852,7 +2864,7 @@ function movableUp(t, from, run, pend){
   if(t.pc!==from || t.state!=='working' || !t.up || t.upStage!=='queued' || !t.upPid || run.has(t.upPid) || !pend.includes(t.upPid) || t.noMove || MOVE_NOW.has(t.id)) return false;
   const ch = t.up.chain, pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev); if(ch && ch.prev && !(pv && pv.state==='done' && pv.final && !pv.upErr)) return false;
   return !S.takes.some(o => o!==t && o.up && o.up.chain && o.up.chain.prev===t.id && o.upStage && o.upStage!=='start'); }
-async function moveUp(t, to){ const from = t.pc, fl = t.smoothed || t.final, oi = (pcOf(to) || {}).oi;
+async function moveUp(t, to, why){ const from = t.pc, fl = t.smoothed || t.final, oi = (pcOf(to) || {}).oi;
   if(!oi || regenMissing(oi, t)) return false;
   const ch = t.up.chain, pv = ch && ch.prev && S.takes.find(x => x.id===ch.prev);
   for(const v of [fl, pv && pv.final]) if(v){ try{ if(!(await fetch(rawView(to, v), {method:'HEAD'})).ok) return false; }catch(e){ return false; } } // (that PC can't see the videos yet)
@@ -2863,7 +2875,7 @@ async function moveUp(t, to){ const from = t.pc, fl = t.smoothed || t.final, oi 
     t.pc = to; t.upPid = null; t.upSave = null; t.upStage = 'start'; t.t0r = Date.now(); t.moved = (t.moved || 0) + 1;
     S.takes.forEach(o => { if(o.up && o.up.chain && o.up.chain.prev===t.id && o.upStage==='start'){ o.pc = to; o.up.chain.pc = to; } }); // (clips lined up to carry on from it follow it)
     if(ch){ if(pv && !ch.from) ch.from = pv.pc; ch.pc = to; } // (its saved ending to carry on from stays in the folder of the PC that made it)
-    toast('⇄ ' + pcName(to) + ' was free, so it took a waiting ✨ pass from ' + pcName(from), 4000); tickSoon(300); return true; }
+    toast(why || '⇄ ' + pcName(to) + ' was free, so it took a waiting ✨ pass from ' + pcName(from), 4000); tickSoon(300); return true; }
   finally{ MOVE_NOW.delete(t.id); } }
 // what's left of the job a PC is running: its guess less the time it has run (the websocket saw it start), else its steps done so far,
 // else half (overnight QA 2026-11-16: "half of it" was the whole guess, and the guesses ran 30-100% short on later parts)
@@ -2876,7 +2888,7 @@ async function rebalance(){
       let best = null;
       for(const from of Object.keys(Q)){ if(from===u) continue; const oq = Q[from], run = new Set((oq.queue_running || []).map(x => x[1])), order = (oq.queue_pending || []).slice().sort((a, b) => a[0] - b[0]).map(x => x[1]);
         const est = id => { for(const t of S.takes){ if(t.upPid===id) return estSecs(t, from); for(const x of t.pieces) if(x.pid===id) return x.est || 300; } return 300; };
-        for(const t of S.takes){ const up = movableUp(t, from, run, order); if(!(up || movable(t, from, run, order)) || ((!t.combo || t.combo.seam) && canRun(u, t))) continue; // (a plain ⛓ join only needs Concatenate Video: moveTake checks it)
+        for(const t of S.takes){ const up = movableUp(t, from, run, order); if(!(up || movable(t, from, run, order)) || ((!t.combo || t.combo.seam) ? canRun(u, t) : wildBlock(u, t))) continue; // (a plain ⛓ join only needs Concatenate Video: moveTake checks it)
           const at = up ? order.indexOf(t.upPid) : Math.min(...t.pieces.map(x => order.indexOf(x.pid)));
           const ahead = [...run].reduce((s, id) => s + runLeft(id, est(id)), 0) + order.slice(0, at).reduce((s, id) => s + est(id), 0);
           if(estSecs(t, u) >= ahead + estSecs(t, from)) continue; // it would still finish sooner where it is
@@ -2885,9 +2897,26 @@ async function rebalance(){
   }catch(e){ console.warn(e); }
   MOVING = false; if(moved){ save(); drawTakes(); } return moved;
 }
-async function moveTake(t, to){
-  MOVE_NOW.add(t.id); try{ return await moveTake1(t, to); } finally{ MOVE_NOW.delete(t.id); } }
-async function moveTake1(t, to){
+// 🎲 Wildcards only: waiting takes sitting in the wrong PC's line move (🎲 Wildcard clips onto the 🎲 PC, the rest off it), a few each look,
+// while the app is open. Ones already started, and the kinds ⇄ never moves, stay where they are.
+let SWEEP_AT = 0;
+async function wildSweep(force){
+  if(MOVING || !S.pcs.some(p => p.wild) || (!force && Date.now() - SWEEP_AT < 8000)) return 0; SWEEP_AT = Date.now(); MOVING = true; let moved = 0;
+  try{
+    const Q = {}; for(const P of S.pcs){ if(!pcOf(P.url).online) continue; try{ Q[P.url] = await getJ(P.url + '/queue', null, 6000); pcOf(P.url).queue = Q[P.url]; }catch(e){} }
+    for(const t of S.takes.slice().reverse()){ if(moved >= 4) break; const from = t.pc, oq = Q[from]; if(!oq || t.state!=='working' || MOVE_NOW.has(t.id) || !wildBlock(from, t)) continue;
+      const run = new Set((oq.queue_running || []).map(x => x[1])), order = (oq.queue_pending || []).map(x => x[1]), up = movableUp(t, from, run, order);
+      if(!up && !movable(t, from, run, order)) continue;
+      const others = S.pcs.map(p => p.url).filter(u => u!==from && Q[u] && !(t.combo && !t.combo.seam ? wildBlock(u, t) : canRun(u, t)));
+      const to = others.sort((a, b) => busySecs(a) - busySecs(b))[0]; if(!to) continue;
+      const msg = '🎲 ' + (wildJob(t) ? 'A waiting Wildcard clip moved to ' + pcName(to) : 'A waiting take moved off ' + pcName(from) + ' (it takes 🎲 Wildcard clips only)');
+      if(await (up ? moveUp(t, to, msg) : moveTake(t, to, msg))){ moved++; } }
+  }catch(e){ console.warn(e); }
+  MOVING = false; if(moved){ save(); drawTakes(); } return moved;
+}
+async function moveTake(t, to, why){
+  MOVE_NOW.add(t.id); try{ return await moveTake1(t, to, why); } finally{ MOVE_NOW.delete(t.id); } }
+async function moveTake1(t, to, why){
   const from = t.pc, pids = t.pieces.map(x => x.pid), post = (u, o) => fetch(u + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(o)});
   // ⛓ / 🧵 joins and seams move too (QA 2026-11-14: Main sat idle 20+ min while a 🧵 seams job waited behind another on Render), once
   // that PC sees every clip in it through Dropbox, and has the seams' model
@@ -2902,7 +2931,7 @@ async function moveTake1(t, to){
     const i = t.pieces.findIndex(x => !there.includes(x.pid)); if(i > 0){ try{ await sendPieces(t, i); }catch(e){} } return false; }
   if(pids.some(id => there.includes(id))) return false;
   t.pieces.forEach(x => { x.pid = null; x.state = 'new'; }); t.pc = to;
-  try{ await sendPieces(t, 0); t.moved = (t.moved || 0) + 1; toast('⇄ ' + pcName(to) + ' was free, so it took a waiting take from ' + pcName(from), 4000); return true; }
+  try{ await sendPieces(t, 0); t.moved = (t.moved || 0) + 1; toast(why || '⇄ ' + pcName(to) + ' was free, so it took a waiting take from ' + pcName(from), 4000); return true; }
   catch(e){ t.pc = from; t.pieces.forEach(x => { x.pid = null; x.state = 'new'; });
     try{ await sendPieces(t, 0); }catch(e2){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'moving it to ' + pcName(to) + ' failed: ' + e.message; save(); drawTakes(); } return false; }
 }
@@ -3736,6 +3765,7 @@ async function tick(){
         else if(t.state==='done'){ t.t1 = Date.now(); notify(t); finStart(t); }
       }
     }
+    if(busy.length) await wildSweep(); // 🎲 Wildcard clips onto the 🎲 Wildcards-only PC, the rest off it
     if(busy.length && Date.now() - REBAL_AT > 8000){ REBAL_AT = Date.now(); await rebalance(); } // ⇄ a free PC takes a waiting take
     save(); drawTakes();
   }catch(e){ console.warn(e); }
@@ -4063,7 +4093,7 @@ function jobName(url, e){ const id = e[1];
 function pcStatus(p){ const q = pcOf(p.url), a = AGENT[p.url], d = q.stats && q.stats.devices && q.stats.devices[0];
   if(q.restarting) return 'Restarting ComfyUI…';
   if(!q.online) return a ? (a.comfy==='starting' ? 'The PC is on; ComfyUI is starting…' : 'The PC is on; ComfyUI is closed' + (a.wanted ? ' (starting it again shortly)' : '')) : "Can't reach it (off, asleep, or Tailscale is off on this phone)";
-  const n = q.load || 0; return (n ? 'Busy · ' + n + ' job' + (n > 1 ? 's' : '') : 'Free') + (p.on ? '' : ' · not taking new takes') + (d ? ' · ' + String(d.name || '').replace(/^cuda:\d+\s*/, '').replace(/ : .*/, '') + ', ' + (d.vram_free / 2 ** 30).toFixed(1) + ' of ' + (d.vram_total / 2 ** 30).toFixed(1) + ' GB free' : ''); }
+  const n = q.load || 0; return (n ? 'Busy · ' + n + ' job' + (n > 1 ? 's' : '') : 'Free') + (p.on ? '' : ' · not taking new takes') + (p.wild ? ' · 🎲 Wildcard clips only' : '') + (d ? ' · ' + String(d.name || '').replace(/^cuda:\d+\s*/, '').replace(/ : .*/, '') + ', ' + (d.vram_free / 2 ** 30).toFixed(1) + ' of ' + (d.vram_total / 2 ** 30).toFixed(1) + ' GB free' : ''); }
 function pcBox(p, i){ const q = pcOf(p.url), a = AGENT[p.url], half = !q.online && a;
   const run = (q.queue && q.queue.queue_running) || [], wait = ((q.queue && q.queue.queue_pending) || []).slice().sort((x, y) => x[0] - y[0]);
   const row = (e, r) => { const j = jobName(p.url, e), L = LIVE[e[1]] || {}, pct = r && L.max ? Math.round(100 * L.v / L.max) : 0;
@@ -4072,14 +4102,20 @@ function pcBox(p, i){ const q = pcOf(p.url), a = AGENT[p.url], half = !q.online 
   const btn = (act, label, on) => `<button class="btn" data-pca="${i}|${act}" ${on ? '' : 'disabled'}>${label}</button>`;
   const ctl = a ? (q.online ? btn('restart', '↻ Restart ComfyUI', true) + btn('close', '■ Close ComfyUI', true) : btn('start', '▶ Start ComfyUI', a.comfy!=='starting')) : btn('reboot', '↻ Restart ComfyUI', q.online);
   return `<div class="pcbox"><div class="hd"><i class="dot ${q.online ? (q.load ? 'busy' : 'on') : half ? 'half' : ''}"></i><b>${esc(p.name)}</b><small style="color:var(--dim)">New takes</small><span class="tog ${p.on ? 'on' : ''}" data-pcon2="${i}" role="switch" aria-checked="${!!p.on}" aria-label="Let ${esc(p.name)} take new takes"></span></div>
+    <div class="hd" style="margin-top:6px"><small style="flex:1;color:var(--dim);text-align:right">🎲 Wildcards only</small><span class="tog ${p.wild ? 'on' : ''}" data-pcwild="${i}" role="switch" aria-checked="${!!p.wild}" aria-label="${esc(p.name)} takes 🎲 Wildcard clips only"></span></div>
     <div class="st">${esc(pcStatus(p))}</div><div class="btns">${ctl}${wait.length > 1 ? `<button class="btn warn" data-qclear="${i}">Clear the ${wait.length} waiting</button>` : ''}</div>
     ${run.map(e => row(e, true)).join('')}${wait.slice(0, 20).map(e => row(e, false)).join('')}${wait.length > 20 ? `<div class="note">…and ${wait.length - 20} more waiting</div>` : ''}</div>`; }
+// 🎲 one PC at a time is Wildcards only; switching it on also lets it take new takes, and moves the waiting takes now
+function setWild(p){ p.wild = !p.wild; if(p.wild){ S.pcs.forEach(x => { if(x!==p) x.wild = false; }); p.on = true; } save(); drawAll();
+  toast(p.wild ? '🎲 ' + p.name + ' takes Wildcard clips only now: moving the waiting ones…' : '🎲 ' + p.name + ' takes every kind of take again', 4000);
+  if(p.wild) wildSweep(true).then(n => { toast(n ? '🎲 Moved ' + n + ' waiting take' + (n > 1 ? 's' : '') + (n >= 4 ? ' (more follow every few seconds)' : '') : '🎲 Nothing waiting needed to move', 4000); try{ drawPcSheet(); }catch(e){} }); }
 let PCT = 0;
 function drawPcSheet(){ const c = $('#pcSheet'); if(!c){ clearInterval(PCT); PCT = 0; return; } c.innerHTML = S.pcs.map(pcBox).join(''); }
-function openPcs(){ openSheet(`<h3>🖥 PCs <button class="btn" data-close>✕</button></h3><div id="pcSheet"></div><div class="note">Off = that PC gets no new takes from H3 Deck (e.g. Main while you game). What's already in its line keeps going. Names and addresses are in ⚙.</div>`);
+function openPcs(){ openSheet(`<h3>🖥 PCs <button class="btn" data-close>✕</button></h3><div id="pcSheet"></div><div class="note">Off = that PC gets no new takes from H3 Deck (e.g. Main while you game). What's already in its line keeps going. 🎲 Wildcards only = every 🎲 Wildcard clip goes to that PC, the waiting ones too, and it takes nothing else (the other PC does the rest). Names and addresses are in ⚙.</div>`);
   drawPcSheet(); S.pcs.forEach(p => agentLook(p.url).then(drawPcSheet)); clearInterval(PCT);
   PCT = setInterval(() => { if(!$('#pcSheet')){ clearInterval(PCT); PCT = 0; return; } Promise.all(S.pcs.map(p => ping(p.url))).then(drawPcSheet); }, 3000);
-  $('#sheetCard').onclick = async ev => { const t = ev.target.closest('[data-pcon2]'); if(t){ const p = S.pcs[+t.dataset.pcon2]; p.on = !p.on; save(); drawAll(); drawPcSheet(); toast(p.name + (p.on ? ' takes new takes again' : ' gets no new takes for now')); return; }
+  $('#sheetCard').onclick = async ev => { const t = ev.target.closest('[data-pcon2]'); if(t){ const p = S.pcs[+t.dataset.pcon2]; p.on = !p.on; save(); drawAll(); drawPcSheet(); toast(p.name + (p.on ? ' takes new takes again' : ' gets no new takes for now')); if(p.on && S.pcs.some(x => x.wild)) wildSweep(true).then(drawPcSheet); return; }
+    const w = ev.target.closest('[data-pcwild]'); if(w){ setWild(S.pcs[+w.dataset.pcwild]); drawPcSheet(); return; }
     const x = ev.target.closest('[data-qx]'); if(x){ const [i, id, r, mine] = x.dataset.qx.split('|'), p = S.pcs[+i];
       if(!confirm((r==='1' ? 'Stop the job ' + p.name + ' is working on' : 'Take this job out of ' + p.name + "'s line") + '?' + (mine==='1' ? ' Its take stops there.' : " It wasn't sent from H3 Deck."))) return;
       try{ await fetch(p.url + (r==='1' ? '/interrupt' : '/queue'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(r==='1' ? {prompt_id:id} : {delete:[id]})}); toast(r==='1' ? 'Stopped' : 'Taken out of the line');
@@ -5045,6 +5081,7 @@ $('#setBtn').onclick = () => {
   openSheet(`<h3>⚙ PCs <button class="btn" data-close>✕</button></h3><div class="sw ${S.bare===false ? 'on' : ''}" id="bareSw" style="margin-bottom:10px"><div><div class="t">🧰 Show all the tools</div><div class="d">Off = bare bones: clips, carry-ons, lead-ins, uploads and the Library. On = smoothing, redo, guides, 4K, extra Films tracks (picture in picture, crop, canvas, track order) and the rest</div></div><div class="tog"></div></div>` + S.pcs.map((p, i) => { const q = pcOf(p.url), job = {model:S.f.model, turbo:S.f.turbo, loras:S.f.loras.filter(l => l.name), pieces:currentPlan(), vids:refsOn().vids, follow:refsOn().follow, imgs:refsOn().imgs, auds:refsOn().auds};
     const why = canRun(p.url, job), mc = q.oi && q.oi.MiniMaxH3MotionContext, st = q.stats && q.stats.devices && q.stats.devices[0];
     return `<div class="pcrow"><div class="nm"><i class="dot ${q.online ? 'on' : ''}"></i>${esc(p.name)}</div><span class="tog ${p.on ? 'on' : ''}" data-pcon="${i}"></span>
+      <div class="sw ${p.wild ? 'on' : ''}" data-pcwild1="${i}" style="grid-column:1/-1"><div><div class="t">🎲 Wildcards only</div><div class="d">Every Wildcard clip goes to ${esc(p.name)} (waiting ones too) and it takes nothing else.</div></div><span class="tog"></span></div>
       <input data-pcname="${i}" value="${esc(p.name)}" style="grid-column:1/-1"><input data-pcurl="${i}" value="${esc(p.url)}" style="grid-column:1/-1" inputmode="url">
       <div class="why">${q.online ? (why ? '⚠ ' + esc(why) + ' (for the shot in the form).' : '✓ Can take the shot in the form.') + (mc ? ' Has H3 Motion Context.' : ' No H3 Motion Context, so only clips up to the longest piece.') + (st ? ' VRAM free ' + (st.vram_free / 2 ** 30).toFixed(1) + ' of ' + (st.vram_total / 2 ** 30).toFixed(1) + ' GB.' : '') + (q.load ? ' ' + q.load + ' in its queue.' : '') : "Can't be reached: is ComfyUI on there, and Tailscale on this phone?"}</div></div>`; }).join('')
     + `<div class="note">Both PCs run ComfyUI with --enable-cors-header "*". A long clip's pieces all run on one PC (each needs the one before it), so with Both picked, takes go to whichever PC frees up first (Main counts as 1.26× slower).</div>
@@ -5054,7 +5091,8 @@ $('#setBtn').onclick = () => {
   $('#freshBtn').onclick = freshSheet;
   $('#sheetCard').onclick = ev => { if(ev.target.closest('#bareSw')){ S.bare = S.bare===false; $('#bareSw').classList.toggle('on', S.bare===false); save(); drawAll();
       try{ const fr = $('#filmTab iframe'); if(fr && fr.contentWindow.draw) fr.contentWindow.draw(); }catch(e){} return; }
-    const t = ev.target.closest('[data-pcon]'); if(t){ const p = S.pcs[+t.dataset.pcon]; p.on = !p.on; t.classList.toggle('on', p.on); save(); drawAll(); } };
+    const t = ev.target.closest('[data-pcon]'); if(t){ const p = S.pcs[+t.dataset.pcon]; p.on = !p.on; t.classList.toggle('on', p.on); save(); drawAll(); }
+    const w = ev.target.closest('[data-pcwild1]'); if(w){ setWild(S.pcs[+w.dataset.pcwild1]); S.pcs.forEach((p, i) => { const e = $('[data-pcwild1="' + i + '"]'); if(e) e.classList.toggle('on', !!p.wild); const o = $('[data-pcon="' + i + '"]'); if(o) o.classList.toggle('on', !!p.on); }); } };
   $('#pcSave').onclick = () => { $$('[data-pcname]').forEach(el => { S.pcs[+el.dataset.pcname].name = el.value.trim() || 'PC'; }); $$('[data-pcurl]').forEach(el => { S.pcs[+el.dataset.pcurl].url = el.value.trim().replace(/\/+$/, ''); });
     S.f.budget = +$('#budget').value || 45000; save(); closeSheet(); Object.keys(PC).forEach(k => delete PC[k]); pingAll().then(drawAll); };
 };
@@ -5566,7 +5604,7 @@ window.H3Sound = async o => { const src = deckTake(o.take), fl = takeFile(src);
   const vo = String(o.vo || '').trim(); if(vo){ Object.assign(s0, {vo, voHow:String(o.voHow || '').trim(), model:src.model, turbo:src.turbo});
     if(F > VO_MAX * FPS + 2){ toast('🎙 A voice-over goes on clips up to ' + VO_MAX + ' s (MiniMax on 8 GB). ✂ Split it first.', 6000); return 0; } }
   const key = uid('k'), n = Math.max(1, Math.min(3, +o.n || 1)), label = (vo ? '🎙 "' + vo.slice(0, 50) + '" + ' : '🔊 ') + s0.prompt.slice(0, 70) + (s0.voice ? ' (+ voices)' : '');
-  const urls = [...new Set([src.pc].concat(S.f.where==='both' ? S.pcs.map(p => p.url) : [S.f.where]))].filter(u => { const P = S.pcs.find(x => x.url===u); return P && P.on && pcOf(u).online && !sndMissing(pcOf(u).oi, s0); });
+  const urls = [...new Set([src.pc].concat(S.f.where==='both' ? S.pcs.map(p => p.url) : [S.f.where]))].filter(u => { const P = S.pcs.find(x => x.url===u); return P && P.on && !(P.wild && !wildJob(src)) && pcOf(u).online && !sndMissing(pcOf(u).oi, s0); });
   const ok = []; for(const u of urls){ if(u===src.pc){ ok.push(u); continue; } const k = u + '|' + fl.filename;
     if(SEES[k]==null){ try{ SEES[k] = (await fetch(rawView(u, fl), {method:'HEAD'})).ok; }catch(e){ SEES[k] = false; } } if(SEES[k]) ok.push(u); }
   if(!ok.length){ const why = S.pcs.map(p => pcName(p.url) + ' ' + (pcOf(p.url).online ? sndMissing(pcOf(p.url).oi, s0) || "can't see the clip" : "can't be reached")).join('; '); toast('🔊 No PC can add sound yet: ' + why, 8000); return 0; }
@@ -5873,7 +5911,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {pickPc, wildJob, wildBlock, wildPcs, wildSweep, setWild, soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
