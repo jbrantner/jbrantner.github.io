@@ -5,6 +5,7 @@ const path = require('path'), http = require('http'), fs = require('fs');
 const R = 'http://render.test';
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
+  EasyCache:{input:{required:{model:['MODEL'], reuse_threshold:['FLOAT',{default:0.2}], start_percent:['FLOAT',{default:0.15}], end_percent:['FLOAT',{default:0.95}], verbose:['BOOLEAN',{default:false}]}}},
   ModelAttentionBackend:{input:{required:{model:['MODEL'], attention:[['pytorch attention','comfy kitchen attention'], {default:'pytorch attention'}]}}},
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['AFK_Claude_minimaxh3.safetensors','MMH3-Realism-V2-HyperFlow-ref2va.safetensors','DetailSlider-V1.safetensors','MMH3-RealismSlider-V1.safetensors','h3-realism-people-t2v-i2v-r2v.safetensors','minimax_h3_cinematic_v2_tutu.safetensors']], strength_model:['FLOAT', {default:1}]}}},
@@ -59,6 +60,13 @@ const POSTED = [];
     q('#fastSw').click(); o.offState = H3.S.fast===false && !q('#fastSw').classList.contains('on');
     o.offGraph = !Object.values(H3.fastGraph(oi, g0)).some(x => x.class_type==='ModelAttentionBackend');
     q('#fastSw').click(); o.backOn = H3.S.fast===true;
+    o.ec = n.filter(([id, x]) => x.class_type==='EasyCache').map(([id, x]) => x.inputs);
+    o.steps = (Object.values(g0).find(x => x.class_type==='BasicScheduler') || {inputs:{}}).inputs.steps;
+    o.cacheDef = H3.S.cache!==false && q('#cacheSw').classList.contains('on');
+    q('#cacheSw').click(); o.cacheOff = !Object.values(H3.fastGraph(oi, g0)).some(x => x.class_type==='EasyCache') && Object.values(H3.fastGraph(oi, g0)).some(x => x.class_type==='ModelAttentionBackend'); q('#cacheSw').click();
+    const few = JSON.parse(JSON.stringify(g0)); Object.values(few).forEach(x => { if(x.class_type==='BasicScheduler') x.inputs.steps = 8; }); o.fewNo = !Object.values(H3.fastGraph(oi, few)).some(x => x.class_type==='EasyCache');
+    const part = JSON.parse(JSON.stringify(g0)); Object.values(part).forEach(x => { if(x.class_type==='BasicScheduler') x.inputs.denoise = 0.5; }); o.partNo = !Object.values(H3.fastGraph(oi, part)).some(x => x.class_type==='EasyCache');
+    q('#fastSw').click(); const g2 = H3.fastGraph(oi, g0); o.cacheOnly = Object.values(g2).some(x => x.class_type==='EasyCache') && !Object.values(g2).some(x => x.class_type==='ModelAttentionBackend'); q('#fastSw').click();
     await H3.queueGraph(R, {g:g0}); return o; }, REF);
   ok(r.defOn, 'switch is on by default');
   ok(r.ok, 'PC offers comfy kitchen attention');
@@ -70,6 +78,12 @@ const POSTED = [];
   ok(r.imgSkip, 'P-H3 image model not patched');
   ok(r.noNode, 'PC without the node gets the graph as is');
   ok(r.offState && r.offGraph && r.backOn, 'switch turns it off and on');
+  ok(r.cacheDef, 'skip-steps switch on by default');
+  ok(r.steps >= 12 && r.ec.length===1 && r.ec[0].model[0]===r.faId && r.ec[0].reuse_threshold===0.2 && r.ec[0].start_percent===0.15 && r.ec[0].end_percent===0.95, 'EasyCache after the attention node on a full ' + r.steps + '-step render: ' + JSON.stringify(r.ec));
+  ok(r.cacheOff, 'skip-steps switch off keeps fast attention only');
+  ok(r.fewNo, 'no cache on 8-step (Pika/turbo) renders');
+  ok(r.partNo, 'no cache on partial-denoise passes');
+  ok(r.cacheOnly, 'cache works without fast attention');
   ok(POSTED.length===1 && Object.values(POSTED[0]).some(x => x.class_type==='ModelAttentionBackend'), 'queued job carries the attention node');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
