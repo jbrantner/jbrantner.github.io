@@ -65,8 +65,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   await page.waitForTimeout(800);
   const sw = await page.evaluate(() => ({on:document.querySelector('#smLoopSmSw').classList.contains('on'), src:H3.S.f.smSrc}));
   ok(sw.on && sw.src==='tA', 'Make it loop has 🪄 Smooth the whole loop too, on by default, and knows the take: ' + JSON.stringify(sw));
+  const off = await page.evaluate(() => ({fin:H3.S.f.smFin, sw:document.querySelector('#smFinSw').classList.contains('on')}));
+  ok(off.fin===false && !off.sw, '📺 4K 60 is off unless switched on (Jordan 2026-11-18): ' + JSON.stringify(off));
   await page.$eval('#smLoopSmSw', b => b.click());
-  await page.evaluate(() => { const f = H3.S.f; f.smStart = 1; f.seconds = 3; f.smSeam = 12; H3.saveNow(); });
+  await page.evaluate(() => { const f = H3.S.f; f.smFin = true; f.smStart = 1; f.seconds = 3; f.smSeam = 12; H3.saveNow(); });
   const n0 = sent.length;
   await page.$eval('#goBtn', b => b.click()); await page.waitForTimeout(1500);
   if(0) console.log('toasts', await page.evaluate(() => [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' | ')), await page.evaluate(() => ({dis:document.querySelector('#goBtn').disabled, txt:document.querySelector('#goBtn').textContent, on:H3.S.f.smLoopSm, sm:H3.S.f.sm, loop:H3.S.f.smLoop, n:H3.S.takes.length})));
@@ -88,7 +90,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   // 3) 🎲 wildcard loop with 🪄 off
   const W = await page.evaluate(async () => { H3.S.f.wildLoop = true; H3.S.f.wildLoopSm = false; H3.drawAll(); const btn = !!document.querySelector('[data-wt="loopsm"]');
     const t = H3.S.takes.find(x => x.id==='tA'); Object.assign(t, {wildLoop:1, wildRaw:1, loopTake:null, loopTried:0}); const r = await H3.wildLoopGo(t); const n = H3.S.takes.find(x => x.id===t.loopTake);
-    return {r, btn, n:n && {combo:!!n.combo, loopOf:n.loopOf, raw:!!n.rawLoop, up:n.up}}; });
+    return {r, btn, n:n && {combo:!!n.combo, loopOf:n.loopOf, raw:!!n.rawLoop, up:n.up, k4:n.k4want}}; });
+  const W0 = await page.evaluate(async () => { H3.S.f.smFin = false; const t = H3.S.takes.find(x => x.id==='tA'); Object.assign(t, {loopTake:null, loopTried:0}); await H3.wildLoopGo(t); const n = H3.S.takes.find(x => x.id===t.loopTake); return n && {k4:n.k4want || null, fin:H3.finOf(n)}; });
+  ok(W0 && !W0.k4 && !W0.fin, '📺 with 4K off, a wildcard loop gets no 4K 60 finish: ' + JSON.stringify(W0));
   ok(W.r && W.n && W.n.combo && W.n.raw && W.n.loopOf==='tA' && !W.n.up, '🎲 a wildcard loop with 🪄 Smooth the loop off is made the same way, from the stretch that loops best: ' + JSON.stringify(W));
   const W2 = await page.evaluate(async () => { const t = H3.S.takes.find(x => x.id==='tA'); Object.assign(t, {wildUp:1, loopTake:null, loopTried:0}); await H3.wildLoopGo(t); const n = H3.S.takes.find(x => x.id===t.loopTake); return n && n.up; });
   ok(W2 && W2.str===0 && W2.rep==='medium', '⬆ Upscale on too: the joined loop is ⬆ regenerated after (medium, no LoRA): ' + JSON.stringify(W2));
