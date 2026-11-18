@@ -48,6 +48,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     try { if(f.boost===false) q('#boostSw').click(); const t = H3.snapshot(); t.id = 'u1'; t.pc = R; t.seed = 3; t.dir = 'H3Deck/u'; t.name = 'u'; t.up = {scale:1, rep:'light', den:0, str:0.8, look:'live'};
       t.redo = {src:'x', file:'x.mp4', F:73, L:73, Fout:73, a:0, b:73, s0:0, cin:0, cout:3}; t.pieces = [{start:0, gen:73, deliv:73, ctx:0, prompt:'she waves', state:'done'}]; t.final = {filename:'u.mp4', subfolder:'H3Deck/u'};
       const G = H3.upGraph(t, oi, {}), n = Object.values(G.g || G); o.hq = n.filter(x => x.class_type==='LoraLoaderModelOnly').map(x => x.inputs.lora_name); } catch(e){ o.hqErr = String(e); }
+    { if(f.boost===false) q('#boostSw').click(); const t = H3.snapshot(); t.h3 = {quality:true, qstyle:'3d'}; o.boost3d = H3.boostLoras(oi, t).length; t.h3.qstyle = 'real'; o.boostReal = H3.boostLoras(oi, t).length; }
     const old = H3.snapshot(); delete old.boost; o.oldNone = H3.boostLoras(oi, old).length;
     return o; }, REF);
   ok(r.defOn, 'switch is on by default');
@@ -61,6 +62,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(r.offState && r.off.los.length===1 && !/r34l1sm/.test(r.off.p), 'switch off = no boost');
   ok(r.noNsfw, '🔥 switch is gone');
   ok(r.hq && r.hq.filter(n => /realism|detailslider/i.test(n)).length===4 && !r.hq.some(n => /cinematic/i.test(n)), '✨ High quality pass: 4 realism/detail, no Cinematic (' + (r.hqErr || JSON.stringify(r.hq)) + ')');
+  ok(r.boost3d===0 && r.boostReal===4, 'boost skipped on 🧊 3D / ✏ 2D, kept on 🎥 Realistic (' + r.boost3d + '/' + r.boostReal + ')');
   ok(r.oldNone===0, 'takes from before the switch get no boost');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
