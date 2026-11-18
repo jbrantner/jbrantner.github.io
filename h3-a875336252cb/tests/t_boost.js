@@ -50,6 +50,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       const G = H3.upGraph(t, oi, {}), n = Object.values(G.g || G); o.hq = n.filter(x => x.class_type==='LoraLoaderModelOnly').map(x => x.inputs.lora_name); } catch(e){ o.hqErr = String(e); }
     { if(f.boost===false) q('#boostSw').click(); const t = H3.snapshot(); t.h3 = {quality:true, qstyle:'3d'}; o.boost3d = H3.boostLoras(oi, t).length; t.h3.qstyle = 'real'; o.boostReal = H3.boostLoras(oi, t).length; }
     const old = H3.snapshot(); delete old.boost; o.oldNone = H3.boostLoras(oi, old).length;
+    { const t = H3.snapshot(); t.boost = true; t.h3 = null; t.model = 'singularityv2x10eros_prismpika'; o.pika = H3.boostLoras(oi, t).map(l => [l.name, l.str, l.words]); }
     return o; }, REF);
   ok(r.defOn, 'switch is on by default');
   ok(r.listHides, 'boost LoRAs are not offered in the LoRA picker');
@@ -63,6 +64,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(r.noNsfw, '🔥 switch is gone');
   ok(r.hq && r.hq.filter(n => /realism|detailslider/i.test(n)).length===4 && !r.hq.some(n => /cinematic/i.test(n)), '✨ High quality pass: 4 realism/detail, no Cinematic (' + (r.hqErr || JSON.stringify(r.hq)) + ')');
   ok(r.boost3d===0 && r.boostReal===4, 'boost skipped on 🧊 3D / ✏ 2D, kept on 🎥 Realistic (' + r.boost3d + '/' + r.boostReal + ')');
+  { const pk = Object.fromEntries((r.pika || []).map(l => [l[0], l[1]])); ok(r.pika && r.pika.length===3 && pk['DetailSlider-V1.safetensors']===0.7 && pk['MMH3-RealismSlider-V1.safetensors']===0.7 && pk['MMH3-Realism-V2-HyperFlow-ref2va.safetensors']===0.5 && !r.pika.some(l => l[2]), 'PIKA boost: Realism V2 0.5, Detail 0.7, Realism V1 0.7, no fal/Cinematic, no trigger (' + JSON.stringify(r.pika) + ')'); }
   ok(r.oldNone===0, 'takes from before the switch get no boost');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
