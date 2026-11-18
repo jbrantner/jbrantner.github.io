@@ -64,7 +64,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(r.noNsfw, '🔥 switch is gone');
   ok(r.hq && r.hq.filter(n => /realism|detailslider/i.test(n)).length===4 && !r.hq.some(n => /cinematic/i.test(n)), '✨ High quality pass: 4 realism/detail, no Cinematic (' + (r.hqErr || JSON.stringify(r.hq)) + ')');
   ok(r.boost3d===0 && r.boostReal===4, 'boost skipped on 🧊 3D / ✏ 2D, kept on 🎥 Realistic (' + r.boost3d + '/' + r.boostReal + ')');
-  { const pk = Object.fromEntries((r.pika || []).map(l => [l[0], l[1]])); ok(r.pika && r.pika.length===3 && pk['DetailSlider-V1.safetensors']===0.7 && pk['MMH3-RealismSlider-V1.safetensors']===0.7 && pk['MMH3-Realism-V2-HyperFlow-ref2va.safetensors']===0.5 && !r.pika.some(l => l[2]), 'PIKA boost: Realism V2 0.5, Detail 0.7, Realism V1 0.7, no fal/Cinematic, no trigger (' + JSON.stringify(r.pika) + ')'); }
+  { const pk = Object.fromEntries((r.pika || []).map(l => [l[0], l[1]])); ok(r.pika && r.pika.length===5 && pk['MMH3-Realism-V2-HyperFlow-ref2va.safetensors']===0.35 && pk['DetailSlider-V1.safetensors']===0.5 && pk['MMH3-RealismSlider-V1.safetensors']===0.5 && pk['h3-realism-people-t2v-i2v-r2v.safetensors']===0.5 && pk['minimax_h3_cinematic_v2_tutu.safetensors']===0.35 && r.pika.some(l => l[2]==='r34l1sm'), 'PIKA boost = P7 mix (' + JSON.stringify(r.pika) + ')'); }
   ok(r.oldNone===0, 'takes from before the switch get no boost');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
