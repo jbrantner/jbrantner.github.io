@@ -6,7 +6,7 @@ const R = 'http://render.test';
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
-  LoraLoaderModelOnly:{input:{required:{lora_name:[['AFK_Claude_minimaxh3.safetensors','MMH3-Realism-V2-HyperFlow-ref2va.safetensors','DetailSlider-V1.safetensors','MMH3-RealismSlider-V1.safetensors','h3-realism-people-t2v-i2v-r2v.safetensors','minimax_h3_cinematic_v2_tutu.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['AFK_Claude_minimaxh3.safetensors','MMH3-Realism-V2-HyperFlow-ref2va.safetensors','DetailSlider-V1.safetensors','MMH3-RealismSlider-V1.safetensors','h3-realism-people-t2v-i2v-r2v.safetensors','minimax_h3_cinematic_v2_tutu.safetensors','MysticXXX_MMH3-V5-ref2va.safetensors','H3_Better_NSFW_Motion_V1.safetensors','Minimax3_Boob Physics_v1.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
@@ -44,7 +44,8 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const a = graph(); o.on = a; o.formWords = f.prompt;
     q('#boostSw').click(); o.offState = f.boost===false && !q('#boostSw').classList.contains('on');
     o.off = graph();
-    o.noNsfw = !q('#nsfwSw');
+    o.nsfwSw = !!q('#nsfwSw'); o.nsfwDef = !f.nsfw && !q('#nsfwSw').classList.contains('on');
+    { q('#nsfwSw').click(); const t = H3.snapshot(); t.model = 'singularityv2x10eros_prismpika'; t.h3 = null; t.boost = true; o.nsfw = H3.boostLoras(oi, t).map(l => [l.name, l.str]); t.boost = false; o.nsfwOnly = H3.boostLoras(oi, t).map(l => l[0] || l.name); q('#nsfwSw').click(); o.nsfwOff = H3.snapshot().nsfw===false; }
     try { if(f.boost===false) q('#boostSw').click(); const t = H3.snapshot(); t.id = 'u1'; t.pc = R; t.seed = 3; t.dir = 'H3Deck/u'; t.name = 'u'; t.up = {scale:1, rep:'light', den:0, str:0.8, look:'live'};
       t.redo = {src:'x', file:'x.mp4', F:73, L:73, Fout:73, a:0, b:73, s0:0, cin:0, cout:3}; t.pieces = [{start:0, gen:73, deliv:73, ctx:0, prompt:'she waves', state:'done'}]; t.final = {filename:'u.mp4', subfolder:'H3Deck/u'};
       const G = H3.upGraph(t, oi, {}), n = Object.values(G.g || G); o.hq = n.filter(x => x.class_type==='LoraLoaderModelOnly').map(x => x.inputs.lora_name); } catch(e){ o.hqErr = String(e); }
@@ -61,7 +62,9 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(/^AFKJ Style, r34l1sm\. she waves/.test(r.on.p || ''), 'trigger word sent: ' + r.on.p);
   ok(r.formWords==='she waves', 'Shot box words unchanged');
   ok(r.offState && r.off.los.length===1 && !/r34l1sm/.test(r.off.p), 'switch off = no boost');
-  ok(r.noNsfw, '🔥 switch is gone');
+  ok(r.nsfwSw && r.nsfwDef, '🔥 switch is back, off by default');
+  { const m = Object.fromEntries(r.nsfw || []); ok(m['MysticXXX_MMH3-V5-ref2va.safetensors']===0.6 && m['H3_Better_NSFW_Motion_V1.safetensors']===0.7 && m['Minimax3_Boob Physics_v1.safetensors']===0.6 && !('minimax_h3_cinematic_v2_tutu.safetensors' in m) && (r.nsfw || []).length===7, '🔥 on PIKA: 3 body/motion + boost minus Cinematic (' + JSON.stringify(r.nsfw) + ')'); }
+  ok(r.nsfwOnly && r.nsfwOnly.length===3 && r.nsfwOff, '🔥 alone without boost, and switches off (' + JSON.stringify(r.nsfwOnly) + ')');
   ok(r.hq && r.hq.filter(n => /realism|detailslider/i.test(n)).length===4 && !r.hq.some(n => /cinematic/i.test(n)), '✨ High quality pass: 4 realism/detail, no Cinematic (' + (r.hqErr || JSON.stringify(r.hq)) + ')');
   ok(r.boost3d===0 && r.boostReal===4, 'boost skipped on 🧊 3D / ✏ 2D, kept on 🎥 Realistic (' + r.boost3d + '/' + r.boostReal + ')');
   { const pk = Object.fromEntries((r.pika || []).map(l => [l[0], l[1]])); ok(r.pika && r.pika.length===5 && pk['MMH3-Realism-V2-HyperFlow-ref2va.safetensors']===0.35 && pk['DetailSlider-V1.safetensors']===0.5 && pk['MMH3-RealismSlider-V1.safetensors']===0.5 && pk['h3-realism-people-t2v-i2v-r2v.safetensors']===0.5 && pk['minimax_h3_cinematic_v2_tutu.safetensors']===0.35 && r.pika.some(l => l[2]==='r34l1sm'), 'PIKA boost = P7 mix (' + JSON.stringify(r.pika) + ')'); }
