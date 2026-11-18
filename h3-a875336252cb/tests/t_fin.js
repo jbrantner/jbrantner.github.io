@@ -54,5 +54,13 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(r.old.b.step===5 && r.old.a.step * 8 === r.old.a.steps * 5, 'an old 0.6 setting snaps to 5/8, both models meet at the same point ' + JSON.stringify([r.old.a, r.old.b]));
   ok(JSON.stringify(r.plans.map(p => [p.k, p.s1, p.p]))==='[[2,4,4],[9,24,5],[4,8,4]]', 'turbo 4 steps and 8-step plans ' + JSON.stringify(r.plans));
   ok(r.note==='10 of 20 steps on this model, then PIKA does its own last 4 of 8', 'note: ' + r.note);
+  // 📺 a take with 🔀 Finish on PIKA ({at}) is NOT sent to the 4K finish (Jordan 2026-11-18 got a 4K 48 fps copy of a plain take)
+  const K = await page.evaluate(() => { const R = Object.keys(H3.PC)[0], t = H3.snapshot(); Object.assign(t, {id:'tK', t:Date.now(), pc:R, state:'done', fin:{at:0.5}, final:{filename:'k_00001_.mp4', subfolder:'Output_Render/H3Deck/k', type:'output'}, pieces:[{state:'done'}]});
+    H3.S.takes.unshift(t); H3.finStart(t); const before = t.k4 || null; H3.drawAll();
+    const btn = !!document.querySelector('[data-act="k4"][data-t="tK"]'); H3.k4Go(t);
+    const after = t.k4 && {state:t.k4.state, fps:t.k4.fps}; const btn2 = !!document.querySelector('[data-act="k4"][data-t="tK"]');
+    H3.S.takes.shift(); H3.drawAll(); return {before, fin:H3.finOf({fin:{at:0.5}}), btn, after, btn2}; });
+  ok(!K.before && !K.fin, 'Finish on PIKA alone makes no 4K copy: ' + JSON.stringify(K));
+  ok(K.btn && K.after && K.after.state==='wait' && K.after.fps===60 && !K.btn2, '📺 Make a 4K 60 copy in the take ⋯ starts it as a last pass, then the button goes: ' + JSON.stringify(K));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
