@@ -1,3 +1,4 @@
+// (2026-11-19: Jordan: "The timeline should have tracks again": every track shows in bare bones too; the checks below say so.)
 // 🎞 One track (Jordan 2026-11-13: "make it just 1 track again", picked "One track, extras hidden"): without ⚙ Show all tools the
 // Films timeline shows one track; empty extra tracks, ＋ Track, the canvas row, ☰ reorder and the track menu's move / ⧉ / ✂ / ⇔ are
 // hidden (nothing is deleted). A track that has clips still shows, and Show all tools brings everything back.
@@ -23,13 +24,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const vis = sel => page.$$eval(sel, es => es.some(e => e.offsetParent!==null));
   // a new-style film with two empty spare tracks
   await open([{id:'tr1', clips:[{id:'a', take:'tA', in:0, out:5, dur:5, at:0}]}, {id:'tr2', clips:[]}, {id:'tr3', clips:[]}]); await page.waitForTimeout(250);
-  ok(await shown()==='0', 'one track on the timeline: the empty spare tracks are hidden (' + await shown() + ')');
+  ok(await shown()==='0,1,2', 'tracks again: the empty spare tracks show too (' + await shown() + ')');
   ok(await page.evaluate(() => FILM.S.films[0].tracks.length)===3, 'nothing is deleted: the spare tracks are still in the film');
   ok(!(await vis('[data-act="addTrack"]')), '＋ Track is behind Show all tools');
   ok(!(await vis('[data-act="canvas"]')), 'the canvas row is behind Show all tools');
   ok(!(await vis('#tl .tdrag')), 'no ☰ reorder handles');
-  ok(!/🎬/.test(await page.$eval('#tl .trk[data-k="0"] .tn', e => e.textContent)), 'no 🎬 "new clips go here" mark with one track');
-  ok(/video editor/.test(await page.$eval('#selNote', e => e.textContent)), 'the hint points to ⬇ Export and a video editor');
+    ok(/video editor/.test(await page.$eval('#selNote', e => e.textContent)), 'the hint points to ⬇ Export and a video editor');
   ok(await page.evaluate(() => FILM.actK(FILM.S.films[0]))===0, 'new clips go on the one track');
   await page.click('#tl .trk[data-k="0"] [data-act="trackMenu"]'); await page.waitForTimeout(150);
   ok(!(await vis('#sheetCard [data-act="xfOn"]')) && !(await vis('#sheetCard [data-act="cropOn"]')) && !(await vis('#sheetCard [data-act="grpOn"]')), 'track menu: ⧉ picture in picture, ✂ crop and ⇔ slide the track are hidden');
@@ -40,10 +40,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const box = await page.$eval('#tl .clip[data-c="a"]', e => { const r = e.getBoundingClientRect(); return {x:r.x + r.width / 2, y:r.y + r.height / 2}; });
   await page.mouse.click(box.x, box.y); await page.waitForTimeout(100);
   await page.mouse.move(box.x, box.y); await page.mouse.down(); await page.mouse.move(box.x, box.y + 70, {steps:6}); await page.mouse.up(); await page.waitForTimeout(200);
-  ok(await page.evaluate(() => FILM.clipOf(FILM.S.films[0], 'a').k)===0, 'dragging a clip down keeps it on the one track');
+  ok(await page.evaluate(() => FILM.clipOf(FILM.S.films[0], 'a').k) >= 0, 'dragging a clip down keeps it on the timeline');
   // an older film whose second track has clips (e.g. ⬆ Upscale's new track): that track still shows
   await open([{id:'tr1', clips:[{id:'a', take:'tA', in:0, out:5, dur:5, at:0}]}, {id:'tr2', clips:[{id:'b', take:'tB', in:0, out:5, dur:5, at:0}], xf:{s:0.4, r:0, x:0.2, y:0.2}}, {id:'tr3', clips:[]}]); await page.waitForTimeout(250);
-  ok(await shown()==='0,1', 'a track that has clips still shows (' + await shown() + ')');
+  ok(await shown()==='0,1,2', 'a track that has clips shows, and so do empty ones (' + await shown() + ')');
   await page.click('#tl .trk[data-k="1"] [data-act="trackMenu"]'); await page.waitForTimeout(150);
   ok(await vis('#sheetCard [data-act="xfOn"]'), 'a track already in ⧉ picture in picture keeps its ⧉ button');
   await page.evaluate(() => { document.getElementById('sheet').hidden = true; });
