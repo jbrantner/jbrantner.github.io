@@ -23,7 +23,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const base = {model:'singularityV2X10eros_prismPIKA', turbo:false, loras:[], imgs:[], vids:[], auds:[], follow:[], seconds:5, seed:1, dir:'H3Deck/x', pc:R, w:864, h:480, state:'done', film:'s2', pieces:[{deliv:120, gen:124, ctx:0, state:'done', pid:'p', file:F('p.mp4')}]};
   const tk = (id, x) => Object.assign({}, base, {id, name:'h3_' + id, prompt:'<Subject 1> walks in.', final:F(id + '.mp4'), t:1000}, x || {});
-  const deck = {bare:true, pcs:[{name:'Render', url:R, on:true}, {name:'Main', url:M, on:true}], tab:'films', takes:[tk('tA'), tk('tB'), tk('tA2', {t:2000})], forms:{}, casts:{}, up:{},
+  const deck = {bare:true, pcs:[{name:'Render', url:R, on:true}, {name:'Main', url:M, on:true}], tab:'films', takes:[tk('tA'), tk('tB'), tk('tA2', {t:2000, prompt:'She spins around in the red dress.', redo:{src:'tA', a:24, b:72}})], forms:{}, casts:{}, up:{},
     lib:[{id:'L1', kind:'char', name:'Brianna', stand:'a woman', desc:'tall, long curly hair', pics:['m1'], keep:'exact'}, {id:'L2', kind:'char', name:'Marcus', stand:'a man', desc:'', pics:['m2'], keep:'exact'},
       {id:'W1', kind:'wear', name:'White tee', what:'outfit', pics:[]}, {id:'W2', kind:'wear', name:'Red dress', what:'outfit', pics:[]}],
     media:{m1:{id:'m1', kind:'img', name:'b.png', w:64, h:96, thumb:'', tc:1}, m2:{id:'m2', kind:'img', name:'m.png', w:64, h:96, thumb:'', tc:1}}};
@@ -48,6 +48,13 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await FR.$$eval('#tl .trk', rs => rs.filter(r => getComputedStyle(r).display!=='none').length)===2, 'both tracks show (tracks again)');
   ok(await vis(FR, '#vstrip [data-act="useTake"]') && !(await vis(FR, '[data-act="keepOnly"]')), 'a selected clip shows its takes, no ✓ Keep only this');
   ok(await FR.$eval('#pbBox', e => e.innerHTML.trim()==='') && await FR.$eval('#selNote', e => e.textContent.trim()===''), 'no 📝 clip words box and no clip info line');
+  // tapping a take loads that take's own prompt (an ✏️ Edit's words), not the original (Jordan 2026-11-19)
+  await FR.click('#vstrip [data-act="useTake"][data-t="tA2"]'); await page.waitForTimeout(400); FR = fr();
+  ok(await page.inputValue('#prompt')==='She spins around in the red dress.', 'tapping the edited take puts its words in the Prompt box (' + await page.inputValue('#prompt') + ')');
+  await FR.click('#vstrip [data-act="useTake"][data-t="tA"]'); await page.waitForTimeout(400); FR = fr();
+  ok(await page.inputValue('#prompt')==='<Subject 1> walks in.', 'tapping the original take brings its words back');
+  await FR.click('#vstrip [data-act="useTake"][data-t="tA"]'); await page.waitForTimeout(300); FR = fr();
+  ok(await page.inputValue('#prompt')==='<Subject 1> walks in.', 'tapping the take already in use loads its words too');
   await FR.click('[data-act="shotSet"]'); await page.waitForTimeout(150);
   ok(await vis(FR, '#sheetCard input[data-fname]') && await vis(FR, '#sheetCard [data-act="delFilm"]'), '⚙ holds the shot name and 🗑 delete');
   await FR.fill('#sheetCard input[data-fname]', 'Renamed'); await FR.click('#sheetCard .btns [data-act="shotSetDone"]'); await page.waitForTimeout(150);
