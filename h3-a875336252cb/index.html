@@ -3933,6 +3933,27 @@ function whyNot(){ if(rawLoopOn()) return deckTake(S.f.smSrc) ? '' : '🔁 witho
     return urls.map(u => pcName(u) + ' ' + canRun(u, job)).join(' · '); }
   return '';
 }
+// 🎬 Render with a clip selected (Jordan 2026-11-19: "when I have a clip selected hitting render adds to its choices rather than being
+// something independent. If I want an independent clip I can hit the +clip button"): the new takes go under the clip in its takes.
+// A ➕ carry-on clip's new takes carry on from the same moment as it did, so each one fits where the clip sits; a ➕ Carry on you
+// just set up from this clip (not rendered yet) still makes its new part. Returns the carry key the takes share, or null.
+const filmPlaced = k => { try{ return !!(k && FW.FILM.S.placed && FW.FILM.S.placed[k]); }catch(e){ return false; } };
+function selCarryTake(FT){ try{ const F = FW.FILM, f = F.S.films.find(x => x.id===FT.film), r = f && F.clipOf(f, FT.clip); if(!r) return null;
+  for(const id of [r.c.take].concat(r.c.alts || [])){ const x = deckTake(id); if(x && x.carry && x.carry.key && x.carry.own && x.carry.src && !x.carry.still && takeFile(deckTake(x.carry.src))) return x; } }catch(e){} return null; }
+function dropCarry(){ const f = S.f; f.fl = false; f.first = null; if(f.aspect==='pic') f.aspect = '16:9'; }
+function selTakeForm(FT){ const m = S.f.fl && !S.f.sm && S.media[S.f.first], mc = m && m.carry, x = selCarryTake(FT);
+  if(mc && mc.clip===FT.clip && !filmPlaced(mc.key) && !(x && x.carry.key===mc.key)) return null; // ➕ Carry on from this clip: its new part
+  if(x && mc && mc.key===x.carry.key) return mc.key; // already set up for this clip's carry-on
+  if(mc) dropCarry(); // set up for another clip: this clip gets the take
+  if(!x) return null;
+  const src = deckTake(x.carry.src), fl = takeFile(src), dur = takeFrames(src) / FPS, at = +x.carry.at || 0, near = dur && Math.abs(at - dur) < 0.05, id = uid('m');
+  S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(src.pc, fl), w:src.w, h:src.h, fps:FPS, sound:true, dur,
+    cut:near ? 0 : Math.round(at * 1000) / 1000, carry:Object.assign({}, x.carry), thumb:''};
+  Object.assign(S.f, {fl:true, first:id, last:false, aspect:'pic'}); return x.carry.key; }
+// the Render button says where the take goes
+function goLabel(){ const b = $('#goBtn'); if(!b || b.textContent==='Sending…') return; const n = +S.f.takes || 1, ft = S.tab==='films' && filmTarget(), m = S.f.fl && S.media[S.f.first], mc = m && m.carry;
+  const tx = ft && ft.clip && !S.f.sm && !(mc && ft && mc.clip===ft.clip && !filmPlaced(mc.key)) ? (n > 1 ? 'Render ' + n + ' more takes of this clip' : 'Render another take of this clip') : 'Render' + (n > 1 ? ' ' + n + ' takes' : '');
+  if(b.textContent!==tx) b.textContent = tx; }
 async function render(){ if(S.tab!=='wild' && S.fkey===WK && !WLOOP_BUSY && !WORKER) try{ syncFilm(); }catch(e){} // (🎲 Wildcard clips only from the Wildcards tab)
   if(rawLoopOn()) return rawLoopForm();
   const why = whyNot(); if(why){ toast(why); return; }
@@ -3942,9 +3963,11 @@ async function render(){ if(S.tab!=='wild' && S.fkey===WK && !WLOOP_BUSY && !WOR
   try{
     const base = +S.f.seed || 0;
     const N = +S.f.takes || 1, FT0 = filmTarget(), NX = S.ftNext; S.ftNext = null; if(FT0 && NX) delete FT0.clip; const FT = FT0 && Object.assign(FT0, {key:uid('k')}, NX || {}); // 📝 a prompt block: its place on the timeline
+    const MORE = FT && FT.clip ? selTakeForm(FT) : null; // 🎬 a clip is selected: the takes are more choices for it (Jordan 2026-11-19)
     for(let k = 0; k < N; k++){
       const t = sceneOn() && !contOn() ? sceneSnap() : snapshot(); t.id = uid('t'); t.t = Date.now(); t.seed = base && mineK()!==WK ? base + k : Math.floor(Math.random() * 2 ** 31); shufMark(t, k); if(mineK()===WK){ t.film = WK; if(S.f.wildLoop) t.wildLoop = 1; if(S.f.wildLoop && S.f.wildLoopSm===false) t.wildRaw = 1; if(S.f.wildUp) t.wildUp = 1; } wildMark(t); // 🎲 a fresh mix each take (🎲 Wildcard clips: its own list, no timeline)
       if(!t.carry && !t.blend && !t.back && FT) t.toFilm = Object.assign({}, FT);
+      else if(MORE && t.carry && t.carry.key===MORE) t.toFilm = Object.assign({}, FT, {more:true}); // (a take of a ➕ carry-on clip carries on from the same moment)
       if(t.carry && t.carry.guide) applyGuide(t, t.carry.guide); // 🦴 a carry-on on a track that follows the guidance track
       t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
       const url = pickPc(t, extra); if(!url) throw new Error('no PC can take it right now');
@@ -4719,7 +4742,7 @@ function drawMore(){
 }
 function drawGo(){
   const why = whyNot(), b = $('#goBtn'); b.disabled = !!why;
-  const n = +S.f.takes || 1; b.textContent = 'Render' + (n > 1 ? ' ' + n + ' takes' : ''); $('#goN').textContent = n;
+  const n = +S.f.takes || 1; b.textContent = 'Render' + (n > 1 ? ' ' + n + ' takes' : ''); goLabel(); $('#goN').textContent = n;
   const long = n > 1 && !S.f.sm && !contOn() && currentPlan().length > 1, th = $('#takesHow'); if(th) th.textContent = long ? n + ' separate full-length clips' : 'split across the PCs';
   $('#goWhy').hidden = !why || /^Write/.test(why); $('#goWhy').textContent = why;
   clearTimeout(ETA_T); ETA_T = setTimeout(drawEta, 700);
@@ -5556,7 +5579,7 @@ setInterval(() => { if(S.tab==='films' && !document.hidden){ syncFilm(); fitFilm
 // the film that new takes from the Films tab go into (its timeline), or null
 function filmTarget(){ try{ const F = S.tab==='films' && FW && FW.FILM, n = F && F.S.nav; if(!n || n.v!=='film') return null; const f = F.S.films.find(x => x.id===n.film); if(!f || f.edit) return null;
   const nm = F.fullName ? F.fullName(f.id) : f.name, sel = F.SEL && F.clipOf(f, F.SEL); return sel ? {film:f.id, name:nm, clip:sel.c.id} : {film:f.id, name:nm}; }catch(e){ return null; } }
-function drawFilmNote(){ const el = $('#filmFormNote'); if(!el) return; const ft = filmTarget(); el.hidden = S.tab!=='films';
+function drawFilmNote(){ const el = $('#filmFormNote'); if(!el) return; const ft = filmTarget(); el.hidden = S.tab!=='films'; goLabel();
   if(S.tab!=='films') return; const m = S.f.fl && S.media[S.f.first], c = m && m.carry;
   const H = c ? '➕ <b>Carrying on</b> from ' + esc(fmtS(c.at)) + ' of the selected clip. Write what happens next and Render: it replaces the rest of the clip from that moment, and the clips after it move along.' + (c.more ? '' : '')
     : ft && ft.clip ? '🎬 <b>New takes become versions of the selected clip</b>: tap one under the clip to use it. Tap empty timeline to add to the end instead.'
@@ -5573,7 +5596,7 @@ function filmFollowAgain(){ FILMSIG = null; FILMT = null; FILMED = false; FILMP 
   if(m && m.carry){ S.f.fl = false; S.f.first = null; } drawFilmNote(); try{ const F = FW.FILM; F.resetWords(); F.pushWords(F.S.films.find(x => x.id===F.S.nav.film)); }catch(e){} }
 let FILMRAW = null; // the clip's words as they were rendered (the key of your edit on its take)
 window.H3FilmWords = (w, at, tid, raw) => { if(S.tab!=='films' || !w || S.f.sm) return false; const pb = $('#prompt'); if(document.activeElement===pb) return false;
-  const m = S.f.fl && S.media[S.f.first]; if(m && m.carry) return false; // ➕ carrying on: the box is for what happens next
+  const m = S.f.fl && S.media[S.f.first]; if(m && m.carry){ if(S.bare===false || !filmPlaced(m.carry.key)) return false; dropCarry(); FILMT = null; } // ➕ carrying on: the box is for what happens next (bare bones: once that part is on the timeline, a tapped clip brings its own words)
   if(FILMTYPED() && FILMTID===tid){ drawFilmNote(); return false; } // your own words stay on the clip you wrote them for; another clip brings its words (Jordan 2026-11-06)
   // Jordan 2026-11-06: everything the clip's take used comes along too (model, LoRAs, references, Motion guide…), once per clip
   // …until you change something (Jordan 2026-11-06: swapping a character reference mustn't be undone by scrubbing): then your
