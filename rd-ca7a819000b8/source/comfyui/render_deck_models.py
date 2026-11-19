@@ -731,6 +731,7 @@ async def h3wipe(request):
             n, b = _tree_size(d)
             files += n; size += b
         px = [os.path.join(PX_DIR, f) for f in (os.listdir(PX_DIR) if os.path.isdir(PX_DIR) else []) if f.lower().endswith('.mp4')]
+        sf = [os.path.join(ST_DIR, f) for f in (os.listdir(ST_DIR) if os.path.isdir(ST_DIR) else []) if f.lower().endswith('.h3s')]  # 🎞 scrub frames too
         if dry:
             return {'files': files, 'bytes': size, 'copies': len(px), 'shared': shared, 'pc': _pc()}
         gone = 0
@@ -747,7 +748,7 @@ async def h3wipe(request):
                 gone += 1
             except Exception:
                 pass
-        for f in px:
+        for f in px + sf:
             try:
                 os.remove(f)
             except OSError:
@@ -3176,6 +3177,94 @@ async def h3proxy(request):
         print('[Render Deck] scrub copy:', e)
         return web.json_response({'error': str(e)}, status=500)
 
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# 🎞 scrub frames (Jordan 2026-11-19, "Optimize the hell out of the video scrubbing and playback"): every frame of a clip as a
+# small JPEG (long side 384), all in one file, so the phone draws the frame under the needle straight onto a canvas while a finger
+# swipes the timeline: no video seeking at all until the finger stops. Made from the ⚡ scrub copy when it's there (quicker to
+# read), else from the clip. Long videos (a ⚡ preview of a whole film) keep every 2nd/3rd… frame, at most ST_MAX frames.
+# GET /renderdeck/h3strip?filename&subfolder&type = b'H3S1' + uint32 LE length of a JSON head {fps, n, w, h, offs} + the JPEGs
+# (frame i = data[offs[i]:offs[i+1]], counted from the end of the head; fps = frames per second of the strip itself).
+ST_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'user', 'render_deck_h3strip')
+ST_LONG, ST_Q, ST_MAX, ST_KEEP = 384, 72, 720, 400
+_st_busy = {}
+_st_sem = None
+
+
+def _st_path(src):
+    return os.path.join(ST_DIR, os.path.basename(_px_path(src))[:-4] + '.h3s')
+
+
+def _st_make(src, out):
+    import av, io, json, struct
+    from fractions import Fraction
+    px = _px_path(src)
+    rd = px if os.path.isfile(px) else src
+    with av.open(rd) as f:
+        vs = f.streams.video[0]
+        vs.thread_type = 'AUTO'
+        fps = float(Fraction(vs.average_rate or 24).limit_denominator(1001)) or 24.0
+        cw, ch = vs.codec_context.width or 16, vs.codec_context.height or 9
+        dur = float(vs.duration * vs.time_base) if vs.duration else (f.duration / 1e6 if f.duration else 0.0)
+        n0 = int(vs.frames or 0) or max(1, int(round(dur * fps)))
+        step = max(1, -(-n0 // ST_MAX), 2 if fps > 31 else 1)
+        k = min(1.0, ST_LONG / float(max(cw, ch)))
+        w, h = max(2, int(round(cw * k))), max(2, int(round(ch * k)))
+        jpgs, i = [], 0
+        for fr in f.decode(vs):
+            if i % step == 0:
+                b = io.BytesIO()
+                fr.reformat(width=w, height=h, format='rgb24').to_image().save(b, 'JPEG', quality=ST_Q)
+                jpgs.append(b.getvalue())
+            i += 1
+    if not jpgs:
+        raise ValueError('no frames in ' + os.path.basename(src))
+    offs, at = [], 0
+    for j in jpgs:
+        offs.append(at)
+        at += len(j)
+    offs.append(at)
+    head = json.dumps({'fps': fps / step, 'n': len(jpgs), 'w': w, 'h': h, 'offs': offs}).encode('utf-8')
+    os.makedirs(ST_DIR, exist_ok=True)
+    with open(out + '.part', 'wb') as o:
+        o.write(b'H3S1' + struct.pack('<I', len(head)) + head)
+        for j in jpgs:
+            o.write(j)
+    os.replace(out + '.part', out)
+    try:  # keep the newest ST_KEEP
+        old = sorted((os.path.join(ST_DIR, x) for x in os.listdir(ST_DIR) if x.endswith('.h3s')), key=os.path.getmtime)
+        for x in old[:-ST_KEEP]:
+            os.remove(x)
+    except Exception:
+        pass
+
+
+@routes.get('/renderdeck/h3strip')
+async def h3strip(request):
+    global _st_sem
+    try:
+        q = request.query
+        src = _ex_find({'filename': q.get('filename') or '', 'subfolder': q.get('subfolder') or ''})
+        out = _st_path(src)
+        if not os.path.isfile(out):
+            if _st_sem is None:
+                _st_sem = asyncio.Semaphore(2)
+            fut = _st_busy.get(out)
+            if fut is None:
+                async def run():
+                    async with _st_sem:
+                        if not os.path.isfile(out):
+                            await asyncio.get_event_loop().run_in_executor(None, _st_make, src, out)
+                fut = _st_busy[out] = asyncio.ensure_future(run())
+                fut.add_done_callback(lambda _f: _st_busy.pop(out, None))
+            await asyncio.shield(fut)
+        return web.FileResponse(out, headers={'Content-Type': 'application/octet-stream', 'Cache-Control': 'max-age=31536000, immutable', 'X-H3-Strip': '1'})
+    except FileNotFoundError as e:
+        return web.json_response({'error': str(e)}, status=404)
+    except Exception as e:
+        print('[Render Deck] scrub frames:', e)
+        return web.json_response({'error': str(e)}, status=500)
 
 def _ex_crop(x):
     """✂ the share cut off each edge {l, t, r, b} (0..0.45 each); None = no crop."""
