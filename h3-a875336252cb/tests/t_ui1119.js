@@ -73,6 +73,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(f.q===true && f.qs==='' && f.b===true && f.n===false && !f.sh && f.fr===false && f.mp===0.41 && !f.rs, 'Custom quality on, boost on, no 🔥, no shuffle/fill/strength, 480p (' + JSON.stringify(f) + ')');
   ok(/prism/i.test(f.m) && f.fin===false, 'a PIKA form stays PRISM PIKA (no finish)');
   ok(!(await page.$('#styleChips [data-q]')) && !(await page.$('#styleChips [data-qs]')), 'no quality on/off or presets');
+  ok(!(await page.isVisible('#bLook')), 'no ✨ Look and words box at all: the quality words are just on (Jordan 2026-11-19)');
   await page.click('#modelPick [data-mpk="combo"]'); await page.waitForTimeout(150);
   const g = await page.evaluate(() => ({m:H3.S.f.model, fin:H3.S.f.finOn, at:H3.S.f.finAt, t:H3.S.f.turbo, len:document.getElementById('lenBox').closest('section').id}));
   ok(/ref2va/.test(g.m) && g.fin===true && g.at===0.5 && g.t===false, 'H3 Reference → PIKA finish: the reference model with Finish on PIKA at 50% (' + JSON.stringify(g) + ')');
