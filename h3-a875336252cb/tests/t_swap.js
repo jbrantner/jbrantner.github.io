@@ -107,6 +107,17 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMax
   // 4) the take card and the timeline label
   const lab = await fr.evaluate(id => FILM.clipLabel ? FILM.clipLabel(FILM.takeOf(id)) : '', C2.id);
   ok(/^🔄 Laura in for the person, Mia in for the man in the hat/.test(C2.prompt) && !/^↻/.test(lab), 'the take\'s label: ' + C2.prompt);
+  // 6) a 12 s stretch goes in ~5 s parts: each part follows its own stretch of the clip and carries on from the part before (2026-11-19)
+  const PL = await page.evaluate(([R]) => { H3.S.takes = H3.S.takes.filter(x => !x.swap); const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tA'))); t.id = 'tL'; t.seconds = 12;
+      t.pieces = [{start:0, gen:294, deliv:288, ctx:0, prompt:t.prompt, state:'done', file:t.pieces[0].file}]; H3.S.takes.push(t);
+      return window.H3Swap({take:'tL', a:0, b:12, film:'fA', ppl:[{n:1, name:'Laura', goes:'', looks:'a woman', pics:['p1', 'p2'], attrs:[]}]}).then(() => {
+        const s = H3.S.takes.find(x => x.swap), names = {}; ['p1', 'p2', 'a1'].forEach(k => names[k] = k + '.png');
+        return {ps:s.pieces.map(p => [Math.round(p.start * 24), p.gen, p.deliv, p.ctx]), gs:s.pieces.map((p, i) => { const G = H3.pieceGraph(s, i, H3.PC[R].oi, names).g, g = Object.values(G), C = c => g.filter(n => n.class_type===c);
+          const fit = C('MMH3FitReferences')[0]; return {st:fit && fit.inputs.video_1_start, ld:C('MiniMaxH3MotionContextLoadLatent').length, sv:C('MiniMaxH3MotionContextSaveLatent').length, ifb:C('ImageFromBatch').map(n => n.inputs.batch_index + '+' + n.inputs.length).join(' '), join:C('RenderDeckH3Join').length}; })}; }); }, [R]);
+  const own = PL.ps.reduce((a, p, i) => a + Math.min(p[2], 288 - p[0]), 0);
+  ok(PL.ps.length===3 && PL.ps[0][3]===0 && PL.ps.slice(1).every(p => p[3]===22) && PL.ps.every(p => p[2] >= 60 && p[2] <= 130) && own===288, '12 s goes in three ~5 s parts that carry on: ' + JSON.stringify(PL.ps));
+  ok(PL.gs[0].ld===0 && PL.gs[1].ld===1 && PL.gs[2].ld===1 && PL.gs.every(g => g.sv===1) && PL.gs[2].join===1, 'parts 2 and 3 carry on from the part before (Motion Context), the last joins them: ' + JSON.stringify(PL.gs));
+  ok(PL.gs.every((g, i) => Math.abs(g.st - Math.max(0, PL.ps[i][0] / 24 - (PL.ps[i][3] ? 23 / 24 : 0))) < 0.01), 'each part reads its own stretch of the clip (from its carried-over frames on): ' + PL.gs.map(g => g.st));
   // 5) ✨ High quality (vanilla: only the first few pictures) keeps her attribute's picture even when she has more pictures than slots
   const HQ = await page.evaluate(([R]) => { const c = H3.S.cast.find(x => x.n===1); c.pics = ['p1', 'p2', 'q4']; const t = JSON.parse(JSON.stringify(H3.S.takes.find(x => x.id==='tA'))); t.id = 'tHQ';
     t.up = {scale:2, rep:'light', den:0.3, clean:0.8, look:'live', str:0.8, unet:'', qw:'', refs:true, prompt:t.prompt, crop:{s0:0, L:124, pad:0, F:120}};
