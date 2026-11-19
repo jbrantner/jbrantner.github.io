@@ -828,7 +828,7 @@ async function getJ(url, opt, ms){ const c = new AbortController(), t = setTimeo
   try{ const r = await fetch(url, Object.assign({signal:c.signal}, opt || {})); if(!r.ok) throw new Error(r.status + ''); return await r.json(); } finally{ clearTimeout(t); } }
 async function ping(url){
   const p = pcOf(url);
-  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true; markDown(url, false); if(!was) setTimeout(missBack, 0);
+  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true; markDown(url, false); if(!was){ setTimeout(missBack, 0); setTimeout(lorCatchUp, 1500); }
     if(!p.oi || !was || Date.now() - (p.oiAt || 0) > 120000){ p.oiAt = Date.now(); const got = await Promise.all(NEED.map(c => getJ(url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))); p.oi = Object.assign({}, ...got);
       try{ localStorage.setItem('h3oi:' + url, JSON.stringify(p.oi)); }catch(e){}
       // the Render Deck helper saves into this PC's own subfolder of a shared (Dropbox) output folder, e.g. Output_Render/
@@ -2124,7 +2124,29 @@ document.addEventListener('click', e => { const b = e.target.closest('[data-lrn]
 // civitai link and I want it to download Lora's onto both computers"): the helper's own /renderdeck/download (kind loras) and
 // /renderdeck/upload on every PC that is on and reachable, its /renderdeck/jobs for progress, /renderdeck/token for the Civitai key.
 // When a PC finishes, its node list is read again so the LoRA shows in the pickers.
-const lorPcs = () => S.pcs.filter(p => p.on!==false && pcOf(p.url).online);
+// (Jordan 2026-11-19, "I want Lora on both computers": the import went onto Render only while Main was set to no new takes)
+// every PC that can be reached gets it, whatever its New takes switch says; one that's off or can't be reached is
+// remembered in S.lorPend and gets the link (or the phone's file, kept on the phone until then) when it comes back.
+const lorPcs = () => S.pcs.filter(p => pcOf(p.url).online);
+const lorLate = () => S.pcs.filter(p => !pcOf(p.url).online);
+function lorRemember(pcs, it){ S.lorPend = S.lorPend || []; for(const p of pcs) if(!S.lorPend.some(x => x.pc===p.url && x.u===it.u && x.blob===it.blob)) S.lorPend.push(Object.assign({pc:p.url, at:Date.now()}, it)); save(); }
+async function lorSendLink(p, u){ try{ const r = await fetch(p.url + '/renderdeck/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:u, kind:'loras'})}), j = await r.json().catch(() => ({}));
+    return {ok:r.ok && !j.error, said:r.status===404 ? p.name + ' needs the Render Deck helper' : j.error ? p.name + ': ' + j.error : 'Downloading ' + (j.name || 'it') + ' on ' + p.name}; }
+  catch(e){ return {ok:false, off:true, said:p.name + " can't be reached"}; } }
+function lorSendFile(p, f, name){ return new Promise(ok => { const fd = new FormData(); fd.append('file', f, name); const x = new XMLHttpRequest();
+  x.open('POST', p.url + '/renderdeck/upload?kind=loras&name=' + encodeURIComponent(name) + '&size=' + f.size);
+  x.onload = () => { let j = {}; try{ j = JSON.parse(x.responseText); }catch(e){} if(x.status===404) toast(p.name + ' needs the Render Deck helper'); else if(j.error) toast(p.name + ': ' + j.error); ok({ok:x.status < 300 && !j.error}); };
+  x.onerror = () => { toast('The upload to ' + p.name + ' stopped. Is Tailscale on?'); ok({ok:false, off:true}); };
+  setTimeout(lorJobs, 800); x.send(fd); }); }
+let LORPB = 0;
+async function lorCatchUp(){ if(LORPB || !(S.lorPend || []).length) return; LORPB = 1;
+  try{ for(const it of [...S.lorPend]){ const p = S.pcs.find(x => x.url===it.pc); if(!p){ S.lorPend = S.lorPend.filter(x => x!==it); continue; } if(!pcOf(p.url).online) continue;
+      let r; if(it.u) r = await lorSendLink(p, it.u);
+      else { const b = await IDB.get(it.blob).catch(() => null); if(!b){ toast(it.name + " isn't on the phone any more: send it to " + p.name + ' again', 6000); r = {ok:true}; }
+        else { toast('Sending ' + it.name + ' to ' + p.name + ' now that it’s back…', 4000); r = await lorSendFile(p, b, it.name); } }
+      if(r.ok || !r.off){ if(r.said) toast(r.said, 4000); S.lorPend = S.lorPend.filter(x => x!==it);
+        if(it.blob && !S.lorPend.some(x => x.blob===it.blob)) IDB.del(it.blob).catch(() => {}); save(); } } }
+  finally{ LORPB = 0; } try{ lorJobs(); }catch(e){} }
 let LORJ = {}, LORT = 0;
 async function lorJobs(){ clearTimeout(LORT); const box = $('#lorJobs'); if(!box) return; let busy = false;
   await Promise.all(S.pcs.map(async p => { try{ const r = await fetch(p.url + '/renderdeck/jobs', {cache:'no-store'}); if(!r.ok) return; const j = await r.json();
@@ -2135,16 +2157,17 @@ async function lorJobs(){ clearTimeout(LORT); const box = $('#lorJobs'); if(!box
   const b = $('#lorJobs'); if(!b) return;
   const rows = S.pcs.flatMap(p => ((LORJ[p.url + '#'] || {}).js || []).map(x => { const pc = x.total ? Math.round(100 * x.done / x.total) : 0;
     return `<div style="margin-top:6px"><b>${esc(x.title || x.name)}</b> <small style="color:var(--dim)">· ${esc(p.name)} · ${x.status==='done' ? '✓ done' : x.status==='failed' ? '✕ ' + esc(x.error || 'failed') : x.status==='queued' ? 'waiting' : pc + '%'}</small>${['done', 'failed', 'queued'].includes(x.status) ? '' : `<div class="bar" style="margin-top:3px"><i style="width:${pc}%"></i></div>`}</div>`; }));
+  for(const it of S.lorPend || []){ const p = S.pcs.find(x => x.url===it.pc); if(p) rows.push(`<div style="margin-top:6px"><b>${esc(it.name || it.u)}</b> <small style="color:var(--dim)">· ${esc(p.name)} · waiting for ${esc(p.name)} to come on</small></div>`); }
   b.innerHTML = rows.length ? rows.join('') : '<div class="note">Nothing yet.</div>';
   const tk = $('#lorTok'); if(tk){ const no = S.pcs.filter(p => LORJ[p.url + '#'] && !LORJ[p.url + '#'].token).map(p => p.name); const seen = S.pcs.filter(p => LORJ[p.url + '#']);
     tk.textContent = !seen.length ? "Couldn't reach the PCs' helper to check for a Civitai key." : no.length ? 'No Civitai key on ' + no.join(' and ') + ' yet: some LoRAs only download when signed in.' : 'A Civitai key is saved on ' + seen.map(p => p.name).join(' and ') + '.'; }
   if(busy) LORT = setTimeout(lorJobs, 1500); }
 function loraImportSheet(){ const on = lorPcs();
   openSheet(`<h3><span>⬇ Import LoRA</span><button class="btn" data-close>✕</button></h3><div id="lorBox">
-    <div class="note">It goes onto ${on.length ? on.map(p => esc(p.name)).join(' and ') : 'your PCs (none can be reached right now)'}, into ComfyUI's loras folder.</div>
+    <div class="note">It goes onto ${S.pcs.length > 1 ? 'both PCs' : 'the PC'}, into ComfyUI's loras folder.${lorLate().length ? ' ' + lorLate().map(p => esc(p.name)).join(' and ') + " can't be reached right now: it gets it when it comes back on (with this app open)." : ''}</div>
     <div class="lab" style="margin-top:10px"><span>From a link</span></div>
     <input id="lorUrl" placeholder="a Civitai LoRA link, or a Hugging Face file link" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url">
-    <button class="btn pri" id="lorGo" style="width:100%;margin-top:8px">⬇ Download onto ${on.length > 1 ? 'both PCs' : on.length ? esc(on[0].name) : 'the PCs'}</button>
+    <button class="btn pri" id="lorGo" style="width:100%;margin-top:8px">⬇ Download onto ${S.pcs.length > 1 ? 'both PCs' : 'the PC'}</button>
     <div class="lab" style="margin-top:12px"><span>From this phone</span></div>
     <button class="btn" id="lorFile" style="width:100%">📲 Send a .safetensors file</button><input type="file" id="lorPick" accept=".safetensors" hidden>
     <div class="lab" style="margin-top:12px"><span>Downloads</span></div><div id="lorJobs"><div class="note">Looking…</div></div>
@@ -2152,20 +2175,19 @@ function loraImportSheet(){ const on = lorPcs();
     <div class="row" style="flex-wrap:nowrap;margin-top:6px"><input id="lorKey" type="password" placeholder="Civitai API key" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" style="flex:1"><button class="btn" id="lorKeyGo">Save on ${on.length > 1 ? 'both' : 'the PC'}</button></div>
     </div>`);
   lorJobs();
-  $('#lorGo').onclick = async () => { let u = $('#lorUrl').value.trim(); if(!u){ toast('Paste a link first'); return; } if(!/^https?:/.test(u)) u = 'https://' + u; const P = lorPcs(); if(!P.length){ toast("Can't reach Render or Main"); return; }
-    $('#lorGo').disabled = true; const said = [];
-    for(const p of P){ try{ const r = await fetch(p.url + '/renderdeck/download', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:u, kind:'loras'})}), j = await r.json().catch(() => ({}));
-      said.push(r.status===404 ? p.name + ' needs the Render Deck helper' : j.error ? p.name + ': ' + j.error : 'Downloading ' + (j.name || 'it') + ' on ' + p.name); }catch(e){ said.push(p.name + " can't be reached"); } }
+  $('#lorGo').onclick = async () => { let u = $('#lorUrl').value.trim(); if(!u){ toast('Paste a link first'); return; } if(!/^https?:/.test(u)) u = 'https://' + u;
+    $('#lorGo').disabled = true; const said = [], late = lorLate();
+    for(const p of lorPcs()){ const r = await lorSendLink(p, u); said.push(r.said); if(r.off) late.push(p); }
+    if(late.length){ lorRemember(late, {u, name:u.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60)}); said.push(late.map(p => p.name).join(' and ') + ' gets it when it comes back on'); }
     const g = $('#lorGo'); if(g) g.disabled = false; const ui = $('#lorUrl'); if(ui) ui.value = ''; toast(said.join(' · '), 5000); setTimeout(lorJobs, 600); };
   $('#lorFile').onclick = () => { $('#lorPick').value = ''; $('#lorPick').click(); };
-  $('#lorPick').onchange = async e => { const f = e.target.files[0]; if(!f) return; if(!/\.safetensors$/i.test(f.name)){ toast('Only .safetensors files can be added'); return; }
-    const P = lorPcs(); if(!P.length){ toast("Can't reach Render or Main"); return; }
-    for(const p of P){ toast('Sending ' + f.name + ' to ' + p.name + '…', 4000); // one PC after the other, so the phone's upload isn't split
-      await new Promise(ok => { const fd = new FormData(); fd.append('file', f, f.name); const x = new XMLHttpRequest();
-        x.open('POST', p.url + '/renderdeck/upload?kind=loras&name=' + encodeURIComponent(f.name) + '&size=' + f.size);
-        x.onload = () => { let j = {}; try{ j = JSON.parse(x.responseText); }catch(e){} if(x.status===404) toast(p.name + ' needs the Render Deck helper'); else if(j.error) toast(p.name + ': ' + j.error); ok(); };
-        x.onerror = () => { toast('The upload to ' + p.name + ' stopped. Is Tailscale on?'); ok(); };
-        setTimeout(lorJobs, 800); x.send(fd); }); }
+  $('#lorPick').onchange = async e => { let f = e.target.files[0]; if(!f) return; if(!/\.safetensors$/i.test(f.name)){ toast('Only .safetensors files can be added'); return; }
+    const name = f.name, late = lorLate();
+    if(late.length || lorPcs().length > 1){ try{ const raw = await f.arrayBuffer(); if(raw.byteLength) f = new Blob([raw]); }catch(er){} } // a copy in memory: iOS can drop the picker's file
+    for(const p of lorPcs()){ toast('Sending ' + name + ' to ' + p.name + '…', 4000); // one PC after the other, so the phone's upload isn't split
+      const r = await lorSendFile(p, f, name); if(r.off) late.push(p); }
+    if(late.length){ const id = uid('lor'); try{ await IDB.put(id, f); lorRemember(late, {blob:id, name}); toast(late.map(p => p.name).join(' and ') + ' gets ' + name + ' when it comes back on (keep the app open then)', 6000); }
+      catch(er){ toast("Couldn't keep " + name + ' on the phone for ' + late.map(p => p.name).join(' and ') + ': send it again when it’s on', 6000); } }
     lorJobs(); };
   $('#lorKeyGo').onclick = async () => { const k = $('#lorKey').value.trim(); if(!k){ toast('Paste the key first'); return; } const P = lorPcs(), said = [];
     for(const p of P){ try{ const r = await fetch(p.url + '/renderdeck/token', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:k})}), j = await r.json().catch(() => ({})); said.push(j.error ? p.name + ': ' + j.error : 'Key saved on ' + p.name); }catch(e){ said.push(p.name + " can't be reached"); } }
