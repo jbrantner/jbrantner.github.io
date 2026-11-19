@@ -108,6 +108,13 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(/Render/.test(await page.textContent('#lorJobs')) && /Main/.test(await page.textContent('#lorJobs')) && /No Civitai key on Main/.test(await page.textContent('#lorTok')), 'progress per PC and which PC has no Civitai key');
   await page.fill('#lorKey', 'abc'); await page.click('#lorKeyGo'); await page.waitForTimeout(400);
   ok(TOK.length===2, 'the Civitai key is saved on both');
+  // ---- 📤 an uploaded clip goes to the PC with fewer jobs waiting (Render first when even)
+  const upTo = async (lr, lm) => page.evaluate(async ([R, M, lr, lm]) => { const n = {CreateVideo:{}, SaveVideo:{}, ImageScale:{}, VHS_LoadVideo:{}};
+    for(const [u, l] of [[R, lr], [M, lm]]){ Object.assign(H3.PC[u].oi, n); H3.PC[u].online = true; H3.PC[u].load = l; }
+    document.querySelectorAll('.toast').forEach(d => d.remove()); const file = new File([new Uint8Array(8)], 'c.mp4', {type:'video/mp4'});
+    window.H3Upload({file}).catch(() => {}); await new Promise(r => setTimeout(r, 50)); return [...document.querySelectorAll('.toast')].map(d => d.textContent).join(' | '); }, [R, M, lr, lm]);
+  const u1 = await upTo(3, 0), u2 = await upTo(0, 0);
+  ok(/Sending the clip to Main/.test(u1) && /Sending the clip to Render/.test(u2), 'upload goes to Main while Render is busy, Render when even (' + u1 + ' / ' + u2 + ')');
   // ---- ⚙ Show all the tools brings the old layout back
   await page.evaluate(() => { H3.S.bare = false; H3.save(); H3.drawAll(); }); await page.waitForTimeout(200);
   ok(await page.isVisible('#model') && await page.isVisible('#takesH') && await page.$$eval('#castList .cast', b => b.length)===2, 'Show all tools: model list, Renders and full subject cards are back');
