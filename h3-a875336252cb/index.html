@@ -3216,7 +3216,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       // keeps every reference inside the 8 GB budget (the MMH3 Studio low-memory node): videos read at the size they're used
       const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0) + (t.pins || []).length, stop_above:72000};
       imgs.forEach((r, k) => { fi['image_' + (k + 1)] = useFirst ? img(r.id) : refPic(add, oi, names[r.id], r.id, w, h); });
-      t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:r.file || names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.start != null ? +r.start : r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; }); // (🔄 a swap's clip is read straight from the PC's output, from its own start)
+      t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:r.file || names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.start != null ? +r.start + (t.swap && t.pieces.length > 1 ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0) : r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; }); // (🔄 a swap's clip is read straight from the PC's output, from its own start)
       t.auds.forEach((r, k) => { fi['audio_' + (k + 1)] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
       const fit = add('MMH3FitReferences', fi);
       imgs.forEach((r, k) => { refs['ref_images.ref_image_' + k] = [fit, k]; });
@@ -3351,15 +3351,18 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   if(t.sm && pc.skip){ ims = [add('ImageFromBatch', {image:ims, batch_index:pc.skip, length:L - pc.skip}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:pc.skip / FPS, duration:(L - pc.skip) / FPS}), 0]; } // 🪄 the frames the window before already has
   if(t.lead){ const R = t.lead, k0 = R.gap ? +R.k0 || 0 : 0; ims = [add('ImageFromBatch', {image:ims, batch_index:k0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:k0 / FPS, duration:R.B / FPS}), 0]; } // only the new seconds
   if(t.redo && t.redo.swap){ // 🔄 the swapped stretch in place of the clip's frames; the rest of the take as it was
-    const R = t.redo, n0 = R.b - R.a; let joined = R.a > 0 ? [add('ImageFromBatch', {image:rIm, batch_index:0, length:R.a}), 0] : null;
-    const mid = [add('ImageFromBatch', {image:ims, batch_index:0, length:n0}), 0]; joined = joined ? batchOf(add, oi, joined, mid) : mid;
-    if(R.F - R.b > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:rIm, batch_index:R.b, length:R.F - R.b}), 0]);
+    // (in parts: the first part puts the take before the stretch in front, the last one the take after it behind, and the join adds them up)
+    const R = t.redo, n0 = R.b - R.a, many = t.pieces.length > 1, S0 = Math.round((pc.start || 0) * FPS), own = Math.max(1, Math.min(n0 - S0, many ? pc.deliv : n0));
+    const pre = first ? R.a : 0, post = last ? R.F - R.b : 0;
+    let joined = pre > 0 ? [add('ImageFromBatch', {image:rIm, batch_index:0, length:pre}), 0] : null;
+    const mid = [add('ImageFromBatch', {image:ims, batch_index:0, length:own}), 0]; joined = joined ? batchOf(add, oi, joined, mid) : mid;
+    if(post > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:rIm, batch_index:R.b, length:post}), 0]);
     ims = joined;
     // 🔊 the clip's own sound (the workflow's default), else MiniMax's sound for the swapped stretch (the take's sound either side of it)
-    if(t.swap.sound || (!oi.AudioConcat && (R.a > 0 || R.F - R.b > 0))) aud = rAu;
-    else { const tr = (a, s, d) => [add('TrimAudioDuration', {audio:a, start_index:Math.round(s * 1000) / 1000, duration:Math.round(d * 1000) / 1000}), 0];
-      let au = tr(aud, 0, n0 / FPS); if(R.a > 0) au = [add('AudioConcat', {audio1:tr(rAu, 0, R.a / FPS), audio2:au, direction:'after'}), 0];
-      if(R.F - R.b > 0) au = [add('AudioConcat', {audio1:au, audio2:tr(rAu, R.b / FPS, (R.F - R.b) / FPS), direction:'after'}), 0]; aud = au; } }
+    const tr = (a, s, d) => [add('TrimAudioDuration', {audio:a, start_index:Math.round(s * 1000) / 1000, duration:Math.round(d * 1000) / 1000}), 0];
+    if(t.swap.sound || (!oi.AudioConcat && (pre > 0 || post > 0))) aud = many ? tr(rAu, (first ? 0 : R.a + S0) / FPS, (pre + own + post) / FPS) : rAu;
+    else { let au = tr(aud, 0, own / FPS); if(pre > 0) au = [add('AudioConcat', {audio1:tr(rAu, 0, pre / FPS), audio2:au, direction:'after'}), 0];
+      if(post > 0) au = [add('AudioConcat', {audio1:au, audio2:tr(rAu, R.b / FPS, post / FPS), direction:'after'}), 0]; aud = au; } }
   else if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
     const R = t.redo; let joined = [add('ImageFromBatch', {image:rIm, batch_index:0, length:R.a + 1}), 0];
     const mid = R.b - R.a - 1; if(mid > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:ims, batch_index:R.a - R.s0 + 1, length:mid}), 0]);
@@ -5730,7 +5733,16 @@ window.H3RedoPlan = redoPlan;
 // the moves, the camera and (by default) the clip's own sound. As the workflow does: vanilla MiniMax + Pika's Flex LoRA at 1.0 on Pika's
 // six lcm steps (CFG 1); another model can be picked. The prompt is the workflow's six-part swap wording (AusBoss nodes' H3 Prompt Writer, MIT).
 // The result is a version of the take with only the clip's stretch swapped, so it drops into the clip like ↻ redo does.
-const SWAP_SIGMAS = '1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0', SWAP_MAX = 8, SWAP_PICS = 3;
+const SWAP_SIGMAS = '1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0', SWAP_MAX = 60, SWAP_ONE = 6, SWAP_PART = 5, SWAP_PICS = 3;
+// 🔄 a longer swap goes in parts (Jordan 2026-11-19: "Is swap characters not able to split the clip up into 5 second parts and use context?"):
+// up to SWAP_ONE s is one go as before; longer is split into even parts of about SWAP_PART s, and each part after the first carries on from
+// the swapped part before it (H3 Motion Context: its last 22 frames) while it follows its own stretch of the clip as <Video 1>. Every part
+// has at least the frames it has to give (the last one is cut to fit), so the swapped stretch is exactly as long as the clip's.
+function swapPlan(n0){ if(n0 <= SWAP_ONE * FPS + 2){ const g = gridUp(n0); return [{start:0, gen:g, deliv:g, ctx:0}]; }
+  const k = Math.ceil(n0 / (SWAP_PART * FPS)), out = []; let cum = 0;
+  for(let j = 0; j < k && cum < n0; j++){ const first = !j, want = Math.max(9, Math.round(n0 * (j + 1) / k) - cum), gen = gridUp(want + (first ? 0 : CTX + HEAD)), deliv = gen - (first ? 0 : CTX + HEAD);
+    out.push({start:cum / FPS, gen, deliv, ctx:first ? 0 : CTX}); cum += deliv; }
+  return out; }
 const SWAP_SPOTS = {2:['left', 'right'], 3:['left', 'centre', 'right'], 4:['far left', 'left', 'right', 'far right']};
 const swapLora = oi => combo(oi, 'LoraLoaderModelOnly', 'lora_name').find(n => /pika[^\\/]*flex|flex[^\\/]*pika/i.test(bn(n))) || '';
 const swapLoraAny = () => { for(const p of S.pcs){ const n = swapLora(pcOf(p.url).oi); if(n) return n; } return ''; };
@@ -5775,6 +5787,7 @@ window.H3Swap = async o => { const src = deckTake(o.take), fl = takeFile(src);
   if(!fl){ toast('That take has no finished video yet'); return 0; }
   const F = takeFrames(src), A = Math.max(0, Math.min(F - 9, Math.round((+o.a || 0) * FPS))), B = Math.max(A + 9, Math.min(F, Math.round((o.b != null ? +o.b : F / FPS) * FPS))), n0 = B - A, L = gridUp(n0);
   if(n0 > SWAP_MAX * FPS + 2){ toast('🔄 Swap takes up to ' + SWAP_MAX + ' s at a time. ✂ Split the clip first.', 6000); return 0; }
+  const parts = swapPlan(n0);
   const ppl = (o.ppl || []).filter(p => p && (p.pics || []).length).slice(0, 4); if(!ppl.length){ toast('Pick who comes in first (someone with pictures)'); return 0; }
   const per = Math.max(1, Math.min(SWAP_PICS, Math.floor(9 / ppl.length))), imgs = [];
   ppl.forEach(p => { const at = (p.attrs || []).map(x => Object.assign({}, x, {pics:(x.pics || []).slice(0, 2)})).filter(x => x.pics.length); let room = Math.max(1, Math.floor(9 / ppl.length)) - 1; // (at least one of their own pictures)
@@ -5793,7 +5806,7 @@ window.H3Swap = async o => { const src = deckTake(o.take), fl = takeFile(src);
       h3:null, neg:'', rstr:null, pstr:0, fin:null, shuffle:0, look:null, blend:null, refOff:null, imgs, vids:[{file:fileArg(fl), sound:opt.sound, start:A / FPS}],
       swap:Object.assign({text, pika, ppl:ppl.map(p => ({n:+p.n || 0, name:p.name || '', goes:p.goes || '', looks:p.looks || '', pics:p.use.length}))}, opt),
       redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:false, film:o.film || '', clip:o.clip || '', key, swap:true, a:A, b:B, s0:A, L, F, Fout:F, pins:[]},
-      pieces:[{start:0, gen:L, deliv:L, ctx:0, prompt:label, state:'new'}]});
+      pieces:parts.map(x => Object.assign({}, x, {prompt:label, state:'new'}))});
     if(pika){ t.model = famKey('minimax_h3_ref2va_pruned_int8_convrot.safetensors'); t.turbo = false; t.steps = 6; t.loras = [{name:lora, str:1, words:''}]; }
     else { t.model = o.model; t.turbo = !!o.turbo; t.steps = 0; t.loras = []; }
     if(src.up && src.up.crop && src.final && +src.up.scale > 1){ const d = upDims(src); t.w = d.w; t.h = d.h; } // (a ✨ take's video is bigger than the take says)
@@ -6186,7 +6199,7 @@ setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
-window.H3 = {finPlan, k4Go, finOf, PIKA_STEPS, loraChSheet, loraChips, loraOut, openLoraLib, LORARE, snapshot0, fastGraph, kitchenOk, pickPc, syncFilm, filmKeyNow, setTab, WK, wildJob, wildBlock, wildPcs, wildSweep, setWild, soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, BOOST, boostLoras, allLoras, isBoost, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {swapPlan, SWAP_ONE, finPlan, k4Go, finOf, PIKA_STEPS, loraChSheet, loraChips, loraOut, openLoraLib, LORARE, snapshot0, fastGraph, kitchenOk, pickPc, syncFilm, filmKeyNow, setTab, WK, wildJob, wildBlock, wildPcs, wildSweep, setWild, soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, BOOST, boostLoras, allLoras, isBoost, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + (L.max ? L.v + '/' + L.max : 'loading'); }
