@@ -694,7 +694,8 @@ async function nestTick(){ if(NESTBUSY) return; NESTBUSY = true; let ch = false;
 // a new version of the shot: every clip of it keeps its in/out, cut back to the shot's new length
 function nestFit(s){ const d = s.nest.dur; S.films.forEach(f => { if(f.edit) f.tracks.forEach(tr => tr.clips.forEach(c => { if(c.take!==NEST + s.id) return;
   c.dur = d; if(c.in > d - 0.1) c.in = Math.max(0, d - 0.5); if(c.out > d) c.out = d; if(c.out <= c.in) c.out = Math.min(d, c.in + 0.5); })); }); }
-setInterval(() => { if(!document.hidden) nestTick(); }, 4000);
+// (2026-11-19) no film-wide timeline any more, so shots aren't exported for it in the background
+const NEST_ON = false; setInterval(() => { if(NEST_ON && !document.hidden) nestTick(); }, 4000);
 function nestPut(s, all){ const m = movieOfShot(s), e = editOf(m); if(!e) return null; const k = Math.max(0, e.tracks.findIndex(tr => tr.id===ACT[e.id])), tr = e.tracks[k];
   const end = Math.max(0, ...tr.clips.map(c => c.at + len(c))), d = filmSecs(s) || 5;
   const c = {id:uid('c'), take:NEST + s.id, in:0, out:d, dur:d, at:end}; tr.clips.push(c); if(!all) nestTick(); return c; }
@@ -722,9 +723,10 @@ function draw(){ document.body.classList.toggle('bare', BARE()); document.body.c
   placeNew(); keepTakes(); S.films.forEach(f => f.tracks.forEach(tr => tr.clips.forEach(c => { if(isNest(c.take)) return; if(!takeOf(c.take)) findLost(c.take); else if(!fileOf(takeOf(c.take)) && !takes().find(x => x.id===c.take)) findLost(c.take); }))); drawDots(); const r = reviewList(); if(EMBED){ try{ window.parent.H3Badge(r.length); }catch(e){} } $('#roomBadge').innerHTML = r.length ? `<span class="badge">${r.length}</span>` : '';
   if(ensureMovies() | splitTracks()) saveRaw();
   const v = N().v, f = v==='film' && filmOf(N().film), mv = v==='movie' && movieOf(N().movie);
-  if(mv){ go({v:'film', film:editOf(mv).id}); return; }
+  // (Jordan 2026-11-19: "take out the timeline for a film and instead have the shots stay as their own timelines") a film is its list of
+  // shots; the old film-wide timeline (the hidden edit entry) is kept in the data but not shown, and opening it goes to the film's shots
+  if(f && f.edit){ go(movieOf(f.movie) ? {v:'movie', movie:f.movie} : {v:'home'}); return; }
   $('#view').innerHTML = f ? (f.edit ? editView(f) : filmView(f)) : mv ? movieView(mv) : v==='review' ? reviewView() : homeView();
-  if(mv){ wireMovie(mv); const V = mvFilm(mv); if(V.exp && V.exp.state==='working') expPoll(V); else if(V.exp && V.exp.state==='done') expFetch(V); }
   if(f){ wireFilm(f); pxFilm(f, PH); { const b = PSEL && blockOf(f, PSEL); if(b) blockSheet(f, b); } clipPanel(f, SEL && clipOf(f, SEL)); /* a redraw keeps the selected clip's words panel (it went blank after any refresh) */ if(f.exp && f.exp.state==='working') expPoll(f); else if(f.exp && f.exp.state==='done') expFetch(f); if(f.fin && f.fin.state==='working') finPoll(f); }
 }
 // redraw what can change by itself without disturbing a playing video or a drag
@@ -741,21 +743,20 @@ function homeView(){
   ${BARE() ? '' : '<div class="note" style="margin-top:14px">The earlier H3 Film (cast, scenes and cuts) is still at <a href="old.html" style="color:var(--cyan)">old.html</a>.</div>'}`;
 }
 
-// 🎞 a film: its shots in order. Tap a shot to open its own timeline; ⬆⬇ to reorder; ▶ plays them all; ⬇ Export joins them.
-function movieView(m){ const sh = shotsOfM(m), V = mvFilm(m), T = movieSecs(m), ar = canvasAr(V);
+// 🎞 a film: its shots in order, each with its own timeline (Jordan 2026-11-19: no film-wide timeline; H3 Deck leans toward a stock
+// video generator and editor). Tap a shot to open it; ⬆⬇ to reorder. (Later: pick several shots for tools like ⬆ upscale selected shots.)
+function movieView(m){ const sh = shotsOfM(m), T = movieSecs(m);
   const thumb = f => { const c = f.tracks.flatMap(tr => tr.hide ? [] : tr.clips).sort((a, b) => a.at - b.at)[0], t = c && takeOf(c.take), fl = t && fileOf(t);
     return fl ? thumbTag(t.pc, fl, c.in + 0.05) : (c ? 'rendering…' : 'empty'); };
   return crumb([['Films', {v:'home'}], [m.name]]) +
   `<div class="row" style="flex-wrap:nowrap;margin-bottom:10px"><input data-mname value="${esc(m.name)}" placeholder="Film name"><button class="btn warn" data-act="mvDel" aria-label="Delete film">🗑</button></div>
-  <video class="mvplay" id="mvV" playsinline style="--ar:${ar}" ${S.snd ? '' : 'muted'}></video>
-  <div class="row" style="margin-bottom:12px;gap:8px"><button class="btn pri" data-act="mvPlay" id="mvPlayBtn" ${T ? '' : 'disabled'}>▶ Play the film</button><span class="note" style="margin:0;flex:1" id="mvTc">${fmt(T)} · ${sh.length} shot${sh.length===1 ? '' : 's'}</span><button class="btn" data-act="mvExport" ${T ? '' : 'disabled'}>⬇ Export</button></div>
+  <div class="note" style="margin:0 0 10px" id="mvTc">${sh.length} shot${sh.length===1 ? '' : 's'} · ${fmt(T)} in all</div>
   <div class="shots">${sh.map((f, i) => { const n = f.tracks.reduce((a, t) => a + t.clips.length, 0);
     return `<div class="shot" data-nav='${esc(JSON.stringify({v:'film', film:f.id}))}'><div class="th">${thumb(f)}</div><div class="t">${i + 1}. ${esc(shotLabel(f))}<small>${n} clip${n===1 ? '' : 's'} · ${fmt(filmSecs(f))}</small></div>
       <div class="mv"><button class="btn" data-act="mvMove" data-s="${esc(f.id)}" data-d="-1" ${i ? '' : 'disabled'} aria-label="Move up">⬆</button><button class="btn" data-act="mvMove" data-s="${esc(f.id)}" data-d="1" ${i < sh.length - 1 ? '' : 'disabled'} aria-label="Move down">⬇</button></div></div>`; }).join('')
     || '<div class="empty">No shots yet.</div>'}</div>
   <button class="btn pri" data-act="mvNewShot" style="width:100%;padding:13px;margin-top:10px">＋ New shot</button>
-  <div class="note" style="margin-top:8px">Tap a shot to work on its own timeline: carry on, fill a gap, ✨, takes. Every shot has all of this film's characters.</div>
-  <div id="exp">${expHtml(V)}</div>`; }
+  <div class="note" style="margin-top:8px">Each shot is its own video with its own timeline: tap one to carry on, fill a gap, ✨, take, ⬇ export. Every shot has all of this film's characters.</div>`; }
 // 🎬 the film: its own multi-track timeline of nested shots, and the shots under it
 function editView(f){ const m = movieOf(f.movie), sh = shotsOfM(m), T = filmSecs(f), sel = SEL && clipOf(f, SEL), st = sel && takeOf(sel.c.take), ar = canvasAr(f); S.lastFilm = f.id;
   if(m && f.name!==m.name) f.name = m.name;

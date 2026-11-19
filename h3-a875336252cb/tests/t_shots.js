@@ -40,7 +40,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await page.evaluate(() => H3.S.cast.map(c => c.name).join())==='Laura', 'Beach\'s cast is Laura');
   // the film screen
   await fr.click('.crumb button:nth-of-type(2)'); await page.waitForTimeout(300);
-  ok(await fr.evaluate(() => { const f = FILM.S.films.find(x => x.id===FILM.S.nav.film); return f && f.edit && f.movie==='fA'; }) && await fr.$$eval('.shot', e => e.length)===1, 'tapping the film name shows the film\'s own timeline and its shots (1)');
+  ok(await fr.evaluate(() => FILM.S.nav.v==='movie' && FILM.S.nav.movie==='fA') && await fr.$$eval('.shot', e => e.length)===1 && !(await fr.$('#tl')) && !(await fr.$('.stage')), 'tapping the film name shows its shots (1), with no film-wide timeline or player');
   await fr.click('[data-act="mvNewShot"]'); await page.waitForTimeout(600);
   const s2 = await fr.evaluate(() => FILM.S.nav.film);
   const cr = (await fr.$eval('.crumb', e => e.textContent)).replace(/\s+/g, ''); ok(/Beach›Shot2/.test(cr), 'crumb: Films › Beach › Shot 2: ' + cr);
@@ -56,43 +56,24 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   ok(await page.evaluate(() => H3.S.cast.map(c => c.name).join())==='Kat', 'Forest keeps its own cast (Kat)');
   await fr.evaluate(id => FILM.go({v:'film', film:id}), s2); await page.waitForTimeout(600);
   ok(await page.evaluate(() => H3.S.cast.map(c => c.name).join())==='Laura,Mia', 'back in Beach\'s Shot 2: Laura and Mia');
-  // 🎬 nested shots on the film's own timeline
+  // the film is its list of shots: each shot keeps its own timeline (Jordan 2026-11-19), no film-wide timeline
   await fr.evaluate(() => { const f = FILM.S.films.find(x => x.id===FILM.S.nav.film); f.tracks[0].clips.push({id:'c9', take:'tB', in:0, out:2, dur:5, at:0}); FILM.save(); FILM.go({v:'movie', movie:'fA'}); }); await page.waitForTimeout(400);
-  ok(await fr.$$eval('.shot', e => e.length)===2, 'the film shows 2 shots under its timeline');
+  ok(await fr.$$eval('.shot', e => e.length)===2 && !(await fr.$('[data-act="nestPut"]')) && !(await fr.$('[data-act="mvPlay"]')), 'the film lists its 2 shots, no 🎬 Put in film and no film ▶');
   await fr.click('.shot:nth-of-type(2) [data-act="mvMove"][data-d="-1"]'); await page.waitForTimeout(300);
   ok(await fr.evaluate(() => FILM.movieOf('fA').shots[0]!=='fA'), '⬆ moves Shot 2 first in the list');
-  await fr.click('.shot:nth-of-type(2) [data-act="nestPut"]'); await page.waitForTimeout(300);
-  const E = () => fr.evaluate(() => FILM.editOf(FILM.movieOf('fA')).tracks.map(tr => tr.clips.map(c => [c.take, c.at, c.in, c.out, c.dur].join('@')).join(',')).join('|'));
-  ok(await E()==='shot:fA@0@0@5@5', '🎬 Put in film puts the shot on the film timeline as one clip: ' + await E());
-  ok(exp.length===1 && exp[0].clips.map(c => c.filename).join()==='tA.mp4', 'and its video is made on the PC (⬇ export of that shot)');
-  ok(await fr.evaluate(() => FILM.takeOf('shot:fA').state)==='working', 'it shows as rendering until the video is ready');
-  await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300);
-  ok(await fr.evaluate(() => { const t = FILM.takeOf('shot:fA'); return t.state==='done' && t.final.filename==='x1.mp4'; }), 'then the clip plays the shot\'s video (x1.mp4)');
-  ok(await fr.$eval('.shot:nth-of-type(2) small', e => /in the film/.test(e.textContent)), 'the shot says ✓ in the film');
-  // trim it on the film, then change the shot: the clip updates and keeps its cut
-  await fr.evaluate(() => { const c = FILM.editOf(FILM.movieOf('fA')).tracks[0].clips[0]; c.in = 1; c.out = 4; FILM.save(); });
-  await fr.evaluate(() => { const s = FILM.S.films.find(f => f.id==='fA'); s.tracks[0].clips.push({id:'c7', take:'tB', in:0, out:3, dur:5, at:5}); FILM.save(); });
-  ok(await fr.evaluate(() => FILM.nestStale(FILM.S.films.find(f => f.id==='fA'))), 'a change to the shot marks its film clip out of date');
-  for(let i = 0; i < 3; i++){ await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); }
-  ok(exp.length===2 && exp[1].clips.length===2, 'the shot is exported again by itself');
-  ok(await fr.evaluate(() => FILM.takeOf('shot:fA').final.filename)==='x2.mp4' && await E()==='shot:fA@0@1@4@8', 'the film clip now plays the new version and keeps its cut (1–4 of 8 s): ' + await E());
-  // the shot gets shorter than the cut: the cut is shortened
-  await fr.evaluate(() => { const s = FILM.S.films.find(f => f.id==='fA'); s.tracks[0].clips = s.tracks[0].clips.filter(c => c.id==='c7'); s.tracks[0].clips[0].at = 0; FILM.save(); });
-  for(let i = 0; i < 3; i++){ await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); }
-  ok(await E()==='shot:fA@0@1@3@3', 'a shot that got shorter cuts the clip back to its new end: ' + await E());
-  // 🎬 Put all in, ⬇ Export of the film
-  await fr.click('[data-act="nestAll"]'); await page.waitForTimeout(300); for(let i = 0; i < 3; i++){ await fr.evaluate(() => FILM.nestTick()); await page.waitForTimeout(300); }
-  ok((await E()).split(',').length===3, '🎬 Put all in adds every shot after it: ' + await E());
-  const n0 = exp.length; await fr.click('[data-act="export"]'); await page.waitForTimeout(500);
-  ok(exp.length===n0 + 1 && exp[n0].name==='Beach' && exp[n0].clips.every(c => /^x\d+\.mp4$/.test(c.filename)), '⬇ Export of the film sends the shots\' videos: ' + JSON.stringify(exp[n0] && exp[n0].clips.map(c => c.filename + '@' + c.at)));
-  ok(await page.evaluate(() => H3.S.fkey)!==await fr.evaluate(() => FILM.S.nav.film), 'the film timeline doesn\'t take over the Render form');
+  // an old film-wide timeline is kept in the data, but opening it shows the film's shots, and nothing is exported for it
+  await fr.evaluate(() => { const e = FILM.editOf(FILM.movieOf('fA')); FILM.nestPut(FILM.S.films.find(f => f.id==='fA'), true); FILM.save(); FILM.go({v:'film', film:e.id}); }); await page.waitForTimeout(500);
+  ok(await fr.evaluate(() => FILM.S.nav.v==='movie' && FILM.S.nav.movie==='fA'), 'an old film timeline opens as the film\'s shots');
+  const e0 = exp.length; await page.waitForTimeout(4500);
+  ok(exp.length===e0, 'shots are not exported in the background for it any more');
+  ok(await page.evaluate(() => H3.S.fkey)!==await fr.evaluate(() => FILM.S.nav.film), 'the film screen doesn\'t take over the Render form');
   // home lists films, not shots
   await fr.evaluate(() => FILM.go({v:'home'})); await page.waitForTimeout(300);
   ok(await fr.$$eval('#view .item', e => e.map(x => x.textContent).join('|')).then(t => /Beach.*2 shots/.test(t) && /Forest.*1 shot/.test(t) && /Old.*2 shots/.test(t)), 'Films lists films with their shot counts');
   // a shot deleted, then the film
   await fr.evaluate(id => FILM.go({v:'film', film:id}), s2); await page.waitForTimeout(400);
   await fr.click('[data-act="delFilm"]'); await page.waitForTimeout(400);
-  ok(await fr.evaluate(() => FILM.S.films.find(x => x.id===FILM.S.nav.film).edit && FILM.movieOf('fA').shots.join()==='fA' && !FILM.editOf(FILM.movieOf('fA')).tracks.some(tr => tr.clips.some(c => c.take!=='shot:fA'))), '🗑 on a shot takes it (and its film clips) out of the film and shows the film');
+  ok(await fr.evaluate(() => FILM.S.nav.v==='movie' && FILM.movieOf('fA').shots.join()==='fA'), '🗑 on a shot takes it out of the film and shows the film');
   await fr.click('[data-act="mvDel"]'); await page.waitForTimeout(400);
   ok(await fr.evaluate(() => !FILM.movieOf('fA') && !FILM.S.films.some(f => f.id==='fA' || f.edit && f.movie==='fA') && FILM.S.nav.v==='home'), '🗑 on the film deletes it and its shots');
   // new film opens its first shot
