@@ -769,7 +769,9 @@ async function addMedia(file, kind){
   BLOBS[id] = file; try{ await IDB.put(id, file); }catch(e){ toast("Couldn't keep it on the phone; it works until you close the app"); }
   if(kind==='img'){ const im = await imgOf(file); m.w = im.naturalWidth; m.h = im.naturalHeight; m.thumb = thumbOf(im); }
   if(kind==='vid'){ try{ Object.assign(m, await mp4Info(file)); }catch(e){} }
-  if(kind==='vid' || kind==='aud'){ m.dur = await durOf(file, kind); if(kind==='vid'){ const t = await vidThumb(file); if(t){ m.thumb = t.url; m.w = t.w; m.h = t.h; } } }
+  if(kind==='vid' || kind==='aud'){ m.dur = await durOf(file, kind); if(kind==='vid'){ const t = await vidThumb(file); if(t){ m.thumb = t.url; m.w = t.w; m.h = t.h; }
+    // (the file's own shape wins: the phone's player can hand back the stored, unturned size, or no frame at all)
+    if(m.vw && m.vh){ m.w = m.vw; m.h = m.vh; } } }
   S.media[id] = m; save(); return id;
 }
 // frame rate and whether there's sound, read from the file's MP4/MOV boxes (phone videos are often 30 or 60 fps, H3 clips 24)
@@ -783,16 +785,20 @@ async function mp4Info(blob){
     if(ty==='moov'){ moov = new DataView(await blob.slice(off + hd, off + sz).arrayBuffer()); break; } if(sz < 8) break; off += sz; }
   if(!moov) return {};
   const find = (b, ty) => b && kids(moov, b.s, b.e).find(k => k.ty===ty);
-  let fps = 0, sound = false;
+  let fps = 0, sound = false, vw = 0, vh = 0;
   for(const tr of kids(moov, 0, moov.byteLength).filter(k => k.ty==='trak')){
     const md = find(tr, 'mdia'), hd = find(md, 'hdlr'); if(!hd) continue; const ht = cc(moov, hd.s + 8);
     if(ht==='soun') sound = true;
+    // the picture's shape as it shows (Jordan 2026-11-19: a vertical phone video came in wide): the track header's size, turned by its
+    // rotation matrix (a phone stores a tall video as a wide picture plus "turn it 90°")
+    if(ht==='vide' && !vw){ const th = find(tr, 'tkhd'); if(th){ const v1 = moov.getUint8(th.s)===1, mo = th.s + (v1 ? 52 : 40), a = moov.getInt32(mo), b = moov.getInt32(mo + 4);
+      let w = moov.getUint32(mo + 36) / 65536, h = moov.getUint32(mo + 40) / 65536; if(a===0 && Math.abs(b)===65536){ const x = w; w = h; h = x; } if(w > 0 && h > 0){ vw = Math.round(w); vh = Math.round(h); } } }
     if(ht==='vide' && !fps){ const mh = find(md, 'mdhd'), st = find(find(find(md, 'minf'), 'stbl'), 'stts'); if(!mh || !st) continue;
       const ts = moov.getUint32(mh.s + (moov.getUint8(mh.s)===1 ? 20 : 12)), n = moov.getUint32(st.s + 4); let c = 0, d = 0;
       for(let i = 0; i < n; i++){ const k = moov.getUint32(st.s + 8 + i * 8); c += k; d += k * moov.getUint32(st.s + 12 + i * 8); }
       if(d) fps = ts * c / d; } }
   const std = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120].sort((x, y) => Math.abs(x - fps) - Math.abs(y - fps)).find(x => Math.abs(x - fps) < x * 0.005);
-  return {fps:std || Math.round(fps * 1000) / 1000, sound};
+  return Object.assign({fps:std || Math.round(fps * 1000) / 1000, sound}, vw ? {vw, vh} : {});
 }
 function imgOf(blob){ return new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error("that picture couldn't be read")); i.src = URL.createObjectURL(blob); }); }
 function thumbOf(im){ const c = document.createElement('canvas'), s = 220 / Math.max(im.naturalWidth, im.naturalHeight); c.width = Math.max(1, Math.round(im.naturalWidth * s)); c.height = Math.max(1, Math.round(im.naturalHeight * s)); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); return c.toDataURL('image/jpeg', 0.8); }
