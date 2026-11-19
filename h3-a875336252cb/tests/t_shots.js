@@ -19,7 +19,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
     return rt.fulfill({status:404, headers:H, body:''}); });
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const tk = (id, film) => ({id, t:1, pc:R, w:640, h:360, seconds:5, prompt:id, dir:'H3Deck/' + id, film, state:'done', final:F(id + '.mp4'), pieces:[{prompt:id, state:'done', deliv:120, file:F(id + '.mp4')}]});
-  const deck = {pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA', 'fA'), tk('tB', 'fB'), tk('tC', 'fC'), tk('tD', 'fC')], tab:'films', fkey:'fA', cast:[{n:1, name:'Laura', desc:'a woman'}], casts:{fB:[{n:1, name:'Kat', desc:'a cat'}]}};
+  const deck = {bare:false, pcs:[{name:'Render', url:R, on:true}], takes:[tk('tA', 'fA'), tk('tB', 'fB'), tk('tC', 'fC'), tk('tD', 'fC')], tab:'films', fkey:'fA', cast:[{n:1, name:'Laura', desc:'a woman'}], casts:{fB:[{n:1, name:'Kat', desc:'a cat'}]}};
   const edit = {films:[{id:'fA', name:'Beach', pps:24, tracks:[{id:'a1', clips:[{id:'c1', take:'tA', in:0, out:5, dur:5, at:0}]}, {id:'a2', clips:[]}]},
     {id:'fB', name:'Forest', pps:24, tracks:[{id:'b1', clips:[{id:'c2', take:'tB', in:1, out:4, dur:5, at:0}]}]},
     {id:'fC', name:'Old', pps:24, canvas:'tall', tracks:[{id:'o1', clips:[{id:'c5', take:'tC', in:0, out:5, dur:5, at:0}]}, {id:'o2', clips:[{id:'c6', take:'tD', in:0, out:2, dur:5, at:3}], xf:{s:0.4, r:0, x:0, y:0}}, {id:'o3', clips:[]}]}], nav:{v:'film', film:'fA'}, lastFilm:'fA'};

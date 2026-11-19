@@ -35,11 +35,13 @@ const POSTED = [];
   await page.waitForFunction(() => H3.families().length > 1, null, {timeout:20000});
   const fams = await page.evaluate(() => H3.families().map(f => f.key)); const REF = fams.find(k => /hybrid/.test(k));
   page.on('dialog', d => d.accept());
-  const st = () => page.evaluate(() => { const t = H3.snapshot(); return {w:t.w, h:t.h, chips:[...document.querySelectorAll('#sizes [data-mp]')].map(b => b.textContent + (b.classList.contains('on') ? '*' : '')), vis:!document.querySelector('#sizeRow').hidden && document.querySelector('#sizeRow').offsetParent!==null}; });
+  const st = () => page.evaluate(() => { const t = H3.snapshot(); return {w:t.w, h:t.h, chips:[...document.querySelectorAll('#sizes [data-mp]')].map(b => b.textContent + (b.classList.contains('on') ? '*' : '')), vis:document.querySelector('#sizeRow').offsetParent!==null && document.querySelector('#sizeRow').offsetParent!==null}; });
   await page.evaluate(() => { const b = document.querySelector('#bCanvas'); if(b.classList.contains('shut')) b.querySelector('h3').click(); });
   let s = await st(); console.log(JSON.stringify(s));
-  ok(s.vis, 'size chips show in the bare app'); ok(s.chips.length===3, 'three sizes'); ok(s.w===864 && s.h===480, 'default stays 864x480'); ok(/480p.*\*$/.test(s.chips[0]), '480p lit by default');
+  ok(!s.vis, 'size chips are hidden in the bare app (480p quick only, Jordan 2026-11-19)'); ok(s.chips.length===3, 'three sizes'); ok(s.w===864 && s.h===480, 'default stays 864x480'); ok(/480p.*\*$/.test(s.chips[0]), '480p lit by default');
   ok(/1024×576/.test(s.chips[1]), 'middle chip says 1024x576');
+  ok(await page.evaluate(() => H3.S.f.mp)===0.41, 'bare bones keeps 480p');
+  await page.evaluate(() => { H3.S.bare = false; H3.save(); H3.drawAll(); }); // the other sizes: ⚙ Show all tools
   await page.click('#sizes [data-mp="0.59"]'); s = await st(); ok(s.w===1024 && s.h===576, 'middle = 1024x576 (' + s.w + 'x' + s.h + ')'); ok(/\*$/.test(s.chips[1]), 'middle lit');
   await page.click('#aspects [data-asp="9:16"]'); s = await st(); ok(s.w===576 && s.h===1024, 'tall middle = 576x1024 (' + s.w + 'x' + s.h + ')');
   await page.click('#aspects [data-asp="1:1"]'); s = await st(); ok(s.w===768 && s.h===768, 'square middle = 768x768 (' + s.w + 'x' + s.h + ')');

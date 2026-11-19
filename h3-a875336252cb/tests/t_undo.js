@@ -67,6 +67,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   await page.evaluate(() => H3.undoNow()); await page.waitForTimeout(400);
   await fr.evaluate(() => { FILM.S.films[0].name = 'Renamed'; FILM.save(); }); await page.evaluate(() => H3.undoNow());
   ok((await U())[0] >= nU + 2, 'film changes are steps of the same one history: ' + (await U()));
+  await fr.evaluate(() => { if(document.body.classList.contains('bare') && !document.body.classList.contains('edopen')) document.querySelector('[data-act="edTools"]').click(); }); await page.waitForTimeout(200); // (2026-11-19) the Films ↶ is under 🛠 Editing tools
   const fb = await fr.$('#undoBtn'); ok(fb && !(await fb.isDisabled()), "the Films timeline's own ↶ is lit");
   await fb.click(); await page.waitForTimeout(300);
   ok(await fr.evaluate(() => FILM.S.films[0].name==='Film A'), "the Films ↶ is the same undo: the film's name is back");

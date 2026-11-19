@@ -13,7 +13,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
   const F = n => ({filename:n, subfolder:'Output_Render/H3Deck/x', type:'output'});
   const base = {model:'m', loras:[], imgs:[], vids:[], auds:[], follow:[], seconds:5, seed:1, dir:'H3Deck/x', pc:R, w:640, h:360, state:'done', pieces:[{deliv:120, state:'done', file:F('p.mp4')}], film:'F1'};
   const T = (id, o) => Object.assign({}, base, {id, name:'h3_' + id, final:F(id + '.mp4')}, o);
-  const deck = {pcs:[{name:'Render', url:R, on:true}], takes:[T('a', {t:1, prompt:'A woman walks in'}),
+  const deck = {bare:false, pcs:[{name:'Render', url:R, on:true}], takes:[T('a', {t:1, prompt:'A woman walks in'}),
     T('c1', {t:2, prompt:'She sits', carry:{key:'k1'}}), T('c2', {t:3, prompt:'She sits', carry:{key:'k1'}}), T('c3', {t:4, prompt:'She sits', carry:{key:'k1'}})]};
   await page.addInitScript(d => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(d)); sessionStorage.setItem('init', '1'); } }, deck);
   await page.goto('http://127.0.0.1:8033/index.html'); await page.waitForTimeout(2500);
