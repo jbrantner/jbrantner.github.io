@@ -59,13 +59,13 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(await page.evaluate(() => [...document.querySelectorAll('#lookBox [data-lk]')].map(b => b.textContent).join('|')).then(s => /Off\|Anna's look\|Ben's look\|Cat's look\|🖼 Style picture/.test(s)), 'the 🎨 row: Off, each character\'s look, a style picture');
   // Anna's look
   await page.evaluate(() => ['bLook', 'bModel', 'bCanvas'].forEach(id => { H3.S.open[id] = true; document.getElementById(id).classList.remove('shut'); })); // these boxes start folded (declutter 2026-11-15)
-  await page.click('[data-lk="c:1"]'); X = await prom();
+  await page.click('#lookBox [data-lk="c:1"]'); X = await prom();
   console.log(X.p.slice(X.p.indexOf('retention_analysis'), X.p.indexOf('overall_soundscape')));
   ok(/<Subject 1> \(appears in \[Shot 1\]\): fully_preserved - .*\. Its visual style is the look of the whole video\./.test(X.p) && /<Subject 2> \(appears in \[Shot 1\]\): fully_preserved - .*\. <Subject 2> is shown in the same visual style as <Subject 1>\./.test(X.p), "Anna's look: her retention sets it, Ben is shown in her style");
   ok(/detailed_description:\nThe whole target video is in one single visual style, the look of <Subject 1>: every person, object and place/.test(X.p) && /Everything is shown in the visual style of <Subject 1>\./.test(X.p) && !/\u0001/.test(X.p), 'the style line and the summary name <Subject 1>');
   ok(X.imgs.length===3, 'she is in the shot: no extra picture');
   // Cat's look, Cat not in the shot: her first picture goes as a style picture
-  await page.click('[data-lk="c:3"]'); X = await prom();
+  await page.click('#lookBox [data-lk="c:3"]'); X = await prom();
   ok(X.imgs.length===4 && X.imgs[3]===await page.evaluate(() => P.c) && /<Subject 3> is the visual style shown in <Picture 4>\. That picture is a style reference only\./.test(X.p)
     && /<Subject 3> \(appears in \[Shot 1\]\): attribute_transfer - only the visual style of <Picture 4>/.test(X.p) && /<Subject 1> is shown in the same visual style as <Subject 3>/.test(X.p) && /<Subject 2> is shown in the same visual style as <Subject 3>/.test(X.p), "Cat's look with Cat off screen: her picture goes as a style-only reference");
   // style pictures
@@ -77,16 +77,16 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.evaluate(() => { H3.S.f.h3 = false; }); X = await prom(); await page.evaluate(() => { H3.S.f.h3 = true; });
   ok(/<Picture 4> and <Picture 5> are style references only: the whole video, every person, object and place, is shown in their visual style/.test(X.p), 'plain prompt says it too');
   // 🪄 Redraw Ben and Cat in Anna's look
-  await page.click('[data-lk="c:1"]');
-  const btn = await page.evaluate(() => (document.querySelector('[data-lk="redo"]') || {}).textContent || '');
+  await page.click('#lookBox [data-lk="c:1"]');
+  const btn = await page.evaluate(() => (document.querySelector('#lookBox [data-lk="redo"]') || {}).textContent || '');
   ok(/Redraw Ben and Cat in this look \(3 pictures, Qwen on Render\)/.test(btn), 'the redraw button names the others and counts their pictures: ' + btn);
   HOLD = true; await page.evaluate(() => { H3.LIVE_().pid1 = {v:4, max:8}; });
-  await page.click('[data-lk="redo"]');
-  await page.waitForFunction(() => { const b = document.querySelector('[data-lk="redo"]'); return b && b.disabled; }, null, {timeout:10000});
+  await page.click('#lookBox [data-lk="redo"]');
+  await page.waitForFunction(() => { const b = document.querySelector('#lookBox [data-lk="redo"]'); return b && b.disabled; }, null, {timeout:10000});
   await page.waitForFunction(() => /step 4\/8/.test((document.querySelector('#lookProg') || {}).textContent || ''), null, {timeout:10000}).catch(() => {});
   const pg = await page.evaluate(() => ({t:document.querySelector('#lookProg').textContent, w:(document.querySelector('#lookProg .bar i') || {style:{}}).style.width}));
   ok(/Picture 1 of 3 · step 4\/8/.test(pg.t) && /17%/.test(pg.t) && pg.w==='17%', 'progress bar: picture 1 of 3, its live steps, overall % ' + JSON.stringify(pg));
-  const busy = await page.evaluate(() => { const b = document.querySelector('[data-lk="redo"]'), cs = getComputedStyle(b); return {t:b.textContent, cls:b.className, dash:cs.borderTopStyle, anim:cs.animationName}; });
+  const busy = await page.evaluate(() => { const b = document.querySelector('#lookBox [data-lk="redo"]'), cs = getComputedStyle(b); return {t:b.textContent, cls:b.className, dash:cs.borderTopStyle, anim:cs.animationName}; });
   if(process.env.SHOT) await page.locator('#lookBox').screenshot({path:process.env.SHOT.replace(/\.png$/, '_busy.png')});
   HOLD = false;
   ok(/Redrawing 1 of 3…/.test(busy.t) && /busy/.test(busy.cls) && !/pri/.test(busy.cls) && busy.dash==='dashed' && busy.anim==='busyp', 'while it runs: locked, dashed, pulsing, "Redrawing 1 of 3" ' + JSON.stringify(busy));
@@ -94,7 +94,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
   ok(SENT.length===3, 'three Qwen jobs');
   ok(await page.evaluate(() => !document.querySelector('#lookProg .bar')), 'done: the bar goes');
-  ok(await page.evaluate(() => { const b = document.querySelector('[data-lk="redo"]'); return !b.disabled && /pri/.test(b.className) && getComputedStyle(b).borderTopStyle==='solid'; }), 'done: pink and pressable again');
+  ok(await page.evaluate(() => { const b = document.querySelector('#lookBox [data-lk="redo"]'); return !b.disabled && /pri/.test(b.className) && getComputedStyle(b).borderTopStyle==='solid'; }), 'done: pink and pressable again');
   ok(/redrawn with Qwen \(P-H3 not ready/.test(await page.evaluate(() => document.querySelector('#lookNote').textContent)), 'no P-H3 yet: Qwen did it, and says why');
   const G = SENT[0], bad = Object.values(G).flatMap(n => Object.keys(n.inputs).filter(k => { const s = SCHEMA[n.class_type]; return !s || !((s.input.required || {})[k] || (s.input.optional || {})[k]); }).map(k => n.class_type + '.' + k));
   const enc = Object.values(G).filter(n => n.class_type==='TextEncodeQwenImageEditPlus'), ld = Object.values(G).filter(n => n.class_type==='LoadImage').map(n => n.inputs.image);
@@ -105,21 +105,21 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(st.n===3 && st.has && !st.a && st.tiles===3, 'three redrawn copies kept (Anna\'s untouched), shown as tiles');
   X = await prom(); const R2 = await page.evaluate(() => { const L = H3.lookOf(); return {a:P.a, b:L.redo[P.b].id, b0:P.b}; });
   ok(X.imgs[0]===R2.a && X.imgs.includes(R2.b) && !X.imgs.includes(R2.b0), 'takes send Ben\'s redrawn picture and Anna\'s own');
-  await page.click('[data-lk="use"]'); X = await prom();
+  await page.click('#lookBox [data-lk="use"]'); X = await prom();
   ok(X.imgs.includes(R2.b0) && !X.imgs.includes(R2.b), 'Use the redrawn pictures off: the originals go');
-  await page.click('[data-lk="use"]');
-  await page.click('[data-lk="c:2"]'); X = await prom();
+  await page.click('#lookBox [data-lk="use"]');
+  await page.click('#lookBox [data-lk="c:2"]'); X = await prom();
   ok(X.imgs.includes(R2.b0) && !X.imgs.includes(R2.b), "another look: copies made for Anna's look aren't used");
-  ok(await page.evaluate(() => /Redraw Anna and Cat in this look \(2 pictures/.test(document.querySelector('[data-lk="redo"]').textContent)), 'and the button offers to redraw for the new look');
-  await page.click('[data-lk="off"]'); X = await prom();
+  ok(await page.evaluate(() => /Redraw Anna and Cat in this look \(2 pictures/.test(document.querySelector('#lookBox [data-lk="redo"]').textContent)), 'and the button offers to redraw for the new look');
+  await page.click('#lookBox [data-lk="off"]'); X = await prom();
   ok(!/visual style/.test(X.p) && X.imgs.includes(R2.b0), 'off again: as before');
   // ✨ P-H3 Image on the PC: it does the redraw (Qwen stays the fallback)
   await page.evaluate(() => { const oi = H3.PC['http://render.test'].oi; ['PH3ImageConditioning', 'MiniMaxH3SigmaShift', 'ManualSigmas', 'SamplerCustomAdvanced', 'KSamplerSelect', 'RandomNoise', 'BasicGuider'].forEach(c => oi[c] = oi[c] || {input:{required:{}}});
     oi.UNETLoader.input.required.unet_name[0].push('minimax_h3_fl2va_pruned_int8_convrot.safetensors'); oi.LoraLoaderModelOnly.input.required.lora_name[0].push('p-h3-image_lora_bf16.safetensors');
     oi.TextGenerateV2 = {input:{required:{}}}; oi.CLIPLoader.input.required.clip_name[0].push('p-h3-image_text_encoder_int8.safetensors', 'p-h3-image_prompt_upsampler_w4a8.safetensors'); oi.VAELoader.input.required.vae_name[0].push('p-h3-image_vae_int8.safetensors');
     H3.lookOf().src = 'c'; H3.lookOf().n = 1; H3.lookOf().redo = {}; delete H3.S.media[P.c].w; delete H3.S.media[P.c].h; H3.drawLook(); });
-  ok(await page.evaluate(() => /\(3 pictures, P-H3 on Render\)/.test(document.querySelector('[data-lk="redo"]').textContent) && !!document.querySelector('[data-lk="eng:qwen"]')), 'P-H3 there: the button says P-H3, with a Qwen choice');
-  SENT = []; await page.click('[data-lk="redo"]');
+  ok(await page.evaluate(() => /\(3 pictures, P-H3 on Render\)/.test(document.querySelector('#lookBox [data-lk="redo"]').textContent) && !!document.querySelector('#lookBox [data-lk="eng:qwen"]')), 'P-H3 there: the button says P-H3, with a Qwen choice');
+  SENT = []; await page.click('#lookBox [data-lk="redo"]');
   await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || ''), null, {timeout:30000});
   console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
   const PG = SENT[0], by = c => Object.values(PG).filter(n => n.class_type===c), ci = (by('PH3ImageConditioning')[0] || {}).inputs || {};
@@ -141,7 +141,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(/Original · 64×96/.test(F.t), 'Original shows');
   await page.click('#picFull [data-pf="x"]'); ok(!(await fv()), '✕ closes it');
   // 🖼 the first frame in the look, painted by P-H3 from the shot's subjects (redrawn ones) at the video's shape
-  SENT = []; await page.click('[data-lk="frame"]');
+  SENT = []; await page.click('#lookBox [data-lk="frame"]');
   await page.waitForFunction(() => /Done|Couldn't/.test((document.querySelector('#lookNote') || {}).textContent || '') && /🖼/.test(document.querySelector('#lookNote').textContent), null, {timeout:30000});
   console.log(await page.evaluate(() => document.querySelector('#lookNote').textContent));
   const FG = SENT[0], fby = c => Object.values(FG).filter(n => n.class_type===c), fci = fby('PH3ImageConditioning')[0].inputs, ftg = fby('TextGenerateV2')[0].inputs;
@@ -153,17 +153,17 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   X = await prom(); const fid = await page.evaluate(() => H3.lookOf().frame), fk = X.imgs.indexOf(fid) + 1;
   ok(fk > 0 && new RegExp('<Picture ' + fk + '> is an example frame of this scene in that look: the framing, the layout and who is in frame come from the shot\'s own words').test(X.p) && /is the visual style shown in/.test(X.p), 'takes send it as part of the style subject, framing from the words');
   ok(await page.evaluate(fid => !H3.frameRefs().some(r => r.id===fid), fid), 'painting again leaves the old frame out');
-  await page.click('[data-lk="fuse"]'); X = await prom();
+  await page.click('#lookBox [data-lk="fuse"]'); X = await prom();
   ok(!X.imgs.includes(fid), 'switched off: not sent');
-  await page.click('[data-lk="fuse"]');
-  await page.click('[data-lk="funuse"]');
+  await page.click('#lookBox [data-lk="fuse"]');
+  await page.click('#lookBox [data-lk="funuse"]');
   ok(await page.evaluate(() => !H3.S.f.fl && !H3.lookOf().frame), '✕ takes it off');
-  await page.click('[data-lk="eng:qwen"]');
-  ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('[data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
-  await page.click('[data-lk="eng:"]');
+  await page.click('#lookBox [data-lk="eng:qwen"]');
+  ok(await page.evaluate(() => /Qwen on Render/.test(document.querySelector('#lookBox [data-lk="redo"]').textContent) && H3.lookKit(H3.lookOf()).eng==='qwen'), 'Qwen picked: Qwen does it');
+  await page.click('#lookBox [data-lk="eng:"]');
   if(process.env.SHOT) await page.locator('#lookBox').screenshot({path:process.env.SHOT});
   // 📴 close the app mid-redraw: every picture is already in the PC's line; reopening picks them up
-  HOLD = true; SENT = []; await page.click('[data-lk="redo"]');
+  HOLD = true; SENT = []; await page.click('#lookBox [data-lk="redo"]');
   await page.waitForFunction(() => (H3.lookOf().pend || []).length===3, null, {timeout:15000});
   const NOTE = await page.evaluate(() => document.querySelector('#lookNote').textContent);
   ok(SENT.length===3 && /You can close the app/.test(NOTE), 'all three are in the PC\'s line before the first comes back, and it says you can close: ' + NOTE);
