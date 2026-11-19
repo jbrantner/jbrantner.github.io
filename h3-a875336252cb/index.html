@@ -509,6 +509,9 @@ function load(){
   if(!s.wearMig){ s.wearMig = true; for(const L of s.lib) if(L.kind==='attr' && /outfit|cloth|dress|wear|costume|uniform|suit|shirt|\btop\b|sweater|jumper|hoodie|cardigan|blouse|skirt|pants|trousers|jeans|lingerie|bikini|swimsuit|jacket|coat|armou?r|gown|kimono|robe|corset|shoes|boots|\bhat\b/i.test(L.what || '')) L.kind = 'wear'; } // 👗 clothing is its own kind (2026-11-09)
   if(!s.defMig1109){ s.defMig1109 = true; for(const f of [s.f, ...Object.values(s.forms)]) Object.assign(f, {quality:true, qstyle:'', shuffle:1}); } // ✨ quality (✍ Custom) and 🔀 sentence shuffle on by default (Jordan 2026-11-09)
   if(!s.defMig1111){ s.defMig1111 = true; for(const f of [s.f, ...Object.values(s.forms || {})]) if(f) f.shuffle = 0; } // 🔀 Randomize OFF by default (Jordan 2026-11-11: "Can we make randomize off by default?"); the button still turns it on
+  if(!s.swapLoraMig1119){ s.swapLoraMig1119 = true; const sw = l => /pika[^\\/]*flex|flex[^\\/]*pika/i.test(String((l && l.name) || '').split(/[\\/]/).pop()); // 🔄 the swap's LoRA stuck in a form (2026-11-19)
+    for(const f of [s.f, ...Object.values(s.forms || {})]) if(f && Array.isArray(f.loras) && f.loras.some(sw)){ f.loras = f.loras.filter(l => !sw(l)); if(+f.steps===6) f.steps = ''; } }
+  if(!s.refLeakMig1119){ s.refLeakMig1119 = true; const ids = charPicIds(s); for(const f of [s.f, ...Object.values(s.forms || {})]) dropCharRefs(f, ids); } // 👥 characters' pictures that leaked into 🖼 Ref images (2026-11-19)
   if(!s.defMig1118b){ s.defMig1118b = true; for(const t of s.takes || []) if(t.k4 && t.k4.state!=='done' && !(t.k4.fps) ) delete t.k4; } // the 🔀 PIKA-finish mix-up's 4K jobs (no fps) still waiting or running
   if(!s.defMig1118){ s.defMig1118 = true; for(const f of [s.f, ...Object.values(s.forms || {})]) if(f) f.smFin = false; // 📺 4K 60 fps OFF by default (Jordan 2026-11-18: "Why is it auto making it 4k and 60fps now? Can I turn that off?"); it was on by default but hidden in bare bones, so every 🔁 loop / 🪄 smooth made one
     for(const t of s.takes || []) if(t.k4 && t.k4.state==='wait') delete t.k4; } // ones still waiting are dropped too
@@ -1364,6 +1367,19 @@ const refGone = (imgs, k, T) => { const r = (imgs || []).find(x => x.rk===+k) ||
 function refRenum(f, map){ // <Ref Image old> → <Ref Image new> (null = taken out) in the Shot box and the edited pieces
   const fix = v => (v || '').replace(REFRE, (m, n) => map[+n]===undefined ? m : map[+n]===null ? '' : '\u0002' + map[+n] + '\u0002').replace(/\u0002(\d+)\u0002/g, '<Ref Image $1>').replace(/ {2,}/g, ' ');
   f.prompt = fix(f.prompt); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = fix(f.pieceText[k]); const ta = $('#prompt'); if(ta && f===S.f) ta.value = f.prompt; }
+// 👥 a character's pictures go with her chip, never into 🖼 Ref images (Jordan 2026-11-19: Jinx wasn't in the words, yet two of her pictures sat
+// there as Ref Image 1 and 2). A 🔄 swap take keeps its people's pictures in t.imgs, and tapping that clip loaded them into the shot as its own.
+function charPicIds(s){ const ids = new Set(); for(const L of s.lib || []) if(L.kind!=='pose') for(const id of L.pics || []) ids.add(id);
+  for(const cl of [s.cast || [], ...Object.values(s.casts || {}), s.castOld || []]) for(const c of cl){ for(const id of c.pics || []) ids.add(id); if(c.pic) ids.add(c.pic); } return ids; } // (a function, so load() can use it)
+const notOwnPic = r => !!(r && (r.cast || r.attrOf || r.poseOf || r.poseCh || r.style || r.lib)); // (castTake / 🔄 swap marks)
+function dropCharRefs(f, ids, words){ // takes out shot refs that are a character's pictures and that the words don't name; returns how many
+  if(!f || !Array.isArray(f.imgs)) return 0; const txt = [words != null ? words : f.prompt || '', ...Object.values(f.pieceText || {})].join('\n'), named = new Set([...txt.matchAll(/<\s*ref\s*image\s*(\d+)\s*>/gi)].map(m => +m[1]));
+  const SR = f.imgs.filter(r => r && !r.pose && !r.pin), gone = SR.filter((r, i) => ids.has(r.id) && !named.has(i + 1)); if(!gone.length) return 0;
+  const map = {}; let j = 0; SR.forEach((r, i) => { if(!gone.includes(r)){ j++; if(j!==i + 1) map[i + 1] = j; } });
+  f.imgs = f.imgs.filter(r => !gone.includes(r));
+  if(Object.keys(map).length){ const fix = v => (v || '').replace(/<\s*ref\s*image\s*(\d+)\s*>/gi, (m, n) => map[+n]===undefined ? m : '\u0002' + map[+n] + '\u0002').replace(/\u0002(\d+)\u0002/g, '<Ref Image $1>');
+    f.prompt = fix(f.prompt); for(const k of Object.keys(f.pieceText || {})) f.pieceText[k] = fix(f.pieceText[k]); }
+  return gone.length; }
 function rmImg(f, i){ const r = f.imgs[i]; if(!r) return; const SR = shotRefs(f), k = SR.indexOf(r) + 1; f.imgs.splice(i, 1);
   if(k){ const map = {[k]:null}; for(let j = k + 1; j <= SR.length; j++) map[j] = j - 1; refRenum(f, map); } }
 // 💬 dialogue (Jordan 2026-11-13: "a line of dialogue be me selecting the character chip and then typing the line into a box that then wraps it in
@@ -4354,11 +4370,16 @@ async function saveVideo(t){
   }catch(e){ if(e && e.name!=='AbortError') toast("Couldn't get it: " + e.message); }
 }
 function useAgain(t, quiet){
-  const f = S.f; if(t.lines){ S.lines = S.lines || {}; for(const [k, L] of Object.entries(t.lines)) S.lines[k] = Object.assign({}, L); } /* 💬 the take's own lines */ Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).filter(l => !(t.chipLoras || []).includes(l.name)).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl && !t.startPic, first:t.startPic ? null : t.first, startPic:t.startPic || '', last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {})), fillRefs:!!t.fill, rstr:rstrForm(t), pstr:0});
+  // 🔄 a person swap's own settings (its people's pictures, the Pika Flex LoRA, 6 steps, its label as words) are for the swap only: tapping a
+  // swapped clip loads the take it was swapped from (Jordan 2026-11-19: the swap LoRA and Jinx's pictures stayed in a new clip's form)
+  if(t && t.swap){ let src = t, n = 0; while(src && src.swap && src.redo && n++ < 8) src = S.takes.find(x => x.id===src.redo.src); if(src && !src.swap) return useAgain(src, quiet);
+    if(!quiet) toast("That's a 🔄 swap: its settings are for the swap only"); return; }
+  const f = S.f; if(t.lines){ S.lines = S.lines || {}; for(const [k, L] of Object.entries(t.lines)) S.lines[k] = Object.assign({}, L); } /* 💬 the take's own lines */ Object.assign(f, {prompt:t.prompt.split('\n\n＋ ')[0], seconds:t.seconds || f.seconds, model:t.model, turbo:t.turbo, loras:lorasOf(t).filter(l => !(t.chipLoras || []).includes(l.name) && !/pika[^\\/]*flex|flex[^\\/]*pika/i.test(bn(l.name || ''))).map(l => Object.assign({}, l)), steps:t.steps || '', fl:t.fl && !t.startPic, first:t.startPic ? null : t.first, startPic:t.startPic || '', last:t.lastOn, lastImg:t.lastImg, pieceText:{}, descOff:JSON.parse(JSON.stringify(t.descOff || {})), fillRefs:!!t.fill, rstr:rstrForm(t), pstr:0});
   f.sm = !!t.sm; if(t.sm){ f.smUp = !!t.up; if(t.up) Object.assign(f, {smUpX:t.up.scale, smUpRep:t.up.rep || 'medium', smUpStr:t.up.str != null ? t.up.str : 0.8}); Object.assign(f, {smFin:!!t.sm.fin && S.bare===false, smFinLook:(t.sm.fin && t.sm.fin.look) || f.smFinLook || 'live', smBridge:t.sm.bridge!==false, smVid:t.sm.vid, smStart:t.sm.start, smEvery:t.sm.every, smSound:t.sm.sound, smSpc:!!t.sm.spc, smEase:t.sm.ease != null ? t.sm.ease : f.smEase, smPunch:t.sm.punch || 0, smLoop:!!t.sm.loop, smSeam:t.sm.loop || f.smSeam, smLoopH:t.sm.lh || 0}); if(t.prompt===SM_PROMPT) f.prompt = ''; }
   if(t.imgs.length || (t.pins || []).length || t.vids.length || t.auds.length || t.follow.length){ f.ref = true;
-    f.imgs = t.imgs.map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}})));
-    { const map = {}; t.imgs.filter(r => !r.pose).forEach((r, j) => { if(r.rk && r.rk!==j + 1) map[r.rk] = j + 1; }); if(Object.keys(map).length) refRenum(f, map); } // 🖼 an off one wasn't kept: the numbers close up
+    f.imgs = t.imgs.filter(r => !notOwnPic(r)).map(r => Object.assign({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:r.pose} : {})).concat((t.pins || []).map(p => ({id:p.id, on:true, desc:'', keep:'', pin:true, pose:{t:p.t}})));
+    { const map = {}; t.imgs.filter(r => !r.pose && !notOwnPic(r)).forEach((r, j) => { if(r.rk && r.rk!==j + 1) map[r.rk] = j + 1; }); if(Object.keys(map).length) refRenum(f, map); } // 🖼 an off one wasn't kept: the numbers close up
+    dropCharRefs(f, charPicIds(S)); // 👥 (a take made while her pictures had leaked in)
     f.vids = t.vids.map(r => ({id:r.id, on:true, sound:r.sound, follow:r.follow, desc:r.desc || '', keep:r.keep || ''})); f.auds = t.auds.map(r => ({id:r.id, on:true, desc:r.desc || '', keep:r.keep || ''})).concat(t.follow.map(r => ({id:r.id, on:true, follow:true}))); }
   else f.imgs = (f.imgs || []).filter(r => r.pose || r.pin); // 🖼 another shot's ref images don't come along
   f.finOn = !!t.fin; if(t.fin) f.finAt = t.fin.at;
