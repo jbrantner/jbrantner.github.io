@@ -226,6 +226,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await p3.click('[data-act="make"]'); await p3.waitForTimeout(200); await p3.fill('#mkW', 'Noa waves'); await p3.click('#mkGo'); await p3.waitForTimeout(1500);
   ok(await p3.evaluate(() => /haven't reached the PCs/.test(document.body.innerText) && !document.querySelector('#sheet').hidden), "Noa (pictures never sent to a PC) isn't rendered as a stranger: it says to open H3 Deck once");
   await ctx3.close();
+  // ⬆ a newer Reel on the site: a banner offers to load it
+  { const p4 = await ctx.newPage(); await p4.route(R + '/**', fake);
+    await p4.route(/reel-5b1e7c94d2a0\/\?u=/, rt => rt.fulfill({status:200, contentType:'text/html', body:'<meta name="reel-build" content="9999-new">'}));
+    await p4.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/'); await p4.waitForTimeout(4500);
+    ok(await p4.evaluate(() => /new version of Reel/.test((document.querySelector('.upd') || {}).textContent || '')), '⬆ a newer Reel on the site shows "A new version of Reel is ready"'); await p4.close(); }
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
