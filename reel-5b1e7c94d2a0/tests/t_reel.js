@@ -324,6 +324,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.click('#card .big.pri, #card button.pri'); await page.waitForTimeout(2500);
   const lt = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(n => { const t = H3.S.takes.find(x => !n.includes(x.id)) || {}; const c = H3.S.cast.find(x => x.lib==='Lmia'); return {prompt:t.prompt, loras:(t.loras || []).map(l => l.name + ':' + l.str), off:c && t.descOff && t.descOff[c.n], fit:c && c.fitHere, lines:t.lines, SL:H3.S.lines, pr:t.pieces && t.pieces[0] && t.pieces[0].prompt}; }, nT);
   ok(/<Lora 1>|soft glow light/.test(lt.prompt || '') && !/\{Glow\}/.test(lt.prompt || '') && lt.loras.includes('glow.safetensors:0.8') && (lt.off || []).includes('add:Lfrk') && !(lt.off || []).includes('fit') && lt.fit===true, "🧩 the take gets Glow's LoRA and words, and ✨ Freckles is on Mia in this take itself (its own 🏷 chips) (" + JSON.stringify(lt) + ')');
+  // ✨ per clip: ↻ Redo has its own "On them in this clip" row, starting from the picked option's look; turning Freckles off there
+  // only changes the new options of this clip (Jordan 2026-11-20: "How do I turn them off and on per shot?")
+  { await page.waitForTimeout(500); const nT2 = await eng.evaluate(() => H3.S.takes.map(t => t.id));
+    await page.click('#redoBtn'); await page.waitForTimeout(300);
+    const row = await page.evaluate(() => ({on:!!document.querySelector('.lk[data-c="Lmia"] [data-at="Lfrk"].on'), lab:/On them in this clip/.test(document.querySelector('#card').textContent)}));
+    await page.click('.lk[data-c="Lmia"] [data-at="Lfrk"]'); await page.click('#rdGo'); await page.waitForTimeout(2500);
+    const r = await eng.evaluate(n => { const c = H3.S.cast.find(x => x.lib==='Lmia'); const t = H3.S.takes.find(x => !n.includes(x.id)) || {}; return {off:c && t.descOff && t.descOff[c.n]}; }, nT2);
+    const m = await page.evaluate(() => { const c = REEL.cur(), ids = c.takes; return ids.map(id => ((c.meta[id] || {}).look || {attrs:{}}).attrs.Lmia || null); });
+    ok(row.on && row.lab && !(r.off || []).includes('add:Lfrk') && m.some(a => a && a.includes('Lfrk')) && m.some(a => a && !a.includes('Lfrk')), '✨ ↻ Redo has its own per-clip row: Freckles off there leaves it off only on the new options (' + JSON.stringify({row, r, m}) + ')');
+    await finish(); }
   // 🙂 character thumbnails centred on the face
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(1500);
   const fb = await eng.evaluate(() => H3.S.faceBox && H3.S.faceBox.mPic).catch(() => null) || await page.frames().find(f => /engine=1/.test(f.url())).evaluate(() => H3.S.faceBox && H3.S.faceBox.mPic);
