@@ -231,11 +231,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.mouse.click(vb.x + vb.w / 2, vb.y + vb.h / 2); await page.waitForTimeout(300);
     ok(await page.evaluate(() => !document.querySelector('#vA').paused), '⏯ tapping it again plays');
     await page.evaluate(() => { const v = document.querySelector('#vA'); v.pause(); v.currentTime = 0; }); await page.waitForTimeout(200);
-    const dur = await page.evaluate(() => document.querySelector('#vA').duration);
+    const dur = await page.evaluate(() => { const v = document.querySelector('#vA'); return Math.min(+v.dataset.b || v.duration, v.duration) - (+v.dataset.a || 0); });
     await page.mouse.move(vb.x + 20, vb.y + vb.h / 2); await page.mouse.down(); for(let k = 1; k <= 6; k++){ await page.mouse.move(vb.x + 20 + k * vb.w * 0.08, vb.y + vb.h / 2); await page.waitForTimeout(40); }
     const mid = await page.evaluate(() => ({t:parseFloat(document.querySelector('#scrubT').textContent), lab:!document.querySelector('#scrubT').hidden})); await page.mouse.up(); await page.waitForTimeout(300);
     const after = await page.evaluate(() => ({paused:document.querySelector('#vA').paused, lab:document.querySelector('#scrubT').hidden}));
-    ok(mid.lab && Math.abs(mid.t - 0.48 * dur) < 0.25 * dur && after.paused && after.lab, '👆 dragging across the viewport scrubs it (' + JSON.stringify({dur, mid, after}) + ')'); }
+    ok(mid.lab && Math.abs(mid.t - 0.48 * dur) < 0.25 * dur && after.paused && after.lab, '👆 dragging across the viewport scrubs it (' + JSON.stringify({dur, mid, after}) + ')');
+    // …and dragging on past the end stays on the last frame, stopped (Jordan 2026-11-20: it jumped back to the start)
+    await page.mouse.move(vb.x + 10, vb.y + vb.h / 2); await page.mouse.down(); for(let k = 1; k <= 8; k++){ await page.mouse.move(vb.x + 10 + k * vb.w * 0.2, vb.y + vb.h / 2); await page.waitForTimeout(60); }
+    await page.waitForTimeout(500); const endT = await page.evaluate(() => ({t:parseFloat(document.querySelector('#scrubT').textContent), paused:document.querySelector('#vA').paused})); await page.mouse.up(); await page.waitForTimeout(500);
+    const endA = await page.evaluate(() => ({paused:document.querySelector('#vA').paused}));
+    ok(Math.abs(endT.t - (dur - 0.05)) < 0.1 && endT.paused && endA.paused, '👆 dragging past the end stays at the end, stopped (' + JSON.stringify({dur, endT, endA}) + ')'); }
   // 📚 Library tab: make a character here, put her in the reel
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => !document.querySelector('#libTab').hidden && document.querySelector('#reelTab').hidden && /Mia/.test(document.querySelector('#libAll').textContent)), '📚 the Library tab lists the characters');
@@ -349,6 +354,18 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await p4.route(/reel-5b1e7c94d2a0\/\?u=/, rt => rt.fulfill({status:200, contentType:'text/html', body:'<meta name="reel-build" content="9999-new">'}));
     await p4.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/'); await p4.waitForTimeout(4500);
     ok(await p4.evaluate(() => /new version of Reel/.test((document.querySelector('.upd') || {}).textContent || '')), '⬆ a newer Reel on the site shows "A new version of Reel is ready"'); await p4.close(); }
+  // ⇿ Across the cut: one new clip over the end of clip 3 and the start of clip 4, both cut back to make room
+  { await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(300);
+    const b0 = await page.evaluate(() => { const cs = REEL.clips(), e = c => { const d = REEL.info(c.pick).secs; return c.out != null ? Math.min(c.out, d) : d; }; return {n:cs.length, endA:e(cs[2]), inA:cs[2].in || 0, inB:cs[3].in || 0, a:cs[2].pick, b:cs[3].pick}; });
+    await page.click('#editBtn'); await page.waitForTimeout(400); await page.click('#edM [data-m="across"]');
+    await page.evaluate(() => { for(const [id, v] of [['#edXA', 1], ['#edXB', 1.5]]){ const s = document.querySelector(id); s.value = v; s.oninput({target:s}); } });
+    await page.fill('#edXW', 'she turns and looks straight at the camera'); n0 = sent.filter(x => x.g).length; await page.click('#edXGo'); await page.waitForTimeout(2500);
+    const r = await page.evaluate(() => { const cs = REEL.clips(); return {n:cs.length, kinds:cs.map(c => c.kind).join(), out:cs[2].out, inB:cs[4].in, mid:cs[3].takes.length, meta:cs[3].meta[cs[3].takes[0]], cur:REEL.S().reels.find(x => x.id===REEL.S().open).cur}; });
+    const g = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap && {aOut:t.lead.gap.aOut, bIn:t.lead.gap.bIn, prompt:t.prompt}; });
+    ok(r.n===b0.n + 1 && Math.abs(r.out - (b0.endA - Math.min(1, b0.endA - b0.inA - 0.5))) < 0.05 && Math.abs(r.inB - (b0.inB + 1.5)) < 0.05 && r.mid >= 1 && r.meta.after===b0.a && r.meta.before===b0.b && r.cur===3
+       && g && Math.abs(g.aOut - r.out) < 0.01 && Math.abs(g.bIn - r.inB) < 0.01 && /looks straight at the camera/.test(g.prompt) && sent.filter(x => x.g).length > n0,
+      '⇿ Across the cut makes one ⇿ clip from 1 s before the cut to 1.5 s into the next clip, both trimmed to make room (' + JSON.stringify({b0, r, g}) + ')');
+    await finish(); }
   // 🧹 Keep only this option (tap twice)
   { await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); const n = await page.evaluate(() => REEL.cur().takes.length);
     await page.click('#keepOne'); await page.waitForTimeout(200); const mid = await page.evaluate(() => ({n:REEL.cur().takes.length, t:document.querySelector('#keepOne').textContent}));
