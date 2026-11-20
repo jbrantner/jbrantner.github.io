@@ -4892,11 +4892,15 @@ function stateLine0(t){
     return (done ? done + ' of ' + n + ' done · ' : '') + (at > 0 ? 'waiting behind ' + at + ' job' + (at > 1 ? 's' : '') : 'starting'); }
   return 'Sending';
 }
+// a take finished on PIKA runs two samplers one after the other: the first model's steps are the first half, PIKA's the second
+// (Jordan 2026-11-20: "6/10 isn't 50% because it does the Pika pass 4/8 afterward"), decoding the very end
+function stageFrac(p, L){ const f = L.v / L.max, stg = p.stg || {}, two = Object.values(stg).includes('PIKA'); if(!two) return f;
+  const st = stg[L.pn]; return st==='first model' ? 0.5 * f : st==='PIKA' ? 0.5 + 0.5 * f : st==='decoding' ? 0.95 + 0.05 * f : f; }
 function progress(t){ // 0..1 by estimates, sharpened by the running piece's steps
   if(t.state!=='working') return t.state==='done' ? 1 : 0;
   if(t.upStage){ const L = LIVE[t.upPid] || {}; return 0.9 + (L.max ? 0.09 * L.v / L.max : 0); }
   const tot = t.pieces.reduce((s, p) => s + (p.est || 1), 0); let got = 0;
-  for(const p of t.pieces){ if(p.state==='done') got += p.est || 1; else if(p.state==='running'){ const L = LIVE[p.pid] || {}; got += (p.est || 1) * (L.max ? 0.1 + 0.8 * L.v / L.max : 0.05); } }
+  for(const p of t.pieces){ if(p.state==='done') got += p.est || 1; else if(p.state==='running'){ const L = LIVE[p.pid] || {}; got += (p.est || 1) * (L.max ? 0.02 + 0.97 * stageFrac(p, L) : 0.02); } }
   return Math.min(0.99, got / tot);
 }
 function timeLeft(t){
@@ -6387,7 +6391,7 @@ if(ENGINE){
   // the characters named in the words: their names become <Subject n>; one picked but not named is put at the start
   const engLines = () => { const o = {}; for(const [k, L] of Object.entries(S.lines || {})) if(L && L.lora) o[k] = Object.assign({}, L, {snap:1, ltext:loraWords(L), loras:JSON.parse(JSON.stringify(loraSet(L)))}); return o; };
   // ✨ Reel's per-reel attributes and clothing: {library id: [attribute/clothing ids]}, put on each one when it's named (Jordan 2026-11-20)
-  let ATTRS = {};
+  let ATTRS = {}, FIT = {};
   const SUBK = ['char', 'thing', 'place'];
   function whoWords(words, who){ let w = String(words || '').trim(); const add = [], pick = new Set(who || []);
     // 🧩 {Name} = a Library LoRA chip: its words where it sits and its LoRAs on the take, as H3 Deck's <Lora k> does
@@ -6396,7 +6400,7 @@ if(ENGINE){
       const k = ++S.lineNo; S.lines[k] = {lora:1, lib:A.id, name:A.name.trim()}; return '<Lora ' + k + '>'; });
     const chars = (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).sort((a, b) => b.name.trim().length - a.name.trim().length); // (longest names first)
     for(const L of chars){ const nm = L.name.trim(), re = new RegExp('(^|[^\\w<])' + nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w>])', 'gi');
-      const on = c => { c.attrs = (ATTRS[L.id] || []).filter(id => { const A = libOf(id); return A && onK(A.kind); }); return c; };
+      const on = c => { c.attrs = (ATTRS[L.id] || []).filter(id => { const A = libOf(id); return A && onK(A.kind); }); if(FIT[L.id]!=null) c.fitHere = !!FIT[L.id]; else delete c.fitHere; return c; };
       if(re.test(w)){ const c = on(libToCast(L)); w = w.replace(re, (m, p) => p + '<Subject ' + c.n + '>'); } // a Library character named in the words
       else if(pick.has(L.id)) add.push('<Subject ' + on(libToCast(L)).n + '>'); } // picked but not named
     return (add.length ? add.join(' and ') + (add.length > 1 ? ' are' : ' is') + ' in the scene. ' : '') + w; }
@@ -6432,12 +6436,14 @@ if(ENGINE){
     models:() => modelList().map(x => ({key:x.key, label:x.label})),
     look:() => ({model:S.f.model, aspect:S.reelAspect || (S.f.aspect==='pic' ? '16:9' : S.f.aspect), turbo:S.f.turbo}),
     setLook:o => { if(o.model) S.f.model = o.model; if(o.aspect){ S.reelAspect = o.aspect; S.f.aspect = o.aspect; } if(o.turbo!=null) S.f.turbo = !!o.turbo; save(); },
-    lib:() => (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || '', pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
+    lib:() => (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || '', pics:libPics(L).slice(), reel:!!L.reel, fit:!!L.fit, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
     // 👥 a character made in Reel: name, a few words about her look, her pictures (kept on the phone and sent with her like H3 Deck's)
     // ✨ 👗 🧩 the rest of the Library, as H3 Deck has it: attributes, clothing, LoRA chips
     extras:() => (S.lib || []).filter(L => ['attr', 'wear', 'lora'].includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || L.what || '',
       loras:(L.loras || []).filter(l => l && l.name).map(l => ({name:l.name, str:l.str})), pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
-    setAttrs:m => { ATTRS = m && typeof m==='object' ? m : {}; },
+    setAttrs:(m, fit) => { ATTRS = m && typeof m==='object' ? m : {}; FIT = fit && typeof fit==='object' ? fit : {}; },
+    // 🎞 the moving preview of a take while it renders (the frames ComfyUI sends this copy of the engine), or ''
+    live:id => { const t = deckTake(id); if(!t || t.state!=='working') return ''; const run = (t.pieces || []).find(p => p.state==='running'), L = run && LIVE[run.pid]; return (L && L.img) || ''; },
     saveChar:async o => { let L = o.id && (S.lib || []).find(x => x.id===o.id); if(L && !L.reel) return {err:"That character is H3 Deck's: change her in H3 Deck's Library"};
       if(!L){ L = {id:'L' + Math.random().toString(36).slice(2, 10), kind:['char', 'thing', 'place', 'attr', 'wear'].includes(o.kind) ? o.kind : 'char', name:'', stand:'', desc:'', pics:[], keep:'exact', what:'', reel:true}; S.lib.push(L); }
       L.name = String(o.name || '').trim() || L.name || 'Character'; if(o.desc!=null) L.desc = String(o.desc).trim();

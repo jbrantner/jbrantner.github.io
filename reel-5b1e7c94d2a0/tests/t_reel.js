@@ -175,7 +175,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // ✨ 🧩 attributes and LoRA chips, as H3 Deck's Library has them
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(400);
   ok(await page.evaluate(() => /Freckles/.test(document.querySelector('#libAttr').textContent) && /Glow/.test(document.querySelector('#libLora').textContent) && !!document.querySelector('#libWear [data-ex="new:wear"]')), '📚 the Library tab has ✨ Attributes, 👗 Clothing and 🧩 LoRAs');
-  await page.click('#libIn [data-ch="Lmia"]'); await page.waitForTimeout(200); await page.click('#chA [data-at="Lfrk"]'); await page.click('[data-close]');
+  await page.click('#libIn [data-ch="Lmia"]'); await page.waitForTimeout(200); await page.click('#chA [data-at="Lfrk"]'); await page.click('#chA [data-fit]'); await page.click('[data-close]');
   ok(await page.evaluate(() => (REEL.R().attrs.Lmia || []).includes('Lfrk')), '✨ Freckles put on Mia for this reel from her card');
   await page.click('#libWear [data-ex="new:wear"]'); await page.waitForTimeout(200); await page.fill('#exN', 'Raincoat'); await page.fill('#exD', 'a long red raincoat'); await page.click('#exGo'); await page.waitForFunction(() => document.querySelector('#sheet').hidden, null, {timeout:8000}).catch(() => {});
   ok(await page.evaluate(() => REEL.E().extras().some(x => x.kind==='wear' && x.name==='Raincoat' && x.reel)), '👗 new clothing made in Reel');
@@ -185,8 +185,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok((await page.inputValue('#' + tw))==='Mia waves {Glow} ' && await page.evaluate(() => !!document.querySelector('.hl mark.lo')), '🧩 tapping Glow puts the {Glow} chip in the words (' + JSON.stringify(await page.inputValue('#' + tw)) + ')');
   const nT = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(() => H3.S.takes.map(t => t.id));
   await page.click('#card .big.pri, #card button.pri'); await page.waitForTimeout(2500);
-  const lt = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(n => { const t = H3.S.takes.find(x => !n.includes(x.id)) || {}; const c = H3.S.cast.find(x => x.lib==='Lmia'); return {prompt:t.prompt, loras:(t.loras || []).map(l => l.name + ':' + l.str), attrs:c && c.attrs, lines:t.lines, SL:H3.S.lines, pr:t.pieces && t.pieces[0] && t.pieces[0].prompt}; }, nT);
-  ok(/<Lora 1>|soft glow light/.test(lt.prompt || '') && !/\{Glow\}/.test(lt.prompt || '') && lt.loras.includes('glow.safetensors:0.8') && (lt.attrs || []).includes('Lfrk'), "🧩 the take gets Glow's LoRA and words, and ✨ Freckles is on Mia (" + JSON.stringify(lt) + ')');
+  const lt = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(n => { const t = H3.S.takes.find(x => !n.includes(x.id)) || {}; const c = H3.S.cast.find(x => x.lib==='Lmia'); return {prompt:t.prompt, loras:(t.loras || []).map(l => l.name + ':' + l.str), attrs:c && c.attrs, fit:c && c.fitHere, lines:t.lines, SL:H3.S.lines, pr:t.pieces && t.pieces[0] && t.pieces[0].prompt}; }, nT);
+  ok(/<Lora 1>|soft glow light/.test(lt.prompt || '') && !/\{Glow\}/.test(lt.prompt || '') && lt.loras.includes('glow.safetensors:0.8') && (lt.attrs || []).includes('Lfrk') && lt.fit===true, "🧩 the take gets Glow's LoRA and words, and ✨ Freckles is on Mia (" + JSON.stringify(lt) + ')');
   // 🙂 character thumbnails centred on the face
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(1500);
   if(process.env.DBG) console.log('DBG', faces.length, await page.frames().find(f => /engine=1/.test(f.url())).evaluate(async () => { try{ return JSON.stringify([H3.S.faceBox, Object.keys(H3.S.media), H3.S.pcs.map(p => [p.url, typeof H3.pcOf]), await H3Engine.faceBox('mPic')]); }catch(e){ return 'ERR ' + e.message; } }));
