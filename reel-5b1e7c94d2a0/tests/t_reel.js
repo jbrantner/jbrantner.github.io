@@ -126,9 +126,28 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // ▶ Play all
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
+  // 📚 Library tab: make a character here, put her in the reel
+  await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => !document.querySelector('#libTab').hidden && document.querySelector('#reelTab').hidden && /Mia/.test(document.querySelector('#libAll').textContent)), '📚 the Library tab lists the characters');
+  await page.click('#libAll [data-ch="new"]'); await page.waitForTimeout(200); await page.fill('#chN', 'Zoe'); await page.fill('#chD', 'short black hair');
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#chAdd')]); await fc.setFiles(path.join(root, 'reel-5b1e7c94d2a0', 'icon-192.png')); await page.waitForTimeout(300);
+  await page.click('#chGo'); await page.waitForTimeout(1200);
+  const zo = await page.evaluate(() => { const z = REEL.E().lib().find(x => x.name==='Zoe'); return z && {reel:z.reel, pics:z.pics.length, inReel:REEL.R().cast.includes(z.id), card:/Zoe/.test(document.querySelector('#libIn').textContent)}; });
+  ok(zo && zo.reel && zo.pics===1 && zo.inReel && zo.card, '＋ New makes a character with her picture and puts her in this reel (' + JSON.stringify(zo) + ')');
+  await page.click('#libAll [data-ch="Lmia"]'); await page.waitForTimeout(200); await page.click('#chIn'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => REEL.R().cast.includes('Lmia')), "tapping H3 Deck's Mia puts her in this reel too");
+  if(process.env.SHOT3) await page.screenshot({path:process.env.SHOT3});
+  await page.click('#tabs [data-tab="reel"]'); await page.waitForTimeout(300); if(process.env.SHOT3) await page.screenshot({path:process.env.SHOT3.replace('.png', 'b.png'), fullPage:true});
+  ok(await page.evaluate(() => /Zoe/.test(document.querySelector('#castRow').textContent) && /Mia/.test(document.querySelector('#castRow').textContent)), '👥 In this reel under the options shows both');
+  await page.click('#nextBtn'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => document.querySelectorAll('#who button.on').length===2), 'a new clip starts with the reel\'s characters picked'); await page.click('[data-close]');
+  // Zoe stays after the engine reloads (Reel's own, kept apart from H3 Deck's Library)
+  await eng.evaluate(() => location.reload()); await page.waitForTimeout(3000);
+  const eng2 = page.frames().find(f => /engine=1/.test(f.url()));
+  ok(await eng2.evaluate(() => H3.S.lib.some(L => L.name==='Zoe' && L.reel) && H3.S.lib.some(L => L.name==='Mia')), "Zoe is still there after the engine reopens, next to H3 Deck's Library");
   // H3 Deck's own save is untouched, nothing was sent over its copies on the PCs
   const deck = await page.evaluate(() => JSON.parse(localStorage.getItem('h3deck')));
-  ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld, "H3 Deck's own save is untouched (its take and pictures are still there)");
+  ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld && deck.lib.length===1, "H3 Deck's own save is untouched (its take and pictures are still there)");
   ok(!sent.some(x => x.userdata && /h3deck_(takes|films|run)/.test(x.userdata)) && !sent.some(x => x.run), "the engine never writes H3 Deck's copies on the PCs or wakes the 🌙 hidden copy");
   // H3 Deck itself still opens normally on its own save
   const p2 = await ctx.newPage(); p2.on('pageerror', e => { console.log('DECK PAGE ERROR', e.message); fails++; });
