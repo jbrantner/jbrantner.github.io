@@ -7,7 +7,7 @@ const R = 'http://render.test', CLIP = process.env.CLIP;
 if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); process.exit(2); }
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
-  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors']], weight_dtype:[['default']]}}},
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
@@ -16,7 +16,7 @@ const SCHEMA = {
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
-  'BboxDetectorSEGS','UltralyticsDetectorProvider','SegsToCombinedMask','MaskToImage','PreviewImage','Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
+  'BboxDetectorSEGS','UltralyticsDetectorProvider','SplitSigmas','DisableNoise','SegsToCombinedMask','MaskToImage','PreviewImage','Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
 (async () => {
   const root = path.join(__dirname, '..', '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
@@ -80,6 +80,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const tk1 = await eng.evaluate(() => H3.S.takes.map(t => ({id:t.id, prompt:t.prompt})));
   ok(g1.length===2 && tk1.length===2 && tk1.every(t => /<Subject 1>/.test(t.prompt) && !/\bMia\b/.test(t.prompt)), 'New clip sends 2 options, Mia named as <Subject 1> (' + JSON.stringify(tk1) + ')');
   ok(g1.every(x => nodes(x.g, 'LoadImage').length >= 1), "her Library picture goes with it");
+  ok(await eng.evaluate(() => { const t = H3.S.takes[0]; return !!t.h3 && t.h3.quality===true && t.boost===true && /ref2va/.test(t.model) && t.fin && t.fin.at===0.5; }), 'a Reel take gets H3 Deck\'s bare-bones settings (references, the H3 way, ✨ quality on)');
+  { const w = await page.evaluate(() => { const ids = REEL.clips()[REEL.R().cur].takes, st = ids.map(id => REEL.info(id).state); const other = ids.find(id => id!==REEL.clips()[REEL.R().cur].pick);
+      return {st, other, html:document.querySelector('#wheel').innerHTML}; });
+    ok(!/\$\{/.test(w.html), 'the wheel shows no stray code while a clip renders');
+    if(w.other && /working|done/.test((await page.evaluate(id => REEL.info(id).state, w.other)))){ await page.click(`#opts [data-o="${w.other}"]`).catch(() => {}); await page.waitForTimeout(200);
+      ok(await page.evaluate(id => REEL.clips()[REEL.R().cur].pick===id && !!document.querySelector(`[data-o="${id}"].on`), w.other), 'tapping an option, even one still rendering, makes it the one on the main screen (' + JSON.stringify(w.st) + ')'); } }
   const st = await page.evaluate(() => ({clips:REEL.clips().length, takes:REEL.cur().takes.length, words:REEL.cur().words}));
   ok(st.clips===1 && st.takes===2, 'the reel has one clip with two options (' + JSON.stringify(st) + ')');
   // finish them (the PC is fake)
