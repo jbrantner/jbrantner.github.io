@@ -174,6 +174,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await finish();
   // 🎬 Final pass: ✨ High quality on every clip's picked option with Prism Pika, chained clip to clip, picked as a new option
   { const before = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length})));
+    const w0 = await page.evaluate((async () => { const out = []; for(let i = 1; i < REEL.clips().length; i++){ REEL.go(i); await new Promise(r => setTimeout(r, 250)); out.push(/may jump/.test(document.querySelector('#warnBox').textContent)); } REEL.go(0); await new Promise(r => setTimeout(r, 250)); return out; }));
     await page.click('#finBtn'); await page.waitForTimeout(300);
     ok(await page.evaluate(() => /Final pass on \d+ clip/.test(document.querySelector('#fnGo').textContent)), '🎬 Final pass sheet opens');
     await page.click('#fnGo'); await page.waitForTimeout(4000);
@@ -186,6 +187,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     // ⬆ upscaled options and clips show a badge
     const bd = await page.evaluate(() => ({wi:document.querySelectorAll('#wheel .upb').length, opt:document.querySelectorAll('#opts .opt.on .upb').length, all:REEL.clips().every(c => c.up && REEL.isUp(c, c.pick))}));
     ok(bd.wi >= 1 && bd.opt===1 && bd.all, '⬆ an upscaled clip shows "⬆ Upscaled" in the wheel and ⬆ on its option (' + JSON.stringify(bd) + ')');
+    { const w = await page.evaluate((async () => { const out = []; for(let i = 1; i < REEL.clips().length; i++){ REEL.go(i); await new Promise(r => setTimeout(r, 250)); out.push(/may jump/.test(document.querySelector('#warnBox').textContent)); } REEL.go(0); await new Promise(r => setTimeout(r, 250)); return out; }));
+      ok(JSON.stringify(w)===JSON.stringify(w0), '⬆ the final pass doesn\'t add "made for another option of the clip before" warnings (' + JSON.stringify({w0, w}) + ')'); }
     // ⬆ a new option of an upscaled clip gets the same ✨ pass once it's done, and replaces it as the pick
     { const r = await page.evaluate(async () => { const c = REEL.cur(), src = c.meta[c.pick].src; const x = await REEL.E().again({take:src, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
         REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; c.upPx = 1e9; return {id, reup:c.meta[id].reup, n:c.takes.length}; });
