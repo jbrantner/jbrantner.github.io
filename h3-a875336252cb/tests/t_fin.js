@@ -40,6 +40,15 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
       const lorasOn = s => { const gd = ref(s.inputs.guider); let m = ref(gd.inputs.model), out = []; while(m && m.class_type!=='UNETLoader'){ if(m.class_type==='LoraLoaderModelOnly') out.push([m.inputs.lora_name, m.inputs.strength_model]); m = ref(m.inputs.model); } return {unet:m && m.inputs.unet_name, los:out}; };
       return {t, n:sas.length, a:sig(sas[0]), b:sig(sas[1]), la:lorasOn(sas[0]), lb:lorasOn(sas[1])}; };
     o.half = graph(); f.finAt = 0.375; o.three = graph(); f.finAt = 0.75; o.q3 = graph(); f.finAt = 0.6; o.old = graph();
+    // 🎨 a redo at a strength (Jordan 2026-11-20: PIKA ran 10 of 20, "should be 4/8")
+    ['VAEEncode', 'LTXVSeparateAVLatent', 'LTXVConcatAVLatent', 'GetVideoComponents', 'LoadVideo', 'ImageFromBatch'].forEach(k => { if(!oi[k]) oi[k] = {input:{required:{}}}; });
+    const red = str => { f.finAt = 0.5; const t = H3.snapshot(); t.id = 'r' + str; t.pc = R; t.seed = 3; t.dir = 'H3Deck/r'; t.name = 'r'; t.redo = {str, F:400, Fout:400, L:121, s0:0, file:'src.mp4', src:'x', root:'x', a:0, b:5, pins:[], sound:false};
+      let g; try{ g = H3.pieceGraph(t, 0, oi, {}).g; }catch(e){ return 'ERR ' + e.message; } const ref = v => v && g[v[0]];
+      return Object.values(g).filter(x => x.class_type==='SamplerCustomAdvanced').map(s => { let v = s.inputs.sigmas, ch = [], n;
+        while((n = ref(v)) && n.class_type==='SplitSigmas'){ ch.push(v[1] + '@' + n.inputs.step); v = n.inputs.sigmas; }
+        let m = ref(n.inputs.model); while(m && m.class_type!=='UNETLoader') m = ref(m.inputs.model);
+        return {noise:ref(s.inputs.noise).class_type, ch:ch.join(' '), steps:n.inputs.steps, den:n.inputs.denoise, pika:/PIKA/i.test(m && m.inputs.unet_name)}; }); };
+    o.red6 = red(0.6); o.red3 = red(0.3); f.finAt = 0.6;
     { f.finAt = 0.5; const t = H3.snapshot(); t.id = 's1'; t.pc = R; t.seed = 3; t.dir = 'H3Deck/s'; t.name = 's'; const g = H3.pieceGraph(t, 0, oi, {}).g, st = H3.stagesOf(g), sa = Object.keys(g).filter(k => g[k].class_type==='SamplerCustomAdvanced'), dec = Object.keys(g).find(k => /^VAEDecode/.test(g[k].class_type));
       o.stg = [st[sa[0]], st[sa[1]], st[dec]]; const p = {stg:st};
       o.lines = [H3.stepLine(p, {pn:sa[0], v:3, max:10}), H3.stepLine(p, {pn:sa[1], v:2, max:4}), H3.stepLine(p, {pn:dec, v:3, max:3}), H3.stepLine(p, {pn:sa[1], v:2, max:4}, true), H3.stepLine({}, {pn:'9', v:3, max:8})];
@@ -53,6 +62,8 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
   ok(/prismPIKA/.test(H.b.unet) && H.b.steps===8 && H.b.step===4 && H.b.half===1, 'PIKA: its own last 4 of 8 steps (was 10 of 20) ' + JSON.stringify(H.b));
   { const a = Object.fromEntries(r.half.la.los), b = Object.fromEntries(r.half.lb.los);
     ok(a['DetailSlider-V1.safetensors']===0.75 && b['DetailSlider-V1.safetensors']===0.5 && b['MMH3-Realism-V2-HyperFlow-ref2va.safetensors']===0.35 && b['minimax_h3_cinematic_v2_tutu.safetensors']===0.35, 'vanilla keeps its boost mix, PIKA gets the lighter PIKA mix ' + JSON.stringify(r.half.lb.los)); }
+  ok(JSON.stringify(r.red6)===JSON.stringify([{noise:'RandomNoise', ch:'1@8 0@10', steps:20, den:1, pika:false}, {noise:'DisableNoise', ch:'1@4', steps:8, den:1, pika:true}]), '🎨 a redo at 0.6: first model steps 8-10 of its 20, PIKA its own last 4 of 8 ' + JSON.stringify(r.red6));
+  ok(JSON.stringify(r.red3)===JSON.stringify([{noise:'RandomNoise', ch:'1@6', steps:8, den:1, pika:true}]), '🎨 a light redo at 0.3: PIKA alone, its own last 2 of 8 ' + JSON.stringify(r.red3));
   ok(r.three.a.steps===24 && r.three.a.step===9 && r.three.b.step===3 && r.three.b.steps===8, '3/8 handover: vanilla 9 of 24, PIKA last 5 of 8 ' + JSON.stringify([r.three.a, r.three.b]));
   ok(r.q3.a.steps===20 && r.q3.a.step===15 && r.q3.b.step===6, '3/4 handover: vanilla 15 of 20, PIKA last 2 of 8');
   ok(r.old.b.step===5 && r.old.a.step * 8 === r.old.a.steps * 5, 'an old 0.6 setting snaps to 5/8, both models meet at the same point ' + JSON.stringify([r.old.a, r.old.b]));

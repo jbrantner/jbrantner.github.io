@@ -3475,13 +3475,20 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     // (Jordan 2026-11-18: "does it do anything weird if pika is using 20 steps"): PIKA used to finish on the first model's 20-step schedule,
     // 10 steps for a stretch it normally covers in 4, with vanilla's stronger ✨ boost LoRAs. Now each model runs its own schedule and they
     // meet at the same point: PIKA does the tail of its own 8 steps, the first model the head of its own steps (finPlan), PIKA gets PIKA's boost mix
-    const P = den===1 ? finPlan(t, steps) : null, smp = [add('KSamplerSelect', {sampler_name:'res_multistep'}), 0];
-    const sp = add('SplitSigmas', {sigmas:[P ? add('BasicScheduler', {model, scheduler:'simple', steps:P.s1, denoise:1}) : sig, 0], step:P ? P.k : finSplit(t, steps)});
-    const a1 = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:smp, sigmas:[sp, 0], latent_image:lat0});
+    // (Jordan 2026-11-20: a 🎨 Change it / redo at a strength ran PIKA 10 of 20 "when it should be 4/8"): a redo now uses the same plan. The
+    // first model starts lower on its own schedule (strength = how far down it starts) and still hands over at PIKA's j of 8; a strength
+    // below the handover leaves the first model out and PIKA starts from that point on its own 8 steps
+    const P = finPlan(t, steps), smp = [add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], st = den >= 0.995 ? 0 : Math.round(P.s1 * (1 - den));
     const pk = pikaOf(oi); let m2 = [add('UNETLoader', {unet_name:pk, weight_dtype:'default'}), 0];
     for(const l of allLoras(oi, Object.assign({}, t, {model:famKey(pk), turbo:false}))) m2 = [add('LoraLoaderModelOnly', {model:m2, lora_name:l.name, strength_model:+l.str}), 0];
-    const s2 = P ? [add('SplitSigmas', {sigmas:[add('BasicScheduler', {model:m2, scheduler:'simple', steps:PIKA_STEPS, denoise:1}), 0], step:P.j}), 1] : [sp, 1];
-    out = add('SamplerCustomAdvanced', {noise:[add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:s2, latent_image:[a1, 0]});
+    const p8 = [add('BasicScheduler', {model:m2, scheduler:'simple', steps:PIKA_STEPS, denoise:1}), 0];
+    if(st < P.k){
+      const sp = add('SplitSigmas', {sigmas:[add('BasicScheduler', {model, scheduler:'simple', steps:P.s1, denoise:1}), 0], step:P.k});
+      const head = st > 0 ? [add('SplitSigmas', {sigmas:[sp, 0], step:st}), 1] : [sp, 0];
+      const a1 = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:smp, sigmas:head, latent_image:lat0});
+      out = add('SamplerCustomAdvanced', {noise:[add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[add('SplitSigmas', {sigmas:p8, step:P.j}), 1], latent_image:[a1, 0]});
+    } else { const jj = Math.max(P.j, Math.min(PIKA_STEPS - 1, Math.round(PIKA_STEPS * (1 - den))));
+      out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[add('SplitSigmas', {sigmas:p8, step:jj}), 1], latent_image:lat0}); }
   } else out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], sigmas:[sig, 0], latent_image:lat0}); }
   if(chain && !X) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
