@@ -154,6 +154,19 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await p2.route(R + '/**', fake); await p2.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await p2.goto('http://127.0.0.1:8041/h3-a875336252cb/'); await p2.waitForTimeout(2500);
   ok(await p2.evaluate(() => H3.S.takes.some(t => t.id==='tDeck') && !H3.S.takes.some(t => /<Subject 1> sits/.test(t.prompt || ''))), "H3 Deck opens with its own takes, not Reel's");
+  // Reel as its own home-screen app (its own storage, no H3 Deck save there): the Library comes from H3 Deck's copy on the PCs
+  const ctx3 = await br.newContext({viewport:{width:390, height:844}}), p3 = await ctx3.newPage(); p3.on('pageerror', e => { console.log('REEL3 PAGE ERROR', e.message); fails++; });
+  const fake3 = async rt => { const u = new URL(rt.request().url()), pa = u.pathname;
+    if(pa==='/userdata/h3deck_films.json' && rt.request().method()==='GET') return rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify({v:1, t:Date.now(), films:[],
+      lib:[{id:'Lkai', kind:'char', name:'Kai', stand:'man', desc:'blue jacket', pics:['mKai'], keep:'exact', what:''}], media:{mKai:{id:'mKai', kind:'img', name:'kai.png', type:'image/png', thumb:'blob:gone'}}, up:{['mKai|' + R]:'h3deck/h3deck_mKai.png'}})});
+    if(pa==='/view' && u.searchParams.get('type')==='input') return rt.fulfill({status:200, contentType:'image/png', headers:{'Access-Control-Allow-Origin':'*'}, body:Buffer.from(PNG, 'base64')});
+    return fake(rt); };
+  await p3.route(R + '/**', fake3); await p3.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
+  await p3.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/'); await p3.waitForTimeout(5000);
+  await p3.click('#tabs [data-tab="lib"]'); await p3.waitForTimeout(7000);
+  const k3 = await p3.evaluate(() => { const b = [...document.querySelectorAll('#libAll [data-ch]')].find(x => /Kai/.test(x.textContent)), im = b && b.querySelector('img'); return {card:!!b, src:im ? im.src.slice(0, 5) : ''}; });
+  ok(k3.card && k3.src==='blob:', "on its own storage, Reel's Library shows H3 Deck's characters from the PCs' copy, picture and all (" + JSON.stringify(k3) + ')');
+  await ctx3.close();
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
