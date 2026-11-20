@@ -26,6 +26,13 @@ App: https://jbrantner.github.io/reel-5b1e7c94d2a0/ (add it to the home screen).
 - 👥 Who's in it: H3 Deck's 📚 Library characters. Tapping one puts the name in the words; any Library character named in the words
   is sent as `<Subject n>` with her pictures.
 
+## 📚 Library tab (Jordan 2026-11-20: "a library tab like Render Deck does")
+- 🎞 Reel / 📚 Library tabs under the header. The Library lists H3 Deck's 📚 Library characters plus ones made here (＋ New: name,
+  what she looks like, 1–4 pictures). Tap one to put her in this reel (`reel.cast`); the reel's characters are picked in 👥 Who's in it
+  for every new clip. 👥 In this reel shows them under the options (＋ opens the Library).
+- Characters made in Reel live in the engine's own save (`L.reel`), kept next to H3 Deck's Library on every start; H3 Deck's save is
+  never written. H3 Deck's own characters are changed in H3 Deck.
+
 ## Engine
 The page loads `../h3-a875336252cb/?engine=1` in a hidden frame (same site, so same storage). In engine mode H3 Deck:
 - keeps its own save under `h3reel_engine` (its own takes and form), and on every start reads H3 Deck's `h3deck` save for the 📚 Library
