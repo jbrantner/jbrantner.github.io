@@ -14,7 +14,7 @@ const SCHEMA = {
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
   ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
 };
-const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
+const OTHER = ['MiniMaxH3ReferenceToVideo','NAGGuiderMiniMaxH3','CLIPTextEncode','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
   'BboxDetectorSEGS','UltralyticsDetectorProvider','SplitSigmas','DisableNoise','SegsToCombinedMask','MaskToImage','PreviewImage','Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
@@ -50,8 +50,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.route(R + '/**', fake); await page.route('http://main.test/**', fake);
   // H3 Deck's own save: a Library character and its picture, one take of its own, the PCs
   const PNG = fs.readFileSync(path.join(root, 'reel-5b1e7c94d2a0', 'icon-vhs-180.png')).toString('base64');
-  const DECK = {pcs:[{name:'Render', url:R, on:true, speed:1}], f:{model:'', aspect:'16:9', mp:0.41, turbo:true}, takes:[{id:'tDeck', t:1, state:'done', prompt:'H3 Deck take', pieces:[], imgs:[], vids:[], auds:[], follow:[]}],
-    lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}, {id:'Lfrk', kind:'attr', name:'Freckles', stand:'', desc:'light freckles', pics:[], keep:'exact', what:''}, {id:'Lglow', kind:'lora', name:'Glow', stand:'', desc:'', pics:[], keep:'exact', what:'soft glow light', loras:[{name:'glow.safetensors', str:0.8}]}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{['mPic|' + R]:'h3deck/h3deck_mPic.png'}};
+  const DECK = {pcs:[{name:'Render', url:R, on:true, speed:1}], f:{model:'', aspect:'16:9', mp:0.41, turbo:true, qtext:'Soft film grain and gentle handheld sway.', negOn:true, neg:'blurry hands', h3Style:'A quiet indie film.'}, takes:[{id:'tDeck', t:1, state:'done', prompt:'H3 Deck take', pieces:[], imgs:[], vids:[], auds:[], follow:[]}],
+    lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}, {id:'Lpip', kind:'char', name:'Pip', stand:'cat girl', desc:'an anthro cat with orange fur', pics:['mPic'], keep:'exact', what:''}, {id:'Lfrk', kind:'attr', name:'Freckles', stand:'', desc:'light freckles', pics:[], keep:'exact', what:''}, {id:'Lglow', kind:'lora', name:'Glow', stand:'', desc:'', pics:[], keep:'exact', what:'soft glow light', loras:[{name:'glow.safetensors', str:0.8}]}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{['mPic|' + R]:'h3deck/h3deck_mPic.png'}};
   await page.addInitScript(([deck, r]) => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(deck)); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, [DECK, R]);
   // the picture in IndexedDB (shared by both apps)
   await page.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/');
@@ -60,7 +60,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const eng = page.frames().find(f => /engine=1/.test(f.url()));
   ok(!!eng, 'H3 Deck runs hidden as the engine');
   const iso = await eng.evaluate(() => ({key:Object.keys(localStorage), deckTakes:H3.S.takes.length, lib:H3.S.lib.map(L => L.name), media:Object.keys(H3.S.media), tab:H3.S.tab, films:!!document.querySelector('#filmTab iframe')}));
-  ok(iso.deckTakes===0 && iso.lib.join()==='Mia,Freckles,Glow' && iso.media.join()==='mPic' && iso.tab==='lib' && !iso.films, 'the engine has its own takes (none of H3 Deck\'s), H3 Deck\'s Library and only its pictures, and no Films frame (' + JSON.stringify(iso) + ')');
+  ok(iso.deckTakes===0 && iso.lib.join()==='Mia,Pip,Freckles,Glow' && iso.media.join()==='mPic' && iso.tab==='lib' && !iso.films, 'the engine has its own takes (none of H3 Deck\'s), H3 Deck\'s Library and only its pictures, and no Films frame (' + JSON.stringify(iso) + ')');
   ok(await page.evaluate(() => /Make your first clip/.test(document.querySelector('#vmsg').textContent)), 'an empty reel asks for the first clip');
   // ✍ New clip with Mia
   await page.click('[data-act="make"]'); await page.waitForTimeout(200);
@@ -178,17 +178,56 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok(await eng2.evaluate(() => H3.S.lib.some(L => L.name==='Zoe' && L.reel) && H3.S.lib.some(L => L.name==='Mia')), "Zoe is still there after the engine reopens, next to H3 Deck's Library");
   // H3 Deck's own save is untouched, nothing was sent over its copies on the PCs
   const deck = await page.evaluate(() => JSON.parse(localStorage.getItem('h3deck')));
-  ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld && deck.lib.length===3, "H3 Deck's own save is untouched (its take and pictures are still there)");
+  ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld && deck.lib.length===4, "H3 Deck's own save is untouched (its take and pictures are still there)");
   ok(!sent.some(x => x.userdata && /h3deck_(takes|films|run)/.test(x.userdata)) && !sent.some(x => x.run), "the engine never writes H3 Deck's copies on the PCs or wakes the 🌙 hidden copy");
   // H3 Deck itself still opens normally on its own save
   const p2 = await ctx.newPage(); p2.on('pageerror', e => { console.log('DECK PAGE ERROR', e.message); fails++; });
   await p2.route(R + '/**', fake); await p2.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await p2.goto('http://127.0.0.1:8041/h3-a875336252cb/'); await p2.waitForTimeout(2500);
   ok(await p2.evaluate(() => H3.S.takes.some(t => t.id==='tDeck') && !H3.S.takes.some(t => /<Subject 1> sits/.test(t.prompt || ''))), "H3 Deck opens with its own takes, not Reel's");
+  // ⚖ side by side (Jordan 2026-11-20: "make sure what the new app does is what H3 deck does prompt wise"): the same shot from Reel and from
+  // H3 Deck itself must send the same job to the PC, apart from seeds and file names
+  const engF = () => page.frames().find(f => /engine=1/.test(f.url()));
+  await page.evaluate(() => { REEL.R().attrs = {}; REEL.R().fit = {}; });
+  const s0 = sent.length;
+  const rid = await engF().evaluate(async () => { const r = await H3Engine.make({words:'Mia waves at the camera', who:[], n:1}); return r.ids ? r.ids[0] : JSON.stringify(r); });
+  await page.waitForTimeout(2500);
+  const rg = sent.slice(s0).find(x => x.g && Object.values(x.g).some(n => /Sampler/.test(n.class_type)));
+  const rt = await engF().evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {seconds:t.seconds, w:t.w, h:t.h, h3:t.h3, neg:t.neg}; }, rid);
+  const s1 = sent.length;
+  await p2.evaluate(sec => { const S = H3.S, L = S.lib.find(x => x.id==='Lmia'); const c = H3.libToCast(L); S.f.prompt = '<Subject ' + c.n + '> waves at the camera'; S.f.seconds = sec; S.f.takes = 1; }, rt.seconds || 5);
+  await p2.click('#goBtn'); await p2.waitForTimeout(3000);
+  const dg = sent.slice(s1).find(x => x.g && Object.values(x.g).some(n => /Sampler/.test(n.class_type)));
+  const norm = g => { const o = {}; for(const [id, n] of Object.entries(g || {})){ const i = {}; for(const [k, v] of Object.entries(n.inputs || {})) if(!/seed|filename_prefix|^image$|^file$|^video$|^audio$/.test(k)) i[k] = v; o[id] = n.class_type + ' ' + JSON.stringify(i); } return o; };
+  const A = norm(rg && rg.g), B = norm(dg && dg.g), diff = [...new Set(Object.keys(A).concat(Object.keys(B)))].filter(k => A[k]!==B[k]);
+  if(diff.length) diff.slice(0, 12).forEach(k => console.log('  DIFF node ' + k + '\n    Reel:    ' + (A[k] || '(none)').slice(0, 900) + '\n    H3 Deck: ' + (B[k] || '(none)').slice(0, 900)));
+  ok(rg && dg && !diff.length, '⚖ Reel and H3 Deck send the same job for the same shot (' + (rg ? Object.keys(A).length : 0) + ' vs ' + (dg ? Object.keys(B).length : 0) + ' nodes, ' + diff.length + ' differ)');
+  // a stylized character (🎨 kept from her pictures by default, scene follows her) with Mia in ✨ Freckles and her own clothes
+  await page.evaluate(() => { REEL.R().attrs = {Lmia:['Lfrk']}; REEL.R().fit = {Lmia:true}; });
+  await page.evaluate(() => { const R = REEL.R(); REEL.E().setAttrs(JSON.parse(JSON.stringify(R.attrs)), JSON.parse(JSON.stringify(R.fit)), {}, 'auto'); });
+  const s2 = sent.length;
+  const rid2 = await engF().evaluate(async () => { const r = await H3Engine.make({words:'Pip hugs Mia', who:[], n:1}); return r.ids ? r.ids[0] : JSON.stringify(r); });
+  await page.waitForTimeout(2500);
+  const rg2 = sent.slice(s2).find(x => x.g && Object.values(x.g).some(n => /Sampler/.test(n.class_type)));
+  const rt2 = await engF().evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {seconds:t.seconds, styled:t.styled, look:t.look, scene:t.h3 && t.h3.scene}; }, rid2);
+  const s3 = sent.length;
+  await p2.evaluate(sec => { const S = H3.S, P = H3.libToCast(S.lib.find(x => x.id==='Lpip')), M = H3.libToCast(S.lib.find(x => x.id==='Lmia'));
+    P.art = 'pic'; M.attrs = ['Lfrk']; M.fitHere = true; S.f.look = {src:'c', n:P.n, pics:[], redo:{}, use:true};
+    S.f.prompt = '<Subject ' + P.n + '> hugs <Subject ' + M.n + '>'; S.f.seconds = sec; S.f.takes = 1; }, rt2.seconds || 5);
+  await p2.click('#goBtn'); await p2.waitForTimeout(3000);
+  const dg2 = sent.slice(s3).find(x => x.g && Object.values(x.g).some(n => /Sampler/.test(n.class_type)));
+  const A2 = norm(rg2 && rg2.g), B2 = norm(dg2 && dg2.g), diff2 = [...new Set(Object.keys(A2).concat(Object.keys(B2)))].filter(k => A2[k]!==B2[k]);
+  if(diff2.length) diff2.slice(0, 12).forEach(k => console.log('  DIFF node ' + k + '\n    Reel:    ' + (A2[k] || '(none)').slice(0, 1500) + '\n    H3 Deck: ' + (B2[k] || '(none)').slice(0, 1500)));
+  ok(rg2 && dg2 && !diff2.length, '⚖ the same for a stylized character with Mia in ✨ Freckles and her own clothes (' + diff2.length + ' nodes differ)');
+  ok(rt2.styled && rt2.look && rt2.look.src==='c' && /art style is kept/.test(JSON.stringify(rg2 && rg2.g)), '🎨 Pip (anthro, no H3 Deck setting) keeps her own art style and the scene follows her by default (' + JSON.stringify(rt2) + ')');
+  await page.evaluate(() => { REEL.R().attrs = {}; REEL.R().fit = {}; });
+  ok(rg && /Soft film grain/.test(JSON.stringify(rg.g)) && /blurry hands/.test(JSON.stringify(rt)), "⚖ Reel uses H3 Deck's ✍ Custom quality words and 🚫 Keep out (" + JSON.stringify(rt) + ')');
   // ✨ 🧩 attributes and LoRA chips, as H3 Deck's Library has them
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(400);
+  ok(await page.evaluate(() => [...document.querySelectorAll('#sceneSeg button')].map(b => (b.classList.contains('on') ? '*' : '') + b.textContent).join('|')).then(x => /^\*✨ Auto\|Off\|🧊.*\|🎥 Realistic$/.test(x)), '🎨 the Library tab has the Scene style row, ✨ Auto by default');
   ok(await page.evaluate(() => /Freckles/.test(document.querySelector('#libAttr').textContent) && /Glow/.test(document.querySelector('#libLora').textContent) && !!document.querySelector('#libWear [data-ex="new:wear"]')), '📚 the Library tab has ✨ Attributes, 👗 Clothing and 🧩 LoRAs');
-  await page.click('#libIn [data-ch="Lmia"]'); await page.waitForTimeout(200); await page.click('#chA [data-at="Lfrk"]'); await page.click('#chA [data-fit]'); await page.click('[data-close]');
+  await page.click('#libIn [data-ch="Lmia"]'); await page.waitForTimeout(200); await page.click('#chA [data-at="Lfrk"]'); await page.click('#chA [data-fit]'); const artRow = await page.evaluate(() => [...document.querySelectorAll('#chArt button')].map(b => (b.classList.contains('on') ? '*' : '') + b.textContent).join('|'));
+  ok(/^\*Off\|🖼 As in the pictures\|🧊 3D animated\|✏ 2D anime\|🖍 Cartoon$/.test(artRow), "🎨 Mia's card has Keep her own art style, off for her (" + artRow + ')'); await page.click('[data-close]');
   ok(await page.evaluate(() => (REEL.R().attrs.Lmia || []).includes('Lfrk')), '✨ Freckles put on Mia for this reel from her card');
   await page.click('#libWear [data-ex="new:wear"]'); await page.waitForTimeout(200); await page.fill('#exN', 'Raincoat'); await page.fill('#exD', 'a long red raincoat'); await page.click('#exGo'); await page.waitForFunction(() => document.querySelector('#sheet').hidden, null, {timeout:8000}).catch(() => {});
   ok(await page.evaluate(() => REEL.E().extras().some(x => x.kind==='wear' && x.name==='Raincoat' && x.reel)), '👗 new clothing made in Reel');
