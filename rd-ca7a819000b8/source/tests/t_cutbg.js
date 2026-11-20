@@ -88,6 +88,13 @@ const links = g => Object.entries(g).flatMap(([id, n]) => Object.entries(n.input
   ok(true, 'Library tab ✂ button opens the sheet');
   await page.screenshot({path:path.join(__dirname, 'shot-cutbg.png')});
 
+  // Render on but BiRefNet gone (Jordan 2026-11-20): says the file is missing, not that Render is off
+  await page.evaluate(() => { allPcs().forEach(p => { p.oi = Object.assign({}, p.oi, {LoadBackgroundRemovalModel:{input:{required:{bg_removal_name:[['rmbg.safetensors']]}}}}); }); cutDraw(); });
+  const miss = await page.textContent('#cutBody .warn');
+  ok(/BiRefNet.*is not on/.test(miss) && !/needs to be on/.test(miss), 'Render on without BiRefNet says the model is missing: ' + miss);
+  await page.evaluate(() => { allPcs().forEach(p => { p.oi = Object.assign({}, p.oi); delete p.oi.RemoveBackground; }); cutDraw(); });
+  ok(/no Remove Background node/.test(await page.textContent('#cutBody .warn')), 'Render on without the node says update ComfyUI');
+
   // no Render: says why, button off
   await page.evaluate(() => { allPcs().forEach(p => p.online = false); cutDraw(); });
   ok(await page.$eval('#cutBody [data-cut="go"]', b => b.disabled) && (await page.textContent('#cutBody .warn')).length > 10, 'with no computer on it says why and the button is off');
