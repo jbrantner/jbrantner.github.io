@@ -8,7 +8,7 @@ if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); pro
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors']], weight_dtype:[['default']]}}},
-  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
@@ -51,7 +51,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // H3 Deck's own save: a Library character and its picture, one take of its own, the PCs
   const PNG = fs.readFileSync(path.join(root, 'reel-5b1e7c94d2a0', 'icon-180.png')).toString('base64');
   const DECK = {pcs:[{name:'Render', url:R, on:true, speed:1}], f:{model:'', aspect:'16:9', mp:0.41, turbo:true}, takes:[{id:'tDeck', t:1, state:'done', prompt:'H3 Deck take', pieces:[], imgs:[], vids:[], auds:[], follow:[]}],
-    lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{['mPic|' + R]:'h3deck/h3deck_mPic.png'}};
+    lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}, {id:'Lfrk', kind:'attr', name:'Freckles', stand:'', desc:'light freckles', pics:[], keep:'exact', what:''}, {id:'Lglow', kind:'lora', name:'Glow', stand:'', desc:'', pics:[], keep:'exact', what:'soft glow light', loras:[{name:'glow.safetensors', str:0.8}]}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{['mPic|' + R]:'h3deck/h3deck_mPic.png'}};
   await page.addInitScript(([deck, r]) => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(deck)); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, [DECK, R]);
   // the picture in IndexedDB (shared by both apps)
   await page.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/');
@@ -60,11 +60,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const eng = page.frames().find(f => /engine=1/.test(f.url()));
   ok(!!eng, 'H3 Deck runs hidden as the engine');
   const iso = await eng.evaluate(() => ({key:Object.keys(localStorage), deckTakes:H3.S.takes.length, lib:H3.S.lib.map(L => L.name), media:Object.keys(H3.S.media), tab:H3.S.tab, films:!!document.querySelector('#filmTab iframe')}));
-  ok(iso.deckTakes===0 && iso.lib.join()==='Mia' && iso.media.join()==='mPic' && iso.tab==='lib' && !iso.films, 'the engine has its own takes (none of H3 Deck\'s), H3 Deck\'s Library and only its pictures, and no Films frame (' + JSON.stringify(iso) + ')');
+  ok(iso.deckTakes===0 && iso.lib.join()==='Mia,Freckles,Glow' && iso.media.join()==='mPic' && iso.tab==='lib' && !iso.films, 'the engine has its own takes (none of H3 Deck\'s), H3 Deck\'s Library and only its pictures, and no Films frame (' + JSON.stringify(iso) + ')');
   ok(await page.evaluate(() => /Make your first clip/.test(document.querySelector('#vmsg').textContent)), 'an empty reel asks for the first clip');
   // ✍ New clip with Mia
   await page.click('[data-act="make"]'); await page.waitForTimeout(200);
-  ok(await page.evaluate(() => !document.querySelector('#who') && !!document.querySelector('[data-golib]')), '👥 with nobody in the reel, the sheet points to the 📚 Library instead of listing everyone');
+  ok(await page.evaluate(() => !document.querySelector('#who [data-w]') && !!document.querySelector('[data-golib]')), '👥 with nobody in the reel, the sheet points to the 📚 Library instead of listing everyone');
   await page.click('[data-close]'); await page.evaluate(() => { REEL.R().cast = ['Lmia']; }); await page.click('[data-act="make"]'); await page.waitForTimeout(200);
   ok(await page.evaluate(() => !!document.querySelector('#who [data-w="Lmia"]') && document.querySelectorAll('#who [data-w]').length===1), "👥 only the reel's characters are listed");
   await page.fill('#mkW', 'waves at the camera'); await page.click('#who [data-w="Lmia"]');
@@ -165,13 +165,28 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok(await eng2.evaluate(() => H3.S.lib.some(L => L.name==='Zoe' && L.reel) && H3.S.lib.some(L => L.name==='Mia')), "Zoe is still there after the engine reopens, next to H3 Deck's Library");
   // H3 Deck's own save is untouched, nothing was sent over its copies on the PCs
   const deck = await page.evaluate(() => JSON.parse(localStorage.getItem('h3deck')));
-  ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld && deck.lib.length===1, "H3 Deck's own save is untouched (its take and pictures are still there)");
+  ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld && deck.lib.length===3, "H3 Deck's own save is untouched (its take and pictures are still there)");
   ok(!sent.some(x => x.userdata && /h3deck_(takes|films|run)/.test(x.userdata)) && !sent.some(x => x.run), "the engine never writes H3 Deck's copies on the PCs or wakes the 🌙 hidden copy");
   // H3 Deck itself still opens normally on its own save
   const p2 = await ctx.newPage(); p2.on('pageerror', e => { console.log('DECK PAGE ERROR', e.message); fails++; });
   await p2.route(R + '/**', fake); await p2.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await p2.goto('http://127.0.0.1:8041/h3-a875336252cb/'); await p2.waitForTimeout(2500);
   ok(await p2.evaluate(() => H3.S.takes.some(t => t.id==='tDeck') && !H3.S.takes.some(t => /<Subject 1> sits/.test(t.prompt || ''))), "H3 Deck opens with its own takes, not Reel's");
+  // ✨ 🧩 attributes and LoRA chips, as H3 Deck's Library has them
+  await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(400);
+  ok(await page.evaluate(() => /Freckles/.test(document.querySelector('#libAttr').textContent) && /Glow/.test(document.querySelector('#libLora').textContent) && !!document.querySelector('#libWear [data-ex="new:wear"]')), '📚 the Library tab has ✨ Attributes, 👗 Clothing and 🧩 LoRAs');
+  await page.click('#libIn [data-ch="Lmia"]'); await page.waitForTimeout(200); await page.click('#chA [data-at="Lfrk"]'); await page.click('[data-close]');
+  ok(await page.evaluate(() => (REEL.R().attrs.Lmia || []).includes('Lfrk')), '✨ Freckles put on Mia for this reel from her card');
+  await page.click('#libWear [data-ex="new:wear"]'); await page.waitForTimeout(200); await page.fill('#exN', 'Raincoat'); await page.fill('#exD', 'a long red raincoat'); await page.click('#exGo'); await page.waitForFunction(() => document.querySelector('#sheet').hidden, null, {timeout:8000}).catch(() => {});
+  ok(await page.evaluate(() => REEL.E().extras().some(x => x.kind==='wear' && x.name==='Raincoat' && x.reel)), '👗 new clothing made in Reel');
+  await page.click('#tabs [data-tab="reel"]'); await page.waitForTimeout(200); await page.click('#nextBtn'); await page.waitForTimeout(300);
+  const tw = await page.evaluate(() => { const ta = document.querySelector('.sheet textarea, #card textarea'); return ta && ta.id; });
+  await page.fill('#' + tw, 'Mia waves'); await page.click('#who [data-lw="Lglow"]');
+  ok((await page.inputValue('#' + tw))==='Mia waves {Glow} ' && await page.evaluate(() => !!document.querySelector('.hl mark.lo')), '🧩 tapping Glow puts the {Glow} chip in the words (' + JSON.stringify(await page.inputValue('#' + tw)) + ')');
+  const nT = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(() => H3.S.takes.map(t => t.id));
+  await page.click('#card .big.pri, #card button.pri'); await page.waitForTimeout(2500);
+  const lt = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(n => { const t = H3.S.takes.find(x => !n.includes(x.id)) || {}; const c = H3.S.cast.find(x => x.lib==='Lmia'); return {prompt:t.prompt, loras:(t.loras || []).map(l => l.name + ':' + l.str), attrs:c && c.attrs, lines:t.lines, SL:H3.S.lines, pr:t.pieces && t.pieces[0] && t.pieces[0].prompt}; }, nT);
+  ok(/<Lora 1>|soft glow light/.test(lt.prompt || '') && !/\{Glow\}/.test(lt.prompt || '') && lt.loras.includes('glow.safetensors:0.8') && (lt.attrs || []).includes('Lfrk'), "🧩 the take gets Glow's LoRA and words, and ✨ Freckles is on Mia (" + JSON.stringify(lt) + ')');
   // 🙂 character thumbnails centred on the face
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(1500);
   if(process.env.DBG) console.log('DBG', faces.length, await page.frames().find(f => /engine=1/.test(f.url())).evaluate(async () => { try{ return JSON.stringify([H3.S.faceBox, Object.keys(H3.S.media), H3.S.pcs.map(p => [p.url, typeof H3.pcOf]), await H3Engine.faceBox('mPic')]); }catch(e){ return 'ERR ' + e.message; } }));
