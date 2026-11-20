@@ -191,7 +191,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       ok(JSON.stringify(w)===JSON.stringify(w0), '⬆ the final pass doesn\'t add "made for another option of the clip before" warnings (' + JSON.stringify({w0, w}) + ')'); }
     // ⬆ a new option of an upscaled clip gets the same ✨ pass once it's done, and replaces it as the pick
     { const r = await page.evaluate(async () => { const c = REEL.cur(), src = c.meta[c.pick].src; const x = await REEL.E().again({take:src, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
-        REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; c.upPx = 1e9; return {id, reup:c.meta[id].reup, n:c.takes.length}; });
+        REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; return {id, reup:c.meta[id].reup, n:c.takes.length}; });
       await finish(); await page.evaluate(() => REEL.reup()); await page.waitForTimeout(2500);
       const r2 = await page.evaluate(id => { const c = REEL.cur(), m = c.meta[c.pick] || {}; return {pick:c.pick, src:m.src, fin:m.fin, was:c.meta[id].reup, n:c.takes.length}; }, r.id);
       const t2 = await eng.evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {src:t.redo && t.redo.src, scale:t.up && t.up.scale}; }, r2.pick);
@@ -201,6 +201,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnBack'); await page.waitForTimeout(400);
     const back = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, up:!!c.up, cur:c===REEL.cur()})));
     ok(back.every((x, i) => !x.up && (x.cur || x.pick===before[i].pick)), '↩ Back to the originals picks each clip\'s option from before the final pass (' + JSON.stringify({back, before}) + ')');
+    // ⬆ …and once the clips around it are back on their originals, a new option stays as it is (Jordan 2026-11-20)
+    { const r = await page.evaluate(async () => { const c = REEL.cur(), base = c.pick; const x = await REEL.E().again({take:base, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
+        REEL.addTakes(c, [id], {}, 'Mia waves'); return {id, reup:c.meta[id].reup, n:c.takes.length}; });
+      await finish(); await page.evaluate(() => REEL.reup()); await page.waitForTimeout(2500);
+      const r2 = await page.evaluate(id => ({was:REEL.cur().meta[id].reup, n:REEL.cur().takes.length}), r.id);
+      ok(r.reup===1 && r2.was===0 && r2.n===r.n, '⬆ a new option next to clips picked on their originals is not upscaled (' + JSON.stringify({r, r2}) + ')'); }
     await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; c.up = false; }); REEL.refresh(); }, before); await page.waitForTimeout(300); }
   // ⬇ Export the reel: the picked option of every clip, trimmed, in order, joined on the PC; 📲 Save when done
   { await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnExp'); await page.waitForTimeout(2500);
