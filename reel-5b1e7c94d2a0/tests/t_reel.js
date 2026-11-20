@@ -143,6 +143,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // ▶ Play all
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
+  // ⏯ tapping the current clip on the wheel pauses and plays it
+  { await page.evaluate(() => { const v = document.querySelector('#vA'); v.muted = true; return v.play().catch(() => {}); }); await page.waitForTimeout(300);
+    const box = await page.evaluate(() => { const el = document.querySelector(`#wheel .wi[data-i="${REEL.R().cur}"]`).getBoundingClientRect(); return {x:el.x + el.width / 2, y:el.y + el.height / 2}; });
+    const was = await page.evaluate(() => document.querySelector('#vA').paused); await page.mouse.click(box.x, box.y); await page.waitForTimeout(300);
+    const now = await page.evaluate(() => document.querySelector('#vA').paused);
+    ok(!was && now, '⏯ tapping the current clip on the wheel pauses it (' + was + ' → ' + now + ')'); }
   // 📚 Library tab: make a character here, put her in the reel
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => !document.querySelector('#libTab').hidden && document.querySelector('#reelTab').hidden && /Mia/.test(document.querySelector('#libAll').textContent)), '📚 the Library tab lists the characters');
@@ -199,7 +205,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const ctx3 = await br.newContext({viewport:{width:390, height:844}}), p3 = await ctx3.newPage(); p3.on('pageerror', e => { console.log('REEL3 PAGE ERROR', e.message); fails++; });
   const fake3 = async rt => { const u = new URL(rt.request().url()), pa = u.pathname;
     if(pa==='/userdata/h3deck_films.json' && rt.request().method()==='GET') return rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify({v:1, t:Date.now(), films:[],
-      lib:[{id:'Lkai', kind:'char', name:'Kai', stand:'man', desc:'blue jacket', pics:['mKai'], keep:'exact', what:''}], media:{mKai:{id:'mKai', kind:'img', name:'kai.png', type:'image/png', thumb:'blob:gone'}}, up:{['mKai|' + R]:'h3deck/h3deck_mKai.png'}})});
+      lib:[{id:'Lkai', kind:'char', name:'Kai', stand:'man', desc:'blue jacket', pics:['mKai'], keep:'exact', what:''}, {id:'Lnoa', kind:'char', name:'Noa', stand:'woman', desc:'', pics:['mNoa'], keep:'exact', what:''}], media:{mKai:{id:'mKai', kind:'img', name:'kai.png', type:'image/png', thumb:'blob:gone'}, mNoa:{id:'mNoa', kind:'img', name:'noa.png', type:'image/png', thumb:''}}, up:{['mKai|' + R]:'h3deck/h3deck_mKai.png'}})});
+    if(pa==='/view' && u.searchParams.get('type')==='input' && /mNoa/.test(u.searchParams.get('filename') || '')) return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''});
     if(pa==='/view' && u.searchParams.get('type')==='input') return rt.fulfill({status:200, contentType:'image/png', headers:{'Access-Control-Allow-Origin':'*'}, body:Buffer.from(PNG, 'base64')});
     return fake(rt); };
   await p3.route(R + '/**', fake3); await p3.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
@@ -207,6 +214,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await p3.click('#tabs [data-tab="lib"]'); await p3.waitForTimeout(7000);
   const k3 = await p3.evaluate(() => { const b = [...document.querySelectorAll('#libAll [data-ch]')].find(x => /Kai/.test(x.textContent)), im = b && b.querySelector('img'); return {card:!!b, src:im ? im.src.slice(0, 5) : ''}; });
   ok(k3.card && (k3.src==='blob:' || k3.src==='data:'), "on its own storage, Reel's Library shows H3 Deck's characters from the PCs' copy, picture and all (" + JSON.stringify(k3) + ')');
+  // a character whose pictures never reached a PC stops the clip with a clear message, instead of a stranger
+  await p3.evaluate(() => { REEL.R().cast = ['Lnoa']; }); await p3.click('#tabs [data-tab="reel"]'); await p3.waitForTimeout(200);
+  await p3.click('[data-act="make"]'); await p3.waitForTimeout(200); await p3.fill('#mkW', 'Noa waves'); await p3.click('#mkGo'); await p3.waitForTimeout(1500);
+  ok(await p3.evaluate(() => /haven't reached the PCs/.test(document.body.innerText) && !document.querySelector('#sheet').hidden), "Noa (pictures never sent to a PC) isn't rendered as a stranger: it says to open H3 Deck once");
   await ctx3.close();
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
