@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-20-2">
+<meta name="reel-build" content="2026-11-20-3">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -50,6 +50,8 @@ h1 i{font-style:normal;color:var(--accent)}
 .dot.on{background:var(--good)} .dot.busy{background:var(--warn)}
 /* viewport */
 .view{position:relative;border:1px solid var(--line);border-radius:var(--r);background:#000;overflow:hidden;aspect-ratio:16/9;display:grid;place-items:center}
+.view{touch-action:pan-y;user-select:none;-webkit-user-select:none}
+.view .scrubT{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:3;padding:4px 10px;border-radius:9px;background:#000a;color:#fff;font-weight:800;font-size:13px;pointer-events:none}
 .view video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
 .view .msg{position:relative;z-index:2;text-align:center;padding:16px;color:var(--soft);font-size:14px}
 .view .msg:has(img.live[src]){position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-start;text-align:left;padding:12px}
@@ -165,6 +167,7 @@ body.lib .bar3{display:none}
     <div class="msg" id="vmsg"></div>
     <div class="over" id="vover" hidden><span class="chip" id="vInfo"></span><span class="sp"></span><button class="chip" id="allBtn">▶ Play all</button><button class="chip" id="sndBtn" aria-label="Sound">🔇</button></div>
     <div class="prog" id="vprog"></div>
+    <div class="scrubT" id="scrubT" hidden></div>
   </div>
   <div class="wheel" id="wheel"></div>
   <div class="wlab" id="wlab"></div>
@@ -433,7 +436,17 @@ let SUBN = {};
   const L = b - a; $('#vprog').style.width = L > 0 ? clamp((v.currentTime - a) / L * 100, 0, 100) + '%' : '0'; }));
 // ⏯ tap the video, or the current clip on the wheel, to pause and play (Jordan 2026-11-20)
 function togglePlay(){ const v = ALL ? ALL.act : $('#vA'); if(!v || !v.getAttribute('src')) return; if(v.paused) v.play().catch(() => {}); else v.pause(); }
-$('#vA').addEventListener('click', togglePlay); $('#vB').addEventListener('click', togglePlay);
+// ⏯ the viewport (Jordan 2026-11-20): a tap plays or pauses, a finger run across it scrubs (the whole width = the whole clip,
+// moved from where it was). Tapping the wheel no longer plays anything.
+{ let D = null; const V = $('#view'), vid = () => ALL ? ALL.act : $('#vA'), T = $('#scrubT');
+  V.addEventListener('pointerdown', e => { if(e.target.closest('.over button, .msg button')) return; const v = vid(); D = {x:e.clientX, y:e.clientY, id:e.pointerId, t0:v ? v.currentTime || 0 : 0, moved:false, was:v ? !v.paused : false}; });
+  V.addEventListener('pointermove', e => { if(!D || e.pointerId!==D.id) return; const dx = e.clientX - D.x, v = vid();
+    if(!D.moved){ if(Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(e.clientY - D.y)) return; D.moved = true; try{ V.setPointerCapture(e.pointerId); }catch(x){} if(v) v.pause(); }
+    if(!v || !v.getAttribute('src') || !isFinite(v.duration) || !v.duration) return;
+    const t = Math.max(0, Math.min(v.duration - 0.03, D.t0 + dx / V.clientWidth * v.duration)); try{ if(v.fastSeek) v.fastSeek(t); else v.currentTime = t; }catch(x){ v.currentTime = t; }
+    T.hidden = false; T.textContent = t.toFixed(1) + ' s / ' + v.duration.toFixed(1) + ' s'; e.preventDefault(); });
+  const end = e => { if(!D || e.pointerId!==D.id) return; const d = D; D = null; T.hidden = true; if(!d.moved && e.type==='pointerup') togglePlay(); };
+  V.addEventListener('pointerup', end); V.addEventListener('pointercancel', end); }
 $('#sndBtn').onclick = () => { const m = !$('#vA').muted; $('#vA').muted = m; $('#vB').muted = m; $('#sndBtn').textContent = m ? '🔇' : '🔊'; };
 
 // ▶ Play all: from this clip to the end, two players so there's no gap between clips
@@ -455,7 +468,7 @@ function stopAll(){ if(!ALL) return; const keep = ALL.act; ALL = null; $('#allBt
     const now = performance.now(); vel = (e.clientX - lastX) / Math.max(1, now - lastT); lastX = e.clientX; lastT = now;
     WP = clamp(p0 - dx / STEP, -0.45, clips().length - 0.55); placeWheel(); });
   const end = e => { if(!drag) return; drag = false; const STEP = (box.clientWidth || 360) * 0.36;
-    if(!moved){ const hit = document.elementFromPoint(e.clientX, e.clientY), el = hit && hit.closest && hit.closest('.wi'); if(el){ if(+el.dataset.i===curI()) togglePlay(); else go(+el.dataset.i); } else animWheel(curI()); return; }
+    if(!moved){ const hit = document.elementFromPoint(e.clientX, e.clientY), el = hit && hit.closest && hit.closest('.wi'); if(el){ if(+el.dataset.i!==curI()) go(+el.dataset.i); else animWheel(curI()); } else animWheel(curI()); return; }
     const d = WP - p0, flick = Math.abs(vel) > 0.45 ? -Math.sign(vel) : 0; let t = Math.round(p0 + (Math.abs(d) > 0.28 ? d : 0));
     if(flick && Math.round(d)===0) t = Math.round(p0) + flick; go(clamp(t, 0, clips().length - 1)); };
   box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end); })();

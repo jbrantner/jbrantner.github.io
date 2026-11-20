@@ -150,12 +150,23 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
   ok(await page.evaluate(() => { const r = REEL.R(), keep = r.clips, cur = r.cur; r.clips = [{id:'cx', kind:'new', words:'Mia waves', takes:[], pick:null}]; const p = REEL.redoPlan(0); r.clips = keep; r.cur = cur; return !p.err && /fresh/.test(p.how); }), '↻ Redo on a clip with no options left makes it fresh from its words');
-  // ⏯ tapping the current clip on the wheel pauses and plays it
+  // ⏯ the viewport: a tap pauses / plays, a drag scrubs; the wheel no longer plays (the fake PC can't serve byte ranges, so the
+  // scrub's target time is read from its label rather than the video)
   { await page.evaluate(() => { const v = document.querySelector('#vA'); v.muted = true; return v.play().catch(() => {}); }); await page.waitForTimeout(300);
     const box = await page.evaluate(() => { const el = document.querySelector(`#wheel .wi[data-i="${REEL.R().cur}"]`).getBoundingClientRect(); return {x:el.x + el.width / 2, y:el.y + el.height / 2}; });
-    const was = await page.evaluate(() => document.querySelector('#vA').paused); await page.mouse.click(box.x, box.y); await page.waitForTimeout(300);
-    const now = await page.evaluate(() => document.querySelector('#vA').paused);
-    ok(!was && now, '⏯ tapping the current clip on the wheel pauses it (' + was + ' → ' + now + ')'); }
+    await page.mouse.click(box.x, box.y); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => !document.querySelector('#vA').paused), '⏯ tapping the current clip on the wheel no longer pauses it');
+    const vb = await page.evaluate(() => { const r = document.querySelector('#view').getBoundingClientRect(); return {x:r.x, y:r.y, w:r.width, h:r.height}; });
+    await page.mouse.click(vb.x + vb.w / 2, vb.y + vb.h / 2); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => document.querySelector('#vA').paused), '⏯ tapping the viewport pauses the clip');
+    await page.mouse.click(vb.x + vb.w / 2, vb.y + vb.h / 2); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => !document.querySelector('#vA').paused), '⏯ tapping it again plays');
+    await page.evaluate(() => { const v = document.querySelector('#vA'); v.pause(); v.currentTime = 0; }); await page.waitForTimeout(200);
+    const dur = await page.evaluate(() => document.querySelector('#vA').duration);
+    await page.mouse.move(vb.x + 20, vb.y + vb.h / 2); await page.mouse.down(); for(let k = 1; k <= 6; k++){ await page.mouse.move(vb.x + 20 + k * vb.w * 0.08, vb.y + vb.h / 2); await page.waitForTimeout(40); }
+    const mid = await page.evaluate(() => ({t:parseFloat(document.querySelector('#scrubT').textContent), lab:!document.querySelector('#scrubT').hidden})); await page.mouse.up(); await page.waitForTimeout(300);
+    const after = await page.evaluate(() => ({paused:document.querySelector('#vA').paused, lab:document.querySelector('#scrubT').hidden}));
+    ok(mid.lab && Math.abs(mid.t - 0.48 * dur) < 0.25 * dur && after.paused && after.lab, '👆 dragging across the viewport scrubs it (' + JSON.stringify({dur, mid, after}) + ')'); }
   // 📚 Library tab: make a character here, put her in the reel
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => !document.querySelector('#libTab').hidden && document.querySelector('#reelTab').hidden && /Mia/.test(document.querySelector('#libAll').textContent)), '📚 the Library tab lists the characters');
