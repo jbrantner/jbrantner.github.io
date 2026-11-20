@@ -49,7 +49,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
   await page.route(R + '/**', fake); await page.route('http://main.test/**', fake);
   // H3 Deck's own save: a Library character and its picture, one take of its own, the PCs
-  const PNG = fs.readFileSync(path.join(root, 'reel-5b1e7c94d2a0', 'icon-180.png')).toString('base64');
+  const PNG = fs.readFileSync(path.join(root, 'reel-5b1e7c94d2a0', 'icon-vhs-180.png')).toString('base64');
   const DECK = {pcs:[{name:'Render', url:R, on:true, speed:1}], f:{model:'', aspect:'16:9', mp:0.41, turbo:true}, takes:[{id:'tDeck', t:1, state:'done', prompt:'H3 Deck take', pieces:[], imgs:[], vids:[], auds:[], follow:[]}],
     lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}, {id:'Lfrk', kind:'attr', name:'Freckles', stand:'', desc:'light freckles', pics:[], keep:'exact', what:''}, {id:'Lglow', kind:'lora', name:'Glow', stand:'', desc:'', pics:[], keep:'exact', what:'soft glow light', loras:[{name:'glow.safetensors', str:0.8}]}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{['mPic|' + R]:'h3deck/h3deck_mPic.png'}};
   await page.addInitScript(([deck, r]) => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(deck)); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, [DECK, R]);
@@ -153,7 +153,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => !document.querySelector('#libTab').hidden && document.querySelector('#reelTab').hidden && /Mia/.test(document.querySelector('#libAll').textContent)), '📚 the Library tab lists the characters');
   await page.click('#libAll [data-ch="new"]'); await page.waitForTimeout(200); await page.fill('#chN', 'Zoe'); await page.fill('#chD', 'short black hair');
-  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#chAdd')]); await fc.setFiles(path.join(root, 'reel-5b1e7c94d2a0', 'icon-192.png')); await page.waitForTimeout(300);
+  const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('#chAdd')]); await fc.setFiles(path.join(root, 'reel-5b1e7c94d2a0', 'icon-vhs-192.png')); await page.waitForTimeout(300);
   await page.click('#chGo'); await page.waitForTimeout(1200);
   const zo = await page.evaluate(() => { const z = REEL.E().lib().find(x => x.name==='Zoe'); return z && {reel:z.reel, pics:z.pics.length, inReel:REEL.R().cast.includes(z.id), card:/Zoe/.test(document.querySelector('#libIn').textContent)}; });
   ok(zo && zo.reel && zo.pics===1 && zo.inReel && zo.card, '＋ New makes a character with her picture and puts her in this reel (' + JSON.stringify(zo) + ')');
