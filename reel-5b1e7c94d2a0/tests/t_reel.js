@@ -131,6 +131,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.click(`#opts [data-o="${tk[0]}"]`); await page.waitForTimeout(300); const b = await page.textContent('#words');
     await page.click('#redoBtn'); await page.waitForTimeout(200); const c = await page.inputValue('#rdW'); await page.click('[data-close]');
     ok(/spins around twice/.test(a) && !/spins/.test(b) && b.length > 0 && c===w0.trim(), '✍ the redo option shows its new words, the first option its own (' + JSON.stringify([a, b, c]) + ')'); }
+  // 🎞 a finished option picked again after a rendering one shows in the viewport (it stayed black)
+  { const tk = await page.evaluate(() => REEL.cur().takes.slice());
+    await page.evaluate(() => { const E = REEL.E(), o = E.info; window._oi = o; E.info = id => id==='tw1' ? {state:'working', pct:5, step:'1/10'} : o(id); const c = REEL.cur(); c.takes.push('tw1'); c.pick = 'tw1'; REEL.refresh(); }); await page.waitForTimeout(400); // (a rendering option picked: the viewport is emptied)
+    const xb = await page.evaluate(() => { const b = document.querySelector('#opts [data-o="tw1"] .x'), r = b.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return hit===b || b.contains(hit); });
+    ok(xb, "✕ on a rendering option is on top (the progress text doesn't cover it)");
+    ok(await page.evaluate(() => !document.querySelector('#vA').getAttribute('src')), '(an unfinished option empties the viewport)');
+    await page.click(`#opts [data-o="${tk[0]}"]`); await page.waitForTimeout(500);
+    ok(await page.evaluate(() => !!document.querySelector('#vA').getAttribute('src')), '🎞 picking a finished option again loads it in the viewport');
+    await page.evaluate(() => { const E = REEL.E(); E.info = window._oi; const c = REEL.cur(); c.takes = c.takes.filter(x => x!=='tw1'); REEL.refresh(); }); }
   // ↻ Redo on the first clip (nothing before, a clip after): a lead-in that lands on clip 2
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#redoBtn'); await page.waitForTimeout(200);
   ok(/Leads into the clip after/.test(await page.textContent('#card')), '↻ Redo on the first clip leads into the next one');
