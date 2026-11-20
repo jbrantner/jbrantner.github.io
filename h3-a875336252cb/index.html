@@ -654,7 +654,14 @@ function backupBody(){ const {E} = filmsNow(), films = JSON.parse(JSON.stringify
   const keep = {lib:S.lib || [], wlib:S.wlib || [], wcats:S.wcats || [], forms:S.forms || {}, casts:S.casts || {}, cast:S.cast || [], fkey:S.fkey, films, movies:JSON.parse(JSON.stringify(E.movies || [], (k, v) => k==='exp' || k==='fin' ? undefined : v)), mv:S.mv || {}}, txt = JSON.stringify(keep), media = {}, up = {};
   for(const id of Object.keys(S.media || {})) if(txt.includes('"' + id + '"')){ media[id] = S.media[id]; Object.keys(S.up || {}).forEach(k => { if(k.startsWith(id + '|')) up[k] = S.up[k]; }); }
   return JSON.stringify(Object.assign({v:1, t:Date.now(), fresh:S.fresh || 0, media, up}, keep)); }
-async function pushFilms(){ if(!RESCUED || HOLD || ENGINE) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
+// 📚 the Library's pictures go to each PC's input folder too (Jordan 2026-11-20: Reel couldn't send Espey, one of her pictures had never
+// left the phone), so Reel, a fresh copy of the app or the 🛟 rescue can fetch them back; once per picture and PC
+let LIBUP = false;
+async function libPicsUp(){ if(LIBUP || ENGINE) return; LIBUP = true; try{
+  const ids = [...new Set((S.lib || []).concat(S.wlib || []).flatMap(L => L.pics || []))].filter(id => S.media[id] && !S.media[id].remote);
+  for(const p of S.pcs){ if(!pcOf(p.url).online) continue; for(const id of ids){ if(S.up[id + '|' + p.url]) continue; try{ await upload(p.url, id); }catch(e){} } }
+  }finally{ LIBUP = false; } }
+async function pushFilms(){ if(!RESCUED || HOLD || ENGINE) return; libPicsUp(); const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url + '|films']===sig) continue;
     try{ const r = await fetch(p.url + FILMS_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url + '|films'] = sig; }catch(e){} } }
 async function mediaBack(ids, up){ let n = 0;
@@ -699,7 +706,14 @@ async function engineLibPull(){ let best = null;
   const ids = [];
   for(const [id, m] of Object.entries(best.media || {})){ ids.push(id); if(!S.media[id]) S.media[id] = Object.assign({}, m, {thumb:/^data:/.test(m.thumb || '') ? m.thumb : ''}); }
   for(const [k, v] of Object.entries(best.up || {})) if(!S.up[k]) S.up[k] = v;
-  save(); await mediaBack(ids, best.up).catch(() => 0); return 1; }
+  save(); await mediaBack(ids, best.up).catch(() => 0); await libPicsHere(); return 1; }
+// a picture H3 Deck never sent to a PC can't reach Reel on its own storage: it's left out of Reel's copy (H3 Deck's own stays as it is)
+// rather than stopping every clip with "no longer on the phone"; H3 Deck sends its Library pictures to the PCs now (libPicsUp)
+async function libPicsHere(){ let n = 0;
+  for(const L of S.lib || []){ if(L.reel || !(L.pics || []).length) continue; const keep = [];
+    for(const id of L.pics){ const m = S.media[id]; let ok = !!(m && m.remote) || !!BLOBS[id]; if(!ok){ try{ ok = !!(await IDB.get(id)); }catch(e){} } if(ok) keep.push(id); }
+    if(keep.length!==L.pics.length){ n += L.pics.length - keep.length; L.pics = keep; libSync(L); } }
+  if(n) save(); return n; }
 async function rescue(){ if(ENGINE){ RESCUED = true; await engineLibPull().catch(() => 0); setInterval(() => { if(!document.hidden) engineLibPull().catch(() => 0); }, 60000); return; } try{
   for(let i = 0; i < 40 && S.tab==='films' && !(FW && FW.FILM); i++) await new Promise(res => setTimeout(res, 250)); // Films' own save is read once it's open
   await pullTakes().catch(() => 0);
@@ -5873,6 +5887,7 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
       Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3, ctl:src.cont ? null : fs.ctl, ctl2:src.cont ? null : fs.ctl2}); }
     if(o.model){ t.model = o.model; t.turbo = !!o.turbo; } // Jordan 2026-11-06: pick the model for the redo in its sheet
     if(Array.isArray(o.loras)) t.loras = o.loras.map(l => ({name:l.name, str:+l.str || 1, words:l.words || ''})); // and its LoRAs (2026-11-08)
+    if(o.lines){ t.lines = o.lines; loraChips(t); } // 🧩 Reel's LoRA chips
     if(o.str != null && +o.str < 0.995) t.redo.str = Math.max(0.2, Math.min(1, +o.str));
     if(o.guide) applyGuide(t, o.guide);
     if(o.bridge){ t.redo.bridge = o.bridge; t.pc = src.pc; // 🧵 the seams left to bridge after this one; the last one gets the smoothing's ⬆ upscale/regenerate
@@ -6266,6 +6281,7 @@ async function leadGo(src, fl, P, o, more, icon, word){ const key = uid('k'), n 
     if(FILMT===src.id){ const fs = snapshot(); Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3}); }
     if(o.model){ t.model = o.model; t.turbo = !!o.turbo; } // ⇿ / ⏪ the model picked in the sheet (Jordan 2026-11-14: fill was stuck on the clip's own model)
     if(Array.isArray(o.loras)) t.loras = o.loras.filter(l => l && l.name).map(l => ({name:l.name, str:+l.str, words:(l.words || '').trim()})); // ⏪ the sheet's LoRAs
+    if(o.lines){ t.lines = o.lines; loraChips(t); } // 🧩 Reel's LoRA chips
     t.ctl = null; t.ctl2 = null; if(o.guide) applyGuide(t, o.guide);
     t.pc = await redoPc(t, src, fl, extra); if(!t.pc){ const why = canRun(src.pc, t); toast(pcName(src.pc) + ' ' + (why || "can't take it right now"), 6000); break; }
     extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
@@ -6369,11 +6385,20 @@ if(ENGINE){
   async function go(n){ S.f.takes = nOf(n); $('#prompt').value = S.f.prompt; save(); const why = whyNot(); if(why) return {err:why};
     const b = before(); await render(); const ids = newIds(b); return ids.length ? {ids} : {err:'Nothing was sent'}; }
   // the characters named in the words: their names become <Subject n>; one picked but not named is put at the start
+  const engLines = () => { const o = {}; for(const [k, L] of Object.entries(S.lines || {})) if(L && L.lora) o[k] = Object.assign({}, L, {snap:1, ltext:loraWords(L), loras:JSON.parse(JSON.stringify(loraSet(L)))}); return o; };
+  // ✨ Reel's per-reel attributes and clothing: {library id: [attribute/clothing ids]}, put on each one when it's named (Jordan 2026-11-20)
+  let ATTRS = {};
+  const SUBK = ['char', 'thing', 'place'];
   function whoWords(words, who){ let w = String(words || '').trim(); const add = [], pick = new Set(who || []);
-    const chars = (S.lib || []).filter(L => L.kind==='char' && (L.name || '').trim()).sort((a, b) => b.name.trim().length - a.name.trim().length); // (longest names first)
+    // 🧩 {Name} = a Library LoRA chip: its words where it sits and its LoRAs on the take, as H3 Deck's <Lora k> does
+    S.lines = {}; S.lineNo = 0; const lor = (S.lib || []).filter(x => x.kind==='lora' && (x.name || '').trim());
+    w = w.replace(/\{([^{}\n]+)\}/g, (m, nm) => { const A = lor.find(x => x.name.trim().toLowerCase()===nm.trim().toLowerCase()); if(!A) return m;
+      const k = ++S.lineNo; S.lines[k] = {lora:1, lib:A.id, name:A.name.trim()}; return '<Lora ' + k + '>'; });
+    const chars = (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).sort((a, b) => b.name.trim().length - a.name.trim().length); // (longest names first)
     for(const L of chars){ const nm = L.name.trim(), re = new RegExp('(^|[^\\w<])' + nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w>])', 'gi');
-      if(re.test(w)){ const c = libToCast(L); w = w.replace(re, (m, p) => p + '<Subject ' + c.n + '>'); } // a Library character named in the words
-      else if(pick.has(L.id)) add.push('<Subject ' + libToCast(L).n + '>'); } // picked but not named
+      const on = c => { c.attrs = (ATTRS[L.id] || []).filter(id => { const A = libOf(id); return A && onK(A.kind); }); return c; };
+      if(re.test(w)){ const c = on(libToCast(L)); w = w.replace(re, (m, p) => p + '<Subject ' + c.n + '>'); } // a Library character named in the words
+      else if(pick.has(L.id)) add.push('<Subject ' + on(libToCast(L)).n + '>'); } // picked but not named
     return (add.length ? add.join(' and ') + (add.length > 1 ? ' are' : ' is') + ' in the scene. ' : '') + w; }
   // 🙂 a character picture's face, for Reel's thumbnails (Jordan 2026-11-20: "have the thumbnail center on a character's face"):
   // the same face finder as Render Deck's Fix faces (face_yolov8m) runs on a PC and draws the face boxes as a white mask; the
@@ -6407,10 +6432,14 @@ if(ENGINE){
     models:() => modelList().map(x => ({key:x.key, label:x.label})),
     look:() => ({model:S.f.model, aspect:S.reelAspect || (S.f.aspect==='pic' ? '16:9' : S.f.aspect), turbo:S.f.turbo}),
     setLook:o => { if(o.model) S.f.model = o.model; if(o.aspect){ S.reelAspect = o.aspect; S.f.aspect = o.aspect; } if(o.turbo!=null) S.f.turbo = !!o.turbo; save(); },
-    lib:() => (S.lib || []).filter(L => L.kind==='char' && (L.name || '').trim()).map(L => ({id:L.id, name:L.name.trim(), desc:L.desc || '', pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
+    lib:() => (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || '', pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
     // 👥 a character made in Reel: name, a few words about her look, her pictures (kept on the phone and sent with her like H3 Deck's)
+    // ✨ 👗 🧩 the rest of the Library, as H3 Deck has it: attributes, clothing, LoRA chips
+    extras:() => (S.lib || []).filter(L => ['attr', 'wear', 'lora'].includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || L.what || '',
+      loras:(L.loras || []).filter(l => l && l.name).map(l => ({name:l.name, str:l.str})), pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
+    setAttrs:m => { ATTRS = m && typeof m==='object' ? m : {}; },
     saveChar:async o => { let L = o.id && (S.lib || []).find(x => x.id===o.id); if(L && !L.reel) return {err:"That character is H3 Deck's: change her in H3 Deck's Library"};
-      if(!L){ L = {id:'L' + Math.random().toString(36).slice(2, 10), kind:'char', name:'', stand:'', desc:'', pics:[], keep:'exact', what:'', reel:true}; S.lib.push(L); }
+      if(!L){ L = {id:'L' + Math.random().toString(36).slice(2, 10), kind:['char', 'thing', 'place', 'attr', 'wear'].includes(o.kind) ? o.kind : 'char', name:'', stand:'', desc:'', pics:[], keep:'exact', what:'', reel:true}; S.lib.push(L); }
       L.name = String(o.name || '').trim() || L.name || 'Character'; if(o.desc!=null) L.desc = String(o.desc).trim();
       if(Array.isArray(o.drop)) L.pics = L.pics.filter(id => !o.drop.includes(id));
       for(const f of o.files || []){ try{ L.pics.push(await addMedia(f, 'img')); }catch(e){} }
@@ -6438,13 +6467,13 @@ if(ENGINE){
       if(!/<\s*ref\s*image\s*\d+\s*>/i.test(S.f.prompt)) S.f.imgs = (S.f.imgs || []).filter(r => r.pose || r.pin);
       setLen(Math.max(1, Math.min(5, +o.secs || 5))); return go(o.n); },
     // ⇿ Insert: new seconds between two clips (the end of one pinned at the start, the start of the next pinned at the end)
-    fill:async o => { const b = before(), n = await window.H3GapFill({takeA:o.takeA, outA:+o.outA, takeB:o.takeB, inB:+o.inB || 0, secs:Math.max(0.5, Math.min(5, +o.secs || 2)), prompt:whoWords(o.words, o.who), n:nOf(o.n)});
+    fill:async o => { const b = before(), n = await window.H3GapFill({takeA:o.takeA, outA:+o.outA, takeB:o.takeB, inB:+o.inB || 0, secs:Math.max(0.5, Math.min(5, +o.secs || 2)), prompt:whoWords(o.words, o.who), lines:engLines(), n:nOf(o.n)});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // ⏪ a part that leads into a clip (a clip with nothing before it)
-    lead:async o => { const b = before(), n = await window.H3Lead({take:o.take, at:+o.at || 0, secs:Math.max(1, Math.min(5, +o.secs || 3)), prompt:whoWords(o.words, o.who), n:nOf(o.n)});
+    lead:async o => { const b = before(), n = await window.H3Lead({take:o.take, at:+o.at || 0, secs:Math.max(1, Math.min(5, +o.secs || 3)), prompt:whoWords(o.words, o.who), lines:engLines(), n:nOf(o.n)});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 🎨 Change a stretch of a clip (like inpainting over time): the frames around it are pinned, str = how much it changes
-    redo:async o => { const b = before(), n = await window.H3Redo({take:o.take, a:+o.a, b:+o.b, prompt:whoWords(o.words, o.who), n:nOf(o.n), str:o.str != null ? +o.str : 1});
+    redo:async o => { const b = before(), n = await window.H3Redo({take:o.take, a:+o.a, b:+o.b, prompt:whoWords(o.words, o.who), lines:engLines(), n:nOf(o.n), str:o.str != null ? +o.str : 1});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 📤 a clip from the phone
     upload:async o => { const id = await window.H3Upload({file:o.file}); return id ? {ids:[id]} : {err:'Not uploaded'}; },
