@@ -1,0 +1,141 @@
+// 🎞 Reel (2026-11-20): the simple clip app on H3 Deck's engine. Fake PCs; checks the engine keeps its own takes, the Library is
+// shared, and New clip / ➕ Next / ⇿ Insert / ↻ Redo / ✂ trim with 🪄 blend / 🎨 change / the wheel all work.
+// Run: CLIP=<a ~5 s video> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests/t_reel.js   (from the repo root)
+const { chromium } = require('playwright');
+const path = require('path'), http = require('http'), fs = require('fs');
+const R = 'http://render.test', CLIP = process.env.CLIP;
+if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); process.exit(2); }
+let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
+const SCHEMA = {
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors']], weight_dtype:[['default']]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
+  CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
+  VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
+  ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
+};
+const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
+  'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
+  'Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
+const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
+(async () => {
+  const root = path.join(__dirname, '..', '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
+    fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : /\.png$/.test(f) ? 'image/png' : 'application/octet-stream'}); r.end(b); }); }).listen(8041);
+  const br = await chromium.launch(), ctx = await br.newContext({viewport:{width:390, height:844}, deviceScaleFactor:2}), page = await ctx.newPage();
+  page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
+  const sent = [];
+  const fake = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
+    if(p==='/system_stats') return J({devices:[]});
+    if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
+    if(p==='/agent/status') return J({agent:1, comfy:'up', wanted:true});
+    if(p==='/queue') return J({queue_running:[], queue_pending:[]});
+    if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
+    if(p.startsWith('/userdata/')){ if(rt.request().method()!=='GET') sent.push({userdata:p}); return rt.request().method()==='GET' ? rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}) : J({}); }
+    if(p.startsWith('/renderdeck/h3run')){ sent.push({run:p}); return J({}); }
+    if(p==='/view') return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)});
+    if(p==='/upload/image') return J({name:'up_' + Date.now() + '.png', subfolder:'h3deck', type:'input'});
+    if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
+    if(p.startsWith('/history')) return J({});
+    return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
+  await page.route(R + '/**', fake); await page.route('http://main.test/**', fake);
+  // H3 Deck's own save: a Library character and its picture, one take of its own, the PCs
+  const PNG = fs.readFileSync(path.join(root, 'reel-5b1e7c94d2a0', 'icon-180.png')).toString('base64');
+  const DECK = {pcs:[{name:'Render', url:R, on:true, speed:1}], f:{model:'', aspect:'16:9', mp:0.41, turbo:true}, takes:[{id:'tDeck', t:1, state:'done', prompt:'H3 Deck take', pieces:[], imgs:[], vids:[], auds:[], follow:[]}],
+    lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{}};
+  await page.addInitScript(([deck, r]) => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(deck)); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, [DECK, R]);
+  // the picture in IndexedDB (shared by both apps)
+  await page.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/');
+  await page.waitForFunction(() => window.REEL && REEL.E() && REEL.E().ready(), null, {timeout:30000});
+  await page.waitForTimeout(800);
+  const eng = page.frames().find(f => /engine=1/.test(f.url()));
+  ok(!!eng, 'H3 Deck runs hidden as the engine');
+  const iso = await eng.evaluate(() => ({key:Object.keys(localStorage), deckTakes:H3.S.takes.length, lib:H3.S.lib.map(L => L.name), media:Object.keys(H3.S.media), tab:H3.S.tab, films:!!document.querySelector('#filmTab iframe')}));
+  ok(iso.deckTakes===0 && iso.lib.join()==='Mia' && iso.media.join()==='mPic' && iso.tab==='lib' && !iso.films, 'the engine has its own takes (none of H3 Deck\'s), H3 Deck\'s Library and only its pictures, and no Films frame (' + JSON.stringify(iso) + ')');
+  ok(await page.evaluate(() => /Make your first clip/.test(document.querySelector('#vmsg').textContent)), 'an empty reel asks for the first clip');
+  // ✍ New clip with Mia
+  await page.click('[data-act="make"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => !!document.querySelector('#who [data-w="Lmia"]')), "👥 Who's in it lists H3 Deck's Library characters");
+  await page.fill('#mkW', 'waves at the camera'); await page.click('#who [data-w="Lmia"]');
+  ok(/Mia/.test(await page.inputValue('#mkW')), 'tapping Mia puts her name in the words');
+  await page.click('#nSeg [data-n="2"]');
+  let n0 = sent.filter(x => x.g).length; await page.click('#mkGo'); await page.waitForTimeout(2500);
+  const g1 = sent.filter(x => x.g).slice(n0);
+  const tk1 = await eng.evaluate(() => H3.S.takes.map(t => ({id:t.id, prompt:t.prompt})));
+  ok(g1.length===2 && tk1.length===2 && tk1.every(t => /<Subject 1>/.test(t.prompt) && !/\bMia\b/.test(t.prompt)), 'New clip sends 2 options, Mia named as <Subject 1> (' + JSON.stringify(tk1) + ')');
+  ok(g1.every(x => nodes(x.g, 'LoadImage').length >= 1), "her Library picture goes with it");
+  const st = await page.evaluate(() => ({clips:REEL.clips().length, takes:REEL.cur().takes.length, words:REEL.cur().words}));
+  ok(st.clips===1 && st.takes===2, 'the reel has one clip with two options (' + JSON.stringify(st) + ')');
+  // finish them (the PC is fake)
+  const finish = async () => { await eng.evaluate(() => { H3.S.takes.forEach((t, k) => { if(t.state!=='working') return; t.state = 'done'; t.pieces.forEach(p => { p.state = 'done'; p.file = {filename:t.name + '_p.webm', subfolder:'Output_Render/' + t.dir, type:'output'}; }); t.final = {filename:t.name + '.webm', subfolder:'Output_Render/' + t.dir, type:'output'}; }); H3.saveNow(); });
+    await page.evaluate(() => REEL.refresh()); await page.waitForTimeout(1500); };
+  await finish();
+  const v1 = await page.evaluate(() => ({src:document.querySelector('#vA').src, pick:REEL.cur().pick, opts:document.querySelectorAll('#opts .opt').length, next:document.querySelector('#nextBtn').textContent, dis:document.querySelector('#nextBtn').disabled}));
+  ok(/render\.test\/view/.test(v1.src) && v1.opts===2 && v1.next==='➕ Next' && !v1.dis, 'a finished option plays in the viewport, two options show, ➕ Next is on (' + JSON.stringify(v1) + ')');
+  // tap the other option: it becomes the clip's pick
+  const other = await page.evaluate(() => REEL.cur().takes.find(id => id!==REEL.cur().pick)); await page.click(`#opts [data-o="${other}"]`); await page.waitForTimeout(300);
+  ok(await page.evaluate(o => REEL.cur().pick===o && document.querySelector('#vA').src.includes(REEL.info(o).url.split('filename=')[1].split('&')[0]), other), 'tapping an option uses it');
+  // ➕ Next: carries on from the end
+  await page.click('#nextBtn'); await page.waitForTimeout(200); await page.fill('#nxW', 'Mia sits down'); await page.click('#nSeg [data-n="1"]');
+  n0 = sent.filter(x => x.g).length; await page.click('#nxGo'); await page.waitForTimeout(2500);
+  const g2 = sent.filter(x => x.g).slice(n0), t2 = await eng.evaluate(() => { const t = H3.S.takes[0]; return {prompt:t.prompt, carry:t.carry, cont:!!t.cont}; });
+  ok(g2.length===1 && t2.carry && t2.carry.own && t2.carry.src===other && /^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] <Subject 1> sits down$/.test(t2.prompt), '➕ Next carries on from the picked option with the anchor line (' + JSON.stringify(t2) + ')');
+  ok(nodes(g2[0].g, 'MiniMaxH3MotionContext').length || nodes(g2[0].g, 'LoadVideo').length, 'its graph loads the clip before as context');
+  ok(await page.evaluate(() => REEL.clips().length===2 && REEL.R().cur===1 && REEL.cur().kind==='next'), 'the new clip goes after it and is the current one');
+  await finish();
+  // back to clip 1 by dragging the wheel to the right
+  const wb = await page.evaluate(() => { const r = document.querySelector('#wheel').getBoundingClientRect(); return {x:r.left + r.width / 2, y:r.top + r.height / 2}; });
+  await page.mouse.move(wb.x, wb.y); await page.mouse.down(); for(let k = 1; k <= 8; k++){ await page.mouse.move(wb.x + k * 20, wb.y); await page.waitForTimeout(16); } await page.mouse.up(); await page.waitForTimeout(500);
+  ok(await page.evaluate(() => REEL.R().cur===0), 'dragging the wheel snaps the clip before into the middle');
+  ok(await page.evaluate(() => document.querySelector('#nextBtn').textContent==='⇿ Insert'), 'with a clip after it, Next becomes ⇿ Insert');
+  // ⇿ Insert
+  const ids = await page.evaluate(() => REEL.clips().map(c => [c.kind, c.pick]));
+  await page.click('#nextBtn'); await page.waitForTimeout(200); await page.fill('#nxW', 'she pulls out a chair');
+  n0 = sent.filter(x => x.g).length; await page.click('#nxGo'); await page.waitForTimeout(2500);
+  const g3 = sent.filter(x => x.g).slice(n0), t3 = await eng.evaluate(() => { const t = H3.S.takes[0]; return {gap:t.lead && t.lead.gap && t.lead.gap.src, src:t.lead && t.lead.src, prompt:t.prompt}; });
+  ok(g3.length===1 && nodes(g3[0].g, 'LoadVideo').length===2 && t3.gap===ids[0][1] && t3.src===ids[1][1], '⇿ Insert pins the end of clip 1 and the start of clip 2 (' + JSON.stringify([t3, ids]) + ')');
+  ok(await page.evaluate(() => REEL.clips().map(c => c.kind).join()==='new,insert,next' && REEL.R().cur===1), 'the inserted clip sits between them');
+  await finish();
+  // ↻ Redo on the middle clip: lines up with both
+  n0 = sent.filter(x => x.g).length; await page.click('#redoBtn'); await page.waitForTimeout(200);
+  ok(/Lands between/.test(await page.textContent('#card')), '↻ Redo on a middle clip says it lands between both');
+  await page.click('#rdGo'); await page.waitForTimeout(2500);
+  const t4 = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap ? 'gap' : 'other'; });
+  ok(t4==='gap' && await page.evaluate(() => REEL.cur().takes.length===2), '↻ Redo makes another fill as a new option of the same clip');
+  await finish();
+  // ↻ Redo on the first clip (nothing before, a clip after): a lead-in that lands on clip 2
+  await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#redoBtn'); await page.waitForTimeout(200);
+  ok(/Leads into the clip after/.test(await page.textContent('#card')), '↻ Redo on the first clip leads into the next one');
+  await page.click('[data-close]');
+  // ✂ Edit: trim the end of clip 1 with the 🪄 blend on
+  await page.click('#editBtn'); await page.waitForTimeout(500);
+  await page.evaluate(() => { const T = document.querySelector('#edT'), r = T.getBoundingClientRect(); window.__T = r; });
+  const tr = await page.evaluate(() => window.__T);
+  await page.mouse.move(tr.x + tr.width - 2, tr.y + tr.height / 2); await page.mouse.down(); await page.mouse.move(tr.x + tr.width * 0.8, tr.y + tr.height / 2, {steps:5}); await page.mouse.up(); await page.waitForTimeout(200);
+  n0 = sent.filter(x => x.g).length; await page.click('#edGo'); await page.waitForTimeout(2500);
+  const ed = await page.evaluate(() => ({kinds:REEL.clips().map(c => c.kind).join(), out:REEL.clips()[0].out, d:REEL.info(REEL.clips()[0].pick).secs}));
+  const g5 = sent.filter(x => x.g).slice(n0);
+  ok(g5.length===1 && ed.kinds==='new,blend,insert,next' && ed.out > 2.5 && ed.out < 3.6, '✂ trimming the end blends it into the next clip: a 🪄 clip between them, clip 1 ends where the blend starts (' + JSON.stringify(ed) + ')');
+  await finish();
+  // 🎨 Change it on clip 2
+  await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="change"]');
+  await page.fill('#edW', 'she pulls out a red chair'); await page.evaluate(() => { const s = document.querySelector('#edS'); s.value = 0.5; s.oninput({target:s}); });
+  n0 = sent.filter(x => x.g).length; await page.click('#edCGo'); await page.waitForTimeout(2500);
+  const t6 = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.redo && {str:t.redo.str, prompt:t.prompt}; });
+  ok(t6 && t6.str===0.5 && /red chair/.test(t6.prompt) && await page.evaluate(() => REEL.cur().takes.length===3), '🎨 Change it is a redo of the stretch at that strength, as a new option (' + JSON.stringify(t6) + ')');
+  await finish();
+  // ▶ Play all
+  await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
+  ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
+  // H3 Deck's own save is untouched, nothing was sent over its copies on the PCs
+  const deck = await page.evaluate(() => JSON.parse(localStorage.getItem('h3deck')));
+  ok(deck.takes.length===1 && deck.takes[0].id==='tDeck' && deck.media.mOld, "H3 Deck's own save is untouched (its take and pictures are still there)");
+  ok(!sent.some(x => x.userdata && /h3deck_(takes|films|run)/.test(x.userdata)) && !sent.some(x => x.run), "the engine never writes H3 Deck's copies on the PCs or wakes the 🌙 hidden copy");
+  // H3 Deck itself still opens normally on its own save
+  const p2 = await ctx.newPage(); p2.on('pageerror', e => { console.log('DECK PAGE ERROR', e.message); fails++; });
+  await p2.route(R + '/**', fake); await p2.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
+  await p2.goto('http://127.0.0.1:8041/h3-a875336252cb/'); await p2.waitForTimeout(2500);
+  ok(await p2.evaluate(() => H3.S.takes.some(t => t.id==='tDeck') && !H3.S.takes.some(t => /<Subject 1> sits/.test(t.prompt || ''))), "H3 Deck opens with its own takes, not Reel's");
+  await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
+  if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
+  await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
+})();

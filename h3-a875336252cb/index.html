@@ -477,7 +477,11 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const FPS = 24, CTX = 22, HEAD = 1, LEAD = p => p.ctx ? p.ctx + HEAD : 0, MAXREF = {img:9, vid:3, aud:3};
-const KEY = 'h3deck';
+// 🎞 Reel (Jordan 2026-11-20: "an app that uses the same engine … extremely simplified"): the Reel app at ../reel-5b1e7c94d2a0/ runs this page
+// hidden with ?engine=1. Then it keeps its own takes and form (h3reel_engine), reads H3 Deck's 📚 Library, PCs and look fresh each time, and
+// leaves H3 Deck's own save, its copies on the PCs and its pictures alone.
+const ENGINE = /[?&]engine=1/.test(location.search);
+const KEY = ENGINE ? 'h3reel_engine' : 'h3deck';
 // 🌙 the hidden copy (Jordan 2026-11-13: "I'd like it to run fully autonomously if possible with the phone off"): Render's helper opens
 // H3 Deck itself, hidden, with ?worker=1, once the phone has been away a while with something still running. It starts from the copy
 // of everything the phone last sent (h3deck_run.json on Render: H3 Deck's state and Films'), carries the work on exactly as the
@@ -492,6 +496,7 @@ function F_DEF(){ return {quality:true, qstyle:'', shuffle:0, prompt:'', seconds
     model:'', turbo:true, loras:[], boost:true, nsfw:false, aspect:'16:9', mp:0.41, takes:1, where:'both', steps:'', seed:'', maxPiece:5, pieceText:{}, sm:false, smVid:null, smStart:0, smEvery:4, smSound:true, smBridge:true, smFin:false, smFinLook:'live', smSpc:true, smEase:0.5, smPunch:0, smLoop:false, smSeam:12, smUp:false, smUpX:1.5, smUpRep:'medium', smUpStr:0.8, smRefs:[], smUpRefs:true, ctl:false, ctlVid:null, follow:0.7, ctlStr:1, ctlEnd:0.75, ctl2Vid:null, ctl2Str:0.5, ctl2End:0.65, h3:true, h3Style:'', h3Sound:'', h3Music:''}; }
 function load(){
   let s = {}; try{ s = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }catch(e){}
+  if(ENGINE) engineImport(s);
   if(window.H3_PCS) s.pcs = window.H3_PCS; // tests
   // a take whose sending broke off (nothing reached ComfyUI) shows as stopped, so ↻ Try again can send it
   (s.takes || []).forEach(t => { if(!t.state && t.pieces && t.pieces.length && !t.pieces.some(p => p.pid)){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent (the upload to ' + (t.pc || '').replace(/^https:\/\/([^.]+).*$/, '$1') + ' broke off)'; } });
@@ -520,6 +525,18 @@ function load(){
   s.guides = s.guides || {}; s.media = s.media || {}; s.up = s.up || {}; s.inbox = s.inbox || []; s.takes = s.takes || []; s.open = s.open || {bMore:false};
   return s;
 }
+// 🎞 Reel: H3 Deck's Library (with its pictures' media entries and what's already on each PC), PCs and look, read fresh each time
+function engineImport(s){ let d = {}; try{ d = JSON.parse(localStorage.getItem('h3deck') || '{}') || {}; }catch(e){}
+  s.lib = d.lib || []; s.wlib = d.wlib || []; if(d.wcats) s.wcats = d.wcats; s.media = s.media || {}; s.up = s.up || {};
+  const lt = JSON.stringify([s.lib, s.wlib]);
+  for(const [id, m] of Object.entries(d.media || {})) if(lt.includes('"' + id + '"')) s.media[id] = Object.assign({}, m);
+  for(const [k, v] of Object.entries(d.up || {})) if(lt.includes('"' + k.split('|')[0] + '"')) s.up[k] = v;
+  if(d.pcs && d.pcs.length) s.pcs = d.pcs;
+  if(!s.f){ s.f = {}; const f0 = d.f || {}; for(const k of ['model', 'turbo', 'aspect', 'mp', 'steps', 'maxPiece', 'where', 'h3', 'h3Style', 'quality', 'qstyle', 'qtext', 'boost', 'nsfw', 'negOn', 'neg', 'negScale']) if(f0[k]!==undefined) s.f[k] = f0[k];
+    if(s.f.aspect==='pic' || s.f.aspect==='custom') s.f.aspect = '16:9'; }
+  if(s.fkey===undefined){ s.fkey = ''; s.fmig = false; }
+  for(const k of ['defMig1109', 'defMig1111', 'swapLoraMig1119', 'refLeakMig1119', 'defMig1118b', 'defMig1118', 'wearMig']) if(s[k]===undefined) s[k] = true;
+  s.bare = d.bare!==undefined ? d.bare : true; s.tab = 'lib'; s.castOld = s.castOld || []; }
 let saveT = 0;
 let SAVE_REV = 0; // ⚡ counts saves, so the ↶ watcher only compares when something changed (2026-11-13)
 function save(){ SAVE_REV++; fileTakes(); clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
@@ -578,7 +595,7 @@ function seedCast(k){ const used = new Set(); S.takes.filter(t => (t.film || '')
 function tidyMedia(hard){
   const used = JSON.stringify({f:S.f, takes:S.takes, cast:S.cast, guides:S.guides, forms:S.forms, casts:S.casts, castOld:S.castOld, lib:S.lib, wlib:S.wlib, wildKeep:S.wildKeep}) + undoMediaRefs(), form = JSON.stringify([S.f, S.forms]); let n = 0;
   for(const id of Object.keys(S.media)){
-    if(!used.includes('"' + id + '"')){ delete S.media[id]; delete BLOBS[id]; IDB.del(id).catch(() => {}); Object.keys(S.up).forEach(k => { if(k.startsWith(id + '|')) delete S.up[k]; }); n++; }
+    if(!used.includes('"' + id + '"')){ delete S.media[id]; delete BLOBS[id]; if(!ENGINE) IDB.del(id).catch(() => {}); /* (🎞 Reel: the pictures are H3 Deck's too) */ Object.keys(S.up).forEach(k => { if(k.startsWith(id + '|')) delete S.up[k]; }); n++; }
     else if(hard && S.media[id].thumb && !form.includes('"' + id + '"')){ S.media[id].thumb = ''; S.media[id].tc = 1; n++; } }
   return n; }
 const THUMBING = {};
@@ -604,7 +621,7 @@ let pushT = 0, pushed = {};
 function pushSoon(){ clearTimeout(pushT); pushT = setTimeout(pushTakes, 4000); }
 // reconnect (Jordan 2026-11-03): a fresh copy of the app (a new home-screen icon) starts empty, so takes it doesn't have are
 // brought in from the PCs' copy; takes it already has are left as they are
-async function pullTakes(){
+async function pullTakes(){ if(ENGINE) return 0;
   let best = null;
   for(const p of S.pcs){ if(!pcOf(p.url).online) continue; try{ const r = await fetch(p.url + '/userdata/h3deck_takes.json', {cache:'no-store'}); if(!r.ok) continue; const j = await r.json(); if(j && Array.isArray(j.takes) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
   if(!best) return 0;
@@ -612,7 +629,7 @@ async function pullTakes(){
   if(!add.length) return 0;
   S.takes = S.takes.concat(add).sort((a, b) => (b.t || 0) - (a.t || 0)); save(); drawTakes(); tickSoon(300);
   toast(add.length + (add.length > 1 ? ' renders' : ' render') + ' brought back from the PCs'); return add.length; }
-async function pushTakes(){ if(HOLD) return; if(WORKER || runWork()) pushRunSoon();
+async function pushTakes(){ if(HOLD || ENGINE) return; if(WORKER || runWork()) pushRunSoon();
   const body = JSON.stringify({v:1, t:S.tsav || Date.now(), fresh:S.fresh || 0, pcs:S.pcs, takes:S.takes});
   // (never an empty list over the PCs' copy, unless 🧹 Start fresh meant it: QA 2026-11-14, a fresh copy of the app that couldn't read
   // the PCs' copy yet sent an empty one over it 4 s after opening)
@@ -636,7 +653,7 @@ function backupBody(){ const {E} = filmsNow(), films = JSON.parse(JSON.stringify
   const keep = {lib:S.lib || [], wlib:S.wlib || [], wcats:S.wcats || [], forms:S.forms || {}, casts:S.casts || {}, cast:S.cast || [], fkey:S.fkey, films, movies:JSON.parse(JSON.stringify(E.movies || [], (k, v) => k==='exp' || k==='fin' ? undefined : v)), mv:S.mv || {}}, txt = JSON.stringify(keep), media = {}, up = {};
   for(const id of Object.keys(S.media || {})) if(txt.includes('"' + id + '"')){ media[id] = S.media[id]; Object.keys(S.up || {}).forEach(k => { if(k.startsWith(id + '|')) up[k] = S.up[k]; }); }
   return JSON.stringify(Object.assign({v:1, t:Date.now(), fresh:S.fresh || 0, media, up}, keep)); }
-async function pushFilms(){ if(!RESCUED || HOLD) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
+async function pushFilms(){ if(!RESCUED || HOLD || ENGINE) return; const body = backupBody(); if(!body) return; const sig = body.replace(/"t":\d+,/, '');
   for(const p of S.pcs){ if(!pcOf(p.url).online || pushed[p.url + '|films']===sig) continue;
     try{ const r = await fetch(p.url + FILMS_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url + '|films'] = sig; }catch(e){} } }
 async function mediaBack(ids, up){ let n = 0;
@@ -666,7 +683,7 @@ function rebuildFilms(){ const by = {};
     let at = 0; const clips = seq.map(g => { const c = {id:rid('c'), take:g.take, in:0, out:g.d, dur:g.d, at}; if(g.alts.length > 1) c.alts = g.alts; at += g.d; return c; });
     if(clips.length) out.push({id:fid, name:(nameOf || 'Film ' + (i + 1)) + ' (rebuilt)', rebuilt:true, tracks:[{id:rid('tr'), clips}, {id:rid('tr'), clips:[]}], pps:24}); });
   return out; }
-async function rescue(){ try{
+async function rescue(){ if(ENGINE){ RESCUED = true; return; } try{
   for(let i = 0; i < 40 && S.tab==='films' && !(FW && FW.FILM); i++) await new Promise(res => setTimeout(res, 250)); // Films' own save is read once it's open
   await pullTakes().catch(() => 0);
   let best = null;
@@ -695,7 +712,7 @@ setInterval(() => { pushTakes(); pushFilms(); }, 60000);
 // running (h3deck_run.json). While the app is in the background it does nothing (HOLD), so the two never act at once; when it comes
 // back it asks the helper to stop the hidden copy, waits for its last copy, and takes that over (the app reloads once).
 const RUN_FILE = '/userdata/' + 'h3deck_run.json';
-let HOLD = !WORKER, ADOPTING = false, HIDE_T = 0, RUNOK = false, WSTOP = false, WIDLE = 0, RUNSIG = '', runT = 0;
+let HOLD = !WORKER && !ENGINE, ADOPTING = false, HIDE_T = 0, RUNOK = false, WSTOP = false, WIDLE = 0, RUNSIG = '', runT = 0;
 const BOOT_TSAV = S.tsav || 0;
 const runHost = () => WORKER ? location.origin : ((S.pcs.find(p => p.on!==false && /render|desktop/i.test((p.name || '') + ' ' + p.url)) || S.pcs.find(p => p.on!==false) || {}).url || '');
 // something that moves on by itself: a take still rendering, a ✨ / 🎭 pass, or an ⬆ Upscale track run that isn't waiting for her
@@ -704,7 +721,7 @@ function runWork(){ if(S.takes.some(t => t.state==='working' || (t.state==='fail
 function filmsState(){ try{ const F = FW && FW.FILM; if(F && F.S) return F.S; }catch(e){} try{ return JSON.parse(localStorage.getItem('h3edit') || '{}') || {}; }catch(e){ return {}; } }
 function runBody(by){ return JSON.stringify({v:1, t:Date.now(), by, wid:WID, deck:S, edit:filmsState()}); }
 function pushRunSoon(){ clearTimeout(runT); runT = setTimeout(() => pushRun(WORKER ? 'worker' : 'phone'), WORKER ? 1500 : 3000); }
-async function pushRun(by, force){ const u = runHost(); if(!u || (HOLD && !force)) return false; const body = runBody(by), sig = body.replace(/^\{"v":1,"t":\d+,/, '');
+async function pushRun(by, force){ if(ENGINE) return false; const u = runHost(); if(!u || (HOLD && !force)) return false; const body = runBody(by), sig = body.replace(/^\{"v":1,"t":\d+,/, '');
   if(sig===RUNSIG && !force) return true;
   for(let a = 0; a < 2; a++){ if(a) await new Promise(z => setTimeout(z, 2000)); // (one more try: "Connection lost" on Render 2026-11-16 03:57)
     try{ const r = await fetch(u + RUN_FILE + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok){ RUNSIG = sig; return true; } }catch(e){} } return false; }
@@ -731,7 +748,7 @@ function adopt(j){ ADOPTING = true; clearTimeout(saveT);
   try{ const d = j.deck; d.tab = S.tab; localStorage.setItem(KEY, JSON.stringify(d)); if(j.edit){ const E = j.edit; try{ const cur = JSON.parse(localStorage.getItem('h3edit') || '{}'); if(cur.nav) E.nav = cur.nav; }catch(e){} localStorage.setItem('h3edit', JSON.stringify(E)); }
     sessionStorage.setItem('h3adoptT', String(j.t)); sessionStorage.setItem('h3adoptMsg', '1'); }catch(e){ ADOPTING = false; HOLD = false; return; }
   location.reload(); }
-if(!WORKER){
+if(!WORKER && !ENGINE){
   setInterval(beat, 15000);
   document.addEventListener('visibilitychange', () => { if(document.hidden){ if(HOLD) return; HIDE_T = Date.now(); const w = runWork(); if(w) pushRun('phone', true); const u = runHost();
       if(u && RUNOK) postJ(u + '/renderdeck/h3run/beat', {who:'phone', want:w, farm:u, away:true}); HOLD = RUNOK; }
@@ -746,7 +763,7 @@ if(!WORKER){
     pushRun('worker'); };
   setInterval(wbeat, 5000); setTimeout(wbeat, 1500);
 }
-function toast(t, ms){ const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), ms || 3200); }
+function toast(t, ms){ if(ENGINE){ try{ if(parent!==window && parent.ReelToast) parent.ReelToast(t, ms); }catch(e){} return; } const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), ms || 3200); }
 
 // ---------- media kept on the phone (IndexedDB), so a reference can be sent to whichever PC takes the job ----------
 const IDB = (() => { let db = null;
@@ -822,7 +839,7 @@ const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
 const pcName = url => (S.pcs.find(p => p.url===url) || {}).name || 'PC';
 const pcSpeed = url => +(S.pcs.find(p => p.url===url) || {}).speed || 1;
 // kept across reopening the app: ComfyUI sends a render's preview pictures only to the client id that queued it
-const CID = (() => { let c = ''; try{ c = localStorage.getItem('h3cid') || sessionStorage.getItem('h3cid'); }catch(e){} if(!c){ c = uid('h3-'); } try{ localStorage.setItem('h3cid', c); }catch(e){} return c; })();
+const CID = (() => { let c = ''; const ck = ENGINE ? 'h3reelcid' : 'h3cid'; try{ c = localStorage.getItem(ck) || sessionStorage.getItem(ck); }catch(e){} if(!c){ c = uid('h3-'); } try{ localStorage.setItem(ck, c); }catch(e){} return c; })();
 function combo(oi, cls, name){ const d = oi && oi[cls]; if(!d) return []; const inp = d.input || {}, spec = (inp.required || {})[name] || (inp.optional || {})[name]; if(!spec) return [];
   if(Array.isArray(spec[0])) return spec[0]; if(spec[0]==='COMBO' && spec[1] && spec[1].options) return spec[1].options; return []; }
 const bn = s => String(s).split(/[\\/]/).pop();
@@ -4073,8 +4090,8 @@ async function sendPieces(t, from){
 const SELF_TRIES = 2, SELF_WAIT = 45000;
 // one tab follows the takes: two open copies on one phone would each move, retry or give up on the same takes
 const TAB = Math.random().toString(36).slice(2);
-function lead(){ if(WORKER) return true; try{ const o = JSON.parse(localStorage.getItem('h3lead') || 'null'), now = Date.now();
-  if(o && o.id!==TAB && now - o.t < 15000) return false; localStorage.setItem('h3lead', JSON.stringify({id:TAB, t:now})); }catch(e){} return true; }
+function lead(){ if(WORKER) return true; try{ const LK = ENGINE ? 'h3reel_lead' : 'h3lead', o = JSON.parse(localStorage.getItem(LK) || 'null'), now = Date.now();
+  if(o && o.id!==TAB && now - o.t < 15000) return false; localStorage.setItem(LK, JSON.stringify({id:TAB, t:now})); }catch(e){} return true; }
 let tickT = 0, REBAL_AT = 0; const tickSoon = ms => { clearTimeout(tickT); tickT = setTimeout(tick, ms || 0); };
 async function tick(){
   clearTimeout(tickT); if(HOLD){ tickT = setTimeout(tick, 2000); return; }
@@ -4935,7 +4952,7 @@ const withSig = (c, k, fl) => { const sig = c.sig + '|' + k; return {id:c.id, si
 const whereOf = t => { try{ return t.film && FW && FW.FILM && FW.FILM.takeWhere ? FW.FILM.takeWhere(t.id) : null; }catch(e){ return null; } };
 const whereLabel = w => w && w.clip ? '🎬 Clip ' + w.ci + ' · Take ' + w.n + (w.of > 1 ? ' of ' + w.of : '') + (w.use ? ' · in use' : '') : w ? 'Not on the timeline' : '';
 function goFilm(id, take){ setTab('films'); try{ const F = FW && FW.FILM; if(!F) return; F.go({v:'film', film:id}); if(take && F.selTake) setTimeout(() => F.selTake(take), 300); }catch(e){} }
-function drawTakes(){ fileTakes(); const L = S.takes.filter(inMine); drawRenders();
+function drawTakes(){ fileTakes(); if(ENGINE) return; const L = S.takes.filter(inMine); drawRenders();
   const box = $('#takes'); if(!L.length){ box.innerHTML = '<div class="empty">Your renders show up here, from both PCs.</div>'; $('#clearDone').hidden = true; $('#clearFail').hidden = true; return; }
   // keep a playing video playing: only redraw what changed
   // Films' renders under the canvas say which clip and take each one is; ⬆ Pick it selects that clip up top with the take picked out
@@ -5548,7 +5565,7 @@ drawAll();
 setTimeout(() => { lookResume().catch(() => {}); }, 1500); // 📴 redraws the PC finished while the app was closed
 // 🦴 clips Mocap left for us on a PC (its ComfyUI input + a note in its user files): fetched once, kept on the phone, put in Motion guide
 const INBOX_FILE = '/userdata/' + 'h3deck_inbox.json';
-async function pullInbox(){ const list = [], looked = [];
+async function pullInbox(){ if(ENGINE) return; const list = [], looked = [];
   for(const p of S.pcs){ if(!pcOf(p.url).online) continue; looked.push(p.name); let box = null; try{ const r = await fetch(p.url + INBOX_FILE, {cache:'no-store'}); if(r.ok) box = await r.json(); }catch(e){} if(!box || !Array.isArray(box.items)) continue;
     for(const it of box.items) if(it && it.id && it.file && Date.now() - (it.t || 0) < 7 * 864e5) list.push({pc:p.url, it}); }
   // and every Mocap clip sitting in a PC's input folder, by its name (no note needed): mocap_<name>_<stamp>_<w>x<h>_<tenths>_<clip>.webm
@@ -6261,7 +6278,7 @@ window.H3PoseKeys = async P => { const f = S.f, got = [];
   save(); setTab('films'); drawAll(); toForm(); toast('🧍 In: ' + andList(got) + '. Write who it is and what happens, then Render.', 6000); return got; };
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); });
 window.addEventListener('resize', () => tabTop());
-setTab(!WORKER && (S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
+setTab(ENGINE ? 'lib' : !WORKER && (S.tab==='poses' || S.tab==='lib') && !/take=/.test(location.hash) ? S.tab : 'films'); showTake();
 // ---------- ↶ Undo / ↷ Redo (Jordan 2026-11-09: "i need an undo button on h3 render deck") ----------
 // One history for the whole app: the Shot box and every setting of the form (each film's own), the cast, the 📚 Library,
 // the Films timelines and prompt blocks, the words of the takes, and takes taken off the list. Only what you did yourself
@@ -6319,10 +6336,73 @@ undoWatch(document);
 // ⚡ (2026-11-13) the watcher used to copy every film, take and setting each 0.7 s; now it compares only after a save here or in
 // the Films frame, and at least every 5 s to catch anything else, and never while the app is in the background
 let UNDO_REV = '', UNDO_FULLT = 0;
-setInterval(() => { try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.hidden) return;
+setInterval(() => { if(ENGINE) return; try{ if(FW) undoWatch(FW.document); }catch(e){} if(document.hidden) return;
   let fr = ''; try{ fr = FW ? FW.FILM_REV || 0 : ''; }catch(e){} const rev = SAVE_REV + ':' + fr, now = Date.now();
   if(rev===UNDO_REV && now - UNDO_FULLT < 5000) return; UNDO_REV = rev; UNDO_FULLT = now; undoCheck(false); }, 700);
 setTimeout(undoRebase, 0);
+// ---------- 🎞 Reel's engine (Jordan 2026-11-20): the Reel app calls these on this page, running hidden ----------
+// Every call starts the form from the look (model, size, quality) and sets just what that call needs, so nothing from one call leaks
+// into the next. Each returns {ids:[new take ids]} or {err}.
+if(ENGINE){
+  const REEL_LEAD = '[0s-1s] The scene keeps carrying on from the moment before.\n[1s-] ';
+  const LOOKS = ['model', 'turbo', 'aspect', 'mp', 'steps', 'maxPiece', 'where', 'h3', 'h3Style', 'quality', 'qstyle', 'qtext', 'boost', 'nsfw', 'negOn', 'neg', 'negScale'];
+  const fresh = () => { const k = {}; LOOKS.forEach(x => { if(S.f[x]!==undefined) k[x] = S.f[x]; }); if(k.aspect==='pic' || k.aspect==='custom') k.aspect = S.reelAspect || '16:9'; S.f = Object.assign(F_DEF(), k, {takes:1, shuffle:0}); };
+  const nOf = n => Math.max(1, Math.min(4, Math.round(+n || 1)));
+  const before = () => new Set(S.takes.map(t => t.id)), newIds = b => S.takes.filter(t => !b.has(t.id)).map(t => t.id);
+  async function go(n){ S.f.takes = nOf(n); $('#prompt').value = S.f.prompt; save(); const why = whyNot(); if(why) return {err:why};
+    const b = before(); await render(); const ids = newIds(b); return ids.length ? {ids} : {err:'Nothing was sent'}; }
+  // the characters named in the words: their names become <Subject n>; one picked but not named is put at the start
+  function whoWords(words, who){ let w = String(words || '').trim(); const add = [], pick = new Set(who || []);
+    const chars = (S.lib || []).filter(L => L.kind==='char' && (L.name || '').trim()).sort((a, b) => b.name.trim().length - a.name.trim().length); // (longest names first)
+    for(const L of chars){ const nm = L.name.trim(), re = new RegExp('(^|[^\\w<])' + nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w>])', 'gi');
+      if(re.test(w)){ const c = libToCast(L); w = w.replace(re, (m, p) => p + '<Subject ' + c.n + '>'); } // a Library character named in the words
+      else if(pick.has(L.id)) add.push('<Subject ' + libToCast(L).n + '>'); } // picked but not named
+    return (add.length ? add.join(' and ') + (add.length > 1 ? ' are' : ' is') + ' in the scene. ' : '') + w; }
+  window.H3Engine = {
+    ready:() => families().length > 0,
+    pcs:() => S.pcs.map(p => ({name:p.name, url:p.url, on:p.on!==false, online:!!pcOf(p.url).online, busy:busySecs(p.url) > 0})),
+    models:() => modelList().map(x => ({key:x.key, label:x.label})),
+    look:() => ({model:S.f.model, aspect:S.reelAspect || (S.f.aspect==='pic' ? '16:9' : S.f.aspect), turbo:S.f.turbo}),
+    setLook:o => { if(o.model) S.f.model = o.model; if(o.aspect){ S.reelAspect = o.aspect; S.f.aspect = o.aspect; } if(o.turbo!=null) S.f.turbo = !!o.turbo; save(); },
+    lib:() => (S.lib || []).filter(L => L.kind==='char' && (L.name || '').trim()).map(L => ({id:L.id, name:L.name.trim(), pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
+    picUrl:id => mediaUrl(id),
+    // a take's state for the Reel: where its video is, how long, how far along
+    info:id => { const t = deckTake(id); if(!t) return {state:'gone'}; const fl = takeFile(t);
+      const err = t.state==='failed' ? ((t.pieces || []).map(p => p.err).find(Boolean) || t.joinErr || 'stopped') : '';
+      return {state:fl && t.state!=='working' ? 'done' : t.state==='failed' ? 'failed' : 'working', url:fl ? viewUrl(t.pc, fl) : '', secs:fl ? takeFrames(t) / FPS : +t.seconds || 0,
+        w:t.w, h:t.h, pct:Math.round(progress(t) * 100), left:timeLeft(t), step:(() => { try{ return H3.stepOf(t); }catch(e){ return ''; } })(), pc:pcName(t.pc), words:t.prompt || '', err}; },
+    retry:async id => { const t = deckTake(id); if(!t) return false; try{ return !!(await retryTake(t)); }catch(e){ return false; } },
+    // ✍ a new clip from words (and Library characters)
+    make:async o => { fresh(); S.f.prompt = whoWords(o.words, o.who); if(o.aspect){ S.f.aspect = o.aspect; S.reelAspect = o.aspect; } setLen(Math.max(1, Math.min(5, +o.secs || 5))); return go(o.n); },
+    // ↻ more of a first clip: its own settings again
+    again:async o => { const t = deckTake(o.take); if(!t) return {err:"That clip isn't here any more"}; fresh(); useAgain(t, true);
+      if(o.words!=null && String(o.words).trim()) S.f.prompt = whoWords(o.words, o.who); if(o.secs) setLen(Math.max(1, Math.min(5, +o.secs))); return go(o.n); },
+    // ➕ Next: carries on from a moment of a clip (its end, or where it's trimmed to); only the new part is made
+    carry:async o => { const t = deckTake(o.take), fl = takeFile(t); if(!t || !fl) return {err:'That clip has no finished video yet'};
+      const dur = takeFrames(t) / FPS, at = Math.max(0, Math.min(+o.at || dur, dur)); if(at * FPS < CTX + HEAD + 1) return {err:'Carrying on needs at least about 1 s of the clip before it'};
+      fresh(); useAgain(t, true); const near = Math.abs(at - dur) < 0.05, id = uid('m');
+      S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
+        cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:'', clip:'', key:uid('k'), own:true, guide:null, len:0}, thumb:''};
+      Object.assign(S.f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:REEL_LEAD + whoWords(o.words, o.who), pieceText:{}});
+      if(!/<\s*ref\s*image\s*\d+\s*>/i.test(S.f.prompt)) S.f.imgs = (S.f.imgs || []).filter(r => r.pose || r.pin);
+      setLen(Math.max(1, Math.min(5, +o.secs || 5))); return go(o.n); },
+    // ⇿ Insert: new seconds between two clips (the end of one pinned at the start, the start of the next pinned at the end)
+    fill:async o => { const b = before(), n = await window.H3GapFill({takeA:o.takeA, outA:+o.outA, takeB:o.takeB, inB:+o.inB || 0, secs:Math.max(0.5, Math.min(5, +o.secs || 2)), prompt:whoWords(o.words, o.who), n:nOf(o.n)});
+      const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
+    // ⏪ a part that leads into a clip (a clip with nothing before it)
+    lead:async o => { const b = before(), n = await window.H3Lead({take:o.take, at:+o.at || 0, secs:Math.max(1, Math.min(5, +o.secs || 3)), prompt:whoWords(o.words, o.who), n:nOf(o.n)});
+      const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
+    // 🎨 Change a stretch of a clip (like inpainting over time): the frames around it are pinned, str = how much it changes
+    redo:async o => { const b = before(), n = await window.H3Redo({take:o.take, a:+o.a, b:+o.b, prompt:whoWords(o.words, o.who), n:nOf(o.n), str:o.str != null ? +o.str : 1});
+      const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
+    // 📤 a clip from the phone
+    upload:async o => { const id = await window.H3Upload({file:o.file}); return id ? {ids:[id]} : {err:'Not uploaded'}; },
+    // takes the Reel no longer uses (videos stay on the PCs)
+    forget:ids => { const g = new Set(ids); S.takes = S.takes.filter(t => !g.has(t.id) || t.state==='working'); save(); },
+    stop:async id => { const t = deckTake(id); if(!t) return; try{ await cancelTake(t); }catch(e){} },
+    refresh:() => pingAll().then(() => tickSoon(0)),
+  };
+}
 window.H3 = {stagesOf, stepLine, swapPlan, SWAP_ONE, finPlan, k4Go, finOf, PIKA_STEPS, loraChSheet, loraChips, loraOut, openLoraLib, LORARE, snapshot0, fastGraph, kitchenOk, pickPc, syncFilm, filmKeyNow, setTab, WK, wildJob, wildBlock, wildPcs, wildSweep, setWild, soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, BOOST, boostLoras, allLoras, isBoost, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
