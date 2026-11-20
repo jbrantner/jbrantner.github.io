@@ -26,6 +26,12 @@ button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
 button:disabled{opacity:.4;cursor:default}
 input,select,textarea{font:inherit;font-size:16px;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
 textarea{resize:vertical;min-height:84px}
+.hlw{position:relative;background:var(--bg);border-radius:10px}
+.hlw .hl{position:absolute;inset:0;pointer-events:none;white-space:pre-wrap;overflow-wrap:break-word;overflow:hidden;font-size:16px;line-height:inherit;padding:10px 12px;border:1px solid transparent;color:var(--text)}
+.hlw textarea{position:relative;display:block;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:var(--text)}
+.hlw textarea::placeholder{color:var(--dim);-webkit-text-fill-color:var(--dim)}
+.hl mark{background:color-mix(in srgb,var(--accent) 28%,transparent);color:#ffd3e8;border-radius:7px;box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 28%,transparent)}
+.lnk{background:none;border:0;padding:0;color:var(--accent);font:inherit;font-weight:800;text-decoration:underline}
 input[type=range]{padding:0;border:0;background:none;accent-color:var(--accent)}
 input[type=checkbox]{width:auto;accent-color:var(--accent)}
 .wrap{max-width:560px;margin:0 auto;padding:0 16px}
@@ -81,7 +87,7 @@ h1 i{font-style:normal;color:var(--accent)}
 .chars{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 .ch{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0;font-weight:800;font-size:13px;color:var(--soft)}
 .ch .pic{width:100%;aspect-ratio:1;border-radius:14px;overflow:hidden;background:var(--panel2);border:1px solid var(--line);display:grid;place-items:center;font-size:24px;position:relative}
-.ch .pic img{width:100%;height:100%;object-fit:cover;display:block}
+.ch .pic img{width:100%;height:100%;object-fit:cover;object-position:50% 12%;display:block}
 .ch span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ch.on .pic{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)} .ch.on{color:var(--text)}
 .ch .pic b{position:absolute;right:4px;bottom:4px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-size:12px;display:grid;place-items:center}
@@ -239,8 +245,25 @@ function setTab(t){ TAB = t; $$('#tabs button').forEach(b => b.classList.toggle(
   document.body.classList.toggle('lib', t==='lib'); if(t==='lib'){ $('#libIn').dataset.sig = ''; drawLib(); } else { VSIG = ''; draw(); } window.scrollTo(0, 0); }
 $('#tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if(b) setTab(b.dataset.tab); };
 const PICS = {}; // media id -> picture link (from the phone's copy)
-function picSrc(id, thumb){ if(PICS[id]) return PICS[id]; if(/^data:/.test(thumb || '')) return thumb; // (the small preview H3 Deck kept is enough here)
-  if(id && E && !PICS[id + '?']){ PICS[id + '?'] = 1; E.picUrl(id).then(u => { if(u){ PICS[id] = u; $$(`img[data-pic="${id}"]`).forEach(im => im.src = u); } else setTimeout(() => { PICS[id + '?'] = 0; }, 4000); }).catch(() => { PICS[id + '?'] = 0; }); } return /^data:/.test(thumb || '') ? thumb : ''; }
+// 🙂 character thumbnails centred on the face (Jordan 2026-11-20): the engine finds the face on a PC once per picture, and a square
+// around it is kept here (h3reel_face). Until then, or with no face found, the picture shows from its top part.
+const FACEK = 'h3reel_face'; let FACE = {}; try{ FACE = JSON.parse(localStorage.getItem(FACEK) || '{}') || {}; }catch(e){}
+const FTRY = {};
+function faceSave(){ try{ localStorage.setItem(FACEK, JSON.stringify(FACE)); }catch(e){} }
+async function faceCrop(id, thumb){ if(FTRY[id] || !E || !E.faceBox) return; FTRY[id] = 1;
+  const b = await E.faceBox(id).catch(() => undefined);
+  if(b===undefined){ setTimeout(() => { delete FTRY[id]; }, 30000); return; }
+  if(!b){ FACE[id] = 'none'; faceSave(); return; }
+  let u = PICS[id] || (/^data:/.test(thumb || '') ? thumb : ''); if(!u) u = await E.picUrl(id).catch(() => ''); if(!u){ setTimeout(() => { delete FTRY[id]; }, 30000); return; }
+  const im = new Image(); im.src = u; try{ await im.decode(); }catch(e){ setTimeout(() => { delete FTRY[id]; }, 30000); return; }
+  const W = im.naturalWidth, H = im.naturalHeight, cx = (b.x + b.w / 2) * W, cy = (b.y + b.h / 2) * H;
+  const side = Math.min(W, H, Math.max(b.w * W, b.h * H) * 2.4), sx = Math.max(0, Math.min(W - side, cx - side / 2)), sy = Math.max(0, Math.min(H - side, cy - side / 2));
+  const c = document.createElement('canvas'); c.width = c.height = 256; c.getContext('2d').drawImage(im, sx, sy, side, side, 0, 0, 256, 256);
+  try{ FACE[id] = c.toDataURL('image/jpeg', 0.85); }catch(e){ return; } faceSave();
+  $$(`img[data-pic="${id}"]`).forEach(x => { x.src = FACE[id]; x.classList.add('face'); }); }
+function picSrc(id, thumb){ if(id && FACE[id] && FACE[id]!=='none') return FACE[id]; if(id && !FACE[id]) faceCrop(id, thumb);
+  if(PICS[id]) return PICS[id]; if(/^data:/.test(thumb || '')) return thumb; // (the small preview H3 Deck kept is enough here)
+  if(id && E && !PICS[id + '?']){ PICS[id + '?'] = 1; E.picUrl(id).then(u => { if(u){ PICS[id] = u; $$(`img[data-pic="${id}"]`).forEach(im => { if(!/^data:/.test(FACE[id] || '')) im.src = u; }); } else setTimeout(() => { PICS[id + '?'] = 0; }, 4000); }).catch(() => { PICS[id + '?'] = 0; }); } return /^data:/.test(thumb || '') ? thumb : ''; }
 const castOf = () => (R().cast = R().cast || []);
 const chCard = (x, on) => { const src = picSrc(x.pic, x.thumb); return `<button class="ch${on ? ' on' : ''}" data-ch="${x.id}"><div class="pic">${src || x.pic ? `<img data-pic="${esc(x.pic)}" src="${esc(src)}" alt="">` : '🧑'}${on ? '<b>✓</b>' : ''}</div><span>${esc(x.name)}</span></button>`; };
 function drawLib(){ if(!READY) return; const L = E.lib(), C = castOf(), sig = JSON.stringify([L.map(x => [x.id, x.name, x.pic, x.thumb ? 1 : 0]), C, S.open]);
@@ -380,14 +403,27 @@ $('#opts').addEventListener('click', async e => { const c = cur(); if(!c) return
 function sheet(html){ $('#card').innerHTML = html; $('#sheet').hidden = false; }
 function closeSheet(){ $('#sheet').hidden = true; $('#card').innerHTML = ''; }
 $('#sheet').addEventListener('click', e => { if(e.target===$('#sheet') || e.target.closest('[data-close]')) closeSheet(); });
-// 👥 characters from H3 Deck's 📚 Library: tap puts the name in the words
-function whoHtml(sel){ const L = E ? E.lib() : [], C = castOf(); if(!L.length) return `<div class="note" style="margin-top:10px">👥 No characters yet: add them in the 📚 Library tab.</div>`;
-  const list = L.slice().sort((a, b) => (C.includes(b.id) ? 1 : 0) - (C.includes(a.id) ? 1 : 0));
-  return `<div class="lab"><span>👥 Who's in it</span><span class="note">pink = sent with this clip</span></div><div class="who" id="who">${list.map(x => { const src = picSrc(x.pic, x.thumb); return `<button data-w="${x.id}" class="${sel.includes(x.id) ? 'on' : ''}">${src || x.pic ? `<img data-pic="${esc(x.pic)}" src="${esc(src)}" alt="">` : '<i></i>'}${esc(x.name)}</button>`; }).join('')}</div>`; }
-function whoWire(sel, ta){ const box = $('#who'); if(!box) return;
-  box.onclick = e => { const b = e.target.closest('[data-w]'); if(!b) return; const id = b.dataset.w, i = sel.indexOf(id), nm = b.textContent.trim();
-    if(i < 0){ sel.push(id); b.classList.add('on'); if(!new RegExp('\\b' + nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(ta.value)){ const p = ta.selectionStart != null ? ta.selectionStart : ta.value.length; const pre = ta.value.slice(0, p), sp = pre && !/\s$/.test(pre) ? ' ' : ''; ta.value = pre + sp + nm + ' ' + ta.value.slice(p); ta.focus(); } }
-    else { sel.splice(i, 1); b.classList.remove('on'); } }; }
+// 👥 the characters in this reel (picked in the 📚 Library tab), as buttons that put a chip in the words, like H3 Deck's prompt box
+// (Jordan 2026-11-20). A name in the words shows as a chip; who is named is who goes with the clip (their pictures and <Subject n>).
+const reEsc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function whoList(){ const C = castOf(); return (E ? E.lib() : []).filter(x => C.includes(x.id)); }
+function whoHtml(sel){ const L = whoList();
+  if(!L.length) return `<div class="note" style="margin-top:10px">👥 Nobody in this reel yet. <button class="lnk" data-golib="1">Pick characters in 📚 Library</button></div>`;
+  return `<div class="lab"><span>👥 Tap to put in the words</span></div><div class="who" id="who">${L.map(x => { const src = picSrc(x.pic, x.thumb); return `<button data-w="${x.id}" class="${sel.includes(x.id) ? 'on' : ''}">${src || x.pic ? `<img data-pic="${esc(x.pic)}" src="${esc(src)}" alt="">` : '<i></i>'}${esc(x.name)}</button>`; }).join('')}</div>`; }
+function named(text){ const t = String(text || ''); return whoList().filter(x => new RegExp('(^|[^\\w<])' + reEsc(x.name) + '(?![\\w>])', 'i').test(t)); }
+function chipHtml(text){ const L = whoList().slice().sort((a, b) => b.name.length - a.name.length); let h = esc(text);
+  if(L.length){ const re = new RegExp('(^|[^\\w&;])(' + L.map(x => reEsc(esc(x.name))).join('|') + ')(?![\\w])', 'gi'); h = h.replace(re, (m, p, n) => p + '<mark>' + n + '</mark>'); }
+  return h + '\n'; }
+function chipBox(ta){ if(!ta || ta.parentNode.classList.contains('hlw')) return; const w = document.createElement('div'), m = document.createElement('div'); w.className = 'hlw'; m.className = 'hl';
+  ta.parentNode.insertBefore(w, ta); w.appendChild(m); w.appendChild(ta);
+  const draw = () => { m.innerHTML = chipHtml(ta.value); m.scrollTop = ta.scrollTop; }; ta.addEventListener('input', draw); ta.addEventListener('scroll', () => { m.scrollTop = ta.scrollTop; }); draw(); }
+function whoWire(sel, ta){ chipBox(ta); const box = $('#who'); const g = $('[data-golib]'); if(g) g.onclick = () => { closeSheet(); setTab('lib'); };
+  const sync = () => { const ids = named(ta.value).map(x => x.id); sel.splice(0, sel.length, ...ids); if(box) $$('#who [data-w]').forEach(b => b.classList.toggle('on', ids.includes(b.dataset.w))); };
+  ta.addEventListener('input', sync); sync(); if(!box) return;
+  box.onclick = e => { const b = e.target.closest('[data-w]'); if(!b) return; const x = whoList().find(y => y.id===b.dataset.w); if(!x) return;
+    const p = ta.selectionStart != null && document.activeElement===ta ? ta.selectionStart : (ta.selectionEnd != null && ta.dataset.touched ? ta.selectionEnd : ta.value.length);
+    const pre = ta.value.slice(0, p), post = ta.value.slice(p), a = pre && !/\s$/.test(pre) ? ' ' : '', z = post && /^\s/.test(post) ? '' : ' ';
+    ta.value = pre + a + x.name + z + post; const q = (pre + a + x.name + z).length; ta.focus(); try{ ta.setSelectionRange(q, q); }catch(e){} ta.dataset.touched = 1; ta.dispatchEvent(new Event('input')); }; }
 const nRow = n => `<div class="lab"><span>Options to make</span></div><div class="seg" id="nSeg">${[1, 2, 3, 4].map(k => `<button data-n="${k}" class="${k===n ? 'on' : ''}">${k}</button>`).join('')}</div>`;
 function nWire(o){ $$('#nSeg button').forEach(b => b.onclick = () => { o.n = S.n = +b.dataset.n; save(); $$('#nSeg button').forEach(x => x.classList.toggle('on', x===b)); }); }
 const lenRow = (id, v, lo, hi, lab) => `<div class="lab"><span>${lab || 'Length'}</span><b id="${id}V">${fmt(v)}</b></div><input type="range" id="${id}" min="${lo}" max="${hi}" step="0.1" value="${v}">`;

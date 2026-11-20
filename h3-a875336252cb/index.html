@@ -6375,7 +6375,33 @@ if(ENGINE){
       if(re.test(w)){ const c = libToCast(L); w = w.replace(re, (m, p) => p + '<Subject ' + c.n + '>'); } // a Library character named in the words
       else if(pick.has(L.id)) add.push('<Subject ' + libToCast(L).n + '>'); } // picked but not named
     return (add.length ? add.join(' and ') + (add.length > 1 ? ' are' : ' is') + ' in the scene. ' : '') + w; }
+  // 🙂 a character picture's face, for Reel's thumbnails (Jordan 2026-11-20: "have the thumbnail center on a character's face"):
+  // the same face finder as Render Deck's Fix faces (face_yolov8m) runs on a PC and draws the face boxes as a white mask; the
+  // box is read from that mask here. {x,y,w,h} as parts of the picture, or null when no face was found. Kept per picture.
+  const FACE_Q = []; let FACE_RUN = false;
+  async function faceBoxNow(id){ S.faceBox = S.faceBox || {}; if(id in S.faceBox) return S.faceBox[id]; if(!S.media[id]) return null;
+    const pcs = S.pcs.filter(p => pcOf(p.url).online); if(!pcs.length) return undefined;
+    const url = pcs[0].url; let det = 'bbox/face_yolov8m.pt';
+    try{ const o = await getJ(url + '/object_info/UltralyticsDetectorProvider', null, 8000), l = (((o.UltralyticsDetectorProvider || {}).input || {}).required || {}).model_name;
+      const names = l && (Array.isArray(l[0]) ? l[0] : (l[1] || {}).options) || []; if(!names.length) return null; /* no face finder on this PC */ det = names.find(n => /face_yolov8m/i.test(n)) || names.find(n => /face/i.test(n)) || names[0]; }catch(e){ return undefined; }
+    let img; try{ img = await upload(url, id); }catch(e){ return undefined; }
+    const g = {1:{class_type:'LoadImage', inputs:{image:img}}, 2:{class_type:'UltralyticsDetectorProvider', inputs:{model_name:det}},
+      3:{class_type:'BboxDetectorSEGS', inputs:{bbox_detector:['2', 0], image:['1', 0], threshold:0.35, dilation:0, crop_factor:1, drop_size:10, labels:'all'}},
+      4:{class_type:'SegsToCombinedMask', inputs:{segs:['3', 0]}}, 5:{class_type:'MaskToImage', inputs:{mask:['4', 0]}}, 6:{class_type:'PreviewImage', inputs:{images:['5', 0]}}};
+    let pid; try{ const r = await fetch(url + '/prompt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt:g, client_id:CID + '_face'})}); const j = await r.json(); pid = j.prompt_id; if(!pid) return (S.faceBox[id] = null); }catch(e){ return undefined; }
+    let out = null; for(let i = 0; i < 90 && !out; i++){ await new Promise(r => setTimeout(r, i < 5 ? 600 : 1500));
+      try{ const h = await getJ(url + '/history/' + pid, null, 8000), e = h && h[pid]; if(!e) continue; if(e.status && e.status.status_str==='error') return (S.faceBox[id] = null);
+        out = ((e.outputs || {})['6'] || {}).images; if(e.status && e.status.completed && !out) return (S.faceBox[id] = null); }catch(e){} }
+    if(!out || !out[0]) return undefined;
+    try{ const f = out[0], r = await fetch(url + '/view?type=' + (f.type || 'temp') + '&subfolder=' + encodeURIComponent(f.subfolder || '') + '&filename=' + encodeURIComponent(f.filename), {cache:'no-store'});
+      const bm = await createImageBitmap(await r.blob()), W = Math.min(256, bm.width), H = Math.round(bm.height * W / bm.width), c = document.createElement('canvas'); c.width = W; c.height = H;
+      const x = c.getContext('2d'); x.drawImage(bm, 0, 0, W, H); const d = x.getImageData(0, 0, W, H).data; let x0 = W, y0 = H, x1 = -1, y1 = -1;
+      for(let yy = 0; yy < H; yy++) for(let xx = 0; xx < W; xx++) if(d[(yy * W + xx) * 4] > 127){ if(xx < x0) x0 = xx; if(xx > x1) x1 = xx; if(yy < y0) y0 = yy; if(yy > y1) y1 = yy; }
+      S.faceBox[id] = x1 < 0 ? null : {x:x0 / W, y:y0 / H, w:(x1 - x0 + 1) / W, h:(y1 - y0 + 1) / H}; save(); return S.faceBox[id]; }catch(e){ return undefined; } }
+  function faceBox(id){ return new Promise(res => { FACE_Q.push([id, res]); faceNext(); }); }
+  async function faceNext(){ if(FACE_RUN) return; FACE_RUN = true; while(FACE_Q.length){ const [id, res] = FACE_Q.shift(); let b; try{ b = await faceBoxNow(id); }catch(e){ b = undefined; } res(b); } FACE_RUN = false; }
   window.H3Engine = {
+    faceBox,
     ready:() => families().length > 0,
     pcs:() => S.pcs.map(p => ({name:p.name, url:p.url, on:p.on!==false, online:!!pcOf(p.url).online, busy:busySecs(p.url) > 0})),
     models:() => modelList().map(x => ({key:x.key, label:x.label})),
