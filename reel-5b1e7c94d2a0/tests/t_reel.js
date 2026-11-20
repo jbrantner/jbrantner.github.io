@@ -161,6 +161,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const t6 = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.redo && {str:t.redo.str, prompt:t.prompt}; });
   ok(t6 && t6.str===0.5 && /red chair/.test(t6.prompt) && await page.evaluate(() => REEL.cur().takes.length===3), '🎨 Change it is a redo of the stretch at that strength, as a new option (' + JSON.stringify(t6) + ')');
   await finish();
+  // 🪄 Smooth on clip 2: H3 Deck's Smooth with 📐 spacing, first and last frames kept, as a new option
+  await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="smooth"]');
+  ok(await page.evaluate(() => !document.querySelector('#edSm').hidden && document.querySelector('#edT').hidden), '🪄 Edit has a Smooth tab');
+  const nT7 = await page.evaluate(() => REEL.cur().takes.length); n0 = sent.filter(x => x.g).length;
+  await page.click('#edSGo'); await page.waitForFunction(n => REEL.cur().takes.length > n, nT7, {timeout:40000}).catch(() => {}); await page.waitForTimeout(1500);
+  const t7 = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.sm && {every:t.sm.every, spc:t.sm.spc, keys:(t.sm.keys || []).length, first:t.sm.keys && t.sm.keys[0], last:t.sm.keys && t.sm.keys[t.sm.keys.length - 1], up:!!t.up, loop:t.sm.loop}; });
+  const g7 = sent.filter(x => x.g).slice(n0);
+  ok(t7 && !t7.up && !t7.loop && g7.length >= 1 && await page.evaluate(n => REEL.cur().takes.length===n + 1, nT7), '🪄 Smooth sends a smoothing take (no regenerate, no loop) as a new option (' + JSON.stringify(t7) + ')');
+  await finish();
   // ▶ Play all
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
