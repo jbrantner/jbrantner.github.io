@@ -170,6 +170,17 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const g7 = sent.filter(x => x.g).slice(n0);
   ok(t7 && !t7.up && !t7.loop && g7.length >= 1 && await page.evaluate(n => REEL.cur().takes.length===n + 1, nT7), '🪄 Smooth sends a smoothing take (no regenerate, no loop) as a new option (' + JSON.stringify(t7) + ')');
   await finish();
+  // 🎬 Final pass: ✨ High quality on every clip's picked option with Prism Pika, chained clip to clip, picked as a new option
+  { const before = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length})));
+    await page.click('#finBtn'); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => /Final pass on \d+ clip/.test(document.querySelector('#fnGo').textContent)), '🎬 Final pass sheet opens');
+    await page.click('#fnGo'); await page.waitForTimeout(4000);
+    const after = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, fin:!!((c.meta || {})[c.pick] || {}).fin, in:c.in, out:c.out})));
+    const ups = await eng.evaluate(ids => ids.map(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {src:t.redo && t.redo.src, scale:t.up && t.up.scale, unet:t.up && t.up.unet, den:t.up && t.up.den, chain:t.up && t.up.chain && {idx:t.up.chain.idx, prev:t.up.chain.prev, dir:t.up.chain.dir}, off:t.descOff}; }), after.map(x => x.pick));
+    const chained = ups.slice(1).every((u, i) => u.chain && u.chain.idx===i + 1 && u.chain.prev===after[i].pick && u.chain.dir===ups[0].chain.dir) && ups[0].chain && ups[0].chain.idx===0;
+    ok(after.every((x, i) => x.n===before[i].n + 1 && x.fin && x.in===0 && x.out===null) && ups.every((u, i) => u.src===before[i].pick && u.scale===1.5 && /prismPIKA/.test(u.unet || '') && u.den===0.9) && chained,
+      '🎬 every clip gets a ✨ Prism Pika option made from its picked one, picked, each carrying on from the one before (' + JSON.stringify({before, after, ups}) + ')');
+    await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; }); REEL.refresh(); }, before); await page.waitForTimeout(300); }
   // ▶ Play all
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
@@ -272,8 +283,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok((await page.inputValue('#' + tw))==='Mia waves {Glow} ' && await page.evaluate(() => !!document.querySelector('.hl mark.lo')), '🧩 tapping Glow puts the {Glow} chip in the words (' + JSON.stringify(await page.inputValue('#' + tw)) + ')');
   const nT = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(() => H3.S.takes.map(t => t.id));
   await page.click('#card .big.pri, #card button.pri'); await page.waitForTimeout(2500);
-  const lt = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(n => { const t = H3.S.takes.find(x => !n.includes(x.id)) || {}; const c = H3.S.cast.find(x => x.lib==='Lmia'); return {prompt:t.prompt, loras:(t.loras || []).map(l => l.name + ':' + l.str), attrs:c && c.attrs, fit:c && c.fitHere, lines:t.lines, SL:H3.S.lines, pr:t.pieces && t.pieces[0] && t.pieces[0].prompt}; }, nT);
-  ok(/<Lora 1>|soft glow light/.test(lt.prompt || '') && !/\{Glow\}/.test(lt.prompt || '') && lt.loras.includes('glow.safetensors:0.8') && (lt.attrs || []).includes('Lfrk') && lt.fit===true, "🧩 the take gets Glow's LoRA and words, and ✨ Freckles is on Mia (" + JSON.stringify(lt) + ')');
+  const lt = await page.frames().find(f => /engine=1/.test(f.url())).evaluate(n => { const t = H3.S.takes.find(x => !n.includes(x.id)) || {}; const c = H3.S.cast.find(x => x.lib==='Lmia'); return {prompt:t.prompt, loras:(t.loras || []).map(l => l.name + ':' + l.str), off:c && t.descOff && t.descOff[c.n], fit:c && c.fitHere, lines:t.lines, SL:H3.S.lines, pr:t.pieces && t.pieces[0] && t.pieces[0].prompt}; }, nT);
+  ok(/<Lora 1>|soft glow light/.test(lt.prompt || '') && !/\{Glow\}/.test(lt.prompt || '') && lt.loras.includes('glow.safetensors:0.8') && (lt.off || []).includes('add:Lfrk') && !(lt.off || []).includes('fit') && lt.fit===true, "🧩 the take gets Glow's LoRA and words, and ✨ Freckles is on Mia in this take itself (its own 🏷 chips) (" + JSON.stringify(lt) + ')');
   // 🙂 character thumbnails centred on the face
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(1500);
   if(process.env.DBG) console.log('DBG', faces.length, await page.frames().find(f => /engine=1/.test(f.url())).evaluate(async () => { try{ return JSON.stringify([H3.S.faceBox, Object.keys(H3.S.media), H3.S.pcs.map(p => [p.url, typeof H3.pcOf]), await H3Engine.faceBox('mPic')]); }catch(e){ return 'ERR ' + e.message; } }));
