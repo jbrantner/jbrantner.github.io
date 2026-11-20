@@ -16,16 +16,26 @@ const SCHEMA = {
 };
 const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
-  'Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
+  'BboxDetectorSEGS','UltralyticsDetectorProvider','SegsToCombinedMask','MaskToImage','PreviewImage','Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
 (async () => {
   const root = path.join(__dirname, '..', '..'); const srv = http.createServer((q, r) => { const f = path.join(root, decodeURIComponent(q.url.split('?')[0]).replace(/\/$/, '/index.html'));
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : /\.png$/.test(f) ? 'image/png' : 'application/octet-stream'}); r.end(b); }); }).listen(8041);
   const br = await chromium.launch(), ctx = await br.newContext({viewport:{width:390, height:844}, deviceScaleFactor:2}), page = await ctx.newPage();
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  const sent = [];
+  const sent = [], faces = [];
+  const MASK = (() => { const zlib = require('zlib'), W = 64, rows = []; for(let y = 0; y < W; y++){ const r = Buffer.alloc(W + 1); for(let x = 0; x < W; x++) r[x + 1] = (x >= 20 && x <= 35 && y >= 4 && y <= 19) ? 255 : 0; rows.push(r); }
+    const crc = b => { let c, t = []; for(let n = 0; n < 256; n++){ c = n; for(let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } c = 0xffffffff; for(const x of b) c = t[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+    const ch = (ty, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(ty), d]), c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
+    const h = Buffer.alloc(13); h.writeUInt32BE(W, 0); h.writeUInt32BE(W, 4); h[8] = 8; h[9] = 0;
+    return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ch('IHDR', h), ch('IDAT', zlib.deflateSync(Buffer.concat(rows))), ch('IEND', Buffer.alloc(0))]); })();
   const fake = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
+    // 🙂 the face finder: a 64x64 mask with the face box at x 20-35, y 4-19
+    if(p==='/object_info/UltralyticsDetectorProvider') return J({UltralyticsDetectorProvider:{input:{required:{model_name:[['bbox/hand_yolov8s.pt', 'bbox/face_yolov8m.pt']]}}}});
+    if(p==='/prompt' && /BboxDetectorSEGS/.test(rt.request().postData() || '')){ const g = JSON.parse(rt.request().postData()).prompt; faces.push(g); return J({prompt_id:'face' + faces.length}); }
+    if(p.startsWith('/history/face')){ const id = p.slice(9); return J({[id]:{status:{completed:true, status_str:'success'}, outputs:{6:{images:[{filename:'m.png', subfolder:'', type:'temp'}]}}}}); }
+    if(p==='/view' && u.searchParams.get('type')==='temp') return rt.fulfill({status:200, contentType:'image/png', headers:{'Access-Control-Allow-Origin':'*'}, body:MASK});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
     if(p==='/agent/status') return J({agent:1, comfy:'up', wanted:true});
     if(p==='/queue') return J({queue_running:[], queue_pending:[]});
@@ -41,7 +51,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // H3 Deck's own save: a Library character and its picture, one take of its own, the PCs
   const PNG = fs.readFileSync(path.join(root, 'reel-5b1e7c94d2a0', 'icon-180.png')).toString('base64');
   const DECK = {pcs:[{name:'Render', url:R, on:true, speed:1}], f:{model:'', aspect:'16:9', mp:0.41, turbo:true}, takes:[{id:'tDeck', t:1, state:'done', prompt:'H3 Deck take', pieces:[], imgs:[], vids:[], auds:[], follow:[]}],
-    lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{}};
+    lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png', w:180, h:180, thumb:'data:image/png;base64,' + PNG}, mOld:{id:'mOld', kind:'img', name:'old.png', type:'image/png'}}, up:{['mPic|' + R]:'h3deck/h3deck_mPic.png'}};
   await page.addInitScript(([deck, r]) => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(deck)); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, [DECK, R]);
   // the picture in IndexedDB (shared by both apps)
   await page.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/');
@@ -54,9 +64,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok(await page.evaluate(() => /Make your first clip/.test(document.querySelector('#vmsg').textContent)), 'an empty reel asks for the first clip');
   // ✍ New clip with Mia
   await page.click('[data-act="make"]'); await page.waitForTimeout(200);
-  ok(await page.evaluate(() => !!document.querySelector('#who [data-w="Lmia"]')), "👥 Who's in it lists H3 Deck's Library characters");
+  ok(await page.evaluate(() => !document.querySelector('#who') && !!document.querySelector('[data-golib]')), '👥 with nobody in the reel, the sheet points to the 📚 Library instead of listing everyone');
+  await page.click('[data-close]'); await page.evaluate(() => { REEL.R().cast = ['Lmia']; }); await page.click('[data-act="make"]'); await page.waitForTimeout(200);
+  ok(await page.evaluate(() => !!document.querySelector('#who [data-w="Lmia"]') && document.querySelectorAll('#who [data-w]').length===1), "👥 only the reel's characters are listed");
   await page.fill('#mkW', 'waves at the camera'); await page.click('#who [data-w="Lmia"]');
-  ok(/Mia/.test(await page.inputValue('#mkW')), 'tapping Mia puts her name in the words');
+  ok((await page.inputValue('#mkW'))==='waves at the camera Mia ', 'tapping Mia puts her in the words (' + JSON.stringify(await page.inputValue('#mkW')) + ')');
+  await page.click('#who [data-w="Lmia"]');
+  ok((await page.inputValue('#mkW'))==='waves at the camera Mia Mia ', 'every tap puts her in again, like a button');
+  ok(await page.evaluate(() => document.querySelectorAll('.hlw .hl mark').length===2 && document.querySelector('#who [data-w="Lmia"]').classList.contains('on')), 'her name shows as a chip in the words');
+  if(process.env.SHOTC) await page.screenshot({path:process.env.SHOTC});
+  await page.fill('#mkW', 'Mia waves at the camera');
   await page.click('#nSeg [data-n="2"]');
   let n0 = sent.filter(x => x.g).length; await page.click('#mkGo'); await page.waitForTimeout(2500);
   const g1 = sent.filter(x => x.g).slice(n0);
@@ -134,13 +151,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.click('#chGo'); await page.waitForTimeout(1200);
   const zo = await page.evaluate(() => { const z = REEL.E().lib().find(x => x.name==='Zoe'); return z && {reel:z.reel, pics:z.pics.length, inReel:REEL.R().cast.includes(z.id), card:/Zoe/.test(document.querySelector('#libIn').textContent)}; });
   ok(zo && zo.reel && zo.pics===1 && zo.inReel && zo.card, '＋ New makes a character with her picture and puts her in this reel (' + JSON.stringify(zo) + ')');
+  await page.evaluate(() => { REEL.R().cast = REEL.R().cast.filter(x => x!=='Lmia'); });
   await page.click('#libAll [data-ch="Lmia"]'); await page.waitForTimeout(200); await page.click('#chIn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => REEL.R().cast.includes('Lmia')), "tapping H3 Deck's Mia puts her in this reel too");
   if(process.env.SHOT3) await page.screenshot({path:process.env.SHOT3});
   await page.click('#tabs [data-tab="reel"]'); await page.waitForTimeout(300); if(process.env.SHOT3) await page.screenshot({path:process.env.SHOT3.replace('.png', 'b.png'), fullPage:true});
   ok(await page.evaluate(() => /Zoe/.test(document.querySelector('#castRow').textContent) && /Mia/.test(document.querySelector('#castRow').textContent)), '👥 In this reel under the options shows both');
   await page.click('#nextBtn'); await page.waitForTimeout(300);
-  ok(await page.evaluate(() => document.querySelectorAll('#who button.on').length===2), 'a new clip starts with the reel\'s characters picked'); await page.click('[data-close]');
+  ok(await page.evaluate(() => document.querySelectorAll('#who [data-w]').length===2 && !document.querySelectorAll('#who button.on').length), 'Next lists both of the reel\'s characters, none named yet'); await page.click('[data-close]');
   // Zoe stays after the engine reloads (Reel's own, kept apart from H3 Deck's Library)
   await eng.evaluate(() => location.reload()); await page.waitForTimeout(3000);
   const eng2 = page.frames().find(f => /engine=1/.test(f.url()));
@@ -154,6 +172,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await p2.route(R + '/**', fake); await p2.addInitScript(r => { window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await p2.goto('http://127.0.0.1:8041/h3-a875336252cb/'); await p2.waitForTimeout(2500);
   ok(await p2.evaluate(() => H3.S.takes.some(t => t.id==='tDeck') && !H3.S.takes.some(t => /<Subject 1> sits/.test(t.prompt || ''))), "H3 Deck opens with its own takes, not Reel's");
+  // 🙂 character thumbnails centred on the face
+  await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(1500);
+  if(process.env.DBG) console.log('DBG', faces.length, await page.frames().find(f => /engine=1/.test(f.url())).evaluate(async () => { try{ return JSON.stringify([H3.S.faceBox, Object.keys(H3.S.media), H3.S.pcs.map(p => [p.url, typeof H3.pcOf]), await H3Engine.faceBox('mPic')]); }catch(e){ return 'ERR ' + e.message; } }));
+  const fb = await eng.evaluate(() => H3.S.faceBox && H3.S.faceBox.mPic).catch(() => null) || await page.frames().find(f => /engine=1/.test(f.url())).evaluate(() => H3.S.faceBox && H3.S.faceBox.mPic);
+  ok(fb && Math.abs(fb.x - 20 / 64) < 0.02 && Math.abs(fb.w - 16 / 64) < 0.02 && Math.abs(fb.y - 4 / 64) < 0.02, '🙂 the face box is read from the face finder\'s mask (' + JSON.stringify(fb) + ')');
+  ok(faces.length >= 1 && /face_yolov8m/.test(JSON.stringify(faces[0])) && faces.every(g => Object.values(g).some(n => n.class_type==='SegsToCombinedMask')), '🙂 it uses face_yolov8m from the PC\'s own list');
+  ok(await page.evaluate(() => { const im = document.querySelector('#libAll [data-ch="Lmia"] img'); return !!im && /^data:image\/jpeg/.test(im.src); }), "🙂 Mia's card shows the square cut around her face");
+  await page.click('#tabs [data-tab="reel"]'); await page.waitForTimeout(200);
   // Reel as its own home-screen app (its own storage, no H3 Deck save there): the Library comes from H3 Deck's copy on the PCs
   const ctx3 = await br.newContext({viewport:{width:390, height:844}}), p3 = await ctx3.newPage(); p3.on('pageerror', e => { console.log('REEL3 PAGE ERROR', e.message); fails++; });
   const fake3 = async rt => { const u = new URL(rt.request().url()), pa = u.pathname;
@@ -165,7 +191,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await p3.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/'); await p3.waitForTimeout(5000);
   await p3.click('#tabs [data-tab="lib"]'); await p3.waitForTimeout(7000);
   const k3 = await p3.evaluate(() => { const b = [...document.querySelectorAll('#libAll [data-ch]')].find(x => /Kai/.test(x.textContent)), im = b && b.querySelector('img'); return {card:!!b, src:im ? im.src.slice(0, 5) : ''}; });
-  ok(k3.card && k3.src==='blob:', "on its own storage, Reel's Library shows H3 Deck's characters from the PCs' copy, picture and all (" + JSON.stringify(k3) + ')');
+  ok(k3.card && (k3.src==='blob:' || k3.src==='data:'), "on its own storage, Reel's Library shows H3 Deck's characters from the PCs' copy, picture and all (" + JSON.stringify(k3) + ')');
   await ctx3.close();
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
