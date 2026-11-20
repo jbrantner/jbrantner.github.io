@@ -359,6 +359,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const b0 = await page.evaluate(() => { const cs = REEL.clips(), e = c => { const d = REEL.info(c.pick).secs; return c.out != null ? Math.min(c.out, d) : d; }; return {n:cs.length, endA:e(cs[2]), inA:cs[2].in || 0, inB:cs[3].in || 0, a:cs[2].pick, b:cs[3].pick}; });
     await page.click('#editBtn'); await page.waitForTimeout(400); await page.click('#edM [data-m="across"]');
     await page.evaluate(() => { for(const [id, v] of [['#edXA', 1], ['#edXB', 1.5]]){ const s = document.querySelector(id); s.value = v; s.oninput({target:s}); } });
+    { await page.waitForTimeout(800); const pv = await page.evaluate(() => { const v = document.querySelector('#edV'), cs = REEL.clips(); return {src:v.src, t:+v.dataset.xt, b:REEL.info(cs[3].pick).url, a:REEL.info(cs[2].pick).url, note:document.querySelector('#edXN').textContent}; });
+      ok(pv.src===pv.b && Math.abs(pv.t - (b0.inB + 1.5)) < 0.15 && /lands/.test(pv.note), '⇿ the preview follows the sliders: the last one moved shows where it lands in the next clip (' + JSON.stringify(pv) + ')'); }
     await page.fill('#edXW', 'she turns and looks straight at the camera'); n0 = sent.filter(x => x.g).length; await page.click('#edXGo'); await page.waitForTimeout(2500);
     const r = await page.evaluate(() => { const cs = REEL.clips(); return {n:cs.length, kinds:cs.map(c => c.kind).join(), out:cs[2].out, inB:cs[4].in, mid:cs[3].takes.length, meta:cs[3].meta[cs[3].takes[0]], cur:REEL.S().reels.find(x => x.id===REEL.S().open).cur}; });
     const g = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap && {aOut:t.lead.gap.aOut, bIn:t.lead.gap.bIn, prompt:t.prompt}; });
