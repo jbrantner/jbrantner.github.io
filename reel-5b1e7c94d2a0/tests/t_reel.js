@@ -121,10 +121,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // ↻ Redo on the middle clip: lines up with both
   n0 = sent.filter(x => x.g).length; await page.click('#redoBtn'); await page.waitForTimeout(200);
   ok(/Lands between/.test(await page.textContent('#card')), '↻ Redo on a middle clip says it lands between both');
-  await page.click('#rdGo'); await page.waitForTimeout(2500);
+  const w0 = await page.evaluate(() => REEL.cur().words); await page.fill('#rdW', 'She spins around twice'); await page.click('#rdGo'); await page.waitForTimeout(2500);
   const t4 = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap ? 'gap' : 'other'; });
   ok(t4==='gap' && await page.evaluate(() => REEL.cur().takes.length===2), '↻ Redo makes another fill as a new option of the same clip');
   await finish();
+  // ✍ each option shows the words it was made with
+  { const tk = await page.evaluate(() => REEL.cur().takes.slice());
+    await page.click(`#opts [data-o="${tk[1]}"]`); await page.waitForTimeout(300); const a = await page.textContent('#words');
+    await page.click(`#opts [data-o="${tk[0]}"]`); await page.waitForTimeout(300); const b = await page.textContent('#words');
+    await page.click('#redoBtn'); await page.waitForTimeout(200); const c = await page.inputValue('#rdW'); await page.click('[data-close]');
+    ok(/spins around twice/.test(a) && !/spins/.test(b) && b.length > 0 && c===w0.trim(), '✍ the redo option shows its new words, the first option its own (' + JSON.stringify([a, b, c]) + ')'); }
   // ↻ Redo on the first clip (nothing before, a clip after): a lead-in that lands on clip 2
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#redoBtn'); await page.waitForTimeout(200);
   ok(/Leads into the clip after/.test(await page.textContent('#card')), '↻ Redo on the first clip leads into the next one');
