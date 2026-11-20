@@ -28,11 +28,13 @@ const ISO = /^\d{4}-\d\d-\d\d$/;
 // bank: what you typed last (cents) · pay: next payday, how often, usual paycheck · adv: pay advance owed + step down
 // bills: monthly {id,name,amt,due,goal,until} · once: one-time {id,name,amt,date} · cleared: {'YYYY-MM': {billId: principal|true}}
 // goals: things you're paying back {id,name,owed,start,apr} · cushion: kept in the bank, never spending money
-const blank = () => ({ v: 1, bank: null, bankAt: null, last: null, pay: null, adv: null, bills: [], once: [], cleared: {}, goals: [], cushion: 0, cushionGoal: 100000 });
+const blank = () => ({ v: 1, bank: null, bankAt: null, typed: null, spends: [], last: null, pay: null, adv: null, bills: [], once: [], cleared: {}, goals: [], cushion: 0, cushionGoal: 100000 });
 function fix(s) {
   const b = blank(), c = n => Math.max(0, Math.round(Number(n) || 0));
   if (!s || typeof s !== 'object') return b;
   b.bank = s.bank == null ? null : c(s.bank); b.bankAt = typeof s.bankAt === 'string' ? s.bankAt : null;
+  b.typed = s.typed == null ? b.bank : c(s.typed);
+  b.spends = (Array.isArray(s.spends) ? s.spends : []).filter(x => x && x.amt > 0).slice(-300).map(x => ({ id: String(x.id || uid()), t: Number(x.t) || Date.now(), amt: c(x.amt), cat: String(x.cat || '').slice(0, 30) }));
   b.last = s.last && typeof s.last === 'object' ? { at: String(s.last.at || ''), spent: c(s.last.spent), days: c(s.last.days) } : null;
   if (s.pay && ISO.test(s.pay.next)) b.pay = { next: s.pay.next, every: +s.pay.every === 7 ? 7 : 14, amt: c(s.pay.amt) };
   if (s.adv && c(s.adv.owed)) b.adv = { owed: c(s.adv.owed), step: c(s.adv.step) || 10000 };
@@ -86,7 +88,7 @@ function plan() {
   const inc = pays.slice(0, AHEAD).map(d => { const borrow = Math.max(0, owed - step), amt = Math.max(0, P.amt - owed + borrow), back = owed; owed = borrow; return { d, amt, back, borrow }; });
   const ev = events(t, pays[AHEAD]), avg = inc.reduce((a, x) => a + x.amt, 0) / AHEAD;
   const steady = Math.max(0, Math.floor((avg - billsMonth(nextMk()) / (P.every === 7 ? 4 : 2)) / 100) * 100);
-  const start = state.bank - state.cushion;
+  const sp = todaySpends().reduce((a, x) => a + x.amt, 0), start = state.bank - state.cushion + sp;   // today's spending comes off today's number, dollar for dollar
   const lowWith = (now, per) => {   // the lowest the bank gets if you spend `now` before payday and `per` each pay period after
     let bal = start - now, low = bal, i = 0;
     const walk = upto => { while (i < ev.length && ev[i].d < upto) { bal -= ev[i++].amt; low = Math.min(low, bal); } };
@@ -101,9 +103,10 @@ function plan() {
     let lo = 0, hi = steady; while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (lowWith(share(mid), mid) >= 0) lo = mid; else hi = mid; }
     per = Math.floor(lo / 100) * 100; left = share(per); short = steady - per;
   }
+  left = Math.max(0, left - sp);
   const periods = pays.slice(0, AHEAD).map((d, k) => ({ pay: d, inc: inc[k], bills: ev.filter(x => x.d >= d && x.d < pays[k + 1]), next: pays[k + 1] }));
   const before = ev.filter(x => x.d < pays[0]);
-  return { pay: pays[0], left, steady: per, normal: steady, perDay: Math.floor(left / dleft), dleft, payToday: pays[0] === t, before, beforeAmt: before.reduce((a, x) => a + x.amt, 0), periods, through: isoAdd(pays[AHEAD], -1), short, tight: per < steady, held: Math.max(0, start - left) };
+  return { pay: pays[0], left, steady: per, normal: steady, perDay: Math.floor(left / dleft), dleft, payToday: pays[0] === t, before, beforeAmt: before.reduce((a, x) => a + x.amt, 0), periods, through: isoAdd(pays[AHEAD], -1), short, tight: per < steady, held: Math.max(0, start - sp - left) };
 }
 // More than a normal pay period's spending sitting here: offer to keep the extra as cushion.
 function extraForCushion(Z) {
@@ -130,7 +133,7 @@ let tab = 'home';
 function render() {
   $('dateLabel').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
   if (tab === 'bills') { $('homeList').innerHTML = billsTop(); $('townList').innerHTML = billsAll(); }
-  else { $('homeList').innerHTML = heroCard(); $('townList').innerHTML = comingUp() + goalsHTML(); }
+  else { $('homeList').innerHTML = heroCard(); $('townList').innerHTML = todayList() + comingUp() + goalsHTML(); }
 }
 function heroCard() {
   if (!state.pay || !state.pay.amt) return `<div class="vl-hero pp-panel mh-have"><div class="mh-cu"><span class="vl-k">Let's set up</span><span class="vl-sub">Add your payday and usual paycheck in Settings, then your bills. Or bring them in from the simple app.</span></div><div class="pc-row"><button class="big" data-go="settings">Open Settings</button><button data-act="fromsimple">Bring in from the simple app</button></div></div>`;
@@ -144,6 +147,7 @@ function heroCard() {
     + `<span class="pc-day">About <b>${mWhole(Z.perDay)} a day</b> for ${Z.dleft} day${Z.dleft === 1 ? '' : 's'}</span>`
     + `<div class="pc-mini"><div>In your bank<b class="num">${mWhole(state.bank)}</b></div><div>Saved for bills<b class="num">${mWhole(Z.held)}</b></div><div>Cushion<b class="num">${mWhole(state.cushion)}</b></div></div>`
     + `<span class="vl-sub">${Z.tight ? Z.steady ? `Every bill is covered through ${dayTxt(Z.through)} ✓ Money is snug, so this spreads it evenly: about <b>${mWhole(Z.steady)}</b> each payday too. Overtime lifts it. Update your bank when your paycheck lands.` : `Your bills need about ${mWhole(Z.short)} more than is coming before ${dayTxt(Z.through)}. Overtime or a skipped extra covers it. Update your bank when money lands.` : `Every bill is covered through ${dayTxt(Z.through)} ✓ Then about <b>${mWhole(Z.steady)}</b> to spend each payday.`}</span>`
+    + todayLine(Z)
     + (L && L.days ? `<span class="pc-since">Since your last update: about <b>${mWhole(L.spent)}</b> spent${L.days > 1 ? ` (${mWhole(L.spent / L.days)} a day)` : ''}.</span>` : '')
     + `<span class="${ago >= 48 ? 'pc-old' : 'pc-since'}">Bank updated ${agoTxt}${ago >= 48 ? '. Update it so this stays right' : ''}</span>`
     + `</div><div class="pc-row"><button class="big" data-act="bank">Update bank balance</button><button data-act="paydays">See paydays</button>${x ? `<button data-act="keep" data-v="${x}">Keep ${mWhole(x)} as cushion</button>` : ''}</div></div>`;
@@ -246,11 +250,53 @@ function bankPrev() {
 }
 function bankGo() {
   const v = $('bankAmt').value.trim(); if (v === '') return;
-  const before = state.bank, at = state.bankAt, r = applyAnswers(state, bankAns), now = toC(v);
+  const before = state.typed != null ? state.typed : state.bank, at = state.bankAt, r = applyAnswers(state, bankAns), now = toC(v);
   if (before != null && at) { const d = Math.max(1, days(isoOf(new Date(at)), today())), spent = before + r.landed - r.paid - now;
     state.last = spent > 0 ? { at: new Date().toISOString(), spent, days: d } : null; }
-  state.bank = now; state.bankAt = new Date().toISOString(); save(); hideAsk(); render();
+  state.bank = now; state.typed = now; state.bankAt = new Date().toISOString(); save(); hideAsk(); render();
   const Z = plan(); toast(Z ? `${m(Z.left)} to spend until ${dayTxt(Z.pay)}` : 'Saved ✓');
+}
+
+
+/* ---------- spend: log it and the bank number goes down right away ---------- */
+const CATS = ['Groceries', 'Gas', 'Work food', 'Eating out', 'Other'];
+const todaySpends = () => { const t = today(); return state.spends.filter(x => isoOf(new Date(x.t)) === t); };
+function todayLine(Z) {
+  const T = todaySpends().reduce((a, x) => a + x.amt, 0); if (!T) return '';
+  return `<span class="pc-since">Spent today: <b>${m(T)}</b>${T <= Math.floor((Z.left + T) / Math.max(1, Z.dleft)) ? ' · on track ✓' : ''}</span>`;
+}
+function todayList() {
+  const L = todaySpends(); if (!L.length) return '';
+  return `<div class="pp-sec pp-sec-home"><h3 class="pp-h2">Spent today</h3><span><b class="num">${m(L.reduce((a, x) => a + x.amt, 0))}</b></span></div><div class="pp-panel pc-list pc-today">`
+    + [...L].reverse().map(x => `<div class="pc-li"><span class="grow"><b>${esc(x.cat || 'Spent')}</b><small>${new Date(x.t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</small></span><span class="num">${m(x.amt)}</span><button class="vl-pay undo" data-act="unspend" data-id="${x.id}">Undo</button></div>`).join('') + `</div>`;
+}
+let spVal = 0, spCat = '';
+function openSpend() {
+  if (state.bank == null) return openBank();
+  spVal = 0; spCat = ''; spSync(); showAsk('spendBox');
+}
+function spSync() {
+  const d = String(spVal).padStart(5, '0').slice(-5), faces = document.querySelectorAll('#spLock .face');
+  faces.forEach((f, i) => f.textContent = d[i]);
+  document.querySelectorAll('#spLock .wheel').forEach((w, i) => w.classList.toggle('lead', (i === 0 && spVal < 10000) || (i === 1 && spVal < 1000)));
+  $('spCats').innerHTML = CATS.map(c => `<button type="button" data-cat="${c}" class="${c === spCat ? 'on' : ''}">${c}</button>`).join('');
+  $('spGo').disabled = !spVal; $('spSaid').textContent = m(spVal);
+  const Z = plan(); $('spLeft').textContent = Z ? `${m(Z.left)} left until ${dayTxt(Z.pay)}${spVal ? ` · ${m(Math.max(0, Z.left - spVal))} after this` : ''}` : '';
+}
+function spKey(k) {
+  if (k === 'del') spVal = Math.floor(spVal / 10);
+  else for (const ch of k) { if (spVal >= 10000) break; spVal = spVal * 10 + +ch; }
+  spSync();
+}
+function spGo() {
+  if (!spVal) return; const Z0 = plan();
+  state.spends.push({ id: uid(), t: Date.now(), amt: spVal, cat: spCat }); if (state.spends.length > 300) state.spends.splice(0, state.spends.length - 300);
+  state.bank = Math.max(0, state.bank - spVal); save(); hideAsk(); render();
+  const Z = plan(); toast(`${m(spVal)}${spCat ? ' on ' + spCat : ''} · ${Z ? m(Z.left) + ' left' : ''}`);
+}
+function unspend(id) {
+  const x = state.spends.find(s => s.id === id); if (!x) return;
+  state.spends = state.spends.filter(s => s !== x); state.bank += x.amt; save(); render(); toast(`${m(x.amt)} back`);
 }
 
 /* ---------- bill dialog ---------- */
@@ -386,7 +432,7 @@ function showView(v) {
   tab = v === 'settings' ? tab : v;
   const st = v === 'settings';
   document.documentElement.classList.toggle('full', !st); document.documentElement.classList.toggle('st', st);
-  $('view-home').classList.toggle('hidden', st); $('view-settings').classList.toggle('hidden', !st); $('bankFab').classList.toggle('hidden', st);
+  $('view-home').classList.toggle('hidden', st); $('view-settings').classList.toggle('hidden', !st); $('spendFab').classList.toggle('hidden', st);
   $('settingsBtn').innerHTML = st ? '&#10005;' : '&#9881;';
   document.querySelectorAll('nav button').forEach(x => { const on = x.dataset.view === v; x.classList.toggle('active', on); if (on) x.setAttribute('aria-current', 'page'); else x.removeAttribute('aria-current'); });
   if (st) setSync(); else { render(); const s = $('mainScroll'); if (s) s.scrollTop = 0; }
@@ -419,12 +465,17 @@ document.addEventListener('click', e => {
   else if (a === 'newgoal') openGoal(null);
   else if (a === 'editgoal') openGoal(id);
   else if (a === 'fromsimple') fromSimple();
+  else if (a === 'unspend') unspend(id);
 });
-$('bankFab').onclick = openBank;
+$('spendFab').onclick = openSpend;
 $('settingsBtn').onclick = () => showView(document.documentElement.classList.contains('st') ? tab : 'settings');
 $('settingsBack').onclick = () => showView(tab);
 $('bankAmt').oninput = bankPrev; $('bankAmt').onkeydown = e => { if (e.key === 'Enter') bankGo(); };
 $('bankCancel').onclick = hideAsk; $('bankGo').onclick = bankGo;
+document.querySelectorAll('#spKeys [data-k]').forEach(b => b.onclick = () => spKey(b.dataset.k));
+$('spCats').onclick = e => { const b = e.target.closest('[data-cat]'); if (b) { spCat = spCat === b.dataset.cat ? '' : b.dataset.cat; spSync(); } };
+$('spClear').onclick = () => { spVal = 0; spSync(); }; $('spGo').onclick = spGo; $('spClose').onclick = hideAsk;
+document.addEventListener('keydown', e => { if ($('spendBox').classList.contains('hidden')) return; if (/^[0-9]$/.test(e.key)) spKey(e.key); else if (e.key === 'Backspace') spKey('del'); else if (e.key === 'Enter') spGo(); });
 document.querySelectorAll('[data-bk]').forEach(b => b.onclick = () => setBillKind(b.dataset.bk));
 $('billCancel').onclick = hideAsk; $('billGo').onclick = billGo; $('billDel').onclick = billDel;
 $('goalCancel').onclick = hideAsk; $('goalGo').onclick = goalGo; $('goalDel').onclick = goalDel;
