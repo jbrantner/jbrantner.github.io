@@ -29,6 +29,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const ch = (ty, d) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(ty), d]), c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
     const h = Buffer.alloc(13); h.writeUInt32BE(W, 0); h.writeUInt32BE(W, 4); h[8] = 8; h[9] = 0;
     return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ch('IHDR', h), ch('IDAT', zlib.deflateSync(Buffer.concat(rows))), ch('IEND', Buffer.alloc(0))]); })();
+  const exps = [];
   const fake = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     // 🙂 the face finder: a 64x64 mask with the face box at x 20-35, y 4-19
@@ -42,6 +43,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p.startsWith('/userdata/')){ if(rt.request().method()!=='GET') sent.push({userdata:p}); return rt.request().method()==='GET' ? rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}) : J({}); }
     if(p.startsWith('/renderdeck/h3run')){ sent.push({run:p}); return J({}); }
+    if(p==='/renderdeck/h3export'){ if(rt.request().method()==='POST'){ exps.push(JSON.parse(rt.request().postData())); return J({id:'ex1', state:'working'}); } return J({id:'ex1', state:'done', done:10, total:10, file:{filename:'reel_ex1.mp4', subfolder:'H3Film/reel', type:'output'}}); }
     if(p==='/view') return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)});
     if(p==='/upload/image') return J({name:'up_' + Date.now() + '.png', subfolder:'h3deck', type:'input'});
     if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
@@ -89,7 +91,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const st = await page.evaluate(() => ({clips:REEL.clips().length, takes:REEL.cur().takes.length, words:REEL.cur().words}));
   ok(st.clips===1 && st.takes===2, 'the reel has one clip with two options (' + JSON.stringify(st) + ')');
   // finish them (the PC is fake)
-  const finish = async () => { await eng.evaluate(() => { H3.S.takes.forEach((t, k) => { if(t.state!=='working') return; t.state = 'done'; t.pieces.forEach(p => { p.state = 'done'; p.file = {filename:t.name + '_p.webm', subfolder:'Output_Render/' + t.dir, type:'output'}; }); t.final = {filename:t.name + '.webm', subfolder:'Output_Render/' + t.dir, type:'output'}; }); H3.saveNow(); });
+  const finish = async () => { await eng.evaluate(() => { H3.S.takes.forEach((t, k) => { if(t.up && t.upErr && !t.final){ t.upErr = ''; t.final = t.smoothed; } /* (the fake PC has no latent upscaler: count a ✨ pass as done) */ if(t.state!=='working') return; t.state = 'done'; t.pieces.forEach(p => { p.state = 'done'; p.file = {filename:t.name + '_p.webm', subfolder:'Output_Render/' + t.dir, type:'output'}; }); if(t.up) t.upStage = 'done'; t.upPid = null; t.final = {filename:t.name + '.webm', subfolder:'Output_Render/' + t.dir, type:'output'}; }); H3.saveNow(); });
     await page.evaluate(() => REEL.refresh()); await page.waitForTimeout(1500); };
   await finish();
   const v1 = await page.evaluate(() => ({src:document.querySelector('#vA').src, pick:REEL.cur().pick, opts:document.querySelectorAll('#opts .opt').length, next:document.querySelector('#nextBtn').textContent, dis:document.querySelector('#nextBtn').disabled}));
@@ -180,7 +182,30 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const chained = ups.slice(1).every((u, i) => u.chain && u.chain.idx===i + 1 && u.chain.prev===after[i].pick && u.chain.dir===ups[0].chain.dir) && ups[0].chain && ups[0].chain.idx===0;
     ok(after.every((x, i) => x.n===before[i].n + 1 && x.fin && x.in===0 && x.out===null) && ups.every((u, i) => u.src===before[i].pick && u.scale===1.5 && /prismPIKA/.test(u.unet || '') && u.den===0.9) && chained,
       '🎬 every clip gets a ✨ Prism Pika option made from its picked one, picked, each carrying on from the one before (' + JSON.stringify({before, after, ups}) + ')');
-    await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; }); REEL.refresh(); }, before); await page.waitForTimeout(300); }
+    await finish();
+    // ⬆ upscaled options and clips show a badge
+    const bd = await page.evaluate(() => ({wi:document.querySelectorAll('#wheel .upb').length, opt:document.querySelectorAll('#opts .opt.on .upb').length, all:REEL.clips().every(c => c.up && REEL.isUp(c, c.pick))}));
+    ok(bd.wi >= 1 && bd.opt===1 && bd.all, '⬆ an upscaled clip shows "⬆ Upscaled" in the wheel and ⬆ on its option (' + JSON.stringify(bd) + ')');
+    // ⬆ a new option of an upscaled clip gets the same ✨ pass once it's done, and replaces it as the pick
+    { const r = await page.evaluate(async () => { const c = REEL.cur(), src = c.meta[c.pick].src; const x = await REEL.E().again({take:src, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
+        REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; c.upPx = 1e9; return {id, reup:c.meta[id].reup, n:c.takes.length}; });
+      await finish(); await page.evaluate(() => REEL.reup()); await page.waitForTimeout(2500);
+      const r2 = await page.evaluate(id => { const c = REEL.cur(), m = c.meta[c.pick] || {}; return {pick:c.pick, src:m.src, fin:m.fin, was:c.meta[id].reup, n:c.takes.length}; }, r.id);
+      const t2 = await eng.evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {src:t.redo && t.redo.src, scale:t.up && t.up.scale}; }, r2.pick);
+      ok(r.reup===1 && r2.src===r.id && r2.fin && r2.was===2 && r2.n===r.n + 1 && t2.src===r.id && t2.scale===1.5, '⬆ an edit of an upscaled clip is upscaled by itself when done and picked (' + JSON.stringify({r, r2, t2}) + ')');
+      await finish(); }
+    // ↩ Back to the originals
+    await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnBack'); await page.waitForTimeout(400);
+    const back = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, up:!!c.up, cur:c===REEL.cur()})));
+    ok(back.every((x, i) => !x.up && (x.cur || x.pick===before[i].pick)), '↩ Back to the originals picks each clip\'s option from before the final pass (' + JSON.stringify({back, before}) + ')');
+    await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; c.up = false; }); REEL.refresh(); }, before); await page.waitForTimeout(300); }
+  // ⬇ Export the reel: the picked option of every clip, trimmed, in order, joined on the PC; 📲 Save when done
+  { await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnExp'); await page.waitForTimeout(2500);
+    const cs = await page.evaluate(() => REEL.clips().map(c => { const I = REEL.info(c.pick); return {f:I.file && I.file.filename, a:c.in || 0}; }));
+    const b = exps[exps.length - 1] || {clips:[]}; let at = 0;
+    const good = b.clips.length===cs.length && b.clips.every((x, i) => { const r = x.filename===cs[i].f && x.in===cs[i].a && Math.abs(x.at - at) < 1e-6 && x.track===0; at += x.out - x.in; return r; }) && b.canvas && b.canvas[0] > b.canvas[1];
+    ok(good && await page.evaluate(() => !!document.querySelector('#fnSave')), '⬇ Export sends every clip\'s picked option in order and offers 📲 Save when done (' + JSON.stringify({b, cs}) + ')');
+    await page.click('[data-close]'); await page.waitForTimeout(300); }
   // ▶ Play all
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
@@ -287,7 +312,6 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok(/<Lora 1>|soft glow light/.test(lt.prompt || '') && !/\{Glow\}/.test(lt.prompt || '') && lt.loras.includes('glow.safetensors:0.8') && (lt.off || []).includes('add:Lfrk') && !(lt.off || []).includes('fit') && lt.fit===true, "🧩 the take gets Glow's LoRA and words, and ✨ Freckles is on Mia in this take itself (its own 🏷 chips) (" + JSON.stringify(lt) + ')');
   // 🙂 character thumbnails centred on the face
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(1500);
-  if(process.env.DBG) console.log('DBG', faces.length, await page.frames().find(f => /engine=1/.test(f.url())).evaluate(async () => { try{ return JSON.stringify([H3.S.faceBox, Object.keys(H3.S.media), H3.S.pcs.map(p => [p.url, typeof H3.pcOf]), await H3Engine.faceBox('mPic')]); }catch(e){ return 'ERR ' + e.message; } }));
   const fb = await eng.evaluate(() => H3.S.faceBox && H3.S.faceBox.mPic).catch(() => null) || await page.frames().find(f => /engine=1/.test(f.url())).evaluate(() => H3.S.faceBox && H3.S.faceBox.mPic);
   ok(fb && Math.abs(fb.x - 20 / 64) < 0.02 && Math.abs(fb.w - 16 / 64) < 0.02 && Math.abs(fb.y - 4 / 64) < 0.02, '🙂 the face box is read from the face finder\'s mask (' + JSON.stringify(fb) + ')');
   ok(faces.length >= 1 && /face_yolov8m/.test(JSON.stringify(faces[0])) && faces.every(g => Object.values(g).some(n => n.class_type==='SegsToCombinedMask')), '🙂 it uses face_yolov8m from the PC\'s own list');
@@ -316,6 +340,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await p4.route(/reel-5b1e7c94d2a0\/\?u=/, rt => rt.fulfill({status:200, contentType:'text/html', body:'<meta name="reel-build" content="9999-new">'}));
     await p4.goto('http://127.0.0.1:8041/reel-5b1e7c94d2a0/'); await p4.waitForTimeout(4500);
     ok(await p4.evaluate(() => /new version of Reel/.test((document.querySelector('.upd') || {}).textContent || '')), '⬆ a newer Reel on the site shows "A new version of Reel is ready"'); await p4.close(); }
+  // 🧹 Keep only this option (tap twice)
+  { await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); const n = await page.evaluate(() => REEL.cur().takes.length);
+    await page.click('#keepOne'); await page.waitForTimeout(200); const mid = await page.evaluate(() => ({n:REEL.cur().takes.length, t:document.querySelector('#keepOne').textContent}));
+    await page.click('#keepOne'); await page.waitForTimeout(500); const r = await page.evaluate(() => ({n:REEL.cur().takes.length, opts:document.querySelectorAll('#opts .opt').length, btn:!!document.querySelector('#keepOne')}));
+    ok(n > 1 && mid.n===n && /Tap again/.test(mid.t) && r.n===1 && r.opts===1 && !r.btn, '🧹 Keep only this option asks for a second tap, then leaves only the picked option (' + JSON.stringify({n, mid, r}) + ')'); }
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
