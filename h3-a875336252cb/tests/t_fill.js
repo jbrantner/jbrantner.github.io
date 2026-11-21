@@ -86,7 +86,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   const n0 = sent.length; await fr.click('#flGo'); await page.waitForTimeout(1500);
   const g = sent[n0] && sent[n0].g, ags = g ? Object.values(g).filter(n => n.class_type==='MiniMaxH3AddGuide' && n.inputs.image) : [], lvs = g ? nodes(g, 'LoadVideo') : [];
   const keep = g && Object.values(g).find(n => n.class_type==='ImageFromBatch' && n.inputs.batch_index===GQ.k0 && n.inputs.length===GQ.B);
-  ok(sent.length===n0 + 1 && lvs.length===2 && ags.length===GQ.pinsA.length + GQ.pins.length && ags.some(n => n.inputs.frame_idx===0) && ags.some(n => n.inputs.frame_idx===GQ.L - 1) && keep, '⇿ its graph loads both clips, pins A\'s end from frame 0 and B\'s start at the end, and keeps only the new frames (' + ags.map(n => n.inputs.frame_idx).join(',') + ')');
+  const gl = n => g[n.inputs.image[0]] && g[n.inputs.image[0]].class_type==='ImageFromBatch' ? g[n.inputs.image[0]].inputs : (g[g[n.inputs.image[0]].inputs.image[0]] || {}).inputs || {};
+  const cA = ags.find(n => n.inputs.frame_idx===GQ.k0 - 22), cB = ags.find(n => n.inputs.frame_idx===GQ.k0 + GQ.B);
+  ok(sent.length===n0 + 1 && lvs.length===2 && ags.length===2 && cA && cB && gl(cA).length===22 && gl(cA).batch_index + 22===GQ.ea && gl(cB).length===22 && gl(cB).batch_index===GQ.s && keep, '⇿ its graph loads both clips, A\'s last 22 frames go in as one moving guide ending right before the new part, B\'s first 22 right after it, and only the new frames are kept (' + ags.map(n => n.inputs.frame_idx + ':' + JSON.stringify(gl(n))).join(',') + ')');
   const tk = await page.evaluate(() => { const t = H3.S.takes.find(x => x.lead && x.lead.gap); return t && {prompt:t.prompt, gap:t.lead.gap.clip, clip:t.lead.clip}; });
   { const tm = await page.evaluate(() => { const t = H3.S.takes.find(x => x.lead && x.lead.gap); return {model:t.model, turbo:t.turbo}; }); ok(MD.box && tm.model===MD.k && tm.turbo===false, '⇿ the sheet picks the model and Turbo/Regular for the fill (' + JSON.stringify([MD, tm]) + ')'); }
   ok(tk && /^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] she turns from the window\n\[2\.5s-\] \[Shot 2\] The camera cuts on the action to a close-up as she reaches for the handle, same place, same lighting, same outfit\.$/.test(tk.prompt), '🎬 cut on the action adds the cut line at its moment (anchor line untouched): ' + JSON.stringify(tk && tk.prompt));
@@ -108,7 +110,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
     await fr.evaluate(() => { const A = document.querySelector('#flSA'), B = document.querySelector('#flEB'); A.value = A.max; A.oninput({target:A}); B.value = B.min; B.oninput({target:B}); });
     const n1 = sent.length; await fr.click('#flGo'); await page.waitForTimeout(1500);
     const g2 = sent[n1] && sent[n1].g, lv = g2 ? Object.entries(g2).filter(([k, n]) => n.class_type==='LoadVideo') : [], src = id => Object.entries(g2).find(([k, n]) => n.class_type==='GetVideoComponents' && n.inputs.video[0]===id);
-    const fromVid = (gcId) => Object.values(g2).filter(n => n.class_type==='ImageFromBatch' && n.inputs.image[0]===gcId).map(n => n.inputs.batch_index);
+    const fromVid = (gcId) => Object.values(g2).filter(n => n.class_type==='ImageFromBatch' && n.inputs.image[0]===gcId).flatMap(n => [n.inputs.batch_index, n.inputs.batch_index + n.inputs.length - 1]);
     const per = lv.map(([id]) => { const gc = src(id); return gc ? fromVid(gc[0]) : []; });
     const pinsA = per.find(a => a.includes(83)), pinsB = per.find(a => a.includes(30));
     ok(pinsA && Math.max(...pinsA)===83 && pinsB && Math.min(...pinsB)===30, '⇿ with trimmed clips the fill starts on clip A\'s last frame showing (3.5 s → frame 83) and lands on clip B\'s first frame showing (1.25 s → frame 30): ' + JSON.stringify(per)); }
