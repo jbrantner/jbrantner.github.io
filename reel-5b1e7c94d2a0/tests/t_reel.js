@@ -172,6 +172,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const g7 = sent.filter(x => x.g).slice(n0);
   ok(t7 && !t7.up && !t7.loop && g7.length >= 1 && await page.evaluate(n => REEL.cur().takes.length===n + 1, nT7), '🪄 Smooth sends a smoothing take (no regenerate, no loop) as a new option (' + JSON.stringify(t7) + ')');
   await finish();
+  // ⇿ / ➕ next to a 🪄 smoothed clip still get the PIKA finish (Jordan 2026-11-21: Insert ran 20 vanilla steps)
+  { const r = await page.evaluate(async () => { const c = REEL.cur(), sm = c.takes[c.takes.length - 1], E = REEL.E(), a = REEL.clips()[0].pick;
+      const f = await E.fill({takeA:a, outA:1, takeB:sm, inB:0, secs:1, words:'Mia waves', n:1}), k = await E.carry({take:sm, at:1, words:'Mia waves', n:1}); return {sm, f:(f.ids || [])[0], k:(k.ids || [])[0]}; });
+    const t = await eng.evaluate(x => { const T = id => H3.S.takes.find(t => t.id===id) || {}; const o = {smSrc:!!T(x.sm).sm, f:!!T(x.f).fin, k:!!T(x.k).fin, fsm:!!T(x.f).sm, ksm:!!T(x.k).sm}; H3.S.takes = H3.S.takes.filter(t => t.id!==x.f && t.id!==x.k); return o; }, r);
+    ok(t.smSrc && t.f && t.k && !t.fsm && !t.ksm, '⇿ Insert / ➕ Next from a 🪄 smoothed option keep the PIKA finish and aren\'t smoothed again (' + JSON.stringify(t) + ')'); }
   // 🎬 Final pass: ✨ High quality on every clip's picked option with Prism Pika, chained clip to clip, picked as a new option
   { const before = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length})));
     const w0 = await page.evaluate((async () => { const out = []; for(let i = 1; i < REEL.clips().length; i++){ REEL.go(i); await new Promise(r => setTimeout(r, 250)); out.push(/may jump/.test(document.querySelector('#warnBox').textContent)); } REEL.go(0); await new Promise(r => setTimeout(r, 250)); return out; }));
