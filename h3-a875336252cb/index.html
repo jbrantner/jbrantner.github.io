@@ -3443,11 +3443,16 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     if(R.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:rAu, start_index:R.s0 / FPS, duration:L / FPS}), 0], frame_idx:0}), 0]; }
   if(t.lead){ // ⏪ lead-in: the clip's first frames are pinned at the END of the window, so the new seconds arrive exactly where it starts
     const R = t.lead, ls = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]});
-    for(const [o, sf] of R.pins){ let fr = [add('ImageFromBatch', {image:[ls, 0], batch_index:sf, length:1}), 0];
+    const gClip = (src, c, scale) => { let fr = [add('ImageFromBatch', {image:[src, 0], batch_index:c.s, length:c.n}), 0]; // ⇿ a moving stretch, one guide
+      if(scale && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0];
+      cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:c.o}), 0]; guides++; };
+    if(R.gap && R.clipB) gClip(ls, R.clipB, R.gap.scaleB);
+    else for(const [o, sf] of R.pins){ let fr = [add('ImageFromBatch', {image:[ls, 0], batch_index:sf, length:1}), 0];
       if(R.gap && R.gap.scaleB && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (⇿ the clip after can be another size, e.g. a 🎬 shot export)
       cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; }
     if(R.gap){ const G = R.gap, as = add('GetVideoComponents', {video:[add('LoadVideo', {file:G.file}), 0]}); // ⇿ the clip before: its last frames start the window
-      for(const [o, sf] of G.pins){ let fr = [add('ImageFromBatch', {image:[as, 0], batch_index:sf, length:1}), 0];
+      if(G.gclip) gClip(as, G.gclip, (G.w && G.h && (G.w!==w || G.h!==h)) || G.scaleB);
+      else for(const [o, sf] of G.pins){ let fr = [add('ImageFromBatch', {image:[as, 0], batch_index:sf, length:1}), 0];
         if(((G.w && G.h && (G.w!==w || G.h!==h)) || G.scaleB) && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (a clip of another size)
         cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; } } }
   let trim = null;
@@ -6278,7 +6283,12 @@ function gapPlan(FA, ea, FB, sb, secs, ctx){ // (the frames on screen: a clip tr
   for(let o = 0; o <= C; o += 4) pinsA.push([o, ea - 1 - C + o]);
   for(let o = e; o < L; o += 4){ if(sb + o - e < FB) pins.push([o, sb + o - e]); }
   if(!pins.some(p => p[0]===L - 1) && sb + L - 1 - e < FB) pins.push([L - 1, sb + L - 1 - e]);
-  return {s:sb, ea, C, k0, B:N, L, pins, pinsA}; }
+  // (Jordan 2026-11-21, Reel: "Make sure insert slots in between the clips it's inserting perfectly"): the context on each side goes in
+  // as ONE moving clip guide (MiniMax H3's AddGuide takes 5, 22, 39… frames), so the model sees how things move into and out of the new
+  // part, not every 4th frame as separate stills. Too short a side keeps the old stills.
+  const G = GUIDE_CLIP, clipA = k0 >= G && ea >= G ? {o:k0 - G, s:ea - G, n:G} : null, clipB = FB - sb >= G && L - e >= G ? {o:e, s:sb, n:G} : null;
+  return {s:sb, ea, C, k0, B:N, L, pins, pinsA, clipA, clipB}; }
+const GUIDE_CLIP = 22;
 // (Jordan 2026-11-14: pick where the blend starts on the clip before and where it lands on the clip after; the frames up to the start
 // and from the landing point on are the context, a second of each, pinned; the new part = the overlap replaced + any added seconds.)
 // o.a / o.b = {file, frames, w, h} for a clip that isn't an H3 Deck take (a 🎬 nested shot); o.base = a take to copy the settings from.
@@ -6288,7 +6298,7 @@ window.H3GapFill = async o => { const srcA = deckTake(o.takeA), tB = deckTake(o.
   if(!fl || !flA){ toast('Both clips need a finished video first'); return 0; }
   const FA = o.a ? +o.a.frames : takeFrames(srcA), FB = o.b ? +o.b.frames : takeFrames(tB);
   const P = gapPlan(FA, (+o.outA || 0) * FPS, FB, (+o.inB || 0) * FPS, +o.secs || 2, FILL_CTX);
-  const gap = {src:srcA ? srcA.id : '', clip:o.clipA || '', file:fileArg(flA), pins:P.pinsA, w:o.a ? o.a.w : srcA.w, h:o.a ? o.a.h : srcA.h, aOut:+o.outA || 0, bIn:+o.inB || 0, scaleB:true, hq:o.hq || null};
+  const gap = {src:srcA ? srcA.id : '', clip:o.clipA || '', file:fileArg(flA), pins:P.pinsA, gclip:P.clipA, w:o.a ? o.a.w : srcA.w, h:o.a ? o.a.h : srcA.h, aOut:+o.outA || 0, bIn:+o.inB || 0, scaleB:true, hq:o.hq || null};
   return leadGo(src, fl, P, Object.assign({}, o, {clip:o.clipB}), {gap}, '⇿', 'gap fill'); };
 async function leadGo(src, fl, P, o, more, icon, word){ const key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)); let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){

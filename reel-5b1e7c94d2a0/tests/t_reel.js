@@ -155,6 +155,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const ed = await page.evaluate(() => ({kinds:REEL.clips().map(c => c.kind).join(), out:REEL.clips()[0].out, d:REEL.info(REEL.clips()[0].pick).secs}));
   const g5 = sent.filter(x => x.g).slice(n0);
   ok(g5.length===1 && ed.kinds==='new,blend,insert,next' && ed.out > 2.5 && ed.out < 3.6, '✂ trimming the end blends it into the next clip: a 🪄 clip between them, clip 1 ends where the blend starts (' + JSON.stringify(ed) + ')');
+  // (Jordan 2026-11-21: "it didn't do anything other than shorten it") the blend runs on an untrimmed clip too
+  { await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(400); await page.click('#editBtn'); await page.waitForTimeout(500);
+    const chk = await page.evaluate(() => { const b = document.querySelector('#edBl'); if(!b) return false; if(!b.checked) b.click(); return b.checked; });
+    const m0 = sent.filter(x => x.g).length; await page.click('#edGo'); await page.waitForTimeout(2500);
+    const r = await page.evaluate(() => ({kinds:REEL.clips().map(c => c.kind).join()})), gn = sent.filter(x => x.g).length - m0;
+    ok(chk && gn===1 && r.kinds==='new,blend,insert,blend,next', '🪄 Blend the end on a clip whose end wasn\'t moved still makes the 🪄 clip (' + JSON.stringify({chk, gn, r}) + ')');
+    await page.evaluate(() => { const cs = REEL.clips(); cs.splice(3, 1); cs[2].out = null; REEL.refresh(); }); await page.waitForTimeout(300); }
   await finish();
   // 🎨 Change it on clip 2
   await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="change"]');
