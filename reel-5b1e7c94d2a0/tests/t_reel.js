@@ -162,8 +162,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   { await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(400); await page.click('#editBtn'); await page.waitForTimeout(500);
     const chk = await page.evaluate(() => { const b = document.querySelector('#edBl'); if(!b) return false; if(!b.checked) b.click(); return b.checked; });
     const m0 = sent.filter(x => x.g).length; await page.click('#edGo'); await page.waitForTimeout(2500);
-    const r = await page.evaluate(() => ({kinds:REEL.clips().map(c => c.kind).join()})), gn = sent.filter(x => x.g).length - m0;
-    ok(chk && gn===1 && r.kinds==='new,blend,insert,blend,next', '🪄 Blend the end on a clip whose end wasn\'t moved still makes the 🪄 clip (' + JSON.stringify({chk, gn, r}) + ')');
+    const r = await page.evaluate(() => { const b = REEL.clips()[3]; return {kinds:REEL.clips().map(c => c.kind).join(), look:!!(b.look && (b.meta[b.takes[0]] || {}).look)}; }), gn = sent.filter(x => x.g).length - m0;
+    ok(chk && gn===1 && r.kinds==='new,blend,insert,blend,next' && r.look, '🪄 Blend the end on a clip whose end wasn\'t moved still makes the 🪄 clip (' + JSON.stringify({chk, gn, r}) + ')');
     // (Jordan 2026-11-21: a blend lit "like a flashlight") a ⇿ / 🪄 part next to a clip made without the ✨ boost LoRAs leaves them out
     { await finish(); const r2 = await page.evaluate(() => { const ids = REEL.clips().map(c => c.pick).filter(id => REEL.info(id).file); return {A:ids[0], B:ids[1]}; });
       const n0 = await eng.evaluate(o => { const T = H3.S.takes; T.find(x => x.id===o.A).boost = false; T.find(x => x.id===o.B).boost = true; return T.length; }, r2);
@@ -219,6 +219,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       const r = await eng.evaluate(x => { const T = id => H3.S.takes.find(t => t.id===id) || {}, up = T(x.src), root = T(up.redo && up.redo.src); return {root:{m:root.model, w:root.w, fin:!!root.fin}, up:{m:up.model, w:up.w}, f:{m:T(x.f).model, w:T(x.f).w, fin:!!T(x.f).fin}, k:{m:T(x.k).model, fin:!!T(x.k).fin}}; }, ids);
       ok(r.root.m && r.f.m===r.root.m && r.f.w===r.root.w && r.f.fin===r.root.fin && r.k.m===r.root.m && r.k.fin===r.root.fin, '⇿ Insert / ➕ Next beside a ✨ clip use the original take\'s model and size, not the ✨ pass\'s (' + JSON.stringify(r) + ')');
       await eng.evaluate(x => { H3.S.takes = H3.S.takes.filter(t => t.id!==x.f && t.id!==x.k); }, ids); }
+    // 🪄 Smooth on a ✨ pick uses the original take's model, size and PIKA finish, and its option isn't marked ⬆ upscaled
+    { const c0 = await page.evaluate(() => { const c = REEL.cur(); return {pick:c.pick, n:c.takes.length}; }); const n1 = await eng.evaluate(() => H3.S.takes.length);
+      await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="smooth"]'); await page.click('#edSGo');
+      await page.waitForFunction(n => REEL.cur().takes.length > n, c0.n, {timeout:40000}).catch(() => {}); await page.waitForTimeout(1500);
+      const r = await page.evaluate(() => { const c = REEL.cur(), id = c.takes[c.takes.length - 1], m = c.meta[id] || {}; return {id, fin:!!m.fin, src:m.src || null, reup:m.reup}; });
+      const t = await eng.evaluate(x => { const T = id => H3.S.takes.find(t => t.id===id) || {}, up = T(x.pick), root = T(up.redo && up.redo.src), s = H3.S.takes[0]; return {root:{m:root.model, w:root.w, fin:!!root.fin}, up:{m:up.model, w:up.w}, s:{m:s.model, w:s.w, fin:!!s.fin, sm:!!s.sm}}; }, c0);
+      ok(t.s.sm && t.s.m===t.root.m && t.s.w===t.root.w && t.s.fin===t.root.fin && !r.fin && !r.src && r.reup===1, '🪄 Smooth on a ✨ pick uses the original take\'s model, size and finish, and waits for its own ⬆ (' + JSON.stringify({r, t}) + ')');
+      await page.evaluate(x => { const c = REEL.cur(); c.takes = c.takes.filter(id => id!==x.id); delete c.meta[x.id]; c.pick = x.pick; REEL.refresh(); }, Object.assign({}, c0, {id:r.id}));
+      await eng.evaluate(n => { H3.S.takes = H3.S.takes.slice(H3.S.takes.length - n); }, n1); await page.keyboard.press('Escape').catch(() => {}); await page.click('[data-close]').catch(() => {}); }
     // ⬆ a new option of an upscaled clip gets the same ✨ pass once it's done, and replaces it as the pick
     { const r = await page.evaluate(async () => { const c = REEL.cur(), src = c.meta[c.pick].src; const x = await REEL.E().again({take:src, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
         REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; return {id, reup:c.meta[id].reup, n:c.takes.length}; });
