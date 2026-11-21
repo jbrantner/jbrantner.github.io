@@ -57,9 +57,9 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(/Each subject is shown in the art style of their own reference pictures\./.test(X.p) && !/live-action/i.test(X.p), "no scene style: the 'live-action, cinematic' line gives way to each one's own style");
   ok(X.styled && X.loras.length===0, 'a styled take sends no realism boost LoRAs');
   ok(/Keeping their own style: Anna \(3D animated\)/.test(await page.evaluate(() => document.querySelector('#artBox').textContent)), 'the Scene style row says who keeps their own style');
-  // "As in the pictures": no named kind
+  // an old "As in the pictures" setting (taken out 2026-11-21) counts as off: no art line, boost kept
   await page.evaluate(() => { H3.S.cast[0].art = 'pic'; }); X = await prom();
-  ok(/Their art style is kept as well: <Subject 1> is rendered exactly as in <Picture 1>, with the same proportions/.test(X.p), 'as in the pictures: no kind named');
+  ok(!/art style is kept/.test(X.p) && !X.styled && X.loras.length===4, "an old 'as in the pictures' setting counts as off (boost LoRAs on): " + JSON.stringify({styled:X.styled, n:X.loras.length}));
   // scene style 🧊 3D (words)
   await page.evaluate(() => { H3.S.cast[0].art = ''; H3.drawAll(); document.querySelector('#artBox [data-lk="w:3d"]').click(); });
   X = await prom();
