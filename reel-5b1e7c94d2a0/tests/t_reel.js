@@ -189,6 +189,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     ok(bd.wi >= 1 && bd.opt===1 && bd.all, '⬆ an upscaled clip shows "⬆ Upscaled" in the wheel and ⬆ on its option (' + JSON.stringify(bd) + ')');
     { const w = await page.evaluate((async () => { const out = []; for(let i = 1; i < REEL.clips().length; i++){ REEL.go(i); await new Promise(r => setTimeout(r, 250)); out.push(/may jump/.test(document.querySelector('#warnBox').textContent)); } REEL.go(0); await new Promise(r => setTimeout(r, 250)); return out; }));
       ok(JSON.stringify(w)===JSON.stringify(w0), '⬆ the final pass doesn\'t add "made for another option of the clip before" warnings (' + JSON.stringify({w0, w}) + ')'); }
+    // ⇿ / ➕ next to a ✨ clip copy the settings of the take the ✨ was made from, not the pass's own vanilla model (Jordan 2026-11-21)
+    { const ids = await page.evaluate(async () => { const cs = REEL.clips(), E = REEL.E(); const f = await E.fill({takeA:cs[0].pick, outA:1, takeB:cs[1].pick, inB:0, secs:1, words:'Mia waves', n:1});
+        const k = await E.carry({take:cs[1].pick, at:1.5, words:'Mia waves', n:1}); return {f:(f.ids || [])[0], k:(k.ids || [])[0], src:cs[1].pick}; });
+      const r = await eng.evaluate(x => { const T = id => H3.S.takes.find(t => t.id===id) || {}, up = T(x.src), root = T(up.redo && up.redo.src); return {root:{m:root.model, w:root.w, fin:!!root.fin}, up:{m:up.model, w:up.w}, f:{m:T(x.f).model, w:T(x.f).w, fin:!!T(x.f).fin}, k:{m:T(x.k).model, fin:!!T(x.k).fin}}; }, ids);
+      ok(r.root.m && r.f.m===r.root.m && r.f.w===r.root.w && r.f.fin===r.root.fin && r.k.m===r.root.m && r.k.fin===r.root.fin, '⇿ Insert / ➕ Next beside a ✨ clip use the original take\'s model and size, not the ✨ pass\'s (' + JSON.stringify(r) + ')');
+      await eng.evaluate(x => { H3.S.takes = H3.S.takes.filter(t => t.id!==x.f && t.id!==x.k); }, ids); }
     // ⬆ a new option of an upscaled clip gets the same ✨ pass once it's done, and replaces it as the pick
     { const r = await page.evaluate(async () => { const c = REEL.cur(), src = c.meta[c.pick].src; const x = await REEL.E().again({take:src, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
         REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; return {id, reup:c.meta[id].reup, n:c.takes.length}; });
