@@ -43,7 +43,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
     if(p.startsWith('/userdata/')){ if(rt.request().method()!=='GET') sent.push({userdata:p}); return rt.request().method()==='GET' ? rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}) : J({}); }
     if(p.startsWith('/renderdeck/h3run')){ sent.push({run:p}); return J({}); }
-    if(p==='/renderdeck/h3export'){ if(rt.request().method()==='POST'){ exps.push(JSON.parse(rt.request().postData())); return J({id:'ex1', state:'working'}); } return J({id:'ex1', state:'done', done:10, total:10, file:{filename:'reel_ex1.mp4', subfolder:'H3Film/reel', type:'output'}}); }
+    if(p==='/renderdeck/h3export'){ if(rt.request().method()==='POST'){ exps.push(Object.assign(JSON.parse(rt.request().postData()), {_host:u.origin})); return J({id:'ex1', state:'working'}); } return J({id:'ex1', state:'done', done:10, total:10, file:{filename:'reel_ex1.mp4', subfolder:'H3Film/reel', type:'output'}}); }
     if(p==='/view') return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)});
     if(p==='/upload/image') return J({name:'up_' + Date.now() + '.png', subfolder:'h3deck', type:'input'});
     if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
@@ -253,6 +253,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const b = exps[exps.length - 1] || {clips:[]}; let at = 0;
     const good = b.clips.length===cs.length && b.clips.every((x, i) => { const r = x.filename===cs[i].f && x.in===cs[i].a && Math.abs(x.at - at) < 1e-6 && x.track===0; at += x.out - x.in; return r; }) && b.canvas && b.canvas[0] > b.canvas[1];
     ok(good && await page.evaluate(() => !!document.querySelector('#fnSave')), '⬇ Export sends every clip\'s picked option in order and offers 📲 Save when done (' + JSON.stringify({b, cs}) + ')');
+    // the first clip's PC is off: the other (reachable) PC joins them, since both share the Dropbox output folder
+    { const x = await page.evaluate(async () => { const E = REEL.E(), p0 = REEL.info(REEL.clips()[0].pick).pcUrl, old = E.pcs;
+        E.pcs = () => [{name:'Render', url:p0, online:false}, {name:'Main', url:'http://main.test', online:true}]; const n = document.querySelector('#fnExp'); REEL.R().exp = null; n.click(); await new Promise(r => setTimeout(r, 1500)); E.pcs = old; return {p0}; });
+      const b2 = exps[exps.length - 1] || {}; ok((b2._host && x.p0.indexOf(b2._host)!==0 && b2.clips.length===b.clips.length), '⬇ Export goes to a reachable PC when the first clip\'s PC is off (' + JSON.stringify({x, host:b2._host}) + ')'); }
     await page.click('[data-close]'); await page.waitForTimeout(300); }
   // ▶ Play all
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
