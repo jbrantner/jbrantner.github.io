@@ -9,6 +9,9 @@ self.addEventListener('fetch', e => {
   if (u.origin !== location.origin) return;
   const net = fetch(e.request, { cache: 'no-cache' });
   e.waitUntil(net.then(r => { if (!r.ok) return; const copy = r.clone(); return caches.open(CACHE).then(c => c.put(e.request, copy)); }).catch(() => {}));
+  // Reel's engine (?engine=1) always waits for the network (Jordan 2026-11-21: on a slow connection the 3 s fallback kept handing Reel an
+  // old engine after an update); the saved copy is only used when there's no connection at all
+  if (u.searchParams.has('engine')) { e.respondWith(net.catch(() => caches.open(CACHE).then(c => c.match(e.request, { ignoreSearch: true })).then(hit => hit || Response.error()))); return; }
   e.respondWith(caches.open(CACHE).then(c => c.match(e.request, { ignoreSearch: true })).then(hit => {
     if (!hit) return net;
     const fresh = net.then(r => r.ok ? r : hit).catch(() => hit);
