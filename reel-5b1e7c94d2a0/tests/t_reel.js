@@ -197,7 +197,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const t = await eng.evaluate(x => { const T = id => H3.S.takes.find(t => t.id===id) || {}; const o = {smSrc:!!T(x.sm).sm, f:!!T(x.f).fin, k:!!T(x.k).fin, fsm:!!T(x.f).sm, ksm:!!T(x.k).sm}; H3.S.takes = H3.S.takes.filter(t => t.id!==x.f && t.id!==x.k); return o; }, r);
     ok(t.smSrc && t.f && t.k && !t.fsm && !t.ksm, '⇿ Insert / ➕ Next from a 🪄 smoothed option keep the PIKA finish and aren\'t smoothed again (' + JSON.stringify(t) + ')'); }
   // 🎬 Final pass: ✨ High quality on every clip's picked option with Prism Pika, chained clip to clip, picked as a new option
-  { const before = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length})));
+  { await page.evaluate(() => { const cs = REEL.clips(), c = cs[cs.length - 1]; c.out = Math.round((REEL.info(c.pick).secs - 0.5) * 24) / 24; REEL.refresh(); });
+    const before = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, in:c.in || 0, out:c.out == null ? null : c.out})));
     const w0 = await page.evaluate((async () => { const out = []; for(let i = 1; i < REEL.clips().length; i++){ REEL.go(i); await new Promise(r => setTimeout(r, 250)); out.push(/may jump/.test(document.querySelector('#warnBox').textContent)); } REEL.go(0); await new Promise(r => setTimeout(r, 250)); return out; }));
     await page.click('#finBtn'); await page.waitForTimeout(300);
     ok(await page.evaluate(() => /Final pass on \d+ clip/.test(document.querySelector('#fnGo').textContent)), '🎬 Final pass sheet opens');
@@ -238,8 +239,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       await finish(); }
     // ↩ Back to the originals
     await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnBack'); await page.waitForTimeout(400);
-    const back = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, up:!!c.up, cur:c===REEL.cur()})));
-    ok(back.every((x, i) => !x.up && (x.cur || x.pick===before[i].pick)), '↩ Back to the originals picks each clip\'s option from before the final pass (' + JSON.stringify({back, before}) + ')');
+    const back = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, up:!!c.up, cur:c===REEL.cur(), in:c.in || 0, out:c.out == null ? null : c.out})));
+    ok(back.every((x, i) => !x.up && (x.cur || (x.pick===before[i].pick && x.in===before[i].in && x.out===before[i].out))) && before.some((x, i) => !back[i].cur && (x.in || x.out!=null)), '↩ Back to the originals picks each clip\'s option from before the final pass, with the trim it had (' + JSON.stringify({back, before}) + ')');
     // ⬆ …and once the clips around it are back on their originals, a new option stays as it is (Jordan 2026-11-20)
     { const r = await page.evaluate(async () => { const c = REEL.cur(), base = c.pick; const x = await REEL.E().again({take:base, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
         REEL.addTakes(c, [id], {}, 'Mia waves'); return {id, reup:c.meta[id].reup, n:c.takes.length}; });
@@ -433,6 +434,27 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.click('#keepOne'); await page.waitForTimeout(200); const mid = await page.evaluate(() => ({n:REEL.cur().takes.length, t:document.querySelector('#keepOne').textContent}));
     await page.click('#keepOne'); await page.waitForTimeout(500); const r = await page.evaluate(() => ({n:REEL.cur().takes.length, opts:document.querySelectorAll('#opts .opt').length, btn:!!document.querySelector('#keepOne')}));
     ok(n > 1 && mid.n===n && /Tap again/.test(mid.t) && r.n===1 && r.opts===1 && !r.btn, '🧹 Keep only this option asks for a second tap, then leaves only the picked option (' + JSON.stringify({n, mid, r}) + ')'); }
+  // 🗑 removing a clip or a whole reel stops its options that are still rendering (the PC doesn't keep making clips nobody sees)
+  { await page.evaluate(() => { const E = REEL.E(); window.__stops = []; window.__oi = E.info; window.__os = E.stop; E.info = id => /^tw/.test(id) ? {state:'working', pct:5} : window.__oi(id); E.stop = async id => { window.__stops.push(id); };
+      REEL.addClip(1, {kind:'insert', words:'busy', takes:['tw1']}); REEL.go(1); REEL.refresh(); }); await page.waitForTimeout(400);
+    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edDel'); await page.click('#edDel'); await page.waitForTimeout(400);
+    const a = await page.evaluate(() => ({stops:window.__stops.slice(), left:REEL.clips().some(c => c.words==='busy')}));
+    await page.click('#reelBtn'); await page.waitForTimeout(300); await page.click('#rlNew'); await page.waitForTimeout(300);
+    await page.evaluate(() => { REEL.addClip(0, {kind:'new', words:'busy2', takes:['tw2']}); REEL.refresh(); }); await page.waitForTimeout(300);
+    await page.click('#reelBtn'); await page.waitForTimeout(300); const del = await page.evaluate(() => { const b = document.querySelector('#card [data-del="' + REEL.R().id + '"]'); return !!b; });
+    if(del){ await page.click('#card [data-del="' + await page.evaluate(() => REEL.R().id) + '"]'); await page.click('#card [data-del="' + await page.evaluate(() => REEL.R().id) + '"]'); await page.waitForTimeout(400); }
+    const b = await page.evaluate(() => ({stops:window.__stops.slice(), reels:REEL.S().reels.length, open:REEL.clips().length}));
+    await page.evaluate(() => { const E = REEL.E(); E.info = window.__oi; E.stop = window.__os; REEL.refresh(); }); await page.click('[data-close]').catch(() => {});
+    ok(a.stops.includes('tw1') && !a.left && del && b.stops.includes('tw2') && b.open > 0, '🗑 removing a clip or a reel stops its options that are still rendering (' + JSON.stringify({a, b, del}) + ')'); }
+  // 📡 the clip's PC goes off while it's showing: the player switches to the same file on the other PC
+  { const r = await page.evaluate(async () => { const E = REEL.E(), old = E.pcs; E.pcs = () => [{name:'Gone', url:'http://gone.test', online:false}, {name:'Main', url:'http://main.test', online:true}];
+      const v = document.querySelector('#vA'); v.dataset.tried = ''; v.src = 'http://gone.test/view?filename=x.mp4&subfolder=Output_Render%2FH3Deck&type=output';
+      for(let i = 0; i < 40 && !/main\.test/.test(v.getAttribute('src')); i++) await new Promise(r => setTimeout(r, 100)); E.pcs = old; return v.getAttribute('src'); });
+    ok(/^http:\/\/main\.test\/view\?filename=x\.mp4/.test(r), '📡 a clip whose PC went off plays from the other PC (' + r + ')'); await page.evaluate(() => { REEL.go(0); REEL.refresh(); }); }
+  // 💾 preview pictures are capped at about 1.5 MB, so the reels always have room to save
+  { const r = await page.evaluate(() => { const TH = REEL.TH(), big = 'data:image/jpeg;base64,' + 'A'.repeat(30000); for(let i = 0; i < 300; i++) TH['zz' + i] = big; REEL.saveTh();
+      const n = (localStorage.getItem('h3reel_th') || '').length; Object.keys(TH).filter(k => /^zz/.test(k)).forEach(k => delete TH[k]); REEL.saveTh(); return n; });
+    ok(r > 0 && r <= 1.5e6, '💾 preview pictures are capped at about 1.5 MB so the reels can always save (' + r + ')'); }
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
