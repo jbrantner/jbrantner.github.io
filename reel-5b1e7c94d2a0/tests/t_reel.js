@@ -451,6 +451,19 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       const v = document.querySelector('#vA'); v.dataset.tried = ''; v.src = 'http://gone.test/view?filename=x.mp4&subfolder=Output_Render%2FH3Deck&type=output';
       for(let i = 0; i < 40 && !/main\.test/.test(v.getAttribute('src')); i++) await new Promise(r => setTimeout(r, 100)); E.pcs = old; return v.getAttribute('src'); });
     ok(/^http:\/\/main\.test\/view\?filename=x\.mp4/.test(r), '📡 a clip whose PC went off plays from the other PC (' + r + ')'); await page.evaluate(() => { REEL.go(0); REEL.refresh(); }); }
+  // 🎞 switching reels while a ➕ Next is sending: the new clip still goes into the reel it was made in
+  { await page.evaluate(() => { REEL.go(REEL.clips().length - 1); REEL.refresh(); }); await page.waitForTimeout(300);
+    const a = await page.evaluate(() => ({id:REEL.R().id, n:REEL.clips().length}));
+    await page.evaluate(() => { const E = REEL.E(); window.__oc = E.carry; E.carry = async () => { await new Promise(r => setTimeout(r, 900)); return {ids:['tswitch']}; }; });
+    await page.click('#nextBtn'); await page.waitForTimeout(300); await page.fill('#nxW', 'she waves'); await page.click('#nxGo'); await page.waitForTimeout(150);
+    const bId = await page.evaluate(() => { const S = REEL.S(), r = {id:'rB' + Date.now(), name:'Other', clips:[], cur:0, t:Date.now()}; S.reels.push(r); S.open = r.id; REEL.refresh(); return r.id; });
+    await page.waitForTimeout(1500);
+    const x = await page.evaluate(o => { const S = REEL.S(), A = S.reels.find(r => r.id===o.a), B = S.reels.find(r => r.id===o.b); return {open:S.open, nA:A.clips.length, inA:A.clips.some(c => c.takes.includes('tswitch')), nB:B.clips.length}; }, {a:a.id, b:bId});
+    await page.evaluate(o => { const E = REEL.E(), S = REEL.S(); E.carry = window.__oc; S.reels = S.reels.filter(r => r.id!==o.b); S.open = o.a; const A = S.reels.find(r => r.id===o.a); A.clips = A.clips.filter(c => !c.takes.includes('tswitch')); REEL.refresh(); }, {a:a.id, b:bId});
+    ok(x.inA && x.nA===a.n + 1 && x.nB===0 && x.open===bId, '🎞 a ➕ Next sent just before opening another reel lands in its own reel, and the other reel stays open (' + JSON.stringify(x) + ')'); }
+  // 🕳 a clip with no options left says what to do
+  { const t = await page.evaluate(async () => { REEL.addClip(0, {kind:'new', words:'none'}); REEL.go(0); REEL.refresh(); await new Promise(r => setTimeout(r, 300)); const m = document.querySelector('#vmsg').textContent; REEL.clips().splice(0, 1); REEL.refresh(); return m; });
+    ok(/No options left/.test(t), '🕳 a clip with no options left says to ↻ Redo or remove it (' + t + ')'); }
   // 💾 preview pictures are capped at about 1.5 MB, so the reels always have room to save
   { const r = await page.evaluate(() => { const TH = REEL.TH(), big = 'data:image/jpeg;base64,' + 'A'.repeat(30000); for(let i = 0; i < 300; i++) TH['zz' + i] = big; REEL.saveTh();
       const n = (localStorage.getItem('h3reel_th') || '').length; Object.keys(TH).filter(k => /^zz/.test(k)).forEach(k => delete TH[k]); REEL.saveTh(); return n; });
