@@ -161,6 +161,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const m0 = sent.filter(x => x.g).length; await page.click('#edGo'); await page.waitForTimeout(2500);
     const r = await page.evaluate(() => ({kinds:REEL.clips().map(c => c.kind).join()})), gn = sent.filter(x => x.g).length - m0;
     ok(chk && gn===1 && r.kinds==='new,blend,insert,blend,next', '🪄 Blend the end on a clip whose end wasn\'t moved still makes the 🪄 clip (' + JSON.stringify({chk, gn, r}) + ')');
+    // (Jordan 2026-11-21: a blend lit "like a flashlight") a ⇿ / 🪄 part next to a clip made without the ✨ boost LoRAs leaves them out
+    { await finish(); const r2 = await page.evaluate(() => { const ids = REEL.clips().map(c => c.pick).filter(id => REEL.info(id).file); return {A:ids[0], B:ids[1]}; });
+      const n0 = await eng.evaluate(o => { const T = H3.S.takes; T.find(x => x.id===o.A).boost = false; T.find(x => x.id===o.B).boost = true; return T.length; }, r2);
+      const x = await page.evaluate(async o => { const ts = []; const old = window.ReelToast; window.ReelToast = t => ts.push(t); const r = await REEL.E().fill({takeA:o.A, outA:1, takeB:o.B, inB:0, secs:1, words:'x', n:1}); window.ReelToast = old; return {r, ts}; }, r2); await page.waitForTimeout(1500);
+      const nb = await eng.evaluate(n0 => ({n:H3.S.takes.length - n0, gap:!!(H3.S.takes[0].lead && H3.S.takes[0].lead.gap), boost:H3.S.takes[0].boost}), n0);
+      await eng.evaluate(o => { const T = H3.S.takes; T.find(x => x.id===o.A).boost = true; }, r2);
+      ok(nb.n===1 && nb.gap && nb.boost===false, '⇿ a part next to a clip made without the ✨ boost is made without it too (' + JSON.stringify({x, nb}) + ')'); }
     await page.evaluate(() => { const cs = REEL.clips(); cs.splice(3, 1); cs[2].out = null; REEL.refresh(); }); await page.waitForTimeout(300); }
   await finish();
   // 🎨 Change it on clip 2
