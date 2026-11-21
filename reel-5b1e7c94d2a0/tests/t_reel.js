@@ -386,6 +386,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await finish(); await page.evaluate(() => REEL.go(4)); await page.waitForTimeout(400);
     ok(await page.evaluate(() => !/may jump/.test(document.querySelector('#warnBox').textContent)), '⇿ the clip after the ⇿ clip doesn\'t say it may jump (the ⇿ clip was made to land on it)');
     await finish(); }
+  // 🗑 a clip with no options can still be removed from ✂ Edit (Jordan 2026-11-21)
+  { const n = await page.evaluate(() => { REEL.addClip(1, {kind:'insert', words:'empty'}); REEL.go(1); return REEL.clips().length; }); await page.waitForTimeout(400);
+    const dis = await page.evaluate(() => document.querySelector('#editBtn').disabled); await page.click('#editBtn'); await page.waitForTimeout(300);
+    await page.click('#edDel'); await page.click('#edDel'); await page.waitForTimeout(400);
+    ok(!dis && await page.evaluate(n => REEL.clips().length===n - 1 && !REEL.clips().some(c => c.words==='empty'), n), '🗑 an empty clip can be removed from ✂ Edit'); }
   // 🧹 Keep only this option (tap twice)
   { await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); const n = await page.evaluate(() => REEL.cur().takes.length);
     await page.click('#keepOne'); await page.waitForTimeout(200); const mid = await page.evaluate(() => ({n:REEL.cur().takes.length, t:document.querySelector('#keepOne').textContent}));
