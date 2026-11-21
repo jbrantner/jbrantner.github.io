@@ -171,6 +171,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const t7 = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.sm && {every:t.sm.every, spc:t.sm.spc, keys:(t.sm.keys || []).length, first:t.sm.keys && t.sm.keys[0], last:t.sm.keys && t.sm.keys[t.sm.keys.length - 1], up:!!t.up, loop:t.sm.loop}; });
   const g7 = sent.filter(x => x.g).slice(n0);
   ok(t7 && !t7.up && !t7.loop && g7.length >= 1 && await page.evaluate(n => REEL.cur().takes.length===n + 1, nT7), '🪄 Smooth sends a smoothing take (no regenerate, no loop) as a new option (' + JSON.stringify(t7) + ')');
+  { const fin = await eng.evaluate(() => { const t = H3.S.takes[0]; return !!t.fin; }), G = JSON.stringify(g7.map(x => x.g)), sp = /SplitSigmas/.test(G), pk = /prism_?pika/i.test(G);
+    ok(fin && sp && pk, '🪄 Smooth keeps the 🔀 finish on PIKA like the clip it smooths (' + JSON.stringify({fin, sp, pk}) + ')'); }
   await finish();
   // ⇿ / ➕ next to a 🪄 smoothed clip still get the PIKA finish (Jordan 2026-11-21: Insert ran 20 vanilla steps)
   { const r = await page.evaluate(async () => { const c = REEL.cur(), sm = c.takes[c.takes.length - 1], E = REEL.E(), a = REEL.clips()[0].pick;
