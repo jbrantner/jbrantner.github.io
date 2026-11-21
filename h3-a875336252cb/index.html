@@ -867,7 +867,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
   v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); }; v.onseeked = done; v.onerror = () => ok(null); setTimeout(() => ok(null), 9000); v.src = URL.createObjectURL(blob); }); }
 
 // ---------- the PCs ----------
-const NEED = ['ModelAttentionBackend','H3AudioRefineSampler','HunyuanModelLoader','HunyuanDependenciesLoader','HunyuanFoleySampler','MelBandRoFormerModelLoader','MelBandRoFormerSampler','AudioMerge','AudioAdjustVolume','AudioConcat','MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide','ConditioningSetTimestepRange','ConditioningCombine',
+const NEED = ['ColorMatch','ModelAttentionBackend','H3AudioRefineSampler','HunyuanModelLoader','HunyuanDependenciesLoader','HunyuanFoleySampler','MelBandRoFormerModelLoader','MelBandRoFormerSampler','AudioMerge','AudioAdjustVolume','AudioConcat','MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide','ConditioningSetTimestepRange','ConditioningCombine',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
   'MiniMaxH3FunControlNetApply','EmptyImage','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
@@ -3457,10 +3457,12 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
         if(((G.w && G.h && (G.w!==w || G.h!==h)) || G.scaleB) && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (a clip of another size)
         cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; } } }
   let trim = null;
+  let ctxRef = null;
   if(pc.ctx && i===0 && t.cont){ // carry on the given video: its last frames are pinned (resized to this clip by the node)
     let cv = [add('LoadVideo', {file:names[t.cont]}), 0];
     if(t.contCut) cv = [add('Video Slice', {video:cv, start_time:0, duration:t.contCut, strict_duration:false}), 0]; // ➕ from a moment inside it: only up to there
     const gc = add('GetVideoComponents', {video:cv}), snd = (S.media[t.cont] || {}).sound!==false;
+    if(oi.ColorMatch) ctxRef = [add('ImageFromBatch', {image:[gc, 0], batch_index:4095, length:1}), 0]; // (its last frame: ImageFromBatch stops at the end)
     const mc = add('MiniMaxH3MotionContext', Object.assign({conditioning:cond, vae, latent:lat, context_length:String(CTX), audio_context_length:24, context_frames:[gc, 0]}, snd ? {audio_vae:avae, context_audio:[gc, 1]} : {}));
     cond = [mc, 0]; trim = [mc, 1]; }
   else if(pc.ctx){ const ld = add('MiniMaxH3MotionContextLoadLatent', {latent_path:ctxDir(t, i), clip_index:i});
@@ -3501,6 +3503,14 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
     // then HEAD more frames (sound too): the first frame after the carried-over overlap decodes too bright and flashes at the join
     const t2 = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:HEAD, audio:aud, fps:FPS, match_tail:true}); ims = [t2, 0]; aud = [t2, 1]; }
+  // 🎨 (Jordan 2026-11-21, Reel: "It's not a very good seam if the lighting suddenly changes"): MiniMax carries the motion over but not the
+  // exposure, so a carry-on opened ~20% brighter and cooler than the clip before (measured). Its first 1.5 s are colour-matched to the clip
+  // before's last frame (KJNodes ColorMatch, mkl), full strength at the cut and easing to none, so the seam matches and its own light comes in slowly
+  if(ctxRef && trim){ const D = +pc.deliv || 0, RAMP = CM_RAMP, STEP = 6;
+    if(D > RAMP + STEP){ let acc = null;
+      for(let k = 0; k < RAMP; k += STEP){ const part = [add('ColorMatch', {image_ref:ctxRef, image_target:[add('ImageFromBatch', {image:ims, batch_index:k, length:STEP}), 0], method:'mkl', strength:Math.round((1 - k / RAMP) * 100) / 100, multithread:true}), 0];
+        acc = acc ? batchOf(add, oi, acc, part) : part; }
+      ims = batchOf(add, oi, acc, [add('ImageFromBatch', {image:ims, batch_index:RAMP, length:4096}), 0]); } }
   if(t.sm && pc.skip){ ims = [add('ImageFromBatch', {image:ims, batch_index:pc.skip, length:L - pc.skip}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:pc.skip / FPS, duration:(L - pc.skip) / FPS}), 0]; } // 🪄 the frames the window before already has
   if(t.lead){ const R = t.lead, k0 = R.gap ? +R.k0 || 0 : 0; ims = [add('ImageFromBatch', {image:ims, batch_index:k0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:k0 / FPS, duration:R.B / FPS}), 0]; } // only the new seconds
   if(t.redo && t.redo.swap){ // 🔄 the swapped stretch in place of the clip's frames; the rest of the take as it was
@@ -6294,6 +6304,7 @@ const GUIDE_CLIP = 22;
 // and from the landing point on are the context, a second of each, pinned; the new part = the overlap replaced + any added seconds.)
 // o.a / o.b = {file, frames, w, h} for a clip that isn't an H3 Deck take (a 🎬 nested shot); o.base = a take to copy the settings from.
 const FILL_CTX = 24;
+const CM_RAMP = 36; // 🎨 carry-on colour match: frames it eases over (1.5 s)
 window.H3GapFill = async o => { const srcA = deckTake(o.takeA), tB = deckTake(o.takeB), src = tB || deckTake(o.base), flA = o.a ? o.a.file : takeFile(srcA), fl = o.b ? o.b.file : takeFile(tB);
   if(!src || (!srcA && !o.a)){ toast("Those takes aren't in H3 Deck on this phone"); return 0; }
   if(!fl || !flA){ toast('Both clips need a finished video first'); return 0; }
