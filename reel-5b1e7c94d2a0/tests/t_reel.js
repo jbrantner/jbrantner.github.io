@@ -514,6 +514,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     ok(a.n===n0 + 1 && a.ch===2 && /2 more clips/.test(a.box) && b.n===n0 + 2 && /waves/.test(b.w) && b.kind==='next' && b.ch===1 && t.cont && /waves/.test(t.p) && c.n===n0 + 3 && /smiles/.test(c.w) && !c.ch,
       '🔗 Then keep going makes each line as a ➕ Next of the clip before, one after another, then stops (' + JSON.stringify({a, b, t, c}) + ')');
     await page.evaluate(n0 => { REEL.clips().splice(n0); REEL.go(0); REEL.refresh(); }, n0); await finish(); }
+  // ⚠ on the wheel where a join may jump; ↻ Try all failed again
+  { const r = await page.evaluate(async () => { const cs = REEL.clips(), c = cs[1], m = c.meta[c.pick] = c.meta[c.pick] || {}, keep = m.after; m.after = 'tnotthepick'; REEL.refresh(); await new Promise(r => setTimeout(r, 300));
+      const on = !!document.querySelectorAll('#wheel .wi')[1].querySelector('.jmp'); if(keep===undefined) delete m.after; else m.after = keep; REEL.refresh(); await new Promise(r => setTimeout(r, 300));
+      const off = !!document.querySelectorAll('#wheel .wi')[1].querySelector('.jmp'); return {on, off}; });
+    ok(r.on && !r.off, '⚠ the wheel marks a clip whose join from the clip before may jump (' + JSON.stringify(r) + ')');
+    const x = await page.evaluate(async () => { const E = REEL.E(), oi = E.info, orr = E.retry, got = []; const id = REEL.clips()[0].takes[0], base = REEL.clips().flatMap(c => c.takes).filter(q => q!==id && REEL.info(q).state==='failed').length;
+      E.info = q => q===id ? {state:'failed', err:'x'} : oi(q); E.retry = async q => { got.push(q); return true; }; REEL.refresh(); await new Promise(r => setTimeout(r, 200));
+      const b = document.querySelector('#retryAll'), vis = !b.hidden, t = b.textContent; b.click(); await new Promise(r => setTimeout(r, 300)); E.info = oi; E.retry = orr; REEL.refresh(); return {vis, t, got, id, base}; });
+    ok(x.vis && new RegExp('Try ' + (x.base + 1) + ' failed again').test(x.t) && x.got.length===x.base + 1 && x.got.includes(x.id), '↻ Try all failed again sends every failed option of the reel again (' + JSON.stringify(x) + ')'); }
   // 📡 the clip's PC goes off while it's showing: the player switches to the same file on the other PC
   { const r = await page.evaluate(async () => { const E = REEL.E(), old = E.pcs; E.pcs = () => [{name:'Gone', url:'http://gone.test', online:false}, {name:'Main', url:'http://main.test', online:true}];
       const v = document.querySelector('#vA'); v.dataset.tried = ''; v.src = 'http://gone.test/view?filename=x.mp4&subfolder=Output_Render%2FH3Deck&type=output';
