@@ -50,6 +50,11 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     const chains = () => { const t = H3.snapshot(); t.id = 'l' + Math.random(); t.pc = R; t.seed = 3; t.dir = 'H3Deck/l'; t.name = 'l'; const g = H3.pieceGraph(t, 0, oi, {}).g, ref = v => v && g[v[0]];
       return Object.values(g).filter(x => x.class_type==='SamplerCustomAdvanced').map(s => { let m = ref(ref(s.inputs.guider).inputs.model), los = []; while(m && m.class_type!=='UNETLoader'){ if(m.class_type==='LoraLoaderModelOnly') los.push(m.inputs.lora_name); m = ref(m.inputs.model); } return los.includes('AFK_Claude_minimaxh3.safetensors'); }); };
     o.first = chains(); f.loras[0].first = false; o.both = chains(); f.loras[0].first = true;
+    // 🎚 vanilla ↔ finish slider
+    const mi = document.querySelector('#finMixIn'); o.mixShown = !document.querySelector('#finMix').hidden;
+    mi.value = 0.75; mi.dispatchEvent(new Event('input', {bubbles:true})); o.mixAt = f.finAt; o.mixTxt = document.querySelector('#finMixV').textContent;
+    { const t = H3.snapshot(); t.id = 'm1'; t.pc = R; t.seed = 3; t.dir = 'H3Deck/m'; t.name = 'm'; const g = H3.pieceGraph(t, 0, oi, {}).g; o.mixSplit = Object.values(g).filter(x => x.class_type==='SplitSigmas').map(x => x.inputs.step); }
+    H3.drawAll(); o.mixKept = f.finAt; mi.value = 0.5; mi.dispatchEvent(new Event('input', {bubbles:true}));
     document.querySelector('[data-mpk="pika"]').click(); o.lfPika = !document.querySelector('#loraList [data-lf]'); o.pikaSnap = H3.snapshot().loras[0].first;
     return o; });
   ok(/ultima_nsfw_lv120/.test(r.u), 'Ultima Lv120 is found on the PC: ' + r.u);
@@ -64,6 +69,8 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(r.mpCol==='column', 'the three model choices stack instead of overlapping');
   ok(r.first[0]===true && r.first[1]===false, 'vanilla half only: the LoRA is on vanilla, not on the finisher ' + JSON.stringify(r.first));
   ok(r.both[0]===true && r.both[1]===true, 'both halves: the LoRA is on both ' + JSON.stringify(r.both));
+  ok(r.mixShown && r.mixAt===0.25 && /vanilla 2 · Ultima 6 of 8/.test(r.mixTxt) && r.mixKept===0.25, '🎚 slider: right = more Ultima (vanilla 2, Ultima 6 of 8), kept by bare bones: ' + r.mixTxt);
+  ok(r.mixSplit.includes(2), 'the render hands over at 2 of 8 ' + JSON.stringify(r.mixSplit));
   ok(r.lfPika && r.pikaSnap===undefined, 'PRISM PIKA alone: no switch, the LoRA works as before');
   // 🎞 Reel's engine (Jordan 2026-11-22: "Could we add that one to reel?"): Ultima finish as its own pick, kept over H3 Deck's form
   const pe = await br.newPage({viewport:{width:390, height:844}}); pe.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
@@ -72,9 +79,10 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await pe.goto('http://127.0.0.1:8049/index.html?engine=1');
   await pe.waitForFunction(() => window.H3Engine && H3Engine.models().length > 2, null, {timeout:20000});
   const e = await pe.evaluate(() => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)); E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
-    const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; return o; });
+    const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; E.setLook({finAt:0.375}); o.reelAt = H3.S.reelAt===0.375 && E.look().finAt===0.375; return o; });
   ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|PRISM PIKA', 'Reel lists the three picks: ' + e.labels.join(' | '));
   ok(e.look && e.finU===true && e.reelFin==='ultima', 'picking Ultima finish in Reel sets it (kept over H3 Deck\'s own pick)');
   ok(e.back, 'and back to PIKA finish');
+  ok(e.reelAt, 'Reel keeps its own vanilla ↔ finish share');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
