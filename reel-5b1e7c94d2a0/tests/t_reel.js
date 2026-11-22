@@ -14,7 +14,7 @@ const SCHEMA = {
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
   ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
 };
-const OTHER = ['ColorMatch','MiniMaxH3ReferenceToVideo','NAGGuiderMiniMaxH3','CLIPTextEncode','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
+const OTHER = ['ColorMatch','ConditioningSetTimestepRange','ConditioningCombine','MiniMaxH3ReferenceToVideo','NAGGuiderMiniMaxH3','CLIPTextEncode','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MiniMaxH3AddGuide','MMH3FitReferences','RenderDeckH3Join',
   'LoadImage','LoadVideo','BasicGuider','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','GetVideoComponents','ImageScale',
   'BboxDetectorSEGS','UltralyticsDetectorProvider','SplitSigmas','DisableNoise','SegsToCombinedMask','MaskToImage','PreviewImage','Video Slice','ImageFromBatch','TrimAudioDuration','VAEEncode','LTXVSeparateAVLatent','LTXVConcatAVLatent','ManualSigmas'];
 const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
@@ -108,6 +108,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   { const G = g2[0].g, cm = nodes(G, 'ColorMatch'), ref = cm[0] && G[cm[0].inputs.image_ref[0]], src = ref && G[ref.inputs.image[0]];
     ok(cm.length===6 && cm[0].inputs.strength===1 && cm[5].inputs.strength < 0.2 && cm.every(n => n.inputs.method==='mkl') && ref && ref.class_type==='ImageFromBatch' && ref.inputs.batch_index===4095 && src && src.class_type==='GetVideoComponents',
       '🎨 ➕ Next eases its first 1.5 s into the colour of the clip before\'s last frame (' + JSON.stringify([cm.map(n => n.inputs.strength), Object.values(G).map(n => n.class_type).join(',')]) + ')'); }
+  // (Jordan 2026-11-22, Tifa: carry-ons opened on a new shot / a reference picture) the pictures only come in after the first 30% of the steps
+  { const G = g2[0].g, tr = nodes(G, 'ConditioningSetTimestepRange').map(n => ({a:n.inputs.start, b:n.inputs.end, src:G[n.inputs.conditioning[0]]})), refsOf = n => n ? Object.keys(n.inputs).filter(k => /ref_image_\d/.test(k)).length : -1;
+    const early = tr.find(x => x.a===0 && Math.abs(x.b - 0.3) < 1e-6), late = tr.find(x => Math.abs(x.a - 0.3) < 1e-6 && x.b===1);
+    ok(early && late && refsOf(early.src)===0 && refsOf(late.src) > 0, '➕ Next brings the pictures in only after the first 30% of the steps, so the layout follows the clip before (' + JSON.stringify(tr.map(x => [x.a, x.b, x.src && x.src.class_type, refsOf(x.src)])) + ')'); }
   ok(await page.evaluate(() => REEL.clips().length===2 && REEL.R().cur===1 && REEL.cur().kind==='next'), 'the new clip goes after it and is the current one');
   await finish();
   // back to clip 1 by dragging the wheel to the right
