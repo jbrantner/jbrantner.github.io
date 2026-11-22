@@ -167,7 +167,7 @@ const node = (g, t) => Object.values(g).find(n => n.class_type===t);
     const P = o => H3.h3Prompt({h3:Object.assign({style:'', quality:true}, o), text:'she waves', imgs:[{desc:'a woman', keep:'exact'}], secs:5}), B = o => H3.h3Prompt({h3:Object.assign({style:'', quality:true}, o), text:'she waves', secs:5});
     const r = {chips:[...q('#styleChips').querySelectorAll('[data-qs]')].map(b => b.textContent).join('|')};
     r.custom = /The image is stable, sharp/.test(P({qstyle:''})) && /live-action, cinematic style/.test(P({qstyle:''}));
-    r.d2 = /hand-drawn 2D anime/.test(P({qstyle:'2d'})) && !/live-action, cinematic style/.test(P({qstyle:'2d'})) && /line art stays clean/.test(P({qstyle:'2d'}));
+    r.d2 = /soft painterly 2D illustration/.test(P({qstyle:'2d'})) && !/anime|flat cel/.test(P({qstyle:'2d'})) && !/live-action, cinematic style/.test(P({qstyle:'2d'})) && /line art stays clean/.test(P({qstyle:'2d'}));
     r.d3base = /\[Shot 1\] The target video is a modern 3D animated/.test(B({qstyle:'3d'})) && /polished lighting/.test(B({qstyle:'3d'}));
     r.own = /my noir look/.test(P({qstyle:'real', style:'my noir look'})) && !/photorealistic live-action film/.test(P({qstyle:'real', style:'my noir look'}));
     r.off = !/hand-drawn/.test(P({qstyle:'2d', quality:false}));
