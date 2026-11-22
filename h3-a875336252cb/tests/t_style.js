@@ -74,7 +74,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(/<Subject 2> is shown in the same visual style as <Subject 1>/.test(X.p), 'Ben is told to match her');
   // no pictures at all (base format) with a scene kind
   await page.evaluate(() => { H3.S.f.look = {src:'w', kind:'2d', n:0, pics:[], redo:{}, use:true}; H3.S.f.prompt = 'a woman walks through the park.'; H3.drawAll(); }); X = await prom();
-  ok(/hand-drawn 2D anime: every person, object and place is drawn/.test(X.p), 'no references: the 2D sentence leads the base format');
+  ok(/soft painterly 2D illustration, like a modern animated feature film: every person, object and place is drawn/.test(X.p), 'no references: the 2D sentence leads the base format');
   // Library entry keeps it in every film
   const lib = await page.evaluate(() => { const L = {id:'L1', kind:'char', name:'Mia', stand:'a woman', pics:[P.a], keep:'exact'}; H3.S.lib.push(L); H3.openLib('L1');
     const b = document.querySelector('#lbBox [data-lb="art:toon"]'); if(!b) return 'no button'; b.click(); return H3.S.lib.find(x => x.id==='L1').art; });
