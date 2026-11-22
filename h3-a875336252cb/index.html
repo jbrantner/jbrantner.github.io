@@ -4057,7 +4057,7 @@ function snapshot0(){ // the form, frozen into a take
     back:sm && f.smBack && f.smBack.vid===f.smVid ? Object.assign({}, f.smBack, {key:uid('k')}) : null, // 🪄 Smooth track / 🔁 loop: back into the clips
     neg:keepOut(f), negScale:+f.negScale || NAG.scale, fin:f.finOn && finAble(f.model) ? {at:+f.finAt || 0.5} : null,
     h3:!sm && f.h3 ? {quality:f.quality===true, qstyle:f.qstyle || '', qtext:(f.qtext || '').trim(), style:(f.h3Style || '').trim(), sound:(f.h3Sound || '').trim(), music:(f.h3Music || '').trim(), scene:sceneKind(f)} : null,
-    styled:!sm && styledOn(f, pieces), look:sm ? null : lookSnap(), lines:lineSnap(f), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0, fill:!sm && f.fillRefs ? 1 : 0, rstr:sm ? null : rstrSnap(f),
+    styled:!sm && styledOn(f, pieces), look:sm ? null : lookSnap(), lines:lineSnap(f), descOff:JSON.parse(JSON.stringify(f.descOff || {})), shuffle:sm ? 0 : f.shuffle===2 ? 2 : f.shuffle ? 1 : 0, fill:!sm && f.fillRefs ? 1 : 0, refLate:!sm && +f.refLate > 0 ? +f.refLate : 0, rstr:sm ? null : rstrSnap(f),
     prompt:sm && !f.prompt.trim() ? SM_PROMPT : f.prompt, seconds:+f.seconds,
     pieces:pieces.map((p, i) => Object.assign({}, p, {prompt:sm ? (pieces.length > 1 ? piecePrompt(f.prompt.trim() || SM_PROMPT, pieces, i) : f.prompt.trim() || SM_PROMPT) : (f.pieceText[i] != null && pieces.length > 1 ? f.pieceText[i] : piecePrompt(f.prompt, pieces, i)), state:'new'}))};
 }
@@ -5445,7 +5445,12 @@ const standIn = r => !!(r && (r.poseOf || r.poseCh || r.actOf));
 const refKey = r => !r ? '' : r.cast ? 'c' + r.cast : standIn(r) ? 'p' : r.rk ? 'r' + r.rk : r.attrOf ? 'a' + r.lib + ':' + r.attrOf : r.style ? 'st' : '';
 // form: f.rstr[k] = {s, e} in % (a plain number = stop, from before ▶ start); take: t.rstr[k] = [start, stop] as 0-1 (a number = stop)
 const winOf = v => Array.isArray(v) ? [+v[0] || 0, v[1] == null ? 1 : +v[1]] : v > 0 && v < 1 ? [0, +v] : [0, 1];
-const refWin = (t, r) => { const k = refKey(r), v = k && t.rstr && t.rstr[k]; if(v != null) return winOf(v); return k==='p' && t.pstr > 0 && t.pstr < 1 ? [0, t.pstr] : [0, 1]; }; // (t.pstr: takes from before 🎚)
+const refWin0 = (t, r) => { const k = refKey(r), v = k && t.rstr && t.rstr[k]; if(v != null) return winOf(v); return k==='p' && t.pstr > 0 && t.pstr < 1 ? [0, t.pstr] : [0, 1]; }; // (t.pstr: takes from before 🎚)
+// ➕ Reel carry-ons (Jordan 2026-11-22, Tifa: "the next button didn't continue the video very well … basically being their own cuts"): 2 of 3
+// options opened on a new shot, one of them a copy of a reference picture, because the pictures are in the early steps that set the
+// layout. On a carry-on (t.refLate) every picture comes in only after that share of the steps: the layout comes from the clip before's
+// last frames, the pictures still keep her face, hair and clothes
+const refWin = (t, r) => { const w = refWin0(t, r); if(!(+t.refLate > 0 && t.cont)) return w; const a = Math.max(w[0], Math.min(+t.refLate, w[1] - 0.1)); return [a, w[1]]; };
 const rstrWin = (f, k) => { const v = (f.rstr || {})[k]; let a = 0, b = 100; if(v && typeof v==='object'){ a = +v.s || 0; b = v.e == null ? 100 : +v.e; } else if(+v > 0) b = +v; else if(k==='p' && +f.pstr > 0) b = +f.pstr;
   b = Math.max(10, Math.min(100, b)); a = Math.max(0, Math.min(b - 10, a)); return [a, b]; };
 const rstrSnap = f => { const o = {}; for(const k of Object.keys(f.rstr || {}).concat(f.pstr ? ['p'] : [])){ const [a, b] = rstrWin(f, k); if(a > 0 || b < 100) o[k] = [a / 100, b / 100]; } return Object.keys(o).length ? o : null; };
@@ -6422,6 +6427,7 @@ setTimeout(undoRebase, 0);
 // Every call starts the form from the look (model, size, quality) and sets just what that call needs, so nothing from one call leaks
 // into the next. Each returns {ids:[new take ids]} or {err}.
 if(ENGINE){
+  const REF_LATE = 0.3; // ➕ carry-ons: pictures only after the first 30% of the steps (see refWin)
   const REEL_LEAD = '[0s-1s] The scene keeps carrying on from the moment before.\n[1s-] ';
   const LOOKS = ['model', 'turbo', 'aspect', 'mp', 'steps', 'maxPiece', 'where', 'h3', 'h3Style', 'quality', 'qstyle', 'qtext', 'boost', 'nsfw', 'negOn', 'neg', 'negScale'];
   const fresh = () => { const k = {}; LOOKS.forEach(x => { if(S.f[x]!==undefined) k[x] = S.f[x]; }); if(k.aspect==='pic' || k.aspect==='custom') k.aspect = S.reelAspect || '16:9'; S.f = Object.assign(F_DEF(), k, deckForm() || {}, {takes:1, shuffle:0}); };
@@ -6533,7 +6539,7 @@ if(ENGINE){
       fresh(); useBase(t); const near = Math.abs(at - dur) < 0.05, id = uid('m');
       S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
         cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:'', clip:'', key:uid('k'), own:true, guide:null, len:0}, thumb:''};
-      Object.assign(S.f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:REEL_LEAD + whoWords(o.words, o.who), pieceText:{}});
+      Object.assign(S.f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:REEL_LEAD + whoWords(o.words, o.who), pieceText:{}, refLate:REF_LATE});
       if(!/<\s*ref\s*image\s*\d+\s*>/i.test(S.f.prompt)) S.f.imgs = (S.f.imgs || []).filter(r => r.pose || r.pin);
       setLen(Math.max(1, Math.min(5, +o.secs || 5))); return go(o.n); },
     // 🪄 Smooth (Jordan 2026-11-20, Reel's ✂ Edit): H3 Deck's own 🪄 Smooth on a finished clip: 📐 spacing measured from how far things
