@@ -19,12 +19,13 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     fs.readFile(f, (e, b) => { if(e){ r.writeHead(404); r.end(); return; } r.writeHead(200, {'Content-Type':/\.html$/.test(f) ? 'text/html' : 'application/octet-stream'}); r.end(b); }); }).listen(8049);
   const br = await chromium.launch(), page = await br.newPage({viewport:{width:390, height:844}});
   page.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
-  await page.route(R + '/**', async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
+  const handle = async rt => { const u = new URL(rt.request().url()), p = u.pathname, J = o => rt.fulfill({status:200, contentType:'application/json', headers:{'Access-Control-Allow-Origin':'*'}, body:JSON.stringify(o)});
     if(p==='/system_stats') return J({devices:[]});
     if(p==='/object_info' || p.startsWith('/object_info/')){ const c = decodeURIComponent(p.slice(13)); if(!c){ const all = Object.assign({}, SCHEMA); OTHER.forEach(o => all[o] = {input:{required:{}}}); return J(all); } return J(SCHEMA[c] ? {[c]:SCHEMA[c]} : OTHER.includes(c) ? {[c]:{input:{required:{}}}} : {}); }
     if(p==='/queue') return J({queue_running:[], queue_pending:[]});
     if(p==='/renderdeck/images') return J({shared:true, pc:'Output_Render', images:[]});
-    return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); });
+    return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
+  await page.route(R + '/**', handle);
   await page.addInitScript(r => { localStorage.clear(); window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R); // bare bones (no H3_FULL)
   await page.goto('http://127.0.0.1:8049/index.html');
   await page.waitForFunction(() => H3.families().length > 2, null, {timeout:20000});
@@ -64,5 +65,16 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(r.first[0]===true && r.first[1]===false, 'vanilla half only: the LoRA is on vanilla, not on the finisher ' + JSON.stringify(r.first));
   ok(r.both[0]===true && r.both[1]===true, 'both halves: the LoRA is on both ' + JSON.stringify(r.both));
   ok(r.lfPika && r.pikaSnap===undefined, 'PRISM PIKA alone: no switch, the LoRA works as before');
+  // 🎞 Reel's engine (Jordan 2026-11-22: "Could we add that one to reel?"): Ultima finish as its own pick, kept over H3 Deck's form
+  const pe = await br.newPage({viewport:{width:390, height:844}}); pe.on('pageerror', e => { console.log('PAGE ERROR', e.message); fails++; });
+  await pe.route(R + '/**', handle);
+  await pe.addInitScript(r => { localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify({f:{finU:false}, tsav:Date.now()})); window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
+  await pe.goto('http://127.0.0.1:8049/index.html?engine=1');
+  await pe.waitForFunction(() => window.H3Engine && H3Engine.models().length > 2, null, {timeout:20000});
+  const e = await pe.evaluate(() => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)); E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
+    const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; return o; });
+  ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|PRISM PIKA', 'Reel lists the three picks: ' + e.labels.join(' | '));
+  ok(e.look && e.finU===true && e.reelFin==='ultima', 'picking Ultima finish in Reel sets it (kept over H3 Deck\'s own pick)');
+  ok(e.back, 'and back to PIKA finish');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
