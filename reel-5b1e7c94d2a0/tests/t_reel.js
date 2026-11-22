@@ -486,6 +486,17 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const top = await page.evaluate(() => document.querySelector('#reelName').textContent);
     ok(/\d+ clips · [\d.]+ s$/.test(top), '🎞 the top shows the reel\'s total length (' + top + ')');
     await page.evaluate(() => { REEL.E().forget = window.__of; }); }
+  // 🔁 Make it loop in ✂ Edit: H3 Deck's loop as a new option of the clip
+  { await page.evaluate(() => { REEL.go(0); REEL.refresh(); }); await page.waitForTimeout(300); const n0 = await page.evaluate(() => REEL.cur().takes.length);
+    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="loop"]'); const vis = await page.evaluate(() => !document.querySelector('#edLp').hidden && document.querySelector('#edT').hidden);
+    await page.click('#edLGo'); await page.waitForFunction(n => REEL.cur().takes.length > n, n0, {timeout:60000}).catch(() => {}); await page.waitForTimeout(800);
+    const r = await page.evaluate(() => { const c = REEL.cur(), id = c.takes[c.takes.length - 1]; return {n:c.takes.length, loop:!!(c.meta[id] || {}).loop}; });
+    const t = await eng.evaluate(() => { const t = H3.S.takes[0]; return {loop:!!(t.sm && t.sm.loop), up:!!t.up, fin:!!t.fin}; });
+    ok(vis && r.n===n0 + 1 && r.loop && t.loop && !t.up, '🔁 Make it loop in ✂ Edit sends H3 Deck\'s loop (no regenerate) as a new option (' + JSON.stringify({vis, r, t, n0}) + ')');
+    await page.click('[data-close]').catch(() => {}); await finish(); }
+  // 🕘 words used before in this reel, one tap away in ➕ Next
+  { await page.click('#nextBtn'); await page.waitForTimeout(300); const r = await page.evaluate(() => { const b = document.querySelector('.recent [data-rw]'); if(!b) return {n:0}; b.click(); return {n:document.querySelectorAll('.recent [data-rw]').length, v:document.querySelector('#nxW').value, t:b.textContent}; });
+    ok(r.n > 0 && r.v && r.t.replace('…', '').length > 0 && r.v.indexOf(r.t.replace('…', ''))===0, '🕘 ➕ Next shows words used before in this reel; a tap puts them in the box (' + JSON.stringify(r) + ')'); await page.click('[data-close]').catch(() => {}); }
   // 📡 the clip's PC goes off while it's showing: the player switches to the same file on the other PC
   { const r = await page.evaluate(async () => { const E = REEL.E(), old = E.pcs; E.pcs = () => [{name:'Gone', url:'http://gone.test', online:false}, {name:'Main', url:'http://main.test', online:true}];
       const v = document.querySelector('#vA'); v.dataset.tried = ''; v.src = 'http://gone.test/view?filename=x.mp4&subfolder=Output_Render%2FH3Deck&type=output';
