@@ -79,10 +79,13 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await pe.goto('http://127.0.0.1:8049/index.html?engine=1');
   await pe.waitForFunction(() => window.H3Engine && H3Engine.models().length > 2, null, {timeout:20000});
   const e = await pe.evaluate(() => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)); E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
-    const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; E.setLook({finAt:0.375}); o.reelAt = H3.S.reelAt===0.375 && E.look().finAt===0.375; return o; });
+    const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; E.setLook({finAt:0.375}); o.reelAt = H3.S.reelAt===0.375 && E.look().finAt===0.375;
+    const mk = fin => ({prompt:'<Lora 1> she waves', lines:{1:{lora:1, lib:'L1', snap:1, loras:[{name:'A.safetensors', str:0.7}]}}, loras:[], fin});
+    E.setLoraFirst(['L1']); o.chipV = H3.loraChips(mk({at:0.5})).loras; o.chipNoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]); o.chipBoth = H3.loraChips(mk({at:0.5})).loras; return o; });
   ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|PRISM PIKA', 'Reel lists the three picks: ' + e.labels.join(' | '));
   ok(e.look && e.finU===true && e.reelFin==='ultima', 'picking Ultima finish in Reel sets it (kept over H3 Deck\'s own pick)');
   ok(e.back, 'and back to PIKA finish');
   ok(e.reelAt, 'Reel keeps its own vanilla ↔ finish share');
+  ok(e.chipV[0].first===true && !e.chipNoFin[0].first && !e.chipBoth[0].first, '🧩 a chip marked vanilla only in Reel puts its LoRAs on the vanilla half only (finish takes only) ' + JSON.stringify([e.chipV, e.chipNoFin, e.chipBoth]));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
