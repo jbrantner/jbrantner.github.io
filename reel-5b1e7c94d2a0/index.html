@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-22-1">
+<meta name="reel-build" content="2026-11-22-2">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -149,6 +149,7 @@ body.lib .bar3{display:none}
 .list .it:first-child{border-top:0}
 .list .it .t{flex:1;min-width:0}
 .list .it .t b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toast.und{display:flex;align-items:center;z-index:61}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(92px + env(safe-area-inset-bottom));z-index:60;max-width:min(92vw,520px);background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.4)}
 #eng{position:absolute;width:1px;height:1px;left:-9999px;top:0;border:0;opacity:0;pointer-events:none}
 </style>
@@ -219,6 +220,14 @@ async function checkUpdate(){ if(UPD || !BUILD || window.REEL_ENGINE) return; tr
   document.body.appendChild(b); }catch(e){} }
 setTimeout(checkUpdate, 3000); setInterval(() => { if(!document.hidden) checkUpdate(); }, 300000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden) checkUpdate(); });
+// ↩ Undo (Jordan 2026-11-22 overnight: quality of life): removing a clip, an option or a reel shows ↩ Undo for 8 s; its renders are only
+// stopped and forgotten once that's gone (another removal, or leaving the page in between, ends the one before)
+let UNDO = null;
+function undoToast(text, undo, commit){ flushUndo(); const d = document.createElement('div'); d.className = 'toast und'; d.innerHTML = `<span>${esc(text)}</span><button class="btn" style="margin-left:10px">↩ Undo</button>`;
+  const u = UNDO = {d, commit, tm:setTimeout(() => flushUndo(), 8000)}; d.querySelector('button').onclick = () => { if(UNDO!==u) return; clearTimeout(u.tm); UNDO = null; d.remove(); undo(); };
+  document.body.appendChild(d); }
+function flushUndo(){ const u = UNDO; if(!u) return; UNDO = null; clearTimeout(u.tm); u.d.remove(); try{ u.commit && u.commit(); }catch(e){ console.warn(e); } }
+window.addEventListener('pagehide', () => flushUndo());
 function toast(t, ms){ const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), ms || 3200); }
 window.ReelToast = (t, ms) => { if(/settings are back in the form|Its settings/i.test(t)) return; toast(t, Math.min(ms || 3200, 6000)); };
 
@@ -386,7 +395,7 @@ function exSheet(id){ const nk = /^new:/.test(id) ? id.slice(4) : '', x = nk ? n
     save(); closeSheet(); redrawChars(); toast(x ? 'Saved' : XK[kind][0] + ' ' + name + ' is in the Library'); };
   if($('#exDel')) $('#exDel').onclick = () => { const b = $('#exDel'); if(!b.dataset.sure){ b.dataset.sure = 1; b.textContent = '🗑 Tap again to delete ' + x.name; return; }
     E.delChar(x.id); S.reels.forEach(r => { for(const k of Object.keys(r.attrs || {})) r.attrs[k] = r.attrs[k].filter(y => y!==x.id); }); save(); closeSheet(); redrawChars(); }; }
-function drawTop(){ $('#reelName').textContent = R().name + ' · ' + clips().length + (clips().length===1 ? ' clip' : ' clips');
+function drawTop(){ const tot = clips().reduce((a, c) => a + lenOf(c), 0); $('#reelName').textContent = R().name + ' · ' + clips().length + (clips().length===1 ? ' clip' : ' clips') + (tot ? ' · ' + fmt(tot) : '');
   const pcs = E ? E.pcs() : []; $('#dots').innerHTML = pcs.filter(p => p.on).map(p => `<span class="dot ${p.online ? (p.busy ? 'busy' : 'on') : ''}" title="${esc(p.name)}"></span>`).join(''); }
 function drawWheel(){ const box = $('#wheel'), cs = clips();
   if(box.children.length!==cs.length || box.dataset.r!==S.open){ box.dataset.r = S.open; box.innerHTML = cs.map((c, i) => `<div class="wi" data-i="${i}"></div>`).join(''); }
@@ -406,9 +415,11 @@ function placeWheel(){ const box = $('#wheel'), W = box.clientWidth || 360, STEP
 const isUp = (c, id) => !!(c && id && ((c.meta || {})[id] || {}).fin);
 // 🧹 Keep only this option (Jordan 2026-11-20: "so I don't forget which clip we hit next on"): the others go, except the original an
 // upscaled option was made from (so ↩ Back to the originals still works)
-async function stopForget(ids){ const w = ids.filter(id => info(id).state==='working'); for(const id of w){ try{ await E.stop(id); }catch(e){} } E.forget(ids); }
+// (a ⧉ copied reel shares its options with the reel it came from: an option still used by any clip of any reel is never forgotten)
+const usedIds = () => new Set((S.reels || []).flatMap(r => (r.clips || []).flatMap(c => c.takes || [])));
+async function stopForget(ids0){ const U = usedIds(), ids = ids0.filter(id => !U.has(id)); const w = ids.filter(id => info(id).state==='working'); for(const id of w){ try{ await E.stop(id); }catch(e){} } E.forget(ids); }
 function keepOne(c){ const m = (c.meta || {})[c.pick] || {}, keep = [c.pick].concat(m.src && c.takes.includes(m.src) ? [m.src] : []), gone = c.takes.filter(id => !keep.includes(id));
-  if(E) stopForget(gone); c.takes = keep; save(); VSIG = ''; refresh(); toast('🧹 Kept only this option' + (keep.length > 1 ? ' (and the original it was upscaled from)' : '')); }
+  c.takes = keep; if(E) stopForget(gone); save(); VSIG = ''; refresh(); toast('🧹 Kept only this option' + (keep.length > 1 ? ' (and the original it was upscaled from)' : '')); }
 // the option an upscaled one was made from, back to the first (⬆ final pass / ⬆ edits that stay upscaled)
 function rootOf(c, id){ const M = c.meta || {}; for(let i = 0; i < 20 && M[id] && (M[id].src || M[id].same); i++) id = M[id].src || M[id].same; return id; } // (same = 🪄 smoothed from it: first and last frames kept, so it lines up the same)
 function drawOpts(){ const c = cur(), box = $('#opts'); { const a = $('#optAct'), m = c && (c.meta || {})[c.pick] || {}, extra = c ? c.takes.filter(id => id!==c.pick && id!==m.src).length : 0;
@@ -514,7 +525,9 @@ let SURE = null;
 $('#opts').addEventListener('click', async e => { const c = cur(); if(!c) return;
   const r = e.target.closest('[data-retry]'); if(r){ e.stopPropagation(); if(E && await E.retry(r.dataset.retry)) toast('↻ Sent again'); else toast("Couldn't send it again: is the PC on?"); return; }
   const x = e.target.closest('[data-x]'); if(x){ e.stopPropagation(); const id = x.dataset.x; if(SURE!==id){ SURE = id; drawOpts(); setTimeout(() => { if(SURE===id){ SURE = null; drawOpts(); } }, 3000); return; }
-    SURE = null; if(info(id).state==='working' && E) await E.stop(id); c.takes = c.takes.filter(t => t!==id); if(c.pick===id) c.pick = null; if(E) E.forget([id]); autoPick(c); save(); VSIG = ''; draw(); return; }
+    SURE = null; const was = info(id).state==='working', at = c.takes.indexOf(id), wasPick = c.pick===id; if(was && E) await E.stop(id); c.takes = c.takes.filter(t => t!==id); if(c.pick===id) c.pick = null; autoPick(c); save(); VSIG = ''; draw();
+    if(was){ if(E) stopForget([id]); return; }
+    undoToast('Option removed', () => { if(!c.takes.includes(id)) c.takes.splice(Math.max(0, at), 0, id); if(wasPick){ c.pick = id; c.in = 0; c.out = null; } VSIG = ''; save(); refresh(); }, () => { if(E) stopForget([id]); }); return; }
   const o = e.target.closest('[data-o]'); if(!o) return; const id = o.dataset.o; if(!/done|working/.test(info(id).state)) return; c.pick = id; c.in = 0; c.out = null; save(); VSIG = ''; draw(); });
 
 // ---------- sheets ----------
@@ -629,6 +642,7 @@ function redoSheet(){ const i = curI(), c = cur(); if(!c) return; const P = redo
 function editSheet(m0){ const i = curI(), c = cur(); if(!c) return;
   // (Jordan 2026-11-21: a clip with no options left couldn't be deleted, Edit was greyed out) no finished option: only 🗑 Remove
   if(!doneOf(c.pick)){ sheet(`<h3><span>✂ Edit clip ${i + 1}</span><button class="btn" data-close>✕</button></h3><div class="note">${c.takes.length ? 'Its options are still rendering: trimming and changes open up once one is done.' : 'This clip has no options. ↻ Redo makes some, or remove it.'}</div>
+      <div class="row" style="gap:8px;margin-top:16px">${i > 0 ? '<button class="btn" id="edMvL" style="flex:1">‹ Move earlier</button>' : ''}${i < clips().length - 1 ? '<button class="btn" id="edMvR" style="flex:1">Move later ›</button>' : ''}</div>
       <button class="btn" id="edDel" style="width:100%;margin-top:16px;color:var(--bad)">🗑 Remove this clip</button>`); delWire(i); return; } const I = info(c.pick), D = I.secs || 5, N = clips()[i + 1];
   const o = {mode:m0 || 'trim', a:c.in || 0, b:endOf(c), blend:N ? 1 : 0, ca:c.in || 0, cb:endOf(c), words:words0(c), str:0.6, n:S.n || 2, xa:1.5, xb:1.5}, L = lookOf(c);
   // ⇿ Across the cut (Jordan 2026-11-20): how much of each side it can take (each side keeps 0.5 s; together 5 s at most)
@@ -662,6 +676,8 @@ function editSheet(m0){ const i = curI(), c = cur(); if(!c) return;
       <button class="big pri" id="edXGo" style="width:100%;margin-top:14px">⇿ Remake across the cut</button>
     </div>` : ''}
     <div id="edLk" hidden>${lookRow(L)}</div>
+    <button class="btn" id="edSave" style="width:100%;margin-top:16px">📲 Save this option's video</button>
+    <div class="row" style="gap:8px;margin-top:16px">${i > 0 ? '<button class="btn" id="edMvL" style="flex:1">‹ Move earlier</button>' : ''}${i < clips().length - 1 ? '<button class="btn" id="edMvR" style="flex:1">Move later ›</button>' : ''}</div>
     <button class="btn" id="edDel" style="width:100%;margin-top:16px;color:var(--bad)">🗑 Remove this clip</button>`); lookWire(L);
   const v = $('#edV'), T = $('#edT');
   const lim = () => o.mode==='trim' ? [o, 'a', 'b'] : [o, 'ca', 'cb'];
@@ -712,10 +728,22 @@ function editSheet(m0){ const i = curI(), c = cur(); if(!c) return;
     const ids = await send($('#edCGo'), () => E.redo({take:c.pick, a:Math.max(0.2, o.ca), b: b >= D - 0.05 ? D + 1 : b, words:w, str:o.str, n:o.n}), '🎨 Sent: the changed versions show up as new options of this clip', L);
     if(ids){ c.look = cl(L); addTakes(c, ids, Object.assign({}, (c.meta || {})[c.pick] || {}, {look:cl(L)}), w); } };
   delWire(i); }
-function delWire(i){
+function delWire(i){ mvWire(i);
+  const sv = $('#edSave'); if(sv) sv.onclick = () => saveOpt(cur());
   $('#edDel').onclick = () => { const b = $('#edDel'); if(!b.dataset.sure){ b.dataset.sure = 1; b.textContent = '🗑 Tap again to remove clip ' + (i + 1); return; }
-    if(ALL) stopAll(); const gone = clips().splice(i, 1)[0]; if(E) stopForget(gone.takes); /* (still rendering: stopped, so the PC doesn't keep making a clip nobody sees) */ R().cur = Math.max(0, i - 1); WP = R().cur; closeSheet(); save(); refresh();
-    if(clips()[i] && i > 0) toast('Removed. If the clips around it now jump, ⇿ Insert can bridge them', 5000); }; }
+    if(ALL) stopAll(); const r = R(), gone = clips().splice(i, 1)[0]; R().cur = Math.max(0, i - 1); WP = R().cur; closeSheet(); save(); refresh();
+    undoToast('Clip ' + (i + 1) + ' removed' + (clips()[i] && i > 0 ? '. If the clips around it now jump, ⇿ Insert can bridge them' : ''),
+      () => { r.clips.splice(Math.min(i, r.clips.length), 0, gone); if(S.open===r.id){ r.cur = i; WP = i; } VSIG = ''; save(); refresh(); },
+      () => { if(E) stopForget(gone.takes); }); }; } // (still rendering: stopped once ↩ Undo is gone, so the PC doesn't keep making a clip nobody sees)
+
+// ‹ › move a clip (the clips around it may then jump: ⇿ Insert or ↻ Redo can bridge them)
+function mvWire(i){ const go = d => { const cs = clips(), j = i + d; if(j < 0 || j >= cs.length) return; if(ALL) stopAll(); const [c] = cs.splice(i, 1); cs.splice(j, 0, c); R().cur = j; WP = j; VSIG = ''; closeSheet(); save(); refresh(); toast('Moved to clip ' + (j + 1) + '. If it jumps now, ↻ Redo makes options that line up with its new neighbours', 5000); };
+  if($('#edMvL')) $('#edMvL').onclick = () => go(-1); if($('#edMvR')) $('#edMvR').onclick = () => go(1); }
+// 📲 one option's whole video, to Photos
+async function saveOpt(c){ const I = c && info(c.pick); if(!I || !I.url){ toast('No finished video to save'); return; }
+  try{ toast('Getting the video…'); const b = await (await fetch(I.url)).blob(), name = ((I.file && I.file.filename) || 'clip.mp4').replace(/\.\w+$/, '') + '.mp4', f = new File([b], name, {type:b.type || 'video/mp4'});
+    if(navigator.canShare && navigator.canShare({files:[f]})) await navigator.share({files:[f]}); else { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; a.click(); } }
+  catch(e){ if(e && e.name==='NotAllowedError') toast("It's on the phone now: tap 📲 Save again"); else if(e && e.name!=='AbortError') toast("Couldn't save it: " + e.message); } }
 
 // ⚙ settings and reels
 function setSheet(){ const L = E ? E.look() : {}, M = E ? E.models() : [], pcs = E ? E.pcs() : [];
@@ -729,13 +757,18 @@ function setSheet(){ const L = E ? E.look() : {}, M = E ? E.models() : [], pcs =
   const m = $('#stM'); if(m) m.onchange = () => E.setLook({model:m.value});
   $$('#stA button').forEach(b => b.onclick = () => { E.setLook({aspect:b.dataset.a}); $$('#stA button').forEach(x => x.classList.toggle('on', x===b)); }); }
 function reelSheet(){ sheet(`<h3><span>🎞 Reels</span><button class="btn" data-close>✕</button></h3>
-    <div class="list">${S.reels.map(r => `<div class="it"><div class="t"><b>${esc(r.name)}${r.id===S.open ? ' ·  open' : ''}</b><span class="note">${r.clips.length} ${r.clips.length===1 ? 'clip' : 'clips'}</span></div><button class="btn" data-open="${r.id}">Open</button><button class="btn" data-ren="${r.id}" aria-label="Rename">✏</button>${S.reels.length > 1 ? `<button class="btn" data-del="${r.id}" aria-label="Delete">🗑</button>` : ''}</div>`).join('')}</div>
+    <div class="list">${S.reels.map(r => `<div class="it"><div class="t"><b>${esc(r.name)}${r.id===S.open ? ' ·  open' : ''}</b><span class="note">${r.clips.length} ${r.clips.length===1 ? 'clip' : 'clips'}</span></div><button class="btn" data-open="${r.id}">Open</button><button class="btn" data-ren="${r.id}" aria-label="Rename">✏</button><button class="btn" data-dup="${r.id}" aria-label="Copy">⧉</button>${S.reels.length > 1 ? `<button class="btn" data-del="${r.id}" aria-label="Delete">🗑</button>` : ''}</div>`).join('')}</div>
     <button class="big pri" id="rlNew" style="width:100%;margin-top:12px">＋ New reel</button>`);
   $('#card').onclick = e => { const b = e.target.closest('button'); if(!b) return;
     if(b.dataset.open){ if(ALL) stopAll(); S.open = b.dataset.open; WP = curI(); VSIG = ''; save(); closeSheet(); refresh(); }
+    else if(b.dataset.dup){ const r0 = S.reels.find(x => x.id===b.dataset.dup); if(!r0) return; // ⧉ a copy to try things on: same options (shared, never forgotten while either reel uses them), its own clips and trims
+      const r = JSON.parse(JSON.stringify(r0)); Object.assign(r, {id:uid('r'), name:r0.name + ' copy', t:Date.now(), exp:null}); r.clips.forEach(c => c.id = uid('c'));
+      S.reels.splice(S.reels.indexOf(r0) + 1, 0, r); S.open = r.id; WP = curI(); VSIG = ''; save(); closeSheet(); refresh(); toast('⧉ “' + r.name + '” is open: changes here leave “' + r0.name + '” as it was'); }
     else if(b.dataset.ren){ const r = S.reels.find(x => x.id===b.dataset.ren), n = prompt('Name', r.name); if(n && n.trim()){ r.name = n.trim(); save(); reelSheet(); draw(); } }
     else if(b.dataset.del){ if(!b.dataset.sure){ b.dataset.sure = 1; b.textContent = 'Sure?'; return; } const k = S.reels.findIndex(x => x.id===b.dataset.del), r = S.reels.splice(k, 1)[0];
-      if(ALL && S.open===r.id) stopAll(); if(E) stopForget(r.clips.flatMap(c => c.takes)); if(S.open===r.id) S.open = S.reels[0].id; WP = curI(); VSIG = ''; save(); reelSheet(); refresh(); }
+      if(ALL && S.open===r.id) stopAll(); const wasOpen = S.open===r.id; if(wasOpen) S.open = S.reels[0].id; WP = curI(); VSIG = ''; save(); reelSheet(); refresh();
+      undoToast('“' + r.name + '” removed', () => { S.reels.splice(Math.min(k, S.reels.length), 0, r); if(wasOpen){ S.open = r.id; WP = curI(); } VSIG = ''; save(); if(!$('#sheet').hidden) reelSheet(); refresh(); },
+        () => { if(E) stopForget(r.clips.flatMap(c => c.takes)); }); }
     else if(b.id==='rlNew'){ const r = newReel('Reel ' + (S.reels.length + 1)); S.reels.unshift(r); S.open = r.id; WP = 0; VSIG = ''; save(); closeSheet(); refresh(); } }; }
 
 // ---------- buttons ----------
@@ -829,6 +862,6 @@ async function boot(){ for(let i = 0; i < 600 && !engOk(); i++) await new Promis
 document.addEventListener('visibilitychange', () => { if(!document.hidden && E){ E.refresh(); refresh(); } });
 window.addEventListener('resize', () => placeWheel());
 draw(); boot();
-window.REEL = {setTab, S:() => S, R, cur, clips, go, info:id => info(id), redoPlan, addClip, refresh, E:() => E, TH:() => TH, addTakes, reup:reupTick, isUp, saveTh};
+window.REEL = {setTab, S:() => S, R, cur, clips, go, info:id => info(id), redoPlan, addClip, refresh, E:() => E, TH:() => TH, addTakes, reup:reupTick, isUp, saveTh, flushUndo};
 </script>
 </body></html>

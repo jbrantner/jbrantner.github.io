@@ -447,15 +447,45 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // 🗑 removing a clip or a whole reel stops its options that are still rendering (the PC doesn't keep making clips nobody sees)
   { await page.evaluate(() => { const E = REEL.E(); window.__stops = []; window.__oi = E.info; window.__os = E.stop; E.info = id => /^tw/.test(id) ? {state:'working', pct:5} : window.__oi(id); E.stop = async id => { window.__stops.push(id); };
       REEL.addClip(1, {kind:'insert', words:'busy', takes:['tw1']}); REEL.go(1); REEL.refresh(); }); await page.waitForTimeout(400);
-    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edDel'); await page.click('#edDel'); await page.waitForTimeout(400);
+    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edDel'); await page.click('#edDel'); await page.waitForTimeout(400); await page.evaluate(() => REEL.flushUndo());
     const a = await page.evaluate(() => ({stops:window.__stops.slice(), left:REEL.clips().some(c => c.words==='busy')}));
     await page.click('#reelBtn'); await page.waitForTimeout(300); await page.click('#rlNew'); await page.waitForTimeout(300);
     await page.evaluate(() => { REEL.addClip(0, {kind:'new', words:'busy2', takes:['tw2']}); REEL.refresh(); }); await page.waitForTimeout(300);
     await page.click('#reelBtn'); await page.waitForTimeout(300); const del = await page.evaluate(() => { const b = document.querySelector('#card [data-del="' + REEL.R().id + '"]'); return !!b; });
-    if(del){ await page.click('#card [data-del="' + await page.evaluate(() => REEL.R().id) + '"]'); await page.click('#card [data-del="' + await page.evaluate(() => REEL.R().id) + '"]'); await page.waitForTimeout(400); }
+    if(del){ await page.click('#card [data-del="' + await page.evaluate(() => REEL.R().id) + '"]'); await page.click('#card [data-del="' + await page.evaluate(() => REEL.R().id) + '"]'); await page.waitForTimeout(400); await page.evaluate(() => REEL.flushUndo()); }
     const b = await page.evaluate(() => ({stops:window.__stops.slice(), reels:REEL.S().reels.length, open:REEL.clips().length}));
     await page.evaluate(() => { const E = REEL.E(); E.info = window.__oi; E.stop = window.__os; REEL.refresh(); }); await page.click('[data-close]').catch(() => {});
     ok(a.stops.includes('tw1') && !a.left && del && b.stops.includes('tw2') && b.open > 0, '🗑 removing a clip or a reel stops its options that are still rendering (' + JSON.stringify({a, b, del}) + ')'); }
+  // ↩ Undo after removing a clip / an option; ⧉ copy a reel (shared options are never forgotten); ‹ › move a clip; total length on top
+  { await page.evaluate(() => { REEL.go(1); REEL.refresh(); }); await page.waitForTimeout(300);
+    const before = await page.evaluate(() => ({ids:REEL.clips().map(c => c.id), n:REEL.cur().takes.length, pick:REEL.cur().pick}));
+    await page.evaluate(() => { const E = REEL.E(); window.__fg = []; window.__of = E.forget; E.forget = ids => { window.__fg.push(...ids); return window.__of(ids); }; });
+    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edDel'); await page.click('#edDel'); await page.waitForTimeout(300);
+    const mid = await page.evaluate(() => ({n:REEL.clips().length, toast:!!document.querySelector('.toast.und button')}));
+    await page.click('.toast.und button'); await page.waitForTimeout(300);
+    const back = await page.evaluate(() => ({ids:REEL.clips().map(c => c.id), fg:window.__fg.length}));
+    ok(mid.toast && mid.n===before.ids.length - 1 && JSON.stringify(back.ids)===JSON.stringify(before.ids) && back.fg===0, '↩ Undo puts a removed clip back where it was, and nothing was forgotten (' + JSON.stringify({mid, back}) + ')');
+    // an option
+    const oid = await page.evaluate(() => { const c = REEL.cur(); return c.takes.find(id => id!==c.pick && REEL.info(id).state==='done') || null; });
+    if(oid){ await page.click(`#opts [data-x="${oid}"]`); await page.click(`#opts [data-x="${oid}"]`); await page.waitForTimeout(300);
+      const m2 = await page.evaluate(id => !REEL.cur().takes.includes(id), oid); await page.click('.toast.und button'); await page.waitForTimeout(300);
+      const b2 = await page.evaluate(id => ({has:REEL.cur().takes.includes(id), fg:window.__fg.includes(id)}), oid);
+      ok(m2 && b2.has && !b2.fg, '↩ Undo puts a removed option back (' + JSON.stringify({m2, b2}) + ')'); }
+    // ⧉ copy, then remove the copy: the original keeps its options
+    await page.click('#reelBtn'); await page.waitForTimeout(300); const r0 = await page.evaluate(() => REEL.R().id); await page.click(`#card [data-dup="${r0}"]`); await page.waitForTimeout(300);
+    const cp = await page.evaluate(r0 => ({open:REEL.R().id, name:REEL.R().name, same:JSON.stringify(REEL.clips().map(c => c.takes))===JSON.stringify(REEL.S().reels.find(r => r.id===r0).clips.map(c => c.takes))}), r0);
+    await page.click('#reelBtn'); await page.waitForTimeout(300); await page.click(`#card [data-del="${cp.open}"]`); await page.click(`#card [data-del="${cp.open}"]`); await page.waitForTimeout(300); await page.evaluate(() => REEL.flushUndo()); await page.click('[data-close]').catch(() => {});
+    const after = await page.evaluate(r0 => { const r = REEL.S().reels.find(x => x.id===r0); return {fg:window.__fg.length, gone:r.clips.flatMap(c => c.takes).filter(id => REEL.info(id).state==='gone').length, open:REEL.R().id}; }, r0);
+    ok(cp.open!==r0 && /copy$/.test(cp.name) && cp.same && after.fg===0 && after.gone===0 && after.open===r0, '⧉ a copied reel shares the options, and removing the copy forgets none of them (' + JSON.stringify({cp, after}) + ')');
+    // ‹ › move
+    await page.evaluate(() => { REEL.go(1); REEL.refresh(); }); await page.waitForTimeout(300); const ids0 = await page.evaluate(() => REEL.clips().map(c => c.id));
+    await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edMvR'); await page.waitForTimeout(300);
+    const mv = await page.evaluate(() => ({ids:REEL.clips().map(c => c.id), cur:REEL.R().cur}));
+    ok(mv.ids[2]===ids0[1] && mv.ids[1]===ids0[2] && mv.cur===2, '‹ › Move later swaps the clip with the next one and stays on it (' + JSON.stringify({ids0, mv}) + ')');
+    await page.evaluate(ids0 => { const cs = REEL.clips(); cs.sort((a, b) => ids0.indexOf(a.id) - ids0.indexOf(b.id)); REEL.go(0); REEL.refresh(); }, ids0);
+    const top = await page.evaluate(() => document.querySelector('#reelName').textContent);
+    ok(/\d+ clips · [\d.]+ s$/.test(top), '🎞 the top shows the reel\'s total length (' + top + ')');
+    await page.evaluate(() => { REEL.E().forget = window.__of; }); }
   // 📡 the clip's PC goes off while it's showing: the player switches to the same file on the other PC
   { const r = await page.evaluate(async () => { const E = REEL.E(), old = E.pcs; E.pcs = () => [{name:'Gone', url:'http://gone.test', online:false}, {name:'Main', url:'http://main.test', online:true}];
       const v = document.querySelector('#vA'); v.dataset.tried = ''; v.src = 'http://gone.test/view?filename=x.mp4&subfolder=Output_Render%2FH3Deck&type=output';
