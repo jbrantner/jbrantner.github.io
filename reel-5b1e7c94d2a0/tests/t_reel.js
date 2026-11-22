@@ -504,6 +504,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const r = await page.evaluate(() => ({ids:REEL.clips().map(c => c.id), kind:REEL.clips()[1].kind, cur:REEL.R().cur, n:REEL.clips()[1].takes.length}));
     ok(/New shot after clip 1/.test(title) && r.ids.length===ids0.length + 1 && r.ids[0]===ids0[0] && r.ids[2]===ids0[1] && r.kind==='new' && r.cur===1 && r.n > 0, '✍ New shot from ➕ Next goes right after the current clip (' + JSON.stringify({title, r}) + ')');
     await page.evaluate(() => { REEL.clips().splice(1, 1); REEL.go(0); REEL.refresh(); }); await finish(); }
+  // 🔗 Then keep going: lines under ➕ Next each carry on from the clip before once it's done
+  { await page.evaluate(() => { REEL.go(REEL.clips().length - 1); REEL.refresh(); }); await page.waitForTimeout(300); const n0 = await page.evaluate(() => REEL.clips().length);
+    await page.click('#nextBtn'); await page.waitForTimeout(300); await page.evaluate(() => { document.querySelector('#nxThen').open = true; }); await page.fill('#nxW', 'Mia sits down'); await page.fill('#nxT', 'Mia waves\n\nMia smiles at the camera');
+    await page.click('#nxGo'); await page.waitForTimeout(2500); const a = await page.evaluate(() => ({n:REEL.clips().length, ch:REEL.R().chain && REEL.R().chain.lines.length, box:document.querySelector('#chainBox').textContent}));
+    await finish(); await page.evaluate(() => REEL.chainTick()); await page.waitForTimeout(2500); const b = await page.evaluate(() => ({n:REEL.clips().length, w:REEL.clips()[REEL.clips().length - 1].words, ch:REEL.R().chain && REEL.R().chain.lines.length, kind:REEL.clips()[REEL.clips().length - 1].kind}));
+    const t = await eng.evaluate(() => { const t = H3.S.takes[0]; return {cont:!!t.cont || !!(t.carry), p:t.prompt}; });
+    await finish(); await page.evaluate(() => REEL.chainTick()); await page.waitForTimeout(2500); const c = await page.evaluate(() => ({n:REEL.clips().length, w:REEL.clips()[REEL.clips().length - 1].words, ch:REEL.R().chain}));
+    ok(a.n===n0 + 1 && a.ch===2 && /2 more clips/.test(a.box) && b.n===n0 + 2 && /waves/.test(b.w) && b.kind==='next' && b.ch===1 && t.cont && /waves/.test(t.p) && c.n===n0 + 3 && /smiles/.test(c.w) && !c.ch,
+      '🔗 Then keep going makes each line as a ➕ Next of the clip before, one after another, then stops (' + JSON.stringify({a, b, t, c}) + ')');
+    await page.evaluate(n0 => { REEL.clips().splice(n0); REEL.go(0); REEL.refresh(); }, n0); await finish(); }
   // 📡 the clip's PC goes off while it's showing: the player switches to the same file on the other PC
   { const r = await page.evaluate(async () => { const E = REEL.E(), old = E.pcs; E.pcs = () => [{name:'Gone', url:'http://gone.test', online:false}, {name:'Main', url:'http://main.test', online:true}];
       const v = document.querySelector('#vA'); v.dataset.tried = ''; v.src = 'http://gone.test/view?filename=x.mp4&subfolder=Output_Render%2FH3Deck&type=output';
