@@ -42,7 +42,10 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     document.querySelector('[data-mpk="combou"]').click(); H3.drawAll(); o.kept = f.finU===true && f.finOn===true;
     // 🎯 a LoRA on the vanilla half only
     f.loras = [{name:'AFK_Claude_minimaxh3.safetensors', str:0.8, words:''}]; H3.drawAll();
-    const lf = document.querySelector('#loraList [data-lf]'); o.lfShown = !!lf; o.lfBoth = lf && /Both halves/.test(lf.textContent); lf.click(); o.lfOn = f.loras[0].first===true && /Vanilla half only/.test(document.querySelector('#loraList [data-lf]').textContent);
+    const on = () => (document.querySelector('#loraList [data-lf].on') || {}).textContent || '';
+    o.lfShown = !!document.querySelector('#loraList [data-lf="1"]'); o.lfBoth = /Both halves/.test(on()); document.querySelector('#loraList [data-lf="1"]').click(); o.lfOn = f.loras[0].first===true && /Vanilla only/.test(on());
+    document.querySelector('#loraList [data-lf="1"]').click(); o.lfStay = f.loras[0].first===true; document.querySelector('#loraList [data-lf="0"]').click(); o.lfOff = !f.loras[0].first; document.querySelector('#loraList [data-lf="1"]').click();
+    o.mpCol = getComputedStyle(document.querySelector('#modelPick')).flexDirection;
     const chains = () => { const t = H3.snapshot(); t.id = 'l' + Math.random(); t.pc = R; t.seed = 3; t.dir = 'H3Deck/l'; t.name = 'l'; const g = H3.pieceGraph(t, 0, oi, {}).g, ref = v => v && g[v[0]];
       return Object.values(g).filter(x => x.class_type==='SamplerCustomAdvanced').map(s => { let m = ref(ref(s.inputs.guider).inputs.model), los = []; while(m && m.class_type!=='UNETLoader'){ if(m.class_type==='LoraLoaderModelOnly') los.push(m.inputs.lora_name); m = ref(m.inputs.model); } return los.includes('AFK_Claude_minimaxh3.safetensors'); }); };
     o.first = chains(); f.loras[0].first = false; o.both = chains(); f.loras[0].first = true;
@@ -56,7 +59,8 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(r.ug.fin && r.ug.fin.u && r.ug.n===2 && r.ug.tailUnet===ULTF && r.ug.tailLoras===0 && r.ug.smp==='res_multistep' && r.ug.stg.includes('Ultima'), 'vanilla first, Ultima samples the tail, no boost LoRAs ' + JSON.stringify(r.ug));
   ok(!r.back && r.pg.n===2 && /PIKA/.test(r.pg.tailUnet) && r.pg.tailLoras > 0 && !r.pg.fin.u && r.pg.stg.includes('PIKA'), 'switching back: PIKA finishes again with its boost LoRAs ' + JSON.stringify(r.pg));
   ok(r.kept, 'bare bones keeps the Ultima finish picked');
-  ok(r.lfShown && r.lfBoth && r.lfOn, '🎯 switch on each LoRA in the finish flow: Both halves → Vanilla half only');
+  ok(r.lfShown && r.lfBoth && r.lfOn && r.lfStay && r.lfOff, 'two lit buttons on each LoRA in the finish flow: Both halves / 🎯 Vanilla only (tapping the lit one keeps it)');
+  ok(r.mpCol==='column', 'the three model choices stack instead of overlapping');
   ok(r.first[0]===true && r.first[1]===false, 'vanilla half only: the LoRA is on vanilla, not on the finisher ' + JSON.stringify(r.first));
   ok(r.both[0]===true && r.both[1]===true, 'both halves: the LoRA is on both ' + JSON.stringify(r.both));
   ok(r.lfPika && r.pikaSnap===undefined, 'PRISM PIKA alone: no switch, the LoRA works as before');
