@@ -1,5 +1,5 @@
-// Ultima NSFW Hybrid (Civitai 3047487) as a third bare-bones model beside PRISM PIKA (Jordan 2026-11-22: "have it swap out for pika as an
-// option so I can test it myself"): the creator's 6 steps, er_sde / beta, no boost LoRAs, no 🔀 Finish on PIKA. PIKA unchanged.
+// Ultima NSFW Hybrid (Civitai 3047487) in place of PIKA in the vanilla → finish flow (Jordan 2026-11-22: "I want the level 120 to replace
+// Pika in its flow of starting with vanilla Minimax"): H3 Reference → Ultima finish button, toggles back to PIKA.
 // Run: NODE_PATH=$(npm root -g) node tests/t_ultima.js
 const { chromium } = require('playwright');
 const path = require('path'), http = require('http'), fs = require('fs');
@@ -29,23 +29,25 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await page.goto('http://127.0.0.1:8049/index.html');
   await page.waitForFunction(() => H3.families().length > 2, null, {timeout:20000});
   const r = await page.evaluate(() => { const o = {}, f = H3.S.f, R = Object.keys(H3.PC)[0], oi = H3.PC[R].oi;
-    o.u = H3.FAM_ULT(); o.list = H3.modelList().map(x => x.label);
-    const btn = document.querySelector('[data-mpk="ultima"]'); o.btnShown = btn && !btn.hidden; o.btnText = btn && btn.textContent;
+    o.u = H3.FAM_ULT(true); o.list = H3.modelList().map(x => x.label);
+    const btn = document.querySelector('[data-mpk="combou"]'); o.btnShown = btn && !btn.hidden;
     const graph = () => { const t = H3.snapshot(); t.id = 't' + Math.random(); t.pc = R; t.seed = 3; t.dir = 'H3Deck/x'; t.name = 'x';
       const g = H3.pieceGraph(t, 0, oi, {}).g, n = Object.values(g), ref = v => v && g[v[0]], sas = n.filter(x => x.class_type==='SamplerCustomAdvanced');
-      const s = sas[sas.length - 1], bs = ref(s.inputs.sigmas);
-      return {n:sas.length, smp:ref(s.inputs.sampler).inputs.sampler_name, sch:bs.inputs.scheduler, steps:bs.inputs.steps, unets:n.filter(x => x.class_type==='UNETLoader').map(x => x.inputs.unet_name), loras:n.filter(x => x.class_type==='LoraLoaderModelOnly').length}; };
-    f.steps = 20; btn.click(); o.model = f.model; o.steps = f.steps; o.finOn = f.finOn; o.sum = document.querySelector('#modelSum').textContent; o.ug = graph();
-    document.querySelector('[data-mpk="pika"]').click(); o.pg = graph();
-    document.querySelector('[data-mpk="ultima"]').click(); H3.drawAll(); o.kept = f.model===o.u;
+      const tail = sas.find(s => ref(s.inputs.noise).class_type==='DisableNoise'); let m = tail && ref(ref(tail.inputs.guider).inputs.model), los = 0;
+      while(m && m.class_type!=='UNETLoader'){ if(m.class_type==='LoraLoaderModelOnly') los++; m = ref(m.inputs.model); }
+      return {fin:t.fin, n:sas.length, tailUnet:m && m.inputs.unet_name, tailLoras:los, smp:tail && ref(tail.inputs.sampler).inputs.sampler_name, stg:Object.values(H3.stagesOf(g))}; };
+    btn.click(); o.model = f.model; o.finOn = f.finOn; o.finU = f.finU; o.sum = document.querySelector('#modelSum').textContent; o.ug = graph();
+    o.why = H3.canRun ? null : null;
+    document.querySelector('[data-mpk="combo"]').click(); o.back = f.finU; o.pg = graph();
+    document.querySelector('[data-mpk="combou"]').click(); H3.drawAll(); o.kept = f.finU===true && f.finOn===true;
     return o; });
   ok(/ultima_nsfw_lv120/.test(r.u), 'Ultima Lv120 is found on the PC: ' + r.u);
-  ok(r.list.some(l => /Ultima Hybrid Lv120/.test(l)) && r.list.length===3, 'bare bones lists three models (Reel gets the same list): ' + r.list.join(' | '));
-  ok(r.btnShown && /Ultima Hybrid Lv120/.test(r.btnText), 'the Ultima button shows in Model when the PC has it');
-  ok(r.model===r.u && r.steps==='' && !r.finOn, 'picking it: Ultima, its own steps, no 🔀 Finish on PIKA');
+  ok(r.list.length===2 && !r.list.some(l => /Ultima/.test(l)), 'bare bones: Ultima is not its own model, only the finisher: ' + r.list.join(' | '));
+  ok(r.btnShown, 'the H3 Reference → Ultima finish button shows when a PC has Ultima');
+  ok(/ref2va/.test(r.model) && r.finOn && r.finU, 'picking it: vanilla H3 Reference with Finish on, Ultima as the finisher');
   ok(/Ultima/.test(r.sum), 'the Model summary names it: ' + r.sum);
-  ok(r.ug.n===1 && r.ug.smp==='er_sde' && r.ug.sch==='beta' && r.ug.steps===6 && r.ug.unets.length===1 && r.ug.unets[0]===ULTF && r.ug.loras===0, 'Ultima graph: one sampler, er_sde / beta, 6 steps, no LoRAs ' + JSON.stringify(r.ug));
-  ok(r.pg.smp==='res_multistep' && r.pg.sch==='simple' && r.pg.steps===8 && /PIKA/.test(r.pg.unets[0]) && r.pg.loras > 0, 'PRISM PIKA unchanged: res_multistep / simple, 8 steps, boost LoRAs ' + JSON.stringify(r.pg));
-  ok(r.kept, 'bare bones keeps Ultima picked');
+  ok(r.ug.fin && r.ug.fin.u && r.ug.n===2 && r.ug.tailUnet===ULTF && r.ug.tailLoras===0 && r.ug.smp==='res_multistep' && r.ug.stg.includes('Ultima'), 'vanilla first, Ultima samples the tail, no boost LoRAs ' + JSON.stringify(r.ug));
+  ok(!r.back && r.pg.n===2 && /PIKA/.test(r.pg.tailUnet) && r.pg.tailLoras > 0 && !r.pg.fin.u && r.pg.stg.includes('PIKA'), 'switching back: PIKA finishes again with its boost LoRAs ' + JSON.stringify(r.pg));
+  ok(r.kept, 'bare bones keeps the Ultima finish picked');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
