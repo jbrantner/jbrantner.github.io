@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-23-6">
+<meta name="reel-build" content="2026-11-23-7">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -240,27 +240,46 @@ function load(){ let s = {}; try{ s = JSON.parse(localStorage.getItem(KEY) || '{
   s.n = s.n || 2; return s; }
 function newReel(name){ return {id:uid('r'), name, clips:[], cur:0, t:Date.now()}; }
 let S = load(), TH = {}; try{ TH = JSON.parse(localStorage.getItem(THK) || '{}') || {}; }catch(e){}
-let saveT = 0; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { const j = JSON.stringify(S); try{ localStorage.setItem(KEY, j); }catch(e){
+let saveT = 0; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { stampReels(); const j = JSON.stringify(S); try{ localStorage.setItem(KEY, j); }catch(e){
     // (the reels come first: the saved preview pictures share the phone's space, so they go and it tries again; they're made again when needed)
     try{ localStorage.removeItem(THK); localStorage.setItem(KEY, j); }catch(e2){ toast("Couldn't save: the phone's space for this app is full. Your reels are still kept on the PCs.", 6000); } } pushReelsSoon(); }, 120); };
 // 🛟 the reels get a copy on each PC too, like H3 Deck's (Jordan 2026-11-22: "This doesn't happen on render deck H3 how do we keep it from happening on Reel?"):
 // the phone can lose a site's saved data, so the reels (clips, options, picks, trims) are kept in ComfyUI's user files (h3reel_reels.json)
 // and brought back when Reel opens without them. Nothing is sent before Reel has looked for a copy, so an empty phone never writes over a good one.
-const REELS_FILE = '/userdata/h3reel_reels.json'; let RESTORED = false, pushRT = 0, PUSHED = {};
+const REELS_FILE = '/userdata/h3reel_reels.json'; let RESTORED = false, pushRT = 0, PUSHED = {}, PULLEDR = {};
 function pushReelsSoon(){ clearTimeout(pushRT); pushRT = setTimeout(pushReels, 3000); }
-async function pushReels(){ if(!RESTORED || !E || !S.reels.some(r => (r.clips || []).length)) return; const body = JSON.stringify({v:1, t:Date.now(), open:S.open, reels:S.reels, gone:S.goneReels || []}), sig = JSON.stringify([S.reels, S.goneReels || []]);
+// (2026-11-23 overnight) each PC's copy is read and merged in before this phone first writes to it, so a PC that was off or out of reach
+// when Reel opened (Tailscale still waking up) never gets a phone that lost its reels writing a short list over its full one
+async function pushReels(){ if(!RESTORED || !E || !S.reels.some(r => (r.clips || []).length)) return;
   let pcs = []; try{ pcs = E.pcs().filter(p => p.online); }catch(e){}
-  for(const p of pcs){ if(PUSHED[p.url]===sig) continue; try{ const q = await fetch(p.url + REELS_FILE + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(q.ok) PUSHED[p.url] = sig; }catch(e){} } }
+  for(const p of pcs){ if(!PULLEDR[p.url]){ const j = await readReels(p.url); if(!PULLEDR[p.url]) continue; if(j && mergeReels(j)) return; }
+    const body = JSON.stringify({v:1, t:Date.now(), open:S.open, reels:S.reels, gone:S.goneReels || []}), sig = JSON.stringify([S.reels, S.goneReels || []]);
+    if(PUSHED[p.url]===sig) continue; try{ const q = await fetch(p.url + REELS_FILE + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(q.ok) PUSHED[p.url] = sig; }catch(e){} } }
+async function readReels(url){ try{ const q = await fetch(url + REELS_FILE, {cache:'no-store'}); if(q.status===404){ PULLEDR[url] = true; return null; } if(!q.ok) return null;
+  const j = await q.json(); PULLEDR[url] = true; return j && Array.isArray(j.reels) ? j : null; }catch(e){ return null; } }
+// a reel from a PC's copy: new here = added; one this phone has = the newer one wins (mt, stamped when a reel changes), or, for copies made
+// before that, the one with more options. Returns how many came in (saved and shown).
+function mergeReels(best){ let n = 0; const gone = new Set((S.goneReels || []).concat(best.gone || [])); S.goneReels = [...gone].slice(-300);
+  const cnt = x => (x.clips || []).reduce((a, c) => a + (c.takes || []).length, 0);
+  for(const b of best.reels){ if(!b || !b.id || gone.has(b.id)) continue; const k = S.reels.findIndex(x => x.id===b.id);
+    if(k < 0){ S.reels.push(b); n++; continue; }
+    const mine = S.reels[k], newer = mine.mt && b.mt ? b.mt > mine.mt : cnt(b) > cnt(mine);
+    if(newer && JSON.stringify(b)!==JSON.stringify(mine)){ if(ALL && S.open===b.id) stopAll(); S.reels[k] = b; n++; } }
+  const dropGone = S.reels.filter(x => !gone.has(x.id)); if(dropGone.length < S.reels.length){ if(ALL && gone.has(S.open)) stopAll(); S.reels = dropGone.length ? dropGone : [newReel('Reel 1')]; n++; }
+  if(n){ // the empty 'Reel 1' a phone with nothing saved starts with goes once the real ones are back
+    if(S.reels.length > 1) S.reels = S.reels.filter(x => (x.clips || []).length || x.name!=='Reel 1');
+    if(!S.reels.find(x => x.id===S.open)) S.open = (S.reels.find(x => x.id===best.open) || S.reels[0]).id;
+    REELSIG = {}; save(); WP = curI(); VSIG = ''; refresh(); toast('🛟 Brought back ' + n + (n===1 ? ' reel' : ' reels') + ' from the PCs', 6000); }
+  return n; }
 async function restoreReels(){ let best = null, pcs = []; try{ pcs = E.pcs().filter(p => p.online); }catch(e){}
-  for(const p of pcs){ try{ const q = await fetch(p.url + REELS_FILE, {cache:'no-store'}); if(!q.ok) continue; const j = await q.json(); if(j && Array.isArray(j.reels) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
-  let n = 0;
-  if(best){ const gone = new Set((S.goneReels || []).concat(best.gone || [])); S.goneReels = [...gone].slice(-300);
-    for(const b of best.reels){ if(!b || !b.id || gone.has(b.id)) continue; const k = S.reels.findIndex(x => x.id===b.id);
-      if(k < 0){ S.reels.push(b); n++; }
-      else { const mine = S.reels[k], cnt = x => (x.clips || []).reduce((a, c) => a + (c.takes || []).length, 0); if(cnt(b) > cnt(mine)){ S.reels[k] = b; n++; } } }
-    // the empty 'Reel 1' a phone with nothing saved starts with goes once the real ones are back
-    if(n){ if(S.reels.length > 1) S.reels = S.reels.filter(x => (x.clips || []).length || x.name!=='Reel 1'); if(!S.reels.find(x => x.id===S.open)) S.open = (S.reels.find(x => x.id===best.open) || S.reels[0]).id; } }
-  RESTORED = true; if(n){ save(); WP = curI(); VSIG = ''; refresh(); toast('🛟 Brought back ' + n + (n===1 ? ' reel' : ' reels') + ' from the PCs', 6000); } else pushReelsSoon(); }
+  for(const p of pcs){ const j = await readReels(p.url); if(j && (!best || (j.t || 0) > (best.t || 0))) best = j; }
+  RESTORED = true; if(!best || !mergeReels(best)) pushReelsSoon(); }
+// (a PC that comes on later, or Tailscale waking up after Reel opened: its copy is looked at then)
+setInterval(async () => { if(document.hidden || !RESTORED || !E) return; let pcs = []; try{ pcs = E.pcs().filter(p => p.online && !PULLEDR[p.url]); }catch(e){}
+  for(const p of pcs){ const j = await readReels(p.url); if(j) mergeReels(j); } if(pcs.length) pushReelsSoon(); }, 20000);
+// 🕘 a reel's mt is when it last changed on this phone (what mergeReels goes by)
+let REELSIG = {};
+function stampReels(){ for(const r of S.reels){ const sig = JSON.stringify(r, (k, v) => k==='mt' ? undefined : v); if(REELSIG[r.id]!=null && REELSIG[r.id]!==sig) r.mt = Date.now(); REELSIG[r.id] = sig; } }
 // preview pictures: at most about 1.5 MB kept (newest), so they never crowd out the reels themselves
 const saveTh = () => { let ks = Object.keys(TH); if(ks.length > 500) ks.slice(0, ks.length - 500).forEach(k => delete TH[k]);
   let j = JSON.stringify(TH); while(j.length > 1.5e6 && (ks = Object.keys(TH)).length){ ks.slice(0, Math.ceil(ks.length / 4)).forEach(k => delete TH[k]); j = JSON.stringify(TH); }
@@ -477,7 +496,9 @@ function drawOpts(){ drawRetry(); const c = cur(), box = $('#opts'); { const a =
   $('#warnBox').innerHTML = warn.length ? `<div class="warn">⚠ This option was made for another option of ${warn.join(' and ')}, so it may jump. ↻ Redo makes ones that line up.</div>` : ''; }
 function drawButtons(){ const c = cur(), cs = clips(), N = cs[curI() + 1];
   $('#nextBtn').textContent = N ? '⇿ Insert' : '➕ Next';
-  $('#redoBtn').disabled = !c; $('#editBtn').disabled = !c; $('#nextBtn').disabled = !c || !doneOf(c.pick) || (N && !doneOf(N.pick)); }
+  $('#redoBtn').disabled = !c; $('#editBtn').disabled = !c; $('#nextBtn').disabled = !c; $('#nextBtn').style.opacity = c && (!doneOf(c.pick) || (N && !doneOf(N.pick))) ? '.45' : ''; }
+// (2026-11-23 overnight: a greyed ➕ Next said nothing about why) it says what it's waiting for
+function nextWhy(){ const c = cur(), N = clips()[curI() + 1]; if(!c) return ''; if(!doneOf(c.pick)) return c.takes.length && c.takes.some(id => info(id).state==='working') ? 'This clip is still rendering: ➕ Next carries on from it once an option is done' : 'This clip has no finished option: ↻ Redo makes some'; if(N && !doneOf(N.pick)) return 'Clip ' + (curI() + 2) + ' is still rendering: ⇿ Insert needs both sides done'; return ''; }
 // the viewport: the picked option of the clip, looping between its start and end
 let VSIG = '', ALL = null;
 function drawView(){ const c = cur(), v = $('#vA'), msg = $('#vmsg');
@@ -558,7 +579,9 @@ $('#opts').addEventListener('click', async e => { const c = cur(); if(!c) return
     SURE = null; const was = info(id).state==='working', at = c.takes.indexOf(id), wasPick = c.pick===id; if(was && E) await E.stop(id); c.takes = c.takes.filter(t => t!==id); if(c.pick===id) c.pick = null; autoPick(c); save(); VSIG = ''; draw();
     if(was){ if(E) stopForget([id]); return; }
     undoToast('Option removed', () => { if(!c.takes.includes(id)) c.takes.splice(Math.max(0, at), 0, id); if(wasPick){ c.pick = id; c.in = 0; c.out = null; } VSIG = ''; save(); refresh(); }, () => { if(E) stopForget([id]); }); return; }
-  const o = e.target.closest('[data-o]'); if(!o) return; const id = o.dataset.o; if(!/done|working/.test(info(id).state)) return; c.pick = id; c.in = 0; c.out = null; save(); VSIG = ''; draw(); });
+  const o = e.target.closest('[data-o]'); if(!o) return; const id = o.dataset.o; if(!/done|working/.test(info(id).state)) return;
+  if(id===c.pick){ togglePlay(); return; } // (2026-11-23 overnight: tapping the option already in use threw its ✂ trim away; now it plays / pauses)
+  c.pick = id; c.in = 0; c.out = null; save(); VSIG = ''; draw(); });
 
 // ---------- sheets ----------
 function sheet(html){ $('#card').innerHTML = html; $('#sheet').hidden = false; }
@@ -777,7 +800,10 @@ function editSheet(m0){ const i = curI(), c = cur(); if(!c) return;
   v.addEventListener('timeupdate', () => { $('#edP').style.left = (v.currentTime / D * 100) + '%'; });
   v.addEventListener('click', () => { if(v.paused){ const [, ka, kb] = lim(); if(v.currentTime >= o[kb] - 0.05 || v.currentTime < o[ka]) v.currentTime = o[ka]; v.play().catch(() => {}); } else v.pause(); });
   v.addEventListener('timeupdate', () => { const [, ka, kb] = lim(); if(!v.paused && v.currentTime >= o[kb]) v.pause(); });
-  if($('#edBl')){ $('#edBl').onchange = () => { $('#edBlW').hidden = !$('#edBl').checked; show(); }; $('#edBlL').oninput = e => { o.blend = +e.target.value; $('#edBlLV').textContent = fmt(o.blend); show(); }; }
+  // (2026-11-23 overnight: '✓ Save length' also sent a 🪄 blend render, which the button didn't say) the button says what it will do
+  const goLab = () => { const g = $('#edGo'); if(g) g.textContent = N && $('#edBl') && $('#edBl').checked && Math.min(o.blend, Math.max(0, o.b - o.a - 0.5)) >= 0.3 ? '✓ Save length and 🪄 blend the end' : '✓ Save length'; };
+  T.addEventListener('pointerup', goLab); goLab();
+  if($('#edBl')){ $('#edBl').onchange = () => { $('#edBlW').hidden = !$('#edBl').checked; show(); goLab(); }; $('#edBlL').oninput = e => { o.blend = +e.target.value; $('#edBlLV').textContent = fmt(o.blend); show(); goLab(); }; }
   function xNote(){ if(!$('#edXN')) return; $('#edXN').textContent = 'New clip: ' + fmt(o.xa + o.xb) + ' (' + fmt(o.xa) + ' from clip ' + (i + 1) + ', ' + fmt(o.xb) + ' from clip ' + (i + 2) + ').'; }
   if($('#edXA')){ $('#edXA').max = xMaxA(); $('#edXB').max = xMaxB();
     const xs = (k, e) => { o[k] = +e.target.value; const other = k==='xa' ? 'xb' : 'xa'; if(o.xa + o.xb > 5){ o[other] = Math.max(0.3, Math.round((5 - o[k]) * 10) / 10); $(other==='xa' ? '#edXA' : '#edXB').value = o[other]; $(other==='xa' ? '#edXAV' : '#edXBV').textContent = fmt(o[other]); }
@@ -854,7 +880,7 @@ function reelSheet(){ sheet(`<h3><span>🎞 Reels</span><button class="btn" data
     else if(b.id==='rlNew'){ const r = newReel('Reel ' + (S.reels.length + 1)); S.reels.unshift(r); S.open = r.id; WP = 0; VSIG = ''; save(); closeSheet(); refresh(); } }; }
 
 // ---------- buttons ----------
-$('#nextBtn').onclick = () => nextSheet();
+$('#nextBtn').onclick = () => { const w = nextWhy(); if(w){ toast(w, 4500); return; } nextSheet(); };
 $('#redoBtn').onclick = () => redoSheet();
 $('#editBtn').onclick = () => editSheet();
 $('#setBtn').onclick = () => setSheet();
@@ -973,7 +999,7 @@ async function boot(){ for(let i = 0; i < 600 && !engOk(); i++) await new Promis
   setInterval(() => { if(document.hidden) return; refresh(); }, 1500); }
 document.addEventListener('visibilitychange', () => { if(!document.hidden && E){ E.refresh(); refresh(); } });
 window.addEventListener('resize', () => placeWheel());
-draw(); boot();
+stampReels(); draw(); boot();
 window.REEL = {setTab, S:() => S, R, cur, clips, go, info:id => info(id), redoPlan, addClip, refresh, E:() => E, TH:() => TH, addTakes, reup:reupTick, isUp, saveTh, flushUndo, chainTick};
 </script>
 </body></html>

@@ -545,6 +545,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   { const r = await page.evaluate(() => { const TH = REEL.TH(), big = 'data:image/jpeg;base64,' + 'A'.repeat(30000); for(let i = 0; i < 300; i++) TH['zz' + i] = big; REEL.saveTh();
       const n = (localStorage.getItem('h3reel_th') || '').length; Object.keys(TH).filter(k => /^zz/.test(k)).forEach(k => delete TH[k]); REEL.saveTh(); return n; });
     ok(r > 0 && r <= 1.5e6, '💾 preview pictures are capped at about 1.5 MB so the reels can always save (' + r + ')'); }
+  // 2026-11-23 overnight: tapping the option already in use keeps its trim (it used to reset it); ➕ Next on a clip still rendering says why
+  { await page.evaluate(() => { const cs = REEL.clips(); let i = cs.findIndex(c => c.pick && REEL.info(c.pick).state==='done'); REEL.go(i); const c = REEL.cur(); c.in = 0.5; REEL.refresh(); });
+    await page.waitForTimeout(300); const id = await page.evaluate(() => REEL.cur().pick); await page.click(`#opts [data-o="${id}"]`); await page.waitForTimeout(200);
+    ok(await page.evaluate(() => REEL.cur().in===0.5), 'tapping the option already in use keeps its ✂ trim');
+    await page.evaluate(() => { REEL.cur().in = 0; REEL.refresh(); }); }
+  { const w = await page.evaluate(async () => { document.querySelector('#sheet').hidden = true; const c = REEL.cur(), keep = c.pick, kt = c.takes; c.takes = []; c.pick = null; REEL.refresh(); document.querySelector('#nextBtn').click(); await new Promise(r => setTimeout(r, 200));
+      const t = [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' | '), sheet = !document.querySelector('#sheet').hidden; document.querySelector('#sheet').hidden = true; c.takes = kt; c.pick = keep; REEL.refresh(); return {t, sheet}; });
+    ok(!w.sheet && /Redo|rendering/.test(w.t), '➕ Next with nothing finished says why instead of doing nothing (' + JSON.stringify(w) + ')'); }
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
