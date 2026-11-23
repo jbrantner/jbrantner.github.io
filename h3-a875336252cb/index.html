@@ -542,6 +542,10 @@ function engineImport(s){ let d = {}; try{ d = JSON.parse(localStorage.getItem('
   if(s.fkey===undefined){ s.fkey = ''; s.fmig = false; }
   for(const k of ['defMig1109', 'defMig1111', 'swapLoraMig1119', 'refLeakMig1119', 'defMig1118b', 'defMig1118', 'wearMig']) if(s[k]===undefined) s[k] = true;
   s.bare = d.bare!==undefined ? d.bare : true; s.tab = 'lib'; s.castOld = s.castOld || []; }
+// 🎞 Reel's save leaves out H3 Deck's Library and its pictures (read fresh from H3 Deck every time it opens): they took the space twice
+function engSlim(){ const own = (S.lib || []).filter(L => L.reel), used = JSON.stringify({f:S.f, takes:S.takes, forms:S.forms, guides:S.guides, own}), media = {};
+  for(const [id, m] of Object.entries(S.media || {})) if(used.includes('"' + id + '"')) media[id] = m;
+  return Object.assign({}, S, {lib:own, wlib:[], media}); }
 let saveT = 0;
 let SAVE_REV = 0; // ⚡ counts saves, so the ↶ watcher only compares when something changed (2026-11-13)
 function save(){ SAVE_REV++; fileTakes(); clearTimeout(saveT); saveT = setTimeout(saveNow, 150); }
@@ -616,25 +620,25 @@ function fixThumbs(){ const form = JSON.stringify(S.f), shown = JSON.stringify([
       shownThumb(m).then(u => { delete THUMBING[m.id]; if(u && !m.thumb){ m.thumb = u; drawAll(); try{ drawLib(); }catch(e){} } }).catch(() => { delete THUMBING[m.id]; }); } }
   for(const m of Object.values(S.media)) if(m.tc && !m.thumb && !THUMBING[m.id] && form.includes('"' + m.id + '"')){ THUMBING[m.id] = 1; if(m.remote){ remoteThumb(m); continue; }
     blobOf(m.id).then(async b => { if(!b) return; if(m.kind==='img') m.thumb = thumbOf(await imgOf(b)); else { const t = await vidThumb(b); if(t) m.thumb = t.url; } if(m.thumb){ delete m.tc; save(); drawInputs(); } }).catch(() => {}); } }
-function saveNow(){ if(ADOPTING) return; S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(S, (k, v) => k==='thumb' && typeof v==='string' && v.startsWith('blob:') ? '' : v));
-  try{ put(); }catch(e){ try{ tidyMedia(true); put(); }catch(e2){ toast("H3 Deck's own save space in Safari is full (about 5 MB; not your phone's storage), so the newest changes aren't kept. Tap Clear finished to make room.", 6000); } }
+function saveNow(){ if(ADOPTING) return; S.tsav = Date.now(); const put = () => localStorage.setItem(KEY, JSON.stringify(ENGINE ? engSlim() : S, (k, v) => k==='thumb' && typeof v==='string' && v.startsWith('blob:') ? '' : v));
+  try{ put(); }catch(e){ try{ tidyMedia(true); put(); }catch(e2){ if(ENGINE){ try{ window.parent.toast("Reel's save space on this phone is full, so the newest options aren't kept on the phone. They're still kept on the PCs.", 8000); }catch(e3){} } toast("H3 Deck's own save space in Safari is full (about 5 MB; not your phone's storage), so the newest changes aren't kept. Tap Clear finished to make room.", 6000); } }
   pushSoon(); }
 // a copy of the takes list on each PC (ComfyUI's own user files), so 🎬 H3 Film sees them even where it can't share this app's
 // storage (Jordan 2026-11-03: on iPhone each home-screen app keeps its own, so H3 Film saw nothing)
-const TAKES_FILE = '/userdata/' + 'h3deck_takes.json' + '?overwrite=true';
+const TAKES_NAME = ENGINE ? 'h3reel_takes.json' : 'h3deck_takes.json', TAKES_FILE = '/userdata/' + TAKES_NAME + '?overwrite=true';
 let pushT = 0, pushed = {};
 function pushSoon(){ clearTimeout(pushT); pushT = setTimeout(pushTakes, 4000); }
 // reconnect (Jordan 2026-11-03): a fresh copy of the app (a new home-screen icon) starts empty, so takes it doesn't have are
 // brought in from the PCs' copy; takes it already has are left as they are
-async function pullTakes(){ if(ENGINE) return 0;
+async function pullTakes(){
   let best = null;
-  for(const p of S.pcs){ if(!pcOf(p.url).online) continue; try{ const r = await fetch(p.url + '/userdata/h3deck_takes.json', {cache:'no-store'}); if(!r.ok) continue; const j = await r.json(); if(j && Array.isArray(j.takes) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
+  for(const p of S.pcs){ if(!pcOf(p.url).online) continue; try{ const r = await fetch(p.url + '/userdata/' + TAKES_NAME, {cache:'no-store'}); if(!r.ok) continue; const j = await r.json(); if(j && Array.isArray(j.takes) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
   if(!best) return 0;
   const have = new Set(S.takes.map(t => t.id)), add = best.takes.filter(t => t && t.id && !have.has(t.id) && (t.t || 0) > (S.fresh || 0));
   if(!add.length) return 0;
   S.takes = S.takes.concat(add).sort((a, b) => (b.t || 0) - (a.t || 0)); save(); drawTakes(); tickSoon(300);
   toast(add.length + (add.length > 1 ? ' renders' : ' render') + ' brought back from the PCs'); return add.length; }
-async function pushTakes(){ if(HOLD || ENGINE) return; if(WORKER || runWork()) pushRunSoon();
+async function pushTakes(){ if(HOLD || (ENGINE && !RESCUED)) return; if(!ENGINE && (WORKER || runWork())) pushRunSoon();
   const body = JSON.stringify({v:1, t:S.tsav || Date.now(), fresh:S.fresh || 0, pcs:S.pcs, takes:S.takes});
   // (never an empty list over the PCs' copy, unless 🧹 Start fresh meant it: QA 2026-11-14, a fresh copy of the app that couldn't read
   // the PCs' copy yet sent an empty one over it 4 s after opening)
@@ -726,7 +730,7 @@ async function libPicsHere(){ let n = 0;
     for(const id of L.pics){ const m = S.media[id]; let ok = !!(m && m.remote) || !!BLOBS[id]; if(!ok){ try{ ok = !!(await IDB.get(id)); }catch(e){} } if(ok) keep.push(id); }
     if(keep.length!==L.pics.length){ n += L.pics.length - keep.length; if(!keep.length) L.lost = L.pics.length; L.pics = keep; libSync(L); } else delete L.lost; }
   if(n) save(); return n; }
-async function rescue(){ if(ENGINE){ RESCUED = true; await engineLibPull().catch(() => 0); setInterval(() => { if(!document.hidden) engineLibPull().catch(() => 0); }, 60000); return; } try{
+async function rescue(){ if(ENGINE){ await pullTakes().catch(() => 0); RESCUED = true; pushSoon(); await engineLibPull().catch(() => 0); setInterval(() => { if(!document.hidden) engineLibPull().catch(() => 0); }, 60000); return; } try{
   for(let i = 0; i < 40 && S.tab==='films' && !(FW && FW.FILM); i++) await new Promise(res => setTimeout(res, 250)); // Films' own save is read once it's open
   await pullTakes().catch(() => 0);
   let best = null;
@@ -5853,6 +5857,26 @@ window.H3Tab = (tab, takeId, more) => { if(takeId){ setTab('films'); location.ha
 window.H3Badge = () => {};
 // ---------- 🎞 Films asks for new video (Jordan 2026-11-05: an editor where parts can be remade on the fly) ----------
 // a take a Films clip uses: H3 Deck's own, or the copy Films kept (e.g. after Clear finished), which comes back onto the list
+function vidMeta(url){ return new Promise(ok => { const e = document.createElement('video'); e.preload = 'metadata'; e.muted = true; const k = setTimeout(() => ok(null), 15000);
+  e.onloadedmetadata = () => { clearTimeout(k); ok({dur:isFinite(e.duration) ? e.duration : 0, w:e.videoWidth, h:e.videoHeight}); }; e.onerror = () => { clearTimeout(k); ok(null); }; e.src = url; }); }
+// (Jordan 2026-11-23: "What just happened?", every option of a Reel clip said Not found: the phone's copy of Reel's takes was gone, the videos weren't)
+async function findLost(list){ const want = {}; (list || []).forEach(x => { if(x && x.id && !deckTake(x.id)) want[String(x.id).slice(-4)] = x; }); if(!Object.keys(want).length) return 0;
+  await pullTakes().catch(() => 0); for(const k of Object.keys(want)) if(deckTake(want[k].id)) delete want[k]; if(!Object.keys(want).length) return -1;
+  const hits = {};
+  for(const p of S.pcs){ let H = null; try{ H = await getJ(p.url + '/history?max_items=1500', null, 30000); }catch(e){ continue; }
+    for(const [pid, hh] of Object.entries(H || {})){ if(!hh || !hh.status || !hh.status.completed) continue; const num = +((hh.prompt || [])[0]) || 0;
+      for(const o of Object.values(hh.outputs || {})) for(const arr of [o.images, o.videos, o.gifs]) for(const f of arr || []){ if(!f || !/\.mp4$/i.test(f.filename || '')) continue;
+        const m = /(?:^|\/)h3_\d+_([A-Za-z0-9]{4})$/.exec(f.subfolder || ''); if(!m || !want[m[1]]) continue; const b = hits[m[1]];
+        if(!b || num > b.num) hits[m[1]] = {num, pid, url:p.url, f}; } } }
+  let n = 0;
+  for(const [k, x] of Object.entries(hits)){ const L = want[k], file = {filename:x.f.filename, subfolder:x.f.subfolder || '', type:x.f.type || 'output'}, dir = file.subfolder.split('/').pop();
+    let w = 832, hgt = 480, F = 121; try{ const d = await vidMeta(viewUrl(x.url, file)); if(d){ w = d.w || w; hgt = d.h || hgt; if(d.dur) F = Math.max(1, Math.round(d.dur * FPS)); } }catch(e){}
+    let t = {}; try{ t = JSON.parse(JSON.stringify(snapshot0())); }catch(e){} const words = String(L.words || '');
+    Object.assign(t, {id:L.id, t:+L.t || Date.now(), name:dir, dir:'H3Deck/' + dir, pc:x.url, state:'done', w, h:hgt, seconds:F / FPS, prompt:words, found:true, reviewed:true, redo:null, lead:null, cont:null, contFile:null, up:null, upImgs:[], final:null, sm:null, smoothed:null, fl:false, first:null, carry:null, combo:null, k4:null,
+      pieces:[{start:0, gen:F, deliv:F, ctx:0, prompt:words, state:'done', pid:x.pid, file}]});
+    if(!deckTake(t.id)){ S.takes.push(t); n++; } }
+  if(n){ S.takes.sort((a, b) => (b.t || 0) - (a.t || 0)); save(); try{ drawTakes(); }catch(e){} }
+  return n; }
 function deckTake(id){ let t = id && S.takes.find(x => x.id===id); if(t || !id) return t;
   try{ const k = (JSON.parse(localStorage.getItem('h3edit') || '{}').keep || {})[id]; if(k && !k.recovered){ t = JSON.parse(JSON.stringify(k)); S.takes.push(t); save(); drawTakes(); return t; } if(k) return k; }catch(e){} return null; }
 const takeFile = t => t && (t.final || ((t.pieces || []).length===1 && (!t.cont || ownCarry(t)) ? t.pieces[0].file : null));
@@ -6561,6 +6585,7 @@ if(ENGINE){
     delChar:id => { const L = (S.lib || []).find(x => x.id===id); if(!L || !L.reel) return false; S.lib = S.lib.filter(x => x!==L); S.cast = (S.cast || []).filter(c => c.lib!==id); save(); return true; },
     picUrl:id => mediaUrl(id),
     // a take's state for the Reel: where its video is, how long, how far along
+    findLost,
     info:id => { const t = deckTake(id); if(!t) return {state:'gone'}; const fl = takeFile(t);
       const err = t.state==='failed' ? ((t.pieces || []).map(p => p.err).find(Boolean) || t.joinErr || 'stopped') : '';
       return {state:fl && t.state!=='working' ? 'done' : t.state==='failed' ? 'failed' : 'working', url:fl ? viewUrl(t.pc, fl) : '', secs:fl ? takeFrames(t) / FPS : +t.seconds || 0,
