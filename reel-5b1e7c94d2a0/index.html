@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-23-5">
+<meta name="reel-build" content="2026-11-23-6">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -634,13 +634,38 @@ function setSubNames(){ try{ const w = eng.contentWindow, H = w.H3; SUBN = {}; (
 function makeSheet(at){ const o = {words:'', who:castOf().slice(), secs:5, n:S.n || 2}, L = reelLook(), pos = at == null ? clips().length : at;
   sheet(`<h3><span>${clips().length ? '✍ New shot after clip ' + pos : '✍ New clip'}</span><button class="btn" data-close>✕</button></h3>
     <div class="lab"><span>What happens</span></div><textarea id="mkW" rows="4" placeholder="Mia walks into the kitchen and pours a coffee, then looks out of the window."></textarea>
-    ${whoHtml(o.who)}${lookRow(L)}${lenRow('mkL', o.secs, 1, 5)}${nRow(o.n)}
+    ${whoHtml(o.who)}${firstRow()}${lookRow(L)}${lenRow('mkL', o.secs, 1, 5)}${nRow(o.n)}
     <button class="big pri" id="mkGo" style="width:100%;margin-top:14px">Render</button>`);
-  whoWire(o.who, $('#mkW')); lookWire(L); lenWire('mkL', o, 'secs'); nWire(o);
+  whoWire(o.who, $('#mkW')); firstWire(o); lookWire(L); lenWire('mkL', o, 'secs'); nWire(o);
   $('#mkGo').onclick = async () => { o.words = $('#mkW').value.trim(); if(!o.words){ toast('Write what happens first'); return; }
-    const ids = await send($('#mkGo'), () => E.make(o), '', L); if(!ids) return; const nc = addClip(Math.min(pos, clips().length), {kind:'new', words:o.words, who:o.who, look:cl(L)}); addTakes(nc, ids, {look:cl(L)}, o.words); }; }
+    const ids = await send($('#mkGo'), async () => E.make(Object.assign({}, o, {first:await firstUp(o)})), '', L); if(!ids) return; const nc = addClip(Math.min(pos, clips().length), {kind:'new', words:o.words, who:o.who, look:cl(L)}); addTakes(nc, ids, {look:cl(L)}, o.words); }; }
 function addClip(at, c){ const nc = Object.assign({id:uid('c'), takes:[], pick:null, in:0, out:null, words:'', who:[], meta:{}}, c); nc.tw = {}; nc.takes.forEach(id => nc.tw[id] = nc.words); clips().splice(at, 0, nc); R().cur = at; WP = at; autoPick(nc); save(); refresh(); return nc; }
 function addTakes(c, ids, meta, words){ if(!(meta && meta.fin) && (R() || {clips:[]}).clips.some(x => Object.values(x.meta || {}).some(m => m && m.fin))) meta = Object.assign({}, meta || {}, {reup:1, fin:false, src:null}); const W = c.tw = c.tw || {}; c.takes.forEach(id => { if(W[id]==null) W[id] = c.words || ''; }); ids.forEach(id => W[id] = words!=null ? words : c.words || ''); c.takes = c.takes.concat(ids); c.meta = c.meta || {}; ids.forEach(id => c.meta[id] = meta || {}); autoPick(c); save(); refresh(); }
+
+// 🖼 First frame (Jordan 2026-11-22: "In reels let's have a way to set the first frame"): a picture from the phone or the 📚 Library, cut to
+// the reel's shape on the phone (centre crop, so it isn't squashed), sent as H3 Deck's First frame: the clip starts on it exactly
+const ASPW = {'16:9':16 / 9, '9:16':9 / 16, '1:1':1};
+async function cropTo(blob){ const a = ASPW[(E && E.look ? E.look().aspect : '') || '16:9'] || 16 / 9, bm = await createImageBitmap(blob);
+  let w = bm.width, h = bm.height, x = 0, y = 0; if(w / h > a){ const nw = Math.round(h * a); x = Math.round((w - nw) / 2); w = nw; } else { const nh = Math.round(w / a); y = Math.round((h - nh) / 2); h = nh; }
+  const k = Math.min(1, 1600 / Math.max(w, h)), cv = document.createElement('canvas'); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
+  cv.getContext('2d').drawImage(bm, x, y, w, h, 0, 0, cv.width, cv.height); return await new Promise(ok => cv.toBlob(b => ok(b), 'image/jpeg', 0.93)); }
+function firstRow(){ return `<div class="lab"><span>🖼 First frame</span><span class="note">optional: the clip starts on this picture</span></div>
+  <div id="ffBox" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><img id="ffPrev" alt="" hidden style="height:64px;border-radius:8px;border:1px solid var(--line)">
+  <button class="btn" data-ff="phone">📷 From the phone</button><button class="btn" data-ff="lib">📚 From the Library</button><button class="btn" data-ff="off" hidden>✕ None</button></div>
+  <div id="ffLib" hidden style="display:flex;gap:6px;overflow-x:auto;margin-top:8px"></div>`; }
+function firstWire(o){ const show = () => { const p = $('#ffPrev'); if(o.firstBlob){ if(o.firstUrl) URL.revokeObjectURL(o.firstUrl); o.firstUrl = URL.createObjectURL(o.firstBlob); p.src = o.firstUrl; p.hidden = false; } else { p.hidden = true; p.removeAttribute('src'); }
+    $('#ffBox [data-ff="off"]').hidden = !o.firstBlob; };
+  const take = async b => { try{ o.firstBlob = await cropTo(b); show(); $('#ffLib').hidden = true; }catch(e){ toast("Couldn't read that picture", 5000); } };
+  $('#ffBox').onclick = async e => { const b = e.target.closest('[data-ff]'); if(!b) return; const k = b.dataset.ff;
+    if(k==='off'){ o.firstBlob = null; show(); return; }
+    if(k==='phone'){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.onchange = () => { const f = inp.files && inp.files[0]; if(f) take(f); }; inp.click(); return; }
+    const box = $('#ffLib'); if(!box.hidden){ box.hidden = true; return; } const lib = E ? E.lib() : [], ids = new Set([].concat(o.who || [], castOf()));
+    const pics = lib.filter(x => ids.has(x.id) || !ids.size).flatMap(x => (x.pics || []).map(id => ({id, name:x.name})));
+    box.innerHTML = pics.length ? pics.map(p => `<img data-ffpic="${esc(p.id)}" alt="${esc(p.name)}" title="${esc(p.name)}" style="height:84px;min-width:48px;border-radius:8px;border:1px solid var(--line);flex:none;background:var(--panel2)">`).join('') : '<span class="note">No pictures for the people in this clip yet.</span>';
+    box.hidden = false; box.querySelectorAll('img[data-ffpic]').forEach(im => E.picUrl(im.dataset.ffpic).then(u => { if(u) im.src = u; }).catch(() => {}));
+    box.onclick = async ev => { const im = ev.target.closest('[data-ffpic]'); if(!im || !im.src) return; try{ const bl = await (await fetch(im.src)).blob(); take(bl); }catch(err){ toast("Couldn't get that picture from the PC", 5000); } }; };
+  show(); }
+async function firstUp(o){ if(!o.firstBlob) return ''; const r = await E.addPic(new File([o.firstBlob], 'first-frame.jpg', {type:'image/jpeg'})); if(!r || r.err) throw new Error((r && r.err) || "The first frame couldn't be kept"); return r.id; }
 
 // 📤 a clip from the phone
 function uploadPick(at){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'video/*';
@@ -673,18 +698,18 @@ function redoPlan(i){ const cs = clips(), c = cs[i], P = cs[i - 1], N = cs[i + 1
   if(N) return {how:'⏪ Leads into the clip after, so it lands on its first frame.', secs:L, lo:1, run:o => E.lead({take:N.pick, at:N.in || 0, secs:o.secs, words:o.words, who:o.who, n:o.n}), meta:{before:N.pick}};
   if(c.kind==='upload') return {err:'An uploaded clip can\'t be made again: try ✂ Edit › 🎨 Change it'};
   const base = c.takes.find(doneOf);
-  if(!base) return {how:'✍ Made fresh from the words (no finished option to copy from yet).', secs:L, lo:1, run:o => E.make({words:o.words, who:o.who, secs:o.secs, n:o.n}), meta:{}}; // (Jordan 2026-11-20: all options gone, Redo said to wait)
-  return {how:'The same settings again, with your words.', secs:L, lo:1, run:o => E.again({take:base, words:o.words, who:o.who, secs:o.secs, n:o.n}), meta:{}}; }
+  if(!base) return {how:'✍ Made fresh from the words (no finished option to copy from yet).', secs:L, lo:1, run:o => E.make({words:o.words, who:o.who, secs:o.secs, n:o.n, first:o.first}), meta:{}, ff:true}; // (Jordan 2026-11-20: all options gone, Redo said to wait)
+  return {how:'The same settings again, with your words.', secs:L, lo:1, run:o => E.again({take:base, words:o.words, who:o.who, secs:o.secs, n:o.n, first:o.first}), meta:{}, ff:true}; }
 function redoSheet(){ const i = curI(), c = cur(); if(!c) return; const P = redoPlan(i); if(P.err){ toast(P.err, 5000); return; }
   const o = {words:words0(c), who:[...new Set([].concat(castOf(), c.who || [], (clips()[i - 1] || {}).who || [], (clips()[i + 1] || {}).who || []))], secs:Math.round(P.secs * 10) / 10, n:S.n || 2}, L = lookOf(c);
   sheet(`<h3><span>↻ More options for clip ${i + 1}</span><button class="btn" data-close>✕</button></h3>
     <div class="note">${P.how}</div>
     <div class="lab"><span>What happens</span></div><textarea id="rdW" rows="4">${esc(o.words)}</textarea>
-    ${whoHtml(o.who)}${lookRow(L)}${lenRow('rdL', o.secs, P.lo, 5)}${nRow(o.n)}
+    ${whoHtml(o.who)}${P.ff ? firstRow() : ''}${lookRow(L)}${lenRow('rdL', o.secs, P.lo, 5)}${nRow(o.n)}
     <button class="big pri" id="rdGo" style="width:100%;margin-top:14px">↻ Make ${o.n > 1 ? 'more options' : 'another option'}</button>`);
-  whoWire(o.who, $('#rdW')); lookWire(L); lenWire('rdL', o, 'secs'); nWire(o);
+  whoWire(o.who, $('#rdW')); if(P.ff) firstWire(o); lookWire(L); lenWire('rdL', o, 'secs'); nWire(o);
   $('#rdGo').onclick = async () => { o.words = $('#rdW').value.trim(); if(!o.words){ toast('Write what happens'); return; }
-    const ids = await send($('#rdGo'), () => P.run(o), '↻ Sent: the new options show up under this clip', L); if(ids){ c.look = cl(L); addTakes(c, ids, Object.assign({}, P.meta, {look:cl(L)}), o.words); c.words = o.words || c.words; } }; }
+    const ids = await send($('#rdGo'), async () => P.run(Object.assign({}, o, P.ff ? {first:await firstUp(o)} : {})), '↻ Sent: the new options show up under this clip', L); if(ids){ c.look = cl(L); addTakes(c, ids, Object.assign({}, P.meta, {look:cl(L)}), o.words); c.words = o.words || c.words; } }; }
 
 // ✂ Edit: trim the clip (its end can blend into the next clip) or 🎨 change a stretch of it
 function editSheet(m0){ const i = curI(), c = cur(); if(!c) return;
