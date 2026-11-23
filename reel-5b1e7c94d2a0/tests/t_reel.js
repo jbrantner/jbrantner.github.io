@@ -561,6 +561,11 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       document.querySelector('[data-close]').click(); document.querySelector('#nextBtn').click(); await new Promise(z => setTimeout(z, 200)); document.querySelector('#nxW').value = 'typing here';
       go(); await new Promise(z => setTimeout(z, 300)); E.make = mk; REEL.clips().splice(REEL.clips().findIndex(c => c.takes.includes('tFakeSend')), 1); REEL.refresh(); const o = {open:!document.querySelector('#sheet').hidden, v:(document.querySelector('#nxW') || {}).value}; document.querySelector('#sheet').hidden = true; return o; });
     ok(r.open && r.v==='typing here', 'a send finishing after its sheet was closed leaves the next sheet open (' + JSON.stringify(r) + ')'); }
+  // an untrimmed clip loops in the viewport (the browser pauses at the very end before the last timeupdate)
+  { const r = await page.evaluate(async () => { const cs = REEL.clips(), i = cs.findIndex(c => c.pick && REEL.info(c.pick).state==='done'); REEL.go(i); const c = REEL.cur(); c.in = 0; c.out = null; REEL.refresh();
+      await new Promise(z => setTimeout(z, 400)); const v = document.querySelector('#vA'); v.play().catch(() => {}); try{ v.currentTime = Math.max(0, (v.duration || 5) - 0.6); }catch(e){}
+      await new Promise(z => setTimeout(z, 2200)); return {paused:v.paused, t:v.currentTime, d:v.duration}; });
+    ok(!r.paused && r.t < 3.5, 'an untrimmed clip loops back to its start in the viewport (' + JSON.stringify(r) + ')'); }
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT3){ await page.evaluate(() => { document.querySelector('#sheet').hidden = true; REEL.setTab('lib'); }); await page.waitForTimeout(600); await page.screenshot({path:process.env.SHOT3, fullPage:true}); await page.evaluate(() => REEL.setTab('reel')); }
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
