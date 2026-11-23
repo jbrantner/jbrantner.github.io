@@ -543,7 +543,7 @@ function engineImport(s){ let d = {}; try{ d = JSON.parse(localStorage.getItem('
   for(const k of ['defMig1109', 'defMig1111', 'swapLoraMig1119', 'refLeakMig1119', 'defMig1118b', 'defMig1118', 'wearMig']) if(s[k]===undefined) s[k] = true;
   s.bare = d.bare!==undefined ? d.bare : true; s.tab = 'lib'; s.castOld = s.castOld || []; }
 // 🎞 Reel's save leaves out H3 Deck's Library and its pictures (read fresh from H3 Deck every time it opens): they took the space twice
-function engSlim(){ const own = (S.lib || []).filter(L => L.reel), used = JSON.stringify({f:S.f, takes:S.takes, forms:S.forms, guides:S.guides, own}), media = {};
+function engSlim(){ const own = (S.lib || []).filter(L => L.reel), used = JSON.stringify({f:S.f, takes:S.takes, forms:S.forms, guides:S.guides, own, cast:S.cast}), media = {}; // (the cast's pictures too: 2026-11-23)
   for(const [id, m] of Object.entries(S.media || {})) if(used.includes('"' + id + '"')) media[id] = m;
   return Object.assign({}, S, {lib:own, wlib:[], media}); }
 let saveT = 0;
@@ -1597,7 +1597,9 @@ const MINOR = /\b(child|children|kid|kids|loli|lolita|shota|toddler|baby|infant|
 const minorish = c => { const L = c && c.lib && libOf(c.lib); return MINOR.test([c && c.who, c && c.stand, c && c.desc, L && L.name, L && L.desc].join(' ')); };
 const nudeAble = c => !!c && (c.kind || 'char')==='char' && !minorish(c);
 const dressed = r => { if(!r || !r.nude) return r; const x = Object.assign({}, r); delete x.nude; return x; }; // passes over a finished video (✨ High quality, 🎭 Faces) leave its clothes alone
-const nudeOn = (c, t) => nudeAble(c) && !fitOn(c, t) && !wearOn(c, t) && !(descOffOf(c, t) || []).includes('nude');
+// (2026-11-23) never when the shot's own words read as a child or a teen either (Reel 5's words had "she laughs like a silly teenager")
+const minorWords = t => !!t && MINOR.test([t.prompt || ''].concat((t.pieces || []).map(p => (p && p.prompt) || '')).join(' '));
+const nudeOn = (c, t) => nudeAble(c) && !minorWords(t) && !fitOn(c, t) && !wearOn(c, t) && !(descOffOf(c, t) || []).includes('nude');
 const chipOn = (x, off) => x.add ? off.includes(x.key) : !off.includes(x.key);
 // ✍ words-only clothing and attributes (Jordan 2026-11-11: "a custom option where I can just put text in… put someone in a sweater"):
 // a 👗/✨ Library entry with no picture is sent as its words (More detail, else its name) in the person's own description
@@ -1956,6 +1958,15 @@ function castTake(t, pics){ // the take as it's sent: the pictures of the subjec
   { const T0 = Object.assign({}, t, {imgs}); for(const r of imgs) if(r.attrOf && !imgs.some(x => +x.cast===+r.attrOf)){ const c = castOf(r.attrOf, t.film, t); if(c) r.wearer = leadName(c, T0); } } // 🎲 who an attribute goes on, by the name the words use
   const drop = (t.imgs || []).filter(r => !r.cast && r.rk && !imgs.includes(r)); // 🖼 ref images with no room: their words stand in
   return Object.assign({}, t, {imgs, vids}, drop.length ? {refOff:Object.assign({}, t.refOff, ...drop.map(r => ({[r.rk]:r.desc || ''})))} : {}); }
+// 👗 a dressed person whose pictures are left out of these steps (Jordan 2026-11-23, Reel 5: ➕ Next clips came out with her unclothed even in
+// the vanilla steps): her clothes were only in her pictures, and a carry-on keeps every picture out of the first 30% of the steps, where
+// the body and layout are set, so those steps said just "Woman: red hair" with nothing about clothes. Now they say she is dressed: as in
+// the moment before on a carry-on, else in her own outfit, plus any 👗 clothing item she has on by its name
+const dressWords = (c, T) => { if(!c || (c.kind || 'char')!=='char' || !T || nudeOn(c, T)) return '';
+  const wp = attrsOf(c, T).map(libOf).filter(A => isWear(A) && libPics(A).length && !libWords(A)).map(A => ((A.desc || '').trim() || (A.name || '').trim()).replace(/\s*\n+\s*/g, ' ').replace(/[\s.]*$/, '')).filter(Boolean);
+  if(wp.length) return 'is fully dressed, wearing ' + andList(wp.map(w => /^(a|an|the|her|his|their)\s/i.test(w) ? w : 'the ' + w)) + (T.cont ? ', the same clothes as in the moment before' : '');
+  if(fitOn(c, T)) return T.cont ? 'is fully dressed, in the same clothes as in the moment before' : 'is fully dressed in their own outfit';
+  return ''; };
 function castText(txt, T, plain){ // a subject with no picture → its stand-in words; a plain prompt also gets who each pictured one is, up front
   const pics = {}; ((T && T.imgs) || []).forEach((r, k) => { if(r.cast) (pics[r.cast] = pics[r.cast] || []).push('<Picture ' + (k + 1) + '>'); });
   const told = []; txt = lineOut(txt, T); // 💬 <Dialogue k> → (Sx) … <d>[English] …</d>
@@ -1964,10 +1975,10 @@ function castText(txt, T, plain){ // a subject with no picture → its stand-in 
   let out = (txt || '').replace(SUBRE, (m, n, off, all) => { const c = castOf(n, fk, T); if(!c || pics[c.n]) return m;
     const nm = noPicName(c, T), nd = !(T && T.noNude) && nudeOn(c, T);
     let w = nm || (c.stand || '').trim() || 'someone'; if(nd && !nm) w = /^(a|an)\s+/i.test(w) ? 'a nude ' + w.replace(/^(a|an)\s+/i, '') : /^(the|someone)$/i.test(w) ? w + ' nude' : 'nude ' + w; // 🫥
-    if((castMoreT(c, T) || (nm && nd)) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
+    if((castMoreT(c, T) || (nm && nd) || dressWords(c, T)) && !told.includes(c)) told.push(c); if(/(^|[.!?]\s*|\n\s*|\]\s*)$/.test(all.slice(0, off))) w = w.charAt(0).toUpperCase() + w.slice(1); return w; });
   // no picture: the description goes in up front, once ("The woman: long black hair, green eyes, …")
   if(told.length){ const lead = told.map(c => { const nm = leadName(c, T), N = nm.charAt(0).toUpperCase() + nm.slice(1), m0 = castMoreT0(c, T);
-      return [m0 ? N + ': ' + m0 + '.' : '', noPicName(c, T) && !(T && T.noNude) && nudeOn(c, T) ? N + ' is nude.' : '', wildSents(c, T, nm)].filter(Boolean).join(' '); }).filter(Boolean).join(' ');
+      const dw = dressWords(c, T); return [m0 ? N + ': ' + m0 + '.' : '', noPicName(c, T) && !(T && T.noNude) && nudeOn(c, T) ? N + ' is nude.' : '', dw ? N + ' ' + dw + '.' : '', wildSents(c, T, nm)].filter(Boolean).join(' '); }).filter(Boolean).join(' ');
     const m = out.match(/^\s*\[Shot 1\]\s*/i); out = m ? m[0] + lead + ' ' + out.slice(m[0].length) : lead + ' ' + out; }
   if(plain){ const defs = Object.keys(pics).filter(n => new RegExp('<\\s*subject\\s*' + n + '\\s*>', 'i').test(out)).map(n => '<Subject ' + n + '> is ' + (castWho(castOf(n, fk, T)) || 'the subject') + ', as shown in ' + andList(pics[n]) + '.' + (castMoreT(castOf(n, fk, T), T) ? ' ' + castMoreT(castOf(n, fk, T), T).replace(/^./, x => x.toUpperCase()) + '.' : ''));
     if(defs.length) out = defs.join(' ') + ' ' + out; }
@@ -6537,10 +6548,14 @@ if(ENGINE){
       // ✨👗 (Jordan 2026-11-20: "attributes and clothing engage or disengage depending on whether the clip was generated with them on or off"):
       // Reel's attributes and own-clothes setting go on the take itself, as H3 Deck's per-shot 🏷 chips (t.descOff: 'add:id' puts one on, 'fit'
       // takes her own clothes off), not on the shared cast, so every pass made from a take later (✨ final pass, 🪄, 🎨) keeps that take's own
-      const on = c => { c.attrs = []; c.fitHere = true; c.art = ART[L.id]!=null ? ART[L.id] : artDef(L);
+      // (Jordan 2026-11-23, Reel 5: options 3 on came out nude) the cast entry is filled from the Library every time: its picture list had been
+      // emptied while the pictures' entries weren't loaded yet (castPics drops ids it can't find), so she went with no pictures at all, which
+      // also meant no 👗 outfit from them, and H3 Deck's 🫥 rule sent her as "a nude young adult woman"
+      const on = c => { libFill(c, L); c.attrs = []; c.fitHere = true; c.art = ART[L.id]!=null ? ART[L.id] : artDef(L);
         const add = (ATTRS[L.id] || []).filter(id => { const A = libOf(id); return A && onK(A.kind); }).map(id => 'add:' + id), fit = FIT[L.id]!=null ? !!FIT[L.id] : !!L.fit;
         S.f.descOff = S.f.descOff || {}; const d = add.concat(fit ? [] : ['fit']); if(d.length) S.f.descOff[c.n] = d; else delete S.f.descOff[c.n]; DOFF[c.n] = d; return c; };
-      if((re.test(w) || pick.has(L.id)) && !libPics(L).length && L.lost) throw new Error(L.name.trim() + "'s pictures haven't reached the PCs yet, so she'd come out as a stranger. Open H3 Deck once with a PC on: it sends its 📚 Library pictures to the PCs. Then try again here.");
+      const had = (L.pics || []).length; re.lastIndex = 0;
+      if((re.test(w) || pick.has(L.id)) && !libPics(L).length && (L.lost || had)) throw new Error(L.name.trim() + "'s pictures haven't reached the PCs yet, so she'd come out as a stranger. Open H3 Deck once with a PC on: it sends its 📚 Library pictures to the PCs. Then try again here.");
       re.lastIndex = 0;
       if(re.test(w)){ const c = on(libToCast(L)); w = w.replace(re, (m, p) => p + '<Subject ' + c.n + '>'); } // a Library character named in the words
       else if(pick.has(L.id)) add.push('<Subject ' + on(libToCast(L)).n + '>'); } // picked but not named
