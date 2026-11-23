@@ -78,14 +78,25 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await pe.addInitScript(r => { localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify({f:{finU:false}, tsav:Date.now()})); window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await pe.goto('http://127.0.0.1:8049/index.html?engine=1');
   await pe.waitForFunction(() => window.H3Engine && H3Engine.models().length > 2, null, {timeout:20000});
-  const e = await pe.evaluate(() => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)); E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
+  const e = await pe.evaluate(async () => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)); E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
     const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; E.setLook({finAt:0.375}); o.reelAt = H3.S.reelAt===0.375 && E.look().finAt===0.375;
     const mk = fin => ({prompt:'<Lora 1> she waves', lines:{1:{lora:1, lib:'L1', snap:1, loras:[{name:'A.safetensors', str:0.7}]}}, loras:[], fin});
-    E.setLoraFirst(['L1']); o.chipV = H3.loraChips(mk({at:0.5})).loras; o.chipNoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]); o.chipBoth = H3.loraChips(mk({at:0.5})).loras; return o; });
+    E.setLoraFirst(['L1']); o.chipV = H3.loraChips(mk({at:0.5})).loras; o.chipNoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]); o.chipBoth = H3.loraChips(mk({at:0.5})).loras;
+    // 🎚 an older clip made again keeps TODAY's split (Jordan 2026-11-23)
+    const old = Object.assign(H3.snapshot(), {id:'old1', fin:{at:0.75}, pc:H3.S.pcs ? undefined : undefined}); o.redoFin = (() => { const c = JSON.parse(JSON.stringify(old)); finNow(c, {at:0.375, u:true}); return c.fin; })();
+    o.redoKeep = (() => { const c = JSON.parse(JSON.stringify(Object.assign({}, old, {fin:null}))); finNow(c, {at:0.375}); return c.fin; })();
+    { const E = H3Engine, M = E.models(); E.setLook({model:M.find(x => /PIKA finish/.test(x.label)).key}); const t0 = Object.assign(H3.snapshot(), {id:'old2', t:1, state:'done', fin:{at:0.75}, seed:5, pieces:[{start:0, gen:121, deliv:121, ctx:0, prompt:'she waves', state:'done'}], pc:H3.S.pcs && H3.S.pcs[0] ? H3.S.pcs[0].url : ''}); H3.S.takes.unshift(t0);
+      E.setLook({finAt:0.375}); try{ await E.again({take:'old2', words:'she waves again', n:1}); }catch(err){} const nt = H3.S.takes.find(x => x.id!=='old2' && /waves again/.test(x.prompt || '')); o.again = nt ? nt.fin : 'none'; }
+    { rerollSheet(H3.S.takes.find(x => x.id==='old2')); const m = document.querySelector('#rrMix'); o.rr = [!!m, m && m.value, document.querySelector('#rrMixV') && document.querySelector('#rrMixV').textContent]; const u = document.querySelector('#rrFu [data-u="1"]'); if(u){ u.click(); o.rr.push(document.querySelector('#rrMixV').textContent); } }
+    return o; });
+  ok(e.again && e.again.at===0.375, '↻ More options of an older clip in Reel use the split set now, not the clip\'s own ' + JSON.stringify(e.again));
+  ok(e.rr[0] && e.rr[1]==='0.375' && /vanilla 3 · PIKA 5/.test(e.rr[2]) && /Ultima 5/.test(e.rr[3] || ''), '🎲 New take sheet shows the split, starting on today\'s setting ' + JSON.stringify(e.rr));
   ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|PRISM PIKA', 'Reel lists the three picks: ' + e.labels.join(' | '));
   ok(e.look && e.finU===true && e.reelFin==='ultima', 'picking Ultima finish in Reel sets it (kept over H3 Deck\'s own pick)');
   ok(e.back, 'and back to PIKA finish');
   ok(e.reelAt, 'Reel keeps its own vanilla ↔ finish share');
+  ok(e.redoFin && e.redoFin.at===0.375 && e.redoFin.u===true, 'a new option of an older finish clip uses the split set now ' + JSON.stringify(e.redoFin));
+  ok(e.redoKeep===null, 'a clip without a finish stays without one');
   ok(e.chipV[0].first===true && !e.chipNoFin[0].first && !e.chipBoth[0].first, '🧩 a chip marked vanilla only in Reel puts its LoRAs on the vanilla half only (finish takes only) ' + JSON.stringify([e.chipV, e.chipNoFin, e.chipBoth]));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
