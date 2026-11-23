@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-23-4">
+<meta name="reel-build" content="2026-11-23-5">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -242,7 +242,25 @@ function newReel(name){ return {id:uid('r'), name, clips:[], cur:0, t:Date.now()
 let S = load(), TH = {}; try{ TH = JSON.parse(localStorage.getItem(THK) || '{}') || {}; }catch(e){}
 let saveT = 0; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { const j = JSON.stringify(S); try{ localStorage.setItem(KEY, j); }catch(e){
     // (the reels come first: the saved preview pictures share the phone's space, so they go and it tries again; they're made again when needed)
-    try{ localStorage.removeItem(THK); localStorage.setItem(KEY, j); }catch(e2){ toast("Couldn't save: the phone's space for this app is full"); } } }, 120); };
+    try{ localStorage.removeItem(THK); localStorage.setItem(KEY, j); }catch(e2){ toast("Couldn't save: the phone's space for this app is full. Your reels are still kept on the PCs.", 6000); } } pushReelsSoon(); }, 120); };
+// 🛟 the reels get a copy on each PC too, like H3 Deck's (Jordan 2026-11-22: "This doesn't happen on render deck H3 how do we keep it from happening on Reel?"):
+// the phone can lose a site's saved data, so the reels (clips, options, picks, trims) are kept in ComfyUI's user files (h3reel_reels.json)
+// and brought back when Reel opens without them. Nothing is sent before Reel has looked for a copy, so an empty phone never writes over a good one.
+const REELS_FILE = '/userdata/h3reel_reels.json'; let RESTORED = false, pushRT = 0, PUSHED = {};
+function pushReelsSoon(){ clearTimeout(pushRT); pushRT = setTimeout(pushReels, 3000); }
+async function pushReels(){ if(!RESTORED || !E || !S.reels.some(r => (r.clips || []).length)) return; const body = JSON.stringify({v:1, t:Date.now(), open:S.open, reels:S.reels, gone:S.goneReels || []}), sig = JSON.stringify([S.reels, S.goneReels || []]);
+  let pcs = []; try{ pcs = E.pcs().filter(p => p.online); }catch(e){}
+  for(const p of pcs){ if(PUSHED[p.url]===sig) continue; try{ const q = await fetch(p.url + REELS_FILE + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(q.ok) PUSHED[p.url] = sig; }catch(e){} } }
+async function restoreReels(){ let best = null, pcs = []; try{ pcs = E.pcs().filter(p => p.online); }catch(e){}
+  for(const p of pcs){ try{ const q = await fetch(p.url + REELS_FILE, {cache:'no-store'}); if(!q.ok) continue; const j = await q.json(); if(j && Array.isArray(j.reels) && (!best || (j.t || 0) > (best.t || 0))) best = j; }catch(e){} }
+  let n = 0;
+  if(best){ const gone = new Set((S.goneReels || []).concat(best.gone || [])); S.goneReels = [...gone].slice(-300);
+    for(const b of best.reels){ if(!b || !b.id || gone.has(b.id)) continue; const k = S.reels.findIndex(x => x.id===b.id);
+      if(k < 0){ S.reels.push(b); n++; }
+      else { const mine = S.reels[k], cnt = x => (x.clips || []).reduce((a, c) => a + (c.takes || []).length, 0); if(cnt(b) > cnt(mine)){ S.reels[k] = b; n++; } } }
+    // the empty 'Reel 1' a phone with nothing saved starts with goes once the real ones are back
+    if(n){ if(S.reels.length > 1) S.reels = S.reels.filter(x => (x.clips || []).length || x.name!=='Reel 1'); if(!S.reels.find(x => x.id===S.open)) S.open = (S.reels.find(x => x.id===best.open) || S.reels[0]).id; } }
+  RESTORED = true; if(n){ save(); WP = curI(); VSIG = ''; refresh(); toast('🛟 Brought back ' + n + (n===1 ? ' reel' : ' reels') + ' from the PCs', 6000); } else pushReelsSoon(); }
 // preview pictures: at most about 1.5 MB kept (newest), so they never crowd out the reels themselves
 const saveTh = () => { let ks = Object.keys(TH); if(ks.length > 500) ks.slice(0, ks.length - 500).forEach(k => delete TH[k]);
   let j = JSON.stringify(TH); while(j.length > 1.5e6 && (ks = Object.keys(TH)).length){ ks.slice(0, Math.ceil(ks.length / 4)).forEach(k => delete TH[k]); j = JSON.stringify(TH); }
@@ -807,7 +825,7 @@ function reelSheet(){ sheet(`<h3><span>🎞 Reels</span><button class="btn" data
     else if(b.dataset.del){ if(!b.dataset.sure){ b.dataset.sure = 1; b.textContent = 'Sure?'; return; } const k = S.reels.findIndex(x => x.id===b.dataset.del), r = S.reels.splice(k, 1)[0];
       if(ALL && S.open===r.id) stopAll(); const wasOpen = S.open===r.id; if(wasOpen) S.open = S.reels[0].id; WP = curI(); VSIG = ''; save(); reelSheet(); refresh();
       undoToast('“' + r.name + '” removed', () => { S.reels.splice(Math.min(k, S.reels.length), 0, r); if(wasOpen){ S.open = r.id; WP = curI(); } VSIG = ''; save(); if(!$('#sheet').hidden) reelSheet(); refresh(); },
-        () => { if(E) stopForget(r.clips.flatMap(c => c.takes)); }); }
+        () => { S.goneReels = (S.goneReels || []).concat(r.id).slice(-300); save(); if(E) stopForget(r.clips.flatMap(c => c.takes)); }); }
     else if(b.id==='rlNew'){ const r = newReel('Reel ' + (S.reels.length + 1)); S.reels.unshift(r); S.open = r.id; WP = 0; VSIG = ''; save(); closeSheet(); refresh(); } }; }
 
 // ---------- buttons ----------
@@ -926,7 +944,7 @@ setInterval(() => { if(!document.hidden && READY) lostTick(); }, 30000);
 async function boot(){ for(let i = 0; i < 600 && !engOk(); i++) await new Promise(r => setTimeout(r, 100));
   if(!E){ $('#vmsg').innerHTML = "<b>Couldn't start</b>H3 Deck's engine didn't load. Pull down to reload."; return; }
   for(let i = 0; i < 150 && !E.ready(); i++){ drawTop(); await new Promise(r => setTimeout(r, 200)); }
-  READY = true; if(!E.ready()) toast("Can't reach the PCs yet. Is Tailscale on?", 6000); WP = curI(); refresh(); lostTick();
+  READY = true; if(!E.ready()) toast("Can't reach the PCs yet. Is Tailscale on?", 6000); WP = curI(); refresh(); await restoreReels().catch(() => { RESTORED = true; }); lostTick();
   setInterval(() => { if(document.hidden) return; refresh(); }, 1500); }
 document.addEventListener('visibilitychange', () => { if(!document.hidden && E){ E.refresh(); refresh(); } });
 window.addEventListener('resize', () => placeWheel());
