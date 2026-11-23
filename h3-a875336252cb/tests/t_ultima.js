@@ -52,7 +52,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     o.first = chains(); f.loras[0].first = false; o.both = chains(); f.loras[0].first = true;
     // 🎚 vanilla ↔ finish slider
     const mi = document.querySelector('#finMixIn'); o.mixShown = !document.querySelector('#finMix').hidden;
-    mi.value = 0.75; mi.dispatchEvent(new Event('input', {bubbles:true})); o.mixAt = f.finAt; o.mixTxt = document.querySelector('#finMixV').textContent;
+    mi.value = 0.25; mi.dispatchEvent(new Event('input', {bubbles:true})); o.mixAt = f.finAt; o.mixTxt = document.querySelector('#finMixV').textContent;
     { const t = H3.snapshot(); t.id = 'm1'; t.pc = R; t.seed = 3; t.dir = 'H3Deck/m'; t.name = 'm'; const g = H3.pieceGraph(t, 0, oi, {}).g; o.mixSplit = Object.values(g).filter(x => x.class_type==='SplitSigmas').map(x => x.inputs.step); }
     H3.drawAll(); o.mixKept = f.finAt; mi.value = 0.5; mi.dispatchEvent(new Event('input', {bubbles:true}));
     document.querySelector('[data-mpk="pika"]').click(); o.lfPika = !document.querySelector('#loraList [data-lf]'); o.pikaSnap = H3.snapshot().loras[0].first;
@@ -69,7 +69,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(r.mpCol==='column', 'the three model choices stack instead of overlapping');
   ok(r.first[0]===true && r.first[1]===false, 'vanilla half only: the LoRA is on vanilla, not on the finisher ' + JSON.stringify(r.first));
   ok(r.both[0]===true && r.both[1]===true, 'both halves: the LoRA is on both ' + JSON.stringify(r.both));
-  ok(r.mixShown && r.mixAt===0.25 && /vanilla 2 · Ultima 6 of 8/.test(r.mixTxt) && r.mixKept===0.25, '🎚 slider: right = more Ultima (vanilla 2, Ultima 6 of 8), kept by bare bones: ' + r.mixTxt);
+  ok(r.mixShown && r.mixAt===0.25 && /vanilla 2 · Ultima 6 of 8/.test(r.mixTxt) && r.mixKept===0.25, '🎚 slider: filled part = vanilla, left = more Ultima (vanilla 2, Ultima 6 of 8), kept by bare bones: ' + JSON.stringify([r.mixShown, r.mixAt, r.mixTxt, r.mixKept]));
   ok(r.mixSplit.includes(2), 'the render hands over at 2 of 8 ' + JSON.stringify(r.mixSplit));
   ok(r.lfPika && r.pikaSnap===undefined, 'PRISM PIKA alone: no switch, the LoRA works as before');
   // 🎞 Reel's engine (Jordan 2026-11-22: "Could we add that one to reel?"): Ultima finish as its own pick, kept over H3 Deck's form
