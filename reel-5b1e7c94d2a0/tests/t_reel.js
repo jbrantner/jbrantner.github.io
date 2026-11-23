@@ -553,6 +553,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   { const w = await page.evaluate(async () => { document.querySelector('#sheet').hidden = true; const c = REEL.cur(), keep = c.pick, kt = c.takes; c.takes = []; c.pick = null; REEL.refresh(); document.querySelector('#nextBtn').click(); await new Promise(r => setTimeout(r, 200));
       const t = [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' | '), sheet = !document.querySelector('#sheet').hidden; document.querySelector('#sheet').hidden = true; c.takes = kt; c.pick = keep; REEL.refresh(); return {t, sheet}; });
     ok(!w.sheet && /Redo|rendering/.test(w.t), '➕ Next with nothing finished says why instead of doing nothing (' + JSON.stringify(w) + ')'); }
+  // a send that finishes after its sheet was closed and another opened leaves the new sheet alone
+  { const r = await page.evaluate(async () => { const E = REEL.E(), mk = E.make; let go; E.make = o => new Promise(res => { go = () => res({ids:['tFakeSend']}); });
+      document.querySelector('[data-act="make"]') || null; REEL.go(0); document.querySelector('#nextBtn').click(); await new Promise(z => setTimeout(z, 200));
+      const card = document.querySelector('#card'); card.querySelector('[data-act="make"]').click(); await new Promise(z => setTimeout(z, 200));
+      document.querySelector('#mkW').value = 'first'; document.querySelector('#mkGo').click(); await new Promise(z => setTimeout(z, 100));
+      document.querySelector('[data-close]').click(); document.querySelector('#nextBtn').click(); await new Promise(z => setTimeout(z, 200)); document.querySelector('#nxW').value = 'typing here';
+      go(); await new Promise(z => setTimeout(z, 300)); E.make = mk; REEL.clips().splice(REEL.clips().findIndex(c => c.takes.includes('tFakeSend')), 1); REEL.refresh(); const o = {open:!document.querySelector('#sheet').hidden, v:(document.querySelector('#nxW') || {}).value}; document.querySelector('#sheet').hidden = true; return o; });
+    ok(r.open && r.v==='typing here', 'a send finishing after its sheet was closed leaves the next sheet open (' + JSON.stringify(r) + ')'); }
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT3){ await page.evaluate(() => { document.querySelector('#sheet').hidden = true; REEL.setTab('lib'); }); await page.waitForTimeout(600); await page.screenshot({path:process.env.SHOT3, fullPage:true}); await page.evaluate(() => REEL.setTab('reel')); }
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
