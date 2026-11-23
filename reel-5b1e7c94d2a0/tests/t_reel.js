@@ -554,6 +554,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       const t = [...document.querySelectorAll('.toast')].map(x => x.textContent).join(' | '), sheet = !document.querySelector('#sheet').hidden; document.querySelector('#sheet').hidden = true; c.takes = kt; c.pick = keep; REEL.refresh(); return {t, sheet}; });
     ok(!w.sheet && /Redo|rendering/.test(w.t), '➕ Next with nothing finished says why instead of doing nothing (' + JSON.stringify(w) + ')'); }
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
+  if(process.env.SHOT3){ await page.evaluate(() => { document.querySelector('#sheet').hidden = true; REEL.setTab('lib'); }); await page.waitForTimeout(600); await page.screenshot({path:process.env.SHOT3, fullPage:true}); await page.evaluate(() => REEL.setTab('reel')); }
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
