@@ -87,10 +87,15 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     o.redoKeep = (() => { const c = JSON.parse(JSON.stringify(Object.assign({}, old, {fin:null}))); finNow(c, {at:0.375}); return c.fin; })();
     { const E = H3Engine, M = E.models(); E.setLook({model:M.find(x => /PIKA finish/.test(x.label)).key}); const t0 = Object.assign(H3.snapshot(), {id:'old2', t:1, state:'done', fin:{at:0.75}, seed:5, pieces:[{start:0, gen:121, deliv:121, ctx:0, prompt:'she waves', state:'done'}], pc:H3.S.pcs && H3.S.pcs[0] ? H3.S.pcs[0].url : ''}); H3.S.takes.unshift(t0);
       E.setLook({finAt:0.375}); try{ await E.again({take:'old2', words:'she waves again', n:1}); }catch(err){} const nt = H3.S.takes.find(x => x.id!=='old2' && /waves again/.test(x.prompt || '')); o.again = nt ? nt.fin : 'none'; }
+    { const cv = document.createElement('canvas'); cv.width = 160; cv.height = 90; cv.getContext('2d').fillRect(0, 0, 80, 90); const bl = await new Promise(r => cv.toBlob(r, 'image/png'));
+      const ap = await E.addPic(new File([bl], 'f.png', {type:'image/png'})); try{ await E.make({words:'first frame test', n:1, first:ap.id}); }catch(err){}
+      const ft = H3.S.takes.find(x => /first frame test/.test(x.prompt || '')); o.ff = ft ? [ft.fl, ft.first===ap.id, !!ap.id] : 'none';
+      try{ await E.make({words:'no first test', n:1, first:''}); }catch(err){} const nt2 = H3.S.takes.find(x => /no first test/.test(x.prompt || '')); o.ffOff = nt2 ? !nt2.fl : 'none'; }
     { rerollSheet(H3.S.takes.find(x => x.id==='old2')); const m = document.querySelector('#rrMix'); o.rr = [!!m, m && m.value, document.querySelector('#rrMixV') && document.querySelector('#rrMixV').textContent]; const u = document.querySelector('#rrFu [data-u="1"]'); if(u){ u.click(); o.rr.push(document.querySelector('#rrMixV').textContent); } }
     return o; });
   ok(e.again && e.again.at===0.375, '↻ More options of an older clip in Reel use the split set now, not the clip\'s own ' + JSON.stringify(e.again));
   ok(e.rr[0] && e.rr[1]==='0.375' && /vanilla 3 · PIKA 5/.test(e.rr[2]) && /Ultima 5/.test(e.rr[3] || ''), '🎲 New take sheet shows the split, starting on today\'s setting ' + JSON.stringify(e.rr));
+  ok(Array.isArray(e.ff) && e.ff.every(Boolean) && e.ffOff===true, '🖼 Reel first frame: the picture is the take\'s First frame (and none when left off) ' + JSON.stringify([e.ff, e.ffOff]));
   ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|PRISM PIKA', 'Reel lists the three picks: ' + e.labels.join(' | '));
   ok(e.look && e.finU===true && e.reelFin==='ultima', 'picking Ultima finish in Reel sets it (kept over H3 Deck\'s own pick)');
   ok(e.back, 'and back to PIKA finish');
