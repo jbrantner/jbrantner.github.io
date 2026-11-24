@@ -1463,6 +1463,8 @@ function rmImg(f, i){ const r = f.imgs[i]; if(!r) return; const SR = shotRefs(f)
 // sent does the tag become MiniMax H3's own form (VIDEO_PROMPT_WRITING_GUIDE): "<Subject 2> (S1) says softly, <d>[English] Did you bring it?</d>".
 // (S1), (S2)… count speakers in the order they first speak in that prompt, not by subject number; a voiceover adds "while their lips remain completely closed."
 const DLGRE = /<\s*dialogue\s*(\d+)\s*>/gi, DLG1 = /<\s*dialogue\s*\d+\s*>/i;
+// 💬 a line as Reel writes it in plain words: 💬 Mia (softly): "Did you bring it?"  (🎙 instead of 💬 = an off-screen voice; no name = a voice)
+const REEL_DLG = /(💬|🎙\uFE0F?)[ \t]*([^:"“”()\n]*?)[ \t]*(?:\(([^()\n]*)\))?[ \t]*:[ \t]*["“]([^"“”\n]*)["”]/gu;
 // 🥋 action chips (Jordan 2026-11-14: "actions should be an insertable chip so you can name the action they're doing"): <Action k> in the words,
 // the action itself in S.lines[k] {act:1, n, name, text} (same store and counter as dialogue, so takes, ↩ Use settings and "Who is it?" carry it).
 // The chip reads "Katara · Twirl"; only when sent does it become "<Subject 1> spins slowly on the spot, her skirt flaring."
@@ -6570,7 +6572,7 @@ if(ENGINE){
   async function go(n){ S.f.takes = nOf(n); try{ drawBare(); }catch(e){} /* H3 Deck's bare-bones settings, as its own screen sets them before a render: references and the H3 way on, the H3 Reference model finished on PIKA at 50% (Jordan 2026-11-20: Reel ran 20 steps on the first model) */ $('#prompt').value = S.f.prompt; save(); const why = whyNot(); if(why) return {err:why};
     const b = before(); await render(); const ids = newIds(b); return ids.length ? {ids} : {err:'Nothing was sent'}; }
   // the characters named in the words: their names become <Subject n>; one picked but not named is put at the start
-  const engLines = () => { const o = {}; for(const [k, L] of Object.entries(S.lines || {})) if(L && L.lora) o[k] = Object.assign({}, L, {snap:1, ltext:loraWords(L), loras:JSON.parse(JSON.stringify(loraSet(L)))}); return o; };
+  const engLines = () => { const o = {}; for(const [k, L] of Object.entries(S.lines || {})) if(L && L.lora) o[k] = Object.assign({}, L, {snap:1, ltext:loraWords(L), loras:JSON.parse(JSON.stringify(loraSet(L)))}); else if(L) o[k] = Object.assign({}, L); return o; }; // (💬 dialogue lines too)
   // ✨ Reel's per-reel attributes and clothing: {library id: [attribute/clothing ids]}, put on each one when it's named (Jordan 2026-11-20)
   let ATTRS = {}, FIT = {}, ART = {}, SCENE = 'auto', DESCOFF = {}; // DESCOFF: {library id: [description chip keys tapped off]} (2026-11-24)
   // 🎨 a stylized character keeps her look by default (Jordan 2026-11-20: a stylized cat character came out with a realistic human body):
@@ -6582,9 +6584,17 @@ if(ENGINE){
   function whoWords(words, who){ let w = String(words || '').trim(); const add = [], pick = new Set(who || []); DOFF = {};
     // 🧩 {Name} = a Library LoRA chip: its words where it sits and its LoRAs on the take, as H3 Deck's <Lora k> does
     S.lines = {}; S.lineNo = 0; const lor = (S.lib || []).filter(x => x.kind==='lora' && (x.name || '').trim());
+    const chars = (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).sort((a, b) => b.name.trim().length - a.name.trim().length); // (longest names first)
+    // 💬 dialogue (Jordan 2026-11-24: "add in the dialog option in Reels. Like how Render Deck H3 does it"): Reel writes a line as
+    // 💬 Mia (softly): "Did you bring it?"  (🎙 = an off-screen voice). Each one becomes H3 Deck's own <Dialogue k> line, so it's sent exactly
+    // as H3 Deck sends it: "<Subject 1> (S1) says softly, <d>[English] Did you bring it?</d>". Taken out first, so a name said inside the
+    // line ("Hi Mia") stays words and doesn't bring Mia into the shot.
+    const SPK = new Map(); // dialogue line → its speaker's Library entry
+    w = w.replace(REEL_DLG, (m, mk, nm, how, say) => { if(!String(say || '').trim()) return ''; nm = String(nm || '').trim(); const L = nm ? chars.find(x => x.name.trim().toLowerCase()===nm.toLowerCase()) : null, k = ++S.lineNo;
+      S.lines[k] = {n:0, text:say.trim(), how:String(how || '').trim(), vo:/🎙/u.test(mk)}; if(L) SPK.set(k, L); return '<Dialogue ' + k + '>'; });
+    const spk = new Set([...SPK.values()].map(L => L.id));
     w = w.replace(/\{([^{}\n]+)\}/g, (m, nm) => { const A = lor.find(x => x.name.trim().toLowerCase()===nm.trim().toLowerCase()); if(!A) return m;
       const k = ++S.lineNo; S.lines[k] = {lora:1, lib:A.id, name:A.name.trim()}; return '<Lora ' + k + '>'; });
-    const chars = (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).sort((a, b) => b.name.trim().length - a.name.trim().length); // (longest names first)
     for(const L of chars){ const nm = L.name.trim(), re = new RegExp('(^|[^\\w<])' + nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w>])', 'gi');
       // ✨👗 (Jordan 2026-11-20: "attributes and clothing engage or disengage depending on whether the clip was generated with them on or off"):
       // Reel's attributes and own-clothes setting go on the take itself, as H3 Deck's per-shot 🏷 chips (t.descOff: 'add:id' puts one on, 'fit'
@@ -6596,12 +6606,14 @@ if(ENGINE){
         const add = (ATTRS[L.id] || []).filter(id => { const A = libOf(id); return A && onK(A.kind); }).map(id => 'add:' + id), fit = FIT[L.id]!=null ? !!FIT[L.id] : !!L.fit;
         S.f.descOff = S.f.descOff || {}; const d = add.concat(fit ? [] : ['fit'], (DESCOFF[L.id] || []).filter(k => typeof k==='string' && k && !/^(add|attr):/.test(k) && k!=='fit' && k!=='nude')); if(d.length) S.f.descOff[c.n] = d; else delete S.f.descOff[c.n]; DOFF[c.n] = d; return c; };
       const had = (L.pics || []).length; re.lastIndex = 0;
-      if((re.test(w) || pick.has(L.id)) && !libPics(L).length && (L.lost || had)) throw new Error(L.name.trim() + "'s pictures haven't reached the PCs yet, so she'd come out as a stranger. Open H3 Deck once with a PC on: it sends its 📚 Library pictures to the PCs. Then try again here.");
+      if((re.test(w) || pick.has(L.id) || spk.has(L.id)) && !libPics(L).length && (L.lost || had)) throw new Error(L.name.trim() + "'s pictures haven't reached the PCs yet, so she'd come out as a stranger. Open H3 Deck once with a PC on: it sends its 📚 Library pictures to the PCs. Then try again here.");
       re.lastIndex = 0;
       if(re.test(w)){ const c = on(libToCast(L)); w = w.replace(re, (m, p) => p + '<Subject ' + c.n + '>'); } // a Library character named in the words
+      else if(spk.has(L.id)) on(libToCast(L)); // 💬 named only as who says a line: the line itself names her
       else if(pick.has(L.id)) add.push('<Subject ' + on(libToCast(L)).n + '>'); } // picked but not named
+    for(const [k, L] of SPK) S.lines[k].n = libToCast(L).n;
     // 🎨 the scene's style: Reel's pick, or (auto) like the first one named who keeps their own style
-    const named = S.cast.filter(c => new RegExp('<Subject ' + c.n + '>').test(w) || add.includes('<Subject ' + c.n + '>'));
+    const named = S.cast.filter(c => new RegExp('<Subject ' + c.n + '>').test(w) || add.includes('<Subject ' + c.n + '>') || [...SPK.values()].some(L => L.id===c.lib));
     if(SCENE==='auto'){ const k = named.find(c => artOf(c)); S.f.look = k ? {src:'c', n:k.n, pics:[], redo:{}, use:true} : {src:'', n:0, pics:[], redo:{}, use:true}; }
     else if(SCENE && ARTS[SCENE] && ARTS[SCENE].scene) S.f.look = {src:'w', kind:SCENE, n:0, pics:[], redo:{}, use:true};
     else S.f.look = {src:'', n:0, pics:[], redo:{}, use:true};

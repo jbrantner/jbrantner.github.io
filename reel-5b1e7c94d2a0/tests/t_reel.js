@@ -412,6 +412,50 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok(rg2 && dg2 && !diff2.length, '⚖ the same for a stylized character with Mia in ✨ Freckles and her own clothes (' + diff2.length + ' nodes differ)');
   ok(rt2.styled && rt2.look && rt2.look.src==='c' && /art style is kept/.test(JSON.stringify(rg2 && rg2.g)), '🎨 Pip (🧊 3D in H3 Deck\'s Library) keeps her own art style and the scene follows her by default (' + JSON.stringify(rt2) + ')');
   await page.evaluate(() => { REEL.R().attrs = {}; REEL.R().fit = {}; });
+  // 💬 dialogue (Jordan 2026-11-24: "add in the dialog option in Reels. Like how Render Deck H3 does it"): a line in Reel's words goes to
+  // the PC as H3 Deck's own <Dialogue k> line does; a name said inside the line (Pip) doesn't bring her into the shot
+  { await page.evaluate(() => { REEL.E().setAttrs({}, {}, {}, 'auto'); });
+    const s4 = sent.length;
+    const rid4 = await engF().evaluate(async () => { const r = await H3Engine.make({words:'Mia waves at the camera. 💬 Mia (softly): "Hi Pip, did you bring it?"', who:[], n:1}); return r.ids ? r.ids[0] : JSON.stringify(r); });
+    await page.waitForTimeout(2500);
+    const rg4 = sent.slice(s4).find(x => x.g && Object.values(x.g).some(n => /Sampler/.test(n.class_type)));
+    const rt4 = await engF().evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; const pip = H3.S.cast.find(c => c.lib==='Lpip'); return {seconds:t.seconds, prompt:t.prompt, lines:t.lines, pip:pip ? pip.n : 0}; }, rid4);
+    const s5 = sent.length;
+    await p2.evaluate(sec => { const S = H3.S; S.cast = []; S.f.look = {src:'', n:0, pics:[], redo:{}, use:true}; S.f.descOff = {}; const c = H3.libToCast(S.lib.find(x => x.id==='Lmia')); S.lines = S.lines || {}; const k = Math.max(0, +S.lineNo || 0, ...Object.keys(S.lines).map(Number)) + 1; S.lineNo = k;
+      S.lines[k] = {n:c.n, text:'Hi Pip, did you bring it?', how:'softly', vo:false}; S.f.prompt = '<Subject ' + c.n + '> waves at the camera. <Dialogue ' + k + '>'; S.f.seconds = sec; S.f.takes = 1; }, rt4.seconds || 5);
+    await p2.click('#goBtn'); await p2.waitForTimeout(3000);
+    const dg4 = sent.slice(s5).find(x => x.g && Object.values(x.g).some(n => /Sampler/.test(n.class_type)));
+    const A4 = norm(rg4 && rg4.g), B4 = norm(dg4 && dg4.g), diff4 = [...new Set(Object.keys(A4).concat(Object.keys(B4)))].filter(k => A4[k]!==B4[k]);
+    if(diff4.length) diff4.slice(0, 12).forEach(k => console.log('  DIFF node ' + k + '\n    Reel:    ' + (A4[k] || '(none)').slice(0, 1500) + '\n    H3 Deck: ' + (B4[k] || '(none)').slice(0, 1500)));
+    const said = JSON.stringify(rg4 && rg4.g) || '';
+    ok(rg4 && dg4 && !diff4.length && /<Subject 1> \(S1\) says softly, <d>\[English\] Hi Pip, did you bring it\?<\/d>/.test(said) && /<Dialogue 1>/.test(rt4.prompt || '') && !/<Subject 2>/.test(said),
+      '💬 a Reel line goes out exactly as H3 Deck sends it: "<Subject 1> (S1) says softly, <d>[English] …</d>", and Pip (named inside the line) isn\'t brought in (' + diff4.length + ' nodes differ, ' + JSON.stringify(rt4) + ')');
+    // speaker named only as who says it, plus a 🎙 off-screen line from a voice
+    const s6 = sent.length;
+    await engF().evaluate(async () => H3Engine.make({words:'A quiet kitchen at night. 🎙 Mia: "Nobody is home." 💬 : "Hello?"', who:[], n:1}));
+    await page.waitForTimeout(2500);
+    const rg6 = JSON.stringify((sent.slice(s6).find(x => x.g && Object.values(x.g).some(n => /Sampler/.test(n.class_type))) || {}).g) || '';
+    ok(/<Subject 1> \(S1\) says in an off-screen voiceover: <d>\[English\] Nobody is home\.<\/d> while their lips remain completely closed\./.test(rg6) && /A voice \(S2\) says, <d>\[English\] Hello\?<\/d>/.test(rg6) && /LoadImage/.test(rg6),
+      '💬 🎙 a speaker named only by her line is in the shot (her pictures go), a voiceover and an unnamed voice are written the H3 way'); }
+  // 💬 the ＋ Line form in Reel's words box
+  { await page.click('#nextBtn'); await page.waitForTimeout(300);
+    const tw = await page.evaluate(() => { const ta = document.querySelector('#card textarea'); return ta && ta.id; });
+    await page.fill('#' + tw, 'Mia smiles.'); await page.click('#who [data-dl]'); await page.waitForTimeout(150);
+    const who0 = await page.evaluate(() => (document.querySelector('#dlWho .on') || {}).textContent);
+    await page.fill('#dlT', 'We made it... finally'); await page.fill('#dlH', 'with a grin');
+    const pv = await page.evaluate(() => document.querySelector('#dlPv').textContent);
+    await page.click('#dlGo'); await page.waitForTimeout(150);
+    const v = await page.inputValue('#' + tw), chip = await page.evaluate(() => (document.querySelector('.hl mark.dl') || {}).textContent);
+    ok(who0==='Mia' && v==='Mia smiles. 💬 Mia (with a grin): "We made it... finally"' && chip==='💬 Mia (with a grin): "We made it... finally"' && /Sent as: Mia \(S1\) says with a grin, <d>\[English\] We made it, finally\.<\/d>/.test(pv),
+      '💬 ＋ Line: pick who, type the line, it goes in the words as one chip, with a preview of what is sent (' + JSON.stringify({who0, v, chip, pv}) + ')');
+    // tap inside the line to change it, then take it out
+    await page.evaluate(id => { const ta = document.getElementById(id); ta.focus(); ta.setSelectionRange(20, 20); ta.dispatchEvent(new MouseEvent('click', {bubbles:true})); }, tw); await page.waitForTimeout(150);
+    const ed = await page.evaluate(() => ({t:(document.querySelector('#dlT') || {}).value, rm:!!document.querySelector('#dlRm')}));
+    await page.click('#dlVo'); await page.click('#dlGo'); await page.waitForTimeout(100); const v2 = await page.inputValue('#' + tw);
+    await page.evaluate(id => { const ta = document.getElementById(id); ta.setSelectionRange(20, 20); ta.dispatchEvent(new MouseEvent('click', {bubbles:true})); }, tw); await page.waitForTimeout(150);
+    await page.click('#dlRm'); await page.waitForTimeout(100); const v3 = await page.inputValue('#' + tw);
+    ok(ed.t==='We made it... finally' && ed.rm && v2==='Mia smiles. 🎙 Mia (with a grin): "We made it... finally"' && v3==='Mia smiles.', '💬 tapping the line opens it to change (🎙 off-screen) or 🗑 take out (' + JSON.stringify({ed, v2, v3}) + ')');
+    await page.click('#card [data-close]'); await page.waitForTimeout(150); }
   ok(rg && /Soft film grain/.test(JSON.stringify(rg.g)) && /blurry hands/.test(JSON.stringify(rt)), "⚖ Reel uses H3 Deck's ✍ Custom quality words and 🚫 Keep out (" + JSON.stringify(rt) + ')');
   // ✨ 🧩 attributes and LoRA chips, as H3 Deck's Library has them
   await page.click('#tabs [data-tab="lib"]'); await page.waitForTimeout(400);
