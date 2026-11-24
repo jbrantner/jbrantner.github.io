@@ -111,7 +111,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // (Jordan 2026-11-22, Tifa: carry-ons opened on a new shot / a reference picture) the pictures only come in after the first 30% of the steps
   { const G = g2[0].g, tr = nodes(G, 'ConditioningSetTimestepRange').map(n => ({a:n.inputs.start, b:n.inputs.end, src:G[n.inputs.conditioning[0]]})), refsOf = n => n ? Object.keys(n.inputs).filter(k => /ref_image_\d/.test(k)).length : -1;
     const early = tr.find(x => x.a===0 && Math.abs(x.b - 0.3) < 1e-6), late = tr.find(x => Math.abs(x.a - 0.3) < 1e-6 && x.b===1);
-    ok(early && late && refsOf(early.src)===0 && refsOf(late.src) > 0, '➕ Next brings the pictures in only after the first 30% of the steps, so the layout follows the clip before (' + JSON.stringify(tr.map(x => [x.a, x.b, x.src && x.src.class_type, refsOf(x.src)])) + ')'); }
+    ok(early && late && refsOf(early.src)===1 && refsOf(late.src) > 0, '➕ Next brings her pictures in only after the first 30% of the steps (before that only the clip before\'s last frame), so the layout follows the clip before (' + JSON.stringify(tr.map(x => [x.a, x.b, x.src && x.src.class_type, refsOf(x.src)])) + ')'); }
   ok(await page.evaluate(() => REEL.clips().length===2 && REEL.R().cur===1 && REEL.cur().kind==='next'), 'the new clip goes after it and is the current one');
   await finish();
   // back to clip 1 by dragging the wheel to the right
