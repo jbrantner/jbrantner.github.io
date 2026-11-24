@@ -118,6 +118,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t), node = (
   { const n2 = sent.length; await page.evaluate(() => window.H3GapFill({a:{file:{filename:'shot1.mp4', subfolder:'Output_Render/H3Film', type:'output'}, frames:120, w:1600, h:900}, outA:4, takeB:'tA', inB:0.5, secs:2, prompt:'x', n:1, film:'fA', clipA:'', clipB:''}));
     await page.waitForTimeout(1200); const g3 = sent[n2] && sent[n2].g;
     ok(g3 && nodes(g3, 'LoadVideo').some(n => n.inputs.file==='Output_Render/H3Film/shot1.mp4 [output]') && nodes(g3, 'ImageScale').length > 0, '⇿ a nested shot\'s export can be the clip before (loaded from its file, scaled to the fill)'); }
+  // ⇿ joined onto a clip (Jordan 2026-11-24, Reel: edit the clips we have instead of making 1-2 s clips): side b = the new part, then clip B's frames
+  { const n2 = sent.length; await page.evaluate(() => window.H3GapFill({takeA:'tA', outA:4, takeB:'tA', inB:1, outB:3, secs:1, prompt:'x', n:1, join:'b'})); await page.waitForTimeout(1200);
+    const g4 = sent[n2] && sent[n2].g, t4 = await page.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap && {join:t.lead.gap.join, B:t.lead.B, secs:t.seconds, s:t.lead.s}; });
+    const ib = g4 && nodes(g4, 'ImageBatch'), tail = g4 && nodes(g4, 'ImageFromBatch').find(n => n.inputs.batch_index===24 && n.inputs.length===48);
+    ok(t4 && t4.join && t4.join.side==='b' && t4.join.s===24 && t4.join.n===48 && Math.abs(t4.secs - (t4.B + 48) / 24) < 0.01 && ib && ib.length && tail && nodes(g4, 'SaveVideo').length===1,
+      '⇿ joined on side b: one video of the new part then clip B from 1 s to 3 s (' + JSON.stringify(t4) + ')'); }
   // ✨ neighbours (Jordan 2026-11-14: the fill looked lower res than the ✨ clips): the fill gets ✨ with the same settings when it's done
   { await page.evaluate(() => { const a = H3.S.takes.find(x => x.id==='tA'), q = JSON.parse(JSON.stringify(a)); Object.assign(q, {id:'tQ', redo:{qp:true, key:'kq', src:'tA', a:0, b:120, Fout:120, F:120, s0:0, L:121, pins:[]}, up:{scale:1.5, crop:{s0:0, L:121}}, final:{filename:'q.mp4', subfolder:'Output_Render/H3Deck/q', type:'output'}}); H3.S.takes.push(q); H3.saveNow();
       window.H3Nudge = async o => { (window.NUDGED = window.NUDGED || []).push(o); return 1; }; });

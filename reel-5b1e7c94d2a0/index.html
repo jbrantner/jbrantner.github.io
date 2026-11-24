@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-24-3">
+<meta name="reel-build" content="2026-11-24-5">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -304,6 +304,19 @@ const lenOf = c => { if(!c || !c.pick) return 0; const I = info(c.pick), d = I.s
 const endOf = c => { const d = info(c.pick).secs || 0; return c.out != null ? Math.min(c.out, d || c.out) : d; };
 
 // a clip's picked option: the one you tapped; until then the first to finish
+// ✂ each option keeps its own trim when another one is picked, so tapping back to it brings its cut back (2026-11-24: ⇿ edits now pick
+// their new, longer option of the clip straight away, and the old one shouldn't lose its trim for it)
+function pickOpt(c, id){ c.meta = c.meta || {}; if(c.pick && c.pick!==id){ c.meta[c.pick] = Object.assign({}, c.meta[c.pick] || {}, {trim:{in:c.in || 0, out:c.out!=null ? c.out : null}}); }
+  const T = (c.meta[id] || {}).trim; c.pick = id; c.in = T ? T.in || 0 : 0; c.out = T && T.out!=null ? T.out : null; }
+// ⇿ joined edits (Jordan 2026-11-24: "keep some of these editing tools from making new clips and instead just edit the clips we have to try
+// to keep each one 5 seconds long"; the 🎬 Final pass jumped in colour and pose at every 1-2 s clip): 🪄 Blend, ⇿ Across the cut and ⇿ Insert
+// make a new, longer option of a clip that's already there (the new seconds with that clip's own frames joined on) and pick it, instead of a
+// clip of their own. side 'a' = this clip's frames then the new part; 'b' = the new part then the next clip's frames.
+const JOIN_MAX = 6.5;
+// 🎬 a clip that starts a new shot (✍ New shot, 📤 upload) doesn't carry the ✨ look of the clip before it over the cut
+const isCut = c => { const cs = clips(), i = cs.indexOf(c); return i > 0 && (c.kind==='new' || c.kind==='upload'); };
+function joinTakes(c, ids, side, other, extra, words){ const m0 = Object.assign({}, (c.meta || {})[c.pick] || {}); delete m0.trim; delete m0.fin; delete m0.src; delete m0.whole; delete m0.reup;
+  const meta = Object.assign(m0, side==='a' ? {before:other} : {after:other}, {joined:side}, extra || {}); addTakes(c, ids, meta, words!=null ? words : wordsOf(c, c.pick)); pickOpt(c, ids[0]); save(); refresh(); }
 function autoPick(c){ if(c.pick && c.takes.includes(c.pick) && !/failed|gone/.test(info(c.pick).state)) return false;
   const d = c.takes.find(doneOf) || c.takes.find(id => info(id).state==='working') || c.takes[0] || null;
   if(d!==c.pick){ c.pick = d; return true; } return false; }
@@ -589,7 +602,7 @@ $('#opts').addEventListener('click', async e => { const c = cur(); if(!c) return
     undoToast('Option removed', () => { if(!c.takes.includes(id)) c.takes.splice(Math.max(0, at), 0, id); if(wasPick){ c.pick = id; c.in = in0; c.out = out0; } /* (its ✂ trim comes back too) */ VSIG = ''; save(); refresh(); }, () => { if(E) stopForget([id]); }); return; }
   const o = e.target.closest('[data-o]'); if(!o) return; const id = o.dataset.o; if(!/done|working/.test(info(id).state)) return;
   if(id===c.pick){ togglePlay(); return; } // (2026-11-23 overnight: tapping the option already in use threw its ✂ trim away; now it plays / pauses)
-  c.pick = id; c.in = 0; c.out = null; save(); VSIG = ''; draw(); });
+  pickOpt(c, id); save(); VSIG = ''; draw(); });
 
 // ---------- sheets ----------
 function sheet(html){ $('#card').innerHTML = html; $('#sheet').hidden = false; }
@@ -730,8 +743,12 @@ function nextSheet(){ const i = curI(), c = cur(), N = clips()[i + 1]; if(!c) re
     <div class="row" style="gap:8px;margin-top:12px"><button class="btn" data-act="make" data-at="${i + 1}" style="flex:1">✍ New shot (a cut)</button><button class="btn" data-act="upload" data-at="${i + 1}" style="flex:1">📤 Upload a clip</button></div>`);
   whoWire(o.who, $('#nxW')); lookWire(L); lenWire('nxL', o, 'secs'); nWire(o);
   $('#nxGo').onclick = async () => { o.words = $('#nxW').value.trim(); if(!o.words && !N){ toast('Write what happens next first'); return; } o.then = !N && $('#nxT') ? $('#nxT').value.split('\n').map(x => x.trim()).filter(Boolean) : [];
-    if(N){ const ids = await send($('#nxGo'), () => E.fill({takeA:c.pick, outA:endOf(c), takeB:N.pick, inB:N.in || 0, secs:o.secs, words:o.words, who:o.who, n:o.n}), '⇿ Sent: it goes between the two clips', L);
+    // (a clip that would get longer than JOIN_MAX stays its own ⇿ clip, so the 🎬 Final pass's window still fits the PCs' memory)
+    if(N && Math.min(lenOf(c), lenOf(N)) + o.secs > JOIN_MAX){ const ids = await send($('#nxGo'), () => E.fill({takeA:c.pick, outA:endOf(c), takeB:N.pick, inB:N.in || 0, secs:o.secs, words:o.words, who:o.who, n:o.n}), '⇿ Sent: it goes between the two clips (either one would get longer than ' + fmt(JOIN_MAX) + ' with it)', L);
       if(ids){ const nc = addClip(i + 1, {kind:'insert', words:o.words, who:o.who, look:cl(L)}); addTakes(nc, ids, {after:c.pick, before:N.pick, look:cl(L)}, o.words); } return; }
+    if(N){ const side = lenOf(c) <= lenOf(N) ? 'a' : 'b', J = side==='a' ? {join:'a', inA:c.in || 0} : {join:'b', outB:N.out!=null ? N.out : null}, tgt = side==='a' ? c : N;
+      const ids = await send($('#nxGo'), () => E.fill(Object.assign({takeA:c.pick, outA:endOf(c), takeB:N.pick, inB:N.in || 0, secs:o.secs, words:o.words, who:o.who, n:o.n}, J)), '⇿ Sent: clip ' + (side==='a' ? i + 1 : i + 2) + ' gets the new seconds as a longer option', L);
+      if(ids){ (o.who || []).forEach(id => { if(!(tgt.who || []).includes(id)) tgt.who = (tgt.who || []).concat(id); }); joinTakes(tgt, ids, side, side==='a' ? N.pick : c.pick, {look:cl(L)}, wordsOf(tgt, tgt.pick) + (o.words ? ' ' + o.words : '')); R().cur = side==='a' ? i : i + 1; WP = R().cur; save(); refresh(); } return; }
     const ids = await send($('#nxGo'), () => E.carry({take:c.pick, at:endOf(c), words:o.words, who:o.who, secs:o.secs, n:o.n}), '➕ Sent', L);
     if(ids){ const nc = addClip(i + 1, {kind:'next', words:o.words, who:o.who, look:cl(L)}); addTakes(nc, ids, {after:c.pick, look:cl(L)}, o.words);
       if(o.then && o.then.length){ R().chain = {after:nc.id, lines:o.then, who:o.who.slice(), look:cl(L), secs:o.secs, n:o.n}; save(); drawChain(); toast('🔗 ' + o.then.length + ' more clip' + (o.then.length===1 ? '' : 's') + ' will follow, one after another'); } } }; }
@@ -838,14 +855,17 @@ function editSheet(m0){ const i = curI(), c = cur(); if(!c) return;
     $('#edXA').oninput = e => xs('xa', e); $('#edXB').oninput = e => xs('xb', e);
     $('#edXGo').onclick = async () => { const w = $('#edXW').value.trim(); if(!w){ toast('Write what happens in it'); return; } if(!doneOf(N.pick)){ toast('Clip ' + (i + 2) + ' needs a finished option first'); return; }
       const outA = Math.round((endOf(c) - o.xa) * 24) / 24, inB = Math.round(((N.in || 0) + o.xb) * 24) / 24, secs = Math.min(5, o.xa + o.xb);
-      const ids = await send($('#edXGo'), () => E.fill({takeA:c.pick, outA, takeB:N.pick, inB, secs, words:w, who:onScreen(c, N), n:o.n || 1}), '⇿ Remaking across the cut: it shows up as a ⇿ clip between them', L);
-      if(!ids) return; c.out = outA; N.in = inB; const nc = addClip(i + 1, {kind:'insert', words:w, look:cl(L)}); addTakes(nc, ids, {after:c.pick, before:N.pick, look:cl(L)}, w); R().cur = i + 1; WP = i + 1; VSIG = ''; save(); refresh(); }; }
+      // (a clip that would get longer than JOIN_MAX stays its own ⇿ clip between them, as before)
+      if(outA - (c.in || 0) + secs > JOIN_MAX){ const ids = await send($('#edXGo'), () => E.fill({takeA:c.pick, outA, takeB:N.pick, inB, secs, words:w, who:onScreen(c, N), n:o.n || 1}), '⇿ Remaking across the cut: it shows up as a ⇿ clip between them', L);
+        if(!ids) return; c.out = outA; N.in = inB; const nc = addClip(i + 1, {kind:'insert', words:w, look:cl(L)}); addTakes(nc, ids, {after:c.pick, before:N.pick, look:cl(L)}, w); R().cur = i + 1; WP = i + 1; VSIG = ''; save(); refresh(); return; }
+      const ids = await send($('#edXGo'), () => E.fill({takeA:c.pick, outA, takeB:N.pick, inB, secs, words:w, who:onScreen(c, N), n:o.n || 1, join:'a', inA:c.in || 0}), '⇿ Remaking across the cut: clip ' + (i + 1) + ' gets it as a longer option', L);
+      if(!ids) return; N.in = inB; joinTakes(c, ids, 'a', N.pick, {look:cl(L)}); R().cur = i; WP = i; VSIG = ''; save(); refresh(); }; }
   $('#edS').oninput = e => { o.str = +e.target.value; mode(); }; nWire(o); mode();
   $('#edGo').onclick = async () => { const blend = N && $('#edBl') && $('#edBl').checked ? Math.min(o.blend, Math.max(0, o.b - o.a - 0.5)) : 0;
     if(blend >= 0.3 && !doneOf(N.pick)){ toast('Clip ' + (i + 2) + ' is still rendering: blend into it once it has a finished option, or untick 🪄 to just save the length', 5000); return; }
     c.in = o.a; c.out = o.b >= D - 0.02 ? null : o.b;
-    if(blend >= 0.3){ const ids = await send($('#edGo'), () => E.fill({takeA:c.pick, outA:o.b - blend, takeB:N.pick, inB:N.in || 0, secs:blend, words:words0(c) || words0(N), who:onScreen(c, N), n:o.n || 1}), '🪄 Blending the end into the next clip', L);
-      if(!ids){ save(); draw(); return; } c.out = o.b - blend; const nc = addClip(i + 1, {kind:'blend', words:words0(c) || words0(N), look:cl(L)}); addTakes(nc, ids, {after:c.pick, before:N.pick, look:cl(L)}); R().cur = i; WP = i; save(); refresh(); return; }
+    if(blend >= 0.3){ const ids = await send($('#edGo'), () => E.fill({takeA:c.pick, outA:o.b - blend, takeB:N.pick, inB:N.in || 0, secs:blend, words:words0(c) || words0(N), who:onScreen(c, N), n:o.n || 1, join:'a', inA:o.a}), '🪄 Blending the end into the next clip: it comes back as a new option of this clip', L);
+      if(!ids){ save(); draw(); return; } joinTakes(c, ids, 'a', N.pick, {look:cl(L)}); R().cur = i; WP = i; save(); refresh(); return; }
     closeSheet(); VSIG = ''; save(); draw(); toast('✂ ' + fmt(lenOf(c))); };
   $('#edSGo').onclick = async () => { const n = 1;
     const ids = await send($('#edSGo'), () => E.smooth({take:c.pick, n}), '🪄 Smoothing: the smoothed version shows up as a new option of this clip');
@@ -936,7 +956,7 @@ function finalSheet(){ const cs = clips(), ok = cs.filter(c => doneOf(c.pick)), 
   $$('#fnLv button').forEach(b => b.onclick = () => { o.den = +b.dataset.v; $$('#fnLv button').forEach(x => x.classList.toggle('on', x===b)); });
   $$('#fnLo button').forEach(b => b.onclick = () => { o.lstr = +b.dataset.v; $$('#fnLo button').forEach(x => x.classList.toggle('on', x===b)); });
   $('#fnGo').onclick = async () => { S.finDen = o.den; S.finLo = o.lstr; save(); let all = [];
-    const r = await send($('#fnGo'), async () => { const x = await E.final({clips:ok.map(c => ({take:c.pick, a:c.in || 0, b:endOf(c)})), den:o.den, lstr:o.lstr}); if(x.ids){ all = x.ids; return {ids:x.ids.filter(Boolean)}; } return x; }, '🎬 Final pass sent: each clip gets its ✨ version as a new option');
+    const r = await send($('#fnGo'), async () => { const x = await E.final({clips:ok.map(c => ({take:c.pick, a:c.in || 0, b:endOf(c), cut:isCut(c)})), den:o.den, lstr:o.lstr}); if(x.ids){ all = x.ids; return {ids:x.ids.filter(Boolean)}; } return x; }, '🎬 Final pass sent: each clip gets its ✨ version as a new option');
     if(!r) return; ok.forEach((c, k) => { const id = all[k]; if(!id) return; addTakes(c, [id], Object.assign({}, (c.meta || {})[c.pick] || {}, {fin:true, src:c.pick, reup:0, whole:false, srcIn:c.in || 0, srcOut:c.out != null ? c.out : null}), wordsOf(c, c.pick)); c.pick = id; c.in = 0; c.out = null; c.up = true; }); // (↩ Back puts the trim she had back)
     save(); VSIG = ''; refresh(); }; }
 $('#finBtn').onclick = e => { e.stopPropagation(); finalSheet(); };
