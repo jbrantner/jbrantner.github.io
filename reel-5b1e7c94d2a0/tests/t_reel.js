@@ -289,6 +289,27 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       const r2 = await page.evaluate(id => ({was:REEL.cur().meta[id].reup, n:REEL.cur().takes.length}), r.id);
       ok(!r.reup && r2.n===r.n, '⬆ a new option next to clips picked on their originals is not upscaled (' + JSON.stringify({r, r2}) + ')'); }
     await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; c.up = false; }); REEL.refresh(); }, before); await page.waitForTimeout(300); }
+  // 🧵 Blend the seams (Jordan 2026-11-24: "The shadows change fairly hard on the seam"): H3 Deck's ⬆ Upscale track seams. Runs of clips
+  // without a new-shot cut go to the PC joined, with each join repainted (1 s of both clips pinned each side); ≤3 clips a job, the joins
+  // between jobs in a second round; each clip then picks its own stretch of the result
+  { await finish(); const b0 = await page.evaluate(() => { const cs = REEL.clips(); return {kinds:cs.map(c => c.kind).join(), g:REEL.seamGroups().map(g => g.length), cs:cs.map(c => ({id:c.id, pick:c.pick, in:c.in || 0, out:c.out, n:c.takes.length, d:REEL.info(c.pick).secs}))}; });
+    const g0 = sent.filter(x => x.g).length;
+    await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#smLen [data-v="8"]'); await page.click('#smGo'); await page.waitForTimeout(3000);
+    const gA = sent.filter(x => x.g).slice(g0).map(x => x.g), zA = await page.evaluate(() => JSON.parse(JSON.stringify(REEL.R().seam)));
+    const shape = G => { const N = Object.values(G); return {cat:N.filter(n => n.class_type==='ConcatenateVideo').length, vids:N.filter(n => n.class_type==='Video Slice').length, guides:N.filter(n => n.class_type==='MiniMaxH3AddGuide').length, unet:(N.find(n => n.class_type==='UNETLoader') || {inputs:{}}).inputs.unet_name}; };
+    const want = b0.g.reduce((a, n) => { let k = 0; for(let i = 0; i < n; i += 3) if(Math.min(3, n - i) > 1) k++; return a + k; }, 0);
+    ok(zA.state==='A' && zA.half===8 && zA.jobs.length===want && gA.length===want && gA.map(shape).every(x => x.cat===1 && x.guides >= 8) && (b0.g.some(n => n > 3) ? zA.B && zA.B.length : !zA.B),
+      '🧵 Blend the seams sends each run of clips (≤3 a job) joined, with its joins repainted between pinned frames (' + JSON.stringify({b0:{kinds:b0.kinds, g:b0.g}, zA:{state:zA.state, jobs:zA.jobs.length, B:zA.B}, gA:gA.map(shape)}) + ')');
+    await finish(); await page.evaluate(() => REEL.seamTick()); await page.waitForTimeout(2500);
+    const zB = await page.evaluate(() => JSON.parse(JSON.stringify(REEL.R().seam)));
+    await finish(); await page.evaluate(() => REEL.seamTick()); await page.waitForTimeout(2500);
+    const r = await page.evaluate(() => { const z = REEL.R().seam; return {state:z.state, jobs:z.jobs.map(j => ({id:j.id, round:j.round, n:j.bounds.length})), cs:REEL.clips().map(c => ({pick:c.pick, in:c.in || 0, out:c.out, n:c.takes.length, seam:!!(c.meta[c.pick] || {}).seam}))}; });
+    const inG = new Set(b0.g.length ? [].concat(...(await page.evaluate(() => REEL.seamGroups().map(g => g.map(c => c.id))))) : []);
+    const last = {}; r.jobs.forEach(j => last[j.round] = j);
+    ok(r.state==='done' && r.cs.every((c, i) => !inG.has(b0.cs[i].id) || (c.seam && r.jobs.some(j => j.id===c.pick) && Math.abs((c.out - c.in) - ((b0.cs[i].out != null ? Math.min(b0.cs[i].out, b0.cs[i].d) : b0.cs[i].d) - b0.cs[i].in)) < 0.05)) && (!zB.B || zB.state==='B'),
+      '🧵 when the jobs are done each clip picks its own stretch of the blended video, same length as before (round 2 for the joins between jobs) (' + JSON.stringify({zB:{state:zB.state}, r}) + ')');
+    await page.click('[data-close]').catch(() => {});
+    await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; c.in = b[i].in; c.out = b[i].out; }); REEL.R().seam = null; REEL.refresh(); }, b0.cs); await page.waitForTimeout(300); }
   // ⬇ Export the reel: the picked option of every clip, trimmed, in order, joined on the PC; 📲 Save when done
   { await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnExp'); await page.waitForTimeout(2500);
     const cs = await page.evaluate(() => REEL.clips().map(c => { const I = REEL.info(c.pick); return {f:I.file && I.file.filename, a:c.in || 0}; }));
