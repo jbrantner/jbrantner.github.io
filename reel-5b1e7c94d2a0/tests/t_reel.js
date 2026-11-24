@@ -244,16 +244,23 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       await page.waitForFunction(n => REEL.cur().takes.length > n, c0.n, {timeout:40000}).catch(() => {}); await page.waitForTimeout(1500);
       const r = await page.evaluate(() => { const c = REEL.cur(), id = c.takes[c.takes.length - 1], m = c.meta[id] || {}; return {id, fin:!!m.fin, src:m.src || null, reup:m.reup}; });
       const t = await eng.evaluate(x => { const T = id => H3.S.takes.find(t => t.id===id) || {}, up = T(x.pick), root = T(up.redo && up.redo.src), s = H3.S.takes[0]; return {root:{m:root.model, w:root.w, fin:!!root.fin}, up:{m:up.model, w:up.w}, s:{m:s.model, w:s.w, fin:!!s.fin, sm:!!s.sm}}; }, c0);
-      ok(t.s.sm && t.s.m===t.root.m && t.s.w===t.root.w && t.s.fin===t.root.fin && !r.fin && !r.src && r.reup===1, '🪄 Smooth on a ✨ pick uses the original take\'s model, size and finish, and waits for its own ⬆ (' + JSON.stringify({r, t}) + ')');
+      ok(t.s.sm && t.s.m===t.root.m && t.s.w===t.root.w && t.s.fin===t.root.fin && !r.fin && !r.src && !r.reup, '🪄 Smooth on a ✨ pick uses the original take\'s model, size and finish, and isn\'t upscaled by itself (' + JSON.stringify({r, t}) + ')');
       await page.evaluate(x => { const c = REEL.cur(); c.takes = c.takes.filter(id => id!==x.id); delete c.meta[x.id]; c.pick = x.pick; REEL.refresh(); }, Object.assign({}, c0, {id:r.id}));
       await eng.evaluate(n => { H3.S.takes = H3.S.takes.slice(H3.S.takes.length - n); }, n1); await page.keyboard.press('Escape').catch(() => {}); await page.click('[data-close]').catch(() => {}); }
-    // ⬆ a new option of an upscaled clip gets the same ✨ pass once it's done, and replaces it as the pick
+    // ⬆ (Jordan 2026-11-24: upscaling by hand only) a new option of an upscaled clip is NOT upscaled by itself; ⬆ Upscale this option makes
+    // N upscales of it (different seeds), each a new ⬆ option, and the pick stays
     { const r = await page.evaluate(async () => { const c = REEL.cur(), src = c.meta[c.pick].src; const x = await REEL.E().again({take:src, words:'Mia waves', n:1}); const id = (x.ids || [])[0];
-        REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; return {id, reup:c.meta[id].reup, n:c.takes.length}; });
+        REEL.addTakes(c, [id], {}, 'Mia waves'); c.pick = id; REEL.refresh(); return {id, reup:c.meta[id].reup, n:c.takes.length}; });
       await finish(); await page.evaluate(() => REEL.reup()); await page.waitForTimeout(2500);
-      const r2 = await page.evaluate(id => { const c = REEL.cur(), m = c.meta[c.pick] || {}; return {pick:c.pick, src:m.src, fin:m.fin, was:c.meta[id].reup, n:c.takes.length}; }, r.id);
-      const t2 = await eng.evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {src:t.redo && t.redo.src, scale:t.up && t.up.scale}; }, r2.pick);
-      ok(r.reup===1 && r2.src===r.id && r2.fin && r2.was===2 && r2.n===r.n + 1 && t2.src===r.id && t2.scale===1.5, '⬆ an edit of an upscaled clip is upscaled by itself when done and picked (' + JSON.stringify({r, r2, t2}) + ')');
+      const r2 = await page.evaluate(() => { const c = REEL.cur(); return {pick:c.pick, n:c.takes.length}; });
+      ok(!r.reup && r2.pick===r.id && r2.n===r.n, '⬆ a new option of an upscaled clip is not upscaled by itself (' + JSON.stringify({r, r2}) + ')');
+      await page.evaluate(() => REEL.refresh()); await page.waitForTimeout(300); const n1 = await eng.evaluate(() => H3.S.takes.length);
+      await page.click('#upOne'); await page.waitForTimeout(300); await page.click('#upN [data-v="3"]'); await page.click('#upGo'); await page.waitForTimeout(3500);
+      const r3 = await page.evaluate(() => { const c = REEL.cur(), nw = c.takes.slice(-3); return {pick:c.pick, n:c.takes.length, nw, m:nw.map(id => c.meta[id] || {}).map(m => ({fin:!!m.fin, src:m.src}))}; });
+      const t3 = await eng.evaluate(ids => ids.map(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {src:t.redo && t.redo.src, scale:t.up && t.up.scale, seed:t.seed}; }), r3.nw);
+      ok(r3.pick===r.id && r3.n===r.n + 3 && r3.m.every(m => m.fin && m.src===r.id) && t3.every(t => t.src===r.id && t.scale===1.5) && new Set(t3.map(t => t.seed)).size===3 && await eng.evaluate(() => H3.S.takes.length) === n1 + 3,
+        '⬆ Upscale this option ×3 makes three ⬆ options of it with different seeds; the pick stays (' + JSON.stringify({r3, t3}) + ')');
+      await page.evaluate(x => { const c = REEL.cur(); c.takes = c.takes.filter(id => !x.includes(id)); x.forEach(id => delete c.meta[id]); REEL.refresh(); }, r3.nw);
       await finish(); }
     // ↩ Back to the originals
     await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnBack'); await page.waitForTimeout(400);
@@ -264,7 +271,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
         REEL.addTakes(c, [id], {}, 'Mia waves'); return {id, reup:c.meta[id].reup, n:c.takes.length}; });
       await finish(); await page.evaluate(() => REEL.reup()); await page.waitForTimeout(2500);
       const r2 = await page.evaluate(id => ({was:REEL.cur().meta[id].reup, n:REEL.cur().takes.length}), r.id);
-      ok(r.reup===1 && r2.was===0 && r2.n===r.n, '⬆ a new option next to clips picked on their originals is not upscaled (' + JSON.stringify({r, r2}) + ')'); }
+      ok(!r.reup && r2.n===r.n, '⬆ a new option next to clips picked on their originals is not upscaled (' + JSON.stringify({r, r2}) + ')'); }
     await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; c.up = false; }); REEL.refresh(); }, before); await page.waitForTimeout(300); }
   // ⬇ Export the reel: the picked option of every clip, trimmed, in order, joined on the PC; 📲 Save when done
   { await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnExp'); await page.waitForTimeout(2500);
