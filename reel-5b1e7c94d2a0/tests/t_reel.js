@@ -255,13 +255,29 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       const r2 = await page.evaluate(() => { const c = REEL.cur(); return {pick:c.pick, n:c.takes.length}; });
       ok(!r.reup && r2.pick===r.id && r2.n===r.n, '⬆ a new option of an upscaled clip is not upscaled by itself (' + JSON.stringify({r, r2}) + ')');
       await page.evaluate(() => REEL.refresh()); await page.waitForTimeout(300); const n1 = await eng.evaluate(() => H3.S.takes.length);
-      await page.click('#upOne'); await page.waitForTimeout(300); await page.click('#upN [data-v="3"]'); await page.click('#upGo'); await page.waitForTimeout(3500);
+      const pv = await page.evaluate(() => { const cs = REEL.clips(), i = cs.indexOf(REEL.cur()), P = cs[i - 1], d = P && REEL.info(P.pick).secs; return {i, kind:REEL.cur().kind, pick:P && P.pick, at:P && (P.out != null ? Math.min(P.out, d) : d)}; });
+      const g0 = sent.filter(x => x.g).length;
+      await page.click('#upOne'); await page.waitForTimeout(300); await page.click('#upN [data-v="3"]'); await page.click('#upGo');
+      for(let k = 0; k < 40 && sent.filter(x => x.g).length < g0 + 3; k++) await page.waitForTimeout(500); await page.waitForTimeout(500);
       const r3 = await page.evaluate(() => { const c = REEL.cur(), nw = c.takes.slice(-3); return {pick:c.pick, n:c.takes.length, nw, m:nw.map(id => c.meta[id] || {}).map(m => ({fin:!!m.fin, src:m.src}))}; });
       const t3 = await eng.evaluate(ids => ids.map(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {src:t.redo && t.redo.src, scale:t.up && t.up.scale, seed:t.seed}; }), r3.nw);
       ok(r3.pick===r.id && r3.n===r.n + 3 && r3.m.every(m => m.fin && m.src===r.id) && t3.every(t => t.src===r.id && t.scale===1.5) && new Set(t3.map(t => t.seed)).size===3 && await eng.evaluate(() => H3.S.takes.length) === n1 + 3,
         '⬆ Upscale this option ×3 makes three ⬆ options of it with different seeds; the pick stays (' + JSON.stringify({r3, t3}) + ')');
       await page.evaluate(x => { const c = REEL.cur(); c.takes = c.takes.filter(id => !x.includes(id)); x.forEach(id => delete c.meta[id]); REEL.refresh(); }, r3.nw);
       await finish(); }
+    // ⬆ (Jordan 2026-11-24: "it needs to use context nodes and the first frame of the previous video so it still lines up properly. Same with
+    // color correction") on a clip with one before it: Motion Context from the clip before's frames up to its end + colour match
+    { const pv = await page.evaluate(() => { const cs = REEL.clips(), i = cs.findIndex((c, k) => k > 0 && c.kind!=='new' && c.kind!=='upload' && c.pick && REEL.info(c.pick).state==='done' && cs[k - 1].pick && REEL.info(cs[k - 1].pick).state==='done');
+        const P = cs[i - 1], d = P && REEL.info(P.pick).secs, was = cs.indexOf(REEL.cur()); REEL.go(i); return {was, i, pick:P && P.pick, at:P && (P.out != null ? Math.min(P.out, d) : d), n:cs[i].takes.length, cin:cs[i].in || 0}; }); await page.waitForTimeout(400);
+      await page.click('#upOne'); await page.waitForTimeout(300); await page.click('#upN [data-v="1"]'); await page.click('#upGo'); await page.waitForTimeout(2500);
+      const nid = await page.evaluate(() => { const c = REEL.cur(); return c.takes[c.takes.length - 1]; });
+      const G = await eng.evaluate(([id, pick]) => { const t = H3.S.takes.find(x => x.id===id), P = H3.S.takes.find(x => x.id===pick), pf = P && (P.final || (P.pieces[0] || {}).file);
+        const g = Object.values(H3.upGraph(t, H3.PC[t.pc].oi, {}).g), C = c => g.filter(n => n.class_type===c), mc = C('MiniMaxH3MotionContext')[0];
+        return {chain:t.up.chain, mc:!!(mc && mc.inputs.context_frames), cm:C('ColorMatch').length, at:C('Video Slice').map(n => n.inputs.duration), prev:C('LoadVideo').filter(n => pf && n.inputs.file.includes(pf.filename)).length}; }, [nid, pv.pick]);
+      const m = await page.evaluate(id => REEL.cur().meta[id], nid);
+      ok(pv.i > 0 && G.mc && G.cm >= 6 && G.at.filter(a => Math.abs(a - pv.at) < 0.01).length >= 2 && G.prev >= 2 && G.chain.prev===pv.pick && m.fin && m.trim && m.trim.in===0,
+        '⬆ Upscale this option carries on from the clip before (Motion Context from its frames up to its end + colour match toward its last frame) (' + JSON.stringify({pv, G, m}) + ')');
+      await page.evaluate(id => { const c = REEL.cur(); c.takes = c.takes.filter(x => x!==id); delete c.meta[id]; REEL.refresh(); }, nid); await page.evaluate(w => REEL.go(w), pv.was); await page.waitForTimeout(400); await finish(); }
     // ↩ Back to the originals
     await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnBack'); await page.waitForTimeout(400);
     const back = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, up:!!c.up, cur:c===REEL.cur(), in:c.in || 0, out:c.out == null ? null : c.out})));

@@ -3863,6 +3863,8 @@ const regenLen = t => { const n = wholeFrames(t); return t.redo ? (gridDn(n)===n
 const clipFrames = t => t.pieces.reduce((a, p) => a + (p.deliv || p.gen), 0);
 const wholeFrames = t => t.redo ? t.redo.Fout : clipFrames(t);
 const BLEND_DEN = 0.35; // 🫧 how much the blend after a mask pass redraws (the lightest the sigmas allow is 0.3)
+// the clip before's video up to where that clip ends ({f: its file, at: seconds}), for a one-off ✨'s context and colour match
+const ctxVid = (add, v) => { const lv = [add('LoadVideo', {file:fileArg(v.f)}), 0]; return v.at > 0 ? [add('Video Slice', {video:lv, start_time:0, duration:Math.round(v.at * 1000) / 1000, strict_duration:false}), 0] : lv; };
 function upGraph(t, oi, names){
   const g = {}; let n = 0; const add = (cls, inputs) => { const id = String(++n); g[id] = {class_type:cls, inputs:fill(oi, cls, inputs), _meta:{title:cls}}; return id; };
   const u = t.up || {}, part = u.part || null, crop = u.crop || null, d = part ? {w:t.w, h:t.h} : upDims(t), src = t.smoothed || t.final;
@@ -3915,7 +3917,10 @@ function upGraph(t, oi, names){
     else iv = add('MiniMaxH3ImageToVideo', {clip, vae, prompt, width:W, height:Hh, length});
     const sep = add('LTXVSeparateAVLatent', {av_latent:[iv, 1]}), av = add('LTXVConcatAVLatent', {video_latent:Z ? Z.lat : [big, 0], audio_latent:[sep, 1]});
     let cond = [iv, 0]; // 🔗 carries on from the ✨ result of the clip before (its saved latent, at the same size)
-    if(chn && chn.prev && !Z) cond = [add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:[iv, 1], context_length:String(CTX), audio_context_length:24, context_latent:[add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir({pc:chn.from || t.pc, dir:chn.dir}), clip_index:chn.idx}), 0]}), 0];
+    // (Jordan 2026-11-24: Reel's ⬆ Upscale this option "needs to use context nodes and the first frame of the previous video so it still lines up")
+    // a one-off ✨ carries on from the clip before's picked video itself (its frames up to where that clip ends), as a ➕ carry-on does
+    if(chn && chn.prev && chn.vid && !Z) cond = [add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:[iv, 1], context_length:String(CTX), audio_context_length:24, context_frames:[add('GetVideoComponents', {video:ctxVid(add, chn.vid)}), 0]}), 0];
+    else if(chn && chn.prev && !Z) cond = [add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:[iv, 1], context_length:String(CTX), audio_context_length:24, context_latent:[add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir({pc:chn.from || t.pc, dir:chn.dir}), clip_index:chn.idx}), 0]}), 0];
     const gd = [add('BasicGuider', {model, conditioning:cond}), 0], // (no 🚫 here: Jordan 2026-11-09 found ✨ High quality "really awful" with NAG 9 on a light redraw)
       smp = [add('KSamplerSelect', {sampler_name:FIT && !SG && u.den ? 'res_multistep' : 'euler'}), 0],
       sgm = [add('ManualSigmas', {sigmas:SG || (FIT && u.den ? sig8(u.den) : sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl))}), 0];
@@ -3977,8 +3982,8 @@ function upGraph(t, oi, names){
       fmid = [add('ImageFromBatch', {image:bl, batch_index:A, length:Ln}), 0]; } }
   // 🎨 (Jordan 2026-11-24, Reel 6 🎬 Final pass: "there's color differences" between the clips) a ✨ clip that carries on from the ✨ of the
   // clip before is colour-matched to that clip's last frame over its first 1.5 s, full strength at the join and easing to none, as carry-ons are
-  if(chn && chn.prev && !faces.length && oi.ColorMatch && oi.GetVideoComponents){ const pv = S.takes.find(x => x.id===chn.prev), N0 = (part ? part.b - part.a : crop ? crop.L : 0);
-    if(pv && pv.final && N0 > CM_RAMP + 6){ const ref = [add('ImageFromBatch', {image:[add('GetVideoComponents', {video:[add('LoadVideo', {file:fileArg(pv.final)}), 0]}), 0], batch_index:4095, length:1}), 0];
+  if(chn && chn.prev && !faces.length && oi.ColorMatch && oi.GetVideoComponents){ const pv = S.takes.find(x => x.id===chn.prev), N0 = (part ? part.b - part.a : crop ? crop.L : 0), pf = chn.vid ? chn.vid.f : pv && pv.final;
+    if(pf && N0 > CM_RAMP + 6){ const ref = [add('ImageFromBatch', {image:[add('GetVideoComponents', {video:chn.vid ? ctxVid(add, chn.vid) : [add('LoadVideo', {file:fileArg(pf)}), 0]}), 0], batch_index:4095, length:1}), 0];
       let acc = null; for(let k = 0; k < CM_RAMP; k += 6){ const pt = [add('ColorMatch', {image_ref:ref, image_target:[add('ImageFromBatch', {image:ims, batch_index:k, length:6}), 0], method:'mkl', strength:Math.round((1 - k / CM_RAMP) * 100) / 100, multithread:true}), 0]; acc = acc ? batchOf(add, oi, acc, pt) : pt; }
       ims = batchOf(add, oi, acc, [add('ImageFromBatch', {image:ims, batch_index:CM_RAMP, length:4096}), 0]); } }
   if(part){ // the take up to a, the nudged frames from a to b, the take from b on (its own sound throughout)
@@ -6700,7 +6705,9 @@ if(ENGINE){
     // o.clips = [{take, a, b}] in order; returns {ids:[new take id or null per clip]}
     final:async o => { const pk = hqUnets().find(x => /prism_?pika/i.test(x)) || '', ids = []; let ch = null;
       for(const c of o.clips || []){ const src = deckTake(c.take); if(c.cut) ch = null; /* (a new shot: no ✨ context over the cut) */ if(!src || !takeFile(src)){ ids.push(null); ch = null; continue; }
-        const on = !!ch && ch.w===src.w && ch.h===src.h, ctxc = on ? {dir:ch.dir, idx:ch.idx + 1, prev:ch.prev, pc:ch.pc} : {dir:'H3Deck/hqctx_' + uid('r'), idx:0, prev:'', pc:''}, key = uid('k');
+        const on = !!ch && ch.w===src.w && ch.h===src.h, pv = !on && c.ctx && deckTake(c.ctx.take), pvf = pv && takeFile(pv), key = uid('k');
+        // (Reel's ⬆ Upscale this option, Jordan 2026-11-24) nothing chained before it: carry on from the clip before's picked video itself
+        const ctxc = on ? {dir:ch.dir, idx:ch.idx + 1, prev:ch.prev, pc:ch.pc} : {dir:'H3Deck/hqctx_' + uid('r'), idx:0, prev:pvf ? pv.id : '', pc:'', vid:pvf ? {f:pvf, at:+c.ctx.at || 0} : null};
         let n = 0; try{ n = await window.H3Nudge({take:src.id, a:+c.a || 0, b:+c.b || takeFrames(src) / FPS, scale:1.5, den:+o.den || 0.9, clean:0, look:src.h3 && /^(2d|cartoon|anime)/i.test(src.h3.scene || '') ? 'anime' : 'live', unet:pk, str:o.lstr != null ? +o.lstr : 0.8, ctxc, key, quiet:true}); }catch(e){ console.warn(e); }
         const t = n && S.takes.find(x => x.redo && x.redo.key===key); ids.push(t ? t.id : null);
         ch = t ? {dir:ctxc.dir, idx:ctxc.idx, prev:t.id, pc:t.pc, w:src.w, h:src.h} : null; }
