@@ -96,4 +96,18 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const ek = early ? Object.keys(early.inputs).filter(k => /ref_image_\d/.test(k)) : [], fr = ek.length===1 && G[early.inputs[ek[0]][0]], fb = fr && (fr.class_type==='ImageScale' ? G[fr.inputs.image[0]] : fr);
   ok(early && ek.length===1 && fb && fb.class_type==='ImageFromBatch' && fb.inputs.batch_index===4095 && /Picture 1/.test(early.inputs.prompt) && /in exactly the clothes shown in <Picture 1>, the moment before/.test(early.inputs.prompt) && !/nude/i.test(early.inputs.prompt),
     '➕ the carry-on steps before her pictures get the last frame of the clip before as their one picture, and say she wears exactly those clothes (' + JSON.stringify(cr) + ' ' + (early ? early.inputs.prompt.slice(0, 3000) : 'no early stage') + ')');
+  // 🏷 description chips: one tapped off is left out of the words (Jordan 2026-11-24: "click off any I don't need for the shot like jeans")
+  { const n3 = sent.filter(x => x.g).length;
+    await eng.evaluate(async () => { H3Engine.setAttrs({Lmia:[]}, {Lmia:true}, {}, 'auto', {Lmia:['red hair']}); await H3Engine.make({words:'Mia waves', who:['Lmia'], n:1, secs:3}); }); await page.waitForTimeout(1500);
+    const g = sent.filter(x => x.g).slice(n3).map(x => x.g);
+    ok(g.length===1 && !/red hair/i.test(rv(g[0])) && /wearing/.test(rv(g[0])), '🏷 a description chip tapped off is left out, the outfit stays (' + rv(g[0] || {}).slice(0, 200) + ')');
+    const n4 = sent.filter(x => x.g).length;
+    await eng.evaluate(async () => { H3Engine.setAttrs({Lmia:[]}, {Lmia:true}, {}, 'auto', {}); await H3Engine.make({words:'Mia waves', who:['Lmia'], n:1, secs:3}); }); await page.waitForTimeout(1500);
+    const g2 = sent.filter(x => x.g).slice(n4).map(x => x.g);
+    ok(g2.length===1 && /red hair/i.test(rv(g2[0])), '🏷 with every chip on, the whole description goes'); }
+  { await page.evaluate(() => { REEL.R().cast = ['Lmia']; }); await page.click('[data-act="make"]'); await page.waitForTimeout(300);
+    const ch = await page.evaluate(() => [...document.querySelectorAll('.lkd [data-d]')].map(b => [b.textContent, b.classList.contains('on')]));
+    ok(ch.length===1 && ch[0][0]==='red hair' && ch[0][1], '🏷 the clip sheet shows her description as chips, all on (' + JSON.stringify(ch) + ')');
+    await page.click('.lkd [data-d="red hair"]'); const on = await page.evaluate(() => document.querySelector('.lkd [data-d="red hair"]').classList.contains('on'));
+    ok(!on, '🏷 tapping a chip turns it off'); }
   console.log(fails ? fails + ' FAILED' : 'ALL PASS'); await br.close(); srv.close(); process.exit(fails ? 1 : 0); })();
