@@ -159,15 +159,23 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const tr = await page.evaluate(() => window.__T);
   await page.mouse.move(tr.x + tr.width - 2, tr.y + tr.height / 2); await page.mouse.down(); await page.mouse.move(tr.x + tr.width * 0.8, tr.y + tr.height / 2, {steps:5}); await page.mouse.up(); await page.waitForTimeout(200);
   n0 = sent.filter(x => x.g).length; await page.click('#edGo'); await page.waitForTimeout(2500);
-  const ed = await page.evaluate(() => ({kinds:REEL.clips().map(c => c.kind).join(), out:REEL.clips()[0].out, d:REEL.info(REEL.clips()[0].pick).secs}));
-  const g5 = sent.filter(x => x.g).slice(n0);
-  ok(g5.length===1 && ed.kinds==='new,blend,insert,next' && ed.out > 2.5 && ed.out < 3.6, '✂ trimming the end blends it into the next clip: a 🪄 clip between them, clip 1 ends where the blend starts (' + JSON.stringify(ed) + ')');
+  const kinds0 = await page.evaluate(() => REEL.clips().map(c => c.kind).join());
+  const ed = await page.evaluate(() => { const c = REEL.clips()[0]; return {kinds:REEL.clips().map(c => c.kind).join(), n:c.takes.length, pick:c.pick, joined:(c.meta[c.pick] || {}).joined, in:c.in, out:c.out, before:(c.meta[c.pick] || {}).before}; });
+  const tk5 = await eng.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); return t && t.lead && t.lead.gap && {join:t.lead.gap.join, B:t.lead.B, secs:t.seconds}; }, ed.pick);
+  const g5 = sent.filter(x => x.g).slice(n0), gg = g5[0] && g5[0].g, cat = gg && Object.values(gg).some(n => n.class_type==='AudioConcat' || n.class_type==='ImageBatch');
+  // (Jordan 2026-11-24: "keep some of these editing tools from making new clips and instead just edit the clips we have") the blend is a new,
+  // longer option of clip 1 (its kept frames, then the new part that lands on clip 2), picked, not a 🪄 clip of its own
+  ok(g5.length===1 && ed.kinds===kinds0 && !/blend/.test(ed.kinds) && ed.joined==='a' && ed.in===0 && ed.out==null && tk5 && tk5.join && tk5.join.side==='a' && tk5.join.n > 24 && Math.abs(tk5.secs - (tk5.B + tk5.join.n) / 24) < 0.01 && cat,
+    '✂ trimming the end blends it into the next clip as a new, longer option of clip 1 (no 🪄 clip between them) (' + JSON.stringify({ed, tk5}) + ')');
+  // (the checks below were written for a reel with the 🪄 clip in it: move the blend into a clip of its own again, clip 1 back on its old option)
+  await page.evaluate(id => { const cs = REEL.clips(), c = cs[0]; c.takes = c.takes.filter(x => x!==id); const old = c.takes[c.takes.length - 1]; c.pick = old; c.in = 0; c.out = 3; delete c.meta[id];
+    REEL.addClip(1, {kind:'blend', words:'blend', takes:[id], pick:id}); REEL.go(0); REEL.refresh(); }, ed.pick); await page.waitForTimeout(300);
   // (Jordan 2026-11-21: "it didn't do anything other than shorten it") the blend runs on an untrimmed clip too
   { await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(400); await page.click('#editBtn'); await page.waitForTimeout(500);
     const chk = await page.evaluate(() => { const b = document.querySelector('#edBl'); if(!b) return false; if(!b.checked) b.click(); return b.checked; });
     const m0 = sent.filter(x => x.g).length; await page.click('#edGo'); await page.waitForTimeout(2500);
-    const r = await page.evaluate(() => { const b = REEL.clips()[3]; return {kinds:REEL.clips().map(c => c.kind).join(), look:!!(b.look && (b.meta[b.takes[0]] || {}).look)}; }), gn = sent.filter(x => x.g).length - m0;
-    ok(chk && gn===1 && r.kinds==='new,blend,insert,blend,next' && r.look, '🪄 Blend the end on a clip whose end wasn\'t moved still makes the 🪄 clip (' + JSON.stringify({chk, gn, r}) + ')');
+    const r = await page.evaluate(() => { const b = REEL.clips()[2]; return {kinds:REEL.clips().map(c => c.kind).join(), joined:(b.meta[b.pick] || {}).joined, look:!!(b.meta[b.pick] || {}).look, pick:b.pick}; }), gn = sent.filter(x => x.g).length - m0;
+    ok(chk && gn===1 && r.kinds==='new,blend,insert,next' && r.joined==='a' && r.look, '🪄 Blend the end on a clip whose end wasn\'t moved still blends (as a new, longer option of that clip) (' + JSON.stringify({chk, gn, r}) + ')');
     // (Jordan 2026-11-21: a blend lit "like a flashlight") a ⇿ / 🪄 part next to a clip made without the ✨ boost LoRAs leaves them out
     { await finish(); const r2 = await page.evaluate(() => { const ids = REEL.clips().map(c => c.pick).filter(id => REEL.info(id).file); return {A:ids[0], B:ids[1]}; });
       const n0 = await eng.evaluate(o => { const T = H3.S.takes; T.find(x => x.id===o.A).boost = false; T.find(x => x.id===o.B).boost = true; return T.length; }, r2);
@@ -175,7 +183,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       const nb = await eng.evaluate(n0 => ({n:H3.S.takes.length - n0, gap:!!(H3.S.takes[0].lead && H3.S.takes[0].lead.gap), boost:H3.S.takes[0].boost}), n0);
       await eng.evaluate(o => { const T = H3.S.takes; T.find(x => x.id===o.A).boost = true; }, r2);
       ok(nb.n===1 && nb.gap && nb.boost===false, '⇿ a part next to a clip made without the ✨ boost is made without it too (' + JSON.stringify({x, nb}) + ')'); }
-    await page.evaluate(() => { const cs = REEL.clips(); cs.splice(3, 1); cs[2].out = null; REEL.refresh(); }); await page.waitForTimeout(300); }
+    await page.evaluate(id => { const c = REEL.clips()[2]; c.takes = c.takes.filter(x => x!==id); delete c.meta[id]; c.pick = c.takes[c.takes.length - 1]; c.in = 0; c.out = null; REEL.refresh(); }, r.pick); await page.waitForTimeout(300); }
   await finish();
   // 🎨 Change it on clip 2
   await page.evaluate(() => REEL.go(2)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(300); await page.click('#edM [data-m="change"]');
@@ -426,13 +434,14 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     { await page.waitForTimeout(800); const pv = await page.evaluate(() => { const v = document.querySelector('#edV'), cs = REEL.clips(); return {src:v.src, t:+v.dataset.xt, b:REEL.info(cs[3].pick).url, a:REEL.info(cs[2].pick).url, note:document.querySelector('#edXN').textContent}; });
       ok(pv.src===pv.b && Math.abs(pv.t - (b0.inB + 1.5)) < 0.15 && /lands/.test(pv.note), '⇿ the preview follows the sliders: the last one moved shows where it lands in the next clip (' + JSON.stringify(pv) + ')'); }
     await page.fill('#edXW', 'she turns and looks straight at the camera'); n0 = sent.filter(x => x.g).length; await page.click('#edXGo'); await page.waitForTimeout(2500);
-    const r = await page.evaluate(() => { const cs = REEL.clips(); return {n:cs.length, kinds:cs.map(c => c.kind).join(), out:cs[2].out, inB:cs[4].in, mid:cs[3].takes.length, meta:cs[3].meta[cs[3].takes[0]], cur:REEL.S().reels.find(x => x.id===REEL.S().open).cur}; });
-    const g = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap && {aOut:t.lead.gap.aOut, bIn:t.lead.gap.bIn, prompt:t.prompt}; });
-    ok(r.n===b0.n + 1 && Math.abs(r.out - (b0.endA - Math.min(1, b0.endA - b0.inA - 0.5))) < 0.05 && Math.abs(r.inB - (b0.inB + 1.5)) < 0.05 && r.mid >= 1 && r.meta.after===b0.a && r.meta.before===b0.b && r.cur===3
-       && g && Math.abs(g.aOut - r.out) < 0.01 && Math.abs(g.bIn - r.inB) < 0.01 && /looks straight at the camera/.test(g.prompt) && sent.filter(x => x.g).length > n0,
-      '⇿ Across the cut makes one ⇿ clip from 1 s before the cut to 1.5 s into the next clip, both trimmed to make room (' + JSON.stringify({b0, r, g}) + ')');
-    await finish(); await page.evaluate(() => REEL.go(4)); await page.waitForTimeout(400);
-    ok(await page.evaluate(() => !/may jump/.test(document.querySelector('#warnBox').textContent)), '⇿ the clip after the ⇿ clip doesn\'t say it may jump (the ⇿ clip was made to land on it)');
+    // (Jordan 2026-11-24: edits keep ~5 s clips instead of making 1-2 s ones) it comes back as a longer option of clip 3, not a clip of its own
+    const r = await page.evaluate(() => { const cs = REEL.clips(), c = cs[2], m = c.meta[c.pick] || {}; return {n:cs.length, kinds:cs.map(c => c.kind).join(), out:c.out, in:c.in || 0, inB:cs[3].in, joined:m.joined, before:m.before, cur:REEL.S().reels.find(x => x.id===REEL.S().open).cur}; });
+    const g = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap && {aOut:t.lead.gap.aOut, bIn:t.lead.gap.bIn, join:t.lead.gap.join, prompt:t.prompt}; });
+    ok(r.n===b0.n && r.joined==='a' && r.before===b0.b && r.out==null && r.inB > b0.inB + 1.3 && r.inB < b0.inB + 1.55 && r.cur===2
+       && g && g.join && g.join.side==='a' && Math.abs(g.bIn - r.inB) < 0.01 && /looks straight at the camera/.test(g.prompt) && sent.filter(x => x.g).length > n0,
+      '⇿ Across the cut remakes from 1 s before the cut to ~1.5 s into the next clip as a longer option of this clip (no new clip), the next clip trimmed to make room (' + JSON.stringify({b0, r, g}) + ')');
+    await finish(); await page.evaluate(() => REEL.go(3)); await page.waitForTimeout(400);
+    ok(await page.evaluate(() => !/may jump/.test(document.querySelector('#warnBox').textContent)), '⇿ the clip after the remade cut doesn\'t say it may jump (the new option was made to land on it)');
     await finish(); }
   // 🗑 a clip with no options can still be removed from ✂ Edit (Jordan 2026-11-21)
   { const n = await page.evaluate(() => { REEL.addClip(1, {kind:'insert', words:'empty'}); REEL.go(1); return REEL.clips().length; }); await page.waitForTimeout(400);

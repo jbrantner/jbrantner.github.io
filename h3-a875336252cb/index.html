@@ -3563,6 +3563,16 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       ims = batchOf(add, oi, acc, [add('ImageFromBatch', {image:ims, batch_index:RAMP, length:4096}), 0]); } }
   if(t.sm && pc.skip){ ims = [add('ImageFromBatch', {image:ims, batch_index:pc.skip, length:L - pc.skip}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:pc.skip / FPS, duration:(L - pc.skip) / FPS}), 0]; } // 🪄 the frames the window before already has
   if(t.lead){ const R = t.lead, k0 = R.gap ? +R.k0 || 0 : 0; ims = [add('ImageFromBatch', {image:ims, batch_index:k0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:k0 / FPS, duration:R.B / FPS}), 0]; } // only the new seconds
+  // ⇿ joined onto a clip (Jordan 2026-11-24, Reel: "keep some of these editing tools from making new clips and instead just edit the clips we
+  // have"): the new seconds come out as one video with the clip before's kept frames in front of them (side a) or the clip after's behind them
+  // (side b), so 🪄 Blend / ⇿ Across / ⇿ Insert make a longer option of that clip instead of a 1-2 s clip of their own
+  if(t.lead && t.lead.gap && t.lead.gap.join && +t.lead.gap.join.n > 0){ const R = t.lead, G = R.gap, J = G.join, A = J.side==='a';
+    const vc = add('GetVideoComponents', {video:[add('LoadVideo', {file:A ? G.file : R.file}), 0]});
+    let fr = [add('ImageFromBatch', {image:[vc, 0], batch_index:+J.s, length:+J.n}), 0];
+    if(oi.ImageScale && (A ? (G.w && G.h && (G.w!==w || G.h!==h)) || G.scaleB : G.scaleB)) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0];
+    ims = A ? batchOf(add, oi, fr, ims) : batchOf(add, oi, ims, fr);
+    if(oi.AudioConcat){ const au = [add('TrimAudioDuration', {audio:[vc, 1], start_index:Math.round(+J.s / FPS * 1000) / 1000, duration:Math.round(+J.n / FPS * 1000) / 1000}), 0];
+      aud = [add('AudioConcat', A ? {audio1:au, audio2:aud, direction:'after'} : {audio1:aud, audio2:au, direction:'after'}), 0]; } }
   if(t.redo && t.redo.swap){ // 🔄 the swapped stretch in place of the clip's frames; the rest of the take as it was
     // (in parts: the first part puts the take before the stretch in front, the last one the take after it behind, and the join adds them up)
     const R = t.redo, n0 = R.b - R.a, many = t.pieces.length > 1, S0 = Math.round((pc.start || 0) * FPS), own = Math.max(1, Math.min(n0 - S0, many ? pc.deliv : n0));
@@ -3965,6 +3975,12 @@ function upGraph(t, oi, names){
       const seen = {}, R = faces.flatMap(fc => faceRefs(t, fc.n)).filter(r => !seen[r.id] && (seen[r.id] = 1)).slice(0, 9);
       const bl = once(R, {lat:[add('VAEEncode', {pixels:wb, vae}), 0], w:d.w, h:d.h}, denSig(BLEND_DEN));
       fmid = [add('ImageFromBatch', {image:bl, batch_index:A, length:Ln}), 0]; } }
+  // 🎨 (Jordan 2026-11-24, Reel 6 🎬 Final pass: "there's color differences" between the clips) a ✨ clip that carries on from the ✨ of the
+  // clip before is colour-matched to that clip's last frame over its first 1.5 s, full strength at the join and easing to none, as carry-ons are
+  if(chn && chn.prev && !faces.length && oi.ColorMatch && oi.GetVideoComponents){ const pv = S.takes.find(x => x.id===chn.prev), N0 = (part ? part.b - part.a : crop ? crop.L : 0);
+    if(pv && pv.final && N0 > CM_RAMP + 6){ const ref = [add('ImageFromBatch', {image:[add('GetVideoComponents', {video:[add('LoadVideo', {file:fileArg(pv.final)}), 0]}), 0], batch_index:4095, length:1}), 0];
+      let acc = null; for(let k = 0; k < CM_RAMP; k += 6){ const pt = [add('ColorMatch', {image_ref:ref, image_target:[add('ImageFromBatch', {image:ims, batch_index:k, length:6}), 0], method:'mkl', strength:Math.round((1 - k / CM_RAMP) * 100) / 100, multithread:true}), 0]; acc = acc ? batchOf(add, oi, acc, pt) : pt; }
+      ims = batchOf(add, oi, acc, [add('ImageFromBatch', {image:ims, batch_index:CM_RAMP, length:4096}), 0]); } }
   if(part){ // the take up to a, the nudged frames from a to b, the take from b on (its own sound throughout)
     let j = part.a > 0 ? [add('ImageFromBatch', {image:[gc, 0], batch_index:0, length:part.a}), 0] : null;
     const mid = fmid || [add('ImageFromBatch', {image:ims, batch_index:part.a - part.s0, length:part.b - part.a}), 0]; j = j ? batchOf(add, oi, j, mid) : mid;
@@ -6386,15 +6402,22 @@ window.H3Lead = async o => { const src = deckTake(o.take), fl = takeFile(src);
 // sb = clip B's first frame. N is rounded so clip B's first frame lands on the grid.
 function gapPlan(FA, ea, FB, sb, secs, ctx){ // (the frames on screen: a clip trimmed to end at out shows up to frame ceil(out*FPS)-1, one trimmed to start at in shows from floor(in*FPS))
   ea = Math.max(1, Math.min(FA, Math.ceil(ea - 1e-6))); sb = Math.max(0, Math.min(FB - 1, Math.floor(sb + 1e-6)));
-  const C = Math.floor(Math.min(ctx, ea - 1) / 4) * 4, k0 = C + 1; let N = Math.max(7, Math.round(secs * FPS)); while((k0 + N) % 4) N++;
-  const e = k0 + N, room = Math.max(1, Math.min(ctx, FB - sb)), L = gridUp(e + room), pinsA = [], pins = [];
+  const G = GUIDE_CLIP, room = Math.max(1, Math.min(ctx, FB - sb)), gA = ea >= G && ctx >= G, gB = FB - sb >= G && room >= G;
+  // (Jordan 2026-11-24, Reel 6: ⇿ Insert / 🪄 Blend opened on 1-5 pale, washed-out, over-sharp frames in about half the takes): MiniMax H3's
+  // latent frames come in blocks of 17 pixel frames, each one 1-frame token then four 4-frame tokens (0 | 1-4 | 5-8 | 9-12 | 13-16 | 17 | 18-21 …),
+  // and a guide clip is encoded the same way from its own first frame. A guide that starts off a block boundary (it started at frame 3) puts
+  // its tokens between the video's, and the frames just after it came out washed. So a clip guide starts on a block: the clip before at
+  // frame 0 (the new frames start right after it, at 22), the clip after at a multiple of 17 (the new part's length is rounded to fit).
+  const C = gA ? G - 1 : Math.floor(Math.min(ctx, ea - 1) / 4) * 4, k0 = C + 1; let N = Math.max(7, Math.round(secs * FPS));
+  if(gB){ let e = Math.max(Math.ceil((k0 + 7) / 17), Math.round((k0 + N) / 17)) * 17; N = e - k0; } else while((k0 + N) % 4) N++;
+  const e = k0 + N, L = gridUp(e + room), pinsA = [], pins = [];
   for(let o = 0; o <= C; o += 4) pinsA.push([o, ea - 1 - C + o]);
   for(let o = e; o < L; o += 4){ if(sb + o - e < FB) pins.push([o, sb + o - e]); }
   if(!pins.some(p => p[0]===L - 1) && sb + L - 1 - e < FB) pins.push([L - 1, sb + L - 1 - e]);
   // (Jordan 2026-11-21, Reel: "Make sure insert slots in between the clips it's inserting perfectly"): the context on each side goes in
   // as ONE moving clip guide (MiniMax H3's AddGuide takes 5, 22, 39… frames), so the model sees how things move into and out of the new
   // part, not every 4th frame as separate stills. Too short a side keeps the old stills.
-  const G = GUIDE_CLIP, clipA = k0 >= G && ea >= G ? {o:k0 - G, s:ea - G, n:G} : null, clipB = FB - sb >= G && L - e >= G ? {o:e, s:sb, n:G} : null;
+  const clipA = gA ? {o:k0 - G, s:ea - G, n:G} : null, clipB = gB && L - e >= G ? {o:e, s:sb, n:G} : null;
   return {s:sb, ea, C, k0, B:N, L, pins, pinsA, clipA, clipB}; }
 const GUIDE_CLIP = 22;
 // (Jordan 2026-11-14: pick where the blend starts on the clip before and where it lands on the clip after; the frames up to the start
@@ -6408,6 +6431,10 @@ window.H3GapFill = async o => { const srcA = deckTake(o.takeA), tB = deckTake(o.
   const FA = o.a ? +o.a.frames : takeFrames(srcA), FB = o.b ? +o.b.frames : takeFrames(tB);
   const P = gapPlan(FA, (+o.outA || 0) * FPS, FB, (+o.inB || 0) * FPS, +o.secs || 2, FILL_CTX);
   const gap = {src:srcA ? srcA.id : '', clip:o.clipA || '', file:fileArg(flA), pins:P.pinsA, gclip:P.clipA, w:o.a ? o.a.w : srcA.w, h:o.a ? o.a.h : srcA.h, aOut:+o.outA || 0, bIn:+o.inB || 0, scaleB:true, hq:o.hq || null};
+  // ⇿ join (Reel): side 'a' = the clip before's frames from o.inA up to where the new part starts go in front; 'b' = the clip after's frames
+  // from where the new part lands up to o.outB go behind. The take is then that whole clip, made longer, not just the new seconds.
+  if(o.join==='a' || o.join==='b'){ const A = o.join==='a', s = A ? Math.max(0, Math.min(P.ea - 1, Math.round((+o.inA || 0) * FPS))) : P.s, e = A ? P.ea : Math.max(P.s + 1, Math.min(FB, o.outB != null ? Math.ceil(+o.outB * FPS - 1e-6) : FB));
+    gap.join = {side:o.join, s, n:e - s}; }
   return leadGo(src, fl, P, Object.assign({}, o, {clip:o.clipB}), {gap}, '⇿', 'gap fill'); };
 async function leadGo(src, fl, P, o, more, icon, word){ const key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)); let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
@@ -6418,6 +6445,7 @@ async function leadGo(src, fl, P, o, more, icon, word){ const key = uid('k'), n 
       ctxDirs:null, from:null, sm:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false, ctl:null, ctl2:null,
       lead:Object.assign({src:src.id, file:fileArg(fl), film:o.film || '', clip:o.clip || '', key}, P, more || {}),
       pieces:[{start:0, gen:P.L, deliv:P.B, ctx:0, prompt:text, state:'new'}]});
+    { const J = more && more.gap && more.gap.join; if(J && +J.n > 0){ t.pieces[0].deliv = P.B + +J.n; t.seconds = (P.B + +J.n) / FPS; } } // (⇿ joined onto a clip: the take is the whole longer clip)
     { const B = setsOf(src); if(B!==src) Object.assign(t, JSON.parse(JSON.stringify({model:B.model, turbo:B.turbo, loras:B.loras || [], steps:B.steps, fin:B.fin || null, boost:B.boost, w:B.w, h:B.h}))); } // (a ✨ copy's model and size are the pass's own: go back to the take it was made from)
     if(o.sets) Object.assign(t, JSON.parse(JSON.stringify(o.sets))); // (Reel, Jordan 2026-11-21: ⇿ Insert ran 20 steps on the first model) the same model, steps and PIKA finish as ✍ / ➕ / ↻ (H3 Deck's bare-bones form)
     if(FILMT===src.id){ const fs = snapshot(); Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3}); }
@@ -6671,14 +6699,14 @@ if(ENGINE){
     // Each pass is a copy of its clip's own take, so its own words, pictures, attributes and clothing go with it.
     // o.clips = [{take, a, b}] in order; returns {ids:[new take id or null per clip]}
     final:async o => { const pk = hqUnets().find(x => /prism_?pika/i.test(x)) || '', ids = []; let ch = null;
-      for(const c of o.clips || []){ const src = deckTake(c.take); if(!src || !takeFile(src)){ ids.push(null); ch = null; continue; }
+      for(const c of o.clips || []){ const src = deckTake(c.take); if(c.cut) ch = null; /* (a new shot: no ✨ context over the cut) */ if(!src || !takeFile(src)){ ids.push(null); ch = null; continue; }
         const on = !!ch && ch.w===src.w && ch.h===src.h, ctxc = on ? {dir:ch.dir, idx:ch.idx + 1, prev:ch.prev, pc:ch.pc} : {dir:'H3Deck/hqctx_' + uid('r'), idx:0, prev:'', pc:''}, key = uid('k');
         let n = 0; try{ n = await window.H3Nudge({take:src.id, a:+c.a || 0, b:+c.b || takeFrames(src) / FPS, scale:1.5, den:+o.den || 0.9, clean:0, look:src.h3 && /^(2d|cartoon|anime)/i.test(src.h3.scene || '') ? 'anime' : 'live', unet:pk, str:o.lstr != null ? +o.lstr : 0.8, ctxc, key, quiet:true}); }catch(e){ console.warn(e); }
         const t = n && S.takes.find(x => x.redo && x.redo.key===key); ids.push(t ? t.id : null);
         ch = t ? {dir:ctxc.dir, idx:ctxc.idx, prev:t.id, pc:t.pc, w:src.w, h:src.h} : null; }
       save(); return ids.some(Boolean) ? {ids} : {err:'Nothing could be sent. Are the PCs on?'}; },
     // ⇿ Insert: new seconds between two clips (the end of one pinned at the start, the start of the next pinned at the end)
-    fill:async o => { const sets = engSets(o.takeB), b = before(), nb = x => { x = x && setsOf(x); return !!x && (x.boost===false || !!x.styled); }; if(sets && (nb(deckTake(o.takeA)) || nb(deckTake(o.takeB)))) sets.boost = false; /* (Jordan 2026-11-21) between a clip with no ✨ boost LoRAs and one with them, the part leaves them out (they lit her face like a flashlight) */ const n = await window.H3GapFill({takeA:o.takeA, outA:+o.outA, takeB:o.takeB, inB:+o.inB || 0, secs:Math.max(0.5, Math.min(5, +o.secs || 2)), prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets});
+    fill:async o => { const sets = engSets(o.takeB), b = before(), nb = x => { x = x && setsOf(x); return !!x && (x.boost===false || !!x.styled); }; if(sets && (nb(deckTake(o.takeA)) || nb(deckTake(o.takeB)))) sets.boost = false; /* (Jordan 2026-11-21) between a clip with no ✨ boost LoRAs and one with them, the part leaves them out (they lit her face like a flashlight) */ const n = await window.H3GapFill({takeA:o.takeA, outA:+o.outA, takeB:o.takeB, inB:+o.inB || 0, secs:Math.max(0.5, Math.min(5, +o.secs || 2)), prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets, join:o.join || '', inA:+o.inA || 0, outB:o.outB != null ? +o.outB : null});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // ⏪ a part that leads into a clip (a clip with nothing before it)
     lead:async o => { const sets = engSets(o.take), b = before(), n = await window.H3Lead({take:o.take, at:+o.at || 0, secs:Math.max(1, Math.min(5, +o.secs || 3)), prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets});
