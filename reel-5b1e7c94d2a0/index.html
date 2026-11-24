@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-24-7">
+<meta name="reel-build" content="2026-11-24-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -948,7 +948,12 @@ function finalSheet(){ const cs = clips(), ok = cs.filter(c => doneOf(c.pick)), 
     <div class="lab" style="margin-top:10px"><span>✨ How strong</span></div><div class="seg" id="fnLv">${FIN_LV.map(([v, l]) => `<button data-v="${v}" class="${v===o.den ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div class="lab" style="margin-top:10px"><span>Upscale LoRA</span></div><div class="seg" id="fnLo">${FIN_LO.map(([v, l]) => `<button data-v="${v}" class="${v===o.lstr ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div class="note" style="margin-top:4px">The Open-H3 Regenerate LoRA was made for vanilla MiniMax. Off lets Prism Pika redraw on its own.</div>
+    <label class="lab" style="margin-top:12px;display:flex;gap:8px;align-items:center"><input type="checkbox" id="fnSeam" ${S.finSeam!==false ? 'checked' : ''}><span>🧵 Then blend the seams</span></label>
     <button class="big pri" id="fnGo" style="width:100%;margin-top:14px" ${ok.length ? '' : 'disabled'}>🎬 Final pass on ${ok.length} clip${ok.length===1 ? '' : 's'}</button>
+    <div class="lab" style="margin-top:16px"><span>🧵 Blend the seams</span></div>
+    <div class="note">The way H3 Deck's ⬆ Upscale track does it: neighbouring clips are joined on a PC and the frames at each join are repainted, with about 1 s of both clips' real motion pinned on each side, so light, shadows and movement flow across instead of jumping. Joins into a new shot are left alone. Each clip gets the result as a new option (its old one stays).</div>
+    <div class="lab" style="margin-top:8px"><span>How much is repainted at each join</span></div><div class="seg" id="smLen">${SEAM_LEN.map(([v, l]) => `<button data-v="${v}" class="${v===(S.seamHalf || 8) ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <button class="btn pri" id="smGo" style="width:100%;margin-top:8px">🧵 Blend the seams now</button><div id="smSt" class="note" style="margin-top:6px">${esc(seamText())}</div>
     ${cs.some(c => ((c.meta || {})[c.pick] || {}).src) ? '<button class="btn" id="fnBack" style="width:100%;margin-top:10px">↩ Back to the originals (before the final pass)</button>' : ''}
     <div class="lab" style="margin-top:16px"><span>⬇ The whole reel as one video</span></div>
     <div class="note">The picked option of every clip, trimmed as you have it, joined in order on a PC (the same export as H3 Deck's Films). The clips stay separate here, so you can keep editing and export again.</div>
@@ -958,10 +963,13 @@ function finalSheet(){ const cs = clips(), ok = cs.filter(c => doneOf(c.pick)), 
   $('#fnExp').onclick = () => expGo(); expDraw();
   $$('#fnLv button').forEach(b => b.onclick = () => { o.den = +b.dataset.v; $$('#fnLv button').forEach(x => x.classList.toggle('on', x===b)); });
   $$('#fnLo button').forEach(b => b.onclick = () => { o.lstr = +b.dataset.v; $$('#fnLo button').forEach(x => x.classList.toggle('on', x===b)); });
+  $$('#smLen button').forEach(b => b.onclick = () => { S.seamHalf = +b.dataset.v; save(); $$('#smLen button').forEach(x => x.classList.toggle('on', x===b)); });
+  $('#fnSeam').onchange = e => { S.finSeam = e.target.checked; save(); };
+  $('#smGo').onclick = () => { if(!seamStart()) return; $('#smSt').textContent = seamText(); };
   $('#fnGo').onclick = async () => { S.finDen = o.den; S.finLo = o.lstr; save(); let all = [];
     const r = await send($('#fnGo'), async () => { const x = await E.final({clips:ok.map(c => ({take:c.pick, a:c.in || 0, b:endOf(c), cut:isCut(c)})), den:o.den, lstr:o.lstr}); if(x.ids){ all = x.ids; return {ids:x.ids.filter(Boolean)}; } return x; }, '🎬 Final pass sent: each clip gets its ✨ version as a new option');
     if(!r) return; ok.forEach((c, k) => { const id = all[k]; if(!id) return; addTakes(c, [id], Object.assign({}, (c.meta || {})[c.pick] || {}, {fin:true, src:c.pick, reup:0, whole:false, srcIn:c.in || 0, srcOut:c.out != null ? c.out : null}), wordsOf(c, c.pick)); c.pick = id; c.in = 0; c.out = null; c.up = true; }); // (↩ Back puts the trim she had back)
-    save(); VSIG = ''; refresh(); }; }
+    if(S.finSeam!==false) seamStart(true); save(); VSIG = ''; refresh(); }; }
 $('#finBtn').onclick = e => { e.stopPropagation(); finalSheet(); };
 // ⬆ Upscale this option (Jordan 2026-11-24: "the option to just upscale a take individually and have multiple upscales like a batch so I can
 // choose (since some of them change quite a bit)"): the same ✨ pass as 🎬 Final pass on the picked option alone, N times with different seeds.
@@ -1051,6 +1059,53 @@ function drawChain(){ const b = $('#chainBox'); if(!b) return; const ch = R() &&
 setInterval(() => { if(!document.hidden) chainTick(); }, 5000);
 const JOBS = [];
 setInterval(() => { if(!document.hidden) reupTick(); }, 5000);
+// 🧵 Blend the seams (Jordan 2026-11-24: "The shadows change fairly hard on the seam"): H3 Deck's ⬆ Upscale track seams for the reel.
+// R().seam = {state:'wait'|'A'|'B'|'done'|'failed', half, jobs:[{id, round, bounds:[{clip, take, off, len}]}], B:[[clipId, clipId]], err}.
+// Runs of clips joined without a new-shot cut are blended; at most SEAM_MAX clips go in one job (a 12-clip job ran a PC out of memory in
+// H3 Deck), and the joins between two such jobs go in a second round, from the first round's results. 'wait' = after the 🎬 Final pass,
+// it starts by itself once every clip's picked option is done. Each clip gets its own stretch of the joined video as a new option.
+const SEAM_MAX = 3, SEAM_LEN = [[4, 'Short (⅓ s)'], [8, 'Medium (⅔ s)'], [12, 'Long (1 s)']];
+function seamText(){ const z = R() && R().seam; if(!z) return '';
+  if(z.state==='wait') return '🧵 Waiting for every clip to finish, then the seams are blended.';
+  if(z.state==='A' || z.state==='B'){ const js = z.jobs.filter(j => j.round===z.state), d = js.filter(j => doneOf(j.id)).length; return '🧵 Blending the seams' + (z.B && z.B.length ? ' (round ' + (z.state==='A' ? 1 : 2) + ' of 2)' : '') + ': ' + d + ' of ' + js.length + ' done.'; }
+  if(z.state==='failed') return '🧵 The seams didn\'t blend: ' + (z.err || 'a job failed') + '. The clips keep what they had.';
+  return z.state==='done' ? '🧵 Seams blended' + (z.n ? ': ' + z.n + ' join' + (z.n===1 ? '' : 's') : '') + '.' : ''; }
+// runs of clips joined without a cut (each at least 2 clips)
+function seamGroups(){ const cs = clips(), gs = []; let g = []; cs.forEach((c, i) => { if(i && !isCut(c)) g.push(c); else { if(g.length > 1) gs.push(g); g = [c]; } }); if(g.length > 1) gs.push(g); return gs; }
+function seamStart(later){ const r = R(), gs = seamGroups(); if(!gs.length){ if(!later) toast('🧵 Every join is into a new shot, so there are no seams to blend'); return false; }
+  if(r.seam && (r.seam.state==='A' || r.seam.state==='B')){ toast('🧵 The seams are already blending'); return false; }
+  r.seam = {state:'wait', half:S.seamHalf || 8, jobs:[], B:null, err:''}; save(); seamTick(); return true; }
+async function seamSend(r, z, groups, round){ let n = 0;
+  for(const gr of groups){ let off = 0; const bounds = gr.map(c => { const len = endOf(c) - (c.in || 0), b = {clip:c.id, take:c.pick, off, len}; off += len; return b; });
+    const x = await E.seam({parts:gr.map(c => ({take:c.pick, a:c.in || 0, b:endOf(c)})), half:z.half}).catch(e => ({err:e.message}));
+    if(x && x.id){ z.jobs.push({id:x.id, round, bounds}); n++; } else z.err = (x && x.err) || 'not sent'; }
+  return n; }
+// the joined video back into its clips: each clip picks its own stretch of it (the old option stays)
+function seamPlace(r, j){ let n = 0;
+  for(const b of j.bounds){ const c = r.clips.find(x => x.id===b.clip); if(!c || c.pick!==b.take) continue; const m = (c.meta || {})[c.pick] || {};
+    const meta = Object.assign({}, m, {seam:true, trim:{in:b.off, out:b.off + b.len}}); if(!m.fin){ delete meta.src; delete meta.reup; }
+    addTakes(c, [j.id], meta, wordsOf(c, c.pick)); pickOpt(c, j.id); c.meta[j.id].trim = {in:b.off, out:b.off + b.len}; n++; }
+  if(n < j.bounds.length) toast('🧵 Some clips changed while the seams were blending, so ' + (j.bounds.length - n) + ' kept what they had', 6000); return n; }
+let SEAMB = false;
+async function seamTick(){ if(SEAMB || !E || !E.seam || !READY) return; const r = R(), z = r && r.seam; if(!z || z.state==='done' || z.state==='failed') return;
+  SEAMB = true; try{
+    if(z.state==='wait'){ const gs = seamGroups(), cs = gs.flat();
+      if(cs.some(c => !c.pick || /failed|gone/.test(info(c.pick).state))){ z.state = 'failed'; z.err = 'a clip has no finished option'; save(); return; }
+      if(cs.some(c => !doneOf(c.pick))) return;
+      const A = [], B = []; for(const gr of gs){ if(gr.length <= SEAM_MAX){ A.push(gr); continue; }
+        for(let i = 0; i < gr.length; i += SEAM_MAX){ const ch = gr.slice(i, i + SEAM_MAX); if(ch.length > 1) A.push(ch); if(i + SEAM_MAX < gr.length) B.push([gr[i + SEAM_MAX - 1].id, gr[i + SEAM_MAX].id]); } }
+      z.B = B.length ? B : null; z.n = gs.reduce((a, g) => a + g.length - 1, 0);
+      if(!await seamSend(r, z, A, 'A')){ z.state = 'failed'; z.err = z.err || 'not sent'; save(); toast('🧵 Couldn\'t send the seams. Are the PCs on?', 5000); return; }
+      z.state = 'A'; save(); toast('🧵 Blending ' + z.n + ' seam' + (z.n===1 ? '' : 's') + ' on the PC (about a minute each). Each clip gets the result as a new option.', 6000); return; }
+    const js = z.jobs.filter(j => j.round===z.state);
+    if(js.some(j => /failed|gone/.test(info(j.id).state))){ z.state = 'failed'; z.err = 'a seam job failed'; save(); return; }
+    if(!js.every(j => doneOf(j.id))) return;
+    js.forEach(j => { if(!j.placed){ seamPlace(r, j); j.placed = true; } }); VSIG = '';
+    if(z.state==='A' && z.B){ const pairs = z.B.map(p => p.map(id => r.clips.find(c => c.id===id))).filter(p => p.every(Boolean));
+      if(pairs.length && await seamSend(r, z, pairs, 'B')){ z.state = 'B'; save(); refresh(); return; } }
+    z.state = 'done'; save(); refresh(); toast('🧵 Seams blended: each clip has its blended stretch picked (the old option stays)', 5000); }
+  finally{ SEAMB = false; if($('#smSt')) $('#smSt').textContent = seamText(); } }
+setInterval(() => { if(!document.hidden) seamTick(); }, 5000);
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if(!b) return; if(!READY){ toast('Still starting…'); return; }
   const at = b.dataset.at != null ? +b.dataset.at : null; if(b.dataset.act==='make') makeSheet(at); else if(b.dataset.act==='upload'){ closeSheet(); uploadPick(at); } });
 
@@ -1077,6 +1132,6 @@ async function boot(){ for(let i = 0; i < 600 && !engOk(); i++) await new Promis
 document.addEventListener('visibilitychange', () => { if(!document.hidden && E){ E.refresh(); refresh(); } });
 window.addEventListener('resize', () => placeWheel());
 stampReels(); draw(); boot();
-window.REEL = {setTab, S:() => S, R, cur, clips, go, info:id => info(id), redoPlan, addClip, refresh, E:() => E, TH:() => TH, addTakes, reup:reupTick, isUp, saveTh, flushUndo, chainTick};
+window.REEL = {seamTick, seamStart, seamGroups, setTab, S:() => S, R, cur, clips, go, info:id => info(id), redoPlan, addClip, refresh, E:() => E, TH:() => TH, addTakes, reup:reupTick, isUp, saveTh, flushUndo, chainTick};
 </script>
 </body></html>
