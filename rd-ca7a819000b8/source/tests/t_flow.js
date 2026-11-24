@@ -113,6 +113,12 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
   await page.click('.block[style*="--model"] h3'); ok(!(await page.isVisible('[data-k=ckpt]')), 'tapping again folds it');
   await page.click('.block[style*="--model"] h3'); await page.click('.block[style*="--samp"] h3');
   await page.selectOption('[data-k=ckpt]', 'pony.safetensors');
+  // 16:9 and 9:16 shapes: about 1 MP on Large, multiples of 64
+  await page.click('.block[style*="--samp"] [data-seg=shape][data-v=cinema]');
+  ok(await page.evaluate(() => sizeOf(S.blocks.find(b => b.type==='sampler')).join('x'))==='1344x768', '16:9 Large is 1344 × 768');
+  await page.click('.block[style*="--samp"] [data-seg=shape][data-v=phone]');
+  ok(await page.evaluate(() => sizeOf(S.blocks.find(b => b.type==='sampler')).join('x'))==='768x1344', '9:16 Large is 768 × 1344');
+  await page.click('.block[style*="--samp"] [data-seg=shape][data-v=square]');
   await page.click('#graphBtn'); await page.waitForSelector('#graphSheet.open'); const pg = JSON.parse(await page.textContent('#json')); await page.evaluate(() => closeSheets());
   ok(check(pg).length===0 && Object.values(pg).some(x => x.class_type==='CLIPSetLastLayer' && x.inputs.stop_at_clip_layer===-2), 'Pony style adds CLIP skip 2: '+check(pg).join('; '));
   ok(/^score_9, score_8_up/.test(textOf(pg,'Prompt')) && /^score_6, /.test(textOf(pg,'Avoid')), 'Pony style adds score tags');
