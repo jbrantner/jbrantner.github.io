@@ -99,7 +99,7 @@ let view='Front', selId=null; let VW={a:[1,0,0],b:[0,1,0],d:[0,0,1]}; const undo
 const $=id=>document.getElementById(id);
 const byId=id=>S.pts.find(q=>q.id===id);
 function push(){ undoS.push(JSON.stringify({S,nextId})); if(undoS.length>80) undoS.shift(); }
-function undo(){ if(!undoS.length) return; const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; selId=null; selFold=null; changed(); toast('Undo'); }
+function undo(){ if(!undoS.length) return; const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; selId=null; selFold=null; selFace=null; changed(); toast('Undo'); }
 
 // every corner has a spot on the flat, unfolded box (its "rest" spot, q.r) and a spot in 3D (q.p).
 // The rest spot never changes when you pull, so the paper's layout stays steady.
@@ -171,7 +171,7 @@ function solve1(){
   ACT=new Set(S.pts.filter(q=>q.on.t==='c'||q.m).map(q=>q.id)); for(const [a,b] of S.folds||[]){ ACT.add(a); ACT.add(b); }
   if(S.mirror) for(const id of [...ACT]){ const q=byId(id), t=q&&q.tw&&byId(q.tw); if(t) ACT.add(t.id); }
   symm(false);
-  const T=[], triPanel=[], lay=[], regions=[], sticky=[];
+  const T=[], triPanel=[], lay=[], regions=[], sticky=[], faces=[];
   PANELS.forEach((P,f)=>{
     // outline: the side's 4 box corners counter-clockwise, with edge corners slotted in along each edge
     const cs=[[-H,-H],[H,-H],[H,H],[-H,H]].map(([a,b])=>cornerAt(add3(add3(mul3(P.n,H),mul3(P.u,a)),mul3(P.v,b))));
@@ -204,8 +204,10 @@ function solve1(){
     // faces: the pieces of this side between your folds (they must stay flat)
     { const M=emap(tr.T), par=tr.T.map((t,i)=>i), fd=i=>par[i]===i?i:(par[i]=fd(par[i])), n=ring.length;
       for(const [k,ts] of M){ const [u,v]=k.split(',').map(Number); if(ts.length===2&&!userK.has(k)&&!(u<n&&v<n&&(v===(u+1)%n||u===(v+1)%n))) par[fd(ts[0])]=fd(ts[1]); }
-      const g=new Map(); tr.T.forEach((t,i)=>{ const r=fd(i); if(!g.has(r)) g.set(r,new Set()); t.forEach(x=>g.get(r).add(list[x].id)); });
-      for(const ids of g.values()) regions.push([...ids]); }
+      const g=new Map(), gt=new Map(), open=new Set(); tr.T.forEach((t,i)=>{ const r=fd(i); if(!g.has(r)){ g.set(r,new Set()); gt.set(r,[]); } t.forEach(x=>g.get(r).add(list[x].id)); gt.get(r).push(T.length+i);
+        for(let j=0;j<3;j++){ const u=t[j], v=t[(j+1)%3]; if(u<n&&v<n&&(v===(u+1)%n||u===(v+1)%n)) open.add(r); } });
+      // a face fenced in by your folds all the way round (not touching the box's own edges) can be picked, moved and extruded
+      for(const [r,ids] of g){ regions.push([...ids]); faces.push({ids:[...ids],tris:gt.get(r),f,closed:!open.has(r)}); } }
     for(const t of tr.T){ T.push(t.map(i=>list[i].id)); triPanel.push(f); }
     lay[f]={list,V,T:tr.T};
   });
@@ -217,7 +219,7 @@ function solve1(){
         if(u<-1e-6||v<-1e-6||w<-1e-6) continue; const [P,Q,R]=t.map(i=>L.list[i].p); q.p=[0,1,2].map(k=>Math.round((u*P[k]+v*Q[k]+w*R[k])*100)/100); done=true; break; }
       if(done) break; } }
   const pos=new Map(S.pts.map(q=>[q.id,q.p]));
-  GEO={T,triPanel,pos,regions}; return GEO;
+  GEO={T,triPanel,pos,regions,faces}; return GEO;
 }
 // when four corners don't lie flat there are two ways to fold them; pick the gentler fold, and if it's close, the one that bulges out
 const nrm3=(A,B,C)=>{ const u=[B[0]-A[0],B[1]-A[1],B[2]-A[2]], v=[C[0]-A[0],C[1]-A[1],C[2]-A[2]]; const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]]; const L=Math.hypot(...n); return L<1e-6?null:n.map(x=>x/L); };
@@ -304,7 +306,14 @@ function draw2(){
     const R=(live?(rim?8:7):7)*(0.6+0.55*near), A=live?0.28+0.72*near:0.5+0.5*near;
     g.strokeStyle=live?cl:'#ff7a00'; g.globalAlpha=on?1:A; g.lineWidth=on?4.5:(live?1.6+2.2*near:2.6+0.8*near); g.beginPath(); g.arc(a,b,on?11+pulse*5:R,0,7); g.stroke(); g.setLineDash([]);
     if(on||live){ g.fillStyle=cl; g.globalAlpha=on?.4:A*(near>0.6?0.45:0.12); g.fill(); } g.globalAlpha=1; }
-  if(drag&&drag.type==='free'){ const B=drag.link&&P2.get(drag.link); const [x2,y2]=B?toPx(B.x,B.y):[drag.fx,drag.fy]; g.strokeStyle='#2f6bff'; g.lineWidth=5; g.lineCap='round'; g.setLineDash([8,7]); g.beginPath(); g.moveTo(drag.sx,drag.sy); g.lineTo(x2,y2); g.stroke(); g.setLineDash([]); g.fillStyle='#2f6bff'; g.beginPath(); g.arc(drag.sx,drag.sy,5,0,7); g.fill(); }
+  if(selFace){ const ids=new Set(selFace.ids); g.beginPath(); GEO.T.forEach(t=>{ if(!t.every(id=>ids.has(id))) return; t.map(id=>toPx(P2.get(id).x,P2.get(id).y)).forEach(([a,b],k)=>k?g.lineTo(a,b):g.moveTo(a,b)); g.closePath(); });
+    g.fillStyle='#2f6bff'; g.globalAlpha=selFace.ex?.38:.22; g.fill(); g.globalAlpha=1;
+    // outline only (no lines across the face)
+    const cnt=new Map(); GEO.T.forEach(t=>{ if(!t.every(id=>ids.has(id))) return; for(let j=0;j<3;j++){ const k=ek(t[j],t[(j+1)%3]); cnt.set(k,(cnt.get(k)||0)+1); } });
+    g.beginPath(); for(const [k,c] of cnt){ if(c!==1) continue; const [u,v]=k.split(',').map(Number), [x1,y1]=toPx(P2.get(u).x,P2.get(u).y), [x2,y2]=toPx(P2.get(v).x,P2.get(v).y); g.moveTo(x1,y1); g.lineTo(x2,y2); }
+    g.strokeStyle='#2f6bff'; g.lineWidth=selFace.ex?4:3; g.setLineDash(selFace.ex?[]:[7,5]); g.stroke(); g.setLineDash([]); }
+  if(drag&&drag.type==='free'&&drag.path&&loopish(drag)){ g.strokeStyle='#2f6bff'; g.lineWidth=4; g.setLineDash([8,7]); g.beginPath(); drag.path.forEach(([a,b],k)=>k?g.lineTo(a,b):g.moveTo(a,b)); g.stroke(); g.setLineDash([]); }
+  else if(drag&&drag.type==='free'){ const B=drag.link&&P2.get(drag.link); const [x2,y2]=B?toPx(B.x,B.y):[drag.fx,drag.fy]; g.strokeStyle='#2f6bff'; g.lineWidth=5; g.lineCap='round'; g.setLineDash([8,7]); g.beginPath(); g.moveTo(drag.sx,drag.sy); g.lineTo(x2,y2); g.stroke(); g.setLineDash([]); g.fillStyle='#2f6bff'; g.beginPath(); g.arc(drag.sx,drag.sy,5,0,7); g.fill(); }
   if(drag&&drag.type==='line'){ const A=P2.get(drag.id), B=drag.link&&P2.get(drag.link); if(A){ const [x1,y1]=toPx(A.x,A.y),[x2,y2]=B?toPx(B.x,B.y):[drag.fx,drag.fy]; g.globalAlpha=B?1:.55; g.strokeStyle='#2f6bff'; g.lineWidth=5; g.setLineDash([8,7]); g.beginPath(); g.moveTo(x1,y1); g.lineTo(x2,y2); g.stroke(); g.setLineDash([]); g.globalAlpha=1; } }
   GEO.vis=out; GEO.P2=P2;
 }
@@ -313,7 +322,10 @@ function draw2(){
 function hitPoint(px,py,skip){ let best=null,bd=skip?20:24; for(const q of GEO.vis){ if(q.id===skip) continue; const p=GEO.P2.get(q.id); const [a,b]=toPx(p.x,p.y); const d=Math.hypot(a-px,b-py)-(q.id===selId?5:0); if(d<bd){bd=d;best=q;} } return best; }
 // one finger at a time: a second finger (or a palm) landing mid-gesture is ignored
 c2.addEventListener('pointerdown',e=>{ if(drag) return; c2.setPointerCapture(e.pointerId); const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
-  const q=hitPoint(px,py); drag=q?{type:'pt',id:q.id,sx:px,sy:py,moved:false}:{type:'tap',sx:px,sy:py,t0:performance.now()}; drag.pid=e.pointerId;
+  const q=hitPoint(px,py);
+  // a picked face: drag anywhere on it to move it (from the side, that pulls it out or pushes it in)
+  if(!q&&selFace&&onFace(px,py)){ drag={type:'face',sx:px,sy:py,moved:false,pid:e.pointerId,t0:performance.now()}; return; }
+  drag=q?{type:'pt',id:q.id,sx:px,sy:py,moved:false}:{type:'tap',sx:px,sy:py,t0:performance.now()}; drag.pid=e.pointerId;
   // hold a corner still for a moment and it switches to drawing a fold line from it
   // hold on a fold (away from corners) and it goes away
   if(!q){ const c=foldNear(px,py); if(c){ const dd=drag;
@@ -323,7 +335,8 @@ c2.addEventListener('pointerdown',e=>{ if(drag) return; c2.setPointerCapture(e.p
   if(!q&&!foldNear(px,py)){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='free'; dd.fx=px; dd.fy=py; dd.loop=!onPaper(px,py); pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast(onPaper(px,py)?'Draw your fold':'Draw across the shape: edge loop'); draw2(); },450); }
   if(q){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.moved) return; dd.type='line'; dd.fx=px; dd.fy=py; selId=dd.id; pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast('Drag to another corner to fold'); draw2(); },500); } });
 c2.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.pid) return; const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
-  if(drag.type==='free'){ drag.fx=px; drag.fy=py; if(drag.loop) snapLine(drag); const o=!drag.loop&&hitPoint(px,py); const was=drag.link; drag.link=o?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
+  if(drag.type==='face'){ moveFace(drag,px,py); return; }
+  if(drag.type==='free'){ drag.fx=px; drag.fy=py; (drag.path=drag.path||[[drag.sx,drag.sy]]).push([px,py]); if(drag.loop) snapLine(drag); const o=!drag.loop&&hitPoint(px,py); const was=drag.link; drag.link=o?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
   if(drag.type==='line'){ drag.fx=px; drag.fy=py; const q=byId(drag.id), o=hitPoint(px,py,q.id); const was=drag.link; drag.link=o&&sharedPanel(q,o)>=0?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
   if(!drag.moved&&Math.hypot(px-drag.sx,py-drag.sy)<6) return;
   clearTimeout(drag.hold); if(drag.pv){ clearTimeout(drag.pv); drag.pv=0; if(selFold){ selFold=null; draw2(); } }
@@ -340,11 +353,12 @@ c2.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.pid) return;
   const np=add3(add3(mul3(Vw.a,a),mul3(Vw.b,b)),mul3(Vw.d,dz)).map(v=>Math.round(v*100)/100);
   if(np.some((v,k)=>Math.abs(v-q.p[k])>0.01)){ q.p=np; const t=twinOf(q); if(t) t.p=[-np[0],np[1],np[2]]; tick(); changed(true); } });
 function endDrag(e){ if(!drag||e.pointerId!==drag.pid) return; const d=drag; drag=null; clearTimeout(d.hold); clearTimeout(d.pv); if(d.type==='tap'&&selFold){ selFold=null; } const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+  if(d.type==='face'){ if(d.moved){ pop(); changed(); } else if(!tapFace(px,py)) addPoint(px,py); return; }
   if(d.type==='pt'&&!d.moved){ selFold=null; selId=selId===d.id?null:d.id; changed(true); return; }
-  if(d.type==='free'){ if(Math.hypot(d.fx-d.sx,d.fy-d.sy)>14||d.link) drawFold(d); else changed(true); return; }
+  if(d.type==='free'){ if(!d.loop&&loopish(d)) drawRect(d); else if(Math.hypot(d.fx-d.sx,d.fy-d.sy)>14||d.link) drawFold(d); else changed(true); return; }
   if(d.type==='line'){ if(d.link){ push(); makeFold(d.id,d.link); } else changed(true); return; }
   if(d.type==='pt'){ pop(); changed(); return; }
-  if(d.type==='tap') addPoint(px,py);
+  if(d.type==='tap'){ if(tapFace(px,py)) return; addPoint(px,py); }
   if(d.type==='swipe'){ const fast=performance.now()-d.t0<350&&Math.abs(d.th)>0.12; const tgt=Math.abs(d.th)>Math.PI/6||fast?Math.sign(d.th)*Math.PI/2:0; settleSpin(d.V0,d.ax,d.th,tgt); } }
 c2.addEventListener('pointerup',endDrag); const cancelDrag=e=>{ if(!drag||e.pointerId!==drag.pid) return; clearTimeout(drag.hold); clearTimeout(drag.pv); if(drag.moved) changed(); drag=null; draw2(); };
 c2.addEventListener('pointercancel',cancelDrag); c2.addEventListener('lostpointercapture',cancelDrag);
@@ -400,6 +414,64 @@ function rimPoint(px,py){ let best=null,bd=45;
     const tq=mk([-p3[0],p3[1],p3[2]],mon); tq.r=[-r[0],r[1],r[2]]; tq.m=true; q.tw=tq.id; tq.tw=q.id;
     const tA=mirrorOf(A), tB=mirrorOf(B); if(keep&&tA&&tB&&tA!==A&&tB!==B&&sharedPanel(tA,tB)>=0){ S.folds=S.folds.filter(x=>!((x[0]===tA.id&&x[1]===tB.id)||(x[0]===tB.id&&x[1]===tA.id))); S.folds.push([tA.id,tq.id],[tq.id,tB.id]); } }
   selId=q.id; pop(); changed(); toast('Corner on the outline. Drag it to reshape.'); return true; }
+// ---------- faces you can pick, move and extrude ----------
+let selFace=null, lastTap={t:0,key:''};
+const faceKey=ids=>ids.slice().sort((a,b)=>a-b).join(',');
+function triAt(px,py){ const [a,b]=toMm(px,py), p={x:a,y:b}; let hit=null;
+  GEO.T.forEach((t,i)=>{ if(dot3(triNormal(t),VW.d)<=0.05) return; const [A,B,C]=t.map(id=>GEO.P2.get(id)); const ar=orient(A,B,C); if(Math.abs(ar)<1e-6) return;
+    const u=orient(B,C,p)/ar, v=orient(C,A,p)/ar, w=orient(A,B,p)/ar; if(u<-1e-6||v<-1e-6||w<-1e-6) return; const z=u*A.z+v*B.z+w*C.z; if(!hit||z>hit.z) hit={i,z}; });
+  return hit?hit.i:-1; }
+function faceAt(px,py){ const i=triAt(px,py); return i<0?null:(GEO.faces||[]).find(F=>F.closed&&F.tris.includes(i))||null; }
+// on the picked face, or (seen edge-on from the side) within a finger's width of it
+function onFace(px,py){ const ids=new Set(selFace.ids), P2=GEO.P2; const ts=GEO.T.filter(t=>t.every(id=>ids.has(id))); if(!ts.length) return false; const p={x:px,y:py};
+  for(const t of ts){ const [A,B,C]=t.map(id=>{ const q=P2.get(id), [x,y]=toPx(q.x,q.y); return {x,y}; }); const o1=orient(A,B,p),o2=orient(B,C,p),o3=orient(C,A,p);
+    if((o1>=0&&o2>=0&&o3>=0)||(o1<=0&&o2<=0&&o3<=0)) return true; if(Math.min(segD(p,A,B),segD(p,B,C),segD(p,C,A))<22) return true; }
+  return false; }
+// tap a face fenced in by folds to pick it; double tap it to get ready to extrude; a single tap on the picked face adds a corner there
+let tapWait=0;
+function tapFace(px,py){ const now=performance.now(), F=faceAt(px,py); clearTimeout(tapWait);
+  if(!F){ if(selFace){ selFace=null; changed(true); return true; } return false; }
+  const key=faceKey(F.ids);
+  if(now-lastTap.t<380&&lastTap.key===key){ selFace={ids:F.ids.slice(),ex:true}; selId=null; selFold=null; pulse=1; if(sound) blip(640,.08,.08); toast('Ready to extrude: drag the face'); lastTap={t:0,key:''}; changed(true); return true; }
+  if(selFace&&faceKey(selFace.ids)===key){ lastTap={t:now,key};
+    // wait a moment: if a second tap comes it's a double tap (extrude), otherwise this tap adds a corner
+    tapWait=setTimeout(()=>{ if(lastTap.key!==key||drag) return; lastTap={t:0,key:''}; selFace=null; addPoint(px,py); },380); return true; }
+  selFace={ids:F.ids.slice(),ex:false}; selId=null; selFold=null; lastTap={t:now,key}; pulse=1; if(sound) blip(560,.06,.06); toast('Face picked: drag it, or double tap to extrude'); changed(true); return true; }
+function moveFace(d,px,py){ if(!d.moved&&Math.hypot(px-d.sx,py-d.sy)<6) return;
+  if(!d.moved){ d.moved=true; push(); if(selFace.ex){ extrudeFace(); selFace.ex=false; } d.p0=new Map(selFace.ids.map(id=>[id,byId(id).p.slice()])); }
+  const [a0,b0]=toMm(d.sx,d.sy), [a,b]=toMm(px,py), da=Math.round((a-a0)/SNAP)*SNAP, db=Math.round((b-b0)/SNAP)*SNAP;
+  const D=add3(mul3(VW.a,da),mul3(VW.b,db)); const ids=new Set(selFace.ids);
+  // a face that straddles the middle (with Mirror on) can only move straight, so both halves stay matched
+  if(S.mirror&&selFace.ids.some(id=>{ const q=byId(id); return q.tw&&ids.has(q.tw); })) D[0]=0;
+  let ch=false; for(const [id,p0] of d.p0){ const q=byId(id); const np=p0.map((v,k)=>Math.round((v+D[k])*100)/100); if(np.some((v,k)=>v!==q.p[k])) ch=true; q.p=np;
+    const t=twinOf(q); if(t&&!ids.has(t.id)) t.p=[-np[0],np[1],np[2]]; }
+  if(ch){ tick(); changed(true); } }
+// extrude: the face's outline is copied just inside itself, joined to the old outline by folds; the copy is what moves, the strip between becomes the walls
+function extrudeOne(F,map){ const cnt=new Map(); for(const ti of F.tris){ const t=GEO.T[ti]; for(let j=0;j<3;j++){ const k=ek(t[j],t[(j+1)%3]); cnt.set(k,(cnt.get(k)||0)+1); } }
+  const bnd=[...cnt].filter(([,c])=>c===1).map(([k])=>k.split(',').map(Number)), B=[...new Set(bnd.flat())];
+  const R=B.map(id=>restOf(byId(id))), c=[0,1,2].map(k=>R.reduce((s,r)=>s+r[k],0)/R.length);
+  B.forEach((id,i)=>{ const r=R[i], dv=[c[0]-r[0],c[1]-r[1],c[2]-r[2]], L=Math.hypot(...dv)||1, dd=Math.min(2.5,L*0.3);
+    const q=mk(byId(id).p.slice(),{t:'f',f:F.f}); q.r=onSide(F.f,r.map((v,k)=>v+dv[k]/L*dd)); q.m=true; map.set(id,q.id); });
+  S.folds=S.folds||[]; for(const [u,v] of bnd) S.folds.push([map.get(u),map.get(v)]); for(const id of B) S.folds.push([id,map.get(id)]);
+  return F.ids.filter(id=>!B.includes(id)); }
+function extrudeFace(){ const ids=new Set(selFace.ids); const F=GEO.faces.find(F=>F.closed&&F.ids.length===ids.size&&F.ids.every(i=>ids.has(i))); if(!F) return;
+  const map=new Map(); const inner=extrudeOne(F,map);
+  if(S.mirror){ const tw=F.ids.map(id=>{ const q=byId(id); return q.tw||0; }); if(tw.every(x=>x)){ const T2=new Set(tw);
+      if(!F.ids.every(id=>T2.has(id))){ const F2=GEO.faces.find(G=>G.closed&&G.ids.length===T2.size&&G.ids.every(i=>T2.has(i))); if(F2) extrudeOne(F2,map); } } }
+  for(const [o,n] of map){ const t=byId(o).tw; if(t&&map.has(t)){ byId(n).tw=map.get(t); } }
+  const loop=[...map].filter(([o])=>ids.has(o)).map(([,n])=>n); selFace={ids:[...loop,...inner],ex:false}; solve(); }
+// ---------- draw a closed shape: it becomes a flat square of folds, snapped to the grid ----------
+function loopish(d){ const P=d.path; if(!P||P.length<8) return false; let L=0, x0=1e9,y0=1e9,x1=-1e9,y1=-1e9; for(let i=0;i<P.length;i++){ if(i) L+=Math.hypot(P[i][0]-P[i-1][0],P[i][1]-P[i-1][1]); x0=Math.min(x0,P[i][0]); y0=Math.min(y0,P[i][1]); x1=Math.max(x1,P[i][0]); y1=Math.max(y1,P[i][1]); }
+  const gap=Math.hypot(P[P.length-1][0]-P[0][0],P[P.length-1][1]-P[0][1]); return x1-x0>18&&y1-y0>18&&L>140&&gap<Math.max(40,0.25*Math.min(x1-x0,y1-y0)+20); }
+function drawRect(d){ const P=d.path.map(([x,y])=>toMm(x,y)); let a0=Math.min(...P.map(p=>p[0])), a1=Math.max(...P.map(p=>p[0])), b0=Math.min(...P.map(p=>p[1])), b1=Math.max(...P.map(p=>p[1]));
+  a0=Math.round(a0/SNAP)*SNAP; a1=Math.round(a1/SNAP)*SNAP; b0=Math.round(b0/SNAP)*SNAP; b1=Math.round(b1/SNAP)*SNAP; if(a1-a0<SNAP||b1-b0<SNAP){ toast('Draw the square a bit bigger'); changed(true); return; }
+  push(); const n0=S.pts.length; const C=[[a0,b0],[a1,b0],[a1,b1],[a0,b1]].map(([a,b])=>addPoint(...toPx(a,b),true)); if(S.pts.length>n0) changed(true);
+  if(C.some(q=>!q)||new Set(C.map(q=>q.id)).size<4||[1,2,3].some(i=>sharedPanel(C[0],C[i])<0)){ const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; toast('Draw the square on one side of the box'); changed(); return; }
+  S.folds=S.folds||[]; const has=(a,b)=>S.folds.some(f=>(f[0]===a&&f[1]===b)||(f[0]===b&&f[1]===a));
+  for(let i=0;i<4;i++){ const A=C[i], B=C[(i+1)%4]; if(!has(A.id,B.id)) S.folds.push([A.id,B.id]); const ta=mirrorOf(A), tb=mirrorOf(B);
+    if(S.mirror&&ta&&tb&&!(ta===A&&tb===B)&&!(ta===B&&tb===A)&&sharedPanel(ta,tb)>=0&&!has(ta.id,tb.id)) S.folds.push([ta.id,tb.id]); }
+  selId=null; solve(); const ids=new Set(C.map(q=>q.id)); const F=GEO.faces.find(F=>F.closed&&C.every(q=>F.ids.includes(q.id))&&F.ids.every(id=>ids.has(id)));
+  selFace=F?{ids:F.ids.slice(),ex:false}:null; pulse=1; if(sound) blip(700,.08,.08); toast(F?'Square made. Drag it, or double tap to extrude':'Square made'); changed(); }
 // is there paper under this spot of the view?
 function onPaper(px,py){ const [a,b]=toMm(px,py), p={x:a,y:b}; return GEO.T.some(t=>{ const [A,B,C]=t.map(id=>GEO.P2.get(id)); const ar=orient(A,B,C); if(Math.abs(ar)<1e-6) return false;
   return orient(B,C,p)/ar>=-1e-6&&orient(C,A,p)/ar>=-1e-6&&orient(A,B,p)/ar>=-1e-6; }); }
@@ -597,11 +669,12 @@ function flipTo(nv,dir){ if(flipping) return; flipping=true; const c=c2.style, a
   c.transition='transform .11s ease-in'; c.transform=`rotate${ax}(${sg*(ax==='Y'?90:-90)}deg)`;
   setTimeout(()=>{ swap(); c.transition='none'; c.transform=`rotate${ax}(${-sg*(ax==='Y'?90:-90)}deg)`; c2.offsetWidth; c.transition='transform .16s ease-out'; c.transform='none'; setTimeout(()=>{flipping=false;},170); },110); }
 function turnTo(){ spin3(); return; const d=VW.d; cam.th=Math.atan2(d[0],d[2])+0.45; cam.ph=d[1]>0.5?0.5:d[1]<-0.5?2.6:1.2; lastTouch=performance.now(); }
-function changed(live){ for(const q of S.pts){ const t=q.tw&&byId(q.tw); if(q.tw&&(!t||(t.on.t==='c')!==(q.on.t==='c'))) delete q.tw; }
+function changed(live){ if(selFace){ selFace.ids=selFace.ids.filter(id=>byId(id)); if(!selFace.ids.length) selFace=null; }
+ for(const q of S.pts){ const t=q.tw&&byId(q.tw); if(q.tw&&(!t||(t.on.t==='c')!==(q.on.t==='c'))) delete q.tw; }
   if(S.folds) S.folds=S.folds.filter(([a,b])=>byId(a)&&byId(b)); solve(); draw2(); build3(); if(!live) save(); ui(); }
 function ui(){ VNAMES.forEach(v=>$('v'+v).classList.toggle('on',v===view)); $('label').textContent=view;
   const sq=selId&&byId(selId);
-  $('tip').textContent=selFold?'Fold picked · Delete removes it':!sq?'Tap: corner · hold + drag: draw a fold · hold a fold: remove':!ACT.has(sq.id)?'A mark: slide it here, or pull it out from a side view':sq.on.t==='c'?'Drag to pull · hold, then drag to fold · Reset':'Drag to pull · hold, then drag to fold · Delete';
+  $('tip').textContent=selFace?(selFace.ex?'Drag the face to pull it out (extrude)':'Face picked · drag to move · double tap: extrude'):selFold?'Fold picked · Delete removes it':!sq?'Tap: corner · hold + drag: draw a fold · hold a fold: remove':!ACT.has(sq.id)?'A mark: slide it here, or pull it out from a side view':sq.on.t==='c'?'Drag to pull · hold, then drag to fold · Reset':'Drag to pull · hold, then drag to fold · Delete';
   $('bMirror').classList.toggle('on',S.mirror); const q=selId&&byId(selId); $('bDel').disabled=!q&&!selFold; $('bDel').textContent=selFold?'Delete fold':q&&q.on.t==='c'?'Reset':'Delete'; $('undo').disabled=!undoS.length; }
 $('undo').onclick=undo;
 $('bMirror').onclick=()=>{ push(); S.mirror=!S.mirror;
