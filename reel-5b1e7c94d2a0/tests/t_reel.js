@@ -428,9 +428,9 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     await page.fill('#edXW', 'she turns and looks straight at the camera'); n0 = sent.filter(x => x.g).length; await page.click('#edXGo'); await page.waitForTimeout(2500);
     const r = await page.evaluate(() => { const cs = REEL.clips(); return {n:cs.length, kinds:cs.map(c => c.kind).join(), out:cs[2].out, inB:cs[4].in, mid:cs[3].takes.length, meta:cs[3].meta[cs[3].takes[0]], cur:REEL.S().reels.find(x => x.id===REEL.S().open).cur}; });
     const g = await eng.evaluate(() => { const t = H3.S.takes[0]; return t.lead && t.lead.gap && {aOut:t.lead.gap.aOut, bIn:t.lead.gap.bIn, prompt:t.prompt}; });
-    ok(r.n===b0.n + 1 && Math.abs(r.out - (b0.endA - Math.min(1, b0.endA - b0.inA - 0.5))) < 0.05 && Math.abs(r.inB - (b0.inB + 1.5)) < 0.05 && r.mid >= 1 && r.meta.after===b0.a && r.meta.before===b0.b && r.cur===3
+    ok(r.n===b0.n + 1 && Math.abs(r.out - (b0.endA - Math.min(1, b0.endA - b0.inA - 0.5))) < 0.05 && r.inB > b0.inB + 1.3 && r.inB < b0.inB + 1.55 && r.mid >= 1 && r.meta.after===b0.a && r.meta.before===b0.b && r.cur===3
        && g && Math.abs(g.aOut - r.out) < 0.01 && Math.abs(g.bIn - r.inB) < 0.01 && /looks straight at the camera/.test(g.prompt) && sent.filter(x => x.g).length > n0,
-      '⇿ Across the cut makes one ⇿ clip from 1 s before the cut to 1.5 s into the next clip, both trimmed to make room (' + JSON.stringify({b0, r, g}) + ')');
+      '⇿ Across the cut makes one ⇿ clip from 1 s before the cut to ~1.5 s into the next clip (less when the ⇿ clip after is shorter: fills round to MiniMax\'s 17-frame blocks), both trimmed to make room (' + JSON.stringify({b0, r, g}) + ')');
     await finish(); await page.evaluate(() => REEL.go(4)); await page.waitForTimeout(400);
     ok(await page.evaluate(() => !/may jump/.test(document.querySelector('#warnBox').textContent)), '⇿ the clip after the ⇿ clip doesn\'t say it may jump (the ⇿ clip was made to land on it)');
     await finish(); }
