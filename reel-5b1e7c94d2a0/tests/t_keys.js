@@ -60,7 +60,7 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
   const PNGB = fs.readFileSync(path.join(root, 'reel-5b1e7c94d2a0', 'icon-violet-180.png')).toString('base64');
   const DECK = {pcs:[{name:'Render', url:R, on:true, speed:1}], f:{model:'', aspect:'16:9', mp:0.41, turbo:true}, takes:[], lib:[{id:'Lmia', kind:'char', name:'Mia', stand:'woman', desc:'red hair', pics:['mPic'], keep:'exact', what:''}], media:{mPic:{id:'mPic', kind:'img', name:'mia.png', type:'image/png'}}};
   await page.addInitScript(([deck, r]) => { if(!sessionStorage.getItem('init')){ localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify(deck)); localStorage.setItem('render-deck-v1', JSON.stringify({styleText:{illustrious:{pos:'masterpiece, best quality, MYPOS'}}})); sessionStorage.setItem('init', '1'); } window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, [DECK, R]);
-  await page.goto('http://127.0.0.1:8043/reel-5b1e7c94d2a0/');
+  await page.goto('http://127.0.0.1:8043/reel-5b1e7c94d2a0/?p2=1');
   await page.evaluate(async b64 => { const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0)); await new Promise(res => { const q = indexedDB.open('h3deck', 1); q.onupgradeneeded = () => q.result.createObjectStore('media'); q.onsuccess = () => { const tx = q.result.transaction('media', 'readwrite'); tx.objectStore('media').put(new Blob([bin], {type:'image/png'}), 'mPic'); tx.oncomplete = res; }; q.onerror = res; }); }, PNGB).catch(() => {});
   await page.waitForFunction(() => window.REEL && REEL.E() && REEL.E().ready(), null, {timeout:30000});
   await page.waitForTimeout(800);

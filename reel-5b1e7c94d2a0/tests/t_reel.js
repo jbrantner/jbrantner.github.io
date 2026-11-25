@@ -666,5 +666,6 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.screenshot({path:process.env.SHOT || '/tmp/reel.png'});
   if(process.env.SHOT3){ await page.evaluate(() => { document.querySelector('#sheet').hidden = true; REEL.setTab('lib'); }); await page.waitForTimeout(600); await page.screenshot({path:process.env.SHOT3, fullPage:true}); await page.evaluate(() => REEL.setTab('reel')); }
   if(process.env.SHOT2){ await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#editBtn'); await page.waitForTimeout(800); await page.screenshot({path:process.env.SHOT2}); await page.click('[data-close]'); await page.click('#nextBtn'); await page.waitForTimeout(300); await page.screenshot({path:process.env.SHOT2.replace('.png', 'b.png')}); }
+  ok(await page.evaluate(() => document.querySelector('#p2Btn').hidden && !document.querySelector('[data-p2]')), '🔑 Phase 2 is hidden for now');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
