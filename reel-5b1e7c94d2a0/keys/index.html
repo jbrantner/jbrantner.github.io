@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-25-4">
+<meta name="reel-build" content="2026-11-25-6">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -47,7 +47,7 @@ h1 i{font-style:normal;color:var(--key)}
 .scrub .tk b{position:absolute;top:13px;left:3px;font-size:10.5px;font-weight:700;color:var(--dim)}
 .scrub .tr{position:absolute;top:44px;height:3px;border-radius:2px;background:var(--line)}
 .scrub .ln{position:absolute;top:41px;height:9px;border-radius:5px;background:color-mix(in srgb,var(--accent) 70%,transparent)}
-.scrub .lk{position:absolute;top:43px;height:5px;border-radius:3px;background:var(--accent);pointer-events:none;z-index:1}.scrub .lk.far{background:var(--bad)}
+.scrub .lk{position:absolute;top:43px;height:5px;border-radius:3px;background:var(--accent);pointer-events:none;z-index:1}.scrub .lk.far{background:var(--bad)}.scrub .lk.ndl{background:#fff;box-shadow:0 0 8px rgba(255,255,255,.6)}
 .scrub .seg{position:absolute;top:53px;height:6px;border-radius:3px;opacity:.75;pointer-events:none}
 .scrub .seg.fast{background:repeating-linear-gradient(90deg,var(--cyan) 0 3px,transparent 3px 7px)}
 .scrub .seg.slow{background:repeating-linear-gradient(90deg,var(--warn) 0 6px,transparent 6px 14px)}
@@ -162,17 +162,31 @@ window.ReelToast = (t, ms) => { if(/settings are back in the form|Its settings/i
 const RID = new URLSearchParams(location.search).get('reel');
 const reels = () => { try{ return JSON.parse(localStorage.getItem(RKEY) || '{}') || {}; }catch(e){ return {}; } };
 const RS = reels(), REEL = (RS.reels || []).find(r => r.id===(RID || RS.open)) || null;
-let ALL = {}; try{ ALL = JSON.parse(localStorage.getItem(KKEY) || '{}') || {}; }catch(e){}
-const P = REEL ? (ALL[REEL.id] = ALL[REEL.id] || {v:2, src:null, keys:[], links:[], den:0.6, n:2, kd:{den:RECIPE.den, n:2, focus:true}}) : null;
-// 🔁 a "· keyframed" reel opens with the keyframes of the Phase 2 it came from (Jordan 2026-11-25: blank only the first time).
-// That reel was laid out in the old Phase 2's shown time, so each keyframe's shown time is its frame in the new reel.
-let CARRIED = 0;
-if(P && !P.keys.length && !P.from && REEL.keysOf && ALL[REEL.keysOf] && (ALL[REEL.keysOf].keys || []).length){ const O = ALL[REEL.keysOf], ids = {};
-  P.keys = O.keys.map(k => { const id = uid('k'); ids[k.id] = id; return {id, s:k.t, t:k.t, pic:k.pic || '', th:k.th || '', tries:[], words:k.words || '', den:k.den, n:k.n, focus:k.focus, paint:k.paint || '', fm:k.pic ? k.fm || '' : '', fms:k.pic ? k.fms || '' : ''}; }).sort((a, b) => a.s - b.s);
-  P.links = (O.links || []).filter(l => ids[l.a] && ids[l.b]).map(l => ({id:uid('l'), a:ids[l.a], b:ids[l.b]}));
-  P.den = O.den || P.den; P.n = O.n || P.n; P.kd = Object.assign({}, P.kd, O.kd || {}); CARRIED = P.keys.length; }
-if(P) P.from = P.from || REEL.keysOf || '-';
-let saveT = 0; const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { try{ const a = JSON.parse(localStorage.getItem(KKEY) || '{}') || {}; if(REEL) a[REEL.id] = P; localStorage.setItem(KKEY, JSON.stringify(a)); }catch(e){ toast("Couldn't save the keyframes: the phone's space is full", 5000); } }, 150); };
+// Phase 2's save lives in the phone's IndexedDB, not localStorage (Jordan 2026-11-25 "phone space error"): localStorage is ~5 MB
+// shared with Render Deck, H3 Deck and Reel, and keyframe masks/thumbnails filled it. The old localStorage copy moves over once and is removed.
+let ALL = {}, P = null, CARRIED = 0;
+let kdb = null; const kOpen = () => kdb || (kdb = new Promise((ok, no) => { try{ const r = indexedDB.open('reelkeys', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }catch(e){ no(e); } }));
+const kGet = async () => { const d = await kOpen(); return new Promise((ok, no) => { const q = d.transaction('kv').objectStore('kv').get('all'); q.onsuccess = () => ok(q.result || null); q.onerror = () => no(q.error); }); };
+// (read, change and write in one go, so two open pages don't undo each other's reels)
+const kPut = async f => { const d = await kOpen(); return new Promise((ok, no) => { const tx = d.transaction('kv', 'readwrite'), st = tx.objectStore('kv'), q = st.get('all');
+  q.onsuccess = () => { const a = q.result || {}; f(a); st.put(a, 'all'); }; tx.oncomplete = () => ok(); tx.onerror = () => no(tx.error); tx.onabort = () => no(tx.error); }); };
+async function loadAll(){ let a = null; try{ a = await kGet(); }catch(e){}
+  let old = null; try{ old = JSON.parse(localStorage.getItem(KKEY) || 'null'); }catch(e){}
+  if(old && typeof old==='object'){ a = Object.assign({}, old, a || {}); try{ await kPut(x => Object.keys(old).forEach(id => { if(!x[id]) x[id] = old[id]; })); localStorage.removeItem(KKEY); }catch(e){} }
+  ALL = a || {}; }
+function initP(){ if(!REEL) return; P = ALL[REEL.id] = ALL[REEL.id] || {v:2, src:null, keys:[], links:[], den:0.6, n:2, kd:{den:RECIPE.den, n:2, focus:true}};
+  // 🔁 a "· keyframed" reel opens with the keyframes of the Phase 2 it came from (Jordan 2026-11-25: blank only the first time).
+  // That reel was laid out in the old Phase 2's shown time, so each keyframe's shown time is its frame in the new reel.
+  if(P && !P.keys.length && !P.from && REEL.keysOf && ALL[REEL.keysOf] && (ALL[REEL.keysOf].keys || []).length){ const O = ALL[REEL.keysOf], ids = {};
+    P.keys = O.keys.map(k => { const id = uid('k'); ids[k.id] = id; return {id, s:k.t, t:k.t, pic:k.pic || '', th:k.th || '', tries:[], words:k.words || '', den:k.den, n:k.n, focus:k.focus, paint:k.paint || '', fm:k.pic ? k.fm || '' : '', fms:k.pic ? k.fms || '' : ''}; }).sort((a, b) => a.s - b.s);
+    P.links = (O.links || []).filter(l => ids[l.a] && ids[l.b]).map(l => ({id:uid('l'), a:ids[l.a], b:ids[l.b]}));
+    P.den = O.den || P.den; P.n = O.n || P.n; P.kd = Object.assign({}, P.kd, O.kd || {}); CARRIED = P.keys.length; }
+  if(P) P.from = P.from || REEL.keysOf || '-';
+}
+let saveT = 0, saving = Promise.resolve();
+const saveNow = () => { clearTimeout(saveT); if(!REEL || !P) return saving; const id = REEL.id, snap = JSON.parse(JSON.stringify(P));
+  return saving = saving.then(() => kPut(a => { a[id] = snap; })).catch(() => toast("Couldn't save the keyframes on this phone", 5000)); };
+const save = () => { clearTimeout(saveT); saveT = setTimeout(saveNow, 150); };
 const K = () => P.keys; // sorted by s (where it is in the reel) and t (when it shows, after retiming)
 let E = null, READY = false, DUR = 0, VW = 0, VH = 0;
 const eng = $('#eng');
@@ -215,6 +229,18 @@ function retime(i, t){ const k = K(), me = k[i], role = roleOf(i), a = k[i - 1];
   else hi = Math.min(hi, A.t + MAXSEG);
   lo = Math.ceil(lo * FPS - 1e-6) / FPS; hi = Math.floor(hi * FPS + 1e-6) / FPS; if(lo > hi) return false; const nt = clamp(snap(t), lo, hi), d = nt - me.t;
   if(role==='mid') me.t = nt; else for(let j = i; j < k.length; j++) k[j].t = snap(k[j].t + d);
+  return true; }
+// 🎯 drop a keyframe's line on the needle (Jordan 2026-11-25): it moves to the needle's time.
+// A keyframe not yet ending a chunk gets joined to the one before it first, so only that stretch changes speed.
+function moveTo(i, t){ const k = K(), me = k[i]; if(!me) return false; t = snap(t); if(Math.abs(t - me.t) < 0.5 / FPS) return false;
+  let added = null; const role = roleOf(i);
+  if(role==='free' || role==='start'){ const a = k[i - 1];
+    if(!a){ toast("The first keyframe stays at the start: drop a later one on the needle"); return false; }
+    if(t - a.t > MAXSEG + 1e-6){ toast('Keyframe ' + i + ' is too far before it (a chunk is at most 5 s)'); return false; }
+    added = {id:uid('l'), a:a.id, b:me.id}; P.links = LK().concat([added]); }
+  if(!retime(i, t)){ if(added) P.links = LK().filter(l => l!==added); toast("It can't go there: in-betweens play ¼–4× speed, keyframes at least 4 frames apart"); return false; }
+  normalize(); save(); const got = K()[i].t;
+  toast(Math.abs(got - t) < 0.5 / FPS ? '🎯 Keyframe ' + (i + 1) + ' now shows at ' + fmt(got) + (added ? ' (joined to keyframe ' + i + ')' : '') : 'Keyframe ' + (i + 1) + ' went as far as it can: ' + fmt(got) + ' (¼–4× speed, chunks ≤5 s)', 3000);
   return true; }
 // outside the chunks the reel keeps its own pace: each keyframe not joined to the one before it has the same shift as that one
 function normalize(){ const k = K(), C = chunks(); if(!k.length) return; const d0 = k[0].t - k[0].s; if(Math.abs(d0) > 1e-6) k.forEach(x => x.t = snap(x.t - d0));
@@ -312,7 +338,7 @@ $('#view').addEventListener('click', e => { if(!e.target.closest('.chip') && REA
 // ---------- the timeline: drag turns it, tap a dot to go to it, hold a dot and drag a line to connect keyframes into a chunk, and
 // with the needle on a breakdown or a chunk's end, drag that dot to retime it ----------
 let DRAG = null;
-const HINT = 'Drag to turn · hold a dot and drag to connect · drag the dot under the needle to retime';
+const HINT = 'Drag to turn · hold a dot and drag to connect, or to the needle to move it there · drag the dot under the needle to retime';
 const tAtX = x => { const r = $('#scrub').getBoundingClientRect(); return NOW + (x - r.left - r.width / 2) / PPS; };
 function fling(v){ cancelAnimationFrame(FLING); let last = performance.now(); const step = now => { const dt = now - last; last = now; v *= Math.pow(0.994, dt); if(Math.abs(v) < 0.02) return;
     setNow(NOW - v * dt / PPS, true, 1); if(NOW <= 0 || NOW >= endT()) return; FLING = requestAnimationFrame(step); }; FLING = requestAnimationFrame(step); }
@@ -332,9 +358,12 @@ $('#scrub').addEventListener('pointermove', e => { if(!DRAG) return; const now =
 let EDGE = 0;
 function linkDraw(fx){ const k = K()[DRAG.k], r = $('#scrub').getBoundingClientRect(), x = fx - r.left, a = xOf(k.t), ft = tAtX(fx), far = Math.abs(ft - k.t) > MAXSEG;
   $('#lnk').hidden = false; $('#lnk').style.left = Math.min(a, x) + 'px'; $('#lnk').style.width = Math.abs(x - a) + 'px'; $('#lnk').classList.toggle('far', far);
-  const on = linkTo(ft, DRAG.k); $$('#kds .kd').forEach((el, i) => el.classList.toggle('pick', on.includes(i)));
+  const nd = onNeedle(x, DRAG.k), on = nd ? [DRAG.k] : linkTo(ft, DRAG.k); $$('#kds .kd').forEach((el, i) => el.classList.toggle('pick', on.includes(i))); $('#lnk').classList.toggle('ndl', nd);
+  $('#tHint').textContent = nd ? 'Let go: keyframe ' + (DRAG.k + 1) + ' moves to the needle (' + fmt(NOW) + ')' : 'Drag along to the keyframes to connect (≤5 s), or to the needle to move it there';
   cancelAnimationFrame(EDGE); const edge = x < 36 ? -1 : x > r.width - 36 ? 1 : 0;
   if(edge) EDGE = requestAnimationFrame(() => { if(!DRAG || DRAG.mode!=='link') return; setNow(NOW + edge * 2.2 / FPS, true); linkDraw(DRAG.fx || fx); }); }
+// the line ends on the needle (and not on another keyframe sitting there)
+function onNeedle(x, i){ const k = K(); return Math.abs(x - sW() / 2) < 18 && Math.abs(k[i].t - NOW) > 2 / FPS && !k.some((y, j) => j!==i && Math.abs(xOf(y.t) - sW() / 2) < 12); }
 // the keyframes a line to time ft takes in: from the held one to the farthest one it reaches (within 5 s)
 function linkTo(ft, i){ const k = K(), tol = 12 / PPS, out = [i], dir = ft >= k[i].t ? 1 : -1;
   for(let j = i + dir; j >= 0 && j < k.length; j += dir){ if(dir * (k[j].t - ft) > tol || Math.abs(k[j].t - k[i].t) > MAXSEG + 1e-6) break; out.push(j); } return out; }
@@ -344,6 +373,7 @@ function endDrag(e){ if(!DRAG) return; const d = DRAG; DRAG = null; clearTimeout
   else if(d.mode==='tap' && d.ln){ chunkSheet(d.ln); }
   else if(d.mode==='turn' && performance.now() - d.lt < 80 && Math.abs(d.vx) > 0.15) fling(d.vx);
   else if(d.mode==='move'){ save(); drawScrub(); drawFin(); }
+  else if(d.mode==='link' && d.fx!=null && onNeedle(d.fx - $('#scrub').getBoundingClientRect().left, d.k)){ moveTo(d.k, NOW); $$('#kds .kd').forEach(el => el.classList.remove('pick')); drawScrub(); drawFin(); if(!PAINTING) drawEd(); }
   else if(d.mode==='link'){ const on = linkTo(d.fx!=null ? tAtX(d.fx) : K()[d.k].t, d.k); if(on.length < 2) toast('Drag the line along to another keyframe to connect them'); else link(on[0], on[on.length - 1]); drawScrub(); drawFin(); if(!PAINTING) drawEd(); } }
 $('#scrub').addEventListener('pointerup', endDrag); $('#scrub').addEventListener('pointercancel', endDrag);
 function chunkSheet(id){ const c = chunks().find(x => x[2].id===id); if(!c) return; const k = K(), [i, j] = c;
@@ -606,7 +636,7 @@ async function finGo(){ const btn = $('#fGo'), st = stretches(), note = t => { i
     if(!sent) throw new Error('nothing could be sent');
     if(nr.clips[0]) nr.clips[0].kind = nr.clips[0].kind || 'new';
     const S0 = reels(); S0.reels = S0.reels || []; S0.reels.push(nr); S0.open = nr.id; localStorage.setItem(RKEY, JSON.stringify(S0)); P.out = nr.id; save();
-    note(''); $('#sheet').hidden = true; toast('🎬 ' + sent + ' of ' + st.length + ' chunks sent. Opening the new reel…', 4000); setTimeout(() => { location.href = '../'; }, 1500); }
+    note(''); $('#sheet').hidden = true; toast('🎬 ' + sent + ' of ' + st.length + ' chunks sent. Opening the new reel…', 4000); Promise.all([saveNow(), new Promise(r => setTimeout(r, 1500))]).then(() => { location.href = '../'; }); }
   catch(e){ note('⚠ ' + e.message); btn.disabled = false; } }
 
 // ---------- start ----------
@@ -620,7 +650,7 @@ async function boot(){ if(!REEL){ msg("<b>No reel</b>Open Phase 2 from a reel in
     await openSrc(); }
   catch(e){ msg('<b>Phase 2</b>' + esc(e.message) + '<br><br><button class="chip" id="retry">↻ Try again</button>'); $('#retry') && ($('#retry').onclick = () => { msg('<b>Phase 2</b>Trying again…'); boot(); }); drawFin(); return; }
   READY = true; NEAR = -1; setNow(0, true); drawAll(); loop(); follow(); }
-window.KEYS = {P:() => P, K, chars, srcAt, dispAt, stretches, stretchPlan, setNow, retime, link, chunks, roleOf, xOf, endT, normalize, E:() => E, ready:() => READY, near:() => NEAR, stripPos, cropBox, canvasWH, follow};
-drawFin(); boot();
+window.KEYS = {P:() => P, K, chars, moveTo, saved:async () => { await saveNow(); return kGet(); }, srcAt, dispAt, stretches, stretchPlan, setNow, retime, link, chunks, roleOf, xOf, endT, normalize, E:() => E, ready:() => READY, near:() => NEAR, stripPos, cropBox, canvasWH, follow};
+(async () => { await loadAll(); initP(); drawFin(); boot(); })();
 </script>
 </body></html>

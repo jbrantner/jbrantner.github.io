@@ -108,6 +108,16 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
   { const d = await dotAt(3); await page.mouse.move(d.x, d.y); await page.mouse.down(); for(let k = 1; k <= 4; k++){ await page.mouse.move(d.x + k * 8, d.y); await page.waitForTimeout(20); } await page.mouse.up(); await page.waitForTimeout(150); }
   const k3 = await page.evaluate(() => { const k = KEYS.K(); return {t:k[3].t, s:k[3].s, end:KEYS.endT(), tail:KEYS.srcAt(k[3].t + 1) - k[3].s}; });
   ok(Math.abs(k3.t - k3.s - 0.5) < 0.05 && Math.abs(k3.end - 4.9583 - 0.5) < 0.05 && Math.abs(k3.tail - 1) < 0.01, 'moving the chunk\'s end makes it longer and the rest of the reel moves along at its own pace (' + JSON.stringify(k3) + ')');
+  // 🎯 hold a keyframe and drop its line on the needle: it moves there (a free one gets joined to the one before)
+  { const t4 = await page.evaluate(() => KEYS.K()[3].t + 1); await page.evaluate(t => KEYS.setNow(t, true), t4); await page.click('#addKey'); await page.waitForTimeout(80);
+    const tgt = await page.evaluate(() => { const t = KEYS.K()[3].t + 0.5; KEYS.setNow(t); return t; }); await page.waitForTimeout(100);
+    const a = await dotAt(4), mid = await page.evaluate(() => { const r = document.querySelector('#scrub').getBoundingClientRect(); return r.left + r.width / 2; });
+    await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.waitForTimeout(450);
+    for(let k = 1; k <= 8; k++){ await page.mouse.move(a.x + (mid - a.x) * k / 8, a.y); await page.waitForTimeout(20); }
+    const glow = await page.evaluate(() => document.querySelector('#lnk').classList.contains('ndl')); await page.mouse.up(); await page.waitForTimeout(150);
+    const mv = await page.evaluate(() => ({t:KEYS.K()[4].t, s:KEYS.K()[4].s, c:KEYS.chunks().map(c => [c[0], c[1]]), roles:KEYS.K().map((k, i) => KEYS.roleOf(i))}));
+    ok(glow && Math.abs(mv.t - tgt) < 1.5 / 24 && mv.t < t4 - 0.4 && JSON.stringify(mv.c)==='[[0,3],[3,4]]', '🎯 dropping a keyframe\'s line on the needle moves it there, joined to the keyframe before (' + JSON.stringify({tgt, glow, mv}) + ')');
+    await page.evaluate(() => { const P = KEYS.P(), id = KEYS.K()[4].id; P.keys = P.keys.filter(k => k.id!==id); P.links = P.links.filter(l => l.a!==id && l.b!==id); KEYS.normalize(); }); }
   // a dot that isn't under the needle: dragging it turns the timeline instead
   { const t0 = await page.evaluate(() => KEYS.K()[0].t), d = await dotAt(0); await page.mouse.move(d.x, d.y); await page.mouse.down(); for(let k = 1; k <= 4; k++){ await page.mouse.move(d.x + k * 10, d.y); await page.waitForTimeout(16); } await page.mouse.up();
     ok(await page.evaluate(t => KEYS.K()[0].t===t, t0), 'dragging a dot away from the needle turns the timeline, it doesn\'t move the dot'); }
@@ -180,9 +190,10 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
   ok(nr && nr.open && nr.clips.length===3 && nr.clips[0][0]===1 && nr.clips[0][2]===0.5 && nr.clips[1][0]===2 && nr.clips[1][1]===0 && nr.clips[2][0]===1 && Math.abs(nr.clips[2][1] - 3.542) < 0.002,
     'the result opens as a new reel in Phase 1: the reel before the chunk as it was, the chunk (2 options), the rest as it was (' + JSON.stringify(nr) + ')');
   // 🔁 Phase 2 of the keyframed reel opens with the last Phase 2's keyframes, at their shown times, chunk kept
-  { const old = await page.evaluate(id => { const A = JSON.parse(localStorage.getItem('h3reel_keys'))[id]; return {t:A.keys.map(k => k.t), pics:A.keys.filter(k => k.pic).length, links:A.links.length}; }, reelId);
+  { const old = await page.evaluate(async id => { const all = await new Promise((ok, no) => { const r = indexedDB.open('reelkeys', 1); r.onsuccess = () => { const q = r.result.transaction('kv').objectStore('kv').get('all'); q.onsuccess = () => ok(q.result); q.onerror = no; }; r.onerror = no; }), A = all[id]; return {t:A.keys.map(k => k.t), pics:A.keys.filter(k => k.pic).length, links:A.links.length, ls:localStorage.getItem('h3reel_keys')}; }, reelId);
+    ok(old.ls===null && old.t.length===4, '💾 Phase 2 saves in the phone\'s IndexedDB, not the shared localStorage');
     const nid = await page.evaluate(id => JSON.parse(localStorage.getItem('h3reel')).reels.find(x => x.keysOf===id).id, reelId);
-    await page.goto('http://127.0.0.1:8043/reel-5b1e7c94d2a0/keys/?reel=' + nid); await page.waitForFunction(() => window.KEYS, null, {timeout:15000}); await page.waitForTimeout(500);
+    await page.goto('http://127.0.0.1:8043/reel-5b1e7c94d2a0/keys/?reel=' + nid); await page.waitForFunction(() => window.KEYS && KEYS.P(), null, {timeout:15000}); await page.waitForTimeout(500);
     const nw = await page.evaluate(() => ({s:KEYS.K().map(k => k.s), t:KEYS.K().map(k => k.t), pics:KEYS.K().filter(k => k.pic).length, c:KEYS.chunks().map(c => [c[0], c[1]])}));
     ok(old.t.length===4 && JSON.stringify(nw.s)===JSON.stringify(old.t) && JSON.stringify(nw.t)===JSON.stringify(old.t) && nw.pics===old.pics && JSON.stringify(nw.c)==='[[0,3]]',
       '🔁 the keyframed reel\'s Phase 2 starts with the keyframes from before, redraws and chunk kept (' + JSON.stringify({old, nw}) + ')'); }
