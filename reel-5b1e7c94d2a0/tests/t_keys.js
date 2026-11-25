@@ -123,6 +123,15 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
     ok(await page.evaluate(t => KEYS.K()[0].t===t, t0), 'dragging a dot away from the needle turns the timeline, it doesn\'t move the dot'); }
   // 🔗 a line longer than 5 s doesn't take in keyframes past 5 s
   ok(await page.evaluate(() => { const ks = KEYS.K(); return ks[3].t - ks[0].t <= 5; }), 'a chunk stays within 5 s');
+  // ✂ freeing a chunk: tap just above its pink bar, or ✂ Disconnect its chunk in the keyframe editor
+  { const keep = await page.evaluate(() => JSON.stringify({k:KEYS.K().map(k => k.t), l:KEYS.P().links}));
+    await page.evaluate(() => KEYS.setNow((KEYS.K()[1].t + KEYS.K()[2].t) / 2)); await page.waitForTimeout(150);
+    const b = await page.evaluate(() => { const r = document.querySelector('#segs .ln').getBoundingClientRect(); return {x:r.left + r.width * 0.3, y:r.top - 10}; });
+    await page.mouse.click(b.x, b.y); await page.waitForTimeout(150);
+    ok(await page.evaluate(() => !document.querySelector('#sheet').hidden && !!document.querySelector('#unl')), 'tapping near the pink chunk bar opens ✂ Disconnect');
+    await page.evaluate(() => { document.querySelector('#sheet').hidden = true; }); await page.mouse.move(b.x, b.y); await page.mouse.down(); await page.waitForTimeout(600); await page.mouse.up(); await page.waitForTimeout(150);
+    ok(await page.evaluate(() => KEYS.chunks().length===0 && document.querySelector('#finBtn').disabled && document.querySelector('#sheet').hidden), 'press and hold the chunk line: it disappears and the stretch is free');
+    await page.evaluate(j => { const o = JSON.parse(j), P = KEYS.P(); P.links = o.l; KEYS.K().forEach((k, i) => k.t = o.k[i]); KEYS.drawAll(); }, keep); await page.waitForTimeout(100); }
   // the strip: halfway between keyframe 1 and 2, both show side by side
   await page.evaluate(() => { const k = KEYS.K(); KEYS.setNow((k[0].t + k[1].t) / 2); }); await page.waitForTimeout(100);
   const sp = await page.evaluate(() => ({pos:KEYS.stripPos(), tr:[...document.querySelectorAll('#strip .kc')].slice(0, 2).map(e => e.style.transform)}));
