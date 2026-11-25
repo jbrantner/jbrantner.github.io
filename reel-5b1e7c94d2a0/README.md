@@ -48,13 +48,15 @@ Test: `CLIP=<a ~5 s video> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests
 
 ## 🔑 Phase 2: keyframes (Jordan 2026-11-24, `keys/`)
 🔑 Phase 2 on the viewport (or 🎬 › Move on to Phase 2) opens `keys/?reel=<id>`. The reel is joined into one video on a PC (the export
-helper) and scrolled as one: dots on the scrubber are keyframes (first ones at the start, the end, clip joins and every ≤2.5 s;
-＋ Keyframe here, ✨ More keyframes = one halfway in every gap). Hold a dot, then drag it to retime: the frame stays, it shows earlier or
-later, and the in-betweens play faster (cyan) or slower (orange), ¼–4×, keyframes ≤5 s apart. Below, the nearest keyframe, the next one
+helper) and turned like a wheel under a fixed centre needle (drag + fling, 64 px = 1 s). It starts BLANK (Jordan 2026-11-25): ＋ Keyframe
+adds one at the needle, tap a dot to bring it to the needle. Hold a dot ~⅓ s and drag a line: every keyframe the line reaches within 5 s
+joins one chunk, the ones inside as breakdowns (tap the chunk bar › ✂ Disconnect). Drag the dot under the needle to retime it: a
+breakdown moves between its neighbours (in-betweens faster cyan / slower orange, ¼–4×), a chunk's end takes the rest of the reel along;
+outside chunks the reel keeps its own pace. Below, the nearest keyframe, the next one
 sliding in as you get closer. Each keyframe: 🖌 paint / 🧽 erase a mask, 🎯 Character focus (on by default, BiRefNet cut-out), words,
 How much changes (0.6), ✨ Redraw = Render Deck's Illustrious recipe (BismuthIllMix_v8 + afk_style_condensed_v2 at 1, 28 steps, CFG 5.5,
 euler_ancestral normal, finishing pass, Fix faces 0.35/32) on the mask's box zoomed to 1344×768, put back with a soft edge.
-🎬 Redo the in-betweens: stretches of ≤5 s from keyframe to keyframe, each from the joined reel retimed to the new timing (strength like
+🎬 Redo the in-betweens: only the chunks, each from the joined reel retimed to the new timing (strength like
 ✂ Edit's 🎨 Change), every keyframe in it pinned (engine `keys` → H3 Deck's `H3KeyPass`), the base take = the clip it's mostly in.
-The result is a new reel "· keyframed" in Phase 1, one clip per stretch. Phase 2's own save is `h3reel_keys`.
+The result is a new reel "· keyframed" in Phase 1: the original takes trimmed around each chunk, one clip per chunk. Phase 2's own save is `h3reel_keys`.
 Test: `CLIP=<a ~5 s webm> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests/t_keys.js`.

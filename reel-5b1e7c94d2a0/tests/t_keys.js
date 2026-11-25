@@ -81,18 +81,38 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
   ok(await page.evaluate(() => KEYS.ready()), 'Phase 2 is ready (' + await page.evaluate(() => document.querySelector('#vmsg').textContent) + ')');
   eng = page.frames().find(f => /engine=1/.test(f.url()));
   ok(exps.length===1 && exps[0].clips.length===2 && exps[0].clips[1].at > 0, 'the two clips are joined into one video on the PC (' + JSON.stringify(exps.map(x => x.clips.length)) + ')');
-  const k0 = await page.evaluate(() => KEYS.K().map(k => [k.s, k.t]));
-  ok(k0.length >= 3 && k0[0][0]===0 && k0.every(x => x[0]===x[1]) && k0.every((x, i) => !i || x[0] - k0[i - 1][0] <= 5), 'first keyframes: the start, the end and every ≤2.5 s, at their own time (' + JSON.stringify(k0) + ')');
+  ok(await page.evaluate(() => KEYS.K().length===0 && document.querySelector('#finBtn').disabled), 'Phase 2 starts blank: no keyframes, nothing to redo yet');
+  const dotAt = i => page.evaluate(i => { const r = document.querySelectorAll('#kds .kd')[i].getBoundingClientRect(); return {x:r.left + r.width / 2, y:r.top + r.height / 2}; }, i);
+  const sc = await page.evaluate(() => { const r = document.querySelector('#scrub').getBoundingClientRect(); return {x:r.left + r.width / 2, y:r.top + 20}; });
+  // 🎡 the timeline turns under the needle: dragging it 64 px to the left = 1 s later
+  await page.mouse.move(sc.x, sc.y); await page.mouse.down(); for(let k = 1; k <= 8; k++){ await page.mouse.move(sc.x - k * 8, sc.y); await page.waitForTimeout(120); } await page.mouse.up(); await page.waitForTimeout(150);
+  const n1 = await page.evaluate(() => ({now:KEYS.P() && +document.querySelector('#tNow').textContent.replace(' s', ''), x0:KEYS.xOf(0)}));
+  ok(Math.abs(n1.now - 1) < 0.15 && n1.x0 < 195 - 50, 'dragging the timeline turns it like a wheel under the needle (' + JSON.stringify(n1) + ')');
+  // four keyframes with ＋
+  for(const t of [0.5, 1.5, 2.5, 3.5]){ await page.evaluate(t => KEYS.setNow(t, true), t); await page.click('#addKey'); await page.waitForTimeout(80); }
+  ok(await page.evaluate(() => KEYS.K().map(k => k.s).join()==='0.5,1.5,2.5,3.5'), '＋ Keyframe adds one at the needle');
   if(process.env.SHOT) await page.screenshot({path:process.env.SHOT, fullPage:true});
-  // ⏱ hold a dot, then drag it: it moves later, the stretch before plays slower and the one after faster
-  const dot = await page.evaluate(() => { const r = document.querySelectorAll('#kds .kd')[1].getBoundingClientRect(); return {x:r.left + r.width / 2, y:r.top + r.height / 2}; });
-  await page.mouse.move(dot.x, dot.y); await page.mouse.down(); await page.waitForTimeout(450); for(let k = 1; k <= 6; k++){ await page.mouse.move(dot.x + k * 8, dot.y); await page.waitForTimeout(20); } await page.mouse.up(); await page.waitForTimeout(200);
-  const k1 = await page.evaluate(() => { const k = KEYS.K(); return {s:k[1].s, t:k[1].t, a:KEYS.srcAt(k[1].t / 2), segs:document.querySelectorAll('#segs .seg').length, slow:!!document.querySelector('#segs .seg.slow'), fast:!!document.querySelector('#segs .seg.fast')}; });
-  ok(k1.t > k1.s + 0.05 && Math.abs(k1.a - k1.s / 2) < 0.02 && k1.slow && k1.fast, 'hold-and-drag retimes keyframe 2: same frame, later; the in-betweens before it play slower, after it faster (' + JSON.stringify(k1) + ')');
-  // a quick drag without holding scrubs instead
-  const kd0 = await page.evaluate(() => KEYS.K()[1].t); const d2 = await page.evaluate(() => { const r = document.querySelectorAll('#kds .kd')[1].getBoundingClientRect(); return {x:r.left + r.width / 2, y:r.top + r.height / 2}; });
-  await page.mouse.move(d2.x, d2.y); await page.mouse.down(); for(let k = 1; k <= 6; k++){ await page.mouse.move(d2.x + k * 10, d2.y); await page.waitForTimeout(16); } await page.mouse.up();
-  ok(await page.evaluate(t => KEYS.K()[1].t===t, kd0), 'dragging a dot without holding it first only scrubs');
+  // 🔗 hold the first dot and drag a line past the fourth: one chunk, two breakdowns
+  await page.evaluate(() => KEYS.setNow(2)); await page.waitForTimeout(100);
+  { const a = await dotAt(0), b = await dotAt(3); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.waitForTimeout(450);
+    for(let k = 1; k <= 10; k++){ await page.mouse.move(a.x + (b.x + 6 - a.x) * k / 10, a.y); await page.waitForTimeout(20); } await page.mouse.up(); await page.waitForTimeout(150); }
+  const ch = await page.evaluate(() => ({c:KEYS.chunks().map(c => [c[0], c[1]]), roles:KEYS.K().map((k, i) => KEYS.roleOf(i)), fin:document.querySelector('#finBtn').textContent, bar:!!document.querySelector('#segs .ln')}));
+  ok(JSON.stringify(ch.c)==='[[0,3]]' && ch.roles.join()==='start,mid,mid,end' && ch.bar && /1 chunk/.test(ch.fin), 'hold a keyframe and drag a line: keyframes 1–4 become one chunk with 2 breakdowns (' + JSON.stringify(ch) + ')');
+  // ⏱ the needle on a breakdown: drag its dot to retime it (no hold)
+  await page.evaluate(() => KEYS.setNow(KEYS.K()[1].t)); await page.waitForTimeout(100);
+  { const d = await dotAt(1); await page.mouse.move(d.x, d.y); await page.mouse.down(); for(let k = 1; k <= 4; k++){ await page.mouse.move(d.x + k * 8, d.y); await page.waitForTimeout(20); } await page.mouse.up(); await page.waitForTimeout(150); }
+  const k1 = await page.evaluate(() => { const k = KEYS.K(); return {s:k[1].s, t:k[1].t, after:k.map(x => x.t), end:KEYS.endT(), slow:!!document.querySelector('#segs .seg.slow'), fast:!!document.querySelector('#segs .seg.fast')}; });
+  ok(Math.abs(k1.t - k1.s - 0.5) < 0.05 && k1.slow && k1.fast && Math.abs(k1.end - 4.9583) < 0.01, 'dragging the breakdown under the needle retimes it: same frame, later; before it plays slower, after faster; the reel\'s length stays (' + JSON.stringify(k1) + ')');
+  // the chunk's end takes the rest of the reel along
+  await page.evaluate(() => KEYS.setNow(KEYS.K()[3].t)); await page.waitForTimeout(100);
+  { const d = await dotAt(3); await page.mouse.move(d.x, d.y); await page.mouse.down(); for(let k = 1; k <= 4; k++){ await page.mouse.move(d.x + k * 8, d.y); await page.waitForTimeout(20); } await page.mouse.up(); await page.waitForTimeout(150); }
+  const k3 = await page.evaluate(() => { const k = KEYS.K(); return {t:k[3].t, s:k[3].s, end:KEYS.endT(), tail:KEYS.srcAt(k[3].t + 1) - k[3].s}; });
+  ok(Math.abs(k3.t - k3.s - 0.5) < 0.05 && Math.abs(k3.end - 4.9583 - 0.5) < 0.05 && Math.abs(k3.tail - 1) < 0.01, 'moving the chunk\'s end makes it longer and the rest of the reel moves along at its own pace (' + JSON.stringify(k3) + ')');
+  // a dot that isn't under the needle: dragging it turns the timeline instead
+  { const t0 = await page.evaluate(() => KEYS.K()[0].t), d = await dotAt(0); await page.mouse.move(d.x, d.y); await page.mouse.down(); for(let k = 1; k <= 4; k++){ await page.mouse.move(d.x + k * 10, d.y); await page.waitForTimeout(16); } await page.mouse.up();
+    ok(await page.evaluate(t => KEYS.K()[0].t===t, t0), 'dragging a dot away from the needle turns the timeline, it doesn\'t move the dot'); }
+  // 🔗 a line longer than 5 s doesn't take in keyframes past 5 s
+  ok(await page.evaluate(() => { const ks = KEYS.K(); return ks[3].t - ks[0].t <= 5; }), 'a chunk stays within 5 s');
   // the strip: halfway between keyframe 1 and 2, both show side by side
   await page.evaluate(() => { const k = KEYS.K(); KEYS.setNow((k[0].t + k[1].t) / 2); }); await page.waitForTimeout(100);
   const sp = await page.evaluate(() => ({pos:KEYS.stripPos(), tr:[...document.querySelectorAll('#strip .kc')].slice(0, 2).map(e => e.style.transform)}));
@@ -136,7 +156,7 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
   const g0 = sent.length; await page.click('#finBtn'); await page.waitForTimeout(200); await page.click('#fGo');
   await page.waitForFunction(() => /\/reel-5b1e7c94d2a0\/$/.test(location.pathname), null, {timeout:30000}).catch(() => {});
   const hs = sent.slice(g0).filter(x => nodes(x.g, 'MiniMaxH3AddGuide').length);
-  ok(hs.length===plan.length * 2, plan.length + ' stretch(es) × 2 options sent to MiniMax (' + hs.length + ')');
+  ok(plan.length===1 && hs.length===2, plan.length + ' chunk(s) × 2 options sent to MiniMax (' + hs.length + ')');
   if(hs[0]){ const G = hs[0].g, lv = nodes(G, 'LoadVideo'), gd = nodes(G, 'MiniMaxH3AddGuide').filter(n => n.inputs.image), last = nodes(G, 'ImageFromBatch').pop();
     const pins = plan[0][1] - plan[0][0] + 1;
     ok(lv.some(n => n.inputs.file==='H3Film/reel/reel_keys.webm [output]'), 'it starts from the joined reel');
@@ -144,8 +164,8 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
     ok(nodes(G, 'VAEEncode').length===1 && nodes(G, 'BasicScheduler').some(n => Math.abs(n.inputs.denoise - 0.6) < 1e-6), 'the in-betweens change by 0.6 (Edit-style strength)');
     ok(nodes(G, 'RepeatImageBatch').length > 0 || nodes(G, 'ImageFromBatch').length > 3, 'the reel is retimed frame by frame for the slowed stretch');
     ok(last && last.inputs.batch_index===0 && last.inputs.length===Math.max(...gd.map(n => n.inputs.frame_idx)) + 1, 'only the frames up to the last keyframe are kept (' + JSON.stringify(last && last.inputs) + ')'); }
-  const nr = await page.evaluate(id => { const S = JSON.parse(localStorage.getItem('h3reel')); const r = S.reels.find(x => x.keysOf===id); return r && {open:S.open===r.id, clips:r.clips.map(c => [c.takes.length, c.in])}; }, reelId);
-  ok(nr && nr.open && nr.clips.length===plan.length && nr.clips.every(c => c[0]===2) && (nr.clips.length < 2 || Math.abs(nr.clips[1][1] - 1 / 24) < 1e-6), 'the result opens as a new reel in Phase 1, one clip per stretch, later ones starting one frame in (' + JSON.stringify(nr) + ')');
-  // the engine function on its own: the retiming runs
+  const nr = await page.evaluate(id => { const S = JSON.parse(localStorage.getItem('h3reel')); const r = S.reels.find(x => x.keysOf===id); return r && {open:S.open===r.id, clips:r.clips.map(c => [c.takes.length, Math.round((c.in || 0) * 1000) / 1000, c.out == null ? null : Math.round(c.out * 1000) / 1000])}; }, reelId);
+  ok(nr && nr.open && nr.clips.length===3 && nr.clips[0][0]===1 && nr.clips[0][2]===0.5 && nr.clips[1][0]===2 && nr.clips[1][1]===0 && nr.clips[2][0]===1 && Math.abs(nr.clips[2][1] - 3.542) < 0.002,
+    'the result opens as a new reel in Phase 1: the reel before the chunk as it was, the chunk (2 options), the rest as it was (' + JSON.stringify(nr) + ')');
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
