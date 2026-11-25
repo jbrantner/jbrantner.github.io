@@ -60,6 +60,7 @@ the same people, clothes, objects and props stay in place and nothing appears or
 never in it). `keep:false` on the engine call leaves it out. Test: `tests/t_relink.js`.
 
 ## 🔑 Phase 2: keyframes (Jordan 2026-11-24, `keys/`)
+**HIDDEN since 2026-11-25** (Jordan: confusing, gets in the way of the workflow, may rethink later). Code and page kept; open Reel with `?p2=1` to show the buttons.
 🔑 Phase 2 on the viewport (or 🎬 › Move on to Phase 2) opens `keys/?reel=<id>`. The reel is joined into one video on a PC (the export
 helper) and turned like a wheel under a fixed centre needle (drag + fling, 64 px = 1 s). It starts BLANK the first time (Jordan 2026-11-25); a "· keyframed" reel's Phase 2 opens with the keyframes, redraws and chunks of the Phase 2 it came from (at their shown times): ＋ Keyframe
 adds one at the needle, tap a dot to bring it to the needle. Hold a dot ~⅓ s and drag a line: every keyframe the line reaches within 5 s
