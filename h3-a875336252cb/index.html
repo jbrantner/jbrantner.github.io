@@ -653,7 +653,45 @@ async function pushTakes(){ if(HOLD || (ENGINE && !RESCUED)) return; if(!ENGINE 
     // (overnight QA 2026-11-16: Windows refused the write now and then, "[WinError 5] Access is denied" while another copy of the app was
     // writing the same file; one more try 3 s later instead of waiting a minute for the next save)
     for(let a = 0; a < 2 && pushed[p.url]!==body; a++){ if(a) await new Promise(z => setTimeout(z, 3000));
-      try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} } }  pushFilms(); }
+      try{ const r = await fetch(p.url + TAKES_FILE, {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushed[p.url] = body; }catch(e){} } }  pushFilms(); if(ENGINE) pushChars(); }
+// 👥 Reel's own characters on the PCs too (Jordan 2026-11-25: a character made in Reel vanished; "make sure characters made in the
+// Reel app are saved like in the other apps"). They lived only in the phone's save (h3reel_engine), with no copy anywhere, so a
+// full or cleared phone save lost them for good. Now each PC keeps h3reel_chars.json: Reel's characters, attributes and clothing,
+// their pictures' media entries and where those pictures are in the PC's input folder. A PC's copy is read and merged in before the
+// phone ever writes to it; a character missing on the phone comes back (pictures fetched back from the PC); the newer edit wins (mt);
+// one deleted in Reel (S.goneChars) stays deleted. The pictures go to every PC's input folder as soon as they're saved.
+const CHARS_NAME = 'h3reel_chars.json', PULLEDC = {}, pushedC = {};
+function charsBody(){ const own = (S.lib || []).filter(L => L.reel), gone = S.goneChars || [];
+  if(!own.length && !gone.length) return null; // (never an empty copy over the PC's)
+  const media = {}, up = {};
+  for(const id of own.flatMap(L => L.pics || [])){ const m = S.media[id]; if(m) media[id] = Object.assign({}, m, {thumb:/^data:/.test(m.thumb || '') ? m.thumb : ''});
+    Object.keys(S.up || {}).forEach(k => { if(k.startsWith(id + '|')) up[k] = S.up[k]; }); }
+  return JSON.stringify({v:1, lib:own, gone, media, up}); }
+async function mergeChars(j){ if(!j || !Array.isArray(j.lib)) return 0;
+  const gone = new Set((S.goneChars || []).concat(j.gone || [])); S.goneChars = [...gone]; let n = 0; const ids = [];
+  const drop = (S.lib || []).filter(L => L.reel && gone.has(L.id)); if(drop.length){ S.lib = S.lib.filter(L => !drop.includes(L)); }
+  for(const L of j.lib){ if(!L || !L.id || !L.reel || gone.has(L.id)) continue; const have = (S.lib || []).find(x => x.id===L.id);
+    if(have){ if((L.mt || 0) > (have.mt || 0)){ Object.assign(have, L); libSync(have); ids.push(...(L.pics || [])); } continue; }
+    (S.lib = S.lib || []).push(L); libSync(L); ids.push(...(L.pics || [])); n++; }
+  for(const [id, m] of Object.entries(j.media || {})) if(!S.media[id]) S.media[id] = m;
+  for(const [k, v] of Object.entries(j.up || {})) if(!S.up[k]) S.up[k] = v;
+  if(!ids.length && !drop.length) return 0;
+  save(); await mediaBack(ids, j.up).catch(() => 0);
+  for(const id of ids){ const m = S.media[id]; if(!m || m.thumb) continue; try{ const b = await blobOf(id); if(b){ const im = await imgOf(b); m.thumb = thumbOf(im); m.w = m.w || im.naturalWidth; m.h = m.h || im.naturalHeight; } }catch(e){} }
+  save(); return n; }
+async function pullChars(url){ const r = await fetch(url + '/userdata/' + CHARS_NAME, {cache:'no-store'}); if(r.status===404){ PULLEDC[url] = true; return 0; } if(!r.ok) return 0;
+  const j = await r.json(); PULLEDC[url] = true; return mergeChars(j); }
+let CHARSBUSY = false;
+async function pushChars(){ if(!ENGINE || !RESCUED || HOLD || CHARSBUSY) return; CHARSBUSY = true; try{
+  for(const p of S.pcs){ if(!pcOf(p.url).online) continue;
+    if(!PULLEDC[p.url]){ await pullChars(p.url).catch(() => 0); if(!PULLEDC[p.url]) continue; }
+    for(const id of (S.lib || []).filter(L => L.reel).flatMap(L => L.pics || [])) if(S.media[id] && !S.media[id].remote && !S.up[id + '|' + p.url]){ try{ await upload(p.url, id); }catch(e){} }
+    const body = charsBody(); if(!body || pushedC[p.url]===body) continue;
+    for(let a = 0; a < 2 && pushedC[p.url]!==body; a++){ if(a) await new Promise(z => setTimeout(z, 3000));
+      try{ const r = await fetch(p.url + '/userdata/' + CHARS_NAME + '?overwrite=true', {method:'POST', headers:{'Content-Type':'text/plain'}, body}); if(r.ok) pushedC[p.url] = body; }catch(e){} } }
+  }finally{ CHARSBUSY = false; } }
+async function pullAllChars(){ let n = 0; for(const p of S.pcs){ if(!pcOf(p.url).online) continue; try{ n += await pullChars(p.url); }catch(e){} }
+  if(n){ try{ window.parent.toast('👥 ' + n + (n===1 ? ' character' : ' characters') + ' brought back from the PCs', 6000); }catch(e){} try{ window.parent.dispatchEvent(new Event('reel-chars')); }catch(e){} } return n; }
 // ---------- 🛟 films and Library kept safe on the PCs (Jordan 2026-11-11: her films and Library were gone, the renders were there) ----------
 // The phone can clear a site's saved data by itself. The takes already had a copy on each PC (h3deck_takes.json), so they came
 // back; the films (Films' own save, 'h3edit') and the 📚 Library didn't. Now they have a copy too (h3deck_films.json), and when
@@ -737,7 +775,7 @@ async function libPicsHere(){ let n = 0;
     for(const id of L.pics){ const m = S.media[id]; let ok = !!(m && m.remote) || !!BLOBS[id]; if(!ok){ try{ ok = !!(await IDB.get(id)); }catch(e){} } if(ok) keep.push(id); }
     if(keep.length!==L.pics.length){ n += L.pics.length - keep.length; if(!keep.length) L.lost = L.pics.length; L.pics = keep; libSync(L); } else delete L.lost; }
   if(n) save(); return n; }
-async function rescue(){ if(ENGINE){ await pullTakes().catch(() => 0); RESCUED = true; pushSoon(); await engineLibPull().catch(() => 0); setInterval(() => { if(!document.hidden) engineLibPull().catch(() => 0); }, 60000); return; } try{
+async function rescue(){ if(ENGINE){ await pullTakes().catch(() => 0); await pullAllChars().catch(() => 0); RESCUED = true; pushSoon(); await engineLibPull().catch(() => 0); setInterval(() => { if(!document.hidden){ engineLibPull().catch(() => 0); pullAllChars().catch(() => 0); } }, 60000); return; } try{
   for(let i = 0; i < 40 && S.tab==='films' && !(FW && FW.FILM); i++) await new Promise(res => setTimeout(res, 250)); // Films' own save is read once it's open
   await pullTakes().catch(() => 0);
   let best = null;
@@ -903,7 +941,7 @@ async function getJ(url, opt, ms){ const c = new AbortController(), t = setTimeo
   try{ const r = await fetch(url, Object.assign({signal:c.signal}, opt || {})); if(!r.ok) throw new Error(r.status + ''); return await r.json(); } finally{ clearTimeout(t); } }
 async function ping(url){
   const p = pcOf(url);
-  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true; markDown(url, false); if(!was){ setTimeout(missBack, 0); setTimeout(lorCatchUp, 1500); if(ENGINE && RESCUED && !PULLED[url]) setTimeout(() => pullOne(url).then(() => pushSoon()).catch(() => 0), 0); } // (🛟 a PC reached later: its copy of Reel's takes comes in)
+  try{ p.stats = await getJ(url + '/system_stats', null, 6000); const was = p.online; p.online = true; markDown(url, false); if(!was){ setTimeout(missBack, 0); setTimeout(lorCatchUp, 1500); if(ENGINE && RESCUED && !PULLED[url]) setTimeout(() => pullOne(url).then(() => pushSoon()).catch(() => 0), 0); if(ENGINE && RESCUED && !PULLEDC[url]) setTimeout(() => pullChars(url).then(() => pushChars()).catch(() => 0), 0); } // (🛟 a PC reached later: its copy of Reel's takes comes in)
     if(!p.oi || !was || Date.now() - (p.oiAt || 0) > 120000){ p.oiAt = Date.now(); const got = await Promise.all(NEED.map(c => getJ(url + '/object_info/' + encodeURIComponent(c), null, 15000).catch(() => ({})))); p.oi = Object.assign({}, ...got);
       try{ localStorage.setItem('h3oi:' + url, JSON.stringify(p.oi)); }catch(e){}
       // the Render Deck helper saves into this PC's own subfolder of a shared (Dropbox) output folder, e.g. Output_Render/
@@ -6770,11 +6808,11 @@ if(ENGINE){
     live:id => { const t = deckTake(id); if(!t || t.state!=='working') return ''; const run = (t.pieces || []).find(p => p.state==='running'), L = run && LIVE[run.pid]; return (L && L.img) || ''; },
     saveChar:async o => { let L = o.id && (S.lib || []).find(x => x.id===o.id); if(L && !L.reel) return {err:"That character is H3 Deck's: change her in H3 Deck's Library"};
       if(!L){ L = {id:'L' + Math.random().toString(36).slice(2, 10), kind:['char', 'thing', 'place', 'attr', 'wear'].includes(o.kind) ? o.kind : 'char', name:'', stand:'', desc:'', pics:[], keep:'exact', what:'', reel:true}; S.lib.push(L); }
-      L.name = String(o.name || '').trim() || L.name || 'Character'; if(o.desc!=null) L.desc = String(o.desc).trim();
+      L.name = String(o.name || '').trim() || L.name || 'Character'; if(o.desc!=null) L.desc = String(o.desc).trim(); L.mt = Date.now();
       if(Array.isArray(o.drop)) L.pics = L.pics.filter(id => !o.drop.includes(id));
       for(const f of o.files || []){ try{ L.pics.push(await addMedia(f, 'img')); }catch(e){} }
       libSync(L); save(); return {id:L.id}; },
-    delChar:id => { const L = (S.lib || []).find(x => x.id===id); if(!L || !L.reel) return false; S.lib = S.lib.filter(x => x!==L); S.cast = (S.cast || []).filter(c => c.lib!==id); save(); return true; },
+    delChar:id => { const L = (S.lib || []).find(x => x.id===id); if(!L || !L.reel) return false; S.lib = S.lib.filter(x => x!==L); S.cast = (S.cast || []).filter(c => c.lib!==id); S.goneChars = [...new Set((S.goneChars || []).concat(id))]; save(); return true; },
     picUrl:id => mediaUrl(id),
     // a take's state for the Reel: where its video is, how long, how far along
     findLost,

@@ -74,3 +74,5 @@ euler_ancestral normal, finishing pass, Fix faces 0.35/32) on the mask's box zoo
 ✂ Edit's 🎨 Change), every keyframe in it pinned (engine `keys` → H3 Deck's `H3KeyPass`), the base take = the clip it's mostly in.
 The result is a new reel "· keyframed" in Phase 1: the original takes trimmed around each chunk, one clip per chunk. Phase 2's own save is in IndexedDB `reelkeys`/kv/'all' (moved out of localStorage `h3reel_keys` 2026-11-25: the 5 MB localStorage is shared with Render Deck/H3 Deck/Reel and filled up). Hold a dot and drag its line onto the needle = 🎯 move it to the needle's time (a free keyframe gets joined to the one before).
 Test: `CLIP=<a ~5 s webm> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests/t_keys.js`.
+
+- 👥 Characters made in Reel are kept on the PCs too (`h3reel_chars.json` in ComfyUI's user files), like H3 Deck's Library: a character missing on the phone comes back with her pictures, the newer edit wins, a deleted one stays deleted (2026-11-25, after one vanished). Test: `h3-a875336252cb/tests/t_reel_chars.js`.
