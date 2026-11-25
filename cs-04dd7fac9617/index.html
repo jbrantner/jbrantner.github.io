@@ -468,7 +468,10 @@ function hitPoint(px,py,skip){ let best=null,bd=skip?20:24; for(const q of GEO.v
 // one finger at a time: a second finger (or a palm) landing mid-gesture is ignored
 c2.addEventListener('contextmenu',e=>e.preventDefault()); // (a long press is a gesture here, never a menu)
 c2.addEventListener('pointerdown',e=>{ if(drag) return; c2.setPointerCapture(e.pointerId); const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
-  const q=hitPoint(px,py);
+  let q=hitPoint(px,py), alt=null;
+  // right on the line of a fold, a little way from a corner's dot, a press is on the fold: hold it to remove it (so short folds can be held too);
+  // a quick tap or a drag from there still takes the corner, as before
+  if(q){ const c=foldNear(px,py); if(c){ const p=GEO.P2.get(q.id), [a,b]=toPx(p.x,p.y); if(Math.hypot(a-px,b-py)>(q.id===selId?15:12)&&segD({x:px,y:py},{x:c.x1,y:c.y1},{x:c.x2,y:c.y2})<6){ alt=q; q=null; } } }
   // a picked face: drag anywhere on it to move it (from the side, that pulls it out or pushes it in)
   // (a corner wins only right on top of it, so a small face doesn't keep handing you its corners)
   if(selFace&&onFace(px,py)&&(!q||(()=>{ const p=GEO.P2.get(q.id), [a,b]=toPx(p.x,p.y); return Math.hypot(a-px,b-py)>12; })())){ const dd=drag={type:'face',sx:px,sy:py,moved:false,pid:e.pointerId,t0:performance.now()};
@@ -476,15 +479,15 @@ c2.addEventListener('pointerdown',e=>{ if(drag) return; c2.setPointerCapture(e.p
     // (not once it's ready to extrude: then a pause before the drag is just a pause)
     dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='face'||dd.moved||(selFace&&selFace.ex)) return; dd.type='free'; dd.fx=px; dd.fy=py; dd.loop=false; pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast('Draw your fold'); draw2(); },450);
     return; }
-  drag=q?{type:'pt',id:q.id,sx:px,sy:py,moved:false}:{type:'tap',sx:px,sy:py,t0:performance.now()}; drag.pid=e.pointerId;
+  drag=q?{type:'pt',id:q.id,sx:px,sy:py,moved:false}:{type:'tap',sx:px,sy:py,t0:performance.now()}; drag.pid=e.pointerId; if(alt) drag.alt=alt.id;
   // hold a corner still for a moment and it switches to drawing a fold line from it
   // hold on a fold (away from corners) and it goes away
   if(!q){ const c=foldNear(px,py); if(c){ const dd=drag;
     dd.pv=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; selFold=[c.a,c.b]; draw2(); },160);
     // (it goes when you let go: keep moving instead and you're drawing a fold that starts here)
-    dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='foldhold'; dd.c=c; selFold=[c.a,c.b]; pulse=1; try{navigator.vibrate&&navigator.vibrate(20);}catch(e){} draw2(); },550); } }
+    dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='foldhold'; dd.c=c; selFold=[c.a,c.b]; pulse=1; try{navigator.vibrate&&navigator.vibrate(20);}catch(e){} draw2(); },alt?500:550); } }
   if(!q&&!foldNear(px,py)){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='free'; dd.fx=px; dd.fy=py; dd.loop=!onPaper(px,py); pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast(onPaper(px,py)?'Draw your fold':'Draw across the shape: edge loop'); draw2(); },450); }
-  if(q){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.moved) return; dd.type='line'; dd.fx=px; dd.fy=py; selId=dd.id; pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast('Drag to another corner to fold'); draw2(); },500); } });
+  if(q){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.moved) return; dd.type='line'; dd.fx=px; dd.fy=py; selId=dd.id; pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast('Drag to fold: let go on a corner or the paper'); draw2(); },500); } });
 c2.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.pid) return; const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
   if(drag.type==='face'){ moveFace(drag,px,py); return; }
   if(drag.type==='free'){ drag.fx=px; drag.fy=py; (drag.path=drag.path||[[drag.sx,drag.sy]]).push([px,py]); if(drag.loop) snapLine(drag); const o=!drag.loop&&hitPoint(px,py); const was=drag.link; drag.link=o?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
@@ -493,6 +496,7 @@ c2.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.pid) return;
   if(drag.type==='line'){ drag.fx=px; drag.fy=py; (drag.path=drag.path||[[drag.sx,drag.sy]]).push([px,py]); const q=byId(drag.id), o=hitPoint(px,py,q.id); const was=drag.link; drag.link=o&&sharedPanel(q,o)>=0?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
   if(!drag.moved&&Math.hypot(px-drag.sx,py-drag.sy)<6) return;
   clearTimeout(drag.hold); if(drag.pv){ clearTimeout(drag.pv); drag.pv=0; if(selFold){ selFold=null; draw2(); } }
+  if(drag.type==='tap'&&drag.alt&&byId(drag.alt)){ drag.type='pt'; drag.id=drag.alt; drag.moved=false; } // (a drag from beside a corner's dot pulls that corner)
   if(drag.type==='tap'){ if(spinning) {drag.type='none';return;} const dx=px-drag.sx, dy=py-drag.sy; drag.type='swipe'; drag.ax=Math.abs(dx)>Math.abs(dy)?'h':'v'; drag.V0=VW; }
   if(drag.type==='swipe'){ const k=Math.PI/W*1.15; drag.th=Math.max(-Math.PI*0.75,Math.min(Math.PI*0.75,drag.ax==='h'?-(px-drag.sx)*k:-(py-drag.sy)*k)); VW=rotView(drag.V0,drag.ax,drag.th); draw2(); spin3(); return; }
   if(drag.type==='none') return;
@@ -520,8 +524,11 @@ function endDrag(e){ if(!drag||e.pointerId!==drag.pid) return; const d=drag; dra
   if(d.type==='pt'&&!d.moved){ selFold=null; selId=selId===d.id?null:d.id; changed(true); return; }
   if(d.type==='free'){ if(!d.loop&&loopish(d)) drawRect(d); else if(Math.hypot(d.fx-d.sx,d.fy-d.sy)>14||d.link) drawFold(d); else { if(!d.loop&&tinyLoop(d)) toast('Draw the square a bit bigger'); changed(true); } return; }
   // (a closed shape drawn from a corner is a square, like one drawn from anywhere else)
-  if(d.type==='line'){ if(loopish(d)) drawRect(d); else if(d.link){ push(); makeFold(d.id,d.link); } else { if(tinyLoop(d)) toast('Draw the square a bit bigger'); changed(true); } return; }
+  // (let go on the paper, away from any corner: the fold runs from the corner to a new corner there, like a fold drawn anywhere else)
+  if(d.type==='line'){ const far=Math.hypot(d.fx-d.sx,d.fy-d.sy)>14; if(loopish(d)) drawRect(d); else if(d.link){ push(); makeFold(d.id,d.link); } else if(far&&onPaper(d.fx,d.fy)) foldTo(d);
+    else { if(tinyLoop(d)) toast('Draw the square a bit bigger'); else if(far) toast('Let go on the paper or on a corner to fold'); changed(true); } return; }
   if(d.type==='pt'){ if(backToStart()) return; pop(); changed(); return; }
+  if(d.type==='tap'&&d.alt&&byId(d.alt)){ selFold=null; selId=selId===d.alt?null:d.alt; changed(true); return; } // (a quick tap beside a corner's dot picks that corner)
   if(d.type==='tap'){ if(tapFace(px,py)) return; addPoint(px,py); }
   if(d.type==='swipe'){ const fast=performance.now()-d.t0<350&&Math.abs(d.th)>0.12; const tgt=Math.abs(d.th)>Math.PI/6||fast?Math.sign(d.th)*Math.PI/2:0; settleSpin(d.V0,d.ax,d.th,tgt); } }
 c2.addEventListener('pointerup',e=>{ endDrag(e); if(!drag){ dropEmpty(); ui(); } }); const cancelDrag=e=>{ if(!drag||e.pointerId!==drag.pid) return; clearTimeout(drag.hold); clearTimeout(drag.pv); if(drag.type==='foldhold') selFold=null; if(drag.moved) changed(); drag=null; draw2(); };
@@ -731,6 +738,12 @@ function drawFold(d){ if(!onPaper(d.sx,d.sy)) return loopCut(d); push(); const n
   const B=d.link?byId(d.link):A?addPoint(d.fx,d.fy,true):null;
   if(!A||!B||A===B){ abandon('Draw the fold across the paper'); return; }
   if(sharedPanel(A,B)<0){ abandon('A fold stays on one side of the box'); return; }
+  for(const q of S.pts.slice(n0)) snapOntoFold(q);
+  selId=null; changed(true); makeFold(A.id,B.id,true); }
+// a fold from a corner you held to a spot on the paper: a new corner goes there
+function foldTo(d){ const A=byId(d.id); if(!A) return; push(); const n0=S.pts.length; const B=addPoint(d.fx,d.fy,true); if(S.pts.length>n0) changed(true);
+  if(!B||B===A){ abandon('Draw the fold across the paper'); return; }
+  if(sharedPanel(A,B)<0){ abandon('A fold stays on one side of the box: add a corner on the box edge and fold to it'); return; }
   for(const q of S.pts.slice(n0)) snapOntoFold(q);
   selId=null; changed(true); makeFold(A.id,B.id,true); }
 // a fold drawn from right beside one of your folds starts on it (a clean T, not a sliver)
