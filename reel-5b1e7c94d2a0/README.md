@@ -48,7 +48,7 @@ Test: `CLIP=<a ~5 s video> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests
 
 ## 🔑 Phase 2: keyframes (Jordan 2026-11-24, `keys/`)
 🔑 Phase 2 on the viewport (or 🎬 › Move on to Phase 2) opens `keys/?reel=<id>`. The reel is joined into one video on a PC (the export
-helper) and turned like a wheel under a fixed centre needle (drag + fling, 64 px = 1 s). It starts BLANK (Jordan 2026-11-25): ＋ Keyframe
+helper) and turned like a wheel under a fixed centre needle (drag + fling, 64 px = 1 s). It starts BLANK the first time (Jordan 2026-11-25); a "· keyframed" reel's Phase 2 opens with the keyframes, redraws and chunks of the Phase 2 it came from (at their shown times): ＋ Keyframe
 adds one at the needle, tap a dot to bring it to the needle. Hold a dot ~⅓ s and drag a line: every keyframe the line reaches within 5 s
 joins one chunk, the ones inside as breakdowns (tap the chunk bar › ✂ Disconnect). Drag the dot under the needle to retime it: a
 breakdown moves between its neighbours (in-betweens faster cyan / slower orange, ¼–4×), a chunk's end takes the rest of the reel along;
