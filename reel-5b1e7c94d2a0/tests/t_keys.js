@@ -14,7 +14,7 @@ const SCHEMA = {
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
   ImageBatch:{input:{required:{image1:['IMAGE'], image2:['IMAGE']}}},
-  CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors', 'Illustrious\\BismuthIllMix_v8.safetensors']]}}},
+  CheckpointLoaderSimple:{input:{required:{ckpt_name:[['oneObsession_v24.safetensors', 'Illustrious\\BismuthIlMix_v8.safetensors']]}}},
   LoraLoader:{input:{required:{lora_name:[['afkj.safetensors', 'afk_style_condensed_v2_lora_f16.safetensors']]}}},
   UltralyticsDetectorProvider:{input:{required:{model_name:[['bbox/hand_yolov8s.pt', 'bbox/face_yolov8m.pt']]}}},
   SAMLoader:{input:{required:{model_name:[['sam_vit_b_01ec64.pth']]}}},
@@ -134,12 +134,24 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
   const st = await page.evaluate(() => { const r = document.querySelector('#stage').getBoundingClientRect(); return {x:r.left, y:r.top, w:r.width, h:r.height}; });
   await page.mouse.move(st.x + st.w * 0.1, st.y + st.h * 0.2); await page.mouse.down(); await page.mouse.move(st.x + st.w * 0.2, st.y + st.h * 0.3, {steps:5}); await page.mouse.up(); await page.waitForTimeout(300);
   ok(await page.evaluate(() => /^data:image\/png/.test(KEYS.K()[1].paint)), '🖌 painting adds to the mask (kept with the keyframe)');
+  // 👤 save the words as a character, then bring them back on an empty keyframe
+  await page.fill('#kw', '1girl, goth, pale skin, pink ring eyes'); await page.click('#chSave'); await page.fill('#chN', 'Mia'); await page.click('#chOk'); await page.waitForTimeout(100);
+  const sv = await page.evaluate(() => ({c:KEYS.chars(), saved:JSON.parse(localStorage.getItem('illus_chars') || '[]').length, on:!!document.querySelector('#chRow [data-ch].on')}));
+  ok(sv.c.length===1 && sv.c[0].name==='Mia' && sv.c[0].text==='1girl, goth, pale skin, pink ring eyes' && sv.saved===1 && sv.on, '💾 Save as a character keeps the words under a name, on the phone (' + JSON.stringify(sv) + ')');
+  await page.fill('#kw', 'smile'); await page.click('#chRow [data-ch]'); await page.waitForTimeout(100);
+  const w1 = await page.evaluate(() => KEYS.K()[1].words);
+  await page.click('#chRow [data-ch]'); await page.waitForTimeout(100);
+  const w2 = await page.evaluate(() => KEYS.K()[1].words);
+  ok(w1==='1girl, goth, pale skin, pink ring eyes, smile' && w2==='smile', 'tapping 👤 Mia puts her description in front of the words, tapping again takes it out (' + JSON.stringify([w1, w2]) + ')');
+  await page.click('#chEdit'); await page.click('#card [data-ce]'); await page.fill('#chT', '1girl, goth'); await page.click('#chOk'); await page.waitForTimeout(100);
+  ok(await page.evaluate(() => KEYS.chars()[0].text==='1girl, goth' && KEYS.chars()[0].name==='Mia'), '✎ edits a saved character');
+  await page.fill('#kw', '');
   // ✨ Redraw: the recipe, zoomed to the mask
   const n0 = sent.length, u0 = ups.length; await page.click('#nSeg [data-v="1"]'); await page.click('#drawBtn'); await page.waitForTimeout(2500);
   const gi = sent.slice(n0).find(x => nodes(x.g, 'KSamplerAdvanced').length);
   ok(!!gi, 'a redraw is sent');
   if(gi){ const G = gi.g, ck = nodes(G, 'CheckpointLoaderSimple')[0], lo = nodes(G, 'LoraLoader')[0], ks = nodes(G, 'KSamplerAdvanced'), fd = nodes(G, 'FaceDetailer')[0], te = nodes(G, 'CLIPTextEncode');
-    ok(ck && /BismuthIllMix_v8/.test(ck.inputs.ckpt_name) && lo && lo.inputs.lora_name==='afk_style_condensed_v2_lora_f16.safetensors' && lo.inputs.strength_model===1, 'BismuthIllMix v8 with afk_style_condensed_v2 at 1.0');
+    ok(ck && /BismuthIlMix_v8/.test(ck.inputs.ckpt_name) && lo && lo.inputs.lora_name==='afk_style_condensed_v2_lora_f16.safetensors' && lo.inputs.strength_model===1, 'BismuthIllMix v8 with afk_style_condensed_v2 at 1.0');
     ok(ks.length===2 && ks.every(k => k.inputs.cfg===5.5 && k.inputs.sampler_name==='euler_ancestral' && k.inputs.scheduler==='normal') && ks[0].inputs.steps===47 && ks[0].inputs.start_at_step===19 && ks[0].inputs.end_at_step===41 && ks[1].inputs.add_noise==='disable' && ks[1].inputs.start_at_step===41,
       '28 steps at 0.6 change, CFG 5.5, euler_ancestral normal, the last 6 steps as the finishing pass (' + JSON.stringify(ks.map(k => [k.inputs.steps, k.inputs.start_at_step, k.inputs.end_at_step])) + ')');
     ok(fd && fd.inputs.denoise===0.35 && fd.inputs.feather===32, 'Fix faces at 0.35 redraw, 32 blend');
