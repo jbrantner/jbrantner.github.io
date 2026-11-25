@@ -104,6 +104,8 @@ let fresh0=Infinity, folds0=Infinity, foldsAt0=null;
 function push(){ undoS.push(JSON.stringify({S,nextId})); if(undoS.length>80) undoS.shift(); fresh0=nextId; folds0=(S.folds||[]).length; foldsAt0=(S.folds||[]).map(f=>f.slice()); }
 // an undo step that changed nothing (a drag that ended where it started, Delete with nothing to take away) is dropped, so Undo always does something
 const sameModel=(a,b)=>{ const k=o=>JSON.stringify(o,(key,v)=>key==='sticky'?undefined:v); return k(a)===k(b); };
+// a drag that ends where it started changes nothing: the paper goes back exactly as it was (bends it re-chose on the way included)
+function backToStart(){ if(!undoS.length) return false; const o=JSON.parse(undoS[undoS.length-1]); if(!sameModel(o.S,S)) return false; abandon(); return true; }
 function dropEmpty(){ while(undoS.length&&sameModel(JSON.parse(undoS[undoS.length-1]).S,S)) undoS.pop(); }
 function undo(){ dropEmpty(); if(!undoS.length){ ui(); return; } const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; selId=null; selFold=null; selFace=null; lockAll(); changed(); toast('Undo'); }
 // a gesture that can't finish puts everything back the way it was (and takes back its undo step)
@@ -279,7 +281,8 @@ function solve1(MV){ MV=MV||new Set();
     for(const t of tr.T){ T.push(t.map(i=>list[i].id)); triPanel.push(f); }
     lay[f]={list,V,T:tr.T};
   });
-  S.sticky=sticky;
+  // (kept in a fixed order, so the same paper always lays out the same way, and solve() can tell when the bends have settled)
+  S.sticky=sticky.map(([a,b])=>a<b?[a,b]:[b,a]).sort((x,y)=>x[0]-y[0]||x[1]-y[1]);
   // loose corners are pencil marks: they ride on the paper wherever it has been pulled
   for(const q of S.pts){ if(ACT.has(q.id)) continue; const fs=q.on.t==='f'?[q.on.f]:panelsOf(q);
     for(const f of fs){ const p=ride(lay,f,home(q,f)); if(p){ q.p=p; break; } } }
@@ -511,13 +514,14 @@ function endDrag(e){ if(!drag||e.pointerId!==drag.pid) return; const d=drag; dra
       const why=d.lock?'Across the middle, a face only moves up and down':d.ext?'Drag the face further to extrude it':'';
       if(still&&d.ext){ abandon(why); selFace={ids:d.ext,ex:true}; changed(true); return; }
       if(still&&why) toast(why);
+      if(still&&backToStart()) return;
       pop(); changed(); } else if(!tapFace(px,py)) addPoint(px,py); return; }
   if(d.type==='foldhold'){ const c=d.c; if(c.stray){ selFold=null; push(); flattenBend(c.a,c.b); if(sound) blip(300,.12,.1); pulse=1; toast('Bend flattened'); changed(); } else deleteFold(); return; }
   if(d.type==='pt'&&!d.moved){ selFold=null; selId=selId===d.id?null:d.id; changed(true); return; }
   if(d.type==='free'){ if(!d.loop&&loopish(d)) drawRect(d); else if(Math.hypot(d.fx-d.sx,d.fy-d.sy)>14||d.link) drawFold(d); else { if(!d.loop&&tinyLoop(d)) toast('Draw the square a bit bigger'); changed(true); } return; }
   // (a closed shape drawn from a corner is a square, like one drawn from anywhere else)
   if(d.type==='line'){ if(loopish(d)) drawRect(d); else if(d.link){ push(); makeFold(d.id,d.link); } else { if(tinyLoop(d)) toast('Draw the square a bit bigger'); changed(true); } return; }
-  if(d.type==='pt'){ pop(); changed(); return; }
+  if(d.type==='pt'){ if(backToStart()) return; pop(); changed(); return; }
   if(d.type==='tap'){ if(tapFace(px,py)) return; addPoint(px,py); }
   if(d.type==='swipe'){ const fast=performance.now()-d.t0<350&&Math.abs(d.th)>0.12; const tgt=Math.abs(d.th)>Math.PI/6||fast?Math.sign(d.th)*Math.PI/2:0; settleSpin(d.V0,d.ax,d.th,tgt); } }
 c2.addEventListener('pointerup',e=>{ endDrag(e); if(!drag){ dropEmpty(); ui(); } }); const cancelDrag=e=>{ if(!drag||e.pointerId!==drag.pid) return; clearTimeout(drag.hold); clearTimeout(drag.pv); if(drag.type==='foldhold') selFold=null; if(drag.moved) changed(); drag=null; draw2(); };
@@ -1010,14 +1014,16 @@ $('bDel').onclick=()=>{ if(selFold){ deleteFold(); return; } const q=selId&&byId
     const y=at[0][0]===x?at[0][1]:at[0][0], Y=byId(y); if(!Y) return;
     const straight=(A,B,C)=>{ const u=B.map((v,k)=>v-A[k]), w=C.map((v,k)=>v-B[k]), cr=Math.hypot(u[1]*w[2]-u[2]*w[1],u[2]*w[0]-u[0]*w[2],u[0]*w[1]-u[1]*w[0]); return dot3(u,w)>0&&cr<=0.05*Math.hypot(...u)*Math.hypot(...w); };
     if(!straight(restOf(P),restOf(X),restOf(Y))&&!straight(P.p,X.p,Y.p)) return; S.folds=S.folds.filter(f=>f!==at[0]); drop(y,x,n+1); };
+  // (with Mirror on its twin goes too: a fold to the twin can't be joined onto anything, it just goes)
+  const dead=new Set([q.id,...(t&&t.on.t!=='c'?[t.id]:[])]);
   const through=id=>{ const F=S.folds||[], at=F.filter(f=>f.includes(id));
     // three or four folds at the corner: folds that go straight on through it stay, joined (where two straight folds cross, the corner has to stay);
     // a fold that just ends here goes with it
     if(at.length===3||at.length===4){ const C=byId(id), R=C&&restOf(C), o=at.map(f=>byId(f[0]===id?f[1]:f[0])); if(!C||o.some(x=>!x)) return null;
       const str=(A,B)=>{ const u=R.map((v,k)=>v-restOf(A)[k]), w=restOf(B).map((v,k)=>v-R[k]), c=[u[1]*w[2]-u[2]*w[1],u[2]*w[0]-u[0]*w[2],u[0]*w[1]-u[1]*w[0]]; return dot3(u,w)>0&&Math.hypot(...c)<=0.05*Math.hypot(...u)*Math.hypot(...w); };
-      const pairs=[], used=new Set(); for(let i=0;i<o.length;i++) for(let j=i+1;j<o.length;j++) if(!used.has(i)&&!used.has(j)&&str(o[i],o[j])&&sharedPanel(o[i],o[j])>=0){ pairs.push([o[i].id,o[j].id]); used.add(i); used.add(j); }
+      const pairs=[], used=new Set(); for(let i=0;i<o.length;i++) for(let j=i+1;j<o.length;j++) if(!used.has(i)&&!used.has(j)&&!dead.has(o[i].id)&&!dead.has(o[j].id)&&str(o[i],o[j])&&sharedPanel(o[i],o[j])>=0){ pairs.push([o[i].id,o[j].id]); used.add(i); used.add(j); }
       if(!pairs.length||pairs.some(([a,b])=>F.some(f=>f.includes(a)&&f.includes(b)))) return null; S.folds=F.filter(f=>!f.includes(id)); return pairs; }
-    if(at.length!==2) return null; const [a,b]=at.map(f=>f[0]===id?f[1]:f[0]);
+    if(at.length!==2) return null; const [a,b]=at.map(f=>f[0]===id?f[1]:f[0]); if(dead.has(a)||dead.has(b)){ S.folds=F.filter(f=>!f.includes(id)); return null; }
     // a middle corner one of those folds ran straight through (where it crossed its mirror image) stays on the joined fold, like on the other half
     const C=byId(id), on=(x,e)=>{ const E=byId(e); if(!E) return false; const A=restOf(C), B=restOf(E), R=restOf(x), AB=B.map((v,k)=>v-A[k]), L2=dot3(AB,AB), t=L2?dot3(R.map((v,k)=>v-A[k]),AB)/L2:0; return t>0.001&&t<0.999&&Math.hypot(...R.map((v,k)=>v-A[k]-AB[k]*t))<0.05; };
     const mids=S.mirror?S.pts.filter(x=>x!==C&&x.id!==a&&x.id!==b&&isMid(x)&&live(x)&&(on(x,a)||on(x,b))):[];
