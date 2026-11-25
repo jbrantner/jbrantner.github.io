@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-25-1">
+<meta name="reel-build" content="2026-11-25-2">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -495,6 +495,7 @@ function rootOf(c, id){ const M = c.meta || {}; for(let i = 0; i < 20 && M[id] &
 function drawRetry(){ const b = $('#retryAll'); if(!b) return; const n = clips().reduce((a, c) => a + c.takes.filter(id => info(id).state==='failed').length, 0); b.hidden = !n; const here = (cur() ? cur().takes : []).filter(id => info(id).state==='failed').length; b.textContent = '↻ Try ' + n + ' failed again' + (here < n ? ' (' + (here ? here + ' here, ' : '') + (n - here) + ' in other clips)' : ''); }
 function drawOpts(){ drawRetry(); const c = cur(), box = $('#opts'); { const a = $('#optAct'), m = c && (c.meta || {})[c.pick] || {}, extra = c ? c.takes.filter(id => id!==c.pick && id!==m.src).length : 0;
     a.innerHTML = (c && c.pick && doneOf(c.pick) ? `<button class="btn" id="upOne" style="width:100%;margin-top:8px">⬆ Upscale this option</button>` : '')
+      + (c && c.pick && doneOf(c.pick) && linkSides(curI()).any ? `<button class="btn" id="linkOne" style="width:100%;margin-top:8px">🔗 Re-link to the clips around it</button>` : '')
       + (c && extra && c.pick ? `<button class="btn" id="keepOne" style="width:100%;margin-top:8px">${KEEP===c.id ? '🧹 Tap again: remove the other ' + extra : '🧹 Keep only this option'}</button>` : ''); }
   if(!c){ box.innerHTML = ''; $('#optNote').textContent = ''; $('#words').hidden = true; $('#warnBox').innerHTML = ''; return; }
   const work = c.takes.filter(id => info(id).state==='working').length;
@@ -516,7 +517,7 @@ function drawOpts(){ drawRetry(); const c = cur(), box = $('#opts'); { const a =
   const pm = P && P.pick ? (P.meta || {})[P.pick] || {} : {}, nm = N && N.pick ? (N.meta || {})[N.pick] || {} : {};
   if(P && m.after && P.pick && rootOf(P, m.after)!==rootOf(P, P.pick) && !(pm.before && rootOf(c, pm.before)===rootOf(c, c.pick))) warn.push('the clip before');
   if(N && m.before && N.pick && rootOf(N, m.before)!==rootOf(N, N.pick) && !(nm.after && rootOf(c, nm.after)===rootOf(c, c.pick))) warn.push('the clip after');
-  $('#warnBox').innerHTML = warn.length ? `<div class="warn">⚠ This option was made for another option of ${warn.join(' and ')}, so it may jump. ↻ Redo makes ones that line up.</div>` : ''; }
+  $('#warnBox').innerHTML = warn.length ? `<div class="warn">⚠ This option was made for another option of ${warn.join(' and ')}, so it may jump. <u id="warnLink">🔗 Re-link</u> lines this one up, ↻ Redo makes new ones that do.</div>` : ''; }
 function drawButtons(){ const c = cur(), cs = clips(), N = cs[curI() + 1];
   $('#nextBtn').textContent = N ? '⇿ Insert' : '➕ Next';
   $('#redoBtn').disabled = !c; $('#editBtn').disabled = !c; $('#nextBtn').disabled = !c; $('#nextBtn').style.opacity = c && (!doneOf(c.pick) || (N && !doneOf(N.pick))) ? '.45' : ''; }
@@ -1047,7 +1048,34 @@ function upSheet(){ const c = cur(); if(!c || !c.pick || !doneOf(c.pick)) return
       return got.length ? {ids:got} : {err}; }, '⬆ Sent: ' + o.n + ' upscale' + (o.n===1 ? '' : 's') + ' of this option, each a new option to pick from');
     if(!ids) return; const T = {in:tr.in - a, out:tr.out != null ? tr.out - a : null};
     addTakes(c, ids, Object.assign({}, L, {fin:true, src:id, reup:0, whole:!a, srcIn:tr.in, srcOut:tr.out, trim:T}), wordsOf(c, id)); save(); VSIG = ''; refresh(); }; }
-document.addEventListener('click', e => { if(e.target.closest('#upOne')) upSheet(); });
+document.addEventListener('click', e => { if(e.target.closest('#upOne')) upSheet(); if(e.target.closest('#linkOne') || e.target.closest('#warnLink')) linkSheet(); });
+// 🔗 Re-link (Jordan 2026-11-25, her drawings: after re-rolling clip 2 and picking the option she likes, "run a 're-link' pass where it smooths
+// the transitions from segment 1 into segment 2, and segment 2 into segment 3. This does not create a new clip, it stays 3 segments total …
+// one clip with the original prompt"): the picked option is made again at a strength, between the end of the clip before and the start of the
+// clip after (both pinned, as ⇿ Insert does), with its own words and settings. It comes back as a new option of the same clip and is picked;
+// the option it was made from stays, so going back is a tap away. A side that is a new shot (✍ New shot, 📤 upload) or isn't done is left out.
+function linkSides(i){ const cs = clips(), c = cs[i], P = cs[i - 1], N = cs[i + 1];
+  const a = !!(c && P && !isCut(c) && P.pick && doneOf(P.pick)), b = !!(c && N && !isCut(N) && N.pick && doneOf(N.pick));
+  return {P:a ? P : null, N:b ? N : null, any:a || b}; }
+const LINK_STR = [[0.35, 'Light'], [0.5, 'Medium'], [0.65, 'Strong']];
+const LINK_DROP = ['trim', 'fin', 'src', 'whole', 'reup', 'joined', 'same', 'loop'];
+function linkSheet(){ const i = curI(), c = cur(); if(!c || !doneOf(c.pick)) return; const Z = linkSides(i);
+  if(!Z.any){ toast("🔗 Re-link needs a finished clip before or after this one (a new shot or an upload starts fresh, so there's nothing to link to)", 6000); return; }
+  const o = {words:words0(c), str:S.linkStr || 0.5, n:1}, L = lookOf(c), sides = [Z.P ? 'clip ' + i : '', Z.N ? 'clip ' + (i + 2) : ''].filter(Boolean).join(' and ');
+  sheet(`<h3><span>🔗 Re-link clip ${i + 1}</span><button class="btn" data-close>✕</button></h3>
+    <div class="note">Makes this option again so it flows out of ${Z.P ? 'the end of clip ' + i : ''}${Z.P && Z.N ? ' and ' : ''}${Z.N ? 'into the start of clip ' + (i + 2) : ''}. ${sides.replace(/^./, x => x.toUpperCase())} ${Z.P && Z.N ? 'are' : 'is'} pinned and left as ${Z.P && Z.N ? 'they are' : 'it is'}. It stays clip ${i + 1}, with its own words: it comes back as a new option and is picked, and the one you have now stays in the options.</div>
+    <div class="lab"><span>How much it can change</span></div><div class="seg" id="lkS">${LINK_STR.map(([v, n]) => `<button data-v="${v}" class="${Math.abs(v - o.str) < 0.01 ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <div class="note" id="lkSN"></div>
+    <div class="lab" style="margin-top:8px"><span>Its words (the clip's own)</span></div><textarea id="lkW" rows="3">${esc(o.words)}</textarea>
+    ${lookRow(L)}${nRow(o.n)}
+    <button class="big pri" id="lkGo" style="width:100%;margin-top:14px">🔗 Re-link clip ${i + 1}</button>`);
+  lookWire(L); nWire(o);
+  const note = () => { $('#lkSN').textContent = o.str < 0.42 ? 'A light touch: the moves stay, the joins get smoothed.' : o.str < 0.58 ? 'Keeps the moves and layout; things near the joins can shift to meet the clips around it.' : 'Bigger changes so it really lines up: the moves can change a bit too.'; };
+  $$('#lkS button').forEach(b => b.onclick = () => { o.str = S.linkStr = +b.dataset.v; save(); $$('#lkS button').forEach(x => x.classList.toggle('on', x===b)); note(); }); note();
+  $('#lkGo').onclick = async () => { const w = $('#lkW').value.trim() || words0(c), pick = c.pick, P = Z.P, N = Z.N;
+    const ids = await send($('#lkGo'), () => E.relink({take:pick, inC:c.in || 0, outC:endOf(c), takeA:P ? P.pick : '', outA:P ? endOf(P) : 0, takeB:N ? N.pick : '', inB:N ? N.in || 0 : 0, words:w, who:onScreen(c), str:o.str, n:o.n}), '🔗 Re-linking clip ' + (i + 1) + ': it comes back as a new option of this clip', L);
+    if(!ids) return; const m0 = {}; Object.entries((c.meta || {})[pick] || {}).forEach(([k, v]) => { if(!LINK_DROP.includes(k)) m0[k] = v; });
+    c.look = cl(L); addTakes(c, ids, Object.assign(m0, {after:P ? P.pick : null, before:N ? N.pick : null, relink:pick, look:cl(L)}), wordsOf(c, pick)); pickOpt(c, ids[0]); VSIG = ''; save(); refresh(); }; }
 // ⬇ Export (the PC helper's /renderdeck/h3export, as Films uses): R().exp = {id, pc, state, done, total, file}
 async function expGo(){ const cs = clips(); let at = 0, W = 0, H = 0; const out = [];
   for(const c of cs){ const I = info(c.pick); if(I.state!=='done' || !I.file){ toast('Every clip needs a finished option picked first'); return; } const a = c.in || 0, b = endOf(c);

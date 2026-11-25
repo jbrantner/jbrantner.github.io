@@ -46,6 +46,19 @@ Reel's own save is `h3reel` (reels → clips → takes, picks, in/out) and `h3re
 
 Test: `CLIP=<a ~5 s video> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests/t_reel.js` (from the repo root).
 
+## 🔗 Re-link (Jordan 2026-11-25, her drawings)
+After re-rolling a middle clip and picking an option, **🔗 Re-link to the clips around it** (under the options, or the link in a "may jump"
+warning) makes that option again at a strength (Light 0.35 / Medium 0.5 / Strong 0.65): one window = the clip before's last 22 frames
+(guide clip at frame 0) + this clip's own frames (VAE-encoded start, spread over a length rounded to MiniMax's 17-frame blocks, within ⅓ s)
++ the clip after's first 22 frames (guide clip on a block). Only this clip's frames are kept; its own sound is pinned; its first and last
+1.5 s are colour-matched (mkl ramp) to the frame it meets on each side. Same words and settings as the clip; it comes back as a new option of
+the same clip and is picked (meta.relink = the option it came from), so the reel keeps the same number of clips. New-shot cuts and
+unfinished neighbours are left out. Engine `relink` → H3 Deck's `H3Relink` (lead take with `lead.base`).
+
+Keep-things-the-same line: clips made to line up (➕ Next, ⇿ Insert / ↻ Redo between clips, ⏪ lead-in, 🔗 Re-link) get a sentence saying
+the same people, clothes, objects and props stay in place and nothing appears or disappears unless said (➕ Next: after the [0s-1s] anchor,
+never in it). `keep:false` on the engine call leaves it out. Test: `tests/t_relink.js`.
+
 ## 🔑 Phase 2: keyframes (Jordan 2026-11-24, `keys/`)
 🔑 Phase 2 on the viewport (or 🎬 › Move on to Phase 2) opens `keys/?reel=<id>`. The reel is joined into one video on a PC (the export
 helper) and turned like a wheel under a fixed centre needle (drag + fling, 64 px = 1 s). It starts BLANK the first time (Jordan 2026-11-25); a "· keyframed" reel's Phase 2 opens with the keyframes, redraws and chunks of the Phase 2 it came from (at their shown times): ＋ Keyframe
