@@ -103,7 +103,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.click('#nextBtn'); await page.waitForTimeout(200); await page.fill('#nxW', 'Mia sits down'); await page.click('#nSeg [data-n="1"]');
   n0 = sent.filter(x => x.g).length; await page.click('#nxGo'); await page.waitForTimeout(2500);
   const g2 = sent.filter(x => x.g).slice(n0), t2 = await eng.evaluate(() => { const t = H3.S.takes[0]; return {prompt:t.prompt, carry:t.carry, cont:!!t.cont}; });
-  ok(g2.length===1 && t2.carry && t2.carry.own && t2.carry.src===other && /^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] Everything from the moment before is still here: .*unless it says so\. <Subject 1> sits down$/.test(t2.prompt), '➕ Next carries on from the picked option with the anchor line (' + JSON.stringify(t2) + ')');
+  ok(g2.length===1 && t2.carry && t2.carry.own && t2.carry.src===other && /^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] <Subject 1> sits down$/.test(t2.prompt), '➕ Next carries on from the picked option with the anchor line (' + JSON.stringify(t2) + ')');
   ok(nodes(g2[0].g, 'MiniMaxH3MotionContext').length || nodes(g2[0].g, 'LoadVideo').length, 'its graph loads the clip before as context');
   { const G = g2[0].g, cm = nodes(G, 'ColorMatch'), ref = cm[0] && G[cm[0].inputs.image_ref[0]], src = ref && G[ref.inputs.image[0]];
     ok(cm.length===6 && cm[0].inputs.strength===1 && cm[5].inputs.strength < 0.2 && cm.every(n => n.inputs.method==='mkl') && ref && ref.class_type==='ImageFromBatch' && ref.inputs.batch_index===4095 && src && src.class_type==='GetVideoComponents',
