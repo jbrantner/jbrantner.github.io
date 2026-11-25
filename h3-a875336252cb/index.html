@@ -3397,7 +3397,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     if(!t.h3) prompt += poseLine(t.imgs, pc.start - LEAD(pc) / FPS, L / FPS);
     if(oi.MMH3FitReferences && (imgs.length || t.vids.length || t.auds.length)){
       // keeps every reference inside the 8 GB budget (the MMH3 Studio low-memory node): videos read at the size they're used
-      const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0) + (t.pins || []).length, stop_above:72000};
+      const fi = {width:w, height:h, length:L, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, L / FPS)), image_size:'match', keyframes:(useFirst ? 1 : 0) + (useLast ? 1 : 0) + (pc.ctx ? 7 : 0) + (t.pins || []).length + (t.redo && t.redo.kp ? t.redo.kp.pins.length : 0), stop_above:72000};
       imgs.forEach((r, k) => { fi['image_' + (k + 1)] = useFirst ? img(r.id) : refPic(add, oi, names[r.id], r.id, w, h); });
       t.vids.forEach((r, k) => { fi['video_' + (k + 1)] = [add('LoadVideo', {file:r.file || names[r.id]}), 0]; fi['video_' + (k + 1) + '_sound'] = !!r.sound; fi['video_' + (k + 1) + '_start'] = r.start != null ? +r.start + (t.swap && t.pieces.length > 1 ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0) : r.follow ? Math.max(0, pc.start - LEAD(pc) / FPS) : 0; }); // (🔄 a swap's clip is read straight from the PC's output, from its own start)
       t.auds.forEach((r, k) => { fi['audio_' + (k + 1)] = [add('LoadAudio', {audio:names[r.id]}), 0]; });
@@ -3489,7 +3489,14 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   // ↻ Redo a stretch (🎞 Films): the take's own frames either side of the stretch are pinned on the 4-frame latent grid, so the new
   // middle leaves and lands where the take does (the old H3 Film recipe, on the grid like 🪄 Smooth); the take's sound is pinned too
   let rsrc = null, rIm = null, rAu = null;
-  if(t.redo){ const R = t.redo; if(X){ rIm = X.im; rAu = X.au; rsrc = 1; } else { rsrc = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]}); rIm = [rsrc, 0]; rAu = [rsrc, 1]; }
+  if(t.redo && t.redo.kp){ const R = t.redo, K = R.kp, all = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]}); rsrc = all; rAu = [all, 1];
+    // 🔑 the joined reel, retimed: runs of next frames, or one frame repeated (a slowed stretch), batched in order, resized to the window
+    for(const [s, c, nx] of K.runs){ let b = [add('ImageFromBatch', {image:[all, 0], batch_index:s, length:nx ? c : 1}), 0];
+      if(!nx && c > 1) b = [add('RepeatImageBatch', {image:b, amount:c}), 0]; rIm = rIm ? batchOf(add, oi, rIm, b) : b; }
+    if(oi.ImageScale) rIm = [add('ImageScale', {image:rIm, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0];
+    for(const [o, id] of K.pins){ let fr = img(id); if(oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0];
+      cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; } }
+  else if(t.redo){ const R = t.redo; if(X){ rIm = X.im; rAu = X.au; rsrc = 1; } else { rsrc = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]}); rIm = [rsrc, 0]; rAu = [rsrc, 1]; }
     for(const [o, s] of R.pins){ const fr = add('ImageFromBatch', {image:rIm, batch_index:s, length:1}); cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:[fr, 0], frame_idx:o}), 0]; guides++; }
     if(R.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:rAu, start_index:R.s0 / FPS, duration:L / FPS}), 0], frame_idx:0}), 0]; }
   if(t.lead){ // ⏪ lead-in: the clip's first frames are pinned at the END of the window, so the new seconds arrive exactly where it starts
@@ -3588,6 +3595,8 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     if(t.swap.sound || (!oi.AudioConcat && (pre > 0 || post > 0))) aud = many ? tr(rAu, (first ? 0 : R.a + S0) / FPS, (pre + own + post) / FPS) : rAu;
     else { let au = tr(aud, 0, own / FPS); if(pre > 0) au = [add('AudioConcat', {audio1:tr(rAu, 0, pre / FPS), audio2:au, direction:'after'}), 0];
       if(post > 0) au = [add('AudioConcat', {audio1:au, audio2:tr(rAu, R.b / FPS, post / FPS), direction:'after'}), 0]; aud = au; } }
+  else if(t.redo && t.redo.kp){ const K = t.redo.kp; ims = [add('ImageFromBatch', {image:ims, batch_index:0, length:K.n}), 0];
+    if(oi.TrimAudioDuration) aud = [add('TrimAudioDuration', {audio:aud, start_index:0, duration:Math.round(K.n / FPS * 1000) / 1000}), 0]; }
   else if(t.redo){ // splice: the take up to frame a, the new frames between a and b, the take from frame b on
     const R = t.redo; let joined = [add('ImageFromBatch', {image:rIm, batch_index:0, length:R.a + 1}), 0];
     const mid = R.b - R.a - 1; if(mid > 0) joined = batchOf(add, oi, joined, [add('ImageFromBatch', {image:ims, batch_index:R.a - R.s0 + 1, length:mid}), 0]);
@@ -4209,7 +4218,7 @@ async function render(){ if(S.tab!=='wild' && S.fkey===WK && !WLOOP_BUSY && !WOR
 }
 async function sendPieces(t, from){
   const url = t.pc, oi = pcOf(url).oi, names = {}, M0 = resolveModel(oi, t.model, t.turbo), T = castTake(t, !(M0 && M0.fl2v));
-  const ids = t.combo ? (seamOne(t) ? [...T.imgs.map(r => r.id), ...T.vids.map(r => r.id)] : []) : [t.sm && !t.sm.file && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...T.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
+  const ids = t.combo ? (seamOne(t) ? [...T.imgs.map(r => r.id), ...T.vids.map(r => r.id)] : []) : [t.sm && !t.sm.file && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...(t.redo && t.redo.kp ? t.redo.kp.pins.map(p => p[1]) : []), ...T.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
   if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
@@ -6058,6 +6067,42 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
   save(); drawTakes(); if(sent && !o.bridge) toast('↻ ' + sent + (sent > 1 ? ' redos' : ' redo') + ' of ' + fmtS(P.a / FPS) + '–' + fmtS(P.b / FPS) + ' sent to ' + [...new Set(S.takes.filter(x => x.redo && x.redo.key===key).map(x => pcName(x.pc)))].join(' and '));
   return sent; };
 window.H3RedoPlan = redoPlan;
+// 🔑 Reel Phase 2 (Jordan 2026-11-24: "mold and refine keyframes and then have the final pass redo the inbetweens like it's edit"): one stretch
+// of the reel, made again between its keyframes. The reel joined into one video is the start (VAE-encoded, retimed to the keyframes' new
+// timing: map[k] = the source frame shown at output frame k), str = how much it changes, like ✂ Edit's 🎨 Change; each keyframe's
+// picture (the refined still) is pinned at its frame (MiniMaxH3AddGuide, re-injected every step), the first and last at the ends.
+// The settings (model, LoRAs, characters, words) are the base take's, the clip the stretch is mostly in. Only the first n frames are kept:
+// the window is rounded up to MiniMax's 17-frame blocks and the frames past the last keyframe are dropped.
+// o = {take, file:{filename, subfolder, type}, pc, w, h, map:[…], n, pins:[[frame, mediaId]], prompt, str, n:copies}
+function kpRuns(map){ const R = []; for(const s of map){ const r = R[R.length - 1];
+  if(r && r[2]===1 && s===r[0] + r[1]) r[1]++; else if(r && r[2]===0 && s===r[0]) r[1]++; else if(r && r[1]===1 && s===r[0] + 1){ r[1] = 2; r[2] = 1; } else if(r && r[1]===1 && s===r[0]){ r[1] = 2; r[2] = 0; } else R.push([s, 1, 1]); }
+  return R; } // [from, count, 1 = next frames | 0 = the same frame again]
+window.H3KpRuns = kpRuns;
+window.H3KeyPass = async o => { const src = deckTake(o.take), fl = o.file;
+  if(!src){ toast("That clip's take isn't here any more"); return 0; }
+  if(!fl || !fl.filename){ toast('The reel needs to be joined into one video first'); return 0; }
+  const n = Math.max(5, Math.min(124, Math.round(+o.n || 0))), L = gridUp(n), map = (o.map || []).slice(0, L).map(x => Math.max(0, Math.round(+x || 0)));
+  while(map.length < L) map.push(map.length ? map[map.length - 1] + 1 : 0);
+  const pins = (o.pins || []).filter(p => p && p[1] && S.media[p[1]]).map(p => [Math.max(0, Math.min(n - 1, Math.round(+p[0]))), p[1]]);
+  const key = uid('k'), copies = Math.max(1, Math.min(4, +o.copies || 1)), extra = {}; let sent = 0;
+  const w = Math.max(256, Math.round((+o.w || src.w) / 32) * 32), h = Math.max(256, Math.round((+o.h || src.h) / 32) * 32);
+  for(let k = 0; k < copies; k++){
+    const t = JSON.parse(JSON.stringify(setsOf(src))); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31); shufMark(t, k); offOver(t, o.descOff);
+    t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
+    const text = (o.prompt || '').trim() || src.prompt || (src.pieces[0] || {}).prompt || '';
+    Object.assign(t, {back:null, prompt:text, seconds:n / FPS, w, h, fl:false, first:null, lastOn:false, lastImg:null, cont:null, contFile:null, contCut:0, contSecs:0, carry:null, pins:[], mq:'', follow:[], lead:null, combo:null, toFilm:null,
+      ctl:null, ctl2:null, ctxDirs:null, from:null, sm:null, up:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upStage:null, upPid:null, upErr:'', smoothed:null, state:'working', reviewed:false, vids:[], auds:[],
+      redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:false, film:'', clip:'', key, a:0, b:n, s0:0, L, F:L, Fout:n, toEnd:false, pins:[], kp:{runs:kpRuns(map), pins, n}},
+      pieces:[{start:0, gen:L, deliv:L, ctx:0, prompt:text, state:'new'}]});
+    finNow(t, o.fin);
+    if(o.lines){ t.lines = o.lines; loraChips(t); }
+    t.redo.str = Math.max(0.2, Math.min(1, o.str != null ? +o.str : 0.6));
+    t.pc = await redoPc(t, {pc:o.pc || src.pc}, fl, extra); if(!t.pc){ toast("No PC that's on can see the joined video right now", 6000); break; }
+    extra[t.pc] = (extra[t.pc] || 0) + estSecs(t, t.pc);
+    S.takes.unshift(t); drawTakes();
+    try{ await sendPieces(t, 0); sent++; }catch(e){ t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'not sent: ' + e.message; toast('Not sent: ' + e.message, 6000); break; }
+  }
+  save(); drawTakes(); return sent; };
 // 🔄 Swap person (Jordan 2026-11-17, after AusBoss's "MiniMax H3 Pika Person Swap" workflow on Civitai): the clip goes in as <Video 1>
 // and each new person's pictures as <Picture n>; MiniMax makes the clip again with them in place of the people named, keeping the place,
 // the moves, the camera and (by default) the clip's own sound. As the workflow does: vanilla MiniMax + Pika's Flex LoRA at 1.0 on Pika's
@@ -6738,6 +6783,9 @@ if(ENGINE){
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 🎨 Change a stretch of a clip (like inpainting over time): the frames around it are pinned, str = how much it changes
     redo:async o => { const b = before(); fresh(); const n = await window.H3Redo({fin:{at:+S.f.finAt || 0.5, u:!!S.f.finU}, take:o.take, a:+o.a, b:+o.b, prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), str:o.str != null ? +o.str : 1});
+      const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
+    // 🔑 Phase 2: a stretch of the joined reel made again between its refined keyframes (see H3KeyPass)
+    keys:async o => { const b = before(); fresh(); const n = await window.H3KeyPass(Object.assign({}, o, {fin:{at:+S.f.finAt || 0.5, u:!!S.f.finU}, prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines()}));
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 📤 a clip from the phone
     upload:async o => { const id = await window.H3Upload({file:o.file}); return id ? {ids:[id]} : {err:'Not uploaded'}; },
