@@ -3488,7 +3488,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[a, 0], frame_idx:LEAD(pc)}), 0]; });
   // ↻ Redo a stretch (🎞 Films): the take's own frames either side of the stretch are pinned on the 4-frame latent grid, so the new
   // middle leaves and lands where the take does (the old H3 Film recipe, on the grid like 🪄 Smooth); the take's sound is pinned too
-  let rsrc = null, rIm = null, rAu = null;
+  let rsrc = null, rIm = null, rAu = null, lBase = null;
   if(t.redo && t.redo.kp){ const R = t.redo, K = R.kp, all = add('GetVideoComponents', {video:[add('LoadVideo', {file:R.file}), 0]}); rsrc = all; rAu = [all, 1];
     // 🔑 the joined reel, retimed: runs of next frames, or one frame repeated (a slowed stretch), batched in order, resized to the window
     for(const [s, c, nx] of K.runs){ let b = [add('ImageFromBatch', {image:[all, 0], batch_index:s, length:nx ? c : 1}), 0];
@@ -3508,11 +3508,26 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     else for(const [o, sf] of R.pins){ let fr = [add('ImageFromBatch', {image:[ls, 0], batch_index:sf, length:1}), 0];
       if(R.gap && R.gap.scaleB && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (⇿ the clip after can be another size, e.g. a 🎬 shot export)
       cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; }
-    if(R.gap){ const G = R.gap, as = add('GetVideoComponents', {video:[add('LoadVideo', {file:G.file}), 0]}); // ⇿ the clip before: its last frames start the window
+    let as = null; if(R.gap && (R.gap.gclip || R.gap.pins.length)){ const G = R.gap; as = add('GetVideoComponents', {video:[add('LoadVideo', {file:G.file}), 0]}); // ⇿ the clip before: its last frames start the window
       if(G.gclip) gClip(as, G.gclip, (G.w && G.h && (G.w!==w || G.h!==h)) || G.scaleB);
       else for(const [o, sf] of G.pins){ let fr = [add('ImageFromBatch', {image:[as, 0], batch_index:sf, length:1}), 0];
         if(((G.w && G.h && (G.w!==w || G.h!==h)) || G.scaleB) && oi.ImageScale) fr = [add('ImageScale', {image:fr, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0]; // (a clip of another size)
-        cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; } } }
+        cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, vae, image:fr, frame_idx:o}), 0]; guides++; } }
+    if(R.base){ // 🔗 re-link: the window's start = the clip before's last frames, the clip's own frames (spread over the new length), the clip after's first frames
+      const B = R.base, cs = add('GetVideoComponents', {video:[add('LoadVideo', {file:B.file}), 0]}), fit = b => oi.ImageScale ? [add('ImageScale', {image:b, upscale_method:'lanczos', width:w, height:h, crop:'center'}), 0] : b;
+      let px = null; const put = b => { px = px ? batchOf(add, oi, px, b) : b; };
+      if(R.k0 > 0 && as) put(fit([add('ImageFromBatch', {image:[as, 0], batch_index:R.ea - R.k0, length:R.k0}), 0]));
+      let mid = null; for(const [s0, c, nx] of B.runs){ let b = [add('ImageFromBatch', {image:[cs, 0], batch_index:s0, length:nx ? c : 1}), 0];
+        if(!nx && c > 1) b = [add('RepeatImageBatch', {image:b, amount:c}), 0]; mid = mid ? batchOf(add, oi, mid, b) : b; }
+      put(fit(mid)); const tail = L - R.k0 - R.B, last = fit([add('ImageFromBatch', {image:R.clipB ? [ls, 0] : [cs, 0], batch_index:R.clipB ? 4095 : B.c0 + B.n - 1, length:1}), 0]);
+      // the clip after's first frames (ImageFromBatch stops at its end, so its last frame is repeated after them and the batch cut to the window)
+      if(tail > 0 && R.clipB) put(fit([add('ImageFromBatch', {image:[ls, 0], batch_index:R.s, length:tail}), 0]));
+      if(tail > 0) put([add('RepeatImageBatch', {image:last, amount:tail}), 0]);
+      lBase = {px:[add('ImageFromBatch', {image:px, batch_index:0, length:L}), 0]};
+      if(B.sound) cond = [add('MiniMaxH3AddGuide', {positive:cond, latent:lat, audio_vae:avae, audio:[add('TrimAudioDuration', {audio:[cs, 1], start_index:Math.round(B.c0 / FPS * 1000) / 1000, duration:Math.round(Math.min(B.n, R.B) / FPS * 1000) / 1000}), 0], frame_idx:R.k0}), 0];
+      // the frames it meets on each side, for the colour match after decoding
+      if(oi.ColorMatch && B.cmA && as) lBase.refA = [add('ImageFromBatch', {image:[as, 0], batch_index:R.ea - 1, length:1}), 0];
+      if(oi.ColorMatch && B.cmB) lBase.refB = [add('ImageFromBatch', {image:[ls, 0], batch_index:R.s, length:1}), 0]; } }
   let trim = null;
   let ctxRef = null;
   if(pc.ctx && i===0 && t.cont){ // carry on the given video: its last frames are pinned (resized to this clip by the node)
@@ -3532,6 +3547,9 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
     let px = [add('ImageFromBatch', {image:rIm, batch_index:R.s0, length:have}), 0];
     if(have < L && oi.RepeatImageBatch) px = batchOf(add, oi, px, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:rIm, batch_index:R.s0 + have - 1, length:1}), 0], amount:L - have}), 0]);
     if(have===L || oi.RepeatImageBatch){ const sep = add('LTXVSeparateAVLatent', {av_latent:lat}); lat0 = [add('LTXVConcatAVLatent', {video_latent:[add('VAEEncode', {pixels:px, vae}), 0], audio_latent:[sep, 1]}), 0]; den = Math.max(0.2, +R.str); } }
+  // 🔗 re-link at its strength: the whole window starts from the real frames (the guides' too), only the last part of the steps runs
+  else if(lBase && oi.VAEEncode && oi.LTXVSeparateAVLatent && oi.LTXVConcatAVLatent){ const sep = add('LTXVSeparateAVLatent', {av_latent:lat});
+    lat0 = [add('LTXVConcatAVLatent', {video_latent:[add('VAEEncode', {pixels:lBase.px, vae}), 0], audio_latent:[sep, 1]}), 0]; den = Math.max(0.2, Math.min(0.95, +t.lead.base.str || 0.5)); }
   let out;
   if(t.swap && t.swap.pika){ // 🔄 Pika Flex's own six steps (the person swap workflow): lcm, CFG 1
     out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'lcm'}), 0], sigmas:[add('ManualSigmas', {sigmas:SWAP_SIGMAS}), 0], latent_image:lat0});
@@ -3572,6 +3590,15 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       ims = batchOf(add, oi, acc, [add('ImageFromBatch', {image:ims, batch_index:RAMP, length:4096}), 0]); } }
   if(t.sm && pc.skip){ ims = [add('ImageFromBatch', {image:ims, batch_index:pc.skip, length:L - pc.skip}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:pc.skip / FPS, duration:(L - pc.skip) / FPS}), 0]; } // 🪄 the frames the window before already has
   if(t.lead){ const R = t.lead, k0 = R.gap ? +R.k0 || 0 : 0; ims = [add('ImageFromBatch', {image:ims, batch_index:k0, length:R.B}), 0]; aud = [add('TrimAudioDuration', {audio:aud, start_index:k0 / FPS, duration:R.B / FPS}), 0]; } // only the new seconds
+  // 🔗 re-link: its first 1.5 s eased toward the clip before's last frame, its last 1.5 s toward the clip after's first frame (KJNodes ColorMatch,
+  // mkl, full strength where they meet, none in the middle), so the light doesn't jump at either join
+  if(lBase && (lBase.refA || lBase.refB)){ const N = t.lead.B, STEP = 6, RAMP = Math.min(CM_RAMP, Math.floor(N / 2 / STEP) * STEP);
+    if(RAMP >= STEP){ const cm = (ref, k, s) => [add('ColorMatch', {image_ref:ref, image_target:[add('ImageFromBatch', {image:ims, batch_index:k, length:STEP}), 0], method:'mkl', strength:Math.round(s * 100) / 100, multithread:true}), 0];
+      let acc = null; const put = b => { acc = acc ? batchOf(add, oi, acc, b) : b; };
+      if(lBase.refA) for(let k = 0; k < RAMP; k += STEP) put(cm(lBase.refA, k, 1 - k / RAMP));
+      const m0 = lBase.refA ? RAMP : 0, m1 = lBase.refB ? N - RAMP : N; if(m1 > m0) put([add('ImageFromBatch', {image:ims, batch_index:m0, length:m1 - m0}), 0]);
+      if(lBase.refB) for(let k = N - RAMP; k < N; k += STEP) put(cm(lBase.refB, k, Math.min(1, (k + STEP - (N - RAMP)) / RAMP)));
+      ims = acc; } }
   // ⇿ joined onto a clip (Jordan 2026-11-24, Reel: "keep some of these editing tools from making new clips and instead just edit the clips we
   // have"): the new seconds come out as one video with the clip before's kept frames in front of them (side a) or the clip after's behind them
   // (side b), so 🪄 Blend / ⇿ Across / ⇿ Insert make a longer option of that clip instead of a 1-2 s clip of their own
@@ -6488,6 +6515,34 @@ window.H3GapFill = async o => { const srcA = deckTake(o.takeA), tB = deckTake(o.
   if(o.join==='a' || o.join==='b'){ const A = o.join==='a', s = A ? Math.max(0, Math.min(P.ea - 1, Math.round((+o.inA || 0) * FPS))) : P.s, e = A ? P.ea : Math.max(P.s + 1, Math.min(FB, o.outB != null ? Math.ceil(+o.outB * FPS - 1e-6) : FB));
     gap.join = {side:o.join, s, n:e - s}; }
   return leadGo(src, fl, P, Object.assign({}, o, {clip:o.clipB}), {gap}, '⇿', 'gap fill'); };
+// 🔗 Re-link (Reel, Jordan 2026-11-25: "once I've picked the segment 2 option I like I run a 're-link' pass where it smooths the transitions
+// from segment 1 into segment 2, and segment 2 into segment 3 … it stays 3 segments total … one clip with the original prompt"): the clip is
+// made again at a strength (Edit-style: its own frames VAE-encoded are the start, so it keeps its moves and layout) inside one window that
+// opens on the clip before's last second and ends on the clip after's first second, both pinned as moving clip guides on MiniMax's 17-frame
+// blocks (as ⇿ Insert does). Only the clip's own frames are kept, so it's the same clip with the same words, now lined up on both sides.
+// Its first and last 1.5 s are also colour-matched to the frame it meets on each side. The clip after's guide has to start on a block, so the
+// clip's length is rounded to fit (within about a third of a second): its frames are spread evenly over the new length.
+// relinkPlan: FA/ea = the clip before's frames / its out point, FB/sb = the clip after's frames / its in point (0 = no clip there), n = the clip's frames
+function relinkPlan(FA, ea, FB, sb, n){ const G = GUIDE_CLIP;
+  ea = FA ? Math.max(1, Math.min(FA, Math.ceil(ea - 1e-6))) : 0; sb = FB ? Math.max(0, Math.min(FB - 1, Math.floor(sb + 1e-6))) : 0;
+  const gA = !!FA && ea >= G, gB = !!FB && FB - sb >= G, k0 = gA ? G : 0; let N = Math.max(9, Math.round(n));
+  if(gB) N = Math.max(Math.ceil((k0 + 9) / 17), Math.round((k0 + N) / 17)) * 17 - k0;
+  const e = k0 + N, L = gridUp(e + (gB ? G : 0));
+  return {s:sb, ea, C:k0 - 1, k0, B:N, L, pins:[], pinsA:[], clipA:gA ? {o:0, s:ea - G, n:G} : null, clipB:gB ? {o:e, s:sb, n:G} : null}; }
+window.H3RelinkPlan = relinkPlan;
+// o = {take (the clip), inC, outC, takeA, outA, takeB, inB, str, prompt, n, sets, lines, descOff}
+window.H3Relink = async o => { const src = deckTake(o.take), flC = takeFile(src), srcA = o.takeA ? deckTake(o.takeA) : null, tB = o.takeB ? deckTake(o.takeB) : null;
+  if(!src || !flC){ toast('That clip has no finished video yet'); return 0; }
+  const flA = srcA && takeFile(srcA), flB = tB && takeFile(tB);
+  if(!flA && !flB){ toast('Re-link needs a finished clip before or after it'); return 0; }
+  const FC = takeFrames(src), c0 = Math.max(0, Math.min(FC - 2, Math.floor((+o.inC || 0) * FPS + 1e-6))), c1 = Math.max(c0 + 2, Math.min(FC, o.outC != null ? Math.ceil(+o.outC * FPS - 1e-6) : FC)), nC = c1 - c0;
+  const FA = flA ? takeFrames(srcA) : 0, FB = flB ? takeFrames(tB) : 0, P = relinkPlan(FA, (+o.outA || 0) * FPS, FB, (+o.inB || 0) * FPS, nC);
+  if(!P.clipA && !P.clipB){ toast('The clips around it are too short to line up with (each needs about 1 s)'); return 0; }
+  // the clip's frames, spread over the new length (the same frame twice or one skipped here and there when it was rounded)
+  const map = []; for(let j = 0; j < P.B; j++) map.push(c0 + (P.B > 1 ? Math.round(j * (nC - 1) / (P.B - 1)) : 0));
+  const gap = {src:srcA ? srcA.id : '', clip:'', file:fileArg(flA || flC), pins:[], gclip:P.clipA, w:srcA ? srcA.w : src.w, h:srcA ? srcA.h : src.h, aOut:+o.outA || 0, bIn:+o.inB || 0, scaleB:true, hq:null};
+  const base = {take:src.id, file:fileArg(flC), runs:kpRuns(map), c0, n:nC, str:Math.max(0.2, Math.min(0.95, o.str != null ? +o.str : 0.5)), sound:src.sound!==false, cmA:!!P.clipA, cmB:!!P.clipB};
+  return leadGo(src, flB || flC, P, Object.assign({}, o, {model:null}), {gap, base, relink:true}, '🔗', 're-link'); };
 async function leadGo(src, fl, P, o, more, icon, word){ const key = uid('k'), n = Math.max(1, Math.min(4, +o.n || 1)); let sent = 0; const extra = {};
   for(let k = 0; k < n; k++){
     const t = JSON.parse(JSON.stringify(src)); t.id = uid('t'); t.t = Date.now(); t.seed = Math.floor(Math.random() * 2 ** 31); shufMark(t, k); offOver(t, o.descOff);
@@ -6602,6 +6657,12 @@ setTimeout(undoRebase, 0);
 if(ENGINE){
   const REF_LATE = 0.3; // ➕ carry-ons: pictures only after the first 30% of the steps (see refWin)
   const REEL_LEAD = '[0s-1s] The scene keeps carrying on from the moment before.\n[1s-] ';
+  // 🔗 (Jordan 2026-11-25: "editing the prompt to automatically help with consistency … things like objects disappearing"): a clip made to
+  // line up with the clips around it (➕ Next, ⇿ Insert, ↻ Redo between clips, ⏪ lead-in, 🔗 Re-link) says that what's already there stays.
+  // A carry-on gets it after the [0s-1s] anchor (never inside it); the others get it in front of the words, for the whole clip. o.keep false = off.
+  const KEEP_NEXT = 'Everything from the moment before is still here: the same people in the same clothes, the same objects and props in the same places, the same room and the same light. Nothing appears or disappears unless it says so. ';
+  const KEEP_ALL = 'This is one continuous moment with the clips around it: the same people in the same clothes, the same objects and props in the same places, the same room and the same light. Nothing appears or disappears unless it says so. ';
+  const keepOf = (o, K) => o && o.keep===false ? '' : K;
   const LOOKS = ['model', 'turbo', 'aspect', 'mp', 'steps', 'maxPiece', 'where', 'h3', 'h3Style', 'quality', 'qstyle', 'qtext', 'boost', 'nsfw', 'negOn', 'neg', 'negScale'];
   const fresh = () => { const k = {}; LOOKS.forEach(x => { if(S.f[x]!==undefined) k[x] = S.f[x]; }); if(k.aspect==='pic' || k.aspect==='custom') k.aspect = S.reelAspect || '16:9'; S.f = Object.assign(F_DEF(), k, deckForm() || {}, {takes:1, shuffle:0}, S.reelFin ? {finU:S.reelFin==='ultima'} : {}, S.reelAt ? {finAt:S.reelAt} : {}); }; // Reel's own finish pick wins over H3 Deck's (Jordan 2026-11-22)
   const nOf = n => Math.max(1, Math.min(4, Math.round(+n || 1)));
@@ -6735,7 +6796,7 @@ if(ENGINE){
       fresh(); useBase(t); const near = Math.abs(at - dur) < 0.05, id = uid('m');
       S.media[id] = {id, kind:'vid', name:'➕ ' + fmtS(at) + ' into ' + fl.filename, type:'video/mp4', remote:fileArg(fl), url:viewUrl(t.pc, fl), w:t.w, h:t.h, fps:FPS, sound:true, dur,
         cut:near ? 0 : Math.round(at * 1000) / 1000, carry:{src:t.id, at, film:'', clip:'', key:uid('k'), own:true, guide:null, len:0}, thumb:''};
-      Object.assign(S.f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:REEL_LEAD + whoWords(o.words, o.who), pieceText:{}, refLate:REF_LATE});
+      Object.assign(S.f, {sm:false, fl:true, first:id, last:false, aspect:'pic', prompt:REEL_LEAD + keepOf(o, KEEP_NEXT) + whoWords(o.words, o.who), pieceText:{}, refLate:REF_LATE});
       if(!/<\s*ref\s*image\s*\d+\s*>/i.test(S.f.prompt)) S.f.imgs = (S.f.imgs || []).filter(r => r.pose || r.pin);
       setLen(Math.max(1, Math.min(5, +o.secs || 5))); return go(o.n); },
     // 🪄 Smooth (Jordan 2026-11-20, Reel's ✂ Edit): H3 Deck's own 🪄 Smooth on a finished clip: 📐 spacing measured from how far things
@@ -6776,10 +6837,15 @@ if(ENGINE){
         ch = t ? {dir:ctxc.dir, idx:ctxc.idx, prev:t.id, pc:t.pc, w:src.w, h:src.h} : null; }
       save(); return ids.some(Boolean) ? {ids} : {err:'Nothing could be sent. Are the PCs on?'}; },
     // ⇿ Insert: new seconds between two clips (the end of one pinned at the start, the start of the next pinned at the end)
-    fill:async o => { const sets = engSets(o.takeB), b = before(), nb = x => { x = x && setsOf(x); return !!x && (x.boost===false || !!x.styled); }; if(sets && (nb(deckTake(o.takeA)) || nb(deckTake(o.takeB)))) sets.boost = false; /* (Jordan 2026-11-21) between a clip with no ✨ boost LoRAs and one with them, the part leaves them out (they lit her face like a flashlight) */ const n = await window.H3GapFill({takeA:o.takeA, outA:+o.outA, takeB:o.takeB, inB:+o.inB || 0, secs:Math.max(0.5, Math.min(5, +o.secs || 2)), prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets, join:o.join || '', inA:+o.inA || 0, outB:o.outB != null ? +o.outB : null});
+    fill:async o => { const sets = engSets(o.takeB), b = before(), nb = x => { x = x && setsOf(x); return !!x && (x.boost===false || !!x.styled); }; if(sets && (nb(deckTake(o.takeA)) || nb(deckTake(o.takeB)))) sets.boost = false; /* (Jordan 2026-11-21) between a clip with no ✨ boost LoRAs and one with them, the part leaves them out (they lit her face like a flashlight) */ const n = await window.H3GapFill({takeA:o.takeA, outA:+o.outA, takeB:o.takeB, inB:+o.inB || 0, secs:Math.max(0.5, Math.min(5, +o.secs || 2)), prompt:keepOf(o, KEEP_ALL) + whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets, join:o.join || '', inA:+o.inA || 0, outB:o.outB != null ? +o.outB : null});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // ⏪ a part that leads into a clip (a clip with nothing before it)
-    lead:async o => { const sets = engSets(o.take), b = before(), n = await window.H3Lead({take:o.take, at:+o.at || 0, secs:Math.max(1, Math.min(5, +o.secs || 3)), prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets});
+    lead:async o => { const sets = engSets(o.take), b = before(), n = await window.H3Lead({take:o.take, at:+o.at || 0, secs:Math.max(1, Math.min(5, +o.secs || 3)), prompt:keepOf(o, KEEP_ALL) + whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets});
+      const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
+    // 🔗 Re-link (Jordan 2026-11-25): the clip made again at a strength between the clip before's end and the clip after's start (see H3Relink);
+    // it keeps its own settings and words and comes back as a new option of the same clip
+    relink:async o => { const sets = engSets(o.take), b = before(), n = await window.H3Relink({take:o.take, inC:+o.inC || 0, outC:o.outC != null ? +o.outC : null, takeA:o.takeA || '', outA:+o.outA || 0, takeB:o.takeB || '', inB:+o.inB || 0,
+      str:o.str != null ? +o.str : 0.5, prompt:keepOf(o, KEEP_ALL) + whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 🎨 Change a stretch of a clip (like inpainting over time): the frames around it are pinned, str = how much it changes
     redo:async o => { const b = before(); fresh(); const n = await window.H3Redo({fin:{at:+S.f.finAt || 0.5, u:!!S.f.finU}, take:o.take, a:+o.a, b:+o.b, prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), str:o.str != null ? +o.str : 1});
