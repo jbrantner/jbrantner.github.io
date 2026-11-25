@@ -179,5 +179,12 @@ const pngWH = b => { const i = b.indexOf('IHDR'); return i < 0 ? null : [b.readU
   const nr = await page.evaluate(id => { const S = JSON.parse(localStorage.getItem('h3reel')); const r = S.reels.find(x => x.keysOf===id); return r && {open:S.open===r.id, clips:r.clips.map(c => [c.takes.length, Math.round((c.in || 0) * 1000) / 1000, c.out == null ? null : Math.round(c.out * 1000) / 1000])}; }, reelId);
   ok(nr && nr.open && nr.clips.length===3 && nr.clips[0][0]===1 && nr.clips[0][2]===0.5 && nr.clips[1][0]===2 && nr.clips[1][1]===0 && nr.clips[2][0]===1 && Math.abs(nr.clips[2][1] - 3.542) < 0.002,
     'the result opens as a new reel in Phase 1: the reel before the chunk as it was, the chunk (2 options), the rest as it was (' + JSON.stringify(nr) + ')');
+  // 🔁 Phase 2 of the keyframed reel opens with the last Phase 2's keyframes, at their shown times, chunk kept
+  { const old = await page.evaluate(id => { const A = JSON.parse(localStorage.getItem('h3reel_keys'))[id]; return {t:A.keys.map(k => k.t), pics:A.keys.filter(k => k.pic).length, links:A.links.length}; }, reelId);
+    const nid = await page.evaluate(id => JSON.parse(localStorage.getItem('h3reel')).reels.find(x => x.keysOf===id).id, reelId);
+    await page.goto('http://127.0.0.1:8043/reel-5b1e7c94d2a0/keys/?reel=' + nid); await page.waitForFunction(() => window.KEYS, null, {timeout:15000}); await page.waitForTimeout(500);
+    const nw = await page.evaluate(() => ({s:KEYS.K().map(k => k.s), t:KEYS.K().map(k => k.t), pics:KEYS.K().filter(k => k.pic).length, c:KEYS.chunks().map(c => [c[0], c[1]])}));
+    ok(old.t.length===4 && JSON.stringify(nw.s)===JSON.stringify(old.t) && JSON.stringify(nw.t)===JSON.stringify(old.t) && nw.pics===old.pics && JSON.stringify(nw.c)==='[[0,3]]',
+      '🔁 the keyframed reel\'s Phase 2 starts with the keyframes from before, redraws and chunk kept (' + JSON.stringify({old, nw}) + ')'); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
