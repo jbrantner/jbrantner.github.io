@@ -93,18 +93,22 @@ function pairBox(){ for(const q of S.pts){ if(q.tw||q.on.t!=='c') continue; cons
 function sample(){ newBox(); for(const y of [-10,10]){ const a=mk([10,y,H],{t:'f',f:0}), b=mk([-10,y,H],{t:'f',f:0}); a.tw=b.id; b.tw=a.id; } }
 function mk(p,on){ const q={id:nextId++,p,on}; S.pts.push(q); return q; }
 sample();
-try{ const s=localStorage.getItem('corner-sketch-box-v1'); if(s){ const o=JSON.parse(s); if(o&&Array.isArray(o.pts)&&[0,1,2,3,4,5,6,7].every(c=>o.pts.filter(q=>q.on&&q.on.t==='c'&&q.on.c===c).length===1)&&o.pts.every(q=>q.p&&q.p.length===3&&q.p.every(isFinite))){ S=o; nextId=Math.max(...S.pts.map(q=>q.id))+1; if(!S.pts.some(q=>q.on.t==='c'&&q.tw)) pairBox(); if(!S.marks){ S.pts.forEach(q=>{ if(q.on.t!=='c') q.m=true; }); S.marks=1; } } } }catch(e){}
+try{ const s=localStorage.getItem('corner-sketch-box-v1'); if(s){ const o=JSON.parse(s); if(o&&Array.isArray(o.pts)&&[0,1,2,3,4,5,6,7].every(c=>o.pts.filter(q=>q.on&&q.on.t==='c'&&q.on.c===c).length===1)&&o.pts.every(q=>q.p&&q.p.length===3&&q.p.every(isFinite))){ S=o; nextId=Math.max(...S.pts.map(q=>q.id))+1; if(!S.pts.some(q=>q.on.t==='c'&&q.tw)) pairBox(); if(!S.marks){ S.pts.forEach(q=>{ if(q.on.t!=='c') q.m=true; }); S.marks=1; } (S.folds||[]).forEach(f=>f.forEach(id=>{ const q=S.pts.find(x=>x.id===id); if(q&&q.on.t!=='c') q.m=true; })); } } }catch(e){}
 function save(){ try{localStorage.setItem('corner-sketch-box-v1',JSON.stringify(S));}catch(e){} }
 let view='Front', selId=null; let VW={a:[1,0,0],b:[0,1,0],d:[0,0,1]}; const undoS=[];
 const $=id=>document.getElementById(id);
 const byId=id=>S.pts.find(q=>q.id===id);
 function push(){ undoS.push(JSON.stringify({S,nextId})); if(undoS.length>80) undoS.shift(); }
-function undo(){ if(!undoS.length) return; const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; selId=null; selFold=null; selFace=null; changed(); toast('Undo'); }
+function undo(){ if(!undoS.length) return; const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; selId=null; selFold=null; selFace=null; lockAll(); changed(); toast('Undo'); }
+// a gesture that can't finish puts everything back the way it was (and takes back its undo step)
+function abandon(msg){ const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; lockAll(); if(msg) toast(msg); changed(); }
 
 // every corner has a spot on the flat, unfolded box (its "rest" spot, q.r) and a spot in 3D (q.p).
 // The rest spot never changes when you pull, so the paper's layout stays steady.
-function onEdge(e,p){ const [a,b]=EDGES[e].map(i=>CORNERS[i]); const d=[b[0]-a[0],b[1]-a[1],b[2]-a[2]]; const t=Math.max(0.05,Math.min(0.95,dot3([p[0]-a[0],p[1]-a[1],p[2]-a[2]],d)/dot3(d,d))); return add3(a,mul3(d,t)).map(v=>Math.round(v*100)/100); }
-function onSide(f,p){ const P=PANELS[f], cl=v=>Math.max(-H+1,Math.min(H-1,v)); return add3(add3(mul3(P.n,H),mul3(P.u,cl(dot3(p,P.u)))),mul3(P.v,cl(dot3(p,P.v)))).map(v=>Math.round(v*100)/100); }
+// a spot on box edge e (kept m of the way in from its ends: 3 mm for spots you place, a hair for exact crossings)
+function onEdge(e,p,m=0.05){ const [a,b]=EDGES[e].map(i=>CORNERS[i]); const d=[b[0]-a[0],b[1]-a[1],b[2]-a[2]]; const t=Math.max(m,Math.min(1-m,dot3([p[0]-a[0],p[1]-a[1],p[2]-a[2]],d)/dot3(d,d))); return add3(a,mul3(d,t)).map(v=>Math.round(v*100)/100); }
+// a spot on side f (kept m mm inside its edges: 1 for spots you place, a hair for exact crossings)
+function onSide(f,p,m=1){ const P=PANELS[f], cl=v=>Math.max(-H+m,Math.min(H-m,v)); return add3(add3(mul3(P.n,H),mul3(P.u,cl(dot3(p,P.u)))),mul3(P.v,cl(dot3(p,P.v)))).map(v=>Math.round(v*100)/100); }
 function restOf(q){ if(q.on.t==='c') return CORNERS[q.on.c]; if(!q.r) q.r=q.on.t==='e'?onEdge(q.on.e,q.p):onSide(q.on.f,q.p); return q.r; }
 function home(q,f){ const P=PANELS[f], r=restOf(q); return {x:dot3(r,P.u),y:dot3(r,P.v)}; }
 const edgeOnPanel=(e,f)=>EDGES[e].every(i=>Math.abs(dot3(CORNERS[i],PANELS[f].n)-H)<1e-6);
@@ -123,6 +127,29 @@ function flipEdge(T,P,u,v,t1,t2){
   if(orient(P[u],P[d],P[c])<=1e-9||orient(P[v],P[c],P[d])<=1e-9) return false;
   T[t1]=[u,d,c]; T[t2]=[v,c,d]; return true;
 }
+// ear clipping for a small counter-clockwise polygon (corners in a straight line are fine; they're just never an ear)
+function earClip(poly,P){ const out=[], V=poly.slice(); let guard=0;
+  while(V.length>3&&guard++<400){ let cut=false;
+    for(let i=0;i<V.length&&!cut;i++){ const p=V[(i+V.length-1)%V.length], v=V[i], n=V[(i+1)%V.length]; if(orient(P[p],P[v],P[n])<=1e-9) continue;
+      if(V.some(w=>w!==p&&w!==v&&w!==n&&orient(P[p],P[v],P[w])>=-1e-9&&orient(P[v],P[n],P[w])>=-1e-9&&orient(P[n],P[p],P[w])>=-1e-9)) continue;
+      out.push([p,v,n]); V.splice(i,1); cut=true; }
+    if(!cut) return null; }
+  if(V.length===3){ if(orient(P[V[0]],P[V[1]],P[V[2]])<=1e-9) return null; out.push(V.slice()); }
+  return out; }
+// put the side a-b into the triangles: take out every triangle it crosses and fill the hole on each side of it
+function cavity(T,P,a,b,C){ const A=P[a], B=P[b], L=Math.hypot(B.x-A.x,B.y-A.y)||1;
+  for(let k=0;k<P.length;k++){ if(k===a||k===b) continue; const t=((P[k].x-A.x)*(B.x-A.x)+(P[k].y-A.y)*(B.y-A.y))/(L*L); if(t>1e-6&&t<1-1e-6&&Math.abs(orient(A,B,P[k]))/L<1e-6) return null; }
+  const hit=new Set(); T.forEach((t,i)=>{ for(let j=0;j<3;j++){ const u=t[j], v=t[(j+1)%3]; if(u===a||u===b||v===a||v===b) continue; if(cross(A,B,P[u],P[v])){ if(C.has(ek(u,v))) hit.add(-1); hit.add(i); } } });
+  if(!hit.size||hit.has(-1)) return null;
+  const dir=new Set(); for(const i of hit){ const t=T[i]; for(let j=0;j<3;j++) dir.add(t[j]+','+t[(j+1)%3]); }
+  const nxt=new Map(); for(const k of dir){ const [u,v]=k.split(',').map(Number); if(!dir.has(v+','+u)){ if(nxt.has(u)) return null; nxt.set(u,v); } }
+  if(!nxt.has(a)||!nxt.has(b)) return null;
+  const c1=[a]; let v=a, g=0; while(v!==b&&g++<200){ v=nxt.get(v); if(v===undefined) return null; c1.push(v); }
+  const c2=[b]; g=0; while(v!==a&&g++<200){ v=nxt.get(v); if(v===undefined) return null; c2.push(v); }
+  if(c1.length+c2.length-2!==nxt.size) return null;
+  { const rim=new Set([...c1,...c2]); for(const i of hit) if(T[i].some(x=>!rim.has(x))) return null; } // (a corner inside the hole would be lost)
+  const e1=earClip(c1,P), e2=earClip(c2,P); if(!e1||!e2) return null;
+  return T.filter((t,i)=>!hit.has(i)).concat(e1,e2); }
 function triangulate(G,FL){
   const {V,n}=G, P=V; if(n<3) return {T:[],bad:[]};
   let T=THREE.ShapeUtils.triangulateShape(V.slice(0,n).map(p=>new THREE.Vector2(p.x,p.y)),[]).map(t=>orient(P[t[0]],P[t[1]],P[t[2]])<0?[t[0],t[2],t[1]]:t.slice());
@@ -133,8 +160,10 @@ function triangulate(G,FL){
     const p=P[j]; let done=false;
     for(let ti=0;ti<T.length&&!done;ti++){ const [a,b,c]=T[ti]; const o1=orient(P[a],P[b],p),o2=orient(P[b],P[c],p),o3=orient(P[c],P[a],p);
       if(o1<-1e-6||o2<-1e-6||o3<-1e-6) continue;
-      const zs=[o1,o2,o3].map(o=>Math.abs(o)<1e-6);
-      if(zs[0]+zs[1]+zs[2]>1){ done=true; bad.push(j); break; } // sits on a corner
+      // a corner a hair from a side (rounding) counts as on it, so no sliver of paper is left between
+      const ds=[[o1,a,b],[o2,b,c],[o3,c,a]].map(([o,u,v])=>Math.abs(o)/(Math.hypot(P[v].x-P[u].x,P[v].y-P[u].y)||1)), zs=ds.map((d,k)=>Math.abs([o1,o2,o3][k])<1e-6||d<0.02);
+      if([a,b,c].some(k=>Math.hypot(P[k].x-p.x,P[k].y-p.y)<0.02)){ done=true; bad.push(j); break; } // sits on a corner
+      if(zs[0]+zs[1]+zs[2]>1){ const m=ds.indexOf(Math.min(...ds)); zs.fill(false); zs[m]=true; } // in a sliver: on the nearer side
       if(!zs[0]&&!zs[1]&&!zs[2]){ T.splice(ti,1,[a,b,j],[b,c,j],[c,a,j]); done=true; break; }
       const e=zs[0]?[a,b]:zs[1]?[b,c]:[c,a]; const M=emap(T); const ts=M.get(ek(e[0],e[1]))||[];
       const nt=[]; for(const t of ts){ const tt=T[t]; const w=tt.find(x=>x!==e[0]&&x!==e[1]); const k=tt.indexOf(w); const u=tt[(k+1)%3], v=tt[(k+2)%3]; nt.push([w,u,j],[w,j,v]); }
@@ -142,12 +171,16 @@ function triangulate(G,FL){
     if(!done) bad.push(j); }
   // folds: flip crossing edges until the fold is an edge
   const C=new Set(); for(let i=0;i<n;i++) C.add(ek(i,(i+1)%n));
-  for(const [a,b] of FL){ let ok=false;
-    for(let it=0;it<300;it++){ const M=emap(T); if(M.has(ek(a,b))){ok=true;break;}
-      let flipped=false;
-      for(const [key,ts] of M){ if(ts.length!==2||C.has(key)) continue; const [u,v]=key.split(',').map(Number); if(u===a||u===b||v===a||v===b) continue;
-        if(cross(P[a],P[b],P[u],P[v])&&flipEdge(T,P,u,v,ts[0],ts[1])){flipped=true;break;} }
-      if(!flipped) break; }
+  for(const [a,b] of FL){ let ok=emap(T).has(ek(a,b));
+    // every crossing edge goes in a queue: flip it if it can be flipped (one still crossing goes to the back), else try it again later
+    // (flipping whichever crossing edge comes first could just flip the same two edges back and forth for ever)
+    if(!ok){ const Q=[]; for(const [key,ts] of emap(T)){ if(ts.length!==2||C.has(key)) continue; const [u,v]=key.split(',').map(Number); if(u===a||u===b||v===a||v===b) continue; if(cross(P[a],P[b],P[u],P[v])) Q.push([u,v]); }
+      for(let g=0;Q.length&&g<2000;g++){ const [u,v]=Q.shift(), M=emap(T), ts=M.get(ek(u,v)); if(!ts||ts.length!==2) continue;
+        const c=T[ts[0]].find(x=>x!==u&&x!==v), d=T[ts[1]].find(x=>x!==u&&x!==v);
+        if(flipEdge(T,P,u,v,ts[0],ts[1])){ if(c!==a&&c!==b&&d!==a&&d!==b&&cross(P[a],P[b],P[c],P[d])) Q.push([c,d]); } else Q.push([u,v]); }
+      ok=emap(T).has(ek(a,b)); }
+    // flips can get stuck where corners sit in a straight line (box edges): then cut out the triangles it crosses and fill both sides again
+    if(!ok){ const NT=cavity(T,P,a,b,C); if(NT){ T=NT; ok=true; } }
     if(ok) C.add(ek(a,b)); else bad.push('f'+a+','+b); }
   // tidy the rest into well-shaped triangles (folds and edges stay put)
   const inCirc=(a,b,c,d)=>{ const ax=a.x-d.x,ay=a.y-d.y,bx=b.x-d.x,by=b.y-d.y,cx=c.x-d.x,cy=c.y-d.y; return (ax*ax+ay*ay)*(bx*cy-cx*by)-(bx*bx+by*by)*(ax*cy-cx*ay)+(cx*cx+cy*cy)*(ax*by-bx*ay)>1e-6; };
@@ -165,13 +198,21 @@ let GEO=null;
 // a corner you add does nothing to the paper until a fold connects it (box corners always count)
 let ACT=new Set();
 // solve again until the remembered bends agree with the paper, so the same model always gives the same shape (after reload too)
-function solve(){ for(let i=0;i<4;i++){ const before=JSON.stringify(S.sticky||[]); solve1(); if(JSON.stringify(S.sticky)===before) break; } return GEO; }
-function solve1(){
+// a remembered bend only changes when a corner right next to it moves, so nothing you didn't touch re-folds
+// (lastX: where every corner was at the last solve)
+let lastX=new Map();
+const lockAll=()=>{ lastX=new Map(S.pts.map(q=>[q.id,q.p.join()])); };
+// a pencil mark taken up as a corner slides along the paper (the shape stays the same), so it doesn't count as moved
+const glide=q=>{ if(lastX.has(q.id)) lastX.set(q.id,q.p.join()); };
+function solve(){ const MV=new Set(S.pts.filter(q=>lastX.has(q.id)&&lastX.get(q.id)!==q.p.join()).map(q=>q.id));
+  for(let i=0;i<4;i++){ const before=JSON.stringify(S.sticky||[]); solve1(MV); if(JSON.stringify(S.sticky)===before) break; }
+  lastX=new Map(S.pts.map(q=>[q.id,q.p.join()])); return GEO; }
+function solve1(MV){ MV=MV||new Set();
   // a new corner is just a mark on the paper; it starts shaping the paper once you pull it (or fold to it)
   ACT=new Set(S.pts.filter(q=>q.on.t==='c'||q.m).map(q=>q.id)); for(const [a,b] of S.folds||[]){ ACT.add(a); ACT.add(b); }
   if(S.mirror) for(const id of [...ACT]){ const q=byId(id), t=q&&q.tw&&byId(q.tw); if(t) ACT.add(t.id); }
   symm(false);
-  const T=[], triPanel=[], lay=[], regions=[], sticky=[], faces=[];
+  const T=[], triPanel=[], lay=[], regions=[], sticky=[], faces=[], foldE=new Map(), badF=new Set();
   PANELS.forEach((P,f)=>{
     // outline: the side's 4 box corners counter-clockwise, with edge corners slotted in along each edge
     const cs=[[-H,-H],[H,-H],[H,H],[-H,H]].map(([a,b])=>cornerAt(add3(add3(mul3(P.n,H),mul3(P.u,a)),mul3(P.v,b))));
@@ -184,23 +225,32 @@ function solve1(){
     const list=[...ring,...inner]; const V=list.map(q=>home(q,f));
     const ix=new Map(list.map((q,i)=>[q.id,i]));
     // a fold that now has a corner sitting on it becomes two folds, one each side of that corner
-    const split=pairs=>{ const out=[]; for(const [a,b] of pairs){ const A=V[a],B=V[b], L=Math.hypot(B.x-A.x,B.y-A.y)||1; const on=[];
-        V.forEach((p,k)=>{ if(k===a||k===b) return; const t=((p.x-A.x)*(B.x-A.x)+(p.y-A.y)*(B.y-A.y))/(L*L); if(t<=1e-3||t>=1-1e-3) return; if(Math.abs(orient(A,B,p))/L<0.05) on.push([t,k]); });
-        const ch=[a,...on.sort((x,y)=>x[0]-y[0]).map(x=>x[1]),b]; for(let i=0;i+1<ch.length;i++) out.push([ch[i],ch[i+1]]); } return out; };
-    const pick=L=>(L||[]).filter(([a,b])=>ix.has(a)&&ix.has(b)).map(([a,b])=>[ix.get(a),ix.get(b)]);
+    // (a remembered bend only splits at a corner that's really on it: one a hair to the side leaves it as it was)
+    const split=(pairs,tol=0.05)=>{ const out=[]; for(const [a,b,o] of pairs){ const A=V[a],B=V[b], L=Math.hypot(B.x-A.x,B.y-A.y)||1; const on=[];
+        V.forEach((p,k)=>{ if(k===a||k===b) return; const t=((p.x-A.x)*(B.x-A.x)+(p.y-A.y)*(B.y-A.y))/(L*L); if(t<=1e-3||t>=1-1e-3) return; if(Math.abs(orient(A,B,p))/L<tol) on.push([t,k]); });
+        const ch=[a,...on.sort((x,y)=>x[0]-y[0]).map(x=>x[1]),b]; for(let i=0;i+1<ch.length;i++) out.push([ch[i],ch[i+1],o]); } return out; };
+    const pick=L=>(L||[]).map((x,o)=>[x[0],x[1],o]).filter(([a,b])=>ix.has(a)&&ix.has(b)).map(([a,b,o])=>[ix.get(a),ix.get(b),o]);
     const FL=split(pick(S.folds)), userK=new Set(FL.map(([a,b])=>ek(a,b)));
     // bends the paper already chose stay put, so adding or moving one corner doesn't reshuffle the whole side
-    const mi=S.mirror&&Math.abs(P.n[0])<0.5?list.map(q=>{ if(Math.abs(restOf(q)[0])<0.01) return ix.get(q.id); const t=q.tw&&byId(q.tw); return t&&ix.has(t.id)?ix.get(t.id):-1; }):null;
-    let SL=split(pick(S.sticky)).filter(([a,b])=>!userK.has(ek(a,b)));
-    // with Mirror on, a remembered bend with no twin on the other half is forgotten, so a lopsided fold can't stick around
-    if(mi){ const K=new Set([...SL.map(([a,b])=>ek(a,b)),...userK]); SL=SL.filter(([a,b])=>{ const A=mi[a],B=mi[b]; return A<0||B<0||K.has(ek(A,B)); }); }
+    const mi=S.mirror&&Math.abs(P.n[0])<0.5?list.map(q=>{ if(isMid(q)) return ix.get(q.id); const t=q.tw&&byId(q.tw); return t&&ix.has(t.id)?ix.get(t.id):-1; }):null;
+    let SL=split(pick(S.sticky),0.02).filter(([a,b])=>!userK.has(ek(a,b)));
+    // with Mirror on, a remembered bend at a corner you're pulling that has no twin on the other half is forgotten, so a lopsided fold can't stick around
+    // (the twin may be cut into pieces by corners sitting on it: all the pieces count). Bends nowhere near your finger stay as they are.
+    if(mi){ const K=new Set([...SL.map(([a,b])=>ek(a,b)),...userK]); SL=SL.filter(([a,b])=>{ const A=mi[a],B=mi[b]; return !(MV.has(list[a].id)||MV.has(list[b].id))||A<0||B<0||split([[A,B,0]],0.02).every(([x,y])=>K.has(ek(x,y))); }); }
     const tr=triangulate({V,n:ring.length},[...FL,...SL]);
-    const X=list.map(q=>q.p);
+    // which of your folds made it in (a fold that couldn't is reported, so the gesture that made it can back out)
+    for(const [a,b,o] of FL){ if(tr.C.has(ek(a,b))) foldE.set(ek(list[a].id,list[b].id),o); else badF.add(o); }
+    const X=list.map(q=>q.p), mv=new Set(); list.forEach((q,i)=>{ if(MV.has(q.id)) mv.add(i); });
     // they're only a habit, though: a clearly better bend still wins, so an old odd fold can't get stuck
     const stK=new Set(SL.map(([a,b])=>ek(a,b))); // with Mirror on, a side that spans the middle prefers folds that have a matching fold on the other half, so it stays symmetric
-    smooth3(tr.T,V,X,new Set([...tr.C].filter(k=>!stK.has(k))),stK,mi);
+    // the left side copies the right side's bends (mirror image), so the two sides of a symmetric shape fold the same way
+    let xm=null; if(S.mirror&&f===3&&lay[2]){ const L2=lay[2], ids2=new Set(L2.list.map(q=>q.id)), K=new Set(), has=new Set();
+      list.forEach((q,i)=>{ const t=q.tw&&byId(q.tw); if(t&&ids2.has(t.id)) has.add(i); });
+      for(const t of L2.T) for(let j=0;j<3;j++){ const A=byId(L2.list[t[j]].tw), B=byId(L2.list[t[(j+1)%3]].tw); if(A&&B&&ix.has(A.id)&&ix.has(B.id)) K.add(ek(ix.get(A.id),ix.get(B.id))); }
+      xm={K,has}; }
+    smooth3(tr.T,V,X,new Set([...tr.C].filter(k=>!stK.has(k))),stK,mi,mv,xm); if(mi) matchMirror(tr.T,V,X,new Set([...tr.C].filter(k=>!stK.has(k))),stK,mi,mv);
     { const M=emap(tr.T); for(const [k,ts] of M){ if(ts.length!==2||userK.has(k)) continue; const [u,v]=k.split(',').map(Number); const n=ring.length; if(u<n&&v<n&&(v===(u+1)%n||u===(v+1)%n)) continue;
-        const n1=nrm3(...tr.T[ts[0]].map(i=>X[i])), n2=nrm3(...tr.T[ts[1]].map(i=>X[i])); if(n1&&n2&&dot3(n1,n2)<0.9995) sticky.push([list[u].id,list[v].id]); } }
+        const n1=nrm3(...tr.T[ts[0]].map(i=>X[i])), n2=nrm3(...tr.T[ts[1]].map(i=>X[i])); if(!n1||!n2||dot3(n1,n2)<0.99999) sticky.push([list[u].id,list[v].id]); } } // (paper squashed flat into a line counts as bent too)
     // faces: the pieces of this side between your folds (they must stay flat)
     { const M=emap(tr.T), par=tr.T.map((t,i)=>i), fd=i=>par[i]===i?i:(par[i]=fd(par[i])), n=ring.length;
       for(const [k,ts] of M){ const [u,v]=k.split(',').map(Number); if(ts.length===2&&!userK.has(k)&&!(u<n&&v<n&&(v===(u+1)%n||u===(v+1)%n))) par[fd(ts[0])]=fd(ts[1]); }
@@ -214,13 +264,55 @@ function solve1(){
   S.sticky=sticky;
   // loose corners are pencil marks: they ride on the paper wherever it has been pulled
   for(const q of S.pts){ if(ACT.has(q.id)) continue; const fs=q.on.t==='f'?[q.on.f]:panelsOf(q);
-    for(const f of fs){ const L=lay[f], h=home(q,f); let done=false;
-      for(const t of L.T){ const [A,B,C]=t.map(i=>L.V[i]); const ar=orient(A,B,C); if(Math.abs(ar)<1e-9) continue; const u=orient(B,C,h)/ar, v=orient(C,A,h)/ar, w=1-u-v;
-        if(u<-1e-6||v<-1e-6||w<-1e-6) continue; const [P,Q,R]=t.map(i=>L.list[i].p); q.p=[0,1,2].map(k=>Math.round((u*P[k]+v*Q[k]+w*R[k])*100)/100); done=true; break; }
-      if(done) break; } }
+    for(const f of fs){ const p=ride(lay,f,home(q,f)); if(p){ q.p=p; break; } } }
   const pos=new Map(S.pts.map(q=>[q.id,q.p]));
-  GEO={T,triPanel,pos,regions,faces}; return GEO;
+  GEO={T,triPanel,pos,regions,faces,foldE,badF,lay}; return GEO;
 }
+// where a spot of the flat paper (side f, home coords h) is in 3D right now
+function ride(lay,f,h){ const L=lay[f]; if(!L) return null;
+  for(const t of L.T){ const [A,B,C]=t.map(i=>L.V[i]); const ar=orient(A,B,C); if(Math.abs(ar)<1e-9) continue; const u=orient(B,C,h)/ar, v=orient(C,A,h)/ar, w=1-u-v;
+    if(u<-1e-6||v<-1e-6||w<-1e-6) continue; const [P,Q,R]=t.map(i=>L.list[i].p); return [0,1,2].map(k=>Math.round((u*P[k]+v*Q[k]+w*R[k])*100)/100); }
+  return null;
+}
+// and the other way round: where on the flat paper of side f the 3D spot p is (null if that side's paper isn't there)
+function restAt(f,p){ const L=GEO&&GEO.lay&&GEO.lay[f]; if(!L) return null; let best=null, bd=0.06;
+  for(const t of L.T){ const [A,B,C]=t.map(i=>L.list[i].p), e0=[B[0]-A[0],B[1]-A[1],B[2]-A[2]], e1=[C[0]-A[0],C[1]-A[1],C[2]-A[2]], e2=[p[0]-A[0],p[1]-A[1],p[2]-A[2]];
+    const d00=dot3(e0,e0), d01=dot3(e0,e1), d11=dot3(e1,e1), d20=dot3(e2,e0), d21=dot3(e2,e1), den=d00*d11-d01*d01; if(Math.abs(den)<1e-9) continue;
+    const v=(d11*d20-d01*d21)/den, w=(d00*d21-d01*d20)/den, u=1-v-w; if(u<-1e-4||v<-1e-4||w<-1e-4) continue;
+    const d=Math.hypot(A[0]+v*e0[0]+w*e1[0]-p[0],A[1]+v*e0[1]+w*e1[1]-p[1],A[2]+v*e0[2]+w*e1[2]-p[2]); if(d<bd){ bd=d; best={t,u,v,w}; } }
+  if(!best) return null; const [HA,HB,HC]=best.t.map(i=>L.V[i]), P=PANELS[f], hx=best.u*HA.x+best.v*HB.x+best.w*HC.x, hy=best.u*HA.y+best.v*HB.y+best.w*HC.y;
+  return add3(add3(mul3(P.n,H),mul3(P.u,hx)),mul3(P.v,hy)).map(v=>Math.round(v*100)/100); }
+// ---------- Mirror: twins are mirror images in 3D, the way you see them ----------
+// a corner on the middle line is its own twin (set when it's made; older ones: sitting on the sheet's middle)
+const canMid=on=>on.t==='f'?Math.abs(PANELS[on.f].n[0])<0.5:on.t==='e'?CORNERS[EDGES[on.e][0]][0]!==CORNERS[EDGES[on.e][1]][0]:false;
+const isMid=q=>q.mid===1||(q.mid===undefined&&q.on.t!=='c'&&Math.abs(restOf(q)[0])<0.01);
+function mirrorOn(on){ if(on.t==='f') return {t:'f',f:on.f===2?3:on.f===3?2:on.f};
+  if(on.t==='e'){ const me=EDGES[on.e].map(i=>cornerAt([-CORNERS[i][0],CORNERS[i][1],CORNERS[i][2]])); return {t:'e',e:EDGES.findIndex(([a,b])=>(a===me[0]&&b===me[1])||(a===me[1]&&b===me[0]))}; }
+  return on; }
+// where the twin of a corner at 3D spot p goes: the mirror-image spot, on whatever bit of paper is there
+function twinSpot(on,p){ const mon=mirrorOn(on), mp=[-p[0],p[1],p[2]];
+  for(const f of (mon.t==='f'?[mon.f]:panelsOf({on:mon}))){ let r=restAt(f,mp); if(!r) continue; r=mon.t==='e'?onEdge(mon.e,r,0.002):onSide(mon.f,r,0.1);
+    // the spot has to really be there: on the edge itself for an edge corner (the paper over there may be shaped differently)
+    const q=ride(GEO.lay,f,home({on:mon,r},f)); if(!q||Math.hypot(q[0]-mp[0],q[1]-mp[1],q[2]-mp[2])>0.06) continue;
+    return {on:mon,p:mp,r}; }
+  return null; }
+// a pencil mark becoming part of the shape: its twin is lined up exactly opposite first (or let go if the paper over there isn't the mirror image)
+function activate(q){ q.m=true;
+  // a middle-line pencil mark the paper has carried off the middle isn't a middle corner any more: it gets a twin like any other
+  if(q.mid&&q.on.t!=='c'&&Math.abs(q.p[0])>0.05) q.mid=0;
+  let t=twinOf(q);
+  if(t&&!ACT.has(t.id)&&t.on.t!=='c'){ const sp=twinSpot(q.on,q.p); if(sp){ t.on=sp.on; t.r=sp.r; t.p=sp.p; } else { delete q.tw; delete t.tw; t=null; } }
+  if(!t){ ensureTwins([q]); t=twinOf(q); } if(t) t.m=true; }
+// with Mirror on every corner has a twin: one that didn't get one gets one on the mirror-image spot (if the paper's there), so pulling it pulls both
+function ensureTwins(list){ if(!S.mirror) return; pairUp(list,S.pts);
+  for(const q of list){ if(!byId(q.id)||q.tw||isMid(q)||q.on.t==='c') continue; const sp=twinSpot(q.on,q.p); if(!sp) continue;
+    if(Math.hypot(sp.p[0]-q.p[0],sp.p[1]-q.p[1],sp.p[2]-q.p[2])<0.05){ if(canMid(q.on)){ q.mid=1; q.p[0]=0; } continue; } // it's on the middle line itself
+    let t=S.pts.find(o=>o!==q&&!o.tw&&o.on.t!=='c'&&!isMid(o)&&Math.hypot(...o.p.map((v,k)=>v-sp.p[k]))<0.05);
+    if(!t){ if(S.pts.some(o=>o!==q&&Math.hypot(...restOf(o).map((v,k)=>v-sp.r[k]))<0.5)) continue; t=mk(sp.p,sp.on); t.r=sp.r; t.mid=0; }
+    if(q.m) t.m=true; if(q.xc) t.xc=1; q.tw=t.id; t.tw=q.id; } }
+// new corners that are mirror images of each other become twins
+function pairUp(list,pool){ if(!S.mirror) return; for(const q of list){ if(q.tw||isMid(q)||q.on.t==='c') continue; const mo=JSON.stringify(mirrorOn(q.on));
+    const t=(pool||list).find(o=>o!==q&&!o.tw&&o.on.t!=='c'&&!isMid(o)&&JSON.stringify(o.on)===mo&&Math.hypot(o.p[0]+q.p[0],o.p[1]-q.p[1],o.p[2]-q.p[2])<0.05); if(t){ q.tw=t.id; t.tw=q.id; } } }
 // when four corners don't lie flat there are two ways to fold them; pick the gentler fold, and if it's close, the one that bulges out
 const nrm3=(A,B,C)=>{ const u=[B[0]-A[0],B[1]-A[1],B[2]-A[2]], v=[C[0]-A[0],C[1]-A[1],C[2]-A[2]]; const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]]; const L=Math.hypot(...n); return L<1e-6?null:n.map(x=>x/L); };
 function foldCost(X,u,v,c,d){ // triangles (u,v,c) and (v,u,d) share the fold u-v
@@ -228,14 +320,31 @@ function foldCost(X,u,v,c,d){ // triangles (u,v,c) and (v,u,d) share the fold u-
   const ang=Math.acos(Math.max(-1,Math.min(1,dot3(n1,n2)))); if(ang<1e-4) return 0;
   const dent=dot3(n1,[X[d][0]-X[u][0],X[d][1]-X[u][1],X[d][2]-X[u][2]])>1e-6;
   return ang+(dent?0.35:0); }
-function smooth3(T,P,X,C,K,mi){
+function smooth3(T,P,X,C,K,mi,mv,xm){
   for(let it=0;it<300;it++){ const M=emap(T); let fl=false;
     for(const [key,ts] of M){ if(ts.length!==2||C.has(key)) continue; let [u,v]=key.split(',').map(Number);
       let A=T[ts[0]],B=T[ts[1]]; const k=A.indexOf(u); if(A[(k+1)%3]!==v){ [u,v]=[v,u]; }
       const c=A.find(x=>x!==u&&x!==v), d=B.find(x=>x!==u&&x!==v);
-      const asym=(a,b)=>{ if(!mi) return 0; const A=mi[a],B=mi[b]; if(A<0||B<0||A===undefined||B===undefined) return 0; const k2=ek(A,B); return k2===ek(a,b)||M.has(k2)?0:0.4; };
+      // a remembered bend stays exactly as it is unless one of its four corners just moved
+      if(K&&K.has(key)&&!(mv&&(mv.has(u)||mv.has(v)||mv.has(c)||mv.has(d)))) continue;
+      const asym=(a,b)=>{ if(xm) return xm.has.has(a)&&xm.has.has(b)&&!xm.K.has(ek(a,b))?0.4:0; if(!mi) return 0; const A=mi[a],B=mi[b]; if(A<0||B<0||A===undefined||B===undefined) return 0; const k2=ek(A,B); return k2===ek(a,b)||M.has(k2)?0:0.4; };
       const now=foldCost(X,u,v,c,d)+asym(u,v), alt=foldCost(X,d,c,u,v)+asym(c,d)
       if(alt<now-(K&&K.has(key)?0.3:0.05)&&flipEdge(T,P,u,v,ts[0],ts[1])){fl=true;break;} }
+    if(!fl) break; } }
+// with Mirror on, a bend on one half with no matching bend on the other half: turn the other half's crease to match, so the shape stays symmetric
+// (where the paper can't lie the nicer way on both halves at once, like an ear pulled out past the box corner, both halves do it the same way)
+function matchMirror(T,P,X,C,K,mi,mv){
+  const ok=i=>i!==undefined&&i>=0;
+  for(let it=0;it<20;it++){ const M=emap(T); let fl=false;
+    for(const [key,ts] of M){ if(ts.length!==2) continue; const [a,b]=key.split(',').map(Number), A=mi[a], B=mi[b]; if(!ok(A)||!ok(B)||A===B) continue; const k2=ek(A,B); if(k2===key||M.has(k2)) continue;
+      const n1=nrm3(...T[ts[0]].map(i=>X[i])), n2=nrm3(...T[ts[1]].map(i=>X[i])); if(n1&&n2&&dot3(n1,n2)>=0.99999) continue; // flat: nothing to match
+      // the crease lying right across where the matching one goes, between two triangles that have its ends as their tips
+      for(const [k3,t3] of M){ if(t3.length!==2||C.has(k3)) continue; const [u,v]=k3.split(',').map(Number); if(!cross(P[A],P[B],P[u],P[v])) continue;
+        const tips=t3.map(i=>T[i].find(x=>x!==u&&x!==v)); if(!(tips.includes(A)&&tips.includes(B))) break;
+        if(K&&K.has(k3)&&!(mv&&[u,v,A,B].some(x=>mv.has(x)))) break;
+        const has=(t,x,y)=>{ for(let j=0;j<3;j++) if(t[j]===x&&t[(j+1)%3]===y) return true; return false; };
+        const [x,y]=has(T[t3[0]],u,v)?[u,v]:[v,u]; if(flipEdge(T,P,x,y,t3[0],t3[1])) fl=true; break; }
+      if(fl) break; }
     if(!fl) break; } }
 function triNormal(t){ const [a,b,c]=t.map(id=>GEO.pos.get(id)); const u=[b[0]-a[0],b[1]-a[1],b[2]-a[2]], v=[c[0]-a[0],c[1]-a[1],c[2]-a[2]]; const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]]; const L=Math.hypot(...n)||1; return n.map(x=>x/L); }
 
@@ -288,7 +397,7 @@ function draw2(){
   const onRim=p=>{ for(let k=0;k<12;k++){ const t=k/12*Math.PI*2; if(!covered(p.x+Math.cos(t)*1.2,p.y+Math.sin(t)*1.2)) return true; } return false; };
   // the outline is drawn bold; folds inside it are faint and dotted so the shape reads clearly
   // folds you drew show even while flat; a bend the paper had to make on its own (no fold drawn there) shows red
-  const M=emap(GEO.T.map(t=>t.map(id=>id))); GEO.creases=[]; GEO.rims=[]; const mine=new Set((S.folds||[]).map(([a,b])=>ek(a,b)));
+  const M=emap(GEO.T.map(t=>t.map(id=>id))); GEO.creases=[]; GEO.rims=[]; const mine=GEO.foldE; // (a fold with a corner on it is still your fold, in pieces)
   for(const [key,ts] of M){ if(ts.length!==2) continue; const n1=triNormal(GEO.T[ts[0]]), n2=triNormal(GEO.T[ts[1]]); if(dot3(n1,n2)>0.9998&&!mine.has(key)) continue;
     if(dot3(n1,Vw.d)<=0.001&&dot3(n2,Vw.d)<=0.001) continue; const [a,b]=key.split(',').map(Number);
     const A=P2.get(a), B=P2.get(b); const [x1,y1]=toPx(A.x,A.y),[x2,y2]=toPx(B.x,B.y); const rim=onRim({x:(A.x+B.x)/2,y:(A.y+B.y)/2});
@@ -324,95 +433,112 @@ function hitPoint(px,py,skip){ let best=null,bd=skip?20:24; for(const q of GEO.v
 c2.addEventListener('pointerdown',e=>{ if(drag) return; c2.setPointerCapture(e.pointerId); const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
   const q=hitPoint(px,py);
   // a picked face: drag anywhere on it to move it (from the side, that pulls it out or pushes it in)
-  if(!q&&selFace&&onFace(px,py)){ drag={type:'face',sx:px,sy:py,moved:false,pid:e.pointerId,t0:performance.now()}; return; }
+  // (a corner wins only right on top of it, so a small face doesn't keep handing you its corners)
+  if(selFace&&onFace(px,py)&&(!q||(()=>{ const p=GEO.P2.get(q.id), [a,b]=toPx(p.x,p.y); return Math.hypot(a-px,b-py)>12; })())){ drag={type:'face',sx:px,sy:py,moved:false,pid:e.pointerId,t0:performance.now()}; return; }
   drag=q?{type:'pt',id:q.id,sx:px,sy:py,moved:false}:{type:'tap',sx:px,sy:py,t0:performance.now()}; drag.pid=e.pointerId;
   // hold a corner still for a moment and it switches to drawing a fold line from it
   // hold on a fold (away from corners) and it goes away
   if(!q){ const c=foldNear(px,py); if(c){ const dd=drag;
     dd.pv=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; selFold=[c.a,c.b]; draw2(); },160);
-    dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='none'; selFold=[c.a,c.b]; try{navigator.vibrate&&navigator.vibrate(20);}catch(e){}
-      if(c.stray){ selFold=null; push(); flattenBend(c.a,c.b); if(sound) blip(300,.12,.1); pulse=1; toast('Bend flattened'); changed(); } else deleteFold(); },550); } }
+    // (it goes when you let go: keep moving instead and you're drawing a fold that starts here)
+    dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='foldhold'; dd.c=c; selFold=[c.a,c.b]; pulse=1; try{navigator.vibrate&&navigator.vibrate(20);}catch(e){} draw2(); },550); } }
   if(!q&&!foldNear(px,py)){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='free'; dd.fx=px; dd.fy=py; dd.loop=!onPaper(px,py); pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast(onPaper(px,py)?'Draw your fold':'Draw across the shape: edge loop'); draw2(); },450); }
   if(q){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.moved) return; dd.type='line'; dd.fx=px; dd.fy=py; selId=dd.id; pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast('Drag to another corner to fold'); draw2(); },500); } });
 c2.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.pid) return; const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
   if(drag.type==='face'){ moveFace(drag,px,py); return; }
   if(drag.type==='free'){ drag.fx=px; drag.fy=py; (drag.path=drag.path||[[drag.sx,drag.sy]]).push([px,py]); if(drag.loop) snapLine(drag); const o=!drag.loop&&hitPoint(px,py); const was=drag.link; drag.link=o?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
+  if(drag.type==='foldhold'){ if(Math.hypot(px-drag.sx,py-drag.sy)<10) return; selFold=null; drag.type='free'; drag.fx=px; drag.fy=py; drag.loop=false; drag.path=[[drag.sx,drag.sy],[px,py]];
+    if(sound) blip(760,.07,.07); toast('Draw your fold'); draw2(); return; }
   if(drag.type==='line'){ drag.fx=px; drag.fy=py; const q=byId(drag.id), o=hitPoint(px,py,q.id); const was=drag.link; drag.link=o&&sharedPanel(q,o)>=0?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
   if(!drag.moved&&Math.hypot(px-drag.sx,py-drag.sy)<6) return;
   clearTimeout(drag.hold); if(drag.pv){ clearTimeout(drag.pv); drag.pv=0; if(selFold){ selFold=null; draw2(); } }
   if(drag.type==='tap'){ if(spinning) {drag.type='none';return;} const dx=px-drag.sx, dy=py-drag.sy; drag.type='swipe'; drag.ax=Math.abs(dx)>Math.abs(dy)?'h':'v'; drag.V0=VW; }
   if(drag.type==='swipe'){ const k=Math.PI/W*1.15; drag.th=Math.max(-Math.PI*0.75,Math.min(Math.PI*0.75,drag.ax==='h'?-(px-drag.sx)*k:-(py-drag.sy)*k)); VW=rotView(drag.V0,drag.ax,drag.th); draw2(); spin3(); return; }
   if(drag.type==='none') return;
-  if(!drag.moved){drag.moved=true;push();}
+  if(!drag.moved){drag.moved=true;push(); const q0=byId(drag.id); if(S.mirror&&q0&&ACT.has(q0.id)&&!twinOf(q0)&&!isMid(q0)){ ensureTwins([q0]); if(twinOf(q0)) solve(); } }
   const [a,b]=toMm(px,py).map(v=>Math.max(-RANGE+5,Math.min(RANGE-5,Math.round(v/SNAP)*SNAP)));
   if(!ACT.has(drag.id)){ const lq=byId(drag.id), fs=lq.on.t==='f'?[lq.on.f]:panelsOf(lq);
     // facing its paper you slide the mark around; from the side you pull it out and it starts shaping the paper
     if(fs.some(f=>Math.abs(dot3(PANELS[f].n,VW.d))>0.5)){ slideLoose(lq,a,b); return; }
-    lq.m=true; const lt=twinOf(lq); if(lt) lt.m=true; solve(); }
+    activate(lq); solve(); }
   const q=byId(drag.id), Vw=VW; const dz=dot3(q.p,Vw.d);
   const np=add3(add3(mul3(Vw.a,a),mul3(Vw.b,b)),mul3(Vw.d,dz)).map(v=>Math.round(v*100)/100);
+  // with Mirror on the two halves can't pass through each other: a corner stops at the middle line, and one on the middle line stays on it
+  if(S.mirror){ if(isMid(q)) np[0]=0; else if(twinOf(q)){ const sd=Math.sign(q.p[0])||Math.sign(restOf(q)[0]); if(np[0]*sd<0) np[0]=0; } }
   if(np.some((v,k)=>Math.abs(v-q.p[k])>0.01)){ q.p=np; const t=twinOf(q); if(t) t.p=[-np[0],np[1],np[2]]; tick(); changed(true); } });
 function endDrag(e){ if(!drag||e.pointerId!==drag.pid) return; const d=drag; drag=null; clearTimeout(d.hold); clearTimeout(d.pv); if(d.type==='tap'&&selFold){ selFold=null; } const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
   if(d.type==='face'){ if(d.moved){ pop(); changed(); } else if(!tapFace(px,py)) addPoint(px,py); return; }
+  if(d.type==='foldhold'){ const c=d.c; if(c.stray){ selFold=null; push(); flattenBend(c.a,c.b); if(sound) blip(300,.12,.1); pulse=1; toast('Bend flattened'); changed(); } else deleteFold(); return; }
   if(d.type==='pt'&&!d.moved){ selFold=null; selId=selId===d.id?null:d.id; changed(true); return; }
   if(d.type==='free'){ if(!d.loop&&loopish(d)) drawRect(d); else if(Math.hypot(d.fx-d.sx,d.fy-d.sy)>14||d.link) drawFold(d); else changed(true); return; }
   if(d.type==='line'){ if(d.link){ push(); makeFold(d.id,d.link); } else changed(true); return; }
   if(d.type==='pt'){ pop(); changed(); return; }
   if(d.type==='tap'){ if(tapFace(px,py)) return; addPoint(px,py); }
   if(d.type==='swipe'){ const fast=performance.now()-d.t0<350&&Math.abs(d.th)>0.12; const tgt=Math.abs(d.th)>Math.PI/6||fast?Math.sign(d.th)*Math.PI/2:0; settleSpin(d.V0,d.ax,d.th,tgt); } }
-c2.addEventListener('pointerup',endDrag); const cancelDrag=e=>{ if(!drag||e.pointerId!==drag.pid) return; clearTimeout(drag.hold); clearTimeout(drag.pv); if(drag.moved) changed(); drag=null; draw2(); };
+c2.addEventListener('pointerup',endDrag); const cancelDrag=e=>{ if(!drag||e.pointerId!==drag.pid) return; clearTimeout(drag.hold); clearTimeout(drag.pv); if(drag.type==='foldhold') selFold=null; if(drag.moved) changed(); drag=null; draw2(); };
 c2.addEventListener('pointercancel',cancelDrag); c2.addEventListener('lostpointercapture',cancelDrag);
 const twinOf=q=>S.mirror&&q.tw?byId(q.tw):null;
+// part of the shape: a box corner, a corner in a fold, or one that just became one in this gesture (before the paper is worked out again)
+const live=q=>q.on.t==='c'||!!q.m||ACT.has(q.id);
 
 // a tap on the paper you're facing adds a corner there; near a box edge it becomes an edge corner
 function addPoint(px,py,quiet){
+  // a tap right on the outline (a hair inside it or outside) is a tap on the outline: a corner you can pull to reshape it
+  if(!quiet&&(GEO.rims||[]).some(c=>segD({x:px,y:py},{x:c.x1,y:c.y1},{x:c.x2,y:c.y2})<7)&&rimPoint(px,py)) return;
   let [a,b]=toMm(px,py); a=Math.round(a/SNAP)*SNAP; b=Math.round(b/SNAP)*SNAP; const p={x:a,y:b}; const Vw=VW;
   let hit=null;
   GEO.T.forEach((t,i)=>{ const n=triNormal(t); if(dot3(n,Vw.d)<=0.05) return; const [A,B,C]=t.map(id=>GEO.P2.get(id)); const ar=orient(A,B,C); if(Math.abs(ar)<1e-6) return;
     const u=orient(B,C,p)/ar, v=orient(C,A,p)/ar, w=orient(A,B,p)/ar; if(u<-1e-6||v<-1e-6||w<-1e-6) return; const z=u*A.z+v*B.z+w*C.z;
     if(!hit||z>hit.z) hit={i,t,u,v,w,z}; });
   if(!hit){ if(quiet) return null; if(rimPoint(px,py)) return; if(selId){selId=null;changed(true);} return; }
-  const [P,Q,R]=hit.t.map(id=>byId(id).p); const p3=[0,1,2].map(k=>Math.round((hit.u*P[k]+hit.v*Q[k]+hit.w*R[k])*100)/100);
+  const [P,Q,R]=hit.t.map(id=>byId(id).p); let p3=[0,1,2].map(k=>Math.round((hit.u*P[k]+hit.v*Q[k]+hit.w*R[k])*100)/100);
   const f=GEO.triPanel[hit.i];
   const [RA,RB,RC]=hit.t.map(id=>restOf(byId(id))); let r=[0,1,2].map(k=>Math.round((hit.u*RA[k]+hit.v*RB[k]+hit.w*RC[k])*100)/100);
+  // with Mirror on, a tap right by the middle line lands on it (else it and its twin would sit almost on top of each other)
+  let mid=false; if(S.mirror&&canMid({t:'f',f})&&Math.abs(p3[0])<1.5){ const p0=[0,p3[1],p3[2]], r0=restAt(f,p0); if(r0){ p3=p0; r=r0; mid=true; } }
   // close to a box edge of this side? make an edge corner shared by both sides
   let on={t:'f',f};
   const h={x:dot3(r,PANELS[f].u),y:dot3(r,PANELS[f].v)};
   { let best=-1,bd=3.5; EDGES.forEach((e,ei)=>{ if(!edgeOnPanel(ei,f)) return; const [A,B]=e.map(i=>CORNERS[i]).map(c=>({x:dot3(c,PANELS[f].u),y:dot3(c,PANELS[f].v)})); const d=segD(h,A,B); if(d<bd){bd=d;best=ei;} });
-    if(best>=0){ on={t:'e',e:best}; r=onEdge(best,r); } }
+    if(best>=0){ on={t:'e',e:best}; r=onEdge(best,r); p3=ride(GEO.lay,f,{x:dot3(r,PANELS[f].u),y:dot3(r,PANELS[f].v)})||p3; if(mid&&!canMid(on)) mid=false; } }
   { const ex=S.pts.find(q=>{const x=restOf(q); return Math.hypot(x[0]-r[0],x[1]-r[1],x[2]-r[2])<2;}); if(ex){ if(quiet) return ex; toast('There’s already a corner there'); return; } }
-  // with Mirror on, a tap right by the middle line lands on it (else it and its twin would sit almost on top of each other)
-  if(S.mirror&&Math.abs(r[0])<1.5&&on.t==='f'){ r[0]=0; p3[0]=0; }
-  if(!quiet) push(); const q=mk(p3,on); q.r=r;
-  if(S.mirror&&Math.abs(r[0])>0.5){ const m=[-p3[0],p3[1],p3[2]]; let mon=on;
-    if(on.t==='f') mon={t:'f',f:on.f===2?3:on.f===3?2:on.f};
-    if(on.t==='e'){ const me=EDGES[on.e].map(i=>cornerAt([-CORNERS[i][0],CORNERS[i][1],CORNERS[i][2]])); mon={t:'e',e:EDGES.findIndex(([a,b])=>(a===me[0]&&b===me[1])||(a===me[1]&&b===me[0]))}; }
-    // a corner already sitting on the mirrored spot becomes the twin instead of getting a second corner on top of it
-    const mr=[-r[0],r[1],r[2]], ex=S.pts.find(o=>o!==q&&Math.hypot(...restOf(o).map((v,k)=>v-mr[k]))<2);
-    if(ex){ if(!ex.tw&&ex.on.t!=='c'){ ex.r=mr; ex.p=m; q.tw=ex.id; ex.tw=q.id; } }
-    else { const t=mk(m,mon); t.r=mr; q.tw=t.id; t.tw=q.id; } }
+  if(!quiet) push(); const q=mk(p3,on); q.r=r; q.mid=mid?1:0;
+  // with Mirror on its twin goes on the mirror-image spot of the paper (in 3D: once the paper is stretched, that's not always the mirror spot of the flat sheet)
+  if(S.mirror&&!mid){ const sp=twinSpot(on,p3);
+    if(sp){ const ex=S.pts.find(o=>o!==q&&Math.hypot(...restOf(o).map((v,k)=>v-sp.r[k]))<2);
+      // a pencil mark already on that spot becomes the twin; a real corner there is left alone
+      if(ex){ if(!ex.tw&&!live(ex)){ Object.assign(ex,{on:sp.on,r:sp.r,p:sp.p,mid:0}); q.tw=ex.id; ex.tw=q.id; } }
+      else { const t=mk(sp.p,sp.on); t.r=sp.r; t.mid=0; q.tw=t.id; t.tw=q.id; } } }
   if(quiet) return q;
   selId=q.id; pop(); changed(); toast('Corner added. Pull it from another view.');
 }
 // tap just outside the shape: a corner lands on the nearest bit of outline, ready to pull out
 function rimPoint(px,py){ let best=null,bd=45;
-  for(const c of GEO.rims||[]){ const d=segD({x:px,y:py},{x:c.x1,y:c.y1},{x:c.x2,y:c.y2}); if(d<bd){bd=d;best=c;} }
+  // (where two bits of outline lie on top of each other, like the front and back top edges seen from the front, the nearer one)
+  for(const c of GEO.rims||[]){ const z=(GEO.P2.get(c.a).z+GEO.P2.get(c.b).z)/2, d=segD({x:px,y:py},{x:c.x1,y:c.y1},{x:c.x2,y:c.y2})-z*0.005; if(d<bd){bd=d;best=c;} }
   if(!best) return false;
   const L2=(best.x2-best.x1)**2+(best.y2-best.y1)**2; let t=L2?((px-best.x1)*(best.x2-best.x1)+(py-best.y1)*(best.y2-best.y1))/L2:0.5; t=Math.max(0.1,Math.min(0.9,t));
-  const A=byId(best.a), B=byId(best.b), f=GEO.triPanel[best.ts[0]];
-  const p3=A.p.map((v,k)=>Math.round((v+(B.p[k]-v)*t)*100)/100); const RA=restOf(A), RB=restOf(B); let r=RA.map((v,k)=>Math.round((v+(RB[k]-v)*t)*100)/100);
+  const A=byId(best.a), B=byId(best.b), f=GEO.triPanel[best.ts[0]], RA=restOf(A), RB=restOf(B);
+  // with Mirror on, a tap right by the middle line lands on it (sliding along the outline, so the corner stays on it)
+  let mid=false; if(S.mirror&&Math.abs(B.p[0]-A.p[0])>1e-6&&Math.abs(A.p[0]+(B.p[0]-A.p[0])*t)<1.5){ const tm=-A.p[0]/(B.p[0]-A.p[0]); if(tm>0.05&&tm<0.95){ t=tm; mid=true; } }
+  const p3=A.p.map((v,k)=>Math.round((v+(B.p[k]-v)*t)*100)/100); let r=RA.map((v,k)=>Math.round((v+(RB[k]-v)*t)*100)/100); if(mid) p3[0]=0;
   let on={t:'f',f}; const h={x:dot3(r,PANELS[f].u),y:dot3(r,PANELS[f].v)};
-  { let be=-1,bd2=3.5; EDGES.forEach((e,ei)=>{ if(!edgeOnPanel(ei,f)) return; const [P,Q]=e.map(i=>CORNERS[i]).map(c=>({x:dot3(c,PANELS[f].u),y:dot3(c,PANELS[f].v)})); const d=segD(h,P,Q); if(d<bd2){bd2=d;be=ei;} }); if(be>=0){ on={t:'e',e:be}; r=onEdge(be,r); } }
-  if(S.mirror&&Math.abs(r[0])<1.5&&on.t==='f'){ r[0]=0; p3[0]=0; }
+  // it's on the box's edge only if that bit of outline runs along the box edge (else moving it there would pull the paper)
+  { let be=-1,bd2=3.5; const hA=home(A,f), hB=home(B,f); EDGES.forEach((e,ei)=>{ if(!edgeOnPanel(ei,f)) return; const [P,Q]=e.map(i=>CORNERS[i]).map(c=>({x:dot3(c,PANELS[f].u),y:dot3(c,PANELS[f].v)})); const d=segD(h,P,Q); if(d<bd2&&segD(hA,P,Q)<0.05&&segD(hB,P,Q)<0.05){bd2=d;be=ei;} }); if(be>=0){ on={t:'e',e:be}; r=onEdge(be,r); } }
+  if(mid&&!canMid(on)) mid=false;
   if(S.pts.some(q=>{const x=restOf(q); return Math.hypot(x[0]-r[0],x[1]-r[1],x[2]-r[2])<2;})){ toast('There’s already a corner there'); return true; }
-  push(); const q=mk(p3,on); q.r=r; q.m=true;
+  push(); const q=mk(p3,on); q.r=r; q.m=true; q.mid=mid?1:0;
   // the outline line becomes a fold through the new corner, so the corner stays on the outline and the rest of the side keeps its shape
   const sp=sharedPanel(A,B), boxEdge=on.t==='e'&&[A,B].every(x=>x.on.t==='c'||(x.on.t==='e'&&x.on.e===on.e)), keep=sp>=0&&!boxEdge;
   if(keep){ S.folds=(S.folds||[]).filter(x=>!((x[0]===A.id&&x[1]===B.id)||(x[0]===B.id&&x[1]===A.id))); S.folds.push([A.id,q.id],[q.id,B.id]); }
-  if(S.mirror&&Math.abs(r[0])>0.5&&!S.pts.some(o=>o!==q&&Math.hypot(restOf(o)[0]+r[0],restOf(o)[1]-r[1],restOf(o)[2]-r[2])<2)){ let mon=on; if(on.t==='f') mon={t:'f',f:on.f===2?3:on.f===3?2:on.f};
-    if(on.t==='e'){ const me=EDGES[on.e].map(i=>cornerAt([-CORNERS[i][0],CORNERS[i][1],CORNERS[i][2]])); mon={t:'e',e:EDGES.findIndex(([a,b])=>(a===me[0]&&b===me[1])||(a===me[1]&&b===me[0]))}; }
-    const tq=mk([-p3[0],p3[1],p3[2]],mon); tq.r=[-r[0],r[1],r[2]]; tq.m=true; q.tw=tq.id; tq.tw=q.id;
-    const tA=mirrorOf(A), tB=mirrorOf(B); if(keep&&tA&&tB&&tA!==A&&tB!==B&&sharedPanel(tA,tB)>=0){ S.folds=S.folds.filter(x=>!((x[0]===tA.id&&x[1]===tB.id)||(x[0]===tB.id&&x[1]===tA.id))); S.folds.push([tA.id,tq.id],[tq.id,tB.id]); } }
+  if(S.mirror&&!mid){ const sp=twinSpot(on,p3); let tq=null;
+    // only where the paper over there really is the mirror image (else the twin would yank the paper)
+    if(sp){ const ex=S.pts.find(o=>o!==q&&Math.hypot(...restOf(o).map((v,k)=>v-sp.r[k]))<2);
+      // a pencil mark already on the mirrored spot becomes the twin; a real corner there is left alone
+      if(ex){ if(!ex.tw&&!live(ex)){ Object.assign(ex,{on:sp.on,r:sp.r,p:sp.p,m:true,mid:0}); tq=ex; } }
+      else { tq=mk(sp.p,sp.on); tq.r=sp.r; tq.m=true; tq.mid=0; } }
+    if(tq){ q.tw=tq.id; tq.tw=q.id;
+      const tA=mirrorOf(A), tB=mirrorOf(B); if(keep&&tA&&tB&&!((tA===A&&tB===B)||(tA===B&&tB===A))&&sharedPanel(tA,tB)>=0){ S.folds=S.folds.filter(x=>!((x[0]===tA.id&&x[1]===tB.id)||(x[0]===tB.id&&x[1]===tA.id))); S.folds.push([tA.id,tq.id],[tq.id,tB.id]); } } }
   selId=q.id; pop(); changed(); toast('Corner on the outline. Drag it to reshape.'); return true; }
 // ---------- faces you can pick, move and extrude ----------
 let selFace=null, lastTap={t:0,key:''};
@@ -442,7 +568,8 @@ function moveFace(d,px,py){ if(!d.moved&&Math.hypot(px-d.sx,py-d.sy)<6) return;
   const [a0,b0]=toMm(d.sx,d.sy), [a,b]=toMm(px,py), da=Math.round((a-a0)/SNAP)*SNAP, db=Math.round((b-b0)/SNAP)*SNAP;
   const D=add3(mul3(VW.a,da),mul3(VW.b,db)); const ids=new Set(selFace.ids);
   // a face that straddles the middle (with Mirror on) can only move straight, so both halves stay matched
-  if(S.mirror&&selFace.ids.some(id=>{ const q=byId(id); return q.tw&&ids.has(q.tw); })) D[0]=0;
+  if(S.mirror&&selFace.ids.some(id=>{ const q=byId(id); return (q.tw&&ids.has(q.tw))||isMid(q); })) D[0]=0;
+  if(S.mirror) for(const [id,p0] of d.p0){ const q=byId(id); if(!twinOf(q)) continue; const sd=Math.sign(p0[0])||Math.sign(restOf(q)[0]); if((p0[0]+D[0])*sd<0) D[0]=-p0[0]; }
   let ch=false; for(const [id,p0] of d.p0){ const q=byId(id); const np=p0.map((v,k)=>Math.round((v+D[k])*100)/100); if(np.some((v,k)=>v!==q.p[k])) ch=true; q.p=np;
     const t=twinOf(q); if(t&&!ids.has(t.id)) t.p=[-np[0],np[1],np[2]]; }
   if(ch){ tick(); changed(true); } }
@@ -451,7 +578,7 @@ function extrudeOne(F,map){ const cnt=new Map(); for(const ti of F.tris){ const 
   const bnd=[...cnt].filter(([,c])=>c===1).map(([k])=>k.split(',').map(Number)), B=[...new Set(bnd.flat())];
   const R=B.map(id=>restOf(byId(id))), c=[0,1,2].map(k=>R.reduce((s,r)=>s+r[k],0)/R.length);
   B.forEach((id,i)=>{ const r=R[i], dv=[c[0]-r[0],c[1]-r[1],c[2]-r[2]], L=Math.hypot(...dv)||1, dd=Math.min(2.5,L*0.3);
-    const q=mk(byId(id).p.slice(),{t:'f',f:F.f}); q.r=onSide(F.f,r.map((v,k)=>v+dv[k]/L*dd)); q.m=true; map.set(id,q.id); });
+    const q=mk(byId(id).p.slice(),{t:'f',f:F.f}); q.r=onSide(F.f,r.map((v,k)=>v+dv[k]/L*dd)); q.m=true; q.mid=isMid(byId(id))?1:0; map.set(id,q.id); });
   S.folds=S.folds||[]; for(const [u,v] of bnd) S.folds.push([map.get(u),map.get(v)]); for(const id of B) S.folds.push([id,map.get(id)]);
   return F.ids.filter(id=>!B.includes(id)); }
 function extrudeFace(){ const ids=new Set(selFace.ids); const F=GEO.faces.find(F=>F.closed&&F.ids.length===ids.size&&F.ids.every(i=>ids.has(i))); if(!F) return;
@@ -466,11 +593,13 @@ function loopish(d){ const P=d.path; if(!P||P.length<8) return false; let L=0, x
 function drawRect(d){ const P=d.path.map(([x,y])=>toMm(x,y)); let a0=Math.min(...P.map(p=>p[0])), a1=Math.max(...P.map(p=>p[0])), b0=Math.min(...P.map(p=>p[1])), b1=Math.max(...P.map(p=>p[1]));
   a0=Math.round(a0/SNAP)*SNAP; a1=Math.round(a1/SNAP)*SNAP; b0=Math.round(b0/SNAP)*SNAP; b1=Math.round(b1/SNAP)*SNAP; if(a1-a0<SNAP||b1-b0<SNAP){ toast('Draw the square a bit bigger'); changed(true); return; }
   push(); const n0=S.pts.length; const C=[[a0,b0],[a1,b0],[a1,b1],[a0,b1]].map(([a,b])=>addPoint(...toPx(a,b),true)); if(S.pts.length>n0) changed(true);
-  if(C.some(q=>!q)||new Set(C.map(q=>q.id)).size<4||[1,2,3].some(i=>sharedPanel(C[0],C[i])<0)){ const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; toast('Draw the square on one side of the box'); changed(); return; }
-  S.folds=S.folds||[]; const has=(a,b)=>S.folds.some(f=>(f[0]===a&&f[1]===b)||(f[0]===b&&f[1]===a));
-  for(let i=0;i<4;i++){ const A=C[i], B=C[(i+1)%4]; if(!has(A.id,B.id)) S.folds.push([A.id,B.id]); const ta=mirrorOf(A), tb=mirrorOf(B);
-    if(S.mirror&&ta&&tb&&!(ta===A&&tb===B)&&!(ta===B&&tb===A)&&sharedPanel(ta,tb)>=0&&!has(ta.id,tb.id)) S.folds.push([ta.id,tb.id]); }
-  selId=null; solve(); const ids=new Set(C.map(q=>q.id)); const F=GEO.faces.find(F=>F.closed&&C.every(q=>F.ids.includes(q.id))&&F.ids.every(id=>ids.has(id)));
+  if(C.some(q=>!q)||new Set(C.map(q=>q.id)).size<4||[1,2,3].some(i=>sharedPanel(C[0],C[i])<0)){ abandon('Draw the square on one side of the box'); return; }
+  for(const q of S.pts.slice(n0)) snapOntoFold(q);
+  // all four corners stay right where you drew them (a pencil mark would drift as the paper re-folds around the first sides)
+  for(const q of C) activate(q);
+  // its sides go in like any fold you draw: corners where they cross your folds or a bend, so the shape stays as it is
+  if(!addFolds(C.map((q,i)=>[q.id,C[(i+1)%4].id]),true)){ abandon('Can’t fold there'); return; }
+  selId=null; solve(); const F=GEO.faces.filter(F=>F.closed&&C.every(q=>F.ids.includes(q.id))).sort((x,y)=>x.ids.length-y.ids.length)[0];
   selFace=F?{ids:F.ids.slice(),ex:false}:null; pulse=1; if(sound) blip(700,.08,.08); toast(F?'Square made. Drag it, or double tap to extrude':'Square made'); changed(); }
 // is there paper under this spot of the view?
 function onPaper(px,py){ const [a,b]=toMm(px,py), p={x:a,y:b}; return GEO.T.some(t=>{ const [A,B,C]=t.map(id=>GEO.P2.get(id)); const ar=orient(A,B,C); if(Math.abs(ar)<1e-6) return false;
@@ -484,11 +613,26 @@ function cutLoop(N,c,span){ const sd=id=>dot3(N,GEO.pos.get(id))-c, at=new Map()
     const RU=restOf(byId(u)), RV=restOf(byId(v)); let r=RU.map((x,i)=>x+(RV[i]-x)*s);
     const ts=M.get(k)||[], fs=[...new Set(ts.map(i=>GEO.triPanel[i]))]; let on;
     // crossing a flat spot inside one side needs no corner: the loop runs straight on through
-    if(fs.length===1&&ts.length===2&&dot3(triNormal(GEO.T[ts[0]]),triNormal(GEO.T[ts[1]]))>0.9995){ at.set(k,'v'+k); return 'v'+k; }
-    if(fs.length>1){ const ei=EDGES.findIndex((e,ei)=>edgeOnPanel(ei,fs[0])&&edgeOnPanel(ei,fs[1])); if(ei<0){ at.set(k,null); return null; } on={t:'e',e:ei}; r=onEdge(ei,r); }
-    else { on={t:'f',f:fs[0]}; r=onSide(fs[0],r); }
-    r=r.map(x=>Math.round(x*100)/100); const ex=near(r); if(ex){ at.set(k,ex.id); return ex.id; }
-    const q=mk(p,on); q.r=r; q.m=true; made++; at.set(k,q.id); return q.id; };
+    if(fs.length===1&&ts.length===2&&!GEO.foldE.has(k)&&dot3(triNormal(GEO.T[ts[0]]),triNormal(GEO.T[ts[1]]))>0.99999){ at.set(k,'v'+k); return 'v'+k; }
+    // a hair from either end of this crease: the loop runs through that corner (two corners that close can't be told apart)
+    { const LQ=Math.hypot(Q[0]-P[0],Q[1]-P[1],Q[2]-P[2]), LR=Math.hypot(RV[0]-RU[0],RV[1]-RU[1],RV[2]-RU[2]); if(s*LQ<0.5&&s*LR<1){ at.set(k,u); return u; } if((1-s)*LQ<0.5&&(1-s)*LR<1){ at.set(k,v); return v; } }
+    if(fs.length>1){ const ei=EDGES.findIndex((e,ei)=>edgeOnPanel(ei,fs[0])&&edgeOnPanel(ei,fs[1])); if(ei<0){ at.set(k,null); return null; } on={t:'e',e:ei}; r=onEdge(ei,r,0.002); }
+    else { on={t:'f',f:fs[0]}; r=onSide(fs[0],r,0.1); }
+    r=r.map(x=>Math.round(x*100)/100);
+    // with Mirror on, a crossing a hair from the middle line goes on it (its twin would sit right on top of it)
+    // (it slides along the crease it's on to where that crease meets the middle, so the paper keeps its shape)
+    if(S.mirror&&canMid(on)&&Math.abs(p[0])>=0.05&&Math.abs(p[0])<0.5&&Math.abs(Q[0]-P[0])>1e-6){ const s0=-P[0]/(Q[0]-P[0]);
+      if(s0>-1e-6&&s0<1+1e-6){ const p0=P.map((x,i)=>Math.round((x+(Q[i]-x)*s0)*100)/100); if(Math.hypot(...p0.map((x,i)=>x-p[i]))<0.6){ p0[0]=0; for(let i=0;i<3;i++) p[i]=p0[i];
+        r=RU.map((x,i)=>x+(RV[i]-x)*s0); r=(on.t==='e'?onEdge(on.e,r,0.002):onSide(on.f,r,0.1)).map(x=>Math.round(x*100)/100); } } }
+    // a corner a hair away (under half a mm, like one this loop just made across a crease right next to it) is the same spot
+    // (on the middle line that goes for a middle corner a little further along the paper too: the cut and its mirror image meet there)
+    { let best=null,bd=1; for(const o of S.pts){ if(!live(o)) continue; const d3=Math.hypot(...o.p.map((x,i)=>x-p[i])), mid=S.mirror&&Math.abs(p[0])<0.05&&isMid(o);
+        if(d3>=0.5||Math.hypot(...restOf(o).map((x,i)=>x-r[i]))>=(mid||d3<0.05?2:1)) continue; const d=d3; if(d<bd){ bd=d; best=o; } }
+      if(best){ at.set(k,best.id); return best.id; } }
+    // a pencil mark right there becomes the loop's corner
+    const ex=near(r);
+    if(ex&&!live(ex)){ ex.on=on; ex.r=r; ex.p=p; ex.m=true; glide(ex); at.set(k,ex.id); return ex.id; }
+    const q=mk(p,on); q.r=r; q.m=true; q.mid=S.mirror&&canMid(on)&&Math.abs(p[0])<0.05?1:0; if(q.mid) q.p[0]=0; made++; at.set(k,q.id); return q.id; };
   GEO.T.forEach(t=>{ const ids=[];
     for(const id of t) if(Math.abs(sd(id))<eps&&span(GEO.pos.get(id))) ids.push(id);
     for(let j=0;j<3;j++){ const u=t[j], v=t[(j+1)%3], su=sd(u), sv=sd(v); if(Math.abs(su)<eps||Math.abs(sv)<eps||(su>0)===(sv>0)) continue; const id=hit(u,v); if(id) ids.push(id); }
@@ -496,8 +640,8 @@ function cutLoop(N,c,span){ const sd=id=>dot3(N,GEO.pos.get(id))-c, at=new Map()
   const adj=new Map(); for(const [a,b] of add){ for(const [x,y] of [[a,b],[b,a]]){ if(!adj.has(x)) adj.set(x,[]); adj.get(x).push(y); } }
   const real=x=>typeof x==='number', links=[];
   for(const [a,ns] of adj){ if(!real(a)) continue; for(let n of ns){ let prev=a, guard=0; while(n!==undefined&&!real(n)&&guard++<500){ const nx=(adj.get(n)||[]).find(y=>y!==prev); prev=n; n=nx; } if(real(n)&&n!==a) links.push([a,n]); } }
-  const same=(x,a,b)=>(x[0]===a&&x[1]===b)||(x[0]===b&&x[1]===a); S.folds=S.folds||[];
-  for(const [a,b] of links){ const A=byId(a), B=byId(b); if(!A||!B||sharedPanel(A,B)<0||S.folds.some(x=>same(x,a,b))) continue; S.folds.push([a,b]); A.m=B.m=true; }
+  // the loop's folds go in like folds you draw on the paper (corners wherever they'd cut across a bend), so the shape stays exactly as it is
+  solve(); for(const [a,b] of links){ const A=byId(a), B=byId(b); if(!A||!B||sharedPanel(A,B)<0) continue; if(foldIn(a,b,true,0)) solve(); }
   return made; }
 // a hand-drawn cut line snaps level, upright or to 45° when it's close
 function snapLine(d){ const dx=d.fx-d.sx, dy=d.fy-d.sy, L=Math.hypot(dx,dy); if(L<10) return; const an=Math.atan2(dy,dx), st=Math.PI/4, sn=Math.round(an/st)*st; if(Math.abs(an-sn)<0.12){ d.fx=d.sx+Math.cos(sn)*L; d.fy=d.sy+Math.sin(sn)*L; } }
@@ -508,15 +652,22 @@ function loopCut(d){ snapLine(d); const V=VW, [a0,b0]=toMm(d.sx,d.sy), [a1,b1]=t
   push(); const n0=S.pts.length; let made=cutLoop(N,c,span);
   // Mirror on and a slanted cut: the other half gets the mirrored loop too
   if(S.mirror&&Math.abs(N[0])>1e-3){ solve(); made+=cutLoop([-N[0],N[1],N[2]],c,X=>span([-X[0],X[1],X[2]])); }
-  if(S.mirror) for(const q of S.pts.slice(n0)){ if(q.tw||Math.abs(q.r[0])<0.5) continue; const t=S.pts.find(o=>o!==q&&!o.tw&&o.on.t!=='c'&&Math.hypot(o.r?o.r[0]+q.r[0]:9,o.r?o.r[1]-q.r[1]:9,o.r?o.r[2]-q.r[2]:9)<0.6); if(t){ q.tw=t.id; t.tw=q.id; } }
+  ensureTwins(S.pts.slice(n0)); made=S.pts.length-n0;
   if(!made&&S.pts.length===n0){ const o=JSON.parse(undoS[undoS.length-1]); if(JSON.stringify(o.S.folds||[])===JSON.stringify(S.folds||[])){ undoS.pop(); S=o.S; nextId=o.nextId; toast('Draw right across the shape to cut a loop'); changed(true); return; } }
   selId=null; pulse=1; if(sound) blip(520,.09,.08); toast('Edge loop: '+made+' new corner'+(made===1?'':'s')+'. Pull them to shape it.'); changed(); }
 // hold on bare paper, then drag: draw a fold anywhere. Its ends become corners (or snap to ones already there)
-function drawFold(d){ if(!onPaper(d.sx,d.sy)) return loopCut(d); push(); const A=addPoint(d.sx,d.sy,true); if(A) changed(true);
+function drawFold(d){ if(!onPaper(d.sx,d.sy)) return loopCut(d); push(); const n0=S.pts.length; const A=addPoint(d.sx,d.sy,true); if(A) changed(true);
   const B=d.link?byId(d.link):A?addPoint(d.fx,d.fy,true):null;
-  if(!A||!B||A===B){ const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; toast('Draw the fold across the paper'); changed(); return; }
-  if(sharedPanel(A,B)<0){ const o=JSON.parse(undoS.pop()); S=o.S; nextId=o.nextId; toast('A fold stays on one side of the box'); changed(); return; }
-  selId=null; changed(true); makeFold(A.id,B.id); }
+  if(!A||!B||A===B){ abandon('Draw the fold across the paper'); return; }
+  if(sharedPanel(A,B)<0){ abandon('A fold stays on one side of the box'); return; }
+  for(const q of S.pts.slice(n0)) snapOntoFold(q);
+  selId=null; changed(true); makeFold(A.id,B.id,true); }
+// a fold drawn from right beside one of your folds starts on it (a clean T, not a sliver)
+function snapOntoFold(q){ if(!q||q.on.t!=='f'||ACT.has(q.id)) return; const f=q.on.f, h=home(q,f); let best=null, bd=2;
+  for(const k of GEO.foldE.keys()){ const [u,v]=k.split(',').map(Number), U=byId(u), V=byId(v); if(!U||!V||!panelsOf(U).includes(f)||!panelsOf(V).includes(f)) continue;
+    const HU=home(U,f), HV=home(V,f), L2=(HV.x-HU.x)**2+(HV.y-HU.y)**2; if(L2<1e-9) continue; const t=((h.x-HU.x)*(HV.x-HU.x)+(h.y-HU.y)*(HV.y-HU.y))/L2, L=Math.sqrt(L2);
+    if(t*L<2||(1-t)*L<2) continue; const d=segD(h,HU,HV); if(d<bd){ bd=d; best={U,V,t}; } }
+  if(!best||bd<0.01) return; const RU=restOf(best.U), RV=restOf(best.V); q.r=RU.map((v,k)=>rnd2(v+(RV[k]-v)*best.t)); q.p=best.U.p.map((v,k)=>rnd2(v+(best.V.p[k]-v)*best.t)); }
 // a folded corner can only move the way its folds let it: every face it touches has to stay flat.
 // One flat face with 4+ corners keeps it on that face's plane, two keep it on a line, three lock it.
 function planeOf(P){ let best=null,ba=1e-3; for(let i=0;i<P.length;i++) for(let j=i+1;j<P.length;j++) for(let k=j+1;k<P.length;k++){ const n=nrm3(P[i],P[j],P[k]); if(!n) continue;
@@ -544,15 +695,21 @@ function foldsAllow(q,a,b,dz){
 // a loose corner slides on its own side of the paper; it can't leave the paper until it's folded in
 function slideLoose(q,a,b){ const fs=q.on.t==='f'?[q.on.f]:panelsOf(q), p={x:a,y:b}; let hit=null;
   GEO.T.forEach((t,i)=>{ if(!fs.includes(GEO.triPanel[i])) return; if(dot3(triNormal(t),VW.d)<=0.05) return; const [A,B,C]=t.map(id=>GEO.P2.get(id)); const ar=orient(A,B,C); if(Math.abs(ar)<1e-6) return;
-    const u=orient(B,C,p)/ar, v=orient(C,A,p)/ar, w=orient(A,B,p)/ar; if(u<-1e-6||v<-1e-6||w<-1e-6) return; const z=u*A.z+v*B.z+w*C.z; if(!hit||z>hit.z) hit={t,u,v,w,z}; });
-  if(!hit) return; const [RA,RB,RC]=hit.t.map(id=>restOf(byId(id))); let r=[0,1,2].map(k=>hit.u*RA[k]+hit.v*RB[k]+hit.w*RC[k]);
-  r=q.on.t==='e'?onEdge(q.on.e,r):onSide(q.on.f,r); if(r.every((v,k)=>v===q.r[k])) return;
+    const u=orient(B,C,p)/ar, v=orient(C,A,p)/ar, w=orient(A,B,p)/ar; if(u<-1e-6||v<-1e-6||w<-1e-6) return; const z=u*A.z+v*B.z+w*C.z; if(!hit||z>hit.z) hit={t,u,v,w,z,i}; });
+  if(!hit) return; const f=GEO.triPanel[hit.i], [RA,RB,RC]=hit.t.map(id=>restOf(byId(id))), [PA,PB,PC]=hit.t.map(id=>byId(id).p);
+  let r=[0,1,2].map(k=>hit.u*RA[k]+hit.v*RB[k]+hit.w*RC[k]), p3=[0,1,2].map(k=>hit.u*PA[k]+hit.v*PB[k]+hit.w*PC[k]);
   const t=twinOf(q);
+  // with Mirror on, a mark on the middle line stays on it; one slid onto the middle line meets its twin there and the two become one
+  let merge=false;
+  if(S.mirror&&canMid(q.on)&&(isMid(q)||(t&&Math.abs(p3[0])<1.5))){ const p0=[0,p3[1],p3[2]], r0=restAt(f,p0); if(r0){ r=r0; p3=p0; merge=!!t; } else if(isMid(q)) return; }
+  r=q.on.t==='e'?onEdge(q.on.e,r):onSide(q.on.f,r); if(r.every((v,k)=>v===q.r[k])) return;
+  p3=ride(GEO.lay,f,{x:dot3(r,PANELS[f].u),y:dot3(r,PANELS[f].v)})||p3;
   // never slide onto another corner (two corners on one spot would tear the paper)
-  if(S.pts.some(o=>o!==q&&o!==t&&Math.hypot(...restOf(o).map((v,k)=>v-r[k]))<2)) return;
-  // with Mirror on, a mark slid onto the middle line meets its twin there and the two become one
-  if(t&&Math.abs(r[0])<1.5){ r[0]=0; S.pts=S.pts.filter(o=>o!==t); delete q.tw; if(t.id===selId) selId=q.id; }
-  q.r=r; if(t&&q.tw) t.r=[-r[0],r[1],r[2]]; tick(); changed(true); }
+  const clash=x=>S.pts.some(o=>o!==q&&o!==t&&Math.hypot(...restOf(o).map((v,k)=>v-x[k]))<2); if(clash(r)) return;
+  // its twin follows, onto the mirror-image spot of the paper
+  const sp=t&&!merge?twinSpot(q.on,p3):null; if(sp&&clash(sp.r)) return;
+  if(merge){ S.pts=S.pts.filter(o=>o!==t); delete q.tw; q.mid=1; if(t.id===selId) selId=q.id; }
+  q.r=r; if(t&&!merge){ if(sp){ t.r=sp.r; } else { delete q.tw; delete t.tw; } } tick(); changed(true); }
 // hold one of your folds to remove it
 let selFold=null;
 function foldNear(px,py){ let best=null,bd=16;
@@ -564,7 +721,7 @@ function foldNear(px,py){ let best=null,bd=16;
 // hold a red bend: only the four corners on either side of that line move, just enough to lay those two triangles flat
 // (the whole side used to be flattened, which squashed every pulled corner on it)
 function flattenBend(a,b){ const M=emap(GEO.T), pairs=[[a,b]];
-  if(S.mirror){ const A=byId(a), B=byId(b), ta=A&&twinOf(A), tb=B&&twinOf(B); if(ta&&tb&&!(ta.id===a&&tb.id===b)&&!(ta.id===b&&tb.id===a)) pairs.push([ta.id,tb.id]); }
+  if(S.mirror){ const A=byId(a), B=byId(b), ta=A&&mirrorOf(A), tb=B&&mirrorOf(B); if(ta&&tb&&!(ta.id===a&&tb.id===b)&&!(ta.id===b&&tb.id===a)) pairs.push([ta.id,tb.id]); }
   for(const [u,v] of pairs){ const ts=M.get(ek(u,v)); if(!ts||ts.length!==2) continue; const ids=[...new Set([...GEO.T[ts[0]],...GEO.T[ts[1]]])].map(byId);
     for(let it=0;it<20;it++){ const {n,c}=fitPlane(ids.map(q=>q.p)); let w=0; for(const q of ids){ const e=dot3(n,q.p)-c; w=Math.max(w,Math.abs(e)); q.p=q.p.map((x,k)=>x-n[k]*e); } if(w<0.01) break; } }
   symm(true); for(const q of S.pts) q.p=q.p.map(v=>Math.round(v*100)/100); }
@@ -576,38 +733,82 @@ function fitPlane(P){ const c=[0,1,2].map(k=>P.reduce((s,p)=>s+p[k],0)/P.length)
   return {n:v,c:dot3(v,c)}; }
 // with Mirror on, twin corners always sit exactly opposite each other (avg: meet halfway, else the first one leads)
 function symm(avg){ if(!S.mirror) return; for(const q of S.pts){ const t=q.tw&&byId(q.tw); if(!t||t.id<q.id||!ACT.has(q.id)||!ACT.has(t.id)) continue;
-    const m=[-t.p[0],t.p[1],t.p[2]]; if(Math.hypot(m[0]-q.p[0],m[1]-q.p[1],m[2]-q.p[2])<0.01) continue;
+    const m=[-t.p[0],t.p[1],t.p[2]], e=Math.hypot(m[0]-q.p[0],m[1]-q.p[1],m[2]-q.p[2]); if(e<0.01) continue;
+    // twins that aren't mirror images (the paper there wasn't) go their own ways rather than one jumping across
+    if(!avg&&e>0.05){ delete q.tw; delete t.tw; continue; }
     const c=avg?q.p.map((v,k)=>(v+m[k])/2):q.p.slice(); q.p=c; t.p=[-c[0],c[1],c[2]]; } }
 function flatten(){ for(let it=0;it<40;it++){ let worst=0;
     for(const r of GEO.regions){ if(r.length<4) continue; const Q=r.map(byId).filter(q=>ACT.has(q.id)); const {n,c}=fitPlane(Q.map(q=>q.p));
       for(const q of Q){ const e=dot3(n,q.p)-c; worst=Math.max(worst,Math.abs(e)); if(Math.abs(e)>1e-4) q.p=q.p.map((v,k)=>v-n[k]*e); } }
     symm(true); if(worst<0.01) break; }
   for(const q of S.pts) q.p=q.p.map(v=>Math.round(v*100)/100); }
+// hold a fold to remove it: the piece you hold goes (between the two corners either side of your finger), the rest of that fold stays
+function cutFold(a,b){ const o=GEO.foldE.get(ek(a,b)); if(o===undefined||!S.folds[o]) return false; const [c,d]=S.folds[o], C=byId(c), D=byId(d), f=sharedPanel(C,D); S.folds.splice(o,1); if(f<0) return true;
+  const HC=home(C,f), HD=home(D,f), L2=(HD.x-HC.x)**2+(HD.y-HC.y)**2||1, tOf=id=>{ const h=home(byId(id),f); return ((h.x-HC.x)*(HD.x-HC.x)+(h.y-HC.y)*(HD.y-HC.y))/L2; };
+  const [p,q]=tOf(a)<tOf(b)?[a,b]:[b,a]; if(p!==c) S.folds.push([c,p]); if(q!==d) S.folds.push([q,d]); return true; }
 function deleteFold(){ if(!selFold) return; const [a,b]=selFold, A=byId(a), B=byId(b); const ta=A&&mirrorOf(A), tb=B&&mirrorOf(B);
-  const same=(x,p,q)=>(x[0]===p&&x[1]===q)||(x[0]===q&&x[1]===p);
-  push(); S.folds=(S.folds||[]).filter(x=>!same(x,a,b)&&!(ta&&tb&&same(x,ta.id,tb.id))); selFold=null;
+  const was=onFolds(); push(); cutFold(a,b); solve(); if(ta&&tb&&ek(ta.id,tb.id)!==ek(a,b)) cutFold(ta.id,tb.id); solve(); tidy(was); selFold=null;
   if(sound) blip(300,.12,.1); pulse=1; toast('Fold removed'); changed(); }
 function panelsOf(q){ if(q.on.t==='f') return [q.on.f]; return PANELS.map((P,f)=>f).filter(f=>q.on.t==='c'?cornerOnPanel(q.on.c,f):edgeOnPanel(q.on.e,f)); }
 function sharedPanel(a,b){ const B=panelsOf(b); const c=panelsOf(a).filter(f=>B.includes(f)); return c.length?c[0]:-1; }
-// drag one corner onto another: the paper folds along the line between them
-function makeFold(a,b,quiet){
-  const A=byId(a), B=byId(b), f=sharedPanel(A,B);
-  if(f<0){ undoS.pop(); toast('Different sides: add a corner on the box edge and fold to it'); changed(); return; }
-  const same=(x,p,q)=>(x[0]===p&&x[1]===q)||(x[0]===q&&x[1]===p);
-  let F=(S.folds||[]).slice();
-  const add=(p,q,f)=>{ const P=byId(p),Q=byId(q), hp=home(P,f), hq=home(Q,f);
-    F=F.filter(x=>{ if(same(x,p,q)) return false; const X=byId(x[0]),Y=byId(x[1]); if(!X||!Y||sharedPanel(X,Y)!==f) return true; if([p,q].includes(x[0])||[p,q].includes(x[1])) return true; return !cross(hp,hq,home(X,f),home(Y,f)); });
-    F.push([p,q]); };
-  const tw=mirrorOf;
-  const ta=tw(A), tb=tw(B);
-  if(!quiet&&F.some(x=>same(x,a,b))){ F=F.filter(x=>!same(x,a,b)&&!(ta&&tb&&same(x,ta.id,tb.id))); S.folds=F; pop(); toast('Fold let go'); changed(); return; }
-  add(a,b,f); if(ta&&tb&&!(ta.id===a&&tb.id===b)&&!(ta.id===b&&tb.id===a)){ const tf=sharedPanel(ta,tb); if(tf>=0&&!(tf===f&&cross(home(A,f),home(B,f),home(ta,f),home(tb,f)))) add(ta.id,tb.id,tf); }
-  S.folds=F; solve();
-  const ok=emap(GEO.T).has(ek(a,b));
-  if(quiet) return;
-  if(!ok){ S.folds=S.folds.filter(x=>!same(x,a,b)); toast('Can’t fold there'); changed(); return; }
+// drag one corner onto another: the paper folds along the line between them (keep: drawn on the paper, so the shape stays as it is)
+function makeFold(a,b,keep){
+  const A=byId(a), B=byId(b);
+  if(!A||!B||sharedPanel(A,B)<0){ abandon('Different sides: add a corner on the box edge and fold to it'); return; }
+  const same=(x,p,q)=>(x[0]===p&&x[1]===q)||(x[0]===q&&x[1]===p), ta=mirrorOf(A), tb=mirrorOf(B);
+  // folding along a fold that's already there lets it go
+  if(!keep&&(S.folds||[]).some(x=>same(x,a,b))){ S.folds=S.folds.filter(x=>!same(x,a,b)&&!(ta&&tb&&same(x,ta.id,tb.id))); pop(); toast('Fold let go'); changed(); return; }
+  if(!addFolds([[a,b]],keep)){ abandon('Can’t fold there'); return; }
   pop(); toast('Fold made'); changed(); }
-const mirrorOf=q=>twinOf(q)||(S.mirror&&Math.abs(q.p[0])>0.5?S.pts.find(r=>r!==q&&Math.abs(r.p[0]+q.p[0])<0.5&&Math.abs(r.p[1]-q.p[1])<0.5&&Math.abs(r.p[2]-q.p[2])<0.5):null);
+// ---------- folds that cross ----------
+// paper creases can cross: where a new fold crosses one of your folds a corner goes in at the crossing, so neither fold is lost.
+// keep: it also gets a corner wherever it crosses a bend in the paper, so drawing a fold never changes the shape
+const rnd2=v=>Math.round(v*100)/100;
+function crossings(a,b,f,keep,midF){ const A=byId(a), B=byId(b), HA=home(A,f), HB=home(B,f), M=emap(GEO.T), out=[];
+  for(const [k,ts] of M){ if(ts.length!==2||GEO.triPanel[ts[0]]!==f||GEO.triPanel[ts[1]]!==f) continue; const [u,v]=k.split(',').map(Number); if(u===a||u===b||v===a||v===b) continue;
+    const fold=GEO.foldE.has(k); if(!fold&&!(keep&&dot3(triNormal(GEO.T[ts[0]]),triNormal(GEO.T[ts[1]]))<0.99999)) continue;
+    const U=byId(u), V=byId(v), HU=home(U,f), HV=home(V,f); if(!cross(HA,HB,HU,HV)) continue;
+    const ex=HB.x-HA.x, ey=HB.y-HA.y, fx=HV.x-HU.x, fy=HV.y-HU.y, den=ex*fy-ey*fx; if(Math.abs(den)<1e-12) continue;
+    const wx=HU.x-HA.x, wy=HU.y-HA.y, t=(wx*fy-wy*fx)/den, s=(wx*ey-wy*ex)/den, LA=Math.hypot(ex,ey);
+    if(t*LA<0.05||(1-t)*LA<0.05) continue; // it crosses right at one of its own ends: nothing to add
+    // a bend crossed a hair from one end needs no corner of its own (it would sit on top of that end)
+    if(!fold&&((t*LA<1&&Math.hypot(...[0,1,2].map(k=>U.p[k]+(V.p[k]-U.p[k])*s-A.p[k]))<0.5)||((1-t)*LA<1&&Math.hypot(...[0,1,2].map(k=>U.p[k]+(V.p[k]-U.p[k])*s-B.p[k]))<0.5))) continue;
+    const RU=restOf(U), RV=restOf(V), r=RU.map((x,k)=>rnd2(x+(RV[k]-x)*s)), p=U.p.map((x,k)=>rnd2(x+(V.p[k]-x)*s));
+    // with Mirror on, where a fold crosses its own twin is the middle line (and on it the crossing corner sits)
+    const mid=S.mirror&&canMid({t:'f',f})&&(Math.abs(p[0])<0.05||(fold&&!!midF&&midF.has(GEO.foldE.get(k)))); if(mid) p[0]=0;
+    out.push({t,r,p,fold,mid}); }
+  return out.sort((x,y)=>x.t-y.t); }
+// put one fold in; returns the corners along it, in order (null if it can't be made)
+function foldIn(a,b,keep,depth,midF){ const A=byId(a), B=byId(b); if(!A||!B||a===b) return null; const f=sharedPanel(A,B); if(f<0) return null;
+  if((S.folds||[]).some(x=>(x[0]===a&&x[1]===b)||(x[0]===b&&x[1]===a))) return [a,b];
+  const xs=crossings(a,b,f,keep,midF), near=r=>S.pts.find(o=>o!==A&&o!==B&&Math.hypot(...restOf(o).map((v,k)=>v-r[k]))<2);
+  // one of your folds crossed a hair from an end that's only a pencil mark: the mark moves onto that fold (the new fold starts there)
+  { const HA=home(A,f), HB=home(B,f), LA=Math.hypot(HB.x-HA.x,HB.y-HA.y);
+    for(const [E,end] of [[A,0],[B,1]]){ if(live(E)||depth>=6) continue; const x=xs.find(x=>x.fold&&(end?1-x.t:x.t)*LA<1);
+      if(x){ Object.assign(E,{on:{t:'f',f},r:x.r,p:x.p.slice(),mid:x.mid?1:0}); return foldIn(a,b,keep,depth+1,midF); } } }
+  // a corner already sits right where it crosses: run the fold through that corner instead (a hair's bend, no extra corner)
+  for(const x of xs){ const o=near(x.r); if(o&&live(o)&&depth<6){ const e=Math.hypot(...o.p.map((v,k)=>v-x.p[k])); if(e<1.5||Math.hypot(...restOf(o).map((v,k)=>v-x.r[k]))<1){
+      const c1=foldIn(a,o.id,keep,depth+1,midF), c2=c1&&foldIn(o.id,b,keep,depth+1,midF); return c1&&c2?[...c1,...c2.slice(1)]:null; } } }
+  const ids=[a];
+  for(const x of xs){ const o=near(x.r);
+    if(o&&!live(o)){ if(o.tw){ const t=byId(o.tw); if(t) delete t.tw; delete o.tw; } Object.assign(o,{on:{t:'f',f},r:x.r,p:x.p,m:true,mid:x.mid?1:0}); if(keep) glide(o); ids.push(o.id); continue; } // a pencil mark right there becomes the crossing corner
+    const q=mk(x.p,{t:'f',f}); q.r=x.r; q.m=true; q.mid=x.mid?1:0; q.xc=1; ids.push(q.id); }
+  ids.push(b); activate(A); activate(B); S.folds=S.folds||[]; S.folds.push([a,b]); return ids; }
+// add folds (with Mirror on, their twins too: the mirror image, corner for corner, of the fold as you see it); false if one can't be made
+function addFolds(pairs,keep){ const n0=S.pts.length, f0=(S.folds||[]).length, chains=[];
+  for(const [a,b] of pairs){ const c=foldIn(a,b,keep,0); if(!c) return false; chains.push(c); solve(); }
+  if(S.mirror){ const first=new Set(); for(let i=f0;i<S.folds.length;i++) first.add(i);
+    for(const c of chains){
+      const tc=c.map(id=>{ const q=byId(id); let t=mirrorOf(q); if(t||q.on.t==='c') return t; const sp=twinSpot(q.on,q.p); if(!sp) return null;
+        t=S.pts.find(o=>o!==q&&!o.tw&&o.on.t!=='c'&&Math.hypot(...o.p.map((v,k)=>v-sp.p[k]))<0.05); if(!t){ t=mk(sp.p,sp.on); t.r=sp.r; t.mid=0; if(q.xc) t.xc=1; }
+        t.m=true; q.tw=t.id; t.tw=q.id; return t; });
+      const ta=tc[0], tb=tc[tc.length-1];
+      if(!ta||!tb||(ta.id===c[0]&&tb.id===c[c.length-1])||(ta.id===c[c.length-1]&&tb.id===c[0])) continue; // no twin, or the fold is its own mirror image
+      const path=tc.every(t=>t)?tc:[ta,tb];
+      for(let i=0;i+1<path.length;i++){ if(path[i]===path[i+1]) continue; if(!foldIn(path[i].id,path[i+1].id,keep,0,first)) return false; solve(); } } }
+  ensureTwins(S.pts.slice(n0)); solve(); for(let i=f0;i<S.folds.length;i++) if(GEO.badF.has(i)) return false; return true; }
+// a corner's mirror twin; a corner on the middle line is its own twin
+const mirrorOf=q=>twinOf(q)||(S.mirror&&isMid(q)?q:null)||(S.mirror&&Math.abs(q.p[0])>0.5?S.pts.find(r=>r!==q&&Math.abs(r.p[0]+q.p[0])<0.5&&Math.abs(r.p[1]-q.p[1])<0.5&&Math.abs(r.p[2]-q.p[2])<0.5):null);
 function segD(p,a,b){ const dx=b.x-a.x,dy=b.y-a.y,L=dx*dx+dy*dy; const t=L?Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/L)):0; return Math.hypot(p.x-a.x-dx*t,p.y-a.y-dy*t); }
 
 // ---------- 3D ----------
@@ -689,15 +890,35 @@ $('bMirror').onclick=()=>{ push(); S.mirror=!S.mirror;
     const mir=(q,t)=>Math.abs(t.p[0]+q.p[0])<0.5&&Math.abs(t.p[1]-q.p[1])<0.5&&Math.abs(t.p[2]-q.p[2])<0.5;
     for(const q of S.pts){ if(!q.tw) continue; const t=byId(q.tw); if(!t||!mir(q,t)){ delete q.tw; if(t&&t.tw===q.id) delete t.tw; } }
     // pair up corners that already mirror each other
-    for(const q of S.pts){ if(q.tw||Math.abs(q.p[0])<0.5) continue; const t=S.pts.find(r=>r!==q&&!r.tw&&(r.on.t==='c')===(q.on.t==='c')&&Math.abs(r.p[0]+q.p[0])<0.5&&Math.abs(r.p[1]-q.p[1])<0.5&&Math.abs(r.p[2]-q.p[2])<0.5); if(t){q.tw=t.id;t.tw=q.id;} } }
+    for(const q of S.pts){ if(!q.tw&&q.on.t!=='c'&&canMid(q.on)&&Math.abs(q.p[0])<0.05) q.mid=1; }
+    for(const q of S.pts){ if(q.tw||Math.abs(q.p[0])<0.5) continue; const t=S.pts.find(r=>r!==q&&!r.tw&&(r.on.t==='c')===(q.on.t==='c')&&Math.abs(r.p[0]+q.p[0])<0.5&&Math.abs(r.p[1]-q.p[1])<0.5&&Math.abs(r.p[2]-q.p[2])<0.5); if(t){q.tw=t.id;t.tw=q.id;} }
+    // and a corner with nothing opposite gets a twin there (where the paper is the mirror image), so pulling anything pulls both sides
+    ensureTwins(S.pts.filter(q=>ACT.has(q.id)&&!q.tw&&q.on.t!=='c')); }
   toast(S.mirror?'Mirror on: left and right move together':'Mirror off'); changed(); };
-$('bDel').onclick=()=>{ if(selFold){ deleteFold(); return; } const q=selId&&byId(selId); if(!q) return;
+// corners that were only there for folds that are gone (made where they crossed another fold), now on no fold and lying flat, go too: they shape nothing
+// (one with a twin goes only along with its twin)
+const onFolds=()=>new Set([...GEO.foldE.keys()].flatMap(k=>k.split(',').map(Number)));
+function tidy(was){ const now=onFolds(), ends=new Set((S.folds||[]).flat()), M=new Map();
+  GEO.T.forEach(t=>t.forEach(id=>{ if(!M.has(id)) M.set(id,[]); M.get(id).push(triNormal(t)); }));
+  const loose=id=>{ const q=byId(id); if(!q||!q.xc||q.on.t==='c'||now.has(id)||ends.has(id)) return false; const N=M.get(id)||[]; return N.length>0&&N.every(n=>dot3(n,N[0])>0.99999); };
+  const go=new Set([...was].filter(id=>loose(id)&&(()=>{ const t=twinOf(byId(id)); return !t||t.id===id||loose(t.id); })()));
+  for(const id of [...go]){ const t=twinOf(byId(id)); if(t) go.add(t.id); }
+  if(!go.size) return; S.pts=S.pts.filter(q=>!go.has(q.id)); for(const q of S.pts) if(q.tw&&go.has(q.tw)) delete q.tw; solve(); }
+$('bDel').onclick=()=>{ if(selFold){ deleteFold(); return; } const q=selId&&byId(selId); if(!q) return; const was=onFolds();
   if(q.on.t==='c'){ push(); q.p=CORNERS[q.on.c].slice(); const t=twinOf(q); if(t) t.p=CORNERS[t.on.c].slice(); pop(); changed(); toast('Box corner back in place'); return; } push(); const t=twinOf(q);
   // a corner in the middle of a fold line goes, but the fold stays: the two folds through it join into one
-  const through=id=>{ const F=S.folds||[], at=F.filter(f=>f.includes(id)); if(at.length!==2) return; const [a,b]=at.map(f=>f[0]===id?f[1]:f[0]);
-    S.folds=F.filter(f=>!f.includes(id)); const A=byId(a), B=byId(b); if(a!==b&&A&&B&&sharedPanel(A,B)>=0&&!S.folds.some(f=>f.includes(a)&&f.includes(b))) S.folds.push([a,b]); };
-  through(q.id); if(t&&t.on.t!=='c') through(t.id);
-  S.pts=S.pts.filter(r=>r!==q&&(r!==t||r.on.t==='c')); selId=null; pop(); changed(); };
+  const through=id=>{ const F=S.folds||[], at=F.filter(f=>f.includes(id)); if(at.length!==2) return null; const [a,b]=at.map(f=>f[0]===id?f[1]:f[0]);
+    S.folds=F.filter(f=>!f.includes(id)); const A=byId(a), B=byId(b); return a!==b&&A&&B&&sharedPanel(A,B)>=0&&!S.folds.some(f=>f.includes(a)&&f.includes(b))?[a,b]:null; };
+  const J=[through(q.id),t&&t.on.t!=='c'?through(t.id):null].filter(Boolean), gone=[q,t].filter(r=>r&&r.on.t!=='c').map(r=>restOf(r).slice());
+  const bad0=GEO.badF.size; S.pts=S.pts.filter(r=>r!==q&&(r!==t||r.on.t==='c')); const n0=S.pts.length;
+  // a corner where folds cross can't go (the folds would cross with no corner)
+  if(!J.length){ solve(); if(GEO.badF.size>bad0){ abandon('Folds cross here, so this corner stays'); return; } }
+  // the joined fold goes in like any fold: where it crosses another of your folds a corner goes in, so neither is lost
+  if(J.length){ solve(); for(const [a,b] of J){ if(!foldIn(a,b,false,0)){ abandon('Can’t remove that corner'); return; } solve(); }
+    ensureTwins(S.pts.slice(n0)); solve(); if(GEO.badF.size>bad0){ abandon('Folds cross here, so this corner stays'); return; }
+    // folds still cross right there: the corner has to stay
+    if(S.pts.slice(n0).some(r=>gone.some(g=>Math.hypot(...restOf(r).map((v,k)=>v-g[k]))<2))){ abandon('Folds cross here, so this corner stays'); return; } }
+  tidy(was); selId=null; pop(); changed(); };
 $('bClear').onclick=()=>{ push(); newBox(); selId=null; changed(); toast('Fresh box. Undo brings yours back.'); };
 document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='z'){e.preventDefault();undo();} if((e.key==='Delete'||e.key==='Backspace')&&!$('bDel').disabled) $('bDel').click(); });
 $('snd').textContent=sound?'🔊':'🔇';
