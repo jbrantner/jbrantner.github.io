@@ -88,7 +88,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     ok(enc.length===1 && L.base.str===0.5 && L.base.runs.length >= 1, 'it starts from the real frames (VAE-encoded) at Medium 0.5 (' + JSON.stringify({sch, spl}) + ')'); }
   { const cm = nodes(G, 'ColorMatch'); ok(cm.length===12 && cm[0].inputs.strength===1 && cm[11].inputs.strength===1 && cm[5].inputs.strength < 0.2 && cm[6].inputs.strength < 0.2, '🎨 its first and last 1.5 s ease into the colour of the clips on each side (' + JSON.stringify(cm.map(n => n.inputs.strength)) + ')'); }
   { const keep = Object.values(G).filter(n => n.class_type==='ImageFromBatch' && n.inputs.batch_index===22 && n.inputs.length===L.B); ok(keep.length >= 1, 'only clip 2\'s frames are kept'); }
-  ok(!/continuous moment|same people/.test(t.prompt) && /<Subject 1> walks with a red umbrella, part 2/.test(t.prompt) && t.model===t.src, '🔗 its words are the clip\'s own, with the keep-things-the-same line, and its own model (' + JSON.stringify(t.prompt) + ')');
+  ok(/The room, the objects and the light stay exactly as they were in the clips around it/.test(t.prompt) && !/same people/.test(t.prompt) && /<Subject 1> walks with a red umbrella, part 2/.test(t.prompt) && t.model===t.src, '🔗 its words are the clip\'s own, with the keep-things-the-same line, and its own model (' + JSON.stringify(t.prompt) + ')');
   const cs1 = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, m:c.meta[c.pick], w:c.tw[c.pick]})));
   ok(cs1.length===3 && cs1[1].n===2 && cs1[1].pick!==cs0[1].pick && cs1[1].m.relink===cs0[1].pick && cs1[1].m.after===cs0[0].pick && cs1[1].m.before===cs0[2].pick && cs1[1].w==='Mia walks with a red umbrella, part 2' && cs1[0].pick===cs0[0].pick && cs1[2].pick===cs0[2].pick,
     'still 3 clips: clip 2 gets the re-link as a new option, picked, with the same words; clips 1 and 3 untouched (' + JSON.stringify(cs1) + ')');
@@ -104,8 +104,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   // ➕ Next gets the keep line after the [0s-1s] anchor (never inside it)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), x = await REEL.E().carry({take:cs[2].pick, at:REEL.info(cs[2].pick).secs, words:'Mia sits down', who:['Lmia'], n:1}); return x; });
     const p = await eng.evaluate(() => H3.S.takes[0].prompt);
-    ok(/^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] <Subject 1> sits down$/.test(p) && !/same people/.test(p), '➕ Next: the anchor stays first, no keep line (off since 2026-11-25) (' + JSON.stringify(p) + ')'); }
+    ok(/^\[0s-1s\] The scene keeps carrying on from the moment before\.\n\[1s-\] The room, the objects and the light stay exactly as they were a moment ago\. <Subject 1> sits down$/.test(p) && !/same people/.test(p), '➕ Next: the anchor stays first, the room-only keep line opens the [1s-] part (' + JSON.stringify(p) + ')'); }
   { const p = await page.evaluate(async () => { const E = REEL.E(), cs = REEL.clips(); await E.fill({takeA:cs[0].pick, outA:1, takeB:cs[1].pick, inB:0, secs:1, words:'Mia waves', who:['Lmia'], n:1, keep:false}); return 1; });
-    const q = await eng.evaluate(() => H3.S.takes[0].prompt); ok(!/continuous moment/.test(q), 'keep:false leaves the line out (' + JSON.stringify(q) + ')'); }
+    const q = await eng.evaluate(() => H3.S.takes[0].prompt); ok(!/room, the objects/.test(q), 'keep:false leaves the line out (' + JSON.stringify(q) + ')'); }
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
