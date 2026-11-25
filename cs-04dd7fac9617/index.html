@@ -467,7 +467,9 @@ function draw2(){
 function hitPoint(px,py,skip){ let best=null,bd=skip?20:24; for(const q of GEO.vis){ if(q.id===skip) continue; const p=GEO.P2.get(q.id); const [a,b]=toPx(p.x,p.y); const d=Math.hypot(a-px,b-py)-(q.id===selId?5:0); if(d<bd){bd=d;best=q;} } return best; }
 // one finger at a time: a second finger (or a palm) landing mid-gesture is ignored
 c2.addEventListener('contextmenu',e=>e.preventDefault()); // (a long press is a gesture here, never a menu)
-c2.addEventListener('pointerdown',e=>{ if(drag) return; c2.setPointerCapture(e.pointerId); const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+// (a second finger landing before the first one has done anything (a pinch, two fingers at once): the first can still tap, but can't hold, drag or turn the box)
+const downs=new Set(); addEventListener('pointerup',e=>downs.delete(e.pointerId),true); addEventListener('pointercancel',e=>downs.delete(e.pointerId),true);
+c2.addEventListener('pointerdown',e=>{ if(drag){ downs.add(e.pointerId); if(!drag.moved&&(drag.type==='tap'||drag.type==='pt'||drag.type==='face')){ clearTimeout(drag.hold); clearTimeout(drag.pv); drag.two=true; } return; } downs.clear(); downs.add(e.pointerId); if(spinning&&spinDone) spinDone(); if(flipping&&flipDone) flipDone(); c2.setPointerCapture(e.pointerId); const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
   let q=hitPoint(px,py), alt=null;
   // right on the line of a fold, a little way from a corner's dot, a press is on the fold: hold it to remove it (so short folds can be held too);
   // a quick tap or a drag from there still takes the corner, as before
@@ -489,6 +491,7 @@ c2.addEventListener('pointerdown',e=>{ if(drag) return; c2.setPointerCapture(e.p
   if(!q&&!foldNear(px,py)){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.type!=='tap') return; dd.type='free'; dd.fx=px; dd.fy=py; dd.loop=!onPaper(px,py); pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast(onPaper(px,py)?'Draw your fold':'Draw across the shape: edge loop'); draw2(); },450); }
   if(q){ const dd=drag; dd.hold=setTimeout(()=>{ if(drag!==dd||dd.moved) return; dd.type='line'; dd.fx=px; dd.fy=py; selId=dd.id; pulse=1; if(sound) blip(760,.07,.07); try{navigator.vibrate&&navigator.vibrate(15);}catch(e){} toast('Drag to fold: let go on a corner or the paper'); draw2(); },500); } });
 c2.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.pid) return; const r=c2.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+  if(drag.two&&!drag.moved&&downs.size>1&&drag.type!=='none'&&Math.hypot(px-drag.sx,py-drag.sy)>=6){ drag.type='none'; if(selFold&&!selId){ selFold=null; draw2(); } return; }
   if(drag.type==='face'){ moveFace(drag,px,py); return; }
   if(drag.type==='free'){ drag.fx=px; drag.fy=py; (drag.path=drag.path||[[drag.sx,drag.sy]]).push([px,py]); if(drag.loop) snapLine(drag); const o=!drag.loop&&hitPoint(px,py); const was=drag.link; drag.link=o?o.id:null; if(drag.link&&was!==drag.link) tick(); draw2(); return; }
   if(drag.type==='foldhold'){ if(Math.hypot(px-drag.sx,py-drag.sy)<10) return; selFold=null; drag.type='free'; drag.fx=px; drag.fy=py; drag.loop=false; drag.path=[[drag.sx,drag.sy],[px,py]];
@@ -531,7 +534,13 @@ function endDrag(e){ if(!drag||e.pointerId!==drag.pid) return; const d=drag; dra
   if(d.type==='tap'&&d.alt&&byId(d.alt)){ selFold=null; selId=selId===d.alt?null:d.alt; changed(true); return; } // (a quick tap beside a corner's dot picks that corner)
   if(d.type==='tap'){ if(tapFace(px,py)) return; addPoint(px,py); }
   if(d.type==='swipe'){ const fast=performance.now()-d.t0<350&&Math.abs(d.th)>0.12; const tgt=Math.abs(d.th)>Math.PI/6||fast?Math.sign(d.th)*Math.PI/2:0; settleSpin(d.V0,d.ax,d.th,tgt); } }
-c2.addEventListener('pointerup',e=>{ endDrag(e); if(!drag){ dropEmpty(); ui(); } }); const cancelDrag=e=>{ if(!drag||e.pointerId!==drag.pid) return; clearTimeout(drag.hold); clearTimeout(drag.pv); if(drag.type==='foldhold') selFold=null; if(drag.moved) changed(); drag=null; draw2(); };
+c2.addEventListener('pointerup',e=>{ endDrag(e); if(!drag){ dropEmpty(); ui(); } }); const cancelDrag=e=>{ if(!drag||e.pointerId!==drag.pid) return; finishDrag(); };
+// a gesture cut short (the phone took the touch, or a button was pressed with the other thumb) ends as if you let go there:
+// a pulled corner or a moved face stays where it got to (and one back where it started changes nothing), a turn settles on a side, a fold not yet drawn is dropped
+function finishDrag(){ const d=drag; if(!d) return; clearTimeout(d.hold); clearTimeout(d.pv);
+  if((d.type==='pt'||d.type==='face')&&d.moved){ endDrag({pointerId:d.pid,clientX:0,clientY:0}); dropEmpty(); ui(); draw2(); return; }
+  if(d.type==='swipe'){ drag=null; const to=Math.abs(d.th||0)>Math.PI/6?Math.sign(d.th)*Math.PI/2:0; spinTok++; spinning=false; VW=rotView(d.V0,d.ax,to); for(const k of ['a','b','d']) VW[k]=VW[k].map(x=>Math.round(x)||0); view=nameOf(VW.d)||view; if(to!==0) selId=null; ui(); draw2(); turnTo(); return; }
+  if(d.type==='foldhold'||d.type==='tap') selFold=null; drag=null; draw2(); }
 c2.addEventListener('pointercancel',cancelDrag); c2.addEventListener('lostpointercapture',cancelDrag);
 const twinOf=q=>S.mirror&&q.tw?byId(q.tw):null;
 // part of the shape: a box corner, a corner in a fold, or one that just became one in this gesture (before the paper is worked out again)
@@ -978,10 +987,13 @@ function nameOf(d){ return VNAMES.find(n=>VIEWS[n].d.every((x,i)=>Math.abs(x-d[i
 function rotView(V0,ax,t){ const c=Math.cos(t), s=Math.sin(t), L=(p,q,a,b)=>p.map((x,i)=>a*x+b*q[i]);
   if(ax==='h') return {a:L(V0.a,V0.d,c,-s),b:V0.b,d:L(V0.d,V0.a,c,s)};
   return {a:V0.a,b:L(V0.b,V0.d,c,s),d:L(V0.d,V0.b,c,-s)}; }
-let spinning=false;
-function settleSpin(V0,ax,from,to){ spinning=true; const t0=performance.now(), dur=Math.max(90,Math.abs(to-from)*260);
-  const step=()=>{ const k=Math.min(1,(performance.now()-t0)/dur), e=1-Math.pow(1-k,3); VW=rotView(V0,ax,from+(to-from)*e); draw2(); spin3();
-    if(k<1) requestAnimationFrame(step); else { VW=rotView(V0,ax,to); for(const key of ['a','b','d']) VW[key]=VW[key].map(x=>Math.round(x)||0); view=nameOf(VW.d)||view; spinning=false; if(to!==0){ selId=null; pop(); } ui(); draw2(); turnTo(); } };
+let spinning=false, spinTok=0, spinDone=null;
+// (touch the paper again while it's still settling and it lands on that side straight away: a quick tap goes where it will be, a quick second swipe turns on from there)
+function settleSpin(V0,ax,from,to){ spinning=true; const my=++spinTok, t0=performance.now(), dur=Math.max(90,Math.abs(to-from)*260);
+  const done=()=>{ if(my!==spinTok) return; spinTok++; spinDone=null; VW=rotView(V0,ax,to); for(const key of ['a','b','d']) VW[key]=VW[key].map(x=>Math.round(x)||0); view=nameOf(VW.d)||view; spinning=false; if(to!==0){ selId=null; pop(); } ui(); draw2(); turnTo(); };
+  spinDone=done;
+  const step=()=>{ if(my!==spinTok) return; const k=Math.min(1,(performance.now()-t0)/dur), e=1-Math.pow(1-k,3); VW=rotView(V0,ax,from+(to-from)*e); draw2(); spin3();
+    if(k<1) requestAnimationFrame(step); else done(); };
   requestAnimationFrame(step); }
 // the 3D preview follows the view while you turn
 function spin3(){ const d=VW.d; cam.th=Math.atan2(d[0],d[2])+0.45; cam.ph=Math.acos(Math.max(-1,Math.min(1,d[1])))*0.85+0.2; lastTouch=performance.now(); }
@@ -990,12 +1002,15 @@ function turnBox(dir){ const {a,b,d}=VW; let nv;
   else if(dir==='up') nv={a,b:d,d:neg(b)}; else nv={a,b:neg(d),d:b};
   flipTo(nv,dir); }
 let flipping=false;
-function flipTo(nv,dir){ if(flipping) return; flipping=true; const c=c2.style, ax=(dir==='left'||dir==='right')?'Y':'X', sg=(dir==='left'||dir==='down')?-1:1;
-  const reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const swap=()=>{ VW=nv; view=nameOf(VW.d); selId=null; ui(); draw2(); turnTo(); if(sound) blip(dir==='left'||dir==='up'?520:440,.09,.1); };
-  if(reduce){ swap(); flipping=false; return; }
+// (a second view picked, or the paper touched, while it's still flipping: the flip finishes at once, so no tap is lost)
+let flipTok=0, flipDone=null;
+function flipTo(nv,dir){ if(flipping&&flipDone) flipDone(); if(same(VW,nv)) return; flipping=true; spinTok++; spinning=false; const c=c2.style, ax=(dir==='left'||dir==='right')?'Y':'X', sg=(dir==='left'||dir==='down')?-1:1;
+  const reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches, my=++flipTok; let swapped=false;
+  const swap=()=>{ if(swapped) return; swapped=true; VW=nv; view=nameOf(VW.d); selId=null; ui(); draw2(); turnTo(); if(sound) blip(dir==='left'||dir==='up'?520:440,.09,.1); };
+  const done=()=>{ if(my!==flipTok) return; flipTok++; flipDone=null; swap(); c.transition='none'; c.transform='none'; flipping=false; };
+  flipDone=done; if(reduce){ done(); return; }
   c.transition='transform .11s ease-in'; c.transform=`rotate${ax}(${sg*(ax==='Y'?90:-90)}deg)`;
-  setTimeout(()=>{ swap(); c.transition='none'; c.transform=`rotate${ax}(${-sg*(ax==='Y'?90:-90)}deg)`; c2.offsetWidth; c.transition='transform .16s ease-out'; c.transform='none'; setTimeout(()=>{flipping=false;},170); },110); }
+  setTimeout(()=>{ if(my!==flipTok) return; swap(); c.transition='none'; c.transform=`rotate${ax}(${-sg*(ax==='Y'?90:-90)}deg)`; c2.offsetWidth; c.transition='transform .16s ease-out'; c.transform='none'; setTimeout(()=>{ if(my!==flipTok) return; flipTok++; flipDone=null; flipping=false; },170); },110); }
 function turnTo(){ spin3(); return; const d=VW.d; cam.th=Math.atan2(d[0],d[2])+0.45; cam.ph=d[1]>0.5?0.5:d[1]<-0.5?2.6:1.2; lastTouch=performance.now(); }
 function changed(live){ if(selFace){ selFace.ids=selFace.ids.filter(id=>byId(id)); if(!selFace.ids.length) selFace=null; }
  for(const q of S.pts){ const t=q.tw&&byId(q.tw); if(q.tw&&(!t||(t.on.t==='c')!==(q.on.t==='c'))) delete q.tw; }
@@ -1005,6 +1020,8 @@ function ui(){ VNAMES.forEach(v=>$('v'+v).classList.toggle('on',v===view)); $('l
   $('tip').textContent=selFace?(selFace.ex?'Drag the face to pull it out (extrude)':'Face picked · drag to move · double tap: extrude'):selFold?((GEO.creases||[]).some(c=>c.stray&&ek(c.a,c.b)===ek(selFold[0],selFold[1]))?'Hold, then let go to flatten this bend':'Hold, then let go to remove this fold · or drag to draw one'):!sq?'Tap: corner · hold + drag: draw a fold · hold a fold: remove':!ACT.has(sq.id)?'A mark: slide it here, or pull it out from a side view':sq.on.t==='c'?'Drag to pull · hold, then drag to fold · Reset':'Drag to pull · hold, then drag to fold · Delete';
   $('bMirror').classList.toggle('on',S.mirror); const q=selId&&byId(selId); $('bDel').disabled=!q&&!selFold; $('bDel').textContent=selFold?'Delete fold':q&&q.on.t==='c'?'Reset':'Delete'; $('undo').disabled=!undoS.length; }
 $('undo').onclick=undo;
+// (a button pressed with the other thumb mid-gesture: the gesture ends first, as if you let go, then the button does its thing)
+$('app').addEventListener('click',e=>{ if(drag&&e.target.closest&&e.target.closest('button')) finishDrag(); },true);
 $('bMirror').onclick=()=>{ push(); fresh0=folds0=Infinity; foldsAt0=null; S.mirror=!S.mirror; // (turning Mirror on changes nothing by itself: the new twins aren't something you're working on)
   if(S.mirror){ // twins that drifted apart while mirror was off are let go, so nothing jumps across
     const mir=(q,t)=>Math.abs(t.p[0]+q.p[0])<0.5&&Math.abs(t.p[1]-q.p[1])<0.5&&Math.abs(t.p[2]-q.p[2])<0.5;
@@ -1063,7 +1080,7 @@ $('bDel').onclick=()=>{ if(selFold){ deleteFold(); return; } const q=selId&&byId
   tidy(was); selId=null; pop(); changed(); };
 $('bClear').onclick=()=>{ push(); newBox(); selId=null; changed(); toast('Fresh box. Undo brings yours back.'); dropEmpty(); ui(); };
 { const del=$('bDel').onclick; $('bDel').onclick=e=>{ del(e); dropEmpty(); ui(); }; }
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='z'){e.preventDefault();undo();} if((e.key==='Delete'||e.key==='Backspace')&&!$('bDel').disabled) $('bDel').click(); });
+document.addEventListener('keydown',e=>{ if(drag&&((e.metaKey||e.ctrlKey)&&e.key==='z'||e.key==='Delete'||e.key==='Backspace')) finishDrag(); if((e.metaKey||e.ctrlKey)&&e.key==='z'){e.preventDefault();undo();} if((e.key==='Delete'||e.key==='Backspace')&&!$('bDel').disabled) $('bDel').click(); });
 $('snd').textContent=sound?'🔊':'🔇';
 $('snd').onclick=()=>{sound=!sound; try{localStorage.setItem('corner-sketch-snd',sound?'1':'0');}catch(e){} $('snd').textContent=sound?'🔊':'🔇'; toast(sound?'Sound on':'Sound off'); if(sound) pop();};
 new ResizeObserver(()=>{size2();size3();}).observe($('app'));
