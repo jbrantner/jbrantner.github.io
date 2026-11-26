@@ -421,6 +421,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   { await engF().evaluate(() => { const S = H3.S; if(!S.pcs.some(p => p.name==='Main')) S.pcs.push({name:'Main', url:'http://main.test', on:true, speed:1}); });
     for(let i = 0; i < 30; i++){ if(await engF().evaluate(() => H3Engine.pcs().every(p => p.online))) break; await page.waitForTimeout(500); }
     await engF().evaluate(() => H3Engine.setLook({test:true}));
+    const both = await engF().evaluate(() => H3Engine.look()); ok(both.test && !both.testPc && both.testUrl==='both', '🧪 on = both PCs by default');
+    await engF().evaluate(() => H3Engine.setLook({testPc:'http://main.test'}));
     const lk = await engF().evaluate(() => H3Engine.look());
     const sA = sent.length, tid = await engF().evaluate(async () => { const r = await H3Engine.make({words:'Mia waves at the camera', who:[], n:1, aspect:'16:9'}); return r.ids ? r.ids[0] : JSON.stringify(r); });
     await page.waitForTimeout(2500);
@@ -437,7 +439,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     ok(t2.w < 1000 && t2.fin, '🧪 off: back to the normal size and vanilla → PIKA (' + JSON.stringify(t2) + ')');
     { await page.evaluate(() => setSheet()); await page.click('#stT'); const on = await engF().evaluate(() => H3Engine.look().test), txt = await page.evaluate(() => document.querySelector('#stT').textContent);
       await page.click('#stT'); const off = await engF().evaluate(() => H3Engine.look().test); await page.evaluate(() => closeSheet());
-      ok(on && !off && /On/.test(txt), '🧪 ⚙ switch turns the test on and off'); }
+      ok(on && !off && /On/.test(txt), '🧪 ⚙ switch turns the test on and off');
+      await engF().evaluate(() => H3Engine.setLook({test:true, testPc:'both'})); const sC = sent.length;
+      await engF().evaluate(async () => { await H3Engine.make({words:'Mia waves', who:[], n:2, aspect:'16:9'}); }); await page.waitForTimeout(2500);
+      const hs = [...new Set(sent.slice(sC).filter(x => x.g).map(x => x.host))], wh = await engF().evaluate(() => H3.S.f.where);
+      ok(wh==='both' && hs.length >= 1, '🧪 both PCs: not pinned (sent to ' + hs.join(',') + ', where ' + wh + ')');
+      await engF().evaluate(() => H3Engine.setLook({test:false})); }
     await engF().evaluate(() => { const S = H3.S; S.pcs = S.pcs.filter(p => p.name!=='Main'); S.f.where = 'both'; }); }
   await page.evaluate(() => { REEL.R().attrs = {Lmia:['Lfrk']}; REEL.R().fit = {Lmia:true}; });
   await page.evaluate(() => { const R = REEL.R(); REEL.E().setAttrs(JSON.parse(JSON.stringify(R.attrs)), JSON.parse(JSON.stringify(R.fit)), {}, 'auto'); });
