@@ -708,6 +708,16 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const g2 = sent.filter(x => x.g).slice(n0), t2 = await eng.evaluate(() => H3.S.takes[0].loras || []);
     ok(g2.length===1 && !styleOn(g2[0].g).length && !t2.some(l => /anime_style/.test(l.name)), 'with it taken off, the new option has no style LoRA (' + JSON.stringify(t2) + ')');
   }
+  // ⇿ (Jordan 2026-11-26: a Redo cut to a new shot halfway through) ↻ Redo on a middle clip can have a free ending instead of landing on the clip after
+  { await finish(); await page.evaluate(() => { REEL.go(1); REEL.refresh(); }); await page.waitForTimeout(400); await page.click('#redoBtn'); await page.waitForTimeout(300);
+    const a = await page.evaluate(() => ({seg:!!document.querySelector('#rdLand'), on:(document.querySelector('#rdLand .on') || {}).dataset, how:(document.querySelector('#rdHow') || {}).textContent}));
+    ok(a.seg && a.on && a.on.l==='1' && /Lands between/.test(a.how), '⇿ ↻ Redo on a middle clip has Land on its first frame (on) / Free ending (' + JSON.stringify(a) + ')');
+    await page.click('#rdLand [data-l="0"]'); await page.waitForTimeout(150);
+    ok(/Carries on/.test(await page.textContent('#rdHow')), 'Free ending: it only carries on from the clip before');
+    await page.fill('#rdW', 'Mia looks around'); const n0 = sent.filter(x => x.g).length; await page.click('#rdGo'); await page.waitForTimeout(2500);
+    const t = await eng.evaluate(() => { const t = H3.S.takes[0]; return {carry:!!t.carry, gap:!!(t.lead && t.lead.gap)}; });
+    ok(sent.filter(x => x.g).length > n0 && t.carry && !t.gap, 'the free-ending option is a carry-on, not pinned to the clip after (' + JSON.stringify(t) + ')');
+    ok(await page.evaluate(() => { const N = REEL.clips()[2]; return REEL.R().rdLand && REEL.R().rdLand[N.id]===false; }), 'the choice is remembered for that pair of clips'); }
   // an untrimmed clip loops in the viewport (the browser pauses at the very end before the last timeupdate)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), i = cs.findIndex(c => c.pick && REEL.info(c.pick).state==='done'); REEL.go(i); const c = REEL.cur(); c.in = 0; c.out = null; REEL.refresh();
       await new Promise(z => setTimeout(z, 400)); const v = document.querySelector('#vA'); v.play().catch(() => {}); try{ v.currentTime = Math.max(0, (v.duration || 5) - 0.6); }catch(e){}
