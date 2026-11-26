@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="reel-build" content="2026-11-26-4">
+<meta name="reel-build" content="2026-11-26-5">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#111217">
@@ -825,7 +825,9 @@ function nextSheet(){ const i = curI(), c = cur(), N = clips()[i + 1]; if(!c) re
       if(o.then && o.then.length){ R().chain = {after:nc.id, lines:o.then, who:o.who.slice(), look:cl(L), secs:o.secs, n:o.n}; save(); drawChain(); toast('🔗 ' + o.then.length + ' more clip' + (o.then.length===1 ? '' : 's') + ' will follow, one after another'); } } }; }
 
 // ↻ Redo: more options for this clip that line up with the clips around it
-function redoPlan(i){ const cs = clips(), c = cs[i], P = cs[i - 1], N = cs[i + 1], L = clamp(lenOf(c) || (c.secs || 5), 0.5, 5);
+// ⇿ (Jordan 2026-11-26: "generating the scene and then half way through cutting to a new scene"): a Redo pinned to the clip after's first
+// frame has to reach that frame, and when the clip after is framed differently MiniMax gets there with a hard cut. free = don't land on it
+function redoPlan(i, free){ const cs = clips(), c = cs[i], P = cs[i - 1], N = free ? null : cs[i + 1], L = clamp(lenOf(c) || (c.secs || 5), 0.5, 5);
   if(P && !doneOf(P.pick)) return {err:'The clip before is still rendering'}; if(N && !doneOf(N.pick)) return {err:'The clip after is still rendering'};
   if(P && N) return {how:'⇿ Lands between the clip before and the clip after, so it lines up with both.', secs:L, lo:0.5, run:o => E.fill({takeA:P.pick, outA:endOf(P), takeB:N.pick, inB:N.in || 0, secs:o.secs, words:o.words, who:o.who, n:o.n}), meta:{after:P.pick, before:N.pick}};
   if(P) return {how:'➕ Carries on from the end of the clip before, like the first time.', secs:L, lo:1, run:o => E.carry({take:P.pick, at:endOf(P), words:o.words, who:o.who, secs:o.secs, n:o.n}), meta:{after:P.pick}};
@@ -834,16 +836,20 @@ function redoPlan(i){ const cs = clips(), c = cs[i], P = cs[i - 1], N = cs[i + 1
   const base = c.takes.find(doneOf);
   if(!base) return {how:'✍ Made fresh from the words (no finished option to copy from yet).', secs:L, lo:1, run:o => E.make({words:o.words, who:o.who, secs:o.secs, n:o.n, first:o.first}), meta:{}, ff:true}; // (Jordan 2026-11-20: all options gone, Redo said to wait)
   return {how:'The same settings again, with your words.', secs:L, lo:1, run:o => E.again({take:base, words:o.words, who:o.who, secs:o.secs, n:o.n, first:o.first}), meta:{}, ff:true}; }
-function redoSheet(){ const i = curI(), c = cur(); if(!c) return; const P = redoPlan(i); if(P.err){ toast(P.err, 5000); return; }
+const landOn = N => !!N && (R().rdLand || {})[N.id]!=null ? !!R().rdLand[N.id] : !!N && !isCut(N); // a clip after that starts a new shot: off by default
+function redoSheet(){ const i = curI(), c = cur(); if(!c) return; const N = clips()[i + 1]; let land = landOn(N), P = redoPlan(i, !land); if(P.err){ toast(P.err, 5000); return; } const ff0 = !!P.ff;
   const o = {words:words0(c), who:[...new Set([].concat(castOf(), c.who || [], (clips()[i - 1] || {}).who || [], (clips()[i + 1] || {}).who || []))], secs:Math.round(P.secs * 10) / 10, n:S.n || 2}, L = lookOf(c);
   sheet(`<h3><span>↻ More options for clip ${i + 1}</span><button class="btn" data-close>✕</button></h3>
-    <div class="note">${P.how}</div>
+    ${N ? `<div class="lab"><span>⇿ The clip after</span></div><div class="seg" id="rdLand"><button data-l="1" class="${land ? 'on' : ''}">Land on its first frame</button><button data-l="0" class="${land ? '' : 'on'}">Free ending</button></div><div class="note" style="margin-top:4px">If the clip after is framed differently, landing on it makes the new option cut to that shot partway through. A free ending carries on without reaching it.</div>` : ''}
+    <div class="note" id="rdHow" style="margin-top:6px">${P.how}</div>
     <div class="lab"><span>What happens</span></div><textarea id="rdW" rows="4">${esc(o.words)}</textarea>
     ${whoHtml(o.who)}${P.ff ? firstRow() : ''}${lookRow(L)}${lenRow('rdL', o.secs, P.lo, 5)}${nRow(o.n)}
     <button class="big pri" id="rdGo" style="width:100%;margin-top:14px">↻ Make ${o.n > 1 ? 'more options' : 'another option'}</button>`);
   whoWire(o.who, $('#rdW')); if(P.ff) firstWire(o); lookWire(L); lenWire('rdL', o, 'secs'); nWire(o);
+  if($('#rdLand')) $('#rdLand').onclick = e => { const b = e.target.closest('[data-l]'); if(!b) return; const P2 = redoPlan(i, b.dataset.l!=='1'); if(P2.err){ toast(P2.err, 5000); return; }
+    land = b.dataset.l==='1'; P = P2; (R().rdLand = R().rdLand || {})[N.id] = land; save(); $$('#rdLand button').forEach(y => y.classList.toggle('on', y===b)); $('#rdHow').textContent = P.how; };
   $('#rdGo').onclick = async () => { o.words = $('#rdW').value.trim(); if(!o.words){ toast('Write what happens'); return; }
-    const ids = await send($('#rdGo'), async () => P.run(Object.assign({}, o, P.ff ? {first:await firstUp(o)} : {})), '↻ Sent: the new options show up under this clip', L); if(ids){ c.look = cl(L); addTakes(c, ids, Object.assign({}, P.meta, {look:cl(L)}), o.words); c.words = o.words || c.words; } }; }
+    const ids = await send($('#rdGo'), async () => P.run(Object.assign({}, o, P.ff && ff0 ? {first:await firstUp(o)} : {})), '↻ Sent: the new options show up under this clip', L); if(ids){ c.look = cl(L); addTakes(c, ids, Object.assign({}, P.meta, {look:cl(L)}), o.words); c.words = o.words || c.words; } }; }
 
 // ✂ Edit: trim the clip (its end can blend into the next clip) or 🎨 change a stretch of it
 function editSheet(m0){ const i = curI(), c = cur(); if(!c) return;
