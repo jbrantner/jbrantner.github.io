@@ -1,5 +1,5 @@
 // 🗑 Reel (Jordan 2026-11-26): a take stopped from Reel has its own folder deleted on its PC (helper /renderdeck/h3drop),
-// with /renderdeck/delete of its videos for an older helper; finished options that are removed keep their files. Fake PCs.
+// with /renderdeck/delete of its videos for an older helper; finished options removed from Reel too; ones that failed on their own keep theirs. Fake PCs.
 // Run: CLIP=<a ~5 s video> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests/t_cancel_drop.js   (from the repo root)
 const { chromium } = require('playwright');
 const path = require('path'), http = require('http'), fs = require('fs');
@@ -76,11 +76,22 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   ok(drops.length===1 && drops[0].dirs.length===1 && /^Output_Render\/H3Deck\/h3_[\w-]+$/.test(drops[0].dirs[0]) && drops[0].dirs[0].endsWith(tb.dir) && drops[0]._host===R, '✕ on a rendering option: its own folder is deleted on its PC (' + JSON.stringify(drops) + ')');
   const q = await eng.evaluate(() => H3Engine.dropQ());
   ok(q.length===1 && q[0].tries===1 && q[0].next > Date.now(), 'it is tried once more a little later (' + JSON.stringify(q.map(d => ({t:d.tries}))) + ')');
-  // a finished option that's removed: its files stay
-  drops.length = 0; await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300);
-  const c0 = await page.evaluate(() => REEL.clips()[0].id);
+  // a finished option that's removed: its folder goes too (Jordan 2026-11-26), unless a later take carried on from it
+  drops.length = 0;
+  const ad = await eng.evaluate(id => H3.S.takes.find(x => x.id===id).dir, a);
+  const a2 = await mk('Mia walks, done two'); await finish();
+  await eng.evaluate(([a, a2]) => { const T = H3.S.takes; T.find(t => t.id===a2).carry = {src:a}; }, [a, a2]);
+  const a3 = await mk('Mia walks, done three'); await finish();
   await page.evaluate(id => REEL.E().forget([id]), a); await page.waitForTimeout(800);
-  ok(drops.length===0, 'a finished option that is let go keeps its files');
+  ok(drops.length===0, 'a finished option another take carried on from keeps its folder');
+  const a3d = await eng.evaluate(id => H3.S.takes.find(x => x.id===id).dir, a3);
+  await page.evaluate(id => REEL.E().forget([id]), a3); await page.waitForTimeout(800);
+  ok(drops.length===1 && drops[0].dirs[0].endsWith(a3d), 'a finished option that is let go has its folder deleted (' + JSON.stringify(drops) + ')');
+  // one that failed on its own keeps its files
+  drops.length = 0; const f1 = await mk('Mia, fails');
+  await eng.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); t.state = 'failed'; t.pieces[0].state = 'failed'; t.pieces[0].err = 'out of memory'; }, f1);
+  await page.evaluate(id => REEL.E().forget([id]), f1); await page.waitForTimeout(800);
+  ok(drops.length===0, 'an option that failed on its own keeps its files');
   // a stopped take that shares its piece with another take: its folder stays
   const c = await mk('Mia, shared'), d = await mk('Mia, shared 2');
   await eng.evaluate(([c, d]) => { const T = H3.S.takes, x = T.find(t => t.id===c), y = T.find(t => t.id===d); y.pieces[0].pid = x.pieces[0].pid = 'shared1'; }, [c, d]);
