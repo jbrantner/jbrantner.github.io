@@ -46,7 +46,7 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     if(p==='/renderdeck/h3export'){ if(rt.request().method()==='POST'){ exps.push(Object.assign(JSON.parse(rt.request().postData()), {_host:u.origin})); return J({id:'ex1', state:'working'}); } return J({id:'ex1', state:'done', done:10, total:10, file:{filename:'reel_ex1.mp4', subfolder:'H3Film/reel', type:'output'}}); }
     if(p==='/view') return rt.fulfill({status:200, contentType:'video/webm', headers:{'Access-Control-Allow-Origin':'*'}, body:fs.readFileSync(CLIP)});
     if(p==='/upload/image') return J({name:'up_' + Date.now() + '.png', subfolder:'h3deck', type:'input'});
-    if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
+    if(p==='/prompt'){ const pid = 'p' + (sent.length + 1); sent.push({pid, host:u.host, g:JSON.parse(rt.request().postData()).prompt}); return J({prompt_id:pid}); }
     if(p.startsWith('/history')) return J({});
     return rt.fulfill({status:404, headers:{'Access-Control-Allow-Origin':'*'}, body:''}); };
   await page.route(R + '/**', fake); await page.route('http://main.test/**', fake);
@@ -417,7 +417,28 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   const A = norm(rg && rg.g), B = norm(dg && dg.g), diff = [...new Set(Object.keys(A).concat(Object.keys(B)))].filter(k => A[k]!==B[k]);
   if(diff.length) diff.slice(0, 12).forEach(k => console.log('  DIFF node ' + k + '\n    Reel:    ' + (A[k] || '(none)').slice(0, 900) + '\n    H3 Deck: ' + (B[k] || '(none)').slice(0, 900)));
   ok(rg && dg && !diff.length, '⚖ Reel and H3 Deck send the same job for the same shot (' + (rg ? Object.keys(A).length : 0) + ' vs ' + (dg ? Object.keys(B).length : 0) + ' nodes, ' + diff.length + ' differ)');
-  // a stylized character (🎨 kept from her pictures by default, scene follows her) with Mia in ✨ Freckles and her own clothes
+  // 🧪 0.9 MP test (Jordan 2026-11-26): PRISM PIKA alone, 1280×704, sent only to Main; off again = back to normal
+  { await engF().evaluate(() => { const S = H3.S; if(!S.pcs.some(p => p.name==='Main')) S.pcs.push({name:'Main', url:'http://main.test', on:true, speed:1}); });
+    for(let i = 0; i < 30; i++){ if(await engF().evaluate(() => H3Engine.pcs().every(p => p.online))) break; await page.waitForTimeout(500); }
+    await engF().evaluate(() => H3Engine.setLook({test:true}));
+    const lk = await engF().evaluate(() => H3Engine.look());
+    const sA = sent.length, tid = await engF().evaluate(async () => { const r = await H3Engine.make({words:'Mia waves at the camera', who:[], n:1, aspect:'16:9'}); return r.ids ? r.ids[0] : JSON.stringify(r); });
+    await page.waitForTimeout(2500);
+    const gs = sent.slice(sA).filter(x => x.g), tt = await engF().evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {w:t.w, h:t.h, pc:t.pc, fin:t.fin}; }, tid);
+    const unets = gs.flatMap(x => nodes(x.g, 'UNETLoader').map(n => n.inputs.unet_name));
+    ok(lk.test && lk.testPc==='Main', '🧪 test switch on, Main named (' + JSON.stringify(lk) + ')');
+    ok(gs.length && gs.every(x => x.host==='main.test'), '🧪 test job goes only to Main (' + gs.map(x => x.host).join(',') + ')');
+    ok(tt.w===1280 && tt.h===704 && !tt.fin, '🧪 1280×704, no vanilla stage (' + JSON.stringify(tt) + ')');
+    ok(unets.length && unets.every(u => /prismPIKA/.test(u)), '🧪 PRISM PIKA only (' + unets.join(',') + ')');
+    await engF().evaluate(() => H3Engine.setLook({test:false}));
+    const sB = sent.length, tid2 = await engF().evaluate(async () => { const r = await H3Engine.make({words:'Mia waves at the camera', who:[], n:1, aspect:'16:9'}); return r.ids ? r.ids[0] : JSON.stringify(r); });
+    await page.waitForTimeout(2500);
+    const t2 = await engF().evaluate(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {w:t.w, h:t.h, fin:!!t.fin}; }, tid2);
+    ok(t2.w < 1000 && t2.fin, '🧪 off: back to the normal size and vanilla → PIKA (' + JSON.stringify(t2) + ')');
+    { await page.evaluate(() => setSheet()); await page.click('#stT'); const on = await engF().evaluate(() => H3Engine.look().test), txt = await page.evaluate(() => document.querySelector('#stT').textContent);
+      await page.click('#stT'); const off = await engF().evaluate(() => H3Engine.look().test); await page.evaluate(() => closeSheet());
+      ok(on && !off && /On/.test(txt), '🧪 ⚙ switch turns the test on and off'); }
+    await engF().evaluate(() => { const S = H3.S; S.pcs = S.pcs.filter(p => p.name!=='Main'); S.f.where = 'both'; }); }
   await page.evaluate(() => { REEL.R().attrs = {Lmia:['Lfrk']}; REEL.R().fit = {Lmia:true}; });
   await page.evaluate(() => { const R = REEL.R(); REEL.E().setAttrs(JSON.parse(JSON.stringify(R.attrs)), JSON.parse(JSON.stringify(R.fit)), {}, 'auto'); });
   const s2 = sent.length;
