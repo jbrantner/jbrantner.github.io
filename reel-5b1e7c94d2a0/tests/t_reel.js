@@ -310,6 +310,25 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       '🧵 when the jobs are done each clip picks its own stretch of the blended video, same length as before (round 2 for the joins between jobs) (' + JSON.stringify({zB:{state:zB.state}, r}) + ')');
     await page.click('[data-close]').catch(() => {});
     await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; c.in = b[i].in; c.out = b[i].out; }); REEL.R().seam = null; REEL.refresh(); }, b0.cs); await page.waitForTimeout(300); }
+  // 🔁 Loop the whole reel (Jordan 2026-11-25): H3 Deck's 🔁 Loop the whole track: the LAST clip then the FIRST joined on a PC with the
+  // 🧵 seam repainted at that turn; only those two clips get their stretch back as a new option; ▶ Play all on repeat goes back to clip 1
+  { await finish(); const b0 = await page.evaluate(() => REEL.clips().map(c => ({id:c.id, pick:c.pick, in:c.in || 0, out:c.out, n:c.takes.length, d:REEL.info(c.pick).secs})));
+    const g0 = sent.filter(x => x.g).length;
+    await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#lpRep'); await page.click('#lpGo'); await page.waitForTimeout(3000);
+    const gs = sent.filter(x => x.g).slice(g0).map(x => x.g), z = await page.evaluate(() => JSON.parse(JSON.stringify(REEL.R().loopR || null)));
+    const G = gs[0] || {}, N = Object.values(G), files = N.filter(n => n.class_type==='LoadVideo').map(n => n.inputs.file || n.inputs.video);
+    const f = await page.evaluate(ids => ids.map(id => (REEL.info(id).file || {}).filename), [b0[b0.length - 1].pick, b0[0].pick]);
+    ok(z && z.state==='run' && gs.length===1 && N.filter(n => n.class_type==='ConcatenateVideo').length===1 && N.filter(n => n.class_type==='MiniMaxH3AddGuide').length >= 8
+      && z.bounds.length===2 && z.bounds[0].clip===b0[b0.length - 1].id && z.bounds[1].clip===b0[0].id && files.length >= 2 && String(files[0]).includes(f[0]) && String(files[1]).includes(f[1]),
+      '🔁 Loop the whole reel sends one job: the last clip then the first, joined, the turn repainted between pinned frames (' + JSON.stringify({z, n:gs.length, files, f}) + ')');
+    await finish(); await page.evaluate(() => REEL.loopTick()); await page.waitForTimeout(1500);
+    const r = await page.evaluate(() => { const z = REEL.R().loopR; return {state:z.state, id:z.id, S:REEL.S().allRep, cs:REEL.clips().map(c => ({pick:c.pick, in:c.in || 0, out:c.out, n:c.takes.length}))}; });
+    const L = b0.length - 1, len = b => (b.out != null ? Math.min(b.out, b.d) : b.d) - b.in;
+    ok(r.state==='done' && r.S===true && r.cs[0].pick===r.id && r.cs[L].pick===r.id && Math.abs((r.cs[L].out - r.cs[L].in) - len(b0[L])) < 0.05 && Math.abs((r.cs[0].out - r.cs[0].in) - len(b0[0])) < 0.05
+      && Math.abs(r.cs[0].in - len(b0[L])) < 0.05 && r.cs.slice(1, L).every((c, i) => c.pick===b0[i + 1].pick && c.n===b0[i + 1].n),
+      '🔁 when it is done the last and first clips pick their own stretch of the loop (same lengths), the clips between are untouched, ▶ repeat is on (' + JSON.stringify({r, b0}) + ')');
+    await page.click('[data-close]').catch(() => {});
+    await page.evaluate(b => { REEL.clips().forEach((c, i) => { c.pick = b[i].pick; c.in = b[i].in; c.out = b[i].out; }); REEL.R().loopR = null; REEL.S().allRep = false; REEL.refresh(); }, b0); await page.waitForTimeout(300); }
   // ⬇ Export the reel: the picked option of every clip, trimmed, in order, joined on the PC; 📲 Save when done
   { await page.click('#finBtn'); await page.waitForTimeout(300); await page.click('#fnExp'); await page.waitForTimeout(2500);
     const cs = await page.evaluate(() => REEL.clips().map(c => { const I = REEL.info(c.pick); return {f:I.file && I.file.filename, a:c.in || 0}; }));
