@@ -220,7 +220,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const w0 = await page.evaluate((async () => { const out = []; for(let i = 1; i < REEL.clips().length; i++){ REEL.go(i); await new Promise(r => setTimeout(r, 250)); out.push(/may jump/.test(document.querySelector('#warnBox').textContent)); } REEL.go(0); await new Promise(r => setTimeout(r, 250)); return out; }));
     await page.click('#finBtn'); await page.waitForTimeout(300);
     ok(await page.evaluate(() => /Final pass on \d+ clip/.test(document.querySelector('#fnGo').textContent)), '🎬 Final pass sheet opens');
+    ok(await page.evaluate(() => !/Upscale LoRA/.test(document.querySelector('#sheet').textContent) && !!document.querySelector('.lsl[data-up] [data-sa]') && !document.querySelector('.lsl [data-sd]')), '🎨 the Final pass sheet has no Upscale LoRA row and has an optional Style LoRA (no halves: one model)');
+    await page.click('.lsl [data-sa]'); await page.waitForTimeout(150); await page.selectOption('.lsl [data-si="0"] [data-sn]', 'minimax_h3_anime_style.safetensors'); await page.waitForTimeout(150); await page.fill('.lsl [data-si="0"] [data-sw]', 'up_style_words');
     await page.click('#fnGo'); await page.waitForTimeout(4000);
+    { const u = await eng.evaluate(() => H3.S.takes.filter(t => t.up && t.up.scale===1.5).map(t => ({str:t.up.str, loras:(t.loras || []).filter(l => /anime_style/.test(l.name)).map(l => l.str + ':' + l.words)})));
+      ok(u.length >= 1 && u.every(x => x.str===0 && x.loras.length===1 && x.loras[0]==='0.8:up_style_words'), '🎬 the ✨ pass has the Upscale LoRA off and the style LoRA with its words (' + JSON.stringify(u) + ')');
+      ok(await page.evaluate(() => (REEL.S().upSl || [])[0] && REEL.S().upSl[0].name==='minimax_h3_anime_style.safetensors'), 'the pass\'s style LoRA is remembered for next time'); }
     const after = await page.evaluate(() => REEL.clips().map(c => ({pick:c.pick, n:c.takes.length, fin:!!((c.meta || {})[c.pick] || {}).fin, in:c.in, out:c.out})));
     const ups = await eng.evaluate(ids => ids.map(id => { const t = H3.S.takes.find(x => x.id===id) || {}; return {src:t.redo && t.redo.src, scale:t.up && t.up.scale, unet:t.up && t.up.unet, den:t.up && t.up.den, chain:t.up && t.up.chain && {idx:t.up.chain.idx, prev:t.up.chain.prev, dir:t.up.chain.dir}, off:t.descOff}; }), after.map(x => x.pick));
     const chained = ups.slice(1).every((u, i) => u.chain && u.chain.idx===i + 1 && u.chain.prev===after[i].pick && u.chain.dir===ups[0].chain.dir) && ups[0].chain && ups[0].chain.idx===0;
