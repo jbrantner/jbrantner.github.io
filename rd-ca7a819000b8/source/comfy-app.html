@@ -6,7 +6,7 @@
   --bg:#111217; --panel:#1b1d23; --panel2:#24262e; --line:#30333c;
   --text:#e8eaee; --soft:#a3aab6; --dim:#7d8592;
   --accent:#ff5ca8; --accent-ink:#1b0b14; --cyan:#33c2c9;
-  --model:#b892ff; --samp:#ffb35c; --lora:#ff6fae; --cn:#6fc0ff; --pic:#ffd75e; --up:#5cffb0; --orb:#7fe0e6;
+  --model:#b892ff; --samp:#ffb35c; --lora:#ff6fae; --cn:#6fc0ff; --pic:#ffd75e; --up:#5cffb0; --orb:#7fe0e6; --eye:#8ef0ff;
   --bad:#f2777f; --good:#5cffb0;
   --display:"Pixelify Sans","Courier New",ui-monospace,monospace;
   --body:"Nunito",ui-rounded,"SF Pro Rounded",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -624,7 +624,7 @@ body.scn-open{padding-bottom:0}
 'use strict';
 const $ = s => document.querySelector(s);
 const KEY = 'render-deck-v1';
-const APP_VERSION = '2026-11-24.376'; // bump on every release: a home-screen app left open checks this when it comes back
+const APP_VERSION = '2026-11-26.377'; // bump on every release: a home-screen app left open checks this when it comes back
 
 // ---------- block types ----------
 const TYPES = {
@@ -634,6 +634,7 @@ const TYPES = {
   cn:     {name:'ControlNet', emo:'C', c:'--cn', desc:'Guide pose or shape with a picture', needs:['ControlNetLoader','ControlNetApplyAdvanced','LoadImage']},
   pic:    {name:'Start from picture', emo:'S', c:'--pic', desc:'Repaint an image you pick', needs:['LoadImage','VAEEncode','ImageScale'], one:true},
   up:     {name:'Upscale', emo:'U', c:'--up', desc:'Make the result bigger', needs:['ImageScaleBy'], one:true},
+  eyes:   {name:'Eye redraw', emo:'E', c:'--eye', desc:'Last step: SAM finds the eyes, zooms in on both, redraws them with a LoRA you pick', needs:['SAM3_Detect','MaskToSEGS','DetailerForEach'], one:true},
   d3:     {name:'3D', emo:'3', c:'--pic', desc:'Make the picture in the preview 3D, then paint it in Illustrious', one:true, tool:true}, // not part of the render (Jordan 2026-10-24)
 };
 const SIZES = {512:[512,512], 768:[768,768], 1024:[1024,1024]};
@@ -757,7 +758,7 @@ const FAKE = {
   upm:['4x-UltraSharp.pth','RealESRGAN_x4plus.pth'],
   samplers:['euler','euler_ancestral','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','uni_pc','lcm'],
   schedulers:['normal','karras','exponential','sgm_uniform','simple','beta'],
-  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','SetUnionControlNetType','ConditioningSetArea','ConditioningCombine','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider','ModelMergeSDXL','KSamplerAdvanced','VAEEncodeTiled','VAEDecodeTiled','SAMLoader','RenderDeckUpscaleColorFix']),
+  nodes:new Set(['CheckpointLoaderSimple','CLIPTextEncode','EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoraLoader','ControlNetLoader','ControlNetApplyAdvanced','SetUnionControlNetType','ConditioningSetArea','ConditioningCombine','LoadImage','Canny','VAEEncode','ImageScale','ImageScaleBy','UpscaleModelLoader','ImageUpscaleWithModel','CLIPSetLastLayer','UltimateSDUpscale','UltimateSDUpscaleNoUpscale','FaceDetailer','UltralyticsDetectorProvider','ModelMergeSDXL','KSamplerAdvanced','VAEEncodeTiled','VAEDecodeTiled','SAMLoader','RenderDeckUpscaleColorFix','SAM3_Detect','MaskToSEGS','DetailerForEach','GrowMask','MaskComposite','BboxDetectorSEGS','SegsToCombinedMask','ImpactImageBatchToImageList']),
   cnVae:true,
 };
 
@@ -787,6 +788,65 @@ function faceFiles(oi){
 }
 const homeOi = () => S.test ? null : (pcOf(base()).oi || null);
 const FACES_MISSING = 'Fix faces was skipped: this computer is missing its face model (face_yolov8m). The picture renders without it.';
+// 👁 Eye redraw (Jordan 2026-11-26): its own block, the very last step of a render (after any upscale and Fix faces).
+// SAM 3 finds the eyes by a word (its mask is refined on a close crop round each eye, so it follows the lids), kept inside
+// the faces the face finder sees so nothing else is picked up. Both eyes go into ONE crop (MaskToSEGS combined), which the
+// Impact Detailer blows up to Zoom size, so the eyes get every pixel the model can draw; Context widens that crop, so the
+// model sees more of the face and picture round them to match. Only the mask is redrawn (grown over the lids and lashes,
+// feathered), with the render's checkpoint (or one picked here) and its LoRAs plus the eye LoRA, and the render's words
+// with the eye words in front; the result is pasted back with a soft edge.
+const EYE_D = {find:'eye', people:1, thr:0.4, grow:12, ctx:2, zoom:1024, denoise:0.45, feather:16, strength:1, words:'', keepLoras:true, usePrompt:true, faceOnly:true, eckpt:''};
+const upScale = up => !up ? 1 : up.mode==='model' && up.model ? 4 : (up.scale || 2); // about how much bigger the upscale makes it
+const eyeOpt = (b, k) => b[k] ?? EYE_D[k];
+const EYE_SAM_RE = /^sam3/i;
+const eyeLoras = list => (list || []).filter(n => !MOSS_FAST_RE.test(n) && !/moss/i.test(baseName(n))).sort((a, b) => a.localeCompare(b, undefined, {sensitivity:'base', numeric:true}));
+const eyeCkpts = list => (list || []).filter(n => !isMoss(n) && !EYE_SAM_RE.test(baseName(n)));
+// the SAM 3.1 checkpoint as this computer names it ('' = it has none; no lists known = the usual name)
+function eyeSam(oi){ if(!oi || !oi.CheckpointLoaderSimple) return 'sam3.1_multiplex_fp16.safetensors';
+  return combo(oi.CheckpointLoaderSimple, 'ckpt_name').find(n => EYE_SAM_RE.test(baseName(n))) || ''; }
+// the words SAM looks for: each word (comma separated) up to 2 eyes a person
+function eyeWord(E){ const n = 2 * (+eyeOpt(E, 'people') || 1);
+  return String(eyeOpt(E, 'find')).split(',').map(w => w.trim().replace(/:\s*\d+$/, '')).filter(Boolean).map(w => w + ':' + n).join(', ') || 'eye:' + n; }
+// c: {model, clip, vae (the render's, LoRAs on), base:[model, clip] (no LoRAs), moss, sk (style key), seed, P, M, notes, px (output short side)}
+function eyePass(add, out, c){
+  const E = S.blocks.find(b => b.type==='eyes' && b.on); if(!E) return out;
+  const nodes = info ? info.nodes : FAKE.nodes, oi = homeOi(), sam = eyeSam(oi), ff = faceFiles(oi), I = info || {ckpt:[]};
+  if(!['SAM3_Detect', 'MaskToSEGS', 'DetailerForEach', 'GrowMask'].every(x => nodes.has(x))){ c.notes.push('Eye redraw was skipped: this ComfyUI is missing SAM 3 or the Impact Pack Detailer.'); return out; }
+  if(!sam){ c.notes.push('Eye redraw was skipped: this computer has no SAM 3.1 model (sam3.1_multiplex_fp16 in models/checkpoints).'); return out; }
+  const own = E.eckpt && !isMoss(E.eckpt) ? E.eckpt : c.moss ? eyeCkpts(I.ckpt)[0] : '';
+  if(c.moss && !own){ c.notes.push('Eye redraw was skipped: MOSS-Image pictures need a checkpoint picked in the Eye redraw block.'); return out; }
+  let model = c.model, clip = c.clip, vae = c.vae, sk = c.sk;
+  if(own){ const ck = add('CheckpointLoaderSimple', {ckpt_name:own}, '👁 Eye model', '--eye'); model = [ck,0]; clip = [ck,1]; vae = [ck,2]; sk = styleKey({ckpt:own});
+    if(E.keepLoras!==false && !c.moss) S.blocks.filter(b => b.type==='lora' && b.on && b.lora).forEach(b => { const l = add('LoraLoader', {model, clip, lora_name:b.lora, strength_model:b.strength, strength_clip:b.strength}, '👁 Render LoRA', '--eye'); model = [l,0]; clip = [l,1]; });
+    if(STYLES[sk].clipSkip) clip = [add('CLIPSetLastLayer', {stop_at_clip_layer:STYLES[sk].clipSkip, clip}, '👁 CLIP skip', '--eye'), 0];
+  } else if(E.keepLoras===false){ model = c.base[0]; clip = c.base[1]; if(STYLES[sk].clipSkip) clip = [add('CLIPSetLastLayer', {stop_at_clip_layer:STYLES[sk].clipSkip, clip}, '👁 CLIP skip', '--eye'), 0]; }
+  const w = +eyeOpt(E, 'strength');
+  if(E.lora){ const l = add('LoraLoader', {model, clip, lora_name:E.lora, strength_model:w, strength_clip:w}, '👁 Eye LoRA', '--eye'); model = [l,0]; clip = [l,1]; }
+  const tx = c.M.quality ? styleText(sk) : {pos:'', neg:''};
+  const words = [E.lora && S.loraWords[E.lora], eyeOpt(E, 'words')].map(x => String(x || '').trim()).filter(Boolean).join(', ');
+  const keepWords = E.keepLoras!==false && !(c.moss && own) ? loraWords() : '';
+  const pos = add('CLIPTextEncode', {text:joinTags([tx.pos, words, keepWords].filter(Boolean).join(', '), E.usePrompt!==false ? sentPrompt() : ''), clip}, '👁 Eye words', '--eye');
+  const neg = add('CLIPTextEncode', {text:joinTags(tx.neg, S.negative), clip}, '👁 Avoid', '--eye');
+  const rec = (own || c.moss) && STYLES[sk].rec, smp = rec ? rec.sampler : c.P.sampler, sch = rec ? rec.scheduler : c.P.scheduler, cfg = rec ? rec.cfg : c.P.cfg;
+  // a batch goes through one picture at a time (the Detailer takes one picture)
+  if(S.batch > 1 && !c.one && nodes.has('ImpactImageBatchToImageList')) out = [add('ImpactImageBatchToImageList', {image:out}, '👁 One picture at a time', '--eye'), 0];
+  const f = Math.max(0.5, (c.px || 1024) / 1024), px = v => Math.max(1, Math.round(v * f)); // sizes are set for a 1024 picture and follow the upscale
+  const sm = add('CheckpointLoaderSimple', {ckpt_name:sam}, '👁 SAM 3.1', '--eye');
+  const look = add('CLIPTextEncode', {text:eyeWord(E), clip:[sm,1]}, '👁 Look for', '--eye');
+  let mask = [add('SAM3_Detect', {model:[sm,0], image:out, conditioning:[look,0], threshold:+eyeOpt(E, 'thr'), refine_iterations:2, individual_masks:false}, '👁 Find the eyes (SAM 3)', '--eye'), 0];
+  if(E.faceOnly!==false && ff.det && ['UltralyticsDetectorProvider', 'BboxDetectorSEGS', 'SegsToCombinedMask', 'MaskComposite'].every(x => nodes.has(x))){
+    // only what's inside a face (a little grown, so the outer corners stay in)
+    const fd = add('UltralyticsDetectorProvider', {model_name:ff.det}, '👁 Face finder', '--eye');
+    const fs = add('BboxDetectorSEGS', {bbox_detector:[fd,0], image:out, threshold:0.3, dilation:0, crop_factor:1, drop_size:10, labels:'all'}, '👁 Find faces', '--eye');
+    const fm = add('GrowMask', {mask:[add('SegsToCombinedMask', {segs:[fs,0]}, '👁 Face area', '--eye'), 0], expand:px(24), tapered_corners:true}, '👁 Face area, grown', '--eye');
+    mask = [add('MaskComposite', {destination:mask, source:[fm,0], x:0, y:0, operation:'multiply'}, '👁 Eyes inside faces', '--eye'), 0];
+  }
+  if(+eyeOpt(E, 'grow') > 0) mask = [add('GrowMask', {mask, expand:px(+eyeOpt(E, 'grow')), tapered_corners:true}, '👁 Grow over the lids', '--eye'), 0];
+  const segs = add('MaskToSEGS', {mask, combined:true, crop_factor:+eyeOpt(E, 'ctx'), bbox_fill:false, drop_size:px(4), contour_fill:true}, '👁 Both eyes in one crop', '--eye');
+  const zoom = +eyeOpt(E, 'zoom'), fe = Math.round(+eyeOpt(E, 'feather'));
+  return [add('DetailerForEach', {image:out, segs:[segs,0], model, clip, vae, guide_size:zoom, guide_size_for:true, max_size:Math.round(zoom * 1.5), seed:c.seed, steps:Math.min(30, Math.max(20, c.P.steps)), cfg,
+    sampler_name:smp, scheduler:sch, positive:[pos,0], negative:[neg,0], denoise:+eyeOpt(E, 'denoise'), feather:fe, noise_mask:true, force_inpaint:true, wildcard:'', cycle:1, noise_mask_feather:fe}, '👁 Redraw the eyes', '--eye'), 0];
+}
 // the model lists of each computer are kept on the phone: with the computer off, the app still opens ready to render,
 // and renders wait on the phone until a computer is on (offline: the lists in use are the saved ones)
 let offline = false;
@@ -1127,6 +1187,7 @@ function buildGraph(opt){
       bbox_threshold:0.5, bbox_dilation:16, bbox_crop_factor:3, sam_detection_hint:'center-1', sam_dilation:12, sam_threshold:0.93, sam_bbox_expansion:0,
       sam_mask_hint_threshold:0.7, sam_mask_hint_use_negative:'False', drop_size:10, bbox_detector:[det,0], wildcard:'', cycle:1}, extra), 'Fix faces', '--up'), 0];
   }
+  if(!opt.draft) out = eyePass(add, out, {model, clip, vae, base:[[ck,0], [ck,1]], moss:false, sk:styleKey(M), seed, P, M, notes, one:opt.one, px:Math.min(W, H) * upScale(up)});
   add('SaveImage', {filename_prefix:(S.ws && wsPrefix(opt.draft)) || (S.hidden ? HIDDEN : 'RenderDeck') + (opt.draft ? '/drafts/draft' : '/render'), images:out}, 'Save', '--model');
   const colors = {}; for(const id in g){ colors[id] = g[id]._c; delete g[id]._c; }
   return {graph:g, titles, colors, notes, seed};
@@ -1211,6 +1272,7 @@ function buildMoss(opt){
     }
   }
   if(P.faces && !opt.draft) notes.push('Fix faces is SDXL-only for now, so it is skipped for MOSS-Image.');
+  if(!opt.draft) out = eyePass(add, out, {model, clip, vae, base:[model, clip], moss:true, sk:'moss', seed, P, M, notes, one:opt.one, px:Math.min(W, H) * upScale(up)});
   add('SaveImage', {filename_prefix:(S.ws && wsPrefix(opt.draft)) || (S.hidden ? HIDDEN : 'RenderDeck') + (opt.draft ? '/drafts/draft' : '/render'), images:out}, 'Save', '--model');
   const colors = {}; for(const id in g){ colors[id] = g[id]._c; delete g[id]._c; }
   return {graph:g, titles, colors, notes, seed};
@@ -2110,6 +2172,7 @@ function defaults(type){
   if(type==='cn') return {id,type,on:true,model:'',image:'',preview:'',prep:'none',strength:0.8,start:0,end:1};
   if(type==='pic') return {id,type,on:true,image:'',preview:'',change:0.6};
   if(type==='d3') return {id,type,on:true}; // a tool, not part of the render
+  if(type==='eyes') return Object.assign({id,type,on:true,lora:''}, EYE_D);
   if(type==='up') return {id,type,on:true,mode:(!info || info.nodes.has('UltimateSDUpscale')) ? 'redraw' : 'simple',scale:2,model:'',denoise:0.35};
 }
 function addBlock(type, quiet){
@@ -2117,6 +2180,7 @@ function addBlock(type, quiet){
   if(type==='lora') b.lora = loraList(list)[0] || '';
   if(type==='cn') b.model = list[0] || '';
   if(type==='up' && list.length){ b.model = list.find(m => /anime/i.test(m)) || list[0]; }
+  if(type==='eyes'){ const l = eyeLoras(info && info.lora); b.lora = l.find(n => /eye/i.test(baseName(n))) || ''; }
   S.blocks.push(b); justAdded = b.id; S.open[b.id] = true; save(); if(!quiet){ closeSheets(); render(); buzz(); setTimeout(()=>{ const el = document.querySelector(`[data-id="${b.id}"]`); el && el.scrollIntoView({behavior:'smooth',block:'center'}); }, 60); }
   return b;
 }
@@ -2196,6 +2260,30 @@ function blockBody(b){
     ${slider('start','Starts at',0,1,0.05,b.start)}
     ${slider('end','Ends at',0,1,0.05,b.end)}`;
   if(b.type==='d3') return `<div id="d3Body">${d3BlockHtml()}</div>`;
+  if(b.type==='eyes'){ const wd = b.lora ? S.loraWords[b.lora] || '' : '', lm = loraMeta(b.lora), meta = ((lm && lm.words) || []).filter(x => !wd.toLowerCase().split(/,\s*/).includes(x.toLowerCase()));
+    const moss = isMoss((S.blocks.find(x=>x.type==='model') || {}).ckpt), cks = eyeCkpts(I.ckpt), noSam = info && !S.test && !eyeSam(homeOi());
+    const flag = (k, yes, no) => `<button class="chipbtn" data-do="eyeflag" data-v="${k}" style="${b[k]!==false?'border-color:var(--eye);color:var(--eye)':''}">${b[k]!==false ? '✓ ' + yes : no}</button>`;
+    const lo = eyeLoras(I.lora), cur = b.lora && !lo.includes(b.lora) ? [b.lora] : [];
+    return `<div class="row"><label>LoRA</label><div class="grow"><select data-k="lora"><option value="">No LoRA: just redraw the eyes</option>${cur.concat(lo).map(o => `<option ${o===b.lora?'selected':''}>${esc(o)}</option>`).join('')}</select></div></div>
+    ${b.lora ? slider('strength','Strength',0,2,0.05,eyeOpt(b,'strength')) + `<div class="row"><label>Activation</label><div class="grow"><input data-lw value="${esc(wd)}" placeholder="its trigger words" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
+    ${meta.length ? `<div class="row" style="padding-left:92px;flex-wrap:wrap">${meta.map(x => `<button class="chipbtn" data-do="lw" data-v="${esc(x)}">＋ ${esc(x)}</button>`).join('')}</div>` : ''}` : ''}
+    <div class="lbl">Eye words</div><textarea data-k="words" style="min-height:52px" placeholder="e.g. spiral eyes, pink eyes, detailed eyes">${esc(eyeOpt(b,'words'))}</textarea>
+    <div class="row" style="padding-left:92px;flex-wrap:wrap">${flag('usePrompt', "Render's words too", "Render's words: off")}${flag('keepLoras', "Render's LoRAs too", "Render's LoRAs: off")}</div>
+    <div class="row"><label>Model</label><div class="grow"><select data-k="eckpt"><option value="">${moss ? 'First checkpoint (' + esc(cks[0] || 'none') + ')' : 'Same as the render'}</option>${cks.map(o => `<option ${o===b.eckpt?'selected':''}>${esc(o)}</option>`).join('')}</select></div></div>
+    ${moss ? '<p class="note" style="margin-left:92px">MOSS-Image pictures get their eyes redrawn by a checkpoint (eye LoRAs are made for those).</p>' : ''}
+    ${slider('denoise','Redraw strength',0.15,0.8,0.05,eyeOpt(b,'denoise'))}
+    <div class="row"><label>Zoom</label>${seg('zoom',[[768,'768'],[1024,'1024'],[1280,'1280']], eyeOpt(b,'zoom'))}</div>
+    ${slider('ctx','Context',1.25,5,0.25,eyeOpt(b,'ctx'))}
+    ${slider('grow','Mask grow',0,20,1,eyeOpt(b,'grow'))}
+    ${slider('feather','Blend',4,48,2,eyeOpt(b,'feather'))}
+    <div class="row"><label>People</label>${seg('people',[[1,'1'],[2,'2']], eyeOpt(b,'people'))}</div>
+    <details class="neg"><summary>How the eyes are found</summary>
+      <div class="row" style="margin-top:8px"><label>SAM looks for</label><div class="grow"><input data-k="find" value="${esc(eyeOpt(b,'find'))}" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
+      ${slider('thr','Sureness',0.2,0.7,0.05,eyeOpt(b,'thr'))}
+      <div class="row" style="padding-left:92px">${flag('faceOnly', 'Only inside faces', 'Only inside faces: off')}</div>
+      <p class="note">SAM 3 outlines whatever matches the words (comma separated, each up to 2 per person). Lower Sureness finds more; Only inside faces drops anything the face finder doesn't see as a face.</p></details>
+    ${noSam ? '<p class="warn">This computer has no SAM 3.1 model (sam3.1_multiplex_fp16 in models/checkpoints), so the eyes are skipped for now.</p>' : ''}
+    <p class="note">The very last step. SAM 3 outlines both eyes, they are cut out together and zoomed to ${esc(eyeOpt(b,'zoom'))} px so the redraw has full detail, then pasted back with a soft edge. Context sets how much of the face round the eyes the model sees while it redraws (more context, less zoom). Mask grow takes in the lids and lashes; Blend softens the edge. The words go in front of your prompt.</p>`; }
   if(b.type==='pic') return `<div class="thumb">${b.preview ? `<img src="${esc(b.preview)}" alt="">` : '<div class="ph">＋</div>'}<button class="chipbtn" data-do="pick">${b.image?'Change picture':'Pick a picture'}</button></div>
     ${slider('change','How much changes',0.05,1,0.05,b.change)}
     <p class="note">Low keeps your picture, high repaints almost everything.</p>`;
@@ -2215,7 +2303,7 @@ function blockBody(b){
 }
 function renderBlocks(){
   $('#blocks').innerHTML = S.blocks.map(b => { const T = TYPES[b.type];
-    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' : b.type==='d3' ? d3Sum() :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
+    const sub = b.type==='model' ? (b.ckpt ? STYLES[styleKey(b)].name + ' · ' + b.ckpt : 'none picked') : b.type==='sampler' ? sizeOf(b).join('×') + ' · ' + b.steps + ' steps' + (b.noNoise!==false ? ' + finish' : '') + (b.faces ? ' + faces' : '') : b.type==='lora' ? (b.lora||'none picked') : b.type==='cn' ? (b.model||'none picked') : b.type==='pic' ? Math.round(b.change*100)+'% change' : b.type==='d3' ? d3Sum() : b.type==='eyes' ? (b.lora ? baseName(b.lora).replace(/\.safetensors$/i, '') : 'no LoRA') + ' · ' + Math.round(eyeOpt(b,'denoise')*100) + '% redraw' :  (b.mode==='redraw' ? 'redraw ×' + b.scale : b.mode==='model' ? 'model' : '×'+b.scale);
     return `<div class="block ${b.on?'':'off'} ${S.open[b.id]?'open':''} ${b.id===justAdded?'new':''}" data-id="${b.id}" style="--c:var(${T.c})">
       <div class="bhead"><div class="emo">${T.emo}</div><h3>${T.name}<small>${esc(sub)}</small></h3>
       ${T.fixed ? '' : `${T.tool ? '' : `<button class="tog ${b.on?'on':''}" data-do="toggle" aria-label="On or off"></button>`}<button class="x" data-do="del" aria-label="Remove">✕</button>`}<span class="chev" aria-hidden="true">›</span></div>
@@ -2314,6 +2402,7 @@ $('#blocks').addEventListener('click', e => {
   else if(act==='quality'){ b.quality = !b.quality; }
   else if(act==='faces'){ const P = S.blocks.find(x=>x.type==='sampler'); P.faces = !P.faces; }
   else if(act==='seams' || act==='keepColour'){ b[act] = b[act]===false; }
+  else if(act==='eyeflag'){ b[d.dataset.v] = b[d.dataset.v]===false; }
   else if(act==='nonoise'){ b.noNoise = b.noNoise===false; }
   else if(act==='mossfast'){ b.mossFast = !b.mossFast; if(b.mossFast && !mossKit().fast) toast('⚡ Fast needs its LoRA: tap 🌿 Get MOSS-Image on the Model block', true); }
   else if(act==='mossget'){ mossGet(); return; }
@@ -4109,7 +4198,8 @@ function fromPng(buf){
   const graph = pngGraph(buf);
   if(!graph) return null;
   const nodes = Object.values(graph), one = c => nodes.find(n => n.class_type===c), ref = r => Array.isArray(r) ? graph[r[0]] : null;
-  const ks = one('KSampler') || one('KSamplerAdvanced'), ck = one('CheckpointLoaderSimple'); if(!ks) return null;
+  const mine = n => !/^👁/.test((n._meta || {}).title || ''); // (the 👁 Eye redraw's own SAM, model and LoRAs aren't the render's)
+  const ks = one('KSampler') || one('KSamplerAdvanced'), ck = nodes.find(n => n.class_type==='CheckpointLoaderSimple' && mine(n) && !EYE_SAM_RE.test(baseName(n.inputs.ckpt_name || ''))); if(!ks) return null;
   const i = ks.inputs, txt = r => { let n = ref(r); while(n && !('text' in n.inputs)) n = ref(n.inputs.conditioning || n.inputs.positive); return n ? n.inputs.text : ''; };
   const blocks = JSON.parse(JSON.stringify(S.blocks.filter(b => b.type==='model' || b.type==='sampler')));
   const M = blocks.find(b=>b.type==='model'), P = blocks.find(b=>b.type==='sampler');
@@ -4120,7 +4210,7 @@ function fromPng(buf){
   if(typeof i.sampler_name==='string') P.sampler = i.sampler_name; if(typeof i.scheduler==='string') P.scheduler = i.scheduler;
   const lat = one('EmptyLatentImage') || one('EmptyFlux2LatentImage'); if(lat){ const w = lat.inputs.width, h = lat.inputs.height, px = Math.sqrt(w*h);
     P.size = px < 640 ? 512 : px < 896 ? 768 : 1024; const r = w/h; P.shape = r > 1.55 ? 'cinema' : r > 1.15 ? 'wide' : r < 0.65 ? 'phone' : r < 0.87 ? 'tall' : 'square'; }
-  let id = 100; nodes.filter(n => n.class_type==='LoraLoader').forEach(n => blocks.push({id:id++, type:'lora', on:true, lora:n.inputs.lora_name, strength:n.inputs.strength_model}));
+  let id = 100; nodes.filter(n => n.class_type==='LoraLoader' && mine(n)).forEach(n => blocks.push({id:id++, type:'lora', on:true, lora:n.inputs.lora_name, strength:n.inputs.strength_model}));
   const seed = typeof (i.seed ?? i.noise_seed)==='number' ? (i.seed ?? i.noise_seed) : null;
   return {blocks, prompt:txt(i.positive), negative:txt(i.negative), addedTags:[], asTags:false, seed, fromPng:true};
 }
