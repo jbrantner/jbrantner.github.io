@@ -13,6 +13,7 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
   POST /renderdeck/sync {source}              -> copy the checkpoints and LoRAs another computer has and this one lacks (not Qwen/MiniMax/3D)
+       {source, names:[..]} / {source, kinds}  -> just those LoRAs (a fresh add, sent on by the farm) / only these kinds (loras)
        {source, only:'qwen'}                   -> copy the Qwen-Image-Edit files once (edit model, encoder, VAE, Lightning LoRAs)
   GET  /renderdeck/tagger, POST /renderdeck/tagger/get, POST /renderdeck/tag -> the WD EVA02 tagger (Danbooru tags with
                                                scores, on the CPU) for training captions; fetched once from Hugging Face
@@ -49,8 +50,14 @@ RETRIES = 8  # a download waits 30 s, 1, 2, 4 … up to 10 minutes after each dr
 # installed on, and these names are never copied whatever folder they are in (Jordan 2026-10-20: Qwen stays on Render).
 SYNC_KINDS = ('checkpoints', 'loras')
 STAYS_PUT = re.compile(r'qwen|minimax|hunyuan|trellis|pixal|mistral|flux2|moss', re.I)  # moss: MOSS-Image is Render only (2026-11-03)
+# LoRAs go to every computer (Jordan 2026-11-26: "Lora's are going to just one computer when they should go to both"): a MiniMax H3
+# LoRA is named MinimaxH3… or …-minimax-h3-…, so STAYS_PUT kept every video LoRA on the PC it was added on. Main has the whole video
+# stack now, so only LoRAs for models that live on one PC stay put.
+LORA_STAYS = re.compile(r'qwen|hunyuan|trellis|pixal|mistral|flux2', re.I)
 def _synced(kind, rel):
-    return kind in SYNC_KINDS and rel.lower().endswith('.safetensors') and not STAYS_PUT.search(rel)
+    if not rel.lower().endswith('.safetensors') or kind not in SYNC_KINDS:
+        return False
+    return not (LORA_STAYS if kind == 'loras' else STAYS_PUT).search(rel)
 # 📦 Copy Qwen once (Jordan 2026-10-22, the WiFi drops were a bad cord): the Qwen-Image-Edit set (edit model, text encoder,
 # VAE, Lightning LoRAs) from any models folder, asked for once from the app; MiniMax's own Qwen-named encoder is not part of it
 QWEN_SET = re.compile(r'qwen', re.I)
@@ -1013,6 +1020,8 @@ async def sync(request):
     try:
         body = await request.json()
         src, only = (body.get('source') or '').strip().rstrip('/'), body.get('only') or ''
+        names = {os.path.basename(str(n)).lower() for n in (body.get('names') or [])}  # just these LoRAs (a fresh add, sent on at once)
+        kinds = [k for k in (body.get('kinds') or SYNC_KINDS) if k in SYNC_KINDS]  # a video-only computer is sent LoRAs only
         u = urlparse(src)
         if u.scheme != 'https' or not (u.hostname or '').lower().endswith('.ts.net'):
             raise ValueError('Sync only works with your computers\' Tailscale https addresses')
@@ -1028,8 +1037,9 @@ async def sync(request):
         mine = _models()
         busy = {(j['kind'], j['name'].lower()) for j in JOBS.values() if j['status'] not in ('done', 'failed')}
         todo, skipped = [], []
-        want = (lambda k, n: _qwen(k, n)) if only == 'qwen' else _synced
-        for kind in (KINDS if only == 'qwen' else SYNC_KINDS):
+        want = (lambda k, n: _qwen(k, n)) if only == 'qwen' else (lambda k, n: k == 'loras' and os.path.basename(n).lower() in names
+                                                                   and n.lower().endswith('.safetensors')) if names else _synced
+        for kind in (KINDS if only == 'qwen' else ('loras',) if names else kinds):
             if kind not in mine:
                 continue
             have = {os.path.basename(m['name']).lower() for m in mine[kind]}  # same file name in any subfolder counts as having it
@@ -1196,6 +1206,8 @@ async def _look(s, url):
             st['training'] = bool(jl.get('training'))
         except Exception:
             jl = None
+    if st['online'] and jl is not None:
+        _fresh_loras(url, jl.get('jobs', []))
     if st['online'] and st['copies'] and jl is not None:
         try:
             jobs = jl.get('jobs', [])
@@ -1206,6 +1218,48 @@ async def _look(s, url):
                 st['lists_at'] = 0
         except Exception:
             pass
+
+
+def _fresh_loras(url, jobs):
+    """A LoRA just added on one computer (⬇ Add a LoRA: a Civitai / Hugging Face link or a file from the phone, in any app) is
+    noted in FARM['lpush'] so the farm sends it on to every other computer at once, instead of waiting for the half-hourly compare.
+    Copies between the computers have the other computer's name as their source, so they are never sent back."""
+    seen = _st(url).setdefault('lseen', set())
+    for x in jobs:
+        src = str(x.get('source') or '')
+        if x.get('kind') != 'loras' or x.get('status') != 'done' or x.get('id') in seen or not (src == 'phone' or src.startswith('http')):
+            continue
+        seen.add(x.get('id'))
+        name = os.path.basename(str(x.get('name') or ''))
+        if name and not any(p['name'].lower() == name.lower() for p in FARM.setdefault('lpush', [])):
+            FARM['lpush'].append({'name': name, 'src': url, 'got': [url], 't': time.time()})
+            _farm_save()
+
+
+async def _push_loras(s, on):
+    """Send each freshly added LoRA to the computers that are on and don't have it yet; one that is off gets it when it comes back
+    (kept for two weeks). Video-only computers get LoRAs too."""
+    left = []
+    for p in FARM.get('lpush') or []:
+        if time.time() - p.get('t', 0) > 14 * 86400:
+            continue
+        for dst in on:
+            if dst in p['got'] or not _st(p['src'])['online']:
+                continue
+            try:
+                status, j = await _post(s, dst + '/renderdeck/sync', {'source': p['src'], 'names': [p['name']]})
+            except Exception:
+                continue
+            if status == 200 and not j.get('error'):
+                p['got'].append(dst)
+                if j.get('queued'):
+                    _st(dst)['copies'] += [{'name': n, 'done': 0, 'total': 0} for n in j['queued']]
+                    _st(dst)['lists_at'] = 0
+        if any(u not in p['got'] for u in [q['url'] for q in FARM['pcs']]):
+            left.append(p)
+    if left != (FARM.get('lpush') or []):
+        FARM['lpush'] = left
+        _farm_save()
 
 
 _DIRECT = {}  # host -> (checked at, direct?)
@@ -1229,11 +1283,11 @@ async def _direct(url):
     return ok
 
 
-async def _sync_pair(s, dst, src):
+async def _sync_pair(s, dst, src, kinds=None):
     if not (await _direct(src) and await _direct(dst)):
         return  # relayed: a big copy would go out through the internet connection
     try:
-        status, j = await _post(s, dst + '/renderdeck/sync', {'source': src})
+        status, j = await _post(s, dst + '/renderdeck/sync', dict({'source': src}, **({'kinds': kinds} if kinds else {})))
         if status == 200 and j.get('queued'):
             _st(dst)['copies'] += [{'name': n, 'done': 0, 'total': 0} for n in j['queued']]
             _st(dst)['lists_at'] = 0
@@ -1379,13 +1433,15 @@ async def _farm_round(s):
     # after each WiFi drop was the suspect when the house WiFi kept dropping on 2026-10-18, before the router fix.)
     global _last_compare
     on = [u for u in pcs if _st(u)['online']]
+    if FARM.get('lpush'):
+        await _push_loras(s, on)
     if (_auto_sync() and len(on) > 1 and time.time() - _last_compare > 1800
             and not any(_st(u)['copies'] for u in pcs)):
         _last_compare = time.time()
         for dst in on:
             for src in on:
-                if src != dst and dst not in FARM['video']:
-                    await _sync_pair(s, dst, src)
+                if src != dst:
+                    await _sync_pair(s, dst, src, ['loras'] if dst in FARM['video'] else None)  # a video-only computer still gets every LoRA
     if changed:
         _farm_save()
 

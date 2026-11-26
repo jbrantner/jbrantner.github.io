@@ -51,8 +51,11 @@ async def main():
     # what the sync copies: checkpoints and LoRAs, never Qwen, MiniMax or 3D files, nothing from other folders
     ok(H._synced('checkpoints', 'oneObsession_v24.safetensors') and H._synced('loras', 'chars/Librarian_rd.safetensors'), 'checkpoints and LoRAs are copied')
     ok(not any(H._synced(k, n) for k, n in [('diffusion_models', 'qwen_image_edit_fp8_e4m3fn.safetensors'), ('text_encoders', 'qwen_2.5_vl_7b.safetensors'),
-        ('loras', 'Qwen-Image-Lightning-4steps.safetensors'), ('loras', 'minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors'),
-        ('controlnet', 'diffusion_pytorch_model_promax.safetensors'), ('checkpoints', 'trellis_model.safetensors'), ('vae', 'sdxl_vae.safetensors')]), 'Qwen, MiniMax, 3D and other folders stay put')
+        ('loras', 'Qwen-Image-Lightning-4steps.safetensors'), ('checkpoints', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors'),
+        ('controlnet', 'diffusion_pytorch_model_promax.safetensors'), ('checkpoints', 'trellis_model.safetensors'), ('vae', 'sdxl_vae.safetensors')]), 'Qwen, MiniMax models, 3D and other folders stay put')
+    # (Jordan 2026-11-26: "Lora's are going to just one computer when they should go to both") MiniMax H3 LoRAs go to both
+    ok(all(H._synced('loras', n) for n in ['style-minimax-h3-base-epoch-10.safetensors', 'MinimaxH3-Blowjob-512_000000510.safetensors',
+        'minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors', 'pika_h3_flex_ref2va.safetensors']), 'MiniMax H3 LoRAs are copied to both computers')
     # two syncs asked for at once still copy one file at a time
     live, most = [0], [0]
     async def slow(todo):
