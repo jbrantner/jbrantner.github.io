@@ -8,7 +8,7 @@ if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); pro
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
   UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors']], weight_dtype:[['default']]}}},
-  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors']], strength_model:['FLOAT', {default:1}]}}},
+  LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors', 'minimax_h3_anime_style.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
   VAELoader:{input:{required:{vae_name:[['minimax_h3_video_vae_fp16.safetensors', 'minimax_h3_audio_vae.safetensors']]}}},
@@ -677,6 +677,32 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       document.querySelector('[data-close]').click(); document.querySelector('#nextBtn').click(); await new Promise(z => setTimeout(z, 200)); document.querySelector('#nxW').value = 'typing here';
       go(); await new Promise(z => setTimeout(z, 300)); E.make = mk; REEL.clips().splice(REEL.clips().findIndex(c => c.takes.includes('tFakeSend')), 1); REEL.refresh(); const o = {open:!document.querySelector('#sheet').hidden, v:(document.querySelector('#nxW') || {}).value}; document.querySelector('#sheet').hidden = true; return o; });
     ok(r.open && r.v==='typing here', 'a send finishing after its sheet was closed leaves the next sheet open (' + JSON.stringify(r) + ')'); }
+  // 🎨 Style LoRA per clip (Jordan 2026-11-26): picked in the sheet, not a chip in the words; activation words go in out of sight; 🏁 finish only
+  { const unetOf = (g, id) => { let n = g[id]; while(n && n.class_type!=='UNETLoader') n = g[(n.inputs.model || [])[0]]; return n ? n.inputs.unet_name : ''; };
+    const styleOn = g => Object.entries(g).filter(([k, n]) => n.class_type==='LoraLoaderModelOnly' && /anime_style/.test(n.inputs.lora_name)).map(([k, n]) => ({unet:unetOf(g, k), str:n.inputs.strength_model}));
+    await page.evaluate(() => { const cs = REEL.clips(), i = cs.length - 1 - [...cs].reverse().findIndex(c => c.pick && REEL.info(c.pick).state==='done'); REEL.go(i); REEL.refresh(); }); await page.waitForTimeout(400);
+    await page.click('#nextBtn'); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => !!document.querySelector('.lsl [data-sa]') && !document.querySelector('.lsl [data-si]')), '🎨 the Next sheet has a ＋ Style LoRA button and no style LoRA yet');
+    await page.click('.lsl [data-sa]'); await page.waitForTimeout(150);
+    await page.selectOption('.lsl [data-si="0"] [data-sn]', 'minimax_h3_anime_style.safetensors'); await page.waitForTimeout(150);
+    await page.fill('.lsl [data-si="0"] [data-sw]', 'anime_style_trigger'); await page.click('.lsl [data-si="0"] [data-sd="fin"]');
+    await page.fill('#nxW', 'Mia stretches'); await page.click('#nSeg [data-n="1"]');
+    const words = await page.inputValue('#nxW'); ok(!/anime_style/.test(words), 'the style LoRA stays out of the words box');
+    let n0 = sent.filter(x => x.g).length; await page.click('#nxGo'); await page.waitForTimeout(2500);
+    const g = sent.filter(x => x.g).slice(n0), t = await eng.evaluate(() => { const t = H3.S.takes[0]; return {loras:t.loras, styleL:t.styleL}; });
+    const on = g.length ? styleOn(g[0].g) : [], txt = g.length ? JSON.stringify(nodes(g[0].g, 'MiniMaxH3ReferenceToVideo').map(n => n.inputs.prompt)) : '';
+    ok(g.length===1 && on.length===1 && /PIKA/.test(on[0].unet) && on[0].str===0.8, '🏁 finish only: the style LoRA goes on the PIKA model only, at 0.8 (' + JSON.stringify(on) + ')');
+    ok(/anime_style_trigger/.test(txt), 'its activation words are sent with the clip (' + txt.slice(0, 200) + ')');
+    ok((t.loras || []).some(l => l.style && l.fin2 && /anime_style/.test(l.name)), 'the take keeps it as a style LoRA (' + JSON.stringify(t) + ')');
+    ok(await page.evaluate(() => (REEL.cur().look.sl || []).length===1 && REEL.R().shotSl[0].side==='fin'), 'the new clip keeps it in its look');
+    // ↻ Redo on that clip starts with it; take it off and the new option has none
+    await page.click('#redoBtn'); await page.waitForTimeout(300);
+    ok(await page.evaluate(() => document.querySelectorAll('.lsl [data-si]').length===1 && document.querySelector('.lsl [data-sn]').value==='minimax_h3_anime_style.safetensors'), '↻ Redo starts with the clip\'s style LoRA');
+    await page.click('.lsl [data-sx]'); await page.waitForTimeout(150); await page.fill('#rdW', 'Mia sits'); await page.click('#nSeg [data-n="1"]');
+    n0 = sent.filter(x => x.g).length; await page.click('#rdGo'); await page.waitForTimeout(2500);
+    const g2 = sent.filter(x => x.g).slice(n0), t2 = await eng.evaluate(() => H3.S.takes[0].loras || []);
+    ok(g2.length===1 && !styleOn(g2[0].g).length && !t2.some(l => /anime_style/.test(l.name)), 'with it taken off, the new option has no style LoRA (' + JSON.stringify(t2) + ')');
+  }
   // an untrimmed clip loops in the viewport (the browser pauses at the very end before the last timeupdate)
   { const r = await page.evaluate(async () => { const cs = REEL.clips(), i = cs.findIndex(c => c.pick && REEL.info(c.pick).state==='done'); REEL.go(i); const c = REEL.cur(); c.in = 0; c.out = null; REEL.refresh();
       await new Promise(z => setTimeout(z, 400)); const v = document.querySelector('#vA'); v.play().catch(() => {}); try{ v.currentTime = Math.max(0, (v.duration || 5) - 0.6); }catch(e){}

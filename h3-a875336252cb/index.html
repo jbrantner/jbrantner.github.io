@@ -1522,6 +1522,14 @@ function loraOut(txt, T){ return txt.replace(/<\s*lora\s*(\d+)\s*>(\s*([.!?])(?!
     let w = L && L.lora ? actWords(loraWords(L, fr)) : ''; if(!w) return dt ? mk : '';
     const end = (w.match(/[.!?]$/) || [''])[0]; w = w.replace(/\s*[.!?]+$/, '');
     return w + (mk || (/^\s*(?:$|\n|[A-Z<\[])/.test(nx) ? end : '')); }); } // its own full stop only where a sentence ends (trigger words with a comma keep it)
+// 🎨 Reel's style LoRAs for the shot being sent (Jordan 2026-11-26: "a style Lora option so it doesn't need to be imported to the Lora section
+// that goes into the prompt ... will just apply to the shot and can still have activation text but will be more on the back end"):
+// {add:[{name, str, words, side:'both'|'first'|'fin'}], drop:[names]} while Reel sends a shot, else null. styleIn puts them on a new take
+let STYLEL = null;
+function styleIn(t){ const S2 = STYLEL; if(!S2) return; const drop = new Set([...(S2.drop || []), ...S2.add.map(l => l.name)]);
+  t.loras = lorasOf(t).filter(l => !l.style && !drop.has(l.name)).map(l => Object.assign({}, l));
+  for(const l of S2.add) t.loras.push(Object.assign({name:l.name, str:l.str != null && l.str!=='' ? +l.str : 1, words:(l.words || '').trim(), style:true}, l.side==='first' ? {first:true} : l.side==='fin' ? {fin2:true} : {}));
+  t.styleL = S2.add.map(l => l.name); }
 let LFIRST = new Set(), LFIN2 = new Set(); // 📚 🧩 LoRA chip ids whose LoRAs go on the vanilla half only / on the 🏁 finisher only (set by Reel)
 function loraChips(t){ delete t.chipLoras; const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), add = [];
   // 🎯 a 🧩 chip marked vanilla only (Reel, Jordan 2026-11-22: "Can we add the Lora just for vanilla to Reels?") keeps its LoRAs off the finisher
@@ -3420,7 +3428,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       model = [add('MiniMaxH3FunControlNetApply', {model, model_patch:patch, vae, strength:+g.str, start_percent:0, end_percent:+g.end, control_video:[add('GetVideoComponents', {video:[v, 0]}), 0]}), 0]; };
     guide(t.ctl); if(t.ctl2) guide(t.ctl2); } // a second guide (e.g. depth under the skeleton) wraps the first: both steer every block
   const useFirst = t.fl && first && t.first, useLast = t.fl && t.lastOn && last && t.lastImg;
-  const words = LS.map(l => (l.words || '').trim()).filter(Boolean).join(', ');
+  const words = allLoras(oi, t).map(l => (l.words || '').trim()).filter(Boolean).join(', '); // (a 🏁 finish-only LoRA's words stay in the words too)
   // (✨ in-betweens: the mannequin wording is added here, out of sight; Jordan's prompt says what happens)
   const say = t.ctl && t.ctl.face ? faceWords(t.ctl.face, Math.max(0, pc.start - LEAD(pc) / FPS), L / FPS) : '';
   const pp = castText(shuffleWords(pc.prompt, shufSeed(t, i), shufOn(t, i) ? 1 : 0), t, !t.h3), act = (t.mq && (t.pins || []).length ? t.mq + ' ' : '') + pp + (say ? (/[.!?]\s*$/.test(pp) || !pp.trim() ? ' ' : '. ') + say : '');
@@ -4285,6 +4293,7 @@ async function render(){ if(S.tab!=='wild' && S.fkey===WK && !WLOOP_BUSY && !WOR
     toast(sent > 1 ? sent + ' takes sent to ' + used.map(pcName).join(' and ') + (left ? '. Not ' + left + ', so they take turns on ' + pcName(used[0]) : '') : 'Sent to ' + pcName(S.takes[0].pc), left ? 8000 : 3200); }
 }
 async function sendPieces(t, from){
+  if(STYLEL && !from && !t.pieces.some(p => p.pid)) styleIn(t); // 🎨 Reel's style LoRAs for this shot (a brand-new take only)
   const url = t.pc, oi = pcOf(url).oi, names = {}, M0 = resolveModel(oi, t.model, t.turbo), T = castTake(t, !(M0 && M0.fl2v));
   const ids = t.combo ? (seamOne(t) ? [...T.imgs.map(r => r.id), ...T.vids.map(r => r.id)] : []) : [t.sm && !t.sm.file && t.sm.vid, t.ctl && t.ctl.vid, t.ctl2 && t.ctl2.vid, t.cont, t.first, t.lastImg, ...T.imgs.map(r => r.id), ...(t.pins || []).map(r => r.id), ...(t.redo && t.redo.kp ? t.redo.kp.pins.map(p => p[1]) : []), ...T.vids.map(r => r.id), ...t.auds.map(r => r.id), ...t.follow.map(r => r.id)].filter(Boolean);
   for(const id of [...new Set(ids)]) names[id] = await upload(url, id);
@@ -6810,6 +6819,8 @@ if(ENGINE){
     // ✨ 👗 🧩 the rest of the Library, as H3 Deck has it: attributes, clothing, LoRA chips
     extras:() => (S.lib || []).filter(L => ['attr', 'wear', 'lora'].includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || L.what || '',
       loras:(L.loras || []).filter(l => l && l.name).map(l => ({name:l.name, str:l.str})), pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
+    setStyle:(add, drop) => { STYLEL = Array.isArray(add) ? {add:add.filter(l => l && l.name).map(l => ({name:String(l.name), str:l.str, words:l.words || '', side:l.side || 'both'})), drop:Array.isArray(drop) ? drop.map(String) : []} : null; },
+    styleLoraList:() => wLoraNames().map(n => ({name:n, words:(S.loraWords || {})[n] || ''})),
     setLoraFirst:(ids, fin2) => { LFIRST = new Set(Array.isArray(ids) ? ids : []); LFIN2 = new Set(Array.isArray(fin2) ? fin2 : []); },
     setAttrs:(m, fit, art, scene, doff) => { ATTRS = m && typeof m==='object' ? m : {}; FIT = fit && typeof fit==='object' ? fit : {}; ART = art && typeof art==='object' ? art : {}; SCENE = scene==null ? 'auto' : String(scene); DESCOFF = doff && typeof doff==='object' ? doff : {}; },
     arts:() => Object.keys(ARTS).map(k => ({key:k, label:ARTS[k].label, scene:!!ARTS[k].scene, own:ARTS[k].only!=='scene'})),
