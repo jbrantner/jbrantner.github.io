@@ -1522,12 +1522,12 @@ function loraOut(txt, T){ return txt.replace(/<\s*lora\s*(\d+)\s*>(\s*([.!?])(?!
     let w = L && L.lora ? actWords(loraWords(L, fr)) : ''; if(!w) return dt ? mk : '';
     const end = (w.match(/[.!?]$/) || [''])[0]; w = w.replace(/\s*[.!?]+$/, '');
     return w + (mk || (/^\s*(?:$|\n|[A-Z<\[])/.test(nx) ? end : '')); }); } // its own full stop only where a sentence ends (trigger words with a comma keep it)
-let LFIRST = new Set(); // 📚 🧩 LoRA chip ids whose LoRAs go on the vanilla half only (set by Reel)
+let LFIRST = new Set(), LFIN2 = new Set(); // 📚 🧩 LoRA chip ids whose LoRAs go on the vanilla half only / on the 🏁 finisher only (set by Reel)
 function loraChips(t){ delete t.chipLoras; const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), add = [];
   // 🎯 a 🧩 chip marked vanilla only (Reel, Jordan 2026-11-22: "Can we add the Lora just for vanilla to Reels?") keeps its LoRAs off the finisher
-  for(const m of txt.matchAll(LORARE)){ const L = (t.lines || {})[m[1]]; if(L && L.lora){ const fv = !!(t.fin && L.lib && LFIRST.has(L.lib)); add.push(...loraSet(L, !!L.snap).map(l => fv ? Object.assign({}, l, {first:true}) : l)); } }
+  for(const m of txt.matchAll(LORARE)){ const L = (t.lines || {})[m[1]]; if(L && L.lora){ const fv = !!(t.fin && L.lib && LFIRST.has(L.lib)), f2 = !fv && !!(t.fin && L.lib && LFIN2.has(L.lib)); add.push(...loraSet(L, !!L.snap).map(l => fv ? Object.assign({}, l, {first:true}) : f2 ? Object.assign({}, l, {fin2:true}) : l)); } }
   if(!add.length) return t; const LS = lorasOf(t).map(l => Object.assign({}, l)), have = new Set(LS.map(l => l.name)), got = [];
-  for(const l of add){ if(have.has(l.name)) continue; have.add(l.name); got.push(l.name); LS.push(Object.assign({name:l.name, str:l.str != null && l.str!=='' ? +l.str : 1, words:(l.words || '').trim()}, l.first ? {first:true} : {})); }
+  for(const l of add){ if(have.has(l.name)) continue; have.add(l.name); got.push(l.name); LS.push(Object.assign({name:l.name, str:l.str != null && l.str!=='' ? +l.str : 1, words:(l.words || '').trim()}, l.first ? {first:true} : l.fin2 ? {fin2:true} : {})); }
   t.loras = LS; if(got.length) t.chipLoras = got; return t; }
 // 🧍 pose chips (Jordan 2026-11-15: "Can we have poses prompt sort of like actions and dialog does?"): <Pose k> at a moment in the words, the
 // pose in S.lines[k] {pose:1, n, lib (a 📚 Library pose), p (which person in its picture, -1 = the person), name, text, hold}. The chip reads
@@ -3407,7 +3407,10 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   const M = resolveModel(oi, t.model, t.turbo), w = t.w, h = t.h, L = pc.gen, steps = +t.steps || M.steps;
   let model = [add('UNETLoader', {unet_name:M.unet, weight_dtype:'default'}), 0];
   if(M.lora) model = [add('LoraLoaderModelOnly', {model, lora_name:M.lora, strength_model:1}), 0];
-  const LS = allLoras(oi, t); // ✨ Quality boost rides along here
+  // 🏁 Finish only (Jordan 2026-11-25: "an option where LoRAs apply to the first model, the second model, or both"): l.fin2 stays off the
+  // first model when a finisher runs (with no finisher there is only one model, so it goes on that one)
+  const fin2On = !!(t.fin && finAble(t.model) && finOf2(oi, t) && oi.SplitSigmas && oi.DisableNoise);
+  const LS = allLoras(oi, t).filter(l => !(fin2On && l.fin2)); // ✨ Quality boost rides along here
   for(const l of LS) model = [add('LoraLoaderModelOnly', {model, lora_name:l.name, strength_model:+l.str}), 0];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0], vae = [add('VAELoader', {vae_name:vaeOf(oi)}), 0], avae = [add('VAELoader', {vae_name:avaeOf(oi)}), 0];
   const img = id => [add('LoadImage', {image:names[id]}), 0];
@@ -4201,7 +4204,7 @@ function snapshot0(){ // the form, frozen into a take
   const up = sm && f.smUp ? {scale:+f.smUpX || 1.5, rep:f.smUpRep || 'medium', str:f.smUpStr != null ? +f.smUpStr : 0.8, refs:upImgs.length > 0} : null;
   const ctl = !sm && f.ctl && f.ctlVid && S.media[f.ctlVid] ? {vid:f.ctlVid, str:+f.ctlStr, end:+f.ctlEnd, face:f.faceOn!==false ? faceOf(S.media[f.ctlVid]) : null} : null;
   const ctl2 = ctl && f.ctl2Vid && f.ctl2Vid!==f.ctlVid && S.media[f.ctl2Vid] ? {vid:f.ctl2Vid, str:+f.ctl2Str, end:+f.ctl2End} : null;
-  return {sm, up, upImgs, ctl, ctl2, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => Object.assign({name:l.name, str:+l.str, words:(l.words || '').trim()}, l.first && f.finOn && finAble(f.model) ? {first:true} : {})), boost:f.boost!==false, w, h, steps:f.steps,
+  return {sm, up, upImgs, ctl, ctl2, model:f.model, turbo:f.turbo, loras:f.loras.filter(l => l.name).map(l => Object.assign({name:l.name, str:+l.str, words:(l.words || '').trim()}, l.first && f.finOn && finAble(f.model) ? {first:true} : l.fin2 && f.finOn && finAble(f.model) ? {fin2:true} : {})), boost:f.boost!==false, w, h, steps:f.steps,
     fl:!sm && (f.fl && !!f.first || !!startPic(f)), first:!sm && f.fl && !contOn() ? f.first : !sm && startPic(f) ? startPic(f) : null, startPic:!sm && !(f.fl && f.first) ? startPic(f) : null, cont:contOn() ? f.first : null, ...contBits(), ...stillBits(), lastOn:!sm && f.fl && f.last && !!f.lastImg, lastImg:!sm && f.fl && f.last ? f.lastImg : null,
     imgs:R.imgs.map(r => Object.assign({id:r.id, desc:r.desc || '', keep:r.keep || ''}, r.pose ? {pose:{t:+r.pose.t || 0}} : {}, shotRefs(f).includes(r) ? {rk:shotRefs(f).indexOf(r) + 1} : {})), refOff:(() => { const o = {}; shotRefs(f).forEach((r, i) => { if(!R.imgs.includes(r)) o[i + 1] = r.desc || ''; }); return o; })(), pins:R.pins.map(r => ({id:r.id, t:+r.pose.t || 0})), mq:R.pins.length ? f.mq || '' : '', vids:R.vids.map(r => ({id:r.id, sound:!!r.sound, follow:!!r.follow, desc:r.desc || '', keep:r.keep || ''})), auds:R.auds.map(r => ({id:r.id, desc:r.desc || '', keep:r.keep || ''})), follow:R.follow.map(r => ({id:r.id})),
     blend:sm && f.smBlend && f.smBlend.vid===f.smVid ? Object.assign({}, f.smBlend, {key:uid('k')}) : null,
@@ -5007,7 +5010,7 @@ function drawModel(){
   // style LoRAs any PC has
   const loras = [...new Set(oiAny.flatMap(styleLoras))].sort(), on = f.loras.filter(l => l.name);
   $('#loraList').innerHTML = f.loras.map((l, i) => `<div class="lr" data-li="${i}"><div class="lt"><select data-ln>${(l.name ? '' : '<option value="">Pick a LoRA</option>') + [...new Set([...(l.name ? [l.name] : []), ...loras])].map(n => `<option value="${esc(n)}"${n===l.name ? ' selected' : ''}>${esc(bn(n).replace(/\.safetensors$/, ''))}${loras.includes(n) ? '' : ' (not on the PCs)'}</option>`).join('')}</select><b>${(+l.str).toFixed(2)}</b><button class="btn x" data-lx aria-label="Remove">✕</button></div>
-    <input type="range" data-ls min="0" max="1.5" step="0.05" value="${+l.str}">${f.finOn && finAble(f.model) ? `<div class="seg pick" style="margin:6px 0"><button data-lf="0" class="${l.first ? '' : 'on'}">Both halves</button><button data-lf="1" class="${l.first ? 'on' : ''}">🎯 Vanilla only</button></div>` : ''}<input data-lw placeholder="Trigger words and phrases (remembered for this LoRA)" value="${esc(l.words || '')}"></div>`).join('');
+    <input type="range" data-ls min="0" max="1.5" step="0.05" value="${+l.str}">${f.finOn && finAble(f.model) ? `<div class="seg pick" style="margin:6px 0"><button data-lf="0" class="${l.first || l.fin2 ? '' : 'on'}">Both halves</button><button data-lf="1" class="${l.first ? 'on' : ''}">🎯 Vanilla only</button><button data-lf="2" class="${l.fin2 && !l.first ? 'on' : ''}">🏁 Finish only</button></div>` : ''}<input data-lw placeholder="Trigger words and phrases (remembered for this LoRA)" value="${esc(l.words || '')}"></div>`).join('');
   $('#boostSw').classList.toggle('on', f.boost!==false); $('#fastSw').classList.toggle('on', S.fast!==false);
   $('#loraAdd').disabled = !loras.length; $('#loraOut').textContent = on.length ? on.length + ' on' : '';
   { const can = finAble(f.model) && oiAny.some(o => pikaOf(o)), on = can && !!f.finOn, at = +f.finAt || 0.5, st = +f.steps || (M ? M.steps : 20), P = finPlan({finAt:at}, st);
@@ -5708,7 +5711,7 @@ $('#loraList').onchange = e => { const row = e.target.closest('[data-li]'); if(!
 $('#loraList').oninput = e => { const row = e.target.closest('[data-li]'); if(!row) return; const l = S.f.loras[+row.dataset.li];
   if(e.target.matches('[data-ls]')){ l.str = +e.target.value; row.querySelector('b').textContent = l.str.toFixed(2); }
   if(e.target.matches('[data-lw]')){ l.words = e.target.value; if(l.name){ S.loraWords = S.loraWords || {}; S.loraWords[l.name] = l.words; } } save(); };
-$('#loraList').onclick = e => { const lf = e.target.closest('[data-lf]'); if(lf){ const l = S.f.loras[+lf.closest('[data-li]').dataset.li]; l.first = lf.dataset.lf==='1'; save(); drawModel(); return; } const x = e.target.closest('[data-lx]'); if(!x) return; S.f.loras.splice(+x.closest('[data-li]').dataset.li, 1); save(); drawModel(); drawGo(); };
+$('#loraList').onclick = e => { const lf = e.target.closest('[data-lf]'); if(lf){ const l = S.f.loras[+lf.closest('[data-li]').dataset.li]; l.first = lf.dataset.lf==='1'; l.fin2 = lf.dataset.lf==='2'; if(!l.fin2) delete l.fin2; save(); drawModel(); return; } const x = e.target.closest('[data-lx]'); if(!x) return; S.f.loras.splice(+x.closest('[data-li]').dataset.li, 1); save(); drawModel(); drawGo(); };
 $('#res').oninput = e => { S.f.mp = +e.target.value; save(); drawCanvas(); };
 for(const k of ['cw', 'ch']){ $('#' + k).oninput = e => { const v = +e.target.value; if(v >= 64){ S.f[k] = v; save(); drawCanvas(); drawGo(); } }; $('#' + k).onchange = () => { const d = customDims(); S.f.cw = d.w; S.f.ch = d.h; save(); $('#cw').value = d.w; $('#ch').value = d.h; drawCanvas(); }; }
 $('#cSwap').onclick = () => { const f = S.f, w = +f.cw || 640; f.cw = +f.ch || 352; f.ch = w; save(); $('#cw').value = f.cw; $('#ch').value = f.ch; drawCanvas(); drawGo(); };
@@ -6807,7 +6810,7 @@ if(ENGINE){
     // ✨ 👗 🧩 the rest of the Library, as H3 Deck has it: attributes, clothing, LoRA chips
     extras:() => (S.lib || []).filter(L => ['attr', 'wear', 'lora'].includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || L.what || '',
       loras:(L.loras || []).filter(l => l && l.name).map(l => ({name:l.name, str:l.str})), pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
-    setLoraFirst:ids => { LFIRST = new Set(Array.isArray(ids) ? ids : []); },
+    setLoraFirst:(ids, fin2) => { LFIRST = new Set(Array.isArray(ids) ? ids : []); LFIN2 = new Set(Array.isArray(fin2) ? fin2 : []); },
     setAttrs:(m, fit, art, scene, doff) => { ATTRS = m && typeof m==='object' ? m : {}; FIT = fit && typeof fit==='object' ? fit : {}; ART = art && typeof art==='object' ? art : {}; SCENE = scene==null ? 'auto' : String(scene); DESCOFF = doff && typeof doff==='object' ? doff : {}; },
     arts:() => Object.keys(ARTS).map(k => ({key:k, label:ARTS[k].label, scene:!!ARTS[k].scene, own:ARTS[k].only!=='scene'})),
     // 🎞 the moving preview of a take while it renders (the frames ComfyUI sends this copy of the engine), or ''

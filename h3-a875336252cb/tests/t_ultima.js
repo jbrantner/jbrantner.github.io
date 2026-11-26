@@ -49,7 +49,9 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     o.mpCol = getComputedStyle(document.querySelector('#modelPick')).flexDirection;
     const chains = () => { const t = H3.snapshot(); t.id = 'l' + Math.random(); t.pc = R; t.seed = 3; t.dir = 'H3Deck/l'; t.name = 'l'; const g = H3.pieceGraph(t, 0, oi, {}).g, ref = v => v && g[v[0]];
       return Object.values(g).filter(x => x.class_type==='SamplerCustomAdvanced').map(s => { let m = ref(ref(s.inputs.guider).inputs.model), los = []; while(m && m.class_type!=='UNETLoader'){ if(m.class_type==='LoraLoaderModelOnly') los.push(m.inputs.lora_name); m = ref(m.inputs.model); } return los.includes('AFK_Claude_minimaxh3.safetensors'); }); };
-    o.first = chains(); f.loras[0].first = false; o.both = chains(); f.loras[0].first = true;
+    o.first = chains(); f.loras[0].first = false; o.both = chains();
+    document.querySelector('#loraList [data-lf="2"]').click(); o.f2On = f.loras[0].fin2===true && !f.loras[0].first && /Finish only/.test(on()); o.f2 = chains(); o.f2Snap = H3.snapshot().loras[0].fin2;
+    document.querySelector('#loraList [data-lf="1"]').click(); o.f2Off = !f.loras[0].fin2 && f.loras[0].first===true;
     // 🎚 vanilla ↔ finish slider
     const mi = document.querySelector('#finMixIn'); o.mixShown = !document.querySelector('#finMix').hidden;
     mi.value = 0.25; mi.dispatchEvent(new Event('input', {bubbles:true})); o.mixAt = f.finAt; o.mixTxt = document.querySelector('#finMixV').textContent;
@@ -69,6 +71,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(r.mpCol==='column', 'the three model choices stack instead of overlapping');
   ok(r.first[0]===true && r.first[1]===false, 'vanilla half only: the LoRA is on vanilla, not on the finisher ' + JSON.stringify(r.first));
   ok(r.both[0]===true && r.both[1]===true, 'both halves: the LoRA is on both ' + JSON.stringify(r.both));
+  ok(r.f2On && r.f2Snap===true && r.f2[0]===false && r.f2[1]===true && r.f2Off, '🏁 finish only: the LoRA is on the finisher, not the first model; 🎯 switches back ' + JSON.stringify([r.f2On, r.f2Snap, r.f2, r.f2Off]));
   ok(r.mixShown && r.mixAt===0.25 && /vanilla 2 · Ultima 6 of 8/.test(r.mixTxt) && r.mixKept===0.25, '🎚 slider: filled part = vanilla, left = more Ultima (vanilla 2, Ultima 6 of 8), kept by bare bones: ' + JSON.stringify([r.mixShown, r.mixAt, r.mixTxt, r.mixKept]));
   ok(r.mixSplit.includes(2), 'the render hands over at 2 of 8 ' + JSON.stringify(r.mixSplit));
   ok(r.lfPika && r.pikaSnap===undefined, 'PRISM PIKA alone: no switch, the LoRA works as before');
@@ -81,7 +84,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   const e = await pe.evaluate(async () => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)); E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
     const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; E.setLook({finAt:0.375}); o.reelAt = H3.S.reelAt===0.375 && E.look().finAt===0.375;
     const mk = fin => ({prompt:'<Lora 1> she waves', lines:{1:{lora:1, lib:'L1', snap:1, loras:[{name:'A.safetensors', str:0.7}]}}, loras:[], fin});
-    E.setLoraFirst(['L1']); o.chipV = H3.loraChips(mk({at:0.5})).loras; o.chipNoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]); o.chipBoth = H3.loraChips(mk({at:0.5})).loras;
+    E.setLoraFirst(['L1']); o.chipV = H3.loraChips(mk({at:0.5})).loras; o.chipNoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]); o.chipBoth = H3.loraChips(mk({at:0.5})).loras; E.setLoraFirst([], ['L1']); o.chipF2 = H3.loraChips(mk({at:0.5})).loras; o.chipF2NoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]);
     // 🎚 an older clip made again keeps TODAY's split (Jordan 2026-11-23)
     const old = Object.assign(H3.snapshot(), {id:'old1', fin:{at:0.75}, pc:H3.S.pcs ? undefined : undefined}); o.redoFin = (() => { const c = JSON.parse(JSON.stringify(old)); finNow(c, {at:0.375, u:true}); return c.fin; })();
     o.redoKeep = (() => { const c = JSON.parse(JSON.stringify(Object.assign({}, old, {fin:null}))); finNow(c, {at:0.375}); return c.fin; })();
@@ -102,6 +105,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(e.reelAt, 'Reel keeps its own vanilla ↔ finish share');
   ok(e.redoFin && e.redoFin.at===0.375 && e.redoFin.u===true, 'a new option of an older finish clip uses the split set now ' + JSON.stringify(e.redoFin));
   ok(e.redoKeep===null, 'a clip without a finish stays without one');
+  ok(e.chipF2[0].fin2===true && !e.chipF2[0].first && !e.chipF2NoFin[0].fin2, '🧩 a chip marked 🏁 finish only in Reel puts its LoRAs on the finisher only (finish takes only) ' + JSON.stringify([e.chipF2, e.chipF2NoFin]));
   ok(e.chipV[0].first===true && !e.chipNoFin[0].first && !e.chipBoth[0].first, '🧩 a chip marked vanilla only in Reel puts its LoRAs on the vanilla half only (finish takes only) ' + JSON.stringify([e.chipV, e.chipNoFin, e.chipBoth]));
   await br.close(); srv.close(); console.log(fails ? fails + ' FAILED' : 'ALL PASS'); process.exit(fails ? 1 : 0);
 })();
