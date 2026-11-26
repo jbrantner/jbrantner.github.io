@@ -924,7 +924,7 @@ function vidThumb(blob){ return new Promise(ok => { const v = document.createEle
 const NEED = ['ColorMatch','ModelAttentionBackend','H3AudioRefineSampler','HunyuanModelLoader','HunyuanDependenciesLoader','HunyuanFoleySampler','MelBandRoFormerModelLoader','MelBandRoFormerSampler','AudioMerge','AudioAdjustVolume','AudioConcat','MinimaxH3LatentUpscaler3D','RepeatImageBatch','RenderDeckUpscaleFit','ImageBlur','ManualSigmas','LTXVSeparateAVLatent','LTXVConcatAVLatent','VAEEncode','RenderDeckH3Join','UNETLoader','LoraLoaderModelOnly','CLIPLoader','VAELoader','MiniMaxH3ReferenceToVideo','ImageCrop','MiniMaxH3ImageToVideo','MiniMaxH3AddGuide','ConditioningSetTimestepRange','ConditioningCombine',
   'MiniMaxH3MotionContext','MiniMaxH3MotionContextTrim','MiniMaxH3MotionContextSaveLatent','MiniMaxH3MotionContextLoadLatent','MMH3FitReferences',
   'LoadImage','LoadVideo','LoadAudio','TrimAudioDuration','SplitSigmas','DisableNoise','BasicGuider','NAGGuiderMiniMaxH3','CLIPTextEncode','BasicScheduler','KSamplerSelect','RandomNoise','SamplerCustomAdvanced',
-  'MiniMaxH3FunControlNetApply','EmptyImage','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
+  'MiniMaxH3FunControlNetApply','EmptyImage','ModelPatchLoader','VAEDecodeTiled','VAEDecodeAudio','CreateVideo','SaveVideo','ConcatenateVideo','Video Slice','GetVideoComponents','ImageFromBatch','ImageBatch','BatchImagesNode','VHS_LoadVideo','ImageScale','SAM3_Detect','SAM3_TrackPreview','SAM3_VideoTrack','SAM3_TrackToMask','GrowMask','GrowMaskWithBlur','ReverseImageBatch','BatchCropFromMask','BatchUncrop','MaskToImage','ImageToMask','ImageCompositeMasked','CheckpointLoaderSimple','PreviewImage',
   'TextEncodeQwenImageEditPlus','TextEncodeQwenImageEdit','PH3ImageConditioning','MiniMaxH3SigmaShift','TextGenerateV2','ModelSamplingAuraFlow','CFGNorm','KSampler','VAEDecode','ImageScaleToTotalPixels'];
 const PC = {}; // url -> {online, oi, load, ws, stats}
 const pcOf = url => PC[url] = PC[url] || {online:false, oi:null, load:0};
@@ -4037,18 +4037,40 @@ function upGraph(t, oi, names){
       else { const det = add('SAM3_Detect', {model:[ck, 0], image:first, positive_coords:JSON.stringify([{x:Math.round(fc.x * t.w), y:Math.round(fc.y * t.h)}]), threshold:0.4, refine_iterations:2, individual_masks:false});
         trk = add('SAM3_VideoTrack', {images:orig, model:[ck, 0], initial_mask:[det, 0], detection_threshold:0.5, max_objects:1, detect_interval:1}); }
       const raw = idx!=='' ? cut([add('SAM3_TrackToMask', {track_data:[trk, 0], object_indices:idx}), 0]) : [add('SAM3_TrackToMask', {track_data:[trk, 0], object_indices:idx}), 0]; let gen;
+      // 🎭 blend (Jordan 2026-11-26: "How well can it do a light face pass without having too much ghosting on it?" / "it hasn't blended
+      // super well in the past"): the redrawn face is colour-matched to the original frame by frame, so no brighter or warmer patch shows;
+      // its edge is feathered INSIDE the face (the original's jaw, hairline and outline stay, so there's no second outline beside the
+      // first); holes in the mask (eyes, mouth) are filled so the whole face changes together; and the mask is smoothed over time so the
+      // edge doesn't crawl. With 🔍 zoom the feather is set in the zoomed crop, so it scales with the face (a small face isn't eaten up)
+      const GB = !!oi.GrowMaskWithBlur, CM = !!oi.ColorMatch;
+      const gmb = (mask, o) => [add('GrowMaskWithBlur', Object.assign({mask, expand:0, incremental_expandrate:0, tapered_corners:true, flip_input:false, blur_radius:0, lerp_alpha:1, decay_factor:1, fill_holes:true}, o)), 0];
       if(zoomOn){ let mi = [add('MaskToImage', {mask:raw}), 0]; // the part over the whole window: its first and last frames held over the frames around it
-        if(A > 0) mi = batchOf(add, oi, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:mi, batch_index:0, length:1}), 0], amount:A}), 0], mi);
+        if(A > 0) mi = batchOf(add, oi, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:[add('MaskToImage', {mask:raw}), 0], batch_index:0, length:1}), 0], amount:A}), 0], mi);
         if(hold > 0) mi = batchOf(add, oi, mi, [add('RepeatImageBatch', {image:[add('ImageFromBatch', {image:[add('MaskToImage', {mask:raw}), 0], batch_index:Ln - 1, length:1}), 0], amount:hold}), 0]);
-        const cr = add('BatchCropFromMask', {original_images:px, masks:[add('ImageToMask', {image:mi, channel:'red'}), 0], crop_size_mult:mult, bbox_smooth_alpha:0.5});
+        // (BatchCropFromMask stops on a frame with no mask at all: before her face first shows, or while it's turned away) the crop's mask
+        // keeps her last place over those frames: the window is run backwards then forwards through a slow fade (lerp 0.1: about 2 s), and
+        // the forward half is kept. A face missing for longer than that at the start (or from the whole stretch) still can't be cropped
+        let cm = [add('ImageToMask', {image:mi, channel:'red'}), 0];
+        if(GB && oi.ReverseImageBatch){ const both = batchOf(add, oi, [add('ReverseImageBatch', {images:mi}), 0], mi);
+          cm = [add('ImageToMask', {image:[add('ImageFromBatch', {image:[add('MaskToImage', {mask:gmb([add('ImageToMask', {image:both, channel:'red'}), 0], {lerp_alpha:0.1, fill_holes:false})}), 0], batch_index:part.L, length:part.L}), 0], channel:'red'}), 0]; }
+        const cr = add('BatchCropFromMask', {original_images:px, masks:cm, crop_size_mult:mult, bbox_smooth_alpha:0.5});
         const zin = [add('ImageScale', {image:[cr, 1], upscale_method:'lanczos', width:Zw, height:Zh, crop:'disabled'}), 0];
-        const zo = once(faceRefs(t, fc.n), {lat:[add('VAEEncode', {pixels:zin, vae}), 0], w:Zw, h:Zh});
+        let zo = once(faceRefs(t, fc.n), {lat:[add('VAEEncode', {pixels:zin, vae}), 0], w:Zw, h:Zh});
+        if(CM) zo = [add('ColorMatch', {image_ref:zin, image_target:zo, method:'mkl', strength:1, multithread:true}), 0];
+        if(GB){ // the same crop of the mask itself (same masks in = same boxes), at the zoomed size, feathered inside the face
+          const mz = [add('ImageScale', {image:[add('BatchCropFromMask', {original_images:mi, masks:cm, crop_size_mult:mult, bbox_smooth_alpha:0.5}), 1], upscale_method:'bilinear', width:Zw, height:Zh, crop:'disabled'}), 0];
+          const zs0 = Math.min(Zw, Zh), zm = gmb([add('ImageToMask', {image:mz, channel:'red'}), 0], {expand:-Math.max(2, Math.round(zs0 * 0.03)), blur_radius:Math.max(3, Math.round(zs0 * 0.04)), lerp_alpha:0.8});
+          zo = [add('ImageCompositeMasked', {destination:zin, source:zo, x:0, y:0, resize_source:false, mask:zm}), 0]; }
         const back = add('BatchUncrop', {original_images:px, cropped_images:zo, bboxes:[cr, 2], border_blending:0.25, crop_rescale:1, border_top:true, border_bottom:true, border_left:true, border_right:true});
         gen = [add('ImageFromBatch', {image:[back, 0], batch_index:A, length:Ln}), 0]; }
-      else gen = [add('ImageFromBatch', {image:once(faceRefs(t, fc.n)), batch_index:A, length:Ln}), 0];
-      let m = [add('GrowMask', {mask:raw, expand:grow, tapered_corners:true}), 0];
-      // (Jordan 2026-11-12: 🎭 on a 1280×704 ✨ clip failed at once, "ImageBlur: sigma") ComfyUI's ImageBlur takes sigma 0.1-10
-      m = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:m}), 0], blur_radius:Math.min(31, grow), sigma:Math.min(10, Math.max(1, grow / 2))}), 0], channel:'red'}), 0];
+      else { gen = [add('ImageFromBatch', {image:once(faceRefs(t, fc.n)), batch_index:A, length:Ln}), 0];
+        if(CM) gen = [add('ColorMatch', {image_ref:orig, image_target:gen, method:'mkl', strength:1, multithread:true}), 0]; }
+      let m;
+      // zoomed: the crop is already feathered inside the face, so this mask only keeps the rest of the frame exactly as it was
+      if(GB) m = zoomOn ? gmb(raw, {expand:grow, blur_radius:grow, lerp_alpha:0.8}) : gmb(raw, {expand:-Math.max(2, Math.round(grow / 3)), blur_radius:Math.max(3, Math.round(grow * 0.6)), lerp_alpha:0.8});
+      else { m = [add('GrowMask', {mask:raw, expand:grow, tapered_corners:true}), 0];
+        // (Jordan 2026-11-12: 🎭 on a 1280×704 ✨ clip failed at once, "ImageBlur: sigma") ComfyUI's ImageBlur takes sigma 0.1-10
+        m = [add('ImageToMask', {image:[add('ImageBlur', {image:[add('MaskToImage', {mask:m}), 0], blur_radius:Math.min(31, grow), sigma:Math.min(10, Math.max(1, grow / 2))}), 0], channel:'red'}), 0]; }
       fmid = [add('ImageCompositeMasked', {destination:fmid, source:gen, x:0, y:0, resize_source:false, mask:m}), 0]; }
     // 🫧 blend the masks in (Jordan 2026-11-11: "the face pass could have some ghosting around where the mask is … an automatic pass to
     // blend it" on every mask pass): the window with the repainted parts in goes through one very light vanilla MiniMax pass, with the
@@ -4101,7 +4123,10 @@ async function tickUpscale(t){
   if(h && h.status && h.status.completed){ const o = (h.outputs || {})[t.upSave] || {}, f = (o.images || o.videos || o.gifs || [])[0];
     if(f) t.final = {filename:f.filename, subfolder:f.subfolder || '', type:'output'}; else t.upErr = 'the regenerate gave nothing back'; upDone(t); }
   else if(h && h.status && h.status.status_str==='error'){ const e = (h.status.messages || []).find(x => x[0]==='execution_error');
-    if(!e && upAgain(t)) return; t.upErr = (e || [0, {}])[1].exception_message || 'the regenerate was stopped on ' + pcName(t.pc); upDone(t); }
+    if(!e && upAgain(t)) return; t.upErr = (e || [0, {}])[1].exception_message || 'the regenerate was stopped on ' + pcName(t.pc);
+    // (🔍 zoom can't crop a face that isn't there: BatchCropFromMask stops on a stretch with no face for over ~2 s)
+    if(facesOn(t) && /zero-size array|no identity/i.test(t.upErr)) t.upErr = "🎭 that face number isn't in the clip for long enough at the start (or at all) to zoom in on it. Check the number in the scan";
+    upDone(t); }
   else if(!h){ const q = p.queue || {}, inQ = [...(q.queue_running || []), ...(q.queue_pending || [])];
     if(inQ.some(x => x[1]===t.upPid)) t.upStage = (q.queue_running || []).some(x => x[1]===t.upPid) ? 'running' : 'queued';
     else if(Date.now() - (t.tu || 0) > 60000){ if(upAgain(t)) return; t.upErr = 'the regenerate left the queue (ComfyUI restarted or it was cancelled)'; upDone(t); } }
@@ -6864,6 +6889,21 @@ if(ENGINE){
       Object.assign(S.f, {smUp:false, smSpc:true, smLoop:true, smBlend:null, smBack:null, smFin:false, smSeam:+S.f.smSeam || 12});
       let R = await measureSpacing(); for(let i = 0; i < 120 && R && R.busy; i++){ await new Promise(r => setTimeout(r, 500)); R = SPC[spcKey()]; }
       return go(o.n); },
+    // 🎭 Fix faces (Reel's ✂ Edit, Jordan 2026-11-26: "a light face pass … have it zoom into the face so it has like high resolution …
+    // specify who's face is whose"): H3 Deck's 🎭 Faces. 🔎 faceScan has SAM 3 number every face over the whole clip (a preview video with
+    // the numbers on it); faces() then redraws each picked number with only that character's pictures, zoomed in, on Prism Pika, and blends
+    // it back (colour-matched, feathered inside the face). o.faces = [{lib: Library id, obj: number}], o.den = strength
+    faceScan:async o => { const t = deckTake(o.take); if(!t || !takeFile(t)) return {err:'That clip has no finished video yet'};
+      const q = await window.H3FaceScan({take:t.id, a:0, b:takeFrames(t) / FPS, word:'face'}); return q || {err:"Couldn't start the face finder"}; },
+    faceScanGet:q => window.H3FaceScanGet(q),
+    faces:async o => { const t = deckTake(o.take), fl = t && takeFile(t); if(!fl) return {err:'That clip has no finished video yet'};
+      const fs = (o.faces || []).map(f => { const L = libOf(f.lib); if(!L || !(+f.obj >= 0)) return null; const c = libToCast(L); libFill(c, L); return {n:c.n, obj:+f.obj}; }).filter(Boolean);
+      if(!fs.length) return {err:'Pick whose face is whose first'};
+      if(fs.some(f => !faceRefs(t, f.n).length)) return {err:'Someone picked has no pictures in the Library, so there is nothing to draw her face from'};
+      const pk = hqUnets().find(x => /prism_?pika/i.test(x)) || '', key = uid('k'), D = takeFrames(t) / FPS;
+      let n = 0; try{ n = await window.H3Nudge({take:t.id, a:Math.max(0, +o.a || 0), b:o.b != null ? Math.min(D, +o.b) : D, n:1, den:+o.den || 0.5, clean:0, look:t.h3 && /^(2d|cartoon|anime)/i.test(t.h3.scene || '') ? 'anime' : 'live',
+        faces:fs, find:'face', zoom:true, unet:pk, str:o.lstr != null ? +o.lstr : 0.4, trk:{a:0, b:D}, key, quiet:true}); }catch(e){ return {err:e.message}; }
+      const ids = S.takes.filter(x => x.redo && x.redo.key===key).map(x => x.id); return n && ids.length ? {ids} : {err:'Not sent. Is the PC on?'}; },
     // 🎬 Final pass (Jordan 2026-11-20: "basically just the 'upscale track' from Render Deck H3"): ✨ High quality on every clip, in order, with
     // Prism Pika, each clip carrying on from the ✨ result of the clip before (H3 Motion Context, one PC), as Films' ⬆ Upscale track does.
     // Each pass is a copy of its clip's own take, so its own words, pictures, attributes and clothing go with it.
