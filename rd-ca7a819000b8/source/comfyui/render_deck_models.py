@@ -9,6 +9,7 @@ Copy this file into ComfyUI/custom_nodes/ and restart ComfyUI. It adds three rou
   POST /renderdeck/delete {items}             -> move pictures (and H3 Deck videos) into "Deleted by Render Deck" in the output folder
                                                (a shared Dropbox output folder deletes for real; Dropbox keeps them in Deleted files)
   POST /renderdeck/h3wipe {dry}               -> 🧹 H3 Deck's Start fresh: every H3Deck / H3Film output folder and the scrub copies
+  POST /renderdeck/h3drop {dirs}              -> 🗑 a take cancelled in Reel: its own H3Deck/h3_... output folder (half-made pieces, saved endings)
   GET  /renderdeck/models                     -> the .safetensors checkpoints and LoRAs on this computer, with sizes
   GET  /renderdeck/file?kind=..&name=..       -> one of those files, so another computer can copy it
   POST /renderdeck/sync {source}              -> copy the checkpoints and LoRAs another computer has and this one lacks (not Qwen/MiniMax/3D)
@@ -754,6 +755,48 @@ async def h3wipe(request):
             except OSError:
                 pass
         return {'files': files, 'bytes': size, 'copies': len(px), 'dirs': gone, 'shared': shared, 'pc': _pc()}
+    return web.json_response(await asyncio.get_running_loop().run_in_executor(None, run))
+
+# ---------- 🗑 Reel: a cancelled take leaves nothing behind (Jordan 2026-11-26: "canceled jobs to be deleted rather than saved so we can save space") ----------
+# dirs = output subfolders like Output_Render/H3Deck/h3_202611261428_llcq. Only a take's own folder: the last part must look like h3_...,
+# right inside a folder named H3Deck, inside the output folder (never a ✨ hqctx_ chain folder, never the trash). Shared Dropbox output:
+# deleted for real (Dropbox's Deleted files can bring it back for a while); otherwise moved into "Deleted by Render Deck".
+H3_TAKE = re.compile(r'^h3_[A-Za-z0-9_-]+$')
+
+
+@routes.post('/renderdeck/h3drop')
+async def h3drop(request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    dirs, shared = [str(d) for d in (body.get('dirs') or [])][:50], _shared()
+
+    def run():
+        root = os.path.realpath(folder_paths.get_output_directory())
+        gone = files = 0
+        for sub in dirs:
+            try:
+                parts = [x for x in sub.replace('\\', '/').split('/') if x]
+                if len(parts) < 2 or parts[-2] != 'H3Deck' or not H3_TAKE.match(parts[-1]) or TRASH in parts or '..' in parts:
+                    continue
+                d = os.path.realpath(os.path.join(root, *parts))
+                if not d.startswith(root + os.sep) or not os.path.isdir(d):
+                    continue
+                n, _ = _tree_size(d)
+                if shared:
+                    shutil.rmtree(d, ignore_errors=True)
+                else:
+                    dest = os.path.join(root, TRASH, os.path.relpath(d, root))
+                    if os.path.exists(dest):
+                        dest += '_%d' % int(time.time())
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    shutil.move(d, dest)
+                gone += 1
+                files += n
+            except Exception:
+                pass
+        return {'dropped': gone, 'files': files, 'shared': shared}
     return web.json_response(await asyncio.get_running_loop().run_in_executor(None, run))
 
 # ---------- 📚 Character Library: a finished Character Creator character kept for later (Jordan 2026-10-27) ----------

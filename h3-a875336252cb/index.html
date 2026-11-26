@@ -4427,6 +4427,35 @@ async function probeFile(t, i){
   return best;
 }
 function notify(t){ toast('✓ ' + fmtS(t.pieces.reduce((s, p) => s + p.deliv, 0) / FPS) + ' clip finished on ' + pcName(t.pc)); }
+// 🗑 Reel (Jordan 2026-11-26: "I'm wanting to have canceled jobs to be deleted rather than saved so we can save space"): a take
+// stopped from 🎞 Reel and then let go has its own output folder (H3Deck/h3_…) deleted on its PC: half-made pieces and their saved
+// endings (ctx_*.safetensors). Never a folder another take still uses (shared pieces, carry-ons, branches), never a ✨ chain folder.
+// Helper POST /renderdeck/h3drop {dirs}; an older helper only takes /renderdeck/delete, so then just the videos go. Each folder is
+// tried twice (once more 30 s later, in case the PC wrote a last file as it stopped); a PC that's off is tried again for 7 days.
+const DROPK = 'h3reel_drop';
+function dropQ(){ try{ return JSON.parse(localStorage.getItem(DROPK) || '[]'); }catch(e){ return []; } }
+function dropQSet(q){ try{ localStorage.setItem(DROPK, JSON.stringify(q.slice(-300))); }catch(e){} }
+const dSlash = x => String(x || '').replace(/\\/g, '/');
+function cutDrop(gone){ if(!gone.length) return; const q = dropQ();
+  for(const t of gone){ if(!t.pc || !/^H3Deck\/h3_[\w-]+$/.test(t.dir || '')) continue;
+    const pids = new Set((t.pieces || []).map(p => p.pid).filter(Boolean)), mine = d => dSlash(d).endsWith(t.dir);
+    const used = S.takes.some(o => o!==t && (o.dir===t.dir || (o.ctxDirs || []).some(d => d && mine(d)) || tFiles(o).some(x => mine(x.subfolder))
+      || (o.pieces || []).some(p => p.pid && pids.has(p.pid)) || [o.carry && o.carry.src, o.redo && o.redo.src, o.redo && o.redo.root, o.from && o.from.id, o.lead && o.lead.src].includes(t.id)));
+    if(used) continue;
+    q.push({pc:t.pc, dir:outDir(t), files:tFiles(t).map(x => ({filename:x.filename, subfolder:x.subfolder || ''})), at:Date.now(), tries:0, next:0}); }
+  dropQSet(q); dropRun(); }
+let DROPBUSY = false;
+async function dropRun(){ if(DROPBUSY) return; DROPBUSY = true; try{ const q = dropQ(), now = Date.now(), keep = [];
+  for(const d of q){ if(d.next > now){ keep.push(d); continue; }
+    if(!pcOf(d.pc).online){ if(now - d.at < 7 * 864e5) keep.push(d); continue; }
+    let ok = false;
+    try{ const r = await fetch(d.pc + '/renderdeck/h3drop', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({dirs:[d.dir]})}); ok = r.ok; }catch(e){}
+    if(!ok && d.files.length){ try{ const r = await fetch(d.pc + '/renderdeck/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({items:d.files})}); ok = r.ok; }catch(e){} }
+    d.tries++; if(d.tries < 2 || !ok && now - d.at < 7 * 864e5){ d.next = now + (d.tries < 2 ? 30000 : 600000); keep.push(d); } }
+  const later = dropQ().filter(d => !q.some(x => x.dir===d.dir && x.pc===d.pc)); dropQSet(keep.concat(later)); // (ones added while this ran stay)
+  if(keep.length || later.length) setTimeout(dropRun, Math.max(5000, Math.min(...keep.concat(later).map(d => d.next ? d.next - Date.now() : 60000))));
+} finally{ DROPBUSY = false; } }
+if(ENGINE) setTimeout(dropRun, 8000);
 async function cancelTake(t){
   if(t.upStage && t.upStage!=='done'){ // cancelling the ⬆ upscale keeps the smoothed clip
     try{ await fetch(t.pc + '/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:[t.upPid].filter(Boolean)})}); }catch(e){}
@@ -6962,9 +6991,10 @@ if(ENGINE){
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 📤 a clip from the phone
     upload:async o => { const id = await window.H3Upload({file:o.file}); return id ? {ids:[id]} : {err:'Not uploaded'}; },
-    // takes the Reel no longer uses (videos stay on the PCs)
-    forget:ids => { const g = new Set(ids); S.takes = S.takes.filter(t => !g.has(t.id) || t.state==='working'); save(); },
-    stop:async id => { const t = deckTake(id); if(!t) return; try{ await cancelTake(t); }catch(e){} },
+    // takes the Reel no longer uses (finished videos stay on the PCs; a take stopped from Reel has its own folder deleted, see cutDrop)
+    forget:ids => { const g = new Set(ids), gone = S.takes.filter(t => g.has(t.id) && t.state!=='working'); S.takes = S.takes.filter(t => !g.has(t.id) || t.state==='working'); save(); cutDrop(gone.filter(t => t.cut)); },
+    stop:async id => { const t = deckTake(id); if(!t) return; t.cut = 1; try{ await cancelTake(t); }catch(e){} },
+    dropQ:() => dropQ(),
     refresh:() => pingAll().then(() => { tickSoon(0); engineLibPull().catch(() => 0); }),
   };
 }
