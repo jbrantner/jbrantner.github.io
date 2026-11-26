@@ -89,11 +89,11 @@ class Pc:
         if not farm:  # the farm host's own /renderdeck routes come from the helper; these stand in for the other computer's
             @r.post('/renderdeck/sync')
             async def sync(req):
-                self.syncs.append((await req.json())['source'])
-                return web.json_response({'queued': [], 'room': True})
+                b = await req.json(); self.syncs.append(b['source']); self.sync_bodies = getattr(self, 'sync_bodies', []) + [b]
+                return web.json_response({'queued': b.get('names') or [], 'room': True})
 
             @r.get('/renderdeck/jobs')
-            async def jobs(req): return web.json_response({'jobs': []})
+            async def jobs(req): return web.json_response({'jobs': getattr(self, 'jobs', [])})
         app.add_routes(r)
 
 
@@ -108,7 +108,7 @@ async def main():
     real_sync = [r for r in H.routes if getattr(r, 'path', '') == '/renderdeck/sync']
     ra.add_routes([r for r in H.routes if r.path.startswith('/renderdeck/farm')])
     # the farm host's sync: record it, as the real one would start copying
-    async def rsync(req): R.syncs.append((await req.json())['source']); return web.json_response({'queued': []})
+    async def rsync(req): b = await req.json(); R.syncs.append(b['source']); R.sync_bodies = getattr(R, 'sync_bodies', []) + [b]; return web.json_response({'queued': []})
     async def rjobs(req): return web.json_response({'jobs': []})
     ra.router.add_post('/renderdeck/sync', rsync); ra.router.add_get('/renderdeck/jobs', rjobs)
     runners = []
@@ -216,7 +216,7 @@ async def main():
         async with s.post(RU + '/renderdeck/farm/pcs', json={'pcs': pcs, 'off': [], 'video': [MU]}) as r: await r.json()
         v = await view(); ok([p['video'] for p in v['pcs']] == [False, True] and v.get('vid') == 1, 'the farm knows Main is video-only')
         json.dump({'mbps': 0, 'auto': True}, open(H.SPEED_FILE, 'w')); H._last_compare = 0
-        R.syncs.clear(); M.syncs.clear(); r0, m0 = len(R.prompts), len(M.prompts)
+        R.syncs.clear(); M.syncs.clear(); M.sync_bodies = []; r0, m0 = len(R.prompts), len(M.prompts)
         vg = {'1': {'class_type': 'KSampler', 'inputs': {'seed': 3}}, '9': {'class_type': 'SaveVideo', 'inputs': {}}}
         jobs = [{'key': 'v-pic' + str(i), 'graph': g('pixel.safetensors'), 'home': RU} for i in range(3)] + [{'key': 'v-vid', 'graph': vg, 'home': RU}]
         async with s.post(RU + '/renderdeck/farm/add', json={'pcs': pcs, 'off': [], 'video': [MU], 'jobs': jobs}) as r: await r.json()
@@ -224,7 +224,19 @@ async def main():
         srv = {d['key']: d.get('srv') for d in v['done'] if d['key'].startswith('v-')}
         ok(all(srv.get('v-pic' + str(i)) == RU for i in range(3)), 'picture jobs all go to Render, even while Main is free: %r' % srv)
         ok(srv.get('v-vid') == MU, 'the video job goes to free Main: %r' % srv.get('v-vid'))
-        ok(not M.syncs and MU in R.syncs, 'the timed compare copies to Render only, never to Main: R %r M %r' % (R.syncs, M.syncs))
+        mb = [b for b in getattr(M, 'sync_bodies', []) if b.get('source') == RU]
+        ok(MU in R.syncs and mb and all(b.get('kinds') == ['loras'] for b in mb), 'the timed compare copies everything to Render and only LoRAs to video-only Main: R %r M %r' % (R.syncs, mb))
+        # (Jordan 2026-11-26) a LoRA just added on Main (link or phone file) is sent on to Render at once, a copy is never sent back
+        R.syncs.clear(); H.FARM['lpush'] = []
+        M.jobs = [{'id': 'j1', 'kind': 'loras', 'status': 'done', 'name': 'style-minimax-h3-new.safetensors', 'source': 'https://civitai.com/models/1'},
+                  {'id': 'j2', 'kind': 'loras', 'status': 'done', 'name': 'copied.safetensors', 'source': 'jordo-desktop'},
+                  {'id': 'j3', 'kind': 'loras', 'status': 'downloading', 'name': 'half.safetensors', 'source': 'phone'}]
+        R.sync_bodies = []
+        await until(lambda v: not H.FARM.get('lpush') and 'j1' in H._st(MU).get('lseen', ()), 10)
+        ok('j1' in H._st(MU).get('lseen', ()) and not H.FARM.get('lpush'), 'the fresh LoRA was pushed and is done: %r' % H.FARM.get('lpush'))
+        ok(any(b.get('names') == ['style-minimax-h3-new.safetensors'] and b['source'] == MU for b in R.sync_bodies), 'Render was asked to copy just that LoRA from Main: %r' % R.sync_bodies)
+        M.jobs = []
+        ok('j2' not in H._st(MU).get('lseen', ()) and 'j3' not in H._st(MU).get('lseen', ()), 'copies and unfinished downloads are not pushed')
         ok(json.load(open(H.FARM_FILE))['video'] == [MU], 'video-only is saved with the farm')
     for rn in runners: await rn.cleanup()
     print(('%d FAILED' % len(fails)) if fails else 'all passed')
