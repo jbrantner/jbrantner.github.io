@@ -77,10 +77,12 @@ Test: `CLIP=<a ~5 s webm> NODE_PATH=$(npm root -g) node reel-5b1e7c94d2a0/tests/
 
 - 👥 Characters made in Reel are kept on the PCs too (`h3reel_chars.json` in ComfyUI's user files), like H3 Deck's Library: a character missing on the phone comes back with her pictures, the newer edit wins, a deleted one stays deleted (2026-11-25, after one vanished). Test: `h3-a875336252cb/tests/t_reel_chars.js`.
 
-## 🗑 Stopped options leave nothing behind (Jordan 2026-11-26)
+## 🗑 Stopped and removed options leave nothing behind (Jordan 2026-11-26)
 An option stopped while it renders (✕ twice, or a rendering option of a removed clip or reel, or 🧹 Keep only this) has its own output
 folder on its PC deleted: half-made parts and their saved endings (`ctx_*.safetensors`). Engine `stop` marks the take, `forget` queues
 its folder (`h3reel_drop` on the phone), and the helper's `POST /renderdeck/h3drop {dirs}` deletes it (only `…/H3Deck/h3_…`, never a ✨
 `hqctx_` chain folder). It is tried again 30 s later in case the PC wrote a last file as it stopped; a PC that's off is tried for 7 days.
 A folder another option still uses (shared parts, carry-ons) stays. An older helper only gets `/renderdeck/delete` of the videos.
-Finished options you remove, and options that failed on their own, keep their files. Test: `tests/t_cancel_drop.js`.
+Since later the same day (Jordan: "let's have those delete their files too if they're removed"), finished options you remove go the same
+way once their ↩ Undo is gone (✕, 🧹 Keep only this, a removed clip or reel), unless another option carried on from them. Options that
+failed on their own keep their files. Test: `tests/t_cancel_drop.js`.
