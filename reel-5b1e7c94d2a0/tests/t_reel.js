@@ -7,7 +7,7 @@ const R = 'http://render.test', CLIP = process.env.CLIP;
 if(!CLIP || !fs.existsSync(CLIP)){ console.log('set CLIP to a short video'); process.exit(2); }
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if(!c) fails++; };
 const SCHEMA = {
-  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors', 'Ultima NSFW Lv120 Hybrid pruned Turbo int8-convrot_.safetensors']], weight_dtype:[['default']]}}},
+  UNETLoader:{input:{required:{unet_name:[['DaSiWa-MiniMaxH3-Hybrid-Turbo-V2.safetensors', 'DaSiWa-MiniMaxH3-Hybrid-V2.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'singularityV2X10eros_prismPIKA.safetensors', 'Ultima NSFW Lv120 Hybrid pruned Turbo int8-convrot_.safetensors', 'Sulphur3_10ErosMax_SingularityV2_TriPRISM_TurboFusion_realism_int8_convrot.safetensors']], weight_dtype:[['default']]}}},
   LoraLoaderModelOnly:{input:{required:{lora_name:[['minimax_h3_ref2v_turbo_4step.safetensors', 'glow.safetensors', 'minimax_h3_anime_style.safetensors']], strength_model:['FLOAT', {default:1}]}}},
   MiniMaxH3MotionContext:{input:{required:{}, optional:{context_frames:['IMAGE'], context_latent:['LATENT'], audio_vae:['VAE'], context_audio:['AUDIO']}}},
   CLIPLoader:{input:{required:{clip_name:[['minimax_h3_text_encoder.safetensors']], type:[['minimax']], device:[['default']]}}},
@@ -466,13 +466,15 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
         return {pk:P.key, lk, a:{model:t.model, fin:!!t.fin, w:t.w}, m:{model:u.model, fin:!!u.fin, w:u.w}}; }, tid2);
       ok(r.lk===r.pk && /prismPIKA/i.test(r.a.model) && !r.a.fin && r.a.w < 1000 && /prismPIKA/i.test(r.m.model) && !r.m.fin && r.m.w < 1000, '🎛 PIKA pick wins over the clip\'s own MiniMax → PIKA (usual size, no vanilla stage) ' + JSON.stringify(r)); }
     // 🎛 (Jordan 2026-11-27) MiniMax only (vanilla H3 Reference, no finish, its own 20 steps) and Ultima only (6 steps), for new clips and ↻ Redo
-    for(const [re, mod, st, nm] of [[/^MiniMax only/, /minimax_h3_ref2va/, 20, 'MiniMax only'], [/^Ultima only/, /ultima/i, 6, 'Ultima only']]){
+    for(const [re, mod, st, nm] of [[/^MiniMax only/, /minimax_h3_ref2va/, 20, 'MiniMax only'], [/^TriPRISM/, /triprism/i, 6, 'TriPRISM']]){
       const sM = sent.length, r = await engF().evaluate(async ([re, nm]) => { const P = H3Engine.models().find(x => x.label.startsWith(nm)); if(!P) return {none:H3Engine.models().map(x => x.label)}; H3Engine.setLook({model:P.key});
         const y = await H3Engine.make({words:'Mia waves', who:[], n:1, aspect:'16:9'}), u = H3.S.takes.find(z => z.id===(y.ids || [])[0]) || {};
         return {key:P.key, lk:H3Engine.look().model, m:{id:u.id, model:u.model, fin:!!u.fin, steps:u.steps, turbo:!!u.turbo}}; }, [String(re), nm]);
       await page.waitForTimeout(2500);
       const gs = sent.slice(sM).filter(x => x.g), un = gs.flatMap(x => nodes(x.g, 'UNETLoader').map(n => n.inputs.unet_name)), stp = gs.flatMap(x => nodes(x.g, 'BasicScheduler').map(n => +n.inputs.steps).concat(nodes(x.g, 'ManualSigmas').map(n => String(n.inputs.sigmas).split(',').length - 1)));
       ok(r.m && r.lk===r.key && mod.test(r.m.model) && !r.m.fin && (nm!=='MiniMax only' || !r.m.turbo) && un.length && un.every(u => mod.test(u)) && stp.includes(st), '🎛 ' + nm + ': one model, no finish, ' + st + ' steps ' + JSON.stringify({r, un, stp}));
+      if(nm==='TriPRISM'){ const sm = gs.flatMap(x => nodes(x.g, 'KSamplerSelect').map(n => n.inputs.sampler_name)), lo = gs.flatMap(x => nodes(x.g, 'LoraLoaderModelOnly').map(n => n.inputs.lora_name)), ml = await engF().evaluate(() => H3Engine.models().map(x => x.label));
+        ok(sm.length && sm.every(x => x==='lcm') && !lo.some(n => /realism|detail/i.test(n)) && !ml.some(x => /ultima/i.test(x)), '🎛 TriPRISM: lcm, no ✨ boost LoRAs; Ultima gone from the list ' + JSON.stringify({sm, lo, ml})); }
       if(nm==='MiniMax only'){ const x = await engF().evaluate(async id => { const a = await H3Engine.again({take:id, words:'Mia waves', n:1}); const t = H3.S.takes.find(z => z.id===(a.ids || [])[0]) || {}; return {model:t.model, fin:!!t.fin}; }, r.m.id);
         ok(/minimax_h3_ref2va/.test(x.model) && !x.fin, '🎛 MiniMax only: ↻ again stays vanilla with no finish ' + JSON.stringify(x)); } }
     await engF().evaluate(() => { H3Engine.setLook({model:H3Engine.models().find(m => /Reference → PIKA/.test(m.label)).key}); delete H3.S.reelModel; });

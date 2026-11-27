@@ -81,7 +81,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   await pe.addInitScript(r => { localStorage.clear(); localStorage.setItem('h3deck', JSON.stringify({f:{finU:false}, tsav:Date.now()})); window.H3_PCS = [{name:'Render', url:r, on:true, speed:1}]; }, R);
   await pe.goto('http://127.0.0.1:8049/index.html?engine=1');
   await pe.waitForFunction(() => window.H3Engine && H3Engine.models().length > 2, null, {timeout:20000});
-  const e = await pe.evaluate(async () => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)); E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
+  const e = await pe.evaluate(async () => { const E = H3Engine, M = E.models(), u = M.find(x => /Ultima finish/.test(x.label)) || M.find(x => /PIKA finish/.test(x.label)); /* Ultima left Reel 2026-11-27 */ E.setLook({model:u.key}); const o = {labels:M.map(x => x.label), look:E.look().model===u.key};
     const t = H3.snapshot(); o.finU = H3.S.f.finU; o.reelFin = H3.S.reelFin; const p = M.find(x => /PIKA finish/.test(x.label)); E.setLook({model:p.key}); o.back = H3.S.f.finU===false && E.look().model===p.key; E.setLook({finAt:0.375}); o.reelAt = H3.S.reelAt===0.375 && E.look().finAt===0.375;
     const mk = fin => ({prompt:'<Lora 1> she waves', lines:{1:{lora:1, lib:'L1', snap:1, loras:[{name:'A.safetensors', str:0.7}]}}, loras:[], fin});
     E.setLoraFirst(['L1']); o.chipV = H3.loraChips(mk({at:0.5})).loras; o.chipNoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]); o.chipBoth = H3.loraChips(mk({at:0.5})).loras; E.setLoraFirst([], ['L1']); o.chipF2 = H3.loraChips(mk({at:0.5})).loras; o.chipF2NoFin = H3.loraChips(mk(null)).loras; E.setLoraFirst([]);
@@ -97,10 +97,10 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
     { rerollSheet(H3.S.takes.find(x => x.id==='old2')); const m = document.querySelector('#rrMix'); o.rr = [!!m, m && m.value, document.querySelector('#rrMixV') && document.querySelector('#rrMixV').textContent]; const u = document.querySelector('#rrFu [data-u="1"]'); if(u){ u.click(); o.rr.push(document.querySelector('#rrMixV').textContent); } }
     return o; });
   ok(e.again && e.again.at===0.375, '↻ More options of an older clip in Reel use the split set now, not the clip\'s own ' + JSON.stringify(e.again));
-  ok(e.rr[0] && e.rr[1]==='0.375' && /vanilla 3 · PIKA 5/.test(e.rr[2]) && /Ultima 5/.test(e.rr[3] || ''), '🎲 New take sheet shows the split, starting on today\'s setting ' + JSON.stringify(e.rr));
+  ok(e.rr[0] && e.rr[1]==='0.375' && /vanilla 3 · PIKA 5/.test(e.rr[2]) && e.rr.length===3 /* no Ultima finish switch in Reel since 2026-11-27 */, '🎲 New take sheet shows the split, starting on today\'s setting ' + JSON.stringify(e.rr));
   ok(Array.isArray(e.ff) && e.ff.every(Boolean) && e.ffOff===true, '🖼 Reel first frame: the picture is the take\'s First frame (and none when left off) ' + JSON.stringify([e.ff, e.ffOff]));
-  ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|MiniMax only (H3 Reference)|PRISM PIKA|Ultima only', 'Reel lists the five picks (+ MiniMax only, Ultima only 2026-11-27): ' + e.labels.join(' | '));
-  ok(e.look && e.finU===true && e.reelFin==='ultima', 'picking Ultima finish in Reel sets it (kept over H3 Deck\'s own pick)');
+  ok(e.labels.join('|')==='H3 Reference → PIKA finish|MiniMax only (H3 Reference)|PRISM PIKA', 'Reel lists its picks, no Ultima (Jordan 2026-11-27: "Remove Ultima"): ' + e.labels.join(' | '));
+  ok(e.look && e.finU===false && e.reelFin==='pika', 'Reel never sets an Ultima finish');
   ok(e.back, 'and back to PIKA finish');
   ok(e.reelAt, 'Reel keeps its own vanilla ↔ finish share');
   ok(e.redoFin && e.redoFin.at===0.375 && e.redoFin.u===true, 'a new option of an older finish clip uses the split set now ' + JSON.stringify(e.redoFin));
