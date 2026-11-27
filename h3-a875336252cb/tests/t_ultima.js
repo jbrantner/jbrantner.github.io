@@ -99,7 +99,7 @@ const OTHER = ['MiniMaxH3ReferenceToVideo','MiniMaxH3ImageToVideo','MiniMaxH3Mot
   ok(e.again && e.again.at===0.375, '↻ More options of an older clip in Reel use the split set now, not the clip\'s own ' + JSON.stringify(e.again));
   ok(e.rr[0] && e.rr[1]==='0.375' && /vanilla 3 · PIKA 5/.test(e.rr[2]) && /Ultima 5/.test(e.rr[3] || ''), '🎲 New take sheet shows the split, starting on today\'s setting ' + JSON.stringify(e.rr));
   ok(Array.isArray(e.ff) && e.ff.every(Boolean) && e.ffOff===true, '🖼 Reel first frame: the picture is the take\'s First frame (and none when left off) ' + JSON.stringify([e.ff, e.ffOff]));
-  ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|PRISM PIKA', 'Reel lists the three picks: ' + e.labels.join(' | '));
+  ok(e.labels.join('|')==='H3 Reference → PIKA finish|H3 Reference → Ultima finish|MiniMax only (H3 Reference)|PRISM PIKA|Ultima only', 'Reel lists the five picks (+ MiniMax only, Ultima only 2026-11-27): ' + e.labels.join(' | '));
   ok(e.look && e.finU===true && e.reelFin==='ultima', 'picking Ultima finish in Reel sets it (kept over H3 Deck\'s own pick)');
   ok(e.back, 'and back to PIKA finish');
   ok(e.reelAt, 'Reel keeps its own vanilla ↔ finish share');

@@ -3816,7 +3816,8 @@ const REGEN_SIG = {full:'0.909375, 0.857143, 0.75, 0.6, 0.45, 0.3, 0.15, 0.0', m
 // and the many small low-noise steps it never learned left its moving parts half-drawn (the regenerate LoRA at 0.8 had covered that).
 // Now the steps follow that same curve from the strength down, as big as its own 8 (in its time t): 0.9 → 0.9, .85, .77, .59, 0
 const H3_SHIFT = 12, shiftSig = t => H3_SHIFT * t / (1 + (H3_SHIFT - 1) * t);
-const sig8 = d => { d = Math.max(0.3, Math.min(1, +d)); const t0 = d / (H3_SHIFT - (H3_SHIFT - 1) * d), n = Math.max(2, Math.ceil(t0 * 8 - 1e-6));
+// (Reel 2026-11-27: a vanilla MiniMax ✨ pass follows vanilla's own 20-step curve the same way, sigN(d, 20))
+const sig8 = d => sigN(d, 8), sigN = (d, N) => { d = Math.max(0.3, Math.min(1, +d)); const t0 = d / (H3_SHIFT - (H3_SHIFT - 1) * d), n = Math.max(2, Math.ceil(t0 * N - 1e-6));
   return Array.from({length:n}, (_, i) => i ? shiftSig(t0 * (n - i) / n).toFixed(4) : d.toFixed(4)).concat(['0.0']).join(', '); };
 const denSig = d => { d = Math.max(0.3, Math.min(1, +d)); return [1, 0.85, 0.65, 0.42, 0.2].map(k => (d * k).toFixed(4)).concat(['0.0']).join(', '); };
 // with 🧽 on, the last jump down to 0 is split in two (a big last jump leaves grain behind)
@@ -3857,6 +3858,7 @@ const upUnetOf = (t, oi, refs) => { const m = t && t.up && t.up.unet, bn = s => 
   if(m) return combo(oi, 'UNETLoader', 'unet_name').find(x => bn(x)===bn(m)) || ''; return refs ? regenRefUnet(oi) : regenUnet(oi); };
 // (Jordan 2026-11-14: "Pika not selectable" in 🎭 Faces) every PC's model list counts, also the one remembered from when it was last seen,
 // so a PC that hasn't answered yet (just opened, a slow ping) doesn't hide Pika; a PC without it is still skipped when the pass is sent
+const vanUnet = () => S.pcs.map(p => pcOf(p.url).oi).filter(Boolean).map(oi => regenRefUnet(oi)).find(Boolean) || ''; // the vanilla MiniMax H3 Reference file, for a Reel ✨ pass on it
 const hqUnets = () => [...new Set(S.pcs.filter(p => pcOf(p.url).oi).flatMap(p => combo(pcOf(p.url).oi, 'UNETLoader', 'unet_name')))]
   .filter(x => !officialH3(x) && /prism_?pika/i.test(x)).sort(); // ✨ only PRISM PIKA besides vanilla (Jordan 2026-11-08: "keep it to the just 2 models we use")
 // 🔀 Finish on PIKA (Jordan 2026-11-09: "minimax for the movement and then the last steps would be pika"): the render's sigmas are split;
@@ -3933,7 +3935,7 @@ const upPick = t => { const all = upRefs(t), keyOf = r => r.cast ? 'c' + r.cast 
 // ✨ on Prism Pika (Jordan 2026-11-12: "I do the pika model with reference and it recreates her perfectly. I upscale it and she looks very
 // different"): the render had all her pictures, fitted to the 8 GB budget by MMH3FitReferences; the ✨ pass only had the first 3-4, at full
 // size. A Pika pass now gets every picture the take's render had (up to 9), through the same fit node, like the render
-const upFitAll = (t, oi) => !!(oi && oi.MMH3FitReferences && t && t.up && t.up.unet && !officialH3(t.up.unet) && !facesOn(t));
+const upFitAll = (t, oi) => !!(oi && oi.MMH3FitReferences && t && t.up && t.up.unet && (!officialH3(t.up.unet) || t.up.van) && !facesOn(t));
 const upRefSet = (t, oi) => upFitAll(t, oi) ? upRefs(t).slice(0, 9) : upPick(t);
 const regenUpModel = oi => { const m = combo(oi, 'MinimaxH3LatentUpscaler3D', 'model_name'); return m.find(x => /3d.*bf16/i.test(x)) || m[0]; };
 // t (optional): a same-size window (nudge / ✨ quality pass) needs no upscaler, and with its pictures it runs on the Reference model,
@@ -4001,7 +4003,7 @@ function upGraph(t, oi, names){
   // 🫥 a ✨ / 🎯 pass says nude where the render did (same take settings); only 🎭 Faces leaves the clothes alone
   const keepN = !facesOn(t), dr = r => keepN ? r : dressed(r), ctT = imgs => keepN ? Object.assign({}, t, {imgs, vids:[]}) : {imgs, film:t.film, descOff:t.descOff, noNude:true};
   const h3Of = R => { if(!t.h3 || !R) return ''; try{ const imgs = R.map(dr); return h3Prompt({h3:t.h3, text:castText(words, ctT(imgs), false), imgs, vids:[], auds:[], cont:!!(chn && chn.prev), secs:length / FPS, t0:0}); }catch(e){ console.warn(e); return ''; } };
-  const once = (R, Z, SG, FIT) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (FIT && R && R.length && h3Of(R)) || (!R && /prism_?pika/i.test(u.unet || '') && h3Of([])) /* (Jordan 2026-11-22: Reel's 🎬 final pass on a clip with nobody's pictures sent only the bare words: no 2D style line) */ || (R ? castText(words, ctT(R.map(dr)), true) : castWords(words, t.film)) || SM_PROMPT;
+  const once = (R, Z, SG, FIT) => { const W = Z ? Z.w : d.w, Hh = Z ? Z.h : d.h; const prompt = (FIT && R && R.length && h3Of(R)) || (!R && (u.van || /prism_?pika/i.test(u.unet || '')) && h3Of([])) /* (Jordan 2026-11-22: Reel's 🎬 final pass on a clip with nobody's pictures sent only the bare words: no 2D style line) */ || (R ? castText(words, ctT(R.map(dr)), true) : castWords(words, t.film)) || SM_PROMPT;
     let iv;
     if(R || refModel){ const ri = {};
       if(FIT && R && R.length){ const fi = {width:W, height:Hh, length, memory_budget:+S.f.budget || 45000, video_seconds:Math.max(0.2, Math.min(15, length / FPS)), image_size:'match', keyframes:chn && chn.prev ? 7 : 0, stop_above:72000};
@@ -4017,7 +4019,7 @@ function upGraph(t, oi, names){
     else if(chn && chn.prev && !Z) cond = [add('MiniMaxH3MotionContext', {conditioning:cond, vae, latent:[iv, 1], context_length:String(CTX), audio_context_length:24, context_latent:[add('MiniMaxH3MotionContextLoadLatent', {latent_path:outDir({pc:chn.from || t.pc, dir:chn.dir}), clip_index:chn.idx}), 0]}), 0];
     const gd = [add('BasicGuider', {model, conditioning:cond}), 0], // (no 🚫 here: Jordan 2026-11-09 found ✨ High quality "really awful" with NAG 9 on a light redraw)
       smp = [add('KSamplerSelect', {sampler_name:FIT && !SG && u.den ? 'res_multistep' : 'euler'}), 0],
-      sgm = [add('ManualSigmas', {sigmas:SG || (FIT && u.den ? sig8(u.den) : sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl))}), 0];
+      sgm = [add('ManualSigmas', {sigmas:SG || (FIT && u.den ? (u.van ? sigN(u.den, 20) : sig8(u.den)) : sigTail(u.den ? denSig(u.den) : REGEN_SIG[u.rep] || REGEN_SIG.medium, cl))}), 0];
     // 🎯 several light passes (Jordan 2026-11-15: "select how many nudge passes … a different seed every time … without having to decode it
     // every time"): each pass takes the last one's latent, noises it again to the strength with a new seed and samples it, all in latent space;
     // one VAE decode at the end
@@ -5280,7 +5282,7 @@ function bareFix(f){ const bare = S.bare!==false, wild = mineK()===WK;
   set('quality', true); set('qstyle', ''); set('boost', true); set('nsfw', false); set('fillRefs', false); set('shuffle', 0);
   if(f.rstr && Object.keys(f.rstr).length){ f.rstr = {}; ch = true; } if(f.pstr){ f.pstr = 0; ch = true; }
   if(Math.abs((+f.mp || 0) - SIZES[0][0]) > 0.01) set('mp', SIZES[0][0]);
-  const R = FAM_REF(), P = FAM_PIKA(); const U = FAM_ULT(), UF = FAM_ULT(true); if(R && P){ if(f.model!==R && f.model!==P && !(U && f.model===U)){ f.model = R; ch = true; } if(f.model===R){ set('finOn', true); if(!(+f.finAt >= 0.25 && +f.finAt <= 0.875)) set('finAt', 0.5); set('turbo', false); if(f.finU && !UF) set('finU', false); } else set('finOn', false); }
+  const R = FAM_REF(), P = FAM_PIKA(); const U = FAM_ULT(ENGINE), UF = FAM_ULT(true); /* (Reel 2026-11-27: Ultima only and MiniMax only are Reel picks) */ if(R && P){ if(f.model!==R && f.model!==P && !(U && f.model===U)){ f.model = R; ch = true; } if(f.model===R && ENGINE && f.vanOnly){ set('finOn', false); set('turbo', false); } else if(f.model===R){ set('finOn', true); if(!(+f.finAt >= 0.25 && +f.finAt <= 0.875)) set('finAt', 0.5); set('turbo', false); if(f.finU && !UF) set('finU', false); } else set('finOn', false); }
   { const mx = $('#finMix'); if(mx){ const show = !!(R && f.model===R && f.finOn); mx.hidden = !show; if(show){ const at = +f.finAt || 0.5, j = Math.round(8 * at), nm = f.finU && UF ? 'Ultima' : 'PIKA';
       $('#finMixR').textContent = nm + ': finish'; if(document.activeElement!==$('#finMixIn')) $('#finMixIn').value = at; /* (Jordan 2026-11-23) the filled part of the bar = vanilla's share */ $('#finMixV').textContent = 'vanilla ' + j + ' · ' + nm + ' ' + (8 - j) + ' of 8';
       $('#finMixNote').textContent = 'The filled part is vanilla\'s share. Slide left to hand over sooner: ' + nm + ' then shapes more of the motion as well as the finish.'; } } }
@@ -6189,7 +6191,7 @@ window.H3Redo = async o => { const src = deckTake(o.take), fl = takeFile(src);
     if(src.up && src.up.crop && src.final && +src.up.scale > 1){ const d = upDims(src); t.w = d.w; t.h = d.h; }
     if(FILMT===src.id){ const fs = snapshot(); // the form below the timeline holds this take's settings, maybe changed (a new reference): use them
       Object.assign(t, {model:fs.model, turbo:fs.turbo, loras:fs.loras, steps:fs.steps, fin:fs.fin, imgs:fs.imgs, vids:fs.vids, auds:fs.auds, h3:fs.h3, ctl:src.cont ? null : fs.ctl, ctl2:src.cont ? null : fs.ctl2}); }
-    if(o.model){ t.model = o.model; t.turbo = !!o.turbo; if(!finAble(o.model)) t.fin = null; else if(!t.fin && o.fin && ENGINE) t.fin = Object.assign({at:+o.fin.at || 0.5}, o.fin.u ? {u:true} : {}); } // Jordan 2026-11-06: pick the model for the redo in its sheet (PIKA alone has no finish stage)
+    if(o.model){ t.model = o.model; t.turbo = !!o.turbo; if(!finAble(o.model) || o.van) t.fin = null; if(o.van || ULT(o.model)) t.steps = ''; else if(!t.fin && o.fin && ENGINE) t.fin = Object.assign({at:+o.fin.at || 0.5}, o.fin.u ? {u:true} : {}); } // Jordan 2026-11-06: pick the model for the redo in its sheet (PIKA alone has no finish stage)
     finNow(t, o.fin);
     if(Array.isArray(o.loras)) t.loras = o.loras.map(l => ({name:l.name, str:+l.str || 1, words:l.words || ''})); // and its LoRAs (2026-11-08)
     if(o.lines){ t.lines = o.lines; loraChips(t); } // 🧩 Reel's LoRA chips
@@ -6516,7 +6518,7 @@ window.H3Nudge = async o => { const src = deckTake(o.take), fl = takeFile(src);
     t.name = 'h3_' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '_' + t.id.slice(-4); t.dir = 'H3Deck/' + t.name;
     const text = (o.prompt || '').trim() || src.prompt;
     Object.assign(t, {prompt:text, seconds:F / FPS, carry:null, combo:null, lead:null, toFilm:null, sm:null, upImgs:[], final:null, joinPid:null, joinErr:'', joinSave:null, upPid:null, upErr:'', smoothed:fl, state:'working', reviewed:false, t0r:Date.now(),
-      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, ...(Array.isArray(o.only) ? {only:o.only.map(Number), passes:Math.max(1, Math.min(4, Math.round(+o.passes || 1)))} : {}), unet:o.unet || '', qw:String(o.qw || '').trim(), refs:o.faces && o.faces.length ? true : Array.isArray(o.only) ? o.only.length > 0 : o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, o.faces && o.faces.length && !big ? Object.assign({faces:o.faces.map(f => f.obj != null ? {n:+f.n, obj:+f.obj} : {n:+f.n, x:+f.x, y:+f.y}), find:o.find || '', zoom:!!o.zoom}, o.trk ? {trk:faceAB(src, o.trk.a, o.trk.b)} : {}) : {}, big ? {crop:{s0, L, pad, F}} : {part}, chn ? {chain:chn} : {}), upStage:'start',
+      up:Object.assign({scale:big ? +o.scale : 1, rep:o.rep || 'light', den:o.den ? +o.den : 0, clean:o.clean ? +o.clean : 0, look:o.look==='anime' ? 'anime' : 'live', str:o.str != null ? +o.str : 0.8, ...(Array.isArray(o.only) ? {only:o.only.map(Number), passes:Math.max(1, Math.min(4, Math.round(+o.passes || 1)))} : {}), unet:o.unet || '', ...(o.van ? {van:true} : {}), qw:String(o.qw || '').trim(), refs:o.faces && o.faces.length ? true : Array.isArray(o.only) ? o.only.length > 0 : o.refs != null ? !!o.refs : upRefs(src).length > 0, prompt:text}, o.faces && o.faces.length && !big ? Object.assign({faces:o.faces.map(f => f.obj != null ? {n:+f.n, obj:+f.obj} : {n:+f.n, x:+f.x, y:+f.y}), find:o.find || '', zoom:!!o.zoom}, o.trk ? {trk:faceAB(src, o.trk.a, o.trk.b)} : {}) : {}, big ? {crop:{s0, L, pad, F}} : {part}, chn ? {chain:chn} : {}), upStage:'start',
       redo:{src:src.id, root:src.redo ? src.redo.root : src.id, file:fileArg(fl), sound:src.sound!==false, film:o.film || '', clip:o.clip || '', key, wi:o.wi != null ? +o.wi : null, nudge:true, qp:!!o.qp, big, cin:(part.a - s0) / FPS, cout:(part.b - s0) / FPS, a:part.a, b:part.b, s0, L, F, Fout:big ? L : F},
       pieces:[{start:0, gen:big ? L : F, deliv:big ? L : F, ctx:0, prompt:text, state:'done', file:null}]});
     if(big) t.seconds = L / FPS; if(sd){ t.w = sd.w; t.h = sd.h; }
@@ -6798,8 +6800,9 @@ if(ENGINE){
     reelPick(); if(S.f.finOn){ if(+at0) S.f.finAt = +at0; S.f.finU = pickModel() ? pickModel().u : !!u0; } }
   // 🎛 (Jordan 2026-11-27: "pika only is broken when the 0.9 mp isn't turned on … it shows 0/10 steps") ➕ Next, ↻ Redo, ⇿ Insert and the rest
   // loaded the clip's OWN model (useAgain), so a clip made on MiniMax → PIKA kept coming back on it. Reel's ⚙ model pick now wins for every new send
-  function pickModel(){ const m = S.reelModel; if(!m) return null; const key = String(m).replace(/#u$/, ''); if(!families().some(x => x.key===key)) return null; return {model:key, u:/#u$/.test(m)}; }
-  function reelPick(){ const p = pickModel(); if(!p || S.f.sm) return; S.f.model = p.model; if(finAble(p.model)){ S.f.finOn = true; S.f.finU = p.u; } else S.f.finOn = false; }
+  // (Jordan 2026-11-27: "a minimax only option for rendering … then hires with minimax" + "an Ultima only mode") key#v = H3 Reference alone, no finish
+  function pickModel(){ const m = S.reelModel; if(!m) return null; const key = String(m).replace(/#[uv]$/, ''); if(!families().some(x => x.key===key)) return null; return {model:key, u:/#u$/.test(m), v:/#v$/.test(m)}; }
+  function reelPick(){ const p = pickModel(); if(S.f.sm) return; S.f.vanOnly = !!(p && p.v); if(!p) return; S.f.model = p.model; if(p.v || ULT(p.model)) S.f.steps = ''; /* (its own steps: 20 vanilla, 6 Ultima) */ if(finAble(p.model) && !p.v){ S.f.finOn = true; S.f.finU = p.u; } else { S.f.finOn = false; if(p.v) S.f.turbo = false; } }
   async function go(n){ S.f.takes = nOf(n); reelPick(); try{ drawBare(); }catch(e){} /* H3 Deck's bare-bones settings, as its own screen sets them before a render: references and the H3 way on, the H3 Reference model finished on PIKA at 50% (Jordan 2026-11-20: Reel ran 20 steps on the first model) */ S.f.t09 = false; const keep9 = {model:S.f.model, finOn:S.f.finOn, mp:S.f.mp}; { const tp = testPc(); if(testOn()){ S.f.where = tp || 'both'; if(!S.f.sm){ const P = FAM_PIKA(); if(P){ S.f.model = P; S.f.finOn = false; } S.f.mp = 0.9; S.f.t09 = true; } } } /* 🧪 0.9 MP · PIKA only · one PC */ $('#prompt').value = S.f.prompt; save(); const why = whyNot(); if(why) return {err:why};
     const b = before(); try{ await render(); }finally{ if(S.f.t09){ Object.assign(S.f, keep9, {t09:false}); save(); } } /* 🧪 the test's PIKA/size is for this send only: Reel's own model pick stays */ const ids = newIds(b); return ids.length ? {ids} : {err:'Nothing was sent'}; }
   // the characters named in the words: their names become <Subject n>; one picked but not named is put at the start
@@ -6880,9 +6883,9 @@ if(ENGINE){
     pcs:() => S.pcs.map(p => ({name:p.name, url:p.url, on:p.on!==false, online:!!pcOf(p.url).online, busy:busySecs(p.url) > 0})),
     pcOn:(url, on) => { const p = S.pcs.find(x => x.url===url); if(!p) return false; p.on = !!on; save(); return true; }, // (Reel ⚙: Jordan 2026-11-24, "none of the renders go to Main tonight")
     // (Jordan 2026-11-22: "Could we add that one to reel?") the vanilla model is offered twice, finishing on PIKA or on Ultima ('#u')
-    models:() => { const R0 = FAM_REF(), U = FAM_ULT(true); return modelList().flatMap(x => x.key===R0 ? [{key:x.key, label:'H3 Reference → PIKA finish'}].concat(U ? [{key:x.key + '#u', label:'H3 Reference → Ultima finish'}] : []) : [{key:x.key, label:/singularity/i.test(x.key) ? 'PRISM PIKA' : x.label}]); },
+    models:() => { const R0 = FAM_REF(), U = FAM_ULT(true); const L = modelList().flatMap(x => x.key===R0 ? [{key:x.key, label:'H3 Reference → PIKA finish'}].concat(U ? [{key:x.key + '#u', label:'H3 Reference → Ultima finish'}] : [], [{key:x.key + '#v', label:'MiniMax only (H3 Reference)'}]) : [{key:x.key, label:/singularity/i.test(x.key) ? 'PRISM PIKA' : ULT(x.key) ? 'Ultima only' : x.label}]); if(U && !L.some(x => x.key===U)) L.push({key:U, label:'Ultima only'}); return L; },
     look:() => ({model:pickModel() ? S.reelModel : S.f.model && S.f.model===FAM_REF() && FAM_ULT(true) && (S.reelFin ? S.reelFin==='ultima' : S.f.finU) ? S.f.model + '#u' : S.f.model, aspect:S.reelAspect || (S.f.aspect==='pic' ? '16:9' : S.f.aspect), turbo:S.f.turbo, finAt:+S.reelAt || +S.f.finAt || 0.5, test:testOn(), testPc:testPc() ? pcName(testPc()) : '', testUrl:testPc() || 'both'}),
-    setLook:o => { if(o.finAt){ S.reelAt = Math.max(0.25, Math.min(0.875, Math.round(+o.finAt * 8) / 8)); S.f.finAt = S.reelAt; } if(o.model){ const u = /#u$/.test(o.model); S.reelModel = o.model; S.f.model = o.model.replace(/#u$/, ''); if(S.f.model===FAM_REF()){ S.reelFin = u ? 'ultima' : 'pika'; S.f.finU = u; } } if(o.aspect){ S.reelAspect = o.aspect; S.f.aspect = o.aspect; } if(o.turbo!=null) S.f.turbo = !!o.turbo; if(o.test!=null || o.testPc){ const T0 = S.reelTest || {}; S.reelTest = {on:o.test!=null ? !!o.test : !!T0.on, pc:o.testPc || (T0.v ? T0.pc : '') || 'both', v:2}; if(!S.reelTest.on || S.reelTest.pc==='both') S.f.where = 'both'; } save(); },
+    setLook:o => { if(o.finAt){ S.reelAt = Math.max(0.25, Math.min(0.875, Math.round(+o.finAt * 8) / 8)); S.f.finAt = S.reelAt; } if(o.model){ const u = /#u$/.test(o.model), v = /#v$/.test(o.model); S.reelModel = o.model; S.f.model = o.model.replace(/#[uv]$/, ''); S.f.vanOnly = v; if(S.f.model===FAM_REF() && !v){ S.reelFin = u ? 'ultima' : 'pika'; S.f.finU = u; } } if(o.aspect){ S.reelAspect = o.aspect; S.f.aspect = o.aspect; } if(o.turbo!=null) S.f.turbo = !!o.turbo; if(o.test!=null || o.testPc){ const T0 = S.reelTest || {}; S.reelTest = {on:o.test!=null ? !!o.test : !!T0.on, pc:o.testPc || (T0.v ? T0.pc : '') || 'both', v:2}; if(!S.reelTest.on || S.reelTest.pc==='both') S.f.where = 'both'; } save(); },
     lib:() => (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || '', pics:libPics(L).slice(), reel:!!L.reel, fit:!!L.fit, art:artDef(L), pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
     // 👥 a character made in Reel: name, a few words about her look, her pictures (kept on the phone and sent with her like H3 Deck's)
     // ✨ 👗 🧩 the rest of the Library, as H3 Deck has it: attributes, clothing, LoRA chips
@@ -6969,14 +6972,15 @@ if(ENGINE){
     seam:async o => { const pk = hqUnets().find(x => /prism_?pika/i.test(x)) || '', b = before();
       const n = await window.H3Combine({parts:(o.parts || []).map(q => ({take:q.take, in:+q.a || 0, out:+q.b})), seam:{rk:uid('k'), unet:pk, qw:o.qw || '', half:Math.max(2, Math.min(24, +o.half || BRIDGE_HALF))}});
       const ids = newIds(b); return n && ids.length ? {id:ids[0]} : {err:'Not sent'}; },
-    final:async o => { const pk = hqUnets().find(x => /prism_?pika/i.test(x)) || '', ids = []; let ch = null;
+    final:async o => { const van = o.hm==='minimax', pk = van ? vanUnet() : hqUnets().find(x => /prism_?pika/i.test(x)) || '', ids = []; let ch = null; // (Jordan 2026-11-27: "hires with minimax") o.hm 'minimax' = vanilla H3 Reference does the ✨ pass
+      if(van && !pk) return {err:'No PC lists the MiniMax H3 Reference model yet'};
       // 🎨 Reel's style LoRAs for the ✨ pass (2026-11-26), on top of the clip's own LoRAs (a same-named one takes the pass's strength)
       const upSl = (Array.isArray(o.sl) ? o.sl : []).filter(l => l && l.name).map(l => ({name:String(l.name), str:l.str != null && l.str!=='' ? +l.str : 1, words:String(l.words || '').trim(), style:true}));
       for(const c of o.clips || []){ const src = deckTake(c.take); if(c.cut) ch = null; /* (a new shot: no ✨ context over the cut) */ if(!src || !takeFile(src)){ ids.push(null); ch = null; continue; }
         const on = !!ch && ch.w===src.w && ch.h===src.h, pv = !on && c.ctx && deckTake(c.ctx.take), pvf = pv && takeFile(pv), key = uid('k');
         // (Reel's ⬆ Upscale this option, Jordan 2026-11-24) nothing chained before it: carry on from the clip before's picked video itself
         const ctxc = on ? {dir:ch.dir, idx:ch.idx + 1, prev:ch.prev, pc:ch.pc} : {dir:'H3Deck/hqctx_' + uid('r'), idx:0, prev:pvf ? pv.id : '', pc:'', vid:pvf ? {f:pvf, at:+c.ctx.at || 0} : null};
-        let n = 0; try{ n = await window.H3Nudge({take:src.id, a:+c.a || 0, b:+c.b || takeFrames(src) / FPS, scale:1.5, den:+o.den || 0.9, clean:0, look:src.h3 && /^(2d|cartoon|anime)/i.test(src.h3.scene || '') ? 'anime' : 'live', unet:pk, str:o.lstr != null ? +o.lstr : 0.8, ctxc, key, quiet:true, ...(upSl.length ? {loras:lorasOf(src).filter(l => !upSl.some(x => x.name===l.name)).map(l => Object.assign({}, l)).concat(upSl)} : {})}); }catch(e){ console.warn(e); }
+        let n = 0; try{ n = await window.H3Nudge({take:src.id, a:+c.a || 0, b:+c.b || takeFrames(src) / FPS, scale:1.5, den:+o.den || 0.9, clean:0, look:src.h3 && /^(2d|cartoon|anime)/i.test(src.h3.scene || '') ? 'anime' : 'live', unet:pk, van, str:o.lstr != null ? +o.lstr : 0.8, ctxc, key, quiet:true, ...(upSl.length ? {loras:lorasOf(src).filter(l => !upSl.some(x => x.name===l.name)).map(l => Object.assign({}, l)).concat(upSl)} : {})}); }catch(e){ console.warn(e); }
         const t = n && S.takes.find(x => x.redo && x.redo.key===key); ids.push(t ? t.id : null);
         ch = t ? {dir:ctxc.dir, idx:ctxc.idx, prev:t.id, pc:t.pc, w:src.w, h:src.h} : null; }
       save(); return ids.some(Boolean) ? {ids} : {err:'Nothing could be sent. Are the PCs on?'}; },
@@ -6992,7 +6996,7 @@ if(ENGINE){
       str:o.str != null ? +o.str : 0.5, prompt:keepOf(o, KEEP_ALL) + whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), sets});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 🎨 Change a stretch of a clip (like inpainting over time): the frames around it are pinned, str = how much it changes
-    redo:async o => { const b = before(); fresh(); const pk = pickModel(); const n = await window.H3Redo({fin:{at:+S.f.finAt || 0.5, u:pk ? pk.u : !!S.f.finU}, ...(pk ? {model:pk.model, turbo:false} : {}), take:o.take, a:+o.a, b:+o.b, prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), str:o.str != null ? +o.str : 1});
+    redo:async o => { const b = before(); fresh(); const pk = pickModel(); const n = await window.H3Redo({fin:pk && pk.v ? null : {at:+S.f.finAt || 0.5, u:pk ? pk.u : !!S.f.finU}, ...(pk ? {model:pk.model, turbo:false, van:!!pk.v} : {}), take:o.take, a:+o.a, b:+o.b, prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines(), n:nOf(o.n), str:o.str != null ? +o.str : 1});
       const ids = newIds(b); return n && ids.length ? {ids} : {err:'Not sent'}; },
     // 🔑 Phase 2: a stretch of the joined reel made again between its refined keyframes (see H3KeyPass)
     keys:async o => { const b = before(); fresh(); const n = await window.H3KeyPass(Object.assign({}, o, {fin:{at:+S.f.finAt || 0.5, u:!!S.f.finU}, prompt:whoWords(o.words, o.who), descOff:DOFF, lines:engLines()}));
