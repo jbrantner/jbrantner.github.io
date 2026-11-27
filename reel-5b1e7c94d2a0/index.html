@@ -320,7 +320,7 @@ function pickOpt(c, id){ c.meta = c.meta || {}; if(c.pick && c.pick!==id){ c.met
 // clip of their own. side 'a' = this clip's frames then the new part; 'b' = the new part then the next clip's frames.
 const JOIN_MAX = 6.5;
 // 🎬 a clip that starts a new shot (✍ New shot, 📤 upload) doesn't carry the ✨ look of the clip before it over the cut
-const isCut = c => { const cs = clips(), i = cs.indexOf(c); return i > 0 && (c.kind==='new' || c.kind==='upload'); };
+const isCut = c => { const cs = clips(), i = cs.indexOf(c); return i > 0 && (c.kind==='new' || c.kind==='upload' || c.kind==='angle'); };
 function joinTakes(c, ids, side, other, extra, words){ const m0 = Object.assign({}, (c.meta || {})[c.pick] || {}); delete m0.trim; delete m0.fin; delete m0.src; delete m0.whole; delete m0.reup;
   const meta = Object.assign(m0, side==='a' ? {before:other} : {after:other}, {joined:side}, extra || {}); addTakes(c, ids, meta, words!=null ? words : wordsOf(c, c.pick)); pickOpt(c, ids[0]); save(); refresh(); }
 function autoPick(c){ if(c.pick && c.takes.includes(c.pick) && !/failed|gone/.test(info(c.pick).state)) return false;
@@ -834,6 +834,39 @@ async function picUp(o, k){ if(!o[k + 'Blob'] || (k==='last' && !o.firstBlob)) r
 async function firstUp(o){ return picUp(o, 'first'); }
 async function framesUp(o){ const first = await picUp(o, 'first'); return {first, last:first ? await picUp(o, 'last') : ''}; }
 
+// 🎬 Continuity cut (Jordan 2026-11-27: "the same shot but cut to a different camera angle … a continuity cut"): a new shot of the same
+// moment. The clip's frame where it ends (or is trimmed to) goes as the shot's <Ref Image 1>, NOT as a first frame, so MiniMax copies the
+// place, the light, the people and their clothes but frames it fresh; the same people and look come along. It starts a new shot (isCut).
+const ANGLES = [['close', 'close-up', 'Close-up'], ['xclose', 'extreme close-up on the face', 'Face'], ['wide', 'wide shot', 'Wide'], ['ots', 'over-the-shoulder shot', 'Over shoulder'], ['low', 'low angle shot', 'Low angle'], ['high', 'high angle shot', 'High angle'], ['side', 'side view', 'Side'], ['rev', 'reverse angle', 'Reverse']];
+function angleWords(a, w){ return 'The camera cuts to a ' + a + ' of the same moment, in <Ref Image 1>: the same lighting, the same people in the same outfits, carrying on from where they are.' + (w ? ' ' + w : ''); }
+// a full-size frame of a clip, as a JPEG
+function frameBlob(url, at){ return new Promise((ok, no) => { const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
+  const done = () => { v.removeAttribute('src'); v.load(); };
+  const tm = setTimeout(() => { done(); no(new Error('slow')); }, 20000);
+  v.onloadeddata = () => { try{ v.currentTime = clamp(at || 0.05, 0.05, Math.max(0.05, (v.duration || 1) - 0.05)); }catch(e){ no(e); } };
+  v.onseeked = () => { try{ const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0);
+    c.toBlob(b => { clearTimeout(tm); done(); b ? ok(b) : no(new Error('no frame')); }, 'image/jpeg', 0.93); }catch(e){ clearTimeout(tm); no(e); } };
+  v.onerror = () => { clearTimeout(tm); no(new Error('no video')); }; v.src = url; }); }
+function angleSheet(i){ const c = clips()[i]; if(!c || !doneOf(c.pick)){ toast('That clip needs a finished option first', 4000); return; }
+  const at = Math.max(0, endOf(c) - 0.05), sc = onScreen(c), o = {words:'', who:sc.concat(castOf().filter(id => !sc.includes(id))), secs:clamp(lenOf(c) || 5, 1, 5), n:S.n || 2, ang:S.angle || 'close'}, L = lookOf(c);
+  sheet(`<h3><span>🎬 Same moment, new angle</span><button class="btn" data-close>✕</button></h3>
+    <div class="note">A cut to a new camera angle on the same moment. The end of clip ${i + 1} goes along as a reference picture (not as the first frame), so the place, the light and the outfits match while the camera moves.</div>
+    <img id="anPic" alt="" hidden style="margin-top:10px;height:84px;border-radius:8px;border:1px solid var(--line)">
+    <div class="lab"><span>New angle</span></div><div class="seg" id="anSeg" style="flex-wrap:wrap;gap:4px">${ANGLES.map(([k, a, lab]) => `<button data-a="${k}" title="${esc(a)}" style="flex:1 1 22%" class="${o.ang===k ? 'on' : ''}">${esc(lab)}</button>`).join('')}</div>
+    <input id="anOwn" placeholder="or type your own: a slow push-in from behind the counter" style="width:100%;margin-top:6px">
+    <div class="lab"><span>What happens (optional)</span></div><textarea id="anW" rows="3" placeholder="She lifts the cup and blows on the coffee."></textarea>
+    ${whoHtml(o.who)}${lookRow(L)}${lenRow('anL', o.secs, 1, 5)}${nRow(o.n)}
+    <button class="big pri" id="anGo" style="width:100%;margin-top:14px">🎬 Render the cut</button>`);
+  whoWire(o.who, $('#anW')); lookWire(L); lenWire('anL', o, 'secs'); nWire(o);
+  frameAt(info(c.pick).url, at).then(u => { const im = $('#anPic'); if(im){ im.src = u; im.hidden = false; } }).catch(() => {});
+  $$('#anSeg button').forEach(b => b.onclick = () => { o.ang = S.angle = b.dataset.a; save(); $('#anOwn').value = ''; $$('#anSeg button').forEach(x => x.classList.toggle('on', x===b)); });
+  $('#anOwn').oninput = () => { const on = !!$('#anOwn').value.trim(); $$('#anSeg button').forEach(x => x.classList.toggle('on', !on && x.dataset.a===o.ang)); };
+  $('#anGo').onclick = async () => { const own = $('#anOwn').value.trim(), a = own || (ANGLES.find(x => x[0]===o.ang) || ANGLES[0])[1]; o.words = angleWords(a, $('#anW').value.trim());
+    let ref = ''; const ids = await send($('#anGo'), async () => { let b; try{ b = await frameBlob(info(c.pick).url, at); }catch(e){ return {err:"Couldn't get the last frame of clip " + (i + 1) + ' from the PC'}; }
+      const r = await E.addPic(new File([b], 'cut-from.jpg', {type:'image/jpeg'})); if(!r || r.err) return {err:(r && r.err) || "The frame couldn't be kept"}; ref = r.id;
+      return E.make({words:o.words, who:o.who, secs:o.secs, n:o.n, refs:[ref]}); }, '🎬 Sent: the cut goes right after clip ' + (i + 1), L); if(!ids) return;
+    const nc = addClip(i + 1, {kind:'angle', words:o.words, who:o.who, look:cl(L), ref, from:c.pick}); addTakes(nc, ids, {look:cl(L), angle:a}, o.words); }; }
+
 // 📤 a clip from the phone
 function uploadPick(at){ const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'video/*';
   inp.onchange = async () => { const f = inp.files && inp.files[0]; if(!f) return; const r = await E.upload({file:f}); if(!r || r.err){ toast((r && r.err) || 'Not uploaded', 6000); return; }
@@ -848,7 +881,8 @@ function nextSheet(){ const i = curI(), c = cur(), N = clips()[i + 1]; if(!c) re
     ${whoHtml(o.who)}${lookRow(L)}${lenRow('nxL', o.secs, N ? 0.5 : 1, 5, N ? 'Seconds to add' : 'Length')}${nRow(o.n)}
     ${N ? '' : `<details id="nxThen" style="margin-top:10px"><summary class="lab" style="cursor:pointer"><span>🔗 Then keep going</span></summary><div class="note">One line per clip, as many as you like. Each one carries on from the clip before as soon as that has a finished option (the first one that's done; you can still pick another later). It runs while Reel is open on this reel.</div><textarea id="nxT" rows="4" placeholder="She sits down on the bed.&#10;She looks up at the camera and smiles."></textarea></details>`}
     <button class="big pri" id="nxGo" style="width:100%;margin-top:14px">${N ? '⇿ Insert' : '➕ Render next'}</button>
-    <div class="row" style="gap:8px;margin-top:12px"><button class="btn" data-act="make" data-at="${i + 1}" style="flex:1">✍ New shot (a cut)</button><button class="btn" data-act="upload" data-at="${i + 1}" style="flex:1">📤 Upload a clip</button></div>`);
+    <div class="row" style="gap:8px;margin-top:12px"><button class="btn" data-act="make" data-at="${i + 1}" style="flex:1">✍ New shot (a cut)</button><button class="btn" data-act="upload" data-at="${i + 1}" style="flex:1">📤 Upload a clip</button></div>
+    ${doneOf(c.pick) ? `<button class="btn" data-act="angle" data-at="${i}" style="width:100%;margin-top:8px">🎬 Same moment, new angle (a continuity cut)</button>` : ''}`);
   whoWire(o.who, $('#nxW')); lookWire(L); lenWire('nxL', o, 'secs'); nWire(o);
   $('#nxGo').onclick = async () => { o.words = $('#nxW').value.trim(); if(!o.words && !N){ toast('Write what happens next first'); return; } o.then = !N && $('#nxT') ? $('#nxT').value.split('\n').map(x => x.trim()).filter(Boolean) : [];
     // (a clip that would get longer than JOIN_MAX stays its own ⇿ clip, so the 🎬 Final pass's window still fits the PCs' memory)
@@ -872,7 +906,7 @@ function redoPlan(i, free){ const cs = clips(), c = cs[i], P = isCut(c) ? null :
   if(N) return {how:'⏪ Leads into the clip after, so it lands on its first frame.', secs:L, lo:1, run:o => E.lead({take:N.pick, at:N.in || 0, secs:o.secs, words:o.words, who:o.who, n:o.n}), meta:{before:N.pick}};
   if(c.kind==='upload') return {err:'An uploaded clip can\'t be made again: try ✂ Edit › 🎨 Change it'};
   const base = c.takes.find(doneOf);
-  if(!base) return {how:'✍ Made fresh from the words (no finished option to copy from yet).', secs:L, lo:1, run:o => E.make({words:o.words, who:o.who, secs:o.secs, n:o.n, first:o.first, last:o.last}), meta:{}, ff:true}; // (Jordan 2026-11-20: all options gone, Redo said to wait)
+  if(!base) return {how:'✍ Made fresh from the words (no finished option to copy from yet).', secs:L, lo:1, run:o => E.make({words:o.words, who:o.who, secs:o.secs, n:o.n, first:o.first, last:o.last, refs:c.ref ? [c.ref] : []}), meta:{}, ff:true}; // (Jordan 2026-11-20: all options gone, Redo said to wait)
   return {how:'The same settings again, with your words.', secs:L, lo:1, run:o => E.again({take:base, words:o.words, who:o.who, secs:o.secs, n:o.n, first:o.first, last:o.last}), meta:{}, ff:true}; }
 const landOn = N => !!N && (R().rdLand || {})[N.id]!=null ? !!R().rdLand[N.id] : !!N && !isCut(N); // a clip after that starts a new shot: off by default
 function redoSheet(){ const i = curI(), c = cur(); if(!c) return; const N = clips()[i + 1]; let land = landOn(N), P = redoPlan(i, !land); if(P.err){ toast(P.err, 5000); return; } const ff0 = !!P.ff;
@@ -1341,7 +1375,7 @@ function loopTick(){ const r = R(), z = r && r.loopR; if(!z || z.state!=='run' |
   if($('#lpSt')) $('#lpSt').textContent = loopText(); }
 setInterval(() => { if(!document.hidden) loopTick(); }, 5000);
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if(!b) return; if(!READY){ toast('Still starting…'); return; }
-  const at = b.dataset.at != null ? +b.dataset.at : null; if(b.dataset.act==='make') makeSheet(at); else if(b.dataset.act==='upload'){ closeSheet(); uploadPick(at); } });
+  const at = b.dataset.at != null ? +b.dataset.at : null; if(b.dataset.act==='make') makeSheet(at); else if(b.dataset.act==='angle') angleSheet(at); else if(b.dataset.act==='upload'){ closeSheet(); uploadPick(at); } });
 
 // ---------- following the renders ----------
 function refresh(){ INFO = {}; if(E){ setSubNames(); for(const c of clips()) autoPick(c); } draw(); }
