@@ -349,6 +349,8 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
   await page.evaluate(() => REEL.go(0)); await page.waitForTimeout(300); await page.click('#allBtn'); await page.waitForTimeout(300);
   ok(await page.evaluate(() => document.querySelector('#allBtn').textContent==='■ Stop'), '▶ Play all starts'); await page.click('#allBtn');
   ok(await page.evaluate(() => { const r = REEL.R(), keep = r.clips, cur = r.cur; r.clips = [{id:'cx', kind:'new', words:'Mia waves', takes:[], pick:null}]; const p = REEL.redoPlan(0); r.clips = keep; r.cur = cur; return !p.err && /fresh/.test(p.how); }), '↻ Redo on a clip with no options left makes it fresh from its words');
+  { const p = await page.evaluate(() => { const r = REEL.R(), keep = r.clips, cur = r.cur; r.clips = [{id:'ca', kind:'new', words:'Mia waves', takes:[], pick:null}, {id:'cb', kind:'new', words:'Mia sits', takes:[], pick:null}]; const p = REEL.redoPlan(1); r.clips = keep; r.cur = cur; return p; });
+    ok(!p.err && !/Carries on/.test(p.how) && /fresh/.test(p.how), '✍ ↻ Redo on a ✍ New clip after another clip makes a new clip, not a carry-on (' + (p.err || p.how) + ')'); }
   // ⏯ the viewport: a tap pauses / plays, a drag scrubs; the wheel no longer plays (the fake PC can't serve byte ranges, so the
   // scrub's target time is read from its label rather than the video)
   { await page.evaluate(() => { const v = document.querySelector('#vA'); v.muted = true; return v.play().catch(() => {}); }); await page.waitForTimeout(300);
