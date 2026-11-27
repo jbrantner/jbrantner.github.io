@@ -1017,6 +1017,7 @@ function famLabel(k){ k = normKey(k);
   { const d = k.match(/^dasiwa_hybrid_v(\d+)(_fl2v)?$/); if(d) return 'DaSiWa Hybrid V' + d[1] + (d[2] ? ' First/last frame' : ''); }
   if(/fl2v/.test(k)) return 'MiniMax H3 First/last frame (official)';
   if(/ref2v/.test(k)) return 'MiniMax H3 Reference (official)';
+  if(TRI(k)) return 'TriPRISM TurboFusion';
   if(/ultima/.test(k)) return 'Ultima Hybrid' + ((k.match(/lv(\d+)/) || [])[1] ? ' Lv' + k.match(/lv(\d+)/)[1] : '');
   if(/singularity/.test(k)) return 'Singularity V2 x 10Eros' + ((k.match(/prism_?(\w+)$/) || [])[1] ? ' · PRISM ' + k.match(/prism_?(\w+)$/)[1].toUpperCase() : '');
   let s = k.replace(/^dasiwaminimaxh3_/, '').replace(/^dasiwa/, 'DaSiWa ').replace(/_/g, ' ');
@@ -1037,6 +1038,8 @@ function resolveModel(oi, key, turbo){ key = normKey(key);
   const files = combo(oi, 'UNETLoader', 'unet_name').filter(n => isH3(n) && famKey(n)===key); if(!files.length) return null;
   const fl2v = /fl2v/.test(key), t = files.find(n => /turbo/i.test(bn(n))), b = files.find(n => !/turbo/i.test(bn(n)));
   // Singularity (PRISM merges) has the 8-step turbo baked in: Turbo and Regular are the same file at 8 steps, no extra LoRA
+  // TriPRISM TurboFusion (Civitai 3019421 v3488344, Jordan 2026-11-27): turbo baked in, the creator's 6 steps lcm / beta57, no LoRAs (Render test: 73 s vs PIKA 104 s)
+  if(TRI(key) && (b || t)) return {unet:b || t, steps:TRI_STEPS, fl2v, label:bn(b || t) + ' · turbo built in'};
   if(/singularity|prism/.test(key) && b) return {unet:b, steps:8, fl2v, label:bn(b) + ' · turbo built in'};
   // Ultima NSFW Hybrid (Civitai 3047487, Jordan 2026-11-22): turbo baked in, the creator's 6 steps er_sde / beta, no LoRAs
   if(ULT(key)) return {unet:b || t, steps:ULT_STEPS, fl2v, label:bn(b || t) + ' · turbo built in'};
@@ -1052,6 +1055,7 @@ function resolveModel(oi, key, turbo){ key = normKey(key);
 }
 // a take's LoRAs, stacked in order; older takes kept one in lora/loraStr/words
 const ULT = k => /ultima/i.test(String(k || '')), ULT_STEPS = 6;
+const TRI = k => /triprism/i.test(String(k || '')), TRI_STEPS = 6;
 const lorasOf = t => (t.loras || (t.lora ? [{name:t.lora, str:+t.loraStr || 1, words:t.words || ''}] : [])).filter(l => l.name);
 // ✨ Quality boost (Jordan 2026-11-18: "All 5 Lora's together look really good… a toggle, on by default", LoRAs and trigger word out of sight):
 // five quality LoRAs added at send time to every take made with the switch on; whichever of them the PC has (never blocks a PC)
@@ -1062,7 +1066,7 @@ const BOOST = [{re:/mmh3-realism-v2.*ref2va/i, str:0.5}, {re:/detailslider-v1/i,
 const BOOST_PIKA = [{re:/mmh3-realism-v2.*ref2va/i, str:0.35}, {re:/detailslider-v1/i, str:0.5}, {re:/mmh3-realismslider-v1/i, str:0.5}, {re:/h3-realism-people/i, str:0.5, words:'r34l1sm'}, {re:/minimax_h3_cinematic_v2/i, str:0.35}];
 // (🔥 Body & motion was tried twice on 2026-11-18 and taken out for good 2026-11-19 at Jordan's ask: "We can just take 🔥 out")
 const isBoost = n => BOOST.some(b => b.re.test(bn(n))) || /minimax_h3_cinematic_v2/i.test(bn(n));
-const boostLoras = (oi, t) => { if(!t || !oi || !t.boost || ULT(t.model)) return []; /* Ultima: the creator says no LoRAs */ const q = !t.styled && !(t.h3 && t.h3.quality===true && /^(3d|2d)$/.test(t.h3.qstyle || '')); /* photoreal LoRAs would fight 🧊 3D / ✏ 2D */ const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), mine = new Set(lorasOf(t).map(l => l.name));
+const boostLoras = (oi, t) => { if(!t || !oi || !t.boost || ULT(t.model) || TRI(t.model)) return []; /* TriPRISM: realism slider already baked in */ /* Ultima: the creator says no LoRAs */ const q = !t.styled && !(t.h3 && t.h3.quality===true && /^(3d|2d)$/.test(t.h3.qstyle || '')); /* photoreal LoRAs would fight 🧊 3D / ✏ 2D */ const have = combo(oi, 'LoraLoaderModelOnly', 'lora_name'), mine = new Set(lorasOf(t).map(l => l.name));
   return (q ? (/singularity|prism/.test(normKey(t.model || '')) ? BOOST_PIKA : BOOST) : []).map(b => ({name:have.find(n => b.re.test(bn(n))), str:b.str, words:b.words || ''})).filter(l => l.name && !mine.has(l.name)); };
 // ⚡ Fast attention (Jordan 2026-11-18, "keep the quality while speeding up"): ComfyUI's built-in ModelAttentionBackend set to
 // comfy kitchen attention (INT8 attention) after every MiniMax H3 video UNETLoader, added at send time so every kind of job gets it.
@@ -1932,7 +1936,7 @@ function rerollSheet(t){ openSheet(`<h3><span>🎲 New take</span><button class=
     <div class="note">Same settings, a new seed. Change the words first if you like.</div>
     <textarea id="rrP" rows="6" style="width:100%;box-sizing:border-box;margin-top:8px">${esc(t.prompt || '')}</textarea>
     <div id="rrTags" style="margin-top:8px"></div>
-    ${t.fin ? `<div class="lab" style="margin-top:10px"><span>🎚 Vanilla ↔ <span id="rrFn">PIKA</span></span><b id="rrMixV" style="font-size:13px"></b></div>${FAM_ULT(true) ? `<div class="seg" id="rrFu"><button data-u="0">PIKA finish</button><button data-u="1">Ultima finish</button></div>` : ''}<input type="range" id="rrMix" min="0.25" max="0.875" step="0.125" value="${Math.max(0.25, Math.min(0.875, +(S.f.finOn ? S.f.finAt : t.fin.at) || 0.5))}" style="width:100%"><div class="note">The filled part is vanilla's share. Starts on what the 🎚 slider is set to now.</div>` : ''}
+    ${t.fin ? `<div class="lab" style="margin-top:10px"><span>🎚 Vanilla ↔ <span id="rrFn">PIKA</span></span><b id="rrMixV" style="font-size:13px"></b></div>${FAM_ULT(true) && !ENGINE ? `<div class="seg" id="rrFu"><button data-u="0">PIKA finish</button><button data-u="1">Ultima finish</button></div>` : ''}<input type="range" id="rrMix" min="0.25" max="0.875" step="0.125" value="${Math.max(0.25, Math.min(0.875, +(S.f.finOn ? S.f.finAt : t.fin.at) || 0.5))}" style="width:100%"><div class="note">The filled part is vanilla's share. Starts on what the 🎚 slider is set to now.</div>` : ''}
     <button class="btn pri" id="rrGo" style="width:100%;padding:13px;margin-top:10px">🎲 Make a new take</button></div>`);
   const tg = {prompt:t.prompt || '', descOff:JSON.parse(JSON.stringify(t.descOff || {}))}, drawTags = () => { tg.prompt = $('#rrP').value; $('#rrTags').innerHTML = descBarHtml(tg, t.film, 'data-rtag'); };
   drawTags(); $('#rrP').addEventListener('input', drawTags);
@@ -3629,8 +3633,8 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       out = add('SamplerCustomAdvanced', {noise:[add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[add('SplitSigmas', {sigmas:p8, step:P.j}), 1], latent_image:[a1, 0]});
     } else { const jj = Math.max(P.j, Math.min(PIKA_STEPS - 1, Math.round(PIKA_STEPS * (1 - den))));
       out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[add('SplitSigmas', {sigmas:p8, step:jj}), 1], latent_image:lat0}); }
-  } else { const u = ULT(t.model), sg = u ? [add('BasicScheduler', {model, scheduler:'beta', steps, denoise:den}), 0] : [sig, 0]; // Ultima: the creator's er_sde / beta
-    out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:u ? 'er_sde' : 'res_multistep'}), 0], sigmas:sg, latent_image:lat0}); } }
+  } else { const u = ULT(t.model), tr = TRI(t.model), b57 = tr && (combo(oi, 'BasicScheduler', 'scheduler') || []).includes('beta57'), sg = u || tr ? [add('BasicScheduler', {model, scheduler:b57 ? 'beta57' : 'beta', steps, denoise:den}), 0] : [sig, 0]; // Ultima: the creator's er_sde / beta; TriPRISM: lcm / beta57
+    out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:u ? 'er_sde' : tr ? 'lcm' : 'res_multistep'}), 0], sigmas:sg, latent_image:lat0}); } }
   if(chain && !X) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
@@ -5064,8 +5068,8 @@ function drawInputs(){
   $('#inSum').textContent = bits.join(' · ') || 'text only';
 }
 // 🦴 bare bones (Jordan 2026-11-08): just two models, Singularity V2 (PRISM PIKA) and the official MiniMax H3 Reference (pruned)
-const BARE_FAM = x => /singularity.*prism_?pika/i.test(x.key) || /^minimax_h3_ref2va_pruned/.test(x.key) || x.key===FAM_ULT(); // + Ultima to test (Jordan 2026-11-22)
-const BARE_LABEL = x => ULT(x.key) ? x.label : /singularity/i.test(x.key) ? 'Singularity V2 (PRISM PIKA)' : 'MiniMax H3 Reference';
+const BARE_FAM = x => /singularity.*prism_?pika/i.test(x.key) || TRI(x.key) || /^minimax_h3_ref2va_pruned/.test(x.key) || x.key===FAM_ULT(); // + Ultima to test (Jordan 2026-11-22)
+const BARE_LABEL = x => ULT(x.key) ? x.label : TRI(x.key) ? 'TriPRISM' : /singularity/i.test(x.key) ? 'Singularity V2 (PRISM PIKA)' : 'MiniMax H3 Reference';
 function modelList(){ const all = families(); if(S.bare===false) return all; const b = all.filter(BARE_FAM).map(x => Object.assign({}, x, {label:BARE_LABEL(x)})); return b.length ? b : all; }
 function drawModel(){
   const f = S.f, fams = modelList().filter(x => !(f.ref && x.fl2v)), sel = $('#model');
@@ -5273,6 +5277,7 @@ function drawBare(){ document.body.classList.toggle('bare', S.bare!==false); con
 // H3 Reference with 🔀 Finish on PIKA at 50% (the default) or PRISM PIKA alone. Length sits in the Model box. No Renders list under Films.
 const FAM_REF = () => (families().find(x => /^minimax_h3_ref2va_pruned/.test(x.key)) || {}).key || '';
 const FAM_PIKA = () => (families().find(x => /singularity.*prism_?pika/i.test(x.key)) || {}).key || '';
+const FAM_TRI = () => (families().find(x => TRI(x.key) && !x.fl2v) || {}).key || '';
 // Ultima (Jordan 2026-11-22: "have it swap out for pika as an option so I can test it myself"): the highest level on the PCs
 function FAM_ULT(fin){ if(!fin && S.bare!==false) return ''; /* bare bones: Ultima only as the finisher (Jordan 2026-11-22) */ return (families().filter(x => ULT(x.key) && !x.fl2v).sort((a, b) => +((b.key.match(/lv(\d+)/) || [])[1] || 0) - +((a.key.match(/lv(\d+)/) || [])[1] || 0))[0] || {}).key || ''; }
 function bareFix(f){ const bare = S.bare!==false, wild = mineK()===WK;
@@ -5282,7 +5287,7 @@ function bareFix(f){ const bare = S.bare!==false, wild = mineK()===WK;
   set('quality', true); set('qstyle', ''); set('boost', true); set('nsfw', false); set('fillRefs', false); set('shuffle', 0);
   if(f.rstr && Object.keys(f.rstr).length){ f.rstr = {}; ch = true; } if(f.pstr){ f.pstr = 0; ch = true; }
   if(Math.abs((+f.mp || 0) - SIZES[0][0]) > 0.01) set('mp', SIZES[0][0]);
-  const R = FAM_REF(), P = FAM_PIKA(); const U = FAM_ULT(ENGINE), UF = FAM_ULT(true); /* (Reel 2026-11-27: Ultima only and MiniMax only are Reel picks) */ if(R && P){ if(f.model!==R && f.model!==P && !(U && f.model===U)){ f.model = R; ch = true; } if(f.model===R && ENGINE && f.vanOnly){ set('finOn', false); set('turbo', false); } else if(f.model===R){ set('finOn', true); if(!(+f.finAt >= 0.25 && +f.finAt <= 0.875)) set('finAt', 0.5); set('turbo', false); if(f.finU && !UF) set('finU', false); } else set('finOn', false); }
+  const R = FAM_REF(), P = FAM_PIKA(); const U = ENGINE ? '' : FAM_ULT(ENGINE), UF = ENGINE ? '' : FAM_ULT(true), T3 = ENGINE ? FAM_TRI() : ''; /* (Reel 2026-11-27: MiniMax only and TriPRISM are Reel picks; Ultima taken out of Reel at Jordan's ask) */ if(R && P){ if(f.model!==R && f.model!==P && !(U && f.model===U) && !(T3 && f.model===T3)){ f.model = R; ch = true; } if(f.model===R && ENGINE && f.vanOnly){ set('finOn', false); set('turbo', false); } else if(f.model===R){ set('finOn', true); if(!(+f.finAt >= 0.25 && +f.finAt <= 0.875)) set('finAt', 0.5); set('turbo', false); if(f.finU && !UF) set('finU', false); } else set('finOn', false); }
   { const mx = $('#finMix'); if(mx){ const show = !!(R && f.model===R && f.finOn); mx.hidden = !show; if(show){ const at = +f.finAt || 0.5, j = Math.round(8 * at), nm = f.finU && UF ? 'Ultima' : 'PIKA';
       $('#finMixR').textContent = nm + ': finish'; if(document.activeElement!==$('#finMixIn')) $('#finMixIn').value = at; /* (Jordan 2026-11-23) the filled part of the bar = vanilla's share */ $('#finMixV').textContent = 'vanilla ' + j + ' · ' + nm + ' ' + (8 - j) + ' of 8';
       $('#finMixNote').textContent = 'The filled part is vanilla\'s share. Slide left to hand over sooner: ' + nm + ' then shapes more of the motion as well as the finish.'; } } }
@@ -6801,8 +6806,8 @@ if(ENGINE){
   // 🎛 (Jordan 2026-11-27: "pika only is broken when the 0.9 mp isn't turned on … it shows 0/10 steps") ➕ Next, ↻ Redo, ⇿ Insert and the rest
   // loaded the clip's OWN model (useAgain), so a clip made on MiniMax → PIKA kept coming back on it. Reel's ⚙ model pick now wins for every new send
   // (Jordan 2026-11-27: "a minimax only option for rendering … then hires with minimax" + "an Ultima only mode") key#v = H3 Reference alone, no finish
-  function pickModel(){ const m = S.reelModel; if(!m) return null; const key = String(m).replace(/#[uv]$/, ''); if(!families().some(x => x.key===key)) return null; return {model:key, u:/#u$/.test(m), v:/#v$/.test(m)}; }
-  function reelPick(){ const p = pickModel(); if(S.f.sm) return; S.f.vanOnly = !!(p && p.v); if(!p) return; S.f.model = p.model; if(p.v || ULT(p.model)) S.f.steps = ''; /* (its own steps: 20 vanilla, 6 Ultima) */ if(finAble(p.model) && !p.v){ S.f.finOn = true; S.f.finU = p.u; } else { S.f.finOn = false; if(p.v) S.f.turbo = false; } }
+  function pickModel(){ const m = S.reelModel; if(!m) return null; const key = String(m).replace(/#[uv]$/, ''); if(!families().some(x => x.key===key) || ULT(key) || /#u$/.test(m)) return null; /* Ultima left Reel (Jordan 2026-11-27) */ return {model:key, u:/#u$/.test(m), v:/#v$/.test(m)}; }
+  function reelPick(){ const p = pickModel(); if(S.f.sm) return; S.f.vanOnly = !!(p && p.v); if(!p) return; S.f.model = p.model; if(p.v || ULT(p.model) || TRI(p.model)) S.f.steps = ''; /* (its own steps: 20 vanilla, 6 TriPRISM) */ if(finAble(p.model) && !p.v){ S.f.finOn = true; S.f.finU = false; } else { S.f.finOn = false; if(p.v) S.f.turbo = false; } }
   async function go(n){ S.f.takes = nOf(n); reelPick(); try{ drawBare(); }catch(e){} /* H3 Deck's bare-bones settings, as its own screen sets them before a render: references and the H3 way on, the H3 Reference model finished on PIKA at 50% (Jordan 2026-11-20: Reel ran 20 steps on the first model) */ S.f.t09 = false; const keep9 = {model:S.f.model, finOn:S.f.finOn, mp:S.f.mp}; { const tp = testPc(); if(testOn()){ S.f.where = tp || 'both'; if(!S.f.sm){ const P = FAM_PIKA(); if(P){ S.f.model = P; S.f.finOn = false; } S.f.mp = 0.9; S.f.t09 = true; } } } /* 🧪 0.9 MP · PIKA only · one PC */ $('#prompt').value = S.f.prompt; save(); const why = whyNot(); if(why) return {err:why};
     const b = before(); try{ await render(); }finally{ if(S.f.t09){ Object.assign(S.f, keep9, {t09:false}); save(); } } /* 🧪 the test's PIKA/size is for this send only: Reel's own model pick stays */ const ids = newIds(b); return ids.length ? {ids} : {err:'Nothing was sent'}; }
   // the characters named in the words: their names become <Subject n>; one picked but not named is put at the start
@@ -6883,9 +6888,10 @@ if(ENGINE){
     pcs:() => S.pcs.map(p => ({name:p.name, url:p.url, on:p.on!==false, online:!!pcOf(p.url).online, busy:busySecs(p.url) > 0})),
     pcOn:(url, on) => { const p = S.pcs.find(x => x.url===url); if(!p) return false; p.on = !!on; save(); return true; }, // (Reel ⚙: Jordan 2026-11-24, "none of the renders go to Main tonight")
     // (Jordan 2026-11-22: "Could we add that one to reel?") the vanilla model is offered twice, finishing on PIKA or on Ultima ('#u')
-    models:() => { const R0 = FAM_REF(), U = FAM_ULT(true); const L = modelList().flatMap(x => x.key===R0 ? [{key:x.key, label:'H3 Reference → PIKA finish'}].concat(U ? [{key:x.key + '#u', label:'H3 Reference → Ultima finish'}] : [], [{key:x.key + '#v', label:'MiniMax only (H3 Reference)'}]) : [{key:x.key, label:/singularity/i.test(x.key) ? 'PRISM PIKA' : ULT(x.key) ? 'Ultima only' : x.label}]); if(U && !L.some(x => x.key===U)) L.push({key:U, label:'Ultima only'}); return L; },
-    look:() => ({model:pickModel() ? S.reelModel : S.f.model && S.f.model===FAM_REF() && FAM_ULT(true) && (S.reelFin ? S.reelFin==='ultima' : S.f.finU) ? S.f.model + '#u' : S.f.model, aspect:S.reelAspect || (S.f.aspect==='pic' ? '16:9' : S.f.aspect), turbo:S.f.turbo, finAt:+S.reelAt || +S.f.finAt || 0.5, test:testOn(), testPc:testPc() ? pcName(testPc()) : '', testUrl:testPc() || 'both'}),
-    setLook:o => { if(o.finAt){ S.reelAt = Math.max(0.25, Math.min(0.875, Math.round(+o.finAt * 8) / 8)); S.f.finAt = S.reelAt; } if(o.model){ const u = /#u$/.test(o.model), v = /#v$/.test(o.model); S.reelModel = o.model; S.f.model = o.model.replace(/#[uv]$/, ''); S.f.vanOnly = v; if(S.f.model===FAM_REF() && !v){ S.reelFin = u ? 'ultima' : 'pika'; S.f.finU = u; } } if(o.aspect){ S.reelAspect = o.aspect; S.f.aspect = o.aspect; } if(o.turbo!=null) S.f.turbo = !!o.turbo; if(o.test!=null || o.testPc){ const T0 = S.reelTest || {}; S.reelTest = {on:o.test!=null ? !!o.test : !!T0.on, pc:o.testPc || (T0.v ? T0.pc : '') || 'both', v:2}; if(!S.reelTest.on || S.reelTest.pc==='both') S.f.where = 'both'; } save(); },
+    // (Jordan 2026-11-27: "add it as an option for reel … Remove Ultima") TriPRISM TurboFusion alone; Ultima no longer offered
+    models:() => { const R0 = FAM_REF(); return modelList().filter(x => !ULT(x.key)).flatMap(x => x.key===R0 ? [{key:x.key, label:'H3 Reference → PIKA finish'}, {key:x.key + '#v', label:'MiniMax only (H3 Reference)'}] : [{key:x.key, label:TRI(x.key) ? 'TriPRISM (6 steps)' : /singularity/i.test(x.key) ? 'PRISM PIKA' : x.label}]); },
+    look:() => ({model:pickModel() ? S.reelModel : S.f.model, aspect:S.reelAspect || (S.f.aspect==='pic' ? '16:9' : S.f.aspect), turbo:S.f.turbo, finAt:+S.reelAt || +S.f.finAt || 0.5, test:testOn(), testPc:testPc() ? pcName(testPc()) : '', testUrl:testPc() || 'both'}),
+    setLook:o => { if(o.finAt){ S.reelAt = Math.max(0.25, Math.min(0.875, Math.round(+o.finAt * 8) / 8)); S.f.finAt = S.reelAt; } if(o.model){ const u = /#u$/.test(o.model), v = /#v$/.test(o.model); S.reelModel = o.model; S.f.model = o.model.replace(/#[uv]$/, ''); S.f.vanOnly = v; if(S.f.model===FAM_REF() && !v){ S.reelFin = 'pika'; S.f.finU = false; } } if(o.aspect){ S.reelAspect = o.aspect; S.f.aspect = o.aspect; } if(o.turbo!=null) S.f.turbo = !!o.turbo; if(o.test!=null || o.testPc){ const T0 = S.reelTest || {}; S.reelTest = {on:o.test!=null ? !!o.test : !!T0.on, pc:o.testPc || (T0.v ? T0.pc : '') || 'both', v:2}; if(!S.reelTest.on || S.reelTest.pc==='both') S.f.where = 'both'; } save(); },
     lib:() => (S.lib || []).filter(L => SUBK.includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || '', pics:libPics(L).slice(), reel:!!L.reel, fit:!!L.fit, art:artDef(L), pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
     // 👥 a character made in Reel: name, a few words about her look, her pictures (kept on the phone and sent with her like H3 Deck's)
     // ✨ 👗 🧩 the rest of the Library, as H3 Deck has it: attributes, clothing, LoRA chips
