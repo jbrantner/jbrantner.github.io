@@ -1538,14 +1538,14 @@ function loraOut(txt, T){ return txt.replace(/<\s*lora\s*(\d+)\s*>(\s*([.!?])(?!
 let STYLEL = null;
 function styleIn(t){ const S2 = STYLEL; if(!S2) return; const drop = new Set([...(S2.drop || []), ...S2.add.map(l => l.name)]);
   t.loras = lorasOf(t).filter(l => !l.style && !drop.has(l.name)).map(l => Object.assign({}, l));
-  for(const l of S2.add) t.loras.push(Object.assign({name:l.name, str:l.str != null && l.str!=='' ? +l.str : 1, words:(l.words || '').trim(), style:true}, l.side==='first' ? {first:true} : l.side==='fin' ? {fin2:true} : {}));
+  for(const l of S2.add) t.loras.push(Object.assign({name:l.name, str:l.str != null && l.str!=='' ? +l.str : 1, words:(l.words || '').trim(), style:true}, l.side==='first' ? {first:true} : l.side==='fin' ? {fin2:true} : {}, twOf(l.tw) ? {tw:twOf(l.tw)} : {}));
   t.styleL = S2.add.map(l => l.name); }
-let LFIRST = new Set(), LFIN2 = new Set(); // 📚 🧩 LoRA chip ids whose LoRAs go on the vanilla half only / on the 🏁 finisher only (set by Reel)
+let LFIRST = new Set(), LFIN2 = new Set(), LTIME = {}; // (LTIME: chip id → ⏱ [start, stop]) // 📚 🧩 LoRA chip ids whose LoRAs go on the vanilla half only / on the 🏁 finisher only (set by Reel)
 function loraChips(t){ delete t.chipLoras; const txt = [t.prompt || '', ...(t.pieces || []).map(p => p.prompt || '')].join('\n'), add = [];
   // 🎯 a 🧩 chip marked vanilla only (Reel, Jordan 2026-11-22: "Can we add the Lora just for vanilla to Reels?") keeps its LoRAs off the finisher
-  for(const m of txt.matchAll(LORARE)){ const L = (t.lines || {})[m[1]]; if(L && L.lora){ const fv = !!(t.fin && L.lib && LFIRST.has(L.lib)), f2 = !fv && !!(t.fin && L.lib && LFIN2.has(L.lib)); add.push(...loraSet(L, !!L.snap).map(l => fv ? Object.assign({}, l, {first:true}) : f2 ? Object.assign({}, l, {fin2:true}) : l)); } }
+  for(const m of txt.matchAll(LORARE)){ const L = (t.lines || {})[m[1]]; if(L && L.lora){ const fv = !!(t.fin && L.lib && LFIRST.has(L.lib)), f2 = !fv && !!(t.fin && L.lib && LFIN2.has(L.lib)); const tw = L.lib && twOf(LTIME[L.lib]); add.push(...loraSet(L, !!L.snap).map(l => Object.assign({}, l, fv ? {first:true} : f2 ? {fin2:true} : {}, tw ? {tw} : {}))); } }
   if(!add.length) return t; const LS = lorasOf(t).map(l => Object.assign({}, l)), have = new Set(LS.map(l => l.name)), got = [];
-  for(const l of add){ if(have.has(l.name)) continue; have.add(l.name); got.push(l.name); LS.push(Object.assign({name:l.name, str:l.str != null && l.str!=='' ? +l.str : 1, words:(l.words || '').trim()}, l.first ? {first:true} : l.fin2 ? {fin2:true} : {})); }
+  for(const l of add){ if(have.has(l.name)) continue; have.add(l.name); got.push(l.name); LS.push(Object.assign({name:l.name, str:l.str != null && l.str!=='' ? +l.str : 1, words:(l.words || '').trim()}, l.first ? {first:true} : l.fin2 ? {fin2:true} : {}, l.tw ? {tw:l.tw} : {})); }
   t.loras = LS; if(got.length) t.chipLoras = got; return t; }
 // 🧍 pose chips (Jordan 2026-11-15: "Can we have poses prompt sort of like actions and dialog does?"): <Pose k> at a moment in the words, the
 // pose in S.lines[k] {pose:1, n, lib (a 📚 Library pose), p (which person in its picture, -1 = the person), name, text, hold}. The chip reads
@@ -3430,13 +3430,18 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   // first model when a finisher runs (with no finisher there is only one model, so it goes on that one)
   const fin2On = !!(t.fin && finAble(t.model) && finOf2(oi, t) && oi.SplitSigmas && oi.DisableNoise);
   const LS = allLoras(oi, t).filter(l => !(fin2On && l.fin2)); // ✨ Quality boost rides along here
-  for(const l of LS) model = [add('LoraLoaderModelOnly', {model, lora_name:l.name, strength_model:+l.str}), 0];
+  // ⏱ a LoRA with its own start/stop (Jordan 2026-11-27: "a Lora at the first part of minimax to help with movement and the last half to
+  // help with style and look") is held back here and put on only for the steps inside its window (timedRun below)
+  const TL = LS.filter(loraTimed);
+  for(const l of LS) if(!loraTimed(l)) model = [add('LoraLoaderModelOnly', {model, lora_name:l.name, strength_model:+l.str}), 0];
+  const mPre = model, ctlOn = [];
   const clip = [add('CLIPLoader', {clip_name:clipOf(oi), type:'minimax', device:'default'}), 0], vae = [add('VAELoader', {vae_name:vaeOf(oi)}), 0], avae = [add('VAELoader', {vae_name:avaeOf(oi)}), 0];
   const img = id => [add('LoadImage', {image:names[id]}), 0];
   if(t.ctl){ // 🦴 motion guide (a Mocap skeleton or depth clip): this piece's stretch of it steers every frame; the pictures still say who it is
     const patch = [add('ModelPatchLoader', {name:patchOf(oi)}), 0];
     const guide = g => { const v = add('Video Slice', {video:[add('LoadVideo', {file:names[g.vid]}), 0], start_time:Math.max(0, (+g.off || 0) + pc.start - LEAD(pc) / FPS), duration:Math.round((L / FPS + 0.1) * 1000) / 1000, strict_duration:false});
-      model = [add('MiniMaxH3FunControlNetApply', {model, model_patch:patch, vae, strength:+g.str, start_percent:0, end_percent:+g.end, control_video:[add('GetVideoComponents', {video:[v, 0]}), 0]}), 0]; };
+      const cv = [add('GetVideoComponents', {video:[v, 0]}), 0], on = m => [add('MiniMaxH3FunControlNetApply', {model:m, model_patch:patch, vae, strength:+g.str, start_percent:0, end_percent:+g.end, control_video:cv}), 0];
+      ctlOn.push(on); model = on(model); };
     guide(t.ctl); if(t.ctl2) guide(t.ctl2); } // a second guide (e.g. depth under the skeleton) wraps the first: both steer every block
   const useFirst = t.fl && first && t.first, useLast = t.fl && t.lastOn && last && t.lastImg;
   const words = allLoras(oi, t).map(l => (l.words || '').trim()).filter(Boolean).join(', '); // (a 🏁 finish-only LoRA's words stay in the words too)
@@ -3613,6 +3618,7 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
   let out;
   if(t.swap && t.swap.pika){ // 🔄 Pika Flex's own six steps (the person swap workflow): lcm, CFG 1
     out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:'lcm'}), 0], sigmas:[add('ManualSigmas', {sigmas:SWAP_SIGMAS}), 0], latent_image:lat0});
+  } else if(TL.length || (fin2On && allLoras(oi, Object.assign({}, t, {model:famKey(finOf2(oi, t)), turbo:false})).some(l => !l.first && loraTimed(l)))){ out = timedRun(); // ⏱ LoRAs with a start/stop
   } else { const sig = add('BasicScheduler', {model, scheduler:'simple', steps, denoise:den});
   if(t.fin && finAble(t.model) && finOf2(oi, t) && oi.SplitSigmas && oi.DisableNoise){ // 🔀 first model for the motion, PIKA for the last steps
     // (Jordan 2026-11-18: "does it do anything weird if pika is using 20 steps"): PIKA used to finish on the first model's 20-step schedule,
@@ -3635,6 +3641,33 @@ function pieceGraph(t, i, oi, names, X){ // X (🧵 seams in one job): {add, g, 
       out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guiderOf(add, oi, t, m2, cond, clip), 0], sampler:smp, sigmas:[add('SplitSigmas', {sigmas:p8, step:jj}), 1], latent_image:lat0}); }
   } else { const u = ULT(t.model), tr = TRI(t.model), b57 = tr && (combo(oi, 'BasicScheduler', 'scheduler') || []).includes('beta57'), sg = u || tr ? [add('BasicScheduler', {model, scheduler:b57 ? 'beta57' : 'beta', steps, denoise:den}), 0] : [sig, 0]; // Ultima: the creator's er_sde / beta; TriPRISM: lcm / beta57
     out = add('SamplerCustomAdvanced', {noise:[add('RandomNoise', {noise_seed:seed}), 0], guider:[guider, 0], sampler:[add('KSamplerSelect', {sampler_name:u ? 'er_sde' : tr ? 'lcm' : 'res_multistep'}), 0], sigmas:sg, latent_image:lat0}); } }
+  function timedRun(){ // ⏱ the steps cut where a timed LoRA comes on or goes off; each stretch samples with the LoRAs that are on there
+    // (the same model under them, so nothing reloads from disk; the last stretch's latent carries straight into the next, no new noise)
+    const segs = (sigN, N, a, b, timed, mk, noise, lat, smp, lab, f0, f1) => { const at = l => [Math.max(0, Math.min(N, Math.round(+l.tw[0] * N))), Math.max(0, Math.min(N, Math.round(+l.tw[1] * N)))];
+      const cuts = [...new Set([a, b, ...timed.flatMap(at).filter(x => x > a && x < b)])].sort((x, y) => x - y), runs = [];
+      for(let k = 0; k < cuts.length - 1; k++){ const c = cuts[k], d = cuts[k + 1], on = timed.filter(l => { const [s, e] = at(l); return s <= c && d <= e; }), key = on.map(l => l.name).join('|');
+        if(runs.length && runs[runs.length - 1].key===key) runs[runs.length - 1].d = d; else runs.push({c, d, on, key}); }
+      let o = lat, first = true;
+      for(const r of runs){ let sg = sigN; if(r.c > 0) sg = [add('SplitSigmas', {sigmas:sg, step:r.c}), 1]; if(r.d < N) sg = [add('SplitSigmas', {sigmas:sg, step:r.d - r.c}), 0];
+        const id = add('SamplerCustomAdvanced', {noise:first ? noise : [add('DisableNoise', {}), 0], guider:[guiderOf(add, oi, t, mk(r.on), cond, clip), 0], sampler:smp, sigmas:sg, latent_image:o});
+        const mt = g[id] ? (g[id]._meta = g[id]._meta || {}) : {}; mt.stg = runs.length > 1 ? lab + (lab ? ' · ' : '') + 'part ' + (runs.indexOf(r) + 1) + ' of ' + runs.length : lab || '';
+        mt.frac = [f0 + (f1 - f0) * (r.c - a) / Math.max(1, b - a), f0 + (f1 - f0) * (r.d - a) / Math.max(1, b - a)];
+        o = [id, 0]; first = false; }
+      return o; };
+    const mk1 = on => { if(!on.length) return model; let m = mPre; for(const l of on) m = [add('LoraLoaderModelOnly', {model:m, lora_name:l.name, strength_model:+l.str}), 0]; for(const f of ctlOn) m = f(m); return m; };
+    const noise = [add('RandomNoise', {noise_seed:seed}), 0];
+    if(fin2On){ const P = finPlan(t, steps), smp = [add('KSamplerSelect', {sampler_name:'res_multistep'}), 0], st = den >= 0.995 ? 0 : Math.round(P.s1 * (1 - den)), pk = finOf2(oi, t), FL = finLab(pk);
+      const L2 = allLoras(oi, Object.assign({}, t, {model:famKey(pk), turbo:false})).filter(l => !l.first);
+      let m2b = [add('UNETLoader', {unet_name:pk, weight_dtype:'default'}), 0]; for(const l of L2) if(!loraTimed(l)) m2b = [add('LoraLoaderModelOnly', {model:m2b, lora_name:l.name, strength_model:+l.str}), 0];
+      const mk2 = on => { let m = m2b; for(const l of on) m = [add('LoraLoaderModelOnly', {model:m, lora_name:l.name, strength_model:+l.str}), 0]; return m; };
+      const p8 = [add('BasicScheduler', {model:m2b, scheduler:'simple', steps:PIKA_STEPS, denoise:1}), 0], T2 = L2.filter(loraTimed), h = P.j / PIKA_STEPS;
+      if(st < P.k){ const a1 = segs([add('BasicScheduler', {model, scheduler:'simple', steps:P.s1, denoise:1}), 0], P.s1, st, P.k, TL, mk1, noise, lat0, smp, 'first model', 0, h);
+        return segs(p8, PIKA_STEPS, P.j, PIKA_STEPS, T2, mk2, [add('DisableNoise', {}), 0], a1, smp, FL, h, 1)[0]; }
+      const jj = Math.max(P.j, Math.min(PIKA_STEPS - 1, Math.round(PIKA_STEPS * (1 - den))));
+      return segs(p8, PIKA_STEPS, jj, PIKA_STEPS, T2, mk2, noise, lat0, smp, FL, 0, 1)[0]; }
+    // one model: a redo at a strength runs the tail of the longer schedule BasicScheduler would have cut it from, so the windows stay where they are
+    const u = ULT(t.model), tr = TRI(t.model), b57 = tr && (combo(oi, 'BasicScheduler', 'scheduler') || []).includes('beta57'), N = den >= 0.995 ? steps : Math.max(steps, Math.floor(steps / den)), smp = [add('KSamplerSelect', {sampler_name:u ? 'er_sde' : tr ? 'lcm' : 'res_multistep'}), 0];
+    return segs([add('BasicScheduler', {model, scheduler:u || tr ? (b57 ? 'beta57' : 'beta') : 'simple', steps:N, denoise:1}), 0], N, N - steps, N, TL, mk1, noise, lat0, smp, '', 0, 1)[0]; }
   if(chain && !X) add('MiniMaxH3MotionContextSaveLatent', {latent:[out, 0], filename_prefix:t.dir + '/ctx', clip_index:i + 1}); // kept so the next piece (or ➕ Add more) carries on from it
   let ims = [add('VAEDecodeTiled', {samples:[out, 0], vae, tile_size:512, overlap:64, temporal_size:64, temporal_overlap:8}), 0], aud = [add('VAEDecodeAudio', {samples:[out, 0], vae:avae}), 0];
   if(trim){ const tr = add('MiniMaxH3MotionContextTrim', {images:ims, trim_frames:trim, audio:aud, fps:FPS, match_tail:true}); ims = [tr, 0]; aud = [tr, 1];
@@ -3875,11 +3908,17 @@ const ultOf = oi => combo(oi, 'UNETLoader', 'unet_name').filter(x => ULT(x)).sor
 const finOf2 = (oi, t) => t && t.fin && t.fin.u ? ultOf(oi) : pikaOf(oi);
 // which part of a job is running (Jordan 2026-11-19: "step 3/3 … shouldn't it be step 3/10?"): ComfyUI counts steps per sampler, so a
 // 🔀 Finish on PIKA take shows the first model's steps, then PIKA's, then the tiles of the decode. Each is named on the line now
+// ⏱ a LoRA's own start/stop: tw = [start, stop] as fractions of the whole run (on both models' steps when a finisher runs)
+const loraTimed = l => !!(l && Array.isArray(l.tw) && (+l.tw[0] > 0.001 || +l.tw[1] < 0.999));
+const twOf = v => Array.isArray(v) && v.length===2 && +v[1] > +v[0] && (+v[0] > 0.001 || +v[1] < 0.999) ? [Math.max(0, +v[0]), Math.min(1, +v[1])] : null;
+const finLab = pk => ULT(pk) ? 'Ultima' : 'PIKA';
+const stageFracs = g => { const o = {}; for(const k of Object.keys(g || {})) if(g[k]._meta && g[k]._meta.frac) o[k] = g[k]._meta.frac; return Object.keys(o).length ? o : null; };
 const stagesOf = g => { const o = {}, sa = Object.keys(g || {}).filter(k => g[k].class_type==='SamplerCustomAdvanced');
+  if(sa.some(k => g[k]._meta && g[k]._meta.stg!=null)){ sa.forEach(k => { const v = (g[k]._meta || {}).stg; if(v) o[k] = v; }); for(const k of Object.keys(g || {})) if(/^VAEDecode/.test(g[k].class_type)) o[k] = 'decoding'; return o; }
   if(sa.length===2 && sa.some(k => g[(g[k].inputs.noise || [])[0]] && g[g[k].inputs.noise[0]].class_type==='DisableNoise')) { const u = Object.values(g).some(n => n.class_type==='UNETLoader' && ULT(n.inputs.unet_name)); sa.forEach((k, i) => { o[k] = i ? (u ? 'Ultima' : 'PIKA') : 'first model'; }); }
   for(const k of Object.keys(g || {})) if(/^VAEDecode/.test(g[k].class_type)) o[k] = 'decoding'; return o; };
 const stepLine = (p, L, short) => { if(!L.max) return 'loading'; const st = (p.stg || {})[L.pn];
-  if(short) return (st==='PIKA' || st==='Ultima' ? st + ' ' : st==='decoding' ? '⇣ ' : '') + L.v + '/' + L.max;
+  if(short) return (st==='PIKA' || st==='Ultima' ? st + ' ' : /^(PIKA|Ultima) · /.test(st || '') ? st.split(' ')[0] + ' ' : st==='decoding' ? '⇣ ' : '') + L.v + '/' + L.max;
   return st==='decoding' ? 'decoding ' + L.v + ' of ' + L.max : (st ? st + ' · ' : '') + 'step ' + L.v + ' of ' + L.max; };
 const finAble = key => !/prism|pika|singularity|ultima/i.test(key || '');
 const finSplit = (t, steps) => Math.max(1, Math.min(steps - 1, Math.round(steps * (+t.fin.at || 0.5))));
@@ -4338,7 +4377,7 @@ async function sendPieces(t, from){
   if(t.cont) t.contFile = names[t.cont];
   for(let i = from; i < t.pieces.length; i++){
     const p = t.pieces[i], G = p.upl ? uplGraph(t, p, oi) : p.snd ? sndGraph(t, p, oi) : seamOne(t) ? seamGraph(t, oi, names) : t.combo ? comboGraph(t) : pieceGraph(t, i, oi, names);
-    p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.stg = stagesOf(G.g); p.save = G.save; p.join = G.join || null; p.err = ''; p.file = null;
+    p.est = estSecs(Object.assign({}, t, {pieces:[p]}), url); p.stg = stagesOf(G.g); p.stf = stageFracs(G.g); p.save = G.save; p.join = G.join || null; p.err = ''; p.file = null;
     p.pid = await queueGraph(url, G, !!p.upl); p.state = 'queued'; p.tq = Date.now(); save(); // 📤 an upload takes seconds: it goes to the front of the PC's line
   }
   t.final = null; t.joinPid = null; t.state = 'working'; save(); tickSoon(500);
@@ -5155,7 +5194,7 @@ function stateLine0(t){
 }
 // a take finished on PIKA runs two samplers one after the other: the first model's steps are the first half, PIKA's the second
 // (Jordan 2026-11-20: "6/10 isn't 50% because it does the Pika pass 4/8 afterward"), decoding the very end
-function stageFrac(p, L){ const f = L.v / L.max, stg = p.stg || {}, two = Object.values(stg).some(x => x==='PIKA' || x==='Ultima'); if(!two) return f;
+function stageFrac(p, L){ const f = L.v / L.max, stg = p.stg || {}; if(p.stf){ const r = p.stf[L.pn]; if(r) return r[0] + (r[1] - r[0]) * f; if(stg[L.pn]==='decoding') return 0.95 + 0.05 * f; } const two = Object.values(stg).some(x => x==='PIKA' || x==='Ultima'); if(!two) return f;
   const st = stg[L.pn]; return st==='first model' ? 0.5 * f : st==='PIKA' || st==='Ultima' ? 0.5 + 0.5 * f : st==='decoding' ? 0.95 + 0.05 * f : f; }
 function progress(t){ // 0..1 by estimates, sharpened by the running piece's steps
   if(t.state!=='working') return t.state==='done' ? 1 : 0;
@@ -6897,9 +6936,9 @@ if(ENGINE){
     // ✨ 👗 🧩 the rest of the Library, as H3 Deck has it: attributes, clothing, LoRA chips
     extras:() => (S.lib || []).filter(L => ['attr', 'wear', 'lora'].includes(L.kind) && (L.name || '').trim()).map(L => ({id:L.id, kind:L.kind, name:L.name.trim(), desc:L.desc || L.what || '',
       loras:(L.loras || []).filter(l => l && l.name).map(l => ({name:l.name, str:l.str})), pics:libPics(L).slice(), reel:!!L.reel, pic:libPics(L)[0] || '', thumb:(S.media[libPics(L)[0]] || {}).thumb || ''})),
-    setStyle:(add, drop) => { STYLEL = Array.isArray(add) ? {add:add.filter(l => l && l.name).map(l => ({name:String(l.name), str:l.str, words:l.words || '', side:l.side || 'both'})), drop:Array.isArray(drop) ? drop.map(String) : []} : null; },
+    setStyle:(add, drop) => { STYLEL = Array.isArray(add) ? {add:add.filter(l => l && l.name).map(l => Object.assign({name:String(l.name), str:l.str, words:l.words || '', side:l.side || 'both'}, twOf(l.tw) ? {tw:twOf(l.tw)} : {})), drop:Array.isArray(drop) ? drop.map(String) : []} : null; },
     styleLoraList:() => wLoraNames().map(n => ({name:n, words:(S.loraWords || {})[n] || ''})),
-    setLoraFirst:(ids, fin2) => { LFIRST = new Set(Array.isArray(ids) ? ids : []); LFIN2 = new Set(Array.isArray(fin2) ? fin2 : []); },
+    setLoraFirst:(ids, fin2, times) => { LFIRST = new Set(Array.isArray(ids) ? ids : []); LFIN2 = new Set(Array.isArray(fin2) ? fin2 : []); LTIME = times && typeof times==='object' ? Object.assign({}, times) : {}; },
     setAttrs:(m, fit, art, scene, doff) => { ATTRS = m && typeof m==='object' ? m : {}; FIT = fit && typeof fit==='object' ? fit : {}; ART = art && typeof art==='object' ? art : {}; SCENE = scene==null ? 'auto' : String(scene); DESCOFF = doff && typeof doff==='object' ? doff : {}; },
     arts:() => Object.keys(ARTS).map(k => ({key:k, label:ARTS[k].label, scene:!!ARTS[k].scene, own:ARTS[k].only!=='scene'})),
     // 🎞 the moving preview of a take while it renders (the frames ComfyUI sends this copy of the engine), or ''
@@ -7016,7 +7055,7 @@ if(ENGINE){
     refresh:() => pingAll().then(() => { tickSoon(0); engineLibPull().catch(() => 0); }),
   };
 }
-window.H3 = {FAM_ULT, ULT, FAM_PIKA, stagesOf, stepLine, swapPlan, SWAP_ONE, finPlan, k4Go, finOf, PIKA_STEPS, loraChSheet, loraChips, loraOut, openLoraLib, LORARE, snapshot0, fastGraph, kitchenOk, pickPc, syncFilm, filmKeyNow, setTab, WK, wildJob, wildBlock, wildPcs, wildSweep, setWild, soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, BOOST, boostLoras, allLoras, isBoost, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
+window.H3 = {loraTimed, twOf, stageFracs, FAM_ULT, ULT, FAM_PIKA, stagesOf, stepLine, swapPlan, SWAP_ONE, finPlan, k4Go, finOf, PIKA_STEPS, loraChSheet, loraChips, loraOut, openLoraLib, LORARE, snapshot0, fastGraph, kitchenOk, pickPc, syncFilm, filmKeyNow, setTab, WK, wildJob, wildBlock, wildPcs, wildSweep, setWild, soundSheet, voText, voModel, voAudio, VO_MAX, sndMissing, sndAny, sndGraph, sndChunks, sndTalks, SND_MAX, rawLoopOn, rawLoopGo, rawLoopForm, rawLoopWords, finOf, swapLoraAny, swapText, swapPeople, SWAP_MAX, sceneSnap, sceneOn, drawCut, cutSet, wildLoras, wLoraSheet, subjPick, wildFolderTap, wActText, wStandRoll, wildCast, loopScore, findLoop, loopApply, loopWhole, shiftTimed, wChoose, wildTexts, wildWords, wildLoopGo, wildLoopTick, wildRoll, wildMark, wildSheet, wildOpt, wildNew, drawWild, wildLine, wcats, attrsOf, castOf, clipPaintGraph, clipPaint, maskClean, viewUrl, downOf, startPics, startPic, refShape, pieceSeed, MOVE_ON, sameRun, movableUp, moveUp, estSecs, sendPieces, queueGraph, actShow, QWORDS, backupBody, castK, mvSync, qwToggle, drawQWords, rebalance, moveTake, movable, cutSheet, cutLine, cutPut, lineOut, lineSheet, actSheet, poseChSheet, poseChOut, pmarkOut, actPrep, actSkelOf, actSkelGraph, actNeeds, actOut, actBook, lineOf, autoWho, autoSync, lineLabel, lineSubs, ckLines, shotRefs, rmImg, undoNow:() => undoCheck(true), undo:h3Undo, redo:h3Redo, UNDO:() => UNDOS, REDO:() => REDOS, ckSet, sentWords, shufOn, shufSeed, addMedia, mediaUrl, poseCode, poseScanGraph, posePic, posesOf, poseGive, posePickSheet, poseLibHtml, POSE_COL, libNew, openLib, drawLib, libOf, castTake, shuffleWords, Q_STYLES, ckNames, ckOut, ckBack, ckParse, ckKind, ckUrl, drawCk, CK, pikaOf, canRun, keepOut, KEEP_OUT, NAG, nagOn, QUALITY, h3Peek, useAgain, touchTake, descTags, descKey, descChips, chipOn, goFilm, faceScanGraph, faceAB, FACE_SCAN, drawRenders, clearFailed, isFailed, outDir, filesToDrop, h3WipeCount, h3Wipe, modelList, drawCast, castName, faceRefs, facesOn, regenMissing, lorasOf, BOOST, boostLoras, allLoras, isBoost, progress, stepOf:t => { // ⏱ a short step count for a rendering clip on the timeline (Jordan 2026-11-08: "1/8 … as well as the loading bar")
     if(!t || t.state!=='working') return ''; if(t.upStage){ const L = LIVE[t.upPid] || {}; return L.max ? '⬆ ' + L.v + '/' + L.max : '⬆'; }
     const n = t.pieces.length, run = t.pieces.find(p => p.state==='running'); if(t.joinPid) return 'joining';
     if(run){ const L = LIVE[run.pid] || {}; return (n > 1 ? (t.pieces.indexOf(run) + 1) + '/' + n + ' · ' : '') + stepLine(run, L, true); }

@@ -769,6 +769,23 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
     const g2 = sent.filter(x => x.g).slice(n0), t2 = await eng.evaluate(() => H3.S.takes[0].loras || []);
     ok(g2.length===1 && !styleOn(g2[0].g).length && !t2.some(l => /anime_style/.test(l.name)), 'with it taken off, the new option has no style LoRA (' + JSON.stringify(t2) + ')');
   }
+  // ⏱ (Jordan 2026-11-27: "have Lora's start and stop at certain points"): a style LoRA on 25-75% of the run, cut into both models' steps
+  { const unetOf = (g, id) => { let n = g[id]; while(n && n.class_type!=='UNETLoader') n = g[(n.inputs.model || [])[0]]; return n ? n.inputs.unet_name : ''; };
+    await finish(); await page.click('#redoBtn'); await page.waitForTimeout(300);
+    await page.click('.lsl [data-sa]'); await page.waitForTimeout(150);
+    await page.selectOption('.lsl [data-si="0"] [data-sn]', 'minimax_h3_anime_style.safetensors'); await page.waitForTimeout(150);
+    ok(await page.evaluate(() => !!document.querySelector('.lsl [data-si="0"] .ltw [data-tp="all"].on')), '⏱ a new style LoRA is on for the whole run');
+    await page.click('.lsl [data-si="0"] [data-tp="c"]'); await page.waitForTimeout(150);
+    await page.$eval('.lsl [data-si="0"] [data-t0]', el => { el.value = 0.25; el.dispatchEvent(new Event('input', {bubbles:true})); });
+    await page.$eval('.lsl [data-si="0"] [data-t1]', el => { el.value = 0.75; el.dispatchEvent(new Event('input', {bubbles:true})); });
+    const note = await page.textContent('.lsl [data-si="0"] .twN'); ok(/On from 25% to 75%/.test(note) && /runs on both/.test(note), '⏱ the note says where it is on (' + note + ')');
+    await page.fill('#rdW', 'Mia turns'); await page.click('#nSeg [data-n="1"]');
+    const n0 = sent.filter(x => x.g).length; await page.click('#rdGo'); await page.waitForTimeout(2500);
+    const g = (sent.filter(x => x.g).slice(n0)[0] || {}).g || {}, sas = Object.keys(g).filter(k => g[k].class_type==='SamplerCustomAdvanced');
+    const withL = sas.filter(k => { let n = g[g[k].inputs.guider[0]]; n = g[(n.inputs.model || [])[0]]; while(n && n.class_type!=='UNETLoader'){ if(/anime_style/.test(n.inputs.lora_name || '')) return true; n = g[(n.inputs.model || [])[0]]; } return false; });
+    ok(sas.length===4 && withL.length===2 && new Set(withL.map(k => /PIKA/.test(unetOf(g, g[g[k].inputs.guider[0]].inputs.model[0])))).size===2, '⏱ 4 stretches, the LoRA on in the middle two (one on vanilla, one on PIKA) (' + sas.length + '/' + withL.length + ')');
+    ok(await page.evaluate(() => JSON.stringify(REEL.R().shotSl[0].tw)==='[0.25,0.75]'), '⏱ the clip keeps the window in its look');
+  }
   // ⇿ (Jordan 2026-11-26: a Redo cut to a new shot halfway through) ↻ Redo on a middle clip can have a free ending instead of landing on the clip after
   { await finish(); await page.evaluate(() => { REEL.go(1); REEL.refresh(); }); await page.waitForTimeout(400); await page.click('#redoBtn'); await page.waitForTimeout(300);
     const a = await page.evaluate(() => ({seg:!!document.querySelector('#rdLand'), on:(document.querySelector('#rdLand .on') || {}).dataset, how:(document.querySelector('#rdHow') || {}).textContent}));
