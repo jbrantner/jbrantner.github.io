@@ -285,12 +285,12 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       await page.evaluate(id => { const c = REEL.cur(); c.takes = c.takes.filter(x => x!==id); delete c.meta[id]; REEL.refresh(); }, nid); await page.evaluate(w => REEL.go(w), pv.was); await page.waitForTimeout(400); await finish(); }
     // ✨ (Jordan 2026-11-27: "generate with one but then hires with minimax") ⬆ Upscale with MiniMax = vanilla H3 Reference does the ✨ pass,
     // on its own 20-step curve from the strength; the pick is remembered and PRISM PIKA stays the default
-    for(const hm of ['minimax', 'pika']){ await page.click('#upOne'); await page.waitForTimeout(300); await page.click('#upHm [data-hm="' + hm + '"]'); await page.click('#upN [data-v="1"]');
+    for(const hm of ['minimax', 'triprism', 'pika']){ await page.click('#upOne'); await page.waitForTimeout(300); await page.click('#upHm [data-hm="' + hm + '"]'); await page.click('#upN [data-v="1"]');
       const txt = await page.evaluate(() => document.querySelector('.hmN').textContent); await page.click('#upGo'); await page.waitForTimeout(2500);
       const nid = await page.evaluate(() => { const c = REEL.cur(); return c.takes[c.takes.length - 1]; });
       const G = await eng.evaluate(id => { const t = H3.S.takes.find(x => x.id===id); const g = Object.values(H3.upGraph(t, H3.PC[t.pc].oi, {}).g);
         return {un:g.filter(n => n.class_type==='UNETLoader').map(n => n.inputs.unet_name), sg:g.filter(n => n.class_type==='ManualSigmas').map(n => String(n.inputs.sigmas).split(',').length - 1)}; }, nid);
-      ok(txt===(hm==='minimax' ? 'MiniMax' : 'Prism Pika') && G.un.length && G.un.every(u => (hm==='minimax' ? /minimax_h3_ref2va/ : /prismPIKA/).test(u)) && G.sg.length && (hm==='minimax' ? G.sg.every(n => n > 4) : G.sg.every(n => n <= 8)),
+      ok(txt===({minimax:'MiniMax', triprism:'TriPRISM'}[hm] || 'Prism Pika') && G.un.length && G.un.every(u => (hm==='minimax' ? /minimax_h3_ref2va/ : hm==='triprism' ? /TriPRISM/ : /prismPIKA/).test(u)) && G.sg.length && (hm==='minimax' ? G.sg.every(n => n > 4) : G.sg.every(n => n <= 8)),
         '✨ ⬆ Upscale with ' + hm + ' runs the pass on that model ' + JSON.stringify({txt, G}));
       await page.evaluate(id => { const c = REEL.cur(); c.takes = c.takes.filter(x => x!==id); delete c.meta[id]; REEL.refresh(); }, nid); await finish(); }
     ok(await page.evaluate(() => { REEL.S().upHm = 'pika'; return true; }), '✨ back to PRISM PIKA for the rest');
@@ -475,6 +475,10 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       ok(r.m && r.lk===r.key && mod.test(r.m.model) && !r.m.fin && (nm!=='MiniMax only' || !r.m.turbo) && un.length && un.every(u => mod.test(u)) && stp.includes(st), '🎛 ' + nm + ': one model, no finish, ' + st + ' steps ' + JSON.stringify({r, un, stp}));
       if(nm==='TriPRISM'){ const sm = gs.flatMap(x => nodes(x.g, 'KSamplerSelect').map(n => n.inputs.sampler_name)), lo = gs.flatMap(x => nodes(x.g, 'LoraLoaderModelOnly').map(n => n.inputs.lora_name)), ml = await engF().evaluate(() => H3Engine.models().map(x => x.label));
         ok(sm.length && sm.every(x => x==='lcm') && !lo.some(n => /realism|detail/i.test(n)) && !ml.some(x => /ultima/i.test(x)), '🎛 TriPRISM: lcm, no ✨ boost LoRAs; Ultima gone from the list ' + JSON.stringify({sm, lo, ml})); }
+      if(nm==='TriPRISM'){ const sF = sent.length, f = await engF().evaluate(async () => { const P = H3Engine.models().find(x => x.label==='H3 Reference → TriPRISM finish'); if(!P) return {none:H3Engine.models().map(x => x.label)}; H3Engine.setLook({model:P.key});
+          const y = await H3Engine.make({words:'Mia waves', who:[], n:1, aspect:'16:9'}), u = H3.S.takes.find(z => z.id===(y.ids || [])[0]) || {}; const lk = H3Engine.look().model; H3Engine.setLook({model:H3Engine.models().find(m => /Reference → PIKA/.test(m.label)).key}); delete H3.S.reelModel; return {key:P.key, lk, fin:u.fin, model:u.model}; });
+        await page.waitForTimeout(2500); const g2 = sent.slice(sF).filter(x => x.g), un2 = g2.flatMap(x => nodes(x.g, 'UNETLoader').map(n => n.inputs.unet_name)), sa2 = g2.flatMap(x => nodes(x.g, 'SamplerCustomAdvanced'));
+        ok(f.fin && f.fin.t && !f.fin.u && f.lk===f.key && /minimax_h3_ref2va/.test(f.model) && un2.some(u => /TriPRISM/.test(u)) && un2.some(u => /minimax_h3_ref2va/.test(u)) && !un2.some(u => /prismPIKA/.test(u)) && sa2.length >= 2, '🎛 H3 Reference → TriPRISM finish: vanilla first, TriPRISM finishes ' + JSON.stringify({f, un2, n:sa2.length})); }
       if(nm==='MiniMax only'){ const x = await engF().evaluate(async id => { const a = await H3Engine.again({take:id, words:'Mia waves', n:1}); const t = H3.S.takes.find(z => z.id===(a.ids || [])[0]) || {}; return {model:t.model, fin:!!t.fin}; }, r.m.id);
         ok(/minimax_h3_ref2va/.test(x.model) && !x.fin, '🎛 MiniMax only: ↻ again stays vanilla with no finish ' + JSON.stringify(x)); } }
     await engF().evaluate(() => { H3Engine.setLook({model:H3Engine.models().find(m => /Reference → PIKA/.test(m.label)).key}); delete H3.S.reelModel; });
