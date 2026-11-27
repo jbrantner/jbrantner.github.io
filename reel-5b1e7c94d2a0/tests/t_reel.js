@@ -445,6 +445,13 @@ const nodes = (g, t) => Object.values(g).filter(n => n.class_type===t);
       const hs = [...new Set(sent.slice(sC).filter(x => x.g).map(x => x.host))], wh = await engF().evaluate(() => H3.S.f.where);
       ok(wh==='both' && hs.length >= 1, '🧪 both PCs: not pinned (sent to ' + hs.join(',') + ', where ' + wh + ')');
       await engF().evaluate(() => H3Engine.setLook({test:false})); }
+    // 🎛 (Jordan 2026-11-27) PRISM PIKA picked in ⚙ with the test off: ↻ Redo of a MiniMax → PIKA clip stays on PIKA alone, at the usual size
+    { const r = await engF().evaluate(async id => { const P = H3Engine.models().find(x => /PIKA$/.test(x.label)); H3Engine.setLook({model:P.key}); const lk = H3Engine.look().model;
+        const x = await H3Engine.again({take:id, words:'Mia waves', n:1}), y = await H3Engine.make({words:'Mia waves', who:[], n:1, aspect:'16:9'});
+        const t = H3.S.takes.find(z => z.id===(x.ids || [])[0]) || {}, u = H3.S.takes.find(z => z.id===(y.ids || [])[0]) || {};
+        H3Engine.setLook({model:H3Engine.models().find(m => /Reference → PIKA/.test(m.label)).key}); delete H3.S.reelModel;
+        return {pk:P.key, lk, a:{model:t.model, fin:!!t.fin, w:t.w}, m:{model:u.model, fin:!!u.fin, w:u.w}}; }, tid2);
+      ok(r.lk===r.pk && /prismPIKA/i.test(r.a.model) && !r.a.fin && r.a.w < 1000 && /prismPIKA/i.test(r.m.model) && !r.m.fin && r.m.w < 1000, '🎛 PIKA pick wins over the clip\'s own MiniMax → PIKA (usual size, no vanilla stage) ' + JSON.stringify(r)); }
     await engF().evaluate(() => { const S = H3.S; S.pcs = S.pcs.filter(p => p.name!=='Main'); S.f.where = 'both'; }); }
   await page.evaluate(() => { REEL.R().attrs = {Lmia:['Lfrk']}; REEL.R().fit = {Lmia:true}; });
   await page.evaluate(() => { const R = REEL.R(); REEL.E().setAttrs(JSON.parse(JSON.stringify(R.attrs)), JSON.parse(JSON.stringify(R.fit)), {}, 'auto'); });
